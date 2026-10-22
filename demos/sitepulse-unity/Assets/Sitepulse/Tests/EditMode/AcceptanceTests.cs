@@ -95,7 +95,7 @@ namespace DeviceChain.Sitepulse.Tests
             var wrapped = AcceptanceControls.WrapBind(inner, new ControlSpec(ControlSpec.BogusBinding, "SP-HL-0004"));
 
             Answer(wrapped(DeviceBinder.ResolveQuery, VarsJson.StringList("ids", new[] { "SP-HL-0003", "SP-HL-0004", "SP-HL-0005" }), CancellationToken.None));
-            Answer(wrapped(CredentialResolver.BatchQuery, VarsJson.StringList("tokens", new[] { "SP-HL-0004" }), CancellationToken.None));
+            Answer(wrapped(CredentialResolver.ExistsQuery, VarsJson.StringList("tokens", new[] { "SP-HL-0004" }), CancellationToken.None));
 
             using var resolve = JsonDocument.Parse(seen[0].vars);
             var ids = resolve.RootElement.GetProperty("ids").EnumerateArray().Select(e => e.GetString()).ToArray();
@@ -262,7 +262,7 @@ namespace DeviceChain.Sitepulse.Tests
                 for (var i = 0; i < devices.Length; i++)
                 {
                     Board.SetBind(new BindResult { ExternalId = devices[i].ExternalId, Outcome = BindOutcome.Bound, DeviceToken = Tokens[i] });
-                    Board.SetCredential(new CredentialOutcome { ExternalId = devices[i].ExternalId, Ok = true, Path = CredentialPath.Batched });
+                    Board.SetCredential(new CredentialOutcome { ExternalId = devices[i].ExternalId, Ok = true, Path = CredentialPath.Created });
                     if (fillObserved) FillObserved(i);
                 }
 
@@ -616,7 +616,7 @@ namespace DeviceChain.Sitepulse.Tests
             foreach (var d in devices)
             {
                 b.SetBind(new BindResult { ExternalId = d.ExternalId, Outcome = BindOutcome.Bound, DeviceToken = "tok-" + d.ExternalId });
-                b.SetCredential(new CredentialOutcome { ExternalId = d.ExternalId, Ok = true, Path = CredentialPath.Batched });
+                b.SetCredential(new CredentialOutcome { ExternalId = d.ExternalId, Ok = true, Path = CredentialPath.Created });
             }
 
             b.BeginSessions();

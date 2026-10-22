@@ -11,9 +11,11 @@ using System.Threading.Tasks;
 namespace DeviceChain.Sitepulse.Platform
 {
     /// <summary>
-    /// The per-device credentials, in memory only. An ACCESS_TOKEN credential's id is the bearer a
-    /// device connects with, so this holder never prints: <c>ToString</c> and the debugger view show
-    /// a count, and nothing here writes to disk, PlayerPrefs, a log or a recording.
+    /// The per-device access tokens, in memory only. The token is the bearer a device connects with,
+    /// so this holder never prints: <c>ToString</c> and the debugger view show a count, and nothing
+    /// here writes to disk, PlayerPrefs, a log or a recording. The platform keeps only a digest of an
+    /// access token and returns the value once, to the call that sets it, so a token held here cannot
+    /// be read back: a run that loses it sets a new one.
     /// </summary>
     [DebuggerDisplay("DeviceCredentials")]
     public sealed class DeviceCredentials
@@ -29,9 +31,9 @@ namespace DeviceChain.Sitepulse.Platform
         public override string ToString() => $"DeviceCredentials({byDevice.Count})";
     }
 
-    public enum CredentialPath { Batched, Fallback }
+    public enum CredentialPath { Created, Rotated }
 
-    /// <summary>The result of looking up one device's credential. Carries no secret.</summary>
+    /// <summary>The result of issuing one device's token. Carries no secret.</summary>
     public sealed class CredentialOutcome
     {
         public string ExternalId { get; set; }
@@ -54,23 +56,44 @@ namespace DeviceChain.Sitepulse.Platform
     }
 
     /// <summary>
-    /// The documented <c>{deviceToken}-cred</c> contract, cross-checked: a row is accepted only if it
-    /// belongs to the device it was looked up for, is an ACCESS_TOKEN and is enabled. The player
-    /// never re-derives a credential from a seed, though it could.
+    /// Sitepulse's own access token per device. A platform that stores access tokens as digests cannot
+    /// hand one back, so the player cannot read the sim's <c>{device}-cred</c> credential to borrow its
+    /// token. Instead each start sets a token of its own on a credential named
+    /// <c>{deviceToken}-sitepulse</c> (created if absent, rotated if present) and keeps the value from
+    /// that response in memory. The sim's credential is never touched, so the sim emitter keeps working.
+    /// A rotation retires the previous run's token at once: the last player to start owns the
+    /// device's session.
     /// </summary>
     public static class CredentialResolver
     {
         public const string AccessToken = "ACCESS_TOKEN";
 
-        public const string BatchQuery =
-            "query Creds($tokens: [String!]!) { deviceCredentialsByToken(tokens: $tokens) { token credentialType credentialId enabled device { token } } }";
+        const string Fields = "token credentialType credentialId enabled device { token }";
 
-        public const string FallbackQuery =
-            "query Cred($c: DeviceCredentialSearchCriteria!) { deviceCredentials(criteria: $c) { results { token credentialType credentialId enabled device { token } } } }";
+        /// <summary>Which of the player's own credentials already exist. Asks for no token: none is readable.</summary>
+        public const string ExistsQuery =
+            "query Creds($tokens: [String!]!) { deviceCredentialsByToken(tokens: $tokens) { token credentialType enabled device { token } } }";
 
-        public static string CredentialToken(string deviceToken) => deviceToken + "-cred";
+        public const string CreateMutation =
+            "mutation CreateCred($r: DeviceCredentialCreateRequest) { createDeviceCredential(request: $r) { " + Fields + " } }";
 
-        /// <summary>Null when the row is acceptable for <paramref name="deviceToken"/>, else why not.</summary>
+        public const string RotateMutation =
+            "mutation RotateCred($t: String!, $r: DeviceCredentialUpdateRequest!) { updateDeviceCredential(token: $t, request: $r) { " + Fields + " } }";
+
+        /// <summary>The platform's marker for a stored token: what every read returns instead of the token.</summary>
+        public const string FingerprintPrefix = "dctk1$";
+
+        public static string CredentialToken(string deviceToken) => deviceToken + "-sitepulse";
+
+        /// <summary>A fresh random token: 32 bytes, base64url, 43 characters.</summary>
+        public static string MintToken()
+        {
+            var bytes = new byte[32];
+            using (var rng = System.Security.Cryptography.RandomNumberGenerator.Create()) rng.GetBytes(bytes);
+            return Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+        }
+
+        /// <summary>Null when the row is an enabled ACCESS_TOKEN credential of <paramref name="deviceToken"/> that carries an id, else why not.</summary>
         public static string Check(CredentialRow row, string deviceToken)
         {
             if (row.DeviceToken != deviceToken) return $"credential {row.Token} belongs to device {row.DeviceToken ?? "(none)"}, not {deviceToken}";
@@ -80,109 +103,115 @@ namespace DeviceChain.Sitepulse.Platform
             return null;
         }
 
-        public static List<CredentialRow> ParseBatch(string dataJson) => Parse(dataJson, "deviceCredentialsByToken", false);
-
-        public static List<CredentialRow> ParseSearch(string dataJson) => Parse(dataJson, "deviceCredentials", true);
-
-        static List<CredentialRow> Parse(string dataJson, string field, bool paged)
+        public static List<CredentialRow> ParseExisting(string dataJson)
         {
             using var doc = JsonDocument.Parse(dataJson);
-            if (!doc.RootElement.TryGetProperty(field, out var list)) throw new FormatException($"the response has no {field}");
-            if (paged)
-            {
-                if (list.ValueKind != JsonValueKind.Object || !list.TryGetProperty("results", out list)) throw new FormatException($"{field} has no results");
-            }
-
-            if (list.ValueKind != JsonValueKind.Array) throw new FormatException($"{field} is not a list");
+            if (!doc.RootElement.TryGetProperty("deviceCredentialsByToken", out var list)) throw new FormatException("the response has no deviceCredentialsByToken");
+            if (list.ValueKind != JsonValueKind.Array) throw new FormatException("deviceCredentialsByToken is not a list");
             var rows = new List<CredentialRow>();
-            foreach (var e in list.EnumerateArray())
-            {
-                var device = DeviceBinder.Obj(e, "device");
-                rows.Add(new CredentialRow
-                {
-                    Token = DeviceBinder.Str(e, "token"),
-                    CredentialType = DeviceBinder.Str(e, "credentialType"),
-                    CredentialId = DeviceBinder.Str(e, "credentialId"),
-                    Enabled = e.TryGetProperty("enabled", out var en) && en.ValueKind == JsonValueKind.True,
-                    DeviceToken = device.HasValue ? DeviceBinder.Str(device.Value, "token") : null,
-                });
-            }
-
+            foreach (var e in list.EnumerateArray()) rows.Add(ParseRow(e));
             return rows;
         }
 
-        /// <summary>One batched call for every bound device, then the search fallback for any that did not answer.</summary>
+        /// <summary>The credential a create or update mutation answered with.</summary>
+        public static CredentialRow ParseIssued(string dataJson, string field)
+        {
+            using var doc = JsonDocument.Parse(dataJson);
+            if (!doc.RootElement.TryGetProperty(field, out var e) || e.ValueKind != JsonValueKind.Object) throw new FormatException($"the response has no {field}");
+            return ParseRow(e);
+        }
+
+        static CredentialRow ParseRow(JsonElement e)
+        {
+            var device = DeviceBinder.Obj(e, "device");
+            return new CredentialRow
+            {
+                Token = DeviceBinder.Str(e, "token"),
+                CredentialType = DeviceBinder.Str(e, "credentialType"),
+                CredentialId = DeviceBinder.Str(e, "credentialId"),
+                Enabled = e.TryGetProperty("enabled", out var en) && en.ValueKind == JsonValueKind.True,
+                DeviceToken = device.HasValue ? DeviceBinder.Str(device.Value, "token") : null,
+            };
+        }
+
+        /// <summary>One call for which credentials exist, then one create or rotate per bound device.</summary>
         public static async Task<IReadOnlyList<CredentialOutcome>> ResolveAll(QueryFn q, IReadOnlyList<BindResult> bound, DeviceCredentials credentials, CancellationToken ct)
         {
             var tokens = new List<string>();
             foreach (var b in bound) tokens.Add(CredentialToken(b.DeviceToken));
-            var batch = ParseBatch(await q(BatchQuery, VarsJson.StringList("tokens", tokens), ct));
-            return await Resolve(bound, batch, async device =>
-                ParseSearch(await q(FallbackQuery, VarsJson.CredentialSearch(device), ct)), credentials);
+            var existing = ParseExisting(await q(ExistsQuery, VarsJson.StringList("tokens", tokens), ct));
+            return await Resolve(bound, existing, async (device, exists, token) =>
+            {
+                var credToken = CredentialToken(device);
+                return exists
+                    ? ParseIssued(await q(RotateMutation, VarsJson.CredentialRotate(credToken, token), ct), "updateDeviceCredential")
+                    : ParseIssued(await q(CreateMutation, VarsJson.CredentialCreate(credToken, device, token), ct), "createDeviceCredential");
+            }, credentials, MintToken);
         }
 
         /// <summary>
-        /// Pure core: pick each device's credential from the batch, falling back to
-        /// <paramref name="search"/> when the batch has no acceptable row for it, and record which
-        /// path answered. The fallback must find exactly one acceptable row; with several, it refuses
-        /// to choose.
+        /// Pure core. For each bound device: refuse an existing <c>-sitepulse</c> row that is not that
+        /// device's ACCESS_TOKEN credential (it is never rewritten); otherwise mint a token, ask the
+        /// platform to set it, and accept the answer only if the response carries back the very token
+        /// that was sent. Anything else is a failed outcome with a reason, never an unusable bearer.
         /// </summary>
-        public static async Task<IReadOnlyList<CredentialOutcome>> Resolve(IReadOnlyList<BindResult> bound, IReadOnlyList<CredentialRow> batch,
-            Func<string, Task<List<CredentialRow>>> search, DeviceCredentials credentials)
+        public static async Task<IReadOnlyList<CredentialOutcome>> Resolve(IReadOnlyList<BindResult> bound, IReadOnlyList<CredentialRow> existing,
+            Func<string, bool, string, Task<CredentialRow>> issue, DeviceCredentials credentials, Func<string> mint = null)
         {
+            mint ??= MintToken;
             var byToken = new Dictionary<string, CredentialRow>(StringComparer.Ordinal);
-            foreach (var row in batch)
+            foreach (var row in existing)
                 if (row.Token != null) byToken[row.Token] = row;
 
             var outcomes = new List<CredentialOutcome>();
             foreach (var b in bound)
             {
-                var o = new CredentialOutcome { ExternalId = b.ExternalId, DeviceToken = b.DeviceToken, Path = CredentialPath.Batched };
+                var o = new CredentialOutcome { ExternalId = b.ExternalId, DeviceToken = b.DeviceToken, Path = CredentialPath.Created };
                 outcomes.Add(o);
+                var credToken = CredentialToken(b.DeviceToken);
 
-                string batchWhy = null;
-                if (byToken.TryGetValue(CredentialToken(b.DeviceToken), out var row))
+                var exists = byToken.TryGetValue(credToken, out var row);
+                if (exists)
                 {
-                    batchWhy = Check(row, b.DeviceToken);
-                    if (batchWhy == null)
-                    {
-                        credentials.Set(b.DeviceToken, row.CredentialId);
-                        o.Ok = true;
-                        PlatformLog.Info($"{b.ExternalId}: credential via batched {CredentialToken(b.DeviceToken)}");
-                        continue;
-                    }
+                    o.Path = CredentialPath.Rotated;
+                    // the exists query asks for no token, so only ownership and type are judged here
+                    if (row.DeviceToken != b.DeviceToken) { Fail(b, o, $"credential {credToken} belongs to device {row.DeviceToken ?? "(none)"}, not {b.DeviceToken}; not rewriting it"); continue; }
+                    if (row.CredentialType != AccessToken) { Fail(b, o, $"credential {credToken} is {row.CredentialType}, not {AccessToken}; not rewriting it"); continue; }
                 }
 
-                // no acceptable {device}-cred row: ask for the device's enabled ACCESS_TOKEN credentials
-                o.Path = CredentialPath.Fallback;
-                var found = await search(b.DeviceToken);
-                var good = new List<CredentialRow>();
-                var why = new List<string>();
-                if (batchWhy != null) why.Add(batchWhy);
-                foreach (var f in found)
+                var token = mint();
+                CredentialRow issued;
+                try
                 {
-                    var w = Check(f, b.DeviceToken);
-                    if (w == null) good.Add(f);
-                    else why.Add(w);
+                    issued = await issue(b.DeviceToken, exists, token);
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception e)
+                {
+                    Fail(b, o, $"the platform refused to {(exists ? "rotate" : "create")} {credToken}: {e.Message}");
+                    continue;
                 }
 
-                if (good.Count == 1)
-                {
-                    credentials.Set(b.DeviceToken, good[0].CredentialId);
-                    o.Ok = true;
-                    PlatformLog.Info($"{b.ExternalId}: credential via search fallback ({CredentialToken(b.DeviceToken)} did not answer)");
-                }
-                else if (good.Count > 1)
-                {
-                    o.Reason = $"{good.Count} enabled {AccessToken} credentials for {b.DeviceToken}; refusing to choose one";
-                }
-                else
-                {
-                    o.Reason = $"no usable {AccessToken} credential for {b.DeviceToken}" + (why.Count > 0 ? " (" + string.Join("; ", why) + ")" : "");
-                }
+                // CredentialId is compared, never printed: it is the secret, or its fingerprint
+                var why = issued.CredentialId != null && issued.CredentialId.StartsWith(FingerprintPrefix, StringComparison.Ordinal)
+                    ? $"the platform returned a fingerprint, not the token it was given, for {credToken}"
+                    : issued.CredentialId != token
+                        ? $"the platform did not return the token it was given for {credToken}"
+                        : Check(issued, b.DeviceToken);
+                if (why != null) { Fail(b, o, why); continue; }
+
+                credentials.Set(b.DeviceToken, token);
+                o.Ok = true;
+                PlatformLog.Info($"{b.ExternalId}: access token {(exists ? "rotated" : "created")} on {credToken}");
             }
 
             return outcomes;
+        }
+
+        static void Fail(BindResult b, CredentialOutcome o, string reason)
+        {
+            o.Reason = reason;
+            PlatformLog.Error($"{b.ExternalId}: {reason}");
         }
     }
 }

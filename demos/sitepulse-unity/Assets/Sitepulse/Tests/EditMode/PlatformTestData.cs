@@ -167,7 +167,48 @@ namespace DeviceChain.Sitepulse.Tests
         }
 
         public static string CredBatch(params string[] credJson) => "{\"deviceCredentialsByToken\":[" + string.Join(",", credJson) + "]}";
-        public static string CredSearch(params string[] credJson) => "{\"deviceCredentials\":{\"results\":[" + string.Join(",", credJson) + "]}}";
+
+        /// <summary>What a create or update mutation answers: the credential, with the id the platform chose to return.</summary>
+        public static string Issued(string field, string token, string deviceToken, string credentialId, string type = "ACCESS_TOKEN", bool enabled = true) =>
+            "{\"" + field + "\":" + Cred(token, deviceToken, type, enabled, credentialId) + "}";
+
+        /// <summary>
+        /// A platform that stores access tokens as digests: the credentials named by <paramref name="existing"/> already
+        /// exist (their ids read back as a fingerprint), a create or rotate echoes the token it was sent, and any other
+        /// query is not its business (null).
+        /// </summary>
+        public static string CredPlatform(string query, string varsJson, params string[] existing)
+        {
+            using var v = JsonDocument.Parse(varsJson);
+            var root = v.RootElement;
+            if (query == CredentialResolver.ExistsQuery)
+            {
+                var rows = new List<string>();
+                foreach (var t in root.GetProperty("tokens").EnumerateArray())
+                {
+                    var name = t.GetString();
+                    foreach (var dev in existing)
+                        if (CredentialResolver.CredentialToken(dev) == name) rows.Add(Cred(name, dev, id: CredentialResolver.FingerprintPrefix + "stored"));
+                }
+
+                return CredBatch(rows.ToArray());
+            }
+
+            if (query == CredentialResolver.CreateMutation)
+            {
+                var r = root.GetProperty("r");
+                return Issued("createDeviceCredential", r.GetProperty("token").GetString(), r.GetProperty("deviceToken").GetString(), r.GetProperty("credentialId").GetString());
+            }
+
+            if (query == CredentialResolver.RotateMutation)
+            {
+                var t = root.GetProperty("t").GetString();
+                var dev = t.Substring(0, t.Length - "-sitepulse".Length);
+                return Issued("updateDeviceCredential", t, dev, root.GetProperty("r").GetProperty("credentialId").GetString());
+            }
+
+            return null;
+        }
 
         public static CredentialRow Row(string token, string deviceToken, string type = "ACCESS_TOKEN", bool enabled = true, string id = "0123456789abcdef0123456789abcdef") =>
             new CredentialRow { Token = token, DeviceToken = deviceToken, CredentialType = type, Enabled = enabled, CredentialId = id };
