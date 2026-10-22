@@ -2774,6 +2774,40 @@ jobs:
           exit 1
 
   # ---------------------------------------------------------------------------
+  # API compatibility: does this change break a client written against the last
+  # release? Every served GraphQL schema is compared with the same schema at the
+  # nearest stable release tag reachable from HEAD; a breaking change fails unless it
+  # is declared in backend/tools/docsgql/sdlcompat/breaks.txt with a reason, and every
+  # @deprecated must carry a reason that names the replacement.
+  # ---------------------------------------------------------------------------
+  api-compat:
+    runs-on: ubuntu-latest
+    steps:
+      # 🔴 fetch-depth: 0 — the baseline is a release TAG. On the default shallow clone
+      # no tag is visible and the check (correctly) refuses to compare against nothing.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.work
+          cache: false
+
+      - name: go mod download
+        run: hack/go-mod-download.sh backend/tools/docsgql
+
+      # End to end on the real served schemas, through the script and the built command:
+      # identical trees pass with zero changes, a planted field removal fails naming the
+      # field, a declaration covers it, and expired and stale declarations behave. Runs
+      # first, so the green result below is known to be one that can fail.
+      - name: GraphQL compatibility check self-test
+        run: hack/check-graphql-compat.sh --self-test
+
+      - name: Served GraphQL schemas are compatible with the last release
+        run: hack/check-graphql-compat.sh
+
+  # ---------------------------------------------------------------------------
   # The single required check.
   #
   # This job exists so branch protection has ONE stable name to require. The
@@ -2817,6 +2851,7 @@ jobs:
       - helm
       - opentofu
       - image-smoke
+      - api-compat
     steps:
       # ANY result other than success fails the gate, including `skipped` and
       # `cancelled`. No job in this workflow is conditional, so a skip here means

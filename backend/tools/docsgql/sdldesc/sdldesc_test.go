@@ -230,3 +230,78 @@ func TestLoadServedRefusesAnEmptyTree(t *testing.T) {
 		t.Error("a missing services directory loaded without error")
 	}
 }
+
+// THE INVENTORY AGAINST AN INDEPENDENT ONE. LoadSources finds schemas by a filename
+// convention in <area>/graphql. What a service actually SERVES is what its code embeds.
+// Every schema-shaped file a non-test Go file under the services tree embeds must be in
+// the inventory, and nothing else may be: a schema embedded from another directory or
+// under another name would be served and checked by nothing — not by the description
+// gate, and not by the compatibility gate, which reads the same inventory.
+func TestInventoryMatchesEmbeddedSchemas(t *testing.T) {
+	services := filepath.Join("..", "..", "..", "services")
+	srcs, err := LoadSources(services)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inventory := map[string]bool{}
+	for _, s := range srcs {
+		inventory[filepath.Clean(s.Path)] = true
+	}
+
+	embedded := map[string]string{}
+	err = filepath.WalkDir(services, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if d.Name() == "node_modules" || d.Name() == "testdata" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		for _, line := range strings.Split(string(b), "\n") {
+			line = strings.TrimSpace(line)
+			if !strings.HasPrefix(line, "//go:embed ") {
+				continue
+			}
+			for _, pat := range strings.Fields(strings.TrimPrefix(line, "//go:embed ")) {
+				ext := strings.ToLower(filepath.Ext(strings.Trim(pat, "\"`")))
+				if ext != ".graphql" && ext != ".gql" && ext != ".graphqls" {
+					continue
+				}
+				if strings.ContainsAny(pat, "*?[") {
+					t.Errorf("%s embeds %s by a pattern; this check (and the inventory) cannot tell which schemas that serves", path, pat)
+					continue
+				}
+				embedded[filepath.Clean(filepath.Join(filepath.Dir(path), strings.Trim(pat, "\"`")))] = path
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(embedded) == 0 {
+		t.Fatal("found no embedded schema at all; the independent enumeration is broken, not the inventory")
+	}
+	for f, by := range embedded {
+		if !inventory[f] {
+			t.Errorf("%s embeds %s, which the served-schema inventory does not list: it is served and checked by nothing", by, f)
+		}
+	}
+	for f := range inventory {
+		if _, ok := embedded[f]; !ok {
+			t.Errorf("the inventory lists %s, but no service embeds it: a schema nothing serves is being checked as if it were", f)
+		}
+	}
+	if len(embedded) != len(inventory) {
+		t.Errorf("%d embedded schemas, %d in the inventory", len(embedded), len(inventory))
+	}
+}

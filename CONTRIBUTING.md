@@ -214,6 +214,44 @@ hack/migration-diff.sh verify     # schemas still match their goldens; also runs
 hack/migration-diff.sh snapshot   # refresh the goldens after an intended schema change
 ```
 
+## Changing a GraphQL schema
+
+Every served schema (`backend/services/*/graphql/*.graphql`) is compared with the same
+schema at the last release, and a change that would break a client written against that
+release fails CI. Breaking means removing or renaming a type, field, argument, input field,
+enum value or union member; changing a type (except making an output field non-null or an
+input optional); and adding a required argument or input field, or removing the default
+that let a client omit a non-null one. New enum values, union members and changed defaults
+are reported but do not fail. Any other addition is fine.
+
+```bash
+hack/check-graphql-compat.sh          # against the nearest release tag; needs the tags fetched
+```
+
+**Prefer the additive change.** Add the new field or argument next to the old one and mark
+the old one deprecated, with a reason that names its replacement:
+
+```graphql
+devices(tokens: [String!]): [Device!]! @deprecated(reason: "Use devicesPage(tokens:), which pages.")
+```
+
+A bare `@deprecated` fails the check: it is served as "No longer supported", which tells a
+client it must move without telling it where.
+
+**If the break is intended**, declare it. The failure prints the exact line to add to
+[`backend/tools/docsgql/sdlcompat/breaks.txt`](backend/tools/docsgql/sdlcompat/breaks.txt);
+replace the placeholder with the reason and what a client uses instead:
+
+```text
+v0.24.0 device-management Query.devices field-removed Replaced by devicesPage, which pages.
+```
+
+A declaration applies only against the release it names, so it expires by itself when the
+next release is tagged (the check then reports it for deletion). Before v1.0.0 a declared
+break can ship in any release, and that release's highlights must say it breaks. From v1.0.0
+a break in a covered interface ships only in a major release; see the
+[versioning policy](docs/docs/deployment/versioning-policy.md).
+
 ## Commit & PR conventions
 
 - Use clear, imperative commit subjects; conventional-commit prefixes
