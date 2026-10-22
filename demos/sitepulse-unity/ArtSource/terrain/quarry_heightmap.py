@@ -62,7 +62,8 @@ OUTPUT (into --out, default ../../Assets/Sitepulse/Art/Terrain)
   --preview DIR also writes a shaded relief map with the layers and roads drawn on it.
 """
 import argparse
-import gzip
+import struct
+import zlib
 import json
 import math
 import os
@@ -1056,9 +1057,16 @@ def write(q, color, feats, out, raw_dir=None):
     pred[1:, :] += s[:-1, :]
     pred[1:, 1:] -= s[:-1, :-1]
     resid = ((s - pred) % 65536).astype("<u2")
-    # mtime=0 keeps the gzip header, and so the file, identical from run to run
+    # The gzip member is framed by hand. gzip.compress() fills the header's OS byte from the
+    # interpreter (0xff up to Python 3.10, 0x03 from 3.11), so the committed file changed with
+    # the Python that wrote it though the data did not. mtime 0, XFL 2 (best compression) and
+    # OS 0xff (unknown) are fixed here, which is what the committed bytes already carry.
+    raw = resid.tobytes()
+    co = zlib.compressobj(9, zlib.DEFLATED, -zlib.MAX_WBITS)
+    body = co.compress(raw) + co.flush()
     with open(os.path.join(out, "quarry_height.bytes"), "wb") as f:
-        f.write(gzip.compress(resid.tobytes(), compresslevel=9, mtime=0))
+        f.write(bytes.fromhex("1f8b08000000000002ff") + body
+                + struct.pack("<II", zlib.crc32(raw) & 0xFFFFFFFF, len(raw) & 0xFFFFFFFF))
     rgba = np.round(np.flipud(color) * 255.0).astype(np.uint8)       # image top row = north
     Image.fromarray(rgba, "RGBA").save(os.path.join(out, "quarry_color.png"), optimize=True)
     with open(os.path.join(out, "quarry_features.json"), "w", newline="\n") as f:   # LF on every platform
