@@ -322,6 +322,7 @@ describe('the built package', () => {
       'entity-selector': ['EntitySelector'],
       table: ['Table'],
       'control-widgets': ['CommandButton'],
+      'presence-widgets': ['DeviceStatus', 'OnlineDoughnut'],
     };
     for (const [chunk, names] of Object.entries(families)) {
       const spec = specs.find((s) => path.basename(s).startsWith(`${chunk}-`));

@@ -198,6 +198,11 @@ A fleet count card puts a number above that table: how many of a group's devices
 (*3 of 21*), or simply how many devices the group holds. Its settings are described under
 [Configuring a widget](#configuring-a-widget).
 
+Two widgets answer the first question about a fleet, whether it is connected. A device status card
+shows one device as *Online* or *Offline* with the time it was last seen, and an online doughnut
+rings a group by how many of its devices are online, offline or have no status yet. They read the
+platform's device status, not the devices' readings.
+
 ## Editing on the canvas
 
 **Edit** turns the dashboard into a canvas. The buttons change to **Undo**, **Redo**, **Add
@@ -261,7 +266,7 @@ draft only. Viewers see nothing new until you publish a version.
 
 | Group | Widgets |
 |---|---|
-| Telemetry | Timeseries chart, Latest card, Gauge, Table, Linear gauge, Level gauge, Battery, Status light, Signal bars, Compass, Progress ring, Stat card, Bar chart, Pie chart, Fleet table, Fleet count |
+| Telemetry | Timeseries chart, Latest card, Gauge, Table, Linear gauge, Level gauge, Battery, Status light, Signal bars, Compass, Progress ring, Stat card, Bar chart, Pie chart, Fleet table, Fleet count, Device status, Online doughnut |
 | Static | Label, Image |
 | Alarms | Alarm table, Alarm count, Alarm severity |
 | Control | Command button, Command slider, Command toggle |
@@ -288,7 +293,7 @@ The settings depend on the widget. Common ones:
   inside the building chosen elsewhere on the dashboard. With a parent, **Strategy** decides whether
   it follows the parent's **First member** or a member you choose (**Manual pick**).
 - **Data source** picks the device or entity the widget reads. For a widget scoped to a parent, it
-  explains that the widget follows the parent. Only the fleet table, the fleet count, a bar chart set to one bar
+  explains that the widget follows the parent. Only the fleet table, the fleet count, the online doughnut, a bar chart set to one bar
   per device and a timeseries chart set to one line per device can read a device group; every other telemetry widget shows one device, and bound to a
   group it says so rather than mixing the readings of several devices.
 - **Measurement** and display options such as units, range and precision.
@@ -416,6 +421,27 @@ The settings depend on the widget. Common ones:
   how many devices the group holds, whatever they report. **Time span** works as for the fleet
   table; **Stale after** applies to the newest reading in the group, as on other cards. A group larger than the 500 devices read says "Showing 500 of N devices",
   and the attention count covers the devices shown.
+- **Device status**: whether one device is connected. The card says *Online* or *Offline* and, under
+  it, when the device was last seen (the time of its newest event). Online keeps the ordinary text
+  color; only *Offline* takes a color, and the word says which, so the color is never the only
+  signal. A device that has never sent anything has no status yet, and reads *No status yet* and
+  *Never seen* in a muted color rather than as an outage. The widget's footer shows how old the
+  status is, and **Stale after** marks the card stale once the status has not been read for that
+  many seconds, which happens only when reading it keeps failing; a device that is merely quiet is
+  not stale, since whether it is online is the status itself. Without it the age is shown and
+  nothing is marked stale. Bound to a
+  group it says so rather than showing one device of several. The status is read every 15 seconds
+  and holds still while the dashboard is paused. Showing it needs permission to read device state;
+  without it the card says you do not have access to this data.
+- **Online doughnut**: how many of a group's devices are connected. A ring splits the group into
+  *Online*, *Offline* and, only when some device has never sent anything, *No status yet* (a pale
+  slice), with the online count in the middle (*18 of 21 online*) and every count listed under the
+  ring. The online slice is a quiet gray; only the offline slice takes a color, so a group with
+  nothing offline draws no color at all, and a zero is still listed. While the group's statuses are
+  still loading the widget shows no ring rather than a partial one, and a device whose status could
+  not be read is noted apart ("1 could not be read") and left out of the ring. It reads the first
+  500 devices of a group and says "Showing 500 of N devices" when the group is larger. **Stale
+  after** marks the ring stale once the group's status has not been read for that many seconds.
 
 Problems with a widget's options, such as an option it does not read, a required one left empty or
 a value out of range, are listed in **Version history**. **Publish version** stays disabled until

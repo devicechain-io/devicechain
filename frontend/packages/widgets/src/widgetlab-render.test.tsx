@@ -35,17 +35,19 @@ import {
   type LocationStreamState,
   type MeasurementStreamState,
 } from '@devicechain/widget-sdk';
-import { membersMode } from './binding-policy';
+import { membersMode, presenceMode } from './binding-policy';
 import { createBuiltinWidgetRegistry } from './builtin-registry';
 import { CONTROL_STRINGS } from './command-control-strings';
 import { FLEET_STRINGS } from './fleet-strings';
 import { LEVEL_STRINGS } from './level-strings';
 import { MapRuntimeProvider } from './map-runtime-context';
+import { PRESENCE_STRINGS } from './presence-strings';
 import { AGGREGATE_STRINGS } from './aggregate-strings';
 import { loadAggregateWidgets } from './widgets/aggregate-lazy';
 import { loadAlarmWidgets } from './widgets/alarm-lazy';
 import { loadControlWidgets } from './widgets/control-lazy';
 import { loadLevelWidgets } from './widgets/level-lazy';
+import { loadPresenceWidgets } from './widgets/presence-lazy';
 import { loadSelectionWidgets } from './widgets/selection-lazy';
 import { loadTableWidget } from './widgets/table-lazy';
 
@@ -59,6 +61,7 @@ afterEach(cleanup);
 beforeAll(() =>
   Promise.all([
     loadLevelWidgets(),
+    loadPresenceWidgets(),
     loadControlWidgets(),
     loadAggregateWidgets(),
     loadAlarmWidgets(),
@@ -155,6 +158,10 @@ const EMPTY_STATES = [
   FLEET_STRINGS.en.noMembers,
   FLEET_STRINGS.en.noMeasurement,
   FLEET_STRINGS.en.failed,
+  // The presence widgets' explained states: a configured board has a group, access and a status to read.
+  PRESENCE_STRINGS.en.unsupported,
+  PRESENCE_STRINGS.en.failed,
+  PRESENCE_STRINGS.en.oneDevice,
 ];
 
 const sample = (name: string, value: number): MeasurementSample => ({
@@ -233,6 +240,21 @@ const FLEET_DATA: MeasurementStreamState = {
     }),
   },
 };
+
+// What device-state says of the gallery's sensors, for the presence widgets: two online (one seen a
+// minute ago, one an hour ago), one offline, and a fourth that has never sent anything. The status
+// card is bound to ONE sensor, so it is given the first; the doughnut, the zone's four.
+const PRESENCE_MEMBERS = [
+  { token: 'wl-sensor-01', presence: { status: 'ready' as const, active: true, lastActivityTime: '2026-08-01T11:59:00Z', inactivityTimeout: 600 } },
+  { token: 'wl-sensor-02', presence: { status: 'ready' as const, active: true, lastActivityTime: '2026-08-01T11:00:00Z', inactivityTimeout: 600 } },
+  { token: 'wl-sensor-03', presence: { status: 'ready' as const, active: false, lastActivityTime: '2026-07-31T12:00:00Z', inactivityTimeout: 600 } },
+  { token: 'wl-sensor-04', presence: { status: 'unknown' as const } },
+].map(({ token, presence }) => ({ token, name: token, latest: {}, seed: 'ready' as const, observed: [], presence }));
+
+function presenceData(widget: KnownWidgetInstance): MeasurementStreamState {
+  const members = widget.type === 'device-status' ? PRESENCE_MEMBERS.slice(0, 1) : PRESENCE_MEMBERS;
+  return { latest: {}, samples: [], error: null, members: { status: 'ready', members, total: members.length, truncated: false } };
+}
 
 const alarmRow: AlarmRow = {
   token: 'alarm-1',
@@ -340,7 +362,9 @@ function renderWidget(widget: KnownWidgetInstance) {
     case 'location':
       return render(<Component widget={widget} data={locationData} />);
     case 'measurement':
-      // The descriptor decides whether a measurement widget reads member by member, as it does live.
+      // The descriptor decides whether a measurement widget reads member by member, or reads device
+      // connectivity, as it does live.
+      if (presenceMode(registry.descriptor(widget.type)!)) return render(<Component widget={widget} data={presenceData(widget)} />);
       return render(
         <Component
           widget={widget}
@@ -571,6 +595,26 @@ describe('the gallery widgets draw their data', () => {
       cleanup();
     }
     expect(checked, 'the gallery lost a fleet table').toBeGreaterThanOrEqual(2);
+  });
+
+  it('draws the connectivity widgets: the sensor online, and the zone as two online, one offline and one never seen', () => {
+    let checked = 0;
+    for (const widget of galleryWidgets('device-status')) {
+      checked++;
+      const { container } = renderWidget(widget);
+      expect(container.querySelector('[data-device-status]')?.getAttribute('data-device-status'), `${widget.id} lost the status`).toBe('online');
+      expect(container.querySelector('[data-device-status-caption]')?.textContent, `${widget.id} lost the last seen`).toContain('Last seen');
+      cleanup();
+    }
+    expect(checked, 'the gallery lost a device status card').toBeGreaterThanOrEqual(1);
+    for (const widget of galleryWidgets('online-doughnut')) {
+      checked++;
+      const { container } = renderWidget(widget);
+      const ring = container.querySelector('[data-online-doughnut]');
+      expect([ring?.getAttribute('data-online'), ring?.getAttribute('data-offline'), ring?.getAttribute('data-no-status')], `${widget.id} miscounted`).toEqual(['2', '1', '1']);
+      cleanup();
+    }
+    expect(checked, 'the gallery lost an online doughnut').toBeGreaterThanOrEqual(2);
   });
 
   it('draws one bar per device on the per-device bar chart', () => {

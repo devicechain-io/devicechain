@@ -235,6 +235,24 @@ describe('validateWidgetDescriptor', () => {
     expect(at({ const: true }, 'control')).toContain('binding.countBySeverity');
   });
 
+  it('checks the presence binding that makes a measurement widget read connectivity instead of readings', () => {
+    const at = (presence: unknown, channel = 'measurement') =>
+      issuesOf({
+        ...valid(),
+        channel,
+        datasource: { mode: 'required', selectors: ['device'] },
+        binding: channel === 'alarm' ? { pageSize: { const: 1 }, presence } : { presence },
+      }).map((i) => i.path);
+    expect(at({ const: true })).toEqual([]);
+    // A constant switch and nothing else.
+    expect(at({ const: false })).toEqual(['binding.presence']);
+    expect(at({ option: 'state', equals: 'ACTIVE' })).toEqual(['binding.presence']);
+    expect(at({ const: true, option: 'state' })).toEqual(['binding.presence']);
+    expect(at(true)).toEqual(['binding.presence']);
+    // Only the measurement channel reads connectivity.
+    expect(at({ const: true }, 'alarm')).toContain('binding.presence');
+  });
+
   it('checks that the deviceType binding names a declared string option', () => {
     const at = (deviceType: unknown, channel = 'alarm') =>
       issuesOf({

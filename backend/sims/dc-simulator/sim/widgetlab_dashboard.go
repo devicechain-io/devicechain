@@ -443,6 +443,7 @@ func buildWidgetlabGallery(devices []DeviceInstance) (string, error) {
 	def.Widgets = append(def.Widgets, widgetlabAggregates(onSensor)...)
 	def.Widgets = append(def.Widgets, widgetlabFleet()...)
 	def.Widgets = append(def.Widgets, widgetlabAlarmSeverity(onZone)...)
+	def.Widgets = append(def.Widgets, widgetlabPresence(onSensor(), onZone)...)
 
 	raw, err := json.Marshal(def)
 	if err != nil {
@@ -756,6 +757,36 @@ func widgetlabAlarmSeverity(onZone widgetSubject) []dashboardWidget {
 	return []dashboardWidget{
 		buildAlarmSeverityWidget("wl-alarm-severity", box{0, 6, r, 3}, onZone, "Active alarms by severity", ""),
 		buildAlarmSeverityWidget("wl-alarm-severity-type", box{6, 6, r, 3}, onZone, "Sensor alarms by severity", WidgetlabDeviceTypeToken),
+	}
+}
+
+// widgetlabPresenceRow is the first row of the presence block (rows 57-60), under the alarm-severity
+// block that ends at row 56.
+const widgetlabPresenceRow = 57
+
+// buildDeviceStatusWidget shows one device's connectivity: Online or Offline, and when it was last
+// seen. A staleAfterSeconds above zero marks the card stale once the device has been silent that long.
+func buildDeviceStatusWidget(id string, b box, s widgetSubject, title string, staleAfterSeconds int) dashboardWidget {
+	options := map[string]any{"title": title}
+	if staleAfterSeconds > 0 {
+		options["staleAfterSeconds"] = staleAfterSeconds
+	}
+	return dashboardWidget{Id: id, Type: "device-status", Layout: b.layout(), Datasource: s.datasource(), Options: options}
+}
+
+// buildOnlineDoughnutWidget rings the subject's anchor by connectivity: online, offline and no
+// status yet.
+func buildOnlineDoughnutWidget(id string, b box, s widgetSubject, title string) dashboardWidget {
+	return dashboardWidget{Id: id, Type: "online-doughnut", Layout: b.layout(), Datasource: s.datasource(), Options: map[string]any{"title": title}}
+}
+
+// widgetlabPresence places the connectivity widgets: the status card on the sensor and the doughnut
+// over the zone. Neither selects a measurement: both read device-state.
+func widgetlabPresence(onSensor, onZone widgetSubject) []dashboardWidget {
+	const r = widgetlabPresenceRow
+	return []dashboardWidget{
+		buildDeviceStatusWidget("wl-device-status", box{0, 3, r, 3}, onSensor, "Sensor status", 600),
+		buildOnlineDoughnutWidget("wl-online-doughnut", box{3, 4, r, 4}, onZone, "Sensors online"),
 	}
 }
 

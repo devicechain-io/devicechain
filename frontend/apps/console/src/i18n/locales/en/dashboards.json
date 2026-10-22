@@ -494,6 +494,8 @@
   "widgetLabelMaxSeries": "Most lines",
   "widgetHintMaxSeries": "The most devices drawn as lines when the chart shows one line per device (default 5, at most 12). Each line costs one history read, and colours repeat after five. A larger group shows its first devices and says how many it left out.",
   "widgetTypeFleetCount": "Fleet count",
+  "widgetTypeDeviceStatus": "Device status",
+  "widgetTypeOnlineDoughnut": "Online doughnut",
   "widgetLabelFleetShow": "Count",
   "widgetHintFleetShow": "Devices needing attention: how many have a latest reading of the measurement in an abnormal band of the thresholds below. Devices: how many devices the group holds.",
   "widgetFleetShowAttention": "Devices needing attention",

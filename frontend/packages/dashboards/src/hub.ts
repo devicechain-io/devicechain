@@ -31,8 +31,9 @@ import {
   CREATE_COMMAND,
 } from './internal/command-doc';
 import { LATEST_LOCATIONS_QUERY } from './internal/location-doc';
+import { DEVICE_PRESENCE_QUERY } from './internal/presence-doc';
 import { createLimiter, MEMBER_SEED_CONCURRENCY, SEED_CANCELLED } from './members';
-import type { MemberBucketCriteria, MemberRef, MemberRoster, MemberSeed, MemberSeedPlan, MemberSink, SeedFailure } from './members';
+import type { MemberBucketCriteria, MemberRef, MemberRoster, MemberSeed, MemberSeedPlan, MemberSink, PresenceSink, SeedFailure } from './members';
 import { BUCKETED_MEASUREMENTS, type MeasurementBucket } from './queries';
 import {
   MEASUREMENT_STREAM,
@@ -47,6 +48,7 @@ import type {
   AnchorTarget,
   CommandRow,
   DatasourceSelector,
+  DevicePresence,
   LocationSample,
   MeasurementSample,
   SlotBinding,
@@ -100,6 +102,15 @@ const COMMAND_POLL_MS = 4_000;
 // subscription rather than a tighter poll — a tighter poll would multiply a whole
 // board's queries against a projection that is only written when a device moves.
 const LOCATION_POLL_MS = 15_000;
+
+// Presence channel cadence. device-state exposes NO presence subscription, so like the location
+// channel this is poll-only and the poll IS the channel; the same batch-per-tick reasoning applies
+// (one `deviceStatesByDeviceToken` round trip per tick covers every device on the widget). Presence
+// changes on the scale of an inactivity timeout (minutes), so it polls at the location cadence rather
+// than faster: a tighter poll would multiply a board's queries to learn nothing sooner.
+const PRESENCE_POLL_MS = 15_000;
+// deviceStatesByDeviceToken refuses more than 1000 tokens with LIMIT_EXCEEDED.
+const PRESENCE_CHUNK = 1000;
 
 // DeviceResolver turns the graph references in a dashboard definition into the
 // device tokens event-management keys on (measurementStream(deviceToken:), per
@@ -406,6 +417,11 @@ export interface WidgetDataSource {
   // silent). `null` when it cannot say -- no published profile, no way to look, or the lookup
   // failed -- and an unknown declaration is read as declared, never as absent. Optional like the above.
   declaredMetrics?(deviceType: string): Promise<readonly string[] | null>;
+  // A presence widget's roster and connectivity: the members the selector resolves to (delivered
+  // once), then a whole snapshot of their device-state on every poll (online or offline, last active).
+  // Optional: a source with no device-state to read (a recorded run) omits it, and the widget then
+  // says so rather than draw a status it cannot know.
+  subscribePresence?(datasource: DatasourceSelector, sink: PresenceSink): () => void;
 }
 
 // One widget's interest in a device stream: the measurement names it wants (an
@@ -446,6 +462,8 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
   // commandDisposers — the location channel holds a poll per subscription, not a shared
   // device stream), so disposeAll() can tear down every map widget's poll.
   private readonly locationDisposers = new Set<() => void>();
+  // Live presence-subscription disposers (same rationale: a poll per subscription).
+  private readonly presenceDisposers = new Set<() => void>();
 
   // Which of this hub's sockets are down, folded into one state a header can show.
   private readonly connection = new ConnectionTracker();
@@ -1027,6 +1045,77 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
     }
   }
 
+  // subscribePresence: the roster, then the roster's device-state on an interval. Poll-only (see
+  // PRESENCE_POLL_MS). A refusal (`state:read` is outside some members' grants) becomes `forbidden`,
+  // and every other failure stays an error, as for the location channel. A slow read that lands after
+  // a newer one is dropped, so an old answer never overwrites a fresher one.
+  subscribePresence(datasource: DatasourceSelector, sink: PresenceSink): () => void {
+    let disposed = false;
+    let poll: ReturnType<typeof setInterval> | undefined;
+    let shown: (() => void) | undefined;
+    let generation = 0;
+    const dispose = (): void => {
+      disposed = true;
+      if (poll) clearInterval(poll);
+      if (shown) document.removeEventListener('visibilitychange', shown);
+      this.presenceDisposers.delete(dispose);
+    };
+    this.presenceDisposers.add(dispose);
+
+    const reconcile = (tokens: string[]): void => {
+      const gen = ++generation;
+      this.queryPresence(tokens).then(
+        (states) => {
+          if (!disposed && gen === generation) sink.next(states);
+        },
+        (err) => {
+          if (disposed || gen !== generation) return;
+          if (isForbiddenError(err)) sink.forbidden?.();
+          else sink.error?.(err);
+        },
+      );
+    };
+
+    this.resolveRoster(datasource).then(
+      ({ roster }) => {
+        if (disposed) return;
+        sink.roster(roster);
+        const tokens = roster.members.map((m) => m.token);
+        if (tokens.length === 0) {
+          sink.next([]);
+          return;
+        }
+        // A hidden tab reads nothing: nobody is looking, and a board left open in a background tab
+        // would otherwise poll device-state for as long as the browser lives. Shown again, it reads at
+        // once rather than drawing the snapshot it last had until the next tick.
+        const hidden = (): boolean => typeof document !== 'undefined' && document.hidden;
+        poll = setInterval(() => {
+          if (!hidden()) reconcile(tokens);
+        }, PRESENCE_POLL_MS);
+        if (typeof document !== 'undefined') {
+          shown = () => {
+            if (!hidden()) reconcile(tokens);
+          };
+          document.addEventListener('visibilitychange', shown);
+        }
+        reconcile(tokens);
+      },
+      (err) => {
+        if (disposed) return;
+        if (isForbiddenError(err)) sink.forbidden?.();
+        else sink.error?.(err);
+      },
+    );
+    return dispose;
+  }
+
+  private async queryPresence(tokens: string[]): Promise<DevicePresence[]> {
+    const chunks: string[][] = [];
+    for (let i = 0; i < tokens.length; i += PRESENCE_CHUNK) chunks.push(tokens.slice(i, i + PRESENCE_CHUNK));
+    const reads = await Promise.all(chunks.map((deviceTokens) => gql(STATE_AREA, DEVICE_PRESENCE_QUERY, { deviceTokens })));
+    return reads.flatMap((r) => r.deviceStatesByDeviceToken);
+  }
+
   // ── WidgetActions (the write seam) ───────────────────────────────────────
 
   // can reports whether the viewer holds an authority ('*' grants all). Drives whether
@@ -1117,6 +1206,8 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
     this.commandDisposers.clear();
     for (const dispose of [...this.locationDisposers]) dispose();
     this.locationDisposers.clear();
+    for (const dispose of [...this.presenceDisposers]) dispose();
+    this.presenceDisposers.clear();
   }
 
   // The number of distinct upstream device streams currently open (observability

@@ -36,6 +36,14 @@ export interface MeasurementStreamState {
 // is what separates the empty states: a reading is a reading wherever it came from, but the lack
 // of one means "still loading" until the seed has settled, and only then "no data in range" (the
 // device sent nothing in the span) or "does not report this" (its profile does not declare it).
+// Where one member's connectivity read stands. `unknown` is a settled answer: device-state holds no
+// row for the device (it has never sent anything), which is neither online nor offline.
+export type MemberPresence =
+  | { status: 'pending' }
+  | { status: 'failed' }
+  | { status: 'unknown' }
+  | { status: 'ready'; active: boolean; lastActivityTime: string | null; inactivityTimeout: number };
+
 export interface FleetMember {
   token: string;
   // The device's name, when the source knows it; the widget falls back to the token.
@@ -55,6 +63,9 @@ export interface FleetMember {
   // published profile -- and unknown is read as declared: a device is never left out of a count
   // on a guess.
   declared?: string[];
+  // Present only on a widget that reads connectivity (its descriptor declares `binding.presence`);
+  // such a member holds no readings. Optional, so a widget that does not ask never sees it.
+  presence?: MemberPresence;
 }
 
 // The members a fleet widget draws. `total` is the size of the anchor; `members` holds at most the

@@ -1420,6 +1420,49 @@
         "title": "Sensor alarms by severity"
       },
       "type": "alarm-severity"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [],
+        "slot": "sensor"
+      },
+      "id": "wl-device-status",
+      "layout": {
+        "base": {
+          "col": 0,
+          "cols": 3,
+          "mode": "grid",
+          "row": 57,
+          "rows": 3
+        }
+      },
+      "options": {
+        "staleAfterSeconds": 600,
+        "title": "Sensor status"
+      },
+      "type": "device-status"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [],
+        "slot": "zone"
+      },
+      "id": "wl-online-doughnut",
+      "layout": {
+        "base": {
+          "col": 3,
+          "cols": 4,
+          "mode": "grid",
+          "row": 57,
+          "rows": 4
+        }
+      },
+      "options": {
+        "title": "Sensors online"
+      },
+      "type": "online-doughnut"
     }
   ]
 }

@@ -37,7 +37,7 @@ import {
 import { isForbiddenError } from '@devicechain/client';
 import { useEffect, useMemo, useState, type ComponentType, type ReactNode } from 'react';
 
-import { alarmSubscription, commandSubscription, groupsAlarmsByDeviceType, measurementSpan, measurementIsMembersOnly, measurementWindow, membersMode, wantsEventMarkers } from './binding-policy';
+import { alarmSubscription, commandSubscription, groupsAlarmsByDeviceType, measurementSpan, measurementIsMembersOnly, measurementWindow, membersMode, presenceMode, wantsEventMarkers } from './binding-policy';
 import { useHeld } from './use-held';
 import { accessStrings } from './access-strings';
 import { defaultWidgetRegistry } from './default-registry';
@@ -58,6 +58,7 @@ import type { AggregateFeedProps } from './aggregate-feed';
 import type { GroupedAlarmProps } from './widgets/alarm-grouped';
 import type { EventMarkersFeedProps } from './event-markers-feed';
 import type { FleetFeedProps } from './fleet-feed';
+import type { PresenceFeedProps } from './presence-feed';
 import { narrowActions, narrowCandidates, narrowSelect } from './widget-host';
 
 export interface ConnectedWidgetProps {
@@ -250,7 +251,18 @@ function StaticConnectedWidget({ widget, Component, actions }: ChannelProps) {
 // widget's containment, which shows the failure, and its Reset fetches it again (lazyChunk).
 const FleetFeed = lazyChunk<typeof import('./fleet-feed')>(() => import('./fleet-feed')).component<never, FleetFeedProps>('default', undefined, ChunkLoadingFrame);
 
+// The presence feed (presence-feed.tsx) loads with the presence widgets, in their chunk: a board
+// without a device status card or an online doughnut never downloads it.
+const PresenceFeed = lazyChunk<typeof import('./widgets/presence-widgets')>(() => import('./widgets/presence-widgets')).component<never, PresenceFeedProps>('PresenceFeed');
+
 function MeasurementConnectedWidget(props: ChannelProps) {
+  // A presence widget reads device-state, not readings: its own feed, whatever it is bound to (the
+  // widget itself says so when a card meant for one device is bound to a group).
+  if (presenceMode(props.descriptor)) {
+    return (
+      <PresenceFeed hub={props.hub} widget={props.widget} descriptor={props.descriptor} Component={props.Component} actions={props.actions} ErrorFrame={WidgetErrorFrame} />
+    );
+  }
   // Read member by member, or as one stream keyed by measurement name: decided by the descriptor
   // and the widget's options, never by the widget id.
   //

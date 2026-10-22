@@ -53,7 +53,8 @@ afterEach(cleanup);
 
 // Every built-in that reads measurements by name or aggregates them: the ones that must refuse.
 const ONE_DEVICE_WIDGETS = Object.values(builtinWidgetDescriptors)
-  .filter((d) => (d.channel === 'measurement' && !('members' in d.binding)) || d.channel === 'aggregate')
+  // (the presence widgets read device-state, and have their own cases in presence.test.tsx)
+  .filter((d) => (d.channel === 'measurement' && !('members' in d.binding) && !('presence' in d.binding)) || d.channel === 'aggregate')
   .map((d) => d.id);
 
 describe('a widget that shows one device, bound to a group', () => {
@@ -117,6 +118,6 @@ describe('a widget that shows one device, bound to a group', () => {
       .filter((d) => d.datasource.mode !== 'none' && (d.datasource.selectors as readonly string[]).includes('anchor'))
       .map((d) => d.id)
       .sort();
-    expect(takesGroup).toEqual(['alarm-count', 'alarm-severity', 'alarm-table', 'bar-chart', 'fleet-count', 'fleet-table', 'map', 'timeseries-chart']);
+    expect(takesGroup).toEqual(['alarm-count', 'alarm-severity', 'alarm-table', 'bar-chart', 'fleet-count', 'fleet-table', 'map', 'online-doughnut', 'timeseries-chart']);
   });
 });

@@ -65,7 +65,7 @@ bound to a slot needs its datasource resolved first (`resolveWidgets` or
 
 | channel | widgets |
 | --- | --- |
-| measurement | `timeseries-chart`, `latest-card`, `gauge`, `linear-gauge`, `level-gauge`, `battery`, `status-light`, `signal-bars`, `compass`, `progress-ring`, `table`, `bar-chart`, `pie-chart`, `fleet-table`, `fleet-count` |
+| measurement | `timeseries-chart`, `latest-card`, `gauge`, `linear-gauge`, `level-gauge`, `battery`, `status-light`, `signal-bars`, `compass`, `progress-ring`, `table`, `bar-chart`, `pie-chart`, `fleet-table`, `fleet-count`, `device-status`, `online-doughnut` |
 | aggregate | `stat-card` |
 | none (static) | `label`, `image` |
 | alarm | `alarm-table`, `alarm-count`, `alarm-severity` |
@@ -77,6 +77,11 @@ bound to a slot needs its datasource resolved first (`resolveWidgets` or
 group member by member. The other measurement widgets, and `stat-card`, show one
 device and refuse a group. `stat-card` shows one figure (average, minimum, maximum, sum, count or
 latest) over the board's time range.
+
+`device-status` and `online-doughnut` read the devices' connectivity (online or offline, and when
+each was last active) from device-state, not their readings. They ride the measurement channel's
+member feed (`data.members[].presence`), so the channel set is unchanged. `device-status` shows one
+device; `online-doughnut` takes a group.
 
 The time-series chart, the dial gauge and the compass are drawn with
 [Apache ECharts](https://echarts.apache.org); the other widgets are plain DOM
