@@ -13,6 +13,7 @@ package rdb
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
 	"sort"
@@ -29,6 +30,9 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
 )
+
+// errDeliberateRollback is what a writer returns to roll its transaction back on purpose.
+var errDeliberateRollback = errors.New("deliberate rollback")
 
 type auditTxWidget struct {
 	ID   uint `gorm:"primaryKey"`
@@ -192,11 +196,18 @@ func TestAuditTxConcurrentWritersDoNotDeadlockAndEveryChangeIsJournaled(t *testi
 						}
 					}
 					if rollback {
-						return fmt.Errorf("deliberate rollback")
+						return errDeliberateRollback
 					}
 					return nil
 				})
 				if rollback {
+					// Only the deliberate error is expected here: a deadlock (or any other
+					// failure) in a transaction that was going to roll back anyway is still
+					// a failure, and must not be discarded with it.
+					if !errors.Is(err, errDeliberateRollback) {
+						errs <- err
+						return
+					}
 					continue
 				}
 				if err != nil {
