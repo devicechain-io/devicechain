@@ -184,7 +184,7 @@ const schemaOrder = (type: WidgetType) => Object.keys(specsOf(type));
 //
 // Index 1 written, index 2 shown: both interior wherever the list is long enough to have
 // an interior, always distinct from each other, and folded back for the short lists
-// (a two-value enum has no interior, and is covered by the group check instead).
+// (a two-value enum has no interior; `enumIndex` rotates siblings apart).
 type Side = 'written' | 'shown';
 const SIDE_INDEX: Record<Side, number> = { written: 1, shown: 2 };
 
@@ -203,6 +203,27 @@ function choiceIndex(offered: number, side: Side): number {
 // The command a command-button is driven to, or rendered from. All three command keys
 // resolve through one choice, because that is what they are: picking a command bakes its
 // key, its label and its parameter descriptors together.
+// The entry an ENUM option of `type` uses on this side. For a list of three or more it is
+// `choiceIndex` unchanged. A TWO-valued enum has no interior, so every one of them would land
+// on the same entry of its own list, and two of them on one widget (the timeseries chart's
+// groupBy and markAlarmsScope, both ending in 'device') would then be indistinguishable. Each
+// is therefore rotated by its ordinal among the widget's two-valued enums: still different
+// between the two sides (the rotation is the same for both), and different between siblings.
+function enumIndex(type: WidgetType, key: string, side: Side): number {
+  const spec = specsOf(type)[key];
+  expect(spec.kind, `${type}.${key} is not an enum`).toBe('enum');
+  const offered = spec.kind === 'enum' ? spec.values.length : 0;
+  const base = choiceIndex(offered, side);
+  if (offered !== 2) return base;
+  const salt = schemaOrder(type)
+    .filter((k) => {
+      const s = specsOf(type)[k];
+      return s.kind === 'enum' && s.values.length === 2;
+    })
+    .indexOf(key);
+  return (base + salt) % 2;
+}
+
 const commandFor = (side: Side) => COMMANDS[choiceIndex(COMMANDS.length, side)];
 
 const slotFor = (side: Side) => SLOT_NAMES[choiceIndex(SLOT_NAMES.length, side)];
@@ -228,7 +249,7 @@ function optionValue(type: WidgetType, key: string, side: Side): string | number
       // displaying a constant is caught instead.
       return true;
     case 'enum':
-      return spec.values[choiceIndex(spec.values.length, side)];
+      return spec.values[enumIndex(type, key, side)];
     case 'number':
       return numberValue(type, key);
     case 'string':
@@ -422,7 +443,7 @@ function choiceFor(
   expect(values.length, `the ${id} dropdown on ${type} offered ${offered} of ${values.length} values`).toBe(
     offered,
   );
-  const index = choiceIndex(values.length, 'written');
+  const index = enumIndex(type, id, 'written');
   return { index, entered: { [id]: values[index] } };
 }
 
@@ -709,7 +730,7 @@ async function expectedChoiceLabel(
   // The label of the entry the bag's value names — at the SHOWN offset, which is not the
   // entry the write pass drives. A control displaying any fixed entry fails here for at
   // least one field, whichever entry it fixes on.
-  return (choices[choiceIndex(values.length, 'shown')].textContent ?? '').trim();
+  return (choices[enumIndex(type, id, 'shown')].textContent ?? '').trim();
 }
 
 describe('the config panel shows each option the widget already carries', () => {
@@ -837,14 +858,7 @@ describe('the gate itself', () => {
       // timeseries chart's markAlarms and markCommands) cannot differ here. They are excluded,
       // and the pair is pinned where it can be: WidgetConfigPanel.markers.test.tsx renders each
       // with only itself set and requires the other to read unchecked.
-      // The same holds for a two-valued enum: the driver reaches its second entry on the written side,
-      // so the timeseries chart's groupBy and markAlarmsScope (both ending in 'device') cannot differ here
-      // either. Enums offering three or more entries stay in the check.
-      const twoValuedEnum = (k: string) => {
-        const spec = specsOf(type)[k];
-        return spec.kind === 'enum' && spec.values.length < 3;
-      };
-      const keys = schemaOrder(type).filter((k) => specsOf(type)[k].kind !== 'boolean' && !twoValuedEnum(k));
+      const keys = schemaOrder(type).filter((k) => specsOf(type)[k].kind !== 'boolean');
       for (const side of ['written', 'shown'] as const) {
         const values = keys.map((k) => JSON.stringify(optionValue(type, k, side)));
         const collisions = keys.filter((_k, i) => values.indexOf(values[i]) !== i);
