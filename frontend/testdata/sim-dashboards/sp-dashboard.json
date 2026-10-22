@@ -23,7 +23,7 @@
     },
     "selectedMachine": {
       "defaultBinding": {
-        "deviceToken": "sp-hauler-01",
+        "deviceToken": "sp-hauler-03",
         "kind": "device"
       },
       "label": "Machine",
@@ -415,7 +415,7 @@
       "layout": {
         "base": {
           "col": 0,
-          "cols": 12,
+          "cols": 8,
           "mode": "grid",
           "row": 8,
           "rows": 5
@@ -488,6 +488,40 @@
         "title": "Fleet"
       },
       "type": "fleet-table"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "engine_temp_c"
+        ],
+        "slot": "selectedMachine"
+      },
+      "id": "sp-engine-trend",
+      "layout": {
+        "base": {
+          "col": 8,
+          "cols": 4,
+          "mode": "grid",
+          "row": 8,
+          "rows": 5
+        }
+      },
+      "options": {
+        "markAlarms": true,
+        "markCommands": true,
+        "max": 130,
+        "min": 60,
+        "thresholds": [
+          {
+            "level": "critical",
+            "value": 105
+          }
+        ],
+        "title": "Engine temp history",
+        "unit": "°C"
+      },
+      "type": "timeseries-chart"
     }
   ]
 }

@@ -314,3 +314,53 @@ func TestTheWatchAsksForEveryFieldItRecords(t *testing.T) {
 		t.Errorf("the alarm query asks for fields nothing records: %v", asked)
 	}
 }
+
+// The recording carries what each kind's profile declares: the crusher plant declares no fuel, so a
+// replayed fleet table says it does not report fuel rather than that it sent none.
+func TestBuildCarriesEachKindsDeclaredMeasurements(t *testing.T) {
+	p, o := fixture()
+	m := sim.NewSitepulse(1, sim.Load{}).Manifest()
+	o.Declared = DeclaredByType(m)
+	rec, _, err := Build(context.Background(), p, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	machine := []string{sim.SitepulseFuelKey, sim.SitepulseEngineTempKey, sim.SitepulseEngineHoursKey, sim.SitepulsePayloadKey, sim.SitepulseTyreKey}
+	want := map[string][]string{
+		"Hauler": machine, "Loader": machine, "Dozer": machine,
+		"Plant": {sim.SitepulseThroughputKey, sim.SitepulsePlantRunningKey},
+	}
+	if !reflect.DeepEqual(rec.DeclaredMetrics, want) {
+		t.Fatalf("declaredMetrics = %v, want %v", rec.DeclaredMetrics, want)
+	}
+	var buf bytes.Buffer
+	if err := Write(&buf, rec); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), `"declaredMetrics":{"Dozer":`) {
+		t.Fatalf("the written recording carries no declaredMetrics: %.400s", buf.String())
+	}
+
+	// Without declarations, none is written: a player then reads every device as declaring all.
+	o.Declared = nil
+	if rec, _, err = Build(context.Background(), p, o); err != nil || rec.DeclaredMetrics != nil {
+		t.Fatalf("no declarations: err %v", err)
+	}
+
+	// A type that declares nothing, and a kind whose devices disagree, are refused.
+	o.Declared = DeclaredByType(m)
+	o.Declared[sim.SitepulsePlantTypeToken] = nil
+	if _, _, err := Build(context.Background(), p, o); err == nil || !strings.Contains(err.Error(), "declares no measurements") {
+		t.Fatalf("a type declaring nothing: err %v", err)
+	}
+	o.Declared = DeclaredByType(m)
+	o.Devices = append([]sim.DeviceInstance(nil), o.Devices...)
+	for i, d := range o.Devices {
+		if d.ExternalId == "SP-HL-0002" {
+			o.Devices[i].DeviceTypeToken = sim.SitepulsePlantTypeToken
+		}
+	}
+	if _, _, err := Build(context.Background(), p, o); err == nil || !strings.Contains(err.Error(), "do not all declare") {
+		t.Fatalf("a kind that disagrees: err %v", err)
+	}
+}

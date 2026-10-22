@@ -44,6 +44,14 @@
 // writes it only from the device's own publish log (the value it sent for the alarm's metric
 // at the raise instant), so an alarm raised before the run carries none, and plays with no
 // value rather than a guessed one.
+//
+// Version 2 may also carry `declaredMetrics`: for each device `kind`, the measurement names that
+// kind's device-type profile DECLARES (what the live board reads from the active profile
+// version). It is what lets a replayed fleet tell "does not report this" (the profile never
+// declares it: the crusher has no fuel) from "no data in range" (declared, and silent). A kind
+// with no entry is unknown, and a player counts its devices as declaring everything, which is the
+// live board's rule for a profile it cannot read. Every key is a kind some device has, and every
+// list names at least one measurement, each once.
 
 // The newest version this reader understands; it reads every version in
 // RECORDING_FORMAT_VERSIONS.
@@ -143,6 +151,9 @@ export interface RecordedLocationColumns {
   spd: Array<number | null>;
 }
 
+// What each device kind's profile declares (formatVersion 2, optional): kind -> measurement names.
+export type RecordedDeclarations = Record<string, string[]>;
+
 export interface BoardRecording {
   kind: typeof RECORDING_KIND;
   formatVersion: (typeof RECORDING_FORMAT_VERSIONS)[number];
@@ -155,6 +166,8 @@ export interface BoardRecording {
   build: { gitSha: string; sdkCommit: string };
   clock: RecordedClockSegment[];
   devices: RecordedDevice[];
+  // Absent when the recording does not say (every version 1 recording, and older version 2 ones).
+  declaredMetrics?: RecordedDeclarations;
   channels: RecordedChannels;
   board: { path: string; sourceCommit: string; sha256: string };
   sourceHashes: Record<string, string>;
@@ -309,7 +322,7 @@ export function parseBoardRecording(input: unknown): BoardRecording {
       'build', 'clock', 'devices', 'channels', 'board', 'sourceHashes', 'converter', 'chapters',
       'measurements', 'alarms', 'locations',
     ],
-    ['excerpt'],
+    ['excerpt', 'declaredMetrics'],
   );
 
   if (root.kind !== RECORDING_KIND) {
@@ -348,6 +361,23 @@ export function parseBoardRecording(input: unknown): BoardRecording {
   const tokens = new Set(devices.map((d) => d.token));
   if (tokens.size !== devices.length || new Set(devices.map((d) => d.id)).size !== devices.length) {
     throw new RecordingFormatError('$.devices', 'duplicate device id or token');
+  }
+
+  let declaredMetrics: RecordedDeclarations | undefined;
+  if (root.declaredMetrics !== undefined) {
+    if (version === 1) throw new RecordingFormatError('$.declaredMetrics', 'version 1 carries no declarations');
+    const dm = root.declaredMetrics;
+    if (!isObj(dm)) throw new RecordingFormatError('$.declaredMetrics', 'expected an object');
+    const kinds = new Set(devices.map((d) => d.kind));
+    declaredMetrics = {};
+    for (const kind of Object.keys(dm)) {
+      const p = `$.declaredMetrics.${kind}`;
+      if (!kinds.has(kind)) throw new RecordingFormatError(p, `no device in $.devices is of kind '${kind}'`);
+      const names = column(dm[kind], p, str);
+      if (names.length === 0) throw new RecordingFormatError(p, 'declares nothing; leave the kind out instead');
+      if (new Set(names).size !== names.length) throw new RecordingFormatError(p, 'duplicate measurement name');
+      declaredMetrics[kind] = names;
+    }
   }
 
   const ch = strict(root.channels, '$.channels', ['measurements', 'alarms', 'locations', 'commands']);
@@ -569,5 +599,6 @@ export function parseBoardRecording(input: unknown): BoardRecording {
     locations,
   };
   if (excerpt) rec.excerpt = excerpt;
+  if (declaredMetrics) rec.declaredMetrics = declaredMetrics;
   return rec;
 }

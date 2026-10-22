@@ -295,6 +295,11 @@ The settings depend on the widget. Common ones:
 - **Time span** (timeseries chart): how much history the chart draws, in seconds, from 60 to
   604800. Leave it empty and the chart follows the board's time range, which viewers can change.
   Set it and the chart keeps that span whatever range a viewer picks.
+- **Min** and **Max** (timeseries chart): the ends of the value axis. Leave them empty and the
+  chart picks its own range, which starts at zero for readings that never go near it. Set them to
+  frame the readings that matter: a 92 °C engine on an axis from 70 to 130 sits where its overheat
+  line can be seen above it, not as a flat line along the top of the chart. An end is never a cut
+  off: a reading or threshold beyond it widens the axis, so nothing drawn falls off the chart.
 - **Mark alarms** and **Mark commands** (timeseries chart): both off by default. **Mark alarms**
   draws the chart device's alarms over the readings: a faint band from the moment an alarm was
   raised to the moment it cleared (to the right edge while it is still active) with a line at the

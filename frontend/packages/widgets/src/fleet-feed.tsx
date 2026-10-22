@@ -140,7 +140,14 @@ function FleetFeed({ hub, widget, descriptor, Component, actions, ErrorFrame }: 
   const queued = useRef<Map<string, Map<string, MeasurementSample>>>(new Map());
   const pausedRef = useRef(pausedAt !== undefined);
   const [version, bump] = useReducer((n: number) => n + 1, 0);
+  // Which roster the seeds and declarations were read for: the subscription's generation and the
+  // member tokens. The generation is what makes a NEW subscription's roster a new key even when its
+  // members are the same (board-replay builds a new source after every seek, over the same
+  // devices). By tokens alone, the reset to null and the new roster could land in one batch, React
+  // saw no change, and the new store's seeds and declarations were never read: after a seek every
+  // cell a live reading had not filled stayed "loading".
   const [rosterKey, setRosterKey] = useState<string | null>(null);
+  const generation = useRef(0);
   const flushTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   // Re-reads asked for by a member stream that resumed; the seeds effect re-runs on each.
   const [resumes, resumed] = useReducer((n: number) => n + 1, 0);
@@ -161,11 +168,12 @@ function FleetFeed({ hub, widget, descriptor, Component, actions, ErrorFrame }: 
     queued.current = new Map();
     setRosterKey(null);
     bump();
+    const gen = ++generation.current;
     if (!ds || !supported) return;
     const dispose = hub.subscribeMembers!(ds, {
       roster: (roster) => {
         s.roster = roster;
-        setRosterKey(roster.members.map((m) => m.token).join('\n'));
+        setRosterKey(`${gen}\n${roster.members.map((m) => m.token).join('\n')}`);
         schedule();
       },
       next: (sample) => {

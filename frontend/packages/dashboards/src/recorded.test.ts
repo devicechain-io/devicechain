@@ -735,7 +735,7 @@ describe.skipIf(!existsSync(EXCERPT))('the converter excerpt of the first record
     stop();
     expect(rosters).toHaveLength(1);
     expect(rosters[0]).toHaveLength(r.devices.length);
-    expect(rosters[0].find((m) => m.token === 'sp-dozer-01')).toEqual({ token: 'sp-dozer-01', name: null });
+    expect(rosters[0].find((m) => m.token === 'sp-dozer-01')).toEqual({ token: 'sp-dozer-01', name: null, deviceType: 'Dozer' });
     expect(rosters[0].every((m) => m.name === null)).toBe(true);
     expect(seeds.get('sp-dozer-01')!.observed).toContain('fuel_pct');
     expect(seeds.get('sp-dozer-01')!.observed).not.toContain('tyre_pressure_kpa');

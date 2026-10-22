@@ -302,6 +302,22 @@ const MARK_COMMANDS = {
   helpId: 'widgetHintMarkCommands',
 } as const satisfies RuntimeOptionSpec;
 
+// The timeseries chart's value-axis ends: optional, with no default, so the axis is ECharts' own
+// unless the author frames it. An end is reached, never clipped at: a reading beyond it widens the
+// axis. A 92 °C engine on an axis from zero is a flat line at the top of an empty tile; framed at
+// 70..130 it sits where its overheat edge can be seen above it.
+const CHART_AXIS_MIN = {
+  kind: 'number',
+  labelId: 'widgetLabelMin',
+  helpId: 'widgetHintChartAxisMin',
+} as const satisfies RuntimeOptionSpec;
+
+const CHART_AXIS_MAX = {
+  kind: 'number',
+  labelId: 'widgetLabelMax',
+  helpId: 'widgetHintChartAxisMax',
+} as const satisfies RuntimeOptionSpec;
+
 const WINDOW_SECONDS = {
   kind: 'number',
   integer: true,
@@ -371,7 +387,10 @@ export const builtinWidgetDescriptors = {
       windowSeconds: WINDOW_SECONDS,
       markAlarms: MARK_ALARMS,
       markCommands: MARK_COMMANDS,
+      min: CHART_AXIS_MIN,
+      max: CHART_AXIS_MAX,
     },
+    constraints: [{ kind: 'greater-than', key: 'max', than: 'min' }],
     defaults: { title: 'Timeseries chart' },
     interactions: {},
     freshness: true,

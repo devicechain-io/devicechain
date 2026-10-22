@@ -21,6 +21,7 @@ import type {
 } from '@devicechain/dashboards';
 import { WidgetTimeRangeProvider } from '@devicechain/widget-sdk';
 import { act, cleanup, render, screen } from '@testing-library/react';
+import { useState } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ConnectedWidget } from './connected-widget';
@@ -232,6 +233,66 @@ describe('the data it asks for', () => {
     expect(f.disposed).toHaveBeenCalledTimes(1);
     unmount();
     expect(f.disposed).toHaveBeenCalledTimes(2);
+  });
+});
+
+// A new data source with the SAME members (board-replay builds one after every seek) is a new
+// store, and its seeds and declarations must be read from it. The roster here arrives inside the
+// microtask after the subscribe call, as the recorded source delivers it: the feed's own reset and
+// the roster land in one batch, so a feed that keyed its reads by the member tokens alone saw "no change" and never
+// read the new source, leaving every cell loading after a seek.
+describe('a new data source for the same members', () => {
+  it('reads the seeds and the declarations again, from the new source', async () => {
+    // The board swaps its source from a state update, as board-replay does on a seek.
+    let swap: (hub: DashboardHub) => void = () => {};
+    function Board({ initial }: { initial: DashboardHub }) {
+      const [hub, setHub] = useState(initial);
+      swap = setHub;
+      return (
+        <WidgetTimeRangeProvider range={live()}>
+          <ConnectedWidget widget={widget()} hub={hub} />
+        </WidgetTimeRangeProvider>
+      );
+    }
+    const first = makeHub();
+    render(<Board initial={first.hub} />);
+    act0(() => first.sink().roster(roster(['a'], 1, { a: 'sensor' })));
+    await flush();
+    expect(first.seeds).toHaveBeenCalledTimes(1);
+    expect(first.declared).toHaveBeenCalledTimes(1);
+
+    const next = makeHub();
+    const subscribe = next.subscribe.getMockImplementation() as (d: DatasourceSelector, s: MemberSink) => () => void;
+    next.subscribe.mockImplementation((d: DatasourceSelector, s: MemberSink) => {
+      const dispose = subscribe(d, s);
+      // The recorded source delivers it in a microtask after subscribe returns.
+      queueMicrotask(() => s.roster(roster(['a'], 1, { a: 'sensor' })));
+      return dispose;
+    });
+    next.declared.mockImplementation(async () => ['temperature']);
+    // Outside act, on the real clock, as in a browser: React renders the feed's reset in a later
+    // task, and the source's microtask delivers the roster before it, so the two land in one batch.
+    // Under act the reset renders first and hides the race.
+    vi.useRealTimers();
+    const env = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+    const wasAct = env.IS_REACT_ACT_ENVIRONMENT;
+    env.IS_REACT_ACT_ENVIRONMENT = false;
+    try {
+      swap(next.hub);
+      await new Promise((r) => setTimeout(r, FLUSH_MS * 3));
+    } finally {
+      env.IS_REACT_ACT_ENVIRONMENT = wasAct;
+    }
+    expect(next.subscribe).toHaveBeenCalledTimes(1);
+    expect(next.seeds).toHaveBeenCalledTimes(1);
+    expect(next.declared).toHaveBeenCalledWith('sensor');
+    // On the real clock now, so the reading is dated by it.
+    const reading = { ...sample('a', 'temperature', 21), occurredTime: new Date().toISOString() };
+    act0(() => next.seed('a', { latest: { temperature: reading }, observed: ['temperature'] }));
+    await act(async () => void (await new Promise((r) => setTimeout(r, FLUSH_MS * 2))));
+    expect(cellText('a', 'temperature')).toContain('21');
+    // humidity is not declared by the new source's profile: the cell says so, not "loading".
+    expect(cellText('a', 'humidity')).toBe('does not report this');
   });
 });
 

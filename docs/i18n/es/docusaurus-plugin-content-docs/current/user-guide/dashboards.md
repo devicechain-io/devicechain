@@ -303,6 +303,12 @@ Los ajustes dependen del widget. Los más comunes:
   segundos, de 60 a 604800. Si lo dejas vacío, el gráfico sigue el intervalo de tiempo del panel,
   que los espectadores pueden cambiar. Si lo indicas, el gráfico conserva ese intervalo sea cual
   sea el que elija un espectador.
+- **Mín.** y **Máx.** (gráfico de series temporales): los extremos del eje de valores. Si los dejas
+  vacíos, el gráfico elige su propio rango, que empieza en cero aunque las lecturas nunca se acerquen.
+  Fíjalos para encuadrar las lecturas que importan: un motor a 92 °C en un eje de 70 a 130 queda
+  donde se ve su línea de sobrecalentamiento por encima, no como una línea plana pegada al borde
+  superior. Un extremo nunca recorta: una lectura o un umbral más allá de él amplía el eje, así que
+  nada de lo dibujado se sale del gráfico.
 - **Marcar alarmas** y **Marcar comandos** (gráfico de series temporales): ambas desactivadas por
   defecto. **Marcar alarmas** dibuja las alarmas del dispositivo del gráfico sobre las lecturas: una
   banda tenue desde que se activó la alarma hasta que se despejó (hasta el borde derecho mientras

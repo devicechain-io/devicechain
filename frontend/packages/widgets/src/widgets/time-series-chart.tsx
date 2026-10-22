@@ -54,10 +54,13 @@ function TimeSeriesBody({ widget, data, markers }: TimeSeriesProps) {
   const unit = optString(widget.options, 'unit');
   const precision = optNumber(widget.options, 'precision');
   const thresholds = useMemo(() => optThresholds(widget.options, 'thresholds'), [widget.options]);
+  // The value axis's ends, when the author set them (each widens for a reading beyond it).
+  const min = optNumber(widget.options, 'min');
+  const max = optNumber(widget.options, 'max');
   const option = useMemo(() => {
-    const base = buildLineOption(data.samples, theme, { measurements, unit, precision, thresholds, scale, gaps: data.gaps }, size);
+    const base = buildLineOption(data.samples, theme, { measurements, unit, precision, thresholds, scale, gaps: data.gaps, min, max }, size);
     return markers ? markers.decorate(base, size) : base;
-  }, [data.samples, data.gaps, theme, measurements, unit, precision, thresholds, scale, size, markers]);
+  }, [data.samples, data.gaps, theme, measurements, unit, precision, thresholds, scale, size, markers, min, max]);
 
   const chart = (
     <div style={{ position: 'relative', width: '100%', height: '100%' }}>

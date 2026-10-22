@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -29,8 +30,14 @@ const (
 	FormatKind    = "sitepulse-board-recording"
 	ProducerName  = "sitepulse-record"
 	// ProducerVersion is this producer's own version, in converter.version. 2: alarms carry
-	// the reading that raised them (`val`), and FullRate measurements are never thinned.
-	ProducerVersion = 2
+	// the reading that raised them (`val`), and FullRate measurements are never thinned. 3: the
+	// recording carries what each kind's profile declares (`declaredMetrics`).
+	//
+	// The committed showcase recording (frontend/testdata/board-replay/sitepulse-showcase.json)
+	// was written by version 2 and its `declaredMetrics` added afterwards from DeclaredByType over
+	// the same sitepulse manifest, which is exactly what version 3 writes; its converter.version
+	// still says 2, because version 2 is what read its rows back from the platform.
+	ProducerVersion = 3
 )
 
 // BoardMeasurements are the measurements the sitepulse board shows, and the only ones a
@@ -95,7 +102,12 @@ type Options struct {
 	// unthinned tail. The board-replay tests hold the committed recording to this.
 	FullRate []string
 
-	Devices         []sim.DeviceInstance
+	Devices []sim.DeviceInstance
+	// Declared is what each device TYPE's profile declares, by type token (DeclaredByType). The
+	// recording carries it per kind as `declaredMetrics`, which is what lets a replayed fleet
+	// table say "does not report this" for the crusher's fuel. Nil writes none, and a player
+	// then treats every device as declaring everything.
+	Declared        map[string][]string
 	Instance        string
 	Tenant          string
 	PlatformVersion string
@@ -207,22 +219,23 @@ type recSnapshot struct {
 
 // Recording is the document written, field for field the format's.
 type Recording struct {
-	Kind            string            `json:"kind"`
-	FormatVersion   int               `json:"formatVersion"`
-	RunID           string            `json:"runId"`
-	StartedAtUtc    string            `json:"startedAtUtc"`
-	DurationMs      int64             `json:"durationMs"`
-	PlatformVersion string            `json:"platformVersion"`
-	Instance        string            `json:"instance"`
-	Tenant          string            `json:"tenant"`
-	Build           map[string]string `json:"build"`
-	Clock           []map[string]any  `json:"clock"`
-	Devices         []recDevice       `json:"devices"`
-	Channels        map[string]any    `json:"channels"`
-	Board           map[string]string `json:"board"`
-	SourceHashes    map[string]string `json:"sourceHashes"`
-	Converter       map[string]any    `json:"converter"`
-	Chapters        []map[string]any  `json:"chapters"`
+	Kind            string              `json:"kind"`
+	FormatVersion   int                 `json:"formatVersion"`
+	RunID           string              `json:"runId"`
+	StartedAtUtc    string              `json:"startedAtUtc"`
+	DurationMs      int64               `json:"durationMs"`
+	PlatformVersion string              `json:"platformVersion"`
+	Instance        string              `json:"instance"`
+	Tenant          string              `json:"tenant"`
+	Build           map[string]string   `json:"build"`
+	Clock           []map[string]any    `json:"clock"`
+	Devices         []recDevice         `json:"devices"`
+	DeclaredMetrics map[string][]string `json:"declaredMetrics,omitempty"`
+	Channels        map[string]any      `json:"channels"`
+	Board           map[string]string   `json:"board"`
+	SourceHashes    map[string]string   `json:"sourceHashes"`
+	Converter       map[string]any      `json:"converter"`
+	Chapters        []map[string]any    `json:"chapters"`
 	Measurements    struct {
 		D []int     `json:"d"`
 		N []int     `json:"n"`
@@ -273,6 +286,49 @@ func kindOf(externalID string) string {
 		return "Plant"
 	}
 	return ""
+}
+
+// DeclaredByType is what each device type of a manifest declares: its profile's metric keys, in
+// the profile's order, by device type token. The manifest is what bootstrapped those profiles,
+// so it is the vocabulary the platform's active profile versions hold for the run.
+func DeclaredByType(m sim.SimManifest) map[string][]string {
+	byProfile := map[string][]string{}
+	for _, p := range m.Profiles {
+		for _, metric := range p.Metrics {
+			byProfile[p.Token] = append(byProfile[p.Token], metric.Key)
+		}
+	}
+	out := map[string][]string{}
+	for _, dt := range m.DeviceTypes {
+		out[dt.Token] = byProfile[dt.ProfileToken]
+	}
+	return out
+}
+
+// declare writes the declarations per kind. Every device's type must declare something, and every
+// device of a kind the same names: the format keys a declaration by kind, and a kind whose devices
+// disagreed would state one of them falsely.
+func declare(rec *Recording, devices []sim.DeviceInstance, byType map[string][]string) error {
+	if byType == nil {
+		return nil
+	}
+	out := map[string][]string{}
+	for _, d := range devices {
+		names := byType[d.DeviceTypeToken]
+		if len(names) == 0 {
+			return refuse("%s: its device type %q declares no measurements", d.ExternalId, d.DeviceTypeToken)
+		}
+		k := kindOf(d.ExternalId)
+		if have, ok := out[k]; ok {
+			if !slices.Equal(have, names) {
+				return refuse("the %s devices do not all declare the same measurements (%v, %v)", k, have, names)
+			}
+			continue
+		}
+		out[k] = append([]string(nil), names...)
+	}
+	rec.DeclaredMetrics = out
+	return nil
 }
 
 // Build reads the window back from the platform, checks every row against the publish
@@ -343,6 +399,9 @@ func Build(ctx context.Context, p Platform, o Options) (*Recording, Report, erro
 		}
 		rec.Devices = append(rec.Devices, recDevice{ID: d.ExternalId, Token: d.Token, Kind: k})
 		index[d.Token] = i
+	}
+	if err := declare(rec, devices, o.Declared); err != nil {
+		return nil, rep, err
 	}
 	nameIndex := map[string]int{}
 	for i, n := range BoardMeasurements {

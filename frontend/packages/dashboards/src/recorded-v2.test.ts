@@ -333,3 +333,61 @@ describe('the reading that raised an alarm', () => {
     expect(() => parseBoardRecording(v1)).toThrow(RecordingFormatError);
   });
 });
+
+// What each kind's profile declares: the fleet widgets' "does not report this" on a replay. An
+// absent declaration is UNKNOWN (null), never "declares nothing".
+describe('the declarations a recording carries', () => {
+  const declaring = (): Json => {
+    const doc = JSON.parse(JSON.stringify(fixtureJsonV2())) as Json;
+    doc.declaredMetrics = { Hauler: ['fuel_pct', 'tyre_pressure_kpa'], Plant: ['throughput_tph'] };
+    return doc;
+  };
+
+  it("answers each kind's names, and null for a kind (or a recording) that does not say", async () => {
+    const rec = parseBoardRecording(declaring());
+    expect(rec.declaredMetrics).toEqual({ Hauler: ['fuel_pct', 'tyre_pressure_kpa'], Plant: ['throughput_tph'] });
+    const { source } = sourceAt(rec, 12_000);
+    expect(await source.declaredMetrics('Plant')).toEqual(['throughput_tph']);
+    expect(await source.declaredMetrics('Dozer')).toBeNull();
+    // An inherited property name is not a kind.
+    expect(await source.declaredMetrics('constructor')).toBeNull();
+    const { source: old } = sourceAt(fixtureRecordingV2(), 12_000);
+    expect(fixtureRecordingV2().declaredMetrics).toBeUndefined();
+    expect(await old.declaredMetrics('Plant')).toBeNull();
+  });
+
+  it("hands each fleet member its kind, the key the declarations are read by", async () => {
+    const { source } = sourceAt(parseBoardRecording(declaring()), 12_000);
+    const rosters: Array<Array<{ token: string; deviceType?: string | null }>> = [];
+    const stop = source.subscribeMembers(site(['fuel_pct']), { roster: (x) => rosters.push(x.members), next: () => {} });
+    await settle();
+    stop();
+    expect(rosters[0].map((m) => [m.token, m.deviceType])).toEqual([
+      ['sp-hauler-01', 'Hauler'],
+      ['sp-hauler-02', 'Hauler'],
+      ['sp-plant-01', 'Plant'],
+    ]);
+  });
+
+  it('refuses a declaration it cannot honour', () => {
+    const refusal = (mutate: (doc: Json) => void): RecordingFormatError => {
+      const doc = declaring();
+      mutate(doc);
+      try {
+        parseBoardRecording(doc);
+      } catch (err) {
+        expect(err).toBeInstanceOf(RecordingFormatError);
+        return err as RecordingFormatError;
+      }
+      return expect.fail('the corrupted recording was accepted');
+    };
+    expect(refusal((d) => (d.declaredMetrics.Dozer = ['fuel_pct'])).path).toBe('$.declaredMetrics.Dozer');
+    expect(refusal((d) => (d.declaredMetrics.Plant = [])).path).toBe('$.declaredMetrics.Plant');
+    expect(refusal((d) => (d.declaredMetrics.Plant = ['throughput_tph', 'throughput_tph'])).path).toBe('$.declaredMetrics.Plant');
+    expect(refusal((d) => (d.declaredMetrics.Plant = [''])).path).toBe('$.declaredMetrics.Plant[0]');
+    expect(refusal((d) => (d.declaredMetrics = ['fuel_pct'])).path).toBe('$.declaredMetrics');
+    const v1 = fixtureJson();
+    v1.declaredMetrics = { Hauler: ['fuel_pct'] };
+    expect(() => parseBoardRecording(v1)).toThrow(RecordingFormatError);
+  });
+});

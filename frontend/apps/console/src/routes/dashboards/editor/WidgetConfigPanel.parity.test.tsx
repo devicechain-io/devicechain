@@ -151,6 +151,7 @@ const LEGACY_HINT_OVERRIDES: Partial<Record<WidgetType, Record<string, string>>>
   'level-gauge': { min: 'widgetHintScaleMin', max: 'widgetHintScaleMax' },
   battery: { min: 'widgetHintBatteryRange', max: 'widgetHintBatteryRange' },
   'command-slider': { min: 'widgetHintSliderRange', max: 'widgetHintSliderRange' },
+  'timeseries-chart': { min: 'widgetHintChartAxisMin', max: 'widgetHintChartAxisMax' },
 };
 
 const LEGACY_ENUM_VALUE: Record<string, string> = {

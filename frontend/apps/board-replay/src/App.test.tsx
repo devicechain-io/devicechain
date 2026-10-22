@@ -8,7 +8,7 @@
 import { createRecordedClock, effectiveBindings } from '@devicechain/dashboards';
 import * as dashboards from '@devicechain/dashboards';
 import { DashboardRenderer } from '@devicechain/widgets';
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import ReplayApp from './App';
@@ -568,6 +568,27 @@ describe('the showcase recording (format 2)', () => {
     }
   });
 
+  // The recording carries what each kind's profile declares, so the replay tells the crusher's fuel
+  // ("does not report this": its profile has none) from a declared reading that is silent. Without
+  // it every device counts as declaring everything, and the public board says the plant is "not
+  // reporting" fuel and counts it among the machines.
+  it("says the crusher does not report the machines' measurements, and leaves it out of the fuel count", async () => {
+    const doc = JSON.parse(readFileSync(SHOWCASE_PATH, 'utf-8'));
+    expect(doc.declaredMetrics.Plant).not.toContain('fuel_pct');
+    await mountApp(await showcaseOnCurrentBoardText());
+    await settle();
+    const fleet = document.querySelector<HTMLElement>('[data-widget="sp-fleet"]')!;
+    const plantRow = () => within(fleet).getByRole('button', { name: 'sp-plant-01' }).closest('tr')!;
+    const count = () => document.querySelector('[data-widget="sp-low-fuel"]')?.textContent ?? '';
+    // The fleet feed loads on first use and seeds each member, so the cells settle after mounting.
+    // At the recording's first instant: the declaration does not depend on any reading.
+    await waitFor(() => expect(plantRow().textContent!.match(/does not report this/g)).toHaveLength(4));
+    expect(plantRow().textContent).not.toContain('no data in range');
+    const machines = doc.devices.filter((d: { kind: string }) => d.kind !== 'Plant').length;
+    await waitFor(() => expect(count()).toContain(`of ${machines}`));
+    expect(count()).toContain('1 does not report this');
+  });
+
   it('places the machines on the map from the recorded positions', async () => {
     await mountApp(await showcaseOnCurrentBoardText());
     await seekTo(JSON.parse(readFileSync(SHOWCASE_PATH, 'utf-8')).chapters[0].tMs);
@@ -583,6 +604,23 @@ describe.skipIf(!EXCERPT_AVAILABLE)('the first recorded run (converter excerpt)'
   // The chapter's own time, on the same clock as the measurements (ms from the run start).
   const T_ALARM = 441_124;
 
+  // The board opens on sp-hauler-03 (the machine with the tyre alarm), so a drill TO it would pass
+  // having moved nothing. Each drill below starts from another machine.
+  const selectOtherMachine = async (): Promise<void> => {
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('Machine'), { target: { value: 'sp-hauler-01' } });
+    });
+    await settle();
+    expect(gaugeReading('sp-tyre')).not.toContain('599.6');
+  };
+
+  it('opens on the machine with the tyre alarm, its gauge on the reading that raised it', async () => {
+    await mountApp(await excerptOnCurrentBoardText());
+    await seekTo(441_200);
+    expect((screen.getByLabelText('Machine') as HTMLSelectElement).value).toBe('sp-hauler-03');
+    expect(gaugeReading('sp-tyre')).toContain('599.6');
+  });
+
   it('golden at 441.2 s: one MAJOR alarm, and SP-HL-0003 tyre pressure 599.6 after the drill', async () => {
     await mountApp(await excerptOnCurrentBoardText());
     await seekTo(441_200);
@@ -592,9 +630,9 @@ describe.skipIf(!EXCERPT_AVAILABLE)('the first recorded run (converter excerpt)'
     expect(text).toContain('Major alarmsacme-earthworks1alarm');
     expect(text).toContain('tyre-pressure-low');
 
-    // Before the drill the tyre gauge is on the default machine, the first haul truck: it must
-    // be showing that truck's reading, not the drilled truck's.
-    expect(gaugeReading('sp-tyre')).not.toContain('599.6');
+    // Before the drill the tyre gauge is on another haul truck: it must be showing that truck's
+    // reading, not the drilled truck's.
+    await selectOtherMachine();
 
     // The alarm's originator and the fleet table's row name the truck the SAME way, so a viewer
     // can carry it from one to the other: two drills, one name.
@@ -612,6 +650,7 @@ describe.skipIf(!EXCERPT_AVAILABLE)('the first recorded run (converter excerpt)'
   it('the fleet table row drills to the same gauge as the alarm', async () => {
     await mountApp(await excerptOnCurrentBoardText());
     await seekTo(441_200);
+    await selectOtherMachine();
     const fleet = document.querySelector<HTMLElement>('[data-widget="sp-fleet"]')!;
     await act(async () => {
       fireEvent.click(within(fleet).getByRole('button', { name: 'sp-hauler-03' }));
@@ -624,6 +663,7 @@ describe.skipIf(!EXCERPT_AVAILABLE)('the first recorded run (converter excerpt)'
   it('the Machine selector drives the same gauge', async () => {
     await mountApp(await excerptOnCurrentBoardText());
     await seekTo(441_200);
+    await selectOtherMachine();
     await act(async () => {
       fireEvent.change(screen.getByLabelText('Machine'), { target: { value: 'sp-hauler-03' } });
     });
