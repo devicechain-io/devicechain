@@ -415,6 +415,9 @@ func NewClient(source config.SparkplugSource, broker Broker, ingester SampleInge
 	if now == nil {
 		now = time.Now
 	}
+	// Every source's client files on the one presence_probe series, but each probe loop keeps
+	// its own failure-log streak: one source's healthy slots must not end another's outage.
+	metrics.PresenceProbePass = metrics.PresenceProbePass.WithOwnFailureLog()
 	c := &Client{
 		tenant:   source.Tenant,
 		broker:   broker,

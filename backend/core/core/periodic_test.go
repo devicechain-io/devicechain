@@ -598,3 +598,24 @@ func TestACancelledPassDoesNotEndAFailureStreak(t *testing.T) {
 	m.RecordPass(context.Background(), nil, time.Now(), "t")
 	assert.Contains(t, logs.String(), "recovered", "the streak the cancelled pass left open ends on the next complete one")
 }
+
+// Several loops filing on one series each keep their own streak through WithOwnFailureLog:
+// one loop's healthy pass neither logs a false recovery nor ends another's streak, and both
+// still count on the shared series.
+func TestWithOwnFailureLogSharesTheSeriesButNotTheStreak(t *testing.T) {
+	logs := captureCoreLogs(t)
+	shared, _ := newTaskMetrics(t, "probe")
+	failing, healthy := shared.WithOwnFailureLog(), shared.WithOwnFailureLog()
+	pass := func(m *PeriodicTaskMetrics, err error) {
+		m.RecordPass(context.Background(), err, time.Now(), "probe")
+	}
+	pass(failing, errors.New("x"))
+	pass(healthy, nil)
+	pass(failing, errors.New("x"))
+	assert.Equal(t, 1, strings.Count(logs.String(), "Maintenance pass failed."),
+		"the healthy loop's pass ended the failing loop's streak")
+	assert.NotContains(t, logs.String(), "recovered", "a loop that never failed logged a recovery")
+	assert.EqualValues(t, 2, testutil.ToFloat64(shared.passes.WithLabelValues(PassFailed)))
+	assert.EqualValues(t, 1, testutil.ToFloat64(shared.passes.WithLabelValues(PassComplete)))
+	assert.Nil(t, (*PeriodicTaskMetrics)(nil).WithOwnFailureLog())
+}

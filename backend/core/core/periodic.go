@@ -205,6 +205,21 @@ func (f *failStreak) recovered() (was bool, suppressed int) {
 	return was, suppressed
 }
 
+// WithOwnFailureLog returns metrics that file onto the same three series as m but keep their
+// own failure-log streak. Nil-safe: nil gives nil.
+//
+// 🔴 THE STREAK BELONGS TO THE VALUE, NOT TO THE SERIES, so one value shared by several
+// concurrent loops (one per source, say) shares one streak: a healthy loop's complete pass logs
+// "recovered" while another is still failing and resets the streak, so the failing one logs on
+// every pass again — twice the lines it logged before the limit existed, one of them false. Each
+// such loop takes its own value from this.
+func (m *PeriodicTaskMetrics) WithOwnFailureLog() *PeriodicTaskMetrics {
+	if m == nil {
+		return nil
+	}
+	return &PeriodicTaskMetrics{passes: m.passes, duration: m.duration, lastSuccess: m.lastSuccess}
+}
+
 // NewPeriodicTaskMetrics builds the three signals under this service's namespace.
 func (ms *Microservice) NewPeriodicTaskMetrics(name string) *PeriodicTaskMetrics {
 	sub, name := ms.requireMetricName("NewPeriodicTaskMetrics", name)
