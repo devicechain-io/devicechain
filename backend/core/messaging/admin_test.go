@@ -6,6 +6,7 @@ package messaging
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -201,6 +202,39 @@ func TestADriftedStreamIsRefusedByNameAndTheAdministratorRestoresIt(t *testing.T
 			require.NoError(t, err, "the stream still differs after the administrator reconciled it")
 		})
 	}
+}
+
+// The streams read by sequence answer direct gets: a stream that has lost AllowDirect is drift a
+// service names, and the administrator turns it back on (the replay and preview cannot read without
+// it). The administrator only ever turns it on.
+func TestAStreamThatLostDirectGetsIsDriftTheAdministratorRestores(t *testing.T) {
+	srv := startEmbeddedServer(t)
+	admin := adminOn(t, srv)
+	_, err := admin.ReconcileBroker(context.Background(), []string{"device-management"})
+	require.NoError(t, err)
+	name := StreamName("test", streams.ResolvedEvents)
+	info, err := admin.js.StreamInfo(name)
+	require.NoError(t, err)
+	require.True(t, info.Config.AllowDirect, "the administrator creates the stream answering direct gets")
+
+	cfg := info.Config
+	cfg.AllowDirect = false
+	_, err = admin.js.UpdateStream(&cfg)
+	require.NoError(t, err, "the setup could not drift the stream")
+
+	_, err = deployedOn(t, srv, "device-management").NewWriter(streams.ResolvedEvents)
+	d := drift(t, err)
+	require.Equal(t, name, d.Name)
+	require.Contains(t, strings.Join(d.Problems, "; "), "direct gets")
+
+	report, err := admin.ReconcileBroker(context.Background(), []string{"device-management"})
+	require.NoError(t, err)
+	require.Positive(t, report.Count("updated"))
+	info, err = admin.js.StreamInfo(name)
+	require.NoError(t, err)
+	require.True(t, info.Config.AllowDirect, "the administrator did not turn direct gets back on")
+	_, err = deployedOn(t, srv, "device-management").NewWriter(streams.ResolvedEvents)
+	require.NoError(t, err)
 }
 
 func TestADriftedBucketIsRefusedByName(t *testing.T) {

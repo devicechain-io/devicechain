@@ -109,6 +109,8 @@ func directGetBatch(ctx context.Context, nc *nats.Conn, stream string, req direc
 	}
 	// The connection's own inbox prefix: the login may subscribe to nothing else.
 	inbox := nc.NewInbox()
+	//subconfirm:ok the request below goes out on this same connection, so the server reads
+	// SUB before PUB (the reasoning is PurgeTenantDetect's)
 	sub, err := nc.SubscribeSync(inbox)
 	if err != nil {
 		return directBatch{}, err

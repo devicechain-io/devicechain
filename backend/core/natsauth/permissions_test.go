@@ -260,9 +260,6 @@ func TestAnAreaCannotTouchAnotherAreasDurable(t *testing.T) {
 					if area == owner.Area {
 						continue
 					}
-					if streams.ReadsAs(st.Suffix, area, streams.ReadEphemeral) {
-						continue // the named residue
-					}
 					for _, verb := range []string{
 						"CONSUMER.CREATE." + name + "." + d,
 						"CONSUMER.MSG.NEXT." + name + "." + d,

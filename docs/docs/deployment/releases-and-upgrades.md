@@ -450,7 +450,7 @@ What a running instance sees:
   is mounted into that area's pod only. `mcp` and `ai-inference` never open a broker connection and
   mount none. Each login is held to what its area uses, and no more: the streams it writes, the
   consumers it reads under (named exactly, so one area cannot rewrite, take messages from or
-  acknowledge another's, with one exception below), the key-value buckets it opens, and its own reply
+  acknowledge another's), the key-value buckets it opens, and its own reply
   subjects. A login can no longer publish into another area's streams, write another area's cache, or
   subscribe to another area's replies. The grants are generated from the same declarations the
   services are checked against, so they cannot fall behind what a service does. This is not yet a

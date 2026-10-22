@@ -217,6 +217,22 @@ func TestRangeReaderAShortBatchIsContinuedNotTakenForTheEnd(t *testing.T) {
 	require.Greater(t, calls, 25, "the batches were cut, so the read has to have asked many times")
 }
 
+// The last sequence of the range is read even when a batch ends just before it: a read that
+// stopped one short would hand the range's last message to nobody.
+func TestRangeReaderABatchEndingJustBeforeTheLastSequenceReadsIt(t *testing.T) {
+	rig := newRangeRig(t, 320)
+	rd := rig.open(t, 2, 300).(*sequenceReader)
+	rd.get = func(ctx context.Context, req directBatchRequest) (directBatch, error) {
+		b, err := directGetBatch(ctx, rig.mgr.nc, rig.stream, req)
+		if len(b.msgs) > 1 {
+			b.msgs = b.msgs[:1] // every batch ends at the sequence it asked for
+		}
+		return b, err
+	}
+	require.Equal(t, seqRange(2, 300), drainRange(t, rd))
+	require.Equal(t, RangeStats{Present: 299}, rangeStats(t, rd))
+}
+
 // A message the answer skips that the leader still holds is an error, not an absence.
 func TestRangeReaderASkippedMessageTheLeaderHoldsIsAnError(t *testing.T) {
 	rig := newRangeRig(t, 320)

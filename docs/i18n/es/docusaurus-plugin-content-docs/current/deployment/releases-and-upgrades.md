@@ -479,7 +479,7 @@ Lo que ve una instancia en marcha:
   `mcp` y `ai-inference` nunca abren una conexión con el bróker y no montan ninguna. Cada credencial
   queda limitada a lo que usa su área, y a nada más: los streams en los que escribe, los consumidores
   con los que lee (con nombre exacto, así que un área no puede reescribir, tomar mensajes de ni
-  confirmar los de otra, con una excepción que se indica abajo), los buckets clave-valor que abre y
+  confirmar los de otra), los buckets clave-valor que abre y
   sus propios subjects de respuesta. Una credencial ya no puede publicar en los streams de otra área,
   escribir en la caché de otra ni suscribirse a las respuestas de otra. Los permisos se generan a
   partir de las mismas declaraciones contra las que se comprueban los servicios, así que no pueden
