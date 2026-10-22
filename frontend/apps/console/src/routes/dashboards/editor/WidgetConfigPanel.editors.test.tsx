@@ -15,7 +15,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { hostControl, type ControlEditorProps } from './controlEditors';
 import { WidgetConfigPanel } from './WidgetConfigPanel';
 
-vi.mock('./EntityPicker', () => ({ EntityPicker: () => null }));
+vi.mock('./EntityPicker', () => ({
+  EntityPicker: () => null,
+  SharedDeviceTypeCatalogue: ({ children }: { children: unknown }) => children,
+}));
 // The panel's own command lookup would hit the API; an editor driven directly never calls it,
 // and the panel-level tests below never open a command control.
 const api = vi.hoisted(() => ({ fails: false }));

@@ -14,7 +14,10 @@ import { createWidgetRegistry, defineWidget } from '@devicechain/widget-sdk';
 import { WidgetConfigPanel } from './WidgetConfigPanel';
 import { TANK_ID, registryWithTank } from './testExtension';
 
-vi.mock('./EntityPicker', () => ({ EntityPicker: () => null }));
+vi.mock('./EntityPicker', () => ({
+  EntityPicker: () => null,
+  SharedDeviceTypeCatalogue: ({ children }: { children: unknown }) => children,
+}));
 
 afterEach(cleanup);
 

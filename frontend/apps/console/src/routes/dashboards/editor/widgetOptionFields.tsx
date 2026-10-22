@@ -40,7 +40,7 @@ import {
 } from '@devicechain/dashboards';
 import type { WidgetEditorServices } from '@devicechain/widget-sdk';
 import { ArrowDown, ArrowUp, Plus, X } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { Button } from '@/components/ui/button';
@@ -51,7 +51,7 @@ import { Combobox, type ComboboxOption } from '@/components/ui/combobox';
 import { FormField } from '@/components/ui/form-field';
 import { Input } from '@/components/ui/input';
 
-import { EntityPicker, type EntityKind } from './EntityPicker';
+import { EntityPicker, SharedDeviceTypeCatalogue, type EntityKind } from './EntityPicker';
 import { editorControlOf, hostControl, type ControlEditorProps } from './controlEditors';
 import { enumChoiceLabel, enumPlaceholder, fieldHelp, fieldLabel, useMessageLookup } from './optionWording';
 
@@ -310,97 +310,104 @@ function ListField({
       }),
     );
 
+  // One catalogue read for every row's picker, not one per row.
+  const Rows = Object.values(spec.item).some((f) => f.kind === 'string' && f.control === DEVICE_TYPE_CONTROL)
+    ? SharedDeviceTypeCatalogue
+    : Fragment;
+
   return (
     <FormField label={label} description={hint}>
-      <div ref={listRef} className="flex flex-col gap-2">
-        {rows.length > 0 && (
-          // Visible column headings: a row of bare controls (a number, a select, a text box)
-          // says nothing about which is which to a sighted author. Each cell also carries its
-          // own accessible name, so this row is hidden from a screen reader.
-          <div
-            aria-hidden
-            data-testid={`list-head-${option}`}
-            className="flex items-end gap-2 text-xs font-medium text-muted-foreground"
-          >
-            {Object.entries(spec.item).map(([field, fieldSpec]) => (
-              <div key={field} className="min-w-0 flex-1 truncate">
-                {fieldLabel(field, fieldSpec, lookup)}
-              </div>
-            ))}
-            {/* the move/remove buttons' columns (IconButton size sm) */}
-            {spec.ordered && <div className="size-6 shrink-0" />}
-            {spec.ordered && <div className="size-6 shrink-0" />}
-            <div className="size-6 shrink-0" />
-          </div>
-        )}
-        {rows.map((row, index) => (
-          <div
-            // Rows are positional (no identity of their own), so the index is the key.
-            key={index}
-            data-testid={`list-row-${option}-${index}`}
-            className="flex items-start gap-2"
-          >
-            {Object.entries(spec.item).map(([field, fieldSpec]) => (
-              <div key={field} className="min-w-0 flex-1" data-testid={`list-cell-${option}-${index}-${field}`}>
-                <ListCell
-                  fieldSpec={fieldSpec}
-                  value={row[field]}
-                  onChange={(v) => {
-                    // A required field cannot be cleared: the row would be invalid and the
-                    // validated write would refuse it, so a blank keeps the last good value.
-                    if (v === undefined && fieldSpec.required) return;
-                    setCell(index, field, v);
-                  }}
-                  lookup={lookup}
-                  ariaLabel={`${fieldLabel(field, fieldSpec, lookup)} ${index + 1}`}
-                />
-              </div>
-            ))}
-            {spec.ordered && (
-              <>
-                <IconButton
-                  data-testid={`list-up-${option}-${index}`}
-                  className={ROW_BUTTON}
-                  label={t('widgetListMoveUp', { n: index + 1 })}
-                  disabled={index === 0}
-                  onClick={() => move(index, index - 1)}
-                >
-                  <ArrowUp className="size-4" />
-                </IconButton>
-                <IconButton
-                  data-testid={`list-down-${option}-${index}`}
-                  className={ROW_BUTTON}
-                  label={t('widgetListMoveDown', { n: index + 1 })}
-                  disabled={index === rows.length - 1}
-                  onClick={() => move(index, index + 1)}
-                >
-                  <ArrowDown className="size-4" />
-                </IconButton>
-              </>
-            )}
-            <IconButton
-              className={ROW_BUTTON}
-              label={t('widgetListRemove', { n: index + 1 })}
-              onClick={() => write(rows.filter((_, i) => i !== index))}
+      <Rows>
+        <div ref={listRef} className="flex flex-col gap-2">
+          {rows.length > 0 && (
+            // Visible column headings: a row of bare controls (a number, a select, a text box)
+            // says nothing about which is which to a sighted author. Each cell also carries its
+            // own accessible name, so this row is hidden from a screen reader.
+            <div
+              aria-hidden
+              data-testid={`list-head-${option}`}
+              className="flex items-end gap-2 text-xs font-medium text-muted-foreground"
             >
-              <X className="size-4" />
-            </IconButton>
+              {Object.entries(spec.item).map(([field, fieldSpec]) => (
+                <div key={field} className="min-w-0 flex-1 truncate">
+                  {fieldLabel(field, fieldSpec, lookup)}
+                </div>
+              ))}
+              {/* the move/remove buttons' columns (IconButton size sm) */}
+              {spec.ordered && <div className="size-6 shrink-0" />}
+              {spec.ordered && <div className="size-6 shrink-0" />}
+              <div className="size-6 shrink-0" />
+            </div>
+          )}
+          {rows.map((row, index) => (
+            <div
+              // Rows are positional (no identity of their own), so the index is the key.
+              key={index}
+              data-testid={`list-row-${option}-${index}`}
+              className="flex items-start gap-2"
+            >
+              {Object.entries(spec.item).map(([field, fieldSpec]) => (
+                <div key={field} className="min-w-0 flex-1" data-testid={`list-cell-${option}-${index}-${field}`}>
+                  <ListCell
+                    fieldSpec={fieldSpec}
+                    value={row[field]}
+                    onChange={(v) => {
+                      // A required field cannot be cleared: the row would be invalid and the
+                      // validated write would refuse it, so a blank keeps the last good value.
+                      if (v === undefined && fieldSpec.required) return;
+                      setCell(index, field, v);
+                    }}
+                    lookup={lookup}
+                    ariaLabel={`${fieldLabel(field, fieldSpec, lookup)} ${index + 1}`}
+                  />
+                </div>
+              ))}
+              {spec.ordered && (
+                <>
+                  <IconButton
+                    data-testid={`list-up-${option}-${index}`}
+                    className={ROW_BUTTON}
+                    label={t('widgetListMoveUp', { n: index + 1 })}
+                    disabled={index === 0}
+                    onClick={() => move(index, index - 1)}
+                  >
+                    <ArrowUp className="size-4" />
+                  </IconButton>
+                  <IconButton
+                    data-testid={`list-down-${option}-${index}`}
+                    className={ROW_BUTTON}
+                    label={t('widgetListMoveDown', { n: index + 1 })}
+                    disabled={index === rows.length - 1}
+                    onClick={() => move(index, index + 1)}
+                  >
+                    <ArrowDown className="size-4" />
+                  </IconButton>
+                </>
+              )}
+              <IconButton
+                className={ROW_BUTTON}
+                label={t('widgetListRemove', { n: index + 1 })}
+                onClick={() => write(rows.filter((_, i) => i !== index))}
+              >
+                <X className="size-4" />
+              </IconButton>
+            </div>
+          ))}
+          <div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={full}
+              data-testid={`list-add-${option}`}
+              onClick={() => write([...rows, newRow(spec.item)])}
+            >
+              <Plus className="mr-1 size-4" />
+              {t('widgetListAdd')}
+            </Button>
           </div>
-        ))}
-        <div>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={full}
-            data-testid={`list-add-${option}`}
-            onClick={() => write([...rows, newRow(spec.item)])}
-          >
-            <Plus className="mr-1 size-4" />
-            {t('widgetListAdd')}
-          </Button>
         </div>
-      </div>
+      </Rows>
     </FormField>
   );
 }
