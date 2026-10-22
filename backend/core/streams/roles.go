@@ -40,9 +40,12 @@ const (
 	// from ReadDurable on the same stream, and the area also deletes the legacy
 	// ReadDurable-named consumer it replaced.
 	ReadAckFloor
-	// ReadEphemeral is a short-lived consumer, or a read by sequence, that exists to replay
-	// history: a restart catch-up, a live-gap fill, a rule preview. It has no declared name -
-	// the client generates one - and it is the mode a stricter grant has to treat on its own.
+	// ReadEphemeral is a read of the stream's PAST by sequence (a batched direct get, or a single
+	// get), that exists to replay history: a restart catch-up, a live-gap fill, a rule preview. It
+	// creates no consumer on the broker, so it has no consumer name and its grant is a read of the
+	// one stream; the stream declares AllowDirect for it. (It used to be an ephemeral consumer
+	// whose name the client library chose, which could be granted only as a wildcard over every
+	// consumer on the stream.)
 	ReadEphemeral
 	// ReadLive is a core-NATS subscription on the stream's subjects (messaging.SubscribeLive),
 	// serving a GraphQL subscription. It is not a consumer and the stream does not know it is

@@ -453,7 +453,7 @@ func TestTheLargestConfiguredBatchLeavesARangeTheDirectPathReads(t *testing.T) {
 	require.IsType(t, &seqRangeReader{}, narrow, "a full batch's range must take the direct path")
 	wide, err := nmgr.NewRangeReader(streams.InboundEvents, 1, 1+rangeDirectMax)
 	require.NoError(t, err)
-	require.IsType(t, &consumerRangeReader{}, wide)
+	require.IsType(t, &sequenceReader{}, wide)
 	_ = narrow.Close()
 	_ = wide.Close()
 }

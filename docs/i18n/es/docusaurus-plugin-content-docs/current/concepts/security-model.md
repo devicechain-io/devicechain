@@ -125,9 +125,7 @@ Estas carencias son conocidas y se aceptan en la versión actual. Planifique en 
    es el inicio de sesión compartido que usaban las versiones anteriores. Permanece en la configuración del broker, y en la configuración de instancia que lee cada pod,
    hasta que una versión posterior lo retire, y conserva los permisos que siempre tuvo, incluido administrar flujos. Mientras no se retire, un
    pod puede presentarlo. Los servicios que aceptan tráfico de dispositivos (event-sources, device-management, lwm2m-ingest y sparkplug-ingest) siguen
-   siendo parte del núcleo de confianza de la plataforma, porque escriben datos de dispositivo por diseño. Event-processing, que
-   reproduce el flujo resolved-events mediante consumidores cuyo nombre elige la biblioteca cliente, aún puede alcanzar los demás
-   consumidores de ese flujo. Dos permisos son más amplios a propósito: event-sources puede actualizar los almacenes MQTT propios del broker, y
+   siendo parte del núcleo de confianza de la plataforma, porque escriben datos de dispositivo por diseño. Dos permisos son más amplios a propósito: event-sources puede actualizar los almacenes MQTT propios del broker, y
    user-management puede purgar los datos de un inquilino eliminado en todos los flujos. Un servicio comprometido todavía puede causar
    pérdida, aunque no falsificación, llenando un flujo en el que puede crear consumidores hasta que se descartan mensajes más antiguos.
 2. **El inicio de sesión de la base de datos es compartido por todos los servicios de una instancia.** Todos los servicios acceden a la base de datos

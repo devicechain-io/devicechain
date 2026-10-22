@@ -512,3 +512,83 @@ func TestThePurgeCannotDeleteTheFailClosedDurables(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, own.publishes("$JS.API.CONSUMER.DELETE."+messaging.MqttMessageStore+"."+names[0]))
 }
+
+// ownedStreams are the streams an area may hold wildcard consumer verbs on, because it owns them
+// and nobody else trusts them: the key-value streams of the buckets it opens (a watch or a key
+// listing is an ordered consumer the client library names) and the MQTT gateway's stores (the
+// tenant purge deletes the consumers that name a tenant).
+func ownedStreams() map[string]bool {
+	owned := map[string]bool{
+		messaging.MqttSessionStore: true, messaging.MqttMessageStore: true, messaging.MqttPubRelStore: true,
+	}
+	for _, name := range messaging.IdentityBucketNames(permInstance) {
+		owned[messaging.KvStreamName(name)] = true
+	}
+	for _, b := range kv.All {
+		for _, area := range config.NatsLoginAreas() {
+			for _, bucket := range messaging.KvBucketNames(permInstance, b, area) {
+				owned[messaging.KvStreamName(bucket)] = true
+			}
+		}
+	}
+	return owned
+}
+
+// wildcardConsumerGrants lists every consumer verb, in p, with a wildcard in the consumer-name
+// token on a stream that is not owned.
+func wildcardConsumerGrants(p Permissions) []string {
+	owned := ownedStreams()
+	var out []string
+	for _, a := range p.Publish.Allow {
+		for _, verb := range []string{"CONSUMER.CREATE.", "CONSUMER.DURABLE.CREATE.", "CONSUMER.INFO.", "CONSUMER.DELETE.", "CONSUMER.MSG.NEXT.", "CONSUMER.LEADER.STEPDOWN."} {
+			rest, ok := strings.CutPrefix(a, jsAPI+verb)
+			if !ok {
+				continue
+			}
+			stream, consumer, _ := strings.Cut(rest, ".")
+			// The consumer is the token after the stream. "<name>.>" is a durable's own name followed
+			// by the filter-subject form of a create, which is exact; "*" or ">" in the name's place is not.
+			consumer, _, _ = strings.Cut(consumer, ".")
+			if !owned[stream] && (consumer == "*" || consumer == ">") {
+				out = append(out, a)
+			}
+		}
+		if rest, ok := strings.CutPrefix(a, "$JS.ACK."); ok {
+			stream, consumer, _ := strings.Cut(rest, ".")
+			consumer, _, _ = strings.Cut(consumer, ".")
+			if !owned[stream] && (consumer == "*" || consumer == ">") {
+				out = append(out, a)
+			}
+		}
+	}
+	return out
+}
+
+// 🔴 NO AREA NAMES A CONSUMER WITH A WILDCARD ON A MESSAGE STREAM. A grant of "*" in the consumer
+// name token lets its holder create-or-update, fetch from, acknowledge and delete any consumer on
+// the stream, including another area's durable: rewriting its filter, or stealing and acknowledging
+// its messages. It used to be needed by the one ephemeral reader (event-processing's replay), whose
+// consumer the client library named; that reader reads by sequence now.
+func TestNoAreaHoldsAWildcardConsumerNameOnAMessageStream(t *testing.T) {
+	for area, p := range allAreaPermissions(t) {
+		require.Empty(t, wildcardConsumerGrants(p), "%s holds a wildcard consumer name on a message stream", area)
+	}
+}
+
+// The negative control: the grant the replay reader used to hold is caught by the same rule, and
+// event-processing's real one is not it.
+func TestTheWildcardConsumerRuleCanFail(t *testing.T) {
+	name := messaging.StreamName(permInstance, streams.ResolvedEvents)
+	g := newGrant()
+	g.api("CONSUMER.CREATE."+name+".>", "CONSUMER.INFO."+name+".*", "CONSUMER.MSG.NEXT."+name+".*")
+	g.publish("$JS.ACK." + name + ".*.>")
+	require.Len(t, wildcardConsumerGrants(g.permissions(true)), 4)
+
+	ep, err := AreaPermissions(permInstance, "event-processing")
+	require.NoError(t, err)
+	require.Empty(t, wildcardConsumerGrants(ep))
+	require.True(t, ep.publishes("$JS.API.DIRECT.GET."+name), "event-processing reads resolved-events by sequence")
+	require.True(t, ep.publishes("$JS.API.STREAM.MSG.GET."+name))
+	// It still manages the two durables it declares.
+	require.True(t, ep.publishes("$JS.API.CONSUMER.MSG.NEXT."+name+"."+messaging.AckFloorDurableName(permInstance, "event-processing", streams.ResolvedEvents)))
+}
