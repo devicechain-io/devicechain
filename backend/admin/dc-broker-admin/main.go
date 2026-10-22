@@ -123,7 +123,7 @@ func (r *reconcileRun) run(ctx context.Context, getenv func(string) string, out 
 	if err := admin.ExecuteInitialize(ctx); err != nil {
 		return fmt.Errorf("connecting to the broker as the broker administrator: %w", err)
 	}
-	defer admin.Conn().Close()
+	defer admin.Close()
 
 	report, err := admin.ReconcileBroker(ctx, r.areas)
 	// What was done is printed even when the pass failed part of the way: the hook's log is what

@@ -78,6 +78,10 @@ func NewBrokerAdmin(ms *core.Microservice) *NatsManager {
 	return nmgr
 }
 
+// Close ends the administrator's connection as an orderly close, which the liveness handlers do
+// not mistake for a death.
+func (nmgr *NatsManager) Close() { nmgr.closeConn() }
+
 // mayReconcile reports whether this manager creates and reconfigures what it opens: the
 // administrator does, and so does a manager that is not held to the catalog (a test's).
 func (nmgr *NatsManager) mayReconcile() bool { return nmgr.admin || !nmgr.enforced() }

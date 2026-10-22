@@ -109,7 +109,7 @@ func TestTheAdministratorShapesTheCatalogAndNotAnythingElse(t *testing.T) {
 	ms.InstanceConfiguration.Infrastructure.Nats = b.AdminNatsConfiguration()
 	admin := messaging.NewBrokerAdmin(ms)
 	require.NoError(t, admin.ExecuteInitialize(context.Background()))
-	t.Cleanup(admin.Conn().Close)
+	t.Cleanup(admin.Close)
 	js, err := admin.Conn().JetStream()
 	require.NoError(t, err)
 

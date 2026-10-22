@@ -243,7 +243,7 @@ func (b *Broker) Reconcile(t testing.TB, areas ...string) *messaging.ReconcileRe
 	if err := admin.ExecuteInitialize(ctx); err != nil {
 		t.Fatalf("connecting the broker administrator: %v", err)
 	}
-	defer admin.Conn().Close()
+	defer admin.Close()
 	report, err := admin.ReconcileBroker(ctx, areas)
 	if err != nil {
 		t.Fatalf("the broker administrator could not reconcile the broker under its generated permissions: %v", err)
