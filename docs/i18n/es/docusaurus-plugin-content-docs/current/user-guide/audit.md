@@ -9,7 +9,7 @@ import GuideShot from '@site/src/components/GuideShot';
 
 La pantalla **Auditoría** es el diario de cambios en el registro del inquilino: quién cambió qué y
 cuándo. La plataforma anota una entrada por cada creación, actualización y eliminación que hace en el
-registro; si la entrada no se puede escribir, el cambio se notifica como fallido. Los cambios en
+registro; la entrada se guarda junto con el cambio, así que si no se puede escribir, el cambio no se realiza y la llamada informa de un fallo. Los cambios en
 conectores, paneles, reglas y actualizaciones no están en este diario. Las entradas nunca se editan.
 Usa esta pantalla para responder preguntas como «¿quién eliminó ese dispositivo?» o «¿qué creó
 anoche este script?». Es para los administradores de un inquilino y para quien revise la actividad de
