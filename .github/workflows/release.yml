@@ -14,6 +14,11 @@
 #   - chart:  packages the Helm chart at the tag version and pushes it as an OCI
 #             artifact to ghcr.io/devicechain-io/charts.
 #   - cli:    goreleaser cross-compiles dcctl and creates the GitHub Release.
+#   - sign:   cosign-signs (keyless, by DIGEST) every image and the chart, attaches an SBOM
+#             attestation to each image and a SLSA provenance attestation to everything.
+#   - verify-signatures:
+#             runs hack/verify-release-signatures.sh against what was just published,
+#             negative controls included. Gates the GitHub Release.
 #   - npm-packages / nuget:
 #             publish the five @devicechain/* npm packages and the C# SDK, after
 #             the correctness gates — these are the only IMMUTABLE artifacts a
@@ -55,6 +60,11 @@ on:
 #   provenance        — attest + gh release upload           -> contents: write,
 #                                                               id-token: write,
 #                                                               attestations: write
+#   sign              — cosign + attest; the signing identity  -> packages: write,
+#                       comes from the OIDC token                id-token: write,
+#                                                               attestations: write
+#   verify-signatures — reads the registry + attestation store -> contents: read,
+#                                                               attestations: read
 #   publish-manifest  — gh release VIEW; the website push
 #                       uses its own PAT, not GITHUB_TOKEN   -> contents: read
 permissions:
@@ -79,6 +89,7 @@ jobs:
       version: ${{ steps.semver.outputs.version }}
       is_prerelease: ${{ steps.semver.outputs.is_prerelease }}
       smoke: ${{ steps.smoke.outputs.smoke }}
+      sign: ${{ steps.smoke.outputs.sign }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -152,6 +163,21 @@ jobs:
           echo "smoke=$smoke" >> "$GITHUB_OUTPUT"
           echo "Image modules: $smoke"
 
+          # The SIGN matrix: every artifact this release publishes to the registry, named
+          # the way the registry names it (backend/k8s publishes as "operator"; the other
+          # modules by directory basename), plus the console image and the chart, which
+          # their own jobs publish. `artifact` is the name of the digest file those jobs
+          # upload; `path` is the repository under $REGISTRY. hack/verify-release-
+          # signatures.sh embeds the same list and the release contract test in
+          # backend/k8s/functionalarea fails when it, this step and the chart drift.
+          sign="$(jq -c '
+            [ .[] | (if . == "backend/k8s" then "operator" else (split("/") | last) end)
+              | {artifact: ., path: ., kind: "image"} ]
+            + [ {artifact: "frontend", path: "frontend", kind: "image"},
+                {artifact: "chart", path: "charts/devicechain", kind: "chart"} ]' <<<"$smoke")"
+          echo "sign=$sign" >> "$GITHUB_OUTPUT"
+          echo "Signed artifacts: $(jq 'length' <<<"$sign")"
+
   # ---------------------------------------------------------------------------
   # Build + push every service image and the operator image, multi-arch.
   # ---------------------------------------------------------------------------
@@ -216,10 +242,12 @@ jobs:
           # Go MODULE base (dc-<name>, since the modules are dc-device-management etc.),
           # which the chart does not deploy, yielding an un-deployable release.
           if [ "$MODULE" = "backend/k8s" ]; then
-            echo "repo=${REGISTRY}/operator" >> "$GITHUB_OUTPUT"
+            name=operator
           else
-            echo "repo=${REGISTRY}/$(basename "$MODULE")" >> "$GITHUB_OUTPUT"
+            name="$(basename "$MODULE")"
           fi
+          echo "repo=${REGISTRY}/${name}" >> "$GITHUB_OUTPUT"
+          echo "name=${name}" >> "$GITHUB_OUTPUT"
           # :latest moves ONLY on stable releases -- never on prereleases.
           if [ "$IS_PRERELEASE" = "false" ]; then
             echo "tags=${VERSION},latest" >> "$GITHUB_OUTPUT"
@@ -232,14 +260,33 @@ jobs:
         env:
           KO_DOCKER_REPO: ${{ steps.ko.outputs.repo }}
         run: |
+          set -euo pipefail
           # Multi-arch image published verbatim at the repo computed above
           # (--bare names the image exactly from KO_DOCKER_REPO):
           #   service  -> ghcr.io/devicechain-io/<dir>       (e.g. device-management)
           #   operator -> ghcr.io/devicechain-io/operator
-          ko build --bare \
+          #
+          # ko prints the pushed reference BY DIGEST (repo@sha256:...) on stdout. That is
+          # the thing the `sign` job signs: not a tag it would re-resolve later, but the
+          # bytes this step just pushed.
+          ref="$(ko build --bare \
             --platform=linux/amd64,linux/arm64 \
             --tags="${{ steps.ko.outputs.tags }}" \
-            ./
+            ./ | tail -n1)"
+          if ! [[ "$ref" =~ ^[^@[:space:]]+@sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::ko did not print a digest reference (got '$ref')"
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/ref"
+          printf '%s\n' "$ref" > "$RUNNER_TEMP/ref/ref.txt"
+          echo "Published $ref"
+
+      - name: Record the pushed digest for the sign job
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: ref-${{ steps.ko.outputs.name }}
+          path: ${{ runner.temp }}/ref/ref.txt
+          if-no-files-found: error
 
   # ---------------------------------------------------------------------------
   # Package the Helm chart at the release version and push it as an OCI artifact.
@@ -271,6 +318,7 @@ jobs:
         env:
           VERSION: ${{ needs.guard.outputs.version }}
         run: |
+          set -euo pipefail
           # The chart version/appVersion are SemVer WITHOUT the leading 'v'.
           # OCI tags follow chart version, so strip the prefix for the chart only.
           chart_version="${VERSION#v}"
@@ -285,7 +333,22 @@ jobs:
             --app-version "$VERSION"
 
           # helm package writes devicechain-<chart_version>.tgz to the cwd.
-          helm push "devicechain-${chart_version}.tgz" "oci://${REGISTRY}/charts"
+          # The digest helm prints is what the `sign` job signs (see the images job).
+          helm push "devicechain-${chart_version}.tgz" "oci://${REGISTRY}/charts" 2>&1 | tee push.log
+          digest="$(sed -n 's/^Digest: *\(sha256:[0-9a-f]\{64\}\).*/\1/p' push.log | tail -n1)"
+          if [ -z "$digest" ]; then
+            echo "::error::helm push did not report a digest"
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/ref"
+          printf '%s\n' "${REGISTRY}/charts/devicechain@${digest}" > "$RUNNER_TEMP/ref/ref.txt"
+
+      - name: Record the pushed digest for the sign job
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: ref-chart
+          path: ${{ runner.temp }}/ref/ref.txt
+          if-no-files-found: error
 
   # ---------------------------------------------------------------------------
   # Build + push the web console image (static nginx SPA), multi-arch.
@@ -336,6 +399,7 @@ jobs:
           echo "Frontend tags: $tags"
 
       - name: Build + push console image
+        id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           context: frontend
@@ -343,6 +407,173 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.tags.outputs.tags }}
+
+      - name: Record the pushed digest for the sign job
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::build-push-action reported no digest ('$DIGEST')"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/ref"
+          printf '%s\n' "${REGISTRY}/frontend@${DIGEST}" > "$RUNNER_TEMP/ref/ref.txt"
+
+      - name: Upload the digest
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: ref-frontend
+          path: ${{ runner.temp }}/ref/ref.txt
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # Sign every published artifact, keylessly, BY DIGEST; attach an SBOM and SLSA provenance.
+  #
+  # A SEPARATE job from the ones that build and push, for the same blast-radius reason as
+  # `provenance` below: signing needs `id-token: write`, and ko / buildx / helm are third-party
+  # tools that should never hold a token that can mint a signing identity. Each build job
+  # uploads the digest it just pushed; this job signs THAT digest, never a tag it re-resolves.
+  #
+  # Per artifact (hack/sign-release-image.sh, the same script release-signing-dryrun.yml runs
+  # against a throwaway registry on every PR that touches this path):
+  #   - a cosign keyless signature (Fulcio certificate naming THIS workflow + the tag),
+  #   - images only: a syft SPDX SBOM attached as a signed cosign attestation,
+  #   - a SLSA build-provenance attestation (actions/attest-build-provenance), pushed to the
+  #     registry and recorded in GitHub's attestation store.
+  # The chart has no SBOM: it is a bundle of YAML, and a package list of one is not a bill of
+  # materials. Its images are covered by their own.
+  #
+  # Runs BEFORE the load gate on purpose, beside it: the gates decide whether the release
+  # proceeds, not whether the bytes are attributable. A signature is a statement of origin,
+  # not of fitness -- it must exist for the rc a human investigates too.
+  sign:
+    needs: [guard, images, frontend, chart]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write     # cosign pushes signatures / attestations next to the image
+      id-token: write     # Sigstore keyless signing identity
+      attestations: write # record the provenance attestation in GitHub's store
+    strategy:
+      fail-fast: false
+      matrix:
+        item: ${{ fromJson(needs.guard.outputs.sign) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Fetch the pushed digest
+        continue-on-error: ${{ vars.RELEASE_SIGNING == 'warn' }} # see verify-signatures
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ref-${{ matrix.item.artifact }}
+          path: ${{ runner.temp }}/ref
+
+      - name: Resolve the reference
+        id: ref
+        continue-on-error: ${{ vars.RELEASE_SIGNING == 'warn' }} # see verify-signatures
+        env:
+          WANT: ${{ env.REGISTRY }}/${{ matrix.item.path }}
+        run: |
+          set -euo pipefail
+          ref="$(head -n1 "$RUNNER_TEMP/ref/ref.txt")"
+          # The digest file must name the repository this matrix entry is FOR; a mix-up
+          # between artifacts would otherwise sign the wrong image under the right label.
+          # Matched in full, digest included: the value travels on as a step output.
+          if [ "${ref%@*}" != "$WANT" ] || ! [[ "${ref#*@}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::digest file says '$ref', expected ${WANT}@sha256:<64 hex>"
+            exit 1
+          fi
+          {
+            echo "ref=$ref"
+            echo "digest=${ref#*@}"
+            echo "name=$WANT"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Log in to ghcr
+        continue-on-error: ${{ vars.RELEASE_SIGNING == 'warn' }} # see verify-signatures
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Pinned for the same reason as ko above: a release is signed and checked by tooling
+      # chosen deliberately, not by whichever version was current that day.
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        continue-on-error: ${{ vars.RELEASE_SIGNING == 'warn' }} # see verify-signatures
+        with:
+          cosign-release: v3.1.3
+
+      - name: Install syft
+        id: syft
+        continue-on-error: ${{ vars.RELEASE_SIGNING == 'warn' }} # see verify-signatures
+        if: matrix.item.kind == 'image'
+        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          syft-version: v1.55.0
+
+      - name: Sign + attest SBOM
+        continue-on-error: ${{ vars.RELEASE_SIGNING == 'warn' }} # see verify-signatures
+        env:
+          SYFT: ${{ steps.syft.outputs.cmd }}
+          KIND: ${{ matrix.item.kind }}
+          REF: ${{ steps.ref.outputs.ref }}
+        run: |
+          flags=()
+          [ "$KIND" = "image" ] || flags+=(--no-sbom)
+          hack/sign-release-image.sh "$REF" "${flags[@]}"
+
+      - name: Attest build provenance
+        continue-on-error: ${{ vars.RELEASE_SIGNING == 'warn' }} # see verify-signatures
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ steps.ref.outputs.name }}
+          subject-digest: ${{ steps.ref.outputs.digest }}
+          push-to-registry: true
+
+  # ---------------------------------------------------------------------------
+  # Verify what `sign` just published, the way a user would: hack/verify-release-signatures.sh
+  # checks every image and the chart against the release workflow's identity, then runs its two
+  # NEGATIVE CONTROLS (a signed image under a wrong identity, and a foreign image) and fails
+  # unless both are rejected. Gates the GitHub Release (`cli`), so a tag whose signing is broken
+  # never becomes an official release that claims to be verifiable. npm-packages and nuget
+  # wait for it too: they are the IMMUTABLE artifacts, and signing finishes long before the
+  # load gate does, so the wait costs no wall time while a broken signing path then publishes
+  # nothing that cannot be taken back.
+  #
+  # ESCAPE HATCH, deliberately manual. Signing depends on Sigstore (Fulcio + Rekor) being up
+  # at tag time, and a tag's run uses the workflow files AT THE TAG, so a signing defect found
+  # on a final tag cannot be fixed by a commit to main. Setting the repository variable
+  # RELEASE_SIGNING=warn makes a failed verification a warning instead of a gate; re-run the
+  # failed jobs and the release proceeds, UNSIGNED where signing failed, with a warning on the
+  # run. Unset (the default) or any other value enforces. Unset it again after the release.
+  # The hatch covers the `sign` steps too (each is continue-on-error under it): a job
+  # downstream of a FAILED job is skipped, however its direct needs ended.
+  # ---------------------------------------------------------------------------
+  verify-signatures:
+    needs: [guard, sign]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      attestations: read # gh attestation verify reads this repository's attestation store
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        continue-on-error: ${{ vars.RELEASE_SIGNING == 'warn' }}
+        with:
+          cosign-release: v3.1.3
+
+      - name: Verify signatures, SBOMs and provenance
+        id: verify
+        continue-on-error: ${{ vars.RELEASE_SIGNING == 'warn' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: hack/verify-release-signatures.sh "$TAG"
+
+      - name: Signing was waived
+        if: steps.verify.outcome == 'failure'
+        run: |
+          echo "::warning::RELEASE_SIGNING=warn: signature verification FAILED and was waived for this release. It is not (fully) signed; say so in the release notes, and unset the variable."
 
   # ---------------------------------------------------------------------------
   # ADR-064 correctness-under-load gate. Reuses the loadtest-gate workflow on its
@@ -487,7 +718,7 @@ jobs:
   # number permanently. So this runs after everything in the release that can still
   # say "no".
   npm-packages:
-    needs: [guard, loadtest-gate, upgrade-gate]
+    needs: [guard, loadtest-gate, upgrade-gate, verify-signatures]
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -617,7 +848,7 @@ jobs:
   # version is immutable too — unlisting hides a package from search, it does not free
   # the number.
   nuget:
-    needs: [guard, loadtest-gate, upgrade-gate]
+    needs: [guard, loadtest-gate, upgrade-gate, verify-signatures]
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -737,7 +968,7 @@ jobs:
     # auditable release artifact, so it is not created unless the
     # correctness-under-load gate passed AND an existing instance's data was shown
     # to survive the upgrade to this tag.
-    needs: [guard, images, loadtest-gate, upgrade-gate]
+    needs: [guard, images, loadtest-gate, upgrade-gate, verify-signatures]
     runs-on: ubuntu-latest
     permissions:
       contents: write # goreleaser creates the GitHub Release

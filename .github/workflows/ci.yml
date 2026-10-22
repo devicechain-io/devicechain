@@ -88,6 +88,13 @@ jobs:
       - name: release-manifest self-test
         run: hack/build-release-manifest.sh --self-test
 
+      # The signature verifier is the user's way to check a release, and the identity regexp
+      # it derives is what makes "signed" mean "signed by OUR release workflow for THIS tag".
+      # The self-test proves that regexp matches only its own tag; the cosign-facing half is
+      # exercised on PRs by release-signing-dryrun.yml.
+      - name: release-signature verifier self-test
+        run: hack/verify-release-signatures.sh --self-test
+
       # The govulncheck wrapper decides which findings are allowed to pass. Its
       # allowlist is the one place in CI where a known vulnerability is waved
       # through on purpose, so proving the checker can still fail — on an
