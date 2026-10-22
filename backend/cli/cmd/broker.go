@@ -18,8 +18,8 @@ import (
 var (
 	brokerReconcileKubeContext string
 	brokerPermissionsInstance  string
-	brokerPermissionsProfile  string
-	brokerPermissionsAreas    []string
+	brokerPermissionsProfile   string
+	brokerPermissionsAreas     []string
 )
 
 // brokerCmd is the parent for the message broker's operator commands.
