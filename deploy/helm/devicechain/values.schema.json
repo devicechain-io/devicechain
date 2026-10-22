@@ -482,6 +482,36 @@
         }
       }
     },
+    "brokerAdmin": {
+      "type": "object",
+      "description": "The broker administrator: the pre-install/pre-upgrade hook Job that alone creates and reconciles the platform's JetStream streams and KV buckets. Services only verify them.",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Run the broker administrator as a hook Job. Disable only if the installation creates and reconciles the broker's streams and buckets itself; services still verify them."
+        },
+        "image": {
+          "type": "string",
+          "description": "Full image reference for the broker administrator, overriding <image.registry>/dc-broker-admin:<image.tag>."
+        },
+        "activeDeadlineSeconds": {
+          "type": "integer",
+          "minimum": 60,
+          "description": "How long the whole reconcile may take, including waiting for a stream created under an older retention to be drained before it is recreated."
+        },
+        "backoffLimit": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 6,
+          "description": "How many times a failed attempt is retried before the Job, and so the release, fails."
+        },
+        "resources": {
+          "type": "object",
+          "description": "Resource requests and limits for the Job's container."
+        }
+      }
+    },
     "frontend": {
       "type": "object",
       "description": "The web console workload: a static nginx SPA served at the ingress root. Disable for headless/ingest-only instances.",

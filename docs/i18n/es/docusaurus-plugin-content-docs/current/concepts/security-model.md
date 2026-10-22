@@ -116,13 +116,20 @@ automáticamente. Consulte [Auditoría](../user-guide/audit.md).
 
 Estas carencias son conocidas y se aceptan en la versión actual. Planifique en torno a ellas.
 
-1. **Los servicios de la plataforma comparten hoy un único inicio de sesión en el broker.** Todos los servicios se conectan al broker con el mismo inicio de sesión. A ese inicio de sesión se le
-   deniegan los asuntos que solo un dispositivo puede escribir, lo que impide que un servicio publique un evento de dispositivo por
-   error, pero también puede administrar los flujos del broker, y un flujo puede configurarse para escribir en
-   esos asuntos. Un servicio comprometido podría, por tanto, falsificar eventos de dispositivo, respuestas a comandos y reportes de dispositivo
-   de cualquier inquilino. Se está construyendo un inicio de sesión propio para cada servicio, limitado a los asuntos y flujos que necesita,
-   y está previsto antes de la 1.0.0. Esta entrada cambiará cuando se publique. Hasta entonces, trate los servicios que aceptan tráfico de
-   dispositivos como parte del núcleo de confianza de la plataforma.
+1. **El inicio de sesión compartido del broker sigue en su sitio junto a los de cada servicio.** Cada área se conecta al broker con un
+   inicio de sesión propio, limitado a los asuntos, flujos, consumidores y buckets que usa, y ningún servicio puede crear,
+   cambiar ni borrar un flujo o un bucket: eso lo hace un inicio de sesión de administración, en un job que el chart ejecuta antes de cada
+   instalación y actualización, y un servicio solo comprueba que lo que abre coincide con lo que declara su versión y se niega a arrancar, indicando la diferencia,
+   cuando no es así. Un servicio comprometido no puede por tanto reconfigurar un flujo para escribir en los asuntos que solo un dispositivo
+   puede escribir, así que no puede falsificar eventos de dispositivo, respuestas a comandos ni reportes de dispositivo por esa vía. Lo que queda
+   es el inicio de sesión compartido que usaban las versiones anteriores. Permanece en la configuración del broker, y en la configuración de instancia que lee cada pod,
+   hasta que una versión posterior lo retire, y conserva los permisos que siempre tuvo, incluido administrar flujos. Mientras no se retire, un
+   pod puede presentarlo. Los servicios que aceptan tráfico de dispositivos (event-sources, device-management, lwm2m-ingest y sparkplug-ingest) siguen
+   siendo parte del núcleo de confianza de la plataforma, porque escriben datos de dispositivo por diseño. Event-processing, que
+   reproduce el flujo resolved-events mediante consumidores cuyo nombre elige la biblioteca cliente, aún puede alcanzar los demás
+   consumidores de ese flujo. Dos permisos son más amplios a propósito: event-sources puede actualizar los almacenes MQTT propios del broker, y
+   user-management puede purgar los datos de un inquilino eliminado en todos los flujos. Un servicio comprometido todavía puede causar
+   pérdida, aunque no falsificación, llenando un flujo en el que puede crear consumidores hasta que se descartan mensajes más antiguos.
 2. **El inicio de sesión de la base de datos es compartido por todos los servicios de una instancia.** Todos los servicios acceden a la base de datos
    relacional de la instancia con un único inicio de sesión, así que un servicio comprometido podría leer y escribir las tablas de otra área. El aislamiento de inquilinos
    en la base de datos descansa en el ámbito de inquilino de la aplicación, no en permisos de la base de datos. Los roles separados por

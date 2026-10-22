@@ -44,8 +44,9 @@ import (
 // on; a login that is present is NEVER replaced, one principal at a time.
 //
 // The broker administrator (config.NatsAdminPrincipal) is the odd one out: it belongs to no area, and
-// nothing mounts its Secret yet. It is introduced now so the step that gives stream administration
-// one credential finds it already recorded and escrowed.
+// no Deployment mounts its Secret. Only the chart's pre-install/pre-upgrade hook Job does
+// (templates/broker-admin-job.yaml), which is what makes the right to create and change streams
+// one credential's.
 
 const (
 	// natsLoginUserKey and natsLoginPasswordKey are the keys the chart's secretKeyRefs read.
@@ -250,9 +251,10 @@ func sayAreaLoginsIntroduced(st *State) {
 	}
 	fmt.Println(color.WhiteString(
 		"\nEvery area that uses the message broker now has a login of its own, in a Secret only that area mounts,\n" +
-			"and so does the broker administrator (mounted nowhere yet). Each area's login is held to what that\n" +
-			"area uses: its own streams, consumers, buckets and reply subjects. The shared login is still in place,\n" +
-			"with the permissions it always had; a later release retires it."))
+			"and so does the broker administrator, which only the pre-upgrade job mounts and which alone creates\n" +
+			"and changes streams and buckets. Each area's login is held to what that area uses: its own streams,\n" +
+			"consumers, buckets and reply subjects, and it cannot create or change a stream. The shared login is\n" +
+			"still in place, with the permissions it always had; a later release retires it."))
 }
 
 // loginPlaintexts is every principal's password in creds, keyed by principal, as the broker record

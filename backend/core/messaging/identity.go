@@ -205,13 +205,17 @@ func IdentityBucketNames(instanceId string) []string {
 		if b.Account != kv.Identity {
 			continue
 		}
-		if b.Name == kv.BucketCredentialAttempts {
-			out = append(out, CredentialAttemptsBucketName(instanceId))
-			continue
-		}
-		out = append(out, b.Name)
+		out = append(out, identityBucketName(instanceId, b.Name))
 	}
 	return out
+}
+
+// identityBucketName is the concrete name of an identity bucket, in whichever account it lives.
+func identityBucketName(instanceId, logical string) string {
+	if logical == kv.BucketCredentialAttempts {
+		return CredentialAttemptsBucketName(instanceId)
+	}
+	return logical
 }
 
 // RetireSharedIdentityBuckets deletes the copies of the identity buckets that an earlier release

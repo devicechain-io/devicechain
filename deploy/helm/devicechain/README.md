@@ -483,6 +483,19 @@ re-opens every private address for every tenant.
 - Optional (`blobStorage.persistence.enabled=true`, filesystem backend): a
   `PersistentVolumeClaim` (`dci-<id>-blob`) mounted into `blobStorage.mountAreas`
   at the store directory.
+- The broker administrator (`brokerAdmin.enabled=true`, on by default): the chart's
+  one **hook**. A `Job` named `<instance.id>-broker-admin` runs as a Helm `pre-install` and
+  `pre-upgrade` hook, before any other object of the release is created or changed. It is
+  the only workload that creates, updates or deletes the broker's streams and key-value
+  buckets, and the only one that mounts the broker-administration login
+  (`dci-<id>-nats-broker-admin`); the services only verify what they open and refuse to
+  start, naming the difference, when it does not match. A failed Job fails the release and
+  is kept so its pod log can be read; a successful one is removed. `dcctl broker reconcile
+  <id>` runs it again. Because it runs before the release creates anything, a first install
+  without dcctl needs the namespace and that Secret to exist already (and, under
+  `instance.existingSecret`, the instance config Secret). Set `brokerAdmin.enabled=false`
+  only if you create and reconcile the streams and buckets yourself with the
+  `dc-broker-admin` image (`dc-broker-admin reconcile --areas <area>,...`).
 - The web console (`frontend.enabled=true`, on by default): a static nginx
   `Deployment` + `Service` serving the Vite/React SPA. Disable for
   headless/ingest-only instances.
@@ -587,6 +600,12 @@ generated from the schema; do not edit it by hand.
 | `ingress.tls.issuerName` | string | `"devicechain-selfsigned"` | Name of the self-signed Issuer the chart renders when selfSigned is true. |
 | `ingress.tls.clusterIssuer` | string | `""` | Name of an existing cert-manager ClusterIssuer (for example a Let's Encrypt ACME issuer) to request certificates from. Used when selfSigned is false. |
 | `ingress.tls.secretName` | string | `"devicechain-tls"` | Name of the Secret that holds the TLS certificate. |
+| `brokerAdmin` | object | - | The broker administrator: the pre-install/pre-upgrade hook Job that alone creates and reconciles the platform's JetStream streams and KV buckets. Services only verify them. |
+| `brokerAdmin.enabled` | boolean | `true` | Run the broker administrator as a hook Job. Disable only if the installation creates and reconciles the broker's streams and buckets itself; services still verify them. |
+| `brokerAdmin.image` | string | `""` | Full image reference for the broker administrator, overriding &lt;image.registry&gt;/dc-broker-admin:&lt;image.tag&gt;. |
+| `brokerAdmin.activeDeadlineSeconds` | integer | `540` | How long the whole reconcile may take, including waiting for a stream created under an older retention to be drained before it is recreated. |
+| `brokerAdmin.backoffLimit` | integer | `1` | How many times a failed attempt is retried before the Job, and so the release, fails. |
+| `brokerAdmin.resources` | object | see values.yaml | Resource requests and limits for the Job's container. |
 | `frontend` | object | - | The web console workload: a static nginx SPA served at the ingress root. Disable for headless/ingest-only instances. |
 | `frontend.enabled` | boolean | `true` | Deploy the web console. Disable for headless or ingest-only instances. |
 | `frontend.image` | object | - | Console image override. By default the image is &lt;image.registry&gt;/frontend:&lt;image.tag&gt;. |

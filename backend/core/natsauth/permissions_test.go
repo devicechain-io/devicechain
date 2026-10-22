@@ -284,39 +284,88 @@ func TestAnAreaCannotTouchAnotherAreasDurable(t *testing.T) {
 
 // 🔴 STREAM CREATE AND UPDATE NAME THE STREAM, NOT ITS CONFIGURATION. Whoever may update a stream
 // may give it sources, a subject transform or RePublish, and each of those writes into a stream
-// past every publish permission. That is the residue the stream-administration step removes; until
-// then the grant must at least stop at the streams and buckets the catalog says the area
-// administers, plus the MQTT gateway's stores for event-sources (the named exception). An area
-// that gained an update on a stream it only has to read would be a forgery path nothing else here
-// sees, because the publish properties above all hold.
-func TestStreamAdministrationIsGrantedOnlyWhereDeclared(t *testing.T) {
+// past every publish permission; whoever may create one may give it any subjects, which captures
+// another login's inbox, another bucket's keys or the broker's own authorization requests and
+// reads them back. So NO AREA holds either verb on a catalog stream or bucket: they belong to the
+// broker administrator. The exceptions are exactly two, each a named exception to the catalog and
+// each pinned here by the full set it may touch: the MQTT gateway's own stores (event-sources) and
+// nothing else. A new grant of either verb is a visible edit to this list.
+func TestNoAreaCanCreateOrUpdateAStreamExceptTheGatewayStores(t *testing.T) {
+	gatewayStores := map[string]bool{}
+	for _, s := range messaging.MqttStoreNames() {
+		gatewayStores[s] = true
+	}
 	for area, p := range allAreaPermissions(t) {
-		mayAdminister := map[string]bool{}
-		for _, st := range streams.All {
-			if streams.Administers(st.Suffix, area) {
-				mayAdminister[messaging.StreamName(permInstance, st.Suffix)] = true
-			}
-		}
-		for _, b := range kv.All {
-			for _, bucket := range messaging.KvBucketNames(permInstance, b, area) {
-				mayAdminister[messaging.KvStreamName(bucket)] = true
-			}
-		}
-		if area == mqttGatewayArea {
-			for _, s := range messaging.MqttStoreNames() {
-				mayAdminister[s] = true
-			}
-		}
 		for _, a := range p.Publish.Allow {
 			for _, verb := range []string{"$JS.API.STREAM.CREATE.", "$JS.API.STREAM.UPDATE."} {
 				target, ok := strings.CutPrefix(a, verb)
 				if !ok {
 					continue
 				}
-				require.True(t, mayAdminister[target], "%s may %s%s, a stream it does not administer", area, verb, target)
+				require.Equal(t, mqttGatewayArea, area, "%s may %s%s: only the MQTT gateway's owner shapes a stream", area, verb, target)
+				require.True(t, gatewayStores[target], "%s may %s%s, which is not one of the gateway's stores", area, verb, target)
 			}
 		}
 	}
+}
+
+// The negative control for the test above: it must be able to fail. A generated grant that DID
+// hold the verb on a catalog stream is built by hand and the same rule is applied to it.
+func TestTheStreamShapingRuleCanFail(t *testing.T) {
+	g := newGrant()
+	g.api("STREAM.CREATE." + messaging.StreamName(permInstance, streams.ResolvedEvents))
+	p := g.permissions(true)
+	gatewayStores := map[string]bool{}
+	for _, s := range messaging.MqttStoreNames() {
+		gatewayStores[s] = true
+	}
+	var offending []string
+	for _, a := range p.Publish.Allow {
+		if target, ok := strings.CutPrefix(a, "$JS.API.STREAM.CREATE."); ok && !gatewayStores[target] {
+			offending = append(offending, target)
+		}
+	}
+	require.NotEmpty(t, offending, "the rule did not notice a CREATE on a catalog stream")
+}
+
+// The broker administrator is the one login that shapes the catalog's streams and buckets, and it
+// is held to that: it can create, update and inspect every stream and bucket (and delete the one
+// declared for a retention migration), reads its own reply inbox, and holds no publish right on
+// any data subject and no consumer or message verb at all beyond the migration's durable.
+func TestTheBrokerAdministratorShapesTheCatalogAndNothingElse(t *testing.T) {
+	p, err := AdminPermissions(permInstance)
+	require.NoError(t, err)
+	for _, st := range streams.All {
+		name := messaging.StreamName(permInstance, st.Suffix)
+		for _, verb := range []string{"STREAM.INFO.", "STREAM.CREATE.", "STREAM.UPDATE."} {
+			require.True(t, p.publishes("$JS.API."+verb+name), "the administrator cannot %s%s", verb, name)
+		}
+		require.Equal(t, st.RecreateOnRetentionChange, p.publishes("$JS.API.STREAM.DELETE."+name), "delete is for the declared migration only: %s", name)
+		// No data goes in through this login.
+		for _, subject := range messaging.StreamSubjects(permInstance, st.Suffix) {
+			require.False(t, p.publishes(strings.ReplaceAll(subject, "*", "x")), "the administrator may publish into %s", subject)
+		}
+	}
+	for _, b := range kv.All {
+		if b.Account != kv.App {
+			continue
+		}
+		for _, area := range b.Admins() {
+			for _, bucket := range messaging.KvBucketNames(permInstance, b, area) {
+				require.True(t, p.publishes("$JS.API.STREAM.CREATE."+messaging.KvStreamName(bucket)), "no create on %s", bucket)
+				require.False(t, p.publishes("$KV."+bucket+".key"), "the administrator may write into %s", bucket)
+			}
+		}
+	}
+	for _, a := range p.Publish.Allow {
+		require.True(t, strings.HasPrefix(a, "$JS.API."), "the administrator may publish to %q, which is not a JetStream API subject", a)
+		for _, forbidden := range []string{"STREAM.PURGE", "STREAM.MSG", "STREAM.RESTORE", "STREAM.SNAPSHOT", "CONSUMER.CREATE", "CONSUMER.DELETE", "CONSUMER.MSG", "DIRECT.GET"} {
+			require.NotContains(t, a, forbidden)
+		}
+	}
+	require.Equal(t, []string{messaging.InboxPrefix(config.NatsAdminPrincipal) + ".>"}, p.Subscribe.Allow)
+	require.False(t, p.AllowResponses)
+	require.False(t, p.publishes("$MQTT.msgs.acme.devices.d1.events"), "the device-events deny rides on this login too")
 }
 
 // Stream deletion, restore and message deletion are not granted wholesale: they appear only where
@@ -328,17 +377,11 @@ func TestDestructiveVerbsAreGrantedOnlyWhereDeclared(t *testing.T) {
 			require.NotContains(t, a, "STREAM.SNAPSHOT", area)
 			require.False(t, a == ">" || a == "*" || a == "$JS.API.>" || a == "$JS.>", "%s holds the blanket grant %q", area, a)
 			if strings.HasPrefix(a, "$JS.API.STREAM.DELETE.") {
-				found := false
-				for _, st := range streams.All {
-					if st.RecreateOnRetentionChange && a == "$JS.API.STREAM.DELETE."+messaging.StreamName(permInstance, st.Suffix) {
-						found = streams.Administers(st.Suffix, area)
-					}
-				}
-				// user-management retires the shared-account copies of the sign-in buckets.
-				if area == "user-management" && strings.Contains(a, "KV_") {
-					found = true
-				}
-				require.True(t, found, "%s may delete a stream it has no declared reason to: %s", area, a)
+				// The only deletion an area holds is user-management retiring the shared-account
+				// copies of the sign-in buckets. The retention migration's delete is the broker
+				// administrator's.
+				require.True(t, area == "user-management" && strings.Contains(a, "KV_"),
+					"%s may delete a stream it has no declared reason to: %s", area, a)
 			}
 			if strings.HasPrefix(a, "$JS.API.STREAM.PURGE.") {
 				require.Equal(t, "user-management", area, "only the tenant purge purges: %s holds %s", area, a)
@@ -447,4 +490,25 @@ func TestPermissionsSerialiseAsTheBrokerReadsThem(t *testing.T) {
 	raw, err = json.Marshal(ServicePermissions())
 	require.NoError(t, err)
 	require.JSONEq(t, `{"publish":{"deny":["*.*.devices.*.events","$MQTT.msgs.*.*.devices.*.events","*.*.gateways.*.devices.*.events","$MQTT.msgs.*.*.gateways.*.devices.*.events"]}}`, string(raw))
+}
+
+// The tenant purge deletes the gateway's consumers that name a tenant, whose names the gateway
+// chooses, so it holds a wildcard over the message store's consumers. event-sources' fail-closed
+// durables are in that store, and deleting one loses a PUBACKed message, so the wildcard is carved
+// around exactly those names: purgeable consumers still are, the durables are not.
+func TestThePurgeCannotDeleteTheFailClosedDurables(t *testing.T) {
+	p, err := AreaPermissions(permInstance, tenantPurgeArea)
+	require.NoError(t, err)
+	names := messaging.MqttFailClosedConsumerNames(permInstance)
+	require.NotEmpty(t, names)
+	for _, d := range names {
+		require.False(t, p.publishes("$JS.API.CONSUMER.DELETE."+messaging.MqttMessageStore+"."+d),
+			"user-management may delete the fail-closed durable %s", d)
+	}
+	require.True(t, p.publishes("$JS.API.CONSUMER.DELETE."+messaging.MqttMessageStore+".a-gateway-consumer"),
+		"the carve-out removed the purge of the gateway's own consumers")
+	// event-sources, which owns the durables, still manages them.
+	own, err := AreaPermissions(permInstance, mqttGatewayArea)
+	require.NoError(t, err)
+	require.True(t, own.publishes("$JS.API.CONSUMER.DELETE."+messaging.MqttMessageStore+"."+names[0]))
 }

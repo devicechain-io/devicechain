@@ -11,7 +11,6 @@ import (
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
-	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/require"
 
 	"github.com/devicechain-io/dc-microservice/kv"
@@ -39,12 +38,13 @@ const purgeInstance = "pinst"
 
 func seedPurgeData(t *testing.T, b *permtest.Broker) {
 	t.Helper()
-	// Cache buckets, created and filled as the area that owns them.
+	// Cache buckets, created by the broker administrator (permtest.Start) and filled as the area
+	// that owns them.
 	nc := b.Connect(t, "device-management")
 	js, err := nc.JetStream()
 	require.NoError(t, err)
 	bucket := messaging.CacheBucketName(purgeInstance, "device-management", kv.BucketDeviceByToken)
-	store, err := js.CreateKeyValue(&nats.KeyValueConfig{Bucket: bucket, TTL: time.Hour})
+	store, err := js.KeyValue(bucket)
 	require.NoError(t, err)
 	for _, key := range []string{"victim|dev1", "bystander|dev1"} {
 		_, err := store.Put(base64.RawURLEncoding.EncodeToString([]byte(key)), []byte("x"))

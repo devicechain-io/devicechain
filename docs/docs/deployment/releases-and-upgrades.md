@@ -454,20 +454,44 @@ What a running instance sees:
   subjects. A login can no longer publish into another area's streams, write another area's cache, or
   subscribe to another area's replies. The grants are generated from the same declarations the
   services are checked against, so they cannot fall behind what a service does. This is not yet a
-  boundary against a compromised service, and three gaps remain until later releases close them.
-  Every area can still create and update the streams it uses, including streams it only reads, and a
-  stream's configuration can copy messages into another stream or capture subjects that the login
-  itself could not publish or subscribe to. event-processing, which replays the resolved-events
-  stream, can still reach the other consumers on that stream. And the shared login stays in place
-  beside the new ones, with the permissions it always had, so services that have not restarted yet
-  keep connecting during the upgrade; until a later release retires it, it is still in the
-  configuration every pod reads, so a pod can still present it. Two grants are wider by design:
-  event-sources keeps update rights on the broker's MQTT stores, and user-management can purge a
-  deleted tenant's data across every stream. An installation that runs the chart without dcctl and
+  boundary against a compromised service, and two gaps remain until later releases close them.
+  event-processing, which replays the resolved-events stream, can still reach the other consumers
+  on that stream. And the shared login stays in place beside the new ones, with the permissions it
+  always had, so services that have not restarted yet keep connecting during the upgrade; until a
+  later release retires it, it is still in the configuration every pod reads, so a pod can still
+  present it. Two grants are wider by design: event-sources keeps update rights on the broker's MQTT
+  stores, and user-management can purge a deleted tenant's data across every stream, except for the
+  consumers event-sources keeps its acknowledged-message durability on. An installation that runs the chart without dcctl and
   brings its own broker can print the same grants with `dcctl broker permissions`. The broker
   restarts once, one server at a time under `--ha`, to add the users. An area refuses to
   start if the instance says the logins exist and its own is missing, rather than fall back to the
   shared one. Existing logins are never replaced: an upgrade creates only the ones that are absent.
+- **Streams and buckets are now created by one administration login, before the services roll.** A
+  stream's configuration decides what is stored under which subject, so letting every service create
+  and change the streams it uses meant any one of them could reshape a stream to capture or forge
+  messages. The chart now runs a job, `<instance>-broker-admin`, before every install and upgrade
+  (a Helm pre-install and pre-upgrade hook). It signs in with the broker administration login, which
+  no Deployment mounts, and does what every service used to do for itself at start: it creates what is
+  missing, puts back the subjects, duplicate window, discard policy, size ceilings and replica count of
+  what exists, and, for the one capture stream an older release created with a different retention,
+  waits for its reader to drain it before recreating it as declared. That wait can take a few minutes.
+  A service no longer creates or changes anything: it checks that every stream and bucket it opens
+  matches what its release declares, and refuses to start, naming the stream and what differs, when one
+  is missing or wrong. If the job fails, the upgrade fails before any service rolls, and `dcctl upgrade`
+  prints the job's log; the services of the previous release keep running. `dcctl broker reconcile
+  <instance>` runs the same job again, which is also how to recover a stream or bucket deleted by hand.
+  Area logins no longer hold the right to create, update or delete a stream or bucket, with two
+  exceptions that stay by design: event-sources keeps its rights on the broker's own MQTT stores, and
+  user-management keeps the right to delete the old copies of the sign-in buckets. Two behaviours
+  change with it. The cache buckets' lifetime is now fixed at five minutes, because the job creates them
+  and no longer asks each service; the device-management cache time-to-live settings bound only how long a
+  replica holds an entry in its own memory. And a replica count raised in the instance configuration takes
+  effect when the job runs, at the next upgrade, rather than at every pod restart. A pod of the previous
+  release that restarts after the broker was updated but before the job has run is refused when it tries
+  to reconfigure a stream; roll forward and it starts. An installation that runs the chart without dcctl
+  needs the namespace and the administration login's Secret in place before the first install, because
+  the job runs before the chart creates anything; it can switch the job off with `brokerAdmin.enabled=false` and
+  create the streams and buckets itself with the `dc-broker-admin` image.
 - **The event store restarts when its pods change**, for example for a new image or placement.
   A settings-only change reloads without a restart. Under `--ha` the standbys restart first, then
   the primary role switches to one of them. Without `--ha` the one instance restarts and

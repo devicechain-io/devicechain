@@ -11,13 +11,15 @@ import (
 
 	"github.com/devicechain-io/dc-k8s/functionalarea"
 	"github.com/devicechain-io/dc-microservice/natsauth"
+	"github.com/devicechain-io/dcctl/bootstrap"
 	"github.com/spf13/cobra"
 )
 
 var (
-	brokerPermissionsInstance string
-	brokerPermissionsProfile  string
-	brokerPermissionsAreas    []string
+	brokerReconcileKubeContext string
+	brokerPermissionsInstance  string
+	brokerPermissionsProfile   string
+	brokerPermissionsAreas     []string
 )
 
 // brokerCmd is the parent for the message broker's operator commands.
@@ -58,7 +60,43 @@ no block must not be created: nats-server reads a user with no permissions as un
 	SilenceUsage: true,
 }
 
+// brokerReconcileCmd runs the broker administrator again.
+var brokerReconcileCmd = &cobra.Command{
+	Use:   "reconcile <instance>",
+	Short: "Create and reconcile the instance's message broker streams and buckets",
+	Long: `Run the broker administrator again for an installed instance and wait for it.
+
+The platform's services do not create or change the broker's streams and buckets. They verify what
+they open and stop, naming what differs, when it is missing or does not match what the release
+declares. One login, the broker administrator, creates and reconciles them, as a Job the chart runs
+before every install and upgrade. This runs that same Job on demand, for recovery:
+
+  - a pod that stops with "does not match what this build declares" or "does not exist";
+  - a stream or bucket lost at runtime or deleted by hand;
+  - a ceiling or replica count changed in the instance configuration and applied without a release.
+
+The Job is the one the instance's last install or upgrade ran, read back from its Helm release, so
+it uses the same image, the same areas and the same broker login. It is idempotent: on a broker that
+already matches it changes nothing. The Job's log is printed. When it fails, the Job is left in the
+instance's namespace to read and the command exits non-zero.
+
+A stream that an older release created with a different retention is drained by its reader before
+it is recreated as declared, which can take a few minutes.`,
+	Example: `  dcctl broker reconcile devicechain
+  dcctl broker reconcile devicechain --kube-context kind-devicechain`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return bootstrap.ReconcileBroker(cmd.Context(), bootstrap.ReconcileBrokerOptions{
+			Options: bootstrap.Options{Instance: args[0], KubeContext: brokerReconcileKubeContext},
+			Out:     cmd.OutOrStdout(),
+		})
+	},
+	SilenceUsage: true,
+}
+
 func init() {
+	brokerReconcileCmd.Flags().StringVar(&brokerReconcileKubeContext, "kube-context", "", "kube-context to target (default: the cluster recorded at bootstrap; a different context is refused)")
+	brokerCmd.AddCommand(brokerReconcileCmd)
 	brokerPermissionsCmd.Flags().StringVar(&brokerPermissionsInstance, "instance-id", "", "the instance id the services run under (their DC_INSTANCE_ID); it is part of every subject and stream name (required)")
 	brokerPermissionsCmd.Flags().StringVar(&brokerPermissionsProfile, "profile", "", "limit the output to the areas of this deployment profile (default: every area)")
 	brokerPermissionsCmd.Flags().StringArrayVar(&brokerPermissionsAreas, "enable-area", nil, "also include this area's login on top of --profile; repeat for more")

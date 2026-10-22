@@ -18,6 +18,7 @@ package permtest
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -30,11 +31,14 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/config"
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/natsauth"
+	"github.com/devicechain-io/dc-microservice/streams"
 	dctest "github.com/devicechain-io/dc-microservice/test"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // Broker is a running permission-enforcing test broker.
@@ -52,6 +56,8 @@ type Broker struct {
 type settings struct {
 	users map[string]map[string]natsauth.Permissions
 	extra map[string]any
+	// bare leaves the broker's streams and buckets uncreated (see WithoutReconcile).
+	bare bool
 }
 
 // Option adjusts the generated users, or the server configuration around them.
@@ -67,6 +73,10 @@ const OpenUser = "open-test-login"
 func WithOpenUser() Option {
 	return func(s *settings) { s.users[natsauth.AppAccount][OpenUser] = natsauth.Permissions{} }
 }
+
+// WithoutReconcile starts the broker without running the broker administrator, so a test sees
+// what a service finds when nobody has created its streams (the drifted-broker case).
+func WithoutReconcile() Option { return func(s *settings) { s.bare = true } }
 
 // WithMQTT turns the MQTT gateway on at an ephemeral port (see Broker.MQTTPort), the way the
 // deployed broker runs it.
@@ -194,7 +204,51 @@ func Start(t testing.TB, instance string, opts ...Option) *Broker {
 		t.Fatal(err)
 	}
 	b.Host, b.Port = u.Hostname(), uint32(port)
+	if !set.bare {
+		// What the chart's pre-install hook does before any service starts: the broker
+		// administrator creates every stream and bucket, over its own login, so a service under
+		// test finds the broker as a deployed one is found and, since it holds no right to create
+		// anything, cannot be passing because it did.
+		b.Reconcile(t, streams.PlatformAreas...)
+	}
 	return b
+}
+
+// AdminNatsConfiguration is what the broker administrator is given to connect to this broker as
+// its own login. The ceilings are small: the administrator creates every stream of every area at
+// once, and a test machine's disk is not a production volume.
+func (b *Broker) AdminNatsConfiguration() config.NatsConfiguration {
+	user := natsauth.AdminUser
+	return config.NatsConfiguration{
+		Hostname:           b.Host,
+		Port:               b.Port,
+		Auth:               config.NatsAuthConfiguration{User: user, Password: Password(user), IdentityAccount: true},
+		StreamMaxBytes:     16 << 20,
+		StreamMaxBytesCold: 4 << 20,
+		KvStateMaxBytes:    4 << 20,
+		KvCacheMaxBytes:    2 << 20,
+	}
+}
+
+// Reconcile runs the broker administrator over this broker for the given areas, exactly as the
+// hook Job does, and returns what it did. The test fails if it cannot.
+func (b *Broker) Reconcile(t testing.TB, areas ...string) *messaging.ReconcileReport {
+	t.Helper()
+	ms := &core.Microservice{InstanceId: b.instance}
+	ms.UseMetricsRegistry(prometheus.NewRegistry())
+	ms.InstanceConfiguration.Infrastructure.Nats = b.AdminNatsConfiguration()
+	admin := messaging.NewBrokerAdmin(ms)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	if err := admin.ExecuteInitialize(ctx); err != nil {
+		t.Fatalf("connecting the broker administrator: %v", err)
+	}
+	defer admin.Close()
+	report, err := admin.ReconcileBroker(ctx, areas)
+	if err != nil {
+		t.Fatalf("the broker administrator could not reconcile the broker under its generated permissions: %v", err)
+	}
+	return report
 }
 
 // NatsConfiguration is what an area's microservice is given to connect to this broker as its own

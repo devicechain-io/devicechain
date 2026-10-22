@@ -313,6 +313,12 @@ type Stream struct {
 	// place, and every other stream keeps the refusal: a recreate is only safe where the
 	// stream holds nothing but what its single reader has not yet forwarded.
 	RecreateOnRetentionChange bool
+	// AllowDirect declares that the stream answers direct gets (the broker serves a read by
+	// sequence, or a batch of them, without a consumer). The broker administrator sets it, and a
+	// reader that reads history by sequence instead of through an ephemeral consumer needs it:
+	// an ephemeral consumer is named by the client library, so a grant to create one cannot name
+	// it, while a read by sequence creates nothing on the broker.
+	AllowDirect bool
 	// Dormant marks a stream that is DECLARED but that no service ensures yet, so it does
 	// not exist on a running broker. The replication check does not require a dormant
 	// stream even where its areas (Areas()) are deployed - a check that fails on a healthy install
@@ -1101,6 +1107,9 @@ func MaxBytesCapFor(suffix string) int64 {
 func RetentionFor(suffix string) Retention {
 	return bySuffix[suffix].Retention
 }
+
+// AllowDirectFor reports whether the stream is declared to answer direct gets.
+func AllowDirectFor(suffix string) bool { return bySuffix[suffix].AllowDirect }
 
 // RecreatesOnRetentionChange reports whether an existing stream of suffix with a different
 // retention may be drained and recreated (Stream.RecreateOnRetentionChange).

@@ -96,6 +96,12 @@ done
 # Operator (backend/k8s) — deployed by 'make deploy IMG=...'.
 build_one "$ROOT/backend/k8s" "$REGISTRY/operator"
 
+# The broker administrator, which the chart runs as its pre-install/pre-upgrade hook Job and
+# pulls as {REGISTRY}/dc-broker-admin:{TAG} (devicechain.brokerAdminImage). Without it every
+# install and upgrade from this registry fails its hook on an image that is not there, before a
+# single service rolls.
+build_one "$ROOT/backend/admin/dc-broker-admin" "$REGISTRY/dc-broker-admin"
+
 # Web console (frontend) — a static nginx SPA, so docker (not ko) builds it. The
 # chart deploys it by default at {REGISTRY}/frontend:{TAG}.
 step "🏗️  $REGISTRY/frontend:$TAG"

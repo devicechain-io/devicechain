@@ -31,6 +31,7 @@ answer, not a fault in your setup.
 - every service image: `ghcr.io/devicechain-io/<service>` (for example `device-management`)
 - the Kubernetes operator image: `ghcr.io/devicechain-io/operator`
 - the edge agent image: `ghcr.io/devicechain-io/dc-edge-agent`
+- the broker administrator image, which the chart's pre-install and pre-upgrade job runs: `ghcr.io/devicechain-io/dc-broker-admin`
 - the web console image: `ghcr.io/devicechain-io/frontend`
 - the Helm chart: `oci://ghcr.io/devicechain-io/charts/devicechain`
 

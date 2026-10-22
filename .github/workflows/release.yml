@@ -158,6 +158,7 @@ jobs:
             { printf '%s\n' "$services"
               echo "backend/k8s"
               echo "backend/edge/dc-edge-agent"
+              echo "backend/admin/dc-broker-admin"
             } | jq -R . | jq -s -c .
           )"
           echo "smoke=$smoke" >> "$GITHUB_OUTPUT"

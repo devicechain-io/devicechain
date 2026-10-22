@@ -162,6 +162,13 @@ func (a natsAck) Ack() error { return a.nm.Ack() }
 type NatsManager struct {
 	Microservice *core.Microservice
 
+	// admin makes this manager the BROKER ADMINISTRATOR's: the one holder of the right to
+	// create, reconfigure and delete streams and buckets (admin.go). Every other manager over
+	// a deployed microservice only verifies them.
+	admin bool
+	// reconciled, when set, is told what each reconcile did (admin.go).
+	reconciled func(kind, name, action string)
+
 	oncreate func(*NatsManager) error
 	// runCtx is the context ExecuteStart (or, before it, ExecuteInitialize) was handed,
 	// kept until ExecuteStop so the stream and consumer provisioning that oncreate (and
@@ -733,6 +740,25 @@ func applyStreamDiscard(cfg *nats.StreamConfig) bool {
 	return true
 }
 
+// applyStreamNoCrossing removes what makes a stream store under a subject it does not capture:
+// sources, a subject transform and a republish. It reports whether it changed anything, and
+// whether the stream is a mirror (which cannot be undone by an update).
+func applyStreamNoCrossing(cfg *nats.StreamConfig) (changed, mirror bool) {
+	if cfg.Mirror != nil {
+		return false, true
+	}
+	if len(cfg.Sources) > 0 {
+		cfg.Sources, changed = nil, true
+	}
+	if cfg.SubjectTransform != nil {
+		cfg.SubjectTransform, changed = nil, true
+	}
+	if cfg.RePublish != nil {
+		cfg.RePublish, changed = nil, true
+	}
+	return changed, false
+}
+
 // applyStreamReplicas reconciles a stream's replica factor UPWARD only, reporting
 // whether it changed and whether a downward change was refused.
 //
@@ -846,6 +872,9 @@ func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 	if err := nmgr.requireAdmin(suffix); err != nil {
 		return "", err
 	}
+	if !nmgr.mayReconcile() {
+		return nmgr.verifyStream(suffix)
+	}
 	name := StreamName(nmgr.Microservice.InstanceId, suffix)
 	bounds := nmgr.streamBounds(suffix)
 	subjects := StreamSubjects(nmgr.Microservice.InstanceId, suffix)
@@ -919,16 +948,27 @@ func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 			dupChanged := applyStreamDuplicateWindow(&cfg, dupWindow)
 			had := cfg.Discard
 			discardChanged := applyStreamDiscard(&cfg)
+			// A stream that stores under a subject it does not capture is how a message is forged
+			// into another stream's namespace; none of ours has sources, a transform or a
+			// republish, so any found is put back, and a mirror (which JetStream cannot undo in
+			// place) is refused.
+			crossChanged, isMirror := applyStreamNoCrossing(&cfg)
+			if isMirror {
+				refused = fmt.Errorf("stream %s is a mirror, which no declared stream is and JetStream cannot "+
+					"change in place; delete it so it is created as declared", name)
+				return nil
+			}
 			if discardChanged {
 				log.Warn().Str("stream", name).Str("have", had.String()).Str("want", cfg.Discard.String()).
 					Msg("Stream was set to discard new messages when full; restoring discard-old. A refused " +
 						"store on the device-events capture stream reaches no device, so discard-new loses the " +
 						"newest events with nothing counting them")
 			}
-			if boundsChanged || subjectsChanged || dupChanged || discardChanged {
+			if boundsChanged || subjectsChanged || dupChanged || discardChanged || crossChanged {
 				if _, err := nmgr.js.UpdateStream(&cfg, nats.Context(ctx)); err != nil {
 					return err
 				}
+				nmgr.noteReconciled("stream", name, "updated")
 				log.Info().Str("stream", name).Int64("maxBytes", bounds.maxBytes).
 					Int64("maxMsgs", bounds.maxMsgs).Int32("maxMsgSize", bounds.maxMsgSize).
 					Strs("subjects", cfg.Subjects).Bool("subjectsChanged", subjectsChanged).
@@ -967,6 +1007,9 @@ func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 			// same hazard by re-reading StreamInfo (kv.go); here the fresh config is
 			// already in hand.
 			nmgr.reconcileStreamReplicas(name, cfg)
+			if !(boundsChanged || subjectsChanged || dupChanged || discardChanged || crossChanged) {
+				nmgr.noteReconciled("stream", name, "unchanged")
+			}
 			return nil
 		} else if !errors.Is(err, nats.ErrStreamNotFound) {
 			return err
@@ -990,6 +1033,7 @@ func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 		if _, err := nmgr.js.AddStream(cfg, nats.Context(ctx)); err != nil {
 			return err
 		}
+		nmgr.noteReconciled("stream", name, "created")
 		log.Info().Str("stream", name).Int64("maxBytes", bounds.maxBytes).
 			Int64("maxMsgs", bounds.maxMsgs).Int32("maxMsgSize", bounds.maxMsgSize).
 			Str("retention", retention.String()).Msg("Created JetStream stream")

@@ -24,6 +24,7 @@ La firma se aplica a las versiones cuyas notas la anuncian, a más tardar `v1.0.
 - cada imagen de servicio: `ghcr.io/devicechain-io/<servicio>` (por ejemplo `device-management`)
 - la imagen del operador de Kubernetes: `ghcr.io/devicechain-io/operator`
 - la imagen del agente de borde: `ghcr.io/devicechain-io/dc-edge-agent`
+- la imagen del administrador del bróker, que ejecuta el job pre-install y pre-upgrade del chart: `ghcr.io/devicechain-io/dc-broker-admin`
 - la imagen de la consola web: `ghcr.io/devicechain-io/frontend`
 - el chart de Helm: `oci://ghcr.io/devicechain-io/charts/devicechain`
 

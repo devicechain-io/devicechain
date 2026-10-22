@@ -49,7 +49,7 @@ func TestEnablingAnAreaIsAcceptedByAnAPIServer(t *testing.T) {
 		t.Fatalf("control: before enable-area the server answered %v for update-management, want NotFound", err)
 	}
 
-	rel, err = upgradeRelease(t, cfg, helmReleaseNameFor("guide"), ch, valuesFor("update-management"))
+	rel, err = upgradeRelease(t, c, cfg, helmReleaseNameFor("guide"), ch, valuesFor("update-management"))
 	if err != nil {
 		t.Fatalf("the API server refused the enable-area upgrade: %v", err)
 	}

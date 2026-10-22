@@ -260,13 +260,13 @@ func helmInstall(ctx context.Context, st *State) error {
 		inst.Wait = true
 		inst.Timeout = helmTimeout
 		_, err := inst.RunWithContext(ctx, ch, vals)
-		return err
+		return brokerAdminFailure(ctx, st.KubeContext, st.Instance, err)
 	} else if err != nil {
 		return err
 	}
 
 	_, err = newHelmUpgrade(actionConfig, releaseNamespace).RunWithContext(ctx, releaseName, ch, vals)
-	return err
+	return brokerAdminFailure(ctx, st.KubeContext, st.Instance, err)
 }
 
 // releaseValues is the value map helmInstall hands Helm, and the instance configuration

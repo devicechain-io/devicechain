@@ -657,6 +657,12 @@ func buildImages(ctx context.Context, root string, st *State) error {
 			return err
 		}
 	}
+	// The broker administrator the chart's pre-install/pre-upgrade hook runs. It is not a service
+	// (it serves nothing, and the chart gives it no Deployment), so it is not under services/;
+	// the image is named for the module, as the chart pulls it.
+	if err := build(filepath.Join(root, brokerAdminModuleDir), fmt.Sprintf("%s/%s", st.ImageRegistry, brokerAdminImageName)); err != nil {
+		return err
+	}
 	// Through buildOperatorImage rather than inline, so "which module is the
 	// operator, and what is it called in a registry" has ONE answer that install
 	// and bootstrap share.

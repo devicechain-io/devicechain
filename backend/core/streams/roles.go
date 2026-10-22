@@ -5,6 +5,11 @@ package streams
 
 import "slices"
 
+// BrokerAdmin is the name of the one principal that creates, updates and deletes streams and
+// buckets: the broker administrator. It is not a functional area (nothing in PlatformAreas is
+// it, and no Deployment is named for it); its login is minted beside the areas'.
+const BrokerAdmin = "broker-admin"
+
 // PlatformAreas are the functional areas that exist, which is every area a declaration here
 // or in core/kv may name. A name outside it is a typo, and a typo in a role is a grant to
 // nobody that reads as a grant to somebody. mcp and ai-inference are listed although neither
@@ -130,15 +135,17 @@ func ReadersOf(suffix string) []Reader {
 	return out
 }
 
-// AdminsOf returns the areas that create, update and (for a retention change) delete the
-// stream's configuration, sorted.
+// AdminsOf returns the areas that OPEN the stream, sorted: the ones that write it or hold a
+// durable consumer on it, whose start therefore needs it to exist.
 //
-// TODAY THAT IS EVERY AREA THAT OPENS IT FOR WRITING OR FOR A DURABLE READ, because each
-// service reconciles the streams it touches at start (messaging's ensureStream, called by
-// every writer and consuming reader). That is the truth this records, not the wish: an
-// ephemeral or live reader opens nothing, so it is not here. A later change that moves
-// stream administration to one dedicated login narrows this to that login, and the roles
-// above it do not move.
+// 🔴 THE NAME IS OLDER THAN THE DISTINCTION. Until the stream-administration step each of these
+// areas also created and reconfigured the stream at its own start, and "administers" was true.
+// It is not any more: the right to create, update and delete a stream belongs to the broker
+// administrator alone (BrokerAdmin), and an area listed here only VERIFIES the stream
+// (messaging's verifyStream) and fails its start, naming what differs, when it is missing or
+// wrong. What the list still decides is which streams the administrator creates for an
+// installation (those a deployed area opens) and which areas the replication check expects to
+// have started them. An ephemeral or live reader opens nothing, so it is not here.
 func AdminsOf(suffix string) []string {
 	var out []string
 	for _, a := range WritersOf(suffix) {
@@ -167,5 +174,6 @@ func ReadsAs(suffix, area string, mode ReadMode) bool {
 	return slices.Contains(ReadersOf(suffix), Reader{Area: area, Mode: mode})
 }
 
-// Administers reports whether area may create or reconcile the stream.
+// Administers reports whether area OPENS the stream (see AdminsOf). It does not mean the area may
+// create or change it: only the broker administrator may.
 func Administers(suffix, area string) bool { return slices.Contains(AdminsOf(suffix), area) }

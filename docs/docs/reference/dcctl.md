@@ -105,6 +105,7 @@ Operate on the message broker an instance runs on.
 
 * [dcctl](#dcctl)	 - DeviceChain CLI
 * [dcctl broker permissions](#dcctl-broker-permissions)	 - Print the broker permissions every platform login is held to
+* [dcctl broker reconcile](#dcctl-broker-reconcile)	 - Create and reconcile the instance's message broker streams and buckets
 
 ## dcctl broker permissions {#dcctl-broker-permissions}
 
@@ -153,6 +154,55 @@ dcctl broker permissions [flags]
   -h, --help                      help for permissions
       --instance-id string        the instance id the services run under (their DC_INSTANCE_ID); it is part of every subject and stream name (required)
       --profile string            limit the output to the areas of this deployment profile (default: every area)
+```
+
+### SEE ALSO
+
+* [dcctl broker](#dcctl-broker)	 - Message broker operations
+
+## dcctl broker reconcile {#dcctl-broker-reconcile}
+
+Create and reconcile the instance's message broker streams and buckets
+
+### Synopsis
+
+Run the broker administrator again for an installed instance and wait for it.
+
+The platform's services do not create or change the broker's streams and buckets. They verify what
+they open and stop, naming what differs, when it is missing or does not match what the release
+declares. One login, the broker administrator, creates and reconciles them, as a Job the chart runs
+before every install and upgrade. This runs that same Job on demand, for recovery:
+
+```
+  - a pod that stops with "does not match what this build declares" or "does not exist";
+  - a stream or bucket lost at runtime or deleted by hand;
+  - a ceiling or replica count changed in the instance configuration and applied without a release.
+```
+
+The Job is the one the instance's last install or upgrade ran, read back from its Helm release, so
+it uses the same image, the same areas and the same broker login. It is idempotent: on a broker that
+already matches it changes nothing. The Job's log is printed. When it fails, the Job is left in the
+instance's namespace to read and the command exits non-zero.
+
+A stream that an older release created with a different retention is drained by its reader before
+it is recreated as declared, which can take a few minutes.
+
+```
+dcctl broker reconcile <instance> [flags]
+```
+
+### Examples
+
+```
+  dcctl broker reconcile devicechain
+  dcctl broker reconcile devicechain --kube-context kind-devicechain
+```
+
+### Options
+
+```
+  -h, --help                  help for reconcile
+      --kube-context string   kube-context to target (default: the cluster recorded at bootstrap; a different context is refused)
 ```
 
 ### SEE ALSO

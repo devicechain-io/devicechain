@@ -26,11 +26,13 @@ import (
 // 🔴 WHAT A GRANT IS EXACT ABOUT, AND WHAT IT IS NOT. A stream or bucket is named, never
 // wildcarded; a durable consumer is named exactly (the name is derived from the same declaration
 // that creates it), so one area cannot rewrite, steal from or ack another's. A writer's publish
-// subjects are its streams' own subjects. What it is NOT yet exact about is administration: until
-// the stream-administration step moves stream creation to one dedicated login, an area keeps
-// STREAM.CREATE and STREAM.UPDATE on the streams it opens, and an EPHEMERAL reader keeps a
-// wildcard consumer name on its stream (the client library names the consumer). Both are listed
-// in the residue the design records, not hidden here.
+// subjects are its streams' own subjects. NO AREA CAN CREATE, UPDATE OR DELETE A STREAM OR A
+// BUCKET: those verbs, which let a login give a stream any subjects, a RePublish or a subject
+// transform, belong to the broker administrator (AdminPermissions) alone. The named exceptions
+// are the MQTT gateway's own stores (event-sources) and the retirement of the old shared-account
+// sign-in buckets (user-management), each beside its reason in exceptionGrant. What a grant is
+// NOT yet exact about is an EPHEMERAL reader, which keeps a wildcard consumer name on its stream
+// (the client library names the consumer) until its reads become reads by sequence.
 
 // jsAPI is the JetStream API subject prefix every administrative request is published under.
 const jsAPI = "$JS.API."
@@ -57,10 +59,20 @@ type Permissions struct {
 // grant accumulates one login's lists.
 type grant struct {
 	pub, sub map[string]struct{}
+	// denyPub are publish subjects withheld from an allow that is wider than they are. A deny wins
+	// over an allow in nats-server, so it carves an exact name out of a wildcard grant.
+	denyPub map[string]struct{}
 }
 
 func newGrant() *grant {
-	return &grant{pub: map[string]struct{}{}, sub: map[string]struct{}{}}
+	return &grant{pub: map[string]struct{}{}, sub: map[string]struct{}{}, denyPub: map[string]struct{}{}}
+}
+
+// apiDeny withholds "$JS.API.<tail>" from the allow-list.
+func (g *grant) apiDeny(tails ...string) {
+	for _, t := range tails {
+		g.denyPub[jsAPI+t] = struct{}{}
+	}
 }
 
 func (g *grant) publish(subjects ...string) {
@@ -95,8 +107,9 @@ func sortedKeys(m map[string]struct{}) []string {
 // shared one: nothing the platform writes is in that namespace, and an allow-list that one day
 // grew a wildcard over it must not become a way to forge a device.
 func (g *grant) permissions(responses bool) Permissions {
+	deny := append(ServicePublishDeny(), sortedKeys(g.denyPub)...)
 	return Permissions{
-		Publish:        &Rules{Allow: sortedKeys(g.pub), Deny: ServicePublishDeny()},
+		Publish:        &Rules{Allow: sortedKeys(g.pub), Deny: deny},
 		Subscribe:      &Rules{Allow: sortedKeys(g.sub)},
 		AllowResponses: responses,
 	}
@@ -182,23 +195,16 @@ func streamGrant(g *grant, instance, area string, st streams.Stream) {
 		}
 	}
 	writes := streams.Writes(st.Suffix, area)
-	admin := streams.Administers(st.Suffix, area)
-	if !writes && !admin && len(mine) == 0 {
+	opens := streams.Administers(st.Suffix, area)
+	if !writes && !opens && len(mine) == 0 {
 		return
 	}
 	name := messaging.StreamName(instance, st.Suffix)
 
-	// Looking at the stream: ensureStream reads it before it creates or reconciles it, the
-	// sampler and the writers' backpressure read its state.
+	// Looking at the stream: the start-time verification reads its configuration, the sampler and
+	// the writers' backpressure read its state. Looking is all an area does to a stream's
+	// configuration; the broker administrator creates and changes it.
 	g.api("STREAM.INFO." + name)
-
-	if admin {
-		g.api("STREAM.CREATE."+name, "STREAM.UPDATE."+name)
-		if st.RecreateOnRetentionChange {
-			// A retention change is deleted and re-added once the single reader has drained it.
-			g.api("STREAM.DELETE." + name)
-		}
-	}
 
 	if writes {
 		g.publish(messaging.StreamSubjects(instance, st.Suffix)...)
@@ -275,7 +281,7 @@ func bucketGrant(g *grant, instance, area string, b kv.Bucket) {
 		stream := messaging.KvStreamName(bucket)
 		// The client library's bucket lookup reads the account's JetStream limits first.
 		g.api("INFO")
-		g.api("STREAM.INFO."+stream, "STREAM.CREATE."+stream, "STREAM.UPDATE."+stream)
+		g.api("STREAM.INFO." + stream)
 		if kv.Writes(b.Name, area) {
 			g.publish("$KV." + bucket + ".>")
 		}
@@ -386,6 +392,14 @@ func exceptionGrant(g *grant, instance, area string) {
 		for _, s := range []string{messaging.MqttMessageStore, messaging.MqttPubRelStore} {
 			g.api("CONSUMER.LIST."+s, "CONSUMER.DELETE."+s+".*")
 		}
+		// ...but not event-sources' fail-closed durables. The gateway names its own consumers, so the
+		// purge cannot be granted by name, and a wildcard over the message store would let it delete
+		// the durables that hold a PUBACKed message until the platform has it: a loss, with no
+		// forgery to show for it. The three names are declared (MqttFailClosedConsumerNames), so
+		// they are carved out of the wildcard.
+		for _, d := range messaging.MqttFailClosedConsumerNames(instance) {
+			g.apiDeny("CONSUMER.DELETE." + messaging.MqttMessageStore + "." + d)
+		}
 		g.api("STREAM.INFO."+messaging.MqttSessionStore,
 			"STREAM.MSG.DELETE."+messaging.MqttSessionStore,
 			"CONSUMER.CREATE."+messaging.MqttSessionStore+".>",
@@ -407,10 +421,59 @@ func ServicePermissions() Permissions {
 	return Permissions{Publish: &Rules{Deny: ServicePublishDeny()}}
 }
 
-// AdminPermissions is the block of the broker-administration login. Nothing mounts its Secret
-// yet, so it keeps the shared login's permissions; the stream-administration step that mounts it
-// narrows it to stream and bucket administration.
-func AdminPermissions() Permissions { return ServicePermissions() }
+// AdminPermissions is the block of the broker-administration login: the right to create, update
+// and (for the one declared retention migration) delete the platform account's streams and
+// buckets, and to read the one durable the migration waits on. It holds NO publish right on any
+// data subject and no subscription beyond its own reply inbox, so the login that can shape the
+// broker cannot put anything into it. Its Secret is mounted only by the chart's pre-install and
+// pre-upgrade hook Job.
+//
+// The streams and buckets are every one the catalogs declare, not those of the areas an
+// installation deploys: the broker's configuration is rendered once, by dcctl, before anyone has
+// said which areas an upgrade adds next, and a stream the administrator is not asked to create is
+// a stream nothing here lets it.
+func AdminPermissions(instanceId string) (Permissions, error) {
+	if err := checkInstanceToken(instanceId); err != nil {
+		return Permissions{}, err
+	}
+	g := newGrant()
+	g.subscribe(messaging.InboxPrefix(config.NatsAdminPrincipal) + ".>")
+	// The client library reads the account's JetStream limits before it opens a bucket.
+	g.api("INFO")
+	shape := func(stream string) { g.api("STREAM.INFO."+stream, "STREAM.CREATE."+stream, "STREAM.UPDATE."+stream) }
+	for _, st := range streams.All {
+		name := messaging.StreamName(instanceId, st.Suffix)
+		shape(name)
+		if st.RecreateOnRetentionChange {
+			// The migration waits for the reader's durable to drain, deletes the stream and adds it
+			// again with the declared retention.
+			g.api("STREAM.DELETE." + name)
+			for _, r := range streams.ReadersOf(st.Suffix) {
+				for _, d := range messaging.DeclaredDurables(instanceId, st.Suffix, r) {
+					g.api("CONSUMER.INFO." + name + "." + d)
+				}
+			}
+		}
+	}
+	for _, b := range kv.All {
+		if b.Account != kv.App {
+			// The identity account is entered by its own login; the administrator never is.
+			// (Where the account does not exist the sign-in buckets are created in this one, below.)
+			continue
+		}
+		for _, area := range b.Admins() {
+			for _, bucket := range messaging.KvBucketNames(instanceId, b, area) {
+				shape(messaging.KvStreamName(bucket))
+			}
+		}
+	}
+	// A broker built before the identity account keeps the sign-in buckets in this account, and the
+	// administrator creates them there.
+	for _, bucket := range messaging.IdentityBucketNames(instanceId) {
+		shape(messaging.KvStreamName(bucket))
+	}
+	return g.permissions(false), nil
+}
 
 // SysPermissions is the block of the system-account login the broker-presence tap holds.
 func SysPermissions() Permissions {
@@ -442,9 +505,13 @@ func ServiceUsersFor(instanceId string, areas []string) (map[string]map[string]P
 	if err := checkInstanceToken(instanceId); err != nil {
 		return nil, err
 	}
+	admin, err := AdminPermissions(instanceId)
+	if err != nil {
+		return nil, err
+	}
 	app := map[string]Permissions{
 		ServiceUser: ServicePermissions(),
-		AdminUser:   AdminPermissions(),
+		AdminUser:   admin,
 	}
 	for _, area := range areas {
 		if !config.NeedsNatsLogin(area) {
