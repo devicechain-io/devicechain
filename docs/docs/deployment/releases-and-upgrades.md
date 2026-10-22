@@ -3582,7 +3582,7 @@ Nothing needs doing.
 `dcctl upgrade` for each instance, as described [for v0.17.0](#v0170-upgrade). Give `dcctl install`
 the settings the cluster was installed with, such as `--ha` and `--database-node-selector`, as well as
 the new `--version`. **It cannot be reached in place from `v0.22.0` or earlier: upgrade to `v0.23.0`
-first.** Its one migration adds a table to `event-management` and rewrites no existing row (see
+first.** Its four migrations add one table and three indexes and rewrite no existing row (see
 [During the upgrade](#v0240-during)). Coming from `v0.22.0` or earlier, read the
 [`v0.23.0` notes](#v0230-upgrade) as well; they apply to any upgrade that crosses that release.
 
@@ -3590,13 +3590,24 @@ This release makes calculated metrics something you author and fill in yourself:
 editor, per-device constants, formulas that read other calculated metrics, previews, and a
 **backfill** that computes a metric for readings stored before it existed. The rest is about an
 event path that carries more: events are written in a smaller form by default, detections are
-published side by side, and alarm changes are applied several at a time. What changes for somebody:
+published side by side, and alarm changes are applied several at a time. It also closes two places
+where a secret rested where every platform service could read it: a device's credential in the body
+of an MQTT event, and the sign-in state. What changes for somebody:
 
+- **Devices must stop sending a credential in the body of an event published over the platform's MQTT
+  broker.** Such an event is now refused. See
+  [Devices must stop sending a body credential over MQTT](#v0240-mqtt-body-credential).
+- **The C# SDK's `IDeviceEventCarrier` has a new abstract member,** `CarriesBodyCredential`; a custom
+  carrier no longer compiles until it declares it. See the same section.
+- **Everyone signs in once more, and the broker restarts twice.** Sign-in state moves to its own
+  broker account and is not carried over, and the device authentication callout is encrypted. See
+  [The broker's logins are narrowed](#v0240-broker-logins).
 - **Upgrade through `v0.23.0`.** Events are now written in the `compact` form by default, which
   `v0.22.0` and earlier cannot read. See [The event wire format](#event-wire-format).
 - **The broker restarts once, onto NATS 2.15.1.** See
   [The broker moves to NATS 2.15](#v0240-nats).
-- **A migration in `event-management`** adds the table that holds backfill jobs. See
+- **Four migrations:** a table for backfill jobs in `event-management`, a table for the profile
+  activation log and an index in `device-management`, and an index in `command-delivery`. See
   [During the upgrade](#v0240-during).
 - **`device` is a reserved name in calculated-metric formulas.** See
   [Calculated metrics](#v0240-calculated-metrics).
@@ -3636,22 +3647,48 @@ published side by side, and alarm changes are applied several at a time. What ch
 
 #### During the upgrade {#v0240-during}
 
-- **One migration runs on `event-management`'s first start.** It creates the
-  `calculated_backfills` table and its indexes. It writes no row, rewrites nothing and can be run
-  again if it is interrupted. No other service has a migration in this release.
-- **The broker restarts once.** Under `--ha`, one server at a time, each Ready before the next
-  stops; without `--ha` the single server restarts and the broker is unavailable for about a minute.
+- **Four migrations run, one set per first start of the service that owns it.** None writes or
+  rewrites a row, and each can be run again if it is interrupted.
+  - `event-management` creates the `calculated_backfills` table and its indexes.
+  - `device-management` creates `device_profile_activations`, the log of which profile version became
+    active and when (it starts empty: nothing is reconstructed for activations before the upgrade),
+    and an index on `devices (tenant_id, device_type_id)` that serves the alarm table's device-type
+    tabs.
+  - `command-delivery` creates `idx_commands_device_time`, which serves the chart markers that show a
+    device's commands on its time axis.
+
+  Each index is built with a plain `CREATE INDEX`, which holds a lock against writes to the table
+  while it runs, so on a table with millions of rows start that service in a quiet period.
+- **The broker restarts, and on the first upgrade that adds the encrypted callout it restarts twice.**
+  The first restart carries the move to NATS 2.15.1 and the new sign-in account; the second turns
+  callout encryption on once the services can read it. Under `--ha`, one server at a time, each
+  Ready before the next stops; without `--ha` the single server restarts and the broker is
+  unavailable for about a minute each time. See [The broker's logins are narrowed](#v0240-broker-logins).
   Devices reconnect on their own, and a persistent MQTT session keeps its subscriptions and the QoS 1
   messages held for it. **Do not restart a broker server by hand while it rolls.** See
   [The broker moves to NATS 2.15](#v0240-nats).
 - **Services start writing `compact` events as they roll.** Pods of `v0.23.0` read both forms, so a
   rolling update between the two releases is safe.
+- **Revoking a device's authority while `device-management` and `event-sources` are on different
+  releases can fail.** Disabling or deleting a device, or changing a credential, now also ends the
+  device's open MQTT sessions by asking `event-sources` to do it. If a pod of the previous release
+  of either service answers (or no one does) during the roll, the change is saved and the call
+  returns the error `ErrSessionsNotEnded` ("the change was saved, but the device's live broker
+  sessions could not be confirmed ended ... repeat the operation"). Repeat it after the roll
+  finishes; repeating is safe and asks again.
+- **A sign-in or token refresh that reaches a `user-management` pod of the previous release can
+  fail for a few seconds** while the sign-in state moves. It succeeds when retried.
 - **A derived value stored by a pod of the old release and one stored by a pod of the new release
   can carry different ids** for a reading that has sub-microsecond digits in its instant. See
   [Calculated metrics](#v0240-calculated-metrics).
 
-Going back to `v0.23.0` after the upgrade reads the same database. The `calculated_backfills` table
-stays in place, unused, and a backfill that was queued or running is not continued. Going back to
+Going back to `v0.23.0` after the upgrade reads the same database. The `calculated_backfills` and
+`device_profile_activations` tables and the new indexes stay in place, unused, and a backfill that
+was queued or running is not continued. Roll forward rather than back, though: the callout's
+encryption seeds live in a Secret that `v0.23.0` does not read, so a broker that already encrypts its
+callout is left with no responder that can serve it, and every device stays refused until the
+upgrade is run again. Sign-in state is not restored by going back either: the previous release
+recreates its buckets empty, so everyone signs in once more. Going back to
 `v0.22.0` or earlier needs `legacy` set first and every `compact` message drained from the streams
 (see [The event wire format](#event-wire-format)).
 
@@ -3662,6 +3699,92 @@ stays in place, unused, and a backfill that was queued or running is not continu
   previous release runs 2.14.4.
 - **Keep `metrics.enabled` and `metrics.alerts` on** (both are by default) to install the new
   `MqttGatewayStreamUnbounded` alert.
+- **Find the devices that still send a body credential.** `total_msg_credential_in_mqtt_body`
+  counts the refused events by source. Update the firmware or SDK of each, and rotate the credential
+  of any device that was counted (see the next section).
+
+##### Devices must stop sending a body credential over MQTT {#v0240-mqtt-body-credential}
+
+A device on the platform's MQTT broker is authenticated when it connects, through the device
+authentication callout. The published contract also had it repeat its credential in the body of every
+event, and the broker wrote that body into its own streams before any platform code ran, so a
+plaintext password or access token rested in a stream readable by every platform service, by anyone
+with the volume and by its snapshots. The body credential is now refused instead:
+
+- **An event published over the platform's MQTT broker whose body carries `credentialType`,
+  `credentialId` or `credentialSecret` is refused.** It is counted in
+  `total_msg_credential_in_mqtt_body`, set aside on the failed-decode stream with the credential
+  redacted, and never forwarded. The broker has already acknowledged the message, so the refusal is
+  visible to you and not to the device: a device that keeps sending the old body goes quiet while it
+  believes it is publishing.
+- **An event without a credential is accepted** and attributed to the device that connected. Under
+  `deviceAuthMode: required` it is accepted for every event type.
+- **HTTP ingest and an MQTT broker you connect as a source are unchanged.** They keep requiring the
+  credential in the body.
+- **Treat a device that was refused as exposed.** The plaintext existed on the broker for the
+  moments before the message was acknowledged, in the MQTT gateway's store while a subscription was
+  interested, and in unreclaimed file blocks until compaction. Rotate the credential of every device
+  that was counted.
+- **Update SDKs and firmware first.** The C# SDK (and the Unity package, which rides it) stops
+  sending the credential over MQTT in this release, and still sends it over HTTP. The envelope JSON
+  Schema now marks the three members HTTP-only. A custom `IDeviceEventCarrier` must declare the new
+  `CarriesBodyCredential` member (`true` for a carrier that goes over HTTP, `false` for the platform's
+  MQTT); it is a compile error, deliberately, rather than a default. Firmware that writes the body
+  by hand must drop the three members. The edge agent forwards bodies unchanged, and its uplink to a
+  platform broker that authenticates devices is not supported in this release.
+- **A session no longer outlives its credential.** The connection's token now expires with the
+  credential (at the earlier of 12 hours and the credential's own expiry), and revoking a credential,
+  rotating its secret, disabling or deleting a device, or replacing it ends the device's open MQTT
+  sessions. The device reconnects and is authenticated again against the credential it presents,
+  which the database refuses if it was revoked. All of a device's sessions end, so revoking one of
+  two credentials briefly drops the session on the other. If the platform cannot confirm the sessions
+  ended, the change is still saved and the call returns `ErrSessionsNotEnded`; repeat it.
+- **Rotate the tokens of access-token devices whose messages were refused or dead-lettered.** The
+  failed-decode and dead-letter records used to keep an access token's `credentialId`, which for that
+  credential type is the token itself (for MQTT_BASIC it is the login name). They are now redacted,
+  but nothing rewrites a record written by an earlier release: those streams age out in 7 days and
+  the dead-letter table is pruned by its retention sweep, and a database backup holds them until it
+  expires.
+- **`event-sources` needs the broker's system-account login to start** wherever the broker runs the
+  device authentication callout (`dcctl bootstrap` mints it), and that login is now limited to listing
+  and ending connections. `dcctl upgrade` refuses an instance that has the callout and no system login
+  rather than roll `event-sources` into a crash loop.
+- **The shared service login can no longer publish on a device's events subject.** Anyone who held it
+  could previously forge an event for any device with one publish. This is not a boundary against
+  someone who holds the login, which still administers the services' streams.
+
+See [Connecting a device](../guides/connecting-a-device.md),
+[Device credentials](../guides/device-credentials.md) and the
+[device protocol](../reference/device-protocol.md).
+
+##### The broker's logins are narrowed {#v0240-broker-logins}
+
+Two secrets that rested where every service could read them now rest where only one can. The
+mechanism and the restarts are described under
+[What an upgrade applies to the infrastructure](#upgrade-infrastructure); what changes for somebody:
+
+- **The device authentication callout is encrypted.** A device's password used to cross the broker in
+  the clear to any service that listened for it. `dcctl upgrade` creates the Secret
+  `dci-<instance>-callout` (the signing seed and a new encryption seed), mounted into
+  `device-management` only. The instance configuration keeps the public halves. A chart-only install
+  must create that Secret itself.
+- **Sign-in state moves to its own broker account, and everyone signs in once more.** Refresh tokens,
+  OAuth authorization codes, single sign-on records and the sign-in throttle move to an `IDENTITY`
+  account that only `user-management` can enter, with the password in the Secret
+  `dci-<instance>-identity`. The previous release's copies are **deleted, not carried over**, so every
+  session from before the upgrade ends: people sign in again in the console and dashboards, and MCP
+  and OAuth clients authorize again. An access token already issued works until it expires, 15 minutes
+  by default. A chart-only install must add the account to its own broker, or nothing changes.
+- **The broker restarts twice on the first upgrade that does both**, as described above. Devices
+  reconnect within seconds under `--ha`, and in about a minute without it. If the second step fails,
+  devices keep connecting; run `dcctl upgrade` again to finish it.
+- **Helm release history keeps the old issuer seed until it ages out.** The callout's signing seed
+  used to be in the instance configuration; Helm's stored releases from before the upgrade still
+  hold it. Delete old release Secrets if that matters to you.
+- **A restored instance gets a new sign-in login,** and sign-in state is not restored from a backup.
+- **The Kubernetes Secrets are the only copy of the seeds.** There is no rotation verb, and editing
+  either Secret outside `dcctl` is unsupported. Anyone who can read Secrets in the instance
+  namespace can still read them.
 
 ##### The broker moves to NATS 2.15 {#v0240-nats}
 
@@ -3758,6 +3881,26 @@ Calculated metrics stay off until a tier's `calculatedMetricsPerProfile` is abov
   stored again after the upgrade, because event storage was handed it again (it was not yet
   acknowledged when the pods rolled) or the device resent a reading from before it, its derived value is stored as a second row. Raw rows are
   unaffected, and old rows are not rewritten.
+- **A message that carries none of a formula's inputs is no longer counted as a skip.** A battery
+  formula used to record a `missing_input` skip for every temperature message of a device that sends
+  the two in separate messages (about 3,600 an hour for a message a second). Such a message is now
+  simply not evaluated, and a message that carries some of the inputs but not all still counts as
+  `missing_input`. After the upgrade, `devicechain_devicemanagement_calcmetric_skipped_total` with
+  `missing_input` and the matching log lines drop, so a dashboard or alert built on it reads lower.
+  No stored value changes.
+- **Formulas that read a device constant now compute on live readings from devices that authenticate
+  with a credential** (MQTT login or access token, over any transport). They were skipped as
+  `missing_input` on every such reading, while the console preview, which takes constants from the
+  request, worked. A constant you edit reaches the next reading.
+- **In the console,** the profile's Versions tab shows, for the active version, whether each
+  calculated metric is Computing, Not computing or has no input readings over the last 24 hours or
+  7 days, counted from stored readings; Backfill is disabled up front, with the reason, when the
+  instance cannot run it (`calculatedMetricBackfillAvailability`); and `calculatedMetricPlan` marks a
+  metric whose name another profile's active version also uses (`nameSharedWithOtherProfiles`).
+- **A device profile records which version became active, and when.** `DeviceProfile.activations`
+  lists publishes and rollbacks, newest first. The log starts at the upgrade; a profile published
+  earlier has no entry until its next publish or rollback, and a missing entry means unknown, not
+  inactive.
 
 ##### Backfilling history {#v0240-backfill}
 
@@ -3886,6 +4029,39 @@ usually because the broker has no storage left to reserve it. New metrics:
 - **`dcctl upgrade` checks the object-store mount before it records the new version.** A
   ReadWriteOnce store that a second pod would mount is refused before the version is recorded, as
   `--enable-area` already did. The "recorded binding" message no longer names the context twice.
+- **A `sendCommand` rule action can bound how long its command waits for the device.** The optional
+  `expiresAfter` takes a duration from `1m` to `168h`; without it the command waits for the 7-day
+  default as before. A value outside the range, or one that cannot be read, is refused when the rule
+  is saved or published, and a stored rule with an invalid value is dropped (counted with the reason
+  `invalid_action`) rather than sent without a bound.
+- **Dashboards and widgets.** The alarm table can group its alarms into tabs by device type, each with
+  its own count and highest severity; the stat card can show a trend sparkline and a count of devices
+  in a fleet; a fleet count leaves out devices whose profile does not declare the measurement; the
+  command slider has a stepper mode; a click on a map marker selects the device, and a link can open
+  a board with a device bound; an alarm severity breakdown shows active alarms by severity; the
+  timeseries chart can mark alarms and commands on its time axis, limited to the alarms about the
+  measurement it plots with the `markAlarmsScope` option (a chart without the option marks every
+  alarm of the device), and one line per device across a group with `groupBy: device`; the widget
+  editor offers a device's metrics and marks the calculated ones; and **Create dashboard** on a
+  device type's Profile tab drafts a board from what the profile declares. All of it is additive: a
+  saved dashboard reads and renders as before. See the [user guide](../user-guide/dashboards.md).
+- **Console: forms no longer save onto the wrong entity.** After switching registry, tenant, tier,
+  role or device, a form could keep the previous entity's data and save it onto the new one. Display
+  data and data that is acted on are now kept apart, across every query in the console.
+- **GraphQL.** The placeholder `_empty` mutation on `event-management` is gone, because the service
+  now has a real mutation (starting and cancelling a backfill). A client that called `_empty` gets an
+  unknown-field error.
+- **Detection dashboard.** Two latency panels (the p50 and p99 of the rule-health write and of the
+  derived-publish acknowledgement) join the rule-health write panel.
+- **A task that keeps failing no longer fills the log.** The "Maintenance pass failed" line from a
+  loop that runs every second (the detection tick) is logged once when a streak starts, then at most
+  once a minute with a count of the lines held back, and once when the task recovers. Seven loops
+  that recorded no pass duration, outcome or last success now do, under the existing
+  `devicechain_<area>_<task>_passes_total` series.
+- **Stream and bucket access is declared per service.** Each service may open only the streams and
+  key-value buckets it is declared to read or write, and refuses to start naming the stream and the
+  fix if it asks for another. A broker start abandoned by the caller (shutdown) no longer spends about
+  a minute per stream retrying.
 - **Rule health.** Rule-health fire counters are batched off the detection loop (about 2.6 ms saved
   per published detection on PostgreSQL), and the detection dashboard gains a panel for
   `detect_rule_stat_write_failures_total` and the new `detect_rule_stat_admission_contended_total`.
@@ -3896,6 +4072,9 @@ usually because the broker has no storage left to reserve it. New metrics:
   on). A repeat is folded by the destination stream's duplicate window and stored again beyond it.
 - **Customer users.** A member limited to some customers sees their Updates list again, and the
   customer Users tab beyond 10,000 members shows the first 10,000 with a notice instead of an error.
+- **Go 1.27.3.** The toolchain moves to Go 1.27.3, which carries the fix for a `crypto/x509` advisory.
+- **Replacing the instance root key means recreating the instance.** There is no rotation verb;
+  see [Disaster recovery](./disaster-recovery.md#replace-root-key-losses).
 - **Building from source.** The C# SDK now builds with the .NET SDK pinned in `global.json` (8.0.425),
   so a locked restore no longer breaks when a runner image moves a patch.
 - **Documentation.** A user-guide chapter on calculated metrics (English, Spanish and Chinese), and
