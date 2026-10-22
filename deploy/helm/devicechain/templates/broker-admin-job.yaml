@@ -1,0 +1,117 @@
+{{- if (.Values.brokerAdmin | default dict).enabled }}
+{{- $root := . -}}
+{{- $ns := include "devicechain.instanceNamespace" $root -}}
+{{- $admin := $root.Values.brokerAdmin -}}
+{{/*
+THE BROKER ADMINISTRATOR: the chart's pre-install and pre-upgrade hook.
+
+WHY A HOOK, AND WHY BEFORE. A stream's configuration is more than bookkeeping: whoever can create
+or update one can give it any subjects, a republish or a subject transform, and so capture another
+login's inbox or write into a stream every reader trusts. So the services hold no such right. They
+VERIFY the streams and buckets they open against what the build declares, and stop, naming what
+differs, when they do not match. Something has to create them first, and it has to be done before
+any new pod starts verifying, which is exactly what a pre-install / pre-upgrade hook is: Helm runs
+it, waits for it, and starts nothing else until it has succeeded. A failed Job fails the release,
+and its pod is kept so the log says why.
+
+WHAT IT MOUNTS. The broker-administration login (`dci-<id>-nats-broker-admin`) is mounted by this
+Job and by no Deployment; that is what makes the right to shape the broker one credential's. The
+instance document is mounted too, because the broker's address, TLS authority and stream ceilings
+are in it.
+
+THE INSTANCE DOCUMENT AT HOOK TIME. A pre-install hook runs before the release's own objects
+exist. Under instance.existingSecret (dcctl's way) the document is a Secret that is already there,
+and the Job mounts it. Otherwise the chart renders the document into its own Secret, which does not
+exist yet at pre-install, so a hook-scoped copy is rendered first (weight -10, deleted when the Job
+ends) and the Job mounts that.
+
+A helm-only first install also needs the namespace and the broker-administration Secret in place
+before the hook runs, because neither is created by a release whose hooks have not finished.
+*/}}
+{{- $configSecret := include "devicechain.instanceConfigSecret" $root -}}
+{{- if not $root.Values.instance.existingSecret }}
+{{- $configSecret = printf "%s-broker-admin" $configSecret -}}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $configSecret }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "devicechain.instanceLabels" $root | nindent 4 }}
+    devicechain.io/component: broker-admin
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed
+type: Opaque
+stringData:
+  instance: {{ include "devicechain.instanceConfig" $root | quote }}
+{{- end }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $root.Values.instance.id }}-broker-admin
+  namespace: {{ $ns }}
+  labels:
+    {{- include "devicechain.instanceLabels" $root | nindent 4 }}
+    devicechain.io/component: broker-admin
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    {{- /* Kept when it fails, so the pod and its log are there to read; removed when it succeeds. */}}
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ $admin.backoffLimit }}
+  activeDeadlineSeconds: {{ $admin.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "devicechain.instanceLabels" $root | nindent 8 }}
+        devicechain.io/component: broker-admin
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      {{- with $root.Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: broker-admin
+          image: {{ include "devicechain.brokerAdminImage" $root | quote }}
+          imagePullPolicy: {{ $root.Values.image.pullPolicy }}
+          {{- with $root.Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          args:
+            - reconcile
+            - --areas={{ include "devicechain.enabledAreas" $root }}
+            - --timeout={{ sub (int $admin.activeDeadlineSeconds) 30 }}s
+          env:
+            - name: DC_INSTANCE_ID
+              value: {{ $root.Values.instance.id | quote }}
+            {{- /* The administrator's OWN login, from the Secret no Deployment mounts. Optional at
+            the pod so an instance whose broker has no per-area logins reconciles as the shared
+            login; the command itself refuses to connect when the document says the logins exist
+            and this one is missing. */}}
+            {{- range $env, $key := dict "DC_NATS_USER" "user" "DC_NATS_PASSWORD" "password" }}
+            - name: {{ $env }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "devicechain.natsLoginSecret" (dict "root" $root "area" "broker-admin") | quote }}
+                  key: {{ $key }}
+                  optional: true
+            {{- end }}
+          resources:
+            {{- toYaml $admin.resources | nindent 12 }}
+          volumeMounts:
+            - name: instance-config
+              mountPath: /etc/dci-config
+              readOnly: true
+      volumes:
+        - name: instance-config
+          secret:
+            secretName: {{ $configSecret | quote }}
+{{- end }}

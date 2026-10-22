@@ -107,6 +107,21 @@ sparkplug-ingest,lwm2m-ingest
 {{- end -}}
 
 {{/*
+The broker administrator's image: brokerAdmin.image when set, else
+"{image.registry}/dc-broker-admin:{image.tag}" with the same registry and tag as the services, so a
+release pins the whole deploy coherently. The name is also what the release publishes it under
+(TestReleaseImageSetMatchesDeployAndVerifier holds the two together).
+*/}}
+{{- define "devicechain.brokerAdminImage" -}}
+  {{- $override := (.Values.brokerAdmin | default dict).image | default "" -}}
+  {{- if $override -}}
+    {{- $override -}}
+  {{- else -}}
+    {{- printf "%s/dc-broker-admin:%s" .Values.image.registry (.Values.image.tag | default .Chart.AppVersion) -}}
+  {{- end -}}
+{{- end -}}
+
+{{/*
 The web console image reference: explicit frontend.image.repository:tag overrides,
 otherwise "{image.registry}/frontend:{image.tag}" — same registry/tag the services
 resolve through, so a release pins the whole deploy coherently.

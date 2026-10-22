@@ -590,6 +590,36 @@ image:
 service:
   port: 8080
 
+# The broker administrator: a Job the chart runs as a pre-install and pre-upgrade HOOK, before any
+# service starts or rolls (templates/broker-admin-job.yaml). It is the only workload that creates,
+# updates or deletes the platform's JetStream streams and KV buckets, and the only one that mounts
+# the broker-administration login. Services verify the streams and buckets they open against what
+# the build declares and stop, naming what differs, when they do not match; they never create or
+# change one. `dcctl broker reconcile` runs this Job again for recovery (a stream lost at runtime,
+# a bucket deleted by hand).
+#
+# A failed Job fails `helm install` / `helm upgrade` and keeps its pod, so its log says why.
+#
+# Set enabled=false only for an installation that creates and reconciles the broker's streams
+# itself (the dc-broker-admin image, `dc-broker-admin reconcile --areas ...`, is what the Job runs):
+# the services still verify, and start only once the streams match.
+brokerAdmin:
+  enabled: true
+  # Image defaults to "{image.registry}/dc-broker-admin:{image.tag}".
+  image: ""
+  # The whole reconcile, including waiting for a stream created under an older retention to be
+  # drained by its reader before it is recreated (the one declared migration).
+  activeDeadlineSeconds: 540
+  # A failed attempt is retried this many times before the Job (and so the release) fails.
+  backoffLimit: 1
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
 # The web console (single-page app). Unlike the functional areas this is a static
 # nginx image (frontend/Dockerfile), not a Go service, so it is a standalone
 # workload rather than part of the area machinery. The cluster ingress serves it

@@ -206,9 +206,10 @@ func TestTheChartMountsEachAreaItsOwnBrokerLogin(t *testing.T) {
 	}
 }
 
-// The administrator's Secret is written and mounted by nobody yet: it exists so the step that gives
-// stream administration one credential finds it already recorded.
-func TestTheAdministratorsLoginIsMintedAndMountedNowhere(t *testing.T) {
+// The administrator's Secret is written by dcctl and mounted by no Deployment: only the hook Job
+// does (TestOnlyTheBrokerAdminJobMountsTheAdministratorsLogin), and hooks are not in the release
+// manifest this renders.
+func TestTheAdministratorsLoginIsMintedAndMountedByNoDeployment(t *testing.T) {
 	st, creds := loginState(t)
 	if creds.Logins[config.NatsAdminPrincipal].User != "dc-broker-admin-g1" {
 		t.Fatalf("the administrator's login is %+v", creds.Logins[config.NatsAdminPrincipal])
@@ -223,7 +224,7 @@ func TestTheAdministratorsLoginIsMintedAndMountedNowhere(t *testing.T) {
 	for _, d := range renderDocs(t, helmValues(st)) {
 		b, _ := json.Marshal(d)
 		if strings.Contains(string(b), "nats-"+config.NatsAdminPrincipal) {
-			t.Errorf("%v references the administrator's Secret; nothing may mount it yet", d["kind"])
+			t.Errorf("%v references the administrator's Secret; only the hook Job may mount it", d["kind"])
 		}
 	}
 }

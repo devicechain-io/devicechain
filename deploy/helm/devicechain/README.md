@@ -483,6 +483,19 @@ re-opens every private address for every tenant.
 - Optional (`blobStorage.persistence.enabled=true`, filesystem backend): a
   `PersistentVolumeClaim` (`dci-<id>-blob`) mounted into `blobStorage.mountAreas`
   at the store directory.
+- The broker administrator (`brokerAdmin.enabled=true`, on by default): the chart's
+  one **hook**. A `Job` named `<instance.id>-broker-admin` runs as a Helm `pre-install` and
+  `pre-upgrade` hook, before any other object of the release is created or changed. It is
+  the only workload that creates, updates or deletes the broker's streams and key-value
+  buckets, and the only one that mounts the broker-administration login
+  (`dci-<id>-nats-broker-admin`); the services only verify what they open and refuse to
+  start, naming the difference, when it does not match. A failed Job fails the release and
+  is kept so its pod log can be read; a successful one is removed. `dcctl broker reconcile
+  <id>` runs it again. Because it runs before the release creates anything, a first install
+  without dcctl needs the namespace and that Secret to exist already (and, under
+  `instance.existingSecret`, the instance config Secret). Set `brokerAdmin.enabled=false`
+  only if you create and reconcile the streams and buckets yourself with the
+  `dc-broker-admin` image (`dc-broker-admin reconcile --areas <area>,...`).
 - The web console (`frontend.enabled=true`, on by default): a static nginx
   `Deployment` + `Service` serving the Vite/React SPA. Disable for
   headless/ingest-only instances.
