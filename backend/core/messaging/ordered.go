@@ -156,6 +156,9 @@ func (nmgr *NatsManager) NewOrderedWriter(suffix string, writer PublishWriter, w
 	if err := refuseUnknownWriter(writer); err != nil {
 		return nil, err
 	}
+	if err := nmgr.requireWriter(suffix); err != nil {
+		return nil, err
+	}
 	if err := refuseTenantWide(suffix); err != nil {
 		return nil, err
 	}

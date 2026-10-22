@@ -86,6 +86,9 @@ type RangeStatser interface {
 // message. It ends early only when the leader confirms that the rest of the range is
 // absent.
 func (nmgr *NatsManager) NewRangeReader(suffix string, from, to uint64) (ReplayReader, error) {
+	if err := nmgr.requireReader(suffix, streams.ReadEphemeral); err != nil {
+		return nil, err
+	}
 	if from == 0 || from > to {
 		return nil, fmt.Errorf("invalid range [%d, %d]: need 1 <= from <= to", from, to)
 	}

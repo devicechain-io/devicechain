@@ -231,6 +231,16 @@ func (nmgr *NatsManager) RetireSharedIdentityBuckets() ([]string, error) {
 	if nmgr.identity == nil || nmgr.js == nil {
 		return nil, nil
 	}
+	// Deleting a bucket is administering it, and this reaches the broker without KeyValueStore,
+	// so it asks the catalog itself: only an area declared on every identity bucket may.
+	for _, b := range kv.All {
+		if b.Account != kv.Identity {
+			continue
+		}
+		if err := nmgr.requireBucket(b.Name); err != nil {
+			return nil, err
+		}
+	}
 	var deleted []string
 	for _, name := range IdentityBucketNames(nmgr.Microservice.InstanceId) {
 		err := nmgr.js.DeleteKeyValue(name)

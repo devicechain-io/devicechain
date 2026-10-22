@@ -54,6 +54,9 @@ func kvKey(key string) string {
 // is lost. Whether the refusal is survivable is a property of the call site, and
 // that is exactly what the tier in kv.All records.
 func (nmgr *NatsManager) KeyValueStore(logical, bucket string, ttl time.Duration) (nats.KeyValue, error) {
+	if err := nmgr.requireBucket(logical); err != nil {
+		return nil, err
+	}
 	js, tracked, err := nmgr.kvContext(logical)
 	if err != nil {
 		return nil, err

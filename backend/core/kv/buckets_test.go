@@ -3,7 +3,11 @@
 
 package kv
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/devicechain-io/dc-microservice/streams"
+)
 
 // A duplicate name would make TierFor return the first entry's tier while the
 // disk budget counted the bucket twice — an inconsistency that is invisible at
@@ -57,5 +61,77 @@ func TestTierForReturnsDeclaredTier(t *testing.T) {
 func TestCountMatchesAll(t *testing.T) {
 	if got := Count(Cache) + Count(State); got != len(All) {
 		t.Errorf("tier counts sum to %d, want %d: a bucket is in neither tier", got, len(All))
+	}
+}
+
+// Every bucket is opened by somebody, every area named is a real one, and a cache bucket -
+// which is created per instance AND per area - names exactly one.
+func TestEveryBucketNamesItsAreas(t *testing.T) {
+	for _, b := range All {
+		if len(b.Writers) == 0 || len(b.Readers) == 0 {
+			t.Errorf("bucket %q declares no writer or no reader: nothing could open it", b.Name)
+		}
+		for _, a := range append(append([]string{}, b.Writers...), b.Readers...) {
+			if !streams.IsPlatformArea(a) {
+				t.Errorf("bucket %q names %q, which is not a platform area", b.Name, a)
+			}
+		}
+		if b.Tier == Cache && len(b.Admins()) != 1 {
+			t.Errorf("cache bucket %q is per-area, but names %v", b.Name, b.Admins())
+		}
+	}
+}
+
+func TestKnownBucketRoles(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		got  bool
+	}{
+		{"device-management writes device-by-token", Writes(BucketDeviceByToken, "device-management")},
+		{"user-management writes refresh tokens", Writes(BucketRefreshTokens, "user-management")},
+		{"event-processing holds leases", Administers(BucketLeases, "event-processing")},
+		{"sparkplug-ingest holds leases", Administers(BucketLeases, "sparkplug-ingest")},
+		{"event-sources takes locks", Administers(BucketLocks, "event-sources")},
+	} {
+		if !tc.got {
+			t.Errorf("%s: not declared", tc.name)
+		}
+	}
+	for _, tc := range []struct {
+		name string
+		got  bool
+	}{
+		// Forging a device through the cache event resolution trusts, and reading a
+		// refresh token, are the two things this declaration exists to fence.
+		{"event-sources must not write device-by-token", Writes(BucketDeviceByToken, "event-sources")},
+		{"lwm2m-ingest must not write device-by-token", Writes(BucketDeviceByToken, "lwm2m-ingest")},
+		{"device-management must not read refresh tokens", Reads(BucketRefreshTokens, "device-management")},
+		{"an undeclared bucket has no writer", Writes("a-bucket-nobody-declared", "user-management")},
+	} {
+		if tc.got {
+			t.Errorf("%s", tc.name)
+		}
+	}
+}
+
+// A bucket in the identity account holds bearer secrets and only user-management's login can
+// enter that account, so the catalog must say the same: user-management alone writes, reads and
+// administers it. A second area declared here would be granted a bucket its login cannot reach,
+// and the grant generated from this declaration would point at the wrong account.
+func TestIdentityAccountBucketsBelongToUserManagementAlone(t *testing.T) {
+	n := 0
+	for _, b := range All {
+		if b.Account != Identity {
+			continue
+		}
+		n++
+		for role, areas := range map[string][]string{"writers": b.Writers, "readers": b.Readers, "admins": b.Admins()} {
+			if len(areas) != 1 || areas[0] != "user-management" {
+				t.Errorf("identity-account bucket %q declares %s %v, want exactly [user-management]", b.Name, role, areas)
+			}
+		}
+	}
+	if n != 5 {
+		t.Errorf("%d buckets are in the identity account, want the 5 sign-in buckets", n)
 	}
 }

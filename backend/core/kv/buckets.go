@@ -39,6 +39,8 @@
 // check somewhere that can see every caller.
 package kv
 
+import "slices"
+
 // Tier is a KV bucket's disk-budget class. The two tiers are distinguished by
 // what happens when a bucket fills, because DiscardNew makes that a refused write
 // rather than an eviction, and a refused write is survivable in one of these
@@ -88,6 +90,21 @@ type Bucket struct {
 	Tier Tier
 	// Account is the NATS account the bucket lives in. See Account.
 	Account Account
+	// Writers are the areas that put, update, delete or purge keys in the bucket, and
+	// Readers the areas that get, list or watch them. They are separate lists because a
+	// key written into a bucket is a PUBLISH into a stream's subject, and who may publish
+	// there is a different question from who may look: device-by-token is what event
+	// resolution trusts to turn a token into a device, so writing it is forging a device.
+	//
+	// Today every bucket's two lists are the same set, because every area that opens a
+	// bucket both reads and writes it (a lease is read to be renewed, a cache read to be
+	// filled). They are declared apart anyway, so the first read-only user is a one-line
+	// declaration and not a redesign.
+	//
+	// A cache bucket (the Cache tier) is created per instance AND per area, so its named
+	// area is the only one that can open it; the lists name that area, not "every pod".
+	Writers []string
+	Readers []string
 	// Why records what drives this bucket's growth and what a full bucket breaks.
 	// It sits next to the tier so a reclassification has to confront it.
 	Why string
@@ -99,6 +116,8 @@ var All = []Bucket{
 		Name:    BucketRefreshTokens,
 		Tier:    State,
 		Account: Identity,
+		Writers: []string{"user-management"},
+		Readers: []string{"user-management"},
 		Why: "One entry per live refresh token (jti -> email), plus two small entries " +
 			"per sign-in (its record and its per-identity index entry), so it scales " +
 			"with concurrent signed-in humans, not with devices. A full bucket refuses " +
@@ -108,6 +127,8 @@ var All = []Bucket{
 		Name:    BucketOAuthCodes,
 		Tier:    State,
 		Account: Identity,
+		Writers: []string{"user-management"},
+		Readers: []string{"user-management"},
 		Why: "One entry per in-flight OAuth 2.1 authorization code (ADR-047), held " +
 			"only between the authorize redirect and the token exchange. Lowest " +
 			"volume of any bucket here; a full one breaks MCP authorization.",
@@ -116,6 +137,8 @@ var All = []Bucket{
 		Name:    BucketSsoState,
 		Tier:    State,
 		Account: Identity,
+		Writers: []string{"user-management"},
+		Readers: []string{"user-management"},
 		Why: "One entry per in-flight single sign-on attempt (state, nonce, the upstream " +
 			"PKCE verifier and the return address), written by the UNAUTHENTICATED beginSso " +
 			"call and held ten minutes or until the identity provider's redirect consumes it. " +
@@ -128,6 +151,8 @@ var All = []Bucket{
 		Name:    BucketSsoCodes,
 		Tier:    State,
 		Account: Identity,
+		Writers: []string{"user-management"},
+		Readers: []string{"user-management"},
 		Why: "One entry per completed single sign-on awaiting its completeSso call, " +
 			"single-use with a 60-second lifetime. Kept apart from the OAuth authorization " +
 			"codes so neither redeemer can ever be handed the other's record. Lowest volume " +
@@ -137,6 +162,8 @@ var All = []Bucket{
 		Name:    BucketCredentialAttempts,
 		Tier:    State,
 		Account: Identity,
+		Writers: []string{"user-management"},
+		Readers: []string{"user-management"},
 		Why: "One entry per principal of a throttled kind (in user-management, a " +
 			"hashed email; OAuth client secrets are unthrottled and write nothing) that " +
 			"was checked recently, expiring 10 minutes after its last write, so it " +
@@ -156,8 +183,10 @@ var All = []Bucket{
 			"is where that shows, and the CredentialAttemptStoreFull alert fires on it.",
 	},
 	{
-		Name: BucketDeviceCredentialAttempts,
-		Tier: State,
+		Name:    BucketDeviceCredentialAttempts,
+		Tier:    State,
+		Writers: []string{"device-management"},
+		Readers: []string{"device-management"},
 		Why: "device-management's MQTT password backoff (credential.KindDeviceCredential): " +
 			"one entry per MQTT username tried in the last 10 minutes, a real one or not, " +
 			"since a connect is charged before the credential is looked up. A SUCCESSFUL " +
@@ -173,15 +202,19 @@ var All = []Bucket{
 			"DeviceCredentialAttemptStoreFull alert fires on it.",
 	},
 	{
-		Name: BucketLocks,
-		Tier: State,
+		Name:    BucketLocks,
+		Tier:    State,
+		Writers: []string{"event-sources", "user-management"},
+		Readers: []string{"event-sources", "user-management"},
 		Why: "One entry per HELD lock — a handful at a time, TTL'd so a crashed " +
 			"holder cannot wedge one. A full bucket fails acquisition, and " +
 			"DistributedLock.WithLock is fail-closed, so guarded reconcilers stop.",
 	},
 	{
-		Name: BucketLeases,
-		Tier: State,
+		Name:    BucketLeases,
+		Tier:    State,
+		Writers: []string{"event-processing", "event-sources", "lwm2m-ingest", "sparkplug-ingest"},
+		Readers: []string{"event-processing", "event-sources", "lwm2m-ingest", "sparkplug-ingest"},
 		Why: "One entry per HELD partition lease (ADR-070) — a handful at a time, one " +
 			"per Class-3 partition (DETECT per tenant, Sparkplug and LwM2M per Instance, an " +
 			"event-sources external MQTT source per source), TTL'd " +
@@ -190,35 +223,45 @@ var All = []Bucket{
 			"never two — the same fail-closed shape as the lock bucket above.",
 	},
 	{
-		Name: BucketDeviceByToken,
-		Tier: Cache,
+		Name:    BucketDeviceByToken,
+		Tier:    Cache,
+		Writers: []string{"device-management"},
+		Readers: []string{"device-management"},
 		Why: "One entry per device resolved on the hot ingest path. Scales directly " +
 			"with fleet size — the single largest KV consumer at scale, and the " +
 			"reason the cache tier is bounded below the state tier.",
 	},
 	{
-		Name: BucketRelationshipsBySource,
-		Tier: Cache,
+		Name:    BucketRelationshipsBySource,
+		Tier:    Cache,
+		Writers: []string{"device-management"},
+		Readers: []string{"device-management"},
 		Why: "One entry per device holding tracked relationships (ADR-044 F2), so " +
 			"it scales with fleet size.",
 	},
 	{
-		Name: BucketMembershipsByEntity,
-		Tier: Cache,
+		Name:    BucketMembershipsByEntity,
+		Tier:    Cache,
+		Writers: []string{"device-management"},
+		Readers: []string{"device-management"},
 		Why: "One entry per entity with rule-scoped group memberships (ADR-062), so " +
 			"it scales with fleet size.",
 	},
 	{
-		Name: BucketProfileResolutionByType,
-		Tier: Cache,
+		Name:    BucketProfileResolutionByType,
+		Tier:    Cache,
+		Writers: []string{"device-management"},
+		Readers: []string{"device-management"},
 		Why: "One entry per device TYPE: the active published profile version's metric " +
 			"definitions and rule-scoping identity (with the tenant's fence-set version), " +
 			"read once per resolved event (ADR-016/045/051). Scales with the type catalog, " +
 			"not the fleet.",
 	},
 	{
-		Name: BucketScopedGroupsExist,
-		Tier: Cache,
+		Name:    BucketScopedGroupsExist,
+		Tier:    Cache,
+		Writers: []string{"device-management"},
+		Readers: []string{"device-management"},
 		Why: "One entry per TENANT — the resolver's pay-nothing gate (ADR-062 " +
 			"Decision 7). The smallest bucket the platform creates.",
 	},
@@ -289,4 +332,49 @@ func Count(t Tier) int {
 		}
 	}
 	return n
+}
+
+// Admins returns the areas that create and reconcile the bucket, sorted.
+//
+// TODAY THAT IS EVERY AREA THAT OPENS IT, because messaging.KeyValueStore creates a missing
+// bucket and reconciles the ceiling and replica count of an existing one for whoever calls it.
+// It is therefore the union of Writers and Readers, derived rather than listed, and it is
+// what a later move of bucket creation to one dedicated login narrows.
+func (b Bucket) Admins() []string {
+	out := append([]string(nil), b.Writers...)
+	for _, a := range b.Readers {
+		if !slices.Contains(out, a) {
+			out = append(out, a)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// Lookup returns the declaration for a bucket's logical name.
+func Lookup(name string) (Bucket, bool) {
+	for _, b := range All {
+		if b.Name == name {
+			return b, true
+		}
+	}
+	return Bucket{}, false
+}
+
+// Writes reports whether area may write the bucket's keys.
+func Writes(name, area string) bool {
+	b, ok := Lookup(name)
+	return ok && slices.Contains(b.Writers, area)
+}
+
+// Reads reports whether area may read the bucket's keys.
+func Reads(name, area string) bool {
+	b, ok := Lookup(name)
+	return ok && slices.Contains(b.Readers, area)
+}
+
+// Administers reports whether area may create or reconcile the bucket.
+func Administers(name, area string) bool {
+	b, ok := Lookup(name)
+	return ok && slices.Contains(b.Admins(), area)
 }

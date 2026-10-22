@@ -92,6 +92,18 @@ type Microservice struct {
 	MicroserviceName string
 	FunctionalArea   string
 
+	// Deployed is true for a Microservice NewMicroservice built, whose identity (the
+	// functional area above all) came from the deployment's environment, and false for a
+	// struct literal, which is a fixture that names whatever area its test needs.
+	//
+	// It exists so the stream and bucket declarations (core/streams, core/kv) can be held to a
+	// service without being held to a test: a manager over a Deployed microservice refuses a
+	// stream, bucket or consumer its area does not declare (core/messaging, catalog.go), and a
+	// fixture's is not asked, because "test-area" declares nothing and would otherwise refuse
+	// every broker test in the tree. The default is the unenforced side, and that is safe only
+	// because production has exactly one way to build a Microservice.
+	Deployed bool
+
 	// Configuration content
 	InstanceConfiguration        config.InstanceConfiguration
 	MicroserviceConfigurationRaw []byte
@@ -244,7 +256,7 @@ type Microservice struct {
 
 // Create a new microservice instance
 func NewMicroservice(callbacks LifecycleCallbacks) *Microservice {
-	ms := &Microservice{}
+	ms := &Microservice{Deployed: true}
 	ms.StartTime = time.Now()
 	ms.InstanceId = os.Getenv(ENV_INSTANCE_ID)
 	ms.TenantId = os.Getenv(ENV_TENANT_ID)
