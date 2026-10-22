@@ -255,15 +255,17 @@ func (nmgr *NatsManager) verifyKvBucket(js nats.JetStreamContext, logical, bucke
 // create; a stream nobody deployed opens is not created, so an installation with fewer areas has
 // fewer streams, as before.
 func (nmgr *NatsManager) ReconcileBroker(ctx context.Context, areas []string) (*ReconcileReport, error) {
+	// The report is never nil, refusals included: a caller prints what was done before it looks
+	// at the error, and an empty report is what "nothing was done" reads as.
+	report := &ReconcileReport{}
 	if !nmgr.admin {
-		return nil, errors.New("messaging: only the broker administrator's manager reconciles the broker")
+		return report, errors.New("messaging: only the broker administrator's manager reconciles the broker")
 	}
 	for _, a := range areas {
 		if !streams.IsPlatformArea(a) {
-			return nil, fmt.Errorf("messaging: %q is not a platform functional area (known: %v)", a, streams.PlatformAreas)
+			return report, fmt.Errorf("messaging: %q is not a platform functional area (known: %v)", a, streams.PlatformAreas)
 		}
 	}
-	report := &ReconcileReport{}
 	nmgr.reconciled = func(kind, name, action string) {
 		report.Actions = append(report.Actions, ReconcileAction{Kind: kind, Name: name, Action: action})
 	}

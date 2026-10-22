@@ -136,3 +136,15 @@ func TestAnUnreadableInstanceDocumentIsAnError(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "instance configuration")
 }
+
+// A typo in --areas is refused with the message that names it, not a crash: the hook's log is what
+// the operator reads.
+func TestAnUnknownAreaIsRefusedByName(t *testing.T) {
+	srv := startBroker(t)
+	path := instanceDocument(t, srv, false)
+	var out bytes.Buffer
+	err := run(context.Background(), []string{"reconcile", "--config", path, "--areas", "device-state,no-such-area"},
+		env(map[string]string{"DC_INSTANCE_ID": "tinst"}), &out)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), `"no-such-area" is not a platform functional area`)
+}
