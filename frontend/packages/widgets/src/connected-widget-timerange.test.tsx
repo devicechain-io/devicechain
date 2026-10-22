@@ -139,6 +139,13 @@ describe('a paused measurement widget', () => {
     expect(points()).toBe(2);
   });
 
+  it('under a fixed window a measurement widget carries no current-state badge: it shows the window', () => {
+    const f = measurementHub();
+    const window: TimeRangeState = { spanSeconds: 3600, paused: true, pausedAt: NOW, absolute: { fromMs: NOW - 3_600_000, toMs: NOW } };
+    const { container } = mount(widget('latest-card', { precision: 0 }), f.hub, window);
+    expect(container.querySelector('[data-current-state-badge]')).toBeNull();
+  });
+
   it('a widget outside any board (no range provided) is unaffected', () => {
     const f = measurementHub();
     render(<ConnectedWidget widget={widget('latest-card', { precision: 0 })} hub={f.hub} />);
@@ -201,6 +208,27 @@ describe('a paused alarm widget', () => {
 
     setRange(live);
     expect(screen.getByText('8')).toBeTruthy();
+  });
+
+  it('under a fixed window an alarm widget says it shows the current state; a paused board does not need to', () => {
+    const f = alarmHub();
+    const w = widget('alarm-count', { state: 'ACTIVE' }, undefined);
+    const window: TimeRangeState = {
+      spanSeconds: 3600,
+      paused: true,
+      pausedAt: NOW - 86_400_000,
+      absolute: { fromMs: NOW - 86_400_000 - 3_600_000, toMs: NOW - 86_400_000 },
+    };
+    const { container, setRange } = mount(w, f.hub, window);
+    f.push(4);
+    expect(screen.getByText('4')).toBeTruthy();
+    const badge = container.querySelector('[data-current-state-badge]');
+    expect(badge?.textContent).toBe('Now');
+    expect(badge?.getAttribute('title')).toMatch(/fixed time window does not apply/);
+    setRange(frozen);
+    expect(container.querySelector('[data-current-state-badge]')).toBeNull();
+    setRange(live);
+    expect(container.querySelector('[data-current-state-badge]')).toBeNull();
   });
 
   it('opening paused freezes on the FIRST loaded snapshot, not on the loading state', () => {

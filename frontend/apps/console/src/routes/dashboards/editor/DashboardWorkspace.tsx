@@ -331,7 +331,6 @@ function applyDatasource(
   return pruneSlots(bindWidgetSlot(def, widgetId, binding, ds.measurements, ds.location));
 }
 
-// A widget's name as an author recognises it: its title option, else its type.
 // The custom-window strings for the shared time-range bar.
 function timeRangeAbsoluteLabels(t: TFunction): AbsoluteLabels {
   return {
@@ -361,6 +360,7 @@ function timeRangeAbsoluteLabels(t: TFunction): AbsoluteLabels {
   };
 }
 
+// A widget's name as an author recognises it: its title option, else its type.
 function widgetName(widget: WidgetInstance | undefined): string {
   if (!widget) return '';
   const title = widget.options?.title;

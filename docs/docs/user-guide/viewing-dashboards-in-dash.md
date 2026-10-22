@@ -111,8 +111,8 @@ before the end, the window is shorter than a minute or longer than 31 days, the 
 future, or the start is before the year 2000.
 
 While a custom range shows, the header says **Fixed window** with both ends and their time zone,
-and the board does not follow new data: charts, values and counts stay on that window, the way they
-do when paused. Nothing is paused, so there is no **Paused** badge, and commands still send. **Back
+and the board does not follow new data: charts and values stay on that window, the way they do
+when paused. Nothing is paused, so there is no **Paused** badge, and commands still send. **Back
 to live**, or any of the 15m to 7d buttons, returns to a live board. **Copy link** copies an
 address that opens the same window for anyone, with the times written in UTC.
 
@@ -120,6 +120,10 @@ A chart that follows the board's range draws the window. A chart whose author pi
 keeps that span, counted back from the end of the window, and shows it in its corner as usual. A
 custom widget written before custom ranges existed sees the window as a frozen board and draws the
 right data, with no change.
+
+Alarm widgets, maps and device status widgets keep no history to read back, so they cannot show
+the window: they show the current state, and say so with a **Now** badge in their corner while a
+custom range is showing. Today's active alarms are not the ones that were active during the window.
 
 ## Kiosk mode and links for wall displays
 

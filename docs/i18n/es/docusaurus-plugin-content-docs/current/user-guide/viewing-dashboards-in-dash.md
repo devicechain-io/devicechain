@@ -119,8 +119,8 @@ cuando el inicio no es anterior al fin, el intervalo dura menos de un minuto o m
 está en el futuro o el inicio es anterior al año 2000.
 
 Mientras se muestra un intervalo personalizado, la cabecera indica **Intervalo fijo** con ambos
-extremos y su zona horaria, y el panel no sigue los datos nuevos: gráficos, valores y contadores se
-quedan en ese intervalo, igual que en pausa. Nada está en pausa, así que no hay insignia **En
+extremos y su zona horaria, y el panel no sigue los datos nuevos: gráficos y valores se quedan en
+ese intervalo, igual que en pausa. Nada está en pausa, así que no hay insignia **En
 pausa**, y los comandos se siguen enviando. **Volver a en vivo**, o cualquiera de los botones de 15m
 a 7d, devuelve el panel a en vivo. **Copiar enlace** copia una dirección que abre el mismo intervalo
 a cualquiera, con las horas escritas en UTC.
@@ -129,6 +129,11 @@ Un gráfico que sigue el intervalo del panel dibuja ese intervalo. Un gráfico c
 propio lapso lo conserva, contado hacia atrás desde el final del intervalo, y lo muestra en su
 esquina como siempre. Un widget personalizado escrito antes de los intervalos personalizados ve el
 intervalo como un panel congelado y dibuja los datos correctos, sin cambios.
+
+Los widgets de alarmas, los mapas y los widgets de estado de dispositivo no guardan historial que
+leer, así que no pueden mostrar el intervalo: muestran el estado actual, y lo indican con una
+insignia **Ahora** en su esquina mientras se muestra un intervalo personalizado. Las alarmas activas
+de hoy no son las que estaban activas durante el intervalo.
 
 ## Modo quiosco y enlaces para pantallas murales
 

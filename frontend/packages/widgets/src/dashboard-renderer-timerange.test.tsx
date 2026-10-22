@@ -181,6 +181,48 @@ describe('a frozen board', () => {
     expect(spanOf(second.window)).toBe(21600);
   });
 
+  it('a fixed window re-reads at the window, even one of the same length as the live span', async () => {
+    const def = board();
+    const { rerender } = render(<DashboardRenderer definition={def} hub={source} timeRange={range(3600)} />);
+    await flush();
+    expect(fetchesOf('chart')).toHaveLength(1);
+    const toMs = Math.floor((Date.now() - 86_400_000) / 1000) * 1000;
+    const fixed = (to: number) => range(3600, { paused: true, pausedAt: to, absolute: { fromMs: to - 3_600_000, toMs: to } });
+
+    rerender(<DashboardRenderer definition={def} hub={source} timeRange={fixed(toMs)} />);
+    await flush();
+    expect(fetchesOf('chart')).toHaveLength(2);
+    expect(Date.parse(fetchesOf('chart')[1].window.endTime)).toBe(toMs);
+    expect(spanOf(fetchesOf('chart')[1].window)).toBe(3600);
+    // The card is not time-ranged: its fixed hour ends at the window's end, so it shows the value AS OF then.
+    expect(fetchesOf('card')).toHaveLength(2);
+    expect(Date.parse(fetchesOf('card')[1].window.endTime)).toBe(toMs);
+
+    // Another window of the same length is another read.
+    rerender(<DashboardRenderer definition={def} hub={source} timeRange={fixed(toMs - 7_200_000)} />);
+    await flush();
+    expect(fetchesOf('chart')).toHaveLength(3);
+    expect(Date.parse(fetchesOf('chart')[2].window.endTime)).toBe(toMs - 7_200_000);
+
+    // Back to live reads up to now again.
+    rerender(<DashboardRenderer definition={def} hub={source} timeRange={range(3600)} />);
+    await flush();
+    expect(fetchesOf('chart')).toHaveLength(4);
+    expect(Math.abs(Date.parse(fetchesOf('chart')[3].window.endTime) - Date.now())).toBeLessThan(5000);
+  });
+
+  it('never hands a seed read for the live board to a fixed window, nor the other way round', async () => {
+    const def = board();
+    const { rerender } = render(<DashboardRenderer definition={def} hub={source} timeRange={range(3600)} />);
+    await flush();
+    await act(async () => fetchesOf('chart')[0].resolve([{ id: 's', deviceToken: 'd-1', eventType: 0, occurredTime: null, name: 't', value: 1, classifier: null }]));
+    expect(lastChartRender()?.seeded).toBe(1);
+    const to = Math.floor((Date.now() - 86_400_000) / 1000) * 1000;
+    rerender(<DashboardRenderer definition={def} hub={source} timeRange={range(3600, { paused: true, pausedAt: to, absolute: { fromMs: to - 3_600_000, toMs: to } })} />);
+    await flush();
+    expect(lastChartRender()?.seeded).toBeUndefined();
+  });
+
   it('does not re-fetch on pause or resume: the stream kept buffering, so there is no gap to read', async () => {
     const def = board();
     const live = range(3600);

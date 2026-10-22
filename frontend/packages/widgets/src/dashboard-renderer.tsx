@@ -23,6 +23,7 @@
 import {
   anchorFraction,
   DEFAULT_CANVAS_DENSITY,
+  DEFAULT_TIME_RANGE_SECONDS,
   defaultHistoryWindow,
   effectiveLayout,
   historyWindowFor,
@@ -153,6 +154,9 @@ export function DashboardRenderer({
     [timeRange, defaultSeconds],
   );
   const { histories, reseed } = useWidgetHistories(widgets, seedHistory, registry, range);
+  // Each fixed window is its own board state: entering, leaving or moving one remounts the widgets,
+  // so no live buffer (samples from after the window) and no held snapshot carries across it.
+  const windowKey = windowTag(range);
 
   const { grid, background: bg, frame: canvasFrame } = definition.canvas;
   const effectiveSizing = sizing ?? definition.canvas.sizing;
@@ -215,6 +219,7 @@ export function DashboardRenderer({
                   <WidgetFrameStyleProvider frame={resolveFrame(canvasFrame, widgetFrame(widget))}>
                     <WidgetSubjectProvider label={widgetSubjectLabel(widget)}>
                       <ConnectedWidget
+                        key={windowKey}
                         widget={widget}
                         hub={hub}
                         registry={registry}
@@ -458,8 +463,17 @@ function useContainerWidth<T extends HTMLElement>(keyOf: (width: number) => stri
 // A widget's seed, tagged with the concrete selector it was fetched for, and when it was read up to.
 interface Seed {
   key: string;
+  // The fixed window it was read for ('' for a rolling range): see windowTag.
+  window: string;
   samples: MeasurementSample[];
   asOf: number;
+}
+
+// A fixed window's identity, '' for a rolling range. A seed belongs to the window it was read for:
+// one read for the live board ends now, and handed to a window yesterday it would draw the last
+// hour under a "Fixed window" label (two windows of the same length differ only by this).
+function windowTag(range: TimeRangeState): string {
+  return range.absolute ? `${range.absolute.fromMs}-${range.absolute.toMs}` : '';
 }
 
 // What a measurement widget is handed: its seed and the instant the seed was read up to.
@@ -543,7 +557,8 @@ function useWidgetHistories(
     const span = descriptor ? (measurementSpan(descriptor, w, range.spanSeconds) ?? null) : null;
     return [[w.id, key, span] as const];
   });
-  const wantedKey = JSON.stringify(wanted);
+  const tag = windowTag(range);
+  const wantedKey = JSON.stringify([tag, wanted]);
 
   useEffect(() => {
     // Preview (enabled=false) must not touch the backend; clear any prior seed so a
@@ -558,7 +573,7 @@ function useWidgetHistories(
     const next: Record<string, string> = {};
     for (const [id, key, span] of wanted) {
       // What was asked for: the selector, the span and the re-reads. Equal = fetched, or in flight.
-      const base = `${key}|${span ?? ''}|`;
+      const base = `${key}|${span ?? ''}|${tag}|`;
       const n = reseeds.current[id] ?? 0;
       // A read made while frozen ends at the freeze instant, so it answers no re-read: it is asked
       // as `p`, and resuming reads the outage back.
@@ -578,13 +593,16 @@ function useWidgetHistories(
       // A frozen board reads up to the freeze instant, so a range change while paused re-fetches
       // the same moment at the new span instead of sliding forward.
       const end = range.paused && range.pausedAt !== undefined ? range.pausedAt : now;
-      const historyWindow = span === null ? defaultHistoryWindow() : historyWindowFor(span, end);
+      // A widget that is not time-ranged reads its fixed hour back from the window's end under a
+      // fixed window (the value AS OF that window), and back from now otherwise.
+      const historyWindow =
+        span !== null ? historyWindowFor(span, end) : range.absolute ? historyWindowFor(DEFAULT_TIME_RANGE_SECONDS, end) : defaultHistoryWindow();
       const current = () => mounted.current && requested.current[id] === asked;
       void fetchWidgetHistory(widget, historyWindow, { rethrow: n > 0 }).then(
         (samples) => {
           if (!current()) return; // superseded or unmounted
           // `asOf`: what the read covers up to (the fixed hour reads to now, a moment after `now`).
-          setSeeds((prev) => ({ ...prev, [id]: { key, samples, asOf: end } }));
+          setSeeds((prev) => ({ ...prev, [id]: { key, window: tag, samples, asOf: end } }));
         },
         () => {
           // Only a re-read rejects. The seed on screen stays, the outage stays a gap, and it is
@@ -605,9 +623,9 @@ function useWidgetHistories(
     if (!enabled) return out;
     for (const w of widgets) {
       const seed = seeds[w.id];
-      out[w.id] = seed && seed.key === seedKey(w, registry) ? seed : undefined;
+      out[w.id] = seed && seed.key === seedKey(w, registry) && seed.window === tag ? seed : undefined;
     }
     return out;
-  }, [widgets, seeds, enabled, registry]);
+  }, [widgets, seeds, enabled, registry, tag]);
   return { histories, reseed };
 }

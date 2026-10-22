@@ -952,7 +952,20 @@ export function View({
         <>
           {/* A wall display has no header, but a frozen board must never look live: the
               connection state floats in the corner opposite the fullscreen button. */}
-          <div style={{ position: 'fixed', top: 8, left: 8, zIndex: 10, display: 'flex', gap: 8 }}>
+          {/* Kept clear of the fullscreen button opposite: a fixed window's pill is long enough to
+              reach it on a narrow screen, and wraps instead. */}
+          <div
+            style={{
+              position: 'fixed',
+              top: 8,
+              left: 8,
+              zIndex: 10,
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: 8,
+              maxWidth: kioskChrome ? 'calc(100% - 136px)' : 'calc(100% - 16px)',
+            }}
+          >
             {/* chrome=0 hides it only while the board is live: a dropped board still says so. */}
             <ConnectionStatus hub={hub} onlyWhenDown={!kioskChrome} />
             {/* A wall board has no controls, but it must never be frozen without saying so. */}
@@ -968,6 +981,10 @@ export function View({
         <header
           style={{
             display: 'flex',
+            // Wraps on a narrow screen: unwrapped, every control was squeezed to its narrowest and
+            // the time-range bar stacked one button per line (and a fixed window's dates one word
+            // per line) down half a phone's height, with the row still wider than the screen.
+            flexWrap: 'wrap',
             alignItems: 'center',
             gap: 12,
             padding: '8px 16px',
