@@ -111,7 +111,7 @@ verify_prov() { # <ref> <tag>
 }
 
 fail_count=0
-note_fail() { echo "  FAIL  $1"; sed 's/^/        /' "$ERR" | head -8; fail_count=$((fail_count + 1)); }
+note_fail() { echo "  FAIL  $1"; sed -n '1,8s/^/        /p' "$ERR"; fail_count=$((fail_count + 1)); }
 
 # The error a REAL rejection carries. A pull error / 404 / auth error is deliberately not
 # in this list: it would make a control pass over a broken registry.
@@ -208,7 +208,7 @@ self_test() {
   # The derived regexp must match its own tag and NOTHING else: not another tag, not a
   # branch, not a lookalike repo (the failure that makes identity binding worthless).
   good='https://github.com/devicechain-io/devicechain/.github/workflows/release.yml@refs/tags/v1.2.3-rc.1'
-  printf '%s\n' "$good" | grep -qE "$re" || { echo "FAIL regexp rejects its own identity"; bad=1; }
+  grep -qE "$re" <<<"$good" || { echo "FAIL regexp rejects its own identity"; bad=1; }
   for other in \
     'https://github.com/devicechain-io/devicechain/.github/workflows/release.yml@refs/tags/v1.2.3-rc.10' \
     'https://github.com/devicechain-io/devicechain/.github/workflows/release.yml@refs/tags/v1.2.3' \
@@ -217,7 +217,7 @@ self_test() {
     'https://github.com/evil/devicechain/.github/workflows/release.yml@refs/tags/v1.2.3-rc.1' \
     'https://github.com/devicechain-io/devicechainX.github/workflows/release.yml@refs/tags/v1.2.3-rc.1' \
     'https://github.com/devicechain-io/devicechain/.github/workflows/releaseXyml@refs/tags/v1.2.3-rc.1'; do
-    if printf '%s\n' "$other" | grep -qE "$re"; then echo "FAIL regexp accepted: $other"; bad=1; fi
+    if grep -qE "$re" <<<"$other"; then echo "FAIL regexp accepted: $other"; bad=1; fi
   done
   [ "${#RELEASE_IMAGES[@]}" -ge 18 ] || { echo "FAIL image list suspiciously short"; bad=1; }
   if [ "$bad" -eq 0 ]; then echo "$SELF self-test: ok"; else echo "$SELF self-test: FAILED"; return 1; fi
