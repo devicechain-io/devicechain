@@ -600,6 +600,12 @@ generated from the schema; do not edit it by hand.
 | `ingress.tls.issuerName` | string | `"devicechain-selfsigned"` | Name of the self-signed Issuer the chart renders when selfSigned is true. |
 | `ingress.tls.clusterIssuer` | string | `""` | Name of an existing cert-manager ClusterIssuer (for example a Let's Encrypt ACME issuer) to request certificates from. Used when selfSigned is false. |
 | `ingress.tls.secretName` | string | `"devicechain-tls"` | Name of the Secret that holds the TLS certificate. |
+| `brokerAdmin` | object | - | The broker administrator: the pre-install/pre-upgrade hook Job that alone creates and reconciles the platform's JetStream streams and KV buckets. Services only verify them. |
+| `brokerAdmin.enabled` | boolean | `true` | Run the broker administrator as a hook Job. Disable only if the installation creates and reconciles the broker's streams and buckets itself; services still verify them. |
+| `brokerAdmin.image` | string | `""` | Full image reference for the broker administrator, overriding &lt;image.registry&gt;/dc-broker-admin:&lt;image.tag&gt;. |
+| `brokerAdmin.activeDeadlineSeconds` | integer | `540` | How long the whole reconcile may take, including waiting for a stream created under an older retention to be drained before it is recreated. |
+| `brokerAdmin.backoffLimit` | integer | `1` | How many times a failed attempt is retried before the Job, and so the release, fails. |
+| `brokerAdmin.resources` | object | see values.yaml | Resource requests and limits for the Job's container. |
 | `frontend` | object | - | The web console workload: a static nginx SPA served at the ingress root. Disable for headless/ingest-only instances. |
 | `frontend.enabled` | boolean | `true` | Deploy the web console. Disable for headless or ingest-only instances. |
 | `frontend.image` | object | - | Console image override. By default the image is &lt;image.registry&gt;/frontend:&lt;image.tag&gt;. |
