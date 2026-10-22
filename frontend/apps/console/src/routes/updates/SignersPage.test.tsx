@@ -39,7 +39,7 @@ function signer(over: Record<string, unknown> = {}) {
     keyId: 'aaaabbbbccccdddd',
     state: 'ACTIVE',
     revokedAt: null,
-    createdBy: 'derek',
+    createdBy: 'alice',
     revokedBy: null,
     soleSignedArtifactCount: 3,
     ...over,
