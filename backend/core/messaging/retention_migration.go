@@ -135,9 +135,18 @@ func (nmgr *NatsManager) migrateRetention(ctx context.Context, suffix, name stri
 		poll = nmgr.retentionDrainPoll
 	}
 	durable := nmgr.ownDurable(suffix)
-	lock, err := nmgr.NewDistributedLock(retentionLockTTL)
-	if err != nil {
-		return fmt.Errorf("messaging: opening the lock for the retention change of %s: %w", name, err)
+	// The broker administrator runs once, from a hook Job that Helm serialises, and holds no
+	// publish right on any bucket, so it takes no lock; a manager that is not the administrator
+	// (a test's) still serialises its replicas with the distributed lock.
+	withLock := func(ctx context.Context, fn func(context.Context) error) error { return fn(ctx) }
+	if !nmgr.admin {
+		lock, err := nmgr.NewDistributedLock(retentionLockTTL)
+		if err != nil {
+			return fmt.Errorf("messaging: opening the lock for the retention change of %s: %w", name, err)
+		}
+		withLock = func(ctx context.Context, fn func(context.Context) error) error {
+			return lock.WithLock(ctx, "stream-retention:"+name, fn)
+		}
 	}
 	log.Info().Str("stream", name).Str("durable", durable).Dur("bound", bound).
 		Msg("Waiting for a stream to drain before recreating it with its declared retention")
@@ -179,7 +188,7 @@ func (nmgr *NatsManager) migrateRetention(ctx context.Context, suffix, name stri
 			}
 		}
 		moved := false
-		err := lock.WithLock(ctx, "stream-retention:"+name, func(ctx context.Context) error {
+		err := withLock(ctx, func(ctx context.Context) error {
 			// Everything is read again under the lock: another replica may have finished while
 			// this one waited for it.
 			cur, ok, _, err := nmgr.streamDrained(ctx, name, durable)
@@ -203,6 +212,7 @@ func (nmgr *NatsManager) migrateRetention(ctx context.Context, suffix, name stri
 				return err
 			}
 			moved = true
+			nmgr.noteReconciled("stream", name, "migrated")
 			log.Info().Str("stream", name).Str("retention", cfg.Retention.String()).Uint64("firstSeq", cfg.FirstSeq).
 				Msg("Recreated a drained stream with its declared retention")
 			return nil
@@ -253,8 +263,17 @@ func (nmgr *NatsManager) addBackoff() time.Duration {
 	return retentionAddBackoff
 }
 
-// ownDurable is the durable this service reads suffix's stream with.
+// ownDurable is the durable this service reads suffix's stream with. The broker administrator
+// reads none itself: the stream is drained by the area that declares the durable reader, so it
+// asks that reader's durable, the one the area's own start binds.
 func (nmgr *NatsManager) ownDurable(suffix string) string {
+	if nmgr.admin {
+		for _, r := range streams.ReadersOf(suffix) {
+			if r.Mode == streams.ReadDurable {
+				return DurableName(nmgr.Microservice.InstanceId, r.Area, suffix)
+			}
+		}
+	}
 	nmgr.streamMu.Lock()
 	defer nmgr.streamMu.Unlock()
 	for _, r := range nmgr.readers {

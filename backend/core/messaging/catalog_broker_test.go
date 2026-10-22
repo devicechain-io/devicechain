@@ -15,6 +15,11 @@ import (
 func initializedManager(t *testing.T, area string, deployed bool) *NatsManager {
 	t.Helper()
 	srv := runTestServer(t)
+	if deployed {
+		// A deployed manager only verifies; the broker administrator has created what it opens.
+		_, err := adminOn(t, srv).ReconcileBroker(context.Background(), streams.PlatformAreas)
+		require.NoError(t, err)
+	}
 	ms := testMicroservice(t, srv, area)
 	ms.Deployed = deployed
 	nmgr := NewNatsManager(ms, core.NewNoOpLifecycleCallbacks(), func(*NatsManager) error { return nil })

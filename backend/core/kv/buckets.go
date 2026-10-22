@@ -39,7 +39,10 @@
 // check somewhere that can see every caller.
 package kv
 
-import "slices"
+import (
+	"slices"
+	"time"
+)
 
 // Tier is a KV bucket's disk-budget class. The two tiers are distinguished by
 // what happens when a bucket fills, because DiscardNew makes that a refused write
@@ -90,6 +93,13 @@ type Bucket struct {
 	Tier Tier
 	// Account is the NATS account the bucket lives in. See Account.
 	Account Account
+	// TTL is the bucket's entry lifetime, which the broker administrator creates it with
+	// (an App-account bucket; the Identity account's are created by the one login that owns
+	// them, with the lifetimes identity declares). A KV bucket has ONE lifetime, so for a
+	// bucket several areas open it is the value they all have to agree on: the lease bucket's
+	// is the fencing window. It is declared here, once, because the creator is no longer the
+	// service that opens the bucket and so can no longer be told the value at the call site.
+	TTL time.Duration
 	// Writers are the areas that put, update, delete or purge keys in the bucket, and
 	// Readers the areas that get, list or watch them. They are separate lists because a
 	// key written into a bucket is a PUBLISH into a stream's subject, and who may publish
@@ -185,6 +195,7 @@ var All = []Bucket{
 	{
 		Name:    BucketDeviceCredentialAttempts,
 		Tier:    State,
+		TTL:     10 * time.Minute, // credential.AttemptTTL
 		Writers: []string{"device-management"},
 		Readers: []string{"device-management"},
 		Why: "device-management's MQTT password backoff (credential.KindDeviceCredential): " +
@@ -204,6 +215,7 @@ var All = []Bucket{
 	{
 		Name:    BucketLocks,
 		Tier:    State,
+		TTL:     30 * time.Second, // the longest of the lifetimes its openers asked for before this was declared
 		Writers: []string{"event-sources", "user-management"},
 		Readers: []string{"event-sources", "user-management"},
 		Why: "One entry per HELD lock — a handful at a time, TTL'd so a crashed " +
@@ -213,6 +225,7 @@ var All = []Bucket{
 	{
 		Name:    BucketLeases,
 		Tier:    State,
+		TTL:     30 * time.Second, // messaging.DefaultLeaseTTL
 		Writers: []string{"event-processing", "event-sources", "lwm2m-ingest", "sparkplug-ingest"},
 		Readers: []string{"event-processing", "event-sources", "lwm2m-ingest", "sparkplug-ingest"},
 		Why: "One entry per HELD partition lease (ADR-070) — a handful at a time, one " +
@@ -225,6 +238,7 @@ var All = []Bucket{
 	{
 		Name:    BucketDeviceByToken,
 		Tier:    Cache,
+		TTL:     CacheTTL,
 		Writers: []string{"device-management"},
 		Readers: []string{"device-management"},
 		Why: "One entry per device resolved on the hot ingest path. Scales directly " +
@@ -234,6 +248,7 @@ var All = []Bucket{
 	{
 		Name:    BucketRelationshipsBySource,
 		Tier:    Cache,
+		TTL:     CacheTTL,
 		Writers: []string{"device-management"},
 		Readers: []string{"device-management"},
 		Why: "One entry per device holding tracked relationships (ADR-044 F2), so " +
@@ -242,6 +257,7 @@ var All = []Bucket{
 	{
 		Name:    BucketMembershipsByEntity,
 		Tier:    Cache,
+		TTL:     CacheTTL,
 		Writers: []string{"device-management"},
 		Readers: []string{"device-management"},
 		Why: "One entry per entity with rule-scoped group memberships (ADR-062), so " +
@@ -250,6 +266,7 @@ var All = []Bucket{
 	{
 		Name:    BucketProfileResolutionByType,
 		Tier:    Cache,
+		TTL:     CacheTTL,
 		Writers: []string{"device-management"},
 		Readers: []string{"device-management"},
 		Why: "One entry per device TYPE: the active published profile version's metric " +
@@ -260,12 +277,18 @@ var All = []Bucket{
 	{
 		Name:    BucketScopedGroupsExist,
 		Tier:    Cache,
+		TTL:     CacheTTL,
 		Writers: []string{"device-management"},
 		Readers: []string{"device-management"},
 		Why: "One entry per TENANT — the resolver's pay-nothing gate (ADR-062 " +
 			"Decision 7). The smallest bucket the platform creates.",
 	},
 }
+
+// CacheTTL is the entry lifetime of every cache bucket. It is what the device-management cache
+// settings defaulted to (300 seconds); those settings now bound only how long a replica keeps a
+// value in its own memory, which never exceeds the bucket's lifetime.
+const CacheTTL = 300 * time.Second
 
 // The logical names of every declared bucket. They are constants rather than bare
 // strings in All so that each creation site references the same identifier the
@@ -334,12 +357,15 @@ func Count(t Tier) int {
 	return n
 }
 
-// Admins returns the areas that create and reconcile the bucket, sorted.
+// Admins returns the areas that OPEN the bucket, sorted: the union of Writers and Readers,
+// derived rather than listed.
 //
-// TODAY THAT IS EVERY AREA THAT OPENS IT, because messaging.KeyValueStore creates a missing
-// bucket and reconciles the ceiling and replica count of an existing one for whoever calls it.
-// It is therefore the union of Writers and Readers, derived rather than listed, and it is
-// what a later move of bucket creation to one dedicated login narrows.
+// 🔴 THE NAME IS OLDER THAN THE DISTINCTION. Until the stream-administration step each of these
+// areas also created the bucket and reconciled its ceiling and replica count when it opened it.
+// Now the broker administrator does that (an App-account bucket), and an area listed here
+// verifies the bucket and fails its start, naming what differs, when it is missing or wrong.
+// The identity account's buckets are the exception: the one login that owns the account creates
+// them.
 func (b Bucket) Admins() []string {
 	out := append([]string(nil), b.Writers...)
 	for _, a := range b.Readers {
@@ -373,7 +399,7 @@ func Reads(name, area string) bool {
 	return ok && slices.Contains(b.Readers, area)
 }
 
-// Administers reports whether area may create or reconcile the bucket.
+// Administers reports whether area OPENS the bucket (see Admins).
 func Administers(name, area string) bool {
 	b, ok := Lookup(name)
 	return ok && slices.Contains(b.Admins(), area)

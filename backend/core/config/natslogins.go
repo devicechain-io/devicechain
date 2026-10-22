@@ -20,9 +20,10 @@ const (
 )
 
 // NatsAdminPrincipal names the broker-administration login. It belongs to no area: no Deployment
-// mounts it, and it is minted so that the stream-administration step that comes later has a
-// credential of its own to hold.
-const NatsAdminPrincipal = "broker-admin"
+// mounts it. Its Secret is mounted only by the broker administrator's hook Job (the chart's
+// pre-install/pre-upgrade dc-broker-admin), and it alone may create, update and delete streams and
+// buckets.
+const NatsAdminPrincipal = streams.BrokerAdmin
 
 // natsLoginExemptAreas are the platform areas that never open a broker connection, so they have
 // no login and mount no Secret. mcp fronts GraphQL over HTTP under the caller's own token;
@@ -106,6 +107,33 @@ func (a *NatsAuthConfiguration) ApplyAreaLogin(area string, getenv func(string) 
 		// would be exactly the cross-area credential this design removes.
 		return fmt.Errorf("area %s was given the broker login %q, which is not one of its own "+
 			"(dc-%s-g<generation>): the Secret mounted here belongs to another principal", area, user, area)
+	}
+	a.User, a.Password = user, password
+	return nil
+}
+
+// ApplyAdminLogin makes the broker administrator connect as itself. It is the administrator's
+// counterpart to ApplyAreaLogin, called by the administrator's own command after it loads the
+// instance document (the administrator is not a functional area, so the load does not apply a
+// login to it).
+//
+// A no-op when the document does not say the broker has per-area logins: the administrator then
+// connects as the shared login the document carries, as every area does on such a broker.
+// Otherwise the login MUST be there, both halves, and must be the administrator's own.
+func (a *NatsAuthConfiguration) ApplyAdminLogin(getenv func(string) string) error {
+	if !a.AreaLogins {
+		return nil
+	}
+	user, password := getenv(EnvNatsUser), getenv(EnvNatsPassword)
+	if user == "" || password == "" {
+		return fmt.Errorf("the instance configuration says the broker has a login for every principal, and the "+
+			"broker administrator has none: %s or %s is empty. They are projected from its own Secret "+
+			"(dci-<instance>-nats-%s), which only the broker administrator's Job mounts. Refusing to connect "+
+			"as the shared login", EnvNatsUser, EnvNatsPassword, NatsAdminPrincipal)
+	}
+	if !IsNatsLoginOf(user, NatsAdminPrincipal) {
+		return fmt.Errorf("the broker administrator was given the broker login %q, which is not its own "+
+			"(dc-%s-g<generation>): the Secret mounted here belongs to another principal", user, NatsAdminPrincipal)
 	}
 	a.User, a.Password = user, password
 	return nil
