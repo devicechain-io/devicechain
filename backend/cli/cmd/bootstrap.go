@@ -680,4 +680,4 @@ func finishClaim(ctx context.Context, st *bootstrap.State, runErr error) error {
 const mqttBodyCredentialUsage = "TRANSITIONAL. What event-sources does with an MQTT event whose body carries a device credential: " +
 	"refuse (the default) or strip (accept it with the credential removed). Use strip while a fleet whose firmware still sends one is updated, " +
 	"then refuse; a device that sent one should have its credential rotated. A value given here is kept by later upgrades that omit the flag. " +
-	"Removed in v0.26.0"
+	"Planned for removal in v0.26.0"

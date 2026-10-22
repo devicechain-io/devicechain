@@ -100,7 +100,7 @@ func wireBodyCredential(sources ...*processor.GatewayJetStreamSource) {
 	}
 	log.Warn().Msg("capture.bodyCredential is strip: this is TRANSITIONAL. Devices still sending a credential in the body " +
 		"of an MQTT event are accepted with it removed. Set it to refuse when total_msg_credential_in_mqtt_body stops " +
-		"rising. The setting is removed in v0.26.0, and event-sources will refuse to start while it is set.")
+		"rising. Its removal is planned for v0.26.0, which is to refuse to start event-sources while it is set.")
 	warner := newBodyCredentialWarner()
 	for _, s := range sources {
 		s.StripBodyCredential(onBodyCredentialStripped(warner))

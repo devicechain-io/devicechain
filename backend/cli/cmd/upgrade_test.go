@@ -64,21 +64,27 @@ func TestMqttBodyCredentialFlagIsOnBothVerbsAndOffByDefault(t *testing.T) {
 		}
 	}
 
-	file, err := parser.ParseFile(token.NewFileSet(), "upgrade.go", nil, parser.SkipObjectResolution)
-	if err != nil {
-		t.Fatal(err)
-	}
-	threaded := false
-	ast.Inspect(file, func(n ast.Node) bool {
-		kv, ok := n.(*ast.KeyValueExpr)
-		if ok {
-			if k, kok := kv.Key.(*ast.Ident); kok && k.Name == "MqttBodyCredential" {
-				threaded = true
-			}
+	// Both verbs hand on the PARSED flag, not merely some value under that key: a literal
+	// there would leave the key in place and the flag inert.
+	for _, src := range []string{"upgrade.go", "bootstrap.go"} {
+		file, err := parser.ParseFile(token.NewFileSet(), src, nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatal(err)
 		}
-		return true
-	})
-	if !threaded {
-		t.Error("the upgrade command does not pass --mqtt-body-credential to its options")
+		threaded := false
+		ast.Inspect(file, func(n ast.Node) bool {
+			kv, ok := n.(*ast.KeyValueExpr)
+			if ok {
+				k, kok := kv.Key.(*ast.Ident)
+				v, vok := kv.Value.(*ast.Ident)
+				if kok && vok && k.Name == "MqttBodyCredential" && v.Name == "mqttBodyCredential" {
+					threaded = true
+				}
+			}
+			return true
+		})
+		if !threaded {
+			t.Errorf("%s does not pass the parsed --mqtt-body-credential to its options", src)
+		}
 	}
 }

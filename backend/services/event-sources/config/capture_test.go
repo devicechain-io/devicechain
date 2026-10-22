@@ -117,3 +117,14 @@ func TestCaptureBodyCredentialDefaultsToRefuseAndRejectsAnythingElse(t *testing.
 		assert.Contains(t, err.Error(), `"strip"`)
 	}
 }
+
+// capture.bodyCredential loads from the document the chart mounts, under the key the docs and
+// dcctl write. A struct field the loader matched under another spelling would leave the bridge
+// off while every unit test that sets the field directly stayed green.
+func TestCaptureBodyCredentialLoadsFromTheMountedDocument(t *testing.T) {
+	cfg := &EventSourcesConfiguration{}
+	require.NoError(t, core.LoadConfiguration([]byte(`{"capture":{"bodyCredential":"strip"}}`), cfg))
+	cfg.ApplyDefaults()
+	require.NoError(t, cfg.Validate())
+	assert.True(t, cfg.Capture.StripsBodyCredential())
+}

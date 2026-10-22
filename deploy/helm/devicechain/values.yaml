@@ -1476,8 +1476,8 @@ functionalAreas:
     # warned per device), so the fleet keeps reporting while its firmware rolls. Set it back
     # to "refuse" when that counter stops rising. A device that sent one has had its
     # credential stored by the broker: rotate it. Only the platform broker's source honours
-    # this; an external-broker source and HTTP ingest never do. Removed in v0.26.0, after which
-    # event-sources refuses to start while it is set. dcctl upgrade --mqtt-body-credential=strip
+    # this; an external-broker source and HTTP ingest never do. Its removal is planned for
+    # v0.26.0, which is to refuse to start event-sources while it is set. dcctl upgrade --mqtt-body-credential=strip
     # writes it and carries it across later upgrades.
     #   config:
     #     capture:
