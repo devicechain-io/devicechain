@@ -90,3 +90,97 @@ describe('parseDashParams', () => {
     });
   });
 });
+
+describe('rotate and every (the kiosk playlist link)', () => {
+  it('reads a playlist, implies kiosk, and defaults the interval to a minute', () => {
+    const warn = vi.fn();
+    const got = parseDashParams('?rotate=wall-a,wall-b,wall-c', warn);
+    expect(got.playlist).toEqual({ tokens: ['wall-a', 'wall-b', 'wall-c'], everySeconds: 60 });
+    expect(got.kiosk).toBe(true);
+    expect(got.rotateIssues).toBeUndefined();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('reads every, in whole seconds from the minimum to the maximum', () => {
+    const warn = vi.fn();
+    for (const [raw, seconds] of [['10', 10], ['45', 45], ['3600', 3600]] as const) {
+      expect(parseDashParams(`?rotate=a,b&every=${raw}`, warn).playlist?.everySeconds, raw).toBe(seconds);
+    }
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['9', 'tooShort'],
+    ['0', 'tooShort'],
+    ['3601', 'tooLong'],
+    ['999999', 'tooLong'],
+    ['1.5', 'unparseable'],
+    ['-5', 'unparseable'],
+    ['abc', 'unparseable'],
+    ['', 'unparseable'],
+    ['1e3', 'unparseable'],
+  ])('ignores every=%s (%s) with a note and plays at the default', (raw, reason) => {
+    const warn = vi.fn();
+    const got = parseDashParams(`?rotate=a,b&every=${encodeURIComponent(raw)}`, warn);
+    expect(got.playlist?.everySeconds).toBe(60);
+    expect(got.rotateIssues).toEqual([{ kind: 'every', value: raw, reason }]);
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips a token that is not one, notes it, and plays the rest', () => {
+    const warn = vi.fn();
+    const got = parseDashParams('?rotate=a,not%20a%20token,b,,%3Cscript%3E', warn);
+    expect(got.playlist?.tokens).toEqual(['a', 'b']);
+    expect(got.rotateIssues).toEqual([
+      { kind: 'token', value: 'not a token' },
+      { kind: 'token', value: '<script>' },
+    ]);
+  });
+
+  it('keeps a board listed twice, in order', () => {
+    expect(parseDashParams('?rotate=a,b,a').playlist?.tokens).toEqual(['a', 'b', 'a']);
+  });
+
+  it('caps the playlist and says how many were dropped', () => {
+    const tokens = Array.from({ length: 30 }, (_, i) => `board-${i}`);
+    const got = parseDashParams(`?rotate=${tokens.join(',')}`, vi.fn());
+    expect(got.playlist?.tokens).toHaveLength(24);
+    expect(got.rotateIssues).toEqual([{ kind: 'too-many', dropped: 6 }]);
+  });
+
+  it('is no playlist below two boards: one opens that board, none opens the list, both say so', () => {
+    const one = parseDashParams('?rotate=only-one', vi.fn());
+    expect(one.playlist).toBeUndefined();
+    expect(one.dashboard).toBe('only-one');
+    expect(one.kiosk).toBe(false);
+    expect(one.rotateIssues).toEqual([{ kind: 'too-few', usable: 1 }]);
+    const none = parseDashParams('?rotate=,,', vi.fn());
+    expect(none.playlist).toBeUndefined();
+    expect(none.dashboard).toBeNull();
+    expect(none.rotateIssues).toEqual([{ kind: 'too-few', usable: 0 }]);
+    const bad = parseDashParams('?rotate=%20bad%20token,good', vi.fn());
+    expect(bad.dashboard).toBe('good');
+    expect(bad.rotateIssues).toEqual([{ kind: 'token', value: 'bad token' }, { kind: 'too-few', usable: 1 }]);
+  });
+
+  it('lets the playlist win over dashboard, and says so', () => {
+    const got = parseDashParams('?dashboard=x&rotate=a,b', vi.fn());
+    expect(got.dashboard).toBeNull();
+    expect(got.rotateIssues).toEqual([{ kind: 'dashboard-ignored' }]);
+  });
+
+  it('notes every without rotate, and keeps the rest of the link', () => {
+    const warn = vi.fn();
+    const got = parseDashParams('?dashboard=x&every=30&range=6h', warn);
+    expect(got).toMatchObject({ dashboard: 'x', range: 21600 });
+    expect(got.playlist).toBeUndefined();
+    expect(got.rotateIssues).toEqual([{ kind: 'every-alone' }]);
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the time range, fixed window and theme alongside the playlist', () => {
+    const got = parseDashParams('?rotate=a,b&every=20&theme=dark&range=24h&from=2026-10-14T02:00:00Z&to=2026-10-14T04:00:00Z', vi.fn());
+    expect(got).toMatchObject({ theme: 'dark', range: 86400, playlist: { everySeconds: 20 } });
+    expect(got.absolute).toBeDefined();
+  });
+});

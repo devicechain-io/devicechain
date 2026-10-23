@@ -155,6 +155,8 @@ panel adecuado en el modo adecuado:
 | `paused` | `1` | Abre el panel congelado en el momento en que carga, con la insignia **En pausa** visible. Cualquier otro valor lo abre en vivo. |
 | `from`, `to` | dos horas, cada una en ISO 8601 con zona, como `2026-10-22T02:00:00Z` o `2026-10-22T04:00:00+02:00` | Abre el panel en ese intervalo fijo en lugar de uno en vivo; consulta [Intervalo personalizado](#custom-range). Hacen falta las dos. Una hora sin zona se rechaza, porque «02:00» es un momento distinto en cada lugar. Prevalece sobre `range` y `paused`. |
 | `bind.<slot>` | un token de dispositivo | Abre el panel con ese dispositivo elegido para el slot. Consulta [Enlazar a un panel con un dispositivo elegido](#linking-to-a-device). |
+| `rotate` | de dos a 24 tokens de panel, separados por comas | Recorre esos paneles; consulta [Rotar entre varios paneles](#rotating-boards). Implica `kiosk` y prevalece sobre `dashboard`. |
+| `every` | segundos, de 10 a 3600 | Cuánto tiempo se muestra cada panel de una lista `rotate`. 60 si falta. |
 
 Si un parámetro lleva un valor que el visor no reconoce, se ignora, y los demás parámetros se siguen
 aplicando.
@@ -172,6 +174,41 @@ pero un panel abierto con `paused=1` muestra igualmente su insignia **En pausa**
 conexión, de modo que una pantalla mural congelada lo dice.
 
 <GuideShot id="dash-kiosk" alt="El panel Widget Lab en modo quiosco: sin cabecera, un indicador En vivo en la esquina superior izquierda, un botón de pantalla completa en la esquina superior derecha, y debajo la tarjeta de título y los mismos widgets en vivo." />
+
+## Rotar entre varios paneles {#rotating-boards}
+
+Una pantalla de pared que deba mostrar varios paneles por turnos usa una lista de reproducción:
+
+```text
+/dash/?rotate=<token-a>,<token-b>,<token-c>&every=45
+```
+
+Cada panel se muestra durante `every` segundos, luego toma el relevo el siguiente, y la lista vuelve a
+empezar tras el último. La página queda en modo quiosco. Una barra fina en el borde inferior muestra
+cuánto lleva el panel actual. Junto a ella, una pequeña franja nombra el panel y su lugar en la lista
+(por ejemplo *Panel 2 de 3*) y tiene los botones **Panel anterior**, **Pausar la rotación** y **Panel
+siguiente**; `chrome=0` oculta la franja y conserva la barra.
+
+- El siguiente panel se lee en los últimos diez segundos del actual, de modo que el cambio es a un
+  panel ya cargado. La versión en vivo de cada panel se vuelve a leer en cada pasada: un panel que
+  publique aparece la próxima vez que la lista llegue a él.
+- Usar el panel pausa la rotación. Un clic, una pulsación de tecla, un desplazamiento o un toque
+  detienen la lista, para que nadie sea apartado de un widget que está leyendo, y se reanuda tras 30
+  segundos sin ninguno de ellos. **Pausar la rotación** la mantiene detenida hasta que elijas
+  **Reanudar la rotación**. Una lista en pausa siempre lo indica, incluso con `chrome=0`.
+- Un panel que no se puede abrir (sin publicar, no compartido contigo, eliminado) se omite, y una nota
+  en la página lo nombra junto con el motivo. Los demás paneles siguen reproduciéndose. Si no se puede
+  abrir ninguno, la página lo dice y ofrece **Intentarlo de nuevo**.
+- El resto del enlace se aplica a todos los paneles: el mismo `range`, o la misma ventana fija `from`
+  y `to`, el mismo `theme` y `density`. Un parámetro `bind.<slot>` elige ese dispositivo en los paneles
+  que tienen un slot con ese nombre y se omite en los demás, de modo que un solo enlace puede elegir un
+  dispositivo para varios paneles.
+- Una parte del enlace que la lista no puede usar se ignora, y una nota en la página dice cuál y por
+  qué, de modo que la pantalla de pared nunca reproduce algo distinto sin avisar: un token que no es de
+  panel se omite, un `every` fuera de 10 a 3600 segundos (o que no sea un número entero) vuelve a 60,
+  los paneles por encima de 24 se dejan fuera, y menos de dos paneles utilizables no forman una lista
+  (un solo panel se abre como si se hubiera indicado en `dashboard`). Descarta una nota con su **×**; la
+  lista sigue reproduciéndose.
 
 ## Enlazar a un panel con un dispositivo elegido {#linking-to-a-device}
 

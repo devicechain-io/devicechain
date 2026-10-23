@@ -59,6 +59,8 @@ import { useTranslation } from 'react-i18next';
 import type { Basemap } from '@devicechain/client';
 
 import { ConnectionStatus } from './ConnectionStatus';
+import { LinkNotes } from './LinkNotes';
+import { Playlist } from './Playlist';
 import { SUPPORTED_LOCALES, setUserLocale } from './i18n/config';
 import { loadErrorMessage } from './i18n/loadError';
 import { signInErrorKey } from './i18n/signInError';
@@ -187,22 +189,66 @@ export default function App() {
   if (window.location.pathname === SSO_COMPLETE_PATH) return <SsoComplete />;
   if (sessionEnded) return <SessionEnded onSignIn={() => setSessionEnded(false)} />;
   if (!token) return <SignIn onAuthed={onAuthed} signOutFailed={signOutFailed} />; // Step 1
+  // What the link's rotate / every set aside, said on the page: a wall display has no console to
+  // warn in. Shown over whichever step the link opened.
+  const linkNotes = params.rotateIssues ? <LinkNotes issues={params.rotateIssues} /> : null;
+  // A playlist (rotate=a,b): the boards take turns, each read by token like a deep link, and the
+  // viewer's other settings apply to every one of them.
+  if (params.playlist) {
+    const { tokens, everySeconds } = params.playlist;
+    const authorities = decodeToken(token)?.authorities ?? [];
+    return (
+      <>
+        {linkNotes}
+        <Playlist
+          tokens={tokens}
+          everySeconds={everySeconds}
+          load={(boardToken) => loadPublishedDashboard(boardToken, '')}
+          search={window.location.search}
+          chrome={params.kioskChrome}
+          renderBoard={({ loaded: board, search }) => (
+            <View
+              loaded={board}
+              authorities={authorities}
+              onChange={() => {}}
+              onSignOut={signOut}
+              kiosk
+              kioskChrome={params.kioskChrome}
+              density={params.density}
+              range={params.range}
+              paused={params.paused}
+              absolute={params.absolute}
+              rejectedWindow={params.rejected}
+              linkSearch={search}
+              theme={theme}
+              onToggleTheme={toggleTheme}
+            />
+          )}
+        />
+      </>
+    ); // Step 2 and 3, taking turns
+  }
   if (!loaded) {
     return (
-      <Load
-        onRender={setLoaded}
-        onSignOut={signOut}
-        autoLoadToken={deepLinkUsed.current ? null : params.dashboard}
-        onAutoLoadSettled={() => {
-          deepLinkUsed.current = true;
-        }}
-      />
+      <>
+        {linkNotes}
+        <Load
+          onRender={setLoaded}
+          onSignOut={signOut}
+          autoLoadToken={deepLinkUsed.current ? null : params.dashboard}
+          onAutoLoadSettled={() => {
+            deepLinkUsed.current = true;
+          }}
+        />
+      </>
     ); // Step 2
   }
   // The viewer's authorities gate action controls (alarm ack/clear); the server enforces
   // them regardless. Decoded from the access token this reference viewer holds.
   const authorities = decodeToken(token)?.authorities ?? [];
   return (
+    <>
+    {linkNotes}
     <View
       loaded={loaded}
       authorities={authorities}
@@ -224,6 +270,7 @@ export default function App() {
       theme={theme}
       onToggleTheme={toggleTheme}
     />
+    </>
   ); // Step 3
 }
 
@@ -847,6 +894,7 @@ export function View({
   paused = false,
   absolute,
   rejectedWindow,
+  linkSearch,
   theme,
   onToggleTheme,
 }: {
@@ -875,6 +923,12 @@ export function View({
   absolute?: AbsoluteRange;
   /** The ?from=&to= values that were unusable; the header says the link was ignored. */
   rejectedWindow?: AbsoluteLinkRejection;
+  /**
+   * The link this board is opened with, when it is not the page's own address (a playlist hands
+   * each board the link filtered to the slots that board has). The address is then left alone: a
+   * pick is kept in this board's state and never written back to the URL.
+   */
+  linkSearch?: string;
   theme?: DashTheme;
   onToggleTheme?: () => void;
 }) {
@@ -895,22 +949,27 @@ export function View({
   // The view-driven selection overlay (an alarm-originator drill, a marker or selector pick),
   // kept in step with the address: `?bind.<slot>=<device>` opens the board with that device bound
   // (checked against the viewer's own scope), and a pick rewrites the address in place.
-  const [search, setSearch] = useState(() => window.location.search);
+  const [search, setSearch] = useState(() => linkSearch ?? window.location.search);
   useEffect(() => {
+    if (linkSearch !== undefined) return undefined;
     const onPop = () => setSearch(window.location.search);
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
-  }, []);
+  }, [linkSearch]);
   const address = useMemo(
     () => ({
       search,
       replaceSearch: (next: string) => {
+        if (linkSearch !== undefined) {
+          setSearch(next ? `?${next}` : '');
+          return;
+        }
         const { pathname, hash } = window.location;
         window.history.replaceState(window.history.state, '', `${pathname}${next ? `?${next}` : ''}${hash}`);
         setSearch(window.location.search);
       },
     }),
-    [search],
+    [search, linkSearch],
   );
   const bound = useBoundDevices({ definition, resolver, address });
   const { selection, select } = bound;

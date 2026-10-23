@@ -221,7 +221,25 @@ The address can carry parameters, so a bookmark or a wall display opens the righ
 | `density` | `compact`, `comfortable`, `wall` | Overrides the density the board was authored with. It scales every text and spacing size, the gutters and the smallest cell a column may shrink to, so `wall` draws larger and, on a narrow screen, with fewer columns, and `compact` draws smaller. The board's own setting applies when the parameter is absent, and the parameter is never saved to the board or remembered. |
 | `range` | `15m`, `1h`, `6h`, `24h`, `7d` | Opens the board at that time range instead of the board's own default. The viewer can still change it. |
 | `paused` | `1` | Opens the board paused at the moment it loads. Any other value opens it live. |
+| `rotate` | `<token>,<token>,...` | A playlist: two to 24 dashboard tokens, shown one after another. It implies `kiosk`, and wins over `dashboard`. |
+| `every` | seconds, 10 to 3600 | How long each board of a `rotate` playlist shows. 60 when absent. |
 
 A parameter with an unrecognized value is ignored and a warning is written to the browser console; the board still loads with that setting at its default.
+
+#### Playlists {#playlists}
+
+A wall display that should cycle through several boards uses `rotate`:
+
+```text
+/dash/?rotate=<token-a>,<token-b>,<token-c>&every=45&density=wall
+```
+
+Each board shows for `every` seconds, then the next one takes over, and the playlist starts again after the last. A thin bar along the bottom edge shows how far through the current board it is, and a small control strip names the board, its place in the playlist and offers previous, pause and next buttons. `chrome=0` hides the strip and keeps the bar.
+
+- **The next board is read before its turn**, in the last ten seconds of the current one (at once for a short interval), so the switch is to a board that is already here. A board's live version is read again on every pass, so a dashboard you publish shows up the next time the playlist reaches it.
+- **Using the board pauses the rotation.** A click, a key press, a scroll or a touch holds the playlist so nobody is carried off a widget they are reading, and it resumes after 30 seconds without any of those. The pause button holds it until you press it again. A paused playlist always says so, even with `chrome=0`.
+- **A board that cannot be opened is skipped**, with a note on the page naming it and the reason, and the rest keep playing. If no board can be opened the page says so and offers to try again.
+- **The rest of the link applies to every board.** The same `range`, or the same fixed `from` and `to` window, `theme` and `density` are used for each one. A `bind.<slot>` parameter binds that device on the boards that have a slot of that name and is left off the others, so one link can bind a device for several boards.
+- **Unusable parts are ignored, with a note on the page.** A token that is not a dashboard token is skipped, an `every` outside 10 to 3600 seconds or that is not a whole number falls back to 60, more than 24 boards are cut off, and fewer than two usable boards is no playlist (one board opens as if it had been named in `dashboard`). A note can be dismissed; the wall display keeps playing.
 
 See also the [Architecture](./architecture.md) overview and the [GraphQL API reference](../reference/graphql-api.md).
