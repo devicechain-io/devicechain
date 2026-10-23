@@ -35,14 +35,39 @@ func (f Finding) String() string { return fmt.Sprintf("%s: %s: %s", f.Schema, f.
 // move without telling it where to.
 func LintDeprecations(schemas []Parsed) []Finding {
 	var out []Finding
+	walkDeprecated(schemas, func(schema, coord string, d *ast.Directive) {
+		if why := reasonProblem(d); why != "" {
+			out = append(out, Finding{schema, coord, why})
+		}
+	})
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Schema != out[j].Schema {
+			return out[i].Schema < out[j].Schema
+		}
+		return out[i].Coord < out[j].Coord
+	})
+	return out
+}
+
+// Deprecated lists every element marked `@deprecated`, one `schema coordinate` per line, sorted.
+// The deprecation-window check (hack/check-deprecation-window.sh) reads it for a release's tree
+// to learn the first release that carried a deprecation.
+func Deprecated(schemas []Parsed) []string {
+	var out []string
+	walkDeprecated(schemas, func(schema, coord string, _ *ast.Directive) {
+		out = append(out, schema+" "+coord)
+	})
+	sort.Strings(out)
+	return out
+}
+
+// walkDeprecated calls fn for every deprecatable element that carries `@deprecated`: object and
+// interface fields, their arguments, input fields and enum values.
+func walkDeprecated(schemas []Parsed, fn func(schema, coord string, d *ast.Directive)) {
 	for _, p := range schemas {
 		check := func(coord string, dl ast.DirectiveList) {
-			d := dl.Get("deprecated")
-			if d == nil {
-				return
-			}
-			if why := reasonProblem(d); why != "" {
-				out = append(out, Finding{p.Name, coord, why})
+			if d := dl.Get("deprecated"); d != nil {
+				fn(p.Name, coord, d)
 			}
 		}
 		inputs := func(owner, open, closing string, l ast.ArgumentsDefinition) {
@@ -74,13 +99,6 @@ func LintDeprecations(schemas []Parsed) []Finding {
 			}
 		}
 	}
-	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].Schema != out[j].Schema {
-			return out[i].Schema < out[j].Schema
-		}
-		return out[i].Coord < out[j].Coord
-	})
-	return out
 }
 
 func reasonProblem(d *ast.Directive) string {

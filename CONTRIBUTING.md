@@ -282,6 +282,48 @@ element, where `$` is the document, `$.a` a property, `$.a[]` an array's items a
 `{instance}`, `{tenant}` and `{device}` as placeholders. The command tree and the topics are
 read by building the release's own code, so neither has a file to keep in step by hand.
 
+## Changing the C# SDK or the npm packages
+
+| Surface | Run | Breaking | Declare in |
+| --- | --- | --- | --- |
+| **C# SDK** (`DeviceChain.Sdk`) | `hack/check-csharp-api.sh` | a public symbol the last release shipped that is gone or changed. The build fails on any public symbol not listed in `PublicAPI.Shipped.txt` (the last release, frozen) or `PublicAPI.Unshipped.txt` (this cycle) | a `*REMOVED*` line in [`PublicAPI.Unshipped.txt`](sdks/csharp/src/DeviceChain.Sdk/PublicAPI.Unshipped.txt) |
+| **npm packages** (`client`, `brand`, `dashboards`, `widgets`, `widget-sdk`) | `hack/check-npm-api.sh` | an export, a `package.json` `exports` subpath, or a line of a declaration (a member, an overload, a signature) the last release had. A member added without `?` is reported and does not fail | [`frontend/api/breaks.txt`](frontend/api/breaks.txt) |
+
+**C#.** An addition is one line in `PublicAPI.Unshipped.txt`; the analyzer's code fix writes it
+(`dotnet format analyzers DeviceChain.Sdk.csproj --diagnostics RS0016`, run from
+`sdks/csharp/src/DeviceChain.Sdk`). A removal or a change is the old line, copied from
+`PublicAPI.Shipped.txt` and prefixed `*REMOVED*`, plus the new signature as an ordinary line for a
+change. The check also requires `PublicAPI.Shipped.txt` to be exactly the API the baseline release
+shipped, so editing it by hand to hide a removal fails. Nothing is edited before a release is
+tagged; in the commit after it, `hack/check-csharp-api.sh --promote` moves every Unshipped line into
+Shipped and empties Unshipped (until then the check accepts the pre-release Shipped file and says
+so).
+
+**npm.** `frontend/api/*.api.md` is the public API of each package as the compiler prints it, one
+file per package, committed. An intended change to the API rewrites it with
+`hack/check-npm-api.sh --update` (build the packages first); the diff of that file is the review. The
+same check compares the reports with the baseline release's, rebuilt from that release's sources, and
+fails on a removal unless declared in `frontend/api/breaks.txt` (`<baseline-tag> <package> <id> <kind>
+<reason>`, where the id is as the report names it: `.:Name` for an export, `exports:./subpath` for a
+manifest subpath). It needs `npm ci` in `frontend/` and in `hack/api-report/`, which carries its own
+TypeScript because the compiler the frontend pins has no API to read declarations with.
+
+## Releasing a declared break, and removing a deprecated element
+
+The pull request cannot know which version ships it, so two rules apply at release time.
+
+- **The release must say so.** `hack/check-release-highlights.sh <tag>` (the release workflow's first
+  job) lists every declaration still live against the nearest stable tag before the release
+  (`hack/api-declared-breaks.sh`, every surface above). Before 1.0.0 a live declaration needs
+  `"breaking": true` in `.github/release-highlights.json`. From 1.0.0 it is refused unless the release
+  is a new major.
+- **The deprecation window.** An element may be removed only if it was marked deprecated at least two
+  minor releases before the baseline. `hack/check-deprecation-window.sh` finds the first release in
+  which a removed GraphQL field, argument, input field or enum value was deprecated (from the schemas
+  at each tag, not from a field you fill in) and fails a removal that is outside the window. It is
+  report-only while the baseline is below 1.0.0, and enforced from then on. A removal declared on
+  another surface is printed as `window-unchecked`: the same rule applies and a reviewer checks it.
+
 ## Commit & PR conventions
 
 - Use clear, imperative commit subjects; conventional-commit prefixes

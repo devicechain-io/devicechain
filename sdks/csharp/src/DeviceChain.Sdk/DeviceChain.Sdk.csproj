@@ -124,6 +124,12 @@
          of this SDK. 4.3.7 has ZERO transitive dependencies on both our targets, so it stages
          into a Unity project as a single DLL, and carries no reflection, which is what keeps
          the AOT guarantee intact. See Transport/MqttNetConnection.cs. -->
+    <!-- The public-API gate (hack/check-csharp-api.sh): every public symbol must be declared in
+         PublicAPI.Shipped.txt (frozen at the last release) or PublicAPI.Unshipped.txt (this release
+         cycle). A removed or changed member fails the build until it is declared with *REMOVED*.
+         A build-time analyzer only: PrivateAssets keeps it out of the package and out of every
+         project that references this one, the Unity compile check included. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.PublicApiAnalyzers" Version="3.3.4" PrivateAssets="all" />
     <PackageReference Include="MQTTnet" Version="4.3.7.1207" />
   </ItemGroup>
 

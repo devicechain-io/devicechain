@@ -12,6 +12,8 @@
 // a directory holding the release's backend/services (hack/check-graphql-compat.sh
 // extracts it with git archive and passes it here).
 //
+//	-list-deprecated <tree>  print `schema coordinate` for every @deprecated element served by the
+//	          tree (a directory holding backend/services) and exit; used by the deprecation-window check
 //	-v        also list the safe changes
 //	-breaks   read declarations from this file instead of sdlcompat/breaks.txt
 package main
@@ -33,7 +35,18 @@ func main() {
 	baseline := flag.String("baseline", "", "the baseline release tag, e.g. v0.24.0")
 	verbose := flag.Bool("v", false, "also list safe changes")
 	breaks := flag.String("breaks", "", "the declarations file (default <repo-root>/"+breaksFile+"); the wrapper's self-test points it at a scratch file")
+	listDeprecated := flag.String("list-deprecated", "", "print every @deprecated element of this tree and exit")
 	flag.Parse()
+	if *listDeprecated != "" {
+		schemas, err := sdlcompat.Load(filepath.Join(*listDeprecated, "backend", "services"))
+		if err != nil {
+			fail(err)
+		}
+		for _, l := range sdlcompat.Deprecated(schemas) {
+			fmt.Println(l)
+		}
+		return
+	}
 	if *base == "" || *baseline == "" {
 		fail(fmt.Errorf("-base and -baseline are both required"))
 	}

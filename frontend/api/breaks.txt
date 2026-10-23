@@ -1,0 +1,31 @@
+# Intended breaking changes to the public API of the published npm packages, against the
+# baseline release.
+#
+# Checked by hack/check-npm-api.sh (the `api-compat` CI job). A removed export, a removed
+# `exports` subpath, or a removed line of any declaration that is not listed here fails the
+# pull request; the failure prints the exact line to add. One line per change:
+#
+#   <baseline-tag> <package> <id> <kind> <reason>
+#
+#   baseline-tag  the release the change breaks against, as the failure names it (vX.Y.Z)
+#   package       the published name, e.g. @devicechain/client
+#   id            what changed, as the report names it: <subpath>:<Name> for an export
+#                 (`.:GraphQlError`), exports:<subpath> for a manifest subpath,
+#                 css:<subpath>:<--property> and token:<subpath>:<key> for the brand package
+#   kind          export-removed | export-changed
+#   reason        why, and what a consumer uses instead. Required.
+#
+# A line applies only while its baseline-tag IS the baseline. When the next release is
+# tagged, the baseline moves past it and the check reports the line as expired: delete it
+# then. A line for the current baseline that matches no change fails, so remove a
+# declaration when you revert the change it excused.
+#
+# Before v1.0.0 a declared break may ship in any release; say so in that release's
+# highlights (.github/release-highlights.json, `"breaking": true`). From v1.0.0 a covered
+# interface breaks only in a major release. Intended changes also rewrite
+# frontend/api/*.api.md (`hack/check-npm-api.sh --update`); that diff is the review.
+#
+# Example:
+#   v0.24.0 @devicechain/client .:GraphQlError export-removed Renamed to GraphQlRequestError.
+
+v0.24.0 @devicechain/dashboards .:timeRangeFromSearch export-changed Gains an optional `now` parameter and returns TimeRangeLink, a superset of the old { spanSeconds?, paused? } that adds the fixed-window fields; existing callers compile unchanged, and the check cannot tell a widened return type from a narrowed one.

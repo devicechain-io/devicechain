@@ -2838,7 +2838,12 @@ jobs:
   # runs for the dcctl command tree (commands, aliases, flags), the device wire contract
   # (the contract/*.schema.json files) and the topic layout a device is granted; Helm
   # values and the Instance CRDs are reported and never fail. Each surface declares an
-  # intended break in its own breaks.txt under backend/tools/docsgql.
+  # intended break in its own breaks.txt under backend/tools/docsgql. The public C# SDK
+  # (PublicAPI.Shipped/Unshipped.txt, enforced by the build) and the five published npm
+  # packages (committed API reports in frontend/api, compared with the last release) are
+  # covered the same way; the release guard then refuses a release that has a live
+  # declaration unless its highlights say so, and a declared removal must have been
+  # deprecated for two minor releases (enforced from 1.0.0).
   # ---------------------------------------------------------------------------
   api-compat:
     runs-on: ubuntu-latest
@@ -2890,6 +2895,65 @@ jobs:
       # policy. A change prints here and never fails; it belongs in the release highlights.
       - name: Helm values schema and Instance CRD changes (report only)
         run: hack/check-schema-compat.sh reports
+
+      # The C# SDK. The analyzer is the mechanism (a public symbol in neither PublicAPI file
+      # fails the build; a removed one fails it too, until it is declared with *REMOVED*); the
+      # script adds what the analyzer trusts: that PublicAPI.Shipped.txt really IS the API the
+      # last release shipped (rebuilt from that tag's sources the first time, since it predates
+      # the files), and that no declaration is stale. The self-test plants an undeclared type, a
+      # removed member and a hand-edited Shipped file and must see each fail.
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          global-json-file: global.json
+
+      - name: C# API check self-test
+        run: hack/check-csharp-api.sh --self-test
+
+      - name: The C# SDK exposes everything it exposed at the last release
+        run: hack/check-csharp-api.sh
+
+      # The npm packages. api-extractor cannot run against the native TypeScript compiler this
+      # repo pins, so the reports are read from the emitted declarations by a small tool with its
+      # own TypeScript (hack/api-report). The reports are committed (frontend/api): a change
+      # nobody meant fails as drift, and one compared with the last release's own rebuilt
+      # declarations fails unless declared in frontend/api/breaks.txt.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: |
+            frontend/package-lock.json
+            hack/api-report/package-lock.json
+
+      - name: Install the frontend and the API report tool
+        run: |
+          npm ci --prefix frontend
+          npm ci --prefix hack/api-report
+
+      - name: Build the publishable packages
+        run: npm run build:packages --prefix frontend
+
+      - name: npm API tool unit tests
+        run: node --test hack/api-report/compat.test.mjs
+
+      - name: npm API check self-test
+        run: hack/check-npm-api.sh --self-test
+
+      - name: The npm packages export everything they exported at the last release
+        run: hack/check-npm-api.sh
+
+      # The release half and the deprecation window. Every declaration above is listed by one
+      # script; the release guard refuses a release that has a live one unless its highlights
+      # say it breaks (and, from 1.0.0, unless it is a new major), and a removal is allowed only
+      # after the element has been deprecated for two minor releases.
+      - name: Declared-breaks listing self-test
+        run: hack/api-declared-breaks.sh --self-test
+
+      - name: Deprecation window self-test
+        run: hack/check-deprecation-window.sh --self-test
+
+      - name: Declared removals are inside the deprecation window
+        run: hack/check-deprecation-window.sh
 
   # ---------------------------------------------------------------------------
   # The single required check.
