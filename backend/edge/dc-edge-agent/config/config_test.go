@@ -6,6 +6,8 @@ package config
 import (
 	"strings"
 	"testing"
+
+	"github.com/devicechain-io/dc-microservice/core"
 )
 
 // validConfig is a minimal document that passes Validate after ApplyDefaults. Each
@@ -166,5 +168,26 @@ func TestPortDefaultIsValid(t *testing.T) {
 	c := validConfig() // ListenPort left 0
 	if err := loaded(c); err != nil {
 		t.Fatalf("defaulted port should be valid: %v", err)
+	}
+}
+
+// A config left over from the direct uplink still carries agentId. It must stop the agent,
+// and the error must name what replaced it: an operator who upgraded did nothing wrong, and a
+// bare "unknown field" does not tell them where the setting went. The control is the same
+// document without agentId, which loads, so the refusal is about the key and nothing else.
+func TestLeftoverAgentIdIsRefusedNamingItsReplacement(t *testing.T) {
+	const rest = `"instanceId":"prod1","local":{"storeDir":"/var/lib/dc-edge-agent"},` +
+		`"uplink":{"brokerUrl":"ssl://cloud.example.com:8883","tenant":"acme","gatewayToken":"site42-gw",` +
+		`"username":"acme:cred-1","passwordEnv":"DC_EDGE_UPLINK_PASSWORD"}`
+	var ok Configuration
+	if err := core.LoadConfiguration([]byte("{"+rest+"}"), &ok); err != nil {
+		t.Fatalf("the control document must load: %v", err)
+	}
+	for _, key := range []string{"agentId", "AgentID"} {
+		var cfg Configuration
+		err := core.LoadConfiguration([]byte(`{"`+key+`":"site42",`+rest+"}"), &cfg)
+		if err == nil || !strings.Contains(err.Error(), "uplink.gatewayToken") {
+			t.Errorf("leftover %s: err = %v, want a refusal naming uplink.gatewayToken", key, err)
+		}
 	}
 }

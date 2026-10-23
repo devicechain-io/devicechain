@@ -239,11 +239,14 @@ the uplink.
   `uplink_connected 1` (it will not, if the broker has not been upgraded to grant the notices
   topic).
 - **Moving a site from the direct-device uplink.** The old uplink mode is gone: `agentId` is
-  no longer a key (the config is fail-closed, so a leftover `agentId` stops the agent at
-  start) and `uplink.tenant`, `uplink.gatewayToken` and a `{tenant}:{credentialId}` username
+  no longer a key (a leftover `agentId` stops the agent at start, with an error naming
+  `uplink.gatewayToken` as its replacement) and `uplink.tenant`, `uplink.gatewayToken` and a `{tenant}:{credentialId}` username
   are required. Create the gateway device and assign the site's devices to it first. Events
-  spooled under the old mode are forwarded in the new namespace, so a device must be
-  assigned before the agent drains its backlog, or those events are refused.
+  spooled under the old mode are forwarded in the new namespace (the spool and its durable
+  are narrowed to `uplink.tenant` in place, keeping the backlog), so a device must be
+  assigned before the agent drains its backlog, or those events are refused. Spooled events
+  of any other tenant are not forwarded; they stay in the spool until its ring buffer
+  evicts them, and until then they hold `spool_oldest_age_seconds` up.
 - **Do not downgrade to a pre-E3 (E2) binary over a bounded store** — the older binary sends
   `MaxBytes=0` and silently strips the spool's size bound.
 - **Version:** `dc-edge-agent version` reports the build (the container image tag is the

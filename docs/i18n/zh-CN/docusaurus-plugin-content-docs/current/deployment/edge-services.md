@@ -332,21 +332,21 @@ Sparkplug 按租户接入上限计量 DATA 消息中的读数，并丢弃超出�
 
 **代理在上行方向做什么：**
 
-- 它使用网关设备的普通 MQTT 客户端 id 连接，因此代理像对待任何设备一样断言网关自身的在线状态。没有按代理区分的客户端 id：两个代理使用同一台网关设备会互相抢占会话。
-- 它只用子设备令牌构造每个上行主题，因此无法在自己的命名空间之外发布。代理无法拒绝超出授权的发布（MQTT 3.1.1 没有这种机制），而是确认后丢弃。无法构造这样的主题，正是消除这一故障的办法。
+- 它使用网关设备的普通 MQTT 客户端 id 连接，因此消息代理像对待任何设备一样断言网关自身的在线状态。没有按代理区分的客户端 id：两个代理使用同一台网关设备会互相抢占会话。
+- 它只用子设备令牌构造每个上行主题，因此无法在自己的命名空间之外发布。消息代理无法拒绝超出授权的发布（MQTT 3.1.1 没有这种机制），而是确认后丢弃。无法构造这样的主题，正是消除这一故障的办法。
 - 它只捕获所配置租户的设备事件。指向其他租户的发布会计入 `tenant_mismatched_total`，且从不缓冲。
-- 转发前，它会从事件正文中移除 `credentialType`、`credentialId` 和 `credentialSecret`，并计入 `body_credentials_stripped_total`。在经代理认证的主题上，平台会拒绝携带其中任何一项的事件。请修改设备，使其不再发送。
+- 转发前，它会从事件正文中移除 `credentialType`、`credentialId` 和 `credentialSecret`，并计入 `body_credentials_stripped_total`。在经消息代理认证的主题上，平台会拒绝携带其中任何一项的事件。请修改设备，使其不再发送。
 - 它最多保持 **64 个发布在途**，并按各自的确认逐个确认缓冲事件。如果每发一条都等待确认再发下一条，每次往返只能发一个事件，50 ms 时约每秒 20 个，繁忙的现场在中断后永远追不上。重放的事件保留首次存储的时间，云端仍会合并重复项。
-- 每次连接时，它都会订阅网关的通知主题。如果代理拒绝该订阅，上行保持断开，日志会说明原因。
+- 每次连接时，它都会订阅网关的通知主题。如果消息代理拒绝该订阅，上行保持断开，日志会说明原因。
 
-**事件被拒绝时。** 对于未分配给该网关或不存在的设备的事件，平台会拒绝。它把事件连同载荷记录到 `failed-events` 流，原因为 `NotGatewayChild`，计入 `resolve_not_gateway_child_total`，并向网关发送一条*通知*。代理已经确认了该发布，因此没有别的途径能告诉代理。收到通知时，代理会记录一条指明设备的警告（每台设备每 30 秒最多一条），计入 `refused_total{reason="not_gateway_child"}`，并把事件写入存储目录中的 `refused-events.jsonl`。该文件仅对代理的用户可访问，每行一个 JSON 对象，达到 16 MiB 时轮转一次。
+**事件被拒绝时。** 对于未分配给该网关或不存在的设备的事件，平台会拒绝。它把事件连同载荷记录到 `failed-events` 流，原因为 `NotGatewayChild`，计入 `resolve_not_gateway_child_total`，并向网关发送一条*通知*。消息代理已经确认了该发布，因此没有别的途径能告诉代理。收到通知时，代理会记录一条指明设备的警告（每台设备每 30 秒最多一条），计入 `refused_total{reason="not_gateway_child"}`，并把事件写入存储目录中的 `refused-events.jsonl`。该文件仅对代理的用户可访问，每行一个 JSON 对象，达到 16 MiB 时轮转一次。
 
-有三点限制。通知是尽力而为的：发送时离线的网关收不到它，因此可以依赖的是平台的记录和计数器。代理只保留所转发内容的一份有限副本（约 16 MiB）用来匹配通知，因此副本被淘汰后才到达的通知会计入 `refused_unmatched_total` 并记录日志，但不会保留。该文件保存的是转发时的载荷，凭据已被移除。修正分配后恢复被拒绝的事件需要手动重放。
+有三点限制。通知是尽力而为的：发送时离线的网关收不到它，因此可以依赖的是平台的记录和计数器。代理只保留所转发内容的一份有限副本（最近 8192 个事件，且最多 16 MiB）用来匹配通知，因此副本被淘汰后才到达的通知会计入 `refused_unmatched_total` 并记录日志，但不会保留。该文件保存的是转发时的载荷，凭据已被移除。修正分配后恢复被拒绝的事件需要手动重放。
 
 代理还会在不发送的情况下拒绝平台只可能拒绝的事件：本地设备使用了网关自己的令牌（`reason="gateway_self"`），或使用了平台无法存储的令牌（`reason="invalid_device_token"`）。它们被写入同一个文件。
 
 :::warning 在把代理切换到网关上行之前，先升级平台
-先完成平台升级：每个 `event-sources` 和 `device-management` 副本，以及代理的授权。开启 `infrastructure.nats.mqttFailClosed` 时，较旧的 `event-sources` 会确认无法归属的网关消息并丢弃它们，于是代理看到成功，而实际上什么都没有存储。代理尚未升级的代理无法订阅其通知，也不会报告上行已连接（`uplink_connected` 保持为 0）。
+先完成平台升级：每个 `event-sources` 和 `device-management` 副本，以及消息代理的授权。开启 `infrastructure.nats.mqttFailClosed` 时，较旧的 `event-sources` 会确认无法归属的网关消息并丢弃它们，于是代理看到成功，而实际上什么都没有存储。消息代理尚未升级的代理无法订阅其通知，也不会报告上行已连接（`uplink_connected` 保持为 0）。
 :::
 
 **网关的可信范围。** 网关代表分配给它的设备发言。被攻陷的网关只能伪造分配给它的设备的事件，并且只在它被停用或其凭据被吊销之前有效。它所称事件来自*哪个本地客户端*，其可信度只取决于现场本地认证的强度。
@@ -490,7 +490,7 @@ Chart 为 sparkplug-ingest 和 lwm2m-ingest 附带七条告警规则，见[随�
 | `malformed_total` | 无法转发而被丢弃的事件，避免阻塞后续队列。 |
 | `tenant_mismatched_total` | 指向 `uplink.tenant` 之外租户的设备发布。它们不会缓冲或转发。 |
 | `body_credentials_stripped_total` | 转发前从事件正文中移除的凭据成员数。设备应停止发送它们。 |
-| `refused_total{reason}` | **为该网关被拒绝的事件。** `not_gateway_child`：平台因事件所属设备未分配给该网关或不存在而拒绝它。`gateway_self` 和 `invalid_device_token`：代理不愿发送。任何增长都需要关注；参见[网关身份](#gateway-identity)。 |
+| `refused_total{reason}` | **为该网关被拒绝的事件。** `not_gateway_child`：平台因事件所属设备未分配给该网关或不存在而拒绝它。`gateway_self` 和 `invalid_device_token`：代理不愿发送。`other`：此版本代理不认识的原因。任何增长都需要关注；参见[网关身份](#gateway-identity)。 |
 | `refused_kept_total` / `refused_unmatched_total` | 写入 `refused-events.jsonl` 的被拒绝事件数 / 其事件已不在本机保留的拒绝数（平台的 `failed-events` 记录中有它）。 |
 | `uplink_inflight` | 等待确认的发布数，最多 64。积压排空期间保持在 64 是正常的。 |
 | `local_auth_enabled` | 0 表示现场 MQTT 监听不要求凭据。 |

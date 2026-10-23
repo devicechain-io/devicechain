@@ -178,6 +178,17 @@ func (c *Configuration) ApplyDefaults() {
 }
 
 // Validate enforces the semantic constraints, failing the load closed.
+// RenamedConfigKeys names the keys an earlier release accepted whose role another key now
+// plays, so a config left over from that release is refused with the replacement in the error
+// rather than as a bare unknown field. agentId made the old direct uplink's client id unique
+// per box; the gateway identity replaced that mode, and each box is now its own gateway
+// device, named by uplink.gatewayToken (with uplink.tenant and a "{tenant}:{credentialId}"
+// username beside it). The old key is refused, never stripped: the agent cannot run on the
+// old identity, so starting without it would only move the failure to CONNECT.
+func (c *Configuration) RenamedConfigKeys() map[string]string {
+	return map[string]string{"agentId": "uplink.gatewayToken"}
+}
+
 func (c *Configuration) Validate() error {
 	if c.InstanceId == "" {
 		return fmt.Errorf("instanceId is required")

@@ -19,6 +19,7 @@ import (
 	dctest "github.com/devicechain-io/dc-microservice/test"
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	natsserver "github.com/nats-io/nats-server/v2/server"
+	"github.com/nats-io/nats.go"
 
 	"github.com/devicechain-io/dc-edge-agent/config"
 	"github.com/devicechain-io/dc-microservice/messaging"
@@ -469,14 +470,11 @@ func TestDrainKeepsAWindowInFlightAndNeverMoreThan64(t *testing.T) {
 	waitUntil(t, 15*time.Second, a.uplink.Connected)
 
 	dev := mqttConnect(t, fmt.Sprintf("127.0.0.1:%d", agentPort), "dev-window")
-	var toks []interface{ Wait() bool }
+	q := &localQueue{t: t, dev: dev}
 	for i := 0; i < events; i++ {
-		body := fmt.Sprintf(`{"altId":"w-%d","occurredTime":"2026-07-22T10:00:00Z","values":{"i":%d}}`, i, i)
-		toks = append(toks, dev.Publish("test/tenant1/devices/dev1/events", 1, false, []byte(body)))
+		q.publish("test/tenant1/devices/dev1/events", fmt.Sprintf(`{"altId":"w-%d","occurredTime":"2026-07-22T10:00:00Z","values":{"i":%d}}`, i, i))
 	}
-	for _, tk := range toks {
-		tk.Wait()
-	}
+	q.flush()
 	// The spool holds everything (the first window of it is parked at the gate): release it.
 	waitUntil(t, 60*time.Second, func() bool { return a.spoolDepth() == events })
 	start := time.Now()
@@ -491,8 +489,10 @@ func TestDrainKeepsAWindowInFlightAndNeverMoreThan64(t *testing.T) {
 	if peak.Load() < 8 {
 		t.Errorf("peak in flight = %d: the drain is not windowed", peak.Load())
 	}
-	if peak.Load() > uplinkWindow {
-		t.Errorf("peak in flight = %d, over the window of %d", peak.Load(), uplinkWindow)
+	// 64 as a literal, not uplinkWindow: the window is a documented number (the README, the
+	// metric's help text), so a change to the constant must fail here rather than be agreed with.
+	if peak.Load() > 64 {
+		t.Errorf("peak in flight = %d, over the documented window of 64", peak.Load())
 	}
 	waitUntil(t, 10*time.Second, func() bool { return a.spoolDepth() == 0 })
 	mu.Lock()
@@ -545,5 +545,100 @@ func TestUplinkNotConnectedWhenNoticesSubscriptionIsRefused(t *testing.T) {
 	waitUntil(t, 20*time.Second, func() bool { return strings.Contains(logs.String(), "subscribe to gateway notices") })
 	if a.uplink.Connected() {
 		t.Error("the uplink reports connected without a notices subscription")
+	}
+}
+
+// AN UPGRADED BOX. A store written by the build before the gateway uplink captured every
+// tenant of the instance ({instance}.*.devices.*.events) on both the stream and the durable
+// forwarder. The new build narrows both to the configured tenant on its first boot over that
+// store, and the backlog the old build spooled is forwarded in the gateway's namespace rather
+// than stranded: the durable keeps its delivery bookkeeping, so nothing is lost and nothing
+// already forwarded is sent again. Another tenant's spooled event is not forwarded (the cloud
+// could only refuse it). The control is a fresh store, which is the first boot below.
+func TestUpgradedStoreWithTheWideFilterDrainsItsBacklog(t *testing.T) {
+	storeDir := dctest.JetStreamStoreDir(t)
+	cloudPort := startCloudBroker(t)
+	cloudAddr := fmt.Sprintf("127.0.0.1:%d", cloudPort)
+	cfg := config.Configuration{
+		InstanceId: "test",
+		Local:      config.LocalConfiguration{ListenHost: "127.0.0.1", ListenPort: freePort(t), StoreDir: storeDir},
+		Uplink:     gatewayUplinkConfig(cloudAddr),
+	}
+
+	// Boot once so the store carries this install's identity files, then stop.
+	first := newAgent(t, cfg, nil)
+	stop := runReady(t, first)
+	waitUntil(t, 15*time.Second, first.uplink.Connected)
+	stop()
+
+	// Rewrite the store into the OLD build's shape: the wide subject on the stream and the
+	// durable, and a backlog for this tenant and another one.
+	const wide = "test.*.devices.*.events"
+	old := newAgent(t, cfg, nil)
+	srv, err := old.newServer(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nc, err := nats.Connect("", nats.InProcessServer(srv))
+	if err != nil {
+		t.Fatal(err)
+	}
+	js, err := nc.JetStream()
+	if err != nil {
+		t.Fatal(err)
+	}
+	si, err := js.StreamInfo(captureStream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scfg := si.Config
+	scfg.Subjects = []string{wide}
+	if _, err := js.UpdateStream(&scfg); err != nil {
+		t.Fatalf("widen stream: %v", err)
+	}
+	ci, err := js.ConsumerInfo(captureStream, forwarderDurable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ccfg := ci.Config
+	ccfg.FilterSubject = wide
+	if _, err := js.UpdateConsumer(captureStream, &ccfg); err != nil {
+		t.Fatalf("widen durable: %v", err)
+	}
+	for _, s := range []string{"test.tenant1.devices.dev1.events", "test.tenant2.devices.dev9.events"} {
+		if _, err := js.Publish(s, []byte(`{"altId":"`+s+`","occurredTime":"2026-07-22T10:00:00Z","values":{"v":1}}`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	nc.Close()
+	srv.Shutdown()
+	srv.WaitForShutdown()
+
+	got := make(chan mqtt.Message, 4)
+	cloudSubscribe(t, cloudAddr, "cloud-sub-upgrade", got)
+
+	upgraded := newAgent(t, cfg, nil)
+	t.Cleanup(runReady(t, upgraded))
+
+	select {
+	case m := <-got:
+		if want := "test/tenant1/gateways/gw1/devices/dev1/events"; m.Topic() != want {
+			t.Errorf("backlog forwarded on %q, want %q", m.Topic(), want)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("the old build's backlog was never forwarded after the upgrade")
+	}
+	select {
+	case m := <-got:
+		t.Errorf("forwarded a second event %q on %q: another tenant's backlog must not leave the box", m.Payload(), m.Topic())
+	case <-time.After(2 * time.Second):
+	}
+
+	ci, err = upgraded.js.ConsumerInfo(captureStream, forwarderDurable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ci.Config.FilterSubject != upgraded.captureSubject() {
+		t.Errorf("durable filter = %q, want the narrowed %q", ci.Config.FilterSubject, upgraded.captureSubject())
 	}
 }

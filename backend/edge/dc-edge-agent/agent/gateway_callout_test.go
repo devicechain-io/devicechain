@@ -181,7 +181,16 @@ func startStandInPlatform(t *testing.T, svc *nats.Conn, assigned ...string) *sta
 		ev := platformEvent{Gateway: gateway, Child: child, Body: body}
 		// Exactly the resolver's refusals relevant here: not assigned to this gateway, or a
 		// credential in the body of a broker-asserted topic.
-		_, hasCred := body["credentialSecret"]
+		// The platform's decoder folds case and refuses any of the three members, so the
+		// stand-in does too: an exact-key check would pass an agent that stripped only one
+		// spelling. The list is the platform's, written out, not the agent's bodyCredentialKeys:
+		// a stand-in reading the agent's list would agree with any omission in it.
+		hasCred := false
+		for k := range body {
+			for _, c := range []string{"credentialType", "credentialId", "credentialSecret"} {
+				hasCred = hasCred || strings.EqualFold(k, c)
+			}
+		}
 		if !ok || !p.assigned[child] || hasCred {
 			p.refused = append(p.refused, ev)
 			p.mu.Unlock()
@@ -380,15 +389,12 @@ func TestBacklogDrainsFasterThanSerialThroughACalloutBroker(t *testing.T) {
 	proxy.setUp(false)
 	a := calloutAgent2(t, proxy.addr)
 	dev := mqttConnect(t, fmt.Sprintf("127.0.0.1:%d", a.cfg.Local.ListenPort), "site-devices")
-	var toks []mqtt.Token
 	first := time.Now().UTC()
+	q := &localQueue{t: t, dev: dev}
 	for i := 0; i < events; i++ {
-		body := fmt.Sprintf(`{"altId":"d-%d","values":{"i":%d}}`, i, i)
-		toks = append(toks, dev.Publish(fmt.Sprintf("%s/%s/devices/c1/events", calloutInstance, calloutTenant), 1, false, []byte(body)))
+		q.publish(fmt.Sprintf("%s/%s/devices/c1/events", calloutInstance, calloutTenant), fmt.Sprintf(`{"altId":"d-%d","values":{"i":%d}}`, i, i))
 	}
-	for _, tk := range toks {
-		tk.Wait()
-	}
+	q.flush()
 	waitUntil(t, 30*time.Second, func() bool { return a.spoolDepth() == events })
 	time.Sleep(1500 * time.Millisecond) // the stored time must differ visibly from the forward time
 
@@ -548,4 +554,37 @@ func (p *delayProxy) pipe(dst, src net.Conn) {
 	<-done
 	_ = dst.Close()
 	_ = src.Close()
+}
+
+// localQueue publishes a test device's events to the agent's local listener with at most
+// localPublishBatch QoS 1 publishes outstanding. The local broker fsyncs every capture
+// (SyncAlways) and closes an MQTT connection whose pipelined QoS 1 publish waits more than 5 s
+// for its JetStream ack, which hundreds of unpaced publishes on a loaded machine reach: the
+// connection drops, the rest are never stored, and the test waits for a spool depth it can
+// never see.
+type localQueue struct {
+	t       *testing.T
+	dev     mqtt.Client
+	pending []mqtt.Token
+}
+
+const localPublishBatch = 32
+
+func (q *localQueue) publish(topic, body string) {
+	q.t.Helper()
+	q.pending = append(q.pending, q.dev.Publish(topic, 1, false, []byte(body)))
+	if len(q.pending) >= localPublishBatch {
+		q.flush()
+	}
+}
+
+// flush waits for every outstanding publish, failing the test on one that is not acknowledged.
+func (q *localQueue) flush() {
+	q.t.Helper()
+	for _, tk := range q.pending {
+		if !tk.WaitTimeout(30*time.Second) || tk.Error() != nil {
+			q.t.Fatalf("local publish not acknowledged: %v", tk.Error())
+		}
+	}
+	q.pending = nil
 }
