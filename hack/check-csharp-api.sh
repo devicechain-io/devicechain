@@ -223,7 +223,9 @@ CS
   rc=0; analyzer_build "$w" "$log" || rc=$?
   check_rc "a declared addition" 0 "$rc" "$(tail -20 "$log")" || return 1
   rm "$w/ZzSelfTestProbe.cs"
-  printf '#nullable enable\n' >"$w/PublicAPI.Unshipped.txt"
+  # Back to the COMMITTED Unshipped file, not an empty one: this cycle's real additions live
+  # there, and dropping them would fail every case below on RS0016 for symbols nobody planted.
+  cp "$SDK/PublicAPI.Unshipped.txt" "$w/PublicAPI.Unshipped.txt"
 
   # 4. A symbol Shipped promises and the code lacks fails (RS0017): the removed member.
   echo 'DeviceChain.Sdk.ZzSelfTestRemoved' >>"$w/PublicAPI.Shipped.txt"
