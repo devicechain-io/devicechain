@@ -38,9 +38,11 @@
 # 🔴 NOT YET PROMOTED IS NOT RED. A release tag cannot turn main red. Between the tag and the
 # promote commit the working Shipped.txt is still the PREVIOUS release's, which equals the
 # tag's own Shipped.txt; that state is accepted and printed as a note. `--promote` is the
-# release-time step (run it in the commit after a release is tagged, or in the release-prep
-# commit when the highlights already say what breaks): it moves every Unshipped line into
-# Shipped, dropping the `*REMOVED*` targets, and empties Unshipped.
+# release-time step, run in the commit AFTER a release is tagged and never before it: until the
+# tag exists the baseline is still the previous release, and a promoted Shipped.txt carries this
+# cycle's additions, which that baseline did not ship (check 1 below fails on exactly that). It
+# moves every Unshipped line into Shipped, dropping the `*REMOVED*` targets, and empties
+# Unshipped.
 #
 # Exit 1: a break, a stale or invalid declaration, or a Shipped.txt that is not the baseline's.
 # Anything that stops the comparison happening (no tag, no dotnet, a build that fails for a

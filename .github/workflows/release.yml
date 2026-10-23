@@ -1316,6 +1316,11 @@ jobs:
       contents: read  # gh release view; the website push uses its own PAT
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # 🔴 Full history, as in `guard`: build-release-manifest.sh runs the same highlights
+          # guard, which finds the release BEFORE this one to list the declared breaks. A shallow
+          # clone has no earlier tag, so the guard refuses - here, AFTER the Release is published.
+          fetch-depth: 0
 
       - name: Build the release manifest
         env:
