@@ -331,15 +331,13 @@ func checkEpoch(tenant string, epoch time.Time) error {
 // commits can only see writes that were already in flight.
 //
 // epoch is the purge's, as given to Sweep: it locates the rows the sweep retained.
-func Residue(ctx context.Context, db *gorm.DB, plan *Plan, tenant string, epoch time.Time) (Result, error) {
+//
+// The statements stay in this function rather than a helper it times: the raw-SQL allow-list
+// (backend/tools/rdbguard) reviews them under this name.
+func Residue(ctx context.Context, db *gorm.DB, plan *Plan, tenant string, epoch time.Time) (res Result, err error) {
 	started := time.Now()
-	res, err := residue(ctx, db, plan, tenant, epoch)
-	res.Elapsed = time.Since(started)
-	return res, err
-}
-
-func residue(ctx context.Context, db *gorm.DB, plan *Plan, tenant string, epoch time.Time) (Result, error) {
-	res := Result{Tenant: tenant, Deferred: plan.OfClass(ClassDeferred)}
+	defer func() { res.Elapsed = time.Since(started) }()
+	res = Result{Tenant: tenant, Deferred: plan.OfClass(ClassDeferred)}
 	if err := checkSweepable(plan, tenant); err != nil {
 		return res, err
 	}
