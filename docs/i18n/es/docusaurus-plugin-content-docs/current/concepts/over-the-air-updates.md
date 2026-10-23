@@ -13,8 +13,8 @@ artefacto a un dispositivo, envía al dispositivo lo que necesita para obtener l
 **Disponible hoy:** el catálogo de artefactos con una subida en streaming verificada, la asignación
 a un dispositivo cada vez, [despliegues](#rollouts) que asignan un artefacto a un grupo de dispositivos,
 un número limitado de dispositivos a la vez, con pausa, reanudación, aborto y umbral de fallos, una descarga reanudable mediante una concesión de corta duración y el
-seguimiento de cada intento con plazos. La consola tiene pantallas para los artefactos y los
-firmantes, y una pestaña Actualizaciones en cada dispositivo para asignar una actualización y
+seguimiento de cada intento con plazos. La consola tiene pantallas para los artefactos, los
+firmantes y los despliegues, y una pestaña Actualizaciones en cada dispositivo para asignar una actualización y
 seguirla; consulta [Actualizaciones](../user-guide/updates.md) en la guía de usuario.
 
 **Todavía no:** los despliegues no tienen oleadas, promoción canario, programaciones ni ventanas de

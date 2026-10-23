@@ -66,6 +66,10 @@ export default function RolloutDetailPage() {
   const query = useQuery(() => getRollout(token), [token, reloadKey]);
   // The sticky display value may be another rollout's while this one loads: never show it here.
   const data = query.data && query.data.token === token ? query.data : null;
+  // The controls act on the rollout's state, so they are live only while the answer on screen is
+  // the settled answer for this rollout: not while a re-read after an action (or the refresh of a
+  // running rollout) is in flight, when the sticky value may show a state that no longer holds.
+  const actionable = query.current != null && query.current.token === token;
 
   const running = data?.state === 'RUNNING';
   useEffect(() => {
@@ -95,15 +99,19 @@ export default function RolloutDetailPage() {
       </PageShell>
     );
   }
-  return <RolloutDetail key={data.token} rollout={data} reloadKey={reloadKey} onChanged={reload} />;
+  return (
+    <RolloutDetail key={data.token} rollout={data} actionable={actionable} reloadKey={reloadKey} onChanged={reload} />
+  );
 }
 
 function RolloutDetail({
   rollout,
+  actionable,
   reloadKey,
   onChanged,
 }: {
   rollout: UpdateRollout;
+  actionable: boolean;
   reloadKey: number;
   onChanged: () => void;
 }) {
@@ -117,7 +125,7 @@ function RolloutDetail({
       title={rollout.name}
       titleAdornment={<CopyToken value={rollout.token} />}
       banner="devices"
-      action={canWrite ? <RolloutControls rollout={rollout} onChanged={onChanged} onError={setError} /> : undefined}
+      action={canWrite ? <RolloutControls rollout={rollout} actionable={actionable} onChanged={onChanged} onError={setError} /> : undefined}
       description={
         <div className="mt-1 flex flex-wrap items-center gap-2">
           <RolloutStateBadge state={rollout.state} />
@@ -128,7 +136,7 @@ function RolloutDetail({
       <div className="space-y-6">
         {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
         {canWrite && rollout.state === 'PAUSED' && rollout.pauseReason === 'FAILURE_THRESHOLD' && (
-          <RaiseThresholdPanel rollout={rollout} onChanged={onChanged} />
+          <RaiseThresholdPanel rollout={rollout} actionable={actionable} onChanged={onChanged} />
         )}
         <SummaryPanel rollout={rollout} />
         {rollout.state !== 'DRAFT' && <TargetsPanel rollout={rollout} reloadKey={reloadKey} />}
@@ -139,10 +147,12 @@ function RolloutDetail({
 
 function RolloutControls({
   rollout,
+  actionable,
   onChanged,
   onError,
 }: {
   rollout: UpdateRollout;
+  actionable: boolean;
   onChanged: () => void;
   onError: (message: string | null) => void;
 }) {
@@ -188,22 +198,22 @@ function RolloutControls({
   return (
     <div className="flex items-center gap-2">
       {rollout.state === 'DRAFT' && (
-        <Button onClick={start} loading={busy} disabled={busy}>
+        <Button onClick={start} loading={busy} disabled={busy || !actionable}>
           <Rocket size={14} /> {t('rolloutStart')}
         </Button>
       )}
       {rollout.state === 'RUNNING' && (
-        <Button variant="outline" onClick={pause} loading={busy} disabled={busy}>
+        <Button variant="outline" onClick={pause} loading={busy} disabled={busy || !actionable}>
           <Pause size={14} /> {t('rolloutPause')}
         </Button>
       )}
       {rollout.state === 'PAUSED' && !threshold && (
-        <Button onClick={resume} loading={busy} disabled={busy}>
+        <Button onClick={resume} loading={busy} disabled={busy || !actionable}>
           <Play size={14} /> {t('rolloutResume')}
         </Button>
       )}
       {(rollout.state === 'DRAFT' || rollout.state === 'RUNNING' || rollout.state === 'PAUSED') && (
-        <Button variant="destructive" onClick={abort} loading={busy} disabled={busy}>
+        <Button variant="destructive" onClick={abort} loading={busy} disabled={busy || !actionable}>
           <Square size={14} /> {t('rolloutAbort')}
         </Button>
       )}
@@ -214,7 +224,15 @@ function RolloutControls({
 // A rollout that paused at its failure threshold resumes only with a HIGHER threshold: the
 // service refuses to reset the count, and this panel asks for the new number rather than
 // offering a Resume that would be refused.
-function RaiseThresholdPanel({ rollout, onChanged }: { rollout: UpdateRollout; onChanged: () => void }) {
+function RaiseThresholdPanel({
+  rollout,
+  actionable,
+  onChanged,
+}: {
+  rollout: UpdateRollout;
+  actionable: boolean;
+  onChanged: () => void;
+}) {
   const { t } = useTranslation('updates');
   const failures = rollout.progress.failed + rollout.progress.unknown;
   const [value, setValue] = useState(String(failures + 1));
@@ -251,7 +269,7 @@ function RaiseThresholdPanel({ rollout, onChanged }: { rollout: UpdateRollout; o
             onChange={(e) => setValue(e.target.value)}
           />
         </FormField>
-        <Button onClick={submit} loading={busy} disabled={!ok || busy}>
+        <Button onClick={submit} loading={busy} disabled={!ok || busy || !actionable}>
           <Play size={14} /> {t('rolloutResumeWithThreshold')}
         </Button>
       </div>

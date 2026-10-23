@@ -638,3 +638,55 @@ func TestDriverPassesReachEveryRunningRolloutInTurn(t *testing.T) {
 		require.Equal(t, int64(1), e.assignmentCount(t, d), "%s's rollout was stepped", d)
 	}
 }
+
+// hookDevices runs hook once, the first time a device is looked up: the lookups are the window
+// between a step's first read of the rollout and its lock, where another writer can land.
+type hookDevices struct {
+	DeviceLookup
+	once sync.Once
+	hook func()
+}
+
+func (h *hookDevices) DeviceOf(ctx context.Context, tenant, device string) (DeviceFacts, bool, error) {
+	h.once.Do(h.hook)
+	return h.DeviceLookup.DeviceOf(ctx, tenant, device)
+}
+
+// The free slots are counted again under the lock, not carried over from the read before it: a
+// second step that fills the cap while this one is looking devices up leaves this one nothing.
+func TestTheCapIsRecountedUnderTheLockAfterTheLookups(t *testing.T) {
+	e := newRolloutEnv(t, 6)
+	e.create(t, "r1", 2, nil)
+	e.api.Devices = &syncDevices{err: errors.New("held")} // the start's inline step dispatches nobody
+	_, err := e.api.StartRollout(tenantCtx("acme"), "r1")
+	require.NoError(t, err)
+	id := e.rollout(t, "r1").Rollout.ID
+
+	other := NewApi(e.api.RDB, e.store, e.api.Limits) // a second replica
+	other.Profiles, other.Devices, other.Groups, other.Desired = e.api.Profiles, e.devices, e.groups, e.desired
+	other.Policy, other.AllowUnverified, other.Clock = e.api.Policy, true, e.api.Clock
+	e.api.Devices = &hookDevices{DeviceLookup: e.devices, hook: func() {
+		res, err := other.StepRollout(tenantCtx("acme"), id)
+		require.NoError(t, err)
+		require.Equal(t, 2, res.Dispatched, "the other replica fills the cap")
+	}}
+	res := e.step(t, "r1")
+	require.Zero(t, res.Dispatched, "nothing is left under the cap once it is recounted")
+	require.Equal(t, 2, e.rollout(t, "r1").Progress.Occupied())
+}
+
+// A pause that commits while a step is looking devices up is seen by that step under the lock.
+func TestAPauseDuringTheLookupsStopsTheStep(t *testing.T) {
+	e := newRolloutEnv(t, 4)
+	e.create(t, "r1", 2, nil)
+	e.api.Devices = &syncDevices{err: errors.New("held")}
+	_, err := e.api.StartRollout(tenantCtx("acme"), "r1")
+	require.NoError(t, err)
+	e.api.Devices = &hookDevices{DeviceLookup: e.devices, hook: func() {
+		_, err := e.api.PauseRollout(tenantCtx("acme"), "r1")
+		require.NoError(t, err)
+	}}
+	res := e.step(t, "r1")
+	require.Zero(t, res.Dispatched)
+	require.Zero(t, e.assignmentCount(t, "dev-0"), "a paused rollout tells no device")
+}

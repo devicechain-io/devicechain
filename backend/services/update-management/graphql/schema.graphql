@@ -782,7 +782,8 @@ type Mutation {
     """
     Resume a PAUSED rollout. Requires artifact:write. A rollout whose failed or unknown devices reach its failure
     threshold is refused (ROLLOUT_FAILURE_THRESHOLD_REACHED) unless a higher failureThreshold is passed: resuming
-    never resets the count. Resuming a running rollout changes nothing.
+    never resets the count. Resuming a running rollout changes nothing, and is refused (ROLLOUT_STATE_CONFLICT) if it
+    passes a failureThreshold other than the one the rollout has.
     """
     resumeUpdateRollout(
         """
