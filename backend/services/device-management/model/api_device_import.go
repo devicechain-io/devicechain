@@ -381,7 +381,7 @@ func (api *Api) ImportDevices(ctx context.Context, rows []*DeviceImportRow, mode
 
 // importStoredCredentialId is the stored credential_id of an import row's credential.
 func (api *Api) importStoredCredentialId(ctx context.Context, p *importRow) (string, error) {
-	tenant, err := tenantOf(ctx)
+	tenant, err := ctxTenant(ctx)
 	if err != nil {
 		return "", err
 	}

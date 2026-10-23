@@ -145,9 +145,9 @@ func storedCredentialIdForWrite(key *credential.DeviceSecretKey, tenant, ctype, 
 	return stored, id, nil
 }
 
-// tenantOf is the tenant of the request context, or an error: a credential lookup is
+// ctxTenant is the tenant of the request context, or an error: a credential lookup is
 // tenant-scoped, and an access token digest is bound to the tenant.
-func tenantOf(ctx context.Context) (string, error) {
+func ctxTenant(ctx context.Context) (string, error) {
 	tenant, ok := core.TenantFromContext(ctx)
 	if !ok || tenant == "" {
 		return "", errors.New("a credential lookup needs a tenant in context")
@@ -435,7 +435,7 @@ func (api *Api) searchCredentialIds(ctx context.Context, ctype *string, id strin
 	if ctype != nil && !accessTokenCredential(*ctype) {
 		return ids
 	}
-	if tenant, err := tenantOf(ctx); err == nil {
+	if tenant, err := ctxTenant(ctx); err == nil {
 		if digest, err := storedCredentialId(api.DeviceSecretKey, tenant, string(CredentialAccessToken), id); err == nil {
 			ids = append(ids, digest)
 		}
@@ -488,7 +488,7 @@ func (api *Api) presentedCredentialLookupId(ctx context.Context, ctype, id strin
 	if !accessTokenCredential(ctype) {
 		return id, nil
 	}
-	tenant, err := tenantOf(ctx)
+	tenant, err := ctxTenant(ctx)
 	if err != nil {
 		return "", err
 	}
