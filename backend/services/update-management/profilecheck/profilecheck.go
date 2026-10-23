@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/devicechain-io/dc-update-management/model"
 )
@@ -115,4 +116,68 @@ func (c *Checker) DeviceOf(ctx context.Context, tenant, deviceToken string) (fac
 		return facts, true, nil
 	}
 	return model.DeviceFacts{}, false, nil
+}
+
+// resolveDeviceGroupTargets walks a group's device members by KEYSET cursor (the contract command
+// delivery's batches rely on): offset paging would silently skip a member that stays in the group
+// while an earlier one leaves.
+const resolveDeviceGroupTargets = `query($groupToken: String!, $version: Int, $afterId: String, $limit: Int!) {
+  resolveDeviceGroupTargets(groupToken: $groupToken, version: $version, afterId: $afterId, limit: $limit) {
+    rejected
+    code
+    reason
+    deviceTokens
+    nextCursor
+    resolvedVersion
+  }
+}`
+
+// ResolveGroupTargets implements model.GroupResolver: one page of a group's device members.
+//
+// A REJECTION (no such group, not a device group, never published) is a decided fact carried on
+// the page; a transport or availability failure is an error the caller fails closed on. `rejected`
+// is decoded through a pointer because it is non-null in the schema: an answer without it is a
+// broken response, and reading it as false would turn it into a resolved, EMPTY group.
+func (c *Checker) ResolveGroupTargets(ctx context.Context, groupToken string, version *int32,
+	afterCursor string, limit int) (*model.GroupTargetPage, error) {
+	tenant, ok := core.TenantFromContext(ctx)
+	if !ok {
+		return nil, errors.New("device-management group lookup: no tenant in context")
+	}
+	var out struct {
+		ResolveDeviceGroupTargets struct {
+			Rejected        *bool    `json:"rejected"`
+			Code            *string  `json:"code"`
+			Reason          *string  `json:"reason"`
+			DeviceTokens    []string `json:"deviceTokens"`
+			NextCursor      *string  `json:"nextCursor"`
+			ResolvedVersion *int32   `json:"resolvedVersion"`
+		} `json:"resolveDeviceGroupTargets"`
+	}
+	vars := map[string]any{"groupToken": groupToken, "limit": limit, "version": nil, "afterId": nil}
+	if version != nil {
+		vars["version"] = *version
+	}
+	if afterCursor != "" {
+		vars["afterId"] = afterCursor
+	}
+	if err := c.client.Query(ctx, c.url, tenant, resolveDeviceGroupTargets, vars, &out); err != nil {
+		return nil, fmt.Errorf("device-management group lookup: %w", err)
+	}
+	page := out.ResolveDeviceGroupTargets
+	if page.Rejected == nil {
+		return nil, errors.New("device-management group lookup: the answer carries no rejected verdict")
+	}
+	resolved := &model.GroupTargetPage{Rejected: *page.Rejected, DeviceTokens: page.DeviceTokens,
+		ResolvedVersion: page.ResolvedVersion}
+	if page.Code != nil {
+		resolved.Code = *page.Code
+	}
+	if page.Reason != nil {
+		resolved.Reason = *page.Reason
+	}
+	if page.NextCursor != nil {
+		resolved.NextCursor = *page.NextCursor
+	}
+	return resolved, nil
 }

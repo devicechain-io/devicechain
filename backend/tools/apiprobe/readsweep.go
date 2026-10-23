@@ -531,6 +531,9 @@ var sweepTokenArgs = map[string]string{
 	// The by-token read of the seeded service account, which its row reads back through
 	// the list (see the service-account row for why).
 	"user-management.serviceAccount.token": "service-account",
+	// The seeded rollout's targets: a join of its frozen target rows to the attempts their
+	// assignments name, which the rollout's own read-back does not select.
+	"update-management.updateRolloutTargets.token": "update-rollout",
 }
 
 // sweepExemptions names the served doors this sweep will NOT call, and why.

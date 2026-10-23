@@ -146,6 +146,27 @@ type Api struct {
 	// lockTenant takes the per-tenant admission lock inside the create transaction. A seam
 	// so a test can see that it is taken before the sum is read; nil means the real lock.
 	lockTenant func(ctx context.Context, tx *gorm.DB) error
+
+	// Groups resolves an entity group to its devices in device-management, for a rollout's start.
+	// Nil means it is not wired, and starting a rollout is REFUSED.
+	Groups GroupResolver
+	// OnRolloutStep observes every rollout step (the driver's and the inline one after a start or
+	// resume): the service records its metrics through it. Nil observes nothing.
+	OnRolloutStep func(res RolloutStepResult, err error)
+
+	// beforeDispatch runs inside a rollout step after the in-flight count is taken under the
+	// rollout's lock and before any device is dispatched. A seam for the concurrency tests: two
+	// replicas held here at once is exactly what the lock exists to prevent.
+	beforeDispatch func()
+	// noRolloutLock drops the rollout row lock. Set ONLY by the negative control of the
+	// two-replica test, to show that the lock is what keeps the cap.
+	noRolloutLock bool
+	// rolloutPassAfter is where this replica's next driver pass resumes its walk of the RUNNING
+	// rollouts (the last id the previous pass reached; 0 starts over), so a pass bounded to
+	// maxRolloutsPerPass rollouts still reaches every one of them in turn.
+	rolloutPassAfter atomic.Uint64
+	// rolloutsPerPass overrides maxRolloutsPerPass when positive. A seam for the fairness test.
+	rolloutsPerPass int
 }
 
 // The held-bytes predicate in CreateArtifact selects the artifacts that count against a tenant's ceiling: those

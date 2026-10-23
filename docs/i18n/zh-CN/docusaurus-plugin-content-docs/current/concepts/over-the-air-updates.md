@@ -7,9 +7,9 @@ title: 空中（OTA）更新
 可选启用的 **`update-management`** 服务向设备下发固件、软件和配置镜像。它按租户维护**制品**目录，允许你将制品**分配**给设备，向设备发送获取镜像所需的信息，并跟踪每次**更新尝试**，直到设备证明自己正在运行新版本。
 
 :::note 状态
-**目前可用：**带校验的流式上传制品目录、一次分配给一台设备、通过短期授权进行可续传的下载，以及带截止期的尝试跟踪。控制台提供制品和签名者页面，每台设备还有一个“更新”选项卡，用于分配和跟踪更新；参见用户指南中的[更新](/user-guide/updates)。
+**目前可用：**带校验的流式上传制品目录、一次分配给一台设备、按设备组分批分配制品的[发布](#rollouts)（限制同时更新的设备数，支持暂停、恢复、中止和失败阈值）、通过短期授权进行可续传的下载，以及带截止期的尝试跟踪。控制台提供制品、签名者和发布页面，每台设备还有一个“更新”选项卡，用于分配和跟踪更新；参见用户指南中的[更新](/user-guide/updates)。
 
-**尚未提供：**没有面向整个设备群的发布（分阶段或按百分比分配给大量设备）；只使用 HTTP 的设备无法接收更新，因为分配通过设备的 MQTT 通道传递。出于同样的原因，[LwM2M](./lwm2m.md) 和 [Sparkplug](./sparkplug.md) 设备也无法接收更新；LwM2M 设备的固件改为通过普通命令驱动。
+**尚未提供：**发布还没有分批（waves）、金丝雀晋级、计划或维护窗口；只使用 HTTP 的设备无法接收更新，因为分配通过设备的 MQTT 通道传递。出于同样的原因，[LwM2M](./lwm2m.md) 和 [Sparkplug](./sparkplug.md) 设备也无法接收更新；LwM2M 设备的固件改为通过普通命令驱动。
 :::
 
 ## 启用 {#enabling}
@@ -61,6 +61,29 @@ title: 空中（OTA）更新
 `cancelUpdate` 会立即取消排队中的更新。在安装开始之前，它会记录取消请求，当设备确认已放弃该工作时更新变为 `CANCELLED`。设备一旦开始安装，取消就会被拒绝：安装无法撤回。
 
 读取目录、分配和签名者需要 `artifact:read`。更改目录、分配以及附加签名需要 `artifact:write`。注册或吊销签名者需要 `artifact:trust`，它是有意分开的：能够发布二进制文件，并不包含决定谁的签名使其可信的权力。
+
+## 向设备组发布 {#rollouts}
+
+**发布（rollout）**把一个制品分配给某个[设备组](../user-guide/groups-facets-browse.md)中的设备，每次只处理有限数量的设备，并且可以暂停、恢复和中止。
+
+1. `createUpdateRollout(request)` 以 `DRAFT` 状态声明发布：制品（必须为 `AVAILABLE` 且可分配，规则与 `assignArtifact` 相同）、设备组、`maxInFlight`（1 到 1000）以及可选的 `failureThreshold`。此时不会解析或发送任何内容。
+2. `startUpdateRollout(token)` **冻结设备组的成员**作为本次发布的设备，并将其转为 `RUNNING`。之后加入该组的设备不属于本次发布，离开该组的设备仍是目标；要覆盖新加入的设备，请新建一次发布。动态组按其已发布版本解析，发布会记录该版本。超过 10,000 台设备的组会被拒绝（`ROLLOUT_TOO_LARGE`），而不是被截断。
+3. 随后服务按顺序把制品分配给这些设备，任何时候未完成更新的设备都不超过 `maxInFlight` 台。每台设备都遵循与 `assignArtifact` 相同的规则：不存在、已停用、配置档不兼容或正忙于另一项更新的设备会以该拒绝的代码（`DEVICE_NOT_FOUND`、`DEVICE_DISABLED`、`INCOMPATIBLE_PROFILE`、`UPDATE_IN_PROGRESS`）被**跳过**，且不占用名额。已经在处理同一制品、或已经更新到该制品的设备，会按其现有分配计入，而不会再次通知。
+4. 当没有设备在等待、也没有设备存在未完成的更新时，发布变为 `COMPLETED`。
+
+设备的结果始终取自它自己的更新尝试：到达 `UPDATED` 为 `SUCCEEDED`，`FAILED` 或 `TIMED_OUT` 为 `FAILED`，结果未知时为 `UNKNOWN`。**`UNKNOWN` 的设备会继续占用** `maxInFlight` 中的名额，并计为失败，因为它可能已经安装了更新却没有再上报。
+
+| 操作 | 作用 | 不会做的事 |
+| --- | --- | --- |
+| `pauseUpdateRollout` | 不再通知更多设备更新。 | 已在更新的设备会继续。 |
+| `resumeUpdateRollout` | 继续派发。 | 不会清零失败计数：因阈值暂停后，除非传入更高的 `failureThreshold`，否则会被拒绝（`ROLLOUT_FAILURE_THRESHOLD_REACHED`）。 |
+| `abortUpdateRollout` | 尚未通知的设备变为 `CANCELLED`，发布永久结束。 | 已在更新的设备会被留下完成更新，并继续显示。可用 `cancelUpdate` 取消其中任意一台。 |
+
+当失败和未知设备的数量达到 `failureThreshold` 时，发布会以原因 `FAILURE_THRESHOLD` 自行暂停。如果在运行期间制品被停用，或失去本实例要求的签名，发布也会以 `ARTIFACT_NOT_ASSIGNABLE` 暂停。
+
+`updateRollout(token)` 和 `updateRollouts(criteria)` 返回每次发布及其 `progress`（待处理、进行中、成功、失败、未知、已取消和已跳过设备的数量），`updateRolloutTargets(token, criteria)` 分页列出其设备及结果，并可按结果筛选。发布所需的权限与单台分配相同：读取需要 `artifact:read`，创建和控制需要 `artifact:write`。仅限部分客户的成员无法查看或控制发布，因为一次发布涵盖该成员范围之外的设备。每一次开始、暂停、恢复和中止都会以操作者的名义记入[审计日志](../user-guide/audit.md)。
+
+发布在服务重启后以及服务有多个副本时都会继续运行：每个副本每隔几秒推进正在运行的发布，而同一次发布同一时间只由一个副本推进，因此无论有多少副本，上限都成立。发布的分批（waves）、计划和维护窗口目前尚不可用。
 
 ## 尝试如何推进 {#states}
 

@@ -11,12 +11,13 @@ the device proves it is running the new version.
 
 :::note Status
 **Available today:** the artifact catalogue with a verified streaming upload, assignment to one
-device at a time, a resumable download through a short-lived grant, and tracking of each attempt
-with deadlines. The console has screens for artifacts and signers, and an Updates tab on each
-device for assigning and following an update; see [Updates](/user-guide/updates) in the user guide.
+device at a time, [rollouts](#rollouts) that assign an artifact to a device group a capped number of
+devices at a time with pause, resume, abort and a failure threshold, a resumable download through a
+short-lived grant, and tracking of each attempt with deadlines. The console has screens for artifacts,
+signers and rollouts, and an Updates tab on each device for assigning and following an update; see
+[Updates](/user-guide/updates) in the user guide.
 
-**Not yet:** there is no fleet rollout (staged or percentage-based assignment across many devices),
-and devices that speak only HTTP cannot receive updates, because assignments travel on the device's
+**Not yet:** rollouts have no waves, canary promotion, schedules or maintenance windows, and devices that speak only HTTP cannot receive updates, because assignments travel on the device's
 MQTT channel. For the same reason [LwM2M](./lwm2m.md) and [Sparkplug](./sparkplug.md) devices cannot receive them either; an LwM2M
 device's firmware is driven with ordinary commands instead.
 :::
@@ -118,6 +119,54 @@ and attaching a signature need `artifact:write`. Registering or revoking a signe
 which is separate on purpose: being able to publish a binary does not include deciding whose signature
 makes it trusted.
 
+## Rolling out to a group {#rollouts}
+
+A **rollout** assigns one artifact to the devices of a [device group](../user-guide/groups-facets-browse.md),
+a capped number at a time, and can be paused, resumed and aborted.
+
+1. `createUpdateRollout(request)` declares it as a `DRAFT`: the artifact (which must be `AVAILABLE` and
+   assignable, exactly as for `assignArtifact`), the group, `maxInFlight` (1 to 1000) and an optional
+   `failureThreshold`. Nothing is resolved or sent yet.
+2. `startUpdateRollout(token)` **freezes the group's members** as the rollout's devices and moves it to
+   `RUNNING`. A device that joins the group afterwards is not part of the rollout, and one that leaves it
+   stays a target; start a new rollout to reach the newcomers. A dynamic group is resolved from its
+   published version, which the rollout records. A group of more than 10,000 devices is refused
+   (`ROLLOUT_TOO_LARGE`) rather than cut short.
+3. The service then assigns the artifact to the devices in order, never letting more than `maxInFlight`
+   of them have an unfinished update. Each device goes through the same rules as `assignArtifact`: a
+   device that is missing, disabled, on an incompatible profile, or busy with a different update is
+   **skipped** with that refusal's code (`DEVICE_NOT_FOUND`, `DEVICE_DISABLED`, `INCOMPATIBLE_PROFILE`,
+   `UPDATE_IN_PROGRESS`) and holds no place. A device already working on, or already updated to, the same
+   artifact is counted with the assignment it has rather than told again.
+4. The rollout is `COMPLETED` when no device is waiting and none has an unfinished update.
+
+A device's outcome is always its own update attempt: `SUCCEEDED` when it reached `UPDATED`, `FAILED` for
+`FAILED` or `TIMED_OUT`, and `UNKNOWN` while the outcome is unknown. **An `UNKNOWN` device keeps its place**
+under `maxInFlight` and counts as a failure, because it may have installed the update and not come back.
+
+| Control | What it does | What it does not do |
+| --- | --- | --- |
+| `pauseUpdateRollout` | No further device is told to update. | Devices already updating carry on. |
+| `resumeUpdateRollout` | Dispatching continues. | It does not reset the failure count: after a threshold pause it is refused (`ROLLOUT_FAILURE_THRESHOLD_REACHED`) unless you pass a higher `failureThreshold`. |
+| `abortUpdateRollout` | Devices not yet told are `CANCELLED`, and the rollout ends for good. | Devices already updating are left to finish, and keep being reported. Cancel any of them with `cancelUpdate`. |
+
+When the number of failed and unknown devices reaches `failureThreshold`, the rollout pauses itself
+with the reason `FAILURE_THRESHOLD`. It also pauses with `ARTIFACT_NOT_ASSIGNABLE` if the artifact is
+retired, or loses the signature this instance requires, while it runs.
+
+`updateRollout(token)` and `updateRollouts(criteria)` return each rollout with its `progress` (counts of
+pending, in-flight, succeeded, failed, unknown, cancelled and skipped devices), and
+`updateRolloutTargets(token, criteria)` pages its devices with their outcome, filterable by outcome.
+Rollouts need the same authorities as single assignments: `artifact:read` to read them and
+`artifact:write` to create and control them. A member limited to some customers cannot see or
+control rollouts, since a rollout spans devices outside that member's scope. Every start, pause, resume
+and abort is recorded in the [audit journal](../user-guide/audit.md) under the person who did it.
+
+Rollouts keep running across restarts and with several replicas of the service: each replica advances
+the running rollouts every few seconds, and a rollout is advanced by one replica at a time, so the cap
+holds however many replicas there are. Waves, schedules and maintenance windows for rollouts are not
+available yet.
+
 ## How an attempt progresses {#states}
 
 Each assignment carries one **attempt**, whose state the platform derives from what the device
@@ -213,8 +262,8 @@ messages are in [Connecting a Device](../guides/connecting-a-device.md#over-the-
 
 ## Watching it {#monitoring}
 
-The service's metrics, including report verdicts, download grants and attempts the deadlines moved,
-are listed in the [metrics reference](../deployment/metrics-reference.md#update-management).
+The service's metrics, including report verdicts, download grants, attempts the deadlines moved
+and what rollouts dispatched, are listed in the [metrics reference](../deployment/metrics-reference.md#update-management).
 
 ## Related
 
