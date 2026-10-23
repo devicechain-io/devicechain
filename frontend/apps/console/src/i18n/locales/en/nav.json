@@ -46,5 +46,6 @@
   "settings": "Settings",
   "updates": "Updates",
   "artifacts": "Artifacts",
-  "signers": "Signers"
+  "signers": "Signers",
+  "serviceAccounts": "Service accounts"
 }

@@ -247,3 +247,4 @@ users**.
 - [Viewing dashboards in /dash](/user-guide/viewing-dashboards-in-dash)
 - [GraphQL API: when your access is limited to some customers](/reference/graphql-api#limited-access)
 - [Managing assignments](/guides/managing-assignments): attaching devices to customers.
+- [Service accounts](/user-guide/service-accounts): non-human accounts for integrations.

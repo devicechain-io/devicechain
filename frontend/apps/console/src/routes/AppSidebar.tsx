@@ -33,6 +33,7 @@ import {
   Users,
   Webhook,
   type LucideIcon,
+  KeyRound,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Logomark, LogoHorizontal } from '@/components/brand/Logo';
@@ -193,6 +194,9 @@ export const NAV: NavNode[] = [
       // grants (member:read, role:read), for the same reason the rest of this group is
       // split by grant.
       { labelKey: 'members', href: '/members', icon: Users, requires: 'member:read' },
+      // The tenant's integrations: non-human principals, administered with the same grant
+      // as its people.
+      { labelKey: 'serviceAccounts', href: '/service-accounts', icon: KeyRound, requires: 'member:read' },
       { labelKey: 'roles', href: '/roles', icon: UserCog, requires: 'role:read' },
       { labelKey: 'branding', href: '/branding', icon: Palette, requires: 'branding:write' },
       // Labelled "Map", not "Basemap": inside Settings the longer name is redundant,

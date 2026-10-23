@@ -60,6 +60,7 @@ const AdminSettingsPage = lazy(() => import('@/routes/admin/settings/SettingsPag
 const AdminIdentityProvidersPage = lazy(() => import('@/routes/admin/identity-providers/IdentityProvidersPage'));
 const AdminIdentityProviderDetailPage = lazy(() => import('@/routes/admin/identity-providers/IdentityProviderDetailPage'));
 const MembersPage = lazy(() => import('@/routes/members/MembersPage'));
+const ServiceAccountsPage = lazy(() => import('@/routes/service-accounts/ServiceAccountsPage'));
 const RolesPage = lazy(() => import('@/routes/roles/RolesPage'));
 const RoleDetailPage = lazy(() => import('@/routes/roles/RoleDetailPage'));
 const RegistryRoute = lazy(() => import('@/routes/RegistryRoute'));
@@ -131,6 +132,7 @@ export default function App() {
           <Route path="basemap" element={<BasemapPage />} />
           <Route path="locale" element={<LocalePage />} />
           <Route path="members" element={<MembersPage />} />
+          <Route path="service-accounts" element={<ServiceAccountsPage />} />
           <Route path="roles" element={<RolesPage />} />
           <Route path="roles/new" element={<RoleDetailPage />} />
           <Route path="roles/:token" element={<RoleDetailPage />} />

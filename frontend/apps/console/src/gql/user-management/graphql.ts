@@ -98,6 +98,36 @@ export type ScopeAnchorKind =
    */
   | 'GROUP';
 
+/** A service account to create. */
+export type ServiceAccountCreateRequest = {
+  /** Free-text description, at most 1024 characters. */
+  description?: string | null | undefined;
+  /** Human-readable name, at most 128 characters. */
+  name?: string | null | undefined;
+  /**
+   * The roles to assign. Each must be assignable in this tenant and grant only authorities
+   * you hold yourself.
+   */
+  roleTokens: Array<string>;
+  /** The customers or groups to limit the account to. Omit it, or send an empty list, for the whole tenant. */
+  scope?: Array<ScopeAnchorInput> | null | undefined;
+  /** Days until the first secret expires: 1 to 730. Defaults to 365. */
+  secretExpiresInDays?: number | null | undefined;
+  /**
+   * Unique identifier within this tenant: letters, digits, hyphens and underscores, starting
+   * with a letter or digit, at most 128 characters.
+   */
+  token: string;
+};
+
+/** Paging for listing this tenant's service accounts. */
+export type ServiceAccountSearchCriteria = {
+  /** Page to return, starting at 1. */
+  pageNumber: number;
+  /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
+  pageSize: number;
+};
+
 /**
  * A basemap for setTenantBasemap. Every field is optional and the input replaces the
  * tenant's whole basemap: a field left out or sent as null (or as a blank string) is cleared,
@@ -293,6 +323,53 @@ export type AcceptInvitationMutationVariables = Exact<{
 
 
 export type AcceptInvitationMutation = { acceptInvitation: { identityToken: string, expiresAt: string, superuser: boolean, memberships: Array<{ tenant: string, roles: Array<string>, ssoRequired: boolean }> } };
+
+export type ServiceAccountsQueryVariables = Exact<{
+  criteria: ServiceAccountSearchCriteria;
+}>;
+
+
+export type ServiceAccountsQuery = { serviceAccountTokenEndpoint: string | null, serviceAccounts: { results: Array<{ token: string, name: string | null, description: string | null, clientId: string, enabled: boolean, createdBy: string | null, createdAt: string, roles: Array<{ token: string, name: string | null, owner: RoleOwner }>, scope: Array<{ kind: ScopeAnchorKind, token: string }>, secrets: Array<{ hint: string, createdAt: string, expiresAt: string, lastUsedAt: string | null, active: boolean }> }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+
+export type CreateServiceAccountMutationVariables = Exact<{
+  request: ServiceAccountCreateRequest;
+}>;
+
+
+export type CreateServiceAccountMutation = { createServiceAccount: { clientId: string, clientSecret: string, tokenEndpoint: string | null, serviceAccount: { token: string } } };
+
+export type SetServiceAccountAccessMutationVariables = Exact<{
+  token: string;
+  roleTokens: Array<string> | string;
+  scope: Array<ScopeAnchorInput> | ScopeAnchorInput;
+}>;
+
+
+export type SetServiceAccountAccessMutation = { setServiceAccountAccess: { token: string } };
+
+export type SetServiceAccountEnabledMutationVariables = Exact<{
+  token: string;
+  enabled: boolean;
+}>;
+
+
+export type SetServiceAccountEnabledMutation = { setServiceAccountEnabled: { token: string } };
+
+export type RotateServiceAccountSecretMutationVariables = Exact<{
+  token: string;
+  overlapHours?: number | null | undefined;
+  expiresInDays?: number | null | undefined;
+}>;
+
+
+export type RotateServiceAccountSecretMutation = { rotateServiceAccountSecret: { clientId: string, clientSecret: string, tokenEndpoint: string | null, serviceAccount: { token: string } } };
+
+export type DeleteServiceAccountMutationVariables = Exact<{
+  token: string;
+}>;
+
+
+export type DeleteServiceAccountMutation = { deleteServiceAccount: boolean };
 
 export type LoginMutationVariables = Exact<{
   email: string;
@@ -635,6 +712,90 @@ export const AcceptInvitationDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<AcceptInvitationMutation, AcceptInvitationMutationVariables>;
+export const ServiceAccountsDocument = new TypedDocumentString(`
+    query ServiceAccounts($criteria: ServiceAccountSearchCriteria!) {
+  serviceAccounts(criteria: $criteria) {
+    results {
+      token
+      name
+      description
+      clientId
+      enabled
+      createdBy
+      createdAt
+      roles {
+        token
+        name
+        owner
+      }
+      scope {
+        kind
+        token
+      }
+      secrets {
+        hint
+        createdAt
+        expiresAt
+        lastUsedAt
+        active
+      }
+    }
+    pagination {
+      pageStart
+      pageEnd
+      totalRecords
+    }
+  }
+  serviceAccountTokenEndpoint
+}
+    `) as unknown as TypedDocumentString<ServiceAccountsQuery, ServiceAccountsQueryVariables>;
+export const CreateServiceAccountDocument = new TypedDocumentString(`
+    mutation CreateServiceAccount($request: ServiceAccountCreateRequest!) {
+  createServiceAccount(request: $request) {
+    clientId
+    clientSecret
+    tokenEndpoint
+    serviceAccount {
+      token
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<CreateServiceAccountMutation, CreateServiceAccountMutationVariables>;
+export const SetServiceAccountAccessDocument = new TypedDocumentString(`
+    mutation SetServiceAccountAccess($token: String!, $roleTokens: [String!]!, $scope: [ScopeAnchorInput!]!) {
+  setServiceAccountAccess(token: $token, roleTokens: $roleTokens, scope: $scope) {
+    token
+  }
+}
+    `) as unknown as TypedDocumentString<SetServiceAccountAccessMutation, SetServiceAccountAccessMutationVariables>;
+export const SetServiceAccountEnabledDocument = new TypedDocumentString(`
+    mutation SetServiceAccountEnabled($token: String!, $enabled: Boolean!) {
+  setServiceAccountEnabled(token: $token, enabled: $enabled) {
+    token
+  }
+}
+    `) as unknown as TypedDocumentString<SetServiceAccountEnabledMutation, SetServiceAccountEnabledMutationVariables>;
+export const RotateServiceAccountSecretDocument = new TypedDocumentString(`
+    mutation RotateServiceAccountSecret($token: String!, $overlapHours: Int, $expiresInDays: Int) {
+  rotateServiceAccountSecret(
+    token: $token
+    overlapHours: $overlapHours
+    expiresInDays: $expiresInDays
+  ) {
+    clientId
+    clientSecret
+    tokenEndpoint
+    serviceAccount {
+      token
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<RotateServiceAccountSecretMutation, RotateServiceAccountSecretMutationVariables>;
+export const DeleteServiceAccountDocument = new TypedDocumentString(`
+    mutation DeleteServiceAccount($token: String!) {
+  deleteServiceAccount(token: $token)
+}
+    `) as unknown as TypedDocumentString<DeleteServiceAccountMutation, DeleteServiceAccountMutationVariables>;
 export const LoginDocument = new TypedDocumentString(`
     mutation Login($email: String!, $password: String!) {
   login(email: $email, password: $password) {

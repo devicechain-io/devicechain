@@ -302,6 +302,10 @@
       "sourceSha256": "651a7280e313b66cb0ad2eec7747f914bb388f904d39969a1a90e5db6bac2028",
       "translationSha256": "fbf7444783bee3003278e7a0ac79d5ddbb6781f2fc7b428de92a0fd5ecc45e8d"
     },
+    "user-guide/service-accounts.md": {
+      "sourceSha256": "85696159e59d28f8412f140cbe921a199ca92adcbc13e405a7e1b142d9420b35",
+      "translationSha256": "42c03f0d0a05459c617f7dd4bb4a085df8d77ec26930627ef20ab9b6f0db0f54"
+    },
     "user-guide/signing-in.md": {
       "sourceSha256": "e8305918933769a1b71827e6ce1bf93333ab2aa889fd9bec721fb1af30436679",
       "translationSha256": "f097bf5f6f2fdd74c7b6a81db477442746631576f49d2767dc2d29d01218ce43"

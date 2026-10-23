@@ -71,6 +71,10 @@ Consulte [Multitenencia](./multi-tenancy.md).
 - **Permisos.** Los roles llevan permisos, y la API los comprueba en cada llamada. Una pertenencia puede limitarse a los datos de un
   cliente, y los miembros, invitaciones y roles que un inquilino gestiona por sí mismo no pueden conceder más de lo que posee quien
   los concede. Consulte [Gobernanza y cuotas](./governance.md).
+- **Integraciones.** Las [cuentas de servicio](../user-guide/service-accounts.md) de un inquilino intercambian un ID de
+  cliente y un secreto por un token de acceso de 5 minutos (la concesión OAuth `client_credentials`), sin token de
+  actualización y sin el inicio de sesión de ninguna persona. Una cuenta tiene exactamente los permisos de sus roles, su
+  secreto solo se guarda como un resumen con clave, y lo que hace se audita con su propio nombre.
 - **Inicio de sesión único.** Un inquilino puede exigir el inicio de sesión mediante su propio proveedor de identidad. Consulte
   [Inicio de sesión único](./single-sign-on.md).
 - **Agentes de IA.** El [servidor MCP](./mcp.md) opcional llama a la plataforma con el token del propio llamador. No tiene ningún token
