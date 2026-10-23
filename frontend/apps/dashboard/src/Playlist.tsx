@@ -18,7 +18,7 @@
 // over, so nothing one board bound or selected leaks into the next.
 
 import type { ReactNode } from 'react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { NoteStack, skippedNote, type Note } from './LinkNotes';
@@ -177,8 +177,8 @@ export function Playlist({ tokens, everySeconds, load, renderBoard, search, chro
     let idle: ReturnType<typeof setTimeout> | undefined;
     const onUse = (event: Event) => {
       // The rotation's own controls are not "using the board": pressing pause must not also
-      // start the idle pause.
-      if (event.target instanceof Element && event.target.closest('[data-rotate-controls]')) return;
+      // start the idle pause, nor dismissing a note.
+      if (event.target instanceof Element && event.target.closest('[data-rotate-controls], [data-rotate-notes]')) return;
       setUsing(true);
       clearTimeout(idle);
       idle = setTimeout(() => setUsing(false), IDLE_RESUME_MS);
@@ -189,6 +189,15 @@ export function Playlist({ tokens, everySeconds, load, renderBoard, search, chro
       for (const name of USE_EVENTS) window.removeEventListener(name, onUse, { capture: true });
     };
   }, []);
+
+  // The board, drawn once per visit. The clock re-renders this component four times a second, and a
+  // wall display runs for days: the board under it must not re-render with it.
+  const boardSearch = shown ? boardAddress(search, shown.loaded.definition) : '';
+  const shownToken = shown ? tokens[shown.index] : undefined;
+  const board = useMemo(
+    () => (shown && shownToken !== undefined ? renderBoard({ loaded: shown.loaded, token: shownToken, search: boardSearch }) : null),
+    [shown, shownToken, boardSearch, renderBoard],
+  );
 
   const notes: Note[] = skips
     .map((s) => ({ id: `skip:${s.token}`, text: skippedNote(s, t) }))
@@ -221,11 +230,10 @@ export function Playlist({ tokens, everySeconds, load, renderBoard, search, chro
   const title = shown.loaded.definition.title || t('view:untitled');
   const percent = Math.round(progressOf(elapsed, everySeconds) * 100);
   const count = tokens.length;
-  const token = tokens[shown.index];
   return (
     <div data-rotate="" data-rotate-index={shown.index} data-rotate-paused={paused ? '' : undefined} style={{ height: '100%', position: 'relative' }}>
       <div key={`${shown.index}:${shown.visit}`} style={{ height: '100%' }}>
-        {renderBoard({ loaded: shown.loaded, token, search: boardAddress(search, shown.loaded.definition) })}
+        {board}
       </div>
       <NoteStack notes={notes} onDismiss={dismiss} />
       <div

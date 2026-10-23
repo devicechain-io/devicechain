@@ -249,6 +249,18 @@ describe('pausing', () => {
     expect(shownToken()).toBe('a');
   });
 
+  it('resumes a full interval after the LAST touch, not the first', async () => {
+    setup();
+    await flush();
+    fireEvent.pointerDown(screen.getByTestId('board'));
+    await advance(20_000);
+    fireEvent.pointerDown(screen.getByTestId('board'));
+    await advance(20_000); // 40 s after the first touch, 20 s after the last
+    expect(document.querySelector('[data-rotate-paused]')).not.toBeNull();
+    await advance(IDLE_RESUME_MS - 20_000 + 500);
+    expect(document.querySelector('[data-rotate-paused]')).toBeNull();
+  });
+
   it('the pause control holds the rotation until it is pressed again, and says so', async () => {
     setup();
     await flush();
@@ -265,6 +277,15 @@ describe('pausing', () => {
     setup();
     await flush();
     fireEvent.pointerDown(screen.getByLabelText(t('view:rotatePause')));
+    await flush();
+    expect(document.querySelector('[data-rotate-paused]')).toBeNull();
+  });
+
+  it('dismissing a note is not using the board either', async () => {
+    setup({ results: { a: { loaded: boardOf('Board A') }, b: { error: { code: 'dashboardNotFound' } }, c: { loaded: boardOf('Board C') } } });
+    await flush();
+    await advance(30_000);
+    fireEvent.pointerDown(screen.getByLabelText(t('view:rotateDismiss')));
     await flush();
     expect(document.querySelector('[data-rotate-paused]')).toBeNull();
   });
@@ -301,6 +322,20 @@ describe('with chrome=0', () => {
   });
 });
 
+describe('a wall display that runs for days', () => {
+  it('draws the board once per visit, not on every tick of the clock', async () => {
+    const { renderBoard } = setup();
+    await flush();
+    const drawn = renderBoard.mock.calls.length;
+    await advance(20_000);
+    expect(bar()).toBeGreaterThan(50);
+    expect(renderBoard.mock.calls.length).toBe(drawn);
+    await advance(10_000);
+    expect(shownToken()).toBe('b');
+    expect(renderBoard.mock.calls.length).toBe(drawn + 1);
+  });
+});
+
 describe('cleaning up', () => {
   it('stops the clock and the listeners when it unmounts', async () => {
     const { unmount, load } = setup();
@@ -309,5 +344,23 @@ describe('cleaning up', () => {
     const calls = load.mock.calls.length;
     await advance(120_000);
     expect(load.mock.calls.length).toBe(calls);
+  });
+
+  it('leaves no timer and no listener behind, even unmounted mid-pause', async () => {
+    const added = vi.spyOn(window, 'addEventListener');
+    const removed = vi.spyOn(window, 'removeEventListener');
+    const { unmount } = setup();
+    await flush();
+    fireEvent.pointerDown(screen.getByTestId('board')); // starts the idle-resume timer
+    await flush();
+    unmount();
+    expect(vi.getTimerCount()).toBe(0);
+    for (const name of ['pointerdown', 'keydown', 'wheel', 'touchstart']) {
+      const adds = added.mock.calls.filter(([n]) => n === name).length;
+      expect(adds, name).toBeGreaterThan(0);
+      expect(removed.mock.calls.filter(([n]) => n === name).length, name).toBe(adds);
+    }
+    added.mockRestore();
+    removed.mockRestore();
   });
 });
