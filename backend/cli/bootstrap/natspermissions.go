@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/natsauth"
 )
 
@@ -23,8 +24,20 @@ import (
 //
 // Compact and unescaped: json.Marshal would write ">" as >, which is the same JSON but not what
 // anyone reading the printed document, or nats-server's own configuration parser, expects.
-func BrokerPermissionsJSON(instance string) (string, error) {
-	users, err := natsauth.ServiceUsers(instance)
+//
+// withSharedLogin adds the transitional `dc_service` block, for the one broker configuration that
+// still has that login (an upgraded instance before its retirement). Every other broker, a fresh
+// install and a retired instance included, is rendered without it.
+func BrokerPermissionsJSON(instance string, withSharedLogin bool) (string, error) {
+	var (
+		users map[string]map[string]natsauth.Permissions
+		err   error
+	)
+	if withSharedLogin {
+		users, err = natsauth.ServiceUsersWithSharedLogin(instance, config.NatsLoginAreas())
+	} else {
+		users, err = natsauth.ServiceUsers(instance)
+	}
 	if err != nil {
 		return "", fmt.Errorf("generating the broker permissions for instance %q: %w", instance, err)
 	}
@@ -60,7 +73,7 @@ func writeBrokerPermissionsVarFile(rootdir string, st *State) error {
 		}
 		return nil
 	}
-	doc, err := BrokerPermissionsJSON(st.Instance)
+	doc, err := BrokerPermissionsJSON(st.Instance, sharedLoginRetainedFor(st))
 	if err != nil {
 		return err
 	}

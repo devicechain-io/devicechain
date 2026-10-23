@@ -171,6 +171,13 @@ func hydrateUpgradeState(
 	if err := refuseNoSystemLogin(opts.Instance, st); err != nil {
 		return nil, err
 	}
+	// Whether this run keeps, introduces around or retires the shared broker login. Decided from the
+	// instance it starts from, here, before anything is written, so the plan, the dry run and the
+	// apply all read the one answer.
+	decideSharedLogin(ctx, st)
+	if err := checkSharedLoginHasSuccessors(st); err != nil {
+		return nil, fmt.Errorf("instance %q: %w. Nothing has been changed", opts.Instance, err)
+	}
 
 	// 3. THE SECRETS.
 	//
@@ -347,6 +354,9 @@ func applyDeployedInfrastructure(st *State, deployed *config.InstanceConfigurati
 	if err := introduceIdentity(st); err != nil {
 		return err
 	}
+	// Before anything is minted: a login this run introduces is not one the services run on, and the
+	// retirement of the shared login is keyed off exactly that (decideSharedLogin).
+	noteLoginsPresentAtStart(st)
 	return introduceLogins(st)
 }
 

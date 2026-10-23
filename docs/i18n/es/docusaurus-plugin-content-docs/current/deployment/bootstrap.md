@@ -408,7 +408,7 @@ que un fallo nombra un paso que puedes encontrar aquí:
    que acaba con éxito la retira, en la misma escritura que registra la instancia como `Ready`.
 6. **Render configuration** (renderizar la configuración) — resuelve el id de la instancia, el
    namespace, el perfil y todas las credenciales generadas: el material de autenticación del
-   broker (la contraseña de servicio compartida y la clave del emisor del callout), la
+   broker (una credencial para cada área que usa el broker y la clave del emisor del callout), la
    autoridad certificadora que firma el propio certificado TLS del broker, el secreto de
    autenticación entre servicios y la **clave raíz del almacén de secretos**. Todas se acuñan
    aquí, porque el paso 3 ha establecido que no hay ninguna instancia viva de la que tomarlas.

@@ -472,3 +472,33 @@ func TestDeviceChannelGrantIsConfinedToTheDevice(t *testing.T) {
 		})
 	}
 }
+
+// An instance with no shared login rebuilds its credentials with none: the issuer and the system
+// login come across unchanged and nothing for the shared login is invented. The ordinary rebuild
+// still refuses an empty shared password, so a caller cannot reach the first by accident.
+func TestCredentialsFromDeployedWithoutSharedLoginInventsNone(t *testing.T) {
+	deployed, err := GenerateCredentials()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := CredentialsFromDeployedWithoutSharedLogin(deployed.IssuerSeed, deployed.SysPassword,
+		DeployedHashes{Sys: deployed.SysPasswordBcrypt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ServicePassword != "" || got.ServicePasswordBcrypt != "" {
+		t.Fatalf("a shared login was invented: %q / %q", got.ServicePassword, got.ServicePasswordBcrypt)
+	}
+	if got.IssuerPublic != deployed.IssuerPublic || got.SysPassword != deployed.SysPassword {
+		t.Fatal("the issuer or the system login did not come across")
+	}
+	if got.SysPasswordBcrypt != deployed.SysPasswordBcrypt {
+		t.Fatal("the system login's hash was re-salted, which would roll the broker")
+	}
+	if _, err := CredentialsFromDeployed(deployed.IssuerSeed, "", deployed.SysPassword, DeployedHashes{}); err == nil {
+		t.Fatal("the ordinary rebuild accepted an empty shared password")
+	}
+	if _, err := CredentialsFromDeployedWithoutSharedLogin("", "", DeployedHashes{}); err == nil {
+		t.Fatal("a rebuild with no issuer seed was accepted")
+	}
+}

@@ -34,6 +34,10 @@
 #                                 release's values forward, and run the upgrade
 #                                 exactly as docs/deployment/releases-and-upgrades
 #                                 says to run it
+#   hack/upgrade-rig.sh logins    the shared broker login (dc_service) goes through its two
+#                                 phases: the first upgrade gives every area a login of its
+#                                 own and keeps it, a second upgrade retires it. Run it after
+#                                 `upgrade` and before `verify`
 #   hack/upgrade-rig.sh recreate  THE OTHER DRILL, for a baseline this release does
 #                                 not upgrade onto: the same command must REFUSE,
 #                                 say to destroy and bootstrap, and damage nothing
@@ -1514,6 +1518,7 @@ $baseline_tag will actually meet."
   # What the broker and event store carry BEFORE anything moves, so `infra` can say
   # whether this run exercised their convergence or found them already there.
   record_infra_before
+  record_logins_before
 
   # --compact because the cluster was installed compact by `cmd_up`, and this is a
   # RE-install of a cluster that already exists.
@@ -2872,6 +2877,224 @@ $gone"
 }
 
 # ---------------------------------------------------------------------------
+# logins — the shared broker login (`dc_service`) is retired by the SECOND upgrade
+# ---------------------------------------------------------------------------
+#
+# THE CLAIM: an upgrade that starts from an instance where the services share one broker login
+# gives every area a login of its own and KEEPS the shared one (so pods that had not rolled yet stay
+# connected); running the upgrade again drops it from the broker and from the instance document, in
+# one broker roll. An upgrade that starts from an instance that is already per-area retires it at
+# once. Which of the two this run drills is read off the instance BEFORE it moves, never assumed:
+# the baseline is whatever the newest published release is, and it changes under this rig.
+#
+# 🔴 EACH PHASE'S CHECK IS SHOWN TO FAIL. `login_problems` is a pure function of three captured
+# files, so the selftest feeds it the other phase's capture and requires it to object. A check that
+# only ever saw the state it expects asserts nothing: "dc_service is gone" is also what an empty
+# capture looks like, which is why the broker's per-area logins are counted as well.
+logins_before_file="$work/logins-before"
+
+# login_capture <dir> reads the three artifacts the phase checks judge, from the live instance:
+# the broker's rendered configuration, the instance document every service mounts, and the
+# Deployments with the login Secret each one projects.
+login_capture() {
+  local dir="$1" conf
+  mkdir -p "$dir"
+  conf="$(infra_kubectl get configmap dc-nats-config -o jsonpath='{.data}')" ||
+    fail "could not read the broker's configuration (dc-nats-config)"
+  printf '%s\n' "$conf" >"$dir/broker.conf"
+  infra_kubectl get secret "dci-${instance}-config" -o jsonpath='{.data.instance}' | base64 -d >"$dir/document.json" ||
+    fail "could not read the instance document (Secret dci-${instance}-config)"
+  infra_kubectl get deployments -o json >"$dir/deployments.json" ||
+    fail "could not list the instance's Deployments"
+  [[ -s "$dir/broker.conf" && -s "$dir/document.json" && -s "$dir/deployments.json" ]] ||
+    fail "a capture of the instance's broker logins came back empty, so there is nothing to judge"
+}
+
+# login_auth_field <dir> <field> prints one field of the document's broker authentication block
+# ("" when absent): the block is found by the key only it carries.
+login_auth_field() {
+  jq -r --arg f "$2" '[.. | objects | select(has("calloutIssuerPublic")) | (.[$f] // "")] | first // ""' "$1/document.json"
+}
+
+# login_state <dir> prints `shared=<true|false> perarea=<true|false>` for a capture: does the
+# broker still name dc_service, and does the document tell the areas to use their own logins.
+login_state() {
+  local dir="$1" shared=false perarea=false
+  if grep -q 'dc_service' "$dir/broker.conf"; then shared=true; fi
+  if [[ "$(login_auth_field "$dir" areaLogins)" == true ]]; then perarea=true; fi
+  printf 'shared=%s perarea=%s\n' "$shared" "$perarea"
+}
+
+# login_problems <introduced|retired> <dir> prints one line per way the capture is NOT in that phase,
+# and nothing when it is.
+#
+#   introduced  every area runs its own login and the shared one is still there
+#   retired     every area runs its own login and nothing names the shared one
+login_problems() {
+  local phase="$1" dir="$2" n docuser docpw named bad
+  # The per-area logins, in the broker. Counted, so an empty or truncated configuration cannot pass
+  # "dc_service is absent" by having nothing in it.
+  n="$(grep -o 'dc-[a-z0-9-]*-g[0-9][0-9]*' "$dir/broker.conf" | sort -u | wc -l | tr -d '[:space:]')"
+  [[ "$n" -ge 3 ]] || echo "the broker's configuration holds $n per-area logins (want at least 3)"
+  grep -q 'dc-broker-admin-g' "$dir/broker.conf" || echo "the broker holds no login for the broker administrator"
+  # The document.
+  [[ "$(login_auth_field "$dir" areaLogins)" == true ]] ||
+    echo "the instance document does not tell the areas to use their own logins (areaLogins)"
+  docuser="$(login_auth_field "$dir" user)"
+  docpw="$(login_auth_field "$dir" password)"
+  named=false
+  if grep -q 'dc_service' "$dir/broker.conf"; then named=true; fi
+  case "$phase" in
+  introduced)
+    [[ "$named" == true ]] || echo "the broker no longer has the shared login, which this phase keeps"
+    [[ "$docuser" == dc_service && -n "$docpw" ]] || echo "the instance document no longer names the shared login (user '$docuser')"
+    ;;
+  retired)
+    [[ "$named" == false ]] || echo "the broker's configuration still names dc_service"
+    [[ -z "$docuser" && -z "$docpw" ]] || echo "the instance document still carries a shared login (user '$docuser')"
+    ;;
+  *) echo "unknown phase '$phase'" ;;
+  esac
+  # Every Deployment that opens a broker connection projects ITS OWN login Secret. Counted, for the
+  # same reason as above.
+  bad="$(jq -r --arg prefix "dci-${instance}-nats-" '
+      [.items[] | {name: .metadata.name, secret: ([.spec.template.spec.containers[].env[]? | select(.name == "DC_NATS_USER") | .valueFrom.secretKeyRef.name] | first // "")}]
+      | map(select(.secret != ""))
+      | (if length < 3 then "only \(length) Deployment(s) project a broker login (want at least 3)" else empty end),
+        (.[] | select((.secret | startswith($prefix) | not) or (.secret == ($prefix + "broker-admin"))) | "Deployment \(.name) projects \(.secret), which is not an area login Secret")' "$dir/deployments.json")" ||
+    bad="could not read the Deployments' login Secrets"
+  if [[ -n "$bad" ]]; then printf '%s\n' "$bad"; fi
+}
+
+record_logins_before() {
+  local dir="$work/logins-start" st
+  rm -rf "$dir"
+  login_capture "$dir"
+  st="$(login_state "$dir")"
+  printf '%s\n' "$st" >"$logins_before_file"
+  note "before the upgrade: $st"
+}
+
+expect_login_phase() {
+  local phase="$1" dir="$2" problems
+  problems="$(login_problems "$phase" "$dir")"
+  if [[ -n "$problems" ]]; then
+    fail "THE SHARED BROKER LOGIN IS NOT IN ITS '$phase' PHASE:
+$problems
+Read the upgrade's closing summary: it says which phase ran and, when it declined to retire the
+login, why."
+  fi
+}
+
+cmd_logins() {
+  need kubectl; need jq
+  [[ -s "$logins_before_file" && -s "$target_file" ]] || fail "the readings taken before the upgrade
+are missing; run 'upgrade' first. Without them this check cannot say which phase the baseline
+started in."
+  load_cluster_target
+  local before registry_t tag_t after_dir="$work/logins-after-1" second_dir="$work/logins-after-2"
+  before="$(cat "$logins_before_file")"
+  registry_t="$(sed -n 1p "$target_file")"
+  tag_t="$(sed -n 2p "$target_file")"
+
+  say "THE SHARED BROKER LOGIN — started from: $before"
+  rm -rf "$after_dir" "$second_dir"
+  login_capture "$after_dir"
+
+  if [[ "$before" == *"perarea=true"* ]]; then
+    # The baseline already runs every area on its own login, so the first upgrade retires it.
+    expect_login_phase retired "$after_dir"
+    note "the baseline was already per-area, so the first upgrade retired the shared login ✓"
+  else
+    expect_login_phase introduced "$after_dir"
+    note "first upgrade: every area runs its own login and the shared login stays ✓"
+    # 🔴 THE NEGATIVE CONTROL, ON THE LIVE CAPTURE: the retired check must object to this state.
+    if [[ -z "$(login_problems retired "$after_dir")" ]]; then
+      fail "NEGATIVE CONTROL FAILED: the 'retired' check passed an instance that still has the shared login"
+    fi
+    note "the 'retired' check objects to this state, so it can fail ✓"
+
+    say "dcctl upgrade, a second time → the upgrade that retires the shared login"
+    "$target_dcctl" upgrade local "$instance" \
+      ${instance_target[@]+"${instance_target[@]}"} \
+      --registry "$registry_t" --version "$tag_t" ||
+      fail "THE SECOND UPGRADE FAILED. The first left every area on its own login with the shared one
+kept; this one is what drops it. Read the output above: it says which phase it was in."
+    wait_for_every_api
+    login_capture "$second_dir"
+    expect_login_phase retired "$second_dir"
+    note "second upgrade: the shared login is gone from the broker and from the document, and every area is serving ✓"
+    if [[ -z "$(login_problems introduced "$second_dir")" ]]; then
+      fail "NEGATIVE CONTROL FAILED: the 'introduced' check passed an instance whose shared login is gone"
+    fi
+    note "the 'introduced' check objects to the retired state, so it can fail ✓"
+  fi
+  say "THE SHARED BROKER LOGIN IS RETIRED — no broker user, no document entry and no Deployment names it"
+}
+
+# selftest_logins is the part of the check above that needs no cluster: the phase judgements, over
+# captures written here, in BOTH directions.
+selftest_logins() {
+  local d inst_saved="$instance"
+  instance=selftest
+  d="$(mktemp -d)"
+
+  # write_capture <name> <shared:true|false> <perarea:true|false> <deployments:int>
+  write_capture() {
+    local dir="$d/$1" i dep=""
+    mkdir -p "$dir"
+    {
+      printf '{"authorization":{"users":["dc-broker-admin-g1","dc-device-management-g1","dc-user-management-g1","dc-event-sources-g1"'
+      if [[ "$2" == true ]]; then printf ',"dc_service"'; fi
+      printf ']}}\n'
+    } >"$dir/broker.conf"
+    printf '{"infrastructure":{"nats":{"auth":{"calloutIssuerPublic":"A1"' >"$dir/document.json"
+    if [[ "$2" == true ]]; then printf ',"user":"dc_service","password":"pw"' >>"$dir/document.json"; fi
+    if [[ "$3" == true ]]; then printf ',"areaLogins":true' >>"$dir/document.json"; fi
+    printf '}}}}\n' >>"$dir/document.json"
+    for ((i = 0; i < $4; i++)); do
+      dep+="${dep:+,}{\"metadata\":{\"name\":\"selftest-a$i\"},\"spec\":{\"template\":{\"spec\":{\"containers\":[{\"env\":[{\"name\":\"DC_NATS_USER\",\"valueFrom\":{\"secretKeyRef\":{\"name\":\"dci-selftest-nats-a$i\"}}}]}]}}}}"
+    done
+    printf '{"items":[%s]}\n' "$dep" >"$dir/deployments.json"
+  }
+  expect_problems() {
+    local phase="$1" name="$2" want="$3" got
+    got="$(login_problems "$phase" "$d/$name")"
+    if [[ "$want" == none && -n "$got" ]]; then
+      fail "SELF-TEST FAILED: the '$phase' check objected to '$name', a state it must accept:
+$got"
+    fi
+    if [[ "$want" == some && -z "$got" ]]; then
+      fail "SELF-TEST FAILED: the '$phase' check passed '$name', a state it must reject"
+    fi
+    note "'$phase' on '$name': $want ✓"
+  }
+
+  say "the shared broker login's phase checks"
+  write_capture introduced true true 4
+  write_capture retired false true 4
+  write_capture classic true false 4
+  write_capture emptied false true 0
+  expect_problems introduced introduced none
+  expect_problems retired introduced some
+  expect_problems retired retired none
+  expect_problems introduced retired some
+  # An instance still on the shared login (the baseline) is in neither phase.
+  expect_problems introduced classic some
+  expect_problems retired classic some
+  # ...and a capture with no Deployments projecting a login proves nothing in either direction.
+  expect_problems retired emptied some
+  [[ "$(login_state "$d/introduced")" == "shared=true perarea=true" ]] ||
+    fail "SELF-TEST FAILED: login_state misread the introduced capture: $(login_state "$d/introduced")"
+  [[ "$(login_state "$d/classic")" == "shared=true perarea=false" ]] ||
+    fail "SELF-TEST FAILED: login_state misread the baseline capture: $(login_state "$d/classic")"
+  [[ "$(login_state "$d/retired")" == "shared=false perarea=true" ]] ||
+    fail "SELF-TEST FAILED: login_state misread the retired capture: $(login_state "$d/retired")"
+  instance="$inst_saved"
+  rm -rf "$d"
+}
+
+# ---------------------------------------------------------------------------
 # selftest — the part of this rig that runs without a cluster
 # ---------------------------------------------------------------------------
 #
@@ -2885,6 +3108,7 @@ $gone"
 # nothing on its own — a check hard-wired to fail would look identical. Proving it
 # reports AGREEMENT when the tags agree is what makes the red mean something.
 selftest() {
+  selftest_logins
   # Needed before expect_mode's self-upgrade case, which asks validate_upgrade_mode to
   # refuse `upgrade_tag == baseline_tag`. An unresolved baseline makes that case pass an
   # EMPTY tag, which is refused by the previous check instead — and expect_mode asserts
@@ -3706,6 +3930,7 @@ mode)
   ;;
 up) cmd_up ;;
 upgrade) cmd_upgrade ;;
+logins) cmd_logins ;;
 recreate) cmd_recreate ;;
 ranwhat) cmd_ranwhat ;;
 verify) cmd_verify ;;
@@ -3746,6 +3971,7 @@ written down."
     exit 0
   fi
   cmd_upgrade
+  cmd_logins
   cmd_verify
   cmd_readsweep
   cmd_tablesweep
@@ -3775,5 +4001,5 @@ and event history belongs to the DR drill, not this one."
   cmd_infra
   say "UPGRADE DRILL COMPLETE — data survived, the operator is in step, and the broker and event store carry this release's settings."
   ;;
-*) fail "unknown command ${1}; try mode | up | upgrade | recreate | ranwhat | verify | readsweep | tablesweep | control | controlverify | operator | infra | all | selftest | down" ;;
+*) fail "unknown command ${1}; try mode | up | upgrade | logins | recreate | ranwhat | verify | readsweep | tablesweep | control | controlverify | operator | infra | all | selftest | down" ;;
 esac

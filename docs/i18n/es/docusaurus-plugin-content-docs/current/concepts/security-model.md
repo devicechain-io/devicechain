@@ -116,15 +116,16 @@ automáticamente. Consulte [Auditoría](../user-guide/audit.md).
 
 Estas carencias son conocidas y se aceptan en la versión actual. Planifique en torno a ellas.
 
-1. **El inicio de sesión compartido del broker sigue en su sitio junto a los de cada servicio.** Cada área se conecta al broker con un
+1. **Una instancia actualizada conserva el inicio de sesión compartido del broker hasta su siguiente actualización.** Cada área se conecta al broker con un
    inicio de sesión propio, limitado a los asuntos, flujos, consumidores y buckets que usa, y ningún servicio puede crear,
    cambiar ni borrar un flujo o un bucket: eso lo hace un inicio de sesión de administración, en un job que el chart ejecuta antes de cada
    instalación y actualización, y un servicio solo comprueba que lo que abre coincide con lo que declara su versión y se niega a arrancar, indicando la diferencia,
    cuando no es así. Un servicio comprometido no puede por tanto reconfigurar un flujo para escribir en los asuntos que solo un dispositivo
    puede escribir, así que no puede falsificar eventos de dispositivo, respuestas a comandos ni reportes de dispositivo por esa vía. Lo que queda
-   es el inicio de sesión compartido que usaban las versiones anteriores. Permanece en la configuración del broker, y en la configuración de instancia que lee cada pod,
-   hasta que una versión posterior lo retire, y conserva los permisos que siempre tuvo, incluido administrar flujos. Mientras no se retire, un
-   pod puede presentarlo. Los servicios que aceptan tráfico de dispositivos (event-sources, device-management, lwm2m-ingest y sparkplug-ingest) siguen
+   es el inicio de sesión compartido que usaban las versiones anteriores. Una instancia nueva nunca lo tiene. Una instancia actualizada
+   desde una versión que lo tenía lo conserva durante la actualización que da a cada área un inicio de sesión propio, en la
+   configuración del broker y en la configuración de instancia que lee cada pod, con los permisos que siempre tuvo, incluido
+   administrar flujos, así que un pod de esa instancia puede presentarlo. La siguiente `dcctl upgrade` lo elimina de ambas. Los servicios que aceptan tráfico de dispositivos (event-sources, device-management, lwm2m-ingest y sparkplug-ingest) siguen
    siendo parte del núcleo de confianza de la plataforma, porque escriben datos de dispositivo por diseño. Dos permisos son más amplios a propósito: event-sources puede actualizar los almacenes MQTT propios del broker, y
    user-management puede purgar los datos de un inquilino eliminado en todos los flujos. Un servicio comprometido todavía puede causar
    pérdida, aunque no falsificación, llenando un flujo en el que puede crear consumidores hasta que se descartan mensajes más antiguos.

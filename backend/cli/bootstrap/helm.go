@@ -373,9 +373,13 @@ func helmValues(st *State) map[string]interface{} {
 		// The seeds are written to a Secret of their own that only device-management mounts
 		// (writeCalloutSecret): a seed here would let any pod sign a device grant or open a
 		// device's CONNECT credentials.
-		auth := map[string]interface{}{
-			"user":     natsauth.ServiceUser,
-			"password": st.Values["natsServicePassword"],
+		auth := map[string]interface{}{}
+		// The shared login, while the instance still has one. Once it is retired the document names no
+		// user or password at all: every area presents its own (areaLogins, below), and a document that
+		// still carried the shared one would point a reader at a login the broker no longer has.
+		if sharedLoginRetainedFor(st) {
+			auth["user"] = natsauth.ServiceUser
+			auth["password"] = st.Values["natsServicePassword"]
 		}
 		if pub := st.Values["natsCalloutIssuerPublic"]; pub != "" {
 			auth["calloutIssuerPublic"] = pub

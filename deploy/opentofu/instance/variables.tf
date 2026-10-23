@@ -246,7 +246,7 @@ variable "nats_callout_xkey_public" {
 }
 
 variable "nats_service_password_bcrypt" {
-  description = "BCRYPT HASH ($2a$...) of the shared `dc_service` password, placed in the broker config (the plaintext goes only into the services' instance-config Secret; the broker bcrypt-compares). Minted by the bring-up; required when nats_enable_auth is true. Sensitive."
+  description = "BCRYPT HASH ($2a$...) of the TRANSITIONAL shared `dc_service` password, placed in the broker config only on an instance upgraded from a release that had one and not yet through the upgrade that retires it (the plaintext goes only into the services' instance-config Secret; the broker bcrypt-compares). Empty renders no such user: every fresh install and every retired instance, which then needs nats_login_password_bcrypts. Sensitive."
   type        = string
   default     = ""
   sensitive   = true

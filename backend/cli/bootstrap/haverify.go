@@ -15,6 +15,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/natsauth"
 	"github.com/devicechain-io/dc-microservice/replication"
 	nats "github.com/nats-io/nats.go"
 	corev1 "k8s.io/api/core/v1"
@@ -366,10 +367,34 @@ func probeMqttVia(restCfg *rest.Config, namespace, pod string, natscfg config.Na
 		tlsCfg.ServerName = natscfg.Hostname
 	}
 	addr := fmt.Sprintf("127.0.0.1:%d", local)
-	if err := mqttProbe(addr, tlsCfg, natscfg.Auth.User, natscfg.Auth.Password); err != nil {
+	user, password, err := operatorLogin(natscfg)
+	if err != nil {
+		return err
+	}
+	if err := mqttProbe(addr, tlsCfg, user, password); err != nil {
 		return fmt.Errorf("MQTT probe: %w", err)
 	}
 	return nil
+}
+
+// operatorLogin is the broker login dcctl's own diagnostics present: the broker administrator's,
+// which the instance's Secrets hand to the person operating it.
+//
+// 🔴 THERE IS NO SHARED LOGIN TO BORROW. These checks used to connect as the one login every service
+// shared, and an instance that has retired it (every fresh install) would answer them with an
+// authorization failure that reads like a broken broker. When the document says the broker has
+// per-area logins the administrator's is required and its absence is an error naming the Secret;
+// only an instance that has none connects as the document's user, as it always did.
+func operatorLogin(natscfg config.NatsConfiguration) (user, password string, err error) {
+	if !natscfg.Auth.AreaLogins {
+		return natscfg.Auth.User, natscfg.Auth.Password, nil
+	}
+	password = natscfg.Auth.AreaPasswords[config.NatsAdminPrincipal]
+	if password == "" {
+		return "", "", fmt.Errorf("the instance has a login for every principal, and the broker administrator's " +
+			"(Secret dci-<instance>-nats-broker-admin) could not be read, so there is no login to inspect the broker with")
+	}
+	return natsauth.LoginUser(config.NatsAdminPrincipal), password, nil
 }
 
 // dialBroker connects with the instance's own TLS material and credentials.
@@ -396,8 +421,16 @@ func dialBroker(url string, natscfg config.NatsConfiguration) (*nats.Conn, error
 		tlsConfig.ServerName = natscfg.Hostname
 		opts = append(opts, nats.Secure(tlsConfig))
 	}
-	if natscfg.Auth.User != "" {
-		opts = append(opts, nats.UserInfo(natscfg.Auth.User, natscfg.Auth.Password))
+	user, password, err := operatorLogin(natscfg)
+	if err != nil {
+		return nil, err
+	}
+	if user != "" {
+		opts = append(opts, nats.UserInfo(user, password))
+		if natscfg.Auth.AreaLogins {
+			// The administrator subscribes only to its own reply inbox, so it replies there.
+			opts = append(opts, nats.CustomInboxPrefix(messaging.InboxPrefix(config.NatsAdminPrincipal)))
+		}
 	}
 	nc, err := nats.Connect(url, opts...)
 	if err != nil {

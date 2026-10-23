@@ -33,8 +33,10 @@ import (
 // 🔴 EACH LOGIN GETS WHAT THE SHARED ONE HAS, AND NOTHING IS NARROWED HERE. The broker places every
 // one in the same account with the same permissions as `dc_service`, so what an area can do is
 // unchanged by this. What changes is that the credential an area presents is one only that area's
-// pod can read, which a later step narrows the grants of. The shared login stays in place beside
-// them so that pods that have not rolled yet still connect, and so that a rollback works.
+// pod can read. The shared login stays in place beside them for this one upgrade, so that pods that
+// have not rolled yet still connect; the next upgrade retires it (sharedlogin.go). Rolling back is
+// not what keeps it: a helm rollback does not restore the instance document, so an upgrade rolls
+// forward.
 //
 // 🔑 THE LOGINS ARE INTRODUCED CREDENTIALS, the same class as the callout's curve key
 // (calloutsecret.go) and the identity login (identitysecret.go): absent from an existing instance's
@@ -254,7 +256,8 @@ func sayAreaLoginsIntroduced(st *State) {
 			"and so does the broker administrator, which only the pre-upgrade job mounts and which alone creates\n" +
 			"and changes streams and buckets. Each area's login is held to what that area uses: its own streams,\n" +
 			"consumers, buckets and reply subjects, and it cannot create or change a stream. The shared login is\n" +
-			"still in place, with the permissions it always had; a later release retires it."))
+			"still in place, with the permissions it always had, so pods that had not rolled yet kept their\n" +
+			"connection. This was phase 1 of 2: run `dcctl upgrade` once more to retire it."))
 }
 
 // loginPlaintexts is every principal's password in creds, keyed by principal, as the broker record

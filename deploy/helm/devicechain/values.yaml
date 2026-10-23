@@ -307,10 +307,13 @@ instance:
           enabled: false
           ca: ""
         # Broker authentication (ADR-025). When the NATS module has auth callout
-        # enabled, the bring-up threads the shared service credential here so every
-        # service authenticates, plus the PUBLIC halves of the device callout's keys.
-        # Empty = the broker requires no auth. Kept in lockstep with the broker:
-        # enabling one without the other locks every service out.
+        # enabled, the bring-up sets areaLogins (below) so every area presents a login of
+        # its own, plus the PUBLIC halves of the device callout's keys. user/password
+        # are the TRANSITIONAL shared login: set only on an instance upgraded from a
+        # release that had one and not yet through the upgrade that retires it, and
+        # absent on a fresh install. Empty user = no shared login (with areaLogins: false,
+        # the broker requires no auth). Kept in lockstep with the broker: enabling one
+        # without the other locks every service out.
         #
         # The callout's SEEDS are not in this document. They live in the Secret named
         # by instance.calloutSecret, which only device-management mounts, so no other
@@ -331,8 +334,9 @@ instance:
           identityAccount: false
           # True when the broker has a login for every area that uses it and each area must
           # present its own (DC_NATS_USER / DC_NATS_PASSWORD, from its own Secret) rather than the
-          # shared user/password above. false (the default) keeps every area on the shared login,
-          # as every instance before it did.
+          # shared user/password above. A fresh install and a retired instance set this and carry no
+          # shared user/password. false (the default) keeps every area on the shared login, as
+          # every instance before the per-area logins did.
           areaLogins: false
           # The SEPARATE system-account login, read only by event-sources' broker
           # presence tap: the system account is where the broker publishes its own

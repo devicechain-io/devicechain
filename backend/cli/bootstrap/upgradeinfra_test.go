@@ -149,7 +149,7 @@ func TestBootstrapInstanceRootVarsAreUnchanged(t *testing.T) {
 		return &State{Instance: "prod", KubeContext: "gke_project_zone_cluster", HA: true, Install: &rec,
 			NATSTLS: &natsTLSMaterial{CACertPEM: "-----CA-----"},
 			Values: map[string]string{"natsCA": "-----CA-----", "natsCalloutIssuerPublic": "AISSUERPUBLIC",
-				"natsServicePasswordBcrypt": "$2a$10$service", "natsSysPasswordBcrypt": "$2a$10$sys",
+				"natsServicePassword": "service", "natsServicePasswordBcrypt": "$2a$10$service", "natsSysPasswordBcrypt": "$2a$10$sys",
 				"backupServerNameTsdb": "dc-tsdb-prod-1a2b3c4d"}}
 	}
 	compactLocal := func() *State {
@@ -158,7 +158,7 @@ func TestBootstrapInstanceRootVarsAreUnchanged(t *testing.T) {
 		return &State{Instance: "dev", KubeContext: "kind-devicechain", Compact: true, Install: &rec,
 			NATSTLS: &natsTLSMaterial{CACertPEM: "-----CA-----"},
 			Values: map[string]string{"natsCA": "-----CA-----", "natsCalloutIssuerPublic": "AISSUERPUBLIC",
-				"natsServicePasswordBcrypt": "$2a$10$service", "backupServerNameTsdb": "dc-tsdb-dev-1a2b3c4d"}}
+				"natsServicePassword": "service", "natsServicePasswordBcrypt": "$2a$10$service", "backupServerNameTsdb": "dc-tsdb-dev-1a2b3c4d"}}
 	}
 	for name, c := range map[string]struct {
 		st   *State

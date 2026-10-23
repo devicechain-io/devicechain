@@ -60,6 +60,14 @@ and kept: the database passwords, the broker's authority and logins, the
 cross-service secret and the secret-store root key. A version change here cannot
 become a credential change.
 
+The one thing it removes is the shared message broker login of an instance upgraded
+from a release that had one. The upgrade that gives every area a login of its own
+keeps the shared one, so pods that have not restarted yet stay connected. Run the
+upgrade once more: when every area already runs its own login, it drops the shared
+login from the broker and from the instance configuration, and its closing summary
+says which phase ran. A new instance never has the shared login. Once it is gone,
+rolling back across this release is not supported; run the newer upgrade again.
+
 It does not change an instance's shape. The profile, topology and functional
 areas come from the instance's own declaration, which is what 'dcctl bootstrap'
 recorded. Use it to move versions, not to reconfigure.

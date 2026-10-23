@@ -5,7 +5,7 @@
 #
 # Each lands in the APP account with the permissions block var.service_users carries for it (the
 # generated, per-area one), and is exempt from the device callout. The shared login stays beside them
-# (it is retired in a later step).
+# only in the transitional phase (shared_login_retired.tftest.hcl covers its retirement).
 #
 # Runs against mocked providers, so no cluster is needed. Run it with
 # hack/check-tofu-module-tests.sh, which tests a COPY of the module.

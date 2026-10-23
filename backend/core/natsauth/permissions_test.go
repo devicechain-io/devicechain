@@ -463,12 +463,14 @@ func TestServiceUsersCoverEveryStaticLogin(t *testing.T) {
 	users, err := ServiceUsers(permInstance)
 	require.NoError(t, err)
 	app := users[AppAccount]
-	require.Contains(t, app, ServiceUser)
+	// 🔴 THE SHARED LOGIN IS NOT A STATIC LOGIN OF THE GENERATED DOCUMENT. A document that carried it
+	// by default would put it back on every fresh install and keep it through the retirement.
+	require.NotContains(t, app, ServiceUser)
 	require.Contains(t, app, AdminUser)
 	for _, area := range config.NatsLoginAreas() {
 		require.Contains(t, app, LoginUser(area))
 	}
-	require.Len(t, app, 2+len(config.NatsLoginAreas()))
+	require.Len(t, app, 1+len(config.NatsLoginAreas()))
 	require.Contains(t, users[SystemAccount], SysUser)
 	// Held out on purpose: the identity login's account is its boundary.
 	for _, m := range users {
@@ -588,4 +590,42 @@ func TestTheWildcardConsumerRuleCanFail(t *testing.T) {
 	require.True(t, ep.publishes("$JS.API.STREAM.MSG.GET."+name))
 	// It still manages the two durables it declares.
 	require.True(t, ep.publishes("$JS.API.CONSUMER.MSG.NEXT."+name+"."+messaging.AckFloorDurableName(permInstance, "event-processing", streams.ResolvedEvents)))
+}
+
+// The shared login is written by exactly one function, for exactly one broker configuration (the
+// upgrade that introduces the per-area logins), and adds that login and nothing else.
+func TestOnlyTheTransitionalDocumentCarriesTheSharedLogin(t *testing.T) {
+	plain, err := ServiceUsersFor(permInstance, config.NatsLoginAreas())
+	require.NoError(t, err)
+	with, err := ServiceUsersWithSharedLogin(permInstance, config.NatsLoginAreas())
+	require.NoError(t, err)
+	require.NotContains(t, plain[AppAccount], ServiceUser)
+	require.Equal(t, ServicePermissions(), with[AppAccount][ServiceUser])
+	delete(with[AppAccount], ServiceUser)
+	require.Equal(t, plain, with, "the transitional document differs from the plain one by the shared login alone")
+	for account, byUser := range plain {
+		for u := range byUser {
+			require.NotEqual(t, ServiceUser, u, "account %s", account)
+		}
+	}
+}
+
+// The operator's diagnostics list every stream and its consumers over the administrator's login,
+// and that grant is a listing and nothing more.
+func TestTheBrokerAdministratorCanEnumerateButNotRead(t *testing.T) {
+	p, err := AdminPermissions(permInstance)
+	require.NoError(t, err)
+	for _, s := range []string{
+		"$JS.API.STREAM.LIST", "$JS.API.STREAM.NAMES",
+		"$JS.API.CONSUMER.LIST." + messaging.StreamName(permInstance, streams.All[0].Suffix),
+		"$JS.API.CONSUMER.NAMES." + messaging.MqttSessionStore,
+	} {
+		require.True(t, p.publishes(s), s)
+	}
+	for _, s := range []string{
+		"$JS.API.CONSUMER.MSG.NEXT.s.c", "$JS.API.CONSUMER.CREATE.s.c", "$JS.API.CONSUMER.DELETE.s.c",
+		"$JS.API.STREAM.MSG.GET.s", "$JS.API.DIRECT.GET.s", "$JS.API.STREAM.PURGE.s",
+	} {
+		require.False(t, p.publishes(s), s)
+	}
 }

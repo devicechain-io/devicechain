@@ -236,7 +236,8 @@ decrypted. You are asked for the artifact's passphrase, or you can supply it wit
 The broker's credentials are not in the escrow and do not need to be. The rebuilt instance mints
 new ones, including the keys of the device authentication callout and the login for the broker's
 identity account and every area's own broker login, and gives them to the broker
-and the services in the same run. Devices do not hold any of them: they sign in with their own
+and the services in the same run. None of the old logins is carried over, and a rebuilt instance has no
+shared broker login: every area signs in with the login minted for it, and the destroyed instance's logins open nothing. Devices do not hold any of them: they sign in with their own
 credentials, which come back with the database.
 
 `dcctl bootstrap` refuses to do it any other way; this is the first of the two checks described
@@ -430,7 +431,7 @@ handing a running instance new credentials is safe.
 and keeps every one of these:
 
 - the secret-store root key;
-- the broker's authority and logins (the callout issuer seed and the service and system passwords);
+- the broker's authority and logins (the callout issuer seed, every area's login and the system password);
 - the database passwords (the shared owner, the provisioner, the instance's own login and the event
   store's owner);
 - the cross-service auth secret;
