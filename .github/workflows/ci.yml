@@ -2786,7 +2786,11 @@ jobs:
   # release? Every served GraphQL schema is compared with the same schema at the
   # nearest stable release tag reachable from HEAD; a breaking change fails unless it
   # is declared in backend/tools/docsgql/sdlcompat/breaks.txt with a reason, and every
-  # @deprecated must carry a reason that names the replacement.
+  # @deprecated must carry a reason that names the replacement. The same comparison
+  # runs for the dcctl command tree (commands, aliases, flags), the device wire contract
+  # (the contract/*.schema.json files) and the topic layout a device is granted; Helm
+  # values and the Instance CRDs are reported and never fail. Each surface declares an
+  # intended break in its own breaks.txt under backend/tools/docsgql.
   # ---------------------------------------------------------------------------
   api-compat:
     runs-on: ubuntu-latest
@@ -2803,7 +2807,7 @@ jobs:
           cache: false
 
       - name: go mod download
-        run: hack/go-mod-download.sh backend/tools/docsgql
+        run: hack/go-mod-download.sh backend/tools/docsgql backend/cli backend/core
 
       # End to end on the real served schemas, through the script and the built command:
       # identical trees pass with zero changes, a planted field removal fails naming the
@@ -2814,6 +2818,30 @@ jobs:
 
       - name: Served GraphQL schemas are compatible with the last release
         run: hack/check-graphql-compat.sh
+
+      # The same shape for the surfaces beyond GraphQL. Each self-test plants a break in a
+      # copy of the working tree and must see it fail naming the element (and, for the
+      # report-only surfaces, see it printed with a zero exit), so each green step after it
+      # is known to be one that can fail.
+      - name: dcctl compatibility check self-test
+        run: hack/check-cli-compat.sh --self-test
+
+      - name: dcctl accepts everything it accepted at the last release
+        run: hack/check-cli-compat.sh
+
+      - name: Schema compatibility check self-test
+        run: hack/check-schema-compat.sh --self-test
+
+      - name: Device wire contract is compatible with the last release
+        run: hack/check-schema-compat.sh contract
+
+      - name: Device topic layout is compatible with the last release
+        run: hack/check-schema-compat.sh topics
+
+      # Report only: Helm values and the Instance CRDs are not covered by the versioning
+      # policy. A change prints here and never fails; it belongs in the release highlights.
+      - name: Helm values schema and Instance CRD changes (report only)
+        run: hack/check-schema-compat.sh reports
 
   # ---------------------------------------------------------------------------
   # The single required check.

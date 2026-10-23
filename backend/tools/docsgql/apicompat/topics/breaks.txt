@@ -1,0 +1,25 @@
+# Intended breaking changes to the MQTT topic layout a device uses, against the baseline release.
+#
+# Checked by `apicompat topics` (backend/tools/docsgql/cmd/apicompat), which the `api-compat`
+# CI job runs through hack/check-schema-compat.sh. A breaking change that is not listed here fails the
+# pull request; the failure prints the exact line to add. One line per change:
+#
+#   <baseline-tag> <surface> <coordinate> <kind> <reason>
+#
+#   baseline-tag  the release the change breaks against, as the failure names it (vX.Y.Z)
+#   surface       topics
+#   coordinate    publish:<topic> or subscribe:<topic>, with {instance}, {tenant} and {device} as placeholders
+#   kind          the breaking kind the failure names
+#   reason        why, and what a user does instead. Required.
+#
+# A line applies only while its baseline-tag IS the baseline. When the next release is
+# tagged, the baseline moves past it and the check reports the line as expired: delete it
+# then. A line for the current baseline that matches no change fails, so remove a
+# declaration when you revert the change it excused.
+#
+# Before v1.0.0 a declared break may ship in any release; say so in that release's
+# highlights (.github/release-highlights.json, `"breaking": true`). From v1.0.0 a covered
+# interface breaks only in a major release.
+#
+# Example:
+#   v0.24.0 topics publish:{instance}/{tenant}/devices/{device}/events topic-removed Events move to .../telemetry; the old topic is refused from 1.1.
