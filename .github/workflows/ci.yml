@@ -1868,6 +1868,29 @@ jobs:
           done
           echo "the MQTT gateway never came up:"; cat "$RUNNER_TEMP/nats.log"; exit 1
 
+      # The SECOND broker: the same nats-server MQTT gateway, but behind the platform's real auth
+      # callout, with a responder that admits seeded devices and mints their grants with the same
+      # function device-management calls. The broker above is authless, which is right for protocol
+      # behaviour and blind to admission: it accepts every connect, so a first connect the callout
+      # would refuse, or a grant that does not cover a topic the SDK uses, cannot fail there.
+      #
+      # It listens on ephemeral ports and describes itself in a JSON file written only once it is
+      # ready, so waiting for that file is the readiness check and there is no port to collide with
+      # the broker above.
+      - name: Start the MQTT broker behind the auth callout
+        working-directory: backend/core
+        run: |
+          go build -o "$RUNNER_TEMP/calloutfixture" ./natsauth/cmd/calloutfixture
+          "$RUNNER_TEMP/calloutfixture" -out "$RUNNER_TEMP/callout-fixture.json" > "$RUNNER_TEMP/calloutfixture.log" 2>&1 &
+          for _ in $(seq 1 60); do
+            if [ -s "$RUNNER_TEMP/callout-fixture.json" ]; then
+              echo "the callout fixture is ready:"; cat "$RUNNER_TEMP/calloutfixture.log"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "the callout fixture never became ready:"; cat "$RUNNER_TEMP/calloutfixture.log"; exit 1
+
       - name: Restore
         run: dotnet restore --locked-mode
 
@@ -1878,11 +1901,36 @@ jobs:
       # the real-broker tests skip themselves when DC_MQTT_BROKER is unset, and a skip reads as a
       # pass, so without this a silently-dead broker would leave the job green while testing
       # nothing. MqttRealBrokerGuardTests turns that into a failure.
+      #
+      # DC_REQUIRE_CALLOUT_FIXTURE is the same guard for the callout broker, and the step after
+      # this one is the stronger form of it: it counts what the RealCallout category actually ran.
       - name: Test
         env:
           DC_MQTT_BROKER: tcp://127.0.0.1:1883
           DC_REQUIRE_MQTT_BROKER: '1'
+          DC_CALLOUT_FIXTURE: ${{ runner.temp }}/callout-fixture.json
+          DC_REQUIRE_CALLOUT_FIXTURE: '1'
         run: dotnet test --no-build -c Release
+
+      # 🔴 A SKIPPED TEST READS AS A PASS, SO THE RUN IS COUNTED. The guard test above catches a
+      # fixture variable that is missing; it cannot catch a category that matched nothing (a renamed
+      # trait, a filter that drifted) or tests that skipped for another reason. This runs the
+      # RealCallout category alone and fails unless every test in it PASSED -- not skipped, not
+      # merely "no failures" -- and at least one existed.
+      - name: Real-callout tests ran and passed (none skipped)
+        env:
+          DC_CALLOUT_FIXTURE: ${{ runner.temp }}/callout-fixture.json
+        run: |
+          dotnet test --no-build -c Release --filter "Category=RealCallout" \
+            --results-directory "$RUNNER_TEMP/trx" --logger "trx;LogFileName=realcallout.trx"
+          counters="$(grep -o '<Counters [^>]*>' "$RUNNER_TEMP/trx/realcallout.trx")"
+          echo "$counters"
+          total="$(sed -n 's/.* total="\([0-9]*\)".*/\1/p' <<<"$counters")"
+          passed="$(sed -n 's/.* passed="\([0-9]*\)".*/\1/p' <<<"$counters")"
+          if [ -z "$total" ] || [ "$total" -lt 1 ] || [ "$passed" != "$total" ]; then
+            echo "::error::the RealCallout category ran $passed of $total tests to a pass; zero, or any skipped, is a failure here"
+            exit 1
+          fi
 
       # The rung the SDK README has been naming as missing. IsAotCompatible only turns on the
       # trim/AOT ANALYZERS, which read our source; they say nothing about whether the whole

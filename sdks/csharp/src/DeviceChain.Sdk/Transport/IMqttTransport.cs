@@ -343,6 +343,12 @@ public sealed class MqttConnectRefusedException : MqttConnectionException
         : base(message)
     {
     }
+
+    /// <summary>Creates the exception, preserving the client library's own refusal.</summary>
+    public MqttConnectRefusedException(string message, Exception? innerException)
+        : base(message, innerException)
+    {
+    }
 }
 
 /// <summary>
