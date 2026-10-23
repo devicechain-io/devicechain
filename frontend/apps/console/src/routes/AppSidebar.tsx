@@ -25,6 +25,7 @@ import {
   Palette,
   ScrollText,
   Send,
+  Rocket,
   ShieldCheck,
   SlidersHorizontal,
   Tags,
@@ -167,6 +168,7 @@ export const NAV: NavNode[] = [
     icon: UploadCloud,
     children: [
       { labelKey: 'artifacts', href: '/updates/artifacts', icon: FileArchive, requires: 'artifact:read', gate: 'updates' },
+      { labelKey: 'rollouts', href: '/updates/rollouts', icon: Rocket, requires: 'artifact:read', gate: 'updates' },
       { labelKey: 'signers', href: '/updates/signers', icon: ShieldCheck, requires: 'artifact:read', gate: 'updates' },
     ],
   },

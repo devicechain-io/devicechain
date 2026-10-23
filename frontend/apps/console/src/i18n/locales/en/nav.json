@@ -47,5 +47,6 @@
   "updates": "Updates",
   "artifacts": "Artifacts",
   "signers": "Signers",
-  "serviceAccounts": "Service accounts"
+  "serviceAccounts": "Service accounts",
+  "rollouts": "Rollouts"
 }

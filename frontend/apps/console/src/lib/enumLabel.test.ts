@@ -7,7 +7,15 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { COMMAND_STATUSES } from '@devicechain/dashboards';
 import en from '@/i18n/locales/en/common.json';
 import es from '@/i18n/locales/es/common.json';
-import type { ArtifactKind, ArtifactState, SignerState, UpdateState } from '@/lib/api/update-management';
+import type {
+  ArtifactKind,
+  ArtifactState,
+  SignerState,
+  UpdateRolloutOutcome,
+  UpdateRolloutPauseReason,
+  UpdateRolloutState,
+  UpdateState,
+} from '@/lib/api/update-management';
 import { artifactKindLabel, commandStatusLabel, signerStateLabel, updateStateLabel } from './enumLabel';
 
 afterEach(() => i18n.changeLanguage('en'));
@@ -24,6 +32,15 @@ const UPDATE_STATES = members({
 const ARTIFACT_KINDS = members({ FIRMWARE: true, SOFTWARE: true, CONFIGURATION: true } satisfies Record<ArtifactKind, true>);
 const ARTIFACT_STATES = members({ UPLOADING: true, AVAILABLE: true, RETIRED: true } satisfies Record<ArtifactState, true>);
 const SIGNER_STATES = members({ ACTIVE: true, REVOKED: true } satisfies Record<SignerState, true>);
+const ROLLOUT_STATES = members({
+  DRAFT: true, RUNNING: true, PAUSED: true, COMPLETED: true, ABORTED: true,
+} satisfies Record<UpdateRolloutState, true>);
+const ROLLOUT_OUTCOMES = members({
+  PENDING: true, IN_FLIGHT: true, SUCCEEDED: true, FAILED: true, UNKNOWN: true, CANCELLED: true, SKIPPED: true,
+} satisfies Record<UpdateRolloutOutcome, true>);
+const ROLLOUT_PAUSE_REASONS = members({
+  OPERATOR: true, FAILURE_THRESHOLD: true, ARTIFACT_NOT_ASSIGNABLE: true,
+} satisfies Record<UpdateRolloutPauseReason, true>);
 
 const FAMILIES: Array<[string, readonly string[]]> = [
   // Command status is a String on the wire; COMMAND_STATUSES is the console's closed set of it.
@@ -32,6 +49,9 @@ const FAMILIES: Array<[string, readonly string[]]> = [
   ['artifactKind', ARTIFACT_KINDS],
   ['artifactState', ARTIFACT_STATES],
   ['signerState', SIGNER_STATES],
+  ['rolloutState', ROLLOUT_STATES],
+  ['rolloutOutcome', ROLLOUT_OUTCOMES],
+  ['rolloutPauseReason', ROLLOUT_PAUSE_REASONS],
 ];
 
 describe('enumLabel', () => {

@@ -126,5 +126,20 @@
   "artifactKind_CONFIGURATION": "Configuration",
   "artifactState_AVAILABLE": "Available",
   "artifactState_UPLOADING": "Uploading",
-  "artifactState_RETIRED": "Retired"
+  "artifactState_RETIRED": "Retired",
+  "rolloutState_DRAFT": "Draft",
+  "rolloutState_RUNNING": "Running",
+  "rolloutState_PAUSED": "Paused",
+  "rolloutState_COMPLETED": "Completed",
+  "rolloutState_ABORTED": "Aborted",
+  "rolloutOutcome_PENDING": "Pending",
+  "rolloutOutcome_IN_FLIGHT": "In flight",
+  "rolloutOutcome_SUCCEEDED": "Succeeded",
+  "rolloutOutcome_FAILED": "Failed",
+  "rolloutOutcome_UNKNOWN": "Unknown",
+  "rolloutOutcome_CANCELLED": "Cancelled",
+  "rolloutOutcome_SKIPPED": "Skipped",
+  "rolloutPauseReason_OPERATOR": "Paused by an operator",
+  "rolloutPauseReason_FAILURE_THRESHOLD": "Failure threshold reached",
+  "rolloutPauseReason_ARTIFACT_NOT_ASSIGNABLE": "Artifact can no longer be assigned"
 }

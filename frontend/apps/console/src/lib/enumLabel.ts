@@ -18,3 +18,6 @@ export const updateStateLabel = (t: TFunction, state: string) => enumLabel(t, 'u
 export const signerStateLabel = (t: TFunction, state: string) => enumLabel(t, 'signerState', state);
 export const artifactKindLabel = (t: TFunction, kind: string) => enumLabel(t, 'artifactKind', kind);
 export const artifactStateLabel = (t: TFunction, state: string) => enumLabel(t, 'artifactState', state);
+export const rolloutStateLabel = (t: TFunction, state: string) => enumLabel(t, 'rolloutState', state);
+export const rolloutOutcomeLabel = (t: TFunction, outcome: string) => enumLabel(t, 'rolloutOutcome', outcome);
+export const rolloutPauseReasonLabel = (t: TFunction, reason: string) => enumLabel(t, 'rolloutPauseReason', reason);

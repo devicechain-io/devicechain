@@ -47,5 +47,6 @@
   "updates": "Actualizaciones",
   "artifacts": "Artefactos",
   "signers": "Firmantes",
-  "serviceAccounts": "Cuentas de servicio"
+  "serviceAccounts": "Cuentas de servicio",
+  "rollouts": "Despliegues"
 }
