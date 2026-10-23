@@ -66,6 +66,8 @@ func TestBuildApiWiresTheProfileCheckAndTheLifecycleGate(t *testing.T) {
 	api, err := buildApi(context.Background())
 	require.NoError(t, err)
 	require.NotNil(t, api.Profiles, "createArtifact would be refused for every request")
+	require.NotNil(t, api.Groups, "startUpdateRollout would be refused for every request")
+	require.NotNil(t, api.OnRolloutStep, "no rollout step would reach the metrics")
 	require.NotNil(t, api.TenantDeleted, "a deleted tenant's token could re-land artifacts")
 	require.NotNil(t, api.Blobs)
 	require.Equal(t, Configuration.Updates.MaxTenantArtifactBytes, api.Limits.MaxTenantArtifactBytes)
@@ -76,6 +78,7 @@ func TestBuildApiWiresTheProfileCheckAndTheLifecycleGate(t *testing.T) {
 	api, err = buildApi(context.Background())
 	require.NoError(t, err)
 	require.Nil(t, api.Profiles)
+	require.Nil(t, api.Groups)
 
 	Microservice = newMs("secret", 0)
 	api, err = buildApi(context.Background())

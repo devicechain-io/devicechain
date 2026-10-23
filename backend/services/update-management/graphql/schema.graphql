@@ -382,6 +382,178 @@ type UpdateAssignmentSearchResults {
     pagination: SearchResultsPagination!
 }
 
+"""Where a group rollout is in its lifecycle."""
+enum UpdateRolloutState {
+    """Declared; no device has been resolved or told anything."""
+    DRAFT
+    """The group's devices were frozen as the target set and are being dispatched, at most maxInFlight at a time."""
+    RUNNING
+    """No further device is dispatched until the rollout is resumed. Devices already working on the update carry on."""
+    PAUSED
+    """Every target was dispatched or skipped and no device is still working on the update."""
+    COMPLETED
+    """Ended by an operator. Devices not yet dispatched were cancelled; devices already working on the update were left to finish."""
+    ABORTED
+}
+
+"""Why a rollout is paused."""
+enum UpdateRolloutPauseReason {
+    """An operator paused it."""
+    OPERATOR
+    """The number of failed or unknown devices reached the rollout's failure threshold."""
+    FAILURE_THRESHOLD
+    """The artifact can no longer be assigned: it was retired, or it lost the signature this instance requires."""
+    ARTIFACT_NOT_ASSIGNABLE
+}
+
+"""Where one device of a rollout stands. Every outcome after dispatch is read from the device's own update attempt."""
+enum UpdateRolloutOutcome {
+    """Not dispatched yet."""
+    PENDING
+    """Dispatched; the device's update attempt has not finished."""
+    IN_FLIGHT
+    """The device confirmed it runs the artifact (UPDATED)."""
+    SUCCEEDED
+    """The device's update attempt FAILED or TIMED_OUT."""
+    FAILED
+    """The device's update outcome is UNKNOWN; it holds its slot and counts toward the failure threshold."""
+    UNKNOWN
+    """The rollout was aborted before this device was dispatched, or its update was cancelled."""
+    CANCELLED
+    """The device was refused at dispatch (skipCode says why) and was not told anything."""
+    SKIPPED
+}
+
+"""A rollout's targets counted by outcome."""
+type UpdateRolloutProgress {
+    """Every target in the frozen set."""
+    total: Int!
+    """Targets not dispatched yet."""
+    pending: Int!
+    """Targets whose update attempt has not finished."""
+    inFlight: Int!
+    """Targets whose device confirmed the update."""
+    succeeded: Int!
+    """Targets whose update attempt failed or timed out."""
+    failed: Int!
+    """Targets whose update outcome is unknown."""
+    unknown: Int!
+    """Targets cancelled by an abort, or whose update was cancelled."""
+    cancelled: Int!
+    """Targets refused at dispatch."""
+    skipped: Int!
+}
+
+"""An artifact assigned to the devices of a group, a capped number at a time."""
+type UpdateRollout {
+    """Internal identifier."""
+    id: ID!
+    """The rollout's token."""
+    token: String!
+    """A label for the rollout."""
+    name: String!
+    """The artifact the devices are moved to."""
+    artifact: Artifact!
+    """The device group whose members are the targets."""
+    groupToken: String!
+    """The published version of a dynamic group the start resolved; null for a static group or before the start."""
+    groupVersion: Int
+    """The most devices whose update may be unfinished at once. A device whose outcome is UNKNOWN keeps its place."""
+    maxInFlight: Int!
+    """The number of failed or unknown devices at which the rollout pauses itself; null when it never does."""
+    failureThreshold: Int
+    """Where the rollout is in its lifecycle."""
+    state: UpdateRolloutState!
+    """Why the rollout is paused; null unless it is PAUSED."""
+    pauseReason: UpdateRolloutPauseReason
+    """How many devices the start froze as targets; 0 before the start."""
+    targetCount: Int!
+    """When the rollout was declared, as an RFC 3339 timestamp."""
+    createdAt: String
+    """Who declared the rollout."""
+    createdBy: String
+    """When the rollout started, as an RFC 3339 timestamp; null before the start."""
+    startedAt: String
+    """When the rollout completed or was aborted, as an RFC 3339 timestamp."""
+    finishedAt: String
+    """Who last started, paused, resumed or aborted it; null when the rollout itself made the last change (completing, or pausing at its threshold)."""
+    stateChangedBy: String
+    """When the state last changed, as an RFC 3339 timestamp."""
+    stateChangedAt: String
+    """The targets counted by outcome."""
+    progress: UpdateRolloutProgress!
+}
+
+"""One device of a rollout's target set."""
+type UpdateRolloutTarget {
+    """The device's token."""
+    deviceToken: String!
+    """Where the device stands."""
+    outcome: UpdateRolloutOutcome!
+    """The token of the update assignment the rollout made or adopted for the device; null before dispatch and when skipped."""
+    assignmentToken: String
+    """The state of the device's update attempt; null before dispatch and when skipped."""
+    attemptState: UpdateState
+    """Why the device was refused at dispatch (the assignment plane's own code, such as DEVICE_DISABLED or UPDATE_IN_PROGRESS); null otherwise."""
+    skipCode: String
+    """The refusal's message; null unless skipped."""
+    skipDetail: String
+    """When the device was dispatched, as an RFC 3339 timestamp."""
+    dispatchedAt: String
+}
+
+"""A rollout to declare. It is created DRAFT and does nothing until it is started."""
+input UpdateRolloutCreateRequest {
+    """The rollout's token, unique in the tenant."""
+    token: String!
+    """A label; the token when omitted."""
+    name: String
+    """The AVAILABLE artifact to roll out."""
+    artifactToken: String!
+    """The device group whose members, as of the start, are the targets."""
+    groupToken: String!
+    """The most devices whose update may be unfinished at once, from 1 to 1000."""
+    maxInFlight: Int!
+    """Pause the rollout once this many devices failed or have an unknown outcome. Omit it to never pause on failures."""
+    failureThreshold: Int
+}
+
+"""Criteria for searching rollouts."""
+input UpdateRolloutSearchCriteria {
+    """Page to return, starting at 1. A value below 1 is treated as 1."""
+    pageNumber: Int!
+    """Records per page."""
+    pageSize: Int!
+    """Only rollouts in this state."""
+    state: UpdateRolloutState
+}
+
+"""A page of rollouts."""
+type UpdateRolloutSearchResults {
+    """The rollouts on this page, newest first."""
+    results: [UpdateRollout!]!
+    """Pagination info for the search."""
+    pagination: SearchResultsPagination!
+}
+
+"""Criteria for paging a rollout's targets."""
+input UpdateRolloutTargetSearchCriteria {
+    """Page to return, starting at 1. A value below 1 is treated as 1."""
+    pageNumber: Int!
+    """Records per page."""
+    pageSize: Int!
+    """Only targets with this outcome."""
+    outcome: UpdateRolloutOutcome
+}
+
+"""A page of a rollout's targets."""
+type UpdateRolloutTargetSearchResults {
+    """The targets on this page, in the order the start froze them."""
+    results: [UpdateRolloutTarget!]!
+    """Pagination info for the search."""
+    pagination: SearchResultsPagination!
+}
+
 """The update-management read operations."""
 type Query {
     """Non-sensitive service identity (the deployed functional area)."""
@@ -428,6 +600,31 @@ type Query {
         """
         criteria: UpdateAssignmentSearchCriteria!
     ): UpdateAssignmentSearchResults!
+    """Look up a group rollout by token. Requires artifact:read; not available to a member limited to part of the tenant. Null when there is none in the caller's tenant."""
+    updateRollout(
+        """
+        The token of the rollout to look up.
+        """
+        token: String!
+    ): UpdateRollout
+    """Search the tenant's group rollouts, newest first. Requires artifact:read; not available to a member limited to part of the tenant."""
+    updateRollouts(
+        """
+        The filters and page to search with.
+        """
+        criteria: UpdateRolloutSearchCriteria!
+    ): UpdateRolloutSearchResults!
+    """Page a rollout's targets, with each device's outcome. Requires artifact:read; not available to a member limited to part of the tenant. Null when the tenant has no such rollout."""
+    updateRolloutTargets(
+        """
+        The token of the rollout.
+        """
+        token: String!
+        """
+        The filters and page to search with.
+        """
+        criteria: UpdateRolloutTargetSearchCriteria!
+    ): UpdateRolloutTargetSearchResults
 }
 
 """The update-management write operations."""
@@ -548,4 +745,64 @@ type Mutation {
         """
         reason: String!
     ): UpdateAssignment!
+    """
+    Declare a group rollout in the DRAFT state. Requires artifact:write. The artifact must be AVAILABLE and
+    assignable on this instance (an artifact that is not SIGNED is refused unless the instance allows it). Nothing
+    is resolved or sent until the rollout is started.
+    """
+    createUpdateRollout(
+        """
+        The rollout to declare.
+        """
+        request: UpdateRolloutCreateRequest!
+    ): UpdateRollout!
+    """
+    Start a DRAFT rollout. Requires artifact:write. The group's members are frozen now as the target set: a device
+    that joins the group later is not part of the rollout, and one that leaves it stays a target. A group of more
+    than 10000 devices is refused (ROLLOUT_TOO_LARGE). Devices are then assigned the artifact through the same rules
+    as assignArtifact, at most maxInFlight unfinished at once; a device the assignment plane refuses is SKIPPED with
+    its code.
+    """
+    startUpdateRollout(
+        """
+        The token of the rollout to start.
+        """
+        token: String!
+    ): UpdateRollout!
+    """
+    Pause a RUNNING rollout. Requires artifact:write. No further device is dispatched; devices already working on
+    the update carry on, since pausing does not recall them. Pausing a paused rollout changes nothing.
+    """
+    pauseUpdateRollout(
+        """
+        The token of the rollout to pause.
+        """
+        token: String!
+    ): UpdateRollout!
+    """
+    Resume a PAUSED rollout. Requires artifact:write. A rollout whose failed or unknown devices reach its failure
+    threshold is refused (ROLLOUT_FAILURE_THRESHOLD_REACHED) unless a higher failureThreshold is passed: resuming
+    never resets the count. Resuming a running rollout changes nothing.
+    """
+    resumeUpdateRollout(
+        """
+        The token of the rollout to resume.
+        """
+        token: String!
+        """
+        A new failure threshold for the rollout, replacing the one it has.
+        """
+        failureThreshold: Int
+    ): UpdateRollout!
+    """
+    Abort a rollout for good. Requires artifact:write. Devices not yet dispatched are cancelled. Devices already
+    working on the update are left to finish and keep being reported in the progress; cancel any of them with
+    cancelUpdate. Aborting an aborted rollout changes nothing; a completed one cannot be aborted.
+    """
+    abortUpdateRollout(
+        """
+        The token of the rollout to abort.
+        """
+        token: String!
+    ): UpdateRollout!
 }

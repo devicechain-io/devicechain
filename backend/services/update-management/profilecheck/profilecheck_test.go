@@ -9,6 +9,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/stretchr/testify/require"
 )
 
@@ -143,4 +144,40 @@ func TestDeviceOfReadsTheScopeAnchors(t *testing.T) {
 	}}
 	_, _, err = New(q, "u").DeviceOf(context.Background(), "acme", "dev-1")
 	require.Error(t, err)
+}
+
+func TestResolveGroupTargetsRelaysAPageAndItsCursor(t *testing.T) {
+	q := &fakeQuerier{respond: func(v map[string]any) (string, error) {
+		require.Equal(t, "fleet", v["groupToken"])
+		require.Nil(t, v["afterId"], "the first page carries no cursor, as an explicit null")
+		require.Nil(t, v["version"])
+		return `{"resolveDeviceGroupTargets":{"rejected":false,"deviceTokens":["d1","d2"],"nextCursor":"c2","resolvedVersion":3}}`, nil
+	}}
+	page, err := New(q, "u").ResolveGroupTargets(core.WithTenant(context.Background(), "acme"), "fleet", nil, "", 1000)
+	require.NoError(t, err)
+	require.Equal(t, "acme", q.tenant)
+	require.False(t, page.Rejected)
+	require.Equal(t, []string{"d1", "d2"}, page.DeviceTokens)
+	require.Equal(t, "c2", page.NextCursor)
+	require.Equal(t, int32(3), *page.ResolvedVersion)
+}
+
+func TestResolveGroupTargetsKeepsARejectionApartFromAnError(t *testing.T) {
+	q := &fakeQuerier{respond: func(map[string]any) (string, error) {
+		return `{"resolveDeviceGroupTargets":{"rejected":true,"code":"NOT_A_DEVICE_GROUP","reason":"collects assets","deviceTokens":[]}}`, nil
+	}}
+	page, err := New(q, "u").ResolveGroupTargets(core.WithTenant(context.Background(), "acme"), "g", nil, "", 10)
+	require.NoError(t, err)
+	require.True(t, page.Rejected)
+	require.Equal(t, "NOT_A_DEVICE_GROUP", page.Code)
+
+	// An answer with no verdict is a broken response, never an empty group.
+	q = &fakeQuerier{respond: func(map[string]any) (string, error) {
+		return `{"resolveDeviceGroupTargets":{"deviceTokens":[]}}`, nil
+	}}
+	_, err = New(q, "u").ResolveGroupTargets(core.WithTenant(context.Background(), "acme"), "g", nil, "", 10)
+	require.Error(t, err)
+
+	_, err = New(q, "u").ResolveGroupTargets(context.Background(), "g", nil, "", 10)
+	require.Error(t, err, "no tenant, no lookup")
 }

@@ -21,8 +21,8 @@ The update service is optional, and not every installation runs it. If yours doe
 has no **Updates** group and devices have no Updates tab. See
 [turning it on](/concepts/over-the-air-updates#enabling).
 
-In the sidebar, **Updates** has two screens: **Artifacts** and **Signers**. Assigning an update to a
-device happens on the device's own page, on its [Updates tab](#assigning-an-update-to-a-device).
+In the sidebar, **Updates** has three screens: **Artifacts**, **Rollouts** and **Signers**. Updating a
+whole device group happens on [Rollouts](#rollouts); assigning an update to a single device happens on the device's own page, on its [Updates tab](#assigning-an-update-to-a-device).
 
 ## Artifacts
 
@@ -235,12 +235,42 @@ queued update is cancelled at once. One the device has already picked up stays *
 while the device is disabled, because its reports are refused: the cancel completes when the device
 is enabled again and confirms, or the update ends as timed out at its stage deadline.
 
+## Rollouts {#rollouts}
+
+**Rollouts** update a whole device group, a few devices at a time. Use it when one device at a time
+is too slow and every device at once is too risky.
+
+**New rollout** asks for a token, an optional name, an **Artifact** (only available ones are offered),
+a **Device group**, **Devices updating at once** and an optional **Failure threshold**. The rollout is
+created as a draft and nothing is sent to any device yet.
+
+On the rollout's page:
+
+- **Start** freezes the group's current members as the rollout's devices and tells the first ones to
+  update. Devices that join the group later are not included; devices that leave stay in the rollout.
+- **Pause** stops more devices being told. Devices already updating carry on, and **Resume** carries
+  on from where it stopped.
+- **Abort** cancels the devices not yet told and ends the rollout. Devices already updating are left to
+  finish; you can cancel any of them from its own [Updates tab](#assigning-an-update-to-a-device).
+
+The summary shows how many devices are pending, in flight, succeeded, failed, unknown, cancelled and
+skipped, and the **Devices** table lists each one with its outcome, filterable by outcome. A skipped
+device was refused by the same rules as a single assignment (for example a disabled device, or one
+busy with another update), and its **Reason** column says which. A device whose outcome is unknown
+counts as a failure and keeps its place under **Devices updating at once**.
+
+When failed and unknown devices reach the **Failure threshold**, the rollout pauses itself. To carry
+on, enter a higher threshold and choose **Resume with this threshold**: resuming never resets the
+count. A rollout also pauses itself if its artifact is retired while it runs.
+
+Rollouts need `artifact:read` to view and `artifact:write` to create and control.
+
 ## Members limited to some customers {#members-limited-to-some-customers}
 
 A member whose access is limited to some of your customers, and who holds `artifact:read`, can read
 the update assignments of the devices that were assigned to one of those customers when the update
-was assigned to them. It cannot assign, cancel or abandon an update, and it cannot list artifacts or
-signers. Assignments made before your instance recorded who a device was assigned to are not shown
+was assigned to them. It cannot assign, cancel or abandon an update, and it cannot list artifacts,
+signers or rollouts. Assignments made before your instance recorded who a device was assigned to are not shown
 to such a member.
 
 ## Related

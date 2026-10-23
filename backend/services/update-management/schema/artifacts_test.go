@@ -13,7 +13,7 @@ import (
 )
 
 func TestTheArtifactsMigrationIsAppendedAfterTheBaselineWithItsOwnID(t *testing.T) {
-	require.Len(t, Migrations, 8)
+	require.Len(t, Migrations, 9)
 	require.Equal(t, BaselineID, Migrations[0].ID)
 	require.Equal(t, ArtifactsID, Migrations[1].ID)
 	require.Equal(t, UploadLeaseID, Migrations[2].ID)
@@ -22,6 +22,7 @@ func TestTheArtifactsMigrationIsAppendedAfterTheBaselineWithItsOwnID(t *testing.
 	require.Equal(t, SignersID, Migrations[5].ID)
 	require.Equal(t, AssignmentSignatureID, Migrations[6].ID)
 	require.Equal(t, AssignmentScopeAnchorsID, Migrations[7].ID)
+	require.Equal(t, RolloutsID, Migrations[8].ID)
 	require.Greater(t, AssignmentScopeAnchorsID, AssignmentSignatureID)
 	require.NotEqual(t, BaselineID, ArtifactsID)
 	// IDs are unique across the chain: gormigrate keys applied migrations by ID.

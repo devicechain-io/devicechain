@@ -1507,7 +1507,7 @@ var probeSelector = `attr["` + probeFacetKey + `"] == "` + probeFacetValue + `"`
 // that has stopped meaning anything.
 func coveredCreates() int {
 	seen := map[string]bool{}
-	for _, e := range entities {
+	for _, e := range allEntities() {
 		if strings.HasPrefix(e.Mutation, "create") {
 			seen[e.Mutation] = true
 		}
@@ -1529,7 +1529,7 @@ func otherWrites() int {
 	return len(seen)
 }
 
-const tenantCreateMutations = 30
+const tenantCreateMutations = 31
 
 // tenantPublishMutations is the same claim for publishes, measured the same way by
 // TestThePublishDenominatorMatchesTheSchemas. Separate from the count above because

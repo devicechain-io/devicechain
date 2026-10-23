@@ -5,6 +5,8 @@ ALTER SEQUENCE "update-management".audit_events_id_seq OWNED BY "update-manageme
 ALTER SEQUENCE "update-management".secrets_id_seq OWNED BY "update-management".secrets.id;
 ALTER SEQUENCE "update-management".update_assignments_id_seq OWNED BY "update-management".update_assignments.id;
 ALTER SEQUENCE "update-management".update_attempts_id_seq OWNED BY "update-management".update_attempts.id;
+ALTER SEQUENCE "update-management".update_rollout_targets_id_seq OWNED BY "update-management".update_rollout_targets.id;
+ALTER SEQUENCE "update-management".update_rollouts_id_seq OWNED BY "update-management".update_rollouts.id;
 ALTER TABLE ONLY "update-management".artifact_signatures
  ADD CONSTRAINT artifact_signatures_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "update-management".artifact_signatures ALTER COLUMN id SET DEFAULT nextval('"update-management".artifact_signatures_id_seq'::regclass);
@@ -30,6 +32,12 @@ ALTER TABLE ONLY "update-management".update_attempts
 ALTER TABLE ONLY "update-management".update_attempts ALTER COLUMN id SET DEFAULT nextval('"update-management".update_attempts_id_seq'::regclass);
 ALTER TABLE ONLY "update-management".update_management_migrations
  ADD CONSTRAINT update_management_migrations_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "update-management".update_rollout_targets
+ ADD CONSTRAINT update_rollout_targets_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "update-management".update_rollout_targets ALTER COLUMN id SET DEFAULT nextval('"update-management".update_rollout_targets_id_seq'::regclass);
+ALTER TABLE ONLY "update-management".update_rollouts
+ ADD CONSTRAINT update_rollouts_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "update-management".update_rollouts ALTER COLUMN id SET DEFAULT nextval('"update-management".update_rollouts_id_seq'::regclass);
 CREATE INDEX "idx_update-management_artifact_signatures_artifact_id" ON "update-management".artifact_signatures USING btree (artifact_id);
 CREATE INDEX "idx_update-management_artifact_signatures_signer_id" ON "update-management".artifact_signatures USING btree (signer_id);
 CREATE INDEX "idx_update-management_artifact_signatures_tenant_id" ON "update-management".artifact_signatures USING btree (tenant_id);
@@ -45,9 +53,14 @@ CREATE INDEX "idx_update-management_update_assignments_artifact_id" ON "update-m
 CREATE INDEX "idx_update-management_update_assignments_device_token" ON "update-management".update_assignments USING btree (device_token);
 CREATE INDEX "idx_update-management_update_assignments_tenant_id" ON "update-management".update_assignments USING btree (tenant_id);
 CREATE INDEX "idx_update-management_update_attempts_tenant_id" ON "update-management".update_attempts USING btree (tenant_id);
+CREATE INDEX "idx_update-management_update_rollout_targets_tenant_id" ON "update-management".update_rollout_targets USING btree (tenant_id);
+CREATE INDEX "idx_update-management_update_rollouts_artifact_id" ON "update-management".update_rollouts USING btree (artifact_id);
+CREATE INDEX "idx_update-management_update_rollouts_tenant_id" ON "update-management".update_rollouts USING btree (tenant_id);
 CREATE INDEX idx_audit_tenant_time ON "update-management".audit_events USING btree (tenant_id, occurred_time DESC);
 CREATE INDEX idx_update_assignments_scope_anchors ON "update-management".update_assignments USING gin (scope_anchors);
 CREATE INDEX ix_update_attempts_state_report ON "update-management".update_attempts USING btree (state, last_report_at);
+CREATE INDEX ix_update_rollout_targets_rollout_status ON "update-management".update_rollout_targets USING btree (rollout_id, status, id);
+CREATE INDEX ix_update_rollouts_state ON "update-management".update_rollouts USING btree (state);
 CREATE SCHEMA "update-management";
 CREATE SEQUENCE "update-management".artifact_signatures_id_seq
  START WITH 1
@@ -86,6 +99,18 @@ CREATE SEQUENCE "update-management".update_assignments_id_seq
  NO MAXVALUE
  CACHE 1;
 CREATE SEQUENCE "update-management".update_attempts_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE SEQUENCE "update-management".update_rollout_targets_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE SEQUENCE "update-management".update_rollouts_id_seq
  START WITH 1
  INCREMENT BY 1
  NO MINVALUE
@@ -213,6 +238,40 @@ CREATE TABLE "update-management".update_attempts (
 CREATE TABLE "update-management".update_management_migrations (
  id character varying(255) NOT NULL
 );
+CREATE TABLE "update-management".update_rollout_targets (
+ id bigint NOT NULL,
+ created_at timestamp with time zone,
+ updated_at timestamp with time zone,
+ tenant_id character varying(128) NOT NULL,
+ rollout_id bigint NOT NULL,
+ device_token character varying(128) NOT NULL,
+ status character varying(16) NOT NULL,
+ assignment_id bigint,
+ dispatched_at timestamp with time zone,
+ skip_code character varying(64) NOT NULL,
+ skip_detail character varying(512) NOT NULL
+);
+CREATE TABLE "update-management".update_rollouts (
+ id bigint NOT NULL,
+ created_at timestamp with time zone,
+ updated_at timestamp with time zone,
+ tenant_id character varying(128) NOT NULL,
+ token character varying(128) NOT NULL,
+ name character varying(128) NOT NULL,
+ artifact_id bigint NOT NULL,
+ group_token character varying(128) NOT NULL,
+ group_version integer,
+ max_in_flight bigint NOT NULL,
+ failure_threshold integer,
+ state character varying(16) NOT NULL,
+ pause_reason character varying(32) NOT NULL,
+ target_count bigint NOT NULL,
+ created_by character varying(256),
+ started_at timestamp with time zone,
+ finished_at timestamp with time zone,
+ state_changed_by character varying(256),
+ state_changed_at timestamp with time zone
+);
 CREATE UNIQUE INDEX uix_artifact_signatures_artifact_signer ON "update-management".artifact_signatures USING btree (artifact_id, signer_id);
 CREATE UNIQUE INDEX uix_artifact_signers_tenant_key ON "update-management".artifact_signers USING btree (tenant_id, key_id);
 CREATE UNIQUE INDEX uix_artifact_signers_tenant_token ON "update-management".artifact_signers USING btree (tenant_id, token);
@@ -223,3 +282,5 @@ CREATE UNIQUE INDEX uix_update_assignments_current ON "update-management".update
 CREATE UNIQUE INDEX uix_update_assignments_tenant_token ON "update-management".update_assignments USING btree (tenant_id, token);
 CREATE UNIQUE INDEX uix_update_attempts_assignment ON "update-management".update_attempts USING btree (assignment_id);
 CREATE UNIQUE INDEX uix_update_attempts_tenant_token ON "update-management".update_attempts USING btree (tenant_id, token);
+CREATE UNIQUE INDEX uix_update_rollout_targets_rollout_device ON "update-management".update_rollout_targets USING btree (rollout_id, device_token);
+CREATE UNIQUE INDEX uix_update_rollouts_tenant_token ON "update-management".update_rollouts USING btree (tenant_id, token);

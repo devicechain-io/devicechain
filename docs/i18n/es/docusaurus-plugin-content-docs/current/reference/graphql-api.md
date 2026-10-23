@@ -85,7 +85,9 @@ fuera del router `/api`. `event-sources` sí está enrutado, pero responde con u
 posición: la ingesta llega a él por los transportes del plano de dispositivo, no por esta API.
 `update-management` también está enrutado: su API es el catálogo de artefactos (`createArtifact`,
 `artifact`, `artifacts`, `retireArtifact`) y la asignación de un artefacto disponible a un
-dispositivo (`assignArtifact`, `cancelUpdate`, `updateAssignment`, `updateAssignments`). Una asignación
+dispositivo (`assignArtifact`, `cancelUpdate`, `updateAssignment`, `updateAssignments`) o, como despliegue con límite, a un
+grupo de dispositivos (`createUpdateRollout`, `startUpdateRollout`, `pauseUpdateRollout`, `resumeUpdateRollout`,
+`abortUpdateRollout`, `updateRollout`, `updateRollouts`, `updateRolloutTargets`). Una asignación
 lleva un intento de actualización cuyo estado pasa de `QUEUED` por `INITIATED`, `DOWNLOADING`, `DOWNLOADED`, `VERIFIED`, `UPDATING`
 y `REBOOTING` hasta `UPDATED`, o a `FAILED`, `TIMED_OUT`, `UNKNOWN` o `CANCELLED`; `UPDATED` solo se alcanza
 cuando el dispositivo informa de que la versión de destino está en ejecución, con un nuevo arranque cuando
