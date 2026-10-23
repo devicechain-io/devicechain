@@ -183,6 +183,60 @@ public class MqttNetConnectionTests
         Assert.False(connection.IsConnected);
     }
 
+    // Every 3.1.1 return code that is a verdict on the CLIENT stops the reconnect loop: 0x01 an
+    // unacceptable protocol version, 0x02 identifier rejected (the callout's client-id rule), 0x04
+    // bad user name or password, 0x05 not authorized. A retry presents the same CONNECT again.
+    [Theory]
+    [InlineData((byte)0x01, "UnsupportedProtocolVersion")]
+    [InlineData((byte)0x02, "ClientIdentifierNotValid")]
+    [InlineData((byte)0x04, "BadUserNameOrPassword")]
+    [InlineData((byte)0x05, "NotAuthorized")]
+    public async Task AnIdentityRefusalIsARefusal(byte code, string named)
+    {
+        using var broker = new ScriptedMqttBroker(connackCode: code);
+        await using var connection = new MqttNetConnection();
+        using var cts = new CancellationTokenSource(Timeout);
+
+        var failure = await Assert.ThrowsAsync<MqttConnectRefusedException>(
+            () => connection.ConnectAsync(OptionsFor(broker), cts.Token));
+        Assert.Contains(named, failure.Message);
+    }
+
+    // 🔴 A CONNACK THAT IS NOT ABOUT THE CLIENT MUST STAY RETRYABLE. 0x03 "server unavailable" is
+    // the broker saying "not now", and a session that took it as a refusal would stop reconnecting
+    // for good after one bad moment on the broker's side -- the opposite failure to the one a
+    // refusal type exists to prevent, and a far worse one for a fleet.
+    [Fact]
+    public async Task ServerUnavailableIsATransportFailureNotARefusal()
+    {
+        using var broker = new ScriptedMqttBroker(connackCode: 0x03);
+        await using var connection = new MqttNetConnection();
+        using var cts = new CancellationTokenSource(Timeout);
+
+        var failure = await Assert.ThrowsAnyAsync<MqttConnectionException>(
+            () => connection.ConnectAsync(OptionsFor(broker), cts.Token));
+        Assert.IsNotType<MqttConnectRefusedException>(failure);
+        Assert.False(connection.IsConnected);
+    }
+
+    // 🔴 NO CONNACK AT ALL IS A FAULT. MQTTnet reports a socket that closed during the CONNECT
+    // exchange with the SAME exception type it uses for a refusal, carrying no result, and its
+    // ResultCode then reads UnspecifiedError rather than anything that says "no answer". nats-server
+    // closes a connect this way when it cannot serve it yet (the account's JetStream not ready), so
+    // classifying by the exception type alone stops a fleet's reconnects during a broker restart.
+    [Fact]
+    public async Task AConnectionDroppedBeforeConnackIsATransportFailureNotARefusal()
+    {
+        using var broker = new ScriptedMqttBroker(closeOnConnect: true);
+        await using var connection = new MqttNetConnection();
+        using var cts = new CancellationTokenSource(Timeout);
+
+        var failure = await Assert.ThrowsAnyAsync<MqttConnectionException>(
+            () => connection.ConnectAsync(OptionsFor(broker), cts.Token));
+        Assert.IsNotType<MqttConnectRefusedException>(failure);
+        Assert.False(connection.IsConnected);
+    }
+
     // QoS-1 publish completes only on PUBACK, and the bytes must arrive unaltered — the publish
     // path carries the same JSON body the HTTP carrier posts.
     [Fact]

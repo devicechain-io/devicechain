@@ -157,7 +157,7 @@ public sealed class MqttNetConnection : IMqttConnection
             await DialAndConnectAsync(built, options, cancellationToken).ConfigureAwait(false);
         }
         catch (MQTTnet.Adapter.MqttConnectingFailedException ex)
-            when (ex.ResultCode != MqttClientConnectResultCode.Success)
+            when (ex.Result != null && IsRefusal(ex.Result.ResultCode))
         {
             // 🔴 A REFUSAL IS A DECISION, NOT A FAULT. MQTTnet reports a non-success CONNACK by
             // THROWING (its ThrowOnNonSuccessfulConnectResponse default) rather than returning the
@@ -165,8 +165,14 @@ public sealed class MqttNetConnection : IMqttConnection
             // transport-failure wrap below. The session then retried a credential the callout had
             // refused, forever, as if the network were down -- and only a broker that actually
             // refuses, which the scripted rigs and an authless broker never do, could show it.
+            //
+            // 🔴 ...BUT ONLY A CONNACK THAT JUDGED THE CLIENT. MQTTnet throws this same type, with
+            // NO Result, when the socket fails during the CONNECT exchange (its ResultCode then
+            // reads UnspecifiedError), and a "server unavailable" CONNACK is the broker saying "not
+            // now". Both fall through to the transport-failure wrap and stay retryable; treating
+            // them as refusals would stop a session's reconnects for good after one broker restart.
             throw new MqttConnectRefusedException(
-                $"the broker refused the connection for client id \"{options.ClientId}\": {ex.ResultCode}", ex);
+                $"the broker refused the connection for client id \"{options.ClientId}\": {ex.Result.ResultCode}", ex);
         }
         catch (Exception ex) when (!(ex is MqttConnectionException) && !(ex is OperationCanceledException))
         {
@@ -254,10 +260,39 @@ public sealed class MqttNetConnection : IMqttConnection
         MqttClientOptions built, MqttConnectOptions options, CancellationToken cancellationToken)
     {
         var result = await _client.ConnectAsync(built, cancellationToken).ConfigureAwait(false);
-        if (result.ResultCode != MqttClientConnectResultCode.Success)
+        if (result.ResultCode == MqttClientConnectResultCode.Success)
+        {
+            return;
+        }
+
+        if (IsRefusal(result.ResultCode))
         {
             throw new MqttConnectRefusedException(
                 $"the broker refused the connection for client id \"{options.ClientId}\": {result.ResultCode}");
+        }
+
+        throw new MqttConnectionException(
+            $"connecting to {options.BrokerUri} as \"{options.ClientId}\" failed: the broker answered {result.ResultCode}");
+    }
+
+    // The CONNACK codes that are a verdict on the CLIENT -- its identity, its credential, its
+    // protocol -- and so will be given again to the same CONNECT. Everything else, "server
+    // unavailable" and "server busy" above all, is about the broker's moment and stays retryable.
+    // An allow-list on purpose: a code this does not name costs a backed-off retry, while a
+    // transient code wrongly named here would end a session's reconnects for good.
+    private static bool IsRefusal(MqttClientConnectResultCode code)
+    {
+        switch (code)
+        {
+            case MqttClientConnectResultCode.UnsupportedProtocolVersion:
+            case MqttClientConnectResultCode.ClientIdentifierNotValid:
+            case MqttClientConnectResultCode.BadUserNameOrPassword:
+            case MqttClientConnectResultCode.NotAuthorized:
+            case MqttClientConnectResultCode.Banned:
+            case MqttClientConnectResultCode.BadAuthenticationMethod:
+                return true;
+            default:
+                return false;
         }
     }
 

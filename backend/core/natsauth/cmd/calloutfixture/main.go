@@ -71,7 +71,8 @@ import (
 )
 
 // fixtureOut is the file the fixture writes once it is ready. The C# tests parse it; its field
-// names are a contract with sdks/csharp/tests/DeviceChain.Sdk.Tests/RealCalloutFixture.cs.
+// names are a contract with RealCalloutFixture in
+// sdks/csharp/tests/DeviceChain.Sdk.Tests/MqttRealCalloutTests.cs.
 type fixtureOut struct {
 	MqttURL    string          `json:"mqttUrl"`
 	ControlURL string          `json:"controlUrl"`
