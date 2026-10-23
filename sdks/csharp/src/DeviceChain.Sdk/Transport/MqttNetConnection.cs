@@ -156,6 +156,18 @@ public sealed class MqttNetConnection : IMqttConnection
         {
             await DialAndConnectAsync(built, options, cancellationToken).ConfigureAwait(false);
         }
+        catch (MQTTnet.Adapter.MqttConnectingFailedException ex)
+            when (ex.ResultCode != MqttClientConnectResultCode.Success)
+        {
+            // 🔴 A REFUSAL IS A DECISION, NOT A FAULT. MQTTnet reports a non-success CONNACK by
+            // THROWING (its ThrowOnNonSuccessfulConnectResponse default) rather than returning the
+            // result, so the check in ConnectOnceAsync never sees one and this used to fall into the
+            // transport-failure wrap below. The session then retried a credential the callout had
+            // refused, forever, as if the network were down -- and only a broker that actually
+            // refuses, which the scripted rigs and an authless broker never do, could show it.
+            throw new MqttConnectRefusedException(
+                $"the broker refused the connection for client id \"{options.ClientId}\": {ex.ResultCode}", ex);
+        }
         catch (Exception ex) when (!(ex is MqttConnectionException) && !(ex is OperationCanceledException))
         {
             // 🔑 MQTTnet SWALLOWS THE CANCELLATION AND RETHROWS ITS OWN TYPE. A caller's expired

@@ -30,7 +30,8 @@ namespace DeviceChain.Sdk.Tests;
 /// REFUSAL therefore cannot be produced by this rig at all, which is why the scripted-broker test
 /// exists alongside it. What this covers is real protocol behaviour: 3.1.1 negotiation, QoS-1
 /// PUBACK, session persistence across a reconnect, redelivery, and a whole scene's worth of
-/// concurrent sessions sharing one broker.
+/// concurrent sessions sharing one broker. Admission through the real callout, including a
+/// refused connect and a refused subscribe, is <see cref="MqttRealCalloutTests"/>.
 /// </para>
 /// <para>
 /// 🔴 THE BROKER MUST BE CONFIGURED WITH <c>mqtt { ack_wait: "1s" }</c>. nats-server's default is

@@ -174,8 +174,12 @@ public class MqttNetConnectionTests
         await using var connection = new MqttNetConnection();
         using var cts = new CancellationTokenSource(Timeout);
 
-        await Assert.ThrowsAsync<MqttConnectionException>(
+        // 🔴 THE REFUSAL TYPE, NOT THE BASE. MQTTnet throws for a non-success CONNACK instead of
+        // returning it, so without a dedicated catch this surfaced as an ordinary transport failure
+        // and the session's reconnect loop retried a decision the broker had already made.
+        var failure = await Assert.ThrowsAsync<MqttConnectRefusedException>(
             () => connection.ConnectAsync(OptionsFor(broker), cts.Token));
+        Assert.Contains("NotAuthorized", failure.Message);
         Assert.False(connection.IsConnected);
     }
 
