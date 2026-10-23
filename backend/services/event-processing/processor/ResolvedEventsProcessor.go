@@ -1570,7 +1570,7 @@ func (rp *ResolvedEventsProcessor) replayToHead() error {
 		if err != nil {
 			return fmt.Errorf("replay read: %w", err)
 		}
-		// Replay owns its ephemeral acks (via the replay reader), so nothing is
+		// A replay read acknowledges nothing (it is a read by sequence), so nothing is
 		// buffered for the durable here — only the engine is advanced.
 		if rp.applyResolved(msg) {
 			replayed++

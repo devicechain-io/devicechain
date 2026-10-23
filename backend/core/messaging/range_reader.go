@@ -12,31 +12,16 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/streams"
 	nats "github.com/nats-io/nats.go"
-	"github.com/rs/zerolog/log"
 )
 
 const (
-	// rangeDirectMax is the widest range read with one request/reply per sequence. At or
-	// below it nothing is created on the broker, so a gap cannot cost a consumer and a
-	// reply that never arrives is a timeout the caller sees, not part of a batch that
-	// silently went missing. Above it a single bounded consumer is cheaper than that
-	// many round trips.
+	// rangeDirectMax is the widest range read with one request/reply per sequence. Above it
+	// the range is read in batched direct gets (sequence_reader.go), which are cheaper than
+	// that many round trips. Neither creates anything on the broker.
 	rangeDirectMax = 256
-
-	// rangeVerifyMax is the most sequences the consumer-backed read will check one by one
-	// against the stream leader before it believes "nothing more to deliver" (see
-	// consumerRangeReader.restIsAbsent). A longer unproven remainder is not believed; the
-	// read re-creates its consumer instead and eventually fails.
-	rangeVerifyMax = 4 * rangeDirectMax
 
 	// rangeGetTimeout bounds one by-sequence request.
 	rangeGetTimeout = 5 * time.Second
-
-	// maxRangeRecreates bounds how often the consumer-backed read re-creates its consumer
-	// (after losing a delivery, or after its answer could not be confirmed against the
-	// stream leader), so a broker that keeps doing either fails the read loudly instead of
-	// looping.
-	maxRangeRecreates = 8
 )
 
 // RangeStats is what a range read found. It is complete once Read has returned io.EOF.
@@ -74,17 +59,12 @@ type RangeStatser interface {
 // on one peer, which may be a follower still catching up, so neither its answers nor a
 // "not found" are taken as the stream's.
 //
-// Ranges of at most 256 sequences are read one by one by sequence, creating no consumer. A
-// sequence reported not found counts as absent only if the leader accounts for it: below its
-// first retained sequence, or in the deleted set its state reports. A sequence the leader
-// holds but cannot read fails the read. Wider ranges skip
-// the part below the stream's first retained sequence (and create no consumer at all when
-// the whole range is below it) and use one bounded ephemeral pull consumer. That reader
-// verifies that the consumer's delivery sequence advances by one per message and
-// re-creates the consumer after the last message received when it does not, because a
-// delivery the connection lost looks, in stream sequences alone, exactly like a purged
-// message. It ends early only when the leader confirms that the rest of the range is
-// absent.
+// Ranges of at most 256 sequences are read one by one by sequence. Wider ranges are read in
+// batched direct gets (sequenceReader), which need the stream to allow direct gets. Neither creates
+// anything on the broker, so the grant to read a range is a read of one stream and the reader
+// needs no consumer name. Both account for every sequence in the range: a hole the answer leaves is
+// an absence only if the stream leader says so, and a reader that is shown an end it cannot
+// confirm retries and then fails rather than ending short.
 func (nmgr *NatsManager) NewRangeReader(suffix string, from, to uint64) (ReplayReader, error) {
 	if err := nmgr.requireReader(suffix, streams.ReadEphemeral); err != nil {
 		return nil, err
@@ -112,22 +92,7 @@ func (nmgr *NatsManager) NewRangeReader(suffix string, from, to uint64) (ReplayR
 		return &seqRangeReader{src: src, from: from, to: to, next: from}, nil
 	}
 
-	lo := from
-	if info.State.FirstSeq > lo {
-		lo = info.State.FirstSeq
-	}
-	if lo > to {
-		// Everything asked for is below the first retained sequence.
-		return &seqRangeReader{src: src, from: from, to: to, next: to + 1, absent: span}, nil
-	}
-	r := &consumerRangeReader{
-		src: src, subject: StreamSubject(nmgr.Microservice.InstanceId, suffix),
-		from: from, to: to, start: lo, fetchWait: fetchTimeout, maxStuck: maxReplayStuckFetches,
-	}
-	if err := r.open(lo); err != nil {
-		return nil, err
-	}
-	return r, nil
+	return &sequenceReader{src: src, nc: nmgr.nc, from: from, to: to, next: from}, nil
 }
 
 // rangeSource is the by-sequence access to the stream leader both readers share.
@@ -141,6 +106,9 @@ type rangeSource struct {
 	// leaderConfirmsAbsent); deleted is the set of purged sequences between the two.
 	lastSeq uint64
 	deleted map[uint64]struct{}
+	// noDirect is set when the leader's configuration (as of the last refresh) says the stream
+	// does not answer direct gets. A state read without a configuration (a test's) leaves it unset.
+	noDirect bool
 	// get and info are the requests themselves; nil means the real ones. A test replaces them.
 	get  func(ctx context.Context, seq uint64) (*nats.RawStreamMsg, error)
 	info func(ctx context.Context) (*nats.StreamInfo, error)
@@ -203,6 +171,15 @@ func (s *rangeSource) leaderConfirmsAbsent(ctx context.Context, seq uint64) (boo
 	if _, ok := s.deleted[seq]; ok {
 		return true, nil
 	}
+	if err := s.refresh(ctx); err != nil {
+		return false, fmt.Errorf("range read of stream %s: confirming seq %d with the stream leader: %w", s.stream, seq, err)
+	}
+	return s.knownAbsent(seq), nil
+}
+
+// refresh asks the stream leader for its state (first and last sequence and the deleted set) so
+// that knownAbsent answers from it.
+func (s *rangeSource) refresh(ctx context.Context) error {
 	cctx, cancel := context.WithTimeout(ctx, rangeGetTimeout)
 	defer cancel()
 	var info *nats.StreamInfo
@@ -213,21 +190,39 @@ func (s *rangeSource) leaderConfirmsAbsent(ctx context.Context, seq uint64) (boo
 		info, err = s.js.StreamInfo(s.stream, &nats.StreamInfoRequest{DeletedDetails: true}, nats.Context(cctx))
 	}
 	if err != nil {
-		return false, fmt.Errorf("range read of stream %s: confirming seq %d with the stream leader: %w", s.stream, seq, err)
+		return fmt.Errorf("range read of stream %s: asking the stream leader for its state: %w", s.stream, err)
 	}
 	if info.State.FirstSeq > s.firstSeq {
 		s.firstSeq = info.State.FirstSeq
 	}
 	s.lastSeq = info.State.LastSeq
+	s.noDirect = info.Config.Name != "" && !info.Config.AllowDirect
 	s.deleted = make(map[uint64]struct{}, len(info.State.Deleted))
 	for _, d := range info.State.Deleted {
 		s.deleted[d] = struct{}{}
 	}
+	return nil
+}
+
+// allKnownAbsent reports whether the leader state last read accounts for every sequence in
+// [lo, hi].
+func (s *rangeSource) allKnownAbsent(lo, hi uint64) bool {
+	for seq := lo; seq <= hi; seq++ {
+		if !s.knownAbsent(seq) {
+			return false
+		}
+	}
+	return true
+}
+
+// knownAbsent reports whether the leader state last read accounts for seq not being held: below
+// the first retained sequence, or in the deleted set.
+func (s *rangeSource) knownAbsent(seq uint64) bool {
 	if seq < s.firstSeq {
-		return true, nil
+		return true
 	}
 	_, ok := s.deleted[seq]
-	return ok, nil
+	return ok
 }
 
 // rawToMessage converts a by-sequence read into the consumed-message shape.
@@ -288,225 +283,3 @@ func (r *seqRangeReader) RangeStats() RangeStats {
 }
 
 func (r *seqRangeReader) Close() error { return nil }
-
-// consumerRangeReader reads a wide range through one ephemeral pull consumer.
-type consumerRangeReader struct {
-	src      *rangeSource
-	subject  string
-	from, to uint64
-	start    uint64 // the first sequence the consumer was first opened at
-
-	sub       *nats.Subscription
-	pending   []*nats.Msg
-	done      uint64 // the last stream sequence returned; 0 until the first
-	lastDseq  uint64 // the consumer sequence of the last message received from this consumer
-	present   uint64
-	timeouts  int
-	recreates int
-	finished  bool
-	failed    bool
-
-	fetchWait time.Duration
-	maxStuck  int
-	// fetch and info are the consumer round trips; nil means the real ones. A test replaces
-	// them to stand in for a consumer on a lagging replica.
-	fetch func() ([]*nats.Msg, error)
-	info  func() (*nats.ConsumerInfo, error)
-}
-
-func (r *consumerRangeReader) open(startSeq uint64) error {
-	if r.sub != nil {
-		_ = r.sub.Unsubscribe()
-		r.sub = nil
-	}
-	sub, err := r.src.js.PullSubscribe(r.subject, "", // empty durable => ephemeral consumer
-		nats.BindStream(r.src.stream),
-		nats.StartSequence(startSeq),
-		// Nothing is acknowledged: the consumer is throwaway, its delivery sequence still
-		// advances per delivery (which is all the contiguity check reads), and an ack on a
-		// work-queue stream would remove messages other readers need.
-		nats.AckNone(),
-		nats.InactiveThreshold(replayInactiveThreshold))
-	if err != nil {
-		return fmt.Errorf("range read of stream %s: open consumer at %d: %w", r.src.stream, startSeq, err)
-	}
-	r.sub = sub
-	r.pending = nil
-	r.lastDseq = 0
-	return nil
-}
-
-// recreate reopens the consumer just after the last message returned.
-func (r *consumerRangeReader) recreate(why string) error {
-	r.recreates++
-	if r.recreates > maxRangeRecreates {
-		return fmt.Errorf("range read of stream %s %d..%d: giving up after %d consumer re-creations (%s)",
-			r.src.stream, r.from, r.to, r.recreates-1, why)
-	}
-	startSeq := r.start
-	if r.done >= startSeq {
-		startSeq = r.done + 1
-	}
-	log.Warn().Str("stream", r.src.stream).Str("why", why).Uint64("from", startSeq).
-		Msg("Range read cannot rely on its consumer; re-creating it")
-	return r.open(startSeq)
-}
-
-func (r *consumerRangeReader) doFetch() ([]*nats.Msg, error) {
-	if r.fetch != nil {
-		return r.fetch()
-	}
-	return r.sub.Fetch(fetchBatch, nats.MaxWait(r.fetchWait))
-}
-
-func (r *consumerRangeReader) doInfo() (*nats.ConsumerInfo, error) {
-	if r.info != nil {
-		return r.info()
-	}
-	return r.sub.ConsumerInfo()
-}
-
-// restIsAbsent asks the stream leader whether the sequences after the last one returned,
-// up to the end of the range, are all absent. The consumer saying it has nothing more is
-// not enough: it lives on one peer, and a follower that has not applied the tail of the
-// range answers "nothing pending" while the leader holds messages there.
-//
-// It reports false, without error, when the leader holds a message the consumer has not
-// delivered or when the remainder is too long to check; either way the consumer's answer is
-// not to be believed.
-func (r *consumerRangeReader) restIsAbsent(ctx context.Context) (bool, error) {
-	next := r.start
-	if r.done >= next {
-		next = r.done + 1
-	}
-	if next > r.to {
-		return true, nil
-	}
-	if r.to-next+1 > rangeVerifyMax {
-		return false, nil
-	}
-	for seq := next; seq <= r.to; seq++ {
-		raw, err := r.src.getOrAbsent(ctx, seq)
-		if err != nil {
-			return false, err
-		}
-		if raw != nil {
-			return false, nil
-		}
-	}
-	return true, nil
-}
-
-func (r *consumerRangeReader) Read(ctx context.Context) (Message, error) {
-	m, err := r.read(ctx)
-	if err != nil && err != io.EOF {
-		r.failed = true
-	}
-	return m, err
-}
-
-func (r *consumerRangeReader) read(ctx context.Context) (Message, error) {
-	for {
-		if r.finished || r.done >= r.to {
-			r.finished = true
-			return Message{}, io.EOF
-		}
-		if err := ctx.Err(); err != nil {
-			return Message{}, err
-		}
-		if len(r.pending) == 0 {
-			msgs, err := r.doFetch()
-			if err != nil {
-				if !errors.Is(err, nats.ErrTimeout) {
-					return Message{}, fmt.Errorf("range read of stream %s: %w", r.src.stream, err)
-				}
-				info, ierr := r.doInfo()
-				if ierr != nil {
-					return Message{}, fmt.Errorf("range read of stream %s: consumer info: %w", r.src.stream, ierr)
-				}
-				if info.Delivered.Consumer != r.lastDseq {
-					// The broker sent something this client never received.
-					if err := r.recreate("tail of a batch lost"); err != nil {
-						return Message{}, err
-					}
-					continue
-				}
-				if info.NumPending == 0 {
-					ok, err := r.restIsAbsent(ctx)
-					if err != nil {
-						return Message{}, err
-					}
-					if ok {
-						// The consumer has nothing more and the stream leader agrees: the
-						// rest of the range is absent.
-						r.finished = true
-						return Message{}, io.EOF
-					}
-					if err := r.recreate("consumer reports nothing pending but the stream holds more of the range"); err != nil {
-						return Message{}, err
-					}
-					continue
-				}
-				if r.timeouts++; r.timeouts > r.maxStuck {
-					return Message{}, fmt.Errorf("range read stalled: stream %s has %d messages pending but delivered none in %d fetches",
-						r.src.stream, info.NumPending, r.timeouts)
-				}
-				continue
-			}
-			r.timeouts = 0
-			r.pending = msgs
-		}
-		nm := r.pending[0]
-		md, err := nm.Metadata()
-		if err != nil {
-			return Message{}, fmt.Errorf("range read of stream %s: message without metadata: %w", r.src.stream, err)
-		}
-		if md.Sequence.Consumer != r.lastDseq+1 {
-			if err := r.recreate(fmt.Sprintf("consumer sequence %d after %d", md.Sequence.Consumer, r.lastDseq)); err != nil {
-				return Message{}, err
-			}
-			continue
-		}
-		r.pending = r.pending[1:]
-		r.lastDseq = md.Sequence.Consumer
-		seq := md.Sequence.Stream
-		if seq > r.to {
-			// Past the range: everything after belongs to the caller's live read.
-			r.finished = true
-			return Message{}, io.EOF
-		}
-		if seq <= r.done {
-			continue
-		}
-		r.done = seq
-		r.present++
-		msg := NewConsumedMessage(nm.Subject, nm.Data, int(md.NumDelivered), natsHeaders(nm), nil)
-		msg.StreamSeq = seq
-		msg.AppendTime = md.Timestamp
-		return msg, nil
-	}
-}
-
-func (r *consumerRangeReader) RangeStats() RangeStats {
-	if !r.failed {
-		return RangeStats{Present: r.present, Absent: (r.to - r.from + 1) - r.present}
-	}
-	// Stopped early: only what lies at or before the last sequence returned, or below the
-	// point the consumer started at, has been established.
-	upto := r.start - 1
-	if r.done > upto {
-		upto = r.done
-	}
-	var absent uint64
-	if upto >= r.from {
-		absent = (upto - r.from + 1) - r.present
-	}
-	return RangeStats{Present: r.present, Absent: absent, Incomplete: true}
-}
-
-func (r *consumerRangeReader) Close() error {
-	if r.sub != nil {
-		return r.sub.Unsubscribe()
-	}
-	return nil
-}

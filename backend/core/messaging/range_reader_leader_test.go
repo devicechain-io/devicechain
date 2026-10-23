@@ -160,32 +160,128 @@ func TestRangeReaderTheFirstRetainedSequenceIsNotPresumedGone(t *testing.T) {
 	require.Zero(t, leader.asked, "below the first retained sequence nothing needs asking")
 }
 
-// A remainder too long for the leader to be asked about sequence by sequence is not believed
-// either: a lagging consumer's "nothing pending" over more than the verify limit must end in
-// an error, never in an end-of-range with the whole remainder counted absent.
-func TestRangeReaderALongRemainderIsNotBelievedFromALaggingConsumer(t *testing.T) {
+// A replica that has not caught up answers a direct get as though the tail were not there. The
+// answer is not the stream's: with the leader holding the next sequence, the read asks again and,
+// if no replica ever returns it, fails loudly after a bounded number of tries. It never ends the
+// range and never counts what the leader holds as absent.
+func TestRangeReaderALaggingReplicaIsNotBelieved(t *testing.T) {
 	rig := newRangeRig(t, 1500)
-	rd := rig.open(t, 2, 1400)
-	cr := rd.(*consumerRangeReader)
-	laggingConsumer(cr, -1)
+	rd := rig.open(t, 2, 1400).(*sequenceReader)
+	rd.wait = time.Millisecond
+	rd.get = func(context.Context, directBatchRequest) (directBatch, error) { return directBatch{none: true}, nil }
 	_, err := rd.Read(context.Background())
 	require.Error(t, err)
 	require.NotEqual(t, io.EOF, err)
-	require.ErrorContains(t, err, "giving up")
+	require.ErrorContains(t, err, "no replica returned it")
+	require.Equal(t, RangeStats{Incomplete: true}, rd.RangeStats(), "after the failure nothing past the point reached is claimed absent")
+	_, again := rd.Read(context.Background())
+	require.Equal(t, err, again, "a failed read is final: no later Read answers io.EOF")
 }
 
-// A range longer than the default pending-ack limit reads through, on a consumer that takes no
-// acknowledgements (one that never acknowledged would stall at that limit).
-func TestRangeReaderAWideRangeBeyondThePendingAckLimitReadsThrough(t *testing.T) {
+// ...and once the replica catches up the same read delivers every message.
+func TestRangeReaderALaggingReplicaThatCatchesUpDeliversEverything(t *testing.T) {
+	rig := newRangeRig(t, 320)
+	rd := rig.open(t, 2, 300).(*sequenceReader)
+	rd.wait = time.Millisecond
+	lies := 3
+	real := func(ctx context.Context, req directBatchRequest) (directBatch, error) {
+		return directGetBatch(ctx, rig.mgr.nc, rig.stream, req)
+	}
+	rd.get = func(ctx context.Context, req directBatchRequest) (directBatch, error) {
+		if lies > 0 {
+			lies--
+			return directBatch{none: true}, nil
+		}
+		return real(ctx, req)
+	}
+	require.Equal(t, seqRange(2, 300), drainRange(t, rd), "a lagging replica's empty answer must not turn present messages into absences")
+	require.Equal(t, RangeStats{Present: 299}, rangeStats(t, rd))
+}
+
+// A replica that stops a batch early (a connection that drops mid-reply, a batch cut at its
+// byte limit) loses nothing: the next request starts where the last message arrived.
+func TestRangeReaderAShortBatchIsContinuedNotTakenForTheEnd(t *testing.T) {
+	rig := newRangeRig(t, 320)
+	rd := rig.open(t, 2, 300).(*sequenceReader)
+	calls := 0
+	rd.get = func(ctx context.Context, req directBatchRequest) (directBatch, error) {
+		calls++
+		b, err := directGetBatch(ctx, rig.mgr.nc, rig.stream, req)
+		if len(b.msgs) > 10 {
+			b.msgs = b.msgs[:10]
+		}
+		return b, err
+	}
+	require.Equal(t, seqRange(2, 300), drainRange(t, rd))
+	require.Equal(t, RangeStats{Present: 299}, rangeStats(t, rd))
+	require.Greater(t, calls, 25, "the batches were cut, so the read has to have asked many times")
+}
+
+// The last sequence of the range is read even when a batch ends just before it: a read that
+// stopped one short would hand the range's last message to nobody.
+func TestRangeReaderABatchEndingJustBeforeTheLastSequenceReadsIt(t *testing.T) {
+	rig := newRangeRig(t, 320)
+	rd := rig.open(t, 2, 300).(*sequenceReader)
+	rd.get = func(ctx context.Context, req directBatchRequest) (directBatch, error) {
+		b, err := directGetBatch(ctx, rig.mgr.nc, rig.stream, req)
+		if len(b.msgs) > 1 {
+			b.msgs = b.msgs[:1] // every batch ends at the sequence it asked for
+		}
+		return b, err
+	}
+	require.Equal(t, seqRange(2, 300), drainRange(t, rd))
+	require.Equal(t, RangeStats{Present: 299}, rangeStats(t, rd))
+}
+
+// A message the answer skips that the leader still holds is an error, not an absence.
+func TestRangeReaderASkippedMessageTheLeaderHoldsIsAnError(t *testing.T) {
+	rig := newRangeRig(t, 320)
+	rd := rig.open(t, 2, 300).(*sequenceReader)
+	rd.get = func(ctx context.Context, req directBatchRequest) (directBatch, error) {
+		b, err := directGetBatch(ctx, rig.mgr.nc, rig.stream, req)
+		for i, m := range b.msgs {
+			if m.Header.Get("Nats-Sequence") == "50" {
+				b.msgs = append(b.msgs[:i:i], b.msgs[i+1:]...)
+				break
+			}
+		}
+		return b, err
+	}
+	var got []uint64
+	for {
+		m, err := rd.Read(context.Background())
+		if err != nil {
+			require.ErrorContains(t, err, "refusing to count it absent")
+			break
+		}
+		got = append(got, m.StreamSeq)
+	}
+	require.Equal(t, seqRange(2, 49), got, "everything before the hole, and nothing after it")
+	require.True(t, rd.RangeStats().Incomplete)
+}
+
+// A range longer than the default pending-ack limit reads through: nothing is acknowledged, because
+// there is no consumer to acknowledge on.
+func TestRangeReaderAWideRangeReadsThrough(t *testing.T) {
 	rig := newRangeRig(t, 1500)
 	rd := rig.open(t, 2, 1400)
-	cr := rd.(*consumerRangeReader)
-	cr.fetchWait = 300 * time.Millisecond
-	cr.maxStuck = 3
-	ci, err := cr.sub.ConsumerInfo()
-	require.NoError(t, err)
-	require.Equal(t, nats.AckNonePolicy, ci.Config.AckPolicy, "the throwaway consumer takes no acknowledgements")
 	require.Equal(t, seqRange(2, 1400), drainRange(t, rd))
+	require.Zero(t, rig.consumers(t))
+}
+
+// A stream that does not allow direct gets fails the wide read by saying so, instead of timing out
+// or ending short.
+func TestRangeReaderAStreamThatDoesNotAllowDirectGetsSaysSo(t *testing.T) {
+	rig := newRangeRig(t, 320)
+	info, err := rig.mgr.js.StreamInfo(rig.stream)
+	require.NoError(t, err)
+	cfg := info.Config
+	cfg.AllowDirect = false
+	_, err = rig.mgr.js.UpdateStream(&cfg)
+	require.NoError(t, err)
+	rd := rig.open(t, 2, 300)
+	_, err = rd.Read(context.Background())
+	require.ErrorContains(t, err, "does not allow")
 }
 
 // A sequence past the stream's last one is not absent, it does not exist yet: refused, on both
@@ -193,7 +289,7 @@ func TestRangeReaderAWideRangeBeyondThePendingAckLimitReadsThrough(t *testing.T)
 func TestRangeReaderRefusesARangePastTheLastSequence(t *testing.T) {
 	rig := newRangeRig(t, 40)
 	for _, c := range [][2]uint64{{30, 41}, {1, 300}, {41, 45}} {
-		rd, err := rig.mgr.NewRangeReader(streams.InboundEvents, c[0], c[1])
+		rd, err := rig.mgr.NewRangeReader(rangeSuffix, c[0], c[1])
 		require.Error(t, err, "range %v", c)
 		require.Nil(t, rd)
 	}
@@ -208,8 +304,8 @@ func TestRangeReaderRefusesAnAdvisoryStreamOnTheWidePath(t *testing.T) {
 	require.Nil(t, rd)
 }
 
-// The consumer delivers nothing past `to`: with `to` and the sequence before it deleted, the
-// next message it hands out is beyond the range and must end it, not be returned.
+// Nothing past `to` is returned: with `to` and the sequence before it deleted, the next message the
+// stream hands out is beyond the range and must end it, not be returned.
 func TestRangeReaderWideRangeDoesNotReturnPastTo(t *testing.T) {
 	rig := newRangeRig(t, 320)
 	require.NoError(t, rig.mgr.js.DeleteMsg(rig.stream, 299))
@@ -219,85 +315,15 @@ func TestRangeReaderWideRangeDoesNotReturnPastTo(t *testing.T) {
 	require.Equal(t, RangeStats{Present: 297, Absent: 2}, rangeStats(t, rd))
 }
 
-// A range whose end was purged and is the stream's end: the consumer sees nothing pending and
-// the leader confirms the remainder is absent, so the read ends cleanly and counts it.
+// A range whose end was purged and is the stream's end: the stream returns nothing for the tail and
+// the leader confirms it is absent, so the read ends cleanly and counts it.
 func TestRangeReaderWideRangeEndingInPurgedTail(t *testing.T) {
 	rig := newRangeRig(t, 320)
 	require.NoError(t, rig.mgr.js.DeleteMsg(rig.stream, 319))
 	require.NoError(t, rig.mgr.js.DeleteMsg(rig.stream, 320))
 	rd := rig.open(t, 2, 320)
-	rd.(*consumerRangeReader).fetchWait = 100 * time.Millisecond
 	require.Equal(t, seqRange(2, 318), drainRange(t, rd))
 	require.Equal(t, RangeStats{Present: 317, Absent: 2}, rangeStats(t, rd))
-}
-
-// laggingConsumer makes the reader's consumer behave as one placed on a follower that has not
-// applied the stream's tail: its fetches time out and its info says nothing is pending and
-// nothing is outstanding, for the next `lies` rounds (forever when lies < 0).
-func laggingConsumer(r *consumerRangeReader, lies int) {
-	r.fetchWait = 50 * time.Millisecond
-	r.fetch = func() ([]*nats.Msg, error) {
-		if lies != 0 {
-			return nil, nats.ErrTimeout
-		}
-		return r.sub.Fetch(fetchBatch, nats.MaxWait(r.fetchWait))
-	}
-	r.info = func() (*nats.ConsumerInfo, error) {
-		if lies != 0 {
-			if lies > 0 {
-				lies--
-			}
-			return &nats.ConsumerInfo{}, nil // Delivered.Consumer 0, NumPending 0
-		}
-		return r.sub.ConsumerInfo()
-	}
-}
-
-// The consumer's "nothing pending" is not the stream's. Here it says so while the leader holds
-// the whole range; the read must not end, must not count those messages absent, and must
-// deliver them once the consumer catches up.
-func TestRangeReaderDoesNotTrustAConsumerThatSaysNothingIsPending(t *testing.T) {
-	rig := newRangeRig(t, 320)
-	rd := rig.open(t, 2, 300)
-	cr := rd.(*consumerRangeReader)
-	laggingConsumer(cr, 2)
-	got := drainRange(t, rd)
-	require.Equal(t, seqRange(2, 300), got, "a lagging consumer's empty answer must not turn present messages into absences")
-	require.Equal(t, RangeStats{Present: 299}, rangeStats(t, rd))
-	require.Equal(t, 2, cr.recreates)
-}
-
-// A consumer that never recovers fails the read loudly after a bounded number of
-// re-creations; it is never an io.EOF with the range counted absent.
-func TestRangeReaderGivesUpOnAConsumerThatKeepsLying(t *testing.T) {
-	rig := newRangeRig(t, 320)
-	rd := rig.open(t, 2, 300)
-	cr := rd.(*consumerRangeReader)
-	laggingConsumer(cr, -1)
-	_, err := rd.Read(context.Background())
-	require.Error(t, err)
-	require.NotEqual(t, io.EOF, err)
-	require.ErrorContains(t, err, "giving up")
-	require.Equal(t, maxRangeRecreates+1, cr.recreates)
-	require.Equal(t, RangeStats{Incomplete: true}, rd.(RangeStatser).RangeStats(),
-		"after the failure nothing past the point reached is claimed absent")
-}
-
-// A consumer that reports messages pending but delivers none fails after a bounded number of
-// fetches, and says it stalled.
-func TestRangeReaderStallIsBounded(t *testing.T) {
-	rig := newRangeRig(t, 320)
-	rd := rig.open(t, 2, 300)
-	cr := rd.(*consumerRangeReader)
-	cr.fetchWait = 10 * time.Millisecond
-	cr.maxStuck = 3
-	cr.fetch = func() ([]*nats.Msg, error) { return nil, nats.ErrTimeout }
-	cr.info = func() (*nats.ConsumerInfo, error) { return &nats.ConsumerInfo{NumPending: 7}, nil }
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	_, err := rd.Read(ctx)
-	require.ErrorContains(t, err, "stalled")
-	require.Equal(t, 4, cr.timeouts)
 }
 
 // rangeCluster starts a three-node JetStream cluster on loopback and returns a client URL
@@ -318,19 +344,19 @@ func rangeCluster(t *testing.T) string {
 // stream's: purged sequences are absent, the rest arrive in order, on both paths, and a range
 // past the last sequence is refused.
 func TestRangeReaderOnACluster(t *testing.T) {
-	const suffix = streams.InboundEvents
+	const suffix = rangeSuffix
 	nc, err := nats.Connect(rangeCluster(t))
 	require.NoError(t, err)
 	t.Cleanup(nc.Close)
 	js, err := nc.JetStream()
 	require.NoError(t, err)
 
-	mgr := &NatsManager{Microservice: &core.Microservice{InstanceId: "test"}, js: js}
+	mgr := &NatsManager{Microservice: &core.Microservice{InstanceId: "test"}, nc: nc, js: js}
 	stream := StreamName("test", suffix)
 	subject := StreamSubject("test", suffix)
 	deadline := time.Now().Add(60 * time.Second)
 	for {
-		_, err = js.AddStream(&nats.StreamConfig{Name: stream, Subjects: []string{subject}, Replicas: 3})
+		_, err = js.AddStream(&nats.StreamConfig{Name: stream, Subjects: []string{subject}, Replicas: 3, AllowDirect: true})
 		if err == nil {
 			break
 		}

@@ -450,13 +450,12 @@ What a running instance sees:
   is mounted into that area's pod only. `mcp` and `ai-inference` never open a broker connection and
   mount none. Each login is held to what its area uses, and no more: the streams it writes, the
   consumers it reads under (named exactly, so one area cannot rewrite, take messages from or
-  acknowledge another's, with one exception below), the key-value buckets it opens, and its own reply
+  acknowledge another's), the key-value buckets it opens, and its own reply
   subjects. A login can no longer publish into another area's streams, write another area's cache, or
   subscribe to another area's replies. The grants are generated from the same declarations the
   services are checked against, so they cannot fall behind what a service does. This is not yet a
-  boundary against a compromised service, and two gaps remain until later releases close them.
-  event-processing, which replays the resolved-events stream, can still reach the other consumers
-  on that stream. And the shared login stays in place beside the new ones, with the permissions it
+  boundary against a compromised service, and one gap remains until a later release closes it. The
+  shared login stays in place beside the new ones, with the permissions it
   always had, so services that have not restarted yet keep connecting during the upgrade; until a
   later release retires it, it is still in the configuration every pod reads, so a pod can still
   present it. Two grants are wider by design: event-sources keeps update rights on the broker's MQTT
@@ -482,8 +481,11 @@ What a running instance sees:
   <instance>` runs the same job again, which is also how to recover a stream or bucket deleted by hand.
   Area logins no longer hold the right to create, update or delete a stream or bucket, with two
   exceptions that stay by design: event-sources keeps its rights on the broker's own MQTT stores, and
-  user-management keeps the right to delete the old copies of the sign-in buckets. Two behaviours
-  change with it. The cache buckets' lifetime is now fixed at five minutes, because the job creates them
+  user-management keeps the right to delete the old copies of the sign-in buckets. event-processing's
+  replays of the resolved-events stream (its catch-up after a restart, the live-gap fill and the rule
+  preview) now read the stream by sequence, which creates no consumer on the broker, so no area holds a
+  right over another area's consumers on a message stream; the administration job turns on the
+  stream's direct reads for this. Two behaviours change with it. The cache buckets' lifetime is now fixed at five minutes, because the job creates them
   and no longer asks each service; the device-management cache time-to-live settings bound only how long a
   replica holds an entry in its own memory. And a replica count raised in the instance configuration takes
   effect when the job runs, at the next upgrade, rather than at every pod restart. A pod of the previous

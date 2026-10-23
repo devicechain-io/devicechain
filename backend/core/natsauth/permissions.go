@@ -30,9 +30,12 @@ import (
 // BUCKET: those verbs, which let a login give a stream any subjects, a RePublish or a subject
 // transform, belong to the broker administrator (AdminPermissions) alone. The named exceptions
 // are the MQTT gateway's own stores (event-sources) and the retirement of the old shared-account
-// sign-in buckets (user-management), each beside its reason in exceptionGrant. What a grant is
-// NOT yet exact about is an EPHEMERAL reader, which keeps a wildcard consumer name on its stream
-// (the client library names the consumer) until its reads become reads by sequence.
+// sign-in buckets (user-management), each beside its reason in exceptionGrant. NO GRANT NAMES A
+// CONSUMER WITH A WILDCARD ON A MESSAGE STREAM either: the reads that once needed one (a replay, a
+// live-gap fill, a rule preview) are reads by sequence, which create no consumer. The wildcard
+// consumer verbs that remain are on streams an area owns and nobody else trusts: the key-value
+// streams it opens (a watch or a key listing is an ordered consumer the client library names) and the
+// MQTT gateway's session store. TestNoAreaHoldsAWildcardConsumerNameOnAMessageStream pins it.
 
 // jsAPI is the JetStream API subject prefix every administrative request is published under.
 const jsAPI = "$JS.API."
@@ -236,18 +239,12 @@ func streamGrant(g *grant, instance, area string, st streams.Stream) {
 				}
 			}
 		case streams.ReadEphemeral:
-			// The client library names an ephemeral consumer, so its name cannot be granted
-			// exactly. The stream-administration step replaces these reads with reads by sequence.
-			g.api(
-				"CONSUMER.CREATE."+name+".>",
-				"CONSUMER.INFO."+name+".*",
-				"CONSUMER.DELETE."+name+".*",
-				"CONSUMER.MSG.NEXT."+name+".*",
-				"STREAM.MSG.GET."+name,
-				"DIRECT.GET."+name,
-				"DIRECT.GET."+name+".>",
-			)
-			g.publish("$JS.ACK." + name + ".*.>")
+			// A replay, a live-gap fill and a preview read the stream's past by SEQUENCE: a single get,
+			// or a batched direct get, which the stream answers without any consumer (the stream
+			// declares AllowDirect for it). The client library names an ephemeral consumer, so its name
+			// could not be granted exactly and the grant would reach every other area's durable on the
+			// stream; a read by sequence needs only the stream's name.
+			g.api("STREAM.MSG.GET."+name, "DIRECT.GET."+name)
 		case streams.ReadLive:
 			g.subscribe(messaging.StreamSubject(instance, st.Suffix))
 		}

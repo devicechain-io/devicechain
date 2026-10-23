@@ -479,14 +479,12 @@ Lo que ve una instancia en marcha:
   `mcp` y `ai-inference` nunca abren una conexión con el bróker y no montan ninguna. Cada credencial
   queda limitada a lo que usa su área, y a nada más: los streams en los que escribe, los consumidores
   con los que lee (con nombre exacto, así que un área no puede reescribir, tomar mensajes de ni
-  confirmar los de otra, con una excepción que se indica abajo), los buckets clave-valor que abre y
+  confirmar los de otra), los buckets clave-valor que abre y
   sus propios subjects de respuesta. Una credencial ya no puede publicar en los streams de otra área,
   escribir en la caché de otra ni suscribirse a las respuestas de otra. Los permisos se generan a
   partir de las mismas declaraciones contra las que se comprueban los servicios, así que no pueden
   quedar por detrás de lo que un servicio hace. Esto aún no es una frontera frente a un servicio
-  comprometido, y quedan dos huecos hasta que versiones posteriores los cierren.
-  event-processing, que reproduce el stream resolved-events, sigue pudiendo
-  alcanzar los demás consumidores de ese stream. Y la credencial compartida sigue en su sitio junto a
+  comprometido, y queda un hueco hasta que una versión posterior lo cierre. La credencial compartida sigue en su sitio junto a
   las nuevas, con los permisos que siempre tuvo, de modo que los servicios que aún no se han
   reiniciado siguen conectándose durante la actualización; hasta que una versión posterior la retire,
   sigue en la configuración que lee cada pod, así que un pod aún puede presentarla. Dos permisos son
@@ -515,7 +513,10 @@ Lo que ve una instancia en marcha:
   Las credenciales de área ya no tienen derecho a crear, actualizar ni borrar un stream o bucket, con dos
   excepciones que se mantienen a propósito: event-sources conserva sus derechos sobre los almacenes MQTT propios
   del bróker, y user-management conserva el derecho a borrar las copias antiguas de los buckets de inicio de sesión.
-  Con esto cambian dos comportamientos. La vida útil de los buckets de caché queda fijada en cinco minutos, porque
+  Las reproducciones del stream resolved-events que hace event-processing (su puesta al día tras un reinicio, el
+  relleno de huecos en vivo y la vista previa de reglas) leen ahora el stream por secuencia, lo que no crea ningún consumidor en
+  el bróker, así que ningún área tiene derechos sobre los consumidores de otra área en un stream de mensajes; el job de
+  administración activa para ello las lecturas directas del stream. Con esto cambian dos comportamientos. La vida útil de los buckets de caché queda fijada en cinco minutos, porque
   los crea el job y ya no se la pide a cada servicio; los ajustes de tiempo de vida de la caché de
   device-management limitan solo cuánto tiempo conserva una réplica una entrada en su propia memoria. Y un
   número de réplicas aumentado en la configuración de la instancia surte efecto cuando se ejecuta el job, en la

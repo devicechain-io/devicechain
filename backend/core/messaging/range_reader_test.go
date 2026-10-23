@@ -18,6 +18,10 @@ import (
 	"github.com/devicechain-io/dc-microservice/streams"
 )
 
+// rangeSuffix is the stream the range and replay readers are tested on: one that is declared to
+// answer direct gets, which is what the wide path needs of a stream.
+const rangeSuffix = streams.ResolvedEvents
+
 // rangeRig is a broker with one stream holding n messages whose payload is their own
 // sequence number, plus a manager to read ranges from it.
 type rangeRig struct {
@@ -28,7 +32,7 @@ type rangeRig struct {
 
 func newRangeRig(t *testing.T, n int) *rangeRig {
 	t.Helper()
-	const suffix = streams.InboundEvents
+	const suffix = rangeSuffix
 	srv := startEmbeddedServer(t)
 	ctx := core.WithTenant(context.Background(), "acme")
 
@@ -51,7 +55,7 @@ func newRangeRig(t *testing.T, n int) *rangeRig {
 
 func (r *rangeRig) open(t *testing.T, from, to uint64) ReplayReader {
 	t.Helper()
-	rd, err := r.mgr.NewRangeReader(streams.InboundEvents, from, to)
+	rd, err := r.mgr.NewRangeReader(rangeSuffix, from, to)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = rd.Close() })
 	return rd
@@ -127,27 +131,25 @@ func TestRangeReaderBelowFirstSeqIsAbsent(t *testing.T) {
 	require.Equal(t, RangeStats{Present: 5, Absent: 6}, rangeStats(t, rd))
 }
 
-func TestRangeReaderWideRangeUsesOneBoundedConsumer(t *testing.T) {
+func TestRangeReaderWideRangeCreatesNoConsumer(t *testing.T) {
 	rig := newRangeRig(t, 320)
 	for _, s := range []uint64{5, 6, 150, 299} {
 		require.NoError(t, rig.mgr.js.DeleteMsg(rig.stream, s))
 	}
-	const from, to = 2, 310 // 309 sequences: past the direct limit
+	const from, to = 2, 310 // 309 sequences: past the one-by-one limit
 	rd := rig.open(t, from, to)
-	require.Equal(t, 1, rig.consumers(t), "a wide range reads through exactly one consumer")
+	require.Zero(t, rig.consumers(t), "a read by sequence creates nothing on the broker")
 	got := drainRange(t, rd)
 	require.Equal(t, seqRange(from, to, 5, 6, 150, 299), got, "all of it, in order, and nothing past `to`")
 	require.Equal(t, RangeStats{Present: uint64(len(got)), Absent: 4}, rangeStats(t, rd))
+	require.Zero(t, rig.consumers(t), "nor while it reads")
 	require.NoError(t, rd.Close())
-	require.Eventually(t, func() bool { return rig.consumers(t) == 0 }, 5*time.Second, 50*time.Millisecond,
-		"the ephemeral consumer is released on Close")
 }
 
-func TestRangeReaderWideRangeEntirelyEvictedCreatesNoConsumer(t *testing.T) {
+func TestRangeReaderWideRangeEntirelyEvictedCountsItAbsent(t *testing.T) {
 	rig := newRangeRig(t, 320)
 	require.NoError(t, rig.mgr.js.PurgeStream(rig.stream, &nats.StreamPurgeRequest{Sequence: 311}))
 	rd := rig.open(t, 1, 300)
-	require.Zero(t, rig.consumers(t))
 	require.Empty(t, drainRange(t, rd))
 	require.Equal(t, RangeStats{Absent: 300}, rangeStats(t, rd))
 	require.Zero(t, rig.consumers(t))
@@ -162,46 +164,10 @@ func TestRangeReaderWideRangePartlyEvictedStartsAtFirstSeq(t *testing.T) {
 	require.Equal(t, RangeStats{Present: 200, Absent: 100}, rangeStats(t, rd))
 }
 
-// A delivery the broker counted but the client never received must not read as a purged
-// sequence. The test steals deliveries from the reader's own consumer without acking, so
-// the broker has sent them and the reader never saw them, which is what a connection that
-// drops mid-response does.
-func TestRangeReaderWideRangeRecoversLostDeliveries(t *testing.T) {
-	t.Run("middle of a batch", func(t *testing.T) {
-		rig := newRangeRig(t, 300)
-		rd := rig.open(t, 1, 300).(*consumerRangeReader)
-		var got []uint64
-		m, err := rd.Read(context.Background())
-		require.NoError(t, err)
-		got = append(got, m.StreamSeq)
-		rd.pending = nil // the rest of this batch was sent and lost
-		got = append(got, drainRange(t, rd)...)
-		require.Equal(t, seqRange(1, 300), got, "the lost tail of the batch was re-read")
-		require.Equal(t, 1, rd.recreates)
-	})
-	t.Run("last batch", func(t *testing.T) {
-		rig := newRangeRig(t, 300)
-		rd := rig.open(t, 1, 300).(*consumerRangeReader)
-		var got []uint64
-		for len(got) < 256 {
-			m, err := rd.Read(context.Background())
-			require.NoError(t, err)
-			got = append(got, m.StreamSeq)
-		}
-		require.Empty(t, rd.pending, "the test needs to stand between batches")
-		lost, err := rd.sub.Fetch(44, nats.MaxWait(5*time.Second)) // sent, never received, never acked
-		require.NoError(t, err)
-		require.Len(t, lost, 44)
-		got = append(got, drainRange(t, rd)...)
-		require.Equal(t, seqRange(1, 300), got, "a lost final batch is not mistaken for purged sequences")
-		require.Equal(t, RangeStats{Present: 300}, rangeStats(t, rd))
-	})
-}
-
 func TestRangeReaderRefusesAnInvalidRange(t *testing.T) {
 	rig := newRangeRig(t, 5)
 	for _, c := range [][2]uint64{{5, 4}, {0, 3}} {
-		rd, err := rig.mgr.NewRangeReader(streams.InboundEvents, c[0], c[1])
+		rd, err := rig.mgr.NewRangeReader(rangeSuffix, c[0], c[1])
 		require.Error(t, err, "range [%d, %d]", c[0], c[1])
 		require.Nil(t, rd)
 	}

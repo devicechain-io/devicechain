@@ -126,9 +126,7 @@ These are known and accepted for the current release. Plan around them.
    is the shared login that earlier releases used. It stays in the broker's configuration, and in the instance configuration every pod
    reads, until a later release retires it, and it still has the permissions it always had, including administering streams. Until it is retired, a
    pod can present it. Services that accept device traffic (event-sources, device-management, lwm2m-ingest and sparkplug-ingest) are
-   still part of the trusted core of the platform, because they write device data by design. Event-processing, which
-   replays the resolved-events stream through consumers whose names the client library chooses, can still reach the other
-   consumers on that stream. Two grants are wider by design: event-sources can update the broker's own MQTT stores, and
+   still part of the trusted core of the platform, because they write device data by design. Two grants are wider by design: event-sources can update the broker's own MQTT stores, and
    user-management can purge a deleted tenant's data across every stream. A compromised service can still cause
    loss, though not forgery, by filling a stream it may create consumers on until older messages are discarded.
 2. **The database login is shared by all services in an instance.** Every service reaches the instance's relational

@@ -740,6 +740,17 @@ func applyStreamDiscard(cfg *nats.StreamConfig) bool {
 	return true
 }
 
+// applyStreamAllowDirect turns direct gets on for a stream declared to answer them (the streams
+// read by sequence), reporting whether it changed. It never turns them off: a stream that does not
+// declare it is left as the broker has it.
+func applyStreamAllowDirect(cfg *nats.StreamConfig, suffix string) bool {
+	if !streams.AllowDirectFor(suffix) || cfg.AllowDirect {
+		return false
+	}
+	cfg.AllowDirect = true
+	return true
+}
+
 // applyStreamNoCrossing removes what makes a stream store under a subject it does not capture:
 // sources, a subject transform and a republish. It reports whether it changed anything, and
 // whether the stream is a mirror (which cannot be undone by an update).
@@ -952,6 +963,7 @@ func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 			// into another stream's namespace; none of ours has sources, a transform or a
 			// republish, so any found is put back, and a mirror (which JetStream cannot undo in
 			// place) is refused.
+			directChanged := applyStreamAllowDirect(&cfg, suffix)
 			crossChanged, isMirror := applyStreamNoCrossing(&cfg)
 			if isMirror {
 				refused = fmt.Errorf("stream %s is a mirror, which no declared stream is and JetStream cannot "+
@@ -964,7 +976,7 @@ func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 						"store on the device-events capture stream reaches no device, so discard-new loses the " +
 						"newest events with nothing counting them")
 			}
-			if boundsChanged || subjectsChanged || dupChanged || discardChanged || crossChanged {
+			if boundsChanged || subjectsChanged || dupChanged || discardChanged || crossChanged || directChanged {
 				if _, err := nmgr.js.UpdateStream(&cfg, nats.Context(ctx)); err != nil {
 					return err
 				}
@@ -1007,7 +1019,7 @@ func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 			// same hazard by re-reading StreamInfo (kv.go); here the fresh config is
 			// already in hand.
 			nmgr.reconcileStreamReplicas(name, cfg)
-			if !(boundsChanged || subjectsChanged || dupChanged || discardChanged || crossChanged) {
+			if !(boundsChanged || subjectsChanged || dupChanged || discardChanged || crossChanged || directChanged) {
 				nmgr.noteReconciled("stream", name, "unchanged")
 			}
 			return nil
@@ -1015,13 +1027,14 @@ func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 			return err
 		}
 		cfg := &nats.StreamConfig{
-			Name:      name,
-			Subjects:  subjects,
-			Storage:   nats.FileStorage,
-			Retention: retention,
-			Discard:   nats.DiscardOld,
-			MaxAge:    streamMaxAge,
-			Replicas:  nmgr.effectiveStreamReplicas(),
+			Name:        name,
+			Subjects:    subjects,
+			Storage:     nats.FileStorage,
+			Retention:   retention,
+			Discard:     nats.DiscardOld,
+			MaxAge:      streamMaxAge,
+			Replicas:    nmgr.effectiveStreamReplicas(),
+			AllowDirect: streams.AllowDirectFor(suffix),
 		}
 		applyStreamBounds(cfg, bounds)
 		applyStreamDuplicateWindow(cfg, dupWindow)
@@ -2167,319 +2180,6 @@ func (nmgr *NatsManager) NewReader(suffix string, opts ...ReaderOption) (Message
 	}
 	log.Info().Str("durable", r.durable).Str("subject", r.subject).Strs("filters", r.filters).Msg("Added new NATS reader")
 	return r, nil
-}
-
-// natsReplayReader is the JetStream implementation of ReplayReader: an EPHEMERAL
-// pull consumer pinned to a start sequence, drained in order up to a fixed head
-// sequence. Unlike the durable reader it owns and acks its own consumer (the acks
-// only advance the throwaway ephemeral, which is deleted on Close / by
-// InactiveThreshold) — it exists purely to feed the engine the exact, ordered
-// prefix it missed, then it is discarded and the durable live reader takes over.
-type natsReplayReader struct {
-	sub      *nats.Subscription
-	js       nats.JetStreamContext
-	stream   string
-	head     uint64
-	doneSeq  uint64
-	pending  []*nats.Msg
-	timeouts int
-
-	// What a re-created consumer needs to start again: the subject, and where the first
-	// open started (a sequence, or a publish time when startSeq is 0).
-	subject   string
-	startSeq  uint64
-	startTime time.Time
-	// lastDseq is the consumer sequence of the last message received from the current
-	// consumer. It must rise by exactly one per message: a jump means the broker sent a
-	// delivery this client never received (see recreate).
-	lastDseq  uint64
-	recreates int
-	// redelivered counts deliveries skipped because their stream sequence had already been
-	// read (the broker redelivers what it saw no ack for).
-	redelivered int
-	// failed is a re-create that did not succeed; the reader is unusable and says so on
-	// every later Read rather than ending as if the replay were complete.
-	failed error
-	// ackWait overrides the re-created consumer's AckWait when non-zero. Production leaves
-	// it zero (the server default); a test sets it to make redelivery fast.
-	ackWait time.Duration
-	// fetch and info are the consumer round trips; nil means the real ones. A test
-	// replaces them to lose deliveries.
-	fetch func() ([]*nats.Msg, error)
-	info  func() (*nats.ConsumerInfo, error)
-}
-
-// replayInactiveThreshold auto-deletes the ephemeral replay consumer if the reader
-// dies without Close (crash mid-replay), so orphaned consumers do not accumulate.
-const replayInactiveThreshold = 5 * time.Minute
-
-// maxReplayStuckFetches bounds how long replay waits on a broker that reports
-// messages retained up to the head yet delivers none — a stuck/broken broker, not a
-// drained one. Reaching it fails startup LOUDLY rather than silently ending replay
-// short of the head (which would reintroduce out-of-order live delivery for the
-// unread tail). At fetchTimeout per fetch this is ~tens of seconds.
-const maxReplayStuckFetches = 30
-
-// NewReplayReader opens an ephemeral, in-order read of the suffix's stream from
-// startSeq up to the current head, returning the reader and that head sequence. When
-// startSeq is already past the head (nothing to replay, or a snapshot ahead of a
-// re-created/truncated stream) it returns a reader that immediately reports io.EOF
-// and creates no consumer. The head is captured once, at open, so live messages
-// published during replay are left for the durable reader.
-func (nmgr *NatsManager) NewReplayReader(suffix string, startSeq uint64) (ReplayReader, uint64, error) {
-	if err := nmgr.requireReader(suffix, streams.ReadEphemeral); err != nil {
-		return nil, 0, err
-	}
-	name := StreamName(nmgr.Microservice.InstanceId, suffix)
-	info, err := nmgr.js.StreamInfo(name)
-	if err != nil {
-		if errors.Is(err, nats.ErrStreamNotFound) {
-			return &natsReplayReader{}, 0, nil // empty/absent stream: nothing to replay
-		}
-		return nil, 0, err
-	}
-	head := info.State.LastSeq
-	if startSeq > head {
-		return &natsReplayReader{head: head, doneSeq: head}, head, nil
-	}
-	subject := StreamSubject(nmgr.Microservice.InstanceId, suffix)
-	sub, err := nmgr.js.PullSubscribe(subject, "", // empty durable => ephemeral consumer
-		nats.BindStream(name),
-		nats.StartSequence(startSeq),
-		nats.AckExplicit(),
-		nats.InactiveThreshold(replayInactiveThreshold))
-	if err != nil {
-		return nil, 0, err
-	}
-	log.Info().Str("stream", name).Uint64("startSeq", startSeq).Uint64("head", head).
-		Msg("Opened ordered replay reader")
-	return &natsReplayReader{sub: sub, js: nmgr.js, stream: name, head: head, subject: subject, startSeq: startSeq}, head, nil
-}
-
-// NewReplayReaderFromTime opens an ephemeral, in-order read of the suffix's stream from the
-// first message published at/after startTime up to the current head, for the replay-preview
-// harness (ADR-053 slice 9d). It mirrors NewReplayReader's isolation exactly — an ephemeral
-// pull consumer (empty durable, InactiveThreshold-reaped) that acks only its own throwaway
-// consumer, never the production durable — but starts by JetStream publish TIME rather than a
-// sequence, since a preview names a time window, not a sequence.
-//
-// It returns the stream's earliest retained message time (FirstTime) so the caller can DETECT
-// the aged-out case: when the requested startTime predates FirstTime, JetStream silently clamps
-// the start to the first retained message, so the caller compares startTime to the returned
-// FirstTime and reports a degraded (history-evicted) preview rather than a misleadingly-empty
-// one. When the stream is absent/empty, or startTime is past the last retained message (an empty
-// window), it returns a reader that immediately reports io.EOF and creates no consumer — so a
-// future-dated or empty window degrades to zero firings cleanly instead of stalling on a
-// consumer that will never deliver.
-//
-// NB: JetStream StartTime keys on the message's PUBLISH time (≈ the event's processed/arrival
-// time), not its logical OccurredTime — so the caller must still filter delivered events to its
-// occurred-time window; this only bounds the scan's lower edge.
-func (nmgr *NatsManager) NewReplayReaderFromTime(suffix string, startTime time.Time) (ReplayReader, time.Time, error) {
-	if err := nmgr.requireReader(suffix, streams.ReadEphemeral); err != nil {
-		return nil, time.Time{}, err
-	}
-	name := StreamName(nmgr.Microservice.InstanceId, suffix)
-	info, err := nmgr.js.StreamInfo(name)
-	if err != nil {
-		if errors.Is(err, nats.ErrStreamNotFound) {
-			return &natsReplayReader{}, time.Time{}, nil // empty/absent stream: nothing to replay
-		}
-		return nil, time.Time{}, err
-	}
-	head := info.State.LastSeq
-	firstTime := info.State.FirstTime
-	// Empty stream, or a window that starts after the last retained event: nothing to replay.
-	// Returning a doneSeq==head reader makes the first Read report io.EOF without a consumer,
-	// so an empty/future window can never stall on a consumer that will never deliver.
-	if head == 0 || startTime.After(info.State.LastTime) {
-		return &natsReplayReader{head: head, doneSeq: head}, firstTime, nil
-	}
-	subject := StreamSubject(nmgr.Microservice.InstanceId, suffix)
-	sub, err := nmgr.js.PullSubscribe(subject, "", // empty durable => ephemeral consumer
-		nats.BindStream(name),
-		nats.StartTime(startTime),
-		nats.AckExplicit(),
-		nats.InactiveThreshold(replayInactiveThreshold))
-	if err != nil {
-		return nil, time.Time{}, err
-	}
-	log.Info().Str("stream", name).Time("startTime", startTime).Uint64("head", head).
-		Msg("Opened time-started replay reader (preview)")
-	return &natsReplayReader{sub: sub, js: nmgr.js, stream: name, head: head, subject: subject, startTime: startTime}, firstTime, nil
-}
-
-// Read returns the next message in ascending stream order, or io.EOF once every
-// message through the head has been delivered. A message whose sequence is past the
-// head is a live publish that arrived after open; it is NOT delivered here (the
-// durable live reader owns it), so replay stays a clean, finite prefix.
-func (r *natsReplayReader) Read(ctx context.Context) (Message, error) {
-	if r.failed != nil {
-		return Message{}, r.failed
-	}
-	if r.doneSeq >= r.head || r.sub == nil {
-		return Message{}, io.EOF
-	}
-	for {
-		if err := ctx.Err(); err != nil {
-			return Message{}, io.EOF
-		}
-		if len(r.pending) == 0 {
-			msgs, err := r.doFetch()
-			if err != nil {
-				if errors.Is(err, nats.ErrTimeout) {
-					// A fetch can return a partial batch, or time out, after a delivery the
-					// client never received: the broker counted it as delivered. Reading on
-					// from the next message would skip it and later end as if complete.
-					ci, cerr := r.doInfo()
-					if cerr != nil {
-						return Message{}, fmt.Errorf("replay of stream %s: consumer info: %w", r.stream, cerr)
-					}
-					if ci.Delivered.Consumer != r.lastDseq {
-						if rerr := r.recreate("tail of a batch lost"); rerr != nil {
-							return Message{}, rerr
-						}
-						continue
-					}
-					// A timeout means nothing is deliverable this instant. Distinguish a
-					// genuinely DRAINED range (the messages up to head aged out, MaxAge)
-					// from transient broker slowness by consulting the stream: if its
-					// earliest retained sequence is already past the head, the whole replay
-					// range is gone — end replay cleanly. Otherwise messages in range still
-					// exist, so keep waiting; NEVER end replay early on transient slowness,
-					// which would leave a tail for the (unordered) live reader and
-					// reintroduce the out-of-order hazard this replay exists to prevent. A
-					// broker that retains through head yet delivers nothing for
-					// maxReplayStuckFetches fails startup loudly rather than truncating.
-					if info, ierr := r.js.StreamInfo(r.stream); ierr == nil && info.State.FirstSeq > r.head {
-						log.Warn().Uint64("doneSeq", r.doneSeq).Uint64("head", r.head).
-							Uint64("firstSeq", info.State.FirstSeq).
-							Msg("Replay range fully evicted (aged out below head); ending replay.")
-						r.doneSeq = r.head
-						return Message{}, io.EOF
-					}
-					r.timeouts++
-					if r.timeouts > maxReplayStuckFetches {
-						return Message{}, fmt.Errorf("replay stalled: stream %s retains messages through head %d but delivered none in %d fetches",
-							r.stream, r.head, r.timeouts)
-					}
-					continue
-				}
-				return Message{}, err
-			}
-			r.timeouts = 0
-			r.pending = msgs
-		}
-		nm := r.pending[0]
-		md, merr := nm.Metadata()
-		if merr != nil {
-			return Message{}, fmt.Errorf("replay of stream %s: message without metadata: %w", r.stream, merr)
-		}
-		if md.Sequence.Consumer != r.lastDseq+1 {
-			if rerr := r.recreate(fmt.Sprintf("consumer sequence %d after %d", md.Sequence.Consumer, r.lastDseq)); rerr != nil {
-				return Message{}, rerr
-			}
-			continue
-		}
-		r.pending = r.pending[1:]
-		r.lastDseq = md.Sequence.Consumer
-		if md.Sequence.Stream <= r.doneSeq {
-			// A copy of a message already returned: the broker saw no ack for it (lost on
-			// the way) and sent it again. Returning it would apply an event twice and
-			// break the ascending order the replay promises.
-			_ = nm.Ack()
-			r.redelivered++
-			continue
-		}
-		seq, deliv, appended := md.Sequence.Stream, int(md.NumDelivered), md.Timestamp
-		if seq > r.head {
-			// A live message past the captured head: stop replay here and leave it (and
-			// everything after) to the durable reader. Do not ack — it is not ours.
-			r.doneSeq = r.head
-			return Message{}, io.EOF
-		}
-		// Ack advances (and lets InactiveThreshold reap) the throwaway ephemeral.
-		_ = nm.Ack()
-		r.doneSeq = seq
-		msg := NewConsumedMessage(nm.Subject, nm.Data, deliv, natsHeaders(nm), nil)
-		msg.StreamSeq = seq
-		msg.AppendTime = appended
-		return msg, nil
-	}
-}
-
-func (r *natsReplayReader) doFetch() ([]*nats.Msg, error) {
-	if r.fetch != nil {
-		return r.fetch()
-	}
-	return r.sub.Fetch(fetchBatch, nats.MaxWait(fetchTimeout))
-}
-
-func (r *natsReplayReader) doInfo() (*nats.ConsumerInfo, error) {
-	if r.info != nil {
-		return r.info()
-	}
-	return r.sub.ConsumerInfo()
-}
-
-// recreate replaces the ephemeral consumer with one that starts just after the last
-// message delivered, discarding whatever the old one still held. It is bounded: a broker
-// that keeps losing deliveries fails the replay loudly rather than looping or ending it
-// short of the head. The bound is per whole replay, not per outage: recreates is never
-// reset. A re-create that fails is final -- every later Read returns the same error.
-func (r *natsReplayReader) recreate(why string) error {
-	if err := r.doRecreate(why); err != nil {
-		r.failed = err
-		return err
-	}
-	return nil
-}
-
-func (r *natsReplayReader) doRecreate(why string) error {
-	r.recreates++
-	if r.recreates > maxRangeRecreates {
-		return fmt.Errorf("replay of stream %s: giving up after %d consumer re-creations (%s)",
-			r.stream, r.recreates-1, why)
-	}
-	opts := []nats.SubOpt{
-		nats.BindStream(r.stream),
-		nats.AckExplicit(),
-		nats.InactiveThreshold(replayInactiveThreshold),
-	}
-	switch {
-	case r.doneSeq > 0:
-		opts = append(opts, nats.StartSequence(r.doneSeq+1))
-	case !r.startTime.IsZero():
-		opts = append(opts, nats.StartTime(r.startTime))
-	default:
-		opts = append(opts, nats.StartSequence(r.startSeq))
-	}
-	if r.ackWait > 0 {
-		opts = append(opts, nats.AckWait(r.ackWait))
-	}
-	log.Warn().Str("stream", r.stream).Str("why", why).Uint64("doneSeq", r.doneSeq).
-		Msg("Replay cannot rely on its consumer; re-creating it after the last message received")
-	if r.sub != nil {
-		_ = r.sub.Unsubscribe()
-		r.sub = nil
-	}
-	sub, err := r.js.PullSubscribe(r.subject, "", opts...)
-	if err != nil {
-		return fmt.Errorf("replay of stream %s: re-create consumer: %w", r.stream, err)
-	}
-	r.sub = sub
-	r.pending = nil
-	r.lastDseq = 0
-	return nil
-}
-
-// Close releases the ephemeral consumer (best-effort; InactiveThreshold reaps it
-// anyway if this is missed).
-func (r *natsReplayReader) Close() error {
-	if r.sub != nil {
-		return r.sub.Unsubscribe()
-	}
-	return nil
 }
 
 // isConsumerGone reports whether a Fetch error means the durable consumer no longer

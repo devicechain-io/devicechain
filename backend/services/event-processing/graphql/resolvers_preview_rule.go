@@ -157,7 +157,7 @@ func (r *SchemaResolver) draftConstants(ctx context.Context, tenant, profileToke
 
 // PreviewRule runs a DRAFT detection rule against replayed history and reports the RAISE/RESOLVE edges
 // it WOULD have produced (ADR-053 slice 9d) — the "what would this rule have done?" headline. It builds
-// a THROWAWAY in-memory DETECT core over an ephemeral replay consumer and collects edges instead of
+// a THROWAWAY in-memory DETECT core over a replay read by sequence and collects edges instead of
 // publishing, so it never perturbs the live singleton (see internal/preview for the isolation contract).
 //
 // It gates on device:read (a read-only replay over the profile's own history) — plus location:read

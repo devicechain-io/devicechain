@@ -716,7 +716,7 @@ var All = []Stream{
 	// which its durable's backlog does not show exactly (see BackpressureReaders). That
 	// backlog is still warned on (the chart's JetStreamDurableUnreadNearFull), as an upper
 	// bound: the checkpoint is never behind what the durable has acknowledged.
-	{Suffix: ResolvedEvents, PlatformAuthored: true, Writers: []string{"device-management"}, Readers: []Reader{{"device-state", ReadDurable}, {"event-management", ReadDurable}, {"event-management", ReadLive}, {"event-processing", ReadAckFloor}, {"event-processing", ReadEphemeral}}, Tier: Hot, DeadLetterKind: kindEvent,
+	{Suffix: ResolvedEvents, AllowDirect: true, PlatformAuthored: true, Writers: []string{"device-management"}, Readers: []Reader{{"device-state", ReadDurable}, {"event-management", ReadDurable}, {"event-management", ReadLive}, {"event-processing", ReadAckFloor}, {"event-processing", ReadEphemeral}}, Tier: Hot, DeadLetterKind: kindEvent,
 		DuplicateWindowSeconds: RedeliveryDuplicateWindowSeconds,
 		ReplayCovered:          []string{"event-processing"},
 		BackpressureReaders:    []string{"event-management"},
