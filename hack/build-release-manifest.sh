@@ -59,7 +59,8 @@ cp "$STUB_ASSETS/$pattern" "$dir/"
 STUB
   chmod +x "$tmp/bin/gh"
   tag=v9.9.9 ver=9.9.9
-  printf '{"version":"%s","theme":"a named release","breaking":false,"highlights":["one thing"]}\n' \
+  # breaking:true so this fixture does not depend on whether the tree has declared breaks live.
+  printf '{"version":"%s","theme":"a named release","breaking":true,"highlights":["one thing"]}\n' \
     "$tag" >"$tmp/hl.json"
   # A distinct digest per file, so a value landing on the wrong row is visible.
   sha_of() { printf '%s' "$1" | sha256sum | cut -d' ' -f1; }

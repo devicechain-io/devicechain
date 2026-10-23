@@ -92,6 +92,11 @@ jobs:
       sign: ${{ steps.smoke.outputs.sign }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # 🔴 Full history: the guard below finds the release BEFORE this one (the nearest
+          # stable tag) and lists the breaks declared against it. A shallow clone sees no tag,
+          # and the guard refuses to compare against nothing.
+          fetch-depth: 0
 
       # The release highlights are the one part of the published manifest a machine cannot
       # derive: generated from commit subjects they would read as `fix(events): give payload
@@ -1311,6 +1316,11 @@ jobs:
       contents: read  # gh release view; the website push uses its own PAT
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # 🔴 Full history, as in `guard`: build-release-manifest.sh runs the same highlights
+          # guard, which finds the release BEFORE this one to list the declared breaks. A shallow
+          # clone has no earlier tag, so the guard refuses - here, AFTER the Release is published.
+          fetch-depth: 0
 
       - name: Build the release manifest
         env:

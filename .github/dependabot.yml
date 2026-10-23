@@ -76,6 +76,7 @@ updates:
       - "/docs"
       - "/hack/guide-capture"
       - "/hack/consumer-proof/harness"
+      - "/hack/api-report"
     schedule:
       interval: "weekly"
       day: "monday"

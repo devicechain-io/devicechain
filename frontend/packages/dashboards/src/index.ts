@@ -365,6 +365,7 @@ export {
   setBoardTimeRange,
   spanLabel,
   timeRangeFromSearch,
+  timeRangeLinkFromSearch,
   withSpan,
   type AbsoluteLinkRejection,
   type AbsoluteRange,

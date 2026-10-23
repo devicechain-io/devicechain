@@ -1,0 +1,10 @@
+{
+  "name": "dc-api-report",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Reads the declaration files the five published npm packages ship and reports their public API. A separate tree on purpose: the frontend pins the native TypeScript compiler, which has no JavaScript API to read declarations with.",
+  "devDependencies": {
+    "typescript": "5.9.3"
+  }
+}

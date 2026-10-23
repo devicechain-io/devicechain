@@ -1,0 +1,2 @@
+#nullable enable
+DeviceChain.Sdk.Transport.MqttConnectRefusedException.MqttConnectRefusedException(string! message, System.Exception? innerException) -> void

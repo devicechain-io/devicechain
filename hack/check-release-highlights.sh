@@ -55,6 +55,22 @@
 # alone and CI calls it on every PR. It is the same function in both paths, deliberately:
 # two guards that must agree are one guard with two callers, which is the lesson the header
 # above already paid for once.
+#
+# THE DECLARED BREAKS (the API-stability gate's release half). Every covered surface lets a pull
+# request DECLARE an intended break (see CONTRIBUTING.md, "Changing a public interface"); the
+# pull request cannot know which version ships it, so the version-dependent half lives here,
+# where the tag is known. hack/api-declared-breaks.sh lists every declaration still live against
+# the release's baseline (the nearest stable tag before it), and then:
+#
+#   before 1.0.0   a live declaration requires `"breaking": true` in the highlights: a break may
+#                  ship in any release, but the release must SAY so.
+#   from 1.0.0     a live declaration is refused unless the release is a NEW MAJOR (and it still
+#                  needs `"breaking": true`): the versioning policy allows a break in a covered
+#                  interface only in a major.
+#
+# A release candidate is judged by its base version, like the highlights themselves. No stable
+# tag before the release is the first release when the clone is complete, and a FAILURE when it
+# is shallow: a gate that compared against nothing would ship every break.
 set -euo pipefail
 
 # The width of a git commit subject. A title that does not fit in one is a sentence, and a
@@ -171,6 +187,63 @@ check() {
     echo "$hl cites an ADR in text that is published: $adr"
     return 0
   fi
+}
+
+# release_baseline <tag>: the nearest STABLE tag before the release. Counted from the release's
+# parent when the tag exists (the tag being released is on HEAD and would otherwise find itself),
+# from HEAD when it does not (running the guard by hand before tagging). Release candidates are
+# not baselines: nobody runs one.
+release_baseline() {
+  local tag="$1" from="HEAD"
+  if git -C "$ROOT" rev-parse --verify --quiet "refs/tags/${tag}^{commit}" >/dev/null; then
+    from="refs/tags/${tag}^{commit}^"
+  fi
+  git -C "$ROOT" describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*' --exclude '*-*' "$from" 2>/dev/null || true
+}
+
+# breaks_findings <tag> <baseline> <highlights> <declared-lines-file>: one line per problem.
+# Pure: the caller supplies the declarations, so every rule is testable without a repository.
+breaks_findings() {
+  local tag="$1" baseline="$2" hl="$3" declared="$4" n base_major tag_major
+  n="$(grep -c . "$declared" || true)"
+  [ "$n" -gt 0 ] || return 0
+  base_major="${baseline#v}"; base_major="${base_major%%.*}"
+  tag_major="${tag#v}"; tag_major="${tag_major%%.*}"
+  if [ "$base_major" -ge 1 ] && [ "$tag_major" -le "$base_major" ]; then
+    echo "$tag is not a new major release but $n break(s) of a covered interface are declared against $baseline; from 1.0.0 a break ships only in v$((base_major + 1)).0.0 (delete the declarations, or release a new major)"
+    return 0
+  fi
+  if ! jq -e '.breaking == true' "$hl" >/dev/null 2>&1; then
+    echo "$n break(s) of a covered interface are declared against $baseline but $hl does not say \"breaking\": true; a release that breaks something must say so"
+  fi
+}
+
+# breaks_gate <tag> <highlights>: the whole rule against the real repository. Prints problems.
+breaks_gate() {
+  local tag="$1" hl="$2" baseline declared out
+  baseline="$(release_baseline "$tag")"
+  if [ -z "$baseline" ]; then
+    if [ "$(git -C "$ROOT" rev-parse --is-shallow-repository 2>/dev/null)" = true ]; then
+      echo "no stable release tag is reachable before $tag and this clone is shallow; check out with fetch-depth: 0 so the declared breaks can be compared with a baseline"
+    else
+      echo "note: no stable release before $tag, so no break can be declared against one" >&2
+    fi
+    return 0
+  fi
+  declared="$(mktemp)"
+  if ! "$ROOT/hack/api-declared-breaks.sh" "$baseline" "$ROOT" >"$declared"; then
+    rm -f "$declared"
+    echo "could not list the declared breaks against $baseline; a release that cannot say what it breaks is refused"
+    return 0
+  fi
+  out="$(breaks_findings "$tag" "$baseline" "$hl" "$declared")"
+  if [ -n "$out" ]; then
+    echo "$out"
+    sed 's/^/  declared: /' "$declared" | sed -n '1,20p' >&2
+  else
+    echo "release breaks: $(grep -c . "$declared" || true) declared against $baseline" >&2
+  fi
+  rm -f "$declared"
 }
 
 if [ "${1:-}" = "--publish-safety" ]; then
@@ -297,6 +370,69 @@ if [ "${1:-}" = "--self-test" ]; then
   rm -f "$hl"
   expect "a missing file"                                  v0.11.0      fail
 
+  # The declared-breaks rules (pure: the declarations come from a file).
+  one="$tmp/one.txt"; none="$tmp/none.txt"
+  printf 'npm\tv0.24.0 @devicechain/client .:A export-removed gone\n' > "$one"; : > "$none"
+  bf() { # <label> <tag> <baseline> <breaking> <declared-file> <want: ok|fail>
+    printf '{"version":"%s","breaking":%s,"highlights":["a"],"theme":"a theme"}\n' "$2" "$4" > "$hl"
+    local o; o="$(breaks_findings "$2" "$3" "$hl" "$5")"
+    if [ "$6" = ok ] && [ -n "$o" ]; then echo "  FAIL: $1 - expected acceptance, got: $o" >&2; exit 1; fi
+    if [ "$6" = fail ] && [ -z "$o" ]; then echo "  FAIL: $1 - expected rejection, got silence" >&2; exit 1; fi
+    echo "  ok: $1"
+  }
+  bf "pre-1.0, a declared break, highlights say breaking"       v0.25.0      v0.24.0 true  "$one"  ok
+  bf "pre-1.0, a declared break, highlights say NOT breaking"   v0.25.0      v0.24.0 false "$one"  fail
+  bf "pre-1.0, no declared break, not breaking"                 v0.25.0      v0.24.0 false "$none" ok
+  bf "pre-1.0, an rc is judged like its release"                v0.25.0-rc.1 v0.24.0 false "$one"  fail
+  bf "1.x minor with a declared break, even though breaking"    v1.1.0       v1.0.0  true  "$one"  fail
+  bf "1.x patch with a declared break"                          v1.0.1       v1.0.0  true  "$one"  fail
+  bf "a new major with a declared break and breaking: true"     v2.0.0       v1.4.0  true  "$one"  ok
+  bf "a new major with a declared break, breaking: false"       v2.0.0       v1.4.0  false "$one"  fail
+  bf "the first 1.0 may break what 0.x declared"                v1.0.0       v0.30.0 true  "$one"  ok
+  bf "1.x minor, nothing declared"                              v1.1.0       v1.0.0  false "$none" ok
+
+  # Baseline resolution in a throwaway repository: counted from the release's PARENT, stable
+  # tags only. The guard's own repository is not used, so a real tag cannot make this pass.
+  repo="$tmp/repo"; mkdir -p "$repo"
+  (
+    cd "$repo"
+    git init -q . && git config user.email t@example.com && git config user.name t
+    git commit -q --allow-empty -m a && git tag v0.1.0
+    git commit -q --allow-empty -m b && git tag v0.2.0-rc.1
+    git commit -q --allow-empty -m c && git tag v0.2.0
+  )
+  REAL_ROOT="$ROOT"; ROOT="$repo"
+  [ "$(release_baseline v0.2.0)" = v0.1.0 ]      || { echo "  FAIL: the baseline of v0.2.0 is not v0.1.0 (a release tag found itself, or an rc counted)" >&2; exit 1; }
+  [ "$(release_baseline v0.2.0-rc.1)" = v0.1.0 ] || { echo "  FAIL: the baseline of an rc is not the previous stable tag" >&2; exit 1; }
+  [ "$(release_baseline v0.3.0)" = v0.2.0 ]      || { echo "  FAIL: a tag not yet created does not resolve from HEAD" >&2; exit 1; }
+  [ -z "$(release_baseline v0.1.0)" ]            || { echo "  FAIL: the first release has a baseline" >&2; exit 1; }
+  ROOT="$REAL_ROOT"
+  echo "  ok: the baseline is the nearest stable tag before the release, never the release itself"
+
+  # The listing and the rule, joined, on the REAL tree's own baseline: a break declared against
+  # it must be listed by hack/api-declared-breaks.sh and refused when the highlights say the
+  # release is not breaking. A baseline that cannot be found is a failure, not a skip: this is
+  # the only case that proves the two halves meet.
+  real_base="$(release_baseline v99.0.0)"
+  [ -n "$real_base" ] || { echo "  FAIL: no stable tag is reachable from this checkout (a shallow clone?), so the declared-breaks gate cannot be exercised" >&2; exit 1; }
+  printf '{"version":"v99.0.0","breaking":false,"highlights":["a"],"theme":"a theme"}\n' > "$hl"
+  sandbox="$tmp/sandbox"; mkdir -p "$sandbox"
+  for f in hack/api-declared-breaks.sh backend/tools/docsgql/sdlcompat/breaks.txt \
+    backend/tools/docsgql/apicompat/clitree/breaks.txt backend/tools/docsgql/apicompat/jsonschema/breaks.txt \
+    backend/tools/docsgql/apicompat/topics/breaks.txt frontend/api/breaks.txt \
+    sdks/csharp/src/DeviceChain.Sdk/PublicAPI.Unshipped.txt; do
+    mkdir -p "$sandbox/$(dirname "$f")"
+    cp "$ROOT/$f" "$sandbox/$f"
+  done
+  printf '%s graphql probe Query.zzProbe field-removed self-test\n' "$real_base" >> "$sandbox/backend/tools/docsgql/sdlcompat/breaks.txt"
+  ( cd "$sandbox" && git init -q . && git config user.email t@example.com && git config user.name t && git add -A && git commit -q -m x )
+  declared="$tmp/declared.txt"
+  "$sandbox/hack/api-declared-breaks.sh" "$real_base" "$sandbox" > "$declared"
+  grep -q "Query.zzProbe" "$declared" || { echo "  FAIL: a break declared against the real baseline ($real_base) was not listed" >&2; exit 1; }
+  [ -n "$(breaks_findings v99.0.0 "$real_base" "$hl" "$declared")" ] \
+    || { echo "  FAIL: a declared break with breaking:false was not refused" >&2; exit 1; }
+  echo "  ok: a break declared against the real baseline ($real_base) is listed, and refused when the highlights do not say breaking"
+
   # 🔴 THE SCAN MUST FAIL CLOSED, and this is the only place that can prove it. adr_refs
   # reports jq's own failure instead of swallowing it — `2>/dev/null || true` around a scan
   # turns a broken program into a clean bill of health, which is the one verdict a guard may
@@ -346,6 +482,12 @@ HL="${2:-$ROOT/.github/release-highlights.json}"
 findings="$(check "$TAG" "$HL")"
 if [ -n "$findings" ]; then
   echo "::error::$findings. Update .github/release-highlights.json (theme + highlights + breaking) before tagging." >&2
+  exit 1
+fi
+
+breaks="$(breaks_gate "$TAG" "$HL")"
+if [ -n "$breaks" ]; then
+  echo "::error::$breaks." >&2
   exit 1
 fi
 

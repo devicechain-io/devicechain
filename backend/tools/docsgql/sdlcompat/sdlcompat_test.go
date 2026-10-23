@@ -417,3 +417,23 @@ func fieldsOf(t *testing.T, nt ast.NamedType) *ast.FieldsDefinition {
 	}
 	return &o.Fields
 }
+
+// Deprecated lists every deprecated element, whatever its reason, by the coordinates a
+// declaration uses: the window check looks these up by `schema coordinate`.
+func TestDeprecatedListsEveryMarkedElement(t *testing.T) {
+	p := mustParse(t, `
+		enum E { A @deprecated B @deprecated(reason: "Use A.") C }
+		input I { a: Int @deprecated(reason: "Use c.") c: Int }
+		type Query {
+			bare: Int @deprecated
+			arg(x: Int @deprecated, y: Int): Int
+			other: Int
+		}
+	`)
+	p.Name = "area"
+	got := strings.Join(Deprecated([]Parsed{p}), "|")
+	want := "area E.A|area E.B|area I.a|area Query.arg(x:)|area Query.bare"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
