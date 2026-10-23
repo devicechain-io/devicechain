@@ -43,6 +43,9 @@ type s3ObjectAPI interface {
 	GetObject(ctx context.Context, in *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error)
 	HeadObject(ctx context.Context, in *s3.HeadObjectInput, optFns ...func(*s3.Options)) (*s3.HeadObjectOutput, error)
 	DeleteObject(ctx context.Context, in *s3.DeleteObjectInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectOutput, error)
+	// DeleteObjects serves DeleteTenant only: erasing a tenant is the one operation that
+	// deletes in bulk, and a request per object makes it latency-bound.
+	DeleteObjects(ctx context.Context, in *s3.DeleteObjectsInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectsOutput, error)
 	// ListObjectsV2 serves DeleteTenant only: tenant erasure is the one operation that
 	// must find objects no row names.
 	ListObjectsV2(ctx context.Context, in *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
@@ -383,8 +386,19 @@ func (s *s3Store) Delete(ctx context.Context, ref Ref) error {
 	return nil
 }
 
-// DeleteTenant lists the tenant's prefix and deletes what it finds, page by page.
-// Deleting the keys a page returned does not disturb the continuation token.
+// s3DeleteBatchMax is the most keys one DeleteObjects request may carry (the S3 API limit).
+const s3DeleteBatchMax = 1000
+
+// DeleteTenant lists the tenant's prefix and deletes what it finds, a page at a time, in
+// batches of up to s3DeleteBatchMax keys per request. Deleting the keys a page returned does
+// not disturb the continuation token.
+//
+// 🔴 A BATCH DELETE CAN SUCCEED AS A REQUEST AND FAIL PER KEY. DeleteObjects answers 200 with
+// an Errors list naming each key it could not delete, so a caller that only checks the call's
+// error reports a clean erasure over objects that are still there. Every per-key error fails
+// the pass: the count returned is only the keys confirmed deleted, and the error names the
+// first failing key. The caller repeats the pass until it finds nothing, so the objects that
+// did go are not reported twice.
 func (s *s3Store) DeleteTenant(ctx context.Context, tenant string) (int64, error) {
 	prefix, err := tenantPrefix(s.instanceID, tenant)
 	if err != nil {
@@ -399,22 +413,54 @@ func (s *s3Store) DeleteTenant(ctx context.Context, tenant string) (int64, error
 		if err != nil {
 			return n, fmt.Errorf("blob: listing tenant %q: %w", tenant, err)
 		}
+		// Check the whole page before deleting any of it: the listing asked for this prefix
+		// only, so anything else is a server that did not honour it, and deleting it would
+		// reach past the tenant.
+		ids := make([]s3types.ObjectIdentifier, 0, len(out.Contents))
 		for _, o := range out.Contents {
 			if o.Key == nil || !strings.HasPrefix(*o.Key, prefix) {
-				// The listing asked for this prefix only; anything else is a server that did
-				// not honour it, and deleting it would reach past the tenant.
 				return n, fmt.Errorf("blob: listing tenant %q returned a key outside its prefix", tenant)
 			}
-			if _, err := s.api.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: aws.String(s.bucket), Key: o.Key}); err != nil {
-				return n, fmt.Errorf("blob: deleting object: %w", err)
+			ids = append(ids, s3types.ObjectIdentifier{Key: o.Key})
+		}
+		for len(ids) > 0 {
+			batch := ids
+			if len(batch) > s3DeleteBatchMax {
+				batch = batch[:s3DeleteBatchMax]
 			}
-			n++
+			ids = ids[len(batch):]
+			deleted, err := s.deleteBatch(ctx, batch)
+			n += deleted
+			if err != nil {
+				return n, err
+			}
 		}
 		if out.IsTruncated == nil || !*out.IsTruncated || out.NextContinuationToken == nil {
 			return n, nil
 		}
 		next = out.NextContinuationToken
 	}
+}
+
+// deleteBatch deletes up to s3DeleteBatchMax keys in one request and returns how many were
+// confirmed deleted. Quiet mode reports only failures, so the successes are the batch minus
+// the errors; a response naming more failures than the batch held cannot make the count
+// negative.
+func (s *s3Store) deleteBatch(ctx context.Context, batch []s3types.ObjectIdentifier) (int64, error) {
+	out, err := s.api.DeleteObjects(ctx, &s3.DeleteObjectsInput{
+		Bucket: aws.String(s.bucket),
+		Delete: &s3types.Delete{Objects: batch, Quiet: aws.Bool(true)},
+	})
+	if err != nil {
+		return 0, fmt.Errorf("blob: deleting %d objects: %w", len(batch), err)
+	}
+	if out == nil || len(out.Errors) == 0 {
+		return int64(len(batch)), nil
+	}
+	failed := min(len(out.Errors), len(batch))
+	first := out.Errors[0]
+	return int64(len(batch) - failed), fmt.Errorf("blob: deleting objects: %d of %d failed, first %q: %s: %s",
+		len(out.Errors), len(batch), aws.ToString(first.Key), aws.ToString(first.Code), aws.ToString(first.Message))
 }
 
 // isS3NotFound reports whether err is an S3 "object does not exist" error, across

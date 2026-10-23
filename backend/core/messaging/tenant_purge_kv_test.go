@@ -6,6 +6,7 @@ package messaging
 import (
 	"context"
 	"encoding/base64"
+	"fmt"
 	"testing"
 	"time"
 
@@ -135,6 +136,62 @@ func TestATenantWhoseTokenIsAPrefixOfAnothersIsUnaffected(t *testing.T) {
 	assert.Equal(t, []string{"acme-2|dev-1"}, bucketKeys(t, store),
 		"acme-2 is a different tenant and its keys must survive acme's purge")
 	assert.Equal(t, []string{"acme-2"}, bucketKeys(t, bareStore))
+}
+
+// TestKvPurgeOfManyKeysIsExactUnderConcurrency drives far more keys than the purge has requests
+// in flight, so every worker slot is reused many times, with the bystanders interleaved
+// (including the prefix-collision tenant) and a deleted key's marker among them. The count
+// must be exact (a lost increment or a double count is a wrong erasure figure in the deletion
+// record), nothing of the victim may remain, and every bystander key must.
+func TestKvPurgeOfManyKeysIsExactUnderConcurrency(t *testing.T) {
+	_, js := purgeRig(t)
+	bucket := CacheBucketName(purgeInstance, "device-management", kv.BucketDeviceByToken)
+	store, err := js.CreateKeyValue(&nats.KeyValueConfig{Bucket: bucket, TTL: time.Hour})
+	require.NoError(t, err)
+
+	const victimKeys = kvPurgeConcurrency * 40
+	var bystanders []string
+	for i := 0; i < victimKeys; i++ {
+		_, err := store.Put(kvKey(fmt.Sprintf("%s|dev-%d", purgeVictim, i)), []byte("v"))
+		require.NoError(t, err)
+		if i%10 == 0 {
+			for _, other := range []string{purgeBystander, purgeVictim + "-2"} {
+				k := fmt.Sprintf("%s|dev-%d", other, i)
+				_, err := store.Put(kvKey(k), []byte("b"))
+				require.NoError(t, err)
+				bystanders = append(bystanders, k)
+			}
+		}
+	}
+	require.NoError(t, store.Delete(kvKey(purgeVictim+"|dev-0")))
+
+	res, err := PurgeTenantKv(context.Background(), js, purgeInstance, purgeVictim)
+	require.NoError(t, err)
+	assert.Equal(t, int64(victimKeys), res.Keys)
+	assert.Equal(t, int64(victimKeys), res.PerBucket[bucket])
+
+	assert.ElementsMatch(t, bystanders, bucketKeys(t, store))
+	info, err := js.StreamInfo(KvStreamName(bucket), &nats.StreamInfoRequest{SubjectsFilter: "$KV." + bucket + ".>"})
+	require.NoError(t, err)
+	assert.Len(t, info.State.Subjects, len(bystanders), "no marker of a victim key may remain")
+
+	again, err := PurgeTenantKv(context.Background(), js, purgeInstance, purgeVictim)
+	require.NoError(t, err)
+	assert.Zero(t, again.Keys)
+}
+
+// A purge whose context is already cancelled must fail rather than report clean.
+func TestKvPurgeWithACancelledContextFails(t *testing.T) {
+	_, js := purgeRig(t)
+	bucket := CacheBucketName(purgeInstance, "device-management", kv.BucketDeviceByToken)
+	store := seedBucket(t, js, bucket, purgeVictim+"|dev-1", purgeVictim+"|dev-2")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := PurgeTenantKv(ctx, js, purgeInstance, purgeVictim)
+
+	require.Error(t, err, "a cancelled pass that reported clean would let the coordinator ack an erasure that never ran")
+	assert.Len(t, bucketKeys(t, store), 2)
 }
 
 // TestKvPurgeIsIdempotent covers the Store contract: it runs on every pass until the purge

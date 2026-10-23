@@ -38,6 +38,14 @@ type fakeS3 struct {
 	delErr  error
 	delKeys []string
 
+	// delBatches records each DeleteObjects request's keys; batchFail maps a key to the
+	// error code the fake reports for it IN the response (the per-key failure S3 returns
+	// alongside a 200), batchErr fails the whole request.
+	delBatches [][]string
+	batchFail  map[string]string
+	batchErr   error
+	batchQuiet []bool
+
 	listIns   []*s3.ListObjectsV2Input
 	listPages []*s3.ListObjectsV2Output
 	listErr   error
@@ -71,6 +79,31 @@ func (f *fakeS3) DeleteObject(_ context.Context, in *s3.DeleteObjectInput, _ ...
 		f.delKeys = append(f.delKeys, *in.Key)
 	}
 	return &s3.DeleteObjectOutput{}, f.delErr
+}
+
+// DeleteObjects implements the batch semantics the store depends on: 1 to 1000 keys per
+// request, and per-key failures reported in the response while the request itself succeeds.
+// Keys that do not fail are recorded as deleted.
+func (f *fakeS3) DeleteObjects(_ context.Context, in *s3.DeleteObjectsInput, _ ...func(*s3.Options)) (*s3.DeleteObjectsOutput, error) {
+	if f.batchErr != nil {
+		return nil, f.batchErr
+	}
+	if in.Delete == nil || len(in.Delete.Objects) == 0 || len(in.Delete.Objects) > 1000 {
+		return nil, &smithy.GenericAPIError{Code: "MalformedXML", Message: "a batch holds 1 to 1000 keys"}
+	}
+	f.batchQuiet = append(f.batchQuiet, aws.ToBool(in.Delete.Quiet))
+	out := &s3.DeleteObjectsOutput{}
+	var keys []string
+	for _, o := range in.Delete.Objects {
+		keys = append(keys, *o.Key)
+		if code, bad := f.batchFail[*o.Key]; bad {
+			out.Errors = append(out.Errors, s3types.Error{Key: o.Key, Code: aws.String(code), Message: aws.String("denied")})
+			continue
+		}
+		f.delKeys = append(f.delKeys, *o.Key)
+	}
+	f.delBatches = append(f.delBatches, keys)
+	return out, nil
 }
 
 // ListObjectsV2 serves the canned pages in order, one per call.
