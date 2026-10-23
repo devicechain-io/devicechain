@@ -1365,6 +1365,44 @@ var entities = []entity{
 		},
 		TokenFrom: func(s *state) string { return probeInviteeEmail },
 	},
+	{
+		// Depends on: tenant-role, customer. A tenant's service account, which writes
+		// iam_service_accounts (scope included: it is limited to the probe customer), its
+		// grant of the tenant's own role (iam_service_account_roles) and its first secret
+		// (iam_service_account_secrets) — three tables an upgrade could drop independently.
+		// roles and scope are selected; secrets are selected by hint and expiry only, which
+		// are stored, never by lastUsedAt or active, which move without data loss.
+		//
+		// 🔴 THE CLIENT SECRET IS NOT SELECTED, AND MUST NEVER BE. It is shown once, in the
+		// create answer; Wrap unwraps `serviceAccount` and leaves clientSecret out of the
+		// document entirely, so it is neither recorded on the receipt nor printed.
+		//
+		// 🔴 READ BACK THROUGH serviceAccounts(criteria:), NOT serviceAccount(token:), for
+		// member-invitation's reason: the by-token read answers a missing account with a
+		// NOT_FOUND ERROR, which readRow would report as a schema that moved rather than a
+		// row that is gone. The by-token door is still swept (sweepTokenArgs).
+		Name:      "service-account",
+		Area:      "user-management",
+		Mutation:  "createServiceAccount",
+		Input:     "ServiceAccountCreateRequest!",
+		Wrap:      "serviceAccount",
+		Read:      "serviceAccounts",
+		ReadInput: "ServiceAccountSearchCriteria!",
+		ReadVars:  map[string]any{"pageNumber": 1, "pageSize": 100},
+		MatchBy:   "token",
+		Requires:  probeTenantRoleGroup,
+		Fields: "token name description clientId enabled createdBy " +
+			"roles{token name description authorities owner} scope{kind token} secrets{hint expiresAt}",
+		Vars: func(s *state) map[string]any {
+			return map[string]any{"req": map[string]any{
+				"token":       s.tok("service-account"),
+				"name":        "apiprobe integration",
+				"description": "A tenant service account; holds the probe's tenant role, limited to its customer.",
+				"roleTokens":  []any{s.tok("tenant-role")},
+				"scope":       []any{map[string]any{"kind": "CUSTOMER", "token": s.tok("customer")}},
+			}}
+		},
+	},
 }
 
 // probeInviteeEmail is the person member-invitation invites. Not derived from the tenant:
@@ -1491,7 +1529,7 @@ func otherWrites() int {
 	return len(seen)
 }
 
-const tenantCreateMutations = 29
+const tenantCreateMutations = 30
 
 // tenantPublishMutations is the same claim for publishes, measured the same way by
 // TestThePublishDenominatorMatchesTheSchemas. Separate from the count above because

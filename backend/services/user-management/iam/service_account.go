@@ -215,7 +215,10 @@ func (s *Store) TouchServiceAccountSecret(ctx context.Context, secretID uint, no
 // DeleteServiceAccount removes an account, its secrets and its role assignments.
 func (s *Store) DeleteServiceAccount(ctx context.Context, a *ServiceAccount) error {
 	return s.sys(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Exec("DELETE FROM iam_service_account_roles WHERE service_account_id = ?", a.ID).Error; err != nil {
+		// Through the association rather than raw SQL, so the statement is one gorm builds
+		// (the join rows also cascade from the account in PostgreSQL; SQLite tests do not
+		// enforce the foreign key, so they are cleared explicitly).
+		if err := tx.Model(a).Association("Roles").Clear(); err != nil {
 			return err
 		}
 		if err := tx.Where("service_account_id = ?", a.ID).Delete(&ServiceAccountSecret{}).Error; err != nil {

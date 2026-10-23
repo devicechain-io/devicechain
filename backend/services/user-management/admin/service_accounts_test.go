@@ -214,6 +214,8 @@ func TestATenantRoleHeldByAServiceAccountCannotBeDeleted(t *testing.T) {
 	var n int64
 	require.NoError(t, e.db.Raw(`SELECT COUNT(*) FROM iam_service_account_secrets`).Scan(&n).Error)
 	require.Zero(t, n, "a deleted account left its secrets behind")
+	require.NoError(t, e.db.Raw(`SELECT COUNT(*) FROM iam_service_account_roles`).Scan(&n).Error)
+	require.Zero(t, n, "a deleted account left its role assignments behind")
 	ok, err := e.s.DeleteTenantRole(boss(), "integrator")
 	require.NoError(t, err)
 	require.True(t, ok, "the role stayed in use after its only holder was deleted")
