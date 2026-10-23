@@ -33,13 +33,16 @@ SUFFIX="$$-$(date +%s)"
 PG="dc-purge-measure-pg-$SUFFIX"
 NATS="dc-purge-measure-nats-$SUFFIX"
 PG_IMAGE="${PM_PG_IMAGE:-timescale/timescaledb:latest-pg16@sha256:61f891691050da6032023c01ea885730eeeba06b7c17b403e7d0b9c49c37dfe9}"
-NATS_IMAGE="${PM_NATS_IMAGE:-nats:2.12-alpine}"
+NATS_IMAGE="${PM_NATS_IMAGE:-nats:2.12-alpine@sha256:b270f5e2428354c0335612694d7dd2fb588148e567a5757fdff325ef9c9332e6}"
 
 cleanup() { docker rm -f "$PG" "$NATS" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
 if [[ "$PG_IMAGE" == *@sha256:* ]]; then
   PG_IMAGE="$("$ROOT/hack/docker-pull.sh" "$PG_IMAGE")" || exit 1
+fi
+if [[ "$NATS_IMAGE" == *@sha256:* ]]; then
+  NATS_IMAGE="$("$ROOT/hack/docker-pull.sh" "$NATS_IMAGE")" || exit 1
 fi
 
 echo "==> starting $PG ($PG_IMAGE) and $NATS ($NATS_IMAGE)"

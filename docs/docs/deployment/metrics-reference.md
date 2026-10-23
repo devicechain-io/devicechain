@@ -293,6 +293,18 @@ Prefix: `devicechain_usermanagement_`.
 
 These count the dead-letter consumer, which stores a failure a service gave up on in a queryable store so it outlives the
 stream's own seven-day window. `dead_letters_unstored_total` is the one that matters: a failure
+the store could not take is recorded nowhere, and `DeadLetterStoreLosing` fires on it.
+
+| Metric | Means |
+| --- | --- |
+| `dead_letters_stored_total` | Dead letters written to the queryable store, so a failure a consumer gave up on outlives the stream's own seven-day window. |
+| `dead_letters_unstorable_total` | Dead-letter messages this consumer could not make sense of — no parseable tenant, or a body that is not an envelope. They are ACKED and counted rather than retried, because no redelivery makes a malformed message parse. |
+| `dead_letters_unstored_total` | Dead letters that exhausted every delivery attempt without being stored — the store was unreachable for longer than the retries last. The failure they described is now recorded nowhere, which is the one thing this consumer exists to prevent. |
+
+These count the tenant-deletion coordinator, which erases a deleted tenant's data from every storage system and then releases its token. None carries a tenant label. See [Tenant deletion](./tenant-deletion.md#blocked-store) for how to read them.
+
+| Metric | Means |
+| --- | --- |
 | `tenant_purge_in_flight` | Tenant deletions currently open. |
 | `tenant_purge_oldest_age_seconds` | Age of the oldest open tenant deletion, from its cut; 0 when none are open. `TenantPurgeStalled` watches it. |
 | `tenant_purge_store_blocked{store,reason}` | Open deletions each storage system is holding back, by store (`rdb`, `tsdb`, `broker`, `kv`, `detect`, `blob`, `other`) and reason (`deferred`: data still present or arriving; `error`: the store could not be asked). `TenantPurgeStoreFailing` and `TenantPurgeStoreHolding` watch it. |
@@ -302,13 +314,6 @@ stream's own seven-day window. `dead_letters_unstored_total` is the one that mat
 | `tenant_purge_failures_total` | Times the coordinator could not carry one tenant's deletion through a pass. It retries on the next pass, so this counts attempts. `TenantPurgeCoordinatorFailing` watches it. |
 | `tenant_purge_duration_seconds` | Histogram of seconds from a tenant's deletion to its token being released. Includes the token hold. |
 | `tenant_purge_clean_duration_seconds` | Histogram of seconds from a tenant's deletion to the last store reporting clean. Excludes the settle and token-hold waits that follow: the time the erasure itself took. |
-the store could not take is recorded nowhere, and `DeadLetterStoreLosing` fires on it.
-
-| Metric | Means |
-| --- | --- |
-| `dead_letters_stored_total` | Dead letters written to the queryable store, so a failure a consumer gave up on outlives the stream's own seven-day window. |
-| `dead_letters_unstorable_total` | Dead-letter messages this consumer could not make sense of — no parseable tenant, or a body that is not an envelope. They are ACKED and counted rather than retried, because no redelivery makes a malformed message parse. |
-| `dead_letters_unstored_total` | Dead letters that exhausted every delivery attempt without being stored — the store was unreachable for longer than the retries last. The failure they described is now recorded nowhere, which is the one thing this consumer exists to prevent. |
 
 ## Update management {#update-management}
 

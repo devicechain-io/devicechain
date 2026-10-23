@@ -5,11 +5,13 @@ package purge
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
+	"gorm.io/gorm"
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -69,6 +71,10 @@ type Coordinator struct {
 	// clocks' worth of timestamps, so a test that cannot move time can only assert the
 	// window by sleeping through it.
 	now func() time.Time
+	// tryLock runs fn under the pass's advisory lock if no peer holds it. A field so a test
+	// on SQLite, which has no advisory lock, can drive RunOnce down the path where a peer
+	// does — the path that refreshes this replica's gauges from the ledger.
+	tryLock func(ctx context.Context, fn func() error) (bool, error)
 
 	// inFlight and oldestAge are what an ALERT can be written against. See observe.
 	inFlight  prometheus.Gauge
@@ -91,6 +97,9 @@ func NewCoordinator(ms *core.Microservice, store *iam.Store, db *rdb.RdbManager,
 		settle:    settle,
 		tokenHold: tokenHold,
 		now:       time.Now,
+	}
+	c.tryLock = func(ctx context.Context, fn func() error) (bool, error) {
+		return db.TryAdvisoryLock(ctx, rdb.AdvisoryLockKey(coordinatorLockName), fn)
 	}
 	c.PeriodicTask = core.NewPeriodicTask(ms.FunctionalArea, "tenant-purge", interval,
 		c.RunOnce, callbacks, core.WithImmediateFirstPass(),
@@ -150,7 +159,7 @@ func (c *Coordinator) observe(tenants []iam.Tenant) {
 // RunOnce makes one pass over every purging tenant, if no peer replica is already doing
 // so. Exported so a test drives the real pass rather than a reconstruction of it.
 func (c *Coordinator) RunOnce(ctx context.Context) error {
-	ran, err := c.db.TryAdvisoryLock(ctx, rdb.AdvisoryLockKey(coordinatorLockName), func() error {
+	ran, err := c.tryLock(ctx, func() error {
 		return c.pass(ctx)
 	})
 	if err != nil {
@@ -161,9 +170,67 @@ func (c *Coordinator) RunOnce(ctx context.Context) error {
 		// timestamp, so an instance where every replica was declining — a lock nobody
 		// released — would report itself freshly swept forever, which is the outage that
 		// timestamp exists to reveal.
+		c.observeLedger(ctx)
 		return core.ErrPassSkipped
 	}
 	return nil
+}
+
+// observeLedger refreshes this replica's gauges from the shared rows, on a tick where a
+// peer holds the pass.
+//
+// 🔴 EVERY REPLICA EXPORTS THESE GAUGES AND THE ALERTS TAKE THE max ACROSS THEM, so a
+// replica that stops passing must not keep exporting what its last pass saw. Without this,
+// a replica that saw a store failing and then lost the lock to a peer for the length of a
+// long pass (a large tenant's erase runs for minutes) would keep reading 1 after the peer
+// saw the store recover, and TenantPurgeStoreFailing would page on a store that is fine.
+// The same held for the oldest-age gauge: a replica that last passed while a deletion was
+// open kept its age after a peer completed it.
+//
+// It reads the ledger the passing replica writes, so it classifies the same lines the same
+// way (passTally.addLine). It sees the ledger as of the peer's last write rather than at a
+// pass boundary, which is no less current than the peer's own gauge. A read that fails
+// leaves the gauges as they were: a stale figure is the same failure as before this
+// existed, and zeroing them would report every store clean on the strength of an error.
+//
+// System context for the same reason as pass: the rows it reads span every purging tenant,
+// so there is no one tenant to scope them to. It only reads, and only counts what it reads.
+func (c *Coordinator) observeLedger(ctx context.Context) {
+	sys := core.WithSystemContext(ctx)
+	tenants, err := c.iam.TenantsPurging(sys)
+	if err != nil {
+		log.Debug().Err(err).Msg("Could not refresh the tenant-purge gauges while a peer holds the pass")
+		return
+	}
+	c.observe(tenants)
+
+	ids := make([]uint, 0, len(tenants))
+	for i := range tenants {
+		if tenants[i].PurgeEpoch == nil {
+			continue
+		}
+		rec, err := c.iam.PurgeRecordFor(sys, tenants[i].Token, *tenants[i].PurgeEpoch)
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			continue // no pass has reached it yet: no store has said anything
+		}
+		if err != nil {
+			log.Debug().Err(err).Msg("Could not refresh the tenant-purge gauges while a peer holds the pass")
+			return
+		}
+		ids = append(ids, rec.ID)
+	}
+	byPurge, err := c.iam.PurgeStoresFor(sys, ids)
+	if err != nil {
+		log.Debug().Err(err).Msg("Could not refresh the tenant-purge gauges while a peer holds the pass")
+		return
+	}
+	tally := newPassTally()
+	for _, lines := range byPurge {
+		for i := range lines {
+			tally.addLine(&lines[i])
+		}
+	}
+	c.metrics.publish(tally)
 }
 
 // pass sweeps every purging tenant once. One tenant's failure does not stop the others:
@@ -302,12 +369,7 @@ func (c *Coordinator) purgeTenant(ctx context.Context, tenant *iam.Tenant, tally
 		line := c.eraseOne(ctx, store, t.Token, epoch, rec.ID, cleanSince[store.Name()])
 		// Before the carry below: this pass's own figure is the progress, not the running total.
 		c.metrics.recordErase(store.Name(), line.Rows, time.Since(started))
-		switch {
-		case line.Failure != "":
-			tally.add(store.Name(), ReasonError)
-		case !line.Complete:
-			tally.add(store.Name(), ReasonDeferred)
-		}
+		tally.addLine(line)
 		// 🔴 ROWS ACCUMULATE ACROSS PASSES; THEY ARE NOT THIS PASS'S FIGURE. An erasure is
 		// idempotent by contract — the second call finds nothing and reports zero — and a
 		// purge cannot complete on its first pass, because the settle window has not

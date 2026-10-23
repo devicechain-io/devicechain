@@ -30,6 +30,21 @@ obligation is being met. These two gauges are; this file is what watches them.
 */}}
 {{- $hold := dig "user-management" "config" "tenantPurge" "tokenHoldSeconds" 43200 .Values.functionalAreas | default 43200 }}
 {{- $stalled := mul $hold 2 }}
+{{/*
+  🔴 ONE FAILURE MUST NOT PAGE, AND "KEEPS FAILING" IS MEASURED IN PASSES. A coordinator
+  failure is retried on the next pass, so a transient one (a DB blip, a replica losing the
+  completion race to its peer) is followed by a pass that succeeds. The alert asks whether a
+  failure has recurred inside every window of three passes for longer than two such windows:
+  increase() over the window is above zero only while failures keep arriving, and one
+  failure holds it there for one window, which is shorter than the `for`. Written as a fixed
+  increase(...[1h]) > 0 for 30m, a single failure fired it 30 minutes later.
+  The interval reads 0 as the default and a negative (the coordinator disabled) the same
+  way, since a disabled coordinator records no failures to alert on.
+*/}}
+{{- $interval := dig "user-management" "config" "tenantPurge" "intervalSeconds" 60 .Values.functionalAreas | default 60 | int }}
+{{- if lt $interval 1 }}{{ $interval = 60 }}{{ end }}
+{{- $failWindow := max 600 (mul $interval 3) }}
+{{- $failFor := max 1800 (mul $failWindow 2) }}
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
@@ -78,12 +93,12 @@ spec:
             summary: "A storage system has reported a deleted tenant's data still present for longer than the token hold"
             description: "The {{ "{{ $labels.store }}" }} store has answered the erase request for at least one open tenant deletion with data still present or still arriving, continuously for the length of the token hold ({{ $hold }}s). A store normally goes clean within a few passes; one that does not is either retaining data on purpose (a stream with a retention the purge cannot cut, a bucket that refuses deletes) or being refilled by something still writing for the deleted tenant. The admin API's tenantDeletions query names the tenant and the store's stated reason. TenantPurgeStalled fires later, at twice the hold, without naming the store."
         - alert: TenantPurgeCoordinatorFailing
-          expr: sum(increase(devicechain_usermanagement_tenant_purge_failures_total{namespace="{{ $ns }}"}[1h])) > 0
-          for: 30m
+          expr: sum(increase(devicechain_usermanagement_tenant_purge_failures_total{namespace="{{ $ns }}"}[{{ $failWindow }}s])) > 0
+          for: {{ $failFor }}s
           labels:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
             summary: "The tenant-deletion coordinator keeps failing to carry a deletion through a pass"
-            description: "The coordinator has failed to take at least one tenant deletion through a pass (re-reading the tenant, writing the ledger, lifting a fence or completing it) and the rate has stayed above zero for 30 minutes. This is a fault in the coordinator's own work, not a store holding data: a store's refusal is reported by TenantPurgeStoreFailing and TenantPurgeStoreHolding. User-management's log names the tenant and the step."
+            description: "The coordinator has failed to take at least one tenant deletion through a pass (re-reading the tenant, writing the ledger, lifting a fence or completing it) and has failed again within every {{ $failWindow }}s for {{ $failFor }}s; a single failure the next pass recovers from does not fire this. This is a fault in the coordinator's own work, not a store holding data: a store's refusal is reported by TenantPurgeStoreFailing and TenantPurgeStoreHolding. User-management's log names the tenant and the step."
 {{- end }}

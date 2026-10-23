@@ -4,6 +4,7 @@
 package purge
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -11,6 +12,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
+
+	"github.com/devicechain-io/dc-microservice/core"
 )
 
 const metricPrefix = "devicechain_usermanagement_tenant_purge_"
@@ -140,4 +143,76 @@ func TestACoordinatorFaultIsCounted(t *testing.T) {
 	m, ok := sample(t, h.reg, metricPrefix+"failures_total", nil)
 	require.True(t, ok)
 	require.GreaterOrEqual(t, m.GetCounter().GetValue(), float64(1))
+}
+
+// Every replica exports the gauges and the alerts take the max across them, so a replica
+// that loses the lock to a peer must read the shared ledger rather than keep what its own
+// last pass saw: otherwise a store that recovered on the peer's pass still reads 1 here.
+func TestAReplicaThatSkipsThePassReadsTheLedger(t *testing.T) {
+	failing := &fakeStore{name: StoreKeyValue, err: errors.New("kv down")}
+	deferring := &fakeStore{name: StoreBroker, deferred: []string{"retained messages remain"}}
+	h := newHarness(t, failing, deferring)
+
+	ctx := context.Background()
+	peerReg := prometheus.NewRegistry()
+	ms := &core.Microservice{FunctionalArea: "user-management"}
+	ms.UseMetricsRegistry(peerReg)
+	peer := NewCoordinator(ms, h.iam, h.coord.db, h.coord.stores, time.Minute,
+		settleWindow, tokenHoldWindow, core.NewNoOpLifecycleCallbacks())
+	peer.now = func() time.Time { return h.clock }
+	// skip drives the peer's real tick on a turn where the other replica holds the lock.
+	skip := func() {
+		t.Helper()
+		peer.tryLock = func(context.Context, func() error) (bool, error) { return false, nil }
+		require.ErrorIs(t, peer.RunOnce(ctx), core.ErrPassSkipped)
+	}
+	peerGauge := func(store, reason string) float64 {
+		t.Helper()
+		m, ok := sample(t, peerReg, metricPrefix+"store_blocked", map[string]string{"store": store, "reason": reason})
+		require.True(t, ok)
+		return m.GetGauge().GetValue()
+	}
+
+	h.deleteTenant("acme")
+	h.clock = h.clock.Add(10 * time.Minute)
+	// The peer passes first and sees both stores blocked, and the deletion ten minutes old.
+	_ = peer.pass(ctx)
+	age, ok := sample(t, peerReg, metricPrefix+"oldest_age_seconds", nil)
+	require.True(t, ok)
+	require.EqualValues(t, 600, age.GetGauge().GetValue())
+	require.EqualValues(t, 1, peerGauge(StoreKeyValue, ReasonError))
+	require.EqualValues(t, 1, peerGauge(StoreBroker, ReasonDeferred))
+
+	// Both recover; the other replica holds the next pass and sees it.
+	failing.err = nil
+	deferring.deferred = nil
+	h.pass()
+	require.EqualValues(t, 0, blockedGauge(t, h, StoreKeyValue, ReasonError))
+	require.EqualValues(t, 1, peerGauge(StoreKeyValue, ReasonError), "the peer has not looked again yet")
+
+	// The peer's tick finds the lock held and reads the ledger instead.
+	skip()
+	require.EqualValues(t, 0, peerGauge(StoreKeyValue, ReasonError), "a skipped replica must not keep its last pass")
+	require.EqualValues(t, 0, peerGauge(StoreBroker, ReasonDeferred))
+
+	// And it reads a blocked store as blocked, not just everything as clean.
+	failing.err = errors.New("kv down again")
+	h.pass()
+	skip()
+	require.EqualValues(t, 1, peerGauge(StoreKeyValue, ReasonError))
+	require.EqualValues(t, 0, peerGauge(StoreBroker, ReasonDeferred))
+
+	// The oldest-age gauge follows the shared rows too: completed on the other replica, 0 here.
+	failing.err = nil
+	h.pass()
+	h.clock = h.clock.Add(settleWindow + time.Second)
+	h.pass()
+	h.clock = h.clock.Add(tokenHoldWindow)
+	h.pass()
+	require.False(t, h.exists("acme"), "the fixture must actually complete the purge")
+	skip()
+	age, ok = sample(t, peerReg, metricPrefix+"oldest_age_seconds", nil)
+	require.True(t, ok)
+	require.EqualValues(t, 0, age.GetGauge().GetValue(), "completed on the other replica")
+	require.EqualValues(t, 0, peerGauge(StoreKeyValue, ReasonError))
 }

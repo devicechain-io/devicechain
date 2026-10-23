@@ -228,7 +228,8 @@ tests:
         exp_alerts: []
 
   # ------------------------------------------------------------------
-  # Coordinator failures: a counter that moves for an hour pages; a flat one is quiet.
+  # Coordinator failures: a counter that keeps moving pages; a flat one is quiet, and so is
+  # one that moved once and stopped (a transient failure the next pass recovered from).
   # ------------------------------------------------------------------
   - interval: 1m
     input_series:
@@ -246,7 +247,7 @@ tests:
               devicechain_instance: devicechain
             exp_annotations:
               summary: "The tenant-deletion coordinator keeps failing to carry a deletion through a pass"
-              description: "The coordinator has failed to take at least one tenant deletion through a pass (re-reading the tenant, writing the ledger, lifting a fence or completing it) and the rate has stayed above zero for 30 minutes. This is a fault in the coordinator's own work, not a store holding data: a store's refusal is reported by TenantPurgeStoreFailing and TenantPurgeStoreHolding. User-management's log names the tenant and the step."
+              description: "The coordinator has failed to take at least one tenant deletion through a pass (re-reading the tenant, writing the ledger, lifting a fence or completing it) and has failed again within every 600s for 1800s; a single failure the next pass recovers from does not fire this. This is a fault in the coordinator's own work, not a store holding data: a store's refusal is reported by TenantPurgeStoreFailing and TenantPurgeStoreHolding. User-management's log names the tenant and the step."
 
   - interval: 1m
     input_series:
@@ -256,3 +257,35 @@ tests:
       - eval_time: 90m
         alertname: TenantPurgeCoordinatorFailing
         exp_alerts: []
+
+  # One failure at 10m, then none: quiet throughout, including the 30m after it.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_usermanagement_tenant_purge_failures_total{namespace="dci-devicechain", pod="dc-user-management-7c9f-abcde", job="devicechain/user-management"}'
+        values: '0x10 1x110'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: TenantPurgeCoordinatorFailing
+        exp_alerts: []
+      - eval_time: 45m
+        alertname: TenantPurgeCoordinatorFailing
+        exp_alerts: []
+      - eval_time: 70m
+        alertname: TenantPurgeCoordinatorFailing
+        exp_alerts: []
+
+  # A failure every 8 minutes keeps the 10m window above zero, so it still pages.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_usermanagement_tenant_purge_failures_total{namespace="dci-devicechain", pod="dc-user-management-7c9f-abcde", job="devicechain/user-management"}'
+        values: '0x7 1x7 2x7 3x7 4x7 5x7 6x7 7x7 8x7 9x7 10x7 11x7'
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: TenantPurgeCoordinatorFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "The tenant-deletion coordinator keeps failing to carry a deletion through a pass"
+              description: "The coordinator has failed to take at least one tenant deletion through a pass (re-reading the tenant, writing the ledger, lifting a fence or completing it) and has failed again within every 600s for 1800s; a single failure the next pass recovers from does not fire this. This is a fault in the coordinator's own work, not a store holding data: a store's refusal is reported by TenantPurgeStoreFailing and TenantPurgeStoreHolding. User-management's log names the tenant and the step."

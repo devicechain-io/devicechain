@@ -301,6 +301,17 @@ entregados, donde `dcctl dead-letters` las lista. Este contador te dice que nunc
 Prefijo: `devicechain_usermanagement_`.
 
 Estos cuentan el consumidor de mensajes no entregados, que guarda un fallo del que un servicio se rindió en un almacén consultable para que sobreviva a la propia ventana de siete días del flujo. `dead_letters_unstored_total` es la que importa: un fallo que el almacén no pudo aceptar no queda registrado en ningún lugar, y `DeadLetterStoreLosing` se dispara sobre ella.
+
+| Métrica | Significa |
+| --- | --- |
+| `dead_letters_stored_total` | Mensajes no entregados escritos en el almacén consultable, de modo que un fallo del que un consumidor se rindió sobrevive a la propia ventana de siete días del flujo. |
+| `dead_letters_unstorable_total` | Mensajes no entregados que este consumidor no pudo interpretar: sin inquilino interpretable, o un cuerpo que no es un sobre. Se CONFIRMAN y se cuentan en lugar de reintentarse, porque ninguna reentrega hace que un mensaje malformado se pueda interpretar. |
+| `dead_letters_unstored_total` | Mensajes no entregados que agotaron todos los intentos de entrega sin almacenarse: el almacén estuvo inalcanzable durante más tiempo del que duran los reintentos. El fallo que describían ya no queda registrado en ningún lugar, que es justo lo que este consumidor existe para evitar. |
+
+Estas cuentan el coordinador de eliminación de inquilinos, que borra los datos de un inquilino eliminado de todos los sistemas de almacenamiento y después libera su identificador. Ninguna lleva etiqueta de inquilino. Consulta [Eliminación de inquilinos](./tenant-deletion.md#blocked-store) para saber cómo leerlas.
+
+| Métrica | Significa |
+| --- | --- |
 | `tenant_purge_in_flight` | Eliminaciones de inquilino abiertas en este momento. |
 | `tenant_purge_oldest_age_seconds` | Antigüedad de la eliminación abierta más antigua, desde su corte; 0 si no hay ninguna. `TenantPurgeStalled` la vigila. |
 | `tenant_purge_store_blocked{store,reason}` | Eliminaciones abiertas que retiene cada sistema de almacenamiento, por almacén (`rdb`, `tsdb`, `broker`, `kv`, `detect`, `blob`, `other`) y motivo (`deferred`: aún hay datos o siguen llegando; `error`: no se pudo consultar al almacén). `TenantPurgeStoreFailing` y `TenantPurgeStoreHolding` la vigilan. |
@@ -310,12 +321,6 @@ Estos cuentan el consumidor de mensajes no entregados, que guarda un fallo del q
 | `tenant_purge_failures_total` | Veces que el coordinador no pudo llevar la eliminación de un inquilino a término en una pasada. Reintenta en la siguiente, así que cuenta intentos. `TenantPurgeCoordinatorFailing` la vigila. |
 | `tenant_purge_duration_seconds` | Histograma de segundos desde la eliminación de un inquilino hasta la liberación de su identificador. Incluye la retención del identificador. |
 | `tenant_purge_clean_duration_seconds` | Histograma de segundos desde la eliminación de un inquilino hasta que el último almacén informó de que estaba limpio. Excluye las esperas de asentamiento y retención posteriores: lo que tardó el borrado en sí. |
-
-| Métrica | Significa |
-| --- | --- |
-| `dead_letters_stored_total` | Mensajes no entregados escritos en el almacén consultable, de modo que un fallo del que un consumidor se rindió sobrevive a la propia ventana de siete días del flujo. |
-| `dead_letters_unstorable_total` | Mensajes no entregados que este consumidor no pudo interpretar: sin inquilino interpretable, o un cuerpo que no es un sobre. Se CONFIRMAN y se cuentan en lugar de reintentarse, porque ninguna reentrega hace que un mensaje malformado se pueda interpretar. |
-| `dead_letters_unstored_total` | Mensajes no entregados que agotaron todos los intentos de entrega sin almacenarse: el almacén estuvo inalcanzable durante más tiempo del que duran los reintentos. El fallo que describían ya no queda registrado en ningún lugar, que es justo lo que este consumidor existe para evitar. |
 
 ## Update management {#update-management}
 

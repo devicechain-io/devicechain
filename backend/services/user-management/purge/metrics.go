@@ -10,6 +10,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-user-management/iam"
 )
 
 // Why a purge is held back by one store. A closed set, because it is a metric label.
@@ -126,6 +127,18 @@ func (t *passTally) add(store, reason string) {
 	t.mu.Lock()
 	t.blocked[[2]string{storeLabel(store), reason}]++
 	t.mu.Unlock()
+}
+
+// addLine classifies one ledger line. The passing replica calls it on the lines it writes
+// and a replica that skipped calls it on the lines it reads back, so the two cannot
+// disagree about what "blocked" means.
+func (t *passTally) addLine(line *iam.TenantPurgeStore) {
+	switch {
+	case line.Failure != "":
+		t.add(line.Store, ReasonError)
+	case !line.Complete:
+		t.add(line.Store, ReasonDeferred)
+	}
 }
 
 // publish writes the tally to the gauge: every pair, so a recovered store goes back to 0.
