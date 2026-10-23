@@ -585,3 +585,95 @@ describe('the time range', () => {
     expect(document.querySelector('[data-time-range-paused]')).toBeNull();
   });
 });
+
+describe('the playlist link (?rotate=&every=)', () => {
+  const boardTitled = (title: string) => ({ loaded: { ...board.loaded, definition: { ...board.loaded.definition, title } } });
+  const advance = (ms: number) => act(async () => void (await vi.advanceTimersByTimeAsync(ms)));
+  const progress = () => document.querySelector('[data-rotate-progress]');
+
+  it('opens the first board in kiosk, then the next after the interval, each read by its own token', async () => {
+    landOn('?rotate=wall-a,wall-b&every=20');
+    h.load.mockImplementation(async (token: string) => boardTitled(token === 'wall-a' ? 'Board A' : 'Board B'));
+    serve();
+    render(<App />);
+    await signIn();
+    expect(h.load).toHaveBeenCalledWith('wall-a', '');
+    expect(screen.getByTestId('board')).toBeTruthy();
+    // Kiosk: no header, no Change button; the playlist's own bar is there.
+    expect(screen.queryByRole('button', { name: t('view:change') })).toBeNull();
+    expect(progress()).not.toBeNull();
+    expect(document.querySelector('[data-rotate-position]')?.textContent).toContain('Board A');
+    await advance(20_000);
+    expect(h.load).toHaveBeenCalledWith('wall-b', '');
+    expect(document.querySelector('[data-rotate-position]')?.textContent).toContain('Board B');
+  });
+
+  it('keeps the link\'s time range on every board', async () => {
+    landOn('?rotate=wall-a,wall-b&every=10&range=24h');
+    serve();
+    render(<App />);
+    await signIn();
+    expect(h.rendered?.timeRange).toEqual({ spanSeconds: 86400, paused: false });
+    await advance(10_000);
+    expect(h.rendered?.timeRange).toEqual({ spanSeconds: 86400, paused: false });
+  });
+
+  it('keeps the fixed window on every board', async () => {
+    landOn('?rotate=wall-a,wall-b&every=10&from=2026-10-14T02:00:00Z&to=2026-10-14T04:00:00Z');
+    serve();
+    render(<App />);
+    await signIn();
+    expect(h.rendered?.timeRange?.paused).toBe(true);
+    expect(document.querySelector('[data-time-range-absolute]')).not.toBeNull();
+    await advance(10_000);
+    expect(document.querySelector('[data-time-range-absolute]')).not.toBeNull();
+  });
+
+  it('says on the page what it ignored, and still plays the rest', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    landOn('?rotate=wall-a,%20bad%20token,wall-b&every=3');
+    serve();
+    render(<App />);
+    await signIn();
+    expect(screen.getByTestId('board')).toBeTruthy();
+    const notes = [...document.querySelectorAll('[data-rotate-note]')].map((n) => n.textContent);
+    expect(notes).toHaveLength(2);
+    expect(notes.join(' ')).toContain('bad token');
+    expect(notes.join(' ')).toContain('3');
+    // The invalid interval falls back to a minute.
+    await advance(30_000);
+    expect(document.querySelector('[data-rotate-position]')?.textContent).toContain(i18n.t('view:rotateProgress', { n: 1, total: 2 }));
+    await advance(30_000);
+    expect(document.querySelector('[data-rotate-position]')?.textContent).toContain(i18n.t('view:rotateProgress', { n: 2, total: 2 }));
+  });
+
+  it('a single board opens as a plain deep link, with a note', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    landOn('?rotate=wall-a');
+    serve();
+    render(<App />);
+    await signIn();
+    expect(h.load).toHaveBeenCalledWith('wall-a', '');
+    expect(progress()).toBeNull();
+    expect(document.querySelector('[data-rotate-note]')?.textContent).toContain('2');
+  });
+
+  it('chrome=0 hides the controls but keeps the bar', async () => {
+    landOn('?rotate=wall-a,wall-b&chrome=0');
+    serve();
+    render(<App />);
+    await signIn();
+    expect(progress()).not.toBeNull();
+    expect(document.querySelector('[data-rotate-toggle]')).toBeNull();
+  });
+
+  it('every on its own is noted and does nothing else', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    landOn('?dashboard=wall&every=30');
+    serve();
+    render(<App />);
+    await signIn();
+    expect(progress()).toBeNull();
+    expect(document.querySelector('[data-rotate-note]')?.textContent).toContain('rotate');
+  });
+});

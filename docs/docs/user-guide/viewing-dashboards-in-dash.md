@@ -145,6 +145,8 @@ the right mode:
 | `paused` | `1` | Opens the board frozen at the moment it loads, with the **Paused** badge showing. Any other value opens it live. |
 | `from`, `to` | two times, each ISO 8601 with a zone, such as `2026-10-22T02:00:00Z` or `2026-10-22T04:00:00+02:00` | Opens the board on that fixed window instead of a live range; see [Custom range](#custom-range). Both are needed. A time with no zone is refused, because "02:00" means a different moment in each place. It wins over `range` and `paused`. |
 | `bind.<slot>` | a device token | Opens the board with that device chosen for the slot. See [Linking to a board with a device chosen](#linking-to-a-device). |
+| `rotate` | two to 24 dashboard tokens, separated by commas | Cycles through those boards; see [Rotating through several boards](#rotating-boards). It implies `kiosk`, and wins over `dashboard`. |
+| `every` | seconds, 10 to 3600 | How long each board of a `rotate` playlist shows. 60 when absent. |
 
 A parameter with a value the viewer does not recognize is ignored, and the other parameters still
 apply.
@@ -162,6 +164,40 @@ time-range or pause controls either, but a board opened with `paused=1` still sh
 badge beside the connection indicator, so a frozen wall display says so.
 
 <GuideShot id="dash-kiosk" alt="The Widget Lab board in kiosk mode: no header, a Live indicator in the top left corner, a Fullscreen button in the top right corner, and the title card and the same live widgets below." />
+
+## Rotating through several boards {#rotating-boards}
+
+A wall display that should show several boards in turn takes a playlist:
+
+```text
+/dash/?rotate=<token-a>,<token-b>,<token-c>&every=45
+```
+
+Each board shows for `every` seconds, then the next takes over, and the playlist starts again after
+the last. The page is in kiosk mode. A thin bar along the bottom edge shows how far through the
+current board it is. Beside it a small strip names the board and its place in the playlist (for
+example *Board 2 of 3*) and has **Previous board**, **Pause rotation** and **Next board** buttons;
+`chrome=0` hides the strip and keeps the bar.
+
+- The next board is read in the last ten seconds of the current one, so the switch is to a board
+  that is already loaded. Each board's live version is read again every pass: a dashboard you
+  publish appears the next time the playlist reaches it.
+- Using the board pauses the rotation. A click, a key press, a scroll or a touch holds the playlist,
+  so nobody is carried off a widget they are reading, and it resumes after 30 seconds without any of
+  those. **Pause rotation** holds it until you choose **Resume rotation**. A paused playlist always
+  says so, even with `chrome=0`.
+- A board that cannot be opened (not published, not shared with you, deleted) is skipped, and a note
+  on the page names it and the reason. The other boards keep playing. If none can be opened, the page
+  says so and offers **Try again**.
+- The rest of the link applies to every board: the same `range`, or the same fixed `from` and `to`
+  window, the same `theme` and `density`. A `bind.<slot>` parameter chooses that device on the
+  boards that have a slot of that name and is left off the others, so one link can choose a device
+  for several boards.
+- A part of the link the playlist cannot use is ignored, and a note on the page says which and why,
+  so the wall display never quietly plays something else: a token that is not a dashboard token is
+  skipped, an `every` outside 10 to 3600 seconds (or not a whole number) falls back to 60, boards
+  past 24 are left out, and fewer than two usable boards is no playlist (a single board opens as if
+  it had been named in `dashboard`). Dismiss a note with its **×**; the playlist keeps playing.
 
 ## Linking to a board with a device chosen {#linking-to-a-device}
 
