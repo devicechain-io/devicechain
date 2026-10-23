@@ -1872,10 +1872,12 @@ $bad"
   note "every area that mounts a broker login is ready ✓"
 
   # ...and none was refused.
-  local pod refused=""
+  # The log is captured before it is searched: piped into `grep -q`, a match closes the pipe early,
+  # kubectl dies of the broken pipe, and under pipefail that turns the very match into "no match".
+  local pod podlog refused=""
   for pod in $(kubectl --context "$kube_context" -n "$(instance_namespace)" get pods -o name); do
-    if kubectl --context "$kube_context" -n "$(instance_namespace)" logs "$pod" --all-containers --tail=500 2>/dev/null |
-      grep -qi 'authorization violation'; then
+    podlog="$(kubectl --context "$kube_context" -n "$(instance_namespace)" logs "$pod" --all-containers --tail=500 2>/dev/null || true)"
+    if grep -qi 'authorization violation' <<<"$podlog"; then
       refused+=" $pod"
     fi
   done

@@ -457,7 +457,7 @@ What a running instance sees:
   upgrade, with the permissions it always had, so services that have not restarted yet keep connecting;
   until the next upgrade it is still in the configuration every pod reads, so a pod can still present it, and
   this is not yet a boundary against a compromised service. Run `dcctl upgrade` once more to retire it. When every
-  area already runs its own login, that upgrade removes the shared login from the broker and from the
+  area already runs its own login and the previous upgrade finished, that upgrade removes the shared login from the broker and from the
   instance configuration, with one more broker restart, and its closing summary says which phase ran
   (or why it did not retire the login). A new instance never has a shared login. Once it is retired,
   rolling back to an earlier release is not supported: run the newer `dcctl upgrade` again instead. Two grants are wider by design: event-sources keeps update rights on the broker's MQTT

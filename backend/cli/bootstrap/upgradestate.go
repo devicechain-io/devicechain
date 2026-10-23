@@ -174,6 +174,7 @@ func hydrateUpgradeState(
 	// Whether this run keeps, introduces around or retires the shared broker login. Decided from the
 	// instance it starts from, here, before anything is written, so the plan, the dry run and the
 	// apply all read the one answer.
+	noteStartPhase(st, inst)
 	decideSharedLogin(ctx, st)
 	if err := checkSharedLoginHasSuccessors(st); err != nil {
 		return nil, fmt.Errorf("instance %q: %w. Nothing has been changed", opts.Instance, err)

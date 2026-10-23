@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/fatih/color"
 	"helm.sh/helm/v3/pkg/action"
@@ -40,6 +41,9 @@ const (
 	// loginsPresentAtStartValue records whether every principal's login Secret existed BEFORE this
 	// run minted anything. A login this run mints is introduced by it; nothing runs on it yet.
 	loginsPresentAtStartValue = "natsLoginsPresentAtStart"
+	// startPhaseValue records the phase the instance's declaration carried when this run started:
+	// what the LAST run over it ended in.
+	startPhaseValue = "natsStartPhase"
 )
 
 // The phases of the shared login, as a run sees them.
@@ -97,6 +101,16 @@ func noteLoginsPresentAtStart(st *State) {
 		requireEveryPrincipalHasALogin(loginsInValues(st)) == nil)
 }
 
+// noteStartPhase records, before this run stamps anything, the phase the last run over the
+// instance ended in.
+func noteStartPhase(st *State, inst *dcv1beta1.Instance) {
+	phase := ""
+	if inst != nil {
+		phase = inst.Annotations[dcv1beta1.AnnotationPhase]
+	}
+	st.Values[startPhaseValue] = phase
+}
+
 // decideSharedLogin settles the shared login's phase for an UPGRADE, from the instance it starts
 // from. It runs after the running instance's credentials have been read into the run (and before
 // anything is written), and a run that retires the login blanks the shared password it carries.
@@ -110,6 +124,13 @@ func noteLoginsPresentAtStart(st *State) {
 //     can authenticate now rather than after this run writes it;
 //   - the running release carries the broker administrator's Job, so the streams stay reconcilable
 //     without the shared login;
+//   - the last run over the instance ended Ready. 🔴 THE DOCUMENT SAYING areaLogins IS A FACT ABOUT
+//     THE DOCUMENT, NOT ABOUT THE PODS: a first upgrade whose service rollout failed or timed out
+//     wrote that document and left Deployments with their OLD pods still serving, on the shared
+//     login they started with. Retiring under them cuts those areas off at the broker apply, before
+//     this run's own rollout replaces them, and if the new pods still cannot start they never come
+//     back. A Ready stamp is written only after every Deployment has fully rolled (waitForAreas), so
+//     it is what proves no pod is still on the old document;
 //   - this run applies the broker. A --skip-infrastructure run changes nothing broker-side, and a
 //     document that dropped the login while the broker kept it would be a half retirement.
 func decideSharedLogin(ctx context.Context, st *State) {
@@ -133,6 +154,13 @@ func decideSharedLogin(ctx context.Context, st *State) {
 	}
 	if st.Values[loginsPresentAtStartValue] != "true" {
 		blocked = append(blocked, "an area or the broker administrator had no login Secret, so this run minted it")
+	}
+	if p := st.Values[startPhaseValue]; p != dcv1beta1.PhaseReady {
+		if p == "" {
+			p = "none recorded"
+		}
+		blocked = append(blocked, fmt.Sprintf("the last run over this instance did not end Ready (phase: %s), so a "+
+			"service may still be running pods that started on the shared login", p))
 	}
 	hashes := lookupDeployedBrokerHashes(ctx, st.KubeContext, InstanceNamespace(st.Instance), natsStatefulSetName)
 	for _, p := range config.NatsLoginPrincipals() {

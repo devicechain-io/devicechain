@@ -487,7 +487,7 @@ Lo que ve una instancia en marcha:
   las nuevas durante esta actualización, con los permisos que siempre tuvo, de modo que los servicios que aún no se han
   reiniciado siguen conectándose; hasta la siguiente actualización
   sigue en la configuración que lee cada pod, así que un pod aún puede presentarla, y esto todavía no es una frontera frente a un
-  servicio comprometido. Ejecute `dcctl upgrade` una vez más para retirarla. Cuando cada área ya usa su propia credencial, esa
+  servicio comprometido. Ejecute `dcctl upgrade` una vez más para retirarla. Cuando cada área ya usa su propia credencial y la actualización anterior terminó, esa
   actualización elimina la credencial compartida del bróker y de la configuración de la instancia, con un reinicio más del bróker, y su
   resumen final indica qué fase se ejecutó (o por qué no retiró la credencial). Una instancia nueva nunca tiene una credencial
   compartida. Una vez retirada, no se admite volver a una versión anterior: ejecute de nuevo el `dcctl upgrade` más reciente. Dos permisos son

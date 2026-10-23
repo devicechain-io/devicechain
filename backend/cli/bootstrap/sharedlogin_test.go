@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/natsauth"
 	"github.com/stretchr/testify/require"
@@ -39,13 +40,15 @@ type retireFixture struct {
 	adminJobError error
 	skipInfra     bool
 	sharedPw      string
+	// startPhase is the phase the instance's declaration carried when the run started.
+	startPhase string
 }
 
 func newRetireFixture(t *testing.T) retireFixture {
 	t.Helper()
 	creds, err := mintBrokerCredentials()
 	require.NoError(t, err)
-	f := retireFixture{creds: creds, deployedFlag: true, logins: loginPlaintexts(creds), adminJob: true, sharedPw: "shared-pw"}
+	f := retireFixture{creds: creds, deployedFlag: true, logins: loginPlaintexts(creds), adminJob: true, sharedPw: "shared-pw", startPhase: dcv1beta1.PhaseReady}
 	f.brokerHolds = config.NatsLoginPrincipals()
 	return f
 }
@@ -77,6 +80,11 @@ func (f retireFixture) run(t *testing.T) *State {
 		// drop it would show.
 		st.Values["natsServicePasswordBcrypt"] = "$2a$10$shared"
 	}
+	decl := &dcv1beta1.Instance{}
+	if f.startPhase != "" {
+		decl.Annotations = map[string]string{dcv1beta1.AnnotationPhase: f.startPhase}
+	}
+	noteStartPhase(st, decl)
 	decideSharedLogin(t.Context(), st)
 	return st
 }
@@ -136,6 +144,23 @@ func TestTheSharedLoginIsNotRetiredFromAnyOtherStartingState(t *testing.T) {
 			f.adminJobError = errors.New("release not found")
 			return f
 		}, "release not found"},
+		// The first upgrade wrote the per-area document and then its rollout failed: old pods may still
+		// be serving on the shared login.
+		"the last run did not end Ready": {func(t *testing.T) retireFixture {
+			f := newRetireFixture(t)
+			f.startPhase = dcv1beta1.PhaseFailed
+			return f
+		}, "did not end Ready (phase: Failed)"},
+		"the last run is still marked as upgrading": {func(t *testing.T) retireFixture {
+			f := newRetireFixture(t)
+			f.startPhase = dcv1beta1.PhaseUpgrading
+			return f
+		}, "did not end Ready (phase: Upgrading)"},
+		"no phase is recorded": {func(t *testing.T) retireFixture {
+			f := newRetireFixture(t)
+			f.startPhase = ""
+			return f
+		}, "did not end Ready (phase: none recorded)"},
 		"the run applies nothing to the broker": {func(t *testing.T) retireFixture {
 			f := newRetireFixture(t)
 			f.skipInfra = true
