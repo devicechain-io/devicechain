@@ -95,7 +95,7 @@ self_test() {
   # 2. A report that drifted - a line removed from the committed file - fails and names it.
   cp -R "$REPORTS" "$tmp/reports"
   local victim
-  victim="$(grep -n '^export interface Basemap' "$tmp/reports/client.api.md" | head -1 | cut -d: -f1)"
+  victim="$(grep -n '^export interface Basemap' "$tmp/reports/client.api.md" | sed -n 1p | cut -d: -f1)"
   [ -n "$victim" ] || { echo "self-test: client.api.md no longer has Basemap; pick another export to drift" >&2; return 1; }
   sed -i "${victim}d" "$tmp/reports/client.api.md"
   rc=0; out="$(api_cli check --frontend "$FRONTEND" --reports "$tmp/reports" 2>&1)" || rc=$?
@@ -157,7 +157,7 @@ self_test() {
 
   # 10. A REQUIRED member added since the baseline is reported and does not fail.
   local decl
-  decl="$(grep -rl --include='*.d.ts' 'interface DecodedClaims' "$base_client/dist" | head -1 || true)"
+  decl="$(grep -rl --include='*.d.ts' 'interface DecodedClaims' "$base_client/dist" | sed -n 1p || true)"
   [ -n "$decl" ] || { echo "self-test: DecodedClaims is gone; pick another interface with a required member" >&2; return 1; }
   sed -i '/^    username: string;$/d' "$decl"
   rc=0; out="$(api_cli compat --frontend "$FRONTEND" --base "$w" --baseline v0.0.0 --breaks "$tmp/none.txt" 2>&1)" || rc=$?

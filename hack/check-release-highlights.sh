@@ -239,7 +239,7 @@ breaks_gate() {
   out="$(breaks_findings "$tag" "$baseline" "$hl" "$declared")"
   if [ -n "$out" ]; then
     echo "$out"
-    sed 's/^/  declared: /' "$declared" | head -20 >&2
+    sed 's/^/  declared: /' "$declared" | sed -n '1,20p' >&2
   else
     echo "release breaks: $(grep -c . "$declared" || true) declared against $baseline" >&2
   fi

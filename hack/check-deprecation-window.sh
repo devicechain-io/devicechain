@@ -63,7 +63,7 @@ window_ok() {
 # stable_tags_upto <data-root> <baseline>: stable release tags up to and including the baseline,
 # newest first.
 stable_tags_upto() {
-  git -C "$1" tag --list 'v[0-9]*.[0-9]*.[0-9]*' | grep -v -- '-' | sort -V | awk -v b="$2" '{ print } $0 == b { exit }' | sort -rV
+  git -C "$1" tag --list 'v[0-9]*.[0-9]*.[0-9]*' | grep -v -- '-' | sort -V | awk -v b="$2" 'done == 0 { print } $0 == b { done = 1 }' | sort -rV
 }
 
 # deprecated_at <data-root> <tag> <out>: every `schema coordinate` deprecated in the tag's schemas.
