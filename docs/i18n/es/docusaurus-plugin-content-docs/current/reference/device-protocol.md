@@ -57,6 +57,21 @@ El broker de la plataforma es el servidor MQTT integrado en NATS. Un topic MQTT 
 
 Por **HTTP**, un dispositivo solo puede enviar eventos. Haz `POST` del mismo [cuerpo de evento](#device-event) a `/{instanceId}/{tenant}/events` en el servicio `event-sources` (puerto 8081). No hay canal de bajada por HTTP: un dispositivo que solo usa HTTP no puede recibir comandos, configuración ni asignaciones de actualización.
 
+### El espacio de nombres de pasarela {#gateway-namespace}
+
+Una pasarela (el [agente de borde](../deployment/edge-services.md#gateway-identity) es una) es un dispositivo que publica por otros dispositivos. Lo hace en su propio espacio de nombres:
+
+| Mensaje | Dirección | Topic MQTT |
+| --- | --- | --- |
+| [Evento](#device-event) de un dispositivo tras la pasarela | pasarela → plataforma | `{instanceId}/{tenant}/gateways/{gatewayToken}/devices/{deviceToken}/events` |
+| Aviso de que se rechazó un evento | plataforma → pasarela | `{instanceId}/{tenant}/gateways/{gatewayToken}/notices` |
+
+- Una pasarela está autorizada a publicar solo bajo su token **propio**, con cualquier token hijo tras `devices/`, y a suscribirse solo a sus propios avisos. No puede publicar en el espacio de nombres de otra pasarela ni de otro tenant, ni en el topic propio de un hijo. La concesión tiene el mismo tamaño sea cual sea el número de dispositivos que representa la pasarela, y la tiene cada dispositivo, así que asignar un primer dispositivo a una pasarela no requiere reconexión.
+- La plataforma acepta un evento solo si el dispositivo nombrado en el topic existe, está **asignado a esa pasarela** y la pasarela está habilitada. En caso contrario rechaza el evento con el motivo `NotGatewayChild` ([más abajo](#rejections-after-acceptance)) y envía un aviso a la pasarela. El broker confirma la publicación en ambos casos, porque MQTT 3.1.1 no puede rechazar una.
+- La identidad es el topic más la asignación. El cuerpo no lleva ninguna: se rechaza un evento de este espacio de nombres que lleve `credentialType`, `credentialId` o `credentialSecret`, y también un `device` del cuerpo que nombre a otro dispositivo. El evento se atribuye al hijo, y el evento resuelto lleva además el token de la pasarela.
+- Un aviso es un objeto JSON, `{"altId": "...", "device": "...", "reason": "not_gateway_child"}`. No lleva carga y no se almacena, así que una pasarela que estaba desconectada cuando se envió no lo recibe. El registro de un rechazo es el flujo `failed-events`.
+- La concesión también cubre `responses` y `reports` bajo el espacio de nombres y la suscripción a `commands` y `desired`, pero nada los lee ni los envía todavía. Publica solo **eventos**.
+
 ## Evento de dispositivo {#device-event}
 
 Un objeto JSON por mensaje MQTT o petición HTTP. Un mensaje es un evento.
@@ -210,6 +225,7 @@ Un evento aceptado (`202`, o capturado por el broker) lo resuelve después `devi
 | `DeviceNotFound` | No se usó ninguna credencial y el token `device` no está registrado en el tenant. |
 | `Invalid` | El evento tiene más de 366 días, o no se pudo interpretar para su tipo. |
 | `ApiCallFailed` | Falló una consulta o escritura que la resolución necesitaba, incluido un [`NewRelationship`](#new-relationship-payload) que la plataforma no pudo crear. |
+| `NotGatewayChild` | Una pasarela publicó por un dispositivo que no tiene asignado, que no existe, o la pasarela está deshabilitada. No se reintenta: se registra en la primera entrega. |
 
 Un evento rechazado se reintenta hasta su quinta entrega, de modo que si entretanto se registra el dispositivo o se recupera la base de datos, el evento se almacena igualmente. La excepción es un evento demasiado antiguo para almacenarse, que se registra en su primera entrega, ya que ningún reintento puede cambiar su antigüedad.
 

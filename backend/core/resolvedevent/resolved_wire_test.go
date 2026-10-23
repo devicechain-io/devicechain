@@ -129,6 +129,7 @@ func referenceMarshalResolvedEvent(event *ResolvedEvent, format eventtime.WireFo
 		ExternalId:           referenceOptionalString(event.ExternalId),
 		FenceSetVersion:      event.FenceSetVersion,
 		SourceDeviceDisabled: event.SourceDeviceDisabled,
+		GatewayToken:         event.GatewayToken,
 		Occurred:             occurred,
 		OccurredTime:         deref(occurredText),
 		Processed:            processed,
@@ -194,7 +195,9 @@ func resolvedShapes() map[string]*ResolvedEvent {
 			e.ExternalId = "grp/node/dev"
 			e.FenceSetVersion = 7
 			e.SourceDeviceDisabled = true
+			e.GatewayToken = "edge-gw-1"
 		}),
+		"gateway token alone":     with(func(e *ResolvedEvent) { e.GatewayToken = "g" }),
 		"empty alt id is present": with(func(e *ResolvedEvent) { e.AltId = strp("") }),
 		"empty anchor and membership": with(func(e *ResolvedEvent) {
 			e.Anchors = []ResolvedAnchor{{}}

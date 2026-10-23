@@ -201,6 +201,10 @@ func (rez *EventResolver) MergeToResolveEvent(device *model.Device, anchors []re
 		ProfileVersionToken: scope.ProfileVersionToken,
 		Anchors:             anchors,
 		ScopeMemberships:    memberships,
+		// Who carried the event, when a gateway did: the broker authenticated it, and the
+		// child's assignment named it (resolveGatewayChild refuses the event before this
+		// otherwise, so a token here has been checked). SourceDeviceToken stays the child.
+		GatewayToken: event.Gateway,
 		// The envelope's time, bounded. This is the value the connectivity projection
 		// advances last-activity on, so leaving it unbounded would let one event dated
 		// 2099 pin a device's presence forever — its inactivity sweep would never fire

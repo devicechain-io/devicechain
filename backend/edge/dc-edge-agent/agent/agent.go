@@ -7,6 +7,12 @@
 // paho MQTT uplink — so the cloud's own MQTT-gateway capture (ADR-030) ingests them
 // with no platform-side publish path.
 //
+// The agent is a GATEWAY (the only uplink mode): it authenticates to the cloud as its own
+// device and forwards each local device's events in the gateway's own namespace, where the
+// platform accepts an event only for a device assigned to this gateway. Local devices are
+// unchanged (they publish their golden topic to the local listener); see uplink.go for the
+// topic constructor and gateway.go for how a platform refusal is surfaced and kept.
+//
 // SLICE (ADR-068 Tier 1): this is E3, the bounded buffer + observability. Over E2's
 // durable store-and-forward buffer it adds:
 //
@@ -38,6 +44,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -63,9 +70,13 @@ const (
 	// Run: no Unsubscribe on the durable) so that bookkeeping persists.
 	forwarderDurable = "edge-forwarder"
 
-	// fetchBatch / fetchWait pace the drain loop's pull from the durable consumer.
-	fetchBatch = 64
-	fetchWait  = time.Second
+	// uplinkWindow bounds the publishes in flight to the uplink: the drain pulls at most
+	// this many spool messages, publishes them all, and acks each on its OWN PUBACK. The
+	// old drain waited for each PUBACK before the next publish, so a box topped out at
+	// about 1/RTT events per second (about 20/s at 50 ms) and could not catch up after an
+	// outage if its devices produced more. fetchWait paces the pull when the spool is idle.
+	uplinkWindow = 64
+	fetchWait    = time.Second
 
 	// disconnectedPoll is how often the drain re-checks the uplink while it is down.
 	// While disconnected the drain does NOT pull, so buffered events sit in the
@@ -165,12 +176,28 @@ type Agent struct {
 	forwardErrors atomic.Int64
 	mismatched    atomic.Int64
 	malformed     atomic.Int64
+
+	// Gateway counters (see gateway.go). refused counts platform notices (and the agent's
+	// own refusals), refusedKept those whose payload was written to the local dead-letter
+	// file, refusedUnmatched those whose payload was no longer held. tenantMismatched counts
+	// local publishes naming another tenant (never spooled); bodyStripped the credential
+	// members removed from event bodies; inflight the publishes awaiting a PUBACK.
+	refused          atomic.Int64
+	refusedKept      atomic.Int64
+	refusedUnmatched atomic.Int64
+	tenantMismatched atomic.Int64
+	bodyStripped     atomic.Int64
+	inflight         atomic.Int64
+
+	sent       *recentSent
+	dead       *deadLetters
+	refusalLog logLimiter
 }
 
 // New builds an Agent from validated config (the uplink credential is resolved
 // eagerly so a missing projected Secret fails at startup, not on first forward).
 func New(cfg config.Configuration, log *slog.Logger) (*Agent, error) {
-	up, err := NewUplink(cfg.Uplink, cfg.InstanceId, cfg.AgentId, log)
+	up, err := NewUplink(cfg.Uplink, cfg.InstanceId, log)
 	if err != nil {
 		return nil, err
 	}
@@ -197,7 +224,12 @@ func New(cfg config.Configuration, log *slog.Logger) (*Agent, error) {
 		}
 	}
 
-	return &Agent{cfg: cfg, log: log, uplink: up, localPassword: localPassword, ready: make(chan struct{})}, nil
+	a := &Agent{
+		cfg: cfg, log: log, uplink: up, localPassword: localPassword, ready: make(chan struct{}),
+		sent: newRecentSent(), dead: newDeadLetters(cfg.Local.StoreDir),
+	}
+	up.onNotice = a.handleNotice
+	return a, nil
 }
 
 // Run brings the agent up and blocks until ctx is cancelled, then shuts down cleanly.
@@ -252,8 +284,12 @@ func (a *Agent) Run(ctx context.Context) error {
 	defer a.nc.Close()
 	a.healthy.Store(true) // JetStream is answering; /healthz is green before the first tick
 
+	filter := a.captureSubject()
+	if err := a.alignConsumerFilter(filter); err != nil {
+		return fmt.Errorf("align durable consumer filter: %w", err)
+	}
 	sub, err := a.js.PullSubscribe(
-		messaging.DeviceEventsWildcard(a.cfg.InstanceId),
+		filter,
 		forwarderDurable,
 		nats.BindStream(captureStream),
 		// Unlimited redelivery: a multi-day outage must never exhaust delivery
@@ -361,7 +397,7 @@ func (a *Agent) bootstrapStream() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	epoch, err := ensureStream(js, a.cfg.InstanceId, a.cfg.Local.StoreDir, a.cfg.Local.SpoolMaxBytes)
+	epoch, err := ensureStream(js, a.captureSubject(), a.cfg.Local.StoreDir, a.cfg.Local.SpoolMaxBytes)
 	if err != nil {
 		return "", err
 	}
@@ -473,6 +509,41 @@ func (a *Agent) ackWait() time.Duration {
 	return 2 * time.Duration(a.cfg.Uplink.ConnectTimeoutSeconds) * time.Second
 }
 
+// captureSubject is the one subject the local spool stores and the drain reads:
+// {instance}.{tenant}.devices.*.events. Narrowing it to the configured tenant (it used to
+// be every tenant of the instance) is what keeps a local publish naming another tenant out
+// of the spool: such a publish could only ever be refused by the cloud, so it is counted
+// (tenant_mismatched_total) and never stored. A spool written by an earlier build may still
+// hold such messages; they match no consumer and stay until the ring buffer evicts them.
+func (a *Agent) captureSubject() string {
+	return messaging.DeviceEventsSubject(a.cfg.InstanceId, a.cfg.Uplink.Tenant, "*")
+}
+
+// alignConsumerFilter moves an existing durable consumer's filter to subject. The durable
+// outlives restarts, so a box that was configured for a wider subject keeps the old filter,
+// and binding with a different one is refused. Updating in place keeps the delivery
+// bookkeeping (and therefore the backlog) that the durable exists to preserve.
+func (a *Agent) alignConsumerFilter(subject string) error {
+	ci, err := a.js.ConsumerInfo(captureStream, forwarderDurable)
+	if err != nil {
+		if errors.Is(err, nats.ErrConsumerNotFound) {
+			return nil // first boot: PullSubscribe creates it with this filter
+		}
+		return err
+	}
+	if ci.Config.FilterSubject == subject && len(ci.Config.FilterSubjects) == 0 {
+		return nil
+	}
+	cfg := ci.Config
+	cfg.FilterSubject = subject
+	cfg.FilterSubjects = nil
+	if _, err := a.js.UpdateConsumer(captureStream, &cfg); err != nil {
+		return err
+	}
+	a.log.Warn("moved the forwarder's filter to the configured tenant", "was", ci.Config.FilterSubject, "now", subject)
+	return nil
+}
+
 // ensureStream creates (or adopts) the local capture stream and returns its
 // stream-incarnation epoch (see identity.go). It captures the same device-events subject
 // the cloud does, so once it exists the embedded MQTT gateway writes each device publish
@@ -496,8 +567,7 @@ func (a *Agent) ackWait() time.Duration {
 // telemetry. Retention MUST stay WorkQueue (the server forbids changing it on update, so
 // it never drifts here). Adding MaxBytes to a pre-E3 (unbounded) stream is an accepted
 // UpdateStream diff; shrinking below current usage evicts immediately.
-func ensureStream(js nats.JetStreamContext, instanceId, storeDir string, maxBytes int64) (string, error) {
-	subject := messaging.DeviceEventsWildcard(instanceId)
+func ensureStream(js nats.JetStreamContext, subject, storeDir string, maxBytes int64) (string, error) {
 	cfg := &nats.StreamConfig{
 		Name:      captureStream,
 		Subjects:  []string{subject},
@@ -586,7 +656,10 @@ func (a *Agent) hardenStoreDirPerms() {
 		"store_dir", a.cfg.Local.StoreDir, "was", fmt.Sprintf("%#o", perm), "now", fmt.Sprintf("%#o", newPerm))
 }
 
-// drain pulls captured events FIFO and forwards each to the cloud, until ctx ends.
+// drain pulls captured events FIFO and forwards them to the cloud, until ctx ends. Each pull
+// is at most uplinkWindow messages, all published before any PUBACK is awaited, so the
+// publishes in flight never exceed the window and a box's drain rate is about window/RTT
+// rather than 1/RTT.
 func (a *Agent) drain(ctx context.Context, sub *nats.Subscription) {
 	for {
 		if ctx.Err() != nil {
@@ -603,7 +676,7 @@ func (a *Agent) drain(ctx context.Context, sub *nats.Subscription) {
 			}
 			continue
 		}
-		msgs, err := sub.Fetch(fetchBatch, nats.MaxWait(fetchWait))
+		msgs, err := sub.Fetch(uplinkWindow, nats.MaxWait(fetchWait))
 		if err != nil {
 			// A fetch that finds nothing before MaxWait returns ErrTimeout — that is
 			// the idle case, not a fault.
@@ -616,41 +689,58 @@ func (a *Agent) drain(ctx context.Context, sub *nats.Subscription) {
 			a.log.Warn("drain fetch failed", "err", err)
 			continue
 		}
-		for _, msg := range msgs {
-			// Bail a long batch promptly on shutdown rather than working through up to
-			// fetchBatch slow forwards first.
-			if ctx.Err() != nil {
+		a.forwardBatch(ctx, msgs)
+	}
+}
+
+// forwardBatch publishes one pulled batch and returns when every publish it started has
+// settled. Each message is acked by the goroutine that saw ITS PUBACK, and only then: a
+// message whose publish failed or timed out stays un-acked and is redelivered after
+// AckWait with the same minted key. A failure stops the batch from starting any more
+// publishes (the uplink is likely down; the Connected() gate in drain pauses the pull).
+func (a *Agent) forwardBatch(ctx context.Context, msgs []*nats.Msg) {
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	for _, msg := range msgs {
+		// Bail a long batch promptly on shutdown rather than working through all of it.
+		if ctx.Err() != nil {
+			return
+		}
+		a.received.Add(1)
+		ev, handled, err := a.prepare(msg)
+		if handled {
+			continue
+		}
+		if err != nil {
+			a.forwardErrors.Add(1)
+			a.log.Warn("forward failed — leaving event buffered for redelivery", "subject", msg.Subject, "err", err)
+			return
+		}
+		// Held BEFORE the publish: a notice can arrive before this goroutine is scheduled
+		// again, and a refusal that finds nothing held is a refusal whose payload was lost.
+		a.sent.put(ev)
+		wait, err := a.begin(ev.topic, ev.payload)
+		if err != nil {
+			a.forwardErrors.Add(1)
+			a.log.Warn("forward failed — leaving event buffered for redelivery", "subject", msg.Subject, "err", err)
+			return
+		}
+		a.inflight.Add(1)
+		wg.Add(1)
+		go func(msg *nats.Msg, wait func() error) {
+			defer wg.Done()
+			defer a.inflight.Add(-1)
+			if err := wait(); err != nil {
+				a.forwardErrors.Add(1)
+				a.log.Warn("forward failed — leaving event buffered for redelivery", "subject", msg.Subject, "err", err)
 				return
 			}
-			a.received.Add(1)
-			// A well-formed device-events subject has no '/'. A device that put a '.'
-			// inside a golden-MQTT topic level lands here as a subject with a '/' in a
-			// token (SubjectToMqttTopic's documented precondition), which would
-			// round-trip to a mangled topic. Skip and count rather than forward garbage
-			// the cloud will drop anyway — and ack it: it is not a transient fault, so
-			// leaving it un-acked would poison the FIFO spool head forever.
-			if strings.Contains(msg.Subject, "/") {
-				a.malformed.Add(1)
-				a.log.Warn("dropping event on malformed subject (dot inside an MQTT topic level?)",
-					"subject", msg.Subject)
-				a.ackAndCount(msg)
-				continue
-			}
-			if ferr := a.forwardOne(msg); ferr != nil {
-				a.forwardErrors.Add(1)
-				a.log.Warn("forward failed — leaving event buffered for redelivery",
-					"subject", msg.Subject, "err", ferr)
-				// Leave this message (and the rest of the batch) un-acked: the uplink is
-				// likely down, so stop pushing. The outer loop's Connected() gate pauses
-				// us, and WorkQueue redelivers everything un-acked once the uplink is back.
-				break
-			}
 			a.forwarded.Add(1)
-			// ACK SITE: ack ONLY after the cloud PUBACK'd (forwardOne returned nil). This
-			// is what turns the spool into a real store-and-forward buffer — an event that
-			// did not reach the cloud stays in the stream for redelivery.
+			// ACK SITE: ack ONLY after the cloud PUBACK'd. This is what turns the spool into
+			// a real store-and-forward buffer — an event that did not reach the cloud stays
+			// in the stream for redelivery.
 			a.ackAndCount(msg)
-		}
+		}(msg, wait)
 	}
 }
 
@@ -674,32 +764,116 @@ func (a *Agent) ackAndCount(msg *nats.Msg) {
 	a.ackedCount.Add(1)
 }
 
-// forwardOne maps one captured event's subject back to its golden MQTT topic, makes it
-// exactly-once-safe (stampIdempotency, derived from immutable stored-message metadata),
-// and publishes it to the cloud. It returns an error when the uplink could not confirm
-// the publish — the caller leaves the message un-acked for redelivery.
-func (a *Agent) forwardOne(msg *nats.Msg) error {
+// prepare maps one captured event to what the uplink publishes: the child's topic in the
+// gateway's namespace (the ONE constructor, Uplink.EventTopic) and the payload made exactly-
+// once-safe (stampIdempotency, derived from immutable stored-message metadata) with any body
+// credential removed. handled reports that the message was disposed of here (acked) and is
+// not to be published; err means it could not be prepared and must stay buffered.
+//
+// Two kinds of message are disposed of locally rather than forwarded, and neither is dropped
+// silently: a subject that is not a device-events subject is garbage and is counted
+// (malformed), and an event the cloud could only refuse (the gateway's own token, or a token
+// the platform's grammar cannot hold) is counted as refused and written to the dead-letter
+// file, where an operator can read it.
+func (a *Agent) prepare(msg *nats.Msg) (ev *sentEvent, handled bool, err error) {
+	// A well-formed device-events subject has no '/'. A device that put a '.' inside a
+	// golden-MQTT topic level lands here as a subject with a '/' in a token
+	// (SubjectToMqttTopic's documented precondition), which would round-trip to a mangled
+	// topic. Skip and count rather than forward garbage — and ack it: it is not a transient
+	// fault, so leaving it un-acked would poison the FIFO spool head forever.
+	gateway, child, ok := messaging.ParseDeviceEventsSubject(msg.Subject)
+	if strings.Contains(msg.Subject, "/") || !ok || gateway != "" {
+		a.malformed.Add(1)
+		a.log.Warn("dropping event on malformed subject (dot inside an MQTT topic level?)", "subject", msg.Subject)
+		a.ackAndCount(msg)
+		return nil, true, nil
+	}
 	meta, err := msg.Metadata()
 	if err != nil {
 		// A pull-consumer message always has JetStream metadata; without it we cannot
 		// derive a replay-stable key, so refuse to forward rather than emit an event
 		// the cloud might duplicate.
-		return fmt.Errorf("no JetStream metadata (cannot derive idempotency key): %w", err)
+		return nil, false, fmt.Errorf("no JetStream metadata (cannot derive idempotency key): %w", err)
 	}
-	payload, err := stampIdempotency(msg.Data, a.installId, a.streamEpoch, meta.Sequence.Stream, meta.Timestamp)
+	payload, altId, stripped, err := prepareUplinkPayload(msg.Data, a.installId, a.streamEpoch, meta.Sequence.Stream, meta.Timestamp, true)
 	if err != nil {
-		return fmt.Errorf("stamp idempotency: %w", err)
+		return nil, false, fmt.Errorf("stamp idempotency: %w", err)
 	}
-	topic := messaging.SubjectToMqttTopic(msg.Subject)
-	return a.publish(topic, payload)
+	if stripped > 0 {
+		a.bodyStripped.Add(int64(stripped))
+		if a.refusalLog.allow("strip:"+child, refusalLogEvery) {
+			a.log.Warn("removed a credential from an event body before forwarding — the platform refuses a body credential on a gateway uplink; change the device to stop sending it",
+				"device", child, "members_removed", stripped)
+		}
+	}
+	topic, terr := a.uplink.EventTopic(child)
+	if terr != nil {
+		reason := refusalInvalidToken
+		if errors.Is(terr, ErrGatewayAddressedItself) {
+			reason = refusalGatewaySelf
+		}
+		held := &sentEvent{altId: altId, child: child, payload: payload}
+		a.refuse(reason, held, "the agent will not forward this event: "+terr.Error())
+		a.keep(reason, held)
+		a.ackAndCount(msg)
+		return nil, true, nil
+	}
+	return &sentEvent{altId: altId, child: child, topic: topic, payload: payload}, false, nil
 }
 
-// publish sends the forwarded bytes to the cloud, honouring a test override.
-func (a *Agent) publish(topic string, payload []byte) error {
+// begin starts one publish, honouring a test override (which runs in the settling goroutine
+// so a test can model a slow broker and a concurrent window).
+func (a *Agent) begin(topic string, payload []byte) (func() error, error) {
 	if a.publishOverride != nil {
-		return a.publishOverride(topic, payload)
+		return func() error { return a.publishOverride(topic, payload) }, nil
 	}
-	return a.uplink.Publish(topic, payload)
+	return a.uplink.Begin(topic, payload)
+}
+
+// handleNotice is the uplink's callback for a platform notice: the platform refused an event
+// this gateway published. It counts it (by reason), warns naming the child (rate limited per
+// child and reason), and, when the refused event is still held, writes it to the local
+// dead-letter file. See gateway.go for why the spool itself cannot be where it is kept.
+func (a *Agent) handleNotice(n messaging.GatewayNotice) {
+	reason := normaliseRefusalReason(n.Reason)
+	ev, held := a.sent.take(n.AltId)
+	if !held {
+		ev = &sentEvent{altId: n.AltId, child: n.Device}
+	}
+	if ev.child == "" {
+		ev.child = n.Device
+	}
+	a.refuse(reason, ev, "the platform refused an event this gateway published")
+	if held {
+		a.keep(reason, ev)
+	} else {
+		a.refusedUnmatched.Add(1)
+		a.log.Warn("a refused event is no longer held on this box — the platform's failed-events record has its payload",
+			"device", n.Device, "alt_id", n.AltId, "reason", reason)
+	}
+}
+
+// refuse counts one refusal and logs it (rate limited per child and reason).
+func (a *Agent) refuse(reason string, ev *sentEvent, why string) {
+	a.refused.Add(1)
+	if a.metrics != nil {
+		a.metrics.refused.WithLabelValues(reason).Inc()
+	}
+	if a.refusalLog.allow("refused:"+reason+":"+ev.child, refusalLogEvery) {
+		a.log.Warn("event refused — "+why,
+			"device", ev.child, "reason", reason, "gateway", a.cfg.Uplink.GatewayToken,
+			"hint", "assign the device to this gateway on the platform (a device belongs to one gateway), or stop it publishing here")
+	}
+}
+
+// keep writes a refused event to the local dead-letter file and counts it.
+func (a *Agent) keep(reason string, ev *sentEvent) {
+	if err := a.dead.write(newRefusedRecord(reason, ev)); err != nil {
+		a.log.Error("could not write a refused event to the local dead-letter file — the event is still recoverable from the platform's failed-events record if it got that far",
+			"device", ev.child, "alt_id", ev.altId, "err", err)
+		return
+	}
+	a.refusedKept.Add(1)
 }
 
 // watchInstanceMismatch counts device publishes seen on any instanceId other than the
@@ -715,9 +889,15 @@ func (a *Agent) watchInstanceMismatch() {
 	// a device that publishes exactly once, on the wrong instance, inside the window is
 	// invisible forever, and that is the single-shot case this watch exists to catch.
 	_, err := messaging.SubscribeSynced(a.nc, "*.*.devices.*.events", func(m *nats.Msg) {
-		instance, _, _ := strings.Cut(m.Subject, ".")
-		if instance != a.cfg.InstanceId {
+		instance, rest, _ := strings.Cut(m.Subject, ".")
+		tenant, _, _ := strings.Cut(rest, ".")
+		switch {
+		case instance != a.cfg.InstanceId:
 			a.mismatched.Add(1)
+		case tenant != a.cfg.Uplink.Tenant:
+			// Right instance, other tenant: not captured (the spool is narrowed to the
+			// configured tenant), because the cloud could only refuse it.
+			a.tenantMismatched.Add(1)
 		}
 	})
 	if err != nil {
@@ -826,6 +1006,11 @@ func (a *Agent) sampleMetrics() {
 		"forward_errors", a.forwardErrors.Load(),
 		"malformed", a.malformed.Load(),
 		"instance_mismatched", mismatch,
+		"tenant_mismatched", a.tenantMismatched.Load(),
+		"refused", a.refused.Load(),
+		"refused_kept", a.refusedKept.Load(),
+		"body_credentials_stripped", a.bodyStripped.Load(),
+		"inflight", a.inflight.Load(),
 		"spool_used_messages", usedMsgs,
 		"spool_used_bytes", usedBytes,
 		"spool_max_bytes", limit,
@@ -843,6 +1028,11 @@ func (a *Agent) sampleMetrics() {
 		a.log.Warn("device publishes seen on a DIFFERENT instanceId than configured — "+
 			"check instanceId; those events are not forwarded",
 			"configured_instance", a.cfg.InstanceId, "mismatched", mismatch)
+	}
+	if tm := a.tenantMismatched.Load(); tm > 0 {
+		a.log.Warn("device publishes seen for a DIFFERENT tenant than uplink.tenant — "+
+			"those events are not spooled or forwarded (a gateway speaks for one tenant)",
+			"configured_tenant", a.cfg.Uplink.Tenant, "tenant_mismatched", tm)
 	}
 }
 

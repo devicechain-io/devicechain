@@ -721,6 +721,7 @@ en el flujo.
 | `devicechain_devicemanagement_resolve_workers` | Cuántos resolvedores ejecuta el pod. |
 | `devicechain_devicemanagement_resolve_inflight` | Cuántos de ellos están ocupados. Cuando se mantiene en `resolve_workers`, los eventos llegan más rápido de lo que el pod los resuelve y se acumulan delante de él. El recuento de pendientes del consumidor de entrada de `device-management` crece entonces (consulte [Un consumidor que se queda atrás](#consumer-backlog)). |
 | `devicechain_devicemanagement_resolve_messages_total` | Eventos resueltos, por resultado. Mientras todos los resolvedores están ocupados, su ritmo es cuántos eventos por segundo puede resolver el pod. |
+| `devicechain_devicemanagement_resolve_not_gateway_child_total` | Eventos rechazados porque una pasarela publicó por un dispositivo que no tiene asignado. Consulta [la referencia de métricas](./metrics-reference.md) e [identidad de pasarela](./edge-services.md#gateway-identity). |
 
 `resolve_duration_seconds` incluye el tiempo que un resolvedor espera para entregar su resultado.
 Su intervalo más bajo es de 5 ms, así que un cuantil por debajo de eso es una estimación, no una

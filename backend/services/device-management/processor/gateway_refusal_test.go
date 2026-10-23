@@ -64,7 +64,17 @@ func TestAGatewayEventForItsAssignedChildResolvesToTheChild(t *testing.T) {
 		rig := gatewayRig(t, mode)
 		resolved := rig.resolve(viaGateway("gw", "c"))
 		require.Equal(t, "c", resolved.SourceDeviceToken, "mode %s: attributed to the child, not the gateway", mode)
+		// ...and the event records who carried it, so a stored event can be traced to the
+		// gateway that vouched for it.
+		require.Equal(t, "gw", resolved.GatewayToken, "mode %s: the resolved event must carry the gateway token", mode)
 	}
+
+	// The control: the same child's event with no gateway on it (a direct publish, auth off)
+	// carries none, so the field means "came through a gateway" and nothing broader.
+	rig := gatewayRig(t, config.AuthModeDisabled)
+	direct := viaGateway("gw", "c")
+	direct.Gateway = ""
+	require.Equal(t, "", rig.resolve(direct).GatewayToken)
 }
 
 // 2. THE R4 CONTROL. The gateway names an existing, enabled device of the same tenant that is

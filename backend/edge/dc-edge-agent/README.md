@@ -26,12 +26,16 @@ ADR-030 durable capture) rather than new surface.
                                               │  acks only AFTER the cloud PUBACKs
                                               ▼
                                      [ paho uplink ]──MQTT──▶ cloud Instance broker
+                                     (as the GATEWAY device, in its own namespace)
 ```
 
 The device is unaware it is talking to the agent rather than the cloud (ADR-006:
-standard MQTT clients work unchanged). The cloud receives the forward on the same
-golden topic and ingests it through its own MQTT-gateway capture (ADR-030) — there
-is no bespoke edge↔cloud protocol.
+standard MQTT clients work unchanged). The agent is a **gateway**: it authenticates to the
+cloud broker as its own device and forwards each local device's events on the gateway's
+namespace, `{instance}/{tenant}/gateways/{gateway}/devices/{device}/events`. The cloud
+ingests them through its own MQTT-gateway capture (ADR-030) and accepts an event only for
+a device **assigned to that gateway** — there is no bespoke edge↔cloud protocol. See
+[Gateway identity](#gateway-identity) below.
 
 Because the drain acks a captured event **only after the cloud confirms it**, an event
 published while the uplink (WAN) is down stays in the WorkQueue spool — across the
@@ -71,6 +75,83 @@ of E3's bounded, observable buffer:
 
 It retains E1–E3's guarantees (store-and-forward across a WAN outage + agent restart;
 cloud-side exactly-once for JSON; the two-phase start; the bounded, observable ring buffer).
+
+## Gateway identity
+
+The edge agent is the platform's **gateway** (the only uplink mode). Its identity is an
+ordinary device on the platform, and the platform records which devices it may speak for.
+
+**Set up, on the platform:**
+
+1. Create the gateway device (any device type) and a device credential for it
+   (`MQTT_BASIC`). Its token is `uplink.gatewayToken`; the credential's id goes in
+   `uplink.username` as `{tenant}:{credentialId}`.
+2. Create each device the site fronts, and assign it to the gateway
+   (`assignDeviceGateway`, or `gatewayToken` when creating it). A device has at most one
+   gateway; a gateway cannot itself have a gateway.
+3. Point the agent at the platform broker and give it the credential's secret in the
+   environment variable named by `uplink.passwordEnv`.
+
+**What the agent does:**
+
+- It connects with the gateway device's **plain MQTT client id** (the same id the broker
+  asserts that device's presence under). It no longer has a per-agent client id: one
+  gateway identity is one session, and a second agent using it takes the first one over.
+- It builds every uplink topic with **one constructor that accepts only a child device
+  token**, so it cannot publish outside its own namespace. (Publishing outside a grant is
+  the one failure the broker hides: MQTT 3.1.1 cannot refuse a publish, so the broker
+  acknowledges it and drops it.)
+- It captures from its local devices **only the configured tenant**
+  (`{instance}/{tenant}/devices/+/events`). A local publish naming another tenant is
+  counted (`tenant_mismatched_total`) and never spooled.
+- It **removes** `credentialType`, `credentialId` and `credentialSecret` from every event
+  body before forwarding (`body_credentials_stripped_total`, with a WARN per device). The
+  platform refuses a body credential on a broker-authenticated topic, and a secret has no
+  business crossing the WAN. Change the device to stop sending it.
+- It keeps up to **64 publishes in flight** and acknowledges each spool message on its own
+  PUBACK. The old drain waited for each PUBACK before the next publish, so a box topped out
+  near `1 / round-trip-time` events per second (about 20/s at 50 ms) and could not catch up
+  after an outage. Original event times are preserved on replay (see above), and the cloud
+  still deduplicates a redelivery.
+- It subscribes to the gateway's **notices** topic (`{instance}/{tenant}/gateways/{gateway}/notices`)
+  on every connect. A refused subscription fails the connect, loudly.
+
+**When the platform refuses an event.** An event for a device that is not assigned to this
+gateway (or does not exist) is refused by the platform, which records it (failed events,
+with its payload), counts it (`resolve_not_gateway_child_total`) and sends this gateway a
+**notice**. The broker has already acknowledged the publish, so the agent cannot learn this
+from a PUBACK. On a notice the agent:
+
+- logs a `WARN` naming the device (at most once per device per 30 s) and counts it in
+  `refused_total{reason="not_gateway_child"}`;
+- writes the refused event to the local dead-letter file `refused-events.jsonl` in
+  `storeDir` (mode `0600`, one JSON object per line, rotated to `.1` at 16 MiB), so it is
+  recoverable from the box.
+
+Three limits to know. A notice is **best effort** (a gateway that was offline, or a broker
+restart, misses it), so the record of truth is the platform's failed-events plus its
+counter. The agent holds a **bounded** copy of what it sent (16 MiB, 8192 events) to match a
+notice against, so a notice that arrives after the copy rolled out is counted as
+`refused_unmatched_total` and logged, not kept. And the dead-letter file holds the payload as
+forwarded, credentials already removed. Recovering a refused event after fixing the
+assignment is a manual replay today.
+
+The agent also refuses, without sending, an event it knows the platform would refuse: a
+local device publishing under the gateway's **own** token (`reason="gateway_self"`; a
+gateway is not a child of itself) or under a token the platform cannot hold
+(`reason="invalid_device_token"`). Both are written to the same dead-letter file and acked.
+
+**Upgrade order.** Finish the platform upgrade (every `event-sources` and
+`device-management` replica, and the broker grants) **before** switching an agent to the
+gateway uplink. An `event-sources` that predates the gateway namespace, running with the
+fail-closed MQTT store, acknowledges and drops gateway messages it cannot attribute, and
+the agent would see success. An agent that cannot subscribe to its notices topic (a broker
+that has not been upgraded) refuses to report the uplink connected.
+
+**Trust.** A gateway speaks for its children. A compromised gateway can forge events only
+for devices assigned to it, and only until it is disabled or its credential is revoked. Its
+word about *which local client* sent an event is only as strong as the site LAN's local
+authentication.
 
 ### E3 (bounded buffer + observability)
 
@@ -112,8 +193,11 @@ fail-safe because the agent survives and the loss is surfaced.
 Served on `127.0.0.1:<metricsPort>` (Prometheus text format), namespace
 `devicechain_edge_`: `spool_used_bytes` / `spool_limit_bytes` / `spool_used_messages`
 / `spool_oldest_age_seconds` (the primary backlog signal) / `dropped_total` (overflow
-evictions) / `uplink_connected`, plus `received_total` / `forwarded_total` /
-`forward_errors_total` / `malformed_total` / `instance_mismatched_total`. `dropped_total`
+evictions) / `uplink_connected` / `uplink_inflight` (publishes awaiting a PUBACK, at most
+64), plus `received_total` / `forwarded_total` / `forward_errors_total` /
+`malformed_total` / `instance_mismatched_total` / `tenant_mismatched_total` /
+`body_credentials_stripped_total` / `refused_total{reason}` / `refused_kept_total` /
+`refused_unmatched_total`. `dropped_total`
 does not reset across a restart (both its operands are durable); the other `_total`
 counters are per-process. `GET /healthz` → `200` when up and healthy, else `503`.
 `local_auth_enabled` (E4) is `1` when the local listener requires a credential, else `0`.
@@ -130,7 +214,9 @@ counters are per-process. `GET /healthz` → `200` when up and healthy, else `50
 - **Rolling back to an E2 binary over an E3 store silently strips the bound** (the E2
   `UpdateStream` sends `MaxBytes=0`). Pre-GA acceptable; do not downgrade a bounded store.
 - **Changing `instanceId` or the uplink timeout over an existing store fails closed,
-  not gracefully.** Both the durable consumer's filter subject (`instanceId`) and its
+  not gracefully.** (Changing `uplink.tenant` is the exception: the agent moves the durable
+  consumer's filter in place. Events already spooled for the old tenant match no consumer and
+  stay until the ring buffer evicts them.) Both the durable consumer's filter subject (`instanceId`) and its
   `AckWait` (derived from `connectTimeoutSeconds`) are fixed when the consumer is first
   created; changing either on an agent that already has a populated `storeDir` makes the
   durable bind reject at startup (a loud, repeated error — no silent loss). Reprovision
@@ -144,20 +230,17 @@ counters are per-process. `GET /healthz` → `200` when up and healthy, else `50
   (open) — logged loudly at boot and exported as `local_auth_enabled 0` — so it must be on
   a trusted network. Set the credential to require it (a single shared secret, not
   per-device identity; over plaintext MQTT it is sniffable on the LAN — local MQTT TLS is
-  future work). Cloud event *attribution* does not depend on this connection — it rides on
-  the per-event payload credential (ADR-014) — so a forged local connection cannot forge
-  attributed events. Enabling auth on a live site is a breaking change for connected
+  future work). Cloud event *attribution* does not depend on this connection — the platform
+  attributes by the gateway's authenticated session plus the device's gateway assignment — so
+  a forged local connection can only forge events for devices assigned to this gateway. A
+  device on the LAN that can publish for a sibling can still impersonate it to the platform:
+  that is exactly what the local gate is for. Enabling auth on a live site is a breaking change for connected
   devices; sequence it (see [RUNBOOK.md](RUNBOOK.md#4-secure)).
-- **The uplink cannot publish to the platform MQTT broker's authenticated listener.** The
-  agent forwards each child event verbatim, body credential included, and the platform
-  broker authenticates the CONNECT and asserts the device from the topic: it refuses an
-  event whose body carries `credentialType`/`credentialId`/`credentialSecret`. The agent
-  does NOT strip them: on an unauthenticated listener they are the only attribution, and
-  removing them would forward events no one can attribute. This is on top of the existing
-  gateway-identity gap (a device login may publish only its own device's topics, and the
-  broker acknowledges a violation as success), so the uplink to an auth-enabled platform
-  broker is unsupported until the edge gateway identity work lands; it is not an exemption
-  the platform grants.
+- **`responses` and `reports` are not forwarded yet.** The platform grants the gateway the
+  `responses` and `reports` leaves of its namespace, but nothing captures them until commands
+  to children are routed. The agent publishes **events only**.
+- **Commands do not reach children yet.** The agent subscribes to notices only; the
+  downlink (`commands`, `desired`) comes with command routing to children.
 - **The plain NATS client port is unbound** (`DontListen`) so the MQTT gateway is the
   only exposed surface — this is enforced and tested, not incidental.
 - **A config `instanceId` typo forwards nothing.** The agent only captures/forwards
@@ -171,7 +254,6 @@ Typed and fail-closed: unknown/invalid keys are rejected at startup. JSON:
 ```json
 {
   "instanceId": "prod1",
-  "agentId": "site42",
   "local": {
     "listenHost": "0.0.0.0",
     "listenPort": 1883,
@@ -183,7 +265,9 @@ Typed and fail-closed: unknown/invalid keys are rejected at startup. JSON:
   },
   "uplink": {
     "brokerUrl": "ssl://cloud.example.com:8883",
-    "username": "edge-site-42",
+    "tenant": "acme",
+    "gatewayToken": "site42-gateway",
+    "username": "acme:site42-cred",
     "passwordEnv": "DC_EDGE_UPLINK_PASSWORD",
     "connectTimeoutSeconds": 30,
     "backoffMinSeconds": 1,
@@ -194,13 +278,18 @@ Typed and fail-closed: unknown/invalid keys are rejected at startup. JSON:
 
 - `instanceId` **must** match the target cloud Instance exactly (it is the first
   segment of the golden topic on both planes).
-- `agentId` **must** be unique per edge box feeding a given Instance — it is the
-  tail of the uplink MQTT client id, and two agents sharing one would kick each
-  other off the cloud broker in a loop.
+- `uplink.tenant` is the tenant the gateway device belongs to; it is a segment of every
+  uplink topic and the only tenant the agent captures from its local devices.
+- `uplink.gatewayToken` is the token of the gateway **device** this agent authenticates as.
+  One gateway identity per edge box: two agents sharing one take each other's session over.
+  (There is no `agentId`: the uplink MQTT client id is the gateway device's plain client id.)
+- `uplink.username` **must** be `{tenant}:{credentialId}` for the tenant above, and
+  `uplink.passwordEnv` is required: the broker authenticates the gateway as a device. A bare
+  name (the old `edge-site-42`) is refused at load, not at CONNECT.
 - `uplink.brokerUrl` scheme selects transport: `tcp://` (plaintext) or
   `ssl://`/`tls://` (TLS with system roots).
-- `uplink.passwordEnv` names an environment variable holding the uplink password (a
-  projected Secret — never cleartext in this file). The edge box has no ADR-059
+- `uplink.passwordEnv` names an environment variable holding the gateway credential's
+  secret (a projected Secret — never cleartext in this file). The edge box has no ADR-059
   secret store, so this follows the sparkplug-ingest env/Secret precedent.
 - `local.spoolMaxBytes` bounds the durable spool (default 1 GiB; floor 16 MiB). Beyond
   it the spool is a ring buffer (drop oldest; see the overflow policy above). It can be

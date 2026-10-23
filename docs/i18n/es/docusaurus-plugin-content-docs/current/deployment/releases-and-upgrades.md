@@ -323,6 +323,10 @@ Ejecute cualquiera de los dos con `--dry-run` primero si quiere ver qué moverí
 upgrade` toma el clúster de destino del propio registro de la instancia en lugar de
 adivinarlo, y dice cuál es.
 
+:::warning Actualice la plataforma antes que los agentes de borde
+Un agente de borde en el [enlace ascendente de pasarela](./edge-services.md#gateway-identity) publica en el espacio de nombres de pasarela. Una plataforma cuyo `event-sources` no conoce ese espacio de nombres, con `infrastructure.nats.mqttFailClosed` activado, confirma esos mensajes en el broker y los descarta, y nada en el agente lo muestra. Termine de actualizar el clúster y cada instancia (todas las réplicas de `event-sources` y de `device-management`, y las concesiones del broker) antes de reiniciar cualquier agente en una versión que lo use. Un agente cuyo broker no se ha actualizado no puede suscribirse a sus avisos y no informa de su enlace ascendente como conectado.
+:::
+
 :::tip Lee todas las credenciales y no acuña ninguna
 `dcctl upgrade` conserva aquello sobre lo que la instancia está funcionando: las contraseñas
 propietarias de las bases de datos, la autoridad y los inicios de sesión del bróker, el secreto

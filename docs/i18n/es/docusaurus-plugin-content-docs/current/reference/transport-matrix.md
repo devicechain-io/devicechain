@@ -111,6 +111,8 @@ hay ningún bróker aparte que operar.
   expresar una lectura como un comando cuya respuesta lleve el valor, pero eso es un vocabulario
   que tú defines en el perfil del dispositivo, no algo que aporte el transporte.
 
+- **Pasarelas.** Un dispositivo puede representar a otros. El [agente de borde](../deployment/edge-services.md#gateway-identity) inicia sesión como dispositivo pasarela y publica los eventos de cada dispositivo en el [espacio de nombres de pasarela](./device-protocol.md#gateway-namespace). La plataforma acepta un evento solo para un dispositivo asignado a esa pasarela, y rechaza cualquier otro de forma visible (el motivo `NotGatewayChild`, un contador y un aviso a la pasarela) en lugar de dejar que el broker lo confirme y lo descarte. Los comandos a dispositivos tras una pasarela aún no se enrutan.
+
 ### HTTP
 
 Un endpoint `POST` para el mismo cuerpo de evento JSON. Sencillo, y de un solo sentido.

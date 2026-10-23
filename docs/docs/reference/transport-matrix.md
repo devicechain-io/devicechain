@@ -105,6 +105,8 @@ there is no separate broker to run.
   as a command whose response carries the value, but that is a vocabulary you define on the
   device profile, not something the transport provides.
 
+- **Gateways.** A device can front other devices. The [edge agent](../deployment/edge-services.md#gateway-identity) signs in as a gateway device and publishes each device's events in the [gateway namespace](./device-protocol.md#gateway-namespace). The platform accepts an event only for a device assigned to that gateway, and refuses any other loudly (the reason `NotGatewayChild`, a counter, and a notice to the gateway) rather than letting the broker acknowledge it and drop it. Commands to devices behind a gateway are not routed yet.
+
 ### HTTP
 
 A `POST` endpoint for the same JSON event body. Simple, and one-way.

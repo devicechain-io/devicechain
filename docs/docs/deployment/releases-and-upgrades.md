@@ -308,6 +308,10 @@ Run either with `--dry-run` first if you want to see what it would move. `dcctl 
 takes the target cluster from the instance's own record rather than guessing, and says
 which.
 
+:::warning Upgrade the platform before the edge agents
+An edge agent on the [gateway uplink](./edge-services.md#gateway-identity) publishes in the gateway namespace. A platform whose `event-sources` does not know that namespace, running with `infrastructure.nats.mqttFailClosed` on, acknowledges those messages at the broker and drops them, and nothing on the agent shows it. Finish upgrading the cluster and every instance (every replica of `event-sources` and `device-management`, and the broker's grants) before you restart any agent on a version that uses it. An agent whose broker has not been upgraded cannot subscribe to its notices and does not report its uplink connected.
+:::
+
 :::tip It reads every credential and mints none
 `dcctl upgrade` keeps what the instance is running on: the database owner passwords, the
 broker's authority and logins, the cross-service secret, the secret-store root key, and —

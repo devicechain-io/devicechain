@@ -276,6 +276,7 @@ var sizedByTheirOwnTag = map[string]bool{
 	"io.devicechain.devicemanagement.PResolvedEvent.source_device_disabled": true,
 	"io.devicechain.devicemanagement.PResolvedEvent.occurred":               true,
 	"io.devicechain.devicemanagement.PResolvedEvent.processed":              true,
+	"io.devicechain.devicemanagement.PResolvedEvent.gateway_token":          true,
 }
 
 // fieldsBeyondOneByteTags names every field of the writer's messages whose number does
@@ -309,14 +310,14 @@ func TestResolvedWireFieldNumbersFitTheTagSize(t *testing.T) {
 			"do not fit; size their tags with protowire.SizeTag:\n  %s", tagSize, strings.Join(beyond, "\n  "))
 	}
 
-	// The negative control: field 19 added to each message must be named. (19, because
-	// PResolvedEvent already holds fields 16 to 18, each sized by its own tag.)
+	// The negative control: field 20 added to each message must be named. (20, because
+	// PResolvedEvent already holds fields 16 to 19, each sized by its own tag.)
 	for _, message := range resolvedWireMessages {
 		fdp := protodesc.ToFileDescriptorProto(File_resolvedevent_dc_resolved_events_proto)
 		for _, m := range fdp.MessageType {
 			if m.GetName() == message {
 				m.Field = append(m.Field, &descriptorpb.FieldDescriptorProto{
-					Name: proto.String("nineteenth"), JsonName: proto.String("nineteenth"), Number: proto.Int32(19),
+					Name: proto.String("twentieth"), JsonName: proto.String("twentieth"), Number: proto.Int32(20),
 					Label: descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
 					Type:  descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum(),
 				})
@@ -327,8 +328,8 @@ func TestResolvedWireFieldNumbersFitTheTagSize(t *testing.T) {
 			t.Fatalf("the extended descriptor does not build: %v", err)
 		}
 		beyond := fieldsBeyondOneByteTags(t, file)
-		if len(beyond) != 1 || !strings.Contains(beyond[0], message+".nineteenth") {
-			t.Errorf("field 19 added to %s: named %v, want exactly it", message, beyond)
+		if len(beyond) != 1 || !strings.Contains(beyond[0], message+".twentieth") {
+			t.Errorf("field 20 added to %s: named %v, want exactly it", message, beyond)
 		}
 	}
 }

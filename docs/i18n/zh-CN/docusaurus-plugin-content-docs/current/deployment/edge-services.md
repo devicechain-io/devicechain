@@ -312,11 +312,46 @@ Sparkplug 按租户接入上限计量 DATA 消息中的读数，并丢弃超出�
 
 ## 边缘代理 {#the-edge-agent}
 
-边缘代理**不是第四条接入路径**。它运行在现场，为本地设备提供普通 MQTT 端点，将发布内容缓冲到本地磁盘，再发布到云端已经接入的相同设备主题。平台端不感知代理参与，因此云服务没有专门针对代理的配置。
+边缘代理**不是第四条接入路径**。它运行在现场，为本地设备提供普通 MQTT 端点，将发布内容缓冲到本地磁盘，再以[网关](#gateway-identity)身份发布到云端：它是一台有自己身份的普通设备，平台只允许它代表你分配给它的设备发言。平台端没有专门针对代理的服务，云服务中也没有专门针对代理的配置。
 
 **它不是 chart 功能领域。** 不出现在领域列表或部署配置中，不能像服务一样启用。它作为静态二进制和容器镜像发布，由你自行部署，例如现场网关 systemd 单元、容器或边缘手写 Kubernetes 清单。
 
 **每个 [GitHub 发布版本](https://github.com/devicechain-io/devicechain/releases)都附带这些二进制文件**，文件名为 `dc-edge-agent_<version>_<os>_<arch>.tar.gz`，提供 Linux 和 macOS 的 `amd64` 与 `arm64` 版本。其 SHA-256 摘要位于同一发布版本的 `dc-edge-agent_checksums.txt` 中，在 Linux 上可用 `sha256sum --ignore-missing -c dc-edge-agent_checksums.txt` 校验下载的文件。Linux 是边缘部署目标；macOS 版本用于在工作站上试用代理。不提供 Windows 版本。
+
+### 网关身份 {#gateway-identity}
+
+代理是一个**网关**：平台上的一台普通设备，代表其他设备发言。它以自己的身份登录，使用自己的设备凭据，并在自己的命名空间 `{instanceId}/{tenant}/gateways/{gateway}/devices/{device}/events` 中发布每台本地设备的事件（参见[网关命名空间](../reference/device-protocol.md#gateway-namespace)）。平台只接受**分配给该网关**的设备的事件。这是唯一的上行模式。
+
+**设置方法：**
+
+1. 创建网关设备（任意设备类型），并为它创建一个 `MQTT_BASIC` [凭据](../guides/device-credentials.md)。设备令牌就是代理的 `uplink.gatewayToken`。凭据 id 以 `{tenant}:{credentialId}` 的形式填入 `uplink.username`，其密钥放入 `uplink.passwordEnv` 所指的环境变量。
+2. 创建现场所代表的设备，并把每台设备分配给该网关，可使用 `assignDeviceGateway`，或在创建时指定 `gatewayToken`。一台设备最多有一个网关，网关本身不能再有网关。分配需要与管理设备凭据相同的权限。
+3. 启动代理。本地设备继续向它发布各自的主题，无需改动。
+
+分配在该设备的下一个事件生效，数秒内完成，无需重连。清除分配同样如此，网关的其他设备不受影响。停用网关或吊销其凭据会结束它的会话。
+
+**代理在上行方向做什么：**
+
+- 它使用网关设备的普通 MQTT 客户端 id 连接，因此代理像对待任何设备一样断言网关自身的在线状态。没有按代理区分的客户端 id：两个代理使用同一台网关设备会互相抢占会话。
+- 它只用子设备令牌构造每个上行主题，因此无法在自己的命名空间之外发布。代理无法拒绝超出授权的发布（MQTT 3.1.1 没有这种机制），而是确认后丢弃。无法构造这样的主题，正是消除这一故障的办法。
+- 它只捕获所配置租户的设备事件。指向其他租户的发布会计入 `tenant_mismatched_total`，且从不缓冲。
+- 转发前，它会从事件正文中移除 `credentialType`、`credentialId` 和 `credentialSecret`，并计入 `body_credentials_stripped_total`。在经代理认证的主题上，平台会拒绝携带其中任何一项的事件。请修改设备，使其不再发送。
+- 它最多保持 **64 个发布在途**，并按各自的确认逐个确认缓冲事件。如果每发一条都等待确认再发下一条，每次往返只能发一个事件，50 ms 时约每秒 20 个，繁忙的现场在中断后永远追不上。重放的事件保留首次存储的时间，云端仍会合并重复项。
+- 每次连接时，它都会订阅网关的通知主题。如果代理拒绝该订阅，上行保持断开，日志会说明原因。
+
+**事件被拒绝时。** 对于未分配给该网关或不存在的设备的事件，平台会拒绝。它把事件连同载荷记录到 `failed-events` 流，原因为 `NotGatewayChild`，计入 `resolve_not_gateway_child_total`，并向网关发送一条*通知*。代理已经确认了该发布，因此没有别的途径能告诉代理。收到通知时，代理会记录一条指明设备的警告（每台设备每 30 秒最多一条），计入 `refused_total{reason="not_gateway_child"}`，并把事件写入存储目录中的 `refused-events.jsonl`。该文件仅对代理的用户可访问，每行一个 JSON 对象，达到 16 MiB 时轮转一次。
+
+有三点限制。通知是尽力而为的：发送时离线的网关收不到它，因此可以依赖的是平台的记录和计数器。代理只保留所转发内容的一份有限副本（约 16 MiB）用来匹配通知，因此副本被淘汰后才到达的通知会计入 `refused_unmatched_total` 并记录日志，但不会保留。该文件保存的是转发时的载荷，凭据已被移除。修正分配后恢复被拒绝的事件需要手动重放。
+
+代理还会在不发送的情况下拒绝平台只可能拒绝的事件：本地设备使用了网关自己的令牌（`reason="gateway_self"`），或使用了平台无法存储的令牌（`reason="invalid_device_token"`）。它们被写入同一个文件。
+
+:::warning 在把代理切换到网关上行之前，先升级平台
+先完成平台升级：每个 `event-sources` 和 `device-management` 副本，以及代理的授权。开启 `infrastructure.nats.mqttFailClosed` 时，较旧的 `event-sources` 会确认无法归属的网关消息并丢弃它们，于是代理看到成功，而实际上什么都没有存储。代理尚未升级的代理无法订阅其通知，也不会报告上行已连接（`uplink_connected` 保持为 0）。
+:::
+
+**网关的可信范围。** 网关代表分配给它的设备发言。被攻陷的网关只能伪造分配给它的设备的事件，并且只在它被停用或其凭据被吊销之前有效。它所称事件来自*哪个本地客户端*，其可信度只取决于现场本地认证的强度。
+
+目前尚不路由发往网关后设备的命令，代理只转发事件。
 
 ### 缓冲存储 {#the-spool}
 
@@ -346,12 +381,15 @@ Sparkplug 按租户接入上限计量 DATA 消息中的读数，并丢弃超出�
 | 设置 | 默认值 | 作用 |
 |---|---|---|
 | `instanceId` | — | 必填。转发目标云实例。其他实例的发布不转发，计入 `instance_mismatched_total`。 |
-| `agentId` | — | 必填。上行身份，**必须唯一**，共用身份的两个代理会循环断开对方。 |
 | `local.listenPort` | `1883` | 现场设备连接的 MQTT 端口。 |
 | `local.storeDir` | — | 必填。持久缓冲目录，每目录一个代理。 |
 | `local.spoolMaxBytes` | `1 GiB` | 缓冲预算，超出丢弃最旧事件，最低 16 MiB。 |
 | `local.metricsPort` | `9090` | 仅回环的指标和健康端口，明确设置 `0` 禁用。 |
 | `uplink.brokerUrl` | — | 必填。云端 MQTT 转发端点。 |
+| `uplink.tenant` | — | 必填。网关设备所属的租户。它是每个上行主题的一部分，也是代理从其设备接收事件的唯一租户。 |
+| `uplink.gatewayToken` | — | 必填。该代理所登录的网关设备令牌。**每台网关设备只能有一个代理**：两个代理共用一台会循环互相抢占会话。 |
+| `uplink.username` | — | 必填。`{tenant}:{credentialId}`，即网关设备的凭据。缺少租户前缀的名称会在代理启动时被拒绝。 |
+| `uplink.passwordEnv` | — | 必填。保存凭据密钥的环境变量。 |
 | `uplink.connectTimeoutSeconds` | `30` | 单次上行连接尝试时间上限。 |
 | `uplink.backoffMinSeconds` / `uplink.backoffMaxSeconds` | `1` / `60` | 链路中断期间重连退避边界。 |
 
@@ -450,6 +488,11 @@ Chart 为 sparkplug-ingest 和 lwm2m-ingest 附带七条告警规则，见[随�
 | `forward_errors_total` | 转发失败次数，事件仍缓冲以便再次投递。 |
 | `received_total` / `forwarded_total` | 接收和转发吞吐。 |
 | `malformed_total` | 无法转发而被丢弃的事件，避免阻塞后续队列。 |
+| `tenant_mismatched_total` | 指向 `uplink.tenant` 之外租户的设备发布。它们不会缓冲或转发。 |
+| `body_credentials_stripped_total` | 转发前从事件正文中移除的凭据成员数。设备应停止发送它们。 |
+| `refused_total{reason}` | **为该网关被拒绝的事件。** `not_gateway_child`：平台因事件所属设备未分配给该网关或不存在而拒绝它。`gateway_self` 和 `invalid_device_token`：代理不愿发送。任何增长都需要关注；参见[网关身份](#gateway-identity)。 |
+| `refused_kept_total` / `refused_unmatched_total` | 写入 `refused-events.jsonl` 的被拒绝事件数 / 其事件已不在本机保留的拒绝数（平台的 `failed-events` 记录中有它）。 |
+| `uplink_inflight` | 等待确认的发布数，最多 64。积压排空期间保持在 64 是正常的。 |
 | `local_auth_enabled` | 0 表示现场 MQTT 监听不要求凭据。 |
 
 ## 验证范围限制 {#what-is-not-validated}

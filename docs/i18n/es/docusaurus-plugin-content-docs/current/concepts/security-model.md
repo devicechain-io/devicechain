@@ -61,6 +61,7 @@ Consulte [Multitenencia](./multi-tenancy.md).
   1.0.0. Por HTTP y a través de un broker propio, donde el cuerpo es la vía de la credencial, la contraseña o el token se sella antes de
   colocar el evento en el flujo interno de la plataforma. En todos los transportes, la copia de un mensaje no decodificable que se
   conserva para diagnóstico tiene sus credenciales eliminadas.
+- **Pasarelas.** Una pasarela, como el [agente de borde](../deployment/edge-services.md#gateway-identity), es un dispositivo que habla por otros dispositivos. Inicia sesión como sí misma y publica en su propio espacio de nombres, y la plataforma acepta un evento solo de un dispositivo que se le haya asignado. Una pasarela no puede publicar en los subjects de otra pasarela ni de otro dispositivo; una que nombre un dispositivo que no representa recibe un rechazo, queda registrada y se le informa, en lugar de confirmarse y perderse. **Una pasarela habla por sus hijos.** Una pasarela comprometida puede falsificar eventos solo de los dispositivos que tiene asignados, y solo hasta que se la deshabilita o se revoca su credencial. Lo que afirma sobre *qué cliente local* envió un evento es tan fiable como la autenticación local de su propia red. Asignar un dispositivo a una pasarela requiere el mismo permiso que emitirle una credencial, porque concede la misma capacidad.
 
 ## Personas y programas {#api-access}
 

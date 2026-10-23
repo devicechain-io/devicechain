@@ -7,8 +7,15 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
+
+// bodyCredentialKeys are the three payload members that carry a device credential. The
+// platform refuses an event whose body carries any of them when it arrives on a broker-
+// asserted topic (the gateway namespace is one: the topic IS the identity), so the agent
+// removes them before the event leaves the box.
+var bodyCredentialKeys = []string{"credentialType", "credentialId", "credentialSecret"}
 
 // jsonNull is the literal a JSON serializer writes for an omitted optional field.
 // A device that emits `"occurredTime": null` has the key PRESENT with value null,
@@ -41,44 +48,75 @@ var jsonNull = []byte("null")
 // (array, scalar, non-JSON binary) is forwarded VERBATIM — exactly-once is a
 // per-decoder (JSON) property; other payloads get at-least-once. altId/occurredTime
 // are the only fields touched; every other field's bytes pass through unchanged
-// (json.RawMessage), so credentials (ADR-014) and payload survive intact.
+// (json.RawMessage), so the payload survives intact. Credential members are removed only
+// by prepareUplinkPayload (the uplink path), never by this entry point.
 func stampIdempotency(raw []byte, installId, streamEpoch string, streamSeq uint64, storedAt time.Time) ([]byte, error) {
+	out, _, _, err := prepareUplinkPayload(raw, installId, streamEpoch, streamSeq, storedAt, false)
+	return out, err
+}
+
+// prepareUplinkPayload is stampIdempotency plus, when strip is set, the removal of any body
+// credential, in one pass over the JSON. It returns the bytes to forward, the event's altId
+// ("" when the payload is not a JSON object or carries none and none could be minted), and
+// how many credential members it removed.
+//
+// A device that still sends a credential in its body is not forwarded with it: the cloud
+// would refuse the event, and the agent must not carry a secret across the WAN that nothing
+// needs. The count is surfaced (body_credentials_stripped_total) so the device can be fixed.
+// The match is case-insensitive because the cloud decoder's is: a "CredentialSecret" key is
+// the same member to it.
+func prepareUplinkPayload(raw []byte, installId, streamEpoch string, streamSeq uint64, storedAt time.Time, strip bool) (out []byte, altId string, stripped int, err error) {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &fields); err != nil {
 		// Not a JSON object (array/scalar/binary/malformed) — forward verbatim.
-		return raw, nil
+		return raw, "", 0, nil
 	}
 	if fields == nil {
 		// A literal JSON `null` unmarshals into a map with NO error but leaves the map
 		// nil — writing to it below would panic, and because the event is never acked
 		// that panic redelivers first on restart and crash-loops the whole spool. Treat
 		// it as a non-object and forward verbatim (the cloud decoder rejects it anyway).
-		return raw, nil
+		return raw, "", 0, nil
 	}
 
 	changed := false
-	if absent(fields["altId"], hasKey(fields, "altId")) {
-		altId, err := json.Marshal(fmt.Sprintf("edge:%s:%s:%d", installId, streamEpoch, streamSeq))
-		if err != nil {
-			return nil, err
+	if strip {
+		for k := range fields {
+			for _, c := range bodyCredentialKeys {
+				if strings.EqualFold(k, c) {
+					delete(fields, k)
+					stripped++
+					changed = true
+					break
+				}
+			}
 		}
-		fields["altId"] = altId
+	}
+	if absent(fields["altId"], hasKey(fields, "altId")) {
+		minted, merr := json.Marshal(fmt.Sprintf("edge:%s:%s:%d", installId, streamEpoch, streamSeq))
+		if merr != nil {
+			return nil, "", 0, merr
+		}
+		fields["altId"] = minted
 		changed = true
 	}
 	if absent(fields["occurredTime"], hasKey(fields, "occurredTime")) {
-		ts, err := json.Marshal(storedAt.UTC().Format(time.RFC3339Nano))
-		if err != nil {
-			return nil, err
+		ts, merr := json.Marshal(storedAt.UTC().Format(time.RFC3339Nano))
+		if merr != nil {
+			return nil, "", 0, merr
 		}
 		fields["occurredTime"] = ts
 		changed = true
 	}
+	// A device-set altId that is not a string cannot key a refusal; it is still forwarded.
+	_ = json.Unmarshal(fields["altId"], &altId)
 	if !changed {
 		// Device supplied both — forward the original bytes untouched (also avoids a
 		// needless key-reordering re-marshal).
-		return raw, nil
+		return raw, altId, 0, nil
 	}
-	return json.Marshal(fields)
+	out, err = json.Marshal(fields)
+	return out, altId, stripped, err
 }
 
 // hasKey reports whether the parsed object carried the key at all.

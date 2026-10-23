@@ -67,6 +67,7 @@ title: 指标参考
 | `raise_alarm_dead_lettered_total` | 在应用它们的所有尝试都失败后写入死信流的触发告警边，使本应被触发或清除的告警可以被看到，而不是只写进日志。 |
 | `resolve_device_disabled_total` | 因设备已[停用](../guides/device-credentials.md#disabling-a-device)而被拒绝的事件。这些事件被丢弃，不进入死信。 |
 | `resolve_event_time_bounded_total` | 因报告的事件时间领先服务器时钟超过配置的容差而被拒绝、并被替换为容差允许的最晚时间的情况。 |
+| `resolve_not_gateway_child_total` | 因[网关](./edge-services.md#gateway-identity)为未分配给它的设备或不存在的设备发布事件，或网关已停用而被拒绝的事件数。每个事件连同载荷记录到 `failed-events` 流（原因 `NotGatewayChild`），不会重试，并通过网关的通知主题告知网关。该指标不带租户或网关标签；日志行（每个网关和设备每分钟最多一条）会指明它们。增长通常意味着某台设备从未分配给其网关，或被分配给了另一个网关。 |
 
 ## 事件处理：检测 {#event-processing-detect}
 

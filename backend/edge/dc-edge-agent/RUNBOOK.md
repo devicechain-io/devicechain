@@ -17,15 +17,23 @@ a container image and as OS binaries.
 
 ## 1. Before you start — what you need
 
-- **A cloud Instance to forward to**, and its MQTT broker URL + a credential for this agent
-  (username + password). Use TLS (`ssl://…`) for anything crossing a WAN.
+- **A cloud Instance to forward to**, and its MQTT broker URL. Use TLS (`ssl://…`) for
+  anything crossing a WAN.
+- **A gateway device on the platform**, with a device credential, and the site's devices
+  assigned to it. The agent authenticates as that device (`uplink.gatewayToken`, and
+  `uplink.username` = `{tenant}:{credentialId}`); the platform accepts an event only for a
+  device assigned to it. See [README.md](README.md#gateway-identity).
+- **The platform fully upgraded first.** Finish upgrading the platform (every `event-sources`
+  and `device-management` replica and the broker grants) before switching an agent to this
+  uplink: an older `event-sources` in fail-closed mode acknowledges and drops gateway
+  messages it cannot attribute. See §6.
 - **The Instance id** (e.g. `prod1`) — it is the first topic segment on *both* the
   device→agent and agent→cloud hops, so it must match the cloud Instance **exactly** or
   nothing is consumed. A mismatch is counted (`devicechain_edge_instance_mismatched_total`)
   and logged, never a silent success.
-- **A unique `agentId` per edge box** feeding a given Instance — it is the tail of the
-  uplink MQTT client id; two boxes sharing one would kick each other off the cloud broker
-  in a loop.
+- **A distinct gateway device per edge box.** The uplink MQTT client id is the gateway
+  device's plain client id; two boxes sharing one gateway identity take each other's session
+  over in a loop.
 - **A writable store directory** on persistent disk for the durable spool (survives
   reboots). Size the disk for `spoolMaxBytes` + ~128 MiB headroom (see §5).
 
@@ -37,7 +45,6 @@ Full field reference: [README.md](README.md#configuration).
 ```json
 {
   "instanceId": "prod1",
-  "agentId": "site42",
   "local": {
     "listenHost": "0.0.0.0",
     "listenPort": 1883,
@@ -49,7 +56,9 @@ Full field reference: [README.md](README.md#configuration).
   },
   "uplink": {
     "brokerUrl": "ssl://cloud.example.com:8883",
-    "username": "edge-site-42",
+    "tenant": "acme",
+    "gatewayToken": "site42-gateway",
+    "username": "acme:site42-cred",
     "passwordEnv": "DC_EDGE_UPLINK_PASSWORD",
     "connectTimeoutSeconds": 30,
     "backoffMinSeconds": 1,
@@ -162,9 +171,14 @@ Point `storeDir` at the `StateDirectory` (`/var/lib/dc-edge-agent`). `secrets.en
   `0750`, logged) and tolerates a **group-shared** store (`0770`, e.g. a container
   `fsGroup`). Provision it `0700` (or group-shared) to avoid the tightening warning; keep
   the `passwordEnv` Secret / `EnvironmentFile` at `0600`.
-- **Cloud event attribution does not depend on the local connection** — it rides the
-  per-event payload credential (ADR-014) — so a forged local connection cannot forge
-  attributed events; the local gate is a network-access control, not identity.
+- **Cloud event attribution does not depend on the local connection** — the platform
+  attributes by the gateway's authenticated session plus the device's gateway assignment —
+  so a forged local connection can forge events only for devices assigned to this gateway.
+  The local gate is a network-access control, not identity: a device that can connect can
+  publish for a sibling, so keep the LAN trusted or enable it.
+- **Revoking a site.** Disabling the gateway device, or revoking its credential, ends the
+  uplink session; clearing a device's gateway assignment takes effect on its next event,
+  within seconds, with no reconnect and without disturbing the gateway's other devices.
 
 ## 5. Operate
 
@@ -180,10 +194,23 @@ Metrics + health are on `http://127.0.0.1:<metricsPort>` (default `9090`; set
 | `devicechain_edge_local_auth_enabled` | `1` local auth on, `0` open. |
 | `…_received_total` / `…_forwarded_total` / `…_forward_errors_total` | Throughput + forward failures (per-process counters). |
 | `…_instance_mismatched_total` | Device publishes on a *different* `instanceId` than configured — usually a config typo. |
+| `…_tenant_mismatched_total` | Device publishes naming a *different* tenant than `uplink.tenant`. Not spooled or forwarded. |
+| `…_refused_total{reason}` | **Alert on any increase.** `not_gateway_child`: the platform refused an event because the device is not assigned to this gateway (or does not exist). `gateway_self` / `invalid_device_token`: the agent would not forward it. See "Refused events" below. |
+| `…_refused_kept_total` / `…_refused_unmatched_total` | Refused events written to the local dead-letter file / refusals whose payload was no longer held (the platform's failed-events record has it). |
+| `…_body_credentials_stripped_total` | Credentials removed from event bodies before forwarding; the device should stop sending them. |
+| `…_uplink_inflight` | Publishes awaiting a PUBACK (window of 64). Pinned at 64 while draining a backlog is normal. |
 
 `GET /healthz` → `200` when the agent is up and the last stream sample succeeded, `503`
 otherwise. It **does not** gate on the uplink — surviving a down uplink is the whole point,
 so uplink state is a metric, never a health failure.
+
+**Refused events.** `refused_total{reason="not_gateway_child"}` rising means a device is
+publishing through this gateway that the platform does not have assigned to it. The WARN in the
+log names the device. The cause is almost always a missing assignment, or a device created in
+another tenant. Fix it on the platform (assign the device to the gateway); events refused
+before the fix are in the platform's failed-events record and in `refused-events.jsonl` in
+`storeDir` (JSON lines: `at`, `reason`, `device`, `altId`, `topic`, `payload`). The file is
+bounded (16 MiB, rotated once to `refused-events.jsonl.1`); copy it off the box if you need it.
 
 **Sizing `spoolMaxBytes`:** set it to the longest outage you must ride × your telemetry
 byte-rate. Ensure the disk has `spoolMaxBytes` + ~128 MiB free (the agent warns at startup
@@ -204,6 +231,19 @@ the uplink.
   store **fails closed** (the durable consumer's filter subject and `AckWait` are fixed when
   the consumer is first created) — a loud, repeated startup error, never silent loss. To
   change either, drain the spool, then reprovision the agent onto a **fresh** `storeDir`.
+- **Upgrading the platform and the agents: platform first.** An agent on the gateway uplink
+  publishes on the gateway namespace. A platform whose `event-sources` predates it, running
+  the fail-closed MQTT store, acknowledges those messages at the broker and then drops them,
+  and nothing on the agent shows it. Finish the platform upgrade (all replicas, and the broker
+  grants) before restarting any agent on this version, and check the agent reports
+  `uplink_connected 1` (it will not, if the broker has not been upgraded to grant the notices
+  topic).
+- **Moving a site from the direct-device uplink.** The old uplink mode is gone: `agentId` is
+  no longer a key (the config is fail-closed, so a leftover `agentId` stops the agent at
+  start) and `uplink.tenant`, `uplink.gatewayToken` and a `{tenant}:{credentialId}` username
+  are required. Create the gateway device and assign the site's devices to it first. Events
+  spooled under the old mode are forwarded in the new namespace, so a device must be
+  assigned before the agent drains its backlog, or those events are refused.
 - **Do not downgrade to a pre-E3 (E2) binary over a bounded store** — the older binary sends
   `MaxBytes=0` and silently strips the spool's size bound.
 - **Version:** `dc-edge-agent version` reports the build (the container image tag is the
