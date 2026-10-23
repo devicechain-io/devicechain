@@ -151,10 +151,11 @@ self_test_reports() {
 }
 
 self_test() {
-  self_test_contract
-  self_test_topics
-  self_test_reports
-  echo "schema-compat self-test: contract (removed property, newly required, removed file) and topics (changed shape) fail naming the element; declared passes; expired and stale fail; values/CRD removals print and exit 0"
+  self_test_contract || return 1
+  self_test_topics || return 1
+  self_test_reports || return 1
+  verdict_self_test || return 1
+  echo "schema-compat self-test: contract (removed property, newly required, removed file) and topics (changed shape) fail naming the element; declared passes; expired and stale fail; values/CRD removals print and exit 0; exit 1 and exit 2 both fail the wrapper"
 }
 
 case "${1:-}" in
@@ -184,20 +185,13 @@ extract_baseline "$baseline" "$tmp" || exit 1
 
 status=0
 run() {
-  local name="$1" rc=0
+  local name="$1" rc=0 log
   shift
-  "$APICOMPAT" "$@" || rc=$?
-  case "$rc" in
-    0) ;;
-    1)
-      echo "::error::the $name no longer matches $baseline, or a declaration is invalid. The FAIL lines above name each element and the line that would declare it." >&2
-      status=1
-      ;;
-    *)
-      echo "::error::the $name compatibility check could not run (exit $rc); nothing was compared. See the error above." >&2
-      status=1
-      ;;
-  esac
+  log="$(mktemp -p "$tmp")"
+  "$APICOMPAT" "$@" >"$log" 2>&1 || rc=$?
+  cat "$log"
+  summarize "$name against $baseline" "$log"
+  verdict "$name" "$baseline" "$rc" || status=1
 }
 
 want() { [ "$surface" = all ] || [ "$surface" = "$1" ]; }

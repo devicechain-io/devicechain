@@ -34,12 +34,21 @@ type Flag struct {
 	Default    string `json:"default"`
 	Hidden     bool   `json:"hidden,omitempty"`
 	Deprecated string `json:"deprecated,omitempty"`
+	// Required is cobra's MarkFlagRequired.
+	Required bool `json:"required,omitempty"`
+	// Groups are the flag-group constraints the flag is in ("mutually_exclusive:a b",
+	// "one_required:a b", "required_if_others_set:a b"): each one can refuse an
+	// invocation the baseline accepted.
+	Groups []string `json:"groups,omitempty"`
 }
 
 // Command is one node of the tree. Path is the space-separated command path below the
 // root, "" for the root itself.
 type Command struct {
-	Path       string   `json:"path"`
+	Path string `json:"path"`
+	// Use is the usage line. Positional arguments are not introspectable (cobra's Args
+	// is a function), so a changed usage line is the only sign of them and is reported.
+	Use        string   `json:"use"`
 	Aliases    []string `json:"aliases,omitempty"`
 	Hidden     bool     `json:"hidden,omitempty"`
 	Deprecated string   `json:"deprecated,omitempty"`
@@ -93,6 +102,10 @@ var Kinds = map[string]decl.Severity{
 	"flag-removed":           decl.Breaking,
 	"flag-type-changed":      decl.Breaking,
 	"flag-shorthand-changed": decl.Breaking,
+	"flag-required":          decl.Breaking,
+	"flag-group-added":       decl.Breaking,
+	"command-usage-changed":  decl.Dangerous,
+	"flag-group-removed":     decl.Safe,
 	"flag-default-changed":   decl.Dangerous,
 	"command-hidden":         decl.Dangerous,
 	"command-deprecated":     decl.Dangerous,
@@ -108,6 +121,10 @@ var Kinds = map[string]decl.Severity{
 func Compare(base, head Tree) []decl.Change {
 	var out []decl.Change
 	add := func(c, kind, detail string) {
+		if _, ok := Kinds[kind]; !ok {
+			// An unlisted kind would take the zero severity, Safe: a break that passes.
+			panic("clitree: change kind " + kind + " is not in Kinds")
+		}
 		out = append(out, decl.Change{Surface: Surface, Coord: c, Kind: kind, Severity: Kinds[kind], Detail: detail})
 	}
 	bm, hm := index(base), index(head)
@@ -134,6 +151,9 @@ func Compare(base, head Tree) []decl.Change {
 		}
 		if h.Deprecated != "" && b.Deprecated == "" {
 			add(coord(p), "command-deprecated", h.Deprecated)
+		}
+		if h.Use != b.Use {
+			add(coord(p), "command-usage-changed", fmt.Sprintf("%q -> %q; check the positional arguments it accepts", b.Use, h.Use))
 		}
 		bf, hf := flagIndex(b), flagIndex(h)
 		for _, n := range sortedKeys(bf) {
@@ -163,6 +183,19 @@ func Compare(base, head Tree) []decl.Change {
 			}
 			if g.Deprecated != "" && f.Deprecated == "" {
 				add(c, "flag-deprecated", g.Deprecated)
+			}
+			if g.Required && !f.Required {
+				add(c, "flag-required", fmt.Sprintf("`%s` now refuses to run without --%s", display(p), n))
+			}
+			for _, grp := range g.Groups {
+				if !contains(f.Groups, grp) {
+					add(c+"#"+strings.ReplaceAll(grp, " ", ","), "flag-group-added", "now constrained: "+grp)
+				}
+			}
+			for _, grp := range f.Groups {
+				if !contains(g.Groups, grp) {
+					add(c+"#"+strings.ReplaceAll(grp, " ", ","), "flag-group-removed", "")
+				}
 			}
 		}
 		for _, n := range sortedKeys(hf) {

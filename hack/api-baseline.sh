@@ -73,3 +73,45 @@ check_rc() {
 check_has() {
   grep -qF -- "$2" <<<"$3" || { echo "$3"; echo "self-test: $1: the output does not contain: $2" >&2; return 1; }
 }
+
+# verdict <what> <baseline> <rc>: how a wrapper reads the command's exit status. One
+# function for every surface, and the self-tests drive it, so the mapping that turns a
+# break red is itself proven to: a wrapper that read exit 1 as success would otherwise
+# pass every break while each self-test (which calls the command directly) stayed green.
+verdict() {
+  case "$3" in
+    0) return 0 ;;
+    1)
+      echo "::error::the $1 no longer matches $2, or a declaration is invalid. The FAIL lines above name each element and the line that would declare it." >&2
+      return 1
+      ;;
+    *)
+      echo "::error::the $1 compatibility check could not run (exit $3); nothing was compared. See the error above." >&2
+      return 1
+      ;;
+  esac
+}
+
+verdict_self_test() {
+  local out
+  verdict probe v0.0.0 0 2>/dev/null || { echo "self-test: verdict fails a clean run" >&2; return 1; }
+  if out="$(verdict probe v0.0.0 1 2>&1)"; then echo "self-test: verdict passes a break" >&2; return 1; fi
+  check_has "verdict of a break" "no longer matches v0.0.0" "$out" || return 1
+  if out="$(verdict probe v0.0.0 2 2>&1)"; then echo "self-test: verdict passes a check that could not run" >&2; return 1; fi
+  check_has "verdict of a check that could not run" "could not run (exit 2)" "$out" || return 1
+}
+
+# summarize <title> <log>: copy what a reader acts on into the job summary, so a
+# report-only change (which never turns anything red) is seen without opening the log.
+# A no-op outside GitHub Actions.
+summarize() {
+  [ -n "${GITHUB_STEP_SUMMARY:-}" ] || return 0
+  {
+    echo "### $1"
+    echo
+    echo '```text'
+    grep -E '^(FAIL|REPORT|dangerous|declared|expired|apicompat:|report-only:)' "$2" || echo "(no output: see the step log)"
+    echo '```'
+    echo
+  } >>"$GITHUB_STEP_SUMMARY"
+}

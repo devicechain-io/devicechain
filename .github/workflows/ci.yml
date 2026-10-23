@@ -1607,7 +1607,7 @@ jobs:
           cache: false
 
       - name: go mod download
-        run: hack/go-mod-download.sh backend/tools/docsgql backend/cli backend/core
+        run: hack/go-mod-download.sh backend/tools/docsgql
 
       - name: GraphQL examples validate against the served schemas
         working-directory: backend/tools/docsgql

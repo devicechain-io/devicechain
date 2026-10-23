@@ -19,19 +19,24 @@
 //     narrows, a closed object that was open, a bound that tightens, a pattern that is
 //     newly imposed, a constant that changes: BREAKING (whoever wrote against the old
 //     schema is now refused, or whoever read it loses what it relied on);
-//   - the opposite loosenings, a new enum value, a changed default, a changed pattern or
-//     format, a changed composition (allOf/anyOf/oneOf/if/then/not): DANGEROUS - reported,
-//     never failing. The policy tells readers to tolerate the first; the rest the tool
-//     cannot decide without evaluating the schema, and says so instead of guessing;
+//   - the opposite loosenings, a new enum value, a changed default, a removed pattern or
+//     format, a dropped composition constraint: DANGEROUS - reported, never failing;
 //   - a new optional property: SAFE.
 //
-// What it does NOT do is evaluate a schema: a keyword combination whose meaning depends
-// on other keywords (an `allOf` of conditionals) is compared for identity, not meaning.
+// WHAT THE TOOL CANNOT DECIDE, IT FAILS. It does not evaluate a schema, so a change whose
+// direction depends on the expressions - a changed pattern or format, an `if` or `not`
+// that changed, composition entries that cannot be paired, an external $ref that points
+// elsewhere, any validation keyword it does not model - is BREAKING and takes a
+// declaration. Reporting such a change instead would let a narrowing written inside an
+// `allOf` or a `then` pass a gate whose job is to catch narrowings. Entries of
+// allOf/anyOf/oneOf and `then`/`else` that CAN be paired are compared like any other
+// subschema, so a property newly required inside a conditional is found where it is.
 package jsonschema
 
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"reflect"
 	"sort"
@@ -52,6 +57,14 @@ var Kinds = map[string]decl.Severity{
 	"additional-properties-narrowed": decl.Breaking,
 	"bound-tightened":                decl.Breaking,
 	"pattern-added":                  decl.Breaking,
+	"pattern-changed":                decl.Breaking,
+	"format-added":                   decl.Breaking,
+	"format-changed":                 decl.Breaking,
+	"composition-narrowed":           decl.Breaking,
+	"composition-changed":            decl.Breaking,
+	"ref-changed":                    decl.Breaking,
+	"keyword-changed":                decl.Breaking,
+	"schema-changed":                 decl.Breaking,
 	"items-constrained":              decl.Breaking,
 	"required-removed":               decl.Dangerous,
 	"type-widened":                   decl.Dangerous,
@@ -59,14 +72,11 @@ var Kinds = map[string]decl.Severity{
 	"const-removed":                  decl.Dangerous,
 	"additional-properties-opened":   decl.Dangerous,
 	"bound-loosened":                 decl.Dangerous,
-	"pattern-changed":                decl.Dangerous,
 	"pattern-removed":                decl.Dangerous,
-	"format-changed":                 decl.Dangerous,
+	"format-removed":                 decl.Dangerous,
 	"default-changed":                decl.Dangerous,
-	"composition-changed":            decl.Dangerous,
-	"ref-changed":                    decl.Dangerous,
+	"composition-widened":            decl.Dangerous,
 	"items-unconstrained":            decl.Dangerous,
-	"schema-changed":                 decl.Dangerous,
 	"schema-added":                   decl.Safe,
 	"property-added":                 decl.Safe,
 }
@@ -101,6 +111,10 @@ func Compare(surface string, base, head any) []decl.Change {
 }
 
 func (d *differ) add(coord, kind, detail string) {
+	if _, ok := Kinds[kind]; !ok {
+		// An unlisted kind would take the zero severity, Safe: a break that passes.
+		panic("jsonschema: change kind " + kind + " is not in Kinds")
+	}
 	d.out = append(d.out, decl.Change{Surface: d.surface, Coord: coord, Kind: kind, Severity: Kinds[kind], Detail: detail})
 }
 
@@ -182,7 +196,13 @@ func (d *differ) node(path string, b, h any, bSeen, hSeen map[string]bool) {
 	bSeen, hSeen = cloneSeen(bSeen), cloneSeen(hSeen)
 	b, bStop := resolve(d.baseDoc, b, bSeen)
 	h, hStop := resolve(d.headDoc, h, hSeen)
+	if bStop && hStop {
+		return
+	}
 	if bStop || hStop {
+		// One side recursed back into a definition it is already inside and the other
+		// did not: the shapes differ, and there is nothing further to pair.
+		d.add(path, "schema-changed", "one side is a recursive reference and the other is not")
 		return
 	}
 	bm, bok := b.(map[string]any)
@@ -202,17 +222,14 @@ func (d *differ) node(path string, b, h any, bSeen, hSeen map[string]bool) {
 	d.constant(path, bm, hm)
 	d.bounds(path, bm, hm)
 	d.pattern(path, bm, hm)
-	if !reflect.DeepEqual(bm["format"], hm["format"]) {
-		d.add(path, "format-changed", fmt.Sprintf("%s -> %s", brief(bm["format"]), brief(hm["format"])))
-	}
+	d.format(path, bm, hm)
+	d.multipleOf(path, bm, hm)
+	d.uniqueItems(path, bm, hm)
 	if !reflect.DeepEqual(bm["default"], hm["default"]) {
 		d.add(path, "default-changed", fmt.Sprintf("%s -> %s", brief(bm["default"]), brief(hm["default"])))
 	}
-	for _, k := range []string{"allOf", "anyOf", "oneOf", "not", "if", "then", "else", "dependentRequired", "dependentSchemas", "dependencies"} {
-		if !reflect.DeepEqual(bm[k], hm[k]) {
-			d.add(path, "composition-changed", k+" differs; the tool compares it for identity, not meaning")
-		}
-	}
+	d.composition(path, bm, hm, bSeen, hSeen)
+	d.otherKeywords(path, bm, hm)
 
 	d.properties(path, bm, hm, bSeen, hSeen)
 	d.required(path, bm, hm)
@@ -233,7 +250,8 @@ func (d *differ) types(path string, bm, hm map[string]any) {
 		widened = true
 	default:
 		for _, t := range bt {
-			if !contains(ht, t) {
+			// every integer is a number, so integer -> number is not a narrowing
+			if !contains(ht, t) && !(t == "integer" && contains(ht, "number")) {
 				narrowed = true
 			}
 		}
@@ -352,6 +370,10 @@ func (d *differ) bounds(path string, bm, hm map[string]any) {
 		var tighter, looser bool
 		switch {
 		case !bok && !hok:
+			if !reflect.DeepEqual(bm[k], hm[k]) {
+				// a boolean exclusiveMinimum (draft 4, OpenAPI 3.0) or a malformed bound
+				d.add(path+"{"+k+"}", "keyword-changed", fmt.Sprintf("%s -> %s", brief(bm[k]), brief(hm[k])))
+			}
 			return
 		case !bok:
 			tighter = true
@@ -377,6 +399,182 @@ func (d *differ) bounds(path string, bm, hm map[string]any) {
 	}
 	for _, k := range maximums {
 		check(k, false)
+	}
+}
+
+func (d *differ) format(path string, bm, hm map[string]any) {
+	bf, hf := bm["format"], hm["format"]
+	switch {
+	case reflect.DeepEqual(bf, hf):
+	case bf == nil:
+		d.add(path, "format-added", fmt.Sprintf("must now be a %s", brief(hf)))
+	case hf == nil:
+		d.add(path, "format-removed", fmt.Sprintf("no longer must be a %s", brief(bf)))
+	default:
+		d.add(path, "format-changed", fmt.Sprintf("%s -> %s", brief(bf), brief(hf)))
+	}
+}
+
+// multipleOf loosens when the old divisor is a multiple of the new one (2 -> 1: every
+// value that passed still passes); any other change, 2 -> 4 or 2 -> 3, can refuse a value
+// that passed, so it tightens.
+func (d *differ) multipleOf(path string, bm, hm map[string]any) {
+	coord := path + "{multipleOf}"
+	bv, bok := num(bm["multipleOf"])
+	hv, hok := num(hm["multipleOf"])
+	detail := fmt.Sprintf("%s -> %s", brief(bm["multipleOf"]), brief(hm["multipleOf"]))
+	switch {
+	case !bok && !hok:
+		if !reflect.DeepEqual(bm["multipleOf"], hm["multipleOf"]) {
+			d.add(coord, "keyword-changed", detail)
+		}
+	case bok && hok && bv == hv:
+	case !hok:
+		d.add(coord, "bound-loosened", detail)
+	case bok && hv != 0 && isMultiple(bv, hv):
+		d.add(coord, "bound-loosened", detail)
+	default:
+		d.add(coord, "bound-tightened", detail)
+	}
+}
+
+func isMultiple(a, b float64) bool {
+	r := a / b
+	return r == math.Trunc(r)
+}
+
+func (d *differ) uniqueItems(path string, bm, hm map[string]any) {
+	b, _ := bm["uniqueItems"].(bool)
+	h, _ := hm["uniqueItems"].(bool)
+	switch {
+	case !b && h:
+		d.add(path+"{uniqueItems}", "bound-tightened", "array items must now be unique")
+	case b && !h:
+		d.add(path+"{uniqueItems}", "bound-loosened", "array items may now repeat")
+	}
+}
+
+// composition compares allOf/anyOf/oneOf, if/then/else, not and the dependent keywords.
+//
+// allOf entries are constraints (one more narrows), anyOf entries alternatives (one
+// fewer narrows), and oneOf can narrow either way (a new branch can make a value match
+// two). Entries identical on both sides are set aside; the rest are paired in order when
+// as many changed on each side, and compared like any subschema, so a narrowing inside
+// one is found where it is. Entries that cannot be paired are a narrowing or a widening
+// by the rule above.
+//
+// `if` and `not` invert: a narrower `if` applies its `then` less often, a narrower `not`
+// refuses more. Neither direction can be read off the subschema, so any change to them
+// is composition-changed, breaking. So is any change to the dependent keywords.
+func (d *differ) composition(path string, bm, hm map[string]any, bSeen, hSeen map[string]bool) {
+	for _, k := range []string{"allOf", "anyOf", "oneOf"} {
+		bv, bHas := bm[k]
+		hv, hHas := hm[k]
+		if !bHas && !hHas {
+			continue
+		}
+		ba, _ := bv.([]any)
+		ha, _ := hv.([]any)
+		var ub, uh []int
+		used := make([]bool, len(ha))
+		for i, b := range ba {
+			match := false
+			for j, h := range ha {
+				if !used[j] && reflect.DeepEqual(b, h) {
+					used[j], match = true, true
+					break
+				}
+			}
+			if !match {
+				ub = append(ub, i)
+			}
+		}
+		for j := range ha {
+			if !used[j] {
+				uh = append(uh, j)
+			}
+		}
+		if len(ub) == len(uh) {
+			for n := range ub {
+				d.node(fmt.Sprintf("%s(%s[%d])", path, k, uh[n]), ba[ub[n]], ha[uh[n]], bSeen, hSeen)
+			}
+			continue
+		}
+		var narrowed bool
+		switch k {
+		case "allOf":
+			narrowed = len(uh) > len(ub)
+		case "anyOf":
+			// a new anyOf where there was none is a new constraint; dropping it is not
+			narrowed = !bHas || (hHas && len(uh) < len(ub))
+		default:
+			narrowed = true
+		}
+		detail := fmt.Sprintf("%d entries changed or removed, %d changed or added; they cannot be paired", len(ub), len(uh))
+		if narrowed {
+			d.add(path+"("+k+")", "composition-narrowed", detail)
+		} else {
+			d.add(path+"("+k+")", "composition-widened", detail)
+		}
+	}
+	for _, k := range []string{"then", "else"} {
+		bv, bHas := bm[k]
+		hv, hHas := hm[k]
+		switch {
+		case !bHas && !hHas:
+		case !bHas:
+			d.add(path+"("+k+")", "composition-narrowed", k+" added")
+		case !hHas:
+			d.add(path+"("+k+")", "composition-widened", k+" removed")
+		default:
+			d.node(path+"("+k+")", bv, hv, bSeen, hSeen)
+		}
+	}
+	for _, k := range []string{"if", "not", "dependentRequired", "dependentSchemas", "dependencies"} {
+		if !reflect.DeepEqual(bm[k], hm[k]) {
+			d.add(path+"("+k+")", "composition-changed", k+" differs; the tool cannot tell whether that narrows, so it is breaking until declared")
+		}
+	}
+}
+
+// modelled lists every keyword the differ compares by meaning; annotations carry no
+// validation.
+var modelled = map[string]bool{
+	"type": true, "enum": true, "const": true, "pattern": true, "format": true, "default": true,
+	"minimum": true, "exclusiveMinimum": true, "minLength": true, "minItems": true, "minProperties": true,
+	"maximum": true, "exclusiveMaximum": true, "maxLength": true, "maxItems": true, "maxProperties": true,
+	"multipleOf": true, "uniqueItems": true,
+	"allOf": true, "anyOf": true, "oneOf": true, "not": true, "if": true, "then": true, "else": true,
+	"dependentRequired": true, "dependentSchemas": true, "dependencies": true,
+	"properties": true, "patternProperties": true, "required": true, "additionalProperties": true,
+	"items": true, "prefixItems": true, "$ref": true,
+}
+
+var annotations = map[string]bool{
+	"title": true, "description": true, "examples": true, "example": true, "$comment": true,
+	"deprecated": true, "readOnly": true, "writeOnly": true, "$schema": true, "$anchor": true,
+	"$defs": true, "definitions": true,
+}
+
+// otherKeywords fails conservatively on a change to any keyword the differ does not
+// model (contains, propertyNames, unevaluatedProperties, an OpenAPI nullable, an
+// x-kubernetes-validations rule, a changed $id, ...): ignoring it would pass whatever it
+// narrows.
+func (d *differ) otherKeywords(path string, bm, hm map[string]any) {
+	keys := map[string]bool{}
+	for k := range bm {
+		keys[k] = true
+	}
+	for k := range hm {
+		keys[k] = true
+	}
+	for _, k := range sortedBoolKeys(keys) {
+		if modelled[k] || annotations[k] {
+			continue
+		}
+		if !reflect.DeepEqual(bm[k], hm[k]) {
+			d.add(path+"{"+k+"}", "keyword-changed", fmt.Sprintf("%s -> %s; the tool does not model %s, so it is breaking until declared", brief(bm[k]), brief(hm[k]), k))
+		}
 	}
 }
 
@@ -502,7 +700,7 @@ func (d *differ) items(path string, bm, hm map[string]any, bSeen, hSeen map[stri
 		d.node(fmt.Sprintf("%s[%d]", path, i), bp[i], hp[i], bSeen, hSeen)
 	}
 	if len(bp) != len(hp) {
-		d.add(path, "composition-changed", fmt.Sprintf("prefixItems has %d entries, was %d", len(hp), len(bp)))
+		d.add(path+"(prefixItems)", "composition-changed", fmt.Sprintf("prefixItems has %d entries, was %d", len(hp), len(bp)))
 	}
 }
 

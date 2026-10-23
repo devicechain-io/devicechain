@@ -57,6 +57,24 @@ func init() {
 		panic("self-test: bootstrap --cluster is gone; pick another flag to change the default of")
 	}
 	f.DefValue = "zz-selftest-default"
+	// The working tree requires `docs --out`; the planted baseline did not, so the
+	// working tree newly requires it - an invocation the baseline accepted is refused.
+	d, _, err := rootCmd.Find([]string{"docs"})
+	if err != nil || d == rootCmd || d.Flags().Lookup("out") == nil {
+		panic("self-test: docs --out is gone; pick another required flag to unrequire")
+	}
+	if _, ok := d.Flags().Lookup("out").Annotations[cobra.BashCompOneRequiredFlag]; !ok {
+		panic("self-test: docs --out is no longer required; pick another required flag")
+	}
+	delete(d.Flags().Lookup("out").Annotations, cobra.BashCompOneRequiredFlag)
+	// A persistent flag is accepted by every command beneath the one that declares it, so
+	// removing it must fail on the CHILD too: that line is only there if the export lists
+	// inherited flags.
+	l, _, err := rootCmd.Find([]string{"dead-letters", "list"})
+	if err != nil || l.Name() != "list" || l.Parent().Name() != "dead-letters" {
+		panic("self-test: dead-letters list is gone; pick another parent with a child")
+	}
+	l.Parent().PersistentFlags().String("zz-selftest-inherited", "", "probe")
 	rootCmd.AddCommand(&cobra.Command{Use: "zz-selftest-command", Run: func(*cobra.Command, []string) {}})
 }
 GO
@@ -79,15 +97,20 @@ GO
   check_has "removed flag" 'bootstrap:--zz-selftest-flag flag-removed' "$out" || return 1
   check_has "removed command" 'zz-selftest-command command-removed' "$out" || return 1
   check_has "changed default" 'dangerous dcctl: bootstrap:--cluster flag-default-changed' "$out" || return 1
+  check_has "newly required flag" 'docs:--out flag-required' "$out" || return 1
+  check_has "removed persistent flag, on the child" 'dead-letters.list:--zz-selftest-inherited flag-removed' "$out" || return 1
 
   # 3. The same removals, declared against this baseline: passes, and counts them declared.
   cat > "$tmp/declared.txt" <<'TXT'
 v0.0.0 dcctl bootstrap:--zz-selftest-flag flag-removed self-test probe
 v0.0.0 dcctl zz-selftest-command command-removed self-test probe
+v0.0.0 dcctl docs:--out flag-required self-test probe
+v0.0.0 dcctl dead-letters:--zz-selftest-inherited flag-removed self-test probe
+v0.0.0 dcctl dead-letters.list:--zz-selftest-inherited flag-removed self-test probe
 TXT
   rc=0; out="$("$APICOMPAT" cli -baseline v0.0.0 -base-json "$tmp/base.json" -head-json "$tmp/head.json" -breaks "$tmp/declared.txt" 2>&1)" || rc=$?
   check_rc "declared removals" 0 "$rc" "$out" || return 1
-  check_has "declared removals" '2 breaking (2 declared)' "$out" || return 1
+  check_has "declared removals" '5 breaking (5 declared)' "$out" || return 1
 
   # 4. The declarations against a DIFFERENT baseline are expired: they cover nothing, so the
   #    removals fail again.
@@ -100,7 +123,10 @@ TXT
   check_rc "stale declarations" 1 "$rc" "$out" || return 1
   check_has "stale declarations" 'but that change is not in the dcctl command tree' "$out" || return 1
 
-  echo "cli-compat self-test: identical trees pass; a removed flag and a removed command fail naming themselves; a changed default is reported; declared passes; expired and stale fail"
+  # 6. The wrapper's own reading of the exit status, which every real run goes through.
+  verdict_self_test || return 1
+
+  echo "cli-compat self-test: identical trees pass; a removed flag (inherited ones on every child), a removed command and a newly required flag fail naming themselves; a changed default is reported; declared passes; expired and stale fail; exit 1 and exit 2 both fail the wrapper"
 }
 
 case "${1:-}" in
@@ -124,15 +150,7 @@ trap 'rm -rf "$tmp" "$BIN_DIR"' EXIT
 extract_baseline "$baseline" "$tmp" || exit 1
 
 rc=0
-"$APICOMPAT" cli -head "$ROOT" -baseline "$baseline" -base "$tmp" || rc=$?
-case "$rc" in
-  0) ;;
-  1)
-    echo "::error::the dcctl command tree no longer accepts something it accepted at $baseline, or a declaration is invalid. The FAIL lines above name each command or flag and the line that would declare it." >&2
-    exit 1
-    ;;
-  *)
-    echo "::error::the dcctl compatibility check could not run (exit $rc); nothing was compared. See the error above." >&2
-    exit 1
-    ;;
-esac
+"$APICOMPAT" cli -head "$ROOT" -baseline "$baseline" -base "$tmp" >"$tmp/cli.log" 2>&1 || rc=$?
+cat "$tmp/cli.log"
+summarize "dcctl command tree against $baseline" "$tmp/cli.log"
+verdict "dcctl command tree" "$baseline" "$rc"

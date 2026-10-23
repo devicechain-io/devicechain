@@ -26,10 +26,13 @@ type apiCompatFlag struct {
 	Default    string `json:"default"`
 	Hidden     bool   `json:"hidden,omitempty"`
 	Deprecated string `json:"deprecated,omitempty"`
+	Required   bool     `json:"required,omitempty"`
+	Groups     []string `json:"groups,omitempty"`
 }
 
 type apiCompatCommand struct {
 	Path       string          `json:"path"`
+	Use        string          `json:"use"`
 	Aliases    []string        `json:"aliases,omitempty"`
 	Hidden     bool            `json:"hidden,omitempty"`
 	Deprecated string          `json:"deprecated,omitempty"`
@@ -45,7 +48,7 @@ func TestAPICompatExportCommandTree(t *testing.T) {
 	var walk func(c *cobra.Command)
 	walk = func(c *cobra.Command) {
 		path := strings.TrimSpace(strings.TrimPrefix(c.CommandPath(), rootCmd.Name()))
-		ac := apiCompatCommand{Path: path, Aliases: append([]string(nil), c.Aliases...), Hidden: c.Hidden, Deprecated: c.Deprecated, Flags: []apiCompatFlag{}}
+		ac := apiCompatCommand{Path: path, Use: c.Use, Aliases: append([]string(nil), c.Aliases...), Hidden: c.Hidden, Deprecated: c.Deprecated, Flags: []apiCompatFlag{}}
 		sort.Strings(ac.Aliases)
 		seen := map[string]bool{}
 		collect := func(f *pflag.Flag) {
@@ -53,9 +56,20 @@ func TestAPICompatExportCommandTree(t *testing.T) {
 				return
 			}
 			seen[f.Name] = true
+			// The cobra annotation keys are spelled out rather than taken from cobra's
+			// constants, so this file compiles against a release whose cobra predates any
+			// of them.
+			_, required := f.Annotations["cobra_annotation_bash_completion_one_required_flag"]
+			var groups []string
+			for _, k := range []string{"cobra_annotation_mutually_exclusive", "cobra_annotation_one_required", "cobra_annotation_required_if_others_set"} {
+				for _, g := range f.Annotations[k] {
+					groups = append(groups, strings.TrimPrefix(k, "cobra_annotation_")+":"+g)
+				}
+			}
+			sort.Strings(groups)
 			ac.Flags = append(ac.Flags, apiCompatFlag{
 				Name: f.Name, Shorthand: f.Shorthand, Type: f.Value.Type(), Default: f.DefValue,
-				Hidden: f.Hidden, Deprecated: f.Deprecated,
+				Hidden: f.Hidden, Deprecated: f.Deprecated, Required: required, Groups: groups,
 			})
 		}
 		c.LocalFlags().VisitAll(collect)

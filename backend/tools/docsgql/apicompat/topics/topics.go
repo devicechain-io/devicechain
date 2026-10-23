@@ -8,6 +8,12 @@
 // enforces and the same declarations the ingest subscription and the parsers are built
 // from. A topic the baseline granted and the head does not is a topic a deployed device
 // can no longer use.
+//
+// What the grant does NOT carry, and this check therefore cannot see: the QoS and retain
+// behaviour of a topic (the broker's, not the grant's), and whether the platform still
+// CONSUMES a topic it grants (a granted topic nobody subscribes to accepts a publish and
+// drops it). A wildcard narrowed or widened is a changed string, so it reads as one
+// topic removed and one added: a widening fails too, and is declared.
 package topics
 
 import (

@@ -76,3 +76,12 @@ func TestExpiredNeverFails(t *testing.T) {
 		t.Fatalf("%+v", r)
 	}
 }
+
+// A stale declaration fails on its own, with no undeclared change beside it: the list
+// must not be able to over-cover.
+func TestAStaleDeclarationAloneFails(t *testing.T) {
+	r := Evaluate("v1.0.0", nil, []Declaration{{Baseline: "v1.0.0", Surface: "s", Coord: "a", Kind: "thing-removed"}})
+	if !r.Failed() || len(r.Stale) != 1 {
+		t.Fatalf("%+v", r)
+	}
+}

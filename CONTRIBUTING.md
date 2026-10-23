@@ -264,8 +264,8 @@ highlights.
 
 | Surface | Run | Breaking | Declare in |
 | --- | --- | --- | --- |
-| **dcctl** commands and flags | `hack/check-cli-compat.sh` | a removed command, alias or flag; a changed flag type; a changed or dropped shorthand. A changed default, or a newly hidden or deprecated command or flag, is reported and does not fail | [`apicompat/clitree/breaks.txt`](backend/tools/docsgql/apicompat/clitree/breaks.txt) |
-| **Device wire contract** (`backend/services/*/contract/*.schema.json`) | `hack/check-schema-compat.sh contract` | a removed property or file; a property that becomes required; a narrowed type or enum; an object that stops accepting unlisted properties; a tightened bound; a newly imposed pattern. A new enum value or a relaxed requirement is reported | [`apicompat/jsonschema/breaks.txt`](backend/tools/docsgql/apicompat/jsonschema/breaks.txt) |
+| **dcctl** commands and flags | `hack/check-cli-compat.sh` | a removed command, alias or flag; a changed flag type; a changed or dropped shorthand; a flag that becomes required or joins a flag group. A changed default or usage line, or a newly hidden or deprecated command or flag, is reported and does not fail | [`apicompat/clitree/breaks.txt`](backend/tools/docsgql/apicompat/clitree/breaks.txt) |
+| **Device wire contract** (`backend/services/*/contract/*.schema.json`) | `hack/check-schema-compat.sh contract` | a removed property or file; a property that becomes required; a narrowed type or enum; an object that stops accepting unlisted properties; a tightened bound (`multipleOf` and `uniqueItems` included); a new or changed pattern or format. Inside `allOf`/`anyOf`/`oneOf` and `then`/`else` the same rules apply where the entries can be paired; what the check cannot decide fails until declared: a changed `if` or `not`, entries it cannot pair, an external `$ref` that points elsewhere, any validation keyword it does not model. A new enum value or a relaxed requirement is reported | [`apicompat/jsonschema/breaks.txt`](backend/tools/docsgql/apicompat/jsonschema/breaks.txt) |
 | **Device topic layout** | `hack/check-schema-compat.sh topics` | a topic a device could publish or subscribe to that it no longer can (a renamed topic is one removal and one addition) | [`apicompat/topics/breaks.txt`](backend/tools/docsgql/apicompat/topics/breaks.txt) |
 | **Helm values** and the **Instance CRDs** | `hack/check-schema-compat.sh reports` | not covered by the versioning policy: changes are printed, never fail, and belong in the release highlights | nothing to declare |
 
@@ -278,7 +278,7 @@ v0.24.0 topics publish:{instance}/{tenant}/devices/{device}/events topic-removed
 A dcctl coordinate is the command path with dots (`install.bootstrap`, the root is `dcctl`),
 `:--flag` for a flag and `@name` for an alias. A contract coordinate is the path to the
 element, where `$` is the document, `$.a` a property, `$.a[]` an array's items and
-`$.a{minItems}` a bound. A topic coordinate is `publish:` or `subscribe:` and the topic, with
+`$.a{minItems}` a bound, and `$(allOf[0])` / `$(then)` a composition entry. A topic coordinate is `publish:` or `subscribe:` and the topic, with
 `{instance}`, `{tenant}` and `{device}` as placeholders. The command tree and the topics are
 read by building the release's own code, so neither has a file to keep in step by hand.
 

@@ -8,7 +8,7 @@
 #
 #   baseline-tag  the release the change breaks against, as the failure names it (vX.Y.Z)
 #   surface       the contract file name, e.g. measurement-payload.schema.json
-#   coordinate    the path to the element: $ is the document, $.entries a property, $.entries[] its items, $.a{*} an additionalProperties schema, $.a{minItems} a bound
+#   coordinate    the path to the element: $ is the document, $.entries a property, $.entries[] its items, $.a{*} an additionalProperties schema, $.a{minItems} a bound, $(allOf[0]) or $(then) a composition entry
 #   kind          the breaking kind the failure names
 #   reason        why, and what a user does instead. Required.
 #

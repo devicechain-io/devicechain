@@ -96,3 +96,56 @@ func TestEveryKindIsSeverityClassified(t *testing.T) {
 		}
 	}
 }
+
+// A flag that becomes required, or joins a flag group, can refuse an invocation the
+// baseline accepted; a renamed persistent flag is removed from every command that
+// inherited it; a command moved under another parent is a removal.
+func TestNarrowingsOfWhatAnInvocationMayBe(t *testing.T) {
+	base := tree(
+		Command{Path: "a", Use: "a <token>", Flags: []Flag{
+			{Name: "x", Type: "string"},
+			{Name: "y", Type: "string"},
+			{Name: "tenant", Type: "string"},
+			{Name: "list", Type: "string"},
+		}},
+		Command{Path: "a b", Flags: []Flag{{Name: "tenant", Type: "string"}}},
+		Command{Path: "c"},
+	)
+	head := tree(
+		Command{Path: "a", Use: "a <token> <name>", Flags: []Flag{
+			{Name: "x", Type: "string", Required: true},
+			{Name: "y", Type: "string", Groups: []string{"mutually_exclusive:x y"}},
+			{Name: "tenant-id", Type: "string"},
+			{Name: "list", Type: "stringSlice"},
+		}},
+		Command{Path: "a b", Flags: []Flag{{Name: "tenant-id", Type: "string"}}},
+		Command{Path: "a c"},
+	)
+	got := kindsOf(Compare(base, head))
+	for _, k := range []string{
+		"a:--x flag-required",
+		"a:--y#mutually_exclusive:x,y flag-group-added",
+		"a:--tenant flag-removed",
+		"a.b:--tenant flag-removed",
+		"a:--list flag-type-changed",
+		"c command-removed",
+	} {
+		if got[k] != decl.Breaking {
+			t.Errorf("%q: want breaking, got %v (all: %v)", k, got[k], got)
+		}
+	}
+	if got["a command-usage-changed"] != decl.Dangerous {
+		t.Errorf("a changed usage line must be reported: %v", got)
+	}
+}
+
+func TestAnUnlistedKindPanicsRatherThanPassing(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("an emitted kind missing from Kinds must not quietly take the Safe severity")
+		}
+	}()
+	delete(Kinds, "flag-required")
+	defer func() { Kinds["flag-required"] = decl.Breaking }()
+	Compare(tree(Command{Path: "a", Flags: []Flag{{Name: "x"}}}), tree(Command{Path: "a", Flags: []Flag{{Name: "x", Required: true}}}))
+}

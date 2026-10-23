@@ -160,7 +160,9 @@ func judge(what, baseline, root, breaksRel, breaksOverride string, kinds map[str
 	failed := decl.Print(os.Stdout, what, baseline, breaksRel, bad, res, verbose)
 	fmt.Printf("apicompat: %s against %s: %d breaking (%d declared), %d dangerous, %d safe; %d failed\n",
 		what, baseline, len(res.Undeclared)+len(res.Declared), len(res.Declared), len(res.Dangerous), len(res.Safe), failed)
-	if failed > 0 {
+	// The verdict is the Result's, the one the unit tests pin; Print's count is what the
+	// summary line says. Two tallies that each decided would be two ways to disagree.
+	if res.Failed() || len(bad) > 0 {
 		os.Exit(1)
 	}
 }
