@@ -121,5 +121,8 @@ var (
 		// The one-time invitation links a tenant administrator issues; the row keeps only
 		// the digest of the link's secret.
 		NewInvitationsMigration(),
+		// A tenant's service accounts: non-human principals for the OAuth client_credentials
+		// grant, their role assignments, and their secrets (keyed digests only).
+		NewServiceAccountsMigration(),
 	}
 )

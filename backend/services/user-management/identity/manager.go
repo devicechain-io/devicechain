@@ -197,7 +197,9 @@ type Manager struct {
 	ssoStateKV, ssoCodesKV nats.KeyValue
 	ssoMetrics             SsoMetrics
 	ssoLimiter             sourceLimiter
-	ssoKeySets             ssoKeySetCache
+	// saAttempts and saMints ration the client_credentials grant (client_credentials.go).
+	saAttempts, saMints sourceLimiter
+	ssoKeySets          ssoKeySetCache
 	// now is the clock the session ceiling is judged against; nil means time.Now. Tests
 	// move it to age a sign-in without waiting out a ceiling of hours.
 	now func() time.Time
@@ -229,7 +231,10 @@ type TokenPair struct {
 // credentials is the credential checker every secret comparison goes through; a nil
 // one makes Login and client authentication fail rather than compare unthrottled.
 func NewManager(ms *core.Microservice, db *rdb.RdbManager, locker *messaging.DistributedLock, store secrets.SecretStore, accessTTL, refreshTTL time.Duration, issuerUrl string, bootstrap BootstrapConfig, credentials *credential.Checker) *Manager {
-	return &Manager{ms: ms, db: db, iam: iam.NewStore(db), locker: locker, secrets: store, accessTTL: accessTTL, refreshTTL: refreshTTL, issuerUrl: issuerUrl, bootstrap: bootstrap, credentials: credentials}
+	m := &Manager{ms: ms, db: db, iam: iam.NewStore(db), locker: locker, secrets: store, accessTTL: accessTTL, refreshTTL: refreshTTL, issuerUrl: issuerUrl, bootstrap: bootstrap, credentials: credentials}
+	m.saAttempts.limits = &serviceAccountAttemptLimits
+	m.saMints.limits = &serviceAccountMintLimits
+	return m
 }
 
 // CredentialPolicies is the backoff schedule for each kind of secret this service
@@ -258,6 +263,12 @@ func NewManager(ms *core.Microservice, db *rdb.RdbManager, locker *messaging.Dis
 var CredentialPolicies = map[credential.Kind]credential.Policy{
 	credential.KindIdentity:    {Free: 5, Base: time.Second, Cap: 5 * time.Minute},
 	credential.KindOAuthClient: {Unthrottled: true},
+	// A SERVICE ACCOUNT's secret is minted by the server from 256 random bits, exactly as
+	// a client secret is, and is unthrottled for the same two reasons: a backoff buys no
+	// guessing resistance, and it would let anyone who learns an account's client id hold
+	// the integration at the cap. The token endpoint's own rate limit is what bounds a
+	// spray (serviceAccountLimiter).
+	credential.KindServiceAccount: {Unthrottled: true},
 }
 
 // errNoCredentialChecker fails a secret comparison on a manager built without a

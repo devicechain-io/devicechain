@@ -149,6 +149,12 @@ const (
 	// excludes ":" from a tenant id. Its stored secret is a keyed digest of the password
 	// (DeviceSecretKey), so declaring it needs WithDeviceSecretKey.
 	KindDeviceCredential Kind = "device-credential"
+	// KindServiceAccount is a tenant's service account authenticating at the OAuth token
+	// endpoint with its client secret (the client_credentials grant). ID is the client_id;
+	// Tenant is the account's tenant, bound into its stored digest. The stored secret is a
+	// keyed digest under the service-account key (DeriveServiceAccountSecretKey), so
+	// declaring it needs WithServiceAccountSecretKey.
+	KindServiceAccount Kind = "service-account"
 )
 
 // comparator is how one kind's presented secret is compared against its stored one.
@@ -158,10 +164,19 @@ type comparator struct {
 	// bcrypt is whether the stored value is a bcrypt hash, which decides what an
 	// unknown principal is compared against (see NewChecker).
 	bcrypt bool
-	// keyed is whether the stored value is a device secret digest, compared under the
-	// Checker's DeviceSecretKey; compare is then nil and NewChecker binds the key.
-	keyed bool
+	// keyed names which of the Checker's digest keys the stored value was made under
+	// (keyNone for a kind that is not keyed); compare is then nil and NewChecker binds the key.
+	keyed digestKey
 }
+
+// digestKey names one of the Checker's keyed-digest keys.
+type digestKey int
+
+const (
+	keyNone digestKey = iota
+	keyDevice
+	keyServiceAccount
+)
 
 // comparators is THE mapping from kind to compare. It is fixed here and not supplied
 // by callers (see the package doc). A kind with no entry cannot be declared: NewChecker
@@ -169,7 +184,8 @@ type comparator struct {
 var comparators = map[Kind]comparator{
 	KindIdentity:         {compare: bcrypt.CompareHashAndPassword, bcrypt: true},
 	KindOAuthClient:      {compare: bcrypt.CompareHashAndPassword, bcrypt: true},
-	KindDeviceCredential: {keyed: true},
+	KindDeviceCredential: {keyed: keyDevice},
+	KindServiceAccount:   {keyed: keyServiceAccount},
 }
 
 // constantTimeCompare is subtle.ConstantTimeCompare. It is a variable only so a test
@@ -190,9 +206,10 @@ var ErrUndeclaredKind = errors.New("credential: kind was not declared to this Ch
 type Principal struct {
 	Kind Kind
 	ID   string
-	// Tenant is the tenant a KindDeviceCredential principal presented: its stored digest
-	// is bound to it, so it is part of the compare. It is not part of Key (ID already
-	// carries it) and is unused by the other kinds. Empty never matches a device secret.
+	// Tenant is the tenant a keyed principal's stored digest is bound to, so it is part of
+	// the compare: for KindDeviceCredential the tenant it presented, for KindServiceAccount
+	// the tenant of the account its client_id names (empty for an unknown one). It is not
+	// part of Key and is unused by the other kinds. Empty never matches a keyed digest.
 	Tenant string
 }
 
@@ -436,6 +453,9 @@ type Checker struct {
 
 	// deviceKey is what KindDeviceCredential's digests are made under (WithDeviceSecretKey).
 	deviceKey *DeviceSecretKey
+	// serviceAccountKey is what KindServiceAccount's digests are made under
+	// (WithServiceAccountSecretKey).
+	serviceAccountKey *DeviceSecretKey
 	// observer is WithCompareObserver's, applied once the compares exist.
 	observer func(stored []byte)
 
@@ -468,6 +488,16 @@ func WithCompareObserver(seen func(hash []byte)) Option {
 func WithDeviceSecretKey(k *DeviceSecretKey) Option {
 	return func(c *Checker) { c.deviceKey = k }
 }
+
+// WithServiceAccountSecretKey is the key KindServiceAccount's stored digests were made
+// under. A Checker declaring that kind without one is refused (ErrNoServiceAccountSecretKey).
+func WithServiceAccountSecretKey(k *DeviceSecretKey) Option {
+	return func(c *Checker) { c.serviceAccountKey = k }
+}
+
+// ErrNoServiceAccountSecretKey is NewChecker's refusal to declare KindServiceAccount without
+// a key (WithServiceAccountSecretKey).
+var ErrNoServiceAccountSecretKey = errors.New("credential: KindServiceAccount needs a service account secret key (WithServiceAccountSecretKey)")
 
 // observeCompares wraps every declared kind's compare so seen is told the stored
 // value first.
@@ -536,11 +566,15 @@ func NewChecker(store Store, policies map[Kind]Policy, opts ...Option) (*Checker
 		if err := policies[k].validate(); err != nil {
 			return nil, fmt.Errorf("credential: policy for kind %q: %w", k, err)
 		}
-		if cmp.keyed {
-			if c.deviceKey == nil {
-				return nil, fmt.Errorf("%w: kind %q", ErrNoDeviceSecretKey, k)
-			}
+		if cmp.keyed != keyNone {
 			key := c.deviceKey
+			missing := ErrNoDeviceSecretKey
+			if cmp.keyed == keyServiceAccount {
+				key, missing = c.serviceAccountKey, ErrNoServiceAccountSecretKey
+			}
+			if key == nil {
+				return nil, fmt.Errorf("%w: kind %q", missing, k)
+			}
 			c.compares[k] = func(p Principal, stored, secret []byte) error {
 				return key.verify(p.Tenant, string(stored), string(secret))
 			}

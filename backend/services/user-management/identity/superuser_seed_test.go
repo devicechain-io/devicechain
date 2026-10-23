@@ -79,7 +79,9 @@ func newSeedFixture(t *testing.T) *seedFixture {
 	require.NoError(t, secrets.NewSecretStoreSchema().Migrate(db))
 	store, err := secrets.NewFromConfig(context.Background(), rootKeyConfig(t), db)
 	require.NoError(t, err)
-	creds, err := credential.NewChecker(credentialtest.NewStore(), CredentialPolicies)
+	saKey, err := credential.DeriveServiceAccountSecretKey(make([]byte, 32))
+	require.NoError(t, err)
+	creds, err := credential.NewChecker(credentialtest.NewStore(), CredentialPolicies, credential.WithServiceAccountSecretKey(saKey))
 	require.NoError(t, err)
 	return &seedFixture{ms: ms, lock: lock, rdbm: &rdb.RdbManager{Database: db}, secret: store, creds: creds}
 }

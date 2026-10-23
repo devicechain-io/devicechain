@@ -59,8 +59,10 @@ func NewTokenVerifier(validator func() *coreauth.Validator, resourceID string) s
 			// UserID drives the SDK's session-hijack protection (a session is bound to
 			// the UserID that created it). Qualify it by tenant so the same human's
 			// tokens in different tenants can't share a session — the grant is
-			// per-tenant, so the session identity must be too.
-			UserID: claims.Tenant + "/" + claims.Email,
+			// per-tenant, so the session identity must be too. A tenant's SERVICE ACCOUNT
+			// has no email, so its subject stands in: without it every account of a
+			// tenant would share one session identity, "acme/".
+			UserID: claims.Tenant + "/" + sessionSubject(claims),
 			Extra: map[string]any{
 				extraTokenKey:  token,
 				extraTenantKey: claims.Tenant,
@@ -74,6 +76,15 @@ func NewTokenVerifier(validator func() *coreauth.Validator, resourceID string) s
 		}
 		return info, nil
 	}
+}
+
+// sessionSubject is who a session belongs to within its tenant: the person's email, or for
+// a principal with none (a service account) its subject.
+func sessionSubject(claims *coreauth.Claims) string {
+	if claims.Email != "" {
+		return claims.Email
+	}
+	return claims.Username
 }
 
 // audienceIncludes reports whether the token audience list contains the resource id.

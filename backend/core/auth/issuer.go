@@ -221,6 +221,46 @@ func (i *Issuer) IssueOAuthAccess(tenant, email string, roles, authorities []str
 	})
 }
 
+// ServiceAccountSubjectPrefix begins the subject ("sub" and "username") of every token
+// minted for a tenant's service account (the client_credentials grant). It has no "@", so a
+// service account's subject can never equal a person's, whose subject is an email address.
+const ServiceAccountSubjectPrefix = "service-account:"
+
+// ServiceAccountSubject is the subject a service account's tokens carry, and so the actor
+// the audit journal records for what it does.
+func ServiceAccountSubject(accountToken string) string {
+	return ServiceAccountSubjectPrefix + accountToken
+}
+
+// IssueServiceAccountAccess mints the access token of a tenant's SERVICE ACCOUNT, the answer
+// to an OAuth 2.1 client_credentials grant. It is an ordinary data-plane access token —
+// every service accepts it unchanged — whose subject is the account (ServiceAccountSubject)
+// rather than a person: it carries no email and is never a superuser's. authorities are the
+// account's roles' authorities, already capped by the caller to oauthScope when one was
+// requested. scope is the account's scope: an unscoped Scope mints no "scp" at all, a scoped
+// one is validated exactly as IssueScopedTenantAccess validates it.
+//
+// It lives for the SCOPED access TTL whether or not the account is scoped. There is no
+// refresh token for an account, so this lifetime is how long a disable, a delete, a role
+// change or the end of a secret's overlap can take to reach a token already issued.
+func (i *Issuer) IssueServiceAccountAccess(tenant, subject string, roles, authorities []string, oauthScope string, audience []string, scope Scope, clientID, jti string) (IssuedToken, error) {
+	if tenant == "" || subject == "" || clientID == "" {
+		return IssuedToken{}, errors.New("a service account token requires a tenant, a subject and a client id")
+	}
+	var anchors []string
+	if scope.IsScoped() {
+		if err := mintableScope(scope); err != nil {
+			return IssuedToken{}, err
+		}
+		anchors = scope.Anchors()
+	}
+	return i.sign(tokenSpec{
+		tokenType: TokenTypeAccess, tenant: tenant, username: subject,
+		roles: roles, authorities: authorities, scope: oauthScope, audience: audience,
+		scopeAnchors: anchors, clientID: clientID, jti: jti, ttl: i.scopedAccessTTL,
+	})
+}
+
 // IssueOAuthRefresh mints an OAuth 2.1 refresh token carrying the granted scope
 // and audience so a refresh grant re-mints an access token with the same
 // scope/audience binding without re-consulting the authorize step. Like every

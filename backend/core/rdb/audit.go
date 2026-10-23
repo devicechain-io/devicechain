@@ -67,6 +67,11 @@ const (
 	// AuditOpPasswordCleared records an administrator removing an identity's password,
 	// leaving it able to sign in only through single sign-on. The label names the identity.
 	AuditOpPasswordCleared = "password_cleared"
+	// AuditOpServiceAccountToken records a tenant's service account obtaining an access
+	// token (the OAuth client_credentials grant). The actor is the account's subject
+	// (auth.ServiceAccountSubject), the tenant its tenant. A refused attempt writes no row,
+	// so a spray of wrong secrets cannot drive database writes.
+	AuditOpServiceAccountToken = "service_account_token"
 )
 
 // AuditEvent is one row of the tenant-scoped audit journal (ADR-019): a record,
