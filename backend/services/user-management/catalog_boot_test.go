@@ -136,7 +136,9 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	// main.go L227: the credential attempt store.
 	attemptsKV, err := NatsManager.CredentialAttemptStore()
 	require.NoError(t, err, "the credential attempt store")
-	_, err = credential.NewChecker(attemptsKV, identity.CredentialPolicies)
+	saKey, err := credential.DeriveServiceAccountSecretKey(make([]byte, 32))
+	require.NoError(t, err)
+	_, err = credential.NewChecker(attemptsKV, identity.CredentialPolicies, credential.WithServiceAccountSecretKey(saKey))
 	require.NoError(t, err)
 
 	// afterMicroserviceStarted: NatsManager.Start runs the oncreate callback (the reader and the

@@ -39,13 +39,38 @@ type tokenBucket struct {
 	last   time.Time
 }
 
-// sourceLimiter is the pair of buckets above. The zero value is ready to use.
+// limiterLimits are one limiter's two schedules and its key bound.
+type limiterLimits struct {
+	perKeyBurst int
+	perKeyEvery time.Duration
+	globalBurst int
+	globalEvery time.Duration
+	maxKeys     int
+}
+
+// ssoBeginLimits are beginSso's, above.
+var ssoBeginLimits = limiterLimits{
+	perKeyBurst: ssoBeginPerSourceBurst, perKeyEvery: ssoBeginPerSourceEvery,
+	globalBurst: ssoBeginGlobalBurst, globalEvery: ssoBeginGlobalEvery, maxKeys: ssoLimiterMaxSources,
+}
+
+// sourceLimiter is the pair of buckets above. The zero value is ready to use, with
+// beginSso's limits; another endpoint sets its own.
 type sourceLimiter struct {
 	mu      sync.Mutex
 	global  tokenBucket
 	sources map[string]*tokenBucket
+	// limits, when set, replaces ssoBeginLimits.
+	limits *limiterLimits
 	// now is the clock; a test may replace it.
 	now func() time.Time
+}
+
+func (l *sourceLimiter) lim() limiterLimits {
+	if l.limits != nil {
+		return *l.limits
+	}
+	return ssoBeginLimits
 }
 
 func (l *sourceLimiter) clock() time.Time {
@@ -78,34 +103,39 @@ func (l *sourceLimiter) allow(source string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := l.clock()
+	lim := l.lim()
 	if l.sources == nil {
 		l.sources = map[string]*tokenBucket{}
 	}
 	sb := l.sources[source]
 	if sb == nil {
-		if len(l.sources) >= ssoLimiterMaxSources {
+		if len(l.sources) >= lim.maxKeys {
 			l.evictLocked(now)
 		}
 		sb = &tokenBucket{}
 		l.sources[source] = sb
 	}
-	if !sb.take(now, ssoBeginPerSourceBurst, ssoBeginPerSourceEvery) {
+	if !sb.take(now, lim.perKeyBurst, lim.perKeyEvery) {
 		return false
 	}
-	return l.global.take(now, ssoBeginGlobalBurst, ssoBeginGlobalEvery)
+	if lim.globalBurst == 0 {
+		return true
+	}
+	return l.global.take(now, lim.globalBurst, lim.globalEvery)
 }
 
 // evictLocked drops every source that has been idle long enough to have refilled, and if
 // that frees nothing (a sustained spray) all of them: forgetting a sender's history only
 // ever gives it a fresh per-source allowance, which the global bucket still bounds.
 func (l *sourceLimiter) evictLocked(now time.Time) {
-	idle := ssoBeginPerSourceEvery * ssoBeginPerSourceBurst
+	lim := l.lim()
+	idle := lim.perKeyEvery * time.Duration(lim.perKeyBurst)
 	for k, b := range l.sources {
 		if now.Sub(b.last) >= idle {
 			delete(l.sources, k)
 		}
 	}
-	if len(l.sources) >= ssoLimiterMaxSources {
+	if len(l.sources) >= lim.maxKeys {
 		l.sources = map[string]*tokenBucket{}
 	}
 }

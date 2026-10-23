@@ -9,6 +9,8 @@ ALTER SEQUENCE "user-management".iam_invitations_id_seq OWNED BY "user-managemen
 ALTER SEQUENCE "user-management".iam_memberships_id_seq OWNED BY "user-management".iam_memberships.id;
 ALTER SEQUENCE "user-management".iam_oauth_clients_id_seq OWNED BY "user-management".iam_oauth_clients.id;
 ALTER SEQUENCE "user-management".iam_roles_id_seq OWNED BY "user-management".iam_roles.id;
+ALTER SEQUENCE "user-management".iam_service_account_secrets_id_seq OWNED BY "user-management".iam_service_account_secrets.id;
+ALTER SEQUENCE "user-management".iam_service_accounts_id_seq OWNED BY "user-management".iam_service_accounts.id;
 ALTER SEQUENCE "user-management".iam_sso_link_requests_id_seq OWNED BY "user-management".iam_sso_link_requests.id;
 ALTER SEQUENCE "user-management".iam_tenant_purge_stores_id_seq OWNED BY "user-management".iam_tenant_purge_stores.id;
 ALTER SEQUENCE "user-management".iam_tenant_purges_id_seq OWNED BY "user-management".iam_tenant_purges.id;
@@ -81,6 +83,20 @@ ALTER TABLE ONLY "user-management".iam_oauth_clients ALTER COLUMN id SET DEFAULT
 ALTER TABLE ONLY "user-management".iam_roles
  ADD CONSTRAINT iam_roles_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "user-management".iam_roles ALTER COLUMN id SET DEFAULT nextval('"user-management".iam_roles_id_seq'::regclass);
+ALTER TABLE ONLY "user-management".iam_service_account_roles
+ ADD CONSTRAINT fk_iam_service_account_roles_role FOREIGN KEY (role_id) REFERENCES "user-management".iam_roles(id) ON DELETE CASCADE;
+ALTER TABLE ONLY "user-management".iam_service_account_roles
+ ADD CONSTRAINT fk_iam_service_account_roles_service_account FOREIGN KEY (service_account_id) REFERENCES "user-management".iam_service_accounts(id) ON DELETE CASCADE;
+ALTER TABLE ONLY "user-management".iam_service_account_roles
+ ADD CONSTRAINT iam_service_account_roles_pkey PRIMARY KEY (service_account_id, role_id);
+ALTER TABLE ONLY "user-management".iam_service_account_secrets
+ ADD CONSTRAINT fk_iam_service_account_secrets_service_account FOREIGN KEY (service_account_id) REFERENCES "user-management".iam_service_accounts(id) ON DELETE CASCADE;
+ALTER TABLE ONLY "user-management".iam_service_account_secrets
+ ADD CONSTRAINT iam_service_account_secrets_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "user-management".iam_service_account_secrets ALTER COLUMN id SET DEFAULT nextval('"user-management".iam_service_account_secrets_id_seq'::regclass);
+ALTER TABLE ONLY "user-management".iam_service_accounts
+ ADD CONSTRAINT iam_service_accounts_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "user-management".iam_service_accounts ALTER COLUMN id SET DEFAULT nextval('"user-management".iam_service_accounts_id_seq'::regclass);
 ALTER TABLE ONLY "user-management".iam_sso_link_requests
  ADD CONSTRAINT fk_iam_sso_link_requests_connection FOREIGN KEY (connection_id) REFERENCES "user-management".iam_idp_connections(id) ON DELETE CASCADE;
 ALTER TABLE ONLY "user-management".iam_sso_link_requests
@@ -134,6 +150,7 @@ CREATE INDEX idx_iam_memberships_deleted_at ON "user-management".iam_memberships
 CREATE INDEX idx_iam_memberships_managed_by ON "user-management".iam_memberships USING btree (managed_by);
 CREATE INDEX idx_iam_oauth_clients_deleted_at ON "user-management".iam_oauth_clients USING btree (deleted_at);
 CREATE INDEX idx_iam_roles_deleted_at ON "user-management".iam_roles USING btree (deleted_at);
+CREATE INDEX idx_iam_service_account_secrets_account ON "user-management".iam_service_account_secrets USING btree (service_account_id);
 CREATE INDEX idx_iam_tenant_purges_completed_at ON "user-management".iam_tenant_purges USING btree (completed_at);
 CREATE INDEX idx_iam_tenant_tiers_deleted_at ON "user-management".iam_tenant_tiers USING btree (deleted_at);
 CREATE INDEX idx_iam_tenants_deleted_at ON "user-management".iam_tenants USING btree (deleted_at);
@@ -201,6 +218,18 @@ CREATE SEQUENCE "user-management".iam_oauth_clients_id_seq
  NO MAXVALUE
  CACHE 1;
 CREATE SEQUENCE "user-management".iam_roles_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE SEQUENCE "user-management".iam_service_account_secrets_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE SEQUENCE "user-management".iam_service_accounts_id_seq
  START WITH 1
  INCREMENT BY 1
  NO MINVALUE
@@ -398,6 +427,32 @@ CREATE TABLE "user-management".iam_roles (
  authorities text,
  tenant_id character varying(128)
 );
+CREATE TABLE "user-management".iam_service_account_roles (
+ service_account_id bigint NOT NULL,
+ role_id bigint NOT NULL
+);
+CREATE TABLE "user-management".iam_service_account_secrets (
+ id bigint NOT NULL,
+ created_at timestamp with time zone,
+ service_account_id bigint NOT NULL,
+ digest character varying(128) NOT NULL,
+ hint character varying(8) NOT NULL,
+ expires_at timestamp with time zone NOT NULL,
+ last_used_at timestamp with time zone
+);
+CREATE TABLE "user-management".iam_service_accounts (
+ id bigint NOT NULL,
+ created_at timestamp with time zone,
+ updated_at timestamp with time zone,
+ name character varying(128),
+ description character varying(1024),
+ tenant_id character varying(128) NOT NULL,
+ token character varying(128) NOT NULL,
+ client_id character varying(64) NOT NULL,
+ enabled boolean NOT NULL,
+ scope jsonb,
+ created_by character varying(256)
+);
 CREATE TABLE "user-management".iam_sso_link_requests (
  id bigint NOT NULL,
  created_at timestamp with time zone,
@@ -531,6 +586,8 @@ CREATE UNIQUE INDEX idx_iam_membership_identity_tenant ON "user-management".iam_
 CREATE UNIQUE INDEX idx_iam_oauth_clients_client_id ON "user-management".iam_oauth_clients USING btree (client_id);
 CREATE UNIQUE INDEX idx_iam_roles_catalogue_token ON "user-management".iam_roles USING btree (scope, token) WHERE (tenant_id IS NULL);
 CREATE UNIQUE INDEX idx_iam_roles_owned_token ON "user-management".iam_roles USING btree (scope, tenant_id, token) WHERE (tenant_id IS NOT NULL);
+CREATE UNIQUE INDEX idx_iam_service_accounts_client_id ON "user-management".iam_service_accounts USING btree (client_id);
+CREATE UNIQUE INDEX idx_iam_service_accounts_tenant_token ON "user-management".iam_service_accounts USING btree (tenant_id, token);
 CREATE UNIQUE INDEX idx_iam_sso_link_requests_connection_subject ON "user-management".iam_sso_link_requests USING btree (connection_id, subject);
 CREATE UNIQUE INDEX idx_iam_tenant_tiers_token ON "user-management".iam_tenant_tiers USING btree (token);
 CREATE UNIQUE INDEX idx_iam_tenants_token ON "user-management".iam_tenants USING btree (token);

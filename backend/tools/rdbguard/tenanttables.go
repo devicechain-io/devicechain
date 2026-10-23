@@ -158,6 +158,19 @@ func (f *facts) derive() {
 					f.tables[j] = d + "." + name + " (many2many)"
 				}
 			}
+			// A HAS-MANY child — a `[]Child` field with no many2many tag, Child a model of
+			// this package that carries no tenant column of its own — holds a foreign key
+			// into this owner (ServiceAccount.Secrets): the purge classes it transitive,
+			// and its rows are tenant rows reached through the owner.
+			for _, child := range hasManyChildren(st, p, f.tenantTypes) {
+				table := p.tableNames[child]
+				if table == "" {
+					table = ns.TableName(child)
+				}
+				if _, seen := f.tables[table]; !seen {
+					f.tables[table] = d + "." + name + " (has-many " + child + ")"
+				}
+			}
 		}
 		// The other side of a join: a many2many whose ELEMENT is tenant-bearing hangs off a
 		// tenant table even when its owner is not (Identity.SystemRoles → Role), so its
@@ -170,6 +183,37 @@ func (f *facts) derive() {
 			}
 		}
 	}
+}
+
+// hasManyChildren returns the element type names of a struct's slice fields that gorm reads
+// as HAS-MANY: a slice of a struct declared in the same package, carrying no many2many tag,
+// whose element is a gorm model without a tenant column of its own (one with a tenant
+// column is already in the set on its own account).
+func hasManyChildren(st *ast.StructType, p *pkgFacts, tenantTypes map[string]bool) []string {
+	var out []string
+	for _, fld := range st.Fields.List {
+		arr, ok := fld.Type.(*ast.ArrayType)
+		if !ok || arr.Len != nil {
+			continue
+		}
+		elem := arr.Elt
+		if s, ok := elem.(*ast.StarExpr); ok {
+			elem = s.X
+		}
+		id, ok := elem.(*ast.Ident)
+		if !ok || tenantTypes[id.Name] {
+			continue
+		}
+		child, ok := p.structs[id.Name]
+		if !ok || !isGormModel(child, tenantTypes) {
+			continue
+		}
+		if len(many2manyTables(&ast.StructType{Fields: &ast.FieldList{List: []*ast.Field{fld}}})) > 0 {
+			continue
+		}
+		out = append(out, id.Name)
+	}
+	return out
 }
 
 // many2manyOfTenantElements returns the join tables of a struct's many2many fields whose

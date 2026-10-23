@@ -112,8 +112,8 @@ var rawSQLAllowList = []siteEntry{
 			"constant owned by tenantpurge; system path",
 	},
 	{
-		Path: "backend/services/user-management/iam/store.go", Func: "Store.DeleteRole", Count: 2,
-		Why: "deletes the identity- and membership-to-role join rows of the ONE role being deleted, by its " +
+		Path: "backend/services/user-management/iam/store.go", Func: "Store.DeleteRole", Count: 3,
+		Why: "deletes the identity-, membership- and service-account-to-role join rows of the ONE role being deleted, by its " +
 			"primary key, under the system context; the caller has already resolved and authorised that role " +
 			"for its own plane (a catalogue role on the admin plane, the caller's own tenant role on the tenant " +
 			"plane), so the statements cannot reach another tenant's rows",

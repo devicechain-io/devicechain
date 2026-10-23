@@ -101,3 +101,34 @@ func TestVerifier_BadTokenRejected(t *testing.T) {
 		t.Errorf("bad token: err = %v, want ErrInvalidToken", err)
 	}
 }
+
+// A tenant's SERVICE ACCOUNT token is held to the same audience binding — bound elsewhere
+// or to nothing, it is refused — and its session identity is the account, so two accounts
+// of one tenant never share a session.
+func TestVerifier_ServiceAccountTokens(t *testing.T) {
+	iss, validator := mustIssuerValidator(t)
+	verify := NewTokenVerifier(validator, testResource)
+	sub := coreauth.ServiceAccountSubject("ci-bot")
+
+	for name, aud := range map[string][]string{"another resource": {"https://api.example.com"}, "no resource": nil} {
+		tok, err := iss.IssueServiceAccountAccess("acme", sub, nil, []string{"device:read"}, "", aud, coreauth.Scope{}, "dcsa_1", "j-"+name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := verify(context.Background(), tok.Token, nil); !errors.Is(err, sdkauth.ErrInvalidToken) {
+			t.Errorf("%s: err = %v, want ErrInvalidToken", name, err)
+		}
+	}
+
+	tok, err := iss.IssueServiceAccountAccess("acme", sub, nil, []string{"device:read"}, "", []string{testResource}, coreauth.Scope{}, "dcsa_1", "j-ok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := verify(context.Background(), tok.Token, nil)
+	if err != nil {
+		t.Fatalf("a bound service account token was refused: %v", err)
+	}
+	if info.UserID != "acme/"+sub {
+		t.Errorf("UserID = %q, want acme/%s", info.UserID, sub)
+	}
+}

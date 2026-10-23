@@ -90,17 +90,24 @@ type DeviceSecretKey struct {
 // (HKDF-SHA-256). The root key must be the 32 bytes config.SecretsConfiguration
 // DecodedRootKey returns.
 func DeriveDeviceSecretKey(rootKey []byte) (*DeviceSecretKey, error) {
+	return deriveKeyedSecretKey(rootKey, deviceSecretKeyInfo, deviceSecretKeyIdLabel, "device secret")
+}
+
+// deriveKeyedSecretKey derives one purpose's digest key from the root key. info separates
+// the purposes: two keys formed with different info strings share nothing, so a digest made
+// for one purpose verifies nothing under another.
+func deriveKeyedSecretKey(rootKey []byte, info, idLabel, purpose string) (*DeviceSecretKey, error) {
 	if len(rootKey) != 32 {
-		return nil, fmt.Errorf("credential: the device secret key needs a 32-byte root key, got %d bytes", len(rootKey))
+		return nil, fmt.Errorf("credential: the %s key needs a 32-byte root key, got %d bytes", purpose, len(rootKey))
 	}
-	raw, err := hkdf.Key(sha256.New, rootKey, nil, deviceSecretKeyInfo, sha256.Size)
+	raw, err := hkdf.Key(sha256.New, rootKey, nil, info, sha256.Size)
 	if err != nil {
 		return nil, err
 	}
 	k := &DeviceSecretKey{}
 	copy(k.key[:], raw)
 	m := hmac.New(sha256.New, k.key[:])
-	m.Write([]byte(deviceSecretKeyIdLabel))
+	m.Write([]byte(idLabel))
 	k.id = hex.EncodeToString(m.Sum(nil)[:4])
 	return k, nil
 }

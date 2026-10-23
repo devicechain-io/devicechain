@@ -1071,8 +1071,8 @@ func withRole(roles []iam.Role, id uint, authorities []string) []iam.Role {
 	return out
 }
 
-// DeleteTenantRole deletes a role the caller's tenant owns. Refused while any member
-// holds it. Returns false when there was no such role.
+// DeleteTenantRole deletes a role the caller's tenant owns. Refused while any member or
+// service account holds it. Returns false when there was no such role.
 func (s *Service) DeleteTenantRole(ctx context.Context, token string) (bool, error) {
 	caller, err := tenantCaller(ctx)
 	if err != nil {
@@ -1105,6 +1105,13 @@ func (s *Service) DeleteTenantRole(ctx context.Context, token string) (bool, err
 		}
 		if len(holders) > 0 {
 			return fmt.Errorf("%w (%d member(s) hold %q)", ErrRoleInUse, len(holders), token)
+		}
+		accounts, err := tx.ServiceAccountsHoldingRole(ctx, r.ID)
+		if err != nil {
+			return err
+		}
+		if accounts > 0 {
+			return fmt.Errorf("%w (%d service account(s) hold %q)", ErrRoleInUse, accounts, token)
 		}
 		if err := tx.DeleteRole(ctx, r); err != nil {
 			return err

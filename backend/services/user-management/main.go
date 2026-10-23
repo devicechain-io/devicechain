@@ -249,7 +249,20 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 				"were readable by every service login, so they were not carried over: every refresh token, " +
 				"OAuth code and single sign-on record issued before this upgrade is gone, and users sign in once more")
 	}
+	// A service account's secret is a keyed digest under a key derived from the instance
+	// root key (credential.DeriveServiceAccountSecretKey), which this service already holds
+	// for its secret store. The checker compares under it, and the admin service digests
+	// every secret it mints under the same key.
+	rootKey, err := Microservice.InstanceConfiguration.Infrastructure.Secrets.DecodedRootKey()
+	if err != nil {
+		return err
+	}
+	serviceAccountKey, err := credential.DeriveServiceAccountSecretKey(rootKey)
+	if err != nil {
+		return err
+	}
 	credentials, err := credential.NewChecker(attemptsKV, identity.CredentialPolicies,
+		credential.WithServiceAccountSecretKey(serviceAccountKey),
 		credential.WithCounter(Microservice.NewCounterVec("credential_checks_total",
 			"Password and OAuth client-secret checks by outcome. A throttled attempt writes no "+
 				"audit row, so outcome=\"throttled\" is the view of an account held at the backoff "+
@@ -319,6 +332,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	AdminService = admin.NewService(iam.NewStore(RdbManager),
 		Configuration.TenantPurgeSettle(), Configuration.TenantPurgeTokenHold(), DeadLetterStore)
 	AdminService.SetViewerBaseline(identity.ViewerAuthorities())
+	AdminService.SetServiceAccountSecretKey(serviceAccountKey)
 
 	// Map of providers injected into the graphql http context.
 	providers := map[gqlcore.ContextKey]interface{}{
@@ -572,6 +586,7 @@ func registerOAuthHandlers() {
 		IdentityManager.AuthenticateClient,
 		IdentityManager.RedeemAuthorizationCode,
 		IdentityManager.RefreshOAuth,
+		IdentityManager.ClientCredentials,
 	))
 
 	// The authorization endpoint (ADR-047 slice C): the server-rendered

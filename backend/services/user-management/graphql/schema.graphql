@@ -730,6 +730,108 @@ input TenantRoleUpdateRequest {
 }
 
 """
+One client secret of a service account. The secret itself is shown only once, when it is
+created; this record never carries it.
+"""
+type ServiceAccountSecret {
+    """The secret's last four characters, to tell secrets apart."""
+    hint: String!
+    """When the secret was created, as an RFC 3339 timestamp."""
+    createdAt: String!
+    """
+    When the secret stops working, as an RFC 3339 timestamp. Every secret expires; after a
+    rotation the previous secret's expiry is the end of the overlap.
+    """
+    expiresAt: String!
+    """When the secret last obtained a token, as an RFC 3339 timestamp. Null if it never has."""
+    lastUsedAt: String
+    """True while the secret can still obtain tokens."""
+    active: Boolean!
+}
+
+"""
+A service account: a non-human principal of this tenant that an integration uses to call the
+APIs. It obtains short-lived access tokens from the OAuth token endpoint with the
+client_credentials grant, using its client ID and a client secret, and acts with exactly the
+authorities of its roles, limited to its scope.
+"""
+type ServiceAccount {
+    """Unique identifier of the service account within this tenant."""
+    token: String!
+    """Human-readable name. Null when none was set."""
+    name: String
+    """Free-text description. Null when none was set."""
+    description: String
+    """The OAuth client ID the account authenticates with. Not a secret."""
+    clientId: String!
+    """False when the account is disabled and cannot obtain tokens."""
+    enabled: Boolean!
+    """The roles the account holds. Its tokens carry exactly these roles' authorities."""
+    roles: [TenantRole!]!
+    """The customers or groups whose devices the account is limited to. Empty for the whole tenant."""
+    scope: [ScopeAnchor!]!
+    """The account's secrets, newest first, including expired ones."""
+    secrets: [ServiceAccountSecret!]!
+    """The subject of the administrator who created the account."""
+    createdBy: String
+    """When the account was created, as an RFC 3339 timestamp."""
+    createdAt: String!
+}
+
+"""Paging for listing this tenant's service accounts."""
+input ServiceAccountSearchCriteria {
+    """Page to return, starting at 1."""
+    pageNumber: Int!
+    """Results per page. Below 1 means the default of 100; above 1000 is capped at 1000."""
+    pageSize: Int!
+}
+
+"""One page of this tenant's service accounts, ordered by token."""
+type ServiceAccountSearchResults {
+    """The service accounts on this page."""
+    results: [ServiceAccount!]!
+    """Where this page sits within the full result set."""
+    pagination: SearchResultsPagination!
+}
+
+"""A service account to create."""
+input ServiceAccountCreateRequest {
+    """
+    Unique identifier within this tenant: letters, digits, hyphens and underscores, starting
+    with a letter or digit, at most 128 characters.
+    """
+    token: String!
+    """Human-readable name, at most 128 characters."""
+    name: String
+    """Free-text description, at most 1024 characters."""
+    description: String
+    """
+    The roles to assign. Each must be assignable in this tenant and grant only authorities
+    you hold yourself.
+    """
+    roleTokens: [String!]!
+    """The customers or groups to limit the account to. Omit it, or send an empty list, for the whole tenant."""
+    scope: [ScopeAnchorInput!]
+    """Days until the first secret expires: 1 to 730. Defaults to 365."""
+    secretExpiresInDays: Int
+}
+
+"""
+A service account with a newly created client secret. The secret is shown only here: it is
+never stored, and cannot be read back later.
+"""
+type ServiceAccountCredentials {
+    """The service account."""
+    serviceAccount: ServiceAccount!
+    """The client ID to authenticate with."""
+    clientId: String!
+    """The client secret. Store it now; it cannot be shown again."""
+    clientSecret: String!
+    """The token endpoint to request tokens from. Null when this instance has no OAuth issuer configured."""
+    tokenEndpoint: String
+}
+
+"""
 Sign-in, session and self-service reads, and this tenant's own members, invitations and
 roles. Everything here is scoped to the caller's own tenant or identity; instance-level
 administration is a separate API.
@@ -849,6 +951,28 @@ type Query {
         """Paging."""
         criteria: InvitationSearchCriteria!
     ): InvitationSearchResults!
+    """
+    One page of this tenant's service accounts, ordered by token. Requires member:read.
+    Refused (error code FORBIDDEN) for a member whose access is limited to part of the tenant.
+    """
+    serviceAccounts(
+        """Paging."""
+        criteria: ServiceAccountSearchCriteria!
+    ): ServiceAccountSearchResults!
+    """
+    One service account of this tenant by token. A token that names no service account of
+    this tenant fails with the error code NOT_FOUND. Requires member:read.
+    """
+    serviceAccount(
+        """Token of the service account."""
+        token: String!
+    ): ServiceAccount!
+    """
+    The OAuth token endpoint service accounts obtain their tokens from, or null when this
+    instance has no OAuth issuer configured, in which case service accounts cannot obtain
+    tokens. Requires member:read.
+    """
+    serviceAccountTokenEndpoint: String
 }
 
 """
@@ -1260,6 +1384,64 @@ type Mutation {
         """The identity token of an existing account, from login or completeSso."""
         identityToken: String
     ): IdentityAuth!
+    """
+    Creates a service account in this tenant with its first client secret, which the answer
+    carries and nothing can read again. Requires member:write. Every role must grant only
+    authorities you hold (error code ESCALATION otherwise). A tenant holds at most 200
+    service accounts. Fails with CONFLICT when the token is taken.
+    """
+    createServiceAccount(
+        """The service account to create."""
+        request: ServiceAccountCreateRequest!
+    ): ServiceAccountCredentials!
+    """
+    Replaces a service account's roles and scope. Requires member:write, and you must hold
+    every authority the account holds now and every authority of the new roles (error code
+    ESCALATION otherwise). Tokens already issued keep their old access until they expire, at
+    most 5 minutes.
+    """
+    setServiceAccountAccess(
+        """Token of the service account."""
+        token: String!
+        """The roles the account will hold, replacing its current ones."""
+        roleTokens: [String!]!
+        """The account's new scope. An empty list means the whole tenant."""
+        scope: [ScopeAnchorInput!]!
+    ): ServiceAccount!
+    """
+    Enables or disables a service account. A disabled account cannot obtain tokens; tokens
+    already issued stay valid until they expire, at most 5 minutes. Requires member:write
+    and every authority the account holds.
+    """
+    setServiceAccountEnabled(
+        """Token of the service account."""
+        token: String!
+        """True to enable, false to disable."""
+        enabled: Boolean!
+    ): ServiceAccount!
+    """
+    Creates a new client secret for a service account and returns it, the only time it can
+    be read. The secret it replaces keeps working for `overlapHours` (0 to 168, default 24)
+    so the integration can switch over, then stops; any older secret still working stops at
+    once. Requires member:write and every authority the account holds.
+    """
+    rotateServiceAccountSecret(
+        """Token of the service account."""
+        token: String!
+        """Hours the previous secret keeps working: 0 to 168. Defaults to 24."""
+        overlapHours: Int
+        """Days until the new secret expires: 1 to 730. Defaults to 365."""
+        expiresInDays: Int
+    ): ServiceAccountCredentials!
+    """
+    Deletes a service account and all its secrets. Tokens already issued stay valid until
+    they expire, at most 5 minutes. Returns false when there was no such account. Requires
+    member:write and every authority the account holds.
+    """
+    deleteServiceAccount(
+        """Token of the service account."""
+        token: String!
+    ): Boolean!
 }
 
 schema {
