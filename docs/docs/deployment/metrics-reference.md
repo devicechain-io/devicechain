@@ -91,6 +91,7 @@ bus: read them with `dcctl dead-letters`.
 | `raise_alarm_dead_lettered_total` | Raise-alarm edges written to the dead-letter stream after every attempt to apply them failed, so an alarm that should have been raised or cleared is visible rather than only logged. |
 | `resolve_device_disabled_total` | Events refused because their device is [disabled](../guides/device-credentials.md#disabling-a-device). They are discarded, not dead-lettered. |
 | `resolve_event_time_bounded_total` | Reported event times refused for leading the server clock by more than the configured tolerance, and replaced with the latest time the tolerance allows. |
+| `resolve_not_gateway_child_total` | Events refused because a [gateway](./edge-services.md#gateway-identity) published for a device that is not assigned to it, that does not exist, or because the gateway is disabled. Each is recorded on the `failed-events` stream with its payload (reason `NotGatewayChild`), is not retried, and is reported to the gateway on its notices topic. It is not labelled by tenant or gateway; the log line, at most one a minute per gateway and device, names them. A rise usually means a device was never assigned to its gateway, or was assigned to another. |
 
 ## Event processing: detection {#event-processing-detect}
 

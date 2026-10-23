@@ -100,3 +100,34 @@ func TestResolvedWireMatchesTheBytesWrittenBeforeTheMove(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, failed, got)
 }
+
+// A gateway token on a resolved event adds exactly one field to the bytes the release before
+// wrote, at the END (field 19, so its tag is two bytes: 0x9a 0x01), and an event without one is
+// byte-for-byte what it was (the golden test above). The expectation is built from the existing
+// golden bytes plus the hand-encoded field, not from this writer's own output, so it cannot be
+// satisfied by a writer that is wrong in the same way twice.
+func TestGatewayTokenAppendsOneFieldAndNothingElseMoves(t *testing.T) {
+	raw, err := os.ReadFile("testdata/main_wire_golden.json")
+	require.NoError(t, err)
+	var golden map[string]map[string]string
+	require.NoError(t, json.Unmarshal(raw, &golden))
+
+	event := mainWireFixtures()["bare"]
+	event.GatewayToken = "gw1"
+	field := []byte{0x9a, 0x01, 0x03, 'g', 'w', '1'}
+
+	for formatName, format := range map[string]eventtime.WireFormat{"compact": eventtime.WireCompact, "legacy": eventtime.WireLegacy} {
+		base, err := hex.DecodeString(golden["bare"][formatName])
+		require.NoError(t, err)
+		want := append(append([]byte(nil), base...), field...)
+
+		got, err := MarshalResolvedEventAs(event, format)
+		require.NoError(t, err)
+		require.Equal(t, want, got, "%s: a gateway token must append only field 19", formatName)
+
+		decoded, err := UnmarshalResolvedEvent(want)
+		require.NoError(t, err)
+		require.Equal(t, "gw1", decoded.GatewayToken, "%s: the decoder lost the gateway token", formatName)
+		require.Equal(t, "d", decoded.SourceDeviceToken, "%s: attribution stays the child", formatName)
+	}
+}

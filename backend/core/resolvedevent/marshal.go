@@ -448,6 +448,7 @@ func UnmarshalResolvedEvent(encoded []byte) (*ResolvedEvent, error) {
 		ExternalId:           pbevent.GetExternalId(),
 		FenceSetVersion:      pbevent.GetFenceSetVersion(),
 		SourceDeviceDisabled: pbevent.GetSourceDeviceDisabled(),
+		GatewayToken:         pbevent.GetGatewayToken(),
 		OccurredTime:         occurred,
 		ProcessedTime:        processed,
 		EventType:            eventtype.EventType(pbevent.EventType),

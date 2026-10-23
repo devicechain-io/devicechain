@@ -343,6 +343,7 @@ kube-state-metrics 本身因节点失效等原因移动期间的重启，只要�
 | `devicechain_devicemanagement_resolve_workers` | Pod 解析器数量。 |
 | `devicechain_devicemanagement_resolve_inflight` | 忙碌解析器数量。持续等于 worker 数时，到达快于解析，前方排队，入站消费者待处理数增长，参见[持续落后](#consumer-backlog)。 |
 | `devicechain_devicemanagement_resolve_messages_total` | 按结果统计已解析事件。全部忙时，增长速率是 Pod 每秒解析能力。 |
+| `devicechain_devicemanagement_resolve_not_gateway_child_total` | 因网关为未分配给它的设备发布事件而被拒绝的事件数。参见[指标参考](./metrics-reference.md)和[网关身份](./edge-services.md#gateway-identity)。 |
 
 `resolve_duration_seconds` 包括等待交付结果的时间。最小桶 5 毫秒，低于它的分位数是估算，不是测量。
 

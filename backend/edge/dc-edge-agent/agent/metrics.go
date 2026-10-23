@@ -34,6 +34,11 @@ import (
 type edgeMetrics struct {
 	reg *prometheus.Registry
 
+	// refused counts events the platform refused for this gateway (a notice) plus those the
+	// agent refused to forward itself, by reason. A CounterVec because the reason is a label;
+	// the agent increments it beside its own atomic total (see Agent.refuse).
+	refused *prometheus.CounterVec
+
 	// Set on the sample tick from StreamInfo().State.
 	spoolUsedBytes        prometheus.Gauge
 	spoolLimitBytes       prometheus.Gauge
@@ -84,11 +89,25 @@ func newEdgeMetrics(a *Agent) *edgeMetrics {
 		spoolOldestAgeSeconds: gauge("spool_oldest_age_seconds", "Age in seconds of the oldest buffered event; the primary backlog signal."),
 	}
 
+	m.refused = auto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: metricsNamespace, Subsystem: metricsSubsystem, Name: "refused_total",
+		Help: "Events refused for this gateway, by reason: the platform told the gateway it would not accept an event (not_gateway_child: the device is not assigned to this gateway, or does not exist), or the agent would not forward it (gateway_self, invalid_device_token). Refused events are kept in the local dead-letter file while the agent still holds them.",
+	}, []string{"reason"})
+	// Create every series now so a scrape shows 0 rather than nothing: an absent series cannot
+	// be alerted on with rate().
+	for _, reason := range knownRefusalReasons {
+		m.refused.WithLabelValues(reason)
+	}
+
 	// Counters over the existing atomics.
 	counterFunc("received_total", "Events read from the capture spool for forwarding.", func() float64 { return float64(a.received.Load()) })
 	counterFunc("forwarded_total", "Events acknowledged by the cloud uplink.", func() float64 { return float64(a.forwarded.Load()) })
 	counterFunc("forward_errors_total", "Forward attempts that failed (event left buffered for redelivery).", func() float64 { return float64(a.forwardErrors.Load()) })
 	counterFunc("malformed_total", "Events dropped for a malformed subject (unforwardable garbage).", func() float64 { return float64(a.malformed.Load()) })
+	counterFunc("tenant_mismatched_total", "Device publishes seen for a different tenant than uplink.tenant (not spooled, not forwarded).", func() float64 { return float64(a.tenantMismatched.Load()) })
+	counterFunc("body_credentials_stripped_total", "Credential members (credentialType, credentialId, credentialSecret) removed from event bodies before forwarding.", func() float64 { return float64(a.bodyStripped.Load()) })
+	counterFunc("refused_kept_total", "Refused events whose payload was written to the local dead-letter file (refused-events.jsonl in the store directory).", func() float64 { return float64(a.refusedKept.Load()) })
+	counterFunc("refused_unmatched_total", "Refusal notices whose event was no longer held on this box (the platform's failed-events record has its payload).", func() float64 { return float64(a.refusedUnmatched.Load()) })
 	counterFunc("instance_mismatched_total", "Device publishes seen on a different instanceId than configured (not forwarded).", func() float64 { return float64(a.mismatched.Load()) })
 	// dropped_total: overflow evictions (oldest buffered events dropped to stay within
 	// spoolMaxBytes). Set on the sample tick from (FirstSeq-1)-ackedCount; monotonic and
@@ -119,6 +138,11 @@ func newEdgeMetrics(a *Agent) *edgeMetrics {
 		Namespace: metricsNamespace, Subsystem: metricsSubsystem, Name: "local_auth_enabled",
 		Help: "1 when the local MQTT listener requires a shared-secret credential, 0 when it is open (trusted-LAN).",
 	}, func() float64 { return localAuthEnabled })
+
+	auto.NewGaugeFunc(prometheus.GaugeOpts{
+		Namespace: metricsNamespace, Subsystem: metricsSubsystem, Name: "uplink_inflight",
+		Help: "Publishes started on the uplink and not yet acknowledged (bounded by the in-flight window of 64).",
+	}, func() float64 { return float64(a.inflight.Load()) })
 
 	// uplink_connected as a GaugeFunc so a scrape sees live connectivity, not a 30s-stale
 	// sample.

@@ -6,6 +6,8 @@ package config
 import (
 	"strings"
 	"testing"
+
+	"github.com/devicechain-io/dc-microservice/core"
 )
 
 // validConfig is a minimal document that passes Validate after ApplyDefaults. Each
@@ -14,9 +16,14 @@ import (
 func validConfig() Configuration {
 	return Configuration{
 		InstanceId: "prod1",
-		AgentId:    "site42",
 		Local:      LocalConfiguration{StoreDir: "/var/lib/dc-edge-agent"},
-		Uplink:     UplinkConfiguration{BrokerURL: "ssl://cloud.example.com:8883"},
+		Uplink: UplinkConfiguration{
+			BrokerURL:    "ssl://cloud.example.com:8883",
+			Tenant:       "acme",
+			GatewayToken: "site42-gw",
+			Username:     "acme:cred-1",
+			PasswordEnv:  "DC_EDGE_UPLINK_PASSWORD",
+		},
 	}
 }
 
@@ -110,8 +117,17 @@ func TestValidateRejects(t *testing.T) {
 		{"missing instanceId", func(c *Configuration) { c.InstanceId = "" }, "instanceId is required"},
 		{"bad instanceId grammar", func(c *Configuration) { c.InstanceId = "prod/1" }, "not token-safe"},
 		{"instanceId leading dash", func(c *Configuration) { c.InstanceId = "-prod" }, "not token-safe"},
-		{"missing agentId", func(c *Configuration) { c.AgentId = "" }, "agentId is required"},
-		{"bad agentId grammar", func(c *Configuration) { c.AgentId = "site/42" }, "not token-safe"},
+		{"missing tenant", func(c *Configuration) { c.Uplink.Tenant = "" }, "uplink.tenant is required"},
+		{"bad tenant grammar", func(c *Configuration) { c.Uplink.Tenant = "ac.me" }, "uplink.tenant"},
+		{"missing gatewayToken", func(c *Configuration) { c.Uplink.GatewayToken = "" }, "uplink.gatewayToken is required"},
+		{"bad gatewayToken grammar", func(c *Configuration) { c.Uplink.GatewayToken = "gw/1" }, "uplink.gatewayToken"},
+		{"missing username", func(c *Configuration) { c.Uplink.Username = "" }, "uplink.username and uplink.passwordEnv are required"},
+		{"missing passwordEnv", func(c *Configuration) { c.Uplink.PasswordEnv = "" }, "uplink.username and uplink.passwordEnv are required"},
+		// The README's old example name: it parses as no tenant at all, so the broker's callout
+		// refuses it at CONNECT. It must fail at load instead.
+		{"unprefixed username", func(c *Configuration) { c.Uplink.Username = "edge-site-42" }, "followed by the gateway credential's id"},
+		{"username of another tenant", func(c *Configuration) { c.Uplink.Username = "other:cred-1" }, "followed by the gateway credential's id"},
+		{"username with empty credential id", func(c *Configuration) { c.Uplink.Username = "acme:" }, "followed by the gateway credential's id"},
 		{"missing storeDir", func(c *Configuration) { c.Local.StoreDir = "" }, "storeDir is required"},
 		{"port out of range", func(c *Configuration) { c.Local.ListenPort = 70000 }, "out of range"},
 		{"missing brokerUrl", func(c *Configuration) { c.Uplink.BrokerURL = "" }, "brokerUrl is required"},
@@ -152,5 +168,26 @@ func TestPortDefaultIsValid(t *testing.T) {
 	c := validConfig() // ListenPort left 0
 	if err := loaded(c); err != nil {
 		t.Fatalf("defaulted port should be valid: %v", err)
+	}
+}
+
+// A config left over from the direct uplink still carries agentId. It must stop the agent,
+// and the error must name what replaced it: an operator who upgraded did nothing wrong, and a
+// bare "unknown field" does not tell them where the setting went. The control is the same
+// document without agentId, which loads, so the refusal is about the key and nothing else.
+func TestLeftoverAgentIdIsRefusedNamingItsReplacement(t *testing.T) {
+	const rest = `"instanceId":"prod1","local":{"storeDir":"/var/lib/dc-edge-agent"},` +
+		`"uplink":{"brokerUrl":"ssl://cloud.example.com:8883","tenant":"acme","gatewayToken":"site42-gw",` +
+		`"username":"acme:cred-1","passwordEnv":"DC_EDGE_UPLINK_PASSWORD"}`
+	var ok Configuration
+	if err := core.LoadConfiguration([]byte("{"+rest+"}"), &ok); err != nil {
+		t.Fatalf("the control document must load: %v", err)
+	}
+	for _, key := range []string{"agentId", "AgentID"} {
+		var cfg Configuration
+		err := core.LoadConfiguration([]byte(`{"`+key+`":"site42",`+rest+"}"), &cfg)
+		if err == nil || !strings.Contains(err.Error(), "uplink.gatewayToken") {
+			t.Errorf("leftover %s: err = %v, want a refusal naming uplink.gatewayToken", key, err)
+		}
 	}
 }

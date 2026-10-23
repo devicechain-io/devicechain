@@ -691,6 +691,7 @@ The rest wait in the stream.
 | `devicechain_devicemanagement_resolve_workers` | How many resolvers the pod runs. |
 | `devicechain_devicemanagement_resolve_inflight` | How many of them are busy. When it stays at `resolve_workers`, events are arriving faster than the pod resolves them, and they queue in front of it. The `device-management` inbound consumer's pending count then grows (see [A consumer that stays behind](#consumer-backlog)). |
 | `devicechain_devicemanagement_resolve_messages_total` | Events resolved, by result. While the resolvers are all busy, its rate is how many events the pod can resolve per second. |
+| `devicechain_devicemanagement_resolve_not_gateway_child_total` | Events refused because a gateway published for a device that is not assigned to it. See [the metrics reference](./metrics-reference.md) and [gateway identity](./edge-services.md#gateway-identity). |
 
 `resolve_duration_seconds` includes the time a resolver waits to hand its result on. Its lowest
 bucket is 5 ms, so a quantile below that is an estimate, not a measurement.

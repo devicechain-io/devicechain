@@ -272,10 +272,18 @@ type ResolvedEvent struct {
 	// disabling it promises will not happen. It is frozen into the event like
 	// ScopeMemberships, so a replay skips exactly what the live path skipped.
 	SourceDeviceDisabled bool
-	OccurredTime         time.Time
-	ProcessedTime        time.Time
-	EventType            eventtype.EventType
-	Payload              interface{}
+	// GatewayToken is the token of the gateway device the event arrived through, when it did:
+	// the broker authenticated that gateway, the subject named SourceDeviceToken as its child,
+	// and the device's gateway assignment named that gateway when the event was resolved.
+	// SourceDeviceToken remains the device that produced the event (attribution is to the
+	// child); this records who carried it, so a stored event can be traced to the gateway that
+	// vouched for it. Empty for an event that did not come through a gateway, and then absent
+	// from the wire.
+	GatewayToken  string
+	OccurredTime  time.Time
+	ProcessedTime time.Time
+	EventType     eventtype.EventType
+	Payload       interface{}
 }
 
 // GroupRef is one rule-scoped dynamic-group version an event is stamped as belonging

@@ -62,6 +62,7 @@ See [Multi-Tenancy](./multi-tenancy.md).
   of your own, where the body is how the credential travels, the password or token is sealed before the event is
   put on the platform's internal stream. On every transport, the copy of an undecodable message that is kept for
   diagnosis has its credentials removed.
+- **Gateways.** A gateway, such as the [edge agent](../deployment/edge-services.md#gateway-identity), is a device that speaks for other devices. It signs in as itself and publishes in its own namespace, and the platform accepts an event only for a device that was assigned to it. A gateway cannot publish in another gateway's or another device's subjects; one that names a device it does not front is refused, recorded and reported to it, not acknowledged and lost. **A gateway speaks for its children.** A compromised gateway can forge events only for devices assigned to it, and only until it is disabled or its credential is revoked. Its word about *which local client* sent an event is only as strong as the local authentication on its own network. Assigning a device to a gateway needs the same permission as issuing the device a credential, because it grants the same ability.
 
 ## People and programs {#api-access}
 

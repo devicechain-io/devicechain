@@ -96,6 +96,7 @@ que un cambio de estado llegó a la base de datos pero no al bus: léelos con `d
 | `raise_alarm_dead_lettered_total` | Aristas de raise-alarm escritas en el flujo de mensajes no entregados tras fallar todos los intentos de aplicarlas, de modo que una alarma que debía haberse levantado o despejado queda visible en lugar de solo registrada en el log. |
 | `resolve_device_disabled_total` | Eventos rechazados porque su dispositivo está [deshabilitado](../guides/device-credentials.md#disabling-a-device). Se descartan; no van a la cola de mensajes fallidos. |
 | `resolve_event_time_bounded_total` | Horas de evento informadas rechazadas por adelantarse al reloj del servidor más de la tolerancia configurada, y sustituidas por la última hora que permite la tolerancia. |
+| `resolve_not_gateway_child_total` | Eventos rechazados porque una [pasarela](./edge-services.md#gateway-identity) publicó por un dispositivo que no tiene asignado, que no existe, o porque la pasarela está deshabilitada. Cada uno se registra en el flujo `failed-events` con su carga (motivo `NotGatewayChild`), no se reintenta y se notifica a la pasarela en su topic de avisos. No lleva etiqueta de tenant ni de pasarela; la línea de registro, como máximo una por minuto por pasarela y dispositivo, los nombra. Un aumento suele significar que un dispositivo nunca se asignó a su pasarela, o se asignó a otra. |
 
 ## Event processing: detección {#event-processing-detect}
 
