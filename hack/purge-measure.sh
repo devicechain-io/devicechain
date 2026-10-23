@@ -70,5 +70,5 @@ REPORT="${PM_REPORT:-$PWD/purge-measure-report.json}"
 echo "==> running the measurement (pg :$PG_PORT, nats :$NATS_PORT, report $REPORT)"
 cd "$ROOT/backend/tools/migrationdiff"
 DC_IT_PGHOST=127.0.0.1 DC_IT_PGPORT="$PG_PORT" PM_NATS_URL="nats://127.0.0.1:$NATS_PORT" PM_REPORT="$REPORT" \
-  go test -tags 'integration purgemeasure' -count=1 -timeout 4h -run '^TestPurgeMeasurement$' -v .
+  go test -tags purgemeasure -count=1 -timeout 4h -run '^TestPurgeMeasurement$' -v .
 echo "==> report: $REPORT"

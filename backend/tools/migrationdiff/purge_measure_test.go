@@ -1,7 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//go:build integration && purgemeasure
+//go:build purgemeasure
 
 // MEASUREMENT 3: how long does a tenant deletion take for a LARGE tenant, per store.
 //
@@ -17,7 +17,7 @@
 // sweep that deleted nothing, or everything, is the confident wrong number this repository
 // has been burned by before (see the harness notes in tenant_purge_cost_test.go).
 //
-// Run it with hack/purge-measure.sh (go test -tags 'integration purgemeasure' -run TestPurgeMeasurement), which starts uniquely named throwaway TimescaleDB and
+// Run it with hack/purge-measure.sh (go test -tags purgemeasure -run TestPurgeMeasurement), which starts uniquely named throwaway TimescaleDB and
 // NATS containers, sets the scale, and removes only what it started.
 //
 // What it does NOT time:
