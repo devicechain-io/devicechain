@@ -62,3 +62,19 @@ test('a declaration without a reason is refused', () => {
   assert.equal(entries.length, 0);
   assert.match(problems[0], /no reason/);
 });
+
+test('a member that moved between two nested objects of one declaration is a break', () => {
+  const c = diffModels(
+    m({ '.:I': ['export interface I {', '    o: {', '        a?: string;', '    };', '    p: {', '    };', '}'] }),
+    m({ '.:I': ['export interface I {', '    o: {', '    };', '    p: {', '        a?: string;', '    };', '}'] }),
+  );
+  assert.deepEqual(c.map((x) => [x.kind, x.level, x.detail]), [['export-changed', 'breaking', '- a?: string;']]);
+});
+
+test('a reordered member of a nested object is not a change', () => {
+  const c = diffModels(
+    m({ '.:I': ['export interface I {', '    o: {', '        a?: string;', '        b?: number;', '    };', '}'] }),
+    m({ '.:I': ['export interface I {', '    o: {', '        b?: number;', '        a?: string;', '    };', '}'] }),
+  );
+  assert.deepEqual(c, []);
+});

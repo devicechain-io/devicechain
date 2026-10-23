@@ -20,15 +20,32 @@ const REQUIRED_MEMBER = /^\s{4}(?:readonly\s+)?(?:[A-Za-z_$][\w$]*|'[^']*'|"[^"]
 // list gains a comma the moment another is appended after it, which is not a change to it.
 const stem = (l) => l.replace(/[;,]\s*$/, '');
 
-/** Multiset difference a \ b, as an array (order of a kept). */
+/**
+ * Each line with the lines that open the blocks it sits in, by indentation: the key a line is
+ * compared by. Without it a member that MOVED from one nested object to another of the same
+ * declaration (`o: { a?: string }` -> `p: { a?: string }`) leaves the multiset of lines equal,
+ * and a break reads as no change at all.
+ */
+function keyed(lines) {
+  const open = []; // { indent, key } of each enclosing block opener
+  return lines.map((l) => {
+    const indent = /^\s*/.exec(l)[0].length;
+    while (open.length > 0 && open[open.length - 1].indent >= indent) open.pop();
+    const key = [...open.map((o) => o.key), stem(l).trim()].join('\n');
+    if (/[{([<]\s*$/.test(l)) open.push({ indent, key });
+    return { line: l, key };
+  });
+}
+
+/** Multiset difference a \ b, as an array of a's lines (order of a kept). */
 function minus(a, b) {
   const counts = new Map();
-  for (const l of b) counts.set(stem(l), (counts.get(stem(l)) ?? 0) + 1);
+  for (const { key } of keyed(b)) counts.set(key, (counts.get(key) ?? 0) + 1);
   const out = [];
-  for (const l of a) {
-    const n = counts.get(stem(l)) ?? 0;
-    if (n > 0) counts.set(stem(l), n - 1);
-    else out.push(l);
+  for (const { line, key } of keyed(a)) {
+    const n = counts.get(key) ?? 0;
+    if (n > 0) counts.set(key, n - 1);
+    else out.push(line);
   }
   return out;
 }
