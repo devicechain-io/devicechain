@@ -215,6 +215,38 @@ Su contrapeso, `TenantPurgeVisibilityLost`, se dispara cuando esas cifras dejan 
 completo. Sin él, un servicio user-management que no se estuviera consultando se vería exactamente
 igual que uno sin ninguna eliminación abierta.
 
+### Qué sistema de almacenamiento retiene una eliminación {#blocked-store}
+
+`TenantPurgeStalled` dice que una eliminación está atascada; estas series dicen dónde. El servicio
+user-management las exporta sin etiqueta de inquilino, porque una serie con el nombre de un inquilino
+sobreviviría al borrado que describe:
+
+- `devicechain_usermanagement_tenant_purge_store_blocked{store,reason}`: número de eliminaciones
+  abiertas que cada sistema de almacenamiento retiene en este momento. `store` es `rdb` (datos
+  relacionales), `tsdb` (telemetría), `broker` (flujos), `kv` (buckets clave-valor), `detect` (estado
+  de detección), `blob` (almacenamiento de objetos) u `other`. `reason` es `deferred` (el almacén
+  respondió que aún hay datos o que siguen llegando) o `error` (no se pudo consultar al almacén). Se
+  exportan todos los pares y valen 0 cuando nada está bloqueado.
+- `devicechain_usermanagement_tenant_purge_store_rows_erased_total{store}`: filas, objetos, mensajes
+  o claves que ha borrado cada almacén. Un almacén bloqueado cuyo contador sigue subiendo está
+  procesando un inquilino grande; si el contador está plano, no avanza.
+- `devicechain_usermanagement_tenant_purge_store_erase_duration_seconds{store}`: lo que tardó cada
+  llamada de borrado, que muestra a qué almacén se va el tiempo.
+- `devicechain_usermanagement_tenant_purge_completed_total`, `tenant_purge_failures_total`,
+  `tenant_purge_duration_seconds` y `tenant_purge_clean_duration_seconds`: eliminaciones completadas;
+  veces que el coordinador no pudo llevar una eliminación a término en una pasada (reintenta en la
+  siguiente); el tiempo desde la eliminación hasta la liberación del identificador; y el tiempo hasta
+  que el último almacén informó de que estaba limpio. La última excluye las esperas de asentamiento y
+  de retención del identificador, así que mide el borrado en sí.
+
+Tres alertas las usan. `TenantPurgeStoreFailing` se dispara cuando un almacén lleva una hora
+devolviendo un error. `TenantPurgeStoreHolding` se dispara cuando un almacén ha informado de datos
+aún presentes durante tanto tiempo como la retención del identificador.
+`TenantPurgeCoordinatorFailing` se dispara cuando el propio coordinador no consigue llevar una
+eliminación a término en una pasada. Las dos primeras llevan el almacén en su etiqueta `store`; la
+línea de registro «Tenant purge store did not report clean» y la consulta `tenantDeletions` indican
+el motivo.
+
 ## Configuración {#configuration}
 
 Estos ajustes residen bajo `tenantPurge` en el servicio user-management. En los tres, `0` significa

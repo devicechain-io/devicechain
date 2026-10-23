@@ -1,7 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//go:build integration
+//go:build integration || purgemeasure
 
 // The tenant purge, driven against the schema an instance actually has (ADR-077).
 //
