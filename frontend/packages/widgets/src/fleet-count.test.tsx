@@ -86,7 +86,7 @@ function show(state: FleetState | undefined, options: Record<string, unknown> = 
     figure: container.querySelector('[data-level-readout]')?.textContent,
     caption: container.querySelector('[data-fleet-count-caption]')?.textContent,
     notes: [...container.querySelectorAll('[data-fleet-count-note]')].map((n) => n.textContent),
-    empty: container.querySelector('[data-level-empty]')?.textContent,
+    empty: (container.querySelector('[data-level-empty]') ?? container.querySelector('[data-empty-detail]'))?.textContent,
     figureColor: container.querySelector<HTMLElement>('[data-level-readout]')?.style.color,
   };
 }

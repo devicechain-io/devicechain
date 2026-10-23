@@ -105,3 +105,4 @@ export function LevelEmpty({ message }: { message: string }) {
     </div>
   );
 }
+

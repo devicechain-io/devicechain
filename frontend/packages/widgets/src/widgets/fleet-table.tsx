@@ -64,6 +64,7 @@ import {
 import { fleetExport } from '../export-rows';
 import { fleetStrings, type FleetStrings } from '../fleet-strings';
 import { LevelEmpty } from '../level-readout';
+import { Explained } from '../no-reading';
 
 // How often the ages are recomputed. Five seconds reads as live for "12 sec. ago" and costs a
 // page of cells one render per tick, not per second.
@@ -146,8 +147,8 @@ export function FleetTable({ widget, data }: WidgetProps) {
   if (!fleet || fleet.status === 'loading') {
     return <Frame title={title}><LevelEmpty message={strings.loading} /></Frame>;
   }
-  if (fleet.status === 'unbound') return <Frame title={title}><LevelEmpty message={strings.unbound} /></Frame>;
-  if (fleet.status === 'forbidden') return <Frame title={title}><LevelEmpty message={strings.forbidden} /></Frame>;
+  if (fleet.status === 'unbound') return <Frame title={title}><Explained kind="unbound" message={strings.unbound} /></Frame>;
+  if (fleet.status === 'forbidden') return <Frame title={title}><Explained kind="forbidden" message={strings.forbidden} /></Frame>;
   if (fleet.status === 'unsupported') return <Frame title={title}><LevelEmpty message={strings.unsupported} /></Frame>;
   if (fleet.members.length === 0) return <Frame title={title}><LevelEmpty message={strings.noMembers} /></Frame>;
   return <Table widget={widget} fleet={fleet} strings={strings} />;

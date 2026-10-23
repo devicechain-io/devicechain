@@ -775,6 +775,7 @@ export declare class DashboardHub implements WidgetDataSource, WidgetActions {
     private resolveRoster;
     private readonly declared;
     declaredMetrics(deviceType: string): Promise<readonly string[] | null>;
+    declaredMetricsForDevice(deviceToken: string): Promise<readonly string[] | null>;
     private readonly seedLimiter;
     private readonly seedReads;
     readMemberSeeds(deviceTokens: readonly string[], plan: MemberSeedPlan, onSeed: (deviceToken: string, seed: MemberSeed | null, failure?: SeedFailure) => void, cancelled?: () => boolean): Promise<void>;
@@ -894,6 +895,7 @@ export interface DeviceResolver {
         total: number;
     }>;
     declaredMetrics?(deviceType: string): Promise<string[] | null>;
+    deviceType?(deviceToken: string): Promise<string | null>;
 }
 ```
 
@@ -1981,6 +1983,7 @@ export declare class RecordedDataSource implements WidgetDataSource {
     subscribeWidget(datasource: DatasourceSelector, sink: WidgetStreamSink): () => void;
     subscribeMembers(datasource: DatasourceSelector, sink: MemberSink): () => void;
     declaredMetrics(kind: string): Promise<readonly string[] | null>;
+    declaredMetricsForDevice(deviceToken: string): Promise<readonly string[] | null>;
     readMemberSeeds(deviceTokens: readonly string[], _plan: MemberSeedPlan, onSeed: (deviceToken: string, seed: MemberSeed | null) => void): Promise<void>;
     subscribeAlarms(subscription: AlarmSubscription, sink: AlarmStreamSink): () => void;
     subscribeCommands(_subscription: CommandSubscription, sink: CommandStreamSink): () => void;
@@ -2648,6 +2651,7 @@ export interface WidgetDataSource {
     subscribeMembers?(datasource: DatasourceSelector, sink: MemberSink): () => void;
     readMemberSeeds?(deviceTokens: readonly string[], plan: MemberSeedPlan, onSeed: (deviceToken: string, seed: MemberSeed | null, failure?: SeedFailure) => void, cancelled?: () => boolean): Promise<void>;
     declaredMetrics?(deviceType: string): Promise<readonly string[] | null>;
+    declaredMetricsForDevice?(deviceToken: string): Promise<readonly string[] | null>;
     subscribePresence?(datasource: DatasourceSelector, sink: PresenceSink): () => void;
 }
 ```

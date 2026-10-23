@@ -19,7 +19,8 @@ import {
 } from '@devicechain/widget-sdk';
 
 import { emptyReason, useLevelReading, type LevelReading } from '../level-reading';
-import { LevelEmpty, LevelReadout } from '../level-readout';
+import { LevelReadout } from '../level-readout';
+import { LevelEmptyFor } from '../no-reading';
 import { readRange } from '../value-scale';
 
 // The percent scale the battery uses when the options set none, stated in its descriptor.
@@ -51,7 +52,7 @@ export function Battery({ widget, data }: WidgetProps) {
 
 function BatteryBody({ reading: r, scale: ws }: { reading: LevelReading; scale: WidgetScale }) {
   const reason = emptyReason(r);
-  if (reason !== undefined || !r.range?.ok || !r.fill) return <LevelEmpty message={reason ?? r.strings.noData} />;
+  if (reason !== undefined || !r.range?.ok || !r.fill) return <LevelEmptyFor reading={r} reason={reason} />;
   const range = r.range.range;
   const fill = r.fill;
   // The readout takes the lower share of the box; the glyph keeps the rest, scaled to fit it.

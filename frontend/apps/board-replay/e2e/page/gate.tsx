@@ -55,9 +55,11 @@ import {
   parseDashboardDefinition,
   recordedWallTimeMs,
   type DashboardDefinition,
+  type DatasourceSelector,
   type DeviceResolver,
   type EntityCandidateLister,
   type WidgetDataSource,
+  type WidgetStreamSink,
 } from '@devicechain/dashboards';
 import { hostWidgetRegistry, type WidgetRegistry } from '@devicechain/host-widgets';
 import { preloadWidgets } from '@devicechain/widgets';
@@ -112,6 +114,28 @@ const syntheticLister: EntityCandidateLister = async (kind) => [
   { token: `gate-${kind}-02`, name: `Gate ${kind} 02` },
 ];
 
+// THE EXPLAINED EMPTY STATES (fixture/empty-states). A source that has nothing to say, in the five ways
+// a widget can have nothing: a device whose profile does not declare the measurement
+// (gate-fuelless), one that declares it and is quiet (gate-quiet), one whose only reading is from
+// before the window (gate-old, which also gives the last-value hint), a refusal (gate-forbidden)
+// and a failure (gate-broken). An unbound slot needs no source at all.
+class EmptyStatesSource extends SyntheticDataSource {
+  override subscribeWidget(datasource: DatasourceSelector, sink: WidgetStreamSink): () => void {
+    const token = datasource.kind === 'device' ? datasource.deviceToken : '';
+    if (token === 'gate-forbidden') sink.error?.([{ message: 'forbidden: missing required authority', extensions: { code: 'FORBIDDEN' } }]);
+    else if (token === 'gate-broken') sink.error?.(new Error('socket closed'));
+    else if (token === 'gate-old') {
+      const at = new Date(SYNTHETIC_NOW - 3 * 86_400_000).toISOString();
+      sink.next({ id: 'old', deviceToken: token, eventType: 0, occurredTime: at, name: 'temperature', value: 21.4, classifier: null });
+    }
+    return () => {};
+  }
+
+  async declaredMetricsForDevice(deviceToken: string): Promise<readonly string[] | null> {
+    return deviceToken === 'gate-fuelless' ? ['temperature'] : ['temperature', 'fuel_level'];
+  }
+}
+
 interface Prepared {
   definition: DashboardDefinition;
   registry: WidgetRegistry;
@@ -132,6 +156,9 @@ async function prepare(boardParam: string | null, recordingParam: string | null)
   if (recordingParam && !recordingLoader) throw new Error(`no recording '${recordingParam}' for ${boardParam}`);
   if (!recordingLoader) {
     Date.now = () => SYNTHETIC_NOW;
+    if (boardParam === 'fixture/empty-states') {
+      return { definition, registry, source: new EmptyStatesSource(), resolver: syntheticResolver, lister: syntheticLister };
+    }
     return {
       definition,
       registry,

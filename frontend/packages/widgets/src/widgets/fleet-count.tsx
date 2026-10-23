@@ -41,6 +41,7 @@ import {
 import { attentionCount } from '../fleet-count-model';
 import { fleetStrings } from '../fleet-strings';
 import { LevelEmpty, LevelReadout } from '../level-readout';
+import { Explained } from '../no-reading';
 
 // The room the caption lines need, before the density scale.
 const CAPTION_ROOM_PX = 22;
@@ -54,14 +55,14 @@ export function FleetCount({ widget, data }: WidgetProps) {
   const thresholds = useMemo(() => optThresholds(widget.options, 'thresholds'), [widget.options]);
   const title = optString(widget.options, 'title');
 
-  const empty = (message: string) => (
+  const empty = (message: string, kind?: 'unbound' | 'forbidden') => (
     <WidgetFrame title={title}>
-      <LevelEmpty message={message} />
+      {kind ? <Explained kind={kind} message={message} /> : <LevelEmpty message={message} />}
     </WidgetFrame>
   );
   if (!fleet || fleet.status === 'loading') return empty(strings.loading);
-  if (fleet.status === 'unbound') return empty(strings.unbound);
-  if (fleet.status === 'forbidden') return empty(strings.forbidden);
+  if (fleet.status === 'unbound') return empty(strings.unbound, 'unbound');
+  if (fleet.status === 'forbidden') return empty(strings.forbidden, 'forbidden');
   if (fleet.status === 'unsupported') return empty(strings.unsupported);
   if (!showDevices) {
     if (measurement === undefined) return empty(strings.noMeasurementCount);

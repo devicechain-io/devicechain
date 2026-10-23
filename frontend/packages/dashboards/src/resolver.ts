@@ -104,6 +104,7 @@ export function createDeviceResolver(): DeviceResolver {
   // dashboard bind the same device, and a device's existence is stable for a viewing
   // session (a delete mid-session is rare and the next mount re-checks).
   const existsCache = new Map<string, Promise<boolean>>();
+  const typeCache = new Map<string, Promise<string | null>>();
 
   // The device types asked for declarations in the current tick, and who is waiting on each.
   type DeclaredWaiter = { resolve: (names: string[] | null) => void; reject: (err: unknown) => void };
@@ -203,6 +204,22 @@ export function createDeviceResolver(): DeviceResolver {
         waiting.push({ resolve, reject });
         batch.set(deviceType, waiting);
       });
+    },
+
+    // The device type's token, from the same names read the roster uses. A failed read rejects (the
+    // caller treats that as unknown) and is not cached.
+    deviceType(deviceToken: string): Promise<string | null> {
+      let pending = typeCache.get(deviceToken);
+      if (!pending) {
+        pending = gql('device-management', DEVICE_NAMES, { tokens: [deviceToken] })
+          .then((r: DeviceNamesResult) => r.devicesByToken.find((d) => d.token === deviceToken)?.deviceType?.token ?? null)
+          .catch((err) => {
+            typeCache.delete(deviceToken);
+            throw err;
+          });
+        typeCache.set(deviceToken, pending);
+      }
+      return pending;
     },
 
     // deviceExists caches only a POSITIVE result (a live device is stable for the

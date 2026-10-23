@@ -27,6 +27,7 @@ import {
   optNumber,
   optString,
   optThresholds,
+  pickSample,
   spaceVar,
   useSeverityColors,
   WidgetFrame,
@@ -38,6 +39,7 @@ import {
 import { parseStat, statReading, type StatReading } from '../aggregate-reading';
 import { aggregateStrings } from '../aggregate-strings';
 import { LevelEmpty, LevelReadout } from '../level-readout';
+import { NoReading } from '../no-reading';
 import { Sparkline, trendPoints } from '../sparkline';
 
 // The room the caption under the figure needs, before the density scale.
@@ -66,6 +68,23 @@ export function StatCard({ widget, data }: WidgetProps<AggregateStreamState>) {
     <WidgetFrame title={title} sampleTime={stat === 'last' ? (reading.kind === 'value' ? reading.time ?? null : null) : undefined}>
       {({ size, scale }) => {
         if (reading.kind === 'empty') {
+          // Loading, unsupported and failed say what the source is doing; the rest is the absence of a
+          // reading, explained once for every widget (NoReading).
+          if (reading.reason === 'unbound' || reading.reason === 'noData' || reading.reason === 'noReadings') {
+            return (
+              <NoReading
+                unbound={reading.reason === 'unbound'}
+                measurement={reading.name}
+                lastSample={pickSample(data.latest, reading.name)}
+                unit={unit}
+                precision={precision}
+                detail={reading.reason === 'noReadings' ? emptyMessage(reading, strings) : undefined}
+                // "No readings in the span" is the answer of a read that landed; "no data" for the
+                // latest reading may be a board still loading, so it waits a moment first.
+                waitMs={reading.reason === 'noReadings' ? 0 : undefined}
+              />
+            );
+          }
           return <LevelEmpty message={emptyMessage(reading, strings)} />;
         }
         // A count is a number of readings: it has no unit, and no decimals.

@@ -5,10 +5,11 @@
 // it has none. The feed that produces the data is covered in aggregate-feed.test.tsx.
 
 import type { AggregateResult, AggregateStreamState, MeasurementSample, WidgetInstance } from '@devicechain/dashboards';
-import { cleanup, render } from '@testing-library/react';
+import { act, cleanup, render } from '@testing-library/react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { aggregateStrings } from './aggregate-strings';
+import { SETTLE_MS } from './no-reading';
 import { StatCard } from './widgets/stat-card';
 
 afterEach(() => {
@@ -73,7 +74,8 @@ function show(options: Record<string, unknown>, state: AggregateStreamState) {
   return {
     figure: container.querySelector('[data-level-readout]')?.textContent,
     caption: container.querySelector('[data-stat-caption]')?.textContent,
-    empty: container.querySelector('[data-level-empty]')?.textContent,
+    empty: (container.querySelector('[data-level-empty]') ?? container.querySelector('[data-empty-detail]'))?.textContent,
+    kind: container.querySelector('[data-empty-state]')?.getAttribute('data-empty-state'),
     card: container.querySelector<HTMLElement>('[data-stat]'),
     text: container.textContent ?? '',
   };
@@ -224,13 +226,13 @@ describe('the stat card when there is no figure', () => {
     const w = { ...widget({ stat: 'count' }), datasource: { kind: 'unbound', measurements: ['temperature'] } } as unknown as WidgetInstance;
     const { container } = render(<StatCard widget={w} data={data(ready({ byName: {} }))} />);
     expect(container.querySelector('[data-level-readout]')).toBeNull();
-    expect(container.querySelector('[data-level-empty]')?.textContent).toBe('Choose a device for this widget');
+    expect(container.querySelector('[data-empty-state="unbound"] [data-empty-title]')?.textContent).toBe('No device chosen');
   });
 
   it('shows no count until the read lands, and none for a card that names no measurement', () => {
     expect(show({ stat: 'count' }, data({ status: 'loading' })).empty).toBe('Loading');
     const { container } = render(<StatCard widget={widget({ stat: 'count' }, [])} data={data(ready({ byName: {} }))} />);
-    expect(container.querySelector('[data-level-empty]')?.textContent).toBe('No readings in the last 1h');
+    expect(container.querySelector('[data-empty-detail]')?.textContent).toBe('No readings in the last 1h');
     expect(container.querySelector('[data-level-readout]')).toBeNull();
   });
 
@@ -242,9 +244,21 @@ describe('the stat card when there is no figure', () => {
     expect(max.container.querySelector('[data-widget-freshness]')).toBeNull();
   });
 
-  it('shows the latest reading as no data until one arrives', () => {
-    expect(show({ stat: 'last' }, data(ready())).empty).toBe(S.noData);
-    expect(show({ stat: 'last' }, data(ready(), { temperature: sample(null) })).empty).toBe(S.noData);
+  it('shows the latest reading as no data until one arrives, after the moment a loading board has none', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const { container } = render(<StatCard widget={widget({ stat: 'last' })} data={data(ready())} />);
+      const kind = () => container.querySelector('[data-empty-state]')?.getAttribute('data-empty-state');
+      expect(kind()).toBeUndefined();
+      act(() => void vi.advanceTimersByTime(SETTLE_MS));
+      expect(kind()).toBe('no-data');
+      cleanup();
+      const nulled = render(<StatCard widget={widget({ stat: 'last' })} data={data(ready(), { temperature: sample(null) })} />);
+      act(() => void vi.advanceTimersByTime(SETTLE_MS));
+      expect(nulled.container.querySelector('[data-empty-state]')?.getAttribute('data-empty-state')).toBe('no-data');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('refuses a latest reading older than the span, instead of presenting it as the span latest', () => {
@@ -252,6 +266,14 @@ describe('the stat card when there is no figure', () => {
     const r = show({ stat: 'last' }, data(ready(), { temperature: old }));
     expect(r.empty).toBe('No readings in the last 1h');
     expect(r.figure).toBeUndefined();
+  });
+
+  it('offers the last reading known outside the span as a hint, not as the figure', () => {
+    const old = sample(22.5, '2026-10-14T09:00:00Z');
+    const { container } = render(<StatCard widget={widget({ stat: 'last', unit: 'C' })} data={data(ready(), { temperature: old })} />);
+    expect(container.querySelector('[data-empty-state="no-data"]')).not.toBeNull();
+    expect(container.querySelector('[data-empty-hint]')?.textContent).toMatch(/^Last value 22\.5 C · /);
+    expect(container.querySelector('[data-level-readout]')).toBeNull();
   });
 
   it('still shows the latest reading when the source cannot compute aggregates', () => {
