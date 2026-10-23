@@ -380,6 +380,7 @@ func TestAGlobalSprayDoesNotStopARunningIntegration(t *testing.T) {
 	}
 	rec := e.postFrom(t, "192.0.2.200:1000", form, id, secret)
 	require.Equal(t, http.StatusTooManyRequests, rec.Code, "the global bucket was never exhausted, so this test proves nothing: %s", rec.Body.String())
+	require.Equal(t, "1", rec.Header().Get("Retry-After"), "a sub-second refill must round up, not drop the header")
 
 	rec = e.postFrom(t, integration, form, id, secret)
 	require.Equal(t, http.StatusOK, rec.Code, "a stranger's spray held a running integration at the global limit: %s", rec.Body.String())

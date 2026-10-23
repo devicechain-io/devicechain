@@ -133,10 +133,16 @@ func (t *trustedSources) mark(key string, now time.Time) {
 	t.seen[key] = now
 }
 
-// errSlowDown is the rate-limit refusal: HTTP 429 with a Retry-After.
+// errSlowDown is the rate-limit refusal: HTTP 429 with a Retry-After of at least one
+// second (the header counts whole seconds, so a sub-second refill rounds up rather than
+// down to no header at all).
 func errSlowDown(retryAfter time.Duration) *oauthError {
+	secs := int((retryAfter + time.Second - 1) / time.Second)
+	if secs < 1 {
+		secs = 1
+	}
 	return &oauthError{Code: "slow_down", Desc: "too many token requests; retry later",
-		Status: http.StatusTooManyRequests, RetryAfter: int(retryAfter.Seconds())}
+		Status: http.StatusTooManyRequests, RetryAfter: secs}
 }
 
 // maxResourceLen bounds a resource indicator.
