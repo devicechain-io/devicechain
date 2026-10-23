@@ -30,7 +30,7 @@ The rules that protect delegated administration apply here too:
 
 - You can give an account only roles whose authorities you hold yourself.
 - You can change, rotate, disable or delete an account only if you hold every authority it holds.
-  Otherwise the console answers that you cannot give an authority you do not hold.
+  Otherwise the console refuses the change and says so.
 - An account cannot administer the tenant: it cannot manage members, roles or other service
   accounts, whatever its roles say.
 
@@ -61,12 +61,23 @@ and when the next one expires.
 
 ## Obtaining a token {#obtaining-a-token}
 
-The integration requests a token with the OAuth `client_credentials` grant, authenticating with
-HTTP Basic (or with `client_id` and `client_secret` form fields):
+The integration requests a token with the OAuth `client_credentials` grant at the token endpoint
+the console shows (the instance's issuer URL followed by `/oauth/token`). It authenticates with
+HTTP Basic:
 
 ```bash
 curl -s -u "$CLIENT_ID:$CLIENT_SECRET" \
   -d grant_type=client_credentials \
+  https://dc.example.com/api/user-management/oauth/token
+```
+
+or, for a client that cannot set an `Authorization` header, with the credentials as form fields:
+
+```bash
+curl -s \
+  -d grant_type=client_credentials \
+  --data-urlencode "client_id=$CLIENT_ID" \
+  --data-urlencode "client_secret=$CLIENT_SECRET" \
   https://dc.example.com/api/user-management/oauth/token
 ```
 
@@ -88,9 +99,10 @@ What to know about the token:
 - Two optional form fields narrow it. `scope` caps the token to an OAuth scope's ceiling (for
   example `read-only`). `resource` binds it to one resource server by its address (an absolute
   `https` URI): the MCP server, for instance, accepts only a token bound to its own address.
-- The token endpoint is rate limited. A client that asks too often is answered `429` with a
-  `Retry-After` header; reuse a token until it is about to expire rather than asking for one per
-  call.
+- The token endpoint is rate limited. Each account can obtain about one token every 30 seconds,
+  after a burst of 10, and each source address can make about one attempt every 3 seconds, after a
+  burst of 20. A client that asks too often is answered `429` (`slow_down`) with a `Retry-After`
+  header in seconds. Reuse a token until it is about to expire rather than asking for one per call.
 
 Every failed attempt — an unknown client ID, a wrong or expired secret, a disabled account —
 gets the same answer, `401 invalid_client`, so a caller cannot tell which it was. An account of a
@@ -110,7 +122,7 @@ secret immediately, which is what to do when a secret has leaked.
 
 ## Disabling and deleting {#disabling-and-deleting}
 
-**Disable** stops the account obtaining new tokens; **Enable** lets it again. **Delete** removes
+**Disable** stops the account obtaining new tokens, after you confirm; **Enable** lets it again. **Delete** removes
 the account and all its secrets. Its token can be reused for a new account, which gets a new client
 ID, so an old secret never works for it.
 

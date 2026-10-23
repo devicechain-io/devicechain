@@ -1,9 +1,9 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AlertTriangle, MoreHorizontal, Plus } from 'lucide-react';
+import { AlertTriangle, Check, Copy, MoreHorizontal, Plus } from 'lucide-react';
 import { PageShell } from '@/components/ui/page-shell';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -13,7 +13,6 @@ import { FormField } from '@/components/ui/form-field';
 import { MultiSelect } from '@/components/ui/multi-select';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { ErrorBanner } from '@/components/ui/error-banner';
-import { CopyToken } from '@/components/ui/copy-token';
 import { LoadingState } from '@/components/ui/loading-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -40,6 +39,7 @@ import {
 import { FormDrawer } from '@/components/registry';
 import { useAuth } from '@/auth/AuthProvider';
 import { useQuery } from '@/lib/hooks/use-query';
+import { isScoped } from '@devicechain/client';
 import { mayWrite } from '@/lib/scope';
 import { formatTime } from '@/lib/utils';
 import { useReload } from '@/routes/common';
@@ -65,6 +65,15 @@ const CUSTOMER_PAGE = { pageNumber: 1, pageSize: 1000 };
 /** The server's bounds on a rotation's overlap (hours) and a secret's lifetime (days). */
 export const MAX_OVERLAP_HOURS = 168;
 export const DEFAULT_OVERLAP_HOURS = 24;
+// The credential fields, which the copy fallback selects.
+const SECRET_INPUT_ID = 'sa-client-secret';
+const CLIENT_ID_INPUT_ID = 'sa-client-id';
+/**
+ * ESCALATION on this page means either half of the server's rule — the roles given carry an
+ * authority the caller lacks, or the account already holds one — so it gets its own copy
+ * rather than the members' "you cannot give…", which is wrong for a rotate or a delete.
+ */
+const SA_ERRORS = { ESCALATION: 'members:saErrorEscalation' };
 
 type Sheet =
   | { kind: 'create' }
@@ -82,7 +91,7 @@ export default function ServiceAccountsPage() {
   const canWrite = mayWrite(claims, 'member:write');
   const [pageNumber, setPageNumber] = useState(1);
   const [version, reload] = useReload();
-  const { data, loading, error } = useQuery(
+  const { data, current, loading, error } = useQuery(
     () => listServiceAccounts({ pageNumber, pageSize: PAGE_SIZE }),
     [pageNumber, version],
   );
@@ -152,7 +161,9 @@ export default function ServiceAccountsPage() {
         {loading && !data ? (
           <LoadingState description={t('saLoading')} />
         ) : error ? (
-          <ErrorState description={error} />
+          // A member limited to part of the tenant is refused by the server; the sidebar already
+          // hides the page from them, so this is a typed URL, and it gets words, not the raw refusal.
+          <ErrorState description={isScoped(claims) ? t('saScopedRefused') : error} />
         ) : accounts.length === 0 ? (
           <EmptyState description={t('saEmpty')} />
         ) : (
@@ -207,6 +218,9 @@ export default function ServiceAccountsPage() {
                       <DataTableCell className="text-right">
                         <AccountActions
                           account={a}
+                          // A row's actions act on it (enable/disable flips what it shows), so they
+                          // wait for the answer to the current read rather than a sticky one.
+                          disabled={!current}
                           onEdit={() => setSheet(editSheet(a))}
                           onRotate={() => setSheet(rotateSheet(a))}
                           onChanged={reload}
@@ -254,8 +268,10 @@ function AccountActions({
   onEdit,
   onRotate,
   onChanged,
+  disabled,
 }: {
   account: ServiceAccount;
+  disabled: boolean;
   onEdit: () => void;
   onRotate: () => void;
   onChanged: () => void;
@@ -269,8 +285,25 @@ function AccountActions({
       toast(done);
       onChanged();
     } catch (err) {
-      toast(memberErrorMessage(err, t), 'error');
+      toast(memberErrorMessage(err, t, SA_ERRORS), 'error');
     }
+  };
+  // Disabling stops a running integration at its next token, so it asks first; enabling does not.
+  const toggle = async () => {
+    if (
+      account.enabled &&
+      !(await confirm({
+        title: t('saDisableTitle'),
+        description: t('saDisableConfirm', { token: account.token }),
+        confirmLabel: t('disableMember'),
+        destructive: true,
+      }))
+    )
+      return;
+    await run(
+      () => setServiceAccountEnabled(account.token, !account.enabled),
+      t(account.enabled ? 'saDisabledToast' : 'saEnabledToast', { token: account.token }),
+    );
   };
   const remove = async () => {
     if (
@@ -287,21 +320,14 @@ function AccountActions({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <IconButton label={t('actionsFor', { email: account.token })} size="sm">
+        <IconButton label={t('actionsFor', { email: account.token })} size="sm" disabled={disabled}>
           <MoreHorizontal size={16} />
         </IconButton>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
         <DropdownMenuItem onClick={onEdit}>{t('editAccess')}</DropdownMenuItem>
         <DropdownMenuItem onClick={onRotate}>{t('saRotate')}</DropdownMenuItem>
-        <DropdownMenuItem
-          onClick={() =>
-            void run(
-              () => setServiceAccountEnabled(account.token, !account.enabled),
-              t(account.enabled ? 'saDisabledToast' : 'saEnabledToast', { token: account.token }),
-            )
-          }
-        >
+        <DropdownMenuItem onClick={() => void toggle()}>
           {account.enabled ? t('disableMember') : t('enableMember')}
         </DropdownMenuItem>
         <DropdownMenuSeparator />
@@ -386,7 +412,9 @@ export function AccountForm({
         onIssued?.(res);
       }
     } catch (err) {
-      setFormError(memberErrorMessage(err, t, { CONFLICT: 'members:saErrorTokenTaken', NOT_FOUND: 'members:errorUnknownRoleOrScope' }));
+      setFormError(
+        memberErrorMessage(err, t, { ...SA_ERRORS, CONFLICT: 'members:saErrorTokenTaken', NOT_FOUND: 'members:errorUnknownRoleOrScope' }),
+      );
     } finally {
       setBusy(false);
     }
@@ -478,7 +506,7 @@ function RotateForm({ account, onIssued }: { account: ServiceAccount; onIssued: 
     try {
       onIssued(await rotateServiceAccountSecret(account.token, hours));
     } catch (err) {
-      setFormError(memberErrorMessage(err, t));
+      setFormError(memberErrorMessage(err, t, SA_ERRORS));
     } finally {
       setBusy(false);
     }
@@ -506,22 +534,22 @@ export function SecretIssued({ credentials, onDone }: { credentials: ServiceAcco
   const { t } = useTranslation('members');
   return (
     <div className="space-y-4" data-shot="service-account-secret">
-      <FormField label={t('saClientIdLabel')} htmlFor="sa-client-id">
+      <FormField label={t('saClientIdLabel')} htmlFor={CLIENT_ID_INPUT_ID}>
         <div className="flex items-center gap-2">
-          <Input id="sa-client-id" readOnly value={credentials.clientId} className="font-mono text-xs" />
-          <CopyToken value={credentials.clientId} display="" />
+          <Input id={CLIENT_ID_INPUT_ID} readOnly value={credentials.clientId} className="font-mono text-xs" />
+          <CopyField value={credentials.clientId} inputId={CLIENT_ID_INPUT_ID} label={t('saCopyClientId')} />
         </div>
       </FormField>
-      <FormField label={t('saClientSecretLabel')} htmlFor="sa-client-secret">
+      <FormField label={t('saClientSecretLabel')} htmlFor={SECRET_INPUT_ID}>
         <div className="flex items-center gap-2">
           <Input
-            id="sa-client-secret"
+            id={SECRET_INPUT_ID}
             readOnly
             value={credentials.clientSecret}
             className="font-mono text-xs"
             onFocus={(e) => e.currentTarget.select()}
           />
-          <CopyToken value={credentials.clientSecret} display="" />
+          <CopyField value={credentials.clientSecret} inputId={SECRET_INPUT_ID} label={t('saCopySecret')} />
         </div>
       </FormField>
       {credentials.tokenEndpoint && (
@@ -535,6 +563,51 @@ export function SecretIssued({ credentials, onDone }: { credentials: ServiceAcco
       </p>
       <Button onClick={onDone}>{t('done')}</Button>
     </div>
+  );
+}
+
+/**
+ * Copies a credential field. Unlike CopyToken it never puts the value in a title or aria-label, and
+ * where the async clipboard is missing (an http:// origin) it falls back to copying the
+ * selected field; failing that it leaves the field selected and says to copy it by hand.
+ */
+function CopyField({ value, inputId, label }: { value: string; inputId: string; label: string }) {
+  const { t } = useTranslation('members');
+  const { toast } = useToast();
+  const [copied, setCopied] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const copy = async () => {
+    let ok = false;
+    try {
+      if (navigator.clipboard) {
+        await navigator.clipboard.writeText(value);
+        ok = true;
+      }
+    } catch {
+      ok = false;
+    }
+    if (!ok) {
+      const input = document.getElementById(inputId) as HTMLInputElement | null;
+      input?.focus();
+      input?.select();
+      try {
+        ok = typeof document.execCommand === 'function' && document.execCommand('copy');
+      } catch {
+        ok = false;
+      }
+    }
+    if (ok) {
+      setCopied(true);
+      clearTimeout(timer.current);
+      timer.current = setTimeout(() => setCopied(false), 1500);
+    } else {
+      toast(t('saCopyManually'), 'error');
+    }
+  };
+  return (
+    <IconButton label={label} size="sm" onClick={() => void copy()}>
+      {copied ? <Check size={14} className="text-emerald-500" /> : <Copy size={14} />}
+    </IconButton>
   );
 }
 

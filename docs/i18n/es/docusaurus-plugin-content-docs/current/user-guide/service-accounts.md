@@ -32,7 +32,7 @@ Las reglas que protegen la administración delegada también se aplican aquí:
 
 - Solo puedes dar a una cuenta roles cuyas autoridades tengas tú.
 - Solo puedes cambiar, rotar, deshabilitar o eliminar una cuenta si tienes todas las autoridades
-  que ella tiene. Si no, la consola responde que no puedes dar una autoridad que no tienes.
+  que ella tiene. Si no, la consola rechaza el cambio y lo indica.
 - Una cuenta no puede administrar el inquilino: no puede gestionar miembros, roles ni otras
   cuentas de servicio, digan lo que digan sus roles.
 
@@ -63,12 +63,24 @@ cosa a la API (de 1 a 730 días). La columna **Secretos** muestra cuántos secre
 
 ## Obtener un token {#obtaining-a-token}
 
-La integración solicita un token con la concesión OAuth `client_credentials` y se autentica con
-HTTP Basic (o con los campos de formulario `client_id` y `client_secret`):
+La integración solicita un token con la concesión OAuth `client_credentials` en el endpoint de
+tokens que muestra la consola (la URL del emisor de la instancia seguida de `/oauth/token`). Se
+autentica con HTTP Basic:
 
 ```bash
 curl -s -u "$CLIENT_ID:$CLIENT_SECRET" \
   -d grant_type=client_credentials \
+  https://dc.example.com/api/user-management/oauth/token
+```
+
+o, para un cliente que no puede poner una cabecera `Authorization`, con las credenciales como
+campos de formulario:
+
+```bash
+curl -s \
+  -d grant_type=client_credentials \
+  --data-urlencode "client_id=$CLIENT_ID" \
+  --data-urlencode "client_secret=$CLIENT_SECRET" \
   https://dc.example.com/api/user-management/oauth/token
 ```
 
@@ -92,9 +104,11 @@ Lo que conviene saber del token:
   OAuth (por ejemplo, `read-only`). `resource` lo vincula a un servidor de recursos por su
   dirección (un URI `https` absoluto): el servidor MCP, por ejemplo, solo acepta un token
   vinculado a su propia dirección.
-- El endpoint de tokens tiene límite de frecuencia. A un cliente que pide demasiado se le responde
-  `429` con una cabecera `Retry-After`; reutiliza un token hasta que esté a punto de caducar en
-  lugar de pedir uno por llamada.
+- El endpoint de tokens tiene límite de frecuencia. Cada cuenta puede obtener aproximadamente un
+  token cada 30 segundos, tras una ráfaga de 10, y cada dirección de origen puede hacer
+  aproximadamente un intento cada 3 segundos, tras una ráfaga de 20. A un cliente que pide
+  demasiado se le responde `429` (`slow_down`) con una cabecera `Retry-After` en segundos.
+  Reutiliza un token hasta que esté a punto de caducar en lugar de pedir uno por llamada.
 
 Todo intento fallido —un ID de cliente desconocido, un secreto incorrecto o caducado, una cuenta
 deshabilitada— recibe la misma respuesta, `401 invalid_client`, así que quien llama no puede saber
@@ -118,8 +132,8 @@ que hay que hacer cuando un secreto se ha filtrado.
 
 ## Deshabilitar y eliminar {#disabling-and-deleting}
 
-**Deshabilitar** impide que la cuenta obtenga tokens nuevos; **Habilitar** se lo vuelve a
-permitir. **Eliminar** borra la cuenta y todos sus secretos. Su token se puede reutilizar para una
+**Deshabilitar** impide que la cuenta obtenga tokens nuevos, tras confirmarlo; **Habilitar** se
+lo vuelve a permitir. **Eliminar** borra la cuenta y todos sus secretos. Su token se puede reutilizar para una
 cuenta nueva, que recibe un ID de cliente nuevo, así que un secreto antiguo nunca funciona con
 ella.
 

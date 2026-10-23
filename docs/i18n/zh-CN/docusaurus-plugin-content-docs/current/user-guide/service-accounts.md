@@ -18,7 +18,7 @@ sidebar_position: 20
 保护委派管理的规则在这里同样适用：
 
 - 你只能给账号分配那些你自己持有其全部权限的角色。
-- 只有当你持有账号所持有的全部权限时，才能修改、轮换、禁用或删除它；否则控制台会提示你不能授予自己没有的权限。
+- 只有当你持有账号所持有的全部权限时，才能修改、轮换、禁用或删除它；否则控制台会拒绝该修改并说明原因。
 - 账号不能管理租户：无论其角色如何，它都不能管理成员、角色或其他服务账号。
 
 一个租户最多可以拥有 200 个服务账号。
@@ -42,11 +42,21 @@ sidebar_position: 20
 
 ## 获取令牌 {#obtaining-a-token}
 
-集成使用 OAuth `client_credentials` 授权方式请求令牌，并通过 HTTP Basic（或 `client_id` 和 `client_secret` 表单字段）进行身份验证：
+集成在控制台显示的令牌端点（实例的签发者 URL 加上 `/oauth/token`）使用 OAuth `client_credentials` 授权方式请求令牌，并通过 HTTP Basic 进行身份验证：
 
 ```bash
 curl -s -u "$CLIENT_ID:$CLIENT_SECRET" \
   -d grant_type=client_credentials \
+  https://dc.example.com/api/user-management/oauth/token
+```
+
+如果客户端无法设置 `Authorization` 请求头，也可以把凭据作为表单字段发送：
+
+```bash
+curl -s \
+  -d grant_type=client_credentials \
+  --data-urlencode "client_id=$CLIENT_ID" \
+  --data-urlencode "client_secret=$CLIENT_SECRET" \
   https://dc.example.com/api/user-management/oauth/token
 ```
 
@@ -64,7 +74,7 @@ curl -s -X POST https://dc.example.com/api/device-management/graphql \
 - **它有效 5 分钟，并且没有刷新令牌。** 过期时请求新令牌即可；每次请求都会重新读取账号，因此你所做的修改会在集成获取下一个令牌时生效。
 - **它只指向账号所属的租户**，不会是其他租户。请求无法要求其他租户。
 - 两个可选的表单字段可以收窄它。`scope` 把令牌限制在某个 OAuth 作用域的上限之内（例如 `read-only`）。`resource` 按地址（一个绝对 `https` URI）把它绑定到一个资源服务器：例如 MCP 服务器只接受绑定到其自身地址的令牌。
-- 令牌端点有速率限制。请求过于频繁的客户端会收到 `429` 和 `Retry-After` 响应头；请在令牌即将过期前一直复用它，而不是每次调用都请求一个新令牌。
+- 令牌端点有速率限制。每个账号在突发 10 次之后，大约每 30 秒可以获取一个令牌；每个来源地址在突发 20 次之后，大约每 3 秒可以尝试一次。请求过于频繁的客户端会收到 `429`（`slow_down`）和以秒为单位的 `Retry-After` 响应头；请在令牌即将过期前一直复用它，而不是每次调用都请求一个新令牌。
 
 每一次失败的尝试（未知的客户端 ID、错误或已过期的密钥、已禁用的账号）都会得到相同的响应 `401 invalid_client`，因此调用方无法分辨是哪一种情况。属于已禁用或正在删除的租户的账号会收到 `400 invalid_grant`。
 
@@ -78,7 +88,7 @@ curl -s -X POST https://dc.example.com/api/device-management/graphql \
 
 ## 禁用与删除 {#disabling-and-deleting}
 
-**Disable**（禁用）会阻止账号获取新令牌；**Enable**（启用）则恢复。**Delete**（删除）会移除账号及其全部密钥。它的令牌标识可以被新账号重新使用，新账号会获得新的客户端 ID，因此旧密钥永远不会对它生效。
+**Disable**（禁用）在你确认后会阻止账号获取新令牌；**Enable**（启用）则恢复。**Delete**（删除）会移除账号及其全部密钥。它的令牌标识可以被新账号重新使用，新账号会获得新的客户端 ID，因此旧密钥永远不会对它生效。
 
 这两种操作都不会收回已经签发的令牌：它在过期前（最多 5 分钟）仍然有效。修改账号的角色或可见范围也是如此。
 

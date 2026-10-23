@@ -187,6 +187,13 @@
   "saEnabledToast": "{{token}} habilitada.",
   "saDisabledToast": "{{token}} deshabilitada. No puede obtener tokens nuevos; los que tiene caducan en 5 minutos como mucho.",
   "saErrorTokenTaken": "Ya existe una cuenta de servicio con este token.",
+  "saScopedRefused": "Las cuentas de servicio las gestionan los administradores de todo el inquilino. Tu acceso está limitado a una parte.",
+  "saErrorEscalation": "Una cuenta de servicio solo puede tener autoridades que tengas tú, y solo puedes cambiarla, rotar su secreto, deshabilitarla o eliminarla si tienes todas las autoridades que tiene.",
+  "saDisableTitle": "Deshabilitar cuenta de servicio",
+  "saDisableConfirm": "¿Deshabilitar {{token}}? La integración que la usa no podrá obtener tokens nuevos; los que ya tiene caducan en 5 minutos como máximo.",
+  "saCopyClientId": "Copiar ID de cliente",
+  "saCopySecret": "Copiar secreto de cliente",
+  "saCopyManually": "No se pudo copiar automáticamente. El secreto está seleccionado: cópialo con el teclado.",
   "saUsingTitle": "Obtener un token",
   "saUsingDescription": "Una integración intercambia su ID de cliente y su secreto por un token de acceso con la concesión OAuth client_credentials y lo envía como token Bearer. Los tokens duran 5 minutos; solicita uno nuevo cuando caduque.",
   "saNoTokenEndpoint": "Esta instancia no tiene configurado un emisor OAuth, así que las cuentas de servicio aún no pueden obtener tokens. Pide a tu operador que configure uno."
