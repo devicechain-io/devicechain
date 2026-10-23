@@ -9,8 +9,10 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 
 	nats "github.com/nats-io/nats.go"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/kv"
@@ -136,14 +138,24 @@ func purgeBucket(ctx context.Context, js nats.JetStreamContext, bucket, tenant s
 		return 0, fmt.Errorf("listing the keys of kv bucket %s: %w", bucket, err)
 	}
 
-	var deleted int64
+	// The purges are independent single-subject requests, so they run concurrently. One at a
+	// time each paid a full round trip (on a replicated stream, a consensus write), which made
+	// a 189k-key tenant a ~100 s erasure on loopback and many minutes on a cluster. The scan
+	// and the ownership test stay on this goroutine, so a key this package did not write is
+	// still found before it is acted on, and dispatching stops at the first failure.
+	var deleted atomic.Int64
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(kvPurgeConcurrency)
+	var scanErr error
+dispatch:
 	for subject := range info.State.Subjects {
 		// A full-bucket scan is the one unbounded thing this store does — device-by-token
 		// is documented as the largest KV consumer at fleet scale — and it runs on the
 		// coordinator's single goroutine, which stops by cancelling a context. Without this
-		// a shutdown mid-scan waits for the whole bucket.
-		if err := ctx.Err(); err != nil {
-			return deleted, fmt.Errorf("scanning kv bucket %s was interrupted: %w", bucket, err)
+		// a shutdown mid-scan waits for the whole bucket. gctx also ends when a purge fails.
+		if err := gctx.Err(); err != nil {
+			scanErr = fmt.Errorf("scanning kv bucket %s was interrupted: %w", bucket, err)
+			break dispatch
 		}
 		encoded := strings.TrimPrefix(subject, prefix)
 		owned, err := keyBelongsTo(encoded, tenant)
@@ -151,19 +163,38 @@ func purgeBucket(ctx context.Context, js nats.JetStreamContext, bucket, tenant s
 			// A key this package did not write. Deleting it would be acting on something
 			// we cannot read, and leaving it is a retention we cannot describe — so it
 			// stops the purge with the bucket and the key named.
-			return deleted, fmt.Errorf("kv bucket %s holds key %q, which is not a key this "+
+			scanErr = fmt.Errorf("kv bucket %s holds key %q, which is not a key this "+
 				"platform writes and cannot be attributed to a tenant: %w", bucket, encoded, err)
+			break dispatch
 		}
 		if !owned {
 			continue
 		}
-		if err := js.PurgeStream(stream, &nats.StreamPurgeRequest{Subject: subject}, nats.Context(ctx)); err != nil {
-			return deleted, fmt.Errorf("purging %s from kv bucket %s: %w", encoded, bucket, err)
-		}
-		deleted++
+		g.Go(func() error {
+			if err := js.PurgeStream(stream, &nats.StreamPurgeRequest{Subject: subject}, nats.Context(gctx)); err != nil {
+				return fmt.Errorf("purging %s from kv bucket %s: %w", encoded, bucket, err)
+			}
+			deleted.Add(1)
+			return nil
+		})
 	}
-	return deleted, nil
+	// Wait for every purge already issued before reporting, so the count is exact and no
+	// request outlives the call. A failed purge wins over a scan stop: it is the cause.
+	if err := g.Wait(); err != nil {
+		return deleted.Load(), err
+	}
+	return deleted.Load(), scanErr
 }
+
+// kvPurgeConcurrency bounds the purge requests in flight per bucket. Each is a small
+// request-and-ack against one stream, so the gain is overlapped round trips (and, on a
+// replicated stream, overlapped consensus rounds), not parallel disk work: a few dozen in
+// flight saturates the stream leader and more only queues behind it. 32 recovers nearly
+// all of the latency the sequential loop paid without a burst large enough to press the
+// server's per-connection pending limits. Re-keying tenant-scoped buckets as
+// "<tenant>.<key>" would replace all of these requests with one subject-filtered purge
+// per bucket; that is a data-format change and is deliberately not made here.
+const kvPurgeConcurrency = 32
 
 // kvSubjectPrefix is what JetStream puts in front of a bucket's name to form the subjects its
 // keys are stored under ("$KV.<bucket>.<key>"). nats.go keeps its copy unexported.

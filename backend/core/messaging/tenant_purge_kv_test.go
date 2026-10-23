@@ -6,6 +6,9 @@ package messaging
 import (
 	"context"
 	"encoding/base64"
+	"errors"
+	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -135,6 +138,150 @@ func TestATenantWhoseTokenIsAPrefixOfAnothersIsUnaffected(t *testing.T) {
 	assert.Equal(t, []string{"acme-2|dev-1"}, bucketKeys(t, store),
 		"acme-2 is a different tenant and its keys must survive acme's purge")
 	assert.Equal(t, []string{"acme-2"}, bucketKeys(t, bareStore))
+}
+
+// TestKvPurgeOfManyKeysIsExactUnderConcurrency drives far more keys than the purge has requests
+// in flight, so every worker slot is reused many times, with the bystanders interleaved
+// (including the prefix-collision tenant) and a deleted key's marker among them. The count
+// must be exact (a lost increment or a double count is a wrong erasure figure in the deletion
+// record), nothing of the victim may remain, and every bystander key must.
+func TestKvPurgeOfManyKeysIsExactUnderConcurrency(t *testing.T) {
+	_, js := purgeRig(t)
+	bucket := CacheBucketName(purgeInstance, "device-management", kv.BucketDeviceByToken)
+	store, err := js.CreateKeyValue(&nats.KeyValueConfig{Bucket: bucket, TTL: time.Hour})
+	require.NoError(t, err)
+
+	const victimKeys = kvPurgeConcurrency * 40
+	var bystanders []string
+	for i := 0; i < victimKeys; i++ {
+		_, err := store.Put(kvKey(fmt.Sprintf("%s|dev-%d", purgeVictim, i)), []byte("v"))
+		require.NoError(t, err)
+		if i%10 == 0 {
+			for _, other := range []string{purgeBystander, purgeVictim + "-2"} {
+				k := fmt.Sprintf("%s|dev-%d", other, i)
+				_, err := store.Put(kvKey(k), []byte("b"))
+				require.NoError(t, err)
+				bystanders = append(bystanders, k)
+			}
+		}
+	}
+	require.NoError(t, store.Delete(kvKey(purgeVictim+"|dev-0")))
+
+	res, err := PurgeTenantKv(context.Background(), js, purgeInstance, purgeVictim)
+	require.NoError(t, err)
+	assert.Equal(t, int64(victimKeys), res.Keys)
+	assert.Equal(t, int64(victimKeys), res.PerBucket[bucket])
+
+	assert.ElementsMatch(t, bystanders, bucketKeys(t, store))
+	info, err := js.StreamInfo(KvStreamName(bucket), &nats.StreamInfoRequest{SubjectsFilter: "$KV." + bucket + ".>"})
+	require.NoError(t, err)
+	assert.Len(t, info.State.Subjects, len(bystanders), "no marker of a victim key may remain")
+
+	again, err := PurgeTenantKv(context.Background(), js, purgeInstance, purgeVictim)
+	require.NoError(t, err)
+	assert.Zero(t, again.Keys)
+}
+
+// A purge whose context is already cancelled must fail rather than report clean.
+func TestKvPurgeWithACancelledContextFails(t *testing.T) {
+	_, js := purgeRig(t)
+	bucket := CacheBucketName(purgeInstance, "device-management", kv.BucketDeviceByToken)
+	store := seedBucket(t, js, bucket, purgeVictim+"|dev-1", purgeVictim+"|dev-2")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := PurgeTenantKv(ctx, js, purgeInstance, purgeVictim)
+
+	require.Error(t, err, "a cancelled pass that reported clean would let the coordinator ack an erasure that never ran")
+	assert.Len(t, bucketKeys(t, store), 2)
+}
+
+// purgeSpy passes every JetStream call through to the real server and watches the purges: how
+// many were issued, how many are in flight at once, and (when failAt or cancelAt is set) it
+// fails or cancels at that call. Each purge holds briefly so that requests overlap and a
+// missing bound or a missing wait shows up as a count rather than as luck.
+type purgeSpy struct {
+	nats.JetStreamContext
+	failAt   int64
+	cancelAt int64
+	cancel   context.CancelFunc
+
+	calls, inflight, maxInflight atomic.Int64
+}
+
+func (s *purgeSpy) PurgeStream(name string, opts ...nats.JSOpt) error {
+	n := s.calls.Add(1)
+	cur := s.inflight.Add(1)
+	defer s.inflight.Add(-1)
+	for {
+		m := s.maxInflight.Load()
+		if cur <= m || s.maxInflight.CompareAndSwap(m, cur) {
+			break
+		}
+	}
+	time.Sleep(time.Millisecond)
+	if n == s.cancelAt {
+		s.cancel()
+	}
+	if n == s.failAt {
+		return errors.New("injected purge failure")
+	}
+	return s.JetStreamContext.PurgeStream(name, opts...)
+}
+
+// seedManyVictimKeys writes count keys of the victim into a fresh device-by-token bucket.
+func seedManyVictimKeys(t *testing.T, js nats.JetStreamContext, count int) {
+	t.Helper()
+	bucket := CacheBucketName(purgeInstance, "device-management", kv.BucketDeviceByToken)
+	store, err := js.CreateKeyValue(&nats.KeyValueConfig{Bucket: bucket, TTL: time.Hour})
+	require.NoError(t, err)
+	for i := 0; i < count; i++ {
+		_, err := store.Put(kvKey(fmt.Sprintf("%s|dev-%d", purgeVictim, i)), []byte("v"))
+		require.NoError(t, err)
+	}
+}
+
+// The purges overlap, but never more than the bound: a purge is a request against one stream
+// leader, and an unbounded fan-out over a large tenant is a burst that leader has to queue.
+func TestKvPurgeOverlapsRequestsWithinTheBound(t *testing.T) {
+	_, js := purgeRig(t)
+	seedManyVictimKeys(t, js, kvPurgeConcurrency*8)
+
+	spy := &purgeSpy{JetStreamContext: js}
+	res, err := PurgeTenantKv(context.Background(), spy, purgeInstance, purgeVictim)
+	require.NoError(t, err)
+	assert.EqualValues(t, kvPurgeConcurrency*8, res.Keys)
+	assert.LessOrEqual(t, spy.maxInflight.Load(), int64(kvPurgeConcurrency), "more purges in flight than the bound")
+	assert.Greater(t, spy.maxInflight.Load(), int64(1), "the purges ran one at a time")
+}
+
+// A purge that fails mid-bucket fails the pass, and the call does not return while any purge
+// it issued is still running: a request outliving the call would race the next pass.
+func TestKvPurgeFailureFailsThePassAndAwaitsInFlightPurges(t *testing.T) {
+	_, js := purgeRig(t)
+	seedManyVictimKeys(t, js, kvPurgeConcurrency*8)
+
+	spy := &purgeSpy{JetStreamContext: js, failAt: kvPurgeConcurrency * 2}
+	_, err := PurgeTenantKv(context.Background(), spy, purgeInstance, purgeVictim)
+	require.Error(t, err, "a pass with a failed purge must not report clean")
+	assert.Contains(t, err.Error(), "injected purge failure")
+	assert.Zero(t, spy.inflight.Load(), "a purge was still in flight when the call returned")
+	assert.Less(t, spy.calls.Load(), int64(kvPurgeConcurrency*8), "dispatch did not stop at the failure")
+}
+
+// A context cancelled mid-scan stops dispatching: the pass fails, and at most the purges
+// already in flight are issued after the cancellation.
+func TestKvPurgeCancelledMidScanStopsDispatching(t *testing.T) {
+	_, js := purgeRig(t)
+	seedManyVictimKeys(t, js, kvPurgeConcurrency*8)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	spy := &purgeSpy{JetStreamContext: js, cancelAt: kvPurgeConcurrency, cancel: cancel}
+	_, err := PurgeTenantKv(ctx, spy, purgeInstance, purgeVictim)
+	require.Error(t, err)
+	assert.LessOrEqual(t, spy.calls.Load(), int64(kvPurgeConcurrency*2), "dispatch went on after the context ended")
+	assert.Zero(t, spy.inflight.Load())
 }
 
 // TestKvPurgeIsIdempotent covers the Store contract: it runs on every pass until the purge

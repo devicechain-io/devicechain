@@ -280,6 +280,44 @@ func TestSweepDeletesOnlyTheNamedTenantsRows(t *testing.T) {
 			"from a correct one by row count alone")
 }
 
+// Each table that contributed rows carries the time its statement took, and the result the
+// time of the whole call, so a large tenant's erase time can be attributed to a table. A table
+// that contributed nothing is omitted, with its timing.
+func TestSweepAndResidueRecordPerTableTiming(t *testing.T) {
+	db := sqliteDB(t)
+	require.NoError(t, db.Exec(`CREATE TABLE devices (id INTEGER PRIMARY KEY, tenant_id TEXT)`).Error)
+	require.NoError(t, db.Exec(`CREATE TABLE gadgets (id INTEGER PRIMARY KEY, tenant_id TEXT)`).Error)
+	require.NoError(t, db.Exec(`INSERT INTO devices (id, tenant_id) VALUES (1,'acme'),(2,'acme')`).Error)
+
+	plan := planOf(t, []column{
+		col("main", "devices", "id", "bigint"),
+		col("main", "devices", "tenant_id", "text"),
+		col("main", "gadgets", "id", "bigint"),
+		col("main", "gadgets", "tenant_id", "text"),
+	}, nil)
+	ctx := context.Background()
+
+	// The clock on some hosts is too coarse to time one in-memory statement, so the per-table
+	// figures are only checked for sanity; the whole-call figure is made measurable by a
+	// precondition that takes a known time, which also shows it spans more than the statements.
+	before, err := Residue(ctx, db, plan, "acme", testEpoch)
+	require.NoError(t, err)
+	require.Len(t, before.Tables, 1)
+	assert.GreaterOrEqual(t, before.Tables[0].Elapsed, time.Duration(0))
+
+	const pause = 20 * time.Millisecond
+	res, err := Sweep(ctx, db, plan, "acme", testEpoch, func(*gorm.DB) error {
+		time.Sleep(pause)
+		return nil
+	})
+	require.NoError(t, err)
+	require.Len(t, res.Tables, 1, "gadgets held nothing and is omitted")
+	assert.Equal(t, "devices", res.Tables[0].Table.Name)
+	assert.GreaterOrEqual(t, res.Tables[0].Elapsed, time.Duration(0))
+	assert.GreaterOrEqual(t, res.Elapsed, pause, "the whole call includes the precondition")
+	assert.Less(t, res.Tables[0].Elapsed, res.Elapsed)
+}
+
 func TestSweepDeletesAJoinRowThroughItsParent(t *testing.T) {
 	db := sqliteDB(t)
 	require.NoError(t, db.Exec(
