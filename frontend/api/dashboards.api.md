@@ -3717,7 +3717,16 @@ export declare function stripDefaultBindings(def: DashboardDefinition): Dashboar
 ## `.:timeRangeFromSearch`
 
 ```ts
-export declare function timeRangeFromSearch(search: string, now?: number): TimeRangeLink;
+export declare function timeRangeFromSearch(search: string): {
+    spanSeconds?: number;
+    paused?: boolean;
+};
+```
+
+## `.:timeRangeLinkFromSearch`
+
+```ts
+export declare function timeRangeLinkFromSearch(search: string, now?: number): TimeRangeLink;
 ```
 
 ## `.:undoEdit`

@@ -251,22 +251,36 @@ export interface TimeRangeLink {
   rejected?: AbsoluteLinkRejection;
 }
 
-// timeRangeFromSearch reads the parameters from a query string. Never throws. An absolute window
-// (`from`+`to`) wins over `range` and `paused`: it is the more specific ask.
-export function timeRangeFromSearch(search: string, now: number = Date.now()): TimeRangeLink {
+// timeRangeFromSearch reads the rolling parameters, `range` and `paused`, from a query string.
+// Never throws. It ignores `from`/`to`, so what it returns for any address is what it returned
+// before fixed windows existed; a host that opens fixed windows reads timeRangeLinkFromSearch.
+export function timeRangeFromSearch(search: string): { spanSeconds?: number; paused?: boolean } {
   let params: URLSearchParams;
   try {
     params = new URLSearchParams(search);
   } catch {
     return {};
   }
-  const link: TimeRangeLink = {};
-  const abs = parseAbsoluteParams(params.get('from'), params.get('to'), now);
-  if (abs.absolute) return { absolute: abs.absolute };
-  if (abs.rejected) link.rejected = abs.rejected;
+  const link: { spanSeconds?: number; paused?: boolean } = {};
   const spanSeconds = parseRangeParam(params.get('range'));
   if (spanSeconds !== undefined) link.spanSeconds = spanSeconds;
   if (parsePausedParam(params.get('paused'))) link.paused = true;
+  return link;
+}
+
+// timeRangeLinkFromSearch reads every time-range parameter from a query string. Never throws. An
+// absolute window (`from`+`to`) wins over `range` and `paused`: it is the more specific ask.
+export function timeRangeLinkFromSearch(search: string, now: number = Date.now()): TimeRangeLink {
+  let params: URLSearchParams;
+  try {
+    params = new URLSearchParams(search);
+  } catch {
+    return {};
+  }
+  const abs = parseAbsoluteParams(params.get('from'), params.get('to'), now);
+  if (abs.absolute) return { absolute: abs.absolute };
+  const link: TimeRangeLink = timeRangeFromSearch(search);
+  if (abs.rejected) link.rejected = abs.rejected;
   return link;
 }
 

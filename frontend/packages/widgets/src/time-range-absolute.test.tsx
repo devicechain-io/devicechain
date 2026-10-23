@@ -1,7 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { rangeWindow, timeRangeFromSearch } from '@devicechain/dashboards';
+import { rangeWindow, timeRangeLinkFromSearch } from '@devicechain/dashboards';
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -21,7 +21,7 @@ afterEach(() => {
 });
 
 describe('useBoardTimeRange with an absolute window', () => {
-  const link = () => timeRangeFromSearch(`?from=${FROM}&to=${TO}`, NOW);
+  const link = () => timeRangeLinkFromSearch(`?from=${FROM}&to=${TO}`, NOW);
 
   it('opens on the window, with the rolling projection a rolling-only widget reads', () => {
     const { result } = renderHook(() => useBoardTimeRange(undefined, link()));

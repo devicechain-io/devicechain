@@ -27,5 +27,3 @@
 #
 # Example:
 #   v0.24.0 @devicechain/client .:GraphQlError export-removed Renamed to GraphQlRequestError.
-
-v0.24.0 @devicechain/dashboards .:timeRangeFromSearch export-changed Gains an optional `now` parameter and returns TimeRangeLink, a superset of the old { spanSeconds?, paused? } that adds the fixed-window fields; existing callers compile unchanged, and the check cannot tell a widened return type from a narrowed one.
