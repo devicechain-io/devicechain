@@ -1,0 +1,79 @@
+// Copyright The DeviceChain Authors
+// SPDX-License-Identifier: Apache-2.0
+
+// Injected by backend/tools/docsgql (apicompat export) into backend/cli/cmd through
+// `go test -overlay`; it is never part of the dcctl tree on disk. It walks the cobra
+// command tree and writes it as JSON to $DC_APICOMPAT_OUT. The field names are the
+// ones apicompat/clitree reads.
+
+package cmd
+
+import (
+	"encoding/json"
+	"os"
+	"sort"
+	"strings"
+	"testing"
+
+	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
+)
+
+type apiCompatFlag struct {
+	Name       string `json:"name"`
+	Shorthand  string `json:"shorthand,omitempty"`
+	Type       string `json:"type"`
+	Default    string `json:"default"`
+	Hidden     bool   `json:"hidden,omitempty"`
+	Deprecated string `json:"deprecated,omitempty"`
+}
+
+type apiCompatCommand struct {
+	Path       string          `json:"path"`
+	Aliases    []string        `json:"aliases,omitempty"`
+	Hidden     bool            `json:"hidden,omitempty"`
+	Deprecated string          `json:"deprecated,omitempty"`
+	Flags      []apiCompatFlag `json:"flags"`
+}
+
+func TestAPICompatExportCommandTree(t *testing.T) {
+	out := os.Getenv("DC_APICOMPAT_OUT")
+	if out == "" {
+		t.Skip("DC_APICOMPAT_OUT is not set; this test is the exporter apicompat injects")
+	}
+	var cmds []apiCompatCommand
+	var walk func(c *cobra.Command)
+	walk = func(c *cobra.Command) {
+		path := strings.TrimSpace(strings.TrimPrefix(c.CommandPath(), rootCmd.Name()))
+		ac := apiCompatCommand{Path: path, Aliases: append([]string(nil), c.Aliases...), Hidden: c.Hidden, Deprecated: c.Deprecated, Flags: []apiCompatFlag{}}
+		sort.Strings(ac.Aliases)
+		seen := map[string]bool{}
+		collect := func(f *pflag.Flag) {
+			if seen[f.Name] {
+				return
+			}
+			seen[f.Name] = true
+			ac.Flags = append(ac.Flags, apiCompatFlag{
+				Name: f.Name, Shorthand: f.Shorthand, Type: f.Value.Type(), Default: f.DefValue,
+				Hidden: f.Hidden, Deprecated: f.Deprecated,
+			})
+		}
+		c.LocalFlags().VisitAll(collect)
+		c.InheritedFlags().VisitAll(collect)
+		sort.Slice(ac.Flags, func(i, j int) bool { return ac.Flags[i].Name < ac.Flags[j].Name })
+		cmds = append(cmds, ac)
+		kids := append([]*cobra.Command(nil), c.Commands()...)
+		sort.Slice(kids, func(i, j int) bool { return kids[i].Name() < kids[j].Name() })
+		for _, k := range kids {
+			walk(k)
+		}
+	}
+	walk(rootCmd)
+	b, err := json.MarshalIndent(map[string]any{"commands": cmds}, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(out, append(b, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}

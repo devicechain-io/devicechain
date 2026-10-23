@@ -252,6 +252,36 @@ break can ship in any release, and that release's highlights must say it breaks.
 a break in a covered interface ships only in a major release; see the
 [versioning policy](docs/docs/deployment/versioning-policy.md).
 
+## Changing dcctl, the device contract or the device topics
+
+The same check runs for the other surfaces a deployment is written against. Each compares
+the working tree with the last release and fails on a break that is not declared; each
+declares an intended break in its own file, in the same line format as the GraphQL one
+(`<baseline-tag> <surface> <coordinate> <kind> <reason>`), and the failure prints the exact
+line to add. Declarations expire when the next release is tagged, a declaration that matches
+no change fails, and a break always ships with a `"breaking": true` line in the release
+highlights.
+
+| Surface | Run | Breaking | Declare in |
+| --- | --- | --- | --- |
+| **dcctl** commands and flags | `hack/check-cli-compat.sh` | a removed command, alias or flag; a changed flag type; a changed or dropped shorthand. A changed default, or a newly hidden or deprecated command or flag, is reported and does not fail | [`apicompat/clitree/breaks.txt`](backend/tools/docsgql/apicompat/clitree/breaks.txt) |
+| **Device wire contract** (`backend/services/*/contract/*.schema.json`) | `hack/check-schema-compat.sh contract` | a removed property or file; a property that becomes required; a narrowed type or enum; an object that stops accepting unlisted properties; a tightened bound; a newly imposed pattern. A new enum value or a relaxed requirement is reported | [`apicompat/jsonschema/breaks.txt`](backend/tools/docsgql/apicompat/jsonschema/breaks.txt) |
+| **Device topic layout** | `hack/check-schema-compat.sh topics` | a topic a device could publish or subscribe to that it no longer can (a renamed topic is one removal and one addition) | [`apicompat/topics/breaks.txt`](backend/tools/docsgql/apicompat/topics/breaks.txt) |
+| **Helm values** and the **Instance CRDs** | `hack/check-schema-compat.sh reports` | not covered by the versioning policy: changes are printed, never fail, and belong in the release highlights | nothing to declare |
+
+```text
+v0.24.0 dcctl install:--dev flag-removed Replaced by --profile=dev, which also sets the placement.
+v0.24.0 measurement-payload.schema.json $.entries[].unit property-removed Units now travel in the metric name.
+v0.24.0 topics publish:{instance}/{tenant}/devices/{device}/events topic-removed Events move to .../telemetry.
+```
+
+A dcctl coordinate is the command path with dots (`install.bootstrap`, the root is `dcctl`),
+`:--flag` for a flag and `@name` for an alias. A contract coordinate is the path to the
+element, where `$` is the document, `$.a` a property, `$.a[]` an array's items and
+`$.a{minItems}` a bound. A topic coordinate is `publish:` or `subscribe:` and the topic, with
+`{instance}`, `{tenant}` and `{device}` as placeholders. The command tree and the topics are
+read by building the release's own code, so neither has a file to keep in step by hand.
+
 ## Commit & PR conventions
 
 - Use clear, imperative commit subjects; conventional-commit prefixes

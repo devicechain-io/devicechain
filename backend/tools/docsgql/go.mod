@@ -13,4 +13,5 @@ replace github.com/graph-gophers/graphql-go => github.com/devicechain-io/graphql
 require (
 	github.com/devicechain-io/dc-microservice v0.0.0-00010101000000-000000000000
 	github.com/graph-gophers/graphql-go v1.10.2
+	go.yaml.in/yaml/v3 v3.0.5
 )
