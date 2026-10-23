@@ -6,6 +6,7 @@ package identity
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -54,6 +55,7 @@ func newCCEnv(t *testing.T) *ccEnv {
 	base.m.credentials = checker
 	base.m.now = func() time.Time { return e.now }
 	base.m.saAttempts.limits = &serviceAccountAttemptLimits
+	base.m.saGlobal.limits = &serviceAccountGlobalLimits
 	base.m.saMints.limits = &serviceAccountMintLimits
 	e.h = TokenHandler(base.m.AuthenticateClient, base.m.RedeemAuthorizationCode, base.m.RefreshOAuth, base.m.ClientCredentials)
 	base.seedTenant(t, "acme")
@@ -85,9 +87,14 @@ func (e *ccEnv) account(t *testing.T, tenant, token string, scope []string, auth
 
 func (e *ccEnv) post(t *testing.T, form url.Values, basicID, basicSecret string) *httptest.ResponseRecorder {
 	t.Helper()
+	return e.postFrom(t, "192.0.2.10:5555", form, basicID, basicSecret)
+}
+
+func (e *ccEnv) postFrom(t *testing.T, remote string, form url.Values, basicID, basicSecret string) *httptest.ResponseRecorder {
+	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "/oauth/token", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.RemoteAddr = "192.0.2.10:5555"
+	req.RemoteAddr = remote
 	if basicID != "" {
 		req.SetBasicAuth(basicID, basicSecret)
 	}
@@ -352,6 +359,53 @@ func TestClientCredentialsIsRateLimited(t *testing.T) {
 	rec = e.grant(t, "dcsa_spray", "x")
 	require.Equal(t, http.StatusTooManyRequests, rec.Code)
 	require.Equal(t, n, e.compares.Load(), "a refused attempt still paid a compare")
+}
+
+// A stranger who sprays from enough sources to exhaust the GLOBAL bucket cannot hold a
+// running integration at the limit: a source that minted recently is exempt from it. A
+// source with no recent mint is still refused, which is what the global bucket is for.
+func TestAGlobalSprayDoesNotStopARunningIntegration(t *testing.T) {
+	e := newCCEnv(t)
+	id, secret := e.account(t, "acme", "ci", nil, "device:read")
+	form := url.Values{"grant_type": {"client_credentials"}}
+	integration := "198.51.100.7:4000"
+	require.Equal(t, http.StatusOK, e.postFrom(t, integration, form, id, secret).Code)
+
+	// The global bucket's clock stands still, so it cannot refill while the spray runs.
+	frozen := time.Now()
+	e.m.saGlobal.now = func() time.Time { return frozen }
+	// The spray: one wrong attempt from each of more distinct sources than the global burst.
+	for i := 0; i <= serviceAccountGlobalLimits.perKeyBurst; i++ {
+		e.postFrom(t, fmt.Sprintf("203.0.%d.%d:1000", i/250, i%250+1), form, "dcsa_spray", "x")
+	}
+	rec := e.postFrom(t, "192.0.2.200:1000", form, id, secret)
+	require.Equal(t, http.StatusTooManyRequests, rec.Code, "the global bucket was never exhausted, so this test proves nothing: %s", rec.Body.String())
+
+	rec = e.postFrom(t, integration, form, id, secret)
+	require.Equal(t, http.StatusOK, rec.Code, "a stranger's spray held a running integration at the global limit: %s", rec.Body.String())
+
+	// The exemption ages out.
+	e.now = e.now.Add(serviceAccountTrustedSourceTTL + time.Minute)
+	require.False(t, e.m.saTrusted.has(attemptSourceKey("198.51.100.7"), e.now))
+}
+
+// An IPv6 sender cannot multiply its per-source allowance by walking the addresses of its
+// own /64.
+func TestAttemptSourceKeyGroupsAnIPv6Subnet(t *testing.T) {
+	require.Equal(t, attemptSourceKey("2001:db8:1:2::1"), attemptSourceKey("2001:db8:1:2:ffff:ffff:ffff:fffe"))
+	require.NotEqual(t, attemptSourceKey("2001:db8:1:2::1"), attemptSourceKey("2001:db8:1:3::1"))
+	require.Equal(t, "192.0.2.1", attemptSourceKey("192.0.2.1"))
+	require.Equal(t, "192.0.2.1", attemptSourceKey("::ffff:192.0.2.1"))
+	require.NotEqual(t, attemptSourceKey("192.0.2.1"), attemptSourceKey("192.0.2.2"))
+	require.Equal(t, "not-an-address", attemptSourceKey("not-an-address"))
+
+	e := newCCEnv(t)
+	form := url.Values{"grant_type": {"client_credentials"}}
+	for i := 0; i < serviceAccountAttemptLimits.perKeyBurst; i++ {
+		e.postFrom(t, fmt.Sprintf("[2001:db8:1:2::%x]:443", i+1), form, "dcsa_spray", "x")
+	}
+	rec := e.postFrom(t, "[2001:db8:1:2::abcd]:443", form, "dcsa_spray", "x")
+	require.Equal(t, http.StatusTooManyRequests, rec.Code, "a fresh address in the same /64 got a fresh allowance")
 }
 
 func TestTheMetadataAdvertisesClientCredentials(t *testing.T) {

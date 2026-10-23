@@ -133,6 +133,17 @@ func TestAServiceAccountCannotAdministerAccounts(t *testing.T) {
 	require.ErrorIs(t, err, auth.ErrForbidden)
 	_, _, err = e.s.RotateServiceAccountSecret(bot, "admin-bot", nil, nil)
 	require.ErrorIs(t, err, auth.ErrForbidden)
+
+	// Nor members, invitations or roles: every change on this plane resolves the caller
+	// as a person, and an account's subject names none.
+	_, err = e.s.SetMemberRoles(bot, "boss@acme.example", []string{"operator"})
+	require.ErrorIs(t, err, auth.ErrForbidden)
+	_, _, err = e.s.InviteMember(bot, InviteInput{Email: "new@acme.example", RoleTokens: []string{"operator"}})
+	require.ErrorIs(t, err, auth.ErrForbidden)
+	_, err = e.s.CreateTenantRole(bot, TenantRoleInput{Token: "bot-made", Authorities: []string{"device:read"}})
+	require.ErrorIs(t, err, auth.ErrForbidden)
+	_, err = e.s.DeleteTenantRole(bot, "operator")
+	require.ErrorIs(t, err, auth.ErrForbidden)
 }
 
 func TestRotationOverlapsThenEndsTheOldSecret(t *testing.T) {

@@ -6,9 +6,11 @@ package identity
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
@@ -50,21 +52,86 @@ func errClientAuthFailed() *oauthError { return errInvalidClient("client authent
 // The token endpoint's client_credentials limits, in-process per replica (the beginSso
 // shape, sso_limiter.go):
 //
-//   - every ATTEMPT charges its source address and a global bucket BEFORE the secret is
-//     compared, which is what bounds a spray of guesses or of unknown client ids — the
-//     compare is unthrottled per principal (CredentialPolicies says why);
+//   - every ATTEMPT charges its source BEFORE the secret is compared, which bounds what one
+//     sender can make the endpoint do — the compare is unthrottled per principal
+//     (CredentialPolicies says why). An IPv6 source is keyed by its /64, the block one
+//     subscriber is routinely given, so walking addresses inside it buys nothing;
+//   - an attempt from a source that has not minted recently also charges a GLOBAL bucket,
+//     which bounds a sender who varies the source. A source that HAS minted recently (a
+//     running integration) is exempt from it: the global bucket is shared by every tenant,
+//     so charging it for everyone would let a stranger who sprays from enough addresses
+//     hold every tenant's integrations at the limit without knowing a single client id;
 //   - every AUTHENTICATED mint charges the account's own bucket, which bounds a runaway
 //     integration without letting a stranger who knows its client id starve it: failed
 //     attempts never touch that bucket.
 var (
 	serviceAccountAttemptLimits = limiterLimits{
-		perKeyBurst: 20, perKeyEvery: 3 * time.Second,
-		globalBurst: 200, globalEvery: 100 * time.Millisecond, maxKeys: 10000,
+		perKeyBurst: 20, perKeyEvery: 3 * time.Second, maxKeys: 10000,
+	}
+	// serviceAccountGlobalLimits is one bucket (a single key) for attempts from sources
+	// with no recent mint.
+	serviceAccountGlobalLimits = limiterLimits{
+		perKeyBurst: 200, perKeyEvery: 100 * time.Millisecond, maxKeys: 1,
 	}
 	serviceAccountMintLimits = limiterLimits{
 		perKeyBurst: 10, perKeyEvery: 30 * time.Second, maxKeys: 10000,
 	}
 )
+
+// serviceAccountTrustedSourceTTL is how long a source that minted stays exempt from the
+// global bucket. Longer than a token's lifetime, so an integration that mints once per
+// token stays exempt for as long as it keeps running.
+const serviceAccountTrustedSourceTTL = time.Hour
+
+// attemptSourceKey is the attempt limiter's key for a source address: an IPv4 address as
+// it is, an IPv6 address by its /64, anything unparseable verbatim.
+func attemptSourceKey(source string) string {
+	ip := net.ParseIP(source)
+	if ip == nil {
+		return source
+	}
+	if v4 := ip.To4(); v4 != nil {
+		return v4.String()
+	}
+	return ip.Mask(net.CIDRMask(64, 128)).String() + "/64"
+}
+
+// trustedSources remembers which sources minted recently. The zero value is ready to use.
+type trustedSources struct {
+	mu   sync.Mutex
+	seen map[string]time.Time
+}
+
+// trustedSourcesMax bounds the map; past it, entries that have aged out are dropped, and if
+// that frees nothing the map is cleared — forgetting only ever puts a source back under the
+// global bucket.
+const trustedSourcesMax = 10000
+
+func (t *trustedSources) has(key string, now time.Time) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	at, ok := t.seen[key]
+	return ok && now.Sub(at) < serviceAccountTrustedSourceTTL
+}
+
+func (t *trustedSources) mark(key string, now time.Time) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.seen == nil {
+		t.seen = map[string]time.Time{}
+	}
+	if _, ok := t.seen[key]; !ok && len(t.seen) >= trustedSourcesMax {
+		for k, at := range t.seen {
+			if now.Sub(at) >= serviceAccountTrustedSourceTTL {
+				delete(t.seen, k)
+			}
+		}
+		if len(t.seen) >= trustedSourcesMax {
+			t.seen = map[string]time.Time{}
+		}
+	}
+	t.seen[key] = now
+}
 
 // errSlowDown is the rate-limit refusal: HTTP 429 with a Retry-After.
 func errSlowDown(retryAfter time.Duration) *oauthError {
@@ -114,8 +181,12 @@ func ValidateResource(resource string) error {
 // against the kind's dummy — so an unknown client, a disabled account, an expired secret
 // and a wrong secret cannot be told apart by answer or by cost.
 func (m *Manager) ClientCredentials(ctx context.Context, req ClientCredentialsRequest) (*OAuthTokens, error) {
-	if !m.saAttempts.allow(req.Source) {
+	source := attemptSourceKey(req.Source)
+	if !m.saAttempts.allow(source) {
 		return nil, errSlowDown(serviceAccountAttemptLimits.perKeyEvery)
+	}
+	if !m.saTrusted.has(source, m.clock()) && !m.saGlobal.allow("") {
+		return nil, errSlowDown(serviceAccountGlobalLimits.perKeyEvery)
 	}
 	if req.ClientID == "" || !req.Presented {
 		return nil, errInvalidClient("client authentication required")
@@ -191,6 +262,7 @@ func (m *Manager) ClientCredentials(ctx context.Context, req ClientCredentialsRe
 	if err := m.iam.TouchServiceAccountSecret(ctx, secret.ID, now); err != nil {
 		log.Warn().Err(err).Msg("Could not record a service account secret's last use.")
 	}
+	m.saTrusted.mark(source, now)
 	m.recordAuth(ctx, rdb.AuditOpServiceAccountToken, subject, acct.TenantId)
 	return &OAuthTokens{
 		AccessToken: access.Token,
