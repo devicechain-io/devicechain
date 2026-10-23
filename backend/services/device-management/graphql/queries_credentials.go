@@ -20,13 +20,13 @@ import (
 // by introspecting the schema, so a field added elsewhere fails rather than
 // quietly widening the gate.
 //
-// The reason is that for two of the three credential types the credentialId IS
-// the bearer secret: an ACCESS_TOKEN device authenticates by presenting its
-// credentialId and nothing else (model.credentialRequiresSecret — only
-// MQTT_BASIC compares a stored secret). Withholding credentialValue therefore
-// defends MQTT_BASIC and does not defend ACCESS_TOKEN, so whoever may read a
-// credential can impersonate its device: open a broker session as it and
-// publish telemetry in its name.
+// The reason this gate was set is that an ACCESS_TOKEN device authenticates by presenting
+// its credentialId and nothing else, and that id used to be stored and returned as is, so
+// whoever could read a credential could impersonate its device. The platform now stores
+// an access token only as a keyed digest and returns the token once, on the write that set
+// it, so a read yields a fingerprint that cannot be presented. The gate is kept as it is:
+// the listing still names a device's usernames, expiries and credential state, and
+// relaxing an authority is a decision of its own, not a side effect of this one.
 //
 // device:read is not a privileged authority — it is in the read-only baseline
 // every enabled tenant member receives (user-management identity.viewerAuthorities),

@@ -8,8 +8,8 @@
 // The two halves sit at DIFFERENT authority levels, and the split is deliberate:
 //
 //   - `replaceDevice` returns the credential minted for the incoming unit, whose
-//     credentialId is the bearer for ACCESS_TOKEN, so it needs device:write —
-//     exactly like createDeviceCredential.
+//     credentialId is the access token itself (shown only on this response), so it
+//     needs device:write — exactly like createDeviceCredential.
 //   - `deviceReplacements` names credentials only by their entity tokens, so it
 //     carries no bearer and reads at device:read. A maintenance history an
 //     operator cannot open answers nobody's question.
@@ -99,9 +99,8 @@ export interface ReplaceDeviceRequest {
 // Bind a new physical unit to an existing device identity. Requires device:write.
 //
 // The returned newCredential is the ONLY time the incoming unit's material is
-// readable, so the caller must show it once and never re-fetch it: the journal
-// stores the credential's entity token, not its id, and re-reading the credential
-// itself needs the separately-gated credential queries.
+// readable, so the caller must show it once: the platform stores an access token only
+// as a digest, and the journal stores the credential's entity token, not its id.
 export async function replaceDevice(request: ReplaceDeviceRequest) {
   const data = await gql('device-management', REPLACE_DEVICE, { request });
   return data.replaceDevice;

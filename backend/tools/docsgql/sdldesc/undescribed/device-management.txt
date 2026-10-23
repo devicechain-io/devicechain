@@ -367,7 +367,6 @@ DeviceClaimRequest.customerToken
 DeviceClaimRequest.deviceToken
 DeviceCredential
 DeviceCredential.createdAt
-DeviceCredential.credentialId
 DeviceCredential.credentialType
 DeviceCredential.credentialValue
 DeviceCredential.deletedAt
@@ -379,7 +378,6 @@ DeviceCredential.metadata
 DeviceCredential.token
 DeviceCredential.updatedAt
 DeviceCredentialCreateRequest
-DeviceCredentialCreateRequest.credentialId
 DeviceCredentialCreateRequest.credentialType
 DeviceCredentialCreateRequest.deviceToken
 DeviceCredentialCreateRequest.enabled
@@ -387,7 +385,6 @@ DeviceCredentialCreateRequest.expiresAt
 DeviceCredentialCreateRequest.metadata
 DeviceCredentialCreateRequest.token
 DeviceCredentialSearchCriteria
-DeviceCredentialSearchCriteria.credentialId
 DeviceCredentialSearchCriteria.credentialType
 DeviceCredentialSearchCriteria.device
 DeviceCredentialSearchCriteria.enabled
@@ -397,7 +394,6 @@ DeviceCredentialSearchResults
 DeviceCredentialSearchResults.pagination
 DeviceCredentialSearchResults.results
 DeviceCredentialUpdateRequest
-DeviceCredentialUpdateRequest.credentialId
 DeviceCredentialUpdateRequest.credentialType
 DeviceCredentialUpdateRequest.deviceToken
 DeviceCredentialUpdateRequest.enabled

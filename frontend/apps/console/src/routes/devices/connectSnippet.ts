@@ -18,14 +18,15 @@
 //
 // What the console cannot know is left as a visible placeholder, never guessed: the
 // instance id and the hosts are deployment facts no API serves, and an MQTT_BASIC password
-// is stored only as a digest, so it was shown once when it was set and cannot be shown
-// again.
+// or an ACCESS_TOKEN is stored only as a digest, so it was shown once when it was set and
+// cannot be shown again.
 
 export const PLACEHOLDER = {
   instanceId: '<instance-id>',
   mqttHost: '<mqtt-host>',
   ingestHost: '<ingest-host>',
   password: '<password>',
+  accessToken: '<access-token>',
 } as const;
 
 // The broker's MQTT listener port (TLS) and the HTTP ingest listener's default port.

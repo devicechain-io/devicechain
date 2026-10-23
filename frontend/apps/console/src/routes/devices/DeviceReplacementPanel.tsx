@@ -34,11 +34,11 @@ import { listDeviceReplacements, replaceDevice } from '@/lib/api/replacements';
 // past swaps.
 //
 // 🔴 THE MINTED CREDENTIAL IS SHOWN EXACTLY ONCE, and that is a property of the
-// system rather than a choice this panel makes. The replacement record stores the
-// new credential's ENTITY TOKEN, not its id, so nothing here can re-fetch the
-// material later — reading it again means going to the separately-gated credential
-// queries. The banner therefore stays up until the operator dismisses it, and the
-// copy button is the only way the value leaves this screen.
+// system rather than a choice this panel makes. The platform stores an access token
+// only as a keyed digest, and the replacement record keeps the new credential's ENTITY
+// TOKEN, not its id, so nothing can read the material again. The banner therefore stays
+// up until the operator dismisses it, and the copy button is the only way the value
+// leaves this screen.
 //
 // The mutation needs device:write (the result carries a bearer); the history reads
 // at device:read. DeviceDetailPage mounts the whole tab only for a device:write

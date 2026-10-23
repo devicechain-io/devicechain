@@ -15,8 +15,8 @@ Available. You manage credentials from the **Credentials** tab of the device det
 
 | Type | The device presents | Stored secret |
 | --- | --- | --- |
-| `ACCESS_TOKEN` | a bearer token (the credential id) | none — possession of the id is the proof |
-| `MQTT_BASIC` | a username (the credential id) + password | the password |
+| `ACCESS_TOKEN` | a bearer token (the credential id) | a one-way, keyed digest of the token |
+| `MQTT_BASIC` | a username (the credential id) + password | a one-way, keyed digest of the password |
 
 :::note X.509 credentials are not accepted
 The `X509_CERTIFICATE` type is not supported until certificate verification ships. Creating or updating a credential of that type is refused (`UNSUPPORTED`), and a credential of that type that already exists no longer authenticates. Use `ACCESS_TOKEN` or `MQTT_BASIC`.
@@ -24,11 +24,11 @@ The `X509_CERTIFICATE` type is not supported until certificate verification ship
 
 ## Reading a credential requires `device:write` {#reading-a-credential}
 
-A secret, where a type has one, is **write-only**. Only `MQTT_BASIC` has one: its password. You submit the password when you register the credential, and it is never returned on read: the API returns `null` for it, and the platform keeps only a one-way, keyed digest of it, never the password itself. The console shows the password **once**, right after you set it, and never again. See [Show-once passwords and rotation](#show-once).
+A secret is **write-only**, and both types have one: the password of an `MQTT_BASIC` credential and the token of an `ACCESS_TOKEN` credential. You submit it when you register the credential, and the platform keeps only a one-way, keyed digest of it, never the secret itself. The API returns `null` for `credentialValue` on every read. An access token is the `credentialId`, and the API returns it exactly **once**: in the response to the call that sets it (registering the credential, an update that rotates it, or a device replacement that mints one). Every read after that returns a fingerprint in its place, a value that begins `dctk1$`, identifies the credential and cannot be presented as the token. The console shows a password or a token **once**, right after you set it, and never again. See [Show-once passwords and tokens, and rotation](#show-once).
 
-That protects the `MQTT_BASIC` password and nothing else. `ACCESS_TOKEN` stores no secret to withhold, because the **`credentialId` is itself the bearer**. `credentialId` is a plainly readable field. So whatever the type, reading a device's credentials gives you what you need to authenticate as that device.
+So whatever the type, reading a device's credentials does not give you what you need to authenticate as that device. You can still find a credential by its token: `deviceCredentials` accepts the token, or the fingerprint, as the `credentialId` in its criteria, and the platform digests the token you type before it matches.
 
-For that reason, every query that returns a credential requires **`device:write`**, not `device:read`. A read-only user cannot list a device's credentials, which is why the console does not show them the **Credentials** tab. The requirement takes nothing away from a `device:write` holder: they can already register a credential for any device in the tenant and impersonate it. What it prevents is that capability reaching the read-only baseline that every enabled tenant member receives.
+Every query that returns a credential still requires **`device:write`**, not `device:read`, because the listing names a device's usernames, expiries and state. A read-only user cannot list a device's credentials, which is why the console does not show them the **Credentials** tab. The requirement takes nothing away from a `device:write` holder, who can already register a credential for any device in the tenant. What it does is keep the listing out of the read-only baseline that every enabled tenant member receives.
 
 ## How a device presents a credential
 
@@ -133,21 +133,22 @@ The `devicechain_devicemanagement_credential_checks_total` metric counts every p
 1. Open the device's detail page and select the **Credentials** tab.
 2. Choose the credential **type** and fill in the fields for that type: generate or paste an access token, or enter a username and password for MQTT-basic. For a password, type one or click **Generate strong password**.
 3. Click **Add credential**.
-4. For `MQTT_BASIC`, a banner now shows the password with a copy button. **Copy it now**: this is the only time it is shown. Click **Done** when you have it. Leaving the page, reloading it or opening another device also clears the banner.
+4. A banner now shows the password (for `MQTT_BASIC`) or the access token (for `ACCESS_TOKEN`) with a copy button. **Copy it now**: this is the only time it is shown. Click **Done** when you have it. Leaving the page, reloading it or opening another device also clears the banner.
 
 To delete a credential, use its row. The device can no longer authenticate with it.
 
-## Show-once passwords and rotation {#show-once}
+## Show-once passwords and tokens, and rotation {#show-once}
 
-Because the platform keeps only a digest of an `MQTT_BASIC` password, nobody can read it back, including an administrator. The console follows from that:
+Because the platform keeps only a digest of an `MQTT_BASIC` password and of an `ACCESS_TOKEN` token, nobody can read either back, including an administrator. The console follows from that:
 
-- **The password is shown once**, in a banner with a copy button, when you add the credential or set a new password. After that the credential's row says only that a password is set. No screen ever shows a stored password or its digest, and no form is filled in with one.
-- **A password that is lost cannot be recovered.** Set a new one.
+- **The password or token is shown once**, in a banner with a copy button, when you add the credential or set a new one. After that the credential's row says only that a password or an access token is set. No screen ever shows a stored secret or its digest, and no form is filled in with one.
+- **A password or token that is lost cannot be recovered.** Set a new one.
 - **To rotate a password**, click **Set new password** on the credential's row, type one or click **Generate strong password**, and click **Save password**. The new password is shown once, as above. The device's current password stops opening new connections as soon as you save; on events it stops as a revocation does, within minutes by default (see [How quickly a revocation takes effect](#revocation-timing)). Have the new one ready to load onto the device. The credential's other fields are left as they were.
+- **To rotate an access token**, click **Set new token** on the credential's row and confirm. The console generates a new token and shows it once, as above. The device's current token stops opening new connections as soon as you confirm, and stops on events as a revocation does. Through GraphQL, call `updateDeviceCredential` with only `credentialId`.
 - **Generated passwords** are 24 random bytes from the browser's secure random source, written in URL-safe base64 (32 characters).
 - **Length.** The platform refuses an `MQTT_BASIC` password shorter than 16 bytes. The console warns as you type, counting UTF-8 bytes rather than characters (a character outside ASCII takes two to four), and still sends what you typed, so the platform's own refusal is the one you see if it disagrees.
 
-`ACCESS_TOKEN` credentials are different: the token is the credential id, a readable identifier by design, and stays listed with a copy button.
+An `MQTT_BASIC` **username** is an identifier, not a secret, and stays listed with a copy button.
 
 ## Register a credential (GraphQL)
 
@@ -162,5 +163,7 @@ mutation {
   }) { id token credentialType credentialId enabled }
 }
 ```
+
+For an `ACCESS_TOKEN`, the `credentialId` in the response is the token you sent, and it is the last time any response contains it. A token is at most 256 bytes and is stored only as a keyed digest, so it is checked exactly as you send it, byte for byte. To replace a token, call `updateDeviceCredential` with only `credentialId`: the old token stops working at once and the response carries the new one. Changing an existing credential to or from `ACCESS_TOKEN` requires `credentialId` in the same request (`INVALID_VALUE` otherwise), because the stored id means a token under one type and a username under the other.
 
 For `MQTT_BASIC`, also pass `credentialValue: "<password>"` (write-only). The password is checked exactly as you send it, including any leading or trailing spaces, so it must match what the device presents byte for byte; an empty value stores no password. The password must be at least 16 bytes long (and at most 4096); a shorter one is refused with `extensions.code` `INVALID_VALUE`, on registering a credential and on changing its password. A password set before this minimum existed keeps working until you change it. Changing an existing credential to `MQTT_BASIC` requires `credentialValue` in the same request. To change it later, call `updateDeviceCredential` with only `credentialValue`: the other fields are left alone, and the old password stops working at once. Neither call returns the password. Registering a credential and listing a device's credentials both require the `device:write` authority; see [Reading a credential requires `device:write`](#reading-a-credential).

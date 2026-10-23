@@ -52,6 +52,25 @@ func digestStoredCredentialSecrets(ctx context.Context, rdbm *rdb.RdbManager, ke
 		log.Info().Int("credentials", converted).
 			Msg("Replaced stored device credential secrets with their keyed digests.")
 	}
+	tokens, err := schema.DigestPlaintextAccessTokens(ctx, rdbm.Database, credential.IsAccessTokenDigest, key.AccessTokenDigest)
+	if err != nil {
+		return fmt.Errorf("could not digest stored device access tokens: %w", err)
+	}
+	if tokens > 0 {
+		log.Info().Int("credentials", tokens).
+			Msg("Replaced stored device access tokens with their keyed digests.")
+	}
+	foreignTokens, err := schema.CountForeignAccessTokenDigests(ctx, rdbm.Database, key.AccessTokenDigestPrefix())
+	if err != nil {
+		return fmt.Errorf("could not check stored device access token digests: %w", err)
+	}
+	if foreignTokens > 0 {
+		log.Error().Int64("credentials", foreignTokens).Str("keyId", key.KeyId()).
+			Msg("Stored device access tokens were digested under a different key than this " +
+				"instance's root key derives, so those devices cannot authenticate. The database was " +
+				"most likely restored next to the wrong root key; restore the matching root key, or " +
+				"set those credentials' access tokens again.")
+	}
 	foreign, err := schema.CountForeignCredentialDigests(ctx, rdbm.Database, "v1$"+key.KeyId()+"$")
 	if err != nil {
 		return fmt.Errorf("could not check stored device credential digests: %w", err)
