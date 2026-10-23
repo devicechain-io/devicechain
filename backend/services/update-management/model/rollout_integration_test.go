@@ -351,3 +351,51 @@ func TestTheTenantPurgeSweepsRolloutsAndTheirTargetsOnPostgres(t *testing.T) {
 	require.NoError(t, err)
 	require.Zero(t, residue.Rows)
 }
+
+// A dispatch that loses the device to a concurrent assignment of the SAME artifact (an operator
+// assigning it by hand while the step runs) adopts the winner's assignment: the device is on its
+// way to the rollout's target, and reporting it SKIPPED as busy would drop its outcome from the
+// rollout. The hand assign is held open until the step is blocked behind it on the unique index.
+func TestADispatchThatLosesToAHandAssignOfTheSameArtifactAdoptsItOnPostgres(t *testing.T) {
+	e := newPGRollouts(t, 2)
+	a := e.replica()
+	_, err := a.CreateRollout(e.ctx(), RolloutCreateRequest{Token: "r1", ArtifactToken: "fw-2", GroupToken: "fleet", MaxInFlight: 1})
+	require.NoError(t, err)
+	a.Devices = &syncDevices{err: errors.New("held")} // the start's inline step dispatches nobody
+	v, err := a.StartRollout(e.ctx(), "r1")
+	require.NoError(t, err)
+	a.Devices = e.devices
+
+	artifact, err := a.ArtifactByToken(e.ctx(), "fw-2")
+	require.NoError(t, err)
+	held := a.RDB.DB(e.ctx()).Begin()
+	require.NoError(t, held.Error)
+	defer held.Rollback()
+	hand, err := a.assignInTx(e.ctx(), held, "dev-0", artifact, nil)
+	require.NoError(t, err)
+
+	reached := make(chan struct{})
+	a.beforeDispatch = func() { close(reached) }
+	stepped := make(chan RolloutStepResult, 1)
+	go func() {
+		res, err := a.StepRollout(e.ctx(), v.Rollout.ID)
+		require.NoError(t, err)
+		stepped <- res
+	}()
+	<-reached
+	select {
+	case <-stepped:
+		t.Fatal("the step finished while the hand assign was uncommitted: the race was not exercised")
+	case <-time.After(500 * time.Millisecond):
+	}
+	require.NoError(t, held.Commit().Error)
+	res := <-stepped
+	require.Equal(t, 1, res.Dispatched)
+	require.Zero(t, res.Skipped)
+
+	page, err := a.RolloutTargets(e.ctx(), "r1", RolloutTargetCriteria{Pagination: rdb.Pagination{PageNumber: 1, PageSize: 10}})
+	require.NoError(t, err)
+	require.Equal(t, "dev-0", page.Results[0].Target.DeviceToken)
+	require.Equal(t, OutcomeInFlight, page.Results[0].Outcome, "adopted, not skipped as busy")
+	require.Equal(t, hand.Assignment.Token, page.Results[0].AssignmentToken)
+}

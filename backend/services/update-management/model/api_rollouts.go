@@ -425,6 +425,13 @@ func (api *Api) ResumeRollout(ctx context.Context, token string, failureThreshol
 	_, err = api.transition(ctx, token, func(tx *gorm.DB, r *UpdateRollout) (map[string]any, error) {
 		switch r.State {
 		case RolloutRunning:
+			// Already running: a repeated resume is a no-op, but only if it asks for nothing more. A
+			// threshold the caller passed and this answer did not apply would read as accepted.
+			if failureThreshold != nil && (!r.FailureThreshold.Valid || int(r.FailureThreshold.Int32) != *failureThreshold) {
+				return nil, refuse(CodeRolloutStateConflict,
+					"rollout %q is already %s; its failure threshold can only be changed by resuming it from %s",
+					token, RolloutRunning, RolloutPaused)
+			}
 			return nil, nil
 		case RolloutPaused:
 		default:
@@ -855,7 +862,7 @@ func (api *Api) dispatchOne(ctx context.Context, tx *gorm.DB, artifact *Artifact
 	}
 	now := api.now()
 	var view *UpdateAssignmentView
-	err := tx.Transaction(func(sp *gorm.DB) error {
+	body := func(sp *gorm.DB) error {
 		res := sp.Model(&UpdateRolloutTarget{ID: c.target.ID, DeviceToken: c.target.DeviceToken}).
 			Where("id = ? AND status = ?", c.target.ID, TargetPending).
 			Updates(map[string]any{"status": TargetDispatched, "dispatched_at": now, "updated_at": now})
@@ -878,7 +885,20 @@ func (api *Api) dispatchOne(ctx context.Context, tx *gorm.DB, artifact *Artifact
 		}
 		return sp.Model(&UpdateRolloutTarget{ID: c.target.ID, DeviceToken: c.target.DeviceToken}).Where("id = ?", c.target.ID).
 			Update("assignment_id", sql.NullInt64{Int64: int64(assignmentID), Valid: true}).Error
-	})
+	}
+	err := tx.Transaction(body)
+	if err != nil && !errors.Is(err, errTargetTaken) {
+		// Lost a race to a concurrent assignment of THIS artifact to the device (a hand assign, or
+		// another rollout of it): the unique index or the supersede refused the dispatch, and the
+		// savepoint rolled it back. The device is on its way to the rollout's target, so it is
+		// adopted rather than reported busy: the retry finds the winner's assignment and takes it.
+		var same []UpdateAssignment
+		if q := tx.Where("device_token = ? AND component = ? AND superseded_at IS NULL AND artifact_id = ?",
+			c.target.DeviceToken, artifact.Component, artifact.ID).Limit(1).Find(&same); q.Error == nil && len(same) == 1 {
+			view = nil
+			err = tx.Transaction(body)
+		}
+	}
 	if err == nil || errors.Is(err, errTargetTaken) {
 		return view, "", "", err
 	}
@@ -959,10 +979,32 @@ func (api *Api) AdvanceRollouts(ctx context.Context) (AdvanceResult, error) {
 	// 🔴 A TENANT-ISOLATION BYPASS, and it is one SELECT of ids and tenants, as the deadline sweep's.
 	// Which rollouts are running is a question across every tenant; every change is made by
 	// StepRollout under core.WithTenant(that rollout's own tenant).
+	//
+	// The walk is bounded per pass and RESUMES where the last pass stopped. Starting from the oldest
+	// every time would step the same first rollouts forever once more than the bound are running,
+	// and a rollout can stay RUNNING indefinitely (an UNKNOWN device holds its slot), so the newer
+	// ones would never be stepped again after their inline first step.
+	limit := maxRolloutsPerPass
+	if api.rolloutsPerPass > 0 {
+		limit = api.rolloutsPerPass
+	}
+	after := uint(api.rolloutPassAfter.Load())
 	var running []UpdateRollout
-	if err := api.RDB.DB(core.WithSystemContext(ctx)).Select("id", "tenant_id").Where("state = ?", RolloutRunning).
-		Order("id ASC").Limit(maxRolloutsPerPass).Find(&running).Error; err != nil {
-		return out, err
+	for {
+		if err := api.RDB.DB(core.WithSystemContext(ctx)).Select("id", "tenant_id").
+			Where("state = ? AND id > ?", RolloutRunning, after).
+			Order("id ASC").Limit(limit).Find(&running).Error; err != nil {
+			return out, err
+		}
+		if len(running) > 0 || after == 0 {
+			break
+		}
+		after = 0 // the last pass ended exactly at the end: start over now rather than idle a pass
+	}
+	if len(running) == limit {
+		api.rolloutPassAfter.Store(uint64(running[len(running)-1].ID))
+	} else {
+		api.rolloutPassAfter.Store(0)
 	}
 	for _, r := range running {
 		if api.TenantDeleted != nil && api.TenantDeleted(r.TenantId) {

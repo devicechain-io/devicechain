@@ -562,3 +562,79 @@ func TestAnUnknownOutcomeCountsTowardTheThreshold(t *testing.T) {
 	require.Equal(t, RolloutPaused, res.Transition)
 	require.Equal(t, PauseFailureThreshold, res.Reason)
 }
+
+// The instance's trust policy is applied at DISPATCH, not only when the rollout is created: an
+// artifact that stops being assignable under it (here the instance no longer accepts unverified
+// artifacts, as when the only active signer is revoked) pauses the rollout before the next device.
+func TestTheTrustPolicyIsAppliedAtEveryDispatch(t *testing.T) {
+	e := newRolloutEnv(t, 3)
+	e.create(t, "r1", 1, nil)
+	_, err := e.api.StartRollout(tenantCtx("acme"), "r1")
+	require.NoError(t, err)
+	require.Equal(t, int64(1), e.assignmentCount(t, "dev-0"))
+
+	e.api.AllowUnverified = false
+	e.finishCurrent(t, ota.StateUpdated, "dev-0")
+	res := e.step(t, "r1")
+	require.Equal(t, RolloutPaused, res.Transition)
+	require.Equal(t, PauseArtifactNotAssignable, res.Reason)
+	require.Zero(t, res.Dispatched)
+	require.Zero(t, e.assignmentCount(t, "dev-1"), "no device is told to install an artifact the policy refuses")
+	_, err = e.api.ResumeRollout(tenantCtx("acme"), "r1", nil)
+	requireRefusal(t, err, CodeRolloutArtifactUnassignable)
+
+	// The control: with the policy restored the same rollout resumes and dispatches.
+	e.api.AllowUnverified = true
+	v, err := e.api.ResumeRollout(tenantCtx("acme"), "r1", nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, v.Progress.InFlight)
+}
+
+// A resume of a rollout that is already RUNNING is a no-op, but not one that silently drops a
+// threshold the caller asked for.
+func TestResumingARunningRolloutRefusesAThresholdItWouldNotApply(t *testing.T) {
+	e := newRolloutEnv(t, 3)
+	e.create(t, "r1", 1, ptr(2))
+	_, err := e.api.StartRollout(tenantCtx("acme"), "r1")
+	require.NoError(t, err)
+
+	_, err = e.api.ResumeRollout(tenantCtx("acme"), "r1", ptr(5))
+	requireRefusal(t, err, CodeRolloutStateConflict)
+	require.Equal(t, int32(2), e.rollout(t, "r1").Rollout.FailureThreshold.Int32)
+
+	// The controls: a plain repeat, and a repeat of the threshold already in force, are no-ops.
+	_, err = e.api.ResumeRollout(tenantCtx("acme"), "r1", nil)
+	require.NoError(t, err)
+	_, err = e.api.ResumeRollout(tenantCtx("acme"), "r1", ptr(2))
+	require.NoError(t, err)
+}
+
+// A driver pass is bounded, and the next one resumes where it stopped: with more rollouts running
+// than one pass steps, every one of them is still stepped in turn.
+func TestDriverPassesReachEveryRunningRolloutInTurn(t *testing.T) {
+	e := newRolloutEnv(t, 6)
+	ctx := tenantCtx("acme")
+	for i := range 3 {
+		g := fmt.Sprintf("g%d", i)
+		e.groups.set("acme", g, fmt.Sprintf("dev-%d", 2*i), fmt.Sprintf("dev-%d", 2*i+1))
+		tok := fmt.Sprintf("r%d", i)
+		_, err := e.api.CreateRollout(ctx, RolloutCreateRequest{Token: tok, ArtifactToken: "fw-2", GroupToken: g, MaxInFlight: 1})
+		require.NoError(t, err)
+		_, err = e.api.StartRollout(ctx, tok)
+		require.NoError(t, err)
+	}
+	// Each rollout's first device finishes, so every rollout has a slot to fill.
+	e.finishCurrent(t, ota.StateUpdated, "dev-0", "dev-2", "dev-4")
+	e.api.rolloutsPerPass = 2
+
+	stepped := 0
+	for range 2 {
+		adv, err := e.api.AdvanceRollouts(context.Background())
+		require.NoError(t, err)
+		stepped += adv.Stepped
+	}
+	require.Equal(t, 3, stepped, "two passes of two step three rollouts once each")
+	for _, d := range []string{"dev-1", "dev-3", "dev-5"} {
+		require.Equal(t, int64(1), e.assignmentCount(t, d), "%s's rollout was stepped", d)
+	}
+}

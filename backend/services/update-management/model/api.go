@@ -161,6 +161,12 @@ type Api struct {
 	// noRolloutLock drops the rollout row lock. Set ONLY by the negative control of the
 	// two-replica test, to show that the lock is what keeps the cap.
 	noRolloutLock bool
+	// rolloutPassAfter is where this replica's next driver pass resumes its walk of the RUNNING
+	// rollouts (the last id the previous pass reached; 0 starts over), so a pass bounded to
+	// maxRolloutsPerPass rollouts still reaches every one of them in turn.
+	rolloutPassAfter atomic.Uint64
+	// rolloutsPerPass overrides maxRolloutsPerPass when positive. A seam for the fairness test.
+	rolloutsPerPass int
 }
 
 // The held-bytes predicate in CreateArtifact selects the artifacts that count against a tenant's ceiling: those
