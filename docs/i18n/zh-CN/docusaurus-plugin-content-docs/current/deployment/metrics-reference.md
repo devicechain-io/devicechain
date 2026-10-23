@@ -247,6 +247,15 @@ title: 指标参考
 前缀：`devicechain_usermanagement_`。
 
 这些统计死信消费者，它把服务放弃的失败存入可查询的存储，使其存续时间超过流自身的七天窗口。`dead_letters_unstored_total` 是重要的那个：存储无法接收的失败不会被记录在任何地方，`DeadLetterStoreLosing` 依据它触发。
+| `tenant_purge_in_flight` | 当前未完成的租户删除数量。 |
+| `tenant_purge_oldest_age_seconds` | 最早未完成租户删除自切断时起的时长；无未完成删除时为 0。`TenantPurgeStalled` 监控它。 |
+| `tenant_purge_store_blocked{store,reason}` | 各存储系统阻塞的未完成删除数量，按存储（`rdb`、`tsdb`、`broker`、`kv`、`detect`、`blob`、`other`）和原因（`deferred`：数据仍然存在或仍在写入；`error`：无法向该存储发出请求）区分。`TenantPurgeStoreFailing` 和 `TenantPurgeStoreHolding` 监控它。 |
+| `tenant_purge_store_rows_erased_total{store}` | 各存储为租户删除而擦除的行、对象、消息或键数量：被阻塞存储的进展信号。 |
+| `tenant_purge_store_erase_duration_seconds{store}` | 单次存储擦除调用耗时的直方图。 |
+| `tenant_purge_completed_total` | 已完成的租户删除：所有存储已清空、已稳定并已保留，屏障已解除，令牌已释放。 |
+| `tenant_purge_failures_total` | 协调器未能在一轮中推进某个租户删除的次数。下一轮会重试，因此统计的是尝试次数。`TenantPurgeCoordinatorFailing` 监控它。 |
+| `tenant_purge_duration_seconds` | 从租户删除到其令牌被释放的秒数直方图。包含令牌保留时间。 |
+| `tenant_purge_clean_duration_seconds` | 从租户删除到最后一个存储报告已清空的秒数直方图。不含随后的稳定等待和令牌保留等待：即擦除本身所用时间。 |
 
 | 指标 | 含义 |
 | --- | --- |

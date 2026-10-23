@@ -73,6 +73,9 @@ type Coordinator struct {
 	// inFlight and oldestAge are what an ALERT can be written against. See observe.
 	inFlight  prometheus.Gauge
 	oldestAge prometheus.Gauge
+
+	// metrics say which store is holding a purge back and how long a purge took.
+	metrics *metrics
 }
 
 // NewCoordinator builds the purge loop. interval is the tick period; settle is how long
@@ -96,6 +99,7 @@ func NewCoordinator(ms *core.Microservice, store *iam.Store, db *rdb.RdbManager,
 		"Tenant deletions currently open (a row in iam_tenants whose purge_state is purging)")
 	c.oldestAge = ms.NewGauge("tenant_purge_oldest_age_seconds",
 		"Age of the oldest open tenant deletion, measured from its cut; 0 when none are open")
+	c.metrics = newMetrics(ms)
 	return c
 }
 
@@ -173,6 +177,7 @@ func (c *Coordinator) pass(ctx context.Context) error {
 	// in-flight picture it read rather than the one from whenever it last got to the end.
 	c.observe(tenants)
 
+	tally := newPassTally()
 	var visited, failed int
 	var lastErr error
 	for i := range tenants {
@@ -182,12 +187,17 @@ func (c *Coordinator) pass(ctx context.Context) error {
 		default:
 		}
 		visited++
-		if err := c.PurgeTenant(ctx, &tenants[i]); err != nil {
+		if err := c.purgeTenant(ctx, &tenants[i], tally); err != nil {
+			c.metrics.failures.Inc()
 			log.Error().Err(err).Str("tenant", tenants[i].Token).Msg("Tenant purge did not complete this pass")
 			failed++
 			lastErr = err
 		}
 	}
+	// Published after the sweep from what the sweep saw, whole: every store x reason pair is
+	// written, so a store that recovered reads 0. A pass cut short by cancellation returns
+	// above without publishing, leaving the last complete picture rather than a partial one.
+	c.metrics.publish(tally)
 	return core.PassResult(visited, failed, lastErr)
 }
 
@@ -208,6 +218,11 @@ func (c *Coordinator) pass(ctx context.Context) error {
 // somewhere that did not filter — which is exactly how the guarantee would otherwise be
 // lost.
 func (c *Coordinator) PurgeTenant(ctx context.Context, tenant *iam.Tenant) error {
+	return c.purgeTenant(ctx, tenant, nil)
+}
+
+// purgeTenant is PurgeTenant reporting into the pass's tally, if it has one.
+func (c *Coordinator) purgeTenant(ctx context.Context, tenant *iam.Tenant, tally *passTally) error {
 	sys := core.WithSystemContext(ctx)
 
 	// 🔴 AN EMPTY STORE SET COMPLETES INSTANTLY IF THIS IS NOT HERE, and it does so
@@ -283,7 +298,16 @@ func (c *Coordinator) PurgeTenant(ctx context.Context, tenant *iam.Tenant) error
 			return ctx.Err()
 		default:
 		}
+		started := time.Now()
 		line := c.eraseOne(ctx, store, t.Token, epoch, rec.ID, cleanSince[store.Name()])
+		// Before the carry below: this pass's own figure is the progress, not the running total.
+		c.metrics.recordErase(store.Name(), line.Rows, time.Since(started))
+		switch {
+		case line.Failure != "":
+			tally.add(store.Name(), ReasonError)
+		case !line.Complete:
+			tally.add(store.Name(), ReasonDeferred)
+		}
 		// 🔴 ROWS ACCUMULATE ACROSS PASSES; THEY ARE NOT THIS PASS'S FIGURE. An erasure is
 		// idempotent by contract — the second call finds nothing and reports zero — and a
 		// purge cannot complete on its first pass, because the settle window has not
@@ -334,9 +358,27 @@ func (c *Coordinator) PurgeTenant(ctx context.Context, tenant *iam.Tenant) error
 	if err := c.iam.CompleteTenantPurge(sys, t, rec, total, c.now()); err != nil {
 		return fmt.Errorf("completing the purge of %q: %w", t.Token, err)
 	}
+	c.recordCompletion(epoch, lines)
 	log.Info().Str("tenant", t.Token).Time("epoch", epoch).Int64("rows", total).
 		Msg("Tenant purge complete; token released")
 	return nil
+}
+
+// recordCompletion observes the two durations of a finished deletion. Called once, after
+// CompleteTenantPurge committed, so a deletion that failed to complete is not counted.
+func (c *Coordinator) recordCompletion(epoch time.Time, lines []iam.TenantPurgeStore) {
+	now := c.now()
+	c.metrics.completed.Inc()
+	c.metrics.duration.WithLabelValues().Observe(now.Sub(epoch).Seconds())
+	var lastClean time.Time
+	for i := range lines {
+		if lines[i].CleanSince != nil && lines[i].CleanSince.After(lastClean) {
+			lastClean = *lines[i].CleanSince
+		}
+	}
+	if !lastClean.IsZero() {
+		c.metrics.clean.Observe(lastClean.Sub(epoch).Seconds())
+	}
 }
 
 // liftFences lifts every erasure fence a store planted, so a successor tenant at the

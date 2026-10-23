@@ -301,6 +301,15 @@ entregados, donde `dcctl dead-letters` las lista. Este contador te dice que nunc
 Prefijo: `devicechain_usermanagement_`.
 
 Estos cuentan el consumidor de mensajes no entregados, que guarda un fallo del que un servicio se rindió en un almacén consultable para que sobreviva a la propia ventana de siete días del flujo. `dead_letters_unstored_total` es la que importa: un fallo que el almacén no pudo aceptar no queda registrado en ningún lugar, y `DeadLetterStoreLosing` se dispara sobre ella.
+| `tenant_purge_in_flight` | Eliminaciones de inquilino abiertas en este momento. |
+| `tenant_purge_oldest_age_seconds` | Antigüedad de la eliminación abierta más antigua, desde su corte; 0 si no hay ninguna. `TenantPurgeStalled` la vigila. |
+| `tenant_purge_store_blocked{store,reason}` | Eliminaciones abiertas que retiene cada sistema de almacenamiento, por almacén (`rdb`, `tsdb`, `broker`, `kv`, `detect`, `blob`, `other`) y motivo (`deferred`: aún hay datos o siguen llegando; `error`: no se pudo consultar al almacén). `TenantPurgeStoreFailing` y `TenantPurgeStoreHolding` la vigilan. |
+| `tenant_purge_store_rows_erased_total{store}` | Filas, objetos, mensajes o claves que ha borrado cada almacén en eliminaciones de inquilino: la señal de avance de un almacén bloqueado. |
+| `tenant_purge_store_erase_duration_seconds{store}` | Histograma de lo que tardó una llamada de borrado de un almacén. |
+| `tenant_purge_completed_total` | Eliminaciones de inquilino completadas: todos los almacenes limpios, asentados y retenidos, barreras levantadas e identificador liberado. |
+| `tenant_purge_failures_total` | Veces que el coordinador no pudo llevar la eliminación de un inquilino a término en una pasada. Reintenta en la siguiente, así que cuenta intentos. `TenantPurgeCoordinatorFailing` la vigila. |
+| `tenant_purge_duration_seconds` | Histograma de segundos desde la eliminación de un inquilino hasta la liberación de su identificador. Incluye la retención del identificador. |
+| `tenant_purge_clean_duration_seconds` | Histograma de segundos desde la eliminación de un inquilino hasta que el último almacén informó de que estaba limpio. Excluye las esperas de asentamiento y retención posteriores: lo que tardó el borrado en sí. |
 
 | Métrica | Significa |
 | --- | --- |

@@ -293,6 +293,15 @@ Prefix: `devicechain_usermanagement_`.
 
 These count the dead-letter consumer, which stores a failure a service gave up on in a queryable store so it outlives the
 stream's own seven-day window. `dead_letters_unstored_total` is the one that matters: a failure
+| `tenant_purge_in_flight` | Tenant deletions currently open. |
+| `tenant_purge_oldest_age_seconds` | Age of the oldest open tenant deletion, from its cut; 0 when none are open. `TenantPurgeStalled` watches it. |
+| `tenant_purge_store_blocked{store,reason}` | Open deletions each storage system is holding back, by store (`rdb`, `tsdb`, `broker`, `kv`, `detect`, `blob`, `other`) and reason (`deferred`: data still present or arriving; `error`: the store could not be asked). `TenantPurgeStoreFailing` and `TenantPurgeStoreHolding` watch it. |
+| `tenant_purge_store_rows_erased_total{store}` | Rows, objects, messages or keys each store has erased for tenant deletions: the progress signal for a store that is blocked. |
+| `tenant_purge_store_erase_duration_seconds{store}` | Histogram of how long one store's erase call took. |
+| `tenant_purge_completed_total` | Tenant deletions completed: every store clean, settled and held, fences lifted, token released. |
+| `tenant_purge_failures_total` | Times the coordinator could not carry one tenant's deletion through a pass. It retries on the next pass, so this counts attempts. `TenantPurgeCoordinatorFailing` watches it. |
+| `tenant_purge_duration_seconds` | Histogram of seconds from a tenant's deletion to its token being released. Includes the token hold. |
+| `tenant_purge_clean_duration_seconds` | Histogram of seconds from a tenant's deletion to the last store reporting clean. Excludes the settle and token-hold waits that follow: the time the erasure itself took. |
 the store could not take is recorded nowhere, and `DeadLetterStoreLosing` fires on it.
 
 | Metric | Means |

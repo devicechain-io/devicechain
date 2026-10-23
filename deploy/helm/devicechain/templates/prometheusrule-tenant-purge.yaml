@@ -59,4 +59,31 @@ spec:
           annotations:
             summary: "Nothing is reporting whether tenant deletions are progressing"
             description: "The tenant-purge gauges have not been scraped for 15m, so TenantPurgeStalled above cannot fire and an open deletion would be invisible rather than green. This is the absent() counterweight: the in-flight gauge is unlabelled and registered at process start, so it reads 0 on a healthy instance rather than going missing -- its absence means user-management is not being scraped at all, not that no deletion is open."
+        - alert: TenantPurgeStoreFailing
+          expr: max by (store) (devicechain_usermanagement_tenant_purge_store_blocked{namespace="{{ $ns }}", reason="error"}) > 0
+          for: 1h
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "A storage system cannot be asked to erase a deleted tenant's data"
+            description: "For an hour, the {{ "{{ $labels.store }}" }} store has returned an error to the erase request for at least one open tenant deletion, so the coordinator cannot tell whether that tenant's data there is gone. Stores are rdb (relational data), tsdb (telemetry), broker (streams), kv (key-value buckets), detect (rule state) and blob (object storage); other is a store this alert's vocabulary does not name. The error is in user-management's log (\"Tenant purge store did not report clean\") and in the admin API's tenantDeletions query. The deletion cannot complete until the store answers."
+        - alert: TenantPurgeStoreHolding
+          expr: max by (store) (devicechain_usermanagement_tenant_purge_store_blocked{namespace="{{ $ns }}", reason="deferred"}) > 0
+          for: {{ $hold }}s
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "A storage system has reported a deleted tenant's data still present for longer than the token hold"
+            description: "The {{ "{{ $labels.store }}" }} store has answered the erase request for at least one open tenant deletion with data still present or still arriving, continuously for the length of the token hold ({{ $hold }}s). A store normally goes clean within a few passes; one that does not is either retaining data on purpose (a stream with a retention the purge cannot cut, a bucket that refuses deletes) or being refilled by something still writing for the deleted tenant. The admin API's tenantDeletions query names the tenant and the store's stated reason. TenantPurgeStalled fires later, at twice the hold, without naming the store."
+        - alert: TenantPurgeCoordinatorFailing
+          expr: sum(increase(devicechain_usermanagement_tenant_purge_failures_total{namespace="{{ $ns }}"}[1h])) > 0
+          for: 30m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "The tenant-deletion coordinator keeps failing to carry a deletion through a pass"
+            description: "The coordinator has failed to take at least one tenant deletion through a pass (re-reading the tenant, writing the ledger, lifting a fence or completing it) and the rate has stayed above zero for 30 minutes. This is a fault in the coordinator's own work, not a store holding data: a store's refusal is reported by TenantPurgeStoreFailing and TenantPurgeStoreHolding. User-management's log names the tenant and the step."
 {{- end }}

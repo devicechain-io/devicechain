@@ -140,3 +140,119 @@ tests:
       - eval_time: 20m
         alertname: TenantPurgeStalled
         exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # Per-store blocked gauge. Every store x reason series is exported at zero, so the
+  # quiet cases carry ALL of them: a quiet alert over a missing series is not a
+  # working alert.
+  # ------------------------------------------------------------------
+
+  # kv returns an error for two hours: TenantPurgeStoreFailing names it after its hour;
+  # the deferred alert stays quiet because kv is not deferring.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_usermanagement_tenant_purge_store_blocked{namespace="dci-devicechain", pod="dc-user-management-7c9f-abcde", job="devicechain/user-management", store="kv", reason="error"}'
+        values: '1x120'
+      - series: 'devicechain_usermanagement_tenant_purge_store_blocked{namespace="dci-devicechain", pod="dc-user-management-7c9f-abcde", job="devicechain/user-management", store="kv", reason="deferred"}'
+        values: '0x120'
+      - series: 'devicechain_usermanagement_tenant_purge_store_blocked{namespace="dci-devicechain", pod="dc-user-management-7c9f-abcde", job="devicechain/user-management", store="broker", reason="error"}'
+        values: '0x120'
+      - series: 'devicechain_usermanagement_tenant_purge_store_blocked{namespace="dci-devicechain", pod="dc-user-management-7c9f-abcde", job="devicechain/user-management", store="broker", reason="deferred"}'
+        values: '0x120'
+    alert_rule_test:
+      - eval_time: 50m
+        alertname: TenantPurgeStoreFailing
+        exp_alerts: []
+      - eval_time: 70m
+        alertname: TenantPurgeStoreFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              store: kv
+            exp_annotations:
+              summary: "A storage system cannot be asked to erase a deleted tenant's data"
+              description: "For an hour, the kv store has returned an error to the erase request for at least one open tenant deletion, so the coordinator cannot tell whether that tenant's data there is gone. Stores are rdb (relational data), tsdb (telemetry), broker (streams), kv (key-value buckets), detect (rule state) and blob (object storage); other is a store this alert's vocabulary does not name. The error is in user-management's log (\"Tenant purge store did not report clean\") and in the admin API's tenantDeletions query. The deletion cannot complete until the store answers."
+      - eval_time: 70m
+        alertname: TenantPurgeStoreHolding
+        exp_alerts: []
+
+  # broker defers for 11h: a store working through its data normally defers for hours,
+  # and this must not page before the 12h token hold has elapsed.
+  - interval: 5m
+    input_series:
+      - series: 'devicechain_usermanagement_tenant_purge_store_blocked{namespace="dci-devicechain", pod="dc-user-management-7c9f-abcde", job="devicechain/user-management", store="broker", reason="deferred"}'
+        values: '1x132'
+      - series: 'devicechain_usermanagement_tenant_purge_store_blocked{namespace="dci-devicechain", pod="dc-user-management-7c9f-abcde", job="devicechain/user-management", store="broker", reason="error"}'
+        values: '0x132'
+    alert_rule_test:
+      - eval_time: 11h
+        alertname: TenantPurgeStoreHolding
+        exp_alerts: []
+      - eval_time: 11h
+        alertname: TenantPurgeStoreFailing
+        exp_alerts: []
+
+  # broker still deferring after the full 12h hold: fires, naming the store.
+  - interval: 5m
+    input_series:
+      - series: 'devicechain_usermanagement_tenant_purge_store_blocked{namespace="dci-devicechain", pod="dc-user-management-7c9f-abcde", job="devicechain/user-management", store="broker", reason="deferred"}'
+        values: '1x200'
+      - series: 'devicechain_usermanagement_tenant_purge_store_blocked{namespace="dci-devicechain", pod="dc-user-management-7c9f-abcde", job="devicechain/user-management", store="broker", reason="error"}'
+        values: '0x200'
+    alert_rule_test:
+      - eval_time: 13h
+        alertname: TenantPurgeStoreHolding
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              store: broker
+            exp_annotations:
+              summary: "A storage system has reported a deleted tenant's data still present for longer than the token hold"
+              description: "The broker store has answered the erase request for at least one open tenant deletion with data still present or still arriving, continuously for the length of the token hold (43200s). A store normally goes clean within a few passes; one that does not is either retaining data on purpose (a stream with a retention the purge cannot cut, a bucket that refuses deletes) or being refilled by something still writing for the deleted tenant. The admin API's tenantDeletions query names the tenant and the store's stated reason. TenantPurgeStalled fires later, at twice the hold, without naming the store."
+
+  # A store that blocks briefly and recovers (error for 20m, then clean) never pages.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_usermanagement_tenant_purge_store_blocked{namespace="dci-devicechain", pod="dc-user-management-7c9f-abcde", job="devicechain/user-management", store="tsdb", reason="error"}'
+        values: '1x20 0x100'
+      - series: 'devicechain_usermanagement_tenant_purge_store_blocked{namespace="dci-devicechain", pod="dc-user-management-7c9f-abcde", job="devicechain/user-management", store="tsdb", reason="deferred"}'
+        values: '0x120'
+    alert_rule_test:
+      - eval_time: 100m
+        alertname: TenantPurgeStoreFailing
+        exp_alerts: []
+      - eval_time: 100m
+        alertname: TenantPurgeStoreHolding
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # Coordinator failures: a counter that moves for an hour pages; a flat one is quiet.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_usermanagement_tenant_purge_failures_total{namespace="dci-devicechain", pod="dc-user-management-7c9f-abcde", job="devicechain/user-management"}'
+        values: '0+1x120'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: TenantPurgeCoordinatorFailing
+        exp_alerts: []
+      - eval_time: 90m
+        alertname: TenantPurgeCoordinatorFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "The tenant-deletion coordinator keeps failing to carry a deletion through a pass"
+              description: "The coordinator has failed to take at least one tenant deletion through a pass (re-reading the tenant, writing the ledger, lifting a fence or completing it) and the rate has stayed above zero for 30 minutes. This is a fault in the coordinator's own work, not a store holding data: a store's refusal is reported by TenantPurgeStoreFailing and TenantPurgeStoreHolding. User-management's log names the tenant and the step."
+
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_usermanagement_tenant_purge_failures_total{namespace="dci-devicechain", pod="dc-user-management-7c9f-abcde", job="devicechain/user-management"}'
+        values: '4x120'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: TenantPurgeCoordinatorFailing
+        exp_alerts: []
