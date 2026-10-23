@@ -141,6 +141,89 @@ export declare function useChartTheme(): ChartTheme;
 export declare function wrapHeading(value: number | null | undefined): number | undefined;
 ```
 
+## `./empty-state:LAST_VALUE_STRINGS`
+
+```ts
+export declare const LAST_VALUE_STRINGS: Record<'en' | 'es', LastValueStrings>;
+```
+
+## `./empty-state:LastValueStrings`
+
+```ts
+export interface LastValueStrings {
+    lastValue: (value: string, age: string) => string;
+}
+```
+
+## `./empty-state:WIDGET_EMPTY_STRINGS`
+
+```ts
+export declare const WIDGET_EMPTY_STRINGS: Record<'en' | 'es', WidgetEmptyStrings>;
+```
+
+## `./empty-state:WidgetEmptyKind`
+
+```ts
+export type WidgetEmptyKind = 'unbound' | 'not-reported' | 'no-data' | 'forbidden' | 'error';
+```
+
+## `./empty-state:WidgetEmptyState`
+
+```ts
+export declare function WidgetEmptyState(props: WidgetEmptyStateProps): import("react").JSX.Element;
+```
+
+## `./empty-state:WidgetEmptyStateProps`
+
+```ts
+export interface WidgetEmptyStateProps {
+    kind: WidgetEmptyKind;
+    measurement?: string;
+    hint?: string;
+    detail?: string;
+    locale?: string;
+}
+```
+
+## `./empty-state:WidgetEmptyStrings`
+
+```ts
+export interface WidgetEmptyStrings {
+    unbound: {
+        title: string;
+        detail: string;
+    };
+    notReported: {
+        title: string;
+        detail: (measurement: string | undefined) => string;
+    };
+    noData: {
+        title: string;
+        detail: (measurement: string | undefined) => string;
+    };
+    forbidden: {
+        title: string;
+        detail: string;
+    };
+    error: {
+        title: string;
+        detail: string;
+    };
+}
+```
+
+## `./empty-state:lastValueHint`
+
+```ts
+export declare function lastValueHint(value: string, age: string, locale?: string | undefined): string;
+```
+
+## `./empty-state:widgetEmptyStrings`
+
+```ts
+export declare function widgetEmptyStrings(locale?: string | undefined): WidgetEmptyStrings;
+```
+
 ## `.:ALARM_LEVELS`
 
 ```ts
@@ -677,6 +760,24 @@ re-export of WidgetChannel from @devicechain/dashboards
 
 ```ts
 export type WidgetComponent<D = MeasurementStreamState> = ComponentType<WidgetProps<D>>;
+```
+
+## `.:WidgetDeclaredMetrics`
+
+```ts
+export interface WidgetDeclaredMetrics {
+    declared: readonly string[] | null | undefined;
+    ask: () => void;
+}
+```
+
+## `.:WidgetDeclaredMetricsProvider`
+
+```ts
+export declare function WidgetDeclaredMetricsProvider(props: {
+    value: WidgetDeclaredMetrics;
+    children: ReactNode;
+}): import("react").JSX.Element;
 ```
 
 ## `.:WidgetDefinition`
@@ -1264,6 +1365,12 @@ export declare function useStickyChars(chars: number, holdMs?: number): number;
 export declare function useWidgetCandidates(): WidgetCandidates | undefined;
 ```
 
+## `.:useWidgetDeclaredMetrics`
+
+```ts
+export declare function useWidgetDeclaredMetrics(): WidgetDeclaredMetrics;
+```
+
 ## `.:useWidgetFrameStyle`
 
 ```ts
@@ -1342,6 +1449,13 @@ types: ./dist/index.d.ts
 ```ts
 import: ./dist/echarts.js
 types: ./dist/echarts.d.ts
+```
+
+## `exports:./empty-state`
+
+```ts
+import: ./dist/empty-state.js
+types: ./dist/empty-state.d.ts
 ```
 
 ## `exports:./package.json`

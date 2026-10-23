@@ -21,6 +21,7 @@ import {
 
 import { useLevelReading, type LevelReading } from '../level-reading';
 import { LevelEmpty, LevelReadout } from '../level-readout';
+import { LevelEmptyFor } from '../no-reading';
 import { litBars } from '../value-scale';
 
 export const SIGNAL_MIN_BARS = 2;
@@ -45,7 +46,7 @@ export function SignalBars({ widget, data }: WidgetProps) {
 function BarsBody({ reading: r, scale: ws }: { reading: LevelReading; scale: WidgetScale }) {
   if (r.thresholds.length < SIGNAL_MIN_BARS) return <LevelEmpty message={r.strings.setThresholds} />;
   const bars = litBars(r.thresholds, r.value);
-  if (!bars) return <LevelEmpty message={r.strings.noData} />;
+  if (!bars) return <LevelEmptyFor reading={r} reason={undefined} />;
   const n = bars.total;
   // n bars and n-1 gaps of a third of a bar's width across the viewBox.
   const barW = VIEW.w / (n + (n - 1) / 3);

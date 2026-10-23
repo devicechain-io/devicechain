@@ -254,9 +254,16 @@ En un espacio más estrecho usa tantas columnas como quepan y reparte los widget
 de lectura, de arriba abajo y de izquierda a derecha. Por debajo de 600 px de ancho, como en un
 teléfono, cada widget ocupa su propia fila a todo el ancho, de modo que el panel se lee como una
 sola columna. Cada widget conserva su tamaño dentro de los límites que admite, y un widget colocado
-en relación con otro se mueve con él. Un widget que todavía no ha
-recibido datos muestra un guion o *No data yet* (este texto aparece en inglés también en la consola
-en español).
+en relación con otro se mueve con él. Un widget sin nada que dibujar
+dice por qué, en un estado atenuado y no con una tarjeta en blanco ni un guion suelto:
+
+- **Sin dispositivo elegido**: el espacio del widget no tiene dispositivo vinculado. Elija uno en el selector del panel o vincule el espacio.
+- **Este dispositivo no lo informa**: el perfil activo del dispositivo no declara la medición que pide el widget, así que nunca la informará. La solución está en el widget (elegir otra medición) o en el perfil, no en esperar.
+- **Sin datos en este rango**: el perfil declara la medición, pero no llegó nada en el rango de tiempo mostrado. Si se conoce una lectura anterior al rango, el widget añade *Último valor 21,4 °C · hace 3 días*.
+- **Sin acceso**: la plataforma rechazó la lectura porque su acceso se limita a una parte del inquilino.
+- **Datos no disponibles**: el origen de datos no respondió. El mensaje nombra el fallo.
+
+Estos estados son deliberadamente discretos. Usan el color de texto atenuado, sin símbolo de advertencia ni color de severidad, porque en un panel ese estilo significa una alarma. Un widget pequeño muestra solo el título; uno mayor añade la explicación y el último valor. Pase el cursor sobre el estado para leer la frase completa.
 
 Un panel guardado por una versión anterior se convierte a la cuadrícula actual al abrirlo. La
 conversión es aproximada, así que el editor muestra un aviso que pide revisar el diseño. Al guardar,

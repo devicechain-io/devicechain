@@ -32,6 +32,7 @@ import {
 import { arcPath } from '../category-geometry';
 import { fleetStrings } from '../fleet-strings';
 import { LevelEmpty } from '../level-readout';
+import { Explained } from '../no-reading';
 import { tallyPresence } from '../presence-model';
 import { presenceStrings } from '../presence-strings';
 import { OFFLINE_LEVEL } from './device-status';
@@ -51,14 +52,14 @@ export function OnlineDoughnut({ widget, data }: WidgetProps) {
   const feed = data.members;
   const title = optString(widget.options, 'title');
 
-  const empty = (message: string) => (
+  const empty = (message: string, kind?: 'unbound' | 'forbidden') => (
     <WidgetFrame title={title}>
-      <LevelEmpty message={message} />
+      {kind ? <Explained kind={kind} message={message} /> : <LevelEmpty message={message} />}
     </WidgetFrame>
   );
   if (!feed || feed.status === 'loading') return empty(fleet.loading);
-  if (feed.status === 'unbound') return empty(fleet.unbound);
-  if (feed.status === 'forbidden') return empty(fleet.forbidden);
+  if (feed.status === 'unbound') return empty(fleet.unbound, 'unbound');
+  if (feed.status === 'forbidden') return empty(fleet.forbidden, 'forbidden');
   if (feed.status === 'unsupported') return empty(strings.unsupported);
   if (feed.members.length === 0) return empty(fleet.noMembers);
   const tally = tallyPresence(feed.members);

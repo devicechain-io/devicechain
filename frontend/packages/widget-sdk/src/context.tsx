@@ -190,6 +190,34 @@ export function useWidgetFreshness(): WidgetFreshness | undefined {
   return useContext(WidgetFreshnessContext);
 }
 
+// What the widget's bound device's ACTIVE profile declares, for a widget that has nothing to draw and
+// needs to say whether the device will ever report what it asks for. `declared` is the declared
+// measurement names, `null` when the profile cannot say (none published, no way to look), and
+// `undefined` until it has been asked for and answered. Nothing is read until a widget calls
+// `ask()` -- a board whose widgets all have data costs no lookup. An unknown declaration is read
+// as declared, never as absent.
+export interface WidgetDeclaredMetrics {
+  declared: readonly string[] | null | undefined;
+  ask: () => void;
+}
+
+const NO_DECLARED: WidgetDeclaredMetrics = { declared: undefined, ask: () => undefined };
+const WidgetDeclaredMetricsContext = createContext<WidgetDeclaredMetrics>(NO_DECLARED);
+
+export function WidgetDeclaredMetricsProvider({
+  value,
+  children,
+}: {
+  value: WidgetDeclaredMetrics;
+  children: ReactNode;
+}) {
+  return <WidgetDeclaredMetricsContext.Provider value={value}>{children}</WidgetDeclaredMetricsContext.Provider>;
+}
+
+export function useWidgetDeclaredMetrics(): WidgetDeclaredMetrics {
+  return useContext(WidgetDeclaredMetricsContext);
+}
+
 // The frame a board gives a widget: its canvas default merged with the widget's own override
 // (resolveFrame in @devicechain/dashboards). Absent -- a widget mounted outside a board -- the
 // frame is today's card.

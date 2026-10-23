@@ -20,7 +20,8 @@ import { buildCompassOption, EChart, useChartTheme } from '@devicechain/widget-s
 
 import { cardinalOf, shownHeading } from '../heading';
 import { emptyReason, useLevelReading, type LevelReading } from '../level-reading';
-import { LevelEmpty, LevelReadout } from '../level-readout';
+import { LevelReadout } from '../level-readout';
+import { LevelEmptyFor } from '../no-reading';
 
 // Whole degrees unless the options ask for more: a bearing is rarely good to a tenth.
 const DEFAULT_PRECISION = 0;
@@ -51,7 +52,7 @@ function CompassBody({ reading: r, title, scale: ws }: { reading: LevelReading; 
     [r.value, theme, r.strings, r.thresholds, ws.scale, ws.size],
   );
   const reason = emptyReason(r);
-  if (reason !== undefined || r.value === undefined) return <LevelEmpty message={reason ?? r.strings.noData} />;
+  if (reason !== undefined || r.value === undefined) return <LevelEmptyFor reading={r} reason={reason} />;
   const point = cardinalOf(r.value, r.strings.cardinals);
   const stripHeight = Math.max(ws.px('font-md') * 1.6, ws.size.height * READOUT_SHARE);
   return (

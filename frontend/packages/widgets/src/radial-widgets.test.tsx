@@ -105,14 +105,14 @@ describe('compass', () => {
 
   it('says No data, not a heading, when nothing has arrived or the value is not a number', () => {
     show({}, 'none');
-    expect(screen.getByText('No data')).toBeTruthy();
+    expect(screen.getByText('No data in this range')).toBeTruthy();
     expect(readout()).toBeNull();
     cleanup();
     show({}, null);
-    expect(screen.getByText('No data')).toBeTruthy();
+    expect(screen.getByText('No data in this range')).toBeTruthy();
     cleanup();
     show({}, Number.NaN);
-    expect(screen.getByText('No data')).toBeTruthy();
+    expect(screen.getByText('No data in this range')).toBeTruthy();
   });
 
   const thresholds = [
@@ -206,7 +206,7 @@ describe('progress-ring', () => {
 
   it('says No data with a scale but no sample', () => {
     show(opts, 'none');
-    expect(screen.getByText('No data')).toBeTruthy();
+    expect(screen.getByText('No data in this range')).toBeTruthy();
     expect(q('[data-ring-fill]')).toBeNull();
   });
 
@@ -265,11 +265,12 @@ describe('gauge readout', () => {
     expect(optionOf().series[0].detail.show).toBe(false);
   });
 
-  it('shows an em dash and draws no needle with no sample', () => {
+  it('explains the absence and draws no needle with no sample', async () => {
     // A needle resting on the minimum would read as a reading of the minimum.
     show({ min: 10, max: 50 }, 'none');
-    expect(readout()?.textContent).toBe('—');
-    expect(optionOf().series[0].pointer.show).toBe(false);
+    // The explanation is its own chunk, fetched on first use.
+    expect(await screen.findByText('No data in this range', {}, { timeout: 4000 })).toBeTruthy();
+    expect(readout()).toBeNull();
     cleanup();
     show({ min: 10, max: 50 }, 10);
     expect(optionOf().series[0].pointer.show).toBe(true);
@@ -295,9 +296,10 @@ describe('gauge readout', () => {
     expect(meter.getAttribute('aria-valuetext')).toBe('80 C');
   });
 
-  it('with no sample, is no meter and prints a bare em dash, never a unit with no number', () => {
+  it('with no sample, is no meter and prints no bare dash or unit with no number', async () => {
     show({ min: 0, max: 50, unit: 'C' }, 'none');
+    expect(await screen.findByText('No data in this range', {}, { timeout: 4000 })).toBeTruthy();
     expect(screen.queryByRole('meter')).toBeNull();
-    expect(readout()?.textContent).toBe('—');
+    expect(readout()).toBeNull();
   });
 });

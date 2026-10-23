@@ -409,7 +409,7 @@ describe('every way of having no chart is a sentence', () => {
     mount(chart(), f.hub);
     await vi.waitFor(() => expect(f.asked).toHaveBeenCalled());
     act(() => f.sink().forbidden?.());
-    expect(await screen.findByText(/access/i)).toBeTruthy();
+    expect(await screen.findByText(/do not have access/i)).toBeTruthy();
   });
 
   it('a source that cannot list a fleet', async () => {

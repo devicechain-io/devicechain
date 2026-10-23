@@ -133,6 +133,10 @@ export interface DeviceResolver {
   // included), or null when it declares nothing to consult. Rejects when the read fails. Optional:
   // a resolver without it leaves every member's declaration unknown.
   declaredMetrics?(deviceType: string): Promise<string[] | null>;
+  // The token of the device type a device belongs to, or null when it has none (or does not exist).
+  // Rejects when the read fails. Optional: a resolver without it cannot say what a single device's
+  // profile declares.
+  deviceType?(deviceToken: string): Promise<string | null>;
 }
 
 // WidgetStreamSink receives live samples for one widget, across every device its
@@ -417,6 +421,10 @@ export interface WidgetDataSource {
   // silent). `null` when it cannot say -- no published profile, no way to look, or the lookup
   // failed -- and an unknown declaration is read as declared, never as absent. Optional like the above.
   declaredMetrics?(deviceType: string): Promise<readonly string[] | null>;
+  // The same, for ONE device: what its device type's active profile declares. It backs the explained
+  // empty state of a single-device widget ("this device does not report that"). `null` when it cannot
+  // say, with the same rule: unknown is read as declared. Optional like the above.
+  declaredMetricsForDevice?(deviceToken: string): Promise<readonly string[] | null>;
   // A presence widget's roster and connectivity: the members the selector resolves to (delivered
   // once), then a whole snapshot of their device-state on every poll (online or offline, last active).
   // Optional: a source with no device-state to read (a recorded run) omits it, and the widget then
@@ -576,6 +584,17 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
       this.declared.set(deviceType, pending);
     }
     return pending;
+  }
+
+  async declaredMetricsForDevice(deviceToken: string): Promise<readonly string[] | null> {
+    const typeOf = this.resolver.deviceType;
+    if (!typeOf) return null;
+    try {
+      const type = await typeOf.call(this.resolver, deviceToken);
+      return type ? await this.declaredMetrics(type) : null;
+    } catch {
+      return null;
+    }
   }
 
   // The hub-wide cap on in-flight member seed reads, and the reads currently in flight (so a second

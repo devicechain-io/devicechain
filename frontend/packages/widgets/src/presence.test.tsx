@@ -92,7 +92,7 @@ function card(state: FleetState | undefined) {
     figure: container.querySelector('[data-level-readout]')?.textContent,
     figureColor: container.querySelector<HTMLElement>('[data-level-readout]')?.style.color,
     caption: container.querySelector('[data-device-status-caption]')?.textContent,
-    empty: container.querySelector('[data-level-empty]')?.textContent,
+    empty: (container.querySelector('[data-level-empty]') ?? container.querySelector('[data-empty-detail]'))?.textContent,
   };
 }
 
@@ -108,7 +108,7 @@ function doughnut(state: FleetState | undefined) {
     segment: (kind: string) => container.querySelector<SVGElement>(`[data-segment="${kind}"]`),
     legend,
     notes: [...container.querySelectorAll('[data-doughnut-note]')].map((n) => n.textContent),
-    empty: container.querySelector('[data-level-empty]')?.textContent,
+    empty: (container.querySelector('[data-level-empty]') ?? container.querySelector('[data-empty-detail]'))?.textContent,
     label: container.querySelector('svg')?.getAttribute('aria-label'),
   };
 }

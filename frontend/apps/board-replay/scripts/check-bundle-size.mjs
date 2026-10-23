@@ -131,7 +131,7 @@ export function lazyBoundaries() {
     // Widget components the sitepulse board may not need on its first frame.
     { what: 'the alarm table and alarm count', chunk: 'alarm-widgets', markers: ['Action failed', 'worst severity'] },
     { what: 'the entity selector', chunk: 'entity-selector', markers: ['No target slot configured.'] },
-    { what: 'the measurement table', chunk: 'table', markers: ['No data yet'] },
+    { what: 'the measurement table', chunk: 'table', markers: ['0.04em'] },
     { what: 'the command button', chunk: 'control-widgets', markers: ['Couldn’t load command history.'] },
     // The chart engine: ECharts (its instance attribute) and zrender (its DOM id attribute), in ONE
     // chunk, fetched by preloadWidgets for a board holding a chart, or by the first chart to mount.

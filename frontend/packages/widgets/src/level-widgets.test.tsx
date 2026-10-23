@@ -189,12 +189,12 @@ describe('linear-gauge', () => {
 
   it('says why it cannot draw instead of drawing a fake value', () => {
     render_(opts, 'none');
-    expect(screen.getByText('No data')).toBeTruthy();
+    expect(screen.getByText('No data in this range')).toBeTruthy();
     expect(q('[data-fill]')).toBeNull();
     expect(q('[role="meter"]')).toBeNull();
     cleanup();
     render_(opts, null);
-    expect(screen.getByText('No data')).toBeTruthy();
+    expect(screen.getByText('No data in this range')).toBeTruthy();
     expect(screen.queryByText('0')).toBeNull();
   });
 
@@ -315,7 +315,7 @@ describe('level-gauge', () => {
     expect(q('[data-liquid]')).toBeNull();
     cleanup();
     render_(opts, 'none');
-    expect(screen.getByText('No data')).toBeTruthy();
+    expect(screen.getByText('No data in this range')).toBeTruthy();
     expect(q('[data-liquid]')).toBeNull();
   });
 });
@@ -374,7 +374,7 @@ describe('battery', () => {
 
   it('shows no charge rather than 0% when it has no reading', () => {
     render_({}, 'none');
-    expect(screen.getByText('No data')).toBeTruthy();
+    expect(screen.getByText('No data in this range')).toBeTruthy();
     expect(q('[data-fill-bar]')).toBeNull();
     expect(screen.queryByText('0')).toBeNull();
   });
@@ -528,7 +528,7 @@ describe('signal-bars', () => {
 
   it('shows no bars rather than an empty signal when it has no reading', () => {
     render_({ thresholds: steps }, 'none');
-    expect(screen.getByText('No data')).toBeTruthy();
+    expect(screen.getByText('No data in this range')).toBeTruthy();
     expect(bars('lit') + bars('unlit')).toBe(0);
   });
 });
