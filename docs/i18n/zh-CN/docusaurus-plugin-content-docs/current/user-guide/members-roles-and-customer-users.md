@@ -153,3 +153,4 @@ sidebar_position: 19
 - [在 /dash 中查看仪表板](/user-guide/viewing-dashboards-in-dash)
 - [GraphQL API：访问权限仅限部分客户时](/reference/graphql-api#limited-access)
 - [管理设备分配](/guides/managing-assignments)：将设备关联到客户。
+- [服务账号](/user-guide/service-accounts)：用于集成的非人类账号。

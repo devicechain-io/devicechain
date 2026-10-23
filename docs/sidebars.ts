@@ -139,6 +139,7 @@ const sidebars: SidebarsConfig = {
         'user-guide/viewing-dashboards-in-dash',
         'user-guide/notification-policies',
         'user-guide/members-roles-and-customer-users',
+        'user-guide/service-accounts',
       ],
     },
     {

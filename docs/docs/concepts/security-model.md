@@ -72,6 +72,10 @@ See [Multi-Tenancy](./multi-tenancy.md).
 - **Permissions.** Roles carry permissions, and the API checks them on each call. A membership can be limited to a
   customer's data, and members, invitations and roles a tenant manages for itself cannot grant more than the person
   granting them holds. See [Governance & Quotas](./governance.md).
+- **Integrations.** A tenant's [service accounts](../user-guide/service-accounts.md) exchange a client ID and secret
+  for a 5-minute access token (the OAuth `client_credentials` grant), with no refresh token and no person's sign-in.
+  An account holds exactly its roles' permissions, its secret is stored only as a keyed digest, and what it does is
+  audited under its own name.
 - **Single sign-on.** A tenant can require sign-in through its own identity provider. See
   [Single sign-on](./single-sign-on.md).
 - **AI agents.** The optional [MCP server](./mcp.md) calls the platform with the caller's own token. It holds no token of

@@ -252,3 +252,4 @@ cliente).
 - [Ver paneles en /dash](/user-guide/viewing-dashboards-in-dash)
 - [API de GraphQL: cuando tu acceso se limita a algunos clientes](/reference/graphql-api#limited-access)
 - [Gestión de asignaciones](/guides/managing-assignments): vincular dispositivos a clientes.
+- [Cuentas de servicio](/user-guide/service-accounts): cuentas no humanas para integraciones.
