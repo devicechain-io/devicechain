@@ -4,6 +4,7 @@
 package purge
 
 import (
+	"sort"
 	"sync"
 	"time"
 
@@ -53,6 +54,31 @@ var (
 	cleanBuckets = []float64{1, 10, 60, 300, 900, 1800, 3600, 7200, 21600, 43200, 86400}
 )
 
+// purgeBucketsFor adds buckets just above the token hold to the fixed set.
+//
+// 🔴 EVERY COMPLETED DELETION TAKES AT LEAST THE HOLD, so with the fixed set alone they all
+// land in the one bucket above it: at the 43200 s default, (43200, 64800]. A quantile over
+// that interpolates linearly across six hours and reads a 12 h 5 min deletion as about 15 h.
+// The interesting part of the distribution is how far past the hold a deletion ran, so
+// that is where the resolution goes. The hold is per instance, hence derived, not listed.
+func purgeBucketsFor(hold time.Duration) []float64 {
+	set := map[float64]bool{}
+	for _, b := range purgeBuckets {
+		set[b] = true
+	}
+	if h := hold.Seconds(); h > 0 {
+		for _, past := range []float64{120, 300, 900, 1800, 3600, 7200, 14400} {
+			set[h+past] = true
+		}
+	}
+	out := make([]float64, 0, len(set))
+	for b := range set {
+		out = append(out, b)
+	}
+	sort.Float64s(out)
+	return out
+}
+
 // metrics are the series that say WHICH store is holding a purge back and HOW LONG a purge
 // took. They carry no tenant label, for the reason given on Coordinator.observe: a series
 // named for a tenant would outlive the erasure it describes.
@@ -75,7 +101,7 @@ type metrics struct {
 	clean    prometheus.Observer
 }
 
-func newMetrics(ms *core.Microservice) *metrics {
+func newMetrics(ms *core.Microservice, tokenHold time.Duration) *metrics {
 	m := &metrics{
 		blocked: ms.NewGaugeVec("tenant_purge_store_blocked",
 			"Open tenant deletions a store is currently holding back, by store (rdb, tsdb, broker, kv, detect, blob, other) "+
@@ -93,7 +119,7 @@ func newMetrics(ms *core.Microservice) *metrics {
 				"the deletion is retried on the next pass, so this counts attempts, not abandoned deletions"),
 		duration: ms.NewHistogramVec("tenant_purge_duration_seconds",
 			"Seconds from a tenant's deletion to its token being released, observed once per completed deletion. Includes the token hold.",
-			nil, purgeBuckets),
+			nil, purgeBucketsFor(tokenHold)),
 	}
 	m.clean = ms.NewHistogramVec("tenant_purge_clean_duration_seconds",
 		"Seconds from a tenant's deletion to the last store reporting clean, observed once per completed deletion. "+

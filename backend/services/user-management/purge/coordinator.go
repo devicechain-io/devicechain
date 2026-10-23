@@ -108,7 +108,7 @@ func NewCoordinator(ms *core.Microservice, store *iam.Store, db *rdb.RdbManager,
 		"Tenant deletions currently open (a row in iam_tenants whose purge_state is purging)")
 	c.oldestAge = ms.NewGauge("tenant_purge_oldest_age_seconds",
 		"Age of the oldest open tenant deletion, measured from its cut; 0 when none are open")
-	c.metrics = newMetrics(ms)
+	c.metrics = newMetrics(ms, tokenHold)
 	return c
 }
 

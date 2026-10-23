@@ -6,6 +6,7 @@ package purge
 import (
 	"context"
 	"errors"
+	"sort"
 	"testing"
 	"time"
 
@@ -215,4 +216,37 @@ func TestAReplicaThatSkipsThePassReadsTheLedger(t *testing.T) {
 	require.True(t, ok)
 	require.EqualValues(t, 0, age.GetGauge().GetValue(), "completed on the other replica")
 	require.EqualValues(t, 0, peerGauge(StoreKeyValue, ReasonError))
+}
+
+// Every deletion takes at least the hold, so the buckets must resolve just above it, not
+// lump every completion into the one coarse bucket past the hold.
+func TestPurgeDurationBucketsResolveJustPastTheHold(t *testing.T) {
+	// Wired from the coordinator's own hold: the exported histogram carries hold+300.
+	h := newHarness(t, &fakeStore{name: StoreRelational, rows: 1})
+	d, ok := sample(t, h.reg, metricPrefix+"duration_seconds", nil)
+	require.True(t, ok)
+	var bounds []float64
+	for _, b := range d.GetHistogram().GetBucket() {
+		bounds = append(bounds, b.GetUpperBound())
+	}
+	require.Contains(t, bounds, tokenHoldWindow.Seconds()+300)
+
+	require.Equal(t, purgeBuckets, purgeBucketsFor(0), "no hold: the fixed set, unchanged")
+	b := purgeBucketsFor(12 * time.Hour)
+	require.True(t, sort.Float64sAreSorted(b))
+	require.Contains(t, b, 43200.0, "the fixed set survives")
+	seen := map[float64]bool{}
+	for _, v := range b {
+		require.False(t, seen[v], "duplicate bucket %v", v)
+		seen[v] = true
+	}
+	// A deletion two minutes past a 12 h hold lands in a bucket within five minutes of it.
+	upper := 0.0
+	for _, v := range b {
+		if v >= 43200+120 {
+			upper = v
+			break
+		}
+	}
+	require.LessOrEqual(t, upper, 43200.0+300)
 }
