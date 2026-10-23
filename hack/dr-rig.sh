@@ -82,7 +82,9 @@
 #                             keeping only what an off-site backup would have
 #   hack/dr-rig.sh restore    fresh cluster recovered from the escrow artifact +
 #                             BOTH off-cluster archives; the secret MUST decrypt
-#                             and the telemetry MUST come back intact
+#                             and the telemetry MUST come back intact, and the rebuilt
+#                             areas MUST authenticate with broker logins that were
+#                             minted again (none carried over, no shared login)
 #   hack/dr-rig.sh control    THE NEGATIVE CONTROLS, one per half, on two rebuilds.
 #                             The EVENT half first: the relational restore under
 #                             the ESCROWED key with the event store NOT restored,
@@ -1237,6 +1239,12 @@ drill against an artifact that belongs to a cluster that no longer exists."
   wait_for_api user-management
   wait_for_api notification-management
 
+  # The login Secrets as they are NOW, before the disaster, so the restore can be shown to have
+  # minted them again. See assert_area_logins.
+  login_fingerprints >"$logins_before_file" || fail "could not fingerprint the instance's broker logins"
+  [[ "$(wc -l <"$logins_before_file" | tr -d '[:space:]')" -ge 3 ]] ||
+    fail "the instance has fewer than 3 broker login Secrets before the disaster, so there is nothing to compare"
+
   say "seeding a secret through the platform's own API"
   # Through the ingress, as a tenant, into the deployed service — so the
   # ciphertext in the archive below is sealed by the real KEK, not manufactured by
@@ -1766,6 +1774,117 @@ on would report a failure that is not a finding.
 Still runnable without it: up, archive, disaster, down."
 }
 
+# ---------------------------------------------------------------------------
+# the broker logins of a restored instance
+# ---------------------------------------------------------------------------
+#
+# WHAT A RESTORE DOES TO THEM. Nothing is carried. The escrow artifact holds the ROOT KEY alone, and
+# the broker is not restored from anything: a restore is a fresh bootstrap that mints every broker
+# credential again, so the rebuilt instance's areas present logins that did not exist before the
+# disaster, and the old ones authenticate nowhere. The claim this drill makes about them is the one
+# an operator rebuilding after a disaster depends on: THE REBUILT AREAS AUTHENTICATE, WITH THEIR OWN
+# FRESHLY MINTED LOGINS, AND NOTHING ON THE REBUILT BROKER IS THE OLD SHARED ONE.
+#
+# 🔴 "FRESH" IS MEASURED, NOT ASSUMED. The login Secrets are fingerprinted (sha256 of the password,
+# never the password) before the disaster and again after the restore, and every principal's must
+# differ. A restore that quietly reused the old Secrets, or a rig that restored the wrong cluster's
+# state, would otherwise pass every check below: the areas would authenticate with logins that were
+# never re-minted.
+logins_before_file="$work/logins-before-disaster"
+
+# login_fingerprints prints "<secret> <sha256 of its password>" for every broker login Secret of the
+# instance, sorted. An empty password is refused: a Secret with none authenticates nothing.
+login_fingerprints() {
+  local name pw
+  kubectl --context "$kube_context" -n "$(instance_namespace)" get secrets -o json |
+    jq -r --arg prefix "dci-${instance}-nats-" \
+      '.items[] | select(.metadata.name | startswith($prefix)) | [.metadata.name, (.data.password // "")] | @tsv' |
+    sort |
+    while IFS=$'\t' read -r name pw; do
+      [[ -n "$pw" ]] || {
+        echo "Secret $name holds no password" >&2
+        exit 1
+      }
+      printf '%s %s\n' "$name" "$(printf '%s' "$pw" | sha256sum | cut -d' ' -f1)"
+    done
+}
+
+# logins_fresh_problems <before> <after> prints one line per way <after> is not a fresh set of
+# logins for the same principals as <before>, and nothing when it is.
+logins_fresh_problems() {
+  local before="$1" after="$2" name same
+  if [[ "$(cut -d' ' -f1 "$before")" != "$(cut -d' ' -f1 "$after")" ]]; then
+    echo "the rebuilt instance has a different set of login Secrets than the original"
+  fi
+  [[ "$(wc -l <"$after" | tr -d '[:space:]')" -ge 3 ]] || echo "the rebuilt instance has fewer than 3 login Secrets"
+  same="$(join "$before" "$after" | awk '$2 == $3 { print $1 }')"
+  for name in $same; do
+    echo "$name carries the SAME password as before the disaster: it was not minted again"
+  done
+}
+
+assert_area_logins() {
+  local after="$work/logins-after-restore" doc conf problems n bad
+  [[ -s "$logins_before_file" ]] || fail "$logins_before_file is missing; run 'up' first. Without the
+fingerprints taken before the disaster, nothing can say the logins were minted again."
+  login_fingerprints >"$after" || fail "could not read the rebuilt instance's login Secrets"
+
+  say "THE BROKER LOGINS — do the rebuilt areas authenticate with freshly minted per-area logins?"
+
+  # The document tells every area to use its own login, and names no shared one.
+  doc="$(instance_config)"
+  [[ "$(jq -r '.infrastructure.nats.auth.areaLogins // false' <<<"$doc")" == true ]] ||
+    fail "the rebuilt instance's document does not tell the areas to use their own logins (areaLogins)"
+  [[ -z "$(jq -r '.infrastructure.nats.auth.user // empty' <<<"$doc")" &&
+    -z "$(jq -r '.infrastructure.nats.auth.password // empty' <<<"$doc")" ]] ||
+    fail "the rebuilt instance's document names a shared broker login; a fresh bootstrap never mints one"
+
+  # ...and the rebuilt broker has no such user, but a login for every area.
+  conf="$(kubectl --context "$kube_context" -n "$(instance_namespace)" get configmap dc-nats-config -o jsonpath='{.data}')" ||
+    fail "could not read the rebuilt broker's configuration"
+  if grep -q 'dc_service' <<<"$conf"; then
+    fail "the rebuilt broker's configuration names dc_service"
+  fi
+  n="$(grep -o 'dc-[a-z0-9-]*-g[0-9][0-9]*' <<<"$conf" | sort -u | wc -l | tr -d '[:space:]')"
+  [[ "$n" -ge 3 ]] || fail "the rebuilt broker holds only $n per-area logins, so the check above is a statement about an empty configuration"
+  note "the document names no shared login, and the broker holds $n per-area logins and no dc_service ✓"
+
+  # Every login is new.
+  problems="$(logins_fresh_problems "$logins_before_file" "$after")"
+  [[ -z "$problems" ]] || fail "THE REBUILT LOGINS ARE NOT FRESH:
+$problems"
+  note "every one of $(wc -l <"$after" | tr -d '[:space:]') login Secrets differs from the one before the disaster ✓"
+  # THE NEGATIVE CONTROL: the freshness check, given a restore that carried the old logins over.
+  if [[ -z "$(logins_fresh_problems "$logins_before_file" "$logins_before_file")" ]]; then
+    fail "NEGATIVE CONTROL FAILED: the freshness check passed a set of logins identical to the original"
+  fi
+  note "the same check rejects an unchanged set, so it can fail ✓"
+
+  # ...and the areas that mount them are up, which is the authentication itself: a service refused
+  # by the broker fails closed at start and never becomes ready.
+  bad="$(kubectl --context "$kube_context" -n "$(instance_namespace)" get deployments -o json |
+    jq -r '[.items[] | select([.spec.template.spec.containers[].env[]? | select(.name == "DC_NATS_USER")] | length > 0)]
+      | (if length < 3 then "only \(length) Deployment(s) mount a broker login" else empty end),
+        (.[] | select((.status.readyReplicas // 0) < (.spec.replicas // 1)) | "\(.metadata.name) is not ready (\(.status.readyReplicas // 0)/\(.spec.replicas // 1))")')" ||
+    fail "could not read the rebuilt instance's Deployments"
+  [[ -z "$bad" ]] || fail "AN AREA THAT MOUNTS A BROKER LOGIN IS NOT UP on the rebuilt instance:
+$bad"
+  note "every area that mounts a broker login is ready ✓"
+
+  # ...and none was refused.
+  # The log is captured before it is searched: piped into `grep -q`, a match closes the pipe early,
+  # kubectl dies of the broken pipe, and under pipefail that turns the very match into "no match".
+  local pod podlog refused=""
+  for pod in $(kubectl --context "$kube_context" -n "$(instance_namespace)" get pods -o name); do
+    podlog="$(kubectl --context "$kube_context" -n "$(instance_namespace)" logs "$pod" --all-containers --tail=500 2>/dev/null || true)"
+    if grep -qi 'authorization violation' <<<"$podlog"; then
+      refused+=" $pod"
+    fi
+  done
+  [[ -z "$refused" ]] || fail "the broker refused a login on the rebuilt instance (Authorization Violation in:$refused)"
+  note "no pod's log records a refused broker login ✓"
+}
+
 cmd_restore() {
   need_all
   build_tools
@@ -1791,6 +1910,8 @@ after this point would be a test of the escrow"
   say "waiting for the recovered instance API to route"
   wait_for_api user-management
   wait_for_api notification-management
+
+  assert_area_logins
 
   say "THE DRILL — can this cluster read the old cluster's secret?"
   local rc=0

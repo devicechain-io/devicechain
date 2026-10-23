@@ -298,7 +298,7 @@ variable "callout_xkey_public" {
 }
 
 variable "service_password_bcrypt" {
-  description = "BCRYPT HASH ($2a$...) of the shared static `dc_service` password. It is what lands in the broker config; nats-server bcrypt-compares the plaintext each service presents. The plaintext is never rendered here. Required when enable_auth is true. Sensitive."
+  description = "BCRYPT HASH ($2a$...) of the TRANSITIONAL shared static `dc_service` password, present only on an instance upgraded from a release that had one and not yet through the upgrade that retires it. It is what lands in the broker config; nats-server bcrypt-compares the plaintext each service presents. The plaintext is never rendered here. EMPTY (the default) renders no such user, which is every fresh install and every retired instance; then login_password_bcrypts must carry the logins the services present. Sensitive."
   type        = string
   default     = ""
   sensitive   = true
@@ -347,7 +347,7 @@ variable "login_password_bcrypts" {
 
     EMPTY (the default) renders none: every instance before they existed. An upgrade passes the hashes
     on its first apply, keeping `dc_service` beside them so the services that have not rolled yet still
-    connect.
+    connect, and the upgrade after it stops passing service_password_bcrypt, which retires that login.
 
     auth_callout cannot be hot-reloaded and these join its auth_users, so setting this rolls the broker.
     Sensitive.
@@ -532,6 +532,11 @@ locals {
   # sync with the Go constant; a mismatch would lock every service out.
   service_user = "dc_service"
 
+  # The shared login exists only while its hash is supplied. Fresh installs and retired instances
+  # supply none, so the user, its auth_users entry and its permissions entry are all absent together.
+  shared_login_enabled = var.service_password_bcrypt != ""
+  shared_users         = local.shared_login_enabled ? [{ user = local.service_user, password = var.service_password_bcrypt, permissions = try(local.service_app_permissions[local.service_user], null) }] : []
+
   # 🔴 THIS MODULE HOLDS NO SUBJECT. Every static login's permissions block comes from
   # var.service_users, which dcctl generates from the stream and bucket declarations the services
   # are held to (natsauth.ServiceUsers), and is rendered into the user unchanged. Before, the
@@ -553,7 +558,7 @@ locals {
   sys_user = "dc_sys"
 
   # The users the precondition holds to an entry in var.service_users.
-  static_app_users = concat([local.service_user], nonsensitive(keys(var.login_password_bcrypts)))
+  static_app_users = concat(local.shared_login_enabled ? [local.service_user] : [], nonsensitive(keys(var.login_password_bcrypts)))
   static_sys_users = var.sys_password_bcrypt == "" ? [] : [local.sys_user]
   missing_permissions = concat(
     [for u in local.static_app_users : u if !contains(keys(local.service_app_permissions), u)],
@@ -768,7 +773,7 @@ locals {
     accounts = merge({
       APP = {
         jetstream = "enabled"
-        users     = concat([{ user = local.service_user, password = var.service_password_bcrypt, permissions = try(local.service_app_permissions[local.service_user], null) }], local.login_users)
+        users     = concat(local.shared_users, local.login_users)
       }
       # SYS carries a user only once the presence tap's credential has been minted.
       # The system account needs no `jetstream` and no exports: the advisories the
@@ -803,7 +808,7 @@ locals {
         issuer = var.callout_issuer_public
         # dc_identity is listed when its account exists, for the reason this list exists at all: a login
         # absent from it is handed to the DEVICE callout, which refuses it.
-        auth_users = concat([local.service_user, local.sys_user], local.identity_enabled ? [local.identity_user] : [], [for l in local.login_users : l.user])
+        auth_users = concat(local.shared_login_enabled ? [local.service_user] : [], [local.sys_user], local.identity_enabled ? [local.identity_user] : [], [for l in local.login_users : l.user])
         account    = "APP"
       }, var.callout_xkey_public == "" ? {} : { xkey = var.callout_xkey_public })
     }
@@ -1311,8 +1316,8 @@ resource "helm_release" "nats" {
     # credentials (the bring-up always provides them together): an empty issuer /
     # password would render a broker that rejects every device and every service.
     precondition {
-      condition     = !var.enable_auth || (var.callout_issuer_public != "" && var.service_password_bcrypt != "")
-      error_message = "nats enable_auth=true requires non-empty callout_issuer_public and service_password_bcrypt (mint them via dcctl / the genauth helper)."
+      condition     = !var.enable_auth || (var.callout_issuer_public != "" && (var.service_password_bcrypt != "" || length(var.login_password_bcrypts) > 0))
+      error_message = "nats enable_auth=true requires a non-empty callout_issuer_public and at least one login for the services to present: login_password_bcrypts, or the transitional service_password_bcrypt (mint them via dcctl / the genauth helper). Without either, every service would be refused."
     }
 
     # An identity login without the broker auth it belongs to would be a hash in a config that

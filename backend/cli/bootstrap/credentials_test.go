@@ -176,8 +176,25 @@ func TestAFreshInstallStillMintsBrokerCredentials(t *testing.T) {
 	first := rerun(t, nil)
 	second := rerun(t, nil)
 
+	// 🔴 A FRESH INSTALL NEVER HAS THE SHARED LOGIN: nothing of it is minted into the run, and every
+	// principal has a login of its own instead.
+	for _, st := range []*State{first, second} {
+		for _, key := range []string{"natsServicePassword", "natsServicePasswordBcrypt"} {
+			if st.Values[key] != "" {
+				t.Errorf("a fresh install carries %s, so the shared login exists on it", key)
+			}
+		}
+		if st.Values[areaLoginsEnabledValue] != "true" {
+			t.Error("a fresh install without the shared login must tell every area to use its own")
+		}
+		if err := requireEveryPrincipalHasALogin(loginsInValues(st)); err != nil {
+			t.Error(err)
+		}
+		if err := checkSharedLoginHasSuccessors(st); err != nil {
+			t.Error(err)
+		}
+	}
 	for _, key := range []string{
-		"natsServicePassword", "natsServicePasswordBcrypt",
 		"natsSysPassword", "natsSysPasswordBcrypt",
 		"natsCalloutIssuerSeed", "natsCalloutIssuerPublic", "serviceAuthSecret",
 	} {
@@ -190,9 +207,8 @@ func TestAFreshInstallStillMintsBrokerCredentials(t *testing.T) {
 	}
 	// The seed and the public key must belong to each other, or the broker trusts an
 	// issuer that nothing signs with.
-	derived, err := natsauth.CredentialsFromDeployed(
-		first.Values["natsCalloutIssuerSeed"], first.Values["natsServicePassword"],
-		first.Values["natsSysPassword"], natsauth.DeployedHashes{})
+	derived, err := natsauth.CredentialsFromDeployedWithoutSharedLogin(
+		first.Values["natsCalloutIssuerSeed"], first.Values["natsSysPassword"], natsauth.DeployedHashes{})
 	if err != nil {
 		t.Fatalf("the minted seed is not usable: %v", err)
 	}
@@ -393,8 +409,12 @@ func TestNoInstanceConfigAndNoRecordStillMints(t *testing.T) {
 	if err := stepRenderConfig(t.Context(), st); err != nil {
 		t.Fatalf("stepRenderConfig: %v", err)
 	}
-	if st.Values["natsCalloutIssuerSeed"] == "" || st.Values["natsServicePassword"] == "" {
+	if st.Values["natsCalloutIssuerSeed"] == "" || st.Values["natsSysPassword"] == "" ||
+		requireEveryPrincipalHasALogin(loginsInValues(st)) != nil {
 		t.Fatal("a fresh install did not mint broker credentials")
+	}
+	if st.Values["natsServicePassword"] != "" {
+		t.Fatal("a fresh install minted the shared login, which it must never have")
 	}
 }
 

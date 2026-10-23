@@ -410,6 +410,7 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 	sayUpgradeCredentialsKept(st, opts)
 	sayIdentityIntroduced(st)
 	sayAreaLoginsIntroduced(st)
+	sayAboutSharedLogin(st)
 	return nil
 }
 
@@ -471,6 +472,7 @@ func sayUpgradeDryRun(st *State) {
 		wouldDo("apply the values overlay over the computed values")
 	}
 	wouldDo("upgrade the instance's Helm release")
+	sayDryRunSharedLogin(st)
 	// A rehearsal that hid this would rehearse a different run: see below.
 	warnPreGeneratedSuperuser(st)
 }

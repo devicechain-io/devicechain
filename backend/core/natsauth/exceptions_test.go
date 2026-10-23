@@ -15,7 +15,6 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/kv"
 	"github.com/devicechain-io/dc-microservice/messaging"
-	"github.com/devicechain-io/dc-microservice/natsauth"
 	"github.com/devicechain-io/dc-microservice/natsauth/permtest"
 )
 
@@ -51,7 +50,7 @@ func seedPurgeData(t *testing.T, b *permtest.Broker) {
 		require.NoError(t, err)
 	}
 
-	// Persistent MQTT sessions with a subscription, as the unrestricted shared login: the point
+	// Persistent MQTT sessions with a subscription, as the unrestricted test login: the point
 	// is to give the purge session records and consumers to find, not to test what a device may do.
 	for _, tenant := range []string{"victim", "bystander"} {
 		clientID, err := messaging.DeviceClientID(purgeInstance, tenant, "dev1")
@@ -59,7 +58,7 @@ func seedPurgeData(t *testing.T, b *permtest.Broker) {
 		c := mqtt.NewClient(mqtt.NewClientOptions().
 			AddBroker(fmt.Sprintf("tcp://127.0.0.1:%d", b.MQTTPort(t))).
 			SetClientID(clientID).
-			SetUsername(natsauth.ServiceUser).SetPassword(permtest.Password(natsauth.ServiceUser)).
+			SetUsername(permtest.OpenUser).SetPassword(permtest.Password(permtest.OpenUser)).
 			SetCleanSession(false).SetConnectTimeout(10 * time.Second))
 		tok := c.Connect()
 		require.True(t, tok.WaitTimeout(10*time.Second))
@@ -99,7 +98,7 @@ func purgeAsUserManagement(t *testing.T, b *permtest.Broker) (rows int64, err er
 }
 
 func TestTenantPurgeRunsUnderTheGeneratedGrant(t *testing.T) {
-	b := permtest.Start(t, purgeInstance, permtest.WithMQTT())
+	b := permtest.Start(t, purgeInstance, permtest.WithMQTT(), permtest.WithOpenUser())
 	seedPurgeData(t, b)
 
 	rows, err := purgeAsUserManagement(t, b)
@@ -113,7 +112,7 @@ func TestTenantPurgeRunsUnderTheGeneratedGrant(t *testing.T) {
 // The negative control. Withdrawing the purge of one stream must be refused by the broker: if it
 // is not, the broker is not enforcing what the grant says and the test above proves nothing.
 func TestTenantPurgeIsRefusedWhenOneDeclaredSubjectIsRemoved(t *testing.T) {
-	b := permtest.Start(t, purgeInstance, permtest.WithMQTT(), permtest.Without("$JS.API.STREAM.PURGE."+messaging.MqttMessageStore))
+	b := permtest.Start(t, purgeInstance, permtest.WithMQTT(), permtest.WithOpenUser(), permtest.Without("$JS.API.STREAM.PURGE."+messaging.MqttMessageStore))
 	seedPurgeData(t, b)
 
 	_, err := purgeAsUserManagement(t, b)

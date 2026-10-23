@@ -375,6 +375,36 @@ func CredentialsFromDeployed(issuerSeed, servicePassword, sysPassword string, de
 	if servicePassword == "" {
 		return Credentials{}, fmt.Errorf("the running instance carries no service password")
 	}
+	creds, err := credentialsFromDeployed(issuerSeed, sysPassword, deployed)
+	if err != nil {
+		return Credentials{}, err
+	}
+	hash, err := reuseOrRehash(servicePassword, deployed.Service)
+	if err != nil {
+		return Credentials{}, fmt.Errorf("hashing the running instance's service password: %w", err)
+	}
+	creds.ServicePassword, creds.ServicePasswordBcrypt = servicePassword, hash
+	return creds, nil
+}
+
+// CredentialsFromDeployedWithoutSharedLogin is CredentialsFromDeployed for an instance whose broker
+// has no shared login: a fresh install, which never had one, or an instance an upgrade has retired it
+// from. The result has no ServicePassword and no ServicePasswordBcrypt, and a broker rendered from it
+// has no ServiceUser.
+//
+// 🔴 IT IS A SEPARATE FUNCTION, NOT A RELAXED CHECK. CredentialsFromDeployed refuses an empty
+// service password because an instance that is still running on the shared login and loses it is
+// locked out; a caller that wants no shared login says so by calling this one, and so owns having
+// established that every service has a login of its own (dcctl's brokerCredentialsFromRunning does).
+func CredentialsFromDeployedWithoutSharedLogin(issuerSeed, sysPassword string, deployed DeployedHashes) (Credentials, error) {
+	return credentialsFromDeployed(issuerSeed, sysPassword, deployed)
+}
+
+// credentialsFromDeployed is the part of the rebuild that does not involve the shared login.
+func credentialsFromDeployed(issuerSeed, sysPassword string, deployed DeployedHashes) (Credentials, error) {
+	if issuerSeed == "" {
+		return Credentials{}, fmt.Errorf("the running instance carries no callout issuer seed")
+	}
 	akp, err := nkeys.FromSeed([]byte(issuerSeed))
 	if err != nil {
 		return Credentials{}, fmt.Errorf("loading the running instance's issuer seed: %w", err)
@@ -382,10 +412,6 @@ func CredentialsFromDeployed(issuerSeed, servicePassword, sysPassword string, de
 	pub, err := akp.PublicKey()
 	if err != nil {
 		return Credentials{}, fmt.Errorf("deriving the issuer public key from the running instance's seed: %w", err)
-	}
-	hash, err := reuseOrRehash(servicePassword, deployed.Service)
-	if err != nil {
-		return Credentials{}, fmt.Errorf("hashing the running instance's service password: %w", err)
 	}
 	sysPw, sysHash := sysPassword, ""
 	if sysPw == "" {
@@ -400,12 +426,10 @@ func CredentialsFromDeployed(issuerSeed, servicePassword, sysPassword string, de
 		}
 	}
 	return Credentials{
-		IssuerPublic:          pub,
-		IssuerSeed:            issuerSeed,
-		ServicePassword:       servicePassword,
-		ServicePasswordBcrypt: hash,
-		SysPassword:           sysPw,
-		SysPasswordBcrypt:     sysHash,
+		IssuerPublic:      pub,
+		IssuerSeed:        issuerSeed,
+		SysPassword:       sysPw,
+		SysPasswordBcrypt: sysHash,
 	}, nil
 }
 

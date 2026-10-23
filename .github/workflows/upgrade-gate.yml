@@ -532,6 +532,14 @@ jobs:
         if: env.DC_UPGRADE_MODE == 'data'
         run: hack/upgrade-rig.sh upgrade
 
+      # The shared broker login. The first upgrade gave every area a login of its own and kept the
+      # shared one; this checks both, runs the upgrade again, and requires the shared login to be
+      # gone from the broker, the instance document and every Deployment. It runs before verify so
+      # the seeded rows are read back from an instance that has been through BOTH phases.
+      - name: The shared broker login -- kept by the first upgrade, retired by the second
+        if: env.DC_UPGRADE_MODE == 'data'
+        run: hack/upgrade-rig.sh logins
+
       - name: THE DRILL -- every seeded row must read back unchanged
         if: env.DC_UPGRADE_MODE == 'data'
         run: hack/upgrade-rig.sh verify

@@ -130,8 +130,10 @@ drift from what a service does. Its shape is:
 where each \<permissions> is a nats-server permissions block (publish and subscribe allow and deny
 lists, and allow_responses). Merge each block into the user of the same name in the broker's APP
 account (and dc_sys's into the system account). Usernames are dc-\<area>-g\<generation> for an area's
-own login, dc-broker-admin-g\<generation> for the broker administrator and dc_service for the shared
-login an upgraded instance keeps until it is retired.
+own login and dc-broker-admin-g\<generation> for the broker administrator. There is no shared login:
+every area presents its own. An installation that was upgraded from a release that had one, and has
+not been through the upgrade that retires it, passes --with-shared-login to keep the transitional
+dc_service block until then.
 
 --profile (or --enable-area) limits the output to the areas that installation deploys. A login with
 no block must not be created: nats-server reads a user with no permissions as unrestricted.
@@ -154,6 +156,7 @@ dcctl broker permissions [flags]
   -h, --help                      help for permissions
       --instance-id string        the instance id the services run under (their DC_INSTANCE_ID); it is part of every subject and stream name (required)
       --profile string            limit the output to the areas of this deployment profile (default: every area)
+      --with-shared-login         also include the transitional dc_service block, for an installation upgraded from a release that had a shared login and not yet retired it
 ```
 
 ### SEE ALSO
@@ -1325,6 +1328,14 @@ It mints no credentials. Every credential the instance is running on is read bac
 and kept: the database passwords, the broker's authority and logins, the
 cross-service secret and the secret-store root key. A version change here cannot
 become a credential change.
+
+The one thing it removes is the shared message broker login of an instance upgraded
+from a release that had one. The upgrade that gives every area a login of its own
+keeps the shared one, so pods that have not restarted yet stay connected. Run the
+upgrade once more: when every area already runs its own login, it drops the shared
+login from the broker and from the instance configuration, and its closing summary
+says which phase ran. A new instance never has the shared login. Once it is gone,
+rolling back across this release is not supported; run the newer upgrade again.
 
 It does not change an instance's shape. The profile, topology and functional
 areas come from the instance's own declaration, which is what 'dcctl bootstrap'

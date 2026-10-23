@@ -487,11 +487,14 @@ Lo que ve una instancia en marcha:
   sus propios subjects de respuesta. Una credencial ya no puede publicar en los streams de otra área,
   escribir en la caché de otra ni suscribirse a las respuestas de otra. Los permisos se generan a
   partir de las mismas declaraciones contra las que se comprueban los servicios, así que no pueden
-  quedar por detrás de lo que un servicio hace. Esto aún no es una frontera frente a un servicio
-  comprometido, y queda un hueco hasta que una versión posterior lo cierre. La credencial compartida sigue en su sitio junto a
-  las nuevas, con los permisos que siempre tuvo, de modo que los servicios que aún no se han
-  reiniciado siguen conectándose durante la actualización; hasta que una versión posterior la retire,
-  sigue en la configuración que lee cada pod, así que un pod aún puede presentarla. Dos permisos son
+  quedar por detrás de lo que un servicio hace. La credencial compartida sigue en su sitio junto a
+  las nuevas durante esta actualización, con los permisos que siempre tuvo, de modo que los servicios que aún no se han
+  reiniciado siguen conectándose; hasta la siguiente actualización
+  sigue en la configuración que lee cada pod, así que un pod aún puede presentarla, y esto todavía no es una frontera frente a un
+  servicio comprometido. Ejecute `dcctl upgrade` una vez más para retirarla. Cuando cada área ya usa su propia credencial y la actualización anterior terminó, esa
+  actualización elimina la credencial compartida del bróker y de la configuración de la instancia, con un reinicio más del bróker, y su
+  resumen final indica qué fase se ejecutó (o por qué no retiró la credencial). Una instancia nueva nunca tiene una credencial
+  compartida. Una vez retirada, no se admite volver a una versión anterior: ejecute de nuevo el `dcctl upgrade` más reciente. Dos permisos son
   más amplios a propósito: event-sources conserva permisos de actualización sobre los almacenes MQTT
   del bróker, y user-management puede purgar los datos de un tenant eliminado en todos los streams, salvo los
   consumidores con los que event-sources conserva la durabilidad de los mensajes confirmados.

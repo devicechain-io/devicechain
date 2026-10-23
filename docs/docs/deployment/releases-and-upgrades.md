@@ -457,12 +457,14 @@ What a running instance sees:
   acknowledge another's), the key-value buckets it opens, and its own reply
   subjects. A login can no longer publish into another area's streams, write another area's cache, or
   subscribe to another area's replies. The grants are generated from the same declarations the
-  services are checked against, so they cannot fall behind what a service does. This is not yet a
-  boundary against a compromised service, and one gap remains until a later release closes it. The
-  shared login stays in place beside the new ones, with the permissions it
-  always had, so services that have not restarted yet keep connecting during the upgrade; until a
-  later release retires it, it is still in the configuration every pod reads, so a pod can still
-  present it. Two grants are wider by design: event-sources keeps update rights on the broker's MQTT
+  services are checked against, so they cannot fall behind what a service does. The shared login stays in place beside the new ones through this
+  upgrade, with the permissions it always had, so services that have not restarted yet keep connecting;
+  until the next upgrade it is still in the configuration every pod reads, so a pod can still present it, and
+  this is not yet a boundary against a compromised service. Run `dcctl upgrade` once more to retire it. When every
+  area already runs its own login and the previous upgrade finished, that upgrade removes the shared login from the broker and from the
+  instance configuration, with one more broker restart, and its closing summary says which phase ran
+  (or why it did not retire the login). A new instance never has a shared login. Once it is retired,
+  rolling back to an earlier release is not supported: run the newer `dcctl upgrade` again instead. Two grants are wider by design: event-sources keeps update rights on the broker's MQTT
   stores, and user-management can purge a deleted tenant's data across every stream, except for the
   consumers event-sources keeps its acknowledged-message durability on. An installation that runs the chart without dcctl and
   brings its own broker can print the same grants with `dcctl broker permissions`. The broker

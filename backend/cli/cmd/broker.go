@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/devicechain-io/dc-k8s/functionalarea"
+	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/natsauth"
 	"github.com/devicechain-io/dcctl/bootstrap"
 	"github.com/spf13/cobra"
@@ -20,6 +21,7 @@ var (
 	brokerPermissionsInstance  string
 	brokerPermissionsProfile   string
 	brokerPermissionsAreas     []string
+	brokerPermissionsShared    bool
 )
 
 // brokerCmd is the parent for the message broker's operator commands.
@@ -48,8 +50,10 @@ drift from what a service does. Its shape is:
 where each <permissions> is a nats-server permissions block (publish and subscribe allow and deny
 lists, and allow_responses). Merge each block into the user of the same name in the broker's APP
 account (and dc_sys's into the system account). Usernames are dc-<area>-g<generation> for an area's
-own login, dc-broker-admin-g<generation> for the broker administrator and dc_service for the shared
-login an upgraded instance keeps until it is retired.
+own login and dc-broker-admin-g<generation> for the broker administrator. There is no shared login:
+every area presents its own. An installation that was upgraded from a release that had one, and has
+not been through the upgrade that retires it, passes --with-shared-login to keep the transitional
+dc_service block until then.
 
 --profile (or --enable-area) limits the output to the areas that installation deploys. A login with
 no block must not be created: nats-server reads a user with no permissions as unrestricted.`,
@@ -100,6 +104,7 @@ func init() {
 	brokerPermissionsCmd.Flags().StringVar(&brokerPermissionsInstance, "instance-id", "", "the instance id the services run under (their DC_INSTANCE_ID); it is part of every subject and stream name (required)")
 	brokerPermissionsCmd.Flags().StringVar(&brokerPermissionsProfile, "profile", "", "limit the output to the areas of this deployment profile (default: every area)")
 	brokerPermissionsCmd.Flags().StringArrayVar(&brokerPermissionsAreas, "enable-area", nil, "also include this area's login on top of --profile; repeat for more")
+	brokerPermissionsCmd.Flags().BoolVar(&brokerPermissionsShared, "with-shared-login", false, "also include the transitional dc_service block, for an installation upgraded from a release that had a shared login and not yet retired it")
 	brokerCmd.AddCommand(brokerPermissionsCmd)
 	rootCmd.AddCommand(brokerCmd)
 }
@@ -108,7 +113,7 @@ func runBrokerPermissions(cmd *cobra.Command, _ []string) error {
 	if strings.TrimSpace(brokerPermissionsInstance) == "" {
 		return fmt.Errorf("--instance-id is required: it is part of every subject and stream name, so there is no default")
 	}
-	doc, err := brokerPermissionsDocument(brokerPermissionsInstance, brokerPermissionsProfile, brokerPermissionsAreas)
+	doc, err := brokerPermissionsDocument(brokerPermissionsInstance, brokerPermissionsProfile, brokerPermissionsAreas, brokerPermissionsShared)
 	if err != nil {
 		return err
 	}
@@ -118,7 +123,7 @@ func runBrokerPermissions(cmd *cobra.Command, _ []string) error {
 
 // brokerPermissionsDocument renders the document for an instance and the areas a deployment runs
 // (every area when neither profile nor extra areas are given), indented for a reader.
-func brokerPermissionsDocument(instance, profile string, extra []string) ([]byte, error) {
+func brokerPermissionsDocument(instance, profile string, extra []string, withSharedLogin bool) ([]byte, error) {
 	var areas []string
 	if strings.TrimSpace(profile) != "" || len(extra) > 0 {
 		resolved, err := functionalarea.ResolveEnabled(profile, nil)
@@ -141,9 +146,14 @@ func brokerPermissionsDocument(instance, profile string, extra []string) ([]byte
 		users map[string]map[string]natsauth.Permissions
 		err   error
 	)
-	if areas == nil {
+	switch {
+	case areas == nil && withSharedLogin:
+		users, err = natsauth.ServiceUsersWithSharedLogin(instance, config.NatsLoginAreas())
+	case areas == nil:
 		users, err = natsauth.ServiceUsers(instance)
-	} else {
+	case withSharedLogin:
+		users, err = natsauth.ServiceUsersWithSharedLogin(instance, areas)
+	default:
 		users, err = natsauth.ServiceUsersFor(instance, areas)
 	}
 	if err != nil {

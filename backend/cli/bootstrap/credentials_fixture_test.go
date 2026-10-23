@@ -109,6 +109,21 @@ func installMemoizedBrokerCredentials() (prewarm func()) {
 		return copyCredentials(c), err
 	}
 
+	// ...and the rebuild for an instance with no shared login, which hashes the system login when the
+	// broker's hash is not supplied. Keyed the same way, for the same reason.
+	var withoutShared memo[natsauth.Credentials]
+	realWithoutShared := credentialsFromDeployedWithoutSharedLogin
+	credentialsFromDeployedWithoutSharedLogin = func(seed, sysPassword string, hashes natsauth.DeployedHashes) (natsauth.Credentials, error) {
+		key, err := json.Marshal([]any{seed, sysPassword, hashes})
+		if err != nil {
+			return natsauth.Credentials{}, err
+		}
+		c, err := withoutShared.get(string(key), func() (natsauth.Credentials, error) {
+			return realWithoutShared(seed, sysPassword, hashes)
+		})
+		return copyCredentials(c), err
+	}
+
 	var identity memo[[2]string]
 	realIdentity := withIdentity
 	withIdentity = func(c natsauth.Credentials, existingPassword, deployedHash string) (natsauth.Credentials, error) {

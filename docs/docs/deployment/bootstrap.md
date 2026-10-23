@@ -383,7 +383,7 @@ failure names a step you can find here:
    `core.devicechain.io/bootstrap-unfinished: "true"`. A run that ends successfully removes
    it, in the same write that records the instance as `Ready`.
 6. **Render configuration** — resolve the instance id, namespace, profile, and every generated
-   credential: the broker-auth material (the shared service password and the callout issuer
+   credential: the broker-auth material (a login for every area that uses the broker, and the callout issuer
    key), the certificate authority that signs the broker's own TLS certificate, the
    cross-service auth secret, and the **secret-store root key**. All of them are minted here,
    because step 3 has established there is no live instance to take them from. Finishing a

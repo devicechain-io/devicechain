@@ -297,6 +297,10 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 		}
 	}
 	setBrokerCredentialValues(st, creds)
+	// A run without the shared login must give every area one of its own and tell them so.
+	if err := checkSharedLoginHasSuccessors(st); err != nil {
+		return fail("settling the broker logins", err)
+	}
 	// A LIVE instance whose broker does not encrypt its callout yet keeps it that way for this run:
 	// the responder must be rolled onto a build that can open encrypted requests first, and the
 	// pipeline applies the broker before the services. `dcctl upgrade` orders that correctly.

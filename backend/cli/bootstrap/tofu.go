@@ -674,8 +674,12 @@ func infraVars(st *State) []string {
 		vars = append(vars,
 			"nats_enable_auth=true",
 			"nats_callout_issuer_public="+pub,
-			"nats_service_password_bcrypt="+st.Values["natsServicePasswordBcrypt"],
 		)
+		// The shared login's hash, while the instance still has one. Omitted once it is retired (and for
+		// an instance that never had it): the module then renders no such user.
+		if sharedLoginRetainedFor(st) {
+			vars = append(vars, "nats_service_password_bcrypt="+st.Values["natsServicePasswordBcrypt"])
+		}
 		// The curve key the broker encrypts each callout request to. Absent while an upgrade is
 		// still rolling the responder onto a build that can open them (withholdXKeyFromBroker);
 		// the broker then keeps sending plaintext, and a later apply turns encryption on.

@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,8 +15,10 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 
+	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/natsauth"
 	"github.com/devicechain-io/dc-microservice/natsauth/permtest"
 	"github.com/devicechain-io/dc-microservice/streams"
 )
@@ -120,4 +123,46 @@ func TestTheAdministratorShapesTheCatalogAndNotAnythingElse(t *testing.T) {
 	_, err = js.Publish(messaging.ConcreteSubjectFor(instance, "acme", streams.ResolvedEvents, "dev1"), []byte("{}"))
 	require.Error(t, err, "the administrator wrote into a stream")
 	require.NotEmpty(t, b.Violations())
+}
+
+// 🔴 A STREAM LOST WITH EVERY REPLICA IS REPORTED, NOT RECREATED. This is the in-process half of the
+// HA rig's `streamloss` case, on the real grants: the administrator (the login the rig drives through
+// the broker's CLI) can delete the capture stream, its only reader then stops by name and asks for
+// nothing it may not have, the stream is STILL missing afterwards, and the administrator brings it
+// back. The negative control is the check itself, run against the restored state, where it must fail.
+func TestAStreamLostWithEveryReplicaIsReportedByNameNotRecreatedAndTheAdministratorRestoresIt(t *testing.T) {
+	instance := fmt.Sprintf("lost%d", time.Now().UnixNano())
+	b := permtest.Start(t, instance)
+	stream := messaging.StreamName(instance, streams.DeviceEventsCapture)
+
+	admin, err := nats.Connect(fmt.Sprintf("nats://%s:%d", b.Host, b.Port),
+		nats.UserInfo(natsauth.AdminUser, permtest.Password(natsauth.AdminUser)),
+		nats.CustomInboxPrefix(messaging.InboxPrefix(config.NatsAdminPrincipal)))
+	require.NoError(t, err)
+	t.Cleanup(admin.Close)
+	adminJS, err := admin.JetStream()
+	require.NoError(t, err)
+
+	present := func() bool { _, err := adminJS.StreamInfo(stream); return err == nil }
+	// stayedLost is the rig's three-part check: the reader stopped with the named error, it did so
+	// asking for nothing it may not have, and the stream is still missing.
+	stayedLost := func() bool {
+		svc := deployedOver(t, b, instance, "event-sources")
+		_, err := svc.NewReader(streams.DeviceEventsCapture)
+		var drift *messaging.BrokerDriftError
+		return errors.As(err, &drift) && drift.Name == stream &&
+			strings.Contains(err.Error(), "dcctl broker reconcile") && !present()
+	}
+
+	require.True(t, present(), "precondition: the stream exists before the loss")
+	require.False(t, stayedLost(), "negative control: the check passed with the stream present")
+
+	require.NoError(t, adminJS.DeleteStream(stream), "the administrator may delete the capture stream")
+	require.False(t, present())
+	require.True(t, stayedLost(), "the reader did not report the loss by name, or something recreated the stream")
+	b.RequireNoViolations(t) // the reader looked and did not try to create
+
+	b.Reconcile(t, "event-sources")
+	require.True(t, present(), "the administrator did not restore the stream")
+	require.False(t, stayedLost(), "negative control: the check still passes once the stream is back")
 }

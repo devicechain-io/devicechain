@@ -413,7 +413,8 @@ func exceptionGrant(g *grant, instance, area string) {
 
 // ServicePermissions is the block of the shared `dc_service` login, retained on an upgraded
 // instance so pods that have not yet rolled onto their own login stay connected: no allow-list, a
-// publish deny on the device-events namespace. It is retired by a later upgrade.
+// publish deny on the device-events namespace. The upgrade after the one that introduced the
+// per-area logins retires it; ServiceUsersWithSharedLogin is the only writer of it.
 func ServicePermissions() Permissions {
 	return Permissions{Publish: &Rules{Deny: ServicePublishDeny()}}
 }
@@ -437,6 +438,11 @@ func AdminPermissions(instanceId string) (Permissions, error) {
 	g.subscribe(messaging.InboxPrefix(config.NatsAdminPrincipal) + ".>")
 	// The client library reads the account's JetStream limits before it opens a bucket.
 	g.api("INFO")
+	// Read-only enumeration, for the operator's own diagnostics (`dcctl ha verify` lists every stream
+	// and its consumers). These list names and configuration; they change nothing and carry no
+	// message. This is the operator plane's login: the one the instance's Secrets hand to a person
+	// who holds them, and the one dcctl presents now that no shared login exists to borrow.
+	g.api("STREAM.LIST", "STREAM.NAMES", "CONSUMER.LIST.>", "CONSUMER.NAMES.>")
 	shape := func(stream string) { g.api("STREAM.INFO."+stream, "STREAM.CREATE."+stream, "STREAM.UPDATE."+stream) }
 	for _, st := range streams.All {
 		name := messaging.StreamName(instanceId, st.Suffix)
@@ -487,10 +493,14 @@ func sortedCopy(in []string) []string {
 }
 
 // ServiceUsers is every static login's permissions for one instance, by account then username:
-// the shared login, the broker administrator's, each area's own login, and the system-account
-// login. It is the one value dcctl hands the broker's renderer (as JSON) and the one value a test
-// broker is configured from. The identity account's login has no entry: the account is its own
-// boundary and the login is held to nothing inside it.
+// the broker administrator's, each area's own login, and the system-account login. It is the one
+// value dcctl hands the broker's renderer (as JSON) and the one value a test broker is configured
+// from. The identity account's login has no entry: the account is its own boundary and the login
+// is held to nothing inside it.
+//
+// 🔴 THE SHARED `dc_service` LOGIN IS NOT IN IT. It exists only on an instance that has not yet
+// been through the upgrade that retires it, and only ServiceUsersWithSharedLogin writes it, so a
+// fresh install, a retired instance and a test broker cannot grow it by default.
 func ServiceUsers(instanceId string) (map[string]map[string]Permissions, error) {
 	return ServiceUsersFor(instanceId, config.NatsLoginAreas())
 }
@@ -507,8 +517,7 @@ func ServiceUsersFor(instanceId string, areas []string) (map[string]map[string]P
 		return nil, err
 	}
 	app := map[string]Permissions{
-		ServiceUser: ServicePermissions(),
-		AdminUser:   admin,
+		AdminUser: admin,
 	}
 	for _, area := range areas {
 		if !config.NeedsNatsLogin(area) {
@@ -524,4 +533,17 @@ func ServiceUsersFor(instanceId string, areas []string) (map[string]map[string]P
 		AppAccount:    app,
 		SystemAccount: {SysUser: SysPermissions()},
 	}, nil
+}
+
+// ServiceUsersWithSharedLogin is ServiceUsersFor plus the transitional shared login's block, for
+// the one broker configuration that still has that login: an upgraded instance during the upgrade
+// that introduces the per-area logins, so pods that have not rolled onto their own stay connected.
+// The upgrade after it renders ServiceUsersFor instead, and the login is gone.
+func ServiceUsersWithSharedLogin(instanceId string, areas []string) (map[string]map[string]Permissions, error) {
+	users, err := ServiceUsersFor(instanceId, areas)
+	if err != nil {
+		return nil, err
+	}
+	users[AppAccount][ServiceUser] = ServicePermissions()
+	return users, nil
 }
