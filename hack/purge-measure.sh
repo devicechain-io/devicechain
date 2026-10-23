@@ -51,8 +51,14 @@ PG_PORT="$(docker port "$PG" 5432/tcp | sed -n '1s/.*://p')"
 NATS_PORT="$(docker port "$NATS" 4222/tcp | sed -n '1s/.*://p')"
 [ -n "$PG_PORT" ] && [ -n "$NATS_PORT" ] || { echo "could not resolve published ports" >&2; exit 1; }
 
-for _ in $(seq 1 90); do
-  docker exec "$PG" pg_isready -U postgres >/dev/null 2>&1 && ok=1 && break
+# The image runs a temporary server to initialise, stops it, then starts the real one, and
+# pg_isready answers during the first. Wait for the second "ready" line in the log.
+for _ in $(seq 1 120); do
+  if [ "$(docker logs "$PG" 2>&1 | grep -c 'ready to accept connections')" -ge 2 ] &&
+    docker exec "$PG" pg_isready -U postgres >/dev/null 2>&1; then
+    ok=1
+    break
+  fi
   sleep 1
 done
 [ "${ok:-}" = 1 ] || { echo "Postgres did not become ready" >&2; docker logs "$PG" | tail -20 >&2; exit 1; }
