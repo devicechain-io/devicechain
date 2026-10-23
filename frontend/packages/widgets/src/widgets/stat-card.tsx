@@ -79,6 +79,9 @@ export function StatCard({ widget, data }: WidgetProps<AggregateStreamState>) {
                 unit={unit}
                 precision={precision}
                 detail={reading.reason === 'noReadings' ? emptyMessage(reading, strings) : undefined}
+                // "No readings in the span" is the answer of a read that landed; "no data" for the
+                // latest reading may be a board still loading, so it waits a moment first.
+                waitMs={reading.reason === 'noReadings' ? 0 : undefined}
               />
             );
           }

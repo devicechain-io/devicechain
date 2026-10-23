@@ -8,8 +8,14 @@ import type { DashboardHub, DatasourceSelector, MeasurementSample, WidgetInstanc
 import { act, cleanup, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+// The chart engine draws nothing in jsdom; the chart's empty state is what is under test.
+vi.mock('@devicechain/widget-sdk/echarts', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@devicechain/widget-sdk/echarts')>()),
+  EChart: () => <div data-testid="echart" />,
+}));
+
 import { ConnectedWidget } from './connected-widget';
-import { ASK_DELAY_MS, emptyKindFor, lastReadingHint } from './no-reading';
+import { ASK_DELAY_MS, emptyKindFor, lastReadingHint, SETTLE_MS } from './no-reading';
 import { loadLevelWidgets } from './widgets/level-lazy';
 
 beforeEach(() => {
@@ -20,6 +26,8 @@ afterEach(cleanup);
 const flush = () => act(async () => void (await new Promise((r) => setTimeout(r, 0))));
 // Past the moment an empty widget waits before it asks what the device declares.
 const asked = () => act(async () => void (await new Promise((r) => setTimeout(r, ASK_DELAY_MS + 60))));
+// Past the moment it stays blank before it says why (a board still loading has no reading yet).
+const settled = () => act(async () => void (await new Promise((r) => setTimeout(r, SETTLE_MS - ASK_DELAY_MS))));
 
 const widgetOf = (type: string, datasource: DatasourceSelector, options: Record<string, unknown> = {}): WidgetInstance =>
   ({
@@ -59,6 +67,11 @@ describe('which empty state', () => {
     expect(emptyKindFor({ unbound: false, measurement: 'x', declared: null })).toBe('no-data');
     expect(emptyKindFor({ unbound: false, measurement: undefined, declared: ['y'] })).toBe('no-data');
   });
+
+  it('a reading the widget holds proves the device reports it, whatever the profile declares', () => {
+    expect(emptyKindFor({ unbound: false, measurement: 'x', declared: ['y'], reported: true })).toBe('no-data');
+    expect(emptyKindFor({ unbound: true, measurement: 'x', declared: ['y'], reported: true })).toBe('unbound');
+  });
 });
 
 describe('through the connected widget', () => {
@@ -67,10 +80,54 @@ describe('through the connected widget', () => {
     const { container } = render(<ConnectedWidget widget={widgetOf('latest-card', device())} hub={f.hub} />);
     await flush();
     await asked();
+    await settled();
     expect(f.declaredMetricsForDevice).toHaveBeenCalledWith('d-1');
     expect(state(container)).toBe('not-reported');
     expect(container.textContent).toContain('"fuel_level"');
     expect(container.textContent).not.toContain('—');
+  });
+
+  it('a board still loading makes no claim for the first moment, then says why', async () => {
+    const f = hubOf(['temperature']);
+    const { container } = render(<ConnectedWidget widget={widgetOf('latest-card', device())} hub={f.hub} />);
+    await flush();
+    await asked();
+    // The lookup has been made and answered, and still nothing is claimed: the reading may be on its way.
+    expect(f.declaredMetricsForDevice).toHaveBeenCalledWith('d-1');
+    expect(state(container)).toBeUndefined();
+    expect(container.querySelector('[data-empty-pending]')).not.toBeNull();
+    await settled();
+    expect(state(container)).toBe('not-reported');
+  });
+
+  it('a chart of several measurements never says the device does not report them', async () => {
+    const f = hubOf(['temperature']);
+    const two: DatasourceSelector = { kind: 'device', deviceToken: 'd-1', measurements: ['fuel_level', 'temperature'] };
+    const { container } = render(<ConnectedWidget widget={widgetOf('timeseries-chart', two)} hub={f.hub} />);
+    await vi.waitFor(() => expect(state(container)).toBe('no-data'), { timeout: 4000 });
+    await asked();
+    expect(state(container)).toBe('no-data');
+  });
+
+  it('an answer about the device it was bound to is never read as the answer about the next one', async () => {
+    // d-1's profile omits fuel_level; d-2's answer is slow to come.
+    const declaredMetricsForDevice = vi.fn((token: string) => (token === 'd-1' ? Promise.resolve(['temperature']) : new Promise<never>(() => {})));
+    const hub = {
+      subscribeWidget: () => () => {},
+      isDatasourceAvailable: async () => true,
+      declaredMetricsForDevice,
+    } as unknown as DashboardHub;
+    const { container, rerender } = render(<ConnectedWidget widget={widgetOf('latest-card', device())} hub={hub} />);
+    await flush();
+    await asked();
+    await settled();
+    expect(state(container)).toBe('not-reported');
+    rerender(<ConnectedWidget widget={widgetOf('latest-card', { kind: 'device', deviceToken: 'd-2', measurements: ['fuel_level'] })} hub={hub} />);
+    await flush();
+    await asked();
+    await settled();
+    expect(declaredMetricsForDevice).toHaveBeenCalledWith('d-2');
+    expect(state(container)).toBe('no-data');
   });
 
   it('a declared measurement with nothing in range says no data in range', async () => {
@@ -78,6 +135,7 @@ describe('through the connected widget', () => {
     const { container } = render(<ConnectedWidget widget={widgetOf('latest-card', device())} hub={f.hub} />);
     await flush();
     await asked();
+    await settled();
     expect(state(container)).toBe('no-data');
   });
 
@@ -86,6 +144,7 @@ describe('through the connected widget', () => {
     const { container } = render(<ConnectedWidget widget={widgetOf('latest-card', device())} hub={f.hub} />);
     await flush();
     await asked();
+    await settled();
     expect(state(container)).toBe('no-data');
   });
 
@@ -95,6 +154,7 @@ describe('through the connected widget', () => {
     const { container } = render(<ConnectedWidget widget={widgetOf('latest-card', unbound)} hub={f.hub} />);
     await flush();
     await asked();
+    await settled();
     expect(state(container)).toBe('unbound');
     expect(f.declaredMetricsForDevice).not.toHaveBeenCalled();
   });
@@ -105,6 +165,7 @@ describe('through the connected widget', () => {
     const { container } = render(<ConnectedWidget widget={widgetOf('latest-card', device())} hub={f.hub} />);
     await flush();
     await asked();
+    await settled();
     expect(state(container)).toBeUndefined();
     expect(f.declaredMetricsForDevice).not.toHaveBeenCalled();
   });
@@ -116,6 +177,7 @@ describe('through the connected widget', () => {
       const { container, unmount } = render(<ConnectedWidget widget={widgetOf(type, device(), { min: 0, max: 100 })} hub={f.hub} />);
       await flush();
       await asked();
+    await settled();
       await vi.waitFor(() => expect(state(container), type).toBe('not-reported'), { timeout: 4000 });
       unmount();
     }

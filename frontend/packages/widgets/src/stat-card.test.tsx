@@ -5,10 +5,11 @@
 // it has none. The feed that produces the data is covered in aggregate-feed.test.tsx.
 
 import type { AggregateResult, AggregateStreamState, MeasurementSample, WidgetInstance } from '@devicechain/dashboards';
-import { cleanup, render } from '@testing-library/react';
+import { act, cleanup, render } from '@testing-library/react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { aggregateStrings } from './aggregate-strings';
+import { SETTLE_MS } from './no-reading';
 import { StatCard } from './widgets/stat-card';
 
 afterEach(() => {
@@ -243,9 +244,21 @@ describe('the stat card when there is no figure', () => {
     expect(max.container.querySelector('[data-widget-freshness]')).toBeNull();
   });
 
-  it('shows the latest reading as no data until one arrives', () => {
-    expect(show({ stat: 'last' }, data(ready())).kind).toBe('no-data');
-    expect(show({ stat: 'last' }, data(ready(), { temperature: sample(null) })).kind).toBe('no-data');
+  it('shows the latest reading as no data until one arrives, after the moment a loading board has none', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const { container } = render(<StatCard widget={widget({ stat: 'last' })} data={data(ready())} />);
+      const kind = () => container.querySelector('[data-empty-state]')?.getAttribute('data-empty-state');
+      expect(kind()).toBeUndefined();
+      act(() => void vi.advanceTimersByTime(SETTLE_MS));
+      expect(kind()).toBe('no-data');
+      cleanup();
+      const nulled = render(<StatCard widget={widget({ stat: 'last' })} data={data(ready(), { temperature: sample(null) })} />);
+      act(() => void vi.advanceTimersByTime(SETTLE_MS));
+      expect(nulled.container.querySelector('[data-empty-state]')?.getAttribute('data-empty-state')).toBe('no-data');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('refuses a latest reading older than the span, instead of presenting it as the span latest', () => {

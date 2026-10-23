@@ -263,7 +263,7 @@ dice por qué, en un estado atenuado y no con una tarjeta en blanco ni un guion 
 - **Sin acceso**: la plataforma rechazó la lectura porque su acceso se limita a una parte del inquilino.
 - **Datos no disponibles**: el origen de datos no respondió. El mensaje nombra el fallo.
 
-Estos estados son deliberadamente discretos. Usan el color de texto atenuado, sin símbolo de advertencia ni color de severidad, porque en un panel ese estilo significa una alarma. Un widget pequeño muestra solo el título; uno mayor añade la explicación y el último valor. Pase el cursor sobre el estado para leer la frase completa.
+Estos estados son deliberadamente discretos. Usan el color de texto atenuado, sin símbolo de advertencia ni color de severidad, porque en un panel ese estilo significa una alarma. Un widget pequeño muestra solo el título; uno mayor añade la explicación y el último valor. Pase el cursor sobre el estado para leer la frase completa. Mientras el panel carga, un widget que aún no tiene lectura queda en blanco un momento antes de decir por qué, de modo que una lectura en camino nunca se anuncia como ausente.
 
 Un panel guardado por una versión anterior se convierte a la cuadrícula actual al abrirlo. La
 conversión es aproximada, así que el editor muestra un aviso que pide revisar el diseño. Al guardar,

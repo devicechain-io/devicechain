@@ -272,7 +272,7 @@ carries a note saying so. A widget with nothing to draw says why, in a muted sta
 - **No access**: the platform refused the read for you, because your access is limited to part of the tenant.
 - **Data unavailable**: the data source did not answer. The message names the failure.
 
-These states are deliberately quiet. They use the muted text color and no warning symbol or severity color, because on a board that styling means an alarm. A small widget shows the title only; a larger one adds the explanation and the last value. Hover the state to read the whole sentence.
+These states are deliberately quiet. They use the muted text color and no warning symbol or severity color, because on a board that styling means an alarm. A small widget shows the title only; a larger one adds the explanation and the last value. Hover the state to read the whole sentence. While a board is loading, a widget with no reading yet stays blank for a moment before it says why, so a reading on its way is never announced as missing.
 
 The dashboard measures the space it is given, not the screen. While the columns fit at **Min
 cell** or larger it shows your layout as you arranged it, with the cells stretching to fill the

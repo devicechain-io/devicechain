@@ -88,7 +88,7 @@ function GaugeBody({ widget, data }: WidgetProps) {
   // board is still loading the dial is drawn as it always was).
   const explain = useSettledEmpty(value === undefined);
   if (explain) {
-    return <NoReading unbound={widget.datasource?.kind === 'unbound'} measurement={name} />;
+    return <NoReading unbound={widget.datasource?.kind === 'unbound'} measurement={name} waitMs={0} />;
   }
 
   return (

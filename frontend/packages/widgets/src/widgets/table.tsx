@@ -20,7 +20,7 @@ import {
   type WidgetProps,
 } from '@devicechain/widget-sdk';
 
-import { NoReading } from '../no-reading';
+import { NoReading } from '../no-reading-core';
 
 const cell: CSSProperties = { padding: `${spaceVar(1)} ${spaceVar(3)}`, textAlign: 'left' };
 const headCell: CSSProperties = {

@@ -8,7 +8,7 @@
 
 import type { MeasurementSample, WidgetInstance, WidgetType } from '@devicechain/dashboards';
 import type { MeasurementStreamState } from '@devicechain/widget-sdk';
-import { cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@devicechain/widget-sdk/echarts', async (importOriginal) => {
@@ -20,11 +20,22 @@ vi.mock('@devicechain/widget-sdk/echarts', async (importOriginal) => {
   };
 });
 
+import { SETTLE_MS } from './no-reading';
 import { Compass } from './widgets/compass';
 import { Gauge } from './widgets/gauge';
 import { ProgressRing, RING_CIRCUMFERENCE } from './widgets/progress-ring';
 
-afterEach(cleanup);
+// An explained empty state waits a moment (a board still loading has no reading yet) before it says why.
+function settle() {
+  act(() => {
+    vi.advanceTimersByTime(SETTLE_MS);
+  });
+}
+
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
 
 const widget = (type: WidgetType, options: Record<string, unknown>): WidgetInstance => ({
   id: 'w',
@@ -104,14 +115,18 @@ describe('compass', () => {
   });
 
   it('says No data, not a heading, when nothing has arrived or the value is not a number', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     show({}, 'none');
+    settle();
     expect(screen.getByText('No data in this range')).toBeTruthy();
     expect(readout()).toBeNull();
     cleanup();
     show({}, null);
+    settle();
     expect(screen.getByText('No data in this range')).toBeTruthy();
     cleanup();
     show({}, Number.NaN);
+    settle();
     expect(screen.getByText('No data in this range')).toBeTruthy();
   });
 
@@ -205,7 +220,9 @@ describe('progress-ring', () => {
   });
 
   it('says No data with a scale but no sample', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     show(opts, 'none');
+    settle();
     expect(screen.getByText('No data in this range')).toBeTruthy();
     expect(q('[data-ring-fill]')).toBeNull();
   });

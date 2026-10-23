@@ -85,7 +85,9 @@ function TimeSeriesBody({ widget, data, markers }: TimeSeriesProps) {
 
   // Nothing in the window: say why (after the history read has had its moment), with the last reading
   // known outside it as a hint.
-  const name = primaryMeasurementName(widget);
+  // A chart of several measurements names none: whether the profile omits the first says nothing
+  // about the others, so it is "no data", never "not reported".
+  const name = measurements && measurements.length > 1 ? undefined : primaryMeasurementName(widget);
   const explain = useSettledEmpty(data.samples.length === 0);
   if (explain) {
     return (
@@ -95,6 +97,7 @@ function TimeSeriesBody({ widget, data, markers }: TimeSeriesProps) {
         lastSample={pickSample(data.latest, name)}
         unit={unit}
         precision={precision}
+        waitMs={0}
       />
     );
   }
