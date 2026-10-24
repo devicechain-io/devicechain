@@ -139,16 +139,20 @@ These are known and accepted for the current release. Plan around them.
    database with one login, so a compromised service could read and write another area's tables. Tenant isolation
    in the database rests on the application's tenant scope, not on database permissions. Separate roles per
    service are planned for a 1.0.x release.
-3. **MQTT acknowledgements across a broker leader change.** By default the broker can acknowledge a QoS 1 message and
+3. **Two other device-side secrets are stored as sent.** A provisioning profile's secret and a device claim's secret
+   are kept in the database as they were set, not as digests like device passwords and access tokens. Neither is
+   ever returned by the API. Treat database access and backups as holding secrets, and if a backup leaks, set a new
+   secret on each provisioning profile and open each unredeemed device claim again with a new secret.
+4. **MQTT acknowledgements across a broker leader change.** By default the broker can acknowledge a QoS 1 message and
    then lose it while the capture stream changes leader, which a broker restart, an upgrade or the loss of a
    node causes, at any load. With `infrastructure.nats.mqttFailClosed` on, an acknowledgement means the
    platform holds the message; in exchange the broker refuses QoS 1 publishes while there is no leader, and
    the instance keeps up with less traffic, so it is for installations sized to stay below that ceiling.
    The setting is off by default, and [Observability](../deployment/observability.md#mqtt-fail-closed)
    describes the trade-off.
-4. **The root key is readable by anyone who can read the instance's Kubernetes Secret.** Restrict access to that
+5. **The root key is readable by anyone who can read the instance's Kubernetes Secret.** Restrict access to that
    Secret and to the cluster's etcd accordingly.
-5. **No external penetration test has been published.**
+6. **No external penetration test has been published.**
 
 Nothing on this page replaces your own review. If an entry here is a problem for your deployment, the matching
 section above says where the control sits.

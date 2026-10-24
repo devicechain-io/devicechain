@@ -139,16 +139,22 @@ Estas carencias son conocidas y se aceptan en la versión actual. Planifique en 
    relacional de la instancia con un único inicio de sesión, así que un servicio comprometido podría leer y escribir las tablas de otra área. El aislamiento de inquilinos
    en la base de datos descansa en el ámbito de inquilino de la aplicación, no en permisos de la base de datos. Los roles separados por
    servicio están previstos para una versión 1.0.x.
-3. **Confirmaciones MQTT durante un cambio de líder del broker.** Por defecto, el broker puede confirmar un mensaje QoS 1 y
+3. **Otros dos secretos del lado del dispositivo se guardan tal como se enviaron.** El secreto de un perfil de
+   aprovisionamiento y el secreto de una reclamación de dispositivo se guardan en la base de datos tal como se
+   establecieron, no como resúmenes como las contraseñas y los tokens de acceso de los dispositivos. La API nunca
+   devuelve ninguno de los dos. Trate el acceso a la base de datos y las copias de seguridad como portadores de
+   secretos y, si se filtra una copia, establezca un secreto nuevo en cada perfil de aprovisionamiento y vuelva a
+   abrir con un secreto nuevo cada reclamación de dispositivo no canjeada.
+4. **Confirmaciones MQTT durante un cambio de líder del broker.** Por defecto, el broker puede confirmar un mensaje QoS 1 y
    perderlo después mientras el flujo de captura cambia de líder, algo que provoca un reinicio del broker, una
    actualización o la pérdida de un nodo, con cualquier carga. Con `infrastructure.nats.mqttFailClosed` activado, una
    confirmación significa que la plataforma conserva el mensaje; a cambio, el broker rechaza las publicaciones QoS 1
    mientras no hay líder, y la instancia sostiene menos tráfico, así que es para instalaciones dimensionadas para
    mantenerse por debajo de ese techo. El ajuste está desactivado por defecto, y
    [Observabilidad](../deployment/observability.md#mqtt-fail-closed) describe el equilibrio.
-4. **La clave raíz es legible para cualquiera que pueda leer el Secret de Kubernetes de la instancia.** Restrinja el acceso a ese
+5. **La clave raíz es legible para cualquiera que pueda leer el Secret de Kubernetes de la instancia.** Restrinja el acceso a ese
    Secret y al etcd del clúster en consecuencia.
-5. **No se ha publicado ninguna prueba de penetración externa.**
+6. **No se ha publicado ninguna prueba de penetración externa.**
 
 Nada de esta página sustituye su propia revisión. Si una entrada de aquí es un problema para su despliegue, la sección
 correspondiente de arriba indica dónde está el control.
