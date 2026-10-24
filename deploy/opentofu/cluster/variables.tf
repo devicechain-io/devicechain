@@ -77,7 +77,7 @@ variable "postgres_image" {
     be 36 MB of attack surface serving nothing.
   EOT
   type        = string
-  default     = "ghcr.io/cloudnative-pg/postgresql:17.10-standard-bookworm"
+  default     = "ghcr.io/cloudnative-pg/postgresql:17.11-standard-bookworm"
 }
 
 variable "allow_legacy_rdb_removal" {

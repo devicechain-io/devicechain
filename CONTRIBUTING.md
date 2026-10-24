@@ -44,6 +44,15 @@ its Schedule B.
 > grant the license rights the project needs to keep relicensing options open. We
 > therefore use a CLA.
 
+## Licensing intent
+
+DeviceChain is released under the [Apache License 2.0](LICENSE), and the project intends to
+keep publishing it under Apache-2.0. The CLA exists so that the project holds clear rights to
+what it distributes; among other things, it lets the steward, IoT Innovations, LLC, offer the
+code under other terms as well as Apache-2.0. This statement is an expression of intent, not a
+contract. It does not change the CLA or the license, and the CLA and the license are what
+govern your contribution.
+
 ## Ground rules
 
 - Be respectful and constructive. Assume good intent.

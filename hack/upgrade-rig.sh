@@ -1483,6 +1483,15 @@ $baseline_tag will actually meet."
   resolve_upgrade_target
   printf '%s\n%s\n' "$target_registry" "$target_tag" >"$target_file"
 
+  # 🔴 THE TARGET'S EVENT-STORE OPERAND MAY NOT BE PUBLISHED YET. An operand bump is
+  # published by operand-image.yml only AFTER its PR merges, but its own PR must pass
+  # this drill first -- so without this the upgrade dies in ImagePullBackOff on a tag
+  # that does not exist, on every PostgreSQL minor. When the tag is published this is
+  # one manifest probe and the cluster pulls it as an operator would; when it is not,
+  # the image is built from the tree and loaded into the cluster's nodes. Prints which.
+  "$repo_root/hack/ensure-operand-image.sh" "$cluster" ||
+    fail "could not make the operand image available to the cluster (see above)"
+
   # THE DOCUMENTED PROCEDURE, AND ALL OF IT — WHICH IS NOW TWO COMMANDS.
   #
   # 🔴 THIS FUNCTION USED TO RUN EXACTLY ONE, AND SAID SO IN A COMMENT ARGUING THAT A
@@ -3108,6 +3117,7 @@ $got"
 # nothing on its own — a check hard-wired to fail would look identical. Proving it
 # reports AGREEMENT when the tags agree is what makes the red mean something.
 selftest() {
+  "$repo_root/hack/ensure-operand-image.sh" --self-test
   selftest_logins
   # Needed before expect_mode's self-upgrade case, which asks validate_upgrade_mode to
   # refuse `upgrade_tag == baseline_tag`. An unresolved baseline makes that case pass an

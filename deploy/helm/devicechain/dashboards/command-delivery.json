@@ -59,7 +59,7 @@
   "timezone": "",
   "title": "DeviceChain \u2014 Command Delivery",
   "uid": "dc-command-delivery-ops",
-  "description": "Operations board for command delivery: fleet writes (batch enqueues, device dispositions, refusal codes and whether the delivery-machinery reserve caused them, cancels), the claim outcomes of both dispatch paths (the periodic sweep and the enqueue-time nudge), and the presence gate's holds. claims_lost is graphed overall and per path. It is a label vector, since the sweep and the nudge are counted apart, and a label vector exports nothing until a label is first used, so the processor PRE-INITIALISES both paths at zero at registration: on an instance that has never lost a claim, which is the ordinary state, both panels read zero rather than \"No data\", and a silent path is a zero series rather than no series. Each instance gets its own copy of this board, scoped to it; there is no instance picker. Note the two naming eras: the six original counters carry a historical command_delivery_ stutter in their metric names and the batch counters do not.",
+  "description": "Operations board for command delivery: fleet writes (batch enqueues, device dispositions, refusal codes and whether the delivery-machinery reserve caused them, cancels), the claim outcomes of both dispatch paths (the periodic sweep and the enqueue-time nudge), and the presence gate's holds. claims_lost is graphed overall and per path. It is a label vector, since the sweep and the nudge are counted apart, and a label vector exports nothing until a label is first used, so the service exports both paths at zero from startup: on an instance that has never lost a claim, which is the ordinary state, both panels read zero rather than \"No data\", and a silent path is a zero series rather than no series. The fleet-write counters are exported at zero from startup in the same way. Counts for events that should never happen (stranded claims, presence read errors) are shown as a total over the selected time range, so a single occurrence stays visible instead of fading into a rate. Each instance gets its own copy of this board, scoped to it; there is no instance picker. Series naming: the claim, hold and presence counters repeat the area name in their metric names (for example command_delivery_claims_lost_total), while the fleet-write counters are named batch_*.",
   "version": 1,
   "weekStart": "",
   "panels": [
@@ -740,8 +740,8 @@
     {
       "id": 14,
       "type": "stat",
-      "title": "Claims STRANDED /s \u2014 commands that will lie",
-      "description": "\ud83d\udd34 THE ONE TO LOOK AT FIRST. A stranded claim is a command left reading SENT whose publish failed AND whose release failed too. It was never sent, nothing will retry it, and it will expire as TIMEOUT \u2014 blaming a device that did nothing wrong. Every other counter on this page describes something that reported itself; this one describes the platform telling an operator something false. Any non-zero value deserves investigation. Alerted as CommandClaimsStranded (critical).",
+      "title": "Stranded claims (selected range)",
+      "description": "Look at this one first. A stranded claim is a command left reading SENT whose publish failed and whose release failed too. It was never sent and nothing will retry it, so it will expire as TIMEOUT and blame a device that did nothing wrong. Every other counter on this page describes something that reported itself; this one describes the platform telling an operator something false. Shown as a count over the selected time range, so one occurrence stays visible. Any non-zero value deserves investigation. Alerted as CommandClaimsStranded (critical).",
       "gridPos": {
         "h": 4,
         "w": 8,
@@ -759,13 +759,14 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(devicechain_commanddelivery_command_delivery_claims_stranded_total{namespace=\"$namespace\"}[5m]))",
-          "legendFormat": "__auto"
+          "expr": "round(sum(increase(devicechain_commanddelivery_command_delivery_claims_stranded_total{namespace=\"$namespace\"}[$__range])))",
+          "legendFormat": "__auto",
+          "instant": true
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "ops",
+          "unit": "short",
           "color": {
             "mode": "thresholds"
           },
@@ -778,10 +779,11 @@
               },
               {
                 "color": "red",
-                "value": 0.0001
+                "value": 1
               }
             ]
-          }
+          },
+          "decimals": 0
         },
         "overrides": []
       },
@@ -794,7 +796,7 @@
           "values": false
         },
         "colorMode": "background",
-        "graphMode": "area",
+        "graphMode": "none",
         "textMode": "auto",
         "justifyMode": "auto"
       }
@@ -1173,8 +1175,8 @@
     {
       "id": 22,
       "type": "stat",
-      "title": "Presence read errors /s \u2014 the gate is failing OPEN",
-      "description": "Sweep passes that could not read the presence projection. The gate FAILS OPEN by design, so this is not a stall: it is commands being dispatched UNGATED, to devices nobody checked were there. A standing rate means every hold this instance should be placing is not being placed. Alerted as CommandPresenceReadErrors (warning).",
+      "title": "Presence read errors (selected range)",
+      "description": "Sweep passes that could not read the presence projection. When presence cannot be read the gate lets commands through rather than holding them (it fails open by design), so this is not a stall: it is commands being dispatched without checking that the device is there. A standing count means the holds this instance should be placing are not being placed. Shown as a count over the selected time range. Alerted as CommandPresenceReadErrors (warning).",
       "gridPos": {
         "h": 4,
         "w": 8,
@@ -1192,13 +1194,14 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(devicechain_commanddelivery_command_delivery_presence_read_errors_total{namespace=\"$namespace\"}[5m]))",
-          "legendFormat": "__auto"
+          "expr": "round(sum(increase(devicechain_commanddelivery_command_delivery_presence_read_errors_total{namespace=\"$namespace\"}[$__range])))",
+          "legendFormat": "__auto",
+          "instant": true
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "ops",
+          "unit": "short",
           "color": {
             "mode": "thresholds"
           },
@@ -1211,10 +1214,11 @@
               },
               {
                 "color": "orange",
-                "value": 0.0001
+                "value": 1
               }
             ]
-          }
+          },
+          "decimals": 0
         },
         "overrides": []
       },
@@ -1227,7 +1231,7 @@
           "values": false
         },
         "colorMode": "background",
-        "graphMode": "area",
+        "graphMode": "none",
         "textMode": "auto",
         "justifyMode": "auto"
       }

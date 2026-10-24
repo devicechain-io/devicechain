@@ -32,7 +32,7 @@ Prefijo: `devicechain_commanddelivery_`.
 
 Las tres [alertas de entrega de comandos](./observability.md#command-delivery-alerts) leen
 `command_delivery_claims_stranded_total`, `command_delivery_presence_read_errors_total` y
-`batch_refusals_total{bound="reserve"}`. Un panel de Command Delivery representa el resto. Es normal
+`batch_refusals_total{bound="reserve"}`. El panel de Command Delivery representa los contadores de escritura de flota y los principales contadores de reclamación, retención y presencia; el resto de las series sirven para consultas ad hoc y para tus propios paneles. Es normal
 que varias de ellas estén muy activas y no son fallos: una proporción estable de avisos rechazados
 por `not_sole`, reclamaciones perdidas porque la pasada de barrido compitió con un aviso, y
 retenciones colocadas mientras los dispositivos están fuera de línea.

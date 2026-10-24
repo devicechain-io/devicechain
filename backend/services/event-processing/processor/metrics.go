@@ -949,6 +949,40 @@ func (m *DetectMetrics) setLeader(leader bool) { m.isLeader.Set(boolGauge(leader
 // goes) does not trip it.
 func (m *DetectMetrics) setDetectLive(live bool) { m.detectLive.Set(boolGauge(live)) }
 
+// clearTermGauges zeroes every gauge that only the leader's loop writes and that describes the
+// term it is running, so a replica that has lost the partition stops reporting the last
+// leader's numbers.
+//
+// 🔴 A GAUGE KEEPS ITS LAST VALUE FOR AS LONG AS THE PROCESS LIVES, and Prometheus keeps scraping
+// a standby. Without this a former leader exports its final backlog, lag and state sizes for ever,
+// and the board and the DetectConsumerBacklogHigh / DetectWatermarkLagHigh / DetectTenantOverStateBudget
+// alerts all aggregate with a bare max() across replicas: the frozen reading out-votes the live
+// leader's real one, so a page cannot clear and a board shows a backlog nobody has.
+//
+// It is cleared HERE, at the source, rather than by filtering every query on detect_live == 1,
+// because the distinction being made is "this replica has no engine", which is a fact about the
+// replica and not about one reader of it. A filter has to be remembered by each panel and each
+// alert written afterwards; a gauge that reads zero when there is nothing to read cannot be
+// aggregated wrongly. Zero is also safe for the aggregation (max, and sum for the state sizes):
+// it can never win against a live leader's reading, and a leader is the only replica for which
+// these numbers mean anything.
+//
+// Only the gauges the loop alone sets are cleared. rulesActive is not: every replica loads the
+// rules, so a standby's count is a true reading of that standby.
+func (m *DetectMetrics) clearTermGauges() {
+	if m == nil {
+		return
+	}
+	for _, g := range []prometheus.Gauge{
+		m.consumerPending, m.consumerAckPending, m.watermarkLagSeconds,
+		m.checkpointSeconds, m.snapshotBytes, m.restoreSeconds, m.appliedStreamSeq,
+		m.liveKeys, m.retainedSamples, m.pendingTimers,
+		m.tenantsOverRuleBudget, m.tenantsOverLiveKeyBudget, m.tenantsOverRetainedSampleBudget,
+	} {
+		g.Set(0)
+	}
+}
+
 func boolGauge(b bool) float64 {
 	if b {
 		return 1
