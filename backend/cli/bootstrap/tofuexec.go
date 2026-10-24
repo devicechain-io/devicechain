@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -43,6 +44,13 @@ type tofuExec struct {
 	// exercise the giving-up without waiting out a real budget; newTofuExec is the only
 	// thing that sets it in production.
 	abandonBudget time.Duration
+	// kubeContext is the --kube-context this runner acts under ("" = the current
+	// context). Every command that configures a provider re-resolves it into a kubePin
+	// and hands tofu that explicit file and context: see kubePin.
+	kubeContext string
+	// planned is the identity of the cluster the last Plan was made against, so applying
+	// that saved plan can be refused if the cluster dcctl now reaches is another one.
+	planned string
 }
 
 // streamSwitch is the one writer terraform-exec is ever given for stdout. Pointing a
@@ -160,7 +168,10 @@ func (f *outputsBlockFilter) line(line []byte) error {
 }
 
 // newTofuExec builds the runner for one root with stdout quiet and stderr streamed.
-func newTofuExec(rootdir, tofuBin string) (*tofuExec, error) {
+//
+// kubeContext is the cluster the runner is allowed to act on. There is no way to build
+// a runner that resolves its own: Apply, Plan, Import and Destroy pin it (kubePin).
+func newTofuExec(rootdir, tofuBin, kubeContext string) (*tofuExec, error) {
 	tf, err := tfexec.NewTerraform(rootdir, tofuBin)
 	if err != nil {
 		return nil, err
@@ -168,7 +179,7 @@ func newTofuExec(rootdir, tofuBin string) (*tofuExec, error) {
 	stdout := &streamSwitch{w: io.Discard}
 	tf.SetStdout(stdout)
 	tf.SetStderr(os.Stderr)
-	return &tofuExec{Terraform: tf, stdout: stdout, abandonBudget: tofuAbandonBudget}, nil
+	return &tofuExec{Terraform: tf, stdout: stdout, abandonBudget: tofuAbandonBudget, kubeContext: kubeContext}, nil
 }
 
 // tofuAbandonBudget is how long dcctl goes on waiting for an INTERRUPTED tofu command
@@ -295,8 +306,79 @@ func (t *tofuExec) Init(ctx context.Context) error {
 	return t.streaming(ctx, func() error { return t.Terraform.Init(ctx, tfexec.Upgrade(true)) })
 }
 
+// pin resolves the cluster for one provider-configuring command. The merged kubeconfig
+// a multi-file KUBECONFIG needs lives beside the root's directory, which is owner-only.
+func (t *tofuExec) pin() (kubePin, error) {
+	return resolveKubePin(t.kubeContext, filepath.Dir(t.WorkingDir()))
+}
+
+// pinVars are the two -var settings that make a command act on the pin. They are
+// appended AFTER the caller's, and OpenTofu takes the last -var of a name, so a
+// kubeconfig_context the caller's list carries cannot outrank the pin.
+func pinVars(p kubePin) (path, kctx *tfexec.VarOption) {
+	return tfexec.Var("kubeconfig_path=" + p.Path), tfexec.Var("kubeconfig_context=" + p.Context)
+}
+
 func (t *tofuExec) Apply(ctx context.Context, opts ...tfexec.ApplyOption) error {
+	p, err := t.pin()
+	if err != nil {
+		return err
+	}
+	defer p.release()
+	if usesSavedPlan(opts) {
+		// A saved plan carries its variables, and -var is refused beside one, so the pin
+		// cannot be re-stated: it can only be CHECKED against the cluster the plan was
+		// made for. A plan this runner did not make cannot be checked, so is not applied.
+		if t.planned == "" || t.planned != p.identity {
+			return fmt.Errorf("refusing to apply a saved plan: it was made against %q but dcctl "+
+				"now reaches %q. Plan again", t.planned, p.identity)
+		}
+	} else {
+		path, kctx := pinVars(p)
+		opts = append(append([]tfexec.ApplyOption(nil), opts...), path, kctx)
+	}
 	return t.streaming(ctx, func() error { return t.Terraform.Apply(ctx, opts...) })
+}
+
+// usesSavedPlan reports whether an apply is of a saved plan file.
+func usesSavedPlan(opts []tfexec.ApplyOption) bool {
+	for _, o := range opts {
+		if _, ok := o.(*tfexec.DirOrPlanOption); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// Plan pins like Apply. Its stdout stays quiet (the plan is read back from the file),
+// and the merged kubeconfig, if any, is kept: the saved plan names it and the apply of
+// that plan re-writes it.
+func (t *tofuExec) Plan(ctx context.Context, opts ...tfexec.PlanOption) (bool, error) {
+	p, err := t.pin()
+	if err != nil {
+		return false, err
+	}
+	path, kctx := pinVars(p)
+	opts = append(append([]tfexec.PlanOption(nil), opts...), path, kctx)
+	changed, err := t.Terraform.Plan(ctx, opts...)
+	if err != nil {
+		p.release()
+		return changed, err
+	}
+	t.planned = p.identity
+	return changed, nil
+}
+
+// Import pins like Apply.
+func (t *tofuExec) Import(ctx context.Context, address, id string, opts ...tfexec.ImportOption) error {
+	p, err := t.pin()
+	if err != nil {
+		return err
+	}
+	defer p.release()
+	path, kctx := pinVars(p)
+	opts = append(append([]tfexec.ImportOption(nil), opts...), path, kctx)
+	return t.Terraform.Import(ctx, address, id, opts...)
 }
 
 // Destroy streams like every progress command, except the plan's list of output
@@ -307,8 +389,15 @@ func (t *tofuExec) Apply(ctx context.Context, opts ...tfexec.ApplyOption) error 
 // io.Discard under the switch's own mutex, so even an abandoned command still holding
 // the writer can no longer reach the filter, and Flush is the filter's only user.
 func (t *tofuExec) Destroy(ctx context.Context, opts ...tfexec.DestroyOption) error {
+	p, err := t.pin()
+	if err != nil {
+		return err
+	}
+	defer p.release()
+	path, kctx := pinVars(p)
+	opts = append(append([]tfexec.DestroyOption(nil), opts...), path, kctx)
 	f := newOutputsBlockFilter(os.Stdout)
-	err := t.streamingTo(ctx, f, func() error { return t.Terraform.Destroy(ctx, opts...) })
+	err = t.streamingTo(ctx, f, func() error { return t.Terraform.Destroy(ctx, opts...) })
 	if ferr := f.Flush(); ferr != nil && err == nil {
 		err = ferr
 	}

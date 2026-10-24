@@ -53,6 +53,7 @@ esac
 // Init runs FIRST on a fresh runner on purpose: that is where terraform-exec runs its
 // own `version -json` for the first time, inside a command whose stdout is streamed.
 func TestTofuExecStreamsProgressNotReads(t *testing.T) {
+	testKube(t)
 	root, bin := t.TempDir(), fakeTofu(t)
 	ctx := context.Background()
 	var failures []string
@@ -60,7 +61,7 @@ func TestTofuExecStreamsProgressNotReads(t *testing.T) {
 		// Built INSIDE the capture: os.Stdout and os.Stderr are read when a writer is set,
 		// so a runner built before it would stream to the real terminal and this test
 		// would pass over exactly the leak it exists to catch (measured).
-		tf, err := newTofuExec(root, bin)
+		tf, err := newTofuExec(root, bin, "")
 		if err != nil {
 			failures = append(failures, "construct: "+err.Error())
 			return
@@ -121,7 +122,7 @@ func TestTofuInitMovesTheLockToThePins(t *testing.T) {
 	root, bin := t.TempDir(), fakeTofu(t)
 	var initErr error
 	captureStdoutAndStderr(t, func() {
-		tf, err := newTofuExec(root, bin)
+		tf, err := newTofuExec(root, bin, "")
 		if err != nil {
 			initErr = err
 			return
@@ -160,6 +161,7 @@ func TestTofuInitMovesTheLockToThePins(t *testing.T) {
 // whatever the progress command returned. A failed destroy is exactly when an operator
 // reaches for a read next, and a stream left on by the failure would print the state.
 func TestAFailedProgressCommandStillQuietsStdout(t *testing.T) {
+	testKube(t)
 	root, bin := t.TempDir(), fakeTofu(t)
 	if err := os.WriteFile(filepath.Join(filepath.Dir(bin), "fail-destroy"), nil, 0o600); err != nil {
 		t.Fatal(err)
@@ -167,7 +169,7 @@ func TestAFailedProgressCommandStillQuietsStdout(t *testing.T) {
 	ctx := context.Background()
 	var failures []string
 	out, _ := captureStdoutAndStderr(t, func() {
-		tf, err := newTofuExec(root, bin)
+		tf, err := newTofuExec(root, bin, "")
 		if err != nil {
 			failures = append(failures, "construct: "+err.Error())
 			return

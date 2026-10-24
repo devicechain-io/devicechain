@@ -94,7 +94,7 @@ func destroyInstanceRoot(ctx context.Context, kubeContext, instance string) (err
 	if err := removeSupersededRootConfig(workdir); err != nil {
 		return err
 	}
-	tf, err := newTofuExec(rootdir, tofuBin)
+	tf, err := newTofuExec(rootdir, tofuBin, kubeContext)
 	if err != nil {
 		return err
 	}
@@ -161,7 +161,6 @@ func destroyOpenedInstanceRoot(ctx context.Context, tf destroyTofu, kubeContext,
 	// inputs, which a destroy of a half-removed instance must not depend on (see
 	// outputsBlockFilter).
 	if err := tf.Destroy(ctx,
-		tfexec.Var("kubeconfig_context="+kubeContext),
 		tfexec.Var("instance_namespace="+InstanceNamespace(instance)),
 	); err != nil {
 		return fmt.Errorf("tofu destroy: %w", err)

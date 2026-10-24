@@ -125,6 +125,7 @@ func TestALiveCommandIsNeverAbandoned(t *testing.T) {
 // is real BEFORE the interrupt, because a fixture that stopped reproducing it would
 // leave a green test proving nothing.
 func TestAnInterruptedApplyWhoseOutputPipeIsHeldIsAbandoned(t *testing.T) {
+	testKube(t)
 	dir := t.TempDir()
 	ready := filepath.Join(dir, "spawned")
 	// `sleep 3 &` inherits the stdout pipe tofu was given and outlives the `exit 0`
@@ -150,7 +151,7 @@ func TestAnInterruptedApplyWhoseOutputPipeIsHeldIsAbandoned(t *testing.T) {
 		// goroutine while a parked terraform-exec goroutine still holds the writer, and
 		// the helper that does it reports its own failures with t.Fatalf, which is not
 		// valid off the test goroutine. One PROGRESS-apply line in the log is cheaper.
-		tf, err := newTofuExec(t.TempDir(), bin)
+		tf, err := newTofuExec(t.TempDir(), bin, "")
 		if err != nil {
 			applyErr = err
 			return

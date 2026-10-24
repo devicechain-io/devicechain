@@ -109,10 +109,11 @@ esac
 // from the configuration's defaults, and that it keeps every other line of the plan, in
 // order.
 func TestTheDestroyLeavesOutTheOutputsItWorkedOutWithoutTheInstancesSettings(t *testing.T) {
+	testKube(t)
 	root, bin := t.TempDir(), fakeTofuPrinting(t, "destroy", destroyTranscript)
 	var destroyErr error
 	out, _ := captureStdoutAndStderr(t, func() {
-		tf, err := newTofuExec(root, bin)
+		tf, err := newTofuExec(root, bin, "")
 		if err != nil {
 			destroyErr = err
 			return
@@ -171,6 +172,7 @@ func TestTheDestroyLeavesOutTheOutputsItWorkedOutWithoutTheInstancesSettings(t *
 // the instance's own variables, so its output list is true; hiding it is the mistake a
 // filter wired into every progress command would make.
 func TestApplyStillPrintsItsOutputs(t *testing.T) {
+	testKube(t)
 	transcript := "Plan: 1 to add, 0 to change, 0 to destroy.\n\n" +
 		"Changes to Outputs:\n" +
 		"  + nats_cluster_replicas            = 3\n" +
@@ -179,7 +181,7 @@ func TestApplyStillPrintsItsOutputs(t *testing.T) {
 	root, bin := t.TempDir(), fakeTofuPrinting(t, "apply", transcript)
 	var applyErr error
 	out, _ := captureStdoutAndStderr(t, func() {
-		tf, err := newTofuExec(root, bin)
+		tf, err := newTofuExec(root, bin, "")
 		if err != nil {
 			applyErr = err
 			return
