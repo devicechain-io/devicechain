@@ -90,6 +90,8 @@ function tenant(overrides: Partial<AdminTenant> = {}): AdminTenant {
     aiExternalEnabled: true,
     aiInferenceRequestsPerMinute: 12,
     aiInferenceBurst: 30,
+    provisioningRegistrationsPerSecond: 20,
+    provisioningBurst: 500,
     heldCommandCeiling: 2500,
     shedPriority: 77,
     geoFencePositionCeiling: 640,
@@ -122,6 +124,8 @@ const PRESERVED: Record<keyof AdminTenantUpdateRequest, unknown> = {
   aiExternalEnabled: true,
   aiInferenceRequestsPerMinute: 12,
   aiInferenceBurst: 30,
+  provisioningRegistrationsPerSecond: 20,
+  provisioningBurst: 500,
   heldCommandCeiling: 2500,
   shedPriority: 77,
   // The three geofence caps. They arrive here by the same route the two above did — the
@@ -148,6 +152,8 @@ const CLEARED: Record<keyof AdminTenantUpdateRequest, unknown> = {
   aiExternalEnabled: false,
   aiInferenceRequestsPerMinute: null,
   aiInferenceBurst: null,
+  provisioningRegistrationsPerSecond: null,
+  provisioningBurst: null,
   heldCommandCeiling: null,
   shedPriority: null,
   geoFencePositionCeiling: null,
@@ -225,6 +231,8 @@ describe('editing a tenant', () => {
         aiExternalEnabled: false,
         aiInferenceRequestsPerMinute: null,
         aiInferenceBurst: null,
+        provisioningRegistrationsPerSecond: null,
+        provisioningBurst: null,
         heldCommandCeiling: null,
         shedPriority: null,
         geoFencePositionCeiling: null,
@@ -244,8 +252,8 @@ describe('editing a tenant', () => {
     fireEvent.mouseDown(await screen.findByRole('tab', { name: 'Settings' }));
     await screen.findByLabelText('Held command ceiling');
     const hints = screen.getAllByText(/Leave blank to inherit the tier's value, then the platform default\./);
-    // ingest rate + burst, outbound rate + burst, AI rate + burst
-    expect(hints).toHaveLength(6);
+    // ingest rate + burst, outbound rate + burst, self-registration rate + burst, AI rate + burst
+    expect(hints).toHaveLength(8);
     expect(screen.queryByText(/inherit the platform default\.$/)).toBeNull();
   });
 

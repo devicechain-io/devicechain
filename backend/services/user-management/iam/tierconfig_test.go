@@ -49,6 +49,7 @@ func TestTierConfigKeysMatchTheKnownDimensions(t *testing.T) {
 		"ingestReadingsPerSecond", "ingestBurst",
 		"outboundCallsPerSecond", "outboundBurst",
 		"aiInferenceRequestsPerMinute", "aiInferenceBurst",
+		"provisioningRegistrationsPerSecond", "provisioningBurst",
 		// The ADR-063 shed priority — a standalone key, NOT a dimension (it has no
 		// burst and no rate unit), registered outside the dimension loop.
 		"shedPriority",

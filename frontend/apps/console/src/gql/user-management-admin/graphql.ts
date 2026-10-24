@@ -133,6 +133,13 @@ export type AdminTenantCreateRequest = {
    * omit it to inherit the tier's ceiling, then the platform default.
    */
   outboundCallsPerSecond?: number | null | undefined;
+  /** Override of the self-registration burst allowance, in registrations. Must be positive. Omit to inherit. */
+  provisioningBurst?: number | null | undefined;
+  /**
+   * Override of the sustained device self-registration rate, in registrations per second.
+   * Must be positive. Omit to inherit the tier's value, then the platform default.
+   */
+  provisioningRegistrationsPerSecond?: number | null | undefined;
   /**
    * Override of the overload-protection priority: a whole number from 1 to 100, higher
    * meaning the tenant's traffic is refused later when the platform is overloaded; 80 to 100
@@ -243,6 +250,13 @@ export type AdminTenantUpdateRequest = {
    * as it is; null removes it so the tenant inherits; a value must be positive.
    */
   outboundCallsPerSecond?: number | null | undefined;
+  /** Override of the self-registration burst allowance, in registrations. Must be positive. Omitted leaves it as it is; null removes it so the tenant inherits. */
+  provisioningBurst?: number | null | undefined;
+  /**
+   * Override of the sustained device self-registration rate, in registrations per second.
+   * Must be positive. Omitted leaves it as it is; null removes it so the tenant inherits.
+   */
+  provisioningRegistrationsPerSecond?: number | null | undefined;
   /** Override of the overload-protection priority, a whole number from 1 to 100. */
   shedPriority?: number | null | undefined;
   /**
@@ -356,7 +370,7 @@ export type IdentitiesQuery = { identities: Array<{ id: string, email: string, f
 export type TenantsQueryVariables = Exact<{ [key: string]: never; }>;
 
 
-export type TenantsQuery = { tenants: Array<{ id: string, token: string, name: string | null, enabled: boolean, purgeState: string, purgeEpoch: string | null, ssoEnforced: boolean, config: string | null, ingestReadingsPerSecond: number | null, ingestBurst: number | null, outboundCallsPerSecond: number | null, outboundBurst: number | null, aiExternalEnabled: boolean | null, aiInferenceRequestsPerMinute: number | null, aiInferenceBurst: number | null, heldCommandCeiling: number | null, shedPriority: number | null, geoFencePositionCeiling: number | null, geoFenceCeiling: number | null, geoFencePositionBudget: number | null, createdAt: string | null, updatedAt: string | null, tier: { token: string, name: string | null, color: string | null }, effectiveSettings: Array<{ dimension: { name: string, label: string, rateUnit: string }, rate: { source: string, value: number | null, tier: number | null, override: number | null }, burst: { source: string, value: number | null, tier: number | null, override: number | null } }>, effectiveScalarSettings: Array<{ key: string, label: string, source: string, value: number | null, tier: number | null, override: number | null }> }> };
+export type TenantsQuery = { tenants: Array<{ id: string, token: string, name: string | null, enabled: boolean, purgeState: string, purgeEpoch: string | null, ssoEnforced: boolean, config: string | null, ingestReadingsPerSecond: number | null, ingestBurst: number | null, outboundCallsPerSecond: number | null, outboundBurst: number | null, aiExternalEnabled: boolean | null, aiInferenceRequestsPerMinute: number | null, aiInferenceBurst: number | null, provisioningRegistrationsPerSecond: number | null, provisioningBurst: number | null, heldCommandCeiling: number | null, shedPriority: number | null, geoFencePositionCeiling: number | null, geoFenceCeiling: number | null, geoFencePositionBudget: number | null, createdAt: string | null, updatedAt: string | null, tier: { token: string, name: string | null, color: string | null }, effectiveSettings: Array<{ dimension: { name: string, label: string, rateUnit: string }, rate: { source: string, value: number | null, tier: number | null, override: number | null }, burst: { source: string, value: number | null, tier: number | null, override: number | null } }>, effectiveScalarSettings: Array<{ key: string, label: string, source: string, value: number | null, tier: number | null, override: number | null }> }> };
 
 export type GovernanceDimensionsQueryVariables = Exact<{ [key: string]: never; }>;
 
@@ -530,7 +544,7 @@ export type CreateTenantMutationVariables = Exact<{
 }>;
 
 
-export type CreateTenantMutation = { createTenant: { id: string, token: string, name: string | null, enabled: boolean, config: string | null, ingestReadingsPerSecond: number | null, ingestBurst: number | null, outboundCallsPerSecond: number | null, outboundBurst: number | null, aiExternalEnabled: boolean | null, aiInferenceRequestsPerMinute: number | null, aiInferenceBurst: number | null, heldCommandCeiling: number | null, shedPriority: number | null, geoFencePositionCeiling: number | null, geoFenceCeiling: number | null, geoFencePositionBudget: number | null, createdAt: string | null, updatedAt: string | null, tier: { token: string, name: string | null, color: string | null } } };
+export type CreateTenantMutation = { createTenant: { id: string, token: string, name: string | null, enabled: boolean, config: string | null, ingestReadingsPerSecond: number | null, ingestBurst: number | null, outboundCallsPerSecond: number | null, outboundBurst: number | null, aiExternalEnabled: boolean | null, aiInferenceRequestsPerMinute: number | null, aiInferenceBurst: number | null, provisioningRegistrationsPerSecond: number | null, provisioningBurst: number | null, heldCommandCeiling: number | null, shedPriority: number | null, geoFencePositionCeiling: number | null, geoFenceCeiling: number | null, geoFencePositionBudget: number | null, createdAt: string | null, updatedAt: string | null, tier: { token: string, name: string | null, color: string | null } } };
 
 export type UpdateTenantMutationVariables = Exact<{
   token: string;
@@ -538,7 +552,7 @@ export type UpdateTenantMutationVariables = Exact<{
 }>;
 
 
-export type UpdateTenantMutation = { updateTenant: { id: string, token: string, name: string | null, enabled: boolean, config: string | null, ingestReadingsPerSecond: number | null, ingestBurst: number | null, outboundCallsPerSecond: number | null, outboundBurst: number | null, aiExternalEnabled: boolean | null, aiInferenceRequestsPerMinute: number | null, aiInferenceBurst: number | null, heldCommandCeiling: number | null, shedPriority: number | null, geoFencePositionCeiling: number | null, geoFenceCeiling: number | null, geoFencePositionBudget: number | null, createdAt: string | null, updatedAt: string | null, tier: { token: string, name: string | null, color: string | null } } };
+export type UpdateTenantMutation = { updateTenant: { id: string, token: string, name: string | null, enabled: boolean, config: string | null, ingestReadingsPerSecond: number | null, ingestBurst: number | null, outboundCallsPerSecond: number | null, outboundBurst: number | null, aiExternalEnabled: boolean | null, aiInferenceRequestsPerMinute: number | null, aiInferenceBurst: number | null, provisioningRegistrationsPerSecond: number | null, provisioningBurst: number | null, heldCommandCeiling: number | null, shedPriority: number | null, geoFencePositionCeiling: number | null, geoFenceCeiling: number | null, geoFencePositionBudget: number | null, createdAt: string | null, updatedAt: string | null, tier: { token: string, name: string | null, color: string | null } } };
 
 export type SetTenantEnabledMutationVariables = Exact<{
   token: string;
@@ -546,7 +560,7 @@ export type SetTenantEnabledMutationVariables = Exact<{
 }>;
 
 
-export type SetTenantEnabledMutation = { setTenantEnabled: { id: string, token: string, name: string | null, enabled: boolean, config: string | null, ingestReadingsPerSecond: number | null, ingestBurst: number | null, outboundCallsPerSecond: number | null, outboundBurst: number | null, aiExternalEnabled: boolean | null, aiInferenceRequestsPerMinute: number | null, aiInferenceBurst: number | null, heldCommandCeiling: number | null, shedPriority: number | null, geoFencePositionCeiling: number | null, geoFenceCeiling: number | null, geoFencePositionBudget: number | null, createdAt: string | null, updatedAt: string | null, tier: { token: string, name: string | null, color: string | null } } };
+export type SetTenantEnabledMutation = { setTenantEnabled: { id: string, token: string, name: string | null, enabled: boolean, config: string | null, ingestReadingsPerSecond: number | null, ingestBurst: number | null, outboundCallsPerSecond: number | null, outboundBurst: number | null, aiExternalEnabled: boolean | null, aiInferenceRequestsPerMinute: number | null, aiInferenceBurst: number | null, provisioningRegistrationsPerSecond: number | null, provisioningBurst: number | null, heldCommandCeiling: number | null, shedPriority: number | null, geoFencePositionCeiling: number | null, geoFenceCeiling: number | null, geoFencePositionBudget: number | null, createdAt: string | null, updatedAt: string | null, tier: { token: string, name: string | null, color: string | null } } };
 
 export type SetTenantSsoEnforcedMutationVariables = Exact<{
   tenant: string;
@@ -761,6 +775,8 @@ export const TenantsDocument = new TypedDocumentString(`
     aiExternalEnabled
     aiInferenceRequestsPerMinute
     aiInferenceBurst
+    provisioningRegistrationsPerSecond
+    provisioningBurst
     heldCommandCeiling
     shedPriority
     geoFencePositionCeiling
@@ -1108,6 +1124,8 @@ export const CreateTenantDocument = new TypedDocumentString(`
     aiExternalEnabled
     aiInferenceRequestsPerMinute
     aiInferenceBurst
+    provisioningRegistrationsPerSecond
+    provisioningBurst
     heldCommandCeiling
     shedPriority
     geoFencePositionCeiling
@@ -1138,6 +1156,8 @@ export const UpdateTenantDocument = new TypedDocumentString(`
     aiExternalEnabled
     aiInferenceRequestsPerMinute
     aiInferenceBurst
+    provisioningRegistrationsPerSecond
+    provisioningBurst
     heldCommandCeiling
     shedPriority
     geoFencePositionCeiling
@@ -1168,6 +1188,8 @@ export const SetTenantEnabledDocument = new TypedDocumentString(`
     aiExternalEnabled
     aiInferenceRequestsPerMinute
     aiInferenceBurst
+    provisioningRegistrationsPerSecond
+    provisioningBurst
     heldCommandCeiling
     shedPriority
     geoFencePositionCeiling

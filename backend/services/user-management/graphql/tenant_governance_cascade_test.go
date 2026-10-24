@@ -229,3 +229,98 @@ func TestAiInferenceCascade(t *testing.T) {
 	// inherit, so a tier can never grant it.
 	require.False(t, r.AiExternalEnabled())
 }
+
+// goldTierWithProvisioning is a tier that packages a self-registration ceiling.
+func goldTierWithProvisioning() *iam.TenantTier {
+	return &iam.TenantTier{Token: iam.TierGoldToken, Config: map[string]any{
+		"provisioningRegistrationsPerSecond": float64(50),
+		"provisioningBurst":                  float64(1000),
+	}}
+}
+
+// TestProvisioningCascadeOnTheWire pins that the data-plane tenantGovernance surface
+// resolves the self-registration dimension down the same cascade every rate uses —
+// per-tenant override, else tier, else null — which is what device-management reads its
+// per-tenant bucket through. Null means neither level declares one and core/governance
+// folds it onto the platform default, a real ceiling; no level can express "unlimited".
+func TestProvisioningCascadeOnTheWire(t *testing.T) {
+	t.Run("override wins over the tier", func(t *testing.T) {
+		r := &TenantGovernanceResolver{t: &iam.Tenant{
+			Tier:                               goldTierWithProvisioning(),
+			ProvisioningRegistrationsPerSecond: f64(5),
+			ProvisioningBurst:                  ip(9),
+		}}
+		require.Equal(t, float64(5), *r.ProvisioningRegistrationsPerSecond())
+		require.EqualValues(t, 9, *i32(r.ProvisioningBurst()))
+	})
+
+	t.Run("tier supplies the ceiling when the tenant declares none", func(t *testing.T) {
+		r := &TenantGovernanceResolver{t: &iam.Tenant{Tier: goldTierWithProvisioning()}}
+		require.Equal(t, float64(50), *r.ProvisioningRegistrationsPerSecond())
+		require.EqualValues(t, 1000, *i32(r.ProvisioningBurst()))
+	})
+
+	t.Run("null when neither declares — the consumer applies the platform default", func(t *testing.T) {
+		r := &TenantGovernanceResolver{t: &iam.Tenant{Tier: &iam.TenantTier{Token: iam.TierSilverToken}}}
+		require.Nil(t, r.ProvisioningRegistrationsPerSecond())
+		require.Nil(t, i32(r.ProvisioningBurst()))
+	})
+
+	t.Run("rate and burst fall back independently", func(t *testing.T) {
+		r := &TenantGovernanceResolver{t: &iam.Tenant{
+			Tier:                               goldTierWithProvisioning(),
+			ProvisioningRegistrationsPerSecond: f64(5),
+		}}
+		require.Equal(t, float64(5), *r.ProvisioningRegistrationsPerSecond())
+		require.EqualValues(t, 1000, *i32(r.ProvisioningBurst()), "burst still comes from the tier")
+	})
+
+	t.Run("a junk override falls through to the tier, not past it", func(t *testing.T) {
+		r := &TenantGovernanceResolver{t: &iam.Tenant{
+			Tier:                               goldTierWithProvisioning(),
+			ProvisioningRegistrationsPerSecond: f64(-5),
+			ProvisioningBurst:                  ip(0),
+		}}
+		require.Equal(t, float64(50), *r.ProvisioningRegistrationsPerSecond())
+		require.EqualValues(t, 1000, *i32(r.ProvisioningBurst()))
+	})
+
+	t.Run("the dimension is independent of ingest", func(t *testing.T) {
+		// A tenant throttled to a trickle of registrations is not thereby throttled on
+		// telemetry, and the reverse.
+		r := &TenantGovernanceResolver{t: &iam.Tenant{
+			Tier:                    goldTier(),
+			IngestReadingsPerSecond: f64(7),
+		}}
+		require.Nil(t, r.ProvisioningRegistrationsPerSecond(), "an ingest override must not govern registrations")
+		require.Equal(t, float64(7), *r.IngestReadingsPerSecond())
+	})
+}
+
+// TestAdminProvisioningIsReadable: the per-tenant override must be readable back on the
+// admin plane so a console form can round-trip it (the same regression the other
+// overrides carry), and the effective-settings view must enumerate the dimension with
+// the tier's and the override's own values beside the winner.
+func TestAdminProvisioningIsReadable(t *testing.T) {
+	r := &AdminTenantResolver{M: iam.Tenant{
+		Tier:                               goldTierWithProvisioning(),
+		ProvisioningRegistrationsPerSecond: f64(5),
+	}}
+	require.Equal(t, float64(5), *r.ProvisioningRegistrationsPerSecond())
+	require.Nil(t, i32(r.ProvisioningBurst()))
+
+	var found *AdminTenantSettingResolver
+	for _, s := range r.EffectiveSettings() {
+		if s.Dimension().Name() == "provisioning" {
+			found = s
+		}
+	}
+	require.NotNil(t, found, "the effective-settings view must include the provisioning dimension")
+	require.Equal(t, "override", found.Rate().Source())
+	require.Equal(t, float64(5), *found.Rate().Value())
+	require.Equal(t, float64(50), *found.Rate().Tier())
+	require.Equal(t, float64(5), *found.Rate().Override())
+	require.Equal(t, "tier", found.Burst().Source())
+	require.EqualValues(t, 1000, *i32(found.Burst().Value()))
+	require.Nil(t, i32(found.Burst().Override()))
+}

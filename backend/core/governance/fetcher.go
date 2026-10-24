@@ -108,6 +108,17 @@ var (
 		PerSecondScale: 1.0 / 60.0,
 		Label:          "AI drafting", RateUnit: "requests/min",
 	})
+	// Provisioning governs device self-registration: how fast a tenant's devices may
+	// register themselves through device-management's HTTPS provisioning endpoint. It is
+	// charged AFTER the provision secret has authenticated, so it bounds the work an
+	// authenticated fleet can ask of the tenant's own database, not what an anonymous
+	// sender can. Declared per second, like the other device-traffic dimensions; the
+	// platform default is DefaultProvisioningLimits.
+	Provisioning = register(Dimension{
+		Name: "provisioning", RateField: "provisioningRegistrationsPerSecond", BurstField: "provisioningBurst",
+		PerSecondScale: 1,
+		Label:          "Self-registration", RateUnit: "registrations/sec",
+	})
 )
 
 // AllDimensions returns every governance dimension the platform declares — the ones

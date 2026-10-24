@@ -129,6 +129,8 @@ const TENANTS = graphql(`
       aiExternalEnabled
       aiInferenceRequestsPerMinute
       aiInferenceBurst
+      provisioningRegistrationsPerSecond
+      provisioningBurst
       # 🔴 Selected so the edit form can SHOW them — and, because TenantForm restates
       # every field it renders on every save, so it can carry them over rather than
       # sending a null for a value it never read.
@@ -718,6 +720,8 @@ const CREATE_TENANT = graphql(`
       aiExternalEnabled
       aiInferenceRequestsPerMinute
       aiInferenceBurst
+      provisioningRegistrationsPerSecond
+      provisioningBurst
       heldCommandCeiling
       shedPriority
       geoFencePositionCeiling
@@ -780,6 +784,8 @@ const UPDATE_TENANT = graphql(`
       aiExternalEnabled
       aiInferenceRequestsPerMinute
       aiInferenceBurst
+      provisioningRegistrationsPerSecond
+      provisioningBurst
       heldCommandCeiling
       shedPriority
       geoFencePositionCeiling
@@ -822,6 +828,8 @@ const SET_TENANT_ENABLED = graphql(`
       aiExternalEnabled
       aiInferenceRequestsPerMinute
       aiInferenceBurst
+      provisioningRegistrationsPerSecond
+      provisioningBurst
       heldCommandCeiling
       shedPriority
       geoFencePositionCeiling

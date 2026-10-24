@@ -534,7 +534,9 @@ CREATE TABLE "user-management".iam_tenants (
  geo_fence_ceiling bigint,
  geo_fence_position_budget bigint,
  locale text,
- sso_enforced boolean DEFAULT false NOT NULL
+ sso_enforced boolean DEFAULT false NOT NULL,
+ provisioning_registrations_per_second numeric,
+ provisioning_burst bigint
 );
 CREATE TABLE "user-management".purged_tenants (
  token character varying(128) NOT NULL,
