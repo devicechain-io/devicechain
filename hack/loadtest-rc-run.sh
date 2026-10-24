@@ -133,7 +133,7 @@ done
 [[ -n "$mqtt_hs" ]] || { echo "--mqtt-handshake is required" >&2; usage; }
 [[ -n "$detect_hs" ]] || { echo "--detect-handshake is required" >&2; usage; }
 # One tenant per harness: compare the handshake files' tenants, not their paths.
-tenant_of() { sed -n 's/.*"tenant"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$1" | head -1; }
+tenant_of() { sed -n 's/.*"tenant"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$1" | sed -n '1p'; }
 tenants="$(for h in "$http_hs" "$mqtt_hs" "$detect_hs"; do tenant_of "$h"; done)"
 [[ "$(echo "$tenants" | grep -c .)" -eq 3 ]] || { echo "could not read a tenant from every handshake" >&2; exit 2; }
 [[ "$(echo "$tenants" | sort -u | wc -l)" -eq 3 ]] || {
