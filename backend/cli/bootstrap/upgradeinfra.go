@@ -1237,6 +1237,7 @@ func prepareUpgradePlan(ctx context.Context, st *State, tf upgradeTofu, rootdir 
 	if err := spellVolumesAsRecorded(st, state); err != nil {
 		return nil, err
 	}
+	st.LiveMaxFileStore = liveMaxFileStore(state)
 	vars, err := instanceRootVars(st)
 	if err != nil {
 		return nil, err

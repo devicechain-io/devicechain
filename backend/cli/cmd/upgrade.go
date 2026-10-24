@@ -27,6 +27,29 @@ var (
 	upgradeResetValues bool
 )
 
+// upgradeOptions is the UpgradeOptions the upgrade flags describe, split out of RunE so
+// the copy of each flag into its field can be tested.
+func upgradeOptions(instance, mqttBodyCredential string, mqttFailClosed *bool, valuesOverlay map[string]interface{}) bootstrap.UpgradeOptions {
+	return bootstrap.UpgradeOptions{
+		Options: bootstrap.Options{
+			Instance:      instance,
+			KubeContext:   upgradeKubeContext,
+			DryRun:        upgradeDryRun,
+			ImageRegistry: upgradeRegistry,
+			ImageVersion:  upgradeVersion,
+
+			MqttBodyCredential: mqttBodyCredential,
+			MqttFailClosed:     mqttFailClosed,
+			ValuesOverlay:      valuesOverlay,
+			ResetValues:        upgradeResetValues,
+		},
+		EscrowFile:           upgradeEscrowFile,
+		EscrowPassphraseFile: upgradeEscrowPass,
+		DcctlVersion:         Version,
+		SkipInfrastructure:   upgradeSkipInfra,
+	}
+}
+
 // upgradeCmd moves a live instance onto a release's version. It began as the half of
 // an upgrade `helm upgrade` could not reach — the operator is not in the chart — and
 // it is now the whole of it, because once dcctl owns the configuration document the
@@ -128,7 +151,7 @@ when they are in a terraform.tfvars beside its state
 		if err != nil {
 			return fmt.Errorf("--mqtt-body-credential: %w", err)
 		}
-		mqttFailClosed := bootstrap.MqttFailClosedFromFlag(cmd.Flags().Changed("mqtt-fail-closed"), upgradeMqttFailClosed)
+		mqttFailClosed := mqttFailClosedFlag(cmd.Flags().Changed, upgradeMqttFailClosed)
 		if upgradeResetValues && len(upgradeValues) > 0 {
 			return fmt.Errorf("--values replaces the recorded overlay and --reset-values removes it; give one")
 		}
@@ -138,24 +161,7 @@ when they are in a terraform.tfvars beside its state
 				return err
 			}
 		}
-		opts := bootstrap.UpgradeOptions{
-			Options: bootstrap.Options{
-				Instance:      args[1],
-				KubeContext:   upgradeKubeContext,
-				DryRun:        upgradeDryRun,
-				ImageRegistry: upgradeRegistry,
-				ImageVersion:  upgradeVersion,
-
-				MqttBodyCredential: mqttBodyCredential,
-				MqttFailClosed:     mqttFailClosed,
-				ValuesOverlay:      valuesOverlay,
-				ResetValues:        upgradeResetValues,
-			},
-			EscrowFile:           upgradeEscrowFile,
-			EscrowPassphraseFile: upgradeEscrowPass,
-			DcctlVersion:         Version,
-			SkipInfrastructure:   upgradeSkipInfra,
-		}
+		opts := upgradeOptions(args[1], mqttBodyCredential, mqttFailClosed, valuesOverlay)
 		return bootstrap.Upgrade(cmd.Context(), provider, opts)
 	},
 	SilenceUsage: true,

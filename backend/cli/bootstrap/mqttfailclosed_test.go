@@ -11,7 +11,10 @@ import (
 	"testing"
 
 	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/dynamic/fake"
+	k8stesting "k8s.io/client-go/testing"
 )
 
 // 🔴 THESE TESTS DRIVE THE REAL PATH: a State goes through the declaration the cluster
@@ -228,14 +231,15 @@ func TestARerunWithNoFailClosedFlagKeepsTheDeclaredChoice(t *testing.T) {
 		t.Helper()
 		prevRead, prevWrite := readInstanceDeclaration, writeInstanceDeclaration
 		t.Cleanup(func() { readInstanceDeclaration, writeInstanceDeclaration = prevRead, prevWrite })
+		current := declared
 		readInstanceDeclaration = func(context.Context, string, string) (*dcv1beta1.Instance, error) {
 			inst := aDeclaration(dcv1beta1.PhaseReady, "")
 			inst.UID = "7f0d4f2e-0000-4000-8000-000000000001"
-			inst.Spec = dcv1beta1.InstanceSpec{Provider: "local", Profile: "default", MQTTFailClosed: declared}
+			inst.Spec = dcv1beta1.InstanceSpec{Provider: "local", Profile: "default", MQTTFailClosed: current}
 			return inst, nil
 		}
 		writeInstanceDeclaration = func(_ context.Context, _, _ string, spec dcv1beta1.InstanceSpec, _ string, _ bool) error {
-			written = spec.MQTTFailClosed
+			written, current = spec.MQTTFailClosed, spec.MQTTFailClosed
 			return nil
 		}
 		st := &State{Instance: "prod", Provider: "local", Profile: "default", MqttFailClosed: flag}
@@ -267,5 +271,45 @@ func TestMqttFailClosedFromFlagDistinguishesNotGivenFromFalse(t *testing.T) {
 	}
 	if v := MqttFailClosedFromFlag(true, true); v == nil || !*v {
 		t.Errorf("--mqtt-fail-closed produced %v", v)
+	}
+}
+
+// 🔴 A CLUSTER WHOSE INSTANCE DEFINITION PREDATES THE FIELD PRUNES IT AND REPORTS SUCCESS. The
+// run must say so, or the next flagless upgrade renders the default over the operator's choice.
+func TestBootstrapRefusesADeclarationThatCameBackWithoutTheChoice(t *testing.T) {
+	prevRead, prevWrite := readInstanceDeclaration, writeInstanceDeclaration
+	t.Cleanup(func() { readInstanceDeclaration, writeInstanceDeclaration = prevRead, prevWrite })
+	readInstanceDeclaration = func(context.Context, string, string) (*dcv1beta1.Instance, error) {
+		inst := aDeclaration(dcv1beta1.PhaseReady, "")
+		inst.UID = "7f0d4f2e-0000-4000-8000-000000000001"
+		inst.Spec = dcv1beta1.InstanceSpec{Provider: "local", Profile: "default"} // the field was pruned
+		return inst, nil
+	}
+	writeInstanceDeclaration = func(context.Context, string, string, dcv1beta1.InstanceSpec, string, bool) error { return nil }
+	st := &State{Instance: "prod", Provider: "local", Profile: "default", MqttFailClosed: boolPtr(true)}
+	err := stepDeclareInstance(context.Background(), st)
+	if err == nil || !strings.Contains(err.Error(), "does not record mqttFailClosed") || !strings.Contains(err.Error(), "dcctl install") {
+		t.Fatalf("a pruned choice was not refused: %v", err)
+	}
+	// Never choosing is never a mismatch.
+	st = &State{Instance: "prod", Provider: "local", Profile: "default"}
+	if err := stepDeclareInstance(context.Background(), st); err != nil {
+		t.Errorf("an instance that never chose was refused: %v", err)
+	}
+}
+
+func TestUpgradeRefusesADeclarationThatCameBackWithoutTheChoice(t *testing.T) {
+	dyn := builtWith(t, nil)
+	dyn.PrependReactor("update", "*", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		if u, ok := action.(k8stesting.UpdateAction).GetObject().(*unstructured.Unstructured); ok {
+			unstructured.RemoveNestedField(u.Object, "spec", "mqttFailClosed")
+		}
+		return false, nil, nil
+	})
+	st, _, _ := upgradeRender(t, dyn, boolPtr(true))
+	st.DcctlVersion, st.ImageRegistry, st.ImageVersion = "v0.25.0", "ghcr.io/devicechain-io", "v1.2.0"
+	err := recordUpgradedVersion(t.Context(), dyn, "prod", st)
+	if err == nil || !strings.Contains(err.Error(), "does not record mqttFailClosed") {
+		t.Fatalf("a pruned choice was not refused: %v", err)
 	}
 }

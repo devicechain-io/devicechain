@@ -230,6 +230,16 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 		infra.say()
 	}
 
+	// 🔴 THE JETSTREAM RESERVATION IS ASKED BEFORE THE DECLARATION IS WRITTEN. The document
+	// this run writes reserves every stream ceiling up front against the broker's real
+	// max_file_store, and an upgrade keeps the volume the instance was built with: a setting that
+	// raises a ceiling can be refused by a broker that cannot hold it, and a declaration already
+	// naming the setting would make every flagless retry fail the same way. See
+	// jetstreamreservation.go.
+	if err := precheckJetStreamReservation(ctx, st); err != nil {
+		return err
+	}
+
 	// 🔴 THE DECLARATION IS UPDATED BEFORE ANYTHING MOVES, AND BOTH HALVES OF THAT
 	// ARE DELIBERATE. See recordUpgradedVersion.
 	if err := recordUpgradedVersion(ctx, dyn, opts.Instance, st); err != nil {
@@ -638,7 +648,21 @@ func recordUpgradedVersion(ctx context.Context, dyn dynamic.Interface, instance 
 	// merely imprecise but names the wrong VERB, which is the one thing a reader
 	// uses it for. See finishUpgradePhase for the other half: a phase that is only
 	// ever entered is a phase that is never left.
-	return writeInstanceCR(ctx, dyn, instance, spec, st.DcctlVersion, dcv1beta1.PhaseUpgrading)
+	if err := writeInstanceCR(ctx, dyn, instance, spec, st.DcctlVersion, dcv1beta1.PhaseUpgrading); err != nil {
+		return err
+	}
+	if !st.MqttFailClosedChange {
+		return nil
+	}
+	// 🔴 READ BACK WHAT THIS RUN ASKED TO KEEP. See verifyFailClosedRecorded.
+	back, err := readInstanceCR(ctx, dyn, instance)
+	if err != nil {
+		return err
+	}
+	if back == nil {
+		return nil
+	}
+	return verifyFailClosedRecorded(st.MqttFailClosed, back.Spec.MQTTFailClosed)
 }
 
 // finishUpgradePhase records how this upgrade ENDED on the declaration, and gives

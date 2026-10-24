@@ -107,6 +107,9 @@ func stepDeclareInstance(ctx context.Context, st *State) error {
 		return fmt.Errorf("the declaration for instance %q was not there immediately after being written; "+
 			"something else is deleting it", st.Instance)
 	}
+	if err := verifyFailClosedRecorded(st.MqttFailClosed, inst.Spec.MQTTFailClosed); err != nil {
+		return err
+	}
 	if err := ValidateInstanceSpec(inst.Spec); err != nil {
 		return fmt.Errorf("the declaration read back from the cluster is not usable: %w", err)
 	}

@@ -288,6 +288,10 @@ type State struct {
 	// reads them before its apply, so a release that changes a default size never asks
 	// to resize a volume that exists. Empty on a bootstrap. See volumeSize.
 	LiveVolumes liveVolumes
+	// LiveMaxFileStore is the file-store ceiling the instance's broker was last applied with, read
+	// from the instance root's state; empty when unread. It is what a hand-set
+	// nats_jetstream_max_file_store arrives as. See jetstreamreservation.go.
+	LiveMaxFileStore string
 	// InfraNotes are what an upgrade's settle found worth saying with the plan — a broker
 	// roll an earlier run left unfinished, which this apply replaces. Empty on a bootstrap.
 	InfraNotes []string

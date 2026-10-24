@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
 	"github.com/devicechain-io/dcctl/bootstrap"
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
@@ -143,6 +144,69 @@ func restoreFlagsFromArgv(backupsEnabled bool) bootstrap.RestoreFlags {
 	}
 }
 
+// bootstrapOptions is the Options the bootstrap flags describe. Split out of RunE so the
+// copy of each flag into its field can be tested: a deleted line is otherwise invisible,
+// and --mqtt-fail-closed would quietly stop reaching the declaration.
+func bootstrapOptions(instance string, enableAreas []string, mqttFailClosed *bool) bootstrap.Options {
+	return bootstrap.Options{
+		Instance:             instance,
+		KubeContext:          bootstrapKubeContext,
+		Cluster:              bootstrapCluster,
+		Profile:              bootstrapProfile,
+		DryRun:               bootstrapDryRun,
+		AssumeYes:            bootstrapAssumeYes,
+		ImageRegistry:        bootstrapRegistry,
+		ImageVersion:         bootstrapVersion,
+		BuildImages:          bootstrapBuild,
+		IngressHost:          bootstrapHost,
+		NoTLS:                bootstrapNoTLS,
+		AllowLegacyDbRemoval: bootstrapAllowLegacyDb,
+		EnableAreas:          enableAreas,
+		MqttFailClosed:       mqttFailClosed,
+	}
+}
+
+// bootstrapStateFor is the State a bootstrap run starts its pipeline from, for the same
+// reason bootstrapOptions is a function.
+func bootstrapStateFor(opts bootstrap.Options, binding bootstrap.ClusterBinding, clusterUID, provider string,
+	enabledAreas []string, lwm2mIdentities []bootstrap.Lwm2mIdentity, mqttBodyCredential string,
+	valuesOverlay map[string]interface{}, objectStore *dcv1beta1.ObjectStoreSpec, objectStoreExplicit bool,
+	escrowPlan bootstrap.EscrowPlan) *bootstrap.State {
+	return &bootstrap.State{
+		Instance:             opts.Instance,
+		KubeContext:          binding.KubeContext,
+		ClusterUID:           clusterUID,
+		Binding:              binding,
+		Provider:             provider,
+		DcctlVersion:         Version,
+		Profile:              opts.Profile,
+		DryRun:               opts.DryRun,
+		AssumeYes:            opts.AssumeYes,
+		ImageRegistry:        opts.ImageRegistry,
+		ImageVersion:         opts.ImageVersion,
+		BuildImages:          opts.BuildImages,
+		IngressHost:          opts.IngressHost,
+		NoTLS:                opts.NoTLS,
+		AllowLegacyDbRemoval: opts.AllowLegacyDbRemoval,
+		EnableAreas:          opts.EnableAreas,
+		EnabledAreas:         enabledAreas,
+		Lwm2mIdentities:      lwm2mIdentities,
+		MqttBodyCredential:   mqttBodyCredential,
+		MqttFailClosed:       opts.MqttFailClosed,
+		ValuesOverlay:        valuesOverlay,
+		ObjectStore:          objectStore,
+		ObjectStoreExplicit:  objectStoreExplicit,
+		Escrow:               escrowPlan,
+		Values:               map[string]string{},
+	}
+}
+
+// mqttFailClosedFlag reads --mqtt-fail-closed off a command's flag set: nil when the flag
+// was not given, otherwise the value it was given.
+func mqttFailClosedFlag(changed func(string) bool, value bool) *bool {
+	return bootstrap.MqttFailClosedFromFlag(changed("mqtt-fail-closed"), value)
+}
+
 // bootstrapCmd provisions a usable DeviceChain instance on a target provider.
 // It is a thin wrapper over the bootstrap engine package (ADR-032).
 var bootstrapCmd = &cobra.Command{
@@ -190,7 +254,7 @@ var bootstrapCmd = &cobra.Command{
 		}
 		// Fail-closed MQTT: judged against the area set up front, so a refusal lands before any
 		// cluster exists. nil (flag not given) is a real answer and is recorded as one.
-		mqttFailClosed := bootstrap.MqttFailClosedFromFlag(cmd.Flags().Changed("mqtt-fail-closed"), bootstrapMqttFailClosed)
+		mqttFailClosed := mqttFailClosedFlag(cmd.Flags().Changed, bootstrapMqttFailClosed)
 		if err := bootstrap.ValidateMqttFailClosed(mqttFailClosed, bootstrapProfile, bootstrapEnableAreas); err != nil {
 			return err
 		}
@@ -275,21 +339,7 @@ var bootstrapCmd = &cobra.Command{
 			return err
 		}
 
-		opts := bootstrap.Options{
-			Instance:             args[1],
-			KubeContext:          bootstrapKubeContext,
-			Cluster:              bootstrapCluster,
-			Profile:              bootstrapProfile,
-			DryRun:               bootstrapDryRun,
-			AssumeYes:            bootstrapAssumeYes,
-			ImageRegistry:        bootstrapRegistry,
-			ImageVersion:         bootstrapVersion,
-			BuildImages:          bootstrapBuild,
-			IngressHost:          bootstrapHost,
-			NoTLS:                bootstrapNoTLS,
-			AllowLegacyDbRemoval: bootstrapAllowLegacyDb,
-			EnableAreas:          enableAreas,
-		}
+		opts := bootstrapOptions(args[1], enableAreas, mqttFailClosed)
 
 		// WHAT CAN BE SETTLED FROM THE ARGUMENTS ALONE IS SETTLED HERE, BEFORE THE RUN
 		// TOUCHES ANYTHING.
@@ -411,33 +461,8 @@ var bootstrapCmd = &cobra.Command{
 		}
 		fmt.Printf("object store: %s\n", bootstrap.ObjectStoreSummary(objectStore))
 
-		st := &bootstrap.State{
-			Instance:             opts.Instance,
-			KubeContext:          binding.KubeContext,
-			ClusterUID:           clusterUID,
-			Binding:              binding,
-			Provider:             provider.Name(),
-			DcctlVersion:         Version,
-			Profile:              opts.Profile,
-			DryRun:               opts.DryRun,
-			AssumeYes:            opts.AssumeYes,
-			ImageRegistry:        opts.ImageRegistry,
-			ImageVersion:         opts.ImageVersion,
-			BuildImages:          opts.BuildImages,
-			IngressHost:          opts.IngressHost,
-			NoTLS:                opts.NoTLS,
-			AllowLegacyDbRemoval: opts.AllowLegacyDbRemoval,
-			EnableAreas:          opts.EnableAreas,
-			EnabledAreas:         enabledAreas,
-			Lwm2mIdentities:      lwm2mIdentities,
-			MqttBodyCredential:   mqttBodyCredential,
-			MqttFailClosed:       mqttFailClosed,
-			ValuesOverlay:        valuesOverlay,
-			ObjectStore:          objectStore,
-			ObjectStoreExplicit:  objectStoreFlagGiven(cmd.Flags().Changed),
-			Escrow:               escrowPlan,
-			Values:               map[string]string{},
-		}
+		st := bootstrapStateFor(opts, binding, clusterUID, provider.Name(), enabledAreas, lwm2mIdentities,
+			mqttBodyCredential, valuesOverlay, objectStore, objectStoreFlagGiven(cmd.Flags().Changed), escrowPlan)
 		if installRec != nil {
 			bootstrap.FollowInstall(st, installRec)
 		}
@@ -709,7 +734,7 @@ const mqttBodyCredentialUsage = "TRANSITIONAL. What event-sources does with an M
 
 // mqttFailClosedUsage is the help for --mqtt-fail-closed on bootstrap and upgrade.
 const mqttFailClosedUsage = "make a QoS 1 PUBACK from the MQTT gateway mean the platform holds the message (infrastructure.nats.mqttFailClosed). " +
-	"The trade: a QoS 1 publish is REFUSED (no PUBACK, connection closed, the device resends) while the capture stream has no leader, " +
+	"The trade: a QoS 1 publish is REFUSED (no PUBACK, connection closed, the device resends) while the broker's MQTT message store has no leader, " +
 	"instead of being acknowledged and possibly lost, and the ingest ceiling is lower, so size the instance below it. " +
 	"It covers QoS 1 only, and its guarantee is stated for a replicated broker (a cluster installed with --ha). " +
 	"--mqtt-fail-closed=false turns it off again. Fixed configuration, recorded on the instance and kept by 'dcctl upgrade' when the flag is omitted; " +
