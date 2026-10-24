@@ -2115,6 +2115,55 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 
 无须操作。
 
+### v0.25.2：服务令牌签发离开公共端口 {#v0252-upgrade}
+
+`v0.25.2` 是 `v0.25.1` 的安全补丁。没有迁移，API、主题、权限均无变化。实例配置新增一个键
+`infrastructure.userManagement.internalPort`，chart 将其设为 `8082`；请保持该值不变，因为 chart 的
+Service、pod 和网络策略都使用这个固定端口。[v0.25.1](#v0251-upgrade) 和 [v0.25.0](#v0250-upgrade)
+两节所描述的内容（包括其已知限制）仍完全适用。
+
+先升级集群，再升级每个实例。除新的 `--version` 外，还要把集群安装时用的设置（例如 `--ha` 和
+`--database-node-selector`）传给 `dcctl install`：
+
+```bash
+dcctl install local --version v0.25.2
+dcctl upgrade local devicechain --version v0.25.2 --dry-run
+dcctl upgrade local devicechain --version v0.25.2
+```
+
+**从 `v0.25.0` 或 `v0.24.0` 升级时，**按 [v0.25.1 说明](#v0251-upgrade)操作，并使用
+`--version v0.25.2`：其内容原样适用，其中关于 v0.25.0 两次升级的说明也同样适用。
+
+#### 内部端点离开公共端口 {#v0252-internal-endpoints}
+
+`user-management` 过去在其公共端口上提供两个仅供平台自身服务使用的端点：`/auth/service-token`，用共享
+服务密钥换取短期服务令牌；`/auth/jwks`，每个服务用来校验令牌的密钥集。唯一让它们不暴露在互联网上的，是
+chart 的 API ingress 上的一个 nginx 配置片段（snippet）。**因此，自带 ingress 控制器的安装会让这两个端点
+从外部可达，**仅由以恒定时间比较的共享服务密钥保护。
+
+从本版本起，`user-management` 在单独的内部端口 `8082` 上提供这两个端点，chart 只在集群内部的 Service
+上发布该端口。没有任何 ingress、路由或负载均衡器指向它，无论前面是什么，公共端口对这两个路径都返回
+404，因此**自带的控制器无需任何边缘规则来隐藏它们。**现在每个服务都在内部端口上获取密钥集并签发令牌。
+参见[不会离开集群的端点](../concepts/security-model.md#internal-endpoints)。
+
+- **chart 不再设置任何 nginx 配置片段。**
+- **`dcctl install` 安装的 ingress 控制器在本版本中保持不变**，仍接受配置片段，因为尚未升级的实例依赖
+  它们。后续版本会关闭配置片段，并由 `dcctl install` 的检查把关：只要该控制器类的任何 Ingress 仍带有
+  `*-snippet` 注解，它就拒绝继续。
+- **外部令牌校验方不受影响：**它们使用授权服务器元数据中的 `jwks_uri`，即 `/oauth/jwks`，该端点仍然公开。
+
+#### 预期情况 {#v0252-during}
+
+- **`user-management` 与其对端服务必须一起滚动更新。**旧版本的 pod 会向公共端口请求密钥集和令牌签发，
+  而公共端口现在返回 404，且它无法靠重试恢复：在该 pod 被本版本的 pod 替换之前，它的签发请求都会失败。
+  `dcctl upgrade` 会替换所有服务的 pod，因此这种情况只持续到滚动更新结束；不要让任何区域停留在旧镜像上。
+- **在 `dcctl upgrade` 写入新配置之后重启的旧 pod 无法启动。**旧的二进制文件严格解码实例配置，会拒绝新的
+  `internalPort` 键，因此这样的 pod 会反复崩溃重启，直到被本版本的 pod 替换。
+- **如果你运行自己的网络策略引擎，**请允许实例命名空间中的 pod 访问 `user-management` 的 `8082` 端口，
+  且仅此而已。chart 自带的针对该端口的网络策略默认关闭，`dcctl` 安装也以关闭状态运行。
+- **chart 自带的 Grafana 看板**现在都以该实例正在触发的告警表开头，并链接到该实例的其他看板；新增的第三个
+  看板 *Instance overview* 目前只包含这张表。
+
 ### v0.25.1：数据库和备份存储的镜像，针对当前安全公告重新构建 {#v0251-upgrade}
 
 `v0.25.1` 是 `v0.25.0` 的补丁。没有迁移，API、主题、权限、chart 值、配置键均无变化。它把集群和每个
