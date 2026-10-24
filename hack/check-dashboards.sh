@@ -111,6 +111,7 @@ BOARDS=(
   command-delivery
   event-processing
   overview
+  platform
 )
 # ...and the two published names, spelled out from that list. This is the only
 # place they are derived: the list above is the literal, the names below are what
@@ -549,6 +550,61 @@ for (form, suffix) in sorted(regex_seen):
             "    complains."
             % (form, suffix, ", ".join(sorted(regex_seen[(form, suffix)])), suffix))
 
+# SERIES THAT ARE NOT DEVICECHAIN'S OWN. A board may chart what kube-state-metrics, cAdvisor and the
+# Go and process collectors export, but nothing in this tree registers those names, so the Go-source
+# check above cannot vouch for them and a typo would draw an empty graph. Each name a board may use is
+# pinned here instead, one per line and sorted. Add a name only when it exists in the kube-prometheus-stack
+# versions the chart supports; a name used in one version only does not belong in this list.
+EXTERNAL_PREFIXES = ("kube", "container", "go", "process")
+EXTERNAL_SERIES = {
+    "container_cpu_cfs_periods_total",
+    "container_cpu_cfs_throttled_periods_total",
+    "container_cpu_usage_seconds_total",
+    "container_memory_working_set_bytes",
+    "go_gc_duration_seconds",
+    "go_gc_duration_seconds_count",
+    "go_goroutines",
+    "go_memstats_heap_inuse_bytes",
+    "kube_deployment_spec_replicas",
+    "kube_deployment_status_replicas_available",
+    "kube_pod_container_resource_limits",
+    "kube_pod_container_resource_requests",
+    "kube_pod_container_status_last_terminated_reason",
+    "kube_pod_container_status_restarts_total",
+    "kube_pod_status_ready",
+    "process_max_fds",
+    "process_open_fds",
+    "process_resident_memory_bytes",
+}
+EXTERNAL_RE = re.compile(r"\b(?:%s)_[a-z0-9_]+" % "|".join(EXTERNAL_PREFIXES))
+
+def board_exprs(node):
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key == "expr" and isinstance(value, str):
+                yield value
+            else:
+                yield from board_exprs(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from board_exprs(value)
+
+for path in dashboards:
+    try:
+        with open(path, "rb") as fh:
+            parsed = json.loads(fh.read().decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        continue  # reported above
+    for expr in board_exprs(parsed):
+        for name in sorted(set(EXTERNAL_RE.findall(expr))):
+            if name not in EXTERNAL_SERIES:
+                problems.append((
+                    "%s names the series %s, which is neither a DeviceChain series nor on the pinned" + chr(10) +
+                    "    list of kube-state-metrics, cAdvisor, Go and process series (EXTERNAL_SERIES in" + chr(10) +
+                    "    hack/check-dashboards.sh). Nothing here can vouch for it: a misspelling draws an" + chr(10) +
+                    "    empty graph. If the name is real, add it to that list.")
+                    % (os.path.relpath(path, root), name))
+
 if problems:
     print("The chart's dashboards and alert rules do not hold up:\n", file=sys.stderr)
     for p in problems:
@@ -935,6 +991,9 @@ EOF
           "expr": "histogram_quantile(0.99, sum by (le) (rate(devicechain_selftestarea_lat_seconds_bucket[5m]))) / (sum(rate(devicechain_selftestarea_lat_seconds_sum[5m])) / sum(rate(devicechain_selftestarea_lat_seconds_count[5m]))) + rate(devicechain_selftestarea_sum_seconds_sum[5m]) + rate(devicechain_selftestarea_sum_seconds_count[5m])"
         },
         {
+          "expr": "sum(kube_pod_container_status_restarts_total{namespace=\"$namespace\"}) + max(go_goroutines{namespace=\"$namespace\"})"
+        },
+        {
           "expr": "devicechain_selftestarea_sum_seconds{quantile=\"0.99\"} + histogram_quantile(0.5, sum by (le) (rate(devicechain_selftestarea_loop_duration_seconds_bucket[5m]))) + rate(devicechain_selftestarea_loop_messages_total[5m]) + rate(devicechain_selftestarea_sweep_pass_duration_seconds_count[5m])"
         }
       ]
@@ -1023,6 +1082,10 @@ EOF
   histcase 'devicechain_selftestarea_lat_seconds_count' 'devicechain_selftestarea_test_only_seconds_count' '_count on a histogram registered only in a test file'
   histcase '_lat_seconds_bucket"' '_lat_seconds"' 'a by-name selector over the bare name of a histogram' "$tmpl/prometheusrule-probe.yaml"
   histcase '_lat_seconds_bucket"' '_lat_seconds_buckets"' 'a by-name selector with a misspelled histogram suffix' "$tmpl/prometheusrule-probe.yaml"
+
+  # Cases 2x -- SERIES THAT ARE NOT DEVICECHAIN'S. The clean fixture already uses two pinned ones.
+  histcase 'kube_pod_container_status_restarts_total' 'kube_pod_container_status_restart_total' 'a misspelled kube-state-metrics series'
+  histcase 'go_goroutines' 'go_goroutine' 'a misspelled Go runtime series'
 
   # Cases 2p — INTERNAL REFERENCES IN PUBLISHED BOARD TEXT, each alone. The board
   # text is screenshotted onto the public docs site, so an ADR number in a title, a
