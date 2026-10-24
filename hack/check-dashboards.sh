@@ -130,7 +130,7 @@ done
 # object; a name with no file would be a board promised and never shipped. Doing
 # it on the files makes the failure say which side is missing and what to edit.
 check_board_list() {
-  local dir="$1" f stem rc=0 listed
+  local dir="$1" f stem rc=0
   shift
   [ "$#" -gt 0 ] || { echo "FAIL: the board list is empty -- this check would pass over nothing" >&2; return 1; }
   [ -d "$dir" ] || { echo "FAIL: $dir is not a directory" >&2; return 1; }
