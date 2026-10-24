@@ -40,7 +40,7 @@ func TestTheServiceWiresSessionKicksOnlyWhereTheMqttCalloutRuns(t *testing.T) {
 		db := putest.NewSQLiteDB(t, credentialTables()...)
 		nmgr := startNatsManager(t, host, port, instance)
 		nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.Auth = mscfg.NatsAuthConfiguration{CalloutIssuerPublic: seed}
-		api, _, err := buildApis(nmgr, &rdb.RdbManager{Database: db}, dmtest.DeviceSecretKey(), config.NewDeviceManagementConfiguration())
+		api, _, err := buildApis(nmgr, &rdb.RdbManager{Database: db}, dmtest.DeviceSecretKey(), dmtest.EnrollmentKeys(), config.NewDeviceManagementConfiguration())
 		require.NoError(t, err)
 		return api, nmgr.Conn()
 	}

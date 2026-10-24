@@ -90,7 +90,7 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 		AfterNats: func(_ context.Context, m *service.Managers) error {
 			// The two steps of the production AfterNats that open broker resources.
 			var err error
-			Api, CachedApi, err = buildApis(m.Nats, RdbManager, DeviceSecretKey, Configuration)
+			Api, CachedApi, err = buildApis(m.Nats, RdbManager, DeviceSecretKey, EnrollmentKeys, Configuration)
 			if err != nil {
 				return err
 			}
