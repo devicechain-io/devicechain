@@ -17,7 +17,7 @@ import (
 const DefaultImageRegistry = "ghcr.io/devicechain-io"
 
 // LocalRegistry is the default registry for the developer build-from-source path
-// (a registry:2 container reachable from host and the kind network as
+// (a registry:3 container reachable from host and the kind network as
 // localhost:5000). Mirrors deploy/local.
 const LocalRegistry = "localhost:5000"
 
