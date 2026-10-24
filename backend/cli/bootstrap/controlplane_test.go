@@ -272,9 +272,9 @@ func TestControlPlaneSelectorsWereReadFromTheShippedChart(t *testing.T) {
 	if m == nil {
 		t.Fatal("monitoring_chart_version has no default")
 	}
-	if got := string(m[1]); got != "65.1.1" {
+	if got := string(m[1]); got != "92.13.1" {
 		t.Fatalf("monitoring_chart_version defaults to %q: the control-plane selectors in controlplane.go "+
-			"were read from chart 65.1.1's templates/exporters/*/service.yaml; re-read them for the new "+
+			"were read from chart 92.13.1's templates/exporters/*/service.yaml; re-read them for the new "+
 			"version, then update this pin", got)
 	}
 }

@@ -200,6 +200,21 @@ instancias arrancadas en ese clúster:
 - **Destruir una instancia deja una carpeta vacía** — sus paneles se eliminan, pero su
   carpeta `devicechain-<instancia>`, ya vacía, permanece en Grafana; elimínela a mano.
 
+### Actualizar la pila
+
+Volver a ejecutar `dcctl install` actualiza la pila de monitoreo a la versión que fija este lanzamiento. Helm nunca
+actualiza las definiciones de recursos personalizados de un chart, así que la pila
+ejecuta primero el Job de actualización de CRD del propio chart: un Job de corta duración en el
+espacio de nombres `monitoring` aplica del lado del servidor las CRD de Prometheus Operator antes de
+que arranque el nuevo operador, y no hay nada que aplicar a mano. El Job descarga dos imágenes
+(`busybox` y `registry.k8s.io/kubectl`); un clúster sin ruta a esos registros debe replicarlas antes.
+
+Pasar de la pila de versiones anteriores a esta cruza una versión mayor de Prometheus (de 2 a 3) y
+una de Grafana (de 11 a 13). Prometheus, Alertmanager y Grafana se reinician una vez; el inicio de
+sesión de administrador de Grafana, su Service `ClusterIP` y las carpetas de paneles por instancia no
+cambian. Prometheus conserva sus métricas en un clúster con volumen persistente y arranca vacío en un
+clúster local, que las guarda solo en el disco del nodo.
+
 ## Iniciar sesión en Grafana
 
 Grafana usa su propio **inicio de sesión de administrador**. Grafana no está integrado con el
