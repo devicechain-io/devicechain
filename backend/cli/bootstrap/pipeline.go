@@ -154,6 +154,14 @@ type State struct {
 	// set, so an upgrade run without the flag leaves the release's value to be carried
 	// forward (see carriedValuePaths) and an explicit value always wins. See mqttbodycredential.go.
 	MqttBodyCredential string
+	// MqttFailClosed is the settled fail-closed MQTT choice: nil when the operator never
+	// made one (the chart's default applies and nothing is written), otherwise their explicit
+	// on or off. A bootstrap takes it from the flag; a run over a declared instance reads it
+	// back from the declaration, which is what keeps it through an upgrade. See mqttfailclosed.go.
+	MqttFailClosed *bool
+	// MqttFailClosedChange says this upgrade was given --mqtt-fail-closed with a value the
+	// declaration does not hold, so recordUpgradedVersion must write it.
+	MqttFailClosedChange bool
 	// ValuesOverlay is the operator's tuning overlay in effect for this run (--values, or the
 	// one the declaration already records), merged over what dcctl computes. See
 	// valuesoverlay.go. Nil means none.

@@ -349,6 +349,8 @@ beyond letting the services run their own migrations, and it never resizes a vol
 
 An upgrade does not change an instance's shape, but it does keep the tuning you gave it. A values file passed to `dcctl bootstrap --values` or `dcctl upgrade --values` is recorded on the instance and applied again by every later upgrade; `--reset-values` removes it. See [Tuning an Instance](./tuning-an-instance.md).
 
+The fail-closed MQTT acknowledgement is carried the same way: `--mqtt-fail-closed` on `dcctl bootstrap` or `dcctl upgrade` is recorded on the instance, and an upgrade that omits the flag keeps what was recorded, on or off. See [fail-closed MQTT](./observability.md#mqtt-fail-closed).
+
 ### What an upgrade applies to the infrastructure {#upgrade-infrastructure}
 
 Before it moves the services, `dcctl upgrade` applies the instance's OpenTofu configuration,
@@ -4005,10 +4007,11 @@ to change and `artifact:read` to view, and a member limited to part of the tenan
   leader among them, and this upgrade rolls the broker twice, so expect a short loss window during each
   broker roll unless fail-closed is on. In a rehearsal of this upgrade with four devices sending 20 QoS 1 messages a
   second between them, 11 of 11,262 acknowledged messages were lost, all during the broker restarts; in an
-  earlier rehearsal none were. To close the window, turn on `infrastructure.nats.mqttFailClosed` (the chart
-  value `instance.config.infrastructure.nats.mqttFailClosed`). `dcctl` has no option for it in this release
-  and `--values` does not accept it, so a value set by hand on an instance `dcctl` manages is written over
-  by the next `dcctl upgrade`. The trade-off: while the broker's message store has no leader, a QoS 1
+  earlier rehearsal none were. To close the window, turn on `infrastructure.nats.mqttFailClosed`. `dcctl` has
+  no option for it in this release and `--values` does not accept it, so a value set by hand on an instance
+  `dcctl` manages is written over by the next `dcctl upgrade`; a later release adds `--mqtt-fail-closed` to
+  `dcctl bootstrap` and `dcctl upgrade`, which records the choice on the instance (see
+  [fail-closed MQTT](./observability.md#mqtt-fail-closed)). The trade-off: while the broker's message store has no leader, a QoS 1
   publish is not acknowledged, so the device must send it again, and the instance keeps up with less
   traffic than with the setting off. On one test cluster it lost nothing while it kept up, at 6,000 and
   9,000 events a second through repeated leader changes; at 12,000 a second it fell behind, two broker

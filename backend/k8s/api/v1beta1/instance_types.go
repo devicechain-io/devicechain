@@ -274,6 +274,21 @@ type InstanceSpec struct {
 	// +optional
 	RestoredAt *metav1.Time `json:"restoredAt,omitempty"`
 
+	// MQTTFailClosed records the operator's choice of the fail-closed MQTT QoS 1
+	// acknowledgement (the instance configuration's infrastructure.nats.mqttFailClosed).
+	// A pointer, because there are three answers and only two of them are a decision:
+	// absent means the choice was never made, so the platform's default applies;
+	// true and false are the operator's own words, and an
+	// explicit false is kept as false by every later upgrade.
+	//
+	// Fixed configuration, so it is recorded here and not in the free-form tuning
+	// overlay: `dcctl upgrade` reads it back and writes it into the instance
+	// configuration document it composes, which is the only way a setting survives a
+	// version bump now that dcctl owns that document.
+	//
+	// +optional
+	MQTTFailClosed *bool `json:"mqttFailClosed,omitempty"`
+
 	// ObjectStore is where the instance keeps opaque binaries that do not belong in
 	// the database: tenant branding logos and update artifacts. Absent means the
 	// instance has no object store, and the operations that need one are refused

@@ -194,6 +194,7 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 		return err
 	}
 	sayValuesOverlay(st)
+	sayMqttFailClosed(st)
 	// 🔴 THE OPERATOR IS NOT LISTED AS SOMETHING THIS RUN WILL MOVE, because it is
 	// not. hydrateUpgradeState has already refused unless the cluster's operator is
 	// the one this build expects; what this verb moves is the instance.
@@ -581,6 +582,9 @@ func recordUpgradedVersion(ctx context.Context, dyn dynamic.Interface, instance 
 			wouldDo(fmt.Sprintf("record %s as enabled in the instance declaration",
 				strings.Join(st.AreaChange.Added, ", ")))
 		}
+		if st.MqttFailClosedChange && st.MqttFailClosed != nil {
+			wouldDo(fmt.Sprintf("record mqttFailClosed=%t in the instance declaration", *st.MqttFailClosed))
+		}
 		return nil
 	}
 
@@ -599,7 +603,8 @@ func recordUpgradedVersion(ctx context.Context, dyn dynamic.Interface, instance 
 	}
 
 	areasMove := st.AreaChange != nil && !slices.Equal(inst.Spec.ExtraFunctionalAreas, st.EnableAreas)
-	if inst.Spec.ImageRegistry == st.ImageRegistry && inst.Spec.ImageVersion == st.ImageVersion && !areasMove {
+	if inst.Spec.ImageRegistry == st.ImageRegistry && inst.Spec.ImageVersion == st.ImageVersion && !areasMove &&
+		!(st.MqttFailClosedChange && !sameBoolPtr(inst.Spec.MQTTFailClosed, st.MqttFailClosed)) {
 		// Already says what this run is about to do. Writing anyway would bump the
 		// provenance annotations on every no-op re-apply, which makes
 		// `last-applied-at` useless for the question it exists to answer.
@@ -619,6 +624,13 @@ func recordUpgradedVersion(ctx context.Context, dyn dynamic.Interface, instance 
 	// State that failed to carry the delta across can write an instance's areas away.
 	if areasMove {
 		spec.ExtraFunctionalAreas = append([]string(nil), st.EnableAreas...)
+	}
+	// 🔴 THE FAIL-CLOSED CHOICE IS WRITTEN WITH THE VERSION, BEFORE THE MOVE, for the reason the
+	// area delta is: a run that dies half-way leaves the choice declared and the flagless re-run
+	// finishes it instead of rolling it back. ONLY when this run was given one -- a State that
+	// merely read the declaration back never writes it away.
+	if st.MqttFailClosedChange {
+		spec.MQTTFailClosed = copyBoolPtr(st.MqttFailClosed)
 	}
 	// 🔴 Upgrading, AND THE VALUE IS THE DEFECT THIS LINE FIXES. writeInstanceCR
 	// stamped Bootstrapping on every write, so every instance that had ever been
