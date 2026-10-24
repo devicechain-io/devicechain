@@ -55,7 +55,7 @@ func TestBuildApiWiresTheProfileCheckAndTheLifecycleGate(t *testing.T) {
 		infra := &ms.InstanceConfiguration.Infrastructure
 		infra.Blob = mscfg.BlobConfiguration{Backend: "filesystem", Directory: t.TempDir()}
 		infra.ServiceAuth.Secret = secret
-		infra.UserManagement = mscfg.UserManagementConfiguration{Hostname: "um", Port: 8080}
+		infra.UserManagement = mscfg.UserManagementConfiguration{Hostname: "um", Port: 8080, InternalPort: 8080}
 		infra.DeviceManagement = mscfg.DeviceManagementConfiguration{Hostname: "dm", Port: dmPort}
 		return ms
 	}

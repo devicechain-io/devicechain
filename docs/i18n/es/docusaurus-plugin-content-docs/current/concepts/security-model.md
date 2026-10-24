@@ -19,6 +19,7 @@ Para notificar una vulnerabilidad, siga el proceso de la
 | Persona o programa frente a la API | Un token firmado, comprobado en cada servicio | Firma del token, reclamación de inquilino y permisos |
 | Secreto frente a lector | Los secretos se sellan y nunca se devuelven | Cifrado de sobre bajo la clave raíz de la instancia |
 | Inquilino frente a la red | Un destino aportado por un inquilino no puede alcanzar direcciones internas | Una comprobación en el momento de la conexión |
+| Internet frente a los endpoints propios de la plataforma | El emisor de tokens de servicio y el conjunto de claves de firma se sirven en un puerto al que no llega ninguna ruta | Un listener interno independiente, no una regla de ingress |
 | Servicios de la plataforma entre sí | Inicios de sesión separados en el broker y la base de datos | **Parcialmente.** Consulte [lo que aún no se hace cumplir](#accepted-gaps) |
 
 ## Inquilinos {#tenants}
@@ -83,6 +84,37 @@ Consulte [Multitenencia](./multi-tenancy.md).
 - **Límites de abuso.** La ingesta tiene un techo de tasa por inquilino, los conectores de salida tienen techos por inquilino, el servidor MCP
   limita a cada llamador, las solicitudes GraphQL tienen ejecución y tamaño de cuerpo acotados, y los intentos fallidos de inicio de sesión tienen límite de tasa.
   No hay un límite de tasa de solicitudes por inquilino en la propia API GraphQL.
+
+## Endpoints que nunca salen del clúster {#internal-endpoints}
+
+Dos endpoints existen solo para los servicios de la propia plataforma. `/auth/service-token` intercambia el secreto
+de servicio compartido por un token de corta duración, y `/auth/jwks` es el conjunto de claves que todos los servicios
+usan para validar tokens. `user-management` sirve ambos en un puerto interno independiente (8082), no en el público.
+El chart publica ese puerto solo en el Service interno del clúster. Ningún ingress, ruta ni balanceador de carga hace
+referencia a él.
+
+Por eso el puerto público responde 404 para ambas rutas, sea cual sea lo que haya delante, incluso si no hay ningún
+ingress. Nada en el borde es un control de seguridad:
+
+- **Un controlador de ingress propio no necesita ninguna regla para estas rutas.** Enruta a los Services que crea
+  el chart, como harías de todos modos, y el emisor de tokens no es alcanzable desde fuera.
+- **El emisor de tokens está protegido por el secreto de servicio compartido.** El secreto se compara en tiempo
+  constante, y una instancia sin secreto configurado se niega a emitir. El puerto interno mantiene el endpoint fuera
+  de la red pública; el secreto es lo que autentica a quien logra alcanzarlo.
+- **El chart no establece ninguna anotación snippet de nginx.** Un snippet de configuración permite a quien pueda
+  escribir un objeto Ingress inyectar configuración de nginx, y aquí nada necesita uno. El controlador de ingress que
+  instala `dcctl install` sigue aceptando snippets en esta versión, porque las instancias que aún no se han actualizado
+  dependen de ellos; una versión posterior los desactivará cuando ninguna instancia los use.
+- **Una política de red restringe aún más el puerto interno, pero es defensa en profundidad y está desactivada por
+  defecto.** Con `networkPolicy.enabled` el chart limita el puerto a los pods del namespace de la propia instancia, en
+  un clúster cuyo plugin de red aplique políticas. Las instalaciones de `dcctl` se ejecutan con la política desactivada.
+- **Un verificador de tokens externo usa en su lugar el conjunto de claves público.** Los metadatos del servidor de
+  autorización (`jwks_uri`) apuntan a `/oauth/jwks`, que sirve las mismas claves públicas cuando hay una URL de emisor
+  configurada.
+
+Si ejecutas tu propio motor de políticas, permite que los pods del namespace de la instancia lleguen al puerto 8082 de
+`user-management`, y nada más. Cada servicio lo usa para obtener el conjunto de claves al arrancar y para emitir su token
+de servicio.
 
 ## Secretos {#secrets}
 

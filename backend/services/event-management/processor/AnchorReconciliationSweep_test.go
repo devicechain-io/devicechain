@@ -60,7 +60,7 @@ func sweepHarness(t *testing.T, api *emtest.MockApi, exists map[string]bool, out
 
 	host, portStr, _ := net.SplitHostPort(mint.Listener.Addr().String())
 	port, _ := strconv.Atoi(portStr)
-	client := svcclient.New(config.UserManagementConfiguration{Hostname: host, Port: uint32(port)}, "shh", "event-management", []string{string(auth.DeviceRead)})
+	client := svcclient.New(config.UserManagementConfiguration{Hostname: host, Port: uint32(port), InternalPort: uint32(port)}, "shh", "event-management", []string{string(auth.DeviceRead)})
 	return &AnchorReconciliationSweep{Api: api, client: client, dmURL: dm.URL}
 }
 
@@ -110,7 +110,7 @@ func mintOnly(t *testing.T) config.UserManagementConfiguration {
 	t.Cleanup(mint.Close)
 	host, portStr, _ := net.SplitHostPort(mint.Listener.Addr().String())
 	port, _ := strconv.Atoi(portStr)
-	return config.UserManagementConfiguration{Hostname: host, Port: uint32(port)}
+	return config.UserManagementConfiguration{Hostname: host, Port: uint32(port), InternalPort: uint32(port)}
 }
 
 // TestSweep_WalksATenantInPagesAndAsksAboutOnePageAtATime replaces a test that asserted

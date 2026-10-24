@@ -20,7 +20,7 @@ import (
 // TestWithQueryTimeoutMovesOnlyTheQueryBound pins the split: the option re-bounds Query
 // and leaves the mint at the default, both still on the package's shared transport.
 func TestWithQueryTimeoutMovesOnlyTheQueryBound(t *testing.T) {
-	c := New(config.UserManagementConfiguration{Hostname: "user-management", Port: 8080},
+	c := New(config.UserManagementConfiguration{Hostname: "user-management", Port: 8080, InternalPort: 8080},
 		"secret", "test", nil, WithQueryTimeout(3*time.Minute))
 	if c.http.Timeout != 3*time.Minute {
 		t.Fatalf("query timeout = %v, want 3m", c.http.Timeout)
@@ -49,7 +49,7 @@ func TestWithQueryTimeoutBoundsTheQuery(t *testing.T) {
 
 	host, portStr, _ := net.SplitHostPort(mint.Listener.Addr().String())
 	port, _ := strconv.Atoi(portStr)
-	c := New(config.UserManagementConfiguration{Hostname: host, Port: uint32(port)},
+	c := New(config.UserManagementConfiguration{Hostname: host, Port: uint32(port), InternalPort: uint32(port)},
 		"shh", "test", nil, WithQueryTimeout(200*time.Millisecond))
 
 	if err := c.Query(context.Background(), target.URL+"?delay=10ms", "t", "query{x}", nil, nil); err != nil {
@@ -97,7 +97,7 @@ func TestWithQueryTimeoutLeavesTheMintOnTheDefaultBound(t *testing.T) {
 
 	host, portStr, _ := net.SplitHostPort(mint.Listener.Addr().String())
 	port, _ := strconv.Atoi(portStr)
-	c := New(config.UserManagementConfiguration{Hostname: host, Port: uint32(port)},
+	c := New(config.UserManagementConfiguration{Hostname: host, Port: uint32(port), InternalPort: uint32(port)},
 		"shh", "test", nil, WithQueryTimeout(time.Minute))
 
 	start := time.Now()

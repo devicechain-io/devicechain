@@ -75,7 +75,22 @@ locals {
       enabled = true
     }
     ingressClass = var.ingress_class
-    # The DeviceChain instance Ingress uses a configuration-snippet annotation.
+    # 🔴 SNIPPETS STAY ON IN THIS RELEASE, ON PURPOSE, AND THE CHART NO LONGER NEEDS THEM.
+    # This controller is SHARED by every instance on the cluster. The documented order
+    # is `dcctl install` (this module) and then `dcctl upgrade` per instance, so for a
+    # while there are instances still on an older chart whose `devicechain-api` Ingress
+    # carries a configuration-snippet. A controller that refuses snippets skips the
+    # whole Ingress, so every /api route of such an instance would go dark, and stay
+    # dark for one whose upgrade is refused. The current chart sets no snippet (the
+    # service-token mint is served on an internal listener no route reaches), and
+    # hack/check-oauth-discovery-routing.sh fails a render that adds one.
+    #
+    # The controller is tightened in the NEXT release (allowSnippetAnnotations=false,
+    # annotations-risk-level left at its default), behind a `dcctl install` preflight
+    # that refuses while any Ingress of the controller's class still carries a
+    # *-snippet annotation.
+    #
+    # The older instance Ingress uses a configuration-snippet annotation.
     # Upstream has been tightening that surface for several releases — snippets went
     # off by default, then a separate annotations risk level was added, and what that
     # level evaluates has changed again since. Both switches are re-enabled here, or

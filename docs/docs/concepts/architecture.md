@@ -108,7 +108,7 @@ Most traffic between services is asynchronous over NATS. When a service needs an
 
 Apart from the `/healthz`, `/readyz` and `/metrics` endpoints every service serves, and the `/graphiql` explorer served only when developer tools are enabled, the non-GraphQL HTTP endpoints are the ones a standard dictates, plus three narrow ones. The standard ones are:
 
-- the JWKS document that token validators fetch
+- the JWKS document that token validators fetch, served on an internal port that no ingress route reaches
 - the OAuth 2.1 authorization-server endpoints (`/oauth/authorize`, `/oauth/token`, `/oauth/userinfo`, `/oauth/jwks` and the RFC 8414 metadata document), which `user-management` serves once an issuer URL is configured
 - the JSON-RPC-over-HTTP transport spoken by the opt-in [MCP server](./mcp.md), and the protected-resource metadata document (RFC 9728) it publishes
 
@@ -116,4 +116,4 @@ The three others are:
 
 - the device-facing HTTP event-ingest endpoint (`POST /{instance}/{tenant}/events`), which `event-sources` serves on its own port; the default configuration includes an HTTP source
 - the tenant logo upload and download endpoint (`/branding/logo`) on `user-management`
-- the endpoint where services obtain their short-lived service token (`/auth/service-token`) on `user-management`
+- the endpoint where services obtain their short-lived service token (`/auth/service-token`) on `user-management`, served on the same internal port and never through the ingress

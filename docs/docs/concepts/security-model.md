@@ -19,6 +19,7 @@ To report a vulnerability, follow the process in the
 | Person or program from the API | A signed token, checked in every service | Token signature, tenant claim and permissions |
 | Secret from reader | Secrets are sealed and never returned | Envelope encryption under the instance root key |
 | Tenant from the network | A tenant-supplied destination cannot reach internal addresses | A check at connection time |
+| Internet from the platform's own endpoints | The service-token mint and the signing-key set are served on a port no route reaches | A separate internal listener, not an ingress rule |
 | Platform services from each other | Separate broker and database logins | **Partly.** See [what is not enforced yet](#accepted-gaps) |
 
 ## Tenants {#tenants}
@@ -83,6 +84,35 @@ See [Multi-Tenancy](./multi-tenancy.md).
 - **Abuse limits.** Ingest has a per-tenant rate ceiling, outbound connectors have per-tenant ceilings, the MCP server
   limits each caller, GraphQL requests have bounded execution and body size, and failed sign-in attempts are rate limited.
   There is no per-tenant request-rate limit on the GraphQL API itself.
+
+## Endpoints that never leave the cluster {#internal-endpoints}
+
+Two endpoints exist only for the platform's own services. `/auth/service-token` exchanges the shared service
+secret for a short-lived token, and `/auth/jwks` is the key set every service uses to validate tokens.
+`user-management` serves both on a separate internal port (8082), not on the public one. The chart publishes that
+port on the cluster-internal Service only. No ingress, route or load balancer refers to it.
+
+This means the public port answers 404 for both paths whatever sits in front of it, including no ingress at all.
+Nothing at the edge is a security control:
+
+- **A bring-your-own ingress controller needs no rule for these paths.** Route to the Services the chart
+  creates, as you would anyway, and the mint is not reachable from outside.
+- **The mint is protected by the shared service secret.** The secret is compared in constant time, and an instance
+  with no secret configured refuses to mint. The internal port keeps the endpoint off the public network; the
+  secret is what authenticates a caller that can reach it.
+- **The chart sets no nginx snippet annotation.** A configuration snippet lets whoever can write an Ingress object
+  inject nginx configuration, and nothing here needs one. The ingress controller that `dcctl install` sets up still
+  accepts snippets in this release, because instances not yet upgraded rely on them; a later release turns them off
+  once no instance does.
+- **A network policy narrows the internal port further, but it is defence in depth and it is off by default.** With
+  `networkPolicy.enabled` the chart restricts the port to pods in the instance's own namespace, on a cluster whose
+  network plugin enforces policy. `dcctl` installs run with the policy off.
+- **An external token verifier uses the public key set instead.** The authorization-server metadata
+  (`jwks_uri`) points at `/oauth/jwks`, which serves the same public keys once an issuer URL is configured.
+
+If you run your own policy engine, allow pods in the instance namespace to reach port 8082 on
+`user-management`, and nothing more. Every service dials it to fetch the key set at startup and to mint its
+service token.
 
 ## Secrets {#secrets}
 

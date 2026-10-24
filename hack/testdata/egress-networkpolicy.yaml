@@ -47,6 +47,8 @@ spec:
         - ports:
             - port: 8080
               protocol: TCP
+            - port: 8082
+              protocol: TCP
           to:
             - podSelector:
                 matchLabels:
@@ -93,6 +95,31 @@ spec:
             devicechain.io/instance: devicechain
     policyTypes:
         - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+    labels:
+        devicechain.io/functional-area: user-management
+        devicechain.io/instance: devicechain
+    name: devicechain-user-management-internal-auth
+    namespace: dci-devicechain
+spec:
+    ingress:
+        - ports:
+            - port: 8080
+              protocol: TCP
+        - from:
+            - podSelector: {}
+          ports:
+            - port: 8082
+              protocol: TCP
+    podSelector:
+        matchLabels:
+            devicechain.io/functional-area: user-management
+            devicechain.io/instance: devicechain
+    policyTypes:
+        - Ingress
 # ------------------------------------------- with additionalAllowedCidrs set
 ---
 apiVersion: networking.k8s.io/v1
@@ -131,6 +158,8 @@ spec:
                     devicechain.io/component: infrastructure
         - ports:
             - port: 8080
+              protocol: TCP
+            - port: 8082
               protocol: TCP
           to:
             - podSelector:
@@ -181,3 +210,28 @@ spec:
             devicechain.io/instance: devicechain
     policyTypes:
         - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+    labels:
+        devicechain.io/functional-area: user-management
+        devicechain.io/instance: devicechain
+    name: devicechain-user-management-internal-auth
+    namespace: dci-devicechain
+spec:
+    ingress:
+        - ports:
+            - port: 8080
+              protocol: TCP
+        - from:
+            - podSelector: {}
+          ports:
+            - port: 8082
+              protocol: TCP
+    podSelector:
+        matchLabels:
+            devicechain.io/functional-area: user-management
+            devicechain.io/instance: devicechain
+    policyTypes:
+        - Ingress

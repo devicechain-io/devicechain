@@ -236,7 +236,7 @@ func rosterServer(t *testing.T, respond func(vars map[string]any) any) (*httptes
 	t.Cleanup(srv.Close)
 	host, portStr, _ := net.SplitHostPort(srv.Listener.Addr().String())
 	port, _ := strconv.Atoi(portStr)
-	return srv, svcclient.New(config.UserManagementConfiguration{Hostname: host, Port: uint32(port)}, "s", "event-management",
+	return srv, svcclient.New(config.UserManagementConfiguration{Hostname: host, Port: uint32(port), InternalPort: uint32(port)}, "s", "event-management",
 		[]string{string(auth.DeviceRead)})
 }
 

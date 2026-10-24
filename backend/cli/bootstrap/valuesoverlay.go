@@ -147,12 +147,11 @@ var ownedWithinTunable = []struct {
 
 // refusedIngressAnnotations are ingress.annotations keys an overlay may not set. The chart
 // writes its overlay annotations AFTER its own on every Ingress, and a repeated key is not
-// refused by the render -- so an overlay naming a key the chart sets would REPLACE it: the
-// configuration snippet that keeps the service-token mint off the public host, the access
+// refused by the render -- so an overlay naming a key the chart sets would REPLACE it: the access
 // log kept off the download route (its capability rides in the query string), the upload
 // route's body limit, the TLS issuer. TestNoOverlayAnnotationReplacesOneTheChartSets renders
 // the chart and holds this list to what it actually sets. Snippets (nginx configuration
-// injected verbatim) and turning the TLS redirect off are refused for the same reason: the
+// injected verbatim; the chart sets none, and the shared controller is to refuse them) and turning the TLS redirect off are refused for the same reason: the
 // ingress host and its TLS are dcctl's.
 var refusedIngressAnnotations = []string{
 	"nginx.ingress.kubernetes.io/rewrite-target",
