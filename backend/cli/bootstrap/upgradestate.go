@@ -304,6 +304,20 @@ func applyUpgradeDeclaration(st *State, inst *dcv1beta1.Instance, opts UpgradeOp
 	}
 	st.EnabledAreas = areas
 
+	// 🔴 THE FAIL-CLOSED CHOICE: THE DECLARATION'S, UNLESS THIS RUN WAS GIVEN ONE. applyDeclaration
+	// has already read the recorded choice into the State, so a flagless upgrade renders the
+	// instance exactly as it was built -- on stays on, an explicit off stays off, and never-chose
+	// stays on the platform default. A flag overrides it, and is marked for recording below
+	// (recordUpgradedVersion) so the NEXT flagless upgrade keeps it. Judged against the area set
+	// the instance will have, here, while nothing has been written.
+	if opts.MqttFailClosed != nil {
+		if err := ValidateMqttFailClosed(opts.MqttFailClosed, st.Profile, st.EnableAreas); err != nil {
+			return err
+		}
+		st.MqttFailClosedChange = !sameBoolPtr(st.MqttFailClosed, opts.MqttFailClosed)
+		st.MqttFailClosed = copyBoolPtr(opts.MqttFailClosed)
+	}
+
 	// The values the chart is rendered from that are DERIVED from the declaration
 	// rather than read out of it. See ingressHostFor: the chart's schema requires a
 	// non-empty host, so an upgrade that left this unset did not render a slightly

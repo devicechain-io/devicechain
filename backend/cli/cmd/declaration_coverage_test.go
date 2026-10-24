@@ -115,6 +115,10 @@ var dispositions = map[string]disposition{
 	// scheduled end would outlive the thing it configures.
 	"mqtt-body-credential": excluded,
 
+	// mqtt-fail-closed is the declaration's mqttFailClosed field (a pointer, so an explicit
+	// off is recorded as off and "never chose" as absent), read back by every upgrade.
+	"mqtt-fail-closed": declared,
+
 	// --- known gaps ---
 	//
 	// lwm2m-identities is two halves too. The pre-shared keys are secretHalf. The

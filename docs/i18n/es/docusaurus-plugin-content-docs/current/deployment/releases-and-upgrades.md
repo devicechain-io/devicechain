@@ -369,6 +369,8 @@ tamaño de un volumen.
 
 Una actualización no cambia la forma de una instancia, pero sí conserva el ajuste que le diste. Un archivo de valores pasado a `dcctl bootstrap --values` o a `dcctl upgrade --values` se registra en la instancia y lo aplica de nuevo cada actualización posterior; `--reset-values` lo elimina. Consulta [Ajustar una instancia](./tuning-an-instance.md).
 
+La confirmación MQTT a prueba de fallos se conserva del mismo modo: `--mqtt-fail-closed` en `dcctl bootstrap` o `dcctl upgrade` se registra en la instancia, y una actualización que omite el indicador conserva lo registrado, activado o desactivado. Consulta [MQTT con fail-closed](./observability.md#mqtt-fail-closed).
+
 ### Qué aplica una actualización a la infraestructura {#upgrade-infrastructure}
 
 Antes de mover los servicios, `dcctl upgrade` aplica la configuración de OpenTofu de la
@@ -4317,10 +4319,11 @@ un miembro limitado a una parte del tenant es rechazado. Consulta
   cuenta con una breve ventana de pérdida en cada reinicio del bróker salvo que fail-closed esté activado. En
   un ensayo de esta actualización con cuatro dispositivos que enviaban 20 mensajes QoS 1 por segundo entre
   todos, se perdieron 11 de 11 262 mensajes confirmados, todos durante los reinicios del bróker; en un ensayo
-  anterior no se perdió ninguno. Para cerrar la ventana, activa `infrastructure.nats.mqttFailClosed` (el valor
-  del chart `instance.config.infrastructure.nats.mqttFailClosed`). `dcctl` no tiene una opción para ello en
-  esta versión y `--values` no lo acepta, así que un valor puesto a mano en una instancia que gestiona `dcctl`
-  lo sobrescribe el siguiente `dcctl upgrade`. La contrapartida: mientras el almacén de mensajes del bróker no
+  anterior no se perdió ninguno. Para cerrar la ventana, activa `infrastructure.nats.mqttFailClosed`. `dcctl`
+  no tiene una opción para ello en esta versión y `--values` no lo acepta, así que un valor puesto a mano en
+  una instancia que gestiona `dcctl` lo sobrescribe el siguiente `dcctl upgrade`; una versión posterior añade
+  `--mqtt-fail-closed` a `dcctl bootstrap` y `dcctl upgrade`, que registra la elección en la instancia
+  (consulta [MQTT con fail-closed](./observability.md#mqtt-fail-closed)). La contrapartida: mientras el almacén de mensajes del bróker no
   tiene líder, una publicación QoS 1 no se confirma, así que el dispositivo debe volver a enviarla, y la
   instancia sostiene menos tráfico que con el ajuste desactivado. En un clúster de pruebas no perdió nada
   mientras daba abasto, a 6 000 y 9 000 eventos por segundo con cambios de líder repetidos; a 12 000 por
