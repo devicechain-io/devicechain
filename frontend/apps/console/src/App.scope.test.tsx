@@ -46,7 +46,7 @@ vi.mock('@/routes/AppLayout', async (importOriginal) => {
     },
   };
 });
-vi.mock('@/routes/Dashboard', () => ({ default: () => <div>home page</div> }));
+vi.mock('@/routes/Home', () => ({ default: () => <div>home page</div> }));
 // No page under the layout gets an answer: a route that renders is caught by its loading
 // state, and a route the guard refuses never asks.
 vi.mock('@devicechain/client', async (importOriginal) => {

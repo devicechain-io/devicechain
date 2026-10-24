@@ -42,7 +42,7 @@ function StatCard({
 // fragment (a technical value) rather than a literal the i18n sweep must flag.
 const homeBodyClassName = 'space-y-6 max-w-5xl';
 
-export default function Dashboard() {
+export default function Home() {
   const { t } = useTranslation(['common', 'nav']);
   const user = useCurrentUser();
 

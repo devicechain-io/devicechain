@@ -46,7 +46,7 @@ vi.mock('@/routes/AppLayout', async () => {
     },
   };
 });
-vi.mock('@/routes/Dashboard', () => ({ default: () => <div>home page</div> }));
+vi.mock('@/routes/Home', () => ({ default: () => <div>home page</div> }));
 
 // The gate names its area around what it guards.
 vi.mock('@/components/AreaUnavailable', () => ({

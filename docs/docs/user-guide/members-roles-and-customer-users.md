@@ -144,7 +144,7 @@ a filter, such as every device in one region.
 
 ### What a customer user sees {#what-a-customer-user-sees}
 
-A customer user's sidebar holds only **Dashboard**, **Dashboards**, **Alarms** and **Devices**,
+A customer user's sidebar holds only **Home**, **Dashboards**, **Alarms** and **Devices**,
 and in those:
 
 - **Devices** lists the devices assigned to their customers now, and the devices in their groups
