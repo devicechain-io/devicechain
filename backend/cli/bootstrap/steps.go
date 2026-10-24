@@ -44,7 +44,7 @@ const (
 	registryContainerName = "kind-registry"
 	kindNetwork           = "kind"
 	// 🔴 PINNED BY DIGEST, with the tag kept beside it so a reader can see the
-	// version. `registry:2` is not a version — it is a name Docker Hub can
+	// version. `registry:3` is not a version — it is a name Docker Hub can
 	// repoint, so an unpinned tag is a third-party dependency that moves under a
 	// build with no commit here to show for it, pulled anonymously and therefore
 	// subject to that registry's rate limits and outages.
@@ -58,7 +58,7 @@ const (
 	// one is pinned by TestLocalRegistryImageIsDigestPinned, because teaching a
 	// shell tokenizer to read Go would trade a rule that is right for one that is
 	// nearly right. To move the pin: `crane digest registry:<version>`.
-	localRegistryImage = "registry:2.8.3@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373"
+	localRegistryImage = "registry:3.1.2@sha256:01cd312e67026f06f5d89c3e133a4a9adc7cb9eeb9b1194e0b2954dfd770efd2"
 )
 
 // doing prints a white "doing…" progress line (house style).
