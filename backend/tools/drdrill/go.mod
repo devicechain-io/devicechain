@@ -19,7 +19,7 @@ require (
 	github.com/glebarez/go-sqlite v1.21.2 // indirect
 	github.com/google/cel-go v0.30.0 // indirect
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674 // indirect
-	github.com/graph-gophers/graphql-go v1.10.2 // indirect
+	github.com/graph-gophers/graphql-go v1.10.3 // indirect
 	github.com/klauspost/compress v1.20.1 // indirect
 	github.com/nats-io/nats.go v1.54.0 // indirect
 	github.com/nats-io/nkeys v0.4.16 // indirect
@@ -72,9 +72,6 @@ require (
 replace github.com/devicechain-io/dc-microservice => ../../core
 
 replace github.com/devicechain-io/dc-notification-management => ../../services/notification-management
-
-replace github.com/graph-gophers/graphql-go => github.com/devicechain-io/graphql-go v1.10.2-dc.2
-
 
 replace github.com/devicechain-io/dc-device-management => ../../services/device-management
 

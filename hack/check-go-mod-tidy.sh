@@ -25,12 +25,8 @@
 # THE DEPENDABOT SHAPE. Every module outside core replaces core with the local
 # ../../core. A bump that raises core's requirements leaves every module that replaces
 # core behind core's graph, and a grouped Dependabot PR only tidies the directories it
-# touched. That shape was already caught, but only incidentally: the graphql-go fork
-# guard's `GOWORK=off go list -m` fails with `updates to go.mod needed` when graphql-go
-# is absent from a module's graph, under a message about the fork. When graphql-go is
-# present, or when the drift is an unused requirement, a wrong `// indirect` marker or
-# a stale go.sum line, nothing noticed. This check catches all of them, by name, with
-# the command that fixes them.
+# touched. This check catches that, an unused requirement, a wrong `// indirect` marker
+# and a stale go.sum line, by name, with the command that fixes them.
 #
 # 🔴 WHY THE EXIT STATUS ALONE IS NOT THE VERDICT. `go mod tidy -diff` exits 1 both for
 # drift and for "could not resolve" (an unreachable proxy, an import nothing provides).
@@ -42,7 +38,7 @@
 # modules in the graph (it is additive over an existing go.sum) and drops hashes for
 # modules outside it. So a go.sum deliberately fuller than a from-scratch tidy — see
 # backend/tools/promqlguard/go.mod — passes here; this check neither requires those
-# extra hashes nor protects them (the fork guard is what needs them).
+# extra hashes nor protects them.
 #
 # GOWORK=off states the intent: the module's own files are the subject. As measured on
 # the current toolchain `go mod tidy` ignores go.work anyway, so it is not load-bearing
