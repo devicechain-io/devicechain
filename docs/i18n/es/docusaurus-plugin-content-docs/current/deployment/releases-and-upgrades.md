@@ -3930,6 +3930,93 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 
 No hay que hacer nada.
 
+### v0.25.1 — las imágenes de las bases de datos y del almacén de respaldos, reconstruidas por avisos de seguridad actuales {#v0251-upgrade}
+
+`v0.25.1` es un parche de `v0.25.0`. No hay migración, y no cambia ninguna API, tema, permiso, valor del
+chart ni clave de configuración. Mueve las tres imágenes de terceros sobre las que el clúster y cada
+instancia ejecutan sus bases de datos y su almacén de respaldos a compilaciones que ya no llevan los avisos
+de seguridad que se enumeran abajo, y corrige lo que dos servicios informan a Prometheus y los paneles de
+Grafana que el chart incluye para ellos (consulta [Las métricas y los paneles](#v0251-metrics)). Todo lo que describe la
+[sección de la v0.25.0](#v0250-upgrade) sigue siendo lo que estás ejecutando.
+
+Actualiza el clúster y después cada instancia. Pasa a `dcctl install` los ajustes con los que se instaló
+el clúster, como `--ha` y `--database-node-selector`, además de la nueva `--version`:
+
+```bash
+dcctl install local --version v0.25.1
+dcctl upgrade local devicechain --version v0.25.1 --dry-run
+dcctl upgrade local devicechain --version v0.25.1
+```
+
+**Si vienes de `v0.24.0`,** sigue las [notas de la v0.25.0](#v0250-upgrade) con `--version v0.25.1`: se
+aplican sin cambios, incluido ejecutar `dcctl upgrade` dos veces. **Si vienes de `v0.25.0`,** basta con un
+`dcctl upgrade` si se ejecutaron las dos actualizaciones de la v0.25.0. Si solo se ejecutó la primera, el
+inicio de sesión compartido del bróker sigue en su sitio, y esta actualización lo retira, con el reinicio
+del bróker que eso conlleva; su `--dry-run` y su resumen final lo indican (consulta
+[Los inicios de sesión del bróker, en dos actualizaciones](#v0250-broker-logins)).
+
+#### Qué se mueve {#v0251-images}
+
+| Imagen | Ejecuta | De | A | Avisos que ya no lleva |
+| --- | --- | --- | --- | --- |
+| `ghcr.io/devicechain-io/postgresql-timescaledb` | el almacén de eventos de cada instancia | `17.10-ts2.28.3-r1` | `17.11-ts2.28.3-r1` | Perl `5.36.0-7+deb12u3`: CVE-2026-13221, CVE-2026-42496, CVE-2026-8376 (críticos), CVE-2026-42497, CVE-2026-48962, CVE-2026-57432, CVE-2026-57433 (altos). PCRE2 `10.42-1`: CVE-2026-103111, CVE-2026-86145, CVE-2026-89157, CVE-2026-89161 (altos) |
+| `ghcr.io/cloudnative-pg/postgresql` | la base de datos relacional compartida del clúster (`dc-rdb`, en `dc-system`) | `17.10-standard-bookworm` | `17.11-standard-bookworm` | los mismos avisos de Perl y PCRE2 |
+| `cgr.dev/chainguard/minio` | el almacén de respaldos dentro del clúster, cuando los respaldos van a él | resumen `sha256:32c504be…` | resumen `sha256:73297936…` | CVE-2026-111497 (decodificador Brotli, alto), CVE-2026-111943 (`crypto/x509` de Go, en el cliente `mc` incluido, alto) |
+
+La imagen del almacén de eventos es una compilación propia de DeviceChain sobre la base PostgreSQL de
+CloudNativePG, así que se mueve con esa base. PostgreSQL pasa de 17.10 a 17.11, una versión menor: los
+ficheros de datos se conservan tal cual y no se vuelca ni se restaura nada. TimescaleDB sigue en 2.28.3.
+Analizada con Trivy en busca de avisos altos y críticos que tengan corrección, ninguna de las imágenes
+nuevas informa de ninguno.
+
+#### Las métricas y los paneles {#v0251-metrics}
+
+- **`event-processing` pone a cero sus indicadores exclusivos del líder cuando una réplica deja de serlo.**
+  Una réplica que había perdido la concesión de detección seguía exportando el retraso, la demora y los
+  tamaños de estado de su último mandato. El panel y las alertas `DetectConsumerBacklogHigh`,
+  `DetectWatermarkLagHigh` y `DetectTenantOverStateBudget` toman la lectura más alta entre réplicas, así
+  que esa lectura congelada podía mostrar un retraso que ninguna réplica tenía e impedir que una alerta se
+  resolviera. Una réplica en espera informa ahora cero para ellos. El recuento de reglas cargadas no
+  cambia, porque todas las réplicas cargan las reglas.
+- **`command-delivery` exporta sus contadores de lotes de comandos a cero desde el arranque**, de modo que
+  su panel muestra cero en lugar de "No data" antes del primer lote, y un `increase()` sobre ellos ve el
+  primero.
+- **Se corrigen los dos paneles que incluye el chart:** sus series coinciden con lo que exportan los
+  servicios, los eventos poco frecuentes se muestran como recuentos, los gráficos que mezclaban unidades se
+  separan y se añaden gráficos para el presupuesto de muestras retenidas.
+
+#### Qué esperar {#v0251-during}
+
+- **`dcctl install` reinicia una vez las instancias de la base de datos relacional**, sobre la imagen
+  nueva: con `--ha`, primero las réplicas en espera y después una conmutación a una de ellas, así que las
+  escrituras se detienen solo durante la conmutación. Una base de datos relacional de una sola instancia
+  no está disponible hasta que esa instancia se ha reiniciado, y las escrituras hechas mientras tanto se
+  reintentan. `dcctl install` espera hasta que cada instancia ejecuta la imagen nueva.
+- **`dcctl install` reinicia una vez el pod del almacén de respaldos**, cuando el clúster guarda sus
+  respaldos dentro del clúster. Los respaldos y el registro de escritura anticipada guardados se
+  conservan. Mientras el pod se reinicia, el archivado se detiene y las bases de datos guardan el registro
+  de escritura anticipada localmente. Un clúster que envía sus respaldos a tu propio almacén de objetos con
+  `--backup-credentials-file` no ejecuta ningún almacén de respaldos, y ahí no cambia nada.
+- **`dcctl upgrade` reinicia una vez el almacén de eventos de la instancia**, sobre la imagen nueva, en el
+  paso de infraestructura antes de mover los servicios: con `--ha`, primero las réplicas en espera y
+  después una conmutación; sin `--ha`, la única instancia se reinicia, y event-management no puede guardar
+  eventos hasta que vuelve. Esos eventos esperan en el flujo de ingesta y se reintentan; uno se abandona
+  solo tras unos cuatro minutos de reintentos fallidos. La actualización espera hasta que cada instancia
+  del almacén ejecuta la imagen nueva antes de mover los servicios. Los ajustes del bróker de mensajes no
+  cambian, así que sus servidores no se reinician.
+- **Los servicios pasan a las imágenes `v0.25.1`** pod a pod, como en cualquier actualización. Su código
+  es el mismo que el de `v0.25.0`, salvo los dos cambios de métricas de arriba.
+- **Si replicas imágenes en un registro propio,** replica las tres referencias nuevas de arriba antes de
+  actualizar, y las imágenes de DeviceChain `v0.25.1` como siempre.
+- **Si fijaste `timescale_image` tú mismo** en el `terraform.tfvars` junto al estado de infraestructura de
+  una instancia, la actualización conserva tu valor, y el almacén de eventos se queda en la imagen que
+  nombra. Ponlo en `ghcr.io/devicechain-io/postgresql-timescaledb:17.11-ts2.28.3-r1`, o quita la línea,
+  para moverlo.
+- **Cambiar un ajuste de la base de datos en la misma ejecución se rechaza** en una base de datos de más
+  de una instancia: el operador de la base de datos no acepta una imagen nueva y ajustes nuevos a la vez.
+  Limita `dcctl install` a los ajustes que el clúster ya tiene (un `--max-connections` distinto, por
+  ejemplo, es un cambio así), y cambia el ajuste en una ejecución aparte.
+
 ### v0.25.0 — cada área inicia sesión en el bróker con su propia identidad, y las versiones están firmadas {#v0250-upgrade}
 
 `v0.25.0` es una actualización en su sitio desde `v0.24.0`: `dcctl install` para el clúster y después
