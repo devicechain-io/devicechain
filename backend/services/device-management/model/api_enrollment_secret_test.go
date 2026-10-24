@@ -65,7 +65,7 @@ func TestAProvisioningSecretIsStoredAsADigestNeverThePlaintext(t *testing.T) {
 	requireNoSecretIn(t, "provisioning_profiles", row, secret)
 	assert.Nil(t, row["provision_secret"], "the retired plaintext column is written NULL")
 	digest, _ := row["provision_secret_digest"].(string)
-	assert.True(t, strings.HasPrefix(digest, "v1$"+testEnrollmentKey.KeyId()+"$"), "digest %q", digest)
+	assert.True(t, strings.HasPrefix(digest, "v1$"+testEnrollmentKeys.Provisioning.KeyId()+"$"), "digest %q", digest)
 
 	// A rotation replaces the digest, and the old secret verifies nothing afterwards.
 	_, err = api.UpdateProvisioningProfile(ctx, token, &ProvisioningProfileUpdateRequest{
@@ -140,7 +140,7 @@ func TestAProvisioningSecretIsRefusedWithoutAKeyOrOverTheLimit(t *testing.T) {
 		return err
 	}
 	assert.Error(t, create(strings.Repeat("x", 257)), "a secret over 256 bytes was accepted")
-	api.EnrollmentSecretKey = nil
+	api.EnrollmentKeys = nil
 	assert.ErrorIs(t, create("fleet-s3cret"), errNoProvisioningSecretKey)
 	rows, err := api.ProvisioningProfilesByToken(ctx, []string{token})
 	require.NoError(t, err)
@@ -155,17 +155,25 @@ func hierarchyCtx() context.Context { return core.WithTenant(context.Background(
 func seedClaimable(t *testing.T) (*Api, string) {
 	t.Helper()
 	api, ctx := hierarchyTestApi(t)
+	seedClaimableIn(t, api, ctx)
+	return api, "dozer-01"
+}
+
+// seedClaimableIn gives ctx's tenant a device "dozer-01" and a customer "acme-mining".
+func seedClaimableIn(t *testing.T, api *Api, ctx context.Context) {
+	t.Helper()
 	seedDeviceForHierarchy(t, api, ctx, "dozer-01")
 	customerType := &CustomerType{}
 	customerType.Token = "operator"
 	require.NoError(t, api.RDB.DB(ctx).Create(customerType).Error)
 	_, err := api.CreateCustomer(ctx, &CustomerCreateRequest{Token: "acme-mining", CustomerTypeToken: "operator"})
 	require.NoError(t, err)
-	return api, "dozer-01"
 }
 
-func redeem(api *Api, secret string) error {
-	_, err := api.ClaimDevice(hierarchyCtx(), &DeviceClaimRequest{DeviceToken: "dozer-01", ClaimSecret: secret,
+func redeem(api *Api, secret string) error { return redeemIn(api, hierarchyCtx(), secret) }
+
+func redeemIn(api *Api, ctx context.Context, secret string) error {
+	_, err := api.ClaimDevice(ctx, &DeviceClaimRequest{DeviceToken: "dozer-01", ClaimSecret: secret,
 		CustomerToken: "acme-mining"}, time.Now())
 	return err
 }
@@ -188,7 +196,7 @@ func TestAClaimSecretIsStoredAsADigestAndRedeemsOnlyWithTheRightSecret(t *testin
 	requireNoSecretIn(t, "device_claims", row, secret)
 	assert.Nil(t, row["claim_secret"], "the retired plaintext column is written NULL")
 	digest, _ := row["claim_secret_digest"].(string)
-	assert.True(t, strings.HasPrefix(digest, "v1$"+testEnrollmentKey.KeyId()+"$"), "digest %q", digest)
+	assert.True(t, strings.HasPrefix(digest, "v1$"+testEnrollmentKeys.Claim.KeyId()+"$"), "digest %q", digest)
 
 	// Negative controls, each one input away from the redemption below.
 	for _, wrong := range []string{"wrong", secret + " ", strings.ToUpper(secret), ""} {
@@ -235,7 +243,7 @@ func TestAClaimSecretIsRefusedWithoutAKeyOrOverTheLimit(t *testing.T) {
 		return err
 	}
 	assert.Error(t, initiate(strings.Repeat("x", 257)))
-	api.EnrollmentSecretKey = nil
+	api.EnrollmentKeys = nil
 	assert.ErrorIs(t, initiate("s3cret"), errNoClaimSecretKey)
 	_, err := api.DeviceClaimByDeviceToken(ctx, "dozer-01")
 	assert.ErrorIs(t, err, gorm.ErrRecordNotFound, "a refused initiate still wrote a claim")
@@ -243,7 +251,9 @@ func TestAClaimSecretIsRefusedWithoutAKeyOrOverTheLimit(t *testing.T) {
 
 // 🔑 AN UNREDEEMED CLAIM SURVIVES THE UPGRADE. A claim opened before secrets were digested
 // holds its plaintext in claim_secret and no digest. The startup step digests it in place,
-// and the owner then redeems it with the secret they were given.
+// and the owner then redeems it with the secret they were given. (A claim an old pod opens
+// AFTER the last start is redeemable without the step: see
+// TestAClaimAnOldPodOpenedRedeemsWithoutAStartupStepAndIsConvertedByIt.)
 func TestAnOpenClaimFromBeforeTheUpgradeStillRedeemsOnceTheStartupStepHasRun(t *testing.T) {
 	api, _ := seedClaimable(t)
 	ctx := hierarchyCtx()
@@ -252,10 +262,7 @@ func TestAnOpenClaimFromBeforeTheUpgradeStillRedeemsOnceTheStartupStepHasRun(t *
 	// The row as the old code left it.
 	require.NoError(t, api.RDB.DB(ctx).Exec(
 		`UPDATE device_claims SET claim_secret = ?, claim_secret_digest = NULL`, "legacy-printed-s3cret").Error)
-	assert.ErrorIs(t, redeem(api, "legacy-printed-s3cret"), ErrClaimSecretMismatch,
-		"a claim with no digest redeemed before the startup step ran")
-
-	n, err := schema.DigestPlaintextClaimSecrets(ctx, api.RDB.DB(ctx), api.EnrollmentSecretKey.Digest)
+	n, err := schema.DigestPlaintextClaimSecrets(ctx, api.RDB.DB(ctx), api.EnrollmentKeys.Claim.Digest)
 	require.NoError(t, err)
 	assert.Equal(t, 1, n)
 
@@ -265,7 +272,7 @@ func TestAnOpenClaimFromBeforeTheUpgradeStillRedeemsOnceTheStartupStepHasRun(t *
 	require.NoError(t, redeem(api, "legacy-printed-s3cret"))
 
 	// Idempotent: a second start finds nothing.
-	n, err = schema.DigestPlaintextClaimSecrets(ctx, api.RDB.DB(ctx), api.EnrollmentSecretKey.Digest)
+	n, err = schema.DigestPlaintextClaimSecrets(ctx, api.RDB.DB(ctx), api.EnrollmentKeys.Claim.Digest)
 	require.NoError(t, err)
 	assert.Equal(t, 0, n)
 }

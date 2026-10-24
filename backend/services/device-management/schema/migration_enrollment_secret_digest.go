@@ -6,6 +6,7 @@ package schema
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"strings"
 
 	"github.com/devicechain-io/dc-microservice/core"
@@ -73,13 +74,14 @@ func NewEnrollmentSecretDigestSchema() *gormigrate.Migration {
 			}
 			return nil
 		},
+		// 🔴 THERE IS NO ROLLBACK, AND THAT IS DELIBERATE. By the time anyone rolls this back the
+		// startup steps have NULLed the plaintext and the digest columns are the ONLY copy of
+		// every profile and claim secret: dropping them destroys the secrets with no way to
+		// recover them from the database, and a digest cannot be turned back into a secret.
 		Rollback: func(tx *gorm.DB) error {
-			// The plaintext columns are not made NOT NULL again: rows written since hold NULL there.
-			if err := tx.Exec(`ALTER TABLE ` + profiles +
-				` DROP COLUMN IF EXISTS provision_secret_digest;`).Error; err != nil {
-				return err
-			}
-			return tx.Exec(`ALTER TABLE ` + claims + ` DROP COLUMN IF EXISTS claim_secret_digest;`).Error
+			return errors.New("the enrollment secret digest migration cannot be rolled back: the " +
+				"plaintext secrets have been replaced by their digests, so dropping the digest " +
+				"columns would destroy every provisioning profile secret and device claim secret")
 		},
 	}
 }
@@ -104,8 +106,9 @@ func (provisionSecretRow) TableName() string { return "provisioning_profiles" }
 // reads every tenant's rows. Each row is written with a compare-and-set on the plaintext it
 // read (id = ? AND provision_secret = ?), so replicas starting together cannot undo one
 // another: the loser of a race updates nothing, and both would have written a digest of the
-// same secret. A stored empty or blank secret is cleared to NULL with no digest: create has
-// refused a blank one since v0.18.0, and a profile that holds none matches nothing.
+// same secret. A stored empty or blank secret has its plaintext cleared to NULL and its digest
+// left alone: create has refused a blank one since v0.18.0, a profile that holds no digest
+// matches nothing, and one that holds a digest keeps it.
 //
 // 🔴 IT RUNS ON EVERY START, not once. After the first, the read finds nothing and the step
 // costs one query. That is what digests a plaintext an old-version pod wrote while the
@@ -125,19 +128,24 @@ func DigestPlaintextProvisionSecrets(ctx context.Context, db *gorm.DB, digest fu
 		}
 		for _, row := range rows {
 			after = row.ID
-			digested := sql.NullString{}
+			// A blank plaintext is NOT a secret to digest. An old-version pod's update that does
+			// not name the secret reads the column as "" and saves it back blank, over a row whose
+			// digest a new pod wrote; clearing the digest for that would erase a working secret.
+			// So a blank only clears the plaintext column, and the digest is left as it is (NULL
+			// when there never was one, which is what a blank has always meant).
+			updates := map[string]any{"provision_secret": nil}
 			if strings.TrimSpace(row.ProvisionSecret.String) != "" {
 				d, err := digest(row.TenantId, row.ProvisionSecret.String)
 				if err != nil {
 					return converted, err
 				}
-				digested = sql.NullString{String: d, Valid: true}
+				updates["provision_secret_digest"] = sql.NullString{String: d, Valid: true}
 			}
 			// The model carries the primary key, so gorm adds id = ? and the audit journal
 			// records which row changed.
 			res := db.Model(&provisionSecretRow{ID: row.ID}).
 				Where("provision_secret = ?", row.ProvisionSecret.String).
-				Updates(map[string]any{"provision_secret_digest": digested, "provision_secret": nil})
+				Updates(updates)
 			if res.Error != nil {
 				return converted, res.Error
 			}
@@ -183,8 +191,8 @@ func (claimSecretRow) TableName() string { return "device_claims" }
 //
 // It is DigestPlaintextProvisionSecrets for device claims, and works the same way: a system
 // context, a compare-and-set on the plaintext it read so replicas starting together cannot
-// undo one another, an empty or blank stored secret cleared to NULL with no digest (nothing
-// redeems a claim with none), and a run on EVERY start so a claim an old-version pod opened
+// undo one another, an empty or blank stored secret cleared to NULL with the digest left alone
+// (nothing redeems a claim with none), and a run on EVERY start so a claim an old-version pod opened
 // during a rolling upgrade is digested by the next one.
 func DigestPlaintextClaimSecrets(ctx context.Context, db *gorm.DB, digest func(tenant, secret string) (string, error)) (int, error) {
 	db = db.WithContext(core.WithSystemContext(ctx))
@@ -201,17 +209,19 @@ func DigestPlaintextClaimSecrets(ctx context.Context, db *gorm.DB, digest func(t
 		}
 		for _, row := range rows {
 			after = row.ID
-			digested := sql.NullString{}
+			// A blank only clears the plaintext and leaves the digest alone, for the reason
+			// DigestPlaintextProvisionSecrets gives.
+			updates := map[string]any{"claim_secret": nil}
 			if strings.TrimSpace(row.ClaimSecret.String) != "" {
 				d, err := digest(row.TenantId, row.ClaimSecret.String)
 				if err != nil {
 					return converted, err
 				}
-				digested = sql.NullString{String: d, Valid: true}
+				updates["claim_secret_digest"] = sql.NullString{String: d, Valid: true}
 			}
 			res := db.Model(&claimSecretRow{ID: row.ID}).
 				Where("claim_secret = ?", row.ClaimSecret.String).
-				Updates(map[string]any{"claim_secret_digest": digested, "claim_secret": nil})
+				Updates(updates)
 			if res.Error != nil {
 				return converted, res.Error
 			}

@@ -19,10 +19,11 @@ var testSecretKey = func() *credential.DeviceSecretKey {
 	return k
 }()
 
-// testEnrollmentKey is the provisioning secret key the model tests store and check profile
-// secrets under. It is derived from the same root as testSecretKey and is a different key.
-var testEnrollmentKey = func() *credential.DeviceSecretKey {
-	k, err := credential.DeriveEnrollmentSecretKey([]byte("model-tests-root-key-32-bytes!!!"))
+// testEnrollmentKeys are the enrollment secret keys the model tests store and check profile
+// and claim secrets under. They are derived from the same root as testSecretKey and are
+// different keys.
+var testEnrollmentKeys = func() *credential.EnrollmentSecretKeys {
+	k, err := credential.DeriveEnrollmentSecretKeys([]byte("model-tests-root-key-32-bytes!!!"))
 	if err != nil {
 		panic(err)
 	}
@@ -30,14 +31,14 @@ var testEnrollmentKey = func() *credential.DeviceSecretKey {
 }()
 
 // provisionSecretStr renders a stored provisioning secret digest as secretStr renders a
-// credential's: the candidate it verifies under testEnrollmentKey, NullMarker for none, the
+// credential's: the candidate it verifies under testEnrollmentKeys, NullMarker for none, the
 // digest itself when it verifies none.
 func provisionSecretStr(d sql.NullString, candidates ...string) string {
 	if !d.Valid {
 		return putest.NullString(d)
 	}
 	for _, c := range candidates {
-		if credential.VerifyDeviceSecret(testEnrollmentKey, partialUpdateTenant, d.String, c) == nil {
+		if credential.VerifyDeviceSecret(testEnrollmentKeys.Provisioning, partialUpdateTenant, d.String, c) == nil {
 			return c
 		}
 	}

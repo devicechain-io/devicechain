@@ -28,7 +28,7 @@ var (
 	// ErrProvisioningKeyEmpty means an empty or blank provision key was supplied on
 	// create. The key is how a device names the profile it is registering against.
 	ErrProvisioningKeyEmpty = errors.New("provision key must not be empty")
-	// errNoProvisioningSecretKey refuses a write carrying a secret when no EnrollmentSecretKey is
+	// errNoProvisioningSecretKey refuses a write carrying a secret when no EnrollmentKeys is
 	// wired: nothing falls back to storing the secret.
 	errNoProvisioningSecretKey = errors.New("provisioning secrets cannot be stored: no provisioning secret key is configured")
 )
@@ -43,10 +43,16 @@ func (api *Api) digestProvisionSecret(tenant, secret string) (sql.NullString, er
 	if len(secret) > credential.MaxEnrollmentSecretBytes {
 		return sql.NullString{}, limit.Exceeded("provisionSecret bytes", len(secret), credential.MaxEnrollmentSecretBytes)
 	}
-	if api.EnrollmentSecretKey == nil {
+	return api.digestStoredProvisionSecret(tenant, secret)
+}
+
+// digestStoredProvisionSecret digests a secret already at rest, which the length limit on a
+// SET does not apply to: the old column bounded it at 256 characters, up to four bytes each.
+func (api *Api) digestStoredProvisionSecret(tenant, secret string) (sql.NullString, error) {
+	if api.EnrollmentKeys == nil {
 		return sql.NullString{}, errNoProvisioningSecretKey
 	}
-	digest, err := api.EnrollmentSecretKey.Digest(tenant, secret)
+	digest, err := api.EnrollmentKeys.Provisioning.Digest(tenant, secret)
 	if err != nil {
 		return sql.NullString{}, err
 	}
@@ -235,6 +241,14 @@ func (api *Api) UpdateProvisioningProfile(ctx context.Context, token string,
 // (LegacyProvisionSecret), so the plaintext is digested here first rather than discarded,
 // which would bring back the secret the old pod rotated away. Outside an upgrade's overlap
 // the column is always NULL and this returns the digest unchanged.
+//
+// 🔴 A KNOWN, NARROW LOST UPDATE. The plaintext is read here and the row is saved later, with
+// no lock between them. An old pod that rotates the secret in that gap writes a plaintext this
+// save then overwrites with NULL, so the rotation is lost and the previous digest stays. It
+// needs an old-version pod to write the same profile within the milliseconds between two reads
+// of one request, only during a rolling upgrade; the secret then has to be set again. It is
+// documented rather than closed because closing it takes a compare-and-set on the plaintext
+// column through gorm's Save, which the rest of the update path does not use.
 func (api *Api) adoptLegacyProvisionSecret(ctx context.Context, profile *ProvisioningProfile) (sql.NullString, error) {
 	var legacy []sql.NullString
 	if err := api.RDB.DB(ctx).Model(&ProvisioningProfile{}).Where("id = ?", profile.ID).
@@ -244,7 +258,7 @@ func (api *Api) adoptLegacyProvisionSecret(ctx context.Context, profile *Provisi
 	if len(legacy) != 1 || !legacy[0].Valid || strings.TrimSpace(legacy[0].String) == "" {
 		return profile.ProvisionSecretDigest, nil
 	}
-	return api.digestProvisionSecret(profile.TenantId, legacy[0].String)
+	return api.digestStoredProvisionSecret(profile.TenantId, legacy[0].String)
 }
 
 // Get provisioning profiles by id.
