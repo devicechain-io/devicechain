@@ -50,11 +50,12 @@ Consulte [Multitenencia](./multi-tenancy.md).
   dispositivo. Desactivar, rotar o eliminar una credencial rechaza de inmediato las nuevas conexiones y cierra las sesiones abiertas
   del dispositivo. Consulte [Credenciales de dispositivo](../guides/device-credentials.md), incluida la rapidez con que una
   revocación alcanza a los eventos en curso.
-- **Credenciales en reposo.** La contraseña de una credencial `MQTT_BASIC` se guarda solo como un resumen unidireccional con clave
-  y nunca se devuelve. Una credencial `ACCESS_TOKEN` es distinta hoy: el token es el identificador de la
-  credencial y se guarda como un valor que la plataforma puede leer. Una fuga de la base de datos o de una copia de
-  seguridad expondría los tokens de todos los dispositivos autenticados por token. Trate esas copias en consecuencia y
-  prefiera `MQTT_BASIC` cuando pueda. Está previsto guardar los tokens de acceso solo como resumen antes de la 1.0.0.
+- **Credenciales en reposo.** La contraseña de una credencial `MQTT_BASIC` y el token de una credencial `ACCESS_TOKEN`
+  se guardan solo como resúmenes unidireccionales con clave, bajo una clave derivada de la clave raíz de la instancia,
+  que no se guarda en la base de datos. Cada uno se muestra una vez, en la respuesta a la llamada que lo establece, y
+  nunca se vuelve a devolver; una lectura de una credencial de token de acceso devuelve una huella que no puede
+  presentarse como el token. Por tanto, una fuga de la base de datos o de una copia de seguridad no da ninguna
+  contraseña ni ningún token de dispositivo que funcione.
 - **Credenciales en el cuerpo de un evento.** En el broker MQTT de la plataforma la conexión ya ha autenticado al dispositivo, así que
   se rechaza un evento que además lleve una credencial en su cuerpo. Un ajuste transitorio, `capture.bodyCredential: strip`, acepta ese
   evento sin la credencial para que una flota siga informando mientras se actualiza su firmware; está previsto retirarlo antes de la
@@ -138,18 +139,16 @@ Estas carencias son conocidas y se aceptan en la versión actual. Planifique en 
    relacional de la instancia con un único inicio de sesión, así que un servicio comprometido podría leer y escribir las tablas de otra área. El aislamiento de inquilinos
    en la base de datos descansa en el ámbito de inquilino de la aplicación, no en permisos de la base de datos. Los roles separados por
    servicio están previstos para una versión 1.0.x.
-3. **Los tokens de acceso se guardan legibles**, como se describe en [Dispositivos](#devices). Está previsto guardarlos solo
-   como resumen antes de la 1.0.0.
-4. **Confirmaciones MQTT durante un cambio de líder del broker.** Por defecto, el broker puede confirmar un mensaje QoS 1 y
+3. **Confirmaciones MQTT durante un cambio de líder del broker.** Por defecto, el broker puede confirmar un mensaje QoS 1 y
    perderlo después mientras el flujo de captura cambia de líder, algo que provoca un reinicio del broker, una
    actualización o la pérdida de un nodo, con cualquier carga. Con `infrastructure.nats.mqttFailClosed` activado, una
    confirmación significa que la plataforma conserva el mensaje; a cambio, el broker rechaza las publicaciones QoS 1
    mientras no hay líder, y la instancia sostiene menos tráfico, así que es para instalaciones dimensionadas para
    mantenerse por debajo de ese techo. El ajuste está desactivado por defecto, y
    [Observabilidad](../deployment/observability.md#mqtt-fail-closed) describe el equilibrio.
-5. **La clave raíz es legible para cualquiera que pueda leer el Secret de Kubernetes de la instancia.** Restrinja el acceso a ese
+4. **La clave raíz es legible para cualquiera que pueda leer el Secret de Kubernetes de la instancia.** Restrinja el acceso a ese
    Secret y al etcd del clúster en consecuencia.
-6. **No se ha publicado ninguna prueba de penetración externa.**
+5. **No se ha publicado ninguna prueba de penetración externa.**
 
 Nada de esta página sustituye su propia revisión. Si una entrada de aquí es un problema para su despliegue, la sección
 correspondiente de arriba indica dónde está el control.

@@ -2115,6 +2115,60 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 
 无须操作。
 
+### v0.25.1：数据库和备份存储的镜像，针对当前安全公告重新构建 {#v0251-upgrade}
+
+`v0.25.1` 是 `v0.25.0` 的补丁。它不改动任何 DeviceChain 代码：没有迁移，API、主题、权限、chart 值、
+配置键均无变化。它把集群和每个实例运行数据库与备份存储所用的三个第三方镜像，换成不再带有下列安全公告的
+构建。[v0.25.0 一节](#v0250-upgrade)所描述的内容仍完全适用。
+
+先升级集群，再升级每个实例。除新的 `--version` 外，还要把集群安装时用的设置（例如 `--ha` 和
+`--database-node-selector`）传给 `dcctl install`：
+
+```bash
+dcctl install local --version v0.25.1
+dcctl upgrade local devicechain --version v0.25.1 --dry-run
+dcctl upgrade local devicechain --version v0.25.1
+```
+
+**从 `v0.24.0` 升级时，**按 [v0.25.0 说明](#v0250-upgrade)操作，并使用 `--version v0.25.1`：其内容原样
+适用，包括运行两次 `dcctl upgrade`。**从 `v0.25.0` 升级时，**如果 v0.25.0 的两次升级都已运行，一次
+`dcctl upgrade` 即可。如果只运行了第一次，共享的消息代理登录仍然存在，本次升级会停用它，并为此重启一次
+消息代理；其 `--dry-run` 和结束时的摘要会说明这一点（见[消息代理的登录，分两次升级](#v0250-broker-logins)）。
+
+#### 变动的内容 {#v0251-images}
+
+| 镜像 | 运行 | 从 | 到 | 不再带有的安全公告 |
+| --- | --- | --- | --- | --- |
+| `ghcr.io/devicechain-io/postgresql-timescaledb` | 每个实例的事件存储 | `17.10-ts2.28.3-r1` | `17.11-ts2.28.3-r1` | Perl `5.36.0-7+deb12u3`：CVE-2026-13221、CVE-2026-42496、CVE-2026-8376（严重），CVE-2026-42497、CVE-2026-48962、CVE-2026-57432、CVE-2026-57433（高）。PCRE2 `10.42-1`：CVE-2026-103111、CVE-2026-86145、CVE-2026-89157、CVE-2026-89161（高） |
+| `ghcr.io/cloudnative-pg/postgresql` | 集群共享的关系数据库（`dc-rdb`，位于 `dc-system`） | `17.10-standard-bookworm` | `17.11-standard-bookworm` | 相同的 Perl 和 PCRE2 公告 |
+| `cgr.dev/chainguard/minio` | 集群内的备份存储（备份存放在集群内时） | 摘要 `sha256:32c504be…` | 摘要 `sha256:73297936…` | CVE-2026-111497（Brotli 解码器，高），CVE-2026-111943（Go `crypto/x509`，位于随附的 `mc` 客户端中，高） |
+
+事件存储镜像是 DeviceChain 基于 CloudNativePG PostgreSQL 基础镜像自行构建的，因此随该基础镜像一起变动。
+PostgreSQL 从 17.10 升到 17.11，属于小版本：数据文件原样保留，无需转储或恢复。TimescaleDB 仍为 2.28.3。
+用 Trivy 扫描已有修复的高危和严重公告，所有新镜像均未报告任何问题。
+
+#### 预期情况 {#v0251-during}
+
+- **`dcctl install` 会让关系数据库的实例重启一次**，换到新镜像：在 `--ha` 下先重启备用实例，再切换到其中
+  之一，因此写入只在切换期间暂停。单实例的关系数据库在其唯一实例重启完成之前不可用，期间的写入会重试。
+  `dcctl install` 会等到每个实例都运行新镜像。
+- **`dcctl install` 会让备份存储的 Pod 重启一次**（当集群把备份保存在集群内时）。已存储的备份和预写日志都会
+  保留。Pod 重启期间归档暂停，数据库在本地保留预写日志。通过 `--backup-credentials-file` 把备份发送到你自己
+  的对象存储的集群不运行备份存储，那里没有任何变化。
+- **`dcctl upgrade` 会让实例的事件存储重启一次**，换到新镜像，这发生在移动服务之前的基础设施步骤中：在
+  `--ha` 下先重启备用实例，再进行切换；没有 `--ha` 时，唯一的实例会重启，在它恢复之前 event-management
+  无法存储事件。这些事件在接入流中等待并重试；只有在大约四分钟的重试都失败后才会放弃某个事件。升级会等到
+  事件存储的每个实例都运行新镜像，然后才移动服务。消息代理的设置没有变化，因此其服务器不会重启。
+- **各服务逐个 Pod 切换到 `v0.25.1` 镜像**，与任何升级相同。其代码与 `v0.25.0` 相同。
+- **如果你把镜像同步到自己的镜像仓库，**请在升级前同步上面的三个新引用，并照常同步 DeviceChain 的
+  `v0.25.1` 镜像。
+- **如果你自己设置了 `timescale_image`**（在实例基础设施状态旁的 `terraform.tfvars` 中），升级会保留你的
+  值，事件存储会停留在它指定的镜像上。要切换，请把它设为
+  `ghcr.io/devicechain-io/postgresql-timescaledb:17.11-ts2.28.3-r1`，或删除该行。
+- **在同一次运行中更改数据库设置会被拒绝**（对于多于一个实例的数据库）：数据库 Operator 不接受同时更换镜像和
+  更改设置。让 `dcctl install` 只使用集群已有的设置（例如不同的 `--max-connections` 就属于这种更改），
+  并在单独的一次运行中更改该设置。
+
 ### v0.25.0：每个领域以自己的身份登录消息代理，且发布版本已签名 {#v0250-upgrade}
 
 `v0.25.0` 可从 `v0.24.0` 原地升级：先为集群执行 `dcctl install`，再为每个实例执行 `dcctl upgrade`，

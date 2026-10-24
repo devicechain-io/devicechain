@@ -50,11 +50,11 @@ See [Multi-Tenancy](./multi-tenancy.md).
   different device is refused. Disabling, rotating or deleting a credential refuses new connections at once and
   ends the device's open sessions. See [Device credentials](../guides/device-credentials.md), including how quickly
   a revocation reaches events already in flight.
-- **Credentials at rest.** The password of an `MQTT_BASIC` credential is stored only as a keyed one-way digest and
-  is never returned. An `ACCESS_TOKEN` credential is different today: the token is the
-  credential's identifier and is stored as a value the platform can read back. A leak of the database or of a
-  backup would expose the tokens of every token-authenticated device. Treat such backups accordingly, and
-  prefer `MQTT_BASIC` where you can. Storing access tokens only as a digest is planned before 1.0.0.
+- **Credentials at rest.** The password of an `MQTT_BASIC` credential and the token of an `ACCESS_TOKEN` credential
+  are both stored only as keyed one-way digests, under a key derived from the instance root key, which is not kept
+  in the database. Each is shown once, in the response to the call that sets it, and never returned again; a read
+  of an access-token credential returns a fingerprint that cannot be presented as the token. A leak of the
+  database or of a backup therefore yields no working device password or token.
 - **Credentials in an event body.** On the platform's MQTT broker the connection has already authenticated the
   device, so an event that also carries a credential in its body is refused. A transitional setting,
   `capture.bodyCredential: strip`, accepts such an event with the credential removed so that a fleet keeps
@@ -139,18 +139,16 @@ These are known and accepted for the current release. Plan around them.
    database with one login, so a compromised service could read and write another area's tables. Tenant isolation
    in the database rests on the application's tenant scope, not on database permissions. Separate roles per
    service are planned for a 1.0.x release.
-3. **Access tokens are stored readable**, as described under [Devices](#devices). Storing them only as a digest
-   is planned before 1.0.0.
-4. **MQTT acknowledgements across a broker leader change.** By default the broker can acknowledge a QoS 1 message and
+3. **MQTT acknowledgements across a broker leader change.** By default the broker can acknowledge a QoS 1 message and
    then lose it while the capture stream changes leader, which a broker restart, an upgrade or the loss of a
    node causes, at any load. With `infrastructure.nats.mqttFailClosed` on, an acknowledgement means the
    platform holds the message; in exchange the broker refuses QoS 1 publishes while there is no leader, and
    the instance keeps up with less traffic, so it is for installations sized to stay below that ceiling.
    The setting is off by default, and [Observability](../deployment/observability.md#mqtt-fail-closed)
    describes the trade-off.
-5. **The root key is readable by anyone who can read the instance's Kubernetes Secret.** Restrict access to that
+4. **The root key is readable by anyone who can read the instance's Kubernetes Secret.** Restrict access to that
    Secret and to the cluster's etcd accordingly.
-6. **No external penetration test has been published.**
+5. **No external penetration test has been published.**
 
 Nothing on this page replaces your own review. If an entry here is a problem for your deployment, the matching
 section above says where the control sits.

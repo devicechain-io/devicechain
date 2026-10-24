@@ -3658,6 +3658,69 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 
 Nothing needs doing.
 
+### v0.25.1 — the database and backup-store images, rebuilt for current advisories {#v0251-upgrade}
+
+`v0.25.1` is a patch for `v0.25.0`. It changes no DeviceChain code: there is no migration, and no API,
+topic, permission, chart value or configuration key changes. It moves the three third-party images the
+cluster and each instance run their databases and backup store on to builds that no longer carry the
+advisories listed below. Everything the [v0.25.0 section](#v0250-upgrade) describes is still what you are
+running.
+
+Upgrade the cluster, then each instance. Give `dcctl install` the settings the cluster was installed with,
+such as `--ha` and `--database-node-selector`, as well as the new `--version`:
+
+```bash
+dcctl install local --version v0.25.1
+dcctl upgrade local devicechain --version v0.25.1 --dry-run
+dcctl upgrade local devicechain --version v0.25.1
+```
+
+**Coming from `v0.24.0`,** follow the [v0.25.0 notes](#v0250-upgrade) with `--version v0.25.1`: they apply
+unchanged, including running `dcctl upgrade` twice. **Coming from `v0.25.0`,** one `dcctl upgrade` is
+enough if both of the v0.25.0 upgrades ran. If only the first did, the shared broker login is still in
+place, and this upgrade retires it, with the one broker restart that takes; its `--dry-run` and its closing
+summary say so (see [The broker's logins, in two upgrades](#v0250-broker-logins)).
+
+#### What moves {#v0251-images}
+
+| Image | Runs | From | To | Advisories it no longer carries |
+| --- | --- | --- | --- | --- |
+| `ghcr.io/devicechain-io/postgresql-timescaledb` | each instance's event store | `17.10-ts2.28.3-r1` | `17.11-ts2.28.3-r1` | Perl `5.36.0-7+deb12u3`: CVE-2026-13221, CVE-2026-42496, CVE-2026-8376 (critical), CVE-2026-42497, CVE-2026-48962, CVE-2026-57432, CVE-2026-57433 (high). PCRE2 `10.42-1`: CVE-2026-103111, CVE-2026-86145, CVE-2026-89157, CVE-2026-89161 (high) |
+| `ghcr.io/cloudnative-pg/postgresql` | the cluster's shared relational database (`dc-rdb`, in `dc-system`) | `17.10-standard-bookworm` | `17.11-standard-bookworm` | the same Perl and PCRE2 advisories |
+| `cgr.dev/chainguard/minio` | the cluster's in-cluster backup store, where backups go to it | digest `sha256:32c504be…` | digest `sha256:73297936…` | CVE-2026-111497 (Brotli decoder, high), CVE-2026-111943 (Go `crypto/x509`, in the bundled `mc` client, high) |
+
+The event store image is DeviceChain's own build on the CloudNativePG PostgreSQL base, so it moves with
+that base. PostgreSQL moves from 17.10 to 17.11, a minor release: the data files are kept as they are, and
+nothing is dumped or restored. TimescaleDB stays at 2.28.3. Scanned with Trivy for high and critical
+advisories that have a fix, each new image reports none.
+
+#### What to expect {#v0251-during}
+
+- **`dcctl install` restarts the relational database's instances once**, onto the new image: under `--ha`
+  the standbys first, then a switchover to one of them, so writes pause for the switchover only. A
+  single-instance relational database is unavailable until its one instance has restarted, and writes made
+  meanwhile are retried. `dcctl install` waits until every instance runs the new image.
+- **`dcctl install` restarts the backup store's pod once**, when the cluster keeps its backups in the
+  cluster. Stored backups and write-ahead log are kept. While the pod restarts, archiving pauses and the
+  databases hold write-ahead log locally. A cluster that sends its backups to your own object store with
+  `--backup-credentials-file` runs no backup store, and nothing changes there.
+- **`dcctl upgrade` restarts the instance's event store once**, onto the new image, in the infrastructure
+  step before the services move: under `--ha` the standbys first, then a switchover; without `--ha` the
+  one instance restarts, and event-management cannot store events until it is back. Those events wait in
+  the ingest stream and are retried; one is given up on only after about four minutes of failed retries. The upgrade waits until every instance of the store runs the new image before it moves the
+  services. The message broker's settings do not change, so its servers do not restart.
+- **The services roll onto the `v0.25.1` images** one pod at a time, as in any upgrade. Their code is the
+  same as `v0.25.0`'s.
+- **If you mirror images,** mirror the three new references above before you upgrade, and the `v0.25.1`
+  DeviceChain images as usual.
+- **If you set `timescale_image` yourself** in the `terraform.tfvars` beside an instance's infrastructure
+  state, the upgrade keeps your value, and the event store stays on the image it names. Set it to
+  `ghcr.io/devicechain-io/postgresql-timescaledb:17.11-ts2.28.3-r1`, or remove the line, to move.
+- **Changing a database setting in the same run is refused** on a database of more than one instance: the
+  database operator does not accept a new image and new settings at once. Keep `dcctl install` to the
+  settings the cluster already has (a different `--max-connections`, for example, is such a change), and
+  change the setting in a run of its own.
+
 ### v0.25.0 — each area signs in to the broker as itself, and releases are signed {#v0250-upgrade}
 
 `v0.25.0` is an in-place upgrade from `v0.24.0`: `dcctl install` for the cluster, then `dcctl upgrade` for
