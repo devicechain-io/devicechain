@@ -180,6 +180,8 @@ func TestTheNonXyzTileSchemesAreAccepted(t *testing.T) {
 	for _, url := range []string{
 		"https://wms.example.invalid/?bbox={bbox-epsg-3857}&width=256",
 		"https://tiles.example.invalid/{quadkey}.png",
+		// {bbox} is substituted by MapLibre from 6.15.
+		"https://wms.example.invalid/{z}/{x}/{y}?bbox={bbox}",
 	} {
 		if err := Validate(Basemap{TileURL: s(url), Attribution: s(osmCred)}); err != nil {
 			t.Fatalf("%q is a valid tile template, got %v", url, err)
