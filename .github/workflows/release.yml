@@ -283,6 +283,17 @@ jobs:
             echo "::error::ko did not print a digest reference (got '$ref')"
             exit 1
           fi
+          # 🔴 WITH --tags, ko prints the reference TAG-QUALIFIED: repo:<tag>@sha256:...
+          # The digest is what is signed, and the sign job matches the repository in full,
+          # so the file records repo@sha256:... -- the repository this step pushed to and
+          # the digest ko reported, nothing else. A name that is neither the repository nor
+          # the repository plus one tag is refused rather than rewritten.
+          name="${ref%@*}"
+          if [ "$name" != "$KO_DOCKER_REPO" ] && [ "${name%:*}" != "$KO_DOCKER_REPO" ]; then
+            echo "::error::ko pushed '$ref', which is not in $KO_DOCKER_REPO"
+            exit 1
+          fi
+          ref="${KO_DOCKER_REPO}@${ref#*@}"
           mkdir -p "$RUNNER_TEMP/ref"
           printf '%s\n' "$ref" > "$RUNNER_TEMP/ref/ref.txt"
           echo "Published $ref"
