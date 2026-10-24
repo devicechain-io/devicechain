@@ -12,7 +12,7 @@
 // (trust auth, so the password is ignored):
 //
 //	. deploy/images/timescaledb/standalone.sh
-//	PORT=$(dc_operand_start ghcr.io/devicechain-io/postgresql-timescaledb:17.10-ts2.28.3-r1 \
+//	PORT=$(dc_operand_start ghcr.io/devicechain-io/postgresql-timescaledb:17.11-ts2.28.3-r1 \
 //	         dc-batchbench "127.0.0.1::5432")
 //	cd backend/services/event-management
 //	DC_IT_PGPORT=$PORT go test -tags integration -run '^$' -bench PersistBatch \
