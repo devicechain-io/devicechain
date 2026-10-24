@@ -192,7 +192,7 @@ Lo que un dispositivo publica en su topic `command-responses` para cerrar un com
 
 ## Rechazos y errores {#rejections}
 
-Lo que le ocurre a un mensaje que la plataforma no acepta depende de dónde se rechaza y del transporte. HTTP responde a la petición, así que el dispositivo se entera de un rechazo en la entrada. MQTT confirma una publicación (`PUBACK`) en cuanto el broker la ha capturado, **antes** de decodificarla, así que a un dispositivo MQTT nunca se le avisa: todo rechazo posterior al broker solo es visible para un operador.
+Lo que le ocurre a un mensaje que la plataforma no acepta depende de dónde se rechaza y del transporte. HTTP responde a la petición, así que el dispositivo se entera de un rechazo en la entrada. MQTT confirma una publicación (`PUBACK`) en cuanto el broker la ha capturado, **antes** de decodificarla, así que a un dispositivo MQTT nunca se le avisa: todo rechazo posterior al broker solo es visible para un operador. Con el ajuste por defecto, una publicación QoS 1 confirmada mientras el stream de captura cambia de líder también se puede perder; vea [Calidad de servicio](../guides/connecting-a-device.md#quality-of-service).
 
 ### En la entrada {#rejections-at-the-door}
 
