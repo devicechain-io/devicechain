@@ -107,6 +107,7 @@ func newMintTestEnv(t *testing.T) *mintTestEnv {
 		refreshKV: kv,
 		accessTTL: time.Minute,
 	}
+	m.initLimiters()
 	return &mintTestEnv{m: m, store: store, validator: auth.NewValidator(&key.PublicKey), kv: kv}
 }
 
