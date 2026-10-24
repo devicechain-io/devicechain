@@ -126,7 +126,7 @@ func RunMonitored(ctx context.Context, hs *sim.Handshake, p Profile, cohortSize 
 	// interleave on the cohort subscriptions — a false monotonicity violation from
 	// cross-producer stamp interleaving, or worse a false PASS if it feeds the
 	// cohort while this drive applied no load.
-	counter := &graphqlEventCounter{session: rt.Session, endpoint: eventEndpoint}
+	counter := newRetryingCounter(&graphqlEventCounter{session: rt.Session, endpoint: eventEndpoint})
 	if err := requireCleanTenant(ctx, counter); err != nil {
 		return nil, err
 	}

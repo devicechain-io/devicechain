@@ -29,6 +29,22 @@ type probeStats struct {
 	mu       sync.Mutex
 	failures int
 	firstErr error
+	// falling is when each cycle's falling (resolving) edge began to be emitted, oldest
+	// first. The detection-lag check holds each cycle's alarm to a deadline from this time.
+	falling []time.Time
+}
+
+func (s *probeStats) markFalling(at time.Time) {
+	s.mu.Lock()
+	s.falling = append(s.falling, at)
+	s.mu.Unlock()
+}
+
+// fallingEmitTimes returns a copy of the falling-edge emit times recorded so far.
+func (s *probeStats) fallingEmitTimes() []time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]time.Time(nil), s.falling...)
 }
 
 func (s *probeStats) fail(err error) {
@@ -151,6 +167,9 @@ func driveProbes(ctx context.Context, rt *sim.Runtime, safety, edge []sim.Device
 	steps := 2 * cycles
 	emitStep := func(step int) {
 		above := step%2 == 0
+		if !above {
+			ps.markFalling(time.Now())
+		}
 		var wg sync.WaitGroup
 		emit := func(d sim.DeviceInstance, value float64) {
 			defer wg.Done()

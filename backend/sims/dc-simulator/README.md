@@ -175,6 +175,18 @@ needs a tenant to itself, so the release-candidate run is three handshakes on th
 `hack/loadtest-rc-run.sh` starts the HTTP rung, the MQTT rung and the detection oracle together
 for one duration (60 minutes by default) and exits non-zero if any of them did.
 
+- **Detection lag is gated, not just the end state.** The oracle reads the edge probes' durable
+  alarms throughout the drive and the drain, and holds every cycle to a deadline: the alarm's
+  `clearedTime` (the occurred-time the harness stamped on the event) must reach the emit time of
+  each falling edge within `--lag-bound` (30s). A pipeline that falls behind and later catches up
+  fails the `detection-lag` invariant, which `alarm-liveness` alone cannot see (it reads an end
+  state the early cycles had already produced). The report carries the per-cycle lag percentiles.
+- **The live detection signal survives long runs.** Its socket is replaced with a fresh access token
+  every five minutes, so a run longer than a token's life no longer goes without it.
+- **A stopped rung exits 143 (SIGINT: 130), never 1,** so the run script's summary tells a rung it
+  stopped from one that failed. Every count read-back is retried with a bounded backoff
+  (5 attempts, 5s doubling to 60s) before a run is reported as having no verdict.
+
 **Scope.** Telemetry only: the broker's command and presence planes are covered by
 `dc-loadtest-command` and `dc-loadtest-presence`. Brokers are dialled over `tcp://` or `ssl://`
 (a websocket address is refused, since the harness could not observe what it connected over).
