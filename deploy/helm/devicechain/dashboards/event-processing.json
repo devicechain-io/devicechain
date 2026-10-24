@@ -48,6 +48,14 @@
     "query": "",
     "hide": 2,
     "description": "The instance this board reads. Empty on purpose: the chart's templates/grafana-dashboard.yaml replaces this entry with a hidden constant naming the instance it installs, so every namespace=\"$namespace\" selector reads that instance's series and no other. There is no instance picker: each instance ships its own copy of this board, in its own Grafana folder."
+   },
+   {
+    "name": "instance",
+    "type": "constant",
+    "label": "Instance ID",
+    "query": "",
+    "hide": 2,
+    "description": "The instance ID, used to select this instance's alerts. Empty on purpose: the chart's templates/grafana-dashboard.yaml replaces this entry with a hidden constant holding the ID of the instance it installs."
    }
   ]
  },
@@ -64,6 +72,119 @@
  "weekStart": "",
  "panels": [
   {
+   "id": 100,
+   "type": "table",
+   "title": "Firing alerts",
+   "description": "Alerts firing right now for this instance that concern event processing. An empty table means none are firing. Alerts come from the instance's Prometheus rules, so the table stays empty if those rules are not installed.",
+   "gridPos": {
+    "h": 6,
+    "w": 24,
+    "x": 0,
+    "y": 0
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "instant": true,
+     "format": "table",
+     "expr": "max by (alertname, severity) (ALERTS{alertstate=\"firing\", devicechain_instance=\"$instance\", alertname=~\"Detect.*|React.*|GeoFenceSetPublishFailing|DeviceFactPublishFailing\"})"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "align": "auto",
+      "cellOptions": {
+       "type": "auto"
+      }
+     },
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       }
+      ]
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "severity"
+      },
+      "properties": [
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "value",
+          "options": {
+           "critical": {
+            "color": "red",
+            "index": 0
+           },
+           "warning": {
+            "color": "yellow",
+            "index": 1
+           }
+          }
+         }
+        ]
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-text"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "showHeader": true,
+    "cellHeight": "sm",
+    "sortBy": [
+     {
+      "displayName": "severity",
+      "desc": false
+     }
+    ]
+   },
+   "transformations": [
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {
+       "Time": true,
+       "Value": true
+      },
+      "indexByName": {
+       "alertname": 0,
+       "severity": 1
+      },
+      "renameByName": {
+       "alertname": "Alert",
+       "severity": "severity"
+      }
+     }
+    }
+   ]
+  },
+  {
    "id": 1,
    "type": "row",
    "title": "Pipeline health",
@@ -72,7 +193,7 @@
     "h": 1,
     "w": 24,
     "x": 0,
-    "y": 0
+    "y": 7
    }
   },
   {
@@ -84,7 +205,7 @@
     "h": 4,
     "w": 4,
     "x": 0,
-    "y": 1
+    "y": 8
    },
    "datasource": {
     "type": "prometheus",
@@ -150,7 +271,7 @@
     "h": 4,
     "w": 4,
     "x": 4,
-    "y": 1
+    "y": 8
    },
    "datasource": {
     "type": "prometheus",
@@ -208,7 +329,7 @@
     "h": 4,
     "w": 4,
     "x": 8,
-    "y": 1
+    "y": 8
    },
    "datasource": {
     "type": "prometheus",
@@ -274,7 +395,7 @@
     "h": 4,
     "w": 4,
     "x": 12,
-    "y": 1
+    "y": 8
    },
    "datasource": {
     "type": "prometheus",
@@ -332,7 +453,7 @@
     "h": 4,
     "w": 4,
     "x": 16,
-    "y": 1
+    "y": 8
    },
    "datasource": {
     "type": "prometheus",
@@ -390,7 +511,7 @@
     "h": 4,
     "w": 4,
     "x": 20,
-    "y": 1
+    "y": 8
    },
    "datasource": {
     "type": "prometheus",
@@ -448,7 +569,7 @@
     "h": 8,
     "w": 12,
     "x": 0,
-    "y": 5
+    "y": 12
    },
    "datasource": {
     "type": "prometheus",
@@ -512,7 +633,7 @@
     "h": 8,
     "w": 12,
     "x": 12,
-    "y": 5
+    "y": 12
    },
    "datasource": {
     "type": "prometheus",
@@ -567,7 +688,7 @@
     "h": 1,
     "w": 24,
     "x": 0,
-    "y": 13
+    "y": 20
    }
   },
   {
@@ -579,7 +700,7 @@
     "h": 8,
     "w": 12,
     "x": 0,
-    "y": 14
+    "y": 21
    },
    "datasource": {
     "type": "prometheus",
@@ -652,7 +773,7 @@
     "h": 8,
     "w": 12,
     "x": 12,
-    "y": 14
+    "y": 21
    },
    "datasource": {
     "type": "prometheus",
@@ -710,7 +831,7 @@
     "h": 8,
     "w": 12,
     "x": 0,
-    "y": 22
+    "y": 29
    },
    "datasource": {
     "type": "prometheus",
@@ -765,7 +886,7 @@
     "h": 8,
     "w": 12,
     "x": 12,
-    "y": 22
+    "y": 29
    },
    "datasource": {
     "type": "prometheus",
@@ -829,7 +950,7 @@
     "h": 1,
     "w": 24,
     "x": 0,
-    "y": 30
+    "y": 37
    }
   },
   {
@@ -841,7 +962,7 @@
     "h": 8,
     "w": 12,
     "x": 0,
-    "y": 31
+    "y": 38
    },
    "datasource": {
     "type": "prometheus",
@@ -899,7 +1020,7 @@
     "h": 8,
     "w": 12,
     "x": 12,
-    "y": 31
+    "y": 38
    },
    "datasource": {
     "type": "prometheus",
@@ -1020,7 +1141,7 @@
     "h": 1,
     "w": 24,
     "x": 0,
-    "y": 39
+    "y": 46
    }
   },
   {
@@ -1032,7 +1153,7 @@
     "h": 4,
     "w": 6,
     "x": 0,
-    "y": 40
+    "y": 47
    },
    "datasource": {
     "type": "prometheus",
@@ -1090,7 +1211,7 @@
     "h": 4,
     "w": 6,
     "x": 6,
-    "y": 40
+    "y": 47
    },
    "datasource": {
     "type": "prometheus",
@@ -1152,7 +1273,7 @@
     "h": 4,
     "w": 6,
     "x": 12,
-    "y": 40
+    "y": 47
    },
    "datasource": {
     "type": "prometheus",
@@ -1214,7 +1335,7 @@
     "h": 4,
     "w": 6,
     "x": 18,
-    "y": 40
+    "y": 47
    },
    "datasource": {
     "type": "prometheus",
@@ -1276,7 +1397,7 @@
     "h": 8,
     "w": 12,
     "x": 0,
-    "y": 44
+    "y": 51
    },
    "datasource": {
     "type": "prometheus",
@@ -1331,7 +1452,7 @@
     "h": 8,
     "w": 12,
     "x": 12,
-    "y": 44
+    "y": 51
    },
    "datasource": {
     "type": "prometheus",
@@ -1395,7 +1516,7 @@
     "h": 1,
     "w": 24,
     "x": 0,
-    "y": 52
+    "y": 59
    }
   },
   {
@@ -1407,7 +1528,7 @@
     "h": 8,
     "w": 8,
     "x": 0,
-    "y": 53
+    "y": 60
    },
    "datasource": {
     "type": "prometheus",
@@ -1462,7 +1583,7 @@
     "h": 8,
     "w": 8,
     "x": 8,
-    "y": 53
+    "y": 60
    },
    "datasource": {
     "type": "prometheus",
@@ -1517,7 +1638,7 @@
     "h": 8,
     "w": 8,
     "x": 16,
-    "y": 53
+    "y": 60
    },
    "datasource": {
     "type": "prometheus",
@@ -1572,7 +1693,7 @@
     "h": 1,
     "w": 24,
     "x": 0,
-    "y": 61
+    "y": 68
    }
   },
   {
@@ -1584,7 +1705,7 @@
     "h": 8,
     "w": 12,
     "x": 0,
-    "y": 62
+    "y": 69
    },
    "datasource": {
     "type": "prometheus",
@@ -1651,7 +1772,7 @@
     "h": 8,
     "w": 12,
     "x": 12,
-    "y": 62
+    "y": 69
    },
    "datasource": {
     "type": "prometheus",
@@ -1718,7 +1839,7 @@
     "h": 8,
     "w": 24,
     "x": 0,
-    "y": 70
+    "y": 77
    },
    "datasource": {
     "type": "prometheus",
@@ -1797,7 +1918,7 @@
     "h": 1,
     "w": 24,
     "x": 0,
-    "y": 79
+    "y": 86
    }
   },
   {
@@ -1809,7 +1930,7 @@
     "h": 8,
     "w": 12,
     "x": 0,
-    "y": 80
+    "y": 87
    },
    "datasource": {
     "type": "prometheus",
@@ -1885,7 +2006,7 @@
     "h": 8,
     "w": 12,
     "x": 12,
-    "y": 80
+    "y": 87
    },
    "datasource": {
     "type": "prometheus",
@@ -1945,7 +2066,7 @@
     "h": 8,
     "w": 12,
     "x": 0,
-    "y": 88
+    "y": 95
    },
    "datasource": {
     "type": "prometheus",
@@ -2003,7 +2124,7 @@
     "h": 8,
     "w": 12,
     "x": 12,
-    "y": 88
+    "y": 95
    },
    "datasource": {
     "type": "prometheus",
@@ -2061,7 +2182,7 @@
     "h": 1,
     "w": 24,
     "x": 0,
-    "y": 96
+    "y": 103
    }
   },
   {
@@ -2073,7 +2194,7 @@
     "h": 8,
     "w": 12,
     "x": 0,
-    "y": 97
+    "y": 104
    },
    "datasource": {
     "type": "prometheus",
@@ -2131,7 +2252,7 @@
     "h": 8,
     "w": 12,
     "x": 12,
-    "y": 97
+    "y": 104
    },
    "datasource": {
     "type": "prometheus",
@@ -2185,7 +2306,7 @@
     "h": 8,
     "w": 12,
     "x": 12,
-    "y": 113
+    "y": 120
    },
    "datasource": {
     "type": "prometheus",
@@ -2239,7 +2360,7 @@
     "h": 8,
     "w": 12,
     "x": 0,
-    "y": 105
+    "y": 112
    },
    "datasource": {
     "type": "prometheus",
@@ -2311,7 +2432,7 @@
     "h": 8,
     "w": 12,
     "x": 12,
-    "y": 105
+    "y": 112
    },
    "datasource": {
     "type": "prometheus",
@@ -2365,7 +2486,7 @@
     "h": 8,
     "w": 12,
     "x": 0,
-    "y": 113
+    "y": 120
    },
    "datasource": {
     "type": "prometheus",
@@ -2428,7 +2549,7 @@
     "h": 8,
     "w": 12,
     "x": 0,
-    "y": 121
+    "y": 128
    },
    "datasource": {
     "type": "prometheus",
@@ -2491,7 +2612,7 @@
     "h": 8,
     "w": 12,
     "x": 12,
-    "y": 121
+    "y": 128
    },
    "datasource": {
     "type": "prometheus",

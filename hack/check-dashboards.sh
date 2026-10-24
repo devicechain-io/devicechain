@@ -107,14 +107,49 @@ python3 -c 'import yaml' 2>/dev/null || {
 #
 # `{instance}` is substituted with the instance id each render uses.
 # ---------------------------------------------------------------------------
-EXPECTED_CONFIGMAPS=(
-  "{instance}-command-delivery-dashboard"
-  "{instance}-event-processing-dashboard"
+BOARDS=(
+  command-delivery
+  event-processing
+  overview
 )
-EXPECTED_DATA_KEYS=(
-  "{instance}-command-delivery.json"
-  "{instance}-event-processing.json"
-)
+# ...and the two published names, spelled out from that list. This is the only
+# place they are derived: the list above is the literal, the names below are what
+# the template must render for each entry.
+EXPECTED_CONFIGMAPS=()
+EXPECTED_DATA_KEYS=()
+for board in "${BOARDS[@]}"; do
+  EXPECTED_CONFIGMAPS+=("{instance}-$board-dashboard")
+  EXPECTED_DATA_KEYS+=("{instance}-$board.json")
+done
+
+# check_board_list <dashboards-dir> <board>...
+#
+# The board list and the files on disk must name the same set, in BOTH
+# directions. A file the list does not name would still render (the template
+# globs dashboards/*.json) and only the render-time NAME-UNPINNED check would
+# object; a name with no file would be a board promised and never shipped. Doing
+# it on the files makes the failure say which side is missing and what to edit.
+check_board_list() {
+  local dir="$1" f stem rc=0
+  shift
+  [ "$#" -gt 0 ] || { echo "FAIL: the board list is empty -- this check would pass over nothing" >&2; return 1; }
+  [ -d "$dir" ] || { echo "FAIL: $dir is not a directory" >&2; return 1; }
+  for f in "$dir"/*.json; do
+    [ -e "$f" ] || continue
+    stem="$(basename "$f" .json)"
+    case " $* " in
+      *" $stem "*) ;;
+      *) echo "BOARD-UNLISTED: dashboards/$stem.json exists but BOARDS in hack/check-dashboards.sh does not name \"$stem\". Add it to that list (one entry) so its names and keys are pinned." >&2; rc=1 ;;
+    esac
+  done
+  for stem in "$@"; do
+    [ -f "$dir/$stem.json" ] || {
+      echo "BOARD-MISSING: BOARDS names \"$stem\" but dashboards/$stem.json does not exist. Add the file or drop the entry." >&2
+      rc=1
+    }
+  done
+  return "$rc"
+}
 
 # ---------------------------------------------------------------------------
 # check_content <repo-root>
@@ -174,6 +209,58 @@ def published_text_problems(node, rel, trail="$"):
     return found
 
 # --- gap 1: every dashboard must be JSON ------------------------------------
+# 🔑 THE BOARD CONVENTION (deploy/helm/devicechain/dashboards/README.md). Every board
+# is one of N lanes' output, so the shape every lane shares is checked here rather than
+# remembered: file stem -> uid, title prefix, the tags and variables the template
+# rewrites, and a "Firing alerts" table on top that selects this instance's alerts.
+ALERT_SELECTORS = ('ALERTS{', 'alertstate="firing"', 'devicechain_instance="$instance"')
+INSTANCE_SELECTOR = re.compile(r'devicechain_instance\s*=~?\s*"([^"]*)"')
+
+def convention_problems(board, stem, rel):
+    found = []
+    def bad(msg):
+        found.append("%s: %s" % (rel, msg))
+    if board.get("uid") != "dc-%s-ops" % stem:
+        bad("uid is %r, want 'dc-%s-ops'. The chart replaces it per instance, but the file\n"
+            "    keeps the convention so a reader can tell which board a file is." % (board.get("uid"), stem))
+    if not str(board.get("title", "")).startswith("DeviceChain — "):
+        bad("title %r must start with 'DeviceChain — ' (the chart appends [<instance>])." % board.get("title"))
+    if "devicechain" not in (board.get("tags") or []):
+        bad("tags must include 'devicechain'.")
+    names = [v.get("name") for v in (board.get("templating") or {}).get("list") or [] if isinstance(v, dict)]
+    for need in ("datasource", "namespace", "instance"):
+        if names.count(need) != 1:
+            bad("needs exactly one %r template variable (found %d). The chart replaces namespace\n"
+                "    and instance with per-instance constants and refuses a board without them."
+                % (need, names.count(need)))
+    panels = board.get("panels") or []
+    first = panels[0] if panels else {}
+    exprs = " ".join(t.get("expr", "") for t in first.get("targets") or [])
+    if (first.get("type") != "table" or first.get("title") != "Firing alerts"
+            or any(sel not in exprs for sel in ALERT_SELECTORS)):
+        bad("the first panel must be the 'Firing alerts' table over\n"
+            '    ALERTS{alertstate="firing", devicechain_instance="$instance", ...} (copy it from README.md).')
+    elif (first.get("gridPos") or {}).get("y") != 0 or (first.get("gridPos") or {}).get("x") != 0:
+        bad("the 'Firing alerts' table must sit at the top left (gridPos x=0, y=0).")
+    def exprs_of(node):
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key == "expr" and isinstance(value, str):
+                    yield value
+                else:
+                    yield from exprs_of(value)
+        elif isinstance(node, list):
+            for value in node:
+                yield from exprs_of(value)
+    for expr in exprs_of(board):
+        for m in INSTANCE_SELECTOR.finditer(expr):
+            if m.group(1) != "$instance":
+                bad("selects devicechain_instance=%r. Use \"$instance\": a literal ID is one\n"
+                    "    instance's board shipped to all of them." % m.group(1))
+    if re.search(r"/d/dc-[0-9a-f]{20}", json.dumps(board)):
+        bad("links to a literal board uid. A uid is a hash of the instance; write /d/@board:<file stem>@.")
+    return found
+
 dashboards = sorted(
     os.path.join(dashboard_dir, f)
     for f in os.listdir(dashboard_dir)
@@ -199,6 +286,8 @@ for path in dashboards:
         )
         continue
     problems.extend(published_text_problems(board, os.path.relpath(path, root)))
+    problems.extend(convention_problems(
+        board, os.path.basename(path)[:-len(".json")], os.path.relpath(path, root)))
 
 # --- gap 2: every devicechain_* series must be registered somewhere in Go ----
 
@@ -522,7 +611,7 @@ PY
   EXPECTED_NAMES="$(printf '%s\n' "${EXPECTED_CONFIGMAPS[@]}")" \
     EXPECTED_KEYS="$(printf '%s\n' "${EXPECTED_DATA_KEYS[@]}")" \
     python3 - "$dir" "$short_id" "$long_id" <<'PY' || rc=$?
-import json, os, sys
+import json, os, re, sys
 import yaml  # presence already enforced at the top of the script
 
 render_dir, ids = sys.argv[1], sys.argv[2:]
@@ -538,11 +627,13 @@ problems = []
 uids = {}      # uid -> [(instance, key)]
 all_keys = {}  # data key -> [instance]
 scopes = {}    # namespace a board scopes itself to -> [instance]
+tags = {}      # the per-instance tag -> [instance]
 boards = 0
 
 for inst in ids:
     folder = "devicechain-%s" % inst
     found_names, found_keys = set(), set()
+    inst_boards = []  # (where, board, raw body) of this instance, for the cross-board checks
     with open(os.path.join(render_dir, inst + ".yaml"), encoding="utf-8") as fh:
         docs = [d for d in yaml.safe_load_all(fh) if d]
 
@@ -625,6 +716,50 @@ for inst in ids:
             elif len(ns) == 1:
                 scopes.setdefault(ns[0].get("query"), set()).add(inst)
 
+            # The `instance` constant is what the firing-alerts table selects ALERTS by:
+            # it must be this instance's ID, which is what the alert rules stamp as
+            # devicechain_instance. Anything else lists another instance's alerts or none.
+            iv = [v for v in (board.get("templating") or {}).get("list") or []
+                  if isinstance(v, dict) and v.get("name") == "instance"]
+            if not (len(iv) == 1 and iv[0].get("type") == "constant" and iv[0].get("hide") == 2
+                    and iv[0].get("query") == inst and (iv[0].get("current") or {}).get("value") == inst):
+                problems.append(
+                    "INSTANCE: %s does not carry a hidden `instance` constant equal to %r; found %s.\n"
+                    "    The firing-alerts table selects ALERTS{devicechain_instance=\"$instance\"}, so a\n"
+                    "    wrong value lists another instance's alerts, or none." % (where, inst, json.dumps(iv)))
+
+            # The per-instance tag, and the one link that lists boards by it. A link by
+            # tag can only offer this instance's boards if no other instance renders it.
+            own = [t for t in board.get("tags") or [] if isinstance(t, str) and t.startswith("dc-")]
+            links = [l for l in board.get("links") or [] if isinstance(l, dict) and l.get("type") == "dashboards"]
+            if len(own) != 1 or len(own[0]) > 50:
+                problems.append(
+                    "TAG: %s carries tags %s; want exactly one `dc-<hash>` per-instance tag of at most\n"
+                    "    50 characters (Grafana's tag limit)." % (where, json.dumps(board.get("tags"))))
+            else:
+                tags.setdefault(own[0], set()).add(inst)
+                if not any(l.get("tags") == [own[0]] for l in links):
+                    problems.append(
+                        "LINK: %s has no `dashboards` link listing exactly its own instance tag %s.\n"
+                        "    Without it the boards of one instance do not link to each other; with a shared\n"
+                        "    tag they would link across instances." % (where, own[0]))
+            inst_boards.append((where, board, body))
+
+    # Board-to-board references are written @board:<stem>@ and resolved per instance.
+    # Every /d/<uid> in a rendered board must be a uid of THIS instance's boards, and no
+    # unresolved token may survive. A literal or foreign uid is a link that opens
+    # another instance's board.
+    own_uids = {b.get("uid") for _w, b, _t in inst_boards}
+    for where, _b, text in inst_boards:
+        if "@board:" in text:
+            problems.append("LINK-UNRESOLVED: %s still contains an @board:<name>@ reference." % where)
+        for ref in re.findall(r"/d/([A-Za-z0-9_-]+)", text):
+            if ref not in own_uids:
+                problems.append(
+                    "LINK-FOREIGN: %s links to /d/%s, which is not a board of instance %s.\n"
+                    "    Write /d/@board:<file stem>@ so the chart resolves it for this instance."
+                    % (where, ref, inst))
+
     want_names = {p.replace("{instance}", inst) for p in names}
     want_keys = {p.replace("{instance}", inst) for p in keys}
     for n in sorted(want_names - found_names):
@@ -636,6 +771,12 @@ for inst in ids:
     for k in sorted(found_keys - want_keys):
         problems.append("KEY-UNPINNED: %s (instance %s)" % (k, inst))
 
+for tag, insts in sorted(tags.items()):
+    if len(insts) > 1:
+        problems.append(
+            "DUPLICATE-TAG: tag %s is rendered by instances %s.\n"
+            "    The boards' links list boards by this tag, so each instance's boards would\n"
+            "    link to the other's." % (tag, ", ".join(sorted(insts))))
 for uid, where in sorted(uids.items(), key=lambda kv: str(kv[0])):
     if len(where) > 1:
         problems.append(
@@ -681,7 +822,7 @@ so renaming one orphans the dashboard on every existing install with nothing to
 say so.
 
 If one genuinely has to change, or a new dashboard is being added, update
-EXPECTED_CONFIGMAPS / EXPECTED_DATA_KEYS in hack/check-dashboards.sh in the same
+BOARDS in hack/check-dashboards.sh in the same
 commit.""", file=sys.stderr)
 sys.exit(1)
 PY
@@ -769,9 +910,21 @@ EOF
   # and leave the next one planting its defect ALONE.
   cat >"$tmp/probe.json" <<'EOF'
 {
-  "title": "Self-test probe",
-  "uid": "dc-self-test-probe",
+  "title": "DeviceChain \u2014 Self-test probe",
+  "uid": "dc-probe-ops",
+  "tags": ["devicechain", "probe"],
+  "templating": {"list": [{"name": "datasource", "type": "datasource"}, {"name": "namespace", "type": "constant"}, {"name": "instance", "type": "constant"}]},
   "panels": [
+    {
+      "type": "table",
+      "title": "Firing alerts",
+      "gridPos": {"h": 6, "w": 24, "x": 0, "y": 0},
+      "targets": [
+        {
+          "expr": "max by (alertname) (ALERTS{alertstate=\"firing\", devicechain_instance=\"$instance\", alertname=~\".+\"})"
+        }
+      ]
+    },
     {
       "type": "timeseries",
       "targets": [
@@ -895,19 +1048,52 @@ import json, sys
 board = json.load(open(sys.argv[1]))
 board["description"] = "Plain operator language."
 board["panels"].append({"type": "row", "title": "A row", "panels": []})
-board["panels"][0]["title"] = "A panel"
-board["panels"][0]["description"] = "A description."
-board["panels"][0]["targets"][0]["legendFormat"] = "{{reason}}"
+board["panels"][1]["title"] = "A panel"
+board["panels"][1]["description"] = "A description."
+board["panels"][1]["targets"][0]["legendFormat"] = "{{reason}}"
 json.dump(board, open(sys.argv[2], "w"), indent=2)
 FIXTURE
   check_content "$work" >/dev/null || fail "a board with plain text in every published field was reported as broken"
   restore
-  textcase 'board["title"] = "Probe (ADR-023)"' 'an ADR reference in a board title'
+  textcase 'board["title"] = "DeviceChain — Probe (ADR-023)"' 'an ADR reference in a board title'
   textcase 'board["description"] = "see ADR-051 for the thread"' 'an ADR reference in a board description'
   textcase 'board["panels"].append({"type": "row", "title": "State budget (ADR-023)", "panels": []})' 'an ADR reference in a row title'
-  textcase 'board["panels"][0]["targets"][0]["legendFormat"] = "{{reason}} ADR-057"' 'an ADR reference in a legend'
-  textcase 'board["panels"][0]["description"] = "superseded (ADR-057 D6)"' 'an ADR reference in a panel description'
-  textcase 'board["panels"][0]["description"] = "\U0001F534 look here first"' 'the red-circle marker in a panel description'
+  textcase 'board["panels"][1]["targets"][0]["legendFormat"] = "{{reason}} ADR-057"' 'an ADR reference in a legend'
+  textcase 'board["panels"][1]["description"] = "superseded (ADR-057 D6)"' 'an ADR reference in a panel description'
+  textcase 'board["panels"][1]["description"] = "\U0001F534 look here first"' 'the red-circle marker in a panel description'
+
+  # Case 2b — THE BOARD CONVENTION, each rule broken alone. These start from the
+  # clean fixture (which satisfies the convention, so the clean-tree case above
+  # already proves the rules do not fire on a conforming board).
+  textcase 'board["uid"] = "dc-other-ops"' 'a board uid that does not follow its file name'
+  textcase 'board["title"] = "Probe"' 'a board title without the DeviceChain prefix'
+  textcase 'board["tags"] = []' 'a board without the devicechain tag'
+  textcase 'board["templating"]["list"] = [v for v in board["templating"]["list"] if v["name"] != "instance"]' 'a board with no instance variable'
+  textcase 'board["templating"]["list"] = [v for v in board["templating"]["list"] if v["name"] != "namespace"]' 'a board with no namespace variable'
+  textcase 'del board["panels"][0]' 'a board with no firing-alerts table'
+  textcase 'board["panels"][0]["gridPos"]["y"] = 5' 'a firing-alerts table that is not at the top'
+  textcase 'board["panels"][0]["targets"][0]["expr"] = board["panels"][0]["targets"][0]["expr"].replace("alertstate=\"firing\", ", "")' 'a firing-alerts table that also lists pending alerts'
+  textcase 'board["panels"][1]["targets"][0]["expr"] = "sum(ALERTS{devicechain_instance=\"prod\"})"' 'an alert selector with a literal instance ID'
+  textcase 'board["panels"][1]["links"] = [{"url": "/d/dc-0123456789abcdef0123"}]' 'a link to a literal board uid'
+
+  # Case 2c — THE BOARD LIST, both directions, and an empty list. The failure
+  # message names which side is missing, so each case checks the message too.
+  bl="$tmp/boardlist"
+  mkdir -p "$bl"
+  : >"$bl/alpha.json"
+  : >"$bl/beta.json"
+  check_board_list "$bl" alpha beta >/dev/null 2>&1 || fail "a board list matching the files was refused"
+  blcase() { # <expected code> <description> <board>...
+    local code="$1" desc="$2" out rc=0
+    shift 2
+    out="$(check_board_list "$bl" "$@" 2>&1)" || rc=$?
+    [ "$rc" -ne 0 ] || fail "did not flag $desc"
+    grep -q "^$code" <<<"$out" || { echo "$out" >&2; fail "flagged $desc, but not as $code"; }
+    echo "  ok: $desc is caught ($code)"
+  }
+  blcase BOARD-UNLISTED 'a board file the list does not name' alpha
+  blcase BOARD-MISSING 'a listed board with no file' alpha beta gamma
+  blcase FAIL 'an empty board list'
 
   # Case 3 — A MISSPELLED SERIES IN AN ALERT RULE, alone. Same defect, the far
   # more dangerous half: this one is a rule that can never fire, and promtool
@@ -1042,10 +1228,44 @@ PY
   # adding a dashboard without recording its name here fails too — which is what
   # makes the pinned list a decision rather than a formality. The board carries
   # a `namespace` variable because the template refuses to render one without.
-  printf '%s\n' '{"title": "scratch", "uid": "scratch", "panels": [], "templating": {"list": [{"name": "namespace", "type": "constant", "query": ""}]}}' \
+  printf '%s\n' '{"title": "scratch", "uid": "scratch", "panels": [], "templating": {"list": [{"name": "namespace", "type": "constant", "query": ""}, {"name": "instance", "type": "constant", "query": ""}]}}' \
     >"$chart/dashboards/scratch-board.json"
   expect_configmaps NAME-UNPINNED "a dashboard whose ConfigMap name is not pinned"
   rm -f "$chart/dashboards/scratch-board.json"
+
+  # Cases 9b-9e — BOARD-TO-BOARD REFERENCES. A board names another as
+  # @board:<stem>@ and the chart resolves it per instance. The scratch board is
+  # unpinned (NAME-UNPINNED is expected and beside the point), so each case asserts
+  # the presence or absence of the LINK-* code it is about.
+  scratch_board() { # <link url>
+    printf '%s\n' "{\"title\": \"scratch\", \"uid\": \"scratch\", \"panels\": [{\"id\": 1, \"type\": \"text\", \"links\": [{\"url\": \"$1\"}]}], \"templating\": {\"list\": [{\"name\": \"namespace\", \"type\": \"constant\", \"query\": \"\"}, {\"name\": \"instance\", \"type\": \"constant\", \"query\": \"\"}]}}" \
+      >"$chart/dashboards/scratch-board.json"
+  }
+  scratch_board "/d/dc-00000000000000000000/x"
+  expect_configmaps LINK-FOREIGN "a board linking to a literal uid"
+  scratch_board "/d/@board:event-processing@/x"
+  out="$(check_configmaps "$chart" 2>&1)" || true
+  grep -q -- "- LINK" <<<"$out" && { echo "$out" >&2; fail "flagged a correctly written board reference"; }
+  echo "  ok: a correctly written @board:<stem>@ reference passes"
+  scratch_board "/d/@board:no-such-board@/x"
+  missing_rc=0
+  missing_err="$(helm template dc "$chart" \
+    --set "instance.config.infrastructure.secrets.rootKey=$(openssl rand -base64 32)" 2>&1 >/dev/null)" || missing_rc=$?
+  [ "$missing_rc" -ne 0 ] || fail "rendered a reference to a board that does not exist"
+  grep -qF 'references a board that does not exist' <<<"$missing_err" || {
+    echo "$missing_err" >&2
+    fail "the render of an unresolved board reference failed, but not with the template's own refusal"
+  }
+  rm -f "$chart/dashboards/scratch-board.json"
+  echo "  ok: a reference to a board that does not exist is refused by the template"
+
+  # Cases 9f-9h — THE PER-INSTANCE VARIABLE, TAG AND LINK, each broken alone.
+  plant "$tpl" '"label" "Instance ID" "query" $id' '"label" "Instance ID" "query" $ns'
+  expect_configmaps INSTANCE "an instance variable that holds the namespace instead of the instance ID"
+  plant "$tpl" '(sha256sum $id | trunc 20)' '(sha256sum "shared" | trunc 20)'
+  expect_configmaps DUPLICATE-TAG "one per-instance tag shared across instances"
+  plant "$tpl" '"tags" (list $tag) "asDropdown"' '"tags" (list "dc-shared") "asDropdown"'
+  expect_configmaps LINK "a boards link that lists a tag other than the instance's own"
 
   # Case 10 — ONE UID FOR EVERY INSTANCE, alone. Today's-shape regression on the
   # uid only: every file is still distinct, so nothing but the cross-instance
@@ -1145,9 +1365,35 @@ FIXTURE
   rm -f "$chart/dashboards/unscoped-board.json"
   echo "  ok: a dashboard with no namespace variable is refused by the template"
 
-  echo "self-test passed: 38 defects, each planted alone, each caught; a clean tree and chart pass"
+  # The same for the `instance` variable: without it the firing-alerts table selects
+  # nothing, so the render refuses rather than shipping a table that is always empty.
+  python3 - "$chart/dashboards/command-delivery.json" "$chart/dashboards/unscoped-board.json" <<'FIXTURE' ||
+import json, sys
+board = json.load(open(sys.argv[1]))
+before = len(board["templating"]["list"])
+board["templating"]["list"] = [v for v in board["templating"]["list"] if v.get("name") != "instance"]
+if len(board["templating"]["list"]) != before - 1:
+    sys.exit(1)
+json.dump(board, open(sys.argv[2], "w"), indent=2)
+FIXTURE
+    fail "the instance-less fixture could not be built"
+  noinst_rc=0
+  noinst_err="$(helm template dc "$chart" \
+    --set "instance.config.infrastructure.secrets.rootKey=$(openssl rand -base64 32)" 2>&1 >/dev/null)" || noinst_rc=$?
+  [ "$noinst_rc" -ne 0 ] || fail "rendered a dashboard that has no instance variable"
+  grep -qF 'dashboard dashboards/unscoped-board.json has no "instance" template variable' <<<"$noinst_err" || {
+    echo "$noinst_err" >&2
+    fail "the render of an instance-less dashboard failed, but not with the template's own refusal"
+  }
+  rm -f "$chart/dashboards/unscoped-board.json"
+  echo "  ok: a dashboard with no instance variable is refused by the template"
+
+  echo "self-test passed: 58 defects, each planted alone, each caught; a clean tree and chart pass"
   exit 0
 fi
+
+say "board list: every dashboards/*.json is named in BOARDS, and every name has its file"
+check_board_list "$ROOT/deploy/helm/devicechain/dashboards" "${BOARDS[@]}"
 
 say "parsing the chart's Grafana dashboards and resolving their series"
 check_content "$ROOT"
