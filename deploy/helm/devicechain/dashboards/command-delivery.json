@@ -48,6 +48,14 @@
         "query": "",
         "hide": 2,
         "description": "The instance this board reads. Empty on purpose: the chart's templates/grafana-dashboard.yaml replaces this entry with a hidden constant naming the instance it installs, so every namespace=\"$namespace\" selector reads that instance's series and no other. There is no instance picker: each instance ships its own copy of this board, in its own Grafana folder."
+      },
+      {
+        "name": "instance",
+        "type": "constant",
+        "label": "Instance ID",
+        "query": "",
+        "hide": 2,
+        "description": "The instance ID, used to select this instance's alerts. Empty on purpose: the chart's templates/grafana-dashboard.yaml replaces this entry with a hidden constant holding the ID of the instance it installs."
       }
     ]
   },
@@ -64,6 +72,119 @@
   "weekStart": "",
   "panels": [
     {
+      "id": 100,
+      "type": "table",
+      "title": "Firing alerts",
+      "description": "Alerts firing right now for this instance that concern command delivery. An empty table means none are firing. Alerts come from the instance's Prometheus rules, so the table stays empty if those rules are not installed.",
+      "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "instant": true,
+          "format": "table",
+          "expr": "max by (alertname, severity) (ALERTS{alertstate=\"firing\", devicechain_instance=\"$instance\", alertname=~\"Command.*\"})"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            }
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "severity"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "critical": {
+                        "color": "red",
+                        "index": 0
+                      },
+                      "warning": {
+                        "color": "yellow",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "sortBy": [
+          {
+            "displayName": "severity",
+            "desc": false
+          }
+        ]
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Value": true
+            },
+            "indexByName": {
+              "alertname": 0,
+              "severity": 1
+            },
+            "renameByName": {
+              "alertname": "Alert",
+              "severity": "severity"
+            }
+          }
+        }
+      ]
+    },
+    {
       "id": 1,
       "type": "row",
       "title": "Fleet writes",
@@ -72,7 +193,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 0
+        "y": 7
       }
     },
     {
@@ -84,7 +205,7 @@
         "h": 4,
         "w": 4,
         "x": 0,
-        "y": 1
+        "y": 8
       },
       "datasource": {
         "type": "prometheus",
@@ -142,7 +263,7 @@
         "h": 4,
         "w": 4,
         "x": 4,
-        "y": 1
+        "y": 8
       },
       "datasource": {
         "type": "prometheus",
@@ -200,7 +321,7 @@
         "h": 4,
         "w": 4,
         "x": 8,
-        "y": 1
+        "y": 8
       },
       "datasource": {
         "type": "prometheus",
@@ -262,7 +383,7 @@
         "h": 4,
         "w": 4,
         "x": 12,
-        "y": 1
+        "y": 8
       },
       "datasource": {
         "type": "prometheus",
@@ -320,7 +441,7 @@
         "h": 4,
         "w": 4,
         "x": 16,
-        "y": 1
+        "y": 8
       },
       "datasource": {
         "type": "prometheus",
@@ -382,7 +503,7 @@
         "h": 4,
         "w": 4,
         "x": 20,
-        "y": 1
+        "y": 8
       },
       "datasource": {
         "type": "prometheus",
@@ -444,7 +565,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 5
+        "y": 12
       },
       "datasource": {
         "type": "prometheus",
@@ -502,7 +623,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 5
+        "y": 12
       },
       "datasource": {
         "type": "prometheus",
@@ -560,7 +681,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 13
+        "y": 20
       },
       "datasource": {
         "type": "prometheus",
@@ -618,7 +739,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 13
+        "y": 20
       },
       "datasource": {
         "type": "prometheus",
@@ -676,7 +797,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 21
+        "y": 28
       },
       "datasource": {
         "type": "prometheus",
@@ -734,7 +855,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 29
+        "y": 36
       }
     },
     {
@@ -746,7 +867,7 @@
         "h": 4,
         "w": 8,
         "x": 0,
-        "y": 30
+        "y": 37
       },
       "datasource": {
         "type": "prometheus",
@@ -810,7 +931,7 @@
         "h": 4,
         "w": 8,
         "x": 8,
-        "y": 30
+        "y": 37
       },
       "datasource": {
         "type": "prometheus",
@@ -872,7 +993,7 @@
         "h": 4,
         "w": 8,
         "x": 16,
-        "y": 30
+        "y": 37
       },
       "datasource": {
         "type": "prometheus",
@@ -934,7 +1055,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 34
+        "y": 41
       },
       "datasource": {
         "type": "prometheus",
@@ -989,7 +1110,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 34
+        "y": 41
       },
       "datasource": {
         "type": "prometheus",
@@ -1053,7 +1174,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 42
+        "y": 49
       }
     },
     {
@@ -1065,7 +1186,7 @@
         "h": 4,
         "w": 8,
         "x": 0,
-        "y": 43
+        "y": 50
       },
       "datasource": {
         "type": "prometheus",
@@ -1123,7 +1244,7 @@
         "h": 4,
         "w": 8,
         "x": 8,
-        "y": 43
+        "y": 50
       },
       "datasource": {
         "type": "prometheus",
@@ -1181,7 +1302,7 @@
         "h": 4,
         "w": 8,
         "x": 16,
-        "y": 43
+        "y": 50
       },
       "datasource": {
         "type": "prometheus",
@@ -1245,7 +1366,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 47
+        "y": 54
       },
       "datasource": {
         "type": "prometheus",
@@ -1309,7 +1430,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 47
+        "y": 54
       },
       "datasource": {
         "type": "prometheus",

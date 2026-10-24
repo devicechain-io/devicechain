@@ -17,7 +17,7 @@ instance's board returned 404 until the sidecar's next watch restart (a fixed ~6
 `created` reset). Grafana never logged a duplicate uid. The instance picker the boards
 used to carry could not help — it scoped the queries of a board that was not there.
 
-So each ConfigMap now differs per instance in five places, and nowhere else:
+So each ConfigMap now differs per instance in these places, and nowhere else:
 
   - the DATA KEY, `{instance}-<file>.json`. This is the file name the sidecar writes, so
     it is what keeps two instances' files apart. The sidecar's UNIQUE_FILENAMES option
@@ -38,7 +38,25 @@ So each ConfigMap now differs per instance in five places, and nowhere else:
     it — across upgrades and reinstalls.
   - the `title`, the file's own title with `[{instance}]` appended, so a search across
     folders still says which instance a board reads.
-  - the `namespace` template variable, below.
+  - the `namespace` and `instance` template variables, below.
+  - a per-instance TAG, `dc-` + the first 20 hex characters of sha256("{instance}"), added
+    to the board's tags (23 characters; Grafana's tag limit is 50), and one `dashboards`
+    LINK that lists every board carrying that tag. A link by tag can only ever offer this
+    instance's boards, because no other instance renders the tag.
+  - board-to-board references. A board file may write `@board:<file stem>@` anywhere in its
+    text (a data link's `/d/@board:ingest@`, a link URL); it is replaced with that board's
+    uid FOR THIS INSTANCE, which no file can spell for itself because the uid is a hash of
+    the instance. A reference to a board that does not exist fails the render.
+
+The `instance` template variable is REPLACED the same way, with a hidden constant holding
+the instance ID, which is what the alert rules stamp on every alert as
+`devicechain_instance` -- so a board's "Firing alerts" table
+(`ALERTS{devicechain_instance="$instance"}`) lists this instance's alerts and no other's.
+The ID and the namespace are different strings (the namespace is `dci-` + the ID), which
+is why there are two variables and not one.
+
+The conventions a board file follows (uid and title scheme, the alerts table to copy, units,
+rate versus range) are in dashboards/README.md.
 
 The `namespace` template variable is REPLACED with a hidden constant naming the
 instance's NAMESPACE — which is not the instance id but the id behind the `dci-`
@@ -75,26 +93,54 @@ exist.
      necessary rather than merely tidy: a board scoped to the bare id renders
      perfectly, carries the right uid, title and folder, and shows nothing at all. */}}
 {{- $ns := include "devicechain.instanceNamespace" . }}
-{{- range $path, $_ := .Files.Glob "dashboards/*.json" }}
+{{/* Every board's uid for THIS instance, computed up front so a board can name another
+     (@board:<stem>@) without knowing a hash. */}}
+{{- $files := .Files.Glob "dashboards/*.json" }}
+{{- $uids := dict }}
+{{- range $path, $_ := $files }}
 {{- $stem := base $path | trimSuffix ".json" }}
-{{- $board := $.Files.Get $path | mustFromJson }}
-{{- $_ := set $board "uid" (printf "dc-%s" (sha256sum (printf "%s/%s" $id $stem) | trunc 20)) }}
+{{- $_ := set $uids $stem (printf "dc-%s" (sha256sum (printf "%s/%s" $id $stem) | trunc 20)) }}
+{{- end }}
+{{/* The tag only this instance's boards carry. */}}
+{{- $tag := printf "dc-%s" (sha256sum $id | trunc 20) }}
+{{- range $path, $_ := $files }}
+{{- $stem := base $path | trimSuffix ".json" }}
+{{- $text := $.Files.Get $path }}
+{{- range $other, $otherUid := $uids }}
+{{- $text = replace (printf "@board:%s@" $other) $otherUid $text }}
+{{- end }}
+{{- if contains "@board:" $text }}
+{{- fail (printf "dashboard %s references a board that does not exist (an unresolved @board:<name>@). Known boards: %s." $path (keys $uids | sortAlpha | join ", ")) }}
+{{- end }}
+{{- $board := $text | mustFromJson }}
+{{- $_ := set $board "uid" (get $uids $stem) }}
 {{- $_ := set $board "title" (printf "%s [%s]" (get $board "title") $id) }}
 {{- $scope := dict "text" $ns "value" $ns "selected" true }}
 {{- $namespaceVar := dict "type" "constant" "name" "namespace" "label" "Instance" "query" $ns "hide" 2 "current" $scope "options" (list $scope) }}
+{{- $instanceVar := dict "type" "constant" "name" "instance" "label" "Instance ID" "query" $id "hide" 2 "current" (dict "text" $id "value" $id "selected" true) "options" (list (dict "text" $id "value" $id "selected" true)) }}
+{{- $_ := set $board "tags" (append (get $board "tags" | default list) $tag) }}
+{{- $link := dict "type" "dashboards" "title" "DeviceChain boards" "tags" (list $tag) "asDropdown" true "includeVars" true "keepTime" true "icon" "external link" "tooltip" "The boards of this instance" "targetBlank" false "url" "" }}
+{{- $_ := set $board "links" (append (get $board "links" | default list) $link) }}
 {{- $templating := get $board "templating" | default dict }}
 {{- $vars := list }}
 {{- $scoped := false }}
+{{- $named := false }}
 {{- range (get $templating "list" | default list) }}
 {{- if eq (get . "name") "namespace" }}
 {{- $vars = append $vars $namespaceVar }}
 {{- $scoped = true }}
+{{- else if eq (get . "name") "instance" }}
+{{- $vars = append $vars $instanceVar }}
+{{- $named = true }}
 {{- else }}
 {{- $vars = append $vars . }}
 {{- end }}
 {{- end }}
 {{- if not $scoped }}
 {{- fail (printf "dashboard %s has no \"namespace\" template variable. Each board is scoped to its instance by replacing that variable with a constant; without one, its namespace=\"$namespace\" selectors would match nothing." $path) }}
+{{- end }}
+{{- if not $named }}
+{{- fail (printf "dashboard %s has no \"instance\" template variable. Each board's firing-alerts table selects ALERTS by devicechain_instance=\"$instance\"; the variable is replaced here with the instance ID, and without one that selector matches nothing." $path) }}
 {{- end }}
 {{- $_ := set $templating "list" $vars }}
 ---
