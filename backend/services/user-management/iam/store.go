@@ -434,6 +434,7 @@ func (s *Store) UpdateTenant(ctx context.Context, t *Tenant) error {
 		Select("Name", "Config", "TierID", "IngestReadingsPerSecond", "IngestBurst",
 			"OutboundCallsPerSecond", "OutboundBurst", "AiExternalEnabled",
 			"AiInferenceRequestsPerMinute", "AiInferenceBurst", "ShedPriority",
+			"ProvisioningRegistrationsPerSecond", "ProvisioningBurst",
 			"HeldCommandCeiling", "GeoFencePositionCeiling", "GeoFenceCeiling",
 			"GeoFencePositionBudget").
 		Updates(t).Error

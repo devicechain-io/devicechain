@@ -33,6 +33,8 @@ function tenant(token: string, name: string): AdminTenant {
     aiExternalEnabled: false,
     aiInferenceRequestsPerMinute: null,
     aiInferenceBurst: null,
+    provisioningRegistrationsPerSecond: null,
+    provisioningBurst: null,
     heldCommandCeiling: null,
     shedPriority: null,
     geoFencePositionCeiling: null,

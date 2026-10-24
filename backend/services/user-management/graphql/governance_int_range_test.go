@@ -32,7 +32,7 @@ func i32(v *int32, err error) *int32 {
 func TestAGovernanceValueWiderThanAnIntIsRefusedOnRead(t *testing.T) {
 	wide := math.MaxInt32 + 1
 	tenant := iam.Tenant{
-		IngestBurst: &wide, OutboundBurst: &wide, AiInferenceBurst: &wide,
+		IngestBurst: &wide, OutboundBurst: &wide, AiInferenceBurst: &wide, ProvisioningBurst: &wide,
 		ShedPriority: &wide, HeldCommandCeiling: &wide,
 		GeoFencePositionCeiling: &wide, GeoFenceCeiling: &wide, GeoFencePositionBudget: &wide,
 	}
@@ -41,6 +41,7 @@ func TestAGovernanceValueWiderThanAnIntIsRefusedOnRead(t *testing.T) {
 		"admin ingestBurst":             admin.IngestBurst,
 		"admin outboundBurst":           admin.OutboundBurst,
 		"admin aiInferenceBurst":        admin.AiInferenceBurst,
+		"admin provisioningBurst":       admin.ProvisioningBurst,
 		"admin shedPriority":            admin.ShedPriority,
 		"admin heldCommandCeiling":      admin.HeldCommandCeiling,
 		"admin geoFencePositionCeiling": admin.GeoFencePositionCeiling,
@@ -65,6 +66,7 @@ func TestAGovernanceValueWiderThanAnIntIsRefusedOnRead(t *testing.T) {
 	data := &TenantGovernanceResolver{t: &tenant}
 	for name, read := range map[string]func() (*int32, error){
 		"data ingestBurst":        data.IngestBurst,
+		"data provisioningBurst":  data.ProvisioningBurst,
 		"data shedPriority":       data.ShedPriority,
 		"data heldCommandCeiling": data.HeldCommandCeiling,
 	} {

@@ -373,6 +373,17 @@ type TenantGovernance {
     """
     aiInferenceBurst: Int
     """
+    The tenant's effective sustained self-registration ceiling, in device registrations
+    per second: its own override, else its tier's. Null means neither declares one and the
+    platform default applies — never unlimited.
+    """
+    provisioningRegistrationsPerSecond: Float
+    """
+    How many device registrations the tenant may make in a burst above the sustained
+    self-registration rate before being throttled.
+    """
+    provisioningBurst: Int
+    """
     How strongly the tenant's traffic is protected when the platform is overloaded and has
     to refuse some ingest: a whole number from 1 to 100, higher meaning more protected.
     80 to 100 is never refused, 50 to 79 only under the heaviest load, 20 to 49 under heavy
