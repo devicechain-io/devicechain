@@ -177,7 +177,8 @@ These are known and accepted for the current release. Plan around them.
    `JetStreamDurableLostUnread` alert fires. With `infrastructure.nats.mqttFailClosed` on, an acknowledgement means the
    platform holds the message; in exchange the broker refuses QoS 1 publishes while there is no leader or its message store is full, and
    the instance keeps up with less traffic, so it is for installations sized to stay below that ceiling.
-   The setting is off by default, and [Observability](../deployment/observability.md#mqtt-fail-closed)
+   The setting is off by default; `--mqtt-fail-closed` on `dcctl bootstrap` or `dcctl upgrade` turns it on, and
+   [Observability](../deployment/observability.md#mqtt-fail-closed)
    describes the trade-off.
 4. **The root key is readable by anyone who can read the instance's Kubernetes Secret.** Restrict access to that
    Secret and to the cluster's etcd accordingly.

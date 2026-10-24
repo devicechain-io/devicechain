@@ -81,6 +81,8 @@ func InstanceSpecFrom(st *State, binding ClusterBinding, provider string) dcv1be
 	// The store as RESOLVED (the provider's default applied), for the reason the ingress
 	// host is: an unset flag recorded as unset leaves the next reader to re-derive a default.
 	spec.ObjectStore = st.ObjectStore.DeepCopy()
+	// The fail-closed choice as made: nil is "never chose" and is recorded as that.
+	spec.MQTTFailClosed = copyBoolPtr(st.MqttFailClosed)
 	if spec.Restored {
 		now := metav1.NewTime(time.Now().UTC())
 		spec.RestoredAt = &now

@@ -180,7 +180,7 @@ Estas carencias son conocidas y se aceptan en la versión actual. Planifique en 
    `JetStreamDurableLostUnread`. Con `infrastructure.nats.mqttFailClosed` activado, una
    confirmación significa que la plataforma conserva el mensaje; a cambio, el broker rechaza las publicaciones QoS 1
    mientras no hay líder o su almacén de mensajes está lleno, y la instancia sostiene menos tráfico, así que es para instalaciones dimensionadas para
-   mantenerse por debajo de ese techo. El ajuste está desactivado por defecto, y
+   mantenerse por debajo de ese techo. El ajuste está desactivado por defecto; `--mqtt-fail-closed` en `dcctl bootstrap` o `dcctl upgrade` lo activa, y
    [Observabilidad](../deployment/observability.md#mqtt-fail-closed) describe el equilibrio.
 4. **La clave raíz es legible para cualquiera que pueda leer el Secret de Kubernetes de la instancia.** Restrinja el acceso a ese
    Secret y al etcd del clúster en consecuencia.

@@ -100,7 +100,8 @@ there is no separate broker to run.
   platform reads QoS 1 events, command responses and device reports from the broker's own message
   store. A full store refuses the publish, and one whose leader is changing does not acknowledge
   it, so the device gets no PUBACK and sends it again. QoS 0 publishes keep the behaviour above, and a message
-  over the tenant's ceiling is still dropped after its PUBACK. See
+  over the tenant's ceiling is still dropped after its PUBACK. `dcctl bootstrap` and `dcctl upgrade`
+  turn it on with `--mqtt-fail-closed`. See
   [quality of service](../guides/connecting-a-device.md#quality-of-service) and
   [fail-closed MQTT](../deployment/observability.md#mqtt-fail-closed).
 - **Write ◐** — commands are delivered, but delivery is **live-only and unacknowledged**. A

@@ -20,6 +20,10 @@ import (
 // its longer name does not realign every line of it.
 var bootstrapMqttBodyCredential string
 
+// bootstrapMqttFailClosed is --mqtt-fail-closed. Whether it was GIVEN is read off the flag set
+// (Changed), because "not given" and "given false" are different things to record.
+var bootstrapMqttFailClosed bool
+
 // bootstrapValues is --values: operator tuning overlay files, merged in order.
 var bootstrapValues []string
 
@@ -183,6 +187,12 @@ var bootstrapCmd = &cobra.Command{
 		mqttBodyCredential, err := bootstrap.ParseMqttBodyCredential(bootstrapMqttBodyCredential)
 		if err != nil {
 			return fmt.Errorf("--mqtt-body-credential: %w", err)
+		}
+		// Fail-closed MQTT: judged against the area set up front, so a refusal lands before any
+		// cluster exists. nil (flag not given) is a real answer and is recorded as one.
+		mqttFailClosed := bootstrap.MqttFailClosedFromFlag(cmd.Flags().Changed("mqtt-fail-closed"), bootstrapMqttFailClosed)
+		if err := bootstrap.ValidateMqttFailClosed(mqttFailClosed, bootstrapProfile, bootstrapEnableAreas); err != nil {
+			return err
 		}
 		// The tuning overlay is judged here too -- its keys against the allowlist and its values
 		// against the chart's schema -- so a refused key fails before any cluster exists.
@@ -421,6 +431,7 @@ var bootstrapCmd = &cobra.Command{
 			EnabledAreas:         enabledAreas,
 			Lwm2mIdentities:      lwm2mIdentities,
 			MqttBodyCredential:   mqttBodyCredential,
+			MqttFailClosed:       mqttFailClosed,
 			ValuesOverlay:        valuesOverlay,
 			ObjectStore:          objectStore,
 			ObjectStoreExplicit:  objectStoreFlagGiven(cmd.Flags().Changed),
@@ -614,6 +625,7 @@ func init() {
 	bootstrapCmd.Flags().StringSliceVar(&bootstrapEnableAreas, "enable-area", nil, "additionally deploy a functional area on TOP of the profile (repeatable, e.g. --enable-area lwm2m-ingest --enable-area sparkplug-ingest). Composes with the cluster's --compact setting; validated against the area catalog (unknown area or unmet hard dependency fails before any cluster spin-up)")
 	bootstrapCmd.Flags().StringVar(&bootstrapMqttBodyCredential, "mqtt-body-credential", "", mqttBodyCredentialUsage)
 	bootstrapCmd.Flags().StringArrayVar(&bootstrapValues, "values", nil, valuesUsage)
+	bootstrapCmd.Flags().BoolVar(&bootstrapMqttFailClosed, "mqtt-fail-closed", false, mqttFailClosedUsage)
 	bootstrapCmd.Flags().StringVar(&bootstrapLwm2mIdentities, "lwm2m-identities", "", "path to a JSON file of LwM2M DTLS-PSK credentials to provision: [{identity, psk(base64), tenant, externalId, deviceTypeToken, autoRegister}]. Renders the PSKs into a chart-owned Secret and binds each to lwm2m-ingest; implies --enable-area lwm2m-ingest. Validated up front (short PSK / missing tenancy fails before any cluster). Re-running bootstrap WITHOUT this flag removes the provisioned credentials")
 
 	bootstrapCmd.Flags().StringVar(&bootstrapObjectStore.Mode, "object-store", "", "where the instance keeps tenant logos and update artifacts: none, filesystem (a volume the chart creates) or s3. Default: a small filesystem store on a cluster dcctl created, none on one it was pointed at with --kube-context. Fixed configuration, recorded on the instance and kept by 'dcctl upgrade'")
@@ -694,6 +706,14 @@ const mqttBodyCredentialUsage = "TRANSITIONAL. What event-sources does with an M
 	"refuse (the default) or strip (accept it with the credential removed). Use strip while a fleet whose firmware still sends one is updated, " +
 	"then refuse; a device that sent one should have its credential rotated. A value given here is kept by later upgrades that omit the flag. " +
 	"Planned for removal in v0.26.0"
+
+// mqttFailClosedUsage is the help for --mqtt-fail-closed on bootstrap and upgrade.
+const mqttFailClosedUsage = "make a QoS 1 PUBACK from the MQTT gateway mean the platform holds the message (infrastructure.nats.mqttFailClosed). " +
+	"The trade: a QoS 1 publish is REFUSED (no PUBACK, connection closed, the device resends) while the capture stream has no leader, " +
+	"instead of being acknowledged and possibly lost, and the ingest ceiling is lower, so size the instance below it. " +
+	"It covers QoS 1 only, and its guarantee is stated for a replicated broker (a cluster installed with --ha). " +
+	"--mqtt-fail-closed=false turns it off again. Fixed configuration, recorded on the instance and kept by 'dcctl upgrade' when the flag is omitted; " +
+	"not giving the flag leaves the platform default"
 
 // valuesUsage is the help for --values on bootstrap and upgrade.
 const valuesUsage = "a YAML file of operator tuning (replica counts, resources, an area's own configuration), merged over the values dcctl computes (repeatable; later files win). " +

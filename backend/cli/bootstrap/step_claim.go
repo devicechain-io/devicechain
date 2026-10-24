@@ -43,6 +43,11 @@ func stepDeclareInstance(ctx context.Context, st *State) error {
 		if existing != nil && !st.ObjectStoreExplicit {
 			st.ObjectStore = existing.Spec.ObjectStore.DeepCopy()
 		}
+		// 🔴 AND FOR THE FAIL-CLOSED CHOICE: a re-run that names no --mqtt-fail-closed keeps the
+		// one the declaration records, rather than writing "never chose" over a decision.
+		if existing != nil && st.MqttFailClosed == nil {
+			st.MqttFailClosed = copyBoolPtr(existing.Spec.MQTTFailClosed)
+		}
 		// 🔴 THE SAME RULE FOR THE OPERATOR'S TUNING: a re-run that names no --values keeps the
 		// overlay the declaration records, rather than rendering the instance without it.
 		if err := adoptRecordedValuesOverlay(st, existing); err != nil {
@@ -50,6 +55,7 @@ func stepDeclareInstance(ctx context.Context, st *State) error {
 		}
 	}
 	spec := InstanceSpecFrom(st, st.Binding, st.Provider)
+	sayMqttFailClosed(st)
 
 	if st.DryRun {
 		// 🔴 A dry run takes no lock and writes no declaration, because both are
@@ -184,4 +190,8 @@ func applyDeclaration(st *State, spec dcv1beta1.InstanceSpec) {
 	// built with. nil is a real answer (no store) and is taken as one: an instance declared
 	// before this field existed has no store, and an upgrade must not invent one.
 	st.ObjectStore = spec.ObjectStore.DeepCopy()
+	// Likewise: the declaration is the only place the choice survives an upgrade. nil is a
+	// real answer (never chose), taken as one -- an instance declared before this field
+	// existed keeps the platform default rather than being handed a decision.
+	st.MqttFailClosed = copyBoolPtr(spec.MQTTFailClosed)
 }

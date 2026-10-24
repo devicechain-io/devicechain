@@ -424,6 +424,7 @@ func helmValues(st *State) map[string]interface{} {
 	for k, v := range haFor(st.HA).natsValues() {
 		natsVals[k] = v
 	}
+	applyMqttFailClosed(natsVals, st)
 	infraVals := map[string]interface{}{}
 	if len(natsVals) > 0 {
 		infraVals["nats"] = natsVals

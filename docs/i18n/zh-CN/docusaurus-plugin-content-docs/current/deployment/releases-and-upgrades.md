@@ -275,6 +275,8 @@ profile、拓扑和启用的功能区来自实例自身声明，即 `dcctl boots
 
 升级不会改变实例的形态，但会保留你为它设置的调优。传给 `dcctl bootstrap --values` 或 `dcctl upgrade --values` 的 values 文件会记录在实例上，之后每次升级都会再次应用；`--reset-values` 可将其移除。参见[调优实例](./tuning-an-instance.md)。
 
+MQTT 故障关闭确认也以同样方式保留：`dcctl bootstrap` 或 `dcctl upgrade` 上的 `--mqtt-fail-closed` 会记录在实例上，省略该参数的升级会保留已记录的值，无论开启还是关闭。参见 [fail-closed MQTT](./observability.md#mqtt-fail-closed)。
+
 ### 升级会应用哪些基础设施 {#upgrade-infrastructure}
 
 更新服务前，`dcctl upgrade` 应用实例 OpenTofu 配置，即 `dcctl bootstrap` 构建实例时使用的配置。
@@ -2515,9 +2517,10 @@ SDK 过去无法识别被拒绝的连接。MQTT 库通过抛出异常来报告�
   重启会重启每台服务器，包括 leader，而本次升级会滚动消息代理两次，因此除非开启了 fail-closed，否则每次消息代理
   滚动期间都应预期一个短暂的丢失窗口。在本次升级的一次演练中，四台设备合计每秒发送 20 条 QoS 1 消息，11,262 条
   已确认消息中丢失了 11 条，全部发生在消息代理重启期间；更早的一次演练没有丢失。要关闭这个窗口，请开启
-  `infrastructure.nats.mqttFailClosed`（chart 值为 `instance.config.infrastructure.nats.mqttFailClosed`）。本版本的
+  `infrastructure.nats.mqttFailClosed`。本版本的
   `dcctl` 没有对应的选项，`--values` 也不接受它，因此在由 `dcctl` 管理的实例上手动设置的值会被下一次
-  `dcctl upgrade` 覆盖。代价是：消息代理的消息存储没有 leader 期间，QoS 1 发布不会被确认，设备必须重新发送；
+  `dcctl upgrade` 覆盖；后续版本会为 `dcctl bootstrap` 和 `dcctl upgrade` 增加 `--mqtt-fail-closed`，
+  并把这一选择记录在实例上（见 [fail-closed MQTT](./observability.md#mqtt-fail-closed)）。代价是：消息代理的消息存储没有 leader 期间，QoS 1 发布不会被确认，设备必须重新发送；
   而且实例能跟上的流量低于关闭该设置时。在一个测试集群上，只要能跟上，它就没有丢失任何消息（每秒 6,000 和 9,000
   个事件，期间多次更换 leader）；在每秒 12,000 个事件时它跟不上，两台消息代理服务器内存耗尽，已确认的消息丢失。
   请按低于其上限的规模部署。见 [fail-closed MQTT](./observability.md#mqtt-fail-closed)。
