@@ -358,6 +358,9 @@ type NatsManager struct {
 	// mqttSkipped counts the messages readers acked and skipped because the other copy of the
 	// same device publish is the one forwarded (skipHandOut); read by tests.
 	mqttSkipped atomic.Uint64
+	// foreignDropped counts the messages readers acked and dropped because they were stored
+	// under a subject the reader does not hand out (dropForeign); read by tests.
+	foreignDropped atomic.Uint64
 }
 
 // SetAckWaitForTesting sets the AckWait this manager configures on the durables it
@@ -1590,6 +1593,9 @@ type natsReader struct {
 	// has one: its filter is the advisory subject of each of its area's own durables, which
 	// no single pattern expresses. Sorted, so a comparison against the server's copy is a
 	// comparison of sets.
+	//
+	// The capture reader has neither: its durable is unfiltered on the broker, and the
+	// reader filters at hand-out instead (forwards; NewReader says why).
 	filters []string
 	// sub is the current pull subscription. It is written by the read-loop goroutine
 	// (bind, on first attach and on self-heal re-bind) and read by the lifecycle
@@ -1736,11 +1742,16 @@ type natsReader struct {
 	// while the durable is gone. Read goroutine only.
 	store              bool
 	storeMissingLogged bool
-	// forwards is, on a store reader, the subject pattern of what it hands out; a message
-	// delivered outside it is acked and dropped (storeHandOut). It differs from subject (the
-	// durable's filter) only on the unfiltered events durable.
+	// foreignLogged edge-triggers dropForeign's log line. Read goroutine only.
+	foreignLogged bool
+	// forwards is the subject pattern of what a reader hands out when the broker does not
+	// filter for it; a message delivered outside it is acked and dropped, never handed to the
+	// caller. Two kinds of reader have one: a store reader (storeHandOut; it differs from
+	// subject, the durable's filter, only on the unfiltered events durable), and the
+	// device-events capture reader, whose durable carries no filter at all (NewReader).
 	forwards string
-	// alsoForwards are further patterns a store reader hands out (MqttFailClosedDurable.AlsoForwards).
+	// alsoForwards are further patterns such a reader hands out
+	// (MqttFailClosedDurable.AlsoForwards, and the capture reader's gateway subject).
 	alsoForwards []string
 }
 
@@ -2077,6 +2088,9 @@ func (r *natsReader) reconcileFilterSubject() error {
 	if info.Config.FilterSubject == r.subject && slices.Equal(have, r.filters) {
 		return nil
 	}
+	if r.subject == "" && len(r.filters) == 0 {
+		return r.recreateUnfiltered(info.Config.FilterSubject, have)
+	}
 	log.Info().Str("stream", r.stream).Str("durable", r.durable).
 		Str("from", info.Config.FilterSubject).Str("to", r.subject).
 		Strs("fromList", have).Strs("toList", r.filters).
@@ -2084,6 +2098,39 @@ func (r *natsReader) reconcileFilterSubject() error {
 	if _, err := r.nmgr.js.UpdateConsumer(r.stream, r.consumerConfig(), nats.Context(ctx)); err != nil {
 		return fmt.Errorf("moving durable %q from filter %q %v to %q %v: %w",
 			r.durable, info.Config.FilterSubject, have, r.subject, r.filters, err)
+	}
+	return nil
+}
+
+// recreateUnfiltered moves an existing filtered durable onto NO filter by deleting it and
+// creating it again, never by updating it in place.
+//
+// 🔴 AN IN-PLACE UPDATE THAT TAKES THE FILTER OFF LEAVES A DURABLE THE STREAM NO LONGER
+// SIGNALS (nats-server 2.15.1, measured: TestAnOlderCaptureDurableIsRecreatedNotUpdated). The
+// update succeeds and the durable still delivers what a pull asks for, but a message stored
+// after it is not counted in its num_pending, and a pull waiting at the end of the stream is not
+// woken when one arrives: it waits out its whole expiry. The backlog metrics and alerts read
+// num_pending, and every quiet device would wait a fetch timeout per message. A durable
+// created unfiltered is signalled normally.
+//
+// Recreating loses nothing on the stream this is for. The capture stream is a work queue, which
+// keeps a message until it is acked, whether or not a consumer exists (it holds what devices
+// publish before event-sources has ever started); the new durable starts from the stream's first
+// message, so whatever the old one had delivered and not had acked is delivered again, and the
+// forward is deduplicated downstream by the capture sequence it is named by. A reader of another
+// replica bound to the deleted durable re-binds to the new one by the self-heal every reader has.
+// Two replicas starting at once can each delete and create; the second delete costs only a
+// redelivery, for the same reason.
+func (r *natsReader) recreateUnfiltered(fromSubject string, fromList []string) error {
+	ctx := r.nmgr.opContext()
+	log.Info().Str("stream", r.stream).Str("durable", r.durable).
+		Str("from", fromSubject).Strs("fromList", fromList).
+		Msg("Recreating an existing durable consumer without a filter; what it had not had acked is delivered again")
+	if err := r.nmgr.js.DeleteConsumer(r.stream, r.durable, nats.Context(ctx)); err != nil && !errors.Is(err, nats.ErrConsumerNotFound) {
+		return fmt.Errorf("deleting durable %q to recreate it without the filter %q %v: %w", r.durable, fromSubject, fromList, err)
+	}
+	if _, err := r.nmgr.js.AddConsumer(r.stream, r.consumerConfig(), nats.Context(ctx)); err != nil {
+		return fmt.Errorf("recreating durable %q without a filter: %w", r.durable, err)
 	}
 	return nil
 }
@@ -2118,11 +2165,36 @@ func (nmgr *NatsManager) NewReader(suffix string, opts ...ReaderOption) (Message
 		downstream: streams.ForwardsInto(suffix, nmgr.Microservice.FunctionalArea),
 	}
 	// The device-events capture stream stores two subjects (a device's own telemetry and a
-	// gateway's for its children), which no single pattern expresses: its reader filters on
-	// the exact list, the way the max-delivery recorder does.
+	// gateway's for its children), which no single pattern expresses. Its durable carries NO
+	// filter on the broker, and the reader hands out those two subjects only (forwards).
+	//
+	// 🔴 WHY THE BROKER IS NOT ASKED TO FILTER: A FILTER LIST COSTS A VISIT TO EVERY DEVICE'S
+	// SUBJECT PER DELIVERED MESSAGE ONCE THE READER IS BEHIND. With more than one filter
+	// subject, nats-server finds each next message through the file block's per-subject index
+	// whenever the block holds fewer distinct subjects than there are sequences left to walk
+	// (2.15.1 filestore, msgBlock.firstMatchingMulti), and that visits every subject in the
+	// block and matches each against the list. A reader that keeps up reads near the end of a
+	// block and takes the cheap linear walk. One that falls more than a block's subject count
+	// behind (about 2,000 messages with 2,000 devices) pays for every device on every message,
+	// reads slower than the devices publish, and does not catch up, with nothing else wrong.
+	// On GKE (v1 gate G3, rounds 17 and 18) the capture reader fell from 3,500/s to ~2,000/s
+	// after one short stall and stayed there until the 1 GiB stream filled and evicted 1.36M
+	// PUBACKed events; a backlog built with no other load drained at the same ~2,000/s, with a
+	// broker core in that lookup. Unfiltered, the broker reads the next sequence. The list was
+	// exactly the stream's own subjects, so it never filtered anything out. The fail-closed
+	// store's events durable is unfiltered for the same reason (MqttFailClosedDurable.Filter);
+	// nats-io/nats-server#8778 reports the lookup.
+	//
+	// 🔴 AND WHY THE READER STILL FILTERS. An unfiltered durable is delivered everything the
+	// stream stores, and a stream can hold an entry under a subject outside its own list: a push
+	// consumer on another stream whose deliver subject is one of this stream's stores its message
+	// here under the SOURCE stream's subject (probe P7 of the per-service broker logins design).
+	// A filtered durable never delivered such an entry. This reader acks and drops it
+	// (dropForeign), so what reaches event-sources is still a device-events subject and nothing
+	// else.
 	if streams.ShapeOf(suffix) == streams.ShapeDeviceEvents {
-		r.filters = DeviceEventsSubjects(nmgr.Microservice.InstanceId)
-		slices.Sort(r.filters)
+		subjects := DeviceEventsSubjects(nmgr.Microservice.InstanceId)
+		r.forwards, r.alsoForwards = subjects[0], subjects[1:]
 	} else {
 		r.subject = StreamSubject(nmgr.Microservice.InstanceId, suffix)
 	}
@@ -2480,6 +2552,11 @@ func (r *natsReader) ReadMessage(ctx context.Context) (_ Message, err error) {
 		if r.ackFloor() {
 			ack = floorAck{nm: nm, r: r, gen: r.ackGen.Load()}
 		}
+		// A reader the broker does not filter for hands out its own subjects only.
+		if !r.store && r.forwards != "" && !r.forwardsSubject(nm.Subject) {
+			r.dropForeign(nm, sl, seq)
+			continue
+		}
 		msg := NewConsumedMessage(nm.Subject, nm.Data, deliv, natsHeaders(nm), ack)
 		if r.store && !r.storeHandOut(nm, &msg, seq, appended) {
 			r.skipHandOut(nm, sl)
@@ -2704,6 +2781,25 @@ func (r *natsReader) skipHandOut(nm *nats.Msg, sl *slot) {
 		sl.release()
 	}
 	r.nmgr.mqttSkipped.Add(1)
+}
+
+// dropForeign acks and drops a message delivered to a reader the broker does not filter for,
+// whose subject is not one the reader hands out (forwards): an entry stored under a subject
+// outside the stream's own list. It is never handed to the caller. The first one a reader
+// meets is logged at warn with its subject and sequence; every one is counted.
+func (r *natsReader) dropForeign(nm *nats.Msg, sl *slot, seq uint64) {
+	if err := nm.Ack(); err != nil {
+		log.Debug().Err(err).Str("durable", r.durable).Msg("Failed to ack a dropped foreign message; it will be redelivered and dropped again")
+	}
+	if sl != nil {
+		sl.release()
+	}
+	r.nmgr.foreignDropped.Add(1)
+	if !r.foreignLogged {
+		r.foreignLogged = true
+		log.Warn().Str("stream", r.stream).Str("durable", r.durable).Str("subject", nm.Subject).Uint64("seq", seq).
+			Msg("Dropped a message stored under a subject this stream does not capture; it was not forwarded")
+	}
 }
 
 // natsHeaders flattens a delivered message's NATS headers into the transport-

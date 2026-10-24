@@ -52,8 +52,11 @@ func TestDeployedManagerOpensWhatItDeclaresAndNothingElse(t *testing.T) {
 
 // The consumer-name argument for leaving consumers with their services rests on two facts
 // about what the declaration can produce, and this holds them against a real broker: no stream
-// the platform creates sources, mirrors, transforms or re-publishes, and every consumer it
-// creates carries a filter.
+// the platform creates sources, mirrors, transforms or re-publishes, and every reader it
+// creates filters what it hands out. That is the durable's filter on the broker for every
+// stream but the device-events capture, whose durable is unfiltered for the broker's sake and
+// whose reader drops anything outside the stream's two subjects (NewReader, dropForeign;
+// TestTheCaptureReaderDropsAnEntryStoredUnderAForeignSubject holds the drop).
 func TestNoStreamCrossesStreamsAndEveryConsumerIsFiltered(t *testing.T) {
 	nmgr := initializedManager(t, "catalog-scan", false)
 
@@ -79,6 +82,13 @@ func TestNoStreamCrossesStreamsAndEveryConsumerIsFiltered(t *testing.T) {
 		nr := reader.(*natsReader)
 		ci, err := nmgr.js.ConsumerInfo(name, nr.durable)
 		require.NoError(t, err, s.Suffix)
+		if s.Shape == streams.ShapeDeviceEvents {
+			require.True(t, ci.Config.FilterSubject == "" && len(ci.Config.FilterSubjects) == 0,
+				"the capture durable for %s has a broker filter", s.Suffix)
+			require.NotEmpty(t, nr.forwards,
+				"the capture reader for %s filters nothing: it would hand out what a push consumer stored under its source subject", s.Suffix)
+			continue
+		}
 		require.True(t, ci.Config.FilterSubject != "" || len(ci.Config.FilterSubjects) > 0,
 			"the durable for %s has no filter: an unfiltered reader sees what a push consumer stored under its source subject", s.Suffix)
 	}
