@@ -3930,6 +3930,69 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 
 No hay que hacer nada.
 
+### v0.25.2 — la emisión de tokens de servicio sale del puerto público {#v0252-upgrade}
+
+`v0.25.2` es un parche de seguridad de `v0.25.1`. No hay migración, y no cambia ninguna API, tema ni
+permiso. La configuración de la instancia gana una clave, `infrastructure.userManagement.internalPort`,
+que el chart fija en `8082`; déjala en ese valor, porque el Service, el pod y la política de red del chart
+usan ese puerto fijo. Todo lo que describen las secciones de la [v0.25.1](#v0251-upgrade) y la
+[v0.25.0](#v0250-upgrade) sigue siendo lo que estás ejecutando, incluidas sus limitaciones conocidas.
+
+Actualiza el clúster y después cada instancia. Pasa a `dcctl install` los ajustes con los que se instaló
+el clúster, como `--ha` y `--database-node-selector`, además de la nueva `--version`:
+
+```bash
+dcctl install local --version v0.25.2
+dcctl upgrade local devicechain --version v0.25.2 --dry-run
+dcctl upgrade local devicechain --version v0.25.2
+```
+
+**Si vienes de `v0.25.0` o de `v0.24.0`,** sigue las [notas de la v0.25.1](#v0251-upgrade) con
+`--version v0.25.2`: se aplican sin cambios, y también lo que dicen sobre las actualizaciones de la v0.25.0.
+
+#### Los endpoints internos salen del puerto público {#v0252-internal-endpoints}
+
+`user-management` servía en su puerto público dos endpoints pensados solo para los servicios de la propia
+plataforma: `/auth/service-token`, que intercambia el secreto de servicio compartido por un token de
+servicio de corta duración, y `/auth/jwks`, el conjunto de claves con el que cada servicio valida los
+tokens. Lo único que los mantenía fuera de internet era un fragmento de configuración (snippet) de nginx en
+el ingress de la API del chart. **Por eso, una instalación que traía su propio controlador de ingress tenía
+ambos accesibles desde fuera,** protegidos por el secreto de servicio compartido, que se compara en tiempo
+constante.
+
+A partir de esta versión, `user-management` sirve ambos en un puerto interno aparte, el `8082`, que el
+chart publica solo en el Service interno del clúster. Ningún ingress, ruta ni balanceador de carga se
+refiere a él, y el puerto público responde 404 a ambas rutas, haya lo que haya delante, así que **un
+controlador propio no necesita ninguna regla en el borde para ocultarlos.** Ahora cada servicio obtiene el
+conjunto de claves y emite su token en el puerto interno. Consulta
+[Endpoints que nunca salen del clúster](../concepts/security-model.md#internal-endpoints).
+
+- **El chart ya no fija ningún snippet de configuración de nginx.**
+- **El controlador de ingress que instala `dcctl install` no cambia en esta versión** y sigue aceptando
+  snippets, porque las instancias aún no actualizadas dependen de ellos. Una versión posterior los
+  desactiva, tras una comprobación de `dcctl install` que se niega a continuar mientras algún Ingress de la
+  clase del controlador siga llevando una anotación `*-snippet`.
+- **Los verificadores de tokens externos no se ven afectados:** usan el `jwks_uri` de los metadatos del
+  servidor de autorización, `/oauth/jwks`, que sigue siendo público.
+
+#### Qué esperar {#v0252-during}
+
+- **`user-management` y sus pares deben actualizarse juntos.** Un pod de una versión anterior pide el
+  conjunto de claves y la emisión de tokens al puerto público, que ahora responde 404, y no sale de ello
+  reintentando: sus emisiones fallan hasta que ese pod se sustituye por uno de esta versión.
+  `dcctl upgrade` sustituye los pods de todos los servicios, así que esto dura lo que dura el despliegue;
+  no dejes ningún área atrás en una imagen anterior.
+- **Un pod anterior que se reinicia después de que `dcctl upgrade` haya escrito la nueva configuración no
+  arranca.** Los binarios anteriores decodifican la configuración de la instancia de forma estricta y
+  rechazan la nueva clave `internalPort`, así que ese pod entra en un bucle de reinicios hasta que se
+  sustituye por uno de esta versión.
+- **Si usas tu propio motor de políticas de red,** permite que los pods del namespace de la instancia
+  lleguen al puerto `8082` de `user-management`, y nada más. La política de red propia del chart para ese
+  puerto está desactivada por defecto, y las instalaciones con `dcctl` la ejecutan desactivada.
+- **Los paneles de Grafana que incluye el chart** se abren con una tabla de las alertas activas de la
+  instancia y enlazan a los demás paneles de la instancia, y un tercer panel, *Instance overview*, contiene
+  por ahora solo esa tabla.
+
 ### v0.25.1 — las imágenes de las bases de datos y del almacén de respaldos, reconstruidas por avisos de seguridad actuales {#v0251-upgrade}
 
 `v0.25.1` es un parche de `v0.25.0`. No hay migración, y no cambia ninguna API, tema, permiso, valor del
