@@ -145,11 +145,14 @@ Estas carencias son conocidas y se aceptan en la versión actual. Planifique en 
    devuelve ninguno de los dos. Trate el acceso a la base de datos y las copias de seguridad como portadores de
    secretos y, si se filtra una copia, establezca un secreto nuevo en cada perfil de aprovisionamiento y vuelva a
    abrir con un secreto nuevo cada reclamación de dispositivo no canjeada.
-4. **Confirmaciones MQTT durante un cambio de líder del broker.** Por defecto, el broker puede confirmar un mensaje QoS 1 y
-   perderlo después mientras el flujo de captura cambia de líder, algo que provoca un reinicio del broker, una
-   actualización o la pérdida de un nodo, con cualquier carga. Con `infrastructure.nats.mqttFailClosed` activado, una
+4. **Confirmaciones MQTT que el broker puede perder.** Por defecto, el broker puede confirmar un mensaje QoS 1 y
+   perderlo después de dos formas. Una es mientras el flujo de captura cambia de líder, algo que provoca un reinicio del broker, una
+   actualización o la pérdida de un nodo, con cualquier carga. La otra no necesita ningún reinicio: con carga sostenida, si
+   `event-sources` se queda atrás y la cola del flujo de captura alcanza su límite, el flujo descarta sus mensajes sin leer más
+   antiguos. `devicechain_<area>_jetstream_consumer_unread_skipped_total` los cuenta y salta la alerta
+   `JetStreamDurableLostUnread`. Con `infrastructure.nats.mqttFailClosed` activado, una
    confirmación significa que la plataforma conserva el mensaje; a cambio, el broker rechaza las publicaciones QoS 1
-   mientras no hay líder, y la instancia sostiene menos tráfico, así que es para instalaciones dimensionadas para
+   mientras no hay líder o su almacén de mensajes está lleno, y la instancia sostiene menos tráfico, así que es para instalaciones dimensionadas para
    mantenerse por debajo de ese techo. El ajuste está desactivado por defecto, y
    [Observabilidad](../deployment/observability.md#mqtt-fail-closed) describe el equilibrio.
 5. **La clave raíz es legible para cualquiera que pueda leer el Secret de Kubernetes de la instancia.** Restrinja el acceso a ese

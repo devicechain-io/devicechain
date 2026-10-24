@@ -4078,8 +4078,12 @@ to change and `artifact:read` to view, and a member limited to part of the tenan
 - **Rollouts have no waves or canary stage,** no schedule, and no alert for a stalled rollout driver.
 - **The SBOM is generated from each image's `amd64` variant.**
 - **With `mqttFailClosed` off, which is the default, QoS 1 messages the broker has acknowledged can be lost
-  while the MQTT capture stream changes leader, at any load,** and nothing counts them
-  (`JetStreamCaptureLeaderChanged` warns that a change happened). A broker roll restarts every server, the
+  while the MQTT capture stream changes leader, at any load,** and nothing counts those
+  (`JetStreamCaptureLeaderChanged` warns that a change happened). They can also be lost with no leader change, under
+  sustained load: in a load test on a default install, `event-sources` fell behind reading the capture stream, the stream
+  filled to its bound and discarded its oldest unread messages, and 1,357,188 acknowledged events, about 7 to 13% of the
+  MQTT traffic, were lost. `devicechain_<area>_jetstream_consumer_unread_skipped_total` counts them and `JetStreamDurableLostUnread` alerts. Why
+  `event-sources` fell behind is still being investigated. A broker roll restarts every server, the
   leader among them, and this upgrade rolls the broker twice, so expect a short loss window during each
   broker roll unless fail-closed is on. In a rehearsal of this upgrade with four devices sending 20 QoS 1 messages a
   second between them, 11 of 11,262 acknowledged messages were lost, all during the broker restarts; in an
