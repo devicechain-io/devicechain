@@ -210,7 +210,18 @@ tofu init
 tofu apply
 ```
 
-Creating the cluster takes 10 to 15 minutes. If a node pool sits in `PROVISIONING`
+Creating the cluster takes 10 to 15 minutes, and `apply` does not return until GKE
+has finished with it. The cluster and its node pools exist well before that: GKE
+then applies their settings (the monitoring configuration, for one) as an
+`UPDATE_CLUSTER` operation, and the cluster reports `RECONCILING` until it ends. An
+install started in that window timed out against an API server that was being
+reconfigured, so the last step of the apply waits for the cluster to be `RUNNING`
+with no operation in progress (`wait-for-cluster-operations.sh`, using `bash` and
+`gcloud`; it fails after `cluster_operations_timeout_seconds`, 30 minutes by
+default, rather than returning early). Without `gcloud`, set
+`wait_for_cluster_operations = false` and check
+`gcloud container clusters describe devicechain --location us-east4-b --format='value(status)'`
+says `RUNNING` before you install. If a node pool sits in `PROVISIONING`
 and then fails with `does not have enough resources available`, the zone has run
 out of that machine type. Nothing is wrong with your configuration, and a
 neighbouring zone in the same region is often out too. Before moving the cluster,

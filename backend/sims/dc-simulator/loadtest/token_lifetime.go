@@ -27,15 +27,6 @@ func monitorLifetimeNeeded(p Profile) time.Duration {
 	return p.Hold + monitorDrainWait + tokenMargin
 }
 
-// detectionLifetimeNeeded is how long the access token the detection run's live monitor
-// dials with must stay valid. The monitor is subscribed before the probes are driven and
-// stopped only after the alarm wait and the settle, so every one of those phases counts,
-// at the longest each is allowed to run.
-func detectionLifetimeNeeded(cfg DetectionConfig) time.Duration {
-	probes := time.Duration(max(2*cfg.Cycles-1, 0)) * cfg.ProbeInterval
-	return subscribeSettle + probes + cfg.AlarmTimeout + cfg.AlarmSettle + tokenMargin
-}
-
 // pinnedToken fetches ONE access token that stays valid for need and returns a provider
 // that always hands back that token, for a WebSocket that is dialled once and held for the
 // whole run. It returns an error wrapping userclient.ErrTokenLifetimeTooShort when the
