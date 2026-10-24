@@ -9,7 +9,7 @@ import { useAuth } from '@/auth/AuthProvider';
 import { LoadingState } from '@/components/ui/loading-state';
 import LoginPage from '@/routes/Login';
 import AppLayout from '@/routes/AppLayout';
-import Dashboard from '@/routes/Dashboard';
+import Home from '@/routes/Home';
 import { AreaGate } from '@/components/AreaUnavailable';
 import { RouteSuspense } from '@/components/RouteSuspense';
 import { AREA } from '@/lib/capabilities';
@@ -107,7 +107,7 @@ export default function App() {
 
       <Route element={<ProtectedRoute />}>
         <Route path="/" element={<AppLayout />}>
-          <Route index element={<Dashboard />} />
+          <Route index element={<Home />} />
           <Route path="devices" element={<DevicesPage />} />
           <Route path="devices/:token" element={<DeviceDetailPage />} />
           <Route path="dashboards" element={<DashboardsPage />} />
