@@ -6,7 +6,7 @@
 # must keep the ConfigMap names they already have, and must keep two instances'
 # boards apart.
 #
-# FOUR GAPS, ALL OF THEM SILENT, NONE OF THEM COVERED BY ANYTHING ELSE.
+# FIVE GAPS (the fifth is the published-text rule below), ALL OF THEM SILENT, NONE OF THEM COVERED BY ANYTHING ELSE.
 #
 # 1. NOTHING PARSED THE DASHBOARD JSON. templates/grafana-dashboard.yaml used to
 #    embed each file with `.Files.Get | indent 4`, which turns ANY bytes into a
@@ -137,6 +137,42 @@ go_root = os.path.join(root, "backend")
 
 problems = []
 
+# --- gap 5: a board's TEXT is a published surface ----------------------------
+# Board titles, descriptions, legends and row titles are rendered in Grafana and end
+# up in the docs site's screenshots, where hack/check-docs-adr-refs.sh -- a guard
+# over Markdown -- cannot read them. The ADRs live in a private repository, so an
+# ADR number there is a citation nobody who reads the page can follow. The same goes
+# for the planning workspace and the maintainer's severity marker. This is the ADR
+# rule extended to the one surface it could not see, not a drift gate.
+PUBLISHED_TEXT_KEYS = {"title", "description", "legendFormat", "displayName", "text"}
+INTERNAL_REFERENCES = (
+    (re.compile(r"\bADRs?\b(?:[-\s]?[0-9]+)?"), "an ADR reference"),
+    (re.compile(r"\bSD-[0-9]+\b"), "a design-decision reference"),
+    (re.compile(r"\.agent-os"), "a path in the private planning workspace"),
+    (re.compile("\U0001F534"), "the red-circle severity marker used in source comments"),
+)
+
+def published_text_problems(node, rel, trail="$"):
+    found = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            where = "%s.%s" % (trail, key)
+            if key in PUBLISHED_TEXT_KEYS and isinstance(value, str):
+                for pattern, what in INTERNAL_REFERENCES:
+                    hit = pattern.search(value)
+                    if hit:
+                        found.append(
+                            "%s %s contains %s (%r).\n"
+                            "    Board text is published in screenshots; say the thing itself in plain\n"
+                            "    operator language instead of citing an internal document."
+                            % (rel, where, what, hit.group(0)))
+            else:
+                found.extend(published_text_problems(value, rel, where))
+    elif isinstance(node, list):
+        for i, value in enumerate(node):
+            found.extend(published_text_problems(value, rel, "%s[%d]" % (trail, i)))
+    return found
+
 # --- gap 1: every dashboard must be JSON ------------------------------------
 dashboards = sorted(
     os.path.join(dashboard_dir, f)
@@ -153,7 +189,7 @@ for path in dashboards:
     with open(path, "rb") as fh:
         raw = fh.read()
     try:
-        json.loads(raw.decode("utf-8"))
+        board = json.loads(raw.decode("utf-8"))
     except (ValueError, UnicodeDecodeError) as exc:
         problems.append(
             "%s is not parseable JSON: %s\n"
@@ -161,6 +197,8 @@ for path in dashboards:
             "    fails on this file."
             % (os.path.relpath(path, root), exc)
         )
+        continue
+    problems.extend(published_text_problems(board, os.path.relpath(path, root)))
 
 # --- gap 2: every devicechain_* series must be registered somewhere in Go ----
 
@@ -833,6 +871,44 @@ EOF
   histcase '_lat_seconds_bucket"' '_lat_seconds"' 'a by-name selector over the bare name of a histogram' "$tmpl/prometheusrule-probe.yaml"
   histcase '_lat_seconds_bucket"' '_lat_seconds_buckets"' 'a by-name selector with a misspelled histogram suffix' "$tmpl/prometheusrule-probe.yaml"
 
+  # Cases 2p — INTERNAL REFERENCES IN PUBLISHED BOARD TEXT, each alone. The board
+  # text is screenshotted onto the public docs site, so an ADR number in a title, a
+  # description, a legend or a row title is a dead citation. The probe is given the
+  # field under test by rewriting the pristine fixture, so the clean fixture (Case 0)
+  # is the counterweight: the same fields, free of references, pass.
+  textcase() { # <python expression that mutates board> <description>
+    python3 - "$tmp/probe.json" "$dash/probe.json" "$1" <<'FIXTURE' || fail "the mutation for $2 did not apply"
+import json, sys
+board = json.load(open(sys.argv[1]))
+exec(sys.argv[3])
+json.dump(board, open(sys.argv[2], "w"), indent=2)
+FIXTURE
+    if check_content "$work" >/dev/null 2>&1; then
+      fail "did not flag $2"
+    fi
+    restore
+    echo "  ok: $2 is caught"
+  }
+  # A clean board with every published-text field populated must still pass.
+  python3 - "$tmp/probe.json" "$dash/probe.json" <<'FIXTURE' || fail "the clean-text fixture could not be built"
+import json, sys
+board = json.load(open(sys.argv[1]))
+board["description"] = "Plain operator language."
+board["panels"].append({"type": "row", "title": "A row", "panels": []})
+board["panels"][0]["title"] = "A panel"
+board["panels"][0]["description"] = "A description."
+board["panels"][0]["targets"][0]["legendFormat"] = "{{reason}}"
+json.dump(board, open(sys.argv[2], "w"), indent=2)
+FIXTURE
+  check_content "$work" >/dev/null || fail "a board with plain text in every published field was reported as broken"
+  restore
+  textcase 'board["title"] = "Probe (ADR-023)"' 'an ADR reference in a board title'
+  textcase 'board["description"] = "see ADR-051 for the thread"' 'an ADR reference in a board description'
+  textcase 'board["panels"].append({"type": "row", "title": "State budget (ADR-023)", "panels": []})' 'an ADR reference in a row title'
+  textcase 'board["panels"][0]["targets"][0]["legendFormat"] = "{{reason}} ADR-057"' 'an ADR reference in a legend'
+  textcase 'board["panels"][0]["description"] = "superseded (ADR-057 D6)"' 'an ADR reference in a panel description'
+  textcase 'board["panels"][0]["description"] = "\U0001F534 look here first"' 'the red-circle marker in a panel description'
+
   # Case 3 — A MISSPELLED SERIES IN AN ALERT RULE, alone. Same defect, the far
   # more dangerous half: this one is a rule that can never fire, and promtool
   # parses it perfectly.
@@ -1069,7 +1145,7 @@ FIXTURE
   rm -f "$chart/dashboards/unscoped-board.json"
   echo "  ok: a dashboard with no namespace variable is refused by the template"
 
-  echo "self-test passed: 32 defects, each planted alone, each caught; a clean tree and chart pass"
+  echo "self-test passed: 38 defects, each planted alone, each caught; a clean tree and chart pass"
   exit 0
 fi
 

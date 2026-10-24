@@ -30,7 +30,7 @@ Prefix: `devicechain_commanddelivery_`.
 
 The three [command delivery alerts](./observability.md#command-delivery-alerts) read
 `command_delivery_claims_stranded_total`, `command_delivery_presence_read_errors_total` and
-`batch_refusals_total{bound="reserve"}`. A Command Delivery dashboard charts the rest. Several of
+`batch_refusals_total{bound="reserve"}`. The Command Delivery dashboard charts the fleet-write counters and the main claim, hold and presence counters; the remaining series are there for ad-hoc queries and your own panels. Several of
 these are expected to be busy and are not faults: a steady `not_sole` share of declined nudges, claims
 lost to the sweep racing a nudge, and holds placed while devices are offline. `command_delivery_responses_refused_total` is expected to read zero. A rising
 rate on `command_delivery_stranded_observed_total` or `command_response_lost_unsettled_total` means

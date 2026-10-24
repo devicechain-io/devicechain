@@ -596,6 +596,9 @@ func (rp *ResolvedEventsProcessor) endTerm(handle *termHandle) {
 	// Not consuming from here on, though the entry may stay ours on the server for as
 	// long as the release retries — which is why is_leader stays up until after it.
 	rp.metrics.setDetectLive(false)
+	// Nothing this replica reports about the term means anything from here on (the final
+	// checkpoint above was the last write to them), and it may stay a standby for a long time.
+	rp.metrics.clearTermGauges()
 	ctx, cancel := rp.releaseContext()
 	err := handle.lease.ReleaseWithin(ctx)
 	cancel()
