@@ -314,6 +314,14 @@ jobs:
           # shellcheck disable=SC2086
           "$RUNNER_TEMP/dcctl" install local --compact -y $preflight $imgargs || rc=$?
           if [ "$rc" -eq 0 ]; then
+            # The kind cluster exists now and the instance (hence the event store's
+            # operand image) does not. When the tag this tree points at is not published
+            # yet -- an operand bump before its merge -- build it and load it, so the
+            # event store does not ImagePullBackOff. A published tag is left to be pulled
+            # (one manifest probe).
+            hack/ensure-operand-image.sh devicechain || rc=$?
+          fi
+          if [ "$rc" -eq 0 ]; then
             # shellcheck disable=SC2086
             DCCTL_ESCROW_PASSPHRASE=loadtest-gate-throwaway \
             "$RUNNER_TEMP/dcctl" bootstrap local "$DC_INSTANCE" \
