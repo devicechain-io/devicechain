@@ -414,6 +414,30 @@ instance:
       # definition, in the service code (eventtime.DefaultWireFormat).
       # messaging:
       #   wireFormat: compact
+      # Which proxies' X-Forwarded-For header an endpoint that keys on the caller's address may
+      # believe: CIDR prefixes (IPv4 or IPv6), in practice the ingress controller's pod or
+      # Service range. Absent or empty trusts no proxy, so such an endpoint keys on the
+      # connection's own peer, which behind an ingress is the ingress itself, not the device.
+      #
+      # Each entry must be in canonical masked form (10.42.0.0/16, never 10.42.0.7/16: the
+      # second would trust the whole /16 while reading as one host), and a malformed entry
+      # stops every service at startup instead of being skipped. The list is read at startup,
+      # so changing it rolls the pods.
+      #
+      # It only helps if the ingress controller preserves the client address in the first
+      # place: its Service needs externalTrafficPolicy: Local (or PROXY protocol from the load
+      # balancer). With ingress-nginx at the edge, leave use-forwarded-headers OFF: the
+      # controller then writes the real TCP peer into X-Forwarded-For. Turn it on only behind
+      # a load balancer that itself appends the header, and then set proxy-real-ip-cidr to
+      # that load balancer's range (its default, 0.0.0.0/0, makes the client's own header win
+      # and so lets any caller choose its source address).
+      #
+      # Left commented out for the same reason as the log level: an uncommented empty list
+      # would change every existing instance's rendered document and checksum, rolling every
+      # pod on upgrade to arrive where it already was.
+      # http:
+      #   trustedProxies:
+      #     - "10.42.0.0/16"   # the ingress controller's pod range
       userManagement:
         # user-management is a functional area deployed by THIS chart into the
         # instance namespace (not infra in dc-system), so peers reach it by its

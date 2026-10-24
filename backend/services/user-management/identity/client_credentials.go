@@ -6,7 +6,6 @@ package identity
 import (
 	"context"
 	"errors"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -16,6 +15,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/credential"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/sourcelimit"
 	"github.com/devicechain-io/dc-user-management/iam"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
@@ -65,16 +65,16 @@ func errClientAuthFailed() *oauthError { return errInvalidClient("client authent
 //     integration without letting a stranger who knows its client id starve it: failed
 //     attempts never touch that bucket.
 var (
-	serviceAccountAttemptLimits = limiterLimits{
-		perKeyBurst: 20, perKeyEvery: 3 * time.Second, maxKeys: 10000,
+	serviceAccountAttemptLimits = sourcelimit.Limits{
+		Burst: 20, Every: 3 * time.Second, MaxKeys: 10000,
 	}
 	// serviceAccountGlobalLimits is one bucket (a single key) for attempts from sources
 	// with no recent mint.
-	serviceAccountGlobalLimits = limiterLimits{
-		perKeyBurst: 200, perKeyEvery: 100 * time.Millisecond, maxKeys: 1,
+	serviceAccountGlobalLimits = sourcelimit.Limits{
+		Burst: 200, Every: 100 * time.Millisecond, MaxKeys: 1,
 	}
-	serviceAccountMintLimits = limiterLimits{
-		perKeyBurst: 10, perKeyEvery: 30 * time.Second, maxKeys: 10000,
+	serviceAccountMintLimits = sourcelimit.Limits{
+		Burst: 10, Every: 30 * time.Second, MaxKeys: 10000,
 	}
 )
 
@@ -82,19 +82,6 @@ var (
 // global bucket. Longer than a token's lifetime, so an integration that mints once per
 // token stays exempt for as long as it keeps running.
 const serviceAccountTrustedSourceTTL = time.Hour
-
-// attemptSourceKey is the attempt limiter's key for a source address: an IPv4 address as
-// it is, an IPv6 address by its /64, anything unparseable verbatim.
-func attemptSourceKey(source string) string {
-	ip := net.ParseIP(source)
-	if ip == nil {
-		return source
-	}
-	if v4 := ip.To4(); v4 != nil {
-		return v4.String()
-	}
-	return ip.Mask(net.CIDRMask(64, 128)).String() + "/64"
-}
 
 // trustedSources remembers which sources minted recently. The zero value is ready to use.
 type trustedSources struct {
@@ -187,12 +174,12 @@ func ValidateResource(resource string) error {
 // against the kind's dummy — so an unknown client, a disabled account, an expired secret
 // and a wrong secret cannot be told apart by answer or by cost.
 func (m *Manager) ClientCredentials(ctx context.Context, req ClientCredentialsRequest) (*OAuthTokens, error) {
-	source := attemptSourceKey(req.Source)
-	if !m.saAttempts.allow(source) {
-		return nil, errSlowDown(serviceAccountAttemptLimits.perKeyEvery)
+	source := sourcelimit.SourceKey(req.Source)
+	if !m.saAttempts.Allow(source) {
+		return nil, errSlowDown(serviceAccountAttemptLimits.Every)
 	}
-	if !m.saTrusted.has(source, m.clock()) && !m.saGlobal.allow("") {
-		return nil, errSlowDown(serviceAccountGlobalLimits.perKeyEvery)
+	if !m.saTrusted.has(source, m.clock()) && !m.saGlobal.Allow("") {
+		return nil, errSlowDown(serviceAccountGlobalLimits.Every)
 	}
 	if req.ClientID == "" || !req.Presented {
 		return nil, errInvalidClient("client authentication required")
@@ -228,8 +215,8 @@ func (m *Manager) ClientCredentials(ctx context.Context, req ClientCredentialsRe
 	if err != nil {
 		return nil, err
 	}
-	if !m.saMints.allow(acct.ClientId) {
-		return nil, errSlowDown(serviceAccountMintLimits.perKeyEvery)
+	if !m.saMints.Allow(acct.ClientId) {
+		return nil, errSlowDown(serviceAccountMintLimits.Every)
 	}
 
 	t, err := m.iam.TenantByToken(ctx, acct.TenantId)

@@ -4,8 +4,9 @@
 package identity
 
 import (
-	"sync"
 	"time"
+
+	"github.com/devicechain-io/dc-microservice/sourcelimit"
 )
 
 // beginSso is public, so anyone can call it, and each call that gets as far as a
@@ -34,108 +35,33 @@ const (
 	ssoLimiterMaxSources = 10000
 )
 
-type tokenBucket struct {
-	tokens float64
-	last   time.Time
-}
-
-// limiterLimits are one limiter's two schedules and its key bound.
-type limiterLimits struct {
-	perKeyBurst int
-	perKeyEvery time.Duration
-	globalBurst int
-	globalEvery time.Duration
-	maxKeys     int
-}
-
-// ssoBeginLimits are beginSso's, above.
-var ssoBeginLimits = limiterLimits{
-	perKeyBurst: ssoBeginPerSourceBurst, perKeyEvery: ssoBeginPerSourceEvery,
-	globalBurst: ssoBeginGlobalBurst, globalEvery: ssoBeginGlobalEvery, maxKeys: ssoLimiterMaxSources,
-}
-
-// sourceLimiter is the pair of buckets above. The zero value is ready to use, with
-// beginSso's limits; another endpoint sets its own.
-type sourceLimiter struct {
-	mu      sync.Mutex
-	global  tokenBucket
-	sources map[string]*tokenBucket
-	// limits, when set, replaces ssoBeginLimits.
-	limits *limiterLimits
-	// now is the clock; a test may replace it.
-	now func() time.Time
-}
-
-func (l *sourceLimiter) lim() limiterLimits {
-	if l.limits != nil {
-		return *l.limits
+// ssoBeginSourceLimits and ssoBeginGlobalLimits are beginSso's, above. The global one is a
+// single key (a bucket shared by every sender).
+var (
+	ssoBeginSourceLimits = sourcelimit.Limits{
+		Burst: ssoBeginPerSourceBurst, Every: ssoBeginPerSourceEvery, MaxKeys: ssoLimiterMaxSources,
 	}
-	return ssoBeginLimits
+	ssoBeginGlobalLimits = sourcelimit.Limits{
+		Burst: ssoBeginGlobalBurst, Every: ssoBeginGlobalEvery, MaxKeys: 1,
+	}
+)
+
+// beginLimiter is the pair of buckets above, built from the shared per-source limiter in
+// core/sourcelimit. The global bucket is this endpoint's own policy: the primitive carries none.
+type beginLimiter struct {
+	perSource, global *sourcelimit.Limiter
 }
 
-func (l *sourceLimiter) clock() time.Time {
-	if l.now != nil {
-		return l.now()
+func newBeginLimiter(opts ...sourcelimit.Option) beginLimiter {
+	return beginLimiter{
+		perSource: sourcelimit.Must(ssoBeginSourceLimits, opts...),
+		global:    sourcelimit.Must(ssoBeginGlobalLimits, opts...),
 	}
-	return time.Now()
-}
-
-func (b *tokenBucket) take(now time.Time, burst int, every time.Duration) bool {
-	if b.last.IsZero() {
-		b.tokens, b.last = float64(burst), now
-	}
-	b.tokens += float64(now.Sub(b.last)) / float64(every)
-	if b.tokens > float64(burst) {
-		b.tokens = float64(burst)
-	}
-	b.last = now
-	if b.tokens < 1 {
-		return false
-	}
-	b.tokens--
-	return true
 }
 
 // allow reports whether a begin from source may proceed. A refusal from either bucket
 // refuses; the per-source bucket is charged first so a sender already over its own
 // allowance does not also drain the global one.
-func (l *sourceLimiter) allow(source string) bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	now := l.clock()
-	lim := l.lim()
-	if l.sources == nil {
-		l.sources = map[string]*tokenBucket{}
-	}
-	sb := l.sources[source]
-	if sb == nil {
-		if len(l.sources) >= lim.maxKeys {
-			l.evictLocked(now)
-		}
-		sb = &tokenBucket{}
-		l.sources[source] = sb
-	}
-	if !sb.take(now, lim.perKeyBurst, lim.perKeyEvery) {
-		return false
-	}
-	if lim.globalBurst == 0 {
-		return true
-	}
-	return l.global.take(now, lim.globalBurst, lim.globalEvery)
-}
-
-// evictLocked drops every source that has been idle long enough to have refilled, and if
-// that frees nothing (a sustained spray) all of them: forgetting a sender's history only
-// ever gives it a fresh per-source allowance, which the global bucket still bounds.
-func (l *sourceLimiter) evictLocked(now time.Time) {
-	lim := l.lim()
-	idle := lim.perKeyEvery * time.Duration(lim.perKeyBurst)
-	for k, b := range l.sources {
-		if now.Sub(b.last) >= idle {
-			delete(l.sources, k)
-		}
-	}
-	if len(l.sources) >= lim.maxKeys {
-		l.sources = map[string]*tokenBucket{}
-	}
+func (l beginLimiter) allow(source string) bool {
+	return l.perSource.Allow(source) && l.global.Allow("")
 }

@@ -106,9 +106,10 @@ type AuditEvent struct {
 	// Category is "mutation" (an entity create/update/delete) or "auth" (a login,
 	// failed login, or refresh). It discriminates the two row shapes.
 	Category string `gorm:"not null"`
-	// Actor is the JWT subject that performed the mutation, "system" for a
-	// deliberate system-context operation (bootstrap, the ingest pipeline), or ""
-	// when neither is present. For an auth event it is the subject username.
+	// Actor is the JWT subject that performed the mutation, else the actor a caller
+	// named with WithAuditActor (a device registering itself has no JWT), else "system"
+	// for a deliberate system-context operation (bootstrap, the ingest pipeline), or ""
+	// when none is present. For an auth event it is the subject username.
 	Actor string
 	// TableName is the mutated table (schema-qualified as the dialect renders it);
 	// empty for an auth event.
@@ -293,13 +294,36 @@ func auditCallback(operation string) func(*gorm.DB) {
 	}
 }
 
+// auditActorKey is the context key WithAuditActor stores its actor under.
+type auditActorKey struct{}
+
+// WithAuditActor names the actor the audit journal records for mutations made under the
+// returned context, for a write that has no user behind it: a device registering itself
+// through a provisioning profile has no JWT, so without a name its rows would carry no
+// actor at all. The name is the caller's to compose ("provisioning-profile:<token>"), and
+// must come from the server's own decision about who authenticated, never from request
+// input.
+//
+// Claims win: a context that carries an authenticated identity is journalled as that
+// identity whatever this says, so naming an actor can never relabel a user's write. An
+// empty actor leaves the context unchanged.
+func WithAuditActor(ctx context.Context, actor string) context.Context {
+	if actor == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, auditActorKey{}, actor)
+}
+
 // auditActor resolves the acting identity for the mutation from the statement
-// context: the JWT subject when authenticated, "system" for a deliberate
-// system-context operation, else "".
+// context: the JWT subject when authenticated, else the actor WithAuditActor named, "system"
+// for a deliberate system-context operation, else "".
 func auditActor(db *gorm.DB) string {
 	ctx := db.Statement.Context
 	if claims, ok := auth.ClaimsFromContext(ctx); ok {
 		return claims.Username
+	}
+	if actor, ok := ctx.Value(auditActorKey{}).(string); ok {
+		return actor
 	}
 	if core.IsSystemContext(ctx) {
 		return "system"

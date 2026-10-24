@@ -207,7 +207,7 @@ func (r *Registrar) Resolve(ctx context.Context, tenant, externalId string, poli
 		return "", ResolveDropped, nil
 	}
 
-	token := DeriveDeviceToken(externalId, r.tokenPrefix)
+	token := core.DeriveDeviceToken(externalId, r.tokenPrefix)
 	// TODO (follow-up): a persistently-failing create (e.g. a deviceTypeToken that
 	// passes the grammar check but names no existing type) is retried by the caller on
 	// every message from that device, spending the full bounded budget each time. It is
