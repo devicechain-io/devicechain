@@ -108,6 +108,12 @@ type Api struct {
 	// (ErrCredentialMisconfigured); nothing falls back to storing or comparing plaintext.
 	DeviceSecretKey *credential.DeviceSecretKey
 
+	// EnrollmentSecretKey digests the shared secret of every provisioning profile a create or
+	// update carries. It is a different key from DeviceSecretKey, derived from the same root
+	// key (credential.DeriveEnrollmentSecretKey). NIL FAILS CLOSED: a profile cannot be
+	// created or have its secret changed, and nothing falls back to storing the secret.
+	EnrollmentSecretKey *credential.DeviceSecretKey
+
 	// MisconfiguredSecrets counts checks refused with ErrCredentialMisconfigured, by path
 	// (CredentialPathConnect, CredentialPathEvent). Nil counts nothing (tests).
 	MisconfiguredSecrets *prometheus.CounterVec

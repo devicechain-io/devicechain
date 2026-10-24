@@ -5,14 +5,15 @@ package model
 
 import (
 	"context"
-	"crypto/subtle"
 	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/credential"
 	"github.com/devicechain-io/dc-microservice/entity"
+	"github.com/devicechain-io/dc-microservice/limit"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -53,6 +54,10 @@ func (api *Api) InitiateDeviceClaim(ctx context.Context, request *DeviceClaimIni
 	if len(devices) == 0 {
 		return nil, gorm.ErrRecordNotFound
 	}
+	secretDigest, err := api.digestClaimSecret(devices[0].TenantId, request.ClaimSecret)
+	if err != nil {
+		return nil, err
+	}
 
 	expiresAt, err := parseOptionalTime(request.ExpiresAt)
 	if err != nil {
@@ -78,7 +83,7 @@ func (api *Api) InitiateDeviceClaim(ctx context.Context, request *DeviceClaimIni
 					return err
 				}
 			}
-			existing.ClaimSecret = request.ClaimSecret
+			existing.ClaimSecretDigest = secretDigest
 			existing.Status = string(ClaimStatusOpen)
 			existing.ExpiresAt = expiresAt
 			existing.ClaimedTime = sql.NullTime{}
@@ -100,10 +105,10 @@ func (api *Api) InitiateDeviceClaim(ctx context.Context, request *DeviceClaimIni
 	}
 
 	created := &DeviceClaim{
-		Device:      devices[0],
-		ClaimSecret: request.ClaimSecret,
-		Status:      string(ClaimStatusOpen),
-		ExpiresAt:   expiresAt,
+		Device:            devices[0],
+		ClaimSecretDigest: secretDigest,
+		Status:            string(ClaimStatusOpen),
+		ExpiresAt:         expiresAt,
 	}
 	if err := api.RDB.DB(ctx).Create(created).Error; err != nil {
 		return nil, err
@@ -111,25 +116,51 @@ func (api *Api) InitiateDeviceClaim(ctx context.Context, request *DeviceClaimIni
 	return created, nil
 }
 
+// errNoClaimSecretKey refuses a claim carrying a secret when no EnrollmentSecretKey is wired:
+// nothing falls back to storing the secret.
+var errNoClaimSecretKey = errors.New("device claim secrets cannot be stored: no enrollment secret key is configured")
+
+// digestClaimSecret is the stored form of a claim secret: its keyed digest, bound to the
+// claim's tenant. The secret is digested EXACTLY AS SENT, whitespace included, because the
+// owner presents it byte for byte. One over credential.MaxEnrollmentSecretBytes is refused
+// with LIMIT_EXCEEDED, as the plaintext column's width did before it.
+func (api *Api) digestClaimSecret(tenant, secret string) (sql.NullString, error) {
+	if len(secret) > credential.MaxEnrollmentSecretBytes {
+		return sql.NullString{}, limit.Exceeded("claimSecret bytes", len(secret), credential.MaxEnrollmentSecretBytes)
+	}
+	if api.EnrollmentSecretKey == nil {
+		return sql.NullString{}, errNoClaimSecretKey
+	}
+	digest, err := api.EnrollmentSecretKey.Digest(tenant, secret)
+	if err != nil {
+		return sql.NullString{}, err
+	}
+	return sql.NullString{String: digest, Valid: true}, nil
+}
+
 // evaluateDeviceClaim verifies an open claim can be redeemed with the presented
 // secret: status OPEN, not expired, and the secret matches. Pure (no I/O) so the
-// policy is unit-testable in isolation; now is supplied by the caller.
-func evaluateDeviceClaim(claim *DeviceClaim, presentedSecret string, now time.Time) error {
+// policy is unit-testable in isolation; now is supplied by the caller. key is the
+// enrollment secret key the claim's digest was made under; nil fails closed.
+func evaluateDeviceClaim(key *credential.DeviceSecretKey, claim *DeviceClaim, presentedSecret string, now time.Time) error {
 	if ClaimStatus(claim.Status) != ClaimStatusOpen {
 		return ErrClaimNotOpen
 	}
 	if claim.ExpiresAt.Valid && !now.Before(claim.ExpiresAt.Time) {
 		return ErrClaimExpired
 	}
-	// An empty stored secret is never a valid proof (review #5, defense in depth):
-	// a constant-time compare of "" == "" would otherwise match an empty presented
-	// secret. InitiateDeviceClaim rejects empty secrets, so this only guards rows
-	// that predate that check.
-	if claim.ClaimSecret == "" {
+	// No stored digest is never a valid proof (review #5, defense in depth): a claim with
+	// no secret is redeemed by nothing, an empty presented secret included.
+	// InitiateDeviceClaim rejects empty secrets, so this only guards rows that predate
+	// that check.
+	if !claim.ClaimSecretDigest.Valid || presentedSecret == "" {
 		return ErrClaimSecretMismatch
 	}
-	// Constant-time compare to avoid leaking the secret via timing.
-	if subtle.ConstantTimeCompare([]byte(presentedSecret), []byte(claim.ClaimSecret)) != 1 {
+	// Constant-time compare of the presented secret's digest to the stored one, so the
+	// secret does not leak via timing; a digest made under another key, another tenant's
+	// or a malformed one is a mismatch. Gated by an exemption in
+	// hack/check-credential-compare.sh.
+	if credential.VerifyDeviceSecret(key, claim.TenantId, claim.ClaimSecretDigest.String, presentedSecret) != nil {
 		return ErrClaimSecretMismatch
 	}
 	return nil
@@ -155,7 +186,7 @@ func (api *Api) ClaimDevice(ctx context.Context, request *DeviceClaimRequest, no
 		}
 		return nil, err
 	}
-	if err := evaluateDeviceClaim(claim, request.ClaimSecret, now); err != nil {
+	if err := evaluateDeviceClaim(api.EnrollmentSecretKey, claim, request.ClaimSecret, now); err != nil {
 		return nil, err
 	}
 

@@ -58,7 +58,7 @@ func TestCreateProvisioningProfile_RefusesBlankKeyOrSecret(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a non-blank secret was refused: %v", err)
 	}
-	if created.ProvisionSecret != " s3cret " {
-		t.Fatalf("stored secret %q, want it verbatim", created.ProvisionSecret)
+	if got := provisionSecretStr(created.ProvisionSecretDigest, " s3cret ", "s3cret"); got != " s3cret " {
+		t.Fatalf("stored secret verifies as %q, want it verbatim (padding included)", got)
 	}
 }

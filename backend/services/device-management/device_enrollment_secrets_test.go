@@ -1,0 +1,111 @@
+// Copyright The DeviceChain Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package main
+
+import (
+	"context"
+	"database/sql"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
+
+	"github.com/devicechain-io/dc-device-management/model"
+	dmtest "github.com/devicechain-io/dc-device-management/test"
+	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/credential"
+	"github.com/devicechain-io/dc-microservice/rdb"
+	putest "github.com/devicechain-io/dc-microservice/rdb/partialupdatetest"
+)
+
+// 🔑 AN UPGRADED INSTANCE KEEPS ITS PROFILES AND ITS OPEN CLAIMS. Rows written before these
+// secrets were digested hold them in provision_secret and claim_secret. The startup step
+// digests every one in place, across tenants, claim statuses and soft-deleted rows, and
+// NULLs the plaintext. The values in the rows are what this test asserts, because
+// hack/migration-diff.sh compares the schema and no rows.
+
+func rawColumn(t *testing.T, db *gorm.DB, table, col, token string) any {
+	t.Helper()
+	var rows []map[string]any
+	require.NoError(t, db.Raw(`SELECT `+col+` FROM `+table+` WHERE token = ?`, token).Scan(&rows).Error)
+	require.Len(t, rows, 1, token)
+	return rows[0][col]
+}
+
+func TestTheStartupStepDigestsEveryPlaintextEnrollmentSecretInPlace(t *testing.T) {
+	db := putest.NewSQLiteDB(t, &model.ProvisioningProfile{}, &model.DeviceClaim{}, &model.DeviceCredential{})
+	// Seeding writes rows of two tenants, so it runs as the instance does.
+	seed := db.WithContext(core.WithSystemContext(context.Background()))
+	key := dmtest.EnrollmentSecretKey()
+
+	legacy := func(s string) sql.NullString { return sql.NullString{String: s, Valid: true} }
+	profile := func(tenant, token, key string, secret sql.NullString) {
+		p := &model.ProvisioningProfile{ProvisionKey: key, LegacyProvisionSecret: secret}
+		p.TenantId, p.Token = tenant, token
+		require.NoError(t, seed.Create(p).Error)
+	}
+	profile("acme", "pp-a", "key-a", legacy("fleet-a"))
+	profile("acme", "pp-pad", "key-pad", legacy(" fleet pad "))
+	profile("acme", "pp-del", "key-del", legacy("fleet-deleted"))
+	profile("beta", "pp-b", "key-b", legacy("fleet-b"))
+	profile("acme", "pp-blank", "key-blank", legacy(""))
+	profile("acme", "pp-none", "key-none", sql.NullString{})
+	require.NoError(t, db.Exec(`UPDATE provisioning_profiles SET deleted_at = ? WHERE token = ?`, time.Now(), "pp-del").Error)
+
+	claim := func(tenant string, deviceId uint, status, secret string) {
+		c := &model.DeviceClaim{DeviceId: deviceId, Status: status, LegacyClaimSecret: legacy(secret)}
+		c.TenantId = tenant
+		require.NoError(t, seed.Create(c).Error)
+	}
+	claim("acme", 1, string(model.ClaimStatusOpen), "printed-open")
+	claim("acme", 2, string(model.ClaimStatusClaimed), "printed-claimed")
+	claim("beta", 3, string(model.ClaimStatusOpen), "printed-beta")
+	claim("acme", 4, string(model.ClaimStatusCanceled), "")
+
+	rdbm := &rdb.RdbManager{Database: db}
+	require.NoError(t, digestStoredCredentialSecrets(context.Background(), rdbm,
+		dmtest.DeviceSecretKey(), key))
+
+	// Every plaintext is gone, and the digest verifies the secret that was there, bound to
+	// the row's own tenant.
+	for token, want := range map[string]struct{ tenant, secret string }{
+		"pp-a": {"acme", "fleet-a"}, "pp-pad": {"acme", " fleet pad "},
+		"pp-del": {"acme", "fleet-deleted"}, "pp-b": {"beta", "fleet-b"},
+	} {
+		require.Nil(t, rawColumn(t, db, "provisioning_profiles", "provision_secret", token), "%s still holds its plaintext", token)
+		digest, _ := rawColumn(t, db, "provisioning_profiles", "provision_secret_digest", token).(string)
+		require.NoError(t, credential.VerifyDeviceSecret(key, want.tenant, digest, want.secret), "%s", token)
+		// The negative control: the digest is bound to the tenant and to the secret.
+		other := "beta"
+		if want.tenant == "beta" {
+			other = "acme"
+		}
+		require.Error(t, credential.VerifyDeviceSecret(key, other, digest, want.secret), "%s verifies in another tenant", token)
+		require.Error(t, credential.VerifyDeviceSecret(key, want.tenant, digest, want.secret+"x"), token)
+	}
+	for _, token := range []string{"pp-blank", "pp-none"} {
+		require.Nil(t, rawColumn(t, db, "provisioning_profiles", "provision_secret", token), token)
+		require.Nil(t, rawColumn(t, db, "provisioning_profiles", "provision_secret_digest", token), "%s was given a digest of nothing", token)
+	}
+
+	var claims []map[string]any
+	require.NoError(t, db.Raw(`SELECT device_id, tenant_id, claim_secret, claim_secret_digest FROM device_claims ORDER BY device_id`).Scan(&claims).Error)
+	require.Len(t, claims, 4)
+	secrets := []string{"printed-open", "printed-claimed", "printed-beta", ""}
+	for i, c := range claims {
+		require.Nil(t, c["claim_secret"], "claim %d still holds its plaintext", i+1)
+		if secrets[i] == "" {
+			require.Nil(t, c["claim_secret_digest"], "claim %d was given a digest of nothing", i+1)
+			continue
+		}
+		digest, _ := c["claim_secret_digest"].(string)
+		require.NoError(t, credential.VerifyDeviceSecret(key, c["tenant_id"].(string), digest, secrets[i]), "claim %d", i+1)
+	}
+
+	// A second start finds nothing to do.
+	require.NoError(t, digestStoredCredentialSecrets(context.Background(), rdbm, dmtest.DeviceSecretKey(), key))
+	digest1, _ := rawColumn(t, db, "provisioning_profiles", "provision_secret_digest", "pp-a").(string)
+	require.NoError(t, credential.VerifyDeviceSecret(key, "acme", digest1, "fleet-a"))
+}

@@ -112,9 +112,15 @@ type ProvisioningProfileUpdateRequest struct {
 // ultimately folds in; until that lands it is a standalone entity resolved by
 // its ProvisionKey.
 //
-// ProvisionSecret is stored as-is and verified with a constant-time compare,
-// mirroring the DeviceCredential secret posture (ADR-014); hashing both secret
-// stores is a future cross-cutting decision, not a provisioning-only one.
+// 🔴 THE SECRET IS NEVER STORED, ONLY ITS KEYED DIGEST. ProvisionSecretDigest is what
+// credential.DeriveEnrollmentSecretKey's key made of the secret a create or update
+// carried, and NULL for a profile with none (which matches no presented secret). Nothing
+// that reads this row can recover the secret. The provision_secret column that held the
+// plaintext is still in the table, NULLed by DigestPlaintextProvisionSecrets at startup and
+// by every write (LegacyProvisionSecret). Nothing in the service
+// reads a profile's secret back: no endpoint consumes a profile yet, so there is a write path
+// and no verifier. The endpoint that adds one compares through credential.Checker, behind a
+// per-key backoff, against this digest.
 type ProvisioningProfile struct {
 	gorm.Model
 	rdb.TenantScoped
@@ -122,14 +128,23 @@ type ProvisioningProfile struct {
 	rdb.NamedEntity
 	rdb.MetadataEntity
 
-	ProvisionKey    string
-	ProvisionSecret string
-	Strategy        string
-	DeviceTypeId    uint
-	DeviceType      *DeviceType
-	CredentialType  string
-	Enabled         bool
-	ExpiresAt       sql.NullTime
+	ProvisionKey          string
+	ProvisionSecretDigest sql.NullString
+	Strategy              string
+	DeviceTypeId          uint
+	DeviceType            *DeviceType
+	CredentialType        string
+	Enabled               bool
+	ExpiresAt             sql.NullTime
+
+	// LegacyProvisionSecret is the retired plaintext column, mapped WRITE-ONLY so that every
+	// create and save of a profile writes it NULL. Nothing reads it, and nothing may set it.
+	//
+	// 🔴 IT IS LOAD-BEARING DURING A ROLLING UPGRADE, for the reason
+	// DeviceCredential.LegacyCredentialValue gives: an old-version pod rotates the secret
+	// into this column and leaves the digest alone, and a new pod that saved without
+	// clearing it would let the next start digest the OLDER value over the newer one.
+	LegacyProvisionSecret sql.NullString `gorm:"column:provision_secret;->:false;<-"`
 }
 
 // DefaultOrder implements rdb.Sortable with the registry default: newest first, token

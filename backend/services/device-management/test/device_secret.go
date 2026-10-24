@@ -17,6 +17,17 @@ func DeviceSecretKey() *credential.DeviceSecretKey {
 	return k
 }
 
+// EnrollmentSecretKey is the fixed provisioning secret key for tests: what a test Api stores
+// provisioning profile secrets under and a test Checker compares them with. It is derived
+// from the same root as DeviceSecretKey, and is a different key.
+func EnrollmentSecretKey() *credential.DeviceSecretKey {
+	k, err := credential.DeriveEnrollmentSecretKey([]byte("device-management-test-root-key!"))
+	if err != nil {
+		panic(err)
+	}
+	return k
+}
+
 // SecretDigest is tenant's secret's stored form under DeviceSecretKey.
 func SecretDigest(tenant, secret string) string {
 	d, err := DeviceSecretKey().Digest(tenant, secret)
