@@ -4,8 +4,12 @@
 package main
 
 import (
+	"context"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -40,8 +44,11 @@ func registeredPattern(ms *core.Microservice, path string) string {
 func newUserManagementForRoutes(t *testing.T, issuerUrl string) *core.Microservice {
 	t.Helper()
 
-	prevMs, prevCfg, prevIdent := Microservice, Configuration, IdentityManager
-	t.Cleanup(func() { Microservice, Configuration, IdentityManager = prevMs, prevCfg, prevIdent })
+	prevMs, prevCfg, prevIdent, prevInternal := Microservice, Configuration, IdentityManager, InternalAuthMux
+	t.Cleanup(func() {
+		Microservice, Configuration, IdentityManager, InternalAuthMux = prevMs, prevCfg, prevIdent, prevInternal
+	})
+	InternalAuthMux = nil
 
 	Microservice = &core.Microservice{InstanceId: "test", FunctionalArea: "user-management"}
 	Microservice.UseMetricsRegistry(prometheus.NewRegistry())
@@ -64,7 +71,11 @@ func newUserManagementForRoutes(t *testing.T, issuerUrl string) *core.Microservi
 // /auth/service-token is beside it and is the bootstrap trust root: without it no
 // service can mint the token it calls another service with, so service-to-service
 // traffic stops too — not merely token validation.
-func TestUnconditionalRoutesAreOnTheOwnedMux(t *testing.T) {
+//
+// They are served by the INTERNAL mux and by nothing else: the public mux must not carry
+// them, because the mint is a shared-secret-to-token exchange that stays private only if no
+// public listener can reach it, whatever ingress sits in front.
+func TestInternalAuthRoutesAreOnTheInternalMuxAndNotThePublicOne(t *testing.T) {
 	ms := newUserManagementForRoutes(t, "")
 
 	registerKeyHandlers()
@@ -74,14 +85,94 @@ func TestUnconditionalRoutesAreOnTheOwnedMux(t *testing.T) {
 		path string
 		why  string
 	}{
-		{"/auth/jwks", "every peer service fetches this to validate tokens; losing it takes the whole instance out of its Service endpoints"},
+		{auth.JWKSPath, "every peer service fetches this to validate tokens; losing it takes the whole instance out of its Service endpoints"},
 		{auth.ServiceTokenPath, "the bootstrap trust root; losing it stops every service-to-service call, not just token validation"},
 	} {
 		t.Run(tc.path, func(t *testing.T) {
-			require.Equal(t, tc.path, registeredPattern(ms, tc.path),
-				"%s is not served by this microservice's mux — %s", tc.path, tc.why)
+			_, got := internalAuthMux().Handler(httptest.NewRequest(http.MethodGet, tc.path, nil))
+			require.Equal(t, tc.path, got,
+				"%s is not served by the internal auth mux — %s", tc.path, tc.why)
+			require.Empty(t, registeredPattern(ms, tc.path),
+				"%s is on the PUBLIC mux; the internal-only endpoints must never share it", tc.path)
 		})
 	}
+}
+
+// The caller-level fail-closed check: with the WHOLE public surface registered, as production
+// does, a request for either internal endpoint on the public handler answers 404, and the same
+// request on the internal handler is served (a bad secret is 401, not 404).
+//
+// 🔴 THIS IS WHAT REPLACES THE INGRESS SNIPPET. It runs with no ingress anywhere in the
+// picture, so it fails if any registration puts a mint on the public mux again.
+func TestPublicHandlerAnswers404ForInternalEndpointsWithNoIngressInFront(t *testing.T) {
+	ms := newUserManagementForRoutes(t, "https://iot.example.com/api/user-management")
+	ms.InstanceConfiguration.Infrastructure.ServiceAuth.Secret = "right-secret"
+
+	registerKeyHandlers()
+	registerServiceTokenHandler()
+	registerOAuthHandlersIfEnabled()
+	registerSsoHandlersIfEnabled()
+	registerAdminHandler()
+	registerSettingsHandler()
+	ms.RegisterProbes(nil)
+
+	public := httptest.NewServer(ms.Mux())
+	defer public.Close()
+	internal := httptest.NewServer(internalAuthMux())
+	defer internal.Close()
+
+	do := func(t *testing.T, base, method, path string) int {
+		req, err := http.NewRequest(method, base+path, strings.NewReader(`{}`))
+		require.NoError(t, err)
+		req.Header.Set(auth.ServiceSecretHeader, "wrong-secret")
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	for _, p := range []string{auth.ServiceTokenPath, auth.JWKSPath, "/auth/", "/auth/anything"} {
+		for _, m := range []string{http.MethodGet, http.MethodPost} {
+			require.Equal(t, http.StatusNotFound, do(t, public.URL, m, p),
+				"public %s %s must be 404 with no ingress in front", m, p)
+		}
+	}
+	require.Equal(t, http.StatusUnauthorized, do(t, internal.URL, http.MethodPost, auth.ServiceTokenPath),
+		"the internal listener must serve the mint (a wrong secret is refused 401, not routed 404)")
+	require.NotEqual(t, http.StatusNotFound, do(t, internal.URL, http.MethodGet, auth.JWKSPath),
+		"the internal listener must serve the JWKS")
+	// The public JWKS mirror an external verifier uses is unaffected.
+	require.NotEqual(t, http.StatusNotFound, do(t, public.URL, http.MethodGet, identity.OAuthJwksPath))
+}
+
+// The listener itself: started from the instance configuration it binds the configured
+// port, serves the internal mux, and refuses a port that would collapse it onto the public one.
+func TestInternalAuthListenerBindsTheConfiguredPort(t *testing.T) {
+	ms := newUserManagementForRoutes(t, "")
+	prevSrv := InternalAuthServer
+	t.Cleanup(func() { InternalAuthServer = prevSrv })
+
+	registerServiceTokenHandler()
+
+	ms.InstanceConfiguration.Infrastructure.UserManagement.InternalPort = 0
+	require.Error(t, startInternalAuthListener(), "an unset port must be refused, not bound at random")
+	ms.InstanceConfiguration.Infrastructure.UserManagement.InternalPort = core.HttpPort
+	require.Error(t, startInternalAuthListener(), "the public port must be refused")
+
+	// Pick a free port, then release it for the listener.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	port := ln.Addr().(*net.TCPAddr).Port
+	require.NoError(t, ln.Close())
+
+	ms.InstanceConfiguration.Infrastructure.UserManagement.InternalPort = uint32(port)
+	require.NoError(t, startInternalAuthListener())
+	t.Cleanup(func() { _ = InternalAuthServer.Shutdown(context.Background()) })
+
+	resp, err := http.Post(fmt.Sprintf("http://127.0.0.1:%d%s", port, auth.ServiceTokenPath), "application/json", strings.NewReader(`{}`))
+	require.NoError(t, err)
+	resp.Body.Close()
+	require.NotEqual(t, http.StatusNotFound, resp.StatusCode, "the mint is not served on the internal port")
 }
 
 // The rest of the unconditional set: the two admin-tier GraphQL planes and the

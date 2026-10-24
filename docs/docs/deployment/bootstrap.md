@@ -308,6 +308,22 @@ Two things on a cluster can belong to only one instance, and the bootstrap handl
   the first instance only. Later instances' brokers are reachable from inside the cluster, and
   the bootstrap says so when it happens.
 
+#### Ingress and your own controller {#ingress-controller}
+
+The cluster install sets up one ingress controller and every instance gets its routes from the chart. Nothing
+at the edge is a security control: the service-token mint and the signing-key set are served by
+`user-management` on an internal port that no ingress route targets, so the public port answers 404
+for them behind any controller. The controller `dcctl install` sets up runs with configuration snippets
+disabled, and the chart's ingresses carry none.
+
+If you bring your own controller:
+
+- Route `/api/<area>` to each area's Service port `graphql`, stripping the prefix, and `/` to the console. You
+  do not need a rule that hides `/auth/` paths, and you must not route to a Service port named `internal-auth`.
+- Keep that port reachable from the instance's own namespace only. The chart's network policy
+  (`networkPolicy.enabled`) does that on a cluster that enforces policy. See
+  [Endpoints that never leave the cluster](../concepts/security-model.md#internal-endpoints).
+
 #### The instance namespace {#instance-namespace}
 
 The bootstrap checks the instance's namespace at the same point. An instance owns

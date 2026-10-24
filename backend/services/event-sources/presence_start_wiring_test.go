@@ -44,6 +44,7 @@ func startPresence(t *testing.T, b *authBroker) (*core.Microservice, *presenceRu
 	infra := &Microservice.InstanceConfiguration.Infrastructure
 	infra.ServiceAuth.Secret = "shh"
 	infra.UserManagement.Hostname, infra.UserManagement.Port = host, port
+	infra.UserManagement.InternalPort = port
 	infra.DeviceState.Hostname, infra.DeviceState.Port = host, port
 	infra.Nats = b.cfg
 	initializeMetrics()

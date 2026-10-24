@@ -126,6 +126,7 @@ func wireIngest(t *testing.T, um *fakeUM, rate float64, burst int) *ingestWiring
 		Microservice.InstanceConfiguration.Infrastructure.ServiceAuth.Secret = "shh"
 		Microservice.InstanceConfiguration.Infrastructure.UserManagement.Hostname = host
 		Microservice.InstanceConfiguration.Infrastructure.UserManagement.Port = port
+		Microservice.InstanceConfiguration.Infrastructure.UserManagement.InternalPort = port
 	}
 	initializeMetrics()
 	InboundEventsWriter, FailedDecodeWriter = nopWriter{}, nopWriter{}

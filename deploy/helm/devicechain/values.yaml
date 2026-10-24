@@ -424,6 +424,14 @@ instance:
         # a stale pre-Helm coordinate that does not exist under ADR-022 rendering.)
         hostname: user-management
         port: 8080
+        # The INTERNAL listener: the service-token mint and the JWKS every peer validates
+        # tokens against. Peers dial it directly, through the ClusterIP Service's
+        # `internal-auth` port; no Ingress, route or load balancer ever names it, so the
+        # public port answers 404 for both whatever controller sits in front. The chart
+        # reads this one value for the container port, the Service port and the
+        # NetworkPolicy, so they cannot disagree with what the peers dial. It must differ
+        # from `port`.
+        internalPort: 8082
       deviceManagement:
         # device-management is reached in-cluster by its instance-namespace Service
         # name for synchronous cross-service calls (ADR-044 amendment). command-

@@ -8,7 +8,9 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"fmt"
+	"net"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -474,9 +476,29 @@ type MetricsConfiguration struct {
 // User-management connectivity configuration. The user-management service
 // issues the platform's RS256 JWT signing key (ADR-008); every other service
 // fetches the public key from this host at startup to validate access tokens.
+//
+// 🔴 TWO PORTS, AND THEY ARE TWO DIFFERENT TRUST BOUNDARIES. Port is the public GraphQL
+// port: the one an ingress routes to, and the one that serves /graphql. InternalPort is a
+// separate listener that serves ONLY the endpoints no outside caller may ever reach: the
+// service-token mint (a shared-secret to token exchange) and the platform JWKS every peer
+// validates tokens against. Nothing routes to it; the chart exposes it on the ClusterIP
+// Service alone. Everything a service dials to authenticate itself goes to InternalPort,
+// and nothing else does. See InternalAddr.
 type UserManagementConfiguration struct {
-	Hostname string
-	Port     uint32
+	Hostname     string
+	Port         uint32
+	InternalPort uint32
+}
+
+// DefaultUserManagementInternalPort is the internal listener's port when none is configured.
+// Only ABSENCE is defaulted (ApplyDefaults).
+const DefaultUserManagementInternalPort = 8082
+
+// InternalAddr is host:port of the internal listener, the one address every in-cluster
+// caller of the service-token mint and the JWKS uses. It is the single place that answer
+// is computed, so a caller cannot reach those endpoints by building the public address.
+func (c UserManagementConfiguration) InternalAddr() string {
+	return net.JoinHostPort(c.Hostname, strconv.FormatUint(uint64(c.InternalPort), 10))
 }
 
 // DeviceManagementConfiguration locates the device-management GraphQL endpoint for
@@ -1293,6 +1315,11 @@ func (c *InstanceConfiguration) ApplyDefaults() {
 	if c.Infrastructure.Logging.Level == "" {
 		c.Infrastructure.Logging.Level = DefaultLogLevel
 	}
+	// Absence only: an instance config rendered before the internal listener existed still
+	// names the right port.
+	if c.Infrastructure.UserManagement.InternalPort == 0 {
+		c.Infrastructure.UserManagement.InternalPort = DefaultUserManagementInternalPort
+	}
 	// Absence only, as with the log level: a present value that names no format is refused
 	// in Validate, never rewritten.
 	if c.Infrastructure.Messaging.WireFormat == "" {
@@ -1471,8 +1498,9 @@ func NewDefaultInstanceConfiguration() *InstanceConfiguration {
 				Enabled: true,
 			},
 			UserManagement: UserManagementConfiguration{
-				Hostname: "dc-user-management.dc-system",
-				Port:     8080,
+				Hostname:     "dc-user-management.dc-system",
+				Port:         8080,
+				InternalPort: DefaultUserManagementInternalPort,
 			},
 			DeviceManagement: DeviceManagementConfiguration{
 				Hostname: "dc-device-management.dc-system",

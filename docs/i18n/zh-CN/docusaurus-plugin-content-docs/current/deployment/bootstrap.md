@@ -170,6 +170,15 @@ Operator 无法接管 StatefulSet 的数据目录，因此不支持原地升级�
 - **Ingress 主机名。** 两个实例使用同一主机名时，Ingress 控制器会静默地只服务一个。主机名已被其他实例使用时初始化拒绝执行。为每个实例设置独立 `--host`，本地集群例如 `--host beta.localhost`。
 - **本地 MQTT 端口。** 本地集群中，机器的 1883 端口只连接第一个实例的代理。后续实例的代理可从集群内部访问，初始化会对此提示。
 
+#### Ingress 与自带控制器 {#ingress-controller}
+
+集群安装会部署一个 Ingress 控制器，每个实例的路由由 Chart 提供。边缘不承担任何安全控制：服务令牌签发端点和签名密钥集由 `user-management` 在一个没有任何 Ingress 路由指向的内部端口上提供，因此无论使用哪种控制器，公开端口对它们都返回 404。`dcctl install` 部署的控制器在禁用配置 snippet 的情况下运行，Chart 的 Ingress 也不带任何 snippet。
+
+如果你自带控制器：
+
+- 将 `/api/<area>` 路由到各功能区 Service 的 `graphql` 端口并去掉前缀，将 `/` 路由到控制台。你不需要隐藏 `/auth/` 路径的规则，也不能路由到名为 `internal-auth` 的 Service 端口。
+- 让该端口只能从实例自身的命名空间访问。在强制执行网络策略的集群上，Chart 的网络策略（`networkPolicy.enabled`）会做到这一点。参见[不会离开集群的端点](../concepts/security-model.md#internal-endpoints)。
+
 #### 实例命名空间 {#instance-namespace}
 
 初始化同时检查命名空间。实例拥有 `dci-<id>`：dcctl 在其中写入根密钥、代理 TLS 密钥对和所有数据库凭据，`dcctl destroy` 会删除整个命名空间。因此，已存在却没有 `devicechain.io/instance=<id>` 标签的 `dci-<id>` 会在任何写入前被拒绝。

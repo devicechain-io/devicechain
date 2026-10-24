@@ -158,7 +158,7 @@ func New(umCfg config.UserManagementConfiguration, secret, subject string, autho
 	c := &Client{
 		http:        &http.Client{Timeout: requestTimeout, Transport: sharedTransport},
 		mintHTTP:    &http.Client{Timeout: requestTimeout, Transport: sharedTransport},
-		mintURL:     fmt.Sprintf("http://%s:%d%s", umCfg.Hostname, umCfg.Port, auth.ServiceTokenPath),
+		mintURL:     "http://" + umCfg.InternalAddr() + auth.ServiceTokenPath,
 		secret:      secret,
 		subject:     subject,
 		authorities: authorities,

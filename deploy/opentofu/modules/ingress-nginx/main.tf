@@ -19,13 +19,13 @@ variable "release_name" {
 
 variable "chart_version" {
   description = <<-EOT
-    ingress-nginx chart version. PINNED, and the pin is not hygiene — the values
-    below re-enable configuration snippets and lower the annotations risk level,
-    a surface upstream has tightened repeatedly. 4.15.1 ships controller 1.15.1,
-    which is where this recipe was verified: the instance chart's Ingress admits.
-    When that gating moves again the failure does not look like a version problem:
-    the Ingress is rejected by the admission webhook midway through bootstrap,
-    with the controller reporting a snippet or risk-level error.
+    ingress-nginx chart version. PINNED, and the pin is not hygiene — the annotation
+    admission gating (snippets, the annotations risk level) is a surface upstream has
+    tightened repeatedly. 4.15.1 ships controller 1.15.1, which is where this recipe
+    was verified: the instance chart's Ingress admits with snippets OFF and the
+    default risk level. When that gating moves again the failure does not look like
+    a version problem: the Ingress is rejected by the admission webhook midway
+    through bootstrap, with the controller reporting an annotation or risk-level error.
 
     Bumping is a deliberate act: install the new chart, then apply an instance and
     confirm its Ingress ADMITS. Keep the root's ingress_nginx_chart_version in step
@@ -75,23 +75,25 @@ locals {
       enabled = true
     }
     ingressClass = var.ingress_class
-    # The DeviceChain instance Ingress uses a configuration-snippet annotation.
-    # Upstream has been tightening that surface for several releases — snippets went
-    # off by default, then a separate annotations risk level was added, and what that
-    # level evaluates has changed again since. Both switches are re-enabled here, or
-    # the instance chart's helm apply is rejected by the admission webhook ("Snippet
-    # directives are disabled" / "risky annotation"). Local-dev trust boundary: the
-    # only Ingress author is the DeviceChain chart itself.
+    # 🔴 SNIPPETS ARE OFF AND THE RISK LEVEL IS THE CONTROLLER DEFAULT, BOTH ON PURPOSE.
+    # The instance chart's Ingress objects carry no configuration-snippet: nothing at
+    # the edge guards the service-token mint, because user-management serves it on an
+    # internal listener no route reaches. A snippet is an arbitrary nginx directive
+    # taken from an Ingress object, which is the attack class behind IngressNightmare
+    # and CVE-2026-4342; with no Ingress that needs one, the controller has no reason
+    # to accept one. A future template that adds a snippet is rejected by the admission
+    # webhook at install, and hack/check-ingress-no-snippets.sh fails it in CI first.
     #
-    # 🔴 No release boundary is named on purpose. The two that used to be written here
-    # were wrong, and a version number in a comment is a claim about someone else's
-    # changelog that nothing in this repo re-checks. What IS verified is the pin:
-    # chart 4.15.1 / controller 1.15.1 admits the instance Ingress with these values,
-    # measured on a live cluster. That is why the version is pinned rather than
-    # tracked — so the next tightening arrives as a bump somebody chose.
-    allowSnippetAnnotations = true
+    # The risk level is pinned to "High" (the default) rather than left implicit so the
+    # setting is visible and so a change to the controller's default cannot quietly
+    # raise it back to "Critical", the level that admits snippets.
+    #
+    # What IS verified is the pin: chart 4.15.1 / controller 1.15.1 admits the instance
+    # Ingress objects with these values. The version is pinned rather than tracked so
+    # the next tightening arrives as a bump somebody chose.
+    allowSnippetAnnotations = false
     config = {
-      "annotations-risk-level" = "Critical"
+      "annotations-risk-level" = "High"
     }
   }
   # kind recipe: bind node 80/443 directly, no LoadBalancer to wait on.

@@ -126,7 +126,7 @@ func stubScheduler(t *testing.T, owner *stubOwner) *verify.WindowScheduler {
 	t.Cleanup(mint.Close)
 	host, portStr, _ := net.SplitHostPort(mint.Listener.Addr().String())
 	port, _ := strconv.Atoi(portStr)
-	client := svcclient.New(config.UserManagementConfiguration{Hostname: host, Port: uint32(port)},
+	client := svcclient.New(config.UserManagementConfiguration{Hostname: host, Port: uint32(port), InternalPort: uint32(port)},
 		"shh", "command-delivery", []string{string(auth.DeviceRead)})
 	return verify.NewWindowScheduler(client, owner.serve(t))
 }

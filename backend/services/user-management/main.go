@@ -511,12 +511,15 @@ func registerSettingsHandler() {
 	Microservice.Mux().Handle("/settings/graphql", gqlcore.NewAdminHttpHandler(settingsSchema, settingsProviders, Microservice.Readiness))
 }
 
-// registerKeyHandlers serves the instance signing keys on the shared http server
+// registerKeyHandlers serves the instance signing keys on the INTERNAL listener
 // so the other services can validate tokens (ADR-008). /auth/jwks is the JWK Set
 // of every retained public key — consumers select the right key by the token's
 // kid, which lets a signing-key rotation propagate without restarts.
+//
+// It is deliberately not on the public mux: an external verifier uses /oauth/jwks,
+// the public mirror the OAuth metadata advertises.
 func registerKeyHandlers() {
-	Microservice.Mux().Handle("/auth/jwks", identity.BoundRequests(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	internalAuthMux().Handle(auth.JWKSPath, identity.BoundRequests(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		jwks, err := IdentityManager.JWKS()
 		if err != nil {
 			http.Error(w, "failed to build JWKS", http.StatusInternalServerError)
@@ -533,9 +536,8 @@ func registerKeyHandlers() {
 // 8414 metadata + a public JWKS mirror); the /oauth/authorize and /oauth/token
 // endpoints it advertises land in the following slices.
 //
-// The advertised jwks_uri is /oauth/jwks precisely so it is NOT caught by the
-// ingress rule that 404s external /api/<area>/auth/* — no ingress change is needed
-// for it.
+// The advertised jwks_uri is /oauth/jwks because /auth/jwks is served only on the
+// internal listener (see InternalAuthMux), which an external verifier cannot reach.
 //
 // 🔴 THE METADATA DOCUMENT IS SERVED AT TWO PATHS, AND THE SECOND IS THE ONE CLIENTS
 // USE. A note here used to describe the path-INSERTED location as an unsupported
@@ -627,8 +629,11 @@ func registerOAuthHandlers() {
 // service's JWKS validator accepts it. The secret is the bootstrap trust root, so
 // an empty configured secret fails closed (minting disabled). The handler body
 // lives in identity so its branches are unit-tested.
+//
+// It registers on the INTERNAL mux only (see InternalAuthMux): the public port does not
+// serve the mint, whatever sits in front of it.
 func registerServiceTokenHandler() {
-	Microservice.Mux().Handle(auth.ServiceTokenPath, identity.ServiceTokenHandler(
+	internalAuthMux().Handle(auth.ServiceTokenPath, identity.ServiceTokenHandler(
 		func() string { return Microservice.InstanceConfiguration.Infrastructure.ServiceAuth.Secret },
 		IdentityManager.IssueServiceToken,
 	))
@@ -659,6 +664,11 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	if err := GraphQLManager.Start(ctx); err != nil {
 		return err
 	}
+	// The internal listener (service-token mint + JWKS). Peers' readiness gates fetch the
+	// JWKS from it, so it comes up with the public server.
+	if err := startInternalAuthListener(); err != nil {
+		return err
+	}
 	if PurgeCoordinator != nil {
 		if err := PurgeCoordinator.Start(ctx); err != nil {
 			return err
@@ -681,6 +691,11 @@ func afterMicroserviceStarted(ctx context.Context) error {
 func beforeMicroserviceStopped(ctx context.Context) error {
 	if err := GraphQLManager.Stop(ctx); err != nil {
 		return err
+	}
+	if InternalAuthServer != nil {
+		if err := InternalAuthServer.Shutdown(ctx); err != nil {
+			return err
+		}
 	}
 	// Before the database it sweeps through and the broker: its pass holds an advisory lock
 	// on a pooled connection.

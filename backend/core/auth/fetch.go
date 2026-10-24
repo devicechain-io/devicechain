@@ -73,8 +73,12 @@ func FetchValidatorForInstance(ctx context.Context, cfg config.UserManagementCon
 
 // jwksURLForInstance is the single source of the user-management JWKS endpoint
 // convention.
+//
+// 🔴 IT DIALS THE INTERNAL LISTENER (cfg.InternalAddr), NOT THE PUBLIC PORT. The public port
+// no longer serves /auth/jwks at all; an external verifier reads the public mirror the OAuth
+// metadata advertises (jwks_uri) instead.
 func jwksURLForInstance(cfg config.UserManagementConfiguration) string {
-	return fmt.Sprintf("http://%s:%d/auth/jwks", cfg.Hostname, cfg.Port)
+	return fmt.Sprintf("http://%s%s", cfg.InternalAddr(), JWKSPath)
 }
 
 // NewValidatorFromJWKSURL fetches the platform JWKS from user-management and

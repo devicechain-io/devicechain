@@ -184,9 +184,9 @@ variable "ingress_nginx_namespace" {
 variable "ingress_nginx_chart_version" {
   description = <<-EOT
     ingress-nginx chart version. Pinned by default — 4.15.1 ships controller 1.15.1,
-    which is what the module's snippet/risk-level values were verified against.
-    Upstream keeps tightening that surface, and when it moves again the symptom is
-    not a version diff: the instance chart's Ingress is REJECTED BY THE ADMISSION
+    which is what the module's snippet-off / default-risk-level values were verified
+    against. Upstream keeps tightening that surface, and when it moves again the symptom
+    is not a version diff: the instance chart's Ingress is REJECTED BY THE ADMISSION
     WEBHOOK partway through bootstrap.
   EOT
   type        = string

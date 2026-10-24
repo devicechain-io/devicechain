@@ -102,6 +102,7 @@ func startPresenceAsyncWiring(t *testing.T, window *int, wiring tapWiring,
 	infra.Nats.Auth.SysUser, infra.Nats.Auth.SysPassword = "sys", "sys"
 	infra.ServiceAuth.Secret = "shh"
 	infra.UserManagement.Hostname, infra.UserManagement.Port = umHost, umPort
+	infra.UserManagement.InternalPort = umPort
 	infra.DeviceState.Hostname, infra.DeviceState.Port = umHost, umPort
 	// command-delivery is configured so the tap runs its command waker, whose stop the writer's
 	// close must precede. A wake it sends goes nowhere useful, which nothing here reads.
@@ -520,6 +521,7 @@ func TestTheDemotionRuntimeClosesThePresenceWriter(t *testing.T) {
 	infra := &Microservice.InstanceConfiguration.Infrastructure
 	infra.ServiceAuth.Secret = "shh"
 	infra.UserManagement.Hostname, infra.UserManagement.Port = host, port
+	infra.UserManagement.InternalPort = port
 	infra.DeviceState.Hostname, infra.DeviceState.Port = host, port
 	initializeMetrics()
 	InboundEventsWriter = nopWriter{}

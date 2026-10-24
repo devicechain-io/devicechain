@@ -328,6 +328,22 @@ de ambas:
   broker de la primera instancia. Los brokers de las instancias posteriores son alcanzables
   desde dentro del clúster, y el arranque inicial lo indica cuando ocurre.
 
+#### Ingress y tu propio controlador {#ingress-controller}
+
+La instalación del clúster configura un controlador de ingress y cada instancia recibe sus rutas del chart. Nada en
+el borde es un control de seguridad: el emisor de tokens de servicio y el conjunto de claves de firma los sirve
+`user-management` en un puerto interno al que no apunta ninguna ruta del ingress, de modo que el puerto público
+responde 404 para ellos detrás de cualquier controlador. El controlador que configura `dcctl install` se ejecuta con
+los snippets de configuración desactivados, y los ingress del chart no llevan ninguno.
+
+Si traes tu propio controlador:
+
+- Enruta `/api/<area>` al puerto `graphql` del Service de cada área, quitando el prefijo, y `/` a la consola. No
+  necesitas una regla que oculte las rutas `/auth/`, y no debes enrutar a un puerto de Service llamado `internal-auth`.
+- Mantén ese puerto alcanzable solo desde el namespace de la propia instancia. La política de red del chart
+  (`networkPolicy.enabled`) lo hace en un clúster que aplica políticas. Consulta
+  [Endpoints que nunca salen del clúster](../concepts/security-model.md#internal-endpoints).
+
 #### El namespace de la instancia {#instance-namespace}
 
 El arranque inicial comprueba el namespace de la instancia en el mismo punto. Una instancia es
