@@ -39,14 +39,14 @@ import (
 // nothing in core proves anything about it; and unlike every scalar on these inputs it
 // bypasses graphql-go's StructPacker entirely — a field whose Go type implements
 // decode.Unmarshaler is handed the RAW value, so the library's input-object handling, and
-// with it the unknown-field rejection this repo forked the library to get, never runs on a
+// with it the unknown-field rejection added upstream in v1.10.3, never runs on a
 // rule. A unit test on UnmarshalGraphQL alone would prove nothing about the state that
 // matters most, ABSENT, because absent means the method is never called at all.
 //
 // So the rule list is driven through a real schema, with the value arriving as a VARIABLE.
 // That is not belt-and-braces either: the literal and the variable paths are decoded by
 // different code in this library — the parser for one, encoding/json for the other — and
-// the divergence between them is exactly what made the fork necessary. Every real client
+// the divergence between them is exactly the defect upstream v1.10.3 fixed. Every real client
 // (console, SDKs, dcctl, codegen) sends variables.
 
 // newWireCtx builds the request context a resolver reads its dependencies out of: a
@@ -141,7 +141,7 @@ func storedRules(t *testing.T, ctx context.Context) []model.NotificationRule {
 // rules: $r }` — does NOT give you the absent state: an unsupplied `$r` arrives as a
 // present null, so the field reads Set=true, Value=nil and the policy is EMPTIED. That is
 // graphql-go's behaviour and it is identical on OptionalString and every other optional on
-// the platform; it is filed as a fork candidate rather than something this service can fix.
+// the platform; it would need an upstream change rather than something this service can fix.
 // It is worth naming here because the consequence differs by field: on a string it clears
 // one column, and on this field it destroys a policy's entire rule set and returns success.
 // If you are hand-writing a document against this mutation, put the whole request in one
@@ -264,7 +264,7 @@ func TestUpdatePolicyRuleListCarriesAllFourWireStates(t *testing.T) {
 
 // A rule carrying a field the input type does not define is REFUSED, not dropped.
 //
-// This is the fork's own guarantee, checked where it is not automatic: the rule list
+// This is graphql-go's own guarantee, checked where it is not automatic: the rule list
 // bypasses StructPacker, so the refusal comes from the library's variable validation AND
 // from OptionalNotificationRuleList's own decoder. Either one alone would be enough today;
 // having both is what keeps a field added to the SDL and forgotten in the decoder from
@@ -360,7 +360,7 @@ func updateInputOf(t *testing.T, name string) *ast.InputObject {
 // REJECTED, AND THE DIFFERENCE IS THE SAME ONE THE RULE DECODER'S TESTS RAN INTO. An
 // earlier version of this test sent `request: { token: "moved" }` and looked for a request
 // error. That passes — but what it observes is graphql-go's unknown-input-field rejection
-// firing, which is the LIBRARY's guarantee (and the fork's), not this schema's. The
+// firing, which is the LIBRARY's guarantee, not this schema's. The
 // property here is "the field is not declared", and the honest way to check it is to ask
 // the type. It also removes a second hazard the old shape carried: these mutations are
 // addressed to a token that names no row, so the resolver errors too, and an assertion on

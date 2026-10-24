@@ -555,18 +555,18 @@ func TestBatchQueriesReadBackTheRecord(t *testing.T) {
 	}
 }
 
-// TestUnknownBatchInputFieldIsRejected pins the forked-library behaviour on THIS input.
+// TestUnknownBatchInputFieldIsRejected pins graphql-go's unknown-field rejection on THIS input.
 //
-// The fork exists because upstream silently DISCARDS input-object entries the schema does
-// not define when they arrive through a variable.
+// Before upstream v1.10.3 (graph-gophers/graphql-go#765), graphql-go silently DISCARDED
+// input-object entries the schema does not define when they arrive through a variable.
 //
 // 🔴 THE EXAMPLE HAS TO BE A NULLABLE FIELD, AND MY FIRST ONE WAS NOT. I originally
 // justified this test with a misspelled `allowPartial` — but that field is `Boolean!`, so
-// dropping it leaves a required variable unsatisfied and even UNPATCHED graphql-go returns
-// a request error. The test would have passed against the unforked library and proved
-// nothing about the fork.
+// dropping it leaves a required variable unsatisfied and even a pre-v1.10.3 graphql-go returns
+// a request error. The test would have passed against a pre-v1.10.3 library and proved
+// nothing about the rejection.
 //
-// `groupToken` is the real case: nullable, so upstream drops a misspelling silently and
+// `groupToken` is the real case: nullable, so graphql-go before v1.10.3 dropped a misspelling silently and
 // the request becomes one that names NO target — refused as BATCH_TARGET_AMBIGUOUS, which
 // tells the operator their request was malformed in a way that has nothing to do with the
 // typo they actually made. `deviceTokens` is the same shape and worse, because a dropped
@@ -580,14 +580,14 @@ func TestUnknownBatchInputFieldIsRejected(t *testing.T) {
 		"request": map[string]any{
 			"token": "wire-unknown-field", "name": "reboot", "allowPartial": false,
 			"deviceTokens": []any{"pump-a"},
-			// Nullable in the schema, so upstream drops it without complaint and the
+			// Nullable in the schema, so a pre-v1.10.3 graphql-go dropped it without complaint and the
 			// request silently becomes a different one.
 			"group_token": "pumps-region-3",
 		},
 	})
 	if len(res.Errors) == 0 {
 		t.Fatal("an unknown input-object field must be a REQUEST ERROR; silently dropping " +
-			"it is the upstream fail-open this repo forks the library to fix")
+			"it is the fail-open fixed upstream in graphql-go v1.10.3")
 	}
 }
 

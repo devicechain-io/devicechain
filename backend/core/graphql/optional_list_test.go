@@ -23,7 +23,7 @@ import (
 //
 // 🔴 AND THE VALUE ARRIVES AS A VARIABLE, NOT A LITERAL. A literal is decoded by the
 // query parser and a variable by encoding/json; they reach the packer as different Go
-// values, and the pinned graphql-go fork exists because the two paths diverge. Every
+// values, and graphql-go's unknown-input-field defect (fixed upstream in v1.10.3) came from the two paths diverging. Every
 // real client — console, SDKs, dcctl, codegen — sends variables, so the variable path is
 // the one that has to be right. The literal cases below are the cross-check, not the
 // substance.
@@ -99,7 +99,7 @@ func TestOptionalStringListDistinguishesAbsentFromEmpty(t *testing.T) {
 
 // The remaining wire states, both request paths. The literal cases are here because the
 // two paths are decoded by different code and this is exactly the class of divergence
-// the pinned fork exists to fix — a list that worked as a variable and not as a literal
+// the upstream v1.10.3 fix addressed — a list that worked as a variable and not as a literal
 // would be a defect nobody driving the console would ever see.
 func TestOptionalStringListCarriesEveryWireState(t *testing.T) {
 	cases := []struct {

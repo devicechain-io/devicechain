@@ -121,7 +121,7 @@ const (
 func (o ResolveOutcome) Ingestible() bool { return o == ResolveFound || o == ResolveCreated }
 
 // The device-management GraphQL operations. Field names are pinned to the schema
-// (DeviceCreateRequest.token/externalId/deviceTypeToken); the graphql-go fork rejects
+// (DeviceCreateRequest.token/externalId/deviceTypeToken); graphql-go rejects
 // an unknown field sent through a variable, so a typo here fails the call loudly rather
 // than silently creating a half-formed device.
 const (

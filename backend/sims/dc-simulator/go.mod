@@ -7,7 +7,7 @@ require (
 	github.com/devicechain-io/dc-microservice v0.0.1
 	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
-	github.com/graph-gophers/graphql-go v1.10.2
+	github.com/graph-gophers/graphql-go v1.10.3
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/rs/zerolog v1.35.1
 	github.com/stretchr/testify v1.12.1
@@ -55,5 +55,3 @@ require (
 replace github.com/devicechain-io/dc-microservice => ../../core
 
 replace github.com/devicechain-io/dc-event-sources => ../../services/event-sources
-
-replace github.com/graph-gophers/graphql-go => github.com/devicechain-io/graphql-go v1.10.2-dc.2

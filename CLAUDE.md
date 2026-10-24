@@ -328,67 +328,16 @@ done
 
 ## Forked dependencies
 
-**`github.com/graph-gophers/graphql-go` → `github.com/devicechain-io/graphql-go@v1.10.2-dc.2`**
+None. `github.com/graph-gophers/graphql-go` was carried as a fork (`devicechain-io/graphql-go`) because
+upstream silently discarded input-object entries the schema does not define when the value arrived
+through a **variable** — a fail-open, since every real client sends variables. Upstream v1.10.3 carries
+the fix, so the fork, every module's `replace`, and the CI guard were retired.
 
-The upstream library silently discards input-object entries the schema does not define when the
-value arrives through a **variable**. (Values written as *literals* in the query are rejected
-correctly; every real client — console, SDKs, dcctl, codegen — sends variables.) The GraphQL spec
-requires a request error here, so this is a fail-open: a misnamed field returns success and
-produces a half-configured entity indistinguishable from a correct one. It bit us live — sending
-`deviceProfileToken` instead of `profileToken` created a device type with no profile, which left
-its devices with no command vocabulary and made a correct enqueue gate look broken.
-
-The fork carries exactly one commit on top of the upstream `v1.10.2` **tag** (branch
-`dc-release-v1.10.2`), mirroring the iteration direction the library's own literal path already
-uses. Cutting from the tag rather than upstream `main` is deliberate: `main` carries unreleased
-changes — including a refactor of the resolver execution path — that we would otherwise be running
-in production without having chosen them. The same patch sits on `fix/reject-unknown-input-object-fields-in-variables`,
-branched from `main`, which is what the upstream PR proposes. When it lands in a release, **drop
-every `replace` and the CI guard, and bump to that release** — nothing else depends on the fork.
-
-Note the fork inherits upstream's tags, so `devicechain-io/graphql-go@v1.10.2` exists and is
-*unpatched*. Only the `-dc.N` tags carry the fix, which is why the CI guard matches the exact
-version and not just the module path.
-
-Two things to know:
-
-1. A `replace` applies **only in the main module**, so **every module that resolves graphql-go at
-   all needs its own** — not just the ones that compile it. Modules split into two kinds, and the
-   second is the dangerous one:
-   - those that **import** the library (core plus the GraphQL-serving services — and
-     `services/mcp`, which fronts GraphQL over HTTP rather than executing a schema, but imports
-     the library in a TEST, `server/documents_test.go`, to validate every document it sends
-     against the schema it is sent to), and
-   - those that resolve it **transitively through core and compile none of it** — `cli`, the
-     ingest services, `sims/dc-simulator`, `tools/*`, `edge/dc-edge-agent`. Their replace is *defensive*:
-     it means the day one of them **does** import the library, it gets the patched one rather than
-     silently getting upstream. Because they carry no graphql-go line in their `go.mod`, a grep
-     cannot find them — which is exactly how a module ends up on the unpatched library unnoticed.
-
-   Deliberately **no count is given here**: the split moves whenever a service gains or drops a
-   schema (`event-sources` has already crossed from the first group to the second), and a number
-   frozen in prose only ever drifts away from the tree. Ask the tree instead:
-
-   ```bash
-   # every module carrying the replace, split by whether it actually imports the library
-   for m in $(go list -m -f '{{.Dir}}'); do
-     grep -q 'graph-gophers/graphql-go => ' "$m/go.mod" 2>/dev/null || continue
-     n=${m#"$PWD"/}
-     if grep -rlq graph-gophers/graphql-go "$m" --include=*.go 2>/dev/null
-       then echo "compiles  $n"; else echo "defensive $n"; fi
-   done | sort
-   ```
-
-   The `graphql-go fork guard` step in the `go` CI job is the authority, not this file: it enforces
-   the replace per module with `GOWORK=off`, so a module that loses it fails CI instead of reverting
-   silently, and a newly added module is covered the moment it joins the matrix.
-2. Dependabot does not track the fork, so upstream security advisories for graphql-go will not
-   raise an alert here. Re-check it by hand when reviewing GraphQL-layer CVEs.
-
-The behaviour is pinned by `TestUnknownInputFieldIsRejected` and `TestValidInputIsNotRejected` in
+The behaviour is still pinned by `TestUnknownInputFieldIsRejected` and `TestValidInputIsNotRejected` in
 [backend/core/graphql/unknown_input_fields_test.go](backend/core/graphql/unknown_input_fields_test.go).
-The second test is the counterweight: rejecting unknown fields is only safe while well-formed input
-still passes untouched.
+Keep both: the first is the regression guard, the second is the counterweight (rejecting unknown fields is
+only safe while well-formed input still passes untouched). Dependabot now tracks graphql-go like any other
+dependency.
 
 ## License headers
 

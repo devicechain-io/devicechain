@@ -165,7 +165,7 @@ func TestCreateDeviceAcceptsAGatewayToken(t *testing.T) {
 	require.Len(t, rows, 1)
 	require.NotNil(t, rows[0].GatewayId)
 
-	// Unknown field names are rejected (the fork's guard), so a misspelling cannot half-configure.
+	// Unknown field names are rejected (graphql-go's unknown-field guard), so a misspelling cannot half-configure.
 	bad := schema.Exec(ctx, `mutation($r: DeviceCreateRequest) { createDevice(request: $r) { token } }`, "",
 		map[string]any{"r": map[string]any{"token": "x", "deviceTypeToken": "dt", "gatewayTokn": "gw"}})
 	require.NotEmpty(t, bad.Errors)

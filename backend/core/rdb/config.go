@@ -108,7 +108,7 @@ func resolveSslMode(configured string) (string, error) {
 //     left the posture at its default while the operator believed they had
 //     changed it. Silently ignoring a key someone deliberately wrote is the
 //     fail-OPEN half of a fail-closed house rule, and it is precisely the shape
-//     the graphql-go fork exists to fix one layer up.
+//     graphql-go's unknown-input-field rejection (upstream v1.10.3) provides one layer up.
 //  2. sslMode is validated HERE, not only at the point of use. It used to be
 //     checked inside the connection builders, which are called from within
 //     `RetryInfraConnect` — so a typo produced 30 attempts

@@ -194,7 +194,7 @@ async function clickSave() {
  * Asserts the request carries exactly the expected fields and nothing else.
  *
  * Both directions matter. Missing keys are the defect this file exists for; EXTRA keys
- * mean the form is sending something the schema does not declare, which the forked
+ * mean the form is sending something the schema does not declare, which
  * graphql-go now rejects at the server — better to fail here than to ship a request the
  * API refuses. `toStrictEqual` covers both, and also catches a key present with an
  * `undefined` value, which is the shape a half-applied fix would take.

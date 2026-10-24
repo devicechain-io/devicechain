@@ -8,7 +8,7 @@
 // module. When a field is renamed or an argument changes shape, the page that teaches it
 // keeps building and keeps being wrong, and a reader who pastes it gets
 // `Cannot query field ...` from the very product the page describes. This asks the schema,
-// with the SERVER'S OWN VALIDATOR (the same library and the same fork the services parse
+// with the SERVER'S OWN VALIDATOR (the same library the services parse
 // with), the way backend/services/mcp and backend/sims/dc-simulator already do for the
 // documents they send.
 //
@@ -17,8 +17,8 @@
 //   - fenced graphql blocks, validated as bare documents (no variable VALUES exist, so the
 //     one rule dropped is VariablesOfCorrectType);
 //   - curl payloads, `-d '{"query":...,"variables":...}'` inside shell fences. These are
-//     the only examples that carry variables, which is the case the pinned graphql-go
-//     fork exists for, so each is validated WITH its variables and nothing filtered, and
+//     the only examples that carry variables, which is the case the unknown-field
+//     rejection in graphql-go v1.10.3 exists for, so each is validated WITH its variables and nothing filtered, and
 //     is attributed to the schema its URL addresses.
 //
 // ATTRIBUTION of a graphql block, both ways visible to a writer:
@@ -579,7 +579,7 @@ func (r *Report) checkPayload(p Payload, schemas []Named) {
 	}
 	// Variables are validated WITH their values and nothing is filtered: an input-object
 	// field the schema does not define, reaching the server through a variable, is the
-	// defect the pinned fork exists to reject.
+	// defect graphql-go v1.10.3 rejects.
 	if errs := target.Schema.ValidateWithVariables(p.Query, p.Variables); len(errs) > 0 {
 		r.fail(b, "curl payload invalid against %s: %s", target.Name, describe(errs))
 		return
