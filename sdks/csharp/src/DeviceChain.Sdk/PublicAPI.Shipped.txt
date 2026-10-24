@@ -274,6 +274,7 @@ DeviceChain.Sdk.Transport.MqttConnectOptions.Username.get -> string?
 DeviceChain.Sdk.Transport.MqttConnectOptions.Username.set -> void
 DeviceChain.Sdk.Transport.MqttConnectRefusedException
 DeviceChain.Sdk.Transport.MqttConnectRefusedException.MqttConnectRefusedException(string! message) -> void
+DeviceChain.Sdk.Transport.MqttConnectRefusedException.MqttConnectRefusedException(string! message, System.Exception? innerException) -> void
 DeviceChain.Sdk.Transport.MqttConnectionException
 DeviceChain.Sdk.Transport.MqttConnectionException.MqttConnectionException(string! message) -> void
 DeviceChain.Sdk.Transport.MqttConnectionException.MqttConnectionException(string! message, System.Exception? innerException) -> void
