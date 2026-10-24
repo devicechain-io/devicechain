@@ -25,7 +25,7 @@ import (
 // Both request paths are exercised throughout. A literal is decoded by the query
 // parser and a variable by encoding/json, they reach the packer as different Go
 // types, and the two paths diverging under the same schema is not hypothetical
-// here: it is exactly the defect the pinned graphql-go fork exists to fix.
+// here: it is exactly the defect fixed upstream in graphql-go v1.10.3 (graph-gophers/graphql-go#765).
 
 const optionalSchema = `
 schema { query: Query  mutation: Mutation }
@@ -561,7 +561,7 @@ func TestTheOptionalTypeListIsComplete(t *testing.T) {
 }
 
 // The counterweight, mirroring TestValidInputIsNotRejected: the optional types must
-// not weaken the fork's unknown-field rejection. An update input is precisely where
+// not weaken graphql-go's unknown-field rejection. An update input is precisely where
 // a silently-dropped misnamed field is most damaging — the caller believes they
 // changed something and the entity is returned unchanged, with a 200.
 func TestOptionalInputStillRejectsUnknownFields(t *testing.T) {

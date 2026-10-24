@@ -27,8 +27,8 @@ import (
 //
 // The credential documents are validated WITH VARIABLES, built from the C# VarsJson
 // writers that really produce them. That matters more than for any other document
-// here: an input-object key the schema does not declare is refused by this repo's
-// patched graphql-go only when it is LOOKED AT, and only the variables carry those
+// here: an input-object key the schema does not declare is refused by graphql-go's
+// unknown-field validation (v1.10.3 and later) only when it is LOOKED AT, and only the variables carry those
 // keys. A create request that said `device` where the schema says `deviceToken` would
 // validate without its variables. What the validator does NOT check is a nested input
 // field's scalar VALUE (a string where a Boolean belongs passes here and fails at

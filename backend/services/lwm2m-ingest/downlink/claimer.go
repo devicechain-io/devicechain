@@ -21,8 +21,8 @@ import (
 // dispatch is refused, so a claim that did not hand the nonce back would leave the drain able to
 // actuate a device and unable to settle the command.
 //
-// Field names are pinned to command-delivery's schema. The graphql-go fork rejects an
-// unknown field sent through a variable (CLAUDE.md, the forked-dependency note), so a typo
+// Field names are pinned to command-delivery's schema. graphql-go (v1.10.3 and later) rejects an
+// unknown field sent through a variable, so a typo
 // here fails the call loudly — and a failed claim does NOT dispatch, which is the safe
 // direction.
 const claimMutation = `mutation($token: String!) {

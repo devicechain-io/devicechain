@@ -23,7 +23,7 @@ import (
 // schema with REAL variables rather than by calling resolver methods directly. The
 // variable path is the one that matters: every real client (console, SDKs, dcctl,
 // codegen) sends variables, and the input-object handling on that path is the one this
-// repo runs a forked graphql-go to keep honest.
+// repo relies on graphql-go v1.10.3 or later to keep honest.
 
 func profileLocationCtx(t *testing.T) context.Context {
 	t.Helper()

@@ -210,8 +210,8 @@ func TestReplaceDeviceDoesNotReturnACredentialValue(t *testing.T) {
 
 // The input carries no device identity field, so moving a device's token,
 // externalId or type through a replacement is UNREPRESENTABLE rather than refused.
-// The rejection comes from the unknown-input-field guard, which the forked
-// graphql-go supplies for variables; without it these would be silently dropped and
+// The rejection comes from the unknown-input-field guard, which graphql-go
+// (v1.10.3 and later) supplies for variables; without it these would be silently dropped and
 // the caller told their replacement succeeded.
 func TestReplaceDeviceCannotMoveTheIdentity(t *testing.T) {
 	schema := gql.MustParseSchema(SchemaContent, &SchemaResolver{})

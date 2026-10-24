@@ -11,8 +11,8 @@ import (
 // parkMutation hands a dispatched command back to command-delivery because this adapter
 // found the device unreachable.
 //
-// Field names are pinned to command-delivery's schema. The graphql-go fork rejects an
-// unknown field sent through a variable (CLAUDE.md, the forked-dependency note), so a typo
+// Field names are pinned to command-delivery's schema. graphql-go (v1.10.3 and later) rejects an
+// unknown field sent through a variable, so a typo
 // here fails the call loudly rather than silently parking nothing.
 const parkMutation = `mutation($token: String!, $dispatchNonce: String!) {
   parkCommand(token: $token, dispatchNonce: $dispatchNonce)

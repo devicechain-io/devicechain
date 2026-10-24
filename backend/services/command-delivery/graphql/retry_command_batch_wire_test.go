@@ -11,7 +11,7 @@ import (
 )
 
 // retryCommandBatch goes through the schema as a VARIABLE, like every real client, so an input
-// field the schema does not define is rejected by the fork rather than silently dropped.
+// field the schema does not define is rejected by graphql-go rather than silently dropped.
 const retryBatchMutation = `mutation($request: CommandBatchRetryRequest!) {
   retryCommandBatch(request: $request) {
     batch { token name retryOf accepted retries }
