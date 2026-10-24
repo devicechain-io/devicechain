@@ -5,7 +5,7 @@ title: 验证发布版本
 
 # 验证发布版本 {#verifying-releases}
 
-DeviceChain 每个发布版本所发布的所有容器镜像和 Helm chart 都经过**签名**，并附带两份关于其构建方式的已签名声明。你可以在运行任何东西之前完成全部验证，无需账号，也无需获取任何密钥。
+DeviceChain 每个发布版本所发布的所有容器镜像和 Helm chart 都经过**签名**，并附带两份关于其构建方式的已签名声明。你可以在运行任何东西之前完成全部验证，无需获取任何密钥；检查构建溯源需要登录 GitHub。
 
 | 内容 | 存放位置 | 它告诉你什么 |
 | --- | --- | --- |
@@ -16,7 +16,7 @@ DeviceChain 每个发布版本所发布的所有容器镜像和 Helm chart 都�
 签名采用**无密钥**方式：不存在需要防止泄露或轮换的长期密钥。每个签名都绑定到生成它的工作流运行的身份，记录在公开的透明日志中，并据此身份进行验证。来自任何其他工作流、仓库或分支的签名，都不会被验证为发布版本。
 
 :::note 适用的版本
-签名适用于其发布说明中宣布了签名的版本，最迟不晚于 `v1.0.0`。更早的镜像没有签名，验证时会报错 "no signatures found"。这是正确的结果，并非你的环境有问题。
+签名从 `v0.25.0` 开始。`v0.25.0` 之前的发布版本没有签名，验证时会报错 "no signatures found"。这是正确的结果，并非你的环境有问题。
 :::
 
 ## 哪些内容已签名 {#what}
@@ -28,16 +28,16 @@ DeviceChain 每个发布版本所发布的所有容器镜像和 Helm chart 都�
 - Web 控制台镜像：`ghcr.io/devicechain-io/frontend`
 - Helm chart：`oci://ghcr.io/devicechain-io/charts/devicechain`
 
-镜像使用发布标签（`v1.0.0`）。chart 使用**不带** `v` 的版本号（`1.0.0`）。GitHub Release 附带的 `dcctl` 和边缘代理压缩包有各自的溯源信息，参见[发布与升级](./releases-and-upgrades.md)。
+镜像使用发布标签（`v0.25.0`）。chart 使用**不带** `v` 的版本号（`0.25.0`）。GitHub Release 附带的 `dcctl` 和边缘代理压缩包有各自的溯源信息，参见[发布与升级](./releases-and-upgrades.md)。
 
 ## 一次验证全部 {#script}
 
 仓库提供了一个脚本，它会检查每个镜像和 chart，然后证明它自己的检查确实能够失败。它需要 [`cosign`](https://docs.sigstore.dev/cosign/system_config/installation/) 3 或更高版本、`jq`，以及已登录（`gh auth login`）的 [GitHub CLI](https://cli.github.com/)（用于溯源验证）。
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/devicechain-io/devicechain/v1.0.0/hack/verify-release-signatures.sh
+curl -fsSLO https://raw.githubusercontent.com/devicechain-io/devicechain/v0.25.0/hack/verify-release-signatures.sh
 chmod +x verify-release-signatures.sh
-./verify-release-signatures.sh v1.0.0
+./verify-release-signatures.sh v0.25.0
 ```
 
 请从你正在验证的**同一个标签**获取脚本。只要有任何签名、SBOM 或溯源检查失败，它就会以非零状态退出，并指出是哪一项。
@@ -47,7 +47,7 @@ chmod +x verify-release-signatures.sh
 ## 手动验证单个镜像 {#by-hand}
 
 ```bash
-TAG=v1.0.0
+TAG=v0.25.0
 IMAGE=ghcr.io/devicechain-io/device-management:$TAG
 
 cosign verify "$IMAGE" \
@@ -74,8 +74,8 @@ gh attestation verify "oci://$IMAGE" --repo devicechain-io/devicechain \
 chart 的验证方式相同，只是使用它自己的标签：
 
 ```bash
-cosign verify ghcr.io/devicechain-io/charts/devicechain:1.0.0 \
-  --certificate-identity "https://github.com/devicechain-io/devicechain/.github/workflows/release.yml@refs/tags/v1.0.0" \
+cosign verify ghcr.io/devicechain-io/charts/devicechain:0.25.0 \
+  --certificate-identity "https://github.com/devicechain-io/devicechain/.github/workflows/release.yml@refs/tags/v0.25.0" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 

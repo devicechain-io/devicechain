@@ -55,14 +55,14 @@ backported patch releases.
 
 ## Verifying a release
 
-Every container image and the Helm chart a release publishes is signed (keyless, with
+From `v0.25.0`, every container image and the Helm chart a release publishes is signed (keyless, with
 Sigstore, bound to this repository's release workflow) and carries an SBOM and SLSA build
 provenance. To check a release, fetch the script from the tag you are verifying and run it:
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/devicechain-io/devicechain/v1.0.0/hack/verify-release-signatures.sh
+curl -fsSLO https://raw.githubusercontent.com/devicechain-io/devicechain/v0.25.0/hack/verify-release-signatures.sh
 chmod +x verify-release-signatures.sh
-./verify-release-signatures.sh v1.0.0
+./verify-release-signatures.sh v0.25.0
 ```
 
 [Verifying releases](https://docs.devicechain.io/deployment/verifying-releases) explains what

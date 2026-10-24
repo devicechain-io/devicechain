@@ -2115,6 +2115,321 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 
 无须操作。
 
+### v0.25.0：每个领域以自己的身份登录消息代理，且发布版本已签名 {#v0250-upgrade}
+
+`v0.25.0` 可从 `v0.24.0` 原地升级：先为集群执行 `dcctl install`，再为每个实例执行 `dcctl upgrade`，
+如 [v0.17.0](#v0170-upgrade) 所述。除新的 `--version` 外，还要把集群安装时用的设置（例如 `--ha` 和
+`--database-node-selector`）一并传给 `dcctl install`。**与大多数版本不同，`dcctl upgrade` 要执行两次。**
+第一次为每个领域创建各自的消息代理登录，并保留共享登录与之并存；第二次则停用共享登录（见
+[消息代理的登录，分两次升级](#v0250-broker-logins)）。**无法从 `v0.22.0` 或更早版本原地升级到本版本：**
+请先升级到 `v0.23.0` 和 `v0.24.0`（见[升级之前](#v0250-before)）。它的三项迁移共新增五张表、一个列及其索引，
+不改写任何已有的行（见[升级期间](#v0250-during)）。**升级后只能向前，不能回退**（见[回退](#v0250-going-back)）。
+
+命令如下，版本号带 `v`，并先做一次演练：
+
+```bash
+dcctl install local --version v0.25.0
+dcctl upgrade local devicechain --version v0.25.0 --dry-run
+dcctl upgrade local devicechain --version v0.25.0
+# when that has finished and every area is Ready, run it again to retire the shared broker login:
+dcctl upgrade local devicechain --version v0.25.0
+```
+
+`--version` 取带 `v` 的标签。集群不是默认的本地集群时，请向 `dcctl install` 和 `dcctl upgrade` 传入
+`--kube-context`；镜像来自默认之外的镜像仓库时，再传入 `--registry`。两次执行各自的 `--dry-run` 会说明它将
+执行两者中的哪一次。如果实例引导时没有根密钥托管，`dcctl upgrade` 会打印托管警告；这是预期行为，与本次
+升级无关。为 `v0.24.0` 设置的 `--mqtt-body-credential` 取值，在省略该标志的升级中会被保留；它仍是过渡性的，
+`dcctl` 的文档说明计划在 `v0.26.0` 中移除它（见 [`v0.24.0`](#v0240-mqtt-body-credential)）。
+
+本版本在信任方面做了两件事。在集群内部，**任何服务都不再与其他服务共用一个消息代理凭据**：每个领域以自己的
+身份登录消息代理，权限仅限于它用到的内容，并且只有一个管理登录可以创建和修改流与桶。在集群外部，
+**每个镜像和 chart 都经过签名**，你可以核对所运行的内容确实由 DeviceChain 的发布工作流构建。此外：设备的
+访问令牌改为以带密钥的摘要存储，边缘代理成为拥有自己身份的网关，租户可以为其集成创建服务账号，空中更新
+也可以向设备组发布。对某些人有影响的变化：
+
+- **执行两次 `dcctl upgrade`。** 第一次升级保留共享的 `dc_service` 登录；第二次将其移除。见
+  [消息代理的登录，分两次升级](#v0250-broker-logins)。
+- **设备的访问令牌不能再被读回。** 凡是读取 `ACCESS_TOKEN` 凭据的 `credentialId` 并把它当作令牌使用的做法，
+  现在拿到的都是指纹。见[设备访问令牌以摘要形式存储](#v0250-access-tokens)。
+- **边缘代理必须在升级之前迁移到网关身份**；旧的直连设备上行链路已经移除。见
+  [边缘代理是网关](#v0250-edge-gateway)。
+- **消息代理拒绝的 C# SDK 连接现在会抛出 `MqttConnectRefusedException`，** 而不是被当作网络故障而重试。见
+  [C# SDK](#v0250-csharp-sdk)。
+- **不通过 `dcctl` 运行 chart 的安装**，需要在首次安装之前准备好实例命名空间和消息代理管理员的 Secret，
+  或设置 `brokerAdmin.enabled=false`。见[消息代理的登录，分两次升级](#v0250-broker-logins)。
+- **两次升级中，消息代理各重启一次，** 使用 `--ha` 时一次重启一台服务器。见[升级期间](#v0250-during)。
+- **无法回退到 `v0.24.0`。** 见[回退](#v0250-going-back)。
+- **从 `v0.22.0` 或更早版本升级时，请先升级到 `v0.23.0` 和 `v0.24.0`。**
+- **三项迁移：** `update-management` 中两张表，`user-management` 中三张表，`device-management` 中一个列和
+  一个索引。见[升级期间](#v0250-during)。
+- **发布版本已签名。** 无须操作；见[首个已签名的发布版本](#v0250-signing)。
+- **你手工设置的调优，除非通过 `--values` 提供，否则会被升级还原。** 这一点以前就是如此；本版本提供了保留它的
+  办法。见[运维人员的调优会被保留](#upgrade-tuning)。
+
+#### 升级之前 {#v0250-before}
+
+1. **从 `v0.22.0` 或更早版本升级时，请先停下。** 先升级到 `v0.23.0`，再升级到 `v0.24.0`，每次都要等所有
+   pod 都在运行新版本，之后才能升级到 `v0.25.0`。`v0.24.0` 设为默认的 compact 线路格式，`v0.22.0` 及更早版本
+   无法读取（见[事件在代理上的编码格式](#event-wire-format)），而跳过一个次版本不是经过测试的路径（见
+   [支持的升级路径](./versioning-policy.md#upgrade-paths)）。也请阅读 [`v0.24.0` 说明](#v0240-upgrade)。由
+   `v0.16.0` 或更早版本构建的实例仍然无法升级；见
+   [v0.16.0 及更早版本构建的实例](#pre-declaration-recreate)。
+2. **找出读回设备访问令牌的地方。** 凡是从 `deviceCredentials` 或 `deviceCredentialsByToken` 获取令牌的脚本、
+   配置工具或电子表格，现在收到的都是以 `dctk1$` 开头的指纹。设备中的令牌仍然有效。请决定每个你没有记录的
+   令牌将从哪里获得：为该凭据设置新令牌（见[设备访问令牌以摘要形式存储](#v0250-access-tokens)）。
+3. **如果运行边缘代理，请在升级它之前规划好它向网关的迁移。** 为每个代理创建一个带 `MQTT_BASIC` 凭据的网关
+   设备，并把该站点由它前置的设备分配给它。在平台（包括其消息代理）完成升级之前，不要在本版本上重启任何代理。
+   见[边缘代理是网关](#v0250-edge-gateway)。
+4. **如果不通过 `dcctl` 运行 chart，请先创建命名空间和管理员的 Secret，** 或者设置
+   `brokerAdmin.enabled=false`，并使用 `dc-broker-admin` 镜像自行创建流和桶。见
+   [升级会应用哪些基础设施](#upgrade-infrastructure)。自带消息代理的安装可以用 `dcctl broker permissions`
+   打印每个登录所需的授权。
+5. **如果把镜像镜像到自己的镜像仓库，请加上 `dc-broker-admin`。** pre-upgrade 作业会运行它，如果拉取不到，
+   升级会在任何服务滚动之前失败。它同样在[已签名镜像](./verifying-releases.md#what)的列表中。
+6. **如果你手工调优过实例**（副本数、资源、某个领域自己的配置），请把它写入 values 文件，并在第一次升级时
+   通过 `--values` 传入。升级会根据声明重建实例的设置，因此以其他方式设置的内容会被还原。见
+   [调优实例](./tuning-an-instance.md)。
+7. **如果有 C# 或 Unity 设备程序连接平台的 MQTT 消息代理，** 请在重新构建它之前阅读
+   [C# SDK](#v0250-csharp-sdk)。
+
+#### 升级期间 {#v0250-during}
+
+- **运行三项迁移，各在拥有它的服务首次启动时运行。** 没有任何一项改写行，被中断后也都可以重新运行。
+  - `device-management` 新增可为空的列 `devices.gateway_id`，记录设备位于哪个网关之后（所有已有设备该列
+    为空），以及 `(tenant_id, gateway_id)` 上的一个部分索引。该索引用普通的 `CREATE INDEX` 构建，构建期间
+    会对 `devices` 的写入加锁；它只覆盖有网关的设备，因此首次运行时是空的。
+  - `update-management` 创建 `update_rollouts` 和 `update_rollout_targets`，用于保存设备组发布。两张表初始为空。
+  - `user-management` 创建 `iam_service_accounts`、`iam_service_account_roles` 和
+    `iam_service_account_secrets`，用于保存服务账号及其密钥的摘要。三张表初始都为空。
+- **`device-management` 在启动时把每个已存储的访问令牌转换为其摘要。** 这不是迁移：它在迁移链之后、每次
+  启动时运行，覆盖所有租户和已软删除的行，仅当行仍保持读取时的值才写入，第二次运行时无事可做。设备保留
+  它已有的令牌；同一个字符串在转换前后都能通过认证。
+- **`device-management` 滚动期间，使用访问令牌认证的设备可能连接失败。** 一旦本版本的某个 pod 完成了行的转换，
+  仍在滚动中的 `v0.24.0` pod 会按明文查找出示的令牌，什么也找不到，因此在新旧并存期间，它会拒绝访问令牌的
+  连接和逐事件检查。设备会重试并连上本版本的 pod。在并存期间由上一版本的 pod 写入的令牌，会在本版本的 pod
+  下一次启动时被转换。使用 `MQTT_BASIC` 认证的设备不受影响。
+- **消息代理在第一次升级中重启一次，在第二次升级中再重启一次。** 第一次向消息代理添加登录；第二次移除共享
+  登录。使用 `--ha` 时，每次一台服务器地重启，前一台就绪后才停下一台；不使用 `--ha` 时，单台服务器重启，
+  其间消息代理不可用，通常约一分钟。设备和服务会自行重连。**消息代理滚动期间，不要手工重启任何一台服务器。**
+  见[升级会应用哪些基础设施](#upgrade-infrastructure)。
+- **有一个作业在消息代理与服务之间运行。** chart 把 `<instance>-broker-admin` 作为 Helm pre-install 和
+  pre-upgrade 钩子运行。它创建或修复每个流和键值桶，包括为 `resolved-events` 流开启直接读取，event-processing
+  的重放现在会用到这一点。如果它失败，升级会在任何服务滚动之前失败，`dcctl` 会打印该作业的日志，而
+  `v0.24.0` 的服务继续运行。该作业默认允许运行 540 秒（`brokerAdmin.activeDeadlineSeconds`），并重试一次
+  （`brokerAdmin.backoffLimit`）。
+- **升级运行期间重启的上一版本 pod 无法启动。** `dcctl` 在该作业之前写入新的实例配置，其中带有 `v0.24.0` 没有
+  声明的键（`areaLogins`），所以在此之后重启的 `v0.24.0` pod 会拒绝该配置。继续运行的 pod 不受影响。请让升级
+  完成，而不要手工重启 pod；替换它们的 pod 运行的是本版本。
+- **每个领域等待自己的登录。** 第一次升级之后，如果实例表明各领域的登录已经存在而某个领域自己的 Secret 缺失，
+  该领域会拒绝启动，而不会回退到共享登录。
+
+#### 回退 {#v0250-going-back}
+
+**只能向前，不要回退到 `v0.24.0`，无论使用 `helm rollback` 还是其他方式。** 如果升级中途失败，请排除原因，
+并使用相同的 `--version` 再次执行 `dcctl upgrade`。回退会留下一个无法工作的实例：
+
+- **每台使用访问令牌的设备都会被拒绝。** 令牌现在以摘要存储，而 `v0.24.0` 按明文查找出示的令牌。回退不会恢复
+  明文，明文也没有保存在任何地方。
+- **共享的消息代理登录可能已经消失。** 第二次升级之后，消息代理不再有 `dc_service`，实例配置也不再提到它，
+  所以 `v0.24.0` 的服务没有可用来连接的登录。`dcctl` 在停用该登录时会这样说明：不支持跨越本版本回退，请改为
+  重新执行较新的 `dcctl upgrade`。
+- **配置是为本版本写入的。** `dcctl` 把实例配置写入 Secret `dci-<instance>-config`，位于 chart 的发布之外，
+  所以 `helm rollback` 会恢复上一版本的工作负载，而配置仍保持本版本写入的样子。其中带有 `v0.24.0` 没有
+  声明的键 `areaLogins`；服务启动时会拒绝未知的配置键。
+
+新增的表和新增的列不会造成妨碍：`v0.24.0` 读取同一个数据库，对它们闲置不用。
+
+#### 升级之后 {#v0250-after}
+
+- **在第一次升级以所有领域就绪结束后，执行第二次 `dcctl upgrade`。** 见
+  [消息代理的登录，分两次升级](#v0250-broker-logins)。
+- **如果愿意，检查所安装内容的签名。** 见[首个已签名的发布版本](#v0250-signing)。
+- **保持 `metrics.enabled` 和 `metrics.alerts` 开启**（默认均为开启），以安装三条新的租户删除告警：
+  `TenantPurgeStoreFailing`、`TenantPurgeStoreHolding` 和 `TenantPurgeCoordinatorFailing`。见
+  [租户删除](./tenant-deletion.md#blocked-store)。
+- **平台完成后，迁移每个边缘代理。** 见[边缘代理是网关](#v0250-edge-gateway)。
+- **为你没有记录的任何访问令牌凭据设置新令牌。** 见
+  [设备访问令牌以摘要形式存储](#v0250-access-tokens)。
+
+##### 消息代理的登录，分两次升级 {#v0250-broker-logins}
+
+迄今为止，每个服务都用同一个共享登录登录消息代理，所以任何 pod 都能出示、任何一次配置泄露都会暴露所有服务
+的凭据。其机制在[升级会应用哪些基础设施](#upgrade-infrastructure)中说明，该节涵盖了各领域的登录、管理作业和
+`dcctl broker reconcile`；对升级而言，其含义如下：
+
+- **第一次升级是两个阶段中的第 1 阶段。** 它为每个使用消息代理的领域（`mcp` 和 `ai-inference` 从不打开消息代理
+  连接，因此没有）创建一个登录，并为消息代理管理创建一个登录，每个都放在名为 `dci-<instance>-nats-<area>`
+  的 Secret 中，只有该领域会挂载它。共享的 `dc_service` 登录保留，权限与以往相同，因此尚未滚动的 pod 保持
+  连接。在第二次升级之前，它仍在每个 pod 读取的配置中，所以 pod 仍然可以出示它。结尾的摘要写道：
+  "This was phase 1 of 2: run `dcctl upgrade` once more to retire it."
+- **第二次升级停用它。** 只有当起点实例已经让每个领域都运行在自己的登录上时，它才会这样做。它会检查：
+  - 正在运行的配置是否已经告诉各领域使用自己的登录；
+  - 每个登录的 Secret 是否在本次运行之前就已存在，即没有任何一个是在本次创建的；
+  - 正在运行的消息代理是否已经为每个领域和管理员持有登录；
+  - 正在运行的版本是否带有消息代理管理作业；
+  - 对该实例的上一次运行是否以就绪结束；以及
+  - 本次运行是否应用消息代理，所以 `--skip-infrastructure` 永远不会停用该登录。
+
+  全部满足时，消息代理和实例配置不再带有共享登录，消息代理再重启一次，服务再滚动一次以采用变更后的配置。
+  结尾的摘要写道："The shared message broker login is retired."。有任何一项不满足时，该登录会被保留，
+  摘要写道："The shared message broker login was NOT retired"，并指出原因；请解决后再次执行 `dcctl upgrade`。
+- **不要向任何一次执行传入 `--skip-infrastructure`。** 它不对消息代理应用任何内容，所以既不会添加登录，
+  也不会停用共享登录。
+- **新实例从来没有共享登录。** `dcctl bootstrap` 只创建各领域的登录。
+- **不支持跨越第二次升级回退。** 见[回退](#v0250-going-back)。
+- **服务负责检查，管理员负责修改。** 服务会校验它打开的每个流和桶，当某个缺失或不正确时，会报错停止，并指出
+  是哪个流以及哪里不同。执行 `dcctl broker reconcile <instance>` 可将其恢复，这也能恢复被手工删除的流或桶。
+- **随之有两处行为变化。** 缓存桶的存活时间现在固定为五分钟，因为由作业创建它们，不再由各服务请求；
+  `device-management` 的缓存存活时间设置现在只限定副本在自己内存中保留条目的时长。另外，实例配置中调高的
+  副本数在作业运行时（即下一次升级）生效，而不是在每次 pod 重启时。
+- **仅使用 chart 的安装**需要在首次安装之前准备好命名空间和管理 Secret，因为该作业在 chart 创建任何内容之前
+  运行。该 Secret 名为 `dci-<instance>-nats-broker-admin`，包含 `user` 和 `password`。`dcctl broker permissions`
+  会为你自己运行的消息代理打印授权。
+- **从备份恢复会得到新的登录。** 见[灾难恢复](./disaster-recovery.md)。
+
+关于这些登录能保护什么、不能保护什么，请参阅[安全模型](../concepts/security-model.md)。
+
+##### 设备访问令牌以摘要形式存储 {#v0250-access-tokens}
+
+`ACCESS_TOKEN` 凭据的令牌就是它的凭据 id，过去按发送时的样子存储和返回，所以数据库或备份一旦泄露，
+每个使用令牌的设备都会得到一个可用的凭据。现在它以带密钥的摘要存储，与 `MQTT_BASIC` 密码已有的方式相同：
+对租户和令牌计算 HMAC-SHA-256，密钥由实例根密钥派生。存储形式为 `dctk1$<key id>$<digest>`。
+
+- **已有设备保留它们的令牌。** 无需重新配置任何设备。
+- **令牌只显示一次，** 在设置它的调用的响应中（创建、轮换令牌的更新、生成令牌的设备替换），以及控制台的
+  横幅中，之后不再显示。读取返回的是指纹，它用于标识该凭据，不能当作令牌出示。
+- **要为你没有记录令牌的凭据获得可用的令牌，请设置新令牌：** 在控制台中点击**设置新令牌**，或只带
+  `credentialId` 调用 `updateDeviceCredential`。你这样做之后，设备当前的令牌立即无法再建立连接。见
+  [密码与令牌只显示一次，以及轮换](../guides/device-credentials.md#show-once)。
+- **`deviceCredentials(criteria: {credentialId})` 同时接受令牌和指纹。**
+- **把凭据类型改为或改出 `ACCESS_TOKEN` 时，必须在同一请求中指明 `credentialId`，** 因为存储的值在一种类型下
+  表示摘要，在另一种类型下表示用户名。没有指明的请求会以 `INVALID_VALUE` 被拒绝。超过 256 字节的令牌会以
+  `LIMIT_EXCEEDED` 被拒绝。
+- **控制台的连接代码片段**对访问令牌凭据显示 `<access-token>`，就像它们之前对密码显示占位符一样。
+- **不同的根密钥会让每个摘要都无法识别。** 与密码摘要一样，恢复到错误根密钥旁的实例，会记录一条错误，
+  说明其密钥无法生成多少个已存储的摘要。
+
+##### 边缘代理是网关 {#v0250-edge-gateway}
+
+边缘代理以自己的设备（即**网关**）身份登录平台，并在它自己的命名空间中发布每台本地设备的事件。平台只接受
+分配给该网关的设备的事件。这是唯一的上行链路模式：旧的直连设备模式（代理把消息原样转发到云端消息代理）
+已经移除。见[网关身份](./edge-services.md#gateway-identity)和
+[网关命名空间](../reference/device-protocol.md#gateway-namespace)。
+
+- **代理的配置必须修改。** `agentId` 不再是一个键，残留的该键会让代理在启动时停止，并给出指明以
+  `uplink.gatewayToken` 取代它的错误。`uplink.tenant`、`uplink.gatewayToken`、`uplink.username`（形式为
+  `{tenant}:{credentialId}`，否则在加载时被拒绝）和 `uplink.passwordEnv` 是必需的。
+- **请在代理清空其积压之前创建网关设备并分配其设备。** 旧模式下缓冲的事件会在新的命名空间中转发，对尚未分配的
+  设备的事件会被拒绝。缓冲区及其 durable 会就地收窄到 `uplink.tenant`；任何其他租户的缓冲事件不会被转发，
+  并留在缓冲区中，直到其环形缓冲区将其淘汰。
+- **使用 `assignDeviceGateway` 分配设备，** 或在创建设备时使用 `gatewayToken`，或在控制台设备的**网关**标签页中
+  操作。一台设备最多只有一个网关，网关本身不能位于另一个网关之后，仍有设备的网关不能删除。这需要
+  `device:write` 权限，并在设备的下一个事件时生效。
+- **被拒绝的事件不会悄无声息。** 平台以原因 `NotGatewayChild` 把它记录在失败事件流中，计入
+  `resolve_not_gateway_child_total`，并向网关发送通知；代理会记录日志、计数，并把该事件保存在其存储目录的
+  `refused-events.jsonl` 中。
+- **先升级平台。** 在 `infrastructure.nats.mqttFailClosed` 开启时运行 `v0.24.0` 的 `event-sources`，会确认它
+  无法归属的网关消息并丢弃它们，而代理看到的是成功。请先完成每个 `event-sources` 和 `device-management`
+  副本以及消息代理的升级，再在本版本上重启任何代理。消息代理尚未升级的代理无法订阅其通知，也不会报告
+  `uplink_connected`。见[滚动升级](#rolling-upgrades)下的警告。
+- **发往网关之后设备的命令尚未路由。** 代理只转发事件。
+
+##### C# SDK {#v0250-csharp-sdk}
+
+SDK 过去无法识别被拒绝的连接。MQTT 库通过抛出异常来报告非成功的 CONNACK，而 SDK 把它当作普通的传输故障，
+所以会话的重连循环会不断重试消息代理已拒绝的凭据，就像网络中断一样。现在对于判定了客户端的 CONNACK
+（不支持的协议版本、客户端标识符无效、用户名或密码错误、未授权、被封禁、认证方法错误），它会抛出
+`MqttConnectRefusedException`，会话的重连循环会因此停止，并报告该会话失明。"服务器不可用"或"服务器繁忙"
+的 CONNACK，以及连接中途失败的套接字，仍然会重试。`MqttConnectRefusedException` 新增一个接受底层异常的
+构造函数，这是公共 API 的新增；没有移除任何内容。
+
+对设备程序而言，变化在于：依赖无限重试的程序，现在必须处理这一拒绝，例如在其凭据被撤销或替换，或其访问令牌
+被重新设置之后。
+
+##### 首个已签名的发布版本 {#v0250-signing}
+
+每个服务镜像、operator、边缘代理、消息代理管理器和控制台，以及 Helm chart，都使用 cosign 以无密钥方式按摘要
+签名。每个镜像还附带已签名的 SPDX SBOM 和 SLSA 构建溯源，chart 附带溯源。签名绑定到发布工作流和标签，所以
+来自任何其他工作流、仓库或分支的签名，都不会被验证为发布版本。在 `hack/verify-release-signatures.sh <tag>`
+对已推送的内容通过之前，GitHub Release 不会发布。
+
+- **要检查你下载的内容，** 请按[验证发布版本](./verifying-releases.md)操作；该脚本需要 `cosign` 3 或更高版本、
+  `jq` 和 GitHub CLI，不需要我们的账号或密钥。
+- **`v0.25.0` 之前的发布版本没有签名，** 验证时会报错 "no signatures found"。
+- **数据库镜像不在范围内。** 运行事件存储的 operand 镜像由另一个工作流发布，在本版本中未签名。
+- **`dcctl` 和边缘代理归档**附带构建溯源，自 [`v0.18.0`](#v0180-provenance) 起即是如此。
+
+升级无须任何操作。如何报告问题，请参阅[安全策略](https://github.com/devicechain-io/devicechain/security/policy)。
+
+##### 服务账号 {#v0250-service-accounts}
+
+租户管理员可以在**设置**中、**成员**旁边创建**服务账号**，供不应依赖某个人的刷新令牌运行的脚本和集成使用。
+账号只持有赋予它的角色（没有查看者基线），可选地限定于某些客户或组，并通过 OAuth `client_credentials`
+授权获得有效期五分钟的普通访问令牌。密钥只显示一次，以带密钥的摘要存储，并会过期（默认 365 天，最长 730 天）；
+轮换密钥时，旧密钥在你选定的一段重叠时间内仍然可用，默认 24 小时。一个租户可以持有 200 个账号，账号不能管理
+租户。见[服务账号](../user-guide/service-accounts.md)。运维人员的 OAuth 客户端不能使用这种授权，服务账号的凭据
+在其他授权类型上不能认证任何内容。
+
+##### 空中更新的设备组发布 {#v0250-rollouts}
+
+`createUpdateRollout`、`startUpdateRollout`、`pauseUpdateRollout`、`resumeUpdateRollout` 和
+`abortUpdateRollout` 把一个制品分配给设备组的成员，同时有未完成更新的设备不超过 `maxInFlight` 台（1 到
+1,000），控制台中的 **更新 → 发布** 会显示它们。开始发布会冻结该组的成员；超过 10,000 台设备的组会被拒绝。被
+分配规则拒绝的设备会带着该规则的代码被跳过，且不占用名额。可选的失败阈值会让发布自动暂停，之后恢复它需要
+更高的阈值。中止会取消尚未开始的设备，并让进行中的设备完成。发布需要 `artifact:write` 才能修改，需要
+`artifact:read` 才能查看，仅限于租户一部分的成员会被拒绝。见
+[向设备组发布](../concepts/over-the-air-updates.md#rollouts)。新增指标为
+`update_rollout_dispatches_total`、`update_rollout_transitions_total` 和 `update_rollout_step_failures_total`。
+
+#### 其他变化 {#v0250-what-changed}
+
+##### 已知限制 {#v0250-known-limitations}
+
+- **在第一次升级期间，共享登录仍可被每个 pod 读取。** 这就是两次升级之间的窗口；请尽快执行第二次。
+- **有两项消息代理授权按设计更宽：** `event-sources` 保留对消息代理自身 MQTT 存储的更新权限，
+  `user-management` 可以跨所有流清除已删除租户的数据，但 `event-sources` 保存其已确认消息持久性的
+  消费者除外。
+- **网关的命令不会被路由，** 发给网关的通知是尽力而为的，代理保留它所转发内容的一份有界副本（8,192 个事件和
+  16 MiB），用于与通知匹配。
+- **发布没有分批或金丝雀阶段，** 没有计划，也没有针对停滞的发布驱动器的告警。
+- **SBOM 由每个镜像的 `amd64` 变体生成。**
+- **沿用自 `v0.24.0`：** 计算指标回填会跳过已压缩的历史；消息代理在积压量大时崩溃不在 `mqttFailClosed` 的覆盖
+  范围内；`mqttFailClosed` 关闭时，在高负载下 MQTT 捕获流的 leader 发生变化，可能丢失已确认的 QoS 1
+  事件（`JetStreamCaptureLeaderChanged` 会发出警告）。
+
+##### 本版本的其他内容 {#v0250-also}
+
+- **`dcctl bootstrap` 和 `dcctl upgrade` 接受 `--values`，** 这是一个调优的 YAML 文件（副本数、资源、某个领域
+  自己的配置），会记录在实例上，并由之后的每次升级再次应用。`dcctl` 拥有的键，例如镜像、凭据或端点，会在
+  任何改动发生之前按名称被拒绝。`--reset-values` 将其移除，`--dry-run` 打印将发生的变化。见
+  [调优实例](./tuning-an-instance.md)。
+- **`dcctl broker reconcile <instance>` 和 `dcctl broker permissions`** 是新增的；见上文。
+- **实体的审计条目与变更在同一个事务中保存。** 过去它在变更提交之后才写入，所以审计写入失败时，调用方被告知
+  变更失败，而变更实际上已经保存，且没有留下记录。现在两者要么都保存，要么都不保存，这意味着审计写入失败
+  会让变更失败。登录和认证事件仍是尽力而为。
+- **租户删除会显示是什么在拖住它。** `tenant_purge_store_blocked{store,reason}` 按存储系统统计未完成的删除，
+  同时还有 `tenant_purge_store_rows_erased_total`、`tenant_purge_store_erase_duration_seconds`、
+  `tenant_purge_completed_total`、`tenant_purge_failures_total`、`tenant_purge_duration_seconds` 和
+  `tenant_purge_clean_duration_seconds`，以及三条告警。见[租户删除](./tenant-deletion.md#blocked-store)。
+- **租户删除在两处更快。** 键值擦除一次运行 32 个清除，而不是一个；S3 对象删除改为批量，每个请求最多 1,000 个
+  键。在单节点回环测试中，擦除 63,000 个键从 28.9 秒降到 3.1 秒。批次中任何一个键删除失败，现在都会让这一轮
+  失败，并重复进行直到不剩任何内容。
+- **写入方会跟随 leader 选举，直到追上。** 路由到流的 leader 的发布者，过去只计算一次新 leader，如果那一轮
+  失败就保留旧目标。现在它以逐渐增大的间隔重试，最多 30 秒。这只影响性能。
+- **看板。** 看板可以显示一个固定的时间窗口，通过**自定义范围**选择，或从 `?from=&to=` 链接打开，以取代滚动
+  范围（见[自定义范围](../user-guide/viewing-dashboards-in-dash.md#custom-range)）。新的历史表格组件把一台设备
+  的已存储历史列为各时间桶平均值的行，有可交付内容的组件带有 CSV 或 PNG 的下载按钮。没有内容可绘制的组件
+  现在会说明五种原因中的哪一种：未选择设备、此设备未上报、此范围内没有数据、无权访问，或数据源失败。
+  `/dash?rotate=tokA,tokB&every=60` 在墙面显示屏上轮播两到 24 个看板，每个 10 到 3,600 秒（见
+  [在多个看板之间轮播](../user-guide/viewing-dashboards-in-dash.md#rotating-boards)）。这些全部是增量的：
+  已保存的看板的读取和渲染与以前相同。
+- **版本与安全文档。** [版本与升级策略](./versioning-policy.md)说明了从 `v1.0.0` 起哪些内容是稳定的，
+  [安全模型](../concepts/security-model.md)描述了信任边界以及各由什么来强制执行。滚动升级一节不再声称零停机。
+- **每次变更都会运行兼容性检查。** 每个对外提供的 GraphQL schema、`dcctl` 命令和标志、设备线路契约、设备主题
+  布局、C# SDK 的公共 API 以及 npm 包的导出，都会与上一个发布版本比较，破坏性变更必须声明。与 `v0.24.0`
+  相比，本版本没有声明任何破坏性变更。
+- **Sitepulse 展示的演示播放器会在每台设备的凭据上设置自己的令牌，** 因为它已无法读回一个令牌。
+
 ### v0.24.0：可自行编写的计算指标，以及承载更多事件的事件路径 {#v0240-upgrade}
 
 `v0.24.0` 可从 `v0.23.0` 原地升级：先为集群执行 `dcctl install`，再为每个实例执行

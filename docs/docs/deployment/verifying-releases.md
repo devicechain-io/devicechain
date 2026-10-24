@@ -7,7 +7,7 @@ title: Verifying releases
 
 Every container image and the Helm chart a DeviceChain release publishes is **signed**, and carries
 two signed statements about how it was made. You can check all of it before you run anything, with
-no account and no key to obtain.
+no key to obtain; checking the provenance needs a GitHub sign-in.
 
 | What | Where it lives | What it tells you |
 | --- | --- | --- |
@@ -21,9 +21,8 @@ against that identity. A signature from any other workflow, repository or branch
 a release.
 
 :::note Which releases
-Signing applies to the releases whose notes announce it, which is no later than `v1.0.0`. Earlier
-images carry no signature, and verifying one fails with "no signatures found". That is the correct
-answer, not a fault in your setup.
+Signing starts with `v0.25.0`. Releases before `v0.25.0` carry no signature, and verifying one fails
+with "no signatures found". That is the correct answer, not a fault in your setup.
 :::
 
 ## What is signed {#what}
@@ -35,8 +34,8 @@ answer, not a fault in your setup.
 - the web console image: `ghcr.io/devicechain-io/frontend`
 - the Helm chart: `oci://ghcr.io/devicechain-io/charts/devicechain`
 
-Images are tagged with the release tag (`v1.0.0`). The chart is tagged with the version **without**
-the `v` (`1.0.0`). The `dcctl` and edge agent archives attached to the GitHub Release have their
+Images are tagged with the release tag (`v0.25.0`). The chart is tagged with the version **without**
+the `v` (`0.25.0`). The `dcctl` and edge agent archives attached to the GitHub Release have their
 own provenance; see [Releases & Upgrades](./releases-and-upgrades.md).
 
 ## Verify everything at once {#script}
@@ -46,9 +45,9 @@ fail. It needs [`cosign`](https://docs.sigstore.dev/cosign/system_config/install
 `jq`, and the [GitHub CLI](https://cli.github.com/) signed in (`gh auth login`) for provenance.
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/devicechain-io/devicechain/v1.0.0/hack/verify-release-signatures.sh
+curl -fsSLO https://raw.githubusercontent.com/devicechain-io/devicechain/v0.25.0/hack/verify-release-signatures.sh
 chmod +x verify-release-signatures.sh
-./verify-release-signatures.sh v1.0.0
+./verify-release-signatures.sh v0.25.0
 ```
 
 Fetch the script from the **same tag** you are verifying. It exits non-zero if any signature,
@@ -63,7 +62,7 @@ the right reason. A run that skips either is not a pass.
 ## Verify one image by hand {#by-hand}
 
 ```bash
-TAG=v1.0.0
+TAG=v0.25.0
 IMAGE=ghcr.io/devicechain-io/device-management:$TAG
 
 cosign verify "$IMAGE" \
@@ -92,8 +91,8 @@ gh attestation verify "oci://$IMAGE" --repo devicechain-io/devicechain \
 The chart is verified the same way, with its own tag:
 
 ```bash
-cosign verify ghcr.io/devicechain-io/charts/devicechain:1.0.0 \
-  --certificate-identity "https://github.com/devicechain-io/devicechain/.github/workflows/release.yml@refs/tags/v1.0.0" \
+cosign verify ghcr.io/devicechain-io/charts/devicechain:0.25.0 \
+  --certificate-identity "https://github.com/devicechain-io/devicechain/.github/workflows/release.yml@refs/tags/v0.25.0" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
