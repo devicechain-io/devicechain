@@ -110,6 +110,7 @@ python3 -c 'import yaml' 2>/dev/null || {
 BOARDS=(
   command-delivery
   event-processing
+  ingest
   overview
 )
 # ...and the two published names, spelled out from that list. This is the only
