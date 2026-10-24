@@ -42,6 +42,7 @@ func TestLoadInstanceConfigurationRefusesABadTrustedProxy(t *testing.T) {
 		"a bare address":         `"10.42.0.1"`,
 		"bad prefix length":      `"10.42.0.0/33"`,
 		"host bits set (widens)": `"10.42.0.7/16"`,
+		"4-in-6 never matches":   `"::ffff:10.0.0.0/104"`,
 		"empty":                  `""`,
 		"blank":                  `"  "`,
 	} {

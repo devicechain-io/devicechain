@@ -43,8 +43,11 @@ func TrustedSourceAddr(r *http.Request, trusted []netip.Prefix) string {
 		host = r.RemoteAddr
 	}
 	peer, ok := parseAddr(host)
-	if !ok || !inPrefixes(peer, trusted) {
+	if !ok {
 		return host
+	}
+	if !inPrefixes(peer, trusted) {
+		return peer.String()
 	}
 	var chain []string
 	for _, line := range r.Header.Values("X-Forwarded-For") {
@@ -57,13 +60,13 @@ func TrustedSourceAddr(r *http.Request, trusted []netip.Prefix) string {
 		}
 		a, ok := parseAddr(entry)
 		if !ok {
-			return host
+			return peer.String()
 		}
 		if !inPrefixes(a, trusted) {
 			return a.String()
 		}
 	}
-	return host
+	return peer.String()
 }
 
 // parseAddr reads an address as a proxy writes it into X-Forwarded-For: bare, bracketed, or

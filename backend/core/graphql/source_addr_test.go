@@ -68,6 +68,9 @@ func TestTrustedSourceAddrTakesTheRightmostUntrustedEntry(t *testing.T) {
 	require.Equal(t, "198.51.100.7", TrustedSourceAddr(req("10.1.2.3:80", "198.51.100.7:51000"), trusted))
 	require.Equal(t, "2001:db8::5", TrustedSourceAddr(req("[fd00::1]:80", "[2001:db8::5]:443"), trusted))
 	require.Equal(t, "198.51.100.7", TrustedSourceAddr(req("10.1.2.3:80", "::ffff:198.51.100.7"), trusted))
+	// A mapped IPv4 address WITH a port is the IPv4 address it is, so it matches the IPv4
+	// trusted prefix and the walk goes on to the real client.
+	require.Equal(t, "198.51.100.7", TrustedSourceAddr(req("10.1.2.3:80", "198.51.100.7, [::ffff:10.9.9.9]:80"), trusted))
 }
 
 // With an empty or nil trusted list, the peer is used and the header never read.
@@ -92,4 +95,8 @@ func TestTrustedSourceAddrToleratesAnOddPeer(t *testing.T) {
 	trusted := prefixes(t, "10.0.0.0/8")
 	require.Equal(t, "198.51.100.7", TrustedSourceAddr(req("10.1.2.3", "198.51.100.7"), trusted))
 	require.Equal(t, "pipe", TrustedSourceAddr(req("pipe", "198.51.100.7"), trusted))
+	// The peer is normalised like an XFF entry: a zone is dropped, a mapped address unmapped.
+	require.Equal(t, "fe80::1", TrustedSourceAddr(req("[fe80::1%eth0]:80"), trusted))
+	require.Equal(t, "203.0.113.9", TrustedSourceAddr(req("[::ffff:203.0.113.9]:80"), trusted))
+	require.Equal(t, "10.1.2.3", TrustedSourceAddr(req("[::ffff:10.1.2.3]:80", "oops"), trusted))
 }
