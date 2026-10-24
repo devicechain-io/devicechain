@@ -1314,6 +1314,12 @@ jobs:
       - name: The L3 contention runs use separate tenants
         run: hack/check-loadtest-l3-tenants.sh
 
+      # The rc perf run's verdict is all three rungs: a failed rung must fail the
+      # script and stop the other two, and an interrupt must leave no rung running.
+      # Checked against stub harnesses, each failure case seen to fail.
+      - name: rc perf run script self-test
+        run: hack/loadtest-rc-run.sh --self-test
+
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.work

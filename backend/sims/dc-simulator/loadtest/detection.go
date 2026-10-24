@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-simulator/loadtest/detmonitor"
+	"github.com/devicechain-io/dc-simulator/mqttload"
 	"github.com/devicechain-io/dc-simulator/sim"
 	"github.com/rs/zerolog/log"
 )
@@ -190,6 +191,12 @@ type DetectionConfig struct {
 	AlarmPoll    time.Duration
 	AlarmTimeout time.Duration
 	AlarmSettle  time.Duration
+
+	// MQTT, when set, carries every emit (the background fleet AND the probes) over the
+	// platform's MQTT gateway instead of the HTTP ingress, so the detection oracle runs under
+	// MQTT load: the combined run. Each device holds one session; an emit counts as accepted
+	// only on the broker's PUBACK. Broker and TLSInsecure default to the handshake's.
+	MQTT *mqttload.Config
 }
 
 func (c DetectionConfig) withDefaults() DetectionConfig {
@@ -682,7 +689,20 @@ type DetectionReport struct {
 	// never watched the stream. Empty when LiveSignal is true.
 	LiveAbsent string            `json:"liveSignalAbsentReason,omitempty"`
 	Detection  detmonitor.Report `json:"detectionLiveSignal"` // NON-GATING evidence
-	Invariants []Invariant       `json:"invariants"`
+	// MQTT is set when the run's emits went over the MQTT gateway: what was connected and
+	// what the broker acknowledged.
+	MQTT       *DetectionMQTT `json:"mqtt,omitempty"`
+	Invariants []Invariant    `json:"invariants"`
+}
+
+// DetectionMQTT is the transport evidence of a detection run driven over MQTT.
+type DetectionMQTT struct {
+	Broker       string           `json:"broker"`
+	QoS          byte             `json:"qos"`
+	TLSRequested bool             `json:"tlsRequested"`
+	TLSVersions  map[string]int64 `json:"tlsVersions,omitempty"`
+	mqttload.Snapshot
+	AckLatency mqttload.Percentiles `json:"ackLatency"`
 }
 
 // Passed reports whether every invariant held. An empty invariant set is NOT a pass
@@ -712,6 +732,10 @@ func (r *DetectionReport) Human() string {
 	fmt.Fprintf(&b, "detection-alarm-probes %s (seed %d, tenant %s)\n", verdict, r.Seed, r.Tenant)
 	fmt.Fprintf(&b, "  drive: %d bg devices, achieved %.1f ev/s over %.0fs — %s\n",
 		r.Drive.Devices, r.Drive.AchievedRatePS, r.Drive.HoldSeconds, r.Drive.outcome())
+	if m := r.MQTT; m != nil {
+		fmt.Fprintf(&b, "  mqtt: %s QoS %d, %d connection(s) %d TLS / %d plaintext, pubacked %d, unconfirmed %d, %d connection loss(es), ack p50 %.1fms p99 %.1fms\n",
+			m.Broker, m.QoS, m.Connects, m.TLSConns, m.PlainConns, m.Acked, m.Unconfirmed, m.ConnectionLosses, m.AckLatency.P50, m.AckLatency.P99)
+	}
 	fmt.Fprintf(&b, "  probes: %d safety, %d edge × K=%d cycles, %d emit failure(s); alarms reached-target %v in %.0fs\n",
 		r.SafetyProbes, r.EdgeProbes, r.Cycles, r.ProbeFailures, r.AlarmsReached, r.AlarmSecs)
 	if r.LiveSignal {
@@ -790,6 +814,30 @@ func RunDetectionProbes(ctx context.Context, hs *sim.Handshake, cfg DetectionCon
 	safety, edge, background, err := partitionByPrefix(rt.Devices, safetyTokenPrefix, edgeTokenPrefix, bgTokenPrefix)
 	if err != nil {
 		return nil, err
+	}
+	// The combined run: every emit, probes included, goes over MQTT. The fleet needs every
+	// device (a probe is a device too), so it is built before rt.Devices narrows to the
+	// background below.
+	var fleet *mqttload.Fleet
+	if cfg.MQTT != nil {
+		mc := *cfg.MQTT
+		if mc.Broker == "" {
+			mc.Broker = hs.Endpoints.MqttBroker
+		}
+		if hs.MqttTLSInsecure && mc.TLS {
+			mc.TLSInsecure = true
+		}
+		mc.InstanceId, mc.Tenant = hs.InstanceId, hs.Tenant
+		fleet, err = mqttload.NewFleet(mc, rt.Devices)
+		if err != nil {
+			return nil, fmt.Errorf("mqtt transport: %w", err)
+		}
+		fleet.Start(ctx)
+		defer fleet.Close()
+		if n, cerr := fleet.AwaitConnected(ctx, 5*time.Minute); cerr != nil {
+			return nil, fmt.Errorf("mqtt transport: connect the fleet: %w (%d connected)", cerr, n)
+		}
+		rt.Wire = fleet
 	}
 	if len(edge) == 0 || len(safety) == 0 {
 		return nil, fmt.Errorf("harness provisioned %d safety + %d edge probes — need at least one of each", len(safety), len(edge))
@@ -936,6 +984,14 @@ func RunDetectionProbes(ctx context.Context, hs *sim.Handshake, cfg DetectionCon
 	probeFailures, firstProbeErr := ps.snapshot()
 
 	invs := classifyAlarms(safetyStates, edgeStates, reached, cfg, snap.Emitted)
+	var mqttSection *DetectionMQTT
+	if fleet != nil {
+		fc := fleet.Config()
+		cs := fleet.Counters.Snapshot()
+		invs = append(invs, transportInvariant(fc.TLS, cs))
+		mqttSection = &DetectionMQTT{Broker: fleet.Broker(), QoS: fc.QoS, TLSRequested: fc.TLS,
+			TLSVersions: fleet.TLSVersions(), Snapshot: cs, AckLatency: fleet.Lat.Percentiles()}
+	}
 
 	// Probe delivery is a run-integrity gate: a probe emit the ingress rejected means
 	// the planted signal never entered the pipeline, so the durable alarm state is not
@@ -966,6 +1022,7 @@ func RunDetectionProbes(ctx context.Context, hs *sim.Handshake, cfg DetectionCon
 		Detection:     liveSignal,
 		Invariants:    invs,
 		Drive:         newDriveStats(len(background), rt.Load.TargetRate(len(background)), snap, start, end),
+		MQTT:          mqttSection,
 	}
 	return report, nil
 }

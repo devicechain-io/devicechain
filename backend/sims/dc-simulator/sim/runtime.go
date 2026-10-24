@@ -211,6 +211,10 @@ type Runtime struct {
 	// it; nothing else mutates it after Bootstrap returns.
 	Devices []DeviceInstance
 
+	// Wire, when set, carries every event in place of the HTTP ingress (see EventWire). Nil
+	// in production: the persistent sim and the HTTP load tests POST to the ingress.
+	Wire EventWire
+
 	// Stats accumulates emit accounting across the process lifetime.
 	Stats Stats
 
