@@ -256,9 +256,14 @@ dcctl upgrade local devicechain --version <new-version>
 
 :::note What has been measured
 The upgrade has been rehearsed by hand on a local cluster: an instance installed with `--ha` was upgraded
-in place with MQTT traffic running, its broker rolled twice, devices reconnected after each roll, and every
-message the broker had acknowledged was still stored afterwards. That rehearsal is manual. The automated
-upgrade check that gates a release runs with no traffic.
+in place with MQTT traffic running (four devices publishing at QoS 1, 20 messages a second between them,
+with `infrastructure.nats.mqttFailClosed` off, as it is by default), its broker rolled twice, and devices
+reconnected after each roll. In one rehearsal every message the broker had acknowledged was still stored
+afterwards (11,009 of 11,009). In another, 11 of 11,262 acknowledged messages were lost, all of them while a
+broker server restarted and the MQTT capture stream changed leader. With `mqttFailClosed` off, expect a
+short window of loss like this at every broker roll, at any rate of traffic; see
+[MQTT, the platform broker](../reference/transport-matrix.md#mqtt--the-platform-broker). The rehearsals
+are manual. The automated upgrade check that gates a release runs with no traffic.
 
 An upgrade under sustained production load, on a cluster of production size, has not been
 measured, so DeviceChain does not promise an upgrade without interruption. Plan for a short
@@ -3994,10 +3999,23 @@ to change and `artifact:read` to view, and a member limited to part of the tenan
   bounded copy (8,192 events and 16 MiB) of what it forwarded to match a notice against.
 - **Rollouts have no waves or canary stage,** no schedule, and no alert for a stalled rollout driver.
 - **The SBOM is generated from each image's `amd64` variant.**
-- **Carried from `v0.24.0`:** a calculated-metric backfill skips compressed history; a broker crash with a
-  large backlog is not covered by `mqttFailClosed`; and with `mqttFailClosed` off a change of the MQTT
-  capture stream's leader under heavy load can lose acknowledged QoS 1 events (`JetStreamCaptureLeaderChanged`
-  warns).
+- **With `mqttFailClosed` off, which is the default, QoS 1 messages the broker has acknowledged can be lost
+  while the MQTT capture stream changes leader, at any load,** and nothing counts them
+  (`JetStreamCaptureLeaderChanged` warns that a change happened). A broker roll restarts every server, the
+  leader among them, and this upgrade rolls the broker twice, so expect a short loss window during each
+  broker roll unless fail-closed is on. In a rehearsal of this upgrade with four devices sending 20 QoS 1 messages a
+  second between them, 11 of 11,262 acknowledged messages were lost, all during the broker restarts; in an
+  earlier rehearsal none were. To close the window, turn on `infrastructure.nats.mqttFailClosed` (the chart
+  value `instance.config.infrastructure.nats.mqttFailClosed`). `dcctl` has no option for it in this release
+  and `--values` does not accept it, so a value set by hand on an instance `dcctl` manages is written over
+  by the next `dcctl upgrade`. The trade-off: while the broker's message store has no leader, a QoS 1
+  publish is not acknowledged, so the device must send it again, and the instance keeps up with less
+  traffic than with the setting off. On one test cluster it lost nothing while it kept up, at 6,000 and
+  9,000 events a second through repeated leader changes; at 12,000 a second it fell behind, two broker
+  servers ran out of memory, and acknowledged messages were lost. Size the install to stay below its
+  ceiling. See [fail-closed MQTT](./observability.md#mqtt-fail-closed).
+- **Carried from `v0.24.0`:** a calculated-metric backfill skips compressed history, and a broker crash
+  with a large backlog is not covered by `mqttFailClosed`.
 
 ##### Also in this release {#v0250-also}
 

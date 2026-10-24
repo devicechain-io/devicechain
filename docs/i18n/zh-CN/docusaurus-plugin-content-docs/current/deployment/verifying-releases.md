@@ -42,6 +42,16 @@ chmod +x verify-release-signatures.sh
 
 请从你正在验证的**同一个标签**获取脚本。只要有任何签名、SBOM 或溯源检查失败，它就会以非零状态退出，并指出是哪一项。
 
+:::note 在 Windows 上
+Git Bash 在启动 `cosign.exe` 或 `gh.exe` 这类 Windows 程序之前，会改写看起来像路径的参数，这会破坏检查所要求的身份。脚本会为它运行的命令关闭这种转换。如果你在 Git Bash 中手动运行 `cosign` 或 `gh`，请先自行关闭它：
+
+```bash
+export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'
+```
+
+否则，一个已签名的版本也可能以 "no matching CertificateIdentity found" 失败。
+:::
+
 脚本最后会运行两项**负向对照**。只见过正确输入的验证器，从未被证明能拒绝任何东西。因此脚本会用一个不可能匹配的身份去验证一个已签名的 DeviceChain 镜像，并验证一个未为此版本签名的镜像（默认是一个较早的 DeviceChain operator 镜像，发布于版本开始签名之前），要求两者都因正确的原因被拒绝。跳过其中任何一项的运行都不算通过。
 
 ## 手动验证单个镜像 {#by-hand}

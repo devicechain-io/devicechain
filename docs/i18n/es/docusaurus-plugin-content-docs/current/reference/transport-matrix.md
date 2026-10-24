@@ -84,9 +84,13 @@ hay ningún bróker aparte que operar.
 
   Un tercer agujero es la propia elección de líder del stream de captura. El broker entrega cada
   publicación QoS 1 al stream de captura sin respuesta, después de que el dispositivo ya tiene su
-  PUBACK. Si el stream cambia de líder bajo carga, las publicaciones que llegan mientras no tiene
-  ninguno, varios segundos, no se guardan en ningún sitio y ningún contador las registra. En una
-  prueba de 12 000 eventos por segundo, un cambio así perdió unos cinco segundos de eventos.
+  PUBACK. Si el stream cambia de líder, con cualquier carga, las publicaciones que llegan mientras no
+  tiene ninguno, varios segundos, no se guardan en ningún sitio y ningún contador las registra. Un
+  reinicio progresivo del broker reinicia todos los servidores, también el líder, así que cada uno,
+  incluidos los que hace una actualización, abre esta ventana. En una prueba de 12 000 eventos por
+  segundo, un cambio así perdió unos cinco segundos de eventos; en un ensayo de actualización con
+  cuatro dispositivos que enviaban 20 mensajes por segundo entre todos, se perdieron 11 de 11 262
+  mensajes confirmados durante los reinicios del broker.
   `JetStreamCaptureLeaderChanged` avisa de que hubo un cambio mientras llegaban eventos; los
   eventos perdidos no se pueden recuperar, y la hora del cambio acota la ventana que revisar en los
   registros de sus propios dispositivos.

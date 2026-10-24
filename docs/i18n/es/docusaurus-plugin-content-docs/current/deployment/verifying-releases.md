@@ -42,6 +42,16 @@ chmod +x verify-release-signatures.sh
 
 Obtenga el script de la **misma etiqueta** que está verificando. Termina con un código distinto de cero si falla cualquier comprobación de firma, SBOM o procedencia, e indica cuál.
 
+:::note En Windows
+Git Bash reescribe los argumentos que parecen rutas antes de iniciar un programa de Windows como `cosign.exe` o `gh.exe`, lo que estropea la identidad que exige la comprobación. El script desactiva esa conversión para los comandos que ejecuta. Si ejecuta `cosign` o `gh` a mano desde Git Bash, desactívela usted antes:
+
+```bash
+export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'
+```
+
+Sin ello, una versión firmada puede fallar con "no matching CertificateIdentity found".
+:::
+
 Termina con dos **controles negativos**. Un verificador que solo ha visto entradas correctas nunca ha demostrado que rechace nada, así que el script verifica una imagen firmada de DeviceChain contra una identidad que no puede coincidir, y verifica una imagen que no se firmó para esta versión (por defecto, una imagen anterior del operador de DeviceChain, de antes de que las versiones se firmaran), y exige que ambas se rechacen por el motivo correcto. Una ejecución que omita cualquiera de los dos no es un éxito.
 
 ## Verificar una imagen a mano {#by-hand}
