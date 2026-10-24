@@ -19,6 +19,31 @@ var testSecretKey = func() *credential.DeviceSecretKey {
 	return k
 }()
 
+// testEnrollmentKey is the provisioning secret key the model tests store and check profile
+// secrets under. It is derived from the same root as testSecretKey and is a different key.
+var testEnrollmentKey = func() *credential.DeviceSecretKey {
+	k, err := credential.DeriveEnrollmentSecretKey([]byte("model-tests-root-key-32-bytes!!!"))
+	if err != nil {
+		panic(err)
+	}
+	return k
+}()
+
+// provisionSecretStr renders a stored provisioning secret digest as secretStr renders a
+// credential's: the candidate it verifies under testEnrollmentKey, NullMarker for none, the
+// digest itself when it verifies none.
+func provisionSecretStr(d sql.NullString, candidates ...string) string {
+	if !d.Valid {
+		return putest.NullString(d)
+	}
+	for _, c := range candidates {
+		if credential.VerifyDeviceSecret(testEnrollmentKey, partialUpdateTenant, d.String, c) == nil {
+			return c
+		}
+	}
+	return "unverified digest " + d.String
+}
+
 // testDigest is secret's stored form under testSecretKey, for a credential of the fixture
 // tenant.
 func testDigest(secret string) sql.NullString {

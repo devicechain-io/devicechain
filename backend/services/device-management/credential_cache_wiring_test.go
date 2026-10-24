@@ -36,7 +36,7 @@ import (
 func credentialTables() []any {
 	return []any{&model.Device{}, &model.DeviceType{}, &model.DeviceProfile{}, &model.DeviceProfileVersion{}, &model.DeviceProfileActivation{},
 		&model.MetricDefinition{}, &model.CommandDefinition{}, &model.DetectionRule{},
-		&model.DetectionRuleScopeRef{}, &model.DeviceCredential{}}
+		&model.DetectionRuleScopeRef{}, &model.DeviceCredential{}, &model.ProvisioningProfile{}, &model.DeviceClaim{}}
 }
 
 // credentialStatements counts the query statements that read device_credentials on db.
@@ -166,7 +166,7 @@ type replica struct {
 func newReplica(t *testing.T, host string, port uint32, instanceId string, db *gorm.DB) replica {
 	t.Helper()
 	nmgr := startNatsManager(t, host, port, instanceId)
-	api, capi, err := buildApis(nmgr, &rdb.RdbManager{Database: db}, dmtest.DeviceSecretKey(), config.NewDeviceManagementConfiguration())
+	api, capi, err := buildApis(nmgr, &rdb.RdbManager{Database: db}, dmtest.DeviceSecretKey(), dmtest.EnrollmentSecretKey(), config.NewDeviceManagementConfiguration())
 	require.NoError(t, err)
 	return replica{api: api, capi: capi, nmgr: nmgr}
 }

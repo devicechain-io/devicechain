@@ -32,9 +32,14 @@ func TestClaimStatusValid(t *testing.T) {
 // claim builds a device claim with the given status/secret/expiry for exercising
 // evaluateDeviceClaim in isolation.
 func claim(status ClaimStatus, secret string, expires *time.Time) *DeviceClaim {
-	c := &DeviceClaim{
-		Status:      string(status),
-		ClaimSecret: secret,
+	c := &DeviceClaim{Status: string(status)}
+	c.TenantId = partialUpdateTenant
+	if secret != "" {
+		d, err := testEnrollmentKey.Digest(partialUpdateTenant, secret)
+		if err != nil {
+			panic(err)
+		}
+		c.ClaimSecretDigest = sql.NullString{String: d, Valid: true}
 	}
 	if expires != nil {
 		c.ExpiresAt = sql.NullTime{Time: *expires, Valid: true}
@@ -45,7 +50,7 @@ func claim(status ClaimStatus, secret string, expires *time.Time) *DeviceClaim {
 // An open, unexpired claim whose secret matches can be redeemed.
 func TestEvaluateDeviceClaim_OK(t *testing.T) {
 	now := time.Date(2026, 6, 25, 12, 0, 0, 0, time.UTC)
-	err := evaluateDeviceClaim(claim(ClaimStatusOpen, "s3cret", nil), "s3cret", now)
+	err := evaluateDeviceClaim(testEnrollmentKey, claim(ClaimStatusOpen, "s3cret", nil), "s3cret", now)
 	assert.NoError(t, err)
 }
 
@@ -53,7 +58,7 @@ func TestEvaluateDeviceClaim_OK(t *testing.T) {
 func TestEvaluateDeviceClaim_NotOpen(t *testing.T) {
 	now := time.Date(2026, 6, 25, 12, 0, 0, 0, time.UTC)
 	for _, status := range []ClaimStatus{ClaimStatusClaimed, ClaimStatusCanceled} {
-		err := evaluateDeviceClaim(claim(status, "s3cret", nil), "s3cret", now)
+		err := evaluateDeviceClaim(testEnrollmentKey, claim(status, "s3cret", nil), "s3cret", now)
 		assert.ErrorIs(t, err, ErrClaimNotOpen, "status %q should not be redeemable", status)
 	}
 }
@@ -61,7 +66,7 @@ func TestEvaluateDeviceClaim_NotOpen(t *testing.T) {
 // A wrong secret is rejected.
 func TestEvaluateDeviceClaim_SecretMismatch(t *testing.T) {
 	now := time.Date(2026, 6, 25, 12, 0, 0, 0, time.UTC)
-	err := evaluateDeviceClaim(claim(ClaimStatusOpen, "s3cret", nil), "wrong", now)
+	err := evaluateDeviceClaim(testEnrollmentKey, claim(ClaimStatusOpen, "s3cret", nil), "wrong", now)
 	assert.ErrorIs(t, err, ErrClaimSecretMismatch)
 }
 
@@ -69,20 +74,20 @@ func TestEvaluateDeviceClaim_SecretMismatch(t *testing.T) {
 func TestEvaluateDeviceClaim_Expired(t *testing.T) {
 	now := time.Date(2026, 6, 25, 12, 0, 0, 0, time.UTC)
 	past := now.Add(-time.Hour)
-	err := evaluateDeviceClaim(claim(ClaimStatusOpen, "s3cret", &past), "s3cret", now)
+	err := evaluateDeviceClaim(testEnrollmentKey, claim(ClaimStatusOpen, "s3cret", &past), "s3cret", now)
 	assert.ErrorIs(t, err, ErrClaimExpired)
 }
 
 func TestEvaluateDeviceClaim_ExpiresAtExactlyNow(t *testing.T) {
 	now := time.Date(2026, 6, 25, 12, 0, 0, 0, time.UTC)
-	err := evaluateDeviceClaim(claim(ClaimStatusOpen, "s3cret", &now), "s3cret", now)
+	err := evaluateDeviceClaim(testEnrollmentKey, claim(ClaimStatusOpen, "s3cret", &now), "s3cret", now)
 	assert.ErrorIs(t, err, ErrClaimExpired)
 }
 
 func TestEvaluateDeviceClaim_NotYetExpired(t *testing.T) {
 	now := time.Date(2026, 6, 25, 12, 0, 0, 0, time.UTC)
 	future := now.Add(time.Hour)
-	err := evaluateDeviceClaim(claim(ClaimStatusOpen, "s3cret", &future), "s3cret", now)
+	err := evaluateDeviceClaim(testEnrollmentKey, claim(ClaimStatusOpen, "s3cret", &future), "s3cret", now)
 	assert.NoError(t, err)
 }
 
@@ -90,7 +95,7 @@ func TestEvaluateDeviceClaim_NotYetExpired(t *testing.T) {
 // reports not-open rather than secret-mismatch.
 func TestEvaluateDeviceClaim_NotOpenBeatsSecret(t *testing.T) {
 	now := time.Date(2026, 6, 25, 12, 0, 0, 0, time.UTC)
-	err := evaluateDeviceClaim(claim(ClaimStatusClaimed, "s3cret", nil), "wrong", now)
+	err := evaluateDeviceClaim(testEnrollmentKey, claim(ClaimStatusClaimed, "s3cret", nil), "wrong", now)
 	assert.ErrorIs(t, err, ErrClaimNotOpen)
 }
 
@@ -98,6 +103,6 @@ func TestEvaluateDeviceClaim_NotOpenBeatsSecret(t *testing.T) {
 // a constant-time "" == "" would otherwise pass (review #5 defense in depth).
 func TestEvaluateDeviceClaim_EmptyStoredSecret(t *testing.T) {
 	now := time.Date(2026, 6, 25, 12, 0, 0, 0, time.UTC)
-	err := evaluateDeviceClaim(claim(ClaimStatusOpen, "", nil), "", now)
+	err := evaluateDeviceClaim(testEnrollmentKey, claim(ClaimStatusOpen, "", nil), "", now)
 	assert.ErrorIs(t, err, ErrClaimSecretMismatch)
 }

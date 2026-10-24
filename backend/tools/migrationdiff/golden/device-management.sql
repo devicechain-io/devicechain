@@ -697,11 +697,12 @@ CREATE TABLE "device-management".device_claims (
  deleted_at timestamp with time zone,
  tenant_id character varying(128) NOT NULL,
  device_id bigint NOT NULL,
- claim_secret character varying(256) NOT NULL,
+ claim_secret character varying(256),
  status character varying(32) NOT NULL,
  expires_at timestamp with time zone,
  claimed_time timestamp with time zone,
- claimed_by_customer_id bigint
+ claimed_by_customer_id bigint,
+ claim_secret_digest character varying(128)
 );
 CREATE TABLE "device-management".device_configuration_revisions (
  id bigint NOT NULL,
@@ -1042,12 +1043,13 @@ CREATE TABLE "device-management".provisioning_profiles (
  description character varying(1024),
  metadata jsonb,
  provision_key character varying(256) NOT NULL,
- provision_secret character varying(256) NOT NULL,
+ provision_secret character varying(256),
  strategy character varying(32) NOT NULL,
  device_type_id bigint NOT NULL,
  credential_type character varying(32) NOT NULL,
  enabled boolean NOT NULL,
- expires_at timestamp with time zone
+ expires_at timestamp with time zone,
+ provision_secret_digest character varying(128)
 );
 CREATE TABLE "device-management".purged_tenants (
  token character varying(128) NOT NULL,
