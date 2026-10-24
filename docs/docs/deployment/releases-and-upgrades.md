@@ -3667,6 +3667,8 @@ what two services report to Prometheus and the Grafana boards the chart ships fo
 [The metrics and the boards](#v0251-metrics)). Everything the [v0.25.0 section](#v0250-upgrade) describes is still what you are
 running.
 
+The [v0.25.0 known limitations](#v0250-upgrade) still apply, including this one: with `mqttFailClosed` off, the default, acknowledged QoS 1 messages can also be lost under sustained load with no broker restart, when `event-sources` falls behind and the capture stream fills. `devicechain_<area>_jetstream_consumer_unread_skipped_total` counts them and `JetStreamDurableLostUnread` alerts.
+
 Upgrade the cluster, then each instance. Give `dcctl install` the settings the cluster was installed with,
 such as `--ha` and `--database-node-selector`, as well as the new `--version`:
 

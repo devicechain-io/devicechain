@@ -3939,6 +3939,8 @@ de seguridad que se enumeran abajo, y corrige lo que dos servicios informan a Pr
 Grafana que el chart incluye para ellos (consulta [Las métricas y los paneles](#v0251-metrics)). Todo lo que describe la
 [sección de la v0.25.0](#v0250-upgrade) sigue siendo lo que estás ejecutando.
 
+Siguen vigentes las [limitaciones conocidas de la v0.25.0](#v0250-upgrade), incluida esta: con `mqttFailClosed` desactivado, el valor por defecto, también se pueden perder mensajes QoS 1 confirmados con carga sostenida y sin reinicio del broker, cuando `event-sources` se queda atrás y el stream de captura se llena. `devicechain_<area>_jetstream_consumer_unread_skipped_total` los cuenta y `JetStreamDurableLostUnread` alerta.
+
 Actualiza el clúster y después cada instancia. Pasa a `dcctl install` los ajustes con los que se instaló
 el clúster, como `--ha` y `--database-node-selector`, además de la nueva `--version`:
 
