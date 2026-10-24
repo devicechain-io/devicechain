@@ -50,13 +50,14 @@ title: 安全模型
 
 ## 不会离开集群的端点 {#internal-endpoints}
 
-有两个端点只供平台自身的服务使用。`/auth/service-token` 用共享的服务密钥换取短期令牌，`/auth/jwks` 是所有服务用于校验令牌的密钥集。`user-management` 在单独的内部端口（默认 8082，`infrastructure.userManagement.internalPort`）上提供这两个端点，而不是在公开端口上。Chart 只在集群内部的 Service 上发布该端口，没有任何 Ingress、路由或负载均衡器引用它。
+有两个端点只供平台自身的服务使用。`/auth/service-token` 用共享的服务密钥换取短期令牌，`/auth/jwks` 是所有服务用于校验令牌的密钥集。`user-management` 在单独的内部端口（8082）上提供这两个端点，而不是在公开端口上。Chart 只在集群内部的 Service 上发布该端口，没有任何 Ingress、路由或负载均衡器引用它。
 
 因此，无论前面放的是什么，甚至完全没有 Ingress，公开端口对这两个路径都返回 404。边缘不承担任何安全控制：
 
-- **自带的 Ingress 控制器不需要为这些路径添加任何规则。** 像往常一样路由到 Chart 创建的 Service 即可，令牌签发端点无法被访问。
-- **Chart 不设置任何 nginx snippet 注解，** `dcctl install` 安装的 Ingress 控制器也在禁用 snippet 的情况下运行。配置 snippet 允许任何能写入 Ingress 对象的人注入 nginx 配置，而这里没有任何东西需要它。
-- **启用网络策略后，** 只有实例自身命名空间中的 Pod 能连接到内部端口。其他命名空间中的 Pod 仍可访问公开端口，Ingress 控制器和指标采集器也必须如此。
+- **自带的 Ingress 控制器不需要为这些路径添加任何规则。** 像往常一样路由到 Chart 创建的 Service 即可，外部无法访问令牌签发端点。
+- **令牌签发端点由共享的服务密钥保护。** 密钥以恒定时间比较，未配置密钥的实例会拒绝签发。内部端口让该端点远离公共网络；密钥则用于认证能够访问它的调用方。
+- **Chart 不设置任何 nginx snippet 注解。** 配置 snippet 允许任何能写入 Ingress 对象的人注入 nginx 配置，而这里没有任何东西需要它。`dcctl install` 安装的 Ingress 控制器在本版本中仍接受 snippet，因为尚未升级的实例依赖它们；待没有实例再依赖时，后续版本会将其关闭。
+- **网络策略进一步限制内部端口，但它只是纵深防御，且默认关闭。** 启用 `networkPolicy.enabled` 后，在网络插件强制执行策略的集群上，Chart 会将该端口限制为实例自身命名空间中的 Pod。`dcctl` 安装时该策略为关闭状态。
 - **外部令牌验证方改用公开的密钥集。** 授权服务器元数据中的 `jwks_uri` 指向 `/oauth/jwks`，在配置了签发者 URL 后，它提供相同的公钥。
 
 如果你运行自己的策略引擎，请仅允许实例命名空间中的 Pod 访问 `user-management` 的 8082 端口。每个服务都会通过它在启动时获取密钥集，并签发自己的服务令牌。

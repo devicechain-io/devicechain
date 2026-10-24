@@ -89,20 +89,24 @@ See [Multi-Tenancy](./multi-tenancy.md).
 
 Two endpoints exist only for the platform's own services. `/auth/service-token` exchanges the shared service
 secret for a short-lived token, and `/auth/jwks` is the key set every service uses to validate tokens.
-`user-management` serves both on a separate internal port (8082 by default, `infrastructure.userManagement.internalPort`),
-not on the public one. The chart publishes that port on the cluster-internal Service only. No ingress, route
-or load balancer refers to it.
+`user-management` serves both on a separate internal port (8082), not on the public one. The chart publishes that
+port on the cluster-internal Service only. No ingress, route or load balancer refers to it.
 
 This means the public port answers 404 for both paths whatever sits in front of it, including no ingress at all.
 Nothing at the edge is a security control:
 
 - **A bring-your-own ingress controller needs no rule for these paths.** Route to the Services the chart
-  creates, as you would anyway, and the mint is not reachable.
-- **The chart sets no nginx snippet annotation,** and the ingress controller that `dcctl install` sets up runs with
-  snippets disabled. A configuration snippet lets whoever can write an Ingress object inject nginx configuration, so
-  nothing here needs one.
-- **With network policies enabled,** only pods in the instance's own namespace can connect to the internal port.
-  Pods in other namespaces can still reach the public port, as the ingress controller and the metrics scraper must.
+  creates, as you would anyway, and the mint is not reachable from outside.
+- **The mint is protected by the shared service secret.** The secret is compared in constant time, and an instance
+  with no secret configured refuses to mint. The internal port keeps the endpoint off the public network; the
+  secret is what authenticates a caller that can reach it.
+- **The chart sets no nginx snippet annotation.** A configuration snippet lets whoever can write an Ingress object
+  inject nginx configuration, and nothing here needs one. The ingress controller that `dcctl install` sets up still
+  accepts snippets in this release, because instances not yet upgraded rely on them; a later release turns them off
+  once no instance does.
+- **A network policy narrows the internal port further, but it is defence in depth and it is off by default.** With
+  `networkPolicy.enabled` the chart restricts the port to pods in the instance's own namespace, on a cluster whose
+  network plugin enforces policy. `dcctl` installs run with the policy off.
 - **An external token verifier uses the public key set instead.** The authorization-server metadata
   (`jwks_uri`) points at `/oauth/jwks`, which serves the same public keys once an issuer URL is configured.
 

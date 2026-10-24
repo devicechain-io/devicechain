@@ -282,8 +282,8 @@ for name, pat, mm, ann, svc in routed:
 # --- 5. nothing at the edge is a security control --------------------------------------
 # user-management serves the service-token mint and the JWKS on an INTERNAL listener that
 # no route reaches, so the public port answers 404 for them with no ingress in front. That
-# is why the chart carries no configuration-snippet and the controller runs with snippets
-# off. Three things must stay true of the RENDER for that to hold:
+# is why the chart carries no configuration-snippet (the shared controller is tightened
+# in a later release, once no instance still needs one). Three things must stay true of the RENDER for that to hold:
 #   (a) no Ingress carries a snippet annotation of any kind (a snippet is how an edge rule
 #       would creep back in, and it is the attack class behind IngressNightmare);
 #   (b) no Ingress backend names the internal port, by name or number;
@@ -295,7 +295,7 @@ for ing in ingresses:
         if "snippet" in str(key).lower():
             problems.append(f"ingress {name} carries the snippet annotation {key!r}. The chart "
                             f"must not depend on edge configuration for any security property, "
-                            f"and the controller runs with snippets disabled.")
+                            f"and the controller is to be run with snippets disabled.")
 
 services = {(d.get("metadata") or {}).get("name"): d for d in docs if d.get("kind") == "Service"}
 um_svc = services.get("user-management")

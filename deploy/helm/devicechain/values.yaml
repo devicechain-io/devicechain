@@ -427,10 +427,9 @@ instance:
         # The INTERNAL listener: the service-token mint and the JWKS every peer validates
         # tokens against. Peers dial it directly, through the ClusterIP Service's
         # `internal-auth` port; no Ingress, route or load balancer ever names it, so the
-        # public port answers 404 for both whatever controller sits in front. The chart
-        # reads this one value for the container port, the Service port and the
-        # NetworkPolicy, so they cannot disagree with what the peers dial. It must differ
-        # from `port`.
+        # public port answers 404 for both whatever controller sits in front. The chart's
+        # container port, Service port and NetworkPolicy use the fixed 8082
+        # (devicechain.authInternalPort), so this value must stay 8082.
         internalPort: 8082
       deviceManagement:
         # device-management is reached in-cluster by its instance-namespace Service

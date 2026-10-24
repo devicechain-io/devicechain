@@ -333,16 +333,26 @@ de ambas:
 La instalación del clúster configura un controlador de ingress y cada instancia recibe sus rutas del chart. Nada en
 el borde es un control de seguridad: el emisor de tokens de servicio y el conjunto de claves de firma los sirve
 `user-management` en un puerto interno al que no apunta ninguna ruta del ingress, de modo que el puerto público
-responde 404 para ellos detrás de cualquier controlador. El controlador que configura `dcctl install` se ejecuta con
-los snippets de configuración desactivados, y los ingress del chart no llevan ninguno.
+responde 404 para ellos detrás de cualquier controlador. El emisor está protegido por el secreto de servicio
+compartido, que se compara en tiempo constante. Los ingress del chart no llevan ningún snippet de configuración. El
+controlador que configura `dcctl install` sigue aceptando snippets en esta versión, porque las instancias que aún no
+se han actualizado dependen de ellos.
 
-Si traes tu propio controlador:
+Si traes tu propio controlador, enruta los cinco ingress del chart:
 
-- Enruta `/api/<area>` al puerto `graphql` del Service de cada área, quitando el prefijo, y `/` a la consola. No
-  necesitas una regla que oculte las rutas `/auth/`, y no debes enrutar a un puerto de Service llamado `internal-auth`.
-- Mantén ese puerto alcanzable solo desde el namespace de la propia instancia. La política de red del chart
-  (`networkPolicy.enabled`) lo hace en un clúster que aplica políticas. Consulta
-  [Endpoints que nunca salen del clúster](../concepts/security-model.md#internal-endpoints).
+- `/api/<area>` al puerto `graphql` del Service de cada área, quitando el prefijo.
+- `/` a la consola.
+- `/.well-known/oauth-protected-resource` (a `mcp`) y `/.well-known/oauth-authorization-server` (a `user-management`),
+  sin quitar nada, cuando esas áreas están activadas.
+- La subida de actualizaciones, `PUT /api/update-management/updates/artifacts/<token>/content`, a `update-management`. No
+  almacenes en búfer el cuerpo de la solicitud, porque el servicio autentica antes de leerlo.
+- La descarga de actualizaciones, `GET /api/update-management/updates/download/<artifact>`, a `update-management`. Mantén
+  su cadena de consulta fuera de los registros de acceso, porque la concesión viaja en ella.
+
+No necesitas una regla que oculte las rutas `/auth/`, y no debes enrutar a un puerto de Service llamado `internal-auth`.
+La política de red del chart (`networkPolicy.enabled`, desactivada en las instalaciones de `dcctl`) también puede
+limitar ese puerto al namespace de la propia instancia. Consulta
+[Endpoints que nunca salen del clúster](../concepts/security-model.md#internal-endpoints).
 
 #### El namespace de la instancia {#instance-namespace}
 

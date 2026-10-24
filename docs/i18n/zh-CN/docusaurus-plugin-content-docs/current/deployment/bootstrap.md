@@ -172,12 +172,17 @@ Operator 无法接管 StatefulSet 的数据目录，因此不支持原地升级�
 
 #### Ingress 与自带控制器 {#ingress-controller}
 
-集群安装会部署一个 Ingress 控制器，每个实例的路由由 Chart 提供。边缘不承担任何安全控制：服务令牌签发端点和签名密钥集由 `user-management` 在一个没有任何 Ingress 路由指向的内部端口上提供，因此无论使用哪种控制器，公开端口对它们都返回 404。`dcctl install` 部署的控制器在禁用配置 snippet 的情况下运行，Chart 的 Ingress 也不带任何 snippet。
+集群安装会部署一个 Ingress 控制器，每个实例的路由由 Chart 提供。边缘不承担任何安全控制：服务令牌签发端点和签名密钥集由 `user-management` 在一个没有任何 Ingress 路由指向的内部端口上提供，因此无论使用哪种控制器，公开端口对它们都返回 404。签发端点由共享的服务密钥保护，该密钥以恒定时间比较。Chart 的 Ingress 不带任何配置 snippet。`dcctl install` 部署的控制器在本版本中仍接受 snippet，因为尚未升级的实例依赖它们。
 
-如果你自带控制器：
+如果你自带控制器，请路由 Chart 的五个 Ingress：
 
-- 将 `/api/<area>` 路由到各功能区 Service 的 `graphql` 端口并去掉前缀，将 `/` 路由到控制台。你不需要隐藏 `/auth/` 路径的规则，也不能路由到名为 `internal-auth` 的 Service 端口。
-- 让该端口只能从实例自身的命名空间访问。在强制执行网络策略的集群上，Chart 的网络策略（`networkPolicy.enabled`）会做到这一点。参见[不会离开集群的端点](../concepts/security-model.md#internal-endpoints)。
+- 将 `/api/<area>` 路由到各功能区 Service 的 `graphql` 端口并去掉前缀。
+- 将 `/` 路由到控制台。
+- 启用相应功能区时，将 `/.well-known/oauth-protected-resource`（到 `mcp`）和 `/.well-known/oauth-authorization-server`（到 `user-management`）原样路由，不去掉任何前缀。
+- 更新上传 `PUT /api/update-management/updates/artifacts/<token>/content` 路由到 `update-management`。不要缓冲请求正文，因为服务在读取正文之前先完成认证。
+- 更新下载 `GET /api/update-management/updates/download/<artifact>` 路由到 `update-management`。不要把其查询字符串写入访问日志，因为授权凭据就在其中。
+
+你不需要隐藏 `/auth/` 路径的规则，也不能路由到名为 `internal-auth` 的 Service 端口。Chart 的网络策略（`networkPolicy.enabled`，`dcctl` 安装时关闭）还可以将该端口限制为实例自身的命名空间。参见[不会离开集群的端点](../concepts/security-model.md#internal-endpoints)。
 
 #### 实例命名空间 {#instance-namespace}
 

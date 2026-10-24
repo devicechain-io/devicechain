@@ -75,7 +75,14 @@ var (
 )
 
 func main() {
-	callbacks := core.LifecycleCallbacks{
+	Microservice = core.NewMicroservice(lifecycleCallbacks())
+	Microservice.Run()
+}
+
+// lifecycleCallbacks is the service's whole lifecycle wiring, as a function so a test can build
+// the Microservice production builds rather than restate which callback runs when.
+func lifecycleCallbacks() core.LifecycleCallbacks {
+	return core.LifecycleCallbacks{
 		Initializer: core.LifecycleCallback{
 			Preprocess:  func(context.Context) error { return nil },
 			Postprocess: afterMicroserviceInitialized,
@@ -93,8 +100,6 @@ func main() {
 			Postprocess: func(context.Context) error { return nil },
 		},
 	}
-	Microservice = core.NewMicroservice(callbacks)
-	Microservice.Run()
 }
 
 // Parses the configuration from raw bytes.

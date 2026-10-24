@@ -14,7 +14,10 @@ import (
 // internalAuthEndpoints are the user-management endpoints that exist only for the platform's own
 // services: the service-token mint and the JWKS. They are served on an INTERNAL listener that no
 // route reaches, so the public port answers 404 for them with no ingress in front.
-var internalAuthEndpoints = []string{"ServiceTokenPath", "JWKSPath", `"/auth/jwks"`, `"/auth/service-token"`}
+//
+// The paths are matched as bare substrings, not as quoted literals, so a URL assembled in a
+// format string (fmt.Sprintf("http://%s:%d/auth/jwks", ...)) is found as well as a constant.
+var internalAuthEndpoints = []string{"ServiceTokenPath", "JWKSPath", "/auth/jwks", "/auth/service-token"}
 
 // internalAuthSites are the only non-test files allowed to name one of those endpoints, and what
 // each is for. A new file naming one is a new caller (or a new route), and either has to be a
@@ -77,7 +80,7 @@ type internalAuthRef struct {
 // isDefinitionOnly is true for a line that merely declares or documents a constant rather than
 // dialing it (the const block in the definition file).
 func (r internalAuthRef) isDefinitionOnly() bool {
-	return strings.Contains(r.text, "= \"/auth/")
+	return strings.Contains(r.text, "Path = \"/auth/")
 }
 
 func internalAuthReferences(root string) ([]internalAuthRef, error) {

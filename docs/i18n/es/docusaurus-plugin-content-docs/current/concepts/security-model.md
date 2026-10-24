@@ -88,21 +88,25 @@ Consulte [Multitenencia](./multi-tenancy.md).
 
 Dos endpoints existen solo para los servicios de la propia plataforma. `/auth/service-token` intercambia el secreto
 de servicio compartido por un token de corta duración, y `/auth/jwks` es el conjunto de claves que todos los servicios
-usan para validar tokens. `user-management` sirve ambos en un puerto interno independiente (8082 por defecto,
-`infrastructure.userManagement.internalPort`), no en el público. El chart publica ese puerto solo en el Service
-interno del clúster. Ningún ingress, ruta ni balanceador de carga hace referencia a él.
+usan para validar tokens. `user-management` sirve ambos en un puerto interno independiente (8082), no en el público.
+El chart publica ese puerto solo en el Service interno del clúster. Ningún ingress, ruta ni balanceador de carga hace
+referencia a él.
 
 Por eso el puerto público responde 404 para ambas rutas, sea cual sea lo que haya delante, incluso si no hay ningún
 ingress. Nada en el borde es un control de seguridad:
 
 - **Un controlador de ingress propio no necesita ninguna regla para estas rutas.** Enruta a los Services que crea
-  el chart, como harías de todos modos, y el emisor de tokens no es alcanzable.
-- **El chart no establece ninguna anotación snippet de nginx,** y el controlador de ingress que instala `dcctl install`
-  se ejecuta con los snippets desactivados. Un snippet de configuración permite a quien pueda escribir un objeto Ingress
-  inyectar configuración de nginx, así que aquí nada necesita uno.
-- **Con las políticas de red activadas,** solo los pods del namespace de la propia instancia pueden conectarse al puerto
-  interno. Los pods de otros namespaces siguen pudiendo llegar al puerto público, como deben hacerlo el controlador de
-  ingress y el recolector de métricas.
+  el chart, como harías de todos modos, y el emisor de tokens no es alcanzable desde fuera.
+- **El emisor de tokens está protegido por el secreto de servicio compartido.** El secreto se compara en tiempo
+  constante, y una instancia sin secreto configurado se niega a emitir. El puerto interno mantiene el endpoint fuera
+  de la red pública; el secreto es lo que autentica a quien logra alcanzarlo.
+- **El chart no establece ninguna anotación snippet de nginx.** Un snippet de configuración permite a quien pueda
+  escribir un objeto Ingress inyectar configuración de nginx, y aquí nada necesita uno. El controlador de ingress que
+  instala `dcctl install` sigue aceptando snippets en esta versión, porque las instancias que aún no se han actualizado
+  dependen de ellos; una versión posterior los desactivará cuando ninguna instancia los use.
+- **Una política de red restringe aún más el puerto interno, pero es defensa en profundidad y está desactivada por
+  defecto.** Con `networkPolicy.enabled` el chart limita el puerto a los pods del namespace de la propia instancia, en
+  un clúster cuyo plugin de red aplique políticas. Las instalaciones de `dcctl` se ejecutan con la política desactivada.
 - **Un verificador de tokens externo usa en su lugar el conjunto de claves público.** Los metadatos del servidor de
   autorización (`jwks_uri`) apuntan a `/oauth/jwks`, que sirve las mismas claves públicas cuando hay una URL de emisor
   configurada.

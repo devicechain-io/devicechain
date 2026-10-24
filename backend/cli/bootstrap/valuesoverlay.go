@@ -147,13 +147,12 @@ var ownedWithinTunable = []struct {
 
 // refusedIngressAnnotations are ingress.annotations keys an overlay may not set. The chart
 // writes its overlay annotations AFTER its own on every Ingress, and a repeated key is not
-// refused by the render -- so an overlay naming a key the chart sets would REPLACE it: the
-// access log kept off the download route (its capability rides in the query string), the upload
+// refused by the render -- so an overlay naming a key the chart sets would REPLACE it: the access
+// log kept off the download route (its capability rides in the query string), the upload
 // route's body limit, the TLS issuer. TestNoOverlayAnnotationReplacesOneTheChartSets renders
 // the chart and holds this list to what it actually sets. Snippets (nginx configuration
-// injected verbatim) are refused because the controller runs with them disabled and an
-// Ingress carrying one would be rejected at admission; turning the TLS redirect off is
-// refused because the ingress host and its TLS are dcctl's.
+// injected verbatim; the chart sets none, and the shared controller is to refuse them) and turning the TLS redirect off are refused for the same reason: the
+// ingress host and its TLS are dcctl's.
 var refusedIngressAnnotations = []string{
 	"nginx.ingress.kubernetes.io/rewrite-target",
 	"nginx.ingress.kubernetes.io/configuration-snippet",
@@ -171,7 +170,7 @@ func refuseIngressAnnotation(key string) string {
 	case strings.HasPrefix(k, "cert-manager.io/"):
 		return "the TLS certificate's issuer is dcctl's (it follows --no-tls and the cluster's issuer)"
 	case strings.HasSuffix(k, "-snippet"):
-		return "a snippet injects nginx configuration verbatim, and the controller runs with snippets disabled"
+		return "a snippet injects nginx configuration verbatim, and can undo the routes the chart refuses at the edge"
 	}
 	for _, r := range refusedIngressAnnotations {
 		if k == r {
