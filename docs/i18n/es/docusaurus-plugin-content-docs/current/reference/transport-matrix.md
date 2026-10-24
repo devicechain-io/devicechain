@@ -82,6 +82,12 @@ hay ningún bróker aparte que operar.
   `JetStreamDurableStalledBehindStream` lo informa mientras la canalización no lee el stream de
   captura, y `JetStreamDurableLostUnread` cuando vuelve a leerlo.
 
+  Lo mismo ocurre sin ningún rechazo cuando `event-sources` simplemente se queda atrás respecto al ritmo de los dispositivos con
+  carga sostenida. En una prueba de carga con tráfico HTTP y MQTT combinado en una instalación por defecto, sin reinicio del
+  broker, el stream de captura se llenó y se perdió entre el 7 y el 13 % del tráfico MQTT, todo él ya confirmado.
+  `devicechain_<area>_jetstream_consumer_unread_skipped_total` lo cuenta, `JetStreamDurableLostUnread` alerta sobre ello, y
+  `JetStreamCaptureBacklogGrowing` y `JetStreamCaptureBacklogWillOverflow` avisan antes de que el stream se llene.
+
   Un tercer agujero es la propia elección de líder del stream de captura. El broker entrega cada
   publicación QoS 1 al stream de captura sin respuesta, después de que el dispositivo ya tiene su
   PUBACK. Si el stream cambia de líder, con cualquier carga, las publicaciones que llegan mientras no

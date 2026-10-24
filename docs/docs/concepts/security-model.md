@@ -143,10 +143,12 @@ These are known and accepted for the current release. Plan around them.
    are kept in the database as they were set, not as digests like device passwords and access tokens. Neither is
    ever returned by the API. Treat database access and backups as holding secrets, and if a backup leaks, set a new
    secret on each provisioning profile and open each unredeemed device claim again with a new secret.
-4. **MQTT acknowledgements across a broker leader change.** By default the broker can acknowledge a QoS 1 message and
-   then lose it while the capture stream changes leader, which a broker restart, an upgrade or the loss of a
-   node causes, at any load. With `infrastructure.nats.mqttFailClosed` on, an acknowledgement means the
-   platform holds the message; in exchange the broker refuses QoS 1 publishes while there is no leader, and
+4. **MQTT acknowledgements the broker can lose.** By default the broker can acknowledge a QoS 1 message and
+   then lose it in two ways. One is while the capture stream changes leader, which a broker restart, an upgrade or the loss of a
+   node causes, at any load. The other needs no restart: under sustained load, if `event-sources` falls behind and the
+   capture stream's backlog reaches its bound, the stream discards its oldest unread messages. `devicechain_<area>_jetstream_consumer_unread_skipped_total` counts those, and the
+   `JetStreamDurableLostUnread` alert fires. With `infrastructure.nats.mqttFailClosed` on, an acknowledgement means the
+   platform holds the message; in exchange the broker refuses QoS 1 publishes while there is no leader or its message store is full, and
    the instance keeps up with less traffic, so it is for installations sized to stay below that ceiling.
    The setting is off by default, and [Observability](../deployment/observability.md#mqtt-fail-closed)
    describes the trade-off.

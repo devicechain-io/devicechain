@@ -3939,6 +3939,8 @@ de seguridad que se enumeran abajo, y corrige lo que dos servicios informan a Pr
 Grafana que el chart incluye para ellos (consulta [Las métricas y los paneles](#v0251-metrics)). Todo lo que describe la
 [sección de la v0.25.0](#v0250-upgrade) sigue siendo lo que estás ejecutando.
 
+Siguen vigentes las [limitaciones conocidas de la v0.25.0](#v0250-upgrade), incluida esta: con `mqttFailClosed` desactivado, el valor por defecto, también se pueden perder mensajes QoS 1 confirmados con carga sostenida y sin reinicio del broker, cuando `event-sources` se queda atrás y el stream de captura se llena. `devicechain_<area>_jetstream_consumer_unread_skipped_total` los cuenta y `JetStreamDurableLostUnread` alerta.
+
 Actualiza el clúster y después cada instancia. Pasa a `dcctl install` los ajustes con los que se instaló
 el clúster, como `--ha` y `--database-node-selector`, además de la nueva `--version`:
 
@@ -4399,7 +4401,11 @@ un miembro limitado a una parte del tenant es rechazado. Consulta
 - **El SBOM se genera a partir de la variante `amd64` de cada imagen.**
 - **Con `mqttFailClosed` desactivado, que es el valor por defecto, se pueden perder mensajes QoS 1 que el
   bróker ya confirmó mientras el stream de captura MQTT cambia de líder, con cualquier carga,** y nada los
-  cuenta (`JetStreamCaptureLeaderChanged` avisa de que hubo un cambio). Un reinicio progresivo del bróker
+  cuenta (`JetStreamCaptureLeaderChanged` avisa de que hubo un cambio). También se pueden perder sin ningún cambio de líder, con
+  carga sostenida: en una prueba de carga en una instalación por defecto, `event-sources` se quedó atrás leyendo el stream de captura,
+  el stream se llenó hasta su límite y descartó sus mensajes sin leer más antiguos, y se perdieron 1.357.188 eventos confirmados,
+  entre el 7 y el 13 % del tráfico MQTT. `devicechain_<area>_jetstream_consumer_unread_skipped_total` los cuenta y
+  `JetStreamDurableLostUnread` alerta. Aún se investiga por qué `event-sources` se quedó atrás. Un reinicio progresivo del bróker
   reinicia todos los servidores, también el líder, y esta actualización reinicia el bróker dos veces, así que
   cuenta con una breve ventana de pérdida en cada reinicio del bróker salvo que fail-closed esté activado. En
   un ensayo de esta actualización con cuatro dispositivos que enviaban 20 mensajes QoS 1 por segundo entre

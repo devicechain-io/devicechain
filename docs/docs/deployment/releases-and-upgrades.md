@@ -3667,6 +3667,8 @@ what two services report to Prometheus and the Grafana boards the chart ships fo
 [The metrics and the boards](#v0251-metrics)). Everything the [v0.25.0 section](#v0250-upgrade) describes is still what you are
 running.
 
+The [v0.25.0 known limitations](#v0250-upgrade) still apply, including this one: with `mqttFailClosed` off, the default, acknowledged QoS 1 messages can also be lost under sustained load with no broker restart, when `event-sources` falls behind and the capture stream fills. `devicechain_<area>_jetstream_consumer_unread_skipped_total` counts them and `JetStreamDurableLostUnread` alerts.
+
 Upgrade the cluster, then each instance. Give `dcctl install` the settings the cluster was installed with,
 such as `--ha` and `--database-node-selector`, as well as the new `--version`:
 
@@ -4078,8 +4080,12 @@ to change and `artifact:read` to view, and a member limited to part of the tenan
 - **Rollouts have no waves or canary stage,** no schedule, and no alert for a stalled rollout driver.
 - **The SBOM is generated from each image's `amd64` variant.**
 - **With `mqttFailClosed` off, which is the default, QoS 1 messages the broker has acknowledged can be lost
-  while the MQTT capture stream changes leader, at any load,** and nothing counts them
-  (`JetStreamCaptureLeaderChanged` warns that a change happened). A broker roll restarts every server, the
+  while the MQTT capture stream changes leader, at any load,** and nothing counts those
+  (`JetStreamCaptureLeaderChanged` warns that a change happened). They can also be lost with no leader change, under
+  sustained load: in a load test on a default install, `event-sources` fell behind reading the capture stream, the stream
+  filled to its bound and discarded its oldest unread messages, and 1,357,188 acknowledged events, about 7 to 13% of the
+  MQTT traffic, were lost. `devicechain_<area>_jetstream_consumer_unread_skipped_total` counts them and `JetStreamDurableLostUnread` alerts. Why
+  `event-sources` fell behind is still being investigated. A broker roll restarts every server, the
   leader among them, and this upgrade rolls the broker twice, so expect a short loss window during each
   broker roll unless fail-closed is on. In a rehearsal of this upgrade with four devices sending 20 QoS 1 messages a
   second between them, 11 of 11,262 acknowledged messages were lost, all during the broker restarts; in an

@@ -2121,6 +2121,8 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 实例运行数据库与备份存储所用的三个第三方镜像，换成不再带有下列安全公告的构建，并修正两个服务向
 Prometheus 报告的内容以及 chart 为它们自带的 Grafana 看板（参见[指标与看板](#v0251-metrics)）。[v0.25.0 一节](#v0250-upgrade)所描述的内容仍完全适用。
 
+[v0.25.0 的已知限制](#v0250-upgrade)仍然适用，包括这一条：`mqttFailClosed` 关闭（默认）时，在持续负载下即使没有代理重启，当 `event-sources` 落后、捕获流写满时，已确认的 QoS 1 消息也可能丢失。`devicechain_<area>_jetstream_consumer_unread_skipped_total` 会统计这些丢失，`JetStreamDurableLostUnread` 会告警。
+
 先升级集群，再升级每个实例。除新的 `--version` 外，还要把集群安装时用的设置（例如 `--ha` 和
 `--database-node-selector`）传给 `dcctl install`：
 
@@ -2460,7 +2462,7 @@ SDK 过去无法识别被拒绝的连接。MQTT 库通过抛出异常来报告�
 - **发布没有分批或金丝雀阶段，** 没有计划，也没有针对停滞的发布驱动器的告警。
 - **SBOM 由每个镜像的 `amd64` 变体生成。**
 - **`mqttFailClosed` 关闭时（默认值），在 MQTT 捕获流更换 leader 期间，消息代理已确认的 QoS 1 消息可能丢失，
-  与负载高低无关，** 且没有任何计数器记录（`JetStreamCaptureLeaderChanged` 会警告发生过切换）。消息代理的滚动
+  与负载高低无关，** 且没有任何计数器记录（`JetStreamCaptureLeaderChanged` 会警告发生过切换）。在持续负载下，即使没有更换 leader 也可能丢失：在对默认安装的一次负载测试中，`event-sources` 读取捕获流时落后，该流写满到上限并丢弃最早的未读消息，丢失了 1,357,188 个已确认的事件，约占 MQTT 流量的 7% 到 13%。`devicechain_<area>_jetstream_consumer_unread_skipped_total` 会统计这些丢失，`JetStreamDurableLostUnread` 会告警。`event-sources` 为何落后仍在调查中。消息代理的滚动
   重启会重启每台服务器，包括 leader，而本次升级会滚动消息代理两次，因此除非开启了 fail-closed，否则每次消息代理
   滚动期间都应预期一个短暂的丢失窗口。在本次升级的一次演练中，四台设备合计每秒发送 20 条 QoS 1 消息，11,262 条
   已确认消息中丢失了 11 条，全部发生在消息代理重启期间；更早的一次演练没有丢失。要关闭这个窗口，请开启

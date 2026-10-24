@@ -67,6 +67,9 @@ title: 传输能力矩阵
   流水线尚未读取捕获流时，`JetStreamDurableStalledBehindStream` 会报告此事；
   恢复读取后则由 `JetStreamDurableLostUnread` 报告。
 
+  即使没有任何拒绝，只要 `event-sources` 在持续负载下跟不上设备的发送速率，同样会发生这种情况。在一次对默认安装进行的 HTTP 与 MQTT 混合流量负载测试中，没有代理重启，捕获流写满，约 7% 到 13% 的 MQTT 流量（全部已被确认）丢失。
+  `devicechain_<area>_jetstream_consumer_unread_skipped_total` 会统计这些丢失，`JetStreamDurableLostUnread` 会对此告警，`JetStreamCaptureBacklogGrowing` 和 `JetStreamCaptureBacklogWillOverflow` 会在流写满之前发出警告。
+
   第三个漏洞是捕获流自身的主节点选举。代理在设备收到 PUBACK 之后，才把每条 QoS 1 发布无应答地交给捕获流。
   若该流更换主节点（与负载高低无关），没有主节点的那几秒内到达的发布不会存到任何地方，也没有任何计数器记录。
   代理的滚动重启会重启每台服务器，包括主节点，因此每次滚动（包括升级时的滚动）都会打开这个窗口。
