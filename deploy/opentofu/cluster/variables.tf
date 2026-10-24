@@ -751,9 +751,9 @@ variable "monitoring_namespace" {
 }
 
 variable "monitoring_chart_version" {
-  description = "kube-prometheus-stack chart version. Pinned by default — this chart's Operator CRDs are installed once and never upgraded by Helm, so an unpinned 'latest' drifting across bootstraps skews the operator against install-day CRDs. Bump deliberately."
+  description = "kube-prometheus-stack chart version. Pinned by default — Helm installs this chart's Operator CRDs once and never upgrades them, so an unpinned 'latest' drifting across bootstraps skews the operator against install-day CRDs. The monitoring module runs the chart's CRD upgrade job, so a bump also updates the CRDs on an existing cluster. Bump deliberately."
   type        = string
-  default     = "65.1.1"
+  default     = "92.13.1"
 
   # Fail closed. An empty string used to mean "install latest", which made the chart
   # version resolve at APPLY time — the chart repository became a dependency of
