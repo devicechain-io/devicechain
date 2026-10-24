@@ -681,7 +681,7 @@ func RunMQTT(ctx context.Context, hs *sim.Handshake, p MQTTProfile) (*MQTTReport
 	if err != nil {
 		return nil, err
 	}
-	counter := &graphqlEventCounter{session: rt.Session, endpoint: eventEndpoint}
+	counter := newRetryingCounter(&graphqlEventCounter{session: rt.Session, endpoint: eventEndpoint})
 	led := sim.NewIdentityLedger()
 	rt.Identity = led
 

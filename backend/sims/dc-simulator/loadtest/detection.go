@@ -192,6 +192,12 @@ type DetectionConfig struct {
 	AlarmTimeout time.Duration
 	AlarmSettle  time.Duration
 
+	// LagBound is the per-cycle detection deadline: each edge probe's falling edge must show
+	// in its durable alarm within this long of being emitted, or the detection-lag invariant
+	// fails. The alarm is read throughout the run (every AlarmPoll), so a pipeline that falls
+	// behind fails here even if it catches up to the same end state afterwards.
+	LagBound time.Duration
+
 	// MQTT, when set, carries every emit (the background fleet AND the probes) over the
 	// platform's MQTT gateway instead of the HTTP ingress, so the detection oracle runs under
 	// MQTT load: the combined run. Each device holds one session; an emit counts as accepted
@@ -230,6 +236,9 @@ func (c DetectionConfig) withDefaults() DetectionConfig {
 	if c.AlarmSettle <= 0 {
 		c.AlarmSettle = DefaultAlarmSettle
 	}
+	if c.LagBound <= 0 {
+		c.LagBound = DefaultDetectionLagBound
+	}
 	return c
 }
 
@@ -250,6 +259,9 @@ func (c DetectionConfig) Validate() error {
 	}
 	if c.MinAccepted < 0 {
 		return fmt.Errorf("min accepted must not be negative")
+	}
+	if c.LagBound < 0 {
+		return fmt.Errorf("lag bound must not be negative")
 	}
 	return nil
 }
@@ -689,6 +701,10 @@ type DetectionReport struct {
 	// never watched the stream. Empty when LiveSignal is true.
 	LiveAbsent string            `json:"liveSignalAbsentReason,omitempty"`
 	Detection  detmonitor.Report `json:"detectionLiveSignal"` // NON-GATING evidence
+	// LiveRedials counts how often the live socket was replaced with a fresh token.
+	LiveRedials int `json:"liveSignalRedials"`
+	// Lag is the per-cycle detection lag, GATED by the detection-lag invariant.
+	Lag DetectionLag `json:"detectionLag"`
 	// MQTT is set when the run's emits went over the MQTT gateway: what was connected and
 	// what the broker acknowledged.
 	MQTT       *DetectionMQTT `json:"mqtt,omitempty"`
@@ -738,9 +754,11 @@ func (r *DetectionReport) Human() string {
 	}
 	fmt.Fprintf(&b, "  probes: %d safety, %d edge × K=%d cycles, %d emit failure(s); alarms reached-target %v in %.0fs\n",
 		r.SafetyProbes, r.EdgeProbes, r.Cycles, r.ProbeFailures, r.AlarmsReached, r.AlarmSecs)
+	fmt.Fprintf(&b, "  detection lag: %d of %d cycle(s) seen, p50 %.1fs p99 %.1fs max %.1fs, bound %.0fs, %d deadline miss(es)\n",
+		r.Lag.Detected, r.Lag.Detected+r.Lag.Undetected, r.Lag.P50Seconds, r.Lag.P99Seconds, r.Lag.MaxSeconds, r.Lag.BoundSeconds, r.Lag.DeadlineMisses)
 	if r.LiveSignal {
-		fmt.Fprintf(&b, "  live detection signal (NON-authoritative, lossy): %d edge(s) observed, %d watcher violation(s)\n",
-			r.Detection.Observed, len(r.Detection.Violations))
+		fmt.Fprintf(&b, "  live detection signal (NON-authoritative, lossy): %d edge(s) observed, %d watcher violation(s), %d socket re-dial(s)\n",
+			r.Detection.Observed, len(r.Detection.Violations), r.LiveRedials)
 	} else {
 		fmt.Fprintf(&b, "  live detection signal: absent (%s) — verdict is on the durable alarm oracle alone\n", r.LiveAbsent)
 	}
@@ -863,34 +881,40 @@ func RunDetectionProbes(ctx context.Context, hs *sim.Handshake, cfg DetectionCon
 	// downgrades to "no live signal" rather than aborting. So does a token that would
 	// expire before the run ends: the socket is held for the whole run and the server
 	// closes it at the token's expiry, which would read as a lost view.
-	var mon *detmonitor.Monitor
+	var mon *rotatingMonitor
 	var absentReason string
-	need := detectionLifetimeNeeded(cfg)
 	if strings.TrimSpace(hs.Endpoints.EventProcessingWS) == "" {
 		absentReason = "the handshake has no eventProcessingWS"
 		log.Info().Msg("handshake has no eventProcessingWS — running on the durable alarm oracle with no live detection signal")
-	} else if liveToken, terr := pinnedToken(ctx, rt.Session, need); terr != nil {
-		absentReason = liveTokenAbsentReason(need, terr)
-		log.Warn().Err(terr).Dur("need", need).Str("reason", absentReason).
-			Msg("skipping the live detectionStream monitor — proceeding on the durable alarm oracle alone")
 	} else {
-		if m, derr := detmonitor.Dial(ctx, hs.Endpoints.EventProcessingWS, liveToken); derr != nil {
-			absentReason = "the detectionStream dial failed"
-			log.Warn().Err(derr).Msg("could not dial detectionStream for the live signal — proceeding on the durable alarm oracle alone")
+		// The socket outlives no token, so it is replaced before each token expires: a run of
+		// any length keeps its live signal. A token that cannot outlive even one rotation
+		// window is the only reason left to go without.
+		m := newRotatingMonitor(func(dctx context.Context, window time.Duration) (liveSocket, error) {
+			liveToken, terr := pinnedToken(dctx, rt.Session, window)
+			if terr != nil {
+				return nil, fmt.Errorf("%s: %w", liveTokenAbsentReason(window, terr), terr)
+			}
+			dm, derr := detmonitor.Dial(dctx, hs.Endpoints.EventProcessingWS, liveToken)
+			if derr != nil {
+				return nil, fmt.Errorf("the detectionStream dial failed: %w", derr)
+			}
+			if werr := dm.Watch(dctx, HarnessProfileToken); werr != nil {
+				_ = dm.Stop()
+				return nil, fmt.Errorf("the detectionStream subscribe failed: %w", werr)
+			}
+			return dm, nil
+		})
+		if lerr := m.Start(ctx); lerr != nil {
+			absentReason = lerr.Error()
+			log.Warn().Err(lerr).Msg("skipping the live detectionStream monitor — proceeding on the durable alarm oracle alone")
 		} else {
 			mon = m
 			defer mon.Stop()
-			if werr := mon.Watch(ctx, HarnessProfileToken); werr != nil {
-				absentReason = "the detectionStream subscribe failed"
-				log.Warn().Err(werr).Msg("could not subscribe detectionStream — proceeding without the live signal")
-				_ = mon.Stop()
-				mon = nil
-			} else {
-				select {
-				case <-ctx.Done():
-					return nil, ctx.Err()
-				case <-time.After(subscribeSettle):
-				}
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(subscribeSettle):
 			}
 		}
 	}
@@ -914,6 +938,17 @@ func RunDetectionProbes(ctx context.Context, hs *sim.Handshake, cfg DetectionCon
 	}()
 
 	ps := &probeStats{}
+	// Read the edge probes' durable alarms THROUGHOUT the drive and the drain, so each cycle's
+	// transition is held to its deadline as it falls due rather than judged once at the end.
+	tracker := newLagTracker(cfg.LagBound, tokensOf(edge))
+	lagCtx, stopLag := context.WithCancel(ctx)
+	var lagWg sync.WaitGroup
+	lagWg.Add(1)
+	go func() {
+		defer lagWg.Done()
+		(&lagWatcher{oracle: oracle, edge: tokensOf(edge), ps: ps, tracker: tracker, poll: cfg.AlarmPoll}).run(lagCtx)
+	}()
+	defer func() { stopLag(); lagWg.Wait() }()
 	driveProbes(ctx, rt, safety, edge, cfg.Cycles, cfg.ProbeInterval, ps)
 	if ctx.Err() != nil {
 		cancel()
@@ -966,6 +1001,16 @@ func RunDetectionProbes(ctx context.Context, hs *sim.Handshake, cfg DetectionCon
 		return nil, fmt.Errorf("final edge alarm read: %w", err)
 	}
 
+	// The lag watch ends here, with the final authoritative read as its last observation: a
+	// cycle that shows only now, past its deadline, was still late.
+	stopLag()
+	lagWg.Wait()
+	finalAt := time.Now()
+	for _, d := range edge {
+		tracker.observe(finalAt, d.Token, edgeStates[d.Token], ps.fallingEmitTimes())
+	}
+	lagReport, lagInv := tracker.report(len(ps.fallingEmitTimes()))
+
 	// MEDIUM-1 guard: a no-spurious PASS rests on safety devices having NO alarm row
 	// (Found==false). But the alarm query returns an empty set for an UNRESOLVABLE
 	// originator token too — so "no alarm" and "token didn't resolve" are
@@ -977,13 +1022,15 @@ func RunDetectionProbes(ctx context.Context, hs *sim.Handshake, cfg DetectionCon
 
 	// Settle + report the non-gating live signal.
 	var liveSignal detmonitor.Report
+	liveRedials := 0
 	if mon != nil {
-		_ = mon.Stop()
-		liveSignal = mon.Report()
+		mon.Stop()
+		liveSignal, liveRedials = mon.Report()
 	}
 	probeFailures, firstProbeErr := ps.snapshot()
 
 	invs := classifyAlarms(safetyStates, edgeStates, reached, cfg, snap.Emitted)
+	invs = append(invs, lagInv)
 	var mqttSection *DetectionMQTT
 	if fleet != nil {
 		fc := fleet.Config()
@@ -1020,6 +1067,8 @@ func RunDetectionProbes(ctx context.Context, hs *sim.Handshake, cfg DetectionCon
 		LiveSignal:    mon != nil,
 		LiveAbsent:    absentReason,
 		Detection:     liveSignal,
+		LiveRedials:   liveRedials,
+		Lag:           lagReport,
 		Invariants:    invs,
 		Drive:         newDriveStats(len(background), rt.Load.TargetRate(len(background)), snap, start, end),
 		MQTT:          mqttSection,

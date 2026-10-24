@@ -30,26 +30,6 @@ func TestMonitorLifetimeCoversTheWholeRun(t *testing.T) {
 	}
 }
 
-func TestDetectionLifetimeCoversEveryPhaseTheMonitorIsHeldFor(t *testing.T) {
-	cfg := DetectionConfig{Cycles: 5, ProbeInterval: time.Second, AlarmTimeout: 2 * time.Minute, AlarmSettle: 5 * time.Second}
-	// Subscribe settle, 9 probe intervals (2K-1), the full alarm wait, the settle, the margin.
-	want := subscribeSettle + 9*time.Second + 2*time.Minute + 5*time.Second + tokenMargin
-	if got := detectionLifetimeNeeded(cfg); got != want {
-		t.Fatalf("need %s, want %s", got, want)
-	}
-	// Each phase counts: lengthening any one lengthens the need by exactly that much.
-	longer := cfg
-	longer.AlarmTimeout += time.Minute
-	if got := detectionLifetimeNeeded(longer); got != want+time.Minute {
-		t.Fatalf("a minute more of alarm wait moved the need by %s", got-want)
-	}
-	longer = cfg
-	longer.Cycles++
-	if got := detectionLifetimeNeeded(longer); got != want+2*cfg.ProbeInterval {
-		t.Fatalf("one more cycle moved the need by %s, want two probe intervals", got-want)
-	}
-}
-
 // signInOnly stands in for the platform with nothing but sign-in: it issues tokens that
 // live ttl and answers every other request with an error, recording that it came.
 type signInOnly struct {

@@ -119,6 +119,34 @@ resource "google_container_node_pool" "this" {
   }
 }
 
+# `apply` used to return as soon as the cluster and the pools existed, while GKE was still
+# applying their settings as an UPDATE_CLUSTER operation, and an install started right after it
+# timed out against a cluster that was RECONCILING. This resource is the end of the apply: it runs
+# once the cluster and every pool exist, and returns only when the cluster is RUNNING with no
+# operation in progress (it fails, rather than returning, if that never happens). It runs again
+# when a pool is added, removed or resized, since each of those starts operations of its own.
+# The outputs depend on it, so nothing that reads them is handed a cluster that is still moving.
+resource "terraform_data" "cluster_settled" {
+  count = var.wait_for_cluster_operations ? 1 : 0
+
+  triggers_replace = {
+    cluster = google_container_cluster.this.id
+    pools   = join(",", sort([for name, pool in google_container_node_pool.this : "${name}:${pool.id}:${pool.node_count}"]))
+  }
+
+  provisioner "local-exec" {
+    interpreter = ["bash", "-c"]
+    command     = "exec bash \"$DC_WAIT_SCRIPT\" \"$DC_PROJECT\" \"$DC_CLUSTER\" \"$DC_LOCATION\" \"$DC_TIMEOUT\""
+    environment = {
+      DC_WAIT_SCRIPT = "${path.module}/wait-for-cluster-operations.sh"
+      DC_PROJECT     = var.project_id
+      DC_CLUSTER     = google_container_cluster.this.name
+      DC_LOCATION    = var.location
+      DC_TIMEOUT     = tostring(var.cluster_operations_timeout_seconds)
+    }
+  }
+}
+
 # The load-generator pool was its own resource before the pools shared one
 # definition. Same name, so a cluster that has one keeps it rather than replacing it.
 moved {

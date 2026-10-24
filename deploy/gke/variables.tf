@@ -116,6 +116,33 @@ variable "loadgen_disk_size_gb" {
   default     = 100
 }
 
+variable "wait_for_cluster_operations" {
+  description = <<-EOT
+    Make `apply` wait until GKE has finished every operation on the cluster before it returns.
+
+    GKE is not done when the cluster and its node pools exist: it goes on to apply their
+    settings (the monitoring configuration, for one) as an UPDATE_CLUSTER operation, during
+    which the cluster is RECONCILING. An install started in that window can time out against an
+    API server that is being reconfigured. The wait runs wait-for-cluster-operations.sh, which
+    needs bash and the Google Cloud CLI (`gcloud`) on the machine that runs `tofu apply`; set
+    this to false only if you have neither and will wait yourself (`gcloud container clusters
+    describe NAME --location LOCATION --format='value(status)'` must say RUNNING).
+  EOT
+  type        = bool
+  default     = true
+}
+
+variable "cluster_operations_timeout_seconds" {
+  description = "How long the wait for the cluster's operations may take before `apply` fails."
+  type        = number
+  default     = 1800
+
+  validation {
+    condition     = var.cluster_operations_timeout_seconds >= 60
+    error_message = "cluster_operations_timeout_seconds must be at least 60."
+  }
+}
+
 variable "labels" {
   description = "Labels applied to the cluster and its nodes, for finding (and billing) what this created."
   type        = map(string)
