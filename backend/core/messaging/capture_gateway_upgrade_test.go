@@ -23,6 +23,8 @@ import (
 // bind moves the durable from FilterSubject onto the FilterSubjects list. Both must happen, in
 // that order, or the stream captures a gateway's publishes while the durable never delivers
 // them: the broker acknowledges a gateway's PUBACKed publish, the platform never reads it.
+// The durable now ends up with NO broker filter, its reader handing out both subjects itself
+// (NewReader says why); what is held here is that the move happens and both shapes arrive.
 //
 // This is the order on a manager that reconciles what it opens (a test's). On a deployed broker
 // the stream half is the broker administrator's, not event-sources': see the test below.
@@ -68,7 +70,8 @@ func TestTheCaptureStreamAndDurableUpgradeOntoTheGatewayShape(t *testing.T) {
 	require.ElementsMatch(t, DeviceEventsSubjects(instance), after.Config.Subjects)
 	moved, err := nmgr.js.ConsumerInfo(stream, durable)
 	require.NoError(t, err)
-	require.ElementsMatch(t, DeviceEventsSubjects(instance), moved.Config.FilterSubjects)
+	require.Empty(t, moved.Config.FilterSubject, "the durable kept the old single filter")
+	require.Empty(t, moved.Config.FilterSubjects, "the durable was given a broker filter list")
 
 	_, err = nmgr.js.Publish(GatewayEventsSubject(instance, "acme", "gw-1", "child"), []byte("gateway"))
 	require.NoError(t, err)
@@ -139,13 +142,14 @@ func TestOnADeployedBrokerTheAdministratorMovesTheCaptureSubjectsAndTheReaderMov
 	require.NoError(t, err)
 	require.Equal(t, oldSubject, still.Config.FilterSubject, "the administrator touched a durable, which is its reader's")
 
-	// The roll: event-sources verifies, binds, and moves its own durable onto both subjects.
+	// The roll: event-sources verifies, binds, and moves its own durable off the old filter.
 	svc := deployedOn(t, srv, "event-sources")
 	reader, err := svc.NewReader(captureSuffix)
 	require.NoError(t, err)
 	moved, err := admin.js.ConsumerInfo(stream, durable)
 	require.NoError(t, err)
-	require.ElementsMatch(t, DeviceEventsSubjects(instance), moved.Config.FilterSubjects)
+	require.Empty(t, moved.Config.FilterSubject, "the durable kept the old single filter")
+	require.Empty(t, moved.Config.FilterSubjects, "the durable was given a broker filter list")
 
 	_, err = admin.js.Publish(GatewayEventsSubject(instance, "acme", "gw-1", "child"), []byte("gateway"))
 	require.NoError(t, err)
