@@ -66,31 +66,35 @@ import (
 //  4. It is REDUNDANT, which is what makes the other three unnecessary to trade off.
 //     Given (1) — the caller already holds a tenant-admin token — serving credentials
 //     grants no capability the caller lacks; it only writes a permanent secret into a
-//     body that an ephemeral one will vacate on its own. device-management exposes
-//     credentialId as a readable field on DeviceCredential (only credentialValue is
-//     withheld — its resolver returns nil unconditionally), and for an ACCESS_TOKEN
-//     credential the bearer IS the credentialId, not the withheld value. So the client
-//     resolves its own credentials over GraphQL and reads the DATABASE rather than a
-//     snapshot taken at page load, which fixes (2) as a side effect.
+//     body that an ephemeral one will vacate on its own. And there is nothing here to
+//     serve: device-management stores an ACCESS_TOKEN as a keyed digest, so a read of a
+//     DeviceCredential returns a fingerprint of the token, never the token, and the
+//     token is returned ONLY in the response to the create or update that sets it. A
+//     client therefore does not look up the sim's credentials: it sets one of its OWN
+//     per device and keeps the value from that response in memory, which also fixes
+//     (2), since it is issued when the client starts rather than snapshotted at page
+//     load.
 //
-//     Note what (1) is carrying here. The queries returning a DeviceCredential are
-//     gated on device:WRITE, not device:read, precisely because credentialId is the
-//     bearer for an ACCESS_TOKEN — so this round trip works because the token issued
-//     by dcctl carries tenant-admin (seeded with the super-authority), not because
-//     credentials are broadly readable. A presentation client handed a narrower
-//     token would fail the second query, and the right answer then is a scoped
-//     self-lookup, never widening the gate or reinstating (4).
+//     Note what (1) is carrying here. The mutations that write a DeviceCredential are
+//     gated on device:WRITE, so this round trip works because the token issued by
+//     dcctl carries tenant-admin (seeded with the super-authority), not because
+//     credentials are broadly writable. A presentation client handed a narrower token
+//     would fail the mutation, and the right answer then is a scoped self-service
+//     path, never widening the gate or reinstating (4).
 //
 // The round trip that (4) refers to, written down so it is discoverable from the file
 // that declines to shortcut it — a client that knows a device by its scene-side business
-// id resolves the addressing token first, then the credential:
+// id resolves the addressing token first, then sets its own credential on that device:
 //
 //	devicesByExternalId(externalIds: ["SITE-EXCAVATOR-01"]) { token }
-//	deviceCredentialsByToken(tokens: ["{token}-cred"])      { credentialId }
+//	createDeviceCredential(request: {token: "{token}-<client>", deviceToken: "{token}",
+//	    credentialType: "ACCESS_TOKEN", credentialId: "<fresh random token>", enabled: true})
+//	    { credentialId }                      // the token, this once
 //
-// The `-cred` suffix is not a convention the client may invent: it is what
-// deriveCredential (manifest.go) provisions the DeviceCredential's own entity token as,
-// and deviceCredentialsByToken looks up credentials by THAT token, not by the device's.
+// (or updateDeviceCredential(token: "{token}-<client>", request: {credentialId: ...}) to
+// rotate one that already exists). Never rotate the sim's own `-cred` credential — the
+// emitter presents it, and deriveCredential (manifest.go) provisions it under that entity
+// token — so the client's credential carries its own suffix.
 type presentationConfig struct {
 	Tenant     string `json:"tenant"`
 	ManifestId string `json:"manifestId"`

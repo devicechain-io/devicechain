@@ -21,7 +21,8 @@ import {
 } from '@devicechain/widget-sdk';
 
 import { emptyReason, useLevelReading, type LevelReading } from '../level-reading';
-import { LevelEmpty, LevelReadout } from '../level-readout';
+import { LevelReadout } from '../level-readout';
+import { LevelEmptyFor } from '../no-reading';
 import { bandSpans, readRange } from '../value-scale';
 
 export function LinearGauge({ widget, data }: WidgetProps) {
@@ -52,7 +53,7 @@ interface BodyProps {
 
 function LinearBody({ reading: r, thermometer, vertical, scale: ws }: BodyProps) {
   const reason = emptyReason(r);
-  if (reason !== undefined || !r.range?.ok || !r.fill) return <LevelEmpty message={reason ?? r.strings.noData} />;
+  if (reason !== undefined || !r.range?.ok || !r.fill) return <LevelEmptyFor reading={r} reason={reason} />;
   const range = r.range.range;
   const fill = r.fill;
   const { size, scale } = ws;

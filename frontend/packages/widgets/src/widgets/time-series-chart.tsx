@@ -18,6 +18,8 @@ import {
   optNumber,
   optString,
   optThresholds,
+  pickSample,
+  primaryMeasurementName,
   spaceVar,
   useWidgetScale,
   useWidgetTimeRange,
@@ -30,6 +32,7 @@ import {
 import { buildLineOption, EChart, loadChartEngine, useChartTheme } from '@devicechain/widget-sdk/echarts';
 
 import { builtinWidgetDescriptors } from '../builtin-descriptors';
+import { NoReading, useSettledEmpty } from './no-reading-lazy';
 import type { EventMarkersView } from '../event-markers-types';
 
 // `markers` is supplied by the event-marker feed (a chart with markAlarms / markCommands on) and by
@@ -79,6 +82,25 @@ function TimeSeriesBody({ widget, data, markers }: TimeSeriesProps) {
     const base = buildLineOption(data.samples, theme, { measurements, unit, precision, thresholds, scale, gaps: data.gaps, min, max }, size);
     return markers ? markers.decorate(base, size) : base;
   }, [data.samples, data.gaps, theme, measurements, unit, precision, thresholds, scale, size, markers, min, max]);
+
+  // Nothing in the window: say why (after the history read has had its moment), with the last reading
+  // known outside it as a hint.
+  // A chart of several measurements names none: whether the profile omits the first says nothing
+  // about the others, so it is "no data", never "not reported".
+  const name = measurements && measurements.length > 1 ? undefined : primaryMeasurementName(widget);
+  const explain = useSettledEmpty(data.samples.length === 0);
+  if (explain) {
+    return (
+      <NoReading
+        unbound={widget.datasource?.kind === 'unbound'}
+        measurement={name}
+        lastSample={pickSample(data.latest, name)}
+        unit={unit}
+        precision={precision}
+        waitMs={0}
+      />
+    );
+  }
 
   const chart = (
     <div style={{ position: 'relative', width: '100%', height: '100%' }}>

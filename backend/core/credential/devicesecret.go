@@ -83,7 +83,11 @@ var ErrDeviceSecretUnrecognized = errors.New("credential: stored device secret i
 // DeviceSecretKey digests and verifies device secrets. Build it with DeriveDeviceSecretKey.
 type DeviceSecretKey struct {
 	key [sha256.Size]byte
-	id  string
+	// lookupKey is the key access tokens are digested under (accesstoken.go). It is derived
+	// from the same root key, separately from key, so a digest of one kind can never be
+	// presented as the other.
+	lookupKey [sha256.Size]byte
+	id        string
 }
 
 // DeriveDeviceSecretKey derives the device secret key from the instance root key
@@ -106,6 +110,11 @@ func deriveKeyedSecretKey(rootKey []byte, info, idLabel, purpose string) (*Devic
 	}
 	k := &DeviceSecretKey{}
 	copy(k.key[:], raw)
+	lookup, err := hkdf.Key(sha256.New, rootKey, nil, accessTokenKeyInfo, sha256.Size)
+	if err != nil {
+		return nil, err
+	}
+	copy(k.lookupKey[:], lookup)
 	m := hmac.New(sha256.New, k.key[:])
 	m.Write([]byte(idLabel))
 	k.id = hex.EncodeToString(m.Sum(nil)[:4])

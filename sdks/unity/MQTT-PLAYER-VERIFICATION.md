@@ -183,11 +183,14 @@ dotnet run --project sdks/csharp/tools/DeviceChain.Sdk.AuthProbe -- \
     /tmp/ca.pem devicechain <tenant> <deviceToken> <credentialId>
 ```
 
-Resolve the two identifiers the way a scene does: `devicesByExternalId` gives the addressing token,
-then **`deviceCredentials(criteria: {device: "<token>", credentialType: "ACCESS_TOKEN", enabled: true, pageNumber: 1, pageSize: 10})`**
-gives the credential. 🔑 Not `deviceCredentialsByToken` — that takes the CREDENTIAL's own token, and
-`type Device` exposes no credentials field, so holding a device token leaves you nothing to pass it.
-For an `ACCESS_TOKEN` credential the `credentialId` **is** the bearer.
+Resolve the addressing token the way a scene does (`devicesByExternalId`), then **set a credential of
+your own on that device and keep the token from the response**:
+`createDeviceCredential(request: {token: "<deviceToken>-probe", deviceToken: "<deviceToken>", credentialType: "ACCESS_TOKEN", credentialId: "<a fresh random token>", enabled: true}) { credentialId }`
+(or `updateDeviceCredential(token: "<deviceToken>-probe", request: {credentialId: "<a fresh random token>"})`
+if it already exists). 🔑 The platform stores an access token only as a digest and returns it ONCE, in the
+response to the call that sets it; every read (`deviceCredentials`, `deviceCredentialsByToken`) returns a
+fingerprint (`dctk1$...`) that identifies the credential and is refused at connect. Do not rotate the sim's
+own `{deviceToken}-cred`: the sim emitter presents it.
 `dcctl sim create <name> --manifest sitepulse` provisions the whole site (18 machines and one
 crusher plant, 19 devices), its three rules (low fuel, engine overheat, low tyre pressure), its pit geofence
 (`sp-geofence-pit`) and its site dashboard

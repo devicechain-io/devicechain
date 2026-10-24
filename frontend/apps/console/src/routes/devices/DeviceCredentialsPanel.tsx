@@ -32,6 +32,7 @@ import {
   listDeviceCredentials,
   createDeviceCredential,
   rotateDeviceCredentialSecret,
+  rotateDeviceCredentialToken,
   deleteDeviceCredential,
   CREDENTIAL_TYPES,
   type CredentialType,
@@ -43,19 +44,17 @@ import {
 const needsSecret = (t: CredentialType) => t === 'MQTT_BASIC';
 
 // DeviceCredentialsPanel lists a device's credentials and registers/rotates/removes
-// them (ADR-014). The platform keeps only a keyed digest of an MQTT_BASIC password,
-// so it can never be shown again: the password is displayed ONCE, in a banner, when
-// it is set (registered or rotated), and the list afterwards says only that one is
-// set. The banner is component state: it is gone on dismissal, navigation or reload,
-// and nothing read from the API can put a value back in it. No form is ever
-// pre-filled with a password; changing it is the explicit "Set new password" action.
-// The credential id (the device-facing identifier, e.g. an access token) is a
-// readable identifier by design and is shown with a copy button.
+// them (ADR-014). The platform keeps only a keyed digest of an MQTT_BASIC password
+// and of an ACCESS_TOKEN, so neither can be shown again: the password or token is
+// displayed ONCE, in a banner, when it is set (registered or rotated), and the list
+// afterwards says only that one is set. The banner is component state: it is gone on
+// dismissal, navigation or reload, and nothing read from the API can put a value back
+// in it. No form is ever pre-filled with a secret; changing it is the explicit "Set
+// new password" or "Set new token" action. An MQTT username is a readable identifier
+// by design and is shown with a copy button; an access token IS the secret and has none.
 //
-// 🔴 Every operation here — the list included — requires device:write. For
-// ACCESS_TOKEN the credential id IS the bearer secret, so
-// reading a credential confers device impersonation and the list query is gated on
-// the write authority server-side. This panel therefore assumes its caller has
+// 🔴 Every operation here — the list included — requires device:write, which the
+// server enforces on the list query. This panel therefore assumes its caller has
 // already checked hasAuthority(claims, 'device:write') and renders it only then —
 // DeviceDetailPage hides the whole Credentials tab otherwise. Do not mount it
 // unconditionally; every query and mutation in it would 403.
@@ -70,8 +69,14 @@ export function DeviceCredentialsPanel({ deviceToken }: { deviceToken: string })
   const [credentialId, setCredentialId] = useState('');
   const [secret, setSecret] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  // The password just set, shown once. username is the credential id.
-  const [issued, setIssued] = useState<{ username: string; password: string; rotated: boolean } | null>(null);
+  // The password or access token just set, shown once. For a password, username is the
+  // credential id; a token has no separate username (it is the credential id).
+  const [issued, setIssued] = useState<{
+    kind: 'password' | 'token';
+    username?: string;
+    secret: string;
+    rotated: boolean;
+  } | null>(null);
   // The credential whose "set new password" form is open, and its draft.
   const [rotating, setRotating] = useState<string | null>(null);
   const [newSecret, setNewSecret] = useState('');
@@ -119,7 +124,7 @@ export function DeviceCredentialsPanel({ deviceToken }: { deviceToken: string })
     setRotatingBusy(true);
     try {
       await rotateDeviceCredentialSecret(c.token, newSecret);
-      setIssued({ username: c.credentialId, password: newSecret, rotated: true });
+      setIssued({ kind: 'password', username: c.credentialId, secret: newSecret, rotated: true });
       toast(t('passwordRotated'));
       setRotating(null);
       setNewSecret('');
@@ -130,6 +135,28 @@ export function DeviceCredentialsPanel({ deviceToken }: { deviceToken: string })
       toast(errMessage(err), 'error');
     } finally {
       setRotatingBusy(false);
+    }
+  };
+
+  // A new access token replaces the old one at once: the device holding it stops
+  // authenticating. The server returns the token on this one response and never again.
+  const rotateToken = async (c: DeviceCredential) => {
+    if (
+      !(await confirm({
+        title: t('rotateTokenTitle'),
+        description: t('rotateTokenConfirm'),
+        confirmLabel: t('setNewToken'),
+      }))
+    ) {
+      return;
+    }
+    try {
+      const updated = await rotateDeviceCredentialToken(c.token, crypto.randomUUID());
+      setIssued({ kind: 'token', secret: updated.credentialId, rotated: true });
+      toast(t('tokenRotated'));
+      reload();
+    } catch (err) {
+      toast(errMessage(err), 'error');
     }
   };
 
@@ -150,7 +177,7 @@ export function DeviceCredentialsPanel({ deviceToken }: { deviceToken: string })
     }
     setSubmitting(true);
     try {
-      await createDeviceCredential({
+      const created = await createDeviceCredential({
         token: crypto.randomUUID(),
         deviceToken,
         credentialType: type,
@@ -159,7 +186,9 @@ export function DeviceCredentialsPanel({ deviceToken }: { deviceToken: string })
         enabled: true,
       });
       toast(t('credentialAdded'));
-      if (needsSecret(type)) setIssued({ username: id, password: secret, rotated: false });
+      if (needsSecret(type)) setIssued({ kind: 'password', username: id, secret, rotated: false });
+      // The token comes back from the server on this response alone.
+      else if (type === 'ACCESS_TOKEN') setIssued({ kind: 'token', secret: created.credentialId, rotated: false });
       setCredentialId('');
       setSecret('');
       rearm(); // re-arm the autofill guard for the now-empty fields
@@ -194,26 +223,44 @@ export function DeviceCredentialsPanel({ deviceToken }: { deviceToken: string })
 
   return (
     <div className="space-y-6">
-      {/* The one-time password banner. Above everything so it cannot be scrolled
-          past; it is the only place the value is ever rendered. */}
+      {/* The one-time banner for a password or an access token. Above everything so it
+          cannot be scrolled past; it is the only place the value is ever rendered. */}
       {issued && (
         <div role="alert" className="space-y-2 rounded-lg border border-warning bg-warning/10 p-4">
           <div className="text-sm font-medium text-foreground">
-            {issued.rotated ? t('passwordRotatedTitle') : t('passwordCreatedTitle')}
+            {issued.kind === 'token'
+              ? issued.rotated
+                ? t('tokenRotatedTitle')
+                : t('tokenCreatedTitle')
+              : issued.rotated
+                ? t('passwordRotatedTitle')
+                : t('passwordCreatedTitle')}
           </div>
-          <p className="text-xs text-muted-foreground">{t('passwordShownOnce')}</p>
-          <div className="text-xs text-muted-foreground">
-            {t('usernameLabel')}: <span className="font-mono text-foreground">{issued.username}</span>
-          </div>
+          <p className="text-xs text-muted-foreground">
+            {issued.kind === 'token' ? t('tokenShownOnce') : t('passwordShownOnce')}
+          </p>
+          {issued.username !== undefined && (
+            <div className="text-xs text-muted-foreground">
+              {t('usernameLabel')}: <span className="font-mono text-foreground">{issued.username}</span>
+            </div>
+          )}
           <div className="flex items-center gap-1.5">
-            <span className="font-mono text-xs break-all text-foreground" data-testid="issued-password">
-              {issued.password}
-            </span>
+            {/* Two literal test ids rather than one computed: the guide-capture anchor
+                check finds data-testid="issued-password" by its text. */}
+            {issued.kind === 'token' ? (
+              <span className="font-mono text-xs break-all text-foreground" data-testid="issued-token" data-shot-mask>
+                {issued.secret}
+              </span>
+            ) : (
+              <span className="font-mono text-xs break-all text-foreground" data-testid="issued-password" data-shot-mask>
+                {issued.secret}
+              </span>
+            )}
             <IconButton
-              label={t('copyPasswordAriaLabel')}
+              label={issued.kind === 'token' ? t('copyTokenAriaLabel') : t('copyPasswordAriaLabel')}
               variant="quiet"
               size="xs"
-              onClick={() => copy(issued.password)}
+              onClick={() => copy(issued.secret)}
             >
               <Copy size={13} />
             </IconButton>
@@ -314,17 +361,22 @@ export function DeviceCredentialsPanel({ deviceToken }: { deviceToken: string })
                   <Badge variant="secondary">{c.credentialType}</Badge>
                 </DataTableCell>
                 <DataTableCell>
-                  <div className="flex items-center gap-1.5">
-                    <span className="font-mono text-xs text-foreground" data-shot-mask={c.credentialType === 'ACCESS_TOKEN' || undefined}>{c.credentialId}</span>
-                    <IconButton
-                      label={t('copyIdAriaLabel')}
-                      variant="quiet"
-                      size="xs"
-                      onClick={() => copy(c.credentialId)}
-                    >
-                      <Copy size={13} />
-                    </IconButton>
-                  </div>
+                  {c.credentialType === 'ACCESS_TOKEN' ? (
+                    // The token is stored only as a digest: there is nothing to show or copy.
+                    <div className="text-xs text-muted-foreground">{t('accessTokenIsSet')}</div>
+                  ) : (
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-mono text-xs text-foreground">{c.credentialId}</span>
+                      <IconButton
+                        label={t('copyIdAriaLabel')}
+                        variant="quiet"
+                        size="xs"
+                        onClick={() => copy(c.credentialId)}
+                      >
+                        <Copy size={13} />
+                      </IconButton>
+                    </div>
+                  )}
                   {c.credentialType === 'MQTT_BASIC' && (
                     <div className="mt-1 space-y-2">
                       <div className="text-xs text-muted-foreground">{t('passwordIsSet')}</div>
@@ -391,6 +443,11 @@ export function DeviceCredentialsPanel({ deviceToken }: { deviceToken: string })
                   {c.credentialType === 'MQTT_BASIC' && rotating !== c.token && (
                     <Button variant="outline" size="sm" className="mr-2" onClick={() => startRotate(c)} data-shot="credential-rotate">
                       <KeyRound size={13} /> {t('setNewPassword')}
+                    </Button>
+                  )}
+                  {c.credentialType === 'ACCESS_TOKEN' && (
+                    <Button variant="outline" size="sm" className="mr-2" onClick={() => rotateToken(c)} data-shot="credential-rotate-token">
+                      <KeyRound size={13} /> {t('setNewToken')}
                     </Button>
                   )}
                   <Button variant="outline" size="sm" onClick={() => remove(c)}>

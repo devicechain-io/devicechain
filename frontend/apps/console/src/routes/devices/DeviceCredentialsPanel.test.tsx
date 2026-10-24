@@ -6,7 +6,8 @@
 // all run.
 //
 // 🔴 WHY THIS FILE EXISTS. The platform keeps only a keyed digest of an MQTT_BASIC
-// password, so the moment it is set is the ONLY moment the operator can read it. A
+// password and of an ACCESS_TOKEN, so the moment either is set is the ONLY moment the
+// operator can read it. A
 // panel that lost it on the reload that follows the mutation strands the operator with
 // a device they cannot program; a panel that rendered a value from a READ would be
 // showing a digest or a stale secret. Nothing else notices either.
@@ -54,15 +55,21 @@ const tokenRow = {
   id: '2',
   token: 'cred-token',
   credentialType: 'ACCESS_TOKEN',
-  credentialId: 'bearer-abc',
+  // What a read of an ACCESS_TOKEN returns: a fingerprint, never the token.
+  credentialId: 'dctk1$fingerprint-only',
   credentialValue: 'LEAKED-TOKEN-VALUE',
 };
 
 function route(rows: unknown[]) {
   gqlMock.mockImplementation((_s: string, doc: string) => {
     const d = String(doc);
-    if (d.includes('mutation CreateDeviceCredential')) return Promise.resolve({ createDeviceCredential: {} });
-    if (d.includes('mutation UpdateDeviceCredential')) return Promise.resolve({ updateDeviceCredential: {} });
+    // The server returns an access token on the response to the write that set it, and only there.
+    if (d.includes('mutation CreateDeviceCredential')) {
+      return Promise.resolve({ createDeviceCredential: { credentialId: 'minted-token-0001' } });
+    }
+    if (d.includes('mutation UpdateDeviceCredential')) {
+      return Promise.resolve({ updateDeviceCredential: { credentialId: 'rotated-token-0002' } });
+    }
     return Promise.resolve({ deviceCredentials: { results: rows, pagination: { totalRecords: rows.length } } });
   });
 }
@@ -184,12 +191,52 @@ describe('DeviceCredentialsPanel password handling', () => {
     expect((screen.getByLabelText('New password') as HTMLInputElement).value).toBe('');
   });
 
-  it('keeps access tokens as readable identifiers with no password UI', async () => {
+  it('shows no value for an access token, only that one is set, and offers a new one', async () => {
     route([tokenRow]);
     render(<DeviceCredentialsPanel deviceToken="dev-1" />);
-    expect(await screen.findByText('bearer-abc')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Copy id' })).toBeTruthy();
+    expect(await screen.findByText(/access token is set/i)).toBeTruthy();
+    expect(document.body.textContent).not.toContain('dctk1$fingerprint-only');
+    expect(screen.queryByRole('button', { name: 'Copy id' })).toBeNull();
     expect(screen.queryByRole('button', { name: /set new password/i })).toBeNull();
+    expect(screen.getByRole('button', { name: /set new token/i })).toBeTruthy();
+  });
+
+  it('shows a new access token once after create, from the response, and not after dismissal', async () => {
+    route([tokenRow]);
+    render(<DeviceCredentialsPanel deviceToken="dev-1" />);
+    fireEvent.click(await screen.findByRole('button', { name: /generate/i }));
+    fireEvent.click(screen.getByRole('button', { name: /add credential/i }));
+    expect((await screen.findByTestId('issued-token')).textContent).toBe('minted-token-0001');
+    expect(screen.getByRole('button', { name: 'Copy access token' })).toBeTruthy();
+    expect(callsTo('CreateDeviceCredential')[0][2]).toMatchObject({ request: { credentialType: 'ACCESS_TOKEN' } });
+    // The reload that follows reads only a fingerprint; the banner keeps the token until dismissed.
+    await waitFor(() => expect(callsTo('query DeviceCredentials').length).toBeGreaterThan(1));
+    expect(screen.getByTestId('issued-token').textContent).toBe('minted-token-0001');
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    expect(screen.queryByTestId('issued-token')).toBeNull();
+    expect(document.body.textContent).not.toContain('minted-token-0001');
+  });
+
+  it('rotates an access token after a confirmation, sending only credentialId, and shows the new one once', async () => {
+    route([tokenRow]);
+    confirmMock.mockResolvedValue(true);
+    render(<DeviceCredentialsPanel deviceToken="dev-1" />);
+    fireEvent.click(await screen.findByRole('button', { name: /set new token/i }));
+    expect((await screen.findByTestId('issued-token')).textContent).toBe('rotated-token-0002');
+    const call = callsTo('UpdateDeviceCredential')[0][2] as { token: string; request: Record<string, unknown> };
+    expect(call.token).toBe('cred-token');
+    expect(Object.keys(call.request)).toEqual(['credentialId']);
+    expect(call.request.credentialId).not.toBe('rotated-token-0002'); // the console generated its own
+  });
+
+  it('does not rotate an access token when the confirmation is declined', async () => {
+    route([tokenRow]);
+    confirmMock.mockResolvedValue(false);
+    render(<DeviceCredentialsPanel deviceToken="dev-1" />);
+    fireEvent.click(await screen.findByRole('button', { name: /set new token/i }));
+    await waitFor(() => expect(confirmMock).toHaveBeenCalled());
+    expect(callsTo('UpdateDeviceCredential')).toHaveLength(0);
+    expect(screen.queryByTestId('issued-token')).toBeNull();
   });
 
   it('hints under 16 bytes without blocking, and counts bytes', async () => {

@@ -723,6 +723,12 @@ export class RecordedDataSource implements WidgetDataSource {
     return declared && Object.prototype.hasOwnProperty.call(declared, kind) ? declared[kind] : null;
   }
 
+  // The same for one device, through its recorded kind.
+  async declaredMetricsForDevice(deviceToken: string): Promise<readonly string[] | null> {
+    const kind = this.kinds.get(deviceToken);
+    return kind === undefined ? null : this.declaredMetrics(kind);
+  }
+
   // Each device's seed comes from the recording itself, with no read to make: its newest reading per
   // measurement inside the history window, and every measurement it reported in that window, which
   // is how "does not report this" (a dozer's tyres) is told from "sent nothing".

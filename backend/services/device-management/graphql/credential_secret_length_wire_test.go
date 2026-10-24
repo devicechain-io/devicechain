@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/devicechain-io/dc-device-management/model"
+	dmtest "github.com/devicechain-io/dc-device-management/test"
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
@@ -37,6 +38,7 @@ func TestAShortMqttPasswordAnswersInvalidValueOnTheWire(t *testing.T) {
 		t.Fatal(err)
 	}
 	api := model.NewApi(&rdb.RdbManager{Database: db})
+	api.DeviceSecretKey = dmtest.DeviceSecretKey()
 	ctx := core.WithTenant(context.Background(), "acme")
 	if _, err := api.CreateDeviceType(ctx, &model.DeviceTypeCreateRequest{Token: "dt"}); err != nil {
 		t.Fatal(err)

@@ -46,6 +46,6 @@ export function primaryMeasurementName(widget: WidgetInstance): string | undefin
   const explicit = optString(widget.options, 'measurement');
   if (explicit) return explicit;
   const ds = widget.datasource;
-  if (ds && ds.measurements.length > 0) return ds.measurements[0];
+  if (ds?.measurements && ds.measurements.length > 0) return ds.measurements[0];
   return undefined;
 }

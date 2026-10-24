@@ -1107,6 +1107,15 @@ func deviceCredentialFamily() putest.Family[*Api] {
 		expiresAtSeed       = "2031-03-04T05:06:07Z"
 		metadataSeed        = `{"fleet":"north"}`
 	)
+	// The type and the id move together: the id is a username under one type and a token
+	// digest under the other, so a change to or from ACCESS_TOKEN has to name the id in the
+	// same request (ErrCredentialIdRequiredForType).
+	typeField, idField := putest.PairedWith(
+		putest.RequiredStringField("credentialType", string(CredentialMqttBasic), string(CredentialAccessToken),
+			func(r *DeviceCredentialUpdateRequest) *dcgraphql.OptionalString { return &r.CredentialType }),
+		putest.RequiredStringField("credentialId", credentialIdSeed, "a-rotated-bearer",
+			func(r *DeviceCredentialUpdateRequest) *dcgraphql.OptionalString { return &r.CredentialId }),
+	)
 	return putest.Family[*Api]{
 		Name:    "deviceCredential",
 		Token:   "dcred-1",
@@ -1137,7 +1146,9 @@ func deviceCredentialFamily() putest.Family[*Api] {
 			return map[string]string{
 				"deviceToken":    refTokenOf(t, e.Device == nil, func() string { return e.Device.Token }),
 				"credentialType": e.CredentialType,
-				"credentialId":   e.CredentialId,
+				// An access token is stored as its digest, so the id reads as the candidate
+				// token it digests, the way a secret does.
+				"credentialId": credentialIdOf(e, credentialIdSeed, "a-rotated-bearer"),
 				// A type that compares no secret holds none by design (checked in
 				// credential_secret_length_test.go), so the seed stands in for it here and a
 				// change of type is not read as a change of password.
@@ -1155,10 +1166,8 @@ func deviceCredentialFamily() putest.Family[*Api] {
 		Fields: []putest.Field{
 			putest.RequiredRefField("deviceToken", "dev-a", "dev-b",
 				func(r *DeviceCredentialUpdateRequest) *dcgraphql.OptionalString { return &r.DeviceToken }),
-			putest.RequiredStringField("credentialType", string(CredentialMqttBasic), string(CredentialAccessToken),
-				func(r *DeviceCredentialUpdateRequest) *dcgraphql.OptionalString { return &r.CredentialType }),
-			putest.RequiredStringField("credentialId", credentialIdSeed, "a-rotated-bearer",
-				func(r *DeviceCredentialUpdateRequest) *dcgraphql.OptionalString { return &r.CredentialId }),
+			typeField,
+			idField,
 			putest.OptionalStringField("credentialValue", credentialValueSeed, "rotated-material-0123",
 				func(r *DeviceCredentialUpdateRequest) *dcgraphql.OptionalString { return &r.CredentialValue }),
 			putest.RequiredBoolField("enabled", true,
@@ -1425,4 +1434,19 @@ func credentialValueOf(e *DeviceCredential, seed string, candidates ...string) s
 		return seed
 	}
 	return secretStr(e.SecretDigest, append([]string{seed}, candidates...)...)
+}
+
+// credentialIdOf reads a credential's id back for the partial-update families: the id as
+// stored for a type that keeps it as sent, and for an ACCESS_TOKEN the candidate token its
+// digest is the digest of, or the digest itself when it is none of them.
+func credentialIdOf(e *DeviceCredential, candidates ...string) string {
+	if !accessTokenCredential(e.CredentialType) {
+		return e.CredentialId
+	}
+	for _, c := range candidates {
+		if e.CredentialId == testTokenDigest(e.TenantId, c) {
+			return c
+		}
+	}
+	return "unverified digest " + e.CredentialId
 }

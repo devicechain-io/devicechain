@@ -13,9 +13,10 @@
 //     expired credential is refused the same way.
 // An unassigned device is NOT one of them: its events are stored, with no assignment.
 //
-// 🔴 It is mounted only for a caller with device:write, like the Credentials tab: for an
-// ACCESS_TOKEN the credential id IS the bearer secret and is written into the command, and
-// listing credentials is gated on that authority server-side.
+// 🔴 It is mounted only for a caller with device:write, like the Credentials tab, which is
+// the authority listing credentials is gated on server-side. The command never carries a
+// secret: an MQTT_BASIC password and an ACCESS_TOKEN are stored only as digests and were
+// shown once when they were set, so the command holds a visible placeholder for either.
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AlertTriangle, Copy } from 'lucide-react';
@@ -85,7 +86,12 @@ export function DeviceConnectPanel({ deviceToken, deviceEnabled }: { deviceToken
   const input: SnippetInput = {
     tenant,
     deviceToken,
-    credential: { credentialType: chosen.credentialType, credentialId: chosen.credentialId },
+    credential: {
+      credentialType: chosen.credentialType,
+      // The token cannot be read back (the list returns only a fingerprint), so the
+      // command shows where it goes.
+      credentialId: chosen.credentialType === 'ACCESS_TOKEN' ? PLACEHOLDER.accessToken : chosen.credentialId,
+    },
     metrics,
   };
   const example = exampleMeasurements(metrics);
@@ -157,6 +163,9 @@ export function DeviceConnectPanel({ deviceToken, deviceEnabled }: { deviceToken
         )}
         {chosen.credentialType === 'MQTT_BASIC' && (
           <li>{t('connectPlaceholderPassword', { placeholder: PLACEHOLDER.password })}</li>
+        )}
+        {chosen.credentialType === 'ACCESS_TOKEN' && (
+          <li>{t('connectPlaceholderAccessToken', { placeholder: PLACEHOLDER.accessToken })}</li>
         )}
         <li>
           {example.fallback

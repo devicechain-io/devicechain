@@ -292,12 +292,34 @@ func (api *Api) lookupPresentedCredential(ctx context.Context, presented *Presen
 	if !CredentialType(presented.CredentialType).Valid() {
 		return nil, ErrCredentialTypeInvalid
 	}
-	cred, err := find(ctx, presented.CredentialType, presented.CredentialId)
+	// An access token is looked up by its keyed digest, never by the token: the stored id
+	// of an ACCESS_TOKEN row is that digest. The lookup is an equality on a value the
+	// presenter cannot compute without the key.
+	lookupId, err := api.presentedCredentialLookupId(ctx, presented.CredentialType, presented.CredentialId)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrCredentialNotResolved
 		}
 		return nil, err
+	}
+	cred, err := find(ctx, presented.CredentialType, lookupId)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrCredentialNotResolved
+		}
+		return nil, err
+	}
+	if accessTokenCredential(presented.CredentialType) {
+		// The row was matched by the digest; confirm it in constant time, over the digest
+		// the presented token yields and the one the row stores, so a row the lookup
+		// returned for any other reason (a collation that folds case, say) never
+		// authenticates a token that is not its own.
+		//
+		// This is not a throttled credential check, and does not need to be: the lookup is
+		// the guess, and a guess needs the key.
+		if credential.VerifyAccessToken(api.DeviceSecretKey, cred.TenantId, cred.CredentialId, presented.CredentialId) != nil {
+			return nil, ErrCredentialNotResolved
+		}
 	}
 	return cred, nil
 }

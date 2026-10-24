@@ -23,6 +23,7 @@ import {
 import { buildGaugeOption, EChart, gaugeReadoutBox, loadChartEngine, useChartTheme } from '@devicechain/widget-sdk/echarts';
 
 import { builtinWidgetDescriptors } from '../builtin-descriptors';
+import { NoReading, useSettledEmpty } from './no-reading-lazy';
 import { LevelReadout } from '../level-readout';
 import { readRange } from '../value-scale';
 
@@ -82,6 +83,13 @@ function GaugeBody({ widget, data }: WidgetProps) {
           'aria-valuetext': `${formatValue(value, precision)}${unit ? ` ${unit}` : ''}`,
         }
       : {};
+
+  // No reading: the dial would be an empty arc; say why instead (after the first moment, while a
+  // board is still loading the dial is drawn as it always was).
+  const explain = useSettledEmpty(value === undefined);
+  if (explain) {
+    return <NoReading unbound={widget.datasource?.kind === 'unbound'} measurement={name} waitMs={0} />;
+  }
 
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%', ...flashBackgroundStyle(flashDirection) }} {...meter}>

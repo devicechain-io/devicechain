@@ -20,6 +20,7 @@ import {
   type WidgetProps,
 } from '@devicechain/widget-sdk';
 
+import { NoReading } from '../no-reading-core';
 
 const cell: CSSProperties = { padding: `${spaceVar(1)} ${spaceVar(3)}`, textAlign: 'left' };
 const headCell: CSSProperties = {
@@ -42,6 +43,15 @@ export function Table({ widget, data }: WidgetProps) {
   // independent — see FlashValue).
   const flash = optBoolean(widget.options, 'flashOnChange');
 
+  if (rows.length === 0) {
+    const asked = widget.datasource?.measurements;
+    return (
+      <WidgetFrame title={optString(widget.options, 'title')}>
+        <NoReading unbound={widget.datasource?.kind === 'unbound'} measurement={asked?.length === 1 ? asked[0] : undefined} precision={precision} />
+      </WidgetFrame>
+    );
+  }
+
   return (
     <WidgetFrame title={optString(widget.options, 'title')} flush>
       <div style={{ height: '100%', overflow: 'auto' }}>
@@ -54,14 +64,7 @@ export function Table({ widget, data }: WidgetProps) {
             </tr>
           </thead>
           <tbody>
-            {rows.length === 0 ? (
-              <tr>
-                <td colSpan={3} style={{ ...cell, textAlign: 'center', color: css('muted-foreground') }}>
-                  No data yet
-                </td>
-              </tr>
-            ) : (
-              rows.map((row) => (
+            {rows.map((row) => (
                 <tr key={row.name}>
                   <td style={cell}>{row.name}</td>
                   <td style={{ ...cell, fontVariantNumeric: 'tabular-nums' }}>
@@ -77,8 +80,7 @@ export function Table({ widget, data }: WidgetProps) {
                   </td>
                   <td style={{ ...cell, color: css('muted-foreground') }}>{formatTimestamp(row.occurredTime, timeZone)}</td>
                 </tr>
-              ))
-            )}
+              ))}
           </tbody>
         </table>
       </div>

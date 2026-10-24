@@ -120,6 +120,17 @@ query {
 
 配套的 `TenantPurgeVisibilityLost` 在这些数据完全停止采集时触发。没有它，未被抓取指标的用户管理服务，与没有任何未完成删除的服务看起来完全一样。
 
+### 哪个存储系统在阻塞删除 {#blocked-store}
+
+`TenantPurgeStalled` 说明删除已阻塞；下列指标说明阻塞在哪里。用户管理服务导出它们时不带租户标签，因为以租户命名的时间序列会比它所描述的擦除存活得更久：
+
+- `devicechain_usermanagement_tenant_purge_store_blocked{store,reason}`：各存储系统当前阻塞的未完成删除数量。`store` 为 `rdb`（关系型数据）、`tsdb`（遥测）、`broker`（流）、`kv`（键值存储桶）、`detect`（检测状态）、`blob`（对象存储）或 `other`。`reason` 为 `deferred`（存储回答数据仍然存在或仍在写入）或 `error`（无法向该存储发出请求）。所有组合都会导出，无阻塞时为 0。
+- `devicechain_usermanagement_tenant_purge_store_rows_erased_total{store}`：各存储已擦除的行、对象、消息或键数量。被阻塞的存储若计数仍在上升，说明正在处理大型租户；计数持平则没有进展。
+- `devicechain_usermanagement_tenant_purge_store_erase_duration_seconds{store}`：每次擦除调用的耗时，可看出时间花在哪个存储上。
+- `devicechain_usermanagement_tenant_purge_completed_total`、`tenant_purge_failures_total`、`tenant_purge_duration_seconds` 和 `tenant_purge_clean_duration_seconds`：已完成的删除数；协调器未能在一轮中推进某个删除的次数（下一轮会重试）；从删除到令牌释放的时间；以及从删除到最后一个存储报告已清空的时间。最后一项不含稳定等待和令牌保留等待，因此衡量的是擦除本身。
+
+三条告警使用这些指标。`TenantPurgeStoreFailing` 在某个存储持续一小时返回错误时触发。`TenantPurgeStoreHolding` 在某个存储报告数据仍然存在的时间达到令牌保留时间时触发。`TenantPurgeCoordinatorFailing` 在协调器自身持续无法推进删除时触发。前两条的 `store` 标签给出存储名称；日志行 “Tenant purge store did not report clean” 和 `tenantDeletions` 查询给出原因。
+
 ## 配置 {#configuration}
 
 这些设置位于用户管理服务的 `tenantPurge` 下。三项设置中，`0` 都表示“使用默认值”。

@@ -54,6 +54,7 @@ import { seedWindow } from './fleet-model';
 import { fleetStrings } from './fleet-strings';
 import { samplesExport } from './export-rows';
 import { LevelEmpty } from './level-readout';
+import { Explained } from './no-reading';
 
 export const FLUSH_MS = 250;
 const MINUTE_MS = 60_000;
@@ -231,15 +232,15 @@ export default function CompareFeed({ hub, widget, descriptor, ErrorFrame }: Com
 
   const title = optString(widget.options, 'title');
   const strings = fleetStrings();
-  const empty = (message: string) => (
+  const empty = (message: string, kind?: 'unbound' | 'forbidden') => (
     <WidgetFrame title={title}>
-      <LevelEmpty message={message} />
+      {kind ? <Explained kind={kind} message={message} /> : <LevelEmpty message={message} />}
     </WidgetFrame>
   );
   if (!measurement) return empty(strings.noMeasurement);
   if (!supported) return empty(strings.unsupported);
-  if (s.forbidden) return empty(strings.forbidden);
-  if (ds?.kind === 'unbound') return empty(strings.unbound);
+  if (s.forbidden) return empty(strings.forbidden, 'forbidden');
+  if (ds?.kind === 'unbound') return empty(strings.unbound, 'unbound');
   if (!capped) return empty(strings.loading);
   if (capped.shown.length === 0) return empty(strings.noMembers);
 

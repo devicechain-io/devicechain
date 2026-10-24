@@ -56,6 +56,9 @@ var sanctionedSystemContexts = map[string][]string{
 	"backend/services/device-management/schema/migration_credential_secret_digest.go": {
 		"CountForeignCredentialDigests", "DigestPlaintextCredentialSecrets",
 	},
+	"backend/services/device-management/schema/credential_token_digest.go": {
+		"CountForeignAccessTokenDigests", "DigestPlaintextAccessTokens",
+	},
 	"backend/services/device-state/processor/StateProcessor.go":                {"StateProcessor.runInactivityMonitor"},
 	"backend/services/event-management/model/analytics.go":                     {"ReconcileAnalyticsSurface"},
 	"backend/services/event-management/model/lifecycle.go":                     {"ApplyDataLifecyclePolicies"},
@@ -78,7 +81,7 @@ var sanctionedSystemContexts = map[string][]string{
 	"backend/services/user-management/identity/keys.go": {
 		"Manager.activeKeyAge", "Manager.loadSigningKeysLocked", "Manager.rotateSigningKeyLocked",
 	},
-	"backend/services/user-management/purge/coordinator.go": {"Coordinator.PurgeTenant", "Coordinator.pass"},
+	"backend/services/user-management/purge/coordinator.go": {"Coordinator.observeLedger", "Coordinator.purgeTenant", "Coordinator.pass"},
 	"backend/services/user-management/purge/relational.go":  {"Relational.handle"},
 	"backend/services/user-management/settings/store.go":    {"Store.sys"},
 }

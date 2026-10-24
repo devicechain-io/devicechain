@@ -101,14 +101,17 @@ func TestWithNoKeyASecretIsNeitherStoredNorChecked(t *testing.T) {
 	_, _, err = api.ResolveDeviceCredential(ctx, basic("cred-1", "s3cret-0123456789"), time.Now())
 	require.ErrorIs(t, err, ErrCredentialMisconfigured)
 
-	// Control: a credential that carries no secret is created and checked without a key.
+	// An access token is digested too, so with no key it is refused and nothing is written;
+	// before, the token was stored as sent.
 	_, err = api.CreateDeviceCredential(ctx, &DeviceCredentialCreateRequest{
 		Token: "c-3", DeviceToken: "dev", CredentialType: string(CredentialAccessToken),
 		CredentialId: "tok-3", Enabled: true,
 	})
-	require.NoError(t, err)
+	require.ErrorIs(t, err, errNoDeviceSecretKey)
+	require.NoError(t, api.RDB.DB(ctx).Model(&DeviceCredential{}).Where("token = ?", "c-3").Count(&n).Error)
+	require.Zero(t, n, "a refused access token create wrote a row")
 	_, err = api.AuthenticateDevice(ctx, accessToken("tok-3"), time.Now())
-	require.NoError(t, err)
+	require.ErrorIs(t, err, errNoDeviceSecretKey, "with no key an access token is not checked against anything")
 }
 
 // 🔴 A DIGEST MADE UNDER ANOTHER KEY IS MISCONFIGURED, NOT A WRONG PASSWORD, on the

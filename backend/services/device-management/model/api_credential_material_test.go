@@ -4,7 +4,9 @@
 package model
 
 import (
+	"strings"
 	"testing"
+	"time"
 
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 )
@@ -95,9 +97,19 @@ func TestRestatingACredentialIdDoesNotRewriteIt(t *testing.T) {
 
 	rows, err := api.DeviceCredentialsByToken(ctx, []string{"dcred-1"})
 	c := requireOne(t, "device credential", rows, err)
-	if c.CredentialId != padded {
-		t.Errorf("credentialId = %q, want %q — the identifier the DEVICE presents at connect "+
+	// The id is stored as the token's digest, byte for byte: restating it must leave the
+	// stored value as it was, and the padded token (not its trimmed form) still resolves.
+	if c.CredentialId != testTokenDigest(partialUpdateTenant, padded) {
+		t.Errorf("credentialId = %q, want the digest of %q — the identifier the DEVICE presents at connect "+
 			"time was rewritten by an edit that restated it", c.CredentialId, padded)
+	}
+	if _, err := api.AuthenticateDevice(ctx, &PresentedCredential{
+		CredentialType: string(CredentialAccessToken), CredentialId: padded}, time.Now()); err != nil {
+		t.Errorf("the token as sent no longer authenticates: %v", err)
+	}
+	if _, err := api.AuthenticateDevice(ctx, &PresentedCredential{
+		CredentialType: string(CredentialAccessToken), CredentialId: strings.TrimSpace(padded)}, time.Now()); err == nil {
+		t.Error("the trimmed token authenticates: a digest of something no device sends was stored")
 	}
 }
 

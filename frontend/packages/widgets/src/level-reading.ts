@@ -25,6 +25,8 @@ import { fillOf, type Fill, type RangeResult } from './value-scale';
 export interface LevelReading {
   // The measurement shown (the title's fallback).
   name: string | undefined;
+  // The widget's slot has no device bound: an empty reading then means "choose one".
+  unbound: boolean;
   sample: MeasurementSample | undefined;
   value: number | undefined;
   unit: string | undefined;
@@ -68,6 +70,7 @@ export function useLevelReading(widget: WidgetInstance, data: MeasurementStreamS
   const bandColor = levelColor(severity, band?.level);
   return {
     name,
+    unbound: widget.datasource?.kind === 'unbound',
     sample,
     value,
     unit,
@@ -84,10 +87,10 @@ export function useLevelReading(widget: WidgetInstance, data: MeasurementStreamS
   };
 }
 
-// The reason a scale widget has nothing to draw, or undefined when it can draw. The author's
-// fix (the scale) is named before the absence of data, which resolves itself.
+// The CONFIGURATION reason a scale widget has nothing to draw, or undefined when its setup is fine.
+// The author's fix (the scale) is named before the absence of data, which resolves itself and is
+// explained apart (LevelEmptyFor).
 export function emptyReason(r: LevelReading): string | undefined {
   if (r.range && !r.range.ok) return r.range.reason === 'missing' ? r.strings.setRange : r.strings.badRange;
-  if (r.value === undefined) return r.strings.noData;
   return undefined;
 }

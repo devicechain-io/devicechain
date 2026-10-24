@@ -16,6 +16,7 @@ require (
 	github.com/devicechain-io/dc-update-management v0.0.0-00010101000000-000000000000
 	github.com/devicechain-io/dc-user-management v0.0.0-00010101000000-000000000000
 	github.com/go-gormigrate/gormigrate/v2 v2.1.7
+	github.com/nats-io/nats.go v1.54.0
 	github.com/stretchr/testify v1.12.1
 	gorm.io/driver/postgres v1.6.3
 	gorm.io/gorm v1.31.2
@@ -65,7 +66,6 @@ require (
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
-	github.com/nats-io/nats.go v1.54.0 // indirect
 	github.com/nats-io/nkeys v0.4.16 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
 	github.com/prometheus/client_golang v1.25.0 // indirect

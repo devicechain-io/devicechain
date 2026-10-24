@@ -245,16 +245,18 @@ namespace DeviceChain.Sitepulse.Tests
         {
             var plantNoCred = Plant();
             var seen = new List<string>();
-            var query = Fake(q =>
+            QueryFn query = (q, vars, ct) =>
             {
-                if (q == DeviceBinder.ResolveQuery) return Devices(Hauler("01"), plantNoCred); // the loader is missing
-                if (q == CredentialResolver.BatchQuery) return CredBatch(Cred("sp-hauler-01-cred", "sp-hauler-01")); // the plant has no -cred row
-                if (q == CredentialResolver.FallbackQuery) return CredSearch(); // and no fallback either
-                throw new InvalidOperationException(q);
-            }, seen);
+                seen.Add(q);
+                if (q == DeviceBinder.ResolveQuery) return Task.FromResult(Devices(Hauler("01"), plantNoCred)); // the loader is missing
+                // the plant's credential is refused; the hauler's is created
+                if (q == CredentialResolver.CreateMutation && vars.Contains(plantNoCred.Token)) return Task.FromException<string>(new InvalidOperationException("denied"));
+                return Task.FromResult(CredPlatform(q, vars));
+            };
 
             var board = new ReadinessBoard(Three, "sim-sitepulse");
             var creds = new DeviceCredentials();
+            UnityEngine.TestTools.LogAssert.Expect(LogType.Error, new System.Text.RegularExpressions.Regex(@"^\[sitepulse\] SP-PL-0001: the platform refused to create .*-sitepulse: denied$"));
             new DeviceBinder(query, Contract()).BindAsync(Three, board, creds, CancellationToken.None).GetAwaiter().GetResult();
 
             Assert.AreEqual("1/3 credentialed · 2 failed", board.Summary());
@@ -265,8 +267,8 @@ namespace DeviceChain.Sitepulse.Tests
             StringAssert.Contains("not on the platform", board["SP-LD-0004"].FailReason);
             Assert.AreEqual(DeviceStage.Resolved, board["SP-PL-0001"].Stage);
             StringAssert.Contains("no credential", board["SP-PL-0001"].FailReason);
-            // one resolve, one batch, and a fallback only for the device the batch did not answer
-            CollectionAssert.AreEqual(new[] { DeviceBinder.ResolveQuery, CredentialResolver.BatchQuery, CredentialResolver.FallbackQuery }, seen);
+            // one resolve, one existence check, then one create per bound device
+            CollectionAssert.AreEqual(new[] { DeviceBinder.ResolveQuery, CredentialResolver.ExistsQuery, CredentialResolver.CreateMutation, CredentialResolver.CreateMutation }, seen);
             Assert.AreEqual(LineKind.Failed, board.Lines()[1].Kind);
             Assert.AreEqual(LineKind.Ok, board.Lines()[0].Kind);
         }
@@ -274,17 +276,14 @@ namespace DeviceChain.Sitepulse.Tests
         [Test]
         public void ACredentialIsNeverInAnythingTheBoardOrHolderPrints()
         {
-            const string secret = "feedfacefeedfacefeedfacefeedface";
             var one = new[] { new SceneDevice("SP-HL-0001", SceneKind.Hauler) };
-            var query = Fake(q => q == DeviceBinder.ResolveQuery
-                ? Devices(Hauler("01"))
-                : CredBatch(Cred("sp-hauler-01-cred", "sp-hauler-01", id: secret)));
+            QueryFn query = (q, vars, ct) => Task.FromResult(q == DeviceBinder.ResolveQuery ? Devices(Hauler("01")) : CredPlatform(q, vars));
             var board = new ReadinessBoard(one, "t");
             var creds = new DeviceCredentials();
             new DeviceBinder(query, Contract()).BindAsync(one, board, creds, CancellationToken.None).GetAwaiter().GetResult();
 
-            Assert.IsTrue(creds.TryGet("sp-hauler-01", out var held));
-            Assert.AreEqual(secret, held);
+            Assert.IsTrue(creds.TryGet("sp-hauler-01", out var secret));
+            Assert.AreEqual(64, secret.Length);
             StringAssert.DoesNotContain(secret, creds.ToString());
             StringAssert.DoesNotContain(secret, board.Summary());
             foreach (var l in board.Lines()) StringAssert.DoesNotContain(secret, l.Text);

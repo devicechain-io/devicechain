@@ -394,15 +394,19 @@ only control is the loopback `--bind` default. Widen it on a trusted host or not
 all.
 
 **Device credentials are deliberately not served here**, and the reason is not that
-the caller cannot get them — given the above, it can. It is that they are the one
-thing in reach that does not expire: a device's `ACCESS_TOKEN` bearer is derived from
-the manifest seed and never rotates, so writing it into this body puts a permanent
-secret somewhere an ephemeral one leaves on its own. A client resolves its own
-instead, using the token already in this body: `devicesByExternalId` maps the scene's
-business id to a device token, and `deviceCredentialsByToken` on `{deviceToken}-cred`
-returns the `credentialId`, which for an `ACCESS_TOKEN` credential *is* the bearer.
-That also survives `POST /reset` re-provisioning the fleet, which a snapshot taken at
-page load would not.
+the caller cannot get them — given the above, it can set its own. It is that they are
+the one thing in reach that does not expire: a device's `ACCESS_TOKEN` bearer is derived
+from the manifest seed and never rotates, so writing it into this body puts a permanent
+secret somewhere an ephemeral one leaves on its own. The platform also stores an access
+token only as a digest: reading a credential returns a fingerprint, and the token comes
+back once, in the response to the create or update that sets it. So a client does not
+read the sim's credential; it sets one of its own, using the token already in this body:
+`devicesByExternalId` maps the scene's business id to a device token, and
+`createDeviceCredential` (or `updateDeviceCredential`, to rotate an existing one) on a
+credential named `{deviceToken}-<client>` with a token the client generated returns that
+token in its response. It must not rotate the sim's own `{deviceToken}-cred`, which the
+sim emitter presents. That also survives `POST /reset` re-provisioning the fleet, which
+a snapshot taken at page load would not.
 
 ## Package layout
 

@@ -28,6 +28,7 @@ import { deviceBars } from '../fleet-model';
 import { fleetStrings } from '../fleet-strings';
 import { niceDomain } from '../category-geometry';
 import { LevelEmpty } from '../level-readout';
+import { Explained } from '../no-reading';
 
 // The width of a character of the chart font, as a share of its size: an estimate for the room a
 // label needs. Wide enough for digits and capitals, so a label is trimmed rather than overlapped.
@@ -93,8 +94,8 @@ function DeviceBars({
   );
   if (!measurement) return <LevelEmpty message={strings.noMeasurement} />;
   if (!fleet || fleet.status === 'loading') return <LevelEmpty message={strings.loading} />;
-  if (fleet.status === 'unbound') return <LevelEmpty message={strings.unbound} />;
-  if (fleet.status === 'forbidden') return <LevelEmpty message={strings.forbidden} />;
+  if (fleet.status === 'unbound') return <Explained kind="unbound" message={strings.unbound} />;
+  if (fleet.status === 'forbidden') return <Explained kind="forbidden" message={strings.forbidden} />;
   if (fleet.status === 'unsupported') return <LevelEmpty message={strings.unsupported} />;
   if (bars.length === 0) return <LevelEmpty message={strings.noMembers} />;
   const drawn = bars.slice(0, MAX_DEVICE_BARS);

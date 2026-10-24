@@ -28,14 +28,16 @@ import {
   newestSampleTime,
   resolveStaleAfterSeconds,
   WidgetCandidatesProvider,
+  WidgetDeclaredMetricsProvider,
   WidgetFreshnessProvider,
   WidgetSelectProvider,
+  useWidgetScale,
   useWidgetTimeRange,
   type WidgetFreshness,
   type WidgetRegistry,
 } from '@devicechain/widget-sdk';
 import { isForbiddenError } from '@devicechain/client';
-import { useEffect, useMemo, useState, type ComponentType, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ComponentType, type ReactNode } from 'react';
 
 import { alarmSubscription, commandSubscription, groupsAlarmsByDeviceType, historyMode, measurementSpan, measurementIsMembersOnly, measurementWindow, membersMode, presenceMode, wantsEventMarkers } from './binding-policy';
 import { useHeld } from './use-held';
@@ -143,6 +145,7 @@ function ConnectedWidgetBody({ widget, hub, registry, actions, initialSamples, i
   }
 
   const body = (
+    <DeclaredScope hub={hub} datasource={widget.datasource}>
     <HostScope descriptor={descriptor} actions={actions}>
       {(hostActions) => (
         <ChannelBody
@@ -157,6 +160,7 @@ function ConnectedWidgetBody({ widget, hub, registry, actions, initialSamples, i
         />
       )}
     </HostScope>
+    </DeclaredScope>
   );
   return range?.absolute !== undefined && showsCurrentStateOnly(descriptor) ? <CurrentStateBadge>{body}</CurrentStateBadge> : body;
 }
@@ -232,6 +236,31 @@ function useDatasourceSupported(hub: WidgetDataSource, datasource: WidgetInstanc
   }, [hub, key]);
   // A refusal belongs to the binding it was given for; a changed binding is supported until asked.
   return refused === null || refused !== key;
+}
+
+// DeclaredScope answers, for a single-device widget with nothing to draw, "does this device's profile
+// declare what you asked for?". Nothing is read until a widget in the scope asks (an empty state
+// does), so a board whose widgets have data costs no lookup; the answer is the hub's shared one per
+// device type. A binding that is not one device (a group, an unbound slot) has nothing to look up.
+function DeclaredScope({ hub, datasource, children }: { hub: WidgetDataSource; datasource: WidgetInstance['datasource']; children: ReactNode }) {
+  const token = datasource?.kind === 'device' && datasource.deviceToken ? datasource.deviceToken : undefined;
+  const [asked, setAsked] = useState(false);
+  const [got, setGot] = useState<{ token: string; names: readonly string[] | null }>();
+  const ask = useCallback(() => setAsked(true), []);
+  useEffect(() => {
+    if (!asked || !token || !hub.declaredMetricsForDevice) return;
+    let live = true;
+    hub.declaredMetricsForDevice(token).then(
+      (names) => live && setGot({ token, names }),
+      () => undefined,
+    );
+    return () => {
+      live = false;
+    };
+  }, [asked, token, hub]);
+  const declared = got && got.token === token ? got.names : undefined;
+  const value = useMemo(() => ({ declared, ask }), [declared, ask]);
+  return <WidgetDeclaredMetricsProvider value={value}>{children}</WidgetDeclaredMetricsProvider>;
 }
 
 // HostScope hands ONE widget only the interactions it declared: a narrowed action seam, and
@@ -519,75 +548,78 @@ function UnresolvedWidgetFrame({
   );
 }
 
-// WidgetForbiddenFrame is shown when the platform refused the widget's read for the viewer.
+// The one body of the settled panes below (refused, gone, not offered, source error): a neutral,
+// muted state that says what it is. None of them borrows an alarm glyph or colour, since on a
+// board that means an alarm. `data-empty-state` names the kind for the tests and the screenshots.
+function StatePane({
+  widget,
+  kind,
+  glyph,
+  title,
+  detail,
+}: {
+  widget: WidgetInstance;
+  kind: string;
+  glyph: string;
+  title: string;
+  detail?: string;
+}): ReactNode {
+  return (
+    <WidgetFrame title={optString(widget.options, 'title')}>
+      <StateBody kind={kind} glyph={glyph} title={title} detail={detail} />
+    </WidgetFrame>
+  );
+}
+
+// The pane's content, which gives way to the title as the widget shrinks (the glyph first, then the
+// explanation), so a small widget never draws it clipped. Unmeasured, it shows everything.
+function StateBody({ kind, glyph, title, detail }: { kind: string; glyph: string; title: string; detail?: string }): ReactNode {
+  const { height } = useWidgetScale().size;
+  const measured = height > 0;
+  return (
+    <div role="status" data-empty-state={kind} style={STATE_STYLE}>
+      {!measured || height >= 84 ? <div style={{ fontSize: 20, lineHeight: 1 }} aria-hidden="true">{glyph}</div> : null}
+      <div style={{ fontSize: 13, fontWeight: 600 }}>{title}</div>
+      {detail && (!measured || height >= 64) ? <div style={{ fontSize: 11, opacity: 0.8, wordBreak: 'break-word' }}>{detail}</div> : null}
+    </div>
+  );
+}
+
+// Shown when the platform refused the widget's read for the viewer.
 function WidgetForbiddenFrame({ widget }: { widget: WidgetInstance }): ReactNode {
-  return (
-    <WidgetFrame title={optString(widget.options, 'title')}>
-      <div role="status" style={STATE_STYLE}>
-        <div style={{ fontSize: 20, lineHeight: 1 }} aria-hidden="true">⊘</div>
-        <div style={{ fontSize: 13, fontWeight: 600 }}>{accessStrings().forbidden}</div>
-      </div>
-    </WidgetFrame>
-  );
+  return <StatePane widget={widget} kind="forbidden" glyph="⊘" title={accessStrings().forbidden} />;
 }
 
-// WidgetUnavailableFrame is shown when a widget's bound device no longer exists (a
-// deleted device's stable token). Distinct from the error frame: not a transient
-// failure to retry, but a settled "this entity is gone" — so it reads as a state, not
-// an error.
+// Shown when a widget's bound device no longer exists (a deleted device's stable token). Distinct
+// from the error frame: not a transient failure to retry, but a settled "this entity is gone".
 function WidgetUnavailableFrame({ widget }: { widget: WidgetInstance }): ReactNode {
-  return (
-    <WidgetFrame title={optString(widget.options, 'title')}>
-      <div
-        style={STATE_STYLE}
-      >
-        <div style={{ fontSize: 20, lineHeight: 1 }} aria-hidden="true">⊘</div>
-        <div style={{ fontSize: 13, fontWeight: 600 }}>Device unavailable</div>
-        <div style={{ fontSize: 11, opacity: 0.8 }}>The bound device no longer exists.</div>
-      </div>
-    </WidgetFrame>
-  );
+  return <StatePane widget={widget} kind="gone" glyph="⊘" title="Device unavailable" detail="The bound device no longer exists." />;
 }
 
-// WidgetNotForCustomerUsersFrame is shown when the platform does not offer the widget's binding to
-// the viewer at all: a member limited to some customers viewing a widget bound to an area or an
-// asset. A settled state, not a failure to retry, and not "no access" either, since nothing the
-// member could be granted would change it -- so the dashboard's author knows to bind it otherwise.
+// Shown when the platform does not offer the widget's binding to the viewer at all: a member limited
+// to some customers viewing a widget bound to an area or an asset. A settled state, not a failure to
+// retry, and not "no access" either, since nothing the member could be granted would change it -- so
+// the dashboard's author knows to bind it otherwise.
 function WidgetNotForCustomerUsersFrame({ widget }: { widget: WidgetInstance }): ReactNode {
   return (
-    <WidgetFrame title={optString(widget.options, 'title')}>
-      <div
-        role="status"
-        style={STATE_STYLE}
-      >
-        <div style={{ fontSize: 20, lineHeight: 1 }} aria-hidden="true">⊘</div>
-        <div style={{ fontSize: 13, fontWeight: 600 }}>Not available for customer users</div>
-        <div style={{ fontSize: 11, opacity: 0.8 }}>
-          This widget is bound to an area or an asset, which customer users cannot view.
-        </div>
-      </div>
-    </WidgetFrame>
+    <StatePane
+      widget={widget}
+      kind="unsupported"
+      glyph="⊘"
+      title="Not available for customer users"
+      detail="This widget is bound to an area or an asset, which customer users cannot view."
+    />
   );
 }
 
-// A resolution/socket error surfaces as a muted error state rather than a blank pane.
-// Shared by both the measurement and alarm channels.
+// A resolution/socket error surfaces as a muted state rather than a blank pane. Shared by the
+// measurement and alarm channels.
 //
-// A REFUSAL is not such an error: a member limited to part of the tenant, viewing a widget
-// bound to a customer or device outside it, is refused by design. It reads as the same plain
-// state the fleet widgets show ("You do not have access to this data"), never as "Data
-// unavailable" over the server's raw "forbidden: missing required authority".
+// A REFUSAL is not such an error: a member limited to part of the tenant, viewing a widget bound to a
+// customer or device outside it, is refused by design. It reads as the same plain state the fleet
+// widgets show ("You do not have access to this data"), never as "Data unavailable" over the
+// server's raw "forbidden: missing required authority".
 function WidgetErrorFrame({ widget, error }: { widget: WidgetInstance; error: unknown }): ReactNode {
   if (isForbiddenError(error)) return <WidgetForbiddenFrame widget={widget} />;
-  return (
-    <WidgetFrame title={optString(widget.options, 'title')}>
-      <div
-        style={STATE_STYLE}
-      >
-        <div style={{ fontSize: 20, lineHeight: 1 }}>⚠</div>
-        <div style={{ fontSize: 13, fontWeight: 600 }}>Data unavailable</div>
-        <div style={{ fontSize: 11, opacity: 0.8, wordBreak: 'break-word' }}>{String(error)}</div>
-      </div>
-    </WidgetFrame>
-  );
+  return <StatePane widget={widget} kind="error" glyph="…" title="Data unavailable" detail={String(error)} />;
 }
