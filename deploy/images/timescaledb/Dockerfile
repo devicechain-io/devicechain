@@ -35,7 +35,7 @@
 # is offering raw Timescale to tenants as a database service; DeviceChain does
 # not, and must not.
 
-ARG PG_IMAGE=ghcr.io/cloudnative-pg/postgresql:17.10-standard-bookworm@sha256:f94c0eea2a7e9d40880adebd27a912d8473d5805a99c4dbc6eb6244ad9770620
+ARG PG_IMAGE=ghcr.io/cloudnative-pg/postgresql:17.11-standard-bookworm@sha256:0d0e407ca1d986022651671e830022ccfe496994a8b99fe925b5ae3f0264cb1a
 FROM ${PG_IMAGE}
 
 ARG PG_MAJOR=17
