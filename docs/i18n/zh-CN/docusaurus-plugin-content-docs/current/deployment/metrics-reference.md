@@ -16,7 +16,7 @@ title: 指标参考
 
 前缀：`devicechain_commanddelivery_`。
 
-三条[指令投递告警](./observability.md#command-delivery-alerts)读取 `command_delivery_claims_stranded_total`、`command_delivery_presence_read_errors_total` 和 `batch_refusals_total{bound="reserve"}`。指令投递仪表盘绘制其余指标。其中有几项预期会很繁忙，并不是故障：被拒绝的触发中稳定的 `not_sole` 占比、因扫描与触发竞争而丢失的领取，以及设备离线期间产生的扣留。`command_delivery_responses_refused_total` 预期为零。`command_delivery_stranded_observed_total` 或 `command_response_lost_unsettled_total` 的速率上升，表示指令正在对没有做错任何事的设备超时。（旧名称中重复的 `command_delivery_` 是历史遗留并保持不变，因为重命名序列会破坏所有读取它的仪表盘。）
+三条[指令投递告警](./observability.md#command-delivery-alerts)读取 `command_delivery_claims_stranded_total`、`command_delivery_presence_read_errors_total` 和 `batch_refusals_total{bound="reserve"}`。指令投递仪表盘绘制设备群写入计数器以及主要的领取、扣留和在线状态计数器；其余指标可用于临时查询和您自己的面板。其中有几项预期会很繁忙，并不是故障：被拒绝的触发中稳定的 `not_sole` 占比、因扫描与触发竞争而丢失的领取，以及设备离线期间产生的扣留。`command_delivery_responses_refused_total` 预期为零。`command_delivery_stranded_observed_total` 或 `command_response_lost_unsettled_total` 的速率上升，表示指令正在对没有做错任何事的设备超时。（旧名称中重复的 `command_delivery_` 是历史遗留并保持不变，因为重命名序列会破坏所有读取它的仪表盘。）
 
 | 指标 | 含义 |
 | --- | --- |
