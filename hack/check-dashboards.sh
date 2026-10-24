@@ -557,7 +557,9 @@ for (form, suffix) in sorted(regex_seen):
 # reads series that other software exports -- the database operator's monitoring queries,
 # kube-state-metrics, the kubelet, the backup plugin -- and for those there is no Go literal to
 # look up, so a misspelling (`cnpg_pg_database_size_byte`) drew an empty graph that looked like
-# a quiet database. They are pinned HERE, by exact name. A board naming one of these families
+# a quiet database. They are pinned HERE, by exact name, in the same EXTERNAL_PREFIXES /
+# EXTERNAL_SERIES shape the platform board uses for kube-state-metrics, cAdvisor, Go and process
+# series, so the two lists are one list once both land. A board naming one of these families
 # with a name that is not in the list fails; adding a name is the moment to confirm it against
 # the exporter's source or a live scrape.
 #
@@ -569,7 +571,7 @@ for (form, suffix) in sorted(regex_seen):
 #                        deploy/opentofu/modules/monitoring.
 #   barman_cloud_*       the Barman Cloud plugin; the alert rules read the same name.
 #   kubelet_volume_*     the kubelet's volume statistics; the storage alert rules read them.
-EXTERNAL_PREFIXES = ("cnpg_", "kube_", "kubelet_", "barman_cloud_")
+EXTERNAL_PREFIXES = ("barman", "cnpg", "kube", "kubelet")
 EXTERNAL_SERIES = {
     "cnpg_backends_max_tx_duration_seconds",
     "cnpg_backends_total",
@@ -592,9 +594,9 @@ EXTERNAL_SERIES = {
     "kubelet_volume_stats_capacity_bytes",
     "kubelet_volume_stats_used_bytes",
 }
-external_re = re.compile(r"(?<![A-Za-z0-9_])(?:%s)[a-z0-9_]+" % "|".join(EXTERNAL_PREFIXES))
+EXTERNAL_RE = re.compile(r"\b(?:%s)_[a-z0-9_]+" % "|".join(EXTERNAL_PREFIXES))
 for rel, text in sorted(dashboard_texts.items()):
-    for name in sorted(set(external_re.findall(text))):
+    for name in sorted(set(EXTERNAL_RE.findall(text))):
         if name not in EXTERNAL_SERIES:
             problems.append(
                 "%s names %s, which is neither a DeviceChain series nor in EXTERNAL_SERIES in\n"
