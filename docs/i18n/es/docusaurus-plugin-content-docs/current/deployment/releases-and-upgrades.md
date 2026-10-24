@@ -3932,10 +3932,11 @@ No hay que hacer nada.
 
 ### v0.25.1 — las imágenes de las bases de datos y del almacén de respaldos, reconstruidas por avisos de seguridad actuales {#v0251-upgrade}
 
-`v0.25.1` es un parche de `v0.25.0`. No cambia ningún código de DeviceChain: no hay migración, y no cambia
-ninguna API, tema, permiso, valor del chart ni clave de configuración. Mueve las tres imágenes de terceros
-sobre las que el clúster y cada instancia ejecutan sus bases de datos y su almacén de respaldos a
-compilaciones que ya no llevan los avisos de seguridad que se enumeran abajo. Todo lo que describe la
+`v0.25.1` es un parche de `v0.25.0`. No hay migración, y no cambia ninguna API, tema, permiso, valor del
+chart ni clave de configuración. Mueve las tres imágenes de terceros sobre las que el clúster y cada
+instancia ejecutan sus bases de datos y su almacén de respaldos a compilaciones que ya no llevan los avisos
+de seguridad que se enumeran abajo, y corrige lo que dos servicios informan a Prometheus y los paneles de
+Grafana que el chart incluye para ellos (consulta [Las métricas y los paneles](#v0251-metrics)). Todo lo que describe la
 [sección de la v0.25.0](#v0250-upgrade) sigue siendo lo que estás ejecutando.
 
 Actualiza el clúster y después cada instancia. Pasa a `dcctl install` los ajustes con los que se instaló
@@ -3968,6 +3969,22 @@ ficheros de datos se conservan tal cual y no se vuelca ni se restaura nada. Time
 Analizada con Trivy en busca de avisos altos y críticos que tengan corrección, ninguna de las imágenes
 nuevas informa de ninguno.
 
+#### Las métricas y los paneles {#v0251-metrics}
+
+- **`event-processing` pone a cero sus indicadores exclusivos del líder cuando una réplica deja de serlo.**
+  Una réplica que había perdido la concesión de detección seguía exportando el retraso, la demora y los
+  tamaños de estado de su último mandato. El panel y las alertas `DetectConsumerBacklogHigh`,
+  `DetectWatermarkLagHigh` y `DetectTenantOverStateBudget` toman la lectura más alta entre réplicas, así
+  que esa lectura congelada podía mostrar un retraso que ninguna réplica tenía e impedir que una alerta se
+  resolviera. Una réplica en espera informa ahora cero para ellos. El recuento de reglas cargadas no
+  cambia, porque todas las réplicas cargan las reglas.
+- **`command-delivery` exporta sus contadores de lotes de comandos a cero desde el arranque**, de modo que
+  su panel muestra cero en lugar de "No data" antes del primer lote, y un `increase()` sobre ellos ve el
+  primero.
+- **Se corrigen los dos paneles que incluye el chart:** sus series coinciden con lo que exportan los
+  servicios, los eventos poco frecuentes se muestran como recuentos, los gráficos que mezclaban unidades se
+  separan y se añaden gráficos para el presupuesto de muestras retenidas.
+
 #### Qué esperar {#v0251-during}
 
 - **`dcctl install` reinicia una vez las instancias de la base de datos relacional**, sobre la imagen
@@ -3988,7 +4005,7 @@ nuevas informa de ninguno.
   del almacén ejecuta la imagen nueva antes de mover los servicios. Los ajustes del bróker de mensajes no
   cambian, así que sus servidores no se reinician.
 - **Los servicios pasan a las imágenes `v0.25.1`** pod a pod, como en cualquier actualización. Su código
-  es el mismo que el de `v0.25.0`.
+  es el mismo que el de `v0.25.0`, salvo los dos cambios de métricas de arriba.
 - **Si replicas imágenes en un registro propio,** replica las tres referencias nuevas de arriba antes de
   actualizar, y las imágenes de DeviceChain `v0.25.1` como siempre.
 - **Si fijaste `timescale_image` tú mismo** en el `terraform.tfvars` junto al estado de infraestructura de

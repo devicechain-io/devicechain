@@ -3660,10 +3660,11 @@ Nothing needs doing.
 
 ### v0.25.1 — the database and backup-store images, rebuilt for current advisories {#v0251-upgrade}
 
-`v0.25.1` is a patch for `v0.25.0`. It changes no DeviceChain code: there is no migration, and no API,
-topic, permission, chart value or configuration key changes. It moves the three third-party images the
-cluster and each instance run their databases and backup store on to builds that no longer carry the
-advisories listed below. Everything the [v0.25.0 section](#v0250-upgrade) describes is still what you are
+`v0.25.1` is a patch for `v0.25.0`. There is no migration, and no API, topic, permission, chart value or
+configuration key changes. It moves the three third-party images the cluster and each instance run their
+databases and backup store on to builds that no longer carry the advisories listed below, and it corrects
+what two services report to Prometheus and the Grafana boards the chart ships for them (see
+[The metrics and the boards](#v0251-metrics)). Everything the [v0.25.0 section](#v0250-upgrade) describes is still what you are
 running.
 
 Upgrade the cluster, then each instance. Give `dcctl install` the settings the cluster was installed with,
@@ -3694,6 +3695,20 @@ that base. PostgreSQL moves from 17.10 to 17.11, a minor release: the data files
 nothing is dumped or restored. TimescaleDB stays at 2.28.3. Scanned with Trivy for high and critical
 advisories that have a fix, each new image reports none.
 
+#### The metrics and the boards {#v0251-metrics}
+
+- **`event-processing` zeroes its leader-only gauges when a replica stops leading.** A replica that had
+  lost the detection lease kept exporting the backlog, lag and state sizes of its last term. The
+  board and the `DetectConsumerBacklogHigh`, `DetectWatermarkLagHigh` and `DetectTenantOverStateBudget`
+  alerts take the highest reading across replicas, so that frozen reading could show a backlog no replica
+  had and keep an alert from clearing. A standby now reports zero for them. The count of loaded rules is
+  not affected, since every replica loads the rules.
+- **`command-delivery` exports its command-batch counters at zero from start**, so its board reads zero
+  rather than "No data" before the first batch, and an `increase()` over them sees the first one.
+- **The two boards the chart ships are corrected:** their series match what the services export, rare
+  events are shown as counts, panels that mixed units are split, and panels for the retained-sample
+  budget are added.
+
 #### What to expect {#v0251-during}
 
 - **`dcctl install` restarts the relational database's instances once**, onto the new image: under `--ha`
@@ -3710,7 +3725,7 @@ advisories that have a fix, each new image reports none.
   the ingest stream and are retried; one is given up on only after about four minutes of failed retries. The upgrade waits until every instance of the store runs the new image before it moves the
   services. The message broker's settings do not change, so its servers do not restart.
 - **The services roll onto the `v0.25.1` images** one pod at a time, as in any upgrade. Their code is the
-  same as `v0.25.0`'s.
+  same as `v0.25.0`'s apart from the two metric changes above.
 - **If you mirror images,** mirror the three new references above before you upgrade, and the `v0.25.1`
   DeviceChain images as usual.
 - **If you set `timescale_image` yourself** in the `terraform.tfvars` beside an instance's infrastructure
