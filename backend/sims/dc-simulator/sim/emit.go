@@ -400,9 +400,8 @@ func eventTimestamp() string {
 // 🔴 THE CREDENTIAL IS IN THE BODY BECAUSE THIS IS HTTP, AND ONLY BECAUSE OF THAT. HTTP has no
 // transport authentication, so the body is the only thing that authenticates the event. The
 // platform MQTT broker is the opposite: it authenticates the CONNECT and REFUSES an event whose
-// body carries a credential, so a future MQTT emit path must not reuse this builder. The
-// simulator emits no events over MQTT today (its MQTT leg carries command responses, which
-// have no credential), and a test pins both halves.
+// body carries a credential, so an MQTT emit path must not reuse this builder: the load
+// harness's MQTT wire uses MQTTEventBody, and a test pins both halves.
 func httpEventBody(d DeviceInstance, eventType, occurredTime string, payload map[string]interface{}) ([]byte, error) {
 	credType := credentialTypeAccessToken
 	credId := d.CredentialId
@@ -419,6 +418,40 @@ func httpEventBody(d DeviceInstance, eventType, occurredTime string, payload map
 		return nil, fmt.Errorf("marshal event: %w", err)
 	}
 	return body, nil
+}
+
+// MQTTEventBody builds the body a device publishes to its own events topic on the platform
+// MQTT gateway.
+//
+// 🔴 IT CARRIES NO CREDENTIAL, ON PURPOSE. The broker authenticated the CONNECT (the device's
+// ACCESS_TOKEN as the username), so the body has nothing to prove, and the gateway REFUSES an
+// event whose body presents one. This is the counterpart of httpEventBody, which carries it
+// because HTTP has no transport authentication; neither builder may be used for the other
+// transport. TestMQTTEventBodyCarriesNoCredential and TestHTTPEventBodyCarriesTheCredential pin
+// the two halves.
+func MQTTEventBody(d DeviceInstance, eventType, occurredTime string, payload map[string]interface{}) ([]byte, error) {
+	body, err := json.Marshal(processor.JsonEvent{
+		Device:       d.Token,
+		EventType:    eventType,
+		OccurredTime: &occurredTime,
+		Payload:      payload,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal event: %w", err)
+	}
+	return body, nil
+}
+
+// EventWire carries an event to the platform in place of the HTTP ingress. It is the seam that
+// lets the load harness drive the SAME scenarios over another device transport (MQTT) without a
+// second copy of any scenario: Runtime.Wire, when set, is where postEvent sends.
+//
+// A wire owns its whole contract: it builds the body its transport needs, waits for the
+// transport's own acknowledgement, files the outcome in rt.Identity (accepted only on a real
+// acknowledgement, ambiguous when the outcome is unknown, refused only when nothing was sent),
+// and returns nil exactly when the event was acknowledged.
+type EventWire interface {
+	Post(ctx context.Context, rt *Runtime, d DeviceInstance, eventType, occurredTime string, payload map[string]interface{}) error
 }
 
 // postEvent is the wire tail every emitter shares: it wraps payload in the
@@ -444,6 +477,9 @@ func httpEventBody(d DeviceInstance, eventType, occurredTime string, payload map
 // on one reading, which is exactly the kind of difference nobody notices.
 func postEvent(ctx context.Context, rt *Runtime, d DeviceInstance,
 	eventType, occurredTime string, payload map[string]interface{}) error {
+	if rt.Wire != nil {
+		return rt.Wire.Post(ctx, rt, d, eventType, occurredTime, payload)
+	}
 	body, err := httpEventBody(d, eventType, occurredTime, payload)
 	if err != nil {
 		return err
