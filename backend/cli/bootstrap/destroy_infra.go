@@ -104,7 +104,7 @@ func destroyInstanceRoot(ctx context.Context, kubeContext, instance string) (err
 	if err := tf.Init(ctx); err != nil {
 		return fmt.Errorf("tofu init: %w", err)
 	}
-	return destroyOpenedInstanceRoot(ctx, tf, kubeContext, instance, uninstallProviderRelease)
+	return destroyOpenedInstanceRoot(ctx, tf, kubeContext, instance, destroyUninstaller)
 }
 
 // destroyOpenedInstanceRoot is the teardown itself, over an initialised root.
@@ -154,7 +154,8 @@ func destroyOpenedInstanceRoot(ctx context.Context, tf destroyTofu, kubeContext,
 	}
 
 	// 🔴 instance_namespace HAS NO DEFAULT, and omitting it fails the destroy (measured).
-	// The two variables are what a destroy plan needs to reach the cluster; nothing else
+	// With the kubeconfig path and context tofuExec pins itself, these are the variables a
+	// destroy plan needs to reach the cluster; nothing else
 	// this run decides changes what the state says to remove. The same two are why the
 	// plan's output values would be the configuration's defaults rather than this
 	// instance's: tofuExec.Destroy leaves that list out instead of passing the instance's
@@ -217,6 +218,10 @@ func preSplitDestroyRefusal(instance string, found []string, releaseUninstalled 
 			"store in %s. To remove those as well, delete and recreate the cluster",
 		instance, len(found), strings.Join(found, "\n  "), removed, infraNamespace)
 }
+
+// destroyUninstaller is the release uninstall destroyInstanceRoot runs; a variable only so
+// a test can drive that function without a cluster.
+var destroyUninstaller providerReleaseUninstaller = uninstallProviderRelease
 
 // uninstallProviderRelease removes a release the instance root's Helm provider created.
 //

@@ -51,22 +51,60 @@ func (p kubePin) release() {
 // default for a setting the configuration leaves unset. The roots set only the
 // kubeconfig path and context, so any of these would silently override part of the
 // cluster those name -- KUBE_HOST replaces the server of whatever context was chosen.
+//
+// KUBE_CONFIG_PATH, KUBE_CONFIG_PATHS and KUBE_CTX are deliberately NOT here: both roots
+// always set config_path and a non-empty config_context, and those variables only
+// default an attribute that is unset, so they cannot override the pin. Refusing them
+// would turn operators away for nothing.
 var providerOverrideEnv = []string{
-	"KUBE_CONFIG_PATH", "KUBE_CONFIG_PATHS", "KUBE_CTX", "KUBE_CTX_AUTH_INFO",
-	"KUBE_CTX_CLUSTER", "KUBE_HOST", "KUBE_USER", "KUBE_PASSWORD", "KUBE_TOKEN",
+	"KUBE_CTX_AUTH_INFO", "KUBE_CTX_CLUSTER", "KUBE_HOST", "KUBE_USER", "KUBE_PASSWORD", "KUBE_TOKEN",
 	"KUBE_CLIENT_CERT_DATA", "KUBE_CLIENT_KEY_DATA", "KUBE_CLUSTER_CA_CERT_DATA",
 	"KUBE_INSECURE", "KUBE_TLS_SERVER_NAME", "KUBE_PROXY_URL",
 }
 
-// clientClusterIdentity is the identity of the cluster dcctl's own clients reach for a
-// kube-context. A variable only so a test can make the two halves disagree, which cannot
-// otherwise happen.
-var clientClusterIdentity = func(kubeContext string) (string, error) {
-	cfg, err := RestConfig(kubeContext)
+// kubeTarget is the cluster a tofu runner is allowed to act on, FROZEN when the runner is
+// built: a concrete context name and the identity (server and CA) of the cluster the
+// client reaches for it.
+//
+// FROZEN, NOT RE-DERIVED. With no --kube-context the context is the kubeconfig's
+// current-context, and another process running `kubectl config use-context` mid-run
+// would retarget a pin that re-derived it while dcctl's already-built clients kept the old
+// cluster. Every later pin must reach the identity recorded here, so that move (or a
+// rebuilt cluster wearing the same context name) is a refusal.
+type kubeTarget struct {
+	Context  string
+	Identity string
+}
+
+// freezeKubeTarget resolves kubeContext ("" = the current context) to a concrete name
+// and records the identity of the cluster dcctl's own clients reach for it.
+func freezeKubeTarget(kubeContext string) (kubeTarget, error) {
+	rules := clientcmd.NewDefaultClientConfigLoadingRules()
+	raw, err := rules.Load()
 	if err != nil {
-		return "", err
+		return kubeTarget{}, fmt.Errorf("reading the kubeconfig: %w", err)
 	}
-	return restIdentity(cfg)
+	name := kubeContext
+	if name == "" {
+		name = raw.CurrentContext
+	}
+	if name == "" {
+		return kubeTarget{}, fmt.Errorf("the kubeconfig names no current context and none was given with " +
+			"--kube-context, so there is no cluster to apply to")
+	}
+	if _, ok := raw.Contexts[name]; !ok {
+		return kubeTarget{}, fmt.Errorf("kube-context %q is not in the kubeconfig dcctl reads (%s)",
+			name, strings.Join(rules.GetLoadingPrecedence(), string(os.PathListSeparator)))
+	}
+	cfg, err := RestConfig(name)
+	if err != nil {
+		return kubeTarget{}, fmt.Errorf("resolving the cluster dcctl's client reaches: %w", err)
+	}
+	id, err := restIdentity(cfg)
+	if err != nil {
+		return kubeTarget{}, err
+	}
+	return kubeTarget{Context: name, Identity: id}, nil
 }
 
 // restIdentity is the server URL plus a digest of the CA: what says which cluster a
@@ -84,14 +122,14 @@ func restIdentity(cfg *rest.Config) (string, error) {
 	return cfg.Host + " ca-sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
-// resolveKubePin resolves the cluster for kubeContext with client-go's rules and
-// verifies the result names the same cluster dcctl's clients reach. mergedDir is where a
+// resolveKubePin resolves the frozen target's context with client-go's rules and
+// verifies the result still names the cluster dcctl's clients were built against. mergedDir is where a
 // merged kubeconfig is written when KUBECONFIG lists several files; it must be owner-only.
 //
 // 🔴 IT REFUSES RATHER THAN FALLING BACK. An unresolvable context, no kubeconfig at all,
 // a provider override in the environment, or a pinned file that reaches a different
 // cluster than the client are all errors, never a default.
-func resolveKubePin(kubeContext, mergedDir string) (kubePin, error) {
+func resolveKubePin(target kubeTarget, mergedDir string) (kubePin, error) {
 	var set []string
 	for _, name := range providerOverrideEnv {
 		if os.Getenv(name) != "" {
@@ -109,14 +147,7 @@ func resolveKubePin(kubeContext, mergedDir string) (kubePin, error) {
 	if err != nil {
 		return kubePin{}, fmt.Errorf("reading the kubeconfig: %w", err)
 	}
-	ctxName := kubeContext
-	if ctxName == "" {
-		ctxName = raw.CurrentContext
-	}
-	if ctxName == "" {
-		return kubePin{}, fmt.Errorf("the kubeconfig names no current context and none was given with " +
-			"--kube-context, so there is no cluster to apply to")
-	}
+	ctxName := target.Context
 	if _, ok := raw.Contexts[ctxName]; !ok {
 		return kubePin{}, fmt.Errorf("kube-context %q is not in the kubeconfig dcctl reads (%s)",
 			ctxName, strings.Join(rules.GetLoadingPrecedence(), string(os.PathListSeparator)))
@@ -178,12 +209,7 @@ func resolveKubePin(kubeContext, mergedDir string) (kubePin, error) {
 		pin.release()
 		return kubePin{}, err
 	}
-	want, err := clientClusterIdentity(kubeContext)
-	if err != nil {
-		pin.release()
-		return kubePin{}, fmt.Errorf("resolving the cluster dcctl's client reaches: %w", err)
-	}
-	if want != pin.identity {
+	if want := target.Identity; want != pin.identity {
 		pin.release()
 		return kubePin{}, fmt.Errorf("refusing to run OpenTofu: it would target %s (kubeconfig %s, "+
 			"context %q) but dcctl's client is talking to %s. Nothing has been changed",

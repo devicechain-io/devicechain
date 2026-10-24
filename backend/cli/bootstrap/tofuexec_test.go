@@ -8,6 +8,7 @@ import (
 	"go/ast"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -26,6 +27,9 @@ import (
 // test can read the flags dcctl actually handed the CLI.
 func fakeTofu(t *testing.T) string {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("needs a POSIX fake tofu")
+	}
 	dir := t.TempDir()
 	script := `#!/bin/sh
 echo "DIAG-$1" >&2
@@ -119,6 +123,7 @@ func TestTofuExecStreamsProgressNotReads(t *testing.T) {
 // machine whose lock file predates a provider pin is moved onto the pin instead of
 // failing the version constraint on every command against that cluster.
 func TestTofuInitMovesTheLockToThePins(t *testing.T) {
+	testKube(t)
 	root, bin := t.TempDir(), fakeTofu(t)
 	var initErr error
 	captureStdoutAndStderr(t, func() {

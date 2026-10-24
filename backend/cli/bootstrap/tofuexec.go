@@ -44,10 +44,10 @@ type tofuExec struct {
 	// exercise the giving-up without waiting out a real budget; newTofuExec is the only
 	// thing that sets it in production.
 	abandonBudget time.Duration
-	// kubeContext is the --kube-context this runner acts under ("" = the current
-	// context). Every command that configures a provider re-resolves it into a kubePin
-	// and hands tofu that explicit file and context: see kubePin.
-	kubeContext string
+	// target is the cluster this runner acts on, frozen at construction. Every command
+	// that configures a provider re-resolves it into a kubePin and hands tofu that
+	// explicit file and context: see kubePin.
+	target kubeTarget
 	// planned is the identity of the cluster the last Plan was made against, so applying
 	// that saved plan can be refused if the cluster dcctl now reaches is another one.
 	planned string
@@ -172,6 +172,10 @@ func (f *outputsBlockFilter) line(line []byte) error {
 // kubeContext is the cluster the runner is allowed to act on. There is no way to build
 // a runner that resolves its own: Apply, Plan, Import and Destroy pin it (kubePin).
 func newTofuExec(rootdir, tofuBin, kubeContext string) (*tofuExec, error) {
+	target, err := freezeKubeTarget(kubeContext)
+	if err != nil {
+		return nil, err
+	}
 	tf, err := tfexec.NewTerraform(rootdir, tofuBin)
 	if err != nil {
 		return nil, err
@@ -179,7 +183,7 @@ func newTofuExec(rootdir, tofuBin, kubeContext string) (*tofuExec, error) {
 	stdout := &streamSwitch{w: io.Discard}
 	tf.SetStdout(stdout)
 	tf.SetStderr(os.Stderr)
-	return &tofuExec{Terraform: tf, stdout: stdout, abandonBudget: tofuAbandonBudget, kubeContext: kubeContext}, nil
+	return &tofuExec{Terraform: tf, stdout: stdout, abandonBudget: tofuAbandonBudget, target: target}, nil
 }
 
 // tofuAbandonBudget is how long dcctl goes on waiting for an INTERRUPTED tofu command
@@ -309,7 +313,7 @@ func (t *tofuExec) Init(ctx context.Context) error {
 // pin resolves the cluster for one provider-configuring command. The merged kubeconfig
 // a multi-file KUBECONFIG needs lives beside the root's directory, which is owner-only.
 func (t *tofuExec) pin() (kubePin, error) {
-	return resolveKubePin(t.kubeContext, filepath.Dir(t.WorkingDir()))
+	return resolveKubePin(t.target, filepath.Dir(t.WorkingDir()))
 }
 
 // pinVars are the two -var settings that make a command act on the pin. They are
@@ -350,19 +354,21 @@ func usesSavedPlan(opts []tfexec.ApplyOption) bool {
 	return false
 }
 
-// Plan pins like Apply. Its stdout stays quiet (the plan is read back from the file),
-// and the merged kubeconfig, if any, is kept: the saved plan names it and the apply of
-// that plan re-writes it.
+// Plan pins like Apply. Its stdout stays quiet (the plan is read back from the file).
+// The merged kubeconfig, if any, is removed when Plan returns, like every other command's:
+// a plan that is never applied (a rehearsal, a refusal, an error) must not leave
+// credentials on disk. The saved plan names that path, and the apply of it re-pins,
+// which writes the file again.
 func (t *tofuExec) Plan(ctx context.Context, opts ...tfexec.PlanOption) (bool, error) {
 	p, err := t.pin()
 	if err != nil {
 		return false, err
 	}
+	defer p.release()
 	path, kctx := pinVars(p)
 	opts = append(append([]tfexec.PlanOption(nil), opts...), path, kctx)
 	changed, err := t.Terraform.Plan(ctx, opts...)
 	if err != nil {
-		p.release()
 		return changed, err
 	}
 	t.planned = p.identity

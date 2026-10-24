@@ -7,6 +7,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -86,6 +87,9 @@ const destroyTranscriptBlock = `Changes to Outputs:
 // command it did not mean to run.
 func fakeTofuPrinting(t *testing.T, sub, text string) string {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("needs a POSIX fake tofu")
+	}
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, sub+"-out"), []byte(text), 0o600); err != nil {
 		t.Fatal(err)

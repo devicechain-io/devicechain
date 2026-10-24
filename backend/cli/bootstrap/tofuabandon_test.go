@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -125,6 +126,9 @@ func TestALiveCommandIsNeverAbandoned(t *testing.T) {
 // is real BEFORE the interrupt, because a fixture that stopped reproducing it would
 // leave a green test proving nothing.
 func TestAnInterruptedApplyWhoseOutputPipeIsHeldIsAbandoned(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("needs a POSIX fake tofu")
+	}
 	testKube(t)
 	dir := t.TempDir()
 	ready := filepath.Join(dir, "spawned")

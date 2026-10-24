@@ -6,8 +6,9 @@
 #
 # WHY THIS EXISTS
 #
-# dcctl destroy runs `tofu destroy` on the instance root with only the two variables it
-# needs to reach the cluster. A destroy first refreshes in normal mode, which works every
+# dcctl destroy runs `tofu destroy` on the instance root with only the variables it
+# needs to reach the cluster (the kubeconfig path and context, which tofuExec pins, and
+# the instance namespace). A destroy first refreshes in normal mode, which works every
 # output value out again from the configuration and the variables it was given, so the
 # plan's closing "Changes to Outputs:" list printed the configuration's DEFAULTS for every
 # other input: one broker server for a three-server instance, the default backup path for
@@ -72,7 +73,7 @@ if [ "$applied" != "3" ]; then
   exit 1
 fi
 
-# No -var: that is what dcctl passes for every variable but two.
+# No -var: that is what dcctl passes for every variable but the three that reach the cluster.
 out="$("$TOFU" destroy -auto-approve -input=false -no-color)"
 
 if ! grep -qxF -- "$header" <<<"$out"; then
