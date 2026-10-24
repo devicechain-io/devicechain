@@ -97,20 +97,12 @@ func TestTheBootstrapCommandWiresTheObjectStore(t *testing.T) {
 					resolveCalls++
 				}
 			}
-		case *ast.CompositeLit:
-			if sel, ok := n.Type.(*ast.SelectorExpr); ok && sel.Sel.Name == "State" {
-				for _, el := range n.Elts {
-					kv, _ := el.(*ast.KeyValueExpr)
-					if kv == nil {
-						continue
-					}
-					switch kv.Key.(*ast.Ident).Name {
-					case "ObjectStore":
-						stateStore = kv.Value
-					case "ObjectStoreExplicit":
-						stateExplicit = kv.Value
-					}
-				}
+		}
+		// The State is built by bootstrapStateFor (split out of RunE so its field copies are
+		// testable); the resolved store and the explicit flag are its 9th and 10th arguments.
+		if call, ok := n.(*ast.CallExpr); ok {
+			if id, ok := call.Fun.(*ast.Ident); ok && id.Name == "bootstrapStateFor" && len(call.Args) >= 10 {
+				stateStore, stateExplicit = call.Args[8], call.Args[9]
 			}
 		}
 		return true

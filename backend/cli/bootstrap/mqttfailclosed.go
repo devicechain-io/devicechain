@@ -95,6 +95,20 @@ func ValidateMqttFailClosed(on *bool, profile string, extraAreas []string) error
 	return nil
 }
 
+// verifyFailClosedRecorded refuses a declaration that came back without the choice this run
+// asked it to keep. The API server prunes a field its CRD's schema does not declare, so a
+// cluster whose Instance definition predates the field accepts the write, drops the field and
+// reports success; the next flagless upgrade would then render the platform default over an
+// instance the operator turned the setting on (or off) for.
+func verifyFailClosedRecorded(want, got *bool) error {
+	if want == nil || sameBoolPtr(want, got) {
+		return nil
+	}
+	return fmt.Errorf("this cluster's Instance definition does not record mqttFailClosed (the declaration " +
+		"came back without the choice this run asked it to keep), so a later upgrade would not know it. " +
+		"Run `dcctl install` to move the cluster's definitions onto this release, then run this again")
+}
+
 // applyMqttFailClosed writes the choice into infrastructure.nats.mqttFailClosed. Nothing
 // is written when the operator never chose, so the chart's default stands.
 func applyMqttFailClosed(natsVals map[string]interface{}, st *State) {
@@ -115,7 +129,7 @@ func sayMqttFailClosed(st *State) {
 		return
 	}
 	fmt.Printf("  %s %s\n", color.WhiteString("MQTT fail-closed:"), color.GreenString(
-		"on: a QoS 1 publish is refused, not acknowledged, while the capture stream has no leader; the ingest ceiling is lower than with it off"))
+		"on: a QoS 1 publish is refused, not acknowledged, while the broker's MQTT message store has no leader; the ingest ceiling is lower than with it off"))
 	if !st.HA {
 		fmt.Printf("  %s\n", color.YellowString(
 			"  this cluster was installed without --ha: with one broker replica a node crash can lose what the file store had not yet synced, so a PUBACK is not a durability promise there"))

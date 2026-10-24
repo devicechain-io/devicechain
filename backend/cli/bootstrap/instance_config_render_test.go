@@ -237,11 +237,17 @@ func TestRenderedReservationFitsTheJetStreamStore(t *testing.T) {
 			"resources available\"", reserved, maxFileStore)
 	}
 	// L5: with infrastructure.nats.mqttFailClosed on, the message store takes the capture
-	// stream's ceiling instead of the safety cap, and the capture stream keeps its own. The
-	// chart does not set the key (it is refused in this release), so it is turned on here, on
-	// the ceilings the chart rendered, which is what an operator turning it on would get.
-	n.MqttFailClosed = true
-	onReserved := reserved - cfg.Infrastructure.Nats.MqttStoreReservation() + n.MqttStoreReservation()
+	// stream's ceiling instead of the safety cap, and the capture stream keeps its own. It is
+	// turned on the way dcctl turns it on -- through the State's choice (--mqtt-fail-closed),
+	// rendered by the chart -- so what is measured is the document an operator who asked for it
+	// gets, on the ceilings the chart rendered.
+	onSt := compactState(false)
+	onSt.MqttFailClosed = boolPtr(true)
+	on := renderFromState(t, onSt).Infrastructure.Nats
+	if !on.MqttFailClosed {
+		t.Fatal("--mqtt-fail-closed did not reach the rendered document, so the 'on' reservation below measures nothing")
+	}
+	onReserved := reserved - cfg.Infrastructure.Nats.MqttStoreReservation() + on.MqttStoreReservation()
 	if onReserved <= reserved {
 		t.Fatalf("premise: with mqttFailClosed on the reservation grows (%d B, from %d B)", onReserved, reserved)
 	}
