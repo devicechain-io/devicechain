@@ -111,6 +111,7 @@ BOARDS=(
   command-delivery
   event-processing
   overview
+  persistence
 )
 # ...and the two published names, spelled out from that list. This is the only
 # place they are derived: the list above is the literal, the names below are what
@@ -272,6 +273,7 @@ dashboards = sorted(
 if not dashboards:
     sys.exit("no dashboards found under %s -- this check would pass by looking at nothing" % dashboard_dir)
 
+dashboard_texts = {}
 for path in dashboards:
     with open(path, "rb") as fh:
         raw = fh.read()
@@ -285,6 +287,7 @@ for path in dashboards:
             % (os.path.relpath(path, root), exc)
         )
         continue
+    dashboard_texts[os.path.relpath(path, root)] = raw.decode("utf-8")
     problems.extend(published_text_problems(board, os.path.relpath(path, root)))
     problems.extend(convention_problems(
         board, os.path.basename(path)[:-len(".json")], os.path.relpath(path, root)))
@@ -548,6 +551,59 @@ for (form, suffix) in sorted(regex_seen):
             "    evaluates an empty vector, which is not false -- it never fires and never\n"
             "    complains."
             % (form, suffix, ", ".join(sorted(regex_seen[(form, suffix)])), suffix))
+
+# --- gap 6: a SERIES THIS PLATFORM DOES NOT REGISTER must be pinned by name ----
+# The platform's own series are vouched for above, against the Go registrations. A board also
+# reads series that other software exports -- the database operator's monitoring queries,
+# kube-state-metrics, the kubelet, the backup plugin -- and for those there is no Go literal to
+# look up, so a misspelling (`cnpg_pg_database_size_byte`) drew an empty graph that looked like
+# a quiet database. They are pinned HERE, by exact name, in the same EXTERNAL_PREFIXES /
+# EXTERNAL_SERIES shape the platform board uses for kube-state-metrics, cAdvisor, Go and process
+# series, so the two lists are one list once both land. A board naming one of these families
+# with a name that is not in the list fails; adding a name is the moment to confirm it against
+# the exporter's source or a live scrape.
+#
+#   cnpg_*, kube_cnpg_*  CloudNativePG 1.30.0 (chart 0.29.0): the default monitoring queries
+#                        (config/manager/default-monitoring.yaml, exported as
+#                        cnpg_<query>_<column>) and the built-in collector
+#                        (pkg/management/postgres/webserver/metricserver). kube_cnpg_* come
+#                        from the kube-state-metrics custom-resource config in
+#                        deploy/opentofu/modules/monitoring.
+#   barman_cloud_*       the Barman Cloud plugin; the alert rules read the same name.
+#   kubelet_volume_*     the kubelet's volume statistics; the storage alert rules read them.
+EXTERNAL_PREFIXES = ("barman", "cnpg", "kube", "kubelet")
+EXTERNAL_SERIES = {
+    "cnpg_backends_max_tx_duration_seconds",
+    "cnpg_backends_total",
+    "cnpg_collector_pg_wal_archive_status",
+    "cnpg_collector_up",
+    "cnpg_pg_database_size_bytes",
+    "cnpg_pg_database_xid_age",
+    "cnpg_pg_replication_lag",
+    "cnpg_pg_replication_streaming_replicas",
+    "cnpg_pg_settings_setting",
+    "cnpg_pg_stat_archiver_archived_count",
+    "cnpg_pg_stat_archiver_failed_count",
+    "cnpg_pg_stat_archiver_seconds_since_last_archival",
+    "cnpg_pg_stat_database_deadlocks",
+    "cnpg_pg_stat_database_xact_commit",
+    "cnpg_pg_stat_database_xact_rollback",
+    "barman_cloud_cloudnative_pg_io_last_available_backup_timestamp",
+    "kube_cnpg_cluster_condition",
+    "kubelet_volume_stats_available_bytes",
+    "kubelet_volume_stats_capacity_bytes",
+    "kubelet_volume_stats_used_bytes",
+}
+EXTERNAL_RE = re.compile(r"\b(?:%s)_[a-z0-9_]+" % "|".join(EXTERNAL_PREFIXES))
+for rel, text in sorted(dashboard_texts.items()):
+    for name in sorted(set(EXTERNAL_RE.findall(text))):
+        if name not in EXTERNAL_SERIES:
+            problems.append(
+                "%s names %s, which is neither a DeviceChain series nor in EXTERNAL_SERIES in\n"
+                "    hack/check-dashboards.sh. If it is a real series from the database operator,\n"
+                "    kube-state-metrics, the kubelet or the backup plugin, confirm its exact name against\n"
+                "    that exporter and add it there; if not, it is a typo and the panel draws an\n"
+                "    empty graph." % (rel, name))
 
 if problems:
     print("The chart's dashboards and alert rules do not hold up:\n", file=sys.stderr)
@@ -929,7 +985,7 @@ EOF
       "type": "timeseries",
       "targets": [
         {
-          "expr": "sum(rate(devicechain_selftestarea_probe_total{namespace=\"$namespace\"}[5m]))"
+          "expr": "sum(rate(devicechain_selftestarea_probe_total{namespace=\"$namespace\"}[5m])) + min(cnpg_collector_up)"
         },
         {
           "expr": "histogram_quantile(0.99, sum by (le) (rate(devicechain_selftestarea_lat_seconds_bucket[5m]))) / (sum(rate(devicechain_selftestarea_lat_seconds_sum[5m])) / sum(rate(devicechain_selftestarea_lat_seconds_count[5m]))) + rate(devicechain_selftestarea_sum_seconds_sum[5m]) + rate(devicechain_selftestarea_sum_seconds_count[5m])"
@@ -994,6 +1050,17 @@ EOF
   fi
   restore
   echo "  ok: a misspelled series in a dashboard is caught"
+
+  # Case 2x — A MISSPELLED EXTERNAL SERIES, alone. cnpg_collector_up is in the pinned list and
+  # the clean fixture uses it (Case 0 proves a pinned name passes); one letter off must fail.
+  sed -i 's/cnpg_collector_up/cnpg_collector_upp/' "$dash/probe.json"
+  grep -q 'cnpg_collector_upp' "$dash/probe.json" ||
+    fail "the external series mutation did not apply"
+  if check_content "$work" >/dev/null 2>&1; then
+    fail "did not flag a misspelled external series (cnpg_*) in a dashboard"
+  fi
+  restore
+  echo "  ok: a misspelled external series is caught, and a pinned one passes"
 
   # Cases 2h — HISTOGRAM-DERIVED SERIES. The clean fixture above already names
   # _bucket/_sum/_count of a histogram and _sum/_count of a summary, and Case 0
