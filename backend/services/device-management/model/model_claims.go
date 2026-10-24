@@ -69,7 +69,7 @@ type DeviceClaimRequest struct {
 // possession by presenting it redeems the claim into an ownership relationship.
 //
 // 🔴 THE SECRET IS NEVER STORED, ONLY ITS KEYED DIGEST. ClaimSecretDigest is what
-// credential.DeriveEnrollmentSecretKey's key made of the secret InitiateDeviceClaim
+// credential.DeriveEnrollmentSecretKeys's key made of the secret InitiateDeviceClaim
 // carried, bound to the claim's tenant, and NULL for a claim with none (which no presented
 // secret redeems). A presented secret is verified against it in constant time
 // (credential.VerifyDeviceSecret). The claim_secret column that held the plaintext is still

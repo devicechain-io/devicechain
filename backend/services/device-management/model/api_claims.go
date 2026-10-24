@@ -116,7 +116,7 @@ func (api *Api) InitiateDeviceClaim(ctx context.Context, request *DeviceClaimIni
 	return created, nil
 }
 
-// errNoClaimSecretKey refuses a claim carrying a secret when no EnrollmentSecretKey is wired:
+// errNoClaimSecretKey refuses a claim carrying a secret when no EnrollmentKeys is wired:
 // nothing falls back to storing the secret.
 var errNoClaimSecretKey = errors.New("device claim secrets cannot be stored: no enrollment secret key is configured")
 
@@ -128,14 +128,63 @@ func (api *Api) digestClaimSecret(tenant, secret string) (sql.NullString, error)
 	if len(secret) > credential.MaxEnrollmentSecretBytes {
 		return sql.NullString{}, limit.Exceeded("claimSecret bytes", len(secret), credential.MaxEnrollmentSecretBytes)
 	}
-	if api.EnrollmentSecretKey == nil {
+	return api.digestStoredClaimSecret(tenant, secret)
+}
+
+// digestStoredClaimSecret digests a secret already at rest, which the length limit on a SET
+// does not apply to: the old column bounded it at 256 characters, up to four bytes each.
+func (api *Api) digestStoredClaimSecret(tenant, secret string) (sql.NullString, error) {
+	if api.EnrollmentKeys == nil {
 		return sql.NullString{}, errNoClaimSecretKey
 	}
-	digest, err := api.EnrollmentSecretKey.Digest(tenant, secret)
+	digest, err := api.EnrollmentKeys.Claim.Digest(tenant, secret)
 	if err != nil {
 		return sql.NullString{}, err
 	}
 	return sql.NullString{String: digest, Valid: true}, nil
+}
+
+// claimSecretState is what a claim's secret is, as ClaimDevice reads it: the digest to verify
+// against, and the two stored columns it was decided from, for the redemption to be written
+// against exactly those.
+type claimSecretState struct {
+	// digest is the digest the presented secret is verified against.
+	digest sql.NullString
+	// storedDigest and legacy are the claim_secret_digest and claim_secret columns as read.
+	storedDigest sql.NullString
+	legacy       sql.NullString
+}
+
+// claimSecretOf decides which secret a claim holds.
+//
+// 🔴 A NON-BLANK PLAINTEXT IS AUTHORITATIVE. During a rolling upgrade an old-version pod opens
+// and re-opens claims by writing claim_secret and leaving claim_secret_digest alone. A claim it
+// RE-OPENED therefore holds the new secret in the plaintext column and the SUPERSEDED secret's
+// digest beside it; verifying against the digest would let the secret the owner was told to
+// stop using redeem, and refuse the new one. A claim it OPENED has no digest at all. Either
+// way the plaintext is the later write, so it is digested here and verified against. Outside
+// an upgrade's overlap the column is always NULL and the stored digest is the answer.
+func (api *Api) claimSecretOf(ctx context.Context, claim *DeviceClaim) (claimSecretState, error) {
+	state := claimSecretState{digest: claim.ClaimSecretDigest, storedDigest: claim.ClaimSecretDigest}
+	var rows []struct {
+		ClaimSecret sql.NullString
+	}
+	if err := api.RDB.DB(ctx).Model(&DeviceClaim{}).Select("claim_secret").
+		Where("id = ?", claim.ID).Scan(&rows).Error; err != nil {
+		return state, err
+	}
+	if len(rows) != 1 {
+		return state, nil
+	}
+	state.legacy = rows[0].ClaimSecret
+	if state.legacy.Valid && strings.TrimSpace(state.legacy.String) != "" {
+		d, err := api.digestStoredClaimSecret(claim.TenantId, state.legacy.String)
+		if err != nil {
+			return state, err
+		}
+		state.digest = d
+	}
+	return state, nil
 }
 
 // evaluateDeviceClaim verifies an open claim can be redeemed with the presented
@@ -186,7 +235,18 @@ func (api *Api) ClaimDevice(ctx context.Context, request *DeviceClaimRequest, no
 		}
 		return nil, err
 	}
-	if err := evaluateDeviceClaim(api.EnrollmentSecretKey, claim, request.ClaimSecret, now); err != nil {
+	state, err := api.claimSecretOf(ctx, claim)
+	if err != nil {
+		return nil, err
+	}
+	// Verify against the secret the claim actually holds (see claimSecretOf).
+	verified := *claim
+	verified.ClaimSecretDigest = state.digest
+	var claimKey *credential.DeviceSecretKey
+	if api.EnrollmentKeys != nil {
+		claimKey = api.EnrollmentKeys.Claim
+	}
+	if err := evaluateDeviceClaim(claimKey, &verified, request.ClaimSecret, now); err != nil {
 		return nil, err
 	}
 
@@ -216,9 +276,26 @@ func (api *Api) ClaimDevice(ctx context.Context, request *DeviceClaimRequest, no
 	}
 	var queued ownershipQueued
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
-		res := tx.Model(claim).
-			Where("id = ? AND status = ?", claim.ID, string(ClaimStatusOpen)).
+		// 🔴 THE REDEMPTION IS WRITTEN AGAINST THE SECRET IT WAS VERIFIED AGAINST. The compare-and-set
+		// holds both secret columns to what was read, so a re-open that lands between the
+		// verification and this write (a new pod's, or an old pod's) leaves zero rows affected and
+		// the superseded secret spends nothing. It also stores the digest that was verified and
+		// clears the plaintext, which is how a claim an old pod opened is converted by being used.
+		cas := tx.Model(claim).Where("id = ? AND status = ?", claim.ID, string(ClaimStatusOpen))
+		if state.storedDigest.Valid {
+			cas = cas.Where("claim_secret_digest = ?", state.storedDigest.String)
+		} else {
+			cas = cas.Where("claim_secret_digest IS NULL")
+		}
+		if state.legacy.Valid {
+			cas = cas.Where("claim_secret = ?", state.legacy.String)
+		} else {
+			cas = cas.Where("claim_secret IS NULL")
+		}
+		res := cas.
 			Updates(map[string]interface{}{
+				"claim_secret_digest":    state.digest,
+				"claim_secret":           nil,
 				"status":                 string(ClaimStatusClaimed),
 				"claimed_time":           now,
 				"claimed_by_customer_id": int64(customerId),

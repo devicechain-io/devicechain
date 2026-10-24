@@ -118,7 +118,7 @@ func TestTheStartupStepDigestsEveryPlaintextAccessTokenInPlace(t *testing.T) {
 		require.ErrorIs(t, err, model.ErrCredentialNotResolved, "%s authenticates before it was converted", credToken)
 	}
 
-	require.NoError(t, digestStoredCredentialSecrets(context.Background(), &rdb.RdbManager{Database: f.db}, key, dmtest.EnrollmentSecretKey()))
+	require.NoError(t, digestStoredCredentialSecrets(context.Background(), &rdb.RdbManager{Database: f.db}, key, dmtest.EnrollmentKeys()))
 
 	// At rest: no column of any credential row holds a token, soft-deleted rows included.
 	var rows []map[string]any
@@ -192,7 +192,7 @@ func TestTheStartupStepDoesNotOverwriteAnAccessTokenAnotherReplicaConverted(t *t
 func TestTheStartupStepCountsAccessTokenDigestsMadeUnderAnotherKey(t *testing.T) {
 	f := newLegacyTokenFixture(t)
 	key := dmtest.DeviceSecretKey()
-	require.NoError(t, digestStoredCredentialSecrets(context.Background(), &rdb.RdbManager{Database: f.db}, key, dmtest.EnrollmentSecretKey()))
+	require.NoError(t, digestStoredCredentialSecrets(context.Background(), &rdb.RdbManager{Database: f.db}, key, dmtest.EnrollmentKeys()))
 
 	n, err := schema.CountForeignAccessTokenDigests(context.Background(), f.db, key.AccessTokenDigestPrefix())
 	require.NoError(t, err)

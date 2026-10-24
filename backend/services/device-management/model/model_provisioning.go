@@ -113,7 +113,7 @@ type ProvisioningProfileUpdateRequest struct {
 // its ProvisionKey.
 //
 // 🔴 THE SECRET IS NEVER STORED, ONLY ITS KEYED DIGEST. ProvisionSecretDigest is what
-// credential.DeriveEnrollmentSecretKey's key made of the secret a create or update
+// credential.DeriveEnrollmentSecretKeys's key made of the secret a create or update
 // carried, and NULL for a profile with none (which matches no presented secret). Nothing
 // that reads this row can recover the secret. The provision_secret column that held the
 // plaintext is still in the table, NULLed by DigestPlaintextProvisionSecrets at startup and

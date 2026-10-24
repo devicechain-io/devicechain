@@ -166,7 +166,7 @@ type replica struct {
 func newReplica(t *testing.T, host string, port uint32, instanceId string, db *gorm.DB) replica {
 	t.Helper()
 	nmgr := startNatsManager(t, host, port, instanceId)
-	api, capi, err := buildApis(nmgr, &rdb.RdbManager{Database: db}, dmtest.DeviceSecretKey(), dmtest.EnrollmentSecretKey(), config.NewDeviceManagementConfiguration())
+	api, capi, err := buildApis(nmgr, &rdb.RdbManager{Database: db}, dmtest.DeviceSecretKey(), dmtest.EnrollmentKeys(), config.NewDeviceManagementConfiguration())
 	require.NoError(t, err)
 	return replica{api: api, capi: capi, nmgr: nmgr}
 }

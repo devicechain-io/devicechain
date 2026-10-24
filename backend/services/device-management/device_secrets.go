@@ -24,15 +24,15 @@ func deriveDeviceSecretKey() (*credential.DeviceSecretKey, error) {
 	return credential.DeriveDeviceSecretKey(root)
 }
 
-// deriveEnrollmentSecretKey derives the key provisioning profile secrets and device claim
+// deriveEnrollmentSecretKeys derives the keys provisioning profile secrets and device claim
 // secrets are stored under, from the same root key as deriveDeviceSecretKey and separately
-// from it.
-func deriveEnrollmentSecretKey() (*credential.DeviceSecretKey, error) {
+// from it and from each other.
+func deriveEnrollmentSecretKeys() (*credential.EnrollmentSecretKeys, error) {
 	root, err := Microservice.InstanceConfiguration.Infrastructure.Secrets.DecodedRootKey()
 	if err != nil {
 		return nil, fmt.Errorf("provisioning profile and device claim secrets are stored as digests under a key derived from the instance root key: %w", err)
 	}
-	return credential.DeriveEnrollmentSecretKey(root)
+	return credential.DeriveEnrollmentSecretKeys(root)
 }
 
 // deriveSecretTransit derives the key that opens the sealed credential secrets inbound
@@ -56,7 +56,7 @@ func deriveSecretTransit() (*credential.SecretTransit, error) {
 // misconfigured until it is re-set; refusing to start would take every other device and
 // the API down with them, and user-management's secret store already refuses a wrong root
 // key outright.
-func digestStoredCredentialSecrets(ctx context.Context, rdbm *rdb.RdbManager, key, enrollmentKey *credential.DeviceSecretKey) error {
+func digestStoredCredentialSecrets(ctx context.Context, rdbm *rdb.RdbManager, key *credential.DeviceSecretKey, enrollment *credential.EnrollmentSecretKeys) error {
 	converted, err := schema.DigestPlaintextCredentialSecrets(ctx, rdbm.Database, key.Digest)
 	if err != nil {
 		return fmt.Errorf("could not digest stored device credential secrets: %w", err)
@@ -95,7 +95,7 @@ func digestStoredCredentialSecrets(ctx context.Context, rdbm *rdb.RdbManager, ke
 				"most likely restored next to the wrong root key; restore the matching root key, or " +
 				"set those credentials' secrets again.")
 	}
-	provisioned, err := schema.DigestPlaintextProvisionSecrets(ctx, rdbm.Database, enrollmentKey.Digest)
+	provisioned, err := schema.DigestPlaintextProvisionSecrets(ctx, rdbm.Database, enrollment.Provisioning.Digest)
 	if err != nil {
 		return fmt.Errorf("could not digest stored provisioning profile secrets: %w", err)
 	}
@@ -103,18 +103,18 @@ func digestStoredCredentialSecrets(ctx context.Context, rdbm *rdb.RdbManager, ke
 		log.Info().Int("profiles", provisioned).
 			Msg("Replaced stored provisioning profile secrets with their keyed digests.")
 	}
-	foreignProvisioned, err := schema.CountForeignProvisionSecretDigests(ctx, rdbm.Database, "v1$"+enrollmentKey.KeyId()+"$")
+	foreignProvisioned, err := schema.CountForeignProvisionSecretDigests(ctx, rdbm.Database, "v1$"+enrollment.Provisioning.KeyId()+"$")
 	if err != nil {
 		return fmt.Errorf("could not check stored provisioning profile secret digests: %w", err)
 	}
 	if foreignProvisioned > 0 {
-		log.Error().Int64("profiles", foreignProvisioned).Str("keyId", enrollmentKey.KeyId()).
+		log.Error().Int64("profiles", foreignProvisioned).Str("keyId", enrollment.Provisioning.KeyId()).
 			Msg("Stored provisioning profile secrets were digested under a different key than this " +
 				"instance's root key derives, so devices cannot register against those profiles. The " +
 				"database was most likely restored next to the wrong root key; restore the matching " +
 				"root key, or set those profiles' secrets again.")
 	}
-	claims, err := schema.DigestPlaintextClaimSecrets(ctx, rdbm.Database, enrollmentKey.Digest)
+	claims, err := schema.DigestPlaintextClaimSecrets(ctx, rdbm.Database, enrollment.Claim.Digest)
 	if err != nil {
 		return fmt.Errorf("could not digest stored device claim secrets: %w", err)
 	}
@@ -122,12 +122,12 @@ func digestStoredCredentialSecrets(ctx context.Context, rdbm *rdb.RdbManager, ke
 		log.Info().Int("claims", claims).
 			Msg("Replaced stored device claim secrets with their keyed digests.")
 	}
-	foreignClaims, err := schema.CountForeignClaimSecretDigests(ctx, rdbm.Database, "v1$"+enrollmentKey.KeyId()+"$")
+	foreignClaims, err := schema.CountForeignClaimSecretDigests(ctx, rdbm.Database, "v1$"+enrollment.Claim.KeyId()+"$")
 	if err != nil {
 		return fmt.Errorf("could not check stored device claim secret digests: %w", err)
 	}
 	if foreignClaims > 0 {
-		log.Error().Int64("claims", foreignClaims).Str("keyId", enrollmentKey.KeyId()).
+		log.Error().Int64("claims", foreignClaims).Str("keyId", enrollment.Claim.KeyId()).
 			Msg("Stored device claim secrets were digested under a different key than this " +
 				"instance's root key derives, so those claims cannot be redeemed. The database was " +
 				"most likely restored next to the wrong root key; restore the matching root key, or " +
