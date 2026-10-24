@@ -109,6 +109,7 @@ python3 -c 'import yaml' 2>/dev/null || {
 # ---------------------------------------------------------------------------
 BOARDS=(
   command-delivery
+  delivery
   event-processing
   overview
 )
