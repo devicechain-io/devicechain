@@ -26,14 +26,14 @@
 // here. (tenant_id leads every key anyway, but for the unrelated reason that the
 // compressed chunk's auto-created btree is prefixed by the segment key.)
 //
-// It runs against a REAL operand image (PG 17.10 / TimescaleDB 2.28.3), through the REAL
+// It runs against a REAL operand image (PG 17.11 / TimescaleDB 2.28.3), through the REAL
 // migration chain and the REAL lifecycle policies, because every question here is about
 // the storage engine: sqlite has no chunks and no columnar compression, and
 // hack/migration-diff.sh compares schema only and so holds no rows.
 //
 //	docker rm -f dc-purgebench 2>/dev/null
 //	. deploy/images/timescaledb/standalone.sh
-//	PORT=$(dc_operand_start ghcr.io/devicechain-io/postgresql-timescaledb:17.10-ts2.28.3-r1 \
+//	PORT=$(dc_operand_start ghcr.io/devicechain-io/postgresql-timescaledb:17.11-ts2.28.3-r1 \
 //	         dc-purgebench "127.0.0.1::5432")
 //	cd backend/services/event-management
 //	DC_IT_PGPORT=$PORT go test -tags integration -count=1 ./model/... -run PurgeCost -v

@@ -20,7 +20,7 @@
 # nats_chart_version = "2.15.1"
 # The event store needs a CloudNativePG operand image carrying TimescaleDB; the default
 # is the one we build and publish. A stock `timescale/timescaledb:` image will not work.
-# timescale_image    = "ghcr.io/devicechain-io/postgresql-timescaledb:17.10-ts2.28.3-r1"
+# timescale_image    = "ghcr.io/devicechain-io/postgresql-timescaledb:17.11-ts2.28.3-r1"
 
 # Change these for anything beyond local dev (or use a pre-created Secret).
 # postgres_password  = "CHANGE-ME"

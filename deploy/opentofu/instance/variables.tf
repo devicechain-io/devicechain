@@ -575,7 +575,7 @@ variable "timescale_image" {
     asserts this default matches it.
   EOT
   type        = string
-  default     = "ghcr.io/devicechain-io/postgresql-timescaledb:17.10-ts2.28.3-r1"
+  default     = "ghcr.io/devicechain-io/postgresql-timescaledb:17.11-ts2.28.3-r1"
 }
 
 variable "timescale_instances" {
