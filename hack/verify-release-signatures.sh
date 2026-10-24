@@ -51,6 +51,13 @@
 #      the wrong reason, and would make this control pass over nothing).
 set -euo pipefail
 
+# Git Bash on Windows (MSYS) rewrites arguments that look like POSIX paths when it starts a
+# native program such as cosign.exe or gh.exe, which mangles the identities and references
+# passed below. Turn that conversion off for every command this script runs.
+case "$(uname -s)" in
+  MINGW* | MSYS*) export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' ;;
+esac
+
 SELF="$(basename "$0")"
 REGISTRY="ghcr.io/devicechain-io"
 REPO="devicechain-io/devicechain"

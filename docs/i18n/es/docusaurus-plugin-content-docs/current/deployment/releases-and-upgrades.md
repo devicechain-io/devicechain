@@ -267,10 +267,16 @@ dcctl upgrade local devicechain --version <new-version>
 
 :::note Qué se ha medido
 La actualización se ha ensayado a mano en un clúster local: una instancia instalada con `--ha` se
-actualizó in situ con tráfico MQTT en marcha, su broker se reinició dos veces, los dispositivos se
-reconectaron tras cada reinicio y todos los mensajes que el broker había confirmado seguían almacenados
-después. Ese ensayo es manual. La comprobación automática de actualización que condiciona cada versión
-se ejecuta sin tráfico.
+actualizó in situ con tráfico MQTT en marcha (cuatro dispositivos publicando con QoS 1, 20 mensajes por
+segundo entre todos, con `infrastructure.nats.mqttFailClosed` desactivado, como lo está por defecto), su
+broker se reinició dos veces y los dispositivos se reconectaron tras cada reinicio. En un ensayo, todos los
+mensajes que el broker había confirmado seguían almacenados después (11 009 de 11 009). En otro se perdieron
+11 de 11 262 mensajes confirmados, todos mientras se reiniciaba un servidor del broker y el stream de captura
+MQTT cambiaba de líder. Con `mqttFailClosed` desactivado, espere una breve ventana de pérdida como esta en
+cada reinicio del broker, con cualquier volumen de tráfico; vea
+[MQTT: el bróker de la plataforma](../reference/transport-matrix.md#mqtt--the-platform-broker). Los
+ensayos son manuales. La comprobación automática de actualización que condiciona cada versión se ejecuta
+sin tráfico.
 
 No se ha medido una actualización bajo carga sostenida de producción en un clúster de tamaño de producción,
 así que DeviceChain no promete una actualización sin interrupción. Prevea una breve interrupción donde se
@@ -4304,10 +4310,25 @@ un miembro limitado a una parte del tenant es rechazado. Consulta
 - **Los despliegues no tienen oleadas ni etapa canario,** ni programación, ni alerta para el proceso que impulsa los
   despliegues si se detiene.
 - **El SBOM se genera a partir de la variante `amd64` de cada imagen.**
-- **Heredadas de la `v0.24.0`:** el relleno de una métrica calculada omite el historial comprimido; una caída
-  del bróker con una gran cola pendiente no está cubierta por `mqttFailClosed`; y con `mqttFailClosed`
-  desactivado, un cambio de líder del stream de captura MQTT bajo mucha carga puede perder eventos QoS 1
-  confirmados (`JetStreamCaptureLeaderChanged` avisa).
+- **Con `mqttFailClosed` desactivado, que es el valor por defecto, se pueden perder mensajes QoS 1 que el
+  bróker ya confirmó mientras el stream de captura MQTT cambia de líder, con cualquier carga,** y nada los
+  cuenta (`JetStreamCaptureLeaderChanged` avisa de que hubo un cambio). Un reinicio progresivo del bróker
+  reinicia todos los servidores, también el líder, y esta actualización reinicia el bróker dos veces, así que
+  cuenta con una breve ventana de pérdida en cada reinicio del bróker salvo que fail-closed esté activado. En
+  un ensayo de esta actualización con cuatro dispositivos que enviaban 20 mensajes QoS 1 por segundo entre
+  todos, se perdieron 11 de 11 262 mensajes confirmados, todos durante los reinicios del bróker; en un ensayo
+  anterior no se perdió ninguno. Para cerrar la ventana, activa `infrastructure.nats.mqttFailClosed` (el valor
+  del chart `instance.config.infrastructure.nats.mqttFailClosed`). `dcctl` no tiene una opción para ello en
+  esta versión y `--values` no lo acepta, así que un valor puesto a mano en una instancia que gestiona `dcctl`
+  lo sobrescribe el siguiente `dcctl upgrade`. La contrapartida: mientras el almacén de mensajes del bróker no
+  tiene líder, una publicación QoS 1 no se confirma, así que el dispositivo debe volver a enviarla, y la
+  instancia sostiene menos tráfico que con el ajuste desactivado. En un clúster de pruebas no perdió nada
+  mientras daba abasto, a 6 000 y 9 000 eventos por segundo con cambios de líder repetidos; a 12 000 por
+  segundo se quedó atrás, dos servidores del bróker se quedaron sin memoria y se perdieron mensajes
+  confirmados. Dimensiona la instalación para mantenerte por debajo de su techo. Consulta
+  [MQTT con fail-closed](./observability.md#mqtt-fail-closed).
+- **Heredadas de la `v0.24.0`:** el relleno de una métrica calculada omite el historial comprimido, y una
+  caída del bróker con una gran cola pendiente no está cubierta por `mqttFailClosed`.
 
 ##### También en esta versión {#v0250-also}
 

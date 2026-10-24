@@ -53,6 +53,18 @@ chmod +x verify-release-signatures.sh
 Fetch the script from the **same tag** you are verifying. It exits non-zero if any signature,
 SBOM or provenance check fails, and prints which one.
 
+:::note On Windows
+Git Bash rewrites arguments that look like paths before it starts a Windows program such as
+`cosign.exe` or `gh.exe`, which breaks the identity the check demands. The script turns that off for
+the commands it runs. If you run `cosign` or `gh` by hand from Git Bash, turn it off yourself first:
+
+```bash
+export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'
+```
+
+Without it, a signed release can fail with "no matching CertificateIdentity found".
+:::
+
 It ends with two **negative controls**. A verifier that has only ever seen good input has never been
 shown to reject anything, so the script verifies a signed DeviceChain image against an identity that
 cannot match, and verifies an image that was not signed for this release (by default, an older

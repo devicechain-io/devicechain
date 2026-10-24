@@ -80,9 +80,12 @@ there is no separate broker to run.
 
   A third hole is the capture stream's own leader election. The broker hands each QoS 1 publish
   to the capture stream with no reply, after the device has its PUBACK. If the stream changes
-  leader under load, the publishes that arrive while it has none, several seconds, are stored
-  nowhere, and no counter records them. In a 12,000 events per second test one such change lost
-  about five seconds of events. `JetStreamCaptureLeaderChanged` reports that a change happened
+  leader, at any load, the publishes that arrive while it has none, several seconds, are stored
+  nowhere, and no counter records them. A broker roll restarts every server, the leader among
+  them, so every roll, including the ones an upgrade makes, opens this window. In a 12,000 events per
+  second test one such change lost about five seconds of events; in an upgrade rehearsal with four
+  devices sending 20 messages a second between them, 11 of 11,262 acknowledged messages were lost
+  during the broker restarts. `JetStreamCaptureLeaderChanged` reports that a change happened
   while events were arriving; the lost events cannot be recovered, and the time of the change
   bounds the window to check in your devices' own records.
 
