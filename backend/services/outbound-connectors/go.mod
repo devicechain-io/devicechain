@@ -6,7 +6,7 @@ require (
 	github.com/aws/aws-sdk-go-v2 v1.47.3
 	github.com/aws/aws-sdk-go-v2/credentials v1.20.9
 	github.com/aws/aws-sdk-go-v2/service/sns v1.47.5
-	github.com/aws/aws-sdk-go-v2/service/sqs v1.52.4
+	github.com/aws/aws-sdk-go-v2/service/sqs v1.52.5
 	github.com/devicechain-io/dc-event-processing v0.0.1
 	github.com/devicechain-io/dc-microservice v0.0.1
 	github.com/eclipse/paho.mqtt.golang v1.5.1
