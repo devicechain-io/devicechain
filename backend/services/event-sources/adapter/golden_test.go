@@ -11,18 +11,16 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// The golden token/dedup-id strings pinned here are the CONTRACT the L0.5 extraction
-// preserved byte-for-byte. A derived device token is the deterministic key an
-// auto-register collides on (a drift mints a duplicate device row for every existing
-// device); a dedup id is JetStream's idempotency key (a drift duplicates presence /
-// measurement events across a retry or failover). Neither has a schema to catch a
-// change, so these literals ARE the schema.
+// The golden dedup-id strings pinned here are the CONTRACT the L0.5 extraction preserved
+// byte-for-byte: a dedup id is JetStream's idempotency key (a drift duplicates presence /
+// measurement events across a retry or failover) and has no schema to catch a change, so
+// these literals ARE the schema. (The derived-token goldens moved with core.DeriveDeviceToken,
+// to core/core/devicetoken_test.go.)
 //
 // These literals were computed from the PRE-EXTRACTION implementation (the old
-// host.dedupID/DeriveDeviceToken) and re-asserted here with the "sp"/"sp-" prefixes
-// passed explicitly. Their survival is the proof the parameterization kept the Sparkplug
-// prefixes producing byte-identical output — carry the SAME literals when adding an LwM2M
-// golden with "lw"/"lw-".
+// host.dedupID) and re-asserted here with the "sp" prefix passed explicitly. Their survival
+// is the proof the parameterization kept the Sparkplug prefix producing byte-identical
+// output — carry the SAME literals when adding an LwM2M golden with "lw".
 
 func TestGoldenDedupIDs(t *testing.T) {
 	samples := []Sample{

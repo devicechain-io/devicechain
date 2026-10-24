@@ -229,10 +229,10 @@ import "github.com/devicechain-io/dc-microservice/credential"
 func f(k *credential.DeviceSecretKey, d, s string) error { return credential.VerifyDeviceSecret(k, d, s) }'
   expect devicesecret-direct 1 "$fx/devicesecret-direct/x.go:5:" "$fx/devicesecret-direct=1"
 
-  # Self-registration's REPLAY compare (KindProvisionedCredential) and its secret compare
-  # (KindProvisioningProfile) go through the Checker. The only direct ways to make either
-  # compare from outside the primitive are these two, and both are refused: a replay check
-  # written against VerifyAccessToken would be an unthrottled, uncounted secret compare.
+  # Self-registration's REPLAY compare (KindProvisionedCredential) goes through the Checker. A
+  # replay check written against VerifyAccessToken is refused. This is the one watched way to
+  # make it from outside the primitive; it does NOT see AccessTokenDigest(...) == stored or a
+  # database lookup by digest, which are compares too (see the header).
   write accesstoken-direct/x.go 'package p
 
 import "github.com/devicechain-io/dc-microservice/credential"
@@ -241,15 +241,6 @@ func replay(k *credential.DeviceSecretKey, tenant, stored, presented string) err
 	return credential.VerifyAccessToken(k, tenant, stored, presented)
 }'
   expect accesstoken-direct 1 "$fx/accesstoken-direct/x.go:6:" "$fx/accesstoken-direct=1"
-
-  write provisioning-direct/x.go 'package p
-
-import "github.com/devicechain-io/dc-microservice/credential"
-
-func registerSecret(k *credential.DeviceSecretKey, tenant, stored, presented string) error {
-	return credential.VerifyDeviceSecret(k, tenant, stored, presented)
-}'
-  expect provisioning-direct 1 "$fx/provisioning-direct/x.go:6:" "$fx/provisioning-direct=1"
 
   # An exemption names ONE MEMBER: a subtle compare in a function exempted for bcrypt is
   # caught. Kills the mutant where exemption matching ignores the member.

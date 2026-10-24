@@ -739,6 +739,10 @@ func (c HttpConfiguration) TrustedProxyPrefixes() ([]netip.Prefix, error) {
 			return nil, fmt.Errorf("infrastructure.http.trustedProxies entry %q is not a CIDR prefix "+
 				"(want a form like 10.42.0.0/16 or fd00::/8): %w", entry, err)
 		}
+		if p.Addr().Is4In6() {
+			return nil, fmt.Errorf("infrastructure.http.trustedProxies entry %q is an IPv4-mapped IPv6 "+
+				"prefix, which never matches: addresses are compared as IPv4. Write the IPv4 prefix", entry)
+		}
 		if p.Masked() != p {
 			return nil, fmt.Errorf("infrastructure.http.trustedProxies entry %q has bits set below its prefix "+
 				"length, so it trusts %s, a wider range than it reads as. Write it masked", entry, p.Masked())

@@ -426,7 +426,11 @@ instance:
       #
       # It only helps if the ingress controller preserves the client address in the first
       # place: its Service needs externalTrafficPolicy: Local (or PROXY protocol from the load
-      # balancer), and ingress-nginx must forward the header it received.
+      # balancer). With ingress-nginx at the edge, leave use-forwarded-headers OFF: the
+      # controller then writes the real TCP peer into X-Forwarded-For. Turn it on only behind
+      # a load balancer that itself appends the header, and then set proxy-real-ip-cidr to
+      # that load balancer's range (its default, 0.0.0.0/0, makes the client's own header win
+      # and so lets any caller choose its source address).
       #
       # Left commented out for the same reason as the log level: an uncommented empty list
       # would change every existing instance's rendered document and checksum, rolling every

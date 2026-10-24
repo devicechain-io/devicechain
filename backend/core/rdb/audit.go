@@ -106,9 +106,10 @@ type AuditEvent struct {
 	// Category is "mutation" (an entity create/update/delete) or "auth" (a login,
 	// failed login, or refresh). It discriminates the two row shapes.
 	Category string `gorm:"not null"`
-	// Actor is the JWT subject that performed the mutation, "system" for a
-	// deliberate system-context operation (bootstrap, the ingest pipeline), or ""
-	// when neither is present. For an auth event it is the subject username.
+	// Actor is the JWT subject that performed the mutation, else the actor a caller
+	// named with WithAuditActor (a device registering itself has no JWT), else "system"
+	// for a deliberate system-context operation (bootstrap, the ingest pipeline), or ""
+	// when none is present. For an auth event it is the subject username.
 	Actor string
 	// TableName is the mutated table (schema-qualified as the dialect renders it);
 	// empty for an auth event.

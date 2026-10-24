@@ -1085,6 +1085,21 @@ func TestGlobalBeginAllowanceHoldsAcrossSources(t *testing.T) {
 	require.True(t, l.allow("fresh-source"), "the allowance refills")
 }
 
+// A sender already over its OWN allowance must not drain the global one: the per-source
+// bucket is charged first, so its refused attempts never reach the shared bucket. Charging
+// the global bucket first would let one noisy source starve every other sender.
+func TestASenderOverItsOwnAllowanceDoesNotDrainTheGlobalBucket(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	l := newBeginLimiter(sourcelimit.WithClock(func() time.Time { return now }))
+	for i := 0; i < ssoBeginPerSourceBurst; i++ {
+		require.True(t, l.allow("203.0.113.9"))
+	}
+	for i := 0; i < 300; i++ {
+		require.False(t, l.allow("203.0.113.9"), "attempt %d is over the source's own allowance", i)
+	}
+	require.True(t, l.allow("198.51.100.1"), "one source's refused attempts drained the shared global bucket")
+}
+
 func TestStateStoreFullFailsClosedAndPasswordSignInSurvives(t *testing.T) {
 	e := newSsoEnv(t)
 	ctx := context.Background()
