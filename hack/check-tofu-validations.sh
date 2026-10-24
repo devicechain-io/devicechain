@@ -1204,15 +1204,14 @@ run_assertions() {
   if [[ -f $versions_conf ]]; then
     # shellcheck disable=SC1090
     source "$versions_conf"
-    # The same helper the publish workflow uses, so the two cannot disagree; it
-    # strips a `@sha256:` pin first. Guarded so an unparseable PG_IMAGE fails
-    # pointing at PG_IMAGE rather than at variables.tf.
-    if ! pg_minor=$("$repo_root/deploy/images/timescaledb/pg-minor.sh" "$PG_IMAGE"); then
-      pg_minor=""
-      echo >&2 "MISSING: could not parse a PostgreSQL minor version from PG_IMAGE=$PG_IMAGE."
+    # The same script the publish workflow and the CI drills use, so they cannot
+    # disagree. Guarded so an unparseable PG_IMAGE fails pointing at PG_IMAGE
+    # rather than at variables.tf.
+    if ! want_image=$("$repo_root/deploy/images/timescaledb/operand-ref.sh"); then
+      want_image=""
+      echo >&2 "MISSING: could not derive the operand image reference from PG_IMAGE=$PG_IMAGE."
       failures=$((failures + 1))
     fi
-    want_image="ghcr.io/devicechain-io/postgresql-timescaledb:${pg_minor}-ts${TIMESCALEDB_VERSION}-r${IMAGE_REVISION}"
     # `tofu console` renders a string result WITH its quotes, so the expected value
     # carries them too. Comparing the raw tag would fail on every correct run.
     evaluates "\"$want_image\"" 'var.timescale_image'

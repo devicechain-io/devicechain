@@ -141,9 +141,12 @@ Estas carencias son conocidas y se aceptan en la versión actual. Planifique en 
 3. **Los tokens de acceso se guardan legibles**, como se describe en [Dispositivos](#devices). Está previsto guardarlos solo
    como resumen antes de la 1.0.0.
 4. **Confirmaciones MQTT durante un cambio de líder del broker.** Por defecto, el broker puede confirmar un mensaje QoS 1 y
-   perderlo después si el flujo de captura cambia de líder. Con `infrastructure.nats.mqttFailClosed` activado, una
-   confirmación significa que la plataforma conserva el mensaje. El ajuste está desactivado por defecto, y
-   [Observabilidad](../deployment/observability.md) describe el equilibrio.
+   perderlo después mientras el flujo de captura cambia de líder, algo que provoca un reinicio del broker, una
+   actualización o la pérdida de un nodo, con cualquier carga. Con `infrastructure.nats.mqttFailClosed` activado, una
+   confirmación significa que la plataforma conserva el mensaje; a cambio, el broker rechaza las publicaciones QoS 1
+   mientras no hay líder, y la instancia sostiene menos tráfico, así que es para instalaciones dimensionadas para
+   mantenerse por debajo de ese techo. El ajuste está desactivado por defecto, y
+   [Observabilidad](../deployment/observability.md#mqtt-fail-closed) describe el equilibrio.
 5. **La clave raíz es legible para cualquiera que pueda leer el Secret de Kubernetes de la instancia.** Restrinja el acceso a ese
    Secret y al etcd del clúster en consecuencia.
 6. **No se ha publicado ninguna prueba de penetración externa.**

@@ -220,21 +220,12 @@ jobs:
         run: |
           set -a; . "${DIR}/versions.conf"; set +a
 
-          # pg-minor.sh strips a `@sha256:` digest before taking the tag (a bare
-          # `${PG_IMAGE##*:}` returns the digest hex once pinned) and refuses
-          # anything that is not `N.N`. Fail loudly rather than publish a bad tag.
-          if ! pg_minor="$("${DIR}/pg-minor.sh" "$PG_IMAGE")"; then
-            echo "::error::could not derive a PostgreSQL minor from PG_IMAGE='${PG_IMAGE}'"
-            exit 1
-          fi
-
-          # The tag carries a REVISION as well as the versions. The versions
-          # alone do not determine the bits: the CNPG base is itself a moving
-          # tag, and workflow_dispatch exists precisely to rebuild when it moves.
-          # Without the revision, a CVE rebake republishes different content
-          # under an identical tag, and a CNPG cluster ends up running two builds
-          # at once — the exact failure this image was created to escape.
-          tag="${pg_minor}-ts${TIMESCALEDB_VERSION}-r${IMAGE_REVISION}"
+          # operand-ref.sh is the one formula for the tag (pg-minor.sh underneath,
+          # then the REVISION -- see IMAGE_REVISION in versions.conf for why the
+          # versions alone are not enough). The CI drills compute it with the same
+          # script to decide whether this tag is published yet, so the two cannot
+          # disagree. Fail loudly rather than publish a bad tag.
+          tag="$("${DIR}/operand-ref.sh" --tag)"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           {
             echo "pg_image=$PG_IMAGE"

@@ -142,9 +142,12 @@ These are known and accepted for the current release. Plan around them.
 3. **Access tokens are stored readable**, as described under [Devices](#devices). Storing them only as a digest
    is planned before 1.0.0.
 4. **MQTT acknowledgements across a broker leader change.** By default the broker can acknowledge a QoS 1 message and
-   then lose it if the capture stream changes leader. With `infrastructure.nats.mqttFailClosed` on, an
-   acknowledgement means the platform holds the message. The setting is off by default, and
-   [Observability](../deployment/observability.md) describes the trade-off.
+   then lose it while the capture stream changes leader, which a broker restart, an upgrade or the loss of a
+   node causes, at any load. With `infrastructure.nats.mqttFailClosed` on, an acknowledgement means the
+   platform holds the message; in exchange the broker refuses QoS 1 publishes while there is no leader, and
+   the instance keeps up with less traffic, so it is for installations sized to stay below that ceiling.
+   The setting is off by default, and [Observability](../deployment/observability.md#mqtt-fail-closed)
+   describes the trade-off.
 5. **The root key is readable by anyone who can read the instance's Kubernetes Secret.** Restrict access to that
    Secret and to the cluster's etcd accordingly.
 6. **No external penetration test has been published.**

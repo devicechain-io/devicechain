@@ -192,7 +192,7 @@ What a device publishes on its `command-responses` topic to settle a command. Th
 
 ## Rejections and errors {#rejections}
 
-What happens to a message the platform does not accept depends on where it is refused, and on the transport. HTTP answers the request, so a device learns of a refusal at the door. MQTT acknowledges a publish (`PUBACK`) as soon as the broker has captured it, **before** it is decoded, so an MQTT device is never told: every refusal after the broker is visible only to an operator.
+What happens to a message the platform does not accept depends on where it is refused, and on the transport. HTTP answers the request, so a device learns of a refusal at the door. MQTT acknowledges a publish (`PUBACK`) as soon as the broker has captured it, **before** it is decoded, so an MQTT device is never told: every refusal after the broker is visible only to an operator. With the default setting, a QoS 1 publish acknowledged while the capture stream changes leader can also be lost; see [Quality of service](../guides/connecting-a-device.md#quality-of-service).
 
 ### At the door {#rejections-at-the-door}
 
