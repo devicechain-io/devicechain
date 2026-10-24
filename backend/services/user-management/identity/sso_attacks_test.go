@@ -18,6 +18,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
+	"github.com/devicechain-io/dc-microservice/sourcelimit"
 	"github.com/devicechain-io/dc-user-management/iam"
 	"github.com/golang-jwt/jwt/v5"
 	nats "github.com/nats-io/nats.go"
@@ -1071,9 +1072,8 @@ func TestBeginIsRateLimitedPerSource(t *testing.T) {
 }
 
 func TestGlobalBeginAllowanceHoldsAcrossSources(t *testing.T) {
-	var l sourceLimiter
 	now := time.Unix(1_000_000, 0)
-	l.now = func() time.Time { return now }
+	l := newBeginLimiter(sourcelimit.WithClock(func() time.Time { return now }))
 	ok := 0
 	for i := 0; i < 5*ssoBeginGlobalBurst; i++ {
 		if l.allow("10.0." + itoa(i/250) + "." + itoa(i%250)) {

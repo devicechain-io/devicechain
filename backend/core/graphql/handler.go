@@ -44,6 +44,12 @@ const (
 // directly-connected peer or an untrusted proxy puts there, so treat the value as a
 // fairness key and never as an identity: anything that must hold against a determined
 // sender needs a limit that does not depend on it.
+//
+// An endpoint that needs the proxy's word to be believed only from proxies the operator
+// named uses TrustedSourceAddr instead (infrastructure.http.trustedProxies). This one is
+// unchanged for its existing callers, which sit behind an ingress that always appends and
+// would all share the ingress's address if it stopped reading the header before that list
+// is rendered.
 func SourceAddr(ctx context.Context) string {
 	s, _ := ctx.Value(contextRemoteAddrKey).(string)
 	return s

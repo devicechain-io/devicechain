@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"fmt"
+	"net/netip"
 	"sort"
 	"strings"
 	"time"
@@ -703,6 +704,48 @@ type InfrastructureConfiguration struct {
 	Shutdown         ShutdownConfiguration
 	Logging          LoggingConfiguration
 	Messaging        MessagingConfiguration
+	Http             HttpConfiguration
+}
+
+// HttpConfiguration is how the instance's HTTP servers read a request's origin.
+//
+// It is FIXED configuration, like the log level: part of the mounted instance document,
+// validated at startup, adopted by rolling the pods.
+type HttpConfiguration struct {
+	// TrustedProxies are the CIDR prefixes (IPv4 or IPv6) of the proxies whose
+	// X-Forwarded-For header may be believed: in Kubernetes the ingress controller's pod or
+	// Service range. Empty, the default, believes no proxy, so an endpoint that keys on the
+	// source address keys on the connection's own peer, which behind an ingress is the
+	// ingress itself, not the client.
+	//
+	// Each entry must be a CIDR in canonical masked form (10.1.2.0/24, never 10.1.2.3/24), and
+	// a malformed one stops the service at startup: a list that silently dropped an entry
+	// would read as configured and behave as though it were not, and one that read host
+	// bits as a wider range would trust more proxies than the operator wrote.
+	TrustedProxies []string
+}
+
+// TrustedProxyPrefixes parses TrustedProxies. Validate has already refused a malformed
+// entry, so an error here only means a document that was never validated.
+func (c HttpConfiguration) TrustedProxyPrefixes() ([]netip.Prefix, error) {
+	out := make([]netip.Prefix, 0, len(c.TrustedProxies))
+	for _, entry := range c.TrustedProxies {
+		trimmed := strings.TrimSpace(entry)
+		if trimmed == "" {
+			return nil, fmt.Errorf("infrastructure.http.trustedProxies has an empty entry")
+		}
+		p, err := netip.ParsePrefix(trimmed)
+		if err != nil {
+			return nil, fmt.Errorf("infrastructure.http.trustedProxies entry %q is not a CIDR prefix "+
+				"(want a form like 10.42.0.0/16 or fd00::/8): %w", entry, err)
+		}
+		if p.Masked() != p {
+			return nil, fmt.Errorf("infrastructure.http.trustedProxies entry %q has bits set below its prefix "+
+				"length, so it trusts %s, a wider range than it reads as. Write it masked", entry, p.Masked())
+		}
+		out = append(out, p)
+	}
+	return out, nil
 }
 
 // MessagingConfiguration is how every producer in the instance writes the event messages
@@ -1341,6 +1384,9 @@ func (c *InstanceConfiguration) Validate() error {
 		}
 	}
 	if _, err := c.Infrastructure.Messaging.EventWireFormat(); err != nil {
+		return err
+	}
+	if _, err := c.Infrastructure.Http.TrustedProxyPrefixes(); err != nil {
 		return err
 	}
 	return nil

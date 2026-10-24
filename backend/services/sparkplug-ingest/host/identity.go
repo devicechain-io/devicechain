@@ -10,7 +10,7 @@ package host
 // never as a token. It is meaningful only for node/device messages, not STATE.
 //
 // The token DERIVATION (raw external id → grammar-safe DeviceChain token) is
-// protocol-neutral and lives in the shared adapter package (adapter.DeriveDeviceToken);
+// protocol-neutral and lives in core (core.DeriveDeviceToken), which the shared adapter calls;
 // only this Sparkplug-topic → external-id mapping is protocol-specific and stays here.
 func SparkplugExternalId(t Topic) string {
 	if t.IsDevice() {

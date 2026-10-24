@@ -24,18 +24,6 @@ import (
 // prefixes producing byte-identical output — carry the SAME literals when adding an LwM2M
 // golden with "lw"/"lw-".
 
-func TestGoldenDerivedTokens(t *testing.T) {
-	cases := map[string]string{
-		"plant-a/node-3/dev-2": "sp-plant-a-node-3-dev-2-f059b7804d5d",
-		"plant-a/n1":           "sp-plant-a-n1-efc075f9d7b9",
-		"café/ñodo 1/dev.7":    "sp-caf---odo-1-dev-7-92df7f344f11", // unicode/space/dot all slug to '-'
-		"////":                 "sp-0ea28b450f5e",                   // nothing survives slugging → hash only
-	}
-	for id, want := range cases {
-		assert.Equal(t, want, DeriveDeviceToken(id, "sp-"), "derived token for %q must not drift", id)
-	}
-}
-
 func TestGoldenDedupIDs(t *testing.T) {
 	samples := []Sample{
 		{Name: "temp", Value: 21.5, Time: 1_700_000_000_000},

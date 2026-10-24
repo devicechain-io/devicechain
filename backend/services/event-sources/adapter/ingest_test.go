@@ -134,8 +134,8 @@ func TestRegistrarAutoRegistersUnknownDevice(t *testing.T) {
 	assert.Equal(t, ResolveCreated, outcome)
 	// The created device carries the DERIVED (grammar-safe) token, the raw external
 	// id, and the source's device type.
-	assert.Equal(t, DeriveDeviceToken("plant-a/node-3", "sp-"), tok)
-	assert.Equal(t, DeriveDeviceToken("plant-a/node-3", "sp-"), createdRequest["token"])
+	assert.Equal(t, core.DeriveDeviceToken("plant-a/node-3", "sp-"), tok)
+	assert.Equal(t, core.DeriveDeviceToken("plant-a/node-3", "sp-"), createdRequest["token"])
 	assert.Equal(t, "plant-a/node-3", createdRequest["externalId"])
 	assert.Equal(t, "sp-node", createdRequest["deviceTypeToken"])
 }
