@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -53,7 +54,9 @@ const (
 func mqttTestProfile(b *fakemqtt.Broker, identity string) MQTTProfile {
 	return MQTTProfile{
 		Manifest: "devicepulse", Rate: 200, Duration: 1500 * time.Millisecond, MetricKey: "speed_kph",
-		Identity: identity, MinAccepted: 10, ReportInterval: -1,
+		// The rate floor is the verdict test's subject, not these runs': a short run on a busy
+		// test machine must not fail it by a few ticks.
+		Identity: identity, MinAccepted: 10, MinOfferedRatio: 0.5, ReportInterval: -1,
 		QuiescePoll: 10 * time.Millisecond, QuiesceTimeout: 400 * time.Millisecond, QuiesceSettle: 20 * time.Millisecond,
 		MQTT: mqttload.Config{
 			Broker: b.URL(), TLS: false, InstanceId: mqttTestInstance, Tenant: mqttTestTenant,
@@ -200,7 +203,15 @@ func TestACountCanMaskLossThatTheIdentityReadBackCatches(t *testing.T) {
 			rep.Storage.MaskedLossBound, rep.Drive.Unconfirmed, rep.Loss, rep.Human())
 	}
 	if !strings.Contains(inv(t, rep, InvPubackDurability).Detail, "could be masked") {
-		t.Fatalf("a count-only pass must say what it cannot see: %+v", inv(t, rep, InvPubackDurability))
+		t.Fatalf("a count-only comparison must say what it cannot see: %+v", inv(t, rep, InvPubackDurability))
+	}
+	// A count that cannot exclude a loss must not pass as having excluded one: no verdict, and
+	// not the loss code either (it did not find one).
+	if rep.Passed() || rep.ExitCode() != ExitFail || inv(t, rep, InvPubackDurability).Passed {
+		t.Fatalf("a count with a masked-loss bound of %d passed (exit %d):\n%s", rep.Storage.MaskedLossBound, rep.ExitCode(), rep.Human())
+	}
+	if !strings.Contains(rep.Human(), "NO DURABILITY VERDICT") {
+		t.Fatalf("the human summary does not say the count reached no verdict:\n%s", rep.Human())
 	}
 
 	b2 := build()
@@ -266,13 +277,34 @@ func TestMQTTVerdict(t *testing.T) {
 		{"clean", func(*mqttMeasured) {}, nil, false},
 		{"loss by count", func(m *mqttMeasured) { m.Persisted = 990 }, []string{InvPubackDurability}, true},
 		{"duplicates", func(m *mqttMeasured) { m.Persisted = 1005 }, []string{InvPubackDurability}, false},
-		{"unconfirmed explains extra", func(m *mqttMeasured) { m.Drive.Sent, m.Drive.Unconfirmed, m.Persisted = 1005, 5, 1005 }, nil, false},
+		// Unconfirmed publishes can explain extra rows, but in a count they can also stand in for
+		// lost ones, so the count reaches no verdict.
+		{"unconfirmed in a count is no verdict", func(m *mqttMeasured) { m.Drive.Sent, m.Drive.Unconfirmed, m.Persisted = 1005, 5, 1005 }, []string{InvPubackDurability}, false},
+		{"re-sent in a count is no verdict", func(m *mqttMeasured) { m.Drive.Resent = 3 }, []string{InvPubackDurability}, false},
+		{"unconfirmed with the identity read-back is fine", func(m *mqttMeasured) {
+			m.Drive.Sent, m.Drive.Unconfirmed, m.Persisted = 1005, 5, 1005
+			m.Mode, m.Identity, m.IdentityInv = IdentityFull, &IdentityReport{}, &Invariant{Name: InvIdentity, Passed: true}
+		}, nil, false},
+		{"duplicates by identity", func(m *mqttMeasured) {
+			m.Persisted = 1003
+			m.Mode, m.Identity, m.IdentityInv = IdentityFull, &IdentityReport{ExtraCopies: 3}, &Invariant{Name: InvIdentity, Passed: true}
+		}, []string{InvPubackDurability}, false},
+		{"stopped short is loss", func(m *mqttMeasured) { m.Persisted, m.Reached = 990, false }, []string{InvPubackDurability}, true},
+		{"still rising is not loss", func(m *mqttMeasured) { m.Persisted, m.Reached, m.Rising = 990, false, true }, []string{InvPubackDurability}, false},
 		{"not drained", func(m *mqttMeasured) { m.Persisted, m.Reached = 1000, false }, []string{InvPubackDurability}, false},
 		{"never connected", func(m *mqttMeasured) { m.NeverConnected = 1 }, []string{InvFleetConnected}, false},
 		{"plaintext when tls requested", func(m *mqttMeasured) { m.Drive.TLSConns, m.Drive.PlainConns = 0, 5 }, []string{InvTransport}, false},
 		{"tls when plaintext requested", func(m *mqttMeasured) { m.Profile.MQTT.TLS = false; m.Drive.PlainConns = 0 }, []string{InvTransport}, false},
 		{"mixed transports", func(m *mqttMeasured) { m.Drive.PlainConns = 1 }, []string{InvTransport}, false},
-		{"under the load floor", func(m *mqttMeasured) { m.Drive.Acked, m.Persisted, m.Drive.Sent = 5, 5, 1000 }, []string{InvLoadApplied}, false},
+		{"under the load floor", func(m *mqttMeasured) {
+			m.Profile.Rate = 0.5
+			m.Drive.Acked, m.Persisted, m.Drive.Sent = 5, 5, 5
+		}, []string{InvLoadApplied}, false},
+		// Sent at the rate, but the broker acknowledged half: the rate was not sustained.
+		{"acknowledged too little", func(m *mqttMeasured) {
+			m.Drive.Acked, m.Drive.Unconfirmed, m.Persisted = 500, 500, 500
+			m.Mode, m.Identity, m.IdentityInv = IdentityFull, &IdentityReport{}, &Invariant{Name: InvIdentity, Passed: true}
+		}, []string{InvLoadOffered}, false},
 		{"offered too little", func(m *mqttMeasured) { m.Drive.Sent, m.Drive.Acked, m.Persisted = 500, 500, 500 }, []string{InvLoadOffered}, false},
 		{"ack latency ceiling", func(m *mqttMeasured) {
 			m.Profile.MaxAckP99 = 50 * time.Millisecond
@@ -282,8 +314,11 @@ func TestMQTTVerdict(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			m := base()
 			tc.mut(&m)
-			inv, _, loss := mqttVerdict(m)
+			inv, st, loss := mqttVerdict(m)
 			got := failed(inv)
+			if m.Rising && (st.Lost != 0 || st.Undrained != m.Drive.Acked-m.Persisted) {
+				t.Fatalf("a rising shortfall: lost %d undrained %d", st.Lost, st.Undrained)
+			}
 			if strings.Join(got, ",") != strings.Join(tc.wantFail, ",") || loss != tc.wantLoss {
 				t.Fatalf("failed %v loss %v, want %v loss %v", got, loss, tc.wantFail, tc.wantLoss)
 			}
@@ -341,4 +376,81 @@ func TestMQTTReportWithoutADurabilityVerdictFails(t *testing.T) {
 	if (&MQTTReport{}).Passed() {
 		t.Fatal("an empty report passed")
 	}
+}
+
+// laggingCounter is a platform still draining: every read shows a few more rows, and the count
+// stays short of everything stored for as long as the test looks.
+type laggingCounter struct {
+	brokerStore
+	mu    sync.Mutex
+	shown int64
+}
+
+func (c *laggingCounter) Count(ctx context.Context, w Window) (int64, error) {
+	all, _ := c.brokerStore.Count(ctx, w)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.shown++
+	return min(c.shown, all/2), nil
+}
+
+// A count still RISING when the quiesce timeout ends is a pipeline that has not drained, not one
+// that lost events: the run fails as inconclusive with the shortfall reported, and never takes
+// the loss exit code a release gate reads as "PUBACKed events are gone".
+//
+// GUARD: kills a run that skips the re-read after the timeout (every slow drain would be a LOSS).
+func TestADrainStillRisingAtTheTimeoutIsNotALoss(t *testing.T) {
+	b := fakemqtt.New(t)
+	run := startRun(t, b, mqttTestProfile(b, IdentityCount), 4)
+	run.Counter = &laggingCounter{brokerStore: brokerStore{b}}
+	rep, err := run.driveAndReconcile(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Loss || rep.ExitCode() != ExitFail || rep.Storage.Lost != 0 || rep.Storage.Undrained == 0 {
+		t.Fatalf("a still-rising count: loss %v exit %d lost %d undrained %d\n%s",
+			rep.Loss, rep.ExitCode(), rep.Storage.Lost, rep.Storage.Undrained, rep.Human())
+	}
+	if d := inv(t, rep, InvPubackDurability); d.Passed || !strings.Contains(d.Detail, "still rising") {
+		t.Fatalf("durability %+v", d)
+	}
+}
+
+// A duplicate the broker stored is never a pass. With the identity read-back it is named (an
+// extra copy, not a loss); a count sees the same rows as an excess. And where duplicates exactly
+// offset PUBACKed losses, the count is blind (nothing unconfirmed, nothing re-sent, totals
+// equal) while the identity read-back still names the loss: the reason the rc run reads every
+// event back.
+func TestStoredDuplicatesNeverPass(t *testing.T) {
+	t.Run("duplicates alone", func(t *testing.T) {
+		for _, mode := range []string{IdentityFull, IdentityCount} {
+			b := fakemqtt.New(t)
+			b.Duplicate = func(n int64) bool { return n%9 == 0 }
+			run := startRun(t, b, mqttTestProfile(b, mode), 4)
+			rep, err := run.driveAndReconcile(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if rep.Passed() || rep.Loss || rep.Storage.Excess == 0 {
+				t.Fatalf("%s: stored duplicates: passed %v loss %v excess %d\n%s", mode, rep.Passed(), rep.Loss, rep.Storage.Excess, rep.Human())
+			}
+		}
+	})
+	t.Run("duplicates offsetting losses", func(t *testing.T) {
+		build := func() *fakemqtt.Broker {
+			b := fakemqtt.New(t)
+			b.AckOnly = func(n int64) bool { return n%10 == 0 }
+			b.Duplicate = func(n int64) bool { return n%10 == 5 }
+			return b
+		}
+		b := build()
+		run := startRun(t, b, mqttTestProfile(b, IdentityFull), 4)
+		rep, err := run.driveAndReconcile(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !rep.Loss || rep.ExitCode() != ExitLoss || !rep.Storage.LostExact {
+			t.Fatalf("the identity read-back missed losses offset by duplicates:\n%s", rep.Human())
+		}
+	})
 }

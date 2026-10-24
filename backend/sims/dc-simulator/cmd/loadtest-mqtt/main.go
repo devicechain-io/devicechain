@@ -84,13 +84,13 @@ func run() int {
 	maxInflight := flag.Int("max-inflight", envIntOr("DC_LOADTEST_MQTT_MAX_INFLIGHT", 0),
 		"per-device cap on unacknowledged publishes (0 = 64, at most 100)")
 	identity := flag.String("identity", envOr("DC_LOADTEST_IDENTITY", loadtest.IdentityAuto),
-		"how to read the platform back: full (every event, exact loss), count (one count, a lower bound), auto (full up to --identity-max-events)")
+		"how to read the platform back: full (every event, exact loss), count (one count; no durability verdict if anything was unconfirmed or re-sent), auto (full up to --identity-max-events)")
 	identityMax := flag.Int64("identity-max-events", int64(envIntOr("DC_LOADTEST_IDENTITY_MAX_EVENTS", loadtest.DefaultIdentityMaxEvents)),
 		"PUBACKed volume above which --identity auto compares counts instead of reading every event back")
 	minAccepted := flag.Int64("min-accepted", int64(envIntOr("DC_LOADTEST_MIN_ACCEPTED", loadtest.DefaultMinAccepted)),
 		"floor of acknowledged events the run must apply for its verdict to count")
 	minOffered := flag.Float64("min-offered-ratio", envFloatOr("DC_LOADTEST_MIN_OFFERED_RATIO", loadtest.DefaultMinOfferedRatio),
-		"share of rate*duration the run must actually offer for its verdict to count")
+		"share of rate*duration the run must actually offer, and have acknowledged, for its verdict to count")
 	qos0Tolerance := flag.Float64("qos0-tolerance", envFloatOr("DC_LOADTEST_QOS0_TOLERANCE", 0),
 		"share of written QoS 0 events allowed to be missing (QoS 0 promises no delivery; the default 0 reports any shortfall as a failure)")
 	maxAckP99 := flag.Duration("max-ack-p99", envDurationOr("DC_LOADTEST_MAX_ACK_P99", 0),

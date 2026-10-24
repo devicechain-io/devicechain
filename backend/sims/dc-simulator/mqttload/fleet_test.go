@@ -481,3 +481,46 @@ func TestAResumedPublishIsAckedOnlyByItsPuback(t *testing.T) {
 		t.Fatalf("ledger %+v", m)
 	}
 }
+
+// THE SHARP HALF OF THE RESUME RULE. When the re-send is never answered either, there is no
+// PUBACK at all, only the original token closed with no error at the resume. The publish must end
+// UNCONFIRMED at its deadline, be filed ambiguous, and be counted re-sent (it may have reached the
+// broker twice, which the count mode's masked-loss bound must include). A fleet that read the
+// closed token as an acknowledgement would count it PUBACKed here, and nothing else would differ.
+//
+// GUARD: kills a check() that treats a completed token as a PUBACK (TestAResumedPublishIsAcked-
+// OnlyByItsPuback cannot: there the re-send IS PUBACKed moments later, so the two agree).
+func TestAResumedPublishThatIsNeverAnsweredIsUnconfirmed(t *testing.T) {
+	b := fakemqtt.New(t)
+	b.Silent = func(int64) bool { return true } // neither the publish nor its re-send is answered
+	cfg := testConfig(b)
+	cfg.CleanSession = false
+	cfg.AckTimeout = 1500 * time.Millisecond
+	f := startFleet(t, cfg, 1)
+	led := sim.NewIdentityLedger()
+	rt := &sim.Runtime{Identity: led, Wire: f, InstanceId: testInstance, Tenant: testTenant}
+	d := devices(1)[0]
+
+	stamp := sim.EventTimestamp()
+	payload, err := sim.MeasurementPayload(map[string]float64{"speed_kph": 1}, stamp, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		b.DropConnections()
+	}()
+	if err := f.Post(context.Background(), rt, d, "Measurement", stamp, payload); err == nil {
+		t.Fatal("a publish nobody ever PUBACKed was reported acknowledged")
+	}
+	if b.Received() < 2 {
+		t.Fatalf("premise: the broker read %d publish(es); the resumed session should have re-sent the first", b.Received())
+	}
+	c := f.Counters.Snapshot()
+	if c.Acked != 0 || c.Unconfirmed != 1 || c.Resent != 1 {
+		t.Fatalf("acked %d unconfirmed %d resent %d, want 0 / 1 / 1", c.Acked, c.Unconfirmed, c.Resent)
+	}
+	if m := led.Snapshot().Measurements(); m.Accepted != 0 || m.Ambiguous != 1 {
+		t.Fatalf("ledger %+v, want one ambiguous", m)
+	}
+}

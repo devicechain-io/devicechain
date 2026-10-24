@@ -103,9 +103,9 @@ go build -o dc-loadtest-mqtt ./cmd/loadtest-mqtt
 ./dc-loadtest-mqtt --handshake ~/.devicechain/sims/perf/handshake.json \
     --devices 3000 --rate 6000 --duration 10m --report mqtt.json
 
-# the 60 minute rung: count the store once instead of reading 21M events back
+# the 60 minute rung: read all ~21M events back, so the loss is exact (~22k queries)
 ./dc-loadtest-mqtt --handshake ... --devices 3000 --rate 6000 --duration 60m \
-    --identity count --quiesce-timeout 10m --report mqtt.json
+    --identity full --quiesce-timeout 10m --report mqtt.json
 ```
 
 **The verdict.** Exit `0`: every invariant held. Exit `1`: an invariant failed. Exit `2`: the run
@@ -115,14 +115,17 @@ number and `loss` is `true`. A PUBACK is counted only when the session store saw
 (`core/test/mqttack`), never because paho completed a publish token: a persistent session that
 reconnects completes the old token with no error and no PUBACK. A publish that ends with no PUBACK
 (timeout, lost connection) is *unconfirmed*: the device would resend it, it may or may not be
-stored, and it is never counted as a loss.
+stored, and it is never counted as a loss. A persistent session's re-sent publishes are counted
+(`resent`) too: either kind can hide a loss from a count (see the identity modes). A count still
+*rising* when `--quiesce-timeout` ends is a drain, not a loss: the run fails with the shortfall in
+`storage.undrained` and exit `1`, never `3`.
 
 | Invariant | Holds when |
 |-----------|-----------|
 | `fleet-connected` | every device connected at least once |
 | `transport-as-requested` | the sockets observed are the transport requested: all TLS with `--tls` (the default), all plaintext with `--no-tls` |
-| `load-applied` / `load-offered` | the broker acknowledged at least `--min-accepted` events, and the run offered at least `--min-offered-ratio` (0.9) of `rate x duration` |
-| `puback-durability` (QoS 1) | every PUBACKed event is persisted; none persisted beyond what could have been stored |
+| `load-applied` / `load-offered` | the broker acknowledged at least `--min-accepted` events, and the run both offered and had acknowledged at least `--min-offered-ratio` (0.95) of `rate x duration` |
+| `puback-durability` (QoS 1) | every PUBACKed event is persisted; none persisted beyond what could have been stored; with `--identity count`, nothing was unconfirmed or re-sent (`maskedLossBound` is 0) |
 | `qos0-delivery` (QoS 0) | the missing share of written events is within `--qos0-tolerance` (default 0: QoS 0 promises no delivery, so this is a measurement) |
 | `ingest-identity` | with `--identity full`: every PUBACKed event was stored exactly once, by (device, occurredTime) |
 | `ack-latency` | with `--max-ack-p99`: the PUBACK p99 is within the ceiling |
@@ -130,10 +133,14 @@ stored, and it is never counted as a loss.
 **Identity modes.** `--identity full` reads every event back and names the exact loss; it costs
 one GraphQL query per 1,000 events. `--identity count` compares the windowed persisted count with
 the PUBACK count in one query, and can be fooled: an unconfirmed publish that *was* stored takes
-the place of a PUBACKed one that was not. The report states how far (`maskedLossBound`, the
-unconfirmed publishes) rather than hiding it. `auto` (the default) reads everything back up to
-`--identity-max-events` (2,000,000) PUBACKed events and counts above that. For a 60 minute run use
-`count`, and raise `--quiesce-timeout` if the run builds a backlog.
+the place of a PUBACKed one that was not, and so does a re-sent one stored twice. The report
+states how far (`maskedLossBound`, unconfirmed plus re-sent), and a count with a bound above zero
+reaches **no durability verdict**: `puback-durability` fails as inconclusive (exit `1`), because a
+count that cannot exclude a loss must not pass as having excluded one. Even at a bound of zero a
+count cannot see a duplicate the platform stored on its own offsetting a loss; only `full` can.
+`auto` (the default) reads everything back up to `--identity-max-events` (2,000,000) PUBACKed
+events and counts above that. The release-candidate run uses `full`; raise `--quiesce-timeout`
+if the run builds a backlog.
 
 **What the flags mean.**
 

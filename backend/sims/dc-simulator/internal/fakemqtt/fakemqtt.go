@@ -47,6 +47,9 @@ type Broker struct {
 	// StoreOnly, when it returns true for the Nth publish, makes the broker keep it and say
 	// nothing: an event the publisher cannot tell was stored.
 	StoreOnly func(n int64) bool
+	// Duplicate, when it returns true for the Nth publish, makes the broker keep it TWICE (and
+	// PUBACK it once): a stored duplicate, the thing that offsets a loss in a count.
+	Duplicate func(n int64) bool
 	// Authorize, when set, decides whether a CONNECT is admitted (username, password, client id).
 	Authorize func(username, password, clientID string) bool
 
@@ -197,6 +200,9 @@ func (b *Broker) serve(conn net.Conn) {
 			}
 			if b.AckOnly == nil || !b.AckOnly(n) {
 				b.keep(connect, p)
+				if b.Duplicate != nil && b.Duplicate(n) {
+					b.keep(connect, p)
+				}
 			}
 			if p.Qos == 1 {
 				pa := packets.NewControlPacket(packets.Puback).(*packets.PubackPacket)

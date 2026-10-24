@@ -410,6 +410,9 @@ type pending struct {
 	stamp    string // the occurredTime sent: the event's identity
 	sentAt   time.Time
 	deadline time.Time
+	// resent: the token closed with no error and no PUBACK, so a resumed session re-sent the
+	// publish (counted once, in Counters.Resent).
+	resent bool
 }
 
 // result is how a publish ended.
@@ -457,6 +460,10 @@ func (s *session) check(p *pending, now time.Time) (done bool, r result, unconfi
 			return true, result{acked: true, latency: now.Sub(p.sentAt)}, false
 		}
 		unconfirmedDone = true
+		if !p.resent {
+			p.resent = true
+			s.f.Counters.Resent.Add(1)
+		}
 	default:
 	}
 	if now.After(p.deadline) {

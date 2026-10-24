@@ -23,6 +23,11 @@ type Counters struct {
 	// was lost under it, or AckTimeout passed. The event may still have been stored; the
 	// reconciliation treats it as ambiguous.
 	Unconfirmed atomic.Int64
+	// Resent is QoS 1 publishes a resumed session re-sent (their token closed with no error
+	// and no PUBACK). However each one ended, the broker may have received it twice, so a
+	// stored duplicate of it can stand in for a lost event in a count: it widens the count
+	// mode's masked-loss bound exactly as an unconfirmed publish does.
+	Resent atomic.Int64
 	// NotSentDisconnected is ticks a session skipped because its connection was down, and
 	// SkippedInflight ticks skipped because MaxInflight publishes were already waiting.
 	// Neither was sent, so neither can be stored.
@@ -51,6 +56,7 @@ type Snapshot struct {
 	Acked               int64 `json:"pubacked"`
 	Written             int64 `json:"writtenQoS0"`
 	Unconfirmed         int64 `json:"unconfirmed"`
+	Resent              int64 `json:"resent"`
 	NotSentDisconnected int64 `json:"notSentDisconnected"`
 	SkippedInflight     int64 `json:"skippedInflight"`
 	Overruns            int64 `json:"overruns"`
@@ -68,7 +74,7 @@ type Snapshot struct {
 func (c *Counters) Snapshot() Snapshot {
 	return Snapshot{
 		Sent: c.Sent.Load(), Acked: c.Acked.Load(), Written: c.Written.Load(),
-		Unconfirmed: c.Unconfirmed.Load(), NotSentDisconnected: c.NotSentDisconnected.Load(),
+		Unconfirmed: c.Unconfirmed.Load(), Resent: c.Resent.Load(), NotSentDisconnected: c.NotSentDisconnected.Load(),
 		SkippedInflight: c.SkippedInflight.Load(), Overruns: c.Overruns.Load(),
 		ConnectAttempts: c.ConnectAttempts.Load(), ConnectFailures: c.ConnectFailures.Load(),
 		Connects: c.Connects.Load(), ConnectionLosses: c.ConnectionLosses.Load(),

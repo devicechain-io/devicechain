@@ -55,8 +55,9 @@ const (
 	// a full read is one query per 1,000 events.
 	DefaultIdentityMaxEvents = 2_000_000
 	// DefaultMinOfferedRatio is the share of the requested load a run must actually have
-	// offered for its verdict to count.
-	DefaultMinOfferedRatio = 0.9
+	// offered, AND had acknowledged, for its verdict to count: a run is published as
+	// sustaining the rate it asked for, so it must have sustained it.
+	DefaultMinOfferedRatio = 0.95
 	// DefaultMQTTReportInterval is how often a run logs and records a progress slice.
 	DefaultMQTTReportInterval = 10 * time.Second
 	// Exit codes of the MQTT command.
@@ -237,9 +238,16 @@ type MQTTStorage struct {
 	// Excess is persisted events beyond everything that could have been stored.
 	Excess int64 `json:"excess"`
 	// MaskedLossBound is, in count mode, how many PUBACKed losses the count could be hiding:
-	// the unconfirmed publishes, any of which may have been stored in a lost event's place.
-	MaskedLossBound int64  `json:"maskedLossBound"`
-	IdentityMode    string `json:"identityMode"`
+	// the unconfirmed publishes, any of which may have been stored in a lost event's place,
+	// plus the re-sent ones, any of which may have been stored twice. A count with a bound
+	// above zero reaches no durability verdict (it fails as inconclusive), because a count
+	// that cannot exclude a loss must not be published as having excluded one.
+	MaskedLossBound int64 `json:"maskedLossBound"`
+	// Undrained is, when the persisted count was still RISING at the quiesce timeout, how far
+	// it was short of the promise. It is not called a loss (the rows may still be arriving)
+	// and the run fails as inconclusive; raise --quiesce-timeout.
+	Undrained    int64  `json:"undrained,omitempty"`
+	IdentityMode string `json:"identityMode"`
 }
 
 // MQTTReport is the machine- and human-readable result of one MQTT run.
@@ -308,9 +316,9 @@ func (r *MQTTReport) Human() string {
 	fmt.Fprintf(&b, "  transport: %s, QoS %d, clean session %v; observed %d TLS and %d plaintext connection(s) %v\n",
 		t.Broker, t.QoS, t.CleanSession, t.TLSObserved, t.PlainObserved, t.TLSVersions)
 	d := r.Drive
-	fmt.Fprintf(&b, "  drive: %d devices on %d connections, target %.1f ev/s, offered %.1f, pubacked %.1f over %.0fs (+%.0fs drain) — sent %d, pubacked %d, unconfirmed %d, not sent %d disconnected + %d in-flight cap, overruns %d\n",
+	fmt.Fprintf(&b, "  drive: %d devices on %d connections, target %.1f ev/s, offered %.1f, pubacked %.1f over %.0fs (+%.0fs drain) — sent %d, pubacked %d, unconfirmed %d, re-sent %d, not sent %d disconnected + %d in-flight cap, overruns %d\n",
 		d.Devices, d.Connections, d.TargetRatePS, d.OfferedRatePS, d.AckedRatePS, d.HoldSeconds, d.DrainSeconds,
-		d.Sent, d.Acked, d.Unconfirmed, d.NotSentDisconnected, d.SkippedInflight, d.Overruns)
+		d.Sent, d.Acked, d.Unconfirmed, d.Resent, d.NotSentDisconnected, d.SkippedInflight, d.Overruns)
 	fmt.Fprintf(&b, "  connections: %d connects, %d losses, %d connect failures; ack latency p50 %.1fms p99 %.1fms p99.9 %.1fms max %.1fms\n",
 		d.Connects, d.ConnectionLosses, d.ConnectFailures, d.AckLatency.P50, d.AckLatency.P99, d.AckLatency.P999, d.AckLatency.Max)
 	s := r.Storage
@@ -322,6 +330,10 @@ func (r *MQTTReport) Human() string {
 		s.Promised, s.Persisted, s.Reached, s.QuiesceSecs, s.Lost, exact, s.Excess, s.IdentityMode)
 	if s.Lost > 0 {
 		fmt.Fprintf(&b, "  LOSS: %d event(s) the broker PUBACKed are not in the store\n", s.Lost)
+	}
+	if s.MaskedLossBound > 0 {
+		fmt.Fprintf(&b, "  NO DURABILITY VERDICT: a count-only comparison could be masking up to %d PUBACKed loss(es) (%d unconfirmed, %d re-sent); rerun with --identity full\n",
+			s.MaskedLossBound, d.Unconfirmed, d.Resent)
 	}
 	for _, inv := range r.Invariants {
 		mark := "FAIL"
@@ -340,9 +352,12 @@ type mqttMeasured struct {
 	Latency mqttload.Percentiles
 	// Held is how long the drive published.
 	Held time.Duration
-	// Persisted/Reached/QuiesceSecs are the oracle's windowed count.
+	// Persisted/Reached/QuiesceSecs are the oracle's windowed count. Rising says the count
+	// had not reached the promise at the timeout and was still going up when re-read: the
+	// pipeline was draining, so the shortfall is not (yet) a loss.
 	Persisted   int64
 	Reached     bool
+	Rising      bool
 	QuiesceSecs float64
 	// NeverConnected is sessions that never connected once.
 	NeverConnected int
@@ -395,11 +410,15 @@ func mqttVerdict(m mqttMeasured) ([]Invariant, MQTTStorage, bool) {
 	floor := p.MinAccepted
 	add(InvLoadApplied, promised >= floor, "%d event(s) acknowledged by the broker (floor %d — a gate must apply real load)", promised, floor)
 
+	// The rate must have been both offered and acknowledged: a run whose broker answered half
+	// of what it was sent did not sustain the rate it will be published at, however every
+	// one of those answers reconciled.
 	asked := p.Rate * m.Held.Seconds()
 	offered := float64(m.Drive.Sent)
-	add(InvLoadOffered, asked <= 0 || offered >= asked*p.MinOfferedRatio,
-		"offered %.0f of the %.0f requested (%.1f%%; floor %.0f%%): a run that offered less is a weaker test than asked for",
-		offered, asked, pct(offered, asked), p.MinOfferedRatio*100)
+	acked := float64(promised)
+	add(InvLoadOffered, asked > 0 && offered >= asked*p.MinOfferedRatio && acked >= asked*p.MinOfferedRatio,
+		"offered %.0f and acknowledged %.0f of the %.0f requested (%.1f%% / %.1f%%; floor %.0f%%): a run that offered or had acknowledged less is a weaker test than asked for",
+		offered, acked, asked, pct(offered, asked), pct(acked, asked), p.MinOfferedRatio*100)
 
 	switch {
 	case qos1:
@@ -408,9 +427,17 @@ func mqttVerdict(m mqttMeasured) ([]Invariant, MQTTStorage, bool) {
 		if !exact {
 			st.MaskedLossBound = maskable
 		}
-		ok := lost == 0 && excess == 0 && m.Reached
+		draining := !m.Reached && m.Rising && lost > 0
+		if draining {
+			// Still arriving: the shortfall is reported, not concluded.
+			st.Undrained, st.Lost = lost, 0
+		}
+		ok := st.Lost == 0 && excess == 0 && m.Reached && st.MaskedLossBound == 0
 		var detail string
 		switch {
+		case draining:
+			detail = fmt.Sprintf("inconclusive: the persisted count %d was %d short of the %d PUBACKed at the quiesce timeout and still rising; raise --quiesce-timeout",
+				m.Persisted, st.Undrained, promised)
 		case lost > 0:
 			how := "lower bound, from the counts"
 			if exact {
@@ -424,9 +451,12 @@ func mqttVerdict(m mqttMeasured) ([]Invariant, MQTTStorage, bool) {
 			detail = fmt.Sprintf("inconclusive: the persisted count %d did not reach the %d PUBACKed within the quiesce timeout", m.Persisted, promised)
 		case exact:
 			detail = fmt.Sprintf("every one of the %d PUBACKed events is persisted (by identity); %d unconfirmed", promised, m.Drive.Unconfirmed)
+		case st.MaskedLossBound > 0:
+			detail = fmt.Sprintf("inconclusive: persisted %d >= PUBACKed %d by count only, and up to %d PUBACKed loss(es) could be masked by %d unconfirmed publish(es) that were stored and %d re-sent one(s) stored twice; no durability verdict: use --identity full",
+				m.Persisted, promised, st.MaskedLossBound, m.Drive.Unconfirmed, m.Drive.Resent)
 		default:
-			detail = fmt.Sprintf("persisted %d >= PUBACKed %d (count only: up to %d PUBACKed loss(es) could be masked by unconfirmed publishes that were stored; use --identity full to close it)",
-				m.Persisted, promised, st.MaskedLossBound)
+			detail = fmt.Sprintf("persisted %d == PUBACKed %d, by count only (nothing unconfirmed or re-sent; a duplicate the platform itself stored would still offset a loss in a count: --identity full rules that out too)",
+				m.Persisted, promised)
 		}
 		add(InvPubackDurability, ok, "%s", detail)
 	default:
@@ -490,7 +520,7 @@ func durability(m mqttMeasured) (lost int64, exact bool, excess int64, maskable 
 	if m.Persisted > acked+unconfirmed {
 		excess = m.Persisted - acked - unconfirmed
 	}
-	return lost, false, excess, unconfirmed
+	return lost, false, excess, unconfirmed + m.Drive.Resent
 }
 
 func pct(a, b float64) float64 {
@@ -550,6 +580,24 @@ func (r mqttRun) driveAndReconcile(ctx context.Context) (*MQTTReport, error) {
 	if err != nil {
 		return nil, fmt.Errorf("oracle read-back: %w", err)
 	}
+	// A count short of the promise at the timeout is a loss only if it has stopped moving:
+	// re-read it once more after a poll, and a count still rising is a drain, not a loss.
+	rising := false
+	if !qr.Reached {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(max(p.QuiescePoll, p.QuiesceSettle)):
+		}
+		again, err := r.Counter.Count(ctx, w)
+		if err != nil {
+			return nil, fmt.Errorf("oracle re-read: %w", err)
+		}
+		if again > qr.Persisted {
+			rising = true
+			qr.Persisted = again
+		}
+	}
 
 	mode := p.Identity
 	if mode == IdentityAuto {
@@ -560,7 +608,7 @@ func (r mqttRun) driveAndReconcile(ctx context.Context) (*MQTTReport, error) {
 	}
 	m := mqttMeasured{
 		Profile: p, Drive: snap, Latency: lat, Held: held,
-		Persisted: qr.Persisted, Reached: qr.Reached, QuiesceSecs: qr.Elapsed.Seconds(),
+		Persisted: qr.Persisted, Reached: qr.Reached, Rising: rising, QuiesceSecs: qr.Elapsed.Seconds(),
 		NeverConnected: r.Fleet.NeverConnected(), Mode: mode,
 	}
 	if mode == IdentityFull {
