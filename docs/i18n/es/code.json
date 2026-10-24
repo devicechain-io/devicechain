@@ -26,5 +26,17 @@
   "theme.SearchPage.noResultsText": {
     "message": "No se encontraron documentos",
     "description": "The paragraph for empty search result"
+  },
+  "guideShot.enlarge": {
+    "message": "Ampliar imagen",
+    "description": "Prefix of the accessible name of a guide screenshot button; the image description follows"
+  },
+  "guideShot.close": {
+    "message": "Cerrar",
+    "description": "Button that closes the enlarged guide screenshot"
+  },
+  "guideShot.toggleSize": {
+    "message": "Alternar entre tamaño ajustado y tamaño completo",
+    "description": "Accessible hint on the enlarged guide screenshot"
   }
 }

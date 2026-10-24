@@ -1,0 +1,101 @@
+/* The thumbnail is a button so it is focusable and announced as one. It keeps the
+   image's intrinsic box (width/height attributes) so opening costs no layout shift. */
+.trigger {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  line-height: 0;
+  cursor: zoom-in;
+}
+.trigger:focus-visible {
+  outline: 2px solid var(--ifm-color-primary);
+  outline-offset: 2px;
+}
+.thumb {
+  max-width: 100%;
+  height: auto;
+}
+.badge {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: var(--ifm-background-surface-color);
+  color: var(--ifm-font-color-base);
+  border: 1px solid var(--ifm-color-emphasis-300);
+  opacity: 0.85;
+  pointer-events: none;
+}
+.trigger:hover .badge,
+.trigger:focus-visible .badge {
+  opacity: 1;
+}
+
+/* Modal dialog: the browser supplies the focus trap, inert background, Escape and
+   focus return to the trigger. The dialog is the full viewport, so a click that lands on
+   it (rather than on the image or the close button) is a click outside the image. */
+.dialog {
+  width: 100vw;
+  height: 100vh;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: rgba(0, 0, 0, 0.82);
+  overflow: auto;
+}
+.dialog::backdrop {
+  background: rgba(0, 0, 0, 0.82);
+}
+.stage {
+  display: flex;
+  min-width: 100%;
+  min-height: 100%;
+  box-sizing: border-box;
+  padding: 3rem 1rem 1rem;
+  /* margin:auto keeps a fitted image centred and lets an oversized one scroll from its edge. */
+}
+.image {
+  margin: auto;
+  background: var(--ifm-background-surface-color);
+  cursor: zoom-in;
+  max-width: calc(100vw - 2rem);
+  max-height: calc(100vh - 4rem);
+  width: auto;
+  height: auto;
+  object-fit: contain;
+}
+.imageActual {
+  max-width: none;
+  max-height: none;
+  cursor: zoom-out;
+}
+.close {
+  position: fixed;
+  top: 0.75rem;
+  right: 0.75rem;
+  z-index: 1;
+  padding: 0.35rem 0.8rem;
+  border: 1px solid var(--ifm-color-emphasis-400);
+  border-radius: 6px;
+  background: var(--ifm-background-surface-color);
+  color: var(--ifm-font-color-base);
+  font: inherit;
+  cursor: pointer;
+}
+.close:focus-visible {
+  outline: 2px solid var(--ifm-color-primary);
+  outline-offset: 2px;
+}
