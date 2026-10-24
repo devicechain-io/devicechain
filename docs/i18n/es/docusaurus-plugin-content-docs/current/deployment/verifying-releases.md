@@ -5,7 +5,7 @@ title: Verificar las versiones
 
 # Verificar las versiones {#verifying-releases}
 
-Cada imagen de contenedor y el chart de Helm que publica una versión de DeviceChain está **firmado**, y lleva dos declaraciones firmadas sobre cómo se construyó. Puede comprobarlo todo antes de ejecutar nada, sin cuenta y sin ninguna clave que obtener.
+Cada imagen de contenedor y el chart de Helm que publica una versión de DeviceChain está **firmado**, y lleva dos declaraciones firmadas sobre cómo se construyó. Puede comprobarlo todo antes de ejecutar nada, sin ninguna clave que obtener; comprobar la procedencia requiere iniciar sesión en GitHub.
 
 | Qué | Dónde está | Qué le dice |
 | --- | --- | --- |
@@ -16,7 +16,7 @@ Cada imagen de contenedor y el chart de Helm que publica una versión de DeviceC
 La firma es **sin clave**: no hay ninguna clave de larga duración que pueda filtrarse o rotarse. Cada firma queda ligada a la identidad de la ejecución del flujo de trabajo que la produjo, se registra en un registro de transparencia público y se verifica contra esa identidad. Una firma de cualquier otro flujo de trabajo, repositorio o rama no se verifica como una versión.
 
 :::note Qué versiones
-La firma se aplica a las versiones cuyas notas la anuncian, a más tardar `v1.0.0`. Las imágenes anteriores no llevan firma, y verificar una falla con «no signatures found». Esa es la respuesta correcta, no un fallo de su configuración.
+La firma empieza con la `v0.25.0`. Las versiones anteriores a la `v0.25.0` no llevan firma, y verificar una falla con «no signatures found». Esa es la respuesta correcta, no un fallo de su configuración.
 :::
 
 ## Qué está firmado {#what}
@@ -28,16 +28,16 @@ La firma se aplica a las versiones cuyas notas la anuncian, a más tardar `v1.0.
 - la imagen de la consola web: `ghcr.io/devicechain-io/frontend`
 - el chart de Helm: `oci://ghcr.io/devicechain-io/charts/devicechain`
 
-Las imágenes llevan la etiqueta de la versión (`v1.0.0`). El chart lleva la versión **sin** la `v` (`1.0.0`). Los archivos de `dcctl` y del agente de borde adjuntos a la versión de GitHub tienen su propia procedencia; consulte [Versiones y actualizaciones](./releases-and-upgrades.md).
+Las imágenes llevan la etiqueta de la versión (`v0.25.0`). El chart lleva la versión **sin** la `v` (`0.25.0`). Los archivos de `dcctl` y del agente de borde adjuntos a la versión de GitHub tienen su propia procedencia; consulte [Versiones y actualizaciones](./releases-and-upgrades.md).
 
 ## Verificarlo todo de una vez {#script}
 
 El repositorio incluye un script que comprueba todas las imágenes y el chart, y después demuestra que su propia comprobación puede fallar. Necesita [`cosign`](https://docs.sigstore.dev/cosign/system_config/installation/) 3 o posterior, `jq` y la [CLI de GitHub](https://cli.github.com/) con la sesión iniciada (`gh auth login`) para la procedencia.
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/devicechain-io/devicechain/v1.0.0/hack/verify-release-signatures.sh
+curl -fsSLO https://raw.githubusercontent.com/devicechain-io/devicechain/v0.25.0/hack/verify-release-signatures.sh
 chmod +x verify-release-signatures.sh
-./verify-release-signatures.sh v1.0.0
+./verify-release-signatures.sh v0.25.0
 ```
 
 Obtenga el script de la **misma etiqueta** que está verificando. Termina con un código distinto de cero si falla cualquier comprobación de firma, SBOM o procedencia, e indica cuál.
@@ -47,7 +47,7 @@ Termina con dos **controles negativos**. Un verificador que solo ha visto entrad
 ## Verificar una imagen a mano {#by-hand}
 
 ```bash
-TAG=v1.0.0
+TAG=v0.25.0
 IMAGE=ghcr.io/devicechain-io/device-management:$TAG
 
 cosign verify "$IMAGE" \
@@ -74,8 +74,8 @@ gh attestation verify "oci://$IMAGE" --repo devicechain-io/devicechain \
 El chart se verifica del mismo modo, con su propia etiqueta:
 
 ```bash
-cosign verify ghcr.io/devicechain-io/charts/devicechain:1.0.0 \
-  --certificate-identity "https://github.com/devicechain-io/devicechain/.github/workflows/release.yml@refs/tags/v1.0.0" \
+cosign verify ghcr.io/devicechain-io/charts/devicechain:0.25.0 \
+  --certificate-identity "https://github.com/devicechain-io/devicechain/.github/workflows/release.yml@refs/tags/v0.25.0" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 

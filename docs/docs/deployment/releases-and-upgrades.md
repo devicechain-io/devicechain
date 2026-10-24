@@ -3653,6 +3653,395 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 
 Nothing needs doing.
 
+### v0.25.0 — each area signs in to the broker as itself, and releases are signed {#v0250-upgrade}
+
+`v0.25.0` is an in-place upgrade from `v0.24.0`: `dcctl install` for the cluster, then `dcctl upgrade` for
+each instance, as described [for v0.17.0](#v0170-upgrade). Give `dcctl install` the settings the cluster
+was installed with, such as `--ha` and `--database-node-selector`, as well as the new `--version`.
+**Unlike most releases, `dcctl upgrade` is run twice.** The first run gives every area a message-broker
+login of its own and keeps the shared login beside them; the second retires the shared login (see
+[The broker's logins, in two upgrades](#v0250-broker-logins)). **It cannot be reached in place from
+`v0.22.0` or earlier:** upgrade through `v0.23.0` and `v0.24.0` first (see
+[Before you upgrade](#v0250-before)). Its three migrations add five tables, a column and their indexes
+and rewrite no existing row (see [During the upgrade](#v0250-during)). **Roll forward from it, not back**
+(see [Going back](#v0250-going-back)).
+
+The commands, with the `v` in the version and a rehearsal first:
+
+```bash
+dcctl install local --version v0.25.0
+dcctl upgrade local devicechain --version v0.25.0 --dry-run
+dcctl upgrade local devicechain --version v0.25.0
+# when that has finished and every area is Ready, run it again to retire the shared broker login:
+dcctl upgrade local devicechain --version v0.25.0
+```
+
+`--version` takes the tag with its `v`. On a cluster other than the default local one, pass `--kube-context`
+to `dcctl install` and `dcctl upgrade`, and pass `--registry` when the images come from a registry other than
+the default. The `--dry-run` of each run says which of the two it would perform. If the instance was
+bootstrapped without root-key escrow, `dcctl upgrade` prints an escrow warning; that is expected and
+unrelated to this upgrade. A value of `--mqtt-body-credential` set for `v0.24.0` is kept by an upgrade that
+omits the flag; it remains transitional, and `dcctl` documents its removal as planned for `v0.26.0` (see
+[`v0.24.0`](#v0240-mqtt-body-credential)).
+
+This release does two things about trust. Inside the cluster, **no service shares a broker credential with
+another any more**: each area signs in to the message broker as itself, held to what it uses, and one
+administration login alone creates and changes streams and buckets. Outside it, **every image and the
+chart are signed**, so you can check that what you run was built by DeviceChain's release workflow. Around
+them: a device's access token is stored as a keyed digest, the edge agent is a gateway with an identity of
+its own, tenants can create service accounts for their integrations, and over-the-air updates can be rolled
+out to a device group. What changes for somebody:
+
+- **Run `dcctl upgrade` twice.** The first upgrade keeps the shared `dc_service` login; the second removes
+  it. See [The broker's logins, in two upgrades](#v0250-broker-logins).
+- **A device's access token can no longer be read back.** Anything that read `credentialId` of an
+  `ACCESS_TOKEN` credential and used it as the token now gets a fingerprint. See
+  [Device access tokens are stored as digests](#v0250-access-tokens).
+- **An edge agent must be moved to its gateway identity** before it is upgraded; the old direct-device
+  uplink is gone. See [The edge agent is a gateway](#v0250-edge-gateway).
+- **A C# SDK connection that the broker refuses now raises `MqttConnectRefusedException`** instead of
+  being retried as if the network were down. See [The C# SDK](#v0250-csharp-sdk).
+- **An installation that runs the chart without `dcctl`** needs the instance namespace and the broker
+  administrator's Secret before its first install, or `brokerAdmin.enabled=false`. See
+  [The broker's logins, in two upgrades](#v0250-broker-logins).
+- **The broker restarts once in each of the two upgrades,** one server at a time under `--ha`. See
+  [During the upgrade](#v0250-during).
+- **There is no going back to `v0.24.0`.** See [Going back](#v0250-going-back).
+- **Upgrade through `v0.23.0` and `v0.24.0`** when coming from `v0.22.0` or earlier.
+- **Three migrations:** two tables in `update-management`, three in `user-management`, and one column and
+  index in `device-management`. See [During the upgrade](#v0250-during).
+- **Releases are signed.** Nothing needs doing; see [The first signed release](#v0250-signing).
+- **Tuning you set by hand is reverted by an upgrade unless you give it to `--values`.** That was true
+  before; this release adds the way to keep it. See [Operator tuning is carried](#upgrade-tuning).
+
+#### Before you upgrade {#v0250-before}
+
+1. **Coming from `v0.22.0` or earlier: stop.** Upgrade to `v0.23.0`, then to `v0.24.0`, waiting each time
+   until every pod runs the new release, and only then to `v0.25.0`. The compact wire format that
+   `v0.24.0` made the default is unreadable to `v0.22.0` and earlier (see
+   [The event wire format](#event-wire-format)), and skipping a minor is not a tested path (see
+   [Supported upgrade paths](./versioning-policy.md#upgrade-paths)). Read the [`v0.24.0` notes](#v0240-upgrade)
+   too. An instance built by `v0.16.0` or earlier still cannot be upgraded; see
+   [Instances built by v0.16.0 and earlier](#pre-declaration-recreate).
+2. **Find what reads a device's access token back.** A script, a provisioning tool or a spreadsheet that
+   fetched the token from `deviceCredentials` or `deviceCredentialsByToken` will receive a fingerprint
+   beginning `dctk1$` instead. The tokens in the devices keep working. Decide where each token you did
+   not record will come from: set a new token on the credential (see
+   [Device access tokens are stored as digests](#v0250-access-tokens)).
+3. **If you run the edge agent, plan its move to a gateway before you upgrade it.** Create a gateway
+   device with an `MQTT_BASIC` credential for each agent, and assign the devices the site fronts to it.
+   Do not restart an agent on this version until the platform, including its broker, has been upgraded.
+   See [The edge agent is a gateway](#v0250-edge-gateway).
+4. **If you run the chart without `dcctl`, create the namespace and the administrator's Secret first,** or
+   set `brokerAdmin.enabled=false` and create the streams and buckets yourself with the `dc-broker-admin`
+   image. See [What an upgrade applies to the infrastructure](#upgrade-infrastructure). An installation
+   that brings its own broker can print the grants every login needs with `dcctl broker permissions`.
+5. **If you mirror images into your own registry, add `dc-broker-admin`.** The pre-upgrade job runs it, and
+   the upgrade fails before any service rolls if it cannot be pulled. It is also in the list of
+   [signed images](./verifying-releases.md#what).
+6. **If you tuned the instance by hand** (replica counts, resources, an area's own configuration), put it in
+   a values file and pass it as `--values` on the first upgrade. An upgrade rebuilds an instance's settings
+   from its declaration, so anything set another way is reverted. See [Tuning an Instance](./tuning-an-instance.md).
+7. **If a C# or Unity device program connects to the platform's MQTT broker,** read
+   [The C# SDK](#v0250-csharp-sdk) before you rebuild it.
+
+#### During the upgrade {#v0250-during}
+
+- **Three migrations run, one per first start of the service that owns it.** None rewrites a row, and
+  each can be run again if it is interrupted.
+  - `device-management` adds the nullable column `devices.gateway_id`, which records the gateway a device
+    sits behind (it is empty for every existing device), and a partial index on
+    `(tenant_id, gateway_id)`. The index is built with a plain `CREATE INDEX`, which holds a lock against
+    writes to `devices` while it builds; it covers only devices that have a gateway, so it is empty on
+    the first run.
+  - `update-management` creates `update_rollouts` and `update_rollout_targets`, which hold group
+    rollouts. Both start empty.
+  - `user-management` creates `iam_service_accounts`, `iam_service_account_roles` and
+    `iam_service_account_secrets`, which hold service accounts and the digests of their secrets. All
+    three start empty.
+- **`device-management` converts every stored access token to its digest on start.** This is not a
+  migration: it runs after the migration chain on every start, covers every tenant and soft-deleted
+  rows, writes each row only if it still holds the value it read, and finds nothing to do the second
+  time. A device keeps the token it has; the same string authenticates before and after.
+- **While `device-management` rolls, devices that authenticate with an access token can fail to connect.**
+  Once a pod of this release has converted the rows, a pod of `v0.24.0` still in the roll looks a
+  presented token up by its plaintext and finds nothing, so for the length of the overlap it refuses
+  access-token connects and per-event checks. Devices retry and reach a pod of this release. A token
+  that a pod of the previous release writes during the overlap is converted at the next start of a pod of
+  this release. Devices that authenticate with `MQTT_BASIC` are not affected.
+- **The broker restarts once in the first upgrade, and once in the second.** The first adds the logins
+  to the broker; the second removes the shared one. Under `--ha` each restarts one server at a time, each
+  Ready before the next stops; without `--ha` the single server restarts and the broker is unavailable
+  meanwhile, usually about a minute. Devices and services reconnect on their own. **Do not restart a
+  broker server by hand while it rolls.** See [What an upgrade applies to the infrastructure](#upgrade-infrastructure).
+- **A job runs between the broker and the services.** The chart runs `<instance>-broker-admin` as a Helm
+  pre-install and pre-upgrade hook. It creates or repairs every stream and key-value bucket, including
+  turning on direct reads for the `resolved-events` stream that event-processing's replays now use. If it
+  fails, the upgrade fails before any service rolls, `dcctl` prints the job's log, and the services of
+  `v0.24.0` keep running. The job is allowed 540 seconds by default (`brokerAdmin.activeDeadlineSeconds`)
+  and one retry (`brokerAdmin.backoffLimit`).
+- **A pod of the previous release that restarts while the upgrade runs does not start.** `dcctl` writes
+  the new instance configuration just before the job, and it carries a key (`areaLogins`) that `v0.24.0`
+  does not declare, so a `v0.24.0` pod that restarts after that refuses the configuration. Pods that keep
+  running are not affected. Let the upgrade finish rather than restarting pods by hand; the pods that
+  replace them run this release.
+- **Each area waits for its own login.** After the first upgrade an area refuses to start if the instance
+  says per-area logins exist and its own Secret is missing, rather than fall back to the shared login.
+
+#### Going back {#v0250-going-back}
+
+**Roll forward. Do not go back to `v0.24.0`, with `helm rollback` or any other way.** If the upgrade fails
+partway, fix the cause and run `dcctl upgrade` again with the same `--version`. Going back leaves an
+instance that does not work:
+
+- **Every device on an access token is refused.** The token is now stored as a digest, and `v0.24.0` looks
+  a presented token up by its plaintext. A rollback does not restore the plaintext, and the plaintext is
+  not kept anywhere.
+- **The shared broker login may be gone.** After the second upgrade the broker no longer has `dc_service`
+  and the instance configuration no longer names it, so a service of `v0.24.0` has nothing to connect
+  with. `dcctl` says so when it retires the login: rolling back across this release is not supported,
+  re-run the newer `dcctl upgrade` instead.
+- **The configuration is written for this release.** `dcctl` writes the instance configuration to the Secret
+  `dci-<instance>-config`, outside the chart's release, so `helm rollback` restores the previous
+  release's workloads and leaves the configuration as this release wrote it. It carries the key
+  `areaLogins`, which `v0.24.0` does not declare; services refuse an unknown configuration key at startup.
+
+The new tables and the new column would not be in the way: `v0.24.0` reads the same database and leaves
+them unused.
+
+#### After the upgrade {#v0250-after}
+
+- **Run `dcctl upgrade` a second time,** once the first has ended with every area Ready. See
+  [The broker's logins, in two upgrades](#v0250-broker-logins).
+- **Check the signatures of what you installed,** if you want to. See
+  [The first signed release](#v0250-signing).
+- **Keep `metrics.enabled` and `metrics.alerts` on** (both are by default) to install the three new
+  tenant-deletion alerts: `TenantPurgeStoreFailing`, `TenantPurgeStoreHolding` and
+  `TenantPurgeCoordinatorFailing`. See [Tenant deletion](./tenant-deletion.md#blocked-store).
+- **Move each edge agent** when the platform is done. See [The edge agent is a gateway](#v0250-edge-gateway).
+- **Set a new token on any access-token credential you did not record.** See
+  [Device access tokens are stored as digests](#v0250-access-tokens).
+
+##### The broker's logins, in two upgrades {#v0250-broker-logins}
+
+Until now every service signed in to the message broker with one shared login, so any pod could present,
+and any leak of its configuration exposed, the credential of all of them. The mechanism is described under
+[What an upgrade applies to the infrastructure](#upgrade-infrastructure), where the per-area logins, the
+administration job and `dcctl broker reconcile` are covered; what it means for the upgrade:
+
+- **The first upgrade is phase 1 of 2.** It creates a login for every area that uses the broker (`mcp` and
+  `ai-inference` never open a broker connection and get none) and one for broker administration, each in a
+  Secret named `dci-<instance>-nats-<area>` that only that area mounts. The shared `dc_service` login stays,
+  with the permissions it always had, so a pod that has not rolled yet keeps its connection. Until the
+  second upgrade it is still in the configuration every pod reads, so a pod can still present it. The
+  closing summary says "This was phase 1 of 2: run `dcctl upgrade` once more to retire it."
+- **The second upgrade retires it.** It does so only when the instance it starts from already runs every
+  area on its own login. It checks that:
+  - the running configuration already tells the areas to use their own logins;
+  - every login's Secret existed before this run, so none is being created now;
+  - the running broker already holds a login for every area and for the administrator;
+  - the running release carries the broker administration job;
+  - the last run over the instance ended Ready; and
+  - this run applies the broker, so `--skip-infrastructure` never retires the login.
+
+  When all hold, the broker and the instance configuration stop carrying the shared login, with one more
+  broker restart, and the services roll once more onto the changed configuration. The closing summary
+  says "The shared message broker login is retired." When one does not, the login is kept and the summary says "The shared message broker login was NOT retired"
+  and names the cause; resolve it and run `dcctl upgrade` again.
+- **Do not pass `--skip-infrastructure` to either run.** It applies nothing to the broker, so it neither
+  adds the logins nor retires the shared one.
+- **A new instance never has a shared login.** `dcctl bootstrap` creates only the per-area logins.
+- **Rolling back across the second upgrade is unsupported.** See [Going back](#v0250-going-back).
+- **Services check, and the administrator changes.** A service verifies every stream and bucket it opens
+  and stops with an error naming the stream and what differs when one is missing or wrong. Run
+  `dcctl broker reconcile <instance>` to put it back, which also recovers a stream or bucket deleted by
+  hand.
+- **Two behaviours change with it.** The cache buckets' lifetime is now fixed at five minutes, because
+  the job creates them and no longer asks each service; the `device-management` cache time-to-live settings
+  now bound only how long a replica holds an entry in its own memory. And a replica count raised in the
+  instance configuration takes effect when the job runs, at the next upgrade, rather than at every pod
+  restart.
+- **Chart-only installs** need the namespace and the administration Secret in place before the first
+  install, because the job runs before the chart creates anything. The Secret is named
+  `dci-<instance>-nats-broker-admin` and holds `user` and `password`. `dcctl broker permissions` prints
+  the grants for a broker you run yourself.
+- **Restoring from a backup gets new logins.** See [Disaster recovery](./disaster-recovery.md).
+
+See the [security model](../concepts/security-model.md) for what the logins do and do not protect.
+
+##### Device access tokens are stored as digests {#v0250-access-tokens}
+
+An `ACCESS_TOKEN` credential's token is its credential id, and it used to be stored and returned as sent, so
+a database or backup leak yielded a working credential for every token device. It is now stored as
+a keyed digest of the same kind an `MQTT_BASIC` password already is: an HMAC-SHA-256 over the tenant and
+the token, under a key derived from the instance root key. The stored form is `dctk1$<key id>$<digest>`.
+
+- **Existing devices keep their tokens.** No device needs reprovisioning.
+- **The token is shown once,** in the response to the call that sets it (create, an update that rotates it,
+  a device replacement that mints one) and in the console's banner, and never again. A read returns the
+  fingerprint, which identifies the credential and cannot be presented as the token.
+- **To get a usable token for a credential whose token you did not record, set a new one:** **Set new
+  token** in the console, or `updateDeviceCredential` with only `credentialId`. The device's current token
+  stops opening connections as soon as you do. See
+  [Show-once passwords and tokens, and rotation](../guides/device-credentials.md#show-once).
+- **`deviceCredentials(criteria: {credentialId})` accepts the token or the fingerprint.**
+- **Changing a credential's type to or from `ACCESS_TOKEN` must name `credentialId` in the same request,**
+  because the stored value means a digest under one type and a username under the other. A request that
+  does not is refused as `INVALID_VALUE`. A token over 256 bytes is refused as `LIMIT_EXCEEDED`.
+- **The console's connect snippets** show `<access-token>` for an access-token credential, as they already
+  showed a placeholder for a password.
+- **A different root key makes every digest foreign.** As for password digests, an instance restored next
+  to the wrong root key logs an error naming how many stored digests its key did not make.
+
+##### The edge agent is a gateway {#v0250-edge-gateway}
+
+The edge agent signs in to the platform as a device of its own, a **gateway**, and publishes each local
+device's events in its own namespace. The platform accepts an event only for a device assigned to that
+gateway. This is the only uplink mode: the old direct-device mode, in which the agent forwarded to the
+cloud broker verbatim, is removed. See [Gateway identity](./edge-services.md#gateway-identity) and
+[the gateway namespace](../reference/device-protocol.md#gateway-namespace).
+
+- **An agent's configuration must change.** `agentId` is no longer a key, and a leftover one stops the
+  agent at start, with an error naming `uplink.gatewayToken` as its replacement. `uplink.tenant`,
+  `uplink.gatewayToken`, `uplink.username` (in the form `{tenant}:{credentialId}`, refused at load
+  otherwise) and `uplink.passwordEnv` are required.
+- **Create the gateway device and assign its devices before the agent drains its backlog.** Events spooled
+  under the old mode are forwarded in the new namespace, and one for a device that is not yet assigned is
+  refused. The spool and its durable are narrowed to `uplink.tenant` in place; spooled events of any other
+  tenant are not forwarded and stay in the spool until its ring buffer evicts them.
+- **Assign devices with `assignDeviceGateway`,** or with `gatewayToken` when creating one, or from the
+  device's **Gateway** tab in the console. A device has at most one gateway, a gateway cannot itself be
+  behind a gateway, and a gateway that still has devices cannot be deleted. It needs `device:write`, and
+  takes effect on the device's next event.
+- **A refused event is not silent.** The platform records it on the failed-events stream with the reason
+  `NotGatewayChild`, counts it in `resolve_not_gateway_child_total`, and sends the gateway a notice; the
+  agent logs it, counts it, and keeps the event in `refused-events.jsonl` in its store directory.
+- **Upgrade the platform first.** An `event-sources` of `v0.24.0` running with
+  `infrastructure.nats.mqttFailClosed` on acknowledges gateway messages it cannot attribute and drops
+  them, and the agent sees success. Finish upgrading every `event-sources` and `device-management` replica
+  and the broker before you restart any agent on this version. An agent whose broker has not been
+  upgraded cannot subscribe to its notices and does not report `uplink_connected`. See the warning under
+  [Rolling upgrades](#rolling-upgrades).
+- **Commands to devices behind a gateway are not routed yet.** The agent forwards events only.
+
+##### The C# SDK {#v0250-csharp-sdk}
+
+The SDK did not recognise a refused connection. The MQTT library reports a CONNACK that is not a success
+by throwing, and the SDK treated that as an ordinary transport failure, so a session's reconnect loop
+kept retrying a credential the broker had refused as if the network were down. It now raises
+`MqttConnectRefusedException` for a CONNACK that judged the client (unsupported protocol version, client
+identifier not valid, bad user name or password, not authorized, banned, bad authentication method), and a
+session's reconnect loop stops on it and reports the session blind. A CONNACK of "server unavailable" or
+"server busy", and a socket that fails mid-connect, are still retried. `MqttConnectRefusedException` gains
+a constructor that takes the underlying exception, which is a public API addition; nothing is removed.
+
+What this changes for a device program: one that depended on an indefinite retry now has to handle the
+refusal, for example after its credential is revoked or replaced, or its access token is set again.
+
+##### The first signed release {#v0250-signing}
+
+Every service image, the operator, the edge agent, the broker administrator and the console, and the Helm
+chart, are signed with cosign, keyless, by digest. Each image also carries a signed SPDX SBOM and SLSA
+build provenance, and the chart carries provenance. A signature is bound to the release workflow and the
+tag, so one from any other workflow, repository or branch does not verify as a release. The GitHub Release is
+not published until `hack/verify-release-signatures.sh <tag>` has passed against what was pushed.
+
+- **To check what you downloaded,** follow [Verifying releases](./verifying-releases.md); the script needs
+  `cosign` 3 or later, `jq` and the GitHub CLI, and no account or key of ours.
+- **Releases before `v0.25.0` carry no signature,** and verifying one fails with "no signatures found".
+- **The database image is not covered.** The operand image that runs the event store is published by a
+  separate workflow and is not signed in this release.
+- **The `dcctl` and edge agent archives** carry build provenance as they have since
+  [`v0.18.0`](#v0180-provenance).
+
+Nothing needs doing for an upgrade. See the [security policy](https://github.com/devicechain-io/devicechain/security/policy)
+for how to report a problem.
+
+##### Service accounts {#v0250-service-accounts}
+
+A tenant administrator can create **service accounts** under **Settings**, next to **Members**, for scripts
+and integrations that should not run on a person's refresh token. An account holds exactly the roles it is
+given (with no viewer baseline), optionally limited to some customers or groups, and obtains an ordinary
+access token valid for five minutes with the OAuth `client_credentials` grant. A secret is shown once, stored
+as a keyed digest, and expires (365 days by default, 730 at most); rotating one leaves the old one working for
+an overlap you choose, 24 hours by default. A tenant can hold 200 accounts, and an account cannot
+administer the tenant. See [Service accounts](../user-guide/service-accounts.md). An operator's OAuth client
+cannot use this grant, and a service account's credentials authenticate nothing on the other grants.
+
+##### Group rollouts of over-the-air updates {#v0250-rollouts}
+
+`createUpdateRollout`, `startUpdateRollout`, `pauseUpdateRollout`, `resumeUpdateRollout` and
+`abortUpdateRollout` assign one artifact to the members of a device group, never more than `maxInFlight`
+devices (1 to 1,000) with an unfinished update, and **Updates → Rollouts** in the console shows them.
+Starting a rollout freezes the group's members; a group of more than 10,000 devices is refused. A device
+the assignment rules refuse is skipped with that rule's code and holds no slot. An optional failure
+threshold pauses the rollout by itself, and resuming it then needs a higher threshold. Aborting cancels
+the devices not yet started and leaves the ones in flight to finish. Rollouts need `artifact:write`
+to change and `artifact:read` to view, and a member limited to part of the tenant is refused. See
+[Rolling out to a group](../concepts/over-the-air-updates.md#rollouts). New metrics are
+`update_rollout_dispatches_total`, `update_rollout_transitions_total` and `update_rollout_step_failures_total`.
+
+#### What else changed {#v0250-what-changed}
+
+##### Known limitations {#v0250-known-limitations}
+
+- **Through the first upgrade the shared login is still readable by every pod.** That is the window
+  between the two upgrades; run the second promptly.
+- **Two broker grants are wider by design:** `event-sources` keeps update rights on the broker's own MQTT
+  stores, and `user-management` can purge a deleted tenant's data across every stream, except for the
+  consumers `event-sources` keeps its acknowledged-message durability on.
+- **A gateway's commands are not routed,** a notice to a gateway is best effort, and the agent holds a
+  bounded copy (8,192 events and 16 MiB) of what it forwarded to match a notice against.
+- **Rollouts have no waves or canary stage,** no schedule, and no alert for a stalled rollout driver.
+- **The SBOM is generated from each image's `amd64` variant.**
+- **Carried from `v0.24.0`:** a calculated-metric backfill skips compressed history; a broker crash with a
+  large backlog is not covered by `mqttFailClosed`; and with `mqttFailClosed` off a change of the MQTT
+  capture stream's leader under heavy load can lose acknowledged QoS 1 events (`JetStreamCaptureLeaderChanged`
+  warns).
+
+##### Also in this release {#v0250-also}
+
+- **`dcctl bootstrap` and `dcctl upgrade` take `--values`,** a YAML file of tuning (replica counts,
+  resources, an area's own configuration) that is recorded on the instance and applied again by every
+  later upgrade. A key `dcctl` owns, such as an image, a credential or an endpoint, is refused by name before
+  anything changes. `--reset-values` removes it, and `--dry-run` prints what would change. See
+  [Tuning an Instance](./tuning-an-instance.md).
+- **`dcctl broker reconcile <instance>` and `dcctl broker permissions`** are new; see above.
+- **An entity's audit entry is saved in the same transaction as the change.** It used to be written after the
+  change committed, so a failed audit write told the caller the change had failed although it had been
+  saved, and left it unrecorded. Now both are saved or neither is, which means a failed audit write fails the
+  change. Sign-in and authentication events stay best effort.
+- **Tenant deletion shows what holds it back.** `tenant_purge_store_blocked{store,reason}` counts open
+  deletions per storage system, with `tenant_purge_store_rows_erased_total`,
+  `tenant_purge_store_erase_duration_seconds`, `tenant_purge_completed_total`, `tenant_purge_failures_total`,
+  `tenant_purge_duration_seconds` and `tenant_purge_clean_duration_seconds`, and three alerts. See
+  [Tenant deletion](./tenant-deletion.md#blocked-store).
+- **Tenant deletion is faster in two places.** The key-value erasure runs 32 purges at a time instead of one,
+  and S3 object deletion is batched, up to 1,000 keys per request. In a single-node loopback test, erasing
+  63,000 keys went from 28.9 s to 3.1 s. A batch in which any key fails to delete now fails the pass, which
+  is repeated until nothing is left.
+- **A writer follows a leader election until it has caught up.** A publisher that routes to a stream's
+  leader used to work out the new leader once, and kept the old target if that pass failed. It now retries
+  with a growing delay, for at most 30 seconds. This affects performance only.
+- **Dashboards.** A board can show a fixed window, chosen with **Custom range** or opened from a
+  `?from=&to=` link, in place of the rolling range (see
+  [Custom range](../user-guide/viewing-dashboards-in-dash.md#custom-range)). A new history table widget
+  lists one device's stored history as rows of bucket averages, and a widget with something to hand over
+  has a download button for CSV or PNG. A widget with nothing to draw now says which of five reasons it
+  is: no device chosen, not reported by this device, no data in this range, no access, or a failed source.
+  `/dash?rotate=tokA,tokB&every=60` cycles two to 24 boards on a wall display, 10 to 3,600 seconds each
+  (see [Rotating through several boards](../user-guide/viewing-dashboards-in-dash.md#rotating-boards)). All
+  of it is additive: a saved dashboard reads and renders as before.
+- **Versioning and security documents.** [Versioning and Upgrade Policy](./versioning-policy.md) says what
+  is stable from `v1.0.0`, and the [security model](../concepts/security-model.md) describes the trust
+  boundaries and what enforces each. The rolling-upgrade section no longer claims zero downtime.
+- **A compatibility check runs on every change.** Every served GraphQL schema, the `dcctl` commands and
+  flags, the device wire contract, the device topic layout, the C# SDK's public API and the npm packages'
+  exports are compared with the last release, and a break must be declared. Against `v0.24.0` no break is
+  declared in this release.
+- **The demo player for the Sitepulse showcase sets a token of its own** on each device's credential,
+  because it could no longer read one back.
+
 ### v0.24.0 — calculated metrics you can author, and an event path that carries more {#v0240-upgrade}
 
 `v0.24.0` is an in-place upgrade from `v0.23.0`: `dcctl install` for the cluster, then
