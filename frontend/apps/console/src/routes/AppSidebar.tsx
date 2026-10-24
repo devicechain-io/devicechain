@@ -14,10 +14,10 @@ import {
   Cpu,
   FileArchive,
   Filter,
+  House,
   Languages,
   Layers,
   LayoutDashboard,
-  LayoutGrid,
   Map,
   MapPin,
   Pentagon,
@@ -66,7 +66,7 @@ interface NavLeaf {
   labelKey: string;
   href: string;
   icon: LucideIcon;
-  // Authority required to see this item; omit for always-visible (e.g. Dashboard).
+  // Authority required to see this item; omit for always-visible (e.g. Home).
   requires?: string;
   // Names a gate beyond authority. 'updates' hides the item unless the update-management
   // area is KNOWN to be deployed and the caller may read it (see useUpdateAccess).
@@ -81,14 +81,14 @@ interface NavLeaf {
 
 type NavGroupNode = { labelKey: string; icon: LucideIcon; children: NavLeaf[] };
 
-// A top-level nav node is either a direct link (Dashboard) or a collapsible
+// A top-level nav node is either a direct link (Home) or a collapsible
 // group of leaves. Each model construct (Devices, and later Assets/Customers/
 // Areas) is one group whose children are its Instances / Types / Groups — so
 // adding a construct is a single config entry, not new layout code.
 type NavNode = NavLeaf | NavGroupNode;
 
 export const NAV: NavNode[] = [
-  { labelKey: 'dashboard', href: '/', icon: LayoutGrid, scoped: true },
+  { labelKey: 'home', href: '/', icon: House, scoped: true },
   { labelKey: 'dashboards', href: '/dashboards', icon: LayoutDashboard, requires: 'dashboard:read', scoped: true },
   { labelKey: 'alarms', href: '/alarms', icon: AlertTriangle, requires: 'alarm:read', scoped: true },
   // Who gets paged for an alarm, and when they are left alone. notification-management has its
