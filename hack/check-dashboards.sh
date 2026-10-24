@@ -112,6 +112,7 @@ BOARDS=(
   event-processing
   messaging
   overview
+  persistence
   platform
 )
 # ...and the two published names, spelled out from that list. This is the only
