@@ -88,7 +88,7 @@ var tilePlaceholders = [][]string{
 //
 // 🔴 THIS LIST IS READ FROM MAPLIBRE'S SOURCE, NOT REMEMBERED. It is the exact set in
 // the `.replace()` chain of Tile.prototype.getTileURL — {prefix}, {z}, {x}, {y},
-// {ratio}, {quadkey}, {bbox-epsg-3857}. The first draft of this list omitted {prefix}
+// {ratio}, {quadkey}, {bbox-epsg-3857}, {bbox}. The first draft of this list omitted {prefix}
 // (a sharding token substituted with the low nibbles of x and y) purely because the
 // author did not know it existed, which turned a fail-closed guard into a refusal of
 // a URL that renders perfectly — and shipped that false enumeration into the error
@@ -119,6 +119,7 @@ var knownPlaceholders = map[string]bool{
 	"z":      true, "x": true, "y": true,
 	"ratio":          true,
 	"bbox-epsg-3857": true,
+	"bbox":           true,
 	"quadkey":        true,
 }
 
@@ -270,7 +271,7 @@ func validateTileURL(url string) error {
 	// the exact URL shape this rule exists to catch would pass through the rule.
 	for _, m := range placeholderRe.FindAllStringSubmatch(url, -1) {
 		if !knownPlaceholders[m[1]] {
-			return fmt.Errorf(`basemap.tileUrl contains %s, which the map renderer does not substitute — it would be requested literally and every tile would fail. Only {prefix}, {z}, {x}, {y}, {ratio}, {bbox-epsg-3857} and {quadkey} are replaced; a subdomain placeholder like {s} comes from Leaflet documentation and should be replaced with a single subdomain (for example a.tile.example.com)`, m[0])
+			return fmt.Errorf(`basemap.tileUrl contains %s, which the map renderer does not substitute — it would be requested literally and every tile would fail. Only {prefix}, {z}, {x}, {y}, {ratio}, {bbox-epsg-3857}, {bbox} and {quadkey} are replaced; a subdomain placeholder like {s} comes from Leaflet documentation and should be replaced with a single subdomain (for example a.tile.example.com)`, m[0])
 		}
 	}
 	for _, set := range tilePlaceholders {

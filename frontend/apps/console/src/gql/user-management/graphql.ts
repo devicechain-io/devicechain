@@ -146,7 +146,7 @@ export type TenantBasemapInput = {
   centerLon?: number | null | undefined;
   /**
    * Raster tile URL template: an https URL of at most 2048 characters containing {z}, {x}
-   * and {y}, or {bbox-epsg-3857}, or {quadkey}. {prefix} and {ratio} are also substituted;
+   * and {y}, or {bbox-epsg-3857}, or {quadkey}. {prefix}, {ratio} and {bbox} are also substituted;
    * any other placeholder is rejected. Requires attribution.
    */
   tileUrl?: string | null | undefined;
