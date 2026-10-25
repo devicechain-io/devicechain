@@ -212,7 +212,11 @@ func (api *Api) resolveRolloutGroup(ctx context.Context, groupToken string) ([]s
 	var version *int32
 	cursor, barren := "", 0
 	for barren < maxBarrenGroupPages {
-		page, err := api.Groups.ResolveGroupTargets(ctx, groupToken, nil, cursor, rolloutGroupPage)
+		// The first page resolves the group's ACTIVE published version; every later page is asked
+		// for exactly that version, so a publish mid-walk cannot splice two versions' member sets
+		// into one frozen target set. A static group has no version (and refuses one), so nothing
+		// is pinned for it.
+		page, err := api.Groups.ResolveGroupTargets(ctx, groupToken, version, cursor, rolloutGroupPage)
 		if err != nil {
 			return nil, nil, refuse(CodeRolloutGroupUnavailable, "the group could not be resolved in device-management: %v", err)
 		}
@@ -220,9 +224,17 @@ func (api *Api) resolveRolloutGroup(ctx context.Context, groupToken string) ([]s
 			return nil, nil, refuse(CodeRolloutGroupUnusable, "group %q cannot be a rollout target [%s]: %s",
 				groupToken, page.Code, page.Reason)
 		}
-		if page.ResolvedVersion != nil {
-			v := *page.ResolvedVersion
-			version = &v
+		if version == nil {
+			if page.ResolvedVersion != nil {
+				v := *page.ResolvedVersion
+				version = &v
+			}
+		} else if page.ResolvedVersion == nil || *page.ResolvedVersion != *version {
+			// Asked for the pinned version and answered with another (or none): mixing it in
+			// would record a target set no single group version ever had.
+			return nil, nil, refuse(CodeRolloutGroupUnavailable,
+				"group %q changed version while it was being resolved (pinned %d, a later page reported %s); retry the start",
+				groupToken, *version, versionLabel(page.ResolvedVersion))
 		}
 		before := len(tokens)
 		for _, t := range page.DeviceTokens {
@@ -247,6 +259,14 @@ func (api *Api) resolveRolloutGroup(ctx context.Context, groupToken string) ([]s
 		cursor = page.NextCursor
 	}
 	return nil, nil, refuse(CodeRolloutGroupUnavailable, "the resolution of group %q did not terminate", groupToken)
+}
+
+// versionLabel renders an optional group version for an error message.
+func versionLabel(v *int32) string {
+	if v == nil {
+		return "none"
+	}
+	return fmt.Sprint(*v)
 }
 
 // StartRollout freezes the group's current membership as the rollout's target set and moves the
