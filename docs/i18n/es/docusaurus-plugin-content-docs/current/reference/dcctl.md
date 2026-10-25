@@ -65,6 +65,7 @@ dcctl bootstrap <provider> <instance> [flags]
       --kube-context string                         build the instance on the cluster this context reaches, prepared with 'dcctl install --kube-context'
       --lwm2m-identities string                     path to a JSON file of LwM2M DTLS-PSK credentials to provision: [{identity, psk(base64), tenant, externalId, deviceTypeToken, autoRegister}]. Renders the PSKs into a chart-owned Secret and binds each to lwm2m-ingest; implies --enable-area lwm2m-ingest. Validated up front (short PSK / missing tenancy fails before any cluster). Re-running bootstrap WITHOUT this flag removes the provisioned credentials
       --mqtt-body-credential string                 TRANSITIONAL. What event-sources does with an MQTT event whose body carries a device credential: refuse (the default) or strip (accept it with the credential removed). Use strip while a fleet whose firmware still sends one is updated, then refuse; a device that sent one should have its credential rotated. A value given here is kept by later upgrades that omit the flag. Planned for removal in v0.26.0
+      --mqtt-fail-closed                            make a QoS 1 PUBACK from the MQTT gateway mean the platform holds the message (infrastructure.nats.mqttFailClosed). The trade: a QoS 1 publish is REFUSED (no PUBACK, connection closed, the device resends) while the broker's MQTT message store has no leader, instead of being acknowledged and possibly lost, and the ingest ceiling is lower, so size the instance below it. It covers QoS 1 only, and its guarantee is stated for a replicated broker (a cluster installed with --ha). --mqtt-fail-closed=false turns it off again. Fixed configuration, recorded on the instance and kept by 'dcctl upgrade' when the flag is omitted; not giving the flag leaves the platform default
       --no-escrow                                   do NOT escrow the secret-store root key. The key then exists only inside the cluster: losing the cluster makes every stored secret permanently unreadable, even from a database backup, because no DeviceChain backup contains etcd. For throwaway instances only; implied by --dev
       --no-tls                                      serve plain HTTP instead of a self-signed cert (with --host localhost, a zero-config http://localhost/). On by default on a cluster installed without cert-manager, where --no-tls=false is refused
       --object-store string                         where the instance keeps tenant logos and update artifacts: none, filesystem (a volume the chart creates) or s3. Default: a small filesystem store on a cluster dcctl created, none on one it was pointed at with --kube-context. Fixed configuration, recorded on the instance and kept by 'dcctl upgrade'
@@ -1345,6 +1346,11 @@ It does not change an instance's shape. The profile, topology and functional
 areas come from the instance's own declaration, which is what 'dcctl bootstrap'
 recorded. Use it to move versions, not to reconfigure.
 
+The fail-closed MQTT acknowledgement is the other: '--mqtt-fail-closed' (or
+'--mqtt-fail-closed=false') sets it on a live instance, and the declaration records the
+choice. A plain upgrade with no flag keeps whatever was recorded, so an instance built
+with it stays on, and one told off stays off.
+
 Operator tuning is the exception, and it is carried: a values overlay given to
 'dcctl bootstrap --values' or to this command is recorded on the instance and applied
 again by every later upgrade. '--values \<file>' replaces the recorded overlay,
@@ -1379,6 +1385,10 @@ when they are in a terraform.tfvars beside its state
 
   # Tune the instance; later upgrades keep applying it without --values
   dcctl upgrade local devicechain --values tuning.yaml
+
+  # Turn the fail-closed MQTT acknowledgement on (kept by later upgrades), or back off
+  dcctl upgrade local devicechain --mqtt-fail-closed
+  dcctl upgrade local devicechain --mqtt-fail-closed=false
 ```
 
 ```
@@ -1394,6 +1404,7 @@ dcctl upgrade <provider> <instance> [flags]
   -h, --help                            help for upgrade
       --kube-context string             kube-context to target (default: the cluster recorded at bootstrap; a different context is refused)
       --mqtt-body-credential string     TRANSITIONAL. What event-sources does with an MQTT event whose body carries a device credential: refuse (the default) or strip (accept it with the credential removed). Use strip while a fleet whose firmware still sends one is updated, then refuse; a device that sent one should have its credential rotated. A value given here is kept by later upgrades that omit the flag. Planned for removal in v0.26.0
+      --mqtt-fail-closed                make a QoS 1 PUBACK from the MQTT gateway mean the platform holds the message (infrastructure.nats.mqttFailClosed). The trade: a QoS 1 publish is REFUSED (no PUBACK, connection closed, the device resends) while the broker's MQTT message store has no leader, instead of being acknowledged and possibly lost, and the ingest ceiling is lower, so size the instance below it. It covers QoS 1 only, and its guarantee is stated for a replicated broker (a cluster installed with --ha). --mqtt-fail-closed=false turns it off again. Fixed configuration, recorded on the instance and kept by 'dcctl upgrade' when the flag is omitted; not giving the flag leaves the platform default
       --registry string                 image registry to pull from (default: ghcr.io/devicechain-io)
       --reset-values                    remove the tuning overlay recorded on the instance: it returns to the values dcctl computes. Cannot be combined with --values
       --skip-infrastructure             move only the services: leave this instance's message broker and event store on the configuration they were built with

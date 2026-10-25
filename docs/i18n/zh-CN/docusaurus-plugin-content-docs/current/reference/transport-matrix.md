@@ -81,7 +81,7 @@ title: 传输能力矩阵
   实例设置 `infrastructure.nats.mqttFailClosed`（默认关闭）可为 QoS 1 堵上第二和第三个漏洞。
   开启后，QoS 1 PUBACK 意味着平台已保存该消息：平台从代理自身的消息存储中读取 QoS 1 事件、命令响应和设备报告。
   存储写满时会拒绝发布，主节点切换中的存储则不会确认发布，因此设备收不到 PUBACK，会重新发送。
-  QoS 0 发布保持上述行为，超出租户上限的消息仍会在 PUBACK 之后被丢弃。参见
+  QoS 0 发布保持上述行为，超出租户上限的消息仍会在 PUBACK 之后被丢弃。`dcctl bootstrap` 和 `dcctl upgrade` 用 `--mqtt-fail-closed` 开启它。参见
   [服务质量](../guides/connecting-a-device.md#quality-of-service)和
   [MQTT 故障关闭](../deployment/observability.md#mqtt-fail-closed)。
 - **写入 ◐**：命令可以送出，但投递**仅面向当前在线连接，且没有确认**。

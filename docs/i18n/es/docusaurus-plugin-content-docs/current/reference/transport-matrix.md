@@ -107,7 +107,8 @@ hay ningún bróker aparte que operar.
   informes de dispositivo QoS 1 del propio almacén de mensajes del bróker. Un almacén lleno rechaza
   la publicación, y uno cuyo líder está cambiando no la confirma, así que el dispositivo no recibe
   PUBACK y la vuelve a enviar. Las publicaciones QoS 0 mantienen el comportamiento anterior, y un
-  mensaje por encima del techo del inquilino se sigue descartando después de su PUBACK. Consulte
+  mensaje por encima del techo del inquilino se sigue descartando después de su PUBACK. `dcctl bootstrap` y
+  `dcctl upgrade` lo activan con `--mqtt-fail-closed`. Consulte
   [calidad de servicio](../guides/connecting-a-device.md#quality-of-service) y
   [MQTT a prueba de fallos](../deployment/observability.md#mqtt-fail-closed).
 - **Escritura ◐**: los comandos se entregan, pero la entrega es **solo en vivo y sin

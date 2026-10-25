@@ -194,6 +194,7 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 		return err
 	}
 	sayValuesOverlay(st)
+	sayMqttFailClosed(st)
 	// 🔴 THE OPERATOR IS NOT LISTED AS SOMETHING THIS RUN WILL MOVE, because it is
 	// not. hydrateUpgradeState has already refused unless the cluster's operator is
 	// the one this build expects; what this verb moves is the instance.
@@ -227,6 +228,16 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 			}
 		}()
 		infra.say()
+	}
+
+	// 🔴 THE JETSTREAM RESERVATION IS ASKED BEFORE THE DECLARATION IS WRITTEN. The document
+	// this run writes reserves every stream ceiling up front against the broker's real
+	// max_file_store, and an upgrade keeps the volume the instance was built with: a setting that
+	// raises a ceiling can be refused by a broker that cannot hold it, and a declaration already
+	// naming the setting would make every flagless retry fail the same way. See
+	// jetstreamreservation.go.
+	if err := precheckJetStreamReservation(ctx, st); err != nil {
+		return err
 	}
 
 	// 🔴 THE DECLARATION IS UPDATED BEFORE ANYTHING MOVES, AND BOTH HALVES OF THAT
@@ -581,6 +592,9 @@ func recordUpgradedVersion(ctx context.Context, dyn dynamic.Interface, instance 
 			wouldDo(fmt.Sprintf("record %s as enabled in the instance declaration",
 				strings.Join(st.AreaChange.Added, ", ")))
 		}
+		if st.MqttFailClosedChange && st.MqttFailClosed != nil {
+			wouldDo(fmt.Sprintf("record mqttFailClosed=%t in the instance declaration", *st.MqttFailClosed))
+		}
 		return nil
 	}
 
@@ -599,7 +613,8 @@ func recordUpgradedVersion(ctx context.Context, dyn dynamic.Interface, instance 
 	}
 
 	areasMove := st.AreaChange != nil && !slices.Equal(inst.Spec.ExtraFunctionalAreas, st.EnableAreas)
-	if inst.Spec.ImageRegistry == st.ImageRegistry && inst.Spec.ImageVersion == st.ImageVersion && !areasMove {
+	if inst.Spec.ImageRegistry == st.ImageRegistry && inst.Spec.ImageVersion == st.ImageVersion && !areasMove &&
+		!(st.MqttFailClosedChange && !sameBoolPtr(inst.Spec.MQTTFailClosed, st.MqttFailClosed)) {
 		// Already says what this run is about to do. Writing anyway would bump the
 		// provenance annotations on every no-op re-apply, which makes
 		// `last-applied-at` useless for the question it exists to answer.
@@ -620,13 +635,34 @@ func recordUpgradedVersion(ctx context.Context, dyn dynamic.Interface, instance 
 	if areasMove {
 		spec.ExtraFunctionalAreas = append([]string(nil), st.EnableAreas...)
 	}
+	// 🔴 THE FAIL-CLOSED CHOICE IS WRITTEN WITH THE VERSION, BEFORE THE MOVE, for the reason the
+	// area delta is: a run that dies half-way leaves the choice declared and the flagless re-run
+	// finishes it instead of rolling it back. ONLY when this run was given one -- a State that
+	// merely read the declaration back never writes it away.
+	if st.MqttFailClosedChange {
+		spec.MQTTFailClosed = copyBoolPtr(st.MqttFailClosed)
+	}
 	// 🔴 Upgrading, AND THE VALUE IS THE DEFECT THIS LINE FIXES. writeInstanceCR
 	// stamped Bootstrapping on every write, so every instance that had ever been
 	// upgraded declared a bootstrap in progress from then on — a phase that is not
 	// merely imprecise but names the wrong VERB, which is the one thing a reader
 	// uses it for. See finishUpgradePhase for the other half: a phase that is only
 	// ever entered is a phase that is never left.
-	return writeInstanceCR(ctx, dyn, instance, spec, st.DcctlVersion, dcv1beta1.PhaseUpgrading)
+	if err := writeInstanceCR(ctx, dyn, instance, spec, st.DcctlVersion, dcv1beta1.PhaseUpgrading); err != nil {
+		return err
+	}
+	if !st.MqttFailClosedChange {
+		return nil
+	}
+	// 🔴 READ BACK WHAT THIS RUN ASKED TO KEEP. See verifyFailClosedRecorded.
+	back, err := readInstanceCR(ctx, dyn, instance)
+	if err != nil {
+		return err
+	}
+	if back == nil {
+		return nil
+	}
+	return verifyFailClosedRecorded(st.MqttFailClosed, back.Spec.MQTTFailClosed)
 }
 
 // finishUpgradePhase records how this upgrade ENDED on the declaration, and gives
