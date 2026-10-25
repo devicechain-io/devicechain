@@ -196,6 +196,21 @@ instance bootstrapped on that cluster is watched by it:
 - **Destroying an instance leaves an empty folder** — its boards are removed, but its
   now-empty `devicechain-<instance>` folder stays in Grafana; delete it by hand.
 
+### Upgrading the stack
+
+Re-running `dcctl install` upgrades the monitoring stack to the version the release pins.
+Helm never upgrades a chart's custom resource definitions, so the stack runs the chart's own
+CRD upgrade job first: a short-lived Job in the `monitoring` namespace applies the Prometheus
+Operator CRDs server-side before the new operator starts, and there is nothing to apply by
+hand. The Job pulls two images (`busybox` and `registry.k8s.io/kubectl`), so a cluster with no
+route to those registries must mirror them first.
+
+Going from the stack of earlier releases to this one crosses a Prometheus major version
+(2 to 3) and a Grafana major version (11 to 13). Prometheus, Alertmanager and Grafana restart
+once; the Grafana admin login, its `ClusterIP` Service and the per-instance dashboard folders
+are unchanged. Prometheus keeps its stored metrics on a cluster with a persistent volume, and
+starts empty on a local cluster, which keeps them on the node's disk only.
+
 ## Signing in to Grafana
 
 Grafana uses its own **admin login**. Grafana is not integrated with DeviceChain

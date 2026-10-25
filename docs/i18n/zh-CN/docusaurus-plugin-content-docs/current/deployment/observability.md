@@ -98,6 +98,12 @@ DeviceChain 内置可观测性：每个服务都提供 **Prometheus 指标**和�
 - **旧面板链接失效。** 升级实例不再使用原共享 ID `dc-event-processing-ops`、`dc-command-delivery-ops`；全部升级后，旧书签失效。
 - **删除实例留下空文件夹。** 面板移除，但空的 `devicechain-<instance>` 文件夹仍留在 Grafana，需手动删除。
 
+### 升级监控栈
+
+重新运行 `dcctl install` 会把监控栈升级到该版本固定的版本。Helm 从不升级 chart 的自定义资源定义，因此监控栈会先运行 chart 自带的 CRD 升级 Job：`monitoring` 命名空间中的一个短生命周期 Job 在新的 operator 启动之前，以服务端方式应用 Prometheus Operator 的 CRD，无需手动应用。该 Job 会拉取两个镜像（`busybox` 和 `registry.k8s.io/kubectl`），无法访问这些镜像仓库的集群需要先镜像它们。
+
+从早期版本的监控栈升级到此版本，会跨越 Prometheus 的一个主版本（2 到 3）和 Grafana 的一个主版本（11 到 13）。Prometheus、Alertmanager 和 Grafana 各重启一次；Grafana 管理员登录、其 `ClusterIP` Service 以及每个实例的仪表盘文件夹保持不变。使用持久卷的集群会保留 Prometheus 已存储的指标；本地集群只把指标保存在节点磁盘上，升级后从空开始。
+
 ## 登录 Grafana {#signing-in-to-grafana}
 
 Grafana 使用自己的**管理员登录**。Grafana 没有与 DeviceChain 登录集成：无论是 DeviceChain 密码，还是已连接的身份提供商（参见[单点登录](../concepts/single-sign-on.md)），都不能用来登录 Grafana。
