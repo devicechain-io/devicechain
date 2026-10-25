@@ -110,6 +110,7 @@ python3 -c 'import yaml' 2>/dev/null || {
 BOARDS=(
   command-delivery
   event-processing
+  ingest
   messaging
   overview
   persistence
