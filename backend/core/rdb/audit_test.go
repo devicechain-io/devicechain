@@ -434,3 +434,54 @@ func TestAuditCallbacksRunBeforeTheCommit(t *testing.T) {
 		t.Fatalf("a callback ordered After the journal and Before the commit saw %d audit rows, want 1", seen)
 	}
 }
+
+// WithAuditActor names the actor of a write that has no user behind it, in a system context
+// (a device registering itself) and under a tenant alike.
+func TestWithAuditActorNamesAWriteWithNoUser(t *testing.T) {
+	db := newAuditTestDB(t)
+	for name, base := range map[string]context.Context{
+		"system": core.WithSystemContext(context.Background()),
+		"tenant": core.WithTenant(context.Background(), "A"),
+	} {
+		ctx := WithAuditActor(base, "provisioning-profile:factory-a")
+		if err := db.WithContext(ctx).Create(&gadget{Name: name}).Error; err != nil {
+			t.Fatalf("%s: create gadget: %v", name, err)
+		}
+	}
+	rows := readAudit(t, db)
+	if len(rows) != 2 {
+		t.Fatalf("expected 2 audit rows, got %d", len(rows))
+	}
+	for _, r := range rows {
+		if r.Actor != "provisioning-profile:factory-a" {
+			t.Errorf("actor = %q, want the named actor", r.Actor)
+		}
+	}
+}
+
+// Claims win: naming an actor can never relabel an authenticated user's write.
+func TestWithAuditActorNeverOverridesClaims(t *testing.T) {
+	db := newAuditTestDB(t)
+	ctx := auth.WithClaims(core.WithTenant(context.Background(), "A"), &auth.Claims{Username: "alice", Tenant: "A"})
+	ctx = WithAuditActor(ctx, "provisioning-profile:factory-a")
+	if err := db.WithContext(ctx).Create(&widget{Name: "w1"}).Error; err != nil {
+		t.Fatalf("create widget: %v", err)
+	}
+	rows := readAudit(t, db)
+	if len(rows) != 1 || rows[0].Actor != "alice" {
+		t.Fatalf("want one row by alice, got %+v", rows)
+	}
+}
+
+// With nothing named, a bare context is still unattributed, and an empty name changes
+// nothing.
+func TestWithAuditActorEmptyLeavesTheContextAlone(t *testing.T) {
+	db := newAuditTestDB(t)
+	ctx := WithAuditActor(core.WithSystemContext(context.Background()), "")
+	if err := db.WithContext(ctx).Create(&gadget{Name: "g"}).Error; err != nil {
+		t.Fatalf("create gadget: %v", err)
+	}
+	if rows := readAudit(t, db); len(rows) != 1 || rows[0].Actor != "system" {
+		t.Fatalf("want the system actor, got %+v", rows)
+	}
+}

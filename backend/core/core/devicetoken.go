@@ -1,14 +1,12 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package adapter
+package core
 
 import (
 	"crypto/sha256"
 	"encoding/hex"
 	"strings"
-
-	"github.com/devicechain-io/dc-microservice/core"
 )
 
 // tokenHashLen is how many hex chars of the raw-id hash a derived token carries. 12
@@ -36,6 +34,15 @@ const tokenHashLen = 12
 //     devices.
 //   - Hash-disambiguated: two DISTINCT ids that slug to the same string still get
 //     distinct tokens, so unrelated devices can never silently merge.
+//
+// 🔴 THE OUTPUT IS A STORED KEY. Every device an ingest source or a provisioning profile
+// has registered carries the token this function derived, and the next message from it
+// re-derives the token to find it. A change to any byte of the result strands every
+// existing device and mints a duplicate for each. The golden vectors in
+// devicetoken_test.go are the schema; they must not move.
+//
+// It lives in core because more than one service derives it (the protocol ingest adapters
+// and device self-registration), and two copies would drift.
 func DeriveDeviceToken(externalId, prefix string) string {
 	sum := sha256.Sum256([]byte(externalId))
 	hash := hex.EncodeToString(sum[:])[:tokenHashLen]
@@ -47,7 +54,7 @@ func DeriveDeviceToken(externalId, prefix string) string {
 	// Bound the whole token to MaxTokenLen: reserve the prefix, the hash, and the one
 	// joining hyphen, then trim any hyphen/underscore the cut left dangling (legal, but
 	// tidier not to).
-	max := core.MaxTokenLen - len(prefix) - len(hash) - 1
+	max := MaxTokenLen - len(prefix) - len(hash) - 1
 	if len(slug) > max {
 		slug = strings.TrimRight(slug[:max], "-_")
 	}

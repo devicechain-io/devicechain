@@ -116,7 +116,30 @@
         },
         "config": {
           "type": "object",
-          "description": "The instance configuration document (infrastructure, persistence, per-service settings), written into the dci-<id>-config Secret. The chart validates only the envelope; each service validates its own part at startup. Under existingSecret this block is not the mounted document, but templates still read its defaults; restate the ports in networkPolicy.externalConfigPorts and the broker host in metrics.natsBrokerHost."
+          "description": "The instance configuration document (infrastructure, persistence, per-service settings), written into the dci-<id>-config Secret. The chart validates only the envelope and the few keys named below; each service validates its own part at startup. Under existingSecret this block is not the mounted document, but templates still read its defaults; restate the ports in networkPolicy.externalConfigPorts and the broker host in metrics.natsBrokerHost.",
+          "properties": {
+            "infrastructure": {
+              "type": "object",
+              "description": "Settings shared by every service in the instance: messaging, secrets and the HTTP edge. The chart validates only the keys named below; each service validates the rest at startup.",
+              "properties": {
+                "http": {
+                  "type": "object",
+                  "description": "How the services' HTTP endpoints read the caller's address.",
+                  "additionalProperties": false,
+                  "properties": {
+                    "trustedProxies": {
+                      "type": "array",
+                      "description": "CIDR prefixes (IPv4 or IPv6) of the proxies whose X-Forwarded-For header an endpoint that keys on the caller's address may believe, in practice the ingress controller's pod or Service range. Empty or absent trusts no proxy, so such an endpoint keys on the connection's own peer, which behind an ingress is the ingress itself. Each entry must be in canonical masked form (10.42.0.0/16, never 10.42.0.7/16); the services re-check every entry at startup and refuse to start on a malformed one.",
+                      "items": {
+                        "type": "string",
+                        "pattern": "^([0-9]{1,3}([.][0-9]{1,3}){3}/[0-9]{1,2}|[0-9a-fA-F:]*:[0-9a-fA-F:.]*/[0-9]{1,3})$"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
         }
       },
       "description": "Identity and configuration of this DeviceChain instance."

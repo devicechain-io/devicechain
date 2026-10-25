@@ -155,6 +155,26 @@ const (
 	// keyed digest under the service-account key (DeriveServiceAccountSecretKey), so
 	// declaring it needs WithServiceAccountSecretKey.
 	KindServiceAccount Kind = "service-account"
+	// KindProvisioningProfile is a device presenting a provisioning profile's shared secret
+	// at the self-registration endpoint. ID is "{tenant}:{provisionKey}"; Tenant is the
+	// tenant the profile belongs to, bound into its stored digest. The stored secret is a
+	// salted keyed digest under the provisioning key (WithProvisioningSecretKey), a key of
+	// its own so a digest from a device or claim row verifies nothing here.
+	//
+	// It must be Unthrottled (ErrMustBeUnthrottled): the secret is server-generated from 256
+	// random bits, so a per-key backoff would buy no guessing resistance, and it would hand
+	// a stranger who knows a provision key a way to lock every device out of its own profile.
+	KindProvisioningProfile Kind = "provisioning-profile"
+	// KindProvisionedCredential is the REPLAY compare of self-registration: a device
+	// presenting, again, the access token it already registered with. ID is
+	// "{tenant}:{deviceToken}"; Tenant is the device's tenant. The stored value is the
+	// deterministic access token digest under the DEVICE key (WithDeviceSecretKey).
+	//
+	// It is a kind of its own, and not KindDeviceCredential, because a mismatch here must not
+	// charge the connect backoff of the username a device presents to the broker, and it
+	// must not share that kind's attempt record. It must be Unthrottled (ErrMustBeUnthrottled):
+	// a mismatch writes no attempt record at all.
+	KindProvisionedCredential Kind = "provisioned-credential"
 )
 
 // comparator is how one kind's presented secret is compared against its stored one.
@@ -167,6 +187,8 @@ type comparator struct {
 	// keyed names which of the Checker's digest keys the stored value was made under
 	// (keyNone for a kind that is not keyed); compare is then nil and NewChecker binds the key.
 	keyed digestKey
+	// unthrottledOnly refuses a policy that is not Unthrottled for this kind (NewChecker).
+	unthrottledOnly bool
 }
 
 // digestKey names one of the Checker's keyed-digest keys.
@@ -176,6 +198,11 @@ const (
 	keyNone digestKey = iota
 	keyDevice
 	keyServiceAccount
+	// keyProvisioning is the provisioning profile secret's key (WithProvisioningSecretKey).
+	keyProvisioning
+	// keyDeviceAccessToken is the DEVICE key, used to compare a deterministic access token
+	// digest (accesstoken.go) and not a salted secret digest.
+	keyDeviceAccessToken
 )
 
 // comparators is THE mapping from kind to compare. It is fixed here and not supplied
@@ -186,6 +213,9 @@ var comparators = map[Kind]comparator{
 	KindOAuthClient:      {compare: bcrypt.CompareHashAndPassword, bcrypt: true},
 	KindDeviceCredential: {keyed: keyDevice},
 	KindServiceAccount:   {keyed: keyServiceAccount},
+
+	KindProvisioningProfile:   {keyed: keyProvisioning, unthrottledOnly: true},
+	KindProvisionedCredential: {keyed: keyDeviceAccessToken, unthrottledOnly: true},
 }
 
 // constantTimeCompare is subtle.ConstantTimeCompare. It is a variable only so a test
@@ -456,6 +486,9 @@ type Checker struct {
 	// serviceAccountKey is what KindServiceAccount's digests are made under
 	// (WithServiceAccountSecretKey).
 	serviceAccountKey *DeviceSecretKey
+	// provisioningKey is what KindProvisioningProfile's digests are made under
+	// (WithProvisioningSecretKey).
+	provisioningKey *DeviceSecretKey
 	// observer is WithCompareObserver's, applied once the compares exist.
 	observer func(stored []byte)
 
@@ -494,6 +527,20 @@ func WithDeviceSecretKey(k *DeviceSecretKey) Option {
 func WithServiceAccountSecretKey(k *DeviceSecretKey) Option {
 	return func(c *Checker) { c.serviceAccountKey = k }
 }
+
+// WithProvisioningSecretKey is the key KindProvisioningProfile's stored digests were made
+// under. A Checker declaring that kind without one is refused (ErrNoProvisioningSecretKey).
+func WithProvisioningSecretKey(k *DeviceSecretKey) Option {
+	return func(c *Checker) { c.provisioningKey = k }
+}
+
+// ErrNoProvisioningSecretKey is NewChecker's refusal to declare KindProvisioningProfile
+// without a key (WithProvisioningSecretKey).
+var ErrNoProvisioningSecretKey = errors.New("credential: KindProvisioningProfile needs a provisioning secret key (WithProvisioningSecretKey)")
+
+// ErrMustBeUnthrottled is NewChecker's refusal of a throttled policy for a kind that is
+// only ever Unthrottled (KindProvisioningProfile, KindProvisionedCredential).
+var ErrMustBeUnthrottled = errors.New("credential: this kind must be declared Unthrottled")
 
 // ErrNoServiceAccountSecretKey is NewChecker's refusal to declare KindServiceAccount without
 // a key (WithServiceAccountSecretKey).
@@ -566,21 +613,39 @@ func NewChecker(store Store, policies map[Kind]Policy, opts ...Option) (*Checker
 		if err := policies[k].validate(); err != nil {
 			return nil, fmt.Errorf("credential: policy for kind %q: %w", k, err)
 		}
+		if cmp.unthrottledOnly && !policies[k].Unthrottled {
+			return nil, fmt.Errorf("%w: kind %q", ErrMustBeUnthrottled, k)
+		}
 		if cmp.keyed != keyNone {
 			key := c.deviceKey
 			missing := ErrNoDeviceSecretKey
-			if cmp.keyed == keyServiceAccount {
+			switch cmp.keyed {
+			case keyServiceAccount:
 				key, missing = c.serviceAccountKey, ErrNoServiceAccountSecretKey
+			case keyProvisioning:
+				key, missing = c.provisioningKey, ErrNoProvisioningSecretKey
 			}
 			if key == nil {
 				return nil, fmt.Errorf("%w: kind %q", missing, k)
 			}
-			c.compares[k] = func(p Principal, stored, secret []byte) error {
-				return key.verify(p.Tenant, string(stored), string(secret))
-			}
 			// The dummy is a digest for a tenant no principal can name (the token grammar
 			// refuses the space), so it costs a real verify and never matches.
-			dummy, err := key.Digest(" dummy", dummySecret)
+			var (
+				dummy string
+				err   error
+			)
+			if cmp.keyed == keyDeviceAccessToken {
+				// The replay compare is a deterministic access token digest, not a salted one.
+				c.compares[k] = func(p Principal, stored, secret []byte) error {
+					return VerifyAccessToken(key, p.Tenant, string(stored), string(secret))
+				}
+				dummy, err = key.AccessTokenDigest(" dummy", dummySecret)
+			} else {
+				c.compares[k] = func(p Principal, stored, secret []byte) error {
+					return key.verify(p.Tenant, string(stored), string(secret))
+				}
+				dummy, err = key.Digest(" dummy", dummySecret)
+			}
 			if err != nil {
 				return nil, err
 			}
