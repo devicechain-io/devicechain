@@ -489,6 +489,12 @@ func infraVars(st *State) []string {
 		vars = append(vars,
 			"ingress_use_host_port=true",
 			"monitoring_slim=true",
+			// Traefik runs next to ingress-nginx in this release, and only one controller
+			// per node can hold the host's 80/443, so it does NOT take host ports here
+			// (the cluster root refuses both). It still needs a Service a kind cluster can
+			// satisfy: a LoadBalancer stays <pending> and hangs the release's --wait.
+			// Reachable on its NodePort until the swap makes it the host-port holder.
+			"traefik_service_type=NodePort",
 		)
 		// Expose MQTT as a NodePort on the port the embedded kind config maps
 		// host 1883 to (deploy/local/kind-cluster.yaml: host 1883 -> node 31883),

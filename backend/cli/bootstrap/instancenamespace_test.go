@@ -340,7 +340,8 @@ func TestTheDryRunRehearsesTheNamespaceVerdict(t *testing.T) {
 // with the cluster's own namespace untouched beside it, fails under both.
 func TestAnInstanceNamedAfterAClusterNamespaceIsBuiltBesideItNotIntoIt(t *testing.T) {
 	for _, owned := range []string{
-		"monitoring", "dc-system", "cert-manager", "cnpg-system", "ingress-nginx", "default",
+		"monitoring", "dc-system", "cert-manager", "cnpg-system", "ingress-nginx", "traefik",
+		"gateway-api-system", "default",
 	} {
 		t.Run(owned, func(t *testing.T) {
 			// The cluster's own namespace, exactly as `dcctl install` leaves it: present,

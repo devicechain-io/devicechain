@@ -896,3 +896,38 @@ func StreamName(instanceId, suffix string) string {
 func DurableName(instanceId, functionalArea, suffix string) string {
 	return sanitizeName(fmt.Sprintf("%s_%s_%s", instanceId, functionalArea, suffix))
 }
+
+// CaptureDurableName is the durable the device-events capture reader uses: the ordinary name
+// (DurableName) with an "_unfiltered" tail, created with no broker filter (see NewReader).
+//
+// 🔴 THE NEW NAME IS WHAT MAKES A ROLLING UPGRADE STICK. event-sources rolls with one pod of the
+// previous build still running beside the new one. Under the old name the new pod would recreate
+// the durable unfiltered, the old pod's next fetch would fail on the deleted consumer, and its
+// re-bind (create, then move the filter onto its list in place) would put the filter list back:
+// after the roll the durable is filtered again, slow once behind, and nothing reports it. Under a
+// name the old build does not know, it cannot touch this durable at all, and a work queue refuses
+// the overlapping filtered durable it tries to create under its own name while this one exists,
+// so the old pod retries until it is gone. The reader deletes the old-named durable every time it
+// binds (retireLegacyCaptureDurable).
+//
+// Going back to a build before this one needs this durable deleted first, by hand: that build
+// creates the old name with its filter list, which the work queue refuses while this durable
+// exists. Nothing is lost by deleting it; the stream keeps every message until it is acked.
+//
+// Dashboards and alert selectors match on the name, so anything that names the capture durable
+// must know this form (and, across an upgrade, the old one).
+func CaptureDurableName(instanceId, functionalArea, suffix string) string {
+	return DurableName(instanceId, functionalArea, suffix) + captureDurableTail
+}
+
+// captureDurableTail ends the capture reader's durable name; see CaptureDurableName.
+const captureDurableTail = "_unfiltered"
+
+// ReaderDurableName is the name of the durable an area's ordinary (explicit-ack) reader of suffix
+// binds: CaptureDurableName for the device-events capture, DurableName for every other stream.
+func ReaderDurableName(instanceId, functionalArea, suffix string) string {
+	if streams.ShapeOf(suffix) == streams.ShapeDeviceEvents {
+		return CaptureDurableName(instanceId, functionalArea, suffix)
+	}
+	return DurableName(instanceId, functionalArea, suffix)
+}

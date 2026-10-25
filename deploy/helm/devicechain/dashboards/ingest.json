@@ -217,7 +217,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "round(sum(increase({__name__=~\"devicechain_[a-z0-9]+_jetstream_consumer_unread_skipped_total\", durable=~\".+_event-sources_device-events-capture\", namespace=\"$namespace\"}[$__range]))) or vector(0)",
+          "expr": "round(sum(increase({__name__=~\"devicechain_[a-z0-9]+_jetstream_consumer_unread_skipped_total\", durable=~\".+_event-sources_device-events-capture(_unfiltered)?\", namespace=\"$namespace\"}[$__range]))) or vector(0)",
           "legendFormat": "__auto",
           "instant": true
         }
@@ -343,7 +343,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "max({__name__=~\"devicechain_[a-z0-9]+_jetstream_consumer_unread_ratio\", durable=~\".+_event-sources_device-events-capture\", namespace=\"$namespace\"})",
+          "expr": "max({__name__=~\"devicechain_[a-z0-9]+_jetstream_consumer_unread_ratio\", durable=~\".+_event-sources_device-events-capture(_unfiltered)?\", namespace=\"$namespace\"})",
           "legendFormat": "__auto"
         }
       ],
@@ -596,7 +596,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "max by (stream) ({__name__=~\"devicechain_[a-z0-9]+_jetstream_consumer_unread_ratio\", durable=~\".+_event-sources_device-events-capture\", namespace=\"$namespace\"})",
+          "expr": "max by (stream) ({__name__=~\"devicechain_[a-z0-9]+_jetstream_consumer_unread_ratio\", durable=~\".+_event-sources_device-events-capture(_unfiltered)?\", namespace=\"$namespace\"})",
           "legendFormat": "Backlog against its limit"
         },
         {
@@ -670,7 +670,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(deriv({__name__=~\"devicechain_[a-z0-9]+_jetstream_consumer_pending_messages\", durable=~\".+_event-sources_device-events-capture\", namespace=\"$namespace\"}[5m]))",
+          "expr": "sum(deriv({__name__=~\"devicechain_[a-z0-9]+_jetstream_consumer_pending_messages\", durable=~\".+_event-sources_device-events-capture(_unfiltered)?\", namespace=\"$namespace\"}[5m]))",
           "legendFormat": "Backlog growth /s (above zero: falling behind)"
         }
       ],
@@ -724,7 +724,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "max by (durable) ({__name__=~\"devicechain_[a-z0-9]+_jetstream_consumer_pending_messages\", durable=~\".+_event-sources_device-events-capture\", namespace=\"$namespace\"})",
+          "expr": "max by (durable) ({__name__=~\"devicechain_[a-z0-9]+_jetstream_consumer_pending_messages\", durable=~\".+_event-sources_device-events-capture(_unfiltered)?\", namespace=\"$namespace\"})",
           "legendFormat": "Waiting to be forwarded"
         },
         {
@@ -733,7 +733,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "max by (durable) ({__name__=~\"devicechain_[a-z0-9]+_jetstream_consumer_unread_gap_messages\", durable=~\".+_event-sources_device-events-capture\", namespace=\"$namespace\"})",
+          "expr": "max by (durable) ({__name__=~\"devicechain_[a-z0-9]+_jetstream_consumer_unread_gap_messages\", durable=~\".+_event-sources_device-events-capture(_unfiltered)?\", namespace=\"$namespace\"})",
           "legendFormat": "Removed before being read"
         }
       ],
@@ -1214,6 +1214,69 @@
       }
     },
     {
+      "id": 101,
+      "type": "stat",
+      "title": "Dropped by the capture reader: not from a device, over the range",
+      "description": "Messages the capture reader was handed but dropped without forwarding, because they were stored under a subject devices do not publish telemetry on, counted over the time range you picked. Device publishes cannot produce one, so any number above zero means something other than a device wrote into device intake, most likely a push consumer on another stream. Nothing was forwarded and no device event is missing. Zero is the normal reading. Alert: JetStreamReaderForeignDropped.",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 33
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "round(sum(increase({__name__=~\"devicechain_[a-z0-9]+_jetstream_reader_foreign_dropped_total\", namespace=\"$namespace\"}[$__range]))) or vector(0)",
+          "legendFormat": "__auto",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "auto"
+      }
+    },
+    {
       "id": 19,
       "type": "timeseries",
       "title": "Refusals by reason",
@@ -1222,7 +1285,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 33
+        "y": 37
       },
       "datasource": {
         "type": "prometheus",
@@ -1361,7 +1424,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 33
+        "y": 37
       },
       "datasource": {
         "type": "prometheus",
@@ -1424,7 +1487,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 41
+        "y": 45
       },
       "datasource": {
         "type": "prometheus",
@@ -1487,7 +1550,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 41
+        "y": 45
       },
       "datasource": {
         "type": "prometheus",
@@ -1550,7 +1613,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 49
+        "y": 53
       }
     },
     {
@@ -1562,7 +1625,7 @@
         "h": 4,
         "w": 4,
         "x": 0,
-        "y": 50
+        "y": 54
       },
       "datasource": {
         "type": "prometheus",
@@ -1624,7 +1687,7 @@
         "h": 4,
         "w": 4,
         "x": 4,
-        "y": 50
+        "y": 54
       },
       "datasource": {
         "type": "prometheus",
@@ -1687,7 +1750,7 @@
         "h": 4,
         "w": 4,
         "x": 8,
-        "y": 50
+        "y": 54
       },
       "datasource": {
         "type": "prometheus",
@@ -1750,7 +1813,7 @@
         "h": 4,
         "w": 4,
         "x": 12,
-        "y": 50
+        "y": 54
       },
       "datasource": {
         "type": "prometheus",
@@ -1812,7 +1875,7 @@
         "h": 4,
         "w": 4,
         "x": 16,
-        "y": 50
+        "y": 54
       },
       "datasource": {
         "type": "prometheus",
@@ -1875,7 +1938,7 @@
         "h": 4,
         "w": 4,
         "x": 20,
-        "y": 50
+        "y": 54
       },
       "datasource": {
         "type": "prometheus",
@@ -1938,7 +2001,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 54
+        "y": 58
       },
       "datasource": {
         "type": "prometheus",
@@ -2003,7 +2066,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 54
+        "y": 58
       },
       "datasource": {
         "type": "prometheus",
@@ -2075,7 +2138,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 62
+        "y": 66
       },
       "datasource": {
         "type": "prometheus",
@@ -2138,7 +2201,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 62
+        "y": 66
       },
       "datasource": {
         "type": "prometheus",
@@ -2196,7 +2259,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 70
+        "y": 74
       }
     },
     {
@@ -2208,7 +2271,7 @@
         "h": 4,
         "w": 8,
         "x": 0,
-        "y": 71
+        "y": 75
       },
       "datasource": {
         "type": "prometheus",
@@ -2271,7 +2334,7 @@
         "h": 4,
         "w": 8,
         "x": 8,
-        "y": 71
+        "y": 75
       },
       "datasource": {
         "type": "prometheus",
@@ -2333,7 +2396,7 @@
         "h": 4,
         "w": 8,
         "x": 16,
-        "y": 71
+        "y": 75
       },
       "datasource": {
         "type": "prometheus",
@@ -2396,7 +2459,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 75
+        "y": 79
       },
       "datasource": {
         "type": "prometheus",
@@ -2450,7 +2513,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 75
+        "y": 79
       },
       "datasource": {
         "type": "prometheus",
@@ -2508,7 +2571,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 83
+        "y": 87
       },
       "panels": []
     },
@@ -2521,7 +2584,7 @@
         "h": 4,
         "w": 4,
         "x": 0,
-        "y": 84
+        "y": 88
       },
       "datasource": {
         "type": "prometheus",
@@ -2580,7 +2643,7 @@
         "h": 4,
         "w": 4,
         "x": 4,
-        "y": 84
+        "y": 88
       },
       "datasource": {
         "type": "prometheus",
@@ -2643,7 +2706,7 @@
         "h": 4,
         "w": 4,
         "x": 8,
-        "y": 84
+        "y": 88
       },
       "datasource": {
         "type": "prometheus",
@@ -2702,7 +2765,7 @@
         "h": 4,
         "w": 4,
         "x": 12,
-        "y": 84
+        "y": 88
       },
       "datasource": {
         "type": "prometheus",
@@ -2761,7 +2824,7 @@
         "h": 4,
         "w": 4,
         "x": 16,
-        "y": 84
+        "y": 88
       },
       "datasource": {
         "type": "prometheus",
@@ -2824,7 +2887,7 @@
         "h": 4,
         "w": 4,
         "x": 20,
-        "y": 84
+        "y": 88
       },
       "datasource": {
         "type": "prometheus",
@@ -2883,7 +2946,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 88
+        "y": 92
       },
       "datasource": {
         "type": "prometheus",
@@ -2941,7 +3004,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 88
+        "y": 92
       },
       "datasource": {
         "type": "prometheus",
@@ -3008,7 +3071,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 96
+        "y": 100
       },
       "panels": [
         {
@@ -3281,7 +3344,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 97
+        "y": 101
       },
       "panels": [
         {

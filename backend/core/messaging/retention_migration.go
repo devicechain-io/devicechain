@@ -270,7 +270,7 @@ func (nmgr *NatsManager) ownDurable(suffix string) string {
 	if nmgr.admin {
 		for _, r := range streams.ReadersOf(suffix) {
 			if r.Mode == streams.ReadDurable {
-				return DurableName(nmgr.Microservice.InstanceId, r.Area, suffix)
+				return ReaderDurableName(nmgr.Microservice.InstanceId, r.Area, suffix)
 			}
 		}
 	}
@@ -281,7 +281,7 @@ func (nmgr *NatsManager) ownDurable(suffix string) string {
 			return r.durable
 		}
 	}
-	return DurableName(nmgr.Microservice.InstanceId, nmgr.Microservice.FunctionalArea, suffix)
+	return ReaderDurableName(nmgr.Microservice.InstanceId, nmgr.Microservice.FunctionalArea, suffix)
 }
 
 // streamDrained reports whether nothing on the stream is waiting for THIS service's durable
