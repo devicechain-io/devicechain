@@ -188,6 +188,13 @@ func (c *CalloutResponder) Configure(maxInFlight int, lookupTimeout, stopWait ti
 	}
 }
 
+// Limits reports the bounds in force and whether the load metrics are attached. A responder is
+// built with the Default* bounds, so this is what a wiring test reads to prove what the service
+// actually runs with.
+func (c *CalloutResponder) Limits() (maxInFlight int, lookupTimeout, stopWait time.Duration, metrics bool) {
+	return cap(c.sem), c.lookupTimeout, c.stopWait, c.metrics != nil
+}
+
 // WithRequestEncryption makes the responder open broker-sealed requests and seal its replies
 // with the curve seed. It is the other half of the broker's auth_callout.xkey: the broker
 // encrypts each authorization request (which carries the device's CONNECT password) to the

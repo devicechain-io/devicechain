@@ -98,6 +98,8 @@ var (
 	// once on the initialize path (buildMetrics) and only with the setting on.
 	MqttStoreBackoffMetrics *messaging.MqttStoreBackoffMetrics
 	CalloutRefusedStoreFull prometheus.Counter
+	// CalloutMetrics are the callout's load series (in flight, refused busy, plaintext requests).
+	CalloutMetrics *processor.CalloutMetrics
 
 	// OwnershipDrain publishes the device ownership facts writes queue in their own
 	// transactions (ADR-081, model/ownership_outbox.go), one replica at a time.
@@ -205,6 +207,7 @@ func buildMetrics() {
 	}
 	OwnershipDrainMetrics = Microservice.NewPeriodicTaskMetrics("ownership_drain")
 	MqttStoreBackoffMetrics, CalloutRefusedStoreFull = buildMqttStoreBackoffMetrics()
+	CalloutMetrics = processor.NewCalloutMetrics(Microservice)
 	GeoFencePublishFails = Microservice.NewCounter(
 		"geofence_set_publish_failures_total",
 		"Geofence-set manifests that could not be published — a marshal error, a broker refusal, or a transport fault. Each one means event-processing was not told about a fence edit, so containment for that tenant holds its previous fence set until a reconcile sweep repairs it. A sustained non-zero rate means fence edits are not reaching the detection engine.")
@@ -923,6 +926,11 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		// The bounds are stated rather than left to the constructor's defaults, and the load
+		// metrics are attached here: a responder without them enforces its bounds but reports
+		// nothing, which left the Ingest board's callout panels empty.
+		CalloutResponder.Configure(processor.DefaultCalloutMaxInFlight, processor.DefaultCalloutLookupTimeout,
+			processor.DefaultCalloutStopWait, CalloutMetrics)
 		// The broker encrypts each authorization request to the responder's curve key when it is
 		// configured with one; the seed to open them was checked against that key above.
 		if seeds.XKeySeed != "" {
