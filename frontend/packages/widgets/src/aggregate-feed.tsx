@@ -75,18 +75,21 @@ export default function AggregateFeed({ hub, widget, descriptor, Component, acti
   useEffect(() => {
     if (!supported || !ds) return;
     let current = true;
+    // Reads overlap (a boundary, a tab shown, a reconnect); only the NEWEST one's outcome is applied.
+    let latest = 0;
     const run = (): void => {
+      const mine = ++latest;
       const { window, spanSeconds: covered } = aggregateWindow(spanSeconds, pausedAt ?? now(), trend ? bucketSecondsFor(spanSeconds) : undefined);
       // Folded inside the chain, so a bucket that cannot be trusted fails the read like a network error.
       hub.bucketMeasurements!(ds, window).then((buckets) => ({ byName: aggregateBuckets(buckets), buckets })).then(
         ({ byName, buckets }) => {
-          if (!current) return;
+          if (!current || mine !== latest) return;
           const { startTime, endTime } = window;
           const series = trend ? { series: aggregateSeries(buckets) } : {};
           setTagged({ key, result: { status: 'ready', byName, ...series, startTime, endTime, spanSeconds: covered } });
         },
         (err: unknown) => {
-          if (!current) return;
+          if (!current || mine !== latest) return;
           const message = err instanceof Error ? err.message : String(err);
           setTagged({ key, result: { status: 'unavailable', reason: 'failed', message } });
         },
