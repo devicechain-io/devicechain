@@ -98,6 +98,11 @@ run "it_does_not_take_over_the_cluster" {
   }
 
   assert {
+    condition     = yamldecode(helm_release.traefik.values[0]).api.dashboard == false
+    error_message = "the dashboard must be off: nothing routes to it and the API adds only surface"
+  }
+
+  assert {
     condition     = yamldecode(helm_release.traefik.values[0]).gateway.enabled == false
     error_message = "instances render their own Gateways; the chart's default one would claim a listener nobody asked for"
   }

@@ -48,12 +48,17 @@ output "ingress_class" {
 
 output "gateway_class" {
   description = "GatewayClass name instance Gateways reference (null if Traefik was not installed here)."
-  value       = var.enable_traefik ? module.traefik[0].gateway_class : null
+  value       = local.traefik_on ? module.traefik[0].gateway_class : null
 }
 
 output "traefik_namespace" {
   description = "Namespace Traefik was installed into (null if not installed here)."
-  value       = var.enable_traefik ? module.traefik[0].namespace : null
+  value       = local.traefik_on ? module.traefik[0].namespace : null
+}
+
+output "gateway_api_notice" {
+  description = "Why Traefik and cert-manager's Gateway API shim were skipped on this cluster, or empty."
+  value       = var.enable_gateway_api_crds ? module.gateway_api_crds[0].notice : ""
 }
 
 output "gateway_api_crds_mode" {

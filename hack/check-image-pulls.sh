@@ -61,11 +61,12 @@
 # WHAT IT DOES NOT COVER
 #
 #   - Images reached through Helm charts at pinned chart versions (cert-manager,
-#     CloudNativePG and its Barman plugin, ingress-nginx, Traefik (docker.io/traefik at the tag
-#     modules/traefik pins), NATS, the Prometheus
+#     CloudNativePG and its Barman plugin, ingress-nginx, NATS, the Prometheus
 #     stack), and tag-pinned operand defaults (the Postgres and TimescaleDB images
 #     in the Tofu roots). Listing those needs helm and the chart repositories; they
 #     were pulled by hand when this was written, and all resolved.
+#     (Traefik is NOT in this list: its digest-pinned reference is written out whole in
+#     modules/traefik, so the enumeration above finds and probes it.)
 #   - Layers. The manifest is where a registry refuses a withdrawn or private
 #     image; blobs are not fetched.
 #   - Whether the digest is CURRENT. That is the bumper's job, not this one's.

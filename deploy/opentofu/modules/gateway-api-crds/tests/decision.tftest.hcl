@@ -144,7 +144,7 @@ run "a_foreign_set_at_the_minimum_is_accepted_and_never_written" {
 }
 
 # One CRD under the floor refuses the whole set, even when every other CRD is current.
-run "one_foreign_crd_under_the_minimum_refuses" {
+run "one_required_foreign_crd_under_the_minimum_skips" {
   command = plan
 
   override_data {
@@ -176,10 +176,17 @@ run "one_foreign_crd_under_the_minimum_refuses" {
     values = { objects = [{ metadata = { annotations = { "gateway.networking.k8s.io/bundle-version" = "v1.6.3" } } }] }
   }
 
-  expect_failures = [terraform_data.compatibility]
+  assert {
+    condition     = output.mode == "skip" && output.usable == false && length(helm_release.crds) == 0 && output.notice != ""
+    error_message = "a set this module cannot use must SKIP (nothing written, a notice, usable=false) and must never fail the plan"
+  }
+
+  # A set the module cannot use is a WARNING in a real plan (a check block); the test
+  # harness reports it as a failure, so the run names it as expected.
+  expect_failures = [check.gateway_api_crds_usable]
 }
 
-run "an_old_foreign_set_is_refused_with_the_remedy" {
+run "an_old_foreign_set_is_skipped" {
   command = plan
 
   override_data {
@@ -191,11 +198,19 @@ run "an_old_foreign_set_is_refused_with_the_remedy" {
     values = { objects = [{ metadata = { annotations = { "gateway.networking.k8s.io/bundle-version" = "v1.3.0" } } }] }
   }
 
-  expect_failures = [terraform_data.compatibility]
+  assert {
+    condition     = output.mode == "skip" && output.usable == false && length(helm_release.crds) == 0 && output.notice != ""
+    error_message = "a set this module cannot use must SKIP (nothing written, a notice, usable=false) and must never fail the plan"
+  }
+
+  # A set the module cannot use is a WARNING in a real plan (a check block); the test
+  # harness reports it as a failure, so the run names it as expected.
+  expect_failures = [check.gateway_api_crds_usable]
 }
 
-# The message is what an operator on GKE reads, so the remedy is part of the contract.
-run "the_refusal_names_the_minimum_and_the_gke_remedy" {
+# The message is what an operator reads, so what it says and what it must never say are part
+# of the contract.
+run "the_notice_names_the_floor_and_never_advises_a_bare_delete" {
   command = plan
 
   override_data {
@@ -204,14 +219,21 @@ run "the_refusal_names_the_minimum_and_the_gke_remedy" {
   }
 
   assert {
-    condition     = local.mode == "refuse" && strcontains(local.refusal, "v1.5.1") && strcontains(local.refusal, "--gateway-api=standard")
-    error_message = "the refusal must name the minimum and the GKE remedy; got: ${local.refusal}"
+    condition     = local.mode == "skip" && strcontains(local.notice, "v1.5.1") && strcontains(local.notice, "provisional")
+    error_message = "the notice must name the floor and say it is provisional; got: ${local.notice}"
   }
 
-  expect_failures = [terraform_data.compatibility]
+  assert {
+    condition     = !strcontains(local.notice, "gcloud") && strcontains(local.notice, "deletes every Gateway and HTTPRoute")
+    error_message = "the notice must not give a gcloud remedy, and must state the cascade wherever it mentions removing CRDs; got: ${local.notice}"
+  }
+
+  # A set the module cannot use is a WARNING in a real plan (a check block); the test
+  # harness reports it as a failure, so the run names it as expected.
+  expect_failures = [check.gateway_api_crds_usable]
 }
 
-run "an_unversioned_foreign_set_is_refused_not_assumed_new_enough" {
+run "an_unversioned_foreign_set_is_skipped_not_assumed_new_enough" {
   command = plan
 
   override_data {
@@ -219,10 +241,17 @@ run "an_unversioned_foreign_set_is_refused_not_assumed_new_enough" {
     values = { objects = [{ metadata = { annotations = {} } }] }
   }
 
-  expect_failures = [terraform_data.compatibility]
+  assert {
+    condition     = output.mode == "skip" && output.usable == false && length(helm_release.crds) == 0 && output.notice != ""
+    error_message = "a set this module cannot use must SKIP (nothing written, a notice, usable=false) and must never fail the plan"
+  }
+
+  # A set the module cannot use is a WARNING in a real plan (a check block); the test
+  # harness reports it as a failure, so the run names it as expected.
+  expect_failures = [check.gateway_api_crds_usable]
 }
 
-run "a_partial_foreign_set_is_refused" {
+run "a_partial_foreign_set_is_skipped" {
   command = plan
 
   # Only the gateways CRD, current. Everything Traefik also needs is absent.
@@ -231,7 +260,14 @@ run "a_partial_foreign_set_is_refused" {
     values = { objects = [{ metadata = { annotations = { "gateway.networking.k8s.io/bundle-version" = "v1.6.3" } } }] }
   }
 
-  expect_failures = [terraform_data.compatibility]
+  assert {
+    condition     = output.mode == "skip" && output.usable == false && length(helm_release.crds) == 0 && output.notice != ""
+    error_message = "a set this module cannot use must SKIP (nothing written, a notice, usable=false) and must never fail the plan"
+  }
+
+  # A set the module cannot use is a WARNING in a real plan (a check block); the test
+  # harness reports it as a failure, so the run names it as expected.
+  expect_failures = [check.gateway_api_crds_usable]
 }
 
 # A set that is ours at an older pin converges on the pin: this is the upgrade path, and
@@ -277,10 +313,17 @@ run "a_same_named_release_elsewhere_is_not_ours" {
   }
 
   # Foreign and partial (only one CRD), so it is refused rather than written over.
-  expect_failures = [terraform_data.compatibility]
+  assert {
+    condition     = output.mode == "skip" && output.usable == false && length(helm_release.crds) == 0 && output.notice != ""
+    error_message = "a set this module cannot use must SKIP (nothing written, a notice, usable=false) and must never fail the plan"
+  }
+
+  # A set the module cannot use is a WARNING in a real plan (a check block); the test
+  # harness reports it as a failure, so the run names it as expected.
+  expect_failures = [check.gateway_api_crds_usable]
 }
 
-run "a_set_that_is_part_ours_and_part_foreign_is_refused" {
+run "a_set_that_is_part_ours_and_part_foreign_is_skipped" {
   command = plan
 
   override_data {
@@ -298,7 +341,14 @@ run "a_set_that_is_part_ours_and_part_foreign_is_refused" {
     values = { objects = [{ metadata = { annotations = { "gateway.networking.k8s.io/bundle-version" = "v1.6.3" } } }] }
   }
 
-  expect_failures = [terraform_data.compatibility]
+  assert {
+    condition     = output.mode == "skip" && output.usable == false && length(helm_release.crds) == 0 && output.notice != ""
+    error_message = "a set this module cannot use must SKIP (nothing written, a notice, usable=false) and must never fail the plan"
+  }
+
+  # A set the module cannot use is a WARNING in a real plan (a check block); the test
+  # harness reports it as a failure, so the run names it as expected.
+  expect_failures = [check.gateway_api_crds_usable]
 }
 
 # A pre-release of a newer version, and the experimental channel, are both accepted: the
@@ -381,4 +431,151 @@ run "unversioned_is_accepted_only_when_the_operator_says_so" {
     condition     = output.mode == "accept" && length(helm_release.crds) == 0
     error_message = "accept_unversioned_crds must let a complete unversioned foreign set through, and still not write it"
   }
+}
+
+# --- the required set --------------------------------------------------------------
+
+# Pinned WITH its reason. Only the first two were measured (Traefik's reflector errors on a
+# missing v1 BackendTLSPolicy or TLSRoute); grpcroutes and referencegrants are absent from
+# the set a platform is reported to ship and are not measured as needed, so demanding them
+# would skip every such cluster on an assumption. A change here is a decision, not a refactor.
+run "the_required_set_is_what_traefik_needs_and_no_more" {
+  command = plan
+
+  assert {
+    condition = jsonencode(sort(local.required_crds)) == jsonencode(sort([
+      "backendtlspolicies.gateway.networking.k8s.io",
+      "gatewayclasses.gateway.networking.k8s.io",
+      "gateways.gateway.networking.k8s.io",
+      "httproutes.gateway.networking.k8s.io",
+      "tlsroutes.gateway.networking.k8s.io",
+    ]))
+    error_message = "required_crds must be exactly: backendtlspolicies and tlsroutes (measured), plus gatewayclasses, gateways, httproutes. grpcroutes/referencegrants are deliberately not required."
+  }
+
+  assert {
+    condition     = !contains(local.required_crds, "grpcroutes.gateway.networking.k8s.io") && !contains(local.required_crds, "referencegrants.gateway.networking.k8s.io")
+    error_message = "grpcroutes and referencegrants were never measured as needed and the reported GKE set has no grpcroutes"
+  }
+}
+
+# --- a platform-managed (GKE-shaped) set ---------------------------------------------
+
+# The reported GKE shape: v1.5.0, six CRDs, no grpcroutes, marked platform-managed. Below the
+# provisional floor, so Traefik and the shim are skipped -- and the plan is NOT an error.
+run "a_gke_shaped_set_skips_without_failing" {
+  command = plan
+
+  override_data {
+    target = data.kubernetes_resources.gatewayclasses
+    values = { objects = [{ metadata = { annotations = { "gateway.networking.k8s.io/bundle-version" = "v1.5.0" }, labels = { "components.gke.io/component-name" = "gateway-api-crds" } } }] }
+  }
+  override_data {
+    target = data.kubernetes_resources.gateways
+    values = { objects = [{ metadata = { annotations = { "gateway.networking.k8s.io/bundle-version" = "v1.5.0" }, labels = { "components.gke.io/component-name" = "gateway-api-crds" } } }] }
+  }
+  override_data {
+    target = data.kubernetes_resources.httproutes
+    values = { objects = [{ metadata = { annotations = { "gateway.networking.k8s.io/bundle-version" = "v1.5.0" }, labels = { "components.gke.io/component-name" = "gateway-api-crds" } } }] }
+  }
+  override_data {
+    target = data.kubernetes_resources.referencegrants
+    values = { objects = [{ metadata = { annotations = { "gateway.networking.k8s.io/bundle-version" = "v1.5.0" }, labels = { "components.gke.io/component-name" = "gateway-api-crds" } } }] }
+  }
+  override_data {
+    target = data.kubernetes_resources.backendtlspolicies
+    values = { objects = [{ metadata = { annotations = { "gateway.networking.k8s.io/bundle-version" = "v1.5.0" }, labels = { "components.gke.io/component-name" = "gateway-api-crds" } } }] }
+  }
+  override_data {
+    target = data.kubernetes_resources.tlsroutes
+    values = { objects = [{ metadata = { annotations = { "gateway.networking.k8s.io/bundle-version" = "v1.5.0" }, labels = { "components.gke.io/component-name" = "gateway-api-crds" } } }] }
+  }
+
+  assert {
+    condition     = output.mode == "skip" && output.usable == false && length(helm_release.crds) == 0
+    error_message = "a platform set below the floor must skip, writing nothing"
+  }
+
+  assert {
+    condition     = strcontains(output.notice, "platform-managed") && strcontains(output.notice, "v1.5.0")
+    error_message = "the notice must say the set is platform-managed and name the version found; got: ${output.notice}"
+  }
+
+  # A set the module cannot use is a WARNING in a real plan (a check block); the test
+  # harness reports it as a failure, so the run names it as expected.
+  expect_failures = [check.gateway_api_crds_usable]
+}
+
+# The same shape with the CRDs Traefik needs present at the floor and NO grpcroutes: usable.
+run "a_platform_set_with_what_traefik_needs_is_accepted_without_grpcroutes" {
+  command = plan
+
+  override_data {
+    target = data.kubernetes_resources.gatewayclasses
+    values = { objects = [{ metadata = { annotations = { "gateway.networking.k8s.io/bundle-version" = "v1.5.1" }, labels = { "components.gke.io/component-name" = "gateway-api-crds" } } }] }
+  }
+  override_data {
+    target = data.kubernetes_resources.gateways
+    values = { objects = [{ metadata = { annotations = { "gateway.networking.k8s.io/bundle-version" = "v1.5.1" }, labels = { "components.gke.io/component-name" = "gateway-api-crds" } } }] }
+  }
+  override_data {
+    target = data.kubernetes_resources.httproutes
+    values = { objects = [{ metadata = { annotations = { "gateway.networking.k8s.io/bundle-version" = "v1.5.1" }, labels = { "components.gke.io/component-name" = "gateway-api-crds" } } }] }
+  }
+  override_data {
+    target = data.kubernetes_resources.backendtlspolicies
+    values = { objects = [{ metadata = { annotations = { "gateway.networking.k8s.io/bundle-version" = "v1.5.1" }, labels = { "components.gke.io/component-name" = "gateway-api-crds" } } }] }
+  }
+  override_data {
+    target = data.kubernetes_resources.tlsroutes
+    values = { objects = [{ metadata = { annotations = { "gateway.networking.k8s.io/bundle-version" = "v1.5.1" }, labels = { "components.gke.io/component-name" = "gateway-api-crds" } } }] }
+  }
+
+  assert {
+    condition     = output.mode == "accept" && output.usable == true && length(helm_release.crds) == 0 && output.notice == ""
+    error_message = "a platform set holding what Traefik needs at the floor must be accepted, never written, with no notice"
+  }
+}
+
+# An annotation-style marker counts as well as a label.
+run "the_platform_marker_may_be_an_annotation" {
+  command = plan
+
+  override_data {
+    target = data.kubernetes_resources.gateways
+    values = { objects = [{ metadata = { annotations = { "gateway.networking.k8s.io/bundle-version" = "v1.3.0", "components.gke.io/component-name" = "gateway-api-crds" } } }] }
+  }
+
+  assert {
+    condition     = strcontains(output.notice, "platform-managed")
+    error_message = "the platform marker must be recognised as an annotation too"
+  }
+
+  # A set the module cannot use is a WARNING in a real plan (a check block); the test
+  # harness reports it as a failure, so the run names it as expected.
+  expect_failures = [check.gateway_api_crds_usable]
+}
+
+# --- accept_unversioned does not excuse an incomplete set ---------------------------------
+
+run "accept_unversioned_with_a_partial_set_still_skips" {
+  command = plan
+
+  variables {
+    accept_unversioned_crds = true
+  }
+
+  override_data {
+    target = data.kubernetes_resources.gateways
+    values = { objects = [{ metadata = { annotations = {} } }] }
+  }
+
+  assert {
+    condition     = output.mode == "skip" && length(helm_release.crds) == 0
+    error_message = "accept_unversioned_crds waives the version, not completeness: a partial set must still skip"
+  }
+
+  # A set the module cannot use is a WARNING in a real plan (a check block); the test
+  # harness reports it as a failure, so the run names it as expected.
+  expect_failures = [check.gateway_api_crds_usable]
 }

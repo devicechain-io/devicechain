@@ -1009,6 +1009,17 @@ run_assertions() {
   accepts traefik_max_artifact_bytes 536870912
   accepts traefik_max_artifact_bytes 1073741824
 
+  # The G15 stack is OFF by default until the release that ships the instance chart's Gateway
+  # and HTTPRoutes and the dual render: before that it is an idle second load balancer and a
+  # cert-manager restart. Pinned in BOTH directions, because a default flipped by accident
+  # ships the stack to every `dcctl install`, and an opt-in that cannot be switched on is
+  # no opt-in.
+  evaluates false "var.enable_traefik"
+  evaluates false "var.enable_gateway_api_crds"
+  evaluates false "local.traefik_on"
+  evaluates false "local.gateway_api_usable"
+  evaluates true "local.traefik_on" -var enable_traefik=true
+
   # The nats chart carries a SECOND block, a 2.15 floor: the broker config the module
   # renders (jetstream.limits.default_max_consumers) is refused at startup by an older
   # nats-server, so an older pin would crash-loop the broker rather than downgrade it.

@@ -708,7 +708,7 @@ module "cert_manager" {
   # and crash-loops (two restarts measured, CrashLoopBackOff up to five minutes, and a
   # helm --wait on the release fails meanwhile). depends_on is what orders it: this module
   # waits for the CRD release to finish.
-  enable_gateway_api = var.enable_gateway_api_crds
+  enable_gateway_api = local.gateway_api_usable
 
   depends_on = [module.gateway_api_crds]
 }
@@ -716,6 +716,15 @@ module "cert_manager" {
 # The Gateway API CRDs (G15). Installed, or -- when the cluster already has a set at
 # v1.5.1 or newer -- accepted and never written; an older set is refused at plan time.
 # Before cert-manager and Traefik, both of which fail without them.
+locals {
+  # Whether the cluster has a Gateway API set the new stack can run against. With our own
+  # module off the CRDs are the operator's and are trusted; with it on, the module says. A
+  # set it cannot use SKIPS Traefik and cert-manager's shim (with a warning from the module)
+  # rather than failing the root, which would block every other cluster prerequisite.
+  gateway_api_usable = var.enable_gateway_api_crds ? module.gateway_api_crds[0].usable : false
+  traefik_on         = var.enable_traefik && (var.enable_gateway_api_crds ? module.gateway_api_crds[0].usable : true)
+}
+
 module "gateway_api_crds" {
   source = "../modules/gateway-api-crds"
   count  = var.enable_gateway_api_crds ? 1 : 0
@@ -728,7 +737,7 @@ module "gateway_api_crds" {
 # legacy Ingress come later.
 module "traefik" {
   source = "../modules/traefik"
-  count  = var.enable_traefik ? 1 : 0
+  count  = local.traefik_on ? 1 : 0
 
   namespace        = var.traefik_namespace
   chart_version    = var.traefik_chart_version

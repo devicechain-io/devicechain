@@ -266,20 +266,24 @@ variable "enable_gateway_api_crds" {
     Install the Gateway API standard-channel CRDs (v1.6.3) -- or, when the cluster already
     has a set, check it and leave it alone -- and turn on cert-manager's Gateway API shim.
 
-    The module never overwrites a set it did not install: one at v1.5.1 or newer (what GKE
-    installs with --gateway-api=standard) is accepted as is, and one older than that is
-    REFUSED at plan time with the remedy, because Traefik's GatewayClass would never be
-    Accepted against it. Set false only if the cluster's Gateway API CRDs are managed
-    entirely outside this root AND cert-manager's shim is configured there too.
+    OFF BY DEFAULT while the stack is built: nothing renders a Gateway yet (the instance
+    chart's Gateway and HTTPRoutes, and the dual render off the legacy Ingress, are later
+    slices), so turning it on today adds a restart of cert-manager and an idle load balancer
+    for no traffic. The defaults flip in the release that ships both.
+
+    The module never overwrites a set it did not install. A set it cannot use (a platform's,
+    such as GKE's, that lacks a CRD Traefik needs or is below the provisional v1.5.1 floor)
+    is NOT an error: Traefik and the cert-manager shim are skipped and the reason is in the
+    gateway_api_notice output and a plan warning.
   EOT
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "enable_traefik" {
-  description = "Install the Traefik Gateway API controller next to ingress-nginx. Set false if the cluster already has a Gateway API controller."
+  description = "Install the Traefik Gateway API controller next to ingress-nginx. OFF BY DEFAULT until the release that ships the instance chart's Gateway/HTTPRoutes and the dual render: before that it is an idle second load balancer. Skipped, with a warning, when the cluster's Gateway API CRDs are not usable."
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "traefik_namespace" {
