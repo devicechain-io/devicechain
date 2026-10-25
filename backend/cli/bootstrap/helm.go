@@ -429,6 +429,9 @@ func helmValues(st *State) map[string]interface{} {
 	if len(natsVals) > 0 {
 		infraVals["nats"] = natsVals
 	}
+	if httpVals := trustedProxiesValues(st); httpVals != nil {
+		infraVals["http"] = httpVals
+	}
 	// The shared service secret (ADR-044 amendment) backing the sync cross-service
 	// call primitive, threaded into every service's instance config.
 	if secret := st.Values["serviceAuthSecret"]; secret != "" {

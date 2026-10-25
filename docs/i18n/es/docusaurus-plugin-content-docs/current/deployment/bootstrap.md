@@ -898,6 +898,21 @@ posterior de los valores no puede hacer que Helm borre los logotipos y artefacto
 deliberadamente conservando la instancia, ejecuta
 `kubectl -n dci-<instancia> delete pvc dci-<instancia>-blob`.
 
+### Direcciones de cliente y proxies de confianza {#trusted-proxies}
+
+Algunos endpoints limitan las solicitudes por dirección de cliente, y el autorregistro de dispositivos es el primero. Detrás del controlador de ingress, la dirección que un servicio ve en la conexión es la del pod del controlador, así que, si no se indica a los servicios que crean la cabecera `X-Forwarded-For` del controlador, todos los dispositivos que hay detrás comparten un único cupo por pod del controlador, y un extraño que lo agote hace que se rechace con `429` a todos ellos.
+
+Por eso `dcctl bootstrap` y `dcctl upgrade` generan `infrastructure.http.trustedProxies` para la instancia: el rango de pods del clúster, leído de los CIDR de pods de los nodos y fusionado en el menor número de prefijos. El controlador de ingress se ejecuta en ese rango, esté donde esté programado. La lista queda registrada en la instancia, de modo que una actualización que no pueda leer los nodos la conserva, y una que pueda leerlos sigue a un clúster que ha crecido. Un clúster cuyos nodos no exponen un rango de pods (algunos CNI asignan ellos mismos las direcciones) no recibe lista y se avisa en cada ejecución; indica tú el rango.
+
+Para fijarla tú mismo, pasa `--trusted-proxies` a `bootstrap` o `upgrade` (CIDR, repetidos o separados por comas). Una lista explícita se conserva tal cual en todas las actualizaciones posteriores; `--trusted-proxies=auto` devuelve la instancia a derivarla.
+
+También deben cumplirse dos cosas en el borde, o la cabecera que creen los servicios no será la del cliente:
+
+- Con `ingress-nginx`, deja `use-forwarded-headers` desactivado (la instalación de dcctl lo hace). Así el controlador escribe en `X-Forwarded-For` el par TCP real. Su Service debe conservar la dirección del cliente: `externalTrafficPolicy: Local`, o PROXY protocol desde el balanceador.
+- Detrás de un balanceador de capa 7 que añade él mismo la cabecera, añade a `--trusted-proxies` los rangos del balanceador además del rango de pods, y activa `use-forwarded-headers` con `proxy-real-ip-cidr` fijado a esos rangos.
+
+Muchos abonados detrás de una misma dirección de operador (CGNAT) siguen compartiendo un cupo. Es un límite de usar la dirección de origen como clave, que estos ajustes no pueden resolver.
+
 ## Flags de instalación {#install-flags}
 
 Estos son flags de [`dcctl install`](#install). Describen el clúster, y toda instancia

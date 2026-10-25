@@ -595,6 +595,9 @@ func recordUpgradedVersion(ctx context.Context, dyn dynamic.Interface, instance 
 		if st.MqttFailClosedChange && st.MqttFailClosed != nil {
 			wouldDo(fmt.Sprintf("record mqttFailClosed=%t in the instance declaration", *st.MqttFailClosed))
 		}
+		if st.TrustedProxiesChange {
+			wouldDo(fmt.Sprintf("record trustedProxies=%s in the instance declaration", strings.Join(st.TrustedProxies, ",")))
+		}
 		return nil
 	}
 
@@ -614,7 +617,8 @@ func recordUpgradedVersion(ctx context.Context, dyn dynamic.Interface, instance 
 
 	areasMove := st.AreaChange != nil && !slices.Equal(inst.Spec.ExtraFunctionalAreas, st.EnableAreas)
 	if inst.Spec.ImageRegistry == st.ImageRegistry && inst.Spec.ImageVersion == st.ImageVersion && !areasMove &&
-		!(st.MqttFailClosedChange && !sameBoolPtr(inst.Spec.MQTTFailClosed, st.MqttFailClosed)) {
+		!(st.MqttFailClosedChange && !sameBoolPtr(inst.Spec.MQTTFailClosed, st.MqttFailClosed)) &&
+		!(st.TrustedProxiesChange && !trustedProxiesRecorded(inst.Spec, st)) {
 		// Already says what this run is about to do. Writing anyway would bump the
 		// provenance annotations on every no-op re-apply, which makes
 		// `last-applied-at` useless for the question it exists to answer.
@@ -641,6 +645,11 @@ func recordUpgradedVersion(ctx context.Context, dyn dynamic.Interface, instance 
 	// merely read the declaration back never writes it away.
 	if st.MqttFailClosedChange {
 		spec.MQTTFailClosed = copyBoolPtr(st.MqttFailClosed)
+	}
+	// The trusted proxies, written with the version for the same reason: the next run, and any
+	// run that cannot read the nodes, finds what this one rendered.
+	if st.TrustedProxiesChange {
+		recordTrustedProxies(&spec, st)
 	}
 	// 🔴 Upgrading, AND THE VALUE IS THE DEFECT THIS LINE FIXES. writeInstanceCR
 	// stamped Bootstrapping on every write, so every instance that had ever been

@@ -54,6 +54,9 @@ func stepDeclareInstance(ctx context.Context, st *State) error {
 			return err
 		}
 	}
+	if err := settleBootstrapTrustedProxies(ctx, st); err != nil {
+		return err
+	}
 	spec := InstanceSpecFrom(st, st.Binding, st.Provider)
 	sayMqttFailClosed(st)
 
@@ -197,4 +200,6 @@ func applyDeclaration(st *State, spec dcv1beta1.InstanceSpec) {
 	// real answer (never chose), taken as one -- an instance declared before this field
 	// existed keeps the platform default rather than being handed a decision.
 	st.MqttFailClosed = copyBoolPtr(spec.MQTTFailClosed)
+	st.TrustedProxies = append([]string(nil), spec.TrustedProxies...)
+	st.TrustedProxiesExplicit = spec.TrustedProxiesExplicit
 }

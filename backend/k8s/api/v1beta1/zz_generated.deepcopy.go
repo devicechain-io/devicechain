@@ -199,6 +199,11 @@ func (in *InstanceSpec) DeepCopyInto(out *InstanceSpec) {
 		*out = new(bool)
 		**out = **in
 	}
+	if in.TrustedProxies != nil {
+		in, out := &in.TrustedProxies, &out.TrustedProxies
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	if in.ObjectStore != nil {
 		in, out := &in.ObjectStore, &out.ObjectStore
 		*out = new(ObjectStoreSpec)

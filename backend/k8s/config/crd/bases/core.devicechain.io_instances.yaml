@@ -295,6 +295,23 @@ spec:
                   nothing else — the broker's own TLS is configured separately and is on by
                   default regardless of this value.
                 type: boolean
+              trustedProxies:
+                description: |-
+                  TrustedProxies are the CIDR prefixes written to the instance configuration's
+                  infrastructure.http.trustedProxies: the proxies whose X-Forwarded-For header the
+                  services may believe, which for the self-registration endpoint is what makes a
+                  per-source rate limit a limit on a DEVICE and not on the ingress controller. dcctl
+                  derives them from the cluster's node pod ranges unless the operator named some; this
+                  records what was rendered, so an upgrade that cannot read the nodes keeps it.
+                items:
+                  type: string
+                type: array
+              trustedProxiesExplicit:
+                description: |-
+                  TrustedProxiesExplicit says TrustedProxies is the operator's own list (dcctl's
+                  --trusted-proxies), which an upgrade keeps as written, rather than a derivation it
+                  refreshes from the cluster.
+                type: boolean
             required:
             - managed
             - provider

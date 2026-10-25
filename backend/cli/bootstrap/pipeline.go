@@ -162,6 +162,14 @@ type State struct {
 	// MqttFailClosedChange says this upgrade was given --mqtt-fail-closed with a value the
 	// declaration does not hold, so recordUpgradedVersion must write it.
 	MqttFailClosedChange bool
+	// TrustedProxiesOverride is --trusted-proxies as given: nil when not given, ["auto"] to drop
+	// an explicit list, otherwise the operator's CIDRs. TrustedProxies and TrustedProxiesExplicit
+	// are what the run settled and renders (infrastructure.http.trustedProxies), and
+	// TrustedProxiesChange says an upgrade must record them. See trustedproxies.go.
+	TrustedProxiesOverride []string
+	TrustedProxies         []string
+	TrustedProxiesExplicit bool
+	TrustedProxiesChange   bool
 	// ValuesOverlay is the operator's tuning overlay in effect for this run (--values, or the
 	// one the declaration already records), merged over what dcctl computes. See
 	// valuesoverlay.go. Nil means none.

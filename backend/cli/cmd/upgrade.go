@@ -22,6 +22,7 @@ var (
 
 	upgradeMqttBodyCredential string
 	upgradeMqttFailClosed     bool
+	upgradeTrustedProxies     []string
 
 	upgradeValues      []string
 	upgradeResetValues bool
@@ -40,6 +41,7 @@ func upgradeOptions(instance, mqttBodyCredential string, mqttFailClosed *bool, v
 
 			MqttBodyCredential: mqttBodyCredential,
 			MqttFailClosed:     mqttFailClosed,
+			TrustedProxies:     upgradeTrustedProxies,
 			ValuesOverlay:      valuesOverlay,
 			ResetValues:        upgradeResetValues,
 		},
@@ -177,6 +179,7 @@ func init() {
 	upgradeCmd.Flags().StringVar(&upgradeMqttBodyCredential, "mqtt-body-credential", "", mqttBodyCredentialUsage)
 	upgradeCmd.Flags().StringArrayVar(&upgradeValues, "values", nil, valuesUsage)
 	upgradeCmd.Flags().BoolVar(&upgradeMqttFailClosed, "mqtt-fail-closed", false, mqttFailClosedUsage)
+	upgradeCmd.Flags().StringSliceVar(&upgradeTrustedProxies, "trusted-proxies", nil, trustedProxiesUsage)
 	upgradeCmd.Flags().BoolVar(&upgradeResetValues, "reset-values", false, "remove the tuning overlay recorded on the instance: it returns to the values dcctl computes. Cannot be combined with --values")
 	upgradeCmd.Flags().StringVar(&upgradeEscrowPass, "escrow-passphrase-file", "", "read the escrow passphrase from this file (or $"+bootstrap.EscrowPassphraseEnv+"). Only needed to WRITE an escrow for an instance that has none — checking an existing one needs no passphrase")
 
