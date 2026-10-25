@@ -408,6 +408,9 @@ func wireReactDispatcher(nmgr *messaging.NatsManager) error {
 			GlobalPerSecond:    Configuration.ShedLetterGlobalPerSecond,
 			GlobalBurst:        Configuration.ShedLetterGlobalBurst,
 		}, ReactMetrics)
+	// The same gate the reader is built on: deliveries the reader handed to lanes before the term
+	// was lost must not start on a replica that no longer detects.
+	ReactDispatcher.SetTermGate(DetectTermGate.Held)
 	return nil
 }
 

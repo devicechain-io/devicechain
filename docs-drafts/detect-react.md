@@ -580,7 +580,16 @@ ack deadline, so an attempt against hung sinks ends with its delivery, and never
 whose deadline passed while it waited for its worker (`runQueued`). The workers are lanes keyed by
 hashing the subject (tenant) and the event's series (`laneFor`), so one device's derived events are
 dispatched one after another in stream order and only different devices overlap; a `Retry` does not
-hold its lane. One worker was a latency-bound ceiling: GKE round 19 measured ~151 events/s with
+hold its lane, so a redelivered event is dispatched again after the events behind it. A lane holds at
+most `laneQueue` deliveries behind the one it runs (half the workers), and a dispatch with deliveries waiting
+behind it is cut at an even share of what is left of its own deadline (`shareOf`, re-measured while it runs
+by `watchShare`), because a delivery's clock starts at fetch and queue time in a lane spends it: without the
+share, one hung device's dispatch ran to the end of the deadline it shares with its lane-mates, each of them
+was skipped as expired, and five such skips dead-lettered a healthy event. In-progress acks were rejected
+for the same reason the capacity reader exists: they would let a delivery be handled arbitrarily long after
+its fetch, which the window is not sized for. The lanes also stop starting deliveries once the DETECT term
+is lost (`SetTermGate`): a queued delivery is released, and only a dispatch already running finishes. One
+worker was a latency-bound ceiling: GKE round 19 measured ~151 events/s with
 ack-pending 1 against 194 offered, because each event is a fetch, a rule read from Postgres and a
 replicated publish per action, each a round trip. Within that deadline each action gets its share — the time
 left over the actions left (`actionContext`) — so hung sendCommands listed first cannot spend the
