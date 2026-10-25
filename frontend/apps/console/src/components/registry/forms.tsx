@@ -54,7 +54,7 @@
 // grammatical text. `entityType` is the technical mask key (ADR-042 P3), separate
 // from any display noun.
 
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -195,6 +195,7 @@ export function RegistryInstanceForm<T extends NamedEntity>({
   update,
   onDone,
   readOnly = false,
+  renderCreateExtra,
 }: {
   entity?: T;
   /** Family prefix in the `entities` catalog, e.g. "asset". */
@@ -209,6 +210,12 @@ export function RegistryInstanceForm<T extends NamedEntity>({
   onDone: (message: string) => void;
   /** Show the values without offering to change them: inputs disabled, no save. */
   readOnly?: boolean;
+  /**
+   * Extra fields shown on CREATE only, under the description and above the save button, told
+   * the type chosen so far. The family keeps the extra values in its own state and reads them
+   * in `create`; an edit never shows them, so an edit cannot send them.
+   */
+  renderCreateExtra?: (ctx: { typeToken: string; disabled: boolean }) => ReactNode;
 }) {
   const { t } = useTranslation(['entities', 'common']);
   const e = (suffix: string, opts?: Record<string, unknown>) =>
@@ -300,6 +307,7 @@ export function RegistryInstanceForm<T extends NamedEntity>({
       <FormField label={t('common:colDescription')} htmlFor="r-description">
         <Textarea id="r-description" value={description} disabled={readOnly} onChange={(ev) => setDescription(ev.target.value)} />
       </FormField>
+      {!editing && renderCreateExtra?.({ typeToken, disabled: readOnly || busy })}
       {!readOnly && (
         <div className="flex gap-2">
           <Button

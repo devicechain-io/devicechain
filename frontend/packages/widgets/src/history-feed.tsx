@@ -56,14 +56,18 @@ export default function HistoryFeed({ hub, widget, descriptor, Component, action
   useEffect(() => {
     if (!supported || !ds || ds.kind === 'unbound') return;
     let current = true;
+    // Reads overlap (a boundary, a tab shown, a rebind); only the NEWEST one's outcome is applied, so a
+    // slow older read can neither replace newer buckets, nor raise an error over them, nor move the age.
+    let latest = 0;
     const run = (): void => {
+      const mine = ++latest;
       const window = historyWindow(spanSeconds, pausedAt ?? now());
       hub.bucketMeasurements!(ds, window).then(
         (buckets) => {
-          if (current) setRead({ key, view: { status: 'ready', buckets, window }, readAt: Date.now() });
+          if (current && mine === latest) setRead({ key, view: { status: 'ready', buckets, window }, readAt: Date.now() });
         },
         (err: unknown) => {
-          if (!current) return;
+          if (!current || mine !== latest) return;
           // A refusal is a state, not a failure; a failure keeps what is on screen for THIS read's key.
           const status = isForbiddenError(err) ? 'forbidden' : 'failed';
           setRead((prev) => (status === 'failed' && prev.key === key && prev.view.status === 'ready' ? prev : { key, view: { status }, readAt: null }));

@@ -21,6 +21,8 @@ import { scopedRouteAllowed } from '@/lib/scope';
 const LoginSsoCompletePage = lazy(() => import('@/routes/LoginSsoComplete'));
 const DevicesPage = lazy(() => import('@/routes/devices/DevicesPage'));
 const DeviceDetailPage = lazy(() => import('@/routes/devices/DeviceDetailPage'));
+const ProvisioningProfilesPage = lazy(() => import('@/routes/provisioning/ProvisioningProfilesPage'));
+const ProvisioningProfileDetailPage = lazy(() => import('@/routes/provisioning/ProvisioningProfileDetailPage'));
 const DashboardsPage = lazy(() => import('@/routes/dashboards/DashboardsPage'));
 const DashboardDetailPage = lazy(() => import('@/routes/dashboards/DashboardDetailPage'));
 const AlarmsPage = lazy(() => import('@/routes/alarms/AlarmsPage'));
@@ -110,6 +112,8 @@ export default function App() {
           <Route index element={<Home />} />
           <Route path="devices" element={<DevicesPage />} />
           <Route path="devices/:token" element={<DeviceDetailPage />} />
+          <Route path="provisioning-profiles" element={<ProvisioningProfilesPage />} />
+          <Route path="provisioning-profiles/:token" element={<ProvisioningProfileDetailPage />} />
           <Route path="dashboards" element={<DashboardsPage />} />
           <Route path="dashboards/:token" element={<DashboardDetailPage />} />
           <Route path="alarms" element={<AlarmsPage />} />

@@ -44,6 +44,7 @@ import { DeviceAssignmentPanel } from '@/routes/devices/DeviceAssignmentPanel';
 import { DeviceLocationPanel } from '@/routes/devices/DeviceLocationPanel';
 import { DeviceConfigurationPanel } from '@/routes/devices/DeviceConfigurationPanel';
 import { DeviceUpdatesPanel } from '@/routes/devices/DeviceUpdatesPanel';
+import { DeviceProvisioningPanel } from '@/routes/devices/DeviceProvisioningPanel';
 import { mayWrite } from '@/lib/scope';
 import { useUpdateAccess } from '@/lib/updateAuthority';
 import { EntityAttributesPanel } from '@/components/EntityAttributesPanel';
@@ -199,6 +200,13 @@ export default function DeviceDetailPage() {
               }}
             />
           </SectionPanel>
+          {/* Provenance rides the credentials gate: the credential list it reads is device:write,
+              and the profile fields are refused to a scoped member. */}
+          {canManageCredentials && (
+            <div className="mt-4">
+              <DeviceProvisioningPanel key={device.token} deviceToken={device.token} canWrite={canManageCredentials} />
+            </div>
+          )}
         </TabsContent>
         <TabsContent value="assignment">
           <SectionPanel>

@@ -30,6 +30,7 @@ export const IMPORT_FIELDS = [
   'name',
   'description',
   'metadata',
+  'provisioningProfileToken',
   'credentialType',
   'credentialId',
   'credentialValue',
@@ -68,6 +69,14 @@ const ALIASES: Record<ImportField, string[]> = {
   name: ['name', 'devicename', 'nombre'],
   description: ['description', 'descripcion'],
   metadata: ['metadata', 'metadatos'],
+  // The profile the device is earmarked for: the one profile that may later adopt it when it
+  // registers itself. Both spellings of the concept ("expected" is the console's word for it).
+  provisioningProfileToken: [
+    'provisioningprofiletoken',
+    'provisioningprofile',
+    'expectedprovisioningprofile',
+    'expectedprofile',
+  ],
   credentialType: ['credentialtype'],
   credentialId: ['credentialid'],
   credentialValue: ['credentialvalue', 'credentialsecret'],
@@ -130,6 +139,9 @@ export function buildRows(
     if (description) out.description = description;
     const metadata = trimmed(cell(r, mapping.metadata));
     if (metadata) out.metadata = metadata;
+    // An empty cell earmarks nothing: absent, never an empty token the server would refuse.
+    const earmark = trimmed(cell(r, mapping.provisioningProfileToken));
+    if (earmark) out.provisioningProfileToken = earmark;
     if (credentials) {
       const credentialType = trimmed(cell(r, mapping.credentialType));
       if (credentialType) out.credentialType = credentialType.toUpperCase();
