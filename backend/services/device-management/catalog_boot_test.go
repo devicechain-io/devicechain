@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/devicechain-io/dc-device-management/model"
+	"github.com/devicechain-io/dc-device-management/processor"
 	dmtest "github.com/devicechain-io/dc-device-management/test"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/governance"
@@ -70,7 +71,8 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 		Deployed:       true,
 		Readiness:      core.NewReadinessGate(),
 	}
-	Microservice.UseMetricsRegistry(prometheus.NewRegistry())
+	reg := prometheus.NewRegistry()
+	Microservice.UseMetricsRegistry(reg)
 	nats := &Microservice.InstanceConfiguration.Infrastructure.Nats
 	*nats = broker.NatsConfiguration("device-management")
 	nats.MqttFailClosed = true
@@ -113,6 +115,18 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 
 	require.NotNil(t, CalloutResponder, "the callout responder (and its credential-attempt bucket) was not started")
 	require.NotNil(t, MqttStoreBackoff, "the MQTT store back-off was not started")
+
+	// The callout runs with its in-flight cap, its lookup bound and its load metrics attached,
+	// and the three series exist on the service's registry. Without the Configure call in the
+	// start hook the metrics are never attached.
+	maxInFlight, lookup, stop, metrics := CalloutResponder.Limits()
+	require.Equal(t, processor.DefaultCalloutMaxInFlight, maxInFlight, "the callout's in-flight cap is not in force")
+	require.Equal(t, processor.DefaultCalloutLookupTimeout, lookup)
+	require.Equal(t, processor.DefaultCalloutStopWait, stop)
+	require.True(t, metrics, "the callout's load metrics were never attached to the responder")
+	for _, series := range []string{"callout_in_flight", "callout_refused_busy_total", "callout_plaintext_requests_total"} {
+		require.NotEmpty(t, registeredSeries(t, reg, series), "%s is not registered", series)
+	}
 
 	// The alarm subscription opens its live feed on first request, not at start:
 	// graphql/subscriptions_alarms.go:139.
