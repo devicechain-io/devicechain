@@ -2591,6 +2591,7 @@ jobs:
       # wait through RECONCILING and fail on a timeout, an always-failing gcloud and a
       # missing one, because a wait that cannot fail is a wait that returns early.
       - name: gke cluster-operations wait self-test
+        working-directory: .
         run: deploy/gke/wait-for-cluster-operations.sh --self-test
 
       # The provider's max_history default is 0, which keeps every revision of every
