@@ -275,6 +275,8 @@ profile、拓扑和启用的功能区来自实例自身声明，即 `dcctl boots
 
 升级不会改变实例的形态，但会保留你为它设置的调优。传给 `dcctl bootstrap --values` 或 `dcctl upgrade --values` 的 values 文件会记录在实例上，之后每次升级都会再次应用；`--reset-values` 可将其移除。参见[调优实例](./tuning-an-instance.md)。
 
+MQTT 故障关闭确认也以同样方式保留：`dcctl bootstrap` 或 `dcctl upgrade` 上的 `--mqtt-fail-closed` 会记录在实例上，省略该参数的升级会保留已记录的值，无论开启还是关闭。参见 [fail-closed MQTT](./observability.md#mqtt-fail-closed)。
+
 ### 升级会应用哪些基础设施 {#upgrade-infrastructure}
 
 更新服务前，`dcctl upgrade` 应用实例 OpenTofu 配置，即 `dcctl bootstrap` 构建实例时使用的配置。
@@ -2115,11 +2117,62 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 
 无须操作。
 
+### v0.25.2：服务令牌签发离开公共端口 {#v0252-upgrade}
+
+`v0.25.2` 是 `v0.25.1` 的安全补丁。没有迁移，API、主题、权限均无变化。实例配置新增一个键
+`infrastructure.userManagement.internalPort`，chart 将其设为 `8082`；请保持该值不变，因为 chart 的
+Service、pod 和网络策略都使用这个固定端口。[v0.25.1](#v0251-upgrade) 和 [v0.25.0](#v0250-upgrade)
+两节所描述的内容（包括其已知限制）仍完全适用。
+
+先升级集群，再升级每个实例。除新的 `--version` 外，还要把集群安装时用的设置（例如 `--ha` 和
+`--database-node-selector`）传给 `dcctl install`：
+
+```bash
+dcctl install local --version v0.25.2
+dcctl upgrade local devicechain --version v0.25.2 --dry-run
+dcctl upgrade local devicechain --version v0.25.2
+```
+
+**从 `v0.25.0` 或 `v0.24.0` 升级时，**按 [v0.25.1 说明](#v0251-upgrade)操作，并使用
+`--version v0.25.2`：其内容原样适用，其中关于 v0.25.0 两次升级的说明也同样适用。
+
+#### 内部端点离开公共端口 {#v0252-internal-endpoints}
+
+`user-management` 过去在其公共端口上提供两个仅供平台自身服务使用的端点：`/auth/service-token`，用共享
+服务密钥换取短期服务令牌；`/auth/jwks`，每个服务用来校验令牌的密钥集。唯一让它们不暴露在互联网上的，是
+chart 的 API ingress 上的一个 nginx 配置片段（snippet）。**因此，自带 ingress 控制器的安装会让这两个端点
+从外部可达，**仅由以恒定时间比较的共享服务密钥保护。
+
+从本版本起，`user-management` 在单独的内部端口 `8082` 上提供这两个端点，chart 只在集群内部的 Service
+上发布该端口。没有任何 ingress、路由或负载均衡器指向它，无论前面是什么，公共端口对这两个路径都返回
+404，因此**自带的控制器无需任何边缘规则来隐藏它们。**现在每个服务都在内部端口上获取密钥集并签发令牌。
+参见[不会离开集群的端点](../concepts/security-model.md#internal-endpoints)。
+
+- **chart 不再设置任何 nginx 配置片段。**
+- **`dcctl install` 安装的 ingress 控制器在本版本中保持不变**，仍接受配置片段，因为尚未升级的实例依赖
+  它们。后续版本会关闭配置片段，并由 `dcctl install` 的检查把关：只要该控制器类的任何 Ingress 仍带有
+  `*-snippet` 注解，它就拒绝继续。
+- **外部令牌校验方不受影响：**它们使用授权服务器元数据中的 `jwks_uri`，即 `/oauth/jwks`，该端点仍然公开。
+
+#### 预期情况 {#v0252-during}
+
+- **`user-management` 与其对端服务必须一起滚动更新。**旧版本的 pod 会向公共端口请求密钥集和令牌签发，
+  而公共端口现在返回 404，且它无法靠重试恢复：在该 pod 被本版本的 pod 替换之前，它的签发请求都会失败。
+  `dcctl upgrade` 会替换所有服务的 pod，因此这种情况只持续到滚动更新结束；不要让任何区域停留在旧镜像上。
+- **在 `dcctl upgrade` 写入新配置之后重启的旧 pod 无法启动。**旧的二进制文件严格解码实例配置，会拒绝新的
+  `internalPort` 键，因此这样的 pod 会反复崩溃重启，直到被本版本的 pod 替换。
+- **如果你运行自己的网络策略引擎，**请允许实例命名空间中的 pod 访问 `user-management` 的 `8082` 端口，
+  且仅此而已。chart 自带的针对该端口的网络策略默认关闭，`dcctl` 安装也以关闭状态运行。
+- **chart 自带的 Grafana 看板**现在都以该实例正在触发的告警表开头，并链接到该实例的其他看板；新增的第三个
+  看板 *Instance overview* 目前只包含这张表。
+
 ### v0.25.1：数据库和备份存储的镜像，针对当前安全公告重新构建 {#v0251-upgrade}
 
 `v0.25.1` 是 `v0.25.0` 的补丁。没有迁移，API、主题、权限、chart 值、配置键均无变化。它把集群和每个
 实例运行数据库与备份存储所用的三个第三方镜像，换成不再带有下列安全公告的构建，并修正两个服务向
 Prometheus 报告的内容以及 chart 为它们自带的 Grafana 看板（参见[指标与看板](#v0251-metrics)）。[v0.25.0 一节](#v0250-upgrade)所描述的内容仍完全适用。
+
+[v0.25.0 的已知限制](#v0250-upgrade)仍然适用，包括这一条：`mqttFailClosed` 关闭（默认）时，在持续负载下即使没有代理重启，当 `event-sources` 落后、捕获流写满时，已确认的 QoS 1 消息也可能丢失。`devicechain_<area>_jetstream_consumer_unread_skipped_total` 会统计这些丢失，`JetStreamDurableLostUnread` 会告警。
 
 先升级集群，再升级每个实例。除新的 `--version` 外，还要把集群安装时用的设置（例如 `--ha` 和
 `--database-node-selector`）传给 `dcctl install`：
@@ -2460,13 +2513,14 @@ SDK 过去无法识别被拒绝的连接。MQTT 库通过抛出异常来报告�
 - **发布没有分批或金丝雀阶段，** 没有计划，也没有针对停滞的发布驱动器的告警。
 - **SBOM 由每个镜像的 `amd64` 变体生成。**
 - **`mqttFailClosed` 关闭时（默认值），在 MQTT 捕获流更换 leader 期间，消息代理已确认的 QoS 1 消息可能丢失，
-  与负载高低无关，** 且没有任何计数器记录（`JetStreamCaptureLeaderChanged` 会警告发生过切换）。消息代理的滚动
+  与负载高低无关，** 且没有任何计数器记录（`JetStreamCaptureLeaderChanged` 会警告发生过切换）。在持续负载下，即使没有更换 leader 也可能丢失：在对默认安装的一次负载测试中，`event-sources` 读取捕获流时落后，该流写满到上限并丢弃最早的未读消息，丢失了 1,357,188 个已确认的事件，约占 MQTT 流量的 7% 到 13%。`devicechain_<area>_jetstream_consumer_unread_skipped_total` 会统计这些丢失，`JetStreamDurableLostUnread` 会告警。`event-sources` 为何落后仍在调查中。消息代理的滚动
   重启会重启每台服务器，包括 leader，而本次升级会滚动消息代理两次，因此除非开启了 fail-closed，否则每次消息代理
   滚动期间都应预期一个短暂的丢失窗口。在本次升级的一次演练中，四台设备合计每秒发送 20 条 QoS 1 消息，11,262 条
   已确认消息中丢失了 11 条，全部发生在消息代理重启期间；更早的一次演练没有丢失。要关闭这个窗口，请开启
-  `infrastructure.nats.mqttFailClosed`（chart 值为 `instance.config.infrastructure.nats.mqttFailClosed`）。本版本的
+  `infrastructure.nats.mqttFailClosed`。本版本的
   `dcctl` 没有对应的选项，`--values` 也不接受它，因此在由 `dcctl` 管理的实例上手动设置的值会被下一次
-  `dcctl upgrade` 覆盖。代价是：消息代理的消息存储没有 leader 期间，QoS 1 发布不会被确认，设备必须重新发送；
+  `dcctl upgrade` 覆盖；后续版本会为 `dcctl bootstrap` 和 `dcctl upgrade` 增加 `--mqtt-fail-closed`，
+  并把这一选择记录在实例上（见 [fail-closed MQTT](./observability.md#mqtt-fail-closed)）。代价是：消息代理的消息存储没有 leader 期间，QoS 1 发布不会被确认，设备必须重新发送；
   而且实例能跟上的流量低于关闭该设置时。在一个测试集群上，只要能跟上，它就没有丢失任何消息（每秒 6,000 和 9,000
   个事件，期间多次更换 leader）；在每秒 12,000 个事件时它跟不上，两台消息代理服务器内存耗尽，已确认的消息丢失。
   请按低于其上限的规模部署。见 [fail-closed MQTT](./observability.md#mqtt-fail-closed)。

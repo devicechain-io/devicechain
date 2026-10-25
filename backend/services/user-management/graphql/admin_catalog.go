@@ -79,6 +79,17 @@ func (r *AdminTenantResolver) AiInferenceBurst() (*int32, error) {
 	return util.IntPtrInt32("aiInferenceBurst", r.M.AiInferenceBurst)
 }
 
+// ProvisioningRegistrationsPerSecond / ProvisioningBurst resolve the per-tenant
+// self-registration governance overrides; null means the tenant inherits its tier's
+// value, then the platform default.
+func (r *AdminTenantResolver) ProvisioningRegistrationsPerSecond() *float64 {
+	return r.M.ProvisioningRegistrationsPerSecond
+}
+
+func (r *AdminTenantResolver) ProvisioningBurst() (*int32, error) {
+	return util.IntPtrInt32("provisioningBurst", r.M.ProvisioningBurst)
+}
+
 // ShedPriority resolves the per-tenant ADR-063 shed-priority override (1–100) for the
 // operator's visibility/edit — the RAW nullable column, null when the tenant inherits
 // its tier's shedPriority. This read-back is load-bearing: updateTenant is a
@@ -271,22 +282,24 @@ func (r *AdminResolver) DeleteRole(ctx context.Context, args struct {
 
 // adminTenantCreateInput mirrors AdminTenantCreateRequest.
 type adminTenantCreateInput struct {
-	Token                        string
-	Name                         *string
-	TierToken                    string
-	Config                       *string
-	IngestReadingsPerSecond      *float64
-	IngestBurst                  *int32
-	OutboundCallsPerSecond       *float64
-	OutboundBurst                *int32
-	AiExternalEnabled            *bool
-	AiInferenceRequestsPerMinute *float64
-	AiInferenceBurst             *int32
-	ShedPriority                 *int32
-	HeldCommandCeiling           *int32
-	GeoFencePositionCeiling      *int32
-	GeoFenceCeiling              *int32
-	GeoFencePositionBudget       *int32
+	Token                              string
+	Name                               *string
+	TierToken                          string
+	Config                             *string
+	IngestReadingsPerSecond            *float64
+	IngestBurst                        *int32
+	OutboundCallsPerSecond             *float64
+	OutboundBurst                      *int32
+	AiExternalEnabled                  *bool
+	AiInferenceRequestsPerMinute       *float64
+	AiInferenceBurst                   *int32
+	ProvisioningRegistrationsPerSecond *float64
+	ProvisioningBurst                  *int32
+	ShedPriority                       *int32
+	HeldCommandCeiling                 *int32
+	GeoFencePositionCeiling            *int32
+	GeoFenceCeiling                    *int32
+	GeoFencePositionBudget             *int32
 }
 
 // intPtr adapts an optional GraphQL Int (*int32) to the model's *int, preserving
@@ -317,17 +330,19 @@ func (r *AdminResolver) CreateTenant(ctx context.Context, args struct {
 		Token: args.Request.Token, Name: strOrEmpty(args.Request.Name),
 		TierToken: args.Request.TierToken, Config: cfg,
 		GovernanceOverrides: admin.GovernanceOverrides{
-			IngestReadingsPerSecond:      args.Request.IngestReadingsPerSecond,
-			IngestBurst:                  intPtr(args.Request.IngestBurst),
-			OutboundCallsPerSecond:       args.Request.OutboundCallsPerSecond,
-			OutboundBurst:                intPtr(args.Request.OutboundBurst),
-			AiInferenceRequestsPerMinute: args.Request.AiInferenceRequestsPerMinute,
-			AiInferenceBurst:             intPtr(args.Request.AiInferenceBurst),
-			ShedPriority:                 intPtr(args.Request.ShedPriority),
-			HeldCommandCeiling:           intPtr(args.Request.HeldCommandCeiling),
-			GeoFencePositionCeiling:      intPtr(args.Request.GeoFencePositionCeiling),
-			GeoFenceCeiling:              intPtr(args.Request.GeoFenceCeiling),
-			GeoFencePositionBudget:       intPtr(args.Request.GeoFencePositionBudget),
+			IngestReadingsPerSecond:            args.Request.IngestReadingsPerSecond,
+			IngestBurst:                        intPtr(args.Request.IngestBurst),
+			OutboundCallsPerSecond:             args.Request.OutboundCallsPerSecond,
+			OutboundBurst:                      intPtr(args.Request.OutboundBurst),
+			AiInferenceRequestsPerMinute:       args.Request.AiInferenceRequestsPerMinute,
+			AiInferenceBurst:                   intPtr(args.Request.AiInferenceBurst),
+			ProvisioningRegistrationsPerSecond: args.Request.ProvisioningRegistrationsPerSecond,
+			ProvisioningBurst:                  intPtr(args.Request.ProvisioningBurst),
+			ShedPriority:                       intPtr(args.Request.ShedPriority),
+			HeldCommandCeiling:                 intPtr(args.Request.HeldCommandCeiling),
+			GeoFencePositionCeiling:            intPtr(args.Request.GeoFencePositionCeiling),
+			GeoFenceCeiling:                    intPtr(args.Request.GeoFenceCeiling),
+			GeoFencePositionBudget:             intPtr(args.Request.GeoFencePositionBudget),
 		},
 		AiExternalEnabled: args.Request.AiExternalEnabled,
 	})

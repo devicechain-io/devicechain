@@ -21,10 +21,34 @@ var (
 	upgradeSkipInfra   bool
 
 	upgradeMqttBodyCredential string
+	upgradeMqttFailClosed     bool
 
 	upgradeValues      []string
 	upgradeResetValues bool
 )
+
+// upgradeOptions is the UpgradeOptions the upgrade flags describe, split out of RunE so
+// the copy of each flag into its field can be tested.
+func upgradeOptions(instance, mqttBodyCredential string, mqttFailClosed *bool, valuesOverlay map[string]interface{}) bootstrap.UpgradeOptions {
+	return bootstrap.UpgradeOptions{
+		Options: bootstrap.Options{
+			Instance:      instance,
+			KubeContext:   upgradeKubeContext,
+			DryRun:        upgradeDryRun,
+			ImageRegistry: upgradeRegistry,
+			ImageVersion:  upgradeVersion,
+
+			MqttBodyCredential: mqttBodyCredential,
+			MqttFailClosed:     mqttFailClosed,
+			ValuesOverlay:      valuesOverlay,
+			ResetValues:        upgradeResetValues,
+		},
+		EscrowFile:           upgradeEscrowFile,
+		EscrowPassphraseFile: upgradeEscrowPass,
+		DcctlVersion:         Version,
+		SkipInfrastructure:   upgradeSkipInfra,
+	}
+}
 
 // upgradeCmd moves a live instance onto a release's version. It began as the half of
 // an upgrade `helm upgrade` could not reach — the operator is not in the chart — and
@@ -72,6 +96,11 @@ It does not change an instance's shape. The profile, topology and functional
 areas come from the instance's own declaration, which is what 'dcctl bootstrap'
 recorded. Use it to move versions, not to reconfigure.
 
+The fail-closed MQTT acknowledgement is the other: '--mqtt-fail-closed' (or
+'--mqtt-fail-closed=false') sets it on a live instance, and the declaration records the
+choice. A plain upgrade with no flag keeps whatever was recorded, so an instance built
+with it stays on, and one told off stays off.
+
 Operator tuning is the exception, and it is carried: a values overlay given to
 'dcctl bootstrap --values' or to this command is recorded on the instance and applied
 again by every later upgrade. '--values <file>' replaces the recorded overlay,
@@ -104,7 +133,11 @@ when they are in a terraform.tfvars beside its state
   dcctl upgrade local devicechain --version v1.3.0 --skip-infrastructure
 
   # Tune the instance; later upgrades keep applying it without --values
-  dcctl upgrade local devicechain --values tuning.yaml`,
+  dcctl upgrade local devicechain --values tuning.yaml
+
+  # Turn the fail-closed MQTT acknowledgement on (kept by later upgrades), or back off
+  dcctl upgrade local devicechain --mqtt-fail-closed
+  dcctl upgrade local devicechain --mqtt-fail-closed=false`,
 	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// The provider is resolved rather than ignored: it is validated here, so a
@@ -118,6 +151,7 @@ when they are in a terraform.tfvars beside its state
 		if err != nil {
 			return fmt.Errorf("--mqtt-body-credential: %w", err)
 		}
+		mqttFailClosed := mqttFailClosedFlag(cmd.Flags().Changed, upgradeMqttFailClosed)
 		if upgradeResetValues && len(upgradeValues) > 0 {
 			return fmt.Errorf("--values replaces the recorded overlay and --reset-values removes it; give one")
 		}
@@ -127,23 +161,7 @@ when they are in a terraform.tfvars beside its state
 				return err
 			}
 		}
-		opts := bootstrap.UpgradeOptions{
-			Options: bootstrap.Options{
-				Instance:      args[1],
-				KubeContext:   upgradeKubeContext,
-				DryRun:        upgradeDryRun,
-				ImageRegistry: upgradeRegistry,
-				ImageVersion:  upgradeVersion,
-
-				MqttBodyCredential: mqttBodyCredential,
-				ValuesOverlay:      valuesOverlay,
-				ResetValues:        upgradeResetValues,
-			},
-			EscrowFile:           upgradeEscrowFile,
-			EscrowPassphraseFile: upgradeEscrowPass,
-			DcctlVersion:         Version,
-			SkipInfrastructure:   upgradeSkipInfra,
-		}
+		opts := upgradeOptions(args[1], mqttBodyCredential, mqttFailClosed, valuesOverlay)
 		return bootstrap.Upgrade(cmd.Context(), provider, opts)
 	},
 	SilenceUsage: true,
@@ -158,6 +176,7 @@ func init() {
 	upgradeCmd.Flags().BoolVar(&upgradeSkipInfra, "skip-infrastructure", false, "move only the services: leave this instance's message broker and event store on the configuration they were built with")
 	upgradeCmd.Flags().StringVar(&upgradeMqttBodyCredential, "mqtt-body-credential", "", mqttBodyCredentialUsage)
 	upgradeCmd.Flags().StringArrayVar(&upgradeValues, "values", nil, valuesUsage)
+	upgradeCmd.Flags().BoolVar(&upgradeMqttFailClosed, "mqtt-fail-closed", false, mqttFailClosedUsage)
 	upgradeCmd.Flags().BoolVar(&upgradeResetValues, "reset-values", false, "remove the tuning overlay recorded on the instance: it returns to the values dcctl computes. Cannot be combined with --values")
 	upgradeCmd.Flags().StringVar(&upgradeEscrowPass, "escrow-passphrase-file", "", "read the escrow passphrase from this file (or $"+bootstrap.EscrowPassphraseEnv+"). Only needed to WRITE an escrow for an instance that has none — checking an existing one needs no passphrase")
 

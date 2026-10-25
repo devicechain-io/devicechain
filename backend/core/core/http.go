@@ -39,8 +39,9 @@ const HttpPort = 8080
 // default mux. http.Handle keeps compiling and keeps registering; the routes simply
 // stop being served, with no error and no log line. So a binary must move ALL of its
 // registrations in the same commit that gives its server a Handler — for
-// user-management that includes /auth/jwks, whose loss makes every other service's
-// token validation fail and pulls the whole instance out of its Service endpoints.
+// user-management that includes the internal listener's /auth/jwks mux, whose loss
+// makes every other service's token validation fail and pulls the whole instance out
+// of its Service endpoints.
 func (ms *Microservice) Mux() *http.ServeMux {
 	ms.muxOnce.Do(func() { ms.mux = http.NewServeMux() })
 	return ms.mux

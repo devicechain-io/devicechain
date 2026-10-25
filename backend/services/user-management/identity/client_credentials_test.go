@@ -21,6 +21,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/credential"
 	"github.com/devicechain-io/dc-microservice/credential/credentialtest"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/sourcelimit"
 	"github.com/devicechain-io/dc-user-management/iam"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/bcrypt"
@@ -54,9 +55,6 @@ func newCCEnv(t *testing.T) *ccEnv {
 	require.NoError(t, err)
 	base.m.credentials = checker
 	base.m.now = func() time.Time { return e.now }
-	base.m.saAttempts.limits = &serviceAccountAttemptLimits
-	base.m.saGlobal.limits = &serviceAccountGlobalLimits
-	base.m.saMints.limits = &serviceAccountMintLimits
 	e.h = TokenHandler(base.m.AuthenticateClient, base.m.RedeemAuthorizationCode, base.m.RefreshOAuth, base.m.ClientCredentials)
 	base.seedTenant(t, "acme")
 	ctx := context.Background()
@@ -332,7 +330,7 @@ func TestClientCredentialsIsRateLimited(t *testing.T) {
 	e := newCCEnv(t)
 	// The per-ACCOUNT mint bucket: a runaway integration is slowed after its burst...
 	id, secret := e.account(t, "acme", "ci", nil, "device:read")
-	for i := 0; i < serviceAccountMintLimits.perKeyBurst; i++ {
+	for i := 0; i < serviceAccountMintLimits.Burst; i++ {
 		require.Equal(t, http.StatusOK, e.grant(t, id, secret).Code, "mint %d", i)
 	}
 	rec := e.grant(t, id, secret)
@@ -343,16 +341,16 @@ func TestClientCredentialsIsRateLimited(t *testing.T) {
 	// ...but strangers' failures never drain it: wrong secrets from elsewhere leave another
 	// account's mints alone.
 	other, otherSecret := e.account(t, "acme", "etl", nil, "device:read")
-	e.m.saAttempts = sourceLimiter{limits: &serviceAccountAttemptLimits}
+	e.m.saAttempts = sourcelimit.Must(serviceAccountAttemptLimits)
 	for i := 0; i < 15; i++ {
 		require.Equal(t, http.StatusUnauthorized, e.grant(t, other, "wrong").Code)
 	}
 	require.Equal(t, http.StatusOK, e.grant(t, other, otherSecret).Code, "failed attempts starved the account")
 
 	// The per-SOURCE attempt bucket bounds a spray before any compare.
-	e.m.saAttempts = sourceLimiter{limits: &serviceAccountAttemptLimits}
+	e.m.saAttempts = sourcelimit.Must(serviceAccountAttemptLimits)
 	e.compares.Store(0)
-	for i := 0; i < serviceAccountAttemptLimits.perKeyBurst; i++ {
+	for i := 0; i < serviceAccountAttemptLimits.Burst; i++ {
 		e.grant(t, "dcsa_spray", "x")
 	}
 	n := e.compares.Load()
@@ -373,9 +371,9 @@ func TestAGlobalSprayDoesNotStopARunningIntegration(t *testing.T) {
 
 	// The global bucket's clock stands still, so it cannot refill while the spray runs.
 	frozen := time.Now()
-	e.m.saGlobal.now = func() time.Time { return frozen }
+	e.m.saGlobal = sourcelimit.Must(serviceAccountGlobalLimits, sourcelimit.WithClock(func() time.Time { return frozen }))
 	// The spray: one wrong attempt from each of more distinct sources than the global burst.
-	for i := 0; i <= serviceAccountGlobalLimits.perKeyBurst; i++ {
+	for i := 0; i <= serviceAccountGlobalLimits.Burst; i++ {
 		e.postFrom(t, fmt.Sprintf("203.0.%d.%d:1000", i/250, i%250+1), form, "dcsa_spray", "x")
 	}
 	rec := e.postFrom(t, "192.0.2.200:1000", form, id, secret)
@@ -387,22 +385,22 @@ func TestAGlobalSprayDoesNotStopARunningIntegration(t *testing.T) {
 
 	// The exemption ages out.
 	e.now = e.now.Add(serviceAccountTrustedSourceTTL + time.Minute)
-	require.False(t, e.m.saTrusted.has(attemptSourceKey("198.51.100.7"), e.now))
+	require.False(t, e.m.saTrusted.has(sourcelimit.SourceKey("198.51.100.7"), e.now))
 }
 
 // An IPv6 sender cannot multiply its per-source allowance by walking the addresses of its
 // own /64.
 func TestAttemptSourceKeyGroupsAnIPv6Subnet(t *testing.T) {
-	require.Equal(t, attemptSourceKey("2001:db8:1:2::1"), attemptSourceKey("2001:db8:1:2:ffff:ffff:ffff:fffe"))
-	require.NotEqual(t, attemptSourceKey("2001:db8:1:2::1"), attemptSourceKey("2001:db8:1:3::1"))
-	require.Equal(t, "192.0.2.1", attemptSourceKey("192.0.2.1"))
-	require.Equal(t, "192.0.2.1", attemptSourceKey("::ffff:192.0.2.1"))
-	require.NotEqual(t, attemptSourceKey("192.0.2.1"), attemptSourceKey("192.0.2.2"))
-	require.Equal(t, "not-an-address", attemptSourceKey("not-an-address"))
+	require.Equal(t, sourcelimit.SourceKey("2001:db8:1:2::1"), sourcelimit.SourceKey("2001:db8:1:2:ffff:ffff:ffff:fffe"))
+	require.NotEqual(t, sourcelimit.SourceKey("2001:db8:1:2::1"), sourcelimit.SourceKey("2001:db8:1:3::1"))
+	require.Equal(t, "192.0.2.1", sourcelimit.SourceKey("192.0.2.1"))
+	require.Equal(t, "192.0.2.1", sourcelimit.SourceKey("::ffff:192.0.2.1"))
+	require.NotEqual(t, sourcelimit.SourceKey("192.0.2.1"), sourcelimit.SourceKey("192.0.2.2"))
+	require.Equal(t, "not-an-address", sourcelimit.SourceKey("not-an-address"))
 
 	e := newCCEnv(t)
 	form := url.Values{"grant_type": {"client_credentials"}}
-	for i := 0; i < serviceAccountAttemptLimits.perKeyBurst; i++ {
+	for i := 0; i < serviceAccountAttemptLimits.Burst; i++ {
 		e.postFrom(t, fmt.Sprintf("[2001:db8:1:2::%x]:443", i+1), form, "dcsa_spray", "x")
 	}
 	rec := e.postFrom(t, "[2001:db8:1:2::abcd]:443", form, "dcsa_spray", "x")

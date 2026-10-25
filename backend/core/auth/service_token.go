@@ -15,6 +15,11 @@ const (
 	// token in exchange for the shared service secret.
 	ServiceTokenPath = "/auth/service-token"
 
+	// JWKSPath is the user-management endpoint serving the platform's retained public signing
+	// keys to the other services. Like ServiceTokenPath it is served on the INTERNAL listener
+	// only; see config.UserManagementConfiguration.
+	JWKSPath = "/auth/jwks"
+
 	// ServiceSecretHeader carries the shared service secret on a mint request. It
 	// is the bootstrap trust root — a holder can mint any authority — so it travels
 	// only from a caller to user-management, never onward to a callee (the callee

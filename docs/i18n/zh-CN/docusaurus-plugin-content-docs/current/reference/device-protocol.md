@@ -192,7 +192,7 @@ Schema 表达不了的内容：
 
 ## 拒绝与错误 {#rejections}
 
-平台不接受的消息会怎样，取决于它在哪里被拒绝以及使用哪种传输方式。HTTP 会响应请求，因此设备能在入口处得知拒绝。MQTT 在 broker 捕获消息后立即确认发布（`PUBACK`），这发生在**解码之前**，因此 MQTT 设备永远不会收到通知：broker 之后的任何拒绝只有运维人员能看到。在默认设置下，捕获流更换主节点期间被确认的 QoS 1 发布也可能丢失；见[服务质量](../guides/connecting-a-device.md#quality-of-service)。
+平台不接受的消息会怎样，取决于它在哪里被拒绝以及使用哪种传输方式。HTTP 会响应请求，因此设备能在入口处得知拒绝。MQTT 在 broker 捕获消息后立即确认发布（`PUBACK`），这发生在**解码之前**，因此 MQTT 设备永远不会收到通知：broker 之后的任何拒绝只有运维人员能看到。在默认设置下，捕获流更换主节点期间被确认的 QoS 1 发布也可能丢失，既包括捕获流更换主节点期间，也包括持续负载下接入落后、该流写满时；见[服务质量](../guides/connecting-a-device.md#quality-of-service)。
 
 ### 入口处 {#rejections-at-the-door}
 

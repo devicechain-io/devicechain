@@ -406,7 +406,7 @@ registry_container="kind-registry"
 kind_network="kind"
 
 # 🔴 PINNED BY DIGEST, and the tag is kept beside it only so a reader can see the
-# version. `registry:2` is not a version — it is a name Docker Hub can repoint, so
+# version. `registry:3` is not a version — it is a name Docker Hub can repoint, so
 # an unpinned tag is a third-party dependency that moves under a release with no
 # commit here to show for it. It is also the one image in the release path pulled
 # anonymously from Docker Hub, which is subject to that registry's rate limits and
@@ -424,7 +424,7 @@ kind_network="kind"
 #
 # hack/check-image-pins.sh enforces the shape. To move the pin: resolve the digest
 # from the tag you want (`crane digest registry:<version>`) and write both.
-registry_image="registry:2.8.3@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373"
+registry_image="registry:3.1.2@sha256:01cd312e67026f06f5d89c3e133a4a9adc7cb9eeb9b1194e0b2954dfd770efd2"
 
 # The registry the release pipeline publishes to. Read as a constant here rather
 # than pulled from the chart: this is the registry an OPERATOR pulls from, and the

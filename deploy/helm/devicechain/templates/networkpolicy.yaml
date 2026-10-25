@@ -213,8 +213,13 @@ spec:
         - protocol: TCP
           port: {{ if $np.externalConfigPorts }}{{ $np.externalConfigPorts.rdb }}{{ else }}{{ $root.Values.instance.config.persistence.rdb.configuration.port }}{{ end }}
 
-    # user-management, in this same namespace: the service-token mint, the
-    # governance GraphQL read, and JWKS. All three ride one port.
+    # user-management, in this same namespace: the governance GraphQL read on the public
+    # port, and the service-token mint and JWKS on the internal one.
+    #
+    # 🔴 BOTH PORTS, OR THE SERVICE HANGS. The JWKS fetch and the mint dial the internal
+    # port; a policy that allowed only the public one would drop them, and a dropped
+    # connection blackholes rather than refusing, so the pod would never become ready and
+    # would not say why.
     - to:
         - podSelector:
             matchLabels:
@@ -222,6 +227,8 @@ spec:
       ports:
         - protocol: TCP
           port: {{ $root.Values.service.port }}
+        - protocol: TCP
+          port: {{ include "devicechain.authInternalPort" $root }}
 
     {{- with $np.additionalAllowedCidrs }}
     # Operator-declared exceptions. Most often the Service CIDR, for a CNI that evaluates
@@ -263,4 +270,41 @@ spec:
               {{- range $blockedIPv6 }}
               - {{ . | quote }}
               {{- end }}
+{{- /*
+  The internal auth listener: who may reach it.
+
+  user-management serves the service-token mint and the JWKS on a port no route targets (see
+  devicechain.authInternalPort). That already keeps them off every ingress. This is the second
+  layer, enforced by the CNI: only pods in THIS namespace may connect to that port, so a pod in
+  another namespace cannot reach the mint even though it can reach the Service by name. The
+  public port stays open to every source, as it is without a policy: the ingress controller
+  and the metrics scraper live in other namespaces.
+
+  Policies union, so this object only narrows the one port it names: selecting the pods for
+  Ingress makes every port not listed below default-deny, which is why the public port is
+  listed with no `from`.
+*/}}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $root.Values.instance.id }}-user-management-internal-auth
+  namespace: {{ include "devicechain.instanceNamespace" $root }}
+  labels:
+    {{- include "devicechain.areaLabels" (dict "root" $root "area" "user-management") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "devicechain.areaLabels" (dict "root" $root "area" "user-management") | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: {{ $root.Values.service.port }}
+    - from:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: {{ include "devicechain.authInternalPort" $root }}
 {{- end }}

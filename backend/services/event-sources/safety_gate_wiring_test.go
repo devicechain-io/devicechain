@@ -46,6 +46,7 @@ func fullInfra() mscfg.InfrastructureConfiguration {
 	var infra mscfg.InfrastructureConfiguration
 	infra.ServiceAuth.Secret = "s3cret"
 	infra.UserManagement.Hostname, infra.UserManagement.Port = "user-management", 8080
+	infra.UserManagement.InternalPort = 8080
 	infra.DeviceState.Hostname, infra.DeviceState.Port = "device-state", 8080
 	infra.EventProcessing.Hostname, infra.EventProcessing.Port = "event-processing", 8080
 	return infra

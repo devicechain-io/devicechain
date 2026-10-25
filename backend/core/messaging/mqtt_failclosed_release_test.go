@@ -54,9 +54,7 @@ func TestAReleaseKeepsEveryStoreCopyTheDurablesHold(t *testing.T) {
 				require.True(t, c.publish(guardTopic(guardInstance, guardTenant, "d1"), fmt.Sprintf("%02d%s", i, pad), 10*time.Second))
 			}
 			ev := fcDurable(t, guardInstance, MqttFailClosedEvents).Name
-			ci, err := b.js.ConsumerInfo(MqttMessageStore, ev)
-			require.NoError(t, err)
-			require.EqualValues(t, n, ci.NumPending, "premise: every PUBACKed copy is held")
+			requireStoreHolds(t, b, ev, n, "premise: every PUBACKed copy is held")
 
 			off := failClosedManager(t, b.nc, b.js, guardInstance, false)
 			off.mqttClock = clock.now
@@ -68,12 +66,39 @@ func TestAReleaseKeepsEveryStoreCopyTheDurablesHold(t *testing.T) {
 			require.NoError(t, err)
 			require.True(t, rep.released, "premise: the store was released")
 
-			ci, err = b.js.ConsumerInfo(MqttMessageStore, ev)
-			require.NoError(t, err)
-			require.EqualValuesf(t, n, ci.NumPending,
+			requireStoreHolds(t, b, ev, n, fmt.Sprintf(
 				"the release evicted PUBACKed store copies the durable still held (store now %d bytes, cap %d)",
-				b.storeInfo().State.Bytes, b.storeInfo().Config.MaxBytes)
+				b.storeInfo().State.Bytes, b.storeInfo().Config.MaxBytes))
 		})
+	}
+}
+
+// requireStoreHolds fails unless the message store holds n messages and the durable counts
+// them all as its own to deliver.
+//
+// 🔑 THE STORE IS ASKED FIRST, AND WITHOUT WAITING; THE DURABLE'S COUNT IS WAITED FOR. A
+// PUBACK is sent once the store has the message, so the store's own message count is exact
+// when the last publish returns, and it is the promise under test: an eviction (a discard
+// old, a lower bound) changes it at once. The durable's NumPending is not that: the broker
+// replies to the publish BEFORE it tells the stream's consumers of the new message, and does
+// so on a goroutine of its own (nats-server 2.15 stream.go: the PubAck, then sigq.push, drained
+// by signalConsumersLoop), so a count read right after the last PUBACK can be behind by the
+// messages that goroutine has not reached. CI read 9 of 12 that way, on a run that had not
+// released anything yet. The wait below is for that goroutine only: a message the store does not
+// hold is failed by the first check, and the wait is bounded by far more than the lag.
+func requireStoreHolds(t *testing.T, b *guardBroker, durable string, n int, msg string) {
+	t.Helper()
+	require.EqualValues(t, n, b.storeInfo().State.Msgs, "the store itself: "+msg)
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		ci, err := b.js.ConsumerInfo(MqttMessageStore, durable)
+		if err == nil && ci.NumPending == uint64(n) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the durable never counted all %d held copies (last: %+v, %v): %s", n, ci, err, msg)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 

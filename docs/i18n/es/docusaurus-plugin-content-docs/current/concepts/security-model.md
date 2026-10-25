@@ -19,6 +19,7 @@ Para notificar una vulnerabilidad, siga el proceso de la
 | Persona o programa frente a la API | Un token firmado, comprobado en cada servicio | Firma del token, reclamación de inquilino y permisos |
 | Secreto frente a lector | Los secretos se sellan y nunca se devuelven | Cifrado de sobre bajo la clave raíz de la instancia |
 | Inquilino frente a la red | Un destino aportado por un inquilino no puede alcanzar direcciones internas | Una comprobación en el momento de la conexión |
+| Internet frente a los endpoints propios de la plataforma | El emisor de tokens de servicio y el conjunto de claves de firma se sirven en un puerto al que no llega ninguna ruta | Un listener interno independiente, no una regla de ingress |
 | Servicios de la plataforma entre sí | Inicios de sesión separados en el broker y la base de datos | **Parcialmente.** Consulte [lo que aún no se hace cumplir](#accepted-gaps) |
 
 ## Inquilinos {#tenants}
@@ -52,10 +53,11 @@ Consulte [Multitenencia](./multi-tenancy.md).
   revocación alcanza a los eventos en curso.
 - **Credenciales en reposo.** La contraseña de una credencial `MQTT_BASIC` y el token de una credencial `ACCESS_TOKEN`
   se guardan solo como resúmenes unidireccionales con clave, bajo una clave derivada de la clave raíz de la instancia,
-  que no se guarda en la base de datos. Cada uno se muestra una vez, en la respuesta a la llamada que lo establece, y
+  que no se guarda en la base de datos. El secreto de un perfil de aprovisionamiento y el secreto de una reclamación de
+  dispositivo se guardan del mismo modo, cada uno bajo una clave propia. Cada uno se muestra una vez, en la respuesta a la llamada que lo establece, y
   nunca se vuelve a devolver; una lectura de una credencial de token de acceso devuelve una huella que no puede
   presentarse como el token. Por tanto, una fuga de la base de datos o de una copia de seguridad no da ninguna
-  contraseña ni ningún token de dispositivo que funcione.
+  contraseña, token, secreto de aprovisionamiento ni secreto de reclamación que funcione.
 - **Credenciales en el cuerpo de un evento.** En el broker MQTT de la plataforma la conexión ya ha autenticado al dispositivo, así que
   se rechaza un evento que además lleve una credencial en su cuerpo. Un ajuste transitorio, `capture.bodyCredential: strip`, acepta ese
   evento sin la credencial para que una flota siga informando mientras se actualiza su firmware; está previsto retirarlo antes de la
@@ -83,6 +85,37 @@ Consulte [Multitenencia](./multi-tenancy.md).
 - **Límites de abuso.** La ingesta tiene un techo de tasa por inquilino, los conectores de salida tienen techos por inquilino, el servidor MCP
   limita a cada llamador, las solicitudes GraphQL tienen ejecución y tamaño de cuerpo acotados, y los intentos fallidos de inicio de sesión tienen límite de tasa.
   No hay un límite de tasa de solicitudes por inquilino en la propia API GraphQL.
+
+## Endpoints que nunca salen del clúster {#internal-endpoints}
+
+Dos endpoints existen solo para los servicios de la propia plataforma. `/auth/service-token` intercambia el secreto
+de servicio compartido por un token de corta duración, y `/auth/jwks` es el conjunto de claves que todos los servicios
+usan para validar tokens. `user-management` sirve ambos en un puerto interno independiente (8082), no en el público.
+El chart publica ese puerto solo en el Service interno del clúster. Ningún ingress, ruta ni balanceador de carga hace
+referencia a él.
+
+Por eso el puerto público responde 404 para ambas rutas, sea cual sea lo que haya delante, incluso si no hay ningún
+ingress. Nada en el borde es un control de seguridad:
+
+- **Un controlador de ingress propio no necesita ninguna regla para estas rutas.** Enruta a los Services que crea
+  el chart, como harías de todos modos, y el emisor de tokens no es alcanzable desde fuera.
+- **El emisor de tokens está protegido por el secreto de servicio compartido.** El secreto se compara en tiempo
+  constante, y una instancia sin secreto configurado se niega a emitir. El puerto interno mantiene el endpoint fuera
+  de la red pública; el secreto es lo que autentica a quien logra alcanzarlo.
+- **El chart no establece ninguna anotación snippet de nginx.** Un snippet de configuración permite a quien pueda
+  escribir un objeto Ingress inyectar configuración de nginx, y aquí nada necesita uno. El controlador de ingress que
+  instala `dcctl install` sigue aceptando snippets en esta versión, porque las instancias que aún no se han actualizado
+  dependen de ellos; una versión posterior los desactivará cuando ninguna instancia los use.
+- **Una política de red restringe aún más el puerto interno, pero es defensa en profundidad y está desactivada por
+  defecto.** Con `networkPolicy.enabled` el chart limita el puerto a los pods del namespace de la propia instancia, en
+  un clúster cuyo plugin de red aplique políticas. Las instalaciones de `dcctl` se ejecutan con la política desactivada.
+- **Un verificador de tokens externo usa en su lugar el conjunto de claves público.** Los metadatos del servidor de
+  autorización (`jwks_uri`) apuntan a `/oauth/jwks`, que sirve las mismas claves públicas cuando hay una URL de emisor
+  configurada.
+
+Si ejecutas tu propio motor de políticas, permite que los pods del namespace de la instancia lleguen al puerto 8082 de
+`user-management`, y nada más. Cada servicio lo usa para obtener el conjunto de claves al arrancar y para emitir su token
+de servicio.
 
 ## Secretos {#secrets}
 
@@ -139,22 +172,19 @@ Estas carencias son conocidas y se aceptan en la versión actual. Planifique en 
    relacional de la instancia con un único inicio de sesión, así que un servicio comprometido podría leer y escribir las tablas de otra área. El aislamiento de inquilinos
    en la base de datos descansa en el ámbito de inquilino de la aplicación, no en permisos de la base de datos. Los roles separados por
    servicio están previstos para una versión 1.0.x.
-3. **Otros dos secretos del lado del dispositivo se guardan tal como se enviaron.** El secreto de un perfil de
-   aprovisionamiento y el secreto de una reclamación de dispositivo se guardan en la base de datos tal como se
-   establecieron, no como resúmenes como las contraseñas y los tokens de acceso de los dispositivos. La API nunca
-   devuelve ninguno de los dos. Trate el acceso a la base de datos y las copias de seguridad como portadores de
-   secretos y, si se filtra una copia, establezca un secreto nuevo en cada perfil de aprovisionamiento y vuelva a
-   abrir con un secreto nuevo cada reclamación de dispositivo no canjeada.
-4. **Confirmaciones MQTT durante un cambio de líder del broker.** Por defecto, el broker puede confirmar un mensaje QoS 1 y
-   perderlo después mientras el flujo de captura cambia de líder, algo que provoca un reinicio del broker, una
-   actualización o la pérdida de un nodo, con cualquier carga. Con `infrastructure.nats.mqttFailClosed` activado, una
+3. **Confirmaciones MQTT que el broker puede perder.** Por defecto, el broker puede confirmar un mensaje QoS 1 y
+   perderlo después de dos formas. Una es mientras el flujo de captura cambia de líder, algo que provoca un reinicio del broker, una
+   actualización o la pérdida de un nodo, con cualquier carga. La otra no necesita ningún reinicio: con carga sostenida, si
+   `event-sources` se queda atrás y la cola del flujo de captura alcanza su límite, el flujo descarta sus mensajes sin leer más
+   antiguos. `devicechain_<area>_jetstream_consumer_unread_skipped_total` los cuenta y salta la alerta
+   `JetStreamDurableLostUnread`. Con `infrastructure.nats.mqttFailClosed` activado, una
    confirmación significa que la plataforma conserva el mensaje; a cambio, el broker rechaza las publicaciones QoS 1
-   mientras no hay líder, y la instancia sostiene menos tráfico, así que es para instalaciones dimensionadas para
-   mantenerse por debajo de ese techo. El ajuste está desactivado por defecto, y
+   mientras no hay líder o su almacén de mensajes está lleno, y la instancia sostiene menos tráfico, así que es para instalaciones dimensionadas para
+   mantenerse por debajo de ese techo. El ajuste está desactivado por defecto; `--mqtt-fail-closed` en `dcctl bootstrap` o `dcctl upgrade` lo activa, y
    [Observabilidad](../deployment/observability.md#mqtt-fail-closed) describe el equilibrio.
-5. **La clave raíz es legible para cualquiera que pueda leer el Secret de Kubernetes de la instancia.** Restrinja el acceso a ese
+4. **La clave raíz es legible para cualquiera que pueda leer el Secret de Kubernetes de la instancia.** Restrinja el acceso a ese
    Secret y al etcd del clúster en consecuencia.
-6. **No se ha publicado ninguna prueba de penetración externa.**
+5. **No se ha publicado ninguna prueba de penetración externa.**
 
 Nada de esta página sustituye su propia revisión. Si una entrada de aquí es un problema para su despliegue, la sección
 correspondiente de arriba indica dónde está el control.

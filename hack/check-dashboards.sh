@@ -109,8 +109,13 @@ python3 -c 'import yaml' 2>/dev/null || {
 # ---------------------------------------------------------------------------
 BOARDS=(
   command-delivery
+  delivery
   event-processing
+  ingest
+  messaging
   overview
+  persistence
+  platform
 )
 # ...and the two published names, spelled out from that list. This is the only
 # place they are derived: the list above is the literal, the names below are what
@@ -417,9 +422,27 @@ for dirpath, _dirs, files in os.walk(services_dir):
             for suffix, kind in HELPER_FAMILIES[reg.group(1)]:
                 area_kinds.setdefault(reg.group(2) + suffix, set()).add(kind)
 
+# 🔑 CORE REGISTERS METRICS UNDER EVERY SERVICE'S SUBSYSTEM. The messaging families
+# (jetstream_*, kv_cache_*, ...) are built once in backend/core and exported by each
+# area that touches the broker, so a histogram there (jetstream_publish_duration_seconds)
+# exports _bucket/_sum/_count under every area's name. Reading only backend/services
+# left those histograms invisible: their derived series failed as unregistered and their
+# bare names passed as plain literals. They are read here into a pseudo-area that every
+# lookup includes.
+CORE = "(core)"
+core_dir = os.path.join(go_root, "core")
+for dirpath, _dirs, files in os.walk(core_dir):
+    for fname in files:
+        if not fname.endswith(".go") or fname.endswith("_test.go"):
+            continue
+        with open(os.path.join(dirpath, fname), "rb") as fh:
+            src = COMMENT_LINE.sub("", fh.read().decode("utf-8", "replace"))
+        for reg in REGISTRATION.finditer(src):
+            kinds.setdefault(CORE, {}).setdefault(reg.group(2), set()).add(reg.group(1).lower())
+
 def lookup_areas(area_dir):
     """area_dir None means any area (a by-name selector spans them all)."""
-    return [area_dir] if area_dir else list(kinds)
+    return [area_dir, CORE] if area_dir else list(kinds)
 
 def registered(metric, area_dir=None):
     """Registered by a call read above, including a core helper's assembled names."""
@@ -549,6 +572,147 @@ for (form, suffix) in sorted(regex_seen):
             "    complains."
             % (form, suffix, ", ".join(sorted(regex_seen[(form, suffix)])), suffix))
 
+# SERIES THAT ARE NOT DEVICECHAIN'S OWN. A board or an alert rule may read what other software exports
+# -- kube-state-metrics, cAdvisor, the kubelet, the Go and process collectors, the database operator,
+# the backup plugin, the message broker's exporter -- but nothing in this tree registers those names, so
+# the Go-source check above cannot vouch for them and a misspelling would draw an empty graph (or, in an
+# alert, a rule that never fires). They are pinned here instead: ONE set of exact names and ONE set of
+# prefixes, scanned over every dashboard and every alert-rule template. A token that starts with a pinned
+# prefix and is not in the set fails; adding a name is the moment to confirm it against the exporter's
+# source or a live scrape, and a name used in one exporter version only does not belong here.
+#
+#   container_*, kube_*  cAdvisor and kube-state-metrics (kube-prometheus-stack versions the chart supports);
+#                        kube_cnpg_* come from the kube-state-metrics custom-resource config in
+#                        deploy/opentofu/modules/monitoring.
+#   go_*, process_*      the client_golang Go and process collectors.
+#   kubelet_*            the kubelet's volume statistics; the storage alert rules read them.
+#   cnpg_*               CloudNativePG 1.30.0 (chart 0.29.0): the default monitoring queries
+#                        (config/manager/default-monitoring.yaml, exported as cnpg_<query>_<column>) and the
+#                        built-in collector (pkg/management/postgres/webserver/metricserver).
+#   barman_*             the Barman Cloud plugin; the alert rules read the same name.
+#   nats_*               the prometheus-nats-exporter sidecar the nats chart runs beside each server
+#                        (image natsio/prometheus-nats-exporter:0.20.2, started with -varz -connz -routez
+#                        -subz -jsz=all -prefix=nats). Varz names are the server's /varz JSON path joined
+#                        with "_"; jsz names are fixed in the exporter's collector/jsz.go. Pinned to that
+#                        version: when the image moves, re-read those two sources and edit this set.
+EXTERNAL_PREFIXES = ("barman", "cnpg", "container", "go", "kube", "kubelet", "nats", "process")
+EXTERNAL_SERIES = {
+    # cAdvisor
+    "container_cpu_cfs_periods_total",
+    "container_cpu_cfs_throttled_periods_total",
+    "container_cpu_usage_seconds_total",
+    "container_memory_working_set_bytes",
+    # Go runtime and process collectors
+    "go_gc_duration_seconds",
+    "go_gc_duration_seconds_count",
+    "go_goroutines",
+    "go_memstats_heap_inuse_bytes",
+    "process_max_fds",
+    "process_open_fds",
+    "process_resident_memory_bytes",
+    # kube-state-metrics
+    "kube_cnpg_backup_stopped_at",
+    "kube_cnpg_cluster_condition",
+    "kube_cnpg_scheduledbackup_snapshot_retention_checked_at",
+    "kube_deployment_spec_replicas",
+    "kube_deployment_status_replicas_available",
+    "kube_pod_container_resource_limits",
+    "kube_pod_container_resource_requests",
+    "kube_pod_container_status_last_terminated_reason",
+    "kube_pod_container_status_restarts_total",
+    "kube_pod_status_ready",
+    # kubelet
+    "kubelet_volume_stats_available_bytes",
+    "kubelet_volume_stats_capacity_bytes",
+    "kubelet_volume_stats_used_bytes",
+    # CloudNativePG
+    "cnpg_backends_max_tx_duration_seconds",
+    "cnpg_backends_total",
+    "cnpg_collector_pg_wal_archive_status",
+    "cnpg_collector_up",
+    "cnpg_pg_database_size_bytes",
+    "cnpg_pg_database_xid_age",
+    "cnpg_pg_replication_lag",
+    "cnpg_pg_replication_streaming_replicas",
+    "cnpg_pg_settings_setting",
+    "cnpg_pg_stat_archiver_archived_count",
+    "cnpg_pg_stat_archiver_failed_count",
+    "cnpg_pg_stat_archiver_last_archived_time",
+    "cnpg_pg_stat_archiver_last_failed_time",
+    "cnpg_pg_stat_archiver_seconds_since_last_archival",
+    "cnpg_pg_stat_database_deadlocks",
+    "cnpg_pg_stat_database_xact_commit",
+    "cnpg_pg_stat_database_xact_rollback",
+    # Barman Cloud plugin
+    "barman_cloud_cloudnative_pg_io_last_available_backup_timestamp",
+    # prometheus-nats-exporter, /varz
+    "nats_varz_cpu", "nats_varz_mem", "nats_varz_connections", "nats_varz_total_connections",
+    "nats_varz_routes", "nats_varz_remotes", "nats_varz_in_msgs", "nats_varz_out_msgs",
+    "nats_varz_in_bytes", "nats_varz_out_bytes", "nats_varz_slow_consumers",
+    "nats_varz_stale_connections", "nats_varz_stalled_clients", "nats_varz_subscriptions",
+    "nats_varz_jetstream_stats_api_total", "nats_varz_jetstream_stats_api_errors",
+    # prometheus-nats-exporter, /jsz server level
+    "nats_server_jetstream_disabled", "nats_server_total_streams", "nats_server_total_consumers",
+    "nats_server_total_messages", "nats_server_total_message_bytes", "nats_server_max_memory",
+    "nats_server_max_storage",
+    # /jsz account level
+    "nats_account_max_memory", "nats_account_max_storage", "nats_account_storage_used",
+    "nats_account_memory_used",
+    # /jsz stream level
+    "nats_stream_total_messages", "nats_stream_total_bytes", "nats_stream_limit_messages",
+    "nats_stream_limit_bytes", "nats_stream_first_seq", "nats_stream_last_seq",
+    "nats_stream_consumer_count", "nats_stream_subject_count",
+    # /jsz consumer level
+    "nats_consumer_delivered_consumer_seq", "nats_consumer_delivered_stream_seq",
+    "nats_consumer_last_delivery_seconds", "nats_consumer_last_ack_seconds",
+    "nats_consumer_num_ack_pending", "nats_consumer_num_redelivered", "nats_consumer_num_waiting",
+    "nats_consumer_num_pending", "nats_consumer_ack_floor_stream_seq",
+    "nats_consumer_ack_floor_consumer_seq",
+}
+# The look-behind keeps a token that merely ENDS in a prefix out: the platform's own
+# devicechain_<area>_nats_connection_dead_total is a DeviceChain series, checked above.
+EXTERNAL_RE = re.compile(
+    r"(?<![A-Za-z0-9_])(?:%s)_[a-z0-9_]+" % "|".join(sorted(EXTERNAL_PREFIXES, key=len, reverse=True)))
+def rule_exprs(text):
+    """The text of every `expr:` in a rule template: the inline value, or the block scalar under it.
+    Prose, comments and descriptions are left out on purpose -- they name configuration, modules and
+    families (`cnpg_cluster_metrics`, `barman_cloud_*`) that are not series."""
+    lines = text.split("\n")
+    for i, line in enumerate(lines):
+        m = re.match(r"^(\s*)(?:- )?expr:\s*(.*)$", line)
+        if not m:
+            continue
+        indent, rest = len(m.group(1)), m.group(2)
+        if rest and rest[0] not in "|>":
+            yield rest
+            continue
+        for follow in lines[i + 1:]:
+            if follow.strip() and len(follow) - len(follow.lstrip()) <= indent:
+                break
+            yield follow
+
+external_seen = {}
+def scan_external(path, text):
+    for m in EXTERNAL_RE.finditer(text):
+        external_seen.setdefault(m.group(0), set()).add(os.path.relpath(path, root))
+# A dashboard is scanned whole: a series named in a panel title or description is a claim too.
+for path in dashboards:
+    with open(path, "rb") as fh:
+        scan_external(path, fh.read().decode("utf-8", "replace"))
+# A rule template is scanned in its expressions only.
+for path in rule_files:
+    with open(path, "rb") as fh:
+        scan_external(path, "\n".join(rule_exprs(fh.read().decode("utf-8", "replace"))))
+for series in sorted(external_seen):
+    if series not in EXTERNAL_SERIES:
+        problems.append(
+            "%s (in %s) is neither a DeviceChain series nor on the pinned list of external series\n"
+            "    (EXTERNAL_SERIES in hack/check-dashboards.sh: kube-state-metrics, cAdvisor, the kubelet,\n"
+            "    Go and process, CloudNativePG, Barman Cloud, the broker exporter). Nothing here can vouch\n"
+            "    for it: a misspelling draws an empty graph, or an alert that never fires. If the name is\n"
+            "    real, confirm it against the exporter and add it to that list."
+            % (series, ", ".join(sorted(external_seen[series]))))
+
 if problems:
     print("The chart's dashboards and alert rules do not hold up:\n", file=sys.stderr)
     for p in problems:
@@ -556,8 +720,9 @@ if problems:
     sys.exit(1)
 
 print("    %d dashboard(s) parse; %d devicechain_* series and %d by-name selector(s) all resolve\n"
-      "    to a Go registration"
-      % (len(dashboards), len([s for s in seen if s not in ALLOWED_NON_SERIES]), len(regex_seen)))
+      "    to a Go registration; %d external series are all on the pinned list"
+      % (len(dashboards), len([s for s in seen if s not in ALLOWED_NON_SERIES]), len(regex_seen),
+         len(external_seen)))
 PY
 }
 
@@ -895,6 +1060,16 @@ func registerForTest(ms *Microservice) {
 	ms.NewHistogramVec("test_only_seconds", "Registered only by a test.", nil, nil)
 }
 EOF
+  # A CORE-REGISTERED HISTOGRAM: backend/core builds the messaging families once and
+  # every service exports them, so its derived series must resolve under any area.
+  mkdir -p "$work/backend/core/messaging"
+  cat >"$work/backend/core/messaging/metrics.go" <<'EOF'
+package messaging
+
+func register(ms *Microservice) {
+	ms.NewHistogramVec("core_lat_seconds", "A histogram registered by core.", nil, nil)
+}
+EOF
   # A SECOND AREA, so the area scoping of a histogram has something to be wrong
   # about: remote_seconds is a histogram in other-area only.
   mkdir -p "$work/backend/services/other-area"
@@ -935,7 +1110,10 @@ EOF
           "expr": "histogram_quantile(0.99, sum by (le) (rate(devicechain_selftestarea_lat_seconds_bucket[5m]))) / (sum(rate(devicechain_selftestarea_lat_seconds_sum[5m])) / sum(rate(devicechain_selftestarea_lat_seconds_count[5m]))) + rate(devicechain_selftestarea_sum_seconds_sum[5m]) + rate(devicechain_selftestarea_sum_seconds_count[5m])"
         },
         {
-          "expr": "devicechain_selftestarea_sum_seconds{quantile=\"0.99\"} + histogram_quantile(0.5, sum by (le) (rate(devicechain_selftestarea_loop_duration_seconds_bucket[5m]))) + rate(devicechain_selftestarea_loop_messages_total[5m]) + rate(devicechain_selftestarea_sweep_pass_duration_seconds_count[5m])"
+          "expr": "sum(kube_pod_container_status_restarts_total{namespace=\"$namespace\"}) + max(go_goroutines{namespace=\"$namespace\"}) + max(container_memory_working_set_bytes) + max(process_open_fds) + max(nats_varz_cpu) + min(cnpg_collector_up) + max(kubelet_volume_stats_used_bytes) + max(barman_cloud_cloudnative_pg_io_last_available_backup_timestamp)"
+        },
+        {
+          "expr": "devicechain_selftestarea_sum_seconds{quantile=\"0.99\"} + histogram_quantile(0.5, sum by (le) (rate(devicechain_selftestarea_loop_duration_seconds_bucket[5m]))) + rate(devicechain_selftestarea_loop_messages_total[5m]) + rate(devicechain_selftestarea_sweep_pass_duration_seconds_count[5m]) + histogram_quantile(0.5, sum by (le) (rate({__name__=~\"devicechain_[a-z0-9]+_core_lat_seconds_bucket\"}[5m])))"
         }
       ]
     }
@@ -957,6 +1135,16 @@ spec:
             devicechain_instance: dc
         - alert: ProbeLatencyByName
           expr: histogram_quantile(0.99, sum by (le) (rate({__name__=~"devicechain_[a-z0-9]+_lat_seconds_bucket", namespace="dc"}[5m]))) > 1
+          labels:
+            devicechain_instance: dc
+        - alert: ProbeExternalInline
+          expr: min(kube_pod_status_ready{namespace="dc"}) < 1
+          labels:
+            devicechain_instance: dc
+        - alert: ProbeExternalBlock
+          expr: |
+            max(cnpg_pg_database_size_bytes{namespace="dc"})
+              > 1e12
           labels:
             devicechain_instance: dc
 EOF
@@ -1023,6 +1211,24 @@ EOF
   histcase 'devicechain_selftestarea_lat_seconds_count' 'devicechain_selftestarea_test_only_seconds_count' '_count on a histogram registered only in a test file'
   histcase '_lat_seconds_bucket"' '_lat_seconds"' 'a by-name selector over the bare name of a histogram' "$tmpl/prometheusrule-probe.yaml"
   histcase '_lat_seconds_bucket"' '_lat_seconds_buckets"' 'a by-name selector with a misspelled histogram suffix' "$tmpl/prometheusrule-probe.yaml"
+
+  # Cases 2x -- SERIES THAT ARE NOT DEVICECHAIN'S, one misspelling per prefix family, each alone.
+  # The clean fixture names one pinned series of every family and passed Case 0, so the accepted half
+  # is proven; each defect below drops a letter from a real name.
+  histcase 'kube_pod_container_status_restarts_total' 'kube_pod_container_status_restart_total' 'a misspelled kube-state-metrics series (kube_*)'
+  histcase 'container_memory_working_set_bytes' 'container_memory_working_set_byte' 'a misspelled cAdvisor series (container_*)'
+  histcase 'go_goroutines' 'go_goroutine' 'a misspelled Go runtime series (go_*)'
+  histcase 'process_open_fds' 'process_open_fd' 'a misspelled process series (process_*)'
+  histcase 'nats_varz_cpu' 'nats_varz_cpuu' 'a misspelled broker exporter series (nats_*)'
+  histcase 'nats_varz_cpu' 'nats_varz_cpu_percent' 'a broker exporter series with a suffix the exporter does not export'
+  histcase 'cnpg_collector_up' 'cnpg_collector_upp' 'a misspelled database operator series (cnpg_*)'
+  histcase 'kubelet_volume_stats_used_bytes' 'kubelet_volume_stats_used_byte' 'a misspelled kubelet series (kubelet_*)'
+  histcase 'barman_cloud_cloudnative_pg_io_last_available_backup_timestamp' 'barman_cloud_cloudnative_pg_io_last_available_backup_timestam' 'a misspelled backup plugin series (barman_*)'
+
+  # ...and in an ALERT RULE, in both spellings of `expr:` (inline, and a block scalar), where a
+  # misspelling is worse than an empty graph: the rule never fires and never complains.
+  histcase 'kube_pod_status_ready' 'kube_pod_status_redy' 'a misspelled external series in an inline alert expression' "$tmpl/prometheusrule-probe.yaml"
+  histcase 'cnpg_pg_database_size_bytes' 'cnpg_pg_database_size_byts' 'a misspelled external series in a block-scalar alert expression' "$tmpl/prometheusrule-probe.yaml"
 
   # Cases 2p — INTERNAL REFERENCES IN PUBLISHED BOARD TEXT, each alone. The board
   # text is screenshotted onto the public docs site, so an ADR number in a title, a
@@ -1171,6 +1377,12 @@ FIXTURE
   fi
   restore
   echo "  ok: a by-name selector in an unresolvable form is refused"
+
+  # Case 6d — CORE-REGISTERED HISTOGRAMS, each defect alone. The clean fixture names
+  # core_lat_seconds_bucket by name and passed Case 0, so the accepted half is proven.
+  histcase 'core_lat_seconds_bucket' 'core_lat_seconds' 'the bare name of a histogram registered in core'
+  histcase 'core_lat_seconds_bucket' 'core_lat_seconds_buckets' 'a misspelled suffix on a core histogram'
+  histcase 'core_lat_seconds_bucket' 'core_lat_secnds_bucket' 'a core histogram suffix on a base that is not registered'
 
   # -------------------------------------------------------------------------
   # The ConfigMap cases DO run against a copy of the real chart, and can: they
@@ -1388,7 +1600,7 @@ FIXTURE
   rm -f "$chart/dashboards/unscoped-board.json"
   echo "  ok: a dashboard with no instance variable is refused by the template"
 
-  echo "self-test passed: 58 defects, each planted alone, each caught; a clean tree and chart pass"
+  echo "self-test passed: 72 defects, each planted alone, each caught; a clean tree and chart pass"
   exit 0
 fi
 

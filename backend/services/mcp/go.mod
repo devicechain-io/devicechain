@@ -8,7 +8,7 @@ replace github.com/devicechain-io/dc-microservice => ../../core
 
 require (
 	github.com/devicechain-io/dc-microservice v0.0.0-00010101000000-000000000000
-	github.com/graph-gophers/graphql-go v1.10.2
+	github.com/graph-gophers/graphql-go v1.10.3
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/prometheus/client_golang v1.25.0
 	github.com/rs/zerolog v1.35.1
@@ -66,5 +66,3 @@ require (
 	gorm.io/driver/postgres v1.6.3 // indirect
 	gorm.io/gorm v1.31.2 // indirect
 )
-
-replace github.com/graph-gophers/graphql-go => github.com/devicechain-io/graphql-go v1.10.2-dc.2

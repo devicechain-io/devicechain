@@ -91,8 +91,8 @@ func servedSchema(t *testing.T, area string) *graphql.Schema {
 // They stop a document validated with no variables at all from reporting every one as
 // a null violating its own `String!` — noise that would bury the real finding. And
 // they pin the KEY SET, which is the one thing the validator genuinely reads about
-// them: this repo runs a patched graphql-go precisely because upstream DISCARDS an
-// input-object entry the schema does not define when it arrives through a variable.
+// them: graphql-go (v1.10.3 and later) rejects an input-object entry the schema does not
+// define when it arrives through a variable; before that it DISCARDED it.
 //
 // 🔴 WHAT IT DOES NOT DO IS TYPE-CHECK VALUES. `pageSize: Int!` given the string
 // "two", or an enum given a nonsense member, both validate. So a stand-in differing

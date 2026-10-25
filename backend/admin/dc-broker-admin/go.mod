@@ -42,8 +42,3 @@ require (
 )
 
 replace github.com/devicechain-io/dc-microservice => ../../core
-
-// Defensive per CLAUDE.md: this module resolves graphql-go transitively through core
-// but compiles none of it today. The replace means the day it does, it gets the
-// patched fork rather than silently getting upstream. Enforced by the CI fork guard.
-replace github.com/graph-gophers/graphql-go => github.com/devicechain-io/graphql-go v1.10.2-dc.2

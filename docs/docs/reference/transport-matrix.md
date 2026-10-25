@@ -78,6 +78,12 @@ there is no separate broker to run.
   that while the pipeline is not reading the capture stream, and `JetStreamDurableLostUnread` once it
   reads again.
 
+  The same happens with no refusal at all when `event-sources` simply falls behind the devices' rate under
+  sustained load. In one load test of combined HTTP and MQTT traffic on a default install, with no broker restart,
+  the capture stream filled, and about 7 to 13% of the MQTT traffic, all of it acknowledged, was lost. `devicechain_<area>_jetstream_consumer_unread_skipped_total`
+  counts it, `JetStreamDurableLostUnread` alerts on it, and `JetStreamCaptureBacklogGrowing` and
+  `JetStreamCaptureBacklogWillOverflow` warn before the stream is full.
+
   A third hole is the capture stream's own leader election. The broker hands each QoS 1 publish
   to the capture stream with no reply, after the device has its PUBACK. If the stream changes
   leader, at any load, the publishes that arrive while it has none, several seconds, are stored
@@ -94,7 +100,8 @@ there is no separate broker to run.
   platform reads QoS 1 events, command responses and device reports from the broker's own message
   store. A full store refuses the publish, and one whose leader is changing does not acknowledge
   it, so the device gets no PUBACK and sends it again. QoS 0 publishes keep the behaviour above, and a message
-  over the tenant's ceiling is still dropped after its PUBACK. See
+  over the tenant's ceiling is still dropped after its PUBACK. `dcctl bootstrap` and `dcctl upgrade`
+  turn it on with `--mqtt-fail-closed`. See
   [quality of service](../guides/connecting-a-device.md#quality-of-service) and
   [fail-closed MQTT](../deployment/observability.md#mqtt-fail-closed).
 - **Write ◐** — commands are delivered, but delivery is **live-only and unacknowledged**. A

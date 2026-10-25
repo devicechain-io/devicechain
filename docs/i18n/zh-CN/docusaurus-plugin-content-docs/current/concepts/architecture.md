@@ -108,7 +108,7 @@ Operator 假定基础设施已经存在，负责 `Instance` 生命周期，而�
 
 除了每个服务提供的 `/healthz`、`/readyz` 和 `/metrics` 端点，以及只在启用开发者工具时提供的 `/graphiql` 浏览器外，非 GraphQL 的 HTTP 端点包括标准规定的端点和三个用途有限的端点。标准端点有：
 
-- 令牌验证器获取的 JWKS 文档
+- 令牌验证器获取的 JWKS 文档，在任何 Ingress 路由都无法到达的内部端口上提供
 - OAuth 2.1 授权服务器端点（`/oauth/authorize`、`/oauth/token`、`/oauth/userinfo`、`/oauth/jwks` 和 RFC 8414 元数据文档），由 `user-management` 在配置 issuer URL 后提供
 - 可选启用的 [MCP 服务器](./mcp.md)使用的基于 HTTP 的 JSON-RPC 传输，以及它发布的受保护资源元数据文档（RFC 9728）
 
@@ -116,4 +116,4 @@ Operator 假定基础设施已经存在，负责 `Instance` 生命周期，而�
 
 - 面向设备的 HTTP 事件接入端点（`POST /{instance}/{tenant}/events`），由 `event-sources` 在独立端口提供；默认配置包含一个 HTTP 来源
 - `user-management` 上的租户徽标上传与下载端点（`/branding/logo`）
-- `user-management` 上供服务获取短期服务令牌的端点（`/auth/service-token`）
+- `user-management` 上供服务获取短期服务令牌的端点（`/auth/service-token`），在同一内部端口上提供，从不经过 Ingress

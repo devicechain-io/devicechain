@@ -235,6 +235,10 @@ type GovernanceOverrides struct {
 	// device-traffic dimensions above: drafting is a human-paced authoring action.
 	AiInferenceRequestsPerMinute *float64
 	AiInferenceBurst             *int
+	// Self-registration (provisioning) rate: how fast the tenant's devices may register
+	// themselves. Per second, like the device-traffic dimensions.
+	ProvisioningRegistrationsPerSecond *float64
+	ProvisioningBurst                  *int
 	// ShedPriority is the per-tenant ADR-063 shed-priority override (1–100) — NOT a
 	// ceiling like the fields above but a contention PREFERENCE (who degrades last). A
 	// scalar with its own band scale, carried here only because it is the same kind of
@@ -276,6 +280,7 @@ func (g GovernanceOverrides) validate() error {
 		{"ingestReadingsPerSecond", g.IngestReadingsPerSecond},
 		{"outboundCallsPerSecond", g.OutboundCallsPerSecond},
 		{"aiInferenceRequestsPerMinute", g.AiInferenceRequestsPerMinute},
+		{"provisioningRegistrationsPerSecond", g.ProvisioningRegistrationsPerSecond},
 	} {
 		if err := validateRateOverride(r.field, r.value); err != nil {
 			return err
@@ -288,6 +293,7 @@ func (g GovernanceOverrides) validate() error {
 		{"ingestBurst", g.IngestBurst},
 		{"outboundBurst", g.OutboundBurst},
 		{"aiInferenceBurst", g.AiInferenceBurst},
+		{"provisioningBurst", g.ProvisioningBurst},
 	} {
 		if err := validateBurstOverride(b.field, b.value); err != nil {
 			return err
@@ -340,6 +346,8 @@ func (g GovernanceOverrides) applyTo(t *iam.Tenant) {
 	t.OutboundBurst = g.OutboundBurst
 	t.AiInferenceRequestsPerMinute = g.AiInferenceRequestsPerMinute
 	t.AiInferenceBurst = g.AiInferenceBurst
+	t.ProvisioningRegistrationsPerSecond = g.ProvisioningRegistrationsPerSecond
+	t.ProvisioningBurst = g.ProvisioningBurst
 	t.ShedPriority = g.ShedPriority
 	t.HeldCommandCeiling = g.HeldCommandCeiling
 	t.GeoFencePositionCeiling = g.GeoFencePositionCeiling
@@ -373,7 +381,7 @@ type TenantInput struct {
 // LONGER MEANS TWO THINGS
 //
 // GovernanceOverrides (which TenantInput still embeds, because a create has nothing to
-// preserve) carries eleven *float64 / *int fields where nil already means something
+// preserve) carries thirteen *float64 / *int fields where nil already means something
 // load-bearing: "this tenant declares no override — fall back to its tier, then to the
 // platform default, and NEVER to unlimited" (ADR-023). Under the full-replace shape
 // that pointer had to carry ABSENT and CLEARED at once, so it could not distinguish
@@ -387,7 +395,7 @@ type TenantInput struct {
 //	               platform default — never to zero, and never to unlimited
 //	a value        set the override to it
 //
-// The eleven are flattened rather than held in an embedded struct because the
+// The thirteen are flattened rather than held in an embedded struct because the
 // exhaustiveness guard and the graphql-go input packer both walk the request type's
 // exported fields, and an embedded struct is one field to each of them: the packer
 // would have nowhere to put `ingestBurst`, and the guard would report the embedded
@@ -423,14 +431,16 @@ type TenantUpdateRequest struct {
 	// column where null and false both mean "not opted in" (fail-closed). Clearable,
 	// unlike the required booleans elsewhere on the platform: null is a state the column
 	// genuinely holds and the read path renders.
-	AiExternalEnabled            dcgraphql.OptionalBool
-	AiInferenceRequestsPerMinute dcgraphql.OptionalFloat64
-	AiInferenceBurst             dcgraphql.OptionalInt32
-	ShedPriority                 dcgraphql.OptionalInt32
-	HeldCommandCeiling           dcgraphql.OptionalInt32
-	GeoFencePositionCeiling      dcgraphql.OptionalInt32
-	GeoFenceCeiling              dcgraphql.OptionalInt32
-	GeoFencePositionBudget       dcgraphql.OptionalInt32
+	AiExternalEnabled                  dcgraphql.OptionalBool
+	AiInferenceRequestsPerMinute       dcgraphql.OptionalFloat64
+	AiInferenceBurst                   dcgraphql.OptionalInt32
+	ProvisioningRegistrationsPerSecond dcgraphql.OptionalFloat64
+	ProvisioningBurst                  dcgraphql.OptionalInt32
+	ShedPriority                       dcgraphql.OptionalInt32
+	HeldCommandCeiling                 dcgraphql.OptionalInt32
+	GeoFencePositionCeiling            dcgraphql.OptionalInt32
+	GeoFenceCeiling                    dcgraphql.OptionalInt32
+	GeoFencePositionBudget             dcgraphql.OptionalInt32
 }
 
 // governanceFor folds every override in this request onto the tenant's CURRENT values,
@@ -440,20 +450,22 @@ type TenantUpdateRequest struct {
 //
 // 🔴 IT FOLDS ONTO t RATHER THAN BUILDING FROM THE REQUEST ALONE, and that is the whole
 // point: a request naming only `name` produces a GovernanceOverrides identical to what
-// the tenant already holds, so applyTo rewrites the same values instead of eleven NULLs.
+// the tenant already holds, so applyTo rewrites the same values instead of thirteen NULLs.
 func (r *TenantUpdateRequest) governanceFor(t *iam.Tenant) GovernanceOverrides {
 	return GovernanceOverrides{
-		IngestReadingsPerSecond:      r.IngestReadingsPerSecond.ApplyTo(t.IngestReadingsPerSecond),
-		IngestBurst:                  r.IngestBurst.ApplyToIntPtr(t.IngestBurst),
-		OutboundCallsPerSecond:       r.OutboundCallsPerSecond.ApplyTo(t.OutboundCallsPerSecond),
-		OutboundBurst:                r.OutboundBurst.ApplyToIntPtr(t.OutboundBurst),
-		AiInferenceRequestsPerMinute: r.AiInferenceRequestsPerMinute.ApplyTo(t.AiInferenceRequestsPerMinute),
-		AiInferenceBurst:             r.AiInferenceBurst.ApplyToIntPtr(t.AiInferenceBurst),
-		ShedPriority:                 r.ShedPriority.ApplyToIntPtr(t.ShedPriority),
-		HeldCommandCeiling:           r.HeldCommandCeiling.ApplyToIntPtr(t.HeldCommandCeiling),
-		GeoFencePositionCeiling:      r.GeoFencePositionCeiling.ApplyToIntPtr(t.GeoFencePositionCeiling),
-		GeoFenceCeiling:              r.GeoFenceCeiling.ApplyToIntPtr(t.GeoFenceCeiling),
-		GeoFencePositionBudget:       r.GeoFencePositionBudget.ApplyToIntPtr(t.GeoFencePositionBudget),
+		IngestReadingsPerSecond:            r.IngestReadingsPerSecond.ApplyTo(t.IngestReadingsPerSecond),
+		IngestBurst:                        r.IngestBurst.ApplyToIntPtr(t.IngestBurst),
+		OutboundCallsPerSecond:             r.OutboundCallsPerSecond.ApplyTo(t.OutboundCallsPerSecond),
+		OutboundBurst:                      r.OutboundBurst.ApplyToIntPtr(t.OutboundBurst),
+		AiInferenceRequestsPerMinute:       r.AiInferenceRequestsPerMinute.ApplyTo(t.AiInferenceRequestsPerMinute),
+		AiInferenceBurst:                   r.AiInferenceBurst.ApplyToIntPtr(t.AiInferenceBurst),
+		ProvisioningRegistrationsPerSecond: r.ProvisioningRegistrationsPerSecond.ApplyTo(t.ProvisioningRegistrationsPerSecond),
+		ProvisioningBurst:                  r.ProvisioningBurst.ApplyToIntPtr(t.ProvisioningBurst),
+		ShedPriority:                       r.ShedPriority.ApplyToIntPtr(t.ShedPriority),
+		HeldCommandCeiling:                 r.HeldCommandCeiling.ApplyToIntPtr(t.HeldCommandCeiling),
+		GeoFencePositionCeiling:            r.GeoFencePositionCeiling.ApplyToIntPtr(t.GeoFencePositionCeiling),
+		GeoFenceCeiling:                    r.GeoFenceCeiling.ApplyToIntPtr(t.GeoFenceCeiling),
+		GeoFencePositionBudget:             r.GeoFencePositionBudget.ApplyToIntPtr(t.GeoFencePositionBudget),
 	}
 }
 

@@ -39,7 +39,9 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-CHART="deploy/helm/devicechain"
+# DC_CHART_DIR exists so the negative control can aim this guard at a chart that is KNOWN to be
+# wrong (the pre-change one); it is never set in CI.
+CHART="${DC_CHART_DIR:-deploy/helm/devicechain}"
 WELLKNOWN_GO="backend/core/auth/wellknown.go"
 SSO_GO="backend/services/user-management/identity/sso_callback_handler.go"
 ISSUER="https://iot.example.com/api/user-management"
@@ -234,8 +236,7 @@ expect(AS_SUFFIX, "user-management", "Prefix", None,
 # service builds from its own issuer and the Go route prefix below. Nothing in the service
 # can tell whether the edge delivers it: it must match the API route for user-management,
 # survive that route's rewrite as the pod-local path the handler is registered at, and not
-# be refused by the snippet that 404s /api/<area>/auth/* (which is why the surface is
-# /sso/ and not /auth/).
+# be refused by anything at the edge.
 #
 # 🔴 THE PREFIX IS READ OUT OF THE GO SOURCE, not spelled here, for the reason the
 # well-known suffixes are: the only thing the two sides share is that string.
@@ -277,11 +278,98 @@ for name, pat, mm, ann, svc in routed:
         if arrives != f"{SSO_PREFIX}acme-idp":
             problems.append(f"{where} delivers the callback as {arrives!r}, not "
                             f"{SSO_PREFIX + 'acme-idp'!r}, the path user-management registers.")
-    snippet = ann.get("nginx.ingress.kubernetes.io/configuration-snippet") or ""
-    for refusal in re.findall(r'\$request_uri ~\*? "([^"]+)"\) \{ return 404; \}', snippet):
-        if re.search(refusal, callback, re.IGNORECASE):
-            problems.append(f"{where} refuses {callback!r} at the edge (its snippet 404s "
-                            f"{refusal!r}); the callback would never reach the service.")
+
+# --- 5. nothing at the edge is a security control --------------------------------------
+# user-management serves the service-token mint and the JWKS on an INTERNAL listener that
+# no route reaches, so the public port answers 404 for them with no ingress in front. That
+# is why the chart carries no configuration-snippet (the shared controller is tightened
+# in a later release, once no instance still needs one). Three things must stay true of the RENDER for that to hold:
+#   (a) no Ingress carries a snippet annotation of any kind (a snippet is how an edge rule
+#       would creep back in, and it is the attack class behind IngressNightmare);
+#   (b) no Ingress backend names the internal port, by name or number;
+#   (c) the instance config tells every peer to dial the port the user-management Service
+#       publishes as `internal-auth`, and that port is not the public one.
+for ing in ingresses:
+    name = (ing.get("metadata") or {}).get("name", "<unnamed>")
+    for key in ((ing.get("metadata") or {}).get("annotations") or {}):
+        if "snippet" in str(key).lower():
+            problems.append(f"ingress {name} carries the snippet annotation {key!r}. The chart "
+                            f"must not depend on edge configuration for any security property, "
+                            f"and the controller is to be run with snippets disabled.")
+
+services = {(d.get("metadata") or {}).get("name"): d for d in docs if d.get("kind") == "Service"}
+um_svc = services.get("user-management")
+internal_port = None
+public_port = None
+if um_svc is None:
+    problems.append("no user-management Service rendered, so the internal listener's port "
+                    "could not be checked.")
+else:
+    for sp in (um_svc.get("spec") or {}).get("ports") or []:
+        if sp.get("name") == "internal-auth":
+            internal_port = sp.get("port")
+        if sp.get("name") == "graphql":
+            public_port = sp.get("port")
+    if internal_port is None:
+        problems.append("the user-management Service publishes no 'internal-auth' port, so "
+                        "peers have nowhere to mint a service token or fetch the JWKS.")
+    elif internal_port == public_port:
+        problems.append(f"the internal-auth port equals the public port ({public_port}); the "
+                        f"internal endpoints would be served where the ingress routes.")
+
+# The pod must actually listen where the Service sends traffic: a Service port whose targetPort
+# names a container port the Deployment does not declare is a connection refused on every mint.
+um_dep = next((d for d in docs if d.get("kind") == "Deployment"
+               and (d.get("metadata") or {}).get("name") == "user-management"), None)
+if um_dep is None:
+    problems.append("no user-management Deployment rendered, so its internal-auth container port "
+                    "could not be checked.")
+elif internal_port is not None:
+    declared = {}
+    for c in (((um_dep.get("spec") or {}).get("template") or {}).get("spec") or {}).get("containers") or []:
+        for cp in c.get("ports") or []:
+            declared[cp.get("name")] = cp.get("containerPort")
+    if declared.get("internal-auth") != internal_port:
+        problems.append(f"the user-management Deployment declares container port "
+                        f"{declared.get('internal-auth')!r} for internal-auth, but its Service "
+                        f"publishes {internal_port!r}.")
+
+def is_internal(port):
+    return port.get("name") == "internal-auth" or (
+        internal_port is not None and port.get("number") == internal_port)
+
+for ing in ingresses:
+    name = (ing.get("metadata") or {}).get("name", "<unnamed>")
+    for rule in (ing.get("spec") or {}).get("rules") or []:
+        for p in ((rule.get("http") or {}).get("paths") or []):
+            port = ((((p.get("backend") or {}).get("service")) or {}).get("port") or {})
+            if is_internal(port):
+                problems.append(f"ingress {name} path {p.get('path')!r} routes to the internal-auth "
+                                f"port. That listener serves the service-token mint and must "
+                                f"never be reachable from an ingress.")
+    default_port = ((((((ing.get("spec") or {}).get("defaultBackend") or {}).get("service")) or {})
+                     .get("port")) or {})
+    if is_internal(default_port):
+        problems.append(f"ingress {name} defaultBackend routes to the internal-auth port.")
+
+instance_cfg = None
+for d in docs:
+    if d.get("kind") == "Secret" and "instance" in (d.get("stringData") or {}):
+        try:
+            instance_cfg = json.loads(d["stringData"]["instance"])
+        except (ValueError, TypeError):
+            pass
+if instance_cfg is None:
+    problems.append("no rendered instance config Secret, so the callers' internal port could not be checked.")
+else:
+    um_infra = ((instance_cfg.get("infrastructure") or {}).get("userManagement") or {})
+    if internal_port is not None and um_infra.get("internalPort") != internal_port:
+        problems.append(f"the instance config tells peers to dial user-management on internalPort "
+                        f"{um_infra.get('internalPort')!r}, but its Service publishes internal-auth "
+                        f"on {internal_port!r}.")
+    if um_infra.get("internalPort") == um_infra.get("port"):
+        problems.append("the instance config gives user-management one port for both the public and "
+                        "internal listeners.")
 
 if problems:
     print("OAuth discovery routing check FAILED:", file=sys.stderr)
@@ -294,6 +382,8 @@ print(f"  1. endpoint   {resource_path}(/|$)(.*) -> mcp, rewritten to '/'")
 print(f"  2. resource   {PR_SUFFIX} (prefix) -> mcp, unrewritten")
 print(f"  3. auth srv   {AS_SUFFIX} (prefix) -> user-management, unrewritten")
 print(f"  4. sso        {callback} -> user-management, rewritten to {SSO_PREFIX}acme-idp, not refused")
+print(f"  5. no ingress carries a snippet, none routes to the internal-auth port ({internal_port}), "
+      f"and the instance config dials it")
 print(f"  also served   {resource_path}{PR_SUFFIX} -> mcp, rewritten to '{PR_SUFFIX}' "
       f"(the appended form, for clients that build it)")
 PY
@@ -565,17 +655,82 @@ for d in docs:
 PYOP
   corrupt sso-wrong-backend "$tmp/op.py"
 
+  # The edge is not a security control: each way it could become one again, or the internal
+  # listener could become reachable, is a corruption of its own.
   cat > "$tmp/op.py" <<'PYOP'
 touched = False
 for d in docs:
     if d.get("kind") == "Ingress" and (d.get("metadata") or {}).get("name") == "devicechain-api":
-        ann = d["metadata"]["annotations"]
-        key = "nginx.ingress.kubernetes.io/configuration-snippet"
-        if "auth(/|$)" in ann.get(key, ""):
-            ann[key] = ann[key].replace("auth(/|$)", "(auth|sso)(/|$)")
-            touched = True
+        d["metadata"]["annotations"]["nginx.ingress.kubernetes.io/configuration-snippet"] = \
+            'if ($request_uri ~* "^/api/[^/]+/auth(/|$)") { return 404; }'
+        touched = True
 PYOP
-  corrupt sso-refused-at-the-edge "$tmp/op.py"
+  corrupt snippet-annotation "$tmp/op.py"
+
+  cat > "$tmp/op.py" <<'PYOP'
+touched = False
+for d in docs:
+    if d.get("kind") == "Ingress" and (d.get("metadata") or {}).get("name") == "devicechain-web":
+        if not d["metadata"].get("annotations"):
+            d["metadata"]["annotations"] = {}
+        d["metadata"]["annotations"]["nginx.ingress.kubernetes.io/server-snippet"] = "#"
+        touched = True
+PYOP
+  corrupt server-snippet-on-another-ingress "$tmp/op.py"
+
+  cat > "$tmp/op.py" <<'PYOP'
+touched = False
+for d in docs:
+    if d.get("kind") == "Ingress" and (d.get("metadata") or {}).get("name") == "devicechain-api":
+        for rule in (d.get("spec") or {}).get("rules") or []:
+            for p in ((rule.get("http") or {}).get("paths") or []):
+                if str(p.get("path", "")).startswith("/api/user-management"):
+                    p["backend"]["service"]["port"] = {"name": "internal-auth"}
+                    touched = True
+PYOP
+  corrupt route-to-internal-port-by-name "$tmp/op.py"
+
+  cat > "$tmp/op.py" <<'PYOP'
+touched = False
+for d in docs:
+    if d.get("kind") == "Ingress" and (d.get("metadata") or {}).get("name") == "devicechain-web":
+        d["spec"]["defaultBackend"] = {"service": {"name": "user-management", "port": {"name": "internal-auth"}}}
+        touched = True
+PYOP
+  corrupt default-backend-to-internal-port "$tmp/op.py"
+
+  cat > "$tmp/op.py" <<'PYOP'
+touched = False
+for d in docs:
+    if d.get("kind") == "Service" and (d.get("metadata") or {}).get("name") == "user-management":
+        d["spec"]["ports"] = [p for p in d["spec"]["ports"] if p.get("name") != "internal-auth"]
+        touched = True
+PYOP
+  corrupt internal-port-not-published "$tmp/op.py"
+
+  cat > "$tmp/op.py" <<'PYOP'
+touched = False
+for d in docs:
+    if d.get("kind") == "Deployment" and (d.get("metadata") or {}).get("name") == "user-management":
+        for c in d["spec"]["template"]["spec"]["containers"]:
+            for cp in c.get("ports") or []:
+                if cp.get("name") == "internal-auth":
+                    cp["containerPort"] = 9999
+                    touched = True
+PYOP
+  corrupt pod-does-not-listen-on-the-internal-port "$tmp/op.py"
+
+  cat > "$tmp/op.py" <<'PYOP'
+import json
+touched = False
+for d in docs:
+    if d.get("kind") == "Secret" and "instance" in (d.get("stringData") or {}):
+        cfg = json.loads(d["stringData"]["instance"])
+        cfg["infrastructure"]["userManagement"]["internalPort"] = cfg["infrastructure"]["userManagement"]["port"]
+        d["stringData"]["instance"] = json.dumps(cfg)
+        touched = True
+PYOP
+  corrupt callers-dial-the-public-port "$tmp/op.py"
 
   cat > "$tmp/op.py" <<'PYOP'
 touched = False
@@ -585,17 +740,6 @@ for d in docs:
         touched = True
 PYOP
   corrupt sso-rewritten "$tmp/op.py"
-
-  # The service moving its callback under /auth/, which the edge refuses.
-  sed 's|"/sso/callback/"|"/auth/sso/callback/"|' "$SSO_GO" > "$tmp/sso-under-auth.go"
-  if ! grep -q '/auth/sso/callback/' "$tmp/sso-under-auth.go"; then
-    echo "self-test: the prefix mutation did not apply." >&2
-    exit 1
-  fi
-  if check "$tmp/full.yaml" "$WELLKNOWN_GO" "$tmp/sso-under-auth.go" >/dev/null 2>&1; then
-    echo "self-test FAILED: the check passed a callback prefix the edge refuses." >&2
-    exit 1
-  fi
 
   # And the suffix source: a constant the chart no longer matches must fail, since the
   # split between this check and the Go tests rests entirely on that one shared string.
@@ -609,8 +753,10 @@ PYOP
 
   echo "self-test passed: the check fails on a missing route, a wrong pathType, a wrong"
   echo "  port name, a wrong backend, a rewritten path, a wrong host, missing TLS, a moved"
-  echo "  suffix constant, and a single sign-on callback sent to the wrong service, rewritten,"
-  echo "  or refused at the edge."
+  echo "  suffix constant, a single sign-on callback sent to the wrong service or rewritten,"
+  echo "  a snippet annotation on any Ingress, a route or default backend to the internal-auth"
+  echo "  port, an unpublished internal-auth port, a pod that does not listen on it, and callers told"
+  echo "  to dial the public port."
 }
 
 case "${1-}" in

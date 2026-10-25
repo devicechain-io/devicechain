@@ -41,6 +41,29 @@ SELF="$ROOT/hack/$(basename "${BASH_SOURCE[0]}")"
 
 usage() { sed -n '4,35p' "$SELF" | sed 's/^# \{0,1\}//'; exit 2; }
 
+# pid_running: is this process still RUNNING? `kill -0` is not that. It succeeds for a ZOMBIE, a
+# process that has exited and is waiting for its parent to collect it, and a process whose parent
+# is gone is handed to PID 1, which in a bare container is whatever the container runs (a `sleep`,
+# a shell) and never collects anything. Every stopped rung then stayed a zombie forever, `kill -0`
+# kept calling it alive, and the self-test failed with "still running" without a reaper such as
+# `tini -s`. The state in /proc is the authority where there is one; elsewhere there are no
+# zombies that outlive their parent's wait, and `kill -0` is the answer.
+pid_running() {
+  local pid="$1" state=""
+  kill -0 "$pid" 2>/dev/null || return 1
+  if [[ -r "/proc/$pid/status" ]]; then
+    state="$(sed -n 's/^State:[[:space:]]*\(.\).*/\1/p' "/proc/$pid/status" 2>/dev/null)" || state=""
+    if [[ -n "$state" ]]; then
+      [[ "$state" != Z ]]
+      return
+    fi
+    # Unreadable: the process went away between the two checks, or the state is not exposed.
+    kill -0 "$pid" 2>/dev/null
+    return
+  fi
+  return 0
+}
+
 # --self-test runs this script against stub harnesses and checks what it reports. A guard is
 # worth nothing until it has been seen to fail, so every case but the first is a failure.
 self_test() {
@@ -55,7 +78,7 @@ self_test() {
 #!/usr/bin/env bash
 name="$(basename "$0")"; var="STUB_${name//-/_}"; read -r code secs <<<"${!var:-0 0}"
 echo $$ >"$STUB_DIR/$name.pid"
-trap 'kill "$s" 2>/dev/null; exit 143' TERM
+trap 'kill "$s" 2>/dev/null; exit "${STUB_TERM_EXIT:-143}"' TERM
 sleep "$secs" & s=$!; wait "$s"
 exit "$code"
 STUB
@@ -71,7 +94,29 @@ STUB
     fi
   }
   alive() { local n; for n in dc-loadtest dc-loadtest-mqtt dc-loadtest-detection; do
-    [[ -f "$d/$n.pid" ]] && kill -0 "$(cat "$d/$n.pid")" 2>/dev/null && echo "$n"; done; true; }
+    [[ -f "$d/$n.pid" ]] && pid_running "$(cat "$d/$n.pid")" && echo "$n"; done; true; }
+
+  # The liveness check itself is under test, both ways. It must call a running process running
+  # (or "still running" can never fire) and an exited-but-uncollected one (a zombie) not running
+  # (or the self-test fails without a reaper). The zombie control runs on Linux, the only place a zombie outlives its parent.
+  sleep 30 & local live=$!
+  pid_running "$live" || { echo "self-test: pid_running did not see a running process" >&2; rc=1; }
+  kill "$live" 2>/dev/null; wait "$live" 2>/dev/null || true
+  ! pid_running "$live" || { echo "self-test: pid_running saw a collected process as running" >&2; rc=1; }
+  if [[ "$(uname -s)" == Linux && -r /proc/self/status ]]; then
+    # `sleep 0` exits at once; its parent execs into `sleep 5`, which never collects it.
+    bash -c 'sleep 0 & echo $! >"$1"; exec sleep 5' _ "$d/zombie.pid" &
+    local zparent=$!
+    for _ in $(seq 50); do [[ -s "$d/zombie.pid" ]] && break; sleep 0.1; done
+    sleep 0.5
+    if ! kill -0 "$(cat "$d/zombie.pid")" 2>/dev/null; then
+      echo "self-test: the zombie control did not produce a zombie, so the check was not exercised" >&2; rc=1
+    elif pid_running "$(cat "$d/zombie.pid")"; then
+      echo "self-test: pid_running counted a zombie as running" >&2; rc=1
+    fi
+    kill "$zparent" 2>/dev/null; wait "$zparent" 2>/dev/null || true
+    rm -f "$d/zombie.pid"
+  fi
 
   run 0 STUB_dc_loadtest="0 1" STUB_dc_loadtest_mqtt="0 1" STUB_dc_loadtest_detection="0 1"
   for r in dc_loadtest dc_loadtest_mqtt dc_loadtest_detection; do
@@ -84,6 +129,21 @@ STUB
   run x STUB_dc_loadtest="0 1" STUB_dc_loadtest_mqtt="3 1" STUB_dc_loadtest_detection="0 1"
   grep -q "MQTT LOSS" <<<"$out" || { echo "self-test: an MQTT exit 3 was not reported as a LOSS" >&2; echo "$out" >&2; rc=1; }
   grep -q "mqtt exited 3" <<<"$out" || { echo "self-test: the MQTT rung's own code was not printed" >&2; rc=1; }
+
+  # A stopped rung is not a failed one: the rungs the script stopped exit 143 and are SAID to
+  # have been stopped, and only the rung that failed is named as the failure.
+  rm -f "$d"/*.pid
+  run x STUB_dc_loadtest="0 60" STUB_dc_loadtest_mqtt="1 1" STUB_dc_loadtest_detection="0 60"
+  grep -q "http stopped by this script (143)" <<<"$out" && grep -q "detect stopped by this script (143)" <<<"$out" \
+    || { echo "self-test: the rungs the script stopped were not reported as stopped (143)" >&2; echo "$out" >&2; rc=1; }
+  grep -q "mqtt FAILED (1)" <<<"$out" || { echo "self-test: the failing rung was not reported as FAILED" >&2; echo "$out" >&2; rc=1; }
+  ! grep -q "http FAILED\|detect FAILED" <<<"$out" || { echo "self-test: a stopped rung was reported as FAILED" >&2; echo "$out" >&2; rc=1; }
+  # And the control: a rung that is stopped but exits 1 (the defect the 143 convention closes)
+  # is called out, so the summary cannot be fooled into reading it as an independent failure.
+  rm -f "$d"/*.pid
+  run x STUB_TERM_EXIT=1 STUB_dc_loadtest="0 60" STUB_dc_loadtest_mqtt="1 1" STUB_dc_loadtest_detection="0 60"
+  grep -q "http was stopped by this script but exited 1, not 143" <<<"$out" \
+    || { echo "self-test: a stopped rung that exited 1 was not called out" >&2; echo "$out" >&2; rc=1; }
 
   # A TERM to the script stops every rung, so an interrupted run leaves nothing behind.
   rm -f "$d"/*.pid
@@ -166,13 +226,15 @@ for b in loadtest loadtest-mqtt loadtest-detection; do
 done
 
 echo "rc run: $duration ($secs s) -> $out"
-pids=() names=() codes=()
+pids=() names=() codes=() termed=()
 
 # Whatever ends the script (a failed rung, an interrupt, an error here) ends the rungs with it.
 stop_rungs() {
   local i
   for i in "${!pids[@]}"; do
-    [[ -n "${codes[$i]:-}" ]] || kill -TERM "${pids[$i]}" 2>/dev/null || true
+    [[ -n "${codes[$i]:-}" ]] && continue
+    # Recorded only when the signal was delivered to a rung still running.
+    if kill -TERM "${pids[$i]}" 2>/dev/null; then termed[i]=1; fi
   done
 }
 trap stop_rungs EXIT
@@ -205,7 +267,7 @@ rc=0 left=${#pids[@]} stopped=""
 while (( left > 0 )); do
   for i in "${!pids[@]}"; do
     [[ -z "${codes[$i]:-}" ]] || continue
-    kill -0 "${pids[$i]}" 2>/dev/null && continue
+    pid_running "${pids[$i]}" && continue
     code=0
     wait "${pids[$i]}" || code=$?
     codes[i]=$code
@@ -213,6 +275,11 @@ while (( left > 0 )); do
     echo "  ${names[$i]} exited $code"
     if [[ "$code" -ne 0 ]]; then
       rc=1
+      # A rung this script stopped says so with 143. It is not a failure of its own, so it
+      # neither names the culprit nor stops anything: the rung that failed already did.
+      if [[ -n "${termed[$i]:-}" && "$code" -eq 143 ]]; then
+        continue
+      fi
       if [[ -z "$stopped" ]]; then
         stopped=${names[$i]}
         echo "  ${names[$i]} failed: stopping the other rungs"
@@ -223,6 +290,23 @@ while (( left > 0 )); do
   (( left == 0 )) || sleep 1
 done
 trap - EXIT
+
+# One line per rung, in one vocabulary: a rung is FAILED only if it failed on its own account. A
+# rung this script stopped is "stopped" (143) and nothing else; one that was stopped but did not
+# exit 143 is called out, because its code then reads as a failure it did not have.
+echo
+for i in "${!names[@]}"; do
+  c="${codes[$i]}"
+  if [[ -n "${termed[$i]:-}" && "$c" -eq 143 ]]; then
+    echo "  ${names[$i]} stopped by this script (143)"
+  elif [[ -n "${termed[$i]:-}" && "$c" -ne 0 ]]; then
+    echo "  ${names[$i]} was stopped by this script but exited $c, not 143: its code is not a failure of its own"
+  elif [[ "$c" -ne 0 ]]; then
+    echo "  ${names[$i]} FAILED ($c)"
+  else
+    echo "  ${names[$i]} passed (0)"
+  fi
+done
 
 code_of() { local i; for i in "${!names[@]}"; do [[ "${names[$i]}" == "$1" ]] && echo "${codes[$i]}"; done; }
 echo

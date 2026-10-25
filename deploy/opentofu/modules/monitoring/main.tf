@@ -36,13 +36,15 @@ variable "release_name" {
 variable "chart_version" {
   description = <<-EOT
     kube-prometheus-stack chart version. PINNED, and this one has a reason beyond
-    reproducibility: the chart ships the Prometheus Operator CRDs in its crds/ directory,
-    which Helm installs once and never upgrades — so an unpinned "latest" that drifts
-    across bootstraps silently skews the operator against install-day CRDs. Bump
-    deliberately, and apply the new CRDs by hand per the chart's upgrade notes.
+    reproducibility: the chart ships the Prometheus Operator CRDs in a form Helm installs
+    once and never upgrades — so an unpinned "latest" that drifts across bootstraps
+    silently skews the operator against install-day CRDs. Bump deliberately. This module
+    switches on the chart's own CRD upgrade job (crds.upgradeJob, below), which applies
+    the CRDs server-side before the new operator rolls out, so a bump needs no manual
+    kubectl step; read the chart's UPGRADE.md for every major crossed all the same.
   EOT
   type        = string
-  default     = "65.1.1"
+  default     = "92.13.1"
 
   # Fail closed. An empty string used to mean "install latest", which made the chart
   # version resolve at APPLY time — the chart repository became a dependency of
@@ -396,7 +398,27 @@ locals {
   values = merge({
     # The Operator CRDs are what the DeviceChain instance chart's ServiceMonitors /
     # PrometheusRule depend on — install them with the stack.
-    crds = { enabled = true }
+    #
+    # 🔴 upgradeJob IS WHAT MAKES A CHART BUMP A ONE-STEP UPGRADE. Helm installs a chart's
+    # CRDs once and never touches them again, so on a cluster that already runs an older
+    # stack the new operator would start against the old CRDs (it then fails to reconcile
+    # fields the old schema prunes, silently). The job is a pre-install/pre-upgrade hook:
+    # it runs `kubectl apply --server-side --force-conflicts` of the chart's CRDs and the
+    # release does not proceed until it succeeds. --force-conflicts is what lets it take the
+    # fields over from Helm, which created them. Cost: two images are pulled by the hook
+    # (busybox, and registry.k8s.io/kubectl at the cluster's version), so an air-gapped
+    # cluster must mirror them -- the same constraint its other images already carry.
+    #
+    # The busybox tag is pinned because the chart defaults it to "latest".
+    crds = {
+      enabled = true
+      upgradeJob = {
+        enabled = true
+        image = {
+          busybox = { tag = "1.37.0" }
+        }
+      }
+    }
 
     prometheus = {
       prometheusSpec = merge({
@@ -433,7 +455,7 @@ locals {
   # The key is quoted because it contains hyphens, and it is the SUBCHART's values
   # block: kube-prometheus-stack does not enumerate `customResourceState` in its
   # own values.yaml, but Helm passes any subchart key straight through. Verified by
-  # rendering chart 65.1.1 with exactly this document — it produces the ConfigMap,
+  # rendering chart 92.13.1 with exactly this document — it produces the ConfigMap,
   # the --custom-resource-state-config-file argument, the volume mount and the
   # ClusterRole rule.
   #

@@ -69,7 +69,7 @@ func TestAnUnconfiguredLifecycleGateReportsZero(t *testing.T) {
 func TestAConfiguredLifecycleGateReportsOne(t *testing.T) {
 	gates, reg := gatesFixture(t)
 
-	gate := NewTenantLifecycleGate(config.UserManagementConfiguration{Hostname: "um", Port: 8080}, "s3cret", "command-delivery", gates)
+	gate := NewTenantLifecycleGate(config.UserManagementConfiguration{Hostname: "um", Port: 8080, InternalPort: 8080}, "s3cret", "command-delivery", gates)
 
 	require.NotNil(t, gate)
 	v, ok := gateValue(t, reg, GateTenantLifecycle)
@@ -85,7 +85,7 @@ func TestTheSameGatesHandleSurvivesASecondStart(t *testing.T) {
 	reg := prometheus.NewRegistry()
 	ms.UseMetricsRegistry(reg)
 	gates := NewSafetyGates(ms)
-	user := config.UserManagementConfiguration{Hostname: "um", Port: 8080}
+	user := config.UserManagementConfiguration{Hostname: "um", Port: 8080, InternalPort: 8080}
 
 	for start := 0; start < 2; start++ {
 		NewTenantLifecycleGate(user, "s3cret", "command-delivery", gates)

@@ -60,9 +60,9 @@ func TestRestatingAProvisioningSecretDoesNotRotateIt(t *testing.T) {
 
 	rows, err := api.ProvisioningProfilesByToken(ctx, []string{"pp-1"})
 	p := requireOne(t, "provisioning profile", rows, err)
-	if p.ProvisionSecret != padded {
-		t.Errorf("provisionSecret = %q, want %q — restating the secret rotated it, and the "+
-			"fleet presenting the created one now fails to register", p.ProvisionSecret, padded)
+	if got := provisionSecretStr(p.ProvisionSecretDigest, padded); got != padded {
+		t.Errorf("provisionSecret verifies as %q, want %q — restating the secret rotated it, and the "+
+			"fleet presenting the created one now fails to register", got, padded)
 	}
 	if p.ProvisionKey != " fleet-key " {
 		t.Errorf("provisionKey = %q, want %q — the key a fleet presents to be LOOKED UP was "+
@@ -133,7 +133,7 @@ func TestRotatingAProvisioningSecretStillTakes(t *testing.T) {
 		t.Fatalf("a rotation was refused: %v", err)
 	}
 	rows, err := api.ProvisioningProfilesByToken(ctx, []string{"pp-1"})
-	if got := requireOne(t, "provisioning profile", rows, err).ProvisionSecret; got != "rotated" {
-		t.Fatalf("provisionSecret = %q, want %q", got, "rotated")
+	if got := provisionSecretStr(requireOne(t, "provisioning profile", rows, err).ProvisionSecretDigest, " s3cret ", "rotated"); got != "rotated" {
+		t.Fatalf("provisionSecret verifies as %q, want %q", got, "rotated")
 	}
 }

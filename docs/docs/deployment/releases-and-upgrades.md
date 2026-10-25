@@ -349,6 +349,8 @@ beyond letting the services run their own migrations, and it never resizes a vol
 
 An upgrade does not change an instance's shape, but it does keep the tuning you gave it. A values file passed to `dcctl bootstrap --values` or `dcctl upgrade --values` is recorded on the instance and applied again by every later upgrade; `--reset-values` removes it. See [Tuning an Instance](./tuning-an-instance.md).
 
+The fail-closed MQTT acknowledgement is carried the same way: `--mqtt-fail-closed` on `dcctl bootstrap` or `dcctl upgrade` is recorded on the instance, and an upgrade that omits the flag keeps what was recorded, on or off. See [fail-closed MQTT](./observability.md#mqtt-fail-closed).
+
 ### What an upgrade applies to the infrastructure {#upgrade-infrastructure}
 
 Before it moves the services, `dcctl upgrade` applies the instance's OpenTofu configuration,
@@ -3658,6 +3660,65 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 
 Nothing needs doing.
 
+### v0.25.2 — the service-token mint leaves the public port {#v0252-upgrade}
+
+`v0.25.2` is a security patch for `v0.25.1`. There is no migration, and no API, topic or permission
+changes. The instance configuration gains one key, `infrastructure.userManagement.internalPort`, which the
+chart sets to `8082`; leave it there, because the chart's Service, pod and network policy use that fixed
+port. Everything
+the [v0.25.1](#v0251-upgrade) and [v0.25.0](#v0250-upgrade) sections describe is still what you are
+running, including their known limitations.
+
+Upgrade the cluster, then each instance. Give `dcctl install` the settings the cluster was installed with,
+such as `--ha` and `--database-node-selector`, as well as the new `--version`:
+
+```bash
+dcctl install local --version v0.25.2
+dcctl upgrade local devicechain --version v0.25.2 --dry-run
+dcctl upgrade local devicechain --version v0.25.2
+```
+
+**Coming from `v0.25.0` or `v0.24.0`,** follow the [v0.25.1 notes](#v0251-upgrade) with
+`--version v0.25.2`: they apply unchanged, and so does what they say about the v0.25.0 upgrades.
+
+#### The internal endpoints are off the public port {#v0252-internal-endpoints}
+
+`user-management` served two endpoints meant only for the platform's own services on its public port:
+`/auth/service-token`, which exchanges the shared service secret for a short-lived service token, and
+`/auth/jwks`, the key set every service validates tokens with. The only thing keeping them off the
+internet was an nginx configuration snippet on the chart's API ingress. **An install that brought its own
+ingress controller therefore had both reachable from outside,** protected by the shared service secret,
+which is compared in constant time.
+
+From this release `user-management` serves both on a separate internal port, `8082`, that the chart
+publishes only on the cluster-internal Service. No ingress, route or load balancer refers to it, and the
+public port answers 404 for both paths whatever sits in front of it, so **a bring-your-own controller
+needs no edge rule to hide them.** Every service now fetches the key set and mints its token on the
+internal port. See [Endpoints that never leave the cluster](../concepts/security-model.md#internal-endpoints).
+
+- **The chart no longer sets an nginx configuration snippet.**
+- **The ingress controller `dcctl install` sets up is unchanged in this release** and still accepts
+  snippets, because instances not yet upgraded rely on them. A later release turns snippets off, behind a
+  `dcctl install` check that refuses while any Ingress of the controller's class still carries a
+  `*-snippet` annotation.
+- **External token verifiers are unaffected:** they use the `jwks_uri` in the authorization-server
+  metadata, `/oauth/jwks`, which stays public.
+
+#### What to expect {#v0252-during}
+
+- **`user-management` and its peers must roll together.** A pod from an older release asks the public
+  port for the key set and the mint, which now answer 404, and it does not retry its way out: its mint
+  calls fail until that pod is replaced by one from this release. `dcctl upgrade` replaces every service's
+  pods, so this lasts as long as the roll; do not hold an area back on an older image.
+- **An older pod that restarts after `dcctl upgrade` has written the new configuration fails to start.**
+  Older binaries decode the instance configuration strictly and reject the new `internalPort` key, so such
+  a pod crash-loops until it is replaced by one from this release.
+- **If you run your own network policy engine,** allow pods in the instance namespace to reach port `8082`
+  on `user-management`, and nothing more. The chart's own network policy for that port is off by default,
+  and `dcctl` installs run with it off.
+- **The Grafana boards the chart ships** each open with a table of the instance's firing alerts and link to
+  the instance's other boards, and a third board, *Instance overview*, holds that table only for now.
+
 ### v0.25.1 — the database and backup-store images, rebuilt for current advisories {#v0251-upgrade}
 
 `v0.25.1` is a patch for `v0.25.0`. There is no migration, and no API, topic, permission, chart value or
@@ -3666,6 +3727,8 @@ databases and backup store on to builds that no longer carry the advisories list
 what two services report to Prometheus and the Grafana boards the chart ships for them (see
 [The metrics and the boards](#v0251-metrics)). Everything the [v0.25.0 section](#v0250-upgrade) describes is still what you are
 running.
+
+The [v0.25.0 known limitations](#v0250-upgrade) still apply, including this one: with `mqttFailClosed` off, the default, acknowledged QoS 1 messages can also be lost under sustained load with no broker restart, when `event-sources` falls behind and the capture stream fills. `devicechain_<area>_jetstream_consumer_unread_skipped_total` counts them and `JetStreamDurableLostUnread` alerts.
 
 Upgrade the cluster, then each instance. Give `dcctl install` the settings the cluster was installed with,
 such as `--ha` and `--database-node-selector`, as well as the new `--version`:
@@ -4078,15 +4141,20 @@ to change and `artifact:read` to view, and a member limited to part of the tenan
 - **Rollouts have no waves or canary stage,** no schedule, and no alert for a stalled rollout driver.
 - **The SBOM is generated from each image's `amd64` variant.**
 - **With `mqttFailClosed` off, which is the default, QoS 1 messages the broker has acknowledged can be lost
-  while the MQTT capture stream changes leader, at any load,** and nothing counts them
-  (`JetStreamCaptureLeaderChanged` warns that a change happened). A broker roll restarts every server, the
+  while the MQTT capture stream changes leader, at any load,** and nothing counts those
+  (`JetStreamCaptureLeaderChanged` warns that a change happened). They can also be lost with no leader change, under
+  sustained load: in a load test on a default install, `event-sources` fell behind reading the capture stream, the stream
+  filled to its bound and discarded its oldest unread messages, and 1,357,188 acknowledged events, about 7 to 13% of the
+  MQTT traffic, were lost. `devicechain_<area>_jetstream_consumer_unread_skipped_total` counts them and `JetStreamDurableLostUnread` alerts. Why
+  `event-sources` fell behind is still being investigated. A broker roll restarts every server, the
   leader among them, and this upgrade rolls the broker twice, so expect a short loss window during each
   broker roll unless fail-closed is on. In a rehearsal of this upgrade with four devices sending 20 QoS 1 messages a
   second between them, 11 of 11,262 acknowledged messages were lost, all during the broker restarts; in an
-  earlier rehearsal none were. To close the window, turn on `infrastructure.nats.mqttFailClosed` (the chart
-  value `instance.config.infrastructure.nats.mqttFailClosed`). `dcctl` has no option for it in this release
-  and `--values` does not accept it, so a value set by hand on an instance `dcctl` manages is written over
-  by the next `dcctl upgrade`. The trade-off: while the broker's message store has no leader, a QoS 1
+  earlier rehearsal none were. To close the window, turn on `infrastructure.nats.mqttFailClosed`. `dcctl` has
+  no option for it in this release and `--values` does not accept it, so a value set by hand on an instance
+  `dcctl` manages is written over by the next `dcctl upgrade`; a later release adds `--mqtt-fail-closed` to
+  `dcctl bootstrap` and `dcctl upgrade`, which records the choice on the instance (see
+  [fail-closed MQTT](./observability.md#mqtt-fail-closed)). The trade-off: while the broker's message store has no leader, a QoS 1
   publish is not acknowledged, so the device must send it again, and the instance keeps up with less
   traffic than with the setting off. On one test cluster it lost nothing while it kept up, at 6,000 and
   9,000 events a second through repeated leader changes; at 12,000 a second it fell behind, two broker

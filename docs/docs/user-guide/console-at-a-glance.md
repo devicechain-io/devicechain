@@ -19,9 +19,9 @@ After you sign in, you land on the home page. It welcomes you by name and shows 
 how many **Devices** and how many **Device Types** your tenant has. Select either count to open
 that list.
 
-<GuideShot id="console-home" alt="The console home page. The sidebar is on the left. The header reads Dashboard, with the tenant chip 'acme (sim)' at the top right. The page is titled 'Welcome, Dana Okafor' and shows two cards: 13 Devices and 1 Device Types." />
+<GuideShot id="console-home" alt="The console home page. The sidebar is on the left. The header reads Home, with the tenant chip 'acme (sim)' at the top right. The page is titled 'Welcome, Dana Okafor' and shows two cards: 13 Devices and 1 Device Types." />
 
-The **Dashboard** entry at the top of the sidebar always brings you back here. It is not the
+The **Home** entry at the top of the sidebar always brings you back here. It is not the
 same as **Dashboards**, which holds the dashboards your team builds.
 
 ## The sidebar
@@ -29,14 +29,14 @@ same as **Dashboards**, which holds the dashboards your team builds.
 The sidebar on the left is how you move around the console. It lists the areas of your tenant
 in a fixed order.
 
-<GuideShot id="console-sidebar" alt="The console sidebar. Under the DeviceChain logo and the words Management Console it lists Dashboard, Dashboards, Alarms, Connectors, Devices, Assets, Customers, Areas, Facets, Browse, Audit, Updates and Settings. Devices, Assets, Customers, Areas, Updates and Settings have an arrow showing they open a sub-menu. The signed-in user's name and email are at the bottom." />
+<GuideShot id="console-sidebar" alt="The console sidebar. Under the DeviceChain logo and the words Management Console it lists Home, Dashboards, Alarms, Connectors, Devices, Assets, Customers, Areas, Facets, Browse, Audit, Updates and Settings. Devices, Assets, Customers, Areas, Updates and Settings have an arrow showing they open a sub-menu. The signed-in user's name and email are at the bottom." />
 
 Some entries open a sub-menu instead of a page. Selecting one opens its sub-menu and takes you
 to its first page. Only one sub-menu is open at a time.
 
 | Entry | What it holds |
 | --- | --- |
-| **Dashboard** | The home page. |
+| **Home** | The home page. |
 | **Dashboards** | Dashboards built by your team. |
 | **Alarms** | The alarms your rules have raised. |
 | **Notification Policies** | Who is told about alarms, and the quiet hours that hold their pages. |
@@ -55,7 +55,7 @@ You see only the entries your role allows. If your role cannot read alarms, for 
 **Alarms** is not in your sidebar. **Updates** appears only when your installation runs the
 update service. The **Settings** entries are for tenant administrators.
 
-If your access is limited to some of the tenant's customers, the sidebar holds only **Dashboard**,
+If your access is limited to some of the tenant's customers, the sidebar holds only **Home**,
 **Dashboards**, **Alarms** and **Devices**. See
 [What a customer user sees](/user-guide/members-roles-and-customer-users#what-a-customer-user-sees).
 

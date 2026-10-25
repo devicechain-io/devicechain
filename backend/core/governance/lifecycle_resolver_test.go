@@ -171,7 +171,7 @@ func TestPurgeStateResponseDecodesARealAnswer(t *testing.T) {
 // never a half-built client pointed at http://:0/graphql. Each of the three coordinates
 // is checked, because a config document predating this feature carries none of them.
 func TestNewTenantLifecycleGateIsOffWhenUnconfigured(t *testing.T) {
-	full := config.UserManagementConfiguration{Hostname: "user-management", Port: 8080}
+	full := config.UserManagementConfiguration{Hostname: "user-management", Port: 8080, InternalPort: 8080}
 	for _, c := range []struct {
 		name   string
 		cfg    config.UserManagementConfiguration

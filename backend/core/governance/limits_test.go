@@ -154,9 +154,11 @@ func TestDimensions_AreDistinct(t *testing.T) {
 	assert.Equal(t, "outboundBurst", Outbound.BurstField)
 	assert.Equal(t, "aiInferenceRequestsPerMinute", AIInference.RateField)
 	assert.Equal(t, "aiInferenceBurst", AIInference.BurstField)
+	assert.Equal(t, "provisioningRegistrationsPerSecond", Provisioning.RateField)
+	assert.Equal(t, "provisioningBurst", Provisioning.BurstField)
 
 	seen := map[string]bool{}
-	for _, d := range []Dimension{Ingest, Outbound, AIInference} {
+	for _, d := range []Dimension{Ingest, Outbound, AIInference, Provisioning} {
 		assert.False(t, seen[d.Name], "dimension names must be distinct: %s", d.Name)
 		assert.False(t, seen[d.RateField], "rate fields must be distinct: %s", d.RateField)
 		assert.False(t, seen[d.BurstField], "burst fields must be distinct: %s", d.BurstField)
@@ -168,7 +170,7 @@ func TestDimensions_AreDistinct(t *testing.T) {
 // declared unit is unstated; PerSecond falls back to identity rather than zeroing a
 // ceiling, but a real dimension should never rely on that fallback.
 func TestDimensions_DeclareAPositiveScale(t *testing.T) {
-	for _, d := range []Dimension{Ingest, Outbound, AIInference} {
+	for _, d := range []Dimension{Ingest, Outbound, AIInference, Provisioning} {
 		assert.Positive(t, d.PerSecondScale, "%s must declare its rate unit", d.Name)
 	}
 }

@@ -36,7 +36,7 @@ func (q *rawQuerier) Query(_ context.Context, _, tenant, query string, vars map[
 // TestClaimDispatchWire pins the live-path claim's wire contract and its three outcomes.
 //
 // The document text and variable names are what command-delivery's schema accepts, and the
-// graphql-go fork refuses an unknown argument sent through a variable, so a drift here fails
+// graphql-go refuses an unknown argument sent through a variable, so a drift here fails
 // every live command closed. The null/empty split matters in the other direction: an empty
 // string read as a win would actuate a command whose outcome nothing could settle.
 func TestClaimDispatchWire(t *testing.T) {

@@ -347,6 +347,11 @@ spec:
             - name: graphql
               containerPort: {{ $root.Values.service.port }}
               protocol: TCP
+            {{- if eq $area "user-management" }}
+            - name: internal-auth
+              containerPort: {{ include "devicechain.authInternalPort" $root }}
+              protocol: TCP
+            {{- end }}
             {{- range $port := get $areaCfg "extraPorts" | default list }}
             - name: {{ $port.name }}
               containerPort: {{ $port.port }}

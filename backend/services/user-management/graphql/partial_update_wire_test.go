@@ -218,7 +218,7 @@ func (m partialUpdateMutation) variables(request any) map[string]any {
 // conversion exists to make: the mutation's own arguments name the record, and the input
 // has no way to name a different one.
 //
-// The rejection arrives from the unknown-input-field guard (the pinned graphql-go fork),
+// The rejection arrives from the unknown-input-field guard (graphql-go v1.10.3 and later),
 // which makes this a check on that guard too: without it a misnamed field is silently
 // DROPPED and the caller is told their update succeeded.
 func TestPartialUpdateInputsCannotCarryTheRecordsIdentity(t *testing.T) {

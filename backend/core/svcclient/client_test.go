@@ -47,7 +47,7 @@ func mintServer(t *testing.T, secret string, mints *int32) *httptest.Server {
 func clientFor(srv *httptest.Server, secret string) *Client {
 	host, portStr, _ := net.SplitHostPort(srv.Listener.Addr().String())
 	port, _ := strconv.Atoi(portStr)
-	return New(config.UserManagementConfiguration{Hostname: host, Port: uint32(port)}, secret, "command-delivery", []string{string(auth.DeviceRead)})
+	return New(config.UserManagementConfiguration{Hostname: host, Port: uint32(port), InternalPort: uint32(port)}, secret, "command-delivery", []string{string(auth.DeviceRead)})
 }
 
 func TestQuery_MintsThenCachesAndPassesAuth(t *testing.T) {
@@ -181,5 +181,43 @@ func TestQuery_SurfacesGraphQLErrors(t *testing.T) {
 	err := c.Query(context.Background(), target.URL, "tenant-a", "query{x}", nil, nil)
 	if err == nil {
 		t.Fatal("Query ignored a GraphQL errors array")
+	}
+}
+
+// The mint is dialled on user-management's INTERNAL port, never the public one. The public
+// port answers 404 for it (it is not served there at all), so a client that built the public
+// address would fail every service-to-service call.
+func TestMintDialsTheInternalPortNotThePublicOne(t *testing.T) {
+	var mints int32
+	internal := mintServer(t, "shh", &mints)
+	defer internal.Close()
+	var publicHits int32
+	public := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&publicHits, 1)
+		http.Error(w, "not found", http.StatusNotFound)
+	}))
+	defer public.Close()
+
+	pubHost, pubPortStr, _ := net.SplitHostPort(public.Listener.Addr().String())
+	pubPort, _ := strconv.Atoi(pubPortStr)
+	_, intPortStr, _ := net.SplitHostPort(internal.Listener.Addr().String())
+	intPort, _ := strconv.Atoi(intPortStr)
+
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"data":{"ok":true}}`))
+	}))
+	defer target.Close()
+
+	c := New(config.UserManagementConfiguration{Hostname: pubHost, Port: uint32(pubPort), InternalPort: uint32(intPort)},
+		"shh", "command-delivery", []string{string(auth.DeviceRead)})
+	var out struct{ OK bool }
+	if err := c.Query(context.Background(), target.URL, "acme", "{ok}", nil, &out); err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if atomic.LoadInt32(&mints) != 1 {
+		t.Fatalf("the internal listener served %d mints, want 1", mints)
+	}
+	if atomic.LoadInt32(&publicHits) != 0 {
+		t.Fatalf("the client touched the public port %d times; the mint must go to the internal port only", publicHits)
 	}
 }

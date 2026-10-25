@@ -66,6 +66,8 @@ func (t *Tenant) overridesFor(dim governance.Dimension) (rate *float64, burst *i
 		return t.OutboundCallsPerSecond, t.OutboundBurst, true
 	case governance.AIInference.Name:
 		return t.AiInferenceRequestsPerMinute, t.AiInferenceBurst, true
+	case governance.Provisioning.Name:
+		return t.ProvisioningRegistrationsPerSecond, t.ProvisioningBurst, true
 	}
 	return nil, nil, false
 }

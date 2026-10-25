@@ -108,7 +108,7 @@ La mayor parte del tráfico entre servicios es asíncrono sobre NATS. Cuando un 
 
 Aparte de los endpoints `/healthz`, `/readyz` y `/metrics` que sirve cada servicio, y del explorador `/graphiql`, que solo se sirve cuando las herramientas de desarrollo están habilitadas, los endpoints HTTP que no son GraphQL son los que dicta un estándar, más tres específicos. Los estándar son:
 
-- el documento JWKS que obtienen los validadores de tokens
+- el documento JWKS que obtienen los validadores de tokens, servido en un puerto interno al que no llega ninguna ruta del ingress
 - los endpoints del servidor de autorización OAuth 2.1 (`/oauth/authorize`, `/oauth/token`, `/oauth/userinfo`, `/oauth/jwks` y el documento de metadatos RFC 8414), que `user-management` sirve una vez configurada una URL de emisor
 - el transporte JSON-RPC sobre HTTP que habla el [servidor MCP](./mcp.md) opcional, y el documento de metadatos del recurso protegido (RFC 9728) que publica
 
@@ -116,4 +116,4 @@ Los otros tres son:
 
 - el endpoint HTTP de ingesta de eventos orientado a dispositivos (`POST /{instance}/{tenant}/events`), que `event-sources` sirve en su propio puerto; la configuración predeterminada incluye una fuente HTTP
 - el endpoint de subida y descarga del logotipo del inquilino (`/branding/logo`) en `user-management`
-- el endpoint donde los servicios obtienen su token de servicio de corta duración (`/auth/service-token`) en `user-management`
+- el endpoint donde los servicios obtienen su token de servicio de corta duración (`/auth/service-token`) en `user-management`, servido en ese mismo puerto interno y nunca a través del ingress

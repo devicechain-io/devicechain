@@ -861,6 +861,25 @@ devicechain.io/functional-area: {{ .area }}
 {{- end -}}
 
 {{/*
+devicechain.authInternalPort is the port user-management serves its INTERNAL endpoints on:
+the service-token mint and the platform JWKS.
+
+🔴 IT IS A CONSTANT, NOT A READ OF THE INSTANCE CONFIG. dcctl strips instance.config and
+mounts its own document (instance.existingSecret), so the chart cannot see the installed
+value; a read would silently fall back to the chart default while the pods and the callers
+used the document's. It equals config.DefaultUserManagementInternalPort in the Go code and
+the instance config's userManagement.internalPort, and hack/check-oauth-discovery-routing.sh
+fails a render in which the Service port and that document disagree.
+
+It is exposed on the ClusterIP Service and on the pod, and NO Ingress, HTTPRoute or
+LoadBalancer ever names it. That is what keeps the mint off the public host; there is no
+edge rule to configure and none for a bring-your-own controller to replicate.
+*/}}
+{{- define "devicechain.authInternalPort" -}}
+{{- 8082 -}}
+{{- end -}}
+
+{{/*
 devicechain.memoryQuantityMiB converts a Kubernetes memory quantity to a whole
 number of MiB (rounded down). Parameters: q (the quantity), area (for messages).
 

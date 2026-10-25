@@ -82,6 +82,12 @@ hay ningún bróker aparte que operar.
   `JetStreamDurableStalledBehindStream` lo informa mientras la canalización no lee el stream de
   captura, y `JetStreamDurableLostUnread` cuando vuelve a leerlo.
 
+  Lo mismo ocurre sin ningún rechazo cuando `event-sources` simplemente se queda atrás respecto al ritmo de los dispositivos con
+  carga sostenida. En una prueba de carga con tráfico HTTP y MQTT combinado en una instalación por defecto, sin reinicio del
+  broker, el stream de captura se llenó y se perdió entre el 7 y el 13 % del tráfico MQTT, todo él ya confirmado.
+  `devicechain_<area>_jetstream_consumer_unread_skipped_total` lo cuenta, `JetStreamDurableLostUnread` alerta sobre ello, y
+  `JetStreamCaptureBacklogGrowing` y `JetStreamCaptureBacklogWillOverflow` avisan antes de que el stream se llene.
+
   Un tercer agujero es la propia elección de líder del stream de captura. El broker entrega cada
   publicación QoS 1 al stream de captura sin respuesta, después de que el dispositivo ya tiene su
   PUBACK. Si el stream cambia de líder, con cualquier carga, las publicaciones que llegan mientras no
@@ -101,7 +107,8 @@ hay ningún bróker aparte que operar.
   informes de dispositivo QoS 1 del propio almacén de mensajes del bróker. Un almacén lleno rechaza
   la publicación, y uno cuyo líder está cambiando no la confirma, así que el dispositivo no recibe
   PUBACK y la vuelve a enviar. Las publicaciones QoS 0 mantienen el comportamiento anterior, y un
-  mensaje por encima del techo del inquilino se sigue descartando después de su PUBACK. Consulte
+  mensaje por encima del techo del inquilino se sigue descartando después de su PUBACK. `dcctl bootstrap` y
+  `dcctl upgrade` lo activan con `--mqtt-fail-closed`. Consulte
   [calidad de servicio](../guides/connecting-a-device.md#quality-of-service) y
   [MQTT a prueba de fallos](../deployment/observability.md#mqtt-fail-closed).
 - **Escritura ◐**: los comandos se entregan, pero la entrega es **solo en vivo y sin

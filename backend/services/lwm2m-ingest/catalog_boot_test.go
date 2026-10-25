@@ -92,6 +92,7 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	infra.DeviceState.Hostname, infra.DeviceState.Port = "127.0.0.1", 1
 	infra.CommandDelivery.Hostname, infra.CommandDelivery.Port = "127.0.0.1", 1
 	infra.UserManagement.Hostname, infra.UserManagement.Port = "127.0.0.1", 1
+	infra.UserManagement.InternalPort = 1
 
 	ctx := context.Background()
 	require.NoError(t, afterMicroserviceInitialized(ctx),

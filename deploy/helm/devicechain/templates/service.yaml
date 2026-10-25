@@ -19,6 +19,13 @@ spec:
       protocol: TCP
       port: {{ $root.Values.service.port }}
       targetPort: graphql
+    {{- if eq $area "user-management" }}
+    {{- /* The internal listener: service-token mint + JWKS. ClusterIP only, never routed. */}}
+    - name: internal-auth
+      protocol: TCP
+      port: {{ include "devicechain.authInternalPort" $root }}
+      targetPort: internal-auth
+    {{- end }}
     {{- range $port := get $areaCfg "extraPorts" | default list }}
     - name: {{ $port.name }}
       protocol: {{ $port.protocol | default "TCP" }}

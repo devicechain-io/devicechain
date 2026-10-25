@@ -111,9 +111,9 @@ func drainable(status string) bool {
 // database against the server's clock; this package no longer sorts, filters or re-clocks
 // anything it gets back.
 //
-// Field names are pinned to command-delivery's schema; the graphql-go fork rejects an unknown
+// Field names are pinned to command-delivery's schema; graphql-go rejects an unknown
 // field sent through a variable, so a typo here fails the call loudly rather than silently
-// returning a half-populated row (CLAUDE.md, the forked-dependency note). Note the bare list:
+// returning a half-populated row (graphql-go v1.10.3 and later). Note the bare list:
 // drainableCommands is not a paged query, so there is no results/pagination envelope.
 const drainQuery = `query($deviceToken: String!, $limit: Int) {
   drainableCommands(deviceToken: $deviceToken, limit: $limit) {

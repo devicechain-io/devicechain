@@ -28,11 +28,10 @@ const (
 	UserinfoPath = "/oauth/userinfo"
 	// OAuthJwksPath is the JWK Set endpoint advertised to *external* OAuth clients
 	// as jwks_uri. It deliberately sits under /oauth/ rather than reusing the
-	// internal /auth/jwks (ADR-008): the cluster ingress 404s all external
-	// /api/<area>/auth/* requests (so the service-token mint is not a public
-	// oracle), which would also blackhole /auth/jwks. Serving an identical key set
-	// here keeps external token validators working without punching a hole in that
-	// edge rule. In-cluster peers keep fetching /auth/jwks directly, unaffected.
+	// internal /auth/jwks (ADR-008): that one is served only on user-management's
+	// internal listener, which no route reaches, so an external validator cannot
+	// use it. This is the PUBLIC copy of the same key set, on the public port.
+	// In-cluster peers keep fetching /auth/jwks from the internal listener.
 	OAuthJwksPath = "/oauth/jwks"
 )
 

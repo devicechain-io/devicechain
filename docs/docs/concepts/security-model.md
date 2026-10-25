@@ -19,6 +19,7 @@ To report a vulnerability, follow the process in the
 | Person or program from the API | A signed token, checked in every service | Token signature, tenant claim and permissions |
 | Secret from reader | Secrets are sealed and never returned | Envelope encryption under the instance root key |
 | Tenant from the network | A tenant-supplied destination cannot reach internal addresses | A check at connection time |
+| Internet from the platform's own endpoints | The service-token mint and the signing-key set are served on a port no route reaches | A separate internal listener, not an ingress rule |
 | Platform services from each other | Separate broker and database logins | **Partly.** See [what is not enforced yet](#accepted-gaps) |
 
 ## Tenants {#tenants}
@@ -52,9 +53,10 @@ See [Multi-Tenancy](./multi-tenancy.md).
   a revocation reaches events already in flight.
 - **Credentials at rest.** The password of an `MQTT_BASIC` credential and the token of an `ACCESS_TOKEN` credential
   are both stored only as keyed one-way digests, under a key derived from the instance root key, which is not kept
-  in the database. Each is shown once, in the response to the call that sets it, and never returned again; a read
+  in the database. The secret of a provisioning profile and the secret of a device claim are stored the same way, each
+  under a key of its own. Each is shown once, in the response to the call that sets it, and never returned again; a read
   of an access-token credential returns a fingerprint that cannot be presented as the token. A leak of the
-  database or of a backup therefore yields no working device password or token.
+  database or of a backup therefore yields no working device password, token, provisioning secret or claim secret.
 - **Credentials in an event body.** On the platform's MQTT broker the connection has already authenticated the
   device, so an event that also carries a credential in its body is refused. A transitional setting,
   `capture.bodyCredential: strip`, accepts such an event with the credential removed so that a fleet keeps
@@ -83,6 +85,35 @@ See [Multi-Tenancy](./multi-tenancy.md).
 - **Abuse limits.** Ingest has a per-tenant rate ceiling, outbound connectors have per-tenant ceilings, the MCP server
   limits each caller, GraphQL requests have bounded execution and body size, and failed sign-in attempts are rate limited.
   There is no per-tenant request-rate limit on the GraphQL API itself.
+
+## Endpoints that never leave the cluster {#internal-endpoints}
+
+Two endpoints exist only for the platform's own services. `/auth/service-token` exchanges the shared service
+secret for a short-lived token, and `/auth/jwks` is the key set every service uses to validate tokens.
+`user-management` serves both on a separate internal port (8082), not on the public one. The chart publishes that
+port on the cluster-internal Service only. No ingress, route or load balancer refers to it.
+
+This means the public port answers 404 for both paths whatever sits in front of it, including no ingress at all.
+Nothing at the edge is a security control:
+
+- **A bring-your-own ingress controller needs no rule for these paths.** Route to the Services the chart
+  creates, as you would anyway, and the mint is not reachable from outside.
+- **The mint is protected by the shared service secret.** The secret is compared in constant time, and an instance
+  with no secret configured refuses to mint. The internal port keeps the endpoint off the public network; the
+  secret is what authenticates a caller that can reach it.
+- **The chart sets no nginx snippet annotation.** A configuration snippet lets whoever can write an Ingress object
+  inject nginx configuration, and nothing here needs one. The ingress controller that `dcctl install` sets up still
+  accepts snippets in this release, because instances not yet upgraded rely on them; a later release turns them off
+  once no instance does.
+- **A network policy narrows the internal port further, but it is defence in depth and it is off by default.** With
+  `networkPolicy.enabled` the chart restricts the port to pods in the instance's own namespace, on a cluster whose
+  network plugin enforces policy. `dcctl` installs run with the policy off.
+- **An external token verifier uses the public key set instead.** The authorization-server metadata
+  (`jwks_uri`) points at `/oauth/jwks`, which serves the same public keys once an issuer URL is configured.
+
+If you run your own policy engine, allow pods in the instance namespace to reach port 8082 on
+`user-management`, and nothing more. Every service dials it to fetch the key set at startup and to mint its
+service token.
 
 ## Secrets {#secrets}
 
@@ -139,20 +170,19 @@ These are known and accepted for the current release. Plan around them.
    database with one login, so a compromised service could read and write another area's tables. Tenant isolation
    in the database rests on the application's tenant scope, not on database permissions. Separate roles per
    service are planned for a 1.0.x release.
-3. **Two other device-side secrets are stored as sent.** A provisioning profile's secret and a device claim's secret
-   are kept in the database as they were set, not as digests like device passwords and access tokens. Neither is
-   ever returned by the API. Treat database access and backups as holding secrets, and if a backup leaks, set a new
-   secret on each provisioning profile and open each unredeemed device claim again with a new secret.
-4. **MQTT acknowledgements across a broker leader change.** By default the broker can acknowledge a QoS 1 message and
-   then lose it while the capture stream changes leader, which a broker restart, an upgrade or the loss of a
-   node causes, at any load. With `infrastructure.nats.mqttFailClosed` on, an acknowledgement means the
-   platform holds the message; in exchange the broker refuses QoS 1 publishes while there is no leader, and
+3. **MQTT acknowledgements the broker can lose.** By default the broker can acknowledge a QoS 1 message and
+   then lose it in two ways. One is while the capture stream changes leader, which a broker restart, an upgrade or the loss of a
+   node causes, at any load. The other needs no restart: under sustained load, if `event-sources` falls behind and the
+   capture stream's backlog reaches its bound, the stream discards its oldest unread messages. `devicechain_<area>_jetstream_consumer_unread_skipped_total` counts those, and the
+   `JetStreamDurableLostUnread` alert fires. With `infrastructure.nats.mqttFailClosed` on, an acknowledgement means the
+   platform holds the message; in exchange the broker refuses QoS 1 publishes while there is no leader or its message store is full, and
    the instance keeps up with less traffic, so it is for installations sized to stay below that ceiling.
-   The setting is off by default, and [Observability](../deployment/observability.md#mqtt-fail-closed)
+   The setting is off by default; `--mqtt-fail-closed` on `dcctl bootstrap` or `dcctl upgrade` turns it on, and
+   [Observability](../deployment/observability.md#mqtt-fail-closed)
    describes the trade-off.
-5. **The root key is readable by anyone who can read the instance's Kubernetes Secret.** Restrict access to that
+4. **The root key is readable by anyone who can read the instance's Kubernetes Secret.** Restrict access to that
    Secret and to the cluster's etcd accordingly.
-6. **No external penetration test has been published.**
+5. **No external penetration test has been published.**
 
 Nothing on this page replaces your own review. If an entry here is a problem for your deployment, the matching
 section above says where the control sits.

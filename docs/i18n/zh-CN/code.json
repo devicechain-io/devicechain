@@ -26,5 +26,17 @@
   "theme.SearchPage.noResultsText": {
     "message": "没有找到任何文档",
     "description": "The paragraph for empty search result"
+  },
+  "guideShot.enlarge": {
+    "message": "放大图片",
+    "description": "Prefix of the accessible name of a guide screenshot button; the image description follows"
+  },
+  "guideShot.close": {
+    "message": "关闭",
+    "description": "Button that closes the enlarged guide screenshot"
+  },
+  "guideShot.toggleSize": {
+    "message": "在适应窗口与完整尺寸之间切换",
+    "description": "Accessible hint on the enlarged guide screenshot"
   }
 }

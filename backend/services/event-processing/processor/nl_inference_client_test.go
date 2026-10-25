@@ -42,7 +42,7 @@ func fakePeers(t *testing.T, mint, answer http.HandlerFunc) (config.UserManageme
 	t.Cleanup(srv.Close)
 	host, portStr, _ := net.SplitHostPort(srv.Listener.Addr().String())
 	port, _ := strconv.Atoi(portStr)
-	return config.UserManagementConfiguration{Hostname: host, Port: uint32(port)}, srv.URL + "/graphql"
+	return config.UserManagementConfiguration{Hostname: host, Port: uint32(port), InternalPort: uint32(port)}, srv.URL + "/graphql"
 }
 
 func fakeAiInference(t *testing.T, answer http.HandlerFunc) (config.UserManagementConfiguration, string) {

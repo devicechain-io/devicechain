@@ -39,15 +39,15 @@ import (
 // input object is the deserialized map — so the struct packer that would ordinarily
 // build a *LocationDeclaration never runs. The schema still validates the object's
 // entries before execution (an entry the type does not declare is a request error, on
-// the literal path and, since the fork, on the variable path too), so what is decoded
+// the literal path and, since graphql-go v1.10.3, on the variable path too), so what is decoded
 // here has already been checked; the default branch below is the fail-closed backstop
 // for the day that stops being true, never the primary guard.
 //
 // The scalar coercion is delegated to core's own Optional* unmarshalers rather than
 // re-typed here. A query LITERAL and a VARIABLE arrive as different Go types for the
 // same GraphQL Int (the parser's int32 versus encoding/json's float64 or
-// json.Number), and that divergence is precisely the class the graphql-go fork exists
-// to close — so the coercion has one implementation, not two.
+// json.Number), and that divergence is precisely the class of divergence the
+// graphql-go v1.10.3 fix closed — so the coercion has one implementation, not two.
 type OptionalLocationDeclaration struct {
 	// Set is true only when the field was PRESENT in the request, whether its value
 	// was null or an object.

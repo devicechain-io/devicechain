@@ -494,6 +494,16 @@ type Tenant struct {
 	AiInferenceRequestsPerMinute *float64
 	AiInferenceBurst             *int
 
+	// Per-tenant SELF-REGISTRATION (provisioning) governance overrides: how fast THIS
+	// tenant's devices may register themselves through device-management's HTTPS
+	// provisioning endpoint, charged once a request has authenticated. A distinct
+	// dimension from ingest — a fleet may stream heavily yet register rarely, or a
+	// factory may register a whole batch at once — with the same fail-safe semantics as
+	// every other knob: nil means "inherit" (the tier, then the platform default), never
+	// unlimited, and a set value must be positive. Declared per second.
+	ProvisioningRegistrationsPerSecond *float64
+	ProvisioningBurst                  *int
+
 	// Per-tenant ADR-063 shed-priority override — the stored int 1–100 that decision 1
 	// preserves as "this ADR's own operational override" over the tier-derived
 	// shed-priority default. A SCALAR, deliberately NOT a rate+burst governance

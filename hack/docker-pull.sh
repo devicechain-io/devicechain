@@ -95,9 +95,9 @@ STUB
   [ "$(grep -c 'pull --quiet timescale/timescaledb' "$STUB_LOG")" = 3 ] ||
     { echo "self-test FAIL: Docker Hub was not retried 3 times" >&2; exit 1; }
   want untagged-ref-gets-a-tag 0 "prom/prometheus:dc-mirror-abababababab" HUB_FAIL=1 -- "prom/prometheus@$d"
-  want official-image 0 "registry:2.8.3" HUB_FAIL=1 -- "registry:2.8.3@$d"
+  want official-image 0 "registry:3.1.2" HUB_FAIL=1 -- "registry:3.1.2@$d"
   logged "pull --quiet mirror.gcr.io/library/registry@$d"
-  want official-image-second-mirror 0 "registry:2.8.3" HUB_FAIL=1 MIRROR_FAIL=gcr -- "registry:2.8.3@$d"
+  want official-image-second-mirror 0 "registry:3.1.2" HUB_FAIL=1 MIRROR_FAIL=gcr -- "registry:3.1.2@$d"
   logged "pull --quiet public.ecr.aws/docker/library/registry@$d"
   want non-official-has-no-ecr 1 "" HUB_FAIL=1 MIRROR_FAIL=gcr -- "x/y:1@$d"
   unlogged public.ecr.aws

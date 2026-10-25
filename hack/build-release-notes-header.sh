@@ -63,13 +63,16 @@ emit() { # <tag> <highlights.json> <docs-file-or-empty>
     fi
   fi
 
+  # The heading comes FIRST. A link to a release page unfurls (on X, Slack, ...) into
+  # GitHub's preview card, which quotes the opening text of this body: with the warning
+  # first, every shared release read "Warning / Pre-1.0 release" instead of what it ships.
   cat <<EOF
+## What's in ${base} — ${theme}
+
 > [!WARNING]
 > **Pre-1.0 release.** Until v1.0.0, any release — including a patch — may change
 > APIs, schemas, or behavior without a compatibility shim.
 > See [Pre-1.0 stability](https://docs.devicechain.io/deployment/releases-and-upgrades#pre-10-stability).
-
-## What's in ${base} — ${theme}
 
 EOF
 
@@ -110,6 +113,9 @@ if [ "${1:-}" = "--self-test" ]; then
   # after the dash is what an unchecked empty theme looks like, so assert the whole line.
   grep -q "^## What's in v0.9.0 — a named release$" <<<"$out" \
     || { echo "  FAIL: the heading does not lead with the theme" >&2; exit 1; }
+  # The heading is the body's FIRST line: link previews quote the opening text.
+  [ "$(sed -n '1p' <<<"$out")" = "## What's in v0.9.0 — a named release" ] \
+    || { echo "  FAIL: the body does not open with the heading (a link preview would quote whatever does)" >&2; exit 1; }
   # THE COUNTERWEIGHT: a non-breaking release must NOT get the callout, or the
   # callout means nothing on the release that has one.
   grep -q 'IMPORTANT' <<<"$out" && { echo "  FAIL: breaking callout on a non-breaking release" >&2; exit 1; }

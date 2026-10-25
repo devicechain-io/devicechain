@@ -69,9 +69,9 @@ func servedSchema(t *testing.T, area string) *graphql.Schema {
 // The three authoring updates, validated with the variables ensure* really sends.
 //
 // The variables are not decoration. They pin the KEY SET, which is the one thing the
-// validator genuinely reads about them — this repo runs a patched graphql-go
-// precisely because upstream DISCARDS an input-object entry the schema does not
-// define when it arrives through a variable. Each request goes through
+// validator genuinely reads about them — graphql-go (v1.10.3 and later)
+// rejects an input-object entry the schema does not define when it arrives through
+// a variable; before that it DISCARDED it. Each request goes through
 // asUpdateRequest for the same reason the real call site does, so what is validated
 // is the map the server would receive rather than a hand-written approximation of it.
 func TestTheAuthoringUpdateDocumentsValidateAgainstTheServedSchema(t *testing.T) {
