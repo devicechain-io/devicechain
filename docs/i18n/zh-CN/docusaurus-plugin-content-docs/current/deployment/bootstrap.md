@@ -415,6 +415,21 @@ chart 会给对象存储的卷加上 `helm.sh/resource-policy: keep`，因此之
 `dcctl destroy` 会删除实例的命名空间，卷也随之删除。若要在保留实例的同时有意删除卷，请运行
 `kubectl -n dci-<instance> delete pvc dci-<instance>-blob`。
 
+### 客户端地址与受信任代理 {#trusted-proxies}
+
+有些端点按客户端地址限制请求速率，设备自注册就是第一个。位于 ingress 控制器之后时，服务在连接上看到的地址是控制器的 Pod，因此除非告知服务信任控制器写入的 `X-Forwarded-For` 头，否则其后的所有设备会按每个控制器 Pod 共用同一份配额，陌生人耗尽该配额会让所有设备一起收到 `429`。
+
+因此 `dcctl bootstrap` 和 `dcctl upgrade` 会为实例生成 `infrastructure.http.trustedProxies`：即集群的 Pod 地址范围，取自各节点的 Pod CIDR 并合并为尽可能少的前缀。无论 ingress 控制器被调度到哪里，它都运行在该范围内。该列表会记录在实例上，因此无法读取节点的升级会保留它，能够读取节点的升级则会跟随集群的扩容。若集群的节点不暴露 Pod 地址范围（某些 CNI 自行分配 Pod 地址），则不会生成列表，并且每次运行都会给出警告，请自行指定该范围。
+
+要自行设置，请在 `bootstrap` 或 `upgrade` 上传入 `--trusted-proxies`（CIDR，可重复或以逗号分隔）。显式列表会被之后的每次升级原样保留；`--trusted-proxies=auto` 让实例恢复为自动推导。
+
+边缘还必须满足两点，否则服务所信任的头并不是客户端的地址：
+
+- 使用 `ingress-nginx` 时，保持 `use-forwarded-headers` 关闭（dcctl 的 install 就是如此）。这样控制器会把真实的 TCP 对端写入 `X-Forwarded-For`。它的 Service 必须保留客户端地址：`externalTrafficPolicy: Local`，或由负载均衡器提供 PROXY 协议。
+- 位于自行追加该头的七层负载均衡器之后时，除 Pod 地址范围外，还要把负载均衡器的地址范围加入 `--trusted-proxies`，并开启 `use-forwarded-headers`，同时把 `proxy-real-ip-cidr` 设为这些范围。
+
+同一运营商地址之后的大量用户（运营商级 NAT）仍共用一份配额。这是以源地址为键的固有限制，这些设置无法解决。
+
 ## 安装标志 {#install-flags}
 
 以下属于 [`dcctl install`](#install)，描述集群设置，所有初始化实例均遵循。它们不是 `dcctl bootstrap` 标志。

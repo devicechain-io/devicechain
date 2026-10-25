@@ -83,6 +83,7 @@ func InstanceSpecFrom(st *State, binding ClusterBinding, provider string) dcv1be
 	spec.ObjectStore = st.ObjectStore.DeepCopy()
 	// The fail-closed choice as made: nil is "never chose" and is recorded as that.
 	spec.MQTTFailClosed = copyBoolPtr(st.MqttFailClosed)
+	recordTrustedProxies(&spec, st)
 	if spec.Restored {
 		now := metav1.NewTime(time.Now().UTC())
 		spec.RestoredAt = &now
@@ -97,6 +98,9 @@ func InstanceSpecFrom(st *State, binding ClusterBinding, provider string) dcv1be
 // This is the check that runs on the SUPPORTED path, where dcctl is the only
 // writer — so it is the one that has to be right, and the one worth testing.
 func ValidateInstanceSpec(spec dcv1beta1.InstanceSpec) error {
+	if _, err := CanonicalTrustedProxies(spec.TrustedProxies); len(spec.TrustedProxies) > 0 && err != nil {
+		return fmt.Errorf("trustedProxies: %w", err)
+	}
 	if spec.Provider == "" {
 		return fmt.Errorf("the instance declaration names no provider, so nothing could later " +
 			"tell which kind of cluster this instance lives in")

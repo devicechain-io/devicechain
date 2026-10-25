@@ -25,6 +25,9 @@ var bootstrapMqttBodyCredential string
 // (Changed), because "not given" and "given false" are different things to record.
 var bootstrapMqttFailClosed bool
 
+// bootstrapTrustedProxies is --trusted-proxies. See trustedProxiesUsage.
+var bootstrapTrustedProxies []string
+
 // bootstrapValues is --values: operator tuning overlay files, merged in order.
 var bootstrapValues []string
 
@@ -163,6 +166,7 @@ func bootstrapOptions(instance string, enableAreas []string, mqttFailClosed *boo
 		AllowLegacyDbRemoval: bootstrapAllowLegacyDb,
 		EnableAreas:          enableAreas,
 		MqttFailClosed:       mqttFailClosed,
+		TrustedProxies:       bootstrapTrustedProxies,
 	}
 }
 
@@ -173,31 +177,32 @@ func bootstrapStateFor(opts bootstrap.Options, binding bootstrap.ClusterBinding,
 	valuesOverlay map[string]interface{}, objectStore *dcv1beta1.ObjectStoreSpec, objectStoreExplicit bool,
 	escrowPlan bootstrap.EscrowPlan) *bootstrap.State {
 	return &bootstrap.State{
-		Instance:             opts.Instance,
-		KubeContext:          binding.KubeContext,
-		ClusterUID:           clusterUID,
-		Binding:              binding,
-		Provider:             provider,
-		DcctlVersion:         Version,
-		Profile:              opts.Profile,
-		DryRun:               opts.DryRun,
-		AssumeYes:            opts.AssumeYes,
-		ImageRegistry:        opts.ImageRegistry,
-		ImageVersion:         opts.ImageVersion,
-		BuildImages:          opts.BuildImages,
-		IngressHost:          opts.IngressHost,
-		NoTLS:                opts.NoTLS,
-		AllowLegacyDbRemoval: opts.AllowLegacyDbRemoval,
-		EnableAreas:          opts.EnableAreas,
-		EnabledAreas:         enabledAreas,
-		Lwm2mIdentities:      lwm2mIdentities,
-		MqttBodyCredential:   mqttBodyCredential,
-		MqttFailClosed:       opts.MqttFailClosed,
-		ValuesOverlay:        valuesOverlay,
-		ObjectStore:          objectStore,
-		ObjectStoreExplicit:  objectStoreExplicit,
-		Escrow:               escrowPlan,
-		Values:               map[string]string{},
+		Instance:               opts.Instance,
+		KubeContext:            binding.KubeContext,
+		ClusterUID:             clusterUID,
+		Binding:                binding,
+		Provider:               provider,
+		DcctlVersion:           Version,
+		Profile:                opts.Profile,
+		DryRun:                 opts.DryRun,
+		AssumeYes:              opts.AssumeYes,
+		ImageRegistry:          opts.ImageRegistry,
+		ImageVersion:           opts.ImageVersion,
+		BuildImages:            opts.BuildImages,
+		IngressHost:            opts.IngressHost,
+		NoTLS:                  opts.NoTLS,
+		AllowLegacyDbRemoval:   opts.AllowLegacyDbRemoval,
+		EnableAreas:            opts.EnableAreas,
+		EnabledAreas:           enabledAreas,
+		Lwm2mIdentities:        lwm2mIdentities,
+		MqttBodyCredential:     mqttBodyCredential,
+		MqttFailClosed:         opts.MqttFailClosed,
+		TrustedProxiesOverride: opts.TrustedProxies,
+		ValuesOverlay:          valuesOverlay,
+		ObjectStore:            objectStore,
+		ObjectStoreExplicit:    objectStoreExplicit,
+		Escrow:                 escrowPlan,
+		Values:                 map[string]string{},
 	}
 }
 
@@ -206,6 +211,12 @@ func bootstrapStateFor(opts bootstrap.Options, binding bootstrap.ClusterBinding,
 func mqttFailClosedFlag(changed func(string) bool, value bool) *bool {
 	return bootstrap.MqttFailClosedFromFlag(changed("mqtt-fail-closed"), value)
 }
+
+// trustedProxiesUsage is the help text of --trusted-proxies on both verbs.
+const trustedProxiesUsage = "CIDR ranges of the proxies whose X-Forwarded-For the services believe " +
+	"(infrastructure.http.trustedProxies); repeat or comma-separate. Default: the cluster's pod range, read from its nodes, " +
+	"which is where the ingress controller runs; add a fronting load balancer's ranges when there is one. " +
+	"It is recorded on the instance and kept by every upgrade; \"auto\" returns to deriving it from the cluster"
 
 // bootstrapCmd provisions a usable DeviceChain instance on a target provider.
 // It is a thin wrapper over the bootstrap engine package (ADR-032).
@@ -651,6 +662,7 @@ func init() {
 	bootstrapCmd.Flags().StringVar(&bootstrapMqttBodyCredential, "mqtt-body-credential", "", mqttBodyCredentialUsage)
 	bootstrapCmd.Flags().StringArrayVar(&bootstrapValues, "values", nil, valuesUsage)
 	bootstrapCmd.Flags().BoolVar(&bootstrapMqttFailClosed, "mqtt-fail-closed", false, mqttFailClosedUsage)
+	bootstrapCmd.Flags().StringSliceVar(&bootstrapTrustedProxies, "trusted-proxies", nil, trustedProxiesUsage)
 	bootstrapCmd.Flags().StringVar(&bootstrapLwm2mIdentities, "lwm2m-identities", "", "path to a JSON file of LwM2M DTLS-PSK credentials to provision: [{identity, psk(base64), tenant, externalId, deviceTypeToken, autoRegister}]. Renders the PSKs into a chart-owned Secret and binds each to lwm2m-ingest; implies --enable-area lwm2m-ingest. Validated up front (short PSK / missing tenancy fails before any cluster). Re-running bootstrap WITHOUT this flag removes the provisioned credentials")
 
 	bootstrapCmd.Flags().StringVar(&bootstrapObjectStore.Mode, "object-store", "", "where the instance keeps tenant logos and update artifacts: none, filesystem (a volume the chart creates) or s3. Default: a small filesystem store on a cluster dcctl created, none on one it was pointed at with --kube-context. Fixed configuration, recorded on the instance and kept by 'dcctl upgrade'")

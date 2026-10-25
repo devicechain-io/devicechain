@@ -832,6 +832,21 @@ cannot make Helm delete the stored logos and artifacts. `dcctl destroy` removes 
 namespace and with it the volume. To delete a volume deliberately while keeping the instance, run
 `kubectl -n dci-<instance> delete pvc dci-<instance>-blob`.
 
+### Client addresses and trusted proxies {#trusted-proxies}
+
+Some endpoints ration requests per client address, and device self-registration is the first. Behind the ingress controller the address a service sees on the connection is the controller's pod, so unless the services are told to believe the controller's `X-Forwarded-For` header, every device behind it shares one allowance per controller pod, and a stranger who exhausts it is refused with `429` on behalf of all of them.
+
+`dcctl bootstrap` and `dcctl upgrade` therefore render `infrastructure.http.trustedProxies` for the instance: the cluster's pod range, read from the nodes' pod CIDRs and merged into the fewest prefixes. The ingress controller runs in that range wherever it is scheduled. The list is recorded on the instance, so an upgrade that cannot read the nodes keeps it, and an upgrade that can read them follows a cluster that grew. A cluster whose nodes expose no pod range (some CNIs allocate pod addresses themselves) gets no list and a warning at every run; name the range yourself.
+
+To set it yourself, pass `--trusted-proxies` to `bootstrap` or `upgrade` (CIDRs, repeated or comma-separated). An explicit list is kept as written by every later upgrade; `--trusted-proxies=auto` returns the instance to deriving it.
+
+Two things must also hold at the edge, or the header the services believe is not the client's:
+
+- With `ingress-nginx`, leave `use-forwarded-headers` off (dcctl's install does). The controller then writes the real TCP peer into `X-Forwarded-For`. Its Service must preserve the client address: `externalTrafficPolicy: Local`, or PROXY protocol from the load balancer.
+- Behind a layer-7 load balancer that appends the header itself, add the load balancer's address ranges to `--trusted-proxies` as well as the pod range, and turn `use-forwarded-headers` on with `proxy-real-ip-cidr` set to those ranges.
+
+Many subscribers behind one carrier address (carrier-grade NAT) still share one allowance. That is a limit of keying on the source address, not something these settings can fix.
+
 ## Install flags {#install-flags}
 
 These are flags of [`dcctl install`](#install). They describe the cluster, and every instance

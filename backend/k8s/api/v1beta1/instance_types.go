@@ -289,6 +289,23 @@ type InstanceSpec struct {
 	// +optional
 	MQTTFailClosed *bool `json:"mqttFailClosed,omitempty"`
 
+	// TrustedProxies are the CIDR prefixes written to the instance configuration's
+	// infrastructure.http.trustedProxies: the proxies whose X-Forwarded-For header the
+	// services may believe, which for the self-registration endpoint is what makes a
+	// per-source rate limit a limit on a DEVICE and not on the ingress controller. dcctl
+	// derives them from the cluster's node pod ranges unless the operator named some; this
+	// records what was rendered, so an upgrade that cannot read the nodes keeps it.
+	//
+	// +optional
+	TrustedProxies []string `json:"trustedProxies,omitempty"`
+
+	// TrustedProxiesExplicit says TrustedProxies is the operator's own list (dcctl's
+	// --trusted-proxies), which an upgrade keeps as written, rather than a derivation it
+	// refreshes from the cluster.
+	//
+	// +optional
+	TrustedProxiesExplicit bool `json:"trustedProxiesExplicit,omitempty"`
+
 	// ObjectStore is where the instance keeps opaque binaries that do not belong in
 	// the database: tenant branding logos and update artifacts. Absent means the
 	// instance has no object store, and the operations that need one are refused

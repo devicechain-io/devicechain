@@ -107,6 +107,13 @@ locals {
     allowSnippetAnnotations = true
     config = {
       "annotations-risk-level" = "Critical"
+      # Stated although it is the controller's default. The services key per-source limits on
+      # the X-Forwarded-For this controller writes, and they believe it only from the
+      # controller's own pods (infrastructure.http.trustedProxies): with this OFF the controller
+      # writes the real TCP peer, and with it ON a caller's own header would win. A load balancer
+      # in front that appends the header is the one reason to turn it on, together with
+      # proxy-real-ip-cidr set to that balancer's ranges.
+      "use-forwarded-headers" = "false"
     }
   }
   # kind recipe: bind node 80/443 directly, no LoadBalancer to wait on.

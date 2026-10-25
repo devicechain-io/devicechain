@@ -135,6 +135,12 @@ func hydrateUpgradeState(
 	if err := applyUpgradeDeclaration(st, inst, opts); err != nil {
 		return nil, err
 	}
+	// The trusted proxies: this run's flag, else the declaration's explicit list, else the
+	// cluster's pod range as the nodes report it now. Settled while nothing has been written.
+	if err := applyTrustedProxies(ctx, st, typed, inst.Spec.TrustedProxies, inst.Spec.TrustedProxiesExplicit,
+		opts.TrustedProxies); err != nil {
+		return nil, err
+	}
 	// The operator's tuning overlay: the one this run was given, or else the one the
 	// declaration records. Settled here, before anything is written, so a recorded overlay
 	// this release no longer accepts stops the run while nothing has moved.
