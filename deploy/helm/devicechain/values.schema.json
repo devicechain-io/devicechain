@@ -120,9 +120,11 @@
           "properties": {
             "infrastructure": {
               "type": "object",
+              "description": "Settings shared by every service in the instance: messaging, secrets and the HTTP edge. The chart validates only the keys named below; each service validates the rest at startup.",
               "properties": {
                 "http": {
                   "type": "object",
+                  "description": "How the services' HTTP endpoints read the caller's address.",
                   "additionalProperties": false,
                   "properties": {
                     "trustedProxies": {
