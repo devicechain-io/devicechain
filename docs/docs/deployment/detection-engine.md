@@ -491,8 +491,9 @@ far a timestamp may run *ahead*, lateness bounds how long the engine waits for o
 | `ruleHealth.writeTimeoutMillis` | 2000 | How long one tenant's write may take, from 100 to 60000. A write that fails or times out is dropped, not retried. |
 | `derivedPublishing.maxInFlight` | 32 | How many detections a checkpoint may have waiting for the message bus to acknowledge them at once, from 1 to 1024. Detections of different devices are published side by side, never more than one per device at a time. At 1, each is acknowledged before the next is sent. See below. |
 | `derivedPublishing.maxBufferedBytes` | 4194304 | Bytes those detections may hold together while they wait to be published, counting ones kept for a retry after a failed attempt, from 65536 to 268435456 (256 MiB). A single detection larger than this is published on its own. |
+| `react.workers` | 8 | How many derived events REACT dispatches at once, from 1 to 64. Events of one device are always dispatched one after another, in the order they were detected; only different devices overlap. When absent beside a connection pool smaller than 16 it is half the pool. A value above 1 must be below the pool size (`rdbConfiguration.maxOpenConnections`, default 20), because each worker may hold one connection while it reads the rule. At 1, events are dispatched one at a time, which caps REACT at one event per round trip to the database and the message bus. |
 
-Each `ruleHealth` and `derivedPublishing` setting is optional; one that is given must be inside its
+Each `ruleHealth`, `derivedPublishing` and `react` setting is optional; one that is given must be inside its
 range (zero included) or the service refuses to start.
 
 ### Rule-health counts are approximate

@@ -6,6 +6,7 @@ package processor
 import (
 	"context"
 	"encoding/json"
+	"hash/fnv"
 	"strings"
 	"sync"
 	"time"
@@ -43,13 +44,36 @@ import (
 //
 // That window is sized on the premise that each delivery is handled within its own AckWait
 // (streams.RedeliveryDuplicateWindowSeconds), and this consumer is what makes the premise true:
-// it reads through a one-slot capacity reader (ReactReaderOptions), so no delivery waits in a
-// buffer behind another while its clock runs, and it bounds every sink call by the delivery's ack
-// deadline (handle).
+// it reads through a capacity reader with one slot per worker (ReactReaderOptions), so it never
+// holds more deliveries than it has workers to start; it bounds every sink call by the delivery's
+// ack deadline (handle); and a worker never starts a delivery whose deadline has already passed
+// (runQueued).
+//
+// CONCURRENCY IS ACROSS DEVICES, NEVER WITHIN ONE. With workers above 1 the deliveries fan out to
+// that many lanes, chosen by hashing the tenant's subject and the event's series (laneFor), and a
+// lane handles its deliveries one after another in the order they were read. Every derived event
+// of one device therefore dispatches in stream order, as it did on the one serial worker (a raise
+// before the clear that follows it, a webhook's raised before its resolved) and only events of
+// different devices overlap. The order matters less for alarms than it looks, because
+// device-management's contributor fold is order-independent by construction, but it matters for
+// connector actions and commands, whose receivers see each dispatch as it is sent. A delivery left
+// for redelivery (Retry) does not hold its lane: the lane moves on, and the redelivered copy
+// arrives behind what was read since, exactly as it did on the serial worker. That at-least-once
+// reordering is what every receiver of a REACT action already absorbs (the decision time on an
+// alarm edge, the token on a command).
+//
+// Why it is not serial: one derived event is a fetch, a rule read from the database and one publish
+// per action, each waiting on a network round trip, so one worker is a latency-bound ceiling. GKE
+// round 19 measured it at ~151 events a second, ack-pending 1, against 194 offered. Lanes overlap
+// those waits; they add no work per event.
 type ReactDispatcher struct {
 	reader     messaging.MessageReader
 	dispatcher *react.Dispatcher
 	metrics    *ReactMetrics
+	// workers is how many derived events are dispatched at once (config react.workers). Below 2
+	// the read loop dispatches inline, one at a time. The capacity reader must have the same
+	// number of slots (ReactReaderOptions); main passes both the one configured value.
+	workers int
 	// dead records an event whose actions could not be dispatched (ADR-024). Nil when no
 	// dead-letter sink is configured, in which case the event is dropped as before. The sink
 	// stamps this service as the letter's source and counts a lost letter on the process's
@@ -91,11 +115,16 @@ type ReactDispatcher struct {
 // the counters are not.
 //
 // sheds is the dead-letter budget for connector actions the source gate shed (see shedLetterer).
-func NewReactDispatcher(ms *core.Microservice, reader messaging.MessageReader,
+//
+// workers is how many derived events are dispatched at once; the reader must be a capacity
+// reader with the same number of slots (ReactReaderOptions). Below 2 they are dispatched one at
+// a time.
+func NewReactDispatcher(ms *core.Microservice, reader messaging.MessageReader, workers int,
 	resolver react.RuleResolver, commands react.CommandSink, alarms react.AlarmSink, connectors react.ConnectorSink,
 	connectorRate react.ConnectorRateGate, dead *deadletter.Sink, sheds ShedLetterBudget, m *ReactMetrics) *ReactDispatcher {
 	rd := &ReactDispatcher{
 		reader:     reader,
+		workers:    workers,
 		dispatcher: react.NewDispatcher(resolver, commands, alarms, connectors, connectorRate, m),
 		metrics:    m,
 		dead:       dead,
@@ -104,6 +133,9 @@ func NewReactDispatcher(ms *core.Microservice, reader messaging.MessageReader,
 	rd.newPacer = func() *core.ReadPacer { return core.NewReadPacer(ms, "react dispatch") }
 	return rd
 }
+
+// Workers is how many derived events this dispatcher dispatches at once.
+func (rd *ReactDispatcher) Workers() int { return max(1, rd.workers) }
 
 // Start launches the consumer goroutine and the shed-letter summariser. It is called after the NATS
 // manager is started (the reader is live) from main's afterMicroserviceStarted.
@@ -142,40 +174,127 @@ func (rd *ReactDispatcher) Stop(ctx context.Context) error {
 // the context BEFORE each read, which is the same stop one iteration earlier.
 func (rd *ReactDispatcher) run() {
 	defer rd.wg.Done()
+	rd.metrics.setWorkers(max(1, rd.workers))
+	if rd.workers < 2 {
+		messaging.RunConsumer(rd.procCtx, rd.reader, rd.pacer(), func(msg messaging.Message) bool {
+			// Process returns the message's capacity slot however handle leaves, so the reader
+			// fetches the next delivery only once this one is finished with.
+			rd.metrics.enterInFlight()
+			defer rd.metrics.leaveInFlight()
+			messaging.Process(msg, rd.handle)
+			return true
+		})
+		return
+	}
+	rd.runLanes()
+}
+
+// runLanes is the read loop with workers above 1: it hands each delivery to the lane its device
+// hashes to (laneFor), and one goroutine per lane dispatches that lane's deliveries in order.
+//
+// A lane's queue holds as many deliveries as there are slots, so the read loop never blocks on a
+// send: the capacity reader holds at most that many between fetch and disposition, so no lane can
+// be handed more.
+func (rd *ReactDispatcher) runLanes() {
+	lanes := make([]chan messaging.Message, rd.workers)
+	var laneWG sync.WaitGroup
+	for i := range lanes {
+		lanes[i] = make(chan messaging.Message, rd.workers)
+		laneWG.Add(1)
+		go func(lane <-chan messaging.Message) {
+			defer laneWG.Done()
+			for msg := range lane {
+				rd.runQueued(msg)
+			}
+		}(lanes[i])
+	}
 	messaging.RunConsumer(rd.procCtx, rd.reader, rd.pacer(), func(msg messaging.Message) bool {
-		// Process returns the message's capacity slot however handle leaves, so the reader
-		// fetches the next delivery only once this one is finished with.
-		messaging.Process(msg, rd.handle)
-		return true
+		rd.metrics.enterInFlight()
+		select {
+		case lanes[laneFor(msg, len(lanes))] <- msg:
+			return true
+		case <-rd.procCtx.Done():
+			rd.metrics.leaveInFlight()
+			msg.Release()
+			return false
+		}
 	})
+	// The read loop is the lanes' only sender, so closing here cannot race a send. Waiting keeps
+	// Stop's promise: nothing is being dispatched once it returns.
+	for _, lane := range lanes {
+		close(lane)
+	}
+	laneWG.Wait()
+}
+
+// runQueued dispatches one delivery a lane has dequeued, and returns its slot either way.
+//
+// It does not start a delivery whose ack deadline passed while it waited in the lane: the broker is
+// already redelivering it, and starting this copy is the duplicate the capacity reader exists to
+// prevent (the reader counts the slot on reader_held_past_ack_wait_total, stage worker). Once
+// shutdown has begun a queued delivery is likewise left unacked, which is what a transient failure
+// does anyway: the broker redelivers it to the next holder of the durable.
+func (rd *ReactDispatcher) runQueued(msg messaging.Message) {
+	defer rd.metrics.leaveInFlight()
+	if rd.procCtx.Err() != nil || expired(msg, time.Now()) {
+		msg.Release()
+		return
+	}
+	messaging.Process(msg, rd.handle)
+}
+
+// expired reports whether msg's ack deadline has passed at now. A message with no deadline (one
+// not read by a capacity reader) never expires.
+func expired(msg messaging.Message, now time.Time) bool {
+	d := msg.AckDeadline()
+	return !d.IsZero() && !now.Before(d)
+}
+
+// laneFor picks the lane for a delivery: a stable hash of its subject (which carries the tenant)
+// and the derived event's series (the device, or the correlation anchor), so every derived event
+// of one device of one tenant shares a lane and dispatches in the order it was read. A payload
+// that does not decode lands on lane 0, where handle drops it as the poison it is.
+//
+// It decodes only the series. The full decode, and every check on it, stays in handle.
+func laneFor(msg messaging.Message, lanes int) int {
+	var key struct {
+		Series string `json:"series"`
+	}
+	if err := json.Unmarshal(msg.Value, &key); err != nil {
+		return 0
+	}
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(msg.Subject))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(key.Series))
+	return int(h.Sum32() % uint32(lanes))
 }
 
 // ReactReaderOptions are the options REACT's derived-events reader is built with. held is the
 // DETECT term gate (main.go, newReactReader): REACT consumes only on the replica that detects.
+// workers is the dispatcher's worker count (NewReactDispatcher), floored at 1.
 //
-// ReaderWithCapacity(1) is load-bearing for deduplication, not for throughput. REACT re-publishes
-// every alarm and connector action on each delivery, and the streams collapse those re-publishes
-// only within a window sized on the premise that each delivery is handled within its AckWait. A
-// plain reader fetches a batch of 64 whose clocks all start at the fetch; behind a slow sink (a hung
-// command-delivery costs a timeout per sendCommand) the tail of that batch would be redelivered
-// while its first copy was still queued, both copies would be handled, many minutes apart, and the
-// second re-publish could land past the window. One slot matches the one serial worker: a delivery
-// is fetched only when the previous one is finished, and a copy whose clock ran out in the buffer
-// is never handed out. The cost is one fetch round trip per derived event on the one serial worker,
-// which caps REACT's drain rate at one event per round trip plus its dispatch. That ceiling has not
-// been measured against real sinks; measure it before relying on REACT to drain a large backlog.
+// ReaderWithCapacity(workers) is load-bearing for deduplication, not only for throughput. REACT
+// re-publishes every alarm and connector action on each delivery, and the streams collapse those
+// re-publishes only within a window sized on the premise that each delivery is handled within its
+// AckWait. A plain reader fetches a batch of 64 whose clocks all start at the fetch; behind a slow
+// sink (a hung command-delivery costs a timeout per sendCommand) the tail of that batch would be
+// redelivered while its first copy was still queued, both copies would be handled, many minutes
+// apart, and the second re-publish could land past the window. One slot per worker means a delivery
+// is fetched only when a worker is free to start it, and a copy whose clock ran out before a worker
+// reached it is never started (the reader's own buffer, and runQueued for a lane's queue).
 //
-// ReaderWithReleaseOnPark is not pinned by a test here. With one slot the reader holds at most one
-// fetched message, and the release path runs only when the term gate closes during a fetch, which
-// no test times. Removing it would leave a message fetched in that instant unacked until its
-// AckWait, not lost: the other replica cannot be handed it before then either, and the re-publishes
-// of a later delivery collapse on their tokens.
-func ReactReaderOptions(held func() bool) []messaging.ReaderOption {
+// ReaderWithReleaseOnPark is not pinned by a test here. The reader holds at most one fetched
+// message per slot, and the release path runs only when the term gate closes during a fetch, which
+// no test times. Removing it would leave the messages fetched in that instant unacked until their
+// AckWait, not lost: the other replica cannot be handed them before then either, and the
+// re-publishes of a later delivery collapse on their tokens.
+func ReactReaderOptions(held func() bool, workers int) []messaging.ReaderOption {
 	return []messaging.ReaderOption{
 		messaging.ReaderWithDeliverNew(),
 		messaging.ReaderWithTermGate(held),
 		messaging.ReaderWithReleaseOnPark(),
-		messaging.ReaderWithCapacity(1),
+		messaging.ReaderWithCapacity(max(1, workers)),
 	}
 }
 
@@ -242,6 +361,10 @@ func (rd *ReactDispatcher) handle(msg messaging.Message) {
 	// time when there is no stamp (an event published before the stamp existed), or now. The
 	// normalized value is written back onto the event, so what the gate charges and what rides the
 	// wire to the outbound-connectors service are the same time.
+	// How far behind the stream this dispatch runs: the derived event's broker time to now, the
+	// wait a detection's actions spend on REACT, which no backlog count states in seconds.
+	rd.metrics.observeDispatchLag(msg.AppendTime, time.Now())
+
 	at, clk := core.MeteringTime(ev.TriggeredAt, msg.AppendTime)
 	ev.TriggeredAt = at
 	rd.metrics.recordClockFallback(clk)

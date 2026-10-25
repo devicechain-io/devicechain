@@ -266,7 +266,7 @@ func reactDispatcherWithRegistry(resolver react.RuleResolver, sink react.Command
 // read loop, and these tests drive handle directly.
 func constructedReactDispatcher(ms *core.Microservice, resolver react.RuleResolver,
 	sink react.CommandSink, dead deadletter.Writer) *ReactDispatcher {
-	rd := NewReactDispatcher(ms, nil, resolver, sink, nil, nil, nil,
+	rd := NewReactDispatcher(ms, nil, 1, resolver, sink, nil, nil, nil,
 		deadletter.NewProducer(ms).NewSink(dead), testShedBudget, NewReactMetrics(ms))
 	rd.procCtx = context.Background()
 	return rd

@@ -52,7 +52,7 @@ func TestSecondStartDoesNotReRegisterMetrics(t *testing.T) {
 			core.NewNoOpLifecycleCallbacks(), detect); p == nil {
 			t.Fatalf("start %d built no resolved-events processor", start)
 		}
-		if d := NewReactDispatcher(ms, nil, nil, nil, nil, nil, nil,
+		if d := NewReactDispatcher(ms, nil, 1, nil, nil, nil, nil, nil,
 			producer.NewSink(&deadRecorder{}), ShedLetterBudget{}, react); d == nil {
 			t.Fatalf("start %d built no react dispatcher", start)
 		}

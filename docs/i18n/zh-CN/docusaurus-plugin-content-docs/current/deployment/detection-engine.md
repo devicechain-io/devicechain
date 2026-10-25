@@ -232,8 +232,9 @@ dcctl dead-letters list --server <host> --email <you> --password <secret> \
 | `ruleHealth.writeTimeoutMillis` | 2000 | 一个租户的一次写入最长允许的时间，范围 100 到 60000。失败或超时的写入会被丢弃，不会重试。 |
 | `derivedPublishing.maxInFlight` | 32 | 一个检查点同时可以有多少个检测在等待消息总线确认，范围 1 到 1024。为 1 时，每个检测确认后才发送下一个。大于 1 时，不同设备的检测并行发布，但每个设备同一时刻最多一个。见下文。 |
 | `derivedPublishing.maxBufferedBytes` | 4194304 | 这些检测在等待发布期间合计可占用的字节数，包括因尝试失败而保留待重试的检测，范围 65536 到 268435456（256 MiB）。单个更大的检测会单独发布。 |
+| `react.workers` | 8 | REACT 同时分发的派生事件数，范围 1 到 64。同一设备的事件始终按检测顺序逐个分发；只有不同设备之间会并行。未设置且连接池小于 16 时取连接池的一半。大于 1 的值必须小于连接池大小（`rdbConfiguration.maxOpenConnections`，默认 20），因为每个工作者在读取规则时可能占用一个连接。设为 1 时逐个分发事件，REACT 的速率因此受限于每个事件一次往返数据库和消息总线的时间。 |
 
-每个 `ruleHealth` 和 `derivedPublishing` 设置都是可选的；一旦设置，就必须在其范围内（包括零），否则服务拒绝启动。
+每个 `ruleHealth`、`derivedPublishing` 和 `react` 设置都是可选的；一旦设置，就必须在其范围内（包括零），否则服务拒绝启动。
 
 ### 规则健康度计数是近似值
 

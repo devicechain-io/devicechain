@@ -36,3 +36,18 @@ func TestProcessorConfigCarriesThePublishWindow(t *testing.T) {
 		t.Fatalf("default processor publish window = %d, want 32", got)
 	}
 }
+
+// The REACT concurrency a deployment configures is the one REACT runs at (reader slots and
+// dispatcher lanes both take reactWorkers); an absent one is the default, 8, not the serial 1
+// round 19 measured as the ceiling.
+func TestReactWorkersCarriesTheConfiguredCount(t *testing.T) {
+	c := config.NewEventProcessingConfiguration()
+	w := 3
+	c.React.Workers = &w
+	if got := reactWorkers(c); got != 3 {
+		t.Fatalf("react workers = %d, want the configured 3", got)
+	}
+	if got := reactWorkers(config.NewEventProcessingConfiguration()); got != config.DefaultReactWorkers || got < 2 {
+		t.Fatalf("default react workers = %d, want %d", got, config.DefaultReactWorkers)
+	}
+}

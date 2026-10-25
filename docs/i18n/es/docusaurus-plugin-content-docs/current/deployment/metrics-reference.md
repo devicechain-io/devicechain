@@ -183,9 +183,12 @@ nunca debería mostrar `raiseAlarm` ni `clearAlarm`, porque ese sumidero siempre
 | `react_actions_not_enabled_total{action}` | Acciones REACT reconocidas pero descartadas porque este despliegue no tiene sumidero para ellas, por tipo de acción: sendCommand sin command-delivery configurado, o httpCall/publish sin conectores de salida habilitados. El sumidero de alarmas siempre está conectado, así que raiseAlarm/clearAlarm nunca deberían aparecer aquí. |
 | `react_connector_egress_shed_total{action}` | Intentos de despacho a conectores (`httpCall`, `publish`) descartados en origen por superar la tasa de salida del inquilino, por tipo de acción. Se cuenta por intento: una reentrega puede descartarse y luego admitir la misma acción, así que no es un recuento de acciones descartadas de forma permanente. |
 | `react_connector_shed_dead_lettered_total{action}` | Acciones de conector (httpCall/publish) descartadas en origen y registradas como mensaje no entregado individual con motivo shed, por tipo de acción. |
+| `react_derived_in_flight` | Eventos derivados que REACT ha tomado del flujo y aún no ha terminado: esperando al trabajador de su dispositivo o en despacho. Como mucho `react_workers`. |
+| `react_dispatch_lag_seconds` | Cuánto retraso lleva REACT respecto del flujo de eventos derivados: la edad de cada evento, desde que el broker lo almacena hasta que empieza su despacho. Es el tiempo que la alarma, los comandos y las llamadas a conectores de una detección esperan a REACT. |
 | `react_events_dead_lettered_total` | Eventos derivados escritos en el flujo de mensajes no entregados tras el tope de reentregas, para poder inspeccionar sus acciones en lugar de que desaparezcan. |
 | `react_events_orphaned_total` | Eventos derivados cuya regla ya no estaba en la proyección (no se despachó nada). |
 | `react_events_poison_dropped_total` | Eventos derivados descartados tras el tope de reentregas, porque su despacho seguía fallando. También se escriben en el flujo de mensajes no entregados, así que esto cuenta los mismos eventos que `react_events_dead_lettered_total`; se mantiene porque la alerta `ReactPoisonDropping` se dispara sobre él. |
+| `react_workers` | Cuántos eventos derivados puede despachar REACT a la vez (`react.workers`). Los eventos de un mismo dispositivo se despachan siempre uno tras otro, en el orden del flujo. |
 
 ## Event sources {#event-sources}
 

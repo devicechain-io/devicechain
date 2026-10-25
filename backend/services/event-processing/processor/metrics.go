@@ -494,7 +494,19 @@ type ReactMetrics struct {
 	// clockFallback counts the derived events REACT metered on a fallback clock because they
 	// carried no usable trigger time (core.NewRateClockFallbacks).
 	clockFallback func(core.MeteringClock)
+	// workers is the configured dispatch concurrency (react.workers), and inFlight how many
+	// derived events are between the reader handing them over and their disposition: queued in a
+	// lane or being dispatched. inFlight pinned at workers with a growing derived-events backlog
+	// says REACT is the bottleneck; inFlight at 1 with workers above 1 says the events all hash to
+	// one device.
+	workers  prometheus.Gauge
+	inFlight prometheus.Gauge
+	// dispatchLag is the derived event's age when its dispatch starts: broker append time to now.
+	dispatchLag prometheus.Observer
 }
+
+// reactLagBuckets span a healthy dispatch (milliseconds) to the r19 failure (minutes behind).
+var reactLagBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 150, 300, 600, 1200}
 
 // NewReactMetrics registers the REACT counters under the service's Prometheus namespace. A nil
 // Microservice (unit tests) yields nil metrics; every recorder is nil-safe, so the dispatcher runs
@@ -523,7 +535,44 @@ func NewReactMetrics(ms *core.Microservice) *ReactMetrics {
 		shedDeadLettered:    precreated(ms.NewCounterVec("react_connector_shed_dead_lettered_total", "Connector actions (httpCall/publish) shed at the source and recorded as an individual dead letter with reason shed, by action type.", []string{"action"})),
 		shedUnlettered:      precreated(ms.NewCounterVec("react_connector_shed_unlettered_total", "Connector actions (httpCall/publish) shed at the source past the tenant's or the service's dead-letter budget, so counted and summarised in one letter per tenant per minute rather than recorded individually, by action type.", []string{"action"})),
 		clockFallback:       core.NewRateClockFallbacks(ms),
+		workers:             ms.NewGauge("react_workers", "How many derived events REACT may dispatch at once (react.workers). Events of one device are always dispatched one after another, in stream order."),
+		inFlight:            ms.NewGauge("react_derived_in_flight", "Derived events REACT has taken from the stream and not yet finished with: waiting for their device's worker or being dispatched. At most react_workers."),
+		dispatchLag: ms.NewHistogramVec("react_dispatch_lag_seconds",
+			"How far behind the derived-event stream REACT dispatches: each event's age, from the broker storing it to its dispatch starting. This is the wait a detection's actions (its alarm, its commands, its connector calls) spend on REACT.",
+			nil, reactLagBuckets).WithLabelValues(),
 	}
+}
+
+// setWorkers records the configured dispatch concurrency. Nil-safe.
+func (m *ReactMetrics) setWorkers(n int) {
+	if m == nil {
+		return
+	}
+	m.workers.Set(float64(n))
+}
+
+// enterInFlight and leaveInFlight bracket one derived event from hand-over to disposition. Nil-safe.
+func (m *ReactMetrics) enterInFlight() {
+	if m == nil {
+		return
+	}
+	m.inFlight.Inc()
+}
+
+func (m *ReactMetrics) leaveInFlight() {
+	if m == nil {
+		return
+	}
+	m.inFlight.Dec()
+}
+
+// observeDispatchLag records how old a derived event is as its dispatch starts. A message with no
+// broker time (one built by hand) is not observed. Nil-safe.
+func (m *ReactMetrics) observeDispatchLag(appended, now time.Time) {
+	if m == nil || appended.IsZero() {
+		return
+	}
+	m.dispatchLag.Observe(max(0, now.Sub(appended).Seconds()))
 }
 
 // recordShedSummaryPass files one shed-summary flush. Nil-safe.

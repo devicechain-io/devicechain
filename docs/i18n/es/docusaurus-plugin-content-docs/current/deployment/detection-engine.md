@@ -541,8 +541,9 @@ puede adelantarse una marca de tiempo, y el retraso acota cuánto espera el moto
 | `ruleHealth.writeTimeoutMillis` | 2000 | Cuánto puede tardar la escritura de un inquilino, de 100 a 60000. Una escritura que falla o agota el tiempo se descarta, no se reintenta. |
 | `derivedPublishing.maxInFlight` | 32 | Cuántas detecciones puede tener a la vez un punto de control esperando la confirmación del bus de mensajes, de 1 a 1024. Con 1, cada una se confirma antes de enviar la siguiente. Por encima de 1, las detecciones de dispositivos distintos se publican en paralelo, nunca más de una por dispositivo a la vez. Véase más abajo. |
 | `derivedPublishing.maxBufferedBytes` | 4194304 | Bytes que pueden ocupar juntas esas detecciones mientras esperan su publicación, incluidas las que se conservan para reintentar tras un intento fallido, de 65536 a 268435456 (256 MiB). Una sola detección más grande se publica sola. |
+| `react.workers` | 8 | Cuántos eventos derivados despacha REACT a la vez, de 1 a 64. Los eventos de un mismo dispositivo se despachan siempre uno tras otro, en el orden en que se detectaron; solo se solapan dispositivos distintos. Si no se indica y el pool de conexiones es menor de 16, vale la mitad del pool. Un valor mayor que 1 debe ser menor que el tamaño del pool (`rdbConfiguration.maxOpenConnections`, 20 por defecto), porque cada trabajador puede ocupar una conexión mientras lee la regla. Con 1, los eventos se despachan de uno en uno, lo que limita REACT a un evento por cada viaje de ida y vuelta a la base de datos y al bus de mensajes. |
 
-Cada ajuste de `ruleHealth` y de `derivedPublishing` es opcional; si se indica, debe estar dentro de
+Cada ajuste de `ruleHealth`, de `derivedPublishing` y de `react` es opcional; si se indica, debe estar dentro de
 su rango (incluido el cero) o el servicio no arranca.
 
 ### Los recuentos de salud de reglas son aproximados

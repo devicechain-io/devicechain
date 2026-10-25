@@ -52,7 +52,7 @@ func (a *alarmRecorder) snapshot() ([]react.AlarmRequest, []time.Time) {
 // NewReactDispatcher, with the dead-letter sink from a producer on ms.
 func constructedReactDispatcherWithAlarms(ms *core.Microservice, resolver react.RuleResolver,
 	cmd react.CommandSink, alarms react.AlarmSink, dead deadletter.Writer) *ReactDispatcher {
-	rd := NewReactDispatcher(ms, nil, resolver, cmd, alarms, nil, nil,
+	rd := NewReactDispatcher(ms, nil, 1, resolver, cmd, alarms, nil, nil,
 		deadletter.NewProducer(ms).NewSink(dead), testShedBudget, NewReactMetrics(ms))
 	rd.procCtx = context.Background()
 	return rd
@@ -192,7 +192,7 @@ func TestAnAttemptEndsWithItsDelivery(t *testing.T) {
 	cmd := &hungCommandSink{}
 	alarms := &alarmRecorder{}
 	publish := startReactOnBroker(t, ackWait, func(ms *core.Microservice, reader messaging.MessageReader, dl *deadletter.Producer) *ReactDispatcher {
-		return NewReactDispatcher(ms, reader, reactFakeResolver{rule: rule, found: true}, cmd, alarms, nil, nil,
+		return NewReactDispatcher(ms, reader, 1, reactFakeResolver{rule: rule, found: true}, cmd, alarms, nil, nil,
 			nil, testShedBudget, NewReactMetrics(ms))
 	})
 	publish()
@@ -231,7 +231,7 @@ func startReactOnBroker(t *testing.T, ackWait time.Duration,
 	ms.InstanceConfiguration.Infrastructure.Nats = b.natsConfig()
 	var reader messaging.MessageReader
 	nmgr := messaging.NewNatsManager(ms, core.NewNoOpLifecycleCallbacks(), func(m *messaging.NatsManager) error {
-		r, err := m.NewReader(streams.DerivedEvents, ReactReaderOptions(func() bool { return true })...)
+		r, err := m.NewReader(streams.DerivedEvents, ReactReaderOptions(func() bool { return true }, 1)...)
 		reader = r
 		return err
 	})
@@ -307,7 +307,7 @@ func TestTheExhaustedLetterOutlivesTheDeliveryDeadline(t *testing.T) {
 	const ackWait = time.Second
 	dead := &ctxDeadRecorder{}
 	publish := startReactOnBroker(t, ackWait, func(ms *core.Microservice, reader messaging.MessageReader, dl *deadletter.Producer) *ReactDispatcher {
-		return NewReactDispatcher(ms, reader, reactFakeResolver{rule: sendCmdRule(), found: true},
+		return NewReactDispatcher(ms, reader, 1, reactFakeResolver{rule: sendCmdRule(), found: true},
 			&hungCommandSink{}, nil, nil, nil, dl.NewSink(dead), testShedBudget, NewReactMetrics(ms))
 	})
 	publish()
@@ -346,7 +346,7 @@ func TestShedLettersOutliveTheDeliveryDeadline(t *testing.T) {
 	// action's share is the time left over the actions left, and the last one's is all of it.
 	rule := connectorRule(httpCallAction(), sendCommandAction())
 	publish := startReactOnBroker(t, ackWait, func(ms *core.Microservice, reader messaging.MessageReader, dl *deadletter.Producer) *ReactDispatcher {
-		return NewReactDispatcher(ms, reader, reactFakeResolver{rule: rule, found: true}, hungSuccessSink{}, nil,
+		return NewReactDispatcher(ms, reader, 1, reactFakeResolver{rule: rule, found: true}, hungSuccessSink{}, nil,
 			&connSink{}, &meterGate{}, dl.NewSink(dead), testShedBudget, NewReactMetrics(ms))
 	})
 	publish()
