@@ -82,10 +82,18 @@ func (api *Api) resolveGroupTargets(ctx context.Context, request *CommandBatchCr
 	seen := make(map[string]struct{})
 	cursor := ""
 
+	// 🔑 THE FIRST PAGE CHOOSES THE VERSION; EVERY LATER PAGE IS ASKED FOR IT. With no version
+	// from the caller the first page resolves the group's ACTIVE published version, and walking
+	// the rest unpinned would let a publish between pages splice two versions' member sets into
+	// one batch and record whichever answered last. A caller-supplied version is passed on every
+	// page as before. A static group has no version (and refuses one), so nothing is pinned.
+	pin := request.GroupVersion
+	var first *GroupTargetPage
+
 	barren := 0
 	for barren < maxBarrenGroupPages {
 		resolved, err := api.GroupTargetResolver.ResolveGroupTargets(ctx, *request.GroupToken,
-			request.GroupVersion, cursor, groupTargetPageSize)
+			pin, cursor, groupTargetPageSize)
 		if err != nil {
 			return nil, fmt.Errorf("cannot resolve the group target: group resolution is unavailable")
 		}
@@ -98,8 +106,21 @@ func (api *Api) resolveGroupTargets(ctx context.Context, request *CommandBatchCr
 			return nil, rejected(RejectGroupUnusable, "cannot command group %q [%s]: %s",
 				*request.GroupToken, resolved.Code, resolved.Reason)
 		}
-		if resolved.ResolvedVersion != nil {
-			targets.groupVersion = sql.NullInt32{Int32: *resolved.ResolvedVersion, Valid: true}
+		if first == nil {
+			first = resolved
+			if resolved.ResolvedVersion != nil {
+				v := *resolved.ResolvedVersion
+				pin = &v
+				targets.groupVersion = sql.NullInt32{Int32: v, Valid: true}
+			}
+		} else if !sameGroupVersion(first.ResolvedVersion, resolved.ResolvedVersion) {
+			// Asked for the pinned version and answered with another (or none, or one where the
+			// first page had none): mixing it in would record a target set no single group
+			// version ever had.
+			return nil, rejected(RejectGroupUnusable,
+				"group %q changed version while it was being resolved (first page %s, a later page %s); retry the batch",
+				*request.GroupToken, groupVersionLabel(first.ResolvedVersion),
+				groupVersionLabel(resolved.ResolvedVersion))
 		}
 		before := len(targets.deviceTokens)
 		for _, token := range resolved.DeviceTokens {
@@ -133,4 +154,21 @@ func (api *Api) resolveGroupTargets(ctx context.Context, request *CommandBatchCr
 	// pagination contract — a cursor that does not advance, or a page that always claims
 	// another — not a large fleet, so it is an error rather than a short target set.
 	return nil, fmt.Errorf("cannot resolve the group target: resolution did not terminate")
+}
+
+// sameGroupVersion reports whether two pages resolved at the same group version; two static
+// pages (no version) agree.
+func sameGroupVersion(a, b *int32) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+// groupVersionLabel renders an optional group version for an error message.
+func groupVersionLabel(v *int32) string {
+	if v == nil {
+		return "none"
+	}
+	return fmt.Sprint(*v)
 }
