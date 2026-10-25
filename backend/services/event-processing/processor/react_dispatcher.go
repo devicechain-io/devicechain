@@ -44,10 +44,10 @@ import (
 //
 // That window is sized on the premise that each delivery is handled within its own AckWait
 // (streams.RedeliveryDuplicateWindowSeconds), and this consumer is what makes the premise true:
-// it reads through a capacity reader with one slot per worker (ReactReaderOptions), so it never
-// holds more deliveries than it has workers to start; it bounds every sink call by the delivery's
-// ack deadline (handle); and a worker never starts a delivery whose deadline has already passed
-// (runQueued).
+// it reads through a capacity reader with one slot per worker (ReactReaderOptions), so it holds
+// no more deliveries than it has slots for; it bounds every sink call by the delivery's ack
+// deadline (dispatch), and by a share of it while other deliveries wait in the same lane
+// (shareOf); and a worker never starts a delivery whose deadline has already passed (runQueued).
 //
 // CONCURRENCY IS ACROSS DEVICES, NEVER WITHIN ONE. With workers above 1 the deliveries fan out to
 // that many lanes, chosen by hashing the tenant's subject and the event's series (laneFor), and a
@@ -61,6 +61,18 @@ import (
 // arrives behind what was read since, exactly as it did on the serial worker. That at-least-once
 // reordering is what every receiver of a REACT action already absorbs (the decision time on an
 // alarm edge, the token on a command).
+//
+// A lane is also where a delivery's ack clock can run out unseen, because the clock started at
+// fetch and a delivery waits in its lane behind the ones before it. Two bounds keep that from
+// costing a healthy event its redelivery attempts when one device's sink is slow or hung. A lane
+// holds at most laneQueue deliveries behind the one running, so what waits behind a slow dispatch
+// is bounded and one lane cannot pin every slot. And a dispatch that has deliveries waiting behind
+// it may spend only an even share of what is left of its own ack deadline (shareOf), so a hung
+// head ends in time for the ones behind it to run inside theirs. The hung event spends its own
+// attempts, as it would on the serial worker, and the healthy ones behind it do not. The
+// alternative, extending a waiting delivery's deadline with in-progress acks, was rejected: it
+// would let a delivery be handled arbitrarily long after its fetch, which is the premise the
+// duplicate window is sized on.
 //
 // Why it is not serial: one derived event is a fetch, a rule read from the database and one publish
 // per action, each waiting on a network round trip, so one worker is a latency-bound ceiling. GKE
@@ -96,6 +108,10 @@ type ReactDispatcher struct {
 	// It is also the seam the pacing tests use: a pacer on the real clock makes a test that
 	// measures the retry budget take the retry budget.
 	newPacer func() *core.ReadPacer
+
+	// held is the DETECT term gate (SetTermGate). Nil means every delivery may start, which is
+	// how a dispatcher assembled without one (a test) behaves.
+	held func() bool
 
 	procCtx    context.Context
 	procCancel context.CancelFunc
@@ -133,6 +149,15 @@ func NewReactDispatcher(ms *core.Microservice, reader messaging.MessageReader, w
 	rd.newPacer = func() *core.ReadPacer { return core.NewReadPacer(ms, "react dispatch") }
 	return rd
 }
+
+// SetTermGate hands the dispatcher the DETECT term gate its reader is gated on (main.go,
+// newReactReader). The reader stops fetching when the term is lost, but deliveries it already
+// handed to lanes would otherwise keep starting on a replica that no longer detects, charging
+// that replica's outbound ceiling beside the new leader's. With the gate a lane starts nothing
+// new once the term is lost: a queued delivery is released, to be redelivered to the holder of
+// the durable after its AckWait, and only a dispatch already running finishes. Call it before
+// Start.
+func (rd *ReactDispatcher) SetTermGate(held func() bool) { rd.held = held }
 
 // Workers is how many derived events this dispatcher dispatches at once.
 func (rd *ReactDispatcher) Workers() int { return max(1, rd.workers) }
@@ -189,22 +214,31 @@ func (rd *ReactDispatcher) run() {
 	rd.runLanes()
 }
 
+// laneQueue is how many deliveries a lane may hold behind the one it is running, for workers
+// workers. Half the slots: a hung lane then pins at most that many plus the one running and the
+// one the read loop is blocked handing over, never every slot. It also fixes the smallest share a
+// dispatch can be held to (shareOf): with the default eight workers a dispatch is allowed at least
+// a fifth of its ack deadline, which at the default 60 s AckWait is above the 10 s timeout of the
+// slowest sink call (send-command).
+func laneQueue(workers int) int { return max(1, workers/2) }
+
 // runLanes is the read loop with workers above 1: it hands each delivery to the lane its device
 // hashes to (laneFor), and one goroutine per lane dispatches that lane's deliveries in order.
 //
-// A lane's queue holds as many deliveries as there are slots, so the read loop never blocks on a
-// send: the capacity reader holds at most that many between fetch and disposition, so no lane can
-// be handed more.
+// The read loop CAN block on a send: a lane holds only laneQueue deliveries behind the one it is
+// running, so a delivery for a full lane waits for the lane to take one. That cannot deadlock,
+// because every lane is always drained by its own goroutine, and it cannot hold Stop up, because
+// the send also selects on the dispatcher's context.
 func (rd *ReactDispatcher) runLanes() {
 	lanes := make([]chan messaging.Message, rd.workers)
 	var laneWG sync.WaitGroup
 	for i := range lanes {
-		lanes[i] = make(chan messaging.Message, rd.workers)
+		lanes[i] = make(chan messaging.Message, laneQueue(rd.workers))
 		laneWG.Add(1)
-		go func(lane <-chan messaging.Message) {
+		go func(lane chan messaging.Message) {
 			defer laneWG.Done()
 			for msg := range lane {
-				rd.runQueued(msg)
+				rd.runQueued(msg, func() int { return len(lane) })
 			}
 		}(lanes[i])
 	}
@@ -227,20 +261,67 @@ func (rd *ReactDispatcher) runLanes() {
 	laneWG.Wait()
 }
 
-// runQueued dispatches one delivery a lane has dequeued, and returns its slot either way.
+// runQueued dispatches one delivery a lane has dequeued, and returns its slot either way. behind
+// reports how many deliveries wait in the lane after this one, now.
 //
 // It does not start a delivery whose ack deadline passed while it waited in the lane: the broker is
 // already redelivering it, and starting this copy is the duplicate the capacity reader exists to
 // prevent (the reader counts the slot on reader_held_past_ack_wait_total, stage worker). Once
-// shutdown has begun a queued delivery is likewise left unacked, which is what a transient failure
-// does anyway: the broker redelivers it to the next holder of the durable.
-func (rd *ReactDispatcher) runQueued(msg messaging.Message) {
+// shutdown has begun, or the DETECT term is lost, a queued delivery is likewise left unacked,
+// which is what a transient failure does anyway: the broker redelivers it to the next holder of
+// the durable.
+func (rd *ReactDispatcher) runQueued(msg messaging.Message, behind func() int) {
 	defer rd.metrics.leaveInFlight()
-	if rd.procCtx.Err() != nil || expired(msg, time.Now()) {
+	if rd.procCtx.Err() != nil || !rd.termHeld() || expired(msg, time.Now()) {
 		msg.Release()
 		return
 	}
-	messaging.Process(msg, rd.handle)
+	messaging.Process(msg, func(m messaging.Message) { rd.dispatch(m, behind) })
+}
+
+// watchShare ends a dispatch whose ctx cancel it holds once it has spent its share of deadline
+// (shareOf) with deliveries waiting behind it, measuring the queue as it runs. It checks 32 times
+// over the deadline, so a dispatch overshoots its share by at most a thirty-second of it: a
+// couple of seconds at the default 60 s AckWait. The returned stop must be called when the
+// dispatch ends. A nil behind (no lane) watches nothing.
+func watchShare(deadline time.Time, behind func() int, cancel context.CancelFunc) (stop func()) {
+	if behind == nil {
+		return func() {}
+	}
+	start := time.Now()
+	done := make(chan struct{})
+	go func() {
+		tick := time.NewTicker(max(time.Millisecond, deadline.Sub(start)/32))
+		defer tick.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case now := <-tick.C:
+				if n := behind(); n > 0 && !now.Before(shareOf(deadline, start, n)) {
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	return func() { close(done) }
+}
+
+// termHeld reports whether this replica may start a delivery: it holds the DETECT term, or no
+// gate was set.
+func (rd *ReactDispatcher) termHeld() bool { return rd.held == nil || rd.held() }
+
+// shareOf is the deadline a dispatch may run to when behind deliveries wait in its lane: an even
+// share of what is left of its own, from now, among it and the ones behind it. The deliveries
+// behind were fetched at about the same time, so their clocks end at about the same moment, and a
+// dispatch that took all of what is left would leave them nothing. With nothing behind it, the
+// whole deadline. now is when the dispatch STARTED, so the share does not shrink as it runs.
+func shareOf(deadline, now time.Time, behind int) time.Time {
+	if behind <= 0 || !now.Before(deadline) {
+		return deadline
+	}
+	return now.Add(deadline.Sub(now) / time.Duration(behind+1))
 }
 
 // expired reports whether msg's ack deadline has passed at now. A message with no deadline (one
@@ -263,10 +344,16 @@ func laneFor(msg messaging.Message, lanes int) int {
 	if err := json.Unmarshal(msg.Value, &key); err != nil {
 		return 0
 	}
+	return LaneOf(msg.Subject, key.Series, lanes)
+}
+
+// LaneOf is the lane a derived event of series on subject is dispatched in, of lanes lanes. It is
+// exported so a test outside the package can place devices on lanes the way the dispatcher does.
+func LaneOf(subject, series string, lanes int) int {
 	h := fnv.New32a()
-	_, _ = h.Write([]byte(msg.Subject))
+	_, _ = h.Write([]byte(subject))
 	_, _ = h.Write([]byte{0})
-	_, _ = h.Write([]byte(key.Series))
+	_, _ = h.Write([]byte(series))
 	return int(h.Sum32() % uint32(lanes))
 }
 
@@ -280,9 +367,11 @@ func laneFor(msg messaging.Message, lanes int) int {
 // AckWait. A plain reader fetches a batch of 64 whose clocks all start at the fetch; behind a slow
 // sink (a hung command-delivery costs a timeout per sendCommand) the tail of that batch would be
 // redelivered while its first copy was still queued, both copies would be handled, many minutes
-// apart, and the second re-publish could land past the window. One slot per worker means a delivery
-// is fetched only when a worker is free to start it, and a copy whose clock ran out before a worker
-// reached it is never started (the reader's own buffer, and runQueued for a lane's queue).
+// apart, and the second re-publish could land past the window. One slot per worker bounds what is
+// held to what the workers can get through, and a copy whose clock ran out before a worker reached
+// it is never started (the reader's own buffer, and runQueued for a lane's queue). The slots are
+// shared by the lanes, so it is the lane queue bound and the share of its deadline a dispatch is
+// held to (laneQueue, shareOf) that keep a lane's wait inside its deliveries' clocks.
 //
 // ReaderWithReleaseOnPark is not pinned by a test here. The reader holds at most one fetched
 // message per slot, and the release path runs only when the term gate closes during a fetch, which
@@ -315,7 +404,13 @@ func (rd *ReactDispatcher) pacer() *core.ReadPacer {
 // dispatch that returns Retry is left unacked for AckWait-paced redelivery, unless the redelivery cap
 // is exhausted, in which case the event is dead-lettered, acked and counted as poison so a
 // persistently-failing dispatch cannot redeliver forever. A Done dispatch is acked.
-func (rd *ReactDispatcher) handle(msg messaging.Message) {
+func (rd *ReactDispatcher) handle(msg messaging.Message) { rd.dispatch(msg, nil) }
+
+// dispatch is handle for a delivery that may have others waiting behind it in its lane (behind,
+// nil when it has no lane). The deliveries behind it are not all there when it starts: the read
+// loop is handing the lane's later deliveries over while the first is already running, so the
+// share it may spend (shareOf) is re-measured as it runs (watchShare).
+func (rd *ReactDispatcher) dispatch(msg messaging.Message, behind func() int) {
 	tctx, tenant, ok := messaging.TenantContextFromSubject(rd.procCtx, msg.Subject)
 	if !ok {
 		log.Warn().Str("correlation", msg.CorrelationID()).
@@ -387,6 +482,7 @@ func (rd *ReactDispatcher) handle(msg messaging.Message) {
 		var cancel context.CancelFunc
 		dctx, cancel = context.WithDeadline(tctx, deadline)
 		defer cancel()
+		defer watchShare(deadline, behind, cancel)()
 	}
 	res := rd.dispatcher.Dispatch(dctx, ev)
 	if res.Outcome == react.Done {
