@@ -91,6 +91,8 @@ ALTER TABLE ONLY "device-management".device_credentials
  ADD CONSTRAINT "fk_device-management_device_credentials_device" FOREIGN KEY (device_id) REFERENCES "device-management".devices(id);
 ALTER TABLE ONLY "device-management".device_credentials
  ADD CONSTRAINT device_credentials_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "device-management".device_credentials
+ ADD CONSTRAINT fk_device_credentials_provisioning_profile FOREIGN KEY (provisioning_profile_id) REFERENCES "device-management".provisioning_profiles(id) ON DELETE RESTRICT;
 ALTER TABLE ONLY "device-management".device_credentials ALTER COLUMN id SET DEFAULT nextval('"device-management".device_credentials_id_seq'::regclass);
 ALTER TABLE ONLY "device-management".device_management_migrations
  ADD CONSTRAINT device_management_migrations_pkey PRIMARY KEY (id);
@@ -117,6 +119,8 @@ ALTER TABLE ONLY "device-management".devices
  ADD CONSTRAINT "fk_device-management_device_types_devices" FOREIGN KEY (device_type_id) REFERENCES "device-management".device_types(id);
 ALTER TABLE ONLY "device-management".devices
  ADD CONSTRAINT devices_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "device-management".devices
+ ADD CONSTRAINT fk_devices_expected_provisioning_profile FOREIGN KEY (expected_provisioning_profile_id) REFERENCES "device-management".provisioning_profiles(id) ON DELETE SET NULL;
 ALTER TABLE ONLY "device-management".devices ALTER COLUMN id SET DEFAULT nextval('"device-management".devices_id_seq'::regclass);
 ALTER TABLE ONLY "device-management".entity_attributes
  ADD CONSTRAINT entity_attributes_pkey PRIMARY KEY (id);
@@ -165,8 +169,6 @@ ALTER TABLE ONLY "device-management".metric_definitions
 ALTER TABLE ONLY "device-management".metric_definitions ALTER COLUMN id SET DEFAULT nextval('"device-management".metric_definitions_id_seq'::regclass);
 ALTER TABLE ONLY "device-management".pending_ownership_facts
  ADD CONSTRAINT pending_ownership_facts_pkey PRIMARY KEY (tenant_id, device_id);
-ALTER TABLE ONLY "device-management".provisioning_profiles
- ADD CONSTRAINT "uni_device-management_provisioning_profiles_provision_key" UNIQUE (provision_key);
 ALTER TABLE ONLY "device-management".provisioning_profiles
  ADD CONSTRAINT provisioning_profiles_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-management".provisioning_profiles ALTER COLUMN id SET DEFAULT nextval('"device-management".provisioning_profiles_id_seq'::regclass);
@@ -273,8 +275,10 @@ CREATE INDEX "idx_device-management_provisioning_profiles_tenant_id" ON "device-
 CREATE INDEX "idx_device-management_provisioning_profiles_token" ON "device-management".provisioning_profiles USING btree (token);
 CREATE INDEX idx_alarms_scope_anchors ON "device-management".alarms USING gin (scope_anchors);
 CREATE INDEX idx_audit_tenant_time ON "device-management".audit_events USING btree (tenant_id, occurred_time DESC);
+CREATE INDEX idx_device_credentials_provisioning_profile ON "device-management".device_credentials USING btree (provisioning_profile_id) WHERE (provisioning_profile_id IS NOT NULL);
 CREATE INDEX idx_devices_device_type ON "device-management".devices USING btree (tenant_id, device_type_id) WHERE (deleted_at IS NULL);
 CREATE INDEX idx_devices_disabled ON "device-management".devices USING btree (tenant_id, id) WHERE ((disabled_at IS NOT NULL) AND (deleted_at IS NULL));
+CREATE INDEX idx_devices_expected_provisioning_profile ON "device-management".devices USING btree (expected_provisioning_profile_id) WHERE (expected_provisioning_profile_id IS NOT NULL);
 CREATE INDEX idx_devices_gateway ON "device-management".devices USING btree (tenant_id, gateway_id) WHERE ((gateway_id IS NOT NULL) AND (deleted_at IS NULL));
 CREATE INDEX idx_dr_scope_ref_group ON "device-management".detection_rule_scope_refs USING btree (group_token, group_version);
 CREATE INDEX idx_egfr_group ON "device-management".entity_group_facet_refs USING btree (group_id, selector_version);
@@ -742,7 +746,8 @@ CREATE TABLE "device-management".device_credentials (
  credential_value character varying(4096),
  enabled boolean DEFAULT true NOT NULL,
  expires_at timestamp with time zone,
- secret_digest character varying(128)
+ secret_digest character varying(128),
+ provisioning_profile_id bigint
 );
 CREATE TABLE "device-management".device_management_migrations (
  id character varying(255) NOT NULL
@@ -835,7 +840,8 @@ CREATE TABLE "device-management".devices (
  external_id character varying(256),
  expected_since timestamp with time zone,
  disabled_at timestamp with time zone,
- gateway_id bigint
+ gateway_id bigint,
+ expected_provisioning_profile_id bigint
 );
 CREATE TABLE "device-management".entity_attributes (
  id bigint NOT NULL,
@@ -1049,7 +1055,9 @@ CREATE TABLE "device-management".provisioning_profiles (
  credential_type character varying(32) NOT NULL,
  enabled boolean NOT NULL,
  expires_at timestamp with time zone,
- provision_secret_digest character varying(128)
+ provision_secret_digest character varying(128),
+ max_devices integer,
+ provision_secret_issued boolean DEFAULT false NOT NULL
 );
 CREATE TABLE "device-management".purged_tenants (
  token character varying(128) NOT NULL,
@@ -1094,4 +1102,5 @@ CREATE UNIQUE INDEX uix_geo_fence_set_versions_tenant_version ON "device-managem
 CREATE UNIQUE INDEX uix_geo_fences_tenant_token ON "device-management".geo_fences USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_maintenance_windows_tenant_token ON "device-management".maintenance_windows USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_metric_definitions_tenant_token ON "device-management".metric_definitions USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
+CREATE UNIQUE INDEX uix_provisioning_profiles_tenant_provision_key ON "device-management".provisioning_profiles USING btree (tenant_id, provision_key) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_provisioning_profiles_tenant_token ON "device-management".provisioning_profiles USING btree (tenant_id, token) WHERE (deleted_at IS NULL);

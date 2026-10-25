@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"strconv"
 	"testing"
 	"time"
 
@@ -1205,12 +1206,20 @@ func nullFloatStr(v sql.NullFloat64) string {
 
 // ─── ProvisioningProfile ───────────────────────────────────────────────────
 
+// nullIntPtrStr renders a nullable *int column the way an Int field a caller sends renders.
+func nullIntPtrStr(v *int) string {
+	if v == nil {
+		return nullMarker
+	}
+	return strconv.Itoa(*v)
+}
+
 func provisioningProfileFamily() putest.Family[*Api] {
 	const (
 		nameSeed        = "Original name"
 		descriptionSeed = "Original description"
 		provisionKey    = "fleet-key"
-		provisionSecret = "fleet-s3cret"
+		maxDevicesSeed  = 40
 		expiresAtSeed   = "2031-03-04T05:06:07Z"
 		metadataSeed    = `{"fleet":"north"}`
 	)
@@ -1224,12 +1233,14 @@ func provisioningProfileFamily() putest.Family[*Api] {
 					t.Fatalf("seed device type %q: %v", tok, err)
 				}
 			}
-			if _, err := api.CreateProvisioningProfile(ctx, &ProvisioningProfileCreateRequest{
+			maxDevices := int32(maxDevicesSeed)
+			_, err := api.CreateProvisioningProfile(ctx, &ProvisioningProfileCreateRequest{
 				Token: "pp-1", Name: strp(nameSeed), Description: strp(descriptionSeed),
-				ProvisionKey: provisionKey, ProvisionSecret: provisionSecret,
+				ProvisionKey: provisionKey, MaxDevices: &maxDevices,
 				Strategy: string(ProvisionAllowNew), DeviceTypeToken: "dt-a",
 				Enabled: true, ExpiresAt: strp(expiresAtSeed), Metadata: strp(metadataSeed),
-			}); err != nil {
+			})
+			if err != nil {
 				t.Fatalf("seed provisioning profile: %v", err)
 			}
 		},
@@ -1240,7 +1251,7 @@ func provisioningProfileFamily() putest.Family[*Api] {
 				"name":            nullStr(e.Name),
 				"description":     nullStr(e.Description),
 				"provisionKey":    e.ProvisionKey,
-				"provisionSecret": provisionSecretStr(e.ProvisionSecretDigest, provisionSecret, "rotated-s3cret"),
+				"maxDevices":      nullIntPtrStr(e.MaxDevices),
 				"strategy":        e.Strategy,
 				"deviceTypeToken": refTokenOf(t, e.DeviceType == nil, func() string { return e.DeviceType.Token }),
 				"enabled":         boolStr(e.Enabled),
@@ -1260,8 +1271,8 @@ func provisioningProfileFamily() putest.Family[*Api] {
 				func(r *ProvisioningProfileUpdateRequest) *dcgraphql.OptionalString { return &r.Description }),
 			putest.RequiredStringField("provisionKey", provisionKey, "rotated-key",
 				func(r *ProvisioningProfileUpdateRequest) *dcgraphql.OptionalString { return &r.ProvisionKey }),
-			putest.RequiredStringField("provisionSecret", provisionSecret, "rotated-s3cret",
-				func(r *ProvisioningProfileUpdateRequest) *dcgraphql.OptionalString { return &r.ProvisionSecret }),
+			putest.OptionalInt32Field("maxDevices", maxDevicesSeed, 41,
+				func(r *ProvisioningProfileUpdateRequest) *dcgraphql.OptionalInt32 { return &r.MaxDevices }),
 			putest.RequiredStringField("strategy", string(ProvisionAllowNew), string(ProvisionCheckPreProvisioned),
 				func(r *ProvisioningProfileUpdateRequest) *dcgraphql.OptionalString { return &r.Strategy }),
 			putest.RequiredRefField("deviceTypeToken", "dt-a", "dt-b",

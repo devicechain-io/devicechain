@@ -31,26 +31,26 @@ import (
 // is exactly what was true while this was broken: the asymmetry lives BETWEEN create
 // and update, so only a test that uses both can see it.
 
-func TestRestatingAProvisioningSecretDoesNotRotateIt(t *testing.T) {
-	// Padded on purpose. CreateProvisioningProfile stores it exactly, so this is a
-	// value a real profile can hold.
-	const padded = " s3cret "
+func TestRestatingAProvisioningProfileDoesNotRotateItsSecret(t *testing.T) {
 	api := newPartialUpdateApi(t, append(append([]any{}, deviceProfileTables...), &ProvisioningProfile{})...)
 	ctx := partialUpdateCtx()
 	if _, err := api.CreateDeviceType(ctx, &DeviceTypeCreateRequest{Token: "dt"}); err != nil {
 		t.Fatalf("seed device type: %v", err)
 	}
-	if _, err := api.CreateProvisioningProfile(ctx, &ProvisioningProfileCreateRequest{
-		Token: "pp-1", ProvisionKey: " fleet-key ", ProvisionSecret: padded,
+	// The key is padded on purpose: CreateProvisioningProfile stores it exactly, so this is a
+	// value a real profile can hold.
+	seeded, err := api.CreateProvisioningProfile(ctx, &ProvisioningProfileCreateRequest{
+		Token: "pp-1", ProvisionKey: " fleet-key ",
 		Strategy: string(ProvisionAllowNew), DeviceTypeToken: "dt", Enabled: true,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("seed provisioning profile: %v", err)
 	}
+	issued := seeded.IssuedSecret
 
 	// The restatement: every field sent back exactly as stored.
 	if _, err := api.UpdateProvisioningProfile(ctx, "pp-1", &ProvisioningProfileUpdateRequest{
 		ProvisionKey:    dcgraphql.OptionalStringOf(" fleet-key "),
-		ProvisionSecret: dcgraphql.OptionalStringOf(padded),
 		Strategy:        dcgraphql.OptionalStringOf(string(ProvisionAllowNew)),
 		DeviceTypeToken: dcgraphql.OptionalStringOf("dt"),
 		Enabled:         dcgraphql.OptionalBoolOf(true),
@@ -60,9 +60,12 @@ func TestRestatingAProvisioningSecretDoesNotRotateIt(t *testing.T) {
 
 	rows, err := api.ProvisioningProfilesByToken(ctx, []string{"pp-1"})
 	p := requireOne(t, "provisioning profile", rows, err)
-	if got := provisionSecretStr(p.ProvisionSecretDigest, padded); got != padded {
-		t.Errorf("provisionSecret verifies as %q, want %q — restating the secret rotated it, and the "+
-			"fleet presenting the created one now fails to register", got, padded)
+	if got := provisionSecretStr(p.ProvisionSecretDigest, issued); got != issued {
+		t.Errorf("the provision secret no longer verifies — an edit rotated it, and the fleet "+
+			"presenting the issued one now fails to register (verifies as %q)", got)
+	}
+	if !p.ProvisionSecretIssued {
+		t.Error("an edit cleared the issued marker, which sends the whole fleet away with a 401")
 	}
 	if p.ProvisionKey != " fleet-key " {
 		t.Errorf("provisionKey = %q, want %q — the key a fleet presents to be LOOKED UP was "+
@@ -121,19 +124,20 @@ func TestRotatingAProvisioningSecretStillTakes(t *testing.T) {
 	if _, err := api.CreateDeviceType(ctx, &DeviceTypeCreateRequest{Token: "dt"}); err != nil {
 		t.Fatalf("seed device type: %v", err)
 	}
-	if _, err := api.CreateProvisioningProfile(ctx, &ProvisioningProfileCreateRequest{
-		Token: "pp-1", ProvisionKey: "fleet-key", ProvisionSecret: " s3cret ",
+	seeded, err := api.CreateProvisioningProfile(ctx, &ProvisioningProfileCreateRequest{
+		Token: "pp-1", ProvisionKey: "fleet-key",
 		Strategy: string(ProvisionAllowNew), DeviceTypeToken: "dt", Enabled: true,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("seed provisioning profile: %v", err)
 	}
-	if _, err := api.UpdateProvisioningProfile(ctx, "pp-1", &ProvisioningProfileUpdateRequest{
-		ProvisionSecret: dcgraphql.OptionalStringOf("rotated"),
-	}); err != nil {
+	rotated, err := api.RotateProvisioningProfileSecret(ctx, "pp-1")
+	if err != nil {
 		t.Fatalf("a rotation was refused: %v", err)
 	}
 	rows, err := api.ProvisioningProfilesByToken(ctx, []string{"pp-1"})
-	if got := provisionSecretStr(requireOne(t, "provisioning profile", rows, err).ProvisionSecretDigest, " s3cret ", "rotated"); got != "rotated" {
-		t.Fatalf("provisionSecret verifies as %q, want %q", got, "rotated")
+	if got := provisionSecretStr(requireOne(t, "provisioning profile", rows, err).ProvisionSecretDigest,
+		seeded.IssuedSecret, rotated.IssuedSecret); got != rotated.IssuedSecret || got == seeded.IssuedSecret {
+		t.Fatalf("the stored secret verifies as %q, want the rotated one", got)
 	}
 }

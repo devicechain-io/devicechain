@@ -223,6 +223,14 @@ func (r *DeviceResolver) Children(ctx context.Context, args struct {
 	return &DeviceSearchResultsResolver{M: *found, S: r.S, C: ctx}, nil
 }
 
+// ExpectedProvisioningProfile is the profile the device is earmarked for, or nil.
+func (r *DeviceResolver) ExpectedProvisioningProfile(ctx context.Context) (*ProvisioningProfileResolver, error) {
+	if r.M.ExpectedProvisioningProfileId == nil {
+		return nil, nil
+	}
+	return r.S.provisioningProfileByID(ctx, *r.M.ExpectedProvisioningProfileId)
+}
+
 func (r *DeviceResolver) DeviceType() *DeviceTypeResolver {
 	if r.M.DeviceType != nil {
 		return &DeviceTypeResolver{

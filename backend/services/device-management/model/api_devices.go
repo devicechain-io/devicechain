@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -321,6 +322,15 @@ func (api *Api) CreateDevice(ctx context.Context, request *DeviceCreateRequest) 
 	// a gateway put behind another gateway, or deleted, in between would leave the new device two
 	// levels deep or naming a gateway that is gone.
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		// An earmark is checked and its profile locked BEFORE the device is inserted (see
+		// lockEarmarkProfiles for why the order matters).
+		if token := earmarkToken(request.ProvisioningProfileToken); token != "" {
+			id, err := lockEarmarkProfile(tx, token, matches[0])
+			if err != nil {
+				return err
+			}
+			created.ExpectedProvisioningProfileId = id
+		}
 		gatewayId, err := gatewayForNewDevice(tx, request.Token, request.GatewayToken)
 		if err != nil {
 			return err
@@ -396,10 +406,29 @@ func (api *Api) CreateDevices(ctx context.Context, requests []*DeviceCreateReque
 	created := make([]*Device, 0, len(requests))
 	now := time.Now()
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		// The profiles the batch earmarks for are locked once, before any device is inserted.
+		earmarkTokens := make([]string, 0)
+		for _, request := range requests {
+			if token := earmarkToken(request.ProvisioningProfileToken); token != "" && !slices.Contains(earmarkTokens, token) {
+				earmarkTokens = append(earmarkTokens, token)
+			}
+		}
+		earmarkProfiles, err := lockEarmarkProfiles(tx, earmarkTokens)
+		if err != nil {
+			return err
+		}
 		for i, request := range requests {
 			dt := typesByToken[request.DeviceTypeToken]
 			if dt == nil {
 				return fmt.Errorf("device type %q: %w", request.DeviceTypeToken, gorm.ErrRecordNotFound)
+			}
+			var earmarkId *uint
+			if token := earmarkToken(request.ProvisioningProfileToken); token != "" {
+				if err := checkEarmark(token, earmarkProfiles[token], dt.ID, dt.Token); err != nil {
+					return fmt.Errorf("device %q: %w", request.Token, err)
+				}
+				id := earmarkProfiles[token].ID
+				earmarkId = &id
 			}
 			metadataJSON := metadataByIndex[i]
 			device := &Device{
@@ -414,6 +443,8 @@ func (api *Api) CreateDevices(ctx context.Context, requests []*DeviceCreateReque
 				// devices sharing a type does not re-touch device_types per row.
 				DeviceTypeId: dt.ID,
 				DisabledAt:   disabledAtOnCreate(request.Enabled, now),
+
+				ExpectedProvisioningProfileId: earmarkId,
 			}
 			if err := tx.Create(device).Error; err != nil {
 				return err
@@ -739,7 +770,12 @@ func (api *Api) UpdateDevice(ctx context.Context, token string, request *DeviceU
 	// writers, under a row lock. Written whole, an edit racing a clear would put the gateway it
 	// loaded back, and a gateway an operator had just taken a device away from would speak for
 	// it again with nothing recording that it had been re-granted.
-	omit := []string{"GatewayId"}
+	//
+	// expected_provisioning_profile_id is NEVER written here either: the earmark is set at creation,
+	// and a profile's delete clears it in the database (ON DELETE SET NULL). Written whole, an
+	// edit that loaded the device before the profile was deleted would write back an earmark for
+	// a profile that no longer exists, and be refused by the constraint for it.
+	omit := []string{"GatewayId", "ExpectedProvisioningProfileId"}
 	if !retyped && !toggled {
 		omit = append(omit, "ExpectedSince")
 	}
@@ -848,6 +884,17 @@ func (api *Api) Devices(ctx context.Context, criteria DeviceSearchCriteria) (*De
 		if criteria.DeviceType != nil {
 			result = result.Where("device_type_id = (?)",
 				api.RDB.DB(ctx).Model(&DeviceType{}).Select("id").Where("token = ?", criteria.DeviceType))
+		}
+		// Provenance: the devices holding a credential a profile issued (revoked ones too).
+		if criteria.ProvisioningProfile != nil {
+			result = result.Where("id IN (?)",
+				api.RDB.DB(ctx).Model(&DeviceCredential{}).Select("device_id").Where("provisioning_profile_id = (?)",
+					api.RDB.DB(ctx).Model(&ProvisioningProfile{}).Select("id").Where("token = ?", *criteria.ProvisioningProfile)))
+		}
+		// The earmark: the devices a profile may adopt.
+		if criteria.ExpectedProvisioningProfile != nil {
+			result = result.Where("expected_provisioning_profile_id = (?)",
+				api.RDB.DB(ctx).Model(&ProvisioningProfile{}).Select("id").Where("token = ?", *criteria.ExpectedProvisioningProfile))
 		}
 		return result.Preload("DeviceType")
 	}, criteria.Pagination)

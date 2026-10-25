@@ -41,6 +41,20 @@ func (r *SchemaResolver) ProvisioningProfilesById(ctx context.Context, args stru
 	return result, nil
 }
 
+// provisioningProfileByID resolves the provisioning profile a device or a credential names,
+// for a caller holding device:read WITHOUT a scope. A scoped caller is refused with an error
+// rather than handed nil, so the field never answers "none" about a profile that exists.
+func (r *SchemaResolver) provisioningProfileByID(ctx context.Context, id uint) (*ProvisioningProfileResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+	found, err := r.GetApi(ctx).ProvisioningProfilesById(ctx, []uint{id})
+	if err != nil || len(found) == 0 {
+		return nil, err
+	}
+	return &ProvisioningProfileResolver{M: *found[0], S: r, C: ctx}, nil
+}
+
 // Find provisioning profiles by unique token.
 func (r *SchemaResolver) ProvisioningProfilesByToken(ctx context.Context, args struct {
 	Tokens []string

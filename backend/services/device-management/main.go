@@ -328,6 +328,15 @@ func buildApis(nmgr *messaging.NatsManager, rdbm *rdb.RdbManager, key *credentia
 	api.DeviceSecretKey = key
 	api.EnrollmentKeys = enrollment
 	api.MisconfiguredSecrets = CredentialMisconfigured
+	// The Checker device self-registration compares through. It is built from the SAME two keys
+	// the Api digests with, so that a digest it writes is one this verifies. Without both keys
+	// there is nothing to compare under, and the Api answers ErrProvisioningUnavailable rather
+	// than fall back to comparing anything itself.
+	if key != nil && enrollment != nil {
+		if api.ProvisioningChecker, err = processor.NewProvisioningChecker(key, enrollment); err != nil {
+			return nil, nil, err
+		}
+	}
 	cached := model.NewCachedApi(api, caches)
 	// The write paths evict the hot-path caches through this seam (ADR-044 F2). The GraphQL
 	// mutations run on the plain *Api, so the evictor is wired onto it.

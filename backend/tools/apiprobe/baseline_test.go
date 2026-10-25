@@ -883,3 +883,69 @@ func TestAReleaseWithoutDashboardSharingSkipsExactlyTheShareRow(t *testing.T) {
 		t.Fatalf("saw %d dashboard-share rows, want 1: nothing seeds dashboard_shares", seen)
 	}
 }
+
+// 🔴 PROVISIONING PROFILES CHANGED INPUT AND RESULT SHAPE TOGETHER. A release before the server
+// generated the provision secret takes one the caller chose and returns the profile itself; a
+// drill seeds THAT release. The row must therefore send provisionSecret to a baseline whose input
+// still declares it, drop the result envelope for it, and do neither for the current release.
+func TestTheProvisioningProfileRowFollowsTheBaselinesShape(t *testing.T) {
+	const old = `
+type Mutation {
+    createProvisioningProfile(request: ProvisioningProfileCreateRequest): ProvisioningProfile!
+}
+type Query {
+    provisioningProfilesByToken(tokens: [String!]!): [ProvisioningProfile!]!
+}
+type ProvisioningProfile {
+    token: String!
+}
+input ProvisioningProfileCreateRequest {
+    token: String!
+    provisionKey: String!
+    provisionSecret: String!
+}
+`
+	current := strings.NewReplacer(
+		"provisionSecret: String!\n", "",
+		"): ProvisioningProfile!\n}\ntype Query", "): ProvisioningProfileSecretResult!\n}\ntype Query",
+		"type ProvisioningProfile {", "type ProvisioningProfileSecretResult {\n    profile: ProvisioningProfile!\n    issuedSecret: String!\n}\ntype ProvisioningProfile {",
+	).Replace(old)
+	if current == old {
+		t.Fatal("the fixture edit did not apply, so both cases below are the same schema")
+	}
+
+	row, ok := entityNamed("provisioning-profile")
+	if !ok {
+		t.Fatal("the coverage table has no \"provisioning-profile\" entity")
+	}
+	build := func(t *testing.T, sdl string) (entity, map[string]any) {
+		t.Helper()
+		b, err := loadBaseline(writeBaseline(t, map[string]string{"device-management": sdl}))
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		if ok, why := b.supports(row); !ok {
+			t.Fatalf("the baseline was refused outright: %s", why)
+		}
+		e := b.adapt(row)
+		vars := e.Vars(newState("t"))
+		e.BaselineInput(b, e, vars)
+		return e, vars["req"].(map[string]any)
+	}
+
+	e, req := build(t, old)
+	if req["provisionSecret"] == nil {
+		t.Error("an older release that requires provisionSecret was sent none")
+	}
+	if e.Wrap != "" {
+		t.Errorf("the older release returns the bare profile, but the row still selects through %q", e.Wrap)
+	}
+
+	e, req = build(t, current)
+	if _, sent := req["provisionSecret"]; sent {
+		t.Error("the current release was sent a provisionSecret its input does not declare")
+	}
+	if e.Wrap != "profile" {
+		t.Errorf("the current release returns {profile, issuedSecret}, but the row selects Wrap=%q", e.Wrap)
+	}
+}

@@ -157,6 +157,11 @@ type DeviceCreateRequest struct {
 	// GatewayToken, when set, creates the device already assigned to that gateway device.
 	// The same rules as AssignDeviceGateway apply, and a refusal fails the create.
 	GatewayToken *string
+	// ProvisioningProfileToken EARMARKS the device for a provisioning profile: the profile may
+	// later adopt this device when it registers itself, and no other profile may. The profile
+	// must exist in the tenant and be of the device's own type, otherwise the create is refused
+	// with INVALID_VALUE. An earmark authorizes nothing by itself; the profile's secret does.
+	ProvisioningProfileToken *string
 }
 
 // MaxBulkDeviceCount bounds how many devices one CreateDevices call renders and
@@ -278,6 +283,18 @@ type Device struct {
 	// REFUSED. That is the safe direction, and no assignment exists before the upgrade anyway.
 	GatewayId *uint
 
+	// ExpectedProvisioningProfileId is the EARMARK: the provisioning profile that may adopt
+	// this device when it registers itself, and the only one. nil means no profile may. It is
+	// a fact about the device and never authorizes anything by itself: the profile's secret
+	// does, and a profile also refuses a device earmarked for another profile, one of a
+	// different type, and one that already holds a credential.
+	//
+	// ON DELETE SET NULL (the migration's foreign key): deleting a profile returns its
+	// earmarked devices to "no earmark" rather than blocking on them. Written by a create or
+	// an import naming a provisioning profile, and by the profile itself when it creates a
+	// device; nothing else sets it.
+	ExpectedProvisioningProfileId *uint
+
 	// metadataUnread marks a row read WITHOUT its metadata column: the narrow credential
 	// lookups' (authDeviceFields, connectDeviceFields). On such a row a nil Metadata means
 	// "not read", not "none stored". The event resolver once took a credential-authenticated
@@ -323,6 +340,13 @@ func (Device) DefaultOrder() string {
 type DeviceSearchCriteria struct {
 	rdb.Pagination
 	DeviceType *string
+	// ProvisioningProfile selects the devices that hold a credential issued by the provisioning
+	// profile with this token (disabled and expired ones included). An unknown token matches
+	// nothing.
+	ProvisioningProfile *string
+	// ExpectedProvisioningProfile selects the devices earmarked for the provisioning profile
+	// with this token. An unknown token matches nothing.
+	ExpectedProvisioningProfile *string
 }
 
 // Search criteria for the devices of one customer: those with a live edge of one
@@ -474,6 +498,15 @@ type DeviceCredential struct {
 	DeviceId       uint
 	Device         *Device
 	CredentialType string
+	// ProvisioningProfileId is the provisioning profile that ISSUED this credential, or nil for
+	// one an operator created. It is the provenance the profile's cap counts, its delete is
+	// refused over, and a profile's revoke acts on. Only the self-registration operation sets
+	// it, and a credential update never changes it.
+	//
+	// ON DELETE RESTRICT (the migration's foreign key): the API refuses the profile's delete with
+	// a readable sentence, and the constraint is the backstop that turns a missed check into a
+	// refused delete instead of a dangling id.
+	ProvisioningProfileId *uint
 	// CredentialId is what the credential is looked up by. For MQTT_BASIC it is the
 	// username as sent. For ACCESS_TOKEN it is the keyed digest of the token, never the
 	// token: the token is a bearer secret, and a copy of the database must not hold one.

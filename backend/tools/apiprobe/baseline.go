@@ -340,6 +340,18 @@ func (b *baseline) returnTypeOf(area, field string) (string, bool) {
 	return inputTypeName(f.Type.String()), true
 }
 
+// inputDeclares reports whether the area's served schema declares the named INPUT type with
+// this field. It is how an entity learns that an older release still takes (and requires) a
+// field the current one dropped.
+func (b *baseline) inputDeclares(area, typeName, field string) bool {
+	s := b.schemas[area]
+	if s == nil {
+		return false
+	}
+	t, ok := s.Types[typeName].(*ast.InputObject)
+	return ok && t.Values.Get(field) != nil
+}
+
 // typeDeclaresField reports whether the named OBJECT type declares this field.
 func (b *baseline) typeDeclaresField(area, typeName, field string) bool {
 	s := b.schemas[area]
