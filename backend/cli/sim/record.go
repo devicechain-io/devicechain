@@ -226,6 +226,14 @@ func AdminURL(server string, tls bool) string {
 	return fmt.Sprintf("%s://%s/api/user-management/admin/graphql", h, server)
 }
 
+// DeviceManagementURL is device-management's API root through the /api/<area> ingress
+// convention (the chart strips the prefix). The self-registration endpoint hangs off it:
+// <root>/provisioning/{tenant}/register.
+func DeviceManagementURL(server string, tls bool) string {
+	h, _ := scheme(tls)
+	return fmt.Sprintf("%s://%s/api/device-management", h, server)
+}
+
 // DefaultMqttBroker is the NATS MQTT gateway address for an instance host: the
 // gateway's own listener, not an /api ingress route, so it is host:1883 the way the
 // device-plane ingress is host:8081.
@@ -281,7 +289,7 @@ func ResolveEndpoints(server, ingress, mqttBroker string, tls bool) Endpoints {
 	}
 	return Endpoints{
 		UserGraphQL:            fmt.Sprintf("%s://%s/api/user-management/graphql", h, server),
-		DeviceMgmtGraphQL:      fmt.Sprintf("%s://%s/api/device-management/graphql", h, server),
+		DeviceMgmtGraphQL:      DeviceManagementURL(server, tls) + "/graphql",
 		DashboardMgmtGraphQL:   fmt.Sprintf("%s://%s/api/dashboard-management/graphql", h, server),
 		Ingress:                ingress,
 		EventMgmtWS:            fmt.Sprintf("%s://%s/api/event-management/graphql", ws, server),

@@ -37,6 +37,24 @@ fires (the store refuses what it cannot keep, and the device keeps it), but devi
 kept off the platform. The 2m hold skips a back-off a fill spike engages and the next samples
 lift.
 
+The provisioning alerts watch device self-registration (POST /provisioning/{tenant}/register).
+Every series they read is created at zero when the service starts, so they can be quiet on a
+healthy instance and still fire on the first failure:
+
+  - ProvisioningAuthFailuresSustained is the only throttle on guessing a provision secret
+    from outside, because the secret itself is 256 random bits and is not rate limited per
+    key. A flood of refusals at a steady rate is either a fleet with the wrong secret or
+    someone probing, and neither goes away on its own. Its result label counts every way
+    authentication can fail together (unknown tenant, unknown key, wrong secret, disabled or
+    expired profile), on purpose, so the alert cannot be used to tell them apart either.
+  - ProvisioningRateLimited is the endpoint saying no to its own devices: either one source
+    (usually every device behind one ingress, when trustedProxies does not name it) or one
+    tenant ran out of its allowance. Unlike the failures above, the devices are right and
+    the limits are what is wrong, so it names which bucket refused.
+  - ProvisioningMisconfigured is an operator's problem alone: a profile whose device type was
+    deleted, whose strategy is not in the vocabulary, or which mints a credential type this
+    build does not support. Every device using that profile is refused until it is fixed.
+
 0/0 IS QUIET. Every series is created at zero, so an idle pod divides zero by zero; the
 result is NaN, NaN > 0.05 is false, and nothing fires. The promtool tests pin that case.
 */}}
@@ -89,4 +107,30 @@ spec:
           annotations:
             summary: "New MQTT device connections are being refused: the broker's MQTT message store is nearly full"
             description: "For 2m device-management has refused every new MQTT device connection, because the broker's MQTT message store is above 80% of its bound. Devices already connected keep publishing, and connections are accepted again once the store is below 60%. The platform is reading device publishes more slowly than devices send them: look at event-sources and at what reads inbound-events. Refused devices are told their connection is not authorized (MQTT CONNACK code 5) and must keep retrying."
+        - alert: ProvisioningAuthFailuresSustained
+          expr: sum(rate(devicechain_devicemanagement_provisioning_requests_total{result="auth_failed",namespace="{{ $ns }}"}[5m])) > 1
+          for: 15m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "Device self-registration is being refused for a wrong provision key or secret, steadily"
+            description: "For 15m device-management has refused more than one self-registration request a second ({{ "{{ $value | humanize }}" }}/s now) because the provision key or secret was not valid. Either a fleet is registering with a secret that is wrong, was rotated or belongs to a disabled or expired profile, or someone is probing the endpoint. The answer is the same for every cause, so check the provisioning profile the fleet should be using (enabled, not expired, secret current) and the sources in the ingress log."
+        - alert: ProvisioningRateLimited
+          expr: sum by (result) (rate(devicechain_devicemanagement_provisioning_requests_total{result=~"rate_limited_source|rate_limited_tenant",namespace="{{ $ns }}"}[5m])) > 0.1
+          for: 15m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "Device self-registration is refusing requests with 429 because a rate limit is exhausted"
+            description: "For 15m device-management has refused self-registration requests with 429 at {{ "{{ $value | humanize }}" }}/s, from the {{ "{{ $labels.result }}" }} limit. rate_limited_source means one client address used up its allowance: if it is the ingress controller's address, every device is sharing one allowance because infrastructure.http.trustedProxies does not name the controller. rate_limited_tenant means the tenant's registrations per second are at its governance ceiling. Devices retry on their own after the Retry-After they are told."
+        - alert: ProvisioningMisconfigured
+          expr: sum(increase(devicechain_devicemanagement_provisioning_requests_total{result=~"misconfigured|unsupported_type",namespace="{{ $ns }}"}[10m])) > 0
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "A provisioning profile cannot register devices because it is misconfigured"
+            description: "In the last 10m device-management refused {{ "{{ $value | humanize }}" }} self-registration request(s) against a provisioning profile that cannot work: its device type was deleted, its strategy is not one the platform knows, or it mints a credential type this build does not support. Every device using that profile is refused until the profile is fixed. The service logs the profile's token at ERROR."
 {{- end }}

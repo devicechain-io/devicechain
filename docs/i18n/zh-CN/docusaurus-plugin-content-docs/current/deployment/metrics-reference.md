@@ -64,6 +64,9 @@ title: 指标参考
 | `credential_misconfigured_total{path}` | 因存储的密钥永远无法匹配而被拒绝的设备凭据检查：未存储任何密钥，或其摘要由与本实例根密钥所派生的不同密钥生成（最可能是数据库被恢复到了错误的根密钥旁）。path="connect" 是 MQTT 认证标注，path="event" 是逐事件检查。错误密码不在此计数。 |
 | `device_reports_dead_lettered_total` | 因无法理解或引用了设备没有的配置修订而写入死信流的设备消息。使用 `dcctl dead-letters` 查看。 |
 | `geofence_set_publish_failures_total` | 无法发布的地理围栏集清单：序列化错误、代理拒绝或传输故障。每一条都表示事件处理未被告知某次围栏编辑，因此该租户的包含判定沿用先前的围栏集，直到协调扫描将其修复。持续的非零速率表示围栏编辑没有到达检测引擎。 |
+| `provisioning_in_flight` | Gauge。此刻本副本正在处理的设备自注册数，从读完请求体之后到应答之前。仍在发送请求体的请求不计入。该值固定在 `provisioning.maxInFlight` 表示新请求正在被应答 `503`。 |
+| `provisioning_request_duration_seconds{result}` | 直方图。按结果统计的自注册请求应答耗时，从处理程序开始计时（包含缓慢的请求体）。 |
+| `provisioning_requests_total{result}` | 按结果统计的设备自注册请求：`created`、`adopted`、`replayed`、`auth_failed`（配置密钥或密文被拒绝的所有情形，有意合并计数）、`invalid`、`read_timeout`、`rate_limited_source`、`rate_limited_tenant`、`busy`、`not_registered`、`not_earmarked`、`disabled`、`type_mismatch`、`token_collision`、`already_provisioned`、`limit_exceeded`、`unavailable`、`misconfigured`、`unsupported_type` 和 `error`。每个结果从启动起就存在。没有租户标签，因为请求在通过认证之前没有可信的租户。 |
 | `raise_alarm_dead_lettered_total` | 在应用它们的所有尝试都失败后写入死信流的触发告警边，使本应被触发或清除的告警可以被看到，而不是只写进日志。 |
 | `resolve_device_disabled_total` | 因设备已[停用](../guides/device-credentials.md#disabling-a-device)而被拒绝的事件。这些事件被丢弃，不进入死信。 |
 | `resolve_event_time_bounded_total` | 因报告的事件时间领先服务器时钟超过配置的容差而被拒绝、并被替换为容差允许的最晚时间的情况。 |

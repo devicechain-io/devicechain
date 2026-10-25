@@ -313,6 +313,11 @@ type DeviceManagementConfiguration struct {
 	// InMemoryCache sizes what each replica keeps in its own memory of the caches keyed by
 	// device (see DefaultPerDeviceCacheMiB for what that costs).
 	InMemoryCache InMemoryCacheConfiguration
+
+	// Provisioning bounds the device self-registration endpoint: what a stranger can make the
+	// service spend before it has proved anything. It is FIXED configuration (the mounted
+	// file); the per-tenant ceiling is the one limit that lives on the database plane.
+	Provisioning ProvisioningConfiguration
 }
 
 // InMemoryCacheConfiguration sizes what one replica keeps in memory of each cache keyed by
@@ -551,6 +556,7 @@ func (c *DeviceManagementConfiguration) ApplyDefaults() {
 	c.Resolution.ApplyDefaults()
 	c.RaiseAlarm.ApplyDefaults(c.RdbConfiguration, c.Resolution)
 	c.InMemoryCache.ApplyDefaults()
+	c.Provisioning.ApplyDefaults()
 }
 
 // Validate enforces semantic constraints after decoding and defaulting, failing
@@ -599,6 +605,9 @@ func (c *DeviceManagementConfiguration) Validate() error {
 		return err
 	}
 	if err := c.InMemoryCache.Validate(); err != nil {
+		return err
+	}
+	if err := c.Provisioning.Validate(); err != nil {
 		return err
 	}
 	return nil

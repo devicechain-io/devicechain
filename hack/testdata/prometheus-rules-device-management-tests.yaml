@@ -188,3 +188,140 @@ tests:
       - eval_time: 15m
         alertname: MqttStoreBackoffEngaged
         exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # Self-registration. The series (counters, scraped every minute) is
+  # devicechain_devicemanagement_provisioning_requests_total{result}; every result is created
+  # at zero, so the quiet cases below use zero series and traffic under the other results.
+  # ------------------------------------------------------------------
+
+  # Two auth failures a second, sustained: fires after the 15m hold, not before.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_provisioning_requests_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="auth_failed"}'
+        values: '0+120x60'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: ProvisioningAuthFailuresSustained
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: ProvisioningAuthFailuresSustained
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "Device self-registration is being refused for a wrong provision key or secret, steadily"
+              description: "For 15m device-management has refused more than one self-registration request a second (2/s now) because the provision key or secret was not valid. Either a fleet is registering with a secret that is wrong, was rotated or belongs to a disabled or expired profile, or someone is probing the endpoint. The answer is the same for every cause, so check the provisioning profile the fleet should be using (enabled, not expired, secret current) and the sources in the ingress log."
+
+  # Half a failure a second is under the line. A flood of OTHER refusals, and the series at
+  # zero, do not count either.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_provisioning_requests_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="auth_failed"}'
+        values: '0+30x60'
+      - series: 'devicechain_devicemanagement_provisioning_requests_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="invalid"}'
+        values: '0+600x60'
+      - series: 'devicechain_devicemanagement_provisioning_requests_total{namespace="dci-devicechain", pod="dc-device-management-bbbbb", result="auth_failed"}'
+        values: '0+0x60'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: ProvisioningAuthFailuresSustained
+        exp_alerts: []
+
+  # A burst of failures that ends before the hold is over does not page.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_provisioning_requests_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="auth_failed"}'
+        values: '0+120x8 960+0x50'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: ProvisioningAuthFailuresSustained
+        exp_alerts: []
+
+  # One source refused at a request a second: fires, and names the bucket. A tenant bucket
+  # refusing 3 a minute is under the line on the same pod.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_provisioning_requests_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="rate_limited_source"}'
+        values: '0+60x60'
+      - series: 'devicechain_devicemanagement_provisioning_requests_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="rate_limited_tenant"}'
+        values: '0+3x60'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: ProvisioningRateLimited
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: ProvisioningRateLimited
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              result: rate_limited_source
+            exp_annotations:
+              summary: "Device self-registration is refusing requests with 429 because a rate limit is exhausted"
+              description: "For 15m device-management has refused self-registration requests with 429 at 1/s, from the rate_limited_source limit. rate_limited_source means one client address used up its allowance: if it is the ingress controller's address, every device is sharing one allowance because infrastructure.http.trustedProxies does not name the controller. rate_limited_tenant means the tenant's registrations per second are at its governance ceiling. Devices retry on their own after the Retry-After they are told."
+
+  # Idle (every series at zero), and 503s for want of a slot, do not fire the 429 alert.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_provisioning_requests_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="rate_limited_source"}'
+        values: '0+0x60'
+      - series: 'devicechain_devicemanagement_provisioning_requests_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="busy"}'
+        values: '0+600x60'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: ProvisioningRateLimited
+        exp_alerts: []
+
+  # A profile that cannot work: the first refusal fires it at once (no hold), and it clears
+  # when the refusals stop. unsupported_type counts the same.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_provisioning_requests_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="misconfigured"}'
+        values: '0+0x4 3+0x40'
+      - series: 'devicechain_devicemanagement_provisioning_requests_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="auth_failed"}'
+        values: '0+600x44'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: ProvisioningMisconfigured
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: ProvisioningMisconfigured
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "A provisioning profile cannot register devices because it is misconfigured"
+              description: "In the last 10m device-management refused 3 self-registration request(s) against a provisioning profile that cannot work: its device type was deleted, its strategy is not one the platform knows, or it mints a credential type this build does not support. Every device using that profile is refused until the profile is fixed. The service logs the profile's token at ERROR."
+      - eval_time: 30m
+        alertname: ProvisioningMisconfigured
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_provisioning_requests_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="unsupported_type"}'
+        values: '0+0x4 1+0x40'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: ProvisioningMisconfigured
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "A provisioning profile cannot register devices because it is misconfigured"
+              description: "In the last 10m device-management refused 1 self-registration request(s) against a provisioning profile that cannot work: its device type was deleted, its strategy is not one the platform knows, or it mints a credential type this build does not support. Every device using that profile is refused until the profile is fixed. The service logs the profile's token at ERROR."
+
+  # Healthy: every provisioning series at zero.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_provisioning_requests_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="misconfigured"}'
+        values: '0+0x20'
+      - series: 'devicechain_devicemanagement_provisioning_requests_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="unsupported_type"}'
+        values: '0+0x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: ProvisioningMisconfigured
+        exp_alerts: []

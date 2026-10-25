@@ -21,6 +21,7 @@ dcctl [command]
 * [dcctl broker](#dcctl-broker)	 - Message broker operations
 * [dcctl dead-letters](#dcctl-dead-letters)	 - Inspect work the platform accepted and then gave up on
 * [dcctl destroy](#dcctl-destroy)	 - Destroy a DeviceChain instance
+* [dcctl device](#dcctl-device)	 - Act as a device
 * [dcctl enable-area](#dcctl-enable-area)	 - Turn on a functional area on a running instance
 * [dcctl ha](#dcctl-ha)	 - Inspect an instance's high-availability posture
 * [dcctl install](#dcctl-install)	 - Prepare a cluster for DeviceChain instances
@@ -356,6 +357,93 @@ dcctl destroy <provider> <instance> [flags]
 ### SEE ALSO
 
 * [dcctl](#dcctl)	 - DeviceChain CLI
+
+## dcctl device {#dcctl-device}
+
+Act as a device
+
+### Synopsis
+
+Commands that play a device against the platform, from a workstation.
+
+They exist to try a flow end to end before firmware does it, and to enroll a device by hand;
+they are not how an operator manages devices (that is the console and the API).
+
+### Options
+
+```
+  -h, --help   help for device
+```
+
+### SEE ALSO
+
+* [dcctl](#dcctl)	 - DeviceChain CLI
+* [dcctl device register](#dcctl-device-register)	 - Register a device through a provisioning profile, as the device would
+
+## dcctl device register {#dcctl-device-register}
+
+Register a device through a provisioning profile, as the device would
+
+### Synopsis
+
+Play a device registering itself: present a provisioning profile's key and secret
+with a serial number, and receive the device's token and MQTT client id.
+
+The device makes its own credential. This command generates it (32 random bytes, base64url) and
+SAVES IT TO --material-file BEFORE SENDING anything, so a retry, a crash or a second run all
+present the same credential and a registration whose answer was lost is recognised as a replay,
+not refused as a second device. An existing file is reused, never overwritten. The platform keeps
+only a digest of the credential, so the file is the only copy: keep it with the device.
+
+The credential is the MQTT username "\<tenant>:\<credential>" with no password. It is printed
+once, on the run that registered the device; running the command again prints the device's
+details (outcome REPLAYED) and not the credential.
+
+It follows the endpoint's client contract. On 429 and 503 it waits the Retry-After the platform
+names plus a random jitter of up to 100% of it. A network error or a 5xx the platform may
+recover from backs off from 1 second to 5 minutes with full jitter. Refusals that need a person
+(400, 401, 403, 404, 409, 413, 422, 501, a misconfigured profile) are not retried.
+
+The provision secret is read from --secret, from --secret-file, or from the environment
+variable DCCTL_PROVISION_SECRET. Give at most one of the two flags (both is an error); either
+wins over the variable. Prefer the file or the variable, which keep it out of the process
+listing.
+
+The endpoint needs the instance's API ingress, and --server is that ingress host exactly as for
+the other commands.
+
+```
+dcctl device register [flags]
+```
+
+### Examples
+
+```
+  dcctl device register --server dc.example.com --tls --tenant acme \
+      --key acme-sensors-2026 --secret-file ./provision.secret \
+      --external-id SN-000123 --material-file ./SN-000123.credential
+```
+
+### Options
+
+```
+      --external-id string     the device's serial number or other external id (required)
+  -h, --help                   help for register
+      --key string             the provisioning profile's provision key (required)
+      --material-file string   file the device's credential is saved to before it is sent, and read back on a re-run (required)
+      --max-attempts int       give up after this many sends (0 keeps trying until --timeout) (default 10)
+      --name string            optional device name, used only when the registration creates the device
+      --secret string          the provisioning profile's provision secret; prefer --secret-file or $DCCTL_PROVISION_SECRET
+      --secret-file string     file holding the provision secret
+  -s, --server string          instance host for platform API calls (default "localhost")
+  -t, --tenant string          tenant the device registers into (required)
+      --timeout duration       give up after this long overall (0 for no limit) (default 10m0s)
+      --tls                    use https for platform endpoints
+```
+
+### SEE ALSO
+
+* [dcctl device](#dcctl-device)	 - Act as a device
 
 ## dcctl enable-area {#dcctl-enable-area}
 
