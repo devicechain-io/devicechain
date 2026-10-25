@@ -48,5 +48,6 @@
   "artifacts": "Artefactos",
   "signers": "Firmantes",
   "serviceAccounts": "Cuentas de servicio",
-  "rollouts": "Despliegues"
+  "rollouts": "Despliegues",
+  "provisioningProfiles": "Perfiles de aprovisionamiento"
 }

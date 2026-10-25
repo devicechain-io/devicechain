@@ -211,7 +211,7 @@ describe('results and secrets', () => {
     expect(csv).not.toContain('credentialValue');
     const lines = csv.trimEnd().split('\r\n');
     expect(lines[0]).toBe(
-      'token,deviceTypeToken,externalId,name,description,metadata,credentialType,credentialId,outcome,code,message',
+      'token,deviceTypeToken,externalId,name,description,metadata,provisioningProfileToken,credentialType,credentialId,outcome,code,message',
     );
     expect(lines).toHaveLength(3); // header + the two failed rows
     expect(lines[1].startsWith('d3,sensor,')).toBe(true);
@@ -221,5 +221,50 @@ describe('results and secrets', () => {
     const t = [['d1', 'TOP-SECRET']];
     expect(stripSecrets(t, { token: 0, credentialValue: 1 })).toEqual([['d1', '']]);
     expect(stripSecrets(t, { token: 0 })).toBe(t);
+  });
+});
+
+describe('the expected provisioning profile column', () => {
+  it('is mapped from the headers that name it, in either mode', () => {
+    const header = ['token', 'deviceTypeToken', 'Expected Provisioning Profile'];
+    expect(autoMap(header, 'NONE')).toEqual({ token: 0, deviceTypeToken: 1, provisioningProfileToken: 2 });
+    expect(autoMap(['token', 'provisioningProfileToken'], 'FACTORY_CREDENTIALS')).toEqual({
+      token: 0,
+      provisioningProfileToken: 1,
+    });
+    expect(fieldsForMode('NONE')).toContain('provisioningProfileToken');
+  });
+
+  it('is sent as the earmark when a cell holds a token, and absent when the cell is empty', () => {
+    const mapping = { token: 0, deviceTypeToken: 1, provisioningProfileToken: 2 };
+    const rows = buildRows(
+      [
+        ['d1', 'gateway', ' acme-fleet '],
+        ['d2', 'gateway', ''],
+      ],
+      mapping,
+      'NONE',
+    );
+    expect(rows[0]).toEqual({ token: 'd1', deviceTypeToken: 'gateway', provisioningProfileToken: 'acme-fleet' });
+    expect(rows[1]).toEqual({ token: 'd2', deviceTypeToken: 'gateway' });
+    expect('provisioningProfileToken' in rows[1]).toBe(false);
+  });
+
+  it('sends no earmark when the column is not mapped', () => {
+    const rows = buildRows([['d1', 'gateway', 'acme-fleet']], { token: 0, deviceTypeToken: 1 }, 'NONE');
+    expect(rows[0]).toEqual({ token: 'd1', deviceTypeToken: 'gateway' });
+  });
+
+  it('is written back by the failed-rows file, so a fixed file maps without help', () => {
+    const outcomes: FileRowOutcome[] = [{ row: 1, token: 'd1', outcome: 'INVALID', code: 'INVALID_VALUE', message: 'x' }];
+    const csv = failedRowsCsv(
+      [['d1', 'gateway', 'acme-fleet']],
+      { token: 0, deviceTypeToken: 1, provisioningProfileToken: 2 },
+      'NONE',
+      outcomes,
+    );
+    const [head, row] = csv.trimEnd().split('\r\n');
+    expect(head.split(',')).toContain('provisioningProfileToken');
+    expect(row).toContain('acme-fleet');
   });
 });

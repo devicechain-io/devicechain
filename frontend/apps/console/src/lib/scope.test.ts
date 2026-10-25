@@ -17,6 +17,8 @@ describe('the routes a scoped member may open', () => {
     for (const path of [
       '/device-types',
       '/device-profiles/p1',
+      '/provisioning-profiles',
+      '/provisioning-profiles/acme-sensors',
       '/customers',
       '/customers/acme',
       '/members',

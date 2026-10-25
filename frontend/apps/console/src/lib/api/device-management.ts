@@ -142,12 +142,21 @@ export async function listDevices(opts: {
   pageNumber: number;
   pageSize: number;
   deviceType?: string;
+  /** Only devices holding a credential this provisioning profile issued (unscoped callers). */
+  provisioningProfile?: string;
+  /** Only devices earmarked for this provisioning profile (unscoped callers). */
+  expectedProvisioningProfile?: string;
 }): Promise<DeviceSearchResults> {
   const data = await gql('device-management', DEVICES, {
     criteria: {
       pageNumber: opts.pageNumber,
       pageSize: opts.pageSize,
       deviceType: opts.deviceType ?? null,
+      // Omitted, not null, when unset: a scoped caller's request must not name the fields at all.
+      ...(opts.provisioningProfile ? { provisioningProfile: opts.provisioningProfile } : {}),
+      ...(opts.expectedProvisioningProfile
+        ? { expectedProvisioningProfile: opts.expectedProvisioningProfile }
+        : {}),
     },
   });
   return data.devices;

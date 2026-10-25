@@ -106,6 +106,22 @@ describe('the device import wizard', () => {
     expect(onDone).toHaveBeenCalledWith('Imported 1 device');
   });
 
+  it('sends the expected provisioning profile column as the earmark, and nothing for an empty cell', async () => {
+    await pasteAndCheck('token,deviceTypeToken,Expected provisioning profile\r\nd1,gateway, acme-fleet \r\nd2,gateway,\r\n');
+
+    expect(imports()[0].rows).toEqual([
+      { token: 'd1', deviceTypeToken: 'gateway', provisioningProfileToken: 'acme-fleet' },
+      { token: 'd2', deviceTypeToken: 'gateway' },
+    ]);
+    // The column was recognised and offered for mapping, not guessed at.
+    expect(screen.getByText('Expected provisioning profile token')).toBeTruthy();
+  });
+
+  it('does not earmark when the file has no such column', async () => {
+    await pasteAndCheck('token,deviceTypeToken\r\nd1,gateway\r\n');
+    expect(imports()[0].rows).toEqual([{ token: 'd1', deviceTypeToken: 'gateway' }]);
+  });
+
   it('filters the outcome table', async () => {
     await pasteAndCheck('token,deviceTypeToken\nd1,gateway\nbad token,gateway\n');
     // Before filtering, a "Created" badge is shown. The row badges are the only elements reading exactly "Created" / "Invalid".
