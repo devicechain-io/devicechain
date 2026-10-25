@@ -61,7 +61,7 @@ func runRegister(t *testing.T, args ...string) (stdout, stderr string, err error
 }
 
 func baseArgs(s *registerStub, dir string) []string {
-	return []string{"--server", strings.TrimPrefix(s.srv.URL, "http://"), "--tenant", "acme", "--key", "fleet",
+	return []string{"--server", strings.TrimPrefix(s.srv.URL, "http://"), "--insecure-plaintext", "--tenant", "acme", "--key", "fleet",
 		"--secret", "s3cret", "--external-id", "SN-1", "--material-file", filepath.Join(dir, "sn-1.credential")}
 }
 
@@ -166,4 +166,40 @@ func TestDeviceRegisterSurfacesARefusal(t *testing.T) {
 	assert.EqualValues(t, 1, s.requests.Load())
 	_, statErr := os.Stat(args[len(args)-1])
 	assert.NoError(t, statErr, "the credential was removed")
+}
+
+// The request goes over https unless plaintext is asked for by name.
+func TestDeviceRegisterIsHTTPSByDefault(t *testing.T) {
+	assert.Equal(t, "https://dc.example.com/api/device-management", registerBaseURL(&deviceRegisterFlags{server: "dc.example.com"}))
+	assert.Equal(t, "http://localhost:8080/api/device-management", registerBaseURL(&deviceRegisterFlags{server: "localhost:8080", insecure: true}))
+}
+
+// Against a server that speaks only plaintext, the default (https) never sends the secret: the
+// TLS handshake fails before a request exists, and the stub sees nothing.
+func TestDeviceRegisterWithoutTheOptInNeverSendsPlaintext(t *testing.T) {
+	s := newRegisterStub(t, func(n int64, w http.ResponseWriter) { created(w, "CREATED") })
+	args := baseArgs(s, t.TempDir())
+	for i, a := range args {
+		if a == "--insecure-plaintext" {
+			args = append(args[:i], args[i+1:]...)
+			break
+		}
+	}
+	_, _, err := runRegister(t, append(args, "--max-attempts", "1")...)
+	require.Error(t, err)
+	assert.Zero(t, s.requests.Load(), "the provision secret reached a plaintext server")
+}
+
+// A redirect is an error, and the body is not sent a second time.
+func TestDeviceRegisterRefusesARedirect(t *testing.T) {
+	target := newRegisterStub(t, func(n int64, w http.ResponseWriter) { created(w, "CREATED") })
+	from := newRegisterStub(t, func(n int64, w http.ResponseWriter) {
+		w.Header().Set("Location", target.srv.URL+"/api/device-management/provisioning/acme/register")
+		w.WriteHeader(http.StatusPermanentRedirect)
+	})
+	_, _, err := runRegister(t, append(baseArgs(from, t.TempDir()), "--max-attempts", "3")...)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "refusing to follow")
+	assert.EqualValues(t, 1, from.requests.Load())
+	assert.Zero(t, target.requests.Load(), "the secret was re-sent to the redirect target")
 }

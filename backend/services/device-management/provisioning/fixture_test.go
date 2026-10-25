@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -26,6 +27,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 // 🔴 EVERYTHING HERE DRIVES THE REAL HANDLER OVER A REAL SOCKET AGAINST THE REAL MODEL (an
@@ -47,10 +49,42 @@ type countingRegistrar struct {
 	entered chan struct{}
 	// failWith, when set, is returned from ProvisionDevice instead of registering.
 	failWith error
+	// delay, when set, is slept inside ProvisionDevice before it registers.
+	delay time.Duration
+	// inside counts the calls into the model running right now: the ones that can hold a
+	// database connection. maxInside is its high-water
+	// mark, and maxGauge the highest provisioning_in_flight any request saw on entry. Both are
+	// recorded by the requests themselves, so no sampling can miss them.
+	inside, maxInside, maxGauge atomic.Int64
+	gauge                       func() float64
+}
+
+func (c *countingRegistrar) enter() {
+	n := c.inside.Add(1)
+	for {
+		m := c.maxInside.Load()
+		if n <= m || c.maxInside.CompareAndSwap(m, n) {
+			break
+		}
+	}
+	if c.gauge != nil {
+		g := int64(c.gauge())
+		for {
+			m := c.maxGauge.Load()
+			if g <= m || c.maxGauge.CompareAndSwap(m, g) {
+				break
+			}
+		}
+	}
 }
 
 func (c *countingRegistrar) AuthenticateProvisioningProfile(ctx context.Context, k, s string) (*model.ProvisioningProfile, error) {
 	c.auth.Add(1)
+	c.enter()
+	defer c.inside.Add(-1)
+	if c.delay > 0 {
+		time.Sleep(c.delay)
+	}
 	if c.entered != nil {
 		select {
 		case c.entered <- struct{}{}:
@@ -65,11 +99,18 @@ func (c *countingRegistrar) AuthenticateProvisioningProfile(ctx context.Context,
 
 func (c *countingRegistrar) RefuseProvisioning(ctx context.Context, k, s string) error {
 	c.refuse.Add(1)
+	c.enter()
+	defer c.inside.Add(-1)
 	return c.Registrar.RefuseProvisioning(ctx, k, s)
 }
 
 func (c *countingRegistrar) ProvisionDevice(ctx context.Context, r *model.ProvisionRequest) (*model.ProvisionResult, error) {
 	c.provision.Add(1)
+	c.enter()
+	defer c.inside.Add(-1)
+	if c.delay > 0 {
+		time.Sleep(c.delay)
+	}
 	if c.failWith != nil {
 		return nil, c.failWith
 	}
@@ -93,13 +134,15 @@ type fixture struct {
 	metrics   *Metrics
 	registrar *countingRegistrar
 	stub      *stubTenants
-	// compares counts every secret compare the Checker ran, the dummy included.
-	compares atomic.Int64
-	deleted  atomic.Bool
-	cfg      Config
-	deps     Deps
-	secrets  map[string]string
-	keys     map[string]string
+	// compares counts every secret compare the Checker ran, the dummy included, and
+	// profileReads every query that read provisioning_profiles.
+	compares     atomic.Int64
+	profileReads atomic.Int64
+	deleted      atomic.Bool
+	cfg          Config
+	deps         Deps
+	secrets      map[string]string
+	keys         map[string]string
 }
 
 type option func(*fixture)
@@ -126,7 +169,7 @@ func newFixture(t *testing.T, opts ...option) *fixture {
 
 	f := &fixture{t: t, api: api, ctx: putest.TenantContext("acme")(), stub: &stubTenants{},
 		secrets: map[string]string{}, keys: map[string]string{},
-		cfg: Config{ReadDeadline: 10 * time.Second, MaxInFlight: 8, SourceBurst: 1000, SourceEvery: time.Millisecond}}
+		cfg: Config{ReadDeadline: 10 * time.Second, MaxInFlight: 8, MaxConcurrentRegistrations: 4, SourceBurst: 1000, SourceEvery: time.Millisecond}}
 	var err error
 	api.ProvisioningChecker, err = credential.NewChecker(credentialtest.NewStore(), map[credential.Kind]credential.Policy{
 		credential.KindProvisioningProfile:   {Unthrottled: true},
@@ -139,7 +182,12 @@ func newFixture(t *testing.T, opts ...option) *fixture {
 	ms := &core.Microservice{InstanceId: "inst1", FunctionalArea: "device-management"}
 	ms.UseMetricsRegistry(prometheus.NewRegistry())
 	f.metrics = NewMetrics(ms)
-	f.registrar = &countingRegistrar{Registrar: api}
+	f.registrar = &countingRegistrar{Registrar: api, gauge: func() float64 { return testutil.ToFloat64(f.metrics.InFlight) }}
+	require.NoError(t, api.RDB.Database.Callback().Query().After("gorm:query").Register("test:count-profile-reads-"+t.Name(), func(tx *gorm.DB) {
+		if strings.Contains(tx.Statement.SQL.String(), "provisioning_profiles") {
+			f.profileReads.Add(1)
+		}
+	}))
 	f.deps = Deps{
 		Registrar: f.registrar, InstanceId: "inst1", Tenants: f.stub, Metrics: f.metrics,
 		TenantDeleted: func(string) bool { return f.deleted.Load() },
@@ -275,4 +323,23 @@ func (f *fixture) rows() (devices, credentials int64) {
 	require.NoError(f.t, db.Raw(`SELECT count(*) FROM devices`).Scan(&devices).Error)
 	require.NoError(f.t, db.Raw(`SELECT count(*) FROM device_credentials`).Scan(&credentials).Error)
 	return
+}
+
+// fakeModel answers every authentication and registration at once. The concurrency tests use
+// it because they measure how many calls run together, and SQLite (the stand-in database)
+// cannot take concurrent writers: its table locks would fail the requests for a reason that
+// has nothing to do with the endpoint.
+type fakeModel struct{ Registrar }
+
+func (fakeModel) AuthenticateProvisioningProfile(context.Context, string, string) (*model.ProvisioningProfile, error) {
+	return &model.ProvisioningProfile{}, nil
+}
+
+func (fakeModel) ProvisionDevice(_ context.Context, r *model.ProvisionRequest) (*model.ProvisionResult, error) {
+	return &model.ProvisionResult{Outcome: model.ProvisionCreated, Tenant: "acme", DeviceToken: "pv-" + r.ExternalId,
+		ExternalId: r.ExternalId, CredentialType: "ACCESS_TOKEN"}, nil
+}
+
+func withFakeModel() option {
+	return func(x *fixture) { x.registrar.Registrar = fakeModel{Registrar: x.api} }
 }

@@ -152,8 +152,6 @@ func TestSlowBodiesDoNotConsumeSlots(t *testing.T) {
 	const slots = 3
 	f := newFixture(t, withConfig(func(c *Config) { c.MaxInFlight = slots; c.ReadDeadline = 30 * time.Second }))
 	f.profile("pp-1", model.ProvisionAllowNew)
-	watch := f.watchInFlight()
-
 	var parked []*slowClient
 	for i := 0; i < slots*3; i++ {
 		c := f.dialSlow("pp-1", fmt.Sprintf("SN-slow-%d", i), i+10)
@@ -164,7 +162,8 @@ func TestSlowBodiesDoNotConsumeSlots(t *testing.T) {
 
 	got := f.post("acme", f.body("pp-1", "SN-prompt", 1))
 	assert.Equal(t, 201, got.Status, "slow bodies starved a prompt request: %s", got.Raw)
-	assert.Equal(t, int64(1), watch.finish(), "only the prompt request ever held a slot")
+	// Read by the request itself on entry to the model, so no sampling interval can miss it.
+	assert.Equal(t, int64(1), f.registrar.maxGauge.Load(), "only the prompt request ever held a slot")
 	assert.Equal(t, 0.0, f.count(ResultBusy))
 	_ = parked
 }

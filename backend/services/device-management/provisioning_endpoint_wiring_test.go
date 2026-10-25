@@ -23,6 +23,7 @@ import (
 	"github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-device-management/provisioning"
 	dmtest "github.com/devicechain-io/dc-device-management/test"
+	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/governance"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -44,7 +45,7 @@ type provWiring struct {
 
 // wireProvisioning builds the service's globals for the endpoint and wires it. withKeys false
 // builds the Api without the enrollment keys, as an instance with no root key would.
-func wireProvisioning(t *testing.T, mutate func(*config.DeviceManagementConfiguration), withKeys bool) *provWiring {
+func wireProvisioning(t *testing.T, mutate func(*config.DeviceManagementConfiguration), withKeys bool, infra ...func(*core.Microservice)) *provWiring {
 	t.Helper()
 	prevMs, prevCfg, prevApi, prevMetrics, prevGates := Microservice, Configuration, Api, ProvisioningMetrics, safetyGates
 	t.Cleanup(func() {
@@ -53,6 +54,9 @@ func wireProvisioning(t *testing.T, mutate func(*config.DeviceManagementConfigur
 
 	Microservice = &core.Microservice{InstanceId: "inst1", FunctionalArea: "device-management"}
 	Microservice.UseMetricsRegistry(prometheus.NewRegistry())
+	for _, f := range infra {
+		f(Microservice)
+	}
 	safetyGates = governance.NewSafetyGates(Microservice)
 	Configuration = config.NewDeviceManagementConfiguration()
 	if mutate != nil {
@@ -152,6 +156,73 @@ func TestTheConfiguredLimitsReachTheHandler(t *testing.T) {
 	status, got := w.post("acme", body)
 	assert.Equal(t, 429, status)
 	assert.Equal(t, "RATE_LIMITED", got["code"])
+}
+
+// post with extra headers, for the source-address tests.
+func (w *provWiring) postFrom(xff string, body map[string]any) int {
+	w.t.Helper()
+	raw, err := json.Marshal(body)
+	require.NoError(w.t, err)
+	req, err := http.NewRequest(http.MethodPost, w.srv.URL+"/provisioning/acme/register", bytes.NewReader(raw))
+	require.NoError(w.t, err)
+	req.Header.Set("X-Forwarded-For", xff)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(w.t, err)
+	defer resp.Body.Close()
+	return resp.StatusCode
+}
+
+// The service reads infrastructure.http.trustedProxies and hands it to the endpoint: with the
+// loopback peer trusted, X-Forwarded-For names separate sources with a bucket each, and without
+// it the same headers are one source. Both halves, so that neither a handler that ignores the
+// list nor a service that forgets to pass it can pass.
+func TestTheConfiguredTrustedProxiesReachTheEndpoint(t *testing.T) {
+	burst := func(c *config.DeviceManagementConfiguration) {
+		c.Provisioning.SourceBurst = 1
+		c.Provisioning.SourceEvery = "1h"
+	}
+	body := map[string]any{"provisionKey": "k", "provisionSecret": "s", "externalId": "SN-1", "credentialSecret": strings.Repeat("a", 43)}
+
+	t.Run("trusted peer: one bucket per forwarded client", func(t *testing.T) {
+		w := wireProvisioning(t, burst, true, func(ms *core.Microservice) {
+			ms.InstanceConfiguration.Infrastructure.Http.TrustedProxies = []string{"127.0.0.0/8", "::1/128"}
+		})
+		assert.Equal(t, 401, w.postFrom("203.0.113.1", body))
+		assert.Equal(t, 401, w.postFrom("203.0.113.2", body), "a second client shares the first one's bucket")
+		assert.Equal(t, 429, w.postFrom("203.0.113.1", body))
+	})
+	t.Run("no trusted proxy: the header is ignored", func(t *testing.T) {
+		w := wireProvisioning(t, burst, true)
+		assert.Equal(t, 401, w.postFrom("203.0.113.1", body))
+		assert.Equal(t, 429, w.postFrom("203.0.113.2", body), "an unbelieved header bought a fresh bucket")
+	})
+}
+
+// The lifecycle gate the service builds is the one the endpoint consults: a tenant it calls
+// deleted gets the generic 401 for a request that would otherwise register, and another tenant
+// registers. A service that stopped passing the gate would register into a tenant being erased.
+func TestTheTenantLifecycleGateReachesTheEndpoint(t *testing.T) {
+	prev := provisioningTenantGate
+	t.Cleanup(func() { provisioningTenantGate = prev })
+	provisioningTenantGate = func(mscfg.InfrastructureConfiguration) func(string) bool {
+		return func(tenant string) bool { return tenant == "acme" }
+	}
+	w := wireProvisioning(t, nil, true)
+	ctx := core.WithTenant(t.Context(), "acme")
+	_, err := w.api.CreateDeviceType(ctx, &model.DeviceTypeCreateRequest{Token: "dt-a"})
+	require.NoError(t, err)
+	created, err := w.api.CreateProvisioningProfile(ctx, &model.ProvisioningProfileCreateRequest{
+		Token: "pp-1", ProvisionKey: "fleet-key", Strategy: string(model.ProvisionAllowNew), DeviceTypeToken: "dt-a", Enabled: true})
+	require.NoError(t, err)
+	body := map[string]any{"provisionKey": "fleet-key", "provisionSecret": created.IssuedSecret,
+		"externalId": "SN-1", "credentialSecret": strings.Repeat("a", 43)}
+
+	status, got := w.post("acme", body)
+	assert.Equal(t, 401, status, "a deleted tenant registered a device: %v", got)
+	assert.Equal(t, "PROVISIONING_FAILED", got["code"])
+	devices, err := w.api.DevicesByExternalId(ctx, []string{"SN-1"})
+	require.NoError(t, err)
+	assert.Empty(t, devices)
 }
 
 // The per-tenant ceiling is the Provisioning governance dimension: with no user-management

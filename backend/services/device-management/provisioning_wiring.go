@@ -56,14 +56,15 @@ func wireProvisioningEndpoint() error {
 
 	pcfg := Configuration.Provisioning
 	h, err := provisioning.New(provisioning.Config{
-		ReadDeadline: pcfg.ReadDeadlineDuration(),
-		MaxInFlight:  pcfg.MaxInFlight,
-		SourceBurst:  pcfg.SourceBurst,
-		SourceEvery:  pcfg.SourceEveryDuration(),
+		ReadDeadline:               pcfg.ReadDeadlineDuration(),
+		MaxInFlight:                pcfg.MaxInFlight,
+		MaxConcurrentRegistrations: pcfg.MaxConcurrentRegistrations,
+		SourceBurst:                pcfg.SourceBurst,
+		SourceEvery:                pcfg.SourceEveryDuration(),
 	}, provisioning.Deps{
 		Registrar:      Api,
 		InstanceId:     Microservice.InstanceId,
-		TenantDeleted:  governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "device-management", safetyGates),
+		TenantDeleted:  provisioningTenantGate(infra),
 		Tenants:        buildProvisioningTenantLimiter(infra),
 		TrustedProxies: trusted,
 		Metrics:        ProvisioningMetrics,
@@ -73,10 +74,16 @@ func wireProvisioningEndpoint() error {
 	}
 	provisioning.Register(Microservice.Mux(), h)
 	log.Info().Str("path", provisioning.Path).Dur("readDeadline", pcfg.ReadDeadlineDuration()).
-		Int("maxInFlight", pcfg.MaxInFlight).Int("sourceBurst", pcfg.SourceBurst).
+		Int("maxInFlight", pcfg.MaxInFlight).Int("maxConcurrentRegistrations", pcfg.MaxConcurrentRegistrations).Int("sourceBurst", pcfg.SourceBurst).
 		Dur("sourceEvery", pcfg.SourceEveryDuration()).Int("trustedProxies", len(trusted)).
 		Msg("Device self-registration endpoint mounted.")
 	return nil
+}
+
+// provisioningTenantGate builds the lifecycle gate that refuses a tenant being deleted. It is a
+// variable only so that the wiring test can stand a gate in and prove the endpoint consults it.
+var provisioningTenantGate = func(infra mscfg.InfrastructureConfiguration) func(string) bool {
+	return governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "device-management", safetyGates)
 }
 
 // buildProvisioningTenantLimiter is the per-tenant registration ceiling. With no service

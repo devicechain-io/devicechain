@@ -75,6 +75,12 @@ const MaxBodyBytes = 8 << 10
 // real secret is 43 characters; anything longer cannot match and is not worth a compare.
 const maxFieldLen = 256
 
+// defaultQueueWait is how long a request waits for a place in the database work.
+const defaultQueueWait = 5 * time.Second
+
+// maxTenantRetryAfter bounds what a tenant-limited caller is told to wait.
+const maxTenantRetryAfter = 5 * time.Minute
+
 // maxSourceKeys bounds the per-source bucket map.
 const maxSourceKeys = 100_000
 
@@ -87,9 +93,14 @@ type Registrar interface {
 }
 
 // TenantLimiter is the per-tenant admission the handler charges after authentication.
-// core.TenantRateLimiter is the implementation.
+// core.TenantRateLimiter is the implementation. A limiter that also implements RetryAfter
+// tells a refused caller how long its own rate takes to earn another admission.
 type TenantLimiter interface {
 	Allow(tenant string) bool
+}
+
+type retryAfterer interface {
+	RetryAfter(tenant string) time.Duration
 }
 
 // Config is the fixed (mounted) configuration of the endpoint.
@@ -102,6 +113,14 @@ type Config struct {
 	// request every SourceEvery.
 	SourceBurst int
 	SourceEvery time.Duration
+	// MaxConcurrentRegistrations bounds how many requests are inside the database work
+	// (authentication and registration) at once, which is how many pooled connections the
+	// endpoint can hold. MaxInFlight admits many more; the surplus queues for this WITHOUT
+	// holding a connection, for at most QueueWait.
+	MaxConcurrentRegistrations int
+	// QueueWait is how long a request waits for one of those places before a 503. Zero is five
+	// seconds.
+	QueueWait time.Duration
 }
 
 // Deps are what the handler is assembled from.
@@ -125,6 +144,7 @@ type Handler struct {
 	cfg     Config
 	deps    Deps
 	slots   chan struct{}
+	db      chan struct{}
 	sources *sourcelimit.Limiter
 	logs    rateLogger
 }
@@ -136,6 +156,8 @@ func New(cfg Config, deps Deps) (*Handler, error) {
 		return nil, errors.New("provisioning: the read deadline must be positive")
 	case cfg.MaxInFlight < 1:
 		return nil, errors.New("provisioning: maxInFlight must be at least 1")
+	case cfg.MaxConcurrentRegistrations < 1:
+		return nil, errors.New("provisioning: maxConcurrentRegistrations must be at least 1")
 	case deps.Registrar == nil:
 		return nil, errors.New("provisioning: a registrar is required")
 	case deps.Tenants == nil:
@@ -149,7 +171,11 @@ func New(cfg Config, deps Deps) (*Handler, error) {
 	if err != nil {
 		return nil, fmt.Errorf("provisioning: per-source limits: %w", err)
 	}
-	return &Handler{cfg: cfg, deps: deps, slots: make(chan struct{}, cfg.MaxInFlight), sources: sources}, nil
+	if cfg.QueueWait <= 0 {
+		cfg.QueueWait = defaultQueueWait
+	}
+	return &Handler{cfg: cfg, deps: deps, slots: make(chan struct{}, cfg.MaxInFlight),
+		db: make(chan struct{}, cfg.MaxConcurrentRegistrations), sources: sources}, nil
 }
 
 // Register mounts the handler on mux.
@@ -264,6 +290,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 5b. A place in the database work. A request past the slot but waiting here holds no
+	// connection, so a burst against one profile (whose registrations serialize on its row)
+	// cannot starve the instance's other users of the pool.
+	if !h.acquireDB(r.Context()) {
+		result = h.write(w, ResultBusy, http.StatusServiceUnavailable, model.ProvisioningCodeUnavailable,
+			"the service is busy; retry later", time.Second)
+		return
+	}
+	defer func() { <-h.db }()
+
 	// 6. Authenticate.
 	ctx := core.WithTenant(r.Context(), tenant)
 	var profile *model.ProvisioningProfile
@@ -285,8 +321,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// 7. The per-tenant bucket.
 	if !h.deps.Tenants.Allow(tenant) {
+		wait := time.Second
+		if ra, ok := h.deps.Tenants.(retryAfterer); ok {
+			wait = min(ra.RetryAfter(tenant), maxTenantRetryAfter)
+		}
 		result = h.write(w, ResultRateLimitedTenant, http.StatusTooManyRequests, RateLimited,
-			"too many registrations for this tenant; retry later", time.Second)
+			"too many registrations for this tenant; retry later", wait)
 		return
 	}
 
@@ -315,6 +355,26 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Outcome: string(done.Outcome), Tenant: done.Tenant, DeviceToken: done.DeviceToken,
 		ExternalId: done.ExternalId, CredentialType: done.CredentialType, Mqtt: mqttInfo{ClientId: clientId},
 	})
+}
+
+// acquireDB waits for one of the places in the database work, for at most QueueWait or until
+// the request is cancelled.
+func (h *Handler) acquireDB(ctx context.Context) bool {
+	select {
+	case h.db <- struct{}{}:
+		return true
+	default:
+	}
+	t := time.NewTimer(h.cfg.QueueWait)
+	defer t.Stop()
+	select {
+	case h.db <- struct{}{}:
+		return true
+	case <-t.C:
+		return false
+	case <-ctx.Done():
+		return false
+	}
 }
 
 // readBody reads at most MaxBodyBytes and parses them. On failure it returns a nil body, the

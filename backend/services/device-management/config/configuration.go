@@ -9,6 +9,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/rs/zerolog/log"
 )
 
 // Device authentication policy applied to inbound events (transport security,
@@ -607,8 +608,17 @@ func (c *DeviceManagementConfiguration) Validate() error {
 	if err := c.InMemoryCache.Validate(); err != nil {
 		return err
 	}
-	if err := c.Provisioning.Validate(); err != nil {
+	if err := c.Provisioning.Validate(c.RdbConfiguration); err != nil {
 		return err
+	}
+	// The writers the pool is shared by. Over the pool they still run, queueing for connections,
+	// which is why this is a warning and not a refusal; but the registration endpoint's
+	// places are part of the same budget and an operator should see the sum.
+	if sum, pool := c.Resolution.Workers+c.RaiseAlarm.Workers+c.Provisioning.MaxConcurrentRegistrations,
+		rdb.EffectiveMaxOpenConnections(c.RdbConfiguration); sum >= pool {
+		log.Warn().Int("resolutionWorkers", c.Resolution.Workers).Int("raiseAlarmWorkers", c.RaiseAlarm.Workers).
+			Int("provisioningMaxConcurrentRegistrations", c.Provisioning.MaxConcurrentRegistrations).Int("pool", pool).
+			Msg("Database writers (resolution, raise-alarm and device self-registration) can together hold the whole connection pool, so reads would wait for them.")
 	}
 	return nil
 }

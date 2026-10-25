@@ -19,6 +19,7 @@ func TestProvisioningDefaults(t *testing.T) {
 	assert.Equal(t, 10*time.Second, cfg.Provisioning.ReadDeadlineDuration())
 	assert.Equal(t, 64, cfg.Provisioning.MaxInFlight)
 	assert.Equal(t, 60, cfg.Provisioning.SourceBurst)
+	assert.Equal(t, 2, cfg.Provisioning.MaxConcurrentRegistrations)
 	assert.Equal(t, time.Second, cfg.Provisioning.SourceEveryDuration())
 	assert.Equal(t, cfg.Provisioning, NewDeviceManagementConfiguration().Provisioning)
 }
@@ -47,6 +48,10 @@ func TestProvisioningFailsClosed(t *testing.T) {
 		{"negative slots", `{"provisioning":{"maxInFlight":-1}}`, "provisioning.maxInFlight must be between 1 and 1024"},
 		{"slots over the ceiling", `{"provisioning":{"maxInFlight":1025}}`, "provisioning.maxInFlight must be between 1 and 1024"},
 		{"slots at the ceiling", `{"provisioning":{"maxInFlight":1024}}`, ""},
+		{"concurrent registrations at the pool", `{"provisioning":{"maxConcurrentRegistrations":20}}`, "provisioning.maxConcurrentRegistrations is 20, but the connection pool holds 20"},
+		{"concurrent registrations below the pool", `{"provisioning":{"maxConcurrentRegistrations":19}}`, ""},
+		{"concurrent registrations against a small pool", `{"rdbConfiguration":{"maxOpenConnections":12},"provisioning":{"maxConcurrentRegistrations":12}}`, "connection pool holds 12"},
+		{"negative concurrent registrations", `{"provisioning":{"maxConcurrentRegistrations":-1}}`, "must be at least 1"},
 		{"a negative burst", `{"provisioning":{"sourceBurst":-3}}`, "provisioning.sourceBurst must be at least 1"},
 		{"an interval that is not a duration", `{"provisioning":{"sourceEvery":"fast"}}`, "provisioning.sourceEvery"},
 		{"a negative interval", `{"provisioning":{"sourceEvery":"-1s"}}`, "provisioning.sourceEvery must be above 0"},

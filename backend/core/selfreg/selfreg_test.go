@@ -84,7 +84,7 @@ func (f *fakeTime) sleep(ctx context.Context, d time.Duration) error {
 }
 
 func opts(t *testing.T, s *stub, ft *fakeTime, rnd float64) Options {
-	return Options{BaseURL: s.srv.URL, MaterialFile: filepath.Join(t.TempDir(), "sn-1.material"),
+	return Options{BaseURL: s.srv.URL, MaterialFile: filepath.Join(t.TempDir(), "sn-1.material"), AllowPlaintext: true,
 		Sleep: ft.sleep, Rand: func() float64 { return rnd }}
 }
 
@@ -250,6 +250,8 @@ func TestRefusalsThatNeedAPersonAreNotRetried(t *testing.T) {
 			s := newStub(t, refuse(tc.status, tc.code, ""))
 			ft := &fakeTime{}
 			o := opts(t, s, ft, 0)
+			// A bound, so a regression that retries fails at once instead of hanging.
+			o.MaxAttempts = 3
 			_, err := Register(context.Background(), req, o)
 			var apiErr *APIError
 			require.ErrorAs(t, err, &apiErr)
@@ -314,4 +316,108 @@ func TestValidateMaterial(t *testing.T) {
 	assert.NoError(t, ValidateMaterial(m))
 	m2, _ := GenerateMaterial()
 	assert.NotEqual(t, m, m2)
+}
+
+// 🔴 THE PROVISION SECRET NEVER GOES OUT IN PLAINTEXT BY ACCIDENT. An http:// URL is refused
+// unless the caller opts in by name, and nothing is saved or sent before the refusal.
+func TestPlaintextIsRefusedWithoutAnExplicitOptIn(t *testing.T) {
+	s := newStub(t, okBody("CREATED"))
+	o := opts(t, s, &fakeTime{}, 0)
+	o.AllowPlaintext = false
+	_, err := Register(context.Background(), req, o)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "plaintext")
+	assert.Empty(t, s.requests, "the secret was sent")
+	_, statErr := os.Stat(o.MaterialFile)
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "material was saved for a request that was never allowed")
+
+	// The control: the same request with the opt-in goes through.
+	o.AllowPlaintext = true
+	_, err = Register(context.Background(), req, o)
+	require.NoError(t, err)
+
+	// Any other scheme is refused outright, opt-in or not.
+	o.BaseURL = "ftp://example.com"
+	_, err = Register(context.Background(), req, o)
+	require.Error(t, err)
+}
+
+// 🔴 A REDIRECT IS NEVER FOLLOWED. Go would re-POST the body, the provision secret in it, to the
+// Location (an ingress answering 308 to https is the real case). The second server counts what
+// reaches it; it must see nothing, and the first must see exactly one request, not retried.
+func TestARedirectIsRefusedAndTheBodyIsNeverResent(t *testing.T) {
+	for _, status := range []int{301, 302, 307, 308} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			target := newStub(t, okBody("CREATED"))
+			from := newStub(t, func(w http.ResponseWriter) {
+				w.Header().Set("Location", target.srv.URL+"/provisioning/acme/register")
+				w.WriteHeader(status)
+			})
+			o := opts(t, from, &fakeTime{}, 0)
+			o.MaxAttempts = 3
+			_, err := Register(context.Background(), req, o)
+			var redirect *RedirectError
+			require.ErrorAs(t, err, &redirect)
+			assert.Equal(t, status, redirect.Status)
+			assert.Contains(t, err.Error(), "refusing to follow")
+			assert.Len(t, from.requests, 1, "a redirect was retried")
+			assert.Empty(t, target.requests, "the secret was re-sent to the redirect target")
+		})
+	}
+}
+
+// A caller's own client gets the same protection: its redirect policy is replaced, not trusted.
+func TestACallersClientDoesNotFollowRedirectsEither(t *testing.T) {
+	target := newStub(t, okBody("CREATED"))
+	from := newStub(t, func(w http.ResponseWriter) {
+		w.Header().Set("Location", target.srv.URL)
+		w.WriteHeader(308)
+	})
+	o := opts(t, from, &fakeTime{}, 0)
+	o.HTTPClient = &http.Client{} // follows redirects by default
+	_, err := Register(context.Background(), req, o)
+	require.Error(t, err)
+	assert.Empty(t, target.requests)
+}
+
+func TestRetryAfterIsCapped(t *testing.T) {
+	assert.Equal(t, backoffCeil, parseRetryAfter("86400"))
+	assert.Equal(t, 7*time.Second, parseRetryAfter("7"))
+	assert.Equal(t, time.Duration(0), parseRetryAfter("-3"))
+	assert.Equal(t, time.Duration(0), parseRetryAfter("soon"))
+}
+
+func TestAMaterialFileOthersCanReadIsRefused(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no POSIX modes")
+	}
+	s := newStub(t, okBody("CREATED"))
+	o := opts(t, s, &fakeTime{}, 0)
+	m, _ := GenerateMaterial()
+	require.NoError(t, os.WriteFile(o.MaterialFile, []byte(m+"\n"), 0o644))
+	_, err := Register(context.Background(), req, o)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "readable by group or others")
+	assert.Empty(t, s.requests)
+	require.NoError(t, os.Chmod(o.MaterialFile, 0o600))
+	_, err = Register(context.Background(), req, o)
+	require.NoError(t, err, "the control: the same file at 0600 is accepted")
+}
+
+// A dangling symlink at the material path fails; it must not recurse forever.
+func TestADanglingSymlinkDoesNotLoop(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks need privileges on windows")
+	}
+	dir := t.TempDir()
+	link := filepath.Join(dir, "m")
+	require.NoError(t, os.Symlink(filepath.Join(dir, "nowhere"), link))
+	done := make(chan error, 1)
+	go func() { _, _, err := LoadOrCreateMaterial(link); done <- err }()
+	select {
+	case err := <-done:
+		assert.Error(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("LoadOrCreateMaterial looped on a dangling symlink")
+	}
 }

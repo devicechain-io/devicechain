@@ -72,7 +72,7 @@ func TestARegisteredDeviceCanConnectAndIsCutOffWhenRevoked(t *testing.T) {
 	// The endpoint, as the service mounts it, with the instance id the responder below expects.
 	ms := &core.Microservice{InstanceId: "inst-1", FunctionalArea: "device-management"}
 	ms.UseMetricsRegistry(prometheus.NewRegistry())
-	h, err := provisioning.New(provisioning.Config{ReadDeadline: 10 * time.Second, MaxInFlight: 4, SourceBurst: 100, SourceEvery: time.Millisecond},
+	h, err := provisioning.New(provisioning.Config{ReadDeadline: 10 * time.Second, MaxInFlight: 4, MaxConcurrentRegistrations: 2, SourceBurst: 100, SourceEvery: time.Millisecond},
 		provisioning.Deps{Registrar: api, InstanceId: "inst-1", Tenants: core.NewTenantRateLimiter(core.StaticCeiling(1000, 1000)),
 			Metrics: provisioning.NewMetrics(ms)})
 	require.NoError(t, err)
@@ -94,7 +94,7 @@ func TestARegisteredDeviceCanConnectAndIsCutOffWhenRevoked(t *testing.T) {
 		t.Helper()
 		res, err := selfreg.Register(context.Background(),
 			selfreg.Request{Tenant: "acme", Key: "fleet-key", Secret: created.IssuedSecret, ExternalId: "SN-000123"},
-			selfreg.Options{BaseURL: srv.URL, MaterialFile: file, MaxAttempts: 1})
+			selfreg.Options{BaseURL: srv.URL, MaterialFile: file, MaxAttempts: 1, AllowPlaintext: true})
 		require.NoError(t, err)
 		return res
 	}
@@ -150,7 +150,7 @@ func TestARegisteredDeviceCanConnectAndIsCutOffWhenRevoked(t *testing.T) {
 	// And a revoked device does not quietly register again with its old credential.
 	_, err = selfreg.Register(context.Background(),
 		selfreg.Request{Tenant: "acme", Key: "fleet-key", Secret: created.IssuedSecret, ExternalId: "SN-000123"},
-		selfreg.Options{BaseURL: srv.URL, MaterialFile: file, MaxAttempts: 1})
+		selfreg.Options{BaseURL: srv.URL, MaterialFile: file, MaxAttempts: 1, AllowPlaintext: true})
 	var apiErr *selfreg.APIError
 	require.ErrorAs(t, err, &apiErr)
 	assert.Equal(t, 409, apiErr.Status)

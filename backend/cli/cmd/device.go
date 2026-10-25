@@ -41,7 +41,7 @@ func init() {
 // its own flag set, and no flag value outlives a run.
 type deviceRegisterFlags struct {
 	server       string
-	tls          bool
+	insecure     bool
 	tenant       string
 	key          string
 	secret       string
@@ -81,9 +81,15 @@ variable ` + provisionSecretEnv + `. Give at most one of the two flags (both is 
 wins over the variable. Prefer the file or the variable, which keep it out of the process
 listing.
 
+The request carries the provision secret, so it always goes over https. --insecure-plaintext
+sends it over plaintext http instead, which exposes the secret to anyone on the path; it exists
+for a local test cluster without a certificate. A redirect from the server is never followed
+(a plain-http ingress that answers 308 would otherwise make the secret travel twice), and is
+reported as an error.
+
 The endpoint needs the instance's API ingress, and --server is that ingress host exactly as for
 the other commands.`,
-		Example: `  dcctl device register --server dc.example.com --tls --tenant acme \
+		Example: `  dcctl device register --server dc.example.com --tenant acme \
       --key acme-sensors-2026 --secret-file ./provision.secret \
       --external-id SN-000123 --material-file ./SN-000123.credential`,
 		Args:         cobra.NoArgs,
@@ -94,7 +100,7 @@ the other commands.`,
 	}
 	fl := c.Flags()
 	fl.StringVarP(&f.server, "server", "s", "localhost", "instance host for platform API calls")
-	fl.BoolVar(&f.tls, "tls", false, "use https for platform endpoints")
+	fl.BoolVar(&f.insecure, "insecure-plaintext", false, "send the request over plaintext http, secret included; for a local test cluster only")
 	fl.StringVarP(&f.tenant, "tenant", "t", "", "tenant the device registers into (required)")
 	fl.StringVar(&f.key, "key", "", "the provisioning profile's provision key (required)")
 	fl.StringVar(&f.secret, "secret", "", "the provisioning profile's provision secret; prefer --secret-file or $"+provisionSecretEnv)
@@ -161,10 +167,11 @@ func runDeviceRegister(ctx context.Context, out, errOut io.Writer, f *deviceRegi
 	res, err := selfreg.Register(ctx, selfreg.Request{
 		Tenant: f.tenant, Key: f.key, Secret: secret, ExternalId: f.externalId, Name: f.name,
 	}, selfreg.Options{
-		BaseURL:      sim.DeviceManagementURL(f.server, f.tls),
-		MaterialFile: f.materialFile,
-		MaxAttempts:  f.maxAttempts,
-		Logf:         func(format string, args ...any) { fmt.Fprintf(errOut, format+"\n", args...) },
+		BaseURL:        registerBaseURL(f),
+		AllowPlaintext: f.insecure,
+		MaterialFile:   f.materialFile,
+		MaxAttempts:    f.maxAttempts,
+		Logf:           func(format string, args ...any) { fmt.Fprintf(errOut, format+"\n", args...) },
 	})
 	if err != nil {
 		var apiErr *selfreg.APIError
@@ -175,6 +182,11 @@ func runDeviceRegister(ctx context.Context, out, errOut io.Writer, f *deviceRegi
 	}
 	printRegistration(out, res)
 	return nil
+}
+
+// registerBaseURL is https unless the caller asked for plaintext by name.
+func registerBaseURL(f *deviceRegisterFlags) string {
+	return sim.DeviceManagementURL(f.server, !f.insecure)
 }
 
 // printRegistration writes the outcome. The credential is printed only on the run that

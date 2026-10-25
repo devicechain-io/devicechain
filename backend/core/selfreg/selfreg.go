@@ -37,6 +37,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -78,6 +79,10 @@ type Options struct {
 	// first send and read, not regenerated, when it already exists.
 	MaterialFile string
 	HTTPClient   *http.Client
+	// AllowPlaintext permits an http:// BaseURL. It is off by default: the request carries the
+	// fleet's provision secret, so sending it unencrypted is something a caller must ask for by
+	// name (a local kind cluster), never something a missing "s" does by accident.
+	AllowPlaintext bool
 	// MaxAttempts bounds the sends; zero keeps trying until the context ends.
 	MaxAttempts int
 	// Sleep waits for d or the context; a test replaces it.
@@ -124,6 +129,17 @@ func (e *APIError) Error() string {
 	return fmt.Sprintf("registration refused: HTTP %d %s: %s", e.Status, e.Code, e.Message)
 }
 
+// RedirectError is an answer that tried to send the request somewhere else. It is never
+// followed and never retried: the request carries the provision secret.
+type RedirectError struct {
+	Status   int
+	Location string
+}
+
+func (e *RedirectError) Error() string {
+	return fmt.Sprintf("the server answered HTTP %d, redirecting to %q; refusing to follow it, because the request carries the provision secret. Use the final https URL directly", e.Status, e.Location)
+}
+
 // GenerateMaterial returns fresh credential material: MaterialBytes random bytes, base64url
 // without padding.
 func GenerateMaterial() (string, error) {
@@ -156,10 +172,17 @@ func ValidateMaterial(material string) error {
 // validated; one that is not valid material is an error, never silently replaced, because
 // replacing it would strand a device whose credential the platform already holds.
 func LoadOrCreateMaterial(path string) (material string, created bool, err error) {
+	return loadOrCreateMaterial(path, true)
+}
+
+func loadOrCreateMaterial(path string, mayRetry bool) (string, bool, error) {
 	if path == "" {
 		return "", false, errors.New("a material file is required: the credential must be saved before it is sent")
 	}
 	if existing, rerr := os.ReadFile(path); rerr == nil {
+		if perr := checkPrivate(path); perr != nil {
+			return "", false, perr
+		}
 		m := strings.TrimSpace(string(existing))
 		if verr := ValidateMaterial(m); verr != nil {
 			return "", false, fmt.Errorf("%s does not hold valid credential material (%v); move it aside if it is stale", path, verr)
@@ -179,9 +202,11 @@ func LoadOrCreateMaterial(path string) (material string, created bool, err error
 	}
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
-		if errors.Is(err, os.ErrExist) {
-			// Another run created it between our read and our create: use theirs.
-			return LoadOrCreateMaterial(path)
+		if errors.Is(err, os.ErrExist) && mayRetry {
+			// Another run created it between our read and our create: use theirs, once. A
+			// path that exists but cannot be read (a dangling symlink) fails here instead of
+			// looping.
+			return loadOrCreateMaterial(path, false)
 		}
 		return "", false, fmt.Errorf("create %s: %w", path, err)
 	}
@@ -199,17 +224,55 @@ func LoadOrCreateMaterial(path string) (material string, created bool, err error
 	return m, true, nil
 }
 
+// checkPrivate refuses a material file that group or others can read, where the platform has
+// such a notion: the file is the device's credential, and a world-readable copy is a leak that
+// nothing else would notice.
+func checkPrivate(path string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	st, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("stat %s: %w", path, err)
+	}
+	if st.Mode().Perm()&0o077 != 0 {
+		return fmt.Errorf("%s is readable by group or others (mode %04o); it holds the device's credential. Run: chmod 600 %s",
+			path, st.Mode().Perm(), path)
+	}
+	return nil
+}
+
 // Register registers the device, saving its material first and following the retry contract.
 func Register(ctx context.Context, req Request, opts Options) (*Result, error) {
 	if opts.BaseURL == "" || req.Tenant == "" || req.Key == "" || req.Secret == "" || req.ExternalId == "" {
 		return nil, errors.New("a registration needs a base URL, tenant, provision key, provision secret and external id")
 	}
-	if opts.HTTPClient == nil {
-		// The transport is stated: this client runs on a device or a workstation, outside the
-		// platform, and an operator behind a proxy expects the standard environment (HTTPS_PROXY)
-		// to apply, which the platform-internal httptransport.New() deliberately refuses.
-		opts.HTTPClient = &http.Client{Timeout: attemptTimeout, Transport: http.DefaultTransport}
+	u, err := url.Parse(opts.BaseURL)
+	if err != nil || u.Host == "" {
+		return nil, fmt.Errorf("the base URL %q is not a URL", opts.BaseURL)
 	}
+	switch u.Scheme {
+	case "https":
+	case "http":
+		if !opts.AllowPlaintext {
+			return nil, errors.New("refusing to send the provision secret over plaintext http: use an https URL, or opt in to plaintext explicitly")
+		}
+	default:
+		return nil, fmt.Errorf("the base URL %q must be https", opts.BaseURL)
+	}
+	// The transport is stated: this client runs on a device or a workstation, outside the
+	// platform, and an operator behind a proxy expects the standard environment (HTTPS_PROXY)
+	// to apply, which the platform-internal httptransport.New() deliberately refuses.
+	client := &http.Client{Timeout: attemptTimeout, Transport: http.DefaultTransport}
+	if opts.HTTPClient != nil {
+		c := *opts.HTTPClient
+		client = &c
+	}
+	// A redirect is never followed, whatever client was given: Go would re-POST the body, the
+	// provision secret with it, to wherever the Location names (an ingress answering 308 to
+	// https is the case that happens), and the command would report success.
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	opts.HTTPClient = client
 	if opts.Sleep == nil {
 		opts.Sleep = sleepContext
 	}
@@ -247,6 +310,8 @@ func Register(ctx context.Context, req Request, opts Options) (*Result, error) {
 			opts.Logf("attempt %d: %v; retrying in %s", attempt, sendErr, wait.Round(time.Millisecond))
 		case status == http.StatusOK || status == http.StatusCreated:
 			return success(payload, material, opts.MaterialFile, created, attempt)
+		case status >= 300 && status < 400:
+			return nil, &RedirectError{Status: status, Location: header.Get("Location")}
 		default:
 			apiErr := parseError(status, payload)
 			retry, afterHeader := classify(status, apiErr.Code, header)
@@ -366,6 +431,10 @@ func classify(status int, code string, h http.Header) (retry bool, retryAfter ti
 
 func parseRetryAfter(v string) time.Duration {
 	if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 0 {
+		// Capped: a server (or a hostile middlebox) must not be able to park a device for days.
+		if n > int(backoffCeil/time.Second) {
+			return backoffCeil
+		}
 		return time.Duration(n) * time.Second
 	}
 	return 0

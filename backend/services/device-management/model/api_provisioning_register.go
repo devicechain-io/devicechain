@@ -640,7 +640,7 @@ func ValidateProvisionRequest(request *ProvisionRequest) error {
 // knows cannot succeed, such as one aimed at a tenant that is being deleted: it pays the same
 // dummy compare an unknown key pays and answers ErrProvisioningFailed. It exists so that
 // refusing early does not make the refusal faster than the others, which would tell a stranger
-// which tenants are gone.
+// which tenants are gone. It makes the same lookup an authentication makes and ignores its answer.
 func (api *Api) RefuseProvisioning(ctx context.Context, provisionKey, secret string) error {
 	if api.ProvisioningChecker == nil || api.EnrollmentKeys == nil {
 		return ErrProvisioningUnavailable
@@ -649,9 +649,19 @@ func (api *Api) RefuseProvisioning(ctx context.Context, provisionKey, secret str
 	if err != nil {
 		return err
 	}
+	// The same tenant-scoped lookup an authentication makes, its answer discarded: the refusal
+	// costs the same database round trip as every other 401, which is the whole point of it.
+	lookup := func(ctx context.Context) (string, error) {
+		var found ProvisioningProfile
+		if err := api.RDB.DB(ctx).Where("provision_key = ?", provisionKey).First(&found).Error; err != nil &&
+			!errors.Is(err, gorm.ErrRecordNotFound) {
+			return "", err
+		}
+		return "", nil
+	}
 	err = api.ProvisioningChecker.Check(ctx, credential.Principal{
 		Kind: credential.KindProvisioningProfile, ID: tenant + ":" + provisionKey, Tenant: tenant,
-	}, secret, func(context.Context) (string, error) { return "", nil })
+	}, secret, lookup)
 	if err == nil || errors.Is(err, credential.ErrMismatch) {
 		return ErrProvisioningFailed
 	}

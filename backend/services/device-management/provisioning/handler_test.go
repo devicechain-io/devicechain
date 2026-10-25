@@ -285,9 +285,10 @@ func TestEveryAuthenticationFailureIsTheSameAnswerAtTheSameCost(t *testing.T) {
 	}
 	var first reply
 	for name, send := range classes {
-		before := f.compares.Load()
+		before, readsBefore := f.compares.Load(), f.profileReads.Load()
 		got := send()
 		assert.Equal(t, 401, got.Status, name)
+		assert.Equal(t, int64(1), f.profileReads.Load()-readsBefore, "%s: a stranger could tell this class by its database round trips", name)
 		assert.Equal(t, int64(1), f.compares.Load()-before, "%s: a stranger could tell this class by the work it costs", name)
 		assert.Equal(t, "PROVISIONING_FAILED", got.Code(), name)
 		if first.Raw == nil {
@@ -298,7 +299,7 @@ func TestEveryAuthenticationFailureIsTheSameAnswerAtTheSameCost(t *testing.T) {
 		assert.Equal(t, first.Header.Get("Content-Type"), got.Header.Get("Content-Type"), name)
 		assert.Equal(t, first.Header.Get("Retry-After"), got.Header.Get("Retry-After"), name)
 	}
-	// A deleted tenant is refused through the dummy compare and never reads the profile.
+	// A deleted tenant is refused through the dummy compare AND the same profile lookup.
 	assert.Equal(t, int64(1), f.registrar.refuse.Load())
 	d, c := f.rows()
 	assert.Equal(t, [2]int64{1, 1}, [2]int64{d, c}, "an authentication failure wrote a row")
@@ -510,6 +511,7 @@ func TestNewRefusesAnythingThatLeavesALayerOff(t *testing.T) {
 	for name, mutate := range map[string]func(*Config, *Deps){
 		"no read deadline":   func(c *Config, d *Deps) { c.ReadDeadline = 0 },
 		"no slots":           func(c *Config, d *Deps) { c.MaxInFlight = 0 },
+		"no db places":       func(c *Config, d *Deps) { c.MaxConcurrentRegistrations = 0 },
 		"no source burst":    func(c *Config, d *Deps) { c.SourceBurst = 0 },
 		"no source schedule": func(c *Config, d *Deps) { c.SourceEvery = 0 },
 		"no registrar":       func(c *Config, d *Deps) { d.Registrar = nil },

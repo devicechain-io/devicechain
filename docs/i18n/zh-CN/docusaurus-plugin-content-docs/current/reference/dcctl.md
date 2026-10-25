@@ -413,6 +413,12 @@ variable DCCTL_PROVISION_SECRET. Give at most one of the two flags (both is an e
 wins over the variable. Prefer the file or the variable, which keep it out of the process
 listing.
 
+The request carries the provision secret, so it always goes over https. --insecure-plaintext
+sends it over plaintext http instead, which exposes the secret to anyone on the path; it exists
+for a local test cluster without a certificate. A redirect from the server is never followed
+(a plain-http ingress that answers 308 would otherwise make the secret travel twice), and is
+reported as an error.
+
 The endpoint needs the instance's API ingress, and --server is that ingress host exactly as for
 the other commands.
 
@@ -423,7 +429,7 @@ dcctl device register [flags]
 ### Examples
 
 ```
-  dcctl device register --server dc.example.com --tls --tenant acme \
+  dcctl device register --server dc.example.com --tenant acme \
       --key acme-sensors-2026 --secret-file ./provision.secret \
       --external-id SN-000123 --material-file ./SN-000123.credential
 ```
@@ -433,6 +439,7 @@ dcctl device register [flags]
 ```
       --external-id string     the device's serial number or other external id (required)
   -h, --help                   help for register
+      --insecure-plaintext     send the request over plaintext http, secret included; for a local test cluster only
       --key string             the provisioning profile's provision key (required)
       --material-file string   file the device's credential is saved to before it is sent, and read back on a re-run (required)
       --max-attempts int       give up after this many sends (0 keeps trying until --timeout) (default 10)
@@ -442,7 +449,6 @@ dcctl device register [flags]
   -s, --server string          instance host for platform API calls (default "localhost")
   -t, --tenant string          tenant the device registers into (required)
       --timeout duration       give up after this long overall (0 for no limit) (default 10m0s)
-      --tls                    use https for platform endpoints
 ```
 
 ### SEE ALSO
