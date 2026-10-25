@@ -177,9 +177,12 @@ defect to investigate, not load. `react_actions_not_enabled_total` should never 
 | `react_actions_not_enabled_total{action}` | REACT actions recognized but dropped because this deployment has no sink for them, by action type: sendCommand without command-delivery configured, or httpCall/publish without outbound connectors enabled. The alarm sink is always wired, so raiseAlarm/clearAlarm should never appear here. |
 | `react_connector_egress_shed_total{action}` | Connector dispatch attempts (`httpCall`, `publish`) shed at the source for being over the tenant's outbound rate, by action type. Counted per attempt: a redelivery may shed and later admit the same action, so this is not a count of permanently dropped actions. |
 | `react_connector_shed_dead_lettered_total{action}` | Connector actions (httpCall/publish) shed at the source and recorded as an individual dead letter with reason shed, by action type. |
+| `react_derived_in_flight` | Derived events REACT has taken from the stream and not yet finished with: waiting for their device's worker or being dispatched. At most `react_workers`. |
+| `react_dispatch_lag_seconds` | How far behind the derived-event stream REACT dispatches: each event's age, from the broker storing it to its dispatch starting. This is the time a detection's alarm, commands and connector calls wait on REACT. |
 | `react_events_dead_lettered_total` | Derived events written to the dead-letter stream after the redelivery cap, so their actions can be inspected rather than vanishing. |
 | `react_events_orphaned_total` | Derived events whose rule was gone from the projection (nothing dispatched). |
 | `react_events_poison_dropped_total` | Derived events dropped after the redelivery cap, because their dispatch kept failing. They are also written to the dead-letter stream, so this counts the same events as `react_events_dead_lettered_total`; it is kept because the `ReactPoisonDropping` alert fires on it. |
+| `react_workers` | How many derived events REACT may dispatch at once (`react.workers`). Events of one device are always dispatched one after another, in stream order. |
 
 ## Event sources {#event-sources}
 

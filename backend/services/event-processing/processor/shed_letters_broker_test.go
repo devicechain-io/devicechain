@@ -136,7 +136,7 @@ func TestAReplayedDetectionIsStoredOnceAndNeverLettered(t *testing.T) {
 	nmgr, ms, producer := b.brokerManager(t, func(m *messaging.NatsManager) error {
 		// The reader main.go builds, with the term gate held open: one slot, so this also
 		// shows a one-at-a-time reader drains a replayed backlog.
-		r, err := m.NewReader(streams.DerivedEvents, ReactReaderOptions(func() bool { return true })...)
+		r, err := m.NewReader(streams.DerivedEvents, ReactReaderOptions(func() bool { return true }, 1)...)
 		reactReader = r
 		return err
 	})
@@ -150,7 +150,7 @@ func TestAReplayedDetectionIsStoredOnceAndNeverLettered(t *testing.T) {
 	dead := &deadRecorder{}
 	sink := &connSink{}
 	gate := core.NewTenantRateLimiter(core.StaticCeiling(100, 200))
-	rd := NewReactDispatcher(ms, reactReader, reactFakeResolver{rule: connectorRule(httpCallAction()), found: true},
+	rd := NewReactDispatcher(ms, reactReader, 1, reactFakeResolver{rule: connectorRule(httpCallAction()), found: true},
 		nil, nil, sink, gate, producer.NewSink(dead), testShedBudget, NewReactMetrics(ms))
 	require.NoError(t, rd.Start(context.Background()))
 	t.Cleanup(func() { _ = rd.Stop(context.Background()) })

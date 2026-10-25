@@ -13,6 +13,7 @@ import (
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/rdb"
 )
 
 // Default checkpoint cadence (ADR-051). The DETECT engine holds window/timer state
@@ -229,6 +230,76 @@ type EventProcessingConfiguration struct {
 	// DerivedPublishing bounds how many detections a checkpoint has waiting for the broker at
 	// once. See DerivedPublishingConfiguration.
 	DerivedPublishing DerivedPublishingConfiguration
+
+	// React sizes the REACT stage's consumer of the derived-event stream. See
+	// ReactConfiguration.
+	React ReactConfiguration
+}
+
+// DefaultReactWorkers is how many derived events REACT dispatches at once when react.workers is
+// absent. MaxReactWorkers is the most it may be set to.
+//
+// One derived event costs REACT a few sequential network round trips and almost no CPU: the
+// fetch, the rule's point read from this service's database, and the publish of each action to
+// its stream, which waits for the broker's replicated acknowledgement. Dispatched one at a time
+// that is a latency-bound ceiling, and GKE round 19 measured it at about 151 events a second
+// against 194 offered (ack-pending 1 for an hour, the backlog growing by 43 a second). Eight
+// overlap those waits about eight ways, leaving device-management's raise-alarm consumer, not
+// REACT, as the next stage to bind, and hold at most eight of the default pool's twenty
+// connections for the rule reads.
+const (
+	DefaultReactWorkers = 8
+	MaxReactWorkers     = 64
+)
+
+// ReactConfiguration is functionalAreas.event-processing.config.react. Its one field is optional
+// and takes its default when absent; a value that IS given must be inside its bounds, zero
+// included, or the service refuses to start.
+//
+// Derived events of one device always dispatch in the order the stream holds them, whatever the
+// count: each device's events go to one worker, chosen by hashing the tenant's subject and the
+// device, and that worker handles them one after another. Only different devices overlap.
+type ReactConfiguration struct {
+	// Workers is how many derived events are dispatched at once: 1 to 64, default 8 (or half the
+	// connection pool, when that is smaller). At 1 they are dispatched one after another, as REACT
+	// did before this setting existed. Each worker holds at most one of this service's database
+	// connections at a time (the rule read), so a count that is set must also be below the
+	// connection pool's size.
+	Workers *int
+}
+
+// applyDefaults fills an absent worker count: DefaultReactWorkers, capped at half the connection
+// pool and floored at 1, so a deployment that sized a small pool before this setting existed still
+// starts, with the rule reads holding no more than half its connections. An explicit count is
+// never adjusted, only validated.
+func (r *ReactConfiguration) applyDefaults(pool config.MicroserviceDatastoreConfiguration) {
+	if r.Workers == nil {
+		r.Workers = intPtr(max(1, min(DefaultReactWorkers, rdb.EffectiveMaxOpenConnections(pool)/2)))
+	}
+}
+
+// validate refuses a worker count outside its bounds, or one the connection pool cannot carry
+// beside everything else this service reads and writes. pool is the service's datastore
+// configuration.
+func (r ReactConfiguration) validate(pool config.MicroserviceDatastoreConfiguration) error {
+	w := r.WorkerCount()
+	if w < 1 || w > MaxReactWorkers {
+		return fmt.Errorf("react.workers must be between 1 and %d, got %d", MaxReactWorkers, w)
+	}
+	// One worker is REACT as it ran before this setting existed, one rule read at a time beside
+	// whatever pool the deployment has; refusing it would refuse a configuration that always started.
+	if w == 1 {
+		return nil
+	}
+	return rdb.CheckWriterCount("react.workers", w, pool)
+}
+
+// WorkerCount is the worker count in effect, an absent one as its default.
+func (r ReactConfiguration) WorkerCount() int {
+	if r.Workers == nil {
+		return DefaultReactWorkers
+	}
+	return *r.Workers
 }
 
 // DerivedPublishingConfiguration is functionalAreas.event-processing.config.derivedPublishing.
@@ -442,6 +513,7 @@ func (c *EventProcessingConfiguration) ApplyDefaults() {
 	}
 	c.RuleHealth.applyDefaults()
 	c.DerivedPublishing.applyDefaults()
+	c.React.applyDefaults(c.RdbConfiguration)
 }
 
 // RetiredConfigKeys names the keys this service accepted in an earlier release and has
@@ -590,6 +662,9 @@ func (c *EventProcessingConfiguration) Validate() error {
 		return err
 	}
 	if err := c.DerivedPublishing.Config().Validate(); err != nil {
+		return err
+	}
+	if err := c.React.validate(c.RdbConfiguration); err != nil {
 		return err
 	}
 	return nil

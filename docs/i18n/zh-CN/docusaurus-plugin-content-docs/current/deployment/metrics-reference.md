@@ -145,9 +145,12 @@ title: 指标参考
 | `react_actions_not_enabled_total{action}` | 被识别但因此部署没有对应接收端而丢弃的 REACT 动作，按动作类型区分：未配置指令投递时的 sendCommand，或未启用出站连接器时的 httpCall/publish。告警接收端总是已接通，因此 raiseAlarm/clearAlarm 不应出现在这里。 |
 | `react_connector_egress_shed_total{action}` | 因超过租户出站速率而在源头被丢弃的连接器分发尝试（`httpCall`、`publish`），按动作类型区分。按尝试计数：重投递可能先被丢弃、后又接纳同一动作，所以这不是被永久丢弃动作的数量。 |
 | `react_connector_shed_dead_lettered_total{action}` | 在源头被丢弃，并以原因 shed 记录为单独死信的连接器动作（httpCall/publish），按动作类型区分。 |
+| `react_derived_in_flight` | REACT 已从流中取出但尚未处理完的派生事件：正在等待其设备的工作者，或正在分发。最多为 `react_workers`。 |
+| `react_dispatch_lag_seconds` | REACT 分发落后于派生事件流的程度：每个事件从被消息代理存储到开始分发时的时长。这是一次检测的告警、命令和连接器调用在 REACT 上等待的时间。 |
 | `react_events_dead_lettered_total` | 达到重投递上限后写入死信流的派生事件，使其动作可以被检查，而不是凭空消失。 |
 | `react_events_orphaned_total` | 其规则已不在投影中的派生事件（未分发任何内容）。 |
 | `react_events_poison_dropped_total` | 因分发持续失败而在达到重投递上限后被丢弃的派生事件。它们同时也写入死信流，因此这与 `react_events_dead_lettered_total` 统计的是同一批事件；保留它是因为 `ReactPoisonDropping` 告警依据它触发。 |
+| `react_workers` | REACT 可同时分发的派生事件数（`react.workers`）。同一设备的事件始终按流中顺序逐个分发。 |
 
 ## 事件来源 {#event-sources}
 

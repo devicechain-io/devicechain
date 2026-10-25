@@ -1133,6 +1133,195 @@
    }
   },
   {
+   "id": 47,
+   "type": "timeseries",
+   "title": "Derived-event backlog",
+   "description": "Derived events waiting for REACT: the broker's own count for the durable (read from the consumer leader, so it stays visible while event-processing is down) beside the count event-processing reports. A line that only grows means REACT is slower than detection: the dispatch lag beside it says by how much.",
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 0,
+    "y": 46
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "max by (consumer_name) (nats_consumer_num_pending{namespace=\"$namespace\", is_consumer_leader=\"true\", consumer_name=~\".+_event-processing_derived-events\"})",
+     "legendFormat": "broker"
+    },
+    {
+     "refId": "B",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "max(devicechain_eventprocessing_jetstream_consumer_pending_messages{namespace=\"$namespace\", durable=~\".+_event-processing_derived-events\"})",
+     "legendFormat": "reported by event-processing"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 1,
+      "fillOpacity": 30,
+      "showPoints": "never",
+      "spanNulls": true
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   }
+  },
+  {
+   "id": 48,
+   "type": "timeseries",
+   "title": "Dispatch concurrency",
+   "description": "Derived events REACT is dispatching at once (queued for their device's worker or in dispatch) against react.workers. In flight pinned at the worker count while the backlog grows means REACT needs more workers or a faster downstream; in flight near 1 with more workers means the events are concentrated on a few devices, whose events are always dispatched one after another.",
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 8,
+    "y": 46
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "max(devicechain_eventprocessing_react_derived_in_flight{namespace=\"$namespace\"})",
+     "legendFormat": "in flight"
+    },
+    {
+     "refId": "B",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "max(devicechain_eventprocessing_react_workers{namespace=\"$namespace\"})",
+     "legendFormat": "workers"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 1,
+      "fillOpacity": 30,
+      "showPoints": "never",
+      "spanNulls": true
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   }
+  },
+  {
+   "id": 49,
+   "type": "timeseries",
+   "title": "Dispatch lag (p50 / p99)",
+   "description": "How far behind the derived-event stream REACT dispatches: each event's age from the broker storing it to its dispatch starting, as the 50th and 99th percentile over 5 minutes. This is the time a detection's alarm, commands and connector calls wait on REACT. Seconds and growing is a REACT backlog.",
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 16,
+    "y": 46
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "histogram_quantile(0.5, sum by (le) (rate(devicechain_eventprocessing_react_dispatch_lag_seconds_bucket{namespace=\"$namespace\"}[5m])))",
+     "legendFormat": "p50"
+    },
+    {
+     "refId": "B",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "histogram_quantile(0.99, sum by (le) (rate(devicechain_eventprocessing_react_dispatch_lag_seconds_bucket{namespace=\"$namespace\"}[5m])))",
+     "legendFormat": "p99"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s",
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 1,
+      "fillOpacity": 30,
+      "showPoints": "never",
+      "spanNulls": true
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   }
+  },
+  {
    "id": 18,
    "type": "row",
    "title": "State budget",
@@ -1141,7 +1330,7 @@
     "h": 1,
     "w": 24,
     "x": 0,
-    "y": 46
+    "y": 54
    }
   },
   {
@@ -1153,7 +1342,7 @@
     "h": 4,
     "w": 6,
     "x": 0,
-    "y": 47
+    "y": 55
    },
    "datasource": {
     "type": "prometheus",
@@ -1211,7 +1400,7 @@
     "h": 4,
     "w": 6,
     "x": 6,
-    "y": 47
+    "y": 55
    },
    "datasource": {
     "type": "prometheus",
@@ -1273,7 +1462,7 @@
     "h": 4,
     "w": 6,
     "x": 12,
-    "y": 47
+    "y": 55
    },
    "datasource": {
     "type": "prometheus",
@@ -1335,7 +1524,7 @@
     "h": 4,
     "w": 6,
     "x": 18,
-    "y": 47
+    "y": 55
    },
    "datasource": {
     "type": "prometheus",
@@ -1397,7 +1586,7 @@
     "h": 8,
     "w": 12,
     "x": 0,
-    "y": 51
+    "y": 59
    },
    "datasource": {
     "type": "prometheus",
@@ -1452,7 +1641,7 @@
     "h": 8,
     "w": 12,
     "x": 12,
-    "y": 51
+    "y": 59
    },
    "datasource": {
     "type": "prometheus",
@@ -1516,7 +1705,7 @@
     "h": 1,
     "w": 24,
     "x": 0,
-    "y": 59
+    "y": 67
    }
   },
   {
@@ -1528,7 +1717,7 @@
     "h": 8,
     "w": 8,
     "x": 0,
-    "y": 60
+    "y": 68
    },
    "datasource": {
     "type": "prometheus",
@@ -1583,7 +1772,7 @@
     "h": 8,
     "w": 8,
     "x": 8,
-    "y": 60
+    "y": 68
    },
    "datasource": {
     "type": "prometheus",
@@ -1638,7 +1827,7 @@
     "h": 8,
     "w": 8,
     "x": 16,
-    "y": 60
+    "y": 68
    },
    "datasource": {
     "type": "prometheus",
@@ -1693,7 +1882,7 @@
     "h": 1,
     "w": 24,
     "x": 0,
-    "y": 68
+    "y": 76
    }
   },
   {
@@ -1705,7 +1894,7 @@
     "h": 8,
     "w": 12,
     "x": 0,
-    "y": 69
+    "y": 77
    },
    "datasource": {
     "type": "prometheus",
@@ -1772,7 +1961,7 @@
     "h": 8,
     "w": 12,
     "x": 12,
-    "y": 69
+    "y": 77
    },
    "datasource": {
     "type": "prometheus",
@@ -1839,7 +2028,7 @@
     "h": 8,
     "w": 24,
     "x": 0,
-    "y": 77
+    "y": 85
    },
    "datasource": {
     "type": "prometheus",
@@ -1918,7 +2107,7 @@
     "h": 1,
     "w": 24,
     "x": 0,
-    "y": 86
+    "y": 94
    }
   },
   {
@@ -1930,7 +2119,7 @@
     "h": 8,
     "w": 12,
     "x": 0,
-    "y": 87
+    "y": 95
    },
    "datasource": {
     "type": "prometheus",
@@ -2006,7 +2195,7 @@
     "h": 8,
     "w": 12,
     "x": 12,
-    "y": 87
+    "y": 95
    },
    "datasource": {
     "type": "prometheus",
@@ -2066,7 +2255,7 @@
     "h": 8,
     "w": 12,
     "x": 0,
-    "y": 95
+    "y": 103
    },
    "datasource": {
     "type": "prometheus",
@@ -2124,7 +2313,7 @@
     "h": 8,
     "w": 12,
     "x": 12,
-    "y": 95
+    "y": 103
    },
    "datasource": {
     "type": "prometheus",
@@ -2182,7 +2371,7 @@
     "h": 1,
     "w": 24,
     "x": 0,
-    "y": 103
+    "y": 111
    }
   },
   {
@@ -2194,7 +2383,7 @@
     "h": 8,
     "w": 12,
     "x": 0,
-    "y": 104
+    "y": 112
    },
    "datasource": {
     "type": "prometheus",
@@ -2252,7 +2441,7 @@
     "h": 8,
     "w": 12,
     "x": 12,
-    "y": 104
+    "y": 112
    },
    "datasource": {
     "type": "prometheus",
@@ -2306,7 +2495,7 @@
     "h": 8,
     "w": 12,
     "x": 12,
-    "y": 120
+    "y": 128
    },
    "datasource": {
     "type": "prometheus",
@@ -2360,7 +2549,7 @@
     "h": 8,
     "w": 12,
     "x": 0,
-    "y": 112
+    "y": 120
    },
    "datasource": {
     "type": "prometheus",
@@ -2432,7 +2621,7 @@
     "h": 8,
     "w": 12,
     "x": 12,
-    "y": 112
+    "y": 120
    },
    "datasource": {
     "type": "prometheus",
@@ -2486,7 +2675,7 @@
     "h": 8,
     "w": 12,
     "x": 0,
-    "y": 120
+    "y": 128
    },
    "datasource": {
     "type": "prometheus",
@@ -2549,7 +2738,7 @@
     "h": 8,
     "w": 12,
     "x": 0,
-    "y": 128
+    "y": 136
    },
    "datasource": {
     "type": "prometheus",
@@ -2612,7 +2801,7 @@
     "h": 8,
     "w": 12,
     "x": 12,
-    "y": 128
+    "y": 136
    },
    "datasource": {
     "type": "prometheus",

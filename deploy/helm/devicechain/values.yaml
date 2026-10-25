@@ -1981,6 +1981,13 @@ functionalAreas:
     # derivedPublishing:
     #   maxInFlight: 32               # 1 to 1024
     #   maxBufferedBytes: 4194304     # bytes of those waiting detections, 65536 to 268435456
+    # REACT (the stage that raises and clears alarms, sends commands and calls connectors for
+    # each detection): how many detections it dispatches at once. Each device's detections are
+    # always dispatched one after another, in order; only different devices overlap. 8 by default
+    # (half the connection pool when that is smaller); a value above 1 must be below the pool
+    # size, since each worker may hold one connection. 1 is the old one-at-a-time consumer.
+    # react:
+    #   workers: 8                    # 1 to 64
   mcp:
     # The MCP server (ADR-047): an OAuth 2.1 Resource Server fronting the per-area
     # GraphQL over the Model Context Protocol. Held back from the `default` profile

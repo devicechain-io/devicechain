@@ -574,9 +574,15 @@ and duplicating another. The guard string is appended to the token **only when n
 guard support did not re-key every in-flight command at the deploy boundary.
 
 The window rests on each delivery being handled within its own AckWait, and the REACT consumer makes
-that true rather than assuming it: it reads through a one-slot capacity reader
-(`ReactReaderOptions`) and bounds every sink call by the delivery's ack deadline, so an attempt
-against hung sinks ends with its delivery. Within that deadline each action gets its share — the time
+that true rather than assuming it: it reads through a capacity reader with one slot per worker
+(`ReactReaderOptions`, sized by `react.workers`, default 8), bounds every sink call by the delivery's
+ack deadline, so an attempt against hung sinks ends with its delivery, and never starts a delivery
+whose deadline passed while it waited for its worker (`runQueued`). The workers are lanes keyed by
+hashing the subject (tenant) and the event's series (`laneFor`), so one device's derived events are
+dispatched one after another in stream order and only different devices overlap; a `Retry` does not
+hold its lane. One worker was a latency-bound ceiling: GKE round 19 measured ~151 events/s with
+ack-pending 1 against 194 offered, because each event is a fetch, a rule read from Postgres and a
+replicated publish per action, each a round trip. Within that deadline each action gets its share — the time
 left over the actions left (`actionContext`) — so hung sendCommands listed first cannot spend the
 whole deadline and leave a later raiseAlarm an expired context on every delivery. At the cap the exhausted dead letter's detail names every
 action that failed (and every connector action shed) on the final attempt, as

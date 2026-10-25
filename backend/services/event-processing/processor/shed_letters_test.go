@@ -83,7 +83,7 @@ func reactWithConnectors(t *testing.T, rule rules.Rule, commands react.CommandSi
 	ms := &core.Microservice{InstanceId: "test", FunctionalArea: "event-processing"}
 	reg := prometheus.NewRegistry()
 	ms.UseMetricsRegistry(reg)
-	rd := NewReactDispatcher(ms, nil, reactFakeResolver{rule: rule, found: true}, commands, nil, conns, gate,
+	rd := NewReactDispatcher(ms, nil, 1, reactFakeResolver{rule: rule, found: true}, commands, nil, conns, gate,
 		deadletter.NewProducer(ms).NewSink(dead), budget, NewReactMetrics(ms))
 	rd.procCtx = context.Background()
 	return rd, reg

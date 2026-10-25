@@ -385,7 +385,9 @@ func wireReactDispatcher(nmgr *messaging.NatsManager) error {
 	// platform default when per-tenant overrides are not wired) — never unlimited.
 	connectorRate := buildEgressLimiter(Configuration, Microservice.InstanceConfiguration.Infrastructure, EgressUnresolved)
 
-	reader, err := newReactReader(nmgr)
+	// One value sizes both the reader's slots and the dispatcher's lanes (react.workers).
+	workers := reactWorkers(Configuration)
+	reader, err := newReactReader(nmgr, workers)
 	if err != nil {
 		return err
 	}
@@ -398,7 +400,7 @@ func wireReactDispatcher(nmgr *messaging.NatsManager) error {
 	if err != nil {
 		return err
 	}
-	ReactDispatcher = processor.NewReactDispatcher(Microservice, reader,
+	ReactDispatcher = processor.NewReactDispatcher(Microservice, reader, workers,
 		processor.NewStoreRuleResolver(DetectRuleStore), commands, alarms, connectors, connectorRate,
 		deadLetters, processor.ShedLetterBudget{
 			PerTenantPerSecond: Configuration.ShedLetterPerSecond,
@@ -442,22 +444,30 @@ func newDeadLetterSink(nmgr *messaging.NatsManager) (*deadletter.Sink, error) {
 //
 // ReaderWithReleaseOnPark gives the buffer up when the term is lost. DETECT keeps its
 // buffer across a flicker of Held because dropping it would reorder a single writer's input;
-// REACT has no order to protect, and a buffer it kept would be handed out on a later term
-// after the other replica had already dispatched it. It narrows that window rather than
-// closing it: ReaderWithReleaseOnPark names the subscription-buffered leftovers it cannot
-// reach. A leftover dispatched again soon after is collapsed by the alarm and connector
-// streams' duplicate windows; one dispatched again after a term gap longer than those windows
-// is one more way a connector call can reach its destination twice.
+// REACT keeps each device's order only within one replica's term (its lanes), and a buffer
+// it kept would be handed out on a later term after the other replica had already dispatched
+// it. It narrows that window rather than closing it: ReaderWithReleaseOnPark names the
+// subscription-buffered leftovers it cannot reach. A leftover dispatched again soon after is
+// collapsed by the alarm and connector streams' duplicate windows; one dispatched again after a
+// term gap longer than those windows is one more way a connector call can reach its
+// destination twice.
 //
-// The reader is also a one-slot capacity reader; processor.ReactReaderOptions says why, and
-// holds the whole option set so the tests build the reader main does.
+// The reader is also a capacity reader with one slot per REACT worker (react.workers);
+// processor.ReactReaderOptions says why, and holds the whole option set so the tests build the
+// reader main does.
 //
 // REACT is deliberately NOT one of the processor's termReaders (bound and unbound per term).
 // Unbinding protects DETECT from a pull request served past the new leader's replay head,
 // which for DETECT is loss; for REACT the same event only delays a dispatch. Binding REACT
 // per term would also put its bind failures on the DETECT term-build fuse.
-func newReactReader(nmgr *messaging.NatsManager) (messaging.MessageReader, error) {
-	return nmgr.NewReader(streams.DerivedEvents, processor.ReactReaderOptions(DetectTermGate.Held)...)
+func newReactReader(nmgr *messaging.NatsManager, workers int) (messaging.MessageReader, error) {
+	return nmgr.NewReader(streams.DerivedEvents, processor.ReactReaderOptions(DetectTermGate.Held, workers)...)
+}
+
+// reactWorkers is how many derived events REACT dispatches at once: react.workers, or its default
+// when absent. It sizes the derived-events reader's slots and the dispatcher's lanes alike.
+func reactWorkers(c *config.EventProcessingConfiguration) int {
+	return c.React.WorkerCount()
 }
 
 // buildEgressLimiter constructs the per-tenant SOURCE-side OUTBOUND egress cost-gate (ADR-060 SD-3).

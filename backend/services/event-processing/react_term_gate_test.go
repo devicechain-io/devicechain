@@ -197,9 +197,11 @@ func TestStandbyDoesNotSplitTheDurable(t *testing.T) {
 // When the term is lost, the REACT reader holds nothing another replica could since have
 // dispatched, so a replica that later regains the term hands out no stale copy.
 //
-// The reader is newReactReader — the function main calls — and it is a ONE-SLOT capacity reader,
-// so the property now holds by construction rather than by a release: while the worker holds a
-// message nothing else is fetched, so there is no batch to buffer across a term loss. (It still
+// The reader is newReactReader — the function main calls — built here with ONE slot (react.workers
+// 1), so the property holds by construction rather than by a release: while the worker holds a
+// message nothing else is fetched, so there is no batch to buffer across a term loss. At the
+// default of 8 slots the reader holds at most 8, each already handed to a lane, and those are the
+// old owner's share of the handover overlap described on newReactReader. (It still
 // carries ReaderWithReleaseOnPark, which gives up the one message a fetch can return just as the
 // gate closes. That path is NOT exercised here or anywhere else — no test times a gate closing
 // during a fetch — so removing the option would pass; see ReactReaderOptions for why that costs a
@@ -214,7 +216,7 @@ func TestReactReaderReleasesItsBufferOnTermLoss(t *testing.T) {
 	var held atomic.Bool
 	held.Store(true)
 	DetectTermGate.Enter(held.Load)
-	reader, err := newReactReader(nmgr)
+	reader, err := newReactReader(nmgr, 1)
 	require.NoError(t, err)
 
 	f.publish(t, nmgr, 3)
@@ -281,7 +283,7 @@ func TestReactParksWithinOnePollOfHeldGoingFalse(t *testing.T) {
 	var held atomic.Bool
 	held.Store(true)
 	DetectTermGate.Enter(held.Load)
-	reader, err := newReactReader(nmgr)
+	reader, err := newReactReader(nmgr, config.DefaultReactWorkers)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -333,4 +335,18 @@ func TestReactParksWithinOnePollOfHeldGoingFalse(t *testing.T) {
 	}
 	require.Positive(t, before, "nothing was handed out while the term was held, so this test shows nothing")
 	require.Zero(t, late, "the REACT reader handed messages out more than two gate polls after the term ended")
+}
+
+// The REACT dispatcher main wires runs at react.workers: the default when the key is absent, the
+// configured count when it is set. A wiring that dropped it would run REACT serial again, at the
+// ceiling round 19 failed on, while the setting and the docs looked right.
+func TestWiredReactDispatcherRunsAtTheConfiguredWorkers(t *testing.T) {
+	f := startReactFixture(t)
+	rd := f.wire(t, f.newManager(t), processor.NewTermGate())
+	require.Equal(t, config.DefaultReactWorkers, rd.Workers())
+
+	w := 3
+	Configuration.React.Workers = &w
+	rd = f.wire(t, f.newManager(t), processor.NewTermGate())
+	require.Equal(t, 3, rd.Workers())
 }
