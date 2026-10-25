@@ -185,6 +185,9 @@ func TestTheCaptureReaderDropsAnEntryStoredUnderAForeignSubject(t *testing.T) {
 	// design's probe P5); without it the push is dropped and the test would prove nothing.
 	lit, err := nc.SubscribeSync(target)
 	require.NoError(t, err)
+	// SubscribeSync returns before the server has registered the interest; the push below must
+	// find it registered, so wait for the round trip.
+	require.NoError(t, nc.Flush())
 	t.Cleanup(func() { _ = lit.Unsubscribe() })
 	_, err = js.AddConsumer("stuffing", &nats.ConsumerConfig{
 		Durable: "push", DeliverSubject: target, AckPolicy: nats.AckNonePolicy,
