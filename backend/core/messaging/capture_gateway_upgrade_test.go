@@ -23,6 +23,9 @@ import (
 // bind moves the durable from FilterSubject onto the FilterSubjects list. Both must happen, in
 // that order, or the stream captures a gateway's publishes while the durable never delivers
 // them: the broker acknowledges a gateway's PUBACKed publish, the platform never reads it.
+// The reader now reads a durable of a NEW name with NO broker filter, handing out both subjects
+// itself, and deletes the old-named one (NewReader, CaptureDurableName); what is held here is
+// that the move happens, the old durable is gone, and both shapes arrive.
 //
 // This is the order on a manager that reconciles what it opens (a test's). On a deployed broker
 // the stream half is the broker administrator's, not event-sources': see the test below.
@@ -39,6 +42,7 @@ func TestTheCaptureStreamAndDurableUpgradeOntoTheGatewayShape(t *testing.T) {
 	instance := ms.InstanceId
 	stream := captureStreamOn(instance)
 	durable := DurableName(instance, area, captureSuffix)
+	current := CaptureDurableName(instance, area, captureSuffix)
 	oldSubject := DeviceEventsWildcard(instance)
 
 	// The OLD shape, exactly as the previous release created it.
@@ -66,9 +70,12 @@ func TestTheCaptureStreamAndDurableUpgradeOntoTheGatewayShape(t *testing.T) {
 	after, err := nmgr.js.StreamInfo(stream)
 	require.NoError(t, err)
 	require.ElementsMatch(t, DeviceEventsSubjects(instance), after.Config.Subjects)
-	moved, err := nmgr.js.ConsumerInfo(stream, durable)
+	moved, err := nmgr.js.ConsumerInfo(stream, current)
 	require.NoError(t, err)
-	require.ElementsMatch(t, DeviceEventsSubjects(instance), moved.Config.FilterSubjects)
+	require.Empty(t, moved.Config.FilterSubject, "the durable kept the old single filter")
+	require.Empty(t, moved.Config.FilterSubjects, "the durable was given a broker filter list")
+	_, err = nmgr.js.ConsumerInfo(stream, durable)
+	require.ErrorIs(t, err, nats.ErrConsumerNotFound, "the old-named durable was left beside the new one")
 
 	_, err = nmgr.js.Publish(GatewayEventsSubject(instance, "acme", "gw-1", "child"), []byte("gateway"))
 	require.NoError(t, err)
@@ -98,6 +105,7 @@ func TestOnADeployedBrokerTheAdministratorMovesTheCaptureSubjectsAndTheReaderMov
 	instance := admin.Microservice.InstanceId
 	stream := captureStreamOn(instance)
 	durable := DurableName(instance, "event-sources", captureSuffix)
+	current := CaptureDurableName(instance, "event-sources", captureSuffix)
 	oldSubject := DeviceEventsWildcard(instance)
 
 	// Everything event-sources opens, as the administrator makes it today...
@@ -139,13 +147,16 @@ func TestOnADeployedBrokerTheAdministratorMovesTheCaptureSubjectsAndTheReaderMov
 	require.NoError(t, err)
 	require.Equal(t, oldSubject, still.Config.FilterSubject, "the administrator touched a durable, which is its reader's")
 
-	// The roll: event-sources verifies, binds, and moves its own durable onto both subjects.
+	// The roll: event-sources verifies, binds, and moves its own durable off the old filter.
 	svc := deployedOn(t, srv, "event-sources")
 	reader, err := svc.NewReader(captureSuffix)
 	require.NoError(t, err)
-	moved, err := admin.js.ConsumerInfo(stream, durable)
+	moved, err := admin.js.ConsumerInfo(stream, current)
 	require.NoError(t, err)
-	require.ElementsMatch(t, DeviceEventsSubjects(instance), moved.Config.FilterSubjects)
+	require.Empty(t, moved.Config.FilterSubject, "the durable kept the old single filter")
+	require.Empty(t, moved.Config.FilterSubjects, "the durable was given a broker filter list")
+	_, err = admin.js.ConsumerInfo(stream, durable)
+	require.ErrorIs(t, err, nats.ErrConsumerNotFound, "the old-named durable was left beside the new one")
 
 	_, err = admin.js.Publish(GatewayEventsSubject(instance, "acme", "gw-1", "child"), []byte("gateway"))
 	require.NoError(t, err)

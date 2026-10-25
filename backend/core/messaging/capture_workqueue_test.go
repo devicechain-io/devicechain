@@ -93,7 +93,7 @@ func TestACaptureGiveUpIsLetteredAndThenRemoved(t *testing.T) {
 	info, err := nmgr.js.ConsumerInfo(StreamName("test", streams.MaxDeliveries), DurableName("test", area, streams.MaxDeliveries))
 	require.NoError(t, err)
 	require.Contains(t, info.Config.FilterSubjects,
-		AdvisorySubject(captureStreamOn("test"), DurableName("test", area, captureSuffix)),
+		AdvisorySubject(captureStreamOn("test"), CaptureDurableName("test", area, captureSuffix)),
 		"the recorder does not listen for the capture durable's give-ups")
 
 	seq := publishCaptured(t, nmgr.js, `{"n":1}`)
@@ -168,7 +168,7 @@ func TestWorkQueueAcksAreNotUnreadLossButEvictionIs(t *testing.T) {
 	require.NoError(t, err)
 	g := &unreadRig{
 		t: t, nmgr: nmgr, reg: reg, reader: r.(*natsReader),
-		stream: captureStreamOn("test"), durable: DurableName("test", area, captureSuffix), area: area,
+		stream: captureStreamOn("test"), durable: CaptureDurableName("test", area, captureSuffix), area: area,
 	}
 	g.sample() // baseline
 
@@ -332,7 +332,7 @@ func TestAnUndrainedOlderCaptureStreamIsLeftAloneAndRefused(t *testing.T) {
 func TestAStreamHoldingMessagesWithNoConsumerIsNotDrained(t *testing.T) {
 	srv := startEmbeddedServer(t)
 	nmgr, _ := migrationRig(t, srv, 1)
-	require.NoError(t, nmgr.js.DeleteConsumer(captureStreamOn("test"), DurableName("test", nmgr.Microservice.FunctionalArea, captureSuffix)))
+	require.NoError(t, nmgr.js.DeleteConsumer(captureStreamOn("test"), CaptureDurableName("test", nmgr.Microservice.FunctionalArea, captureSuffix)))
 	nmgr.retentionDrainBound = 300 * time.Millisecond
 	nmgr.retentionDrainPoll = 20 * time.Millisecond
 	require.Error(t, nmgr.MigratePendingRetention(context.Background()))

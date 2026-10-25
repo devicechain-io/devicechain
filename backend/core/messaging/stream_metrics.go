@@ -173,6 +173,11 @@ type streamMetrics struct {
 	unreadSkipped *prometheus.CounterVec
 	unreadGap     *prometheus.GaugeVec
 
+	// foreignDropped counts, per reader the broker does not filter for (the device capture's),
+	// the messages it acked and dropped because they were stored under a subject it does not
+	// hand out (dropForeign). Bounded like {durable} above.
+	foreignDropped *prometheus.CounterVec
+
 	// consumerPending / consumerAckPending are each reader durable's backlog, from the
 	// ConsumerInfo sampleDurable already fetches: messages in the stream not yet handed to
 	// the durable (NumPending), and messages handed out but not yet acknowledged
@@ -365,6 +370,11 @@ func newStreamMetrics(ms *core.Microservice) *streamMetrics {
 			"1 when the connected NATS server reports a cluster, 0 otherwise. Paired with "+
 				"jetstream_replicas_desired == 1 this is the false-HA state: a replicated broker "+
 				"storing one copy of everything."),
+		foreignDropped: ms.NewCounterVec("jetstream_reader_foreign_dropped_total",
+			"Messages a reader acked and dropped, never handing them on, because they were stored under a "+
+				"subject it does not read: on the device capture stream, an entry another stream's push "+
+				"consumer stored there. Any increase is worth looking at.",
+			[]string{"stream", "durable"}),
 		unreadSkipped: ms.NewCounterVec("jetstream_consumer_unread_skipped_total",
 			"Stream sequences this durable's cursor moved past without a delivery: messages removed "+
 				"before it read them. A lower bound (redeliveries and deletes behind the cursor reduce it).",
@@ -801,6 +811,24 @@ func (m *streamMetrics) initDurable(stream, durable string, capacity bool) {
 	}
 }
 
+// initForeignDropped creates a hand-out-filtering reader's foreign-drop series at zero, so an
+// increase() over it reads the first drop rather than missing it. A no-op on a manager with no
+// metrics.
+func (m *streamMetrics) initForeignDropped(stream, durable string) {
+	if m == nil || m.foreignDropped == nil {
+		return
+	}
+	m.foreignDropped.WithLabelValues(stream, durable).Add(0)
+}
+
+// foreignDroppedFor counts one dropped foreign message; a no-op on a manager with no metrics.
+func (m *streamMetrics) foreignDroppedFor(stream, durable string) {
+	if m == nil || m.foreignDropped == nil {
+		return
+	}
+	m.foreignDropped.WithLabelValues(stream, durable).Inc()
+}
+
 // heldPastAckWaitFor returns the held-past-AckWait recorder for one capacity reader's
 // durable. Its series are created at 0 by initDurable, once the reader exists. It returns
 // nil on a manager with no metrics (one assembled by hand in a unit test).
@@ -1093,10 +1121,11 @@ func (m *streamMetrics) sample(ctx context.Context, js nats.JetStreamContext, na
 // on that failure: a kept baseline loses nothing, but a kept gauge is an old reading
 // exported as a current one (see consumerPending on streamMetrics).
 //
-// PRECONDITION, held by construction: the durable filters on its stream's WHOLE subject.
+// PRECONDITION, held by construction: the durable is handed its stream's WHOLE subject space.
 // Every reader is made by NewReader, which filters on StreamSubject(suffix) — the same
-// subject the stream captures — so every sequence in the stream is one the durable would
-// have been handed. A durable with a narrower filter would count every other subject's
+// subject the stream captures — or, for the device-events capture, sets no broker filter at all
+// (its reader drops a foreign subject at hand-out, after the broker has delivered it) — so every
+// sequence in the stream is one the durable would have been handed. A durable with a narrower filter would count every other subject's
 // messages as loss — which is exactly what the max-delivery recorder's durable is: it filters
 // the shared capture stream to this area's advisory subjects. It stays out because it is not a
 // reader (startRecorder keeps it on nmgr.recorder, never in nmgr.readers), and

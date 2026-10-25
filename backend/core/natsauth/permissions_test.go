@@ -629,3 +629,20 @@ func TestTheBrokerAdministratorCanEnumerateButNotRead(t *testing.T) {
 		require.False(t, p.publishes(s), s)
 	}
 }
+
+// The capture reader binds a durable under a new name and deletes the one an earlier build read
+// with (messaging.CaptureDurableName). Its login must be able to manage the first and DELETE the
+// second; a grant missing the delete would leave the old filtered durable on the work queue, where
+// it refuses the new reader's create. Named literally, so a change to either name is seen here.
+func TestEventSourcesCanManageItsCaptureDurableAndDeleteTheEarlierOne(t *testing.T) {
+	p := allAreaPermissions(t)["event-sources"]
+	stream := messaging.StreamName(permInstance, streams.DeviceEventsCapture)
+	current := permInstance + "_event-sources_device-events-capture_unfiltered"
+	legacy := permInstance + "_event-sources_device-events-capture"
+	require.Equal(t, current, messaging.CaptureDurableName(permInstance, "event-sources", streams.DeviceEventsCapture))
+	for _, verb := range []string{"CONSUMER.CREATE.", "CONSUMER.INFO.", "CONSUMER.DELETE.", "CONSUMER.MSG.NEXT."} {
+		require.True(t, p.publishes("$JS.API."+verb+stream+"."+current), "event-sources %s%s", verb, current)
+	}
+	require.True(t, p.publishes("$JS.API.CONSUMER.DELETE."+stream+"."+legacy), "event-sources cannot delete %s", legacy)
+	require.True(t, p.publishes("$JS.ACK."+stream+"."+current+".1.2.3.4.5"), "event-sources cannot ack on %s", current)
+}

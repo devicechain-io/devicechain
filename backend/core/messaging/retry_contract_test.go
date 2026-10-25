@@ -75,7 +75,7 @@ func retryContractRig(t *testing.T, areaPrefix string) (*NatsManager, string, st
 // contract. `why` names what was being varied, so a failure says which plumbing broke it.
 func assertPlatformRetryContract(t *testing.T, nmgr *NatsManager, instance, area, suffix, why string) {
 	t.Helper()
-	info, err := nmgr.js.ConsumerInfo(StreamName(instance, suffix), DurableName(instance, area, suffix))
+	info, err := nmgr.js.ConsumerInfo(StreamName(instance, suffix), ReaderDurableName(instance, area, suffix))
 	require.NoErrorf(t, err, "consumer info for %s (%s)", suffix, why)
 
 	assert.Equalf(t, MaxDeliver, info.Config.MaxDeliver,
@@ -141,7 +141,7 @@ func TestReaderOptionsDoNotMoveTheRetryContract(t *testing.T) {
 		_, err := nmgr.NewReader(suffix, ReaderWithDeliverNew(), ReaderWithTermGate(func() bool { return false }))
 		require.NoErrorf(t, err, "NewReader(%s) with options", suffix)
 
-		info, err := nmgr.js.ConsumerInfo(StreamName(instance, suffix), DurableName(instance, area, suffix))
+		info, err := nmgr.js.ConsumerInfo(StreamName(instance, suffix), ReaderDurableName(instance, area, suffix))
 		require.NoError(t, err)
 		require.Equalf(t, nats.DeliverNewPolicy, info.Config.DeliverPolicy,
 			"fixture drift: ReaderWithDeliverNew no longer reaches the durable for %s, so this "+
@@ -167,9 +167,9 @@ func TestTierIsADiskBudgetClassNotARetryClass(t *testing.T) {
 		_, err := nmgr.NewReader(suffix)
 		require.NoErrorf(t, err, "NewReader(%s)", suffix)
 	}
-	h, err := nmgr.js.ConsumerInfo(StreamName(instance, hot), DurableName(instance, area, hot))
+	h, err := nmgr.js.ConsumerInfo(StreamName(instance, hot), ReaderDurableName(instance, area, hot))
 	require.NoError(t, err)
-	c, err := nmgr.js.ConsumerInfo(StreamName(instance, cold), DurableName(instance, area, cold))
+	c, err := nmgr.js.ConsumerInfo(StreamName(instance, cold), ReaderDurableName(instance, area, cold))
 	require.NoError(t, err)
 
 	assert.Equal(t, h.Config.MaxDeliver, c.Config.MaxDeliver, "a Hot and a Cold stream must retry alike")
