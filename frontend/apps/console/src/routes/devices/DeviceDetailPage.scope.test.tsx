@@ -6,7 +6,7 @@
 // refuses its assignment, facet values, stored configuration and every change to the
 // device itself — so those tabs and actions are left out rather than shown to fail.
 import '@/i18n/config';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -117,5 +117,31 @@ describe('the device form on the device page', () => {
     renderPage([], ['device:write']);
     expect((await nameField()).disabled).toBe(false);
     expect(screen.getByRole('button', { name: 'Save changes' })).toBeTruthy();
+  });
+});
+
+// Self-registration provenance: the profile fields answer an ERROR (not null) to a scoped member,
+// so the page must not even ask. The positive control is the same page unscoped, which does ask.
+describe('self-registration provenance on the device page', () => {
+  const asked = () =>
+    gqlMock.mock.calls.filter((c) => /expectedProvisioningProfile|provisioningProfile/.test(String(c[1])));
+
+  it('is not requested at all for a customer user', async () => {
+    renderPage(['customer:acme']);
+    await screen.findByRole('tab', { name: 'Events' });
+    expect(asked()).toHaveLength(0);
+    expect(gqlMock.mock.calls.some((c) => /query DeviceProvisioning/.test(String(c[1])))).toBe(false);
+  });
+
+  it('is requested for the same authorities without a scope', async () => {
+    renderPage([]);
+    await screen.findByRole('tab', { name: 'Credentials' });
+    await waitFor(() => expect(asked().length).toBeGreaterThan(0));
+  });
+
+  it('is not requested for a member who cannot read credentials', async () => {
+    renderPage([], ['device:read']);
+    await screen.findByRole('tab', { name: 'Events' });
+    expect(asked()).toHaveLength(0);
   });
 });

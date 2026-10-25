@@ -48,5 +48,6 @@
   "artifacts": "Artifacts",
   "signers": "Signers",
   "serviceAccounts": "Service accounts",
-  "rollouts": "Rollouts"
+  "rollouts": "Rollouts",
+  "provisioningProfiles": "Provisioning Profiles"
 }

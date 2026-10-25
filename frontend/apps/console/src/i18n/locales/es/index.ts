@@ -16,6 +16,7 @@ import esDeviceProfiles from './deviceProfiles.json';
 import esTenants from './tenants.json';
 import esTiers from './tiers.json';
 import esConnectors from './connectors.json';
+import esProvisioning from './provisioning.json';
 import esCommandBatches from './commandBatches.json';
 import esUpdateSigners from './updateSigners.json';
 import esBranding from './branding.json';
@@ -49,6 +50,7 @@ const es = {
     tenants: esTenants,
     tiers: esTiers,
     connectors: esConnectors,
+    provisioning: esProvisioning,
     commandBatches: esCommandBatches,
     updateSigners: esUpdateSigners,
     branding: esBranding,

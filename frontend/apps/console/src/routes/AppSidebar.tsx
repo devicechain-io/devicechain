@@ -105,6 +105,12 @@ export const NAV: NavNode[] = [
       { labelKey: 'deviceTypes', href: '/device-types', icon: Boxes, requires: 'device:read' },
       { labelKey: 'deviceProfiles', href: '/device-profiles', icon: SlidersHorizontal, requires: 'device:read' },
       { labelKey: 'deviceGroups', href: '/device-groups', icon: Layers, requires: 'device:read' },
+      // How a fleet gets onto the platform without an operator creating each unit: the shared
+      // key and secret it registers with. It answers the same question this group does — which
+      // devices exist and how they arrive — and is served under the same authority, so it sits
+      // beside the device registry rather than earning a group of one. Not marked `scoped`: the
+      // server refuses profiles to a member limited to part of the tenant.
+      { labelKey: 'provisioningProfiles', href: '/provisioning-profiles', icon: KeyRound, requires: 'device:read' },
       // A maintenance window is configuration OF device types (a type names the window
       // that holds its disruptive commands), so it lives beside them.
       { labelKey: 'maintenanceWindows', href: '/maintenance-windows', icon: CalendarClock, requires: 'device:read' },

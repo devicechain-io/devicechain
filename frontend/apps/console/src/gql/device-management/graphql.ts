@@ -1004,6 +1004,45 @@ export type PaginationInput = {
   pageSize: number;
 };
 
+export type ProvisioningProfileCreateRequest = {
+  credentialType?: string | null | undefined;
+  description?: string | null | undefined;
+  deviceTypeToken: string;
+  enabled: boolean;
+  expiresAt?: string | null | undefined;
+  /** The most devices the profile may register; at least 1. Omit or send null for no cap. */
+  maxDevices?: number | null | undefined;
+  metadata?: string | null | undefined;
+  name?: string | null | undefined;
+  provisionKey: string;
+  strategy: string;
+  token: string;
+};
+
+export type ProvisioningProfileSearchCriteria = {
+  deviceType?: string | null | undefined;
+  enabled?: boolean | null | undefined;
+  pageNumber: number;
+  pageSize: number;
+  strategy?: string | null | undefined;
+};
+
+export type ProvisioningProfileUpdateRequest = {
+  description?: string | null | undefined;
+  deviceTypeToken?: string | null | undefined;
+  enabled?: boolean | null | undefined;
+  expiresAt?: string | null | undefined;
+  /**
+   * The most devices the profile may register; at least 1. Null removes the cap. Lowering it
+   * below the number already registered only refuses further registrations.
+   */
+  maxDevices?: number | null | undefined;
+  metadata?: string | null | undefined;
+  name?: string | null | undefined;
+  provisionKey?: string | null | undefined;
+  strategy?: string | null | undefined;
+};
+
 export type AlarmsQueryVariables = Exact<{
   criteria: AlarmSearchCriteria;
 }>;
@@ -2000,6 +2039,85 @@ export type MaintenanceWindowOpeningQueryVariables = Exact<{
 
 
 export type MaintenanceWindowOpeningQuery = { maintenanceWindowOpening: { found: boolean, openNow: boolean, dispatchAfter: string, closes: string } };
+
+export type ProvisioningProfilesQueryVariables = Exact<{
+  criteria: ProvisioningProfileSearchCriteria;
+}>;
+
+
+export type ProvisioningProfilesQuery = { provisioningProfiles: { results: Array<{ id: string, token: string, name: string | null, description: string | null, provisionKey: string, strategy: string, credentialType: string, enabled: boolean, expiresAt: string | null, maxDevices: number | null, provisionedDeviceCount: number, secretIssued: boolean, createdAt: string | null, updatedAt: string | null, deviceType: { id: string, token: string, name: string | null } }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+
+export type ProvisioningProfileByTokenQueryVariables = Exact<{
+  tokens: Array<string> | string;
+}>;
+
+
+export type ProvisioningProfileByTokenQuery = { provisioningProfilesByToken: Array<{ id: string, token: string, name: string | null, description: string | null, provisionKey: string, strategy: string, credentialType: string, enabled: boolean, expiresAt: string | null, maxDevices: number | null, provisionedDeviceCount: number, secretIssued: boolean, createdAt: string | null, updatedAt: string | null, deviceType: { id: string, token: string, name: string | null } }> };
+
+export type CreateProvisioningProfileMutationVariables = Exact<{
+  request?: ProvisioningProfileCreateRequest | null | undefined;
+}>;
+
+
+export type CreateProvisioningProfileMutation = { createProvisioningProfile: { issuedSecret: string, profile: { id: string, token: string, name: string | null, description: string | null, provisionKey: string, strategy: string, credentialType: string, enabled: boolean, expiresAt: string | null, maxDevices: number | null, provisionedDeviceCount: number, secretIssued: boolean, createdAt: string | null, updatedAt: string | null, deviceType: { id: string, token: string, name: string | null } } } };
+
+export type RotateProvisioningProfileSecretMutationVariables = Exact<{
+  token: string;
+}>;
+
+
+export type RotateProvisioningProfileSecretMutation = { rotateProvisioningProfileSecret: { issuedSecret: string, profile: { id: string, token: string, name: string | null, description: string | null, provisionKey: string, strategy: string, credentialType: string, enabled: boolean, expiresAt: string | null, maxDevices: number | null, provisionedDeviceCount: number, secretIssued: boolean, createdAt: string | null, updatedAt: string | null, deviceType: { id: string, token: string, name: string | null } } } };
+
+export type UpdateProvisioningProfileMutationVariables = Exact<{
+  token: string;
+  request: ProvisioningProfileUpdateRequest;
+}>;
+
+
+export type UpdateProvisioningProfileMutation = { updateProvisioningProfile: { id: string, token: string, name: string | null, description: string | null, provisionKey: string, strategy: string, credentialType: string, enabled: boolean, expiresAt: string | null, maxDevices: number | null, provisionedDeviceCount: number, secretIssued: boolean, createdAt: string | null, updatedAt: string | null, deviceType: { id: string, token: string, name: string | null } } };
+
+export type DeleteProvisioningProfileMutationVariables = Exact<{
+  token: string;
+}>;
+
+
+export type DeleteProvisioningProfileMutation = { deleteProvisioningProfile: boolean };
+
+export type RevokeProvisionedDevicesMutationVariables = Exact<{
+  profileToken: string;
+}>;
+
+
+export type RevokeProvisionedDevicesMutation = { revokeProvisionedDevices: number };
+
+export type ResetDeviceProvisioningMutationVariables = Exact<{
+  deviceToken: string;
+}>;
+
+
+export type ResetDeviceProvisioningMutation = { resetDeviceProvisioning: number };
+
+export type EarmarkedDeviceCountQueryVariables = Exact<{
+  profile: string;
+}>;
+
+
+export type EarmarkedDeviceCountQuery = { devices: { pagination: { totalRecords: number | null } } };
+
+export type DeviceProvisioningQueryVariables = Exact<{
+  tokens: Array<string> | string;
+  device: string;
+}>;
+
+
+export type DeviceProvisioningQuery = { devicesByToken: Array<{ token: string, expectedProvisioningProfile: { token: string, name: string | null } | null }>, deviceCredentials: { results: Array<{ token: string, enabled: boolean, provisioningProfile: { token: string, name: string | null } | null }> } };
+
+export type DeviceEarmarksQueryVariables = Exact<{
+  tokens: Array<string> | string;
+}>;
+
+
+export type DeviceEarmarksQuery = { devicesByToken: Array<{ token: string, expectedProvisioningProfile: { token: string, name: string | null } | null }> };
 
 export type EntityRelationshipsQueryVariables = Exact<{
   criteria: EntityRelationshipSearchCriteria;
@@ -4108,6 +4226,202 @@ export const MaintenanceWindowOpeningDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<MaintenanceWindowOpeningQuery, MaintenanceWindowOpeningQueryVariables>;
+export const ProvisioningProfilesDocument = new TypedDocumentString(`
+    query ProvisioningProfiles($criteria: ProvisioningProfileSearchCriteria!) {
+  provisioningProfiles(criteria: $criteria) {
+    results {
+      id
+      token
+      name
+      description
+      provisionKey
+      strategy
+      credentialType
+      enabled
+      expiresAt
+      maxDevices
+      provisionedDeviceCount
+      secretIssued
+      createdAt
+      updatedAt
+      deviceType {
+        id
+        token
+        name
+      }
+    }
+    pagination {
+      pageStart
+      pageEnd
+      totalRecords
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<ProvisioningProfilesQuery, ProvisioningProfilesQueryVariables>;
+export const ProvisioningProfileByTokenDocument = new TypedDocumentString(`
+    query ProvisioningProfileByToken($tokens: [String!]!) {
+  provisioningProfilesByToken(tokens: $tokens) {
+    id
+    token
+    name
+    description
+    provisionKey
+    strategy
+    credentialType
+    enabled
+    expiresAt
+    maxDevices
+    provisionedDeviceCount
+    secretIssued
+    createdAt
+    updatedAt
+    deviceType {
+      id
+      token
+      name
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<ProvisioningProfileByTokenQuery, ProvisioningProfileByTokenQueryVariables>;
+export const CreateProvisioningProfileDocument = new TypedDocumentString(`
+    mutation CreateProvisioningProfile($request: ProvisioningProfileCreateRequest) {
+  createProvisioningProfile(request: $request) {
+    issuedSecret
+    profile {
+      id
+      token
+      name
+      description
+      provisionKey
+      strategy
+      credentialType
+      enabled
+      expiresAt
+      maxDevices
+      provisionedDeviceCount
+      secretIssued
+      createdAt
+      updatedAt
+      deviceType {
+        id
+        token
+        name
+      }
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<CreateProvisioningProfileMutation, CreateProvisioningProfileMutationVariables>;
+export const RotateProvisioningProfileSecretDocument = new TypedDocumentString(`
+    mutation RotateProvisioningProfileSecret($token: String!) {
+  rotateProvisioningProfileSecret(token: $token) {
+    issuedSecret
+    profile {
+      id
+      token
+      name
+      description
+      provisionKey
+      strategy
+      credentialType
+      enabled
+      expiresAt
+      maxDevices
+      provisionedDeviceCount
+      secretIssued
+      createdAt
+      updatedAt
+      deviceType {
+        id
+        token
+        name
+      }
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<RotateProvisioningProfileSecretMutation, RotateProvisioningProfileSecretMutationVariables>;
+export const UpdateProvisioningProfileDocument = new TypedDocumentString(`
+    mutation UpdateProvisioningProfile($token: String!, $request: ProvisioningProfileUpdateRequest!) {
+  updateProvisioningProfile(token: $token, request: $request) {
+    id
+    token
+    name
+    description
+    provisionKey
+    strategy
+    credentialType
+    enabled
+    expiresAt
+    maxDevices
+    provisionedDeviceCount
+    secretIssued
+    createdAt
+    updatedAt
+    deviceType {
+      id
+      token
+      name
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<UpdateProvisioningProfileMutation, UpdateProvisioningProfileMutationVariables>;
+export const DeleteProvisioningProfileDocument = new TypedDocumentString(`
+    mutation DeleteProvisioningProfile($token: String!) {
+  deleteProvisioningProfile(token: $token)
+}
+    `) as unknown as TypedDocumentString<DeleteProvisioningProfileMutation, DeleteProvisioningProfileMutationVariables>;
+export const RevokeProvisionedDevicesDocument = new TypedDocumentString(`
+    mutation RevokeProvisionedDevices($profileToken: String!) {
+  revokeProvisionedDevices(profileToken: $profileToken)
+}
+    `) as unknown as TypedDocumentString<RevokeProvisionedDevicesMutation, RevokeProvisionedDevicesMutationVariables>;
+export const ResetDeviceProvisioningDocument = new TypedDocumentString(`
+    mutation ResetDeviceProvisioning($deviceToken: String!) {
+  resetDeviceProvisioning(deviceToken: $deviceToken)
+}
+    `) as unknown as TypedDocumentString<ResetDeviceProvisioningMutation, ResetDeviceProvisioningMutationVariables>;
+export const EarmarkedDeviceCountDocument = new TypedDocumentString(`
+    query EarmarkedDeviceCount($profile: String!) {
+  devices(
+    criteria: {pageNumber: 1, pageSize: 1, expectedProvisioningProfile: $profile}
+  ) {
+    pagination {
+      totalRecords
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<EarmarkedDeviceCountQuery, EarmarkedDeviceCountQueryVariables>;
+export const DeviceProvisioningDocument = new TypedDocumentString(`
+    query DeviceProvisioning($tokens: [String!]!, $device: String!) {
+  devicesByToken(tokens: $tokens) {
+    token
+    expectedProvisioningProfile {
+      token
+      name
+    }
+  }
+  deviceCredentials(criteria: {pageNumber: 1, pageSize: 100, device: $device}) {
+    results {
+      token
+      enabled
+      provisioningProfile {
+        token
+        name
+      }
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<DeviceProvisioningQuery, DeviceProvisioningQueryVariables>;
+export const DeviceEarmarksDocument = new TypedDocumentString(`
+    query DeviceEarmarks($tokens: [String!]!) {
+  devicesByToken(tokens: $tokens) {
+    token
+    expectedProvisioningProfile {
+      token
+      name
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<DeviceEarmarksQuery, DeviceEarmarksQueryVariables>;
 export const EntityRelationshipsDocument = new TypedDocumentString(`
     query EntityRelationships($criteria: EntityRelationshipSearchCriteria!) {
   entityRelationships(criteria: $criteria) {

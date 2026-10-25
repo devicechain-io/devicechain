@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Plus, Layers, Upload } from 'lucide-react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Plus, Layers, Upload, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { useQuery } from '@/lib/hooks/use-query';
@@ -22,6 +22,10 @@ import { TypeCapsule, appearanceOf } from '@/components/TypeCapsule';
 import { Pagination } from '@/components/ui/pagination';
 import { useToast } from '@/components/ui/toast';
 import { rowLinkProps, useReload } from '@/routes/common';
+import { useAuth } from '@/auth/AuthProvider';
+import { isScoped } from '@devicechain/client';
+import { getDeviceEarmarks, listProvisioningProfiles, type ProfileRef } from '@/lib/api/provisioning';
+import { Combobox, type ComboboxOption } from '@/components/ui/combobox';
 import { FormDrawer } from '@/components/registry';
 import { DeviceForm } from '@/routes/devices/DeviceForm';
 import { DeviceBulkForm } from '@/routes/devices/DeviceBulkForm';
@@ -36,6 +40,9 @@ import {
 } from '@/components/ui/data-table';
 
 const pageSize = 20;
+// The URL parameters (and criteria fields) the provisioning filters ride on.
+const REGISTERED_PARAM = 'provisioningProfile';
+const EXPECTED_PARAM = 'expectedProvisioningProfile';
 const EXPORT_STEM = 'devices';
 // The import maps columns and lists per-row outcomes, so its drawer is wider than a form's.
 const IMPORT_DRAWER_WIDTH = 'sm:max-w-2xl';
@@ -77,10 +84,41 @@ export default function DevicesPage() {
   const [bulkCreating, setBulkCreating] = useState(false);
   const [importing, setImporting] = useState(false);
   const [version, reload] = useReload();
+  // Self-registration provenance is for members who may see the whole tenant: the server
+  // refuses the profile fields to one limited to part of it, so a scoped member's page never
+  // names them (no filter, no column, no extra request).
+  const { claims } = useAuth();
+  const scoped = isScoped(claims);
+  const [params, setParams] = useSearchParams();
+  const provisioningProfile = scoped ? '' : (params.get(REGISTERED_PARAM) ?? '');
+  const expectedProvisioningProfile = scoped ? '' : (params.get(EXPECTED_PARAM) ?? '');
+  const filtered = provisioningProfile !== '' || expectedProvisioningProfile !== '';
+  const setFilter = (key: typeof REGISTERED_PARAM | typeof EXPECTED_PARAM, value: string) => {
+    const next = new URLSearchParams(params);
+    if (value) next.set(key, value);
+    else next.delete(key);
+    setParams(next, { replace: true });
+    setPageNumber(1);
+  };
   const { data, loading, error } = useQuery(
-    () => listDevices({ pageNumber, pageSize }),
-    [pageNumber, version],
+    () =>
+      listDevices({
+        pageNumber,
+        pageSize,
+        provisioningProfile: provisioningProfile || undefined,
+        expectedProvisioningProfile: expectedProvisioningProfile || undefined,
+      }),
+    [pageNumber, version, provisioningProfile, expectedProvisioningProfile],
   );
+  const { data: profileList } = useQuery(
+    () => (scoped ? Promise.resolve(null) : listProvisioningProfiles({ pageNumber: 1, pageSize: 1000 })),
+    [scoped],
+  );
+  const profileOptions: ComboboxOption[] = (profileList?.results ?? []).map((p) => ({
+    value: p.token,
+    label: p.name || p.token,
+    description: p.name ? p.token : undefined,
+  }));
 
   // The export mirrors the list's columns (status is a live projection, so it is left out)
   // plus the type's token; timestamps are ISO-8601.
@@ -99,6 +137,15 @@ export default function DevicesPage() {
   // state exists yet, this query just yields nothing and the list is unaffected.
   const { data: states } = useQuery(() => getDeviceStates(tokens), [tokens.join(',')]);
   const stateByToken = new Map((states ?? []).map((s) => [s.deviceToken, s]));
+  // The profile each listed device is earmarked for, loaded separately for the same reason.
+  const { data: earmarks } = useQuery(
+    () => (scoped ? Promise.resolve<Record<string, ProfileRef>>({}) : getDeviceEarmarks(tokens)),
+    [tokens.join(','), scoped],
+  );
+  const profileLabel = (token: string) => {
+    const p = profileList?.results.find((r) => r.token === token);
+    return p?.name || token;
+  };
 
   return (
     <PageShell
@@ -126,6 +173,7 @@ export default function DevicesPage() {
     >
       <FormDrawer shot="device-new" open={creating} onOpenChange={setCreating} title={t('newDevice')}>
         <DeviceForm
+          offerEarmark={!scoped}
           onDone={(m) => {
             toast(m);
             setCreating(false);
@@ -157,12 +205,52 @@ export default function DevicesPage() {
           }}
         />
       </FormDrawer>
+      {!scoped && profileOptions.length > 0 && (
+        <div className="mb-4 flex flex-wrap items-end gap-4" data-shot="device-provisioning-filters">
+          <div className="w-64">
+            <label htmlFor="dev-filter-registered" className="mb-1 block text-xs font-medium text-muted-foreground">
+              {t('filterRegisteredBy')}
+            </label>
+            <Combobox
+              id="dev-filter-registered"
+              value={provisioningProfile}
+              onChange={(v) => setFilter(REGISTERED_PARAM, v)}
+              options={profileOptions}
+              placeholder={t('filterAnyProfile')}
+            />
+          </div>
+          <div className="w-64">
+            <label htmlFor="dev-filter-expected" className="mb-1 block text-xs font-medium text-muted-foreground">
+              {t('filterExpectedProfile')}
+            </label>
+            <Combobox
+              id="dev-filter-expected"
+              value={expectedProvisioningProfile}
+              onChange={(v) => setFilter(EXPECTED_PARAM, v)}
+              options={profileOptions}
+              placeholder={t('filterAnyProfile')}
+            />
+          </div>
+          {filtered && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setParams(new URLSearchParams(), { replace: true });
+                setPageNumber(1);
+              }}
+            >
+              <X size={14} /> {t('filterClear')}
+            </Button>
+          )}
+        </div>
+      )}
       {loading ? (
         <LoadingState description={t('loading')} />
       ) : error ? (
         <ErrorState description={error} />
       ) : results.length === 0 ? (
-        <EmptyState description={t('empty')} />
+        <EmptyState description={filtered ? t('emptyFiltered') : t('empty')} />
       ) : (
         <>
           <DataTable>
@@ -172,6 +260,7 @@ export default function DevicesPage() {
               <DataTableHeaderCell>{t('common:colName')}</DataTableHeaderCell>
               <DataTableHeaderCell>{t('common:colType')}</DataTableHeaderCell>
               <DataTableHeaderCell>{t('common:colDescription')}</DataTableHeaderCell>
+              {!scoped && <DataTableHeaderCell>{t('colProvisioning')}</DataTableHeaderCell>}
               <DataTableHeaderCell>{t('common:colCreated')}</DataTableHeaderCell>
             </DataTableHead>
             <DataTableBody>
@@ -198,6 +287,18 @@ export default function DevicesPage() {
                   <DataTableCell className="max-w-xs truncate text-muted-foreground">
                     {device.description || '—'}
                   </DataTableCell>
+                  {!scoped && (
+                    <DataTableCell data-shot-mask>
+                      <ProvisioningCell
+                        registeredBy={provisioningProfile ? profileLabel(provisioningProfile) : null}
+                        expected={
+                          earmarks?.[device.token]
+                            ? earmarks[device.token].name || earmarks[device.token].token
+                            : null
+                        }
+                      />
+                    </DataTableCell>
+                  )}
                   <DataTableCell className="text-muted-foreground">
                     {device.createdAt ? new Date(device.createdAt).toLocaleDateString() : '—'}
                   </DataTableCell>
@@ -215,5 +316,20 @@ export default function DevicesPage() {
         </>
       )}
     </PageShell>
+  );
+}
+
+// What the list can say about a device's self-registration without a query per row. The
+// earmark is loaded for the whole page; the profile that REGISTERED the device is known only
+// when the list is filtered by it (every row then holds a credential that profile issued), so
+// the unfiltered list does not claim a provenance it has not read. The device's page has both.
+function ProvisioningCell({ registeredBy, expected }: { registeredBy: string | null; expected: string | null }) {
+  const { t } = useTranslation('devices');
+  if (!registeredBy && !expected) return <span className="text-muted-foreground">—</span>;
+  return (
+    <span className="flex flex-col gap-0.5 text-xs">
+      {registeredBy && <span className="text-foreground">{t('provisionedBy', { profile: registeredBy })}</span>}
+      {expected && <span className="text-muted-foreground">{t('expectedProfile', { profile: expected })}</span>}
+    </span>
   );
 }

@@ -1,7 +1,9 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
+import { useState } from 'react';
 import { RegistryInstanceForm } from '@/components/registry';
+import { ProvisioningProfilePicker } from '@/routes/provisioning/ProvisioningProfilePicker';
 import {
   listDeviceTypes,
   createDevice,
@@ -18,12 +20,20 @@ export function DeviceForm({
   device,
   onDone,
   readOnly,
+  offerEarmark = false,
 }: {
   device?: Device;
   onDone: (message: string) => void;
   /** Show the device without offering to change it (a member without device:write). */
   readOnly?: boolean;
+  /**
+   * Offer the "expected provisioning profile" field on create: the one profile that may later
+   * adopt the device when it registers itself. Off by default, and the caller leaves it off for
+   * a member limited to part of the tenant, because the server refuses them the profile list.
+   */
+  offerEarmark?: boolean;
 }) {
+  const [earmark, setEarmark] = useState('');
   return (
     <RegistryInstanceForm
       entity={device}
@@ -38,7 +48,21 @@ export function DeviceForm({
           name: req.name,
           description: req.description,
           deviceTypeToken: req.typeToken,
+          // Absent, not null, when none is chosen: the field is for callers who can use it.
+          ...(earmark ? { provisioningProfileToken: earmark } : {}),
         })
+      }
+      renderCreateExtra={
+        offerEarmark
+          ? ({ typeToken, disabled }) => (
+              <ProvisioningProfilePicker
+                value={earmark}
+                onChange={setEarmark}
+                deviceTypeToken={typeToken}
+                disabled={disabled}
+              />
+            )
+          : undefined
       }
       update={(token, req) =>
         // A partial update: this form edits the name, the description and the type,

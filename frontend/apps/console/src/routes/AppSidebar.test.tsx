@@ -224,6 +224,7 @@ describe('a scoped member', () => {
       'Device Types',
       'Device Profiles',
       'Device Groups',
+      'Provisioning Profiles',
       'Maintenance Windows',
       'Command Batches',
       'Assets',
@@ -245,7 +246,7 @@ describe('a scoped member', () => {
   // navigation, so the cut above is the scope's doing and not the fixture's.
   it('is the scope, not the authorities: the same token unscoped sees everything', () => {
     renderWith(EVERYTHING, '/devices');
-    for (const shown of ['Device Types', 'Customers', 'Audit', 'Settings', 'Connectors']) {
+    for (const shown of ['Device Types', 'Provisioning Profiles', 'Customers', 'Audit', 'Settings', 'Connectors']) {
       expect(entry(shown), shown).toBeTruthy();
     }
   });
@@ -268,5 +269,17 @@ describe('Members and Roles', () => {
     renderWith(['role:read'], '/roles');
     expect(entry('Roles')).toBeTruthy();
     expect(entry('Members')).toBeNull();
+  });
+});
+
+// Provisioning profiles live in the Devices group, behind the device authority, and are never
+// offered to a scoped member (the server refuses them the profile list and every profile field).
+describe('the Provisioning Profiles entry', () => {
+  it('sits in the Devices group for a device:read holder and for nobody without it', () => {
+    renderWith(['device:read'], '/devices');
+    expect(entry('Provisioning Profiles')).toBeTruthy();
+    cleanup();
+    renderWith(['alarm:read'], '/');
+    expect(entry('Provisioning Profiles')).toBeNull();
   });
 });

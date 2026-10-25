@@ -32,6 +32,7 @@ import enDeviceProfiles from './locales/en/deviceProfiles.json';
 import enTenants from './locales/en/tenants.json';
 import enTiers from './locales/en/tiers.json';
 import enConnectors from './locales/en/connectors.json';
+import enProvisioning from './locales/en/provisioning.json';
 import enCommandBatches from './locales/en/commandBatches.json';
 import enUpdateSigners from './locales/en/updateSigners.json';
 import enBranding from './locales/en/branding.json';
@@ -110,6 +111,7 @@ export const NAMESPACES = [
   'tenants',
   'tiers',
   'connectors',
+  'provisioning',
   'commandBatches',
   'updateSigners',
   'branding',
@@ -157,6 +159,7 @@ const enResources = {
     tenants: enTenants,
     tiers: enTiers,
     connectors: enConnectors,
+    provisioning: enProvisioning,
     commandBatches: enCommandBatches,
     updateSigners: enUpdateSigners,
     branding: enBranding,

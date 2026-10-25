@@ -32,6 +32,7 @@ const config: CodegenConfig = {
         'src/lib/api/replacements.ts',
         'src/lib/api/device-configuration.ts',
         'src/lib/api/maintenance-windows.ts',
+        'src/lib/api/provisioning.ts',
       ],
       preset: 'client',
       presetConfig: { fragmentMasking: false },
