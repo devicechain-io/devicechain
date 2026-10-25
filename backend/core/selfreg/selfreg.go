@@ -205,7 +205,10 @@ func Register(ctx context.Context, req Request, opts Options) (*Result, error) {
 		return nil, errors.New("a registration needs a base URL, tenant, provision key, provision secret and external id")
 	}
 	if opts.HTTPClient == nil {
-		opts.HTTPClient = &http.Client{Timeout: attemptTimeout}
+		// The transport is stated: this client runs on a device or a workstation, outside the
+		// platform, and an operator behind a proxy expects the standard environment (HTTPS_PROXY)
+		// to apply, which the platform-internal httptransport.New() deliberately refuses.
+		opts.HTTPClient = &http.Client{Timeout: attemptTimeout, Transport: http.DefaultTransport}
 	}
 	if opts.Sleep == nil {
 		opts.Sleep = sleepContext
