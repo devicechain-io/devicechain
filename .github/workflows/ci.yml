@@ -51,6 +51,12 @@ jobs:
       - name: workspace-sum check self-test
         run: hack/check-go-work-sum.sh --self-test
 
+      # The release-candidate run script's exit-code, stop and liveness handling, against
+      # stub rungs. Nothing else runs it, and it is what a 60-minute run's verdict is
+      # reported through.
+      - name: release-candidate run script self-test
+        run: hack/loadtest-rc-run.sh --self-test
+
       # Proves the coverage check can fail before its green run is used as evidence.
       - name: dependabot module-coverage self-test
         run: hack/check-dependabot-modules.sh --self-test
@@ -2580,6 +2586,13 @@ jobs:
           set -euo pipefail
           tofu test -no-color | tee "$RUNNER_TEMP/gke-tftest.log"
           grep -Eq '^Success! [1-9][0-9]* passed, 0 failed\.$' "$RUNNER_TEMP/gke-tftest.log"
+
+      # The wait that ends the apply has a self-test against a scripted gcloud: it must
+      # wait through RECONCILING and fail on a timeout, an always-failing gcloud and a
+      # missing one, because a wait that cannot fail is a wait that returns early.
+      - name: gke cluster-operations wait self-test
+        working-directory: .
+        run: deploy/gke/wait-for-cluster-operations.sh --self-test
 
       # The provider's max_history default is 0, which keeps every revision of every
       # release forever. That is not a setting anyone chose, so a release added

@@ -15,14 +15,13 @@ import (
 	"context"
 	"flag"
 	"os"
-	"os/signal"
 	"strconv"
-	"syscall"
 	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"github.com/devicechain-io/dc-simulator/internal/stopsig"
 	"github.com/devicechain-io/dc-simulator/loadtest"
 	"github.com/devicechain-io/dc-simulator/mqttload"
 	"github.com/devicechain-io/dc-simulator/sim"
@@ -50,6 +49,8 @@ func main() {
 		"probe emit cadence — low + fixed, so probe edges are never shed traffic (0 = default)")
 	minAccepted := flag.Int64("min-accepted", int64(envIntOr("DC_LOADTEST_MIN_ACCEPTED", 0)),
 		"background load floor for the verdict to count (0 = default)")
+	lagBound := flag.Duration("lag-bound", envDurationOr("DC_LOADTEST_LAG_BOUND", 0),
+		"detection-lag bound: each probe cycle's alarm transition must show in the durable alarm within this long of its emit, or the run fails (0 = default 30s)")
 	reportPath := flag.String("report", envOr("DC_LOADTEST_REPORT", ""),
 		"write the JSON detection report to this path (also printed to stderr)")
 	transport := flag.String("transport", envOr("DC_LOADTEST_TRANSPORT", "http"),
@@ -81,6 +82,7 @@ func main() {
 		Cycles:             *cycles,
 		ProbeInterval:      *probeInterval,
 		MinAccepted:        *minAccepted,
+		LagBound:           *lagBound,
 	}
 
 	switch *transport {
@@ -95,7 +97,7 @@ func main() {
 		log.Fatal().Str("transport", *transport).Msg("--transport must be http or mqtt")
 	}
 
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, cancel, stop := stopsig.Notify(context.Background())
 	defer cancel()
 
 	log.Info().Str("tenant", hs.Tenant).Int("bgDevices", *bgDevices).
@@ -104,6 +106,10 @@ func main() {
 
 	report, err := loadtest.RunDetectionProbes(ctx, hs, cfg)
 	if err != nil {
+		if code, ok := stop.ExitCode(); ok {
+			log.Warn().Err(err).Int("exit", code).Msg("detection-probe run stopped by a signal: no verdict")
+			os.Exit(code)
+		}
 		log.Fatal().Err(err).Msg("detection-probe run failed")
 	}
 

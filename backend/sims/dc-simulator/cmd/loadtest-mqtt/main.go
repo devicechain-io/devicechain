@@ -25,14 +25,13 @@ import (
 	"context"
 	"flag"
 	"os"
-	"os/signal"
 	"strconv"
-	"syscall"
 	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"github.com/devicechain-io/dc-simulator/internal/stopsig"
 	"github.com/devicechain-io/dc-simulator/loadtest"
 	"github.com/devicechain-io/dc-simulator/mqttload"
 	"github.com/devicechain-io/dc-simulator/sim"
@@ -146,7 +145,7 @@ func run() int {
 	}
 
 	// SIGINT/SIGTERM abort the run (no verdict) rather than reconciling a torn stop boundary.
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, cancel, stop := stopsig.Notify(context.Background())
 	defer cancel()
 
 	log.Info().Str("tenant", hs.Tenant).Str("manifest", manifestId).Int("devices", *devices).
@@ -155,6 +154,10 @@ func run() int {
 
 	report, err := loadtest.RunMQTT(ctx, hs, profile)
 	if err != nil {
+		if code, ok := stop.ExitCode(); ok {
+			log.Warn().Err(err).Int("exit", code).Msg("mqtt load-test stopped by a signal: no verdict")
+			return code
+		}
 		log.Error().Err(err).Msg("mqtt load-test run failed: no verdict")
 		return loadtest.ExitError
 	}
