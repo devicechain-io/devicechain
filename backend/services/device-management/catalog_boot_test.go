@@ -6,6 +6,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -96,7 +99,12 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			return initOwnershipDrain()
+			if err = initOwnershipDrain(); err != nil {
+				return err
+			}
+			// The third: the self-registration endpoint is mounted on the real mux here, so
+			// the route is proved present after the whole start path, not only in isolation.
+			return wireProvisioningEndpoint()
 		},
 	})
 	buildMetrics()
@@ -134,4 +142,15 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	require.NoError(t, err, "live subscription on %s", streams.AlarmEvents)
 	_ = live
 	broker.RequireNoViolations(t)
+
+	// The self-registration route survived the whole start path. This test never derives the
+	// enrollment keys, so the Api has no provisioning Checker and the endpoint answers 503:
+	// mounted and unavailable, which is what distinguishes it from the 404 of a missing route.
+	srv := httptest.NewServer(Microservice.Mux())
+	defer srv.Close()
+	resp, err := http.Post(srv.URL+"/provisioning/acme/register", "application/json", strings.NewReader(
+		`{"provisionKey":"k","provisionSecret":"s","externalId":"SN-1","credentialSecret":"`+strings.Repeat("a", 43)+`"}`))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusServiceUnavailable, resp.StatusCode, "the registration route is not mounted by the start path")
 }

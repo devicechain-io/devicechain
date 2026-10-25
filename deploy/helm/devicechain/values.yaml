@@ -1467,6 +1467,26 @@ functionalAreas:
       #     perDeviceCacheEntries: 131072
       #     perDeviceCacheMiB: 24
       #     credentialCacheMiB: 32
+      #
+      # Device self-registration (POST /api/device-management/provisioning/{tenant}/register,
+      # which needs the API Ingress; defaults shown). This is the budget a stranger can make
+      # the endpoint spend BEFORE it has proved anything: the body is read and parsed before a
+      # slot is taken, so a slow or malformed request holds no slot. Fixed configuration, read
+      # when the pod starts. The per-tenant registration ceiling is not here: it is a tenant
+      # tier and override setting, managed with the tenant's other governance limits.
+      #   provisioning:
+      #     readDeadline: 10s   # how long a request has to deliver its body, above 0 and at most 1m
+      #                         # (out of range stops the service).
+      #     maxInFlight: 64     # registrations one replica works on at once, 1 to 1024;
+      #                         # the next is answered 503 with Retry-After. Each holds a
+      #                         # database connection for its transaction.
+      #     sourceBurst: 60     # per client address: this many requests at once...
+      #     sourceEvery: 1s     # ...then one every sourceEvery. Per replica. The address is
+      #                         # the client's only when infrastructure.http.trustedProxies
+      #                         # names the ingress controller (and the controller preserves
+      #                         # the client address); with that list empty every device
+      #                         # behind the ingress shares ONE allowance, and the service
+      #                         # logs a warning at start.
   event-sources:
     # CPU LIMIT raised from the 500m default. On GKE (3 x n2-standard-8, SSD
     # persistent disks, --ha, v0.18.0, shipped defaults) this service was throttled in

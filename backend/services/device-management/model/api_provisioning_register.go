@@ -623,3 +623,47 @@ func mapProvisionError(err error) error {
 		return err
 	}
 }
+
+// ValidateProvisionRequest checks everything about a registration that its own fields decide,
+// without a transaction or an authenticated profile: the material's format, the external id
+// and the optional name and metadata. The HTTP endpoint calls it before it takes a slot, so
+// a malformed request costs no more than reading and parsing its body; ProvisionDevice runs
+// the same check again, so a caller that skips this still cannot register anything invalid.
+func ValidateProvisionRequest(request *ProvisionRequest) error {
+	if request == nil {
+		return invalidProvisioning("a registration needs a request")
+	}
+	return validateProvisionRequest(request)
+}
+
+// RefuseProvisioning is AuthenticateProvisioningProfile for a request the caller already
+// knows cannot succeed, such as one aimed at a tenant that is being deleted: it pays the same
+// dummy compare an unknown key pays and answers ErrProvisioningFailed. It exists so that
+// refusing early does not make the refusal faster than the others, which would tell a stranger
+// which tenants are gone. It makes the same lookup an authentication makes and ignores its answer.
+func (api *Api) RefuseProvisioning(ctx context.Context, provisionKey, secret string) error {
+	if api.ProvisioningChecker == nil || api.EnrollmentKeys == nil {
+		return ErrProvisioningUnavailable
+	}
+	tenant, err := ctxTenant(ctx)
+	if err != nil {
+		return err
+	}
+	// The same tenant-scoped lookup an authentication makes, its answer discarded: the refusal
+	// costs the same database round trip as every other 401, which is the whole point of it.
+	lookup := func(ctx context.Context) (string, error) {
+		var found ProvisioningProfile
+		if err := api.RDB.DB(ctx).Where("provision_key = ?", provisionKey).First(&found).Error; err != nil &&
+			!errors.Is(err, gorm.ErrRecordNotFound) {
+			return "", err
+		}
+		return "", nil
+	}
+	err = api.ProvisioningChecker.Check(ctx, credential.Principal{
+		Kind: credential.KindProvisioningProfile, ID: tenant + ":" + provisionKey, Tenant: tenant,
+	}, secret, lookup)
+	if err == nil || errors.Is(err, credential.ErrMismatch) {
+		return ErrProvisioningFailed
+	}
+	return err
+}

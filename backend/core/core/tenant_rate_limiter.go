@@ -259,6 +259,22 @@ func (l *TenantRateLimiter) AllowNAt(tenant string, when time.Time, n int) bool 
 	return ok
 }
 
+// RetryAfter is how long a caller refused by Allow should wait before one more admission is
+// earned: one token at the tenant's current rate. It reads the ceiling and touches no bucket,
+// so asking changes nothing. A ceiling with no rate (which admits nothing) reports a second,
+// the shortest wait a caller can be told.
+func (l *TenantRateLimiter) RetryAfter(tenant string) time.Duration {
+	c := l.resolve(tenant)
+	if c.RatePerSecond <= 0 {
+		return time.Second
+	}
+	d := time.Duration(float64(time.Second) / c.RatePerSecond)
+	if d < time.Second {
+		return time.Second
+	}
+	return d
+}
+
 // AllowUntrusted admits one event NOW for a tenant string the platform has not
 // authenticated (today: only event-sources' HTTP path segment). Such a name gets a
 // bucket of its own only if the authority has resolved it, if a bucket already exists

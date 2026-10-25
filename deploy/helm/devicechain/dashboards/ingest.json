@@ -94,7 +94,7 @@
           },
           "instant": true,
           "format": "table",
-          "expr": "max by (alertname, severity) (ALERTS{alertstate=\"firing\", devicechain_instance=\"$instance\", alertname=~\"Mqtt.*|ExternalMqtt.*|BrokerPresence.*|DeviceCredential.*|DeviceLookupCache.*|TenantsMetered.*|RateLimiter.*|JetStreamCapture.*|JetStreamDurableLostUnread|JetStreamIngestBackpressure.*|JetStreamUnreadBacklog.*|SparkplugIngest.*|Lwm2mIngest.*\"})"
+          "expr": "max by (alertname, severity) (ALERTS{alertstate=\"firing\", devicechain_instance=\"$instance\", alertname=~\"Mqtt.*|ExternalMqtt.*|BrokerPresence.*|DeviceCredential.*|DeviceLookupCache.*|TenantsMetered.*|RateLimiter.*|JetStreamCapture.*|JetStreamDurableLostUnread|JetStreamIngestBackpressure.*|JetStreamUnreadBacklog.*|SparkplugIngest.*|Lwm2mIngest.*|Provisioning.*\"})"
         }
       ],
       "fieldConfig": {
@@ -2563,6 +2563,506 @@
       }
     },
     {
+      "id": 110,
+      "type": "row",
+      "title": "Device self-registration",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 87
+      },
+      "panels": []
+    },
+    {
+      "id": 111,
+      "type": "stat",
+      "title": "Devices registered, over the range",
+      "description": "Self-registration requests that succeeded over the time range: a device created, an earmarked device given its credential, or a retry recognised as one already done. A fleet being commissioned shows here; a quiet instance shows zero, which is normal.",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 88
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "round(sum(increase(devicechain_devicemanagement_provisioning_requests_total{result=~\"created|adopted|replayed\",namespace=\"$namespace\"}[$__range]))) or vector(0)",
+          "legendFormat": "__auto",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 112,
+      "type": "stat",
+      "title": "Refused: wrong key or secret, over the range",
+      "description": "Self-registration requests refused because the provision key or secret was not valid, over the time range. Every cause is counted together on purpose: an unknown tenant or key, a wrong secret, a profile that is disabled or expired. A few mean a mistyped secret; a steady stream means a fleet with the wrong secret or someone probing. The ProvisioningAuthFailuresSustained alert fires on the sustained case.",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 88
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "round(sum(increase(devicechain_devicemanagement_provisioning_requests_total{result=\"auth_failed\",namespace=\"$namespace\"}[$__range]))) or vector(0)",
+          "legendFormat": "__auto",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 100
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 113,
+      "type": "stat",
+      "title": "Held back by rate limits, over the range",
+      "description": "Self-registration requests answered 429 over the time range, from the per-source limit or the tenant's own. Devices wait and retry, so nothing is lost, but a steady count means a limit is too tight for the fleet or every device is sharing one source address. The ProvisioningRateLimited alert fires on the sustained case.",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 88
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "round(sum(increase(devicechain_devicemanagement_provisioning_requests_total{result=~\"rate_limited_source|rate_limited_tenant\",namespace=\"$namespace\"}[$__range]))) or vector(0)",
+          "legendFormat": "__auto",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 114,
+      "type": "stat",
+      "title": "Refused: no free slot, over the range",
+      "description": "Self-registration requests answered 503 over the time range because every slot of the replica was in use. Devices retry. A steady count means registrations arrive faster than the database can take them.",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 88
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "round(sum(increase(devicechain_devicemanagement_provisioning_requests_total{result=\"busy\",namespace=\"$namespace\"}[$__range]))) or vector(0)",
+          "legendFormat": "__auto",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 115,
+      "type": "stat",
+      "title": "Refused: profile misconfigured, over the range",
+      "description": "Self-registration requests refused because the provisioning profile cannot work: its device type was deleted, its strategy is unknown, or it mints a credential type this build does not support. Above zero is an operator's to fix; the ProvisioningMisconfigured alert fires on the first.",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 16,
+        "y": 88
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "round(sum(increase(devicechain_devicemanagement_provisioning_requests_total{result=~\"misconfigured|unsupported_type\",namespace=\"$namespace\"}[$__range]))) or vector(0)",
+          "legendFormat": "__auto",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 116,
+      "type": "stat",
+      "title": "Registrations being worked on now",
+      "description": "Self-registrations the replicas are working on right now, after their request body arrived. A request still sending its body is not counted. Pinned at the slot limit means new requests are being answered 503.",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 88
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(devicechain_devicemanagement_provisioning_in_flight{namespace=\"$namespace\"}) or vector(0)",
+          "legendFormat": "__auto",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "auto",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 117,
+      "type": "timeseries",
+      "title": "Self-registration requests by result",
+      "description": "Self-registration requests per second, by result. created, adopted and replayed are successes; the others are refusals. replayed is a device retrying a registration that already worked, which is healthy after a lost answer and a loop if it stays high.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 92
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (result) (rate(devicechain_devicemanagement_provisioning_requests_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "{{result}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 30,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 118,
+      "type": "timeseries",
+      "title": "Time to answer a self-registration",
+      "description": "How long the median and the slowest few percent of self-registration requests take to answer, counted from the moment the handler starts, so a slow client body is included. The registration itself is one short database transaction.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 92
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(devicechain_devicemanagement_provisioning_request_duration_seconds_bucket{namespace=\"$namespace\"}[$__rate_interval])))",
+          "legendFormat": "median"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(devicechain_devicemanagement_provisioning_request_duration_seconds_bucket{namespace=\"$namespace\"}[$__rate_interval])))",
+          "legendFormat": "99th percentile"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 30,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
       "id": 40,
       "type": "row",
       "title": "Sparkplug ingest (optional service)",
@@ -2571,7 +3071,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 87
+        "y": 100
       },
       "panels": [
         {
@@ -2583,7 +3083,7 @@
             "h": 4,
             "w": 6,
             "x": 0,
-            "y": 84
+            "y": 97
           },
           "datasource": {
             "type": "prometheus",
@@ -2649,7 +3149,7 @@
             "h": 4,
             "w": 6,
             "x": 6,
-            "y": 84
+            "y": 97
           },
           "datasource": {
             "type": "prometheus",
@@ -2712,7 +3212,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 84
+            "y": 97
           },
           "datasource": {
             "type": "prometheus",
@@ -2770,7 +3270,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 88
+            "y": 101
           },
           "datasource": {
             "type": "prometheus",
@@ -2844,7 +3344,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 88
+        "y": 101
       },
       "panels": [
         {
@@ -2856,7 +3356,7 @@
             "h": 4,
             "w": 6,
             "x": 0,
-            "y": 85
+            "y": 98
           },
           "datasource": {
             "type": "prometheus",
@@ -2918,7 +3418,7 @@
             "h": 4,
             "w": 6,
             "x": 6,
-            "y": 85
+            "y": 98
           },
           "datasource": {
             "type": "prometheus",
@@ -2981,7 +3481,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 85
+            "y": 98
           },
           "datasource": {
             "type": "prometheus",
@@ -3053,7 +3553,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 89
+            "y": 102
           },
           "datasource": {
             "type": "prometheus",

@@ -9,6 +9,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/rs/zerolog/log"
 )
 
 // Device authentication policy applied to inbound events (transport security,
@@ -313,6 +314,11 @@ type DeviceManagementConfiguration struct {
 	// InMemoryCache sizes what each replica keeps in its own memory of the caches keyed by
 	// device (see DefaultPerDeviceCacheMiB for what that costs).
 	InMemoryCache InMemoryCacheConfiguration
+
+	// Provisioning bounds the device self-registration endpoint: what a stranger can make the
+	// service spend before it has proved anything. It is FIXED configuration (the mounted
+	// file); the per-tenant ceiling is the one limit that lives on the database plane.
+	Provisioning ProvisioningConfiguration
 }
 
 // InMemoryCacheConfiguration sizes what one replica keeps in memory of each cache keyed by
@@ -551,6 +557,7 @@ func (c *DeviceManagementConfiguration) ApplyDefaults() {
 	c.Resolution.ApplyDefaults()
 	c.RaiseAlarm.ApplyDefaults(c.RdbConfiguration, c.Resolution)
 	c.InMemoryCache.ApplyDefaults()
+	c.Provisioning.ApplyDefaults()
 }
 
 // Validate enforces semantic constraints after decoding and defaulting, failing
@@ -600,6 +607,18 @@ func (c *DeviceManagementConfiguration) Validate() error {
 	}
 	if err := c.InMemoryCache.Validate(); err != nil {
 		return err
+	}
+	if err := c.Provisioning.Validate(c.RdbConfiguration); err != nil {
+		return err
+	}
+	// The writers the pool is shared by. Over the pool they still run, queueing for connections,
+	// which is why this is a warning and not a refusal; but the registration endpoint's
+	// places are part of the same budget and an operator should see the sum.
+	if sum, pool := c.Resolution.Workers+c.RaiseAlarm.Workers+c.Provisioning.MaxConcurrentRegistrations,
+		rdb.EffectiveMaxOpenConnections(c.RdbConfiguration); sum >= pool {
+		log.Warn().Int("resolutionWorkers", c.Resolution.Workers).Int("raiseAlarmWorkers", c.RaiseAlarm.Workers).
+			Int("provisioningMaxConcurrentRegistrations", c.Provisioning.MaxConcurrentRegistrations).Int("pool", pool).
+			Msg("Database writers (resolution, raise-alarm and device self-registration) can together hold the whole connection pool, so reads would wait for them.")
 	}
 	return nil
 }

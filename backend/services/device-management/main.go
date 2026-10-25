@@ -189,6 +189,7 @@ func buildMetrics() {
 	// core/service built it: the platform's max-delivery recorder letters under it too,
 	// and a second NewProducer here would panic on the duplicate counter.
 	DeadLetters = Svc.DeadLetters
+	buildProvisioningMetrics()
 	CredentialChecks = Microservice.NewCounterVec("credential_checks_total",
 		"MQTT password connect checks by outcome. outcome=\"throttled\" is a connect refused "+
 			"because its username is inside a backoff delay; outcome=\"unavailable\" means the "+
@@ -818,6 +819,9 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			// defaults are still enforced, so refusals still happen and still need reporting.
 			wireGeoFenceCapsResolver()
 			wireCalculatedMetricsCeilingResolver()
+			if err = wireProvisioningEndpoint(); err != nil {
+				return err
+			}
 			Api.GeoFenceCapRefusals = processor.NewGeoFenceCapRefusalCounter(
 				Microservice.NewCounterVec(
 					"geofence_cap_refusals_total",

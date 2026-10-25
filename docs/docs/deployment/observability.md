@@ -1331,6 +1331,19 @@ directions by unit tests.
 | `CommandPresenceReadErrors` | warning | For 15 minutes, the dispatch sweep has been unable to read the presence projection. The presence gate, which withholds commands for devices that are absent, **fails open** by design, so commands are being dispatched without the check. Nothing else shows it: dispatch looks normal and the holds counter falls to zero, which reads as "no devices are absent" rather than "nothing is being checked". | Check the device-state service and the health of the presence projection. Until it is fixed, a quiet holds panel is not reassuring. |
 | `CommandBatchReserveRefusals` | warning | For 30 minutes, fleet writes have been refused that would have fitted a tenant's own undelivered-command ceiling, and were refused only by the headroom the delivery machinery reserves for itself. Nothing is broken and every caller was told; the ceiling and the reserve disagree about what a normal fleet write is. | Raise the tenant's ceiling or lower the reserve, deliberately. The counters carry no tenant label, so the dashboard shows which codes and which bound but not which tenant. Find the tenant in the recorded command batches: a batch that fanned out partially records a per-device `HELD_CEILING_EXCEEDED` refusal, while one refused whole records nothing. |
 
+## Device self-registration {#self-registration-alerts}
+
+Three alerts cover the endpoint devices register themselves through
+(`POST /api/device-management/provisioning/{tenant}/register`). The counters behind them are in
+the [metrics reference](./metrics-reference.md#device-management). The thresholds are reasoned
+rather than measured, and each is checked in both directions by unit tests.
+
+| Alert | Severity | What it means | What to do |
+| --- | --- | --- | --- |
+| `ProvisioningAuthFailuresSustained` | warning | For 15 minutes, more than one self-registration request a second has been refused because the provision key or secret was not valid. Every cause is counted together and answered the same way, on purpose: an unknown tenant, an unknown key, a wrong secret, and a profile that is disabled or expired. A steady rate is either a fleet registering with a secret that is wrong or was rotated, or someone probing the endpoint. | Check the provisioning profile the fleet should be using: enabled, not expired, secret current (rotate it if it leaked). Look at the sources in the ingress log. Nothing else needs to be done for a probe: the secret is 256 random bits and cannot be guessed. |
+| `ProvisioningRateLimited` | warning | For 15 minutes, self-registration requests have been refused with `429` at more than one every ten seconds. The `result` label says which limit: `rate_limited_source` is one client address using up its allowance, `rate_limited_tenant` is the tenant's registrations per second at its governance ceiling. Devices wait the `Retry-After` they are told and try again. | For `rate_limited_source`, check that `infrastructure.http.trustedProxies` names the ingress controller and that the controller preserves the client address. Without them every device shares one allowance. For `rate_limited_tenant`, raise the tenant's provisioning ceiling or spread the factory run out. |
+| `ProvisioningMisconfigured` | warning | In the last 10 minutes at least one request was refused by a provisioning profile that cannot work: its device type was deleted, its strategy is not one the platform knows, or it mints a credential type this build does not support. Every device using that profile is refused until it is fixed. | Find the profile in the service log (the token is logged at `ERROR`) and fix or recreate it. |
+
 ## Safety gates that switched themselves off {#safety-gates}
 
 A few services carry a safety gate that depends on another service, and each comes up **off**, with
