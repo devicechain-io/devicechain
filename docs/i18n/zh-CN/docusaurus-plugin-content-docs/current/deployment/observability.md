@@ -165,6 +165,8 @@ DETECT/REACT 引擎（参见[事件处理](../concepts/event-processing.md)）�
 
 上限位于 `instance.config.infrastructure.nats`：高吞吐流使用 `streamMaxBytes`，其他使用 `streamMaxBytesCold`，以及 `streamMaxMsgs`。JetStream 卷按总和配置，因此提高上限时同步扩卷，参见[初始化实例](./bootstrap.md)。
 
+积压类告警（`JetStreamCaptureBacklogWillOverflow`、`JetStreamCaptureBacklogGrowing`、`JetStreamDurableFallingBehind` 和 `JetStreamDurableUnreadNearFull`）先读取负责读取的服务为各消费者导出的积压；若该服务没有任何输出，则改用消息代理自身的指标（代理指标边车导出的 `nats_consumer_num_pending`、`nats_consumer_num_ack_pending` 和 `nats_stream_*` 上限）。因此读取服务宕机（流积压的常见原因）不会让这些告警失声。代理侧的数据仅限本实例自己的流，且只有消费者的主节点会报告计数，所以告警取各代理 Pod 中的最大值。如果你的 Prometheus 没有抓取代理指标（chart 的代理监控会抓取），回退为空，这些告警仍需读取服务在运行，与以前一致。
+
 告警读取以下序列，各服务为读取的每个持久消费者导出前三项：
 
 - **`devicechain_<area>_jetstream_consumer_unread_skipped_total{stream, durable}`**：未经读取就越过的消息数。这是下界；重新投递或消费者后方消息被删除会少计，不会多计。
@@ -314,6 +316,7 @@ DETECT/REACT 引擎（参见[事件处理](../concepts/event-processing.md)）�
 | 告警 | 含义 | 处理 |
 | --- | --- | --- |
 | `InstanceContainerRestarted`（warning） | 过去十五分钟 Kubernetes 重启了 `pod`、`container` 指定容器，每容器一次，最近重启十五分钟后解除。 | 读取 `kubectl logs --previous -n <namespace> <pod>`。最后错误说明原因，通常在 “A component has declared this process unfit to continue” 后。放弃读取的循环列出流和最近代理错误。多个服务同时重启时先检查代理服务器并运行 `dcctl ha verify`。代理容器 `dc-nats-*` 也读旧日志，其流可能几分钟后才追上。`OOMKilled` 应提高内存限制。安装或升级最初几分钟重启属于预期。 |
+| `InstanceAreaUnavailable`（critical） | 本实例的某个 Deployment 需要至少一个 Pod，却已连续十分钟没有可用 Pod，该区域不再提供服务。区域的所有 Pod 都消失后，它不再上报自身的就绪状态和指标，概览中的就绪与抓取面板看不到它；这条告警和 “Areas with no pod available” 面板可以。有意缩容到零的区域不需要 Pod，不计入。 | 运行 `kubectl describe deployment <deployment> -n <namespace>` 和 `kubectl get pods -n <namespace>`，可看到镜像拉取失败、因 CPU 或内存不足无法调度、就绪探针失败或就绪前崩溃（`kubectl logs --previous`）。若是误缩容到零，请恢复副本数。它读取 kube-state-metrics 的 `kube_deployment_spec_replicas` 和 `kube_deployment_status_replicas_available`，没有它则不会触发。安装或升级时各区域按顺序启动，所以告警等待十分钟。 |
 
 告警使用监控栈安装的 kube-state-metrics 的 `kube_pod_container_status_restarts_total`。自建 Prometheus 没有它时不触发。升级或 `kubectl delete pod` 替换 Pod 会产生新计数，不触发此告警。持续重启还会在十五分钟后由监控栈自己的 `KubePodCrashLooping` 报告。
 

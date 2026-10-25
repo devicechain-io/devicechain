@@ -194,6 +194,19 @@ The check requires: first panel, type `table`, title `Firing alerts`, at the top
   and say in the description that a standby reads zero.
 - Histograms export only `_bucket`, `_sum` and `_count`. Use `histogram_quantile(q, sum by (le)
   (rate(<name>_bucket[$__rate_interval])))`, never the bare name.
+- Adding counters: guard **each** term, `(sum(increase(a[$__range])) or vector(0)) +
+  (sum(increase(b[$__range])) or vector(0))`. One counter with no series (a label value nothing
+  has incremented yet, an area the profile does not install) empties the whole sum, and an
+  `or vector(0)` written once at the end then shows 0 for the total. The check refuses an
+  unguarded sum; an expression that must be empty when a term is absent ends with
+  `# absent-ok: <why>`.
+- A panel over a backlog that a reading service exports (`devicechain_*_jetstream_consumer_*`)
+  goes blind exactly when that service is down. Put the message broker's own series
+  (`nats_consumer_num_pending` and friends, scoped with `stream_name=~"${instance}_.+"`) after an
+  `or`, labelled to match, so the backlog still shows while the reader is away.
+- Prometheus 3 stores `quantile` as `"1.0"`, not `"1"`. Match `quantile=~"1|1.0"`.
+- CloudNativePG's custom-query series (`cnpg_pg_*`) carry no `cluster` label: derive it from the
+  pod name with `label_replace(..., "cluster", "$1", "pod", "(.+)-[0-9]+")` before grouping by it.
 
 ## Units and panels
 

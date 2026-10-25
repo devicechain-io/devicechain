@@ -307,6 +307,16 @@ Los límites son `streamMaxBytes` (los flujos de alto volumen), `streamMaxBytesC
 partir de su suma, así que aumente el volumen junto con ellos (consulte
 [Arrancar una instancia](./bootstrap.md)).
 
+Las alertas de acumulación (`JetStreamCaptureBacklogWillOverflow`, `JetStreamCaptureBacklogGrowing`,
+`JetStreamDurableFallingBehind` y `JetStreamDurableUnreadNearFull`) leen la acumulación de cada consumidor
+del servicio que lo lee y, si ese servicio no informa de nada, de las métricas del propio bróker de
+mensajes (`nats_consumer_num_pending`, `nats_consumer_num_ack_pending` y los límites `nats_stream_*`,
+del sidecar de métricas del bróker). Por eso un servicio lector caído, que es la forma habitual en que un
+flujo se acumula, no las silencia. Las cifras del bróker se limitan a los flujos de la propia instancia y
+solo el líder del consumidor informa de un recuento, así que las alertas toman el valor más alto entre los
+pods del bróker. Si su Prometheus no recoge las métricas del bróker (el monitor de bróker del chart sí lo
+hace), la alternativa queda vacía y estas alertas necesitan que el servicio lector esté en marcha, como antes.
+
 Las alertas leen estas series. Cada servicio exporta las tres primeras para cada consumidor duradero
 que lee:
 
@@ -669,6 +679,7 @@ la interrupción que lo provocó.
 | Alerta | Qué significa | Qué hacer |
 | --- | --- | --- |
 | `InstanceContainerRestarted` (warning) | Kubernetes reinició en los últimos 15 minutos el contenedor que indican las etiquetas `pod` y `container`. Se dispara una vez por contenedor y se despeja 15 minutos después del último reinicio de ese contenedor. | Lea el registro del contenedor que terminó: `kubectl logs --previous -n <namespace> <pod>`. La última línea de error dice por qué, normalmente tras "A component has declared this process unfit to continue". Un bucle de lectura que se rindió nombra su flujo y su último error del broker. Si varios servicios se reiniciaron a la vez, mire primero el broker: compruebe que sus servidores están en marcha y ejecute `dcctl ha verify`. Si el contenedor reiniciado es un servidor del broker (`dc-nats-*`), lea también su registro anterior; sus streams tardan unos minutos en volver a estar al día. Si el último estado del contenedor es `OOMKilled`, aumente su límite de memoria. Los reinicios en los primeros minutos de una instalación o una actualización son de esperar. |
+| `InstanceAreaUnavailable` (critical) | Un deployment de esta instancia quiere al menos un pod y lleva diez minutos sin ninguno disponible, así que esa área no está sirviendo. Cuando todos los pods de un área desaparecen, el área deja de informar de su propia disponibilidad y de sus métricas, por lo que los paneles de disponibilidad y de objetivos de recogida del resumen no la muestran; esta alerta y el panel "Areas with no pod available" sí. Un área reducida a cero a propósito no quiere pods y no cuenta. | Ejecute `kubectl describe deployment <deployment> -n <namespace>` y `kubectl get pods -n <namespace>`. Muestran una descarga de imagen fallida, un pod que no se puede planificar por falta de CPU o memoria, una sonda de disponibilidad fallida o una caída antes de estar listo (`kubectl logs --previous`). Si el área se redujo a cero por error, vuelva a escalarla. Lee `kube_deployment_spec_replicas` y `kube_deployment_status_replicas_available` de kube-state-metrics, así que sin él nunca se dispara. Las áreas arrancan en orden durante una instalación o una actualización, por eso espera diez minutos. |
 
 La alerta lee `kube_pod_container_status_restarts_total` de kube-state-metrics, que instala la pila
 de monitoreo. Si usa su propio Prometheus sin kube-state-metrics, nunca se dispara. Un pod que se

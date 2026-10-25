@@ -356,6 +356,7 @@ func initializeMetrics() {
 		"Count of decoded messages from an external MQTT broker that were not stored because the publish to "+
 			"the platform's inbound-events stream failed. That source does not retry, so each one is lost",
 		[]string{"source"})
+	seedRefusalCounters(configuredSourceIDs())
 	initializePresenceMetrics()
 }
 

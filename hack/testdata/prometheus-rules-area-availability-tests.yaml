@@ -1,0 +1,84 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# promtool UNIT TESTS for the area-availability alerting rule.
+#
+# InstanceAreaUnavailable reads kube-state-metrics' deployment replica counts, because an
+# area whose pods are all gone stops reporting everything of its own. The scenarios:
+#
+#   - an area that wants a pod and has none, for ten minutes: PAGES (and does not before)
+#   - the same area when kube-state-metrics has NO available series for it at all: PAGES
+#     (a deployment with no available series has no pod available either)
+#   - quiet, each carrying its series: a healthy area, a rollout holding some pods available,
+#     an area scaled to zero on purpose (spec 0), a down area in ANOTHER namespace, and an
+#     area that was down for five minutes and came back (shorter than `for`)
+
+rule_files:
+  - rendered-rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  - name: an area that wants a pod and has none pages after ten minutes, with or without an available series
+    interval: 1m
+    input_series:
+      - series: 'kube_deployment_spec_replicas{namespace="dci-devicechain", deployment="dc-device-state"}'
+        values: '1x20'
+      - series: 'kube_deployment_status_replicas_available{namespace="dci-devicechain", deployment="dc-device-state"}'
+        values: '0x20'
+      - series: 'kube_deployment_spec_replicas{namespace="dci-devicechain", deployment="dc-command-delivery"}'
+        values: '2x20'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: InstanceAreaUnavailable
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: InstanceAreaUnavailable
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+              namespace: dci-devicechain
+              deployment: dc-device-state
+            exp_annotations:
+              summary: "an area of this instance has no pod available"
+              description: "Deployment dc-device-state wants 1 pod(s) and has had none available for ten minutes, so that area is not serving. Because its pods are gone, the area also stops reporting its own readiness and metrics, and the instance overview's readiness and scrape panels will not show it: this alert and the panel for areas with no pod available are what do. Describe the deployment and its pods: kubectl describe deployment and kubectl get pods in the instance's namespace show a failing image pull, a pod that cannot be scheduled for want of CPU or memory, a failed readiness probe, or a crash before ready (kubectl logs --previous). If the area was scaled to zero by mistake, scale it back; an area you turned off on purpose has zero wanted pods and does not raise this."
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+              namespace: dci-devicechain
+              deployment: dc-command-delivery
+            exp_annotations:
+              summary: "an area of this instance has no pod available"
+              description: "Deployment dc-command-delivery wants 2 pod(s) and has had none available for ten minutes, so that area is not serving. Because its pods are gone, the area also stops reporting its own readiness and metrics, and the instance overview's readiness and scrape panels will not show it: this alert and the panel for areas with no pod available are what do. Describe the deployment and its pods: kubectl describe deployment and kubectl get pods in the instance's namespace show a failing image pull, a pod that cannot be scheduled for want of CPU or memory, a failed readiness probe, or a crash before ready (kubectl logs --previous). If the area was scaled to zero by mistake, scale it back; an area you turned off on purpose has zero wanted pods and does not raise this."
+
+  - name: a healthy, rolling, scaled-to-zero, foreign and briefly down area are quiet
+    interval: 1m
+    input_series:
+      - series: 'kube_deployment_spec_replicas{namespace="dci-devicechain", deployment="dc-device-management"}'
+        values: '2x20'
+      - series: 'kube_deployment_status_replicas_available{namespace="dci-devicechain", deployment="dc-device-management"}'
+        values: '2x20'
+      - series: 'kube_deployment_spec_replicas{namespace="dci-devicechain", deployment="dc-event-management"}'
+        values: '3x20'
+      - series: 'kube_deployment_status_replicas_available{namespace="dci-devicechain", deployment="dc-event-management"}'
+        values: '1x20'
+      - series: 'kube_deployment_spec_replicas{namespace="dci-devicechain", deployment="dc-lwm2m-ingest"}'
+        values: '0x20'
+      - series: 'kube_deployment_status_replicas_available{namespace="dci-devicechain", deployment="dc-lwm2m-ingest"}'
+        values: '0x20'
+      - series: 'kube_deployment_spec_replicas{namespace="dci-other", deployment="dc-device-state"}'
+        values: '1x20'
+      - series: 'kube_deployment_status_replicas_available{namespace="dci-other", deployment="dc-device-state"}'
+        values: '0x20'
+      - series: 'kube_deployment_spec_replicas{namespace="dci-devicechain", deployment="dc-dashboard-management"}'
+        values: '1x20'
+      - series: 'kube_deployment_status_replicas_available{namespace="dci-devicechain", deployment="dc-dashboard-management"}'
+        values: '0x5 1x15'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: InstanceAreaUnavailable
+        exp_alerts: []
+      - eval_time: 19m
+        alertname: InstanceAreaUnavailable
+        exp_alerts: []

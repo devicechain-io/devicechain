@@ -325,7 +325,7 @@
       "id": 4,
       "type": "stat",
       "title": "Backlog against its limit",
-      "description": "How full the capture backlog is, as a share of what the capture stream can hold: messages waiting to be forwarded or not yet confirmed. At 100% the stream starts discarding the oldest unread messages, and those are lost. Above 10% and rising, add event-sources replicas now; above 80% loss is close. Shows no data until MQTT traffic has been seen.",
+      "description": "How full the capture backlog is, as a share of what the capture stream can hold: messages waiting to be forwarded or not yet confirmed. At 100% the stream starts discarding the oldest unread messages, and those are lost. Above 10% and rising, add event-sources replicas now; above 80% loss is close. Shows no data until MQTT traffic has been seen. While the reading service is down this shows the message broker's own count.",
       "gridPos": {
         "h": 4,
         "w": 4,
@@ -343,7 +343,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "max({__name__=~\"devicechain_[a-z0-9]+_jetstream_consumer_unread_ratio\", durable=~\".+_event-sources_device-events-capture(_unfiltered)?\", namespace=\"$namespace\"})",
+          "expr": "max(max by (stream, durable) ({__name__=~\"devicechain_[a-z0-9]+_jetstream_consumer_unread_ratio\", durable=~\".+_event-sources_device-events-capture(_unfiltered)?\", namespace=\"$namespace\"}) or max by (stream, durable) (label_replace(label_replace(max by (stream_name, consumer_name) (label_replace(sum by (stream_name, consumer_name) (max by (__name__, stream_name, consumer_name) ({__name__=~\"nats_consumer_num_pending|nats_consumer_num_ack_pending\", namespace=\"$namespace\", stream_name=~\"${instance}_.+\", consumer_name=~\".+_event-sources_device-events-capture(_unfiltered)?\"})) / on (stream_name) group_left () max by (stream_name) (nats_stream_limit_messages{namespace=\"$namespace\", stream_name=~\"${instance}_.+\"} > 0), \"form\", \"m\", \"\", \"\") or label_replace(sum by (stream_name, consumer_name) (max by (__name__, stream_name, consumer_name) ({__name__=~\"nats_consumer_num_pending|nats_consumer_num_ack_pending\", namespace=\"$namespace\", stream_name=~\"${instance}_.+\", consumer_name=~\".+_event-sources_device-events-capture(_unfiltered)?\"})) * on (stream_name) group_left () (max by (stream_name) (nats_stream_total_bytes{namespace=\"$namespace\", stream_name=~\"${instance}_.+\"}) / clamp_min(max by (stream_name) (nats_stream_total_messages{namespace=\"$namespace\", stream_name=~\"${instance}_.+\"}), 1)) / on (stream_name) group_left () max by (stream_name) (nats_stream_limit_bytes{namespace=\"$namespace\", stream_name=~\"${instance}_.+\"} > 0), \"form\", \"b\", \"\", \"\")), \"stream\", \"$1\", \"stream_name\", \"(.+)\"), \"durable\", \"$1\", \"consumer_name\", \"(.+)\")))",
           "legendFormat": "__auto"
         }
       ],
@@ -578,7 +578,7 @@
       "id": 8,
       "type": "timeseries",
       "title": "Backlog and stream fill over time",
-      "description": "Two lines on one scale. Backlog is the share of the capture stream's capacity holding messages not yet forwarded; at 100% the oldest unread messages are discarded. Stream fill is total size against its limit. A backlog line climbing toward 100% is the warning to act on.",
+      "description": "Two lines on one scale. Backlog is the share of the capture stream's capacity holding messages not yet forwarded; at 100% the oldest unread messages are discarded. Stream fill is total size against its limit. A backlog line climbing toward 100% is the warning to act on. While the reading service is down this shows the message broker's own count.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -596,7 +596,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "max by (stream) ({__name__=~\"devicechain_[a-z0-9]+_jetstream_consumer_unread_ratio\", durable=~\".+_event-sources_device-events-capture(_unfiltered)?\", namespace=\"$namespace\"})",
+          "expr": "max by (stream) (max by (stream, durable) ({__name__=~\"devicechain_[a-z0-9]+_jetstream_consumer_unread_ratio\", durable=~\".+_event-sources_device-events-capture(_unfiltered)?\", namespace=\"$namespace\"}) or max by (stream, durable) (label_replace(label_replace(max by (stream_name, consumer_name) (label_replace(sum by (stream_name, consumer_name) (max by (__name__, stream_name, consumer_name) ({__name__=~\"nats_consumer_num_pending|nats_consumer_num_ack_pending\", namespace=\"$namespace\", stream_name=~\"${instance}_.+\", consumer_name=~\".+_event-sources_device-events-capture(_unfiltered)?\"})) / on (stream_name) group_left () max by (stream_name) (nats_stream_limit_messages{namespace=\"$namespace\", stream_name=~\"${instance}_.+\"} > 0), \"form\", \"m\", \"\", \"\") or label_replace(sum by (stream_name, consumer_name) (max by (__name__, stream_name, consumer_name) ({__name__=~\"nats_consumer_num_pending|nats_consumer_num_ack_pending\", namespace=\"$namespace\", stream_name=~\"${instance}_.+\", consumer_name=~\".+_event-sources_device-events-capture(_unfiltered)?\"})) * on (stream_name) group_left () (max by (stream_name) (nats_stream_total_bytes{namespace=\"$namespace\", stream_name=~\"${instance}_.+\"}) / clamp_min(max by (stream_name) (nats_stream_total_messages{namespace=\"$namespace\", stream_name=~\"${instance}_.+\"}), 1)) / on (stream_name) group_left () max by (stream_name) (nats_stream_limit_bytes{namespace=\"$namespace\", stream_name=~\"${instance}_.+\"} > 0), \"form\", \"b\", \"\", \"\")), \"stream\", \"$1\", \"stream_name\", \"(.+)\"), \"durable\", \"$1\", \"consumer_name\", \"(.+)\")))",
           "legendFormat": "Backlog against its limit"
         },
         {
@@ -670,7 +670,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(deriv({__name__=~\"devicechain_[a-z0-9]+_jetstream_consumer_pending_messages\", durable=~\".+_event-sources_device-events-capture(_unfiltered)?\", namespace=\"$namespace\"}[5m]))",
+          "expr": "sum(deriv({__name__=~\"devicechain_[a-z0-9]+_jetstream_consumer_pending_messages\", durable=~\".+_event-sources_device-events-capture(_unfiltered)?\", namespace=\"$namespace\"}[5m])) or sum(deriv(nats_consumer_num_pending{namespace=\"$namespace\", stream_name=~\"${instance}_.+\", consumer_name=~\".+_event-sources_device-events-capture(_unfiltered)?\"}[5m]))",
           "legendFormat": "Backlog growth /s (above zero: falling behind)"
         }
       ],
@@ -706,7 +706,7 @@
       "id": 10,
       "type": "timeseries",
       "title": "Capture backlog in messages",
-      "description": "Messages waiting to be forwarded, and messages already removed from the stream that the forwarder never read. The second line should stay at zero; any value means loss has already happened or is happening.",
+      "description": "Messages waiting to be forwarded, and messages already removed from the stream that the forwarder never read. The second line should stay at zero; any value means loss has already happened or is happening. While the reading service is down this shows the message broker's own count.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -724,7 +724,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "max by (durable) ({__name__=~\"devicechain_[a-z0-9]+_jetstream_consumer_pending_messages\", durable=~\".+_event-sources_device-events-capture(_unfiltered)?\", namespace=\"$namespace\"})",
+          "expr": "max by (durable) ({__name__=~\"devicechain_[a-z0-9]+_jetstream_consumer_pending_messages\", durable=~\".+_event-sources_device-events-capture(_unfiltered)?\", namespace=\"$namespace\"}) or max by (durable) (label_replace(nats_consumer_num_pending{namespace=\"$namespace\", stream_name=~\"${instance}_.+\", consumer_name=~\".+_event-sources_device-events-capture(_unfiltered)?\"}, \"durable\", \"$1\", \"consumer_name\", \"(.+)\"))",
           "legendFormat": "Waiting to be forwarded"
         },
         {
@@ -983,7 +983,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "round(sum(increase(devicechain_eventsources_total_msg_rate_limited{namespace=\"$namespace\"}[$__range]) + increase(devicechain_eventsources_total_msg_reading_limited{namespace=\"$namespace\"}[$__range]))) or vector(0)",
+          "expr": "round((sum(increase(devicechain_eventsources_total_msg_rate_limited{namespace=\"$namespace\"}[$__range])) or vector(0)) + (sum(increase(devicechain_eventsources_total_msg_reading_limited{namespace=\"$namespace\"}[$__range])) or vector(0)))",
           "legendFormat": "__auto",
           "instant": true
         }
@@ -1046,7 +1046,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "round(sum(increase(devicechain_eventsources_total_msg_failed_decode{namespace=\"$namespace\"}[$__range]) + increase(devicechain_eventsources_total_msg_too_many_readings{namespace=\"$namespace\"}[$__range]) + increase(devicechain_eventsources_total_msg_invalid_event_time{namespace=\"$namespace\"}[$__range]))) or vector(0)",
+          "expr": "round((sum(increase(devicechain_eventsources_total_msg_failed_decode{namespace=\"$namespace\"}[$__range])) or vector(0)) + (sum(increase(devicechain_eventsources_total_msg_too_many_readings{namespace=\"$namespace\"}[$__range])) or vector(0)) + (sum(increase(devicechain_eventsources_total_msg_invalid_event_time{namespace=\"$namespace\"}[$__range])) or vector(0)))",
           "legendFormat": "__auto",
           "instant": true
         }
@@ -2662,7 +2662,7 @@
                 "type": "prometheus",
                 "uid": "${datasource}"
               },
-              "expr": "round(sum(increase(devicechain_sparkplugingest_ingest_failures_total{namespace=\"$namespace\"}[$__range]) + increase(devicechain_sparkplugingest_connect_failures_total{namespace=\"$namespace\"}[$__range]) + increase(devicechain_sparkplugingest_subscribe_failures_total{namespace=\"$namespace\"}[$__range]))) or vector(0)",
+              "expr": "round((sum(increase(devicechain_sparkplugingest_ingest_failures_total{namespace=\"$namespace\"}[$__range])) or vector(0)) + (sum(increase(devicechain_sparkplugingest_connect_failures_total{namespace=\"$namespace\"}[$__range])) or vector(0)) + (sum(increase(devicechain_sparkplugingest_subscribe_failures_total{namespace=\"$namespace\"}[$__range])) or vector(0)))",
               "legendFormat": "__auto",
               "instant": true
             }

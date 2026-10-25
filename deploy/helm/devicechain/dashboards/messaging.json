@@ -1729,7 +1729,7 @@
       "id": 27,
       "type": "timeseries",
       "title": "Unread backlog per reader",
-      "description": "Messages waiting for each reader that it has not been handed yet. A backlog that grows steadily means the reader is slower than the producers. A brief rise during a restart is normal. Scale the reading service or look for what is slowing it.",
+      "description": "Messages waiting for each reader that it has not been handed yet. A backlog that grows steadily means the reader is slower than the producers. A brief rise during a restart is normal. Scale the reading service or look for what is slowing it. While the reading service is down this shows the message broker's own count.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -1747,7 +1747,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "max by (durable) ({__name__=~\"devicechain_[a-z0-9]+_jetstream_consumer_pending_messages\", namespace=\"$namespace\"})",
+          "expr": "max by (durable) ({__name__=~\"devicechain_[a-z0-9]+_jetstream_consumer_pending_messages\", namespace=\"$namespace\"}) or max by (durable) (label_replace(nats_consumer_num_pending{namespace=\"$namespace\", stream_name=~\"${instance}_.+\"}, \"durable\", \"$1\", \"consumer_name\", \"(.+)\"))",
           "legendFormat": "{{durable}}"
         }
       ],
@@ -1791,7 +1791,7 @@
       "id": 28,
       "type": "timeseries",
       "title": "Handed out, not yet acknowledged",
-      "description": "Messages each reader has received and not yet confirmed. It normally hovers at the reader's working capacity. A value stuck high means handlers are blocked, and those messages will be handed out again when the wait expires.",
+      "description": "Messages each reader has received and not yet confirmed. It normally hovers at the reader's working capacity. A value stuck high means handlers are blocked, and those messages will be handed out again when the wait expires. While the reading service is down this shows the message broker's own count.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -1809,7 +1809,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "max by (durable) ({__name__=~\"devicechain_[a-z0-9]+_jetstream_consumer_ack_pending_messages\", namespace=\"$namespace\"})",
+          "expr": "max by (durable) ({__name__=~\"devicechain_[a-z0-9]+_jetstream_consumer_ack_pending_messages\", namespace=\"$namespace\"}) or max by (durable) (label_replace(nats_consumer_num_ack_pending{namespace=\"$namespace\", stream_name=~\"${instance}_.+\"}, \"durable\", \"$1\", \"consumer_name\", \"(.+)\"))",
           "legendFormat": "{{durable}}"
         }
       ],
@@ -1853,7 +1853,7 @@
       "id": 29,
       "type": "timeseries",
       "title": "Share of stream capacity left unread",
-      "description": "How much of what a stream can hold is still unread by each reader. At 100% the stream discards messages the reader has not seen. Keep this well under 80%. For readers that gate publishing, the stream starts refusing new events at 90%.",
+      "description": "How much of what a stream can hold is still unread by each reader. At 100% the stream discards messages the reader has not seen. Keep this well under 80%. For readers that gate publishing, the stream starts refusing new events at 90%. While the reading service is down this shows the message broker's own count.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -1871,7 +1871,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "max by (durable) ({__name__=~\"devicechain_[a-z0-9]+_jetstream_consumer_unread_ratio\", namespace=\"$namespace\"})",
+          "expr": "max by (durable) (max by (stream, durable) ({__name__=~\"devicechain_[a-z0-9]+_jetstream_consumer_unread_ratio\", namespace=\"$namespace\"}) or (max by (stream, durable) (label_replace(label_replace(max by (stream_name, consumer_name) (label_replace(sum by (stream_name, consumer_name) (max by (__name__, stream_name, consumer_name) ({__name__=~\"nats_consumer_num_pending|nats_consumer_num_ack_pending\", namespace=\"$namespace\", stream_name=~\"${instance}_.+\"})) / on (stream_name) group_left () max by (stream_name) (nats_stream_limit_messages{namespace=\"$namespace\", stream_name=~\"${instance}_.+\"} > 0), \"form\", \"m\", \"\", \"\") or label_replace(sum by (stream_name, consumer_name) (max by (__name__, stream_name, consumer_name) ({__name__=~\"nats_consumer_num_pending|nats_consumer_num_ack_pending\", namespace=\"$namespace\", stream_name=~\"${instance}_.+\"})) * on (stream_name) group_left () (max by (stream_name) (nats_stream_total_bytes{namespace=\"$namespace\", stream_name=~\"${instance}_.+\"}) / clamp_min(max by (stream_name) (nats_stream_total_messages{namespace=\"$namespace\", stream_name=~\"${instance}_.+\"}), 1)) / on (stream_name) group_left () max by (stream_name) (nats_stream_limit_bytes{namespace=\"$namespace\", stream_name=~\"${instance}_.+\"} > 0), \"form\", \"b\", \"\", \"\")), \"stream\", \"$1\", \"stream_name\", \"(.+)\"), \"durable\", \"$1\", \"consumer_name\", \"(.+)\")) unless on (stream, durable) max by (stream, durable) ({__name__=~\"devicechain_[a-z0-9]+_jetstream_backpressure_unread_ratio\", namespace=\"$namespace\"})))",
           "legendFormat": "{{durable}}"
         },
         {

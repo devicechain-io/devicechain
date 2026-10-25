@@ -521,7 +521,7 @@
       "id": 207,
       "type": "stat",
       "title": "Largest backlog share",
-      "description": "For the most backed-up reader, how full its stream is with messages that reader has not finished with. Near zero is healthy. At 100% the stream starts discarding messages the reader has not read; add capacity to that reader or reduce its input. Readers whose backlog makes writers wait instead are not counted here. ",
+      "description": "For the most backed-up reader, how full its stream is with messages that reader has not finished with. Near zero is healthy. At 100% the stream starts discarding messages the reader has not read; add capacity to that reader or reduce its input. Readers whose backlog makes writers wait instead are not counted here.  While the reading service is down this shows the message broker's own count.",
       "gridPos": {
         "h": 4,
         "w": 4,
@@ -539,7 +539,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "max({__name__=~\"devicechain_[a-z0-9]+_jetstream_consumer_unread_ratio\", namespace=\"$namespace\"}) or vector(0)",
+          "expr": "max(max by (stream, durable) ({__name__=~\"devicechain_[a-z0-9]+_jetstream_consumer_unread_ratio\", namespace=\"$namespace\"}) or (max by (stream, durable) (label_replace(label_replace(max by (stream_name, consumer_name) (label_replace(sum by (stream_name, consumer_name) (max by (__name__, stream_name, consumer_name) ({__name__=~\"nats_consumer_num_pending|nats_consumer_num_ack_pending\", namespace=\"$namespace\", stream_name=~\"${instance}_.+\"})) / on (stream_name) group_left () max by (stream_name) (nats_stream_limit_messages{namespace=\"$namespace\", stream_name=~\"${instance}_.+\"} > 0), \"form\", \"m\", \"\", \"\") or label_replace(sum by (stream_name, consumer_name) (max by (__name__, stream_name, consumer_name) ({__name__=~\"nats_consumer_num_pending|nats_consumer_num_ack_pending\", namespace=\"$namespace\", stream_name=~\"${instance}_.+\"})) * on (stream_name) group_left () (max by (stream_name) (nats_stream_total_bytes{namespace=\"$namespace\", stream_name=~\"${instance}_.+\"}) / clamp_min(max by (stream_name) (nats_stream_total_messages{namespace=\"$namespace\", stream_name=~\"${instance}_.+\"}), 1)) / on (stream_name) group_left () max by (stream_name) (nats_stream_limit_bytes{namespace=\"$namespace\", stream_name=~\"${instance}_.+\"} > 0), \"form\", \"b\", \"\", \"\")), \"stream\", \"$1\", \"stream_name\", \"(.+)\"), \"durable\", \"$1\", \"consumer_name\", \"(.+)\")) unless on (stream, durable) max by (stream, durable) ({__name__=~\"devicechain_[a-z0-9]+_jetstream_backpressure_unread_ratio\", namespace=\"$namespace\"}))) or vector(0)",
           "instant": true
         }
       ],
@@ -856,7 +856,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(increase(devicechain_eventsources_total_msg_failed_decode{namespace=\"$namespace\"}[$__range])) + sum(increase(devicechain_eventsources_total_msg_backpressured{namespace=\"$namespace\"}[$__range])) + sum(increase(devicechain_eventsources_total_msg_publish_failed{namespace=\"$namespace\"}[$__range])) or vector(0)",
+          "expr": "(sum(increase(devicechain_eventsources_total_msg_failed_decode{namespace=\"$namespace\"}[$__range])) or vector(0)) + (sum(increase(devicechain_eventsources_total_msg_backpressured{namespace=\"$namespace\"}[$__range])) or vector(0)) + (sum(increase(devicechain_eventsources_total_msg_publish_failed{namespace=\"$namespace\"}[$__range])) or vector(0))",
           "instant": true
         }
       ],
@@ -926,7 +926,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "round(sum(increase(devicechain_eventmanagement_persist_messages_total{namespace=\"$namespace\", result!=\"ok\"}[$__range])) + sum(increase(devicechain_devicestate_state_messages_total{namespace=\"$namespace\", result!=\"ok\"}[$__range])) + sum(increase(devicechain_devicemanagement_resolve_messages_total{namespace=\"$namespace\", result!=\"ok\"}[$__range])) + sum(increase(devicechain_devicemanagement_device_reports_messages_total{namespace=\"$namespace\", result!=\"ok\"}[$__range])) + sum(increase(devicechain_devicemanagement_raise_alarm_messages_total{namespace=\"$namespace\", result!=\"ok\"}[$__range])) + sum(increase(devicechain_commanddelivery_response_messages_total{namespace=\"$namespace\", result!=\"ok\"}[$__range])) + sum(increase(devicechain_notificationmanagement_notify_messages_total{namespace=\"$namespace\", result!=\"ok\"}[$__range])) + sum(increase(devicechain_updatemanagement_update_reports_messages_total{namespace=\"$namespace\", result!=\"ok\"}[$__range]))) or vector(0)",
+          "expr": "round((sum(increase(devicechain_eventmanagement_persist_messages_total{namespace=\"$namespace\", result!=\"ok\"}[$__range])) or vector(0)) + (sum(increase(devicechain_devicestate_state_messages_total{namespace=\"$namespace\", result!=\"ok\"}[$__range])) or vector(0)) + (sum(increase(devicechain_devicemanagement_resolve_messages_total{namespace=\"$namespace\", result!=\"ok\"}[$__range])) or vector(0)) + (sum(increase(devicechain_devicemanagement_device_reports_messages_total{namespace=\"$namespace\", result!=\"ok\"}[$__range])) or vector(0)) + (sum(increase(devicechain_devicemanagement_raise_alarm_messages_total{namespace=\"$namespace\", result!=\"ok\"}[$__range])) or vector(0)) + (sum(increase(devicechain_commanddelivery_response_messages_total{namespace=\"$namespace\", result!=\"ok\"}[$__range])) or vector(0)) + (sum(increase(devicechain_notificationmanagement_notify_messages_total{namespace=\"$namespace\", result!=\"ok\"}[$__range])) or vector(0)) + (sum(increase(devicechain_updatemanagement_update_reports_messages_total{namespace=\"$namespace\", result!=\"ok\"}[$__range])) or vector(0)))",
           "instant": true
         }
       ],
@@ -1259,7 +1259,7 @@
       "description": "Pods available for each deployment. A line that drops below its normal level means pods are down or still starting. Compare with the Missing replicas tile above.",
       "gridPos": {
         "h": 8,
-        "w": 12,
+        "w": 9,
         "x": 0,
         "y": 27
       },
@@ -1312,8 +1312,8 @@
       "description": "Restarts per pod over each interval. Flat at zero is healthy. A step up marks a restart; open that pod's previous logs and check whether it ran out of memory.",
       "gridPos": {
         "h": 8,
-        "w": 12,
-        "x": 12,
+        "w": 9,
+        "x": 9,
         "y": 27
       },
       "datasource": {
@@ -1356,6 +1356,69 @@
           "mode": "multi",
           "sort": "desc"
         }
+      }
+    },
+    {
+      "id": 222,
+      "type": "stat",
+      "title": "Areas with no pod available",
+      "description": "How many deployments of this instance want at least one pod and have none available. An area whose pods are all gone stops reporting, so it also vanishes from the readiness count and the scrape count above; this is the panel that still shows it. Zero is healthy. A non-zero value that stays means that area is down: describe its pods. An area you scaled to zero on purpose wants no pods and is not counted.",
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 27
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "count(kube_deployment_spec_replicas{namespace=\"$namespace\"} > 0 unless on (namespace, deployment) kube_deployment_status_replicas_available{namespace=\"$namespace\"} > 0) or vector(0)",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "noValue": "0"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "center"
       }
     },
     {

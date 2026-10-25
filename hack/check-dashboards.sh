@@ -6,7 +6,7 @@
 # must keep the ConfigMap names they already have, and must keep two instances'
 # boards apart.
 #
-# FIVE GAPS (the fifth is the published-text rule below), ALL OF THEM SILENT, NONE OF THEM COVERED BY ANYTHING ELSE.
+# SEVEN GAPS (the fifth is the published-text rule below), ALL OF THEM SILENT, NONE OF THEM COVERED BY ANYTHING ELSE.
 #
 # 1. NOTHING PARSED THE DASHBOARD JSON. templates/grafana-dashboard.yaml used to
 #    embed each file with `.Files.Get | indent 4`, which turns ANY bytes into a
@@ -67,6 +67,15 @@
 #    the same render, which is the namespace whose label the instance's own series
 #    actually carry, and is therefore an assertion about what the board READS rather
 #    than about a naming convention.
+#
+# 6. NOTHING CHECKED THAT A SUM OF COUNTERS SURVIVES ONE OF THEM BEING ABSENT. `sum(increase(a)) +
+#    sum(increase(b)) or vector(0)` is EMPTY when `b` has no series, and the fallback then shows 0 for
+#    the total while `a` holds real values (400 malformed requests left both "malformed" panels at 0).
+#    Every `+`/`-` over two or more rate()/increase() terms must guard each term with `or vector(0)`,
+#    or end with `# absent-ok: <why>`. See "gap 6" in check_content.
+#
+# 7. A WHOLE-NUMBER summary quantile matched with `=` (quantile="1") selects nothing on Prometheus 3,
+#    which stores "1.0"; the panel or alert over it is empty for good. See "gap 7".
 #
 # 🔴 IF A TOOL IS MISSING THIS HARD FAILS. A checker that cannot parse must not
 # report; "skipped because python3 was absent" and "no problems found" must
@@ -632,6 +641,7 @@ EXTERNAL_SERIES = {
     "cnpg_collector_up",
     "cnpg_pg_database_size_bytes",
     "cnpg_pg_database_xid_age",
+    "cnpg_pg_replication_in_recovery",
     "cnpg_pg_replication_lag",
     "cnpg_pg_replication_streaming_replicas",
     "cnpg_pg_settings_setting",
@@ -712,6 +722,201 @@ for series in sorted(external_seen):
             "    for it: a misspelling draws an empty graph, or an alert that never fires. If the name is\n"
             "    real, confirm it against the exporter and add it to that list."
             % (series, ", ".join(sorted(external_seen[series]))))
+
+# --- gap 6: ONE ABSENT TERM EMPTIES A SUM, AND THE FALLBACK THEN SHOWS ZERO ----
+# 🔴 `sum(increase(a[r])) + sum(increase(b[r])) or vector(0)` LOOKS LIKE "THE TOTAL, OR ZERO" AND IS NOT.
+# PromQL's `+` between two vectors keeps only the label sets present on BOTH sides, so when
+# one counter has no series at all -- a label vector nothing has incremented yet, or a service
+# the profile does not install -- the whole sum is EMPTY, and `or vector(0)` then substitutes 0
+# for the TOTAL while the other terms hold real values. Measured live: 400 malformed requests
+# left both "malformed" panels at 0. `or` binds LOOSER than `+`, so a fallback written once, at
+# the end, guards nothing about any one term.
+#
+# The shape that is correct guards EACH counter term: `(sum(increase(a)) or vector(0)) +
+# (sum(increase(b)) or vector(0))`. This refuses an arithmetic `+`/`-` whose operands include two
+# or more rate()/irate()/increase() terms unless EVERY such term is wrapped in parentheses holding
+# an `or`. A sum that is meant to be empty when a term is absent (a ratio whose denominator must
+# exist) says so with a trailing PromQL comment, `# absent-ok: <why>`, which both Grafana and
+# Prometheus accept at the end of an expression.
+#
+# It is a parser, not a regex: the same text split on a naive `+` would read the `+` inside a
+# label value or a nested function as arithmetic, and a respelling would walk past it.
+COUNTER_TERM = re.compile(r"\b(?:rate|irate|increase)\s*\(")
+ABSENT_OK = re.compile(r"#\s*absent-ok\b")
+BACKSLASH = chr(92)
+OR_ARM = re.compile(r"\s+(?:or|and|unless)\s+")
+ONLY_OR = re.compile(r"\s+or\s+")
+ARITH = re.compile(r"\s*\+\s*|\s+-\s+")
+COMPARE = re.compile(r"\s*(?:>=|<=|==|!=|>|<)\s*(?:bool\s+)?")
+COMMA = re.compile(r",")
+
+def _skip_string(text, i):
+    quote = text[i]
+    j = i + 1
+    while j < len(text) and text[j] != quote:
+        j += 2 if text[j] == BACKSLASH else 1
+    return j + 1
+
+def _skip_selector(text, i):
+    close = "}" if text[i] == "{" else "]"
+    j = i + 1
+    while j < len(text) and text[j] != close:
+        j = _skip_string(text, j) if text[j] in "\"'`" else j + 1
+    return j + 1
+
+def _split_top(text, seps):
+    """Split text at the depth-0 matches of seps, never inside (), {}, [] or a string."""
+    parts, cur, i, depth = [], [], 0, 0
+    while i < len(text):
+        c = text[i]
+        if c in "\"'`" or c in "{[":
+            j = _skip_string(text, i) if c in "\"'`" else _skip_selector(text, i)
+            cur.append(text[i:j])
+            i = j
+            continue
+        if c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+        if depth == 0:
+            hit = next((m for m in (s.match(text, i) for s in seps) if m and m.end() > i), None)
+            if hit:
+                parts.append("".join(cur))
+                cur = []
+                i = hit.end()
+                continue
+        cur.append(c)
+        i += 1
+    parts.append("".join(cur))
+    return parts
+
+def _paren_groups(text):
+    stack, i = [], 0
+    while i < len(text):
+        c = text[i]
+        if c in "\"'`":
+            i = _skip_string(text, i)
+            continue
+        if c in "{[":
+            i = _skip_selector(text, i)
+            continue
+        if c == "(":
+            stack.append(i)
+        elif c == ")" and stack:
+            start = stack.pop()
+            yield text[start + 1:i]
+        i += 1
+
+def _wraps_whole(s):
+    depth = 0
+    for k, ch in enumerate(s):
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0 and k < len(s) - 1:
+                return False
+    return True
+
+def _term_guarded(term):
+    s = term.strip()
+    while s.startswith("(") and s.endswith(")") and _wraps_whole(s):
+        inner = s[1:-1]
+        if len(_split_top(inner, [ONLY_OR])) > 1:
+            return True
+        s = inner.strip()
+    return False
+
+def absent_term_arms(expr):
+    """The arithmetic arms of expr that add or subtract two counter terms without guarding each."""
+    if ABSENT_OK.search(expr):
+        return []
+    found = []
+    for group in list(_paren_groups(expr)) + [expr]:
+        for arg in _split_top(group, [COMMA]):
+            for arm in _split_top(arg, [OR_ARM]):
+                # a comparison binds looser than + and -, so each side of it is its own sum
+                for side in _split_top(arm, [COMPARE]):
+                    operands = _split_top(side, [ARITH])
+                    terms = [o for o in operands if COUNTER_TERM.search(o)]
+                    if len(operands) > 1 and len(terms) > 1 and not all(_term_guarded(o) for o in terms):
+                        if side.strip() not in found:
+                            found.append(side.strip())
+    return found
+
+def _board_exprs(node, trail="$"):
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key == "expr" and isinstance(value, str):
+                yield "%s.expr" % trail, value
+            else:
+                yield from _board_exprs(value, "%s.%s" % (trail, key))
+    elif isinstance(node, list):
+        for i, value in enumerate(node):
+            yield from _board_exprs(value, "%s[%d]" % (trail, i))
+
+def _rule_expr_blocks(text):
+    lines = text.split("\n")
+    for i, line in enumerate(lines):
+        m = re.match(r"^(\s*)(?:- )?expr:\s*(.*)$", line)
+        if not m:
+            continue
+        indent, rest = len(m.group(1)), m.group(2)
+        if rest and rest[0] not in "|>":
+            yield i + 1, rest
+            continue
+        block = []
+        for follow in lines[i + 1:]:
+            if follow.strip() and len(follow) - len(follow.lstrip()) <= indent:
+                break
+            block.append(follow)
+        yield i + 1, "\n".join(block)
+
+ABSENT_TERM_ADVICE = (
+    "    adds or subtracts two or more rate()/increase() terms without guarding each one. If any ONE\n"
+    "    of those counters has no series (a label vector nothing has incremented yet, an area the\n"
+    "    profile does not install) the whole arithmetic is EMPTY, and an `or vector(0)` written once at\n"
+    "    the end then shows 0 for the TOTAL while the other terms hold real values. Guard each term:\n"
+    "    (sum(increase(a[r])) or vector(0)) + (sum(increase(b[r])) or vector(0)).\n"
+    "    If emptiness really is the right answer, end the expression with `# absent-ok: <why>`.")
+absent_term_count = 0
+for path in dashboards:
+    try:
+        with open(path, "rb") as fh:
+            board = json.loads(fh.read().decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        continue  # reported as unparseable above
+    for where, expr in _board_exprs(board):
+        absent_term_count += 1
+        for arm in absent_term_arms(expr):
+            problems.append("%s %s\n    %s\n%s" % (os.path.relpath(path, root), where, arm[:200], ABSENT_TERM_ADVICE))
+for path in rule_files:
+    with open(path, "rb") as fh:
+        text = fh.read().decode("utf-8", "replace")
+    for line_no, expr in _rule_expr_blocks(text):
+        absent_term_count += 1
+        for arm in absent_term_arms(expr):
+            problems.append("%s:%d\n    %s\n%s" % (
+                os.path.relpath(path, root), line_no, " ".join(arm.split())[:200], ABSENT_TERM_ADVICE))
+if absent_term_count == 0:
+    sys.exit("found no expressions to check for absent terms -- this rule would pass over nothing")
+
+# --- gap 7: quantile="1" NEVER MATCHES ON PROMETHEUS 3 -------------------------
+# A summary's quantile label is stored as the float the client formatted: Prometheus 3 and the
+# Go client write 1 as "1.0", so an exact `quantile="1"` selects nothing and the panel or alert
+# over it is empty forever (the Platform board's longest-GC-pause panel was). Fractions such as
+# "0.99" are spelled the same either way. The exact match on a whole number is refused; match
+# `quantile=~"1|1.0"` (or `0|0.0`).
+WHOLE_QUANTILE = re.compile(r'quantile\s*=\s*(?:\\?")(?:0|1)(?:\\?")')
+for path in list(dashboards) + list(rule_files):
+    with open(path, "rb") as fh:
+        text = fh.read().decode("utf-8", "replace")
+    if WHOLE_QUANTILE.search(text):
+        problems.append(
+            "%s selects a summary quantile of exactly 0 or 1 with `=`.\n"
+            "    Prometheus 3 stores those as \"0.0\" and \"1.0\", so the selector matches nothing and the\n"
+            "    panel or alert over it is empty for good. Use quantile=~\"1|1.0\" (or \"0|0.0\")."
+            % os.path.relpath(path, root))
 
 if problems:
     print("The chart's dashboards and alert rules do not hold up:\n", file=sys.stderr)
@@ -1107,13 +1312,16 @@ EOF
           "expr": "sum(rate(devicechain_selftestarea_probe_total{namespace=\"$namespace\"}[5m]))"
         },
         {
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(devicechain_selftestarea_lat_seconds_bucket[5m]))) / (sum(rate(devicechain_selftestarea_lat_seconds_sum[5m])) / sum(rate(devicechain_selftestarea_lat_seconds_count[5m]))) + rate(devicechain_selftestarea_sum_seconds_sum[5m]) + rate(devicechain_selftestarea_sum_seconds_count[5m])"
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(devicechain_selftestarea_lat_seconds_bucket[5m]))) / (sum(rate(devicechain_selftestarea_lat_seconds_sum[5m])) / sum(rate(devicechain_selftestarea_lat_seconds_count[5m]))) + rate(devicechain_selftestarea_sum_seconds_sum[5m]) + rate(devicechain_selftestarea_sum_seconds_count[5m]) # absent-ok: resolver fixture"
+        },
+        {
+          "expr": "(sum(increase(devicechain_selftestarea_probe_total{namespace=\"$namespace\"}[1h])) or vector(0)) + (sum(increase(devicechain_selftestarea_other_probe_total{namespace=\"$namespace\"}[1h])) or vector(0))"
         },
         {
           "expr": "sum(kube_pod_container_status_restarts_total{namespace=\"$namespace\"}) + max(go_goroutines{namespace=\"$namespace\"}) + max(container_memory_working_set_bytes) + max(process_open_fds) + max(nats_varz_cpu) + min(cnpg_collector_up) + max(kubelet_volume_stats_used_bytes) + max(barman_cloud_cloudnative_pg_io_last_available_backup_timestamp)"
         },
         {
-          "expr": "devicechain_selftestarea_sum_seconds{quantile=\"0.99\"} + histogram_quantile(0.5, sum by (le) (rate(devicechain_selftestarea_loop_duration_seconds_bucket[5m]))) + rate(devicechain_selftestarea_loop_messages_total[5m]) + rate(devicechain_selftestarea_sweep_pass_duration_seconds_count[5m]) + histogram_quantile(0.5, sum by (le) (rate({__name__=~\"devicechain_[a-z0-9]+_core_lat_seconds_bucket\"}[5m])))"
+          "expr": "devicechain_selftestarea_sum_seconds{quantile=\"0.99\"} + histogram_quantile(0.5, sum by (le) (rate(devicechain_selftestarea_loop_duration_seconds_bucket[5m]))) + rate(devicechain_selftestarea_loop_messages_total[5m]) + rate(devicechain_selftestarea_sweep_pass_duration_seconds_count[5m]) + histogram_quantile(0.5, sum by (le) (rate({__name__=~\"devicechain_[a-z0-9]+_core_lat_seconds_bucket\"}[5m]))) # absent-ok: resolver fixture"
         }
       ]
     }
@@ -1127,6 +1335,10 @@ spec:
       rules:
         - alert: ProbeFiring
           expr: sum(rate(devicechain_selftestarea_other_probe_total{namespace="dc"}[5m])) > 0
+          labels:
+            devicechain_instance: dc
+        - alert: ProbeGuardedSum
+          expr: (sum(increase(devicechain_selftestarea_probe_total{namespace="dc"}[5m])) or vector(0)) + (sum(increase(devicechain_selftestarea_other_probe_total{namespace="dc"}[5m])) or vector(0)) > 0
           labels:
             devicechain_instance: dc
         - alert: ProbeByNameFiring
@@ -1211,6 +1423,45 @@ EOF
   histcase 'devicechain_selftestarea_lat_seconds_count' 'devicechain_selftestarea_test_only_seconds_count' '_count on a histogram registered only in a test file'
   histcase '_lat_seconds_bucket"' '_lat_seconds"' 'a by-name selector over the bare name of a histogram' "$tmpl/prometheusrule-probe.yaml"
   histcase '_lat_seconds_bucket"' '_lat_seconds_buckets"' 'a by-name selector with a misspelled histogram suffix' "$tmpl/prometheusrule-probe.yaml"
+
+  # Cases 2z -- ONE ABSENT TERM EMPTIES A SUM. The clean fixture carries a sum whose two
+  # counter terms are each guarded (dashboard and rule), and two bare sums marked
+  # `# absent-ok`, and Case 0 passed over all of them (the accepted half). Each defect
+  # below is planted ALONE by rewriting the guarded sum.
+  absentcase() { # <file> <old> <new> <description>
+    python3 - "$1" "$2" "$3" <<'PY' || fail "the mutation for $4 did not apply"
+import sys
+path, old, new = sys.argv[1:]
+text = open(path, encoding="utf-8").read()
+if text.count(old) != 1:
+    sys.exit(1)
+open(path, "w", encoding="utf-8").write(text.replace(old, new))
+PY
+    if check_content "$work" >/dev/null 2>&1; then
+      fail "did not flag $4"
+    fi
+    restore
+    echo "  ok: $4 is caught"
+  }
+  G1='(sum(increase(devicechain_selftestarea_probe_total{namespace=\"$namespace\"}[1h])) or vector(0))'
+  absentcase "$dash/probe.json" "$G1 + (sum" \
+    'sum(increase(devicechain_selftestarea_probe_total{namespace=\"$namespace\"}[1h])) + (sum' \
+    'a dashboard sum with one unguarded counter term'
+  absentcase "$dash/probe.json" \
+    "(sum(increase(devicechain_selftestarea_other_probe_total{namespace=\\\"\$namespace\\\"}[1h])) or vector(0))\"" \
+    "sum(increase(devicechain_selftestarea_other_probe_total{namespace=\\\"\$namespace\\\"}[1h])) or vector(0)\"" \
+    'a dashboard sum whose only fallback is written once, at the end'
+  absentcase "$dash/probe.json" "$G1 + (sum(increase(devicechain_selftestarea_other_probe_total{namespace=\\\"\$namespace\\\"}[1h])) or vector(0))" \
+    'sum(increase(devicechain_selftestarea_probe_total{namespace=\"$namespace\"}[1h]) + increase(devicechain_selftestarea_other_probe_total{namespace=\"$namespace\"}[1h]))' \
+    'a dashboard sum that adds two counters inside one aggregation'
+  # Case 2y -- A WHOLE-NUMBER QUANTILE MATCHED WITH `=`, alone: the probe board already selects
+  # quantile="0.99" (accepted); rewriting it to "1" is exactly the Platform board's defect.
+  absentcase "$dash/probe.json" 'sum_seconds{quantile=\"0.99\"}' 'sum_seconds{quantile=\"1\"}' \
+    'a summary quantile of exactly 1 matched with ='
+  absentcase "$tmpl/prometheusrule-probe.yaml" \
+    '(sum(increase(devicechain_selftestarea_probe_total{namespace="dc"}[5m])) or vector(0)) + (' \
+    'sum(increase(devicechain_selftestarea_probe_total{namespace="dc"}[5m])) + (' \
+    'an alert expression with one unguarded counter term'
 
   # Cases 2x -- SERIES THAT ARE NOT DEVICECHAIN'S, one misspelling per prefix family, each alone.
   # The clean fixture names one pinned series of every family and passed Case 0, so the accepted half
@@ -1600,7 +1851,7 @@ FIXTURE
   rm -f "$chart/dashboards/unscoped-board.json"
   echo "  ok: a dashboard with no instance variable is refused by the template"
 
-  echo "self-test passed: 72 defects, each planted alone, each caught; a clean tree and chart pass"
+  echo "self-test passed: 77 defects, each planted alone, each caught; a clean tree and chart pass"
   exit 0
 fi
 
