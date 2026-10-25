@@ -2835,25 +2835,34 @@ type ProvisioningProfile implements Model & TokenReference & NamedEntity & Metad
     enabled: Boolean!
     expiresAt: String
     metadata: String
-    # The most devices the profile may register, or null for no cap. Devices holding a
-    # credential the profile issued count, revoked ones included, until their provisioning is
-    # reset or they are deleted.
+    """
+    The most devices the profile may register, or null for no cap. Devices holding a
+    credential the profile issued count, revoked ones included, until their provisioning is
+    reset or they are deleted.
+    """
     maxDevices: Int
-    # How many devices hold a credential the profile issued, counted against maxDevices.
+    """How many devices hold a credential the profile issued, counted against maxDevices."""
     provisionedDeviceCount: Int!
-    # False for a profile whose secret was chosen by an operator (every profile created before
-    # the server generated secrets). The registration endpoint refuses such a profile with
-    # PROVISIONING_FAILED until rotateProvisioningProfileSecret issues it a secret.
+    """
+    False for a profile whose secret was chosen by an operator (every profile created before
+    the server generated secrets). The registration endpoint refuses such a profile with
+    PROVISIONING_FAILED until rotateProvisioningProfileSecret issues it a secret.
+    """
     secretIssued: Boolean!
 }
 
-# A provisioning profile together with the provision secret the server just generated for it.
-# The secret is in the response to the write that issued it and nowhere else: the platform
-# stores only a digest, so it cannot be read again. Rotate it if it is lost.
+"""
+A provisioning profile together with the provision secret the server just generated for it.
+The secret is in the response to the write that issued it and nowhere else: the platform
+stores only a digest, so it cannot be read again. Rotate it if it is lost.
+"""
 type ProvisioningProfileSecretResult {
+    """The profile the secret belongs to."""
     profile: ProvisioningProfile!
-    # 43 characters, 256 bits. Show it to the operator once; devices present it, with the
-    # profile's provisionKey, to the registration endpoint.
+    """
+    43 characters, 256 bits. Show it to the operator once; devices present it, with the
+    profile's provisionKey, to the registration endpoint.
+    """
     issuedSecret: String!
 }
 
@@ -2875,7 +2884,7 @@ input ProvisioningProfileCreateRequest {
     enabled: Boolean!
     expiresAt: String
     metadata: String
-    # The most devices the profile may register; at least 1. Omit or send null for no cap.
+    """The most devices the profile may register; at least 1. Omit or send null for no cap."""
     maxDevices: Int
 }
 
@@ -2907,8 +2916,10 @@ input ProvisioningProfileUpdateRequest {
     enabled: Boolean
     # An RFC3339 timestamp. Null or an empty string means "never expires".
     expiresAt: String
-    # The most devices the profile may register; at least 1. Null removes the cap. Lowering it
-    # below the number already registered only refuses further registrations.
+    """
+    The most devices the profile may register; at least 1. Null removes the cap. Lowering it
+    below the number already registered only refuses further registrations.
+    """
     maxDevices: Int
     metadata: String
 }
@@ -4545,20 +4556,35 @@ type Mutation {
     # Create a new provisioning profile. The response carries the provision secret the server
     # generated, once.
     createProvisioningProfile(request: ProvisioningProfileCreateRequest): ProvisioningProfileSecretResult!
-    # Replace a profile's provision secret with a new one, returned once. The old secret stops
-    # working at once and there is no overlap (overlap is a second profile with its own key).
-    # Devices already registered are unaffected. This is also what brings a profile created
-    # before the server generated secrets into service.
-    rotateProvisioningProfileSecret(token: String!): ProvisioningProfileSecretResult!
-    # Disable every credential the profile issued, and end those devices' live sessions. Returns
-    # how many credentials it disabled. The profile still accepts new registrations; pair it with
-    # rotateProvisioningProfileSecret after a leak. A revoked device stays refused until
-    # resetDeviceProvisioning.
-    revokeProvisionedDevices(profileToken: String!): Int!
-    # Delete the credentials self-registration issued to the device and end its sessions. Returns
-    # how many it removed. The device keeps its earmark, so it can register again; this is the
-    # way back from a revoke.
-    resetDeviceProvisioning(deviceToken: String!): Int!
+    """
+    Replace a profile's provision secret with a new one, returned once. The old secret stops
+    working at once and there is no overlap (overlap is a second profile with its own key).
+    Devices already registered are unaffected. This is also what brings a profile created
+    before the server generated secrets into service.
+    """
+    rotateProvisioningProfileSecret(
+        """Token of the profile."""
+        token: String!
+    ): ProvisioningProfileSecretResult!
+    """
+    Disable every credential the profile issued, and end those devices' live sessions. Returns
+    how many credentials it disabled. The profile still accepts new registrations; pair it with
+    rotateProvisioningProfileSecret after a leak. A revoked device stays refused until
+    resetDeviceProvisioning.
+    """
+    revokeProvisionedDevices(
+        """Token of the profile."""
+        profileToken: String!
+    ): Int!
+    """
+    Delete the credentials self-registration issued to the device and end its sessions. Returns
+    how many it removed. The device keeps its earmark, so it can register again; this is the
+    way back from a revoke.
+    """
+    resetDeviceProvisioning(
+        """Token of the device."""
+        deviceToken: String!
+    ): Int!
     # Update an existing provisioning profile.
     updateProvisioningProfile(token: String!, request: ProvisioningProfileUpdateRequest!): ProvisioningProfile!
     # Delete a single provisioning profile.
