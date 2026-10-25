@@ -68,18 +68,28 @@ type DeviceClaimRequest struct {
 // secret (often printed on the device or its packaging) and whoever proves
 // possession by presenting it redeems the claim into an ownership relationship.
 //
-// ClaimSecret is stored as-is and verified with a constant-time compare, mirroring
-// the DeviceCredential / ProvisioningProfile secret posture (ADR-014); it is never
-// exposed on the GraphQL type.
+// 🔴 THE SECRET IS NEVER STORED, ONLY ITS KEYED DIGEST. ClaimSecretDigest is what
+// credential.DeriveEnrollmentSecretKeys's key made of the secret InitiateDeviceClaim
+// carried, bound to the claim's tenant, and NULL for a claim with none (which no presented
+// secret redeems). A presented secret is verified against it in constant time
+// (credential.VerifyDeviceSecret). The claim_secret column that held the plaintext is still
+// in the table, NULLed by DigestPlaintextClaimSecrets at startup and by every write
+// (LegacyClaimSecret). The secret is never exposed on the GraphQL type.
 type DeviceClaim struct {
 	gorm.Model
 	rdb.TenantScoped
 
 	DeviceId            uint
 	Device              *Device
-	ClaimSecret         string
+	ClaimSecretDigest   sql.NullString
 	Status              string
 	ExpiresAt           sql.NullTime
 	ClaimedTime         sql.NullTime
 	ClaimedByCustomerId sql.NullInt64
+
+	// LegacyClaimSecret is the retired plaintext column, mapped WRITE-ONLY so that every
+	// create and save of a claim writes it NULL. Nothing reads it, and nothing may set it.
+	// Every write that sets a secret also replaces the digest, so unlike a credential's there
+	// is no unrelated save that would have to carry an old pod's rotation over.
+	LegacyClaimSecret sql.NullString `gorm:"column:claim_secret;->:false;<-"`
 }

@@ -53,9 +53,10 @@ See [Multi-Tenancy](./multi-tenancy.md).
   a revocation reaches events already in flight.
 - **Credentials at rest.** The password of an `MQTT_BASIC` credential and the token of an `ACCESS_TOKEN` credential
   are both stored only as keyed one-way digests, under a key derived from the instance root key, which is not kept
-  in the database. Each is shown once, in the response to the call that sets it, and never returned again; a read
+  in the database. The secret of a provisioning profile and the secret of a device claim are stored the same way, each
+  under a key of its own. Each is shown once, in the response to the call that sets it, and never returned again; a read
   of an access-token credential returns a fingerprint that cannot be presented as the token. A leak of the
-  database or of a backup therefore yields no working device password or token.
+  database or of a backup therefore yields no working device password, token, provisioning secret or claim secret.
 - **Credentials in an event body.** On the platform's MQTT broker the connection has already authenticated the
   device, so an event that also carries a credential in its body is refused. A transitional setting,
   `capture.bodyCredential: strip`, accepts such an event with the credential removed so that a fleet keeps
@@ -169,11 +170,7 @@ These are known and accepted for the current release. Plan around them.
    database with one login, so a compromised service could read and write another area's tables. Tenant isolation
    in the database rests on the application's tenant scope, not on database permissions. Separate roles per
    service are planned for a 1.0.x release.
-3. **Two other device-side secrets are stored as sent.** A provisioning profile's secret and a device claim's secret
-   are kept in the database as they were set, not as digests like device passwords and access tokens. Neither is
-   ever returned by the API. Treat database access and backups as holding secrets, and if a backup leaks, set a new
-   secret on each provisioning profile and open each unredeemed device claim again with a new secret.
-4. **MQTT acknowledgements the broker can lose.** By default the broker can acknowledge a QoS 1 message and
+3. **MQTT acknowledgements the broker can lose.** By default the broker can acknowledge a QoS 1 message and
    then lose it in two ways. One is while the capture stream changes leader, which a broker restart, an upgrade or the loss of a
    node causes, at any load. The other needs no restart: under sustained load, if `event-sources` falls behind and the
    capture stream's backlog reaches its bound, the stream discards its oldest unread messages. `devicechain_<area>_jetstream_consumer_unread_skipped_total` counts those, and the
@@ -182,9 +179,9 @@ These are known and accepted for the current release. Plan around them.
    the instance keeps up with less traffic, so it is for installations sized to stay below that ceiling.
    The setting is off by default, and [Observability](../deployment/observability.md#mqtt-fail-closed)
    describes the trade-off.
-5. **The root key is readable by anyone who can read the instance's Kubernetes Secret.** Restrict access to that
+4. **The root key is readable by anyone who can read the instance's Kubernetes Secret.** Restrict access to that
    Secret and to the cluster's etcd accordingly.
-6. **No external penetration test has been published.**
+5. **No external penetration test has been published.**
 
 Nothing on this page replaces your own review. If an entry here is a problem for your deployment, the matching
 section above says where the control sits.

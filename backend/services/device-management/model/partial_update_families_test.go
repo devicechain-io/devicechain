@@ -1240,7 +1240,7 @@ func provisioningProfileFamily() putest.Family[*Api] {
 				"name":            nullStr(e.Name),
 				"description":     nullStr(e.Description),
 				"provisionKey":    e.ProvisionKey,
-				"provisionSecret": e.ProvisionSecret,
+				"provisionSecret": provisionSecretStr(e.ProvisionSecretDigest, provisionSecret, "rotated-s3cret"),
 				"strategy":        e.Strategy,
 				"deviceTypeToken": refTokenOf(t, e.DeviceType == nil, func() string { return e.DeviceType.Token }),
 				"enabled":         boolStr(e.Enabled),

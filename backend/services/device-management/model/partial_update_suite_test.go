@@ -30,6 +30,7 @@ func newPartialUpdateApi(t *testing.T, tables ...any) *Api {
 	t.Helper()
 	api := NewApi(&rdb.RdbManager{Database: putest.NewSQLiteDB(t, tables...)})
 	api.DeviceSecretKey = testSecretKey
+	api.EnrollmentKeys = testEnrollmentKeys
 	return api
 }
 

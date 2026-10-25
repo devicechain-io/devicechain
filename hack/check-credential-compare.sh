@@ -63,7 +63,7 @@ EXEMPTIONS=(
   # A device's ACCESS_TOKEN. It is looked up by the keyed digest of the presented token (an indexed equality on a value only the key holder can compute), and this compare then confirms, in constant time, that the row returned is the presented token's own.
   "backend/services/device-management/model.Api.lookupPresentedCredential@credential.VerifyAccessToken=device ACCESS_TOKEN confirmation after a lookup by the token's keyed digest: the lookup itself is the guess, and a guess needs the root-key-derived key, so there is no offline or online search a backoff would slow. It gives the sender no verdict on the per-event path, and the MQTT connect path answers only accepted or denied. The compare is the primitive's own, over two same-width digest strings"
 
-  "backend/services/device-management/model.evaluateDeviceClaim@subtle.ConstantTimeCompare=ClaimDevice requires device:write and is bounded by the GraphQL root-field limit per request; the caller is an authenticated tenant user, not an anonymous device"
+  "backend/services/device-management/model.evaluateDeviceClaim@credential.VerifyDeviceSecret=device CLAIM secret compare: ClaimDevice requires device:write and is bounded by the GraphQL root-field limit per request; the caller is an authenticated tenant user, not an anonymous device, and the claim is one-time (a redemption consumes it). The compare is the primitive's own, over two fixed-width MACs, against the stored keyed digest"
 
   "backend/services/user-management/identity.verifyPKCE@subtle.ConstantTimeCompare=not a guessing oracle: the authorization code is claimed by a revision-checked delete before the verifier is compared, so each code buys exactly one guess"
 
