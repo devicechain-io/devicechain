@@ -6,7 +6,7 @@
 #
 # WHY
 #
-# A tag is a pointer somebody else owns. `registry:2` is not a version — it is a
+# A tag is a pointer somebody else owns. `registry:3` is not a version — it is a
 # name upstream can repoint, fetched anonymously from Docker Hub, and that pull
 # has to succeed for a pull request to go green. Both halves have already cost a
 # release here: the v0.15.0 stable tag stopped because that one pull came back
@@ -209,7 +209,7 @@ self_test() {
   #    "images" but whose value is not one.
   cat >"$tmp/clean.sh" <<'FIXTURE'
 #!/usr/bin/env bash
-img="registry:2.8.3@sha256:aaaa"
+img="registry:3.1.2@sha256:aaaa"
 docker run -d -p "127.0.0.1:5000:5000" -v "$PWD:/w" --name c "$img" >/dev/null
 docker run --rm -u 0 -v "$d:/w" --entrypoint /bin/promtool \
   timescale/timescaledb:latest-pg16@sha256:bbbb check rules /w/x.yaml

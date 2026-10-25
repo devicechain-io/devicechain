@@ -67,9 +67,9 @@ func (r *strictResolver) CreateThings(ctx context.Context, args struct{ Requests
 // The literal path was always enforced by graph-gophers/graphql-go. The VARIABLE path
 // was not (its validator walked the schema's declared fields and looked each up in the
 // supplied map, so undefined entries were never visited), and every real client —
-// console, SDKs, dcctl, codegen — sends variables. We carry a patched graphql-go via a
-// replace directive until the upstream fix lands; if that replace is ever dropped, the
-// variable subtests below fail. That is the point of them.
+// console, SDKs, dcctl, codegen — sends variables. Upstream fixed this in v1.10.3
+// (graph-gophers/graphql-go#765); this repo carried a patched fork until then. If a
+// graphql-go without that fix is ever resolved again, the variable subtests below fail. That is the point of them.
 func TestUnknownInputFieldIsRejected(t *testing.T) {
 	schema := MustParseSchema(strictInputSchema, &strictResolver{})
 

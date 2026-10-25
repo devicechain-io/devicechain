@@ -47,7 +47,7 @@ func newSvcClient(t *testing.T) *svcclient.Client {
 
 	host, portStr, _ := net.SplitHostPort(mint.Listener.Addr().String())
 	port, _ := strconv.Atoi(portStr)
-	return svcclient.New(config.UserManagementConfiguration{Hostname: host, Port: uint32(port)},
+	return svcclient.New(config.UserManagementConfiguration{Hostname: host, Port: uint32(port), InternalPort: uint32(port)},
 		"shh", "command-delivery", []string{string(auth.DeviceRead)})
 }
 

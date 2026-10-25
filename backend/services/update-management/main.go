@@ -15,10 +15,14 @@
 //     reports subject (device-management reads the same subject for configuration);
 //   - the download endpoint a device fetches the bytes from, authorized by a short-lived
 //     capability rather than by any credential of the tenant;
-//   - a deadline sweep that times out attempts whose device went quiet.
+//   - a deadline sweep that times out attempts whose device went quiet;
+//   - group rollouts: an artifact assigned to the frozen membership of a device group, at most a
+//     capped number of devices at a time, with pause, resume, abort and a failure threshold. A
+//     driver on every replica dispatches through the same assignment path a single device uses.
 //
 // What it does not do, so nobody assumes it: it authenticates who produced an artifact only
-// through signatures by signers the tenant registered, and nothing rolls an update out across a fleet.
+// through signatures by signers the tenant registered, and a rollout has no waves, schedules or
+// maintenance windows.
 package main
 
 import (
@@ -84,6 +88,10 @@ var (
 	RosterReader   messaging.MessageReader
 	RosterConsumer *processor.RosterConsumer
 	Sweeper        *processor.DeadlineSweeper
+
+	// RolloutStats and Rollouts are the group-rollout driver and its instruments.
+	RolloutStats *processor.RolloutMetrics
+	Rollouts     *processor.RolloutDriver
 )
 
 func main() {
@@ -185,6 +193,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 // because the consumer built on every NATS start must not register a collector again.
 func buildMetrics() {
 	ReportsMetrics = processor.NewUpdateReportsMetrics(Microservice)
+	RolloutStats = processor.NewRolloutMetrics(Microservice)
 	DownloadStats = &download.Metrics{
 		Requests: Microservice.NewCounterVec("update_downloads_total",
 			"Artifact download requests, by outcome: served, aborted (the client went away or the object "+
@@ -215,6 +224,12 @@ func wireSecrets(ctx context.Context, api *model.Api) error {
 func startSweeper() {
 	Sweeper = processor.NewDeadlineSweeper(Api, time.Duration(Configuration.Updates.SweepIntervalSeconds)*time.Second, &ReportsMetrics)
 	Sweeper.Start(context.Background())
+}
+
+// startRolloutDriver starts the group-rollout driver.
+func startRolloutDriver() {
+	Rollouts = processor.NewRolloutDriver(Api, processor.RolloutInterval)
+	Rollouts.Start(context.Background())
 }
 
 // registerDownloadHandler mounts the artifact download endpoint on the microservice own mux.
@@ -258,6 +273,7 @@ func buildApi(ctx context.Context) (*model.Api, error) {
 	api.AllowUnverified = Configuration.Updates.AllowUnverifiedArtifacts
 	api.DownloadBaseURL = Configuration.Updates.DownloadBaseURL
 	api.CapabilityTTL = time.Duration(Configuration.Updates.CapabilityTTLSeconds) * time.Second
+	api.OnRolloutStep = RolloutStats.Observe
 	if api.AllowUnverified {
 		log.Warn().Msg("updates.allowUnverifiedArtifacts is set: artifacts with no active-signer signature can be assigned to devices. " +
 			"Nothing authenticates who produced them; this is a development setting.")
@@ -272,9 +288,9 @@ func buildApi(ctx context.Context) (*model.Api, error) {
 
 	switch {
 	case infra.ServiceAuth.Secret == "":
-		log.Warn().Msg("Service secret not configured - createArtifact and assignArtifact will be REFUSED, and every device-facing update message (reports, syncs, download requests, downloads) will be REFUSED and retried: profiles and devices cannot be looked up in device-management.")
+		log.Warn().Msg("Service secret not configured - createArtifact, assignArtifact and startUpdateRollout will be REFUSED, and every device-facing update message (reports, syncs, download requests, downloads) will be REFUSED and retried: profiles, devices and groups cannot be looked up in device-management.")
 	case infra.DeviceManagement.Hostname == "" || infra.DeviceManagement.Port == 0:
-		log.Warn().Msg("device-management endpoint not configured (infrastructure.deviceManagement) - createArtifact and assignArtifact will be REFUSED, and every device-facing update message (reports, syncs, download requests, downloads) will be REFUSED and retried: profiles and devices cannot be looked up.")
+		log.Warn().Msg("device-management endpoint not configured (infrastructure.deviceManagement) - createArtifact, assignArtifact and startUpdateRollout will be REFUSED, and every device-facing update message (reports, syncs, download requests, downloads) will be REFUSED and retried: profiles, devices and groups cannot be looked up.")
 	default:
 		client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "update-management",
 			[]string{string(auth.DeviceRead)})
@@ -282,6 +298,7 @@ func buildApi(ctx context.Context) (*model.Api, error) {
 		checker := profilecheck.New(client, url)
 		api.Profiles = checker
 		api.Devices = checker
+		api.Groups = checker
 		log.Info().Str("deviceManagement", url).Msg("Compatible profiles are validated against device-management.")
 	}
 	return api, nil
@@ -366,12 +383,16 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		return err
 	}
 	startSweeper()
+	startRolloutDriver()
 	return nil
 }
 
 // Called before microservice has been stopped. The sweep and the consumer, then the managers in
 // their reverse order.
 func beforeMicroserviceStopped(ctx context.Context) error {
+	if Rollouts != nil {
+		Rollouts.Stop()
+	}
 	if Sweeper != nil {
 		Sweeper.Stop()
 	}

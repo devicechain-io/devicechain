@@ -117,6 +117,7 @@ func TestExternalInstanceConfigRequiresADeclaredChecksum(t *testing.T) {
 // produce different annotations; a hard-coded or empty-document hash would make
 // them equal.
 func TestExternalChecksumIsNotConstant(t *testing.T) {
+	t.Parallel()
 	ch := chartForTest(t)
 
 	first, err := renderChartClientSide(t.Context(), ch, externalValues(digest("one")))
@@ -210,6 +211,7 @@ func TestHandSetShutdownIsRefusedOnBothConfigSources(t *testing.T) {
 // including the ones it exists to catch, on the exact path where the chart's own
 // guards are off too.
 func TestPreflightRefusesADeployNobodyAuthoredAConfigFor(t *testing.T) {
+	t.Parallel()
 	ch := chartForTest(t)
 	external := externalValues(digest("a"))
 
@@ -248,6 +250,7 @@ func TestPreflightRefusesADeployNobodyAuthoredAConfigFor(t *testing.T) {
 // Two documents for one deploy is a contradiction, not a preference: the pods
 // mount exactly one. Resolving it by precedence is how the two drift apart.
 func TestPreflightRefusesTwoConfigSources(t *testing.T) {
+	t.Parallel()
 	ch := chartForTest(t)
 	err := validateRenderedInstanceConfig(t.Context(), ch, inlineValues(), []byte(`{}`))
 	if err == nil {
@@ -449,6 +452,7 @@ func TestAuthoredConfigMustCarryTheTransformsTheChartWouldHaveApplied(t *testing
 // indistinguishable from the real thing, and because the manifest splitter
 // returns a map, WHICH one came back varied between runs of identical values.
 func TestAnExtraSecretCannotImpersonateTheInstanceConfig(t *testing.T) {
+	t.Parallel()
 	ch := chartForTest(t)
 
 	vals := inlineValues()
@@ -460,9 +464,16 @@ func TestAnExtraSecretCannotImpersonateTheInstanceConfig(t *testing.T) {
 	}
 
 	// Run it repeatedly: the defect was nondeterministic, so a single pass proves
-	// nothing about a map iteration.
+	// nothing about a map iteration. The iteration is over SplitManifests' map inside
+	// instanceConfigFromManifest, so it is that selection that runs twenty times; the
+	// render beneath it is deterministic, and repeating its race-instrumented
+	// template execution would only buy the same manifest again.
+	manifest, err := renderChartClientSide(t.Context(), ch, vals)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for i := 0; i < 20; i++ {
-		raw, err := renderInstanceConfigDocument(t.Context(), ch, vals)
+		raw, err := instanceConfigFromManifest(ch, vals, manifest)
 		if err != nil {
 			t.Fatal(err)
 		}

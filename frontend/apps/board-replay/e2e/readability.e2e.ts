@@ -228,6 +228,47 @@ for (const width of WIDTHS) {
   });
 }
 
+// ---- The explained empty states ------------------------------------------------------
+//
+// A widget with nothing to draw says why (frontend/packages/widget-sdk/src/empty-state.tsx): no device
+// chosen, not reported by the device's profile, no data in the range (with the last value known), a
+// refusal, a failure. The board holds each of them, in cards, a gauge, a ring, a battery, a table and a
+// chart, and one at the smallest card, where only the title fits. Each must say which it is, in the
+// right place, and none may read badly or draw a warning symbol: these are not alarms.
+
+const EMPTY_KINDS = ['unbound', 'not-reported', 'no-data', 'forbidden', 'error'];
+
+for (const width of WIDTHS) {
+  test(`the explained empty states board at ${width} px reads cleanly in light and dark`, async ({ page }) => {
+    for (const theme of THEMES) {
+      const { findings, widgets } = await measure(page, 'fixture/empty-states', width, theme, '[data-widget="es-chart"] [data-empty-state]');
+      expect(widgets.length, 'every widget of the board is on the page').toBe(10);
+      const kindOf = async (id: string) => page.locator(`[data-widget="${id}"] [data-empty-state]`).first().getAttribute('data-empty-state');
+      await expect.poll(() => kindOf('es-gauge'), { message: `${theme}: the gauge explains itself` }).toBe('not-reported');
+      expect(await kindOf('es-unbound'), theme).toBe('unbound');
+      expect(await kindOf('es-not-reported'), theme).toBe('not-reported');
+      expect(await kindOf('es-forbidden'), theme).toBe('forbidden');
+      expect(await kindOf('es-error'), theme).toBe('error');
+      expect(await kindOf('es-table'), theme).toBe('no-data');
+      expect(await kindOf('es-battery'), theme).toBe('no-data');
+      expect(await kindOf('es-chart'), theme).toBe('no-data');
+      expect(await kindOf('es-ring'), theme).toBe('not-reported');
+      expect(await page.locator('[data-empty-state]').evaluateAll((els) => els.map((e) => e.getAttribute('data-empty-state'))), theme).toEqual(
+        expect.arrayContaining(EMPTY_KINDS),
+      );
+      // The chart's hint is the last reading known, from before the window.
+      expect(await page.locator('[data-widget="es-chart"] [data-empty-hint]').textContent(), theme).toMatch(/^Last value 21\.4 C · 3 days ago$/);
+      // Neutral: no warning symbol and no bare dash anywhere on the board.
+      const text = (await page.locator('[data-grid]').textContent()) ?? '';
+      expect(text, `${theme}: a warning symbol`).not.toMatch(/[⚠]/);
+      expect(text, `${theme}: a bare dash`).not.toMatch(/(^|\s)—(\s|$)/);
+      // The smallest card keeps its title and gives up the sentence.
+      expect(await page.locator('[data-widget="es-small"] [data-empty-title]').count(), theme).toBe(1);
+      expect(findings.map(describeFinding), `${theme}: new readability findings`).toEqual([]);
+    }
+  });
+}
+
 // ---- The negative control --------------------------------------------------------
 //
 // A gate is worth nothing until it has been seen to fail. This board is broken on purpose and

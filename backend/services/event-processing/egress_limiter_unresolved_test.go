@@ -39,7 +39,7 @@ func failingUserManagement(t *testing.T) mscfg.InfrastructureConfiguration {
 	require.NoError(t, err)
 	var infra mscfg.InfrastructureConfiguration
 	infra.ServiceAuth.Secret = "shh"
-	infra.UserManagement = mscfg.UserManagementConfiguration{Hostname: host, Port: uint32(port)}
+	infra.UserManagement = mscfg.UserManagementConfiguration{Hostname: host, Port: uint32(port), InternalPort: uint32(port)}
 	return infra
 }
 

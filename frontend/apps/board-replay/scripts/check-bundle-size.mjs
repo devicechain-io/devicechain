@@ -131,7 +131,10 @@ export function lazyBoundaries() {
     // Widget components the sitepulse board may not need on its first frame.
     { what: 'the alarm table and alarm count', chunk: 'alarm-widgets', markers: ['Action failed', 'worst severity'] },
     { what: 'the entity selector', chunk: 'entity-selector', markers: ['No target slot configured.'] },
-    { what: 'the measurement table', chunk: 'table', markers: ['No data yet'] },
+    { what: 'the measurement table', chunk: 'table', markers: ['0.04em'] },
+    // The explained empty states' words: fetched by the first widget with nothing to draw. They sit in
+    // a chunk shared by the widgets that reach them, which the bundler names `chunk-<hash>`.
+    { what: 'the explained empty states', chunk: 'chunk', markers: ['Not reported by this device', 'Este dispositivo no lo informa'] },
     { what: 'the command button', chunk: 'control-widgets', markers: ['Couldn’t load command history.'] },
     // The chart engine: ECharts (its instance attribute) and zrender (its DOM id attribute), in ONE
     // chunk, fetched by preloadWidgets for a board holding a chart, or by the first chart to mount.

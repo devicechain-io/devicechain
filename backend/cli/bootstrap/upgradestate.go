@@ -135,6 +135,12 @@ func hydrateUpgradeState(
 	if err := applyUpgradeDeclaration(st, inst, opts); err != nil {
 		return nil, err
 	}
+	// The operator's tuning overlay: the one this run was given, or else the one the
+	// declaration records. Settled here, before anything is written, so a recorded overlay
+	// this release no longer accepts stops the run while nothing has moved.
+	if err := applyUpgradeValuesOverlay(st, inst, opts); err != nil {
+		return nil, err
+	}
 	// An upgrade over an instance whose first bootstrap never finished (the document
 	// written, then Helm or readiness failed) is let through: it runs the same Helm
 	// upgrade and readiness gate against the same document, and its Ready removes the
@@ -164,6 +170,14 @@ func hydrateUpgradeState(
 	}
 	if err := refuseNoSystemLogin(opts.Instance, st); err != nil {
 		return nil, err
+	}
+	// Whether this run keeps, introduces around or retires the shared broker login. Decided from the
+	// instance it starts from, here, before anything is written, so the plan, the dry run and the
+	// apply all read the one answer.
+	noteStartPhase(st, inst)
+	decideSharedLogin(ctx, st)
+	if err := checkSharedLoginHasSuccessors(st); err != nil {
+		return nil, fmt.Errorf("instance %q: %w. Nothing has been changed", opts.Instance, err)
 	}
 
 	// 3. THE SECRETS.
@@ -290,6 +304,20 @@ func applyUpgradeDeclaration(st *State, inst *dcv1beta1.Instance, opts UpgradeOp
 	}
 	st.EnabledAreas = areas
 
+	// 🔴 THE FAIL-CLOSED CHOICE: THE DECLARATION'S, UNLESS THIS RUN WAS GIVEN ONE. applyDeclaration
+	// has already read the recorded choice into the State, so a flagless upgrade renders the
+	// instance exactly as it was built -- on stays on, an explicit off stays off, and never-chose
+	// stays on the platform default. A flag overrides it, and is marked for recording below
+	// (recordUpgradedVersion) so the NEXT flagless upgrade keeps it. Judged against the area set
+	// the instance will have, here, while nothing has been written.
+	if opts.MqttFailClosed != nil {
+		if err := ValidateMqttFailClosed(opts.MqttFailClosed, st.Profile, st.EnableAreas); err != nil {
+			return err
+		}
+		st.MqttFailClosedChange = !sameBoolPtr(st.MqttFailClosed, opts.MqttFailClosed)
+		st.MqttFailClosed = copyBoolPtr(opts.MqttFailClosed)
+	}
+
 	// The values the chart is rendered from that are DERIVED from the declaration
 	// rather than read out of it. See ingressHostFor: the chart's schema requires a
 	// non-empty host, so an upgrade that left this unset did not render a slightly
@@ -322,6 +350,12 @@ func applyDeployedInfrastructure(st *State, deployed *config.InstanceConfigurati
 	st.Values["natsCalloutXKeySeed"] = nats.Auth.CalloutXKeySeed
 	st.Values["natsCalloutIssuerPublic"] = nats.Auth.CalloutIssuerPublic
 	st.Values["natsIdentityPassword"] = nats.Auth.IdentityPassword
+	for p, pw := range nats.Auth.AreaPasswords {
+		st.Values[natsLoginPasswordPrefix+p] = pw
+	}
+	if nats.Auth.AreaLogins {
+		st.Values[areaLoginsDeployedValue] = "true"
+	}
 	if nats.Auth.IdentityAccount {
 		st.Values[identityDeployedValue] = "true"
 	}
@@ -332,7 +366,13 @@ func applyDeployedInfrastructure(st *State, deployed *config.InstanceConfigurati
 	if err := introduceCalloutXKey(st); err != nil {
 		return err
 	}
-	return introduceIdentity(st)
+	if err := introduceIdentity(st); err != nil {
+		return err
+	}
+	// Before anything is minted: a login this run introduces is not one the services run on, and the
+	// retirement of the shared login is keyed off exactly that (decideSharedLogin).
+	noteLoginsPresentAtStart(st)
+	return introduceLogins(st)
 }
 
 // refuseNoSystemLogin refuses an upgrade of an instance whose broker runs the device auth

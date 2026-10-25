@@ -78,7 +78,7 @@ func TestParkCommandRequiresItsOwnAuthority(t *testing.T) {
 // while an AUTHORIZED park still works, end to end through the schema.
 //
 // It goes through gql.Exec rather than calling the resolver, because the wire is where this
-// contract actually breaks. The forked graphql-go rejects an input field the schema does not
+// contract actually breaks. graphql-go (v1.10.3 and later) rejects an input field the schema does not
 // define when it arrives through a VARIABLE, which is how every real client sends one — so a
 // misnamed argument fails loudly here rather than silently parking nothing and reporting
 // success.

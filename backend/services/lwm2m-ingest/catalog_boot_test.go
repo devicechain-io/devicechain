@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/natsauth/permtest"
 	"github.com/devicechain-io/dc-microservice/service"
 )
 
@@ -33,7 +34,11 @@ import (
 // the lease bucket). Waiting for the transport to be serving also covers the leader-only
 // dispatcher's run over the command reader.
 func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
-	host, port := startEmbeddedNats(t)
+	identity := uniqueIdentity("lwm2m-ingest-catalog")
+	// The broker holds the area's login to exactly the permissions natsauth generates for it, so
+	// this is also the area's permission test: the real wiring runs against it and the broker's
+	// log of refusals is asserted empty at the end.
+	broker := permtest.Start(t, identity)
 
 	prevMs, prevCfg, prevMgr, prevSvc := Microservice, Configuration, NatsManager, Svc
 	prevCreds, prevWriter, prevReader, prevResp := Credentials, Writer, CommandReader, ResponseWriter
@@ -68,7 +73,6 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	const pskEnv = "DC_CATALOG_BOOT_LWM2M_PSK"
 	t.Setenv(pskEnv, base64.StdEncoding.EncodeToString([]byte(strings.Repeat("p", 16))))
 
-	identity := uniqueIdentity("lwm2m-ingest-catalog")
 	Microservice = &core.Microservice{
 		InstanceId:     identity,
 		FunctionalArea: "lwm2m-ingest",
@@ -81,14 +85,14 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	  "security": {"identities": [{"identity": "id1", "pskEnv": %q, "tenant": "acme", "externalId": "dev-1"}]}
 	}`, udpPort, pskEnv))
 	infra := &Microservice.InstanceConfiguration.Infrastructure
-	infra.Nats.Hostname = host
-	infra.Nats.Port = port
+	infra.Nats = broker.NatsConfiguration("lwm2m-ingest")
 	infra.ServiceAuth.Secret = "shh"
 	// Peer services nothing listens on: the term build treats them as best-effort reads.
 	infra.DeviceManagement.Hostname, infra.DeviceManagement.Port = "127.0.0.1", 1
 	infra.DeviceState.Hostname, infra.DeviceState.Port = "127.0.0.1", 1
 	infra.CommandDelivery.Hostname, infra.CommandDelivery.Port = "127.0.0.1", 1
 	infra.UserManagement.Hostname, infra.UserManagement.Port = "127.0.0.1", 1
+	infra.UserManagement.InternalPort = 1
 
 	ctx := context.Background()
 	require.NoError(t, afterMicroserviceInitialized(ctx),
@@ -113,4 +117,5 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 		return testutil.ToFloat64(leaderGauge) == 1 && testutil.ToFloat64(servingGauge) == 1
 	}, 30*time.Second, 50*time.Millisecond,
 		"the leadership lease was never acquired, or its term never reached serving, under the catalog (runLeadership, main.go)")
+	broker.RequireNoViolations(t)
 }

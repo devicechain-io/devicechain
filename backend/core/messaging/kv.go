@@ -70,8 +70,12 @@ func (nmgr *NatsManager) KeyValueStore(logical, bucket string, ttl time.Duration
 		// instead of silently creating an unbounded bucket (ADR-023 never-unlimited).
 		return nil, fmt.Errorf("messaging: non-positive ceiling %d for KV bucket %q", maxBytes, bucket)
 	}
+	if !nmgr.mayReconcileBucket(logical) {
+		return nmgr.verifyKvBucket(js, logical, bucket, tracked)
+	}
 	if existing, err := js.KeyValue(bucket); err == nil {
 		nmgr.reconcileKvBucketOn(js, bucket, maxBytes, kv.TierFor(logical))
+		nmgr.noteReconciled("bucket", bucket, "present")
 		tracked(bucket)
 		return existing, nil
 	} else if !errors.Is(err, nats.ErrBucketNotFound) {
@@ -86,6 +90,7 @@ func (nmgr *NatsManager) KeyValueStore(logical, bucket string, ttl time.Duration
 	if err != nil {
 		return nil, err
 	}
+	nmgr.noteReconciled("bucket", bucket, "created")
 	tracked(bucket)
 	return created, nil
 }

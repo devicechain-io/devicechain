@@ -587,9 +587,7 @@ device creates one. With it off, its telemetry is dropped and counted in
 ## The edge agent
 
 The edge agent is **not a fourth ingest path**. It runs at a site, presents an ordinary MQTT endpoint
-to local devices, buffers what they publish to local disk, and re-publishes it onto the same device
-topics the cloud already ingests. Nothing on the platform side knows an agent was involved, which is
-why there is no agent-shaped configuration anywhere in the cloud services.
+to local devices, buffers what they publish to local disk, and re-publishes it to the cloud as a [gateway](#gateway-identity): an ordinary device of its own, which the platform lets speak only for the devices you have assigned to it. There is no agent-shaped service on the platform side, and no agent-shaped configuration in the cloud services.
 
 **It is not a chart functional area.** It appears in no area list and no deployment profile, and it
 cannot be enabled the way a service is. It ships as static binaries and a container image, and you
@@ -601,6 +599,41 @@ as `dc-edge-agent_<version>_<os>_<arch>.tar.gz`, for Linux and macOS on `amd64` 
 SHA-256 digests are in `dc-edge-agent_checksums.txt` on the same release, so on Linux
 `sha256sum --ignore-missing -c dc-edge-agent_checksums.txt` checks what you downloaded. Linux is the
 edge target; the macOS builds are for trying the agent on a workstation. There is no Windows build.
+
+### Gateway identity {#gateway-identity}
+
+The agent is a **gateway**: an ordinary device on the platform that fronts other devices. It signs in as itself, with its own device credential, and publishes each local device's events in its own namespace, `{instanceId}/{tenant}/gateways/{gateway}/devices/{device}/events` (see [the gateway namespace](../reference/device-protocol.md#gateway-namespace)). The platform accepts an event only for a device **assigned to that gateway**. This is the only uplink mode.
+
+**Set one up:**
+
+1. Create the gateway device, with any device type, and give it an `MQTT_BASIC` [credential](../guides/device-credentials.md). The device's token is the agent's `uplink.gatewayToken`. The credential's id goes in `uplink.username` as `{tenant}:{credentialId}`, and its secret in the environment variable named by `uplink.passwordEnv`.
+2. Create the devices the site fronts and assign each one to the gateway, with `assignDeviceGateway` or with `gatewayToken` when you create it. A device has at most one gateway, and a gateway cannot itself have a gateway. Assigning needs the same permission as managing device credentials.
+3. Start the agent. Local devices keep publishing their own topics to it, unchanged.
+
+An assignment takes effect on the device's next event, within seconds, with no reconnect. Clearing one does the same, and the gateway's other devices keep flowing. Disabling the gateway, or revoking its credential, ends its session.
+
+**What the agent does on the uplink:**
+
+- It connects with the gateway device's plain MQTT client id, so the broker asserts the gateway's own presence as it does for any device. There is no per-agent client id: two agents using one gateway device take each other's session over.
+- It builds every uplink topic from a child device token alone, so it cannot publish outside its own namespace. The broker cannot refuse a publish outside a grant (MQTT 3.1.1 has no way to), so it would acknowledge it and drop it. Being unable to build such a topic is what removes that failure.
+- It captures only the configured tenant from its devices. A publish naming another tenant is counted in `tenant_mismatched_total` and never spooled.
+- It removes `credentialType`, `credentialId` and `credentialSecret` from event bodies before forwarding, and counts them in `body_credentials_stripped_total`. The platform refuses an event that carries one on a broker-authenticated topic. Change the device so it stops sending them.
+- It keeps up to **64 publishes in flight** and acknowledges each spooled event on its own acknowledgement. An agent that waited for each one before sending the next could not exceed one event per round trip, about 20 a second at 50 ms, and a busy site could never catch up after an outage. Replayed events keep the time they were first stored, and the cloud still folds a duplicate.
+- It subscribes to the gateway's notices topic on every connect. If the broker refuses that subscription, the uplink stays down and the log says why.
+
+**When an event is refused.** The platform refuses an event for a device that is not assigned to the gateway, or that does not exist. It records the event with its payload on the `failed-events` stream with the reason `NotGatewayChild`, counts it in `resolve_not_gateway_child_total`, and sends the gateway a *notice*. The broker has already acknowledged the publish, so nothing else would tell the agent. On a notice the agent logs a warning naming the device (at most once per device every 30 seconds), counts it in `refused_total{reason="not_gateway_child"}`, and writes the event to `refused-events.jsonl` in the store directory. That file is private to the agent's user, holds one JSON object per line, and is rotated once at 16 MiB.
+
+Three limits apply. A notice is best effort: a gateway that was offline when it was sent does not get it, so the platform's record and counter are what you can rely on. The agent holds a bounded copy of what it forwarded (the last 8,192 events, and at most 16 MiB) to match a notice against, so a notice that arrives after the copy has rolled out is counted in `refused_unmatched_total` and logged, not kept. And the file holds the payload as forwarded, with credentials already removed. Recovering a refused event after you fix the assignment is a manual replay.
+
+The agent also refuses, without sending, an event the platform could only refuse: one from a local device that uses the gateway's own token (`reason="gateway_self"`), or a token the platform cannot hold (`reason="invalid_device_token"`). Those are written to the same file.
+
+:::warning Upgrade the platform before you switch an agent to the gateway uplink
+Finish the platform upgrade first: every `event-sources` and `device-management` replica, and the broker's grants. An older `event-sources` with `infrastructure.nats.mqttFailClosed` on acknowledges gateway messages it cannot attribute and drops them, so the agent sees success while nothing is stored. An agent whose broker has not been upgraded cannot subscribe to its notices and does not report the uplink connected (`uplink_connected` stays 0).
+:::
+
+**What a gateway is trusted for.** A gateway speaks for its assigned devices. A compromised gateway can forge events only for devices assigned to it, and only until it is disabled or its credential is revoked. Its word about *which local client* sent an event is only as strong as the site's local authentication.
+
+Commands to devices behind a gateway are not routed yet, and the agent forwards events only.
 
 ### The spool {#the-spool}
 
@@ -653,12 +686,15 @@ the readings tolerant of a repeat.
 | Setting | Default | What it does |
 |---|---|---|
 | `instanceId` | — | Required. The cloud instance this agent forwards into. Publishes seen for a different instance are not forwarded, and are counted in `instance_mismatched_total`. |
-| `agentId` | — | Required. This agent's identity on the uplink. **Must be unique** — two agents sharing it disconnect each other in a loop. |
 | `local.listenPort` | `1883` | The MQTT port site devices connect to. |
 | `local.storeDir` | — | Required. The directory holding the durable spool. One agent per directory. |
 | `local.spoolMaxBytes` | `1 GiB` | Spool budget. Beyond it, oldest events are dropped. The floor is 16 MiB. |
 | `local.metricsPort` | `9090` | Loopback-only metrics and health port. An explicit `0` disables the endpoint. |
 | `uplink.brokerUrl` | — | Required. The cloud MQTT endpoint to forward to. |
+| `uplink.tenant` | — | Required. The tenant the gateway device belongs to. It is part of every uplink topic, and the only tenant the agent takes from its devices. |
+| `uplink.gatewayToken` | — | Required. The token of the gateway device this agent signs in as. **One agent per gateway device**: two sharing one take each other's session over in a loop. |
+| `uplink.username` | — | Required. `{tenant}:{credentialId}`, the gateway device's credential. A name without the tenant prefix is refused when the agent starts. |
+| `uplink.passwordEnv` | — | Required. The environment variable holding the credential's secret. |
 | `uplink.connectTimeoutSeconds` | `30` | Bounds one uplink connection attempt. |
 | `uplink.backoffMinSeconds` / `uplink.backoffMaxSeconds` | `1` / `60` | Reconnection backoff bounds while the link is down. |
 
@@ -776,6 +812,11 @@ Prefix: `devicechain_edge_`.
 | `forward_errors_total` | Forward attempts that failed; the event stays buffered for redelivery. |
 | `received_total` / `forwarded_total` | Throughput in and out. |
 | `malformed_total` | Events discarded as unforwardable rather than blocking the queue behind them. |
+| `tenant_mismatched_total` | Device publishes naming a tenant other than `uplink.tenant`. They are not spooled or forwarded. |
+| `body_credentials_stripped_total` | Credential members removed from event bodies before forwarding. The device should stop sending them. |
+| `refused_total{reason}` | **Events refused for this gateway.** `not_gateway_child`: the platform refused an event because its device is not assigned to the gateway or does not exist. `gateway_self` and `invalid_device_token`: the agent would not send it. `other`: a reason this version of the agent does not know. Any increase needs attention; see [gateway identity](#gateway-identity). |
+| `refused_kept_total` / `refused_unmatched_total` | Refused events written to `refused-events.jsonl` / refusals whose event was no longer held on the box (the platform's `failed-events` record has it). |
+| `uplink_inflight` | Publishes waiting for an acknowledgement, at most 64. Staying at 64 while a backlog drains is normal. |
 | `local_auth_enabled` | 0 means the site's MQTT listener requires no credential. |
 
 ## Validation limits {#what-is-not-validated}

@@ -269,6 +269,10 @@ type MqttFailClosedDurable struct {
 	// the subject a device is granted to publish this kind of message on, with a wildcard for
 	// the tenant and for the device. The reader acks and drops anything else it is delivered.
 	Forwards string
+	// AlsoForwards are further patterns the reader hands out, for a kind a device may publish
+	// on more than one shape of subject: telemetry is also published by a gateway for its
+	// children (GatewayEventsWildcard). Only the unfiltered events durable has any.
+	AlsoForwards []string
 	// Filter is the durable's filter subject on the broker. It is Forwards for every kind but
 	// events, whose durable is UNFILTERED ("").
 	//
@@ -306,7 +310,8 @@ func MqttFailClosedDurables(instanceId string) []MqttFailClosedDurable {
 	reports := mqttMsgsSubjectPrefix + DeviceScopedSubject(instanceId, "*", SubjectDeviceReports, "*")
 	return []MqttFailClosedDurable{
 		{Kind: MqttFailClosedEvents, Name: durable(MqttFailClosedEvents),
-			Forwards: mqttMsgsSubjectPrefix + DeviceEventsWildcard(instanceId), Filter: ""},
+			Forwards: mqttMsgsSubjectPrefix + DeviceEventsWildcard(instanceId), Filter: "",
+			AlsoForwards: []string{mqttMsgsSubjectPrefix + GatewayEventsWildcard(instanceId)}},
 		{Kind: MqttFailClosedResponses, Name: durable(MqttFailClosedResponses), Forwards: responses, Filter: responses},
 		{Kind: MqttFailClosedReports, Name: durable(MqttFailClosedReports), Forwards: reports, Filter: reports},
 	}

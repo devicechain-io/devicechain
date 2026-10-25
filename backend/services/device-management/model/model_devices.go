@@ -154,6 +154,9 @@ type DeviceCreateRequest struct {
 	// Enabled creates the device already disabled when false. Omitted or null is true:
 	// a new device takes part in ingest and commanding unless the caller says otherwise.
 	Enabled *bool
+	// GatewayToken, when set, creates the device already assigned to that gateway device.
+	// The same rules as AssignDeviceGateway apply, and a refusal fails the create.
+	GatewayToken *string
 }
 
 // MaxBulkDeviceCount bounds how many devices one CreateDevices call renders and
@@ -255,6 +258,25 @@ type Device struct {
 	//
 	// Nullable with no default, for the reason migration_device_disabled.go records.
 	DisabledAt sql.NullTime
+
+	// GatewayId is the id of the GATEWAY device that fronts this one: the only device whose
+	// broker login may publish on this device's behalf (on its own gateway namespace), and
+	// nil for a device that is not behind one. It is the single authority for that: the
+	// resolver accepts a gateway's publish for this device only when this names the
+	// publishing gateway (FailureReason NotGatewayChild otherwise), so it is written by
+	// AssignDeviceGateway / ClearDeviceGateway and by nothing else.
+	//
+	// SINGLE-VALUED AND ONE LEVEL DEEP. A device has at most one gateway, so moving it is one
+	// atomic write, and a gateway cannot itself have a gateway. It is a plain nullable
+	// column with no foreign key, like the other same-service references here: DeleteDevice
+	// refuses to delete a gateway that still has children (ErrGatewayHasChildren), which is
+	// the rule a constraint would have enforced, with a sentence that names it.
+	//
+	// 🔴 NULL MUST MEAN "NO GATEWAY", AND IT DOES FOR THE DEVICE-BY-TOKEN CACHE: an entry
+	// written by a replica that predates this field decodes with it nil, so a rolling upgrade
+	// reads every cached device as having no gateway, and a gateway's publish for it is
+	// REFUSED. That is the safe direction, and no assignment exists before the upgrade anyway.
+	GatewayId *uint
 
 	// metadataUnread marks a row read WITHOUT its metadata column: the narrow credential
 	// lookups' (authDeviceFields, connectDeviceFields). On such a row a nil Metadata means
@@ -452,10 +474,17 @@ type DeviceCredential struct {
 	DeviceId       uint
 	Device         *Device
 	CredentialType string
-	CredentialId   string
-	SecretDigest   sql.NullString
-	Enabled        bool
-	ExpiresAt      sql.NullTime
+	// CredentialId is what the credential is looked up by. For MQTT_BASIC it is the
+	// username as sent. For ACCESS_TOKEN it is the keyed digest of the token, never the
+	// token: the token is a bearer secret, and a copy of the database must not hold one.
+	CredentialId string
+	// IssuedCredentialId is the access token as sent, on the row a create or update just
+	// wrote, and "" on every row read from the database. It is not a column. The response
+	// to the write that set a token shows it, once.
+	IssuedCredentialId string `gorm:"-"`
+	SecretDigest       sql.NullString
+	Enabled            bool
+	ExpiresAt          sql.NullTime
 
 	// LegacyCredentialValue is the retired plaintext column, mapped WRITE-ONLY so that
 	// every create and save of a credential writes it NULL. Nothing reads it, and nothing

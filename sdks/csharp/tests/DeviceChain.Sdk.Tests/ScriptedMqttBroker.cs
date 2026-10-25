@@ -39,6 +39,7 @@ internal sealed class ScriptedMqttBroker : IDisposable
     private readonly CancellationTokenSource _cts = new();
     private readonly byte[] _subackCodes;
     private readonly byte _connackCode;
+    private readonly bool _closeOnConnect;
 
     /// <summary>Topics the broker received a PUBLISH for, in arrival order.</summary>
     public List<string> PublishedTopics { get; } = new();
@@ -69,10 +70,16 @@ internal sealed class ScriptedMqttBroker : IDisposable
     /// 0x01 model a downgrade); 0x80 is a refusal.
     /// </param>
     /// <param name="connackCode">The CONNACK return code; 0x00 accepts.</param>
-    public ScriptedMqttBroker(byte[]? subackCodes = null, byte connackCode = 0x00)
+    /// <param name="closeOnConnect">
+    /// Close the socket on CONNECT without answering, the way nats-server drops a connect it cannot
+    /// serve yet (for instance while the account's JetStream is not ready). No CONNACK is a fault,
+    /// not a refusal.
+    /// </param>
+    public ScriptedMqttBroker(byte[]? subackCodes = null, byte connackCode = 0x00, bool closeOnConnect = false)
     {
         _subackCodes = subackCodes ?? new byte[] { 0x01 };
         _connackCode = connackCode;
+        _closeOnConnect = closeOnConnect;
         _listener = new TcpListener(IPAddress.Loopback, 0);
         _listener.Start();
         var port = ((IPEndPoint)_listener.LocalEndpoint).Port;
@@ -119,6 +126,11 @@ internal sealed class ScriptedMqttBroker : IDisposable
                     {
                         case 1: // CONNECT
                             ParseConnect(body);
+                            if (_closeOnConnect)
+                            {
+                                return;
+                            }
+
                             await stream.WriteAsync(new byte[] { 0x20, 0x02, 0x00, _connackCode }, 0, 4).ConfigureAwait(false);
                             break;
 

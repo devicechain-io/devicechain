@@ -32,7 +32,10 @@ import (
 // The operator (backend/k8s -> .../operator, ko --bare) and the console
 // (frontend/Dockerfile -> .../frontend) are published under fixed names by
 // dedicated release jobs and are not functional areas, so they are excluded from
-// both sides by construction.
+// both sides HERE by construction. They are pinned instead by
+// TestReleaseImageSetMatchesDeployAndVerifier (release_images_contract_test.go), which
+// parses release.yml and compares it to dcctl's operator name, the chart's console
+// image and the signature verifier's image list.
 func TestCatalogMatchesPublishedServiceImages(t *testing.T) {
 	// PUBLISHED side: mirror hack/list-services.sh exactly — backend/services/*
 	// dirs containing a main.go. Tests run with cwd = the package directory, so

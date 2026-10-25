@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-dashboard-management/model"
-	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/natsauth/permtest"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/rdb/sqlitetest"
 	"github.com/devicechain-io/dc-microservice/service"
@@ -52,7 +52,11 @@ func startEmbeddedNats(t *testing.T) (string, uint32) {
 // The database and GraphQL halves open nothing on the broker and are left out; the NATS half
 // is the service's own createNatsComponents and afterMicroserviceStarted.
 func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
-	host, port := startEmbeddedNats(t)
+	instance := fmt.Sprintf("catalog-boot-%d", time.Now().UnixNano())
+	// The broker holds the area's login to exactly the permissions natsauth generates for it, so this
+	// is also the area's permission test: the real wiring runs against it and the broker's log of
+	// refusals is asserted empty at the end.
+	broker := permtest.Start(t, instance)
 
 	savedMs, savedCfg, savedApi, savedSvc, savedRec := Microservice, Configuration, Api, Svc, ShareReconciler
 	t.Cleanup(func() {
@@ -60,13 +64,13 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	})
 
 	Microservice = &core.Microservice{
-		InstanceId:     fmt.Sprintf("catalog-boot-%d", time.Now().UnixNano()),
+		InstanceId:     instance,
 		FunctionalArea: "dashboard-management",
 		Deployed:       true,
 		Readiness:      core.NewReadinessGate(),
 	}
 	Microservice.UseMetricsRegistry(prometheus.NewRegistry())
-	Microservice.InstanceConfiguration.Infrastructure.Nats = mscfg.NatsConfiguration{Hostname: host, Port: port}
+	Microservice.InstanceConfiguration.Infrastructure.Nats = broker.NatsConfiguration("dashboard-management")
 	Microservice.MicroserviceConfigurationRaw = []byte(`{}`)
 	require.NoError(t, parseConfiguration())
 	ShareReconciler = nil
@@ -97,4 +101,5 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	require.NotNil(t, ShareReconciler, "share reconciler")
 	// The entity-deleted reader in createNatsComponents (main.go:163) is the service's only
 	// NewWriter/NewReader/SubscribeLive/KeyValueStore call site: nothing is opened lazily.
+	broker.RequireNoViolations(t)
 }

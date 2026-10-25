@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -414,5 +415,49 @@ func TestHTTPEventBodyCarriesTheCredential(t *testing.T) {
 	}
 	if members["credentialType"] != "ACCESS_TOKEN" || members["credentialId"] != "cred-1" {
 		t.Fatalf("the HTTP event body must carry the credential, got %s", body)
+	}
+}
+
+// The MQTT counterpart of the test above: the broker authenticated the CONNECT, and the gateway
+// refuses an event whose body presents a credential, so the MQTT body must carry none.
+func TestMQTTEventBodyCarriesNoCredential(t *testing.T) {
+	body, err := MQTTEventBody(DeviceInstance{Token: "dev-1", CredentialId: "cred-1"},
+		"Measurement", "2026-10-21T00:00:00Z", map[string]interface{}{"entries": []interface{}{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var members map[string]any
+	if err := json.Unmarshal(body, &members); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"credentialType", "credentialId", "credentialSecret"} {
+		if _, ok := members[k]; ok {
+			t.Fatalf("the MQTT event body must not carry %q, got %s", k, body)
+		}
+	}
+	if strings.Contains(string(body), "cred-1") {
+		t.Fatalf("the MQTT event body leaks the credential id: %s", body)
+	}
+	if members["device"] != "dev-1" || members["eventType"] != "Measurement" || members["occurredTime"] != "2026-10-21T00:00:00Z" {
+		t.Fatalf("the MQTT body must still name the device, type and time, got %s", body)
+	}
+}
+
+type recordingWire struct{ calls int }
+
+func (w *recordingWire) Post(context.Context, *Runtime, DeviceInstance, string, string, map[string]interface{}) error {
+	w.calls++
+	return nil
+}
+
+// postEvent hands the event to Runtime.Wire when one is set and does not touch the HTTP ingress.
+func TestPostEventUsesTheRuntimeWire(t *testing.T) {
+	w := &recordingWire{}
+	rt := &Runtime{Wire: w, Endpoints: Endpoints{Ingress: "http://127.0.0.1:1"}, InstanceId: "i", Tenant: "t"}
+	if err := postEvent(context.Background(), rt, DeviceInstance{Token: "d"}, "Measurement", "2026-10-21T00:00:00Z", nil); err != nil {
+		t.Fatal(err)
+	}
+	if w.calls != 1 {
+		t.Fatalf("wire called %d times, want 1", w.calls)
 	}
 }

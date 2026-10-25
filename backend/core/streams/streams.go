@@ -313,6 +313,12 @@ type Stream struct {
 	// place, and every other stream keeps the refusal: a recreate is only safe where the
 	// stream holds nothing but what its single reader has not yet forwarded.
 	RecreateOnRetentionChange bool
+	// AllowDirect declares that the stream answers direct gets (the broker serves a read by
+	// sequence, or a batch of them, without a consumer). The broker administrator sets it, and a
+	// reader that reads history by sequence instead of through an ephemeral consumer needs it:
+	// an ephemeral consumer is named by the client library, so a grant to create one cannot name
+	// it, while a read by sequence creates nothing on the broker.
+	AllowDirect bool
 	// Dormant marks a stream that is DECLARED but that no service ensures yet, so it does
 	// not exist on a running broker. The replication check does not require a dormant
 	// stream even where its areas (Areas()) are deployed - a check that fails on a healthy install
@@ -566,6 +572,35 @@ const (
 	SegmentEvents  = "events"
 )
 
+// The GATEWAY shape, the second device-plane subject family a capture stream stores. A
+// gateway is an ordinary device that fronts other devices (the edge agent is one); what it
+// publishes for a child is addressed on the GATEWAY's own namespace,
+//
+//	{instance}.{tenant}.gateways.{gateway}.devices.{child}.{events|responses|reports}   uplink
+//	{instance}.{tenant}.gateways.{gateway}.devices.{child}.{commands|desired}           downlink
+//	{instance}.{tenant}.gateways.{gateway}.notices                                       downlink
+//
+// because a captured message does not say who published it: the broker's grant confines a
+// login to the SUBJECT it may publish to, and the subject is the only place a gateway's
+// identity can travel to the platform. The broker asserts the gateway (the grant is spliced
+// from the authenticated token), the subject names the child, and ONE column
+// (devices.gateway_id) decides whether that gateway may speak for that child.
+//
+// Declared here, once, beside the device-events shape: the capture stream's subjects, the
+// event-sources capture filter and assertion parser, the device grant, the service deny and
+// the edge agent's topic builder all derive from these segments (through core/messaging).
+// The response/report/command/desired leaves are all in the v1 grant although only the
+// events leaf is captured today, so adding their routing later changes no grant and no fleet
+// has to reconnect.
+const (
+	SegmentGateways  = "gateways"
+	SegmentNotices   = "notices"
+	SegmentResponses = "responses"
+	SegmentReports   = "reports"
+	SegmentCommands  = "commands"
+	SegmentDesired   = "desired"
+)
+
 // maxDeliveriesMaxBytesCap caps the max-delivery capture. An advisory is a few hundred
 // bytes and the stream is a work queue, so it holds only advisories no recorder has
 // finished with — steady state is empty. 8 MiB is some tens of thousands of them.
@@ -681,7 +716,7 @@ var All = []Stream{
 	// which its durable's backlog does not show exactly (see BackpressureReaders). That
 	// backlog is still warned on (the chart's JetStreamDurableUnreadNearFull), as an upper
 	// bound: the checkpoint is never behind what the durable has acknowledged.
-	{Suffix: ResolvedEvents, PlatformAuthored: true, Writers: []string{"device-management"}, Readers: []Reader{{"device-state", ReadDurable}, {"event-management", ReadDurable}, {"event-management", ReadLive}, {"event-processing", ReadAckFloor}, {"event-processing", ReadEphemeral}}, Tier: Hot, DeadLetterKind: kindEvent,
+	{Suffix: ResolvedEvents, AllowDirect: true, PlatformAuthored: true, Writers: []string{"device-management"}, Readers: []Reader{{"device-state", ReadDurable}, {"event-management", ReadDurable}, {"event-management", ReadLive}, {"event-processing", ReadAckFloor}, {"event-processing", ReadEphemeral}}, Tier: Hot, DeadLetterKind: kindEvent,
 		DuplicateWindowSeconds: RedeliveryDuplicateWindowSeconds,
 		ReplayCovered:          []string{"event-processing"},
 		BackpressureReaders:    []string{"event-management"},
@@ -1072,6 +1107,9 @@ func MaxBytesCapFor(suffix string) int64 {
 func RetentionFor(suffix string) Retention {
 	return bySuffix[suffix].Retention
 }
+
+// AllowDirectFor reports whether the stream is declared to answer direct gets.
+func AllowDirectFor(suffix string) bool { return bySuffix[suffix].AllowDirect }
 
 // RecreatesOnRetentionChange reports whether an existing stream of suffix with a different
 // retention may be drained and recreated (Stream.RecreateOnRetentionChange).

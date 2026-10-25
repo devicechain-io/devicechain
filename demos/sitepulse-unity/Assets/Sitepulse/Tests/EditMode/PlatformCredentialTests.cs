@@ -22,13 +22,13 @@ namespace DeviceChain.Sitepulse.Tests
         [Test]
         public void ARowForTheDeviceIsAccepted()
         {
-            Assert.IsNull(CredentialResolver.Check(Row("sp-hauler-01-cred", "sp-hauler-01"), "sp-hauler-01"));
+            Assert.IsNull(CredentialResolver.Check(Row("sp-hauler-01-sitepulse", "sp-hauler-01"), "sp-hauler-01"));
         }
 
         [Test]
         public void ARowForAnotherDeviceIsRefused()
         {
-            var why = CredentialResolver.Check(Row("sp-hauler-01-cred", "sp-hauler-02"), "sp-hauler-01");
+            var why = CredentialResolver.Check(Row("sp-hauler-01-sitepulse", "sp-hauler-02"), "sp-hauler-01");
             StringAssert.Contains("belongs to device sp-hauler-02, not sp-hauler-01", why);
         }
 
@@ -57,100 +57,145 @@ namespace DeviceChain.Sitepulse.Tests
         }
 
         [Test]
-        public void TheBatchAndSearchShapesParse()
+        public void TheExistenceAndIssuedShapesParse()
         {
-            var batch = CredentialResolver.ParseBatch(CredBatch(Cred("a-cred", "a"), Cred("b-cred", "b", enabled: false)));
-            Assert.AreEqual(2, batch.Count);
-            Assert.AreEqual("a", batch[0].DeviceToken);
-            Assert.IsFalse(batch[1].Enabled);
-            Assert.AreEqual(Id, batch[0].CredentialId);
+            var existing = CredentialResolver.ParseExisting(CredBatch(Cred("a-sitepulse", "a"), Cred("b-sitepulse", "b", enabled: false)));
+            Assert.AreEqual(2, existing.Count);
+            Assert.AreEqual("a", existing[0].DeviceToken);
+            Assert.IsFalse(existing[1].Enabled);
 
-            var search = CredentialResolver.ParseSearch(CredSearch(Cred("a-cred", "a")));
-            Assert.AreEqual(1, search.Count);
-            Assert.AreEqual("ACCESS_TOKEN", search[0].CredentialType);
+            var issued = CredentialResolver.ParseIssued(Issued("createDeviceCredential", "a-sitepulse", "a", "tok"), "createDeviceCredential");
+            Assert.AreEqual("tok", issued.CredentialId);
+            Assert.Throws<System.FormatException>(() => CredentialResolver.ParseIssued("{}", "createDeviceCredential"));
         }
 
         static IReadOnlyList<BindResult> Bound(params string[] deviceTokens) =>
             deviceTokens.Select((t, i) => new BindResult { ExternalId = "SP-" + i, DeviceToken = t, Outcome = BindOutcome.Bound }).ToList();
 
-        static System.Func<string, Task<List<CredentialRow>>> Search(params CredentialRow[] rows) =>
-            _ => Task.FromResult(rows.ToList());
+        // the platform answers with whatever id the test says; the call it was asked to make is recorded
+        static CredentialOutcome Resolve(string device, List<CredentialRow> existing, System.Func<string, CredentialRow> answer,
+            DeviceCredentials into = null, List<(bool exists, string token)> calls = null) =>
+            CredentialResolver.Resolve(Bound(device), existing, (d, exists, token) =>
+            {
+                calls?.Add((exists, token));
+                return Task.FromResult(answer(token));
+            }, into ?? new DeviceCredentials(), () => Id).GetAwaiter().GetResult().Single();
 
-        static CredentialOutcome Resolve(string device, List<CredentialRow> batch, System.Func<string, Task<List<CredentialRow>>> search, DeviceCredentials into = null) =>
-            CredentialResolver.Resolve(Bound(device), batch, search, into ?? new DeviceCredentials()).GetAwaiter().GetResult().Single();
+        static CredentialRow Echo(string token, string device = "d") => Row(device + "-sitepulse", device, id: token);
 
         [Test]
-        public void TheBatchedRowAnswersWithoutTheFallback()
+        public void AnAbsentCredentialIsCreatedAndTheEchoedTokenIsHeld()
         {
             var creds = new DeviceCredentials();
-            var o = Resolve("sp-hauler-01", new List<CredentialRow> { Row("sp-hauler-01-cred", "sp-hauler-01") },
-                _ => throw new System.InvalidOperationException("the fallback must not run"), creds);
+            var calls = new List<(bool, string)>();
+            var o = Resolve("d", new List<CredentialRow>(), t => Echo(t), creds, calls);
             Assert.IsTrue(o.Ok);
-            Assert.AreEqual(CredentialPath.Batched, o.Path);
-            Assert.IsTrue(creds.TryGet("sp-hauler-01", out var held));
+            Assert.AreEqual(CredentialPath.Created, o.Path);
+            Assert.AreEqual((false, Id), calls.Single());
+            Assert.IsTrue(creds.TryGet("d", out var held));
             Assert.AreEqual(Id, held);
         }
 
         [Test]
-        public void AMissingRowFallsBackToTheSearchAndSaysSo()
+        public void AnExistingCredentialIsRotatedNotRecreated()
         {
             var creds = new DeviceCredentials();
-            var o = Resolve("sp-hauler-01", new List<CredentialRow>(), Search(Row("custom-token", "sp-hauler-01", id: "ffffffffffffffffffffffffffffffff")), creds);
+            var calls = new List<(bool, string)>();
+            var o = Resolve("d", new List<CredentialRow> { Row("d-sitepulse", "d", id: CredentialResolver.FingerprintPrefix + "x") }, t => Echo(t), creds, calls);
             Assert.IsTrue(o.Ok);
-            Assert.AreEqual(CredentialPath.Fallback, o.Path);
-            Assert.IsTrue(creds.TryGet("sp-hauler-01", out var held));
-            Assert.AreEqual("ffffffffffffffffffffffffffffffff", held);
+            Assert.AreEqual(CredentialPath.Rotated, o.Path);
+            Assert.AreEqual((true, Id), calls.Single());
+            Assert.IsTrue(creds.TryGet("d", out _));
         }
 
         [Test]
-        public void ARejectedBatchRowFallsBackToo()
+        public void ADisabledExistingCredentialIsStillRotatedBecauseTheUpdateEnablesIt()
         {
-            var o = Resolve("d", new List<CredentialRow> { Row("d-cred", "d", enabled: false) }, Search(Row("other", "d")));
+            var o = Resolve("d", new List<CredentialRow> { Row("d-sitepulse", "d", enabled: false) }, t => Echo(t));
             Assert.IsTrue(o.Ok);
-            Assert.AreEqual(CredentialPath.Fallback, o.Path);
         }
 
         [Test]
-        public void AMismatchedBatchRowIsNeverUsedAndTheReasonSurvivesAnEmptyFallback()
+        public void AFingerprintInPlaceOfTheTokenIsRefusedLoudly()
         {
             var creds = new DeviceCredentials();
-            var o = Resolve("sp-hauler-01", new List<CredentialRow> { Row("sp-hauler-01-cred", "sp-hauler-02") }, Search(), creds);
+            UnityEngine.TestTools.LogAssert.Expect(UnityEngine.LogType.Error, "[sitepulse] SP-0: the platform returned a fingerprint, not the token it was given, for d-sitepulse");
+            var o = Resolve("d", new List<CredentialRow>(), _ => Echo("dctk1$abc"), creds);
             Assert.IsFalse(o.Ok);
             Assert.AreEqual(0, creds.Count);
-            StringAssert.Contains("belongs to device sp-hauler-02", o.Reason);
+            StringAssert.Contains("fingerprint", o.Reason);
         }
 
         [Test]
-        public void TheFallbackRefusesToChooseBetweenTwoCredentials()
+        public void AnotherTokenThanTheOneSentIsRefused()
         {
             var creds = new DeviceCredentials();
-            var o = Resolve("d", new List<CredentialRow>(), Search(Row("a", "d"), Row("b", "d")), creds);
+            UnityEngine.TestTools.LogAssert.Expect(UnityEngine.LogType.Error, "[sitepulse] SP-0: the platform did not return the token it was given for d-sitepulse");
+            var o = Resolve("d", new List<CredentialRow>(), _ => Echo("someone-elses-token"), creds);
             Assert.IsFalse(o.Ok);
             Assert.AreEqual(0, creds.Count);
-            StringAssert.Contains("refusing to choose", o.Reason);
         }
 
         [Test]
-        public void TheFallbackAppliesTheSameCrossCheck()
+        public void ARowForAnotherDeviceOrTypeIsNeverRewritten()
         {
-            var o = Resolve("d", new List<CredentialRow>(), Search(Row("a", "other"), Row("b", "d", type: "MQTT_BASIC"), Row("c", "d", enabled: false)));
+            var calls = new List<(bool, string)>();
+            UnityEngine.TestTools.LogAssert.Expect(UnityEngine.LogType.Error, "[sitepulse] SP-0: credential d-sitepulse belongs to device other, not d; not rewriting it");
+            var o = Resolve("d", new List<CredentialRow> { Row("d-sitepulse", "other") }, t => Echo(t), null, calls);
             Assert.IsFalse(o.Ok);
-            StringAssert.Contains("no usable ACCESS_TOKEN credential", o.Reason);
+            Assert.AreEqual(0, calls.Count);
+
+            UnityEngine.TestTools.LogAssert.Expect(UnityEngine.LogType.Error, "[sitepulse] SP-0: credential d-sitepulse is MQTT_BASIC, not ACCESS_TOKEN; not rewriting it");
+            o = Resolve("d", new List<CredentialRow> { Row("d-sitepulse", "d", type: "MQTT_BASIC") }, t => Echo(t), null, calls);
+            Assert.IsFalse(o.Ok);
+            Assert.AreEqual(0, calls.Count);
+        }
+
+        [Test]
+        public void ARefusedMutationFailsThatDeviceWithTheReason()
+        {
+            var creds = new DeviceCredentials();
+            UnityEngine.TestTools.LogAssert.Expect(UnityEngine.LogType.Error, "[sitepulse] SP-0: the platform refused to create d-sitepulse: FORBIDDEN");
+            var o = Resolve("d", new List<CredentialRow>(), _ => throw new System.InvalidOperationException("FORBIDDEN"), creds);
+            Assert.IsFalse(o.Ok);
+            Assert.AreEqual(0, creds.Count);
+            StringAssert.Contains("FORBIDDEN", o.Reason);
+        }
+
+        [Test]
+        public void MintedTokensAreLongDistinctAndRedacted()
+        {
+            var a = CredentialResolver.MintToken();
+            var b = CredentialResolver.MintToken();
+            Assert.AreNotEqual(a, b);
+            Assert.AreEqual(64, a.Length);
+            Assert.IsTrue(a.All(c => (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')), a);
+            Assert.IsFalse(a.StartsWith(CredentialResolver.FingerprintPrefix));
+            // the shape is chosen so the redactor catches a token wherever it is printed
+            StringAssert.DoesNotContain(a, Redactor.Redact("device d connected with " + a));
+            StringAssert.DoesNotContain(a, Redactor.RedactForRecording("device d connected with " + a));
         }
 
         [Test]
         public void VariablesAreWrittenAsJson()
         {
-            var ids = VarsJson.StringList("tokens", new[] { "a-cred", "b\"q" });
+            var ids = VarsJson.StringList("tokens", new[] { "a-sitepulse", "b\"q" });
             using var doc = System.Text.Json.JsonDocument.Parse(ids);
             Assert.AreEqual(2, doc.RootElement.GetProperty("tokens").GetArrayLength());
             Assert.AreEqual("b\"q", doc.RootElement.GetProperty("tokens")[1].GetString());
 
-            using var s = System.Text.Json.JsonDocument.Parse(VarsJson.CredentialSearch("sp-hauler-01"));
-            var c = s.RootElement.GetProperty("c");
-            Assert.AreEqual("sp-hauler-01", c.GetProperty("device").GetString());
-            Assert.AreEqual("ACCESS_TOKEN", c.GetProperty("credentialType").GetString());
-            Assert.IsTrue(c.GetProperty("enabled").GetBoolean());
+            using var c = System.Text.Json.JsonDocument.Parse(VarsJson.CredentialCreate("d-sitepulse", "d", "tok"));
+            var r = c.RootElement.GetProperty("r");
+            Assert.AreEqual("d-sitepulse", r.GetProperty("token").GetString());
+            Assert.AreEqual("d", r.GetProperty("deviceToken").GetString());
+            Assert.AreEqual("ACCESS_TOKEN", r.GetProperty("credentialType").GetString());
+            Assert.AreEqual("tok", r.GetProperty("credentialId").GetString());
+            Assert.IsTrue(r.GetProperty("enabled").GetBoolean());
+
+            using var u = System.Text.Json.JsonDocument.Parse(VarsJson.CredentialRotate("d-sitepulse", "tok2"));
+            Assert.AreEqual("d-sitepulse", u.RootElement.GetProperty("t").GetString());
+            Assert.AreEqual("tok2", u.RootElement.GetProperty("r").GetProperty("credentialId").GetString());
+            Assert.IsTrue(u.RootElement.GetProperty("r").GetProperty("enabled").GetBoolean());
         }
     }
 

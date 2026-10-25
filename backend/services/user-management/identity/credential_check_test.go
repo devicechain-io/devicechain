@@ -290,7 +290,7 @@ func postToken(t *testing.T, f *credFixture, clientID, secret string) *httptest.
 		},
 		func(context.Context, string, string, string) (*OAuthTokens, error) {
 			return &OAuthTokens{AccessToken: "at", ExpiresIn: 60}, nil
-		})
+		}, nil)
 	h.ServeHTTP(rec, req)
 	return rec
 }
@@ -349,9 +349,11 @@ func TestTokenEndpointDoesNotNeedTheAttemptStore(t *testing.T) {
 // kind missing from the map would be refused with ErrUndeclaredKind at the first
 // sign-in rather than at startup; this is the startup-time check that it is not.
 func TestCredentialPoliciesDeclareEveryKindTheManagerChecks(t *testing.T) {
-	c, err := credential.NewChecker(credentialtest.NewStore(), CredentialPolicies)
+	saKey, err := credential.DeriveServiceAccountSecretKey(make([]byte, 32))
 	require.NoError(t, err)
-	for _, k := range []credential.Kind{credential.KindIdentity, credential.KindOAuthClient} {
+	c, err := credential.NewChecker(credentialtest.NewStore(), CredentialPolicies, credential.WithServiceAccountSecretKey(saKey))
+	require.NoError(t, err)
+	for _, k := range []credential.Kind{credential.KindIdentity, credential.KindOAuthClient, credential.KindServiceAccount} {
 		err := c.Check(context.Background(), credential.Principal{Kind: k, ID: "someone"}, "wrong",
 			func(context.Context) (string, error) { return "", nil })
 		require.ErrorIs(t, err, credential.ErrMismatch, "kind %s", k)
@@ -362,6 +364,7 @@ func TestCredentialPoliciesDeclareEveryKindTheManagerChecks(t *testing.T) {
 // fixture above borrows it, so a change to it would change what those tests test.
 func TestClientSecretsAreUnthrottled(t *testing.T) {
 	assert.Equal(t, credential.Policy{Unthrottled: true}, CredentialPolicies[credential.KindOAuthClient])
+	assert.Equal(t, credential.Policy{Unthrottled: true}, CredentialPolicies[credential.KindServiceAccount])
 }
 
 // ── the authorize form ───────────────────────────────────────────────────────────

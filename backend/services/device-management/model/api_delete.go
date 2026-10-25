@@ -315,6 +315,11 @@ func (api *Api) DeleteDevice(ctx context.Context, token string) (bool, error) {
 	var credentials []DeviceCredential
 	deleted, err := api.deleteEdgeEntity(ctx, entity.TypeDevice, &Device{}, token,
 		func(tx *gorm.DB, id uint) ([]uint, error) {
+			// A gateway that still has children is not deleted (ErrGatewayHasChildren): a device
+			// must never be left naming a gateway that is gone.
+			if err := refuseDeleteOfGateway(tx, id); err != nil {
+				return nil, err
+			}
 			credentials = credentials[:0]
 			if err := deleteCredentialsReturningOwners(tx.Unscoped().Where("device_id = ?", id), &credentials); err != nil {
 				return nil, err

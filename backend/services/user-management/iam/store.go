@@ -378,8 +378,8 @@ func (s *Store) UpdateRole(ctx context.Context, r *Role) error {
 	return s.sys(ctx).Save(r).Error
 }
 
-// DeleteRole clears the role's assignment join rows (from both the identity
-// system-role and membership tenant-role join tables) and hard-deletes it, so a
+// DeleteRole clears the role's assignment join rows (from the identity system-role,
+// membership tenant-role and service-account role join tables) and hard-deletes it, so a
 // deleted role leaves no dangling assignment. The join-table names match the
 // many2many tags on Identity.SystemRoles / Membership.TenantRoles; like every
 // other unqualified table reference here they resolve via the connection's
@@ -390,6 +390,9 @@ func (s *Store) DeleteRole(ctx context.Context, r *Role) error {
 			return err
 		}
 		if err := tx.Exec("DELETE FROM iam_membership_tenant_roles WHERE role_id = ?", r.ID).Error; err != nil {
+			return err
+		}
+		if err := tx.Exec("DELETE FROM iam_service_account_roles WHERE role_id = ?", r.ID).Error; err != nil {
 			return err
 		}
 		return tx.Unscoped().Delete(r).Error
@@ -431,6 +434,7 @@ func (s *Store) UpdateTenant(ctx context.Context, t *Tenant) error {
 		Select("Name", "Config", "TierID", "IngestReadingsPerSecond", "IngestBurst",
 			"OutboundCallsPerSecond", "OutboundBurst", "AiExternalEnabled",
 			"AiInferenceRequestsPerMinute", "AiInferenceBurst", "ShedPriority",
+			"ProvisioningRegistrationsPerSecond", "ProvisioningBurst",
 			"HeldCommandCeiling", "GeoFencePositionCeiling", "GeoFenceCeiling",
 			"GeoFencePositionBudget").
 		Updates(t).Error

@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Refuses any watched secret compare — bcrypt.CompareHashAndPassword,
-# subtle.ConstantTimeCompare, hmac.Equal, credential.VerifyDeviceSecret — in production Go code outside
+# subtle.ConstantTimeCompare, hmac.Equal, credential.VerifyDeviceSecret, credential.VerifyAccessToken — in production Go code outside
 # backend/core/credential, unless an exemption below names the directory, the function
 # AND the member, with the reason that compare is not a guessable credential check. A
 # method is named Recv.Method, so an exemption for a function does not admit a method of
@@ -27,8 +27,8 @@
 # ⚠️ WHAT IT DOES NOT COVER. `==` or bytes.Equal on a secret (indistinguishable from
 # ordinary equality by syntax); subtle.ConstantTimeEq/ConstantTimeByteEq (integer
 # compares, not watched); and a database equality lookup used as authentication — a
-# device ACCESS_TOKEN is exactly that, the bearer IS the credential id, matched by
-# `WHERE credential_id = ?`. This proves "no watched compare outside the primitive
+# device ACCESS_TOKEN is exactly that: it is matched by `WHERE credential_id = ?`, against
+# the token's keyed digest, which a presenter cannot compute without the key. This proves "no watched compare outside the primitive
 # without a stated reason", not "no unthrottled credential check".
 #
 # It parses rather than greps, so an import alias, a call split across lines and the
@@ -60,7 +60,10 @@ EXEMPTIONS=(
   # (KindDeviceCredential), under a per-username backoff.
   "backend/services/device-management/model.evaluateCredential@credential.VerifyDeviceSecret=device MQTT_BASIC secret compare for per-event re-authentication only (AuthenticateDevice, from the event resolver), which gives the sender no verdict: HTTP answers 202 before resolution and an MQTT publish has no reply. The MQTT auth callout compares through credential.Checker instead. The compare is the primitive's own, against the stored keyed digest, over two fixed-width MACs"
 
-  "backend/services/device-management/model.evaluateDeviceClaim@subtle.ConstantTimeCompare=ClaimDevice requires device:write and is bounded by the GraphQL root-field limit per request; the caller is an authenticated tenant user, not an anonymous device"
+  # A device's ACCESS_TOKEN. It is looked up by the keyed digest of the presented token (an indexed equality on a value only the key holder can compute), and this compare then confirms, in constant time, that the row returned is the presented token's own.
+  "backend/services/device-management/model.Api.lookupPresentedCredential@credential.VerifyAccessToken=device ACCESS_TOKEN confirmation after a lookup by the token's keyed digest: the lookup itself is the guess, and a guess needs the root-key-derived key, so there is no offline or online search a backoff would slow. It gives the sender no verdict on the per-event path, and the MQTT connect path answers only accepted or denied. The compare is the primitive's own, over two same-width digest strings"
+
+  "backend/services/device-management/model.evaluateDeviceClaim@credential.VerifyDeviceSecret=device CLAIM secret compare: ClaimDevice requires device:write and is bounded by the GraphQL root-field limit per request; the caller is an authenticated tenant user, not an anonymous device, and the claim is one-time (a redemption consumes it). The compare is the primitive's own, over two fixed-width MACs, against the stored keyed digest"
 
   "backend/services/user-management/identity.verifyPKCE@subtle.ConstantTimeCompare=not a guessing oracle: the authorization code is claimed by a revision-checked delete before the verifier is compared, so each code buys exactly one guess"
 
@@ -225,6 +228,19 @@ import "github.com/devicechain-io/dc-microservice/credential"
 
 func f(k *credential.DeviceSecretKey, d, s string) error { return credential.VerifyDeviceSecret(k, d, s) }'
   expect devicesecret-direct 1 "$fx/devicesecret-direct/x.go:5:" "$fx/devicesecret-direct=1"
+
+  # Self-registration's REPLAY compare (KindProvisionedCredential) goes through the Checker. A
+  # replay check written against VerifyAccessToken is refused. This is the one watched way to
+  # make it from outside the primitive; it does NOT see AccessTokenDigest(...) == stored or a
+  # database lookup by digest, which are compares too (see the header).
+  write accesstoken-direct/x.go 'package p
+
+import "github.com/devicechain-io/dc-microservice/credential"
+
+func replay(k *credential.DeviceSecretKey, tenant, stored, presented string) error {
+	return credential.VerifyAccessToken(k, tenant, stored, presented)
+}'
+  expect accesstoken-direct 1 "$fx/accesstoken-direct/x.go:6:" "$fx/accesstoken-direct=1"
 
   # An exemption names ONE MEMBER: a subtle compare in a function exempted for bcrypt is
   # caught. Kills the mutant where exemption matching ignores the member.

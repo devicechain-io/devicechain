@@ -240,6 +240,10 @@ func helmInstall(ctx context.Context, st *State) error {
 	if err := writeIdentitySecret(ctx, typed, st); err != nil {
 		return err
 	}
+	// ...and every area's own broker login, each in a Secret only that area mounts.
+	if err := writeNatsLoginSecrets(ctx, typed, st); err != nil {
+		return err
+	}
 	if err := writeOwnedSecret(ctx, typed, instanceOwner(st.Instance, st.InstanceUID),
 		instanceConfigSecret(st.Instance, doc), time.Now); err != nil {
 		return err
@@ -256,13 +260,13 @@ func helmInstall(ctx context.Context, st *State) error {
 		inst.Wait = true
 		inst.Timeout = helmTimeout
 		_, err := inst.RunWithContext(ctx, ch, vals)
-		return err
+		return brokerAdminFailure(ctx, st.KubeContext, st.Instance, err)
 	} else if err != nil {
 		return err
 	}
 
 	_, err = newHelmUpgrade(actionConfig, releaseNamespace).RunWithContext(ctx, releaseName, ch, vals)
-	return err
+	return brokerAdminFailure(ctx, st.KubeContext, st.Instance, err)
 }
 
 // releaseValues is the value map helmInstall hands Helm, and the instance configuration
@@ -282,7 +286,7 @@ func helmInstall(ctx context.Context, st *State) error {
 // st must already carry what carryForwardFromRelease reads out of previous: some of it
 // is an input to helmValues.
 func releaseValues(ctx context.Context, ch *chart.Chart, st *State, previous map[string]interface{}) (map[string]interface{}, []byte, error) {
-	authoring := helmValues(st)
+	authoring := authoringValues(st)
 	doc, err := composeInstanceConfig(ctx, ch, authoring)
 	if err != nil {
 		return nil, nil, err
@@ -369,9 +373,13 @@ func helmValues(st *State) map[string]interface{} {
 		// The seeds are written to a Secret of their own that only device-management mounts
 		// (writeCalloutSecret): a seed here would let any pod sign a device grant or open a
 		// device's CONNECT credentials.
-		auth := map[string]interface{}{
-			"user":     natsauth.ServiceUser,
-			"password": st.Values["natsServicePassword"],
+		auth := map[string]interface{}{}
+		// The shared login, while the instance still has one. Once it is retired the document names no
+		// user or password at all: every area presents its own (areaLogins, below), and a document that
+		// still carried the shared one would point a reader at a login the broker no longer has.
+		if sharedLoginRetainedFor(st) {
+			auth["user"] = natsauth.ServiceUser
+			auth["password"] = st.Values["natsServicePassword"]
 		}
 		if pub := st.Values["natsCalloutIssuerPublic"]; pub != "" {
 			auth["calloutIssuerPublic"] = pub
@@ -392,6 +400,11 @@ func helmValues(st *State) map[string]interface{} {
 		if st.Values[identityEnabledValue] == "true" {
 			auth["identityAccount"] = true
 		}
+		// The FLAG that the broker has a login for every area, not the logins (each is in a Secret only its
+		// own area mounts). An area refuses to start without its own once this is set.
+		if st.Values[areaLoginsEnabledValue] == "true" {
+			auth["areaLogins"] = true
+		}
 		natsVals["auth"] = auth
 	}
 	// The compact preset's JetStream/KV ceilings (compactSizing). Merged into the
@@ -411,6 +424,7 @@ func helmValues(st *State) map[string]interface{} {
 	for k, v := range haFor(st.HA).natsValues() {
 		natsVals[k] = v
 	}
+	applyMqttFailClosed(natsVals, st)
 	infraVals := map[string]interface{}{}
 	if len(natsVals) > 0 {
 		infraVals["nats"] = natsVals

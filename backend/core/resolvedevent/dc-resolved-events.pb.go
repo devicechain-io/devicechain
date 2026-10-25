@@ -35,6 +35,7 @@ const (
 	FailureReason_DeviceNotFound  FailureReason = 3 // Device token could not be resolved to a device
 	FailureReason_Unauthenticated FailureReason = 4 // Presented device credential was missing or invalid (ADR-014)
 	FailureReason_DeviceDisabled  FailureReason = 5 // The device was resolved, but an operator has disabled it
+	FailureReason_NotGatewayChild FailureReason = 6 // A gateway published for a device that is not assigned to it (or that does not exist)
 )
 
 // Enum value maps for FailureReason.
@@ -46,6 +47,7 @@ var (
 		3: "DeviceNotFound",
 		4: "Unauthenticated",
 		5: "DeviceDisabled",
+		6: "NotGatewayChild",
 	}
 	FailureReason_value = map[string]int32{
 		"Unknown":         0,
@@ -54,6 +56,7 @@ var (
 		"DeviceNotFound":  3,
 		"Unauthenticated": 4,
 		"DeviceDisabled":  5,
+		"NotGatewayChild": 6,
 	}
 )
 
@@ -345,8 +348,17 @@ type PResolvedEvent struct {
 	// optional so an instant of exactly the epoch is still written: absence means the instant
 	// is in the string form. Field numbers from 16 on take a two-byte tag, so each costs ten
 	// bytes on the wire against the string form's thirty-two.
-	Occurred      *int64 `protobuf:"fixed64,17,opt,name=occurred,proto3,oneof" json:"occurred,omitempty"`
-	Processed     *int64 `protobuf:"fixed64,18,opt,name=processed,proto3,oneof" json:"processed,omitempty"`
+	Occurred  *int64 `protobuf:"fixed64,17,opt,name=occurred,proto3,oneof" json:"occurred,omitempty"`
+	Processed *int64 `protobuf:"fixed64,18,opt,name=processed,proto3,oneof" json:"processed,omitempty"`
+	// gateway_token is the token of the GATEWAY device the event arrived through, set only when
+	// the platform broker authenticated a gateway publishing for this device on its own
+	// namespace ("{instance}.{tenant}.gateways.{gateway}.devices.{device}.events") and the
+	// device was assigned to that gateway when the event was resolved. source_device_token
+	// stays the child: attribution is to the device that produced the event, and this field
+	// records who carried it, so a stored event can be traced to the gateway that vouched for
+	// it. Empty for every event that did not come through a gateway, and then absent from the
+	// wire, so those events' bytes are exactly what they were.
+	GatewayToken  string `protobuf:"bytes,19,opt,name=gateway_token,json=gatewayToken,proto3" json:"gateway_token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -491,6 +503,13 @@ func (x *PResolvedEvent) GetProcessed() int64 {
 		return *x.Processed
 	}
 	return 0
+}
+
+func (x *PResolvedEvent) GetGatewayToken() string {
+	if x != nil {
+		return x.GatewayToken
+	}
+	return ""
 }
 
 // *
@@ -1152,7 +1171,7 @@ const file_resolvedevent_dc_resolved_events_proto_rawDesc = "" +
 	"\x10PScopeMembership\x12\x1f\n" +
 	"\vgroup_token\x18\x01 \x01(\tR\n" +
 	"groupToken\x12\x18\n" +
-	"\aversion\x18\x02 \x01(\x05R\aversion\"\xe5\x06\n" +
+	"\aversion\x18\x02 \x01(\x05R\aversion\"\x8a\a\n" +
 	"\x0ePResolvedEvent\x12\x16\n" +
 	"\x06source\x18\x01 \x01(\tR\x06source\x12\x1a\n" +
 	"\x06alt_id\x18\x02 \x01(\tH\x00R\x05altId\x88\x01\x01\x12.\n" +
@@ -1172,7 +1191,8 @@ const file_resolvedevent_dc_resolved_events_proto_rawDesc = "" +
 	"\x11fence_set_version\x18\x0f \x01(\x05R\x0ffenceSetVersion\x124\n" +
 	"\x16source_device_disabled\x18\x10 \x01(\bR\x14sourceDeviceDisabled\x12\x1f\n" +
 	"\boccurred\x18\x11 \x01(\x10H\x04R\boccurred\x88\x01\x01\x12!\n" +
-	"\tprocessed\x18\x12 \x01(\x10H\x05R\tprocessed\x88\x01\x01B\t\n" +
+	"\tprocessed\x18\x12 \x01(\x10H\x05R\tprocessed\x88\x01\x01\x12#\n" +
+	"\rgateway_token\x18\x13 \x01(\tR\fgatewayTokenB\t\n" +
 	"\a_alt_idB\x14\n" +
 	"\x12_device_type_tokenB\x18\n" +
 	"\x16_profile_version_tokenB\x0e\n" +
@@ -1249,14 +1269,15 @@ const file_resolvedevent_dc_resolved_events_proto_rawDesc = "" +
 	"session_id\x18\x03 \x01(\x04R\tsessionId\x12(\n" +
 	"\roccurred_time\x18\x04 \x01(\tH\x00R\foccurredTime\x88\x01\x01\x12.\n" +
 	"\x13expected_session_id\x18\x05 \x01(\x04R\x11expectedSessionIdB\x10\n" +
-	"\x0e_occurred_time*y\n" +
+	"\x0e_occurred_time*\x8e\x01\n" +
 	"\rFailureReason\x12\v\n" +
 	"\aUnknown\x10\x00\x12\v\n" +
 	"\aInvalid\x10\x01\x12\x11\n" +
 	"\rApiCallFailed\x10\x02\x12\x12\n" +
 	"\x0eDeviceNotFound\x10\x03\x12\x13\n" +
 	"\x0fUnauthenticated\x10\x04\x12\x12\n" +
-	"\x0eDeviceDisabled\x10\x05BGZEgithub.com/devicechain-io/dc-microservice/resolvedevent;resolvedeventb\x06proto3"
+	"\x0eDeviceDisabled\x10\x05\x12\x13\n" +
+	"\x0fNotGatewayChild\x10\x06BGZEgithub.com/devicechain-io/dc-microservice/resolvedevent;resolvedeventb\x06proto3"
 
 var (
 	file_resolvedevent_dc_resolved_events_proto_rawDescOnce sync.Once

@@ -61,7 +61,7 @@ func TestTheFactReconcileSeamAsksEachServiceItsOwnQuestion(t *testing.T) {
 	Microservice = &core.Microservice{InstanceId: "inst", FunctionalArea: "event-processing"}
 	infra := &Microservice.InstanceConfiguration.Infrastructure
 	infra.ServiceAuth.Secret = "shh"
-	infra.UserManagement = mscfg.UserManagementConfiguration{Hostname: umHost, Port: umPort}
+	infra.UserManagement = mscfg.UserManagementConfiguration{Hostname: umHost, Port: umPort, InternalPort: umPort}
 	infra.DeviceManagement = mscfg.DeviceManagementConfiguration{Hostname: dmHost, Port: dmPort}
 
 	seam := buildFactReconcileSeam()

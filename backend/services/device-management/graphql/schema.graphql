@@ -2028,6 +2028,20 @@ type Device implements Model & TokenReference & NamedEntity & MetadataEntity & E
     enabled: Boolean!
     """When the device was disabled, as an RFC 3339 timestamp; null while it is enabled."""
     disabledAt: String
+    """
+    The gateway this device is behind, or null when it is behind none. Only that gateway's
+    credential may publish this device's telemetry on the gateway's own topics; the device's
+    own credential still works as before.
+    """
+    gateway: Device
+    """
+    The devices behind this device, one page at a time. Empty unless the device is a
+    gateway. Requires device:read.
+    """
+    children(
+        """Which page to return."""
+        pagination: PaginationInput!
+    ): DeviceSearchResults!
 }
 
 """Fields for a new device."""
@@ -2049,6 +2063,12 @@ input DeviceCreateRequest {
     metadata: String
     """False to create the device already disabled. Omitted or null creates it enabled."""
     enabled: Boolean
+    """
+    Token of the gateway device to create this device behind. The same rules as
+    assignDeviceGateway apply, and a refusal fails the create. Omitted or null creates the
+    device behind no gateway.
+    """
+    gatewayToken: String
 }
 
 # There is no `token` member — the mutation's own `token` argument names the row. It used
@@ -2448,6 +2468,14 @@ type DeviceCredential implements Model & TokenReference & MetadataEntity {
     token: String!
     device: Device!
     credentialType: String!
+    """
+    What the device presents. For MQTT_BASIC, the username. For ACCESS_TOKEN, the access
+    token itself ONLY in the response to the create, update or replacement that set it,
+    which is the one time it can be read: the platform stores an access token as a keyed
+    digest and cannot return it afterwards. Every later read returns a fingerprint that
+    identifies the credential and cannot be presented as the token. If the token is lost,
+    set a new one with updateDeviceCredential.
+    """
     credentialId: String!
     # Write-only: accepted on create/update but never returned on read (always
     # null), so a stored secret (e.g. an MQTT_BASIC password) cannot be read back
@@ -2463,6 +2491,10 @@ input DeviceCredentialCreateRequest {
     token: String!
     deviceToken: String!
     credentialType: String!
+    """
+    The MQTT username, or the access token for ACCESS_TOKEN (at most 256 bytes). The token
+    is stored only as a keyed digest and is returned once, in this mutation's response.
+    """
     credentialId: String!
     """
     The password for an MQTT_BASIC credential: at least 16 bytes, counted as sent, and at
@@ -2492,6 +2524,13 @@ input DeviceCredentialUpdateRequest {
     # Required and unclearable. credentialType is validated against the known vocabulary
     # when sent; credentialId is what a device presents at connect time.
     credentialType: String
+    """
+    The MQTT username, or the new access token for ACCESS_TOKEN. Setting it on an
+    ACCESS_TOKEN credential rotates the token: the old one stops working at once and the
+    new one is returned once, in this mutation's response. Required when this request
+    changes the credential's type to or from ACCESS_TOKEN, and refused otherwise with
+    extensions.code INVALID_VALUE.
+    """
     credentialId: String
     # The secret material, nullable — a credential type that carries no secret is a real
     # state. OMITTING IT LEAVES THE SECRET IN PLACE, which is what makes editing anything
@@ -2519,6 +2558,10 @@ input DeviceCredentialSearchCriteria {
     pageSize: Int!
     device: String
     credentialType: String
+    """
+    An MQTT username, or for ACCESS_TOKEN either the access token or the fingerprint a read
+    returns. The token is matched through its digest; it is never stored or compared as sent.
+    """
     credentialId: String
     enabled: Boolean
 }
@@ -2551,7 +2594,7 @@ type DeviceReplacement {
     # is the stable business key of the logical thing and must survive a swap.
     unitIdentifier: String
     # Entity tokens of the credentials this replacement disabled. Tokens, never
-    # credential ids: for an ACCESS_TOKEN the credential id is the device's bearer.
+    # credential ids: the id of an ACCESS_TOKEN credential is the device's token.
     retiredCredentialTokens: [String!]!
     # Entity token of the credential minted for the incoming unit.
     newCredentialToken: String!
@@ -2701,9 +2744,9 @@ input DeviceReplaceRequest {
     # Credential type minted for the incoming unit. Defaults to ACCESS_TOKEN.
     credentialType: String
     # The identifier the new unit presents at connect time. Optional only for
-    # ACCESS_TOKEN, where the id is itself the bearer and a fresh random one is
-    # minted; required for every other type, since the server cannot invent an
-    # MQTT username.
+    # ACCESS_TOKEN, where a fresh random token is minted and returned once in
+    # newCredential; required for every other type, since the server cannot invent
+    # an MQTT username.
     credentialId: String
     # Secret material for types that carry one separately (an MQTT password).
     # Write-only, as on any credential.
@@ -2729,8 +2772,8 @@ type DeviceReplaceResult {
     # The append-only record this call wrote.
     replacement: DeviceReplacement!
     # The credential minted for the incoming unit. This is the one moment the
-    # material the new unit must be programmed with is readable, which is why the
-    # mutation is gated on device:write like every other credential door.
+    # material the new unit must be programmed with is readable (an access token is
+    # stored only as a digest and cannot be read again), so copy it from here.
     newCredential: DeviceCredential!
     # Entity tokens of the credentials this call disabled. Tokens only: the
     # credential rows themselves stay behind the gated credential queries.
@@ -4318,6 +4361,31 @@ type Mutation {
         """True to decide every row without writing anything."""
         dryRun: Boolean!
     ): DeviceImportResult!
+    """
+    Puts a device behind a gateway device, so that gateway's credential may publish the
+    device's telemetry on the gateway's own topics, and returns the device. Assigning a
+    device to the gateway it already has changes nothing; a device with another gateway is
+    moved. Refused with INVALID_VALUE when the two are the same device, when the gateway is
+    itself behind a gateway, or when the device is itself the gateway of other devices
+    (gateways are one level deep). Fails if either token names no device. This grants the
+    gateway the same standing over the device as issuing the device a credential, so it
+    requires device:write and is refused for a member limited to part of the tenant.
+    """
+    assignDeviceGateway(
+        """Token of the device to put behind the gateway."""
+        deviceToken: String!
+        """Token of the gateway device."""
+        gatewayToken: String!
+    ): Device!
+    """
+    Takes a device out from behind its gateway and returns it: the gateway's next publish for
+    the device is refused and recorded in failed events. Clearing a device that has no gateway
+    changes nothing. Fails if no device has the token. Requires device:write.
+    """
+    clearDeviceGateway(
+        """Token of the device."""
+        deviceToken: String!
+    ): Device!
     """
     Partially updates a device and returns it. Fails if no device has the token. Requires
     device:write.

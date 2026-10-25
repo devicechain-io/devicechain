@@ -36,6 +36,28 @@ which DeviceChain is distributed.
 
 -------------------------------------------------------------------------------
 
+Vendored third-party code
+
+The documentation site serves a vendored copy of the PostHog
+browser library for its opt-in product analytics:
+
+  docs/static/posthog/posthog-1.436.1.js
+
+  posthog-js — https://github.com/PostHog/posthog-js
+  Copyright 2020 PostHog / Hiberly, Inc.
+  Licensed under the Apache License, Version 2.0.
+
+The bundle embeds components under other terms, all of which are compatible
+with Apache-2.0: @posthog/core (MIT), TraceKit (MIT), uuidv7 (Apache-2.0),
+code from getsentry/sentry-javascript (MIT), and MIT-licensed code from Meta
+Platforms, Expo and MCPcat. The upstream license file, with the full text and
+every component's copyright notice, ships beside the bundle and is kept
+verbatim:
+
+  docs/static/posthog/LICENSE
+
+-------------------------------------------------------------------------------
+
 TimescaleDB (container image only, not source)
 
 DeviceChain publishes a PostgreSQL container image carrying the TimescaleDB

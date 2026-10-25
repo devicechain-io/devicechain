@@ -30,7 +30,7 @@ Prefix: `devicechain_commanddelivery_`.
 
 The three [command delivery alerts](./observability.md#command-delivery-alerts) read
 `command_delivery_claims_stranded_total`, `command_delivery_presence_read_errors_total` and
-`batch_refusals_total{bound="reserve"}`. A Command Delivery dashboard charts the rest. Several of
+`batch_refusals_total{bound="reserve"}`. The Command Delivery dashboard charts the fleet-write counters and the main claim, hold and presence counters; the remaining series are there for ad-hoc queries and your own panels. Several of
 these are expected to be busy and are not faults: a steady `not_sole` share of declined nudges, claims
 lost to the sweep racing a nudge, and holds placed while devices are offline. `command_delivery_responses_refused_total` is expected to read zero. A rising
 rate on `command_delivery_stranded_observed_total` or `command_response_lost_unsettled_total` means
@@ -91,6 +91,7 @@ bus: read them with `dcctl dead-letters`.
 | `raise_alarm_dead_lettered_total` | Raise-alarm edges written to the dead-letter stream after every attempt to apply them failed, so an alarm that should have been raised or cleared is visible rather than only logged. |
 | `resolve_device_disabled_total` | Events refused because their device is [disabled](../guides/device-credentials.md#disabling-a-device). They are discarded, not dead-lettered. |
 | `resolve_event_time_bounded_total` | Reported event times refused for leading the server clock by more than the configured tolerance, and replaced with the latest time the tolerance allows. |
+| `resolve_not_gateway_child_total` | Events refused because a [gateway](./edge-services.md#gateway-identity) published for a device that is not assigned to it, that does not exist, or because the gateway is disabled. Each is recorded on the `failed-events` stream with its payload (reason `NotGatewayChild`), is not retried, and is reported to the gateway on its notices topic. It is not labelled by tenant or gateway; the log line, at most one a minute per gateway and device, names them. A rise usually means a device was never assigned to its gateway, or was assigned to another. |
 
 ## Event processing: detection {#event-processing-detect}
 
@@ -300,6 +301,20 @@ the store could not take is recorded nowhere, and `DeadLetterStoreLosing` fires 
 | `dead_letters_unstorable_total` | Dead-letter messages this consumer could not make sense of — no parseable tenant, or a body that is not an envelope. They are ACKED and counted rather than retried, because no redelivery makes a malformed message parse. |
 | `dead_letters_unstored_total` | Dead letters that exhausted every delivery attempt without being stored — the store was unreachable for longer than the retries last. The failure they described is now recorded nowhere, which is the one thing this consumer exists to prevent. |
 
+These count the tenant-deletion coordinator, which erases a deleted tenant's data from every storage system and then releases its token. None carries a tenant label. See [Tenant deletion](./tenant-deletion.md#blocked-store) for how to read them.
+
+| Metric | Means |
+| --- | --- |
+| `tenant_purge_in_flight` | Tenant deletions currently open. |
+| `tenant_purge_oldest_age_seconds` | Age of the oldest open tenant deletion, from its cut; 0 when none are open. `TenantPurgeStalled` watches it. |
+| `tenant_purge_store_blocked{store,reason}` | Open deletions each storage system is holding back, by store (`rdb`, `tsdb`, `broker`, `kv`, `detect`, `blob`, `other`) and reason (`deferred`: data still present or arriving; `error`: the store could not be asked). `TenantPurgeStoreFailing` and `TenantPurgeStoreHolding` watch it. |
+| `tenant_purge_store_rows_erased_total{store}` | Rows, objects, messages or keys each store has erased for tenant deletions: the progress signal for a store that is blocked. |
+| `tenant_purge_store_erase_duration_seconds{store}` | Histogram of how long one store's erase call took. |
+| `tenant_purge_completed_total` | Tenant deletions completed: every store clean, settled and held, fences lifted, token released. |
+| `tenant_purge_failures_total` | Times the coordinator could not carry one tenant's deletion through a pass. It retries on the next pass, so this counts attempts. `TenantPurgeCoordinatorFailing` watches it. |
+| `tenant_purge_duration_seconds` | Histogram of seconds from a tenant's deletion to its token being released. Includes the token hold. |
+| `tenant_purge_clean_duration_seconds` | Histogram of seconds from a tenant's deletion to the last store reporting clean. Excludes the settle and token-hold waits that follow: the time the erasure itself took. |
+
 ## Update management {#update-management}
 
 Prefix: `devicechain_updatemanagement_`. The service is opt-in; see [Over-the-air updates](../concepts/over-the-air-updates.md).
@@ -314,6 +329,9 @@ Prefix: `devicechain_updatemanagement_`. The service is opt-in; see [Over-the-ai
 | `update_download_grants_total{result}` | Download grants devices asked for, by outcome: `granted`, or why not (`unknown_assignment`, `superseded`, `finished`, `cancel_requested`, `artifact_unavailable`, `not_configured`, `error`). |
 | `update_downloads_total{result}` | Artifact download requests, by outcome: `served`, `aborted` (the client went away or the object could not be read mid-stream), or why it was refused before any byte was served (`capability_malformed`, `capability_invalid`, `capability_expired`, `stale`, `gone`, `range_not_satisfiable`, `busy`, `device_disabled`, `error`). A rising `capability_invalid` rate is someone guessing. |
 | `update_reports_rejected_total{reason}` | Device messages update-management refused before applying them: `malformed`, `unattributable`, `throttled` and `device_disabled` (the device is disabled). |
+| `update_rollout_dispatches_total{result}` | Devices a group rollout decided: `dispatched` (assigned the update, or counted with an assignment of the same artifact it already had), or `skipped` (refused by the assignment rules: not found, disabled, incompatible, busy with another update). |
+| `update_rollout_step_failures_total` | Rollout steps that failed and were left for the next pass. A steady rise means rollouts are not advancing (device-management unreachable, or a database error). |
+| `update_rollout_transitions_total{to}` | Rollouts the service moved on its own: `completed`, `paused_failure_threshold`, or `paused_artifact_not_assignable` (the artifact was retired or lost its required signature). |
 | `update_reports_total{verdict}` | Update progress and inventory reports, by the verdict the update state machine gave: `APPLIED`, or why not (`DUPLICATE`, `STALE_ATTEMPT`, `DIGEST_MISMATCH`, `WRONG_COMPONENT`, `REGRESSION`, `UNCONFIRMED`, `NOT_CANCELLABLE`, `LATE`, `CONFLICT`, `INVALID_ATTEMPT`, `WRONG_KIND`, `UNKNOWN_ASSIGNMENT`). A rising non-applied rate from one fleet is a device-side bug. |
 
 ## Every service {#every-service}

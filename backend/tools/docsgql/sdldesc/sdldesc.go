@@ -205,13 +205,27 @@ func elements(s *ast.Schema) []Element {
 	return out
 }
 
-// LoadServed parses every schema served under servicesDir/<area>/graphql.
-func LoadServed(servicesDir string) ([]Served, error) {
+// Source is one served schema artifact, unparsed: its published name, its file and its
+// SDL.
+type Source struct {
+	// Name is the published name: "<area>", "<area>-admin" or "<area>-settings".
+	Name string
+	Path string
+	SDL  string
+}
+
+// LoadSources reads every schema served under servicesDir/<area>/graphql, named by its
+// published name and sorted by it. It is the one inventory of the served set: this
+// package's description check and sdlcompat's compatibility check both read it, so
+// the two cannot disagree about which schemas exist or what each is called.
+//
+// An empty result is an error: a check that read nothing passes everything.
+func LoadSources(servicesDir string) ([]Source, error) {
 	areas, err := os.ReadDir(servicesDir)
 	if err != nil {
 		return nil, err
 	}
-	var out []Served
+	var out []Source
 	for _, a := range areas {
 		dir := filepath.Join(servicesDir, a.Name(), "graphql")
 		if _, err := os.Stat(dir); err != nil {
@@ -226,21 +240,34 @@ func LoadServed(servicesDir string) ([]Served, error) {
 			if err != nil {
 				return nil, err
 			}
-			els, err := Parse(string(sdl))
-			if err != nil {
-				return nil, fmt.Errorf("parse %s: %w", sc.Path, err)
-			}
 			suffix, ok := mountSuffix[sc.Mount]
 			if !ok {
 				return nil, fmt.Errorf("%s: mount %s has no published name", sc.Path, sc.Mount)
 			}
-			out = append(out, Served{Name: a.Name() + suffix, Path: sc.Path, Elements: els})
+			out = append(out, Source{Name: a.Name() + suffix, Path: sc.Path, SDL: string(sdl)})
 		}
 	}
 	if len(out) == 0 {
 		return nil, fmt.Errorf("no served schema under %s; a check that parsed nothing passes everything", servicesDir)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+// LoadServed parses every schema served under servicesDir/<area>/graphql.
+func LoadServed(servicesDir string) ([]Served, error) {
+	srcs, err := LoadSources(servicesDir)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Served, 0, len(srcs))
+	for _, src := range srcs {
+		els, err := Parse(src.SDL)
+		if err != nil {
+			return nil, fmt.Errorf("parse %s: %w", src.Path, err)
+		}
+		out = append(out, Served{Name: src.Name, Path: src.Path, Elements: els})
+	}
 	return out, nil
 }
 

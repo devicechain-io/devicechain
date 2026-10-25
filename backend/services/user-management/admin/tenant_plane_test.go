@@ -39,7 +39,7 @@ func newPlaneEnv(t *testing.T) *planeEnv {
 	t.Helper()
 	db := putest.NewSQLiteDB(t, &iam.TenantTier{}, &iam.Tenant{}, &iam.Role{}, &iam.Identity{},
 		&iam.Membership{}, &iam.Invitation{}, &iam.IdentityLink{}, &iam.IdpConnection{},
-		&iam.IdpConnectionTenant{}, &iam.IdpRoleMapping{})
+		&iam.IdpConnectionTenant{}, &iam.IdpRoleMapping{}, &iam.ServiceAccount{}, &iam.ServiceAccountSecret{})
 	s := NewService(iam.NewStore(&rdb.RdbManager{Database: db}), 0, 0, nil)
 	s.SetViewerBaseline(viewerBaselineForTests)
 	e := &planeEnv{s: s, db: db}

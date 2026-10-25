@@ -60,7 +60,7 @@ func TestTheBrokerXKeyIsReadOutOfItsRenderedConfiguration(t *testing.T) {
 }
 
 func TestTheXKeyIsHeldBackFromABrokerThatIsNotEncryptingYet(t *testing.T) {
-	creds, err := natsauth.GenerateCredentials()
+	creds, err := existingCredentials()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +130,7 @@ func TestTheXKeyIsHeldBackFromABrokerThatIsNotEncryptingYet(t *testing.T) {
 // gets an xkey introduced and is held back; the second settle, run after the services, hands the
 // broker the same key, and neither replaces the one before it.
 func TestAnUpgradeOfALegacyInstanceHoldsTheKeyBackThenHandsItOver(t *testing.T) {
-	creds, err := natsauth.GenerateCredentials()
+	creds, err := existingCredentials()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +214,7 @@ func TestTheSecondBrokerApplyFollowsTheServiceRollout(t *testing.T) {
 // A bootstrap of a NEW instance has no responder to wait for, so the broker is given the key in
 // its one and only apply.
 func TestABootstrapOfANewInstanceGivesTheBrokerTheKeyAtOnce(t *testing.T) {
-	creds, err := natsauth.GenerateCredentials()
+	creds, err := existingCredentials()
 	if err != nil {
 		t.Fatal(err)
 	}

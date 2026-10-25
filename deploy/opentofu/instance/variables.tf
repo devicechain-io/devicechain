@@ -246,7 +246,7 @@ variable "nats_callout_xkey_public" {
 }
 
 variable "nats_service_password_bcrypt" {
-  description = "BCRYPT HASH ($2a$...) of the shared `dc_service` password, placed in the broker config (the plaintext goes only into the services' instance-config Secret; the broker bcrypt-compares). Minted by the bring-up; required when nats_enable_auth is true. Sensitive."
+  description = "BCRYPT HASH ($2a$...) of the TRANSITIONAL shared `dc_service` password, placed in the broker config only on an instance upgraded from a release that had one and not yet through the upgrade that retires it (the plaintext goes only into the services' instance-config Secret; the broker bcrypt-compares). Empty renders no such user: every fresh install and every retired instance, which then needs nats_login_password_bcrypts. Sensitive."
   type        = string
   default     = ""
   sensitive   = true
@@ -257,6 +257,19 @@ variable "nats_identity_password_bcrypt" {
   type        = string
   default     = ""
   sensitive   = true
+}
+
+variable "nats_login_password_bcrypts" {
+  description = "BCRYPT HASHES ($2a$...) of the per-area broker logins and the broker administrator's, keyed by username (`dc-<area>-g<generation>`). Each area holds only its own plaintext, in a Secret only its Deployment mounts. Each is held to the permissions nats_service_users carries for it; the shared login stays beside them. Minted by the bring-up. Empty renders none. Sensitive."
+  type        = map(string)
+  default     = {}
+  sensitive   = true
+}
+
+variable "nats_service_users" {
+  description = "The generated permissions of every static broker login, as one JSON document (`{\"APP\": {<username>: <permissions>}, \"SYS\": {...}}`), rendered into the broker's users verbatim. dcctl produces it from the stream and bucket declarations the services are held to; `dcctl broker permissions` prints it. Required whenever nats_enable_auth is true: a login with no block would be unrestricted, so the broker module refuses to render one."
+  type        = string
+  default     = ""
 }
 
 variable "nats_sys_password_bcrypt" {
@@ -562,7 +575,7 @@ variable "timescale_image" {
     asserts this default matches it.
   EOT
   type        = string
-  default     = "ghcr.io/devicechain-io/postgresql-timescaledb:17.10-ts2.28.3-r1"
+  default     = "ghcr.io/devicechain-io/postgresql-timescaledb:17.11-ts2.28.3-r1"
 }
 
 variable "timescale_instances" {

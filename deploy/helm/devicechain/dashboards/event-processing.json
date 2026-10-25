@@ -48,6 +48,14 @@
     "query": "",
     "hide": 2,
     "description": "The instance this board reads. Empty on purpose: the chart's templates/grafana-dashboard.yaml replaces this entry with a hidden constant naming the instance it installs, so every namespace=\"$namespace\" selector reads that instance's series and no other. There is no instance picker: each instance ships its own copy of this board, in its own Grafana folder."
+   },
+   {
+    "name": "instance",
+    "type": "constant",
+    "label": "Instance ID",
+    "query": "",
+    "hide": 2,
+    "description": "The instance ID, used to select this instance's alerts. Empty on purpose: the chart's templates/grafana-dashboard.yaml replaces this entry with a hidden constant holding the ID of the instance it installs."
    }
   ]
  },
@@ -59,10 +67,123 @@
  "timezone": "",
  "title": "DeviceChain \u2014 Event Processing (DETECT + REACT)",
  "uid": "dc-event-processing-ops",
- "description": "Operations board for the DETECT + REACT event-processing pipeline: consumer lag, watermark lag, fan-out and detection throughput, REACT dispatch health, per-tenant state budget, snapshot cost, and JetStream stream fill (ADR-051 observability thread).",
+ "description": "Operations board for the DETECT + REACT event-processing pipeline: consumer lag, watermark lag, fan-out and detection throughput, REACT dispatch health, per-tenant state budget (rules, live keys, retained samples), snapshot cost, and JetStream stream fill. The engine gauges (backlog, lag, state sizes) are reported by the replica that holds the detection partition and read zero on a standby.",
  "version": 1,
  "weekStart": "",
  "panels": [
+  {
+   "id": 100,
+   "type": "table",
+   "title": "Firing alerts",
+   "description": "Alerts firing right now for this instance that concern event processing. An empty table means none are firing. Alerts come from the instance's Prometheus rules, so the table stays empty if those rules are not installed.",
+   "gridPos": {
+    "h": 6,
+    "w": 24,
+    "x": 0,
+    "y": 0
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "instant": true,
+     "format": "table",
+     "expr": "max by (alertname, severity) (ALERTS{alertstate=\"firing\", devicechain_instance=\"$instance\", alertname=~\"Detect.*|React.*|GeoFenceSetPublishFailing|DeviceFactPublishFailing\"})"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "align": "auto",
+      "cellOptions": {
+       "type": "auto"
+      }
+     },
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       }
+      ]
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "severity"
+      },
+      "properties": [
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "value",
+          "options": {
+           "critical": {
+            "color": "red",
+            "index": 0
+           },
+           "warning": {
+            "color": "yellow",
+            "index": 1
+           }
+          }
+         }
+        ]
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-text"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "showHeader": true,
+    "cellHeight": "sm",
+    "sortBy": [
+     {
+      "displayName": "severity",
+      "desc": false
+     }
+    ]
+   },
+   "transformations": [
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {
+       "Time": true,
+       "Value": true
+      },
+      "indexByName": {
+       "alertname": 0,
+       "severity": 1
+      },
+      "renameByName": {
+       "alertname": "Alert",
+       "severity": "severity"
+      }
+     }
+    }
+   ]
+  },
   {
    "id": 1,
    "type": "row",
@@ -72,7 +193,7 @@
     "h": 1,
     "w": 24,
     "x": 0,
-    "y": 0
+    "y": 7
    }
   },
   {
@@ -84,7 +205,7 @@
     "h": 4,
     "w": 4,
     "x": 0,
-    "y": 1
+    "y": 8
    },
    "datasource": {
     "type": "prometheus",
@@ -150,7 +271,7 @@
     "h": 4,
     "w": 4,
     "x": 4,
-    "y": 1
+    "y": 8
    },
    "datasource": {
     "type": "prometheus",
@@ -208,7 +329,7 @@
     "h": 4,
     "w": 4,
     "x": 8,
-    "y": 1
+    "y": 8
    },
    "datasource": {
     "type": "prometheus",
@@ -274,7 +395,7 @@
     "h": 4,
     "w": 4,
     "x": 12,
-    "y": 1
+    "y": 8
    },
    "datasource": {
     "type": "prometheus",
@@ -332,7 +453,7 @@
     "h": 4,
     "w": 4,
     "x": 16,
-    "y": 1
+    "y": 8
    },
    "datasource": {
     "type": "prometheus",
@@ -390,7 +511,7 @@
     "h": 4,
     "w": 4,
     "x": 20,
-    "y": 1
+    "y": 8
    },
    "datasource": {
     "type": "prometheus",
@@ -448,7 +569,7 @@
     "h": 8,
     "w": 12,
     "x": 0,
-    "y": 5
+    "y": 12
    },
    "datasource": {
     "type": "prometheus",
@@ -512,7 +633,7 @@
     "h": 8,
     "w": 12,
     "x": 12,
-    "y": 5
+    "y": 12
    },
    "datasource": {
     "type": "prometheus",
@@ -567,7 +688,7 @@
     "h": 1,
     "w": 24,
     "x": 0,
-    "y": 13
+    "y": 20
    }
   },
   {
@@ -579,7 +700,7 @@
     "h": 8,
     "w": 12,
     "x": 0,
-    "y": 14
+    "y": 21
    },
    "datasource": {
     "type": "prometheus",
@@ -647,12 +768,12 @@
    "id": 12,
    "type": "timeseries",
    "title": "Detections rejected before publish",
-   "description": "Detections dropped before publish, by bounded reason enum (e.g. tenant backstop).",
+   "description": "Detections dropped before publish, by bounded reason: backstop (the rule does not belong to the tenant it claims, so it is refused rather than published), orphan (the rule was removed before its detection was published) and marshal (the detection could not be serialized).",
    "gridPos": {
     "h": 8,
     "w": 12,
     "x": 12,
-    "y": 14
+    "y": 21
    },
    "datasource": {
     "type": "prometheus",
@@ -710,7 +831,7 @@
     "h": 8,
     "w": 12,
     "x": 0,
-    "y": 22
+    "y": 29
    },
    "datasource": {
     "type": "prometheus",
@@ -760,12 +881,12 @@
    "id": 14,
    "type": "timeseries",
    "title": "Version-drop safety gates",
-   "description": "Detections dropped at publish because the device left the rule's scope or its profile version is superseded (ADR-057 D6). A persistent rise hints at stale wheel timers surviving a rolling update.",
+   "description": "Detections dropped at publish because the device left the rule's scope or its profile version has been superseded. A persistent rise hints at stale pending timers surviving a rolling update.",
    "gridPos": {
     "h": 8,
     "w": 12,
     "x": 12,
-    "y": 22
+    "y": 29
    },
    "datasource": {
     "type": "prometheus",
@@ -779,7 +900,7 @@
       "uid": "${datasource}"
      },
      "expr": "sum(rate(devicechain_eventprocessing_detect_stale_absence_dropped_total{namespace=\"$namespace\"}[5m]))",
-     "legendFormat": "stale absence dropped /s"
+     "legendFormat": "stale absence detections dropped /s"
     },
     {
      "refId": "B",
@@ -788,7 +909,7 @@
       "uid": "${datasource}"
      },
      "expr": "sum(rate(devicechain_eventprocessing_detect_superseded_frontier_dropped_total{namespace=\"$namespace\"}[5m]))",
-     "legendFormat": "superseded frontier dropped /s"
+     "legendFormat": "superseded-version detections dropped /s"
     }
    ],
    "fieldConfig": {
@@ -829,7 +950,7 @@
     "h": 1,
     "w": 24,
     "x": 0,
-    "y": 30
+    "y": 37
    }
   },
   {
@@ -841,7 +962,7 @@
     "h": 8,
     "w": 12,
     "x": 0,
-    "y": 31
+    "y": 38
    },
    "datasource": {
     "type": "prometheus",
@@ -894,12 +1015,12 @@
    "id": 17,
    "type": "timeseries",
    "title": "Dispatch faults",
-   "description": "Recognized-but-inert actions, derived events whose rule was gone, events dropped after the redelivery cap, and connector actions shed at the source for being over a tenant's outbound egress quota on the timeline its telemetry reached the platform (ADR-060 SD-3). Poison-dropped rising is a REACT-sink outage; egress-shed rising is a tenant over its outbound quota. Each shed is dead-lettered with reason shed within a budget (shed-lettered); past the budget it is counted and summarised once per tenant per minute (shed-unlettered). A clock fallback is a dispatch metered on broker or arrival time because it carried no trigger time, in REACT or in the connectors service: sustained, a catch-up can be shed as a flood again.",
+   "description": "Recognized-but-inert actions, derived events whose rule was gone, events dropped after the redelivery cap, and connector actions shed at the source for being over a tenant's outbound egress quota on the timeline its telemetry reached the platform. Poison-dropped rising is a REACT-sink outage; egress-shed rising is a tenant over its outbound quota. Each shed is dead-lettered with reason shed within a budget (shed-lettered); past the budget it is counted and summarised once per tenant per minute (shed-unlettered). A clock fallback is a dispatch metered on broker or arrival time because it carried no trigger time, in REACT or in the connectors service: sustained, a catch-up can be shed as a flood again. The connectors clock-fallback series exists only when the optional outbound-connectors service is installed.",
    "gridPos": {
     "h": 8,
     "w": 12,
     "x": 12,
-    "y": 31
+    "y": 38
    },
    "datasource": {
     "type": "prometheus",
@@ -1014,13 +1135,13 @@
   {
    "id": 18,
    "type": "row",
-   "title": "State budget (ADR-023)",
+   "title": "State budget",
    "collapsed": false,
    "gridPos": {
     "h": 1,
     "w": 24,
     "x": 0,
-    "y": 39
+    "y": 46
    }
   },
   {
@@ -1030,9 +1151,9 @@
    "description": "Total live window/timer state entries across all tenants (the per-tenant budget aggregate).",
    "gridPos": {
     "h": 4,
-    "w": 8,
+    "w": 6,
     "x": 0,
-    "y": 40
+    "y": 47
    },
    "datasource": {
     "type": "prometheus",
@@ -1088,9 +1209,9 @@
    "description": "Tenants currently exceeding the per-tenant rule-count budget. The offender is in the warn log (no high-cardinality label).",
    "gridPos": {
     "h": 4,
-    "w": 8,
-    "x": 8,
-    "y": 40
+    "w": 6,
+    "x": 6,
+    "y": 47
    },
    "datasource": {
     "type": "prometheus",
@@ -1150,9 +1271,9 @@
    "description": "Tenants currently exceeding the per-tenant live-key budget.",
    "gridPos": {
     "h": 4,
-    "w": 8,
-    "x": 16,
-    "y": 40
+    "w": 6,
+    "x": 12,
+    "y": 47
    },
    "datasource": {
     "type": "prometheus",
@@ -1206,15 +1327,77 @@
    }
   },
   {
+   "id": 43,
+   "type": "stat",
+   "title": "Tenants over retained-sample budget",
+   "description": "Tenants currently exceeding the per-tenant retained-sample budget (the per-sample records held by window-shaped rules). The offender is in the warn log (no high-cardinality label).",
+   "gridPos": {
+    "h": 4,
+    "w": 6,
+    "x": 18,
+    "y": 47
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "max(devicechain_eventprocessing_detect_tenants_over_retained_sample_budget{namespace=\"$namespace\"})",
+     "legendFormat": "__auto"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 1
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "value",
+    "graphMode": "area",
+    "textMode": "auto",
+    "justifyMode": "auto"
+   }
+  },
+  {
    "id": 22,
    "type": "timeseries",
    "title": "Live keyed-state entries",
    "description": "Growth here is the memory-footprint signal for the keyed streaming core.",
    "gridPos": {
     "h": 8,
-    "w": 24,
+    "w": 12,
     "x": 0,
-    "y": 44
+    "y": 51
    },
    "datasource": {
     "type": "prometheus",
@@ -1261,6 +1444,70 @@
    }
   },
   {
+   "id": 44,
+   "type": "timeseries",
+   "title": "Retained samples and pending timers",
+   "description": "The other two memory axes. Retained samples are the per-sample records held by window-shaped rules across all tenants; a long-window rule on one busy device moves this and not live keys. Pending timers are the entries waiting in the timer heap; a long absence or session timeout under frequent reporting moves this and not the other two. Pending timers are instance-wide and have no per-tenant budget.",
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 12,
+    "y": 51
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "max(devicechain_eventprocessing_detect_retained_samples{namespace=\"$namespace\"})",
+     "legendFormat": "retained samples"
+    },
+    {
+     "refId": "B",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "max(devicechain_eventprocessing_detect_pending_timers{namespace=\"$namespace\"})",
+     "legendFormat": "pending timers"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 1,
+      "fillOpacity": 15,
+      "showPoints": "never",
+      "spanNulls": true,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "calcs": []
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   }
+  },
+  {
    "id": 23,
    "type": "row",
    "title": "Snapshot & restore",
@@ -1269,7 +1516,7 @@
     "h": 1,
     "w": 24,
     "x": 0,
-    "y": 52
+    "y": 59
    }
   },
   {
@@ -1281,7 +1528,7 @@
     "h": 8,
     "w": 8,
     "x": 0,
-    "y": 53
+    "y": 60
    },
    "datasource": {
     "type": "prometheus",
@@ -1336,7 +1583,7 @@
     "h": 8,
     "w": 8,
     "x": 8,
-    "y": 53
+    "y": 60
    },
    "datasource": {
     "type": "prometheus",
@@ -1391,7 +1638,7 @@
     "h": 8,
     "w": 8,
     "x": 16,
-    "y": 53
+    "y": 60
    },
    "datasource": {
     "type": "prometheus",
@@ -1446,19 +1693,19 @@
     "h": 1,
     "w": 24,
     "x": 0,
-    "y": 61
+    "y": 68
    }
   },
   {
    "id": 28,
    "type": "timeseries",
    "title": "Stream fill (messages)",
-   "description": "Per-stream message count vs configured ceiling. At ~80% fill the oldest messages are evicted (DiscardOld).",
+   "description": "Per-stream message count vs the configured ceiling. When a stream reaches its ceiling the oldest messages are evicted (the discard-old policy). 80% fill is where the JetStreamStreamNearFull alert fires, not where eviction starts. Writers separately stop accepting new messages when a consumer's unread backlog reaches 90% of what its stream can hold (see the unread backlog panel below).",
    "gridPos": {
     "h": 8,
     "w": 12,
     "x": 0,
-    "y": 62
+    "y": 69
    },
    "datasource": {
     "type": "prometheus",
@@ -1525,7 +1772,7 @@
     "h": 8,
     "w": 12,
     "x": 12,
-    "y": 62
+    "y": 69
    },
    "datasource": {
     "type": "prometheus",
@@ -1592,7 +1839,7 @@
     "h": 8,
     "w": 24,
     "x": 0,
-    "y": 70
+    "y": 77
    },
    "datasource": {
     "type": "prometheus",
@@ -1671,19 +1918,19 @@
     "h": 1,
     "w": 24,
     "x": 0,
-    "y": 79
+    "y": 86
    }
   },
   {
    "id": 31,
    "type": "timeseries",
-   "title": "Fence geometry: unresolved and mismatched",
-   "description": "Manifest entries whose geometry could not be obtained (installed carrying an error, so a rule naming one is COUNTED rather than silently reading as outside), and documents that did not hash to the address they were requested under. Unresolved is often transient and repairs on the reconcile sweep. Mismatch is never transient \u2014 it means the wrong row was served, something re-encoded the document in transit, or the archive is corrupt.",
+   "title": "Fence geometry: unresolved and mismatched (per interval)",
+   "description": "Manifest entries whose geometry could not be obtained (installed carrying an error, so a rule naming one is COUNTED rather than silently reading as outside), and documents that did not hash to the address they were requested under. Unresolved is often transient and repairs on the reconcile sweep. Mismatch is never transient \u2014 it means the wrong row was served, something re-encoded the document in transit, or the archive is corrupt. Counts per evaluation interval, since these should be zero.",
    "gridPos": {
     "h": 8,
     "w": 12,
     "x": 0,
-    "y": 80
+    "y": 87
    },
    "datasource": {
     "type": "prometheus",
@@ -1696,8 +1943,8 @@
       "type": "prometheus",
       "uid": "${datasource}"
      },
-     "expr": "sum(rate(devicechain_eventprocessing_detect_fence_geometry_unresolved_total{namespace=\"$namespace\"}[5m]))",
-     "legendFormat": "unresolved/s"
+     "expr": "sum(increase(devicechain_eventprocessing_detect_fence_geometry_unresolved_total{namespace=\"$namespace\"}[$__rate_interval]))",
+     "legendFormat": "unresolved"
     },
     {
      "refId": "B",
@@ -1705,8 +1952,8 @@
       "type": "prometheus",
       "uid": "${datasource}"
      },
-     "expr": "sum(rate(devicechain_eventprocessing_detect_fence_geometry_hash_mismatch_total{namespace=\"$namespace\"}[5m]))",
-     "legendFormat": "hash mismatch/s"
+     "expr": "sum(increase(devicechain_eventprocessing_detect_fence_geometry_hash_mismatch_total{namespace=\"$namespace\"}[$__rate_interval]))",
+     "legendFormat": "hash mismatch"
     },
     {
      "refId": "C",
@@ -1714,8 +1961,8 @@
       "type": "prometheus",
       "uid": "${datasource}"
      },
-     "expr": "sum(rate(devicechain_eventprocessing_detect_fence_archive_skew_total{namespace=\"$namespace\"}[5m]))",
-     "legendFormat": "version skew/s"
+     "expr": "sum(increase(devicechain_eventprocessing_detect_fence_archive_skew_total{namespace=\"$namespace\"}[$__rate_interval]))",
+     "legendFormat": "version skew"
     }
    ],
    "fieldConfig": {
@@ -1759,7 +2006,7 @@
     "h": 8,
     "w": 12,
     "x": 12,
-    "y": 80
+    "y": 87
    },
    "datasource": {
     "type": "prometheus",
@@ -1814,12 +2061,12 @@
    "id": 33,
    "type": "timeseries",
    "title": "Geometry cache occupancy (vertices)",
-   "description": "Vertices held against the cache's bound. The bound is counted in VERTICES rather than entries on purpose \u2014 a three-vertex box and a five-hundred-vertex polygon are one entry each and differ ~500x in what they cost to hold, so an entry count would mean something different for every mix of tenants. Sustained eviction alongside a falling hit rate is the thrash signature.",
+   "description": "Vertices held against the cache's bound. The bound is counted in VERTICES rather than entries on purpose \u2014 a three-vertex box and a five-hundred-vertex polygon are one entry each and differ ~500x in what they cost to hold, so an entry count would mean something different for every mix of tenants. Sustained eviction (the panel beside it) alongside a falling hit rate is the thrash signature.",
    "gridPos": {
     "h": 8,
     "w": 12,
     "x": 0,
-    "y": 88
+    "y": 95
    },
    "datasource": {
     "type": "prometheus",
@@ -1834,9 +2081,58 @@
      },
      "expr": "sum(devicechain_eventprocessing_detect_fence_geometry_cache_vertices{namespace=\"$namespace\"})",
      "legendFormat": "vertices held"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 1,
+      "fillOpacity": 15,
+      "showPoints": "never",
+      "spanNulls": true,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      }
+     }
     },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   }
+  },
+  {
+   "id": 45,
+   "type": "timeseries",
+   "title": "Geometry cache evictions",
+   "description": "Compiled geometries evicted from the cache to stay within its vertex bound, per second. Sustained eviction alongside a falling hit rate is the thrash signature.",
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 12,
+    "y": 95
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "targets": [
     {
-     "refId": "B",
+     "refId": "A",
      "datasource": {
       "type": "prometheus",
       "uid": "${datasource}"
@@ -1847,7 +2143,7 @@
    ],
    "fieldConfig": {
     "defaults": {
-     "unit": "short",
+     "unit": "ops",
      "custom": {
       "drawStyle": "line",
       "lineWidth": 1,
@@ -1886,7 +2182,7 @@
     "h": 1,
     "w": 24,
     "x": 0,
-    "y": 96
+    "y": 103
    }
   },
   {
@@ -1898,7 +2194,7 @@
     "h": 8,
     "w": 12,
     "x": 0,
-    "y": 97
+    "y": 104
    },
    "datasource": {
     "type": "prometheus",
@@ -1950,13 +2246,13 @@
   {
    "id": 37,
    "type": "timeseries",
-   "title": "Rule-health backlog",
-   "description": "Distinct rules with fire updates not yet written, and the age of the oldest one: how stale the console's fire counts may be.",
+   "title": "Rule-health backlog (pending rules)",
+   "description": "Distinct rules with fire-count updates not yet written. The age of the oldest one is in the panel beside it.",
    "gridPos": {
     "h": 8,
     "w": 12,
     "x": 12,
-    "y": 97
+    "y": 104
    },
    "datasource": {
     "type": "prometheus",
@@ -1971,20 +2267,65 @@
      },
      "expr": "sum(devicechain_eventprocessing_detect_rule_stat_pending_keys{namespace=\"$namespace\"})",
      "legendFormat": "pending rules"
-    },
-    {
-     "refId": "B",
-     "datasource": {
-      "type": "prometheus",
-      "uid": "${datasource}"
-     },
-     "expr": "max(devicechain_eventprocessing_detect_rule_stat_oldest_pending_seconds{namespace=\"$namespace\"})",
-     "legendFormat": "oldest pending (s)"
     }
    ],
    "fieldConfig": {
     "defaults": {
      "unit": "short",
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 1,
+      "fillOpacity": 30,
+      "showPoints": "never",
+      "spanNulls": true
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   }
+  },
+  {
+   "id": 46,
+   "type": "timeseries",
+   "title": "Rule-health backlog (oldest pending)",
+   "description": "Age of the oldest fire-count update not yet written: how stale the console's fire counts may be.",
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 12,
+    "y": 120
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "max(devicechain_eventprocessing_detect_rule_stat_oldest_pending_seconds{namespace=\"$namespace\"})",
+     "legendFormat": "oldest pending"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s",
      "custom": {
       "drawStyle": "line",
       "lineWidth": 1,
@@ -2019,7 +2360,7 @@
     "h": 8,
     "w": 12,
     "x": 0,
-    "y": 105
+    "y": 112
    },
    "datasource": {
     "type": "prometheus",
@@ -2086,12 +2427,12 @@
    "id": 39,
    "type": "timeseries",
    "title": "Derived publish time share",
-   "description": "Share of the detection loop's wall time spent handing detections to the broker at a checkpoint (1 means fully saturated), beside the derived events published per second.",
+   "description": "Share of the detection loop's wall time spent handing detections to the broker at a checkpoint (100% means fully saturated). The published rate is on the fan-out throughput panel.",
    "gridPos": {
     "h": 8,
     "w": 12,
     "x": 12,
-    "y": 105
+    "y": 112
    },
    "datasource": {
     "type": "prometheus",
@@ -2106,20 +2447,11 @@
      },
      "expr": "sum(rate(devicechain_eventprocessing_detect_loop_seconds_total{namespace=\"$namespace\",phase=\"publish\"}[5m]))",
      "legendFormat": "publish phase (share of wall time)"
-    },
-    {
-     "refId": "B",
-     "datasource": {
-      "type": "prometheus",
-      "uid": "${datasource}"
-     },
-     "expr": "sum(rate(devicechain_eventprocessing_detect_derived_events_published_total{namespace=\"$namespace\"}[5m]))",
-     "legendFormat": "published /s"
     }
    ],
    "fieldConfig": {
     "defaults": {
-     "unit": "short",
+     "unit": "percentunit",
      "custom": {
       "drawStyle": "line",
       "lineWidth": 1,
@@ -2154,7 +2486,7 @@
     "h": 8,
     "w": 12,
     "x": 0,
-    "y": 113
+    "y": 120
    },
    "datasource": {
     "type": "prometheus",
@@ -2217,7 +2549,7 @@
     "h": 8,
     "w": 12,
     "x": 0,
-    "y": 121
+    "y": 128
    },
    "datasource": {
     "type": "prometheus",
@@ -2280,7 +2612,7 @@
     "h": 8,
     "w": 12,
     "x": 12,
-    "y": 121
+    "y": 128
    },
    "datasource": {
     "type": "prometheus",

@@ -146,7 +146,7 @@ sus atributos, como todos los dispositivos de una región.
 
 ### Qué ve un usuario de cliente {#what-a-customer-user-sees}
 
-La barra lateral de un usuario de cliente contiene solo **Panel**, **Paneles**, **Alarmas** y
+La barra lateral de un usuario de cliente contiene solo **Inicio**, **Paneles**, **Alarmas** y
 **Dispositivos**, y en ellas:
 
 - **Dispositivos** lista los dispositivos asignados ahora a sus clientes y los que están ahora en sus
@@ -252,3 +252,4 @@ cliente).
 - [Ver paneles en /dash](/user-guide/viewing-dashboards-in-dash)
 - [API de GraphQL: cuando tu acceso se limita a algunos clientes](/reference/graphql-api#limited-access)
 - [Gestión de asignaciones](/guides/managing-assignments): vincular dispositivos a clientes.
+- [Cuentas de servicio](/user-guide/service-accounts): cuentas no humanas para integraciones.

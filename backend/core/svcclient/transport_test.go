@@ -16,7 +16,7 @@ import (
 // minted bearer, so the transport it runs on decides both where that token can be sent
 // and whose connection pool the calls compete for.
 func TestClientDoesNotUseTheProcessDefaultTransport(t *testing.T) {
-	c := New(config.UserManagementConfiguration{Hostname: "user-management", Port: 8080},
+	c := New(config.UserManagementConfiguration{Hostname: "user-management", Port: 8080, InternalPort: 8080},
 		"secret", "test", nil)
 
 	if c.http.Transport == nil {
@@ -43,7 +43,7 @@ func TestClientDoesNotUseTheProcessDefaultTransport(t *testing.T) {
 	// Several Clients per process is the normal case (one per calling subject), and they
 	// all mint from the same endpoint, so they must share the pool rather than each
 	// opening their own.
-	other := New(config.UserManagementConfiguration{Hostname: "user-management", Port: 8080},
+	other := New(config.UserManagementConfiguration{Hostname: "user-management", Port: 8080, InternalPort: 8080},
 		"secret", "other", nil)
 	if other.http.Transport != c.http.Transport {
 		t.Fatal("two Clients carry different transports; a transport is a connection pool and " +

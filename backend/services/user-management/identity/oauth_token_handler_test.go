@@ -53,7 +53,7 @@ func newTestHandlerAuth(
 	if refresh == nil {
 		refresh = func(context.Context, string, string, string) (*OAuthTokens, error) { return okTokens(), nil }
 	}
-	return TokenHandler(authClient, redeem, refresh)
+	return TokenHandler(authClient, redeem, refresh, nil)
 }
 
 func TestTokenHandler_MethodNotPost(t *testing.T) {

@@ -12,6 +12,7 @@ import {
   rangeWindow,
   resumeRange,
   timeRangeFromSearch,
+  timeRangeLinkFromSearch,
   withSpan,
   type TimeRangeState,
 } from './time-range';
@@ -63,17 +64,25 @@ describe('absolute range', () => {
   });
 
   it('reads a link: a window wins over range and paused; a bad one is rejected with its values, never thrown', () => {
-    expect(timeRangeFromSearch('?range=7d&paused=1&from=2026-10-22T02:00:00Z&to=2026-10-22T04:00:00Z', NOW)).toEqual({
+    expect(timeRangeLinkFromSearch('?range=7d&paused=1&from=2026-10-22T02:00:00Z&to=2026-10-22T04:00:00Z', NOW)).toEqual({
       absolute: { fromMs: Z('2026-10-22T02:00:00Z'), toMs: Z('2026-10-22T04:00:00Z') },
     });
-    expect(timeRangeFromSearch('?range=6h&from=2026-10-22T04:00:00Z&to=2026-10-22T02:00:00Z', NOW)).toEqual({
+    expect(timeRangeLinkFromSearch('?range=6h&from=2026-10-22T04:00:00Z&to=2026-10-22T02:00:00Z', NOW)).toEqual({
       spanSeconds: 21600,
       rejected: { reason: 'order', from: '2026-10-22T04:00:00Z', to: '2026-10-22T02:00:00Z' },
     });
-    expect(timeRangeFromSearch('?from=2026-10-22T02:00:00Z', NOW).rejected?.reason).toBe('incomplete');
-    expect(timeRangeFromSearch('?from=2026-10-22T02:00:00&to=2026-10-22T04:00:00', NOW).rejected?.reason).toBe('unparseable');
-    expect(timeRangeFromSearch('?from=%E0%A4%A&to=x', NOW).rejected?.reason).toBe('unparseable');
-    expect(timeRangeFromSearch('', NOW)).toEqual({});
+    expect(timeRangeLinkFromSearch('?from=2026-10-22T02:00:00Z', NOW).rejected?.reason).toBe('incomplete');
+    expect(timeRangeLinkFromSearch('?from=2026-10-22T02:00:00&to=2026-10-22T04:00:00', NOW).rejected?.reason).toBe('unparseable');
+    expect(timeRangeLinkFromSearch('?from=%E0%A4%A&to=x', NOW).rejected?.reason).toBe('unparseable');
+    expect(timeRangeLinkFromSearch('', NOW)).toEqual({});
+  });
+
+  it('timeRangeFromSearch still reads only the rolling parameters, as it did before fixed windows', () => {
+    expect(timeRangeFromSearch('?range=7d&paused=1&from=2026-10-22T02:00:00Z&to=2026-10-22T04:00:00Z')).toEqual({
+      spanSeconds: 604800,
+      paused: true,
+    });
+    expect(timeRangeFromSearch('?from=2026-10-22T04:00:00Z&to=2026-10-22T02:00:00Z')).toEqual({});
   });
 
   it('a rolling-shape reader gets the exact window; a fixed window ignores withSpan and pause', () => {

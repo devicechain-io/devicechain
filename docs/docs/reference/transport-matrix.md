@@ -78,11 +78,20 @@ there is no separate broker to run.
   that while the pipeline is not reading the capture stream, and `JetStreamDurableLostUnread` once it
   reads again.
 
+  The same happens with no refusal at all when `event-sources` simply falls behind the devices' rate under
+  sustained load. In one load test of combined HTTP and MQTT traffic on a default install, with no broker restart,
+  the capture stream filled, and about 7 to 13% of the MQTT traffic, all of it acknowledged, was lost. `devicechain_<area>_jetstream_consumer_unread_skipped_total`
+  counts it, `JetStreamDurableLostUnread` alerts on it, and `JetStreamCaptureBacklogGrowing` and
+  `JetStreamCaptureBacklogWillOverflow` warn before the stream is full.
+
   A third hole is the capture stream's own leader election. The broker hands each QoS 1 publish
   to the capture stream with no reply, after the device has its PUBACK. If the stream changes
-  leader under load, the publishes that arrive while it has none, several seconds, are stored
-  nowhere, and no counter records them. In a 12,000 events per second test one such change lost
-  about five seconds of events. `JetStreamCaptureLeaderChanged` reports that a change happened
+  leader, at any load, the publishes that arrive while it has none, several seconds, are stored
+  nowhere, and no counter records them. A broker roll restarts every server, the leader among
+  them, so every roll, including the ones an upgrade makes, opens this window. In a 12,000 events per
+  second test one such change lost about five seconds of events; in an upgrade rehearsal with four
+  devices sending 20 messages a second between them, 11 of 11,262 acknowledged messages were lost
+  during the broker restarts. `JetStreamCaptureLeaderChanged` reports that a change happened
   while events were arriving; the lost events cannot be recovered, and the time of the change
   bounds the window to check in your devices' own records.
 
@@ -91,7 +100,8 @@ there is no separate broker to run.
   platform reads QoS 1 events, command responses and device reports from the broker's own message
   store. A full store refuses the publish, and one whose leader is changing does not acknowledge
   it, so the device gets no PUBACK and sends it again. QoS 0 publishes keep the behaviour above, and a message
-  over the tenant's ceiling is still dropped after its PUBACK. See
+  over the tenant's ceiling is still dropped after its PUBACK. `dcctl bootstrap` and `dcctl upgrade`
+  turn it on with `--mqtt-fail-closed`. See
   [quality of service](../guides/connecting-a-device.md#quality-of-service) and
   [fail-closed MQTT](../deployment/observability.md#mqtt-fail-closed).
 - **Write ◐** — commands are delivered, but delivery is **live-only and unacknowledged**. A
@@ -104,6 +114,8 @@ there is no separate broker to run.
 - **Read ○** — there is no platform-initiated request/response primitive. You can express a read
   as a command whose response carries the value, but that is a vocabulary you define on the
   device profile, not something the transport provides.
+
+- **Gateways.** A device can front other devices. The [edge agent](../deployment/edge-services.md#gateway-identity) signs in as a gateway device and publishes each device's events in the [gateway namespace](./device-protocol.md#gateway-namespace). The platform accepts an event only for a device assigned to that gateway, and refuses any other loudly (the reason `NotGatewayChild`, a counter, and a notice to the gateway) rather than letting the broker acknowledge it and drop it. Commands to devices behind a gateway are not routed yet.
 
 ### HTTP
 

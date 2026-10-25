@@ -38,12 +38,12 @@ const (
 //
 //   - a second full GraphQL parser (vektah/gqlparser) is a much larger reader that
 //     could disagree in many more places, and it would add a require to every module;
-//   - a change to the devicechain-io graphql-go fork (an exported OperationType, or a
-//     Subscribe that refuses non-subscription operations) would let graphql-go decide
-//     for itself, so nothing could disagree. But the fork is meant to carry exactly the
-//     one commit it has upstream-proposed, and to be DROPPED when upstream releases
-//     that fix; a second, fork-only commit would outlive that exit. That trade is a
-//     standing decision to revisit, not a settled one.
+//   - a change to graphql-go itself (an exported OperationType, or a Subscribe that
+//     refuses non-subscription operations) would let graphql-go decide for itself, so
+//     nothing could disagree. But that is an upstream change, and this repo no longer
+//     carries a fork (it was retired at upstream v1.10.3), so a patch of ours would
+//     have nowhere to live. That trade is a standing decision to revisit, not a
+//     settled one.
 //
 // FuzzOperationType holds it to the one direction that matters, with graphql-go itself
 // as the arbiter: whenever this function says "subscription", graphql-go must not

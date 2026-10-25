@@ -629,10 +629,7 @@ publicando y no aparezca nada.
 ## El agente de borde
 
 El agente de borde **no es una cuarta vía de ingesta**. Se ejecuta en una planta, presenta un endpoint
-MQTT corriente a los dispositivos locales, almacena en disco local lo que publican y lo vuelve a
-publicar sobre los mismos topics de dispositivo que la nube ya ingiere. Nada del lado de la plataforma
-sabe que hubo un agente de por medio, y por eso no hay configuración específica del agente en ningún
-servicio de la nube.
+MQTT corriente a los dispositivos locales, almacena en disco local lo que publican y lo vuelve a publicar en la nube como una [pasarela](#gateway-identity): un dispositivo corriente con identidad propia, al que la plataforma solo permite hablar por los dispositivos que le has asignado. No hay ningún servicio específico del agente en la plataforma ni configuración específica del agente en los servicios de la nube.
 
 **No es un área funcional del chart.** No aparece en ninguna lista de áreas ni en ningún perfil de
 despliegue, y no se puede habilitar como se habilita un servicio. Se distribuye como binarios
@@ -645,6 +642,41 @@ resúmenes SHA-256 están en `dc-edge-agent_checksums.txt`, en la misma versión
 `sha256sum --ignore-missing -c dc-edge-agent_checksums.txt` comprueba lo que descargaste. Linux es el
 destino en el borde; las compilaciones de macOS sirven para probar el agente en una estación de
 trabajo. No hay compilación para Windows.
+
+### Identidad de pasarela {#gateway-identity}
+
+El agente es una **pasarela**: un dispositivo corriente de la plataforma que representa a otros dispositivos. Inicia sesión como sí mismo, con su propia credencial de dispositivo, y publica los eventos de cada dispositivo local en su propio espacio de nombres, `{instanceId}/{tenant}/gateways/{gateway}/devices/{device}/events` (consulta [el espacio de nombres de pasarela](../reference/device-protocol.md#gateway-namespace)). La plataforma acepta un evento solo para un dispositivo **asignado a esa pasarela**. Es el único modo de enlace ascendente.
+
+**Cómo configurar una:**
+
+1. Crea el dispositivo pasarela, con cualquier tipo de dispositivo, y dale una [credencial](../guides/device-credentials.md) `MQTT_BASIC`. El token del dispositivo es el `uplink.gatewayToken` del agente. El id de la credencial va en `uplink.username` como `{tenant}:{credentialId}`, y su secreto en la variable de entorno que indica `uplink.passwordEnv`.
+2. Crea los dispositivos que representa la planta y asigna cada uno a la pasarela, con `assignDeviceGateway` o con `gatewayToken` al crearlo. Un dispositivo tiene como máximo una pasarela, y una pasarela no puede tener a su vez una pasarela. Asignar requiere el mismo permiso que gestionar credenciales de dispositivo.
+3. Arranca el agente. Los dispositivos locales siguen publicando en él sus propios topics, sin cambios.
+
+Una asignación surte efecto con el siguiente evento del dispositivo, en segundos y sin reconexión. Quitarla funciona igual, y el resto de dispositivos de la pasarela siguen fluyendo. Deshabilitar la pasarela, o revocar su credencial, termina su sesión.
+
+**Qué hace el agente en el enlace ascendente:**
+
+- Se conecta con el client id MQTT simple del dispositivo pasarela, de modo que el broker afirma la presencia de la propia pasarela como con cualquier dispositivo. No hay un client id por agente: dos agentes que usan un mismo dispositivo pasarela se arrebatan la sesión.
+- Construye cada topic del enlace ascendente solo a partir de un token de dispositivo hijo, así que no puede publicar fuera de su propio espacio de nombres. El broker no puede rechazar una publicación fuera de una concesión (MQTT 3.1.1 no tiene forma de hacerlo), así que la confirmaría y la descartaría. Que no pueda construir un topic así es lo que elimina ese fallo.
+- Solo captura de sus dispositivos el tenant configurado. Una publicación que nombra otro tenant se cuenta en `tenant_mismatched_total` y nunca se almacena.
+- Elimina `credentialType`, `credentialId` y `credentialSecret` de los cuerpos de los eventos antes de reenviarlos, y los cuenta en `body_credentials_stripped_total`. La plataforma rechaza un evento que lleve una en un topic autenticado por el broker. Cambia el dispositivo para que deje de enviarlas.
+- Mantiene hasta **64 publicaciones en vuelo** y confirma cada evento almacenado con su propio acuse. Un agente que esperara cada acuse antes de enviar el siguiente no podría superar un evento por viaje de ida y vuelta, unos 20 por segundo con 50 ms, y una planta ocupada nunca se pondría al día tras una interrupción. Los eventos reenviados conservan la hora en que se almacenaron por primera vez, y la nube sigue plegando los duplicados.
+- Se suscribe al topic de avisos de la pasarela en cada conexión. Si el broker rechaza esa suscripción, el enlace ascendente permanece caído y el registro dice por qué.
+
+**Cuando se rechaza un evento.** La plataforma rechaza un evento de un dispositivo que no está asignado a la pasarela, o que no existe. Lo registra con su carga en el flujo `failed-events` con el motivo `NotGatewayChild`, lo cuenta en `resolve_not_gateway_child_total` y envía a la pasarela un *aviso*. El broker ya confirmó la publicación, así que nada más se lo diría al agente. Ante un aviso, el agente registra una advertencia con el nombre del dispositivo (como máximo una vez por dispositivo cada 30 segundos), lo cuenta en `refused_total{reason="not_gateway_child"}` y escribe el evento en `refused-events.jsonl`, en el directorio del almacén. Ese archivo es privado para el usuario del agente, contiene un objeto JSON por línea y se rota una vez a los 16 MiB.
+
+Hay tres límites. Un aviso es de mejor esfuerzo: una pasarela que estaba desconectada cuando se envió no lo recibe, así que en lo que puedes confiar es en el registro y el contador de la plataforma. El agente conserva una copia acotada de lo que reenvió (los últimos 8192 eventos, y como máximo 16 MiB) para emparejarla con un aviso, de modo que un aviso que llega cuando la copia ya se descartó se cuenta en `refused_unmatched_total` y se registra, pero no se conserva. Y el archivo contiene la carga tal como se reenvió, con las credenciales ya eliminadas. Recuperar un evento rechazado tras corregir la asignación es una reproducción manual.
+
+El agente también rechaza, sin enviarlo, un evento que la plataforma solo podría rechazar: el de un dispositivo local que usa el token de la propia pasarela (`reason="gateway_self"`) o un token que la plataforma no puede almacenar (`reason="invalid_device_token"`). Se escriben en el mismo archivo.
+
+:::warning Actualiza la plataforma antes de pasar un agente al enlace ascendente de pasarela
+Termina primero la actualización de la plataforma: todas las réplicas de `event-sources` y de `device-management`, y las concesiones del broker. Un `event-sources` anterior con `infrastructure.nats.mqttFailClosed` activado confirma los mensajes de pasarela que no puede atribuir y los descarta, de modo que el agente ve éxito mientras no se almacena nada. Un agente cuyo broker no se ha actualizado no puede suscribirse a sus avisos y no informa del enlace ascendente como conectado (`uplink_connected` se queda en 0).
+:::
+
+**De qué es de fiar una pasarela.** Una pasarela habla por los dispositivos que tiene asignados. Una pasarela comprometida puede falsificar eventos solo de los dispositivos que tiene asignados, y solo hasta que se la deshabilita o se revoca su credencial. Lo que afirma sobre *qué cliente local* envió un evento es tan fiable como la autenticación local de la planta.
+
+Los comandos a dispositivos tras una pasarela aún no se enrutan, y el agente solo reenvía eventos.
 
 ### El almacén local {#the-spool}
 
@@ -702,12 +734,15 @@ agente de borde, haz que tu tratamiento de las lecturas tolere una repetición.
 | Ajuste | Predeterminado | Qué hace |
 |---|---|---|
 | `instanceId` | — | Obligatorio. La instancia de nube hacia la que reenvía este agente. Las publicaciones vistas para otra instancia no se reenvían, y se cuentan en `instance_mismatched_total`. |
-| `agentId` | — | Obligatorio. La identidad de este agente en el enlace ascendente. **Debe ser única**: dos agentes que la comparten se desconectan mutuamente en bucle. |
 | `local.listenPort` | `1883` | El puerto MQTT al que se conectan los dispositivos de la planta. |
 | `local.storeDir` | — | Obligatorio. El directorio que contiene el almacén durable. Un agente por directorio. |
 | `local.spoolMaxBytes` | `1 GiB` | Presupuesto del almacén. Más allá, se descartan los eventos más antiguos. El mínimo es 16 MiB. |
 | `local.metricsPort` | `9090` | Puerto de métricas y salud, solo en loopback. Un `0` explícito desactiva el endpoint. |
 | `uplink.brokerUrl` | — | Obligatorio. El endpoint MQTT de la nube al que reenviar. |
+| `uplink.tenant` | — | Obligatorio. El tenant al que pertenece el dispositivo pasarela. Forma parte de cada topic del enlace ascendente, y es el único tenant que el agente toma de sus dispositivos. |
+| `uplink.gatewayToken` | — | Obligatorio. El token del dispositivo pasarela con el que inicia sesión este agente. **Un agente por dispositivo pasarela**: dos que lo compartan se arrebatan la sesión en bucle. |
+| `uplink.username` | — | Obligatorio. `{tenant}:{credentialId}`, la credencial del dispositivo pasarela. Un nombre sin el prefijo del tenant se rechaza al arrancar el agente. |
+| `uplink.passwordEnv` | — | Obligatorio. La variable de entorno que contiene el secreto de la credencial. |
 | `uplink.connectTimeoutSeconds` | `30` | Acota un intento de conexión del enlace ascendente. |
 | `uplink.backoffMinSeconds` / `uplink.backoffMaxSeconds` | `1` / `60` | Cotas de la espera creciente de reconexión mientras el enlace está caído. |
 
@@ -827,6 +862,11 @@ Prefijo: `devicechain_edge_`.
 | `forward_errors_total` | Intentos de reenvío fallidos; el evento queda almacenado para volver a entregarse. |
 | `received_total` / `forwarded_total` | Rendimiento de entrada y de salida. |
 | `malformed_total` | Eventos descartados como no reenviables, en lugar de bloquear la cola que va detrás. |
+| `tenant_mismatched_total` | Publicaciones de dispositivo que nombran un tenant distinto de `uplink.tenant`. No se almacenan ni se reenvían. |
+| `body_credentials_stripped_total` | Miembros de credencial eliminados de los cuerpos de eventos antes de reenviarlos. El dispositivo debería dejar de enviarlos. |
+| `refused_total{reason}` | **Eventos rechazados para esta pasarela.** `not_gateway_child`: la plataforma rechazó un evento porque su dispositivo no está asignado a la pasarela o no existe. `gateway_self` e `invalid_device_token`: el agente no quiso enviarlo. `other`: un motivo que esta versión del agente no conoce. Cualquier incremento requiere atención; consulta [identidad de pasarela](#gateway-identity). |
+| `refused_kept_total` / `refused_unmatched_total` | Eventos rechazados escritos en `refused-events.jsonl` / rechazos cuyo evento ya no se conservaba en el equipo (el registro `failed-events` de la plataforma lo tiene). |
+| `uplink_inflight` | Publicaciones a la espera de acuse, como máximo 64. Mantenerse en 64 mientras se vacía un atraso es normal. |
 | `local_auth_enabled` | 0 significa que el listener MQTT de la planta no exige credencial. |
 
 ## Límites de la validación {#what-is-not-validated}

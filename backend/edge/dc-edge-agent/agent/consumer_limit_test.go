@@ -57,9 +57,8 @@ func TestEdgeBrokerGrantsMoreThanAThousandQoS1Subscriptions(t *testing.T) {
 	agentPort := freePort(t)
 	cfg := config.Configuration{
 		InstanceId: "test",
-		AgentId:    "site1",
 		Local:      config.LocalConfiguration{ListenHost: "127.0.0.1", ListenPort: agentPort, StoreDir: dctest.JetStreamStoreDir(t)},
-		Uplink:     config.UplinkConfiguration{BrokerURL: "tcp://127.0.0.1:1"},
+		Uplink:     config.UplinkConfiguration{Tenant: "tenant1", GatewayToken: "gw1", BrokerURL: "tcp://127.0.0.1:1"},
 	}
 	a := newAgent(t, cfg, nil)
 	srv, err := a.newServer(true)

@@ -33,6 +33,7 @@ import {
 } from '@devicechain/widget-sdk';
 
 import { builtinWidgetDescriptors } from '../builtin-descriptors';
+import { NoReading } from './no-reading-lazy';
 
 // The room a timestamp line needs under the value. The frame's content column (what the
 // widget scale reports) is already net of the frame's padding.
@@ -70,6 +71,10 @@ export function LatestCard({ widget, data }: WidgetProps) {
   return (
     <WidgetFrame title={title} sampleTime={sample?.occurredTime ?? null}>
       {({ size, scale }) => {
+        // No reading: say why, rather than print a bare dash.
+        if (sample?.value == null) {
+          return <NoReading unbound={widget.datasource?.kind === 'unbound'} measurement={name} />;
+        }
         // Measured: the JS curve. Unmeasured (first frame): the SAME curve in cq units, resolved
         // by the browser against the frame's content column, so there is no fallback-size flash.
         const floor = Math.round(FIT_MIN_FONT_PX * scale);

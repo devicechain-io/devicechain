@@ -51,14 +51,18 @@ func (r *DeviceCredentialResolver) CredentialType() string {
 	return r.M.CredentialType
 }
 
-// CredentialId is readable, and for ACCESS_TOKEN it IS the
-// bearer — that type proves possession out of band and compares no stored secret
-// (model.credentialRequiresSecret). That is why the queries returning this type
-// are gated on device:WRITE rather than device:read; see queries_credentials.go
-// for the reasoning. Do not relax that gate on the assumption that withholding
-// credentialValue below is what protects a credential: for an
-// access token there is nothing in credentialValue to withhold.
+// CredentialId is the MQTT username as sent, and for an ACCESS_TOKEN the token ONLY ON
+// THE RESPONSE TO THE WRITE THAT SET IT (IssuedCredentialId). The platform stores an access
+// token as its keyed digest, so every read afterwards returns that digest, a fingerprint
+// that identifies the credential and cannot be presented as the token. The token is shown
+// once, as an MQTT_BASIC password is.
+//
+// The queries returning this type stay gated on device:WRITE, which they no longer need to
+// be for the sake of the token; see queries_credentials.go.
 func (r *DeviceCredentialResolver) CredentialId() string {
+	if r.M.IssuedCredentialId != "" {
+		return r.M.IssuedCredentialId
+	}
 	return r.M.CredentialId
 }
 

@@ -217,3 +217,42 @@ run "the_loadgen_pool_size_is_a_whole_number" {
 
   expect_failures = [var.loadgen_node_count]
 }
+
+# apply returned while GKE was still applying the cluster's settings, and the next install timed
+# out against a RECONCILING cluster. The wait is the last thing the apply does, on by default.
+run "apply_waits_for_the_cluster_operations_by_default" {
+  command = plan
+
+  assert {
+    condition     = length(terraform_data.cluster_settled) == 1
+    error_message = "The configuration should wait for the cluster's operations unless told not to."
+  }
+}
+
+# The counterpart: the wait is the only thing the flag removes, and it can be removed.
+run "the_wait_can_be_turned_off" {
+  command = plan
+
+  variables {
+    wait_for_cluster_operations = false
+  }
+
+  assert {
+    condition     = length(terraform_data.cluster_settled) == 0
+    error_message = "wait_for_cluster_operations = false should remove the wait."
+  }
+  assert {
+    condition     = join(",", sort(keys(google_container_node_pool.this))) == "database,services"
+    error_message = "Turning the wait off should not change the node pools."
+  }
+}
+
+run "the_wait_has_a_floor" {
+  command = plan
+
+  variables {
+    cluster_operations_timeout_seconds = 10
+  }
+
+  expect_failures = [var.cluster_operations_timeout_seconds]
+}

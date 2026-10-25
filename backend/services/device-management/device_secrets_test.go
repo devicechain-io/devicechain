@@ -90,7 +90,7 @@ func TestTheStartupStepDigestsEveryPlaintextSecretInPlace(t *testing.T) {
 	key := dmtest.DeviceSecretKey()
 	rdbm := &rdb.RdbManager{Database: f.db}
 
-	require.NoError(t, digestStoredCredentialSecrets(context.Background(), rdbm, key))
+	require.NoError(t, digestStoredCredentialSecrets(context.Background(), rdbm, key, dmtest.EnrollmentKeys()))
 
 	tenantOf := map[string]string{"a-1": "acme", "a-2": "acme", "a-del": "acme", "a-tok": "acme", "b-1": "beta"}
 	for token, secret := range map[string]string{
@@ -155,7 +155,7 @@ func TestTheStartupStepDoesNotOverwriteARowAnotherReplicaConverted(t *testing.T)
 func TestTheStartupStepCountsDigestsMadeUnderAnotherKey(t *testing.T) {
 	f := newLegacySecretFixture(t)
 	key := dmtest.DeviceSecretKey()
-	require.NoError(t, digestStoredCredentialSecrets(context.Background(), &rdb.RdbManager{Database: f.db}, key))
+	require.NoError(t, digestStoredCredentialSecrets(context.Background(), &rdb.RdbManager{Database: f.db}, key, dmtest.EnrollmentKeys()))
 
 	prefix := "v1$" + key.KeyId() + "$"
 	n, err := schema.CountForeignCredentialDigests(context.Background(), f.db, prefix)
@@ -192,7 +192,7 @@ func TestARotationDuringTheRollingUpgradeIsNotUndoneByTheNextStart(t *testing.T)
 		require.NoError(t, err)
 	}
 	restart := func(f legacySecretFixture) {
-		require.NoError(t, digestStoredCredentialSecrets(context.Background(), &rdb.RdbManager{Database: f.db}, dmtest.DeviceSecretKey()))
+		require.NoError(t, digestStoredCredentialSecrets(context.Background(), &rdb.RdbManager{Database: f.db}, dmtest.DeviceSecretKey(), dmtest.EnrollmentKeys()))
 	}
 	authenticates := func(f legacySecretFixture, secret string) bool {
 		_, err := f.api.AuthenticateDevice(f.acme, presented(secret), time.Now())

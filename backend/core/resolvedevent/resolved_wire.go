@@ -72,6 +72,7 @@ const (
 	resolvedSourceDeviceDisabled = protowire.Number(16)
 	resolvedOccurred             = protowire.Number(17)
 	resolvedProcessed            = protowire.Number(18)
+	resolvedGatewayToken         = protowire.Number(19)
 
 	anchorType           = protowire.Number(1)
 	anchorToken          = protowire.Number(2)
@@ -96,10 +97,10 @@ const (
 // tagSize is the size of every tag here but one: a field number up to 15 encodes with its
 // wire type in a single byte.
 //
-// 🔴 resolvedSourceDeviceDisabled (16), resolvedOccurred (17) and resolvedProcessed (18) are
-// the exceptions, sized by disabledSize and envelopeNanosSize: a field number from 16 on
-// takes a TWO-byte tag, and sizing one with tagSize would allocate one byte short and refuse
-// every event that carries it.
+// 🔴 resolvedSourceDeviceDisabled (16), resolvedOccurred (17), resolvedProcessed (18) and
+// resolvedGatewayToken (19) are the exceptions, sized by disabledSize, envelopeNanosSize and
+// gatewayTokenSize: a field number from 16 on takes a TWO-byte tag, and sizing one with
+// tagSize would allocate one byte short and refuse every event that carries it.
 const tagSize = 1
 
 // entryNanosSize is the encoded size of an entry's time as a count: a one-byte tag and eight
@@ -266,6 +267,7 @@ func marshalResolvedEvent(event *ResolvedEvent, format eventtime.WireFormat) ([]
 	out = appendUint(out, resolvedSourceDeviceDisabled, boolVarint(event.SourceDeviceDisabled))
 	out = occurred.appendCount(out, resolvedOccurred)
 	out = processed.appendCount(out, resolvedProcessed)
+	out = appendString(out, resolvedGatewayToken, event.GatewayToken)
 
 	// The sizing and writing passes read the same event, so they agree unless it changed
 	// between them, which only a caller mutating it concurrently could do. That is a
@@ -284,10 +286,10 @@ func marshalResolvedEvent(event *ResolvedEvent, format eventtime.WireFormat) ([]
 func sizeResolvedEnvelope(event *ResolvedEvent, occurred, processed wireInstant) (int, error) {
 	size := stringSize(event.Source) + stringSize(event.SourceDeviceToken) +
 		stringSize(event.DeviceTypeToken) + stringSize(event.ProfileVersionToken) +
-		stringSize(event.ExternalId)
+		stringSize(event.ExternalId) + gatewayTokenSize(event.GatewayToken)
 	valid := utf8.ValidString(event.Source) && utf8.ValidString(event.SourceDeviceToken) &&
 		utf8.ValidString(event.DeviceTypeToken) && utf8.ValidString(event.ProfileVersionToken) &&
-		utf8.ValidString(event.ExternalId)
+		utf8.ValidString(event.ExternalId) && utf8.ValidString(event.GatewayToken)
 	if event.AltId != nil {
 		size += presentStringSize(*event.AltId)
 		valid = valid && utf8.ValidString(*event.AltId)
@@ -502,6 +504,15 @@ func disabledSize(disabled bool) int {
 		return 0
 	}
 	return protowire.SizeTag(resolvedSourceDeviceDisabled) + protowire.SizeVarint(1)
+}
+
+// gatewayTokenSize is the encoded size of gateway_token: nothing when empty, and otherwise a
+// two-byte tag (field 19) plus the length-prefixed string.
+func gatewayTokenSize(token string) int {
+	if token == "" {
+		return 0
+	}
+	return protowire.SizeTag(resolvedGatewayToken) + protowire.SizeBytes(len(token))
 }
 
 func appendUint(out []byte, num protowire.Number, v uint64) []byte {

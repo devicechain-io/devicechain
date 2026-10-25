@@ -50,7 +50,7 @@ func newCommandSink(t *testing.T, payload map[string]any) (react.CommandSink, *s
 
 	host, portStr, _ := net.SplitHostPort(mint.Listener.Addr().String())
 	port, _ := strconv.Atoi(portStr)
-	client := svcclient.New(config.UserManagementConfiguration{Hostname: host, Port: uint32(port)},
+	client := svcclient.New(config.UserManagementConfiguration{Hostname: host, Port: uint32(port), InternalPort: uint32(port)},
 		"shh", "event-processing", []string{string(auth.CommandWrite)})
 	return NewCommandClient(client, cd.URL), sentQuery
 }
@@ -209,7 +209,7 @@ func TestRuleExpiryReachesTheWire(t *testing.T) {
 	t.Cleanup(cd.Close)
 	host, portStr, _ := net.SplitHostPort(mint.Listener.Addr().String())
 	port, _ := strconv.Atoi(portStr)
-	client := svcclient.New(config.UserManagementConfiguration{Hostname: host, Port: uint32(port)},
+	client := svcclient.New(config.UserManagementConfiguration{Hostname: host, Port: uint32(port), InternalPort: uint32(port)},
 		"shh", "event-processing", []string{string(auth.CommandWrite)})
 	sink := NewCommandClient(client, cd.URL)
 

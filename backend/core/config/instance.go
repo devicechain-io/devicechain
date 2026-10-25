@@ -8,7 +8,10 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"fmt"
+	"net"
+	"net/netip"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -408,6 +411,20 @@ type NatsAuthConfiguration struct {
 	// IdentityPassword is dcctl's view of a running instance only (DeployedInstanceConfig overlays
 	// it from the identity Secret). Nothing writes it into the document and no service reads it.
 	IdentityPassword string
+	// AreaLogins says the broker has a login of its own for every area that uses it (NatsLoginAreas),
+	// and that each such area must present ITS OWN instead of the shared User/Password above. The
+	// flag is not secret and rides in the document every service reads; the logins do not. Each is in
+	// a Secret of its own that only that area's Deployment mounts (DC_NATS_USER, DC_NATS_PASSWORD).
+	//
+	// 🔴 FAIL CLOSED. When this is true an area that uses the broker refuses to start without its
+	// login, rather than quietly connecting as the shared one. When it is false (a broker with no
+	// authentication, or one built before the logins existed) every area uses User/Password as it
+	// always did.
+	AreaLogins bool
+	// AreaPasswords is dcctl's view of a running instance only (DeployedInstanceConfig overlays it
+	// from the per-area Secrets), keyed by login principal: an area, or NatsAdminPrincipal. Nothing
+	// writes it into the document and no service reads it.
+	AreaPasswords map[string]string
 }
 
 // CalloutEnabled reports whether the broker runs the device auth callout. It is keyed on the
@@ -460,9 +477,29 @@ type MetricsConfiguration struct {
 // User-management connectivity configuration. The user-management service
 // issues the platform's RS256 JWT signing key (ADR-008); every other service
 // fetches the public key from this host at startup to validate access tokens.
+//
+// 🔴 TWO PORTS, AND THEY ARE TWO DIFFERENT TRUST BOUNDARIES. Port is the public GraphQL
+// port: the one an ingress routes to, and the one that serves /graphql. InternalPort is a
+// separate listener that serves ONLY the endpoints no outside caller may ever reach: the
+// service-token mint (a shared-secret to token exchange) and the platform JWKS every peer
+// validates tokens against. Nothing routes to it; the chart exposes it on the ClusterIP
+// Service alone. Everything a service dials to authenticate itself goes to InternalPort,
+// and nothing else does. See InternalAddr.
 type UserManagementConfiguration struct {
-	Hostname string
-	Port     uint32
+	Hostname     string
+	Port         uint32
+	InternalPort uint32
+}
+
+// DefaultUserManagementInternalPort is the internal listener's port when none is configured.
+// Only ABSENCE is defaulted (ApplyDefaults).
+const DefaultUserManagementInternalPort = 8082
+
+// InternalAddr is host:port of the internal listener, the one address every in-cluster
+// caller of the service-token mint and the JWKS uses. It is the single place that answer
+// is computed, so a caller cannot reach those endpoints by building the public address.
+func (c UserManagementConfiguration) InternalAddr() string {
+	return net.JoinHostPort(c.Hostname, strconv.FormatUint(uint64(c.InternalPort), 10))
 }
 
 // DeviceManagementConfiguration locates the device-management GraphQL endpoint for
@@ -689,6 +726,52 @@ type InfrastructureConfiguration struct {
 	Shutdown         ShutdownConfiguration
 	Logging          LoggingConfiguration
 	Messaging        MessagingConfiguration
+	Http             HttpConfiguration
+}
+
+// HttpConfiguration is how the instance's HTTP servers read a request's origin.
+//
+// It is FIXED configuration, like the log level: part of the mounted instance document,
+// validated at startup, adopted by rolling the pods.
+type HttpConfiguration struct {
+	// TrustedProxies are the CIDR prefixes (IPv4 or IPv6) of the proxies whose
+	// X-Forwarded-For header may be believed: in Kubernetes the ingress controller's pod or
+	// Service range. Empty, the default, believes no proxy, so an endpoint that keys on the
+	// source address keys on the connection's own peer, which behind an ingress is the
+	// ingress itself, not the client.
+	//
+	// Each entry must be a CIDR in canonical masked form (10.1.2.0/24, never 10.1.2.3/24), and
+	// a malformed one stops the service at startup: a list that silently dropped an entry
+	// would read as configured and behave as though it were not, and one that read host
+	// bits as a wider range would trust more proxies than the operator wrote.
+	TrustedProxies []string
+}
+
+// TrustedProxyPrefixes parses TrustedProxies. Validate has already refused a malformed
+// entry, so an error here only means a document that was never validated.
+func (c HttpConfiguration) TrustedProxyPrefixes() ([]netip.Prefix, error) {
+	out := make([]netip.Prefix, 0, len(c.TrustedProxies))
+	for _, entry := range c.TrustedProxies {
+		trimmed := strings.TrimSpace(entry)
+		if trimmed == "" {
+			return nil, fmt.Errorf("infrastructure.http.trustedProxies has an empty entry")
+		}
+		p, err := netip.ParsePrefix(trimmed)
+		if err != nil {
+			return nil, fmt.Errorf("infrastructure.http.trustedProxies entry %q is not a CIDR prefix "+
+				"(want a form like 10.42.0.0/16 or fd00::/8): %w", entry, err)
+		}
+		if p.Addr().Is4In6() {
+			return nil, fmt.Errorf("infrastructure.http.trustedProxies entry %q is an IPv4-mapped IPv6 "+
+				"prefix, which never matches: addresses are compared as IPv4. Write the IPv4 prefix", entry)
+		}
+		if p.Masked() != p {
+			return nil, fmt.Errorf("infrastructure.http.trustedProxies entry %q has bits set below its prefix "+
+				"length, so it trusts %s, a wider range than it reads as. Write it masked", entry, p.Masked())
+		}
+		out = append(out, p)
+	}
+	return out, nil
 }
 
 // MessagingConfiguration is how every producer in the instance writes the event messages
@@ -1279,6 +1362,11 @@ func (c *InstanceConfiguration) ApplyDefaults() {
 	if c.Infrastructure.Logging.Level == "" {
 		c.Infrastructure.Logging.Level = DefaultLogLevel
 	}
+	// Absence only: an instance config rendered before the internal listener existed still
+	// names the right port.
+	if c.Infrastructure.UserManagement.InternalPort == 0 {
+		c.Infrastructure.UserManagement.InternalPort = DefaultUserManagementInternalPort
+	}
 	// Absence only, as with the log level: a present value that names no format is refused
 	// in Validate, never rewritten.
 	if c.Infrastructure.Messaging.WireFormat == "" {
@@ -1327,6 +1415,9 @@ func (c *InstanceConfiguration) Validate() error {
 		}
 	}
 	if _, err := c.Infrastructure.Messaging.EventWireFormat(); err != nil {
+		return err
+	}
+	if _, err := c.Infrastructure.Http.TrustedProxyPrefixes(); err != nil {
 		return err
 	}
 	return nil
@@ -1457,8 +1548,9 @@ func NewDefaultInstanceConfiguration() *InstanceConfiguration {
 				Enabled: true,
 			},
 			UserManagement: UserManagementConfiguration{
-				Hostname: "dc-user-management.dc-system",
-				Port:     8080,
+				Hostname:     "dc-user-management.dc-system",
+				Port:         8080,
+				InternalPort: DefaultUserManagementInternalPort,
 			},
 			DeviceManagement: DeviceManagementConfiguration{
 				Hostname: "dc-device-management.dc-system",

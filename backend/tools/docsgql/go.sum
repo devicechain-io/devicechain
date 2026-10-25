@@ -1,2 +1,4 @@
-github.com/devicechain-io/graphql-go v1.10.2-dc.2 h1:9+qkaJlmjzkxW3n+Ka+HZi9B8jpYEDLJFekqzMUvj1o=
-github.com/devicechain-io/graphql-go v1.10.2-dc.2/go.mod h1:AsADheC4CCFwd8n1/QbkduTlHgYYMsRgtPihYVAlEsk=
+github.com/graph-gophers/graphql-go v1.10.3 h1:H6bqOfbuyolAQsbLapHnkIFdJ59vrXuAvDmc4uFvjbY=
+github.com/graph-gophers/graphql-go v1.10.3/go.mod h1:AsADheC4CCFwd8n1/QbkduTlHgYYMsRgtPihYVAlEsk=
+go.yaml.in/yaml/v3 v3.0.5 h1:N6y/pJk8buWs9NY5ERU2HSMfm+IuD/OtfdAnq6kESPw=
+go.yaml.in/yaml/v3 v3.0.5/go.mod h1:HVTZu1O7/Vkt2N+BFy8Zza+lnLsABggaTM2ZpNIGuKg=

@@ -18,6 +18,7 @@ dcctl [command]
 ### Commands
 
 * [dcctl bootstrap](#dcctl-bootstrap)	 - Bootstrap a DeviceChain instance
+* [dcctl broker](#dcctl-broker)	 - Message broker operations
 * [dcctl dead-letters](#dcctl-dead-letters)	 - Inspect work the platform accepted and then gave up on
 * [dcctl destroy](#dcctl-destroy)	 - Destroy a DeviceChain instance
 * [dcctl enable-area](#dcctl-enable-area)	 - Turn on a functional area on a running instance
@@ -60,6 +61,7 @@ dcctl bootstrap <provider> <instance> [flags]
       --kube-context string                         build the instance on the cluster this context reaches, prepared with 'dcctl install --kube-context'
       --lwm2m-identities string                     path to a JSON file of LwM2M DTLS-PSK credentials to provision: [{identity, psk(base64), tenant, externalId, deviceTypeToken, autoRegister}]. Renders the PSKs into a chart-owned Secret and binds each to lwm2m-ingest; implies --enable-area lwm2m-ingest. Validated up front (short PSK / missing tenancy fails before any cluster). Re-running bootstrap WITHOUT this flag removes the provisioned credentials
       --mqtt-body-credential string                 TRANSITIONAL. What event-sources does with an MQTT event whose body carries a device credential: refuse (the default) or strip (accept it with the credential removed). Use strip while a fleet whose firmware still sends one is updated, then refuse; a device that sent one should have its credential rotated. A value given here is kept by later upgrades that omit the flag. Planned for removal in v0.26.0
+      --mqtt-fail-closed                            make a QoS 1 PUBACK from the MQTT gateway mean the platform holds the message (infrastructure.nats.mqttFailClosed). The trade: a QoS 1 publish is REFUSED (no PUBACK, connection closed, the device resends) while the broker's MQTT message store has no leader, instead of being acknowledged and possibly lost, and the ingest ceiling is lower, so size the instance below it. It covers QoS 1 only, and its guarantee is stated for a replicated broker (a cluster installed with --ha). --mqtt-fail-closed=false turns it off again. Fixed configuration, recorded on the instance and kept by 'dcctl upgrade' when the flag is omitted; not giving the flag leaves the platform default
       --no-escrow                                   do NOT escrow the secret-store root key. The key then exists only inside the cluster: losing the cluster makes every stored secret permanently unreadable, even from a database backup, because no DeviceChain backup contains etcd. For throwaway instances only; implied by --dev
       --no-tls                                      serve plain HTTP instead of a self-signed cert (with --host localhost, a zero-config http://localhost/). On by default on a cluster installed without cert-manager, where --no-tls=false is refused
       --object-store string                         where the instance keeps tenant logos and update artifacts: none, filesystem (a volume the chart creates) or s3. Default: a small filesystem store on a cluster dcctl created, none on one it was pointed at with --kube-context. Fixed configuration, recorded on the instance and kept by 'dcctl upgrade'
@@ -77,6 +79,7 @@ dcctl bootstrap <provider> <instance> [flags]
       --restore-tsdb-at string                      stop the event store's recovery at this RFC3339 timestamp instead of replaying the whole archive. For the disaster where the data was destroyed correctly — a mistaken delete — so pick a moment strictly before the damage. Needs --restore-tsdb-from
       --restore-tsdb-from string                    disaster recovery: recover the EVENT store from this archive path (the serverName inside the backup bucket, e.g. dc-tsdb) instead of initialising an empty database. 🔴 Only takes effect when the cluster is CREATED — recover by destroying the instance and rebuilding it with this set, not by re-running against a live one. When the backups are in the cluster's in-cluster object store, destroy with --keep-backups: a destroy without it deletes the archive this reads
       --skip-preflight                              skip the local-system preflight checks
+      --values stringArray                          a YAML file of operator tuning (replica counts, resources, an area's own configuration), merged over the values dcctl computes (repeatable; later files win). The overlay is recorded on the instance, so 'dcctl upgrade' keeps applying it; on upgrade, --values REPLACES the recorded overlay. Only tunable values are accepted: a key dcctl owns (images, credentials, endpoints, ingress host and TLS, the area set) is refused, naming it, before anything changes
       --version string                              image version/tag to deploy (default: the published release version, or 'dev' with --build)
   -y, --yes                                         assume yes for prompts
 ```
@@ -84,6 +87,131 @@ dcctl bootstrap <provider> <instance> [flags]
 ### SEE ALSO
 
 * [dcctl](#dcctl)	 - DeviceChain CLI
+
+## dcctl broker {#dcctl-broker}
+
+Message broker operations
+
+### Synopsis
+
+Operate on the message broker an instance runs on.
+
+### Options
+
+```
+  -h, --help   help for broker
+```
+
+### SEE ALSO
+
+* [dcctl](#dcctl)	 - DeviceChain CLI
+* [dcctl broker permissions](#dcctl-broker-permissions)	 - Print the broker permissions every platform login is held to
+* [dcctl broker reconcile](#dcctl-broker-reconcile)	 - Create and reconcile the instance's message broker streams and buckets
+
+## dcctl broker permissions {#dcctl-broker-permissions}
+
+Print the broker permissions every platform login is held to
+
+### Synopsis
+
+Print the message broker permissions of every platform login, as JSON.
+
+An instance dcctl installs never needs this: dcctl generates the same document at install and
+upgrade time and gives it to the broker. It exists for an installation that runs the chart
+WITHOUT dcctl and brings its own broker, which has to hold each service to the same grants.
+
+The document is generated from the same declarations the services are held to (which streams and
+buckets each area writes, reads and administers, and under which consumer names), so it cannot
+drift from what a service does. Its shape is:
+
+```
+  {"APP": {"<username>": <permissions>, ...}, "SYS": {"dc_sys": <permissions>}}
+```
+
+where each \<permissions> is a nats-server permissions block (publish and subscribe allow and deny
+lists, and allow_responses). Merge each block into the user of the same name in the broker's APP
+account (and dc_sys's into the system account). Usernames are dc-\<area>-g\<generation> for an area's
+own login and dc-broker-admin-g\<generation> for the broker administrator. There is no shared login:
+every area presents its own. An installation that was upgraded from a release that had one, and has
+not been through the upgrade that retires it, passes --with-shared-login to keep the transitional
+dc_service block until then.
+
+--profile (or --enable-area) limits the output to the areas that installation deploys. A login with
+no block must not be created: nats-server reads a user with no permissions as unrestricted.
+
+```
+dcctl broker permissions [flags]
+```
+
+### Examples
+
+```
+  dcctl broker permissions --instance-id acme > permissions.json
+  dcctl broker permissions --instance-id acme --profile telemetry
+```
+
+### Options
+
+```
+      --enable-area stringArray   also include this area's login on top of --profile; repeat for more
+  -h, --help                      help for permissions
+      --instance-id string        the instance id the services run under (their DC_INSTANCE_ID); it is part of every subject and stream name (required)
+      --profile string            limit the output to the areas of this deployment profile (default: every area)
+      --with-shared-login         also include the transitional dc_service block, for an installation upgraded from a release that had a shared login and not yet retired it
+```
+
+### SEE ALSO
+
+* [dcctl broker](#dcctl-broker)	 - Message broker operations
+
+## dcctl broker reconcile {#dcctl-broker-reconcile}
+
+Create and reconcile the instance's message broker streams and buckets
+
+### Synopsis
+
+Run the broker administrator again for an installed instance and wait for it.
+
+The platform's services do not create or change the broker's streams and buckets. They verify what
+they open and stop, naming what differs, when it is missing or does not match what the release
+declares. One login, the broker administrator, creates and reconciles them, as a Job the chart runs
+before every install and upgrade. This runs that same Job on demand, for recovery:
+
+```
+  - a pod that stops with "does not match what this build declares" or "does not exist";
+  - a stream or bucket lost at runtime or deleted by hand;
+  - a ceiling or replica count changed in the instance configuration and applied without a release.
+```
+
+The Job is the one the instance's last install or upgrade ran, read back from its Helm release, so
+it uses the same image, the same areas and the same broker login. It is idempotent: on a broker that
+already matches it changes nothing. The Job's log is printed. When it fails, the Job is left in the
+instance's namespace to read and the command exits non-zero.
+
+A stream that an older release created with a different retention is drained by its reader before
+it is recreated as declared, which can take a few minutes.
+
+```
+dcctl broker reconcile <instance> [flags]
+```
+
+### Examples
+
+```
+  dcctl broker reconcile devicechain
+  dcctl broker reconcile devicechain --kube-context kind-devicechain
+```
+
+### Options
+
+```
+  -h, --help                  help for reconcile
+      --kube-context string   kube-context to target (default: the cluster recorded at bootstrap; a different context is refused)
+```
+
+### SEE ALSO
+
+* [dcctl broker](#dcctl-broker)	 - Message broker operations
 
 ## dcctl dead-letters {#dcctl-dead-letters}
 
@@ -1202,9 +1330,27 @@ and kept: the database passwords, the broker's authority and logins, the
 cross-service secret and the secret-store root key. A version change here cannot
 become a credential change.
 
+The one thing it removes is the shared message broker login of an instance upgraded
+from a release that had one. The upgrade that gives every area a login of its own
+keeps the shared one, so pods that have not restarted yet stay connected. Run the
+upgrade once more: when every area already runs its own login, it drops the shared
+login from the broker and from the instance configuration, and its closing summary
+says which phase ran. A new instance never has the shared login. Once it is gone,
+rolling back across this release is not supported; run the newer upgrade again.
+
 It does not change an instance's shape. The profile, topology and functional
 areas come from the instance's own declaration, which is what 'dcctl bootstrap'
 recorded. Use it to move versions, not to reconfigure.
+
+The fail-closed MQTT acknowledgement is the other: '--mqtt-fail-closed' (or
+'--mqtt-fail-closed=false') sets it on a live instance, and the declaration records the
+choice. A plain upgrade with no flag keeps whatever was recorded, so an instance built
+with it stays on, and one told off stays off.
+
+Operator tuning is the exception, and it is carried: a values overlay given to
+'dcctl bootstrap --values' or to this command is recorded on the instance and applied
+again by every later upgrade. '--values \<file>' replaces the recorded overlay,
+'--reset-values' removes it, and --dry-run prints what would change in it.
 
 The broker and event store are applied from this machine's OpenTofu state for the
 instance, in ~/.devicechain/instances/\<instance>/, so the upgrade needs 'tofu' on
@@ -1232,6 +1378,13 @@ when they are in a terraform.tfvars beside its state
 
   # Move only the services, leaving the broker and event store as they are
   dcctl upgrade local devicechain --version v1.3.0 --skip-infrastructure
+
+  # Tune the instance; later upgrades keep applying it without --values
+  dcctl upgrade local devicechain --values tuning.yaml
+
+  # Turn the fail-closed MQTT acknowledgement on (kept by later upgrades), or back off
+  dcctl upgrade local devicechain --mqtt-fail-closed
+  dcctl upgrade local devicechain --mqtt-fail-closed=false
 ```
 
 ```
@@ -1247,8 +1400,11 @@ dcctl upgrade <provider> <instance> [flags]
   -h, --help                            help for upgrade
       --kube-context string             kube-context to target (default: the cluster recorded at bootstrap; a different context is refused)
       --mqtt-body-credential string     TRANSITIONAL. What event-sources does with an MQTT event whose body carries a device credential: refuse (the default) or strip (accept it with the credential removed). Use strip while a fleet whose firmware still sends one is updated, then refuse; a device that sent one should have its credential rotated. A value given here is kept by later upgrades that omit the flag. Planned for removal in v0.26.0
+      --mqtt-fail-closed                make a QoS 1 PUBACK from the MQTT gateway mean the platform holds the message (infrastructure.nats.mqttFailClosed). The trade: a QoS 1 publish is REFUSED (no PUBACK, connection closed, the device resends) while the broker's MQTT message store has no leader, instead of being acknowledged and possibly lost, and the ingest ceiling is lower, so size the instance below it. It covers QoS 1 only, and its guarantee is stated for a replicated broker (a cluster installed with --ha). --mqtt-fail-closed=false turns it off again. Fixed configuration, recorded on the instance and kept by 'dcctl upgrade' when the flag is omitted; not giving the flag leaves the platform default
       --registry string                 image registry to pull from (default: ghcr.io/devicechain-io)
+      --reset-values                    remove the tuning overlay recorded on the instance: it returns to the values dcctl computes. Cannot be combined with --values
       --skip-infrastructure             move only the services: leave this instance's message broker and event store on the configuration they were built with
+      --values stringArray              a YAML file of operator tuning (replica counts, resources, an area's own configuration), merged over the values dcctl computes (repeatable; later files win). The overlay is recorded on the instance, so 'dcctl upgrade' keeps applying it; on upgrade, --values REPLACES the recorded overlay. Only tunable values are accepted: a key dcctl owns (images, credentials, endpoints, ingress host and TLS, the area set) is refused, naming it, before anything changes
       --version string                  release version to upgrade to (default: this dcctl's pinned version)
 ```
 

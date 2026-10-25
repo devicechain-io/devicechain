@@ -15,9 +15,9 @@ import (
 
 	"github.com/devicechain-io/dc-device-management/model"
 	dmtest "github.com/devicechain-io/dc-device-management/test"
-	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/governance"
+	"github.com/devicechain-io/dc-microservice/natsauth/permtest"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	putest "github.com/devicechain-io/dc-microservice/rdb/partialupdatetest"
 	"github.com/devicechain-io/dc-microservice/service"
@@ -39,7 +39,11 @@ import (
 // standing in for Postgres. The one lazy path left, the alarm subscription, is opened
 // directly below.
 func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
-	host, port := startEmbeddedNats(t)
+	instance := fmt.Sprintf("catalogboot%d", time.Now().UnixNano())
+	// The broker holds the area's login to exactly the permissions natsauth generates for it, so
+	// this is also the area's permission test: the real wiring runs against it and the broker's
+	// log of refusals is asserted empty at the end.
+	broker := permtest.Start(t, instance)
 
 	prevMs, prevCfg, prevNats, prevRdb, prevSvc := Microservice, Configuration, NatsManager, RdbManager, Svc
 	prevApi, prevCached, prevKey, prevTransit, prevGates := Api, CachedApi, DeviceSecretKey, SecretTransit, safetyGates
@@ -61,15 +65,16 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	t.Setenv(envCalloutIssuerSeed, string(issuerSeed))
 
 	Microservice = &core.Microservice{
-		InstanceId:     fmt.Sprintf("catalogboot%d", time.Now().UnixNano()),
+		InstanceId:     instance,
 		FunctionalArea: "device-management",
 		Deployed:       true,
 		Readiness:      core.NewReadinessGate(),
 	}
 	Microservice.UseMetricsRegistry(prometheus.NewRegistry())
 	nats := &Microservice.InstanceConfiguration.Infrastructure.Nats
-	*nats = mscfg.NatsConfiguration{Hostname: host, Port: port, MqttFailClosed: true}
-	nats.Auth = mscfg.NatsAuthConfiguration{CalloutIssuerPublic: issuerPublic}
+	*nats = broker.NatsConfiguration("device-management")
+	nats.MqttFailClosed = true
+	nats.Auth.CalloutIssuerPublic = issuerPublic
 	Microservice.Readiness.MarkReadyWithoutAuthSurface()
 	Microservice.MicroserviceConfigurationRaw = []byte(`{}`)
 	require.NoError(t, parseConfiguration())
@@ -85,7 +90,7 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 		AfterNats: func(_ context.Context, m *service.Managers) error {
 			// The two steps of the production AfterNats that open broker resources.
 			var err error
-			Api, CachedApi, err = buildApis(m.Nats, RdbManager, DeviceSecretKey, Configuration)
+			Api, CachedApi, err = buildApis(m.Nats, RdbManager, DeviceSecretKey, EnrollmentKeys, Configuration)
 			if err != nil {
 				return err
 			}
@@ -114,4 +119,5 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	live, err := NatsManager.SubscribeLive(ctx, "acme", streams.AlarmEvents)
 	require.NoError(t, err, "live subscription on %s", streams.AlarmEvents)
 	_ = live
+	broker.RequireNoViolations(t)
 }

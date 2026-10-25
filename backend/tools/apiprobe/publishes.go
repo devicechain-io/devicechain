@@ -528,6 +528,65 @@ var afterPublish = []entity{
 			}
 		},
 	},
+	{
+		// Depends on: artifact-available, entity-group-dynamic, entity-group-version,
+		// update-assignment.
+		//
+		// 🔑 THIS ROW CREATES update_rollouts, AND ITS START CREATES update_rollout_targets. A group
+		// rollout is declared DRAFT over GraphQL; starting it (the After step) freezes the dynamic
+		// group's published membership — the seeded device — as its target set. The device already
+		// holds the update-assignment row's assignment of the same artifact, so the start ADOPTS it
+		// rather than assigning again, and the rollout's one target is in flight from then on.
+		//
+		// Only stored values are selected: targetCount is written once by the start; state and
+		// progress move as the device's attempt does (its deadline is a day away) and are left out.
+		// It needs updates.allowUnverifiedArtifacts for the same reason update-assignment does, and
+		// a release without rollouts skips it by the field it was written for; nothing reads its token.
+		Name:     "update-rollout",
+		Area:     "update-management",
+		Mutation: "createUpdateRollout",
+		Input:    "UpdateRolloutCreateRequest!",
+		Read:     "updateRollout",
+		Single:   true,
+		Requires: []string{"UpdateRollout.maxInFlight"},
+		Fields:   "token name groupToken maxInFlight failureThreshold targetCount artifact{token}",
+		Vars: func(s *state) map[string]any {
+			return map[string]any{"req": map[string]any{
+				"token":            s.tok("update-rollout"),
+				"name":             "apiprobe rollout",
+				"artifactToken":    s.tok("artifact-available"),
+				"groupToken":       s.tok("entity-group-dynamic"),
+				"maxInFlight":      2,
+				"failureThreshold": 5,
+			}}
+		},
+		After: startProbeRollout,
+		Settled: func(f map[string]any) error {
+			if n, _ := f["targetCount"].(float64); n < 1 {
+				return fmt.Errorf("targetCount is %v, want the started rollout's frozen target set", f["targetCount"])
+			}
+			return nil
+		},
+	},
+}
+
+// startProbeRollout starts the probe rollout, which is what writes its target rows.
+func startProbeRollout(ctx context.Context, c *connection, sess *userclient.TenantSession, st *state) error {
+	var out struct {
+		StartUpdateRollout struct {
+			State       string `json:"state"`
+			TargetCount int    `json:"targetCount"`
+		} `json:"startUpdateRollout"`
+	}
+	if err := sess.Query(ctx, c.areaURL("update-management"), `mutation($t:String!){startUpdateRollout(token:$t){state targetCount}}`,
+		map[string]any{"t": st.tok("update-rollout")}, &out); err != nil {
+		return fmt.Errorf("start the probe rollout: %w", err)
+	}
+	if out.StartUpdateRollout.TargetCount < 1 {
+		return fmt.Errorf("the probe rollout started with %d targets; the dynamic group should resolve to the seeded device",
+			out.StartUpdateRollout.TargetCount)
+	}
+	return nil
 }
 
 // probeArtifactContent is the bytes the probe uploads for its AVAILABLE artifact. A fixed literal,

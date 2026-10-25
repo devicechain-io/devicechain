@@ -7,7 +7,12 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
 
 // 🔴 OFF BY DEFAULT, BECAUSE ON BY DEFAULT IS THE DEFECT. --skip-infrastructure is the
@@ -86,5 +91,48 @@ func TestMqttBodyCredentialFlagIsOnBothVerbsAndOffByDefault(t *testing.T) {
 		if !threaded {
 			t.Errorf("%s does not pass the parsed --mqtt-body-credential to its options", src)
 		}
+	}
+}
+
+// --values is on both verbs, repeatable, and --reset-values is on upgrade only.
+func TestValuesFlagsAreOnTheVerbsThatTakeThem(t *testing.T) {
+	for name, cmd := range map[string]*cobra.Command{"upgrade": upgradeCmd, "bootstrap": bootstrapCmd} {
+		f := cmd.Flags().Lookup("values")
+		if f == nil {
+			t.Fatalf("dcctl %s has no --values", name)
+		}
+		if f.Value.Type() != "stringArray" {
+			t.Errorf("dcctl %s --values is %s; it must be repeatable without splitting a path on commas", name, f.Value.Type())
+		}
+	}
+	if upgradeCmd.Flags().Lookup("reset-values") == nil {
+		t.Error("dcctl upgrade has no --reset-values")
+	}
+	if bootstrapCmd.Flags().Lookup("reset-values") != nil {
+		t.Error("dcctl bootstrap has --reset-values: a first bootstrap has nothing recorded to reset")
+	}
+}
+
+// A refused overlay fails in the command, with the key named, before any cluster is
+// contacted: the provider is a valid name, so the only thing that can stop this run is
+// the overlay -- a cluster call would fail differently.
+func TestARefusedValuesFileStopsUpgradeBeforeAnyCluster(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "bad.yaml")
+	if err := os.WriteFile(f, []byte("image:\n  tag: v9\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	upgradeValues = []string{f}
+	t.Cleanup(func() { upgradeValues = nil })
+	err := upgradeCmd.RunE(upgradeCmd, []string{"local", "prod"})
+	if err == nil || !strings.Contains(err.Error(), "image.tag") {
+		t.Fatalf("a values file setting image.tag was not refused by name: %v", err)
+	}
+
+	upgradeValues = []string{f}
+	upgradeResetValues = true
+	t.Cleanup(func() { upgradeResetValues = false })
+	if err := upgradeCmd.RunE(upgradeCmd, []string{"local", "prod"}); err == nil ||
+		!strings.Contains(err.Error(), "give one") {
+		t.Errorf("--values with --reset-values should be refused as contradictory: %v", err)
 	}
 }

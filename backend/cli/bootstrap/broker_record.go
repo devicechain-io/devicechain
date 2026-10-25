@@ -88,8 +88,15 @@ type brokerRecord struct {
 	// same reason as XKeySeed: a record written before the account existed is valid, and the
 	// absence reads as "introduce one".
 	IdentityPassword string `json:"identityPassword,omitempty"`
-	ServicePassword  string `json:"servicePassword"`
-	SysPassword      string `json:"sysPassword"`
+	// AreaLogins are the per-area broker logins and the administrator's, keyed by principal (an area,
+	// or "broker-admin"). Optional on read for the same reason as the two above: a record written
+	// before they existed is valid, and a principal's absence reads as "introduce one". A principal
+	// that is present is never replaced.
+	AreaLogins map[string]string `json:"areaLogins,omitempty"`
+	// ServicePassword is the shared login's. Empty on an instance that has none, which is every
+	// fresh install: a record is valid without it only when AreaLogins covers every principal.
+	ServicePassword string `json:"servicePassword,omitempty"`
+	SysPassword     string `json:"sysPassword"`
 }
 
 // brokerRecordPathFor resolves the record's path. A seam so tests never touch a real
@@ -142,8 +149,12 @@ func readBrokerRecord(instance string) *brokerRecord {
 	// The back-compat branch it would take is right for an INSTANCE CONFIG written before
 	// SYS existed; this record format never had such a generation, so here it is only ever
 	// a corrupted or hand-edited file.
-	if rec.Instance != instance || rec.IssuerSeed == "" ||
-		rec.ServicePassword == "" || rec.SysPassword == "" {
+	if rec.Instance != instance || rec.IssuerSeed == "" || rec.SysPassword == "" {
+		return nil
+	}
+	// ...and the shared password may be absent only where every service has a login of its own to
+	// fall back on: a record with neither could not rebuild a credential anything connects with.
+	if rec.ServicePassword == "" && requireEveryPrincipalHasALogin(rec.AreaLogins) != nil {
 		return nil
 	}
 	return &rec

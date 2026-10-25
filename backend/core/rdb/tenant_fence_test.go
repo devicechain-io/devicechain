@@ -47,9 +47,8 @@ func newFenceDB(t *testing.T) *gorm.DB {
 	}
 	// 🔴 THE AUDIT JOURNAL IS REGISTERED HERE BECAUSE PRODUCTION REGISTERS IT, and leaving
 	// it out made the delete test below pass against a callback set that does not exist.
-	// The journal's insert runs After("gorm:create"), which gorm sorts after the commit
-	// callback, so it is the one write that reaches the fence with its own mutation
-	// already committed.
+	// The journal's insert runs inside its mutation's transaction, so it is the one write
+	// that reaches the fence carrying a delete the fence deliberately lets through.
 	if err := RegisterAuditJournal(db); err != nil {
 		t.Fatalf("registering the audit journal: %v", err)
 	}

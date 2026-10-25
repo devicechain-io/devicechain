@@ -56,7 +56,7 @@ Each in a namespace of its own, it installs:
 The operator is one controller per cluster, shared by every instance on it. That is why
 installing it is the cluster command's job rather than each instance's, and why moving a
 cluster to a new release starts here: see
-[Releases & upgrades](./releases-and-upgrades.md#zero-downtime-upgrades).
+[Releases & upgrades](./releases-and-upgrades.md#rolling-upgrades).
 
 `install` also creates the base database identity that each instance's own database login is
 created with, and records the install in the cluster.
@@ -240,7 +240,7 @@ passwords, the broker's authority and logins, the cross-service secret, the secr
 key — because none of them exists yet. Point it at an instance that is already running and it
 stops at step 3, before the infrastructure or the chart are touched. It names the command
 that does move a live instance: `dcctl upgrade`, covered in
-[Releases & Upgrades](./releases-and-upgrades.md#zero-downtime-upgrades).
+[Releases & Upgrades](./releases-and-upgrades.md#rolling-upgrades).
 
 A run that *failed* partway through is a different case, and re-running it is still how you
 repair it. Step 3 refuses only a **live** instance: one whose configuration document (written
@@ -307,6 +307,30 @@ Two things on a cluster can belong to only one instance, and the bootstrap handl
 - **The local MQTT port.** On a local cluster, port 1883 on your machine reaches the broker of
   the first instance only. Later instances' brokers are reachable from inside the cluster, and
   the bootstrap says so when it happens.
+
+#### Ingress and your own controller {#ingress-controller}
+
+The cluster install sets up one ingress controller and every instance gets its routes from the chart. Nothing
+at the edge is a security control: the service-token mint and the signing-key set are served by
+`user-management` on an internal port that no ingress route targets, so the public port answers 404
+for them behind any controller. The mint is protected by the shared service secret, compared in constant time.
+The chart's ingresses carry no configuration snippet. The controller `dcctl install` sets up still accepts
+snippets in this release, because instances not yet upgraded rely on them.
+
+If you bring your own controller, route the chart's five ingresses:
+
+- `/api/<area>` to each area's Service port `graphql`, stripping the prefix.
+- `/` to the console.
+- `/.well-known/oauth-protected-resource` (to `mcp`) and `/.well-known/oauth-authorization-server` (to
+  `user-management`), without stripping anything, when those areas are enabled.
+- The update upload, `PUT /api/update-management/updates/artifacts/<token>/content`, to `update-management`. Do not buffer
+  the request body, because the service authenticates before it reads one.
+- The update download, `GET /api/update-management/updates/download/<artifact>`, to `update-management`. Keep its query
+  string out of access logs, because the grant travels in it.
+
+You do not need a rule that hides `/auth/` paths, and you must not route to a Service port named `internal-auth`.
+The chart's network policy (`networkPolicy.enabled`, off in `dcctl` installs) can also restrict that port to the
+instance's own namespace. See [Endpoints that never leave the cluster](../concepts/security-model.md#internal-endpoints).
 
 #### The instance namespace {#instance-namespace}
 
@@ -383,7 +407,7 @@ failure names a step you can find here:
    `core.devicechain.io/bootstrap-unfinished: "true"`. A run that ends successfully removes
    it, in the same write that records the instance as `Ready`.
 6. **Render configuration** — resolve the instance id, namespace, profile, and every generated
-   credential: the broker-auth material (the shared service password and the callout issuer
+   credential: the broker-auth material (a login for every area that uses the broker, and the callout issuer
    key), the certificate authority that signs the broker's own TLS certificate, the
    cross-service auth secret, and the **secret-store root key**. All of them are minted here,
    because step 3 has established there is no live instance to take them from. Finishing a

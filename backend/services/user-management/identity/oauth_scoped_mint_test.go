@@ -86,7 +86,7 @@ func newMintTestEnv(t *testing.T) *mintTestEnv {
 	require.NoError(t, db.AutoMigrate(
 		&iam.TenantTier{}, &iam.Tenant{}, &iam.Role{}, &iam.Identity{}, &iam.Membership{}, &iam.IdentityLink{},
 		&iam.IdpConnection{}, &iam.IdpConnectionTenant{}, &iam.IdpConnectionDomain{}, &iam.IdpRoleMapping{}, &iam.SsoLinkRequest{},
-		&iam.OAuthClient{}, &rdb.AuditEvent{},
+		&iam.OAuthClient{}, &rdb.AuditEvent{}, &iam.ServiceAccount{}, &iam.ServiceAccountSecret{},
 	))
 	rdbm := &rdb.RdbManager{Database: db}
 	store := iam.NewStore(rdbm)
@@ -107,6 +107,7 @@ func newMintTestEnv(t *testing.T) *mintTestEnv {
 		refreshKV: kv,
 		accessTTL: time.Minute,
 	}
+	m.initLimiters()
 	return &mintTestEnv{m: m, store: store, validator: auth.NewValidator(&key.PublicKey), kv: kv}
 }
 

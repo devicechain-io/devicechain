@@ -6,6 +6,8 @@ package blob
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -83,6 +85,79 @@ func TestS3DeleteTenantPagesThroughThePrefix(t *testing.T) {
 	require.Len(t, f.listIns, 2)
 	require.Equal(t, "inst1/acme/", aws.ToString(f.listIns[0].Prefix), "the trailing slash keeps acme2 out")
 	require.Equal(t, "page-2", aws.ToString(f.listIns[1].ContinuationToken))
+}
+
+func TestS3DeleteTenantBatchesAPageIntoFewRequests(t *testing.T) {
+	var contents []s3types.Object
+	for i := 0; i < 2500; i++ {
+		contents = append(contents, s3types.Object{Key: aws.String(fmt.Sprintf("inst1/acme/artifacts/a%04d", i))})
+	}
+	f := &fakeS3{listPages: []*s3.ListObjectsV2Output{{Contents: contents}}}
+	n, err := newS3(f).DeleteTenant(context.Background(), "acme")
+	require.NoError(t, err)
+	require.EqualValues(t, 2500, n)
+	require.Len(t, f.delBatches, 3, "a page larger than the API limit is split, never sent whole")
+	require.Len(t, f.delBatches[0], 1000)
+	require.Len(t, f.delBatches[2], 500)
+	require.Len(t, f.delKeys, 2500)
+	require.Equal(t, []bool{true, true, true}, f.batchQuiet)
+}
+
+// The request succeeds and names the keys it could not delete. Reporting that as a clean
+// erasure is the failure this guards: the count must exclude the failed keys and the error
+// must name one.
+func TestS3DeleteTenantPartialBatchFailureIsAnError(t *testing.T) {
+	f := &fakeS3{
+		listPages: []*s3.ListObjectsV2Output{{Contents: []s3types.Object{
+			{Key: aws.String("inst1/acme/artifacts/a1")},
+			{Key: aws.String("inst1/acme/artifacts/a2")},
+			{Key: aws.String("inst1/acme/artifacts/a3")},
+		}}},
+		batchFail: map[string]string{"inst1/acme/artifacts/a2": "AccessDenied"},
+	}
+	n, err := newS3(f).DeleteTenant(context.Background(), "acme")
+	require.Error(t, err)
+	require.EqualValues(t, 2, n, "only the confirmed deletions are counted")
+	require.Contains(t, err.Error(), "inst1/acme/artifacts/a2")
+	require.Contains(t, err.Error(), "AccessDenied")
+	require.Contains(t, err.Error(), "1 of 3")
+}
+
+func TestS3DeleteTenantStopsAtAFailedPage(t *testing.T) {
+	f := &fakeS3{
+		listPages: []*s3.ListObjectsV2Output{
+			{
+				Contents:              []s3types.Object{{Key: aws.String("inst1/acme/artifacts/a1")}},
+				IsTruncated:           aws.Bool(true),
+				NextContinuationToken: aws.String("page-2"),
+			},
+			{Contents: []s3types.Object{{Key: aws.String("inst1/acme/artifacts/a2")}}},
+		},
+		batchFail: map[string]string{"inst1/acme/artifacts/a1": "InternalError"},
+	}
+	_, err := newS3(f).DeleteTenant(context.Background(), "acme")
+	require.Error(t, err)
+	require.Len(t, f.listIns, 1, "a failed page is not walked past: the pass reports it and is retried")
+}
+
+func TestS3DeleteTenantWholeRequestFailureIsAnError(t *testing.T) {
+	f := &fakeS3{
+		listPages: []*s3.ListObjectsV2Output{{Contents: []s3types.Object{{Key: aws.String("inst1/acme/artifacts/a1")}}}},
+		batchErr:  errors.New("connection reset"),
+	}
+	n, err := newS3(f).DeleteTenant(context.Background(), "acme")
+	require.Error(t, err)
+	require.Zero(t, n)
+}
+
+func TestS3DeleteTenantValidatesTheWholePageBeforeDeletingAny(t *testing.T) {
+	f := &fakeS3{listPages: []*s3.ListObjectsV2Output{{Contents: []s3types.Object{
+		{Key: aws.String("inst1/acme/artifacts/a1")},
+		{Key: aws.String("inst1/globex/artifacts/g1")},
+	}}}}
+	_, err := newS3(f).DeleteTenant(context.Background(), "acme")
+	require.Error(t, err)
+	require.Empty(t, f.delKeys, "an out-of-prefix key anywhere in the page deletes nothing of the page")
 }
 
 func TestS3DeleteTenantRefusesAKeyOutsideThePrefix(t *testing.T) {

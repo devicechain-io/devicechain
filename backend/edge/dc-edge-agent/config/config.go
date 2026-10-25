@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"strings"
 )
 
 // instanceIdPattern mirrors the platform's instance-id grammar (values.schema.json):
@@ -29,13 +30,6 @@ type Configuration struct {
 	// agent→cloud), so it must match the target Instance exactly or every forward
 	// silently addresses a namespace nothing consumes.
 	InstanceId string `json:"instanceId"`
-
-	// AgentId uniquely identifies THIS edge box among all agents feeding the same
-	// Instance. It is the tail of the uplink MQTT client id: two sites on one
-	// Instance is the normal Tier-1 topology, and MQTT client-id takeover would
-	// otherwise make each agent's connect boot the other in a permanent mutual-kick
-	// loop. Required, and token-safe so it is a clean client-id segment.
-	AgentId string `json:"agentId"`
 
 	// Local configures the device-facing MQTT listener the agent terminates.
 	Local LocalConfiguration `json:"local"`
@@ -121,11 +115,28 @@ type UplinkConfiguration struct {
 	// (plaintext) or ssl:// / tls:// (TLS with system roots). Required.
 	BrokerURL string `json:"brokerUrl"`
 
-	// Username is the uplink MQTT login (may be empty for anonymous brokers).
+	// Tenant is the tenant the gateway device belongs to. It is a segment of every
+	// uplink topic, the prefix of Username, and the only tenant the agent captures
+	// from its local devices: a local publish naming another tenant is counted
+	// (tenant_mismatched_total) and never spooled. Required.
+	Tenant string `json:"tenant"`
+
+	// GatewayToken is the token of the gateway DEVICE this agent authenticates as.
+	// The agent connects as that device (client id = the device's plain client id)
+	// and publishes every local device's events in the gateway's own namespace,
+	// {instance}/{tenant}/gateways/{gatewayToken}/devices/{child}/events; the
+	// platform accepts an event only for a device assigned to this gateway.
+	// Required.
+	GatewayToken string `json:"gatewayToken"`
+
+	// Username is the gateway device's MQTT login: "{tenant}:{credentialId}", the
+	// device credential the broker's auth callout verifies. Required, and refused at
+	// load when it does not carry the configured tenant prefix: an unprefixed name
+	// would otherwise fail only at CONNECT, as an opaque not-authorized.
 	Username string `json:"username"`
 
-	// PasswordEnv names the environment variable holding the uplink password (a
-	// projected Secret, never cleartext in this document). Empty means no password.
+	// PasswordEnv names the environment variable holding the gateway credential's
+	// secret (a projected Secret, never cleartext in this document). Required.
 	PasswordEnv string `json:"passwordEnv"`
 
 	// ConnectTimeoutSeconds bounds a single connect attempt. Defaults to 30.
@@ -167,18 +178,23 @@ func (c *Configuration) ApplyDefaults() {
 }
 
 // Validate enforces the semantic constraints, failing the load closed.
+// RenamedConfigKeys names the keys an earlier release accepted whose role another key now
+// plays, so a config left over from that release is refused with the replacement in the error
+// rather than as a bare unknown field. agentId made the old direct uplink's client id unique
+// per box; the gateway identity replaced that mode, and each box is now its own gateway
+// device, named by uplink.gatewayToken (with uplink.tenant and a "{tenant}:{credentialId}"
+// username beside it). The old key is refused, never stripped: the agent cannot run on the
+// old identity, so starting without it would only move the failure to CONNECT.
+func (c *Configuration) RenamedConfigKeys() map[string]string {
+	return map[string]string{"agentId": "uplink.gatewayToken"}
+}
+
 func (c *Configuration) Validate() error {
 	if c.InstanceId == "" {
 		return fmt.Errorf("instanceId is required")
 	}
 	if !instanceIdPattern.MatchString(c.InstanceId) {
 		return fmt.Errorf("instanceId %q is not token-safe (want %s)", c.InstanceId, instanceIdPattern)
-	}
-	if c.AgentId == "" {
-		return fmt.Errorf("agentId is required (it makes the uplink client id unique so two sites on one Instance do not kick each other)")
-	}
-	if !instanceIdPattern.MatchString(c.AgentId) {
-		return fmt.Errorf("agentId %q is not token-safe (want %s)", c.AgentId, instanceIdPattern)
 	}
 	if c.Local.StoreDir == "" {
 		return fmt.Errorf("local.storeDir is required (the durable spool must survive a restart)")
@@ -204,6 +220,9 @@ func (c *Configuration) Validate() error {
 	// reject it at load rather than resolve it silently one way.
 	if (c.Local.Username == "") != (c.Local.PasswordEnv == "") {
 		return fmt.Errorf("local.username and local.passwordEnv must be set together (or both omitted to leave the local MQTT listener open)")
+	}
+	if err := c.Uplink.validateIdentity(); err != nil {
+		return err
 	}
 	if c.Uplink.BrokerURL == "" {
 		return fmt.Errorf("uplink.brokerUrl is required")
@@ -239,6 +258,32 @@ func (c *Configuration) Validate() error {
 	}
 	if c.Uplink.ConnectTimeoutSeconds < 1 {
 		return fmt.Errorf("uplink.connectTimeoutSeconds must be >= 1")
+	}
+	return nil
+}
+
+// validateIdentity checks the gateway identity half of the uplink: the tenant and gateway
+// tokens are subject tokens (they become topic segments), and the username must be the
+// "{tenant}:{credentialId}" form the broker's callout parses, with this tenant.
+func (u *UplinkConfiguration) validateIdentity() error {
+	if u.Tenant == "" {
+		return fmt.Errorf("uplink.tenant is required (the tenant the gateway device belongs to)")
+	}
+	if !instanceIdPattern.MatchString(u.Tenant) {
+		return fmt.Errorf("uplink.tenant %q is not token-safe (want %s)", u.Tenant, instanceIdPattern)
+	}
+	if u.GatewayToken == "" {
+		return fmt.Errorf("uplink.gatewayToken is required (the token of the gateway device this agent authenticates as)")
+	}
+	if !instanceIdPattern.MatchString(u.GatewayToken) {
+		return fmt.Errorf("uplink.gatewayToken %q is not token-safe (want %s)", u.GatewayToken, instanceIdPattern)
+	}
+	if u.Username == "" || u.PasswordEnv == "" {
+		return fmt.Errorf("uplink.username and uplink.passwordEnv are required: the gateway authenticates as its own device with a credential")
+	}
+	prefix := u.Tenant + ":"
+	if !strings.HasPrefix(u.Username, prefix) || len(u.Username) == len(prefix) {
+		return fmt.Errorf("uplink.username %q must be %q followed by the gateway credential's id: the broker reads the tenant from the part before the colon, so a bare name is refused at CONNECT", u.Username, prefix+"<credentialId>")
 	}
 	return nil
 }

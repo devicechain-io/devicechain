@@ -48,7 +48,7 @@ func Run(ctx context.Context, hs *sim.Handshake, p Profile) (*Report, error) {
 	if err != nil {
 		return nil, err
 	}
-	counter := &graphqlEventCounter{session: rt.Session, endpoint: eventEndpoint}
+	counter := newRetryingCounter(&graphqlEventCounter{session: rt.Session, endpoint: eventEndpoint})
 	// Always on: the identity reconciliation is the check behind "every accepted event
 	// stored exactly once", and a gate that can be switched off is the defect it closes.
 	// The state check reads the same ledger.

@@ -161,7 +161,7 @@ namespace DeviceChain.Sitepulse.Tests
                 for (var i = 0; i < devices.Length; i++)
                 {
                     Board.SetBind(new BindResult { ExternalId = Ids[i], Outcome = BindOutcome.Bound, DeviceToken = Tokens[i] });
-                    Board.SetCredential(new CredentialOutcome { ExternalId = Ids[i], Ok = true, Path = CredentialPath.Batched });
+                    Board.SetCredential(new CredentialOutcome { ExternalId = Ids[i], Ok = true, Path = CredentialPath.Created });
                     var keys = i == 2 ? new[] { "throughput_tph", "plant_running" } : MeasurementKeys.Equipment.ToArray();
                     foreach (var key in keys) Observed.ApplyMeasurement(Tokens[i], key, 30.0, T0.AddSeconds(1), T0.AddSeconds(1), false);
                 }

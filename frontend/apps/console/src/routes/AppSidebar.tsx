@@ -14,10 +14,10 @@ import {
   Cpu,
   FileArchive,
   Filter,
+  House,
   Languages,
   Layers,
   LayoutDashboard,
-  LayoutGrid,
   Map,
   MapPin,
   Pentagon,
@@ -25,6 +25,7 @@ import {
   Palette,
   ScrollText,
   Send,
+  Rocket,
   ShieldCheck,
   SlidersHorizontal,
   Tags,
@@ -33,6 +34,7 @@ import {
   Users,
   Webhook,
   type LucideIcon,
+  KeyRound,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Logomark, LogoHorizontal } from '@/components/brand/Logo';
@@ -64,7 +66,7 @@ interface NavLeaf {
   labelKey: string;
   href: string;
   icon: LucideIcon;
-  // Authority required to see this item; omit for always-visible (e.g. Dashboard).
+  // Authority required to see this item; omit for always-visible (e.g. Home).
   requires?: string;
   // Names a gate beyond authority. 'updates' hides the item unless the update-management
   // area is KNOWN to be deployed and the caller may read it (see useUpdateAccess).
@@ -79,14 +81,14 @@ interface NavLeaf {
 
 type NavGroupNode = { labelKey: string; icon: LucideIcon; children: NavLeaf[] };
 
-// A top-level nav node is either a direct link (Dashboard) or a collapsible
+// A top-level nav node is either a direct link (Home) or a collapsible
 // group of leaves. Each model construct (Devices, and later Assets/Customers/
 // Areas) is one group whose children are its Instances / Types / Groups — so
 // adding a construct is a single config entry, not new layout code.
 type NavNode = NavLeaf | NavGroupNode;
 
 export const NAV: NavNode[] = [
-  { labelKey: 'dashboard', href: '/', icon: LayoutGrid, scoped: true },
+  { labelKey: 'home', href: '/', icon: House, scoped: true },
   { labelKey: 'dashboards', href: '/dashboards', icon: LayoutDashboard, requires: 'dashboard:read', scoped: true },
   { labelKey: 'alarms', href: '/alarms', icon: AlertTriangle, requires: 'alarm:read', scoped: true },
   // Who gets paged for an alarm, and when they are left alone. notification-management has its
@@ -166,6 +168,7 @@ export const NAV: NavNode[] = [
     icon: UploadCloud,
     children: [
       { labelKey: 'artifacts', href: '/updates/artifacts', icon: FileArchive, requires: 'artifact:read', gate: 'updates' },
+      { labelKey: 'rollouts', href: '/updates/rollouts', icon: Rocket, requires: 'artifact:read', gate: 'updates' },
       { labelKey: 'signers', href: '/updates/signers', icon: ShieldCheck, requires: 'artifact:read', gate: 'updates' },
     ],
   },
@@ -193,6 +196,9 @@ export const NAV: NavNode[] = [
       // grants (member:read, role:read), for the same reason the rest of this group is
       // split by grant.
       { labelKey: 'members', href: '/members', icon: Users, requires: 'member:read' },
+      // The tenant's integrations: non-human principals, administered with the same grant
+      // as its people.
+      { labelKey: 'serviceAccounts', href: '/service-accounts', icon: KeyRound, requires: 'member:read' },
       { labelKey: 'roles', href: '/roles', icon: UserCog, requires: 'role:read' },
       { labelKey: 'branding', href: '/branding', icon: Palette, requires: 'branding:write' },
       // Labelled "Map", not "Basemap": inside Settings the longer name is redundant,

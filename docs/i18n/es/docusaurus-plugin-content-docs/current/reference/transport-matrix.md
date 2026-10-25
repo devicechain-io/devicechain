@@ -82,11 +82,21 @@ hay ningún bróker aparte que operar.
   `JetStreamDurableStalledBehindStream` lo informa mientras la canalización no lee el stream de
   captura, y `JetStreamDurableLostUnread` cuando vuelve a leerlo.
 
+  Lo mismo ocurre sin ningún rechazo cuando `event-sources` simplemente se queda atrás respecto al ritmo de los dispositivos con
+  carga sostenida. En una prueba de carga con tráfico HTTP y MQTT combinado en una instalación por defecto, sin reinicio del
+  broker, el stream de captura se llenó y se perdió entre el 7 y el 13 % del tráfico MQTT, todo él ya confirmado.
+  `devicechain_<area>_jetstream_consumer_unread_skipped_total` lo cuenta, `JetStreamDurableLostUnread` alerta sobre ello, y
+  `JetStreamCaptureBacklogGrowing` y `JetStreamCaptureBacklogWillOverflow` avisan antes de que el stream se llene.
+
   Un tercer agujero es la propia elección de líder del stream de captura. El broker entrega cada
   publicación QoS 1 al stream de captura sin respuesta, después de que el dispositivo ya tiene su
-  PUBACK. Si el stream cambia de líder bajo carga, las publicaciones que llegan mientras no tiene
-  ninguno, varios segundos, no se guardan en ningún sitio y ningún contador las registra. En una
-  prueba de 12 000 eventos por segundo, un cambio así perdió unos cinco segundos de eventos.
+  PUBACK. Si el stream cambia de líder, con cualquier carga, las publicaciones que llegan mientras no
+  tiene ninguno, varios segundos, no se guardan en ningún sitio y ningún contador las registra. Un
+  reinicio progresivo del broker reinicia todos los servidores, también el líder, así que cada uno,
+  incluidos los que hace una actualización, abre esta ventana. En una prueba de 12 000 eventos por
+  segundo, un cambio así perdió unos cinco segundos de eventos; en un ensayo de actualización con
+  cuatro dispositivos que enviaban 20 mensajes por segundo entre todos, se perdieron 11 de 11 262
+  mensajes confirmados durante los reinicios del broker.
   `JetStreamCaptureLeaderChanged` avisa de que hubo un cambio mientras llegaban eventos; los
   eventos perdidos no se pueden recuperar, y la hora del cambio acota la ventana que revisar en los
   registros de sus propios dispositivos.
@@ -97,7 +107,8 @@ hay ningún bróker aparte que operar.
   informes de dispositivo QoS 1 del propio almacén de mensajes del bróker. Un almacén lleno rechaza
   la publicación, y uno cuyo líder está cambiando no la confirma, así que el dispositivo no recibe
   PUBACK y la vuelve a enviar. Las publicaciones QoS 0 mantienen el comportamiento anterior, y un
-  mensaje por encima del techo del inquilino se sigue descartando después de su PUBACK. Consulte
+  mensaje por encima del techo del inquilino se sigue descartando después de su PUBACK. `dcctl bootstrap` y
+  `dcctl upgrade` lo activan con `--mqtt-fail-closed`. Consulte
   [calidad de servicio](../guides/connecting-a-device.md#quality-of-service) y
   [MQTT a prueba de fallos](../deployment/observability.md#mqtt-fail-closed).
 - **Escritura ◐**: los comandos se entregan, pero la entrega es **solo en vivo y sin
@@ -110,6 +121,8 @@ hay ningún bróker aparte que operar.
 - **Lectura ○**: no hay ninguna primitiva de petición/respuesta iniciada por la plataforma. Puedes
   expresar una lectura como un comando cuya respuesta lleve el valor, pero eso es un vocabulario
   que tú defines en el perfil del dispositivo, no algo que aporte el transporte.
+
+- **Pasarelas.** Un dispositivo puede representar a otros. El [agente de borde](../deployment/edge-services.md#gateway-identity) inicia sesión como dispositivo pasarela y publica los eventos de cada dispositivo en el [espacio de nombres de pasarela](./device-protocol.md#gateway-namespace). La plataforma acepta un evento solo para un dispositivo asignado a esa pasarela, y rechaza cualquier otro de forma visible (el motivo `NotGatewayChild`, un contador y un aviso a la pasarela) en lugar de dejar que el broker lo confirme y lo descarte. Los comandos a dispositivos tras una pasarela aún no se enrutan.
 
 ### HTTP
 

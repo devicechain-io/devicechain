@@ -211,7 +211,8 @@ func (o *OptionalInt32) UnmarshalGraphQL(input any) error {
 	// type depends on how the request arrived: a query literal is decoded by the
 	// parser, a variable by encoding/json. Accepting the whole plausible set here is
 	// what keeps a literal and a variable behaving identically — which is exactly
-	// the class of divergence that made the unknown-input-field fork necessary.
+	// the class of divergence behind the unknown-input-field defect (fixed upstream in
+	// graphql-go v1.10.3, graph-gophers/graphql-go#765).
 	switch v := input.(type) {
 	case int32:
 		o.Value = &v
@@ -403,7 +404,7 @@ func ClearedID() OptionalID                { return OptionalID{Set: true} }
 // documents are whole-object at all 246 update call sites and none per-field, and the
 // SDKs and dcctl build the input as one object because that is what codegen produces. So
 // the exposure is a client someone writes by hand. Making the library refuse an
-// unsupplied variable in a literal slot is a fork candidate; until then, a service adding
+// unsupplied variable in a literal slot would need an upstream change; until then, a service adding
 // a list field should not invite the per-field shape in its own documentation.
 type OptionalStringList struct {
 	// Set is true only when the field was PRESENT in the request, whether its value

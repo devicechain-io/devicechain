@@ -8,18 +8,27 @@
 
 import type { MeasurementSample, WidgetInstance, WidgetType } from '@devicechain/dashboards';
 import type { MeasurementStreamState } from '@devicechain/widget-sdk';
-import { cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { Battery, BATTERY_FILL_WIDTH } from './widgets/battery';
 import { LevelGauge } from './widgets/level-gauge';
 import { LinearGauge } from './widgets/linear-gauge';
+import { SETTLE_MS } from './no-reading';
 import { SignalBars } from './widgets/signal-bars';
 import { StatusLight } from './widgets/status-light';
+
+// An explained empty state waits a moment (a board still loading has no reading yet) before it says why.
+function settle() {
+  act(() => {
+    vi.advanceTimersByTime(SETTLE_MS);
+  });
+}
 
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 const widget = (type: WidgetType, options: Record<string, unknown>): WidgetInstance => ({
@@ -188,13 +197,16 @@ describe('linear-gauge', () => {
   });
 
   it('says why it cannot draw instead of drawing a fake value', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     render_(opts, 'none');
-    expect(screen.getByText('No data')).toBeTruthy();
+    settle();
+    expect(screen.getByText('No data in this range')).toBeTruthy();
     expect(q('[data-fill]')).toBeNull();
     expect(q('[role="meter"]')).toBeNull();
     cleanup();
     render_(opts, null);
-    expect(screen.getByText('No data')).toBeTruthy();
+    settle();
+    expect(screen.getByText('No data in this range')).toBeTruthy();
     expect(screen.queryByText('0')).toBeNull();
   });
 
@@ -310,12 +322,14 @@ describe('level-gauge', () => {
   });
 
   it('refuses to guess the capacity, and to show a level it does not have', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     render_({}, 50);
     expect(screen.getByText('Set min and max')).toBeTruthy();
     expect(q('[data-liquid]')).toBeNull();
     cleanup();
     render_(opts, 'none');
-    expect(screen.getByText('No data')).toBeTruthy();
+    settle();
+    expect(screen.getByText('No data in this range')).toBeTruthy();
     expect(q('[data-liquid]')).toBeNull();
   });
 });
@@ -373,8 +387,10 @@ describe('battery', () => {
   });
 
   it('shows no charge rather than 0% when it has no reading', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     render_({}, 'none');
-    expect(screen.getByText('No data')).toBeTruthy();
+    settle();
+    expect(screen.getByText('No data in this range')).toBeTruthy();
     expect(q('[data-fill-bar]')).toBeNull();
     expect(screen.queryByText('0')).toBeNull();
   });
@@ -527,8 +543,10 @@ describe('signal-bars', () => {
   });
 
   it('shows no bars rather than an empty signal when it has no reading', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     render_({ thresholds: steps }, 'none');
-    expect(screen.getByText('No data')).toBeTruthy();
+    settle();
+    expect(screen.getByText('No data in this range')).toBeTruthy();
     expect(bars('lit') + bars('unlit')).toBe(0);
   });
 });

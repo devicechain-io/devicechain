@@ -75,7 +75,7 @@ func TestTheCaptureStreamRefusesASecondConsumer(t *testing.T) {
 	nmgr, _ := recorderRig(t, srv, uniqueArea("wq-one"), recordNothing, captureSuffix)
 	_, err := nmgr.js.AddConsumer(captureStreamOn("test"), &nats.ConsumerConfig{
 		Durable: "another", AckPolicy: nats.AckExplicitPolicy,
-		FilterSubject: StreamSubject("test", captureSuffix),
+		FilterSubject: DeviceEventsWildcard("test"),
 	})
 	require.Error(t, err, "a second consumer was attached to a work-queue stream with an overlapping filter")
 }

@@ -20,6 +20,11 @@
 //	NATS_SERVICE_PASSWORD='...'            # PLAINTEXT dc_service login → services (helm Secret)
 //	NATS_SERVICE_PASSWORD_BCRYPT='$2a$...' # bcrypt hash of the same → broker config (tofu)
 //
+// The two service-password lines are the TRANSITIONAL shared login (natsauth.ServiceUser), which
+// dcctl no longer mints into a fresh instance: it gives every area a login of its own and renders
+// the broker without the shared one. This helper stays for the shell bring-up that has no per-area
+// logins, which is the only broker that still wants a shared login.
+//
 // The issuer/seed/password use the nkey/hex alphabet, but the bcrypt hash contains
 // '$' (and '/', '.'), so every value is emitted in SINGLE quotes: the shell treats
 // the '$' literally on `eval`, with no variable expansion. The bcrypt alphabet

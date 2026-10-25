@@ -11,13 +11,14 @@ artefacto a un dispositivo, envía al dispositivo lo que necesita para obtener l
 
 :::note Estado
 **Disponible hoy:** el catálogo de artefactos con una subida en streaming verificada, la asignación
-a un dispositivo cada vez, una descarga reanudable mediante una concesión de corta duración y el
-seguimiento de cada intento con plazos. La consola tiene pantallas para los artefactos y los
-firmantes, y una pestaña Actualizaciones en cada dispositivo para asignar una actualización y
+a un dispositivo cada vez, [despliegues](#rollouts) que asignan un artefacto a un grupo de dispositivos,
+un número limitado de dispositivos a la vez, con pausa, reanudación, aborto y umbral de fallos, una descarga reanudable mediante una concesión de corta duración y el
+seguimiento de cada intento con plazos. La consola tiene pantallas para los artefactos, los
+firmantes y los despliegues, y una pestaña Actualizaciones en cada dispositivo para asignar una actualización y
 seguirla; consulta [Actualizaciones](../user-guide/updates.md) en la guía de usuario.
 
-**Todavía no:** no hay despliegue por flota (asignación escalonada o por porcentaje a muchos dispositivos),
-y los dispositivos que solo usan HTTP no pueden recibir actualizaciones, porque las asignaciones viajan
+**Todavía no:** los despliegues no tienen oleadas, promoción canario, programaciones ni ventanas de
+mantenimiento, y los dispositivos que solo usan HTTP no pueden recibir actualizaciones, porque las asignaciones viajan
 por el canal MQTT del dispositivo. Por la misma razón, los dispositivos [LwM2M](./lwm2m.md) y
 [Sparkplug](./sparkplug.md) tampoco pueden recibirlas; el firmware de un dispositivo LwM2M se
 impulsa en cambio con comandos ordinarios.
@@ -121,6 +122,58 @@ rechaza: una instalación no se puede revocar.
 Leer el catálogo, las asignaciones y los firmantes requiere `artifact:read`. Cambiar el catálogo, asignar y
 adjuntar una firma requieren `artifact:write`. Registrar o revocar un firmante requiere `artifact:trust`, que
 está separado a propósito: poder publicar un binario no incluye decidir qué firma lo hace de confianza.
+
+## Desplegar en un grupo {#rollouts}
+
+Un **despliegue** asigna un artefacto a los dispositivos de un [grupo de dispositivos](../user-guide/groups-facets-browse.md),
+un número limitado a la vez, y se puede pausar, reanudar y abortar.
+
+1. `createUpdateRollout(request)` lo declara como `DRAFT`: el artefacto (que debe estar `AVAILABLE` y
+   poder asignarse, igual que con `assignArtifact`), el grupo, `maxInFlight` (de 1 a 1000) y un
+   `failureThreshold` opcional. Todavía no se resuelve ni se envía nada.
+2. `startUpdateRollout(token)` **fija los miembros del grupo** como dispositivos del despliegue y lo pasa
+   a `RUNNING`. Un dispositivo que se una al grupo después no forma parte del despliegue, y uno que salga
+   sigue siendo destino; inicia un despliegue nuevo para llegar a los recién llegados. Un grupo dinámico
+   se resuelve desde su versión publicada, que el despliegue registra. Un grupo de más de 10.000
+   dispositivos se rechaza (`ROLLOUT_TOO_LARGE`) en lugar de recortarse.
+3. Después el servicio asigna el artefacto a los dispositivos en orden, sin dejar nunca que más de
+   `maxInFlight` tengan una actualización sin terminar. Cada dispositivo pasa por las mismas reglas que
+   `assignArtifact`: un dispositivo que no existe, está deshabilitado, tiene un perfil incompatible o
+   está ocupado con otra actualización se **omite** con el código de ese rechazo (`DEVICE_NOT_FOUND`,
+   `DEVICE_DISABLED`, `INCOMPATIBLE_PROFILE`, `UPDATE_IN_PROGRESS`) y no ocupa plaza. Un dispositivo que
+   ya está trabajando en el mismo artefacto, o que ya se actualizó a él, se cuenta con la asignación que
+   tiene en lugar de recibir la orden otra vez.
+4. El despliegue queda `COMPLETED` cuando no hay ningún dispositivo esperando y ninguno tiene una
+   actualización sin terminar.
+
+El resultado de un dispositivo es siempre su propio intento de actualización: `SUCCEEDED` cuando llegó a
+`UPDATED`, `FAILED` para `FAILED` o `TIMED_OUT`, y `UNKNOWN` mientras el resultado es desconocido. **Un
+dispositivo `UNKNOWN` conserva su plaza** dentro de `maxInFlight` y cuenta como fallo, porque puede haber
+instalado la actualización y no haber vuelto.
+
+| Control | Qué hace | Qué no hace |
+| --- | --- | --- |
+| `pauseUpdateRollout` | Ningún dispositivo más recibe la orden de actualizar. | Los dispositivos que ya se están actualizando continúan. |
+| `resumeUpdateRollout` | El envío continúa. | No pone a cero el recuento de fallos: tras una pausa por umbral se rechaza (`ROLLOUT_FAILURE_THRESHOLD_REACHED`) salvo que pases un `failureThreshold` más alto. |
+| `abortUpdateRollout` | Los dispositivos que aún no recibieron la orden quedan `CANCELLED` y el despliegue termina para siempre. | Los dispositivos que ya se están actualizando terminan, y se siguen mostrando. Cancela cualquiera de ellos con `cancelUpdate`. |
+
+Cuando el número de dispositivos fallidos y desconocidos alcanza `failureThreshold`, el despliegue se
+pausa solo con el motivo `FAILURE_THRESHOLD`. También se pausa con `ARTIFACT_NOT_ASSIGNABLE` si el
+artefacto se retira, o pierde la firma que exige esta instancia, mientras está en curso.
+
+`updateRollout(token)` y `updateRollouts(criteria)` devuelven cada despliegue con su `progress` (recuentos
+de dispositivos pendientes, en curso, correctos, fallidos, desconocidos, cancelados y omitidos), y
+`updateRolloutTargets(token, criteria)` pagina sus dispositivos con su resultado, filtrables por
+resultado. Los despliegues necesitan las mismas autoridades que las asignaciones individuales:
+`artifact:read` para leerlos y `artifact:write` para crearlos y controlarlos. Un miembro limitado a
+algunos clientes no puede ver ni controlar despliegues, porque un despliegue abarca dispositivos fuera
+del alcance de ese miembro. Cada inicio, pausa, reanudación y aborto queda en el
+[registro de auditoría](../user-guide/audit.md) a nombre de quien lo hizo.
+
+Los despliegues siguen en marcha tras un reinicio y con varias réplicas del servicio: cada réplica hace
+avanzar los despliegues en curso cada pocos segundos, y un despliegue lo hace avanzar una sola réplica a
+la vez, así que el límite se respeta haya las réplicas que haya. Las oleadas, las programaciones y las
+ventanas de mantenimiento para despliegues todavía no están disponibles.
 
 ## Cómo avanza un intento {#states}
 

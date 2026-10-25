@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -197,22 +196,4 @@ func TestTheSysLoginIsRefusedEverythingElse(t *testing.T) {
 			require.NoError(t, err, "an unrestricted login is answered on %s", s)
 		}
 	})
-}
-
-// The infrastructure module renders the lists as literals (HCL cannot call Go). Hold the two
-// in step, and hold the SYS user to them.
-func TestSysPermissionsMatchTheInfrastructureModule(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "deploy", "opentofu", "modules", "nats", "main.tf"))
-	require.NoError(t, err)
-	tf := string(raw)
-	for name, want := range map[string][]string{
-		"sys_publish_allow":   SysPublishAllow(),
-		"sys_subscribe_allow": SysSubscribeAllow(),
-	} {
-		m := regexp.MustCompile(`(?m)^\s*` + name + `\s*=\s*\[(.*)\]\s*$`).FindStringSubmatch(tf)
-		require.NotNil(t, m, "main.tf must define local %s", name)
-		require.Equal(t, quotedList(want), strings.TrimSpace(m[1]), "local %s must carry natsauth's list verbatim", name)
-	}
-	require.Regexp(t, `permissions\s*=\s*\{\s*publish\s*=\s*\{\s*allow\s*=\s*local\.sys_publish_allow\s*\},\s*subscribe\s*=\s*\{\s*allow\s*=\s*local\.sys_subscribe_allow\s*\}\s*\}`,
-		tf, "the dc_sys user must be given both allow lists")
 }

@@ -698,6 +698,15 @@ func deployedBrokerHashesIn(ctx context.Context, typed kubernetes.Interface, nam
 				out.Sys = m[1]
 			case natsauth.IdentityUser:
 				out.Identity = m[1]
+			default:
+				// The per-area and administrator logins, by username. Anything else with a hash
+				// is not ours to read and is left out.
+				if isNatsLoginUser(m[2]) {
+					if out.Logins == nil {
+						out.Logins = map[string]string{}
+					}
+					out.Logins[m[2]] = m[1]
+				}
 			}
 		}
 	}
@@ -764,6 +773,12 @@ func deployedInstanceConfigVia(ctx context.Context, typed kubernetes.Interface, 
 				return nil, err
 			}
 			cfg.Infrastructure.Nats.Auth.IdentityPassword = identity
+			// ...and each area's own login, from the Secret only that area mounts.
+			logins, err := readNatsLoginPasswords(ctx, typed, candidate, instanceId)
+			if err != nil {
+				return nil, err
+			}
+			cfg.Infrastructure.Nats.Auth.AreaPasswords = logins
 			return cfg, nil
 		case apierrors.IsNotFound(err):
 			continue

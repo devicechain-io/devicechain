@@ -8,6 +8,9 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
+
+	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 )
 
 // maxTokenBodyBytes caps the token-request body (a small set of form fields).
@@ -65,10 +68,16 @@ func extractClientCredentials(r *http.Request) (clientCredentials, *oauthError) 
 // and grant implementations are injected (like ServiceTokenHandler) so the HTTP
 // shaping is unit-testable without a live store; each returns an *oauthError to
 // select the RFC 6749 §5.2 error code + status, or a generic error → server_error.
+//
+// The client_credentials grant (a tenant's service account) is dispatched BEFORE that client
+// authentication, because it authenticates a different principal: clientCredentials checks
+// the secret against the service accounts, never against the OAuth clients, and the other
+// grants never against the service accounts. The grant type decides the table.
 func TokenHandler(
 	authenticateClient func(ctx context.Context, clientID, secret string, presented bool) error,
 	redeemCode func(ctx context.Context, code, clientID, redirectURI, codeVerifier string) (*OAuthTokens, error),
 	refreshGrant func(ctx context.Context, refreshToken, scope, clientID string) (*OAuthTokens, error),
+	clientCredentials func(ctx context.Context, req ClientCredentialsRequest) (*OAuthTokens, error),
 ) http.Handler {
 	return BoundRequests(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -87,6 +96,29 @@ func TokenHandler(
 		creds, cerr := extractClientCredentials(r)
 		if cerr != nil {
 			writeTokenError(w, cerr)
+			return
+		}
+		if r.PostForm.Get("grant_type") == "client_credentials" {
+			if clientCredentials == nil {
+				writeTokenError(w, &oauthError{Code: "unsupported_grant_type", Desc: "unsupported grant_type client_credentials", Status: http.StatusBadRequest})
+				return
+			}
+			tokens, err := clientCredentials(r.Context(), ClientCredentialsRequest{
+				ClientID: creds.clientID, Secret: creds.secret, Presented: creds.presented,
+				Scope: r.PostForm.Get("scope"), Resources: r.PostForm["resource"],
+				Source: gqlcore.RequestSourceAddr(r),
+			})
+			if err != nil {
+				writeGrantError(w, err)
+				return
+			}
+			if tokens == nil || tokens.RefreshToken != "" {
+				// A service account never receives a refresh token; one here is a defect,
+				// refused rather than handed out.
+				writeTokenError(w, errServer("internal error"))
+				return
+			}
+			writeTokenSuccess(w, tokens)
 			return
 		}
 		if err := authenticateClient(r.Context(), creds.clientID, creds.secret, creds.presented); err != nil {
@@ -172,6 +204,9 @@ func writeTokenError(w http.ResponseWriter, e *oauthError) {
 	w.Header().Set("Pragma", "no-cache")
 	if e.Code == "invalid_client" {
 		w.Header().Set("WWW-Authenticate", `Basic realm="oauth", charset="UTF-8"`)
+	}
+	if e.RetryAfter > 0 {
+		w.Header().Set("Retry-After", strconv.Itoa(e.RetryAfter))
 	}
 	w.WriteHeader(e.Status)
 	_ = json.NewEncoder(w).Encode(tokenErrorResponse{Error: e.Code, ErrorDescription: e.Desc})

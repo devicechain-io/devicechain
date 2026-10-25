@@ -31,7 +31,7 @@ import (
 // the cluster holds rather than against a restatement of them.
 func deployedInstance(t *testing.T) (*config.InstanceConfiguration, natsauth.Credentials, string) {
 	t.Helper()
-	creds, err := natsauth.GenerateCredentials()
+	creds, err := existingCredentials()
 	if err != nil {
 		t.Fatalf("generating credentials for the fake deployed instance: %v", err)
 	}
@@ -172,11 +172,29 @@ func TestARerunDiscardsABrokerHashThatDoesNotVerify(t *testing.T) {
 // The reuse branch must not have swallowed the fresh-install path: a first bootstrap
 // still mints, and mints something different every time.
 func TestAFreshInstallStillMintsBrokerCredentials(t *testing.T) {
+	useRealCredentialGeneration(t)
 	first := rerun(t, nil)
 	second := rerun(t, nil)
 
+	// 🔴 A FRESH INSTALL NEVER HAS THE SHARED LOGIN: nothing of it is minted into the run, and every
+	// principal has a login of its own instead.
+	for _, st := range []*State{first, second} {
+		for _, key := range []string{"natsServicePassword", "natsServicePasswordBcrypt"} {
+			if st.Values[key] != "" {
+				t.Errorf("a fresh install carries %s, so the shared login exists on it", key)
+			}
+		}
+		if st.Values[areaLoginsEnabledValue] != "true" {
+			t.Error("a fresh install without the shared login must tell every area to use its own")
+		}
+		if err := requireEveryPrincipalHasALogin(loginsInValues(st)); err != nil {
+			t.Error(err)
+		}
+		if err := checkSharedLoginHasSuccessors(st); err != nil {
+			t.Error(err)
+		}
+	}
 	for _, key := range []string{
-		"natsServicePassword", "natsServicePasswordBcrypt",
 		"natsSysPassword", "natsSysPasswordBcrypt",
 		"natsCalloutIssuerSeed", "natsCalloutIssuerPublic", "serviceAuthSecret",
 	} {
@@ -189,9 +207,8 @@ func TestAFreshInstallStillMintsBrokerCredentials(t *testing.T) {
 	}
 	// The seed and the public key must belong to each other, or the broker trusts an
 	// issuer that nothing signs with.
-	derived, err := natsauth.CredentialsFromDeployed(
-		first.Values["natsCalloutIssuerSeed"], first.Values["natsServicePassword"],
-		first.Values["natsSysPassword"], natsauth.DeployedHashes{})
+	derived, err := natsauth.CredentialsFromDeployedWithoutSharedLogin(
+		first.Values["natsCalloutIssuerSeed"], first.Values["natsSysPassword"], natsauth.DeployedHashes{})
 	if err != nil {
 		t.Fatalf("the minted seed is not usable: %v", err)
 	}
@@ -322,7 +339,7 @@ func TestParseDeployedConfigReadsAWellFormedInstance(t *testing.T) {
 // Preferring the config is a no-op plus a record repair.
 func TestADeployedInstanceBeatsTheLocalRecord(t *testing.T) {
 	cfg, creds, _ := deployedInstance(t)
-	other, err := natsauth.GenerateCredentials()
+	other, err := otherExistingCredentials()
 	if err != nil {
 		t.Fatalf("generating the record's credentials: %v", err)
 	}
@@ -350,7 +367,7 @@ func TestADeployedInstanceBeatsTheLocalRecord(t *testing.T) {
 // The case the whole file exists for: no instance config (the run died before step 5) but a
 // live broker configured in step 3, whose credentials only this record still holds.
 func TestNoInstanceConfigButARecordReusesTheBrokersCredentials(t *testing.T) {
-	creds, err := natsauth.GenerateCredentials()
+	creds, err := existingCredentials()
 	if err != nil {
 		t.Fatalf("generating credentials: %v", err)
 	}
@@ -392,8 +409,12 @@ func TestNoInstanceConfigAndNoRecordStillMints(t *testing.T) {
 	if err := stepRenderConfig(t.Context(), st); err != nil {
 		t.Fatalf("stepRenderConfig: %v", err)
 	}
-	if st.Values["natsCalloutIssuerSeed"] == "" || st.Values["natsServicePassword"] == "" {
+	if st.Values["natsCalloutIssuerSeed"] == "" || st.Values["natsSysPassword"] == "" ||
+		requireEveryPrincipalHasALogin(loginsInValues(st)) != nil {
 		t.Fatal("a fresh install did not mint broker credentials")
+	}
+	if st.Values["natsServicePassword"] != "" {
+		t.Fatal("a fresh install minted the shared login, which it must never have")
 	}
 }
 
@@ -404,7 +425,7 @@ func TestNoInstanceConfigAndNoRecordStillMints(t *testing.T) {
 func TestARecordDoesNotRescueAnInstanceMissingItsBrokerCredentials(t *testing.T) {
 	cfg := &config.InstanceConfiguration{}
 	cfg.Infrastructure.Secrets.RootKey = testRootKey
-	creds, err := natsauth.GenerateCredentials()
+	creds, err := existingCredentials()
 	if err != nil {
 		t.Fatalf("generating credentials: %v", err)
 	}
@@ -427,7 +448,7 @@ func TestARecordDoesNotRescueAnInstanceMissingItsBrokerCredentials(t *testing.T)
 // bridge copy of a live half-bootstrapped broker's credentials — strictly worse than the
 // defect the record fixes. It reads and reports instead.
 func TestADryRunNeverWritesTheRecord(t *testing.T) {
-	creds, err := natsauth.GenerateCredentials()
+	creds, err := existingCredentials()
 	if err != nil {
 		t.Fatalf("generating credentials: %v", err)
 	}
@@ -488,7 +509,7 @@ func TestAnUnusableRecordMintsRatherThanFailingTheRun(t *testing.T) {
 
 	// 🔑 THE COUNTERWEIGHT: a USABLE record with the same shape is still reused, so this
 	// test is about the seed being bad rather than about the record branch being dead.
-	good, err := natsauth.GenerateCredentials()
+	good, err := existingCredentials()
 	if err != nil {
 		t.Fatalf("generating credentials: %v", err)
 	}
@@ -510,7 +531,7 @@ func TestAnUnusableRecordMintsRatherThanFailingTheRun(t *testing.T) {
 // healthy instance, "reused from the record" names the wrong one. It reports the record's
 // existence and mints throwaway values, exactly as it does for the instance config.
 func TestADryRunReportsTheRecordWithoutClaimingItWasUsed(t *testing.T) {
-	creds, err := natsauth.GenerateCredentials()
+	creds, err := existingCredentials()
 	if err != nil {
 		t.Fatalf("generating credentials: %v", err)
 	}

@@ -67,16 +67,21 @@ title: 传输能力矩阵
   流水线尚未读取捕获流时，`JetStreamDurableStalledBehindStream` 会报告此事；
   恢复读取后则由 `JetStreamDurableLostUnread` 报告。
 
+  即使没有任何拒绝，只要 `event-sources` 在持续负载下跟不上设备的发送速率，同样会发生这种情况。在一次对默认安装进行的 HTTP 与 MQTT 混合流量负载测试中，没有代理重启，捕获流写满，约 7% 到 13% 的 MQTT 流量（全部已被确认）丢失。
+  `devicechain_<area>_jetstream_consumer_unread_skipped_total` 会统计这些丢失，`JetStreamDurableLostUnread` 会对此告警，`JetStreamCaptureBacklogGrowing` 和 `JetStreamCaptureBacklogWillOverflow` 会在流写满之前发出警告。
+
   第三个漏洞是捕获流自身的主节点选举。代理在设备收到 PUBACK 之后，才把每条 QoS 1 发布无应答地交给捕获流。
-  若该流在负载下更换主节点，没有主节点的那几秒内到达的发布不会存到任何地方，也没有任何计数器记录。
-  在每秒 12,000 个事件的测试中，一次这样的切换丢失了约五秒的事件。
+  若该流更换主节点（与负载高低无关），没有主节点的那几秒内到达的发布不会存到任何地方，也没有任何计数器记录。
+  代理的滚动重启会重启每台服务器，包括主节点，因此每次滚动（包括升级时的滚动）都会打开这个窗口。
+  在每秒 12,000 个事件的测试中，一次这样的切换丢失了约五秒的事件；在一次升级演练中，四台设备合计每秒发送
+  20 条消息，代理重启期间 11,262 条已确认消息中丢失了 11 条。
   `JetStreamCaptureLeaderChanged` 会报告有事件到达时发生过切换；丢失的事件无法恢复，
   切换发生的时间界定了需要在设备自身记录中核对的范围。
 
   实例设置 `infrastructure.nats.mqttFailClosed`（默认关闭）可为 QoS 1 堵上第二和第三个漏洞。
   开启后，QoS 1 PUBACK 意味着平台已保存该消息：平台从代理自身的消息存储中读取 QoS 1 事件、命令响应和设备报告。
   存储写满时会拒绝发布，主节点切换中的存储则不会确认发布，因此设备收不到 PUBACK，会重新发送。
-  QoS 0 发布保持上述行为，超出租户上限的消息仍会在 PUBACK 之后被丢弃。参见
+  QoS 0 发布保持上述行为，超出租户上限的消息仍会在 PUBACK 之后被丢弃。`dcctl bootstrap` 和 `dcctl upgrade` 用 `--mqtt-fail-closed` 开启它。参见
   [服务质量](../guides/connecting-a-device.md#quality-of-service)和
   [MQTT 故障关闭](../deployment/observability.md#mqtt-fail-closed)。
 - **写入 ◐**：命令可以送出，但投递**仅面向当前在线连接，且没有确认**。
@@ -85,6 +90,8 @@ title: 传输能力矩阵
   设备答复后命令才算完成，参见[响应命令](../guides/connecting-a-device.md#responding-to-a-command)。
 - **读取 ○**：不存在由平台发起的请求/响应原语。你可以把读取表达为响应携带数值的命令，
   但那是你在设备配置文件上定义的协议词汇，并非传输自身提供的能力。
+
+- **网关。** 一台设备可以代表其他设备。[边缘代理](../deployment/edge-services.md#gateway-identity)以网关设备的身份登录，并在[网关命名空间](./device-protocol.md#gateway-namespace)中发布每台设备的事件。平台只接受分配给该网关的设备的事件，并明确地拒绝其他事件（原因 `NotGatewayChild`、一个计数器和一条发给网关的通知），而不是让消息代理确认后丢弃。目前尚不路由发往网关后设备的命令。
 
 ### HTTP {#http}
 

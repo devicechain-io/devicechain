@@ -61,6 +61,7 @@ func renderShutdownBudget(t *testing.T, overrides map[string]interface{}) (drain
 
 // The chart's own defaults must arrive in the struct, on the fields they name.
 func TestChartShutdownBudgetReachesTheStruct(t *testing.T) {
+	t.Parallel()
 	drain, grace := renderShutdownBudget(t, nil)
 
 	if drain == nil {
@@ -78,6 +79,7 @@ func TestChartShutdownBudgetReachesTheStruct(t *testing.T) {
 // 🔴 And an OVERRIDDEN pair must arrive too. Defaults alone cannot catch a chart
 // that hard-codes the numbers, because the hard-coded ones would be the defaults.
 func TestChartOverriddenShutdownBudgetReachesTheStruct(t *testing.T) {
+	t.Parallel()
 	drain, grace := renderShutdownBudget(t, map[string]interface{}{
 		"shutdownDrainSeconds":          9,
 		"terminationGracePeriodSeconds": 45,

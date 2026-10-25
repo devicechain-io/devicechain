@@ -19,7 +19,7 @@ require (
 	github.com/go-gormigrate/gormigrate/v2 v2.1.7 // indirect
 	github.com/go-sql-driver/mysql v1.8.1 // indirect
 	github.com/google/go-tpm v0.9.8 // indirect
-	github.com/graph-gophers/graphql-go v1.10.2 // indirect
+	github.com/graph-gophers/graphql-go v1.10.3 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/pgx/v5 v5.11.0 // indirect
@@ -67,5 +67,3 @@ replace github.com/devicechain-io/dc-microservice => ../../core
 replace github.com/devicechain-io/dc-event-sources => ../event-sources
 
 replace github.com/devicechain-io/dc-k8s => ../../k8s
-
-replace github.com/graph-gophers/graphql-go => github.com/devicechain-io/graphql-go v1.10.2-dc.2

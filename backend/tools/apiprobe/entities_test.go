@@ -169,8 +169,11 @@ func TestTheTableCoversEveryCreateMutation(t *testing.T) {
 		t.Fatal("no create mutations were found in the schemas; the probe is broken, not the table")
 	}
 
+	// Every phase is the drill: a create that needs a published parent or an uploaded artifact
+	// (createUpdateRollout needs both) lives in the after-publish tail and is seeded and
+	// verified like any other row.
 	covered := map[string]bool{}
-	for _, e := range entities {
+	for _, e := range allEntities() {
 		covered[e.Mutation] = true
 	}
 	for name := range declared {

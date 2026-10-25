@@ -79,7 +79,7 @@ func TestAnOversizedResponseSaysSoInsteadOfFailingToParse(t *testing.T) {
 // 🔴 DETECTING OVERFLOW MEANS READING ONE BYTE PAST THE CAP, WHICH IS EXACTLY THE PLACE
 // AN OFF-BY-ONE LIVES. Rejecting the oversized case is only safe while a response that
 // is precisely as large as the limit still decodes untouched — otherwise the fix for a
-// truncation bug is a new truncation bug at a different byte. Same shape as the fork's
+// truncation bug is a new truncation bug at a different byte. Same shape as graphql-go's
 // TestValidInputIsNotRejected: the rejection test and the acceptance test are a pair.
 func TestAResponseOfExactlyTheCapIsOrdinary(t *testing.T) {
 	var mints int32

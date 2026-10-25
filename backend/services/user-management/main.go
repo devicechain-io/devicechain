@@ -75,7 +75,14 @@ var (
 )
 
 func main() {
-	callbacks := core.LifecycleCallbacks{
+	Microservice = core.NewMicroservice(lifecycleCallbacks())
+	Microservice.Run()
+}
+
+// lifecycleCallbacks is the service's whole lifecycle wiring, as a function so a test can build
+// the Microservice production builds rather than restate which callback runs when.
+func lifecycleCallbacks() core.LifecycleCallbacks {
+	return core.LifecycleCallbacks{
 		Initializer: core.LifecycleCallback{
 			Preprocess:  func(context.Context) error { return nil },
 			Postprocess: afterMicroserviceInitialized,
@@ -93,8 +100,6 @@ func main() {
 			Postprocess: func(context.Context) error { return nil },
 		},
 	}
-	Microservice = core.NewMicroservice(callbacks)
-	Microservice.Run()
 }
 
 // Parses the configuration from raw bytes.
@@ -249,7 +254,20 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 				"were readable by every service login, so they were not carried over: every refresh token, " +
 				"OAuth code and single sign-on record issued before this upgrade is gone, and users sign in once more")
 	}
+	// A service account's secret is a keyed digest under a key derived from the instance
+	// root key (credential.DeriveServiceAccountSecretKey), which this service already holds
+	// for its secret store. The checker compares under it, and the admin service digests
+	// every secret it mints under the same key.
+	rootKey, err := Microservice.InstanceConfiguration.Infrastructure.Secrets.DecodedRootKey()
+	if err != nil {
+		return err
+	}
+	serviceAccountKey, err := credential.DeriveServiceAccountSecretKey(rootKey)
+	if err != nil {
+		return err
+	}
 	credentials, err := credential.NewChecker(attemptsKV, identity.CredentialPolicies,
+		credential.WithServiceAccountSecretKey(serviceAccountKey),
 		credential.WithCounter(Microservice.NewCounterVec("credential_checks_total",
 			"Password and OAuth client-secret checks by outcome. A throttled attempt writes no "+
 				"audit row, so outcome=\"throttled\" is the view of an account held at the backoff "+
@@ -319,6 +337,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	AdminService = admin.NewService(iam.NewStore(RdbManager),
 		Configuration.TenantPurgeSettle(), Configuration.TenantPurgeTokenHold(), DeadLetterStore)
 	AdminService.SetViewerBaseline(identity.ViewerAuthorities())
+	AdminService.SetServiceAccountSecretKey(serviceAccountKey)
 
 	// Map of providers injected into the graphql http context.
 	providers := map[gqlcore.ContextKey]interface{}{
@@ -497,12 +516,15 @@ func registerSettingsHandler() {
 	Microservice.Mux().Handle("/settings/graphql", gqlcore.NewAdminHttpHandler(settingsSchema, settingsProviders, Microservice.Readiness))
 }
 
-// registerKeyHandlers serves the instance signing keys on the shared http server
+// registerKeyHandlers serves the instance signing keys on the INTERNAL listener
 // so the other services can validate tokens (ADR-008). /auth/jwks is the JWK Set
 // of every retained public key — consumers select the right key by the token's
 // kid, which lets a signing-key rotation propagate without restarts.
+//
+// It is deliberately not on the public mux: an external verifier uses /oauth/jwks,
+// the public mirror the OAuth metadata advertises.
 func registerKeyHandlers() {
-	Microservice.Mux().Handle("/auth/jwks", identity.BoundRequests(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	internalAuthMux().Handle(auth.JWKSPath, identity.BoundRequests(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		jwks, err := IdentityManager.JWKS()
 		if err != nil {
 			http.Error(w, "failed to build JWKS", http.StatusInternalServerError)
@@ -519,9 +541,8 @@ func registerKeyHandlers() {
 // 8414 metadata + a public JWKS mirror); the /oauth/authorize and /oauth/token
 // endpoints it advertises land in the following slices.
 //
-// The advertised jwks_uri is /oauth/jwks precisely so it is NOT caught by the
-// ingress rule that 404s external /api/<area>/auth/* — no ingress change is needed
-// for it.
+// The advertised jwks_uri is /oauth/jwks because /auth/jwks is served only on the
+// internal listener (see InternalAuthMux), which an external verifier cannot reach.
 //
 // 🔴 THE METADATA DOCUMENT IS SERVED AT TWO PATHS, AND THE SECOND IS THE ONE CLIENTS
 // USE. A note here used to describe the path-INSERTED location as an unsupported
@@ -572,6 +593,7 @@ func registerOAuthHandlers() {
 		IdentityManager.AuthenticateClient,
 		IdentityManager.RedeemAuthorizationCode,
 		IdentityManager.RefreshOAuth,
+		IdentityManager.ClientCredentials,
 	))
 
 	// The authorization endpoint (ADR-047 slice C): the server-rendered
@@ -612,8 +634,11 @@ func registerOAuthHandlers() {
 // service's JWKS validator accepts it. The secret is the bootstrap trust root, so
 // an empty configured secret fails closed (minting disabled). The handler body
 // lives in identity so its branches are unit-tested.
+//
+// It registers on the INTERNAL mux only (see InternalAuthMux): the public port does not
+// serve the mint, whatever sits in front of it.
 func registerServiceTokenHandler() {
-	Microservice.Mux().Handle(auth.ServiceTokenPath, identity.ServiceTokenHandler(
+	internalAuthMux().Handle(auth.ServiceTokenPath, identity.ServiceTokenHandler(
 		func() string { return Microservice.InstanceConfiguration.Infrastructure.ServiceAuth.Secret },
 		IdentityManager.IssueServiceToken,
 	))
@@ -644,6 +669,11 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	if err := GraphQLManager.Start(ctx); err != nil {
 		return err
 	}
+	// The internal listener (service-token mint + JWKS). Peers' readiness gates fetch the
+	// JWKS from it, so it comes up with the public server.
+	if err := startInternalAuthListener(); err != nil {
+		return err
+	}
 	if PurgeCoordinator != nil {
 		if err := PurgeCoordinator.Start(ctx); err != nil {
 			return err
@@ -666,6 +696,11 @@ func afterMicroserviceStarted(ctx context.Context) error {
 func beforeMicroserviceStopped(ctx context.Context) error {
 	if err := GraphQLManager.Stop(ctx); err != nil {
 		return err
+	}
+	if InternalAuthServer != nil {
+		if err := InternalAuthServer.Shutdown(ctx); err != nil {
+			return err
+		}
 	}
 	// Before the database it sweeps through and the broker: its pass holds an advisory lock
 	// on a pooled connection.

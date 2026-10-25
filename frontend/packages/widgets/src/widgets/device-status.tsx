@@ -30,6 +30,7 @@ import {
 
 import { fleetStrings } from '../fleet-strings';
 import { LevelEmpty, LevelReadout } from '../level-readout';
+import { Explained } from '../no-reading';
 import { lastActivityMs, presenceKind } from '../presence-model';
 import { presenceStrings } from '../presence-strings';
 
@@ -55,14 +56,14 @@ export function DeviceStatus({ widget, data }: WidgetProps) {
   const feed = data.members;
   const title = optString(widget.options, 'title');
 
-  const empty = (message: string) => (
+  const empty = (message: string, kind?: 'unbound' | 'forbidden') => (
     <WidgetFrame title={title}>
-      <LevelEmpty message={message} />
+      {kind ? <Explained kind={kind} message={message} /> : <LevelEmpty message={message} />}
     </WidgetFrame>
   );
   if (!feed || feed.status === 'loading') return empty(fleet.loading);
-  if (feed.status === 'unbound') return empty(strings.unbound);
-  if (feed.status === 'forbidden') return empty(fleet.forbidden);
+  if (feed.status === 'unbound') return empty(strings.unbound, 'unbound');
+  if (feed.status === 'forbidden') return empty(fleet.forbidden, 'forbidden');
   if (feed.status === 'unsupported') return empty(strings.unsupported);
   if (feed.members.length === 0) return empty(fleet.noMembers);
   if (feed.members.length > 1 || feed.total > 1) return empty(`${strings.oneDevice} ${strings.useDoughnut}`);

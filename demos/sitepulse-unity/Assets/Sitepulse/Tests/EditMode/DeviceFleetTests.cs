@@ -139,17 +139,15 @@ namespace DeviceChain.Sitepulse.Tests
         static (ReadinessBoard board, DeviceCredentials creds) Credentialed(IReadOnlyList<SceneDevice> scene, params string[] missing)
         {
             var devs = new List<Dev>();
-            var rows = new List<string>();
             foreach (var d in scene)
             {
                 if (missing.Contains(d.ExternalId)) continue;
                 var n = d.ExternalId.Substring(d.ExternalId.Length - 2);
                 var dev = d.Kind == SceneKind.Hauler ? Hauler(n) : d.Kind == SceneKind.Loader ? Loader(n) : Plant();
                 devs.Add(dev);
-                rows.Add(Cred(dev.Token + "-cred", dev.Token));
             }
 
-            QueryFn query = (q, vars, ct) => Task.FromResult(q == DeviceBinder.ResolveQuery ? Devices(devs.ToArray()) : CredBatch(rows.ToArray()));
+            QueryFn query = (q, vars, ct) => Task.FromResult(q == DeviceBinder.ResolveQuery ? Devices(devs.ToArray()) : CredPlatform(q, vars));
             var board = new ReadinessBoard(scene, "sim-sitepulse");
             var creds = new DeviceCredentials();
             new DeviceBinder(query, Contract()).BindAsync(scene, board, creds, CancellationToken.None).GetAwaiter().GetResult();

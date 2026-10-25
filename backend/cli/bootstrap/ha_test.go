@@ -45,6 +45,7 @@ func haState(haOn bool) *State {
 // credentials (a service that cannot connect at all) or the replica factor (a
 // silently unreplicated instance).
 func TestHaValuesMergeIntoTheNatsBlock(t *testing.T) {
+	t.Parallel()
 	n := renderFromState(t, haState(true)).Infrastructure.Nats
 
 	if n.StreamReplicas < 2 {
@@ -75,6 +76,7 @@ func TestHaValuesMergeIntoTheNatsBlock(t *testing.T) {
 // haEnabled.StreamReplicas would pass forever while proving nothing, because both
 // halves would be the same struct field being read twice.
 func TestHaTopologyIsCoherentAcrossTools(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		on   bool

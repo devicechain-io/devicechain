@@ -21,6 +21,10 @@
 #   hack/ha-rig.sh up        create the 4-node kind cluster, install --ha, bootstrap
 #   hack/ha-rig.sh verify    assert the HA claim from live broker (A) and
 #                            relational-database (B) state
+#   hack/ha-rig.sh streamloss  lose the capture stream with every replica, restart its
+#                            reader: it must stop naming the stream and NOT recreate it, and
+#                            `dcctl broker reconcile` must restore it. Its negative control
+#                            is the same check run against the restored state
 #   hack/ha-rig.sh control   THE NEGATIVE CONTROLS: the same two checks against a
 #                            non-HA instance, both required to FAIL
 #   hack/ha-rig.sh all       up + verify + control
@@ -382,6 +386,144 @@ cmd_verify() {
   say "CHECK B2 PASSED"
 }
 
+# ---------------------------------------------------------------------------
+# streamloss — a stream whose replicas are all lost is not silently recreated
+# ---------------------------------------------------------------------------
+#
+# THE CLAIM. The services do not create or change the broker's streams: they VERIFY the ones they
+# open and stop, naming what is missing, when one is gone. One login, the broker administrator,
+# creates them (the chart's pre-install/pre-upgrade Job, or `dcctl broker reconcile` on demand).
+# Before that change a service that found its stream missing quietly created it, so a stream lost
+# with every replica came back EMPTY and nothing reported the loss.
+#
+# So this case loses a stream outright, restarts its only reader, and requires THREE things at once:
+# the reader does not become ready, its log names the stream and says to run `dcctl broker
+# reconcile`, and the stream is STILL missing (nothing recreated it behind the report). Then it runs
+# `dcctl broker reconcile`, and requires the stream back, the reader ready, and the replication
+# claim true again.
+#
+# 🔴 THE NEGATIVE CONTROL IS THE SAME THREE-PART CHECK RUN AGAINST THE RESTORED STATE. A service
+# that still recreated its stream would look like this very instance after the reconcile: the stream
+# present, the reader ready. The old check ("the reader starts and the stream exists") passes both.
+# The new one must FAIL on the restored state, or it cannot tell a recreating service from a
+# verifying one and the case proves nothing.
+#
+# HOW THE STREAM IS LOST. The broker administrator may delete exactly the streams a declared
+# retention migration recreates, and the capture stream is one (streams.DeviceEventsCapture). Its
+# only reader is event-sources. The rig drives the administrator through the nats-box that the
+# broker's chart ships, with the administrator's own login read from its Secret.
+
+# The capture stream: streams.DeviceEventsCapture, named <instance>_<suffix> (messaging.StreamName).
+streamloss_stream() { printf '%s_device-events-capture' "$instance"; }
+
+# admin_nats runs the nats CLI in the broker's nats-box as the broker administrator.
+# The credentials travel as the CLI's own environment variables, not arguments.
+admin_nats() {
+  local ns pw
+  ns="$(instance_namespace "$instance")"
+  pw="$(kubectl --context "kind-$ha_cluster" -n "$ns" get secret "dci-$instance-nats-broker-admin" \
+    -o jsonpath='{.data.password}' | base64 -d)" ||
+    fail "could not read the broker administrator's login (Secret dci-$instance-nats-broker-admin)"
+  [[ -n "$pw" ]] || fail "the broker administrator's Secret holds no password"
+  kubectl --context "kind-$ha_cluster" -n "$ns" exec deploy/dc-nats-box -- \
+    env NATS_USER=dc-broker-admin-g1 NATS_PASSWORD="$pw" \
+    nats --server nats://dc-nats:4222 --inbox-prefix _INBOX_broker-admin "$@"
+}
+
+stream_present() { admin_nats stream info "$(streamloss_stream)" --json >/dev/null 2>&1; }
+
+# newest_reader_pod prints the newest event-sources pod: during the rollout the old one is still
+# running (the new one never becomes ready), so a log read by deployment would be the old pod's.
+newest_reader_pod() {
+  kubectl --context "kind-$ha_cluster" -n "$(instance_namespace "$instance")" get pods -o json |
+    jq -r '[.items[] | select(.metadata.name | test("^event-sources-[a-z0-9]+-[a-z0-9]+$"))] | sort_by(.metadata.creationTimestamp) | last | .metadata.name // empty'
+}
+
+reader_ready() {
+  kubectl --context "kind-$ha_cluster" -n "$(instance_namespace "$instance")" get pod "$1" -o json |
+    jq -e '.status.containerStatuses | length > 0 and all(.[]; .ready)' >/dev/null 2>&1
+}
+
+reader_log() {
+  local ns; ns="$(instance_namespace "$instance")"
+  { kubectl --context "kind-$ha_cluster" -n "$ns" logs "$1" --tail=300 2>&1 || true
+    kubectl --context "kind-$ha_cluster" -n "$ns" logs "$1" --previous --tail=300 2>&1 || true; }
+}
+
+# stream_stays_lost succeeds only when ALL of the claim holds for pod $1: it is not ready, its log
+# names the stream and the remedy, and the stream is still missing.
+stream_stays_lost() {
+  local pod="$1" log
+  [[ -n "$pod" ]] || return 1
+  if reader_ready "$pod"; then return 1; fi
+  log="$(reader_log "$pod")"
+  grep -q "does not match what this build declares" <<<"$log" || return 1
+  grep -q "$(streamloss_stream)" <<<"$log" || return 1
+  grep -q "dcctl broker reconcile" <<<"$log" || return 1
+  if stream_present; then return 1; fi
+  return 0
+}
+
+cmd_streamloss() {
+  need kubectl; need jq; need base64
+  build_dcctl
+  local ctx="kind-$ha_cluster" ns stream pod deadline
+  ns="$(instance_namespace "$instance")"
+  stream="$(streamloss_stream)"
+  kubectl --context "$ctx" -n "$ns" get deploy/dc-nats-box >/dev/null 2>&1 ||
+    fail "the broker's nats-box (deploy/dc-nats-box in $ns) is not there, and this case drives the broker
+administrator through it. The NATS chart ships it unless natsBox.enabled is false."
+
+  say "STREAM LOSS — a stream whose replicas are all lost is not silently recreated by a service"
+  stream_present || fail "precondition: $stream does not exist before the loss, so there is nothing to lose
+(and the administrator's login may not be able to read it). Run 'up' first."
+  note "$stream exists, replicated; losing it"
+
+  admin_nats stream rm "$stream" --force ||
+    fail "could not delete $stream as the broker administrator"
+  if stream_present; then fail "$stream is still there after the delete, so nothing was lost"; fi
+  note "$stream is gone, with every replica"
+
+  say "restarting its reader (event-sources): it must stop, say why, and NOT recreate the stream"
+  kubectl --context "$ctx" -n "$ns" rollout restart deploy/event-sources >/dev/null
+  deadline=$((SECONDS + 240))
+  pod=""
+  while ((SECONDS < deadline)); do
+    sleep 5
+    pod="$(newest_reader_pod)"
+    if stream_stays_lost "$pod"; then break; fi
+    pod=""
+  done
+  [[ -n "$pod" ]] || fail "THE LOSS WAS NOT REPORTED THE WAY IT MUST BE. After 240s the newest event-sources pod
+($(newest_reader_pod)) did not satisfy all three of: not ready, a log that names $stream and says to run
+'dcctl broker reconcile', and the stream still missing. If the stream EXISTS again, a service recreated it
+behind the report — the defect this case exists to catch. If the pod is simply ready, the reader never
+looked for the stream. Its log:
+$(reader_log "$(newest_reader_pod)" | tail -20)"
+  note "$pod stopped with a named error, was never ready, and $stream stayed missing ✓"
+
+  say "dcctl broker reconcile → the administrator restores it"
+  "$dcctl" broker reconcile "$instance" --kube-context "$ctx" ||
+    fail "dcctl broker reconcile failed; the stream was not restored"
+  stream_present || fail "dcctl broker reconcile ran and $stream is still missing"
+  note "$stream is back ✓"
+
+  # THE NEGATIVE CONTROL: the three-part check, against the restored state — the state a service
+  # that recreated its own stream would also have shown. It must fail.
+  if stream_stays_lost "$pod"; then
+    fail "NEGATIVE CONTROL FAILED: the stream-loss check passed with $stream PRESENT. It cannot tell a
+service that recreates its stream from one that verifies it, so the result above proves nothing."
+  fi
+  note "the same check fails once the stream is present, so it can tell the two apart ✓"
+
+  kubectl --context "$ctx" -n "$ns" rollout status deploy/event-sources --timeout=600s ||
+    fail "event-sources did not become ready after the stream was restored"
+  note "the reader is ready again ✓"
+  "$dcctl" ha verify --instance "$instance" --kube-context "$ctx" --probe-mqtt ||
+    fail "the restored stream does not hold the replication the instance declares"
+  say "STREAM LOSS CASE PASSED — reported by name, not recreated, restored by dcctl broker reconcile"
+}
+
 # cmd_control is the check on the check, and it is the reason this script exists
 # rather than a paragraph in a runbook.
 #
@@ -633,11 +775,13 @@ cmd_down() {
 case "${1:-all}" in
   up) cmd_up ;;
   verify) cmd_verify ;;
+  streamloss) cmd_streamloss ;;
   control) cmd_control ;;
   down) cmd_down ;;
   all)
     cmd_up
     cmd_verify
+    cmd_streamloss
     cmd_control
     say "CHECKS A AND B COMPLETE: the instance holds its declared replication in the
 broker, the relational database and the event store, each verifier was shown to
@@ -649,5 +793,5 @@ kills a node, so no failover has been survived under load — that is A1. Nothin
 here backs anything up or restores it — that is A2.5. A green run means the
 declared replication is real, not that a disaster has been rehearsed."
     ;;
-  *) fail "unknown command ${1}; try up | verify | control | all | down" ;;
+  *) fail "unknown command ${1}; try up | verify | streamloss | control | all | down" ;;
 esac

@@ -86,6 +86,9 @@ type oauthError struct {
 	Code   string // RFC 6749 error code, e.g. "invalid_grant"
 	Desc   string
 	Status int
+	// RetryAfter, when positive, is sent as the Retry-After header (seconds): set on a
+	// rate-limit refusal only.
+	RetryAfter int
 }
 
 func (e *oauthError) Error() string { return e.Code + ": " + e.Desc }

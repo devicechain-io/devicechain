@@ -32,7 +32,7 @@ Prefijo: `devicechain_commanddelivery_`.
 
 Las tres [alertas de entrega de comandos](./observability.md#command-delivery-alerts) leen
 `command_delivery_claims_stranded_total`, `command_delivery_presence_read_errors_total` y
-`batch_refusals_total{bound="reserve"}`. Un panel de Command Delivery representa el resto. Es normal
+`batch_refusals_total{bound="reserve"}`. El panel de Command Delivery representa los contadores de escritura de flota y los principales contadores de reclamación, retención y presencia; el resto de las series sirven para consultas ad hoc y para tus propios paneles. Es normal
 que varias de ellas estén muy activas y no son fallos: una proporción estable de avisos rechazados
 por `not_sole`, reclamaciones perdidas porque la pasada de barrido compitió con un aviso, y
 retenciones colocadas mientras los dispositivos están fuera de línea.
@@ -96,6 +96,7 @@ que un cambio de estado llegó a la base de datos pero no al bus: léelos con `d
 | `raise_alarm_dead_lettered_total` | Aristas de raise-alarm escritas en el flujo de mensajes no entregados tras fallar todos los intentos de aplicarlas, de modo que una alarma que debía haberse levantado o despejado queda visible en lugar de solo registrada en el log. |
 | `resolve_device_disabled_total` | Eventos rechazados porque su dispositivo está [deshabilitado](../guides/device-credentials.md#disabling-a-device). Se descartan; no van a la cola de mensajes fallidos. |
 | `resolve_event_time_bounded_total` | Horas de evento informadas rechazadas por adelantarse al reloj del servidor más de la tolerancia configurada, y sustituidas por la última hora que permite la tolerancia. |
+| `resolve_not_gateway_child_total` | Eventos rechazados porque una [pasarela](./edge-services.md#gateway-identity) publicó por un dispositivo que no tiene asignado, que no existe, o porque la pasarela está deshabilitada. Cada uno se registra en el flujo `failed-events` con su carga (motivo `NotGatewayChild`), no se reintenta y se notifica a la pasarela en su topic de avisos. No lleva etiqueta de tenant ni de pasarela; la línea de registro, como máximo una por minuto por pasarela y dispositivo, los nombra. Un aumento suele significar que un dispositivo nunca se asignó a su pasarela, o se asignó a otra. |
 
 ## Event processing: detección {#event-processing-detect}
 
@@ -307,6 +308,20 @@ Estos cuentan el consumidor de mensajes no entregados, que guarda un fallo del q
 | `dead_letters_unstorable_total` | Mensajes no entregados que este consumidor no pudo interpretar: sin inquilino interpretable, o un cuerpo que no es un sobre. Se CONFIRMAN y se cuentan en lugar de reintentarse, porque ninguna reentrega hace que un mensaje malformado se pueda interpretar. |
 | `dead_letters_unstored_total` | Mensajes no entregados que agotaron todos los intentos de entrega sin almacenarse: el almacén estuvo inalcanzable durante más tiempo del que duran los reintentos. El fallo que describían ya no queda registrado en ningún lugar, que es justo lo que este consumidor existe para evitar. |
 
+Estas cuentan el coordinador de eliminación de inquilinos, que borra los datos de un inquilino eliminado de todos los sistemas de almacenamiento y después libera su identificador. Ninguna lleva etiqueta de inquilino. Consulta [Eliminación de inquilinos](./tenant-deletion.md#blocked-store) para saber cómo leerlas.
+
+| Métrica | Significa |
+| --- | --- |
+| `tenant_purge_in_flight` | Eliminaciones de inquilino abiertas en este momento. |
+| `tenant_purge_oldest_age_seconds` | Antigüedad de la eliminación abierta más antigua, desde su corte; 0 si no hay ninguna. `TenantPurgeStalled` la vigila. |
+| `tenant_purge_store_blocked{store,reason}` | Eliminaciones abiertas que retiene cada sistema de almacenamiento, por almacén (`rdb`, `tsdb`, `broker`, `kv`, `detect`, `blob`, `other`) y motivo (`deferred`: aún hay datos o siguen llegando; `error`: no se pudo consultar al almacén). `TenantPurgeStoreFailing` y `TenantPurgeStoreHolding` la vigilan. |
+| `tenant_purge_store_rows_erased_total{store}` | Filas, objetos, mensajes o claves que ha borrado cada almacén en eliminaciones de inquilino: la señal de avance de un almacén bloqueado. |
+| `tenant_purge_store_erase_duration_seconds{store}` | Histograma de lo que tardó una llamada de borrado de un almacén. |
+| `tenant_purge_completed_total` | Eliminaciones de inquilino completadas: todos los almacenes limpios, asentados y retenidos, barreras levantadas e identificador liberado. |
+| `tenant_purge_failures_total` | Veces que el coordinador no pudo llevar la eliminación de un inquilino a término en una pasada. Reintenta en la siguiente, así que cuenta intentos. `TenantPurgeCoordinatorFailing` la vigila. |
+| `tenant_purge_duration_seconds` | Histograma de segundos desde la eliminación de un inquilino hasta la liberación de su identificador. Incluye la retención del identificador. |
+| `tenant_purge_clean_duration_seconds` | Histograma de segundos desde la eliminación de un inquilino hasta que el último almacén informó de que estaba limpio. Excluye las esperas de asentamiento y retención posteriores: lo que tardó el borrado en sí. |
+
 ## Update management {#update-management}
 
 Prefijo: `devicechain_updatemanagement_`. El servicio es opcional; consulta [Actualizaciones over-the-air](../concepts/over-the-air-updates.md).
@@ -321,6 +336,9 @@ Si sube `update_download_grants_total{result="not_configured"}`, `updates.downlo
 | `update_download_grants_total{result}` | Concesiones de descarga pedidas por dispositivos, por resultado: `granted`, o el motivo de no concederla (`unknown_assignment`, `superseded`, `finished`, `cancel_requested`, `artifact_unavailable`, `not_configured`, `error`). |
 | `update_downloads_total{result}` | Peticiones de descarga de artefactos, por resultado: `served`, `aborted` (el cliente se fue o el objeto no se pudo leer a mitad), o el motivo del rechazo antes de servir ningún byte (`capability_malformed`, `capability_invalid`, `capability_expired`, `stale`, `gone`, `range_not_satisfiable`, `busy`, `device_disabled`, `error`). Una tasa creciente de `capability_invalid` es alguien adivinando. |
 | `update_reports_rejected_total{reason}` | Mensajes de dispositivo que update-management rechazó antes de aplicarlos: `malformed`, `unattributable`, `throttled` y `device_disabled` (el dispositivo está deshabilitado). |
+| `update_rollout_dispatches_total{result}` | Dispositivos sobre los que decidió un despliegue: `dispatched` (se les asignó la actualización, o se contaron con una asignación del mismo artefacto que ya tenían) o `skipped` (rechazados por las reglas de asignación: no existe, deshabilitado, incompatible, ocupado con otra actualización). |
+| `update_rollout_step_failures_total` | Pasos de despliegue que fallaron y quedaron para la siguiente pasada. Un aumento constante significa que los despliegues no avanzan (device-management inalcanzable, o un error de base de datos). |
+| `update_rollout_transitions_total{to}` | Despliegues que el servicio movió por sí solo: `completed`, `paused_failure_threshold` o `paused_artifact_not_assignable` (el artefacto se retiró o perdió la firma exigida). |
 | `update_reports_total{verdict}` | Informes de progreso e inventario de actualizaciones, por el veredicto de la máquina de estados: `APPLIED`, o el motivo de no aplicarlo (`DUPLICATE`, `STALE_ATTEMPT`, `DIGEST_MISMATCH`, `WRONG_COMPONENT`, `REGRESSION`, `UNCONFIRMED`, `NOT_CANCELLABLE`, `LATE`, `CONFLICT`, `INVALID_ATTEMPT`, `WRONG_KIND`, `UNKNOWN_ASSIGNMENT`). Una tasa creciente de no aplicados desde una flota es un fallo del lado del dispositivo. |
 
 ## Todos los servicios {#every-service}

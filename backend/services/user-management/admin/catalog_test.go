@@ -45,6 +45,13 @@ func TestGovernanceOverrides_Validate(t *testing.T) {
 		{"zero ai burst rejected", GovernanceOverrides{AiInferenceBurst: iptr(0)}, true},
 		{"negative ai burst rejected", GovernanceOverrides{AiInferenceBurst: iptr(-3)}, true},
 
+		{"positive provisioning rate + burst", GovernanceOverrides{ProvisioningRegistrationsPerSecond: fptr(20), ProvisioningBurst: iptr(500)}, false},
+		{"fractional provisioning rate ok", GovernanceOverrides{ProvisioningRegistrationsPerSecond: fptr(0.5)}, false},
+		{"zero provisioning rate rejected", GovernanceOverrides{ProvisioningRegistrationsPerSecond: fptr(0)}, true},
+		{"negative provisioning rate rejected", GovernanceOverrides{ProvisioningRegistrationsPerSecond: fptr(-1)}, true},
+		{"zero provisioning burst rejected", GovernanceOverrides{ProvisioningBurst: iptr(0)}, true},
+		{"negative provisioning burst rejected", GovernanceOverrides{ProvisioningBurst: iptr(-3)}, true},
+
 		{"valid ingest but bad outbound rejected", GovernanceOverrides{
 			IngestReadingsPerSecond: fptr(500), IngestBurst: iptr(1000), OutboundCallsPerSecond: fptr(-1)}, true},
 		{"valid ingest + outbound but bad ai rejected", GovernanceOverrides{
@@ -91,6 +98,7 @@ func TestGovernanceOverrides_ApplyTo(t *testing.T) {
 		IngestReadingsPerSecond: fptr(500), IngestBurst: iptr(1000),
 		OutboundCallsPerSecond: fptr(50), OutboundBurst: iptr(100),
 		AiInferenceRequestsPerMinute: fptr(30), AiInferenceBurst: iptr(15),
+		ProvisioningRegistrationsPerSecond: fptr(20), ProvisioningBurst: iptr(500),
 		ShedPriority:       iptr(90),
 		HeldCommandCeiling: iptr(2500),
 	}
@@ -102,6 +110,9 @@ func TestGovernanceOverrides_ApplyTo(t *testing.T) {
 	assert.Equal(t, iptr(100), tenant.OutboundBurst)
 	assert.Equal(t, fptr(30), tenant.AiInferenceRequestsPerMinute)
 	assert.Equal(t, iptr(15), tenant.AiInferenceBurst)
+	assert.Equal(t, fptr(20), tenant.ProvisioningRegistrationsPerSecond)
+	assert.Equal(t, iptr(500), tenant.ProvisioningBurst,
+		"a field missing from applyTo is silently unwritable through the admin API")
 	assert.Equal(t, iptr(90), tenant.ShedPriority)
 	assert.Equal(t, iptr(2500), tenant.HeldCommandCeiling,
 		"a field missing from applyTo is silently unwritable through the admin API")
@@ -114,6 +125,8 @@ func TestGovernanceOverrides_ApplyTo(t *testing.T) {
 	assert.Nil(t, tenant.OutboundBurst)
 	assert.Nil(t, tenant.AiInferenceRequestsPerMinute)
 	assert.Nil(t, tenant.AiInferenceBurst)
+	assert.Nil(t, tenant.ProvisioningRegistrationsPerSecond)
+	assert.Nil(t, tenant.ProvisioningBurst)
 	assert.Nil(t, tenant.ShedPriority)
 	assert.Nil(t, tenant.HeldCommandCeiling)
 }

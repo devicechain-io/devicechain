@@ -11,9 +11,9 @@
 //   - a FRESH detect.Engine (core.NewEngine binds no persistence — there is no snapshot store to
 //     write, and this harness never calls Snapshot/Restore), so a preview cannot write a checkpoint;
 //   - a FRESH RuleRegistry holding only the draft rule, so it cannot touch the live rule set;
-//   - an EPHEMERAL replay consumer (NewReplayReaderFromTime → empty durable name, InactiveThreshold-
-//     reaped) that acks only its own throwaway consumer, so it never advances or rebinds the
-//     production durable;
+//   - a replay read BY SEQUENCE (NewReplayReaderFromTime: batched direct gets, no consumer created
+//     and nothing acknowledged), so it never advances or rebinds the production durable and holds
+//     no right over any consumer on the stream;
 //   - it COLLECTS detections off engine.Drain() rather than routing them through the Publisher, so
 //     nothing is ever written to a tenant subject.
 //
@@ -133,8 +133,8 @@ type Result struct {
 	Degraded string
 }
 
-// ReplayOpener is the subset of messaging.NatsManager the preview needs: a time-started ephemeral
-// replay reader that also reports the stream's earliest retained time (for aged-out detection).
+// ReplayOpener is the subset of messaging.NatsManager the preview needs: a time-started replay
+// reader (a read by sequence) that also reports the stream's earliest retained time (for aged-out detection).
 type ReplayOpener interface {
 	NewReplayReaderFromTime(suffix string, startTime time.Time) (messaging.ReplayReader, time.Time, error)
 }

@@ -74,7 +74,10 @@ describe('DeviceConnectPanel', () => {
     render(<DeviceConnectPanel deviceToken="dev-1" deviceEnabled />);
     await screen.findByTestId('connect-command');
     expect(command()).not.toContain('pressure_kpa');
-    expect(command()).toContain(`-u 'acme:bearer-abc'`);
+    // The token was shown once when it was set and cannot be read back: a placeholder.
+    expect(command()).toContain(`-u 'acme:<access-token>'`);
+    expect(command()).not.toContain('bearer-abc');
+    expect(screen.getByText(/access token\. It was shown once/)).toBeTruthy();
     expect(command()).toContain(`-t '<instance-id>/acme/devices/dev-1/events'`);
     expect(command()).toContain('"pressure":"100"');
     expect(command()).not.toContain(' -P ');

@@ -67,6 +67,11 @@ const (
 	// AuditOpPasswordCleared records an administrator removing an identity's password,
 	// leaving it able to sign in only through single sign-on. The label names the identity.
 	AuditOpPasswordCleared = "password_cleared"
+	// AuditOpServiceAccountToken records a tenant's service account obtaining an access
+	// token (the OAuth client_credentials grant). The actor is the account's subject
+	// (auth.ServiceAccountSubject), the tenant its tenant. A refused attempt writes no row,
+	// so a spray of wrong secrets cannot drive database writes.
+	AuditOpServiceAccountToken = "service_account_token"
 )
 
 // AuditEvent is one row of the tenant-scoped audit journal (ADR-019): a record,
@@ -101,9 +106,10 @@ type AuditEvent struct {
 	// Category is "mutation" (an entity create/update/delete) or "auth" (a login,
 	// failed login, or refresh). It discriminates the two row shapes.
 	Category string `gorm:"not null"`
-	// Actor is the JWT subject that performed the mutation, "system" for a
-	// deliberate system-context operation (bootstrap, the ingest pipeline), or ""
-	// when neither is present. For an auth event it is the subject username.
+	// Actor is the JWT subject that performed the mutation, else the actor a caller
+	// named with WithAuditActor (a device registering itself has no JWT), else "system"
+	// for a deliberate system-context operation (bootstrap, the ingest pipeline), or ""
+	// when none is present. For an auth event it is the subject username.
 	Actor string
 	// TableName is the mutated table (schema-qualified as the dialect renders it);
 	// empty for an auth event.
@@ -199,32 +205,43 @@ func isAuditExempt(db *gorm.DB) bool {
 	return false
 }
 
-// RegisterAuditJournal installs global GORM After callbacks that append an
-// AuditEvent for every create/update/delete by construction (ADR-019), alongside
-// the tenant-scope callbacks. A failure to record the audit row is reported as the
-// mutation's error (fail-closed — no silently unrecorded mutation).
+// RegisterAuditJournal installs global GORM callbacks that append an AuditEvent for
+// every create/update/delete by construction (ADR-019), alongside the tenant-scope
+// callbacks.
 //
-// 🔴 IT DOES NOT COMMIT WITH THE MUTATION, AND THIS COMMENT USED TO SAY IT DID.
-// gorm sorts an After("gorm:create") callback AFTER gorm:commit_or_rollback_transaction,
-// so by the time this one runs the statement's implicit transaction has committed
-// and the fresh session is on the pool rather than in that transaction. The
-// consequence is the one that matters when reading the error: a failed audit write
-// reports failure for a mutation that HAPPENED. It is why the ADR-077 erasure fence
-// excludes the journal — fencing it would have handed the tenant sweeper a refusal
-// for rows it had already deleted (see rdb.RegisterTenantFence).
+// 🔴 THE AUDIT ROW COMMITS WITH THE MUTATION, OR NEITHER DOES. Each callback is placed
+// After the statement and Before("gorm:commit_or_rollback_transaction"), so it runs
+// inside the statement's own implicit transaction (or inside the transaction the caller
+// opened, which it joins). A failed audit write is added to the statement's error, the
+// commit callback sees it and rolls the mutation back, and the caller is told the
+// truth: the change did NOT happen. The previous registration was a bare
+// After("gorm:create"), which gorm sorts AFTER the commit callback; the mutation was
+// already durable when the journal row was written, so an audit failure reported
+// failure for a change that had been saved and left it unjournaled.
 //
-// An explicit transaction the caller opened is a different case: there the session
-// shares that transaction and does roll back with it.
+// What is still best effort, deliberately: authentication events (RecordAuthEvent),
+// which are not mutations and must not turn an audit-table blip into a sign-in outage.
+// What is not journaled at all: raw SQL (Exec/Raw), which never reaches these processors.
+// And a session opened with SkipDefaultTransaction and no caller transaction has no
+// transaction to share, so there the audit row is a second, separate write.
+//
+// Lock order: the journal insert is the LAST statement of the transaction it joins, so
+// a transaction takes its entity locks in the order it always did and the journal's
+// rows (a plain append with a serial key and no unique index, so no row is contended
+// between writers) afterwards. The journal takes no lock another writer waits for.
 func RegisterAuditJournal(db *gorm.DB) error {
 	for _, register := range []func() error{
 		func() error {
-			return db.Callback().Create().After("gorm:create").Register("dc:audit_create", auditCallback("create"))
+			return db.Callback().Create().After("gorm:create").Before("gorm:commit_or_rollback_transaction").
+				Register("dc:audit_create", auditCallback("create"))
 		},
 		func() error {
-			return db.Callback().Update().After("gorm:update").Register("dc:audit_update", auditCallback("update"))
+			return db.Callback().Update().After("gorm:update").Before("gorm:commit_or_rollback_transaction").
+				Register("dc:audit_update", auditCallback("update"))
 		},
 		func() error {
-			return db.Callback().Delete().After("gorm:delete").Register("dc:audit_delete", auditCallback("delete"))
+			return db.Callback().Delete().After("gorm:delete").Before("gorm:commit_or_rollback_transaction").
+				Register("dc:audit_delete", auditCallback("delete"))
 		},
 	} {
 		if err := register(); err != nil {
@@ -268,8 +285,8 @@ func auditCallback(operation string) func(*gorm.DB) {
 
 		// Write the audit row on a fresh session that shares this statement's
 		// connection (and thus its transaction), carrying the same context so the
-		// scoping callbacks see the same tenant/system marker. A failure rolls the
-		// whole mutation back.
+		// scoping callbacks see the same tenant/system marker. A failure is added to
+		// this statement's error, so the commit callback rolls the mutation back with it.
 		session := db.Session(&gorm.Session{NewDB: true, Context: db.Statement.Context})
 		if err := session.Create(row).Error; err != nil {
 			_ = db.AddError(err)
@@ -277,13 +294,36 @@ func auditCallback(operation string) func(*gorm.DB) {
 	}
 }
 
+// auditActorKey is the context key WithAuditActor stores its actor under.
+type auditActorKey struct{}
+
+// WithAuditActor names the actor the audit journal records for mutations made under the
+// returned context, for a write that has no user behind it: a device registering itself
+// through a provisioning profile has no JWT, so without a name its rows would carry no
+// actor at all. The name is the caller's to compose ("provisioning-profile:<token>"), and
+// must come from the server's own decision about who authenticated, never from request
+// input.
+//
+// Claims win: a context that carries an authenticated identity is journalled as that
+// identity whatever this says, so naming an actor can never relabel a user's write. An
+// empty actor leaves the context unchanged.
+func WithAuditActor(ctx context.Context, actor string) context.Context {
+	if actor == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, auditActorKey{}, actor)
+}
+
 // auditActor resolves the acting identity for the mutation from the statement
-// context: the JWT subject when authenticated, "system" for a deliberate
-// system-context operation, else "".
+// context: the JWT subject when authenticated, else the actor WithAuditActor named, "system"
+// for a deliberate system-context operation, else "".
 func auditActor(db *gorm.DB) string {
 	ctx := db.Statement.Context
 	if claims, ok := auth.ClaimsFromContext(ctx); ok {
 		return claims.Username
+	}
+	if actor, ok := ctx.Value(auditActorKey{}).(string); ok {
+		return actor
 	}
 	if core.IsSystemContext(ctx) {
 		return "system"

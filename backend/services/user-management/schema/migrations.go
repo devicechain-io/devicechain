@@ -121,5 +121,12 @@ var (
 		// The one-time invitation links a tenant administrator issues; the row keeps only
 		// the digest of the link's secret.
 		NewInvitationsMigration(),
+		// A tenant's service accounts: non-human principals for the OAuth client_credentials
+		// grant, their role assignments, and their secrets (keyed digests only).
+		NewServiceAccountsMigration(),
+		// The per-tenant self-registration (provisioning) rate override: the sustained rate
+		// and burst at which a tenant's devices may register themselves, the fourth
+		// governance dimension. Both columns NULL (inherit the tier, then the platform default).
+		NewTenantProvisioningGovernanceMigration(),
 	}
 )

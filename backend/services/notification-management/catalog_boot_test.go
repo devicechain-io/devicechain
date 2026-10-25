@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/natsauth/permtest"
 	"github.com/devicechain-io/dc-microservice/service"
 	"github.com/devicechain-io/dc-notification-management/processor"
 	"github.com/prometheus/client_golang/prometheus"
@@ -26,7 +26,11 @@ import (
 // scheduler) opens nothing on the broker and is left out; the NATS half is the service's own
 // createNatsComponents and afterMicroserviceStarted.
 func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
-	host, port := startEmbeddedNats(t)
+	instance := fmt.Sprintf("catalog-boot-%d", time.Now().UnixNano())
+	// The broker holds the area's login to exactly the permissions natsauth generates for it, so this
+	// is also the area's permission test: the real wiring runs against it and the broker's log of
+	// refusals is asserted empty at the end.
+	broker := permtest.Start(t, instance)
 
 	savedMs, savedCfg, savedSvc, savedNats := Microservice, Configuration, Svc, NatsManager
 	savedMetrics, savedDead, savedNotifier := NotifyMetrics, DeadLetters, Notifier
@@ -40,13 +44,13 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	})
 
 	Microservice = &core.Microservice{
-		InstanceId:     fmt.Sprintf("catalog-boot-%d", time.Now().UnixNano()),
+		InstanceId:     instance,
 		FunctionalArea: "notification-management",
 		Deployed:       true,
 		Readiness:      core.NewReadinessGate(),
 	}
 	Microservice.UseMetricsRegistry(prometheus.NewRegistry())
-	Microservice.InstanceConfiguration.Infrastructure.Nats = mscfg.NatsConfiguration{Hostname: host, Port: port}
+	Microservice.InstanceConfiguration.Infrastructure.Nats = broker.NatsConfiguration("notification-management")
 	Microservice.MicroserviceConfigurationRaw = []byte(`{}`)
 	require.NoError(t, parseConfiguration())
 	RetentionSweeper, EscalationScheduler = nil, nil
@@ -79,4 +83,5 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	// The dead-letter writer is opened once, in createNatsComponents via newDeadLetterSink
 	// (main.go:114); the service has no other NewWriter/NewReader/SubscribeLive/KeyValueStore
 	// call site, so nothing is opened lazily after start.
+	broker.RequireNoViolations(t)
 }

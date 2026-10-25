@@ -45,7 +45,7 @@ process is genuinely gone, take the claim with `dcctl instances reclaim
 
 初始化在第二步获取锁，而不是第一步。第一步是 `--build` 开发流程中的镜像构建，它不需要集群锁，只生成 Chart 随后要部署的镜像。使用已发布镜像时，第一步不做任何操作。
 
-`dcctl upgrade` 遇到集群锁只会警告，但另有一项与锁无关的拒绝条件：如果集群中没有Operator，或可以确认Operator来自另一个发行版本，它不会将实例升级到目标版本，并会提示先运行 `dcctl install`。手动安装的Operator会收到提示，但可以继续。参见[发行与升级](./releases-and-upgrades.md#zero-downtime-upgrades)。
+`dcctl upgrade` 遇到集群锁只会警告，但另有一项与锁无关的拒绝条件：如果集群中没有Operator，或可以确认Operator来自另一个发行版本，它不会将实例升级到目标版本，并会提示先运行 `dcctl install`。手动安装的Operator会收到提示，但可以继续。参见[发行与升级](./releases-and-upgrades.md#rolling-upgrades)。
 
 升级还会使用执行机器上的 OpenTofu 状态来应用实例的消息代理和事件存储配置。因此，如果另一台机器无视警告，同时升级同一个实例，它会同时应用自己那份状态。对同一个实例，每次只应从一台机器执行升级。
 

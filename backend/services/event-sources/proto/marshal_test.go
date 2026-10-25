@@ -190,3 +190,28 @@ func TestMarshalRoundTripCarriesBrokerAsserted(t *testing.T) {
 		assert.False(t, got.AuthenticatedTransport, "the two markers are independent")
 	}
 }
+
+// The gateway crosses the messaging hop with the assertion: a dropped gateway would turn every
+// gateway event into a plain broker-asserted device event for the child named in the subject,
+// which is exactly the forgery the assignment check exists to stop. proto3 string defaults empty,
+// so bytes written before the field existed read as "no gateway" (a device's own publish).
+func TestMarshalRoundTripCarriesTheGateway(t *testing.T) {
+	for _, gateway := range []string{"gw-1", ""} {
+		event := &model.UnresolvedEvent{
+			Source:         "gw",
+			Device:         "child-1",
+			OccurredTime:   time.Now().UTC().Truncate(time.Second),
+			ProcessedTime:  time.Now().UTC().Truncate(time.Second),
+			EventType:      eventtype.StateChange,
+			Payload:        &model.UnresolvedStateChangePayload{State: presence.StateConnected, SessionId: "1"},
+			BrokerAsserted: true,
+			Gateway:        gateway,
+		}
+		bytes, err := MarshalUnresolvedEventAs(event, eventtime.WireCompact)
+		assert.NoError(t, err)
+		got, err := UnmarshalUnresolvedEvent(bytes)
+		assert.NoError(t, err)
+		assert.Equal(t, gateway, got.Gateway)
+		assert.Equal(t, "child-1", got.Device)
+	}
+}

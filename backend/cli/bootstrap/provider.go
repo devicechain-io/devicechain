@@ -47,6 +47,13 @@ type Options struct {
 	// MqttBodyCredential is --mqtt-body-credential ("refuse", "strip", or "" for not given):
 	// the transitional capture.bodyCredential of event-sources. See mqttbodycredential.go.
 	MqttBodyCredential string
+	// MqttFailClosed is --mqtt-fail-closed: nil when the flag was not given, otherwise the
+	// operator's explicit choice, recorded on the instance declaration. See mqttfailclosed.go.
+	MqttFailClosed *bool
+	// ValuesOverlay is the parsed, validated --values overlay (LoadValuesOverlay); nil when
+	// the flag was not given. ResetValues is `dcctl upgrade --reset-values`.
+	ValuesOverlay map[string]interface{}
+	ResetValues   bool
 }
 
 // Provider abstracts the target environment (local cluster today; cloud later)

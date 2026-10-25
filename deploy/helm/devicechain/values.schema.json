@@ -107,9 +107,39 @@
           "type": "string",
           "description": "Name of the Secret holding the password for the broker's identity account (key `password`), projected into user-management ALONE as DC_NATS_IDENTITY_PASSWORD. That account holds the sign-in buckets (refresh tokens, OAuth and single sign-on codes) where no other service login can read or copy them. Empty means dci-<id>-identity, the Secret dcctl writes. The pod reference is optional, so an instance whose broker has no identity account starts; when the instance configuration says the account exists, user-management refuses to start without the password."
         },
+        "natsLoginSecrets": {
+          "type": "object",
+          "description": "Per-area broker logins: a map of area name to the name of the Secret holding that area's login (keys `user` and `password`), projected into that area ALONE as DC_NATS_USER and DC_NATS_PASSWORD. An area not listed uses dci-<id>-nats-<area>, the Secret dcctl writes. mcp and ai-inference never open a broker connection and mount none. The pod reference is optional, so an instance whose broker has no per-area logins starts; when the instance configuration says they exist, an area refuses to start without its own.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
         "config": {
           "type": "object",
-          "description": "The instance configuration document (infrastructure, persistence, per-service settings), written into the dci-<id>-config Secret. The chart validates only the envelope; each service validates its own part at startup. Under existingSecret this block is not the mounted document, but templates still read its defaults; restate the ports in networkPolicy.externalConfigPorts and the broker host in metrics.natsBrokerHost."
+          "description": "The instance configuration document (infrastructure, persistence, per-service settings), written into the dci-<id>-config Secret. The chart validates only the envelope and the few keys named below; each service validates its own part at startup. Under existingSecret this block is not the mounted document, but templates still read its defaults; restate the ports in networkPolicy.externalConfigPorts and the broker host in metrics.natsBrokerHost.",
+          "properties": {
+            "infrastructure": {
+              "type": "object",
+              "description": "Settings shared by every service in the instance: messaging, secrets and the HTTP edge. The chart validates only the keys named below; each service validates the rest at startup.",
+              "properties": {
+                "http": {
+                  "type": "object",
+                  "description": "How the services' HTTP endpoints read the caller's address.",
+                  "additionalProperties": false,
+                  "properties": {
+                    "trustedProxies": {
+                      "type": "array",
+                      "description": "CIDR prefixes (IPv4 or IPv6) of the proxies whose X-Forwarded-For header an endpoint that keys on the caller's address may believe, in practice the ingress controller's pod or Service range. Empty or absent trusts no proxy, so such an endpoint keys on the connection's own peer, which behind an ingress is the ingress itself. Each entry must be in canonical masked form (10.42.0.0/16, never 10.42.0.7/16); the services re-check every entry at startup and refuse to start on a malformed one.",
+                      "items": {
+                        "type": "string",
+                        "pattern": "^([0-9]{1,3}([.][0-9]{1,3}){3}/[0-9]{1,2}|[0-9a-fA-F:]*:[0-9a-fA-F:.]*/[0-9]{1,3})$"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
         }
       },
       "description": "Identity and configuration of this DeviceChain instance."
@@ -472,6 +502,36 @@
             }
           },
           "description": "TLS for the Ingress, using cert-manager."
+        }
+      }
+    },
+    "brokerAdmin": {
+      "type": "object",
+      "description": "The broker administrator: the pre-install/pre-upgrade hook Job that alone creates and reconciles the platform's JetStream streams and KV buckets. Services only verify them.",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Run the broker administrator as a hook Job. Disable only if the installation creates and reconciles the broker's streams and buckets itself; services still verify them."
+        },
+        "image": {
+          "type": "string",
+          "description": "Full image reference for the broker administrator, overriding <image.registry>/dc-broker-admin:<image.tag>."
+        },
+        "activeDeadlineSeconds": {
+          "type": "integer",
+          "minimum": 60,
+          "description": "How long the whole reconcile may take, including waiting for a stream created under an older retention to be drained before it is recreated."
+        },
+        "backoffLimit": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 6,
+          "description": "How many times a failed attempt is retried before the Job, and so the release, fails."
+        },
+        "resources": {
+          "type": "object",
+          "description": "Resource requests and limits for the Job's container."
         }
       }
     },

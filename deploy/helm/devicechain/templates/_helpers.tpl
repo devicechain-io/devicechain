@@ -107,6 +107,21 @@ sparkplug-ingest,lwm2m-ingest
 {{- end -}}
 
 {{/*
+The broker administrator's image: brokerAdmin.image when set, else
+"{image.registry}/dc-broker-admin:{image.tag}" with the same registry and tag as the services, so a
+release pins the whole deploy coherently. The name is also what the release publishes it under
+(TestReleaseImageSetMatchesDeployAndVerifier holds the two together).
+*/}}
+{{- define "devicechain.brokerAdminImage" -}}
+  {{- $override := (.Values.brokerAdmin | default dict).image | default "" -}}
+  {{- if $override -}}
+    {{- $override -}}
+  {{- else -}}
+    {{- printf "%s/dc-broker-admin:%s" .Values.image.registry (.Values.image.tag | default .Chart.AppVersion) -}}
+  {{- end -}}
+{{- end -}}
+
+{{/*
 The web console image reference: explicit frontend.image.repository:tag overrides,
 otherwise "{image.registry}/frontend:{image.tag}" — same registry/tag the services
 resolve through, so a release pins the whole deploy coherently.
@@ -210,6 +225,34 @@ TestTheChartReadsTheIdentitySecretDcctlWrites holds the two together.
 */}}
 {{- define "devicechain.identitySecret" -}}
 {{- .Values.instance.identitySecret | default (printf "dci-%s-identity" .Values.instance.id) -}}
+{{- end -}}
+
+{{/*
+devicechain.areasWithoutNatsLogin — the functional areas that never open a broker connection, and so
+hold no broker login and mount no login Secret: mcp fronts GraphQL over HTTP under the caller's own
+token, ai-inference calls model providers over HTTP. Every other area mounts exactly its own login.
+
+🔴 A LIST OF EXEMPTIONS, NOT OF GRANTS: an area added to the catalog gets a login by default, and has
+to be named here to be let off. The Go side is config.NatsLoginAreas (backend/core/config); a test
+renders the chart and holds the two together.
+*/}}
+{{- define "devicechain.areasWithoutNatsLogin" -}}
+mcp,ai-inference
+{{- end -}}
+
+{{/*
+The Secret holding one area's OWN broker login (keys `user` and `password`), projected as
+DC_NATS_USER / DC_NATS_PASSWORD into that area's Deployment and no other. Each area connecting as
+itself is the point: a login every pod could read would be per-area in name only. dcctl writes
+the Secrets under dci-<id>-nats-<area>; instance.natsLoginSecrets (area to name) overrides one for an
+install that manages its Secrets itself.
+
+Takes (dict "root" . "area" <area>). The name is spelled in Go too (natsLoginSecretName in
+backend/cli/bootstrap/natsloginsecret.go); TestTheChartMountsEachAreaItsOwnBrokerLogin holds the two
+together.
+*/}}
+{{- define "devicechain.natsLoginSecret" -}}
+{{- get ((.root.Values.instance.natsLoginSecrets) | default dict) .area | default (printf "dci-%s-nats-%s" .root.Values.instance.id .area) -}}
 {{- end -}}
 
 {{/* The per-service config ConfigMap name. */}}
@@ -815,6 +858,25 @@ set is safe for both metadata labels and selector matchLabels.
 {{- define "devicechain.areaLabels" -}}
 devicechain.io/instance: {{ .root.Values.instance.id }}
 devicechain.io/functional-area: {{ .area }}
+{{- end -}}
+
+{{/*
+devicechain.authInternalPort is the port user-management serves its INTERNAL endpoints on:
+the service-token mint and the platform JWKS.
+
+🔴 IT IS A CONSTANT, NOT A READ OF THE INSTANCE CONFIG. dcctl strips instance.config and
+mounts its own document (instance.existingSecret), so the chart cannot see the installed
+value; a read would silently fall back to the chart default while the pods and the callers
+used the document's. It equals config.DefaultUserManagementInternalPort in the Go code and
+the instance config's userManagement.internalPort, and hack/check-oauth-discovery-routing.sh
+fails a render in which the Service port and that document disagree.
+
+It is exposed on the ClusterIP Service and on the pod, and NO Ingress, HTTPRoute or
+LoadBalancer ever names it. That is what keeps the mint off the public host; there is no
+edge rule to configure and none for a bring-your-own controller to replicate.
+*/}}
+{{- define "devicechain.authInternalPort" -}}
+{{- 8082 -}}
 {{- end -}}
 
 {{/*

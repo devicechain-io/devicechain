@@ -32,7 +32,7 @@
 # without a registry call on every one of them.
 #
 # 🔴 THIS WORKFLOW DOES NOT OPEN A PULL REQUEST, AND THAT IS DELIBERATE
-# (Derek, 2026-09-04). It pushes the bump to a branch and stops.
+# (a maintainer decision, 2026-09-04). It pushes the bump to a branch and stops.
 #
 # It could not open one even if we wanted it to: the repository has
 # `can_approve_pull_request_reviews: false`, which is the flag behind GitHub's

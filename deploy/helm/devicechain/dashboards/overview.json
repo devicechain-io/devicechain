@@ -1,0 +1,1378 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "liveNow": false,
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "",
+  "weekStart": "",
+  "version": 1,
+  "title": "DeviceChain \u2014 Instance overview",
+  "uid": "dc-overview-ops",
+  "tags": [
+    "devicechain",
+    "overview"
+  ],
+  "links": [],
+  "description": "Start here. Every alert firing on this instance, whether the areas are up, how much is flowing and what is failing, with links to the board for each stage.",
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {},
+        "hide": 0,
+        "label": "Data source",
+        "refresh": 1,
+        "regex": ""
+      },
+      {
+        "name": "namespace",
+        "type": "constant",
+        "label": "Instance",
+        "query": "",
+        "hide": 2,
+        "description": "The instance this board reads. Empty on purpose: the chart's templates/grafana-dashboard.yaml replaces this entry with a hidden constant naming the instance it installs, so every namespace=\"$namespace\" selector reads that instance's series and no other. There is no instance picker: each instance ships its own copy of this board, in its own Grafana folder."
+      },
+      {
+        "name": "instance",
+        "type": "constant",
+        "label": "Instance ID",
+        "query": "",
+        "hide": 2,
+        "description": "The instance ID, used to select this instance's alerts. Empty on purpose: the chart's templates/grafana-dashboard.yaml replaces this entry with a hidden constant holding the ID of the instance it installs."
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 100,
+      "type": "table",
+      "title": "Firing alerts",
+      "description": "Alerts firing right now for this instance. An empty table means none are firing. Alerts come from the instance's Prometheus rules, so the table stays empty if those rules are not installed.",
+      "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "instant": true,
+          "format": "table",
+          "expr": "max by (alertname, severity) (ALERTS{alertstate=\"firing\", devicechain_instance=\"$instance\", alertname=~\".+\"})"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            }
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "severity"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "critical": {
+                        "color": "red",
+                        "index": 0
+                      },
+                      "warning": {
+                        "color": "yellow",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "sortBy": [
+          {
+            "displayName": "severity",
+            "desc": false
+          }
+        ]
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Value": true
+            },
+            "indexByName": {
+              "alertname": 0,
+              "severity": 1
+            },
+            "renameByName": {
+              "alertname": "Alert",
+              "severity": "severity"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 201,
+      "type": "row",
+      "title": "Is everything up?",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 7
+      },
+      "panels": []
+    },
+    {
+      "id": 202,
+      "type": "stat",
+      "title": "Areas not ready",
+      "description": "How many DeviceChain areas report that they are not ready to serve. Areas you have not turned on do not report, so they are not counted. When this is above zero, open the area's pod logs; the Firing alerts table above usually names the cause.",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "count(max by (__name__) ({__name__=~\"devicechain_[a-z0-9]+_ready\", namespace=\"$namespace\"}) == 0) or vector(0)",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "noValue": "0"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "center"
+      }
+    },
+    {
+      "id": 203,
+      "type": "stat",
+      "title": "Scrape targets down",
+      "description": "How many of this instance's metric endpoints Prometheus cannot reach. A target that is down shows no data on any board, so a quiet graph below may only mean a missing scrape. Check the pod is running and its metrics port is reachable.",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "count(up{namespace=\"$namespace\"} == 0) or vector(0)",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "noValue": "0"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "center"
+      }
+    },
+    {
+      "id": 204,
+      "type": "stat",
+      "title": "Missing replicas",
+      "description": "How many pods the deployments want that are not available right now. Zero is healthy. A non-zero value during a rollout is normal; one that stays up means pods are failing to start or pass their health checks, so describe the pods.",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "clamp_min(sum(kube_deployment_spec_replicas{namespace=\"$namespace\"}) - sum(kube_deployment_status_replicas_available{namespace=\"$namespace\"}), 0)",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              }
+            ]
+          },
+          "noValue": "0"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "center"
+      }
+    },
+    {
+      "id": 205,
+      "type": "stat",
+      "title": "Container restarts",
+      "description": "Container restarts over the selected time range. One stays visible for the whole range. Zero is healthy; look at the pod's previous logs and whether it was killed for memory.",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "round(sum(increase(kube_pod_container_status_restarts_total{namespace=\"$namespace\"}[$__range]))) or vector(0)",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              }
+            ]
+          },
+          "noValue": "0"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "center"
+      }
+    },
+    {
+      "id": 206,
+      "type": "stat",
+      "title": "Messages lost",
+      "description": "Messages a reader skipped because the stream trimmed them before the reader got to them, over the selected range. Zero is healthy; any value means data was dropped because the reader fell too far behind. Look for the backlog on the Messaging board, and add capacity to the slow reader.",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 16,
+        "y": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "round(sum(max by (stream, durable) (increase({__name__=~\"devicechain_[a-z0-9]+_jetstream_consumer_unread_skipped_total\", namespace=\"$namespace\"}[$__range])))) or vector(0)",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "noValue": "0"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "center"
+      },
+      "links": [
+        {
+          "title": "Messaging board",
+          "url": "/d/@board:messaging@?var-datasource=${datasource}",
+          "targetBlank": false
+        }
+      ]
+    },
+    {
+      "id": 207,
+      "type": "stat",
+      "title": "Largest backlog share",
+      "description": "For the most backed-up reader, how full its stream is with messages that reader has not finished with. Near zero is healthy. At 100% the stream starts discarding messages the reader has not read; add capacity to that reader or reduce its input. Readers whose backlog makes writers wait instead are not counted here. ",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "max({__name__=~\"devicechain_[a-z0-9]+_jetstream_consumer_unread_ratio\", namespace=\"$namespace\"}) or vector(0)",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.5
+              },
+              {
+                "color": "red",
+                "value": 0.9
+              }
+            ]
+          },
+          "noValue": "0"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "center"
+      },
+      "links": [
+        {
+          "title": "Messaging board",
+          "url": "/d/@board:messaging@?var-datasource=${datasource}",
+          "targetBlank": false
+        }
+      ]
+    },
+    {
+      "id": 208,
+      "type": "row",
+      "title": "How much is flowing",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 12
+      },
+      "panels": []
+    },
+    {
+      "id": 209,
+      "type": "timeseries",
+      "title": "Events through the pipeline",
+      "description": "Events per second at each step, in order: received from devices, matched to a device, stored, applied to live device state, and fed to the rules. The lines should move together. A step that drops while the one before it holds means work is stuck at that step; open the stage board for it. Steps for areas that are not turned on stay empty.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 13
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_eventsources_total_inbound_messages{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "received from devices"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_devicemanagement_resolve_messages_total{namespace=\"$namespace\", result=\"ok\"}[$__rate_interval]))",
+          "legendFormat": "matched to a device"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_eventmanagement_persist_messages_total{namespace=\"$namespace\", result=\"ok\"}[$__rate_interval]))",
+          "legendFormat": "stored"
+        },
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_devicestate_state_messages_total{namespace=\"$namespace\", result=\"ok\"}[$__rate_interval]))",
+          "legendFormat": "applied to device state"
+        },
+        {
+          "refId": "E",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_eventprocessing_detect_events_applied_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "fed to rules"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "links": [
+        {
+          "title": "Ingest board",
+          "url": "/d/@board:ingest@?var-datasource=${datasource}",
+          "targetBlank": false
+        },
+        {
+          "title": "Event processing board",
+          "url": "/d/@board:event-processing@?var-datasource=${datasource}",
+          "targetBlank": false
+        }
+      ]
+    },
+    {
+      "id": 210,
+      "type": "timeseries",
+      "title": "Work that did not succeed",
+      "description": "Messages per second that a processing step did not handle successfully, one line per step. Zero is healthy. A steady value means a step keeps failing or discarding messages; open its stage board for the reason. Steps for areas that are not turned on stay empty.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 13
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_eventmanagement_persist_messages_total{namespace=\"$namespace\", result!=\"ok\"}[$__rate_interval]))",
+          "legendFormat": "persist"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_devicestate_state_messages_total{namespace=\"$namespace\", result!=\"ok\"}[$__rate_interval]))",
+          "legendFormat": "state"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_devicemanagement_resolve_messages_total{namespace=\"$namespace\", result!=\"ok\"}[$__rate_interval]))",
+          "legendFormat": "resolve"
+        },
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_devicemanagement_device_reports_messages_total{namespace=\"$namespace\", result!=\"ok\"}[$__rate_interval]))",
+          "legendFormat": "device reports"
+        },
+        {
+          "refId": "E",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_devicemanagement_raise_alarm_messages_total{namespace=\"$namespace\", result!=\"ok\"}[$__rate_interval]))",
+          "legendFormat": "raise alarm"
+        },
+        {
+          "refId": "F",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_commanddelivery_response_messages_total{namespace=\"$namespace\", result!=\"ok\"}[$__rate_interval]))",
+          "legendFormat": "response"
+        },
+        {
+          "refId": "G",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_notificationmanagement_notify_messages_total{namespace=\"$namespace\", result!=\"ok\"}[$__rate_interval]))",
+          "legendFormat": "notify"
+        },
+        {
+          "refId": "H",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_updatemanagement_update_reports_messages_total{namespace=\"$namespace\", result!=\"ok\"}[$__rate_interval]))",
+          "legendFormat": "update reports"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 211,
+      "type": "row",
+      "title": "Failures that should stay at zero",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 21
+      },
+      "panels": []
+    },
+    {
+      "id": 212,
+      "type": "stat",
+      "title": "Refused at the door",
+      "description": "Device messages turned away before entering the pipeline (could not be decoded, backed up, or failed to hand off), over the selected range. Zero is healthy. A rise means devices are sending something the instance cannot take in; the Ingest board splits it by reason.",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 22
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(increase(devicechain_eventsources_total_msg_failed_decode{namespace=\"$namespace\"}[$__range])) + sum(increase(devicechain_eventsources_total_msg_backpressured{namespace=\"$namespace\"}[$__range])) + sum(increase(devicechain_eventsources_total_msg_publish_failed{namespace=\"$namespace\"}[$__range])) or vector(0)",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              }
+            ]
+          },
+          "noValue": "0"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "center"
+      },
+      "links": [
+        {
+          "title": "Ingest board",
+          "url": "/d/@board:ingest@?var-datasource=${datasource}",
+          "targetBlank": false
+        }
+      ]
+    },
+    {
+      "id": 213,
+      "type": "stat",
+      "title": "Messages that failed",
+      "description": "Messages a processing step could not handle successfully, summed across steps, over the selected range. Zero is healthy. Read the Firing alerts table first, then open the stage board of the step that is failing.",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 22
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "round(sum(increase(devicechain_eventmanagement_persist_messages_total{namespace=\"$namespace\", result!=\"ok\"}[$__range])) + sum(increase(devicechain_devicestate_state_messages_total{namespace=\"$namespace\", result!=\"ok\"}[$__range])) + sum(increase(devicechain_devicemanagement_resolve_messages_total{namespace=\"$namespace\", result!=\"ok\"}[$__range])) + sum(increase(devicechain_devicemanagement_device_reports_messages_total{namespace=\"$namespace\", result!=\"ok\"}[$__range])) + sum(increase(devicechain_devicemanagement_raise_alarm_messages_total{namespace=\"$namespace\", result!=\"ok\"}[$__range])) + sum(increase(devicechain_commanddelivery_response_messages_total{namespace=\"$namespace\", result!=\"ok\"}[$__range])) + sum(increase(devicechain_notificationmanagement_notify_messages_total{namespace=\"$namespace\", result!=\"ok\"}[$__range])) + sum(increase(devicechain_updatemanagement_update_reports_messages_total{namespace=\"$namespace\", result!=\"ok\"}[$__range]))) or vector(0)",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              }
+            ]
+          },
+          "noValue": "0"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "center"
+      }
+    },
+    {
+      "id": 214,
+      "type": "stat",
+      "title": "Commands given up on",
+      "description": "Commands the platform stopped trying to deliver because every attempt was used up, over the selected range. Zero is healthy. Check whether the target devices are online and listening, then open the Command delivery board.",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 22
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "round(sum(increase(devicechain_commanddelivery_command_delivery_dispatches_exhausted_total{namespace=\"$namespace\"}[$__range]))) or vector(0)",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "noValue": "0"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "center"
+      },
+      "links": [
+        {
+          "title": "Command delivery board",
+          "url": "/d/@board:command-delivery@?var-datasource=${datasource}",
+          "targetBlank": false
+        }
+      ]
+    },
+    {
+      "id": 215,
+      "type": "stat",
+      "title": "Commands that cannot be delivered",
+      "description": "Commands that can never be delivered as sent (for example, a command the device does not define), over the selected range. Zero is healthy. Open the Command delivery board to see which commands.",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 22
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "round(sum(increase(devicechain_commanddelivery_command_delivery_undeliverable_total{namespace=\"$namespace\"}[$__range]))) or vector(0)",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "noValue": "0"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "center"
+      },
+      "links": [
+        {
+          "title": "Command delivery board",
+          "url": "/d/@board:command-delivery@?var-datasource=${datasource}",
+          "targetBlank": false
+        }
+      ]
+    },
+    {
+      "id": 216,
+      "type": "stat",
+      "title": "Rule events fed",
+      "description": "Events the automation rules received over the selected range. A throughput headline, not a failure count: zero while devices are sending means the rules are not seeing events. Open the Event processing board.",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 16,
+        "y": 22
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "round(sum(increase(devicechain_eventprocessing_detect_events_applied_total{namespace=\"$namespace\"}[$__range]))) or vector(0)",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "noValue": "0"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "center"
+      },
+      "links": [
+        {
+          "title": "Event processing board",
+          "url": "/d/@board:event-processing@?var-datasource=${datasource}",
+          "targetBlank": false
+        }
+      ]
+    },
+    {
+      "id": 217,
+      "type": "stat",
+      "title": "Rule actions sent",
+      "description": "Actions the automation rules handed on (raise an alarm, send a command, call an outside service) over the selected range. A throughput headline: zero if no rule has fired. Open the Event processing board for the rules behind it.",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 22
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "round(sum(increase(devicechain_eventprocessing_react_actions_dispatched_total{namespace=\"$namespace\"}[$__range]))) or vector(0)",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "noValue": "0"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "center"
+      },
+      "links": [
+        {
+          "title": "Event processing board",
+          "url": "/d/@board:event-processing@?var-datasource=${datasource}",
+          "targetBlank": false
+        }
+      ]
+    },
+    {
+      "id": 218,
+      "type": "row",
+      "title": "Replicas and restarts",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 26
+      },
+      "panels": []
+    },
+    {
+      "id": 219,
+      "type": "timeseries",
+      "title": "Available replicas by deployment",
+      "description": "Pods available for each deployment. A line that drops below its normal level means pods are down or still starting. Compare with the Missing replicas tile above.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 27
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (deployment) (kube_deployment_status_replicas_available{namespace=\"$namespace\"})",
+          "legendFormat": "{{deployment}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 220,
+      "type": "timeseries",
+      "title": "Container restarts by pod",
+      "description": "Restarts per pod over each interval. Flat at zero is healthy. A step up marks a restart; open that pod's previous logs and check whether it ran out of memory.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 27
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (pod) (increase(kube_pod_container_status_restarts_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "{{pod}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 221,
+      "type": "text",
+      "title": "Stage boards",
+      "description": "Links to the board for each stage of the pipeline.",
+      "gridPos": {
+        "h": 3,
+        "w": 24,
+        "x": 0,
+        "y": 35
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "Drill down: [Ingest](/d/@board:ingest@?var-datasource=${datasource}) \u00b7 [Messaging](/d/@board:messaging@?var-datasource=${datasource}) \u00b7 [Persistence](/d/@board:persistence@?var-datasource=${datasource}) \u00b7 [Event processing](/d/@board:event-processing@?var-datasource=${datasource}) \u00b7 [Command delivery](/d/@board:command-delivery@?var-datasource=${datasource}) \u00b7 [Delivery](/d/@board:delivery@?var-datasource=${datasource}) \u00b7 [Platform](/d/@board:platform@?var-datasource=${datasource})"
+      }
+    }
+  ]
+}

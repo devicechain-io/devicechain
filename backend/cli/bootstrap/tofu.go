@@ -182,6 +182,10 @@ func openInstanceRoot(ctx context.Context, st *State) (_ openedInstanceRoot, err
 	if err := removeSupersededRootConfig(workdir); err != nil {
 		return openedInstanceRoot{}, err
 	}
+	// The generated broker permissions, as a variable file the root loads by itself.
+	if err := writeBrokerPermissionsVarFile(rootdir, st); err != nil {
+		return openedInstanceRoot{}, err
+	}
 
 	// Streams tofu's own progress so a long apply is not a silent wait — and only its
 	// progress: see tofuExec for why a read must never reach the terminal.
@@ -670,8 +674,12 @@ func infraVars(st *State) []string {
 		vars = append(vars,
 			"nats_enable_auth=true",
 			"nats_callout_issuer_public="+pub,
-			"nats_service_password_bcrypt="+st.Values["natsServicePasswordBcrypt"],
 		)
+		// The shared login's hash, while the instance still has one. Omitted once it is retired (and for
+		// an instance that never had it): the module then renders no such user.
+		if sharedLoginRetainedFor(st) {
+			vars = append(vars, "nats_service_password_bcrypt="+st.Values["natsServicePasswordBcrypt"])
+		}
 		// The curve key the broker encrypts each callout request to. Absent while an upgrade is
 		// still rolling the responder onto a build that can open them (withholdXKeyFromBroker);
 		// the broker then keeps sending plaintext, and a later apply turns encryption on.
@@ -689,6 +697,14 @@ func infraVars(st *State) []string {
 		// every other service. Omitted when none was minted: the module then renders no account.
 		if h := st.Values["natsIdentityPasswordBcrypt"]; h != "" && st.Values[identityEnabledValue] == "true" {
 			vars = append(vars, "nats_identity_password_bcrypt="+h)
+		}
+		// The permissions every static login is held to are NOT a -var: the document is far past a
+		// command line's limit on Windows, so it travels in a variable file (see
+		// writeBrokerPermissionsVarFile), written by openInstanceRoot.
+		// The per-area logins and the administrator's, beside the shared one. Omitted until every one
+		// was minted: the module then renders none, which is what every earlier release ran.
+		if st.Values[areaLoginsEnabledValue] == "true" {
+			vars = append(vars, loginsVar(loginsBcryptByUser(st)))
 		}
 	}
 	return vars

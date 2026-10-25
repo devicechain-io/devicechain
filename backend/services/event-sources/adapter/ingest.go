@@ -121,7 +121,7 @@ const (
 func (o ResolveOutcome) Ingestible() bool { return o == ResolveFound || o == ResolveCreated }
 
 // The device-management GraphQL operations. Field names are pinned to the schema
-// (DeviceCreateRequest.token/externalId/deviceTypeToken); the graphql-go fork rejects
+// (DeviceCreateRequest.token/externalId/deviceTypeToken); graphql-go rejects
 // an unknown field sent through a variable, so a typo here fails the call loudly rather
 // than silently creating a half-formed device.
 const (
@@ -207,7 +207,7 @@ func (r *Registrar) Resolve(ctx context.Context, tenant, externalId string, poli
 		return "", ResolveDropped, nil
 	}
 
-	token := DeriveDeviceToken(externalId, r.tokenPrefix)
+	token := core.DeriveDeviceToken(externalId, r.tokenPrefix)
 	// TODO (follow-up): a persistently-failing create (e.g. a deviceTypeToken that
 	// passes the grammar check but names no existing type) is retried by the caller on
 	// every message from that device, spending the full bounded budget each time. It is

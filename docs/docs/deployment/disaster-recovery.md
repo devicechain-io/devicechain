@@ -235,8 +235,9 @@ decrypted. You are asked for the artifact's passphrase, or you can supply it wit
 
 The broker's credentials are not in the escrow and do not need to be. The rebuilt instance mints
 new ones, including the keys of the device authentication callout and the login for the broker's
-identity account, and gives them to the broker
-and the services in the same run. Devices do not hold any of them: they sign in with their own
+identity account and every area's own broker login, and gives them to the broker
+and the services in the same run. None of the old logins is carried over, and a rebuilt instance has no
+shared broker login: every area signs in with the login minted for it, and the destroyed instance's logins open nothing. Devices do not hold any of them: they sign in with their own
 credentials, which come back with the database.
 
 `dcctl bootstrap` refuses to do it any other way; this is the first of the two checks described
@@ -430,7 +431,7 @@ handing a running instance new credentials is safe.
 and keeps every one of these:
 
 - the secret-store root key;
-- the broker's authority and logins (the callout issuer seed and the service and system passwords);
+- the broker's authority and logins (the callout issuer seed, every area's login and the system password);
 - the database passwords (the shared owner, the provisioner, the instance's own login and the event
   store's owner);
 - the cross-service auth secret;
@@ -488,7 +489,7 @@ The root key cannot be rotated in place in this version. There is no command tha
 and re-seals what the old one protected. To replace the root key, you recreate the instance, and a
 recreated instance starts with an empty control plane.
 
-Three kinds of stored data depend on the key:
+Four kinds of stored data depend on the key:
 
 - **Every secret the instance stores.** Each is sealed under the root key: outbound-connector
   credentials, the SMTP passwords and webhook secrets of notification channels, AI provider keys
@@ -497,6 +498,9 @@ Three kinds of stored data depend on the key:
   no one can sign in.
 - **Device MQTT password digests.** The key that digests device MQTT passwords is derived from the
   root key. A digest is one-way, so it cannot be re-made under a new key without the password.
+- **Device access token digests.** An access token is stored only as a digest made under a key
+  derived from the root key. Like a password digest, it cannot be re-made under a new key without
+  the token, so each token device needs its token set again, or registered again with the same one.
 
 ### What a recreate loses {#replace-root-key-losses}
 

@@ -328,9 +328,9 @@ exports later) go to a pluggable object store, configured under
   use the pods' own AWS identity, for example an IAM role bound through
   `serviceAccount.annotations`. `dcctl bootstrap --object-store s3` sets all of this for you.
 
-## Zero-downtime upgrades
+## Rolling upgrades
 
-`helm upgrade` rolls forward without dropping traffic. Each Deployment uses a
+`helm upgrade` rolls forward one pod at a time. Each Deployment uses a
 `RollingUpdate` strategy with `maxUnavailable: 0` / `maxSurge: 1`, so a new pod must
 pass `/readyz` before an old one is removed. On termination a pod flips `/readyz` to
 503 first, waits `shutdownDrainSeconds` (default 5) for endpoint removal to
@@ -342,7 +342,7 @@ more than half the grace period, since the teardown after the drain is what actu
 finishes in-flight work before the kubelet's SIGKILL. Database migrations run under a
 Postgres advisory lock so concurrently-rolling replicas don't race on DDL.
 
-For true zero-downtime run `replicas: 2`+ per area (`--set replicas=2` or
+To keep serving through a rollout run `replicas: 2`+ per area (`--set replicas=2` or
 `functionalAreas.<area>.replicas`); a `PodDisruptionBudget` is rendered for any area
 with more than one replica. Tune the strategy via `rollingUpdate.maxUnavailable` /
 `rollingUpdate.maxSurge`.
@@ -483,6 +483,19 @@ re-opens every private address for every tenant.
 - Optional (`blobStorage.persistence.enabled=true`, filesystem backend): a
   `PersistentVolumeClaim` (`dci-<id>-blob`) mounted into `blobStorage.mountAreas`
   at the store directory.
+- The broker administrator (`brokerAdmin.enabled=true`, on by default): the chart's
+  one **hook**. A `Job` named `<instance.id>-broker-admin` runs as a Helm `pre-install` and
+  `pre-upgrade` hook, before any other object of the release is created or changed. It is
+  the only workload that creates, updates or deletes the broker's streams and key-value
+  buckets, and the only one that mounts the broker-administration login
+  (`dci-<id>-nats-broker-admin`); the services only verify what they open and refuse to
+  start, naming the difference, when it does not match. A failed Job fails the release and
+  is kept so its pod log can be read; a successful one is removed. `dcctl broker reconcile
+  <id>` runs it again. Because it runs before the release creates anything, a first install
+  without dcctl needs the namespace and that Secret to exist already (and, under
+  `instance.existingSecret`, the instance config Secret). Set `brokerAdmin.enabled=false`
+  only if you create and reconcile the streams and buckets yourself with the
+  `dc-broker-admin` image (`dc-broker-admin reconcile --areas <area>,...`).
 - The web console (`frontend.enabled=true`, on by default): a static nginx
   `Deployment` + `Service` serving the Vite/React SPA. Disable for
   headless/ingest-only instances.
@@ -519,7 +532,11 @@ generated from the schema; do not edit it by hand.
 | `instance.superuserSecret` | string | `""` | Name of the Secret holding the superuser's seed password under key `password`, projected into user-management as DC_SUPERUSER_PASSWORD and read only to seed an empty identity table. Empty means dci-&lt;id&gt;-superuser, the Secret dcctl bootstrap generates per instance. There is no default password: an install made without dcctl must create this Secret before user-management first starts, or it refuses to seed the superuser. |
 | `instance.calloutSecret` | string | `""` | Name of the Secret holding the device auth callout's seeds (keys issuerSeed and xkeySeed), projected into device-management ALONE as DC_CALLOUT_ISSUER_SEED and DC_CALLOUT_XKEY_SEED. Empty means dci-&lt;id&gt;-callout, the Secret dcctl writes. The pod reference is optional, so an instance with no callout starts; when the instance configuration says the broker runs one, device-management refuses to start without the seeds. |
 | `instance.identitySecret` | string | `""` | Name of the Secret holding the password for the broker's identity account (key `password`), projected into user-management ALONE as DC_NATS_IDENTITY_PASSWORD. That account holds the sign-in buckets (refresh tokens, OAuth and single sign-on codes) where no other service login can read or copy them. Empty means dci-&lt;id&gt;-identity, the Secret dcctl writes. The pod reference is optional, so an instance whose broker has no identity account starts; when the instance configuration says the account exists, user-management refuses to start without the password. |
-| `instance.config` | object | see values.yaml | The instance configuration document (infrastructure, persistence, per-service settings), written into the dci-&lt;id&gt;-config Secret. The chart validates only the envelope; each service validates its own part at startup. Under existingSecret this block is not the mounted document, but templates still read its defaults; restate the ports in networkPolicy.externalConfigPorts and the broker host in metrics.natsBrokerHost. |
+| `instance.natsLoginSecrets` | object | `{}` | Per-area broker logins: a map of area name to the name of the Secret holding that area's login (keys `user` and `password`), projected into that area ALONE as DC_NATS_USER and DC_NATS_PASSWORD. An area not listed uses dci-&lt;id&gt;-nats-&lt;area&gt;, the Secret dcctl writes. mcp and ai-inference never open a broker connection and mount none. The pod reference is optional, so an instance whose broker has no per-area logins starts; when the instance configuration says they exist, an area refuses to start without its own. |
+| `instance.config` | object | - | The instance configuration document (infrastructure, persistence, per-service settings), written into the dci-&lt;id&gt;-config Secret. The chart validates only the envelope and the few keys named below; each service validates its own part at startup. Under existingSecret this block is not the mounted document, but templates still read its defaults; restate the ports in networkPolicy.externalConfigPorts and the broker host in metrics.natsBrokerHost. |
+| `instance.config.infrastructure` | object | - | Settings shared by every service in the instance: messaging, secrets and the HTTP edge. The chart validates only the keys named below; each service validates the rest at startup. |
+| `instance.config.infrastructure.http` | object | - | How the services' HTTP endpoints read the caller's address. |
+| `instance.config.infrastructure.http.trustedProxies` | array | - | CIDR prefixes (IPv4 or IPv6) of the proxies whose X-Forwarded-For header an endpoint that keys on the caller's address may believe, in practice the ingress controller's pod or Service range. Empty or absent trusts no proxy, so such an endpoint keys on the connection's own peer, which behind an ingress is the ingress itself. Each entry must be in canonical masked form (10.42.0.0/16, never 10.42.0.7/16); the services re-check every entry at startup and refuse to start on a malformed one. |
 | `image` | object | - | Container image selection for the platform's services. |
 | `image.registry` | string | `"ghcr.io/devicechain-io"` | Registry and organisation the service images are pulled from; each area image is &lt;registry&gt;/&lt;area&gt;:&lt;tag&gt; unless the area sets its own image. |
 | `image.tag` | string | `""` | Image tag for every service. Empty uses the chart's appVersion, which a release sets to the release tag, so a packaged chart deploys the matching images with no override. |
@@ -586,6 +603,12 @@ generated from the schema; do not edit it by hand.
 | `ingress.tls.issuerName` | string | `"devicechain-selfsigned"` | Name of the self-signed Issuer the chart renders when selfSigned is true. |
 | `ingress.tls.clusterIssuer` | string | `""` | Name of an existing cert-manager ClusterIssuer (for example a Let's Encrypt ACME issuer) to request certificates from. Used when selfSigned is false. |
 | `ingress.tls.secretName` | string | `"devicechain-tls"` | Name of the Secret that holds the TLS certificate. |
+| `brokerAdmin` | object | - | The broker administrator: the pre-install/pre-upgrade hook Job that alone creates and reconciles the platform's JetStream streams and KV buckets. Services only verify them. |
+| `brokerAdmin.enabled` | boolean | `true` | Run the broker administrator as a hook Job. Disable only if the installation creates and reconciles the broker's streams and buckets itself; services still verify them. |
+| `brokerAdmin.image` | string | `""` | Full image reference for the broker administrator, overriding &lt;image.registry&gt;/dc-broker-admin:&lt;image.tag&gt;. |
+| `brokerAdmin.activeDeadlineSeconds` | integer | `540` | How long the whole reconcile may take, including waiting for a stream created under an older retention to be drained before it is recreated. |
+| `brokerAdmin.backoffLimit` | integer | `1` | How many times a failed attempt is retried before the Job, and so the release, fails. |
+| `brokerAdmin.resources` | object | see values.yaml | Resource requests and limits for the Job's container. |
 | `frontend` | object | - | The web console workload: a static nginx SPA served at the ingress root. Disable for headless/ingest-only instances. |
 | `frontend.enabled` | boolean | `true` | Deploy the web console. Disable for headless or ingest-only instances. |
 | `frontend.image` | object | - | Console image override. By default the image is &lt;image.registry&gt;/frontend:&lt;image.tag&gt;. |

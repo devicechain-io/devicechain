@@ -16,6 +16,7 @@ package admin
 
 import (
 	"context"
+	"github.com/devicechain-io/dc-microservice/credential"
 	"time"
 
 	"errors"
@@ -57,6 +58,10 @@ type Service struct {
 	// still assign the built-in viewer role. Nil until SetViewerBaseline, which is the
 	// strict reading: nothing is held that a role does not grant.
 	viewerBaseline []string
+
+	// saKey is what service-account secrets are digested under (SetServiceAccountSecretKey).
+	// Nil refuses every mint rather than writing a digest nothing could verify.
+	saKey *credential.DeviceSecretKey
 }
 
 // SetViewerBaseline tells the service which authorities every enabled tenant member holds

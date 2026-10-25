@@ -154,7 +154,7 @@ curl -s -X POST http://localhost/api/device-management/graphql \
                          "enabled":true}}}'
 ```
 
-请选择自己的 `credentialId`：任意不可猜测的字符串即可。对于 `ACCESS_TOKEN` 凭据，`credentialId` **本身就是**设备提交的密钥，因此应像保护密码一样保护它，而不是把它当成名称。
+请选择自己的 `credentialId`：任意不可猜测的字符串即可。对于 `ACCESS_TOKEN` 凭据，`credentialId` **本身就是**设备提交的密钥，因此应像保护密码一样保护它，而不是把它当成名称。平台只保存它的单向摘要，所以请自己保留一份：这次请求的响应是它最后一次可被读取。
 
 刷新控制台的**设备（Devices）**列表。`sensor-001` 已出现在列表中，但还没有数据。
 

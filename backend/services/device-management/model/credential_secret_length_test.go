@@ -80,8 +80,10 @@ func TestChangingATypeToMqttBasicNeedsAPasswordThatMeetsTheMinimum(t *testing.T)
 		CredentialType: string(CredentialAccessToken), CredentialId: "tok-1", CredentialValue: &short, Enabled: true})
 	require.NoError(t, err)
 	toBasic := func(value dcgraphql.OptionalString) error {
+		// The id is set too: an access token's stored id is a digest, not a username.
 		_, err := api.UpdateDeviceCredential(ctx, "t-1", &DeviceCredentialUpdateRequest{
-			CredentialType: dcgraphql.OptionalStringOf(string(CredentialMqttBasic)), CredentialValue: value})
+			CredentialType: dcgraphql.OptionalStringOf(string(CredentialMqttBasic)),
+			CredentialId:   dcgraphql.OptionalStringOf("tok-1"), CredentialValue: value})
 		return err
 	}
 
@@ -100,7 +102,8 @@ func TestChangingATypeToMqttBasicNeedsAPasswordThatMeetsTheMinimum(t *testing.T)
 
 	// A value sent with a type that compares no secret is not kept.
 	_, err = api.UpdateDeviceCredential(ctx, "t-1", &DeviceCredentialUpdateRequest{
-		CredentialType: dcgraphql.OptionalStringOf(string(CredentialAccessToken))})
+		CredentialType: dcgraphql.OptionalStringOf(string(CredentialAccessToken)),
+		CredentialId:   dcgraphql.OptionalStringOf("tok-1")})
 	require.NoError(t, err)
 	var digest *string
 	require.NoError(t, api.RDB.Database.Raw("SELECT secret_digest FROM device_credentials WHERE token = ?", "t-1").Scan(&digest).Error)

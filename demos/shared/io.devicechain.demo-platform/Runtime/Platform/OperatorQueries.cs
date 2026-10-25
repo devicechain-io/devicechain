@@ -73,15 +73,26 @@ namespace DeviceChain.Demos.Platform
                 w.WriteEndArray();
             });
 
-        /// <summary>Criteria for the credential search fallback: this device's enabled ACCESS_TOKEN credentials.</summary>
-        public static string CredentialSearch(string deviceToken) =>
+        /// <summary>The create request for a device's own ACCESS_TOKEN credential, carrying the token it will hold.</summary>
+        public static string CredentialCreate(string credentialToken, string deviceToken, string accessToken) =>
             Write(w =>
             {
-                w.WriteStartObject("c");
-                w.WriteNumber("pageNumber", 1);
-                w.WriteNumber("pageSize", 10);
-                w.WriteString("device", deviceToken);
+                w.WriteStartObject("r");
+                w.WriteString("token", credentialToken);
+                w.WriteString("deviceToken", deviceToken);
                 w.WriteString("credentialType", CredentialResolver.AccessToken);
+                w.WriteString("credentialId", accessToken);
+                w.WriteBoolean("enabled", true);
+                w.WriteEndObject();
+            });
+
+        /// <summary>The partial update that rotates an ACCESS_TOKEN credential to a new token and makes sure it is enabled.</summary>
+        public static string CredentialRotate(string credentialToken, string accessToken) =>
+            Write(w =>
+            {
+                w.WriteString("t", credentialToken);
+                w.WriteStartObject("r");
+                w.WriteString("credentialId", accessToken);
                 w.WriteBoolean("enabled", true);
                 w.WriteEndObject();
             });

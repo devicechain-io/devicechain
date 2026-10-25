@@ -1,0 +1,22 @@
+# Intended breaking changes to the served GraphQL schemas, against the baseline release.
+#
+# Checked by `go run ./cmd/sdlcompat` (from backend/tools/docsgql), which the `api-compat`
+# CI job runs through hack/check-graphql-compat.sh. A breaking change that is not listed
+# here fails the pull request; the failure prints the exact line to add. One line per change:
+#
+#   <baseline-tag> <schema> <coordinate> <kind> <reason>
+#
+#   baseline-tag  the release the change breaks against, as the failure names it (vX.Y.Z)
+#   schema        the published schema name: <area>, <area>-admin or <area>-settings
+#   coordinate    Type, Type.field, Type.field(arg:), Enum.VALUE, Input.field, @directive
+#   kind          the breaking kind the failure names (field-removed, argument-type-changed, ...)
+#   reason        why, and what a client uses instead. Required.
+#
+# A line applies only while its baseline-tag IS the baseline. When the next release is
+# tagged, the baseline moves past it and the check reports it as expired: delete it then.
+# A line for the current baseline that matches no change fails, so remove a declaration
+# when you revert the change it excused.
+#
+# Before v1.0.0 a declared break may ship in any release; say so in that release's
+# highlights (.github/release-highlights.json, `"breaking": true`). From v1.0.0 a covered
+# interface breaks only in a major release.

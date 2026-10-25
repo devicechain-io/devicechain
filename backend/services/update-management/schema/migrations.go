@@ -31,4 +31,5 @@ var Migrations = []*gormigrate.Migration{
 	NewSignersSchema(),
 	NewAssignmentSignatureSchema(),
 	NewAssignmentScopeAnchorsSchema(),
+	NewRolloutsSchema(),
 }

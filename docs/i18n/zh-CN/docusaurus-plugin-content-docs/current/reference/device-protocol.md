@@ -57,6 +57,21 @@ Schema 表达不了的内容：
 
 通过 **HTTP**，设备只能发送事件。将同样的[事件正文](#device-event)以 `POST` 发送到 `event-sources` 服务（端口 8081）的 `/{instanceId}/{tenant}/events`。HTTP 没有下行通道：只使用 HTTP 的设备无法接收命令、配置或更新分配。
 
+### 网关命名空间 {#gateway-namespace}
+
+网关（[边缘代理](../deployment/edge-services.md#gateway-identity)就是一个）是代表其他设备发布消息的设备。它在自己的命名空间中发布：
+
+| 消息 | 方向 | MQTT 主题 |
+| --- | --- | --- |
+| 网关后设备的[事件](#device-event) | 网关 → 平台 | `{instanceId}/{tenant}/gateways/{gatewayToken}/devices/{deviceToken}/events` |
+| 事件被拒绝的通知 | 平台 → 网关 | `{instanceId}/{tenant}/gateways/{gatewayToken}/notices` |
+
+- 网关只被授权在**自己的**令牌下发布（`devices/` 之后可以是任意子设备令牌），并且只订阅自己的通知。它不能在其他网关或其他租户的命名空间中发布，也不能在子设备自己的主题上发布。无论网关代表多少台设备，授权的大小都相同，并且每台设备都持有该授权，因此给网关分配第一台设备不需要重连。
+- 只有当主题中指明的设备存在、**已分配给该网关**，并且网关已启用时，平台才接受事件。否则平台以原因 `NotGatewayChild`（见[下文](#rejections-after-acceptance)）拒绝事件，并向网关发送通知。无论哪种情况，消息代理都会确认该发布，因为 MQTT 3.1.1 无法拒绝发布。
+- 身份由主题加分配决定，正文不携带身份：此命名空间上携带 `credentialType`、`credentialId` 或 `credentialSecret` 的事件会被拒绝，正文 `device` 指向其他设备的事件也会被拒绝。事件归属于子设备，已解析的事件还会携带网关的令牌。
+- 通知是一个 JSON 对象：`{"altId": "...", "device": "...", "reason": "not_gateway_child"}`。它不带载荷，也不存储，因此发送时离线的网关收不到。拒绝的记录是 `failed-events` 流。
+- 授权还覆盖该命名空间下的 `responses` 和 `reports`，以及订阅 `commands` 和 `desired`，但目前没有任何组件读取或发送它们。请只发布**事件**。
+
 ## 设备事件 {#device-event}
 
 每条 MQTT 消息或每个 HTTP 请求一个 JSON 对象。一条消息就是一个事件。
@@ -177,7 +192,7 @@ Schema 表达不了的内容：
 
 ## 拒绝与错误 {#rejections}
 
-平台不接受的消息会怎样，取决于它在哪里被拒绝以及使用哪种传输方式。HTTP 会响应请求，因此设备能在入口处得知拒绝。MQTT 在 broker 捕获消息后立即确认发布（`PUBACK`），这发生在**解码之前**，因此 MQTT 设备永远不会收到通知：broker 之后的任何拒绝只有运维人员能看到。
+平台不接受的消息会怎样，取决于它在哪里被拒绝以及使用哪种传输方式。HTTP 会响应请求，因此设备能在入口处得知拒绝。MQTT 在 broker 捕获消息后立即确认发布（`PUBACK`），这发生在**解码之前**，因此 MQTT 设备永远不会收到通知：broker 之后的任何拒绝只有运维人员能看到。在默认设置下，捕获流更换主节点期间被确认的 QoS 1 发布也可能丢失，既包括捕获流更换主节点期间，也包括持续负载下接入落后、该流写满时；见[服务质量](../guides/connecting-a-device.md#quality-of-service)。
 
 ### 入口处 {#rejections-at-the-door}
 
@@ -210,6 +225,7 @@ Schema 表达不了的内容：
 | `DeviceNotFound` | 未使用凭据，且 `device` 令牌未在租户中注册。 |
 | `Invalid` | 事件早于 366 天以上，或无法按其类型解释。 |
 | `ApiCallFailed` | 解析所需的某次查询或写入失败，包括平台无法创建的 [`NewRelationship`](#new-relationship-payload)。 |
+| `NotGatewayChild` | 网关为未分配给它的设备或不存在的设备发布了事件，或网关已停用。不会重试：在第一次投递时即记录。 |
 
 被拒绝的事件会一直重试到第五次投递，因此如果设备在此期间完成注册，或数据库已恢复，事件仍会被存储。例外是过旧而无法存储的事件，它在第一次投递时就被记录，因为任何重试都无法改变它的时间。
 

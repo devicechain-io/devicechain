@@ -67,7 +67,7 @@ func TestGraphQLSetsAndReadsConfigurationDeclaration(t *testing.T) {
 }
 
 // An invalid key is refused as a whole, over the wire, and nothing is stored; an unknown
-// input field is rejected by the schema (the forked library's job, shown here for the
+// input field is rejected by the schema (graphql-go's job, shown here for the
 // new input).
 func TestGraphQLRefusesInvalidConfigurationDeclaration(t *testing.T) {
 	ctx := profileLocationCtx(t)

@@ -18,7 +18,7 @@ require (
 	github.com/google/cel-go v0.30.0
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
-	github.com/graph-gophers/graphql-go v1.10.2
+	github.com/graph-gophers/graphql-go v1.10.3
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/nats-io/jwt/v2 v2.8.2
 	github.com/nats-io/nats-server/v2 v2.15.1
@@ -94,5 +94,3 @@ require (
 	google.golang.org/protobuf v1.36.12
 	gorm.io/datatypes v1.2.7
 )
-
-replace github.com/graph-gophers/graphql-go => github.com/devicechain-io/graphql-go v1.10.2-dc.2

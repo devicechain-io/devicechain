@@ -210,7 +210,7 @@ func TestTheDeployedViewOverlaysTheIdentitySecret(t *testing.T) {
 
 // The login is INTRODUCED: minted when the starting state has none, reused when it has one.
 func TestAnUpgradeIntroducesTheIdentityLoginOnceAndNeverReplacesIt(t *testing.T) {
-	creds, err := natsauth.GenerateCredentials()
+	creds, err := existingCredentials()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,7 +292,7 @@ func TestTheBrokerIsHandedOnlyTheIdentityHash(t *testing.T) {
 }
 
 func TestTheBrokerRecordCarriesTheIdentityLoginAndToleratesItsAbsence(t *testing.T) {
-	creds, err := natsauth.GenerateCredentials()
+	creds, err := existingCredentials()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -320,7 +320,8 @@ func TestTheBrokerRecordCarriesTheIdentityLoginAndToleratesItsAbsence(t *testing
 
 // A hash the broker already holds is reused, so a re-run does not re-salt it and roll the broker.
 func TestTheDeployedIdentityHashIsReadAndReused(t *testing.T) {
-	creds, err := natsauth.GenerateCredentials()
+	t.Parallel()
+	creds, err := existingCredentials()
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -26,14 +27,14 @@ import (
 // within its protocol (the auto-register conflict-swallow still works).
 func TestTokenPrefixNamespacesDevicesByProtocol(t *testing.T) {
 	const id = "plant-a/node-3"
-	sp := DeriveDeviceToken(id, "sp-")
-	lw := DeriveDeviceToken(id, "lw-")
+	sp := core.DeriveDeviceToken(id, "sp-")
+	lw := core.DeriveDeviceToken(id, "lw-")
 
 	assert.True(t, strings.HasPrefix(sp, "sp-"), "a Sparkplug token is labelled sp-")
 	assert.True(t, strings.HasPrefix(lw, "lw-"), "an LwM2M token is labelled lw-")
 	assert.NotEqual(t, sp, lw, "the same external id under two protocols must not share a token")
 	// Determinism within a protocol is what the create/create conflict-swallow relies on.
-	assert.Equal(t, sp, DeriveDeviceToken(id, "sp-"), "derivation stays deterministic per protocol")
+	assert.Equal(t, sp, core.DeriveDeviceToken(id, "sp-"), "derivation stays deterministic per protocol")
 	// The hash disambiguator is shared, so the tokens differ ONLY by prefix — dropping
 	// the prefix (an unparameterized regression) would collapse them.
 	assert.Equal(t, strings.TrimPrefix(sp, "sp-"), strings.TrimPrefix(lw, "lw-"),

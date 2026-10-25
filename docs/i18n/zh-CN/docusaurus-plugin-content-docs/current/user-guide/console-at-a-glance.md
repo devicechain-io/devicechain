@@ -15,21 +15,21 @@ import GuideShot from '@site/src/components/GuideShot';
 
 登录后会进入主页。主页会按姓名问候你，并显示两个数字：租户中有多少台 **Devices**（设备）和多少个 **Device Types**（设备类型）。选择任一数字即可打开对应列表。
 
-<GuideShot id="console-home" alt="控制台主页。左侧是侧边栏。页眉显示 Dashboard，右上角是租户标识“acme (sim)”。页面标题为“Welcome, Dana Okafor”，显示两张卡片：13 Devices 和 1 Device Types。" />
+<GuideShot id="console-home" alt="控制台主页。左侧是侧边栏。页眉显示 Home，右上角是租户标识“acme (sim)”。页面标题为“Welcome, Dana Okafor”，显示两张卡片：13 Devices 和 1 Device Types。" />
 
-侧边栏顶部的 **Dashboard**（仪表板）始终会带你回到这里。它与 **Dashboards** 不同，后者存放团队创建的仪表板。
+侧边栏顶部的 **Home**（主页）始终会带你回到这里。它与 **Dashboards** 不同，后者存放团队创建的仪表板。
 
 ## 侧边栏 {#the-sidebar}
 
 左侧的侧边栏是你在控制台中导航的方式。它按固定顺序列出租户的各个功能区。
 
-<GuideShot id="console-sidebar" alt="控制台侧边栏。DeviceChain 徽标和 Management Console 字样下方依次列出 Dashboard、Dashboards、Alarms、Connectors、Devices、Assets、Customers、Areas、Facets、Browse、Audit、Updates 和 Settings。Devices、Assets、Customers、Areas、Updates 和 Settings 带有箭头，表示可展开子菜单。底部是当前登录用户的姓名和邮箱。" />
+<GuideShot id="console-sidebar" alt="控制台侧边栏。DeviceChain 徽标和 Management Console 字样下方依次列出 Home、Dashboards、Alarms、Connectors、Devices、Assets、Customers、Areas、Facets、Browse、Audit、Updates 和 Settings。Devices、Assets、Customers、Areas、Updates 和 Settings 带有箭头，表示可展开子菜单。底部是当前登录用户的姓名和邮箱。" />
 
 有些条目打开的是子菜单而不是页面。选择这类条目会展开其子菜单，并进入第一个页面。同一时间只会展开一个子菜单。
 
 | 条目 | 内容 |
 | --- | --- |
-| **Dashboard** | 主页。 |
+| **Home** | 主页。 |
 | **Dashboards** | 团队创建的仪表板。 |
 | **Alarms**（告警） | 规则已触发的告警。 |
 | **Notification Policies**（通知策略） | 告警会通知谁，以及暂存这些通知的静默时段。 |
@@ -46,7 +46,7 @@ import GuideShot from '@site/src/components/GuideShot';
 
 你只会看到角色允许访问的条目。例如，如果你的角色无权读取告警，侧边栏中就没有 **Alarms**。只有当你的安装环境运行了更新服务时，才会出现 **Updates**。**Settings** 下的各项面向租户管理员。
 
-如果你的访问权限仅限于租户的部分客户，侧边栏只有 **Dashboard**、**Dashboards**、**Alarms** 和 **Devices**。参见[客户用户能看到什么](/user-guide/members-roles-and-customer-users#what-a-customer-user-sees)。
+如果你的访问权限仅限于租户的部分客户，侧边栏只有 **Home**、**Dashboards**、**Alarms** 和 **Devices**。参见[客户用户能看到什么](/user-guide/members-roles-and-customer-users#what-a-customer-user-sees)。
 
 你的姓名和邮箱地址位于侧边栏底部，选择它们会打开用户菜单，参见[登录](/user-guide/signing-in#the-user-menu)。
 

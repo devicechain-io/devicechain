@@ -20,9 +20,9 @@ Después de iniciar sesión llegas a la página de inicio. Te da la bienvenida p
 muestra dos recuentos: cuántos **Dispositivos** y cuántos **Tipos de dispositivo** tiene tu
 inquilino. Selecciona cualquiera de los dos para abrir esa lista.
 
-<GuideShot id="console-home" alt="La página de inicio de la consola. La barra lateral está a la izquierda. La cabecera dice Panel, con el distintivo de inquilino 'acme (sim)' arriba a la derecha. La página se titula 'Bienvenido, Dana Okafor' y muestra dos tarjetas: 13 Dispositivos y 1 Tipos de dispositivo." />
+<GuideShot id="console-home" alt="La página de inicio de la consola. La barra lateral está a la izquierda. La cabecera dice Inicio, con el distintivo de inquilino 'acme (sim)' arriba a la derecha. La página se titula 'Bienvenido, Dana Okafor' y muestra dos tarjetas: 13 Dispositivos y 1 Tipos de dispositivo." />
 
-La entrada **Panel**, arriba del todo en la barra lateral, siempre te trae de vuelta aquí. No es
+La entrada **Inicio**, arriba del todo en la barra lateral, siempre te trae de vuelta aquí. No es
 lo mismo que **Paneles**, que contiene los paneles que crea tu equipo.
 
 ## La barra lateral
@@ -30,14 +30,14 @@ lo mismo que **Paneles**, que contiene los paneles que crea tu equipo.
 La barra lateral de la izquierda es la forma de moverte por la consola. Enumera las áreas de tu
 inquilino en un orden fijo.
 
-<GuideShot id="console-sidebar" alt="La barra lateral de la consola. Bajo el logotipo de DeviceChain y las palabras Consola de gestión enumera Panel, Paneles, Alarmas, Conectores, Dispositivos, Activos, Clientes, Áreas, Facetas, Explorar, Auditoría, Actualizaciones y Configuración. Dispositivos, Activos, Clientes, Áreas, Actualizaciones y Configuración llevan una flecha que indica que abren un submenú. El nombre y el correo de la persona que inició sesión están al pie." />
+<GuideShot id="console-sidebar" alt="La barra lateral de la consola. Bajo el logotipo de DeviceChain y las palabras Consola de gestión enumera Inicio, Paneles, Alarmas, Conectores, Dispositivos, Activos, Clientes, Áreas, Facetas, Explorar, Auditoría, Actualizaciones y Configuración. Dispositivos, Activos, Clientes, Áreas, Actualizaciones y Configuración llevan una flecha que indica que abren un submenú. El nombre y el correo de la persona que inició sesión están al pie." />
 
 Algunas entradas abren un submenú en lugar de una página. Al seleccionar una se abre su submenú y
 se te lleva a su primera página. Solo hay un submenú abierto a la vez.
 
 | Entrada | Qué contiene |
 | --- | --- |
-| **Panel** | La página de inicio. |
+| **Inicio** | La página de inicio. |
 | **Paneles** | Los paneles que crea tu equipo. |
 | **Alarmas** | Las alarmas que han generado tus reglas. |
 | **Políticas de notificación** | A quién se avisa de las alarmas y las horas de silencio que retienen esos avisos. |
@@ -58,7 +58,7 @@ ejecuta el servicio de actualizaciones. Las entradas de **Configuración** son p
 administradores del inquilino.
 
 Si tu acceso está limitado a algunos de los clientes del inquilino, la barra lateral contiene solo
-**Panel**, **Paneles**, **Alarmas** y **Dispositivos**. Consulta
+**Inicio**, **Paneles**, **Alarmas** y **Dispositivos**. Consulta
 [Qué ve un usuario de cliente](/user-guide/members-roles-and-customer-users#what-a-customer-user-sees).
 
 Tu nombre y tu correo aparecen al pie de la barra lateral. Abren el menú de usuario, que se

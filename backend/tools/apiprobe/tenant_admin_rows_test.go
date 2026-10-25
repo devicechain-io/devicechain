@@ -13,12 +13,14 @@ import (
 	"github.com/graph-gophers/graphql-go/ast"
 )
 
-// The two rows that cover the tenant's own administration: the role it defines and the
-// member it invites. They are what puts rows in iam_roles (tenant-owned) and
-// iam_invitations, which the table sweep otherwise finds empty for every seeded tenant.
+// The rows that cover the tenant's own administration: the role it defines, the member it
+// invites and the service account it creates. They are what puts rows in iam_roles
+// (tenant-owned), iam_invitations and iam_service_accounts, which the table sweep otherwise
+// finds empty for every seeded tenant. The invitation and the account both hand out the
+// tenant's role, so both are skipped with it.
 
 // tenantAdminRows are the rows these tests are about, by name.
-var tenantAdminRows = map[string]bool{"tenant-role": true, "member-invitation": true}
+var tenantAdminRows = map[string]bool{"tenant-role": true, "member-invitation": true, "service-account": true}
 
 // A release that predates tenant-defined roles and invitations cannot express either row,
 // and must skip both — and only them — rather than send createTenantRole or inviteMember
@@ -36,6 +38,28 @@ func TestAReleaseWithoutTenantAdministrationSkipsExactlyItsTwoRows(t *testing.T)
 func TestAReleaseThatCannotDefineARoleSkipsTheInvitationToo(t *testing.T) {
 	b := currentTreeWithout(t, "user-management", "createTenantRole")
 	assertSkipsExactlyTheTenantAdminRows(t, b)
+}
+
+// A release that has tenant administration but predates service accounts skips the
+// account row and nothing else.
+func TestAReleaseWithoutServiceAccountsSkipsOnlyThatRow(t *testing.T) {
+	b := currentTreeWithout(t, "user-management", "createServiceAccount")
+	for _, e := range allEntities() {
+		write, reason, err := plan(e, b)
+		if err != nil {
+			t.Errorf("%q: %v", e.Name, err)
+			continue
+		}
+		if e.Name == "service-account" {
+			if write || reason == "" {
+				t.Errorf("service-account: write=%v reason=%q; want skipped with a reason", write, reason)
+			}
+			continue
+		}
+		if !write {
+			t.Errorf("%q is not written by a release that only lacks service accounts", e.Name)
+		}
+	}
 }
 
 func assertSkipsExactlyTheTenantAdminRows(t *testing.T, b *baseline) {

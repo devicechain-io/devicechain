@@ -112,6 +112,7 @@ func renderInstanceConfig(t *testing.T, natsOverrides map[string]interface{}) *c
 // hand-maintained mirror of exactly the kind core/streams and core/kv exist to
 // eliminate.
 func TestChartJetStreamCeilingsReachTheStruct(t *testing.T) {
+	t.Parallel()
 	cfg := renderInstanceConfig(t, nil)
 	n := cfg.Infrastructure.Nats
 
@@ -144,6 +145,7 @@ func TestChartJetStreamCeilingsReachTheStruct(t *testing.T) {
 // user values completely, since its expected numbers ARE the defaults; this is the
 // half that proves the override path works.
 func TestChartOverriddenCeilingsReachTheStruct(t *testing.T) {
+	t.Parallel()
 	const (
 		wantHot     int64 = 64 << 20
 		wantCold    int64 = 16 << 20
@@ -235,11 +237,17 @@ func TestRenderedReservationFitsTheJetStreamStore(t *testing.T) {
 			"resources available\"", reserved, maxFileStore)
 	}
 	// L5: with infrastructure.nats.mqttFailClosed on, the message store takes the capture
-	// stream's ceiling instead of the safety cap, and the capture stream keeps its own. The
-	// chart does not set the key (it is refused in this release), so it is turned on here, on
-	// the ceilings the chart rendered, which is what an operator turning it on would get.
-	n.MqttFailClosed = true
-	onReserved := reserved - cfg.Infrastructure.Nats.MqttStoreReservation() + n.MqttStoreReservation()
+	// stream's ceiling instead of the safety cap, and the capture stream keeps its own. It is
+	// turned on the way dcctl turns it on -- through the State's choice (--mqtt-fail-closed),
+	// rendered by the chart -- so what is measured is the document an operator who asked for it
+	// gets, on the ceilings the chart rendered.
+	onSt := compactState(false)
+	onSt.MqttFailClosed = boolPtr(true)
+	on := renderFromState(t, onSt).Infrastructure.Nats
+	if !on.MqttFailClosed {
+		t.Fatal("--mqtt-fail-closed did not reach the rendered document, so the 'on' reservation below measures nothing")
+	}
+	onReserved := reserved - cfg.Infrastructure.Nats.MqttStoreReservation() + on.MqttStoreReservation()
 	if onReserved <= reserved {
 		t.Fatalf("premise: with mqttFailClosed on the reservation grows (%d B, from %d B)", onReserved, reserved)
 	}
@@ -392,6 +400,7 @@ func TestBootstrapRejectsAConfigTheServicesWouldRefuse(t *testing.T) {
 // is caught by config.Validate — reaching the gate through State exactly as a real
 // bootstrap would.
 func TestHelmInstallChecksTheConfigBeforeTouchingTheCluster(t *testing.T) {
+	t.Parallel()
 	st := &State{
 		Instance: "dctest",
 		Profile:  "default",
@@ -431,6 +440,7 @@ func TestHelmInstallChecksTheConfigBeforeTouchingTheCluster(t *testing.T) {
 // they wrote it or not, and the failure this catches is one shipped key, not one written
 // key.
 func TestChartRenderedInstanceConfigLoadsThroughTheServiceLoader(t *testing.T) {
+	t.Parallel()
 	ch, err := loadEmbeddedChart()
 	if err != nil {
 		t.Fatalf("loading embedded chart: %v", err)

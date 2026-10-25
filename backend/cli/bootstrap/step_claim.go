@@ -35,16 +35,27 @@ func stepDeclareInstance(ctx context.Context, st *State) error {
 	// cluster dcctl was pointed at, a fresh default one on a cluster it created. Either rewrites
 	// what the instance is built on, and a store dropped from the declaration is a volume Helm
 	// would then remove along with every logo and artifact on it.
-	if !st.DryRun && !st.ObjectStoreExplicit {
+	if !st.DryRun {
 		existing, err := readInstanceDeclaration(ctx, st.KubeContext, st.Instance)
 		if err != nil {
 			return err
 		}
-		if existing != nil {
+		if existing != nil && !st.ObjectStoreExplicit {
 			st.ObjectStore = existing.Spec.ObjectStore.DeepCopy()
+		}
+		// 🔴 AND FOR THE FAIL-CLOSED CHOICE: a re-run that names no --mqtt-fail-closed keeps the
+		// one the declaration records, rather than writing "never chose" over a decision.
+		if existing != nil && st.MqttFailClosed == nil {
+			st.MqttFailClosed = copyBoolPtr(existing.Spec.MQTTFailClosed)
+		}
+		// 🔴 THE SAME RULE FOR THE OPERATOR'S TUNING: a re-run that names no --values keeps the
+		// overlay the declaration records, rather than rendering the instance without it.
+		if err := adoptRecordedValuesOverlay(st, existing); err != nil {
+			return err
 		}
 	}
 	spec := InstanceSpecFrom(st, st.Binding, st.Provider)
+	sayMqttFailClosed(st)
 
 	if st.DryRun {
 		// 🔴 A dry run takes no lock and writes no declaration, because both are
@@ -56,6 +67,7 @@ func stepDeclareInstance(ctx context.Context, st *State) error {
 		fmt.Println()
 		wouldDo(fmt.Sprintf("declare instance %q (provider %s, profile %s)",
 			st.Instance, spec.Provider, spec.Profile))
+		sayValuesOverlay(st)
 		return nil
 	}
 
@@ -71,6 +83,12 @@ func stepDeclareInstance(ctx context.Context, st *State) error {
 	// written one, its failure would hand the next plain bootstrap a running instance.
 	if err := writeInstanceDeclaration(ctx, st.KubeContext, st.Instance, spec, st.DcctlVersion, !st.OverLiveInstance); err != nil {
 		return err
+	}
+	// The operator's tuning rides on the declaration, so the first upgrade finds it there.
+	if valuesOverlayChanges(st) {
+		if err := recordValuesOverlayFor(ctx, st.KubeContext, st.Instance, st.ValuesOverlay); err != nil {
+			return err
+		}
 	}
 	done()
 
@@ -88,6 +106,9 @@ func stepDeclareInstance(ctx context.Context, st *State) error {
 		// something deleting declarations underneath a running bootstrap.
 		return fmt.Errorf("the declaration for instance %q was not there immediately after being written; "+
 			"something else is deleting it", st.Instance)
+	}
+	if err := verifyFailClosedRecorded(st.MqttFailClosed, inst.Spec.MQTTFailClosed); err != nil {
+		return err
 	}
 	if err := ValidateInstanceSpec(inst.Spec); err != nil {
 		return fmt.Errorf("the declaration read back from the cluster is not usable: %w", err)
@@ -172,4 +193,8 @@ func applyDeclaration(st *State, spec dcv1beta1.InstanceSpec) {
 	// built with. nil is a real answer (no store) and is taken as one: an instance declared
 	// before this field existed has no store, and an upgrade must not invent one.
 	st.ObjectStore = spec.ObjectStore.DeepCopy()
+	// Likewise: the declaration is the only place the choice survives an upgrade. nil is a
+	// real answer (never chose), taken as one -- an instance declared before this field
+	// existed keeps the platform default rather than being handed a decision.
+	st.MqttFailClosed = copyBoolPtr(spec.MQTTFailClosed)
 }

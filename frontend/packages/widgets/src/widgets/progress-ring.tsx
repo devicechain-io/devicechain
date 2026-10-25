@@ -21,7 +21,8 @@ import {
 } from '@devicechain/widget-sdk';
 
 import { emptyReason, useLevelReading, type LevelReading } from '../level-reading';
-import { LevelEmpty, LevelReadout } from '../level-readout';
+import { LevelReadout } from '../level-readout';
+import { LevelEmptyFor } from '../no-reading';
 import { readRange } from '../value-scale';
 
 // The ring's geometry in its 100 x 100 viewBox.
@@ -50,7 +51,7 @@ export function ProgressRing({ widget, data }: WidgetProps) {
 
 function RingBody({ reading: r, percent, scale: ws }: { reading: LevelReading; percent: boolean; scale: WidgetScale }) {
   const reason = emptyReason(r);
-  if (reason !== undefined || !r.range?.ok || !r.fill) return <LevelEmpty message={reason ?? r.strings.noData} />;
+  if (reason !== undefined || !r.range?.ok || !r.fill) return <LevelEmptyFor reading={r} reason={reason} />;
   const range = r.range.range;
   const fill = r.fill;
   // The percent is of the scale and is NOT clamped: 150 % is the truth the marker flags.

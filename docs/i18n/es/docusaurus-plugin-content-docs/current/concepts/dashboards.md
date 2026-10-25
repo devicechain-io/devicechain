@@ -222,7 +222,25 @@ La dirección puede llevar parámetros, de modo que un marcador o una pantalla d
 | `density` | `compact`, `comfortable`, `wall` | Sustituye la densidad con la que se diseñó el panel. Escala todos los tamaños de texto y de espaciado, los márgenes entre celdas y la celda más pequeña a la que puede reducirse una columna, así que `wall` dibuja más grande y, en una pantalla estrecha, con menos columnas, y `compact` dibuja más pequeño. Sin el parámetro se aplica la densidad del propio panel, y el parámetro nunca se guarda en el panel ni se recuerda. |
 | `range` | `15m`, `1h`, `6h`, `24h`, `7d` | Abre el panel con ese intervalo de tiempo en lugar del predeterminado del panel. El visor puede seguir cambiándolo. |
 | `paused` | `1` | Abre el panel en pausa en el momento en que se carga. Cualquier otro valor lo abre en vivo. |
+| `rotate` | `<token>,<token>,...` | Una lista de reproducción: de dos a 24 tokens de panel, que se muestran uno tras otro. Implica `kiosk` y prevalece sobre `dashboard`. |
+| `every` | segundos, de 10 a 3600 | Cuánto tiempo se muestra cada panel de una lista `rotate`. 60 si falta. |
 
 Un parámetro con un valor no reconocido se ignora y se escribe un aviso en la consola del navegador; el panel se carga igualmente con ese ajuste en su valor por defecto.
+
+#### Listas de reproducción {#playlists}
+
+Una pantalla de pared que deba recorrer varios paneles usa `rotate`:
+
+```text
+/dash/?rotate=<token-a>,<token-b>,<token-c>&every=45&density=wall
+```
+
+Cada panel se muestra durante `every` segundos, luego toma el relevo el siguiente, y la lista vuelve a empezar tras el último. Una barra fina en el borde inferior muestra cuánto lleva el panel actual, y una pequeña franja de control nombra el panel, su lugar en la lista y ofrece los botones de anterior, pausa y siguiente. `chrome=0` oculta la franja y conserva la barra.
+
+- **El siguiente panel se lee antes de su turno**, en los últimos diez segundos del actual (de inmediato si el intervalo es corto), de modo que el cambio es a un panel que ya está aquí. La versión en vivo de cada panel se vuelve a leer en cada pasada, así que un panel que publique aparece la próxima vez que la lista llegue a él.
+- **Usar el panel pausa la rotación.** Un clic, una pulsación de tecla, un desplazamiento o un toque detienen la lista para que nadie sea apartado de un widget que está leyendo, y se reanuda tras 30 segundos sin ninguno de ellos. El botón de pausa la mantiene detenida hasta que se vuelve a pulsar. Una lista en pausa siempre lo indica, incluso con `chrome=0`.
+- **Un panel que no se puede abrir se omite**, con una nota en la página que lo nombra junto con el motivo, y los demás siguen reproduciéndose. Si no se puede abrir ningún panel, la página lo dice y ofrece reintentar.
+- **El resto del enlace se aplica a todos los paneles.** Se usan el mismo `range`, o la misma ventana fija `from` y `to`, `theme` y `density` en cada uno. Un parámetro `bind.<slot>` vincula ese dispositivo en los paneles que tienen un slot con ese nombre y se omite en los demás, de modo que un solo enlace puede vincular un dispositivo en varios paneles.
+- **Las partes inutilizables se ignoran, con una nota en la página.** Un token que no es de panel se omite, un `every` fuera de 10 a 3600 segundos o que no sea un número entero vuelve a 60, se cortan los paneles por encima de 24, y menos de dos paneles utilizables no forman una lista (un panel se abre como si se hubiera indicado en `dashboard`). Una nota puede descartarse; la pantalla de pared sigue reproduciéndose.
 
 Consulta también la vista general de [Arquitectura](./architecture.md) y la [referencia de la API GraphQL](../reference/graphql-api.md).

@@ -22,8 +22,8 @@ import (
 // can be observed. The scenario they exist for is the one the library CANNOT catch: a field
 // added to NotificationRuleCreateRequest in the SDL and forgotten in decodeRule. The
 // library would then find the field perfectly well defined and pass it through, and a
-// decoder that ignored what it did not recognise would drop it silently — the fork's own
-// defect, arriving through a door the fork does not cover. Driving UnmarshalGraphQL
+// decoder that ignored what it did not recognise would drop it silently — the old
+// pre-v1.10.3 library defect, arriving through a door the library does not cover. Driving UnmarshalGraphQL
 // directly is what makes the refusals observable, and what kills both mutants.
 //
 // The wire tests keep their own value and their own name: they assert that the composite —

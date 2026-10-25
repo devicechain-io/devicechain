@@ -22,7 +22,8 @@ El servicio de actualizaciones es opcional y no todas las instalaciones lo ejecu
 hace, la barra lateral no tiene el grupo **Actualizaciones** y los dispositivos no tienen la pestaña
 Actualizaciones. Consulta [cómo activarlo](../concepts/over-the-air-updates.md#enabling).
 
-En la barra lateral, **Actualizaciones** tiene dos pantallas: **Artefactos** y **Firmantes**. La
+En la barra lateral, **Actualizaciones** tiene tres pantallas: **Artefactos**, **Despliegues** y **Firmantes**.
+Actualizar un grupo de dispositivos completo se hace en [Despliegues](#rollouts). La
 asignación de una actualización a un dispositivo se hace en la página del propio dispositivo, en su
 [pestaña Actualizaciones](#assigning-an-update-to-a-device).
 
@@ -251,12 +252,46 @@ recogido queda en **Cancelación pendiente** mientras el dispositivo esté desha
 rechazan sus informes: la cancelación se completa cuando el dispositivo se vuelve a habilitar y la
 confirma, o la actualización termina por tiempo agotado al vencer el plazo de su etapa.
 
+## Despliegues {#rollouts}
+
+**Despliegues** actualiza un grupo de dispositivos completo, unos pocos dispositivos a la vez. Úsalo
+cuando un dispositivo cada vez sea demasiado lento y todos a la vez sea demasiado arriesgado.
+
+**Nuevo despliegue** pide un token, un nombre opcional, un **Artefacto** (solo se ofrecen los
+disponibles), un **Grupo de dispositivos**, **Dispositivos actualizándose a la vez** y un **Umbral de
+fallos** opcional. El despliegue se crea como borrador y todavía no se envía nada a ningún dispositivo.
+
+En la página del despliegue:
+
+- **Iniciar** fija los miembros actuales del grupo como dispositivos del despliegue y da a los primeros
+  la orden de actualizar. Los dispositivos que se unan al grupo después no se incluyen; los que salgan
+  siguen en el despliegue.
+- **Pausar** hace que ningún dispositivo más reciba la orden. Los que ya se están actualizando
+  continúan, y **Reanudar** sigue desde donde se detuvo.
+- **Abortar** cancela los dispositivos que aún no recibieron la orden y termina el despliegue. Los que
+  ya se están actualizando terminan; puedes cancelar cualquiera de ellos desde su propia
+  [pestaña Actualizaciones](#assigning-an-update-to-a-device).
+
+El resumen muestra cuántos dispositivos están pendientes, en curso, correctos, fallidos,
+desconocidos, cancelados y omitidos, y la tabla **Dispositivos** muestra cada uno con su resultado,
+filtrable por resultado. Un dispositivo omitido fue rechazado por las mismas reglas que una asignación
+individual (por ejemplo, un dispositivo deshabilitado o uno ocupado con otra actualización), y su
+columna **Motivo** indica cuál. Un dispositivo con resultado desconocido cuenta como fallo y conserva
+su plaza dentro de **Dispositivos actualizándose a la vez**.
+
+Cuando los dispositivos fallidos y desconocidos alcanzan el **Umbral de fallos**, el despliegue se
+pausa solo. Para continuar, introduce un umbral más alto y elige **Reanudar con este umbral**:
+reanudar nunca pone el recuento a cero. Un despliegue también se pausa solo si su artefacto se retira
+mientras está en curso.
+
+Los despliegues necesitan `artifact:read` para verlos y `artifact:write` para crearlos y controlarlos.
+
 ## Miembros limitados a algunos clientes {#members-limited-to-some-customers}
 
 Un miembro cuyo acceso está limitado a algunos de tus clientes, y que tiene `artifact:read`, puede leer
 las asignaciones de actualización de los dispositivos que estaban asignados a uno de esos clientes
 cuando se les asignó la actualización. No puede asignar, cancelar ni abandonar una actualización, ni
-listar artefactos o firmantes. Las asignaciones hechas antes de que tu instancia registrara a quién
+listar artefactos, firmantes o despliegues. Las asignaciones hechas antes de que tu instancia registrara a quién
 estaba asignado un dispositivo no se muestran a ese miembro.
 
 ## Relacionado

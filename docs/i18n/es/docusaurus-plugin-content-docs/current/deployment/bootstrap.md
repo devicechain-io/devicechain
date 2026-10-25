@@ -59,7 +59,7 @@ Cada uno en un namespace propio, instala:
 El operador es un solo controlador por clúster, compartido por todas las instancias que haya
 en él. Por eso instalarlo es tarea del comando del clúster y no de cada instancia, y por eso
 mover un clúster a una versión nueva empieza aquí: consulta
-[Versiones y actualizaciones](./releases-and-upgrades.md#zero-downtime-upgrades).
+[Versiones y actualizaciones](./releases-and-upgrades.md#rolling-upgrades).
 
 `install` también crea la identidad de base de datos base con la que se crea el login de base
 de datos propio de cada instancia, y registra la instalación en el clúster.
@@ -256,7 +256,7 @@ servicios, la clave raíz del almacén de secretos— porque ninguna de ellas ex
 Apúntalo a una instancia que ya esté en marcha y se detiene en el paso 3, antes de tocar la
 infraestructura o el chart. Nombra el comando que sí mueve una instancia viva:
 `dcctl upgrade`, descrito en
-[Versiones y actualizaciones](./releases-and-upgrades.md#zero-downtime-upgrades).
+[Versiones y actualizaciones](./releases-and-upgrades.md#rolling-upgrades).
 
 Una ejecución que *falló* a mitad de camino es un caso distinto, y volver a ejecutarla sigue
 siendo la forma de repararla. El paso 3 solo rechaza una instancia **viva**: una cuyo
@@ -327,6 +327,32 @@ de ambas:
 - **El puerto MQTT local.** En un clúster local, el puerto 1883 de tu máquina llega solo al
   broker de la primera instancia. Los brokers de las instancias posteriores son alcanzables
   desde dentro del clúster, y el arranque inicial lo indica cuando ocurre.
+
+#### Ingress y tu propio controlador {#ingress-controller}
+
+La instalación del clúster configura un controlador de ingress y cada instancia recibe sus rutas del chart. Nada en
+el borde es un control de seguridad: el emisor de tokens de servicio y el conjunto de claves de firma los sirve
+`user-management` en un puerto interno al que no apunta ninguna ruta del ingress, de modo que el puerto público
+responde 404 para ellos detrás de cualquier controlador. El emisor está protegido por el secreto de servicio
+compartido, que se compara en tiempo constante. Los ingress del chart no llevan ningún snippet de configuración. El
+controlador que configura `dcctl install` sigue aceptando snippets en esta versión, porque las instancias que aún no
+se han actualizado dependen de ellos.
+
+Si traes tu propio controlador, enruta los cinco ingress del chart:
+
+- `/api/<area>` al puerto `graphql` del Service de cada área, quitando el prefijo.
+- `/` a la consola.
+- `/.well-known/oauth-protected-resource` (a `mcp`) y `/.well-known/oauth-authorization-server` (a `user-management`),
+  sin quitar nada, cuando esas áreas están activadas.
+- La subida de actualizaciones, `PUT /api/update-management/updates/artifacts/<token>/content`, a `update-management`. No
+  almacenes en búfer el cuerpo de la solicitud, porque el servicio autentica antes de leerlo.
+- La descarga de actualizaciones, `GET /api/update-management/updates/download/<artifact>`, a `update-management`. Mantén
+  su cadena de consulta fuera de los registros de acceso, porque la concesión viaja en ella.
+
+No necesitas una regla que oculte las rutas `/auth/`, y no debes enrutar a un puerto de Service llamado `internal-auth`.
+La política de red del chart (`networkPolicy.enabled`, desactivada en las instalaciones de `dcctl`) también puede
+limitar ese puerto al namespace de la propia instancia. Consulta
+[Endpoints que nunca salen del clúster](../concepts/security-model.md#internal-endpoints).
 
 #### El namespace de la instancia {#instance-namespace}
 
@@ -408,7 +434,7 @@ que un fallo nombra un paso que puedes encontrar aquí:
    que acaba con éxito la retira, en la misma escritura que registra la instancia como `Ready`.
 6. **Render configuration** (renderizar la configuración) — resuelve el id de la instancia, el
    namespace, el perfil y todas las credenciales generadas: el material de autenticación del
-   broker (la contraseña de servicio compartida y la clave del emisor del callout), la
+   broker (una credencial para cada área que usa el broker y la clave del emisor del callout), la
    autoridad certificadora que firma el propio certificado TLS del broker, el secreto de
    autenticación entre servicios y la **clave raíz del almacén de secretos**. Todas se acuñan
    aquí, porque el paso 3 ha establecido que no hay ninguna instancia viva de la que tomarlas.

@@ -18,14 +18,13 @@ import (
 	"context"
 	"flag"
 	"os"
-	"os/signal"
 	"strconv"
-	"syscall"
 	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"github.com/devicechain-io/dc-simulator/internal/stopsig"
 	"github.com/devicechain-io/dc-simulator/loadtest"
 	"github.com/devicechain-io/dc-simulator/sim"
 )
@@ -92,7 +91,7 @@ func main() {
 
 	// SIGINT/SIGTERM abort the run (drive returns an error, no verdict) rather
 	// than producing a report against a torn stop boundary.
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, cancel, stop := stopsig.Notify(context.Background())
 	defer cancel()
 
 	log.Info().Str("tenant", hs.Tenant).Str("manifest", manifestId).
@@ -100,6 +99,10 @@ func main() {
 
 	report, err := loadtest.Run(ctx, hs, profile)
 	if err != nil {
+		if code, ok := stop.ExitCode(); ok {
+			log.Warn().Err(err).Int("exit", code).Msg("load-test stopped by a signal: no verdict")
+			os.Exit(code)
+		}
 		log.Fatal().Err(err).Msg("load-test run failed")
 	}
 

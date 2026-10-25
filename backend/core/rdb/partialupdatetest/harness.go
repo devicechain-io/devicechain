@@ -754,16 +754,18 @@ func fixtureJournalsAMutation(t *testing.T, ctx context.Context) {
 
 // 🔴 THE CLASS THE TEN PROPERTIES ABOVE STRUCTURALLY CANNOT SEE, PINNED HERE INSTEAD.
 //
-// The journal's hook is After("gorm:create"/"update"/"delete"), which gorm sorts past the
-// commit callback, and it fails closed with db.AddError. So a mutation whose journal write
-// fails reports FAILURE for a row that has already CHANGED. Every property above asserts
-// on `fam.Update(...) == nil` and reads the row only when that returned nil, so none of
-// them can observe an error over a completed write — registering the callback would
-// otherwise be strictness the harness owns but never exercises.
+// The journal's hook runs inside the mutation's transaction (before the commit callback)
+// and fails closed with db.AddError. So a mutation whose journal write fails reports
+// FAILURE and the row does NOT change: the row and its journal entry commit together or
+// not at all. Every property above asserts on `fam.Update(...) == nil` and reads the row
+// only when that returned nil, so none of them can observe an error over a write —
+// registering the callback would otherwise be strictness the harness owns but never
+// exercises.
 //
 // This drives it: take the journal's table away, then update. The error is required AND so
-// is the changed value, because an assertion on the error alone would also pass if the
-// mutation had been refused, which is the opposite behaviour.
+// is the UNCHANGED value, because an assertion on the error alone would also pass if the
+// mutation had been committed first and reported failed afterwards, which is the defect
+// this ordering replaced.
 func fixtureFailsClosedOnAnUnwritableJournal(t *testing.T, ctx context.Context) {
 	db := NewSQLiteDB(t, &fenceProbe{})
 	row := &fenceProbe{Note: "seeded"}
@@ -789,11 +791,10 @@ func fixtureFailsClosedOnAnUnwritableJournal(t *testing.T, ctx context.Context) 
 	if len(reloaded) != 1 {
 		t.Fatalf("reloaded %d probe rows, want 1", len(reloaded))
 	}
-	if reloaded[0].Note != "moved" {
-		t.Fatalf("the probe row reads %q, want %q — the failure this reports is supposed to be "+
-			"one over a mutation that ALREADY HAPPENED; a refused write is a different "+
-			"behaviour and this subtest is no longer pinning the one it names",
-			reloaded[0].Note, "moved")
+	if reloaded[0].Note != "seeded" {
+		t.Fatalf("the probe row reads %q, want %q — a mutation whose journal write failed "+
+			"must roll back with it; reporting failure over a saved change is the defect "+
+			"this subtest pins", reloaded[0].Note, "seeded")
 	}
 }
 

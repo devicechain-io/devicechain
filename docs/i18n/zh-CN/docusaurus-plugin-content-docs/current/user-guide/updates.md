@@ -13,7 +13,7 @@ import GuideShot from '@site/src/components/GuideShot';
 
 更新服务是可选的，并非每个安装都运行它。如果你的实例没有运行，侧边栏中就没有 **Updates** 组，设备也没有 Updates 选项卡。参见[启用](/concepts/over-the-air-updates#enabling)。
 
-侧边栏中，**Updates** 有两个界面：**Artifacts**（制品）和 **Signers**（签名者）。为设备分配更新在设备自己的页面上进行，即其 [Updates 选项卡](#assigning-an-update-to-a-device)。
+侧边栏中，**Updates** 有三个界面：**Artifacts**（制品）、**Rollouts**（发布）和 **Signers**（签名者）。更新整个设备组在 [Rollouts](#rollouts) 上进行。为设备分配更新在设备自己的页面上进行，即其 [Updates 选项卡](#assigning-an-update-to-a-device)。
 
 ## 制品 {#artifacts}
 
@@ -150,9 +150,27 @@ import GuideShot from '@site/src/components/GuideShot';
 
 当设备被禁用时，选项卡会说明它已与更新隔绝。在设备重新启用之前不能分配新的更新，**Assign** 处于禁用状态。禁用设备不会召回已在进行中的更新；如果不希望它继续，请在此选项卡上取消。取消时，仍在排队的更新会立即取消；设备已经接手的更新在设备被禁用期间保持 **Cancel pending**，因为它的报告会被拒绝：取消在设备重新启用并确认时完成，否则更新会在其所处阶段的截止期以超时结束。
 
+## 发布 {#rollouts}
+
+**Rollouts**（发布）每次只更新少量设备，从而更新整个设备组。当一次一台太慢、一次全部又风险太大时使用它。
+
+**New rollout**（新建发布）需要填写令牌、可选的名称、**Artifact**（制品，仅列出可用的制品）、**Device group**（设备组）、**Devices updating at once**（同时更新的设备数）以及可选的 **Failure threshold**（失败阈值）。发布以草稿形式创建，此时不会向任何设备发送内容。
+
+在发布页面上：
+
+- **Start**（开始）冻结设备组当前的成员作为本次发布的设备，并通知前几台设备更新。之后加入该组的设备不包括在内；离开该组的设备仍留在发布中。
+- **Pause**（暂停）停止通知更多设备。已在更新的设备会继续，**Resume**（恢复）从停下的地方继续。
+- **Abort**（中止）取消尚未通知的设备并结束发布。已在更新的设备会被留下完成更新；你可以在其自己的 [Updates 选项卡](#assigning-an-update-to-a-device)中取消其中任意一台。
+
+摘要显示待处理、进行中、成功、失败、未知、已取消和已跳过的设备数量，**Devices**（设备）表列出每台设备及其结果，并可按结果筛选。被跳过的设备是按与单台分配相同的规则被拒绝的（例如已停用的设备，或正忙于另一项更新的设备），其 **Reason**（原因）列会说明原因。结果未知的设备计为失败，并继续占用 **Devices updating at once** 中的名额。
+
+当失败和未知的设备达到 **Failure threshold** 时，发布会自行暂停。要继续，请输入更高的阈值并选择 **Resume with this threshold**（以此阈值恢复）：恢复永远不会清零计数。如果制品在运行期间被停用，发布也会自行暂停。
+
+查看发布需要 `artifact:read`，创建和控制发布需要 `artifact:write`。
+
 ## 仅限部分客户的成员 {#members-limited-to-some-customers}
 
-访问仅限部分客户、且持有 `artifact:read` 的成员，可以读取那些在分配更新时分配给其中某个客户的设备的更新分配。它不能分配、取消或放弃更新，也不能列出制品或签名者。实例开始记录设备分配给谁之前所做的分配，不会显示给这样的成员。
+访问仅限部分客户、且持有 `artifact:read` 的成员，可以读取那些在分配更新时分配给其中某个客户的设备的更新分配。它不能分配、取消或放弃更新，也不能列出制品、签名者或发布。实例开始记录设备分配给谁之前所做的分配，不会显示给这样的成员。
 
 ## 相关内容 {#related}
 

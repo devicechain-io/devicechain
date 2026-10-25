@@ -136,7 +136,11 @@ func TestTheEventLookupResolvesWhatTheFullReadResolves(t *testing.T) {
 			t.Fatalf("seed %s: %v", token, err)
 		}
 		if exp != nil {
-			mustExec(t, db().Model(&DeviceCredential{}).Where("credential_id = ?", id).Update("expires_at", *exp))
+			stored := id
+			if ctype == CredentialAccessToken {
+				stored = testTokenDigest("acme", id)
+			}
+			mustExec(t, db().Model(&DeviceCredential{}).Where("credential_id = ?", stored).Update("expires_at", *exp))
 		}
 	}
 	soon, past := now.Add(time.Hour), now.Add(-time.Hour)
@@ -153,7 +157,7 @@ func TestTheEventLookupResolvesWhatTheFullReadResolves(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mustExec(t, db().Model(&DeviceCredential{}).Where("credential_id = ?", "tok-gone").Update("device_id", gone.ID))
+	mustExec(t, db().Model(&DeviceCredential{}).Where("credential_id = ?", testTokenDigest("acme", "tok-gone")).Update("device_id", gone.ID))
 	mustExec(t, db().Delete(&Device{}, gone.ID))
 
 	other := core.WithTenant(context.Background(), "other")
@@ -164,7 +168,7 @@ func TestTheEventLookupResolvesWhatTheFullReadResolves(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mustExec(t, db().Model(&DeviceCredential{}).Where("credential_id = ?", "tok-cross").Update("device_id", foreign.ID))
+	mustExec(t, db().Model(&DeviceCredential{}).Where("credential_id = ?", testTokenDigest("acme", "tok-cross")).Update("device_id", foreign.ID))
 
 	quarantined, err := f.api.CreateDevice(f.ctx, &DeviceCreateRequest{Token: "quarantined", DeviceTypeToken: "dt",
 		Enabled: boolp(false)})
@@ -172,7 +176,7 @@ func TestTheEventLookupResolvesWhatTheFullReadResolves(t *testing.T) {
 		t.Fatal(err)
 	}
 	mk("c-10", "tok-quarantined", CredentialAccessToken, true, nil)
-	mustExec(t, db().Model(&DeviceCredential{}).Where("credential_id = ?", "tok-quarantined").Update("device_id", quarantined.ID))
+	mustExec(t, db().Model(&DeviceCredential{}).Where("credential_id = ?", testTokenDigest("acme", "tok-quarantined")).Update("device_id", quarantined.ID))
 
 	cases := []struct {
 		name  string
@@ -199,7 +203,13 @@ func TestTheEventLookupResolvesWhatTheFullReadResolves(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			full, fullErr := f.api.DeviceCredentialByCredentialId(tc.ctx, string(tc.ctype), tc.id)
-			narrow, narrowErr := f.api.deviceCredentialForAuth(tc.ctx, string(tc.ctype), tc.id)
+			// The narrow finders match the STORED id; lookupPresentedCredential maps a presented
+			// access token to its digest first, as this does.
+			var narrow *DeviceCredential
+			lookupId, narrowErr := f.api.presentedCredentialLookupId(tc.ctx, string(tc.ctype), tc.id)
+			if narrowErr == nil {
+				narrow, narrowErr = f.api.deviceCredentialForAuth(tc.ctx, string(tc.ctype), lookupId)
+			}
 			if (fullErr == nil) != (narrowErr == nil) ||
 				errors.Is(fullErr, gorm.ErrRecordNotFound) != errors.Is(narrowErr, gorm.ErrRecordNotFound) {
 				t.Fatalf("lookup verdicts differ: full %v, narrow %v", fullErr, narrowErr)

@@ -4,6 +4,7 @@
 package natsauth
 
 import (
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -197,8 +198,8 @@ func TestSignDeviceUserJWT(t *testing.T) {
 	// The signed claim must carry the SAME per-device grant DevicePermissions builds,
 	// so a device's JWT cannot be broader than the policy. Checked by reachability:
 	// nothing in the signed grant may reach another device's command subject.
-	if got := []string(uc.Permissions.Pub.Allow); len(got) != 3 {
-		t.Errorf("pub allow = %v, want the device's events topic, its own command-responses and its own device-reports", got)
+	if got := []string(uc.Permissions.Pub.Allow); len(got) != 6 {
+		t.Errorf("pub allow = %v, want the device's events topic, its own command-responses and its own device-reports, and the same three leaves under its own gateway namespace", got)
 	}
 	if !slices.Contains(uc.Permissions.Sub.Allow, "inst-1.plant_07.device-desired.sensor-001") {
 		t.Errorf("sub allow = %v, missing this device's own desired subject",
@@ -391,7 +392,7 @@ func TestCredentialsFromDeployedFailsClosed(t *testing.T) {
 			if err == nil {
 				t.Fatalf("accepted unusable deployed credentials, returning %+v", got)
 			}
-			if got != (Credentials{}) {
+			if !reflect.DeepEqual(got, Credentials{}) {
 				t.Errorf("credentials were returned alongside the error: %+v", got)
 			}
 		})
@@ -469,5 +470,35 @@ func TestDeviceChannelGrantIsConfinedToTheDevice(t *testing.T) {
 				t.Errorf("the confinement check accepted a deliberately wrong grant (%s)", name)
 			}
 		})
+	}
+}
+
+// An instance with no shared login rebuilds its credentials with none: the issuer and the system
+// login come across unchanged and nothing for the shared login is invented. The ordinary rebuild
+// still refuses an empty shared password, so a caller cannot reach the first by accident.
+func TestCredentialsFromDeployedWithoutSharedLoginInventsNone(t *testing.T) {
+	deployed, err := GenerateCredentials()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := CredentialsFromDeployedWithoutSharedLogin(deployed.IssuerSeed, deployed.SysPassword,
+		DeployedHashes{Sys: deployed.SysPasswordBcrypt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ServicePassword != "" || got.ServicePasswordBcrypt != "" {
+		t.Fatalf("a shared login was invented: %q / %q", got.ServicePassword, got.ServicePasswordBcrypt)
+	}
+	if got.IssuerPublic != deployed.IssuerPublic || got.SysPassword != deployed.SysPassword {
+		t.Fatal("the issuer or the system login did not come across")
+	}
+	if got.SysPasswordBcrypt != deployed.SysPasswordBcrypt {
+		t.Fatal("the system login's hash was re-salted, which would roll the broker")
+	}
+	if _, err := CredentialsFromDeployed(deployed.IssuerSeed, "", deployed.SysPassword, DeployedHashes{}); err == nil {
+		t.Fatal("the ordinary rebuild accepted an empty shared password")
+	}
+	if _, err := CredentialsFromDeployedWithoutSharedLogin("", "", DeployedHashes{}); err == nil {
+		t.Fatal("a rebuild with no issuer seed was accepted")
 	}
 }

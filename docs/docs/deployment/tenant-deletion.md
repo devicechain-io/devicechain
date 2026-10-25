@@ -192,6 +192,34 @@ Its counterweight, `TenantPurgeVisibilityLost`, fires when those figures stop be
 Without it, a user-management service that was not being scraped would look exactly like one with no
 deletions open.
 
+### Which storage system is holding a deletion back {#blocked-store}
+
+`TenantPurgeStalled` says a deletion is stuck; these series say where. User-management exports them
+with no tenant label, because a series named for a tenant would outlive the erasure it describes:
+
+- `devicechain_usermanagement_tenant_purge_store_blocked{store,reason}`: the number of open deletions
+  each storage system is currently holding back. `store` is `rdb` (relational data), `tsdb`
+  (telemetry), `broker` (streams), `kv` (key-value buckets), `detect` (detection state), `blob`
+  (object storage) or `other`. `reason` is `deferred` (the store answered that data is still present
+  or still arriving) or `error` (the store could not be asked). Every pair is exported and reads 0
+  when nothing is blocked.
+- `devicechain_usermanagement_tenant_purge_store_rows_erased_total{store}`: rows, objects, messages
+  or keys each store has erased. A blocked store whose counter is still rising is working through a
+  large tenant; one whose counter is flat is not progressing.
+- `devicechain_usermanagement_tenant_purge_store_erase_duration_seconds{store}`: how long each erase
+  call took, which shows which store the time goes to.
+- `devicechain_usermanagement_tenant_purge_completed_total`, `tenant_purge_failures_total`,
+  `tenant_purge_duration_seconds` and `tenant_purge_clean_duration_seconds`: deletions completed;
+  times the coordinator could not carry a deletion through a pass (it retries on the next one); the
+  time from deletion to token release; and the time from deletion to the last store reporting clean.
+  The last excludes the settle and token-hold waits, so it measures the erasure itself.
+
+Three alerts use them. `TenantPurgeStoreFailing` fires when a store has returned an error for an
+hour. `TenantPurgeStoreHolding` fires when a store has reported data still present for as long as the
+token hold. `TenantPurgeCoordinatorFailing` fires when the coordinator itself keeps failing to take a
+deletion through a pass. The first two carry the store in their `store` label; the log line "Tenant
+purge store did not report clean" and the `tenantDeletions` query carry the reason.
+
 ## Configuration {#configuration}
 
 These settings live under `tenantPurge` in the user-management service. For all three, `0` means "use

@@ -64,7 +64,7 @@ func planServer(t *testing.T, data any, errs []map[string]any) (string, *svcclie
 	t.Cleanup(srv.Close)
 	host, portStr, _ := net.SplitHostPort(srv.Listener.Addr().String())
 	port, _ := strconv.Atoi(portStr)
-	return srv.URL, svcclient.New(config.UserManagementConfiguration{Hostname: host, Port: uint32(port)}, "s",
+	return srv.URL, svcclient.New(config.UserManagementConfiguration{Hostname: host, Port: uint32(port), InternalPort: uint32(port)}, "s",
 		"event-management", []string{string(auth.DeviceRead)})
 }
 
@@ -117,7 +117,7 @@ func TestPlanSourceMapsDoorFailuresToTheirCodes(t *testing.T) {
 	assert.NotErrorAs(t, err, &un, "a refusal from device-management is not 'unreachable'")
 
 	// Nothing listening: device-management is down, which is UNAVAILABLE.
-	down := svcclient.New(config.UserManagementConfiguration{Hostname: "127.0.0.1", Port: 1}, "s", "event-management", nil)
+	down := svcclient.New(config.UserManagementConfiguration{Hostname: "127.0.0.1", Port: 1, InternalPort: 1}, "s", "event-management", nil)
 	_, _, err = NewGraphQLPlanSource(down, "http://127.0.0.1:1/graphql").Plan(ctx, "acme", "meter", nil)
 	require.ErrorAs(t, err, &un)
 }

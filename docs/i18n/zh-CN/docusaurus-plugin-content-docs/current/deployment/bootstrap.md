@@ -38,7 +38,7 @@ DeviceChain 尚未正式发布。`dcctl install local` 和 `dcctl bootstrap loca
 - 监控 Prometheus、Grafana（`monitoring`），见[可观测性](./observability.md)；
 - ingress 控制器（`ingress-nginx`）。
 
-每集群一个 Operator，由全部实例共享。因此由集群命令安装，而非各实例分别安装；集群升级到新版本也从此处开始，参见[发布与升级](./releases-and-upgrades.md#zero-downtime-upgrades)。
+每集群一个 Operator，由全部实例共享。因此由集群命令安装，而非各实例分别安装；集群升级到新版本也从此处开始，参见[发布与升级](./releases-and-upgrades.md#rolling-upgrades)。
 
 install 还创建基础数据库身份，用于创建各实例自己的数据库登录，并在集群记录安装结果。
 
@@ -137,7 +137,7 @@ and nothing has been changed: ... Destroy an instance, or raise the budget by re
 
 初始化按顺序构建实例。失败时会指出具体步骤。
 
-这是创建操作。数据库密码、代理的认证机构和登录、跨服务密钥、密钥存储根密钥等所有凭据都在此生成，因为它们尚不存在。针对已运行实例执行时，会在第 3 步停止，不改动基础设施或 Helm chart，并指出用于更新运行实例的 `dcctl upgrade`，详见[版本与升级](./releases-and-upgrades.md#zero-downtime-upgrades)。
+这是创建操作。数据库密码、代理的认证机构和登录、跨服务密钥、密钥存储根密钥等所有凭据都在此生成，因为它们尚不存在。针对已运行实例执行时，会在第 3 步停止，不改动基础设施或 Helm chart，并指出用于更新运行实例的 `dcctl upgrade`，详见[版本与升级](./releases-and-upgrades.md#rolling-upgrades)。
 
 中途**失败**的初始化不同，修复方法仍是重跑。第 3 步只拒绝**运行中**实例：第 8 步写入的配置文档存在，且首次初始化已完成。第 5 步声明实例时，会记录首次初始化尚未完成，只有成功结束的运行才删除此记录。因此任何步骤失败，包括 Helm 安装或等待就绪，都留下一个未完成实例；在同一台机器上重跑相同的 `dcctl bootstrap` 命令即可完成。
 
@@ -170,6 +170,20 @@ Operator 无法接管 StatefulSet 的数据目录，因此不支持原地升级�
 - **Ingress 主机名。** 两个实例使用同一主机名时，Ingress 控制器会静默地只服务一个。主机名已被其他实例使用时初始化拒绝执行。为每个实例设置独立 `--host`，本地集群例如 `--host beta.localhost`。
 - **本地 MQTT 端口。** 本地集群中，机器的 1883 端口只连接第一个实例的代理。后续实例的代理可从集群内部访问，初始化会对此提示。
 
+#### Ingress 与自带控制器 {#ingress-controller}
+
+集群安装会部署一个 Ingress 控制器，每个实例的路由由 Chart 提供。边缘不承担任何安全控制：服务令牌签发端点和签名密钥集由 `user-management` 在一个没有任何 Ingress 路由指向的内部端口上提供，因此无论使用哪种控制器，公开端口对它们都返回 404。签发端点由共享的服务密钥保护，该密钥以恒定时间比较。Chart 的 Ingress 不带任何配置 snippet。`dcctl install` 部署的控制器在本版本中仍接受 snippet，因为尚未升级的实例依赖它们。
+
+如果你自带控制器，请路由 Chart 的五个 Ingress：
+
+- 将 `/api/<area>` 路由到各功能区 Service 的 `graphql` 端口并去掉前缀。
+- 将 `/` 路由到控制台。
+- 启用相应功能区时，将 `/.well-known/oauth-protected-resource`（到 `mcp`）和 `/.well-known/oauth-authorization-server`（到 `user-management`）原样路由，不去掉任何前缀。
+- 更新上传 `PUT /api/update-management/updates/artifacts/<token>/content` 路由到 `update-management`。不要缓冲请求正文，因为服务在读取正文之前先完成认证。
+- 更新下载 `GET /api/update-management/updates/download/<artifact>` 路由到 `update-management`。不要把其查询字符串写入访问日志，因为授权凭据就在其中。
+
+你不需要隐藏 `/auth/` 路径的规则，也不能路由到名为 `internal-auth` 的 Service 端口。Chart 的网络策略（`networkPolicy.enabled`，`dcctl` 安装时关闭）还可以将该端口限制为实例自身的命名空间。参见[不会离开集群的端点](../concepts/security-model.md#internal-endpoints)。
+
 #### 实例命名空间 {#instance-namespace}
 
 初始化同时检查命名空间。实例拥有 `dci-<id>`：dcctl 在其中写入根密钥、代理 TLS 密钥对和所有数据库凭据，`dcctl destroy` 会删除整个命名空间。因此，已存在却没有 `devicechain.io/instance=<id>` 标签的 `dci-<id>` 会在任何写入前被拒绝。
@@ -197,7 +211,7 @@ kubectl label namespace dci-<id> devicechain.io/instance=<id>
 3. **拒绝重建运行实例**——查询实例是否已运行，是则停止。此检查在锁之后，避免并发初始化使读到的状态失效；在实例写入之前，避免覆盖正在运行的实例。试运行也会报告实际运行将拒绝的情况。配置文档存在表示实例运行中，除非声明记录首次初始化未完成，此时允许继续完成。无法读取声明时停止，不猜测状态。
 4. **检查其他实例占用的资源**——查询其他实例的 Ingress 主机名和本地 MQTT 端口。主机名冲突时停止。同时检查 `dci-<id>`；已存在却不属于本实例或仍在删除中时停止。此步骤在任何写入之前执行，拒绝不会留下资源。本地 MQTT 端口已被占用只报告，不停止。试运行也报告实际运行将拒绝的情况。详见[一个集群上的多个实例](#several-instances)，包括如何通过标签交接自建命名空间。
 5. **声明实例**——向集群写入实例**声明**：所属提供方与集群、配置档、镜像版本，以及数据库是否从归档恢复。随后读取声明，后续步骤使用读回的内容，而非生成它的标志。实例的真实记录位于集群，详见[实例声明](./kubernetes-operator.md#instance-declaration)。构建实例时（第 3 步未找到配置文档，或首次初始化尚未完成），声明还包含 `core.devicechain.io/bootstrap-unfinished: "true"` 注解。成功结束时，在记录 `Ready` 的同一次写入中删除注解。
-6. **生成配置**——解析实例 ID、命名空间、配置档及所有凭据：代理认证材料（共享服务密码和 callout 签发者密钥）、签署代理 TLS 证书的证书机构、跨服务认证密钥及**密钥存储根密钥**。第 3 步已确认没有可读取凭据的运行实例，因此在此生成。完成半建实例时例外：读取此前运行已写入集群的值，不另行生成，包括已写入配置文档的实例。代理证书机构是每次运行都会重新签发的唯一内容。此步骤在配置代理前将代理凭据记录到本机；代理先于实例配置，且配置后凭据无法从集群恢复，本地记录使中断后能够重跑。根密钥还会托管至你保管的加密文件，详见[灾难恢复](./disaster-recovery.md)。
+6. **生成配置**——解析实例 ID、命名空间、配置档及所有凭据：代理认证材料（使用代理的每个功能区各自的登录凭据，以及 callout 签发者密钥）、签署代理 TLS 证书的证书机构、跨服务认证密钥及**密钥存储根密钥**。第 3 步已确认没有可读取凭据的运行实例，因此在此生成。完成半建实例时例外：读取此前运行已写入集群的值，不另行生成，包括已写入配置文档的实例。代理证书机构是每次运行都会重新签发的唯一内容。此步骤在配置代理前将代理凭据记录到本机；代理先于实例配置，且配置后凭据无法从集群恢复，本地记录使中断后能够重跑。根密钥还会托管至你保管的加密文件，详见[灾难恢复](./disaster-recovery.md)。
 7. **应用基础设施**——通过 [terraform-exec](https://github.com/hashicorp/terraform-exec) 对嵌入的 OpenTofu 配置执行 `tofu apply`。仅处理本实例：命名空间中的 NATS 代理和 TimescaleDB 事件存储，状态保存在 `~/.devicechain/instances/<instance>/infra`；同时在共享关系型数据库上创建实例自己的登录和数据库。集群共享前置组件由 [`dcctl install`](#install) 安装，不在此重新应用。后续运行是增量操作。
 8. **安装实例（Helm）**——写入实例**配置文档**，所有服务从中读取凭据及端点。再通过 Helm Go SDK 部署 chart，并等待工作负载就绪。后续运行的第 3 步检查此文档；运行还需成功结束，实例才算运行中。
 9. **等待就绪**——轮询每个启用领域的 Deployment，直到全部滚动至本次生成的配置。这是 Helm 等待之外的显式确认。仅有可用副本不足，因为即将被替换的旧 Pod 也可能可用；还需新模板已被观察、全部副本按新模板重建，且没有旧副本仍在运行。`dcctl upgrade` 使用相同检查。随后最多等待 15 分钟，直到事件存储的所有实例加入，因为仅主实例就绪便足以让服务就绪。缺少实例时，错误指出数据库和就绪实例数；不会回滚，再运行相同 `dcctl bootstrap` 即可完成。

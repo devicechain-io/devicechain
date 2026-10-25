@@ -14,7 +14,7 @@
 //     /settings/graphql, and its filename contains no "admin", so it was folded
 //     into the tenant plane.
 //   - the fold then joined two files that each declare `type Query` and
-//     `type Mutation`. The pinned graphql-go fork accepts a duplicate root type
+//     `type Mutation`. graphql-go accepts a duplicate root type
 //     without an error and keeps the LAST one, so the concatenated tenant "schema"
 //     served settings and nothing else — no ping, no me, no login. Every consumer's
 //     `if sdl.Len() == 0` floor stayed quiet, because the SDL was not empty. It was

@@ -6,7 +6,7 @@
 # must keep the ConfigMap names they already have, and must keep two instances'
 # boards apart.
 #
-# FOUR GAPS, ALL OF THEM SILENT, NONE OF THEM COVERED BY ANYTHING ELSE.
+# FIVE GAPS (the fifth is the published-text rule below), ALL OF THEM SILENT, NONE OF THEM COVERED BY ANYTHING ELSE.
 #
 # 1. NOTHING PARSED THE DASHBOARD JSON. templates/grafana-dashboard.yaml used to
 #    embed each file with `.Files.Get | indent 4`, which turns ANY bytes into a
@@ -107,14 +107,54 @@ python3 -c 'import yaml' 2>/dev/null || {
 #
 # `{instance}` is substituted with the instance id each render uses.
 # ---------------------------------------------------------------------------
-EXPECTED_CONFIGMAPS=(
-  "{instance}-command-delivery-dashboard"
-  "{instance}-event-processing-dashboard"
+BOARDS=(
+  command-delivery
+  delivery
+  event-processing
+  ingest
+  messaging
+  overview
+  persistence
+  platform
 )
-EXPECTED_DATA_KEYS=(
-  "{instance}-command-delivery.json"
-  "{instance}-event-processing.json"
-)
+# ...and the two published names, spelled out from that list. This is the only
+# place they are derived: the list above is the literal, the names below are what
+# the template must render for each entry.
+EXPECTED_CONFIGMAPS=()
+EXPECTED_DATA_KEYS=()
+for board in "${BOARDS[@]}"; do
+  EXPECTED_CONFIGMAPS+=("{instance}-$board-dashboard")
+  EXPECTED_DATA_KEYS+=("{instance}-$board.json")
+done
+
+# check_board_list <dashboards-dir> <board>...
+#
+# The board list and the files on disk must name the same set, in BOTH
+# directions. A file the list does not name would still render (the template
+# globs dashboards/*.json) and only the render-time NAME-UNPINNED check would
+# object; a name with no file would be a board promised and never shipped. Doing
+# it on the files makes the failure say which side is missing and what to edit.
+check_board_list() {
+  local dir="$1" f stem rc=0
+  shift
+  [ "$#" -gt 0 ] || { echo "FAIL: the board list is empty -- this check would pass over nothing" >&2; return 1; }
+  [ -d "$dir" ] || { echo "FAIL: $dir is not a directory" >&2; return 1; }
+  for f in "$dir"/*.json; do
+    [ -e "$f" ] || continue
+    stem="$(basename "$f" .json)"
+    case " $* " in
+      *" $stem "*) ;;
+      *) echo "BOARD-UNLISTED: dashboards/$stem.json exists but BOARDS in hack/check-dashboards.sh does not name \"$stem\". Add it to that list (one entry) so its names and keys are pinned." >&2; rc=1 ;;
+    esac
+  done
+  for stem in "$@"; do
+    [ -f "$dir/$stem.json" ] || {
+      echo "BOARD-MISSING: BOARDS names \"$stem\" but dashboards/$stem.json does not exist. Add the file or drop the entry." >&2
+      rc=1
+    }
+  done
+  return "$rc"
+}
 
 # ---------------------------------------------------------------------------
 # check_content <repo-root>
@@ -137,7 +177,95 @@ go_root = os.path.join(root, "backend")
 
 problems = []
 
+# --- gap 5: a board's TEXT is a published surface ----------------------------
+# Board titles, descriptions, legends and row titles are rendered in Grafana and end
+# up in the docs site's screenshots, where hack/check-docs-adr-refs.sh -- a guard
+# over Markdown -- cannot read them. The ADRs live in a private repository, so an
+# ADR number there is a citation nobody who reads the page can follow. The same goes
+# for the planning workspace and the maintainer's severity marker. This is the ADR
+# rule extended to the one surface it could not see, not a drift gate.
+PUBLISHED_TEXT_KEYS = {"title", "description", "legendFormat", "displayName", "text"}
+INTERNAL_REFERENCES = (
+    (re.compile(r"\bADRs?\b(?:[-\s]?[0-9]+)?"), "an ADR reference"),
+    (re.compile(r"\bSD-[0-9]+\b"), "a design-decision reference"),
+    (re.compile(r"\.agent-os"), "a path in the private planning workspace"),
+    (re.compile("\U0001F534"), "the red-circle severity marker used in source comments"),
+)
+
+def published_text_problems(node, rel, trail="$"):
+    found = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            where = "%s.%s" % (trail, key)
+            if key in PUBLISHED_TEXT_KEYS and isinstance(value, str):
+                for pattern, what in INTERNAL_REFERENCES:
+                    hit = pattern.search(value)
+                    if hit:
+                        found.append(
+                            "%s %s contains %s (%r).\n"
+                            "    Board text is published in screenshots; say the thing itself in plain\n"
+                            "    operator language instead of citing an internal document."
+                            % (rel, where, what, hit.group(0)))
+            else:
+                found.extend(published_text_problems(value, rel, where))
+    elif isinstance(node, list):
+        for i, value in enumerate(node):
+            found.extend(published_text_problems(value, rel, "%s[%d]" % (trail, i)))
+    return found
+
 # --- gap 1: every dashboard must be JSON ------------------------------------
+# 🔑 THE BOARD CONVENTION (deploy/helm/devicechain/dashboards/README.md). Every board
+# is one of N lanes' output, so the shape every lane shares is checked here rather than
+# remembered: file stem -> uid, title prefix, the tags and variables the template
+# rewrites, and a "Firing alerts" table on top that selects this instance's alerts.
+ALERT_SELECTORS = ('ALERTS{', 'alertstate="firing"', 'devicechain_instance="$instance"')
+INSTANCE_SELECTOR = re.compile(r'devicechain_instance\s*=~?\s*"([^"]*)"')
+
+def convention_problems(board, stem, rel):
+    found = []
+    def bad(msg):
+        found.append("%s: %s" % (rel, msg))
+    if board.get("uid") != "dc-%s-ops" % stem:
+        bad("uid is %r, want 'dc-%s-ops'. The chart replaces it per instance, but the file\n"
+            "    keeps the convention so a reader can tell which board a file is." % (board.get("uid"), stem))
+    if not str(board.get("title", "")).startswith("DeviceChain — "):
+        bad("title %r must start with 'DeviceChain — ' (the chart appends [<instance>])." % board.get("title"))
+    if "devicechain" not in (board.get("tags") or []):
+        bad("tags must include 'devicechain'.")
+    names = [v.get("name") for v in (board.get("templating") or {}).get("list") or [] if isinstance(v, dict)]
+    for need in ("datasource", "namespace", "instance"):
+        if names.count(need) != 1:
+            bad("needs exactly one %r template variable (found %d). The chart replaces namespace\n"
+                "    and instance with per-instance constants and refuses a board without them."
+                % (need, names.count(need)))
+    panels = board.get("panels") or []
+    first = panels[0] if panels else {}
+    exprs = " ".join(t.get("expr", "") for t in first.get("targets") or [])
+    if (first.get("type") != "table" or first.get("title") != "Firing alerts"
+            or any(sel not in exprs for sel in ALERT_SELECTORS)):
+        bad("the first panel must be the 'Firing alerts' table over\n"
+            '    ALERTS{alertstate="firing", devicechain_instance="$instance", ...} (copy it from README.md).')
+    elif (first.get("gridPos") or {}).get("y") != 0 or (first.get("gridPos") or {}).get("x") != 0:
+        bad("the 'Firing alerts' table must sit at the top left (gridPos x=0, y=0).")
+    def exprs_of(node):
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key == "expr" and isinstance(value, str):
+                    yield value
+                else:
+                    yield from exprs_of(value)
+        elif isinstance(node, list):
+            for value in node:
+                yield from exprs_of(value)
+    for expr in exprs_of(board):
+        for m in INSTANCE_SELECTOR.finditer(expr):
+            if m.group(1) != "$instance":
+                bad("selects devicechain_instance=%r. Use \"$instance\": a literal ID is one\n"
+                    "    instance's board shipped to all of them." % m.group(1))
+    if re.search(r"/d/dc-[0-9a-f]{20}", json.dumps(board)):
+        bad("links to a literal board uid. A uid is a hash of the instance; write /d/@board:<file stem>@.")
+    return found
+
 dashboards = sorted(
     os.path.join(dashboard_dir, f)
     for f in os.listdir(dashboard_dir)
@@ -153,7 +281,7 @@ for path in dashboards:
     with open(path, "rb") as fh:
         raw = fh.read()
     try:
-        json.loads(raw.decode("utf-8"))
+        board = json.loads(raw.decode("utf-8"))
     except (ValueError, UnicodeDecodeError) as exc:
         problems.append(
             "%s is not parseable JSON: %s\n"
@@ -161,6 +289,10 @@ for path in dashboards:
             "    fails on this file."
             % (os.path.relpath(path, root), exc)
         )
+        continue
+    problems.extend(published_text_problems(board, os.path.relpath(path, root)))
+    problems.extend(convention_problems(
+        board, os.path.basename(path)[:-len(".json")], os.path.relpath(path, root)))
 
 # --- gap 2: every devicechain_* series must be registered somewhere in Go ----
 
@@ -290,9 +422,27 @@ for dirpath, _dirs, files in os.walk(services_dir):
             for suffix, kind in HELPER_FAMILIES[reg.group(1)]:
                 area_kinds.setdefault(reg.group(2) + suffix, set()).add(kind)
 
+# 🔑 CORE REGISTERS METRICS UNDER EVERY SERVICE'S SUBSYSTEM. The messaging families
+# (jetstream_*, kv_cache_*, ...) are built once in backend/core and exported by each
+# area that touches the broker, so a histogram there (jetstream_publish_duration_seconds)
+# exports _bucket/_sum/_count under every area's name. Reading only backend/services
+# left those histograms invisible: their derived series failed as unregistered and their
+# bare names passed as plain literals. They are read here into a pseudo-area that every
+# lookup includes.
+CORE = "(core)"
+core_dir = os.path.join(go_root, "core")
+for dirpath, _dirs, files in os.walk(core_dir):
+    for fname in files:
+        if not fname.endswith(".go") or fname.endswith("_test.go"):
+            continue
+        with open(os.path.join(dirpath, fname), "rb") as fh:
+            src = COMMENT_LINE.sub("", fh.read().decode("utf-8", "replace"))
+        for reg in REGISTRATION.finditer(src):
+            kinds.setdefault(CORE, {}).setdefault(reg.group(2), set()).add(reg.group(1).lower())
+
 def lookup_areas(area_dir):
     """area_dir None means any area (a by-name selector spans them all)."""
-    return [area_dir] if area_dir else list(kinds)
+    return [area_dir, CORE] if area_dir else list(kinds)
 
 def registered(metric, area_dir=None):
     """Registered by a call read above, including a core helper's assembled names."""
@@ -422,6 +572,147 @@ for (form, suffix) in sorted(regex_seen):
             "    complains."
             % (form, suffix, ", ".join(sorted(regex_seen[(form, suffix)])), suffix))
 
+# SERIES THAT ARE NOT DEVICECHAIN'S OWN. A board or an alert rule may read what other software exports
+# -- kube-state-metrics, cAdvisor, the kubelet, the Go and process collectors, the database operator,
+# the backup plugin, the message broker's exporter -- but nothing in this tree registers those names, so
+# the Go-source check above cannot vouch for them and a misspelling would draw an empty graph (or, in an
+# alert, a rule that never fires). They are pinned here instead: ONE set of exact names and ONE set of
+# prefixes, scanned over every dashboard and every alert-rule template. A token that starts with a pinned
+# prefix and is not in the set fails; adding a name is the moment to confirm it against the exporter's
+# source or a live scrape, and a name used in one exporter version only does not belong here.
+#
+#   container_*, kube_*  cAdvisor and kube-state-metrics (kube-prometheus-stack versions the chart supports);
+#                        kube_cnpg_* come from the kube-state-metrics custom-resource config in
+#                        deploy/opentofu/modules/monitoring.
+#   go_*, process_*      the client_golang Go and process collectors.
+#   kubelet_*            the kubelet's volume statistics; the storage alert rules read them.
+#   cnpg_*               CloudNativePG 1.30.0 (chart 0.29.0): the default monitoring queries
+#                        (config/manager/default-monitoring.yaml, exported as cnpg_<query>_<column>) and the
+#                        built-in collector (pkg/management/postgres/webserver/metricserver).
+#   barman_*             the Barman Cloud plugin; the alert rules read the same name.
+#   nats_*               the prometheus-nats-exporter sidecar the nats chart runs beside each server
+#                        (image natsio/prometheus-nats-exporter:0.20.2, started with -varz -connz -routez
+#                        -subz -jsz=all -prefix=nats). Varz names are the server's /varz JSON path joined
+#                        with "_"; jsz names are fixed in the exporter's collector/jsz.go. Pinned to that
+#                        version: when the image moves, re-read those two sources and edit this set.
+EXTERNAL_PREFIXES = ("barman", "cnpg", "container", "go", "kube", "kubelet", "nats", "process")
+EXTERNAL_SERIES = {
+    # cAdvisor
+    "container_cpu_cfs_periods_total",
+    "container_cpu_cfs_throttled_periods_total",
+    "container_cpu_usage_seconds_total",
+    "container_memory_working_set_bytes",
+    # Go runtime and process collectors
+    "go_gc_duration_seconds",
+    "go_gc_duration_seconds_count",
+    "go_goroutines",
+    "go_memstats_heap_inuse_bytes",
+    "process_max_fds",
+    "process_open_fds",
+    "process_resident_memory_bytes",
+    # kube-state-metrics
+    "kube_cnpg_backup_stopped_at",
+    "kube_cnpg_cluster_condition",
+    "kube_cnpg_scheduledbackup_snapshot_retention_checked_at",
+    "kube_deployment_spec_replicas",
+    "kube_deployment_status_replicas_available",
+    "kube_pod_container_resource_limits",
+    "kube_pod_container_resource_requests",
+    "kube_pod_container_status_last_terminated_reason",
+    "kube_pod_container_status_restarts_total",
+    "kube_pod_status_ready",
+    # kubelet
+    "kubelet_volume_stats_available_bytes",
+    "kubelet_volume_stats_capacity_bytes",
+    "kubelet_volume_stats_used_bytes",
+    # CloudNativePG
+    "cnpg_backends_max_tx_duration_seconds",
+    "cnpg_backends_total",
+    "cnpg_collector_pg_wal_archive_status",
+    "cnpg_collector_up",
+    "cnpg_pg_database_size_bytes",
+    "cnpg_pg_database_xid_age",
+    "cnpg_pg_replication_lag",
+    "cnpg_pg_replication_streaming_replicas",
+    "cnpg_pg_settings_setting",
+    "cnpg_pg_stat_archiver_archived_count",
+    "cnpg_pg_stat_archiver_failed_count",
+    "cnpg_pg_stat_archiver_last_archived_time",
+    "cnpg_pg_stat_archiver_last_failed_time",
+    "cnpg_pg_stat_archiver_seconds_since_last_archival",
+    "cnpg_pg_stat_database_deadlocks",
+    "cnpg_pg_stat_database_xact_commit",
+    "cnpg_pg_stat_database_xact_rollback",
+    # Barman Cloud plugin
+    "barman_cloud_cloudnative_pg_io_last_available_backup_timestamp",
+    # prometheus-nats-exporter, /varz
+    "nats_varz_cpu", "nats_varz_mem", "nats_varz_connections", "nats_varz_total_connections",
+    "nats_varz_routes", "nats_varz_remotes", "nats_varz_in_msgs", "nats_varz_out_msgs",
+    "nats_varz_in_bytes", "nats_varz_out_bytes", "nats_varz_slow_consumers",
+    "nats_varz_stale_connections", "nats_varz_stalled_clients", "nats_varz_subscriptions",
+    "nats_varz_jetstream_stats_api_total", "nats_varz_jetstream_stats_api_errors",
+    # prometheus-nats-exporter, /jsz server level
+    "nats_server_jetstream_disabled", "nats_server_total_streams", "nats_server_total_consumers",
+    "nats_server_total_messages", "nats_server_total_message_bytes", "nats_server_max_memory",
+    "nats_server_max_storage",
+    # /jsz account level
+    "nats_account_max_memory", "nats_account_max_storage", "nats_account_storage_used",
+    "nats_account_memory_used",
+    # /jsz stream level
+    "nats_stream_total_messages", "nats_stream_total_bytes", "nats_stream_limit_messages",
+    "nats_stream_limit_bytes", "nats_stream_first_seq", "nats_stream_last_seq",
+    "nats_stream_consumer_count", "nats_stream_subject_count",
+    # /jsz consumer level
+    "nats_consumer_delivered_consumer_seq", "nats_consumer_delivered_stream_seq",
+    "nats_consumer_last_delivery_seconds", "nats_consumer_last_ack_seconds",
+    "nats_consumer_num_ack_pending", "nats_consumer_num_redelivered", "nats_consumer_num_waiting",
+    "nats_consumer_num_pending", "nats_consumer_ack_floor_stream_seq",
+    "nats_consumer_ack_floor_consumer_seq",
+}
+# The look-behind keeps a token that merely ENDS in a prefix out: the platform's own
+# devicechain_<area>_nats_connection_dead_total is a DeviceChain series, checked above.
+EXTERNAL_RE = re.compile(
+    r"(?<![A-Za-z0-9_])(?:%s)_[a-z0-9_]+" % "|".join(sorted(EXTERNAL_PREFIXES, key=len, reverse=True)))
+def rule_exprs(text):
+    """The text of every `expr:` in a rule template: the inline value, or the block scalar under it.
+    Prose, comments and descriptions are left out on purpose -- they name configuration, modules and
+    families (`cnpg_cluster_metrics`, `barman_cloud_*`) that are not series."""
+    lines = text.split("\n")
+    for i, line in enumerate(lines):
+        m = re.match(r"^(\s*)(?:- )?expr:\s*(.*)$", line)
+        if not m:
+            continue
+        indent, rest = len(m.group(1)), m.group(2)
+        if rest and rest[0] not in "|>":
+            yield rest
+            continue
+        for follow in lines[i + 1:]:
+            if follow.strip() and len(follow) - len(follow.lstrip()) <= indent:
+                break
+            yield follow
+
+external_seen = {}
+def scan_external(path, text):
+    for m in EXTERNAL_RE.finditer(text):
+        external_seen.setdefault(m.group(0), set()).add(os.path.relpath(path, root))
+# A dashboard is scanned whole: a series named in a panel title or description is a claim too.
+for path in dashboards:
+    with open(path, "rb") as fh:
+        scan_external(path, fh.read().decode("utf-8", "replace"))
+# A rule template is scanned in its expressions only.
+for path in rule_files:
+    with open(path, "rb") as fh:
+        scan_external(path, "\n".join(rule_exprs(fh.read().decode("utf-8", "replace"))))
+for series in sorted(external_seen):
+    if series not in EXTERNAL_SERIES:
+        problems.append(
+            "%s (in %s) is neither a DeviceChain series nor on the pinned list of external series\n"
+            "    (EXTERNAL_SERIES in hack/check-dashboards.sh: kube-state-metrics, cAdvisor, the kubelet,\n"
+            "    Go and process, CloudNativePG, Barman Cloud, the broker exporter). Nothing here can vouch\n"
+            "    for it: a misspelling draws an empty graph, or an alert that never fires. If the name is\n"
+            "    real, confirm it against the exporter and add it to that list."
+            % (series, ", ".join(sorted(external_seen[series]))))
+
 if problems:
     print("The chart's dashboards and alert rules do not hold up:\n", file=sys.stderr)
     for p in problems:
@@ -429,8 +720,9 @@ if problems:
     sys.exit(1)
 
 print("    %d dashboard(s) parse; %d devicechain_* series and %d by-name selector(s) all resolve\n"
-      "    to a Go registration"
-      % (len(dashboards), len([s for s in seen if s not in ALLOWED_NON_SERIES]), len(regex_seen)))
+      "    to a Go registration; %d external series are all on the pinned list"
+      % (len(dashboards), len([s for s in seen if s not in ALLOWED_NON_SERIES]), len(regex_seen),
+         len(external_seen)))
 PY
 }
 
@@ -484,7 +776,7 @@ PY
   EXPECTED_NAMES="$(printf '%s\n' "${EXPECTED_CONFIGMAPS[@]}")" \
     EXPECTED_KEYS="$(printf '%s\n' "${EXPECTED_DATA_KEYS[@]}")" \
     python3 - "$dir" "$short_id" "$long_id" <<'PY' || rc=$?
-import json, os, sys
+import json, os, re, sys
 import yaml  # presence already enforced at the top of the script
 
 render_dir, ids = sys.argv[1], sys.argv[2:]
@@ -500,11 +792,13 @@ problems = []
 uids = {}      # uid -> [(instance, key)]
 all_keys = {}  # data key -> [instance]
 scopes = {}    # namespace a board scopes itself to -> [instance]
+tags = {}      # the per-instance tag -> [instance]
 boards = 0
 
 for inst in ids:
     folder = "devicechain-%s" % inst
     found_names, found_keys = set(), set()
+    inst_boards = []  # (where, board, raw body) of this instance, for the cross-board checks
     with open(os.path.join(render_dir, inst + ".yaml"), encoding="utf-8") as fh:
         docs = [d for d in yaml.safe_load_all(fh) if d]
 
@@ -587,6 +881,50 @@ for inst in ids:
             elif len(ns) == 1:
                 scopes.setdefault(ns[0].get("query"), set()).add(inst)
 
+            # The `instance` constant is what the firing-alerts table selects ALERTS by:
+            # it must be this instance's ID, which is what the alert rules stamp as
+            # devicechain_instance. Anything else lists another instance's alerts or none.
+            iv = [v for v in (board.get("templating") or {}).get("list") or []
+                  if isinstance(v, dict) and v.get("name") == "instance"]
+            if not (len(iv) == 1 and iv[0].get("type") == "constant" and iv[0].get("hide") == 2
+                    and iv[0].get("query") == inst and (iv[0].get("current") or {}).get("value") == inst):
+                problems.append(
+                    "INSTANCE: %s does not carry a hidden `instance` constant equal to %r; found %s.\n"
+                    "    The firing-alerts table selects ALERTS{devicechain_instance=\"$instance\"}, so a\n"
+                    "    wrong value lists another instance's alerts, or none." % (where, inst, json.dumps(iv)))
+
+            # The per-instance tag, and the one link that lists boards by it. A link by
+            # tag can only offer this instance's boards if no other instance renders it.
+            own = [t for t in board.get("tags") or [] if isinstance(t, str) and t.startswith("dc-")]
+            links = [l for l in board.get("links") or [] if isinstance(l, dict) and l.get("type") == "dashboards"]
+            if len(own) != 1 or len(own[0]) > 50:
+                problems.append(
+                    "TAG: %s carries tags %s; want exactly one `dc-<hash>` per-instance tag of at most\n"
+                    "    50 characters (Grafana's tag limit)." % (where, json.dumps(board.get("tags"))))
+            else:
+                tags.setdefault(own[0], set()).add(inst)
+                if not any(l.get("tags") == [own[0]] for l in links):
+                    problems.append(
+                        "LINK: %s has no `dashboards` link listing exactly its own instance tag %s.\n"
+                        "    Without it the boards of one instance do not link to each other; with a shared\n"
+                        "    tag they would link across instances." % (where, own[0]))
+            inst_boards.append((where, board, body))
+
+    # Board-to-board references are written @board:<stem>@ and resolved per instance.
+    # Every /d/<uid> in a rendered board must be a uid of THIS instance's boards, and no
+    # unresolved token may survive. A literal or foreign uid is a link that opens
+    # another instance's board.
+    own_uids = {b.get("uid") for _w, b, _t in inst_boards}
+    for where, _b, text in inst_boards:
+        if "@board:" in text:
+            problems.append("LINK-UNRESOLVED: %s still contains an @board:<name>@ reference." % where)
+        for ref in re.findall(r"/d/([A-Za-z0-9_-]+)", text):
+            if ref not in own_uids:
+                problems.append(
+                    "LINK-FOREIGN: %s links to /d/%s, which is not a board of instance %s.\n"
+                    "    Write /d/@board:<file stem>@ so the chart resolves it for this instance."
+                    % (where, ref, inst))
+
     want_names = {p.replace("{instance}", inst) for p in names}
     want_keys = {p.replace("{instance}", inst) for p in keys}
     for n in sorted(want_names - found_names):
@@ -598,6 +936,12 @@ for inst in ids:
     for k in sorted(found_keys - want_keys):
         problems.append("KEY-UNPINNED: %s (instance %s)" % (k, inst))
 
+for tag, insts in sorted(tags.items()):
+    if len(insts) > 1:
+        problems.append(
+            "DUPLICATE-TAG: tag %s is rendered by instances %s.\n"
+            "    The boards' links list boards by this tag, so each instance's boards would\n"
+            "    link to the other's." % (tag, ", ".join(sorted(insts))))
 for uid, where in sorted(uids.items(), key=lambda kv: str(kv[0])):
     if len(where) > 1:
         problems.append(
@@ -643,7 +987,7 @@ so renaming one orphans the dashboard on every existing install with nothing to
 say so.
 
 If one genuinely has to change, or a new dashboard is being added, update
-EXPECTED_CONFIGMAPS / EXPECTED_DATA_KEYS in hack/check-dashboards.sh in the same
+BOARDS in hack/check-dashboards.sh in the same
 commit.""", file=sys.stderr)
 sys.exit(1)
 PY
@@ -716,6 +1060,16 @@ func registerForTest(ms *Microservice) {
 	ms.NewHistogramVec("test_only_seconds", "Registered only by a test.", nil, nil)
 }
 EOF
+  # A CORE-REGISTERED HISTOGRAM: backend/core builds the messaging families once and
+  # every service exports them, so its derived series must resolve under any area.
+  mkdir -p "$work/backend/core/messaging"
+  cat >"$work/backend/core/messaging/metrics.go" <<'EOF'
+package messaging
+
+func register(ms *Microservice) {
+	ms.NewHistogramVec("core_lat_seconds", "A histogram registered by core.", nil, nil)
+}
+EOF
   # A SECOND AREA, so the area scoping of a histogram has something to be wrong
   # about: remote_seconds is a histogram in other-area only.
   mkdir -p "$work/backend/services/other-area"
@@ -731,9 +1085,21 @@ EOF
   # and leave the next one planting its defect ALONE.
   cat >"$tmp/probe.json" <<'EOF'
 {
-  "title": "Self-test probe",
-  "uid": "dc-self-test-probe",
+  "title": "DeviceChain \u2014 Self-test probe",
+  "uid": "dc-probe-ops",
+  "tags": ["devicechain", "probe"],
+  "templating": {"list": [{"name": "datasource", "type": "datasource"}, {"name": "namespace", "type": "constant"}, {"name": "instance", "type": "constant"}]},
   "panels": [
+    {
+      "type": "table",
+      "title": "Firing alerts",
+      "gridPos": {"h": 6, "w": 24, "x": 0, "y": 0},
+      "targets": [
+        {
+          "expr": "max by (alertname) (ALERTS{alertstate=\"firing\", devicechain_instance=\"$instance\", alertname=~\".+\"})"
+        }
+      ]
+    },
     {
       "type": "timeseries",
       "targets": [
@@ -744,7 +1110,10 @@ EOF
           "expr": "histogram_quantile(0.99, sum by (le) (rate(devicechain_selftestarea_lat_seconds_bucket[5m]))) / (sum(rate(devicechain_selftestarea_lat_seconds_sum[5m])) / sum(rate(devicechain_selftestarea_lat_seconds_count[5m]))) + rate(devicechain_selftestarea_sum_seconds_sum[5m]) + rate(devicechain_selftestarea_sum_seconds_count[5m])"
         },
         {
-          "expr": "devicechain_selftestarea_sum_seconds{quantile=\"0.99\"} + histogram_quantile(0.5, sum by (le) (rate(devicechain_selftestarea_loop_duration_seconds_bucket[5m]))) + rate(devicechain_selftestarea_loop_messages_total[5m]) + rate(devicechain_selftestarea_sweep_pass_duration_seconds_count[5m])"
+          "expr": "sum(kube_pod_container_status_restarts_total{namespace=\"$namespace\"}) + max(go_goroutines{namespace=\"$namespace\"}) + max(container_memory_working_set_bytes) + max(process_open_fds) + max(nats_varz_cpu) + min(cnpg_collector_up) + max(kubelet_volume_stats_used_bytes) + max(barman_cloud_cloudnative_pg_io_last_available_backup_timestamp)"
+        },
+        {
+          "expr": "devicechain_selftestarea_sum_seconds{quantile=\"0.99\"} + histogram_quantile(0.5, sum by (le) (rate(devicechain_selftestarea_loop_duration_seconds_bucket[5m]))) + rate(devicechain_selftestarea_loop_messages_total[5m]) + rate(devicechain_selftestarea_sweep_pass_duration_seconds_count[5m]) + histogram_quantile(0.5, sum by (le) (rate({__name__=~\"devicechain_[a-z0-9]+_core_lat_seconds_bucket\"}[5m])))"
         }
       ]
     }
@@ -766,6 +1135,16 @@ spec:
             devicechain_instance: dc
         - alert: ProbeLatencyByName
           expr: histogram_quantile(0.99, sum by (le) (rate({__name__=~"devicechain_[a-z0-9]+_lat_seconds_bucket", namespace="dc"}[5m]))) > 1
+          labels:
+            devicechain_instance: dc
+        - alert: ProbeExternalInline
+          expr: min(kube_pod_status_ready{namespace="dc"}) < 1
+          labels:
+            devicechain_instance: dc
+        - alert: ProbeExternalBlock
+          expr: |
+            max(cnpg_pg_database_size_bytes{namespace="dc"})
+              > 1e12
           labels:
             devicechain_instance: dc
 EOF
@@ -832,6 +1211,95 @@ EOF
   histcase 'devicechain_selftestarea_lat_seconds_count' 'devicechain_selftestarea_test_only_seconds_count' '_count on a histogram registered only in a test file'
   histcase '_lat_seconds_bucket"' '_lat_seconds"' 'a by-name selector over the bare name of a histogram' "$tmpl/prometheusrule-probe.yaml"
   histcase '_lat_seconds_bucket"' '_lat_seconds_buckets"' 'a by-name selector with a misspelled histogram suffix' "$tmpl/prometheusrule-probe.yaml"
+
+  # Cases 2x -- SERIES THAT ARE NOT DEVICECHAIN'S, one misspelling per prefix family, each alone.
+  # The clean fixture names one pinned series of every family and passed Case 0, so the accepted half
+  # is proven; each defect below drops a letter from a real name.
+  histcase 'kube_pod_container_status_restarts_total' 'kube_pod_container_status_restart_total' 'a misspelled kube-state-metrics series (kube_*)'
+  histcase 'container_memory_working_set_bytes' 'container_memory_working_set_byte' 'a misspelled cAdvisor series (container_*)'
+  histcase 'go_goroutines' 'go_goroutine' 'a misspelled Go runtime series (go_*)'
+  histcase 'process_open_fds' 'process_open_fd' 'a misspelled process series (process_*)'
+  histcase 'nats_varz_cpu' 'nats_varz_cpuu' 'a misspelled broker exporter series (nats_*)'
+  histcase 'nats_varz_cpu' 'nats_varz_cpu_percent' 'a broker exporter series with a suffix the exporter does not export'
+  histcase 'cnpg_collector_up' 'cnpg_collector_upp' 'a misspelled database operator series (cnpg_*)'
+  histcase 'kubelet_volume_stats_used_bytes' 'kubelet_volume_stats_used_byte' 'a misspelled kubelet series (kubelet_*)'
+  histcase 'barman_cloud_cloudnative_pg_io_last_available_backup_timestamp' 'barman_cloud_cloudnative_pg_io_last_available_backup_timestam' 'a misspelled backup plugin series (barman_*)'
+
+  # ...and in an ALERT RULE, in both spellings of `expr:` (inline, and a block scalar), where a
+  # misspelling is worse than an empty graph: the rule never fires and never complains.
+  histcase 'kube_pod_status_ready' 'kube_pod_status_redy' 'a misspelled external series in an inline alert expression' "$tmpl/prometheusrule-probe.yaml"
+  histcase 'cnpg_pg_database_size_bytes' 'cnpg_pg_database_size_byts' 'a misspelled external series in a block-scalar alert expression' "$tmpl/prometheusrule-probe.yaml"
+
+  # Cases 2p — INTERNAL REFERENCES IN PUBLISHED BOARD TEXT, each alone. The board
+  # text is screenshotted onto the public docs site, so an ADR number in a title, a
+  # description, a legend or a row title is a dead citation. The probe is given the
+  # field under test by rewriting the pristine fixture, so the clean fixture (Case 0)
+  # is the counterweight: the same fields, free of references, pass.
+  textcase() { # <python expression that mutates board> <description>
+    python3 - "$tmp/probe.json" "$dash/probe.json" "$1" <<'FIXTURE' || fail "the mutation for $2 did not apply"
+import json, sys
+board = json.load(open(sys.argv[1]))
+exec(sys.argv[3])
+json.dump(board, open(sys.argv[2], "w"), indent=2)
+FIXTURE
+    if check_content "$work" >/dev/null 2>&1; then
+      fail "did not flag $2"
+    fi
+    restore
+    echo "  ok: $2 is caught"
+  }
+  # A clean board with every published-text field populated must still pass.
+  python3 - "$tmp/probe.json" "$dash/probe.json" <<'FIXTURE' || fail "the clean-text fixture could not be built"
+import json, sys
+board = json.load(open(sys.argv[1]))
+board["description"] = "Plain operator language."
+board["panels"].append({"type": "row", "title": "A row", "panels": []})
+board["panels"][1]["title"] = "A panel"
+board["panels"][1]["description"] = "A description."
+board["panels"][1]["targets"][0]["legendFormat"] = "{{reason}}"
+json.dump(board, open(sys.argv[2], "w"), indent=2)
+FIXTURE
+  check_content "$work" >/dev/null || fail "a board with plain text in every published field was reported as broken"
+  restore
+  textcase 'board["title"] = "DeviceChain — Probe (ADR-023)"' 'an ADR reference in a board title'
+  textcase 'board["description"] = "see ADR-051 for the thread"' 'an ADR reference in a board description'
+  textcase 'board["panels"].append({"type": "row", "title": "State budget (ADR-023)", "panels": []})' 'an ADR reference in a row title'
+  textcase 'board["panels"][1]["targets"][0]["legendFormat"] = "{{reason}} ADR-057"' 'an ADR reference in a legend'
+  textcase 'board["panels"][1]["description"] = "superseded (ADR-057 D6)"' 'an ADR reference in a panel description'
+  textcase 'board["panels"][1]["description"] = "\U0001F534 look here first"' 'the red-circle marker in a panel description'
+
+  # Case 2b — THE BOARD CONVENTION, each rule broken alone. These start from the
+  # clean fixture (which satisfies the convention, so the clean-tree case above
+  # already proves the rules do not fire on a conforming board).
+  textcase 'board["uid"] = "dc-other-ops"' 'a board uid that does not follow its file name'
+  textcase 'board["title"] = "Probe"' 'a board title without the DeviceChain prefix'
+  textcase 'board["tags"] = []' 'a board without the devicechain tag'
+  textcase 'board["templating"]["list"] = [v for v in board["templating"]["list"] if v["name"] != "instance"]' 'a board with no instance variable'
+  textcase 'board["templating"]["list"] = [v for v in board["templating"]["list"] if v["name"] != "namespace"]' 'a board with no namespace variable'
+  textcase 'del board["panels"][0]' 'a board with no firing-alerts table'
+  textcase 'board["panels"][0]["gridPos"]["y"] = 5' 'a firing-alerts table that is not at the top'
+  textcase 'board["panels"][0]["targets"][0]["expr"] = board["panels"][0]["targets"][0]["expr"].replace("alertstate=\"firing\", ", "")' 'a firing-alerts table that also lists pending alerts'
+  textcase 'board["panels"][1]["targets"][0]["expr"] = "sum(ALERTS{devicechain_instance=\"prod\"})"' 'an alert selector with a literal instance ID'
+  textcase 'board["panels"][1]["links"] = [{"url": "/d/dc-0123456789abcdef0123"}]' 'a link to a literal board uid'
+
+  # Case 2c — THE BOARD LIST, both directions, and an empty list. The failure
+  # message names which side is missing, so each case checks the message too.
+  bl="$tmp/boardlist"
+  mkdir -p "$bl"
+  : >"$bl/alpha.json"
+  : >"$bl/beta.json"
+  check_board_list "$bl" alpha beta >/dev/null 2>&1 || fail "a board list matching the files was refused"
+  blcase() { # <expected code> <description> <board>...
+    local code="$1" desc="$2" out rc=0
+    shift 2
+    out="$(check_board_list "$bl" "$@" 2>&1)" || rc=$?
+    [ "$rc" -ne 0 ] || fail "did not flag $desc"
+    grep -q "^$code" <<<"$out" || { echo "$out" >&2; fail "flagged $desc, but not as $code"; }
+    echo "  ok: $desc is caught ($code)"
+  }
+  blcase BOARD-UNLISTED 'a board file the list does not name' alpha
+  blcase BOARD-MISSING 'a listed board with no file' alpha beta gamma
+  blcase FAIL 'an empty board list'
 
   # Case 3 — A MISSPELLED SERIES IN AN ALERT RULE, alone. Same defect, the far
   # more dangerous half: this one is a rule that can never fire, and promtool
@@ -910,6 +1378,12 @@ EOF
   restore
   echo "  ok: a by-name selector in an unresolvable form is refused"
 
+  # Case 6d — CORE-REGISTERED HISTOGRAMS, each defect alone. The clean fixture names
+  # core_lat_seconds_bucket by name and passed Case 0, so the accepted half is proven.
+  histcase 'core_lat_seconds_bucket' 'core_lat_seconds' 'the bare name of a histogram registered in core'
+  histcase 'core_lat_seconds_bucket' 'core_lat_seconds_buckets' 'a misspelled suffix on a core histogram'
+  histcase 'core_lat_seconds_bucket' 'core_lat_secnds_bucket' 'a core histogram suffix on a base that is not registered'
+
   # -------------------------------------------------------------------------
   # The ConfigMap cases DO run against a copy of the real chart, and can: they
   # depend on the chart alone, not on the Go tree, so their clean baseline is not
@@ -966,10 +1440,44 @@ PY
   # adding a dashboard without recording its name here fails too — which is what
   # makes the pinned list a decision rather than a formality. The board carries
   # a `namespace` variable because the template refuses to render one without.
-  printf '%s\n' '{"title": "scratch", "uid": "scratch", "panels": [], "templating": {"list": [{"name": "namespace", "type": "constant", "query": ""}]}}' \
+  printf '%s\n' '{"title": "scratch", "uid": "scratch", "panels": [], "templating": {"list": [{"name": "namespace", "type": "constant", "query": ""}, {"name": "instance", "type": "constant", "query": ""}]}}' \
     >"$chart/dashboards/scratch-board.json"
   expect_configmaps NAME-UNPINNED "a dashboard whose ConfigMap name is not pinned"
   rm -f "$chart/dashboards/scratch-board.json"
+
+  # Cases 9b-9e — BOARD-TO-BOARD REFERENCES. A board names another as
+  # @board:<stem>@ and the chart resolves it per instance. The scratch board is
+  # unpinned (NAME-UNPINNED is expected and beside the point), so each case asserts
+  # the presence or absence of the LINK-* code it is about.
+  scratch_board() { # <link url>
+    printf '%s\n' "{\"title\": \"scratch\", \"uid\": \"scratch\", \"panels\": [{\"id\": 1, \"type\": \"text\", \"links\": [{\"url\": \"$1\"}]}], \"templating\": {\"list\": [{\"name\": \"namespace\", \"type\": \"constant\", \"query\": \"\"}, {\"name\": \"instance\", \"type\": \"constant\", \"query\": \"\"}]}}" \
+      >"$chart/dashboards/scratch-board.json"
+  }
+  scratch_board "/d/dc-00000000000000000000/x"
+  expect_configmaps LINK-FOREIGN "a board linking to a literal uid"
+  scratch_board "/d/@board:event-processing@/x"
+  out="$(check_configmaps "$chart" 2>&1)" || true
+  grep -q -- "- LINK" <<<"$out" && { echo "$out" >&2; fail "flagged a correctly written board reference"; }
+  echo "  ok: a correctly written @board:<stem>@ reference passes"
+  scratch_board "/d/@board:no-such-board@/x"
+  missing_rc=0
+  missing_err="$(helm template dc "$chart" \
+    --set "instance.config.infrastructure.secrets.rootKey=$(openssl rand -base64 32)" 2>&1 >/dev/null)" || missing_rc=$?
+  [ "$missing_rc" -ne 0 ] || fail "rendered a reference to a board that does not exist"
+  grep -qF 'references a board that does not exist' <<<"$missing_err" || {
+    echo "$missing_err" >&2
+    fail "the render of an unresolved board reference failed, but not with the template's own refusal"
+  }
+  rm -f "$chart/dashboards/scratch-board.json"
+  echo "  ok: a reference to a board that does not exist is refused by the template"
+
+  # Cases 9f-9h — THE PER-INSTANCE VARIABLE, TAG AND LINK, each broken alone.
+  plant "$tpl" '"label" "Instance ID" "query" $id' '"label" "Instance ID" "query" $ns'
+  expect_configmaps INSTANCE "an instance variable that holds the namespace instead of the instance ID"
+  plant "$tpl" '(sha256sum $id | trunc 20)' '(sha256sum "shared" | trunc 20)'
+  expect_configmaps DUPLICATE-TAG "one per-instance tag shared across instances"
+  plant "$tpl" '"tags" (list $tag) "asDropdown"' '"tags" (list "dc-shared") "asDropdown"'
+  expect_configmaps LINK "a boards link that lists a tag other than the instance's own"
 
   # Case 10 — ONE UID FOR EVERY INSTANCE, alone. Today's-shape regression on the
   # uid only: every file is still distinct, so nothing but the cross-instance
@@ -1069,9 +1577,35 @@ FIXTURE
   rm -f "$chart/dashboards/unscoped-board.json"
   echo "  ok: a dashboard with no namespace variable is refused by the template"
 
-  echo "self-test passed: 32 defects, each planted alone, each caught; a clean tree and chart pass"
+  # The same for the `instance` variable: without it the firing-alerts table selects
+  # nothing, so the render refuses rather than shipping a table that is always empty.
+  python3 - "$chart/dashboards/command-delivery.json" "$chart/dashboards/unscoped-board.json" <<'FIXTURE' ||
+import json, sys
+board = json.load(open(sys.argv[1]))
+before = len(board["templating"]["list"])
+board["templating"]["list"] = [v for v in board["templating"]["list"] if v.get("name") != "instance"]
+if len(board["templating"]["list"]) != before - 1:
+    sys.exit(1)
+json.dump(board, open(sys.argv[2], "w"), indent=2)
+FIXTURE
+    fail "the instance-less fixture could not be built"
+  noinst_rc=0
+  noinst_err="$(helm template dc "$chart" \
+    --set "instance.config.infrastructure.secrets.rootKey=$(openssl rand -base64 32)" 2>&1 >/dev/null)" || noinst_rc=$?
+  [ "$noinst_rc" -ne 0 ] || fail "rendered a dashboard that has no instance variable"
+  grep -qF 'dashboard dashboards/unscoped-board.json has no "instance" template variable' <<<"$noinst_err" || {
+    echo "$noinst_err" >&2
+    fail "the render of an instance-less dashboard failed, but not with the template's own refusal"
+  }
+  rm -f "$chart/dashboards/unscoped-board.json"
+  echo "  ok: a dashboard with no instance variable is refused by the template"
+
+  echo "self-test passed: 72 defects, each planted alone, each caught; a clean tree and chart pass"
   exit 0
 fi
+
+say "board list: every dashboards/*.json is named in BOARDS, and every name has its file"
+check_board_list "$ROOT/deploy/helm/devicechain/dashboards" "${BOARDS[@]}"
 
 say "parsing the chart's Grafana dashboards and resolving their series"
 check_content "$ROOT"

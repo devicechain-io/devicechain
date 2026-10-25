@@ -81,6 +81,13 @@ export function TenantForm({
   // this gates how often — and declared per minute, since drafting is human-paced.
   const [aiRate, setAiRate] = useState(tenant?.aiInferenceRequestsPerMinute?.toString() ?? '');
   const [aiBurst, setAiBurst] = useState(tenant?.aiInferenceBurst?.toString() ?? '');
+  // How fast this tenant's devices may register themselves. A separate dimension from
+  // ingest: a fleet may stream heavily yet register rarely, and a factory may register a
+  // whole batch at once. Blank inherits the tier's value, then the platform default.
+  const [provisioningRate, setProvisioningRate] = useState(
+    tenant?.provisioningRegistrationsPerSecond?.toString() ?? '',
+  );
+  const [provisioningBurst, setProvisioningBurst] = useState(tenant?.provisioningBurst?.toString() ?? '');
   // How many commands this tenant may hold for absent devices before an enqueue is
   // refused. Blank inherits the tier's ceiling, then the platform default — never
   // unlimited. It is seeded from the tenant and resubmitted on every save for the same
@@ -149,6 +156,8 @@ export function TenantForm({
         aiExternalEnabled,
         aiInferenceRequestsPerMinute: optNum(aiRate),
         aiInferenceBurst: optNum(aiBurst),
+        provisioningRegistrationsPerSecond: optNum(provisioningRate),
+        provisioningBurst: optNum(provisioningBurst),
         heldCommandCeiling: optNum(heldCeiling),
         shedPriority: optNum(shedPriority),
         geoFencePositionCeiling: optNum(fencePositionCeiling),
@@ -283,6 +292,37 @@ export function TenantForm({
             value={outboundBurst}
             placeholder={t('defaultPlaceholder')}
             onChange={(e) => setOutboundBurst(e.target.value)}
+          />
+        </FormField>
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <FormField
+          label={t('provisioningRateLabel')}
+          htmlFor="t-provisioning-rate"
+          description={t('provisioningRateDescription')}
+        >
+          <Input
+            id="t-provisioning-rate"
+            type="number"
+            min="0"
+            value={provisioningRate}
+            placeholder={t('defaultPlaceholder')}
+            onChange={(e) => setProvisioningRate(e.target.value)}
+          />
+        </FormField>
+        <FormField
+          label={t('provisioningBurstLabel')}
+          htmlFor="t-provisioning-burst"
+          description={t('inheritDefaultHint')}
+        >
+          <Input
+            id="t-provisioning-burst"
+            type="number"
+            min="0"
+            step="1"
+            value={provisioningBurst}
+            placeholder={t('defaultPlaceholder')}
+            onChange={(e) => setProvisioningBurst(e.target.value)}
           />
         </FormField>
       </div>

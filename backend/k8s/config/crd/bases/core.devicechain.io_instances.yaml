@@ -154,6 +154,20 @@ spec:
                   making them invert a negative to learn that Prometheus is installed puts a
                   step in front of the answer.
                 type: boolean
+              mqttFailClosed:
+                description: |-
+                  MQTTFailClosed records the operator's choice of the fail-closed MQTT QoS 1
+                  acknowledgement (the instance configuration's infrastructure.nats.mqttFailClosed).
+                  A pointer, because there are three answers and only two of them are a decision:
+                  absent means the choice was never made, so the platform's default applies;
+                  true and false are the operator's own words, and an
+                  explicit false is kept as false by every later upgrade.
+
+                  Fixed configuration, so it is recorded here and not in the free-form tuning
+                  overlay: `dcctl upgrade` reads it back and writes it into the instance
+                  configuration document it composes, which is the only way a setting survives a
+                  version bump now that dcctl owns that document.
+                type: boolean
               objectStore:
                 description: |-
                   ObjectStore is where the instance keeps opaque binaries that do not belong in

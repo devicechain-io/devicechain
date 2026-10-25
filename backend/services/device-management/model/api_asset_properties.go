@@ -35,8 +35,8 @@ import (
 // is STRICT because a command is an actuation and a mis-keyed argument must never be
 // silently delivered. An asset property is written by an OPERATOR through the API,
 // and a misspelled property that is quietly accepted produces an asset that reads as
-// correctly described and is not — the same failure the graphql-go fork exists to
-// stop. So: strict, on the command side of the line.
+// correctly described and is not — the same failure graphql-go's unknown-field
+// rejection (upstream v1.10.3) stops. So: strict, on the command side of the line.
 
 // validateAssetPropertySchemaInput checks a draft property schema on its way in: it
 // must be a JSON array of descriptors with no unrecognized keys (so a typo'd

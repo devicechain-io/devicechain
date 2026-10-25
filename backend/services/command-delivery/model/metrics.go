@@ -133,7 +133,7 @@ func NewBatchMetrics(ms *core.Microservice) *BatchMetrics {
 	if ms == nil {
 		return nil
 	}
-	return &BatchMetrics{
+	m := &BatchMetrics{
 		enqueues: ms.NewCounterVec("batch_enqueues_total",
 			"Command batches decided, by how the target was named and the outcome.",
 			[]string{"target_kind", "outcome"}),
@@ -149,6 +149,53 @@ func NewBatchMetrics(ms *core.Microservice) *BatchMetrics {
 			"Commands examined by a batch cancel, by what the cancel was able to do with "+
 				"each. A standing already_sent share is a brake that keeps arriving late.",
 			[]string{"disposition"}),
+	}
+	m.seedZero()
+	return m
+}
+
+// seedZero exports every series whose closed label set this package owns at zero, before
+// the first fleet write.
+//
+// 🔴 A COUNTERVEC GATHERS NOTHING UNTIL A LABEL COMBINATION IS FIRST USED. The chart's
+// command-delivery dashboard graphs these counters, and on an instance that has not yet
+// taken a fleet write every one of those panels would read "No data" — indistinguishable
+// from a scrape that is not reaching the service. A seeded zero also lets an increase()
+// alert see the first event, which otherwise appears as a series springing into existence
+// at 1. Same reasoning, and the same shape, as the claims_lost seeding in the delivery
+// processor.
+//
+// Only combinations that can really occur are seeded; a series that can never move would be
+// a lie of its own. A refusal that was decided before a target was established
+// (target_kind=unknown) can only be refused or undecided, never created or replayed.
+//
+// The refusal counter is seeded by BOUND rather than by every code: the bound is what the
+// board and the reserve alert select on, the codes fold into a set far too wide to list as
+// flat-zero lines, and the two series whose first appearance is itself a signal are the
+// ceiling/reserve refusals and the catch-all "other" code.
+func (m *BatchMetrics) seedZero() {
+	if m == nil {
+		return
+	}
+	for _, kind := range []string{targetKindDeviceListLabel, targetKindGroupLabel} {
+		for _, outcome := range []string{outcomeCreated, outcomeReplayed, outcomeRefused, outcomeUndecided} {
+			m.enqueues.WithLabelValues(kind, outcome)
+		}
+	}
+	for _, outcome := range []string{outcomeRefused, outcomeUndecided} {
+		m.enqueues.WithLabelValues(targetKindUnknownLabel, outcome)
+	}
+	for _, disposition := range []string{dispositionAccepted, dispositionRefused} {
+		m.devices.WithLabelValues(disposition)
+	}
+	for _, bound := range []string{boundCeiling, boundReserve} {
+		m.refusals.WithLabelValues(string(RejectHeldCeilingExceeded), bound)
+	}
+	m.refusals.WithLabelValues(codeOtherLabel, boundNone)
+	for _, disposition := range []string{
+		cancelDispositionCancelled, cancelDispositionAlreadySent, cancelDispositionAlreadyFinished,
+	} {
+		m.cancels.WithLabelValues(disposition)
 	}
 }
 

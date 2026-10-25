@@ -155,6 +155,7 @@ func renderDocs(t *testing.T, vals map[string]interface{}) []map[string]interfac
 // chain — a PSK Secret, the identity binding in lwm2m-ingest's mounted config, and a
 // Deployment env var that ties the two together.
 func TestLwm2mIdentitiesRenderEndToEnd(t *testing.T) {
+	t.Parallel()
 	enabled, err := ResolveEnabledAreas("default", []string{"lwm2m-ingest"})
 	if err != nil {
 		t.Fatalf("resolving areas: %v", err)

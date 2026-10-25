@@ -234,6 +234,7 @@ change can be merged.
 
 DeviceChain is licensed under the [Apache License 2.0](LICENSE) (see also [NOTICE](NOTICE)).
 Copyright is held by The DeviceChain Authors.
+The project's licensing intent is stated in [CONTRIBUTING.md](CONTRIBUTING.md#licensing-intent).
 
 "DeviceChain" and the DeviceChain logo are trademarks of IoT Innovations, LLC. The Apache 2.0
 license covers the code, not the marks. See [TRADEMARK.md](TRADEMARK.md) for the trademark policy.

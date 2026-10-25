@@ -200,7 +200,7 @@ func startE2E(t *testing.T) *e2e {
 	infra.Nats = mscfg.NatsConfiguration{Hostname: host, Port: port}
 	infra.Blob = mscfg.BlobConfiguration{Backend: "filesystem", Directory: t.TempDir()}
 	infra.ServiceAuth.Secret = "service-secret"
-	infra.UserManagement = mscfg.UserManagementConfiguration{Hostname: "um", Port: 8080}
+	infra.UserManagement = mscfg.UserManagementConfiguration{Hostname: "um", Port: 8080, InternalPort: 8080}
 	infra.DeviceManagement = mscfg.DeviceManagementConfiguration{Hostname: "dm", Port: 8080}
 	infra.Secrets = mscfg.SecretsConfiguration{RootKey: base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{9}, 32))}
 	Microservice.MicroserviceConfigurationRaw = []byte(`{"updates":{"allowUnverifiedArtifacts":false}}`)

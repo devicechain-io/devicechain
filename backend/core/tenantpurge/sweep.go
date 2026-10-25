@@ -23,6 +23,13 @@ type TableResult struct {
 	// is STUCK — which is the one moment the provenance matters most.
 	Origin string
 	Rows   int64
+	// Elapsed is the wall-clock time the statement for this table took (the DELETE or
+	// UPDATE for a sweep, the count for a residual scan). It is cheap to record and exists to
+	// attribute where a large tenant's erase time goes: the cost per row of the raw
+	// hypertables, the rollup materialization and the relational tables is not the same
+	// curve, and a single total cannot say which one bends. Like the row count it is recorded
+	// only for tables that contributed rows.
+	Elapsed time.Duration
 }
 
 // Describe renders the table for a human, with its provenance when it has any.
@@ -41,6 +48,9 @@ type Result struct {
 	Tables []TableResult
 	// Rows is the total across Tables.
 	Rows int64
+	// Elapsed is the wall-clock time of the whole call, including the precondition and the
+	// transaction commit, which the per-table figures do not include.
+	Elapsed time.Duration
 	// Deferred lists tables that hold this tenant's data and were NOT erased. It is
 	// carried on every result so a caller cannot report a complete erasure without
 	// first having to look at what was left behind.
@@ -155,6 +165,7 @@ type Precondition func(tx *gorm.DB) error
 // tenant table) — and such a caller has the weaker guarantee, by construction.
 func Sweep(ctx context.Context, db *gorm.DB, plan *Plan, tenant string, epoch time.Time,
 	pre Precondition) (Result, error) {
+	started := time.Now()
 	res := Result{Tenant: tenant, Deferred: plan.OfClass(ClassDeferred)}
 	if err := checkSweepable(plan, tenant); err != nil {
 		return res, err
@@ -176,13 +187,15 @@ func Sweep(ctx context.Context, db *gorm.DB, plan *Plan, tenant string, epoch ti
 			if err != nil {
 				return err
 			}
+			t0 := time.Now()
 			out := tx.Exec(fmt.Sprintf("DELETE FROM %s WHERE %s", e.Table.quoted(), where), args...)
+			took := time.Since(t0)
 			if out.Error != nil {
 				return fmt.Errorf("sweep %s: %w", e.Table, out.Error)
 			}
 			if out.RowsAffected > 0 {
 				res.Tables = append(res.Tables, TableResult{
-					Table: e.Table, Class: e.Class, Origin: e.Origin, Rows: out.RowsAffected,
+					Table: e.Table, Class: e.Class, Origin: e.Origin, Rows: out.RowsAffected, Elapsed: took,
 				})
 				res.Rows += out.RowsAffected
 			}
@@ -197,21 +210,24 @@ func Sweep(ctx context.Context, db *gorm.DB, plan *Plan, tenant string, epoch ti
 			if err != nil {
 				return err
 			}
+			t0 := time.Now()
 			out := tx.Exec(stmt, args...)
+			took := time.Since(t0)
 			if out.Error != nil {
 				return fmt.Errorf("redacting %s: %w", e.Table, out.Error)
 			}
 			if out.RowsAffected > 0 {
 				res.Redacted = append(res.Redacted, TableResult{
-					Table: e.Table, Class: e.Class, Origin: e.Origin, Rows: out.RowsAffected,
+					Table: e.Table, Class: e.Class, Origin: e.Origin, Rows: out.RowsAffected, Elapsed: took,
 				})
 			}
 		}
 		return nil
 	})
 	if err != nil {
-		return Result{Tenant: tenant, Deferred: res.Deferred}, err
+		return Result{Tenant: tenant, Deferred: res.Deferred, Elapsed: time.Since(started)}, err
 	}
+	res.Elapsed = time.Since(started)
 	return res, nil
 }
 
@@ -315,8 +331,13 @@ func checkEpoch(tenant string, epoch time.Time) error {
 // commits can only see writes that were already in flight.
 //
 // epoch is the purge's, as given to Sweep: it locates the rows the sweep retained.
-func Residue(ctx context.Context, db *gorm.DB, plan *Plan, tenant string, epoch time.Time) (Result, error) {
-	res := Result{Tenant: tenant, Deferred: plan.OfClass(ClassDeferred)}
+//
+// The statements stay in this function rather than a helper it times: the raw-SQL allow-list
+// (backend/tools/rdbguard) reviews them under this name.
+func Residue(ctx context.Context, db *gorm.DB, plan *Plan, tenant string, epoch time.Time) (res Result, err error) {
+	started := time.Now()
+	defer func() { res.Elapsed = time.Since(started) }()
+	res = Result{Tenant: tenant, Deferred: plan.OfClass(ClassDeferred)}
 	if err := checkSweepable(plan, tenant); err != nil {
 		return res, err
 	}
@@ -331,14 +352,16 @@ func Residue(ctx context.Context, db *gorm.DB, plan *Plan, tenant string, epoch 
 			return res, err
 		}
 		var n int64
+		t0 := time.Now()
 		q := db.WithContext(ctx).Raw(
 			fmt.Sprintf("SELECT count(*) FROM %s WHERE %s", e.Table.quoted(), where), args...).Scan(&n)
+		took := time.Since(t0)
 		if q.Error != nil {
 			return res, fmt.Errorf("residual scan %s: %w", e.Table, q.Error)
 		}
 		if n > 0 {
 			res.Tables = append(res.Tables, TableResult{
-				Table: e.Table, Class: e.Class, Origin: e.Origin, Rows: n})
+				Table: e.Table, Class: e.Class, Origin: e.Origin, Rows: n, Elapsed: took})
 			res.Rows += n
 		}
 	}
@@ -356,14 +379,16 @@ func Residue(ctx context.Context, db *gorm.DB, plan *Plan, tenant string, epoch 
 			return res, err
 		}
 		var n int64
+		t0 := time.Now()
 		q := db.WithContext(ctx).Raw(fmt.Sprintf("SELECT count(*) FROM %s WHERE %s",
 			e.Table.quoted(), where), args...).Scan(&n)
+		took := time.Since(t0)
 		if q.Error != nil {
 			return res, fmt.Errorf("residual identifier scan %s: %w", e.Table, q.Error)
 		}
 		if n > 0 {
 			res.Redacted = append(res.Redacted, TableResult{
-				Table: e.Table, Class: e.Class, Origin: e.Origin, Rows: n})
+				Table: e.Table, Class: e.Class, Origin: e.Origin, Rows: n, Elapsed: took})
 		}
 	}
 	return res, nil

@@ -79,3 +79,8 @@ dc-apiprobe
 # those references are to files on a maintainer's disk, not to repo content, and that is the
 # arrangement being made explicit rather than changed.
 scratchpad/
+
+# API-compat gate work trees (hack/check-npm-api.sh): the baseline release's package sources,
+# extracted inside frontend/ so module resolution finds frontend/node_modules.
+frontend/.api-baseline/
+frontend/.api-selftest/

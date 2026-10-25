@@ -1,0 +1,262 @@
+{
+  "schemaVersion": 2,
+  "title": "Explained empty states",
+  "canvas": {
+    "breakpoints": {
+      "base": 0
+    },
+    "grid": {
+      "columns": 24,
+      "minCellSize": 24,
+      "gutter": 8,
+      "padding": 0
+    },
+    "sizing": "fill"
+  },
+  "widgets": [
+    {
+      "id": "es-unbound",
+      "type": "latest-card",
+      "layout": {
+        "base": {
+          "mode": "grid",
+          "col": 0,
+          "row": 0,
+          "cols": 6,
+          "rows": 3
+        }
+      },
+      "options": {
+        "title": "Unbound slot"
+      },
+      "datasource": {
+        "kind": "slot",
+        "slot": "pick",
+        "measurements": [
+          "temperature"
+        ]
+      }
+    },
+    {
+      "id": "es-not-reported",
+      "type": "latest-card",
+      "layout": {
+        "base": {
+          "mode": "grid",
+          "col": 6,
+          "row": 0,
+          "cols": 6,
+          "rows": 3
+        }
+      },
+      "options": {
+        "title": "Not reported"
+      },
+      "datasource": {
+        "kind": "device",
+        "deviceToken": "gate-fuelless",
+        "measurements": [
+          "fuel_level"
+        ]
+      }
+    },
+    {
+      "id": "es-gauge",
+      "type": "gauge",
+      "layout": {
+        "base": {
+          "mode": "grid",
+          "col": 12,
+          "row": 0,
+          "cols": 6,
+          "rows": 3
+        }
+      },
+      "options": {
+        "title": "Gauge, not reported",
+        "min": 0,
+        "max": 100
+      },
+      "datasource": {
+        "kind": "device",
+        "deviceToken": "gate-fuelless",
+        "measurements": [
+          "fuel_level"
+        ]
+      }
+    },
+    {
+      "id": "es-forbidden",
+      "type": "latest-card",
+      "layout": {
+        "base": {
+          "mode": "grid",
+          "col": 18,
+          "row": 0,
+          "cols": 6,
+          "rows": 3
+        }
+      },
+      "options": {
+        "title": "Refused"
+      },
+      "datasource": {
+        "kind": "device",
+        "deviceToken": "gate-forbidden",
+        "measurements": [
+          "temperature"
+        ]
+      }
+    },
+    {
+      "id": "es-error",
+      "type": "latest-card",
+      "layout": {
+        "base": {
+          "mode": "grid",
+          "col": 0,
+          "row": 3,
+          "cols": 6,
+          "rows": 3
+        }
+      },
+      "options": {
+        "title": "Source error"
+      },
+      "datasource": {
+        "kind": "device",
+        "deviceToken": "gate-broken",
+        "measurements": [
+          "temperature"
+        ]
+      }
+    },
+    {
+      "id": "es-table",
+      "type": "table",
+      "layout": {
+        "base": {
+          "mode": "grid",
+          "col": 6,
+          "row": 3,
+          "cols": 6,
+          "rows": 3
+        }
+      },
+      "options": {
+        "title": "Table, no data"
+      },
+      "datasource": {
+        "kind": "device",
+        "deviceToken": "gate-quiet",
+        "measurements": [
+          "temperature"
+        ]
+      }
+    },
+    {
+      "id": "es-chart",
+      "type": "timeseries-chart",
+      "layout": {
+        "base": {
+          "mode": "grid",
+          "col": 12,
+          "row": 3,
+          "cols": 12,
+          "rows": 6
+        }
+      },
+      "options": {
+        "title": "No data in range",
+        "unit": "C",
+        "precision": 1
+      },
+      "datasource": {
+        "kind": "device",
+        "deviceToken": "gate-old",
+        "measurements": [
+          "temperature"
+        ]
+      }
+    },
+    {
+      "id": "es-battery",
+      "type": "battery",
+      "layout": {
+        "base": {
+          "mode": "grid",
+          "col": 0,
+          "row": 6,
+          "cols": 6,
+          "rows": 3
+        }
+      },
+      "options": {
+        "title": "Battery, no data",
+        "min": 0,
+        "max": 100
+      },
+      "datasource": {
+        "kind": "device",
+        "deviceToken": "gate-quiet",
+        "measurements": [
+          "temperature"
+        ]
+      }
+    },
+    {
+      "id": "es-small",
+      "type": "latest-card",
+      "layout": {
+        "base": {
+          "mode": "grid",
+          "col": 6,
+          "row": 6,
+          "cols": 3,
+          "rows": 2
+        }
+      },
+      "options": {
+        "title": "Compact"
+      },
+      "datasource": {
+        "kind": "device",
+        "deviceToken": "gate-fuelless",
+        "measurements": [
+          "fuel_level"
+        ]
+      }
+    },
+    {
+      "id": "es-ring",
+      "type": "progress-ring",
+      "layout": {
+        "base": {
+          "mode": "grid",
+          "col": 9,
+          "row": 6,
+          "cols": 3,
+          "rows": 3
+        }
+      },
+      "options": {
+        "title": "Ring",
+        "min": 0,
+        "max": 100
+      },
+      "datasource": {
+        "kind": "device",
+        "deviceToken": "gate-fuelless",
+        "measurements": [
+          "fuel_level"
+        ]
+      }
+    }
+  ],
+  "slots": {
+    "pick": {
+      "label": "Device",
+      "type": "device"
+    }
+  }
+}

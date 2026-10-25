@@ -113,12 +113,12 @@ func (*tenantPurgedError) TenantErased() bool { return true }
 // is a no-op, and logs nothing.
 //
 // 🔴 THE AUDIT JOURNAL'S OWN INSERT IS EXCLUDED, and skipping it is not a courtesy — it is
-// what makes the "deletes are not fenced" sentence above TRUE. The journal's callback is
-// registered After("gorm:create"), which gorm sorts AFTER the commit callback, so the
-// audit row for a mutation is inserted on the pool once that mutation has already
-// committed. Fencing it would therefore refuse a DELETE that had happened: the sweeper
-// would be handed ErrTenantPurged for rows it had just removed, and every ordinary
-// delete-by-a-still-valid-token would report a failure over a completed write.
+// what makes the "deletes are not fenced" sentence above TRUE. The journal's row is written
+// inside the mutation's own transaction (it is registered Before the commit callback), so
+// a refusal of it would now ROLL BACK the mutation it describes. Fencing it would
+// therefore undo a DELETE the sweeper is entitled to make: the sweeper would be handed
+// ErrTenantPurged for rows it was removing, and every ordinary delete-by-a-still-valid-
+// token would fail over a write that should have gone through.
 //
 // The exclusion is safe on its own terms. The journal records what happened; it cannot
 // resurrect anything, because the mutation it describes was either refused one hook
@@ -331,10 +331,9 @@ func readFence(db *gorm.DB, tokens []string) error {
 // that token: a record OF a failure, not a row the platform would go on to act on. Two
 // tables are exempt:
 //
-//   - the audit journal, whose row is written AFTER the mutation it describes has already
-//     committed (gorm sorts its After hook past the commit callback), so fencing it hands
-//     the sweeper a refusal for rows it has already deleted. It is matched by its schema
-//     name (see fenceExempt), not through this interface;
+//   - the audit journal, whose row is written in the same transaction as the mutation it
+//     describes, so fencing it would roll back a delete the erasure is entitled to make.
+//     It is matched by its schema name (see fenceExempt), not through this interface;
 //   - the dead-letter store, whose row says work did NOT happen. Whether a deleted tenant
 //     gets a letter at all is decided upstream — it gets none (messaging.Dispose, and the
 //     dead-letter producer's tenant gate) — so a row reaching the store is one that gate

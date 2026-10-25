@@ -27,6 +27,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/service"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/devicechain-io/dc-microservice/svcclient"
+	nats "github.com/nats-io/nats.go"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
 )
@@ -51,6 +52,11 @@ var (
 	// derived from the instance root key in AfterRdb, before anything can store or compare
 	// a secret.
 	DeviceSecretKey *credential.DeviceSecretKey
+
+	// EnrollmentKeys digest and verify provisioning profile secrets and device claim secrets,
+	// each under a key of its own. They are different keys from DeviceSecretKey, derived from
+	// the same root key at the same point.
+	EnrollmentKeys *credential.EnrollmentSecretKeys
 
 	// SecretTransit opens the sealed credential secrets inbound events carry; derived from
 	// the same root key, in the same step, as DeviceSecretKey.
@@ -290,7 +296,9 @@ func newInboundEventsProcessor() *processor.InboundEventsProcessor {
 		time.Duration(Configuration.MaxEventFutureSkewSeconds)*time.Second, ResolveMetrics,
 		processor.WithResolvers(Configuration.Resolution.Workers),
 		processor.WithDeadLetters(DeadLetters),
-		processor.WithSecretTransit(SecretTransit))
+		processor.WithSecretTransit(SecretTransit),
+		processor.WithGatewayNotices(messaging.NewGatewayNoticePublisher(
+			func() *nats.Conn { return NatsManager.Conn() }, Microservice.InstanceId)))
 }
 
 // buildApis builds the service's two Apis over the relational store and the broker: the
@@ -304,7 +312,7 @@ func newInboundEventsProcessor() *processor.InboundEventsProcessor {
 // Api. Without it every eviction is silently skipped, a revoked credential keeps
 // authenticating events from memory until its copy expires, and only a test that builds
 // the Apis through here can see it.
-func buildApis(nmgr *messaging.NatsManager, rdbm *rdb.RdbManager, key *credential.DeviceSecretKey,
+func buildApis(nmgr *messaging.NatsManager, rdbm *rdb.RdbManager, key *credential.DeviceSecretKey, enrollment *credential.EnrollmentSecretKeys,
 	cfg *config.DeviceManagementConfiguration) (*model.Api, *model.CachedApi, error) {
 	// Create NATS KV caches TTL'd from configuration (ADR-022 review B2), and the
 	// in-process credential cache.
@@ -318,6 +326,7 @@ func buildApis(nmgr *messaging.NatsManager, rdbm *rdb.RdbManager, key *credentia
 	api := model.NewApi(rdbm)
 	api.EnableCeilingMetrics(nmgr.Microservice)
 	api.DeviceSecretKey = key
+	api.EnrollmentKeys = enrollment
 	api.MisconfiguredSecrets = CredentialMisconfigured
 	cached := model.NewCachedApi(api, caches)
 	// The write paths evict the hot-path caches through this seam (ADR-044 F2). The GraphQL
@@ -745,10 +754,13 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			if DeviceSecretKey, err = deriveDeviceSecretKey(); err != nil {
 				return err
 			}
+			if EnrollmentKeys, err = deriveEnrollmentSecretKeys(); err != nil {
+				return err
+			}
 			if SecretTransit, err = deriveSecretTransit(); err != nil {
 				return err
 			}
-			if err = digestStoredCredentialSecrets(ctx, RdbManager, DeviceSecretKey); err != nil {
+			if err = digestStoredCredentialSecrets(ctx, RdbManager, DeviceSecretKey, EnrollmentKeys); err != nil {
 				return err
 			}
 
@@ -763,7 +775,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		// relational handle and a broker to build KV buckets from.
 		AfterNats: func(_ context.Context, m *service.Managers) error {
 			var err error
-			Api, CachedApi, err = buildApis(m.Nats, RdbManager, DeviceSecretKey, Configuration)
+			Api, CachedApi, err = buildApis(m.Nats, RdbManager, DeviceSecretKey, EnrollmentKeys, Configuration)
 			if err != nil {
 				return err
 			}

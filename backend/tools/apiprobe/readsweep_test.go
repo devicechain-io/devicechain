@@ -34,10 +34,11 @@ func servedSDL(t *testing.T, area string) string {
 	return string(body)
 }
 
-// probeTokens is a seed's tokens as the sweep receives them: one per entity in the table.
+// probeTokens is a seed's tokens as the sweep receives them: one per seeded row, in every
+// phase, as the receipt holds them and planReadSweep reads them.
 func probeTokens() map[string]string {
 	tokens := map[string]string{}
-	for _, e := range entities {
+	for _, e := range allEntities() {
 		tokens[e.Name] = "probe-" + e.Name
 	}
 	return tokens
@@ -166,7 +167,7 @@ func TestSweepDeclarationsNameThingsThatExist(t *testing.T) {
 	}
 
 	byName := map[string]bool{}
-	for _, e := range entities {
+	for _, e := range allEntities() {
 		byName[e.Name] = true
 	}
 	for key, entity := range sweepTokenArgs {

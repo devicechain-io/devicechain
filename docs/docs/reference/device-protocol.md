@@ -57,6 +57,21 @@ The platform broker is the MQTT server built into NATS. An MQTT topic and the NA
 
 Over **HTTP**, a device can send events only. `POST` the same [event body](#device-event) to `/{instanceId}/{tenant}/events` on the `event-sources` service (port 8081). There is no HTTP downlink: an HTTP-only device cannot receive commands, configuration or update assignments.
 
+### The gateway namespace {#gateway-namespace}
+
+A gateway (the [edge agent](../deployment/edge-services.md#gateway-identity) is one) is a device that publishes for other devices. It does so in its own namespace:
+
+| Message | Direction | MQTT topic |
+| --- | --- | --- |
+| [Event](#device-event) for a device behind the gateway | gateway → platform | `{instanceId}/{tenant}/gateways/{gatewayToken}/devices/{deviceToken}/events` |
+| Notice that an event was refused | platform → gateway | `{instanceId}/{tenant}/gateways/{gatewayToken}/notices` |
+
+- A gateway is authorized to publish only under its **own** token, with any child token after `devices/`, and to subscribe only to its own notices. It cannot publish in another gateway's or another tenant's namespace, or on a child's own topic. The grant is the same size however many devices the gateway fronts, and every device holds it, so assigning a first device to a gateway needs no reconnect.
+- The platform accepts an event only if the device named in the topic exists, is **assigned to that gateway**, and the gateway is enabled. Otherwise it refuses the event with the reason `NotGatewayChild` ([below](#rejections-after-acceptance)) and sends the gateway a notice. The broker acknowledges the publish either way, because MQTT 3.1.1 cannot refuse one.
+- Identity is the topic plus the assignment. The body carries none: an event on this namespace that carries `credentialType`, `credentialId` or `credentialSecret` is refused, and so is a body `device` that names another device. The event is attributed to the child, and the resolved event carries the gateway's token as well.
+- A notice is a JSON object, `{"altId": "...", "device": "...", "reason": "not_gateway_child"}`. It carries no payload and is not stored, so a gateway that was offline when it was sent misses it. The record of a refusal is the `failed-events` stream.
+- The grant also covers `responses` and `reports` under the namespace and subscribing to `commands` and `desired`, but nothing reads or sends them yet. Publish **events** only.
+
 ## Device event {#device-event}
 
 One JSON object per MQTT message or HTTP request. One message is one event.
@@ -177,7 +192,7 @@ What a device publishes on its `command-responses` topic to settle a command. Th
 
 ## Rejections and errors {#rejections}
 
-What happens to a message the platform does not accept depends on where it is refused, and on the transport. HTTP answers the request, so a device learns of a refusal at the door. MQTT acknowledges a publish (`PUBACK`) as soon as the broker has captured it, **before** it is decoded, so an MQTT device is never told: every refusal after the broker is visible only to an operator.
+What happens to a message the platform does not accept depends on where it is refused, and on the transport. HTTP answers the request, so a device learns of a refusal at the door. MQTT acknowledges a publish (`PUBACK`) as soon as the broker has captured it, **before** it is decoded, so an MQTT device is never told: every refusal after the broker is visible only to an operator. With the default setting, a QoS 1 publish acknowledged while the capture stream changes leader can also be lost, both while the capture stream changes leader and, under sustained load, when ingest falls behind and the stream fills; see [Quality of service](../guides/connecting-a-device.md#quality-of-service).
 
 ### At the door {#rejections-at-the-door}
 
@@ -210,6 +225,7 @@ An accepted event (`202`, or captured by the broker) is then resolved by `device
 | `DeviceNotFound` | No credential was used, and the `device` token is not registered in the tenant. |
 | `Invalid` | The event is older than 366 days, or could not be interpreted for its type. |
 | `ApiCallFailed` | A lookup or write the resolution needed failed, including a [`NewRelationship`](#new-relationship-payload) the platform could not create. |
+| `NotGatewayChild` | A gateway published for a device that is not assigned to it, or that does not exist, or the gateway is disabled. Not retried: it is recorded on the first delivery. |
 
 A refused event is retried until its fifth delivery, so a device registered or a database restored in the meantime still gets its event stored. The exception is an event too old to store, which is recorded on its first delivery, since no retry can change its age.
 

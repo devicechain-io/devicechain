@@ -48,12 +48,20 @@ var sanctionedSystemContexts = map[string][]string{
 		"CommandDeliveryProcessor.deliverPendingCommands", "CommandDeliveryProcessor.sweepLocked",
 	},
 	"backend/services/update-management/model/api_updates.go":           {"Api.SweepDeadlines"},
+	"backend/services/update-management/model/api_rollouts.go":          {"Api.AdvanceRollouts"},
 	"backend/services/command-delivery/processor/HoldReconciler.go":     {"CommandDeliveryProcessor.readHeldPage"},
 	"backend/services/command-delivery/processor/StrandedReconciler.go": {"CommandDeliveryProcessor.reconcileStrandedPage"},
 	"backend/services/command-delivery/processor/WindowRestamp.go":      {"CommandDeliveryProcessor.restampWindows"},
 	"backend/services/device-management/model/ownership_outbox.go":      {"Api.DrainOwnershipFacts"},
 	"backend/services/device-management/schema/migration_credential_secret_digest.go": {
 		"CountForeignCredentialDigests", "DigestPlaintextCredentialSecrets",
+	},
+	"backend/services/device-management/schema/credential_token_digest.go": {
+		"CountForeignAccessTokenDigests", "DigestPlaintextAccessTokens",
+	},
+	"backend/services/device-management/schema/migration_enrollment_secret_digest.go": {
+		"CountForeignClaimSecretDigests", "CountForeignProvisionSecretDigests",
+		"DigestPlaintextClaimSecrets", "DigestPlaintextProvisionSecrets",
 	},
 	"backend/services/device-state/processor/StateProcessor.go":                {"StateProcessor.runInactivityMonitor"},
 	"backend/services/event-management/model/analytics.go":                     {"ReconcileAnalyticsSurface"},
@@ -77,7 +85,7 @@ var sanctionedSystemContexts = map[string][]string{
 	"backend/services/user-management/identity/keys.go": {
 		"Manager.activeKeyAge", "Manager.loadSigningKeysLocked", "Manager.rotateSigningKeyLocked",
 	},
-	"backend/services/user-management/purge/coordinator.go": {"Coordinator.PurgeTenant", "Coordinator.pass"},
+	"backend/services/user-management/purge/coordinator.go": {"Coordinator.observeLedger", "Coordinator.purgeTenant", "Coordinator.pass"},
 	"backend/services/user-management/purge/relational.go":  {"Relational.handle"},
 	"backend/services/user-management/settings/store.go":    {"Store.sys"},
 }

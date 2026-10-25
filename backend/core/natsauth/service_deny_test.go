@@ -193,23 +193,6 @@ func TestServiceLoginLegitimatePublishesStillWork(t *testing.T) {
 		"a device's own MQTT publish must still be captured")
 }
 
-// The infrastructure module renders the deny as literals (HCL cannot call Go). Hold the two in
-// step: the module must carry exactly ServicePublishDeny and attach it to the service user.
-func TestInfrastructureModuleCarriesTheServiceDeny(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "deploy", "opentofu", "modules", "nats", "main.tf"))
-	require.NoError(t, err)
-	tf := string(raw)
-
-	quoted := make([]string, 0, 2)
-	for _, s := range ServicePublishDeny() {
-		quoted = append(quoted, fmt.Sprintf("%q", s))
-	}
-	require.Contains(t, tf, "service_publish_deny = ["+strings.Join(quoted, ", ")+"]",
-		"deploy/opentofu/modules/nats/main.tf must carry natsauth.ServicePublishDeny verbatim")
-	require.Contains(t, tf, "permissions = { publish = { deny = local.service_publish_deny } }",
-		"the service user must be given the deny")
-}
-
 // The service login can also reach the broker through its MQTT gateway, where a publish at
 // every QoS and with retain set must meet the same deny: the gateway checks the subject the
 // topic maps to before it stores or delivers anything. withDeny false is the control: the same

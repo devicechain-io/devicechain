@@ -46,7 +46,7 @@ func seedStream(t *testing.T, js nats.JetStreamContext, suffix string, tenants .
 	name := StreamName(purgeInstance, suffix)
 	_, err := js.AddStream(&nats.StreamConfig{
 		Name:     name,
-		Subjects: []string{StreamSubject(purgeInstance, suffix)},
+		Subjects: StreamSubjects(purgeInstance, suffix),
 		Storage:  nats.MemoryStorage,
 	})
 	require.NoErrorf(t, err, "creating %s", name)
@@ -321,4 +321,38 @@ func TestADisconnectedBrokerFailsThePassRatherThanHangingIt(t *testing.T) {
 		t.Fatal("PurgeTenant did not return with the broker down — it is waiting for a reconnect " +
 			"that may never come, on the goroutine that runs every tenant's purge")
 	}
+}
+
+// A tenant's GATEWAY traffic in the capture stream is erased with the tenant. The capture
+// stream stores two subject shapes, and a purge that knew only the device's own would report
+// success and leave a deleted tenant's gateway events on the broker for a successor at a reused
+// token to read. The bystander is the control: another tenant's gateway message stays, and so
+// does nothing else: the victim's device-shaped message goes in the same pass.
+func TestPurgeTenantErasesTheGatewayShapeInTheCaptureStream(t *testing.T) {
+	nc, js := purgeRig(t)
+	name := seedStream(t, js, streams.DeviceEventsCapture, purgeVictim, purgeBystander)
+	for _, tenant := range []string{purgeVictim, purgeBystander} {
+		_, err := js.Publish(GatewayEventsSubject(purgeInstance, tenant, "gw-1", "child-1"), []byte("gateway "+tenant))
+		require.NoError(t, err)
+	}
+	require.Equal(t, uint64(4), streamMsgs(t, js, name), "the seed must hold both shapes of both tenants")
+
+	res, err := PurgeTenant(context.Background(), nc, purgeInstance, purgeVictim)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(2), streamMsgs(t, js, name), "only the bystander's two messages may remain")
+	assert.Equal(t, int64(2), res.PerStream[name], "the victim's device-shaped AND gateway-shaped messages are counted")
+
+	remaining := map[string]bool{}
+	for seq := uint64(1); seq <= 8; seq++ {
+		if m, err := js.GetMsg(name, seq); err == nil {
+			remaining[m.Subject] = true
+		}
+	}
+	assert.True(t, remaining[GatewayEventsSubject(purgeInstance, purgeBystander, "gw-1", "child-1")], "the bystander's gateway message was purged")
+	assert.False(t, remaining[GatewayEventsSubject(purgeInstance, purgeVictim, "gw-1", "child-1")], "the victim's gateway message survived the purge")
+}
+
+// The capture stream has no single subject: asking for one is a defect, not a guess.
+func TestTheCaptureStreamHasNoSingleSubject(t *testing.T) {
+	require.Panics(t, func() { StreamSubject("inst", streams.DeviceEventsCapture) })
 }

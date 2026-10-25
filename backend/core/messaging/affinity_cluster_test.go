@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -114,10 +115,13 @@ func moveStreamLeader(t *testing.T, nmgr *NatsManager, stream, server string) {
 	}
 }
 
-// waitWriterTarget waits up to 15 s for the writer's stream target to name server. The wait is
-// the same as before; what changed is that a timeout says WHERE the target and the stream's
-// leader were, which tells a missed advisory (target stale, leader moved) from a dial that
-// failed (target on the manager's own connection) from a leader that never settled.
+// waitWriterTarget waits up to 15 s for the writer's stream target to name server. A timeout
+// says WHERE the target and the stream's leader were, which tells a missed advisory (target
+// stale, leader moved) from a dial that kept failing (target on the manager's own connection)
+// from a leader that never settled. Callers move the leader with moveStreamLeader first, so
+// the broker names it by then, and the loop's retries (affinityRetargetRetryMax apart at
+// most) put the target on it well inside the wait; the bound itself is asserted by the
+// TestWriterFollowsAnElection* tests.
 func waitWriterTarget(t *testing.T, nmgr *NatsManager, ow *orderedWriter, stream, server string) {
 	t.Helper()
 	deadline := time.Now().Add(15 * time.Second)
@@ -495,9 +499,7 @@ func TestWriterFallsBackWhenItsLeaderConnectionCloses(t *testing.T) {
 	nmgr := affinityManager(t, servers[0], uniqueArea("affinity-fallback"), false, true, nil)
 	w := newOrdered(t, nmgr, 64)
 	ow := w.(*orderedWriter)
-	// The stream accepts a publish before it is moved, as the mid-window test does: a move
-	// started while the stream is still settling from its creation is the one a missed
-	// leader-elected advisory (and no sampler, here) turns into a 15 s wait for nothing.
+	// The stream accepts a publish before it is moved, as the mid-window test does.
 	waitUntilPublishable(t, nmgr)
 	moveStreamLeader(t, nmgr, stream, leader)
 	waitWriterTarget(t, nmgr, ow, stream, leader)
@@ -523,6 +525,378 @@ func TestWriterFallsBackWhenItsLeaderConnectionCloses(t *testing.T) {
 	}
 	if failed != 0 {
 		t.Fatalf("%d of %d publishes failed after the leader connection closed; the writer did not fall back", failed, n)
+	}
+}
+
+// retryBudget is when the loop's (k+1)th pass over a stream comes, after k passes that did not
+// settle its target: the first k delays of the product's own retry schedule.
+func retryBudget(k int) time.Duration {
+	return retryBudgetFrom(affinityRetargetRetry, k)
+}
+
+// retryBudgetFrom is retryBudget for a retry whose next wait is delay: one that earlier
+// passes have already spent part of the backoff of.
+func retryBudgetFrom(delay time.Duration, k int) time.Duration {
+	start := time.Unix(1_000_000, 0)
+	r, now := newRetargetRetry("", start), start
+	r.delay = delay
+	for i := 0; i < k && r.next(now); i++ {
+		now = r.due
+	}
+	return now.Sub(start)
+}
+
+// dialRecorder is the affinity loop's dial address seam (leaderURLs) for one server: it
+// records when each dial of that server BEGINS, refuses the first few, and reads the retry's
+// delay as the first refusal is made. Dials of any other server are passed through.
+type dialRecorder struct {
+	server, stream string
+	urls           map[string]string
+
+	mu      sync.Mutex
+	refuse  int
+	began   []time.Time
+	since   time.Time     // when the first refused dial began
+	delay   time.Duration // the stream's retry delay then: the wait the next pass would make
+	noRetry bool          // a refused dial began with no retry pending
+}
+
+func newDialRecorder(servers []*natsserver.Server, server, stream string) *dialRecorder {
+	r := &dialRecorder{server: server, stream: stream, urls: map[string]string{}}
+	for _, s := range servers {
+		r.urls[s.Name()] = s.ClientURL()
+	}
+	return r
+}
+
+// install is an affinityManager oncreate.
+func (r *dialRecorder) install(n *NatsManager) error {
+	n.aff().leaderURLs = func(server string) []string {
+		if server != r.server {
+			return []string{r.urls[server]}
+		}
+		// The retry is read before r.mu is taken, so the two locks are never nested.
+		var d time.Duration
+		var have bool
+		n.aff().mu.Lock()
+		if rt := n.aff().retries[r.stream]; rt != nil {
+			d, have = rt.delay, true
+		}
+		n.aff().mu.Unlock()
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		r.began = append(r.began, time.Now())
+		if r.refuse > 0 {
+			if r.since.IsZero() {
+				r.since, r.delay, r.noRetry = time.Now(), d, !have
+			}
+			r.refuse--
+			// Nothing listens on port 1: the dial is refused at once.
+			return []string{"nats://127.0.0.1:1"}
+		}
+		return []string{r.urls[server]}
+	}
+	return nil
+}
+
+// arm starts counting from now and refuses the next n dials of the server.
+func (r *dialRecorder) arm(n int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.refuse, r.began, r.since, r.delay, r.noRetry = n, nil, time.Time{}, 0, false
+}
+
+func (r *dialRecorder) dials() []time.Time {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.began)
+}
+
+// dialBound is the longest a dial that is going to succeed may take. nats.go bounds each of the
+// three steps of a connect (the TCP connect, the server's INFO, the PONG answering the
+// CONNECT) by its Timeout, 2 s by default (see the note in affinity.dial): a starved runner
+// that needs most of each is not a defect in the retry, and the dial is not the schedule.
+// 4.4 s was measured for one in a run that shared its CPUs with three more.
+const dialBound = 3 * nats.DefaultTimeout
+
+// followedOnSchedule waits for the writer's stream target to name server, and checks the two
+// things that make that late, apart:
+//
+//   - THE SCHEDULE: the dialNo'th dial of server began within limit of since, less the time the
+//     loop spent waiting on its lookups. Both the waits between passes and the passes that did
+//     not settle are the retry's: this is what the product promises. Only the loop's wait
+//     for the broker to answer a lookup is taken out; it is the broker's.
+//   - THE DIAL: the target names server within dialBound of that dial beginning. A dial that
+//     takes long is a connect on a starved runner, which the retry schedule neither causes nor
+//     controls.
+//
+// 🔴 THESE USED TO BE ONE WALL-CLOCK BOUND FROM since TO THE TARGET, and a dial that took
+// 4.4 s on a starved runner (a successful connect: the third dial began on schedule, 0.75 s
+// after the first refusal) failed it by 2.4 s with the schedule intact.
+func followedOnSchedule(t *testing.T, nmgr *NatsManager, ow *orderedWriter, stream, server string,
+	since time.Time, dialNo int, rec *dialRecorder, faults *faultedLookup, limit time.Duration) (began, followed time.Duration) {
+	t.Helper()
+	fail := func(format string, args ...any) {
+		t.Helper()
+		leader := "?"
+		if info, err := nmgr.js.StreamInfo(stream); err == nil {
+			leader = leaderOfStream(info)
+		}
+		t.Fatalf("%s (the writer's target is %q; the stream's leader reads %q; lookups, as [start after "+
+			"since+duration leader]:%s; dials began at %v)", fmt.Sprintf(format, args...), ow.target.Load().server,
+			leader, faults.timeline(since), offsets(rec.dials(), since))
+	}
+	for len(rec.dials()) < dialNo {
+		if looked := faults.lookingSince(since); time.Since(since)-looked > 2*limit {
+			fail("dial %d of the new leader never began, %v after since", dialNo, time.Since(since))
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	dialAt := rec.dials()[dialNo-1]
+	began = dialAt.Sub(since)
+	if looked := faults.lookingSince(since); began-looked > limit {
+		fail("dial %d began %v after since, of which %v was the loop waiting on its lookups; the bound on the rest is %v",
+			dialNo, began, looked, limit)
+	}
+	for ow.target.Load().server != server {
+		if time.Since(dialAt) > dialBound {
+			fail("the target was not on %s %v after dial %d began; the bound is %v", server, time.Since(dialAt), dialNo, dialBound)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return began, time.Since(since)
+}
+
+// offsets renders when each time was, relative to since.
+func offsets(at []time.Time, since time.Time) []time.Duration {
+	out := make([]time.Duration, len(at))
+	for i, a := range at {
+		out[i] = a.Sub(since).Round(time.Millisecond)
+	}
+	return out
+}
+
+// faultedLookup is the affinity loop's stream info lookup with the answers right after an
+// election replaced: once armed, the next lookups are answered from faults, in order, and then
+// by the broker again.
+type faultedLookup struct {
+	mu     sync.Mutex
+	faults []func(*nats.StreamInfo) (*nats.StreamInfo, error)
+	first  time.Time // when the first fault was served
+	served int
+	spans  []lookupSpan // every lookup the loop made, answered or not
+}
+
+// lookupSpan is one lookup, from the loop's request to its answer.
+type lookupSpan struct {
+	start, end time.Time
+	leader     string // what the loop was told ("" for none or an error)
+}
+
+// install is an affinityManager oncreate: it runs before the loop starts, which is the only
+// reader of the seam.
+func (f *faultedLookup) install(n *NatsManager) error {
+	n.aff().lookup = func(ctx context.Context, stream string) (*nats.StreamInfo, error) {
+		begun := time.Now()
+		info, err := n.js.StreamInfo(stream, nats.Context(ctx))
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		span := lookupSpan{start: begun, end: time.Now()}
+		if err != nil || len(f.faults) == 0 {
+			if err == nil {
+				span.leader = leaderOfStream(info)
+			}
+			f.spans = append(f.spans, span)
+			return info, err
+		}
+		fault := f.faults[0]
+		f.faults = f.faults[1:]
+		if f.served == 0 {
+			f.first = time.Now()
+		}
+		f.served++
+		info, err = fault(info)
+		if err == nil {
+			span.leader = leaderOfStream(info)
+		}
+		f.spans = append(f.spans, span)
+		return info, err
+	}
+	return nil
+}
+
+func (f *faultedLookup) arm(faults ...func(*nats.StreamInfo) (*nats.StreamInfo, error)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.faults, f.served, f.first = faults, 0, time.Time{}
+}
+
+// spent reports how many faults were served, and when the first was.
+func (f *faultedLookup) spent() (int, time.Time) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.served, f.first
+}
+
+// lookingSince is how long the loop spent waiting for the broker's answer to its lookups
+// from since on: time the retry schedule does not control.
+func (f *faultedLookup) lookingSince(since time.Time) time.Duration {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var total time.Duration
+	for _, sp := range f.spans {
+		if sp.end.After(since) {
+			from := sp.start
+			if from.Before(since) {
+				from = since
+			}
+			total += sp.end.Sub(from)
+		}
+	}
+	return total
+}
+
+// timeline renders the lookups from since on, for a failure to say where the time went.
+func (f *faultedLookup) timeline(since time.Time) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var b strings.Builder
+	for _, sp := range f.spans {
+		if sp.end.After(since) {
+			fmt.Fprintf(&b, " [%v+%v leader %q]", sp.start.Sub(since).Round(time.Millisecond),
+				sp.end.Sub(sp.start).Round(time.Millisecond), sp.leader)
+		}
+	}
+	return b.String()
+}
+
+// unanswered is a lookup no server answered in time.
+func unanswered(*nats.StreamInfo) (*nats.StreamInfo, error) { return nil, context.DeadlineExceeded }
+
+// answeredBy is a lookup answered from a view of the group that names leader ("" for none).
+func answeredBy(leader string) func(*nats.StreamInfo) (*nats.StreamInfo, error) {
+	return func(info *nats.StreamInfo) (*nats.StreamInfo, error) {
+		out := *info
+		cl := *info.Cluster
+		cl.Leader = leader
+		out.Cluster = &cl
+		return &out, nil
+	}
+}
+
+// A writer follows an election whose first lookups do not name the new leader: one goes
+// unanswered, one reads the group with no leader, one reads the old leader. The loop asks
+// again, and the target is on the new leader within the retry schedule's first three delays
+// and one more of its cap.
+//
+// The faults are counted as SERVED before the bound is read: a run whose lookups all came
+// after the faults were withdrawn would follow at once and prove nothing.
+//
+// GUARD: on main a pass that cannot name the leader keeps the old target and nothing asks
+// again until the sampler's next pass (stopped here), so the target stays on the old leader.
+func TestWriterFollowsAnElectionWhoseFirstLookupsFail(t *testing.T) {
+	servers := dctest.StartJetStreamCluster(t, 3)
+	first, second := servers[1].Name(), servers[2].Name()
+	stream := StreamName("test", streams.ResolvedEvents)
+	faults := &faultedLookup{}
+	rec := newDialRecorder(servers, second, stream)
+	nmgr := affinityManager(t, servers[0], uniqueArea("affinity-relookup"), false, true, func(n *NatsManager) error {
+		if err := faults.install(n); err != nil {
+			return err
+		}
+		return rec.install(n)
+	})
+	ow := newOrdered(t, nmgr, 64).(*orderedWriter)
+	waitUntilPublishable(t, nmgr)
+	moveStreamLeader(t, nmgr, stream, first)
+	waitWriterTarget(t, nmgr, ow, stream, first)
+
+	rec.arm(0)
+	faults.arm(unanswered, answeredBy(""), answeredBy(first))
+	moveStreamLeader(t, nmgr, stream, second)
+	waitWithin(t, 30*time.Second, "the faulted lookups to be served", func() bool {
+		n, _ := faults.spent()
+		return n == 3
+	})
+	_, since := faults.spent()
+	limit := retryBudget(3) + affinityRetargetRetryMax
+	began, took := followedOnSchedule(t, nmgr, ow, stream, second, since, 1, rec, faults, limit)
+	t.Logf("dialled %v after the first of 3 failed lookups (bound %v), followed after %v", began, limit, took)
+}
+
+// A writer follows an election whose new leader cannot be dialled at first: the loop dials
+// again, the third dial begins within the retry schedule's next two delays and one more of its
+// cap, and the target is on the new leader once that dial has connected.
+//
+// 🔴 THE OLD BOUND WAS ONE WALL-CLOCK FIGURE (2.75 s from the first refusal to the target) AND IT
+// FAILED IN CI AT 5.18 s FOR TWO REASONS THAT HAVE NOTHING TO DO WITH WHAT IT GUARDS. Both
+// were reproduced here, and the check now separates them from the schedule:
+//
+//  1. THE DIAL TOOK LONG. The third dial began on schedule (0.75 s after the first refusal) and
+//     the connect itself took 4.4 s on a starved runner (5.195 s end to end, three other
+//     containers sharing the CPUs). The schedule decides when a dial begins, never how long a
+//     connect takes: that is bounded separately (dialBound).
+//  2. THE BACKOFF WAS ALREADY SPENT. A dial is made only once a lookup names the new leader, and
+//     right after an election the lookups before that one (a leaderless group, an answer from a
+//     member that still names the old leader) are unsettled passes of the same retry: each has
+//     already waited and doubled the delay. The bound assumed the retry was fresh at the first
+//     refusal, which holds only when the first lookup after the advisory already names the new
+//     leader (4.01 s, deterministic, in the "after stale lookups" arm). It is now read from the
+//     retry's own delay at the first refusal.
+//
+// GUARD: on main a failed dial sends the writers to the manager's own connection and nothing
+// dials again until the sampler's next pass (stopped here), so the third dial never begins.
+func TestWriterFollowsAnElectionWhoseLeaderCannotBeDialledAtFirst(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		stale int
+	}{
+		{"prompt", 0},
+		{"after stale lookups", 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			servers := dctest.StartJetStreamCluster(t, 3)
+			first, second := servers[1].Name(), servers[2].Name()
+			stream := StreamName("test", streams.ResolvedEvents)
+			faults := &faultedLookup{}
+			rec := newDialRecorder(servers, second, stream)
+			nmgr := affinityManager(t, servers[0], uniqueArea("affinity-redial"), false, true, func(n *NatsManager) error {
+				if err := faults.install(n); err != nil {
+					return err
+				}
+				return rec.install(n)
+			})
+			ow := newOrdered(t, nmgr, 64).(*orderedWriter)
+			waitUntilPublishable(t, nmgr)
+			moveStreamLeader(t, nmgr, stream, first)
+			waitWriterTarget(t, nmgr, ow, stream, first)
+
+			rec.arm(2)
+			stale := make([]func(*nats.StreamInfo) (*nats.StreamInfo, error), tc.stale)
+			for i := range stale {
+				stale[i] = answeredBy(first)
+			}
+			faults.arm(stale...)
+			moveStreamLeader(t, nmgr, stream, second)
+			waitWithin(t, 30*time.Second, "the refused dials to be made", func() bool {
+				rec.mu.Lock()
+				defer rec.mu.Unlock()
+				return rec.refuse == 0
+			})
+			rec.mu.Lock()
+			since, d0, noRetry := rec.since, rec.delay, rec.noRetry
+			rec.mu.Unlock()
+			if noRetry {
+				t.Fatal("the first dial was refused with no retry pending: the loop dialled for no trigger")
+			}
+			if served, _ := faults.spent(); served != tc.stale {
+				t.Fatalf("%d stale lookups were served, want %d: the arm did not measure what it names", served, tc.stale)
+			}
+			limit := retryBudgetFrom(d0, 2) + affinityRetargetRetryMax
+			began, took := followedOnSchedule(t, nmgr, ow, stream, second, since, 3, rec, faults, limit)
+			t.Logf("third dial began %v after the first of 2 refused dials (retry delay then %v, bound %v), "+
+				"followed after %v", began, d0, limit, took)
+		})
 	}
 }
 

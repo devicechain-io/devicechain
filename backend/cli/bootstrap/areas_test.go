@@ -174,6 +174,7 @@ func TestHelmValuesProfileVsEnabledAreas(t *testing.T) {
 // a lwm2m-ingest workload — and a stock default render does NOT. This is what closes
 // the loop from the CLI flag to a deployed area.
 func TestEnableAreaRendersTheAreaWorkload(t *testing.T) {
+	t.Parallel()
 	stock := &State{
 		Instance:      "dctest",
 		Profile:       "default",

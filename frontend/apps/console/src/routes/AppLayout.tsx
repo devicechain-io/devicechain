@@ -30,7 +30,7 @@ function humanize(segment: string): string {
 // rules and is deferred to the sweep (b) — until then a detail page's top bar shows
 // the section name, not "<Thing> Detail".
 export const NAV_SECTION_KEY: Record<string, string> = {
-  '': 'dashboard',
+  '': 'home',
   devices: 'devices',
   'device-types': 'deviceTypes',
   'device-profiles': 'deviceProfiles',
@@ -57,6 +57,7 @@ export const NAV_SECTION_KEY: Record<string, string> = {
   basemap: 'map',
   locale: 'language',
   members: 'members',
+  'service-accounts': 'serviceAccounts',
   roles: 'roles',
   'command-batches': 'commandBatches',
   updates: 'updates',
@@ -69,7 +70,7 @@ export default function AppLayout() {
   const seg0 = segments[0] ?? '';
   const navKey = NAV_SECTION_KEY[seg0];
   const sectionLabel = navKey ? t(navKey) : humanize(seg0);
-  const title = seg0 === '' ? t('dashboard') : sectionLabel;
+  const title = seg0 === '' ? t('home') : sectionLabel;
   // On a detail page (>= 2 segments) the header carries a back-link to its list,
   // labeled with the localized section name (navigation kept separate from the
   // page content's own actions).

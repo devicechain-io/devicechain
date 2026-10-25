@@ -264,7 +264,15 @@ and drag a handle on its edge or corner to resize it. The size shows as columns 
 that can only be resized in one direction has handles on that side only. Press **Esc** while
 dragging to cancel. With a widget focused, the arrow keys move it one cell and **Shift** with the
 arrow keys resizes it. A widget outside the sizes it supports, or running past the right edge,
-carries a note saying so. A widget that has not received data yet shows a dash or *No data yet*.
+carries a note saying so. A widget with nothing to draw says why, in a muted state rather than a blank card or a bare dash:
+
+- **No device chosen**: the widget's slot has no device bound. Pick one from the board's selector, or bind the slot.
+- **Not reported by this device**: the device's active profile does not declare the measurement the widget asks for, so it will never report it. The fix is in the widget (pick another measurement) or the profile, not in waiting.
+- **No data in this range**: the profile declares the measurement, but nothing arrived in the time range on show. When a reading is known from before the range, the widget adds *Last value 21.4 °C · 3 days ago*.
+- **No access**: the platform refused the read for you, because your access is limited to part of the tenant.
+- **Data unavailable**: the data source did not answer. The message names the failure.
+
+These states are deliberately quiet. They use the muted text color and no warning symbol or severity color, because on a board that styling means an alarm. A small widget shows the title only; a larger one adds the explanation and the last value. Hover the state to read the whole sentence. While a board is loading, a widget with no reading yet stays blank for a moment before it says why, so a reading on its way is never announced as missing.
 
 The dashboard measures the space it is given, not the screen. While the columns fit at **Min
 cell** or larger it shows your layout as you arranged it, with the cells stretching to fill the

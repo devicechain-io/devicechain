@@ -547,3 +547,25 @@ describe('isDatasourceSupported', () => {
     expect(countOf(DEVICES_FOR_ANCHOR)).toBe(1);
   });
 });
+
+describe('what ONE device declares', () => {
+  const resolver = (over: Partial<DeviceResolver>): DeviceResolver =>
+    ({ devicesForAnchor: async () => [], deviceExists: async () => true, ...over }) as DeviceResolver;
+
+  it('asks the device its type, then the type what its active profile declares', async () => {
+    const declaredMetrics = vi.fn(async () => ['temperature']);
+    const deviceType = vi.fn(async () => 'hauler');
+    const hub = new DashboardHub({ resolver: resolver({ deviceType, declaredMetrics }) });
+    expect(await hub.declaredMetricsForDevice('d-1')).toEqual(['temperature']);
+    expect(deviceType).toHaveBeenCalledWith('d-1');
+    expect(declaredMetrics).toHaveBeenCalledWith('hauler');
+  });
+
+  it('cannot say when it cannot look, or the look fails, and never throws', async () => {
+    expect(await new DashboardHub({ resolver: resolver({}) }).declaredMetricsForDevice('d-1')).toBeNull();
+    const typeless = new DashboardHub({ resolver: resolver({ deviceType: async () => null, declaredMetrics: async () => ['x'] }) });
+    expect(await typeless.declaredMetricsForDevice('d-1')).toBeNull();
+    const failing = new DashboardHub({ resolver: resolver({ deviceType: async () => Promise.reject(new Error('down')) }) });
+    expect(await failing.declaredMetricsForDevice('d-1')).toBeNull();
+  });
+});

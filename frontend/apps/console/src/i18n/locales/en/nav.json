@@ -1,5 +1,5 @@
 {
-  "dashboard": "Dashboard",
+  "home": "Home",
   "dashboards": "Dashboards",
   "alarms": "Alarms",
   "notificationPolicies": "Notification Policies",
@@ -46,5 +46,7 @@
   "settings": "Settings",
   "updates": "Updates",
   "artifacts": "Artifacts",
-  "signers": "Signers"
+  "signers": "Signers",
+  "serviceAccounts": "Service accounts",
+  "rollouts": "Rollouts"
 }

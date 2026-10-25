@@ -168,12 +168,14 @@ namespace DeviceChain.Sitepulse.Platform
             var settings = LiveSettingsLoader.Resolve(Environment.GetCommandLineArgs(),
                 Path.Combine(Application.persistentDataPath, LiveSettingsLoader.FileName), File.Exists, File.ReadAllText);
             if (!settings.Ok) { Fail("live settings: " + settings.Error); return; }
-            var credData = await gql.SendAsync(Area.DeviceManagement,
-                "query Creds($t: [String!]!) { deviceCredentialsByToken(tokens: $t) { credentialId device { token } } }",
-                JsonDocument.Parse(VarsJson.StringList("t", new[] { plantToken + "-cred" })).RootElement, Json, Json);
-            var rows = credData.GetProperty("deviceCredentialsByToken");
-            if (rows.GetArrayLength() != 1) { Fail("plant credential not found"); return; }
-            var credentialId = rows[0].GetProperty("credentialId").GetString();
+            // the platform stores an access token as a digest and returns it once, to the call that sets it:
+            // set a fresh one on the player's own credential for the plant and use the value from that response
+            QueryFn asQuery = async (query, variablesJson, ct) =>
+                (await gql.SendAsync(Area.DeviceManagement, query, JsonDocument.Parse(variablesJson).RootElement, Json, Json, null, ct)).GetRawText();
+            var held = new DeviceCredentials();
+            var issue = await CredentialResolver.ResolveAll(asQuery,
+                new[] { new BindResult { ExternalId = "SP-PL-0001", DeviceToken = plantToken, Outcome = BindOutcome.Bound } }, held, CancellationToken.None);
+            if (!issue[0].Ok || !held.TryGet(plantToken, out var credentialId)) { Fail("plant access token: " + issue[0].Reason); return; }
 
             var mqttSw = Stopwatch.StartNew();
             var options = new DeviceChain.Sdk.Mqtt.MqttSessionOptions(new Uri(Str("mqttBroker")), Str("instanceId"), Str("tenant"), plantToken, credentialId)

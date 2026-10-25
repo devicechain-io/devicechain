@@ -138,7 +138,7 @@ func TestPendingCapsAtTheCallersLimit(t *testing.T) {
 //
 // What it is defending: the drain's contract with command-delivery is now the dedicated
 // `drainableCommands(deviceToken:, limit:)` query, which carries the status set, the expiry
-// horizon, the ordering and the bound in the DATABASE. The forked graphql-go rejects an
+// horizon, the ordering and the bound in the DATABASE. graphql-go rejects an
 // unknown field arriving through a variable, so a renamed argument fails loudly — but only if
 // this package actually sends the argument by the agreed NAME.
 //
@@ -167,7 +167,7 @@ func TestPendingCallsDrainableCommandsOnTheWire(t *testing.T) {
 	}
 	// Exhaustive: exactly deviceToken + limit, nothing else. The old paged variables
 	// (criteria/pageNumber/pageSize/status/statuses) must be GONE, not merely unread — the
-	// forked graphql-go rejects an argument the schema does not declare.
+	// graphql-go rejects an argument the schema does not declare.
 	if len(q.gotVars) != 2 {
 		t.Fatalf("variables = %#v, want exactly deviceToken + limit", q.gotVars)
 	}

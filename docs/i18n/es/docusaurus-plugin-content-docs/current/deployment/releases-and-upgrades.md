@@ -7,7 +7,7 @@ title: Versiones y actualizaciones
 
 DeviceChain se distribuye como un conjunto de imágenes de contenedor precompiladas y versionadas,
 más un chart de Helm. **No** necesita compilar nada para ejecutarlo: descargue una versión publicada,
-instale el chart y actualice in situ sin tiempo de inactividad.
+instale el chart y actualice in situ con una actualización progresiva.
 
 :::warning Hay versiones a las que no se puede actualizar
 Hasta ahora, cuatro puntos de la historia pueden exigir recrear la instancia en lugar de actualizarla:
@@ -60,7 +60,7 @@ cosa. El operador es un solo controlador por clúster, compartido por todas las 
 haya en él, así que `dcctl install` lo mueve junto con el resto de los requisitos previos del
 clúster. El documento de configuración, la versión desplegada del chart y las imágenes de los
 servicios pertenecen a una instancia, así que `dcctl upgrade` mueve esos, instancia por
-instancia. Consulte [Actualizaciones sin tiempo de inactividad](#zero-downtime-upgrades) para el
+instancia. Consulte [Actualizaciones progresivas](#rolling-upgrades) para el
 procedimiento.
 
 - Las **versiones estables** son `vX.Y.Z` (por ejemplo, `v1.2.0`). La etiqueta `:latest` sigue a la
@@ -99,12 +99,13 @@ En concreto, antes de la v1.0.0 debe esperar que una versión pueda:
   `v0.19.0` rechaza un almacén de eventos con más de 4 000 000 de filas aún sin comprimir, o una
   tabla de más de 500 fragmentos, y lo indica al principio de sus notas
 
-La propiedad de "actualizar in situ sin tiempo de inactividad" descrita arriba describe la *mecánica* de una
+La propiedad de "actualizar in situ con una actualización progresiva" descrita arriba describe la *mecánica* de una
 actualización progresiva. No es una promesa de que sus llamadas a la API existentes conserven el mismo significado
 a través de un incremento de versión previo a 1.0.
 
-Una vez que se publique la v1.0.0, esta sección se reemplaza por una promesa de compatibilidad de versionado
-semántico normal: cambios disruptivos solo en una versión mayor.
+A partir de la v1.0.0, esta sección se reemplaza por una promesa de compatibilidad de versionado
+semántico: cambios disruptivos solo en una versión mayor. Consulte
+[Política de versionado y actualización](./versioning-policy.md).
 
 Debido a que las versiones son frecuentes antes de la disponibilidad general (GA), la versión **menor** marca un hito
 (una funcionalidad o subsistema significativo que se lanza) y la versión de **parche** lleva el ritmo continuo
@@ -244,11 +245,13 @@ eliminación de `infrastructure.aiInference` cuando esa área no está desplegad
 correspondiéndole a usted reproducirlas, como hasta ahora.
 :::
 
-## Actualizaciones sin tiempo de inactividad {#zero-downtime-upgrades}
+<a id="zero-downtime-upgrades"></a>
+
+## Actualizaciones progresivas {#rolling-upgrades}
 
 Actualizar consiste en **dos comandos** —uno para el clúster y luego uno por cada instancia
-que haya en él—, y el chart y los servicios están diseñados para hacer avanzar a los clientes sin
-perder tráfico. Hay cinco excepciones, todas documentadas más abajo: la transición a la
+que haya en él—, y el chart y los servicios están diseñados para avanzar pod por pod, de modo que un
+área con más de una réplica sigue sirviendo mientras se actualiza. Hay cinco excepciones, todas documentadas más abajo: la transición a la
 ingesta duradera, que sigue siendo una actualización corriente pero tiene un efecto secundario
 visible; la **`v0.9.0`, la `v0.10.0` y cualquier instancia creada por la `v0.16.0` o una
 versión anterior, a las que no se puede actualizar en absoluto**; y la **`v0.19.0` para una
@@ -261,6 +264,26 @@ versión a la que va a migrar antes de ejecutarlo:
 dcctl install local --version <new-version>
 dcctl upgrade local devicechain --version <new-version>
 ```
+
+:::note Qué se ha medido
+La actualización se ha ensayado a mano en un clúster local: una instancia instalada con `--ha` se
+actualizó in situ con tráfico MQTT en marcha (cuatro dispositivos publicando con QoS 1, 20 mensajes por
+segundo entre todos, con `infrastructure.nats.mqttFailClosed` desactivado, como lo está por defecto), su
+broker se reinició dos veces y los dispositivos se reconectaron tras cada reinicio. En un ensayo, todos los
+mensajes que el broker había confirmado seguían almacenados después (11 009 de 11 009). En otro se perdieron
+11 de 11 262 mensajes confirmados, todos mientras se reiniciaba un servidor del broker y el stream de captura
+MQTT cambiaba de líder. Con `mqttFailClosed` desactivado, espere una breve ventana de pérdida como esta en
+cada reinicio del broker, con cualquier volumen de tráfico; vea
+[MQTT: el bróker de la plataforma](../reference/transport-matrix.md#mqtt--the-platform-broker). Los
+ensayos son manuales. La comprobación automática de actualización que condiciona cada versión se ejecuta
+sin tráfico.
+
+No se ha medido una actualización bajo carga sostenida de producción en un clúster de tamaño de producción,
+así que DeviceChain no promete una actualización sin interrupción. Prevea una breve interrupción donde se
+reemplace un pod: un área con una sola réplica y cada servidor del broker. Sin `--ha`, el único servidor del
+broker se reinicia y el broker no está disponible mientras tanto. Un dispositivo que envía mientras está
+desconectado debe reintentar.
+:::
 
 Una versión de DeviceChain es un único número que abarca las imágenes de los servicios, el
 chart, el operador y `dcctl`. Los dos comandos se lo reparten según a qué pertenece cada cosa:
@@ -306,6 +329,10 @@ Ejecute cualquiera de los dos con `--dry-run` primero si quiere ver qué moverí
 upgrade` toma el clúster de destino del propio registro de la instancia en lugar de
 adivinarlo, y dice cuál es.
 
+:::warning Actualice la plataforma antes que los agentes de borde
+Un agente de borde en el [enlace ascendente de pasarela](./edge-services.md#gateway-identity) publica en el espacio de nombres de pasarela. Una plataforma cuyo `event-sources` no conoce ese espacio de nombres, con `infrastructure.nats.mqttFailClosed` activado, confirma esos mensajes en el broker y los descarta, y nada en el agente lo muestra. Termine de actualizar el clúster y cada instancia (todas las réplicas de `event-sources` y de `device-management`, y las concesiones del broker) antes de reiniciar cualquier agente en una versión que lo use. Un agente cuyo broker no se ha actualizado no puede suscribirse a sus avisos y no informa de su enlace ascendente como conectado.
+:::
+
 :::tip Lee todas las credenciales y no acuña ninguna
 `dcctl upgrade` conserva aquello sobre lo que la instancia está funcionando: las contraseñas
 propietarias de las bases de datos, la autoridad y los inicios de sesión del bróker, el secreto
@@ -337,6 +364,12 @@ Una cosa queda además deliberadamente fuera de este comando: no toca los datos 
 datos más allá de dejar que los servicios ejecuten sus propias migraciones, y nunca cambia el
 tamaño de un volumen.
 :::
+
+### El ajuste del operador se conserva {#upgrade-tuning}
+
+Una actualización no cambia la forma de una instancia, pero sí conserva el ajuste que le diste. Un archivo de valores pasado a `dcctl bootstrap --values` o a `dcctl upgrade --values` se registra en la instancia y lo aplica de nuevo cada actualización posterior; `--reset-values` lo elimina. Consulta [Ajustar una instancia](./tuning-an-instance.md).
+
+La confirmación MQTT a prueba de fallos se conserva del mismo modo: `--mqtt-fail-closed` en `dcctl bootstrap` o `dcctl upgrade` se registra en la instancia, y una actualización que omite el indicador conserva lo registrado, activado o desactivado. Consulta [MQTT con fail-closed](./observability.md#mqtt-fail-closed).
 
 ### Qué aplica una actualización a la infraestructura {#upgrade-infrastructure}
 
@@ -450,6 +483,64 @@ Lo que ve una instancia en marcha:
   vez que arranca, y `dcctl upgrade` lo indica al terminar. El bróker se reinicia una vez, servidor a
   servidor con `--ha`, para añadir la cuenta. `user-management` se niega a arrancar si la instancia
   dice que la cuenta existe y falta su contraseña, en lugar de recurrir a la cuenta compartida.
+- **Cada área recibe una credencial propia para el bróker.** Hasta ahora todos los servicios entraban
+  al bróker de mensajes con una sola credencial compartida, de modo que cualquier pod podía presentar,
+  y cualquier fuga de su configuración exponía, la credencial de todos. `dcctl upgrade` crea una
+  credencial por cada área que usa el bróker, y otra para la administración del bróker, y guarda cada
+  una en un Secret llamado `dci-<instancia>-nats-<área>` que se monta solo en el pod de esa área.
+  `mcp` y `ai-inference` nunca abren una conexión con el bróker y no montan ninguna. Cada credencial
+  queda limitada a lo que usa su área, y a nada más: los streams en los que escribe, los consumidores
+  con los que lee (con nombre exacto, así que un área no puede reescribir, tomar mensajes de ni
+  confirmar los de otra), los buckets clave-valor que abre y
+  sus propios subjects de respuesta. Una credencial ya no puede publicar en los streams de otra área,
+  escribir en la caché de otra ni suscribirse a las respuestas de otra. Los permisos se generan a
+  partir de las mismas declaraciones contra las que se comprueban los servicios, así que no pueden
+  quedar por detrás de lo que un servicio hace. La credencial compartida sigue en su sitio junto a
+  las nuevas durante esta actualización, con los permisos que siempre tuvo, de modo que los servicios que aún no se han
+  reiniciado siguen conectándose; hasta la siguiente actualización
+  sigue en la configuración que lee cada pod, así que un pod aún puede presentarla, y esto todavía no es una frontera frente a un
+  servicio comprometido. Ejecute `dcctl upgrade` una vez más para retirarla. Cuando cada área ya usa su propia credencial y la actualización anterior terminó, esa
+  actualización elimina la credencial compartida del bróker y de la configuración de la instancia, con un reinicio más del bróker, y su
+  resumen final indica qué fase se ejecutó (o por qué no retiró la credencial). Una instancia nueva nunca tiene una credencial
+  compartida. Una vez retirada, no se admite volver a una versión anterior: ejecute de nuevo el `dcctl upgrade` más reciente. Dos permisos son
+  más amplios a propósito: event-sources conserva permisos de actualización sobre los almacenes MQTT
+  del bróker, y user-management puede purgar los datos de un tenant eliminado en todos los streams, salvo los
+  consumidores con los que event-sources conserva la durabilidad de los mensajes confirmados.
+  Una instalación que ejecuta el chart sin dcctl y aporta su propio bróker puede imprimir los mismos
+  permisos con `dcctl broker permissions`. El bróker se
+  reinicia una vez, servidor a servidor con `--ha`, para añadir los usuarios. Un área se niega a
+  arrancar si la instancia dice que las credenciales existen y falta la suya, en lugar de recurrir a la
+  compartida. Las credenciales existentes nunca se reemplazan: una actualización crea solo las que faltan.
+- **Los streams y buckets los crea ahora una única credencial de administración, antes de que los servicios
+  se actualicen.** La configuración de un stream decide qué se almacena bajo qué subject, de modo que dejar que
+  cada servicio creara y cambiara los streams que usa permitía que cualquiera de ellos remodelara un stream para
+  capturar o falsificar mensajes. El chart ejecuta ahora un job, `<instancia>-broker-admin`, antes de cada instalación y
+  actualización (un hook de Helm pre-install y pre-upgrade). Entra con la credencial de administración del
+  bróker, que ningún Deployment monta, y hace lo que antes hacía cada servicio por su cuenta al arrancar:
+  crea lo que falta, restablece los subjects, la ventana de duplicados, la política de descarte, los límites de tamaño y el
+  número de réplicas de lo que existe y, para el único stream de captura que una versión anterior creó con otra
+  retención, espera a que su lector lo vacíe antes de recrearlo como se declara. Esa espera puede tardar unos
+  minutos. Un servicio ya no crea ni cambia nada: comprueba que cada stream y bucket que abre coincide con lo
+  que declara su versión, y se niega a arrancar, indicando el stream y en qué difiere, cuando falta alguno o es
+  incorrecto. Si el job falla, la actualización falla antes de que se actualice ningún servicio, y `dcctl upgrade`
+  muestra el log del job; los servicios de la versión anterior siguen funcionando. `dcctl broker reconcile
+  <instancia>` ejecuta de nuevo el mismo job, que es también la forma de recuperar un stream o bucket borrado a mano.
+  Las credenciales de área ya no tienen derecho a crear, actualizar ni borrar un stream o bucket, con dos
+  excepciones que se mantienen a propósito: event-sources conserva sus derechos sobre los almacenes MQTT propios
+  del bróker, y user-management conserva el derecho a borrar las copias antiguas de los buckets de inicio de sesión.
+  Las reproducciones del stream resolved-events que hace event-processing (su puesta al día tras un reinicio, el
+  relleno de huecos en vivo y la vista previa de reglas) leen ahora el stream por secuencia, lo que no crea ningún consumidor en
+  el bróker, así que ningún área tiene derechos sobre los consumidores de otra área en un stream de mensajes; el job de
+  administración activa para ello las lecturas directas del stream. Con esto cambian dos comportamientos. La vida útil de los buckets de caché queda fijada en cinco minutos, porque
+  los crea el job y ya no se la pide a cada servicio; los ajustes de tiempo de vida de la caché de
+  device-management limitan solo cuánto tiempo conserva una réplica una entrada en su propia memoria. Y un
+  número de réplicas aumentado en la configuración de la instancia surte efecto cuando se ejecuta el job, en la
+  siguiente actualización, y no en cada reinicio de pod. Un pod de la versión anterior que se reinicia después de
+  actualizar el bróker pero antes de que el job se haya ejecutado es rechazado cuando intenta reconfigurar un stream; avance a la
+  versión nueva y arrancará. Una instalación que ejecuta el chart sin dcctl necesita tener listos el namespace y el Secret de
+  la credencial de administración antes de la primera instalación, porque el job se ejecuta antes de que el chart cree nada;
+  puede desactivar el job con `brokerAdmin.enabled=false` y crear los streams y buckets por su cuenta con la imagen
+  `dc-broker-admin`.
 - **El almacén de eventos se reinicia cuando cambian sus pods**, por ejemplo por una imagen o una
   ubicación nuevas. Un cambio solo de ajustes se recarga sin reinicio. Con `--ha` se reinician
   primero las réplicas en espera y después el rol primario pasa a una de ellas. Sin `--ha` se
@@ -547,7 +638,7 @@ Lo que hace que el despliegue sea seguro:
   migraciones y el resto espera; sin condiciones de carrera, sin DDL duplicado.
 
 :::tip Ejecute al menos dos réplicas en producción
-Para lograr un verdadero cero tiempo de inactividad, ejecute `replicas: 2` (o más) para cada área que
+Para seguir sirviendo durante un despliegue, ejecute `replicas: 2` (o más) para cada área que
 pueda servir desde más de un pod, de modo que el despliegue siempre tenga un pod activo sirviendo tráfico.
 Una sola réplica igualmente tiene una breve brecha mientras se reemplaza su único pod.
 Configúrelo globalmente con `--set replicas=2`, o por área bajo
@@ -3840,6 +3931,609 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 ```
 
 No hay que hacer nada.
+
+### v0.25.2 — la emisión de tokens de servicio sale del puerto público {#v0252-upgrade}
+
+`v0.25.2` es un parche de seguridad de `v0.25.1`. No hay migración, y no cambia ninguna API, tema ni
+permiso. La configuración de la instancia gana una clave, `infrastructure.userManagement.internalPort`,
+que el chart fija en `8082`; déjala en ese valor, porque el Service, el pod y la política de red del chart
+usan ese puerto fijo. Todo lo que describen las secciones de la [v0.25.1](#v0251-upgrade) y la
+[v0.25.0](#v0250-upgrade) sigue siendo lo que estás ejecutando, incluidas sus limitaciones conocidas.
+
+Actualiza el clúster y después cada instancia. Pasa a `dcctl install` los ajustes con los que se instaló
+el clúster, como `--ha` y `--database-node-selector`, además de la nueva `--version`:
+
+```bash
+dcctl install local --version v0.25.2
+dcctl upgrade local devicechain --version v0.25.2 --dry-run
+dcctl upgrade local devicechain --version v0.25.2
+```
+
+**Si vienes de `v0.25.0` o de `v0.24.0`,** sigue las [notas de la v0.25.1](#v0251-upgrade) con
+`--version v0.25.2`: se aplican sin cambios, y también lo que dicen sobre las actualizaciones de la v0.25.0.
+
+#### Los endpoints internos salen del puerto público {#v0252-internal-endpoints}
+
+`user-management` servía en su puerto público dos endpoints pensados solo para los servicios de la propia
+plataforma: `/auth/service-token`, que intercambia el secreto de servicio compartido por un token de
+servicio de corta duración, y `/auth/jwks`, el conjunto de claves con el que cada servicio valida los
+tokens. Lo único que los mantenía fuera de internet era un fragmento de configuración (snippet) de nginx en
+el ingress de la API del chart. **Por eso, una instalación que traía su propio controlador de ingress tenía
+ambos accesibles desde fuera,** protegidos por el secreto de servicio compartido, que se compara en tiempo
+constante.
+
+A partir de esta versión, `user-management` sirve ambos en un puerto interno aparte, el `8082`, que el
+chart publica solo en el Service interno del clúster. Ningún ingress, ruta ni balanceador de carga se
+refiere a él, y el puerto público responde 404 a ambas rutas, haya lo que haya delante, así que **un
+controlador propio no necesita ninguna regla en el borde para ocultarlos.** Ahora cada servicio obtiene el
+conjunto de claves y emite su token en el puerto interno. Consulta
+[Endpoints que nunca salen del clúster](../concepts/security-model.md#internal-endpoints).
+
+- **El chart ya no fija ningún snippet de configuración de nginx.**
+- **El controlador de ingress que instala `dcctl install` no cambia en esta versión** y sigue aceptando
+  snippets, porque las instancias aún no actualizadas dependen de ellos. Una versión posterior los
+  desactiva, tras una comprobación de `dcctl install` que se niega a continuar mientras algún Ingress de la
+  clase del controlador siga llevando una anotación `*-snippet`.
+- **Los verificadores de tokens externos no se ven afectados:** usan el `jwks_uri` de los metadatos del
+  servidor de autorización, `/oauth/jwks`, que sigue siendo público.
+
+#### Qué esperar {#v0252-during}
+
+- **`user-management` y sus pares deben actualizarse juntos.** Un pod de una versión anterior pide el
+  conjunto de claves y la emisión de tokens al puerto público, que ahora responde 404, y no sale de ello
+  reintentando: sus emisiones fallan hasta que ese pod se sustituye por uno de esta versión.
+  `dcctl upgrade` sustituye los pods de todos los servicios, así que esto dura lo que dura el despliegue;
+  no dejes ningún área atrás en una imagen anterior.
+- **Un pod anterior que se reinicia después de que `dcctl upgrade` haya escrito la nueva configuración no
+  arranca.** Los binarios anteriores decodifican la configuración de la instancia de forma estricta y
+  rechazan la nueva clave `internalPort`, así que ese pod entra en un bucle de reinicios hasta que se
+  sustituye por uno de esta versión.
+- **Si usas tu propio motor de políticas de red,** permite que los pods del namespace de la instancia
+  lleguen al puerto `8082` de `user-management`, y nada más. La política de red propia del chart para ese
+  puerto está desactivada por defecto, y las instalaciones con `dcctl` la ejecutan desactivada.
+- **Los paneles de Grafana que incluye el chart** se abren con una tabla de las alertas activas de la
+  instancia y enlazan a los demás paneles de la instancia, y un tercer panel, *Instance overview*, contiene
+  por ahora solo esa tabla.
+
+### v0.25.1 — las imágenes de las bases de datos y del almacén de respaldos, reconstruidas por avisos de seguridad actuales {#v0251-upgrade}
+
+`v0.25.1` es un parche de `v0.25.0`. No hay migración, y no cambia ninguna API, tema, permiso, valor del
+chart ni clave de configuración. Mueve las tres imágenes de terceros sobre las que el clúster y cada
+instancia ejecutan sus bases de datos y su almacén de respaldos a compilaciones que ya no llevan los avisos
+de seguridad que se enumeran abajo, y corrige lo que dos servicios informan a Prometheus y los paneles de
+Grafana que el chart incluye para ellos (consulta [Las métricas y los paneles](#v0251-metrics)). Todo lo que describe la
+[sección de la v0.25.0](#v0250-upgrade) sigue siendo lo que estás ejecutando.
+
+Siguen vigentes las [limitaciones conocidas de la v0.25.0](#v0250-upgrade), incluida esta: con `mqttFailClosed` desactivado, el valor por defecto, también se pueden perder mensajes QoS 1 confirmados con carga sostenida y sin reinicio del broker, cuando `event-sources` se queda atrás y el stream de captura se llena. `devicechain_<area>_jetstream_consumer_unread_skipped_total` los cuenta y `JetStreamDurableLostUnread` alerta.
+
+Actualiza el clúster y después cada instancia. Pasa a `dcctl install` los ajustes con los que se instaló
+el clúster, como `--ha` y `--database-node-selector`, además de la nueva `--version`:
+
+```bash
+dcctl install local --version v0.25.1
+dcctl upgrade local devicechain --version v0.25.1 --dry-run
+dcctl upgrade local devicechain --version v0.25.1
+```
+
+**Si vienes de `v0.24.0`,** sigue las [notas de la v0.25.0](#v0250-upgrade) con `--version v0.25.1`: se
+aplican sin cambios, incluido ejecutar `dcctl upgrade` dos veces. **Si vienes de `v0.25.0`,** basta con un
+`dcctl upgrade` si se ejecutaron las dos actualizaciones de la v0.25.0. Si solo se ejecutó la primera, el
+inicio de sesión compartido del bróker sigue en su sitio, y esta actualización lo retira, con el reinicio
+del bróker que eso conlleva; su `--dry-run` y su resumen final lo indican (consulta
+[Los inicios de sesión del bróker, en dos actualizaciones](#v0250-broker-logins)).
+
+#### Qué se mueve {#v0251-images}
+
+| Imagen | Ejecuta | De | A | Avisos que ya no lleva |
+| --- | --- | --- | --- | --- |
+| `ghcr.io/devicechain-io/postgresql-timescaledb` | el almacén de eventos de cada instancia | `17.10-ts2.28.3-r1` | `17.11-ts2.28.3-r1` | Perl `5.36.0-7+deb12u3`: CVE-2026-13221, CVE-2026-42496, CVE-2026-8376 (críticos), CVE-2026-42497, CVE-2026-48962, CVE-2026-57432, CVE-2026-57433 (altos). PCRE2 `10.42-1`: CVE-2026-103111, CVE-2026-86145, CVE-2026-89157, CVE-2026-89161 (altos) |
+| `ghcr.io/cloudnative-pg/postgresql` | la base de datos relacional compartida del clúster (`dc-rdb`, en `dc-system`) | `17.10-standard-bookworm` | `17.11-standard-bookworm` | los mismos avisos de Perl y PCRE2 |
+| `cgr.dev/chainguard/minio` | el almacén de respaldos dentro del clúster, cuando los respaldos van a él | resumen `sha256:32c504be…` | resumen `sha256:73297936…` | CVE-2026-111497 (decodificador Brotli, alto), CVE-2026-111943 (`crypto/x509` de Go, en el cliente `mc` incluido, alto) |
+
+La imagen del almacén de eventos es una compilación propia de DeviceChain sobre la base PostgreSQL de
+CloudNativePG, así que se mueve con esa base. PostgreSQL pasa de 17.10 a 17.11, una versión menor: los
+ficheros de datos se conservan tal cual y no se vuelca ni se restaura nada. TimescaleDB sigue en 2.28.3.
+Analizada con Trivy en busca de avisos altos y críticos que tengan corrección, ninguna de las imágenes
+nuevas informa de ninguno.
+
+#### Las métricas y los paneles {#v0251-metrics}
+
+- **`event-processing` pone a cero sus indicadores exclusivos del líder cuando una réplica deja de serlo.**
+  Una réplica que había perdido la concesión de detección seguía exportando el retraso, la demora y los
+  tamaños de estado de su último mandato. El panel y las alertas `DetectConsumerBacklogHigh`,
+  `DetectWatermarkLagHigh` y `DetectTenantOverStateBudget` toman la lectura más alta entre réplicas, así
+  que esa lectura congelada podía mostrar un retraso que ninguna réplica tenía e impedir que una alerta se
+  resolviera. Una réplica en espera informa ahora cero para ellos. El recuento de reglas cargadas no
+  cambia, porque todas las réplicas cargan las reglas.
+- **`command-delivery` exporta sus contadores de lotes de comandos a cero desde el arranque**, de modo que
+  su panel muestra cero en lugar de "No data" antes del primer lote, y un `increase()` sobre ellos ve el
+  primero.
+- **Se corrigen los dos paneles que incluye el chart:** sus series coinciden con lo que exportan los
+  servicios, los eventos poco frecuentes se muestran como recuentos, los gráficos que mezclaban unidades se
+  separan y se añaden gráficos para el presupuesto de muestras retenidas.
+
+#### Qué esperar {#v0251-during}
+
+- **`dcctl install` reinicia una vez las instancias de la base de datos relacional**, sobre la imagen
+  nueva: con `--ha`, primero las réplicas en espera y después una conmutación a una de ellas, así que las
+  escrituras se detienen solo durante la conmutación. Una base de datos relacional de una sola instancia
+  no está disponible hasta que esa instancia se ha reiniciado, y las escrituras hechas mientras tanto se
+  reintentan. `dcctl install` espera hasta que cada instancia ejecuta la imagen nueva.
+- **`dcctl install` reinicia una vez el pod del almacén de respaldos**, cuando el clúster guarda sus
+  respaldos dentro del clúster. Los respaldos y el registro de escritura anticipada guardados se
+  conservan. Mientras el pod se reinicia, el archivado se detiene y las bases de datos guardan el registro
+  de escritura anticipada localmente. Un clúster que envía sus respaldos a tu propio almacén de objetos con
+  `--backup-credentials-file` no ejecuta ningún almacén de respaldos, y ahí no cambia nada.
+- **`dcctl upgrade` reinicia una vez el almacén de eventos de la instancia**, sobre la imagen nueva, en el
+  paso de infraestructura antes de mover los servicios: con `--ha`, primero las réplicas en espera y
+  después una conmutación; sin `--ha`, la única instancia se reinicia, y event-management no puede guardar
+  eventos hasta que vuelve. Esos eventos esperan en el flujo de ingesta y se reintentan; uno se abandona
+  solo tras unos cuatro minutos de reintentos fallidos. La actualización espera hasta que cada instancia
+  del almacén ejecuta la imagen nueva antes de mover los servicios. Los ajustes del bróker de mensajes no
+  cambian, así que sus servidores no se reinician.
+- **Los servicios pasan a las imágenes `v0.25.1`** pod a pod, como en cualquier actualización. Su código
+  es el mismo que el de `v0.25.0`, salvo los dos cambios de métricas de arriba.
+- **Si replicas imágenes en un registro propio,** replica las tres referencias nuevas de arriba antes de
+  actualizar, y las imágenes de DeviceChain `v0.25.1` como siempre.
+- **Si fijaste `timescale_image` tú mismo** en el `terraform.tfvars` junto al estado de infraestructura de
+  una instancia, la actualización conserva tu valor, y el almacén de eventos se queda en la imagen que
+  nombra. Ponlo en `ghcr.io/devicechain-io/postgresql-timescaledb:17.11-ts2.28.3-r1`, o quita la línea,
+  para moverlo.
+- **Cambiar un ajuste de la base de datos en la misma ejecución se rechaza** en una base de datos de más
+  de una instancia: el operador de la base de datos no acepta una imagen nueva y ajustes nuevos a la vez.
+  Limita `dcctl install` a los ajustes que el clúster ya tiene (un `--max-connections` distinto, por
+  ejemplo, es un cambio así), y cambia el ajuste en una ejecución aparte.
+
+### v0.25.0 — cada área inicia sesión en el bróker con su propia identidad, y las versiones están firmadas {#v0250-upgrade}
+
+`v0.25.0` es una actualización en su sitio desde `v0.24.0`: `dcctl install` para el clúster y después
+`dcctl upgrade` para cada instancia, como se describe [para la v0.17.0](#v0170-upgrade). Pasa a
+`dcctl install` los ajustes con los que se instaló el clúster, como `--ha` y `--database-node-selector`,
+además de la nueva `--version`.
+**A diferencia de la mayoría de las versiones, `dcctl upgrade` se ejecuta dos veces.** La primera ejecución da
+a cada área un inicio de sesión propio en el bróker de mensajes y mantiene a su lado el inicio de sesión
+compartido; la segunda retira el inicio de sesión compartido (consulta
+[Los inicios de sesión del bróker, en dos actualizaciones](#v0250-broker-logins)). **No se puede alcanzar en
+su sitio desde la `v0.22.0` ni versiones anteriores:** actualiza primero pasando por la `v0.23.0` y la
+`v0.24.0` (consulta [Antes de actualizar](#v0250-before)). Sus tres migraciones añaden cinco tablas, una
+columna y sus índices, y no reescriben ninguna fila existente (consulta
+[Durante la actualización](#v0250-during)). **Desde ella se avanza, no se vuelve atrás** (consulta
+[Volver atrás](#v0250-going-back)).
+
+Los comandos, con la `v` en la versión y un ensayo primero:
+
+```bash
+dcctl install local --version v0.25.0
+dcctl upgrade local devicechain --version v0.25.0 --dry-run
+dcctl upgrade local devicechain --version v0.25.0
+# when that has finished and every area is Ready, run it again to retire the shared broker login:
+dcctl upgrade local devicechain --version v0.25.0
+```
+
+`--version` lleva la etiqueta con su `v`. En un clúster que no sea el local por defecto, pasa `--kube-context`
+a `dcctl install` y a `dcctl upgrade`, y pasa `--registry` cuando las imágenes salgan de un registro distinto
+del predeterminado. El `--dry-run` de cada ejecución indica cuál de las dos realizaría. Si la instancia se
+inicializó sin custodia de la clave raíz, `dcctl upgrade` imprime una advertencia de custodia; es lo esperado
+y no tiene relación con esta actualización. Un valor de `--mqtt-body-credential` indicado para la `v0.24.0`
+se conserva en una actualización que omite la opción; sigue siendo transitorio, y `dcctl` documenta que su
+eliminación está prevista para la `v0.26.0` (consulta la [`v0.24.0`](#v0240-mqtt-body-credential)).
+
+Esta versión hace dos cosas en torno a la confianza. Dentro del clúster, **ningún servicio comparte ya una
+credencial del bróker con otro**: cada área inicia sesión en el bróker de mensajes con su propia identidad,
+limitada a lo que usa, y un único inicio de sesión de administración crea y modifica streams y buckets. Fuera
+de él, **todas las imágenes y el chart están firmados**, de modo que puedes comprobar que lo que ejecutas lo
+construyó el flujo de trabajo de versiones de DeviceChain. Además: el token de acceso de un dispositivo se
+almacena como un digest con clave, el agente de borde es un gateway con una identidad propia, los tenants
+pueden crear cuentas de servicio para sus integraciones, y las actualizaciones over-the-air se pueden desplegar
+en un grupo de dispositivos. Qué cambia para alguien:
+
+- **Ejecuta `dcctl upgrade` dos veces.** La primera actualización mantiene el inicio de sesión compartido
+  `dc_service`; la segunda lo elimina. Consulta
+  [Los inicios de sesión del bróker, en dos actualizaciones](#v0250-broker-logins).
+- **El token de acceso de un dispositivo ya no se puede leer de vuelta.** Todo lo que leía `credentialId` de
+  una credencial `ACCESS_TOKEN` y lo usaba como token recibe ahora una huella. Consulta
+  [Los tokens de acceso de los dispositivos se almacenan como digests](#v0250-access-tokens).
+- **Un agente de borde debe pasar a su identidad de gateway** antes de actualizarse; el antiguo enlace
+  ascendente directo de dispositivo ha desaparecido. Consulta [El agente de borde es un gateway](#v0250-edge-gateway).
+- **Una conexión del SDK de C# que el bróker rechaza lanza ahora `MqttConnectRefusedException`** en lugar de
+  reintentarse como si la red estuviera caída. Consulta [El SDK de C#](#v0250-csharp-sdk).
+- **Una instalación que ejecuta el chart sin `dcctl`** necesita el espacio de nombres de la instancia y el
+  Secret del administrador del bróker antes de su primera instalación, o `brokerAdmin.enabled=false`. Consulta
+  [Los inicios de sesión del bróker, en dos actualizaciones](#v0250-broker-logins).
+- **El bróker se reinicia una vez en cada una de las dos actualizaciones,** un servidor a la vez con `--ha`.
+  Consulta [Durante la actualización](#v0250-during).
+- **No hay vuelta atrás a la `v0.24.0`.** Consulta [Volver atrás](#v0250-going-back).
+- **Actualiza pasando por la `v0.23.0` y la `v0.24.0`** si vienes de la `v0.22.0` o anterior.
+- **Tres migraciones:** dos tablas en `update-management`, tres en `user-management`, y una columna y un
+  índice en `device-management`. Consulta [Durante la actualización](#v0250-during).
+- **Las versiones están firmadas.** No hay nada que hacer; consulta [La primera versión firmada](#v0250-signing).
+- **Una actualización revierte el ajuste que hayas hecho a mano, salvo que lo pases a `--values`.** Eso ya era
+  así antes; esta versión añade la forma de conservarlo. Consulta
+  [El ajuste del operador se conserva](#upgrade-tuning).
+
+#### Antes de actualizar {#v0250-before}
+
+1. **Si vienes de la `v0.22.0` o anterior, detente.** Actualiza a la `v0.23.0`, después a la `v0.24.0`,
+   esperando cada vez a que todos los pods ejecuten la versión nueva, y solo entonces a la `v0.25.0`. El
+   formato de cable compacto que la `v0.24.0` convirtió en el predeterminado es ilegible para la `v0.22.0` y
+   anteriores (consulta [El formato de los eventos en el cable](#event-wire-format)), y saltarse una versión
+   menor no es una ruta probada (consulta
+   [Rutas de actualización admitidas](./versioning-policy.md#upgrade-paths)). Lee también las
+   [notas de la `v0.24.0`](#v0240-upgrade). Una instancia construida por la `v0.16.0` o anterior sigue sin
+   poder actualizarse; consulta [Instancias construidas por la v0.16.0 y anteriores](#pre-declaration-recreate).
+2. **Averigua qué lee de vuelta el token de acceso de un dispositivo.** Un script, una herramienta de
+   aprovisionamiento o una hoja de cálculo que obtenía el token de `deviceCredentials` o de
+   `deviceCredentialsByToken` recibirá en su lugar una huella que empieza por `dctk1$`. Los tokens que están
+   en los dispositivos siguen funcionando. Decide de dónde saldrá cada token que no registraste: fija un token
+   nuevo en la credencial (consulta
+   [Los tokens de acceso de los dispositivos se almacenan como digests](#v0250-access-tokens)).
+3. **Si ejecutas el agente de borde, planifica su paso a gateway antes de actualizarlo.** Crea un dispositivo
+   gateway con una credencial `MQTT_BASIC` para cada agente, y asígnale los dispositivos que el sitio le
+   presenta. No reinicies un agente en esta versión hasta que la plataforma, bróker incluido, se haya
+   actualizado. Consulta [El agente de borde es un gateway](#v0250-edge-gateway).
+4. **Si ejecutas el chart sin `dcctl`, crea primero el espacio de nombres y el Secret del administrador,** o
+   indica `brokerAdmin.enabled=false` y crea tú mismo los streams y los buckets con la imagen
+   `dc-broker-admin`. Consulta [Qué aplica una actualización a la infraestructura](#upgrade-infrastructure).
+   Una instalación que trae su propio bróker puede imprimir los permisos que necesita cada inicio de sesión
+   con `dcctl broker permissions`.
+5. **Si replicas las imágenes en tu propio registro, añade `dc-broker-admin`.** El job previo a la
+   actualización la ejecuta, y la actualización falla antes de que ruede ningún servicio si no se puede
+   descargar. También figura en la lista de [imágenes firmadas](./verifying-releases.md#what).
+6. **Si ajustaste la instancia a mano** (número de réplicas, recursos, la configuración propia de un área),
+   ponlo en un archivo de valores y pásalo como `--values` en la primera actualización. Una actualización
+   reconstruye los ajustes de una instancia a partir de su declaración, así que todo lo fijado de otro modo se
+   revierte. Consulta [Ajustar una instancia](./tuning-an-instance.md).
+7. **Si un programa de dispositivo en C# o Unity se conecta al bróker MQTT de la plataforma,** lee
+   [El SDK de C#](#v0250-csharp-sdk) antes de recompilarlo.
+
+#### Durante la actualización {#v0250-during}
+
+- **Se ejecutan tres migraciones, una por cada primer arranque del servicio al que pertenece.** Ninguna
+  reescribe una fila, y cada una puede ejecutarse de nuevo si se interrumpe.
+  - `device-management` añade la columna anulable `devices.gateway_id`, que registra el gateway tras el que
+    está un dispositivo (está vacía para todos los dispositivos existentes), y un índice parcial sobre
+    `(tenant_id, gateway_id)`. El índice se construye con un `CREATE INDEX` simple, que mantiene un bloqueo
+    contra las escrituras en `devices` mientras se construye; cubre solo los dispositivos que tienen un
+    gateway, así que está vacío en la primera ejecución.
+  - `update-management` crea `update_rollouts` y `update_rollout_targets`, que contienen los despliegues en
+    grupo. Ambas empiezan vacías.
+  - `user-management` crea `iam_service_accounts`, `iam_service_account_roles` e
+    `iam_service_account_secrets`, que contienen las cuentas de servicio y los digests de sus secretos. Las
+    tres empiezan vacías.
+- **`device-management` convierte cada token de acceso almacenado en su digest al arrancar.** Esto no es una
+  migración: se ejecuta después de la cadena de migraciones en cada arranque, abarca todos los tenants y las
+  filas eliminadas lógicamente, escribe cada fila solo si aún contiene el valor que leyó, y la segunda vez no
+  encuentra nada que hacer. Un dispositivo conserva el token que tiene; la misma cadena autentica antes y
+  después.
+- **Mientras `device-management` se renueva, los dispositivos que se autentican con un token de acceso pueden
+  no conectarse.** Cuando un pod de esta versión ha convertido las filas, un pod de la `v0.24.0` que aún está en
+  la renovación busca un token presentado por su texto en claro y no encuentra nada, así que durante el
+  solapamiento rechaza las conexiones con token de acceso y las comprobaciones por evento. Los dispositivos
+  reintentan y llegan a un pod de esta versión. Un token que un pod de la versión anterior escribe durante el
+  solapamiento se convierte en el siguiente arranque de un pod de esta versión. Los dispositivos que se
+  autentican con `MQTT_BASIC` no se ven afectados.
+- **El bróker se reinicia una vez en la primera actualización y otra en la segunda.** La primera añade los
+  inicios de sesión al bróker; la segunda elimina el compartido. Con `--ha` cada uno se reinicia un servidor a
+  la vez, cada uno Ready antes de que se detenga el siguiente; sin `--ha` se reinicia el único servidor y el
+  bróker no está disponible mientras tanto, normalmente alrededor de un minuto. Los dispositivos y los
+  servicios se vuelven a conectar por sí solos. **No reinicies a mano un servidor del bróker mientras se
+  renueva.** Consulta [Qué aplica una actualización a la infraestructura](#upgrade-infrastructure).
+- **Un job se ejecuta entre el bróker y los servicios.** El chart ejecuta `<instance>-broker-admin` como hook
+  pre-install y pre-upgrade de Helm. Crea o repara cada stream y cada bucket clave-valor, incluido activar las
+  lecturas directas del stream `resolved-events` que ahora usan las reproducciones de event-processing. Si
+  falla, la actualización falla antes de que ruede ningún servicio, `dcctl` imprime el log del job y los
+  servicios de la `v0.24.0` siguen ejecutándose. El job dispone por defecto de 540 segundos
+  (`brokerAdmin.activeDeadlineSeconds`) y de un reintento (`brokerAdmin.backoffLimit`).
+- **Un pod de la versión anterior que se reinicia mientras se ejecuta la actualización no arranca.** `dcctl`
+  escribe la nueva configuración de la instancia justo antes del job, y esta lleva una clave (`areaLogins`) que
+  la `v0.24.0` no declara, así que un pod de la `v0.24.0` que se reinicia después rechaza la configuración.
+  Los pods que siguen en ejecución no se ven afectados. Deja que la actualización termine en lugar de
+  reiniciar pods a mano; los pods que los sustituyen ejecutan esta versión.
+- **Cada área espera su inicio de sesión.** Tras la primera actualización, un área se niega a arrancar si la
+  instancia dice que existen inicios de sesión por área y falta su propio Secret, en lugar de recurrir al
+  inicio de sesión compartido.
+
+#### Volver atrás {#v0250-going-back}
+
+**Avanza. No vuelvas a la `v0.24.0`, ni con `helm rollback` ni de ningún otro modo.** Si la actualización falla
+a medias, corrige la causa y ejecuta `dcctl upgrade` otra vez con la misma `--version`. Volver atrás deja una
+instancia que no funciona:
+
+- **Se rechaza a todo dispositivo con token de acceso.** El token se almacena ahora como un digest, y la
+  `v0.24.0` busca un token presentado por su texto en claro. Una reversión no restaura el texto en claro, y
+  este no se guarda en ningún sitio.
+- **Puede que el inicio de sesión compartido del bróker ya no exista.** Tras la segunda actualización el bróker
+  ya no tiene `dc_service` y la configuración de la instancia ya no lo nombra, así que un servicio de la
+  `v0.24.0` no tiene con qué conectarse. `dcctl` lo dice cuando retira el inicio de sesión: no se admite
+  volver atrás a través de esta versión, vuelve a ejecutar el `dcctl upgrade` más reciente.
+- **La configuración está escrita para esta versión.** `dcctl` escribe la configuración de la instancia en el
+  Secret `dci-<instance>-config`, fuera de la release del chart, así que `helm rollback` restaura las cargas
+  de trabajo de la release anterior y deja la configuración tal como la escribió esta versión. Esta lleva la
+  clave `areaLogins`, que la `v0.24.0` no declara; los servicios rechazan al arrancar una clave de
+  configuración desconocida.
+
+Las tablas nuevas y la columna nueva no estorbarían: la `v0.24.0` lee la misma base de datos y las deja sin
+usar.
+
+#### Después de la actualización {#v0250-after}
+
+- **Ejecuta `dcctl upgrade` una segunda vez,** cuando la primera haya terminado con todas las áreas Ready.
+  Consulta [Los inicios de sesión del bróker, en dos actualizaciones](#v0250-broker-logins).
+- **Comprueba las firmas de lo que instalaste,** si quieres. Consulta
+  [La primera versión firmada](#v0250-signing).
+- **Mantén activados `metrics.enabled` y `metrics.alerts`** (ambos lo están por defecto) para instalar las tres
+  alertas nuevas de eliminación de tenants: `TenantPurgeStoreFailing`, `TenantPurgeStoreHolding` y
+  `TenantPurgeCoordinatorFailing`. Consulta [Eliminación de inquilinos](./tenant-deletion.md#blocked-store).
+- **Pasa cada agente de borde** cuando la plataforma haya terminado. Consulta
+  [El agente de borde es un gateway](#v0250-edge-gateway).
+- **Fija un token nuevo en toda credencial de token de acceso que no registraste.** Consulta
+  [Los tokens de acceso de los dispositivos se almacenan como digests](#v0250-access-tokens).
+
+##### Los inicios de sesión del bróker, en dos actualizaciones {#v0250-broker-logins}
+
+Hasta ahora todos los servicios iniciaban sesión en el bróker de mensajes con un único inicio de sesión
+compartido, de modo que cualquier pod podía presentar, y cualquier filtración de su configuración exponía, la
+credencial de todos ellos. El mecanismo se describe en
+[Qué aplica una actualización a la infraestructura](#upgrade-infrastructure), donde se tratan los inicios de
+sesión por área, el job de administración y `dcctl broker reconcile`; qué significa para la actualización:
+
+- **La primera actualización es la fase 1 de 2.** Crea un inicio de sesión para cada área que usa el bróker
+  (`mcp` y `ai-inference` nunca abren una conexión con el bróker y no reciben ninguno) y uno para la
+  administración del bróker, cada uno en un Secret llamado `dci-<instance>-nats-<area>` que solo monta esa
+  área. El inicio de sesión compartido `dc_service` se mantiene, con los permisos que siempre tuvo, de modo
+  que un pod que aún no se ha renovado conserva su conexión. Hasta la segunda actualización sigue estando en
+  la configuración que lee cada pod, así que un pod aún puede presentarlo. El resumen final dice «This was
+  phase 1 of 2: run `dcctl upgrade` once more to retire it.»
+- **La segunda actualización lo retira.** Solo lo hace cuando la instancia de la que parte ya ejecuta todas
+  las áreas con su propio inicio de sesión. Lo comprueba así:
+  - la configuración en ejecución ya indica a las áreas que usen sus propios inicios de sesión;
+  - el Secret de cada inicio de sesión existía antes de esta ejecución, de modo que ninguno se está creando
+    ahora;
+  - el bróker en ejecución ya tiene un inicio de sesión para cada área y para el administrador;
+  - la versión en ejecución incluye el job de administración del bróker;
+  - la última ejecución sobre la instancia terminó Ready; y
+  - esta ejecución aplica el bróker, así que `--skip-infrastructure` nunca retira el inicio de sesión.
+
+  Cuando se cumple todo, el bróker y la configuración de la instancia dejan de llevar el inicio de sesión
+  compartido, con un reinicio más del bróker, y los servicios se renuevan una vez más sobre la configuración
+  modificada. El resumen final dice «The shared message broker login is retired.» Cuando algo no se cumple,
+  el inicio de sesión se mantiene y el resumen dice «The shared message broker login was NOT retired» y
+  nombra la causa; resuélvela y ejecuta `dcctl upgrade` otra vez.
+- **No pases `--skip-infrastructure` a ninguna de las dos ejecuciones.** No aplica nada al bróker, así que ni
+  añade los inicios de sesión ni retira el compartido.
+- **Una instancia nueva nunca tiene un inicio de sesión compartido.** `dcctl bootstrap` crea solo los inicios
+  de sesión por área.
+- **No se admite volver atrás a través de la segunda actualización.** Consulta
+  [Volver atrás](#v0250-going-back).
+- **Los servicios comprueban, y el administrador cambia.** Un servicio verifica cada stream y cada bucket que
+  abre y se detiene con un error que nombra el stream y en qué difiere cuando falta uno o es incorrecto.
+  Ejecuta `dcctl broker reconcile <instance>` para dejarlo como estaba, lo que también recupera un stream o un
+  bucket eliminado a mano.
+- **Dos comportamientos cambian con ello.** La vida de los buckets de caché queda fijada en cinco minutos,
+  porque los crea el job y ya no se lo pregunta a cada servicio; los ajustes de tiempo de vida de la caché de
+  `device-management` limitan ahora solo cuánto tiempo conserva una réplica una entrada en su propia memoria.
+  Y un número de réplicas aumentado en la configuración de la instancia surte efecto cuando se ejecuta el job,
+  en la siguiente actualización, y no en cada reinicio de pod.
+- **Las instalaciones solo con el chart** necesitan el espacio de nombres y el Secret de administración en su
+  sitio antes de la primera instalación, porque el job se ejecuta antes de que el chart cree nada. El Secret
+  se llama `dci-<instance>-nats-broker-admin` y contiene `user` y `password`. `dcctl broker permissions`
+  imprime los permisos para un bróker que ejecutas tú mismo.
+- **Restaurar desde una copia de seguridad recibe inicios de sesión nuevos.** Consulta
+  [Recuperación ante desastres](./disaster-recovery.md).
+
+Consulta el [modelo de seguridad](../concepts/security-model.md) para saber qué protegen y qué no protegen
+los inicios de sesión.
+
+##### Los tokens de acceso de los dispositivos se almacenan como digests {#v0250-access-tokens}
+
+El token de una credencial `ACCESS_TOKEN` es su id de credencial, y antes se almacenaba y se devolvía tal como
+se enviaba, de modo que una filtración de la base de datos o de una copia de seguridad entregaba una
+credencial que funcionaba para cada dispositivo con token. Ahora se almacena como un digest con clave del
+mismo tipo que ya lo es la contraseña de `MQTT_BASIC`: un HMAC-SHA-256 sobre el tenant y el token, con una
+clave derivada de la clave raíz de la instancia. La forma almacenada es `dctk1$<key id>$<digest>`.
+
+- **Los dispositivos existentes conservan sus tokens.** Ningún dispositivo necesita reaprovisionarse.
+- **El token se muestra una sola vez,** en la respuesta a la llamada que lo establece (crear, una
+  actualización que lo rota, un reemplazo de dispositivo que genera uno) y en el aviso de la consola, y nunca
+  más. Una lectura devuelve la huella, que identifica la credencial y no puede presentarse como el token.
+- **Para obtener un token utilizable de una credencial cuyo token no registraste, fija uno nuevo:** **Set new
+  token** en la consola, o `updateDeviceCredential` solo con `credentialId`. El token actual del dispositivo
+  deja de abrir conexiones en cuanto lo haces. Consulta
+  [Contraseñas y tokens que se muestran una vez, y su rotación](../guides/device-credentials.md#show-once).
+- **`deviceCredentials(criteria: {credentialId})` acepta el token o la huella.**
+- **Cambiar el tipo de una credencial a `ACCESS_TOKEN` o desde `ACCESS_TOKEN` debe nombrar `credentialId` en la
+  misma solicitud,** porque el valor almacenado significa un digest con un tipo y un nombre de usuario con el
+  otro. Una solicitud que no lo hace se rechaza como `INVALID_VALUE`. Un token de más de 256 bytes se rechaza
+  como `LIMIT_EXCEEDED`.
+- **Los fragmentos de conexión de la consola** muestran `<access-token>` para una credencial de token de
+  acceso, igual que ya mostraban un marcador para una contraseña.
+- **Una clave raíz distinta vuelve ajenos todos los digests.** Como ocurre con los digests de contraseña, una
+  instancia restaurada junto a una clave raíz equivocada registra un error que indica cuántos digests
+  almacenados no produjo su clave.
+
+##### El agente de borde es un gateway {#v0250-edge-gateway}
+
+El agente de borde inicia sesión en la plataforma como un dispositivo propio, un **gateway**, y publica los
+eventos de cada dispositivo local en su propio espacio de nombres. La plataforma acepta un evento solo de un
+dispositivo asignado a ese gateway. Este es el único modo de enlace ascendente: el antiguo modo de
+dispositivo directo, en el que el agente reenviaba al bróker de la nube sin cambios, se ha eliminado.
+Consulta [Identidad del gateway](./edge-services.md#gateway-identity) y
+[el espacio de nombres del gateway](../reference/device-protocol.md#gateway-namespace).
+
+- **La configuración de un agente debe cambiar.** `agentId` deja de ser una clave, y una que quede detiene el
+  agente al arrancar, con un error que nombra `uplink.gatewayToken` como su sustituta. `uplink.tenant`,
+  `uplink.gatewayToken`, `uplink.username` (con la forma `{tenant}:{credentialId}`, rechazada al cargar en
+  caso contrario) y `uplink.passwordEnv` son obligatorias.
+- **Crea el dispositivo gateway y asígnale sus dispositivos antes de que el agente vacíe su cola pendiente.**
+  Los eventos guardados en el spool con el modo antiguo se reenvían en el espacio de nombres nuevo, y uno de un
+  dispositivo que aún no está asignado se rechaza. El spool y su durable se limitan a `uplink.tenant` en su
+  sitio; los eventos guardados de cualquier otro tenant no se reenvían y permanecen en el spool hasta que su
+  búfer circular los desaloja.
+- **Asigna dispositivos con `assignDeviceGateway`,** o con `gatewayToken` al crear uno, o desde la pestaña
+  **Gateway** del dispositivo en la consola. Un dispositivo tiene como máximo un gateway, un gateway no puede
+  estar a su vez tras otro gateway, y un gateway que aún tiene dispositivos no se puede eliminar. Requiere
+  `device:write` y surte efecto en el siguiente evento del dispositivo.
+- **Un evento rechazado no pasa en silencio.** La plataforma lo registra en el stream de eventos fallidos con
+  el motivo `NotGatewayChild`, lo cuenta en `resolve_not_gateway_child_total` y envía un aviso al gateway; el
+  agente lo registra en el log, lo cuenta y conserva el evento en `refused-events.jsonl` en su directorio de
+  almacén.
+- **Actualiza primero la plataforma.** Un `event-sources` de la `v0.24.0` que se ejecuta con
+  `infrastructure.nats.mqttFailClosed` activado confirma los mensajes de gateway que no puede atribuir y los
+  descarta, y el agente ve un éxito. Termina de actualizar todas las réplicas de `event-sources` y de
+  `device-management` y el bróker antes de reiniciar ningún agente en esta versión. Un agente cuyo bróker no se
+  ha actualizado no puede suscribirse a sus avisos y no informa `uplink_connected`. Consulta la advertencia en
+  [Actualizaciones progresivas](#rolling-upgrades).
+- **Los comandos a dispositivos tras un gateway aún no se enrutan.** El agente reenvía solo eventos.
+
+##### El SDK de C# {#v0250-csharp-sdk}
+
+El SDK no reconocía una conexión rechazada. La biblioteca MQTT informa de un CONNACK que no es un éxito
+lanzando una excepción, y el SDK lo trataba como un fallo de transporte corriente, de modo que el bucle de
+reconexión de una sesión seguía reintentando una credencial que el bróker había rechazado como si la red
+estuviera caída. Ahora lanza `MqttConnectRefusedException` para un CONNACK que juzgó al cliente (versión de
+protocolo no admitida, identificador de cliente no válido, nombre de usuario o contraseña incorrectos, no
+autorizado, vetado, método de autenticación incorrecto), y el bucle de reconexión de una sesión se detiene
+ante ella y declara la sesión ciega. Un CONNACK de «server unavailable» o «server busy», y un socket que
+falla a mitad de la conexión, se siguen reintentando. `MqttConnectRefusedException` gana un constructor que
+recibe la excepción subyacente, lo que es una adición a la API pública; no se elimina nada.
+
+Qué cambia para un programa de dispositivo: uno que dependía de un reintento indefinido tiene ahora que
+manejar el rechazo, por ejemplo tras revocarse o sustituirse su credencial, o tras fijarse de nuevo su token
+de acceso.
+
+##### La primera versión firmada {#v0250-signing}
+
+Cada imagen de servicio, el operador, el agente de borde, el administrador del bróker y la consola, y el chart
+de Helm, están firmados con cosign, sin clave, por digest. Cada imagen lleva además un SBOM SPDX firmado y una
+procedencia de compilación SLSA, y el chart lleva procedencia. Una firma queda ligada al flujo de trabajo de
+versiones y a la etiqueta, así que una de cualquier otro flujo de trabajo, repositorio o rama no se verifica
+como una versión. La versión de GitHub no se publica hasta que `hack/verify-release-signatures.sh <tag>` ha
+pasado contra lo que se subió.
+
+- **Para comprobar lo que descargaste,** sigue [Verificar las versiones](./verifying-releases.md); el script
+  necesita `cosign` 3 o posterior, `jq` y la CLI de GitHub, y ninguna cuenta ni clave nuestra.
+- **Las versiones anteriores a la `v0.25.0` no llevan firma,** y verificar una falla con «no signatures found».
+- **La imagen de la base de datos no está cubierta.** La imagen operand que ejecuta el almacén de eventos la
+  publica un flujo de trabajo aparte y no está firmada en esta versión.
+- **Los archivos de `dcctl` y del agente de borde** llevan procedencia de compilación, como desde la
+  [`v0.18.0`](#v0180-provenance).
+
+No hay nada que hacer para una actualización. Consulta la
+[política de seguridad](https://github.com/devicechain-io/devicechain/security/policy) para saber cómo
+informar de un problema.
+
+##### Cuentas de servicio {#v0250-service-accounts}
+
+Un administrador de tenant puede crear **cuentas de servicio** en **Settings**, junto a **Members**, para
+scripts e integraciones que no deban depender del token de actualización de una persona. Una cuenta tiene
+exactamente los roles que se le dan (sin rol base de visor), opcionalmente limitada a algunos clientes o
+grupos, y obtiene un token de acceso corriente válido durante cinco minutos con la concesión OAuth
+`client_credentials`. Un secreto se muestra una vez, se almacena como un digest con clave y caduca (365 días
+por defecto, 730 como máximo); rotar uno deja funcionando al antiguo durante un solapamiento que eliges, 24
+horas por defecto. Un tenant puede tener 200 cuentas, y una cuenta no puede administrar el tenant. Consulta
+[Cuentas de servicio](../user-guide/service-accounts.md). El cliente OAuth de un operador no puede usar esta
+concesión, y las credenciales de una cuenta de servicio no autentican nada en las demás concesiones.
+
+##### Despliegues en grupo de actualizaciones over-the-air {#v0250-rollouts}
+
+`createUpdateRollout`, `startUpdateRollout`, `pauseUpdateRollout`, `resumeUpdateRollout` y
+`abortUpdateRollout` asignan un artefacto a los miembros de un grupo de dispositivos, con nunca más de
+`maxInFlight` dispositivos (de 1 a 1.000) con una actualización sin terminar, y **Updates → Rollouts** en la
+consola los muestra. Iniciar un despliegue congela los miembros del grupo; un grupo de más de 10.000
+dispositivos se rechaza. Un dispositivo que las reglas de asignación rechazan se omite con el código de esa
+regla y no ocupa ningún hueco. Un umbral de fallos opcional pausa el despliegue por sí solo, y reanudarlo
+entonces exige un umbral mayor. Abortar cancela los dispositivos que aún no han empezado y deja terminar a los
+que están en curso. Los despliegues necesitan `artifact:write` para modificarse y `artifact:read` para verse, y
+un miembro limitado a una parte del tenant es rechazado. Consulta
+[Desplegar en un grupo](../concepts/over-the-air-updates.md#rollouts). Las métricas nuevas son
+`update_rollout_dispatches_total`, `update_rollout_transitions_total` y
+`update_rollout_step_failures_total`.
+
+#### Qué más cambió {#v0250-what-changed}
+
+##### Limitaciones conocidas {#v0250-known-limitations}
+
+- **Tras la primera actualización, todos los pods pueden leer aún el inicio de sesión compartido.** Esa es la
+  ventana entre las dos actualizaciones; ejecuta la segunda sin demora.
+- **Dos permisos del bróker son más amplios por diseño:** `event-sources` conserva derechos de actualización
+  sobre los almacenes MQTT propios del bróker, y `user-management` puede purgar los datos de un tenant
+  eliminado en todos los streams, salvo en los consumidores en los que `event-sources` mantiene su durabilidad
+  de mensajes confirmados.
+- **Los comandos de un gateway no se enrutan,** un aviso a un gateway es de mejor esfuerzo, y el agente guarda
+  una copia acotada (8.192 eventos y 16 MiB) de lo que reenvió para contrastarla con un aviso.
+- **Los despliegues no tienen oleadas ni etapa canario,** ni programación, ni alerta para el proceso que impulsa los
+  despliegues si se detiene.
+- **El SBOM se genera a partir de la variante `amd64` de cada imagen.**
+- **Con `mqttFailClosed` desactivado, que es el valor por defecto, se pueden perder mensajes QoS 1 que el
+  bróker ya confirmó mientras el stream de captura MQTT cambia de líder, con cualquier carga,** y nada los
+  cuenta (`JetStreamCaptureLeaderChanged` avisa de que hubo un cambio). También se pueden perder sin ningún cambio de líder, con
+  carga sostenida: en una prueba de carga en una instalación por defecto, `event-sources` se quedó atrás leyendo el stream de captura,
+  el stream se llenó hasta su límite y descartó sus mensajes sin leer más antiguos, y se perdieron 1.357.188 eventos confirmados,
+  entre el 7 y el 13 % del tráfico MQTT. `devicechain_<area>_jetstream_consumer_unread_skipped_total` los cuenta y
+  `JetStreamDurableLostUnread` alerta. Aún se investiga por qué `event-sources` se quedó atrás. Un reinicio progresivo del bróker
+  reinicia todos los servidores, también el líder, y esta actualización reinicia el bróker dos veces, así que
+  cuenta con una breve ventana de pérdida en cada reinicio del bróker salvo que fail-closed esté activado. En
+  un ensayo de esta actualización con cuatro dispositivos que enviaban 20 mensajes QoS 1 por segundo entre
+  todos, se perdieron 11 de 11 262 mensajes confirmados, todos durante los reinicios del bróker; en un ensayo
+  anterior no se perdió ninguno. Para cerrar la ventana, activa `infrastructure.nats.mqttFailClosed`. `dcctl`
+  no tiene una opción para ello en esta versión y `--values` no lo acepta, así que un valor puesto a mano en
+  una instancia que gestiona `dcctl` lo sobrescribe el siguiente `dcctl upgrade`; una versión posterior añade
+  `--mqtt-fail-closed` a `dcctl bootstrap` y `dcctl upgrade`, que registra la elección en la instancia
+  (consulta [MQTT con fail-closed](./observability.md#mqtt-fail-closed)). La contrapartida: mientras el almacén de mensajes del bróker no
+  tiene líder, una publicación QoS 1 no se confirma, así que el dispositivo debe volver a enviarla, y la
+  instancia sostiene menos tráfico que con el ajuste desactivado. En un clúster de pruebas no perdió nada
+  mientras daba abasto, a 6 000 y 9 000 eventos por segundo con cambios de líder repetidos; a 12 000 por
+  segundo se quedó atrás, dos servidores del bróker se quedaron sin memoria y se perdieron mensajes
+  confirmados. Dimensiona la instalación para mantenerte por debajo de su techo. Consulta
+  [MQTT con fail-closed](./observability.md#mqtt-fail-closed).
+- **Heredadas de la `v0.24.0`:** el relleno de una métrica calculada omite el historial comprimido, y una
+  caída del bróker con una gran cola pendiente no está cubierta por `mqttFailClosed`.
+
+##### También en esta versión {#v0250-also}
+
+- **`dcctl bootstrap` y `dcctl upgrade` aceptan `--values`,** un archivo YAML de ajuste (número de réplicas,
+  recursos, la configuración propia de un área) que se registra en la instancia y se vuelve a aplicar en cada
+  actualización posterior. Una clave que posee `dcctl`, como una imagen, una credencial o un endpoint, se
+  rechaza por su nombre antes de cambiar nada. `--reset-values` lo elimina, y `--dry-run` imprime qué
+  cambiaría. Consulta [Ajustar una instancia](./tuning-an-instance.md).
+- **`dcctl broker reconcile <instance>` y `dcctl broker permissions`** son nuevos; consulta más arriba.
+- **El registro de auditoría de una entidad se guarda en la misma transacción que el cambio.** Antes se
+  escribía después de que el cambio se confirmara, así que un fallo al escribir la auditoría le decía al
+  llamante que el cambio había fallado aunque se había guardado, y lo dejaba sin registrar. Ahora se guardan
+  ambos o ninguno, lo que significa que un fallo al escribir la auditoría hace fallar el cambio. Los eventos de
+  inicio de sesión y de autenticación siguen siendo de mejor esfuerzo.
+- **La eliminación de un tenant muestra qué la retiene.** `tenant_purge_store_blocked{store,reason}` cuenta las
+  eliminaciones abiertas por sistema de almacenamiento, junto con `tenant_purge_store_rows_erased_total`,
+  `tenant_purge_store_erase_duration_seconds`, `tenant_purge_completed_total`, `tenant_purge_failures_total`,
+  `tenant_purge_duration_seconds` y `tenant_purge_clean_duration_seconds`, y tres alertas. Consulta
+  [Eliminación de inquilinos](./tenant-deletion.md#blocked-store).
+- **La eliminación de un tenant es más rápida en dos puntos.** El borrado de clave-valor ejecuta 32 purgas a la
+  vez en lugar de una, y el borrado de objetos de S3 se hace por lotes, de hasta 1.000 claves por solicitud. En
+  una prueba de loopback de un solo nodo, borrar 63.000 claves pasó de 28,9 s a 3,1 s. Un lote en el que
+  cualquier clave no se llega a borrar hace fallar ahora la pasada, que se repite hasta que no queda nada.
+- **Un escritor sigue una elección de líder hasta ponerse al día.** Un publicador que enruta al líder de un
+  stream calculaba antes el nuevo líder una sola vez, y conservaba el destino antiguo si esa pasada fallaba.
+  Ahora reintenta con una espera creciente, durante 30 segundos como máximo. Esto afecta solo al rendimiento.
+- **Paneles.** Un panel puede mostrar una ventana fija, elegida con **Custom range** o abierta desde un enlace
+  `?from=&to=`, en lugar del intervalo móvil (consulta
+  [Intervalo personalizado](../user-guide/viewing-dashboards-in-dash.md#custom-range)). Un widget nuevo de
+  tabla de historial lista el historial almacenado de un dispositivo como filas de promedios por intervalo, y
+  un widget que tiene algo que entregar tiene un botón de descarga para CSV o PNG. Un widget sin nada que
+  dibujar dice ahora cuál de cinco motivos es: ningún dispositivo elegido, no informado por este dispositivo,
+  sin datos en este intervalo, sin acceso, o una fuente fallida. `/dash?rotate=tokA,tokB&every=60` recorre de
+  dos a 24 paneles en una pantalla de pared, de 10 a 3.600 segundos cada uno (consulta
+  [Rotar entre varios paneles](../user-guide/viewing-dashboards-in-dash.md#rotating-boards)). Todo ello es
+  aditivo: un panel guardado se lee y se renderiza como antes.
+- **Documentos de versionado y de seguridad.** [Política de versionado y actualización](./versioning-policy.md)
+  dice qué es estable desde la `v1.0.0`, y el [modelo de seguridad](../concepts/security-model.md) describe
+  los límites de confianza y qué hace cumplir cada uno. La sección de actualizaciones progresivas ya no afirma
+  que no haya tiempo de inactividad.
+- **Una comprobación de compatibilidad se ejecuta en cada cambio.** Cada esquema GraphQL servido, los comandos
+  y las opciones de `dcctl`, el contrato de cable de dispositivo, la disposición de topics de dispositivo, la
+  API pública del SDK de C# y las exportaciones de los paquetes npm se comparan con la última versión, y una
+  ruptura debe declararse. Frente a la `v0.24.0` no se declara ninguna ruptura en esta versión.
+- **El reproductor de demostración del showcase Sitepulse fija un token propio** en la credencial de cada
+  dispositivo, porque ya no podía leer uno.
 
 ### v0.24.0 — métricas calculadas que puedes crear tú mismo, y una ruta de eventos que transporta más {#v0240-upgrade}
 

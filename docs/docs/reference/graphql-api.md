@@ -79,7 +79,9 @@ authorities do not line up with intuition:
 `/api` router entirely. `event-sources` is routed but answers with a placeholder schema: ingest
 reaches it over the device-plane transports, not this API. `update-management` is routed too: its API is the artifact
 catalogue (`createArtifact`, `artifact`, `artifacts`, `retireArtifact`) and the assignment of an available artifact to a
-device (`assignArtifact`, `cancelUpdate`, `updateAssignment`, `updateAssignments`). An assignment carries
+device (`assignArtifact`, `cancelUpdate`, `updateAssignment`, `updateAssignments`) or, as a capped rollout, to a device
+group (`createUpdateRollout`, `startUpdateRollout`, `pauseUpdateRollout`, `resumeUpdateRollout`, `abortUpdateRollout`,
+`updateRollout`, `updateRollouts`, `updateRolloutTargets`). An assignment carries
 an update attempt whose state moves from `QUEUED` through `INITIATED`, `DOWNLOADING`, `DOWNLOADED`, `VERIFIED`, `UPDATING` and
 `REBOOTING` to `UPDATED`, or to `FAILED`, `TIMED_OUT`, `UNKNOWN` or `CANCELLED`; `UPDATED` is reached only
 when the device reports the target version running, on a new boot when the update needs a reboot. Assigning

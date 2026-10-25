@@ -3,7 +3,8 @@
 
 // Typed GraphQL operations against the update-management service: the opt-in OTA area.
 // It serves the per-tenant artifact catalogue, the signer registry (the public keys a
-// tenant trusts to vouch for artifacts), signatures, and update assignments.
+// tenant trusts to vouch for artifacts), signatures, update assignments, and group rollouts
+// (an artifact assigned to a frozen device group, a capped number of devices at a time).
 //
 // This file carries EVERY operation the schema exposes so the pages built on it (the
 // artifact catalogue, the signer registry, a device's Updates tab) share one generated
@@ -23,6 +24,9 @@ import type {
   ArtifactSignerQuery,
   UpdateAssignmentsQuery,
   UpdateAssignmentQuery,
+  UpdateRolloutsQuery,
+  UpdateRolloutQuery,
+  UpdateRolloutTargetsQuery,
   ArtifactCreateRequest,
   ArtifactSearchCriteria,
   ArtifactSignerSearchCriteria,
@@ -33,6 +37,12 @@ import type {
   SignerAlgorithm,
   SignerState,
   UpdateState,
+  UpdateRolloutCreateRequest,
+  UpdateRolloutSearchCriteria,
+  UpdateRolloutTargetSearchCriteria,
+  UpdateRolloutState,
+  UpdateRolloutOutcome,
+  UpdateRolloutPauseReason,
 } from '@/gql/update-management/graphql';
 
 export type UpdateManagementInfo = UpdateManagementInfoQuery['updateManagementInfo'];
@@ -44,6 +54,10 @@ export type ArtifactSigner = NonNullable<ArtifactSignerQuery['artifactSigner']>;
 export type ArtifactSignerSearchResults = ArtifactSignersQuery['artifactSigners'];
 export type UpdateAssignment = NonNullable<UpdateAssignmentQuery['updateAssignment']>;
 export type UpdateAssignmentSearchResults = UpdateAssignmentsQuery['updateAssignments'];
+export type UpdateRollout = NonNullable<UpdateRolloutQuery['updateRollout']>;
+export type UpdateRolloutSearchResults = UpdateRolloutsQuery['updateRollouts'];
+export type UpdateRolloutTargetSearchResults = NonNullable<UpdateRolloutTargetsQuery['updateRolloutTargets']>;
+export type UpdateRolloutTarget = UpdateRolloutTargetSearchResults['results'][number];
 export type {
   ArtifactCreateRequest,
   ArtifactSearchCriteria,
@@ -55,6 +69,12 @@ export type {
   SignerAlgorithm,
   SignerState,
   UpdateState,
+  UpdateRolloutCreateRequest,
+  UpdateRolloutSearchCriteria,
+  UpdateRolloutTargetSearchCriteria,
+  UpdateRolloutState,
+  UpdateRolloutOutcome,
+  UpdateRolloutPauseReason,
 };
 
 // ── Service info ────────────────────────────────────────────────────────
@@ -595,6 +615,135 @@ const ABANDON_UNKNOWN_UPDATE = graphql(`
   }
 `);
 
+// ── Group rollouts ──────────────────────────────────────────────────────
+
+// One selection for every rollout read and write, so the list, the detail page and the answer
+// to a control all hold the same shape and a control's answer can replace what is on screen.
+const ROLLOUTS = graphql(`
+  query UpdateRollouts($criteria: UpdateRolloutSearchCriteria!) {
+    updateRollouts(criteria: $criteria) {
+      results {
+        ...RolloutFields
+      }
+      pagination {
+        pageStart
+        pageEnd
+        totalRecords
+      }
+    }
+  }
+`);
+
+// Declared as a bare call, as user-management's TenantFields is: codegen finds it by scanning
+// for graphql() templates, and the documents refer to it by its GraphQL name.
+graphql(`
+  fragment RolloutFields on UpdateRollout {
+    id
+    token
+    name
+    groupToken
+    groupVersion
+    maxInFlight
+    failureThreshold
+    state
+    pauseReason
+    targetCount
+    createdAt
+    createdBy
+    startedAt
+    finishedAt
+    stateChangedBy
+    stateChangedAt
+    artifact {
+      token
+      name
+      version
+      component
+      state
+      trustStatus
+    }
+    progress {
+      total
+      pending
+      inFlight
+      succeeded
+      failed
+      unknown
+      cancelled
+      skipped
+    }
+  }
+`);
+
+const ROLLOUT = graphql(`
+  query UpdateRollout($token: String!) {
+    updateRollout(token: $token) {
+      ...RolloutFields
+    }
+  }
+`);
+
+const ROLLOUT_TARGETS = graphql(`
+  query UpdateRolloutTargets($token: String!, $criteria: UpdateRolloutTargetSearchCriteria!) {
+    updateRolloutTargets(token: $token, criteria: $criteria) {
+      results {
+        deviceToken
+        outcome
+        assignmentToken
+        attemptState
+        skipCode
+        skipDetail
+        dispatchedAt
+      }
+      pagination {
+        pageStart
+        pageEnd
+        totalRecords
+      }
+    }
+  }
+`);
+
+const CREATE_ROLLOUT = graphql(`
+  mutation CreateUpdateRollout($request: UpdateRolloutCreateRequest!) {
+    createUpdateRollout(request: $request) {
+      ...RolloutFields
+    }
+  }
+`);
+
+const START_ROLLOUT = graphql(`
+  mutation StartUpdateRollout($token: String!) {
+    startUpdateRollout(token: $token) {
+      ...RolloutFields
+    }
+  }
+`);
+
+const PAUSE_ROLLOUT = graphql(`
+  mutation PauseUpdateRollout($token: String!) {
+    pauseUpdateRollout(token: $token) {
+      ...RolloutFields
+    }
+  }
+`);
+
+const RESUME_ROLLOUT = graphql(`
+  mutation ResumeUpdateRollout($token: String!, $failureThreshold: Int) {
+    resumeUpdateRollout(token: $token, failureThreshold: $failureThreshold) {
+      ...RolloutFields
+    }
+  }
+`);
+
+const ABORT_ROLLOUT = graphql(`
+  mutation AbortUpdateRollout($token: String!) {
+    abortUpdateRollout(token: $token) {
+      ...RolloutFields
+    }
+  }
+`);
+
 // ── Client functions ────────────────────────────────────────────────────
 
 export async function getUpdateManagementInfo(): Promise<UpdateManagementInfo> {
@@ -687,4 +836,47 @@ export async function abandonUnknownUpdate(opts: {
 }): Promise<UpdateAssignment> {
   const data = await gql('update-management', ABANDON_UNKNOWN_UPDATE, opts);
   return data.abandonUnknownUpdate;
+}
+
+export async function listRollouts(criteria: UpdateRolloutSearchCriteria): Promise<UpdateRolloutSearchResults> {
+  const data = await gql('update-management', ROLLOUTS, { criteria });
+  return data.updateRollouts;
+}
+
+export async function getRollout(token: string): Promise<UpdateRollout | null> {
+  const data = await gql('update-management', ROLLOUT, { token });
+  return data.updateRollout ?? null;
+}
+
+export async function listRolloutTargets(
+  token: string,
+  criteria: UpdateRolloutTargetSearchCriteria,
+): Promise<UpdateRolloutTargetSearchResults | null> {
+  const data = await gql('update-management', ROLLOUT_TARGETS, { token, criteria });
+  return data.updateRolloutTargets ?? null;
+}
+
+export async function createRollout(request: UpdateRolloutCreateRequest): Promise<UpdateRollout> {
+  const data = await gql('update-management', CREATE_ROLLOUT, { request });
+  return data.createUpdateRollout;
+}
+
+export async function startRollout(token: string): Promise<UpdateRollout> {
+  const data = await gql('update-management', START_ROLLOUT, { token });
+  return data.startUpdateRollout;
+}
+
+export async function pauseRollout(token: string): Promise<UpdateRollout> {
+  const data = await gql('update-management', PAUSE_ROLLOUT, { token });
+  return data.pauseUpdateRollout;
+}
+
+export async function resumeRollout(opts: { token: string; failureThreshold?: number }): Promise<UpdateRollout> {
+  const data = await gql('update-management', RESUME_ROLLOUT, opts);
+  return data.resumeUpdateRollout;
+}
+
+export async function abortRollout(token: string): Promise<UpdateRollout> {
+  const data = await gql('update-management', ABORT_ROLLOUT, { token });
+  return data.abortUpdateRollout;
 }

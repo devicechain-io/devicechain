@@ -23,6 +23,7 @@ variables {
 
   callout_issuer_public   = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
   service_password_bcrypt = "$2a$10$abcdefghijklmnopqrstuuABCDEFGHIJKLMNOPQRSTUVWXYZ01234"
+  service_users           = "{\"APP\":{\"dc_service\":{\"publish\":{\"deny\":[\"*.*.devices.*.events\"]}}}}"
 }
 
 run "the_identity_account_has_one_login_and_nothing_shared" {

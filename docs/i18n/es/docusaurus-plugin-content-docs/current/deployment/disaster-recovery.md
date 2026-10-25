@@ -254,7 +254,7 @@ artefacto, o puedes proporcionarla con `--escrow-passphrase-file` / `DCCTL_ESCRO
 
 Las credenciales del broker no están en el depósito y no necesitan estarlo. La instancia
 reconstruida acuña unas nuevas, incluidas las claves del callout de autenticación de dispositivos y la credencial de la cuenta de
-identidad del broker, y se las entrega al broker y a los servicios en la misma ejecución. Los dispositivos no guardan
+identidad del broker y la credencial propia de cada área, y se las entrega al broker y a los servicios en la misma ejecución. Ninguna de las credenciales anteriores se conserva, y una instancia reconstruida no tiene una credencial compartida del broker: cada área inicia sesión con la credencial acuñada para ella, y las de la instancia destruida no abren nada. Los dispositivos no guardan
 ninguna de ellas: inician sesión con sus propias credenciales, que vuelven con la base de datos.
 
 `dcctl bootstrap` se niega a hacerlo de otra manera; es la primera de las dos comprobaciones
@@ -455,8 +455,8 @@ orden en el que entregarle credenciales nuevas a una instancia en funcionamiento
 leer y conserva todos estos:
 
 - la clave raíz del almacén de secretos;
-- la autoridad y los inicios de sesión del broker (la semilla del emisor de callout y las
-  contraseñas de servicio y de sistema);
+- la autoridad y los inicios de sesión del broker (la semilla del emisor de callout, la credencial de cada área y la
+  contraseña de sistema);
 - las contraseñas de las bases de datos (la del propietario compartido, la del aprovisionador, la
   del login propio de la instancia y la del propietario del almacén de eventos);
 - el secreto de autenticación entre servicios;
@@ -519,7 +519,7 @@ En esta versión la clave raíz no se puede rotar in situ. No existe ningún com
 clave nueva y vuelva a sellar lo que protegía la anterior. Para sustituir la clave raíz, se recrea la
 instancia, y una instancia recreada empieza con un plano de control vacío.
 
-Tres tipos de datos guardados dependen de la clave:
+Cuatro tipos de datos guardados dependen de la clave:
 
 - **Todos los secretos que guarda la instancia.** Cada uno está sellado bajo la clave raíz:
   credenciales de los conectores de salida, contraseñas SMTP y secretos de webhook de los canales de
@@ -529,6 +529,10 @@ Tres tipos de datos guardados dependen de la clave:
 - **Los resúmenes de las contraseñas MQTT de los dispositivos.** La clave con la que se calculan esos
   resúmenes se deriva de la clave raíz. Un resumen es de un solo sentido, así que no se puede volver
   a calcular bajo una clave nueva sin la contraseña.
+- **Los resúmenes de los tokens de acceso de los dispositivos.** Un token de acceso solo se guarda
+  como un resumen calculado con una clave derivada de la clave raíz. Como el resumen de una
+  contraseña, no se puede volver a calcular bajo una clave nueva sin el token, así que a cada
+  dispositivo con token hay que establecerle el token de nuevo, o registrarlo otra vez con el mismo.
 
 ### Qué se pierde al recrear {#replace-root-key-losses}
 

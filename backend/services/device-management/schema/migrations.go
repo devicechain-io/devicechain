@@ -51,5 +51,7 @@ var (
 		NewMetricExpressionSchema(),
 		NewProfileActivationsSchema(),
 		NewDeviceTypeIndexSchema(),
+		NewDeviceGatewaySchema(),
+		NewEnrollmentSecretDigestSchema(),
 	}
 )

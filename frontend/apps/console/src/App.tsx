@@ -9,7 +9,7 @@ import { useAuth } from '@/auth/AuthProvider';
 import { LoadingState } from '@/components/ui/loading-state';
 import LoginPage from '@/routes/Login';
 import AppLayout from '@/routes/AppLayout';
-import Dashboard from '@/routes/Dashboard';
+import Home from '@/routes/Home';
 import { AreaGate } from '@/components/AreaUnavailable';
 import { RouteSuspense } from '@/components/RouteSuspense';
 import { AREA } from '@/lib/capabilities';
@@ -29,6 +29,8 @@ const CommandBatchesPage = lazy(() => import('@/routes/command-batches/CommandBa
 const CommandBatchDetailPage = lazy(() => import('@/routes/command-batches/CommandBatchDetailPage'));
 const ArtifactsPage = lazy(() => import('@/routes/updates/ArtifactsPage'));
 const ArtifactDetailPage = lazy(() => import('@/routes/updates/ArtifactDetailPage'));
+const RolloutsPage = lazy(() => import('@/routes/updates/RolloutsPage'));
+const RolloutDetailPage = lazy(() => import('@/routes/updates/RolloutDetailPage'));
 const ConnectorsPage = lazy(() => import('@/routes/connectors/ConnectorsPage'));
 const ConnectorDetailPage = lazy(() => import('@/routes/connectors/ConnectorDetailPage'));
 const AiProvidersPage = lazy(() => import('@/routes/admin/ai-providers/AiProvidersPage'));
@@ -60,6 +62,7 @@ const AdminSettingsPage = lazy(() => import('@/routes/admin/settings/SettingsPag
 const AdminIdentityProvidersPage = lazy(() => import('@/routes/admin/identity-providers/IdentityProvidersPage'));
 const AdminIdentityProviderDetailPage = lazy(() => import('@/routes/admin/identity-providers/IdentityProviderDetailPage'));
 const MembersPage = lazy(() => import('@/routes/members/MembersPage'));
+const ServiceAccountsPage = lazy(() => import('@/routes/service-accounts/ServiceAccountsPage'));
 const RolesPage = lazy(() => import('@/routes/roles/RolesPage'));
 const RoleDetailPage = lazy(() => import('@/routes/roles/RoleDetailPage'));
 const RegistryRoute = lazy(() => import('@/routes/RegistryRoute'));
@@ -104,7 +107,7 @@ export default function App() {
 
       <Route element={<ProtectedRoute />}>
         <Route path="/" element={<AppLayout />}>
-          <Route index element={<Dashboard />} />
+          <Route index element={<Home />} />
           <Route path="devices" element={<DevicesPage />} />
           <Route path="devices/:token" element={<DeviceDetailPage />} />
           <Route path="dashboards" element={<DashboardsPage />} />
@@ -122,6 +125,8 @@ export default function App() {
               route is a separate slice. */}
           <Route path="updates/artifacts" element={<AreaGate area={AREA.updateManagement}><ArtifactsPage /></AreaGate>} />
           <Route path="updates/artifacts/:token" element={<AreaGate area={AREA.updateManagement}><ArtifactDetailPage /></AreaGate>} />
+          <Route path="updates/rollouts" element={<AreaGate area={AREA.updateManagement}><RolloutsPage /></AreaGate>} />
+          <Route path="updates/rollouts/:token" element={<AreaGate area={AREA.updateManagement}><RolloutDetailPage /></AreaGate>} />
           <Route path="connectors" element={<AreaGate area={AREA.outboundConnectors}><ConnectorsPage /></AreaGate>} />
           <Route path="connectors/:token" element={<AreaGate area={AREA.outboundConnectors}><ConnectorDetailPage /></AreaGate>} />
           <Route path="audit" element={<AuditPage />} />
@@ -131,6 +136,7 @@ export default function App() {
           <Route path="basemap" element={<BasemapPage />} />
           <Route path="locale" element={<LocalePage />} />
           <Route path="members" element={<MembersPage />} />
+          <Route path="service-accounts" element={<ServiceAccountsPage />} />
           <Route path="roles" element={<RolesPage />} />
           <Route path="roles/new" element={<RoleDetailPage />} />
           <Route path="roles/:token" element={<RoleDetailPage />} />

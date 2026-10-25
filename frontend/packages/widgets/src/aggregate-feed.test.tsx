@@ -108,7 +108,8 @@ const advance = (ms: number) => act(async () => void (await vi.advanceTimersByTi
 
 const figure = () => document.querySelector('[data-level-readout]')?.textContent;
 const caption = () => document.querySelector('[data-stat-caption]')?.textContent;
-const empty = () => document.querySelector('[data-level-empty]')?.textContent;
+// A widget's own sentence, else the explained state's explanation (data-empty-state).
+const empty = () => (document.querySelector('[data-level-empty]') ?? document.querySelector('[data-empty-detail]'))?.textContent;
 
 describe('the span a stat card reads', () => {
   it('is the board range: a window of that span ending at the last minute, read as one bucket', async () => {

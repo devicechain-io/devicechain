@@ -90,6 +90,8 @@ function tenant(overrides: Partial<AdminTenant> = {}): AdminTenant {
     aiExternalEnabled: true,
     aiInferenceRequestsPerMinute: 12,
     aiInferenceBurst: 30,
+    provisioningRegistrationsPerSecond: 20,
+    provisioningBurst: 500,
     heldCommandCeiling: 2500,
     shedPriority: 77,
     geoFencePositionCeiling: 640,
@@ -122,6 +124,8 @@ const PRESERVED: Record<keyof AdminTenantUpdateRequest, unknown> = {
   aiExternalEnabled: true,
   aiInferenceRequestsPerMinute: 12,
   aiInferenceBurst: 30,
+  provisioningRegistrationsPerSecond: 20,
+  provisioningBurst: 500,
   heldCommandCeiling: 2500,
   shedPriority: 77,
   // The three geofence caps. They arrive here by the same route the two above did — the
@@ -148,6 +152,8 @@ const CLEARED: Record<keyof AdminTenantUpdateRequest, unknown> = {
   aiExternalEnabled: false,
   aiInferenceRequestsPerMinute: null,
   aiInferenceBurst: null,
+  provisioningRegistrationsPerSecond: null,
+  provisioningBurst: null,
   heldCommandCeiling: null,
   shedPriority: null,
   geoFencePositionCeiling: null,
@@ -194,7 +200,7 @@ async function clickSave() {
  * Asserts the request carries exactly the expected fields and nothing else.
  *
  * Both directions matter. Missing keys are the defect this file exists for; EXTRA keys
- * mean the form is sending something the schema does not declare, which the forked
+ * mean the form is sending something the schema does not declare, which
  * graphql-go now rejects at the server — better to fail here than to ship a request the
  * API refuses. `toStrictEqual` covers both, and also catches a key present with an
  * `undefined` value, which is the shape a half-applied fix would take.
@@ -225,6 +231,8 @@ describe('editing a tenant', () => {
         aiExternalEnabled: false,
         aiInferenceRequestsPerMinute: null,
         aiInferenceBurst: null,
+        provisioningRegistrationsPerSecond: null,
+        provisioningBurst: null,
         heldCommandCeiling: null,
         shedPriority: null,
         geoFencePositionCeiling: null,
@@ -244,8 +252,8 @@ describe('editing a tenant', () => {
     fireEvent.mouseDown(await screen.findByRole('tab', { name: 'Settings' }));
     await screen.findByLabelText('Held command ceiling');
     const hints = screen.getAllByText(/Leave blank to inherit the tier's value, then the platform default\./);
-    // ingest rate + burst, outbound rate + burst, AI rate + burst
-    expect(hints).toHaveLength(6);
+    // ingest rate + burst, outbound rate + burst, self-registration rate + burst, AI rate + burst
+    expect(hints).toHaveLength(8);
     expect(screen.queryByText(/inherit the platform default\.$/)).toBeNull();
   });
 

@@ -44,6 +44,15 @@ its Schedule B.
 > grant the license rights the project needs to keep relicensing options open. We
 > therefore use a CLA.
 
+## Licensing intent
+
+DeviceChain is released under the [Apache License 2.0](LICENSE), and the project intends to
+keep publishing it under Apache-2.0. The CLA exists so that the project holds clear rights to
+what it distributes; among other things, it lets the steward, IoT Innovations, LLC, offer the
+code under other terms as well as Apache-2.0. This statement is an expression of intent, not a
+contract. It does not change the CLA or the license, and the CLA and the license are what
+govern your contribution.
+
 ## Ground rules
 
 - Be respectful and constructive. Assume good intent.
@@ -213,6 +222,116 @@ hack/migration-diff.sh verify     # schemas still match their goldens; also runs
                                   # replay and tenant-coverage gates and the purge drill
 hack/migration-diff.sh snapshot   # refresh the goldens after an intended schema change
 ```
+
+## Changing a GraphQL schema
+
+Every served schema (`backend/services/*/graphql/*.graphql`) is compared with the same
+schema at the last release, and a change that would break a client written against that
+release fails CI. Breaking means removing or renaming a type, field, argument, input field,
+enum value or union member; changing a type (except making an output field non-null or an
+input optional); and adding a required argument or input field, or removing the default
+that let a client omit a non-null one. New enum values, union members and changed defaults
+are reported but do not fail. Any other addition is fine.
+
+```bash
+hack/check-graphql-compat.sh          # against the nearest release tag; needs the tags fetched
+```
+
+**Prefer the additive change.** Add the new field or argument next to the old one and mark
+the old one deprecated, with a reason that names its replacement:
+
+```graphql
+devices(tokens: [String!]): [Device!]! @deprecated(reason: "Use devicesPage(tokens:), which pages.")
+```
+
+A bare `@deprecated` fails the check: it is served as "No longer supported", which tells a
+client it must move without telling it where.
+
+**If the break is intended**, declare it. The failure prints the exact line to add to
+[`backend/tools/docsgql/sdlcompat/breaks.txt`](backend/tools/docsgql/sdlcompat/breaks.txt);
+replace the placeholder with the reason and what a client uses instead:
+
+```text
+v0.24.0 device-management Query.devices field-removed Replaced by devicesPage, which pages.
+```
+
+A declaration applies only against the release it names, so it expires by itself when the
+next release is tagged (the check then reports it for deletion). Before v1.0.0 a declared
+break can ship in any release, and that release's highlights must say it breaks. From v1.0.0
+a break in a covered interface ships only in a major release; see the
+[versioning policy](docs/docs/deployment/versioning-policy.md).
+
+## Changing dcctl, the device contract or the device topics
+
+The same check runs for the other surfaces a deployment is written against. Each compares
+the working tree with the last release and fails on a break that is not declared; each
+declares an intended break in its own file, in the same line format as the GraphQL one
+(`<baseline-tag> <surface> <coordinate> <kind> <reason>`), and the failure prints the exact
+line to add. Declarations expire when the next release is tagged, a declaration that matches
+no change fails, and a break always ships with a `"breaking": true` line in the release
+highlights.
+
+| Surface | Run | Breaking | Declare in |
+| --- | --- | --- | --- |
+| **dcctl** commands and flags | `hack/check-cli-compat.sh` | a removed command, alias or flag; a changed flag type; a changed or dropped shorthand; a flag that becomes required or joins a flag group. A changed default or usage line, or a newly hidden or deprecated command or flag, is reported and does not fail | [`apicompat/clitree/breaks.txt`](backend/tools/docsgql/apicompat/clitree/breaks.txt) |
+| **Device wire contract** (`backend/services/*/contract/*.schema.json`) | `hack/check-schema-compat.sh contract` | a removed property or file; a property that becomes required; a narrowed type or enum; an object that stops accepting unlisted properties; a tightened bound (`multipleOf` and `uniqueItems` included); a new or changed pattern or format. Inside `allOf`/`anyOf`/`oneOf` and `then`/`else` the same rules apply where the entries can be paired; what the check cannot decide fails until declared: a changed `if` or `not`, entries it cannot pair, an external `$ref` that points elsewhere, any validation keyword it does not model. A new enum value or a relaxed requirement is reported | [`apicompat/jsonschema/breaks.txt`](backend/tools/docsgql/apicompat/jsonschema/breaks.txt) |
+| **Device topic layout** | `hack/check-schema-compat.sh topics` | a topic a device could publish or subscribe to that it no longer can (a renamed topic is one removal and one addition) | [`apicompat/topics/breaks.txt`](backend/tools/docsgql/apicompat/topics/breaks.txt) |
+| **Helm values** and the **Instance CRDs** | `hack/check-schema-compat.sh reports` | not covered by the versioning policy: changes are printed, never fail, and belong in the release highlights | nothing to declare |
+
+```text
+v0.24.0 dcctl install:--dev flag-removed Replaced by --profile=dev, which also sets the placement.
+v0.24.0 measurement-payload.schema.json $.entries[].unit property-removed Units now travel in the metric name.
+v0.24.0 topics publish:{instance}/{tenant}/devices/{device}/events topic-removed Events move to .../telemetry.
+```
+
+A dcctl coordinate is the command path with dots (`install.bootstrap`, the root is `dcctl`),
+`:--flag` for a flag and `@name` for an alias. A contract coordinate is the path to the
+element, where `$` is the document, `$.a` a property, `$.a[]` an array's items and
+`$.a{minItems}` a bound, and `$(allOf[0])` / `$(then)` a composition entry. A topic coordinate is `publish:` or `subscribe:` and the topic, with
+`{instance}`, `{tenant}` and `{device}` as placeholders. The command tree and the topics are
+read by building the release's own code, so neither has a file to keep in step by hand.
+
+## Changing the C# SDK or the npm packages
+
+| Surface | Run | Breaking | Declare in |
+| --- | --- | --- | --- |
+| **C# SDK** (`DeviceChain.Sdk`) | `hack/check-csharp-api.sh` | a public symbol the last release shipped that is gone or changed. The build fails on any public symbol not listed in `PublicAPI.Shipped.txt` (the last release, frozen) or `PublicAPI.Unshipped.txt` (this cycle) | a `*REMOVED*` line in [`PublicAPI.Unshipped.txt`](sdks/csharp/src/DeviceChain.Sdk/PublicAPI.Unshipped.txt) |
+| **npm packages** (`client`, `brand`, `dashboards`, `widgets`, `widget-sdk`) | `hack/check-npm-api.sh` | an export, a `package.json` `exports` subpath, or a line of a declaration (a member, an overload, a signature) the last release had. A member added without `?` is reported and does not fail | [`frontend/api/breaks.txt`](frontend/api/breaks.txt) |
+
+**C#.** An addition is one line in `PublicAPI.Unshipped.txt`; the analyzer's code fix writes it
+(`dotnet format analyzers DeviceChain.Sdk.csproj --diagnostics RS0016`, run from
+`sdks/csharp/src/DeviceChain.Sdk`). A removal or a change is the old line, copied from
+`PublicAPI.Shipped.txt` and prefixed `*REMOVED*`, plus the new signature as an ordinary line for a
+change. The check also requires `PublicAPI.Shipped.txt` to be exactly the API the baseline release
+shipped, so editing it by hand to hide a removal fails. Nothing is edited before a release is
+tagged; in the commit after it, `hack/check-csharp-api.sh --promote` moves every Unshipped line into
+Shipped and empties Unshipped (until then the check accepts the pre-release Shipped file and says
+so).
+
+**npm.** `frontend/api/*.api.md` is the public API of each package as the compiler prints it, one
+file per package, committed. An intended change to the API rewrites it with
+`hack/check-npm-api.sh --update` (build the packages first); the diff of that file is the review. The
+same check compares the reports with the baseline release's, rebuilt from that release's sources, and
+fails on a removal unless declared in `frontend/api/breaks.txt` (`<baseline-tag> <package> <id> <kind>
+<reason>`, where the id is as the report names it: `.:Name` for an export, `exports:./subpath` for a
+manifest subpath). It needs `npm ci` in `frontend/` and in `hack/api-report/`, which carries its own
+TypeScript because the compiler the frontend pins has no API to read declarations with.
+
+## Releasing a declared break, and removing a deprecated element
+
+The pull request cannot know which version ships it, so two rules apply at release time.
+
+- **The release must say so.** `hack/check-release-highlights.sh <tag>` (the release workflow's first
+  job) lists every declaration still live against the nearest stable tag before the release
+  (`hack/api-declared-breaks.sh`, every surface above). Before 1.0.0 a live declaration needs
+  `"breaking": true` in `.github/release-highlights.json`. From 1.0.0 it is refused unless the release
+  is a new major.
+- **The deprecation window.** An element may be removed only if it was marked deprecated at least two
+  minor releases before the baseline. `hack/check-deprecation-window.sh` finds the first release in
+  which a removed GraphQL field, argument, input field or enum value was deprecated (from the schemas
+  at each tag, not from a field you fill in) and fails a removal that is outside the window. It is
+  report-only while the baseline is below 1.0.0, and enforced from then on. A removal declared on
+  another surface is printed as `window-unchecked`: the same rule applies and a reviewer checks it.
 
 ## Commit & PR conventions
 

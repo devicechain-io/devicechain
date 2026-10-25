@@ -107,7 +107,7 @@ func init() {
 	rootCmd.AddCommand(destroyCmd)
 }
 
-// destroyEveryInstance is the single command Derek asked for: shut it all down without
+// destroyEveryInstance is the single command that was asked for: shut it all down without
 // having to know what "it all" is, or which provider anything is on.
 //
 // 🔴 IT PRINTS THE PLAN BEFORE IT ASKS. A bulk teardown whose confirmation prompt says

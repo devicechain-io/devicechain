@@ -194,6 +194,11 @@ func (in *InstanceSpec) DeepCopyInto(out *InstanceSpec) {
 		in, out := &in.RestoredAt, &out.RestoredAt
 		*out = (*in).DeepCopy()
 	}
+	if in.MQTTFailClosed != nil {
+		in, out := &in.MQTTFailClosed, &out.MQTTFailClosed
+		*out = new(bool)
+		**out = **in
+	}
 	if in.ObjectStore != nil {
 		in, out := &in.ObjectStore, &out.ObjectStore
 		*out = new(ObjectStoreSpec)

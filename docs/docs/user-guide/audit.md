@@ -8,8 +8,9 @@ import GuideShot from '@site/src/components/GuideShot';
 # Audit
 
 The **Audit** screen is the tenant's journal of changes to its registry: who changed what, and when.
-The platform records an entry for every create, update and delete it makes to the registry; if an
-entry cannot be written, the change is reported as failed. Changes to connectors, dashboards, rules
+The platform records an entry for every create, update and delete it makes to the registry; the entry
+is saved together with the change, so if it cannot be written the change is not made and the call
+reports a failure. Changes to connectors, dashboards, rules
 and updates are not in this journal. Entries are never edited. Use this screen to answer
 questions such as "who deleted that device?" or "what did this script create last night?". It is
 for tenant administrators and anyone reviewing activity in a tenant.

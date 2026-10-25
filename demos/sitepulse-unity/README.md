@@ -241,8 +241,11 @@ badge in the top-left corner always says which:
 Live mode needs the runner's address and the broker's CA certificate. Copy `live.example.json` to
 `%USERPROFILE%\AppData\LocalLow\DeviceChain\Sitepulse\live.json` and set `caPemPath`, or pass
 `-dc-runner <url> -dc-ca <path>` on the command line. The file holds no secrets: the operator
-token comes from the runner at startup and device credentials are looked up then, kept in memory
-only and never logged.
+token comes from the runner at startup and each device gets an access token of its own then (a
+`{device}-sitepulse` credential, created or rotated at every start; the sim's `-cred` credential is
+never touched), kept in memory only and never logged. The platform keeps only a digest of an access
+token and returns it once, to the call that sets it, so a run cannot read one back. A refused create
+or rotate is logged as an error and shows on the readiness board.
 
 The C# SDK is a local package (`sdks/unity/io.devicechain.sdk`). Its DLLs are build outputs: run
 `sdks/unity/stage-sdk.sh`, then remove the five assemblies Unity already ships, as the package's
@@ -497,7 +500,7 @@ decoder round-trips and rejects a truncated file, and the fleet choreography hol
 machines with tracks of the right length, and the geofence encloses the cut inside the
 work site's colour map, and that a device card's record holds only the profiles' measurement
 keys, alarms and command states. The platform tests cover the runner config and `live.json`
-validation, the token refresh schedule, device binding and the credential cross-check over canned
+validation, the token refresh schedule, device binding and the own-credential create/rotate and its checks over canned
 responses, and the log redactor; the recording and replay tests write short synthetic runs through the real recorder and read
 them back, and check the format, the redaction of every recording file, the shot selectors and the replay root's assembly
 references; the acceptance tests cover its flags, its injected faults, the emitted-sample

@@ -86,6 +86,114 @@ because the curve's constants decide it.
 go run . --handshake ./hs.json --devices 500 --emit-interval 200ms
 ```
 
+### Load-testing over MQTT (`dc-loadtest-mqtt`)
+
+The HTTP load test (`cmd/loadtest`) cannot see the loss that matters most on the MQTT path: a
+QoS 1 publish the broker **PUBACKed** is a promise to the device that the event is stored. Rounds
+13 to 15 found that promise broken (a capture-stream leader step-down dropped 150 to 560 PUBACKed
+events at a time, silently), using a throwaway driver. `cmd/loadtest-mqtt` is that driver in the
+repository: it provisions the same fleet with the same credentials as `dc-loadtest`, holds **one
+MQTT session per device** on the platform's MQTT gateway, publishes at a target rate for a set
+duration, waits for the platform to persist, and compares.
+
+```sh
+go build -o dc-loadtest-mqtt ./cmd/loadtest-mqtt
+
+# 3,000 devices, 6,000 events/s, QoS 1 over TLS, 10 minutes
+./dc-loadtest-mqtt --handshake ~/.devicechain/sims/perf/handshake.json \
+    --devices 3000 --rate 6000 --duration 10m --report mqtt.json
+
+# the 60 minute rung: read all ~21M events back, so the loss is exact (~22k queries)
+./dc-loadtest-mqtt --handshake ... --devices 3000 --rate 6000 --duration 60m \
+    --identity full --quiesce-timeout 10m --report mqtt.json
+```
+
+**The verdict.** Exit `0`: every invariant held. Exit `1`: an invariant failed. Exit `2`: the run
+could not be carried out and has no verdict (bad flags, unreachable platform or broker, aborted).
+Exit `3`: **LOSS**, PUBACKed events are missing from the store; the report's `storage.lost` is the
+number and `loss` is `true`. A PUBACK is counted only when the session store saw it
+(`core/test/mqttack`), never because paho completed a publish token: a persistent session that
+reconnects completes the old token with no error and no PUBACK. A publish that ends with no PUBACK
+(timeout, lost connection) is *unconfirmed*: the device would resend it, it may or may not be
+stored, and it is never counted as a loss. A persistent session's re-sent publishes are counted
+(`resent`) too: either kind can hide a loss from a count (see the identity modes). A count still
+*rising* when `--quiesce-timeout` ends is a drain, not a loss: the run fails with the shortfall in
+`storage.undrained` and exit `1`, never `3`.
+
+| Invariant | Holds when |
+|-----------|-----------|
+| `fleet-connected` | every device connected at least once |
+| `transport-as-requested` | the sockets observed are the transport requested: all TLS with `--tls` (the default), all plaintext with `--no-tls` |
+| `load-applied` / `load-offered` | the broker acknowledged at least `--min-accepted` events, and the run both offered and had acknowledged at least `--min-offered-ratio` (0.95) of `rate x duration` |
+| `puback-durability` (QoS 1) | every PUBACKed event is persisted; none persisted beyond what could have been stored; with `--identity count`, nothing was unconfirmed or re-sent (`maskedLossBound` is 0) |
+| `qos0-delivery` (QoS 0) | the missing share of written events is within `--qos0-tolerance` (default 0: QoS 0 promises no delivery, so this is a measurement) |
+| `ingest-identity` | with `--identity full`: every PUBACKed event was stored exactly once, by (device, occurredTime) |
+| `ack-latency` | with `--max-ack-p99`: the PUBACK p99 is within the ceiling |
+
+**Identity modes.** `--identity full` reads every event back and names the exact loss; it costs
+one GraphQL query per 1,000 events. `--identity count` compares the windowed persisted count with
+the PUBACK count in one query, and can be fooled: an unconfirmed publish that *was* stored takes
+the place of a PUBACKed one that was not, and so does a re-sent one stored twice. The report
+states how far (`maskedLossBound`, unconfirmed plus re-sent), and a count with a bound above zero
+reaches **no durability verdict**: `puback-durability` fails as inconclusive (exit `1`), because a
+count that cannot exclude a loss must not pass as having excluded one. Even at a bound of zero a
+count cannot see a duplicate the platform stored on its own offsetting a loss; only `full` can.
+`auto` (the default) reads everything back up to `--identity-max-events` (2,000,000) PUBACKed
+events and counts above that. The release-candidate run uses `full`; raise `--quiesce-timeout`
+if the run builds a backlog.
+
+**What the flags mean.**
+
+- `--devices` and connections are the same number. The broker confines a device credential to its
+  own client id and its own topic, so devices cannot share a connection. `--connect-concurrency`
+  ramps the fleet (and spreads a reconnect storm) instead.
+- `--rate` is the total across the fleet, open loop: every device ticks on its own schedule
+  whatever the broker is doing. A tick that finds its session down, or `--max-inflight` (64)
+  publishes already waiting, is counted (`notSentDisconnected`, `skippedInflight`) and dropped.
+- `--pad-bytes` adds an inert padding member to each event for a larger payload; the decoder
+  ignores it and it adds no stored row.
+- `--clean-session=false` keeps the session, and its unacknowledged publishes, across reconnects.
+  The default is a clean session, as rounds 12 to 15 ran.
+- **TLS is on by default, and the flag is truthful.** `--tls=false` (or `--no-tls`) dials plaintext
+  and `--tls` dials TLS; the harness opens the sockets itself and the report records what it
+  observed (`tlsConnectionsObserved`, `plaintextConnectionsObserved`, negotiated versions). Round
+  12 found that `dcctl bootstrap --no-tls` turned off HTTPS on the ingress and left the broker's
+  TLS on, so two rounds ran with a flag that did not mean what it said. If the broker disagrees with the
+  flag, the connect fails; it is never silently upgraded. The handshake's `mqttTLSInsecure` skips
+  certificate verification (a local bring-up's self-signed gateway); `--tls-insecure=false` forces
+  verification.
+- **Reconnects** back off with jitter (`--backoff-base` 500ms doubling to `--backoff-max` 30s) and
+  are bounded by `--connect-concurrency`, so a broker restart does not bring 3,000 devices back in
+  the same instant. Losses, reconnects and connect failures are in the report.
+- `--report-interval` (10s) logs a progress line and records a slice (sent, PUBACKed, unconfirmed,
+  sessions up, in flight, p99) so a step-down shows as a gap in a 60 minute run.
+
+**With the DETECT oracle.** `dc-loadtest-detection --transport mqtt` carries the background fleet
+*and* the planted probes over MQTT (one session per device, a probe emit accepted only on its
+PUBACK), so the detection and alarm path is judged while the broker is under load. Every harness
+needs a tenant to itself, so the release-candidate run is three handshakes on three tenants:
+`hack/loadtest-rc-run.sh` starts the HTTP rung, the MQTT rung and the detection oracle together
+for one duration (60 minutes by default) and exits non-zero if any of them did.
+
+- **Detection lag is gated, not just the end state.** The oracle reads the edge probes' durable
+  alarms throughout the drive and the drain, and holds every cycle to a deadline: the alarm's
+  `clearedTime` (the occurred-time the harness stamped on the event) must reach the emit time of
+  each falling edge within `--lag-bound` (30s). A pipeline that falls behind and later catches up
+  fails the `detection-lag` invariant, which `alarm-liveness` alone cannot see (it reads an end
+  state the early cycles had already produced). The report carries the per-cycle lag percentiles.
+- **The live detection signal survives long runs.** Its socket is replaced with a fresh access token
+  every five minutes, so a run longer than a token's life no longer goes without it.
+- **A stopped rung exits 143 (SIGINT: 130), never 1,** so the run script's summary tells a rung it
+  stopped from one that failed. Every count read-back is retried with a bounded backoff
+  (5 attempts, 5s doubling to 60s) before a run is reported as having no verdict.
+
+**Scope.** Telemetry only: the broker's command and presence planes are covered by
+`dc-loadtest-command` and `dc-loadtest-presence`. Brokers are dialled over `tcp://` or `ssl://`
+(a websocket address is refused, since the harness could not observe what it connected over).
+The per-event identity ledger lives in memory for the length of the run (`--identity count` still
+keeps it, since `auto` decides after the drive; a 60 minute run at 6,000/s holds about 21M
+entries, a few hundred MB).
+
 ### Location events
 
 `fleetpulse` is the scenario that reports position: a small fleet driving a closed
@@ -394,15 +502,19 @@ only control is the loopback `--bind` default. Widen it on a trusted host or not
 all.
 
 **Device credentials are deliberately not served here**, and the reason is not that
-the caller cannot get them — given the above, it can. It is that they are the one
-thing in reach that does not expire: a device's `ACCESS_TOKEN` bearer is derived from
-the manifest seed and never rotates, so writing it into this body puts a permanent
-secret somewhere an ephemeral one leaves on its own. A client resolves its own
-instead, using the token already in this body: `devicesByExternalId` maps the scene's
-business id to a device token, and `deviceCredentialsByToken` on `{deviceToken}-cred`
-returns the `credentialId`, which for an `ACCESS_TOKEN` credential *is* the bearer.
-That also survives `POST /reset` re-provisioning the fleet, which a snapshot taken at
-page load would not.
+the caller cannot get them — given the above, it can set its own. It is that they are
+the one thing in reach that does not expire: a device's `ACCESS_TOKEN` bearer is derived
+from the manifest seed and never rotates, so writing it into this body puts a permanent
+secret somewhere an ephemeral one leaves on its own. The platform also stores an access
+token only as a digest: reading a credential returns a fingerprint, and the token comes
+back once, in the response to the create or update that sets it. So a client does not
+read the sim's credential; it sets one of its own, using the token already in this body:
+`devicesByExternalId` maps the scene's business id to a device token, and
+`createDeviceCredential` (or `updateDeviceCredential`, to rotate an existing one) on a
+credential named `{deviceToken}-<client>` with a token the client generated returns that
+token in its response. It must not rotate the sim's own `{deviceToken}-cred`, which the
+sim emitter presents. That also survives `POST /reset` re-provisioning the fleet, which
+a snapshot taken at page load would not.
 
 ## Package layout
 
@@ -420,6 +532,11 @@ page load would not.
   `TenantSession.Query`).
 - `sim/emit.go` — builds a `dc-event-sources/processor.JsonEvent` and POSTs it
   to the device-plane ingress.
+- `sim/emit.go` also holds `EventWire`, the seam that carries a scenario's events over a transport
+  other than the HTTP ingress (`Runtime.Wire`), and the MQTT event body (which carries no
+  credential); `sim/wire.go` has the payload builder both transports share.
+- `mqttload/` — the MQTT fleet behind `dc-loadtest-mqtt`: one session per device, PUBACK-true
+  accounting, jittered reconnect, observed TLS. `loadtest/mqtt.go` is its storage verdict.
 - `sim/lifecycle.go` — the `CREATED -> BOOTSTRAPPED -> RUNNING <-> STOPPED`
   FSM and the control HTTP API.
 - `sim/presentation.go` — serves the static page + its `/config.json`.

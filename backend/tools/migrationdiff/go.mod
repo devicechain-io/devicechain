@@ -16,6 +16,7 @@ require (
 	github.com/devicechain-io/dc-update-management v0.0.0-00010101000000-000000000000
 	github.com/devicechain-io/dc-user-management v0.0.0-00010101000000-000000000000
 	github.com/go-gormigrate/gormigrate/v2 v2.1.7
+	github.com/nats-io/nats.go v1.54.0
 	github.com/stretchr/testify v1.12.1
 	gorm.io/driver/postgres v1.6.3
 	gorm.io/gorm v1.31.2
@@ -54,7 +55,7 @@ require (
 	github.com/google/cel-go v0.30.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674 // indirect
-	github.com/graph-gophers/graphql-go v1.10.2 // indirect
+	github.com/graph-gophers/graphql-go v1.10.3 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/pgx/v5 v5.11.0 // indirect
@@ -65,7 +66,6 @@ require (
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
-	github.com/nats-io/nats.go v1.54.0 // indirect
 	github.com/nats-io/nkeys v0.4.16 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
 	github.com/prometheus/client_golang v1.25.0 // indirect
@@ -115,5 +115,3 @@ replace github.com/devicechain-io/dc-outbound-connectors => ../../services/outbo
 replace github.com/devicechain-io/dc-update-management => ../../services/update-management
 
 replace github.com/devicechain-io/dc-user-management => ../../services/user-management
-
-replace github.com/graph-gophers/graphql-go => github.com/devicechain-io/graphql-go v1.10.2-dc.2

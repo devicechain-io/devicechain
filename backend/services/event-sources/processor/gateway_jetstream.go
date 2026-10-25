@@ -755,23 +755,21 @@ func tenantFromSubject(subject string) (string, bool) {
 }
 
 // deviceFromSubject returns the device token a captured events subject addresses,
-// for the shape "{instance}.{tenant}.devices.{token}.events". The broker grant
-// confines a device to its OWN such subject, so this token is broker-authorized
-// rather than merely asserted — which is what makes it worth checking the payload
-// against (see checkDeviceMatchesTransport).
+// for the shape "{instance}.{tenant}.devices.{token}.events", or the child token of a gateway's
+// "{instance}.{tenant}.gateways.{gateway}.devices.{child}.events" (the gateway itself is
+// recovered by assertedByCaptureBroker). The broker grant confines a device to its OWN
+// such subject, so on a device's subject this token is broker-authorized rather than merely
+// asserted; on a gateway's it is the child the AUTHENTICATED GATEWAY names, which the resolver
+// accepts only for a child assigned to that gateway. Either way it is worth checking the
+// payload against (see checkDeviceMatchesTransport).
 //
 // The segment literals come from core/streams, the same declaration the grant, the
 // capture stream's subject filter and the MQTT topic form are all built from, so
 // this parser cannot recognise a shape the stream no longer captures or miss one
 // it does.
 func deviceFromSubject(subject string) string {
-	parts := strings.Split(subject, ".")
-	if len(parts) != messaging.DeviceEventsSegmentCount ||
-		parts[messaging.DeviceEventsDevicesIndex] != messaging.SegmentDevices ||
-		parts[messaging.DeviceEventsEventsIndex] != messaging.SegmentEvents {
-		return ""
-	}
-	return parts[messaging.DeviceEventsTokenIndex]
+	_, device, _ := messaging.ParseDeviceEventsSubject(subject)
+	return device
 }
 
 // String identifies the source in lifecycle logging.

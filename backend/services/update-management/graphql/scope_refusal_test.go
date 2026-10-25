@@ -35,6 +35,15 @@ var scopedRefusals = map[string]string{
 	"addArtifactSignature":   `mutation { addArtifactSignature(artifactToken: "fw", signerToken: "s", signature: "x") { token } }`,
 	"cancelUpdate":           `mutation { cancelUpdate(assignmentToken: "a") { token } }`,
 	"abandonUnknownUpdate":   `mutation { abandonUnknownUpdate(assignmentToken: "a", reason: "r") { token } }`,
+	// A rollout spans a group of devices, most of them outside any one member's scope.
+	"updateRollout":        `{ updateRollout(token: "r") { token } }`,
+	"updateRollouts":       `{ updateRollouts(criteria: {pageNumber: 1, pageSize: 5}) { results { token } } }`,
+	"updateRolloutTargets": `{ updateRolloutTargets(token: "r", criteria: {pageNumber: 1, pageSize: 5}) { results { deviceToken } } }`,
+	"createUpdateRollout":  `mutation { createUpdateRollout(request: {token: "r", artifactToken: "fw", groupToken: "g", maxInFlight: 1}) { token } }`,
+	"startUpdateRollout":   `mutation { startUpdateRollout(token: "r") { token } }`,
+	"pauseUpdateRollout":   `mutation { pauseUpdateRollout(token: "r") { token } }`,
+	"resumeUpdateRollout":  `mutation { resumeUpdateRollout(token: "r") { token } }`,
+	"abortUpdateRollout":   `mutation { abortUpdateRollout(token: "r") { token } }`,
 }
 
 func rootFields() []string {

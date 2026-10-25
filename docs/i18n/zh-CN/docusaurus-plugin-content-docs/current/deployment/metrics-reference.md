@@ -16,7 +16,7 @@ title: 指标参考
 
 前缀：`devicechain_commanddelivery_`。
 
-三条[指令投递告警](./observability.md#command-delivery-alerts)读取 `command_delivery_claims_stranded_total`、`command_delivery_presence_read_errors_total` 和 `batch_refusals_total{bound="reserve"}`。指令投递仪表盘绘制其余指标。其中有几项预期会很繁忙，并不是故障：被拒绝的触发中稳定的 `not_sole` 占比、因扫描与触发竞争而丢失的领取，以及设备离线期间产生的扣留。`command_delivery_responses_refused_total` 预期为零。`command_delivery_stranded_observed_total` 或 `command_response_lost_unsettled_total` 的速率上升，表示指令正在对没有做错任何事的设备超时。（旧名称中重复的 `command_delivery_` 是历史遗留并保持不变，因为重命名序列会破坏所有读取它的仪表盘。）
+三条[指令投递告警](./observability.md#command-delivery-alerts)读取 `command_delivery_claims_stranded_total`、`command_delivery_presence_read_errors_total` 和 `batch_refusals_total{bound="reserve"}`。指令投递仪表盘绘制设备群写入计数器以及主要的领取、扣留和在线状态计数器；其余指标可用于临时查询和您自己的面板。其中有几项预期会很繁忙，并不是故障：被拒绝的触发中稳定的 `not_sole` 占比、因扫描与触发竞争而丢失的领取，以及设备离线期间产生的扣留。`command_delivery_responses_refused_total` 预期为零。`command_delivery_stranded_observed_total` 或 `command_response_lost_unsettled_total` 的速率上升，表示指令正在对没有做错任何事的设备超时。（旧名称中重复的 `command_delivery_` 是历史遗留并保持不变，因为重命名序列会破坏所有读取它的仪表盘。）
 
 | 指标 | 含义 |
 | --- | --- |
@@ -67,6 +67,7 @@ title: 指标参考
 | `raise_alarm_dead_lettered_total` | 在应用它们的所有尝试都失败后写入死信流的触发告警边，使本应被触发或清除的告警可以被看到，而不是只写进日志。 |
 | `resolve_device_disabled_total` | 因设备已[停用](../guides/device-credentials.md#disabling-a-device)而被拒绝的事件。这些事件被丢弃，不进入死信。 |
 | `resolve_event_time_bounded_total` | 因报告的事件时间领先服务器时钟超过配置的容差而被拒绝、并被替换为容差允许的最晚时间的情况。 |
+| `resolve_not_gateway_child_total` | 因[网关](./edge-services.md#gateway-identity)为未分配给它的设备或不存在的设备发布事件，或网关已停用而被拒绝的事件数。每个事件连同载荷记录到 `failed-events` 流（原因 `NotGatewayChild`），不会重试，并通过网关的通知主题告知网关。该指标不带租户或网关标签；日志行（每个网关和设备每分钟最多一条）会指明它们。增长通常意味着某台设备从未分配给其网关，或被分配给了另一个网关。 |
 
 ## 事件处理：检测 {#event-processing-detect}
 
@@ -253,6 +254,20 @@ title: 指标参考
 | `dead_letters_unstorable_total` | 此消费者无法理解的死信消息：没有可解析的租户，或正文不是信封。它们被确认并计数而不重试，因为重投递不会让格式错误的消息变得可解析。 |
 | `dead_letters_unstored_total` | 耗尽所有投递尝试仍未被存储的死信：存储不可达的时间超过了重试持续的时间。它们所描述的失败现在不被记录在任何地方，而这正是此消费者存在要防止的唯一一件事。 |
 
+这些指标统计租户删除协调器，它从每个存储系统中擦除已删除租户的数据，然后释放其令牌。它们都不带租户标签。如何解读请参阅[租户删除](./tenant-deletion.md#blocked-store)。
+
+| 指标 | 含义 |
+| --- | --- |
+| `tenant_purge_in_flight` | 当前未完成的租户删除数量。 |
+| `tenant_purge_oldest_age_seconds` | 最早未完成租户删除自切断时起的时长；无未完成删除时为 0。`TenantPurgeStalled` 监控它。 |
+| `tenant_purge_store_blocked{store,reason}` | 各存储系统阻塞的未完成删除数量，按存储（`rdb`、`tsdb`、`broker`、`kv`、`detect`、`blob`、`other`）和原因（`deferred`：数据仍然存在或仍在写入；`error`：无法向该存储发出请求）区分。`TenantPurgeStoreFailing` 和 `TenantPurgeStoreHolding` 监控它。 |
+| `tenant_purge_store_rows_erased_total{store}` | 各存储为租户删除而擦除的行、对象、消息或键数量：被阻塞存储的进展信号。 |
+| `tenant_purge_store_erase_duration_seconds{store}` | 单次存储擦除调用耗时的直方图。 |
+| `tenant_purge_completed_total` | 已完成的租户删除：所有存储已清空、已稳定并已保留，屏障已解除，令牌已释放。 |
+| `tenant_purge_failures_total` | 协调器未能在一轮中推进某个租户删除的次数。下一轮会重试，因此统计的是尝试次数。`TenantPurgeCoordinatorFailing` 监控它。 |
+| `tenant_purge_duration_seconds` | 从租户删除到其令牌被释放的秒数直方图。包含令牌保留时间。 |
+| `tenant_purge_clean_duration_seconds` | 从租户删除到最后一个存储报告已清空的秒数直方图。不含随后的稳定等待和令牌保留等待：即擦除本身所用时间。 |
+
 ## 更新管理 {#update-management}
 
 前缀：`devicechain_updatemanagement_`。该服务为可选启用；参见[空中（OTA）更新](../concepts/over-the-air-updates.md)。
@@ -267,6 +282,9 @@ title: 指标参考
 | `update_download_grants_total{result}` | 设备申请的下载授权，按结果分类：`granted`，或未授予的原因（`unknown_assignment`、`superseded`、`finished`、`cancel_requested`、`artifact_unavailable`、`not_configured`、`error`）。 |
 | `update_downloads_total{result}` | 制品下载请求，按结果分类：`served`、`aborted`（客户端离开或传输中途无法读取对象），或在发送任何字节前被拒绝的原因（`capability_malformed`、`capability_invalid`、`capability_expired`、`stale`、`gone`、`range_not_satisfiable`、`busy`、`device_disabled`、`error`）。`capability_invalid` 速率上升说明有人在猜测。 |
 | `update_reports_rejected_total{reason}` | update-management 在应用前拒绝的设备消息：`malformed`、`unattributable`、`throttled` 和 `device_disabled`（设备已被停用）。 |
+| `update_rollout_dispatches_total{result}` | 设备组发布对设备作出的决定：`dispatched`（已分配更新，或按其已有的同一制品分配计入），或 `skipped`（被分配规则拒绝：不存在、已停用、不兼容、正忙于另一项更新）。 |
+| `update_rollout_step_failures_total` | 失败并留待下一轮处理的发布步骤。持续上升说明发布没有推进（无法访问 device-management，或数据库出错）。 |
+| `update_rollout_transitions_total{to}` | 服务自行改变状态的发布：`completed`、`paused_failure_threshold` 或 `paused_artifact_not_assignable`（制品被停用或失去要求的签名）。 |
 | `update_reports_total{verdict}` | 更新进度和清单报告，按更新状态机给出的结论分类：`APPLIED`，或未应用的原因（`DUPLICATE`、`STALE_ATTEMPT`、`DIGEST_MISMATCH`、`WRONG_COMPONENT`、`REGRESSION`、`UNCONFIRMED`、`NOT_CANCELLABLE`、`LATE`、`CONFLICT`、`INVALID_ATTEMPT`、`WRONG_KIND`、`UNKNOWN_ASSIGNMENT`）。某一批设备的未应用速率上升说明设备端存在缺陷。 |
 
 ## 所有服务 {#every-service}

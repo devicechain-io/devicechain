@@ -52,7 +52,7 @@ import {
   SyntheticDataSource,
   SYNTHETIC_GENERATORS,
   TIME_RANGE_PRESETS,
-  timeRangeFromSearch,
+  timeRangeLinkFromSearch,
   type CanvasDensity,
   type CanvasSizing,
   type ConcreteSelector,
@@ -446,7 +446,7 @@ export function DashboardWorkspace({
   // page header; it starts at the board's own default span and follows the author changing it.
   // A `?from=&to=` link opens the preview on that fixed window (the picker offers the same); an
   // unusable one is ignored with a note in the bar. Read once, like the rest of the range state.
-  const [rangeLink] = useState(() => timeRangeFromSearch(window.location.search));
+  const [rangeLink] = useState(() => timeRangeLinkFromSearch(window.location.search));
   const [timeRange, timeRangeControls] = useBoardTimeRange(working.timeRange?.defaultSeconds, {
     absolute: rangeLink.absolute,
   });

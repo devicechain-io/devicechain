@@ -55,7 +55,7 @@ func newValidator(t *testing.T) (*Validator, *string) {
 
 	host, portStr, _ := net.SplitHostPort(mint.Listener.Addr().String())
 	port, _ := strconv.Atoi(portStr)
-	client := svcclient.New(config.UserManagementConfiguration{Hostname: host, Port: uint32(port)}, "shh", "device-management", []string{string(auth.DeviceRead)})
+	client := svcclient.New(config.UserManagementConfiguration{Hostname: host, Port: uint32(port), InternalPort: uint32(port)}, "shh", "device-management", []string{string(auth.DeviceRead)})
 	return NewValidator(client, ep.URL), &gotTenant
 }
 
@@ -136,7 +136,7 @@ func TestValidate_OutageErrorsNotEmpty(t *testing.T) {
 
 	host, portStr, _ := net.SplitHostPort(mint.Listener.Addr().String())
 	port, _ := strconv.Atoi(portStr)
-	client := svcclient.New(config.UserManagementConfiguration{Hostname: host, Port: uint32(port)}, "shh", "dm", []string{string(auth.DeviceRead)})
+	client := svcclient.New(config.UserManagementConfiguration{Hostname: host, Port: uint32(port), InternalPort: uint32(port)}, "shh", "dm", []string{string(auth.DeviceRead)})
 	v := NewValidator(client, ep.URL)
 
 	failures, err := v.ValidateDetectionRules(core.WithTenant(context.Background(), "A"), []model.RuleToValidate{rule("x")})

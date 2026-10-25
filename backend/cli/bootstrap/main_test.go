@@ -5,6 +5,7 @@ package bootstrap
 
 import (
 	"context"
+	"flag"
 	"os"
 	"testing"
 
@@ -38,12 +39,30 @@ import (
 //     store that is already ours, which is the SAFE direction for a test that has no opinion
 //     — a default of "the credentials are there" would let a test pass because the guard was
 //     silently disabled. A test that cares calls stubInstanceCredentials.
+//
+// 🔑 PARALLELISM IS RAISED HERE, NOT BY EVERY CALLER'S COMMAND LINE. `go test` runs at most
+// GOMAXPROCS parallel tests at once, which assumes a parallel test is CPU-bound. A good share
+// of this package's are not: each API-server suite starts a kube-apiserver and etcd and then
+// mostly WAITS on them, and while it waits it holds one of those slots, so on four CPUs four
+// of them parked at once leave the cores idle and the rest of the tests queued behind them
+// (measured under -race on four CPUs: 347 s at the default, 282 s at 12). Raising the cap
+// lets the waiting overlap the computing without adding a single test run at once that is
+// not already runnable. A -parallel on the command line still wins.
+const parallelTests = "8"
+
 func TestMain(m *testing.M) {
+	flag.Parse()
+	explicit := false
+	flag.Visit(func(f *flag.Flag) { explicit = explicit || f.Name == "test.parallel" })
+	if f := flag.Lookup("test.parallel"); f != nil && !explicit {
+		_ = f.Value.Set(parallelTests)
+	}
 	namespacePrecheckClient = func(string) (kubernetes.Interface, error) {
 		return fake.NewSimpleClientset(), nil
 	}
 	readInstanceCredentialSecret = func(context.Context, string, string) (bool, error) {
 		return false, nil
 	}
+	go installMemoizedBrokerCredentials()()
 	os.Exit(kubeisolation.Run(m))
 }

@@ -125,7 +125,7 @@ type Result struct {
 	// Attempts is the number of inference rounds performed.
 	Attempts int32
 	// RawCandidate is the model's last (rejected) raw output — surfaced on !OK so the author can
-	// see what the AI tried (Derek's steer: diagnostics + raw candidate).
+	// see what the AI tried (a maintainer steer: diagnostics + raw candidate).
 	RawCandidate string
 	// Warnings are the advisory findings on a draft that compiled (set only when OK).
 	Warnings []Diagnostic

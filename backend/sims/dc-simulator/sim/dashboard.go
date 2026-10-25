@@ -333,7 +333,7 @@ func buildBuildingpulseDashboard(devices []DeviceInstance) (string, error) {
 				Type:   "alarm-table",
 				Layout: baseLayout(0, 12, 5, 3),
 				// Scoped to the building: only this building's thermostats' alarms show
-				// (the per-building context Derek asked for). selectionTarget names the
+				// (the per-building context that was asked for). selectionTarget names the
 				// slot an originator drill re-points — click an alarm's device and the
 				// chart + table follow it. precision rounds the triggering temperature
 				// in the Value column (matching the latest-values table).

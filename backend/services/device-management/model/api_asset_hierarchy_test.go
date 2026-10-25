@@ -41,6 +41,7 @@ func hierarchyTestApi(t *testing.T) (*Api, context.Context) {
 	), "migrate")
 
 	api := NewApi(&rdb.RdbManager{Database: db})
+	api.EnrollmentKeys = testEnrollmentKeys
 	return api, core.WithTenant(context.Background(), "acme")
 }
 

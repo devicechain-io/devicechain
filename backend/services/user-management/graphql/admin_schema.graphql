@@ -326,6 +326,14 @@ type AdminTenant {
     """The tenant's own override of its AI inference burst allowance, in requests. Null means no override."""
     aiInferenceBurst: Int
     """
+    The tenant's own override of its sustained device self-registration rate, in
+    registrations per second. Null means no override: the tier's value applies, then the
+    platform default; it never means unlimited.
+    """
+    provisioningRegistrationsPerSecond: Float
+    """The tenant's own override of its self-registration burst allowance, in registrations. Null means no override."""
+    provisioningBurst: Int
+    """
     The tenant's own override of its overload-protection priority, a whole number from 1 to
     100, higher meaning the tenant's traffic is refused later when the platform is
     overloaded. Null means no override: the tier's value applies, then the platform default.
@@ -668,6 +676,13 @@ input AdminTenantCreateRequest {
     """Override of the AI inference burst allowance, in requests. Must be positive. Omit to inherit."""
     aiInferenceBurst: Int
     """
+    Override of the sustained device self-registration rate, in registrations per second.
+    Must be positive. Omit to inherit the tier's value, then the platform default.
+    """
+    provisioningRegistrationsPerSecond: Float
+    """Override of the self-registration burst allowance, in registrations. Must be positive. Omit to inherit."""
+    provisioningBurst: Int
+    """
     Override of the overload-protection priority: a whole number from 1 to 100, higher
     meaning the tenant's traffic is refused later when the platform is overloaded; 80 to 100
     is never refused. Omit to inherit the tier's value, then the platform default.
@@ -783,6 +798,13 @@ input AdminTenantUpdateRequest {
     aiInferenceRequestsPerMinute: Float
     """Override of the AI inference burst allowance, in requests. Must be positive."""
     aiInferenceBurst: Int
+    """
+    Override of the sustained device self-registration rate, in registrations per second.
+    Must be positive. Omitted leaves it as it is; null removes it so the tenant inherits.
+    """
+    provisioningRegistrationsPerSecond: Float
+    """Override of the self-registration burst allowance, in registrations. Must be positive. Omitted leaves it as it is; null removes it so the tenant inherits."""
+    provisioningBurst: Int
     """Override of the overload-protection priority, a whole number from 1 to 100."""
     # Per-tenant ADR-063 shed-priority override (1–100), a contention preference. Null
     # clears it, reverting to the tier's shedPriority then the platform fail-safe.

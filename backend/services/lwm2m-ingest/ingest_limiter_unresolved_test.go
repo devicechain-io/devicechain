@@ -39,7 +39,7 @@ func TestBuildIngestLimiterCountsUnresolvedAdmissions(t *testing.T) {
 	port, err := strconv.Atoi(portStr)
 	require.NoError(t, err)
 	infra := mscfg.InfrastructureConfiguration{
-		UserManagement: mscfg.UserManagementConfiguration{Hostname: host, Port: uint32(port)},
+		UserManagement: mscfg.UserManagementConfiguration{Hostname: host, Port: uint32(port), InternalPort: uint32(port)},
 	}
 	client := svcclient.New(infra.UserManagement, "shh", "lwm2m-ingest", []string{string(auth.TenantRead)})
 

@@ -39,12 +39,12 @@ import "fmt"
 //
 // A field whose Go type implements decode.Unmarshaler gets an unmarshalerPacker, which
 // hands the RAW value straight here — so graphql-go's StructPacker, and with it the
-// unknown-input-field rejection this repo forked the library to get, never runs on a rule.
+// unknown-input-field rejection added upstream in v1.10.3, never runs on a rule.
 // The library's variable validation does walk list elements and does reject an entry the
-// input type does not define, so the fork's protection is not actually lost; but relying
+// input type does not define, so the library's protection is not actually lost; but relying
 // on that alone would mean a field ADDED to NotificationRuleCreateRequest in the SDL and
 // forgotten here is silently DROPPED — validated as legal, decoded as nothing, written as
-// absent. That is the fork's own defect arriving through the back door, so unknown keys
+// absent. That is the library's old defect arriving through the back door, so unknown keys
 // are refused here too, by this decoder, on both the literal and the variable path.
 type OptionalNotificationRuleList struct {
 	// Set is true only when the field was PRESENT in the request, whether its value was

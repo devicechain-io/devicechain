@@ -44,7 +44,7 @@ const (
 	registryContainerName = "kind-registry"
 	kindNetwork           = "kind"
 	// 🔴 PINNED BY DIGEST, with the tag kept beside it so a reader can see the
-	// version. `registry:2` is not a version — it is a name Docker Hub can
+	// version. `registry:3` is not a version — it is a name Docker Hub can
 	// repoint, so an unpinned tag is a third-party dependency that moves under a
 	// build with no commit here to show for it, pulled anonymously and therefore
 	// subject to that registry's rate limits and outages.
@@ -58,7 +58,7 @@ const (
 	// one is pinned by TestLocalRegistryImageIsDigestPinned, because teaching a
 	// shell tokenizer to read Go would trade a rule that is right for one that is
 	// nearly right. To move the pin: `crane digest registry:<version>`.
-	localRegistryImage = "registry:2.8.3@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373"
+	localRegistryImage = "registry:3.1.2@sha256:01cd312e67026f06f5d89c3e133a4a9adc7cb9eeb9b1194e0b2954dfd770efd2"
 )
 
 // doing prints a white "doing…" progress line (house style).
@@ -249,6 +249,7 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 			deployed.Infrastructure.Nats.Auth.CalloutIssuerSeed,
 			deployed.Infrastructure.Nats.Auth.CalloutXKeySeed,
 			deployed.Infrastructure.Nats.Auth.IdentityPassword,
+			deployed.Infrastructure.Nats.Auth.AreaPasswords,
 			deployed.Infrastructure.Nats.Auth.Password,
 			deployed.Infrastructure.Nats.Auth.SysPassword)
 		if err != nil {
@@ -280,7 +281,7 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 			// broker's next roll; a refused run does not converge on anything.
 			reused, rerr := brokerCredentialsFromRunning(ctx, st,
 				localRecord.IssuerSeed, localRecord.XKeySeed, localRecord.IdentityPassword,
-				localRecord.ServicePassword, localRecord.SysPassword)
+				localRecord.AreaLogins, localRecord.ServicePassword, localRecord.SysPassword)
 			if rerr == nil {
 				creds = reused
 				notes = append(notes, "NATS broker credentials reused from this machine's bootstrap record")
@@ -290,12 +291,16 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 				"the bootstrap record for this instance is unusable (%v); minting fresh broker "+
 					"credentials, which a running broker would be reconfigured with", rerr))
 		}
-		creds, err = natsauth.GenerateCredentials()
+		creds, err = mintBrokerCredentials()
 		if err != nil {
 			return fail("minting NATS auth credentials", err)
 		}
 	}
 	setBrokerCredentialValues(st, creds)
+	// A run without the shared login must give every area one of its own and tell them so.
+	if err := checkSharedLoginHasSuccessors(st); err != nil {
+		return fail("settling the broker logins", err)
+	}
 	// A LIVE instance whose broker does not encrypt its callout yet keeps it that way for this run:
 	// the responder must be rolled onto a build that can open encrypted requests first, and the
 	// pipeline applies the broker before the services. `dcctl upgrade` orders that correctly.
@@ -339,6 +344,7 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 		IssuerSeed:       creds.IssuerSeed,
 		XKeySeed:         creds.XKeySeed,
 		IdentityPassword: creds.IdentityPassword,
+		AreaLogins:       loginPlaintexts(creds),
 		ServicePassword:  creds.ServicePassword,
 		SysPassword:      creds.SysPassword,
 	}); err != nil {
@@ -654,6 +660,12 @@ func buildImages(ctx context.Context, root string, st *State) error {
 		if err := build(moduleDir, fmt.Sprintf("%s/%s", st.ImageRegistry, e.Name())); err != nil {
 			return err
 		}
+	}
+	// The broker administrator the chart's pre-install/pre-upgrade hook runs. It is not a service
+	// (it serves nothing, and the chart gives it no Deployment), so it is not under services/;
+	// the image is named for the module, as the chart pulls it.
+	if err := build(filepath.Join(root, brokerAdminModuleDir), fmt.Sprintf("%s/%s", st.ImageRegistry, brokerAdminImageName)); err != nil {
+		return err
 	}
 	// Through buildOperatorImage rather than inline, so "which module is the
 	// operator, and what is it called in a registry" has ONE answer that install

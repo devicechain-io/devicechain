@@ -38,8 +38,9 @@ const AppAccount = "APP"
 const ServiceUser = "dc_service"
 
 // ServicePublishDeny is the publish DENY the broker holds the shared service login to: the
-// device-events namespace, "{instance}.{tenant}.devices.{device}.events" and the gateway's
-// "$MQTT.msgs." form of it. Only a device writes there, through the grant DevicePermissions
+// device-events namespace, "{instance}.{tenant}.devices.{device}.events", the gateway namespace's
+// "{instance}.{tenant}.gateways.{gateway}.devices.{child}.events", and the MQTT gateway's
+// "$MQTT.msgs." form of each. Only a device writes there, through the grant DevicePermissions
 // mints, so a subject in this namespace is what makes an event broker-asserted. Without the
 // deny, one `nats pub` or MQTT publish as the service login forges an event for any device.
 //
@@ -48,10 +49,12 @@ const ServiceUser = "dc_service"
 // behalf, past every user permission: a stream whose RePublish destination is a device-events
 // subject, or a capture source with a subject transform, lands a forged event in capture with
 // this deny in force (TestServicePublishDenyDoesNotCoverJetStreamAdministration pins both). The
-// services create and reconcile their own streams over that same login, so the JetStream API
-// cannot be denied to it; closing this takes per-service logins that scope the API to the
-// streams each service owns. Until then the deny removes the casual forgery (a plain or MQTT
-// publish), not the deliberate one.
+// services create and reconcile their own streams over their logins, so the JetStream API
+// cannot be denied to them; closing this takes moving stream administration to one dedicated
+// login. The shared login this deny is held on is the one an upgraded instance keeps until it is
+// retired: every area now has a login of its own, held to an allow-list (AreaPermissions), and
+// that list carries this same deny as a backstop. Until stream creation moves, the deny removes
+// the casual forgery (a plain or MQTT publish), not the deliberate one.
 //
 // It is the one namespace the platform never writes: the messaging writer refuses the
 // device-events shape outright. The device-scoped streams a service DOES publish to
@@ -59,12 +62,13 @@ const ServiceUser = "dc_service"
 // device commands) are deliberately not here.
 //
 // The instance and tenant tokens are wildcards, so the deny covers every instance and tenant
-// on the broker: a deny that missed one would be a hole with a name on it. The infrastructure
-// module renders the same two subjects into the broker's static user (a test holds the two in
-// step).
+// on the broker: a deny that missed one would be a hole with a name on it. The deny reaches the
+// broker through the generated permissions document (ServicePermissions and every area's
+// AreaPermissions), which the infrastructure module renders verbatim.
 func ServicePublishDeny() []string {
 	events := messaging.DeviceEventsWildcard("*")
-	return []string{events, messaging.MqttMsgsSubject(events)}
+	gatewayEvents := messaging.GatewayEventsWildcard("*")
+	return []string{events, messaging.MqttMsgsSubject(events), gatewayEvents, messaging.MqttMsgsSubject(gatewayEvents)}
 }
 
 // SystemAccount is the NATS system account — where the broker publishes its own
@@ -146,8 +150,8 @@ const (
 // The "*" in the CONNZ entry also admits "$SYS.REQ.SERVER.PING.CONNZ", the same lists fanned
 // out, which grants nothing a per-server request does not.
 //
-// The infrastructure module renders the same lists into the broker's SYS user as literals
-// (HCL cannot call Go); TestSysPermissionsMatchTheInfrastructureModule holds the two in step.
+// The lists reach the broker through the generated permissions document (SysPermissions, rendered
+// verbatim by the infrastructure module), so there is no second copy to keep in step.
 func SysPublishAllow() []string {
 	return []string{
 		"$SYS.REQ.SERVER.PING",    // the statsz fan-out: which servers the cluster has
@@ -215,12 +219,21 @@ type Credentials struct {
 	// IdentityAccount, held by user-management alone. See WithIdentity.
 	IdentityPassword       string
 	IdentityPasswordBcrypt string
+	// Logins are the per-principal logins (an area, or the broker administrator), keyed by
+	// principal. See WithLogins.
+	Logins map[string]Login
 }
 
 // GenerateCredentials mints a fresh set of broker-auth credentials: an account
 // nkey (the callout issuer) and a random service password (plus its bcrypt hash
 // for the broker config). Uses crypto/rand throughout so nothing is predictable.
 // The plaintext and its hash are minted together here so they can never drift.
+//
+// It does NOT mint the per-principal Logins: each is a bcrypt hash at the production cost, so
+// minting one for every area is ~15 hashes that a caller wanting only the shared set should not
+// pay. A caller that gives the broker per-area logins asks for them with WithLogins, and one that
+// does not leaves Logins empty, which the instance document and the broker render both treat as
+// "no per-area logins" (see bootstrap's areaLoginsEnabledFor).
 func GenerateCredentials() (Credentials, error) {
 	akp, err := nkeys.CreateAccount()
 	if err != nil {
@@ -257,7 +270,11 @@ func GenerateCredentials() (Credentials, error) {
 	if err != nil {
 		return Credentials{}, err
 	}
-	return withXKey.WithIdentity("", "")
+	withIdentity, err := withXKey.WithIdentity("", "")
+	if err != nil {
+		return Credentials{}, err
+	}
+	return withIdentity, nil
 }
 
 // generateSysPassword mints the system-account login and its hash together, the
@@ -328,6 +345,8 @@ type DeployedHashes struct {
 	Service  string
 	Sys      string
 	Identity string
+	// Logins are the hashes of the per-principal logins, keyed by USERNAME (dc-<principal>-g<n>).
+	Logins map[string]string
 }
 
 // reuseOrRehash returns existing when it is a bcrypt hash of plaintext, and a fresh
@@ -356,6 +375,36 @@ func CredentialsFromDeployed(issuerSeed, servicePassword, sysPassword string, de
 	if servicePassword == "" {
 		return Credentials{}, fmt.Errorf("the running instance carries no service password")
 	}
+	creds, err := credentialsFromDeployed(issuerSeed, sysPassword, deployed)
+	if err != nil {
+		return Credentials{}, err
+	}
+	hash, err := reuseOrRehash(servicePassword, deployed.Service)
+	if err != nil {
+		return Credentials{}, fmt.Errorf("hashing the running instance's service password: %w", err)
+	}
+	creds.ServicePassword, creds.ServicePasswordBcrypt = servicePassword, hash
+	return creds, nil
+}
+
+// CredentialsFromDeployedWithoutSharedLogin is CredentialsFromDeployed for an instance whose broker
+// has no shared login: a fresh install, which never had one, or an instance an upgrade has retired it
+// from. The result has no ServicePassword and no ServicePasswordBcrypt, and a broker rendered from it
+// has no ServiceUser.
+//
+// 🔴 IT IS A SEPARATE FUNCTION, NOT A RELAXED CHECK. CredentialsFromDeployed refuses an empty
+// service password because an instance that is still running on the shared login and loses it is
+// locked out; a caller that wants no shared login says so by calling this one, and so owns having
+// established that every service has a login of its own (dcctl's brokerCredentialsFromRunning does).
+func CredentialsFromDeployedWithoutSharedLogin(issuerSeed, sysPassword string, deployed DeployedHashes) (Credentials, error) {
+	return credentialsFromDeployed(issuerSeed, sysPassword, deployed)
+}
+
+// credentialsFromDeployed is the part of the rebuild that does not involve the shared login.
+func credentialsFromDeployed(issuerSeed, sysPassword string, deployed DeployedHashes) (Credentials, error) {
+	if issuerSeed == "" {
+		return Credentials{}, fmt.Errorf("the running instance carries no callout issuer seed")
+	}
 	akp, err := nkeys.FromSeed([]byte(issuerSeed))
 	if err != nil {
 		return Credentials{}, fmt.Errorf("loading the running instance's issuer seed: %w", err)
@@ -363,10 +412,6 @@ func CredentialsFromDeployed(issuerSeed, servicePassword, sysPassword string, de
 	pub, err := akp.PublicKey()
 	if err != nil {
 		return Credentials{}, fmt.Errorf("deriving the issuer public key from the running instance's seed: %w", err)
-	}
-	hash, err := reuseOrRehash(servicePassword, deployed.Service)
-	if err != nil {
-		return Credentials{}, fmt.Errorf("hashing the running instance's service password: %w", err)
 	}
 	sysPw, sysHash := sysPassword, ""
 	if sysPw == "" {
@@ -381,12 +426,10 @@ func CredentialsFromDeployed(issuerSeed, servicePassword, sysPassword string, de
 		}
 	}
 	return Credentials{
-		IssuerPublic:          pub,
-		IssuerSeed:            issuerSeed,
-		ServicePassword:       servicePassword,
-		ServicePasswordBcrypt: hash,
-		SysPassword:           sysPw,
-		SysPasswordBcrypt:     sysHash,
+		IssuerPublic:      pub,
+		IssuerSeed:        issuerSeed,
+		SysPassword:       sysPw,
+		SysPasswordBcrypt: sysHash,
 	}, nil
 }
 
@@ -456,9 +499,26 @@ func DevicePermissions(instanceId, tenant, deviceToken string) (jwt.Permissions,
 	reports := messaging.DeviceScopedSubject(instanceId, tenant, messaging.SubjectDeviceReports, deviceToken)
 	desired := messaging.DeviceScopedSubject(instanceId, tenant, messaging.SubjectDeviceDesired, deviceToken)
 
+	// 🔑 THE GATEWAY NAMESPACE, GRANTED TO EVERY DEVICE AND CONFINED TO ITS OWN TOKEN. A device
+	// that fronts other devices publishes for each of them under
+	// "{i}.{t}.gateways.{this device}.devices.*.{leaf}" and hears the platform on its own
+	// "…notices" and each child's "…commands"/"…desired". The wildcard stands in only for the
+	// CHILD token, never for the gateway token, so the grant is constant-size however many
+	// children a gateway has and a device can never publish into another gateway's namespace
+	// (the broker refuses it). WHO may be spoken for is not decided here at all: it is the
+	// child's gateway_id, checked by the resolver, so assigning the first child needs no
+	// reconnect, and a device that is nobody's gateway holds a grant that authorizes nothing.
+	// The downlink and response/report leaves are granted from v1 although only events are
+	// captured today, so routing them later changes no grant.
 	var p jwt.Permissions
-	p.Pub.Allow.Add(events, responses, reports)
-	p.Sub.Allow.Add(commands, desired, MqttDeliverySubject)
+	p.Pub.Allow.Add(events, responses, reports,
+		messaging.GatewayLeafWildcard(instanceId, tenant, deviceToken, messaging.SegmentEvents),
+		messaging.GatewayLeafWildcard(instanceId, tenant, deviceToken, messaging.SegmentResponses),
+		messaging.GatewayLeafWildcard(instanceId, tenant, deviceToken, messaging.SegmentReports))
+	p.Sub.Allow.Add(commands, desired, MqttDeliverySubject,
+		messaging.GatewayLeafWildcard(instanceId, tenant, deviceToken, messaging.SegmentCommands),
+		messaging.GatewayLeafWildcard(instanceId, tenant, deviceToken, messaging.SegmentDesired),
+		messaging.GatewayNoticesSubject(instanceId, tenant, deviceToken))
 	return p, nil
 }
 

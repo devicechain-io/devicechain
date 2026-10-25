@@ -156,8 +156,8 @@ func TestStatusesFilterBindsThroughAVariable(t *testing.T) {
 }
 
 // TestUnknownCriteriaFieldIsRejected is the counterweight: the filter above is
-// only trustworthy while a MISNAMED field still fails loudly. This repo carries a
-// patched fork of graphql-go for exactly this reason — upstream discards
+// only trustworthy while a MISNAMED field still fails loudly. Upstream graphql-go
+// fixed this in v1.10.3 (graph-gophers/graphql-go#765); before that it discarded
 // input-object entries the schema does not define when they arrive through a
 // variable, which turns a typo into a successful call that quietly ignores the
 // filter.

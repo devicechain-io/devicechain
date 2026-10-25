@@ -103,6 +103,7 @@ const sidebars: SidebarsConfig = {
             'concepts/tenant-tiers',
             'concepts/single-sign-on',
             'concepts/system-settings',
+            'concepts/security-model',
             'concepts/object-storage',
             'concepts/mcp',
           ],
@@ -138,6 +139,7 @@ const sidebars: SidebarsConfig = {
         'user-guide/viewing-dashboards-in-dash',
         'user-guide/notification-policies',
         'user-guide/members-roles-and-customer-users',
+        'user-guide/service-accounts',
       ],
     },
     {

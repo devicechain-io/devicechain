@@ -136,6 +136,18 @@ func (r *TenantGovernanceResolver) AiInferenceBurst() (*int32, error) {
 	return r.burst("aiInferenceBurst", governance.AIInference)
 }
 
+// ProvisioningRegistrationsPerSecond / ProvisioningBurst resolve the tenant's
+// self-registration ceiling down the same cascade as every rate — override, else tier,
+// else null. Null means neither declares one and the reader (device-management) applies
+// its platform default, which is itself a real limit, never unlimited.
+func (r *TenantGovernanceResolver) ProvisioningRegistrationsPerSecond() *float64 {
+	return r.rate(governance.Provisioning)
+}
+
+func (r *TenantGovernanceResolver) ProvisioningBurst() (*int32, error) {
+	return r.burst("provisioningBurst", governance.Provisioning)
+}
+
 // ShedPriority resolves the tenant's ADR-063 shed priority (1–100) down the same
 // cascade the ceilings use — override, else tier, else null. Null means "no priority
 // resolved from the tenant or its tier"; the reader (event-sources) substitutes the

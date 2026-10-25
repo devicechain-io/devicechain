@@ -73,6 +73,10 @@ ROOT="$(cd "$HACK/.." && pwd)"
 # profile renders run one after another. With the parse done once and those suites
 # and the render-only tests run in parallel, local runs on 4 CPUs went from
 # 672-737 s to 390-452 s (releasewiring_test.go and gomemlimit_test.go say how).
+# It had grown back to 585 s on four CPUs (993 s on CI) once the broker logins landed: the
+# cost was production-cost bcrypt hashes minted once per test instead of once per binary, and
+# parallel API-server suites holding a -parallel slot while they waited on their server. The
+# fixture (credentials_fixture_test.go) and the parallelism (main_test.go) took it to 278 s.
 # Measure it again before adding slow tests there. A real hang still fails, after
 # 20 minutes.
 RACE_TEST=(go test -race -count=1 -timeout 20m)

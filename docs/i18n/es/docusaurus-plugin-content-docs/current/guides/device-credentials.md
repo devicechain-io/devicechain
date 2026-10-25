@@ -15,8 +15,8 @@ Disponible. Gestionas las credenciales desde la pestaña **Credenciales** de la 
 
 | Tipo | El dispositivo presenta | Secreto almacenado |
 | --- | --- | --- |
-| `ACCESS_TOKEN` | un token portador (bearer token) (el id de la credencial) | ninguno — poseer el id es la prueba |
-| `MQTT_BASIC` | un usuario (el id de la credencial) + contraseña | la contraseña |
+| `ACCESS_TOKEN` | un token portador (bearer token) (el id de la credencial) | un resumen irreversible con clave del token |
+| `MQTT_BASIC` | un usuario (el id de la credencial) + contraseña | un resumen irreversible con clave de la contraseña |
 
 :::note Las credenciales X.509 no se aceptan
 El tipo `X509_CERTIFICATE` no es compatible hasta que se publique la verificación de certificados. Crear o actualizar una credencial de ese tipo se rechaza (`UNSUPPORTED`), y una credencial de ese tipo que ya exista deja de autenticar. Usa `ACCESS_TOKEN` o `MQTT_BASIC`.
@@ -24,11 +24,11 @@ El tipo `X509_CERTIFICATE` no es compatible hasta que se publique la verificaci�
 
 ## Leer una credencial requiere `device:write` {#reading-a-credential}
 
-Un secreto, cuando el tipo lo tiene, es de **solo escritura**. Solo `MQTT_BASIC` tiene uno: su contraseña. Envías la contraseña al registrar la credencial, y nunca se devuelve en una lectura: la API devuelve `null` para ella, y la plataforma conserva solo un resumen irreversible con clave, nunca la contraseña en sí. La consola muestra la contraseña **una sola vez**, justo después de establecerla, y nunca más. Consulta [Contraseñas que se muestran una vez y su rotación](#show-once).
+Un secreto es de **solo escritura**, y ambos tipos lo tienen: la contraseña de una credencial `MQTT_BASIC` y el token de una credencial `ACCESS_TOKEN`. Lo envías al registrar la credencial, y la plataforma conserva solo un resumen irreversible con clave de él, nunca el secreto en sí. La API devuelve `null` para `credentialValue` en toda lectura. Un token de acceso es el `credentialId`, y la API lo devuelve exactamente **una vez**: en la respuesta a la llamada que lo establece (registrar la credencial, una actualización que lo rota o un reemplazo de dispositivo que lo genera). Toda lectura posterior devuelve en su lugar una huella, un valor que empieza por `dctk1$`, que identifica la credencial y no puede presentarse como el token. La consola muestra una contraseña o un token **una sola vez**, justo después de establecerlos, y nunca más. Consulta [Contraseñas y tokens que se muestran una vez, y su rotación](#show-once).
 
-Eso protege la contraseña de `MQTT_BASIC`, y nada más. `ACCESS_TOKEN` no almacena ningún secreto que ocultar, porque el **`credentialId` es en sí mismo el portador**. `credentialId` es un campo que se lee sin restricciones. Así que, sea cual sea el tipo, leer las credenciales de un dispositivo te da lo necesario para autenticarte como ese dispositivo.
+Así que, sea cual sea el tipo, leer las credenciales de un dispositivo no te da lo necesario para autenticarte como ese dispositivo. Aun así puedes encontrar una credencial por su token: `deviceCredentials` acepta el token, o la huella, como `credentialId` en sus criterios, y la plataforma calcula el resumen del token que escribes antes de buscar coincidencias.
 
-Por eso, toda consulta que devuelve una credencial requiere **`device:write`**, no `device:read`. Un usuario de solo lectura no puede listar las credenciales de un dispositivo, y por eso la consola no le muestra la pestaña **Credenciales**. El requisito no le quita nada a quien tiene `device:write`: ya puede registrar una credencial para cualquier dispositivo del inquilino y suplantarlo. Lo que evita es que esa capacidad llegue a la base de solo lectura que recibe todo miembro habilitado del inquilino.
+Toda consulta que devuelve una credencial sigue requiriendo **`device:write`**, no `device:read`, porque el listado nombra los usuarios, las caducidades y el estado de un dispositivo. Un usuario de solo lectura no puede listar las credenciales de un dispositivo, y por eso la consola no le muestra la pestaña **Credenciales**. El requisito no le quita nada a quien tiene `device:write`, que ya puede registrar una credencial para cualquier dispositivo del inquilino. Lo que hace es mantener el listado fuera de la base de solo lectura que recibe todo miembro habilitado del inquilino.
 
 ## Cómo presenta un dispositivo una credencial
 
@@ -133,21 +133,22 @@ La métrica `devicechain_devicemanagement_credential_checks_total` cuenta cada v
 1. Abre la página de detalle del dispositivo y selecciona la pestaña **Credenciales**.
 2. Elige el **tipo** de credencial y completa los campos de ese tipo: genera o pega un token de acceso, o introduce un usuario y una contraseña para MQTT-basic. Para la contraseña, escribe una o haz clic en **Generar contraseña segura**.
 3. Haz clic en **Agregar credencial**.
-4. Para `MQTT_BASIC`, aparece un aviso con la contraseña y un botón para copiarla. **Cópiala ahora**: es la única vez que se muestra. Haz clic en **Listo** cuando la tengas. Salir de la página, recargarla o abrir otro dispositivo también borra el aviso.
+4. Aparece un aviso con la contraseña (en `MQTT_BASIC`) o el token de acceso (en `ACCESS_TOKEN`) y un botón para copiarlo. **Cópialo ahora**: es la única vez que se muestra. Haz clic en **Listo** cuando la tengas. Salir de la página, recargarla o abrir otro dispositivo también borra el aviso.
 
 Para eliminar una credencial, usa su fila. El dispositivo ya no podrá autenticarse con ella.
 
-## Contraseñas que se muestran una vez y su rotación {#show-once}
+## Contraseñas y tokens que se muestran una vez, y su rotación {#show-once}
 
-Como la plataforma conserva solo un resumen de una contraseña `MQTT_BASIC`, nadie puede volver a leerla, tampoco un administrador. La consola se comporta en consecuencia:
+Como la plataforma conserva solo un resumen de una contraseña `MQTT_BASIC` y del token de un `ACCESS_TOKEN`, nadie puede volver a leer ninguno de los dos, tampoco un administrador. La consola se comporta en consecuencia:
 
-- **La contraseña se muestra una vez**, en un aviso con un botón de copiar, al agregar la credencial o al establecer una contraseña nueva. Después, la fila de la credencial solo indica que hay una contraseña establecida. Ninguna pantalla muestra una contraseña almacenada ni su resumen, y ningún formulario se rellena con una.
-- **Una contraseña perdida no se puede recuperar.** Establece una nueva.
+- **La contraseña o el token se muestra una vez**, en un aviso con un botón de copiar, al agregar la credencial o al establecer uno nuevo. Después, la fila de la credencial solo indica que hay una contraseña o un token de acceso establecido. Ninguna pantalla muestra un secreto almacenado ni su resumen, y ningún formulario se rellena con uno.
+- **Una contraseña o un token perdido no se puede recuperar.** Establece uno nuevo.
 - **Para rotar una contraseña**, haz clic en **Establecer nueva contraseña** en la fila de la credencial, escribe una o haz clic en **Generar contraseña segura**, y haz clic en **Guardar contraseña**. La contraseña nueva se muestra una vez, como se indicó. La contraseña actual del dispositivo deja de abrir conexiones nuevas en cuanto guardas; en los eventos deja de funcionar como una revocación, en cuestión de minutos de forma predeterminada (consulta [Cuánto tarda en aplicarse una revocación](#revocation-timing)). Ten lista la nueva para cargarla en el dispositivo. Los demás campos de la credencial no cambian.
+- **Para rotar un token de acceso**, haz clic en **Establecer nuevo token** en la fila de la credencial y confirma. La consola genera un token nuevo y lo muestra una vez, como se indicó. El token actual del dispositivo deja de abrir conexiones nuevas en cuanto confirmas, y en los eventos deja de funcionar como una revocación. Por GraphQL, llama a `updateDeviceCredential` solo con `credentialId`.
 - **Las contraseñas generadas** son 24 bytes aleatorios de la fuente aleatoria segura del navegador, escritos en base64 seguro para URL (32 caracteres).
 - **Longitud.** La plataforma rechaza una contraseña `MQTT_BASIC` de menos de 16 bytes. La consola avisa mientras escribes, contando bytes UTF-8 y no caracteres (un carácter fuera de ASCII ocupa de dos a cuatro), y aun así envía lo escrito, de modo que si la plataforma discrepa verás su propio rechazo.
 
-Las credenciales `ACCESS_TOKEN` son distintas: el token es el id de la credencial, un identificador legible por diseño, y sigue listado con un botón de copiar.
+El **usuario** de `MQTT_BASIC` es un identificador, no un secreto, y sigue listado con un botón de copiar.
 
 ## Registrar una credencial (GraphQL)
 
@@ -162,5 +163,7 @@ mutation {
   }) { id token credentialType credentialId enabled }
 }
 ```
+
+En un `ACCESS_TOKEN`, el `credentialId` de la respuesta es el token que enviaste, y es la última vez que una respuesta lo contiene. Un token tiene como máximo 256 bytes y se almacena solo como un resumen con clave, así que se comprueba exactamente como lo envías, byte a byte. Para sustituir un token, llama a `updateDeviceCredential` solo con `credentialId`: el token anterior deja de funcionar al instante y la respuesta trae el nuevo. Cambiar una credencial existente a `ACCESS_TOKEN`, o desde `ACCESS_TOKEN`, exige `credentialId` en la misma solicitud (si no, `INVALID_VALUE`), porque el id almacenado significa un token en un tipo y un usuario en el otro.
 
 Para `MQTT_BASIC`, pasa también `credentialValue: "<password>"` (solo escritura). La contraseña se comprueba exactamente como la envías, espacios iniciales o finales incluidos, así que debe coincidir byte a byte con lo que presenta el dispositivo; un valor vacío no guarda ninguna contraseña. La contraseña debe tener al menos 16 bytes (y como máximo 4096); una más corta se rechaza con `extensions.code` `INVALID_VALUE`, tanto al registrar una credencial como al cambiar su contraseña. Una contraseña establecida antes de existir este mínimo sigue funcionando hasta que la cambies. Cambiar una credencial existente a `MQTT_BASIC` exige `credentialValue` en la misma solicitud. Para cambiarla después, llama a `updateDeviceCredential` solo con `credentialValue`: los demás campos no cambian y la contraseña anterior deja de funcionar al instante. Ninguna de las dos llamadas devuelve la contraseña. Tanto registrar una credencial como listar las credenciales de un dispositivo requieren la autoridad `device:write`; consulta [Leer una credencial requiere `device:write`](#reading-a-credential).

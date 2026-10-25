@@ -198,7 +198,8 @@ curl -s -X POST http://localhost/api/device-management/graphql \
 
 Pick your own `credentialId`: any unguessable string. For an `ACCESS_TOKEN` credential, the
 `credentialId` **is** the secret the device presents, so treat it like a password rather than a
-name.
+name. The platform stores only a one-way digest of it, so keep your own copy: the response to this
+request is the last time it can be read.
 
 Refresh the console's **Devices** list. `sensor-001` is there, with no data yet.
 

@@ -1377,3 +1377,21 @@ got="$(purge_threshold 3600)"
 [ "$got" = "7200" ] ||
   fail "tokenHoldSeconds: 3600 rendered TenantPurgeStalled's threshold as '${got}', not 7200"
 note "an explicit 0 renders the default threshold, and a set hold is still doubled"
+
+# TenantPurgeCoordinatorFailing's window is three passes (never under 10m) and its `for`
+# two windows (never under 30m), from the same service setting the coordinator ticks on.
+# 0 means the default and a negative means disabled, and both must render the default
+# rather than a zero-length window, which promtool would reject or which would never fire.
+say "rendering TenantPurgeCoordinatorFailing from the pass interval"
+purge_fail_window() { # <intervalSeconds> -> "<window> <for>", or nothing
+  helm template dc "$chart" --set "instance.config.infrastructure.secrets.rootKey=$root_key" \
+    --set "functionalAreas.user-management.config.tenantPurge.intervalSeconds=$1" \
+    -s templates/prometheusrule-tenant-purge.yaml |
+    awk '/alert: TenantPurgeCoordinatorFailing/{f=1} f&&/expr:/{match($0,/\[[0-9]+s\]/); w=substr($0,RSTART+1,RLENGTH-3)} f&&/for:/{sub(/.*for: /,""); sub(/s$/,""); print w" "$0; f=0}'
+}
+for want in "0:600 1800" "-1:600 1800" "60:600 1800" "600:1800 3600"; do
+  got="$(purge_fail_window "${want%%:*}")"
+  [ "$got" = "${want#*:}" ] ||
+    fail "intervalSeconds: ${want%%:*} rendered TenantPurgeCoordinatorFailing's window/for as '${got}', not '${want#*:}'"
+done
+note "the coordinator-failure window follows the pass interval, and 0 or disabled render the default"

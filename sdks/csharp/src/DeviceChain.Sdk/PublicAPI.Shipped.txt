@@ -1,0 +1,344 @@
+#nullable enable
+DeviceChain.Sdk.Area
+DeviceChain.Sdk.Area.CommandDelivery = 4 -> DeviceChain.Sdk.Area
+DeviceChain.Sdk.Area.DashboardManagement = 5 -> DeviceChain.Sdk.Area
+DeviceChain.Sdk.Area.DeviceManagement = 1 -> DeviceChain.Sdk.Area
+DeviceChain.Sdk.Area.DeviceState = 3 -> DeviceChain.Sdk.Area
+DeviceChain.Sdk.Area.EventManagement = 2 -> DeviceChain.Sdk.Area
+DeviceChain.Sdk.Area.UserManagement = 0 -> DeviceChain.Sdk.Area
+DeviceChain.Sdk.Areas
+DeviceChain.Sdk.Auth.AuthSession
+DeviceChain.Sdk.Auth.AuthSession.AccessToken.get -> string?
+DeviceChain.Sdk.Auth.AuthSession.AuthSession(DeviceChain.Sdk.GraphQlClient! gql) -> void
+DeviceChain.Sdk.Auth.AuthSession.GetAccessTokenAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<string?>
+DeviceChain.Sdk.Auth.AuthSession.LoginAsync(string! email, string! password, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<DeviceChain.Sdk.Auth.IdentityAuth!>!
+DeviceChain.Sdk.Auth.AuthSession.Memberships.get -> System.Collections.Generic.IReadOnlyList<DeviceChain.Sdk.Auth.Membership!>!
+DeviceChain.Sdk.Auth.AuthSession.RefreshAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<DeviceChain.Sdk.Auth.AuthToken!>!
+DeviceChain.Sdk.Auth.AuthSession.SelectTenantAsync(string! tenant, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<DeviceChain.Sdk.Auth.AuthToken!>!
+DeviceChain.Sdk.Auth.AuthSession.Superuser.get -> bool
+DeviceChain.Sdk.Auth.AuthToken
+DeviceChain.Sdk.Auth.AuthToken.AccessToken.get -> string!
+DeviceChain.Sdk.Auth.AuthToken.AccessToken.set -> void
+DeviceChain.Sdk.Auth.AuthToken.AuthToken() -> void
+DeviceChain.Sdk.Auth.AuthToken.ExpiresAt.get -> string!
+DeviceChain.Sdk.Auth.AuthToken.ExpiresAt.set -> void
+DeviceChain.Sdk.Auth.AuthToken.RefreshToken.get -> string!
+DeviceChain.Sdk.Auth.AuthToken.RefreshToken.set -> void
+DeviceChain.Sdk.Auth.IdentityAuth
+DeviceChain.Sdk.Auth.IdentityAuth.ExpiresAt.get -> string!
+DeviceChain.Sdk.Auth.IdentityAuth.ExpiresAt.set -> void
+DeviceChain.Sdk.Auth.IdentityAuth.IdentityAuth() -> void
+DeviceChain.Sdk.Auth.IdentityAuth.IdentityToken.get -> string!
+DeviceChain.Sdk.Auth.IdentityAuth.IdentityToken.set -> void
+DeviceChain.Sdk.Auth.IdentityAuth.Memberships.get -> System.Collections.Generic.List<DeviceChain.Sdk.Auth.Membership!>!
+DeviceChain.Sdk.Auth.IdentityAuth.Memberships.set -> void
+DeviceChain.Sdk.Auth.IdentityAuth.Superuser.get -> bool
+DeviceChain.Sdk.Auth.IdentityAuth.Superuser.set -> void
+DeviceChain.Sdk.Auth.Membership
+DeviceChain.Sdk.Auth.Membership.Membership() -> void
+DeviceChain.Sdk.Auth.Membership.Roles.get -> System.Collections.Generic.List<string!>!
+DeviceChain.Sdk.Auth.Membership.Roles.set -> void
+DeviceChain.Sdk.Auth.Membership.Tenant.get -> string!
+DeviceChain.Sdk.Auth.Membership.Tenant.set -> void
+DeviceChain.Sdk.DeviceChainClient
+DeviceChain.Sdk.DeviceChainClient.Auth.get -> DeviceChain.Sdk.Auth.AuthSession!
+DeviceChain.Sdk.DeviceChainClient.DeviceChainClient(System.Uri! origin, DeviceChain.Sdk.Transport.IHttpTransport! httpTransport, DeviceChain.Sdk.Transport.IWebSocketFactory! webSocketFactory, DeviceChain.Sdk.Subscriptions.IReadLoopDriver? readLoopDriver = null) -> void
+DeviceChain.Sdk.DeviceChainClient.DeviceChainClient(System.Uri! origin, System.Net.Http.HttpClient? httpClient = null) -> void
+DeviceChain.Sdk.DeviceChainClient.DevicePublisher(System.Uri! ingressOrigin, string! instanceId, string! tenant) -> DeviceChain.Sdk.Ingest.DeviceEventPublisher!
+DeviceChain.Sdk.DeviceChainClient.DisposeAsync() -> System.Threading.Tasks.ValueTask
+DeviceChain.Sdk.DeviceChainClient.Gql.get -> DeviceChain.Sdk.GraphQlClient!
+DeviceChain.Sdk.DeviceChainClient.LoginAsync(string! email, string! password, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<DeviceChain.Sdk.Auth.IdentityAuth!>!
+DeviceChain.Sdk.DeviceChainClient.Origin.get -> System.Uri!
+DeviceChain.Sdk.DeviceChainClient.SelectTenantAsync(string! tenant, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<DeviceChain.Sdk.Auth.AuthToken!>!
+DeviceChain.Sdk.DeviceChainClient.Subscriptions(DeviceChain.Sdk.Area area) -> DeviceChain.Sdk.Subscriptions.GraphQlWsClient!
+DeviceChain.Sdk.DeviceChainClient.WebSocketUri(DeviceChain.Sdk.Area area) -> System.Uri!
+DeviceChain.Sdk.GraphQlClient
+DeviceChain.Sdk.GraphQlClient.GraphQlClient(DeviceChain.Sdk.Transport.IHttpTransport! transport, System.Uri! origin, DeviceChain.Sdk.TokenProvider? tokenProvider = null) -> void
+DeviceChain.Sdk.GraphQlClient.GraphQlClient(System.Net.Http.HttpClient! http, System.Uri! origin, DeviceChain.Sdk.TokenProvider? tokenProvider = null) -> void
+DeviceChain.Sdk.GraphQlClient.SendAsync<TVars, TData>(DeviceChain.Sdk.Area area, string! query, TVars variables, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TVars>! variablesInfo, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TData>! dataInfo, DeviceChain.Sdk.RequestOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<TData>!
+DeviceChain.Sdk.GraphQlError
+DeviceChain.Sdk.GraphQlError.GraphQlError() -> void
+DeviceChain.Sdk.GraphQlError.Message.get -> string!
+DeviceChain.Sdk.GraphQlError.Message.set -> void
+DeviceChain.Sdk.GraphQlRequestException
+DeviceChain.Sdk.GraphQlRequestException.Errors.get -> System.Collections.Generic.IReadOnlyList<DeviceChain.Sdk.GraphQlError!>!
+DeviceChain.Sdk.GraphQlRequestException.GraphQlRequestException(string! message, int status = 0, System.Collections.Generic.IReadOnlyList<DeviceChain.Sdk.GraphQlError!>? errors = null, System.TimeSpan? retryAfter = null) -> void
+DeviceChain.Sdk.GraphQlRequestException.RetryAfter.get -> System.TimeSpan?
+DeviceChain.Sdk.GraphQlRequestException.Status.get -> int
+DeviceChain.Sdk.Ingest.DeviceEventPublisher
+DeviceChain.Sdk.Ingest.DeviceEventPublisher.DeviceEventPublisher(DeviceChain.Sdk.Ingest.IDeviceEventCarrier! carrier) -> void
+DeviceChain.Sdk.Ingest.DeviceEventPublisher.DeviceEventPublisher(DeviceChain.Sdk.Transport.IHttpTransport! transport, System.Uri! ingressOrigin, string! instanceId, string! tenant) -> void
+DeviceChain.Sdk.Ingest.DeviceEventPublisher.DeviceEventPublisher(System.Net.Http.HttpClient! http, System.Uri! ingressOrigin, string! instanceId, string! tenant) -> void
+DeviceChain.Sdk.Ingest.DeviceEventPublisher.EmitLocationAsync(string! deviceToken, string! credentialId, DeviceChain.Sdk.Ingest.LocationFix fix, System.DateTimeOffset? occurredTime = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+DeviceChain.Sdk.Ingest.DeviceEventPublisher.EmitMeasurementsAsync(string! deviceToken, string! credentialId, System.Collections.Generic.IReadOnlyDictionary<string!, double>! metrics, System.DateTimeOffset? occurredTime = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+DeviceChain.Sdk.Ingest.HttpDeviceEventCarrier
+DeviceChain.Sdk.Ingest.HttpDeviceEventCarrier.CarriesBodyCredential.get -> bool
+DeviceChain.Sdk.Ingest.HttpDeviceEventCarrier.HttpDeviceEventCarrier(DeviceChain.Sdk.Transport.IHttpTransport! transport, System.Uri! ingressOrigin, string! instanceId, string! tenant) -> void
+DeviceChain.Sdk.Ingest.HttpDeviceEventCarrier.SendAsync(string! deviceToken, byte[]! jsonEvent, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+DeviceChain.Sdk.Ingest.IDeviceEventCarrier
+DeviceChain.Sdk.Ingest.IDeviceEventCarrier.CarriesBodyCredential.get -> bool
+DeviceChain.Sdk.Ingest.IDeviceEventCarrier.SendAsync(string! deviceToken, byte[]! jsonEvent, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+DeviceChain.Sdk.Ingest.LocationFix
+DeviceChain.Sdk.Ingest.LocationFix.Accuracy.get -> double?
+DeviceChain.Sdk.Ingest.LocationFix.Accuracy.init -> void
+DeviceChain.Sdk.Ingest.LocationFix.Elevation.get -> double?
+DeviceChain.Sdk.Ingest.LocationFix.Elevation.init -> void
+DeviceChain.Sdk.Ingest.LocationFix.Equals(DeviceChain.Sdk.Ingest.LocationFix other) -> bool
+DeviceChain.Sdk.Ingest.LocationFix.Heading.get -> double?
+DeviceChain.Sdk.Ingest.LocationFix.Heading.init -> void
+DeviceChain.Sdk.Ingest.LocationFix.Latitude.get -> double
+DeviceChain.Sdk.Ingest.LocationFix.LocationFix() -> void
+DeviceChain.Sdk.Ingest.LocationFix.LocationFix(double latitude, double longitude) -> void
+DeviceChain.Sdk.Ingest.LocationFix.Longitude.get -> double
+DeviceChain.Sdk.Ingest.LocationFix.Speed.get -> double?
+DeviceChain.Sdk.Ingest.LocationFix.Speed.init -> void
+DeviceChain.Sdk.Ingest.MqttDeviceEventCarrier
+DeviceChain.Sdk.Ingest.MqttDeviceEventCarrier.CarriesBodyCredential.get -> bool
+DeviceChain.Sdk.Ingest.MqttDeviceEventCarrier.MqttDeviceEventCarrier(DeviceChain.Sdk.Mqtt.MqttDeviceSession! session, string! deviceToken) -> void
+DeviceChain.Sdk.Ingest.MqttDeviceEventCarrier.SendAsync(string! deviceToken, byte[]! jsonEvent, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+DeviceChain.Sdk.Json.EmptyVariables
+DeviceChain.Sdk.Json.EmptyVariables.EmptyVariables() -> void
+DeviceChain.Sdk.Mqtt.CommandDeliveryEnvelope
+DeviceChain.Sdk.Mqtt.CommandDeliveryEnvelope.CommandDeliveryEnvelope() -> void
+DeviceChain.Sdk.Mqtt.CommandDeliveryEnvelope.DeviceToken.get -> string?
+DeviceChain.Sdk.Mqtt.CommandDeliveryEnvelope.DeviceToken.set -> void
+DeviceChain.Sdk.Mqtt.CommandDeliveryEnvelope.DispatchNonce.get -> string?
+DeviceChain.Sdk.Mqtt.CommandDeliveryEnvelope.DispatchNonce.set -> void
+DeviceChain.Sdk.Mqtt.CommandDeliveryEnvelope.Name.get -> string?
+DeviceChain.Sdk.Mqtt.CommandDeliveryEnvelope.Name.set -> void
+DeviceChain.Sdk.Mqtt.CommandDeliveryEnvelope.Payload.get -> System.Text.Json.JsonElement?
+DeviceChain.Sdk.Mqtt.CommandDeliveryEnvelope.Payload.set -> void
+DeviceChain.Sdk.Mqtt.CommandDeliveryEnvelope.Token.get -> string?
+DeviceChain.Sdk.Mqtt.CommandDeliveryEnvelope.Token.set -> void
+DeviceChain.Sdk.Mqtt.CommandHandler
+DeviceChain.Sdk.Mqtt.CommandOutcome
+DeviceChain.Sdk.Mqtt.CommandOutcome.Error.get -> string?
+DeviceChain.Sdk.Mqtt.CommandOutcome.Payload.get -> string?
+DeviceChain.Sdk.Mqtt.CommandOutcome.Success.get -> bool
+DeviceChain.Sdk.Mqtt.CommandResponseEnvelope
+DeviceChain.Sdk.Mqtt.CommandResponseEnvelope.CommandResponseEnvelope() -> void
+DeviceChain.Sdk.Mqtt.CommandResponseEnvelope.CommandToken.get -> string?
+DeviceChain.Sdk.Mqtt.CommandResponseEnvelope.CommandToken.set -> void
+DeviceChain.Sdk.Mqtt.CommandResponseEnvelope.DispatchNonce.get -> string?
+DeviceChain.Sdk.Mqtt.CommandResponseEnvelope.DispatchNonce.set -> void
+DeviceChain.Sdk.Mqtt.CommandResponseEnvelope.Error.get -> string?
+DeviceChain.Sdk.Mqtt.CommandResponseEnvelope.Error.set -> void
+DeviceChain.Sdk.Mqtt.CommandResponseEnvelope.Payload.get -> string?
+DeviceChain.Sdk.Mqtt.CommandResponseEnvelope.Payload.set -> void
+DeviceChain.Sdk.Mqtt.CommandResponseEnvelope.Success.get -> bool
+DeviceChain.Sdk.Mqtt.CommandResponseEnvelope.Success.set -> void
+DeviceChain.Sdk.Mqtt.DeviceCommand
+DeviceChain.Sdk.Mqtt.DeviceCommand.DeviceCommand(string! token, string! name, System.Text.Json.JsonElement? payload, long sequence = 0) -> void
+DeviceChain.Sdk.Mqtt.DeviceCommand.Name.get -> string!
+DeviceChain.Sdk.Mqtt.DeviceCommand.Payload.get -> System.Text.Json.JsonElement?
+DeviceChain.Sdk.Mqtt.DeviceCommand.Sequence.get -> long
+DeviceChain.Sdk.Mqtt.DeviceCommand.Token.get -> string!
+DeviceChain.Sdk.Mqtt.DevicePlane
+DeviceChain.Sdk.Mqtt.MqttDeviceSession
+DeviceChain.Sdk.Mqtt.MqttDeviceSession.ClientId.get -> string!
+DeviceChain.Sdk.Mqtt.MqttDeviceSession.DisposeAsync() -> System.Threading.Tasks.ValueTask
+DeviceChain.Sdk.Mqtt.MqttDeviceSession.EventsTopic.get -> string!
+DeviceChain.Sdk.Mqtt.MqttDeviceSession.MalformedFrames.get -> int
+DeviceChain.Sdk.Mqtt.MqttDeviceSession.MqttDeviceSession(DeviceChain.Sdk.Mqtt.MqttSessionOptions! options, DeviceChain.Sdk.Transport.IMqttClientFactory? factory = null) -> void
+DeviceChain.Sdk.Mqtt.MqttDeviceSession.PublishEventAsync(byte[]! jsonEvent, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+DeviceChain.Sdk.Mqtt.MqttDeviceSession.QueuedCommands.get -> int
+DeviceChain.Sdk.Mqtt.MqttDeviceSession.RunningCommands.get -> int
+DeviceChain.Sdk.Mqtt.MqttDeviceSession.StartAsync(DeviceChain.Sdk.Mqtt.CommandHandler! handler, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+DeviceChain.Sdk.Mqtt.MqttDeviceSession.State.get -> DeviceChain.Sdk.Mqtt.MqttSessionState
+DeviceChain.Sdk.Mqtt.MqttDeviceSession.StateChanged -> System.Action<DeviceChain.Sdk.Mqtt.MqttSessionState>?
+DeviceChain.Sdk.Mqtt.MqttSessionOptions
+DeviceChain.Sdk.Mqtt.MqttSessionOptions.BrokerUri.get -> System.Uri!
+DeviceChain.Sdk.Mqtt.MqttSessionOptions.ClientIdDiscriminator.get -> string?
+DeviceChain.Sdk.Mqtt.MqttSessionOptions.ClientIdDiscriminator.set -> void
+DeviceChain.Sdk.Mqtt.MqttSessionOptions.CommandHistorySize.get -> int
+DeviceChain.Sdk.Mqtt.MqttSessionOptions.CommandHistorySize.set -> void
+DeviceChain.Sdk.Mqtt.MqttSessionOptions.CommandLane.get -> System.Func<DeviceChain.Sdk.Mqtt.DeviceCommand!, string?>?
+DeviceChain.Sdk.Mqtt.MqttSessionOptions.CommandLane.set -> void
+DeviceChain.Sdk.Mqtt.MqttSessionOptions.CommandShutdownTimeout.get -> System.TimeSpan
+DeviceChain.Sdk.Mqtt.MqttSessionOptions.CommandShutdownTimeout.set -> void
+DeviceChain.Sdk.Mqtt.MqttSessionOptions.CredentialId.get -> string!
+DeviceChain.Sdk.Mqtt.MqttSessionOptions.DeviceToken.get -> string!
+DeviceChain.Sdk.Mqtt.MqttSessionOptions.InstanceId.get -> string!
+DeviceChain.Sdk.Mqtt.MqttSessionOptions.KeepAlive.get -> System.TimeSpan
+DeviceChain.Sdk.Mqtt.MqttSessionOptions.KeepAlive.set -> void
+DeviceChain.Sdk.Mqtt.MqttSessionOptions.MaxConcurrentCommands.get -> int
+DeviceChain.Sdk.Mqtt.MqttSessionOptions.MaxConcurrentCommands.set -> void
+DeviceChain.Sdk.Mqtt.MqttSessionOptions.MqttSessionOptions(System.Uri! brokerUri, string! instanceId, string! tenant, string! deviceToken, string! credentialId) -> void
+DeviceChain.Sdk.Mqtt.MqttSessionOptions.OperationTimeout.get -> System.TimeSpan
+DeviceChain.Sdk.Mqtt.MqttSessionOptions.OperationTimeout.set -> void
+DeviceChain.Sdk.Mqtt.MqttSessionOptions.ReconnectInitialDelay.get -> System.TimeSpan
+DeviceChain.Sdk.Mqtt.MqttSessionOptions.ReconnectInitialDelay.set -> void
+DeviceChain.Sdk.Mqtt.MqttSessionOptions.ReconnectMaxDelay.get -> System.TimeSpan
+DeviceChain.Sdk.Mqtt.MqttSessionOptions.ReconnectMaxDelay.set -> void
+DeviceChain.Sdk.Mqtt.MqttSessionOptions.Tenant.get -> string!
+DeviceChain.Sdk.Mqtt.MqttSessionOptions.Trust.get -> DeviceChain.Sdk.Transport.MqttTrust!
+DeviceChain.Sdk.Mqtt.MqttSessionOptions.Trust.set -> void
+DeviceChain.Sdk.Mqtt.MqttSessionState
+DeviceChain.Sdk.Mqtt.MqttSessionState.Blind = 3 -> DeviceChain.Sdk.Mqtt.MqttSessionState
+DeviceChain.Sdk.Mqtt.MqttSessionState.Ready = 1 -> DeviceChain.Sdk.Mqtt.MqttSessionState
+DeviceChain.Sdk.Mqtt.MqttSessionState.Reconnecting = 2 -> DeviceChain.Sdk.Mqtt.MqttSessionState
+DeviceChain.Sdk.Mqtt.MqttSessionState.Starting = 0 -> DeviceChain.Sdk.Mqtt.MqttSessionState
+DeviceChain.Sdk.Mqtt.MqttSessionState.Stopped = 4 -> DeviceChain.Sdk.Mqtt.MqttSessionState
+DeviceChain.Sdk.RequestOptions
+DeviceChain.Sdk.RequestOptions.Anonymous.get -> bool
+DeviceChain.Sdk.RequestOptions.Anonymous.init -> void
+DeviceChain.Sdk.RequestOptions.RequestOptions() -> void
+DeviceChain.Sdk.Subscriptions.BackgroundTaskDriver
+DeviceChain.Sdk.Subscriptions.BackgroundTaskDriver.BackgroundTaskDriver() -> void
+DeviceChain.Sdk.Subscriptions.BackgroundTaskDriver.Start(System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task!>! loop, System.Threading.CancellationToken cancellationToken) -> DeviceChain.Sdk.Subscriptions.IReadLoopHandle!
+DeviceChain.Sdk.Subscriptions.GraphQlWsClient
+DeviceChain.Sdk.Subscriptions.GraphQlWsClient.DisposeAsync() -> System.Threading.Tasks.ValueTask
+DeviceChain.Sdk.Subscriptions.GraphQlWsClient.GraphQlWsClient(DeviceChain.Sdk.Transport.IWebSocketFactory! webSocketFactory, System.Uri! endpoint, DeviceChain.Sdk.TokenProvider? tokenProvider = null, DeviceChain.Sdk.Subscriptions.IReadLoopDriver? readLoopDriver = null) -> void
+DeviceChain.Sdk.Subscriptions.GraphQlWsClient.GraphQlWsClient(System.Uri! endpoint, DeviceChain.Sdk.TokenProvider? tokenProvider = null) -> void
+DeviceChain.Sdk.Subscriptions.GraphQlWsClient.SubscribeAsync<TVars, TData>(string! query, TVars variables, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TVars>! variablesInfo, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TData>! dataInfo, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Collections.Generic.IAsyncEnumerable<TData>!
+DeviceChain.Sdk.Subscriptions.IReadLoopDriver
+DeviceChain.Sdk.Subscriptions.IReadLoopDriver.Start(System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task!>! loop, System.Threading.CancellationToken cancellationToken) -> DeviceChain.Sdk.Subscriptions.IReadLoopHandle!
+DeviceChain.Sdk.Subscriptions.IReadLoopHandle
+DeviceChain.Sdk.Subscriptions.IReadLoopHandle.Completion.get -> System.Threading.Tasks.Task!
+DeviceChain.Sdk.Subscriptions.IReadLoopHandle.IsRunning.get -> bool
+DeviceChain.Sdk.Subscriptions.ManualPumpDriver
+DeviceChain.Sdk.Subscriptions.ManualPumpDriver.ManualPumpDriver() -> void
+DeviceChain.Sdk.Subscriptions.ManualPumpDriver.Pump() -> int
+DeviceChain.Sdk.Subscriptions.ManualPumpDriver.Start(System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task!>! loop, System.Threading.CancellationToken cancellationToken) -> DeviceChain.Sdk.Subscriptions.IReadLoopHandle!
+DeviceChain.Sdk.TokenProvider
+DeviceChain.Sdk.Transport.ClientWebSocketConnection
+DeviceChain.Sdk.Transport.ClientWebSocketConnection.Abort() -> void
+DeviceChain.Sdk.Transport.ClientWebSocketConnection.ClientWebSocketConnection() -> void
+DeviceChain.Sdk.Transport.ClientWebSocketConnection.ConnectAsync(System.Uri! endpoint, string! subProtocol, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+DeviceChain.Sdk.Transport.ClientWebSocketConnection.Dispose() -> void
+DeviceChain.Sdk.Transport.ClientWebSocketConnection.IsOpen.get -> bool
+DeviceChain.Sdk.Transport.ClientWebSocketConnection.ReceiveAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<DeviceChain.Sdk.Transport.WebSocketMessage>!
+DeviceChain.Sdk.Transport.ClientWebSocketConnection.SendTextAsync(byte[]! utf8Payload, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+DeviceChain.Sdk.Transport.ClientWebSocketFactory
+DeviceChain.Sdk.Transport.ClientWebSocketFactory.ClientWebSocketFactory() -> void
+DeviceChain.Sdk.Transport.ClientWebSocketFactory.Create() -> DeviceChain.Sdk.Transport.IWebSocketConnection!
+DeviceChain.Sdk.Transport.HttpClientTransport
+DeviceChain.Sdk.Transport.HttpClientTransport.HttpClientTransport(System.Net.Http.HttpClient! http) -> void
+DeviceChain.Sdk.Transport.HttpClientTransport.SendAsync(DeviceChain.Sdk.Transport.HttpTransportRequest! request, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<DeviceChain.Sdk.Transport.HttpTransportResponse!>!
+DeviceChain.Sdk.Transport.HttpRetryAfter
+DeviceChain.Sdk.Transport.HttpTransportRequest
+DeviceChain.Sdk.Transport.HttpTransportRequest.BearerToken.get -> string?
+DeviceChain.Sdk.Transport.HttpTransportRequest.BearerToken.init -> void
+DeviceChain.Sdk.Transport.HttpTransportRequest.Body.get -> byte[]?
+DeviceChain.Sdk.Transport.HttpTransportRequest.Body.init -> void
+DeviceChain.Sdk.Transport.HttpTransportRequest.ContentType.get -> string?
+DeviceChain.Sdk.Transport.HttpTransportRequest.ContentType.init -> void
+DeviceChain.Sdk.Transport.HttpTransportRequest.HttpTransportRequest() -> void
+DeviceChain.Sdk.Transport.HttpTransportRequest.Method.get -> string!
+DeviceChain.Sdk.Transport.HttpTransportRequest.Method.init -> void
+DeviceChain.Sdk.Transport.HttpTransportRequest.Uri.get -> System.Uri!
+DeviceChain.Sdk.Transport.HttpTransportRequest.Uri.init -> void
+DeviceChain.Sdk.Transport.HttpTransportResponse
+DeviceChain.Sdk.Transport.HttpTransportResponse.Body.get -> byte[]!
+DeviceChain.Sdk.Transport.HttpTransportResponse.Body.init -> void
+DeviceChain.Sdk.Transport.HttpTransportResponse.HttpTransportResponse() -> void
+DeviceChain.Sdk.Transport.HttpTransportResponse.RetryAfter.get -> System.TimeSpan?
+DeviceChain.Sdk.Transport.HttpTransportResponse.RetryAfter.init -> void
+DeviceChain.Sdk.Transport.HttpTransportResponse.Status.get -> int
+DeviceChain.Sdk.Transport.HttpTransportResponse.Status.init -> void
+DeviceChain.Sdk.Transport.IHttpTransport
+DeviceChain.Sdk.Transport.IHttpTransport.SendAsync(DeviceChain.Sdk.Transport.HttpTransportRequest! request, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<DeviceChain.Sdk.Transport.HttpTransportResponse!>!
+DeviceChain.Sdk.Transport.IMqttClientFactory
+DeviceChain.Sdk.Transport.IMqttClientFactory.Create() -> DeviceChain.Sdk.Transport.IMqttConnection!
+DeviceChain.Sdk.Transport.IMqttConnection
+DeviceChain.Sdk.Transport.IMqttConnection.ConnectAsync(DeviceChain.Sdk.Transport.MqttConnectOptions! options, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+DeviceChain.Sdk.Transport.IMqttConnection.ConnectionLost -> System.Action<System.Exception?>?
+DeviceChain.Sdk.Transport.IMqttConnection.DisconnectAsync(System.TimeSpan quiesce, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+DeviceChain.Sdk.Transport.IMqttConnection.IsConnected.get -> bool
+DeviceChain.Sdk.Transport.IMqttConnection.MessageReceived -> System.Func<DeviceChain.Sdk.Transport.MqttInbound, System.Threading.Tasks.Task!>?
+DeviceChain.Sdk.Transport.IMqttConnection.PublishAsync(string! topic, byte[]! payload, DeviceChain.Sdk.Transport.MqttQos qos, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+DeviceChain.Sdk.Transport.IMqttConnection.SubscribeAsync(string! topicFilter, DeviceChain.Sdk.Transport.MqttQos qos, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+DeviceChain.Sdk.Transport.IWebSocketConnection
+DeviceChain.Sdk.Transport.IWebSocketConnection.Abort() -> void
+DeviceChain.Sdk.Transport.IWebSocketConnection.ConnectAsync(System.Uri! endpoint, string! subProtocol, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+DeviceChain.Sdk.Transport.IWebSocketConnection.IsOpen.get -> bool
+DeviceChain.Sdk.Transport.IWebSocketConnection.ReceiveAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<DeviceChain.Sdk.Transport.WebSocketMessage>!
+DeviceChain.Sdk.Transport.IWebSocketConnection.SendTextAsync(byte[]! utf8Payload, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+DeviceChain.Sdk.Transport.IWebSocketFactory
+DeviceChain.Sdk.Transport.IWebSocketFactory.Create() -> DeviceChain.Sdk.Transport.IWebSocketConnection!
+DeviceChain.Sdk.Transport.MqttConnectOptions
+DeviceChain.Sdk.Transport.MqttConnectOptions.AddressFamily.get -> System.Net.Sockets.AddressFamily
+DeviceChain.Sdk.Transport.MqttConnectOptions.AddressFamily.set -> void
+DeviceChain.Sdk.Transport.MqttConnectOptions.BrokerUri.get -> System.Uri!
+DeviceChain.Sdk.Transport.MqttConnectOptions.CleanSession.get -> bool
+DeviceChain.Sdk.Transport.MqttConnectOptions.CleanSession.set -> void
+DeviceChain.Sdk.Transport.MqttConnectOptions.ClientId.get -> string!
+DeviceChain.Sdk.Transport.MqttConnectOptions.KeepAlive.get -> System.TimeSpan
+DeviceChain.Sdk.Transport.MqttConnectOptions.KeepAlive.set -> void
+DeviceChain.Sdk.Transport.MqttConnectOptions.MqttConnectOptions(System.Uri! brokerUri, string! clientId) -> void
+DeviceChain.Sdk.Transport.MqttConnectOptions.Password.get -> string?
+DeviceChain.Sdk.Transport.MqttConnectOptions.Password.set -> void
+DeviceChain.Sdk.Transport.MqttConnectOptions.Trust.get -> DeviceChain.Sdk.Transport.MqttTrust!
+DeviceChain.Sdk.Transport.MqttConnectOptions.Trust.set -> void
+DeviceChain.Sdk.Transport.MqttConnectOptions.Username.get -> string?
+DeviceChain.Sdk.Transport.MqttConnectOptions.Username.set -> void
+DeviceChain.Sdk.Transport.MqttConnectRefusedException
+DeviceChain.Sdk.Transport.MqttConnectRefusedException.MqttConnectRefusedException(string! message) -> void
+DeviceChain.Sdk.Transport.MqttConnectRefusedException.MqttConnectRefusedException(string! message, System.Exception? innerException) -> void
+DeviceChain.Sdk.Transport.MqttConnectionException
+DeviceChain.Sdk.Transport.MqttConnectionException.MqttConnectionException(string! message) -> void
+DeviceChain.Sdk.Transport.MqttConnectionException.MqttConnectionException(string! message, System.Exception? innerException) -> void
+DeviceChain.Sdk.Transport.MqttInbound
+DeviceChain.Sdk.Transport.MqttInbound.MqttInbound() -> void
+DeviceChain.Sdk.Transport.MqttInbound.MqttInbound(string! topic, byte[]! payload) -> void
+DeviceChain.Sdk.Transport.MqttInbound.Payload.get -> byte[]!
+DeviceChain.Sdk.Transport.MqttInbound.Topic.get -> string!
+DeviceChain.Sdk.Transport.MqttNetClientFactory
+DeviceChain.Sdk.Transport.MqttNetClientFactory.Create() -> DeviceChain.Sdk.Transport.IMqttConnection!
+DeviceChain.Sdk.Transport.MqttNetClientFactory.MqttNetClientFactory() -> void
+DeviceChain.Sdk.Transport.MqttNetConnection
+DeviceChain.Sdk.Transport.MqttNetConnection.ConnectAsync(DeviceChain.Sdk.Transport.MqttConnectOptions! options, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+DeviceChain.Sdk.Transport.MqttNetConnection.ConnectionLost -> System.Action<System.Exception?>?
+DeviceChain.Sdk.Transport.MqttNetConnection.DisconnectAsync(System.TimeSpan quiesce, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+DeviceChain.Sdk.Transport.MqttNetConnection.DisposeAsync() -> System.Threading.Tasks.ValueTask
+DeviceChain.Sdk.Transport.MqttNetConnection.IsConnected.get -> bool
+DeviceChain.Sdk.Transport.MqttNetConnection.MessageReceived -> System.Func<DeviceChain.Sdk.Transport.MqttInbound, System.Threading.Tasks.Task!>?
+DeviceChain.Sdk.Transport.MqttNetConnection.MqttNetConnection() -> void
+DeviceChain.Sdk.Transport.MqttNetConnection.PublishAsync(string! topic, byte[]! payload, DeviceChain.Sdk.Transport.MqttQos qos, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+DeviceChain.Sdk.Transport.MqttNetConnection.SubscribeAsync(string! topicFilter, DeviceChain.Sdk.Transport.MqttQos qos, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+DeviceChain.Sdk.Transport.MqttQos
+DeviceChain.Sdk.Transport.MqttQos.AtLeastOnce = 1 -> DeviceChain.Sdk.Transport.MqttQos
+DeviceChain.Sdk.Transport.MqttQos.AtMostOnce = 0 -> DeviceChain.Sdk.Transport.MqttQos
+DeviceChain.Sdk.Transport.MqttSubscribeRefusedException
+DeviceChain.Sdk.Transport.MqttSubscribeRefusedException.MqttSubscribeRefusedException(string! topicFilter) -> void
+DeviceChain.Sdk.Transport.MqttSubscribeRefusedException.TopicFilter.get -> string!
+DeviceChain.Sdk.Transport.MqttTrust
+DeviceChain.Sdk.Transport.MqttTrust.CaCertificate.get -> byte[]?
+DeviceChain.Sdk.Transport.MqttTrust.Mode.get -> DeviceChain.Sdk.Transport.MqttTrustMode
+DeviceChain.Sdk.Transport.MqttTrustMode
+DeviceChain.Sdk.Transport.MqttTrustMode.AcceptAny = 2 -> DeviceChain.Sdk.Transport.MqttTrustMode
+DeviceChain.Sdk.Transport.MqttTrustMode.PinnedCa = 1 -> DeviceChain.Sdk.Transport.MqttTrustMode
+DeviceChain.Sdk.Transport.MqttTrustMode.SystemRoots = 0 -> DeviceChain.Sdk.Transport.MqttTrustMode
+DeviceChain.Sdk.Transport.WebSocketMessage
+DeviceChain.Sdk.Transport.WebSocketMessage.CloseCode.get -> int?
+DeviceChain.Sdk.Transport.WebSocketMessage.CloseReason.get -> string?
+DeviceChain.Sdk.Transport.WebSocketMessage.Kind.get -> DeviceChain.Sdk.Transport.WebSocketMessageKind
+DeviceChain.Sdk.Transport.WebSocketMessage.Text.get -> string?
+DeviceChain.Sdk.Transport.WebSocketMessage.WebSocketMessage() -> void
+DeviceChain.Sdk.Transport.WebSocketMessageKind
+DeviceChain.Sdk.Transport.WebSocketMessageKind.Closed = 1 -> DeviceChain.Sdk.Transport.WebSocketMessageKind
+DeviceChain.Sdk.Transport.WebSocketMessageKind.Text = 0 -> DeviceChain.Sdk.Transport.WebSocketMessageKind
+const DeviceChain.Sdk.Ingest.DeviceEventPublisher.AccessTokenCredential = "ACCESS_TOKEN" -> string!
+override DeviceChain.Sdk.Ingest.LocationFix.Equals(object? obj) -> bool
+override DeviceChain.Sdk.Ingest.LocationFix.GetHashCode() -> int
+static DeviceChain.Sdk.Areas.Path(DeviceChain.Sdk.Area area) -> string!
+static DeviceChain.Sdk.Areas.Segment(DeviceChain.Sdk.Area area) -> string!
+static DeviceChain.Sdk.Ingest.LocationFix.CanonicalHeading(double degrees) -> double
+static DeviceChain.Sdk.Ingest.LocationFix.operator !=(DeviceChain.Sdk.Ingest.LocationFix left, DeviceChain.Sdk.Ingest.LocationFix right) -> bool
+static DeviceChain.Sdk.Ingest.LocationFix.operator ==(DeviceChain.Sdk.Ingest.LocationFix left, DeviceChain.Sdk.Ingest.LocationFix right) -> bool
+static DeviceChain.Sdk.Mqtt.CommandOutcome.Failed(string! error) -> DeviceChain.Sdk.Mqtt.CommandOutcome!
+static DeviceChain.Sdk.Mqtt.CommandOutcome.Succeeded(string? payload = null) -> DeviceChain.Sdk.Mqtt.CommandOutcome!
+static DeviceChain.Sdk.Mqtt.DevicePlane.CommandResponsesTopic(string! instanceId, string! tenant, string! deviceToken) -> string!
+static DeviceChain.Sdk.Mqtt.DevicePlane.CommandsTopic(string! instanceId, string! tenant, string! deviceToken) -> string!
+static DeviceChain.Sdk.Mqtt.DevicePlane.ConnectUsername(string! tenant, string! credentialId) -> string!
+static DeviceChain.Sdk.Mqtt.DevicePlane.DeviceClientId(string! instanceId, string! tenant, string! deviceToken, string? discriminator = null) -> string!
+static DeviceChain.Sdk.Mqtt.DevicePlane.EventsTopic(string! instanceId, string! tenant, string! deviceToken) -> string!
+static DeviceChain.Sdk.Mqtt.DevicePlane.IsValidToken(string? token) -> bool
+static DeviceChain.Sdk.Transport.HttpRetryAfter.Parse(string? value, System.DateTimeOffset now) -> System.TimeSpan?
+static DeviceChain.Sdk.Transport.MqttTrust.DangerouslyAcceptAnyServerCertificate() -> DeviceChain.Sdk.Transport.MqttTrust!
+static DeviceChain.Sdk.Transport.MqttTrust.PinnedCa(byte[]! certificate) -> DeviceChain.Sdk.Transport.MqttTrust!
+static DeviceChain.Sdk.Transport.MqttTrust.SystemRoots.get -> DeviceChain.Sdk.Transport.MqttTrust!
+static DeviceChain.Sdk.Transport.WebSocketMessage.OfClose(int? code, string? reason) -> DeviceChain.Sdk.Transport.WebSocketMessage
+static DeviceChain.Sdk.Transport.WebSocketMessage.OfText(string! text) -> DeviceChain.Sdk.Transport.WebSocketMessage
+static readonly DeviceChain.Sdk.Json.EmptyVariables.Value -> DeviceChain.Sdk.Json.EmptyVariables!
+static readonly DeviceChain.Sdk.Mqtt.MqttSessionOptions.MaxCommandShutdownTimeout -> System.TimeSpan

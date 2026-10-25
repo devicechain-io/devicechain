@@ -90,7 +90,7 @@ bad_image="registry.invalid/dc-rerun-rig/absent"
 # Any small image that starts and stays up. The same pin hack/upgrade-rig.sh uses, so
 # the weekly pull check already watches it (registry.k8s.io answers its manifest with a
 # redirect that check does not follow, which rules out the pause image).
-good_image="registry:2.8.3@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373"
+good_image="registry:3.1.2@sha256:01cd312e67026f06f5d89c3e133a4a9adc7cb9eeb9b1194e0b2954dfd770efd2"
 
 if [[ -n "${RIG_KUBE_CONTEXT:-}" ]]; then
   ctx="$RIG_KUBE_CONTEXT"

@@ -20,7 +20,7 @@ import (
 // 🔴 THE CHART'S SELECTOR, NOT "THE" LABEL OF THE COMPONENT: what decides whether the scrape can
 // work is whether the chart's Service selects a pod, because that Service is the only way the scrape
 // reaches one. A component that runs under another label is unscrapeable by this chart anyway.
-// Read from chart 65.1.1 templates/exporters/*/service.yaml (the defaults when service.selector
+// Read from chart 92.13.1 templates/exporters/*/service.yaml (the defaults when service.selector
 // and endpoints are unset, which DeviceChain leaves them).
 type controlPlaneComponent struct {
 	key      string // the chart's values key, and the monitoring module's vocabulary

@@ -51,7 +51,7 @@ var crdGVR = schema.GroupVersionResource{
 //     benign cause AND says to run install if that is not what happened, so (c) is
 //     recoverable by somebody who reads it.
 //
-//     🔴 THIS IS A DECISION, NOT A DEFAULT NOBODY GOT ROUND TO. It was put to Derek
+//     🔴 THIS IS A DECISION, NOT A DEFAULT NOBODY GOT ROUND TO. It was put to the maintainer
 //     with all three causes named and the fail-closed alternative costed, and he
 //     confirmed it on 2026-09-19: NOTED, NOT REFUSED. So a later reader who finds
 //     (c) alarming — and it is the alarming one — is re-opening a settled question
