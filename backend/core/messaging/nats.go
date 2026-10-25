@@ -1745,6 +1745,9 @@ type natsReader struct {
 	// stream with; every bind deletes it before creating this reader's own (see
 	// CaptureDurableName). Empty on every other reader.
 	legacyDurable string
+	// legacyUnconfirmed is true while the last attempt to delete legacyDurable ended without the
+	// broker confirming it gone (neither deleted nor not-found). See retireLegacyCaptureDurable.
+	legacyUnconfirmed atomic.Bool
 	// forwards is the subject pattern of what a reader hands out when the broker does not
 	// filter for it; a message delivered outside it is acked and dropped, never handed to the
 	// caller. Two kinds of reader have one: a store reader (storeHandOut; it differs from
@@ -2034,9 +2037,7 @@ func (r *natsReader) bindLocked() error {
 		// Consumer provisioning runs under the manager's run context, as stream provisioning
 		// does (see opContext): a stop abandons a create or update still in flight rather than
 		// waiting out the client's request timeout on each call.
-		if err := r.retireLegacyCaptureDurable(); err != nil {
-			return err
-		}
+		r.retireLegacyCaptureDurable()
 		if _, err := r.nmgr.js.AddConsumer(r.stream, r.consumerConfig(), nats.Context(r.nmgr.opContext())); err != nil {
 			return err
 		}
@@ -2119,21 +2120,52 @@ func (r *natsReader) reconcileFilterSubject() error {
 // nothing: a work queue keeps every message until it is acked, and this reader's new durable
 // starts from the stream's first message, so what the old one had delivered and not had acked is
 // delivered again (its forward is deduplicated downstream by the capture sequence).
-func (r *natsReader) retireLegacyCaptureDurable() error {
+//
+// 🔴 A DELETE THAT CANNOT BE CONFIRMED MUST NOT STOP THE SERVICE STARTING. The delete is a request
+// to the broker, and it times out across a broker roll, which is exactly when an upgrade runs it
+// (a pod crashed once on this). Not-found means done. Any other error is retried a few times with
+// backoff, and if the old durable still cannot be confirmed gone this logs a WARN and returns:
+// the caller goes on to create its own. The old durable is then the only cost, and the work queue
+// decides what that costs:
+//   - the old build's filtered create is refused while this reader's durable exists, so the old
+//     pod cannot re-filter anything of ours (the hazard CaptureDurableName closes), and no
+//     message is ever split across two consumers;
+//   - this reader's own create is refused while the old durable exists. That bind error is not
+//     fatal either (see NewReader): the reader is left unbound and its read loop re-binds with
+//     backoff, which deletes the old name again, until the broker answers.
+func (r *natsReader) retireLegacyCaptureDurable() {
 	if r.legacyDurable == "" || r.legacyDurable == r.durable {
-		return nil
+		return
 	}
-	err := r.nmgr.js.DeleteConsumer(r.stream, r.legacyDurable, nats.Context(r.nmgr.opContext()))
-	switch {
-	case err == nil:
-		log.Info().Str("stream", r.stream).Str("durable", r.legacyDurable).Str("replacedBy", r.durable).
-			Msg("Deleted the capture durable an earlier build read with; its unacked messages are delivered again under the new one")
-		return nil
-	case errors.Is(err, nats.ErrConsumerNotFound):
-		return nil
-	default:
-		return fmt.Errorf("deleting the earlier build's capture durable %q: %w", r.legacyDurable, err)
+	ctx := r.nmgr.opContext()
+	backoff := legacyDeleteBackoff
+	var err error
+	for attempt := 1; attempt <= legacyDeleteAttempts; attempt++ {
+		err = r.nmgr.js.DeleteConsumer(r.stream, r.legacyDurable, nats.Context(ctx))
+		if err == nil {
+			r.legacyUnconfirmed.Store(false)
+			log.Info().Str("stream", r.stream).Str("durable", r.legacyDurable).Str("replacedBy", r.durable).
+				Msg("Deleted the capture durable an earlier build read with; its unacked messages are delivered again under the new one")
+			return
+		}
+		if errors.Is(err, nats.ErrConsumerNotFound) {
+			r.legacyUnconfirmed.Store(false)
+			return
+		}
+		if attempt == legacyDeleteAttempts || ctx.Err() != nil ||
+			errors.Is(err, nats.ErrConnectionClosed) || errors.Is(err, nats.ErrConnectionDraining) {
+			break
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(backoff):
+			backoff *= 2
+		}
 	}
+	r.legacyUnconfirmed.Store(true)
+	log.Warn().Err(err).Str("stream", r.stream).Str("durable", r.legacyDurable).Str("replacedBy", r.durable).
+		Msg("Could not confirm the earlier build's capture durable is gone; continuing with the new one. " +
+			"The old durable is harmless to this reader's messages and is deleted again on the next bind.")
 }
 
 // recreateUnfiltered moves an existing filtered durable onto NO filter by deleting it and
@@ -2287,7 +2319,15 @@ func (nmgr *NatsManager) NewReader(suffix string, opts ...ReaderOption) (Message
 		r.reconnectsSeen = nmgr.nc.Stats().Reconnects
 	}
 	if err := r.bind(); err != nil {
-		return nil, err
+		// A bind that failed while the earlier build's capture durable could not be confirmed
+		// gone is the work queue refusing this reader's create beside it (or the broker still
+		// rolling). Failing the start for it is what crashed a pod across a broker roll: leave
+		// the reader unbound instead, and its read loop re-binds with backoff (see ReadMessage).
+		if !r.legacyUnconfirmed.Load() || errors.Is(err, nats.ErrConnectionClosed) || errors.Is(err, nats.ErrConnectionDraining) {
+			return nil, err
+		}
+		log.Warn().Err(err).Str("durable", r.durable).
+			Msg("Could not bind the capture durable beside the earlier build's; the reader will keep retrying")
 	}
 	nmgr.streamMu.Lock()
 	nmgr.readers = append(nmgr.readers, r)
@@ -2318,6 +2358,12 @@ func isConsumerGone(err error) bool {
 		errors.Is(err, nats.ErrConsumerNotActive) ||
 		errors.Is(err, nats.ErrNoResponders)
 }
+
+// The bounds on deleting the earlier build's capture durable; see retireLegacyCaptureDurable.
+const (
+	legacyDeleteAttempts = 4
+	legacyDeleteBackoff  = 250 * time.Millisecond
+)
 
 // rebindWithBackoff re-attaches the reader to its durable consumer (recreating it if
 // needed), retrying with capped exponential backoff until it succeeds or ctx is
@@ -2448,6 +2494,14 @@ func (r *natsReader) ReadMessage(ctx context.Context) (_ Message, err error) {
 				case <-ctx.Done():
 					return Message{}, io.EOF
 				case <-time.After(mqttStoreBindRetry):
+				}
+				continue
+			}
+			if sub == nil && r.legacyUnconfirmed.Load() {
+				// The start could not bind beside the earlier build's capture durable; keep
+				// retrying (each bind deletes it again) until the broker lets this reader in.
+				if rebindErr := r.rebindWithBackoff(ctx); rebindErr != nil {
+					return Message{}, io.EOF
 				}
 				continue
 			}
