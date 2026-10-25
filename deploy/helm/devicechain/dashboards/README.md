@@ -44,6 +44,15 @@ instance's own uid; a reference to a board that does not exist fails the render.
 uid: it is a hash of the instance, so a pasted one points into another instance (the check
 refuses it).
 
+## The database namespace
+
+The relational database and the backup object store live in a shared namespace
+(`metrics.databaseNamespace`), not in the instance's. A board that shows them writes `@dbnamespace@`
+where the namespace goes, and the chart substitutes the configured value in the file text, the same way
+it does `@board:<stem>@`. Select the instance's own event store and the shared database together with
+`namespace=~"@dbnamespace@|$namespace"`; say in the description that the shared database serves every
+instance in the cluster.
+
 ## The firing-alerts table
 
 Every board starts with this panel at `x=0, y=0, w=24`. Copy it, change only the `alertname`

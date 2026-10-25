@@ -39,6 +39,8 @@ So each ConfigMap now differs per instance in these places, and nowhere else:
   - the `title`, the file's own title with `[{instance}]` appended, so a search across
     folders still says which instance a board reads.
   - the `namespace` and `instance` template variables, below.
+  - the token `@dbnamespace@`, replaced in the file text with `metrics.databaseNamespace` (the shared
+    database namespace), for boards that show the databases.
   - a per-instance TAG, `dc-` + the first 20 hex characters of sha256("{instance}"), added
     to the board's tags (23 characters; Grafana's tag limit is 50), and one `dashboards`
     LINK that lists every board carrying that tag. A link by tag can only ever offer this
@@ -109,6 +111,11 @@ exist.
 {{- range $other, $otherUid := $uids }}
 {{- $text = replace (printf "@board:%s@" $other) $otherUid $text }}
 {{- end }}
+{{/* @dbnamespace@ is the shared database namespace (metrics.databaseNamespace), where the relational
+     database and the backup object store live. A board cannot know it, and the instance's own namespace
+     holds only its event store, so a board that shows the databases writes
+     namespace=~"@dbnamespace@|$namespace". */}}
+{{- $text = replace "@dbnamespace@" $.Values.metrics.databaseNamespace $text }}
 {{- if contains "@board:" $text }}
 {{- fail (printf "dashboard %s references a board that does not exist (an unresolved @board:<name>@). Known boards: %s." $path (keys $uids | sortAlpha | join ", ")) }}
 {{- end }}
