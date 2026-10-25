@@ -513,9 +513,9 @@ tests:
   - name: a capture backlog that will fill within ten minutes pages
     interval: 1m
     input_series:
-      - series: 'devicechain_eventsources_jetstream_consumer_unread_ratio{namespace="dci-devicechain", pod="dc-event-sources-7c9f-aaaaa", job="devicechain/event-sources", stream="devicechain_device-events-capture", durable="devicechain_event-sources_device-events-capture"}'
+      - series: 'devicechain_eventsources_jetstream_consumer_unread_ratio{namespace="dci-devicechain", pod="dc-event-sources-7c9f-aaaaa", job="devicechain/event-sources", stream="devicechain_device-events-capture", durable="devicechain_event-sources_device-events-capture_unfiltered"}'
         values: '0+0.08x12'
-      - series: 'devicechain_eventsources_jetstream_consumer_unread_ratio{namespace="dci-devicechain", pod="dc-event-sources-7c9f-bbbbb", job="devicechain/event-sources", stream="devicechain_device-events-capture", durable="devicechain_event-sources_device-events-capture"}'
+      - series: 'devicechain_eventsources_jetstream_consumer_unread_ratio{namespace="dci-devicechain", pod="dc-event-sources-7c9f-bbbbb", job="devicechain/event-sources", stream="devicechain_device-events-capture", durable="devicechain_event-sources_device-events-capture_unfiltered"}'
         values: '0+0.075x12'
     alert_rule_test:
       - eval_time: 2m
@@ -531,10 +531,10 @@ tests:
               severity: critical
               devicechain_instance: devicechain
               stream: devicechain_device-events-capture
-              durable: devicechain_event-sources_device-events-capture
+              durable: devicechain_event-sources_device-events-capture_unfiltered
             exp_annotations:
               summary: "MQTT events the broker has already acknowledged are about to be lost"
-              description: "Durable devicechain_event-sources_device-events-capture has not yet forwarded 32% of what stream devicechain_device-events-capture can hold, and at the rate that backlog grew over the last three minutes the stream will be full within ten. Every event in it was sent by an MQTT device that the broker has already acknowledged, so the platform cannot refuse them: once the stream is full it discards the oldest unforwarded ones and the devices are never told (JetStreamDurableLostUnread). Devices are publishing faster than event-sources forwards. If event-sources is not busy on CPU, its publish window is the limit: devicechain_eventsources_jetstream_publish_window_full_seconds_total{writer=\"capture\"} grows by close to a second per second; add event-sources replicas, each of which brings its own window (capture.publishWindow already defaults to its maximum, 1024; raise it only if it was lowered). If inbound-events is refusing new events (JetStreamIngestBackpressureEngaged), the slow consumer is further downstream. To buy time, raise streamMaxBytes together with the JetStream volume, and streamMaxMsgs too if the stream fills by message count first (small payloads); event-sources applies the new ceilings when it restarts."
+              description: "Durable devicechain_event-sources_device-events-capture_unfiltered has not yet forwarded 32% of what stream devicechain_device-events-capture can hold, and at the rate that backlog grew over the last three minutes the stream will be full within ten. Every event in it was sent by an MQTT device that the broker has already acknowledged, so the platform cannot refuse them: once the stream is full it discards the oldest unforwarded ones and the devices are never told (JetStreamDurableLostUnread). Devices are publishing faster than event-sources forwards. If event-sources is not busy on CPU, its publish window is the limit: devicechain_eventsources_jetstream_publish_window_full_seconds_total{writer=\"capture\"} grows by close to a second per second; add event-sources replicas, each of which brings its own window (capture.publishWindow already defaults to its maximum, 1024; raise it only if it was lowered). If inbound-events is refusing new events (JetStreamIngestBackpressureEngaged), the slow consumer is further downstream. To buy time, raise streamMaxBytes together with the JetStream volume, and streamMaxMsgs too if the stream fills by message count first (small payloads); event-sources applies the new ceilings when it restarts."
       - eval_time: 5m
         alertname: JetStreamCaptureBacklogWillOverflow
         exp_alerts:
@@ -542,10 +542,10 @@ tests:
               severity: critical
               devicechain_instance: devicechain
               stream: devicechain_device-events-capture
-              durable: devicechain_event-sources_device-events-capture
+              durable: devicechain_event-sources_device-events-capture_unfiltered
             exp_annotations:
               summary: "MQTT events the broker has already acknowledged are about to be lost"
-              description: "Durable devicechain_event-sources_device-events-capture has not yet forwarded 40% of what stream devicechain_device-events-capture can hold, and at the rate that backlog grew over the last three minutes the stream will be full within ten. Every event in it was sent by an MQTT device that the broker has already acknowledged, so the platform cannot refuse them: once the stream is full it discards the oldest unforwarded ones and the devices are never told (JetStreamDurableLostUnread). Devices are publishing faster than event-sources forwards. If event-sources is not busy on CPU, its publish window is the limit: devicechain_eventsources_jetstream_publish_window_full_seconds_total{writer=\"capture\"} grows by close to a second per second; add event-sources replicas, each of which brings its own window (capture.publishWindow already defaults to its maximum, 1024; raise it only if it was lowered). If inbound-events is refusing new events (JetStreamIngestBackpressureEngaged), the slow consumer is further downstream. To buy time, raise streamMaxBytes together with the JetStream volume, and streamMaxMsgs too if the stream fills by message count first (small payloads); event-sources applies the new ceilings when it restarts."
+              description: "Durable devicechain_event-sources_device-events-capture_unfiltered has not yet forwarded 40% of what stream devicechain_device-events-capture can hold, and at the rate that backlog grew over the last three minutes the stream will be full within ten. Every event in it was sent by an MQTT device that the broker has already acknowledged, so the platform cannot refuse them: once the stream is full it discards the oldest unforwarded ones and the devices are never told (JetStreamDurableLostUnread). Devices are publishing faster than event-sources forwards. If event-sources is not busy on CPU, its publish window is the limit: devicechain_eventsources_jetstream_publish_window_full_seconds_total{writer=\"capture\"} grows by close to a second per second; add event-sources replicas, each of which brings its own window (capture.publishWindow already defaults to its maximum, 1024; raise it only if it was lowered). If inbound-events is refusing new events (JetStreamIngestBackpressureEngaged), the slow consumer is further downstream. To buy time, raise streamMaxBytes together with the JetStream volume, and streamMaxMsgs too if the stream fills by message count first (small payloads); event-sources applies the new ceilings when it restarts."
 
   # ------------------------------------------------------------------
   # A backlog that sat still at 30% for ten minutes and then starts climbing
@@ -576,6 +576,33 @@ tests:
             exp_annotations:
               summary: "MQTT events the broker has already acknowledged are about to be lost"
               description: "Durable devicechain_event-sources_device-events-capture has not yet forwarded 60% of what stream devicechain_device-events-capture can hold, and at the rate that backlog grew over the last three minutes the stream will be full within ten. Every event in it was sent by an MQTT device that the broker has already acknowledged, so the platform cannot refuse them: once the stream is full it discards the oldest unforwarded ones and the devices are never told (JetStreamDurableLostUnread). Devices are publishing faster than event-sources forwards. If event-sources is not busy on CPU, its publish window is the limit: devicechain_eventsources_jetstream_publish_window_full_seconds_total{writer=\"capture\"} grows by close to a second per second; add event-sources replicas, each of which brings its own window (capture.publishWindow already defaults to its maximum, 1024; raise it only if it was lowered). If inbound-events is refusing new events (JetStreamIngestBackpressureEngaged), the slow consumer is further downstream. To buy time, raise streamMaxBytes together with the JetStream volume, and streamMaxMsgs too if the stream fills by message count first (small payloads); event-sources applies the new ceilings when it restarts."
+
+  # ------------------------------------------------------------------
+  - name: a foreign message dropped by the capture reader warns, then ages out
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_jetstream_reader_foreign_dropped_total{namespace="dci-devicechain", pod="dc-event-sources-7c9f-aaaaa", job="devicechain/event-sources", stream="devicechain_device-events-capture", durable="devicechain_event-sources_device-events-capture_unfiltered"}'
+        values: '0x9 2x40'
+      - series: 'devicechain_eventsources_jetstream_reader_foreign_dropped_total{namespace="dci-devicechain", pod="dc-event-sources-7c9f-bbbbb", job="devicechain/event-sources", stream="devicechain_device-events-capture", durable="devicechain_event-sources_device-events-capture_unfiltered"}'
+        values: '0x49'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: JetStreamReaderForeignDropped
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: JetStreamReaderForeignDropped
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              stream: devicechain_device-events-capture
+              durable: devicechain_event-sources_device-events-capture_unfiltered
+            exp_annotations:
+              summary: "The device capture reader dropped messages that no device published"
+              description: "Durable devicechain_event-sources_device-events-capture_unfiltered on stream devicechain_device-events-capture was handed messages stored under a subject it does not read, and dropped them without passing them on: 2 in the last 15 minutes. Its broker-side consumer reads the whole stream unfiltered, so the reader itself keeps only the subjects devices publish telemetry on. Device publishes never land there under another subject, so a dropped message was put into the stream some other way, most likely by a push consumer on another stream whose delivery subject is a device telemetry subject. Nothing was forwarded and no device event is missing, but whoever can create such a consumer is writing into device intake: look for push consumers with a device telemetry delivery subject (nats consumer ls on each stream) and at which login created them. The reader logs the subject and sequence of the first message it drops."
+      - eval_time: 40m
+        alertname: JetStreamReaderForeignDropped
+        exp_alerts: []
 
   # ------------------------------------------------------------------
   # Quiet, each case carrying its series:

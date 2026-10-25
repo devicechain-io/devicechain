@@ -244,12 +244,12 @@ spec:
         - alert: JetStreamCaptureBacklogWillOverflow
           expr: |
             (
-              max by (stream, durable) ({__name__=~"devicechain_[a-z0-9]+_jetstream_consumer_unread_ratio", durable=~".+_event-sources_device-events-capture", namespace="{{ $ns }}"}) > 0.1
+              max by (stream, durable) ({__name__=~"devicechain_[a-z0-9]+_jetstream_consumer_unread_ratio", durable=~".+_event-sources_device-events-capture(_unfiltered)?", namespace="{{ $ns }}"}) > 0.1
             )
             and on (stream, durable)
             (
-              (1 - max by (stream, durable) ({__name__=~"devicechain_[a-z0-9]+_jetstream_consumer_unread_ratio", durable=~".+_event-sources_device-events-capture", namespace="{{ $ns }}"}))
-              / (max by (stream, durable) (deriv({__name__=~"devicechain_[a-z0-9]+_jetstream_consumer_unread_ratio", durable=~".+_event-sources_device-events-capture", namespace="{{ $ns }}"}[3m])) > 0)
+              (1 - max by (stream, durable) ({__name__=~"devicechain_[a-z0-9]+_jetstream_consumer_unread_ratio", durable=~".+_event-sources_device-events-capture(_unfiltered)?", namespace="{{ $ns }}"}))
+              / (max by (stream, durable) (deriv({__name__=~"devicechain_[a-z0-9]+_jetstream_consumer_unread_ratio", durable=~".+_event-sources_device-events-capture(_unfiltered)?", namespace="{{ $ns }}"}[3m])) > 0)
               < 600
             )
           for: 1m
@@ -269,12 +269,12 @@ spec:
         - alert: JetStreamCaptureBacklogGrowing
           expr: |
             (
-              max by (stream, durable) ({__name__=~"devicechain_[a-z0-9]+_jetstream_consumer_unread_ratio", durable=~".+_event-sources_device-events-capture", namespace="{{ $ns }}"}) > 0.1
+              max by (stream, durable) ({__name__=~"devicechain_[a-z0-9]+_jetstream_consumer_unread_ratio", durable=~".+_event-sources_device-events-capture(_unfiltered)?", namespace="{{ $ns }}"}) > 0.1
             )
             and on (stream, durable)
             (
-              (1 - max by (stream, durable) ({__name__=~"devicechain_[a-z0-9]+_jetstream_consumer_unread_ratio", durable=~".+_event-sources_device-events-capture", namespace="{{ $ns }}"}))
-              / (max by (stream, durable) (deriv({__name__=~"devicechain_[a-z0-9]+_jetstream_consumer_unread_ratio", durable=~".+_event-sources_device-events-capture", namespace="{{ $ns }}"}[5m])) > 0)
+              (1 - max by (stream, durable) ({__name__=~"devicechain_[a-z0-9]+_jetstream_consumer_unread_ratio", durable=~".+_event-sources_device-events-capture(_unfiltered)?", namespace="{{ $ns }}"}))
+              / (max by (stream, durable) (deriv({__name__=~"devicechain_[a-z0-9]+_jetstream_consumer_unread_ratio", durable=~".+_event-sources_device-events-capture(_unfiltered)?", namespace="{{ $ns }}"}[5m])) > 0)
               < 1200
             )
           for: 2m
@@ -317,6 +317,21 @@ spec:
           annotations:
             summary: "The MQTT capture stream changed leader while devices were publishing"
             description: "Stream {{ "{{ $labels.stream }}" }} changed leader within the last 15 minutes while events were arriving. While a stream has no leader, which lasts several seconds, the broker's MQTT gateway still acknowledges device QoS 1 publishes into it and stores them nowhere, and nothing counts them: JetStreamDurableLostUnread does not fire for this loss, so MQTT events published during the change may have been acknowledged to their devices and lost. In a 12,000 events per second test one such step-down lost about five seconds of events. Look in the broker logs for 'Leader falling behind, stepping down': that is a leader whose node is overloaded, so check the broker's node CPU and whether the capture leader shares a node with the inbound-events leader. A planned broker restart moves leaders too and may lose events the same way, so schedule one at low traffic. This is a known limitation of MQTT ingest, described with the MQTT transport in the documentation."
+        # A reader the broker does not filter for (the device-events capture's: its durable is
+        # unfiltered on the broker, see core/messaging NewReader) dropped messages stored under a
+        # subject it does not hand out. Device publishes cannot produce one; another stream's push
+        # consumer delivering onto a device telemetry subject can, and that is a write into device
+        # intake by something that is not a device. Nothing reached the platform, so a warning, but
+        # any increase is a finding. The series is created at zero when the reader is built, so
+        # increase() sees the first drop. `max by`: every event-sources replica counts its own.
+        - alert: JetStreamReaderForeignDropped
+          expr: max by (stream, durable) (increase({__name__=~"devicechain_[a-z0-9]+_jetstream_reader_foreign_dropped_total", namespace="{{ $ns }}"}[15m])) > 0
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "The device capture reader dropped messages that no device published"
+            description: "Durable {{ "{{ $labels.durable }}" }} on stream {{ "{{ $labels.stream }}" }} was handed messages stored under a subject it does not read, and dropped them without passing them on: {{ "{{ $value }}" }} in the last 15 minutes. Its broker-side consumer reads the whole stream unfiltered, so the reader itself keeps only the subjects devices publish telemetry on. Device publishes never land there under another subject, so a dropped message was put into the stream some other way, most likely by a push consumer on another stream whose delivery subject is a device telemetry subject. Nothing was forwarded and no device event is missing, but whoever can create such a consumer is writing into device intake: look for push consumers with a device telemetry delivery subject (nats consumer ls on each stream) and at which login created them. The reader logs the subject and sequence of the first message it drops."
         # A gating consumer's UNREAD backlog is over 80% of what its stream can hold. At
         # 90% the stream's writers refuse new events (JetStreamIngestBackpressureEngaged).
         # Exported by every service that WRITES the stream, for the consumers that gate it

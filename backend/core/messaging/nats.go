@@ -358,9 +358,6 @@ type NatsManager struct {
 	// mqttSkipped counts the messages readers acked and skipped because the other copy of the
 	// same device publish is the one forwarded (skipHandOut); read by tests.
 	mqttSkipped atomic.Uint64
-	// foreignDropped counts the messages readers acked and dropped because they were stored
-	// under a subject the reader does not hand out (dropForeign); read by tests.
-	foreignDropped atomic.Uint64
 }
 
 // SetAckWaitForTesting sets the AckWait this manager configures on the durables it
@@ -1744,6 +1741,10 @@ type natsReader struct {
 	storeMissingLogged bool
 	// foreignLogged edge-triggers dropForeign's log line. Read goroutine only.
 	foreignLogged bool
+	// legacyDurable is, on the capture reader, the durable an earlier build read the capture
+	// stream with; every bind deletes it before creating this reader's own (see
+	// CaptureDurableName). Empty on every other reader.
+	legacyDurable string
 	// forwards is the subject pattern of what a reader hands out when the broker does not
 	// filter for it; a message delivered outside it is acked and dropped, never handed to the
 	// caller. Two kinds of reader have one: a store reader (storeHandOut; it differs from
@@ -2033,6 +2034,9 @@ func (r *natsReader) bindLocked() error {
 		// Consumer provisioning runs under the manager's run context, as stream provisioning
 		// does (see opContext): a stop abandons a create or update still in flight rather than
 		// waiting out the client's request timeout on each call.
+		if err := r.retireLegacyCaptureDurable(); err != nil {
+			return err
+		}
 		if _, err := r.nmgr.js.AddConsumer(r.stream, r.consumerConfig(), nats.Context(r.nmgr.opContext())); err != nil {
 			return err
 		}
@@ -2102,6 +2106,36 @@ func (r *natsReader) reconcileFilterSubject() error {
 	return nil
 }
 
+// retireLegacyCaptureDurable deletes the durable an earlier build read the capture stream with
+// (legacyDurable), if it is there, before this reader creates its own (see CaptureDurableName).
+// It is a no-op on every other reader.
+//
+// It runs on EVERY bind, not once, because a pod of the earlier build running beside this one
+// recreates the old name whenever its own durable has gone: until this reader's durable exists,
+// that recreate can win the race, and the work queue then refuses this reader's create (two
+// overlapping consumers). The bind fails, the read loop's pacer retries it, and the retry deletes
+// the old name again. Once this reader's durable exists, the work queue refuses the old build's
+// create instead, and the old pod retries until it is replaced. Deleting the old durable loses
+// nothing: a work queue keeps every message until it is acked, and this reader's new durable
+// starts from the stream's first message, so what the old one had delivered and not had acked is
+// delivered again (its forward is deduplicated downstream by the capture sequence).
+func (r *natsReader) retireLegacyCaptureDurable() error {
+	if r.legacyDurable == "" || r.legacyDurable == r.durable {
+		return nil
+	}
+	err := r.nmgr.js.DeleteConsumer(r.stream, r.legacyDurable, nats.Context(r.nmgr.opContext()))
+	switch {
+	case err == nil:
+		log.Info().Str("stream", r.stream).Str("durable", r.legacyDurable).Str("replacedBy", r.durable).
+			Msg("Deleted the capture durable an earlier build read with; its unacked messages are delivered again under the new one")
+		return nil
+	case errors.Is(err, nats.ErrConsumerNotFound):
+		return nil
+	default:
+		return fmt.Errorf("deleting the earlier build's capture durable %q: %w", r.legacyDurable, err)
+	}
+}
+
 // recreateUnfiltered moves an existing filtered durable onto NO filter by deleting it and
 // creating it again, never by updating it in place.
 //
@@ -2121,6 +2155,13 @@ func (r *natsReader) reconcileFilterSubject() error {
 // replica bound to the deleted durable re-binds to the new one by the self-heal every reader has.
 // Two replicas starting at once can each delete and create; the second delete costs only a
 // redelivery, for the same reason.
+//
+// 🔴 IT IS NOT WHAT CARRIES AN UPGRADE. A pod of the previous build running beside this one (a
+// rolling update keeps one) re-binds with its own reconcile, which moves a durable of the SAME
+// name back onto its filter list in place, after which this reader, which reconciles only when it
+// binds, would read a filtered durable without knowing it. The capture reader therefore reads a
+// durable under a NEW name that no earlier build knows (CaptureDurableName), created unfiltered,
+// and this path only ever meets a durable of that name that someone changed by hand.
 func (r *natsReader) recreateUnfiltered(fromSubject string, fromList []string) error {
 	ctx := r.nmgr.opContext()
 	log.Info().Str("stream", r.stream).Str("durable", r.durable).
@@ -2158,7 +2199,7 @@ func (nmgr *NatsManager) NewReader(suffix string, opts ...ReaderOption) (Message
 		nmgr:    nmgr,
 		suffix:  suffix,
 		stream:  stream,
-		durable: DurableName(nmgr.Microservice.InstanceId, nmgr.Microservice.FunctionalArea, suffix),
+		durable: ReaderDurableName(nmgr.Microservice.InstanceId, nmgr.Microservice.FunctionalArea, suffix),
 		gate:    nmgr.Microservice.Readiness,
 		// A hop that forwards into a stream applying backpressure parks while that stream
 		// refuses, rather than fetching messages it could only fail to publish.
@@ -2192,9 +2233,19 @@ func (nmgr *NatsManager) NewReader(suffix string, opts ...ReaderOption) (Message
 	// A filtered durable never delivered such an entry. This reader acks and drops it
 	// (dropForeign), so what reaches event-sources is still a device-events subject and nothing
 	// else.
+	//
+	// The hand-out filter is the two device-events subjects, not "whatever the stream
+	// captures": were the stream ever given a subject beyond those two, its messages would be
+	// acked here and so deleted from the work queue, unread. Widening the capture's subjects
+	// means widening forwards with them.
+	//
+	// 🔴 AND THE DURABLE HAS A NEW NAME (CaptureDurableName), because a rolling upgrade keeps a
+	// pod of the previous build running beside this one, and that build re-filters the durable
+	// it knows in place whenever it re-binds; see CaptureDurableName.
 	if streams.ShapeOf(suffix) == streams.ShapeDeviceEvents {
 		subjects := DeviceEventsSubjects(nmgr.Microservice.InstanceId)
 		r.forwards, r.alsoForwards = subjects[0], subjects[1:]
+		r.legacyDurable = DurableName(nmgr.Microservice.InstanceId, nmgr.Microservice.FunctionalArea, suffix)
 	} else {
 		r.subject = StreamSubject(nmgr.Microservice.InstanceId, suffix)
 	}
@@ -2249,6 +2300,9 @@ func (nmgr *NatsManager) NewReader(suffix string, opts ...ReaderOption) (Message
 	// so there is no series to initialise and nothing that would ever update one.
 	if nmgr.metrics != nil {
 		nmgr.metrics.initDurable(r.stream, r.durable, r.capacity != nil)
+		if r.forwards != "" {
+			nmgr.metrics.initForeignDropped(r.stream, r.durable)
+		}
 	}
 	log.Info().Str("durable", r.durable).Str("subject", r.subject).Strs("filters", r.filters).Msg("Added new NATS reader")
 	return r, nil
@@ -2794,7 +2848,7 @@ func (r *natsReader) dropForeign(nm *nats.Msg, sl *slot, seq uint64) {
 	if sl != nil {
 		sl.release()
 	}
-	r.nmgr.foreignDropped.Add(1)
+	r.nmgr.metrics.foreignDroppedFor(r.stream, r.durable)
 	if !r.foreignLogged {
 		r.foreignLogged = true
 		log.Warn().Str("stream", r.stream).Str("durable", r.durable).Str("subject", nm.Subject).Uint64("seq", seq).

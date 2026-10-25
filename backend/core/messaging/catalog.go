@@ -121,11 +121,18 @@ func (nmgr *NatsManager) undeclared(role, suffix string, declared []string) erro
 //
 // A durable reader has one name. An ack-floor reader has two: its own, and the ordinary name
 // of the durable it replaced, which it deletes at the start of a term (retireLegacyDurable).
+// The device-events capture reader has two as well: its own (CaptureDurableName) and the
+// ordinary name an earlier build read the stream with, which it deletes whenever it binds
+// (retireLegacyCaptureDurable).
+//
 // An ephemeral or live reader has none: the first is named by the client library and the
 // second is not a consumer.
 func DeclaredDurables(instanceId, suffix string, r streams.Reader) []string {
 	switch r.Mode {
 	case streams.ReadDurable:
+		if streams.ShapeOf(suffix) == streams.ShapeDeviceEvents {
+			return []string{CaptureDurableName(instanceId, r.Area, suffix), DurableName(instanceId, r.Area, suffix)}
+		}
 		return []string{DurableName(instanceId, r.Area, suffix)}
 	case streams.ReadAckFloor:
 		return []string{AckFloorDurableName(instanceId, r.Area, suffix), DurableName(instanceId, r.Area, suffix)}

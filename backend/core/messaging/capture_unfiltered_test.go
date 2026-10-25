@@ -6,10 +6,13 @@ package messaging
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
+	natsserver "github.com/nats-io/nats-server/v2/server"
 	nats "github.com/nats-io/nats.go"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 
 	"github.com/devicechain-io/dc-microservice/core"
@@ -28,7 +31,7 @@ import (
 // captureDurable is the consumer the capture reader of area binds.
 func captureDurable(t *testing.T, js nats.JetStreamContext, area string) *nats.ConsumerInfo {
 	t.Helper()
-	info, err := js.ConsumerInfo(captureStreamOn("test"), DurableName("test", area, captureSuffix))
+	info, err := js.ConsumerInfo(captureStreamOn("test"), CaptureDurableName("test", area, captureSuffix))
 	require.NoError(t, err)
 	return info
 }
@@ -49,14 +52,11 @@ func TestTheCaptureDurableIsUnfilteredOnTheBroker(t *testing.T) {
 		"the capture reader does not hand out exactly the stream's subjects")
 }
 
-// GUARD: a durable an earlier build created with the filter list is moved onto no filter when
-// the reader binds, by RECREATING it, and a message stored before the move is still delivered.
-// AddConsumer reports success against the old durable and keeps its filter (a config that sets
-// no filter is not compared on it), so without the explicit move the slow lookup would survive
-// every upgrade; and an in-place update would leave a durable the stream no longer signals
-// (recreateUnfiltered), which is what the num_pending check catches: such a durable does not
-// count a message stored after the update.
-func TestAnOlderCaptureDurableIsRecreatedNotUpdated(t *testing.T) {
+// GUARD: the durable an earlier build created (old name, filter list) is DELETED when the reader
+// binds, and the reader reads a new durable of its own name, created unfiltered; a message stored
+// before the move is still delivered, and the new durable counts what is stored after it (a
+// durable moved onto no filter in place would not: recreateUnfiltered).
+func TestAnOlderCaptureDurableIsReplacedByANewUnfilteredOne(t *testing.T) {
 	srv := startEmbeddedServer(t)
 	area := uniqueArea("cap-move")
 	nc, err := nats.Connect(srv.ClientURL())
@@ -89,8 +89,10 @@ func TestAnOlderCaptureDurableIsRecreatedNotUpdated(t *testing.T) {
 
 	moved := captureDurable(t, nmgr.js, area)
 	require.Empty(t, moved.Config.FilterSubject)
-	require.Empty(t, moved.Config.FilterSubjects, "the older durable kept its filter list")
-	require.True(t, moved.Created.After(staged.Created), "the durable was updated in place, not recreated")
+	require.Empty(t, moved.Config.FilterSubjects, "the reader's durable has a filter list")
+	require.True(t, moved.Created.After(staged.Created), "the reader's durable is not a new one")
+	_, err = js.ConsumerInfo(stream, durable)
+	require.ErrorIs(t, err, nats.ErrConsumerNotFound, "the old-named durable was left on the work queue")
 
 	// Stored after the move, before anything is read: the durable must count them.
 	for i := 0; i < 5; i++ {
@@ -164,7 +166,9 @@ func TestACaptureBacklogOverManyDevicesDrainsAtSequenceSpeed(t *testing.T) {
 func TestTheCaptureReaderDropsAnEntryStoredUnderAForeignSubject(t *testing.T) {
 	srv := startEmbeddedServer(t)
 	area := uniqueArea("cap-foreign")
-	nmgr, readers := recorderRig(t, srv, area, recordNothing, captureSuffix)
+	reg := prometheus.NewRegistry()
+	nmgr, readers := captureRigWithRegistry(t, srv, area, reg)
+	require.Zero(t, foreignDroppedSeries(t, reg, area, "the series exists at zero before any drop"))
 
 	nc, err := nats.Connect(srv.ClientURL())
 	require.NoError(t, err)
@@ -208,7 +212,7 @@ func TestTheCaptureReaderDropsAnEntryStoredUnderAForeignSubject(t *testing.T) {
 		require.NoError(t, msg.Ack())
 	}
 	require.Equal(t, []string{"device", "gateway"}, got, "the reader handed out a message stored under a foreign subject")
-	require.EqualValues(t, 1, nmgr.foreignDropped.Load(), "the foreign entry was not dropped exactly once")
+	require.EqualValues(t, 1, foreignDroppedSeries(t, reg, area, "after the drop"), "the foreign entry was not counted exactly once")
 	waitWithin(t, 3*time.Second, "the dropped entry to leave the work queue",
 		func() bool { return capturedHeld(t, nmgr.js) == 0 })
 }
@@ -235,7 +239,7 @@ func TestACaptureDurableThatDiffersInMoreThanItsFilterIsStillRefused(t *testing.
 	t.Cleanup(func() { _ = nmgr.Stop(ctx) })
 
 	stream := captureStreamOn(ms.InstanceId)
-	durable := DurableName(ms.InstanceId, area, captureSuffix)
+	durable := CaptureDurableName(ms.InstanceId, area, captureSuffix)
 	_, err := nmgr.js.AddStream(&nats.StreamConfig{
 		Name: stream, Subjects: DeviceEventsSubjects(ms.InstanceId), Retention: nats.WorkQueuePolicy,
 	})
@@ -255,4 +259,90 @@ func TestACaptureDurableThatDiffersInMoreThanItsFilterIsStillRefused(t *testing.
 	require.NoError(t, err)
 	require.Equal(t, staged.Created, after.Created, "the refused durable was recreated")
 	require.Len(t, after.Config.FilterSubjects, 2, "the refused durable lost its filter")
+}
+
+// GUARD: recreateUnfiltered. A durable of the capture reader's OWN name that carries a filter
+// (only a hand edit makes one) is recreated without it, never moved in place: an in-place move
+// onto no filter leaves a durable the stream does not signal, which the num_pending check sees.
+func TestAFilteredDurableUnderTheCaptureNameIsRecreatedNotUpdated(t *testing.T) {
+	srv := startEmbeddedServer(t)
+	area := uniqueArea("cap-recreate")
+	nc, err := nats.Connect(srv.ClientURL())
+	require.NoError(t, err)
+	t.Cleanup(nc.Close)
+	js, err := nc.JetStream()
+	require.NoError(t, err)
+	stream := captureStreamOn("test")
+	_, err = js.AddStream(&nats.StreamConfig{Name: stream, Subjects: DeviceEventsSubjects("test"), Retention: nats.WorkQueuePolicy})
+	require.NoError(t, err)
+	_, err = js.AddConsumer(stream, &nats.ConsumerConfig{
+		Durable: CaptureDurableName("test", area, captureSuffix), AckPolicy: nats.AckExplicitPolicy,
+		AckWait: time.Second, MaxDeliver: MaxDeliver, MaxAckPending: readerMaxAckPending,
+		FilterSubjects: DeviceEventsSubjects("test"),
+	})
+	require.NoError(t, err)
+	staged := captureDurable(t, js, area)
+
+	nmgr, _ := recorderRig(t, srv, area, recordNothing, captureSuffix)
+	moved := captureDurable(t, nmgr.js, area)
+	require.Empty(t, moved.Config.FilterSubjects, "the filter list was kept")
+	require.True(t, moved.Created.After(staged.Created), "the durable was updated in place, not recreated")
+	for i := 0; i < 3; i++ {
+		_, err = js.Publish(DeviceEventsSubject("test", "acme", "after"), []byte("after"))
+		require.NoError(t, err)
+	}
+	waitWithin(t, 3*time.Second, "the recreated durable to count what was stored after it", func() bool {
+		return captureDurable(t, nmgr.js, area).NumPending == 3
+	})
+}
+
+// captureRigWithRegistry is recorderRig for the capture reader, with the microservice's metrics on
+// reg so a test reads them back the way a scrape does.
+func captureRigWithRegistry(t *testing.T, srv *natsserver.Server, area string, reg *prometheus.Registry) (*NatsManager, []MessageReader) {
+	t.Helper()
+	ms := testMicroservice(t, srv, area)
+	ms.UseMetricsRegistry(reg)
+	var readers []MessageReader
+	nmgr := NewNatsManager(ms, core.NewNoOpLifecycleCallbacks(), func(n *NatsManager) error {
+		r, err := n.NewReader(captureSuffix)
+		readers = append(readers, r)
+		return err
+	})
+	nmgr.RecordMaxDeliveries(recordNothing)
+	ctx := context.Background()
+	require.NoError(t, nmgr.Initialize(ctx))
+	nmgr.SetAckWaitForTesting(t, time.Second)
+	require.NoError(t, nmgr.Start(ctx))
+	t.Cleanup(func() {
+		stopCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = nmgr.Stop(stopCtx)
+	})
+	return nmgr, readers
+}
+
+// foreignDroppedSeries reads devicechain_<area>_jetstream_reader_foreign_dropped_total for the
+// capture reader's durable off reg, failing when the series is not exported at all.
+func foreignDroppedSeries(t *testing.T, reg *prometheus.Registry, area, when string) float64 {
+	t.Helper()
+	families, err := reg.Gather()
+	require.NoError(t, err)
+	want := "devicechain_" + strings.ReplaceAll(area, "-", "") + "_jetstream_reader_foreign_dropped_total"
+	for _, f := range families {
+		if f.GetName() != want {
+			continue
+		}
+		for _, m := range f.GetMetric() {
+			labels := map[string]string{}
+			for _, lp := range m.GetLabel() {
+				labels[lp.GetName()] = lp.GetValue()
+			}
+			if labels["stream"] == captureStreamOn("test") && labels["durable"] == CaptureDurableName("test", area, captureSuffix) {
+				return m.GetCounter().GetValue()
+			}
+		}
+	}
+	t.Fatalf("%s{stream=%q,durable=%q} is not exported (%s)", want, captureStreamOn("test"),
+		CaptureDurableName("test", area, captureSuffix), when)
+	return 0
 }

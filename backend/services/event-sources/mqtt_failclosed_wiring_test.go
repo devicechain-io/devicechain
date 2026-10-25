@@ -135,7 +135,7 @@ func TestCreateNatsComponentsDeclaresTheFailClosedStoreOnlyWithTheSettingOn(t *t
 			ci, err := js.ConsumerInfo(messaging.MqttMessageStore, d.Name)
 			require.NoErrorf(t, err, "the %s durable", d.Kind)
 			capture, err := js.ConsumerInfo(messaging.StreamName("inst-1", streams.DeviceEventsCapture),
-				messaging.DurableName("inst-1", "event-sources", streams.DeviceEventsCapture))
+				messaging.CaptureDurableName("inst-1", "event-sources", streams.DeviceEventsCapture))
 			require.NoError(t, err)
 			require.True(t, !ci.Created.After(capture.Created),
 				"the %s durable was created after the capture reader: the store comes first", d.Kind)
