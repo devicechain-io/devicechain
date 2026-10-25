@@ -1,0 +1,56 @@
+{{/*
+Alerting rule for an AREA WITH NO POD AVAILABLE in this instance's namespace.
+
+WHY IT EXISTS. Every other signal that an area is gone is the area's own: its readiness
+gauge, its scrape target, its metrics. When ALL of an area's pods are gone (scaled down by
+mistake, evicted, failing to schedule, crashing before they are ready) those series vanish
+with it, so "areas not ready", "scrape targets down" and every per-area alert read as if
+nothing were wrong: an absent series is not a zero. Measured: with one area's deployment
+scaled to zero, the overview's readiness and scrape panels did not move and no alert fired
+for five minutes. The deployment's own replica counts are the one place that keeps saying
+what is wanted and what is there, and they come from kube-state-metrics, not from the area.
+
+THE RULE. A deployment that WANTS pods (spec replicas above zero) and has NONE available.
+`unless ... > 0` rather than `== 0` on the available count: kube-state-metrics reports 0
+for such a deployment, but a deployment whose available series is missing altogether has no
+pod available either, and the rule should say so. An area scaled to zero ON PURPOSE wants no
+pods, so its spec replicas is 0 and it is not counted: an area the profile does not run is
+not an outage, and neither is one an operator turned off.
+
+`for: 10m`. An install or an upgrade brings areas up in order and a rollout that has to pull
+an image can hold an area at zero for several minutes. A rolling update keeps the old pods
+until the new ones are ready, so a healthy rollout never reads zero.
+
+Needs kube-state-metrics, which the monitoring stack installs; without it the series do not
+exist and the rule never fires. No `or vector(0)`, for the reason prometheusrule-dead-letter.yaml
+gives in its header.
+*/}}
+{{- if and .Values.metrics.enabled .Values.metrics.alerts }}
+{{- $ns := include "devicechain.instanceNamespace" . }}
+{{/* The alert label below names the INSTANCE, not its namespace: those are the
+     same string today and are about to stop being, so they are spelled apart. */}}
+{{- $id := .Values.instance.id }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: area-availability
+  namespace: {{ $ns }}
+  labels:
+    {{- include "devicechain.instanceLabels" . | nindent 4 }}
+spec:
+  groups:
+    - name: devicechain.area-availability
+      rules:
+        - alert: InstanceAreaUnavailable
+          expr: |
+            kube_deployment_spec_replicas{namespace="{{ $ns }}"} > 0
+            unless on (namespace, deployment)
+            kube_deployment_status_replicas_available{namespace="{{ $ns }}"} > 0
+          for: 10m
+          labels:
+            severity: critical
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "an area of this instance has no pod available"
+            description: "Deployment {{ "{{ $labels.deployment }}" }} wants {{ "{{ $value }}" }} pod(s) and has had none available for ten minutes, so that area is not serving. Because its pods are gone, the area also stops reporting its own readiness and metrics, and the instance overview's readiness and scrape panels will not show it: this alert and the panel for areas with no pod available are what do. Describe the deployment and its pods: kubectl describe deployment and kubectl get pods in the instance's namespace show a failing image pull, a pod that cannot be scheduled for want of CPU or memory, a failed readiness probe, or a crash before ready (kubectl logs --previous). If the area was scaled to zero by mistake, scale it back; an area you turned off on purpose has zero wanted pods and does not raise this."
+{{- end }}

@@ -63,12 +63,42 @@ engaged gauge is evaluated at scrape time, so a gate that cannot measure (and so
 reads 1 rather than a stale 0.
 
 Same operator assumption and gating as the event-processing rules.
+
+THE BROKER'S OWN COUNT, FOR WHEN THE READER IS GONE. Every per-durable backlog series above is
+exported by the READING service, so it vanishes exactly while that service is down -- which is
+the main way a stream backs up, and the case these alerts exist for. A rule over it then
+evaluates an empty vector and stays quiet while the broker holds the whole backlog (measured:
+152,000 messages held, no series, no alert). So the capture-backlog alerts, JetStreamDurableFallingBehind
+and JetStreamDurableUnreadNearFull each read the reader's series FIRST and fall back, durable by
+durable, to the message broker's exporter (nats_consumer_num_pending, nats_consumer_num_ack_pending
+and the nats_stream_* limits, already scraped from the broker pods). The two helpers below build the
+fallback; it is shaped like the reader's own series (labels stream and durable), so `or` merges them
+and a durable the reader still reports is never counted twice.
+
+Two things about that fallback. The broker knows a consumer's pending count only on the consumer's
+LEADER, so every aggregation is `max by`. And it is scoped to this instance's streams by name
+(`<instance id>_...`) rather than by namespace, because the broker may run in another namespace;
+the max-delivery stream and ephemeral consumers (no `_` in their names) are left out, the first
+because MaxDeliveryRecordsWaiting watches it and the second because they are not durable readers.
+The one series the fallback cannot replace is the gap counter (JetStreamDurableStalledBehindStream):
+messages removed ahead of a cursor are not something the broker reports.
 */}}
+{{- define "devicechain.brokerUnreadRatio" -}}
+max by (stream, durable) (label_replace(label_replace(max by (stream_name, consumer_name) (label_replace(sum by (stream_name, consumer_name) (max by (__name__, stream_name, consumer_name) ({__name__=~"nats_consumer_num_pending|nats_consumer_num_ack_pending", stream_name=~"{{ .id }}_.+", stream_name!~".+_max-deliveries", consumer_name=~"{{ .durable }}"})) / on (stream_name) group_left () max by (stream_name) (nats_stream_limit_messages{stream_name=~"{{ .id }}_.+", stream_name!~".+_max-deliveries"} > 0), "form", "m", "", "") or label_replace(sum by (stream_name, consumer_name) (max by (__name__, stream_name, consumer_name) ({__name__=~"nats_consumer_num_pending|nats_consumer_num_ack_pending", stream_name=~"{{ .id }}_.+", stream_name!~".+_max-deliveries", consumer_name=~"{{ .durable }}"})) * on (stream_name) group_left () (max by (stream_name) (nats_stream_total_bytes{stream_name=~"{{ .id }}_.+", stream_name!~".+_max-deliveries"}) / clamp_min(max by (stream_name) (nats_stream_total_messages{stream_name=~"{{ .id }}_.+", stream_name!~".+_max-deliveries"}), 1)) / on (stream_name) group_left () max by (stream_name) (nats_stream_limit_bytes{stream_name=~"{{ .id }}_.+", stream_name!~".+_max-deliveries"} > 0), "form", "b", "", "")), "stream", "$1", "stream_name", "(.+)"), "durable", "$1", "consumer_name", "(.+)"))
+{{- end }}
+{{- define "devicechain.brokerPending" -}}
+max by (stream, durable) (label_replace(label_replace(nats_consumer_num_pending{stream_name=~"{{ .id }}_.+", stream_name!~".+_max-deliveries", consumer_name=~"{{ .durable }}"{{ if .except }}, consumer_name!~"{{ .except }}"{{ end }}}, "stream", "$1", "stream_name", "(.+)"), "durable", "$1", "consumer_name", "(.+)"))
+{{- end }}
 {{- if and .Values.metrics.enabled .Values.metrics.alerts }}
 {{- $ns := include "devicechain.instanceNamespace" . }}
 {{/* The alert label below names the INSTANCE, not its namespace: those are the
      same string today and are about to stop being, so they are spelled apart. */}}
 {{- $id := .Values.instance.id }}
+{{/* The capture durable's unread ratio: the reader's own series, or where the reader reports none
+     (event-sources is down) the broker's count of the same quantity. */}}
+{{- $captureReader := printf "{__name__=~\"devicechain_[a-z0-9]+_jetstream_consumer_unread_ratio\", durable=~\".+_event-sources_device-events-capture(_unfiltered)?\", namespace=\"%s\"}" $ns }}
+{{- $captureBroker := include "devicechain.brokerUnreadRatio" (dict "id" $id "durable" ".+_event-sources_device-events-capture(_unfiltered)?") }}
+{{- $captureRatio := printf "(max by (stream, durable) (%s) or %s)" $captureReader $captureBroker }}
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
@@ -131,7 +161,12 @@ spec:
         # "..._resolved-events" of the previous release until the first leader retires it, so
         # both are excluded and a rollback is not paged either.
         - alert: JetStreamDurableFallingBehind
-          expr: max by (stream, durable) ({__name__=~"devicechain_[a-z0-9]+_jetstream_consumer_pending_messages", durable!~".+_event-processing_resolved-events(_ackfloor)?", namespace="{{ $ns }}"}) > 10000
+          expr: |
+            (
+              max by (stream, durable) ({__name__=~"devicechain_[a-z0-9]+_jetstream_consumer_pending_messages", durable!~".+_event-processing_resolved-events(_ackfloor)?", namespace="{{ $ns }}"})
+              or
+              {{ include "devicechain.brokerPending" (dict "id" $id "durable" ".+_.+" "except" ".+_event-processing_resolved-events(_ackfloor)?") }}
+            ) > 10000
           for: 15m
           labels:
             severity: warning
@@ -219,8 +254,23 @@ spec:
         #
         # `max by`: every replica measures the same durable. It needs a running pod of the
         # reading service, like the other per-durable rules.
+        #
+        # Where the reader reports nothing (its service is down) the broker's count of the same
+        # ratio stands in for it, so the warning does not go quiet exactly while the backlog
+        # builds. A durable whose backlog gates its stream's writers (it exports
+        # jetstream_backpressure_unread_ratio instead, watched by JetStreamUnreadBacklogNearFull)
+        # is left out of the fallback with `unless`, as it is left out of the reader's series.
         - alert: JetStreamDurableUnreadNearFull
-          expr: max by (stream, durable) ({__name__=~"devicechain_[a-z0-9]+_jetstream_consumer_unread_ratio", namespace="{{ $ns }}"}) > 0.8
+          expr: |
+            (
+              max by (stream, durable) ({__name__=~"devicechain_[a-z0-9]+_jetstream_consumer_unread_ratio", namespace="{{ $ns }}"})
+              or
+              (
+                {{ include "devicechain.brokerUnreadRatio" (dict "id" $id "durable" ".+_.+") }}
+                unless on (stream, durable)
+                max by (stream, durable) ({__name__=~"devicechain_[a-z0-9]+_jetstream_backpressure_unread_ratio", namespace="{{ $ns }}"})
+              )
+            ) > 0.8
           for: 5m
           labels:
             severity: warning
@@ -243,13 +293,11 @@ spec:
         # it as a negative time left. The value is the ratio, from the left-hand side.
         - alert: JetStreamCaptureBacklogWillOverflow
           expr: |
-            (
-              max by (stream, durable) ({__name__=~"devicechain_[a-z0-9]+_jetstream_consumer_unread_ratio", durable=~".+_event-sources_device-events-capture(_unfiltered)?", namespace="{{ $ns }}"}) > 0.1
-            )
+            ({{ $captureRatio }} > 0.1)
             and on (stream, durable)
             (
-              (1 - max by (stream, durable) ({__name__=~"devicechain_[a-z0-9]+_jetstream_consumer_unread_ratio", durable=~".+_event-sources_device-events-capture(_unfiltered)?", namespace="{{ $ns }}"}))
-              / (max by (stream, durable) (deriv({__name__=~"devicechain_[a-z0-9]+_jetstream_consumer_unread_ratio", durable=~".+_event-sources_device-events-capture(_unfiltered)?", namespace="{{ $ns }}"}[3m])) > 0)
+              (1 - {{ $captureRatio }})
+              / (deriv({{ $captureRatio }}[3m:30s]) > 0)
               < 600
             )
           for: 1m
@@ -268,13 +316,11 @@ spec:
         # a second threshold on one rule so the page and the heads-up route independently.
         - alert: JetStreamCaptureBacklogGrowing
           expr: |
-            (
-              max by (stream, durable) ({__name__=~"devicechain_[a-z0-9]+_jetstream_consumer_unread_ratio", durable=~".+_event-sources_device-events-capture(_unfiltered)?", namespace="{{ $ns }}"}) > 0.1
-            )
+            ({{ $captureRatio }} > 0.1)
             and on (stream, durable)
             (
-              (1 - max by (stream, durable) ({__name__=~"devicechain_[a-z0-9]+_jetstream_consumer_unread_ratio", durable=~".+_event-sources_device-events-capture(_unfiltered)?", namespace="{{ $ns }}"}))
-              / (max by (stream, durable) (deriv({__name__=~"devicechain_[a-z0-9]+_jetstream_consumer_unread_ratio", durable=~".+_event-sources_device-events-capture(_unfiltered)?", namespace="{{ $ns }}"}[5m])) > 0)
+              (1 - {{ $captureRatio }})
+              / (deriv({{ $captureRatio }}[5m:30s]) > 0)
               < 1200
             )
           for: 2m

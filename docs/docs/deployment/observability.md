@@ -299,6 +299,16 @@ The ceilings are `streamMaxBytes` (the high-volume streams), `streamMaxBytesCold
 `streamMaxMsgs` under `instance.config.infrastructure.nats`. The JetStream volume is sized from
 their sum, so raise the volume with them (see [Bootstrap an Instance](./bootstrap.md)).
 
+The backlog alerts (`JetStreamCaptureBacklogWillOverflow`, `JetStreamCaptureBacklogGrowing`,
+`JetStreamDurableFallingBehind` and `JetStreamDurableUnreadNearFull`) read each consumer's backlog from
+the service that reads it and, for a consumer whose service reports nothing, from the message broker's
+own metrics (`nats_consumer_num_pending`, `nats_consumer_num_ack_pending` and the `nats_stream_*`
+limits, from the broker's metrics sidecar). A reading service that is down, which is the usual way a
+stream backs up, therefore does not silence them. The broker's figures are limited to the instance's own
+streams, and only the consumer's leader reports a count, so the alerts take the highest value across the
+broker pods. If your Prometheus does not scrape the broker (the chart's broker monitor does), the
+fallback is empty and these alerts need the reading service to be running, as before.
+
 The alerts read these series. Every service exports the first three for each durable consumer it
 reads:
 
@@ -642,6 +652,7 @@ retried, and each restart lengthens whatever outage caused it.
 | Alert | What it means | What to do |
 | --- | --- | --- |
 | `InstanceContainerRestarted` (warning) | Kubernetes restarted the container named by the `pod` and `container` labels in the last 15 minutes. It fires once per container and clears 15 minutes after that container's last restart. | Read the log of the container that exited: `kubectl logs --previous -n <namespace> <pod>`. The last error line says why, usually after "A component has declared this process unfit to continue". A read loop that gave up names its stream and its last broker error. If several services restarted together, look at the broker first: check that its servers are running and run `dcctl ha verify`. If the restarted container is a broker server (`dc-nats-*`), read its previous log too; its streams take a few minutes to be current again. If the container's last state is `OOMKilled`, raise its memory limit. Restarts in the first minutes of an install or an upgrade are expected. |
+| `InstanceAreaUnavailable` (critical) | A deployment of this instance wants at least one pod and has had none available for ten minutes, so that area is not serving. When every pod of an area is gone, the area stops reporting its own readiness and metrics, so the overview's readiness and scrape panels do not show it; this alert and the "Areas with no pod available" panel do. An area scaled to zero on purpose wants no pods and does not count. | Run `kubectl describe deployment <deployment> -n <namespace>` and `kubectl get pods -n <namespace>`. They show a failing image pull, a pod that cannot be scheduled for want of CPU or memory, a failed readiness probe, or a crash before ready (`kubectl logs --previous`). If the area was scaled to zero by mistake, scale it back. It reads `kube_deployment_spec_replicas` and `kube_deployment_status_replicas_available` from kube-state-metrics, so it never fires without it. Areas start in order during an install or an upgrade, which is why it waits ten minutes. |
 
 The alert reads `kube_pod_container_status_restarts_total` from kube-state-metrics, which the
 monitoring stack installs. If you run your own Prometheus without kube-state-metrics, it never

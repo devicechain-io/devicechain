@@ -2019,7 +2019,7 @@
       "type": "prometheus",
       "uid": "${datasource}"
      },
-     "expr": "sum(rate(devicechain_eventprocessing_detect_fence_geometry_cache_hits_total{namespace=\"$namespace\"}[5m])) / clamp_min(sum(rate(devicechain_eventprocessing_detect_fence_geometry_cache_hits_total{namespace=\"$namespace\"}[5m])) + sum(rate(devicechain_eventprocessing_detect_fence_geometry_cache_misses_total{namespace=\"$namespace\"}[5m])), 1)",
+     "expr": "sum(rate(devicechain_eventprocessing_detect_fence_geometry_cache_hits_total{namespace=\"$namespace\"}[5m])) / clamp_min((sum(rate(devicechain_eventprocessing_detect_fence_geometry_cache_hits_total{namespace=\"$namespace\"}[5m])) or vector(0)) + (sum(rate(devicechain_eventprocessing_detect_fence_geometry_cache_misses_total{namespace=\"$namespace\"}[5m])) or vector(0)), 1)",
      "legendFormat": "hit rate"
     }
    ],

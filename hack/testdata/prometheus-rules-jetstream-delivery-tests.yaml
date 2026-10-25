@@ -1298,3 +1298,188 @@ tests:
       - eval_time: 3m
         alertname: BrokerConnectionDiedSilently
         exp_alerts: []
+
+  # ==================================================================
+  # THE BROKER'S OWN COUNT, FOR WHEN THE READER IS GONE.
+  #
+  # Every scenario below carries ONLY the message broker exporter's series
+  # (nats_consumer_*, nats_stream_*): the reading service is down, so the reader's own
+  # jetstream_consumer_* series are ABSENT, which is the case that used to leave these
+  # alerts empty while the broker held the whole backlog. The broker reports a
+  # consumer's pending count on the consumer's leader only, so each scenario carries a
+  # follower at 0 as well.
+  #
+  # Exporter limits: 5,000,000 messages and 1 GiB per stream (the chart defaults), and
+  # a stream that holds exactly the backlog at 250 bytes a message, which is what the
+  # work-queue capture stream does.
+  # ==================================================================
+
+  # The capture backlog climbs 400,000 messages a minute from 600,000 while event-sources
+  # is down: 1 GiB binds first (250 bytes x 600,000 is 14% of it), the backlog gains about
+  # 9 points a minute, and the stream is full inside ten minutes.
+  - name: a capture backlog the broker reports while event-sources is down pages and warns
+    interval: 1m
+    input_series:
+      - series: 'nats_consumer_num_pending{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_device-events-capture", consumer_name="devicechain_event-sources_device-events-capture_unfiltered", is_consumer_leader="true"}'
+        values: '600000+400000x12'
+      - series: 'nats_consumer_num_pending{namespace="dci-devicechain", pod="dc-nats-0", stream_name="devicechain_device-events-capture", consumer_name="devicechain_event-sources_device-events-capture_unfiltered", is_consumer_leader="false"}'
+        values: '0x12'
+      - series: 'nats_consumer_num_ack_pending{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_device-events-capture", consumer_name="devicechain_event-sources_device-events-capture_unfiltered", is_consumer_leader="true"}'
+        values: '0x12'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_device-events-capture"}'
+        values: '600000+400000x12'
+      - series: 'nats_stream_total_bytes{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_device-events-capture"}'
+        values: '150000000+100000000x12'
+      - series: 'nats_stream_limit_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_device-events-capture"}'
+        values: '5000000x12'
+      - series: 'nats_stream_limit_bytes{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_device-events-capture"}'
+        values: '1073741824x12'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: JetStreamCaptureBacklogWillOverflow
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: JetStreamCaptureBacklogWillOverflow
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+              stream: devicechain_device-events-capture
+              durable: devicechain_event-sources_device-events-capture_unfiltered
+            exp_annotations:
+              summary: "MQTT events the broker has already acknowledged are about to be lost"
+              description: "Durable devicechain_event-sources_device-events-capture_unfiltered has not yet forwarded 69.85% of what stream devicechain_device-events-capture can hold, and at the rate that backlog grew over the last three minutes the stream will be full within ten. Every event in it was sent by an MQTT device that the broker has already acknowledged, so the platform cannot refuse them: once the stream is full it discards the oldest unforwarded ones and the devices are never told (JetStreamDurableLostUnread). Devices are publishing faster than event-sources forwards. If event-sources is not busy on CPU, its publish window is the limit: devicechain_eventsources_jetstream_publish_window_full_seconds_total{writer=\"capture\"} grows by close to a second per second; add event-sources replicas, each of which brings its own window (capture.publishWindow already defaults to its maximum, 1024; raise it only if it was lowered). If inbound-events is refusing new events (JetStreamIngestBackpressureEngaged), the slow consumer is further downstream. To buy time, raise streamMaxBytes together with the JetStream volume, and streamMaxMsgs too if the stream fills by message count first (small payloads); event-sources applies the new ceilings when it restarts."
+      - eval_time: 6m
+        alertname: JetStreamCaptureBacklogGrowing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              stream: devicechain_device-events-capture
+              durable: devicechain_event-sources_device-events-capture_unfiltered
+            exp_annotations:
+              summary: "MQTT events waiting to be forwarded are piling up faster than they leave"
+              description: "Durable devicechain_event-sources_device-events-capture_unfiltered has not yet forwarded 69.85% of what stream devicechain_device-events-capture can hold, and at the rate that backlog grew over the last five minutes the stream will be full within twenty. This is the early warning for JetStreamCaptureBacklogWillOverflow, which fires when ten minutes remain. Every event in the backlog was sent by an MQTT device that the broker has already acknowledged, so the platform cannot refuse them: once the stream is full it discards the oldest unforwarded ones and the devices are never told (JetStreamDurableLostUnread). Devices are publishing faster than event-sources forwards. Add event-sources replicas now, each of which brings its own publish window, and look at event-sources CPU and at devicechain_eventsources_jetstream_publish_window_full_seconds_total{writer=\"capture\"}; if JetStreamIngestBackpressureEngaged is firing, the slow consumer is further downstream. To buy time, raise streamMaxBytes together with the JetStream volume."
+
+  # ------------------------------------------------------------------
+  # Quiet, each case carrying its series: a broker backlog that is DRAINING, one under the
+  # 10% floor, another instance's capture stream growing fast, and a reader that is UP and
+  # reporting a small backlog while the broker's figure is large (the reader's series wins;
+  # the two are never added, and a durable the reader still reports is not judged twice).
+  # ------------------------------------------------------------------
+  - name: a draining, small, foreign and reader-reported capture backlog do not page from the broker
+    interval: 1m
+    input_series:
+      - series: 'nats_consumer_num_pending{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_device-events-capture", consumer_name="devicechain_event-sources_device-events-capture_unfiltered"}'
+        values: '3000000-200000x12'
+      - series: 'nats_stream_limit_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_device-events-capture"}'
+        values: '5000000x12'
+      - series: 'nats_consumer_num_pending{namespace="dci-devicechain", pod="dc-nats-1", stream_name="burst_device-events-capture", consumer_name="burst_event-sources_device-events-capture_unfiltered"}'
+        values: '0 50000x12'
+      - series: 'nats_stream_limit_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="burst_device-events-capture"}'
+        values: '5000000x12'
+      - series: 'nats_consumer_num_pending{namespace="dci-other", pod="dc-nats-1", stream_name="other_device-events-capture", consumer_name="other_event-sources_device-events-capture_unfiltered"}'
+        values: '0+800000x12'
+      - series: 'nats_stream_limit_messages{namespace="dci-other", pod="dc-nats-1", stream_name="other_device-events-capture"}'
+        values: '5000000x12'
+      - series: 'nats_consumer_num_pending{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_device-events-capture", consumer_name="devicechain_event-sources_device-events-capture"}'
+        values: '0+400000x12'
+      - series: 'devicechain_eventsources_jetstream_consumer_unread_ratio{namespace="dci-devicechain", pod="dc-event-sources-7c9f-aaaaa", job="devicechain/event-sources", stream="devicechain_device-events-capture", durable="devicechain_event-sources_device-events-capture"}'
+        values: '0.05x12'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: JetStreamCaptureBacklogWillOverflow
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: JetStreamCaptureBacklogWillOverflow
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: JetStreamCaptureBacklogGrowing
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: JetStreamCaptureBacklogGrowing
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # JetStreamDurableFallingBehind from the broker alone. device-state is down, its durable
+  # holds 20,000 messages behind resolved-events for the whole window, and nothing reports it
+  # but the broker: one alert, not one per broker pod (the follower reports 0). Quiet beside
+  # it, each carrying its series: a backlog under the threshold, DETECT's replay durable, the
+  # max-delivery stream, an ephemeral consumer, and another instance's stream.
+  # ------------------------------------------------------------------
+  - name: a durable the broker holds behind its stream warns without its reader
+    interval: 1m
+    input_series:
+      - series: 'nats_consumer_num_pending{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_resolved-events", consumer_name="devicechain_device-state_resolved-events"}'
+        values: '20000x30'
+      - series: 'nats_consumer_num_pending{namespace="dci-devicechain", pod="dc-nats-0", stream_name="devicechain_resolved-events", consumer_name="devicechain_device-state_resolved-events"}'
+        values: '0x30'
+      - series: 'nats_consumer_num_pending{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_resolved-events", consumer_name="devicechain_event-management_resolved-events"}'
+        values: '9000x30'
+      - series: 'nats_consumer_num_pending{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_resolved-events", consumer_name="devicechain_event-processing_resolved-events_ackfloor"}'
+        values: '900000x30'
+      - series: 'nats_consumer_num_pending{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_max-deliveries", consumer_name="devicechain_device-state_max-deliveries"}'
+        values: '900000x30'
+      - series: 'nats_consumer_num_pending{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_resolved-events", consumer_name="Xk3pQ9aZ"}'
+        values: '900000x30'
+      - series: 'nats_consumer_num_pending{namespace="dci-other", pod="dc-nats-1", stream_name="other_resolved-events", consumer_name="other_device-state_resolved-events"}'
+        values: '900000x30'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: JetStreamDurableFallingBehind
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: JetStreamDurableFallingBehind
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              stream: devicechain_resolved-events
+              durable: devicechain_device-state_resolved-events
+            exp_annotations:
+              summary: "a consumer has stayed more than 10000 messages behind its stream for 15 minutes"
+              description: "Durable devicechain_device-state_resolved-events on stream devicechain_resolved-events has had more than 10000 messages waiting for it for the last 15 minutes (20000 now). Whatever that service produces from the stream is that far behind: for device-state, a device's live state lags its stored events. Compare the consumer's rate with the stream's: if the service is keeping pace but not catching up, give it capacity (for device-state, its projection settings and its database); if it has stopped, JetStreamDurableStalledBehindStream and the service's logs say why. If the stream fills first, messages the consumer has not reached will be lost, except where the stream applies backpressure (inbound-events for device-management, resolved-events for event-management): there new events are refused instead (JetStreamIngestBackpressureEngaged)."
+
+  # ------------------------------------------------------------------
+  # JetStreamDurableUnreadNearFull from the broker alone: 4,500,000 unread of a 5,000,000
+  # message ceiling is 90%, and 100 bytes a message keeps the byte form well under it, so the
+  # message form binds. A durable that gates its stream's writers (it exports
+  # jetstream_backpressure_unread_ratio, which the writers keep reporting) is left to
+  # JetStreamUnreadBacklogNearFull and stays out of this one.
+  # ------------------------------------------------------------------
+  - name: a durable near its stream's ceiling warns from the broker's count, and a gating one does not
+    interval: 1m
+    input_series:
+      - series: 'nats_consumer_num_pending{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_resolved-events", consumer_name="devicechain_device-state_resolved-events"}'
+        values: '4500000x10'
+      - series: 'nats_consumer_num_ack_pending{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_resolved-events", consumer_name="devicechain_device-state_resolved-events"}'
+        values: '0x10'
+      - series: 'nats_consumer_num_pending{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_resolved-events", consumer_name="devicechain_event-management_resolved-events"}'
+        values: '4500000x10'
+      - series: 'nats_consumer_num_ack_pending{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_resolved-events", consumer_name="devicechain_event-management_resolved-events"}'
+        values: '0x10'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_resolved-events"}'
+        values: '5000000x10'
+      - series: 'nats_stream_total_bytes{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_resolved-events"}'
+        values: '500000000x10'
+      - series: 'nats_stream_limit_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_resolved-events"}'
+        values: '5000000x10'
+      - series: 'nats_stream_limit_bytes{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_resolved-events"}'
+        values: '1073741824x10'
+      - series: 'devicechain_eventmanagement_jetstream_backpressure_unread_ratio{namespace="dci-devicechain", pod="dc-device-management-7c9f-aaaaa", job="devicechain/device-management", stream="devicechain_resolved-events", durable="devicechain_event-management_resolved-events"}'
+        values: '0.9x10'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: JetStreamDurableUnreadNearFull
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: JetStreamDurableUnreadNearFull
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              stream: devicechain_resolved-events
+              durable: devicechain_device-state_resolved-events
+            exp_annotations:
+              summary: "A consumer is close to losing messages it has not read"
+              description: "Durable devicechain_device-state_resolved-events has not yet read 90% of what stream devicechain_resolved-events can hold. Once its unread backlog reaches the stream's ceiling, the stream discards its oldest messages to make room, and this consumer will never process the ones it had not reached (JetStreamDurableLostUnread). New messages are still accepted. Find out why the consumer is slow: its service's logs, its database, and JetStreamDurableFallingBehind. If the traffic has outgrown the stream, raise the stream's ceiling (and the JetStream volume with it)."
