@@ -320,3 +320,34 @@ func toJSON(t *testing.T, v any) string {
 	t.Helper()
 	return fmt.Sprint(v)
 }
+
+// A scoped caller filtering devices by a provisioning profile is refused with the scope refusal,
+// not handed a database error: the filters name profiles it may not read.
+func TestAScopedCallerCannotFilterDevicesByProvisioningProfile(t *testing.T) {
+	f := newProvisioningWireFixture(t)
+	admin := f.operator()
+	serve(t, admin, wireCreateProfileSecret, createProfileVars("pp-1", nil))
+	member := f.withClaims(&auth.Claims{TokenType: auth.TokenTypeAccess, Tenant: scopeTenant,
+		Authorities: []string{string(auth.DeviceRead)}, ScopeAnchors: []string{"customer:acme"}})
+
+	// The control: the member lists its devices, and the administrator filters by profile.
+	if got := serve(t, member, `query { devices(criteria: {pageNumber: 1, pageSize: 10}) { results { token } } }`, nil); len(got.errs) > 0 {
+		t.Fatalf("the member cannot list its devices: %v", got.errs[0].Message)
+	}
+	if got := serve(t, admin, `query { devices(criteria: {pageNumber: 1, pageSize: 10, expectedProvisioningProfile: "pp-1"}) { results { token } } }`, nil); len(got.errs) > 0 {
+		t.Fatalf("the administrator cannot filter: %v", got.errs[0].Message)
+	}
+	for _, filter := range []string{`expectedProvisioningProfile: "pp-1"`, `provisioningProfile: "pp-1"`} {
+		got := serve(t, member, `query { devices(criteria: {pageNumber: 1, pageSize: 10, `+filter+`}) { results { token } } }`, nil)
+		if len(got.errs) == 0 {
+			t.Fatalf("a scoped caller filtered by %s", filter)
+		}
+		msg := got.errs[0].Message
+		if strings.Contains(strings.ToLower(msg), "sql") || strings.Contains(msg, "near") {
+			t.Fatalf("%s leaked a database error: %s", filter, msg)
+		}
+		if !strings.Contains(msg, auth.ErrScopeUnsupported.Error()) {
+			t.Fatalf("%s: %q is not the scope refusal %q", filter, msg, auth.ErrScopeUnsupported.Error())
+		}
+	}
+}

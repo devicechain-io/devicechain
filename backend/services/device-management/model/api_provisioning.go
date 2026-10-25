@@ -303,72 +303,85 @@ func (api *Api) UpdateProvisioningProfile(ctx context.Context, token string,
 		}
 		deviceType = deviceTypes[0]
 	}
-	strategy, err := request.Strategy.ApplyToRequired("strategy", updated.Strategy)
-	if err != nil {
-		return nil, err
-	}
-	if request.Strategy.Set && !ProvisioningStrategy(strategy).Valid() {
-		return nil, fmt.Errorf("invalid provisioning strategy: %s", strategy)
-	}
-	provisionKey, err := request.ProvisionKey.ApplyToRequired("provisionKey", updated.ProvisionKey)
-	if err != nil {
-		return nil, err
-	}
 	if request.MaxDevices.Set && request.MaxDevices.Value != nil {
 		if err := validMaxDevices(request.MaxDevices.Value); err != nil {
 			return nil, err
 		}
 	}
-	enabled, err := request.Enabled.ApplyToRequired("enabled", updated.Enabled)
-	if err != nil {
-		return nil, err
+
+	// apply folds the request's fields onto base. It runs twice: once on the copy read above, so
+	// every refusal comes before a transaction opens, and once on the row read UNDER THE LOCK,
+	// which is the one that is written.
+	apply := func(base *ProvisioningProfile) error {
+		strategy, err := request.Strategy.ApplyToRequired("strategy", base.Strategy)
+		if err != nil {
+			return err
+		}
+		if request.Strategy.Set && !ProvisioningStrategy(strategy).Valid() {
+			return fmt.Errorf("invalid provisioning strategy: %s", strategy)
+		}
+		provisionKey, err := request.ProvisionKey.ApplyToRequired("provisionKey", base.ProvisionKey)
+		if err != nil {
+			return err
+		}
+		enabled, err := request.Enabled.ApplyToRequired("enabled", base.Enabled)
+		if err != nil {
+			return err
+		}
+		expiresAt, err := request.ExpiresAt.ApplyToNullTime("expiresAt", base.ExpiresAt)
+		if err != nil {
+			return err
+		}
+		metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.ApplyTo(dcgraphql.MetadataStr(base.Metadata)))
+		if err != nil {
+			return err
+		}
+		base.Name = request.Name.ApplyToNullString(base.Name)
+		base.Description = request.Description.ApplyToNullString(base.Description)
+		base.Metadata = metadataJSON
+		base.ProvisionKey = provisionKey
+		base.MaxDevices = request.MaxDevices.ApplyToIntPtr(base.MaxDevices)
+		base.Strategy = strategy
+		// CredentialType is deliberately NOT assigned: it is not in the input (see
+		// ProvisioningProfileUpdateRequest), so an update leaves what creation chose.
+		base.Enabled = enabled
+		base.ExpiresAt = expiresAt
+		if deviceType != nil {
+			base.DeviceType = deviceType
+			base.DeviceTypeId = deviceType.ID
+		}
+		return nil
 	}
-	expiresAt, err := request.ExpiresAt.ApplyToNullTime("expiresAt", updated.ExpiresAt)
-	if err != nil {
-		return nil, err
-	}
-	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.ApplyTo(dcgraphql.MetadataStr(updated.Metadata)))
-	if err != nil {
+	preview := *updated
+	if err := apply(&preview); err != nil {
 		return nil, err
 	}
 
-	updated.Name = request.Name.ApplyToNullString(updated.Name)
-	updated.Description = request.Description.ApplyToNullString(updated.Description)
-	updated.Metadata = metadataJSON
-	updated.ProvisionKey = provisionKey
-	updated.MaxDevices = request.MaxDevices.ApplyToIntPtr(updated.MaxDevices)
-	updated.Strategy = strategy
-	// CredentialType is deliberately NOT assigned: it is not in the input (see
-	// ProvisioningProfileUpdateRequest), so an update leaves what creation chose.
-	updated.Enabled = enabled
-	updated.ExpiresAt = expiresAt
-	if deviceType != nil {
-		updated.DeviceType = deviceType
-		updated.DeviceTypeId = deviceType.ID
-	}
-
-	// The save runs under the profile's row lock and takes the secret columns from the LOCKED
-	// row, not from the copy read above: an edit that loaded the profile before a rotation must
-	// not write the old digest back over the new one. Registrations hold the same lock, so an
-	// edit also never lands mid-registration.
+	// 🔴 EVERY FIELD IS FOLDED ONTO THE LOCKED ROW, not just the secret columns. A disable and a
+	// rename that queue behind a registration run one after the other: if the rename wrote the
+	// copy it read BEFORE the lock, it would write enabled=true back over the disable that
+	// committed in between, and the fleet secret an operator had just shut off would work again.
+	// Registrations hold the same lock, so an edit also never lands mid-registration.
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		locked, err := lockProfileByToken(tx, updated.Token)
 		if err != nil {
 			return err
 		}
-		updated.ProvisionSecretDigest = locked.ProvisionSecretDigest
-		updated.ProvisionSecretIssued = locked.ProvisionSecretIssued
 		digest, adopted, err := api.adoptLegacyProvisionSecret(tx, locked)
 		if err != nil {
 			return err
 		}
-		updated.ProvisionSecretDigest = digest
+		if err := apply(locked); err != nil {
+			return err
+		}
+		locked.ProvisionSecretDigest = digest
 		if adopted {
 			// An old-version pod set this secret, from an operator's own choice: it is no longer the
 			// one the server generated, and the endpoint refuses it until it is rotated.
-			updated.ProvisionSecretIssued = false
+			locked.ProvisionSecretIssued = false
 		}
-		return tx.Save(updated).Error
+		updated = locked
+		return tx.Save(locked).Error
 	})
 	if err != nil {
 		return nil, err

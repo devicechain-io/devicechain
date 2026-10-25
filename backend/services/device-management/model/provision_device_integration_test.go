@@ -31,6 +31,7 @@ import (
 	"github.com/devicechain-io/dc-device-management/schema"
 	"github.com/devicechain-io/dc-microservice/conflict"
 	"github.com/devicechain-io/dc-microservice/core"
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -211,6 +212,10 @@ func TestSelfRegistrationSchemaOnPostgres(t *testing.T) {
 		assert.Equal(t, "fk_device_credentials_provisioning_profile", rules[0].Name)
 		assert.Equal(t, "r", rules[0].OnDelete, "the credential's provenance must RESTRICT")
 		assert.Equal(t, "fk_devices_expected_provisioning_profile", rules[1].Name)
+		var unvalidated int64
+		require.NoError(t, sys.Raw(`SELECT count(*) FROM pg_constraint WHERE NOT convalidated AND conname IN
+			('fk_devices_expected_provisioning_profile', 'fk_device_credentials_provisioning_profile')`).Scan(&unvalidated).Error)
+		assert.Zero(t, unvalidated, "a foreign key was left NOT VALID")
 		assert.Equal(t, "n", rules[1].OnDelete, "the earmark must SET NULL")
 
 		var indexes int64
@@ -645,4 +650,129 @@ func TestProvisionMixedOperationsOnOneProfileNeverDeadlock(t *testing.T) {
 		t.Fatal("the mixed operations never finished: a deadlock the database did not break")
 	}
 	assert.Zero(t, bad.Load(), "operations failed with a server error: %s", strings.Join(problems, "; "))
+}
+
+// ─── Writes that must be computed under the lock, and columns that are never written ──────
+
+// waitForBlockedBackends polls until at least n backends of this database wait on a lock.
+func waitForBlockedBackends(t *testing.T, db *gorm.DB, n int64) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		var got int64
+		require.NoError(t, db.Raw(`SELECT count(*) FROM pg_stat_activity
+			WHERE datname = current_database() AND wait_event_type = 'Lock'`).Scan(&got).Error)
+		if got >= n {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("fewer than %d backends ever blocked on a lock", n)
+}
+
+// A disable and a rename queue behind a transaction holding the profile's row. Both read the
+// profile BEFORE the lock; the disable commits first. The rename must be folded onto the row as
+// the disable left it: if it wrote the copy it read earlier it would write enabled=true back,
+// and the fleet secret an operator had just shut off would work again.
+func TestProvisionAnUpdateQueuedBehindADisableDoesNotReEnableTheProfile(t *testing.T) {
+	f := newPgFixture(t)
+	f.profile("pp-1", ProvisionAllowNew)
+
+	holder := f.mgr.Database.WithContext(f.ctx).Begin()
+	require.NoError(t, holder.Error)
+	_, err := lockProfileByToken(holder, "pp-1")
+	require.NoError(t, err)
+
+	disabled, renamed := make(chan error, 1), make(chan error, 1)
+	go func() {
+		_, err := f.api.UpdateProvisioningProfile(f.ctx, "pp-1", &ProvisioningProfileUpdateRequest{Enabled: dcgraphql.OptionalBoolOf(false)})
+		disabled <- err
+	}()
+	waitForBlockedBackends(t, f.mgr.Database, 1)
+	go func() {
+		_, err := f.api.UpdateProvisioningProfile(f.ctx, "pp-1", &ProvisioningProfileUpdateRequest{Name: dcgraphql.OptionalStringOf("Renamed")})
+		renamed <- err
+	}()
+	waitForBlockedBackends(t, f.mgr.Database, 2)
+	require.NoError(t, holder.Commit().Error)
+	require.NoError(t, <-disabled)
+	require.NoError(t, <-renamed)
+
+	rows, err := f.api.ProvisioningProfilesByToken(f.ctx, []string{"pp-1"})
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.False(t, rows[0].Enabled, "the rename re-enabled a profile an operator had disabled")
+	assert.Equal(t, "Renamed", rows[0].Name.String, "the rename was lost")
+	_, err = f.api.AuthenticateProvisioningProfile(f.ctx, f.keys["pp-1"], f.secrets["pp-1"])
+	assert.ErrorIs(t, err, ErrProvisioningFailed, "the disabled profile's secret still authenticates")
+}
+
+// holdBeforeUpdate runs fn once, on a second connection, just before the first UPDATE of table
+// that the code under test issues: the moment between its read and its write.
+func holdBeforeUpdate(t *testing.T, f *pgFixture, table string, fn func(db *gorm.DB)) {
+	t.Helper()
+	var once sync.Once
+	name := fmt.Sprintf("test:before-update-%s-%d", table, time.Now().UnixNano())
+	require.NoError(t, f.mgr.Database.Callback().Update().Before("gorm:update").Register(name, func(db *gorm.DB) {
+		if db.Statement.Table != table || db.Error != nil {
+			return
+		}
+		once.Do(func() {
+			fn(db.Session(&gorm.Session{NewDB: true}).WithContext(core.WithSystemContext(context.Background())))
+		})
+	}))
+	t.Cleanup(func() { _ = f.mgr.Database.Callback().Update().Remove(name) })
+}
+
+// A device update never writes the earmark. It loaded the device with the earmark for a profile;
+// the profile is deleted before the write, and the database clears the earmark (SET NULL). Written
+// back whole, the stale value would be refused by the foreign key (or resurrect a dead earmark).
+func TestProvisionADeviceUpdateNeverWritesTheEarmark(t *testing.T) {
+	f := newPgFixture(t)
+	f.profile("pp-1", ProvisionAllowNew)
+	_, err := f.api.CreateDevice(f.ctx, &DeviceCreateRequest{Token: "dev-1", DeviceTypeToken: "dt-a",
+		ProvisioningProfileToken: strPtr("pp-1")})
+	require.NoError(t, err)
+
+	holdBeforeUpdate(t, f, "devices", func(db *gorm.DB) {
+		require.NoError(t, db.Exec(`DELETE FROM "device-management".provisioning_profiles WHERE tenant_id = ?`, f.tenant).Error)
+	})
+	_, err = f.api.UpdateDevice(f.ctx, "dev-1", &DeviceUpdateRequest{Name: dcgraphql.OptionalStringOf("renamed")})
+	require.NoError(t, err, "the update wrote the stale earmark back")
+	rows, err := f.api.DevicesByToken(f.ctx, []string{"dev-1"})
+	require.NoError(t, err)
+	assert.Nil(t, rows[0].ExpectedProvisioningProfileId, "the update put back an earmark for a deleted profile")
+	assert.Equal(t, "renamed", rows[0].Name.String)
+}
+
+// A credential update never writes the provenance. It loaded the credential issued by profile A;
+// the credential is reset and reissued by profile B before the write. Written back whole, the
+// update would say A issued what B did.
+func TestProvisionACredentialUpdateNeverWritesTheProvenance(t *testing.T) {
+	f := newPgFixture(t)
+	f.profile("pp-a", ProvisionAllowNew)
+	f.profile("pp-b", ProvisionAllowNew)
+	_, err := f.register("pp-a", "SN-1", material(1))
+	require.NoError(t, err)
+	dev := core.DeriveDeviceToken("SN-1", "pv-")
+	cred := core.DeriveDeviceToken("SN-1", "pc-")
+
+	holdBeforeUpdate(t, f, "device_credentials", func(db *gorm.DB) {
+		// What a reset followed by another profile's issuance leaves behind.
+		require.NoError(t, db.Exec(`UPDATE "device-management".device_credentials SET provisioning_profile_id =
+			(SELECT id FROM "device-management".provisioning_profiles WHERE tenant_id = ? AND token = 'pp-b')
+			WHERE tenant_id = ? AND token = ?`, f.tenant, f.tenant, cred).Error)
+	})
+	_, err = f.api.UpdateDeviceCredential(f.ctx, cred, &DeviceCredentialUpdateRequest{
+		Metadata: dcgraphql.OptionalStringOf(`{"a":1}`)})
+	require.NoError(t, err)
+	_ = dev
+
+	rows, err := f.api.DeviceCredentialsByToken(f.ctx, []string{cred})
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.NotNil(t, rows[0].ProvisioningProfileId)
+	pb, err := f.api.ProvisioningProfilesByToken(f.ctx, []string{"pp-b"})
+	require.NoError(t, err)
+	assert.Equal(t, pb[0].ID, *rows[0].ProvisioningProfileId, "the update wrote back the provenance it loaded")
 }

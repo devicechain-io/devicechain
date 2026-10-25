@@ -178,8 +178,15 @@ func (r *SchemaResolver) DevicesByExternalId(ctx context.Context, args struct {
 func (r *SchemaResolver) Devices(ctx context.Context, args struct {
 	Criteria model.DeviceSearchCriteria
 }) (*DeviceSearchResultsResolver, error) {
-	if _, err := auth.AuthorizeScoped(ctx, auth.DeviceRead); err != nil {
+	scope, err := auth.AuthorizeScoped(ctx, auth.DeviceRead)
+	if err != nil {
 		return nil, err
+	}
+	// The provenance and earmark filters name provisioning profiles, which a scoped caller may
+	// not read, and the scoped device rule cannot be combined with their subqueries. Refused up
+	// front rather than left to fail in the database with its own wording.
+	if scope.IsScoped() && (args.Criteria.ProvisioningProfile != nil || args.Criteria.ExpectedProvisioningProfile != nil) {
+		return nil, auth.ErrScopeUnsupported
 	}
 
 	api := r.GetApi(ctx)

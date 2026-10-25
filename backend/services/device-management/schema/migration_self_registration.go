@@ -70,7 +70,16 @@ func (provisioningProfileKeySnapshot) TableName() string { return "provisioning_
 //
 // Migrations run with UseTransaction:false and replay from the top after a failure. Every
 // statement is IF NOT EXISTS / IF EXISTS, and each foreign key is added only when the catalog
-// does not already hold it (Postgres has no ADD CONSTRAINT IF NOT EXISTS). The drop names a
+// does not already hold it (Postgres has no ADD CONSTRAINT IF NOT EXISTS).
+//
+// # The foreign keys are added NOT VALID and then validated
+//
+// ADD CONSTRAINT ... FOREIGN KEY scans the whole table while holding a lock that blocks writes.
+// Added NOT VALID it checks only new writes and takes the lock briefly; VALIDATE CONSTRAINT then
+// scans without blocking them. Both columns are NULL on every existing row, so validation cannot
+// fail, but devices and device_credentials are the busiest tables here and the scan is the cost.
+// A replay after a failure between the two statements finds the constraint present and not
+// validated, and validates it (VALIDATE of an already-valid constraint is a no-op). The drop names a
 // constraint with a hyphen, so it is quoted.
 //
 // # DDL only
@@ -119,12 +128,12 @@ func NewSelfRegistrationSchema() *gormigrate.Migration {
 			// The foreign keys, each only when the catalog does not hold it yet.
 			if err := addForeignKeyIfAbsent(tx, "devices", "fk_devices_expected_provisioning_profile",
 				`ALTER TABLE `+devices+` ADD CONSTRAINT fk_devices_expected_provisioning_profile `+
-					`FOREIGN KEY (expected_provisioning_profile_id) REFERENCES `+profiles+`(id) ON DELETE SET NULL;`); err != nil {
+					`FOREIGN KEY (expected_provisioning_profile_id) REFERENCES `+profiles+`(id) ON DELETE SET NULL NOT VALID;`); err != nil {
 				return err
 			}
 			return addForeignKeyIfAbsent(tx, "device_credentials", "fk_device_credentials_provisioning_profile",
 				`ALTER TABLE `+credentials+` ADD CONSTRAINT fk_device_credentials_provisioning_profile `+
-					`FOREIGN KEY (provisioning_profile_id) REFERENCES `+profiles+`(id) ON DELETE RESTRICT;`)
+					`FOREIGN KEY (provisioning_profile_id) REFERENCES `+profiles+`(id) ON DELETE RESTRICT NOT VALID;`)
 		},
 		// 🔴 THERE IS NO ROLLBACK, and that is deliberate. Dropping provisioning_profile_id
 		// would erase which profile issued which credential, and re-adding the global key
@@ -139,7 +148,7 @@ func NewSelfRegistrationSchema() *gormigrate.Migration {
 }
 
 // addForeignKeyIfAbsent runs the ADD CONSTRAINT statement unless the schema already holds a
-// constraint of that name on that table of the area's schema. Postgres has no ADD CONSTRAINT
+// constraint of that name on that table of the area's schema, then validates it. Postgres has no ADD CONSTRAINT
 // IF NOT EXISTS, so the catalog is asked, naming the table rather than relying on the
 // constraint name being unique across schemas.
 func addForeignKeyIfAbsent(tx *gorm.DB, table, name, stmt string) error {
@@ -150,8 +159,12 @@ func addForeignKeyIfAbsent(tx *gorm.DB, table, name, stmt string) error {
 		"device-management", table, name).Scan(&present).Error; err != nil {
 		return err
 	}
-	if present > 0 {
-		return nil
+	if present == 0 {
+		if err := tx.Exec(stmt).Error; err != nil {
+			return err
+		}
 	}
-	return tx.Exec(stmt).Error
+	// Always validated: a constraint left NOT VALID by an interrupted run is finished by the
+	// replay, and validating one that is already valid does nothing.
+	return tx.Exec(`ALTER TABLE "device-management".` + `"` + table + `" VALIDATE CONSTRAINT "` + name + `";`).Error
 }

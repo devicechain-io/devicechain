@@ -17,8 +17,12 @@ import (
 // lock FIRST and the device's second, the order a registration keeps, so neither can deadlock
 // with one.
 
-// errResetRetry is internal: the credentials a reset found changed profile between its unlocked
-// read and its locked one, so the locks it took are not the locks it needs.
+// errResetRetry is internal: a credential from a profile that is not among the profiles locked
+// appeared between the reset's unlocked read and its locked one. Deleting it would act on a
+// profile this transaction does not hold, so the pass starts again with the right set. It keeps
+// the "profile before device" order true to the letter; it is not known to prevent a deadlock
+// (none could be constructed without it), and TestProvisionResetWaitsForAnAdoptInFlight...
+// is what drives it.
 var errResetRetry = errors.New("the device's provisioning changed while it was being reset")
 
 // ResetDeviceProvisioning hard-deletes every credential self-registration issued to the device
@@ -29,10 +33,10 @@ var errResetRetry = errors.New("the device's provisioning changed while it was b
 // A credential an operator created is not touched. A device that holds none from any profile
 // is a no-op returning zero. An unknown device is gorm.ErrRecordNotFound.
 //
-// 🔴 LOCK ORDER: the profiles that issued the credentials, in id order, then the device. Which
+// LOCK ORDER: the profiles that issued the credentials, in id order, then the device. Which
 // profiles those are is learned from an unlocked read, so after locking the answer is read again
 // and, if a credential from a profile that is not locked has appeared, the whole thing is tried
-// again (a handful of times) rather than locking out of order.
+// again (a handful of times) rather than acting on a profile it does not hold.
 func (api *Api) ResetDeviceProvisioning(ctx context.Context, deviceToken string) (int, error) {
 	const attempts = 3
 	for attempt := 0; attempt < attempts; attempt++ {

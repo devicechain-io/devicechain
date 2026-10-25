@@ -293,7 +293,7 @@ type Device struct {
 	// earmarked devices to "no earmark" rather than blocking on them. Written by a create or
 	// an import naming a provisioning profile, and by the profile itself when it creates a
 	// device; nothing else sets it.
-	ExpectedProvisioningProfileId *uint `gorm:"index"`
+	ExpectedProvisioningProfileId *uint
 
 	// metadataUnread marks a row read WITHOUT its metadata column: the narrow credential
 	// lookups' (authDeviceFields, connectDeviceFields). On such a row a nil Metadata means
@@ -506,7 +506,7 @@ type DeviceCredential struct {
 	// ON DELETE RESTRICT (the migration's foreign key): the API refuses the profile's delete with
 	// a readable sentence, and the constraint is the backstop that turns a missed check into a
 	// refused delete instead of a dangling id.
-	ProvisioningProfileId *uint `gorm:"index"`
+	ProvisioningProfileId *uint
 	// CredentialId is what the credential is looked up by. For MQTT_BASIC it is the
 	// username as sent. For ACCESS_TOKEN it is the keyed digest of the token, never the
 	// token: the token is a bearer secret, and a copy of the database must not hold one.
