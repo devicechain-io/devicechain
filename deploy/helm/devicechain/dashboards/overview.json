@@ -508,7 +508,14 @@
         "graphMode": "none",
         "textMode": "auto",
         "justifyMode": "center"
-      }
+      },
+      "links": [
+        {
+          "title": "Messaging board",
+          "url": "/d/@board:messaging@?var-datasource=${datasource}",
+          "targetBlank": false
+        }
+      ]
     },
     {
       "id": 207,
@@ -575,7 +582,14 @@
         "graphMode": "none",
         "textMode": "auto",
         "justifyMode": "center"
-      }
+      },
+      "links": [
+        {
+          "title": "Messaging board",
+          "url": "/d/@board:messaging@?var-datasource=${datasource}",
+          "targetBlank": false
+        }
+      ]
     },
     {
       "id": 208,
@@ -679,6 +693,11 @@
         }
       },
       "links": [
+        {
+          "title": "Ingest board",
+          "url": "/d/@board:ingest@?var-datasource=${datasource}",
+          "targetBlank": false
+        },
         {
           "title": "Event processing board",
           "url": "/d/@board:event-processing@?var-datasource=${datasource}",
@@ -876,7 +895,14 @@
         "graphMode": "none",
         "textMode": "auto",
         "justifyMode": "center"
-      }
+      },
+      "links": [
+        {
+          "title": "Ingest board",
+          "url": "/d/@board:ingest@?var-datasource=${datasource}",
+          "targetBlank": false
+        }
+      ]
     },
     {
       "id": 213,
@@ -1345,7 +1371,7 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "Drill down: [Event processing](/d/@board:event-processing@?var-datasource=${datasource}) \u00b7 [Command delivery](/d/@board:command-delivery@?var-datasource=${datasource}). Use the DeviceChain boards menu at the top for the rest."
+        "content": "Drill down: [Ingest](/d/@board:ingest@?var-datasource=${datasource}) \u00b7 [Messaging](/d/@board:messaging@?var-datasource=${datasource}) \u00b7 [Persistence](/d/@board:persistence@?var-datasource=${datasource}) \u00b7 [Event processing](/d/@board:event-processing@?var-datasource=${datasource}) \u00b7 [Command delivery](/d/@board:command-delivery@?var-datasource=${datasource}) \u00b7 [Delivery](/d/@board:delivery@?var-datasource=${datasource}) \u00b7 [Platform](/d/@board:platform@?var-datasource=${datasource})"
       }
     }
   ]
