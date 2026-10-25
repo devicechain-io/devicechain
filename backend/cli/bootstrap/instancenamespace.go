@@ -38,11 +38,11 @@ import (
 // directory under ~/.devicechain/instances. None of those come through here, and a call
 // added to one of them would rename something that has to keep its name.
 // instanceNamespacePrefix is what puts an instance's namespace out of reach of the
-// cluster's own. `dcctl install` creates monitoring, dc-system, cert-manager, cnpg-system
-// and ingress-nginx; an instance may be named anything an operator likes, and before this
-// prefix a name matching one of those aimed the instance straight at a namespace a cluster
-// component owns. Measured on a real cluster: a bootstrap named `monitoring` wrote the
-// secret-store root key, the broker's TLS private key and four database credentials into
+// cluster's own. `dcctl install` creates monitoring, dc-system, cert-manager, cnpg-system,
+// ingress-nginx, traefik and gateway-api-system; an instance may be named anything an
+// operator likes, and before this prefix a name matching one of those aimed the instance
+// straight at a namespace a cluster component owns. Measured on a real cluster: a
+// bootstrap named `monitoring` wrote the secret-store root key, the broker's TLS private key and four database credentials into
 // the monitoring stack's namespace, and only then was refused by Helm.
 //
 // 🔑 THE POINT IS THAT THE TWO SETS CANNOT MEET, not that the collisions are enumerated.

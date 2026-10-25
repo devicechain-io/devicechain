@@ -701,6 +701,72 @@ module "cert_manager" {
 
   namespace     = var.cert_manager_namespace
   chart_version = var.cert_manager_chart_version
+
+  # The Gateway API shim, which issues a Certificate for a Gateway listener.
+  #
+  # 🔴 THE CRDs MUST EXIST FIRST. With the shim on and the CRDs absent cert-manager exits
+  # and crash-loops (two restarts measured, CrashLoopBackOff up to five minutes, and a
+  # helm --wait on the release fails meanwhile). depends_on is what orders it: this module
+  # waits for the CRD release to finish.
+  enable_gateway_api = local.gateway_api_usable
+
+  depends_on = [module.gateway_api_crds]
+}
+
+# The Gateway API CRDs (G15). Installed, or -- when the cluster already has a set at
+# v1.5.1 or newer -- accepted and never written; an older set is refused at plan time.
+# Before cert-manager and Traefik, both of which fail without them.
+locals {
+  # Whether the cluster has a Gateway API set the new stack can run against. With our own
+  # module off the CRDs are the operator's and are trusted; with it on, the module says. A
+  # set it cannot use SKIPS Traefik and cert-manager's shim (with a warning from the module)
+  # rather than failing the root, which would block every other cluster prerequisite.
+  gateway_api_usable = var.enable_gateway_api_crds ? module.gateway_api_crds[0].usable : false
+  traefik_on         = var.enable_traefik && (var.enable_gateway_api_crds ? module.gateway_api_crds[0].usable : true)
+}
+
+module "gateway_api_crds" {
+  source = "../modules/gateway-api-crds"
+  count  = var.enable_gateway_api_crds ? 1 : 0
+
+  accept_unversioned_crds = var.gateway_api_accept_unversioned_crds
+}
+
+# Traefik -- the Gateway API controller that replaces ingress-nginx (G15). Installed NEXT
+# TO ingress-nginx in this release; the instance chart's Gateway and the move off the
+# legacy Ingress come later.
+module "traefik" {
+  source = "../modules/traefik"
+  count  = local.traefik_on ? 1 : 0
+
+  namespace        = var.traefik_namespace
+  chart_version    = var.traefik_chart_version
+  image_registry   = var.traefik_image_registry
+  image_repository = var.traefik_image_repository
+
+  use_host_port       = var.traefik_use_host_port
+  service_type        = var.traefik_service_type
+  replicas            = var.traefik_replicas
+  trusted_proxy_cidrs = var.traefik_trusted_proxy_cidrs
+  max_artifact_bytes  = var.traefik_max_artifact_bytes
+  gateway_allow_list  = var.traefik_gateway_allow_list
+  access_log_enabled  = var.traefik_access_log_enabled
+
+  # Without the CRDs the Gateway provider's informers error until they appear.
+  depends_on = [module.gateway_api_crds]
+}
+
+# Two controllers cannot both hold a node's host ports. Refused here, at PLAN time, rather
+# than discovered as a Pending pod and an apply that times out.
+resource "terraform_data" "host_port_exclusive" {
+  input = [var.enable_ingress_nginx && var.ingress_use_host_port, var.enable_traefik && var.traefik_use_host_port]
+
+  lifecycle {
+    precondition {
+      condition     = !(var.enable_ingress_nginx && var.ingress_use_host_port && var.enable_traefik && var.traefik_use_host_port)
+      error_message = "ingress-nginx (ingress_use_host_port) and Traefik (traefik_use_host_port) cannot both bind the node's host 80/443. Leave traefik_use_host_port false while ingress-nginx is installed: Traefik is then reachable on its NodePort, and the swap to host ports is a separate step."
+    }
+  }
 }
 
 # Observability — kube-prometheus-stack (Prometheus Operator + Prometheus +

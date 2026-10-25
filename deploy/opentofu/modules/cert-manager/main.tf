@@ -7,6 +7,16 @@
 # exist — which also avoids the Terraform "create a custom resource before its
 # CRD exists" plan-time problem.
 
+# Named so hack/check-tofu-module-tests.sh pins the provider version the shipped roots run (it only pins
+# a provider the module declares), instead of testing against whatever the registry calls latest.
+terraform {
+  required_providers {
+    helm = {
+      source = "hashicorp/helm"
+    }
+  }
+}
+
 variable "namespace" {
   type    = string
   default = "cert-manager"
@@ -43,6 +53,24 @@ variable "chart_version" {
   }
 }
 
+variable "enable_gateway_api" {
+  description = <<-EOT
+    Turn on cert-manager's Gateway API certificate shim (config.enableGatewayAPI), which
+    is what issues a Certificate for a Gateway listener that carries the cert-manager
+    issuer annotation. Off by default so the module alone behaves as it always did.
+
+    🔴 THE GATEWAY API CRDs MUST EXIST BEFORE THIS RELEASE STARTS. With the shim on and the
+    CRDs absent the controller EXITS ("the Gateway API CRDs do not seem to be present") and
+    crash-loops: measured at two restarts before it recovered once the CRDs landed, with a
+    CrashLoopBackOff that can stretch to five minutes, during which a `helm --wait` on this
+    release fails. The caller therefore orders the CRD module first (depends_on), and an
+    UPGRADE that adds the CRDs to a cluster already running cert-manager restarts the pod
+    anyway because this value changes the release.
+  EOT
+  type        = bool
+  default     = false
+}
+
 resource "helm_release" "cert_manager" {
   max_history      = local.helm_max_history
   name             = var.release_name
@@ -74,6 +102,16 @@ resource "helm_release" "cert_manager" {
     name  = "crds.enabled"
     value = "true"
   }
+
+  # The controller configuration file. A ControllerConfiguration document REPLACES the
+  # chart's defaults for the keys it states, so it states only the one it exists for.
+  values = var.enable_gateway_api ? [yamlencode({
+    config = {
+      apiVersion       = "controller.config.cert-manager.io/v1alpha1"
+      kind             = "ControllerConfiguration"
+      enableGatewayAPI = true
+    }
+  })] : []
 }
 
 output "namespace" {

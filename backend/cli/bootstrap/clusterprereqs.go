@@ -38,7 +38,7 @@ type ClusterArchive struct {
 }
 
 // applyClusterPrereqs applies the cluster prerequisite root — the CloudNativePG
-// operator and its backup plugin, cert-manager, ingress-nginx, monitoring, the
+// operator and its backup plugin, cert-manager, ingress-nginx, the Gateway API CRDs and Traefik, monitoring, the
 // shared infrastructure namespace, the shared relational store and the backup object
 // store — and returns what it built, for the install record.
 //

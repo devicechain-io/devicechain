@@ -254,6 +254,151 @@ variable "cert_manager_chart_version" {
   }
 }
 
+# --- Gateway API + Traefik (G15) ------------------------------------------------
+#
+# Traefik is installed NEXT TO ingress-nginx in this release; ingress-nginx is
+# untouched. The instance chart's Gateway/HTTPRoutes and the migration off the legacy
+# Ingress come in later changes -- these variables only put the controller and its
+# prerequisites on the cluster.
+
+variable "enable_gateway_api_crds" {
+  description = <<-EOT
+    Install the Gateway API standard-channel CRDs (v1.6.3) -- or, when the cluster already
+    has a set, check it and leave it alone -- and turn on cert-manager's Gateway API shim.
+
+    OFF BY DEFAULT while the stack is built: nothing renders a Gateway yet (the instance
+    chart's Gateway and HTTPRoutes, and the dual render off the legacy Ingress, are later
+    slices), so turning it on today adds a restart of cert-manager and an idle load balancer
+    for no traffic. The defaults flip in the release that ships both.
+
+    The module never overwrites a set it did not install. A set it cannot use (a platform's,
+    such as GKE's, that lacks a CRD Traefik needs or is below the provisional v1.5.1 floor)
+    is NOT an error: Traefik and the cert-manager shim are skipped and the reason is in the
+    gateway_api_notice output and a plan warning.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "enable_traefik" {
+  description = "Install the Traefik Gateway API controller next to ingress-nginx. OFF BY DEFAULT until the release that ships the instance chart's Gateway/HTTPRoutes and the dual render: before that it is an idle second load balancer. Skipped, with a warning, when the cluster's Gateway API CRDs are not usable."
+  type        = bool
+  default     = false
+}
+
+variable "traefik_namespace" {
+  description = "Namespace for the Traefik controller."
+  type        = string
+  default     = "traefik"
+}
+
+variable "traefik_chart_version" {
+  description = <<-EOT
+    Traefik chart version. Pinned by default -- 42.0.0 ships Traefik v3.7.14, which is
+    what the module's entrypoint, timeout and Service values were verified against. The
+    chart silently ignores a key it does not know, so a bump is verified by rendering it
+    and reading the container args and Service back, not by the install succeeding.
+  EOT
+  type        = string
+  default     = "42.0.0"
+
+  # Fail closed. See ingress_nginx_chart_version for why an empty value or a range is not
+  # a pin.
+  validation {
+    condition     = can(regex("^v?[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.]+)?$", var.traefik_chart_version))
+    error_message = "traefik_chart_version must be an exact chart version (e.g. \"1.2.3\" or \"v1.2.3\"); an empty value or a version range is resolved at apply time, which is not a pin."
+  }
+}
+
+variable "traefik_use_host_port" {
+  description = <<-EOT
+    Bind Traefik to the node's host 80/443 behind a NodePort Service (the local-kind
+    recipe). Only ONE controller per node can hold those ports, so this cannot be on
+    together with ingress_use_host_port while ingress-nginx is installed: the second pod
+    would stay Pending and the apply would time out. The root refuses that combination.
+    Leave false while both controllers run side by side; the swap is a later step.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "traefik_service_type" {
+  description = "Service type for Traefik: LoadBalancer on a cloud, NodePort on kind (a LoadBalancer stays <pending> there and hangs helm --wait). Forced to NodePort by traefik_use_host_port."
+  type        = string
+  default     = "LoadBalancer"
+
+  validation {
+    condition     = contains(["LoadBalancer", "NodePort", "ClusterIP"], var.traefik_service_type)
+    error_message = "traefik_service_type must be LoadBalancer, NodePort or ClusterIP."
+  }
+}
+
+variable "traefik_replicas" {
+  description = "Traefik replicas (forced to 1 with traefik_use_host_port)."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.traefik_replicas >= 1 && var.traefik_replicas == floor(var.traefik_replicas)
+    error_message = "traefik_replicas must be a whole number of at least 1."
+  }
+}
+
+variable "traefik_trusted_proxy_cidrs" {
+  description = "Ranges of an L7 load balancer or proxy IN FRONT of Traefik, whose X-Forwarded-* it should trust. Empty (default) is the edge posture. When set, core's infrastructure.http.trustedProxies must list the pod CIDR AND these same ranges."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for c in var.traefik_trusted_proxy_cidrs : can(cidrhost(c, 0))])
+    error_message = "traefik_trusted_proxy_cidrs must be CIDR ranges such as 10.0.0.0/8."
+  }
+}
+
+variable "traefik_max_artifact_bytes" {
+  description = "The largest OTA artifact any instance on this cluster accepts (updates.maxArtifactBytes; default 512 MiB). Traefik's read timeout is derived from it so an upload of that size can finish, so raise this BEFORE raising an instance's limit."
+  type        = number
+  default     = 536870912
+
+  validation {
+    condition     = var.traefik_max_artifact_bytes > 0 && var.traefik_max_artifact_bytes == floor(var.traefik_max_artifact_bytes)
+    error_message = "traefik_max_artifact_bytes must be a positive whole number of bytes."
+  }
+}
+
+variable "traefik_gateway_allow_list" {
+  description = "Optional: accept only these Gateways ({name, namespace}). Empty accepts any Gateway of the traefik class, and hostname ownership across Gateways is then enforced by RBAC alone. When set it must name EVERY instance Gateway."
+  type = list(object({
+    name      = string
+    namespace = string
+  }))
+  default = []
+}
+
+variable "traefik_access_log_enabled" {
+  description = "Turn Traefik's access log on. Off by default. Whichever way it is set, query strings are dropped from it, so the OTA download capability carried in ?cap= never reaches a log."
+  type        = bool
+  default     = false
+}
+
+variable "gateway_api_accept_unversioned_crds" {
+  description = "Accept a Gateway API CRD set that is not ours and carries no bundle-version annotation, so its version cannot be read. Off: 'cannot tell' is not 'new enough'. Turn it on only after checking by other means that the set is v1.5.1 or newer."
+  type        = bool
+  default     = false
+}
+
+variable "traefik_image_registry" {
+  description = "Registry Traefik's image is pulled from; set with traefik_image_repository to use a mirror."
+  type        = string
+  default     = "docker.io"
+}
+
+variable "traefik_image_repository" {
+  description = "Repository (without registry) Traefik's image is pulled from."
+  type        = string
+  default     = "traefik"
+}
+
 # --- CloudNativePG (database HA + backup, ADR-020 A2 / ADR-028) -----------------
 
 variable "enable_cnpg" {
