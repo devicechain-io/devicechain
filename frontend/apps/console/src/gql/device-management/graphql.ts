@@ -379,6 +379,13 @@ export type DeviceCreateRequest = {
   metadata?: string | null | undefined;
   /** Human-readable name, up to 128 characters. */
   name?: string | null | undefined;
+  /**
+   * Token of a provisioning profile to EARMARK the device for. Only that profile may later
+   * adopt this device when it registers itself; the profile must exist in the tenant and be of
+   * this device's type, otherwise the request is refused with INVALID_VALUE. Omitted or null
+   * earmarks nothing, and no profile will take the device over.
+   */
+  provisioningProfileToken?: string | null | undefined;
   /** Identifier for the new device. A token already in use in the tenant is refused with CONFLICT. */
   token: string;
 };
@@ -494,6 +501,12 @@ export type DeviceImportRow = {
   metadata?: string | null | undefined;
   /** Human-readable name, up to 128 characters. */
   name?: string | null | undefined;
+  /**
+   * Token of a provisioning profile to earmark the device for. An unknown profile, or one of a
+   * different device type, makes the row INVALID. A device that already exists with a different
+   * earmark makes the row a CONFLICT.
+   */
+  provisioningProfileToken?: string | null | undefined;
   /** Identifier of the device, and the key a re-run matches on. Required. */
   token: string;
 };
@@ -592,10 +605,20 @@ export type DeviceReplacementSearchCriteria = {
 export type DeviceSearchCriteria = {
   /** Return only devices of the device type with this token. An unknown token matches nothing. */
   deviceType?: string | null | undefined;
+  /**
+   * Return only devices earmarked for the provisioning profile with this token. An unknown
+   * token matches nothing.
+   */
+  expectedProvisioningProfile?: string | null | undefined;
   /** Page to return, starting at 1. Values below 1 are read as 1. */
   pageNumber: number;
   /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
   pageSize: number;
+  /**
+   * Return only devices that hold a credential issued by the provisioning profile with this
+   * token, revoked ones included. An unknown token matches nothing.
+   */
+  provisioningProfile?: string | null | undefined;
 };
 
 /** Fields for a new device type. */

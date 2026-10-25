@@ -68,6 +68,7 @@ func cloneDeviceValue(in Device) Device {
 	out := in
 	out.Metadata = cloneJSONPtr(in.Metadata)
 	out.GatewayId = clonePtr(in.GatewayId)
+	out.ExpectedProvisioningProfileId = clonePtr(in.ExpectedProvisioningProfileId)
 	if in.DeviceType != nil {
 		dt := cloneDeviceTypeValue(*in.DeviceType)
 		out.DeviceType = &dt

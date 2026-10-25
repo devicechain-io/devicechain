@@ -53,13 +53,16 @@ func newProfileApi(t *testing.T) (*Api, string) {
 }
 
 func TestAProvisioningSecretIsStoredAsADigestNeverThePlaintext(t *testing.T) {
-	const secret = "plaintext-fleet-s3cret"
 	api, token := newProfileApi(t)
 	ctx := partialUpdateCtx()
-	_, err := api.CreateProvisioningProfile(ctx, &ProvisioningProfileCreateRequest{
-		Token: token, ProvisionKey: "fleet-key", ProvisionSecret: secret,
+	created, err := api.CreateProvisioningProfile(ctx, &ProvisioningProfileCreateRequest{
+		Token: token, ProvisionKey: "fleet-key",
 		Strategy: string(ProvisionAllowNew), DeviceTypeToken: "dt", Enabled: true})
 	require.NoError(t, err)
+	// The server generated it: 256 bits as base64url, 43 characters, and it is on the row
+	// handed back and nowhere else.
+	secret := created.IssuedSecret
+	require.Len(t, secret, 43, "the generated secret is 32 bytes of base64url")
 
 	row := rawRow(t, api.RDB.DB(ctx), `SELECT * FROM provisioning_profiles WHERE token = ?`, token)
 	requireNoSecretIn(t, "provisioning_profiles", row, secret)
@@ -67,17 +70,20 @@ func TestAProvisioningSecretIsStoredAsADigestNeverThePlaintext(t *testing.T) {
 	digest, _ := row["provision_secret_digest"].(string)
 	assert.True(t, strings.HasPrefix(digest, "v1$"+testEnrollmentKeys.Provisioning.KeyId()+"$"), "digest %q", digest)
 
+	// What a read of the profile returns carries no secret at all.
+	rows0, err := api.ProvisioningProfilesByToken(ctx, []string{token})
+	require.Empty(t, requireOne(t, "profile", rows0, err).IssuedSecret, "a read returned the issued secret")
+
 	// A rotation replaces the digest, and the old secret verifies nothing afterwards.
-	_, err = api.UpdateProvisioningProfile(ctx, token, &ProvisioningProfileUpdateRequest{
-		ProvisionSecret: dcgraphql.OptionalStringOf("rotated-fleet-s3cret")})
+	rotated, err := api.RotateProvisioningProfileSecret(ctx, token)
 	require.NoError(t, err)
+	require.NotEqual(t, secret, rotated.IssuedSecret)
 	row = rawRow(t, api.RDB.DB(ctx), `SELECT * FROM provisioning_profiles WHERE token = ?`, token)
-	requireNoSecretIn(t, "provisioning_profiles", row, "rotated-fleet-s3cret")
+	requireNoSecretIn(t, "provisioning_profiles", row, rotated.IssuedSecret)
 	requireNoSecretIn(t, "provisioning_profiles", row, secret)
 	rows, err := api.ProvisioningProfilesByToken(ctx, []string{token})
 	p := requireOne(t, "profile", rows, err)
-	assert.Equal(t, "rotated-fleet-s3cret",
-		provisionSecretStr(p.ProvisionSecretDigest, secret, "rotated-fleet-s3cret"))
+	assert.Equal(t, rotated.IssuedSecret, provisionSecretStr(p.ProvisionSecretDigest, secret, rotated.IssuedSecret))
 }
 
 // An update that does not name the secret keeps the stored digest byte for byte: the edit
@@ -85,8 +91,8 @@ func TestAProvisioningSecretIsStoredAsADigestNeverThePlaintext(t *testing.T) {
 func TestAnUpdateThatOmitsTheProvisioningSecretKeepsItsDigest(t *testing.T) {
 	api, token := newProfileApi(t)
 	ctx := partialUpdateCtx()
-	_, err := api.CreateProvisioningProfile(ctx, &ProvisioningProfileCreateRequest{
-		Token: token, ProvisionKey: "fleet-key", ProvisionSecret: "fleet-s3cret",
+	created, err := api.CreateProvisioningProfile(ctx, &ProvisioningProfileCreateRequest{
+		Token: token, ProvisionKey: "fleet-key",
 		Strategy: string(ProvisionAllowNew), DeviceTypeToken: "dt", Enabled: true})
 	require.NoError(t, err)
 	before := rawRow(t, api.RDB.DB(ctx), `SELECT provision_secret_digest FROM provisioning_profiles WHERE token = ?`, token)
@@ -100,7 +106,7 @@ func TestAnUpdateThatOmitsTheProvisioningSecretKeepsItsDigest(t *testing.T) {
 		"a name-only update changed the stored digest")
 	rows, err := api.ProvisioningProfilesByToken(ctx, []string{token})
 	p := requireOne(t, "profile", rows, err)
-	assert.Equal(t, "fleet-s3cret", provisionSecretStr(p.ProvisionSecretDigest, "fleet-s3cret"))
+	assert.Equal(t, created.IssuedSecret, provisionSecretStr(p.ProvisionSecretDigest, created.IssuedSecret))
 }
 
 // During a rolling upgrade an old-version pod rotates the secret into the plaintext column
@@ -109,10 +115,11 @@ func TestAnUpdateThatOmitsTheProvisioningSecretKeepsItsDigest(t *testing.T) {
 func TestAnUpdateAdoptsASecretAnOldPodRotatedIntoThePlaintextColumn(t *testing.T) {
 	api, token := newProfileApi(t)
 	ctx := partialUpdateCtx()
-	_, err := api.CreateProvisioningProfile(ctx, &ProvisioningProfileCreateRequest{
-		Token: token, ProvisionKey: "fleet-key", ProvisionSecret: "fleet-s3cret",
+	created, err := api.CreateProvisioningProfile(ctx, &ProvisioningProfileCreateRequest{
+		Token: token, ProvisionKey: "fleet-key",
 		Strategy: string(ProvisionAllowNew), DeviceTypeToken: "dt", Enabled: true})
 	require.NoError(t, err)
+	require.True(t, created.ProvisionSecretIssued)
 	require.NoError(t, api.RDB.DB(ctx).Exec(
 		`UPDATE provisioning_profiles SET provision_secret = ? WHERE token = ?`, "old-pod-rotated", token).Error)
 
@@ -123,28 +130,36 @@ func TestAnUpdateAdoptsASecretAnOldPodRotatedIntoThePlaintextColumn(t *testing.T
 	rows, err := api.ProvisioningProfilesByToken(ctx, []string{token})
 	p := requireOne(t, "profile", rows, err)
 	assert.Equal(t, "old-pod-rotated",
-		provisionSecretStr(p.ProvisionSecretDigest, "fleet-s3cret", "old-pod-rotated"))
+		provisionSecretStr(p.ProvisionSecretDigest, created.IssuedSecret, "old-pod-rotated"))
+	// A secret a person chose is not one the server generated: the endpoint refuses the profile
+	// until it is rotated.
+	assert.False(t, p.ProvisionSecretIssued, "an adopted plaintext secret left the profile marked as server-issued")
 	row := rawRow(t, api.RDB.DB(ctx), `SELECT * FROM provisioning_profiles WHERE token = ?`, token)
 	assert.Nil(t, row["provision_secret"], "the save left the plaintext in place")
 }
 
-// No key, no secret: a write that carries one is refused and nothing falls back to storing
-// it; and a secret the old column would have refused is still refused.
-func TestAProvisioningSecretIsRefusedWithoutAKeyOrOverTheLimit(t *testing.T) {
+// No key, no secret: a create or a rotation that has to digest one is refused and nothing falls
+// back to storing it.
+func TestAProvisioningSecretIsRefusedWithoutAKey(t *testing.T) {
 	api, token := newProfileApi(t)
 	ctx := partialUpdateCtx()
-	create := func(secret string) error {
+	create := func() error {
 		_, err := api.CreateProvisioningProfile(ctx, &ProvisioningProfileCreateRequest{
-			Token: token, ProvisionKey: "fleet-key", ProvisionSecret: secret,
+			Token: token, ProvisionKey: "fleet-key",
 			Strategy: string(ProvisionAllowNew), DeviceTypeToken: "dt", Enabled: true})
 		return err
 	}
-	assert.Error(t, create(strings.Repeat("x", 257)), "a secret over 256 bytes was accepted")
+	require.NoError(t, create())
+	keys := api.EnrollmentKeys
 	api.EnrollmentKeys = nil
-	assert.ErrorIs(t, create("fleet-s3cret"), errNoProvisioningSecretKey)
+	_, err := api.RotateProvisioningProfileSecret(ctx, token)
+	assert.ErrorIs(t, err, errNoProvisioningSecretKey)
+	require.NoError(t, api.RDB.DB(ctx).Exec(`DELETE FROM provisioning_profiles`).Error)
+	assert.ErrorIs(t, create(), errNoProvisioningSecretKey)
 	rows, err := api.ProvisioningProfilesByToken(ctx, []string{token})
 	require.NoError(t, err)
 	assert.Empty(t, rows, "a refused create still wrote a row")
+	api.EnrollmentKeys = keys
 }
 
 // ─── Device claims ──────────────────────────────────────────────────────────

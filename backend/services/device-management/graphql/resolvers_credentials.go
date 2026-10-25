@@ -89,6 +89,14 @@ func (r *DeviceCredentialResolver) ExpiresAt() *string {
 	return nil
 }
 
+// ProvisioningProfile is the profile whose registration issued the credential, or nil.
+func (r *DeviceCredentialResolver) ProvisioningProfile(ctx context.Context) (*ProvisioningProfileResolver, error) {
+	if r.M.ProvisioningProfileId == nil {
+		return nil, nil
+	}
+	return r.S.provisioningProfileByID(ctx, *r.M.ProvisioningProfileId)
+}
+
 func (r *DeviceCredentialResolver) Device() *DeviceResolver {
 	if r.M.Device != nil {
 		return &DeviceResolver{

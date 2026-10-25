@@ -67,6 +67,10 @@ type DeviceImportRow struct {
 	CredentialType  *string
 	CredentialId    *string
 	CredentialValue *string
+	// ProvisioningProfileToken earmarks the device for a provisioning profile, as on a single
+	// create. An unknown profile, or one of another device type, makes the row INVALID. On a re-run
+	// a device that exists with a different earmark is a CONFLICT.
+	ProvisioningProfileToken *string
 }
 
 // DeviceImportRowResult is the outcome of one row. Row is 1-based within the call. Code and
@@ -132,6 +136,10 @@ type importRow struct {
 	metadata *string // canonical JSON text for the stored column, nil for none
 	credType string
 	credID   string
+	// earmarkToken is the trimmed provisioningProfileToken, "" for none. earmark is the profile it
+	// names, resolved by decideImportRows.
+	earmarkToken string
+	earmark      *ProvisioningProfile
 	// credStored is credID as the credential_id column holds it (see storedCredentialId):
 	// the keyed digest for an ACCESS_TOKEN. Set by decideImportRows, which has the key.
 	credStored string
@@ -163,6 +171,7 @@ func validateImportRow(row *DeviceImportRow, mode string) (outcome, code, messag
 		"deviceTypeToken": &row.DeviceTypeToken, "externalId": row.ExternalId, "name": row.Name,
 		"description": row.Description, "metadata": row.Metadata, "credentialType": row.CredentialType,
 		"credentialId": row.CredentialId, "credentialValue": row.CredentialValue,
+		"provisioningProfileToken": row.ProvisioningProfileToken,
 	} {
 		if v != nil && strings.ContainsRune(*v, 0) {
 			return DeviceImportInvalid, importCodeInvalidValue, field + " must not contain a NUL character", nil
@@ -190,6 +199,9 @@ func validateImportRow(row *DeviceImportRow, mode string) (outcome, code, messag
 	}
 
 	p := &importRow{row: row, name: name, desc: desc, external: external, metadata: metadata}
+	if !blank(row.ProvisioningProfileToken) {
+		p.earmarkToken = strings.TrimSpace(*row.ProvisioningProfileToken)
+	}
 
 	hasCredential := !blank(row.CredentialType) || !blank(row.CredentialId) || (row.CredentialValue != nil && *row.CredentialValue != "")
 	if mode != DeviceImportModeCredentials {
@@ -268,6 +280,16 @@ func metadataEqual(stored []byte, incoming *string) bool {
 // only: a value is never echoed.
 func differingFields(d *Device, p *importRow) []string {
 	var diff []string
+	// The earmark: the profile the row names against the one the device holds. An unresolvable
+	// token (the row is then INVALID before this is reached) cannot match, so it differs.
+	var want *uint
+	if p.earmark != nil {
+		want = &p.earmark.ID
+	}
+	if (want == nil) != (d.ExpectedProvisioningProfileId == nil) ||
+		(want != nil && *want != *d.ExpectedProvisioningProfileId) {
+		diff = append(diff, "provisioningProfileToken")
+	}
 	storedType := ""
 	if d.DeviceType != nil {
 		storedType = d.DeviceType.Token
@@ -425,6 +447,25 @@ func (api *Api) decideImportRows(ctx context.Context, result *DeviceImportResult
 	for _, dt := range typeRows {
 		types[dt.Token] = dt
 	}
+	// The provisioning profiles the rows earmark for, read once.
+	earmarkTokens := make([]string, 0)
+	seenEarmark := map[string]bool{}
+	for _, p := range pending {
+		if p.earmarkToken != "" && !seenEarmark[p.earmarkToken] {
+			seenEarmark[p.earmarkToken] = true
+			earmarkTokens = append(earmarkTokens, p.earmarkToken)
+		}
+	}
+	profiles := map[string]*ProvisioningProfile{}
+	if len(earmarkTokens) > 0 {
+		found, err := api.ProvisioningProfilesByToken(ctx, earmarkTokens)
+		if err != nil {
+			return err
+		}
+		for _, pp := range found {
+			profiles[pp.Token] = pp
+		}
+	}
 	byToken := map[string]*Device{}
 	existing, err := api.DevicesByToken(ctx, tokens)
 	if err != nil {
@@ -461,6 +502,14 @@ func (api *Api) decideImportRows(ctx context.Context, result *DeviceImportResult
 		dt := types[strings.TrimSpace(row.DeviceTypeToken)]
 		credKey := p.credType + "\x00" + p.credStored
 
+		if p.earmarkToken != "" {
+			if p.earmark = profiles[p.earmarkToken]; p.earmark == nil {
+				result.set(i, row, DeviceImportInvalid, importCodeInvalidValue,
+					fmt.Sprintf("provisioning profile %q not found", p.earmarkToken))
+				continue
+			}
+		}
+
 		if dev := byToken[row.Token]; dev != nil {
 			if diff := differingFields(dev, p); len(diff) > 0 {
 				result.set(i, row, DeviceImportConflict, conflict.Code,
@@ -484,6 +533,11 @@ func (api *Api) decideImportRows(ctx context.Context, result *DeviceImportResult
 		}
 		if dt == nil {
 			result.set(i, row, DeviceImportInvalid, importCodeNotFound, fmt.Sprintf("device type %q not found", strings.TrimSpace(row.DeviceTypeToken)))
+			continue
+		}
+		if p.earmark != nil && p.earmark.DeviceTypeId != dt.ID {
+			result.set(i, row, DeviceImportInvalid, importCodeInvalidValue,
+				fmt.Sprintf("provisioning profile %q is for a different device type than %q", p.earmarkToken, dt.Token))
 			continue
 		}
 		if p.external != "" && byExternal[p.external] != nil {
@@ -538,6 +592,15 @@ func (api *Api) createImportedDevice(ctx context.Context, p *importRow, dt *Devi
 		device.Metadata = &md
 	}
 	err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		// The earmarked profile is locked before the device is inserted, the order a registration
+		// takes them in (see lockEarmarkProfiles).
+		if p.earmarkToken != "" {
+			id, err := lockEarmarkProfile(tx, p.earmarkToken, dt)
+			if err != nil {
+				return err
+			}
+			device.ExpectedProvisioningProfileId = id
+		}
 		if err := tx.Create(device).Error; err != nil {
 			return err
 		}

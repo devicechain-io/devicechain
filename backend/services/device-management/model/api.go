@@ -116,6 +116,16 @@ type Api struct {
 	// the secret.
 	EnrollmentKeys *credential.EnrollmentSecretKeys
 
+	// ProvisioningChecker compares the two secrets of device self-registration through the
+	// credential Checker: a profile's shared secret (credential.KindProvisioningProfile, under
+	// EnrollmentKeys.Provisioning) and the REPLAY of a device's own material
+	// (credential.KindProvisionedCredential, under DeviceSecretKey). Both kinds are
+	// Unthrottled, so it needs no attempt store. It is built by processor.NewProvisioningChecker
+	// from the same two keys this Api digests with, which is the property that makes a digest
+	// written here verify there. NIL FAILS CLOSED: AuthenticateProvisioningProfile and
+	// ProvisionDevice answer ErrProvisioningUnavailable, and nothing compares a secret itself.
+	ProvisioningChecker *credential.Checker
+
 	// MisconfiguredSecrets counts checks refused with ErrCredentialMisconfigured, by path
 	// (CredentialPathConnect, CredentialPathEvent). Nil counts nothing (tests).
 	MisconfiguredSecrets *prometheus.CounterVec

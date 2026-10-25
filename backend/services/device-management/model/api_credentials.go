@@ -351,7 +351,10 @@ func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 		updated.DeviceId = device.ID
 	}
 
-	result := api.RDB.DB(ctx).Save(updated)
+	// provisioning_profile_id is provenance: the self-registration operation sets it and nothing
+	// else may change it, so an update never writes it (a stale copy would otherwise put back the
+	// profile of a credential that was removed and re-issued meanwhile).
+	result := api.RDB.DB(ctx).Omit("ProvisioningProfileId").Save(updated)
 	if result.Error != nil {
 		return nil, result.Error
 	}

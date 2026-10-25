@@ -42,7 +42,7 @@ func TestTheStartupStepDigestsEveryPlaintextEnrollmentSecretInPlace(t *testing.T
 
 	legacy := func(s string) sql.NullString { return sql.NullString{String: s, Valid: true} }
 	profile := func(tenant, token, key string, secret sql.NullString) {
-		p := &model.ProvisioningProfile{ProvisionKey: key, LegacyProvisionSecret: secret}
+		p := &model.ProvisioningProfile{ProvisionKey: key, LegacyProvisionSecret: secret, ProvisionSecretIssued: true}
 		p.TenantId, p.Token = tenant, token
 		require.NoError(t, seed.Create(p).Error)
 	}
@@ -95,6 +95,11 @@ func TestTheStartupStepDigestsEveryPlaintextEnrollmentSecretInPlace(t *testing.T
 		require.Error(t, credential.VerifyDeviceSecret(keys.Provisioning, other, digest, want.secret), "%s verifies in another tenant", token)
 		require.Error(t, credential.VerifyDeviceSecret(keys.Provisioning, want.tenant, digest, want.secret+"x"), token)
 	}
+	// A secret that arrived as plaintext was a person's choice, not the server's: the profile is
+	// no longer marked as holding a generated one, and the endpoint refuses it until rotated.
+	for _, token := range []string{"pp-a", "pp-pad", "pp-b"} {
+		require.Equal(t, false, rawBool(t, db, token), "%s is still marked as server-issued after its plaintext was digested", token)
+	}
 	for _, token := range []string{"pp-blank", "pp-none"} {
 		require.Nil(t, rawColumn(t, db, "provisioning_profiles", "provision_secret", token), token)
 		require.Nil(t, rawColumn(t, db, "provisioning_profiles", "provision_secret_digest", token), "%s was given a digest of nothing", token)
@@ -132,4 +137,16 @@ func mustDigest(t *testing.T, key *credential.DeviceSecretKey, tenant, secret st
 	d, err := key.Digest(tenant, secret)
 	require.NoError(t, err)
 	return d
+}
+
+func rawBool(t *testing.T, db *gorm.DB, token string) bool {
+	t.Helper()
+	switch v := rawColumn(t, db, "provisioning_profiles", "provision_secret_issued", token).(type) {
+	case bool:
+		return v
+	case int64:
+		return v != 0
+	}
+	t.Fatalf("provision_secret_issued of %s is not a boolean", token)
+	return false
 }

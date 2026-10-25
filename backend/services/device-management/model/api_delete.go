@@ -227,7 +227,18 @@ func (api *Api) DeleteDeviceType(ctx context.Context, token string) (bool, error
 	if n > 0 {
 		return false, fmt.Errorf("%w: %d device(s) reference device type %q", ErrEntityInUse, n, token)
 	}
-	return api.hardDeleteByToken(ctx, &DeviceType{}, token)
+	// A provisioning profile stamps this type onto the devices it registers, so deleting the type
+	// would leave it unable to register anything (PROVISIONING_MISCONFIGURED). The column carries
+	// no foreign key, so this count is the only guard.
+	n, err = api.countReferencing(ctx, &ProvisioningProfile{}, "device_type_id", dt.ID)
+	if err != nil {
+		return false, err
+	}
+	if n > 0 {
+		return false, fmt.Errorf("%w: %d provisioning profile(s) reference device type %q", ErrEntityInUse, n, token)
+	}
+	deleted, err := api.hardDeleteByToken(ctx, &DeviceType{}, token)
+	return deleted, inUseOn(err, fmt.Sprintf("device type %q is still referenced", token))
 }
 
 // DeleteDeviceProfile deletes a device profile (ADR-045). Refused while any device
@@ -345,7 +356,7 @@ func (api *Api) DeleteDevice(ctx context.Context, token string) (bool, error) {
 			return deleted, kerr
 		}
 	}
-	return deleted, err
+	return deleted, inUseOn(err, fmt.Sprintf("device %q is still referenced", token))
 }
 
 // DeleteDeviceCredential deletes a single device credential by token (ADR-014), and after
@@ -535,7 +546,48 @@ func (api *Api) DeleteDetectionRule(ctx context.Context, token string) (bool, er
 	return api.hardDeleteByToken(ctx, &DetectionRule{}, token)
 }
 
-// DeleteProvisioningProfile deletes a single provisioning profile by token (ADR-012).
+// DeleteProvisioningProfile deletes a single provisioning profile by token (ADR-012), and
+// refuses with ErrEntityInUse while any credential it issued still exists.
+//
+// The delete is a HARD delete, so a credential's provisioning_profile_id would otherwise dangle
+// and the provenance would be gone: which profile registered a device, and what its revoke
+// reaches. Revoked (disabled) and expired credentials count too. An operator removes them
+// with ResetDeviceProvisioning or by deleting the device, after which the delete goes through.
+// Earmarks do NOT block it: devices earmarked for the profile fall back to "no earmark" (the
+// foreign key's ON DELETE SET NULL) and are refused by every other profile from then on.
+//
+// The count runs under the profile's row lock, the lock a registration takes first, so a
+// registration cannot issue a credential between the count and the delete; the foreign key is
+// the backstop for anything that still slips past (a 23503 is answered as ErrEntityInUse too).
 func (api *Api) DeleteProvisioningProfile(ctx context.Context, token string) (bool, error) {
-	return api.hardDeleteByToken(ctx, &ProvisioningProfile{}, token)
+	deleted := false
+	err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		locked, err := lockProfileByToken(tx, token)
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		// Unscoped, to count what the foreign key counts.
+		var n int64
+		if err := tx.Unscoped().Model(&DeviceCredential{}).
+			Where("provisioning_profile_id = ?", locked.ID).Count(&n).Error; err != nil {
+			return err
+		}
+		if n > 0 {
+			return fmt.Errorf("%w: %d credential(s) were issued by provisioning profile %q; revoke the profile's devices first, then reset their provisioning or delete them",
+				ErrEntityInUse, n, token)
+		}
+		result := tx.Unscoped().Delete(locked)
+		if result.Error != nil {
+			return result.Error
+		}
+		deleted = result.RowsAffected > 0
+		return nil
+	})
+	if err != nil {
+		return false, inUseOn(err, fmt.Sprintf("provisioning profile %q still has credentials issued by it", token))
+	}
+	return deleted, nil
 }

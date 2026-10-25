@@ -99,6 +99,9 @@ func runSeed(ctx context.Context, argv []string) error {
 		// building the variables twice would leave the receipt free to disagree with
 		// what the mutation acted on.
 		vars := e.Vars(st)
+		if base != nil && e.BaselineInput != nil {
+			e.BaselineInput(base, e, vars)
+		}
 
 		var after func(context.Context) error
 		if e.After != nil {
