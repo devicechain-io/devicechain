@@ -157,6 +157,19 @@ rendered by the Helm chart (it knows the enabled functional areas) — set
 `ingress.enabled=true` there. Both are toggleable (`enable_ingress_nginx`,
 `enable_cert_manager`) if the cluster already has them.
 
+**Gateway API + Traefik** (the controller that replaces ingress-nginx) are installed *next
+to* ingress-nginx, which is left exactly as it is. `gateway-api-crds` installs the v1.6.3
+standard-channel CRDs only when the cluster has none; a set already at v1.5.1 or newer (GKE's
+`--gateway-api=standard`) is accepted and never written, and an older or partial one is
+refused at plan time with the remedy. The CRDs carry `helm.sh/resource-policy: keep`
+because deleting one deletes every Gateway and route, and `prevent_destroy` does not survive
+a removed module block. cert-manager's Gateway API shim is enabled with them and starts after
+them (it crash-loops on a cluster with the shim on and no CRDs). `traefik` takes its edge
+read timeout from `traefik_max_artifact_bytes` (the OTA upload window plus a minute), so
+raise that before raising an instance's `updates.maxArtifactBytes`. Only one controller can
+hold a node's host 80/443: on kind Traefik stays on its NodePort while ingress-nginx owns
+the host ports (`traefik_use_host_port` and `ingress_use_host_port` together are refused).
+
 The monitoring stack installs the Prometheus Operator CRDs the DeviceChain chart's
 ServiceMonitors / PrometheusRule / dashboard ConfigMaps depend on, so it applies
 **before** the Helm step and the chart's `metrics.enabled` rendering "just works".

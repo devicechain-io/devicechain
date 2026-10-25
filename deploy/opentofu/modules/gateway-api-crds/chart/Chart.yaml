@@ -1,0 +1,6 @@
+apiVersion: v2
+name: gateway-api-crds
+description: The Gateway API STANDARD-channel CustomResourceDefinitions, and nothing else (no admission policy). Vendored by hack/vendor-gateway-api-crds.sh.
+type: application
+version: 1.6.3
+appVersion: v1.6.3

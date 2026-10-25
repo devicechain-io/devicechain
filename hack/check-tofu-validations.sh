@@ -970,7 +970,7 @@ run_assertions() {
   # leading v and `1.2.3-rc.1` has a pre-release suffix, and a naive `^[0-9.]+$` eats
   # both while passing every rejection above.
   for _cv in cnpg_chart_version cnpg_plugin_chart_version \
-  	ingress_nginx_chart_version cert_manager_chart_version monitoring_chart_version; do
+  	ingress_nginx_chart_version cert_manager_chart_version monitoring_chart_version traefik_chart_version; do
   	rejects "$_cv" ""
   	rejects "$_cv" "4.15.1 - 5.0.0"
   	accepts "$_cv" "1.2.3"
@@ -978,6 +978,36 @@ run_assertions() {
   	accepts "$_cv" "1.2.3-rc.1"
   done
   unset _cv
+
+  # --- Traefik (G15) ------------------------------------------------------------
+  #
+  # The Service type decides whether a kind install hangs: a LoadBalancer there stays
+  # <pending> and `helm --wait` times out. Only the three real types are accepted.
+  rejects traefik_service_type ""
+  rejects traefik_service_type "loadbalancer"
+  rejects traefik_service_type "ExternalName"
+  accepts traefik_service_type "LoadBalancer"
+  accepts traefik_service_type "NodePort"
+  accepts traefik_service_type "ClusterIP"
+
+  rejects traefik_replicas 0
+  rejects traefik_replicas 1.5
+  accepts traefik_replicas 1
+  accepts traefik_replicas 3
+
+  # A trusted-proxy entry that is not a CIDR would be handed to the controller as-is.
+  rejects traefik_trusted_proxy_cidrs '["not-a-cidr"]'
+  rejects traefik_trusted_proxy_cidrs '["10.0.0.0/8","10.0.0.1/99"]'
+  accepts traefik_trusted_proxy_cidrs '[]'
+  accepts traefik_trusted_proxy_cidrs '["130.211.0.0/22","35.191.0.0/16"]'
+
+  # The edge read timeout is derived from this, so a non-positive or fractional size would
+  # derive a nonsense timeout rather than fail.
+  rejects traefik_max_artifact_bytes 0
+  rejects traefik_max_artifact_bytes -1
+  rejects traefik_max_artifact_bytes 1.5
+  accepts traefik_max_artifact_bytes 536870912
+  accepts traefik_max_artifact_bytes 1073741824
 
   # The nats chart carries a SECOND block, a 2.15 floor: the broker config the module
   # renders (jetstream.limits.default_max_consumers) is refused at startup by an older

@@ -589,8 +589,9 @@ type AiInferenceConfiguration struct {
 // the console's drafting door.
 const (
 	// RequestEdgeTimeout is the one edge every synchronous browser request lives
-	// inside: ingress-nginx's default proxy-read-timeout and the GraphQL execution
-	// default. A synchronous operation that can run longer must budget below it, or
+	// inside: the edge controller's response-header timeout (set explicitly in the
+	// traefik module, whose value a test holds to this one; ingress-nginx's default
+	// proxy-read-timeout) and the GraphQL execution default. A synchronous operation that can run longer must budget below it, or
 	// its own answer is replaced at the edge by a gateway error.
 	RequestEdgeTimeout = 60 * time.Second
 	// AiDraftBudget bounds one whole NL rule draft (every infer/repair attempt), with

@@ -61,7 +61,8 @@
 # WHAT IT DOES NOT COVER
 #
 #   - Images reached through Helm charts at pinned chart versions (cert-manager,
-#     CloudNativePG and its Barman plugin, ingress-nginx, NATS, the Prometheus
+#     CloudNativePG and its Barman plugin, ingress-nginx, Traefik (docker.io/traefik at the tag
+#     modules/traefik pins), NATS, the Prometheus
 #     stack), and tag-pinned operand defaults (the Postgres and TimescaleDB images
 #     in the Tofu roots). Listing those needs helm and the chart repositories; they
 #     were pulled by hand when this was written, and all resolved.

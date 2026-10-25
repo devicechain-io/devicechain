@@ -46,6 +46,21 @@ output "ingress_class" {
   value       = var.enable_ingress_nginx ? module.ingress_nginx[0].ingress_class : null
 }
 
+output "gateway_class" {
+  description = "GatewayClass name instance Gateways reference (null if Traefik was not installed here)."
+  value       = var.enable_traefik ? module.traefik[0].gateway_class : null
+}
+
+output "traefik_namespace" {
+  description = "Namespace Traefik was installed into (null if not installed here)."
+  value       = var.enable_traefik ? module.traefik[0].namespace : null
+}
+
+output "gateway_api_crds_mode" {
+  description = "install, ours or accept: whether the Gateway API CRDs were written by this root or found already in place (null if the module is off)."
+  value       = var.enable_gateway_api_crds ? module.gateway_api_crds[0].mode : null
+}
+
 output "cert_manager_namespace" {
   description = "Namespace cert-manager was installed into (null if not installed here)."
   value       = var.enable_cert_manager ? module.cert_manager[0].namespace : null

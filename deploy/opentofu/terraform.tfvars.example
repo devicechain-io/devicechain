@@ -52,6 +52,23 @@
 # ingress_nginx_chart_version = "4.15.1"
 # cert_manager_chart_version  = "v1.21.1"
 
+# Gateway API + Traefik (the controller that replaces ingress-nginx; installed NEXT TO it
+# in this release, which stays untouched). The CRDs are installed only when the cluster has
+# none: a set already at v1.5.1 or newer (GKE --gateway-api=standard) is accepted and never
+# written, and an older one is refused at plan time. cert-manager's Gateway API shim is
+# switched on with the CRDs, and starts after them.
+# enable_gateway_api_crds     = true
+# enable_traefik              = true
+# traefik_chart_version       = "42.0.0"
+# kind or any cluster with no load-balancer provider (NodePort, not LoadBalancer):
+# traefik_service_type        = "NodePort"
+# Behind an L7 load balancer you operate (then core's infrastructure.http.trustedProxies
+# must list the pod CIDR AND these same ranges):
+# traefik_trusted_proxy_cidrs = ["130.211.0.0/22", "35.191.0.0/16"]
+# Raise BEFORE raising any instance's updates.maxArtifactBytes -- the edge read timeout is
+# derived from it:
+# traefik_max_artifact_bytes  = 536870912
+
 # CloudNativePG — the operator that will own both database stores (ADR-020 A2), plus
 # the Barman Cloud plugin that provides WAL archiving and point-in-time recovery.
 # Default-on for EVERY install, HA or not: backup is not an HA feature. Both charts
