@@ -25,6 +25,18 @@ var (
 
 	upgradeValues      []string
 	upgradeResetValues bool
+
+	upgradeIngressController string
+	upgradeDropLegacyIngress bool
+)
+
+const (
+	ingressControllerUsage = "which front end serves the instance's host: gateway (a Gateway API Gateway and HTTPRoutes, served by Traefik), nginx (Ingress objects, served by ingress-nginx) or auto. " +
+		"The choice is RECORDED on the instance and kept by every later upgrade, so 'nginx' stays a rollback until 'gateway' or 'auto' says otherwise; auto drops the record and decides from the cluster. " +
+		"With no choice recorded or given, where Traefik runs the instance is served by the Gateway, and while it still has Ingress objects and ingress-nginx remains they are rendered beside it, so the host keeps answering there until --drop-legacy-ingress. " +
+		"nginx needs ingress-nginx on the cluster, and gateway needs Traefik"
+	dropLegacyIngressUsage = "stop rendering the Ingress objects beside the Gateway: run it once DNS points at the new controller, " +
+		"and before 'dcctl install --remove-legacy-ingress' removes ingress-nginx, which it refuses to do while any Ingress object still names its class"
 )
 
 // upgradeOptions is the UpgradeOptions the upgrade flags describe, split out of RunE so
@@ -41,7 +53,10 @@ func upgradeOptions(instance string, mqttFailClosed *bool, valuesOverlay map[str
 			MqttFailClosed: mqttFailClosed,
 			TrustedProxies: upgradeTrustedProxies,
 			ValuesOverlay:  valuesOverlay,
-			ResetValues:    upgradeResetValues,
+
+			IngressController: upgradeIngressController,
+			DropLegacyIngress: upgradeDropLegacyIngress,
+			ResetValues:       upgradeResetValues,
 		},
 		EscrowFile:           upgradeEscrowFile,
 		EscrowPassphraseFile: upgradeEscrowPass,
@@ -101,6 +116,17 @@ The fail-closed MQTT acknowledgement is the other: '--mqtt-fail-closed' (or
 choice. A plain upgrade with no flag keeps whatever was recorded, so an instance built
 with it stays on, and one told off stays off.
 
+Where the cluster runs Traefik (the Gateway API controller that replaces ingress-nginx) an
+upgrade moves the instance's routing to a Gateway and HTTPRoutes. While ingress-nginx is still
+on the cluster the instance's Ingress objects are rendered beside them under a certificate
+Secret of their own, so the host keeps answering where it did until DNS points at the new
+controller; '--drop-legacy-ingress' then stops rendering them, and 'dcctl install
+--remove-legacy-ingress' removes ingress-nginx once no instance has one. '--ingress-controller'
+chooses the front end by hand, records the choice on the instance, and 'nginx' is the way back
+that later upgrades keep ('--ingress-controller auto' returns to deciding from the cluster). The
+Gateway names a new certificate Secret while the Ingress objects remain, so the host DNS still
+reaches never waits for a certificate; the upgrade waits for the Gateway's own to be Ready.
+
 Operator tuning is the exception, and it is carried: a values overlay given to
 'dcctl bootstrap --values' or to this command is recorded on the instance and applied
 again by every later upgrade. '--values <file>' replaces the recorded overlay,
@@ -135,6 +161,9 @@ when they are in a terraform.tfvars beside its state
   # Tune the instance; later upgrades keep applying it without --values
   dcctl upgrade local devicechain --values tuning.yaml
 
+  # Once DNS points at the new controller, stop serving the host from ingress-nginx too
+  dcctl upgrade local devicechain --drop-legacy-ingress
+
   # Turn the fail-closed MQTT acknowledgement on (kept by later upgrades), or back off
   dcctl upgrade local devicechain --mqtt-fail-closed
   dcctl upgrade local devicechain --mqtt-fail-closed=false`,
@@ -146,6 +175,12 @@ when they are in a terraform.tfvars beside its state
 		provider, err := bootstrap.Get(args[0])
 		if err != nil {
 			return err
+		}
+		if err := bootstrap.ValidateFrontEnd(upgradeIngressController); err != nil {
+			return err
+		}
+		if upgradeIngressController == "nginx" && upgradeDropLegacyIngress {
+			return fmt.Errorf("--drop-legacy-ingress stops rendering the Ingress objects beside the Gateway, and --ingress-controller nginx makes them the only front end; give one")
 		}
 		mqttFailClosed := mqttFailClosedFlag(cmd.Flags().Changed, upgradeMqttFailClosed)
 		if upgradeResetValues && len(upgradeValues) > 0 {
@@ -173,6 +208,8 @@ func init() {
 	upgradeCmd.Flags().StringArrayVar(&upgradeValues, "values", nil, valuesUsage)
 	upgradeCmd.Flags().BoolVar(&upgradeMqttFailClosed, "mqtt-fail-closed", false, mqttFailClosedUsage)
 	upgradeCmd.Flags().StringSliceVar(&upgradeTrustedProxies, "trusted-proxies", nil, trustedProxiesUsage)
+	upgradeCmd.Flags().StringVar(&upgradeIngressController, "ingress-controller", "", ingressControllerUsage)
+	upgradeCmd.Flags().BoolVar(&upgradeDropLegacyIngress, "drop-legacy-ingress", false, dropLegacyIngressUsage)
 	upgradeCmd.Flags().BoolVar(&upgradeResetValues, "reset-values", false, "remove the tuning overlay recorded on the instance: it returns to the values dcctl computes. Cannot be combined with --values")
 	upgradeCmd.Flags().StringVar(&upgradeEscrowPass, "escrow-passphrase-file", "", "read the escrow passphrase from this file (or $"+bootstrap.EscrowPassphraseEnv+"). Only needed to WRITE an escrow for an instance that has none — checking an existing one needs no passphrase")
 

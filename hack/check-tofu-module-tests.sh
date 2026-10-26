@@ -119,4 +119,35 @@ for m in "${suites[@]}"; do
     rc=1
   fi
 done
+
+# THE ROOTS' OWN GUARDS. A refusal that lives in a root (a precondition, so that a raw apply
+# cannot bypass dcctl's check) is a property of the root's plan, so it is tested the same way:
+# hack/testdata/tofu-root-tests/<root>/*.tftest.hcl is copied into a throwaway copy of that root
+# beside the shared modules and run against mocked providers. Kept outside the root so the
+# suite is not embedded into dcctl with it.
+root_tests="$repo_root/hack/testdata/tofu-root-tests"
+if [[ -d "$root_tests" ]]; then
+  for d in "$root_tests"/*/; do
+    root="$(basename "${d%/}")"
+    if ! compgen -G "$d*.tftest.hcl" >/dev/null; then
+      echo "FAIL: $d holds no *.tftest.hcl" >&2
+      rc=1
+      continue
+    fi
+    echo "== root $root"
+    rwork="$(mktemp -d)"
+    cp -R "$repo_root/deploy/opentofu/$root" "$rwork/$root"
+    cp -R "$modules_dir" "$rwork/modules"
+    find "$rwork" \( -name .terraform -type d \) -prune -exec rm -rf {} +
+    find "$rwork" -name .terraform.lock.hcl -type f -delete
+    mkdir -p "$rwork/$root/tests"
+    cp "$d"*.tftest.hcl "$rwork/$root/tests/"
+    if ! (cd "$rwork/$root" && "$TF" init -backend=false -input=false >/dev/null &&
+      "$TF" test -no-color); then
+      echo "FAIL: root $root" >&2
+      rc=1
+    fi
+    rm -rf "$rwork"
+  done
+fi
 exit "$rc"

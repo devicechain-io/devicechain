@@ -483,6 +483,21 @@
             "annotations": {
               "type": "object",
               "description": "Annotations merged onto the Gateway, after the cert-manager issuer annotation."
+            },
+            "tlsSecretName": {
+              "type": "string",
+              "description": "The certificate Secret the Gateway's https listener names; empty is ingress.tls.secretName. It must differ from ingress.tls.secretName while ingress.legacy.enabled, so two cert-manager shims never issue into one Secret."
+            }
+          }
+        },
+        "legacy": {
+          "type": "object",
+          "description": "The cutover window from the Ingress front end to the Gateway one: with controller gateway and enabled true, the Ingress objects are rendered beside the Gateway so a cluster still running ingress-nginx keeps serving the host there. dcctl computes it; it is not set by hand.",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Also render the Ingress objects (class ingress.className). Needs controller gateway."
             }
           }
         },
@@ -497,7 +512,7 @@
         },
         "uploadMaxBodySize": {
           "type": "string",
-          "description": "Largest request body the update-artifact upload route accepts at the edge, as an nginx size (for example 1g). That route is rendered on its own Ingress with this limit and request buffering off. Keep it at or above the update-management artifact ceiling. Used when controller is nginx; a Gateway API controller of the shipped kind caps no request body."
+          "description": "Largest request body the update-artifact upload route accepts at the edge, as an nginx size (for example 1g). That route is rendered on its own Ingress with this limit and request buffering off. Keep it at or above the update-management artifact ceiling. Used by the nginx front end and by the legacy Ingress set of a cutover window; a Gateway API controller of the shipped kind caps no request body."
         },
         "tls": {
           "type": "object",

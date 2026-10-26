@@ -53,14 +53,15 @@
 # cert_manager_chart_version  = "v1.21.1"
 
 # Gateway API + Traefik (the controller that replaces ingress-nginx; installed NEXT TO it
-# once on, and ingress-nginx stays untouched). OFF BY DEFAULT until the release that ships
-# the instance chart's Gateway/HTTPRoutes and the dual render: before that it is an idle
-# second load balancer and a cert-manager restart. The CRDs are installed only when the
+# where it is already installed, which then stays untouched). ON BY DEFAULT. Turn
+# enable_ingress_nginx off to run Traefik alone: the root refuses that while an Ingress of
+# ingress_class remains, unless allow_ingress_nginx_removal = true. The CRDs are installed only when the
 # cluster has none. A set that is not ours and that Traefik cannot run against (GKE's, for
 # one, may lack a CRD or sit below the provisional v1.5.1 floor) is never an error: Traefik
 # and cert-manager's Gateway shim are SKIPPED with a warning and a gateway_api_notice output.
-# enable_gateway_api_crds     = false
-# enable_traefik              = false
+# enable_gateway_api_crds     = true
+# enable_traefik              = true
+# allow_ingress_nginx_removal = false
 # traefik_chart_version       = "42.0.0"
 # kind or any cluster with no load-balancer provider (NodePort, not LoadBalancer):
 # traefik_service_type        = "NodePort"

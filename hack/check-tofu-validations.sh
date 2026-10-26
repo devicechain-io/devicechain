@@ -147,6 +147,14 @@ failures=0
 # of instance-root failures as this line disagreeing with variables.tf.
 export TF_VAR_instance_namespace=dci-harness
 
+# The cluster root installs the Gateway API CRDs by default, and whether Traefik is installed then
+# depends on what the CRD module finds ON THE CLUSTER (its data sources). A console with no cluster
+# cannot know, so the module's count is unknown and EVERY evaluation in that root reports "Invalid
+# count argument" -- which `rejects` and `accepts` rightly read as a configuration that did not load.
+# The harness is about variable validation, not about a cluster, so it runs with the CRD module off.
+# The one assertion about the shipped DEFAULT of this variable lifts the fixture around itself.
+export TF_VAR_enable_gateway_api_crds=false
+
 # Assertion keys seen as applicable in at least one root, and keys seen at all. The
 # difference between them is the set of assertions that evaluated NOWHERE.
 declare -A assertion_ran=()
@@ -1015,16 +1023,24 @@ run_assertions() {
   accepts traefik_max_artifact_bytes 536870912
   accepts traefik_max_artifact_bytes 1073741824
 
-  # The G15 stack is OFF by default until the release that ships the instance chart's Gateway
-  # and HTTPRoutes and the dual render: before that it is an idle second load balancer and a
-  # cert-manager restart. Pinned in BOTH directions, because a default flipped by accident
-  # ships the stack to every `dcctl install`, and an opt-in that cannot be switched on is
-  # no opt-in.
-  evaluates false "var.enable_traefik"
-  evaluates false "var.enable_gateway_api_crds"
-  evaluates false "local.traefik_on"
-  evaluates false "local.gateway_api_usable"
-  evaluates true "local.traefik_on" -var enable_traefik=true
+  # The G15 stack is ON by default now that the instance chart renders a Gateway and HTTPRoutes
+  # and dcctl plans the controllers: a cluster without ingress-nginx must come up with a
+  # controller. Pinned in BOTH directions, because a default flipped back by accident leaves a
+  # fresh cluster with no ingress at all, and an opt-out that cannot be switched off is no
+  # opt-out. (traefik_on also reads the CRD module's verdict, which needs a cluster, so it is
+  # exercised with the CRD module off.)
+  evaluates true "var.enable_traefik"
+  evaluates true "var.enable_ingress_nginx"
+  unset TF_VAR_enable_gateway_api_crds
+  evaluates true "var.enable_gateway_api_crds"
+  export TF_VAR_enable_gateway_api_crds=false
+  evaluates false "local.gateway_api_usable" -var enable_gateway_api_crds=false
+  evaluates true "local.traefik_on" -var enable_gateway_api_crds=false
+  evaluates false "local.traefik_on" -var enable_gateway_api_crds=false -var enable_traefik=false
+
+  # Removing ingress-nginx is refused while an Ingress of its class remains unless acknowledged;
+  # the acknowledgement is never on by default.
+  evaluates false "var.allow_ingress_nginx_removal"
 
   # The nats chart carries a SECOND block, a 2.15 floor: the broker config the module
   # renders (jetstream.limits.default_max_consumers) is refused at startup by an older

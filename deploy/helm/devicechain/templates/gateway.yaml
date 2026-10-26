@@ -64,8 +64,8 @@ fails rather than emit an invalid object if a future area set would not.
 {{- $gw := .Values.ingress.gateway -}}
 {{- $host := .Values.ingress.host -}}
 {{- $ns := include "devicechain.instanceNamespace" . -}}
-{{- if .Values.ingress.annotations }}
-{{- fail "ingress.annotations are Ingress controller annotations and have no effect when ingress.controller is gateway. Remove them; to annotate the Gateway itself use ingress.gateway.annotations." }}
+{{- if and .Values.ingress.annotations (ne (include "devicechain.legacyIngress" .) "true") }}
+{{- fail "ingress.annotations are Ingress controller annotations and have no effect when ingress.controller is gateway (they apply to the Ingress objects of a cutover window, ingress.legacy.enabled, and to nothing else). Remove them; to annotate the Gateway itself use ingress.gateway.annotations." }}
 {{- end }}
 {{- $appSection := ternary "https" "http" $tls.enabled -}}
 apiVersion: gateway.networking.k8s.io/v1
@@ -108,7 +108,7 @@ spec:
         mode: Terminate
         certificateRefs:
           - kind: Secret
-            name: {{ $tls.secretName }}
+            name: {{ include "devicechain.gatewayTlsSecret" . }}
       allowedRoutes:
         namespaces:
           from: Same

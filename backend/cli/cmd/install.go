@@ -34,6 +34,7 @@ var (
 	installRegistry          string
 	installVersion           string
 	installBuild             bool
+	installRemoveLegacy      bool
 )
 
 // installRestoreFlagsFromArgv assembles the relational-store restore inputs from the
@@ -184,6 +185,8 @@ func installOptions(dest *bootstrap.BackupDestination, restore bootstrap.Restore
 		MaxConnections:    installMaxConnections,
 		Restore:           restore,
 		DcctlVersion:      Version,
+
+		RemoveLegacyIngress: installRemoveLegacy,
 	}, nil
 }
 
@@ -214,6 +217,12 @@ or upgrading one instance.
 --database-node-selector places the relational store, and the event store of every
 instance bootstrapped on the cluster, on the nodes it names; --database-toleration lets
 them onto nodes tainted to keep other workloads off.
+
+The ingress controller is Traefik, which serves Gateway API routes. A cluster that already
+runs ingress-nginx keeps it, serving, and gains Traefik beside it; a cluster that does not
+gets Traefik alone. --remove-legacy-ingress removes ingress-nginx, and refuses while any
+Ingress object in the cluster still names its class: move each instance first with
+'dcctl upgrade --drop-legacy-ingress'.
 
 Running it again converges. Changing its settings is refused while any instance runs on
 the cluster, with one exception: the connection budget may be raised.`,
@@ -394,6 +403,7 @@ func init() {
 		"developer path: ko-build the operator image from this source checkout and push it to a "+
 			"local registry, instead of pulling a published one. Builds ONLY the operator; the "+
 			"service images are an instance's and are built by dcctl bootstrap --build")
+	installCmd.Flags().BoolVar(&installRemoveLegacy, "remove-legacy-ingress", false, "remove ingress-nginx from a cluster that still runs it. An install otherwise leaves it serving and installs Traefik beside it. Refused while any Ingress object in the cluster still names its class (each instance must first be moved with 'dcctl upgrade --drop-legacy-ingress'); on a local cluster Traefik takes the node's ports 80 and 443 in the same apply")
 	installCmd.Flags().IntVar(&installMaxConnections, "max-connections", 0, "the relational store's connection budget (default 600 on a first install, and what the cluster has on a re-run). Each instance reserves (its relational services x 40) of it when bootstrapped; the default admits two default-profile instances")
 
 	rootCmd.AddCommand(installCmd)

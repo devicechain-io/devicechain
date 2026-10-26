@@ -1243,6 +1243,20 @@ ingress:
     className: traefik
     # Annotations merged onto the Gateway, after the cert-manager issuer annotation.
     annotations: {}
+    # The certificate Secret the Gateway's https listener names; empty is ingress.tls.secretName.
+    # dcctl sets it while it moves an instance off its Ingress objects, so the Gateway (which
+    # serves nothing until DNS moves) is the side that waits for a new Secret, and keeps it
+    # afterwards. It must differ from ingress.tls.secretName while ingress.legacy.enabled.
+    tlsSecretName: ""
+  # The cutover window from the Ingress front end to the Gateway one. With controller
+  # "gateway" and legacy.enabled, the Ingress objects (class ingress.className) are rendered
+  # BESIDE the Gateway, so a cluster that still runs ingress-nginx keeps serving the host
+  # there while the operator moves DNS to the new controller. dcctl computes it from the
+  # cluster and from whether the instance already had Ingress objects; it is not meant to be
+  # set by hand, and dcctl refuses it in a values overlay. Remove it (dcctl upgrade
+  # --drop-legacy-ingress) once DNS has moved, before ingress-nginx is removed.
+  legacy:
+    enabled: false
   host: devicechain.local
   # Extra annotations merged onto the Ingress (e.g. body size, timeouts). nginx only.
   annotations: {}
@@ -1251,7 +1265,9 @@ ingress:
   # Ingress with this body limit and with request buffering OFF, so the body streams to the
   # service, which authenticates before it reads it. Keep it at or above
   # functionalAreas.update-management.config.updates.maxArtifactBytes (default 512 MiB).
-  # nginx only: a Gateway API controller of the shipped kind caps and buffers no request body.
+  # nginx only (and the legacy Ingress set of a cutover window): a Gateway API controller of the
+  # shipped kind caps and buffers no request body, so dcctl refuses this key in an overlay once
+  # an instance is on the Gateway front end.
   uploadMaxBodySize: 1g
   tls:
     enabled: true

@@ -519,12 +519,8 @@ func helmValues(st *State) map[string]interface{} {
 		// Set the host explicitly (matching the chart default) so the deployed
 		// ingress and the access report agree on one value. --no-tls turns off the
 		// self-signed cert for a plain-HTTP (zero-warning) local URL.
-		"ingress": map[string]interface{}{
-			"enabled": true,
-			"host":    st.Values["ingressHost"],
-			"tls":     map[string]interface{}{"enabled": !st.NoTLS},
-		},
-		"image": map[string]interface{}{"registry": st.ImageRegistry, "tag": st.ImageVersion},
+		"ingress": ingressValues(st),
+		"image":   map[string]interface{}{"registry": st.ImageRegistry, "tag": st.ImageVersion},
 		// Metrics rendering (ServiceMonitors / PrometheusRule / dashboards) needs the
 		// Prometheus Operator CRDs. `dcctl install` installs kube-prometheus-stack by
 		// default, and its record says whether it did (st.NoMonitoring, via
@@ -1083,4 +1079,32 @@ func (e *ErrLegacyNamedRelease) Error() string {
 			"That takes %q's data with it. Before v1.0.0 an instance may be recreated; this is "+
 			"one of the changes that requires it.",
 		e.Instance, e.Release, e.Instance, e.Instance, e.Instance)
+}
+
+// ingressValues is the chart's ingress block: the host, TLS, and which front end serves them.
+//
+// 🔴 THE FRONT END IS ALWAYS NAMED. The chart's own default stays nginx, for installs that
+// do not come through dcctl, so leaving it out here would render the retired controller's
+// objects for a State that never settled one. An unsettled State renders the Gateway, which
+// is what a new install gets.
+func ingressValues(st *State) map[string]interface{} {
+	controller := st.IngressController
+	if controller == "" {
+		controller = frontEndGateway
+	}
+	ing := map[string]interface{}{
+		"enabled":    true,
+		"controller": controller,
+		"host":       st.Values["ingressHost"],
+		"tls":        map[string]interface{}{"enabled": !st.NoTLS},
+	}
+	if controller == frontEndGateway && st.LegacyIngress {
+		// The Ingress objects beside the Gateway while the host moves. They keep the instance's
+		// own certificate Secret (DNS still reaches them); the Gateway names a new one.
+		ing["legacy"] = map[string]interface{}{"enabled": true}
+	}
+	if controller == frontEndGateway && st.GatewayTLSSecret != "" {
+		ing["gateway"] = map[string]interface{}{"tlsSecretName": st.GatewayTLSSecret}
+	}
+	return ing
 }

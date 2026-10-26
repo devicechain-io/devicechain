@@ -758,6 +758,66 @@ module "traefik" {
   depends_on = [module.gateway_api_crds]
 }
 
+# Removing ingress-nginx while an Ingress of its class remains. Dropping the module block
+# DESTROYS the controller and leaves every Ingress it served in place and unserved, so each
+# host they carry answers nothing. Same shape as the guards above: it lives in the root, so
+# a raw apply cannot bypass it, and the escape is a variable that names what is being given up.
+#
+# Fires only when this cluster HAS the controller this root installs (its Helm release
+# record is in its namespace) and the module is being turned off. A cluster that never had it,
+# or whose operator brought their own under a release of another name, passes.
+data "kubernetes_resources" "ingress_nginx_release" {
+  api_version    = "v1"
+  kind           = "Secret"
+  namespace      = var.ingress_nginx_namespace
+  label_selector = "owner=helm,name=ingress-nginx"
+}
+
+data "kubernetes_resources" "ingresses_of_the_nginx_class" {
+  api_version = "networking.k8s.io/v1"
+  kind        = "Ingress"
+}
+
+locals {
+  ingress_nginx_installed = length(data.kubernetes_resources.ingress_nginx_release.objects) > 0
+  ingresses_on_nginx = [
+    for o in data.kubernetes_resources.ingresses_of_the_nginx_class.objects :
+    "${o.metadata.namespace}/${o.metadata.name}"
+    if(try(o.spec.ingressClassName, "") == var.ingress_class ||
+    try(o.metadata.annotations["kubernetes.io/ingress.class"], "") == var.ingress_class) &&
+    # Grafana's own Ingress is this root's, and moves to Traefik in the same apply: but only
+    # while this root manages monitoring, and only the one this release (the module's default
+    # name) created. Anyone else's Ingress in that namespace still blocks the removal.
+    !(var.enable_monitoring &&
+      o.metadata.namespace == var.monitoring_namespace &&
+      try(o.metadata.labels["app.kubernetes.io/name"], "") == "grafana" &&
+    try(o.metadata.labels["app.kubernetes.io/instance"], "") == "kube-prometheus-stack")
+  ]
+}
+
+resource "terraform_data" "ingress_nginx_removal_guard" {
+  input = [var.enable_ingress_nginx, local.ingresses_on_nginx]
+
+  lifecycle {
+    precondition {
+      condition     = var.enable_ingress_nginx || !local.ingress_nginx_installed || length(local.ingresses_on_nginx) == 0 || var.allow_ingress_nginx_removal
+      error_message = <<-EOT
+        This apply would REMOVE ingress-nginx, and ${length(local.ingresses_on_nginx)} Ingress object(s) of its class
+        (${var.ingress_class}) still exist:
+
+          ${join("\n          ", local.ingresses_on_nginx)}
+
+        Removing the controller leaves them in place, unserved: every host they carry stops
+        answering and nothing reports a fault. Move them to the Gateway API front end first
+        (dcctl upgrade <instance> --drop-legacy-ingress, after the DNS for the host points at
+        the new controller), and apply again once none is left.
+
+        To remove the controller anyway, set allow_ingress_nginx_removal = true.
+      EOT
+    }
+  }
+}
+
 # Two controllers cannot both hold a node's host ports. Refused here, at PLAN time, rather
 # than discovered as a Pending pod and an apply that times out.
 resource "terraform_data" "host_port_exclusive" {
@@ -805,7 +865,9 @@ module "monitoring" {
   grafana_oauth_api_url       = var.monitoring_grafana_oauth_api_url
   grafana_root_url            = var.monitoring_grafana_root_url
   grafana_ingress_host        = var.monitoring_grafana_ingress_host
-  ingress_class               = var.ingress_class
+  # The /grafana Ingress follows whichever controller is serving: ingress-nginx while it is
+  # installed, Traefik once it is gone. Traefik serves plain Ingress objects of its own class.
+  ingress_class = var.enable_ingress_nginx ? var.ingress_class : (local.traefik_on ? module.traefik[0].ingress_class : var.ingress_class)
 
   # When SSO is on, the monitoring stack ships a /grafana Ingress, which the
   # ingress-nginx admission webhook must validate. Both installs otherwise run in

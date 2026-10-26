@@ -146,6 +146,15 @@ func hydrateUpgradeState(
 	if err := applyUpgradeValuesOverlay(st, inst, opts); err != nil {
 		return nil, err
 	}
+	// The front end this run renders: the choice the declaration records (an operator's
+	// --ingress-controller, kept by every later upgrade), else what the cluster runs; off the
+	// Ingress objects by --drop-legacy-ingress. After the overlay, which the answer retires keys from.
+	if err := applyIngressControllerChoice(st, inst, opts); err != nil {
+		return nil, err
+	}
+	if err := settleFrontEnd(ctx, st); err != nil {
+		return nil, err
+	}
 	// An upgrade over an instance whose first bootstrap never finished (the document
 	// written, then Helm or readiness failed) is let through: it runs the same Helm
 	// upgrade and readiness gate against the same document, and its Ready removes the

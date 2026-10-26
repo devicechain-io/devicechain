@@ -113,14 +113,14 @@ func TestSingletonsAreAttributedToOtherInstancesOnly(t *testing.T) {
 	got := singletonsFrom(
 		[]corev1.Service{svc(InstanceNamespace("alpha"), localMQTTNodePort), svc(InstanceNamespace("gamma"), 30001)},
 		[]networkingv1.Ingress{ing(InstanceNamespace("alpha"), "localhost"), ing(InstanceNamespace("gamma"), "gamma.localhost")},
-		"beta", "localhost")
+		nil, "beta", "localhost")
 	if got.MQTTNodePortHolder != InstanceNamespace("alpha") || got.HostHolder != InstanceNamespace("alpha") {
 		t.Errorf("beta sees %+v, want both held by alpha", got)
 	}
 	own := singletonsFrom(
 		[]corev1.Service{svc(InstanceNamespace("alpha"), localMQTTNodePort)},
 		[]networkingv1.Ingress{ing(InstanceNamespace("alpha"), "localhost")},
-		"alpha", "localhost")
+		nil, "alpha", "localhost")
 	if own != (clusterSingletons{}) {
 		t.Errorf("alpha's own port and host were reported as taken: %+v", own)
 	}

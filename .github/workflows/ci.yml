@@ -2218,14 +2218,18 @@ jobs:
 
           # The artifact upload route needs its own Ingress: nginx's defaults refuse a body
           # over 1 MiB and buffer the whole body before the service can authenticate it.
-          UPLOAD="$(helm template deploy/helm/devicechain             --set "instance.config.infrastructure.secrets.rootKey=$KEY"             --set "enabledFunctionalAreas={user-management,device-management,update-management}"             --set ingress.enabled=true)"
+          #
+          # These proxy-* / enable-access-log annotations are ingress-nginx's, so they are asserted
+          # on the Ingress front end (ingress.controller=nginx) and, beside the Gateway, in the cutover
+          # window (ingress.legacy.enabled). The Gateway front end has no such objects: it is held below.
+          UPLOAD="$(helm template deploy/helm/devicechain             --set "instance.config.infrastructure.secrets.rootKey=$KEY"             --set "enabledFunctionalAreas={user-management,device-management,update-management}"             --set ingress.enabled=true --set ingress.controller=nginx)"
           for want in 'name: devicechain-update-upload' 'proxy-request-buffering: "off"' 'proxy-body-size: "1g"'; do
             case "$UPLOAD" in
               *"$want"*) echo "ok (renders): upload ingress carries $want" ;;
               *) echo "::error::the upload ingress is missing $want"; exit 1 ;;
             esac
           done
-          NOUPLOAD="$(helm template deploy/helm/devicechain --set "instance.config.infrastructure.secrets.rootKey=$KEY" --set ingress.enabled=true)"
+          NOUPLOAD="$(helm template deploy/helm/devicechain --set "instance.config.infrastructure.secrets.rootKey=$KEY" --set ingress.enabled=true --set ingress.controller=nginx)"
           case "$NOUPLOAD" in
             *devicechain-update-upload*) echo "::error::the upload ingress renders without update-management"; exit 1 ;;
             *) echo "ok (renders): no upload ingress without update-management" ;;
@@ -2243,6 +2247,32 @@ jobs:
             *devicechain-update-download*) echo "::error::the download ingress renders without update-management"; exit 1 ;;
             *) echo "ok (renders): no download ingress without update-management" ;;
           esac
+
+          # The Gateway front end and the cutover window. Gateway alone: the update-management routes
+          # are rules of the API HTTPRoute, there is no upload or download Ingress, and no nginx
+          # annotation of any kind is rendered (they would be ignored by the controller, and a
+          # reader would believe the edge enforces them). Cutover: both front ends, and the legacy
+          # upload and download Ingress objects keep the annotations that make them work.
+          GW="$(helm template deploy/helm/devicechain             --set "instance.config.infrastructure.secrets.rootKey=$KEY"             --set "enabledFunctionalAreas={user-management,device-management,update-management}"             --set ingress.enabled=true --set ingress.controller=gateway)"
+          case "$GW" in
+            *"kind: HTTPRoute"*"/api/update-management"*) echo "ok (renders): the Gateway routes update-management" ;;
+            *) echo "::error::the Gateway front end does not route update-management"; exit 1 ;;
+          esac
+          for banned in 'kind: Ingress' 'nginx.ingress.kubernetes.io' 'proxy-body-size' 'proxy-request-buffering' 'enable-access-log' 'devicechain-update-upload' 'devicechain-update-download'; do
+            case "$GW" in
+              *"$banned"*) echo "::error::the Gateway front end renders $banned"; exit 1 ;;
+              *) echo "ok (renders): the Gateway front end has no $banned" ;;
+            esac
+          done
+          CUT="$(helm template deploy/helm/devicechain             --set "instance.config.infrastructure.secrets.rootKey=$KEY"             --set "enabledFunctionalAreas={user-management,device-management,update-management}"             --set ingress.enabled=true --set ingress.controller=gateway --set ingress.legacy.enabled=true --set ingress.gateway.tlsSecretName=devicechain-tls-gateway)"
+          for want in 'kind: Gateway' 'kind: HTTPRoute' 'name: devicechain-update-upload' 'name: devicechain-update-download' 'proxy-request-buffering: "off"' 'proxy-body-size: "1g"' 'enable-access-log: "false"' 'secretName: devicechain-tls' 'name: devicechain-tls-gateway'; do
+            case "$CUT" in
+              *"$want"*) echo "ok (renders): the cutover window carries $want" ;;
+              *) echo "::error::the cutover window is missing $want"; exit 1 ;;
+            esac
+          done
+          refuses "a Gateway and an Ingress naming one certificate Secret" "must differ from ingress.tls.secretName" --set "instance.config.infrastructure.secrets.rootKey=$KEY" --set ingress.enabled=true --set ingress.controller=gateway --set ingress.legacy.enabled=true
+          refuses "legacy ingress beside the nginx front end" "needs ingress.controller: gateway"             --set "instance.config.infrastructure.secrets.rootKey=$KEY" --set ingress.enabled=true --set ingress.legacy.enabled=true
 
           renders "inline config" --set "instance.config.infrastructure.secrets.rootKey=$KEY"
           renders "inline config, ingest-only" --set profile=ingest-only \

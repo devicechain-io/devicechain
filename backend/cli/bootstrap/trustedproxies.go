@@ -25,7 +25,8 @@ import (
 // stranger sending a few junk bodies a second then answers 429 to every device on the
 // instance, which is exactly the lever the per-source design exists to deny. Naming the
 // controller's range makes the services believe the X-Forwarded-For header it writes (the
-// real TCP peer, with ingress-nginx's use-forwarded-headers left OFF) and key on the device.
+// real TCP peer: ingress-nginx with use-forwarded-headers left OFF, Traefik with no trusted IPs of its
+// own, both of which replace what a client sent) and key on the device.
 //
 // The range is the cluster's POD range, read from the nodes: every ingress controller pod is
 // in it, wherever it is scheduled, and so is anything else that could write to the services.

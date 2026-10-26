@@ -51,6 +51,12 @@ type Options struct {
 	// deriving the list from the cluster, otherwise the CIDRs to render as
 	// infrastructure.http.trustedProxies. See trustedproxies.go.
 	TrustedProxies []string
+	// IngressController is --ingress-controller: "nginx" or "gateway" to choose the front end
+	// that serves the instance's host, empty to decide from what the cluster runs
+	// (chooseFrontEnd). DropLegacyIngress is `dcctl upgrade --drop-legacy-ingress`: stop
+	// rendering the Ingress objects beside the Gateway once DNS has moved.
+	IngressController string
+	DropLegacyIngress bool
 	// ValuesOverlay is the parsed, validated --values overlay (LoadValuesOverlay); nil when
 	// the flag was not given. ResetValues is `dcctl upgrade --reset-values`.
 	ValuesOverlay map[string]interface{}

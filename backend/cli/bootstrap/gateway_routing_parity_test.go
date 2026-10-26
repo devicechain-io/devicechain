@@ -525,6 +525,9 @@ func renderRoutingVariant(t *testing.T, p renderProfile, instance, controller st
 		t.Fatalf("%s: the install values carry no ingress block: %v", p.name, vals)
 	}
 	ing["controller"] = controller
+	// The parity is between the two PURE front ends; the cutover window renders both at once
+	// and is held by frontend_test.go.
+	delete(ing, "legacy")
 	tls, _ := ing["tls"].(map[string]interface{})
 	if tls == nil {
 		tls = map[string]interface{}{}
