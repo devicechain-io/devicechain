@@ -1329,6 +1329,16 @@ jobs:
       - name: ko base-image pin guard self-test
         run: hack/check-ko-base-pin.sh --self-test
 
+      # The pin above is only worth guarding if a build READS it. ko finds .ko.yaml in its
+      # working directory only, so every build runs through hack/ko-build.sh, which sets
+      # KO_CONFIG_PATH; this fails any bare ko elsewhere. The build-side
+      # proof is the image-smoke job's "ko build uses the pinned base" step.
+      - name: ko wrapper lint self-test
+        run: hack/check-ko-base-used.sh --self-test
+
+      - name: every ko invocation goes through the pinned-base wrapper
+        run: hack/check-ko-base-used.sh --lint
+
       - name: ko base image is pinned and its bumper is alive
         env:
           GH_TOKEN: ${{ github.token }}
@@ -2800,6 +2810,8 @@ jobs:
         working-directory: ${{ matrix.module }}
         env:
           KO_DOCKER_REPO: ghcr.io/devicechain-io
+          # Built through hack/ko-build.sh, which points ko at the repo's .ko.yaml (ko reads
+          # it from its working directory only; this step runs in the module directory).
         # --local loads to the runner's Docker daemon and never pushes to a
         # registry. --base-import-paths keeps the local tag deterministic.
         #
@@ -2810,7 +2822,7 @@ jobs:
         # build failure (which fails all three attempts deterministically).
         run: |
           for attempt in 1 2 3; do
-            if ko build --local --base-import-paths ./; then
+            if "$GITHUB_WORKSPACE/hack/ko-build.sh" --local --base-import-paths ./; then
               exit 0
             fi
             echo "::warning::ko build attempt ${attempt}/3 failed (likely a transient base-image registry blip); retrying..." >&2
@@ -2818,6 +2830,15 @@ jobs:
           done
           echo "::error::ko build failed after 3 attempts" >&2
           exit 1
+
+      # The watcher for the config line above. Builds ONE image (the operator, whose modules
+      # this job has already downloaded) and reads the base ko recorded in it; it must be the
+      # digest .ko.yaml pins. Without KO_CONFIG_PATH it records the bare tag and fails.
+      - name: ko build uses the pinned base
+        if: matrix.module == 'backend/k8s'
+        env:
+          KO_CHECK_MODULE: backend/k8s
+        run: hack/check-ko-base-used.sh
 
   # ---------------------------------------------------------------------------
   # API compatibility: does this change break a client written against the last

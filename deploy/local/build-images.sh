@@ -81,7 +81,7 @@ command -v ko >/dev/null 2>&1 || {
 # ko build --bare: image name = $KO_DOCKER_REPO exactly (no import path appended).
 build_one() { # <module-dir> <image-name>
   step "🏗️  $2:$TAG"
-  ( cd "$1" && KO_DOCKER_REPO="$2" ko build --bare --tags "$TAG" --platform "$PLATFORM" ./ >/dev/null )
+  ( cd "$1" && KO_DOCKER_REPO="$2" "$ROOT/hack/ko-build.sh" --bare --tags "$TAG" --platform "$PLATFORM" ./ >/dev/null )
 }
 
 log "📦 Building images → $REGISTRY (tag=$TAG)"
