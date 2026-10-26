@@ -157,10 +157,14 @@ rendered by the Helm chart (it knows the enabled functional areas) — set
 `ingress.enabled=true` there. Both are toggleable (`enable_ingress_nginx`,
 `enable_cert_manager`) if the cluster already has them.
 
-**Gateway API + Traefik** (the controller that replaces ingress-nginx) are **off by default**
-(`enable_gateway_api_crds`, `enable_traefik`) until the release that ships the instance chart's
-Gateway/HTTPRoutes and the dual render; on, they install *next to* ingress-nginx, which is left
-exactly as it is. `gateway-api-crds` installs the v1.6.3 standard-channel CRDs only when the
+**Gateway API + Traefik** (the controller that replaces ingress-nginx) are **on by default**
+(`enable_gateway_api_crds`, `enable_traefik`). Next to an ingress-nginx that is already installed
+they run beside it, which is left exactly as it is; `dcctl install` sets `enable_ingress_nginx=false`
+for a cluster that does not have it, so a fresh cluster never gets the retired controller. Removing a
+controller that is there is guarded: the root refuses `enable_ingress_nginx=false` over a cluster
+that has ingress-nginx while any Ingress of its class remains, unless `allow_ingress_nginx_removal`
+is set (dcctl sets it, after its own check, for `dcctl install --remove-legacy-ingress`).
+`gateway-api-crds` installs the v1.6.3 standard-channel CRDs only when the
 cluster has none. A set that is not ours is accepted and never written when it holds the CRDs
 Traefik needs at v1.5.1 or newer (a floor that is provisional until measured on GKE); otherwise
 Traefik and cert-manager's Gateway shim are **skipped with a warning**, never an error, because a
@@ -170,8 +174,8 @@ failure here would block every other cluster prerequisite. The CRDs carry
 CRDs (it crash-loops with the shim on and no CRDs). `traefik` takes its edge read timeout from
 `traefik_max_artifact_bytes` (the OTA upload window plus a minute), so raise that before raising an
 instance's `updates.maxArtifactBytes`. Only one controller can hold a node's host 80/443: on kind
-Traefik stays on its NodePort while ingress-nginx owns the host ports (`traefik_use_host_port` and
-`ingress_use_host_port` together are refused).
+Traefik stays on its NodePort while ingress-nginx owns the host ports and takes them when
+ingress-nginx is removed (`traefik_use_host_port` and `ingress_use_host_port` together are refused).
 
 The monitoring stack installs the Prometheus Operator CRDs the DeviceChain chart's
 ServiceMonitors / PrometheusRule / dashboard ConfigMaps depend on, so it applies

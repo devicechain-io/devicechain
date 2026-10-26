@@ -486,6 +486,22 @@
             }
           }
         },
+        "legacy": {
+          "type": "object",
+          "description": "The cutover window from the Ingress front end to the Gateway one: with controller gateway and enabled true, the Ingress objects are rendered beside the Gateway so a cluster still running ingress-nginx keeps serving the host there. dcctl computes it; it is not set by hand.",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Also render the Ingress objects (class ingress.className). Needs controller gateway."
+            },
+            "tlsSecretName": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The certificate Secret the Ingress objects name while both are rendered. It must differ from tls.secretName, which the Gateway owns, so two cert-manager shims never issue into one Secret."
+            }
+          }
+        },
         "host": {
           "type": "string",
           "minLength": 1,
@@ -497,7 +513,7 @@
         },
         "uploadMaxBodySize": {
           "type": "string",
-          "description": "Largest request body the update-artifact upload route accepts at the edge, as an nginx size (for example 1g). That route is rendered on its own Ingress with this limit and request buffering off. Keep it at or above the update-management artifact ceiling. Used when controller is nginx; a Gateway API controller of the shipped kind caps no request body."
+          "description": "Largest request body the update-artifact upload route accepts at the edge, as an nginx size (for example 1g). That route is rendered on its own Ingress with this limit and request buffering off. Keep it at or above the update-management artifact ceiling. Used by the nginx front end and by the legacy Ingress set of a cutover window; a Gateway API controller of the shipped kind caps no request body."
         },
         "tls": {
           "type": "object",

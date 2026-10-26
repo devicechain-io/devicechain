@@ -1282,3 +1282,34 @@ land. As a JSON array; decode with fromJsonArray.
 {{- define "devicechain.blobConsumers" -}}
 {{- list "user-management" "update-management" | toJson -}}
 {{- end -}}
+
+{{/*
+devicechain.legacyIngress is "true" when the Ingress objects (ingress.yaml, ingress-upload.yaml,
+ingress-download.yaml) are to be rendered: the nginx front end, or the gateway front end with
+ingress.legacy.enabled, which is the cutover window in which the Gateway and the Ingress set
+serve one host side by side (dcctl computes it; see ingress.legacy in values.yaml).
+
+It also refuses the two settings that would make the window misbehave rather than render them:
+legacy.enabled without the gateway front end has nothing to be "legacy" beside, and a legacy
+Ingress that names the Gateway's own certificate Secret would put two cert-manager shims on
+one Certificate, which is the race the distinct name exists to avoid.
+*/}}
+{{- define "devicechain.legacyIngress" -}}
+{{- $legacy := .Values.ingress.legacy -}}
+{{- if and .Values.ingress.enabled $legacy.enabled (ne .Values.ingress.controller "gateway") -}}
+{{- fail "ingress.legacy.enabled renders the Ingress objects BESIDE the Gateway and so needs ingress.controller: gateway. With controller nginx the Ingress objects are the only front end; remove ingress.legacy.enabled." -}}
+{{- end -}}
+{{- if and .Values.ingress.enabled .Values.ingress.controller (eq .Values.ingress.controller "gateway") $legacy.enabled .Values.ingress.tls.enabled (eq $legacy.tlsSecretName .Values.ingress.tls.secretName) -}}
+{{- fail (printf "ingress.legacy.tlsSecretName must differ from ingress.tls.secretName (%q) while the Gateway and the Ingress objects serve one host: both would ask cert-manager to issue into one Secret." .Values.ingress.tls.secretName) -}}
+{{- end -}}
+{{- if and .Values.ingress.enabled (or (eq .Values.ingress.controller "nginx") $legacy.enabled) -}}true{{- end -}}
+{{- end -}}
+
+{{/*
+devicechain.legacyTlsSecret is the certificate Secret the Ingress objects name: the instance's
+own (ingress.tls.secretName) when they are the only front end, and ingress.legacy.tlsSecretName
+when the Gateway is rendered beside them and owns the instance's own.
+*/}}
+{{- define "devicechain.legacyTlsSecret" -}}
+{{- if eq .Values.ingress.controller "gateway" -}}{{ .Values.ingress.legacy.tlsSecretName }}{{- else -}}{{ .Values.ingress.tls.secretName }}{{- end -}}
+{{- end -}}

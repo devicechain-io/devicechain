@@ -481,19 +481,17 @@ func infraVars(st *State) []string {
 	// The OpenTofu half of the event-management pod count, for the same reason: the
 	// event store reserves its connections per pod. See persistenceTopology.
 	vars = append(vars, persistenceFor(st).infraVars()...)
-	// On a kind/minikube node, ingress-nginx must bind the node's 80/443 via
+	// On a kind/minikube node, the ingress controller must bind the node's 80/443 via
 	// hostPort; a LoadBalancer stays <pending> and times out the apply. The
 	// monitoring stack likewise runs in its slim profile (emptyDir TSDB, smaller
 	// requests) so it fits a local single-node cluster.
 	if monitoringSlim(st) {
 		vars = append(vars,
-			"ingress_use_host_port=true",
 			"monitoring_slim=true",
-			// Traefik runs next to ingress-nginx in this release, and only one controller
-			// per node can hold the host's 80/443, so it does NOT take host ports here
-			// (the cluster root refuses both). It still needs a Service a kind cluster can
-			// satisfy: a LoadBalancer stays <pending> and hangs the release's --wait.
-			// Reachable on its NodePort until the swap makes it the host-port holder.
+			// Traefik's Service must be one a kind cluster can satisfy: a LoadBalancer stays
+			// <pending> and hangs the release's --wait. Which controller holds the node's host
+			// 80/443 is the front-end plan's (planClusterFrontEnd): only one can, and the cluster
+			// root refuses both asking.
 			"traefik_service_type=NodePort",
 		)
 		// Expose MQTT as a NodePort on the port the embedded kind config maps
@@ -515,6 +513,9 @@ func infraVars(st *State) []string {
 			vars = append(vars, fmt.Sprintf("nats_mqtt_node_port=%d", localMQTTNodePort))
 		}
 	}
+	// Which ingress controllers the cluster root runs, planned by install from what the cluster
+	// runs now. Empty on every other path: the instance root declares none of them.
+	vars = append(vars, st.ClusterFrontEndVars...)
 	// The observability stack is default-on (like Postgres/Timescale); --no-monitoring
 	// skips it for a cluster that already has the Prometheus Operator.
 	if st.NoMonitoring {

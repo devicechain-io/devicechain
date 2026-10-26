@@ -24,7 +24,7 @@ edge accepts, not what the service stores: the service's own ceiling
 (functionalAreas.update-management.config.updates.maxArtifactBytes) is the one that decides, so
 keep this at or above it.
 */}}
-{{- if and .Values.ingress.enabled (eq .Values.ingress.controller "nginx") (has "update-management" (splitList "," (include "devicechain.enabledAreas" .))) }}
+{{- if and (eq (include "devicechain.legacyIngress" .) "true") (has "update-management" (splitList "," (include "devicechain.enabledAreas" .))) }}
 {{- $tls := .Values.ingress.tls -}}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -53,7 +53,7 @@ spec:
   tls:
     - hosts:
         - {{ .Values.ingress.host | quote }}
-      secretName: {{ $tls.secretName }}
+      secretName: {{ include "devicechain.legacyTlsSecret" . }}
   {{- end }}
   rules:
     - host: {{ .Values.ingress.host | quote }}

@@ -82,6 +82,10 @@ type InstallOptions struct {
 	// bootstrap` carries that half.
 	Restore      RestorePlan
 	DcctlVersion string
+	// RemoveLegacyIngress removes ingress-nginx from a cluster that has it, once no Ingress
+	// object names its class (planClusterFrontEnd refuses otherwise). Without it an install
+	// leaves ingress-nginx serving and installs Traefik beside it.
+	RemoveLegacyIngress bool
 }
 
 // Install prepares a cluster for instances: it creates or names the cluster, applies
@@ -447,6 +451,7 @@ func installState(binding ClusterBinding, provider string, opts InstallOptions) 
 		DatabasePlacement:   opts.DatabasePlacement,
 		MaxConnections:      opts.MaxConnections,
 		Restore:             opts.Restore,
+		RemoveLegacyIngress: opts.RemoveLegacyIngress,
 		Values:              map[string]string{},
 	}
 }

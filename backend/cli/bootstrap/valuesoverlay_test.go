@@ -591,7 +591,11 @@ func TestTheConnectionLimitCountsTheOverlaysReplicasAndPools(t *testing.T) {
 // overlay's value would replace the chart's. The set the chart writes is GENERATED here
 // from a real render, so a new chart annotation fails this until it is refused.
 func TestNoOverlayAnnotationReplacesOneTheChartSets(t *testing.T) {
-	manifest, err := renderChartClientSide(t.Context(), chartForTest(t), renderOnlyAuthoring(compactState(false)))
+	// The Ingress objects are rendered by the nginx front end (a dcctl State renders the Gateway
+	// unless one is settled), and they are the only objects that carry these annotations.
+	st := compactState(false)
+	st.IngressController = frontEndNginx
+	manifest, err := renderChartClientSide(t.Context(), chartForTest(t), renderOnlyAuthoring(st))
 	if err != nil {
 		t.Fatal(err)
 	}

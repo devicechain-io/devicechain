@@ -124,6 +124,9 @@ func settleControlPlaneScrapes(ctx context.Context, st *State, typed kubernetes.
 // function's tests would still pass.
 func installClusterVars(ctx context.Context, st *State, typed kubernetes.Interface) ([]string, error) {
 	settleControlPlaneScrapes(ctx, st, typed)
+	if err := settleClusterFrontEnd(ctx, st, typed); err != nil {
+		return nil, err
+	}
 	cluster, _, err := splitVars(infraVars(st))
 	return cluster, err
 }

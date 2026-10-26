@@ -27,7 +27,7 @@ When TLS is on and selfSigned, a cert-manager self-signed Issuer is rendered in
 this namespace (dev-grade: valid TLS, browser-untrusted); for real certs set
 selfSigned=false and point clusterIssuer at a configured ClusterIssuer.
 */}}
-{{- if and .Values.ingress.enabled (eq .Values.ingress.controller "nginx") }}
+{{- if eq (include "devicechain.legacyIngress" .) "true" }}
 {{- $root := . -}}
 {{- $tls := .Values.ingress.tls -}}
 apiVersion: networking.k8s.io/v1
@@ -60,7 +60,7 @@ spec:
   tls:
     - hosts:
         - {{ .Values.ingress.host | quote }}
-      secretName: {{ $tls.secretName }}
+      secretName: {{ include "devicechain.legacyTlsSecret" . }}
   {{- end }}
   rules:
     - host: {{ .Values.ingress.host | quote }}
@@ -154,7 +154,7 @@ spec:
   tls:
     - hosts:
         - {{ .Values.ingress.host | quote }}
-      secretName: {{ $tls.secretName }}
+      secretName: {{ include "devicechain.legacyTlsSecret" . }}
   {{- end }}
   rules:
     - host: {{ .Values.ingress.host | quote }}
@@ -212,7 +212,7 @@ spec:
   tls:
     - hosts:
         - {{ .Values.ingress.host | quote }}
-      secretName: {{ $tls.secretName }}
+      secretName: {{ include "devicechain.legacyTlsSecret" . }}
   {{- end }}
   rules:
     - host: {{ .Values.ingress.host | quote }}

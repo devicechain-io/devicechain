@@ -7,13 +7,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/fatih/color"
 
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic"
 )
 
 // localMQTTNodePort is the node port the local kind configuration maps host 1883 to
@@ -27,7 +32,7 @@ type clusterSingletons struct {
 	// MQTTNodePortHolder is the namespace of a Service already holding localMQTTNodePort,
 	// other than this instance's own. Empty when the port is free for this instance.
 	MQTTNodePortHolder string
-	// HostHolder is the namespace of an Ingress already serving this instance's host,
+	// HostHolder is the namespace of an Ingress, Gateway or HTTPRoute already serving this instance's host,
 	// other than this instance's own. Empty when no other instance serves it.
 	HostHolder string
 }
@@ -36,7 +41,7 @@ type clusterSingletons struct {
 // Indirected, like the step's other cluster reads, so the decision can be exercised
 // without one.
 var readClusterSingletons = func(ctx context.Context, kubeContext, instance, host string) (clusterSingletons, error) {
-	_, _, typed, err := kubeClients(kubeContext)
+	dyn, _, typed, err := kubeClients(kubeContext)
 	if err != nil {
 		return clusterSingletons{}, fmt.Errorf("connecting to the cluster to see what other instances hold: %w", err)
 	}
@@ -48,11 +53,67 @@ var readClusterSingletons = func(ctx context.Context, kubeContext, instance, hos
 	if err != nil {
 		return clusterSingletons{}, fmt.Errorf("listing Ingresses to see whether host %q is taken: %w", host, err)
 	}
-	return singletonsFrom(svcs.Items, ings.Items, instance, host), nil
+	// 🔴 GATEWAYS AND HTTPROUTES CLAIM A HOST TOO, and the controller that serves them picks
+	// one claimant just as quietly: a second Gateway listener naming another instance's host
+	// was accepted and programmed, and its more specific routes took that instance's paths.
+	// A cluster without the Gateway API CRDs has no such objects, and that is not an error.
+	claims, err := listGatewayHostClaims(ctx, dyn)
+	if err != nil {
+		return clusterSingletons{}, fmt.Errorf("listing Gateways and HTTPRoutes to see whether host %q is taken: %w", host, err)
+	}
+	return singletonsFrom(svcs.Items, ings.Items, claims, instance, host), nil
+}
+
+// gatewayHostClaim is a host a Gateway listener or an HTTPRoute names, and where it lives.
+type gatewayHostClaim struct {
+	Namespace string
+	Host      string
+}
+
+// listGatewayHostClaims reads the hosts every Gateway listener and HTTPRoute names. An
+// absent CRD yields none.
+func listGatewayHostClaims(ctx context.Context, dyn dynamic.Interface) ([]gatewayHostClaim, error) {
+	var out []gatewayHostClaim
+	for _, q := range []struct {
+		gvr   schema.GroupVersionResource
+		hosts func(obj map[string]interface{}) []string
+	}{
+		{gatewayGVR, func(obj map[string]interface{}) []string {
+			var hs []string
+			listeners, _, _ := unstructured.NestedSlice(obj, "spec", "listeners")
+			for _, l := range listeners {
+				if lm, ok := l.(map[string]interface{}); ok {
+					if h, ok := lm["hostname"].(string); ok {
+						hs = append(hs, h)
+					}
+				}
+			}
+			return hs
+		}},
+		{httpRouteGVR, func(obj map[string]interface{}) []string {
+			hs, _, _ := unstructured.NestedStringSlice(obj, "spec", "hostnames")
+			return hs
+		}},
+	} {
+		list, err := dyn.Resource(q.gvr).Namespace(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			if apierrors.IsNotFound(err) || meta.IsNoMatchError(err) {
+				continue
+			}
+			return nil, err
+		}
+		for _, item := range list.Items {
+			for _, h := range q.hosts(item.Object) {
+				out = append(out, gatewayHostClaim{Namespace: item.GetNamespace(), Host: h})
+			}
+		}
+	}
+	return out, nil
 }
 
 // singletonsFrom is readClusterSingletons' decision, with no cluster in it.
-func singletonsFrom(svcs []corev1.Service, ings []networkingv1.Ingress, instance, host string) clusterSingletons {
+func singletonsFrom(svcs []corev1.Service, ings []networkingv1.Ingress, claims []gatewayHostClaim,
+	instance, host string) clusterSingletons {
 	var out clusterSingletons
 	own := InstanceNamespace(instance)
 	for _, s := range svcs {
@@ -73,6 +134,11 @@ func singletonsFrom(svcs []corev1.Service, ings []networkingv1.Ingress, instance
 			if r.Host == host {
 				out.HostHolder = ing.Namespace
 			}
+		}
+	}
+	for _, c := range claims {
+		if c.Namespace != own && strings.EqualFold(c.Host, host) {
+			out.HostHolder = c.Namespace
 		}
 	}
 	return out

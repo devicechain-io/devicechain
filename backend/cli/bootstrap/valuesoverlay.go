@@ -90,9 +90,16 @@ var tunableValues = []string{
 	"metrics.alerts",
 	"metrics.grafanaDashboards",
 	// How the ingress is fronted, not where it points or whether it is encrypted.
+	//
+	// className, annotations and uploadMaxBodySize are the Ingress front end's: dcctl retires
+	// them for an instance on the Gateway (effectiveOverlay). Which front end serves the
+	// host (ingress.controller) and the cutover window (ingress.legacy) are dcctl's, so they are
+	// refused here by omission.
 	"ingress.className",
 	"ingress.annotations",
 	"ingress.uploadMaxBodySize",
+	"ingress.gateway.className",
+	"ingress.gateway.annotations",
 	"networkPolicy.additionalAllowedCidrs",
 	"serviceAccount.annotations",
 	// One area's own scale, resources and configuration.
@@ -261,6 +268,13 @@ func refuseOverlayKey(path []string) string {
 			return why
 		}
 	}
+	// The Gateway's annotations are written after the chart's own, like the Ingress objects',
+	// so the one it sets (the TLS issuer) must not be replaceable from here either.
+	if len(path) == 4 && path[0] == "ingress" && path[1] == "gateway" && path[2] == "annotations" {
+		if strings.HasPrefix(strings.ToLower(path[3]), "cert-manager.io/") {
+			return "the TLS certificate's issuer is dcctl's (it follows --no-tls and the cluster's issuer)"
+		}
+	}
 	for _, ok := range tunableValues {
 		if pathHasPrefix(path, splitPath(ok)) {
 			return ""
@@ -392,8 +406,8 @@ func deepCopyValues(m map[string]interface{}) map[string]interface{} {
 // then refuses, or the reverse.
 func authoringValues(st *State) map[string]interface{} {
 	vals := helmValues(st)
-	if len(st.ValuesOverlay) > 0 {
-		mergeOverlay(vals, st.ValuesOverlay)
+	if overlay := effectiveOverlay(st); len(overlay) > 0 {
+		mergeOverlay(vals, overlay)
 	}
 	return vals
 }

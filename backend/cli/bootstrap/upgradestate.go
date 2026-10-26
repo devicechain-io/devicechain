@@ -146,6 +146,13 @@ func hydrateUpgradeState(
 	if err := applyUpgradeValuesOverlay(st, inst, opts); err != nil {
 		return nil, err
 	}
+	// The front end this run renders: the instance's own (it keeps the one it has), moved to
+	// the Gateway by --ingress-controller gateway, off its Ingress objects by
+	// --drop-legacy-ingress. After the overlay, which the answer retires keys from.
+	st.IngressControllerOverride, st.DropLegacyIngress = opts.IngressController, opts.DropLegacyIngress
+	if err := settleFrontEnd(ctx, st); err != nil {
+		return nil, err
+	}
 	// An upgrade over an instance whose first bootstrap never finished (the document
 	// written, then Helm or readiness failed) is let through: it runs the same Helm
 	// upgrade and readiness gate against the same document, and its Ready removes the

@@ -151,6 +151,26 @@ var renderProfiles = []renderProfile{
 		},
 	},
 	{
+		// The Ingress front end (a cluster that still runs ingress-nginx and an instance not yet
+		// moved), which renders the Ingress objects in place of the Gateway.
+		name: "--ha --profile full, Ingress front end",
+		st: func(instance string) *State {
+			st := profileState(true, false, "full")(instance)
+			st.IngressController = frontEndNginx
+			return st
+		},
+	},
+	{
+		// The cutover window: the Gateway and the Ingress objects beside it, on distinct
+		// certificate Secrets.
+		name: "--ha --profile full, cutover (Gateway and Ingress)",
+		st: func(instance string) *State {
+			st := profileState(true, false, "full")(instance)
+			st.IngressController, st.LegacyIngress = frontEndGateway, true
+			return st
+		},
+	},
+	{
 		name: "--ha --no-tls",
 		st: func(instance string) *State {
 			st := profileState(true, false, "default")(instance)

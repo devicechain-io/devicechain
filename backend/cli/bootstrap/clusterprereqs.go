@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"time"
 
 	assets "github.com/devicechain-io/dc-deploy"
@@ -119,6 +120,9 @@ func applyClusterPrereqs(ctx context.Context, st *State, uid string, vars []stri
 	outputs, err := tf.Output(ctx)
 	if err != nil {
 		return InstallOutputs{}, fmt.Errorf("reading cluster prerequisite outputs: %w", err)
+	}
+	if err := refuseAClusterLeftWithNoController(vars, outputs); err != nil {
+		return InstallOutputs{}, err
 	}
 	if err := confirmObjectStoreRolledOut(ctx, outputs, func() (kubernetes.Interface, error) {
 		_, _, typed, err := kubeClients(st.KubeContext)
@@ -340,4 +344,31 @@ func (a ClusterArchive) archiveVars() []string {
 		"backup_secret_access_key_key=" + a.SecretAccessKey,
 		"backup_bucket_tsdb=" + a.BucketTsdb,
 	}
+}
+
+// refuseAClusterLeftWithNoController stops an install that applied green and left the cluster
+// with no ingress controller at all.
+//
+// 🔴 A SKIPPED TRAEFIK IS NOT AN APPLY ERROR, AND AFTER A PLAN THAT TURNED ingress-nginx OFF IT IS
+// THE WHOLE FRONT DOOR. The cluster root skips Traefik, with a notice, when the cluster's Gateway
+// API CRDs are not ones it can use (a platform's set below the version Traefik needs). On a cluster
+// that keeps ingress-nginx that is a warning. On one the plan did not give ingress-nginx to, it is
+// a cluster whose instances would render a Gateway nothing serves: every instance green, nothing
+// answering. The install says so now, with the cluster root's own reason, and records nothing.
+func refuseAClusterLeftWithNoController(vars []string, outputs map[string]tfexec.OutputMeta) error {
+	if !slices.Contains(vars, "enable_ingress_nginx=false") {
+		return nil
+	}
+	if meta, ok := outputs["gateway_class"]; ok && optionalStringOutput(meta) != "" {
+		return nil
+	}
+	reason := "the cluster root reported no reason"
+	if meta, ok := outputs["gateway_api_notice"]; ok {
+		if n := optionalStringOutput(meta); n != "" {
+			reason = n
+		}
+	}
+	return fmt.Errorf("this install leaves the cluster with no ingress controller: ingress-nginx is not installed "+
+		"on a cluster that has none, and Traefik was skipped (%s). Instances built on it would render a Gateway "+
+		"that nothing serves. Fix the Gateway API CRDs on the cluster and run `dcctl install` again; nothing has been recorded", reason)
 }

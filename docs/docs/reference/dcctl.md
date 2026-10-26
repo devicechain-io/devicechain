@@ -681,6 +681,12 @@ or upgrading one instance.
 instance bootstrapped on the cluster, on the nodes it names; --database-toleration lets
 them onto nodes tainted to keep other workloads off.
 
+The ingress controller is Traefik, which serves Gateway API routes. A cluster that already
+runs ingress-nginx keeps it, serving, and gains Traefik beside it; a cluster that does not
+gets Traefik alone. --remove-legacy-ingress removes ingress-nginx, and refuses while any
+Ingress object in the cluster still names its class: move each instance first with
+'dcctl upgrade --drop-legacy-ingress'.
+
 Running it again converges. Changing its settings is refused while any instance runs on
 the cluster, with one exception: the connection budget may be raised.
 
@@ -709,6 +715,7 @@ dcctl install <provider> [flags]
       --no-monitoring                    skip the monitoring stack (Prometheus/Grafana); instances on the cluster render no ServiceMonitors or alerts
       --no-tls                           with --compact: instances serve plain HTTP, so cert-manager is not installed and database backups (whose plugin needs it) are off. --compact --no-tls=false keeps both
       --registry string                  pull the operator image from this registry (default: the published registry, or the local one with --build)
+      --remove-legacy-ingress            remove ingress-nginx from a cluster that still runs it. An install otherwise leaves it serving and installs Traefik beside it. Refused while any Ingress object in the cluster still names its class (each instance must first be moved with 'dcctl upgrade --drop-legacy-ingress'); on a local cluster Traefik takes the node's ports 80 and 443 in the same apply
       --restore-rdb-at string            stop the relational store's recovery at this RFC3339 timestamp instead of replaying the whole archive. For the disaster where the data was destroyed correctly — a bad migration, a mistaken delete — so pick a moment strictly before the damage. Needs --restore-rdb-from
       --restore-rdb-from string          disaster recovery: recover the RELATIONAL store from this archive path (the serverName inside the backup bucket, e.g. dc-rdb) instead of initialising an empty database. 🔴 Only takes effect when the store is CREATED — recover by installing into a cluster whose relational store is not there, not by re-running against a live one
       --skip-preflight                   skip the local-system preflight checks
@@ -1441,6 +1448,14 @@ The fail-closed MQTT acknowledgement is the other: '--mqtt-fail-closed' (or
 choice. A plain upgrade with no flag keeps whatever was recorded, so an instance built
 with it stays on, and one told off stays off.
 
+Where the cluster runs Traefik (the Gateway API controller that replaces ingress-nginx) an
+upgrade moves the instance's routing to a Gateway and HTTPRoutes. While ingress-nginx is still
+on the cluster the instance's Ingress objects are rendered beside them under a certificate
+Secret of their own, so the host keeps answering where it did until DNS points at the new
+controller; '--drop-legacy-ingress' then stops rendering them, and 'dcctl install
+--remove-legacy-ingress' removes ingress-nginx once no instance has one. '--ingress-controller'
+chooses the front end by hand: 'nginx' is the way back.
+
 Operator tuning is the exception, and it is carried: a values overlay given to
 'dcctl bootstrap --values' or to this command is recorded on the instance and applied
 again by every later upgrade. '--values \<file>' replaces the recorded overlay,
@@ -1476,6 +1491,9 @@ when they are in a terraform.tfvars beside its state
   # Tune the instance; later upgrades keep applying it without --values
   dcctl upgrade local devicechain --values tuning.yaml
 
+  # Once DNS points at the new controller, stop serving the host from ingress-nginx too
+  dcctl upgrade local devicechain --drop-legacy-ingress
+
   # Turn the fail-closed MQTT acknowledgement on (kept by later upgrades), or back off
   dcctl upgrade local devicechain --mqtt-fail-closed
   dcctl upgrade local devicechain --mqtt-fail-closed=false
@@ -1488,10 +1506,12 @@ dcctl upgrade <provider> <instance> [flags]
 ### Options
 
 ```
+      --drop-legacy-ingress             stop rendering the Ingress objects beside the Gateway: run it once DNS points at the new controller, and before 'dcctl install --remove-legacy-ingress' removes ingress-nginx, which it refuses to do while any Ingress object still names its class
       --dry-run                         print what would happen without changing anything
       --escrow-file string              where this instance's root-key escrow artifact lives (default ~/.devicechain/escrow/<instance>-rootkey.escrow). The upgrade checks it still protects the key the instance is running on
       --escrow-passphrase-file string   read the escrow passphrase from this file (or $DCCTL_ESCROW_PASSPHRASE). Only needed to WRITE an escrow for an instance that has none — checking an existing one needs no passphrase
   -h, --help                            help for upgrade
+      --ingress-controller string       which front end serves the instance's host: gateway (a Gateway API Gateway and HTTPRoutes, served by Traefik) or nginx (Ingress objects, served by ingress-nginx). Omitted, it is decided from the cluster: where Traefik runs the instance is served by the Gateway, and while it still has Ingress objects and ingress-nginx remains they are rendered beside it, so the host keeps answering there until --drop-legacy-ingress. nginx is the way back, and gateway is required to put a new instance on a local cluster's Gateway before ingress-nginx is removed
       --kube-context string             kube-context to target (default: the cluster recorded at bootstrap; a different context is refused)
       --mqtt-fail-closed                make a QoS 1 PUBACK from the MQTT gateway mean the platform holds the message (infrastructure.nats.mqttFailClosed). The trade: a QoS 1 publish is REFUSED (no PUBACK, connection closed, the device resends) while the broker's MQTT message store has no leader, instead of being acknowledged and possibly lost, and the ingest ceiling is lower, so size the instance below it. It covers QoS 1 only, and its guarantee is stated for a replicated broker (a cluster installed with --ha). --mqtt-fail-closed=false turns it off again. Fixed configuration, recorded on the instance and kept by 'dcctl upgrade' when the flag is omitted; not giving the flag leaves the platform default
       --registry string                 image registry to pull from (default: ghcr.io/devicechain-io)

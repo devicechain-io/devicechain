@@ -95,6 +95,20 @@ type State struct {
 	// plain HTTP instead of a self-signed cert. See Options for the UX rationale.
 	IngressHost string
 	NoTLS       bool
+	// IngressControllerOverride is --ingress-controller as given ("" decides from the cluster)
+	// and DropLegacyIngress is `dcctl upgrade --drop-legacy-ingress`. IngressController and
+	// LegacyIngress are what the run settled (settleFrontEnd) and helmValues renders: which
+	// front end serves the host, and whether the Ingress objects are rendered beside the
+	// Gateway while DNS moves. An empty IngressController renders the Gateway, the default.
+	IngressControllerOverride string
+	DropLegacyIngress         bool
+	IngressController         string
+	LegacyIngress             bool
+	// RemoveLegacyIngress is `dcctl install --remove-legacy-ingress`, and ClusterFrontEndVars
+	// the cluster root's controller settings the install planned from what the cluster runs
+	// (planClusterFrontEnd). Only install sets them; infraVars emits them when present.
+	RemoveLegacyIngress bool
+	ClusterFrontEndVars []string
 	// NoMonitoring records that the cluster was installed WITHOUT the observability
 	// stack. It is `dcctl install`'s flag, applied to the cluster root there; a
 	// bootstrap has no flag for it and reads it back from the install record

@@ -175,6 +175,21 @@ variable "enable_ingress_nginx" {
   default     = true
 }
 
+variable "allow_ingress_nginx_removal" {
+  description = <<-EOT
+    Allow this apply to REMOVE ingress-nginx (enable_ingress_nginx = false over a cluster that
+    has the controller) while Ingress objects of its class still exist.
+
+    Removing the controller does not remove those Ingresses: they stay, unserved, and every
+    host they carry goes dark -- the console, the API and the OAuth discovery documents --
+    with nothing reporting a fault. So the removal is refused while any exists. dcctl lists
+    them and sets this itself once none is left; set it by hand only after moving every one
+    of them to another controller.
+  EOT
+  type        = bool
+  default     = false
+}
+
 variable "ingress_nginx_namespace" {
   description = "Namespace for the ingress-nginx controller."
   type        = string
@@ -280,20 +295,20 @@ variable "cert_manager_chart_version" {
 
 # --- Gateway API + Traefik (G15) ------------------------------------------------
 #
-# Traefik is installed NEXT TO ingress-nginx in this release; ingress-nginx is
-# untouched. The instance chart's Gateway/HTTPRoutes and the migration off the legacy
-# Ingress come in later changes -- these variables only put the controller and its
-# prerequisites on the cluster.
+# Traefik is the Gateway API controller that replaces ingress-nginx. It is installed
+# NEXT TO ingress-nginx wherever the cluster already has it (the instance chart renders
+# its Gateway and, during the cutover, the legacy Ingress set beside it), and INSTEAD of
+# it on a cluster that does not. dcctl decides which and says so with these variables;
+# a raw apply gets the defaults below.
 
 variable "enable_gateway_api_crds" {
   description = <<-EOT
     Install the Gateway API standard-channel CRDs (v1.6.3) -- or, when the cluster already
     has a set, check it and leave it alone -- and turn on cert-manager's Gateway API shim.
 
-    OFF BY DEFAULT while the stack is built: nothing renders a Gateway yet (the instance
-    chart's Gateway and HTTPRoutes, and the dual render off the legacy Ingress, are later
-    slices), so turning it on today adds a restart of cert-manager and an idle load balancer
-    for no traffic. The defaults flip in the release that ships both.
+    On by default: the instance chart renders a Gateway and HTTPRoutes. Turning it off with
+    Traefik on is refused by Traefik's own need for the CRDs, not by this variable, so turn
+    both off together.
 
     The module never overwrites a set it did not install. A set it cannot use (a platform's,
     such as GKE's, that lacks a CRD Traefik needs or is below the provisional v1.5.1 floor)
@@ -301,13 +316,13 @@ variable "enable_gateway_api_crds" {
     gateway_api_notice output and a plan warning.
   EOT
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "enable_traefik" {
-  description = "Install the Traefik Gateway API controller next to ingress-nginx. OFF BY DEFAULT until the release that ships the instance chart's Gateway/HTTPRoutes and the dual render: before that it is an idle second load balancer. Skipped, with a warning, when the cluster's Gateway API CRDs are not usable."
+  description = "Install the Traefik Gateway API controller. On by default. Next to ingress-nginx it is a second load balancer (on a cloud) or reachable on its NodePort (on kind, where only one controller can hold the node's host ports). Skipped, with a warning, when the cluster's Gateway API CRDs are not usable."
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "traefik_namespace" {

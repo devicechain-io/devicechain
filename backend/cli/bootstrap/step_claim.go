@@ -57,6 +57,11 @@ func stepDeclareInstance(ctx context.Context, st *State) error {
 	if err := settleBootstrapTrustedProxies(ctx, st); err != nil {
 		return err
 	}
+	// Which front end serves the host: the Gateway on a cluster with Traefik, the Ingress
+	// objects on one without. After the overlay is adopted, which the answer retires keys from.
+	if err := settleFrontEnd(ctx, st); err != nil {
+		return err
+	}
 	spec := InstanceSpecFrom(st, st.Binding, st.Provider)
 	sayMqttFailClosed(st)
 
