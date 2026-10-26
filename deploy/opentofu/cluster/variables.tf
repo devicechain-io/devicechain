@@ -214,6 +214,24 @@ variable "ingress_use_host_port" {
   default     = false
 }
 
+variable "ingress_nginx_replicas" {
+  description = <<-EOT
+    ingress-nginx controller replicas. 0 (default) derives it from var.ha: 2 when HA is on,
+    otherwise 1; ingress_use_host_port forces 1 (two pods cannot share a node's host ports).
+    The Service keeps the client address (externalTrafficPolicy: Local), so a cloud load
+    balancer sends traffic only to nodes that run a controller pod: with one replica a rolling
+    update or a node loss leaves no target until the pod is back. Replicas are spread over
+    nodes by a preferred anti-affinity.
+  EOT
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = var.ingress_nginx_replicas >= 0 && var.ingress_nginx_replicas == floor(var.ingress_nginx_replicas)
+    error_message = "ingress_nginx_replicas must be 0 (derive from var.ha) or a whole number of at least 1."
+  }
+}
+
 variable "ingress_class" {
   description = "IngressClass name the controller registers; set the same on the Helm chart's ingress.className."
   type        = string

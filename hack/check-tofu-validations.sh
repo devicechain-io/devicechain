@@ -990,6 +990,12 @@ run_assertions() {
   accepts traefik_service_type "NodePort"
   accepts traefik_service_type "ClusterIP"
 
+  rejects ingress_nginx_replicas -1
+  rejects ingress_nginx_replicas 1.5
+  accepts ingress_nginx_replicas 0
+  accepts ingress_nginx_replicas 1
+  accepts ingress_nginx_replicas 2
+
   rejects traefik_replicas 0
   rejects traefik_replicas 1.5
   accepts traefik_replicas 1

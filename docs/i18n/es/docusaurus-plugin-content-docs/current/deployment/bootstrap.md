@@ -157,6 +157,15 @@ credenciales incluidas, así que trátalo como tratas el directorio del depósit
 cert-manager. Sin `--compact` se rechaza. Para servir una instancia por HTTP simple, pasa
 `--no-tls` a `dcctl bootstrap`.
 
+Con TLS activado, el certificado de la instancia procede de una autoridad certificadora autofirmada que el chart crea en el namespace de la instancia, por lo que el navegador avisa una vez. Un cliente que deba verificar la instancia, como un dispositivo que se registra por HTTPS, confía en esa autoridad en lugar de omitir la verificación. Está guardada como `ca.crt` en el Secret del propio certificado (`devicechain-tls`, salvo que lo renombres):
+
+```bash
+kubectl -n dci-<id> get secret devicechain-tls -o jsonpath='{.data.ca\.crt}' | base64 -d > instance-ca.pem
+curl --cacert instance-ca.pem https://<host>/
+```
+
+La autoridad dura diez años y se conserva cuando el certificado del host se renueva. Una instancia actualizada desde un chart anterior conserva su certificado autofirmado previo hasta que se renueve; elimina el Secret `devicechain-tls` para que se reemita de inmediato desde la autoridad.
+
 Los flags se enumeran en [Flags de instalación](#install-flags). En un portátil:
 
 ```bash
@@ -908,7 +917,7 @@ Para fijarla tú mismo, pasa `--trusted-proxies` a `bootstrap` o `upgrade` (CIDR
 
 También deben cumplirse dos cosas en el borde, o la cabecera que creen los servicios no será la del cliente:
 
-- Con `ingress-nginx`, deja `use-forwarded-headers` desactivado (la instalación de dcctl lo hace). Así el controlador escribe en `X-Forwarded-For` el par TCP real. Su Service debe conservar la dirección del cliente: `externalTrafficPolicy: Local`, o PROXY protocol desde el balanceador.
+- Con `ingress-nginx`, deja `use-forwarded-headers` desactivado (la instalación de dcctl lo hace). Así el controlador escribe en `X-Forwarded-For` el par TCP real. Su Service debe conservar la dirección del cliente. La instalación fija `externalTrafficPolicy: Local` en el Service LoadBalancer del controlador, porque con el valor por defecto (`Cluster`) el tráfico del balanceador de la nube se traduce al origen de un nodo y todos los dispositivos de internet compartirían una cuota por nodo. Con `Local` el balanceador envía tráfico solo a los nodos que ejecutan un pod del controlador (lo comprueba con un health check del Service), así que una instalación HA ejecuta dos réplicas del controlador, repartidas entre nodos, para conservar un destino durante una actualización progresiva o la pérdida de un nodo (fija la variable de OpenTofu `ingress_nginx_replicas` para otro número; con una sola réplica no queda destino mientras se reinicia). Un controlador propio necesita el mismo ajuste, o PROXY protocol desde el balanceador.
 - Detrás de un balanceador de capa 7 que añade él mismo la cabecera, añade a `--trusted-proxies` los rangos del balanceador además del rango de pods, y activa `use-forwarded-headers` con `proxy-real-ip-cidr` fijado a esos rangos.
 
 Muchos abonados detrás de una misma dirección de operador (CGNAT) siguen compartiendo un cupo. Es un límite de usar la dirección de origen como clave, que estos ajustes no pueden resolver.

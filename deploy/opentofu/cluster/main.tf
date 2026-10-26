@@ -691,6 +691,7 @@ module "ingress_nginx" {
   chart_version = var.ingress_nginx_chart_version
   ingress_class = var.ingress_class
   use_host_port = var.ingress_use_host_port
+  replicas      = var.ingress_nginx_replicas > 0 ? var.ingress_nginx_replicas : (var.ha ? 2 : 1)
 }
 
 # cert-manager — issues/renews the ingress TLS certificates (ADR-002). The Issuer
