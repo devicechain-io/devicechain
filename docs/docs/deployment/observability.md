@@ -666,6 +666,26 @@ for example after its node was lost, as long as kube-state-metrics is back withi
 After such an outage it clears 15 minutes after kube-state-metrics last reported before the
 outage. A restart during a longer kube-state-metrics outage is not reported.
 
+## The broker's request for device certificates {#broker-client-certificates}
+
+The message broker is DeviceChain's own build of the NATS server: the upstream server, unchanged,
+with one addition. Its MQTT listener asks each device for a TLS client certificate without
+requiring one, so a device that authenticates by certificate proves it holds the certificate's
+key during the TLS handshake, and a device that uses a token or a password connects exactly as it
+would to any NATS server. The broker re-applies that setting every time it reloads its
+configuration, and checks its own listener at start, after every reload and once a minute.
+
+| Alert | What it means | What to do |
+| --- | --- | --- |
+| `BrokerMqttClientAuthLost` (warning) | For ten minutes, the broker server named by the `pod` label has either served MQTT over TLS without asking for client certificates, or has not been running the DeviceChain broker image (the metrics sidecar reports the server, but the server reports none of its own metrics). Devices that authenticate by certificate cannot connect; token and password devices are not affected. | Check the server's image: `kubectl get pod -n <namespace> <pod> -o jsonpath='{.spec.containers[0].image}'`. If it is the upstream `nats` image, the instance was rolled back to it, and certificate devices stay refused until the DeviceChain image is restored. If it is the DeviceChain image, read the server's log around its last configuration reload for the line saying the listener is not requesting client certificates, or that the check could not complete, then restart the pod and report the log. |
+
+The broker exports these on its own metrics port (`dc-metrics`, 7778):
+`dc_broker_mqtt_client_auth_request` is 1 while the listener asks for certificates,
+`dc_broker_mqtt_tls` is 1 while it terminates TLS, and `dc_broker_info` names the NATS server
+version the build is based on. A broker without TLS on MQTT cannot ask for certificates and does
+not fire the alert. On an instance without the metrics sidecar (the compact preset), only the
+first of the two states above is detected.
+
 ## Tenants metered at the platform default {#tenant-ceilings}
 
 Every service that enforces a per-tenant ceiling reads each tenant's ceiling from

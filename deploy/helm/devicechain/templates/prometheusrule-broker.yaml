@@ -1,0 +1,78 @@
+{{/*
+Alerting rule for the BROKER'S DEVICE CERTIFICATE REQUEST.
+
+WHY IT EXISTS. The broker is DeviceChain's own nats-server build (backend/broker/dc-nats-server):
+upstream's main on the unmodified library, plus a setting the nats-server config file cannot
+express, which makes the MQTT listener ASK each device for a client certificate without
+requiring one. Devices that authenticate by certificate depend on it; token and password
+devices never notice it. Upstream's configuration reload rebuilds the MQTT TLS settings and
+drops it while reporting success, so the binary re-applies it on every reload. If anything ever
+reaches the listener by another path, the failure is silent: every token device keeps working,
+the broker looks healthy, and only certificate devices are refused, by a callout that sees no
+certificate.
+
+THE SIGNAL is the broker binary's own, read off the wire: it handshakes with its own MQTT
+listener at start, after every reload and every minute, and reports whether a CertificateRequest
+came back (dc_broker_mqtt_client_auth_request), next to whether the listener terminates TLS at
+all (dc_broker_mqtt_tls). A probe that could not complete reports 0 too, on purpose: the
+certificate path then cannot be confirmed. Both series come from the binary's own /metrics
+(the dc-metrics port), scraped by podmonitor-nats.yaml.
+
+IT FIRES on either of two states, each held for ten minutes:
+  - a broker serving MQTT over TLS whose listener is not requesting certificates: the reload
+    trap, or a probe that keeps failing;
+  - a broker pod the exporter sidecar reports (nats_varz_connections) that does not export
+    dc_broker_info: it is not running the DeviceChain broker build, which is what the documented
+    upstream rollback image looks like, or its metrics endpoint is not being scraped.
+
+QUIET when the listener does not terminate TLS (no certificate can be requested; a deployment
+choice, not this failure), and when neither series exists. The second arm needs the exporter
+sidecar, which the compact preset drops, so on a compact instance only the first arm speaks.
+
+Ten minutes is longer than a broker start (the probe waits for the server to be ready) and than
+a lame duck shutdown (the probe stops when it begins), so a rolling restart does not fire it.
+
+No `or vector(0)`, for the reason prometheusrule-dead-letter.yaml gives in its header.
+*/}}
+{{- if and .Values.metrics.enabled .Values.metrics.alerts .Values.metrics.natsPodMonitor }}
+{{- $ns := include "devicechain.instanceNamespace" . }}
+{{- $id := .Values.instance.id }}
+{{/* The broker's namespace, derived exactly as podmonitor-nats.yaml derives the one it scrapes. */}}
+{{- $host := .Values.metrics.natsBrokerHost | default .Values.instance.config.infrastructure.nats.hostname | required "instance.config.infrastructure.nats.hostname is required to render the broker alerts; set metrics.natsPodMonitor=false if this instance uses a broker it does not name" }}
+{{- $parts := splitList "." $host }}
+{{- $natsNamespace := $ns }}
+{{- if gt (len $parts) 1 }}
+{{- $natsNamespace = index $parts 1 }}
+{{- end }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: broker
+  namespace: {{ $ns }}
+  labels:
+    {{- include "devicechain.instanceLabels" . | nindent 4 }}
+spec:
+  groups:
+    - name: devicechain.broker
+      rules:
+        - alert: BrokerMqttClientAuthLost
+          expr: |
+            (
+              max by (namespace, pod) (dc_broker_mqtt_tls{namespace="{{ $natsNamespace }}"}) == 1
+              and on (namespace, pod)
+              max by (namespace, pod) (dc_broker_mqtt_client_auth_request{namespace="{{ $natsNamespace }}"}) == 0
+            )
+            or
+            (
+              max by (namespace, pod) (nats_varz_connections{namespace="{{ $natsNamespace }}"})
+              unless on (namespace, pod)
+              max by (namespace, pod) (dc_broker_info{namespace="{{ $natsNamespace }}"})
+            )
+          for: 10m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "the broker is not requesting device client certificates"
+            description: "The broker server named by the pod label is not asking MQTT devices for a client certificate, so devices that authenticate by certificate cannot connect. Devices that use a token or a password are not affected. Either the server is running but its MQTT listener stopped requesting certificates (a configuration reload that did not keep the setting, or the broker's own check of its listener keeps failing; its log says which), or the server is not running the DeviceChain broker image, for example after a rollback to the upstream nats image. Check the server's image with kubectl get pod -o jsonpath='{.spec.containers[0].image}'. On the DeviceChain image, restart the server pod, and report the log lines around the last configuration reload. On the upstream image, certificate devices stay refused until the DeviceChain image is restored."
+{{- end }}

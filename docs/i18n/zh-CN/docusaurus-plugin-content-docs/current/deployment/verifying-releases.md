@@ -25,6 +25,7 @@ DeviceChain 每个发布版本所发布的所有容器镜像和 Helm chart 都�
 - Kubernetes operator 镜像：`ghcr.io/devicechain-io/operator`
 - 边缘代理镜像：`ghcr.io/devicechain-io/dc-edge-agent`
 - 代理管理镜像，由 Chart 的 pre-install 和 pre-upgrade 作业运行：`ghcr.io/devicechain-io/dc-broker-admin`
+- 消息代理镜像，即 DeviceChain 构建的 NATS 服务器，由基础设施安装：`ghcr.io/devicechain-io/dc-nats-server`
 - Web 控制台镜像：`ghcr.io/devicechain-io/frontend`
 - Helm chart：`oci://ghcr.io/devicechain-io/charts/devicechain`
 

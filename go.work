@@ -40,6 +40,7 @@ toolchain go1.27.3
 
 use (
 	./backend/admin/dc-broker-admin
+	./backend/broker/dc-nats-server
 	./backend/cli
 	./backend/core
 	./backend/edge/dc-edge-agent

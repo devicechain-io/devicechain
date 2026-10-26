@@ -79,9 +79,11 @@ command -v ko >/dev/null 2>&1 || {
 }
 
 # ko build --bare: image name = $KO_DOCKER_REPO exactly (no import path appended).
-build_one() { # <module-dir> <image-name>
+build_one() { # <module-dir> <image-name> [VAR=value ...]  extra environment for this build only
   step "🏗️  $2:$TAG"
-  ( cd "$1" && KO_DOCKER_REPO="$2" "$ROOT/hack/ko-build.sh" --bare --tags "$TAG" --platform "$PLATFORM" ./ >/dev/null )
+  local dir="$1" repo="$2"
+  shift 2
+  ( cd "$dir" && env "$@" KO_DOCKER_REPO="$repo" "$ROOT/hack/ko-build.sh" --bare --tags "$TAG" --platform "$PLATFORM" ./ >/dev/null )
 }
 
 log "📦 Building images → $REGISTRY (tag=$TAG)"
@@ -101,6 +103,12 @@ build_one "$ROOT/backend/k8s" "$REGISTRY/operator"
 # install and upgrade from this registry fails its hook on an image that is not there, before a
 # single service rolls.
 build_one "$ROOT/backend/admin/dc-broker-admin" "$REGISTRY/dc-broker-admin"
+# The broker: DeviceChain's nats-server build, which the OpenTofu nats module pulls as
+# {REGISTRY}/dc-nats-server:{TAG} (dcctl passes nats_server_image_repository/_tag). Without it
+# the broker sits in ImagePullBackOff and the infrastructure apply times out waiting for it.
+# Built from its own go.mod and with no VCS stamp, as the release builds it, so the same source
+# gives the same image (see .github/workflows/release.yml).
+build_one "$ROOT/backend/broker/dc-nats-server" "$REGISTRY/dc-nats-server" GOWORK=off GOFLAGS=-buildvcs=false
 
 # Web console (frontend) — a static nginx SPA, so docker (not ko) builds it. The
 # chart deploys it by default at {REGISTRY}/frontend:{TAG}.

@@ -72,7 +72,8 @@ WITH_CHART=0
 ONLY=()
 
 # Keep in step with the release: every backend/services/<dir> with a main.go, the operator
-# (backend/k8s), the edge agent (backend/edge/dc-edge-agent) and the console. The release
+# (backend/k8s), the edge agent (backend/edge/dc-edge-agent), the broker administrator and the
+# broker (backend/admin/dc-broker-admin, backend/broker/dc-nats-server) and the console. The release
 # contract test (backend/k8s/functionalarea) fails the build if this array and release.yml
 # disagree. The chart is separate: it is an OCI artifact, not an image.
 RELEASE_IMAGES=(
@@ -80,7 +81,7 @@ RELEASE_IMAGES=(
   event-management event-processing event-sources lwm2m-ingest mcp
   notification-management outbound-connectors sparkplug-ingest update-management
   user-management
-  operator dc-edge-agent dc-broker-admin frontend
+  operator dc-edge-agent dc-broker-admin dc-nats-server frontend
 )
 RELEASE_CHART="charts/devicechain"
 DEFAULT_FOREIGN="ghcr.io/devicechain-io/operator@sha256:c3106468ae919b9f129fcf86b659808db10f9fdc49af3300d0cae71db35374dc"

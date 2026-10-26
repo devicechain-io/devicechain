@@ -31,6 +31,7 @@ with "no signatures found". That is the correct answer, not a fault in your setu
 - the Kubernetes operator image: `ghcr.io/devicechain-io/operator`
 - the edge agent image: `ghcr.io/devicechain-io/dc-edge-agent`
 - the broker administrator image, which the chart's pre-install and pre-upgrade job runs: `ghcr.io/devicechain-io/dc-broker-admin`
+- the message broker image, DeviceChain's build of the NATS server, which the infrastructure installs: `ghcr.io/devicechain-io/dc-nats-server`
 - the web console image: `ghcr.io/devicechain-io/frontend`
 - the Helm chart: `oci://ghcr.io/devicechain-io/charts/devicechain`
 

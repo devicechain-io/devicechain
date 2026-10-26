@@ -262,6 +262,7 @@ jobs:
               echo "backend/k8s"
               echo "backend/edge/dc-edge-agent"
               echo "backend/admin/dc-broker-admin"
+              echo "backend/broker/dc-nats-server"
             } | jq -R . | jq -s -c .
           )"
           echo "smoke=$smoke" >> "$GITHUB_OUTPUT"
@@ -2700,6 +2701,19 @@ jobs:
         run: hack/check-chart-pins.sh
         working-directory: .
 
+      # The broker image is built on one nats-server library version, and the nats chart,
+      # every module's requirement and the documented upstream rollback image must name the
+      # same one. Dependabot moves the go.mod lines and nothing else, so the bump that
+      # matters most is the one most likely to arrive alone. Self-test first: each skew is
+      # planted alone and must be caught.
+      - name: broker version skew guard self-test
+        run: hack/check-broker-version-skew.sh --self-test
+        working-directory: .
+
+      - name: broker version skew
+        run: hack/check-broker-version-skew.sh
+        working-directory: .
+
   # ---------------------------------------------------------------------------
   # Image smoke build: ko builds each service image locally (no push). This
   # catches image-build breakage. The matrix covers the discovered services
@@ -2831,6 +2845,14 @@ jobs:
           KO_DOCKER_REPO: ghcr.io/devicechain-io
           # Built through hack/ko-build.sh, which points ko at the repo's .ko.yaml (ko reads
           # it from its working directory only; this step runs in the module directory).
+          # 🔴 THE BROKER IS BUILT REPRODUCIBLY, so a release that did not change it publishes the
+          # SAME digest and does not roll it: from its own go.mod (GOWORK=off; in workspace mode it
+          # would link whatever versions the whole workspace selects, so a bump in an unrelated
+          # module would change it) and with no VCS stamp (-buildvcs=false; the revision would make
+          # every commit a new binary, and nats-server reports it as its git_commit). Every path that
+          # builds the broker sets both: backend/broker/dc-nats-server/build_paths_test.go checks.
+          GOWORK: ${{ matrix.module == 'backend/broker/dc-nats-server' && 'off' || '' }}
+          GOFLAGS: ${{ matrix.module == 'backend/broker/dc-nats-server' && '-buildvcs=false' || '' }}
         # --local loads to the runner's Docker daemon and never pushes to a
         # registry. --base-import-paths keeps the local tag deterministic.
         #
@@ -2884,6 +2906,51 @@ jobs:
         env:
           KO_CHECK_MODULE: backend/k8s
         run: hack/check-ko-base-used.sh
+
+      # The broker image is the one image whose job is on the wire, so it is RUN, not only
+      # built: the module's tests run an embedded server, and this runs what the release
+      # publishes (ko's build, the base image, its non-root user and its PATH) in a container
+      # and checks it from outside — the device certificate request and the callout seeing the
+      # chain, token devices unaffected, a SIGHUP and `-sl=reload` keeping the setting, the
+      # chart's preStop `nats-server -sl=ldm` reaching a clean exit, and the negative control:
+      # the same checks must FAIL against the upstream image. See hack/broker-image-smoke.sh.
+      - name: broker image smoke (run it, then the upstream negative control)
+        if: matrix.module == 'backend/broker/dc-nats-server'
+        working-directory: ${{ matrix.module }}
+        env:
+          KO_DOCKER_REPO: ko.local/dc-nats-server
+          # 🔴 THE BROKER IS BUILT REPRODUCIBLY, so a release that did not change it publishes the
+          # SAME digest and does not roll it: from its own go.mod (GOWORK=off; in workspace mode it
+          # would link whatever versions the whole workspace selects, so a bump in an unrelated
+          # module would change it) and with no VCS stamp (-buildvcs=false; the revision would make
+          # every commit a new binary, and nats-server reports it as its git_commit). Every path that
+          # builds the broker sets both: backend/broker/dc-nats-server/build_paths_test.go checks.
+          GOWORK: "off"
+          GOFLAGS: -buildvcs=false
+        run: |
+          set -euo pipefail
+          ref=""
+          for attempt in 1 2 3; do
+            if ref="$("$GITHUB_WORKSPACE/hack/ko-build.sh" --bare --local --platform=linux/amd64 ./ | tail -n1)" && [ -n "$ref" ]; then
+              break
+            fi
+            echo "::warning::ko build attempt ${attempt}/3 failed; retrying..." >&2
+            ref=""
+            sleep $((attempt * 15))
+          done
+          [ -n "$ref" ] || { echo "::error::could not build the broker image" >&2; exit 1; }
+          echo "built $ref"
+          "$GITHUB_WORKSPACE/hack/broker-image-smoke.sh" "$ref"
+
+      # A release that did not change the broker must not roll it, which needs the broker's
+      # image to be a function of its own inputs and not of the commit. Build it at a SECOND
+      # commit that changes nothing under the module (an empty commit: every VCS stamp moves)
+      # and require the same image; then build once more WITHOUT -buildvcs=false and require a
+      # DIFFERENT one, so a gate that could not see a stamp cannot pass. See
+      # hack/broker-image-reproducible.sh.
+      - name: broker image is reproducible across commits
+        if: matrix.module == 'backend/broker/dc-nats-server'
+        run: hack/broker-image-reproducible.sh
 
   # ---------------------------------------------------------------------------
   # API compatibility: does this change break a client written against the last

@@ -14,10 +14,11 @@ mock_provider "helm" {}
 mock_provider "kubernetes" {}
 
 variables {
-  namespace   = "dci-test"
-  enable_tls  = false
-  enable_auth = true
-  ha          = false
+  namespace        = "dci-test"
+  server_image_tag = "v0.0.0-test"
+  enable_tls       = false
+  enable_auth      = true
+  ha               = false
 
   callout_issuer_public   = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
   service_password_bcrypt = "$2a$10$abcdefghijklmnopqrstuuABCDEFGHIJKLMNOPQRSTUVWXYZ01234"

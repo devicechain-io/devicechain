@@ -1,0 +1,128 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Unit tests for deploy/helm/devicechain/templates/prometheusrule-broker.yaml, run by
+# hack/check-prometheus-rules.sh against the rendered rule (rendered-rules.yaml).
+
+rule_files:
+  - rendered-rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  - name: a healthy broker requesting certificates stays quiet
+    interval: 1m
+    input_series:
+      - series: 'dc_broker_mqtt_tls{namespace="dci-devicechain", pod="dc-nats-0", container="nats", endpoint="dc-metrics"}'
+        values: '1x40'
+      - series: 'dc_broker_mqtt_client_auth_request{namespace="dci-devicechain", pod="dc-nats-0", container="nats", endpoint="dc-metrics"}'
+        values: '1x40'
+      - series: 'dc_broker_info{namespace="dci-devicechain", pod="dc-nats-0", container="nats", endpoint="dc-metrics", library_version="2.15.1", build="go1.27.3-abc"}'
+        values: '1x40'
+      - series: 'nats_varz_connections{namespace="dci-devicechain", pod="dc-nats-0", container="prom-exporter", endpoint="prom-metrics", server_id="dc-nats-0"}'
+        values: '12x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: BrokerMqttClientAuthLost
+        exp_alerts: []
+
+  - name: a listener that stops requesting certificates fires after ten minutes, and clears
+    interval: 1m
+    input_series:
+      - series: 'dc_broker_mqtt_tls{namespace="dci-devicechain", pod="dc-nats-1", container="nats", endpoint="dc-metrics"}'
+        values: '1x60'
+      # Requesting for 5 minutes, then the reload trap for 30, then requesting again.
+      - series: 'dc_broker_mqtt_client_auth_request{namespace="dci-devicechain", pod="dc-nats-1", container="nats", endpoint="dc-metrics"}'
+        values: '1x5 0x30 1x25'
+      - series: 'dc_broker_info{namespace="dci-devicechain", pod="dc-nats-1", container="nats", endpoint="dc-metrics", library_version="2.15.1", build="go1.27.3-abc"}'
+        values: '1x60'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: BrokerMqttClientAuthLost
+        exp_alerts: []
+      - eval_time: 17m
+        alertname: BrokerMqttClientAuthLost
+        exp_alerts:
+          - exp_labels: &trap_labels
+              severity: warning
+              devicechain_instance: devicechain
+              namespace: dci-devicechain
+              pod: dc-nats-1
+            exp_annotations: &annotations
+              summary: "the broker is not requesting device client certificates"
+              description: "The broker server named by the pod label is not asking MQTT devices for a client certificate, so devices that authenticate by certificate cannot connect. Devices that use a token or a password are not affected. Either the server is running but its MQTT listener stopped requesting certificates (a configuration reload that did not keep the setting, or the broker's own check of its listener keeps failing; its log says which), or the server is not running the DeviceChain broker image, for example after a rollback to the upstream nats image. Check the server's image with kubectl get pod -o jsonpath='{.spec.containers[0].image}'. On the DeviceChain image, restart the server pod, and report the log lines around the last configuration reload. On the upstream image, certificate devices stay refused until the DeviceChain image is restored."
+      - eval_time: 38m
+        alertname: BrokerMqttClientAuthLost
+        exp_alerts: []
+
+  - name: a short dip, such as a broker restart, does not fire
+    interval: 1m
+    input_series:
+      - series: 'dc_broker_mqtt_tls{namespace="dci-devicechain", pod="dc-nats-2", container="nats", endpoint="dc-metrics"}'
+        values: '1x40'
+      - series: 'dc_broker_mqtt_client_auth_request{namespace="dci-devicechain", pod="dc-nats-2", container="nats", endpoint="dc-metrics"}'
+        values: '1x10 0x8 1x22'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: BrokerMqttClientAuthLost
+        exp_alerts: []
+
+  - name: a listener without TLS cannot request a certificate, and is not this failure
+    interval: 1m
+    input_series:
+      - series: 'dc_broker_mqtt_tls{namespace="dci-devicechain", pod="dc-nats-0", container="nats", endpoint="dc-metrics"}'
+        values: '0x40'
+      - series: 'dc_broker_mqtt_client_auth_request{namespace="dci-devicechain", pod="dc-nats-0", container="nats", endpoint="dc-metrics"}'
+        values: '0x40'
+      - series: 'dc_broker_info{namespace="dci-devicechain", pod="dc-nats-0", container="nats", endpoint="dc-metrics", library_version="2.15.1", build="go1.27.3-abc"}'
+        values: '1x40'
+      - series: 'nats_varz_connections{namespace="dci-devicechain", pod="dc-nats-0", container="prom-exporter", endpoint="prom-metrics", server_id="dc-nats-0"}'
+        values: '3x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: BrokerMqttClientAuthLost
+        exp_alerts: []
+
+  - name: a broker pod running the upstream image fires
+    interval: 1m
+    input_series:
+      # The exporter reports the server; the DeviceChain broker's own series are absent.
+      - series: 'nats_varz_connections{namespace="dci-devicechain", pod="dc-nats-0", container="prom-exporter", endpoint="prom-metrics", server_id="dc-nats-0"}'
+        values: '7x40'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: BrokerMqttClientAuthLost
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: BrokerMqttClientAuthLost
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              namespace: dci-devicechain
+              pod: dc-nats-0
+            exp_annotations: *annotations
+
+  - name: another namespace's broker is not this instance's
+    interval: 1m
+    input_series:
+      - series: 'dc_broker_mqtt_tls{namespace="dci-other", pod="dc-nats-0", container="nats", endpoint="dc-metrics"}'
+        values: '1x40'
+      - series: 'dc_broker_mqtt_client_auth_request{namespace="dci-other", pod="dc-nats-0", container="nats", endpoint="dc-metrics"}'
+        values: '0x40'
+      - series: 'nats_varz_connections{namespace="dci-other", pod="dc-nats-1", container="prom-exporter", endpoint="prom-metrics", server_id="dc-nats-1"}'
+        values: '7x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: BrokerMqttClientAuthLost
+        exp_alerts: []
+
+  - name: no broker series at all (monitoring of the broker off) stays quiet
+    interval: 1m
+    input_series:
+      - series: 'up{job="unrelated"}'
+        values: '1x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: BrokerMqttClientAuthLost
+        exp_alerts: []

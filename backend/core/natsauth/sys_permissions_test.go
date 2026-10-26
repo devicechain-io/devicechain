@@ -197,3 +197,28 @@ func TestTheSysLoginIsRefusedEverythingElse(t *testing.T) {
 		}
 	})
 }
+
+// TestTheSysLoginCannotReloadTheBroker pins one refusal on its own, for a reason that lives in
+// another module. The broker image (backend/broker/dc-nats-server) keeps its MQTT listener
+// requesting device certificates by re-applying that setting in its own reload path; a
+// $SYS.REQ.SERVER.<id>.RELOAD request reaches nats-server's Server.Reload directly
+// (server/events.go, reloadConfig) and bypasses it, so the reload succeeds and certificate devices
+// stop connecting. The only login in the system account is this one, so its allow list is what
+// keeps that path closed. A widened pattern (`$SYS.REQ.SERVER.*.*`, `$SYS.REQ.>`) would reopen it
+// while every other test of the list still passed, so the list itself is checked as well as the
+// broker's answer.
+func TestTheSysLoginCannotReloadTheBroker(t *testing.T) {
+	reload := "$SYS.REQ.SERVER.NSERVERIDXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX.RELOAD"
+	for _, p := range SysPublishAllow() {
+		require.False(t, subjectMatches(p, reload), "SysPublishAllow entry %q admits the server RELOAD request", p)
+	}
+	// The matcher must be able to say yes, or the loop above proves nothing.
+	for _, widened := range []string{"$SYS.REQ.SERVER.*.*", "$SYS.REQ.>", ">", "$SYS.REQ.SERVER.*.RELOAD"} {
+		require.True(t, subjectMatches(widened, reload), "the matcher does not see that %q admits RELOAD", widened)
+	}
+
+	srv := sysBroker(t, true)
+	sys := dialSys(t, srv)
+	_, err := sys.request(fmt.Sprintf("$SYS.REQ.SERVER.%s.RELOAD", srv.ID()), "{}")
+	require.True(t, isViolation(err), "the system login's RELOAD request must be a permissions violation, got %v", err)
+}

@@ -25,6 +25,7 @@ La firma empieza con la `v0.25.0`. Las versiones anteriores a la `v0.25.0` no ll
 - la imagen del operador de Kubernetes: `ghcr.io/devicechain-io/operator`
 - la imagen del agente de borde: `ghcr.io/devicechain-io/dc-edge-agent`
 - la imagen del administrador del bróker, que ejecuta el job pre-install y pre-upgrade del chart: `ghcr.io/devicechain-io/dc-broker-admin`
+- la imagen del bróker de mensajes, la compilación de DeviceChain del servidor NATS, que instala la infraestructura: `ghcr.io/devicechain-io/dc-nats-server`
 - la imagen de la consola web: `ghcr.io/devicechain-io/frontend`
 - el chart de Helm: `oci://ghcr.io/devicechain-io/charts/devicechain`
 

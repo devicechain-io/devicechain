@@ -21,9 +21,10 @@ mock_provider "helm" {}
 mock_provider "kubernetes" {}
 
 variables {
-  namespace   = "dci-test"
-  enable_tls  = false
-  enable_auth = false
+  namespace        = "dci-test"
+  server_image_tag = "v0.0.0-test"
+  enable_tls       = false
+  enable_auth      = false
 }
 
 run "no_per_stream_consumer_default" {

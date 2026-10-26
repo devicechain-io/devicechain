@@ -45,8 +45,9 @@ cd "$(git rev-parse --show-toplevel)"
 # lint checks that it sets a NON-EMPTY KO_CONFIG_PATH.
 # ---------------------------------------------------------------------------
 # Callers of the wrapper, counted by file: release.yml, ci.yml, ko-base-image.yml,
-# deploy/local/build-images.sh, deploy/local/bounce.sh. Adding a caller means raising this.
-EXPECTED_WRAPPER_CALLERS=5
+# deploy/local/build-images.sh, deploy/local/bounce.sh, hack/broker-image-reproducible.sh.
+# Adding a caller means raising this.
+EXPECTED_WRAPPER_CALLERS=6
 
 # logical_lines FILE — whole-line comments dropped, backslash continuations joined, so a
 # `ko \` / `build` split across lines is one line to the matcher.
