@@ -1329,6 +1329,13 @@ jobs:
       - name: ko base-image pin guard self-test
         run: hack/check-ko-base-pin.sh --self-test
 
+      # The pin above is only worth guarding if a build READS it. ko finds .ko.yaml in its
+      # working directory only, so every build run from a module directory needs
+      # KO_CONFIG_PATH; this fails any file that runs `ko build` without it. The build-side
+      # proof is the image-smoke job's "ko build uses the pinned base" step.
+      - name: every ko invocation reads the pinned base
+        run: hack/check-ko-base-used.sh --lint
+
       - name: ko base image is pinned and its bumper is alive
         env:
           GH_TOKEN: ${{ github.token }}
@@ -2770,6 +2777,11 @@ jobs:
         working-directory: ${{ matrix.module }}
         env:
           KO_DOCKER_REPO: ghcr.io/devicechain-io
+          # ko reads .ko.yaml from its WORKING DIRECTORY only, and this step runs in the
+          # module directory, so without this the repo's pinned base is never read and the
+          # build takes whatever the base's tag resolves to that day.
+          # hack/check-ko-base-used.sh proves the pin is the base actually used.
+          KO_CONFIG_PATH: ${{ github.workspace }}/.ko.yaml
         # --local loads to the runner's Docker daemon and never pushes to a
         # registry. --base-import-paths keeps the local tag deterministic.
         #
@@ -2788,6 +2800,16 @@ jobs:
           done
           echo "::error::ko build failed after 3 attempts" >&2
           exit 1
+
+      # The watcher for the config line above. Builds ONE image (the operator, whose modules
+      # this job has already downloaded) and reads the base ko recorded in it; it must be the
+      # digest .ko.yaml pins. Without KO_CONFIG_PATH it records the bare tag and fails.
+      - name: ko build uses the pinned base
+        if: matrix.module == 'backend/k8s'
+        env:
+          KO_CONFIG_PATH: ${{ github.workspace }}/.ko.yaml
+          KO_CHECK_MODULE: backend/k8s
+        run: hack/check-ko-base-used.sh
 
   # ---------------------------------------------------------------------------
   # API compatibility: does this change break a client written against the last

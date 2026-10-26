@@ -265,6 +265,11 @@ jobs:
         working-directory: ${{ matrix.module }}
         env:
           KO_DOCKER_REPO: ${{ steps.ko.outputs.repo }}
+          # ko reads .ko.yaml from its WORKING DIRECTORY only, and this step runs in the
+          # module directory, so without this the repo's pinned base is never read and the
+          # build takes whatever the base's tag resolves to that day.
+          # hack/check-ko-base-used.sh proves the pin is the base actually used.
+          KO_CONFIG_PATH: ${{ github.workspace }}/.ko.yaml
         run: |
           set -euo pipefail
           # Multi-arch image published verbatim at the repo computed above

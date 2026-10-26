@@ -255,6 +255,10 @@ jobs:
       - name: Smoke-build an image against the base
         env:
           KO_DOCKER_REPO: ghcr.io/devicechain-io
+          # ko reads .ko.yaml from its WORKING DIRECTORY only, and this step builds from the
+          # service directory. Without this the smoke build ignored the pin, so it proved
+          # nothing about the base this workflow was proposing.
+          KO_CONFIG_PATH: ${{ github.workspace }}/.ko.yaml
         run: |
           set -euo pipefail
           # One representative service, DERIVED rather than named, so this does
