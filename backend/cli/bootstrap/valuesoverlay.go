@@ -248,7 +248,7 @@ func refuseOverlayKey(path []string) string {
 	// one would either be overwritten by the carry or, worse, make the carry skip.
 	for _, carried := range carriedValuePaths {
 		if pathsOverlap(path, carried) {
-			return "dcctl carries this value from the previous release itself (it is set by --lwm2m-identities or --mqtt-body-credential, or is provisioning state), so an overlay cannot set it"
+			return "dcctl carries this value from the previous release itself (it is set by --lwm2m-identities, or is provisioning state), so an overlay cannot set it"
 		}
 	}
 	for _, owned := range ownedWithinTunable {

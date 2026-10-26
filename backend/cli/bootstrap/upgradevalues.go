@@ -78,11 +78,6 @@ func carryForwardFromRelease(st *State, previous map[string]interface{}) {
 var carriedValuePaths = [][]string{
 	{"extraSecrets"},
 	{"functionalAreas", "lwm2m-ingest"},
-	// The transitional MQTT body-credential bridge. A hand-set (or flag-set) "strip" on
-	// event-sources is otherwise dropped by the next upgrade, which recomputes that area's
-	// block, and the fleet it was bridging would silently go back to being refused. Only
-	// this one leaf is carried: the rest of the area's config is not dcctl's to keep.
-	{"functionalAreas", "event-sources", "config", "capture", "bodyCredential"},
 }
 
 // carryReleaseValues copies those blocks into the freshly computed values, leaving

@@ -91,7 +91,7 @@ vincule ahí: no le concedas más de lo que necesita el bucket.
 Se rechaza todo lo que `dcctl` posee: imágenes y versiones, credenciales y la clave raíz del
 almacén de secretos, endpoints del broker y de las bases de datos, el host y el TLS del ingress,
 el perfil y el conjunto de áreas (lo cambia `dcctl enable-area`), los ajustes del almacén de
-objetos, los contextos de seguridad, y los ajustes de LwM2M y de credencial en el cuerpo MQTT que
+objetos, los contextos de seguridad, y los ajustes de LwM2M que
 `dcctl` traslada por sí mismo de una versión a la siguiente. La lista es una lista de permitidos a
 propósito: un valor que el chart incorpore en una versión posterior sigue rechazado hasta que se
 añada aquí, en lugar de volverse ajustable por accidente.

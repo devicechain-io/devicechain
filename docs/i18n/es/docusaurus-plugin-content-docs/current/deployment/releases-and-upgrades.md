@@ -4141,8 +4141,7 @@ a `dcctl install` y a `dcctl upgrade`, y pasa `--registry` cuando las imágenes 
 del predeterminado. El `--dry-run` de cada ejecución indica cuál de las dos realizaría. Si la instancia se
 inicializó sin custodia de la clave raíz, `dcctl upgrade` imprime una advertencia de custodia; es lo esperado
 y no tiene relación con esta actualización. Un valor de `--mqtt-body-credential` indicado para la `v0.24.0`
-se conserva en una actualización que omite la opción; sigue siendo transitorio, y `dcctl` documenta que su
-eliminación está prevista para la `v0.26.0` (consulta la [`v0.24.0`](#v0240-mqtt-body-credential)).
+se conserva en una actualización que omite la opción; la opción se eliminó en la `v0.26.0` (consulta la [`v0.24.0`](#v0240-mqtt-body-credential)).
 
 Esta versión hace dos cosas en torno a la confianza. Dentro del clúster, **ningún servicio comparte ya una
 credencial del bróker con otro**: cada área inicia sesión en el bróker de mensajes con su propia identidad,
@@ -4805,8 +4804,9 @@ instantáneas. Ahora la credencial en el cuerpo se rechaza:
   `strip` no elimina la exposición: el bróker guardó el cuerpo antes de que se aplicara cualquiera de los
   dos ajustes, así que `strip` y `refuse` dejan el mismo texto claro en reposo, y el paso 5 hace falta con
   ambos. `strip` se aplica solo al bróker MQTT de la plataforma. Un `dcctl upgrade` posterior sin la opción
-  conserva el valor. Es transitorio: está previsto eliminarlo en la `v0.26.0`, que no dejará arrancar
-  `event-sources` mientras siga indicado. En una instalación con el chart (no con `dcctl`) indica
+  conserva el valor. Era transitorio y se eliminó en la `v0.26.0`: desde esa versión una credencial en el cuerpo se rechaza
+  siempre, la opción `--mqtt-body-credential` ya no existe y `event-sources` no arranca mientras siga indicado
+  `capture.bodyCredential`. En una instalación con el chart (no con `dcctl`) indica
   `functionalAreas.event-sources.config.capture.bodyCredential`.
 
   Mientras la actualización se despliega, un pod de `event-sources` de esta versión puede quitar la
@@ -5074,7 +5074,7 @@ resolver el evento.
 | `event-processing` `derivedPublishing.maxInFlight` (nuevo) | una detección cada vez | 32 | Indica `1`. Sigue habiendo como máximo una detección pendiente por dispositivo, así que las detecciones de cada dispositivo llegan en orden. Volver a publicar sin duplicados se mantiene dentro de la ventana de duplicados de 30 minutos del stream de eventos derivados. |
 | `device-management` `raiseAlarm.workers` (nuevo, fijo, se lee al arrancar) | un cambio cada vez | `max(1, min(8, pool - resolution.workers - 4))`, es decir, 6 con el pool por defecto de 20 | Indica `1` para la ruta en línea anterior. Los cambios de una misma alarma se aplican siempre en orden. Un valor explícito se valida contra el pool de conexiones y nunca se ajusta. |
 | `mcp` `maxBatchEntries`, `callsPerSecond`, `callsBurst` (en `functionalAreas.mcp.config`) | sin límite | 16, 20 y 40 | Súbelos; `callsBurst` no puede ser menor que `maxBatchEntries`. |
-| `event-sources` `capture.bodyCredential` (nuevo, fijo, en `functionalAreas.event-sources.config`) | ninguno: se aceptaba una credencial en el cuerpo en el bróker MQTT de la plataforma | `refuse` | Indica `strip` solo para la actualización (transitorio, está previsto eliminarlo en la `v0.26.0`). Consulta [Los dispositivos deben dejar de enviar la credencial en el cuerpo por MQTT](#v0240-mqtt-body-credential). |
+| `event-sources` `capture.bodyCredential` (nuevo, fijo, en `functionalAreas.event-sources.config`) | ninguno: se aceptaba una credencial en el cuerpo en el bróker MQTT de la plataforma | `refuse` | Eliminado en la `v0.26.0`: una credencial en el cuerpo se rechaza siempre. Consulta [Los dispositivos deben dejar de enviar la credencial en el cuerpo por MQTT](#v0240-mqtt-body-credential). |
 | `services_machine_type` del módulo de referencia de GKE (`deploy/gke`) | `n2-custom-4-8192` | `t2d-standard-4` | Indícalo explícitamente. Cambiar el tipo de máquina de un grupo existente recrea sus nodos. |
 
 - **Detección:** las detecciones de distintos dispositivos se publican en paralelo, hasta 32 a la vez, en

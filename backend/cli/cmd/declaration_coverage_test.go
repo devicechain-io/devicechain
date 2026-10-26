@@ -107,14 +107,6 @@ var dispositions = map[string]disposition{
 	"restore-tsdb-from": excluded,
 	"restore-tsdb-at":   excluded,
 
-	// mqtt-body-credential is a TRANSITIONAL upgrade bridge (event-sources'
-	// capture.bodyCredential, removed in v0.26.0), not a property of the instance's shape.
-	// It is deliberately not a declaration field: it is carried upgrade to upgrade through
-	// the Helm release's values (carriedValuePaths), and the running pods report it on the
-	// capture_body_credential_strip gauge. A permanent CR field for a setting with a
-	// scheduled end would outlive the thing it configures.
-	"mqtt-body-credential": excluded,
-
 	// mqtt-fail-closed is the declaration's mqttFailClosed field (a pointer, so an explicit
 	// off is recorded as off and "never chose" as absent), read back by every upgrade.
 	"trusted-proxies":  declared, // recorded as spec.trustedProxies (+ trustedProxiesExplicit)

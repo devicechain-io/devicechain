@@ -86,8 +86,8 @@ than the bucket needs.
 
 Everything `dcctl` owns is refused: images and versions, credentials and the secret-store root
 key, broker and database endpoints, the ingress host and TLS, the profile and the set of areas
-(`dcctl enable-area` changes that), object-store settings, security contexts, and the LwM2M and
-MQTT body-credential settings that `dcctl` carries from one release to the next on its own. The
+(`dcctl enable-area` changes that), object-store settings, security contexts, and the LwM2M
+settings that `dcctl` carries from one release to the next on its own. The
 list is an allowlist on purpose: a value the chart gains in a later release stays refused until
 it is added here, instead of becoming settable by accident.
 

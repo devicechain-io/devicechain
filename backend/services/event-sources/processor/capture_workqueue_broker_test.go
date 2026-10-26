@@ -12,7 +12,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -349,55 +348,4 @@ func TestACapturedBodyCredentialIsRefusedAndLeavesNothingOnTheBroker(t *testing.
 		t.Fatalf("the refused event was forwarded after all, for %s", e.device)
 	case <-time.After(300 * time.Millisecond):
 	}
-}
-
-// The transitional capture.bodyCredential: strip, through a real broker. The same device
-// publish the refusal test refuses is forwarded, with none of the credential in what would
-// reach inbound-events, and the capture stream empties (the broker's files stop holding the
-// secret once the message is acked, exactly as for a refusal).
-func TestACapturedBodyCredentialIsStrippedUnderStripAndLeavesNothingOnTheBroker(t *testing.T) {
-	nc, mqttPort, storeDir := startGatewayWithStore(t)
-	const tenant, device = "acme", "sensor-005"
-	topic := messaging.SubjectToMqttTopic(messaging.DeviceEventsSubject(testInstance, tenant, device))
-	canary := newCanary(t)
-
-	reader := captureReader(t, nc, "strip-consumer")
-	publishAsDevice(t, mqttPort, "strip-device", topic, credentialCanaryEvent(device, canary))
-
-	// CONTROL: the scan sees the secret while the message is unread.
-	require.EqualValues(t, 1, captureHeld(t, nc))
-	eventually(t, 10*time.Second, "the broker to write the secret to its store files", func() bool {
-		return len(storeHolds(t, storeDir, canary)) > 0
-	})
-	require.NotEmpty(t, storeHolds(t, storeDir, canary), "the scan must see the secret before the source runs")
-
-	var stripped atomic.Int64
-	_, out := startCaptureSourceWith(t, "gw-strip", reader,
-		func(_ string, _ string, _ []byte, err error) error {
-			t.Errorf("a body credential under strip must not be routed to failed-decode: %v", err)
-			return nil
-		},
-		func(s *GatewayJetStreamSource) {
-			s.StripBodyCredential(func(_, _, d string, _ bool) {
-				require.Equal(t, device, d)
-				stripped.Add(1)
-			})
-		})
-	select {
-	case e := <-out:
-		require.Equal(t, device, e.device)
-		require.False(t, e.credentialMembers, "the forwarded event still carries a credential member")
-		require.NotEmpty(t, e.wire, "the forwarded event must marshal, or the absence check below reads clean over nothing")
-		require.NotContains(t, string(e.wire), canary)
-	case <-time.After(20 * time.Second):
-		t.Fatal("the source did not forward the stripped event")
-	}
-	eventually(t, 10*time.Second, "the stripped callback to run", func() bool { return stripped.Load() == 1 })
-
-	eventually(t, 10*time.Second, "the message to leave the capture stream", func() bool {
-		return captureHeld(t, nc) == 0
-	})
-	eventually(t, 10*time.Second, "the secret to leave the broker's store files", func() bool {
-		return len(storeHolds(t, storeDir, canary)) == 0
-	})
 }

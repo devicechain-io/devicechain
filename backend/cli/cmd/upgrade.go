@@ -20,9 +20,8 @@ var (
 	upgradeEscrowPass  string
 	upgradeSkipInfra   bool
 
-	upgradeMqttBodyCredential string
-	upgradeMqttFailClosed     bool
-	upgradeTrustedProxies     []string
+	upgradeMqttFailClosed bool
+	upgradeTrustedProxies []string
 
 	upgradeValues      []string
 	upgradeResetValues bool
@@ -30,7 +29,7 @@ var (
 
 // upgradeOptions is the UpgradeOptions the upgrade flags describe, split out of RunE so
 // the copy of each flag into its field can be tested.
-func upgradeOptions(instance, mqttBodyCredential string, mqttFailClosed *bool, valuesOverlay map[string]interface{}) bootstrap.UpgradeOptions {
+func upgradeOptions(instance string, mqttFailClosed *bool, valuesOverlay map[string]interface{}) bootstrap.UpgradeOptions {
 	return bootstrap.UpgradeOptions{
 		Options: bootstrap.Options{
 			Instance:      instance,
@@ -39,11 +38,10 @@ func upgradeOptions(instance, mqttBodyCredential string, mqttFailClosed *bool, v
 			ImageRegistry: upgradeRegistry,
 			ImageVersion:  upgradeVersion,
 
-			MqttBodyCredential: mqttBodyCredential,
-			MqttFailClosed:     mqttFailClosed,
-			TrustedProxies:     upgradeTrustedProxies,
-			ValuesOverlay:      valuesOverlay,
-			ResetValues:        upgradeResetValues,
+			MqttFailClosed: mqttFailClosed,
+			TrustedProxies: upgradeTrustedProxies,
+			ValuesOverlay:  valuesOverlay,
+			ResetValues:    upgradeResetValues,
 		},
 		EscrowFile:           upgradeEscrowFile,
 		EscrowPassphraseFile: upgradeEscrowPass,
@@ -149,10 +147,6 @@ when they are in a terraform.tfvars beside its state
 		if err != nil {
 			return err
 		}
-		mqttBodyCredential, err := bootstrap.ParseMqttBodyCredential(upgradeMqttBodyCredential)
-		if err != nil {
-			return fmt.Errorf("--mqtt-body-credential: %w", err)
-		}
 		mqttFailClosed := mqttFailClosedFlag(cmd.Flags().Changed, upgradeMqttFailClosed)
 		if upgradeResetValues && len(upgradeValues) > 0 {
 			return fmt.Errorf("--values replaces the recorded overlay and --reset-values removes it; give one")
@@ -163,7 +157,7 @@ when they are in a terraform.tfvars beside its state
 				return err
 			}
 		}
-		opts := upgradeOptions(args[1], mqttBodyCredential, mqttFailClosed, valuesOverlay)
+		opts := upgradeOptions(args[1], mqttFailClosed, valuesOverlay)
 		return bootstrap.Upgrade(cmd.Context(), provider, opts)
 	},
 	SilenceUsage: true,
@@ -176,7 +170,6 @@ func init() {
 	upgradeCmd.Flags().BoolVar(&upgradeDryRun, "dry-run", false, "print what would happen without changing anything")
 	upgradeCmd.Flags().StringVar(&upgradeEscrowFile, "escrow-file", "", "where this instance's root-key escrow artifact lives (default ~/.devicechain/escrow/<instance>-rootkey.escrow). The upgrade checks it still protects the key the instance is running on")
 	upgradeCmd.Flags().BoolVar(&upgradeSkipInfra, "skip-infrastructure", false, "move only the services: leave this instance's message broker and event store on the configuration they were built with")
-	upgradeCmd.Flags().StringVar(&upgradeMqttBodyCredential, "mqtt-body-credential", "", mqttBodyCredentialUsage)
 	upgradeCmd.Flags().StringArrayVar(&upgradeValues, "values", nil, valuesUsage)
 	upgradeCmd.Flags().BoolVar(&upgradeMqttFailClosed, "mqtt-fail-closed", false, mqttFailClosedUsage)
 	upgradeCmd.Flags().StringSliceVar(&upgradeTrustedProxies, "trusted-proxies", nil, trustedProxiesUsage)

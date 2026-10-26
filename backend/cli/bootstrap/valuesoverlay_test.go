@@ -78,17 +78,31 @@ func TestTheOverlayIsAppliedOverWhatDcctlComputes(t *testing.T) {
 	if vals["image"].(map[string]interface{})["tag"] != st.ImageVersion {
 		t.Errorf("image tag moved off dcctl's value: %v", vals["image"])
 	}
-	// ...and an overlay that shares an area's config block with a carried leaf keeps both.
+	// ...and a capture.bodyCredential left in the previous release's values (the strip was
+	// removed in v0.26.0; event-sources refuses to start on the key) is NOT carried into the
+	// new release, while the overlay's own tuning of the same config block still lands.
 	st2 := compactState(false)
 	st2.Evolving = true
 	st2.ValuesOverlay = loadTuning(t)
-	vals2, _, err := releaseValues(t.Context(), chartForTest(t), st2, aReleaseBridgingWithStrip())
+	previous := map[string]interface{}{
+		"functionalAreas": map[string]interface{}{
+			"event-sources": map[string]interface{}{
+				"config": map[string]interface{}{
+					"capture": map[string]interface{}{"bodyCredential": "strip"},
+				},
+			},
+		},
+	}
+	vals2, _, err := releaseValues(t.Context(), chartForTest(t), st2, previous)
 	if err != nil {
 		t.Fatalf("releaseValues over a previous release: %v", err)
 	}
 	capture := vals2["functionalAreas"].(map[string]interface{})["event-sources"].(map[string]interface{})["config"].(map[string]interface{})["capture"].(map[string]interface{})
-	if capture["publishWindow"] != float64(512) || capture["bodyCredential"] != "strip" {
-		t.Errorf("the overlay and the carried bodyCredential did not both survive: %v", capture)
+	if _, carried := capture["bodyCredential"]; carried {
+		t.Errorf("the removed capture.bodyCredential was carried into the new release: %v", capture)
+	}
+	if capture["publishWindow"] != float64(512) {
+		t.Errorf("the overlay's capture tuning did not land: %v", capture)
 	}
 }
 
@@ -194,11 +208,10 @@ func TestARefusedKeyIsNamedAndRefusedBeforeAnyChange(t *testing.T) {
 		"extraSecrets":        "extraSecrets: []\n",
 		"ingress.host":        "ingress:\n  host: evil.example\n",
 		"ingress.tls.enabled": "ingress:\n  tls:\n    enabled: false\n",
-		"functionalAreas.device-management.extraEnv":                  "functionalAreas:\n  device-management:\n    extraEnv:\n      - name: X\n        value: y\n",
-		"functionalAreas.event-management.replicas":                   "functionalAreas:\n  event-management:\n    replicas: 1\n",
-		"functionalAreas.event-sources.config.capture.bodyCredential": "functionalAreas:\n  event-sources:\n    config:\n      capture:\n        bodyCredential: strip\n",
-		"functionalAreas.lwm2m-ingest.replicas":                       "functionalAreas:\n  lwm2m-ingest:\n    replicas: 1\n",
-		"securityContext.runAsUser":                                   "securityContext:\n  runAsUser: 0\n",
+		"functionalAreas.device-management.extraEnv": "functionalAreas:\n  device-management:\n    extraEnv:\n      - name: X\n        value: y\n",
+		"functionalAreas.event-management.replicas":  "functionalAreas:\n  event-management:\n    replicas: 1\n",
+		"functionalAreas.lwm2m-ingest.replicas":      "functionalAreas:\n  lwm2m-ingest:\n    replicas: 1\n",
+		"securityContext.runAsUser":                  "securityContext:\n  runAsUser: 0\n",
 		// A security switch or wiring inside an area's otherwise tunable config.
 		"functionalAreas.device-management.config.deviceAuthMode":                      "functionalAreas:\n  device-management:\n    config:\n      deviceAuthMode: disabled\n",
 		"functionalAreas.update-management.config.updates.allowUnverifiedArtifacts":    "functionalAreas:\n  update-management:\n    config:\n      updates:\n        allowUnverifiedArtifacts: true\n",
@@ -207,7 +220,6 @@ func TestARefusedKeyIsNamedAndRefusedBeforeAnyChange(t *testing.T) {
 		"functionalAreas.event-management.config.tsdbConfiguration.maxOpenConnections": "functionalAreas:\n  event-management:\n    config:\n      tsdbConfiguration:\n        maxOpenConnections: 80\n",
 		// ...in any spelling the service would bind: the services match keys as encoding/json does.
 		"functionalAreas.device-management.config.DeviceAuthMode":                "functionalAreas:\n  device-management:\n    config:\n      DeviceAuthMode: disabled\n",
-		"functionalAreas.event-sources.config.Capture.BodyCredential":            "functionalAreas:\n  event-sources:\n    config:\n      Capture:\n        BodyCredential: strip\n",
 		"functionalAreas.event-management.config.TsdbConfiguration.MaxOpenConns": "functionalAreas:\n  event-management:\n    config:\n      TsdbConfiguration:\n        MaxOpenConns: 80\n",
 		// An ingress annotation the chart sets itself would REPLACE the chart's.
 		"ingress.annotations.nginx.ingress.kubernetes.io/configuration-snippet": "ingress:\n  annotations:\n    nginx.ingress.kubernetes.io/configuration-snippet: \"#\"\n",
@@ -480,8 +492,7 @@ func TestTunableValuesNeverCollideWithWhatDcctlSets(t *testing.T) {
 	variants["s3 store"] = s3
 	lw := base()
 	lw.Lwm2mIdentities = []Lwm2mIdentity{{Identity: "i", PSK: "AAAAAAAAAAAAAAAAAAAAAA==", Tenant: "t", ExternalID: "e"}}
-	lw.MqttBodyCredential = MqttBodyCredentialStrip
-	variants["lwm2m and mqtt bridge"] = lw
+	variants["lwm2m"] = lw
 
 	preset := map[string]bool{}
 	for _, p := range presetDefaults {
