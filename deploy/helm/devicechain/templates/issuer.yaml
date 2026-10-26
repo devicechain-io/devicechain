@@ -3,12 +3,62 @@ The per-instance cert-manager Issuer, shared by both routing front ends: the Ing
 objects (ingress.controller nginx) and the Gateway (ingress.controller gateway) take
 their certificate from it through the cert-manager.io/issuer annotation.
 
-When TLS is on and selfSigned, a cert-manager self-signed Issuer is rendered in this
-namespace (dev-grade: valid TLS, browser-untrusted); for real certs set selfSigned=false
-and point clusterIssuer at a configured ClusterIssuer.
+When TLS is on and selfSigned, a self-signed CA CHAIN is rendered in this namespace
+(dev-grade: browsers do not trust it, but clients can trust its CA); for real certs set
+selfSigned=false and point clusterIssuer at a configured ClusterIssuer.
+
+A CHAIN, not a self-signed leaf. A leaf signed by itself has an empty Subject and Issuer
+and CA:FALSE, which Go accepts as an explicit trust anchor and OpenSSL/mbedTLS clients do
+not ("couldn't get X509-issuer name"), so a device could verify an instance only by
+pinning its key. So: a bootstrap Issuer mints a CA certificate, a CA Issuer named
+issuerName (the name every cert-manager.io/issuer annotation and the Gateway refer to)
+signs the host certificate with it, and a client trusts the CA. The CA is in the host
+certificate's own Secret as ca.crt:
+
+  kubectl -n dci-<id> get secret <tls.secretName> -o jsonpath='{.data.ca\.crt}' | base64 -d
+
+Renewing the HOST certificate keeps the CA. The CA's private key is pinned with
+rotationPolicy Never: cert-manager's default (Always) generates a new key on every
+re-issue of the CA (its year-9 renewal, an edit to its spec, a deleted -ca Secret), and a
+device that trusts the old ca.crt would then fail at the next host-certificate renewal.
+With Never the CA keeps its key, so a re-issued CA still verifies what the old one signed
+and a device keeps trusting it. Losing the -ca Secret outright is the one case that still
+mints a new CA; fetch ca.crt again afterwards.
 */}}
 {{- $tls := .Values.ingress.tls -}}
 {{- if and .Values.ingress.enabled $tls.enabled $tls.selfSigned }}
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ $tls.issuerName }}-bootstrap
+  namespace: {{ include "devicechain.instanceNamespace" . }}
+  labels:
+    {{- include "devicechain.instanceLabels" . | nindent 4 }}
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ $tls.issuerName }}-ca
+  namespace: {{ include "devicechain.instanceNamespace" . }}
+  labels:
+    {{- include "devicechain.instanceLabels" . | nindent 4 }}
+spec:
+  isCA: true
+  commonName: {{ printf "%s DeviceChain CA" .Values.instance.id | quote }}
+  secretName: {{ $tls.secretName }}-ca
+  duration: 87600h
+  renewBefore: 8760h
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Never
+  issuerRef:
+    name: {{ $tls.issuerName }}-bootstrap
+    kind: Issuer
+    group: cert-manager.io
+---
 apiVersion: cert-manager.io/v1
 kind: Issuer
 metadata:
@@ -17,5 +67,6 @@ metadata:
   labels:
     {{- include "devicechain.instanceLabels" . | nindent 4 }}
 spec:
-  selfSigned: {}
+  ca:
+    secretName: {{ $tls.secretName }}-ca
 {{- end }}

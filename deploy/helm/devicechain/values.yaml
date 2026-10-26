@@ -1255,8 +1255,9 @@ ingress:
   uploadMaxBodySize: 1g
   tls:
     enabled: true
-    # selfSigned renders a cert-manager self-signed Issuer in the instance
-    # namespace (dev: valid TLS, browser-untrusted). For real certs set
+    # selfSigned renders a cert-manager self-signed CA chain in the instance
+    # namespace (dev: browser-untrusted, but clients can trust its CA, which is
+    # ca.crt in the <secretName> Secret; issuerName names the CA Issuer). For real certs set
     # selfSigned=false and point clusterIssuer at a configured ClusterIssuer
     # (e.g. a Let's Encrypt ACME issuer).
     selfSigned: true

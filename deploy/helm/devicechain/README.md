@@ -639,8 +639,8 @@ generated from the schema; do not edit it by hand.
 | `ingress.uploadMaxBodySize` | string | `"1g"` | Largest request body the update-artifact upload route accepts at the edge, as an nginx size (for example 1g). That route is rendered on its own Ingress with this limit and request buffering off. Keep it at or above the update-management artifact ceiling. Used when controller is nginx; a Gateway API controller of the shipped kind caps no request body. |
 | `ingress.tls` | object | - | TLS for the Ingress, using cert-manager. |
 | `ingress.tls.enabled` | boolean | `true` | Terminate TLS at the Ingress or the Gateway. |
-| `ingress.tls.selfSigned` | boolean | `true` | Render a cert-manager self-signed Issuer in the instance namespace: valid TLS that browsers do not trust, for development. For real certificates set false and name a ClusterIssuer in clusterIssuer. |
-| `ingress.tls.issuerName` | string | `"devicechain-selfsigned"` | Name of the self-signed Issuer the chart renders when selfSigned is true. |
+| `ingress.tls.selfSigned` | boolean | `true` | Render a self-signed certificate authority (a cert-manager Issuer chain) in the instance namespace: browsers do not trust it, but clients can trust its CA, which is ca.crt in the certificate's Secret. For development. For real certificates set false and name a ClusterIssuer in clusterIssuer. |
+| `ingress.tls.issuerName` | string | `"devicechain-selfsigned"` | Name of the CA Issuer the chart renders when selfSigned is true; it signs the host certificate, and the Ingress and Gateway name it for issuance. |
 | `ingress.tls.clusterIssuer` | string | `""` | Name of an existing cert-manager ClusterIssuer (for example a Let's Encrypt ACME issuer) to request certificates from. Used when selfSigned is false. |
 | `ingress.tls.secretName` | string | `"devicechain-tls"` | Name of the Secret that holds the TLS certificate. |
 | `brokerAdmin` | object | - | The broker administrator: the pre-install/pre-upgrade hook Job that alone creates and reconciles the platform's JetStream streams and KV buckets. Services only verify them. |

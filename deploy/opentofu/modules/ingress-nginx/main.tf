@@ -7,6 +7,14 @@
 # Services is rendered by the Helm chart (deploy/helm/devicechain), which knows
 # the enabled functional areas.
 
+terraform {
+  required_providers {
+    helm = {
+      source = "hashicorp/helm"
+    }
+  }
+}
+
 variable "namespace" {
   type    = string
   default = "ingress-nginx"
@@ -68,8 +76,60 @@ variable "use_host_port" {
   default     = false
 }
 
+variable "aws_nlb" {
+  description = <<-EOT
+    EKS: annotate the controller's LoadBalancer Service for an AWS Network Load Balancer
+    (service.beta.kubernetes.io/aws-load-balancer-type: nlb). Off by default, because it
+    REPLACES an existing Classic Load Balancer and so changes the hostname clients resolve.
+    It is what makes externalTrafficPolicy: Local deliver the client address on AWS: a
+    LoadBalancer Service with no annotation gets a Classic balancer, which proxies TCP, so
+    the controller sees the balancer's address either way. (PROXY protocol is the other way.)
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "replicas" {
+  description = <<-EOT
+    Controller replicas. Forced to 1 with use_host_port (two pods cannot share a node's
+    host ports). On a cloud LoadBalancer the Service keeps the client address
+    (externalTrafficPolicy: Local), so the balancer sends traffic ONLY to nodes that run a
+    controller pod: with one replica a rolling update leaves exactly one target, and the
+    balancer learns of the move through its health check, not instantly. Two or more
+    replicas (spread across nodes by a preferred anti-affinity) keep a target throughout.
+  EOT
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.replicas >= 1 && var.replicas == floor(var.replicas)
+    error_message = "replicas must be a whole number of at least 1."
+  }
+}
+
 locals {
+  replicas = var.use_host_port ? 1 : var.replicas
+
   ingress_controller_base = {
+    replicaCount = local.replicas
+    # 🔴 KEEP THE CLIENT'S ADDRESS. The chart's default, Cluster, makes kube-proxy SNAT every
+    # external connection to the node that received it, so the "real TCP peer" the controller
+    # writes into X-Forwarded-For (use-forwarded-headers is false, below) is a NODE address:
+    # every device on the internet shares one rate-limit bucket per node, and a connection
+    # that lands on the controller's own node is SNATed to that node's pod-range gateway,
+    # which is inside infrastructure.http.trustedProxies and so is skipped as a proxy hop.
+    # Local keeps the source address ONLY behind a balancer that passes the connection
+    # through (GKE, AKS, an AWS NLB). An AWS Classic balancer, which EKS gives an
+    # unannotated Service, proxies TCP and defeats it: see var.aws_nlb.
+    # Local keeps the source address, and the balancer health-checks the Service's
+    # healthCheckNodePort so it sends only to nodes that run a controller pod (the cloud
+    # balancers provision that themselves). Only meaningful on a LoadBalancer Service: the
+    # host-port recipe below replaces the whole `service` block with a NodePort, whose
+    # traffic arrives on the node that holds the port and is not SNATed.
+    service = merge(
+      { externalTrafficPolicy = "Local" },
+      var.aws_nlb ? { annotations = { "service.beta.kubernetes.io/aws-load-balancer-type" = "nlb" } } : {},
+    )
     ingressClassResource = {
       name    = var.ingress_class
       enabled = true
@@ -116,6 +176,26 @@ locals {
       "use-forwarded-headers" = "false"
     }
   }
+  # Spread the replicas over nodes where there is more than one (Local sends traffic only
+  # to nodes running a pod, so two pods on one node would be one target). Preferred, not
+  # required: a one-node cluster must still schedule both.
+  ingress_controller_spread = local.replicas > 1 ? { affinity = {
+    podAntiAffinity = {
+      preferredDuringSchedulingIgnoredDuringExecution = [{
+        weight = 100
+        podAffinityTerm = {
+          topologyKey = "kubernetes.io/hostname"
+          labelSelector = {
+            matchLabels = {
+              "app.kubernetes.io/name"      = "ingress-nginx"
+              "app.kubernetes.io/instance"  = var.release_name
+              "app.kubernetes.io/component" = "controller"
+            }
+          }
+        }
+      }]
+    }
+  } } : {}
   # kind recipe: bind node 80/443 directly, no LoadBalancer to wait on.
   ingress_controller_host_port = {
     hostPort     = { enabled = true }
@@ -144,7 +224,7 @@ resource "helm_release" "ingress_nginx" {
   values = [
     var.use_host_port
     ? yamlencode({ controller = merge(local.ingress_controller_base, local.ingress_controller_host_port) })
-    : yamlencode({ controller = local.ingress_controller_base })
+    : yamlencode({ controller = merge(local.ingress_controller_base, local.ingress_controller_spread) })
   ]
 }
 

@@ -89,6 +89,15 @@ from the machine that installed it
 
 install 的 `--no-tls` 仅与 `--compact` 合用时有效，省略 cert-manager；没有 compact 时拒绝。单实例使用明文 HTTP，应对 bootstrap 指定该标志。
 
+开启 TLS 时，实例的证书来自 chart 在实例命名空间中创建的自签名证书颁发机构，因此浏览器会警告一次。需要验证实例的客户端（例如通过 HTTPS 注册的设备）应信任该颁发机构，而不是跳过验证。它以 `ca.crt` 保存在证书自身的 Secret 中（除非改名，否则为 `devicechain-tls`）：
+
+```bash
+kubectl -n dci-<id> get secret devicechain-tls -o jsonpath='{.data.ca\.crt}' | base64 -d > instance-ca.pem
+curl --cacert instance-ca.pem https://<host>/
+```
+
+该颁发机构有效期十年。主机证书续期不会改变它，且 chart 固定了其私钥（`rotationPolicy: Never`），因此即使颁发机构被重新签发，仍能验证旧机构签发的证书。只有删除该机构自身的 Secret（`devicechain-tls-ca`）才会创建新的机构，此时客户端需要重新获取 `ca.crt`。从旧版 chart 升级的实例会保留原有的自签名证书直到下次续期；删除 `devicechain-tls` Secret 可立即由该颁发机构重新签发。
+
 完整标志见[安装标志](#install-flags)。笔记本上：
 
 ```bash
@@ -425,7 +434,7 @@ chart 会给对象存储的卷加上 `helm.sh/resource-policy: keep`，因此之
 
 边缘还必须满足两点，否则服务所信任的头并不是客户端的地址：
 
-- 使用 `ingress-nginx` 时，保持 `use-forwarded-headers` 关闭（dcctl 的 install 就是如此）。这样控制器会把真实的 TCP 对端写入 `X-Forwarded-For`。它的 Service 必须保留客户端地址：`externalTrafficPolicy: Local`，或由负载均衡器提供 PROXY 协议。
+- 使用 `ingress-nginx` 时，保持 `use-forwarded-headers` 关闭（dcctl 的 install 就是如此）。这样控制器会把真实的 TCP 对端写入 `X-Forwarded-For`。它的 Service 必须保留客户端地址。安装会在控制器的 LoadBalancer Service 上设置 `externalTrafficPolicy: Local`。这只在直接透传连接的负载均衡器上保留客户端地址（GKE、AKS、AWS 网络负载均衡器 NLB）；AWS 经典负载均衡器不行（EKS 上未加注解的 LoadBalancer Service 会得到它），因为它代理 TCP，控制器看到的是负载均衡器自身的地址。在 EKS 上请使用 NLB（设置 OpenTofu 变量 `ingress_nginx_aws_nlb`，它会添加 `service.beta.kubernetes.io/aws-load-balancer-type: nlb`；更改类型会替换负载均衡器及其主机名）或使用 PROXY 协议。设置 `Local` 的原因：默认值（`Cluster`）下，云负载均衡器的流量会被源地址转换为节点地址，互联网上的所有设备将按节点共享同一份配额。设为 `Local` 后，负载均衡器只会把流量发往运行控制器 Pod 的节点（通过对该 Service 的健康检查判断），因此 HA 安装会运行两个控制器副本并分散到不同节点，以便在滚动更新或节点丢失期间仍有可用目标（可通过 OpenTofu 变量 `ingress_nginx_replicas` 指定其他数量；只有一个副本时，它重启期间没有可用目标）。自带的控制器需要同样的设置，或由负载均衡器提供 PROXY 协议。
 - 位于自行追加该头的七层负载均衡器之后时，除 Pod 地址范围外，还要把负载均衡器的地址范围加入 `--trusted-proxies`，并开启 `use-forwarded-headers`，同时把 `proxy-real-ip-cidr` 设为这些范围。
 
 同一运营商地址之后的大量用户（运营商级 NAT）仍共用一份配额。这是以源地址为键的固有限制，这些设置无法解决。

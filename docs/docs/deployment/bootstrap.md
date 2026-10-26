@@ -147,6 +147,15 @@ cluster root's state, credentials included, so treat it as you treat the escrow 
 cert-manager. Without `--compact` it is refused. To serve one instance over plain HTTP, pass
 `--no-tls` to `dcctl bootstrap` instead.
 
+When TLS is on, the instance's certificate comes from a self-signed certificate authority that the chart creates in the instance namespace, so a browser warns once. A client that should verify the instance, such as a device registering over HTTPS, trusts that authority instead of skipping verification. It is stored as `ca.crt` in the certificate's own Secret (`devicechain-tls` unless you renamed it):
+
+```bash
+kubectl -n dci-<id> get secret devicechain-tls -o jsonpath='{.data.ca\.crt}' | base64 -d > instance-ca.pem
+curl --cacert instance-ca.pem https://<host>/
+```
+
+The authority lasts ten years. Renewing the host certificate keeps it, and the chart pins its private key (`rotationPolicy: Never`), so even a re-issued authority still verifies what the old one signed. Only deleting the authority's own Secret (`devicechain-tls-ca`) creates a new one, and clients must then fetch `ca.crt` again. An instance upgraded from an earlier chart keeps its previous self-signed certificate until it next renews; delete the `devicechain-tls` Secret to have it reissued from the authority at once.
+
 The flags are listed under [Install flags](#install-flags). On a laptop:
 
 ```bash
@@ -842,7 +851,7 @@ To set it yourself, pass `--trusted-proxies` to `bootstrap` or `upgrade` (CIDRs,
 
 Two things must also hold at the edge, or the header the services believe is not the client's:
 
-- With `ingress-nginx`, leave `use-forwarded-headers` off (dcctl's install does). The controller then writes the real TCP peer into `X-Forwarded-For`. Its Service must preserve the client address: `externalTrafficPolicy: Local`, or PROXY protocol from the load balancer.
+- With `ingress-nginx`, leave `use-forwarded-headers` off (dcctl's install does). The controller then writes the real TCP peer into `X-Forwarded-For`. Its Service must preserve the client address. The install sets `externalTrafficPolicy: Local` on the controller's LoadBalancer Service. That keeps the address on load balancers that pass the connection through (GKE, AKS, an AWS Network Load Balancer); it does not on an AWS Classic Load Balancer, which a LoadBalancer Service gets on EKS unless annotated, because that balancer proxies TCP and the controller sees the balancer's own address. On EKS use a Network Load Balancer (set the `ingress_nginx_aws_nlb` OpenTofu variable, which adds `service.beta.kubernetes.io/aws-load-balancer-type: nlb`; changing the type replaces the load balancer and its hostname) or PROXY protocol. The reason for `Local`: with the default (`Cluster`) the cloud load balancer's traffic is source-translated to a node address and every device on the internet would share one allowance per node. With `Local` the load balancer sends traffic only to nodes that run a controller pod (it health-checks the Service for that), so an HA install runs two controller replicas, spread over nodes, to keep a target during a rolling update or a node loss (set the `ingress_nginx_replicas` OpenTofu variable for another count; a single replica leaves no target while it restarts). A controller you bring yourself needs the same setting, or PROXY protocol from the load balancer.
 - Behind a layer-7 load balancer that appends the header itself, add the load balancer's address ranges to `--trusted-proxies` as well as the pod range, and turn `use-forwarded-headers` on with `proxy-real-ip-cidr` set to those ranges.
 
 Many subscribers behind one carrier address (carrier-grade NAT) still share one allowance. That is a limit of keying on the source address, not something these settings can fix.

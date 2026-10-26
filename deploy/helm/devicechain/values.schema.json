@@ -509,11 +509,11 @@
             },
             "selfSigned": {
               "type": "boolean",
-              "description": "Render a cert-manager self-signed Issuer in the instance namespace: valid TLS that browsers do not trust, for development. For real certificates set false and name a ClusterIssuer in clusterIssuer."
+              "description": "Render a self-signed certificate authority (a cert-manager Issuer chain) in the instance namespace: browsers do not trust it, but clients can trust its CA, which is ca.crt in the certificate's Secret. For development. For real certificates set false and name a ClusterIssuer in clusterIssuer."
             },
             "issuerName": {
               "type": "string",
-              "description": "Name of the self-signed Issuer the chart renders when selfSigned is true."
+              "description": "Name of the CA Issuer the chart renders when selfSigned is true; it signs the host certificate, and the Ingress and Gateway name it for issuance."
             },
             "clusterIssuer": {
               "type": "string",
