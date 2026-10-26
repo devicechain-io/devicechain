@@ -456,6 +456,11 @@ func (m *Manager) ClearPassword(ctx context.Context, email string) (*iam.Identit
 	if err := m.iam.SetPasswordHash(ctx, id, ""); err != nil {
 		return nil, err
 	}
+	// The second factor protects only password sign-ins, so with the password gone it protects
+	// nothing: remove it, seed included, in one transaction.
+	if _, err := m.iam.RemoveMfa(ctx, m.secrets, id.ID); err != nil {
+		return nil, err
+	}
 	m.recordAuthLabeled(ctx, rdb.AuditOpPasswordCleared, actor(ctx), "", id.Email)
 	if _, err := m.endSessionRecords(id.Email); err != nil {
 		return nil, err

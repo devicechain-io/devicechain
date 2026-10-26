@@ -132,6 +132,26 @@ var exemptions = []Exemption{
 			"when decided or when its connection is deleted.",
 	},
 	{
+		Schema: "user-management", Name: "iam_mfa_factors", Class: ClassExempt,
+		Reason: "a second factor belongs to a PERSON, and identities are global exactly as " +
+			"iam_identities is: the same person may hold memberships in several tenants, and deleting " +
+			"one tenant must not remove the human being's factor. It holds the NAME of a sealed seed, " +
+			"never the seed, and a failure count. It is removed with the identity (cascade, plus the " +
+			"sealed seed in the same transaction).",
+	},
+	{
+		Schema: "user-management", Name: "iam_mfa_source_failures", Class: ClassExempt,
+		Reason: "the per-source half of a factor's lock: a count and a lock time keyed by factor and " +
+			"client address prefix. It belongs to the factor, not to a tenant, and is removed with it " +
+			"(cascade) or when a sign-in succeeds.",
+	},
+	{
+		Schema: "user-management", Name: "iam_mfa_recovery_codes", Class: ClassExempt,
+		Reason: "single-use recovery codes of a PERSON, held as digests only. Identity-global like the " +
+			"factor they belong to; removed with the identity (cascade) and whenever the factor is " +
+			"removed or the codes are regenerated.",
+	},
+	{
 		Schema: "user-management", Name: "iam_tenant_purges", Class: ClassExempt,
 		Reason: "the DELETION RECORD, which has to outlive the tenant it records — erasing it would " +
 			"destroy the evidence that the erasure happened, and it is the only durable proof there " +

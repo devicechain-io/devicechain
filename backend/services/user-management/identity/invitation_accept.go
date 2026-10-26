@@ -197,6 +197,14 @@ func neverUsed(ctx context.Context, tx *iam.Store, id *iam.Identity, accepting *
 	if id.PasswordHash != "" || len(id.SystemRoles) > 0 {
 		return false, nil
 	}
+	// A second factor is proof the identity has had a session: it can only be enrolled from one.
+	hasFactor, err := tx.HasMfaFactor(ctx, id.ID)
+	if err != nil {
+		return false, err
+	}
+	if hasFactor {
+		return false, nil
+	}
 	links, err := tx.LinksForIdentity(ctx, id.ID)
 	if err != nil {
 		return false, err

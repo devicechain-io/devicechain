@@ -139,7 +139,7 @@ func (s *Service) DeleteIdentity(ctx context.Context, email string) (bool, error
 	if err != nil {
 		return false, err
 	}
-	if err := s.iam.DeleteIdentity(ctx, id); err != nil {
+	if err := s.iam.DeleteIdentity(ctx, s.secrets, id); err != nil {
 		return false, err
 	}
 	return true, nil

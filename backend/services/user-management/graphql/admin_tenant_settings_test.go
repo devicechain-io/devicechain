@@ -155,6 +155,9 @@ func TestEffectiveScalarSettingsCoversEveryTierKey(t *testing.T) {
 		dimKeys[d.RateField] = true
 		dimKeys[d.BurstField] = true
 	}
+	for _, k := range iam.TierFlagKeys() {
+		dimKeys[k] = true // on/off flags are not scalar ceilings; they have no effective-value row
+	}
 	want := map[string]bool{}
 	for _, k := range iam.TierConfigKeys() {
 		if !dimKeys[k] {

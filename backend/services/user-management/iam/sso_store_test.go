@@ -182,7 +182,7 @@ func TestIdentityDeleteRemovesLinks(t *testing.T) {
 
 	loaded, err := s.IdentityByEmail(ctx, "gone@acme.example")
 	require.NoError(t, err)
-	require.NoError(t, s.DeleteIdentity(ctx, loaded))
+	require.NoError(t, s.DeleteIdentity(ctx, nil, loaded))
 
 	_, err = s.LinkBySubject(ctx, conn.ID, "sub-gone")
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound, "a link must not outlive the identity it names")
@@ -508,6 +508,6 @@ func TestTheStoreDeletesCascadeWithoutForeignKeys(t *testing.T) {
 
 	loaded, err := s.IdentityByEmail(ctx, "gone@acme.example")
 	require.NoError(t, err)
-	require.NoError(t, s.DeleteIdentity(ctx, loaded))
+	require.NoError(t, s.DeleteIdentity(ctx, nil, loaded))
 	require.Zero(t, count(t, s, &IdentityLink{}), "DeleteIdentity must remove the links itself")
 }

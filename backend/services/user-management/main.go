@@ -338,6 +338,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		Configuration.TenantPurgeSettle(), Configuration.TenantPurgeTokenHold(), DeadLetterStore)
 	AdminService.SetViewerBaseline(identity.ViewerAuthorities())
 	AdminService.SetServiceAccountSecretKey(serviceAccountKey)
+	AdminService.SetSecretStore(secretStore)
 
 	// Map of providers injected into the graphql http context.
 	providers := map[gqlcore.ContextKey]interface{}{

@@ -12,6 +12,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/secrets"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -242,8 +243,16 @@ func (s *Store) ReplaceSystemRoles(ctx context.Context, id *Identity, roles []Ro
 // is gone, so nothing can match a token's epoch against it, and an identity created
 // again under the same email is a NEW row that BeforeCreate gives a fresh epoch —
 // so the old person's refresh tokens (keyed by email) do not come back with it.
-func (s *Store) DeleteIdentity(ctx context.Context, id *Identity) error {
+//
+// store is the secret store the identity's second-factor seed is sealed in (see RemoveMfa).
+func (s *Store) DeleteIdentity(ctx context.Context, store secrets.SecretStore, id *Identity) error {
 	return s.sys(ctx).Transaction(func(tx *gorm.DB) error {
+		// The second factor's sealed seed lives in the secrets table, which no foreign key
+		// reaches, so it is removed here, in this transaction. store may be nil only for an
+		// identity with no factor; one that has a factor is refused before anything is deleted.
+		if _, err := removeMfaIn(ctx, tx, store, id.ID); err != nil {
+			return err
+		}
 		if err := tx.Model(id).Association("SystemRoles").Clear(); err != nil {
 			return err
 		}

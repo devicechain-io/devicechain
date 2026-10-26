@@ -129,6 +129,20 @@ const CalculatedMetricsPerProfileConfigKey = governance.CalculatedMetricsPerProf
 // It has NO per-tenant override column: the count is packaging, set on the tier.
 const IntegrationsPerTenantConfigKey = governance.IntegrationsPerTenantField
 
+// MfaRequiredConfigKey is the tier config key that forces a second factor on for every tenant
+// of the tier: the FLOOR under a tenant's own mfaRequired flag. A boolean, unlike every other
+// key here, so it is a flag and not a scalar (see TierFlagKeys).
+const MfaRequiredConfigKey = "mfaRequired"
+
+// tierFlagKeys are the registered keys that are on/off rather than numeric. They are not
+// ceilings, have no tenant override column and no platform default to fall back to: absent
+// means off.
+var tierFlagKeys = []string{MfaRequiredConfigKey}
+
+// TierFlagKeys returns the boolean tier keys, so a surface that renders numeric settings can
+// tell which registered keys it is not responsible for.
+func TierFlagKeys() []string { return append([]string(nil), tierFlagKeys...) }
+
 // tierConfigKeys is the registry, keyed by config-blob key name.
 var tierConfigKeys = buildTierConfigKeys()
 
@@ -150,6 +164,7 @@ func buildTierConfigKeys() map[string]tierConfigKey {
 	keys[GeoFencePositionBudgetConfigKey] = tierConfigKey{validate: validateGeoFencePositionBudget}
 	keys[CalculatedMetricsPerProfileConfigKey] = tierConfigKey{validate: validateCalculatedMetricsPerProfile}
 	keys[IntegrationsPerTenantConfigKey] = tierConfigKey{validate: validateIntegrationsPerTenant}
+	keys[MfaRequiredConfigKey] = tierConfigKey{validate: validateMfaRequired}
 	return keys
 }
 
@@ -407,6 +422,30 @@ func validateIntegrationsPerTenant(v any) error {
 			governance.MaxIntegrationsPerTenant, v, governance.IntegrationsPerTenantBecause)
 	}
 	return nil
+}
+
+// validateMfaRequired accepts a boolean. Nothing else is coerced into one: a string "false" is
+// truthy to a careless reader, and a number is not a flag.
+func validateMfaRequired(v any) error {
+	if _, ok := v.(bool); !ok {
+		return fmt.Errorf("must be true or false (got %T)", v)
+	}
+	return nil
+}
+
+// MfaRequired reports whether the tier forces a second factor on its tenants. False for a nil
+// tier or an absent key, and for a value that is not a boolean (read through the write path's
+// validator, so a junk value parked by an out-of-band write is OFF rather than half-on: the
+// requirement can only be turned on deliberately).
+func (t *TenantTier) MfaRequired() bool {
+	if t == nil || t.Config == nil {
+		return false
+	}
+	v, ok := t.Config[MfaRequiredConfigKey]
+	if !ok || validateMfaRequired(v) != nil {
+		return false
+	}
+	return v.(bool)
 }
 
 // IntegrationsPerTenant returns how many inbound integrations the tier lets a tenant hold,

@@ -7,6 +7,8 @@ ALTER SEQUENCE "user-management".iam_idp_connections_id_seq OWNED BY "user-manag
 ALTER SEQUENCE "user-management".iam_idp_role_mappings_id_seq OWNED BY "user-management".iam_idp_role_mappings.id;
 ALTER SEQUENCE "user-management".iam_invitations_id_seq OWNED BY "user-management".iam_invitations.id;
 ALTER SEQUENCE "user-management".iam_memberships_id_seq OWNED BY "user-management".iam_memberships.id;
+ALTER SEQUENCE "user-management".iam_mfa_factors_id_seq OWNED BY "user-management".iam_mfa_factors.id;
+ALTER SEQUENCE "user-management".iam_mfa_recovery_codes_id_seq OWNED BY "user-management".iam_mfa_recovery_codes.id;
 ALTER SEQUENCE "user-management".iam_oauth_clients_id_seq OWNED BY "user-management".iam_oauth_clients.id;
 ALTER SEQUENCE "user-management".iam_roles_id_seq OWNED BY "user-management".iam_roles.id;
 ALTER SEQUENCE "user-management".iam_service_account_secrets_id_seq OWNED BY "user-management".iam_service_account_secrets.id;
@@ -77,6 +79,20 @@ ALTER TABLE ONLY "user-management".iam_memberships
 ALTER TABLE ONLY "user-management".iam_memberships
  ADD CONSTRAINT iam_memberships_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "user-management".iam_memberships ALTER COLUMN id SET DEFAULT nextval('"user-management".iam_memberships_id_seq'::regclass);
+ALTER TABLE ONLY "user-management".iam_mfa_factors
+ ADD CONSTRAINT fk_iam_mfa_factors_identity FOREIGN KEY (identity_id) REFERENCES "user-management".iam_identities(id) ON DELETE CASCADE;
+ALTER TABLE ONLY "user-management".iam_mfa_factors
+ ADD CONSTRAINT iam_mfa_factors_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "user-management".iam_mfa_factors ALTER COLUMN id SET DEFAULT nextval('"user-management".iam_mfa_factors_id_seq'::regclass);
+ALTER TABLE ONLY "user-management".iam_mfa_recovery_codes
+ ADD CONSTRAINT fk_iam_mfa_recovery_codes_identity FOREIGN KEY (identity_id) REFERENCES "user-management".iam_identities(id) ON DELETE CASCADE;
+ALTER TABLE ONLY "user-management".iam_mfa_recovery_codes
+ ADD CONSTRAINT iam_mfa_recovery_codes_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "user-management".iam_mfa_recovery_codes ALTER COLUMN id SET DEFAULT nextval('"user-management".iam_mfa_recovery_codes_id_seq'::regclass);
+ALTER TABLE ONLY "user-management".iam_mfa_source_failures
+ ADD CONSTRAINT fk_iam_mfa_source_failures_factor FOREIGN KEY (factor_id) REFERENCES "user-management".iam_mfa_factors(id) ON DELETE CASCADE;
+ALTER TABLE ONLY "user-management".iam_mfa_source_failures
+ ADD CONSTRAINT iam_mfa_source_failures_pkey PRIMARY KEY (factor_id, source_key);
 ALTER TABLE ONLY "user-management".iam_oauth_clients
  ADD CONSTRAINT iam_oauth_clients_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "user-management".iam_oauth_clients ALTER COLUMN id SET DEFAULT nextval('"user-management".iam_oauth_clients_id_seq'::regclass);
@@ -148,6 +164,7 @@ CREATE INDEX idx_iam_invitations_membership ON "user-management".iam_invitations
 CREATE INDEX idx_iam_invitations_tenant ON "user-management".iam_invitations USING btree (tenant_id);
 CREATE INDEX idx_iam_memberships_deleted_at ON "user-management".iam_memberships USING btree (deleted_at);
 CREATE INDEX idx_iam_memberships_managed_by ON "user-management".iam_memberships USING btree (managed_by);
+CREATE INDEX idx_iam_mfa_source_failures_updated_at ON "user-management".iam_mfa_source_failures USING btree (updated_at);
 CREATE INDEX idx_iam_oauth_clients_deleted_at ON "user-management".iam_oauth_clients USING btree (deleted_at);
 CREATE INDEX idx_iam_roles_deleted_at ON "user-management".iam_roles USING btree (deleted_at);
 CREATE INDEX idx_iam_service_account_secrets_account ON "user-management".iam_service_account_secrets USING btree (service_account_id);
@@ -206,6 +223,18 @@ CREATE SEQUENCE "user-management".iam_invitations_id_seq
  NO MAXVALUE
  CACHE 1;
 CREATE SEQUENCE "user-management".iam_memberships_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE SEQUENCE "user-management".iam_mfa_factors_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE SEQUENCE "user-management".iam_mfa_recovery_codes_id_seq
  START WITH 1
  INCREMENT BY 1
  NO MINVALUE
@@ -402,6 +431,34 @@ CREATE TABLE "user-management".iam_memberships (
  managed_by bigint,
  scope jsonb
 );
+CREATE TABLE "user-management".iam_mfa_factors (
+ id bigint NOT NULL,
+ identity_id bigint NOT NULL,
+ kind character varying(16) NOT NULL,
+ state character varying(16) NOT NULL,
+ secret_name character varying(128) NOT NULL,
+ last_step bigint DEFAULT 0 NOT NULL,
+ failed_count bigint DEFAULT 0 NOT NULL,
+ locked_until timestamp with time zone,
+ created_at timestamp with time zone,
+ confirmed_at timestamp with time zone,
+ last_used_at timestamp with time zone,
+ CONSTRAINT chk_iam_mfa_factors_kind CHECK (((kind)::text = 'totp'::text)),
+ CONSTRAINT chk_iam_mfa_factors_state CHECK (((state)::text = ANY ((ARRAY['pending'::character varying, 'active'::character varying])::text[])))
+);
+CREATE TABLE "user-management".iam_mfa_recovery_codes (
+ id bigint NOT NULL,
+ identity_id bigint NOT NULL,
+ digest character varying(64) NOT NULL,
+ used_at timestamp with time zone
+);
+CREATE TABLE "user-management".iam_mfa_source_failures (
+ factor_id bigint NOT NULL,
+ source_key character varying(64) NOT NULL,
+ failed_count bigint DEFAULT 0 NOT NULL,
+ locked_until timestamp with time zone,
+ updated_at timestamp with time zone NOT NULL
+);
 CREATE TABLE "user-management".iam_oauth_clients (
  id bigint NOT NULL,
  created_at timestamp with time zone,
@@ -536,7 +593,8 @@ CREATE TABLE "user-management".iam_tenants (
  locale text,
  sso_enforced boolean DEFAULT false NOT NULL,
  provisioning_registrations_per_second numeric,
- provisioning_burst bigint
+ provisioning_burst bigint,
+ mfa_required boolean DEFAULT false NOT NULL
 );
 CREATE TABLE "user-management".purged_tenants (
  token character varying(128) NOT NULL,
@@ -585,6 +643,8 @@ CREATE UNIQUE INDEX idx_iam_idp_connections_token ON "user-management".iam_idp_c
 CREATE UNIQUE INDEX idx_iam_idp_role_mappings_unique ON "user-management".iam_idp_role_mappings USING btree (connection_id, tenant_id, group_value, role_id);
 CREATE UNIQUE INDEX idx_iam_invitations_digest ON "user-management".iam_invitations USING btree (token_digest);
 CREATE UNIQUE INDEX idx_iam_membership_identity_tenant ON "user-management".iam_memberships USING btree (identity_id, tenant_id);
+CREATE UNIQUE INDEX idx_iam_mfa_factors_identity_kind ON "user-management".iam_mfa_factors USING btree (identity_id, kind);
+CREATE UNIQUE INDEX idx_iam_mfa_recovery_codes_identity_digest ON "user-management".iam_mfa_recovery_codes USING btree (identity_id, digest);
 CREATE UNIQUE INDEX idx_iam_oauth_clients_client_id ON "user-management".iam_oauth_clients USING btree (client_id);
 CREATE UNIQUE INDEX idx_iam_roles_catalogue_token ON "user-management".iam_roles USING btree (scope, token) WHERE (tenant_id IS NULL);
 CREATE UNIQUE INDEX idx_iam_roles_owned_token ON "user-management".iam_roles USING btree (scope, tenant_id, token) WHERE (tenant_id IS NOT NULL);
