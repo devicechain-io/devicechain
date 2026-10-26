@@ -453,16 +453,38 @@
     },
     "ingress": {
       "type": "object",
-      "description": "Optional Ingress + cert-manager TLS exposing the GraphQL/HTTP surface (requires the OpenTofu ingress-nginx + cert-manager).",
+      "description": "Optional routing + cert-manager TLS exposing the GraphQL/HTTP surface: Ingress objects (controller nginx) or a Gateway API Gateway with HTTPRoutes (controller gateway). Requires the OpenTofu controller + cert-manager.",
+      "additionalProperties": false,
       "properties": {
         "enabled": {
           "type": "boolean",
-          "description": "Render the Ingress objects: the API, the well-known discovery route and the web console. Each enabled area is reachable at https://<host>/api/<area>/graphql and the console at https://<host>/."
+          "description": "Render the routing objects: the API, the well-known discovery route and the web console. Each enabled area is reachable at https://<host>/api/<area>/graphql and the console at https://<host>/."
+        },
+        "controller": {
+          "type": "string",
+          "enum": ["nginx", "gateway"],
+          "description": "Which front end serves the host: nginx renders Ingress objects for the ingress-nginx controller, gateway renders a Gateway API Gateway and HTTPRoutes for any conformant controller. Exactly one is rendered, and both serve the same hosts, paths and backends."
         },
         "className": {
           "type": "string",
           "minLength": 1,
-          "description": "IngressClass the controller registered (the OpenTofu ingress_class)."
+          "description": "IngressClass the controller registered (the OpenTofu ingress_class). Used when controller is nginx."
+        },
+        "gateway": {
+          "type": "object",
+          "description": "The Gateway API front end, used when controller is gateway.",
+          "additionalProperties": false,
+          "properties": {
+            "className": {
+              "type": "string",
+              "minLength": 1,
+              "description": "GatewayClass the controller registered (the OpenTofu gateway_class)."
+            },
+            "annotations": {
+              "type": "object",
+              "description": "Annotations merged onto the Gateway, after the cert-manager issuer annotation."
+            }
+          }
         },
         "host": {
           "type": "string",
@@ -471,18 +493,19 @@
         },
         "annotations": {
           "type": "object",
-          "description": "Extra annotations merged onto the Ingress objects (body size, timeouts and so on)."
+          "description": "Extra annotations merged onto the Ingress objects (body size, timeouts and so on). Used when controller is nginx; with gateway they must be empty and the render refuses them."
         },
         "uploadMaxBodySize": {
           "type": "string",
-          "description": "Largest request body the update-artifact upload route accepts at the edge, as an nginx size (for example 1g). That route is rendered on its own Ingress with this limit and request buffering off. Keep it at or above the update-management artifact ceiling."
+          "description": "Largest request body the update-artifact upload route accepts at the edge, as an nginx size (for example 1g). That route is rendered on its own Ingress with this limit and request buffering off. Keep it at or above the update-management artifact ceiling. Used when controller is nginx; a Gateway API controller of the shipped kind caps no request body."
         },
         "tls": {
           "type": "object",
+          "additionalProperties": false,
           "properties": {
             "enabled": {
               "type": "boolean",
-              "description": "Terminate TLS at the Ingress."
+              "description": "Terminate TLS at the Ingress or the Gateway."
             },
             "selfSigned": {
               "type": "boolean",

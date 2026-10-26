@@ -1,6 +1,8 @@
 {{/*
 Optional Ingress exposing the console + GraphQL/HTTP surface, with cert-manager
-TLS. The ingress-nginx controller and cert-manager themselves come from the
+TLS. Rendered when ingress.controller is nginx (the default); gateway.yaml renders the
+same routing as a Gateway API Gateway + HTTPRoutes when it is gateway, and a test in
+dcctl pins the two to the same routing. The self-signed Issuer is issuer.yaml's. The ingress-nginx controller and cert-manager themselves come from the
 OpenTofu infra (deploy/opentofu); this renders the per-instance routing + Issuer
 once those exist. Disabled by default.
 
@@ -23,21 +25,9 @@ When TLS is on and selfSigned, a cert-manager self-signed Issuer is rendered in
 this namespace (dev-grade: valid TLS, browser-untrusted); for real certs set
 selfSigned=false and point clusterIssuer at a configured ClusterIssuer.
 */}}
-{{- if .Values.ingress.enabled }}
+{{- if and .Values.ingress.enabled (eq .Values.ingress.controller "nginx") }}
 {{- $root := . -}}
 {{- $tls := .Values.ingress.tls -}}
-{{- if and $tls.enabled $tls.selfSigned }}
-apiVersion: cert-manager.io/v1
-kind: Issuer
-metadata:
-  name: {{ $tls.issuerName }}
-  namespace: {{ include "devicechain.instanceNamespace" . }}
-  labels:
-    {{- include "devicechain.instanceLabels" . | nindent 4 }}
-spec:
-  selfSigned: {}
----
-{{- end }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:

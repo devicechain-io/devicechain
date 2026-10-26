@@ -1,0 +1,21 @@
+{{/*
+The per-instance cert-manager Issuer, shared by both routing front ends: the Ingress
+objects (ingress.controller nginx) and the Gateway (ingress.controller gateway) take
+their certificate from it through the cert-manager.io/issuer annotation.
+
+When TLS is on and selfSigned, a cert-manager self-signed Issuer is rendered in this
+namespace (dev-grade: valid TLS, browser-untrusted); for real certs set selfSigned=false
+and point clusterIssuer at a configured ClusterIssuer.
+*/}}
+{{- $tls := .Values.ingress.tls -}}
+{{- if and .Values.ingress.enabled $tls.enabled $tls.selfSigned }}
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ $tls.issuerName }}
+  namespace: {{ include "devicechain.instanceNamespace" . }}
+  labels:
+    {{- include "devicechain.instanceLabels" . | nindent 4 }}
+spec:
+  selfSigned: {}
+{{- end }}

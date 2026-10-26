@@ -426,7 +426,16 @@ instance:
       #
       # It only helps if the ingress controller preserves the client address in the first
       # place: its Service needs externalTrafficPolicy: Local (or PROXY protocol from the load
-      # balancer). With ingress-nginx at the edge, leave use-forwarded-headers OFF: the
+      # balancer).
+      #
+      # With Traefik at the edge (ingress.controller: gateway) the controller discards every
+      # incoming X-Forwarded-* header from a peer it does not trust and sets X-Forwarded-For to
+      # the real TCP peer, so list the cluster's POD range here: the controller's pods are the
+      # peers the services see. Behind a load balancer or proxy you operate, name that proxy's
+      # ranges in the controller's trusted_proxy_cidrs AND list them here too, next to the pod
+      # range: the walk has to skip every trusted hop or all clients collapse into the proxy's
+      # address. Never put a client-controlled range in either list. `dcctl` renders the
+      # cluster's pod range itself (read from its nodes), and --trusted-proxies adds the rest. With ingress-nginx at the edge, leave use-forwarded-headers OFF: the
       # controller then writes the real TCP peer into X-Forwarded-For. Turn it on only behind
       # a load balancer that itself appends the header, and then set proxy-real-ip-cidr to
       # that load balancer's range (its default, 0.0.0.0/0, makes the client's own header win
@@ -1209,16 +1218,36 @@ securityContext:
 # stripped before the request reaches the service).
 ingress:
   enabled: false
+  # Which front end serves the host: "nginx" renders Ingress objects (the ingress-nginx
+  # controller), "gateway" renders a Gateway API Gateway + HTTPRoutes (any conformant
+  # controller; the OpenTofu install registers Traefik's GatewayClass). Exactly one is
+  # rendered. They serve the same hosts, paths and backends; a test pins that.
+  #
+  # The settings below that name nginx (className, annotations, uploadMaxBodySize) apply
+  # to "nginx" only. With "gateway", ingress.annotations must be empty (the render
+  # refuses it rather than ignore it) and the controller's own installation owns what
+  # those annotations did: the request body is not capped or buffered, the 60s response
+  # timeout is the controller's, and the download's query string is kept out of its
+  # access log. See the chart README.
+  controller: nginx
   # Must match the IngressClass the controller registered (OpenTofu `ingress_class`).
+  # Used when controller is nginx.
   className: nginx
+  # The Gateway front end (controller: gateway).
+  gateway:
+    # Must match the GatewayClass the controller registered (OpenTofu `gateway_class`).
+    className: traefik
+    # Annotations merged onto the Gateway, after the cert-manager issuer annotation.
+    annotations: {}
   host: devicechain.local
-  # Extra annotations merged onto the Ingress (e.g. body size, timeouts).
+  # Extra annotations merged onto the Ingress (e.g. body size, timeouts). nginx only.
   annotations: {}
   # Largest request body the update-artifact upload route accepts at the edge. That route
   # (PUT /api/update-management/updates/artifacts/<token>/content) is rendered on its own
   # Ingress with this body limit and with request buffering OFF, so the body streams to the
   # service, which authenticates before it reads it. Keep it at or above
   # functionalAreas.update-management.config.updates.maxArtifactBytes (default 512 MiB).
+  # nginx only: a Gateway API controller of the shipped kind caps and buffers no request body.
   uploadMaxBodySize: 1g
   tls:
     enabled: true
