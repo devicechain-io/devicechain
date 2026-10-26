@@ -275,7 +275,10 @@ func TestResolveIntegrationDevice(t *testing.T) {
 	assert.Equal(t, IntegrationDeviceUnregistered, scoped.Outcome)
 	assert.Equal(t, *nobody, *scoped, "an out-of-scope device is indistinguishable from an unknown one")
 	assert.Empty(t, scoped.DeviceToken)
-	assert.Len(t, f.sightings("chirp-1"), 2)
+	// Only the value nobody holds is a sighting: a value a device outside the scope holds is not an
+	// unregistered device, and a device created with it would be refused.
+	require.Len(t, f.sightings("chirp-1"), 1)
+	assert.Equal(t, "70B3D57ED0000099", f.sightings("chirp-1")[0].Value)
 
 	// Widening the scope makes the same alias resolve.
 	_, err := f.api.UpdateIntegration(f.ctx, "chirp-1", &IntegrationUpdateRequest{
@@ -438,4 +441,125 @@ func TestDeleteDeviceRemovesItsAliases(t *testing.T) {
 	var n int64
 	require.NoError(t, api.RDB.DB(ctx).Model(&DeviceAlias{}).Count(&n).Error)
 	assert.Zero(t, n, "the device's aliases went with it")
+}
+
+// ---- the sightings list empties ----------------------------------------------------------
+
+func (f *intFixture) sight(integration, token string, values ...string) {
+	f.t.Helper()
+	for _, v := range values {
+		require.Equal(f.t, IntegrationDeviceUnregistered, f.resolve(integration, token, "lorawan.deveui", v).Outcome)
+	}
+}
+
+// Creating a device with the alias a sender was seen using removes the sighting, in every
+// integration, whichever way the alias arrives: a create, an update, an import.
+// rawSightings are the stored rows, including ones the list hides because a device now holds their
+// value: the clearing under test is what removes them.
+func (f *intFixture) rawSightings(token string) []IntegrationUnregisteredDevice {
+	f.t.Helper()
+	integrations, err := f.api.IntegrationsByToken(f.ctx, []string{token})
+	require.NoError(f.t, err)
+	var rows []IntegrationUnregisteredDevice
+	require.NoError(f.t, f.api.RDB.DB(f.ctx).Where("integration_id = ?", integrations[0].ID).Find(&rows).Error)
+	return rows
+}
+
+func TestAnAliasWriteClearsItsSightings(t *testing.T) {
+	f := newIntFixture(t)
+	a, b := f.create("chirp-1"), f.create("chirp-2")
+	vals := []string{"70B3D57ED0000011", "70B3D57ED0000012", "70B3D57ED0000013", "70B3D57ED0000014"}
+	f.sight("chirp-1", a.IssuedToken, vals...)
+	f.sight("chirp-2", b.IssuedToken, vals[0])
+	require.Len(t, f.rawSightings("chirp-1"), 4)
+
+	f.mustDevice("d-create", "dt-a", deveui(vals[0]))
+	assert.Len(t, f.rawSightings("chirp-1"), 3, "a create clears the value")
+	assert.Empty(t, f.rawSightings("chirp-2"), "in every integration of the tenant")
+
+	f.mustDevice("d-update", "dt-a")
+	_, err := f.api.UpdateDevice(f.ctx, "d-update", &DeviceUpdateRequest{
+		Aliases: OptionalDeviceAliasListOf([]DeviceAliasInput{deveui(vals[1])})})
+	require.NoError(t, err)
+	assert.Len(t, f.rawSightings("chirp-1"), 2, "an update clears the value")
+
+	res, err := f.api.ImportDevices(f.ctx, []*DeviceImportRow{aliasImportRow("d-import", deveui(vals[2]))}, DeviceImportModeNone, false)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, res.Created)
+	left := f.rawSightings("chirp-1")
+	require.Len(t, left, 1, "an import clears the value")
+	assert.Equal(t, vals[3], left[0].Value)
+}
+
+// A sighting that survives (a stale row, however it came to be) is not listed while a device holds
+// its value, and goes when the value resolves.
+func TestAResolvedValueDropsItsStaleSighting(t *testing.T) {
+	f := newIntFixture(t)
+	chirp := f.create("chirp-1")
+	f.sight("chirp-1", chirp.IssuedToken, eui1)
+	integrations, err := f.api.IntegrationsByToken(f.ctx, []string{"chirp-1"})
+	require.NoError(t, err)
+	// Make the device exist WITHOUT the clearing path, as a stale row would have it.
+	d := f.mustDevice("d-1", "dt-a")
+	require.NoError(t, f.api.RDB.DB(f.ctx).Create(&DeviceAlias{DeviceId: d.ID, Scheme: "lorawan.deveui", Value: eui1}).Error)
+	require.Len(t, f.sightings("chirp-1"), 0, "a value a device holds is not listed even while its row exists")
+	var n int64
+	require.NoError(t, f.api.RDB.DB(f.ctx).Model(&IntegrationUnregisteredDevice{}).Where("integration_id = ?", integrations[0].ID).Count(&n).Error)
+	require.EqualValues(t, 1, n, "the stale row is still there")
+
+	assert.Equal(t, IntegrationDeviceResolved, f.resolve("chirp-1", chirp.IssuedToken, "lorawan.deveui", eui1).Outcome)
+	require.NoError(t, f.api.RDB.DB(f.ctx).Model(&IntegrationUnregisteredDevice{}).Where("integration_id = ?", integrations[0].ID).Count(&n).Error)
+	assert.Zero(t, n, "resolving the value dropped its sighting")
+}
+
+// Values a device holds do not count against the cap, so an onboarding that created the devices
+// leaves the room back even if stale rows remain.
+func TestHeldValuesAreNotCountedAgainstTheCap(t *testing.T) {
+	f := newIntFixture(t)
+	chirp := f.create("chirp-1")
+	integrations, err := f.api.IntegrationsByToken(f.ctx, []string{"chirp-1"})
+	require.NoError(t, err)
+	rows := make([]IntegrationUnregisteredDevice, 0, MaxUnregisteredPerIntegration)
+	for i := 0; i < MaxUnregisteredPerIntegration; i++ {
+		rows = append(rows, IntegrationUnregisteredDevice{IntegrationId: integrations[0].ID, Scheme: "lorawan.deveui",
+			Value: fmt.Sprintf("%016X", i+1), FirstSeen: integrations[0].CreatedAt, LastSeen: integrations[0].CreatedAt, Count: 1})
+	}
+	require.NoError(t, f.api.RDB.DB(f.ctx).CreateInBatches(&rows, 200).Error)
+	assert.True(t, f.resolve("chirp-1", chirp.IssuedToken, "lorawan.deveui", "FFFFFFFFFFFFFFFF").Overflow, "full")
+
+	// 100 of the rows now name devices (stale rows left behind).
+	for i := 0; i < 100; i++ {
+		other := f.mustDevice(fmt.Sprintf("h-%d", i), "dt-a")
+		require.NoError(t, f.api.RDB.DB(f.ctx).Create(&DeviceAlias{DeviceId: other.ID, Scheme: "lorawan.deveui", Value: fmt.Sprintf("%016X", i+1)}).Error)
+	}
+	assert.False(t, f.resolve("chirp-1", chirp.IssuedToken, "lorawan.deveui", "FFFFFFFFFFFFFFFF").Overflow,
+		"room came back: held values are not counted")
+}
+
+func TestClearUnregisteredIntegrationDevices(t *testing.T) {
+	f := newIntFixture(t)
+	a, b := f.create("chirp-1"), f.create("chirp-2")
+	f.sight("chirp-1", a.IssuedToken, eui1, eui2)
+	f.sight("chirp-2", b.IssuedToken, eui1)
+
+	n, err := f.api.ClearUnregisteredIntegrationDevices(f.ctx, "chirp-1")
+	require.NoError(t, err)
+	assert.EqualValues(t, 2, n)
+	assert.Empty(t, f.sightings("chirp-1"))
+	assert.Len(t, f.sightings("chirp-2"), 1, "another integration's sightings are untouched")
+
+	n, err = f.api.ClearUnregisteredIntegrationDevices(f.ctx, "no-such")
+	require.NoError(t, err)
+	assert.Zero(t, n)
+
+	f.sight("chirp-1", a.IssuedToken, eui1)
+	assert.Len(t, f.sightings("chirp-1"), 1, "a sender still sending is recorded again")
+}
+
+// Alias writes go in (scheme, value) order.
+func TestAliasWritesAreOrdered(t *testing.T) {
+	got := sortedAliases([]DeviceAliasInput{
+		{Scheme: "tts.device-id", Value: "b"}, {Scheme: "custom.a", Value: "z"}, {Scheme: "custom.a", Value: "y"}, {Scheme: "lorawan.deveui", Value: eui1}})
+	assert.Equal(t, []DeviceAliasInput{
+		{Scheme: "custom.a", Value: "y"}, {Scheme: "custom.a", Value: "z"}, {Scheme: "lorawan.deveui", Value: eui1}, {Scheme: "tts.device-id", Value: "b"}}, got)
 }

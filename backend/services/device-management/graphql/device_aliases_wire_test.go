@@ -249,3 +249,34 @@ func TestUnregisteredDevicesNeedUnscopedDeviceRead(t *testing.T) {
 		}
 	}
 }
+
+func TestClearUnregisteredIntegrationDevicesOverTheWire(t *testing.T) {
+	f := newIntegrationWireFixture(t)
+	admin := f.operator()
+	issued := serve(t, admin, wireCreateIntegration, createIntegrationVars("chirp-1", nil)).
+		data["createIntegration"].(map[string]any)["issuedToken"].(string)
+	for _, v := range []string{"70B3D57ED0000001", "70B3D57ED0000002"} {
+		serve(t, service(f), wireResolve, resolveVars("chirp-1", issued, "lorawan.deveui", v))
+	}
+	const clear = `mutation { clearUnregisteredIntegrationDevices(integration: "chirp-1") }`
+
+	viewer := f.withClaims(&auth.Claims{TokenType: auth.TokenTypeAccess, Tenant: scopeTenant,
+		Authorities: []string{string(auth.DeviceRead)}})
+	scoped := f.withClaims(&auth.Claims{TokenType: auth.TokenTypeAccess, Tenant: scopeTenant,
+		Authorities: []string{string(auth.DeviceRead), string(auth.DeviceWrite)}, ScopeAnchors: []string{"customer:acme"}})
+	for who, ctx := range map[string]context.Context{"a viewer": viewer, "a scoped writer": scoped} {
+		if got := serve(t, ctx, clear, nil); len(got.errs) == 0 {
+			t.Errorf("clear was admitted for %s", who)
+		}
+	}
+	if seen := serve(t, admin, wireUnregistered, nil); len(seen.data["unregisteredIntegrationDevices"].(map[string]any)["results"].([]any)) != 2 {
+		t.Fatalf("refused clears removed rows: %v", seen.data)
+	}
+	got := serve(t, admin, clear, nil)
+	if len(got.errs) > 0 || got.data["clearUnregisteredIntegrationDevices"] != float64(2) {
+		t.Fatalf("the administrator's clear: %v %v", got.data, got.errs)
+	}
+	if seen := serve(t, admin, wireUnregistered, nil); len(seen.data["unregisteredIntegrationDevices"].(map[string]any)["results"].([]any)) != 0 {
+		t.Fatalf("rows survived the clear: %v", seen.data)
+	}
+}

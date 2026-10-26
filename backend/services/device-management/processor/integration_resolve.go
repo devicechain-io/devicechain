@@ -14,6 +14,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/credential"
 	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
+	"github.com/devicechain-io/dc-microservice/transport"
 )
 
 // AN INBOUND INTEGRATION'S EVENT.
@@ -62,6 +63,12 @@ func (rez *EventResolver) resolveIntegrationEvent(ctx context.Context, unrez *es
 		unrez.CredentialType != nil || unrez.CredentialId != nil || unrez.CredentialSecret != nil ||
 		unrez.SealedCredentialId != nil || unrez.SealedCredentialSecret != nil {
 		return nil, unauthenticated, errIntegrationEvent(unrez.Integration, "an integration event carries no other authority")
+	}
+	// The source stamp is the one command delivery classifies a device's transport by, so an
+	// integration event that is stamped as anything else would be commandable (or would corrupt
+	// another transport's presence rows). It must be exactly "integration:{token}".
+	if want := transport.Qualify(transport.Integration, unrez.Integration); unrez.Source != want {
+		return nil, unauthenticated, errIntegrationEvent(unrez.Integration, "the event's source is not the integration's")
 	}
 	// What an integration delivers is readings. A marked event of any other type does not
 	// inherit the trust, so a future emit path for a more dangerous type cannot silently get it.

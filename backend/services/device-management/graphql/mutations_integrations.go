@@ -5,6 +5,7 @@ package graphql
 
 import (
 	"context"
+	"math"
 
 	"github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-microservice/auth"
@@ -63,6 +64,23 @@ func (r *SchemaResolver) DeleteIntegration(ctx context.Context, args struct{ Tok
 		return false, err
 	}
 	return r.GetApi(ctx).DeleteIntegration(ctx, args.Token)
+}
+
+// Remove the unregistered devices an integration has recorded.
+func (r *SchemaResolver) ClearUnregisteredIntegrationDevices(ctx context.Context, args struct {
+	Integration string
+}) (int32, error) {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
+		return 0, err
+	}
+	n, err := r.GetApi(ctx).ClearUnregisteredIntegrationDevices(ctx, args.Integration)
+	if err != nil {
+		return 0, err
+	}
+	if n > math.MaxInt32 {
+		n = math.MaxInt32
+	}
+	return int32(n), nil
 }
 
 // Turn a sender's identifier into a device (service plane). The caller is a SERVICE: a service

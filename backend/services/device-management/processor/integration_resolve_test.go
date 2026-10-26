@@ -15,6 +15,7 @@ import (
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	putest "github.com/devicechain-io/dc-microservice/rdb/partialupdatetest"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
+	"github.com/devicechain-io/dc-microservice/transport"
 	"github.com/stretchr/testify/require"
 )
 
@@ -65,6 +66,7 @@ func (r *integrationRig) event(device, integration, token string) *esmodel.Unres
 	e := tempEvent("21")
 	e.Device = device
 	e.Integration = integration
+	e.Source = transport.Qualify(transport.Integration, integration)
 	sealed, err := testSecretTransit(r.t).SealToken("acme", credential.IntegrationSealKind(integration), token)
 	require.NoError(r.t, err)
 	e.SealedIntegrationToken = sealed
@@ -142,6 +144,25 @@ func TestAnIntegrationEventCarriesNoOtherAuthority(t *testing.T) {
 	} {
 		e := rig.event("dev", "chirp-1", rig.token)
 		mutate(e)
+		rig.refused(rez, e, resolvedevent.FailureReason_Unauthenticated, name)
+	}
+}
+
+// The source stamp is what command delivery classifies a device's transport by, so an integration
+// event that is stamped as anything else is refused: a mis-stamping producer cannot make an
+// integration device commandable.
+func TestAnIntegrationEventMustBeStampedAsTheIntegration(t *testing.T) {
+	rig := newIntegrationRig(t)
+	rez := rig.resolver(config.AuthModeRequired)
+	for name, source := range map[string]string{
+		"empty":                 "",
+		"a plain broker source": "mqtt1",
+		"another transport":     "sparkplug:plant-a",
+		"another integration":   transport.Qualify(transport.Integration, "chirp-2"),
+		"bare transport name":   string(transport.Integration),
+	} {
+		e := rig.event("dev", "chirp-1", rig.token)
+		e.Source = source
 		rig.refused(rez, e, resolvedevent.FailureReason_Unauthenticated, name)
 	}
 }

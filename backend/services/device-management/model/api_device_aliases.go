@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/devicealias"
@@ -56,27 +57,62 @@ func normalizeAliasInputs(in []DeviceAliasInput) ([]DeviceAliasInput, error) {
 	return out, nil
 }
 
-// insertAliasesOnTx writes the (already normalized) aliases of a device that has none. A value
-// another device in the tenant holds under the scheme violates the unique index, which the
-// caller's transaction surfaces as a CONFLICT.
-func insertAliasesOnTx(tx *gorm.DB, deviceId uint, aliases []DeviceAliasInput) error {
-	// One statement per alias, not one batch: the audit journal labels a row only when a single
-	// struct is written, and a device carries at most devicealias.MaxPerDevice of them.
+// sortedAliases returns the aliases ordered by (scheme, value). Every writer of the alias table
+// takes its row and index locks in that order, so two transactions writing overlapping sets
+// queue behind each other instead of each holding what the other needs.
+//
+// The inversion that remains is inherent: two devices SWAPPING values (A takes B's, B takes A's)
+// each need a value the other still holds until it commits, and no order of writes can avoid
+// that. One of them loses to the unique index with a CONFLICT (or the database's deadlock
+// detector); it is a retry, never a corrupt row.
+func sortedAliases(in []DeviceAliasInput) []DeviceAliasInput {
+	out := append([]DeviceAliasInput(nil), in...)
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Scheme != out[j].Scheme {
+			return out[i].Scheme < out[j].Scheme
+		}
+		return out[i].Value < out[j].Value
+	})
+	return out
+}
+
+// clearSightingsOnTx removes the unregistered-device sightings of values that now name a device,
+// in every integration of the tenant: a sighting is the invitation to create the device, and the
+// device now exists. Without it the list would never empty and its cap would become permanent
+// after a large onboarding.
+func clearSightingsOnTx(tx *gorm.DB, aliases []DeviceAliasInput) error {
 	for _, a := range aliases {
-		row := DeviceAlias{DeviceId: deviceId, Scheme: a.Scheme, Value: a.Value}
-		if err := tx.Create(&row).Error; err != nil {
+		if err := tx.Where("scheme = ? AND value = ?", a.Scheme, a.Value).Delete(&IntegrationUnregisteredDevice{}).Error; err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// replaceAliasesOnTx makes a device's alias set exactly aliases (already normalized): rows whose
-// scheme is not in the set are removed, a scheme whose value changed is updated in place, a new
-// scheme is inserted, and a row that already holds the right value is not written at all.
+// insertAliasesOnTx writes the (already normalized) aliases of a device that has none, in
+// (scheme, value) order. A value another device in the tenant holds under the scheme violates the
+// unique index, which the caller's transaction surfaces as a CONFLICT. The values' sightings are
+// cleared with it.
+func insertAliasesOnTx(tx *gorm.DB, deviceId uint, aliases []DeviceAliasInput) error {
+	// One statement per alias, not one batch: the audit journal labels a row only when a single
+	// struct is written, and a device carries at most devicealias.MaxPerDevice of them.
+	ordered := sortedAliases(aliases)
+	for _, a := range ordered {
+		row := DeviceAlias{DeviceId: deviceId, Scheme: a.Scheme, Value: a.Value}
+		if err := tx.Create(&row).Error; err != nil {
+			return err
+		}
+	}
+	return clearSightingsOnTx(tx, ordered)
+}
+
+// replaceAliasesOnTx makes a device's alias set exactly aliases (already normalized). Deletes
+// come first, then the updates and inserts in (scheme, value) order (see sortedAliases): rows
+// whose scheme is not in the set are removed, a scheme whose value changed is updated in place,
+// a new scheme is inserted, and a row that already holds the right value is not written at all.
 func replaceAliasesOnTx(tx *gorm.DB, deviceId uint, aliases []DeviceAliasInput) error {
 	var current []DeviceAlias
-	if err := tx.Where("device_id = ?", deviceId).Find(&current).Error; err != nil {
+	if err := tx.Where("device_id = ?", deviceId).Order("scheme ASC, value ASC").Find(&current).Error; err != nil {
 		return err
 	}
 	want := make(map[string]string, len(aliases))
@@ -92,20 +128,25 @@ func replaceAliasesOnTx(tx *gorm.DB, deviceId uint, aliases []DeviceAliasInput) 
 			}
 		}
 	}
-	var fresh []DeviceAliasInput
-	for _, a := range aliases {
+	var written []DeviceAliasInput
+	for _, a := range sortedAliases(aliases) {
 		existing, ok := have[a.Scheme]
 		switch {
 		case !ok:
-			fresh = append(fresh, a)
+			row := DeviceAlias{DeviceId: deviceId, Scheme: a.Scheme, Value: a.Value}
+			if err := tx.Create(&row).Error; err != nil {
+				return err
+			}
+			written = append(written, a)
 		case existing.Value != a.Value:
 			// The loaded row is handed to the statement, so the journal names the row it changed.
 			if err := tx.Model(&existing).Update("value", a.Value).Error; err != nil {
 				return err
 			}
+			written = append(written, a)
 		}
 	}
-	return insertAliasesOnTx(tx, deviceId, fresh)
+	return clearSightingsOnTx(tx, written)
 }
 
 // deleteAliasesOnTx removes every alias of a device. The foreign key cascades in PostgreSQL;
@@ -234,6 +275,11 @@ func (api *Api) ResolveIntegrationDevice(ctx context.Context, integrationToken, 
 			if devices[0].DeviceType != nil {
 				typeToken = devices[0].DeviceType.Token
 			}
+			// The device exists now, so a sighting of this value is stale: drop it.
+			if err := api.RDB.DB(ctx).Where("integration_id = ? AND scheme = ? AND value = ?",
+				integration.ID, scheme, canonical).Delete(&IntegrationUnregisteredDevice{}).Error; err != nil {
+				return nil, err
+			}
 			return &IntegrationDeviceResolution{
 				Outcome: IntegrationDeviceResolved, DeviceToken: devices[0].Token, DeviceTypeToken: typeToken,
 			}, nil
@@ -243,6 +289,11 @@ func (api *Api) ResolveIntegrationDevice(ctx context.Context, integrationToken, 
 		return nil, err
 	}
 
+	// A value some device already holds (one outside this integration's scope) is not an
+	// unregistered device: nothing is recorded for it.
+	if err == nil {
+		return &IntegrationDeviceResolution{Outcome: IntegrationDeviceUnregistered}, nil
+	}
 	overflow, err := api.recordUnregistered(ctx, integration, scheme, canonical)
 	if err != nil {
 		return nil, err
@@ -285,7 +336,8 @@ func (api *Api) recordUnregistered(ctx context.Context, integration *Integration
 			return err
 		}
 		var n int64
-		if err := tx.Model(&IntegrationUnregisteredDevice{}).Where("integration_id = ?", integration.ID).Count(&n).Error; err != nil {
+		if err := notHeldByAnAlias(tx, tx.Model(&IntegrationUnregisteredDevice{})).
+			Where("integration_id = ?", integration.ID).Count(&n).Error; err != nil {
 			return err
 		}
 		if n >= MaxUnregisteredPerIntegration {
@@ -324,7 +376,7 @@ func (api *Api) UnregisteredIntegrationDevices(ctx context.Context, criteria Unr
 		if len(found) == 0 {
 			return result.Where("1 = 0")
 		}
-		return result.Where("integration_id = ?", found[0].ID)
+		return notHeldByAnAlias(api.RDB.DB(ctx), result).Where("integration_id = ?", found[0].ID)
 	}, criteria.Pagination)
 	db.Find(&results)
 	if db.Error != nil {
@@ -334,4 +386,25 @@ func (api *Api) UnregisteredIntegrationDevices(ctx context.Context, criteria Unr
 		results[i].IntegrationToken = criteria.Integration
 	}
 	return &UnregisteredDeviceSearchResults{Results: results, Pagination: pag}, nil
+}
+
+// notHeldByAnAlias narrows a statement over integration_unregistered_devices to the values no
+// device holds as an alias. A value some device carries is not "unregistered", whatever a stale
+// row says, so it is neither listed nor counted against the cap.
+func notHeldByAnAlias(db *gorm.DB, stmt *gorm.DB) *gorm.DB {
+	return stmt.Where("NOT EXISTS (?)", db.Session(&gorm.Session{NewDB: true}).Model(&DeviceAlias{}).Select("1").
+		Where("device_aliases.scheme = integration_unregistered_devices.scheme AND device_aliases.value = integration_unregistered_devices.value"))
+}
+
+// ClearUnregisteredIntegrationDevices removes every sighting an integration has recorded and
+// returns how many rows went. The sightings are observations, so an operator who has dealt with
+// them (or wants the cap's room back) clears them; ones still being sent are recorded again. An
+// unknown integration clears nothing.
+func (api *Api) ClearUnregisteredIntegrationDevices(ctx context.Context, integrationToken string) (int64, error) {
+	found, err := api.IntegrationsByToken(ctx, []string{integrationToken})
+	if err != nil || len(found) == 0 {
+		return 0, err
+	}
+	res := api.RDB.DB(ctx).Where("integration_id = ?", found[0].ID).Delete(&IntegrationUnregisteredDevice{})
+	return res.RowsAffected, res.Error
 }

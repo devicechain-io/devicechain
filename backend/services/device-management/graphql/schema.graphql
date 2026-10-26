@@ -3167,8 +3167,9 @@ enum IntegrationDeviceOutcome {
     """The alias names a device whose type is in the integration's scope."""
     RESOLVED
     """
-    No device in scope carries the alias, and the sighting was recorded. A device that carries
-    the alias but is out of scope reads exactly the same.
+    No device in scope carries the alias. The sighting was recorded, unless a device outside the
+    integration's scope holds the alias, in which case it reads the same but nothing is recorded:
+    that value is not an unregistered device, and creating a device with it would be refused.
     """
     UNREGISTERED
     """
@@ -3196,8 +3197,10 @@ type IntegrationDeviceResolution {
 }
 
 """
-A device a sender named that the tenant has no device in scope for, as an integration saw it.
-Create a device with this alias to start resolving it.
+A device a sender named that no device of the tenant carries an alias for, as an integration saw
+it. Create a device of a type in the integration's scope with this alias to start resolving it;
+the sighting then disappears. Values some device already holds are never listed, and
+clearUnregisteredIntegrationDevices empties the list.
 """
 type UnregisteredIntegrationDevice {
     """Server-assigned numeric identifier, as a string."""
@@ -4940,6 +4943,15 @@ type Mutation {
         """Token of the integration."""
         token: String!
     ): IntegrationSecretResult!
+    """
+    Remove every unregistered device an integration has recorded, returning how many rows went.
+    They are observations; ones the sender is still sending are recorded again. An unknown
+    integration clears nothing.
+    """
+    clearUnregisteredIntegrationDevices(
+        """Token of the integration."""
+        integration: String!
+    ): Int!
     """Delete an integration. Returns false when there was none."""
     deleteIntegration(
         """Token of the integration."""

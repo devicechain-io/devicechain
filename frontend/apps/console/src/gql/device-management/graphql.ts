@@ -325,6 +325,20 @@ export type DetectionRuleUpdateRequest = {
 };
 
 /**
+ * A name for a device in a sender's vocabulary. The value is checked against the scheme and
+ * stored in one canonical spelling, so the same DevEUI written in either case is one alias.
+ */
+export type DeviceAliasInput = {
+  /** lorawan.deveui, tts.device-id, or custom.<name> (lower-case letters, digits, hyphen and underscore, up to 63 characters). */
+  scheme: string;
+  /**
+   * lorawan.deveui: exactly 16 hexadecimal digits. tts.device-id: 1 to 36 letters, digits and
+   * hyphens. custom.<name>: 1 to 128 characters with no control characters, case kept.
+   */
+  value: string;
+};
+
+/**
  * Creates many devices of one type from templates. Device n of the batch (n running from
  * startIndex to startIndex + count - 1) is rendered by replacing {n} with n, or {n:0Wd}
  * with n zero-padded to width W. Each template may be at most 256 characters, with a pad
@@ -358,6 +372,12 @@ export type DeviceBulkCreateRequest = {
 
 /** Fields for a new device. */
 export type DeviceCreateRequest = {
+  /**
+   * Names a sender other than the platform knows the device by, such as its LoRaWAN DevEUI. At
+   * most 8, one per scheme. A value another device in the tenant already holds under the scheme
+   * is refused with CONFLICT. Omitted or null creates the device with none.
+   */
+  aliases?: Array<DeviceAliasInput> | null | undefined;
   /** Free-text description, up to 1024 characters. */
   description?: string | null | undefined;
   /** Token of the device's type. An unknown token fails the request. */
@@ -482,6 +502,12 @@ export type DeviceImportOutcome =
 
 /** One device of an import file. */
 export type DeviceImportRow = {
+  /**
+   * Names a sender other than the platform knows the device by, as on a single create. A value
+   * another device holds makes the row a CONFLICT and a malformed one makes it INVALID. A device
+   * that already exists with a different alias set makes the row a CONFLICT.
+   */
+  aliases?: Array<DeviceAliasInput> | null | undefined;
   /** The id the device presents (the access token itself, or the MQTT username). FACTORY_CREDENTIALS mode only. */
   credentialId?: string | null | undefined;
   /** ACCESS_TOKEN or MQTT_BASIC. FACTORY_CREDENTIALS mode only. */
@@ -603,6 +629,12 @@ export type DeviceReplacementSearchCriteria = {
 
 /** Criteria for searching devices. Results are newest first. */
 export type DeviceSearchCriteria = {
+  /**
+   * Return only the device this alias names. The value is matched in its stored spelling, so
+   * a DevEUI in either case finds the same device. A malformed alias is refused with
+   * INVALID_VALUE, and a caller limited to part of the tenant is refused.
+   */
+  alias?: DeviceAliasInput | null | undefined;
   /** Return only devices of the device type with this token. An unknown token matches nothing. */
   deviceType?: string | null | undefined;
   /**
@@ -715,6 +747,12 @@ export type DeviceTypeUpdateRequest = {
  * object changes nothing.
  */
 export type DeviceUpdateRequest = {
+  /**
+   * Replaces the device's aliases with exactly this list. Null or an empty list removes them
+   * all; omit the field to leave them alone. A value another device already holds under a
+   * scheme refuses the whole update with CONFLICT.
+   */
+  aliases?: Array<DeviceAliasInput> | null | undefined;
   /** New description, or null to clear it. */
   description?: string | null | undefined;
   /**
