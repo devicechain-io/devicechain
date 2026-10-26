@@ -422,6 +422,63 @@ tests:
         exp_alerts: []
 
   # ------------------------------------------------------------------
+  # Backlog with event-processing DOWN: it exports no gauge, so the rule reads the broker's own
+  # count of the resolved-events durable. One alert (the follower reports 0 and `max` ignores
+  # it), and the other durables, the ephemeral consumer and another instance's stream do not
+  # leak in even though they hold more.
+  # ------------------------------------------------------------------
+  - name: a backlog the broker holds while event-processing is down fires DetectConsumerBacklogHigh
+    interval: 1m
+    input_series:
+      - series: 'nats_consumer_num_pending{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_resolved-events", consumer_name="devicechain_event-processing_resolved-events_ackfloor"}'
+        values: '60000x20'
+      - series: 'nats_consumer_num_pending{namespace="dci-devicechain", pod="dc-nats-0", stream_name="devicechain_resolved-events", consumer_name="devicechain_event-processing_resolved-events_ackfloor"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: DetectConsumerBacklogHigh
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: DetectConsumerBacklogHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "DETECT consumer is falling behind"
+              description: "The resolved-events durable consumer has >50k undelivered messages for 10m; the DETECT engine is not keeping up with ingest."
+  - name: the broker's count of other consumers does not raise DetectConsumerBacklogHigh
+    interval: 1m
+    input_series:
+      - series: 'nats_consumer_num_pending{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_resolved-events", consumer_name="devicechain_device-state_resolved-events"}'
+        values: '900000x20'
+      - series: 'nats_consumer_num_pending{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_resolved-events", consumer_name="devicechain_event-processing_resolved-events_ackfloor"}'
+        values: '40000x20'
+      - series: 'nats_consumer_num_pending{namespace="dci-other", pod="dc-nats-1", stream_name="other_resolved-events", consumer_name="other_event-processing_resolved-events_ackfloor"}'
+        values: '900000x20'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: DetectConsumerBacklogHigh
+        exp_alerts: []
+  - name: the reader and the broker both reporting raise one DetectConsumerBacklogHigh
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_detect_consumer_pending{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '60000x20'
+      - series: 'nats_consumer_num_pending{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_resolved-events", consumer_name="devicechain_event-processing_resolved-events_ackfloor"}'
+        values: '60000x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: DetectConsumerBacklogHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "DETECT consumer is falling behind"
+              description: "The resolved-events durable consumer has >50k undelivered messages for 10m; the DETECT engine is not keeping up with ingest."
+
+  # ------------------------------------------------------------------
   # Watermark lag: the same three shapes against the 300s threshold.
   # ------------------------------------------------------------------
   - name: a sustained watermark lag above the threshold fires DetectWatermarkLagHigh

@@ -229,6 +229,7 @@ spec:
               (max by (stream) ({__name__=~"devicechain_[a-z0-9]+_jetstream_stream_sink", namespace="{{ $ns }}"}) == 1)
             unless on (stream)
               max by (stream) ({__name__=~"devicechain_[a-z0-9]+_jetstream_consumer_pending_messages", durable=~".+_user-management_dead-letters", namespace="{{ $ns }}"})
+            # reader-only: the `unless` operand is the evidence that user-management IS reading the dead letters, so the rule needs the reader's own series by design
           for: 10m
           labels:
             severity: info

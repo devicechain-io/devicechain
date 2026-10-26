@@ -200,7 +200,7 @@
    "id": 2,
    "type": "stat",
    "title": "Consumer lag (undelivered)",
-   "description": "Undelivered resolved events waiting on the DETECT durable consumer \u2014 the primary falling-behind signal.",
+   "description": "Undelivered resolved events waiting on the DETECT durable consumer \u2014 the primary falling-behind signal. While the reading service is down this shows the message broker's own count.",
    "gridPos": {
     "h": 4,
     "w": 4,
@@ -218,7 +218,7 @@
       "type": "prometheus",
       "uid": "${datasource}"
      },
-     "expr": "max(devicechain_eventprocessing_detect_consumer_pending{namespace=\"$namespace\"})",
+     "expr": "max(devicechain_eventprocessing_detect_consumer_pending{namespace=\"$namespace\"}) or max(nats_consumer_num_pending{namespace=\"$namespace\", stream_name=~\"${instance}_.+\", consumer_name=~\".+_event-processing_resolved-events(_ackfloor)?\"})",
      "legendFormat": "__auto"
     }
    ],
@@ -266,7 +266,7 @@
    "id": 3,
    "type": "stat",
    "title": "In-flight (delivered-unacked)",
-   "description": "Delivered-but-unacked messages (in-flight work; a peer's during a rolling-update overlap).",
+   "description": "Delivered-but-unacked messages (in-flight work; a peer's during a rolling-update overlap). While the reading service is down this shows the message broker's own count.",
    "gridPos": {
     "h": 4,
     "w": 4,
@@ -284,7 +284,7 @@
       "type": "prometheus",
       "uid": "${datasource}"
      },
-     "expr": "max(devicechain_eventprocessing_detect_consumer_ack_pending{namespace=\"$namespace\"})",
+     "expr": "max(devicechain_eventprocessing_detect_consumer_ack_pending{namespace=\"$namespace\"}) or max(nats_consumer_num_ack_pending{namespace=\"$namespace\", stream_name=~\"${instance}_.+\", consumer_name=~\".+_event-processing_resolved-events(_ackfloor)?\"})",
      "legendFormat": "__auto"
     }
    ],
@@ -564,7 +564,7 @@
    "id": 8,
    "type": "timeseries",
    "title": "Consumer backlog",
-   "description": "The DETECT durable consumer's broker-reported backlog.",
+   "description": "The DETECT durable consumer's broker-reported backlog. While the reading service is down this shows the message broker's own count.",
    "gridPos": {
     "h": 8,
     "w": 12,
@@ -582,7 +582,7 @@
       "type": "prometheus",
       "uid": "${datasource}"
      },
-     "expr": "max(devicechain_eventprocessing_detect_consumer_pending{namespace=\"$namespace\"})",
+     "expr": "max(devicechain_eventprocessing_detect_consumer_pending{namespace=\"$namespace\"}) or max(nats_consumer_num_pending{namespace=\"$namespace\", stream_name=~\"${instance}_.+\", consumer_name=~\".+_event-processing_resolved-events(_ackfloor)?\"})",
      "legendFormat": "undelivered (pending)"
     },
     {
@@ -591,7 +591,7 @@
       "type": "prometheus",
       "uid": "${datasource}"
      },
-     "expr": "max(devicechain_eventprocessing_detect_consumer_ack_pending{namespace=\"$namespace\"})",
+     "expr": "max(devicechain_eventprocessing_detect_consumer_ack_pending{namespace=\"$namespace\"}) or max(nats_consumer_num_ack_pending{namespace=\"$namespace\", stream_name=~\"${instance}_.+\", consumer_name=~\".+_event-processing_resolved-events(_ackfloor)?\"})",
      "legendFormat": "in-flight (ack-pending)"
     }
    ],
@@ -2023,7 +2023,7 @@
    "id": 34,
    "type": "timeseries",
    "title": "Consumer unread backlog (share of stream capacity)",
-   "description": "Each of this service's consumers: messages it has not read (pending plus unacknowledged) over what its stream can hold. History already read does not count, unlike the fill panels. At 100% the stream discards messages the consumer has not read.",
+   "description": "Each of this service's consumers: messages it has not read (pending plus unacknowledged) over what its stream can hold. History already read does not count, unlike the fill panels. At 100% the stream discards messages the consumer has not read. While the reading service is down this shows the message broker's own count.",
    "gridPos": {
     "h": 8,
     "w": 24,
@@ -2041,7 +2041,7 @@
       "type": "prometheus",
       "uid": "${datasource}"
      },
-     "expr": "max by (durable) (devicechain_eventprocessing_jetstream_consumer_unread_ratio{namespace=\"$namespace\"})",
+     "expr": "max by (durable) (max by (stream, durable) (devicechain_eventprocessing_jetstream_consumer_unread_ratio{namespace=\"$namespace\"}) or max by (stream, durable) (label_replace(label_replace(max by (stream_name, consumer_name) (label_replace(sum by (stream_name, consumer_name) (max by (__name__, stream_name, consumer_name) ({__name__=~\"nats_consumer_num_pending|nats_consumer_num_ack_pending\", namespace=\"$namespace\", stream_name=~\"${instance}_.+\", consumer_name=~\".+_event-processing_.+\"})) / on (stream_name) group_left () max by (stream_name) (nats_stream_limit_messages{namespace=\"$namespace\", stream_name=~\"${instance}_.+\"} > 0), \"form\", \"m\", \"\", \"\") or label_replace(sum by (stream_name, consumer_name) (max by (__name__, stream_name, consumer_name) ({__name__=~\"nats_consumer_num_pending|nats_consumer_num_ack_pending\", namespace=\"$namespace\", stream_name=~\"${instance}_.+\", consumer_name=~\".+_event-processing_.+\"})) * on (stream_name) group_left () (max by (stream_name) (nats_stream_total_bytes{namespace=\"$namespace\", stream_name=~\"${instance}_.+\"}) / clamp_min(max by (stream_name) (nats_stream_total_messages{namespace=\"$namespace\", stream_name=~\"${instance}_.+\"}), 1)) / on (stream_name) group_left () max by (stream_name) (nats_stream_limit_bytes{namespace=\"$namespace\", stream_name=~\"${instance}_.+\"} > 0), \"form\", \"b\", \"\", \"\")), \"stream\", \"$1\", \"stream_name\", \"(.+)\"), \"durable\", \"$1\", \"consumer_name\", \"(.+)\")))",
      "legendFormat": "{{durable}}"
     }
    ],

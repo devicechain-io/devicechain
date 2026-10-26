@@ -28,7 +28,8 @@ type Stats struct {
 	// Emitted counts accepted emits (HTTP 202). Shed counts emits rejected at the
 	// per-tenant ingest ceiling (HTTP 429, ADR-023/063). Backpressured counts emits
 	// refused under the platform's shared backpressure gate (HTTP 503 with a
-	// Retry-After). Both are DEFINITIVE clean non-accepts: the ingress refuses before
+	// Retry-After) or by a TCP connect the peer refused (nothing listening: no request was
+	// ever written, see refusedAtDial). All are DEFINITIVE clean non-accepts: the ingress refuses before
 	// anything is published, so the event provably never entered the pipeline and is
 	// not persisted. They are counted apart because they answer different questions —
 	// a 429 is the tenant's own ceiling (and, under a contention floor, shed

@@ -918,6 +918,108 @@ for path in list(dashboards) + list(rule_files):
             "    panel or alert over it is empty for good. Use quantile=~\"1|1.0\" (or \"0|0.0\")."
             % os.path.relpath(path, root))
 
+# --- gap 8: A BACKLOG THAT ONLY THE READER EXPORTS IS BLIND WHILE THE READER IS DOWN ---
+# A service that drains a stream exports its own backlog (the jetstream_consumer_* gauges every
+# service shares, and DETECT's detect_consumer_* pair). When that service stops, which is the main
+# way a stream backs up, its series vanish: a panel over them reads "No data" and an alert over them
+# evaluates an empty vector and stays quiet, while the message broker holds the whole backlog
+# (measured: device-state down, its board panel empty for the whole outage with 115,779 waiting).
+#
+# A BACKLOG TARGET is a panel target, or a rule's expr, that selects any of:
+#   *_jetstream_consumer_pending_messages, *_jetstream_consumer_ack_pending_messages,
+#   *_jetstream_consumer_unread_ratio, *_detect_consumer_pending, *_detect_consumer_ack_pending.
+# Deliberately NOT one: unread_gap_messages and unread_skipped_total (a cursor position and a loss
+# counter, which only the reader can know -- the broker has no equivalent), the
+# backpressure_unread_ratio (exported by the stream's WRITERS), and mqtt_failclosed_durable_* (sampled
+# from the MQTT gateway's own store, not a platform stream a reader drains).
+#
+# It must carry the broker's own count of the same quantity after an `or`: nats_consumer_num_pending
+# for pending, nats_consumer_num_ack_pending for ack-pending, both plus nats_stream_limit_* for the
+# ratio. In a rule file the chart's helpers (devicechain.brokerPending, devicechain.brokerUnreadRatio)
+# stand for those. On a dashboard a panel is also covered when ANOTHER of its targets reads the broker
+# series of that kind (a reader line drawn beside the broker's own, to compare them). An expression
+# that really is only the reader's (it needs a counter only the reader has) ends with
+# `# reader-only: <why>`.
+BACKLOG_READER = {
+    "pending": re.compile(r"_jetstream_consumer_pending_messages\b|_detect_consumer_pending\b"),
+    "ack": re.compile(r"_jetstream_consumer_ack_pending_messages\b|_detect_consumer_ack_pending\b"),
+    "ratio": re.compile(r"_jetstream_consumer_unread_ratio\b"),
+}
+BACKLOG_BROKER = {
+    "pending": re.compile(r"nats_consumer_num_pending\b|devicechain\.broker(?:Pending|UnreadRatio)\b"),
+    "ack": re.compile(r"nats_consumer_num_ack_pending\b|devicechain\.brokerUnreadRatio\b"),
+    "ratio": re.compile(r"nats_stream_limit_|devicechain\.brokerUnreadRatio\b"),
+}
+READER_ONLY = re.compile(r"#\s*reader-only\b")
+OR_WORD = re.compile(r"\bor\b")
+
+def backlog_kinds(expr):
+    return [k for k, rx in BACKLOG_READER.items() if rx.search(expr)]
+
+def broker_kinds(expr):
+    return {k for k, rx in BACKLOG_BROKER.items() if rx.search(expr)}
+
+def uncovered_kinds(expr):
+    """The reader-side backlog kinds expr selects without a broker arm of the same kind after an `or`."""
+    if READER_ONLY.search(expr):
+        return []
+    out = []
+    for kind in backlog_kinds(expr):
+        first = BACKLOG_READER[kind].search(expr).start()
+        tail = expr[first:]
+        arm = [m for m in OR_WORD.finditer(tail) if kind in broker_kinds(tail[m.end():])]
+        if not arm:
+            out.append(kind)
+    return out
+
+def _panels(nodes):
+    for p in nodes:
+        yield p
+        yield from _panels(p.get("panels", []))
+
+BACKLOG_ADVICE = (
+    "    selects a backlog that only the READING service exports, with no broker-side arm. While that\n"
+    "    service is down its series vanish and the panel reads \"No data\" (an alert stays silent) just\n"
+    "    when the backlog is building. Add the broker's own count after an `or`, labelled to match:\n"
+    "    ... or max by (durable) (label_replace(nats_consumer_num_pending{namespace=\"$namespace\",\n"
+    "    stream_name=~\"${instance}_.+\", consumer_name=~\"<durable>\"}, \"durable\", \"$1\", \"consumer_name\", \"(.+)\")).\n"
+    "    (num_ack_pending for an ack-pending gauge; a rule file uses the devicechain.brokerPending helper.)\n"
+    "    If the expression truly needs a counter only the reader has, end it with `# reader-only: <why>`.")
+backlog_checked = 0
+for path in dashboards:
+    try:
+        with open(path, "rb") as fh:
+            board = json.loads(fh.read().decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        continue  # reported as unparseable above
+    for panel in _panels(board.get("panels", [])):
+        targets = [t.get("expr", "") for t in panel.get("targets", []) if isinstance(t.get("expr"), str)]
+        beside = set()
+        for t in targets:
+            beside |= broker_kinds(t)
+        for expr in targets:
+            if not backlog_kinds(expr):
+                continue
+            backlog_checked += 1
+            missing = [k for k in uncovered_kinds(expr) if k not in beside]
+            if missing:
+                problems.append("%s panel %s (%s): %s\n    %s\n%s" % (
+                    os.path.relpath(path, root), panel.get("id"), panel.get("title"),
+                    "/".join(missing), expr[:160], BACKLOG_ADVICE))
+for path in rule_files:
+    with open(path, "rb") as fh:
+        text = fh.read().decode("utf-8", "replace")
+    for line_no, expr in _rule_expr_blocks(text):
+        if not backlog_kinds(expr):
+            continue
+        backlog_checked += 1
+        missing = uncovered_kinds(expr)
+        if missing:
+            problems.append("%s:%d (%s)\n    %s\n%s" % (
+                os.path.relpath(path, root), line_no, "/".join(missing), " ".join(expr.split())[:160], BACKLOG_ADVICE))
+if backlog_checked == 0:
+    sys.exit("found no reader-side backlog target to check -- this rule would pass over nothing")
+
 if problems:
     print("The chart's dashboards and alert rules do not hold up:\n", file=sys.stderr)
     for p in problems:
@@ -1244,6 +1346,7 @@ func register(ms *Microservice) {
 	ms.NewSummary(
 		"sum_seconds", "A probe summary.")
 	ms.NewGauge("level", "A probe gauge.")
+	ms.NewGauge("detect_consumer_pending", "A probe backlog only the reader exports.")
 	ms.NewProcessorMetrics("loop")
 	ms.NewPeriodicTaskMetrics("sweep")
 	// ms.NewHistogramVec("ghost_seconds", "Commented out: exports nothing.", nil, nil)
@@ -1321,7 +1424,18 @@ EOF
           "expr": "sum(kube_pod_container_status_restarts_total{namespace=\"$namespace\"}) + max(go_goroutines{namespace=\"$namespace\"}) + max(container_memory_working_set_bytes) + max(process_open_fds) + max(nats_varz_cpu) + min(cnpg_collector_up) + max(kubelet_volume_stats_used_bytes) + max(barman_cloud_cloudnative_pg_io_last_available_backup_timestamp)"
         },
         {
+          "expr": "max(devicechain_selftestarea_detect_consumer_pending{namespace=\"$namespace\"}) or max(nats_consumer_num_pending{namespace=\"$namespace\", consumer_name=~\".+_probe_.+\"})"
+        },
+        {
           "expr": "devicechain_selftestarea_sum_seconds{quantile=\"0.99\"} + histogram_quantile(0.5, sum by (le) (rate(devicechain_selftestarea_loop_duration_seconds_bucket[5m]))) + rate(devicechain_selftestarea_loop_messages_total[5m]) + rate(devicechain_selftestarea_sweep_pass_duration_seconds_count[5m]) + histogram_quantile(0.5, sum by (le) (rate({__name__=~\"devicechain_[a-z0-9]+_core_lat_seconds_bucket\"}[5m]))) # absent-ok: resolver fixture"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "max(devicechain_selftestarea_detect_consumer_pending{namespace=\"$namespace\"}) # reader-only: fixture needs a counter only the reader has"
         }
       ]
     }
@@ -1335,6 +1449,10 @@ spec:
       rules:
         - alert: ProbeFiring
           expr: sum(rate(devicechain_selftestarea_other_probe_total{namespace="dc"}[5m])) > 0
+          labels:
+            devicechain_instance: dc
+        - alert: ProbeBacklog
+          expr: (max(devicechain_selftestarea_detect_consumer_pending{namespace="dc"}) or max(nats_consumer_num_pending{consumer_name=~".+_probe_.+"})) > 100
           labels:
             devicechain_instance: dc
         - alert: ProbeGuardedSum
@@ -1462,6 +1580,14 @@ PY
     '(sum(increase(devicechain_selftestarea_probe_total{namespace="dc"}[5m])) or vector(0)) + (' \
     'sum(increase(devicechain_selftestarea_probe_total{namespace="dc"}[5m])) + (' \
     'an alert expression with one unguarded counter term'
+
+  # Cases 2w -- A BACKLOG ONLY THE READER EXPORTS. The clean fixture carries the reader's gauge
+  # with its broker arm (dashboard and rule) and once more marked `# reader-only`, and Case 0
+  # passed over all of them (the accepted half). Each defect below is planted ALONE.
+  absentcase "$dash/probe.json" ' or max(nats_consumer_num_pending{namespace=\"$namespace\", consumer_name=~\".+_probe_.+\"})' ''     'a dashboard backlog target with no broker arm'
+  absentcase "$dash/probe.json" 'nats_consumer_num_pending{namespace=\"$namespace\"' 'nats_consumer_num_ack_pending{namespace=\"$namespace\"'     'a dashboard backlog target whose broker arm is the wrong kind (ack-pending for pending)'
+  absentcase "$dash/probe.json" '{namespace=\"$namespace\"}) # reader-only: fixture needs a counter only the reader has' '{namespace=\"$namespace\"})'     'a dashboard backlog target that lost its reader-only marker'
+  absentcase "$tmpl/prometheusrule-probe.yaml" ' or max(nats_consumer_num_pending{consumer_name=~".+_probe_.+"})' ''     'an alert over a reader-side backlog with no broker arm'
 
   # Cases 2x -- SERIES THAT ARE NOT DEVICECHAIN'S, one misspelling per prefix family, each alone.
   # The clean fixture names one pinned series of every family and passed Case 0, so the accepted half
@@ -1851,7 +1977,7 @@ FIXTURE
   rm -f "$chart/dashboards/unscoped-board.json"
   echo "  ok: a dashboard with no instance variable is refused by the template"
 
-  echo "self-test passed: 77 defects, each planted alone, each caught; a clean tree and chart pass"
+  echo "self-test passed: 81 defects, each planted alone, each caught; a clean tree and chart pass"
   exit 0
 fi
 

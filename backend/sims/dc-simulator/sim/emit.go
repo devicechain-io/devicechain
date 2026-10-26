@@ -494,8 +494,14 @@ func postEvent(ctx context.Context, rt *Runtime, d DeviceInstance,
 
 	resp, err := rt.HTTPClient.Do(req)
 	if err != nil {
-		// The request may have been processed before the connection failed, so the store
-		// may hold this event: ambiguous, never refused.
+		// A refused TCP connect never carried the request, so nothing can have been
+		// stored: a definite refusal, filed and counted like a backpressure 503.
+		if refusedAtDial(err) {
+			rt.Identity.Record(OutcomeRefused, d.Token, eventType, occurredTime)
+			return fmt.Errorf("post to ingress %s: %w: %w", url, errBackpressuredShed, err)
+		}
+		// Anything else (a reset, a timeout, a failed read) may have happened after the
+		// request was written, so the store may hold this event: ambiguous, never refused.
 		rt.Identity.Record(OutcomeAmbiguous, d.Token, eventType, occurredTime)
 		return fmt.Errorf("post to ingress %s: %w", url, err)
 	}
