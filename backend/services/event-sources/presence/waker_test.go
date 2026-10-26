@@ -82,6 +82,7 @@ func TestAWakeReachesTheReleaserWithItsTenant(t *testing.T) {
 	if len(tenants) != 1 || tenants[0] != "acme" {
 		t.Fatalf("the release ran without its tenant in context, got %v", tenants)
 	}
+	stop() // waits for the worker to finish the request it is on, so the counters are written (rel.done fires from INSIDE the releaser, before the outcome is counted)
 	if got := testutil.ToFloat64(metrics.Released); got != 3 {
 		t.Fatalf("Released = %v, want the 3 commands the releaser reported", got)
 	}
@@ -162,6 +163,7 @@ func TestAFailedReleaseIsCountedAndNotRetried(t *testing.T) {
 	if got := len(rel.seen()); got != 1 {
 		t.Fatalf("a failed wake was attempted %d times; it must not be retried", got)
 	}
+	stop() // waits for the worker to finish the request it is on, so the counters are written (rel.done fires from INSIDE the releaser, before the outcome is counted)
 	if got := testutil.ToFloat64(metrics.Failed); got != 1 {
 		t.Fatalf("Failed = %v, want 1", got)
 	}
@@ -185,6 +187,7 @@ func TestNothingReleasedIsNotCounted(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("the wake never reached the releaser")
 	}
+	stop() // waits for the worker to finish the request it is on, so the counters are written (rel.done fires from INSIDE the releaser, before the outcome is counted)
 	if got := testutil.ToFloat64(metrics.Released); got != 0 {
 		t.Fatalf("Released = %v for a device with nothing waiting", got)
 	}

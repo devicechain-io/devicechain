@@ -146,7 +146,7 @@ func TestIntegrationAuthOverTheWire(t *testing.T) {
 	}
 
 	for name, vars := range map[string]map[string]any{
-		"a wrong token":          {"t": "chirp-1", "s": "A" + issued[1:]},
+		"a wrong token":          {"t": "chirp-1", "s": differentToken(issued)},
 		"an empty token":         {"t": "chirp-1", "s": ""},
 		"an unknown integration": {"t": "nope", "s": issued},
 	} {
@@ -320,4 +320,15 @@ func TestIntegrationAuthIsServiceOnly(t *testing.T) {
 			t.Errorf("integrationAuth was admitted for %s: %v %v", who, got.data, got.errs)
 		}
 	}
+}
+
+// differentToken returns a token of the same shape that is certainly not the one given. Issued
+// tokens are random base64url, so "overwrite the first character with a fixed one" is the
+// original again one time in 64.
+func differentToken(token string) string {
+	first := byte('A')
+	if token[0] == first {
+		first = 'B'
+	}
+	return string(first) + token[1:]
 }

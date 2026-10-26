@@ -112,7 +112,7 @@ func TestAuthenticateIntegration(t *testing.T) {
 	// Every failure is one answer.
 	for name, call := range map[string]func() error{
 		"wrong token": func() error {
-			_, err := f.api.AuthenticateIntegration(f.ctx, "chirp-1", "A"+created.IssuedToken[1:])
+			_, err := f.api.AuthenticateIntegration(f.ctx, "chirp-1", differentToken(created.IssuedToken))
 			return err
 		},
 		"empty token": func() error {
@@ -200,7 +200,7 @@ func TestAuthenticateIntegrationRefusesADisabledOne(t *testing.T) {
 	require.NotNil(t, got, "the integration comes back with the refusal so a caller can say why")
 	assert.False(t, got.Enabled)
 
-	_, err = f.api.AuthenticateIntegration(f.ctx, "chirp-1", "A"+created.IssuedToken[1:])
+	_, err = f.api.AuthenticateIntegration(f.ctx, "chirp-1", differentToken(created.IssuedToken))
 	assert.ErrorIs(t, err, ErrIntegrationAuthFailed, "without the token a disabled integration looks like any other failure")
 
 	// The control: enabling it again authenticates.
@@ -499,4 +499,15 @@ func TestIntegrationWritesAreAudited(t *testing.T) {
 	assert.Equal(t, 1, ops["create"], "create")
 	assert.GreaterOrEqual(t, ops["update"], 2, "the rotation and the edit are both updates")
 	assert.Equal(t, 1, ops["delete"], "delete")
+}
+
+// differentToken returns a token of the same shape that is certainly not the one given. Issued
+// tokens are random base64url, so "overwrite the first character with a fixed one" is the
+// original again one time in 64.
+func differentToken(token string) string {
+	first := byte('A')
+	if token[0] == first {
+		first = 'B'
+	}
+	return string(first) + token[1:]
 }
