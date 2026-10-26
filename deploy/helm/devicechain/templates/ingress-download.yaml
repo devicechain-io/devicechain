@@ -21,7 +21,7 @@ URI, can only fetch a URL).
 Rendered only with the ingress and the update-management area. On any other ingress controller the
 same rule applies and is the operator's to apply: do not log the query string of this path.
 */}}
-{{- if and .Values.ingress.enabled (has "update-management" (splitList "," (include "devicechain.enabledAreas" .))) }}
+{{- if and .Values.ingress.enabled (eq .Values.ingress.controller "nginx") (has "update-management" (splitList "," (include "devicechain.enabledAreas" .))) }}
 {{- $tls := .Values.ingress.tls -}}
 apiVersion: networking.k8s.io/v1
 kind: Ingress

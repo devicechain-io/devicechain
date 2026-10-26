@@ -1,0 +1,277 @@
+{{/*
+The same routing as ingress.yaml, expressed as Gateway API objects: one Gateway and the
+HTTPRoutes that attach to it. Rendered when ingress.enabled and ingress.controller is
+gateway; the Ingress objects are then not rendered, so exactly one front end serves the
+host. Only standard Gateway API features are used (Gateway, HTTPRoute, PathPrefix,
+URLRewrite ReplacePrefixMatch, RequestRedirect), so any conformant controller serves it.
+Everything controller-specific (entrypoint timeouts, the trusted-proxy list, the access
+log) belongs to the controller's own installation, not to this chart.
+
+Hand it the controller's GatewayClass in ingress.gateway.className; the OpenTofu install
+registers one called traefik.
+
+ONE ROUTE SET, NOT THREE INGRESSES' WORTH. The Ingress front end needs a separate object
+for the update-artifact upload and download only to apply nginx-specific behaviour to them
+(a lifted body limit and unbuffered request body for the upload, no access log for the
+download). Neither has an equivalent here, because neither is needed:
+
+  - request bodies are not size-capped or buffered by a Gateway API controller of this
+    kind, so the upload streams to the service, which authenticates before it reads the
+    body and enforces its own artifact ceiling. A route would add nothing;
+  - the capability in the download's query string is kept out of the log by the controller
+    installation (it drops every query string from its access log), because the Gateway
+    API has no per-route access-log switch. An operator bringing their own controller
+    must do the same for /api/update-management/updates/download/.
+
+Both paths are therefore served by the update-management rule of the API route, at the
+same upstream paths the Ingress objects produce. A test in dcctl renders both front ends
+for every install profile and compares what each one serves.
+
+WHY THE /api/<area> RULES REWRITE WITH ReplacePrefixMatch "/"
+
+It is the standard equivalent of the Ingress's  /api/<area>(/|$)(.*)  -> /$2  rewrite:
+/api/<area> and /api/<area>/ reach the service at /, and /api/<area>/graphql reaches it at
+/graphql. PathPrefix matches whole path elements, so /api/<area>x is not matched (it falls
+to the console route), as with the regex.
+
+WHY THE WELL-KNOWN ROUTE IS ITS OWN OBJECT, WITH NO REWRITE
+
+See ingress.yaml: the OAuth metadata documents are asked for at /.well-known/<suffix>...
+and must reach the service at that same path, so they are routed as prefixes with no
+rewrite and the service that owns the identifier decides which exact path is its
+document. Gateway API picks the longest matching prefix, so both are longer than the
+console's "/".
+
+TLS. The Gateway carries the cert-manager issuer annotation and an https listener on the
+instance host, which is what cert-manager's Gateway support reads to issue the certificate
+into the listener's secret. (cert-manager must have Gateway support enabled; the OpenTofu
+install does that.) Every route sets hostnames explicitly, and the Gateway admits only
+routes from its own namespace.
+
+When TLS is on, every application rule also sets Strict-Transport-Security (max-age one year,
+includeSubDomains), which ingress-nginx sends by default for a TLS host and nothing else in the
+release sets. The application routes attach to the https listener and a small redirect
+route on the http listener sends every plain-HTTP request to https, which is what
+ingress-nginx does by default for a host that has a TLS section. With TLS off, the
+application routes attach to the http listener.
+
+An HTTPRoute holds at most 16 rules. Every route here stays far below that, and the render
+fails rather than emit an invalid object if a future area set would not.
+*/}}
+{{- if and .Values.ingress.enabled (eq .Values.ingress.controller "gateway") }}
+{{- $root := . -}}
+{{- $tls := .Values.ingress.tls -}}
+{{- $gw := .Values.ingress.gateway -}}
+{{- $host := .Values.ingress.host -}}
+{{- $ns := include "devicechain.instanceNamespace" . -}}
+{{- if .Values.ingress.annotations }}
+{{- fail "ingress.annotations are Ingress controller annotations and have no effect when ingress.controller is gateway. Remove them; to annotate the Gateway itself use ingress.gateway.annotations." }}
+{{- end }}
+{{- $appSection := ternary "https" "http" $tls.enabled -}}
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: devicechain
+  namespace: {{ $ns }}
+  labels:
+    {{- include "devicechain.instanceLabels" . | nindent 4 }}
+  {{- if or $tls.enabled $gw.annotations }}
+  annotations:
+    {{- if $tls.enabled }}
+    {{- if $tls.selfSigned }}
+    cert-manager.io/issuer: {{ $tls.issuerName }}
+    {{- else if $tls.clusterIssuer }}
+    cert-manager.io/cluster-issuer: {{ $tls.clusterIssuer }}
+    {{- end }}
+    {{- end }}
+    {{- with $gw.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- end }}
+spec:
+  gatewayClassName: {{ $gw.className }}
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      hostname: {{ $host | quote }}
+      allowedRoutes:
+        namespaces:
+          from: Same
+    {{- if $tls.enabled }}
+    - name: https
+      protocol: HTTPS
+      port: 443
+      # Required: cert-manager takes the certificate's DNS name from it.
+      hostname: {{ $host | quote }}
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - kind: Secret
+            name: {{ $tls.secretName }}
+      allowedRoutes:
+        namespaces:
+          from: Same
+    {{- end }}
+{{- if $tls.enabled }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: devicechain-https-redirect
+  namespace: {{ $ns }}
+  labels:
+    {{- include "devicechain.instanceLabels" . | nindent 4 }}
+spec:
+  parentRefs:
+    - name: devicechain
+      sectionName: http
+  hostnames:
+    - {{ $host | quote }}
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      filters:
+        - type: RequestRedirect
+          requestRedirect:
+            scheme: https
+            statusCode: 308
+{{- end }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: devicechain-api
+  namespace: {{ $ns }}
+  labels:
+    {{- include "devicechain.instanceLabels" . | nindent 4 }}
+spec:
+  parentRefs:
+    - name: devicechain
+      sectionName: {{ $appSection }}
+  hostnames:
+    - {{ $host | quote }}
+  rules:
+    {{- /* The set of areas with a public /api route is ingress.yaml's: an area that serves
+           no external API gets none (the route would expose its Prometheus endpoint
+           unauthenticated). The list is devicechain.areasWithoutPublicApi in both. */}}
+    {{- $noPublicApi := splitList "," (include "devicechain.areasWithoutPublicApi" $root) }}
+    {{- $rules := 0 }}
+    {{- range $area := splitList "," (include "devicechain.enabledAreas" $root) }}
+    {{- if not (has $area $noPublicApi) }}
+    {{- $rules = add1 $rules }}
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api/{{ $area }}
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplacePrefixMatch
+              replacePrefixMatch: /
+    {{- if $tls.enabled }}
+        - type: ResponseHeaderModifier
+          responseHeaderModifier:
+            set:
+              - name: Strict-Transport-Security
+                value: "max-age=31536000; includeSubDomains"
+    {{- end }}
+      backendRefs:
+        - name: {{ $area }}
+          port: {{ $root.Values.service.port }}
+    {{- end }}
+    {{- end }}
+    {{- if gt $rules 16 }}
+    {{- fail (printf "the API HTTPRoute would carry %d rules and a Gateway API HTTPRoute holds at most 16; split the route before adding another public area" $rules) }}
+    {{- end }}
+{{- $mcpEnabled := has "mcp" (splitList "," (include "devicechain.enabledAreas" $root)) }}
+{{- $asIssuer := include "devicechain.userManagementIssuerUrl" $root }}
+{{- if or $mcpEnabled $asIssuer }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: devicechain-wellknown
+  namespace: {{ $ns }}
+  labels:
+    {{- include "devicechain.instanceLabels" . | nindent 4 }}
+spec:
+  parentRefs:
+    - name: devicechain
+      sectionName: {{ $appSection }}
+  hostnames:
+    - {{ $host | quote }}
+  rules:
+    {{- if $mcpEnabled }}
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /.well-known/oauth-protected-resource
+    {{- if $tls.enabled }}
+      filters:
+        - type: ResponseHeaderModifier
+          responseHeaderModifier:
+            set:
+              - name: Strict-Transport-Security
+                value: "max-age=31536000; includeSubDomains"
+    {{- end }}
+      backendRefs:
+        - name: mcp
+          port: {{ $root.Values.service.port }}
+    {{- end }}
+    {{- if $asIssuer }}
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /.well-known/oauth-authorization-server
+    {{- if $tls.enabled }}
+      filters:
+        - type: ResponseHeaderModifier
+          responseHeaderModifier:
+            set:
+              - name: Strict-Transport-Security
+                value: "max-age=31536000; includeSubDomains"
+    {{- end }}
+      backendRefs:
+        - name: user-management
+          port: {{ $root.Values.service.port }}
+    {{- end }}
+{{- end }}
+{{- if .Values.frontend.enabled }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: devicechain-web
+  namespace: {{ $ns }}
+  labels:
+    {{- include "devicechain.instanceLabels" . | nindent 4 }}
+spec:
+  parentRefs:
+    - name: devicechain
+      sectionName: {{ $appSection }}
+  hostnames:
+    - {{ $host | quote }}
+  rules:
+    # No rewrite: the console nginx serves /_app/* verbatim and falls back to index.html
+    # itself, so the path must reach it unchanged. Port 80 is the frontend Service's.
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+    {{- if $tls.enabled }}
+      filters:
+        - type: ResponseHeaderModifier
+          responseHeaderModifier:
+            set:
+              - name: Strict-Transport-Security
+                value: "max-age=31536000; includeSubDomains"
+    {{- end }}
+      backendRefs:
+        - name: frontend
+          port: 80
+{{- end }}
+{{- end }}

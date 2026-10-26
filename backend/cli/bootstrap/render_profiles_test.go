@@ -141,6 +141,16 @@ var renderProfiles = []renderProfile{
 		},
 	},
 	{
+		// The Gateway API front end (ingress.controller: gateway), which renders a Gateway and
+		// HTTPRoutes in place of the Ingress objects. The full profile, so every route kind
+		// (the API, the well-known discovery route, the console) is in the release.
+		name: "--ha --profile full, Gateway API front end",
+		st:   profileState(true, false, "full"),
+		overrides: func() map[string]interface{} {
+			return map[string]interface{}{"ingress": map[string]interface{}{"controller": "gateway"}}
+		},
+	},
+	{
 		name: "--ha --no-tls",
 		st: func(instance string) *State {
 			st := profileState(true, false, "default")(instance)

@@ -502,12 +502,48 @@ re-opens every private address for every tenant.
 - Optional (`networkPolicy.enabled=true`): an egress `NetworkPolicy` for
   `outbound-connectors`. Requires a policy-enforcing CNI to do anything; see
   "Bounding tenant egress" above.
-- Optional (`ingress.enabled=true`): two `Ingress` objects on one host — the API
-  ingress routes `https://<host>/api/<area>/graphql` to each enabled area
-  (stripping the `/api/<area>` prefix), and the web ingress serves the console at
-  `https://<host>/`. Plus a cert-manager TLS `Issuer` (self-signed by default).
-  Requires the ingress-nginx controller + cert-manager from
+- Optional (`ingress.enabled=true`): the instance's routing on one host, in one of two forms
+  chosen by `ingress.controller`. `nginx` (the default) renders `Ingress` objects: the API
+  ingress routes `https://<host>/api/<area>/graphql` to each enabled area (stripping the
+  `/api/<area>` prefix), and the web ingress serves the console at `https://<host>/`, plus
+  the OAuth discovery route and the update-artifact upload and download routes. `gateway`
+  renders a Gateway API `Gateway` and `HTTPRoute`s that serve exactly the same hosts, paths
+  and backends, for any conformant controller (the OpenTofu install registers Traefik's
+  `GatewayClass`). Exactly one form is rendered. Either way a cert-manager TLS `Issuer`
+  (self-signed by default) is rendered. Requires the controller + cert-manager from
   [`deploy/opentofu`](https://github.com/devicechain-io/devicechain/tree/main/deploy/opentofu).
+
+  With `gateway`, what the nginx annotations did is the controller installation's job, not
+  the chart's. For a controller you bring yourself, it must:
+  - stream request bodies without buffering or capping them below the update-management
+    artifact ceiling, and keep each request open long enough for the largest upload (the
+    service authenticates before it reads the body, and enforces its own ceiling);
+  - serve WebSockets (GraphQL subscriptions) without cutting an idle socket inside the
+    service's 25 second ping interval;
+  - bound the time to the first response byte at 60 seconds, as ingress-nginx's default did;
+  - keep the query string of `/api/update-management/updates/download/` out of its access
+    log (the request carries a bearer capability there);
+  - replace any incoming `X-Forwarded-For` from an untrusted peer with the real peer, and
+    list the pod range of the controller (and every other trusted hop) in
+    `instance.config.infrastructure.http.trustedProxies` so the services read the device's
+    address and not the proxy's. `dcctl` derives the pod range itself, but an explicit
+    `--trusted-proxies` replaces the derived list, so it must then name the pod range AND
+    the other hops. Never read `Forwarded` or `X-Real-Ip`: they are not sanitised by every
+    controller;
+  - send `Strict-Transport-Security` (the chart sets `max-age=31536000; includeSubDomains`
+    on every https rule), which ingress-nginx did by default and no other part of the
+    release sets.
+
+  Two behaviours differ from ingress-nginx's by design: a Gateway API path match is
+  case-sensitive and ends on a path-element boundary, so `/API/<area>` and `/api/<area>X`
+  fall through to the console instead of reaching the area.
+
+  With `gateway` and a real certificate (`ingress.tls.selfSigned: false`), an ACME
+  `ClusterIssuer` must solve HTTP-01 through the Gateway API, not an Ingress: set
+  `gatewayHTTPRoute` in its solver with a `parentRef` to the `http` listener of the Gateway
+  named `devicechain` in the instance's namespace (`kind: Gateway`, `sectionName: http`). The
+  https-redirect route is a less specific match than the solver's challenge path, so it does
+  not intercept it.
 
 ## Values reference
 
@@ -591,14 +627,18 @@ generated from the schema; do not edit it by hand.
 | `livenessProbe.failureThreshold` | integer | `6` | Consecutive liveness failures before the container is restarted; kept high so a transient blip does not kill a healthy pod. |
 | `podSecurityContext` | object | see values.yaml | Pod-level securityContext. The hardened defaults run the workload as the non-root uid 65532 with the RuntimeDefault seccomp profile; relax them only if you build images that need to run as root. |
 | `securityContext` | object | see values.yaml | Container-level securityContext. The hardened defaults drop all Linux capabilities, forbid privilege escalation and use a read-only root filesystem; the service images are static binaries that write nothing to the root filesystem. |
-| `ingress` | object | - | Optional Ingress + cert-manager TLS exposing the GraphQL/HTTP surface (requires the OpenTofu ingress-nginx + cert-manager). |
-| `ingress.enabled` | boolean | `false` | Render the Ingress objects: the API, the well-known discovery route and the web console. Each enabled area is reachable at https://&lt;host&gt;/api/&lt;area&gt;/graphql and the console at https://&lt;host&gt;/. |
-| `ingress.className` | string | `"nginx"` | IngressClass the controller registered (the OpenTofu ingress_class). |
+| `ingress` | object | - | Optional routing + cert-manager TLS exposing the GraphQL/HTTP surface: Ingress objects (controller nginx) or a Gateway API Gateway with HTTPRoutes (controller gateway). Requires the OpenTofu controller + cert-manager. |
+| `ingress.enabled` | boolean | `false` | Render the routing objects: the API, the well-known discovery route and the web console. Each enabled area is reachable at https://&lt;host&gt;/api/&lt;area&gt;/graphql and the console at https://&lt;host&gt;/. |
+| `ingress.controller` | string | `"nginx"` | Which front end serves the host: nginx renders Ingress objects for the ingress-nginx controller, gateway renders a Gateway API Gateway and HTTPRoutes for any conformant controller. Exactly one is rendered, and both serve the same hosts, paths and backends. |
+| `ingress.className` | string | `"nginx"` | IngressClass the controller registered (the OpenTofu ingress_class). Used when controller is nginx. |
+| `ingress.gateway` | object | - | The Gateway API front end, used when controller is gateway. |
+| `ingress.gateway.className` | string | `"traefik"` | GatewayClass the controller registered (the OpenTofu gateway_class). |
+| `ingress.gateway.annotations` | object | `{}` | Annotations merged onto the Gateway, after the cert-manager issuer annotation. |
 | `ingress.host` | string | `"devicechain.local"` | Host name the Ingress objects route. The chart renders up to three: the API (https://&lt;host&gt;/api/&lt;area&gt;/graphql), the well-known discovery route for OAuth and MCP, and the web console (https://&lt;host&gt;/). |
-| `ingress.annotations` | object | `{}` | Extra annotations merged onto the Ingress objects (body size, timeouts and so on). |
-| `ingress.uploadMaxBodySize` | string | `"1g"` | Largest request body the update-artifact upload route accepts at the edge, as an nginx size (for example 1g). That route is rendered on its own Ingress with this limit and request buffering off. Keep it at or above the update-management artifact ceiling. |
+| `ingress.annotations` | object | `{}` | Extra annotations merged onto the Ingress objects (body size, timeouts and so on). Used when controller is nginx; with gateway they must be empty and the render refuses them. |
+| `ingress.uploadMaxBodySize` | string | `"1g"` | Largest request body the update-artifact upload route accepts at the edge, as an nginx size (for example 1g). That route is rendered on its own Ingress with this limit and request buffering off. Keep it at or above the update-management artifact ceiling. Used when controller is nginx; a Gateway API controller of the shipped kind caps no request body. |
 | `ingress.tls` | object | - | TLS for the Ingress, using cert-manager. |
-| `ingress.tls.enabled` | boolean | `true` | Terminate TLS at the Ingress. |
+| `ingress.tls.enabled` | boolean | `true` | Terminate TLS at the Ingress or the Gateway. |
 | `ingress.tls.selfSigned` | boolean | `true` | Render a cert-manager self-signed Issuer in the instance namespace: valid TLS that browsers do not trust, for development. For real certificates set false and name a ClusterIssuer in clusterIssuer. |
 | `ingress.tls.issuerName` | string | `"devicechain-selfsigned"` | Name of the self-signed Issuer the chart renders when selfSigned is true. |
 | `ingress.tls.clusterIssuer` | string | `""` | Name of an existing cert-manager ClusterIssuer (for example a Let's Encrypt ACME issuer) to request certificates from. Used when selfSigned is false. |
