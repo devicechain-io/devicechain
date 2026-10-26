@@ -56,6 +56,15 @@ updates:
         update-types:
           - "minor"
           - "patch"
+    # kustomize api/kyaml 0.21.3 move k8s.io/kube-openapi to structured-merge-diff/v7,
+    # while k8s.io/apimachinery 0.37.x still builds against v6, so backend/k8s and
+    # backend/cli stop compiling. Held at 0.21.2 by hand twice (#1782, #1868) and
+    # re-proposed every week since. Drop this once apimachinery moves to smd/v7.
+    ignore:
+      - dependency-name: "sigs.k8s.io/kustomize/api"
+        versions: [">= 0.21.3"]
+      - dependency-name: "sigs.k8s.io/kustomize/kyaml"
+        versions: [">= 0.21.3"]
     commit-message:
       prefix: "chore(deps)"
 
