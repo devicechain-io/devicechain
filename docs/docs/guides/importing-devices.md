@@ -43,6 +43,7 @@ A file may hold up to 10,000 rows and 5 MiB. A larger file is refused before it 
 | `name` | No | Up to 128 characters. |
 | `description` | No | Up to 1024 characters. |
 | `metadata` | No | A JSON document, up to 64 KiB. Compared by value on a re-run, so key order and spacing do not matter. |
+| `provisioningProfileToken` | No | The token of a [provisioning profile](./device-self-registration.md#earmarking) to earmark the device for, so that profile can adopt it when the device registers itself. It must exist and be of the device's type, or the row is `INVALID`. A device that already exists makes the row a `CONFLICT` whenever its earmark differs from the one the row names, including a device with no earmark: an import never updates an existing device, so it cannot earmark one. |
 | `credentialType` | Factory credentials only | `ACCESS_TOKEN` or `MQTT_BASIC`. |
 | `credentialId` | Factory credentials only | What the device presents: the access token itself, or the MQTT username. |
 | `credentialValue` | `MQTT_BASIC` only | The password, at least 16 bytes, at most 4096. Write-only. |

@@ -55,6 +55,8 @@ El broker de la plataforma es el servidor MQTT integrado en NATS. Un topic MQTT 
 - **Los dispositivos se conectan por MQTT, no por NATS directo.** Una credencial de dispositivo autoriza solo una conexión MQTT: un cliente NATS simple que presente una se rechaza al conectar. La columna de subjects es lo que ve un operador en las herramientas de NATS, no una segunda vía de entrada. La configuración de la conexión (el client id, el usuario `{tenant}:{credentialId}`, TLS) está en [Ajustes de conexión](../guides/connecting-a-device.md#connection-settings).
 - Publica los eventos con QoS 0, o con QoS 1 y un [`altId`](#device-event). Las publicaciones QoS 2 se rechazan por defecto y el broker cierra la conexión; consulta [Calidad de servicio](../guides/connecting-a-device.md#quality-of-service).
 
+Un dispositivo que todavía no tiene credencial llega a la plataforma por HTTPS para [registrarse por sí mismo](#self-registration), en `POST /api/device-management/provisioning/{tenant}/register`. Es un endpoint distinto de la ingesta de eventos, servido por `device-management`.
+
 Por **HTTP**, un dispositivo solo puede enviar eventos. Haz `POST` del mismo [cuerpo de evento](#device-event) a `/{instanceId}/{tenant}/events` en el servicio `event-sources` (puerto 8081). No hay canal de bajada por HTTP: un dispositivo que solo usa HTTP no puede recibir comandos, configuración ni asignaciones de actualización.
 
 ### El espacio de nombres de pasarela {#gateway-namespace}
@@ -189,6 +191,130 @@ Lo que un dispositivo publica en su topic `command-responses` para cerrar un com
 ```json
 {"commandToken":"6f1c0f8e-6d1e-4a1a-9a3f-1f2b0d0a5c11","dispatchNonce":"0f6f4a2c-9b71-4d0e-8a5b-3c2d1e0f7a94","success":false,"error":"actuator jammed"}
 ```
+
+## Autorregistro {#self-registration}
+
+Un dispositivo que todavía no tiene credencial puede registrarse por sí mismo, por HTTPS, con una **clave y un secreto de aprovisionamiento** compartidos por toda la flota, tomados de un [perfil de aprovisionamiento](../guides/device-self-registration.md). El dispositivo inventa su propia credencial, la envía una sola vez y la plataforma responde con el token del dispositivo y su id de cliente MQTT. La plataforma conserva solo un resumen (digest) de la credencial, y ninguna respuesta contiene un secreto.
+
+```text
+POST /api/device-management/provisioning/{tenant}/register
+```
+
+- **Solo HTTPS.** La petición lleva el secreto de aprovisionamiento en el cuerpo. No existe el registro por MQTT: un dispositivo no puede registrarse conectándose.
+- **Necesita el ingress de la API de la instancia**, que enruta `/api/<area>` a los servicios y elimina el prefijo. Con `ingress.enabled: false` la ruta no tiene ningún camino público. [`dcctl device register`](./dcctl.md#dcctl-device-register) usa el mismo host `--server` que los demás comandos.
+- **No hay cabecera `Authorization`.** La clave y el secreto de aprovisionamiento del cuerpo son la autenticación.
+
+### Petición {#self-registration-request}
+
+`Content-Type: application/json`, de **8 KiB** como máximo. Un campo que el esquema no define se rechaza, de modo que un campo mal escrito falla en lugar de registrar el dispositivo sin él.
+
+```json
+{
+  "provisionKey": "acme-sensors-2026",
+  "provisionSecret": "<shown once when the profile was created or rotated>",
+  "externalId": "SN-000123",
+  "credentialSecret": "<the device's own credential, 22 to 256 base64url characters>",
+  "name": "optional",
+  "metadata": { "optional": "object" }
+}
+```
+
+| Campo | Obligatorio | Reglas |
+| --- | :---: | --- |
+| `provisionKey`, `provisionSecret` | sí | De 1 a 256 caracteres cada uno. El secreto es el que el servidor generó para el perfil. |
+| `externalId` | sí | El número de serie u otro id del dispositivo, de 1 a 256 caracteres. Es como la plataforma encuentra el dispositivo. |
+| `credentialSecret` | sí | El material de credencial propio del dispositivo, que pasa a ser su token de acceso. **base64url** (letras, dígitos, `-` y `_`, sin relleno), **de 22 a 256 caracteres**. Genera 32 bytes aleatorios y codifícalos (43 caracteres). |
+| `name` | no | Como máximo 128 caracteres. Solo se usa cuando esta petición crea el dispositivo. |
+| `metadata` | no | Un objeto JSON. Solo se usa cuando esta petición crea el dispositivo. |
+
+**Genera la credencial en el dispositivo y guárdala antes de enviar la petición.** La plataforma no puede devolverla. Así, una petición cuya respuesta se perdió se puede repetir sin riesgo con el mismo material: se reconoce como una repetición y se responde `200`, en lugar de rechazarse como un segundo dispositivo.
+
+### Respuesta {#self-registration-response}
+
+`201` cuando la petición creó el dispositivo, `200` cuando adoptó uno existente o reconoció una repetición. El cuerpo es el mismo en los tres casos y no contiene nada secreto:
+
+```json
+{
+  "outcome": "CREATED",
+  "tenant": "acme",
+  "deviceToken": "pv-SN-000123-06e08144e3e8",
+  "externalId": "SN-000123",
+  "credentialType": "ACCESS_TOKEN",
+  "mqtt": { "clientId": "<instanceId>:acme:pv-SN-000123-06e08144e3e8" }
+}
+```
+
+| `outcome` | Estado | Significado |
+| --- | :---: | --- |
+| `CREATED` | `201` | El dispositivo no existía. El perfil (estrategia `ALLOW_NEW`) lo creó, del tipo de dispositivo del perfil y reservado para el perfil, con la credencial. El token del dispositivo se deriva del id externo y empieza por `pv-`. |
+| `ADOPTED` | `200` | El dispositivo ya existía, estaba reservado para este perfil y no tenía credencial. Se le dio esta. |
+| `REPLAYED` | `200` | El dispositivo ya tiene la credencial de este perfil y la petición presentó el mismo material. No se escribió nada. |
+
+Conéctate con el id de cliente de la respuesta y el nombre de usuario MQTT `{tenant}:{credentialSecret}` sin contraseña, como en [Ajustes de conexión](../guides/connecting-a-device.md#connection-settings). La respuesta no repite la credencial.
+
+### Qué decide la respuesta {#self-registration-decision}
+
+Todo rechazo se decide antes de escribir nada. Un dispositivo que la plataforma ya conoce se juzga con estos pasos, en orden, y el primero que coincide es la respuesta:
+
+| Paso | Condición | Respuesta |
+| :---: | --- | --- |
+| 1 | El dispositivo está deshabilitado. | `403 DEVICE_DISABLED` |
+| 2 | Su tipo de dispositivo no es el del perfil. | `409 DEVICE_TYPE_MISMATCH` |
+| 3 | No está reservado para este perfil. | `409 DEVICE_NOT_EARMARKED` |
+| 4 | La credencial de este perfil en él se deshabilitó o ha caducado. | `409 ALREADY_PROVISIONED`, con el mensaje «the device's credential was revoked; an operator must reset its provisioning» |
+| 5 | Tiene la credencial vigente de este perfil y el material coincide. | `200 REPLAYED` |
+| 6 | Tiene la credencial vigente de este perfil y el material difiere, o tiene cualquier otra credencial. | `409 ALREADY_PROVISIONED` |
+| 7 | No tiene credencial y el perfil ya ha registrado tantos dispositivos como su `maxDevices`. | `422 LIMIT_EXCEEDED` |
+| 8 | En cualquier otro caso. | `200 ADOPTED` |
+
+Un dispositivo que la plataforma no conoce (ningún dispositivo activo tiene este `externalId`) se crea con la estrategia `ALLOW_NEW` (`422 LIMIT_EXCEEDED` en el tope) y se rechaza con `404 DEVICE_NOT_REGISTERED` con `CHECK_PRE_PROVISIONED`. Ninguna estrategia adopta nunca un dispositivo que no se reservó para el perfil: un dispositivo creado por un operador solo lo toma un perfil al que alguien lo apuntó, y eso es [reservar](../guides/device-self-registration.md#earmarking).
+
+### Errores {#self-registration-errors}
+
+Un error responde `{ "code": "...", "message": "..." }`. El conjunto de códigos es cerrado. Un `429`, y un `503` por falta de capacidad, llevan además `Retry-After`, en segundos. Un mensaje nunca contiene un secreto y nunca dice qué parte de la autenticación falló.
+
+| Estado | `code` | Cuándo |
+| :---: | --- | --- |
+| `400` | `INVALID_VALUE` | El inquilino de la ruta no es un token válido; el cuerpo no es un único objeto JSON o lleva un campo no definido; un campo está fuera de rango (el mensaje nombra el campo, nunca su valor). |
+| `401` | `PROVISIONING_FAILED` | La clave o el secreto de aprovisionamiento no son válidos. **Es una sola respuesta para todas las causas**: un inquilino desconocido, una clave desconocida, un secreto incorrecto, un perfil deshabilitado o caducado, un perfil cuyo secreto el servidor nunca generó (consulta [rótalo](../guides/device-self-registration.md#rotate-required)) y un inquilino que se está eliminando. |
+| `403` | `DEVICE_DISABLED` | Paso 1 de arriba. |
+| `404` | `DEVICE_NOT_REGISTERED` | Un dispositivo desconocido con `CHECK_PRE_PROVISIONED`. |
+| `408` | `INVALID_VALUE` | El cuerpo no llegó dentro del plazo de lectura (10 segundos por defecto). Se cierra la conexión. |
+| `409` | `DEVICE_NOT_EARMARKED`, `DEVICE_TYPE_MISMATCH`, `ALREADY_PROVISIONED` | Pasos 3, 2, y 4 o 6 de arriba. |
+| `409` | `DEVICE_TOKEN_COLLISION` | El token de dispositivo derivado de este id externo lo tiene otro dispositivo. Debe resolverlo un operador. |
+| `413` | `INVALID_VALUE` | El cuerpo supera los 8 KiB. |
+| `422` | `LIMIT_EXCEEDED` | El perfil ha registrado tantos dispositivos como su `maxDevices`. |
+| `429` | `RATE_LIMITED` | Se agotó un límite: la asignación de la dirección de origen o los registros por segundo del inquilino. `Retry-After` indica cuánto esperar. |
+| `500` | `PROVISIONING_MISCONFIGURED` | El perfil no puede registrar nada: se eliminó su tipo de dispositivo, o su estrategia no es una que la plataforma conozca. Un operador debe corregir el perfil. |
+| `500` | `PROVISIONING_UNAVAILABLE` | Un fallo interno. El registro no se completó; reintenta más tarde. |
+| `501` | `CREDENTIAL_TYPE_UNSUPPORTED` | El perfil emite un tipo de credencial que esta versión no puede emitir. Terminal; nunca recurre a otro tipo. |
+| `503` | `PROVISIONING_UNAVAILABLE` | La réplica está ocupada (con `Retry-After`), o la instancia no tiene claves con las que comprobar un secreto de aprovisionamiento (sin él). |
+
+### Los límites {#self-registration-limits}
+
+Los límites impiden que quien no se ha autenticado haga que el servicio gaste más de lo que vale la petición, y evitan que una tanda de fábrica ahogue al resto del inquilino. En el orden en que se aplican:
+
+1. **Un plazo para el cuerpo.** El cuerpo debe llegar en 10 segundos (`provisioning.readDeadline`, como máximo 1 minuto). Una petición que aún envía su cuerpo no retiene nada salvo su propia conexión.
+2. **Un tope de tamaño y el análisis.** 8 KiB, y el cuerpo se lee y se valida antes de que la petición cuente para nada de lo siguiente.
+3. **Un límite de peticiones simultáneas**: 64 por réplica (`provisioning.maxInFlight`); después, `503` con `Retry-After`.
+4. **Una asignación por origen**: una ráfaga de 60 peticiones y después una por segundo, por dirección de cliente y por réplica (`provisioning.sourceBurst`, `provisioning.sourceEvery`). Los clientes IPv6 se cuentan por /64. Nada exime a un origen que ya tuvo éxito antes. La dirección es la del cliente real solo cuando se indica a los servicios en qué proxies confiar: consulta [Direcciones de cliente y proxies de confianza](../deployment/bootstrap.md#trusted-proxies).
+5. **Un techo por inquilino**, que se cobra solo una vez aceptados la clave y el secreto de aprovisionamiento: por defecto una ráfaga de 500 y 20 registros por segundo, resuelto mediante el [nivel y las anulaciones](../concepts/tenant-tiers.md) del inquilino como los demás techos de [gobernanza](../concepts/governance.md). Un ajuste ausente o inalcanzable significa el valor por defecto de la plataforma, nunca ilimitado.
+6. **Un tope por perfil**: `maxDevices`, fijado por el operador. Sin él, el perfil no tiene tope.
+
+No hay límite para adivinar el secreto de aprovisionamiento, porque no se puede adivinar: son 256 bits aleatorios, comparados en tiempo constante, y una clave desconocida cuesta el mismo trabajo que un secreto incorrecto. En su lugar, una avalancha sostenida de `401` activa una [alerta](../deployment/observability.md#self-registration-alerts).
+
+### El contrato de reintentos {#self-registration-retry}
+
+Guarda la credencial antes del primer envío y presenta **la misma credencial en cada reintento**.
+
+| Respuesta | Qué hacer |
+| --- | --- |
+| `429`, o `503` con `Retry-After` | Espera `Retry-After` más un añadido aleatorio del 0 al 100 % de ese valor y reintenta. |
+| Un error de red, un tiempo de espera agotado, `408`, `502`, `504`, `503` sin `Retry-After`, o `500` con `PROVISIONING_UNAVAILABLE` | Retrocede de forma exponencial de 1 segundo a 5 minutos, con jitter completo, y reintenta. |
+| `400`, `413` | Detente. La petición es incorrecta; es un defecto del firmware. |
+| `401`, `403`, `404`, `409`, `422`, `501`, `500` con `PROVISIONING_MISCONFIGURED` | Detente e informa. Reintentar no puede cambiar la respuesta; tiene que hacerlo un operador. |
+
+El jitter importa: una flota que se enciende a la vez y reintenta al unísono vuelve a llegar a la vez. [`dcctl device register`](./dcctl.md#dcctl-device-register) implementa este contrato y es la referencia para quienes escriben firmware.
 
 ## Rechazos y errores {#rejections}
 

@@ -106,7 +106,7 @@ AI 模型使用资格采用相同回退：先使用租户模型分配，再使�
 削减流量作为运维指标报告。运维人员可以在问题变成支持请求之前，发现达到上限的租户或开始过量输出的规则。治理应表现为可观察的压力，而不是静默丢失。
 
 :::note 状态
-**目前已执行：**每租户接入速率限制（event-sources）、动作传递两端的出站治理（event-processing 和 outbound-connectors）、带费用可观测性的每租户 AI 推理速率限制，以及每租户未投递命令上限（command-delivery）。全部遵循上述安全回退规则。
+**目前已执行：**每租户接入速率限制（event-sources）、动作传递两端的出站治理（event-processing 和 outbound-connectors）、带费用可观测性的每租户 AI 推理速率限制，每租户未投递命令上限（command-delivery），以及每租户的[设备自注册](../guides/device-self-registration.md#operating)速率（device-management；默认突发 500、每秒 20 次注册，通过层级或租户覆盖项以 `provisioningBurst` 和 `provisioningRegistrationsPerSecond` 设置）。全部遵循上述安全回退规则。
 
 **计划采用同一模型：**每租户 API/查询治理、内部消息总线的每租户流容量限制，以及关系扇出上限。
 :::

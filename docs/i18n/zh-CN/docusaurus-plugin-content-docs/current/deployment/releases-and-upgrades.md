@@ -2117,6 +2117,32 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 
 无须操作。
 
+### v0.25.2 之后的版本：设备可以自行注册 {#self-registration-upgrade}
+
+本节写在发布[设备自注册](../guides/device-self-registration.md)的版本之前，因此标题中的版本号留待该版本来命名。它适用于从 `v0.25.2` 或更早版本升级。device-management 新增一个会自动运行的数据库迁移，下面的 API 变更对任何用脚本管理自动注册配置的做法都是破坏性的。
+
+在此之前，自动注册配置可以创建和编辑，但没有任何东西会读取它：没有设备能通过它注册。因此，没有任何昨天还能工作的东西会因为某个设备群在用它而停止工作。变化的是配置的创建方式以及它的要求。
+
+#### 自动注册配置 {#self-registration-profiles}
+
+- **预配密文由服务器生成。**`createProvisioningProfile` 不再接受 `provisionSecret`。它返回 `{ profile, issuedSecret }`，而过去返回的是配置本身，并且 `issuedSecret` **只显示一次**。从结果中选取 `token` 的脚本现在必须选取 `profile { token }`。`updateProvisioningProfile` 同样不再接受 `provisionSecret`。`rotateProvisioningProfileSecret(token)` 是替换密文的唯一方式。两者对基于旧 Schema 构建的客户端都是破坏性的：请重新生成基于旧 Schema 构建的客户端，并检查你的脚本。新增操作列在[自动注册配置](../reference/graphql-api.md#provisioning-profiles)下。
+- **现有配置在你轮换之前会被拒绝。**新端点不接受由运维人员选定的密文，只接受服务器生成的密文。升级时已存在的每个配置，在注册时都会返回 `401 PROVISIONING_FAILED`，控制台会将其标记为**需要轮换（Rotate required）**（GraphQL 中 `secretIssued` 为 `false`）。轮换它，复制新密文，并交给设备群。配置的其他设置都不变。**本次升级无法撤销。**数据库中的自动注册配置密文和设备认领密文会被替换为摘要，而该迁移拒绝回滚（明文已不存在，删除摘要会销毁所有密文）。若必须回到更早的版本，请从备份恢复。
+- **预配密钥按租户唯一，而不是整个实例唯一。**两个租户现在可以使用相同的密钥。让它在实例范围内唯一的数据库约束，被按租户的约束取代。
+- **配置可以有上限。**`maxDevices` 是新增的可选项。未设置它的配置仍然没有上限。
+
+#### 设备 {#self-registration-devices}
+
+- **只有已为某配置预指定的设备，该配置才会采用。**在两种策略下（包括 `ALLOW_NEW`），已存在但未为该配置预指定的设备都会被 `409 DEVICE_NOT_EARMARKED` 拒绝。预指定的方式是在 `createDevice` 和 `importDevices` 上使用 `provisioningProfileToken`，或使用控制台的**预期自动注册配置（Expected provisioning profile）**。现有设备没有预指定，而预指定只能在创建设备时设置：`updateDevice` 没有这个字段，对已存在设备的 `importDevices` 行，只要其预指定不同（包括设备没有预指定），就是 `CONFLICT`。因此，配置永远无法采用在本次升级之前创建的设备。这样的设备仍会用它已有的凭据继续工作；若要把它纳入某个配置，请创建一台为该配置预指定的新设备。
+- **只要配置还有签发出去的凭据，就不能删除它**，只要还有配置使用某个设备类型，就不能删除该设备类型。两者都返回 `REFERENCE_VIOLATION`。请先重置或删除相关设备。
+
+#### 运行与维护 {#self-registration-operating}
+
+- **端点需要 API Ingress。**`POST /api/device-management/provisioning/{tenant}/register` 通过与 GraphQL API 相同的 `/api/<area>` 路由访问。`ingress.enabled: false` 的实例没有通往它的公开路径。
+- **`dcctl bootstrap` 和 `dcctl upgrade` 现在会根据集群的 Pod 地址范围渲染 `infrastructure.http.trustedProxies`**，使按来源的限制看到的是设备，而不是 Ingress 控制器。实例配置会变化，因此各服务会随滚动升级一起重启。如果你运行自己的 Ingress 控制器，或位于负载均衡器之后，请检查它：[客户端地址与受信任代理](./bootstrap.md#trusted-proxies)。没有它，每个 Ingress Pod 之下的所有设备会共用同一份请求配额，陌生人可以把它用光。
+- **新增配置**，全部可选，位于 device-management 的 `provisioning` 键下：`readDeadline`、`maxInFlight`、`maxConcurrentRegistrations`、`sourceBurst` 和 `sourceEvery`。默认值见[限制](../reference/device-protocol.md#self-registration-limits)。
+- **新增指标和三条告警**（`ProvisioningAuthFailuresSustained`、`ProvisioningRateLimited`、`ProvisioningMisconfigured`）随 Chart 一起提供。在不使用该端点的实例上它们保持安静。见[设备自注册](./observability.md#self-registration-alerts)。
+- **新增一个治理维度**，限制租户能进行的注册数：默认突发 500，每秒 20 次，可按层级或按租户设置。见[治理与配额](../concepts/governance.md)。
+
 ### v0.25.2：服务令牌签发离开公共端口 {#v0252-upgrade}
 
 `v0.25.2` 是 `v0.25.1` 的安全补丁。没有迁移，API、主题、权限均无变化。实例配置新增一个键

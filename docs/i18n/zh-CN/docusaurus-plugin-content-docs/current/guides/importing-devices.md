@@ -43,6 +43,7 @@ title: 从 CSV 导入设备
 | `name` | 否 | 最多 128 个字符。 |
 | `description` | 否 | 最多 1024 个字符。 |
 | `metadata` | 否 | JSON 文档，最大 64 KiB。重复运行时按值比较，所以键的顺序和空格无关紧要。 |
+| `provisioningProfileToken` | 否 | 要为该设备预指定的[自动注册配置](./device-self-registration.md#earmarking)的令牌，使该配置在设备自行注册时可以采用它。它必须存在且设备类型与设备相同，否则该行为 `INVALID`。只要已存在设备的预指定与该行指定的不同（包括设备没有预指定），该行就是 `CONFLICT`：导入从不更新已存在的设备，因此无法为其预指定。 |
 | `credentialType` | 仅出厂凭据 | `ACCESS_TOKEN` 或 `MQTT_BASIC`。 |
 | `credentialId` | 仅出厂凭据 | 设备出示的内容：访问令牌本身，或 MQTT 用户名。 |
 | `credentialValue` | 仅 `MQTT_BASIC` | 密码，至少 16 字节，最多 4096 字节。只写。 |

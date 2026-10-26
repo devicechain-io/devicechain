@@ -591,19 +591,35 @@ de vuelta como `null`.
   dejar el otro establecido se rechaza, porque un ámbito necesita ambos.
 - **Un campo obligatorio tampoco se puede limpiar, aunque no sea una referencia.** El `dataType` de
   una métrica, el `credentialType` y el `enabled` de una credencial, la `definition` y el `enabled`
-  de una regla, la `geometry` de un geocerco, la `provisionKey` y el `provisionSecret` de un perfil de
+  de una regla, la `geometry` de un geocerco, la `provisionKey` de un perfil de
   aprovisionamiento: envía un valor para cambiarlo, omítelo para dejarlo tal cual, y un `null`
   explícito se rechaza. El fallo que esto evita es invisible: convertir `enabled: null` en `false`
   desactivaría una credencial o aparcaría una regla y devolvería éxito, y `false` es un valor que
   podrías haber enviado legítimamente.
-- **Omitir un secreto ahora lo conserva.** El `credentialValue` de `updateDeviceCredential` y el
-  `provisionSecret` de `updateProvisioningProfile` quedaban en blanco con cualquier actualización que
-  no los repitiera. Eso dejaba sin conexión a un dispositivo, o a toda una flota que se autorregistra,
-  en su siguiente conexión, con un `200` en la edición que lo rompió.
+- **Omitir un secreto ahora lo conserva.** El `credentialValue` de `updateDeviceCredential` quedaba en
+  blanco con cualquier actualización que no lo repitiera, lo que dejaba sin conexión al dispositivo en
+  su siguiente conexión, con un `200` en la edición que lo rompió. El secreto de un perfil de
+  aprovisionamiento no lo puede cambiar ninguna actualización: `updateProvisioningProfile` no tiene
+  campo de secreto, y `rotateProvisioningProfileSecret` es la única forma de reemplazarlo.
 
 `metadata` se reemplaza por completo cuando lo envías, y se limpia con `null`. Es una cadena JSON
 opaca en el esquema, no un mapa, así que no hay fusión clave a clave que elegir: la API nunca ha
 podido direccionar una clave individual.
+
+## Perfiles de aprovisionamiento {#provisioning-profiles}
+
+Las operaciones de perfiles de aprovisionamiento pertenecen al [autorregistro de dispositivos](../guides/device-self-registration.md). Las mutaciones requieren `device:write` y las consultas `device:read`; se rechaza a quien llama con una membresía restringida a un cliente en todas ellas.
+
+| Operación | Qué hace |
+| --- | --- |
+| `createProvisioningProfile` | Crea un perfil y devuelve `{ profile, issuedSecret }`. El servidor genera el secreto (43 caracteres, 256 bits) y esta respuesta es el único lugar donde aparece: la plataforma almacena un resumen. La petición no tiene `provisionSecret`. `maxDevices` (al menos 1, u omitido para no tener tope) limita cuántos dispositivos registra el perfil. |
+| `rotateProvisioningProfileSecret(token)` | Reemplaza el secreto y devuelve el nuevo una sola vez. El anterior deja de funcionar al instante, sin solapamiento. Los dispositivos registrados no se ven afectados. También es lo que pone en servicio un perfil creado antes de que el servidor generara secretos. |
+| `updateProvisioningProfile` | Una actualización parcial. No tiene campo de secreto. `maxDevices` se puede fijar, o limpiar con `null`. |
+| `revokeProvisionedDevices(profileToken)` | Deshabilita todas las credenciales que emitió el perfil, cierra las sesiones activas de esos dispositivos y devuelve cuántas deshabilitó. |
+| `resetDeviceProvisioning(deviceToken)` | Elimina las credenciales que el autorregistro emitió a un dispositivo y cierra sus sesiones. El dispositivo conserva su reserva, así que puede registrarse de nuevo. |
+| `deleteProvisioningProfile(token)` | Se rechaza (`REFERENCE_VIOLATION`) mientras algún dispositivo conserve una credencial que emitió el perfil, incluidas las revocadas. |
+
+En cuanto a los tipos, `ProvisioningProfile` gana `maxDevices`, `provisionedDeviceCount` y `secretIssued` (falso hasta que el servidor ha generado el secreto, que es cuando el perfil está en **Requiere rotación**). Un dispositivo gana `expectedProvisioningProfile`, su reserva, y una credencial gana `provisioningProfile`. `createDevice` e `importDevices` aceptan `provisioningProfileToken` para reservar un dispositivo, y `DeviceSearchCriteria` acepta `provisioningProfile` y `expectedProvisioningProfile`. El endpoint en sí es HTTP simple y se describe en la [referencia del protocolo de dispositivo](./device-protocol.md#self-registration).
 
 ## Validación de entrada {#input-validation}
 

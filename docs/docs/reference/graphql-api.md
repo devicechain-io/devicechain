@@ -561,17 +561,33 @@ a whitespace-only value or `null` clears it, so it reads back as `null`.
   Clearing one and leaving the other set is refused, because a scope needs both.
 - **A required field cannot be cleared either, even when it is not a reference.** A metric's
   `dataType`, a credential's `credentialType` and `enabled`, a rule's `definition` and `enabled`, a
-  fence's `geometry`, a provisioning profile's `provisionKey` and `provisionSecret`: send a value to
+  fence's `geometry`, a provisioning profile's `provisionKey`: send a value to
   change one, omit it to leave it alone, and an explicit `null` is refused. The failure this
   prevents is invisible: folding `enabled: null` to `false` would disable a credential or park a rule
   and return success, and `false` is a value you could legitimately have sent.
-- **Omitting a secret now keeps it.** `credentialValue` on `updateDeviceCredential` and
-  `provisionSecret` on `updateProvisioningProfile` used to be blanked by any update that failed to
-  restate them. That took a device, or a whole self-registering fleet, offline at its next
-  connection, with a `200` on the edit that broke it.
+- **Omitting a secret now keeps it.** `credentialValue` on `updateDeviceCredential` used to be
+  blanked by any update that failed to restate it, which took the device offline at its next
+  connection, with a `200` on the edit that broke it. A provisioning profile's secret cannot be
+  changed by an update at all: `updateProvisioningProfile` has no secret field, and
+  `rotateProvisioningProfileSecret` is the only way to replace it.
 
 `metadata` is replaced wholesale when you send it, and cleared by `null`. It is an opaque JSON string
 in the schema rather than a map, so there is no per-key merge to choose between: the API has never been able to address an individual key.
+
+## Provisioning profiles {#provisioning-profiles}
+
+The provisioning-profile operations belong to [device self-registration](../guides/device-self-registration.md). The mutations need `device:write` and the queries `device:read`; a caller whose membership is scoped to a customer is refused on all of them.
+
+| Operation | What it does |
+| --- | --- |
+| `createProvisioningProfile` | Creates a profile and returns `{ profile, issuedSecret }`. The server generates the secret (43 characters, 256 bits) and this response is the only place it appears: the platform stores a digest. The request has no `provisionSecret`. `maxDevices` (at least 1, or omitted for no cap) bounds how many devices the profile registers. |
+| `rotateProvisioningProfileSecret(token)` | Replaces the secret and returns the new one once. The old secret stops working at once, with no overlap. Registered devices are unaffected. It is also what brings a profile created before the server generated secrets into service. |
+| `updateProvisioningProfile` | A partial update. It has no secret field. `maxDevices` can be set, or cleared with `null`. |
+| `revokeProvisionedDevices(profileToken)` | Disables every credential the profile issued, ends those devices' live sessions, and returns how many it disabled. |
+| `resetDeviceProvisioning(deviceToken)` | Deletes the credentials self-registration issued to a device and ends its sessions. The device keeps its earmark, so it can register again. |
+| `deleteProvisioningProfile(token)` | Refused (`REFERENCE_VIOLATION`) while any device holds a credential the profile issued, revoked ones included. |
+
+On the types, `ProvisioningProfile` gains `maxDevices`, `provisionedDeviceCount` and `secretIssued` (false until the server has generated the secret, which is when the profile is **Rotate required**). A device gains `expectedProvisioningProfile`, its earmark, and a credential gains `provisioningProfile`. `createDevice` and `importDevices` take `provisioningProfileToken` to earmark a device, and `DeviceSearchCriteria` takes `provisioningProfile` and `expectedProvisioningProfile`. The endpoint itself is plain HTTP and described in the [device protocol reference](./device-protocol.md#self-registration).
 
 ## Input validation {#input-validation}
 

@@ -55,6 +55,8 @@ The platform broker is the MQTT server built into NATS. An MQTT topic and the NA
 - **Devices connect over MQTT, not raw NATS.** A device credential authorizes an MQTT connection only: a plain NATS client presenting one is refused at connect. The subject column is what an operator sees in NATS tooling, not a second way in. Connection settings (the client id, the `{tenant}:{credentialId}` username, TLS) are in [Connection settings](../guides/connecting-a-device.md#connection-settings).
 - Publish events at QoS 0, or at QoS 1 with an [`altId`](#device-event). QoS 2 publishes are refused by default and the broker closes the connection; see [Quality of service](../guides/connecting-a-device.md#quality-of-service).
 
+A device with no credential yet reaches the platform over HTTPS to [register itself](#self-registration), at `POST /api/device-management/provisioning/{tenant}/register`. That is a separate endpoint from event ingest, served by `device-management`.
+
 Over **HTTP**, a device can send events only. `POST` the same [event body](#device-event) to `/{instanceId}/{tenant}/events` on the `event-sources` service (port 8081). There is no HTTP downlink: an HTTP-only device cannot receive commands, configuration or update assignments.
 
 ### The gateway namespace {#gateway-namespace}
@@ -189,6 +191,130 @@ What a device publishes on its `command-responses` topic to settle a command. Th
 ```json
 {"commandToken":"6f1c0f8e-6d1e-4a1a-9a3f-1f2b0d0a5c11","dispatchNonce":"0f6f4a2c-9b71-4d0e-8a5b-3c2d1e0f7a94","success":false,"error":"actuator jammed"}
 ```
+
+## Self-registration {#self-registration}
+
+A device that has no credential yet can register itself, over HTTPS, with a fleet-wide **provision key and secret** from a [provisioning profile](../guides/device-self-registration.md). It makes up its own credential, sends it once, and the platform answers with the device's token and MQTT client id. The platform keeps only a digest of the credential, and no response contains a secret.
+
+```text
+POST /api/device-management/provisioning/{tenant}/register
+```
+
+- **HTTPS only.** The request carries the provision secret in its body. There is no MQTT registration: a device cannot register by connecting.
+- **It needs the instance's API ingress**, which routes `/api/<area>` to the services and strips the prefix. With `ingress.enabled: false` the route has no public path. [`dcctl device register`](./dcctl.md#dcctl-device-register) takes the same `--server` host as the other commands.
+- **There is no `Authorization` header.** The provision key and secret in the body are the authentication.
+
+### Request {#self-registration-request}
+
+`Content-Type: application/json`, at most **8 KiB**. A field the schema does not define is refused, so a misspelled field fails instead of registering the device without it.
+
+```json
+{
+  "provisionKey": "acme-sensors-2026",
+  "provisionSecret": "<shown once when the profile was created or rotated>",
+  "externalId": "SN-000123",
+  "credentialSecret": "<the device's own credential, 22 to 256 base64url characters>",
+  "name": "optional",
+  "metadata": { "optional": "object" }
+}
+```
+
+| Field | Required | Rules |
+| --- | :---: | --- |
+| `provisionKey`, `provisionSecret` | yes | 1 to 256 characters each. The secret is the one the server generated for the profile. |
+| `externalId` | yes | The device's serial number or other id, 1 to 256 characters. It is how the platform finds the device. |
+| `credentialSecret` | yes | The device's own credential material, which becomes its access token. **base64url** (letters, digits, `-` and `_`, no padding), **22 to 256 characters**. Generate 32 random bytes and encode them (43 characters). |
+| `name` | no | At most 128 characters. Used only when this request creates the device. |
+| `metadata` | no | A JSON object. Used only when this request creates the device. |
+
+**Generate the credential on the device and store it before you send the request.** The platform cannot give it back. A request whose answer was lost is then safe to repeat with the same material: it is recognised as a replay and answered `200`, instead of being refused as a second device.
+
+### Response {#self-registration-response}
+
+`201` when the request created the device, `200` when it adopted an existing one or recognised a replay. The body is the same in all three cases and holds nothing secret:
+
+```json
+{
+  "outcome": "CREATED",
+  "tenant": "acme",
+  "deviceToken": "pv-SN-000123-06e08144e3e8",
+  "externalId": "SN-000123",
+  "credentialType": "ACCESS_TOKEN",
+  "mqtt": { "clientId": "<instanceId>:acme:pv-SN-000123-06e08144e3e8" }
+}
+```
+
+| `outcome` | Status | Meaning |
+| --- | :---: | --- |
+| `CREATED` | `201` | The device did not exist. The profile (strategy `ALLOW_NEW`) created it, of the profile's device type and earmarked for the profile, with the credential. The device token is derived from the external id and starts with `pv-`. |
+| `ADOPTED` | `200` | The device already existed, was earmarked for this profile and held no credential. It was given this one. |
+| `REPLAYED` | `200` | The device already holds this profile's credential and the request presented the same material. Nothing was written. |
+
+Connect with the client id from the response and the MQTT username `{tenant}:{credentialSecret}` with no password, as in [Connection settings](../guides/connecting-a-device.md#connection-settings). The response does not repeat the credential.
+
+### What decides the answer {#self-registration-decision}
+
+Every refusal is decided before anything is written. A device the platform already knows is judged by these steps in order, and the first that matches is the answer:
+
+| Step | Condition | Answer |
+| :---: | --- | --- |
+| 1 | The device is disabled. | `403 DEVICE_DISABLED` |
+| 2 | Its device type is not the profile's. | `409 DEVICE_TYPE_MISMATCH` |
+| 3 | It is not earmarked for this profile. | `409 DEVICE_NOT_EARMARKED` |
+| 4 | This profile's credential on it was disabled or has expired. | `409 ALREADY_PROVISIONED`, with the message "the device's credential was revoked; an operator must reset its provisioning" |
+| 5 | It holds this profile's live credential and the material matches. | `200 REPLAYED` |
+| 6 | It holds this profile's live credential and the material differs, or it holds any other credential. | `409 ALREADY_PROVISIONED` |
+| 7 | It holds no credential and the profile has registered as many devices as its `maxDevices`. | `422 LIMIT_EXCEEDED` |
+| 8 | Otherwise. | `200 ADOPTED` |
+
+A device the platform does not know (no live device has this `externalId`) is created under the strategy `ALLOW_NEW` (`422 LIMIT_EXCEEDED` at the cap), and refused with `404 DEVICE_NOT_REGISTERED` under `CHECK_PRE_PROVISIONED`. Neither strategy ever adopts a device that was not earmarked for the profile: an operator-made device is taken over only by a profile somebody pointed at it, which is what [earmarking](../guides/device-self-registration.md#earmarking) is.
+
+### Errors {#self-registration-errors}
+
+An error answers `{ "code": "...", "message": "..." }`. The set of codes is closed. A `429`, and a `503` for want of capacity, also carry `Retry-After`, in seconds. A message never contains a secret and never says which part of the authentication failed.
+
+| Status | `code` | When |
+| :---: | --- | --- |
+| `400` | `INVALID_VALUE` | The tenant in the path is not a valid token; the body is not one JSON object or carries a field that is not defined; a field is out of range (the message names the field, never its value). |
+| `401` | `PROVISIONING_FAILED` | The provision key or secret is not valid. **This is one answer for every cause**: an unknown tenant, an unknown key, a wrong secret, a profile that is disabled or expired, a profile whose secret the server never generated (see [rotate it](../guides/device-self-registration.md#rotate-required)) and a tenant that is being deleted. |
+| `403` | `DEVICE_DISABLED` | Step 1 above. |
+| `404` | `DEVICE_NOT_REGISTERED` | An unknown device under `CHECK_PRE_PROVISIONED`. |
+| `408` | `INVALID_VALUE` | The body did not arrive within the read deadline (10 seconds by default). The connection is closed. |
+| `409` | `DEVICE_NOT_EARMARKED`, `DEVICE_TYPE_MISMATCH`, `ALREADY_PROVISIONED` | Steps 3, 2, and 4 or 6 above. |
+| `409` | `DEVICE_TOKEN_COLLISION` | The device token derived from this external id is held by a different device. An operator must resolve it. |
+| `413` | `INVALID_VALUE` | The body is over 8 KiB. |
+| `422` | `LIMIT_EXCEEDED` | The profile has registered as many devices as its `maxDevices`. |
+| `429` | `RATE_LIMITED` | A limit is used up: the source address's allowance or the tenant's registrations per second. `Retry-After` says how long to wait. |
+| `500` | `PROVISIONING_MISCONFIGURED` | The profile cannot register anything: its device type was deleted, or its strategy is not one the platform knows. An operator must fix the profile. |
+| `500` | `PROVISIONING_UNAVAILABLE` | An internal failure. The registration was not completed; retry later. |
+| `501` | `CREDENTIAL_TYPE_UNSUPPORTED` | The profile mints a credential type this build cannot. Terminal; it never falls back to another type. |
+| `503` | `PROVISIONING_UNAVAILABLE` | The replica is busy (with `Retry-After`), or the instance has no keys to check a provision secret with (without). |
+
+### The limits {#self-registration-limits}
+
+The limits keep someone who has not authenticated from making the service spend more than the request is worth, and keep one factory run from drowning the rest of the tenant. In the order they apply:
+
+1. **A body deadline.** The body must arrive within 10 seconds (`provisioning.readDeadline`, at most 1 minute). A request still sending its body holds nothing but its own connection.
+2. **A size cap and parse.** 8 KiB, and the body is read and validated before the request counts against anything below.
+3. **A bound on concurrent requests**: 64 per replica (`provisioning.maxInFlight`), then `503` with `Retry-After`.
+4. **A per-source allowance**: a burst of 60 requests, then one a second, per client address and per replica (`provisioning.sourceBurst`, `provisioning.sourceEvery`). IPv6 clients are counted by /64. Nothing exempts a source that has succeeded before. The address is the real client's only when the services are told which proxies to believe: see [Client addresses and trusted proxies](../deployment/bootstrap.md#trusted-proxies).
+5. **A per-tenant ceiling**, charged only once the provision key and secret have been accepted: by default a burst of 500 and 20 registrations a second, resolved through the tenant's [tier and overrides](../concepts/tenant-tiers.md) like the other [governance](../concepts/governance.md) ceilings. A missing or unreachable setting means the platform default, never unlimited.
+6. **A cap per profile**: `maxDevices`, set by the operator. Without one, the profile is uncapped.
+
+There is no limit on guessing the provision secret, because it cannot be guessed: it is 256 random bits, compared in constant time, and an unknown key costs the same work as a wrong secret. A sustained flood of `401`s raises an [alert](../deployment/observability.md#self-registration-alerts) instead.
+
+### The retry contract {#self-registration-retry}
+
+Persist the credential before the first send, and present **the same credential on every retry**.
+
+| Answer | What to do |
+| --- | --- |
+| `429`, or `503` with `Retry-After` | Wait `Retry-After` plus a random extra of 0 to 100% of it, then retry. |
+| A network error, a timeout, `408`, `502`, `504`, `503` without `Retry-After`, or `500` with `PROVISIONING_UNAVAILABLE` | Back off exponentially from 1 second to 5 minutes, with full jitter, then retry. |
+| `400`, `413` | Stop. The request is wrong; this is a firmware defect. |
+| `401`, `403`, `404`, `409`, `422`, `501`, `500` with `PROVISIONING_MISCONFIGURED` | Stop and report. Retrying cannot change the answer; an operator has to. |
+
+The jitter matters: a fleet that powers on together and retries in step arrives together again. [`dcctl device register`](./dcctl.md#dcctl-device-register) implements this contract and is the reference for firmware authors.
 
 ## Rejections and errors {#rejections}
 

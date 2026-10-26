@@ -457,16 +457,31 @@ OAuth 客户端的重定向 URI 和 scope 不可清空：空重定向允许列�
   对 `entityGroupToken` 和 `entityGroupVersion` 都发送 `null`。
   清除一项却保留另一项会被拒绝，因为范围同时需要两项。
 - **必需字段即使不是引用，也不能清除。**指标的 `dataType`、凭据的 `credentialType` 和 `enabled`、
-  规则的 `definition` 和 `enabled`、围栏的 `geometry`、自动注册配置的 `provisionKey` 和 `provisionSecret`：
+  规则的 `definition` 和 `enabled`、围栏的 `geometry`、自动注册配置的 `provisionKey`：
   发送值则修改，省略则保持，明确的 `null` 被拒绝。
   这防止一种不可见失败：把 `enabled: null` 转成 `false` 会禁用凭据或停用规则并返回成功，
   而 `false` 又是完全合法的明确值。
-- **省略密钥现在会保留它。**`updateDeviceCredential` 的 `credentialValue` 和
-  `updateProvisioningProfile` 的 `provisionSecret` 过去会在任何未重发它们的更新中被清空。
-  设备或整批自动注册设备会在下次连接时离线，而破坏它们的编辑却返回 `200`。
+- **省略密钥现在会保留它。**`updateDeviceCredential` 的 `credentialValue` 过去会在任何未重发它的更新中被清空，
+  设备会在下次连接时离线，而破坏它的编辑却返回 `200`。自动注册配置的密文根本不能通过更新修改：
+  `updateProvisioningProfile` 没有密文字段，`rotateProvisioningProfileSecret` 是替换它的唯一方式。
 
 发送 `metadata` 时会完整替换，`null` 会清除。
 它在 Schema 中是不透明 JSON 字符串，而非映射，因此没有按键合并可选；API 从来不能单独定位某个键。
+
+## 自动注册配置 {#provisioning-profiles}
+
+自动注册配置（provisioning profile）的各项操作属于[设备自注册](../guides/device-self-registration.md)。变更操作需要 `device:write`，查询需要 `device:read`；成员资格限定到某个客户的调用方对所有这些操作都会被拒绝。
+
+| 操作 | 作用 |
+| --- | --- |
+| `createProvisioningProfile` | 创建配置并返回 `{ profile, issuedSecret }`。密文由服务器生成（43 个字符，256 位），这个响应是它出现的唯一位置：平台只存储摘要。请求中没有 `provisionSecret`。`maxDevices`（至少为 1，省略表示无上限）限制该配置注册的设备数。 |
+| `rotateProvisioningProfileSecret(token)` | 替换密文并只返回一次新密文。旧密文立即失效，没有重叠。已注册的设备不受影响。服务器开始生成密文之前创建的配置，也靠它投入使用。 |
+| `updateProvisioningProfile` | 部分更新。它没有密文字段。`maxDevices` 可以设置，也可以用 `null` 清除。 |
+| `revokeProvisionedDevices(profileToken)` | 禁用该配置签发的每一份凭据，终止这些设备的在线会话，并返回禁用的数量。 |
+| `resetDeviceProvisioning(deviceToken)` | 删除自注册签发给某台设备的凭据并终止其会话。设备保留其预指定，因此可以再次注册。 |
+| `deleteProvisioningProfile(token)` | 只要还有设备持有该配置签发的凭据（包括已吊销的），就会被拒绝（`REFERENCE_VIOLATION`）。 |
+
+在类型上，`ProvisioningProfile` 新增 `maxDevices`、`provisionedDeviceCount` 和 `secretIssued`（在服务器生成密文之前为 false，此时配置处于**需要轮换（Rotate required）**状态）。设备新增 `expectedProvisioningProfile`（它的预指定），凭据新增 `provisioningProfile`。`createDevice` 和 `importDevices` 接受 `provisioningProfileToken` 来预指定设备，`DeviceSearchCriteria` 接受 `provisioningProfile` 和 `expectedProvisioningProfile`。端点本身是纯 HTTP，在[设备协议参考](./device-protocol.md#self-registration)中说明。
 
 ## 输入验证 {#input-validation}
 
