@@ -199,6 +199,7 @@ func (l *Lifecycle) runTickLoop(ctx context.Context, done chan struct{}) {
 			started := time.Now()
 			l.rt.Stats.Ticks.Add(1)
 			shedBefore := l.rt.Stats.refused()
+			refusedConnectsBefore := l.rt.Stats.ConnectRefused.Load()
 			if err := l.sim.Tick(ctx, l.rt); err != nil {
 				log.Error().Err(err).Msg("sim tick failed")
 				l.mu.Lock()
@@ -221,7 +222,17 @@ func (l *Lifecycle) runTickLoop(ctx context.Context, done chan struct{}) {
 			// will see it, rather than only in a counter they would have to think to
 			// read. Only the LIFECYCLE does this: the load harness drives EmitAll
 			// directly and is unaffected.
-			shedNow := l.rt.Stats.refused() - shedBefore
+			// A refused connect is not a shed: nothing is listening at the ingress. Surface it as
+			// an ERROR (status lastError) so a sim against a dead ingress does not read as a
+			// governed-but-healthy run.
+			refusedConnects := l.rt.Stats.ConnectRefused.Load() - refusedConnectsBefore
+			if refusedConnects > 0 {
+				log.Error().Int64("refused", refusedConnects).Msg("ingress unreachable (connection refused)")
+				l.mu.Lock()
+				l.lastError = "ingress unreachable (connection refused)"
+				l.mu.Unlock()
+			}
+			shedNow := l.rt.Stats.refused() - shedBefore - refusedConnects
 			if was := l.rt.Stats.LastTickShed.Swap(shedNow); (was == 0) != (shedNow == 0) {
 				if shedNow > 0 {
 					log.Warn().Int64("refused", shedNow).

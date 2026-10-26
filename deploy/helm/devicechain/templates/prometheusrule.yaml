@@ -47,7 +47,14 @@ spec:
             summary: "A DETECT leader is holding the partition without consuming"
             description: "A replica owns the partition but is not inside a live term and has committed nothing for 10m — it is stuck building a term, which holds the partition against every standby while detecting nothing. The checkpoint term is what keeps this quiet during a long replay, which checkpoints as it goes."
         - alert: DetectConsumerBacklogHigh
-          expr: max(devicechain_eventprocessing_detect_consumer_pending{namespace="{{ $ns }}"}) > 50000
+          # The reader's own gauge, or where event-processing reports none (it is down, which is
+          # the main way this backlog builds) the broker's count of the same durable.
+          expr: |
+            (
+              max(devicechain_eventprocessing_detect_consumer_pending{namespace="{{ $ns }}"})
+              or
+              max({{ include "devicechain.brokerPending" (dict "id" $id "durable" ".+_event-processing_resolved-events(_ackfloor)?") }})
+            ) > 50000
           for: 10m
           labels:
             severity: warning
@@ -68,6 +75,7 @@ spec:
           expr: |
             max(increase(devicechain_eventprocessing_detect_checkpoints_total{namespace="{{ $ns }}"}[15m])) == 0
             and max(devicechain_eventprocessing_detect_consumer_pending{namespace="{{ $ns }}"}) > 0
+            # reader-only: the checkpoint counter on the left is exported only by the reader, so the whole rule is empty while it is down (DetectHasNoLeader covers that gap)
           for: 15m
           labels:
             severity: critical

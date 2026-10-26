@@ -46,6 +46,11 @@ type Stats struct {
 	Shed          atomic.Int64
 	Backpressured atomic.Int64
 	Failed        atomic.Int64
+	// ConnectRefused counts emits whose TCP connect the peer refused (nothing listening at
+	// the ingress). No request was written, so like a shed it is a definitive non-accept and
+	// does not fail a clean drive; it is counted apart because it is the ingress being
+	// UNREACHABLE, not the platform governing the tenant (429) or being behind (503).
+	ConnectRefused atomic.Int64
 
 	// LastTickShed is how many emits the MOST RECENT tick had refused at the ingress
 	// — shed at the tenant's ceiling OR backpressured — as opposed to how many the
@@ -117,6 +122,7 @@ func (s *Stats) Reset(now time.Time) {
 	s.Shed.Store(0)
 	s.Backpressured.Store(0)
 	s.Failed.Store(0)
+	s.ConnectRefused.Store(0)
 	s.LastTickShed.Store(0)
 	s.Overruns.Store(0)
 	s.Ticks.Store(0)
@@ -124,8 +130,10 @@ func (s *Stats) Reset(now time.Time) {
 	s.sinceNanos.Store(now.UnixNano())
 }
 
-// refused is every clean non-accept so far: the 429s and the backpressure 503s.
-func (s *Stats) refused() int64 { return s.Shed.Load() + s.Backpressured.Load() }
+// refused is every clean non-accept so far: the 429s, the backpressure 503s and the refused connects.
+func (s *Stats) refused() int64 {
+	return s.Shed.Load() + s.Backpressured.Load() + s.ConnectRefused.Load()
+}
 
 // Freeze fixes the elapsed time at the moment a run stopped.
 //
@@ -153,6 +161,8 @@ type Snapshot struct {
 	// Retry-After (the platform's shared gate). Refused() is their sum.
 	Shed          int64 `json:"shed"`
 	Backpressured int64 `json:"backpressured"`
+	// ConnectRefused is the emits whose TCP connect was refused: the ingress unreachable.
+	ConnectRefused int64 `json:"connectRefused"`
 	// LastTickShed answers "is it being refused NOW", which the cumulative counters
 	// above cannot. Non-zero means the most recent tick had emits refused at the
 	// ingress — by the per-tenant ceiling or by backpressure — so a widget showing
@@ -170,13 +180,14 @@ type Snapshot struct {
 // that skew is far below the precision anyone should read into the rate.
 func (s *Stats) Snapshot(now time.Time) Snapshot {
 	snap := Snapshot{
-		Emitted:       s.Emitted.Load(),
-		Shed:          s.Shed.Load(),
-		Backpressured: s.Backpressured.Load(),
-		LastTickShed:  s.LastTickShed.Load(),
-		Failed:        s.Failed.Load(),
-		Overruns:      s.Overruns.Load(),
-		Ticks:         s.Ticks.Load(),
+		Emitted:        s.Emitted.Load(),
+		Shed:           s.Shed.Load(),
+		Backpressured:  s.Backpressured.Load(),
+		ConnectRefused: s.ConnectRefused.Load(),
+		LastTickShed:   s.LastTickShed.Load(),
+		Failed:         s.Failed.Load(),
+		Overruns:       s.Overruns.Load(),
+		Ticks:          s.Ticks.Load(),
 	}
 	// A frozen elapsed wins: once a run has stopped, its rate is a fact about a
 	// finished window and must not keep being divided by wall-clock.
@@ -192,8 +203,8 @@ func (s *Stats) Snapshot(now time.Time) Snapshot {
 }
 
 // Refused is every clean non-accept in the snapshot: Shed (429) plus
-// Backpressured (503 with a Retry-After).
-func (s Snapshot) Refused() int64 { return s.Shed + s.Backpressured }
+// Backpressured (503 with a Retry-After) plus ConnectRefused (nothing listening).
+func (s Snapshot) Refused() int64 { return s.Shed + s.Backpressured + s.ConnectRefused }
 
 // Runtime is the shared handle every Sim implementation's Bootstrap/Tick
 // receives: the authenticated tenant session, the resolved endpoints, and the

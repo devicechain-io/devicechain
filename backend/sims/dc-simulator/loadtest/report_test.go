@@ -36,7 +36,7 @@ func TestDriveStatsCarriesEveryRefusal(t *testing.T) {
 	}
 	want := map[string]float64{
 		"devices": 10, "targetRatePerSec": 20, "achievedRatePerSec": 0.5,
-		"accepted": 2, "shed": 3, "backpressured": 4, "failed": 1, "ticks": 5, "holdSeconds": 4,
+		"accepted": 2, "shed": 3, "backpressured": 4, "connectRefused": 0, "failed": 1, "ticks": 5, "holdSeconds": 4,
 	}
 	for k, v := range want {
 		if got, ok := drive[k].(float64); !ok || got != v {
@@ -61,7 +61,7 @@ func TestDriveStatsWithNoRefusals(t *testing.T) {
 // a log that drops them reads as "nothing was refused", the same defect in prose.
 func TestEveryReportsHumanLineCarriesTheRefusals(t *testing.T) {
 	d := newDriveStats(10, 20, refusingSnapshot(), time.Time{}, time.Time{})
-	const want = "accepted 2, shed 3, backpressured 4, failed 1"
+	const want = "accepted 2, shed 3, backpressured 4, connect-refused 0, failed 1"
 	for name, human := range map[string]func() string{
 		"L1":        (&Report{Drive: d}).Human,
 		"command":   (&CommandReport{Drive: d}).Human,
@@ -86,11 +86,11 @@ func TestBackgroundRefusalsCountsBothKinds(t *testing.T) {
 	if !ok {
 		t.Fatal("the fleet was backpressured 4 times, but backgroundRefusals reported nothing")
 	}
-	if want := "refused 4 time(s) at the ingress (0 shed at the per-tenant ingest ceiling, 4 backpressured by the platform)"; desc != want {
+	if want := "refused 4 time(s) at the ingress (0 shed at the per-tenant ingest ceiling, 4 backpressured by the platform, 0 connects refused)"; desc != want {
 		t.Errorf("backgroundRefusals = %q, want %q", desc, want)
 	}
 	desc, _ = backgroundRefusals(refusingSnapshot())
-	if want := "refused 7 time(s) at the ingress (3 shed at the per-tenant ingest ceiling, 4 backpressured by the platform)"; desc != want {
+	if want := "refused 7 time(s) at the ingress (3 shed at the per-tenant ingest ceiling, 4 backpressured by the platform, 0 connects refused)"; desc != want {
 		t.Errorf("backgroundRefusals = %q, want %q", desc, want)
 	}
 }

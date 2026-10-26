@@ -1376,7 +1376,7 @@
       "id": 23,
       "type": "timeseries",
       "title": "Updates waiting to be applied",
-      "description": "Messages queued for device-state that it has not finished handling. Growing while the update rate is flat means live state is falling behind the event store.",
+      "description": "Messages queued for device-state that it has not finished handling. Growing while the update rate is flat means live state is falling behind the event store. While the reading service is down this shows the message broker's own count.",
       "gridPos": {
         "h": 8,
         "w": 6,
@@ -1394,7 +1394,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "max by (durable) ({__name__=~\"devicechain_[a-z0-9]+_jetstream_consumer_pending_messages\", namespace=\"$namespace\", durable=~\".+_device-state_.+\"})",
+          "expr": "max by (durable) ({__name__=~\"devicechain_[a-z0-9]+_jetstream_consumer_pending_messages\", namespace=\"$namespace\", durable=~\".+_device-state_.+\"}) or max by (durable) (label_replace(nats_consumer_num_pending{namespace=\"$namespace\", stream_name=~\"${instance}_.+\", consumer_name=~\".+_device-state_.+\"}, \"durable\", \"$1\", \"consumer_name\", \"(.+)\"))",
           "legendFormat": "{{durable}}"
         }
       ],

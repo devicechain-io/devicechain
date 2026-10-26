@@ -510,7 +510,7 @@
       "id": 7,
       "type": "stat",
       "title": "Waiting to be sent",
-      "description": "Reports only when the outbound connectors area is installed (it is optional and not part of the default install). Without it this panel stays empty. Dispatch requests the connectors service has not been handed yet, as last sampled. A number that keeps growing means sends are not keeping up; look at the retry and given-up panels below.",
+      "description": "Reports only when the outbound connectors area is installed (it is optional and not part of the default install). Without it this panel stays empty. Dispatch requests the connectors service has not been handed yet, as last sampled. A number that keeps growing means sends are not keeping up; look at the retry and given-up panels below. While the reading service is down this shows the message broker's own count.",
       "gridPos": {
         "h": 4,
         "w": 4,
@@ -528,7 +528,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "max(devicechain_outboundconnectors_jetstream_consumer_pending_messages{namespace=\"$namespace\"})",
+          "expr": "max(devicechain_outboundconnectors_jetstream_consumer_pending_messages{namespace=\"$namespace\"}) or max(nats_consumer_num_pending{namespace=\"$namespace\", stream_name=~\"${instance}_.+\", consumer_name=~\".+_outbound-connectors_.+\"})",
           "legendFormat": "__auto"
         }
       ],
@@ -742,7 +742,7 @@
       "id": 11,
       "type": "timeseries",
       "title": "Dispatch backlog",
-      "description": "Reports only when the outbound connectors area is installed (it is optional and not part of the default install). Without it this panel stays empty. Requests waiting for the connectors service (not yet handed over) and requests handed over but not yet confirmed, as last sampled every 30 seconds. Both should sit near zero.",
+      "description": "Reports only when the outbound connectors area is installed (it is optional and not part of the default install). Without it this panel stays empty. Requests waiting for the connectors service (not yet handed over) and requests handed over but not yet confirmed, as last sampled every 30 seconds. Both should sit near zero. While the reading service is down this shows the message broker's own count.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -760,7 +760,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "max by (durable) (devicechain_outboundconnectors_jetstream_consumer_pending_messages{namespace=\"$namespace\"})",
+          "expr": "max by (durable) (devicechain_outboundconnectors_jetstream_consumer_pending_messages{namespace=\"$namespace\"}) or max by (durable) (label_replace(nats_consumer_num_pending{namespace=\"$namespace\", stream_name=~\"${instance}_.+\", consumer_name=~\".+_outbound-connectors_.+\"}, \"durable\", \"$1\", \"consumer_name\", \"(.+)\"))",
           "legendFormat": "waiting / {{durable}}"
         },
         {
@@ -769,7 +769,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "max by (durable) (devicechain_outboundconnectors_jetstream_consumer_ack_pending_messages{namespace=\"$namespace\"})",
+          "expr": "max by (durable) (devicechain_outboundconnectors_jetstream_consumer_ack_pending_messages{namespace=\"$namespace\"}) or max by (durable) (label_replace(nats_consumer_num_ack_pending{namespace=\"$namespace\", stream_name=~\"${instance}_.+\", consumer_name=~\".+_outbound-connectors_.+\"}, \"durable\", \"$1\", \"consumer_name\", \"(.+)\"))",
           "legendFormat": "in progress / {{durable}}"
         }
       ],
@@ -1765,7 +1765,7 @@
       "id": 28,
       "type": "timeseries",
       "title": "Notification backlog",
-      "description": "Alarm events waiting for the notification service and events handed over but not yet confirmed, as last sampled every 30 seconds. Both should sit near zero; a growing number means notifications are late.",
+      "description": "Alarm events waiting for the notification service and events handed over but not yet confirmed, as last sampled every 30 seconds. Both should sit near zero; a growing number means notifications are late. While the reading service is down this shows the message broker's own count.",
       "gridPos": {
         "h": 8,
         "w": 24,
@@ -1783,7 +1783,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "max by (durable) (devicechain_notificationmanagement_jetstream_consumer_pending_messages{namespace=\"$namespace\"})",
+          "expr": "max by (durable) (devicechain_notificationmanagement_jetstream_consumer_pending_messages{namespace=\"$namespace\"}) or max by (durable) (label_replace(nats_consumer_num_pending{namespace=\"$namespace\", stream_name=~\"${instance}_.+\", consumer_name=~\".+_notification-management_.+\"}, \"durable\", \"$1\", \"consumer_name\", \"(.+)\"))",
           "legendFormat": "waiting / {{durable}}"
         },
         {
@@ -1792,7 +1792,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "max by (durable) (devicechain_notificationmanagement_jetstream_consumer_ack_pending_messages{namespace=\"$namespace\"})",
+          "expr": "max by (durable) (devicechain_notificationmanagement_jetstream_consumer_ack_pending_messages{namespace=\"$namespace\"}) or max by (durable) (label_replace(nats_consumer_num_ack_pending{namespace=\"$namespace\", stream_name=~\"${instance}_.+\", consumer_name=~\".+_notification-management_.+\"}, \"durable\", \"$1\", \"consumer_name\", \"(.+)\"))",
           "legendFormat": "in progress / {{durable}}"
         }
       ],
@@ -2564,7 +2564,7 @@
       "id": 42,
       "type": "timeseries",
       "title": "Update report backlog",
-      "description": "Reports only when the software update area is installed (it ships in the full install, not the default one). Without it this panel stays empty. Device reports and device roster changes waiting for the update service, and ones handed over but not yet confirmed, as last sampled every 30 seconds.",
+      "description": "Reports only when the software update area is installed (it ships in the full install, not the default one). Without it this panel stays empty. Device reports and device roster changes waiting for the update service, and ones handed over but not yet confirmed, as last sampled every 30 seconds. While the reading service is down this shows the message broker's own count.",
       "gridPos": {
         "h": 8,
         "w": 24,
@@ -2582,7 +2582,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "max by (durable) (devicechain_updatemanagement_jetstream_consumer_pending_messages{namespace=\"$namespace\"})",
+          "expr": "max by (durable) (devicechain_updatemanagement_jetstream_consumer_pending_messages{namespace=\"$namespace\"}) or max by (durable) (label_replace(nats_consumer_num_pending{namespace=\"$namespace\", stream_name=~\"${instance}_.+\", consumer_name=~\".+_update-management_.+\"}, \"durable\", \"$1\", \"consumer_name\", \"(.+)\"))",
           "legendFormat": "waiting / {{durable}}"
         },
         {
@@ -2591,7 +2591,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "max by (durable) (devicechain_updatemanagement_jetstream_consumer_ack_pending_messages{namespace=\"$namespace\"})",
+          "expr": "max by (durable) (devicechain_updatemanagement_jetstream_consumer_ack_pending_messages{namespace=\"$namespace\"}) or max by (durable) (label_replace(nats_consumer_num_ack_pending{namespace=\"$namespace\", stream_name=~\"${instance}_.+\", consumer_name=~\".+_update-management_.+\"}, \"durable\", \"$1\", \"consumer_name\", \"(.+)\"))",
           "legendFormat": "in progress / {{durable}}"
         }
       ],

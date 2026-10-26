@@ -203,7 +203,10 @@ The check requires: first panel, type `table`, title `Firing alerts`, at the top
 - A panel over a backlog that a reading service exports (`devicechain_*_jetstream_consumer_*`)
   goes blind exactly when that service is down. Put the message broker's own series
   (`nats_consumer_num_pending` and friends, scoped with `stream_name=~"${instance}_.+"`) after an
-  `or`, labelled to match, so the backlog still shows while the reader is away.
+  `or`, labelled to match, so the backlog still shows while the reader is away. The check refuses a
+  panel target or alert expression over `jetstream_consumer_{pending,ack_pending}_messages`,
+  `jetstream_consumer_unread_ratio` or `detect_consumer_{pending,ack_pending}` with no broker arm of
+  the same kind; one that truly needs a counter only the reader has ends with `# reader-only: <why>`.
 - Prometheus 3 stores `quantile` as `"1.0"`, not `"1"`. Match `quantile=~"1|1.0"`.
 - CloudNativePG's custom-query series (`cnpg_pg_*`) carry no `cluster` label: derive it from the
   pod name with `label_replace(..., "cluster", "$1", "pod", "(.+)-[0-9]+")` before grouping by it.

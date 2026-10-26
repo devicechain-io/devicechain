@@ -44,6 +44,14 @@ var ErrShed = errors.New("emit shed at ingress (HTTP 429, or 503 under backpress
 // clean non-accept would make a reconciliation wrong about what the platform holds.
 var ErrBackpressured = errors.New("emit refused at ingress under backpressure (HTTP 503 with Retry-After)")
 
+// ErrConnectRefused marks an emit whose TCP connect the peer refused: nothing is listening
+// at the ingress address (the service is down or has no endpoints). No request was ever
+// written, so the event provably never entered the pipeline, which makes it a clean
+// non-accept like a shed. It is NOT a shed and NOT backpressure, and does not wrap either:
+// it says the ingress is unreachable, not that it governed the tenant, so EmitAll counts it
+// apart in Stats.ConnectRefused and the report names it so.
+var ErrConnectRefused = errors.New("emit refused: the ingress refused the TCP connect (nothing listening)")
+
 // MetricsFunc returns the metrics device d (the i-th in rt.Devices) emits on
 // the current tick. It is pure per-device value generation — EmitAll owns the
 // wire path, the concurrency, and the accounting.
@@ -122,6 +130,10 @@ func emitEach(ctx context.Context, rt *Runtime, workers int,
 				switch {
 				case err == nil:
 					rt.Stats.Emitted.Add(1)
+				case errors.Is(err, ErrConnectRefused):
+					// Before the ErrShed case, though it wraps neither: it is its own class,
+					// a clean non-accept that says the ingress is unreachable.
+					rt.Stats.ConnectRefused.Add(1)
 				case errors.Is(err, ErrBackpressured):
 					// 🔴 Before the ErrShed case, and the order is load-bearing: a
 					// backpressure 503 wraps BOTH sentinels, so the ErrShed case would
@@ -494,8 +506,14 @@ func postEvent(ctx context.Context, rt *Runtime, d DeviceInstance,
 
 	resp, err := rt.HTTPClient.Do(req)
 	if err != nil {
-		// The request may have been processed before the connection failed, so the store
-		// may hold this event: ambiguous, never refused.
+		// A refused TCP connect never carried the request, so nothing can have been
+		// stored: a definite refusal, filed refused in the ledger and counted apart as ErrConnectRefused.
+		if refusedAtDial(err) {
+			rt.Identity.Record(OutcomeRefused, d.Token, eventType, occurredTime)
+			return fmt.Errorf("post to ingress %s: %w: %w", url, ErrConnectRefused, err)
+		}
+		// Anything else (a reset, a timeout, a failed read) may have happened after the
+		// request was written, so the store may hold this event: ambiguous, never refused.
 		rt.Identity.Record(OutcomeAmbiguous, d.Token, eventType, occurredTime)
 		return fmt.Errorf("post to ingress %s: %w", url, err)
 	}
