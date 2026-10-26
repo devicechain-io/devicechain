@@ -91,6 +91,18 @@ func TestDecide(t *testing.T) {
 			"🔑 the transport has no command path at all, so presence is beside the point",
 		},
 		{
+			"an inbound integration device is undeliverable, even when ACTIVE",
+			State{Known: true, Asserted: false, Active: true, Source: "integration:chirp-1"},
+			Undeliverable,
+			"🔑 an integration delivers uplinks over HTTP; there is no connection to command",
+		},
+		{
+			"an operator source merely named like the transport is not",
+			State{Known: true, Asserted: false, Active: true, Source: "integrations1"},
+			Dispatch,
+			"transport.Of cuts at the first ':', so a near-miss spelling is not condemned",
+		},
+		{
 			"sparkplug is undeliverable, not held, when absent",
 			State{Known: true, Asserted: true, Active: false, Source: sparkplugSource},
 			Undeliverable,

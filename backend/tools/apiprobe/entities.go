@@ -613,6 +613,31 @@ var entities = []entity{
 		},
 	},
 	{
+		// Depends on: device-type. A device carrying an identity alias, so the drill watches the
+		// alias table across an upgrade: an alias lost to an upgrade leaves the device in place
+		// and silently stops a network server from finding it, with nothing else to show for it.
+		//
+		// Its own row, gated on the one field it sends, like device-disabled above: the device
+		// row keeps seeding against a baseline that has no `aliases`. The value is sent in
+		// lower case on purpose, so the stored (upper-case) spelling is what is recorded and
+		// compared. A leaf: nothing reads its token.
+		Name:     "device-aliased",
+		Area:     "device-management",
+		Mutation: "createDevice",
+		Input:    "DeviceCreateRequest!",
+		Read:     "devicesByToken",
+		Requires: []string{"DeviceCreateRequest.aliases"},
+		Fields:   "token name aliases{scheme value} deviceType{token}",
+		Vars: func(s *state) map[string]any {
+			return map[string]any{"req": map[string]any{
+				"token":           s.tok("device-aliased"),
+				"name":            "apiprobe aliased device",
+				"deviceTypeToken": s.tokens["deviceType"],
+				"aliases":         []any{map[string]any{"scheme": "lorawan.deveui", "value": "70b3d57ed0a91901"}},
+			}}
+		},
+	},
+	{
 		// Depends on: device. One physical-unit swap, so the append-only replacement
 		// journal has a row the drill can watch across an upgrade — a lifecycle record
 		// nobody can re-derive is exactly the kind of row whose survival is worth

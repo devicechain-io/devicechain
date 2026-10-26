@@ -64,3 +64,28 @@ func (r *SchemaResolver) DeleteIntegration(ctx context.Context, args struct{ Tok
 	}
 	return r.GetApi(ctx).DeleteIntegration(ctx, args.Token)
 }
+
+// Turn a sender's identifier into a device (service plane). The caller is a SERVICE: a service
+// token holding device:read, and a user's access token is refused even when it holds the
+// authority, because the operation answers a question (does this secret belong to this
+// integration?) that a human session has no business asking.
+//
+// It is a mutation because it records a sighting when no device in scope carries the alias, and
+// it asks for device:read, not device:write, on purpose: the service token that asks is the
+// ingest path's, which must not hold the authority to change or delete devices. The only write
+// is an observation row, capped per integration and not journalled.
+func (r *SchemaResolver) ResolveIntegrationDevice(ctx context.Context, args struct {
+	Integration string
+	Secret      string
+	Scheme      string
+	Value       string
+}) (*IntegrationDeviceResolutionResolver, error) {
+	if err := auth.AuthorizeService(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+	resolved, err := r.GetApi(ctx).ResolveIntegrationDevice(ctx, args.Integration, args.Secret, args.Scheme, args.Value)
+	if err != nil {
+		return nil, err
+	}
+	return &IntegrationDeviceResolutionResolver{M: resolved}, nil
+}

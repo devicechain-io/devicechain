@@ -62,3 +62,17 @@ func (r *SchemaResolver) IntegrationAuth(ctx context.Context, args struct {
 		return nil, err
 	}
 }
+
+// The sender-named devices an integration has seen that the tenant has no device in scope for.
+func (r *SchemaResolver) UnregisteredIntegrationDevices(ctx context.Context, args struct {
+	Criteria model.UnregisteredDeviceSearchCriteria
+}) (*UnregisteredIntegrationDeviceSearchResultsResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+	results, err := r.GetApi(ctx).UnregisteredIntegrationDevices(ctx, args.Criteria)
+	if err != nil {
+		return nil, err
+	}
+	return &UnregisteredIntegrationDeviceSearchResultsResolver{M: *results, S: r, C: ctx}, nil
+}

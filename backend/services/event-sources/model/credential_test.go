@@ -32,6 +32,9 @@ func eventWithCredentialMarkers() UnresolvedEvent {
 		// Sealed carries the marker too: it is secret material of the same standing.
 		SealedCredentialSecret: []byte(secret),
 		SealedCredentialId:     []byte(secret),
+		// An integration's sealed bearer token is secret material of the same standing.
+		Integration:            "an-integration",
+		SealedIntegrationToken: []byte(secret),
 	}
 }
 
@@ -55,6 +58,13 @@ func TestWithoutPresentedCredentialClearsEveryField(t *testing.T) {
 	}
 	if got.SealedCredentialId != nil {
 		t.Errorf("SealedCredentialId survived: %q", got.SealedCredentialId)
+	}
+	if got.SealedIntegrationToken != nil {
+		t.Errorf("SealedIntegrationToken survived: %q", got.SealedIntegrationToken)
+	}
+	// The integration's NAME is not secret and stays, so a dead letter says which sender it was.
+	if got.Integration != "an-integration" {
+		t.Errorf("Integration = %q, want it kept", got.Integration)
 	}
 }
 

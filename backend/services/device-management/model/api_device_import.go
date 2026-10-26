@@ -71,6 +71,10 @@ type DeviceImportRow struct {
 	// create. An unknown profile, or one of another device type, makes the row INVALID. On a re-run
 	// a device that exists with a different earmark is a CONFLICT.
 	ProvisioningProfileToken *string
+	// Aliases are the device's identity aliases, as on a single create. A value another device
+	// holds makes the row a CONFLICT; a malformed one makes it INVALID. On a re-run a device that
+	// exists with a different alias set is a CONFLICT.
+	Aliases *[]DeviceAliasInput
 }
 
 // DeviceImportRowResult is the outcome of one row. Row is 1-based within the call. Code and
@@ -140,6 +144,8 @@ type importRow struct {
 	// names, resolved by decideImportRows.
 	earmarkToken string
 	earmark      *ProvisioningProfile
+	// aliases are the row's aliases in their canonical form.
+	aliases []DeviceAliasInput
 	// credStored is credID as the credential_id column holds it (see storedCredentialId):
 	// the keyed digest for an ACCESS_TOKEN. Set by decideImportRows, which has the key.
 	credStored string
@@ -198,7 +204,15 @@ func validateImportRow(row *DeviceImportRow, mode string) (outcome, code, messag
 		metadata = &s
 	}
 
-	p := &importRow{row: row, name: name, desc: desc, external: external, metadata: metadata}
+	aliases, err := normalizeAliasInputs(aliasListOf(row.Aliases))
+	if err != nil {
+		if _, ok := limit.As(err); ok {
+			return DeviceImportInvalid, limit.Code, err.Error(), nil
+		}
+		return DeviceImportInvalid, importCodeInvalidValue, err.Error(), nil
+	}
+
+	p := &importRow{row: row, name: name, desc: desc, external: external, metadata: metadata, aliases: aliases}
 	if !blank(row.ProvisioningProfileToken) {
 		p.earmarkToken = strings.TrimSpace(*row.ProvisioningProfileToken)
 	}
@@ -278,8 +292,11 @@ func metadataEqual(stored []byte, incoming *string) bool {
 
 // differingFields names the fields of the stored device that the row would change. Names
 // only: a value is never echoed.
-func differingFields(d *Device, p *importRow) []string {
+func differingFields(d *Device, p *importRow, storedAliases []DeviceAlias) []string {
 	var diff []string
+	if !aliasSetsEqual(storedAliases, p.aliases) {
+		diff = append(diff, "aliases")
+	}
 	// The earmark: the profile the row names against the one the device holds. An unresolvable
 	// token (the row is then INVALID before this is reached) cannot match, so it differs.
 	var want *uint
@@ -314,6 +331,23 @@ func differingFields(d *Device, p *importRow) []string {
 		diff = append(diff, "metadata")
 	}
 	return diff
+}
+
+// aliasSetsEqual compares a stored alias set with a row's (already normalized) one, as sets.
+func aliasSetsEqual(stored []DeviceAlias, incoming []DeviceAliasInput) bool {
+	if len(stored) != len(incoming) {
+		return false
+	}
+	have := make(map[string]string, len(stored))
+	for _, a := range stored {
+		have[a.Scheme] = a.Value
+	}
+	for _, a := range incoming {
+		if v, ok := have[a.Scheme]; !ok || v != a.Value {
+			return false
+		}
+	}
+	return true
 }
 
 // ImportDevices creates the devices of an import file, one transaction per row, and reports
@@ -358,6 +392,7 @@ func (api *Api) ImportDevices(ctx context.Context, rows []*DeviceImportRow, mode
 	seenToken := map[string]int{}
 	seenExternal := map[string]int{}
 	seenCred := map[string]int{}
+	seenAlias := map[string]int{}
 	for i, row := range rows {
 		outcome, code, message, p := validateImportRow(row, mode)
 		if outcome != "" {
@@ -382,7 +417,21 @@ func (api *Api) ImportDevices(ctx context.Context, rows []*DeviceImportRow, mode
 				continue
 			}
 		}
+		dupAlias := false
+		for _, a := range p.aliases {
+			if first, dup := seenAlias[aliasKey(a.Scheme, a.Value)]; dup {
+				result.set(i, row, DeviceImportInvalid, importCodeDuplicateInFile, fmt.Sprintf("alias %s also appears at row %d", a.Scheme, first+1))
+				dupAlias = true
+				break
+			}
+		}
+		if dupAlias {
+			continue
+		}
 		seenToken[row.Token] = i
+		for _, a := range p.aliases {
+			seenAlias[aliasKey(a.Scheme, a.Value)] = i
+		}
 		if p.external != "" {
 			seenExternal[p.external] = i
 		}
@@ -484,6 +533,23 @@ func (api *Api) decideImportRows(ctx context.Context, result *DeviceImportResult
 			byExternal[d.ExternalId.String] = d
 		}
 	}
+	// The aliases the rows carry and who holds them, and the aliases of the devices that exist.
+	var wantAliases []DeviceAliasInput
+	for _, p := range pending {
+		wantAliases = append(wantAliases, p.aliases...)
+	}
+	aliasHeld, err := api.aliasHolders(ctx, wantAliases)
+	if err != nil {
+		return err
+	}
+	existingIds := make([]uint, 0, len(existing))
+	for _, d := range existing {
+		existingIds = append(existingIds, d.ID)
+	}
+	storedAliases, err := api.DeviceAliasesByDevice(ctx, existingIds)
+	if err != nil {
+		return err
+	}
 	// credential (type, id) -> owning device id.
 	credOwner := map[string]uint{}
 	for ctype, ids := range credIDs {
@@ -511,7 +577,7 @@ func (api *Api) decideImportRows(ctx context.Context, result *DeviceImportResult
 		}
 
 		if dev := byToken[row.Token]; dev != nil {
-			if diff := differingFields(dev, p); len(diff) > 0 {
+			if diff := differingFields(dev, p, storedAliases[dev.ID]); len(diff) > 0 {
 				result.set(i, row, DeviceImportConflict, conflict.Code,
 					"a device with this token exists with a different "+strings.Join(diff, ", ")+"; an import never updates an existing device")
 				continue
@@ -544,6 +610,10 @@ func (api *Api) decideImportRows(ctx context.Context, result *DeviceImportResult
 			result.set(i, row, DeviceImportConflict, conflict.Code, "externalId is already in use by another device")
 			continue
 		}
+		if taken := heldAlias(aliasHeld, p.aliases); taken != "" {
+			result.set(i, row, DeviceImportConflict, conflict.Code, "alias "+taken+" is already in use by another device")
+			continue
+		}
 		if mode == DeviceImportModeCredentials {
 			if _, taken := credOwner[credKey]; taken {
 				result.set(i, row, DeviceImportConflict, conflict.Code, "credentialId is already in use")
@@ -574,6 +644,17 @@ func (api *Api) decideImportRows(ctx context.Context, result *DeviceImportResult
 	return nil
 }
 
+// heldAlias returns the scheme of the first of the aliases another device already holds, or "".
+// It names the scheme and never the value.
+func heldAlias(held map[string]uint, aliases []DeviceAliasInput) string {
+	for _, a := range aliases {
+		if _, taken := held[aliasKey(a.Scheme, a.Value)]; taken {
+			return a.Scheme
+		}
+	}
+	return ""
+}
+
 // createImportedDevice writes one row: the device and, in credentials mode, its credential,
 // in one transaction.
 func (api *Api) createImportedDevice(ctx context.Context, p *importRow, dt *DeviceType, mode string) (*Device, error) {
@@ -602,6 +683,9 @@ func (api *Api) createImportedDevice(ctx context.Context, p *importRow, dt *Devi
 			device.ExpectedProvisioningProfileId = id
 		}
 		if err := tx.Create(device).Error; err != nil {
+			return err
+		}
+		if err := insertAliasesOnTx(tx, device.ID, p.aliases); err != nil {
 			return err
 		}
 		if mode != DeviceImportModeCredentials {

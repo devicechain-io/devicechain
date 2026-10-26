@@ -1,0 +1,337 @@
+// Copyright The DeviceChain Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package model
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/devicechain-io/dc-microservice/devicealias"
+	"github.com/devicechain-io/dc-microservice/integrity"
+	"github.com/devicechain-io/dc-microservice/limit"
+	"gorm.io/gorm"
+)
+
+func invalidDeviceAlias(format string, args ...any) error {
+	return integrity.NewRefusal(integrity.ClassInvalid, fmt.Sprintf(format, args...))
+}
+
+// aliasListOf reads an optional alias list as it arrives on a create or an import row: omitted
+// and null are both "no aliases".
+func aliasListOf(p *[]DeviceAliasInput) []DeviceAliasInput {
+	if p == nil {
+		return nil
+	}
+	return *p
+}
+
+// normalizeAliasInputs validates every alias of one device and returns them in their canonical
+// form, in the order given. It refuses a scheme or value outside the vocabulary, a second value
+// for one scheme (a device has one per scheme), and more than devicealias.MaxPerDevice.
+//
+// 🔴 NORMALIZATION IS ON THE WRITE, NOT ON THE READ. The stored value is the canonical spelling,
+// so a lookup is plain equality on an indexed column, and two spellings of one DevEUI are the
+// same alias — which is what makes "a different-case duplicate" a collision the unique index
+// refuses rather than two rows a sender might reach either of.
+func normalizeAliasInputs(in []DeviceAliasInput) ([]DeviceAliasInput, error) {
+	if len(in) > devicealias.MaxPerDevice {
+		return nil, limit.Exceeded("aliases on one device", len(in), devicealias.MaxPerDevice)
+	}
+	out := make([]DeviceAliasInput, 0, len(in))
+	seen := make(map[string]bool, len(in))
+	for _, a := range in {
+		value, err := devicealias.Normalize(a.Scheme, a.Value)
+		if err != nil {
+			return nil, invalidDeviceAlias("%s", err.Error())
+		}
+		if seen[a.Scheme] {
+			return nil, invalidDeviceAlias("a device has one alias per scheme, and %s appears twice", a.Scheme)
+		}
+		seen[a.Scheme] = true
+		out = append(out, DeviceAliasInput{Scheme: a.Scheme, Value: value})
+	}
+	return out, nil
+}
+
+// insertAliasesOnTx writes the (already normalized) aliases of a device that has none. A value
+// another device in the tenant holds under the scheme violates the unique index, which the
+// caller's transaction surfaces as a CONFLICT.
+func insertAliasesOnTx(tx *gorm.DB, deviceId uint, aliases []DeviceAliasInput) error {
+	// One statement per alias, not one batch: the audit journal labels a row only when a single
+	// struct is written, and a device carries at most devicealias.MaxPerDevice of them.
+	for _, a := range aliases {
+		row := DeviceAlias{DeviceId: deviceId, Scheme: a.Scheme, Value: a.Value}
+		if err := tx.Create(&row).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// replaceAliasesOnTx makes a device's alias set exactly aliases (already normalized): rows whose
+// scheme is not in the set are removed, a scheme whose value changed is updated in place, a new
+// scheme is inserted, and a row that already holds the right value is not written at all.
+func replaceAliasesOnTx(tx *gorm.DB, deviceId uint, aliases []DeviceAliasInput) error {
+	var current []DeviceAlias
+	if err := tx.Where("device_id = ?", deviceId).Find(&current).Error; err != nil {
+		return err
+	}
+	want := make(map[string]string, len(aliases))
+	for _, a := range aliases {
+		want[a.Scheme] = a.Value
+	}
+	have := make(map[string]DeviceAlias, len(current))
+	for _, c := range current {
+		have[c.Scheme] = c
+		if _, keep := want[c.Scheme]; !keep {
+			if err := tx.Delete(&DeviceAlias{}, c.ID).Error; err != nil {
+				return err
+			}
+		}
+	}
+	var fresh []DeviceAliasInput
+	for _, a := range aliases {
+		existing, ok := have[a.Scheme]
+		switch {
+		case !ok:
+			fresh = append(fresh, a)
+		case existing.Value != a.Value:
+			// The loaded row is handed to the statement, so the journal names the row it changed.
+			if err := tx.Model(&existing).Update("value", a.Value).Error; err != nil {
+				return err
+			}
+		}
+	}
+	return insertAliasesOnTx(tx, deviceId, fresh)
+}
+
+// deleteAliasesOnTx removes every alias of a device. The foreign key cascades in PostgreSQL;
+// this is the explicit statement, so the delete does not depend on the database being the one
+// that enforces it.
+func deleteAliasesOnTx(tx *gorm.DB, deviceId uint) error {
+	return tx.Where("device_id = ?", deviceId).Delete(&DeviceAlias{}).Error
+}
+
+// DeviceAliasesByDevice returns the aliases of each of the devices, keyed by device id. A device
+// with none has no entry.
+func (api *Api) DeviceAliasesByDevice(ctx context.Context, deviceIds []uint) (map[uint][]DeviceAlias, error) {
+	out := make(map[uint][]DeviceAlias, len(deviceIds))
+	if len(deviceIds) == 0 {
+		return out, nil
+	}
+	for start := 0; start < len(deviceIds); start += aliasLookupChunk {
+		end := min(start+aliasLookupChunk, len(deviceIds))
+		var rows []DeviceAlias
+		if err := api.RDB.DB(ctx).Where("device_id IN ?", deviceIds[start:end]).Order("scheme ASC").Find(&rows).Error; err != nil {
+			return nil, err
+		}
+		for _, r := range rows {
+			out[r.DeviceId] = append(out[r.DeviceId], r)
+		}
+	}
+	return out, nil
+}
+
+// aliasLookupChunk bounds the key list of one alias read, so an import of a thousand devices is
+// a handful of statements with bounded parameter lists.
+const aliasLookupChunk = 500
+
+// aliasHolders returns the device that holds each of the (already normalized) aliases, keyed by
+// aliasKey. An alias nobody holds has no entry.
+func (api *Api) aliasHolders(ctx context.Context, aliases []DeviceAliasInput) (map[string]uint, error) {
+	out := make(map[string]uint, len(aliases))
+	byScheme := make(map[string][]string)
+	for _, a := range aliases {
+		byScheme[a.Scheme] = append(byScheme[a.Scheme], a.Value)
+	}
+	for scheme, values := range byScheme {
+		for start := 0; start < len(values); start += aliasLookupChunk {
+			end := min(start+aliasLookupChunk, len(values))
+			var rows []DeviceAlias
+			if err := api.RDB.DB(ctx).Where("scheme = ? AND value IN ?", scheme, values[start:end]).Find(&rows).Error; err != nil {
+				return nil, err
+			}
+			for _, r := range rows {
+				out[aliasKey(r.Scheme, r.Value)] = r.DeviceId
+			}
+		}
+	}
+	return out, nil
+}
+
+// aliasKey is the map key of a (scheme, value) pair.
+func aliasKey(scheme, value string) string { return scheme + "\x00" + value }
+
+// DeviceAliases returns one device's aliases, ordered by scheme.
+func (api *Api) DeviceAliases(ctx context.Context, deviceId uint) ([]DeviceAlias, error) {
+	byDevice, err := api.DeviceAliasesByDevice(ctx, []uint{deviceId})
+	if err != nil {
+		return nil, err
+	}
+	return byDevice[deviceId], nil
+}
+
+// ------------------------------------------------------------------------------------------
+// Resolution for an inbound integration
+// ------------------------------------------------------------------------------------------
+
+// ResolveIntegrationDevice is the one call an ingest route makes to turn a sender's identifier
+// into a device. It authenticates the integration, finds the device the alias names, checks the
+// device's type is in the integration's scope, and, when no device in scope carries the alias,
+// records the sighting.
+//
+// The caller is a SERVICE (the resolver authorizes that before calling), and the answer is a
+// value rather than an error for every outcome a sender can cause:
+//
+//   - UNAUTHENTICATED: no such integration, or the token did not match (one answer to both).
+//   - DISABLED: the token matched an integration an operator switched off. It is reported
+//     apart from a credential failure so a caller does not charge it to the bad-credential
+//     budget, and nothing is resolved or recorded.
+//   - UNREGISTERED: no device in scope carries the alias. A device that carries it but is OUT of
+//     scope reads identically, so a token that leaks, or a sender that is wrong about an id,
+//     learns nothing about a device it may not reach.
+//   - RESOLVED: the device's token and type token.
+//
+// A scheme other than the one the integration's identity names, or a value the scheme refuses,
+// is an INVALID_VALUE error: the sender's request is malformed, which is not an outcome.
+//
+// 🔴 THE SCOPE IS CHECKED HERE, AGAINST THE ROW AS IT IS NOW, and is checked again when the
+// event reaches the resolver. A cache in front of this call can be stale; neither check trusts
+// it.
+func (api *Api) ResolveIntegrationDevice(ctx context.Context, integrationToken, presented, scheme, value string) (*IntegrationDeviceResolution, error) {
+	integration, err := api.AuthenticateIntegration(ctx, integrationToken, presented)
+	switch {
+	case err == nil:
+	case errors.Is(err, ErrIntegrationDisabled):
+		return &IntegrationDeviceResolution{Outcome: IntegrationDeviceDisabled}, nil
+	case errors.Is(err, ErrIntegrationAuthFailed):
+		return &IntegrationDeviceResolution{Outcome: IntegrationDeviceUnauthenticated}, nil
+	default:
+		return nil, err
+	}
+	want := integrationIdentityScheme(integration.Identity)
+	if want == "" || scheme != want {
+		return nil, invalidDeviceAlias("this integration resolves devices by %s, not %q", want, clipScheme(scheme))
+	}
+	canonical, err := devicealias.Normalize(scheme, value)
+	if err != nil {
+		return nil, invalidDeviceAlias("%s", err.Error())
+	}
+
+	var alias DeviceAlias
+	err = api.RDB.DB(ctx).Where("scheme = ? AND value = ?", scheme, canonical).First(&alias).Error
+	switch {
+	case err == nil:
+		devices, err := api.DevicesById(ctx, []uint{alias.DeviceId})
+		if err != nil {
+			return nil, err
+		}
+		if len(devices) == 1 && integration.ScopeHas(devices[0].DeviceTypeId) {
+			typeToken := ""
+			if devices[0].DeviceType != nil {
+				typeToken = devices[0].DeviceType.Token
+			}
+			return &IntegrationDeviceResolution{
+				Outcome: IntegrationDeviceResolved, DeviceToken: devices[0].Token, DeviceTypeToken: typeToken,
+			}, nil
+		}
+	case errors.Is(err, gorm.ErrRecordNotFound):
+	default:
+		return nil, err
+	}
+
+	overflow, err := api.recordUnregistered(ctx, integration, scheme, canonical)
+	if err != nil {
+		return nil, err
+	}
+	return &IntegrationDeviceResolution{Outcome: IntegrationDeviceUnregistered, Overflow: overflow}, nil
+}
+
+func clipScheme(s string) string {
+	if len(s) > 40 {
+		return s[:40] + "..."
+	}
+	return s
+}
+
+// recordUnregistered upserts the sighting of a sender-named device the tenant has no device in
+// scope for: a known (integration, scheme, value) gets its last-seen time and count refreshed;
+// a new one is inserted unless the integration already records MaxUnregisteredPerIntegration
+// distinct devices, in which case nothing is stored and overflow is true.
+//
+// 🔴 THE CAP IS EXACT, NOT APPROXIMATE. A new row is counted and inserted under a per-integration
+// advisory lock (PostgreSQL), so two sightings racing at the cap cannot both land. The refresh
+// of a known row takes no lock: it writes one row and cannot grow the table.
+func (api *Api) recordUnregistered(ctx context.Context, integration *Integration, scheme, value string) (overflow bool, err error) {
+	now := time.Now().UTC()
+	refresh := func(tx *gorm.DB) (bool, error) {
+		res := tx.Model(&IntegrationUnregisteredDevice{}).
+			Where("integration_id = ? AND scheme = ? AND value = ?", integration.ID, scheme, value).
+			Updates(map[string]any{"last_seen": now, "count": gorm.Expr("count + 1")})
+		return res.RowsAffected > 0, res.Error
+	}
+	if known, err := refresh(api.RDB.DB(ctx)); err != nil || known {
+		return false, err
+	}
+	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockUnregisteredInserts(tx, integration.ID); err != nil {
+			return err
+		}
+		// Another sighting of the same value may have landed while this one waited.
+		if known, err := refresh(tx); err != nil || known {
+			return err
+		}
+		var n int64
+		if err := tx.Model(&IntegrationUnregisteredDevice{}).Where("integration_id = ?", integration.ID).Count(&n).Error; err != nil {
+			return err
+		}
+		if n >= MaxUnregisteredPerIntegration {
+			overflow = true
+			return nil
+		}
+		return tx.Create(&IntegrationUnregisteredDevice{
+			IntegrationId: integration.ID, Scheme: scheme, Value: value, FirstSeen: now, LastSeen: now, Count: 1,
+		}).Error
+	})
+	return overflow, err
+}
+
+// lockUnregisteredInserts serializes the inserts of one integration's sightings for the rest of
+// the transaction, so the count the cap is checked against is the count the insert lands on.
+// Anywhere but PostgreSQL (the SQLite unit-test database, which has one writer at a time) there
+// is nothing to take.
+func lockUnregisteredInserts(tx *gorm.DB, integrationId uint) error {
+	if tx.Dialector.Name() != "postgres" {
+		return nil
+	}
+	return tx.Exec("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))",
+		fmt.Sprintf("unregistered-devices:%d", integrationId)).Error
+}
+
+// UnregisteredIntegrationDevices pages the sender-named devices an integration has seen and the
+// tenant has no device in scope for, most recently seen first. An unknown integration is an
+// empty page.
+func (api *Api) UnregisteredIntegrationDevices(ctx context.Context, criteria UnregisteredDeviceSearchCriteria) (*UnregisteredDeviceSearchResults, error) {
+	found, err := api.IntegrationsByToken(ctx, []string{criteria.Integration})
+	if err != nil {
+		return nil, err
+	}
+	results := make([]IntegrationUnregisteredDevice, 0)
+	db, pag := api.RDB.ListOf(ctx, &IntegrationUnregisteredDevice{}, func(result *gorm.DB) *gorm.DB {
+		if len(found) == 0 {
+			return result.Where("1 = 0")
+		}
+		return result.Where("integration_id = ?", found[0].ID)
+	}, criteria.Pagination)
+	db.Find(&results)
+	if db.Error != nil {
+		return nil, db.Error
+	}
+	for i := range results {
+		results[i].IntegrationToken = criteria.Integration
+	}
+	return &UnregisteredDeviceSearchResults{Results: results, Pagination: pag}, nil
+}

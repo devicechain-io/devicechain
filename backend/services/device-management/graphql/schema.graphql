@@ -2048,6 +2048,44 @@ type Device implements Model & TokenReference & NamedEntity & MetadataEntity & E
     Requires device:read, unscoped.
     """
     expectedProvisioningProfile: ProvisioningProfile
+    """
+    The names a sender other than the platform knows this device by, such as a LoRaWAN DevEUI,
+    ordered by scheme. An inbound integration finds the device by one of these. Empty when the
+    device has none. Null, and never an empty list, for a caller limited to part of the tenant:
+    aliases are not shown to it.
+    """
+    aliases: [DeviceAlias!]
+}
+
+"""
+One name a sender other than the platform knows a device by. The pair is unique within the
+tenant, and a device has at most one value per scheme.
+"""
+type DeviceAlias {
+    """
+    Whose vocabulary the value is in: lorawan.deveui, tts.device-id, or custom.<name> for a
+    name you chose.
+    """
+    scheme: String!
+    """
+    The value in its stored spelling. A lorawan.deveui value is 16 upper-case hexadecimal
+    digits whatever case it was written in, and a tts.device-id value is lower case.
+    """
+    value: String!
+}
+
+"""
+A name for a device in a sender's vocabulary. The value is checked against the scheme and
+stored in one canonical spelling, so the same DevEUI written in either case is one alias.
+"""
+input DeviceAliasInput {
+    """lorawan.deveui, tts.device-id, or custom.<name> (lower-case letters, digits, hyphen and underscore, up to 63 characters)."""
+    scheme: String!
+    """
+    lorawan.deveui: exactly 16 hexadecimal digits. tts.device-id: 1 to 36 letters, digits and
+    hyphens. custom.<name>: 1 to 128 characters with no control characters, case kept.
+    """
+    value: String!
 }
 
 """Fields for a new device."""
@@ -2082,6 +2120,12 @@ input DeviceCreateRequest {
     earmarks nothing, and no profile will take the device over.
     """
     provisioningProfileToken: String
+    """
+    Names a sender other than the platform knows the device by, such as its LoRaWAN DevEUI. At
+    most 8, one per scheme. A value another device in the tenant already holds under the scheme
+    is refused with CONFLICT. Omitted or null creates the device with none.
+    """
+    aliases: [DeviceAliasInput!]
 }
 
 # There is no `token` member — the mutation's own `token` argument names the row. It used
@@ -2119,6 +2163,12 @@ input DeviceUpdateRequest {
     Disabling a device that is already disabled keeps the time it was first disabled.
     """
     enabled: Boolean
+    """
+    Replaces the device's aliases with exactly this list. Null or an empty list removes them
+    all; omit the field to leave them alone. A value another device already holds under a
+    scheme refuses the whole update with CONFLICT.
+    """
+    aliases: [DeviceAliasInput!]
 }
 
 """
@@ -2198,6 +2248,12 @@ input DeviceImportRow {
     earmark makes the row a CONFLICT.
     """
     provisioningProfileToken: String
+    """
+    Names a sender other than the platform knows the device by, as on a single create. A value
+    another device holds makes the row a CONFLICT and a malformed one makes it INVALID. A device
+    that already exists with a different alias set makes the row a CONFLICT.
+    """
+    aliases: [DeviceAliasInput!]
     """ACCESS_TOKEN or MQTT_BASIC. FACTORY_CREDENTIALS mode only."""
     credentialType: String
     """The id the device presents (the access token itself, or the MQTT username). FACTORY_CREDENTIALS mode only."""
@@ -2259,6 +2315,12 @@ input DeviceSearchCriteria {
     token matches nothing.
     """
     expectedProvisioningProfile: String
+    """
+    Return only the device this alias names. The value is matched in its stored spelling, so
+    a DevEUI in either case finds the same device. A malformed alias is refused with
+    INVALID_VALUE, and a caller limited to part of the tenant is refused.
+    """
+    alias: DeviceAliasInput
 }
 
 """Which customer's devices to return, and the page."""
@@ -3096,6 +3158,78 @@ input IntegrationSearchCriteria {
 type IntegrationSearchResults {
     """The integrations on this page."""
     results: [Integration!]!
+    """Where this page sits in the whole result."""
+    pagination: SearchResultsPagination!
+}
+
+"""What resolveIntegrationDevice concluded."""
+enum IntegrationDeviceOutcome {
+    """The alias names a device whose type is in the integration's scope."""
+    RESOLVED
+    """
+    No device in scope carries the alias, and the sighting was recorded. A device that carries
+    the alias but is out of scope reads exactly the same.
+    """
+    UNREGISTERED
+    """
+    The token matched an integration that an operator has switched off. This is not a failed
+    credential: nothing is resolved or recorded.
+    """
+    DISABLED
+    """No such integration, or the token did not match. One answer to both."""
+    UNAUTHENTICATED
+}
+
+"""The answer to resolveIntegrationDevice."""
+type IntegrationDeviceResolution {
+    """What happened."""
+    outcome: IntegrationDeviceOutcome!
+    """Token of the device the alias names. Set only when the outcome is RESOLVED."""
+    deviceToken: String
+    """Token of that device's type. Set only when the outcome is RESOLVED."""
+    deviceTypeToken: String
+    """
+    True when the outcome is UNREGISTERED and the sighting was not stored because the
+    integration already records 1000 distinct unregistered devices.
+    """
+    overflow: Boolean!
+}
+
+"""
+A device a sender named that the tenant has no device in scope for, as an integration saw it.
+Create a device with this alias to start resolving it.
+"""
+type UnregisteredIntegrationDevice {
+    """Server-assigned numeric identifier, as a string."""
+    id: ID!
+    """Token of the integration that saw it."""
+    integration: String!
+    """The alias scheme the sender's identifier is in."""
+    scheme: String!
+    """The sender's identifier in its stored spelling."""
+    value: String!
+    """When it was first seen, as an RFC 3339 timestamp."""
+    firstSeen: String!
+    """When it was last seen, as an RFC 3339 timestamp."""
+    lastSeen: String!
+    """How many times it has been seen."""
+    count: Int!
+}
+
+"""Which integration's unregistered devices to return, and the page. Most recently seen first."""
+input UnregisteredIntegrationDeviceSearchCriteria {
+    """Page to return, starting at 1. Values below 1 are read as 1."""
+    pageNumber: Int!
+    """Results per page. Below 1 means the default of 100; above 1000 is capped at 1000."""
+    pageSize: Int!
+    """Token of the integration. An unknown token matches nothing."""
+    integration: String!
+}
+
+"""A page of unregistered devices."""
+type UnregisteredIntegrationDeviceSearchResults {
+    """The unregistered devices on this page."""
+    results: [UnregisteredIntegrationDevice!]!
     """Where this page sits in the whole result."""
     pagination: SearchResultsPagination!
 }
@@ -4219,6 +4353,14 @@ type Query {
         """The bearer token the sender presented."""
         secret: String!
     ): Integration
+    """
+    The sender-named devices an integration has seen that the tenant has no device in scope
+    for, most recently seen first. Requires device:read.
+    """
+    unregisteredIntegrationDevices(
+        """The integration and the page."""
+        criteria: UnregisteredIntegrationDeviceSearchCriteria!
+    ): UnregisteredIntegrationDeviceSearchResults!
     # List provisioning profiles that meet criteria.
     provisioningProfiles(criteria: ProvisioningProfileSearchCriteria!): ProvisioningProfileSearchResults!
     # Get a device's current possession claim, or null if it has none.
@@ -4803,6 +4945,26 @@ type Mutation {
         """Token of the integration."""
         token: String!
     ): Boolean!
+    """
+    Service-only: callable with a service token that holds device:read, and refused for any
+    user's access token. The ingest path's one call for turning a sender's identifier into a
+    device: it authenticates the integration with its bearer token, finds the device the alias
+    names, checks that device's type is in the integration's scope, and, when no device in scope
+    carries the alias, records the sighting (see unregisteredIntegrationDevices). Every outcome
+    a sender can cause is an answer, not an error; a scheme other than the one the integration
+    resolves by, or a value the scheme refuses, is refused with INVALID_VALUE. A switched-off
+    integration is reported as DISABLED and is not a failed credential.
+    """
+    resolveIntegrationDevice(
+        """Token of the integration, as it appears in the sender's URL."""
+        integration: String!
+        """The bearer token the sender presented."""
+        secret: String!
+        """The alias scheme; it must be the one the integration's identity names."""
+        scheme: String!
+        """The sender's identifier for the device."""
+        value: String!
+    ): IntegrationDeviceResolution!
     # Open (or reopen) a possession claim on a device with a secret an eventual
     # owner will present.
     initiateDeviceClaim(request: DeviceClaimInitiateRequest!): DeviceClaim!

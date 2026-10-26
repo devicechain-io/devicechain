@@ -54,7 +54,8 @@ func newIntegrationWireFixture(t *testing.T) scopeFixture {
 	if err := rdb.RegisterTenantScoping(db); err != nil {
 		t.Fatal(err)
 	}
-	f := seedScopeFixture(t, db, &model.ProvisioningProfile{}, &model.Integration{}, &model.IntegrationDeviceType{})
+	f := seedScopeFixture(t, db, &model.ProvisioningProfile{}, &model.Integration{}, &model.IntegrationDeviceType{},
+		&model.DeviceAlias{}, &model.IntegrationUnregisteredDevice{})
 	f.api.DeviceSecretKey = dmtest.DeviceSecretKey()
 	f.api.EnrollmentKeys = dmtest.EnrollmentKeys()
 	checker, err := credential.NewChecker(credentialtest.NewStore(), map[credential.Kind]credential.Policy{

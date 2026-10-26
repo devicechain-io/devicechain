@@ -349,6 +349,10 @@ func (api *Api) DeleteDevice(ctx context.Context, token string) (bool, error) {
 			if err := tx.Unscoped().Where("device_id = ?", id).Delete(&DeviceReplacement{}).Error; err != nil {
 				return nil, err
 			}
+			// The device's aliases go with it, which frees them for another device at once.
+			if err := deleteAliasesOnTx(tx, id); err != nil {
+				return nil, err
+			}
 			// The configuration revisions and reported state are records ABOUT this
 			// device; they go with it.
 			return nil, deleteDeviceConfigurationOnTx(tx, id)

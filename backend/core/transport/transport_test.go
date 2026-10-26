@@ -16,6 +16,9 @@ func TestMintedNamesAreTheOnesAlreadyInTheDatabase(t *testing.T) {
 	if Sparkplug != "sparkplug" {
 		t.Errorf("Sparkplug = %q, want %q", Sparkplug, "sparkplug")
 	}
+	if Integration != "integration" {
+		t.Errorf("Integration = %q, want %q", Integration, "integration")
+	}
 }
 
 // 🔴 THE COUNTERWEIGHT to the test above, and the more important of the two. A future author
@@ -24,8 +27,8 @@ func TestMintedNamesAreTheOnesAlreadyInTheDatabase(t *testing.T) {
 // package exists because a plausible-but-unemitted constant caused a live defect. Adding a
 // genuinely minted transport means editing this test and saying why.
 func TestMintedHoldsOnlyWhatThePlatformWrites(t *testing.T) {
-	if len(Minted) != 2 {
-		t.Fatalf("Minted has %d entries, want 2: %v", len(Minted), Minted)
+	if len(Minted) != 3 {
+		t.Fatalf("Minted has %d entries, want 3: %v", len(Minted), Minted)
 	}
 	for _, absent := range []Name{"mqtt", "http", "coap", ""} {
 		if IsMinted(absent) {

@@ -144,7 +144,7 @@ func TestValidateRejectsAnIdThatCollidesWithAPlatformSource(t *testing.T) {
 // warning" would be checking that Validate returned nil while claiming more. The warning is
 // prose for an operator; the behaviour under test is that ingest comes up.
 func TestValidateWarnsButStartsForAReservedId(t *testing.T) {
-	for _, id := range []string{"sparkplug", "sparkplug:plant-a", "lwm2m:site-a"} {
+	for _, id := range []string{"sparkplug", "sparkplug:plant-a", "lwm2m:site-a", "integration", "integration:chirp-1"} {
 		cfg := &EventSourcesConfiguration{}
 		assert.NoError(t, core.LoadConfiguration([]byte(``), cfg))
 		cfg.EventSources = cfg.EventSources[:1]

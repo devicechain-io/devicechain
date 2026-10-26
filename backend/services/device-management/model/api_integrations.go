@@ -17,6 +17,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/credential"
+	"github.com/devicechain-io/dc-microservice/devicealias"
 	"github.com/devicechain-io/dc-microservice/governance"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/integrity"
@@ -100,9 +101,6 @@ func (api *Api) digestIntegrationToken(tenant, token string) (string, error) {
 // Validation of the type-dependent fields
 // ------------------------------------------------------------------------------------------
 
-// aliasSchemeCustom matches the alias scheme a generic sender names: custom.<name>.
-var aliasSchemeCustom = regexp.MustCompile(`^custom\.[a-z0-9][a-z0-9_-]{0,62}$`)
-
 // ValidateIntegrationIdentity checks the identity against the integration's type and returns
 // it normalized. A network-server type defaults to DEV_EUI when none is named; a generic
 // sender must name its alias scheme.
@@ -129,7 +127,7 @@ func ValidateIntegrationIdentity(t IntegrationType, identity *string) (string, e
 			t, IntegrationIdentityDevEUI, IntegrationIdentityDeviceID)
 	default:
 		scheme, ok := strings.CutPrefix(id, IntegrationIdentityAliasPrefix)
-		if !ok || !aliasSchemeCustom.MatchString(scheme) {
+		if !ok || !devicealias.IsCustomScheme(scheme) {
 			return "", invalidIntegration("identity for a %s integration must be %scustom.<name>, where name is lower-case "+
 				"letters, digits, '-' and '_' and at most 63 characters", t, IntegrationIdentityAliasPrefix)
 		}
@@ -585,7 +583,8 @@ func (api *Api) UpdateIntegration(ctx context.Context, token string, request *In
 }
 
 // DeleteIntegration hard-deletes an integration by token, with its scope rows, and reports
-// whether one was removed. Device aliases are not owned by an integration and are untouched.
+// whether one was removed, with the unregistered devices it recorded. Device aliases are not
+// owned by an integration and are untouched.
 func (api *Api) DeleteIntegration(ctx context.Context, token string) (bool, error) {
 	deleted := false
 	err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
@@ -597,6 +596,10 @@ func (api *Api) DeleteIntegration(ctx context.Context, token string) (bool, erro
 			return err
 		}
 		if err := tx.Where("integration_id = ?", locked.ID).Delete(&IntegrationDeviceType{}).Error; err != nil {
+			return err
+		}
+		// The sightings it recorded go with it.
+		if err := tx.Where("integration_id = ?", locked.ID).Delete(&IntegrationUnregisteredDevice{}).Error; err != nil {
 			return err
 		}
 		result := tx.Unscoped().Delete(locked)
