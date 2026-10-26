@@ -55,6 +55,8 @@ Schema 表达不了的内容：
 - **设备通过 MQTT 连接，而不是直接使用 NATS。** 设备凭据只授权 MQTT 连接：出示设备凭据的普通 NATS 客户端在连接时即被拒绝。subject 一列是运维人员在 NATS 工具中看到的名称，而不是第二条接入途径。连接设置（client id、`{tenant}:{credentialId}` 用户名、TLS）见[连接设置](../guides/connecting-a-device.md#connection-settings)。
 - 以 QoS 0 发布事件，或以 QoS 1 发布并携带 [`altId`](#device-event)。QoS 2 发布默认被拒绝，且 broker 会关闭连接；见[服务质量](../guides/connecting-a-device.md#quality-of-service)。
 
+尚无凭据的设备通过 HTTPS 向 `POST /api/device-management/provisioning/{tenant}/register` [自行注册](#self-registration)。这是与事件接入分开的端点，由 `device-management` 提供。
+
 通过 **HTTP**，设备只能发送事件。将同样的[事件正文](#device-event)以 `POST` 发送到 `event-sources` 服务（端口 8081）的 `/{instanceId}/{tenant}/events`。HTTP 没有下行通道：只使用 HTTP 的设备无法接收命令、配置或更新分配。
 
 ### 网关命名空间 {#gateway-namespace}
@@ -189,6 +191,130 @@ Schema 表达不了的内容：
 ```json
 {"commandToken":"6f1c0f8e-6d1e-4a1a-9a3f-1f2b0d0a5c11","dispatchNonce":"0f6f4a2c-9b71-4d0e-8a5b-3c2d1e0f7a94","success":false,"error":"actuator jammed"}
 ```
+
+## 自注册 {#self-registration}
+
+尚无凭据的设备可以通过 HTTPS 自行注册，使用来自[自动注册配置（provisioning profile）](../guides/device-self-registration.md)的整个设备群共用的**预配密钥与密文**。设备自己生成凭据并只发送一次，平台返回设备令牌和 MQTT 客户端 ID。平台只保存凭据的摘要，任何响应都不包含密文。
+
+```text
+POST /api/device-management/provisioning/{tenant}/register
+```
+
+- **仅限 HTTPS。**请求正文中携带预配密文。不存在 MQTT 注册：设备不能通过连接来注册。
+- **需要实例的 API Ingress**，它把 `/api/<area>` 路由到各服务并去掉前缀。`ingress.enabled: false` 时该路由没有公开路径。[`dcctl device register`](./dcctl.md#dcctl-device-register) 与其他命令使用相同的 `--server` 主机。
+- **没有 `Authorization` 请求头。**正文中的预配密钥和密文就是认证。
+
+### 请求 {#self-registration-request}
+
+`Content-Type: application/json`，最大 **8 KiB**。Schema 未定义的字段会被拒绝，因此拼错的字段会失败，而不是让设备在缺少该字段的情况下完成注册。
+
+```json
+{
+  "provisionKey": "acme-sensors-2026",
+  "provisionSecret": "<创建或轮换配置时只显示一次>",
+  "externalId": "SN-000123",
+  "credentialSecret": "<设备自己的凭据，22 到 256 个 base64url 字符>",
+  "name": "optional",
+  "metadata": { "optional": "object" }
+}
+```
+
+| 字段 | 必填 | 规则 |
+| --- | :---: | --- |
+| `provisionKey`、`provisionSecret` | 是 | 各 1 到 256 个字符。密文是服务器为该配置生成的那一个。 |
+| `externalId` | 是 | 设备的序列号或其他 ID，1 到 256 个字符。平台依靠它找到设备。 |
+| `credentialSecret` | 是 | 设备自己的凭据内容，会成为它的访问令牌。**base64url**（字母、数字、`-` 和 `_`，无填充），**22 到 256 个字符**。生成 32 个随机字节并编码（43 个字符）。 |
+| `name` | 否 | 最多 128 个字符。仅在本次请求创建设备时使用。 |
+| `metadata` | 否 | 一个 JSON 对象。仅在本次请求创建设备时使用。 |
+
+**在设备上生成凭据，并在发送请求之前先保存它。**平台无法把它还给你。这样，响应丢失的请求可以用相同内容安全重试：它会被识别为重放并返回 `200`，而不是被当作第二台设备拒绝。
+
+### 响应 {#self-registration-response}
+
+请求创建了设备时返回 `201`，采用已有设备或识别为重放时返回 `200`。三种情况的正文相同，且不含任何密文：
+
+```json
+{
+  "outcome": "CREATED",
+  "tenant": "acme",
+  "deviceToken": "pv-sn-000123-1a2b3c4d",
+  "externalId": "SN-000123",
+  "credentialType": "ACCESS_TOKEN",
+  "mqtt": { "clientId": "<instanceId>:acme:pv-sn-000123-1a2b3c4d" }
+}
+```
+
+| `outcome` | 状态 | 含义 |
+| --- | :---: | --- |
+| `CREATED` | `201` | 设备原先不存在。配置（策略 `ALLOW_NEW`）创建了它，设备类型为配置的设备类型，并为该配置预指定，同时附带凭据。设备令牌由外部 ID 派生，以 `pv-` 开头。 |
+| `ADOPTED` | `200` | 设备原先已存在、已为该配置预指定且没有凭据。它获得了这份凭据。 |
+| `REPLAYED` | `200` | 设备已持有该配置的凭据，且请求给出的内容相同。没有写入任何内容。 |
+
+使用响应中的客户端 ID，以及 MQTT 用户名 `{tenant}:{credentialSecret}`（无密码）连接，见[连接设置](../guides/connecting-a-device.md#connection-settings)。响应不会重复凭据。
+
+### 什么决定响应 {#self-registration-decision}
+
+每一次拒绝都在写入任何内容之前决定。对平台已知的设备，按以下步骤依次判断，第一个匹配的就是答案：
+
+| 步骤 | 条件 | 答案 |
+| :---: | --- | --- |
+| 1 | 设备已禁用。 | `403 DEVICE_DISABLED` |
+| 2 | 其设备类型不是配置的设备类型。 | `409 DEVICE_TYPE_MISMATCH` |
+| 3 | 它没有为该配置预指定。 | `409 DEVICE_NOT_EARMARKED` |
+| 4 | 该配置在其上的凭据已被禁用或已过期。 | `409 ALREADY_PROVISIONED`，消息为 “the device's credential was revoked; an operator must reset its provisioning” |
+| 5 | 它持有该配置有效的凭据，且内容一致。 | `200 REPLAYED` |
+| 6 | 它持有该配置有效的凭据但内容不同，或持有任何其他凭据。 | `409 ALREADY_PROVISIONED` |
+| 7 | 它没有凭据，且配置已注册的设备数已达其 `maxDevices`。 | `422 LIMIT_EXCEEDED` |
+| 8 | 其他情况。 | `200 ADOPTED` |
+
+平台不认识的设备（没有任何有效设备使用该 `externalId`）：在策略 `ALLOW_NEW` 下会被创建（达到上限时返回 `422 LIMIT_EXCEEDED`），在 `CHECK_PRE_PROVISIONED` 下以 `404 DEVICE_NOT_REGISTERED` 拒绝。两种策略都不会采用未为该配置预指定的设备：运维人员创建的设备只会被有人指向它的配置接管，这就是[预指定](../guides/device-self-registration.md#earmarking)。
+
+### 错误 {#self-registration-errors}
+
+错误响应为 `{ "code": "...", "message": "..." }`。错误码集合是封闭的。`429`，以及因容量不足的 `503`，还会携带以秒为单位的 `Retry-After`。消息从不包含密文，也从不说明认证的哪一部分失败。
+
+| 状态 | `code` | 何时 |
+| :---: | --- | --- |
+| `400` | `INVALID_VALUE` | 路径中的租户不是有效令牌；正文不是单个 JSON 对象，或带有未定义的字段；字段超出范围（消息会指出字段，但绝不给出其值）。 |
+| `401` | `PROVISIONING_FAILED` | 预配密钥或密文无效。**所有原因都是同一个答案**：未知租户、未知密钥、错误的密文、已禁用或已过期的配置、其密文从未由服务器生成的配置（见[轮换它](../guides/device-self-registration.md#rotate-required)），以及正在删除的租户。 |
+| `403` | `DEVICE_DISABLED` | 上述步骤 1。 |
+| `404` | `DEVICE_NOT_REGISTERED` | `CHECK_PRE_PROVISIONED` 下的未知设备。 |
+| `408` | `INVALID_VALUE` | 正文未在读取期限内到达（默认 10 秒）。连接会被关闭。 |
+| `409` | `DEVICE_NOT_EARMARKED`、`DEVICE_TYPE_MISMATCH`、`ALREADY_PROVISIONED` | 上述步骤 3、2，以及 4 或 6。 |
+| `409` | `DEVICE_TOKEN_COLLISION` | 由该外部 ID 派生的设备令牌被另一台设备持有。需要运维人员处理。 |
+| `413` | `INVALID_VALUE` | 正文超过 8 KiB。 |
+| `422` | `LIMIT_EXCEEDED` | 配置已注册的设备数已达其 `maxDevices`。 |
+| `429` | `RATE_LIMITED` | 某个限制已用尽：来源地址的配额，或租户每秒注册数。`Retry-After` 说明要等待多久。 |
+| `500` | `PROVISIONING_MISCONFIGURED` | 该配置无法注册任何设备：其设备类型已删除，或其策略不是平台已知的策略。需要运维人员修复配置。 |
+| `500` | `PROVISIONING_UNAVAILABLE` | 内部故障。注册未完成；请稍后重试。 |
+| `501` | `CREDENTIAL_TYPE_UNSUPPORTED` | 配置要签发的凭据类型，此构建无法签发。终态；绝不会回退到另一种类型。 |
+| `503` | `PROVISIONING_UNAVAILABLE` | 副本繁忙（带 `Retry-After`），或实例没有用于校验预配密文的密钥（不带）。 |
+
+### 限制 {#self-registration-limits}
+
+这些限制使尚未认证的一方无法让服务付出超过请求价值的开销，也使一次工厂批量注册不会淹没租户的其余部分。按生效顺序：
+
+1. **正文期限。**正文必须在 10 秒内到达（`provisioning.readDeadline`，最大 1 分钟）。仍在发送正文的请求只占用它自己的连接。
+2. **大小上限与解析。**8 KiB，并且正文先被读取和校验，之后请求才计入下面的任何限制。
+3. **并发请求上限**：每个副本 64 个（`provisioning.maxInFlight`），超出则返回带 `Retry-After` 的 `503`。
+4. **按来源的配额**：每个客户端地址、每个副本，突发 60 个请求，之后每秒一个（`provisioning.sourceBurst`、`provisioning.sourceEvery`）。IPv6 客户端按 /64 计数。成功过的来源不享有豁免。只有在告知服务应信任哪些代理时，该地址才是真实客户端的地址：见[客户端地址与受信任代理](../deployment/bootstrap.md#trusted-proxies)。
+5. **每租户上限**，仅在预配密钥和密文被接受之后才计入：默认突发 500，每秒 20 次注册，与其他[治理](../concepts/governance.md)上限一样，通过租户的[层级与覆盖](../concepts/tenant-tiers.md)解析。缺失或无法获取的设置意味着平台默认值，绝不是无限制。
+6. **每个配置的上限**：由运维人员设置的 `maxDevices`。未设置时，配置没有上限。
+
+对预配密文没有猜测次数限制，因为它无法被猜出：它是 256 位随机数，以常数时间比较，未知密钥与错误密文花费相同的工作量。持续大量的 `401` 会触发[告警](../deployment/observability.md#self-registration-alerts)。
+
+### 重试约定 {#self-registration-retry}
+
+在第一次发送之前保存凭据，并在每次重试时都出示**同一份凭据**。
+
+| 响应 | 怎么做 |
+| --- | --- |
+| `429`，或带 `Retry-After` 的 `503` | 等待 `Retry-After` 再加上其 0 到 100% 的随机额外时间，然后重试。 |
+| 网络错误、超时、`408`、`502`、`504`，或带 `PROVISIONING_UNAVAILABLE` 的 `500` | 从 1 秒到 5 分钟指数退避，并使用完全抖动，然后重试。 |
+| `400`、`413` | 停止。请求有误；这是固件缺陷。 |
+| `401`、`403`、`404`、`409`、`422`、`501`，以及带 `PROVISIONING_MISCONFIGURED` 的 `500` | 停止并上报。重试无法改变答案，需要运维人员处理。 |
+
+抖动很重要：一起上电并同步重试的设备群会再次同时到达。[`dcctl device register`](./dcctl.md#dcctl-device-register) 实现了这一约定，是固件作者的参考。
 
 ## 拒绝与错误 {#rejections}
 

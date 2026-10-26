@@ -3932,6 +3932,32 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 
 No hay que hacer nada.
 
+### La versión posterior a v0.25.2 — los dispositivos pueden registrarse solos {#self-registration-upgrade}
+
+Esta sección está escrita antes de la versión que incluirá el [autorregistro de dispositivos](../guides/device-self-registration.md), así que la versión de su encabezado se deja para que la nombre esa versión. Se aplica a una actualización desde `v0.25.2` o anterior. device-management incorpora una migración de base de datos que se ejecuta sola, y los cambios de API siguientes son incompatibles para todo lo que automatice perfiles de aprovisionamiento.
+
+Hasta ahora un perfil de aprovisionamiento se podía crear y editar, pero nada lo leía: ningún dispositivo podía registrarse con uno. Así que nada que funcionara ayer deja de funcionar porque una flota lo usara. Lo que cambia es cómo se crean los perfiles y qué necesitan.
+
+#### Perfiles de aprovisionamiento {#self-registration-profiles}
+
+- **El servidor genera el secreto de aprovisionamiento.** `createProvisioningProfile` ya no acepta `provisionSecret`. Devuelve `{ profile, issuedSecret }` donde antes devolvía el perfil, y `issuedSecret` se muestra **una sola vez**. Un script que selecciona `token` del resultado ahora debe seleccionar `profile { token }`. `updateProvisioningProfile` tampoco acepta ya `provisionSecret`. `rotateProvisioningProfileSecret(token)` es la única forma de reemplazar un secreto. Ambos cambios son incompatibles: regenera cualquier cliente construido contra el esquema anterior y revisa tus scripts. Las operaciones nuevas están en [Perfiles de aprovisionamiento](../reference/graphql-api.md#provisioning-profiles).
+- **Los perfiles existentes se rechazan hasta que los rotes.** El nuevo endpoint no acepta un secreto elegido por un operador, porque solo acepta uno que generó el servidor. Todo perfil que exista en el momento de la actualización responde `401 PROVISIONING_FAILED` a un registro, y la consola lo marca como **Rotate required** (`secretIssued` es `false` en GraphQL). Rótalo, copia el secreto nuevo y entrégalo a la flota. Nada más del perfil cambia.
+- **La clave de aprovisionamiento es única por inquilino, no en toda la instancia.** Dos inquilinos pueden usar ahora la misma clave. La restricción de base de datos que la hacía global a la instancia se sustituye por una por inquilino.
+- **Un perfil puede tener un tope.** `maxDevices` es nuevo y opcional. Un perfil que lo deja sin definir sigue sin tope.
+
+#### Dispositivos {#self-registration-devices}
+
+- **Un perfil adopta un dispositivo existente solo si el dispositivo se reservó para él.** Con ambas estrategias, incluida `ALLOW_NEW`, un dispositivo que existe pero no se reservó para el perfil se rechaza con `409 DEVICE_NOT_EARMARKED`. Reserva con `provisioningProfileToken` en `createDevice` e `importDevices`, o con el **Expected provisioning profile** de la consola. Los dispositivos existentes no tienen reserva, así que si planeas dejar que un perfil se apropie de dispositivos que ya creaste, resérvalos primero (repetir un `importDevices` con la columna definida lo hace).
+- **Un perfil no se puede eliminar mientras tenga credenciales emitidas**, y un tipo de dispositivo no se puede eliminar mientras lo use un perfil. Ambos responden `IN_USE`. Restablece o elimina antes los dispositivos.
+
+#### Operación {#self-registration-operating}
+
+- **El endpoint necesita el ingress de la API.** `POST /api/device-management/provisioning/{tenant}/register` se alcanza por la misma ruta `/api/<area>` que la API GraphQL. Una instancia con `ingress.enabled: false` no tiene camino público hasta él.
+- **`dcctl bootstrap` y `dcctl upgrade` ahora generan `infrastructure.http.trustedProxies`** a partir del rango de pods del clúster, de modo que el límite por origen vea al dispositivo y no al controlador de ingress. La configuración de la instancia cambia, así que los servicios se reinician con el resto de la actualización progresiva. Revísalo si ejecutas tu propio controlador de ingress o estás detrás de un balanceador de carga: [Direcciones de cliente y proxies de confianza](./bootstrap.md#trusted-proxies). Sin él, todos los dispositivos comparten una sola asignación de peticiones por pod de ingress, que un desconocido puede agotar.
+- **Configuración nueva**, toda opcional, bajo la clave `provisioning` de device-management: `readDeadline`, `maxInFlight`, `maxConcurrentRegistrations`, `sourceBurst` y `sourceEvery`. Los valores por defecto están en [los límites](../reference/device-protocol.md#self-registration-limits).
+- **Métricas nuevas y tres alertas** (`ProvisioningAuthFailuresSustained`, `ProvisioningRateLimited`, `ProvisioningMisconfigured`) llegan con el chart. Están en silencio en una instancia que no usa el endpoint. Consulta [Autorregistro de dispositivos](./observability.md#self-registration-alerts).
+- **Una nueva dimensión de gobernanza** limita los registros que puede hacer un inquilino: por defecto una ráfaga de 500 y 20 por segundo, fijada por nivel o por inquilino. Consulta [Gobernanza y cuotas](../concepts/governance.md).
+
 ### v0.25.2 — la emisión de tokens de servicio sale del puerto público {#v0252-upgrade}
 
 `v0.25.2` es un parche de seguridad de `v0.25.1`. No hay migración, y no cambia ninguna API, tema ni

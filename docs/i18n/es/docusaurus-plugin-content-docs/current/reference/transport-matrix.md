@@ -164,6 +164,21 @@ Un endpoint `POST` para el mismo cuerpo de evento JSON. Sencillo, y de un solo s
   credenciales del dispositivo viajan en el cuerpo del evento. Donde necesites TLS, lo aporta lo
   que pongas por delante del servicio.
 
+### Autorregistro {#self-registration}
+
+No es un transporte para lecturas, sino la forma en que un dispositivo que aún no tiene credencial obtiene una. Es solo HTTPS.
+
+| Puerta | ¿Registra un dispositivo? |
+| --- | :---: |
+| HTTPS, `POST /api/device-management/provisioning/{tenant}/register` | sí |
+| MQTT, cualquier bróker | no |
+| Ingesta de eventos HTTP, Sparkplug B, LwM2M | no |
+
+- Un dispositivo presenta la clave y el secreto de un perfil de aprovisionamiento, su número de serie y una credencial que inventó, y recibe su token de dispositivo y su id de cliente MQTT. Consulta [Autorregistro de dispositivos](../guides/device-self-registration.md) y [el contrato del endpoint](./device-protocol.md#self-registration).
+- **No hay registro al conectarse por MQTT.** Un dispositivo no puede registrarse conectándose: el bróker autentica una credencial que ya existe.
+- Necesita el ingress de la API de la instancia y tiene limitación de tasa por dirección de cliente y por inquilino, y responde `429` con `Retry-After`.
+- Sparkplug B y LwM2M crean dispositivos mediante su propio ajuste de autorregistro, que es independiente y no usa perfiles de aprovisionamiento.
+
 ### MQTT — un bróker externo, propiedad del operador {#external-mqtt-broker}
 
 La plataforma también puede actuar como cliente en un bróker que ya operes, para ingerir de él.

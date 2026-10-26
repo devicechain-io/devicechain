@@ -106,7 +106,7 @@ No es una garantía en todas las configuraciones:
 El volumen descartado se expone como una métrica operativa. Un operador ve a un inquilino que ha alcanzado un techo, o una regla que ha empezado a emitir en exceso, antes de que se convierta en un ticket de soporte. La gobernanza está pensada para mostrarse como presión observable, no como pérdida silenciosa.
 
 :::note Estado
-**Aplicado hoy:** limitación de tasa de ingesta por inquilino (event-sources), gobernanza de egreso en ambos extremos del salto de la acción (event-processing y outbound-connectors), limitación de tasa de inferencia de IA por inquilino con observabilidad del gasto, y el techo de comandos no entregados por inquilino (command-delivery). Todos siguen la regla de seguridad ante fallos descrita arriba.
+**Aplicado hoy:** limitación de tasa de ingesta por inquilino (event-sources), gobernanza de egreso en ambos extremos del salto de la acción (event-processing y outbound-connectors), limitación de tasa de inferencia de IA por inquilino con observabilidad del gasto, el techo de comandos no entregados por inquilino (command-delivery) y la tasa por inquilino de [autorregistros de dispositivos](../guides/device-self-registration.md#operating) (device-management; por defecto una ráfaga de 500 y 20 registros por segundo, fijada mediante el nivel o una anulación del inquilino como `provisioningBurst` y `provisioningRegistrationsPerSecond`). Todos siguen la regla de seguridad ante fallos descrita arriba.
 
 **Planeado bajo el mismo modelo:** gobernanza de API/consultas por inquilino, límites de stream por inquilino en el bus interno y un techo de expansión (fan-out) de relaciones.
 :::

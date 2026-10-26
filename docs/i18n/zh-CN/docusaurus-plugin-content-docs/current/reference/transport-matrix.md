@@ -122,6 +122,21 @@ title: 传输能力矩阵
 - 接入监听器终止的是明文 HTTP，本身没有传输认证；设备凭据放在事件正文中。
   需要 TLS 时，由服务前面的组件提供。
 
+### 自注册 {#self-registration}
+
+它不是读数的传输方式，而是尚无凭据的设备获取凭据的途径。仅限 HTTPS。
+
+| 入口 | 能否注册设备？ |
+| --- | :---: |
+| HTTPS，`POST /api/device-management/provisioning/{tenant}/register` | 能 |
+| MQTT，任何代理 | 不能 |
+| HTTP 事件接入、Sparkplug B、LwM2M | 不能 |
+
+- 设备出示自动注册配置的密钥和密文、自己的序列号以及自己生成的凭据，然后收到它的设备令牌和 MQTT 客户端 ID。见[设备自注册](../guides/device-self-registration.md)和[端点约定](./device-protocol.md#self-registration)。
+- **不存在通过 MQTT 连接来注册。**设备不能通过连接来注册：代理认证的是已经存在的凭据。
+- 它需要实例的 API Ingress，并按客户端地址和按租户限速，超限时返回带 `Retry-After` 的 `429`。
+- Sparkplug B 和 LwM2M 通过它们各自的自动注册设置创建设备，这是独立的机制，不使用自动注册配置。
+
 ### MQTT：外部、由运维人员管理的代理 {#external-mqtt-broker}
 
 平台也可以作为客户端连接你已运行的代理，从中接入数据。

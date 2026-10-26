@@ -3660,6 +3660,32 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 
 Nothing needs doing.
 
+### The release after v0.25.2 — devices can register themselves {#self-registration-upgrade}
+
+This section is written ahead of the release that ships [device self-registration](../guides/device-self-registration.md), so the version in its heading is left for that release to name. It applies to an upgrade from `v0.25.2` or earlier. Device-management gains a database migration that runs on its own, and the API changes below are breaking for anything that scripts provisioning profiles.
+
+Until now a provisioning profile could be created and edited, but nothing read it: no device could register through one. So nothing that worked yesterday stops working because a fleet used it. What changes is how profiles are made and what they need.
+
+#### Provisioning profiles {#self-registration-profiles}
+
+- **The server generates the provision secret.** `createProvisioningProfile` no longer takes `provisionSecret`. It returns `{ profile, issuedSecret }` where it used to return the profile, and `issuedSecret` is shown **once**. A script that selects `token` from the result must now select `profile { token }`. `updateProvisioningProfile` no longer takes `provisionSecret` either. `rotateProvisioningProfileSecret(token)` is the only way to replace a secret. Both are breaking: regenerate any client built against the old schema and check your scripts. The new operations are listed under [Provisioning profiles](../reference/graphql-api.md#provisioning-profiles).
+- **Existing profiles are refused until you rotate them.** A secret an operator chose is not accepted by the new endpoint, because only a secret the server generated is. Every profile that exists at the upgrade answers `401 PROVISIONING_FAILED` to a registration, and the console marks it **Rotate required** (`secretIssued` is `false` in GraphQL). Rotate it, copy the new secret, and give it to the fleet. Nothing about the profile's other settings changes.
+- **The provision key is unique per tenant, not across the instance.** Two tenants can now use the same key. The database constraint that made it instance-wide is replaced by one per tenant.
+- **A profile can have a cap.** `maxDevices` is new and optional. A profile that has it unset stays uncapped.
+
+#### Devices {#self-registration-devices}
+
+- **A profile adopts an existing device only if the device was earmarked for it.** Under both strategies, and including `ALLOW_NEW`, a device that exists but was not earmarked for the profile is refused with `409 DEVICE_NOT_EARMARKED`. Earmark with `provisioningProfileToken` on `createDevice` and `importDevices`, or the console's **Expected provisioning profile**. Existing devices have no earmark, so if you plan to let a profile take over devices you already created, earmark them first (an `importDevices` re-run with the column set does it).
+- **A profile cannot be deleted while it has issued credentials**, and a device type cannot be deleted while a profile uses it. Both answer `IN_USE`. Reset or delete the devices first.
+
+#### Operating it {#self-registration-operating}
+
+- **The endpoint needs the API ingress.** `POST /api/device-management/provisioning/{tenant}/register` is reached through the same `/api/<area>` route as the GraphQL API. An instance with `ingress.enabled: false` has no public path to it.
+- **`dcctl bootstrap` and `dcctl upgrade` now render `infrastructure.http.trustedProxies`** from the cluster's pod range, so the per-source limit sees the device and not the ingress controller. The instance configuration changes, so the services restart with the rest of the rolling upgrade. Check it if you run your own ingress controller or sit behind a load balancer: [Client addresses and trusted proxies](./bootstrap.md#trusted-proxies). Without it every device shares one request allowance per ingress pod, which a stranger can use up.
+- **New configuration**, all optional, under device-management's `provisioning` key: `readDeadline`, `maxInFlight`, `maxConcurrentRegistrations`, `sourceBurst` and `sourceEvery`. The defaults are in [the limits](../reference/device-protocol.md#self-registration-limits).
+- **New metrics and three alerts** (`ProvisioningAuthFailuresSustained`, `ProvisioningRateLimited`, `ProvisioningMisconfigured`) arrive with the chart. They are quiet on an instance that does not use the endpoint. See [Device self-registration](./observability.md#self-registration-alerts).
+- **A new governance dimension** caps the registrations a tenant can make: a burst of 500 and 20 a second by default, set per tier or per tenant. See [Governance & Quotas](../concepts/governance.md).
+
 ### v0.25.2 — the service-token mint leaves the public port {#v0252-upgrade}
 
 `v0.25.2` is a security patch for `v0.25.1`. There is no migration, and no API, topic or permission

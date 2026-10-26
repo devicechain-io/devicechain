@@ -154,6 +154,21 @@ A `POST` endpoint for the same JSON event body. Simple, and one-way.
   device credentials ride in the event body. Where you need TLS, it comes from whatever fronts the
   service.
 
+### Self-registration {#self-registration}
+
+Not a transport for readings, but the way a device with no credential yet gets one. It is HTTPS only.
+
+| Door | Registers a device? |
+| --- | :---: |
+| HTTPS, `POST /api/device-management/provisioning/{tenant}/register` | yes |
+| MQTT, any broker | no |
+| HTTP event ingest, Sparkplug B, LwM2M | no |
+
+- A device presents a provisioning profile's key and secret, its serial number and a credential it made up, and receives its device token and MQTT client id. See [Device self-registration](../guides/device-self-registration.md) and [the endpoint contract](./device-protocol.md#self-registration).
+- **There is no registration by connecting over MQTT.** A device cannot register by connecting: the broker authenticates a credential that already exists.
+- It needs the instance's API ingress, and it is rate limited per client address and per tenant, answering `429` with `Retry-After`.
+- Sparkplug B and LwM2M create devices through their own auto-registration setting, which is separate and does not use provisioning profiles.
+
 ### MQTT — an external, operator-owned broker {#external-mqtt-broker}
 
 The platform can also act as a client on a broker you already run, to ingest from it.

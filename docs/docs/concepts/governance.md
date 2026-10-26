@@ -106,7 +106,7 @@ That is not a guarantee in every setup:
 Shed volume is reported as an operational metric. An operator sees a tenant that has hit a ceiling, or a rule that has started to over-emit, before it becomes a support ticket. Governance is meant to show up as observable pressure, not silent loss.
 
 :::note Status
-**Enforced today:** per-tenant ingest rate limiting (event-sources), outbound egress governance at both ends of the action hop (event-processing and outbound-connectors), per-tenant AI-inference rate limiting with spend observability, and the per-tenant undelivered-command ceiling (command-delivery). All of them follow the fail-safe rule above.
+**Enforced today:** per-tenant ingest rate limiting (event-sources), outbound egress governance at both ends of the action hop (event-processing and outbound-connectors), per-tenant AI-inference rate limiting with spend observability, the per-tenant undelivered-command ceiling (command-delivery), and the per-tenant rate of [device self-registrations](../guides/device-self-registration.md#operating) (device-management; a burst of 500 and 20 registrations a second by default, set through the tier or a tenant override as `provisioningBurst` and `provisioningRegistrationsPerSecond`). All of them follow the fail-safe rule above.
 
 **Planned on the same model:** per-tenant API/query governance, per-tenant stream bounds on the internal bus, and a relationship fan-out ceiling.
 :::
