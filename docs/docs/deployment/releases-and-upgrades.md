@@ -4447,7 +4447,8 @@ with the volume and by its snapshots. The body credential is now refused instead
      Events keep flowing, and each one that carried a credential is counted. The command's `--dry-run`
      does not print this flag's value; to confirm the upgrade took it, look for the `event-sources`
      startup warning that says the setting is transitional, or check that
-     `devicechain_eventsources_capture_body_credential_strip` is `1`.
+     `devicechain_eventsources_capture_body_credential_strip` is `1`. On a chart install (not `dcctl`), set
+     `functionalAreas.event-sources.config.capture.bodyCredential: strip` instead.
   2. Roll out the SDK or firmware that stops sending the body credential.
   3. Watch `devicechain_eventsources_total_msg_credential_in_mqtt_body` until it has stopped rising for
      longer than your slowest device's reporting interval. **Collect the list of devices as you go.** A
@@ -4462,11 +4463,10 @@ with the volume and by its snapshots. The body credential is now refused instead
 
   `strip` does not remove the exposure: the broker stored the body before either setting ran, so `strip`
   and `refuse` leave the same plaintext at rest, and step 5 is needed with both. `strip` applies only
-  to the platform's MQTT broker. A later `dcctl upgrade` without the flag keeps the value. It was
-  transitional and was removed in `v0.26.0`: from that release a body credential is always refused, the
+  to the platform's MQTT broker. A later `dcctl upgrade` without the flag keeps the value. `strip` was
+  transitional and is removed in `v0.26.0`: from that release a body credential is always refused, the
   `--mqtt-body-credential` flag no longer exists, and `event-sources` refuses to start while
-  `capture.bodyCredential` is still set. On a chart install (not `dcctl`) set
-  `functionalAreas.event-sources.config.capture.bodyCredential`.
+  `capture.bodyCredential` is still set. Delete the key before upgrading to `v0.26.0`.
 
   While the upgrade rolls, an `event-sources` pod of this release can strip an event before
   `device-management` has rolled. A `v0.23.0` `device-management` refuses that event, because it no

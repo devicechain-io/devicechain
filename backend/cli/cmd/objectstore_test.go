@@ -78,6 +78,27 @@ func TestTheBootstrapCommandWiresTheObjectStore(t *testing.T) {
 		t.Fatal("bootstrap.go no longer declares bootstrapCmd's RunE")
 	}
 
+	// stateParam maps each parameter name of bootstrapStateFor to its position.
+	stateParam := map[string]int{}
+	ast.Inspect(f, func(n ast.Node) bool {
+		if fd, ok := n.(*ast.FuncDecl); ok && fd.Name.Name == "bootstrapStateFor" {
+			i := 0
+			for _, field := range fd.Type.Params.List {
+				for _, name := range field.Names {
+					stateParam[name.Name] = i
+					i++
+				}
+			}
+		}
+		return true
+	})
+	if _, ok := stateParam["objectStore"]; !ok {
+		t.Fatal("bootstrapStateFor has no objectStore parameter")
+	}
+	if _, ok := stateParam["objectStoreExplicit"]; !ok {
+		t.Fatal("bootstrapStateFor has no objectStoreExplicit parameter")
+	}
+
 	var argvCheck, ensureCluster token.Pos
 	var stateStore, stateExplicit ast.Expr
 	var resolveCalls int
@@ -99,10 +120,17 @@ func TestTheBootstrapCommandWiresTheObjectStore(t *testing.T) {
 			}
 		}
 		// The State is built by bootstrapStateFor (split out of RunE so its field copies are
-		// testable); the resolved store and the explicit flag are its 9th and 10th arguments.
+		// testable). The resolved store and the explicit flag are found by the NAMES of the
+		// parameters that receive them, read from the declaration, so adding or dropping an
+		// unrelated parameter cannot shift this onto the wrong argument.
 		if call, ok := n.(*ast.CallExpr); ok {
-			if id, ok := call.Fun.(*ast.Ident); ok && id.Name == "bootstrapStateFor" && len(call.Args) >= 10 {
-				stateStore, stateExplicit = call.Args[8], call.Args[9]
+			if id, ok := call.Fun.(*ast.Ident); ok && id.Name == "bootstrapStateFor" {
+				if i, ok := stateParam["objectStore"]; ok && i < len(call.Args) {
+					stateStore = call.Args[i]
+				}
+				if i, ok := stateParam["objectStoreExplicit"]; ok && i < len(call.Args) {
+					stateExplicit = call.Args[i]
+				}
 			}
 		}
 		return true

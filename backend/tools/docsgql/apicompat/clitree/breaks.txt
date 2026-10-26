@@ -23,3 +23,6 @@
 #
 # Example:
 #   v0.24.0 dcctl install:--dev flag-removed Replaced by --profile=dev, which also sets the placement.
+
+v0.25.2 dcctl bootstrap:--mqtt-body-credential flag-removed The transitional strip was removed; a body credential on the platform MQTT broker is always refused. Drop the flag.
+v0.25.2 dcctl upgrade:--mqtt-body-credential flag-removed The transitional strip was removed; a body credential on the platform MQTT broker is always refused. Drop the flag.

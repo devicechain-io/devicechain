@@ -99,5 +99,7 @@ func TestCaptureBodyCredentialIsRejectedAtLoad(t *testing.T) {
 		err := core.LoadConfiguration([]byte(`{"capture":{"bodyCredential":"`+v+`"}}`), cfg)
 		require.Error(t, err, v)
 		assert.Contains(t, err.Error(), "bodyCredential")
+		assert.Contains(t, err.Error(), "was removed: Delete functionalAreas.event-sources.config.capture.bodyCredential.")
+		assert.Contains(t, err.Error(), "total_msg_credential_in_mqtt_body")
 	}
 }

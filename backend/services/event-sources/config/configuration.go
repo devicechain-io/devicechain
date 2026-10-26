@@ -559,6 +559,20 @@ func (c *EventSourcesConfiguration) validateSourceIds() error {
 	return nil
 }
 
+// RemovedConfigKeys refuses the load while a removed setting is still present (core.ConfigRemover).
+//
+// capture.bodyCredential chose between refusing a body credential on the platform MQTT broker
+// and accepting it with the credential stripped. The strip is gone; refusal is the only
+// behaviour. It is refused rather than retired, whatever its value: an operator still on
+// "strip" has a fleet that is about to go quiet, and has to be told before it happens.
+func (c *EventSourcesConfiguration) RemovedConfigKeys() map[string]string {
+	return map[string]string{
+		"capture.bodyCredential": "Delete functionalAreas.event-sources.config.capture.bodyCredential. " +
+			"A body credential on the platform MQTT broker is always refused (counted on total_msg_credential_in_mqtt_body); " +
+			"update the devices still sending one and rotate their credentials.",
+	}
+}
+
 // RenamedConfigKeys refuses the old spelling of a renamed key with the new one named
 // (core.ConfigRenamer): the ingest ceiling meters READINGS, and the key now says so. It is refused rather than
 // retired because the setting still exists — stripping it would start the service on

@@ -4786,7 +4786,8 @@ instantáneas. Ahora la credencial en el cuerpo se rechaza:
      Los eventos siguen fluyendo y se cuenta cada uno que llevaba una credencial. El `--dry-run` del comando
      no imprime el valor de este indicador; para confirmar que la actualización lo tomó, busca la advertencia de
      arranque de `event-sources` que dice que el ajuste es transitorio, o comprueba que
-     `devicechain_eventsources_capture_body_credential_strip` vale `1`.
+     `devicechain_eventsources_capture_body_credential_strip` vale `1`. En una instalación con el chart (no con `dcctl`), indica
+     en su lugar `functionalAreas.event-sources.config.capture.bodyCredential: strip`.
   2. Despliega el SDK o el firmware que deja de enviar la credencial en el cuerpo.
   3. Vigila `devicechain_eventsources_total_msg_credential_in_mqtt_body` hasta que deje de subir durante
      más tiempo que el intervalo de envío de tu dispositivo más lento. **Recopila la lista de dispositivos
@@ -4804,10 +4805,9 @@ instantáneas. Ahora la credencial en el cuerpo se rechaza:
   `strip` no elimina la exposición: el bróker guardó el cuerpo antes de que se aplicara cualquiera de los
   dos ajustes, así que `strip` y `refuse` dejan el mismo texto claro en reposo, y el paso 5 hace falta con
   ambos. `strip` se aplica solo al bróker MQTT de la plataforma. Un `dcctl upgrade` posterior sin la opción
-  conserva el valor. Era transitorio y se eliminó en la `v0.26.0`: desde esa versión una credencial en el cuerpo se rechaza
-  siempre, la opción `--mqtt-body-credential` ya no existe y `event-sources` no arranca mientras siga indicado
-  `capture.bodyCredential`. En una instalación con el chart (no con `dcctl`) indica
-  `functionalAreas.event-sources.config.capture.bodyCredential`.
+  conserva el valor. `strip` era transitorio y se elimina en la `v0.26.0`: desde esa versión una credencial en el cuerpo se
+  rechaza siempre, la opción `--mqtt-body-credential` ya no existe y `event-sources` no arranca mientras siga indicado
+  `capture.bodyCredential`. Elimina la clave antes de actualizar a la `v0.26.0`.
 
   Mientras la actualización se despliega, un pod de `event-sources` de esta versión puede quitar la
   credencial de un evento antes de que `device-management` se haya actualizado. Un `device-management` de

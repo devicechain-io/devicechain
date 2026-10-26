@@ -2744,7 +2744,8 @@ dcctl upgrade local devicechain --version v0.24.0
   1. 使用 `dcctl upgrade local devicechain --version v0.24.0 --mqtt-body-credential=strip` 升级。事件继续流入，
      每个带凭据的事件都会被计数。该命令的 `--dry-run`
      不会打印此标志的取值；要确认升级已采用它，请查看 `event-sources` 启动时说明该设置为过渡性的警告，或检查
-     `devicechain_eventsources_capture_body_credential_strip` 是否为 `1`。
+     `devicechain_eventsources_capture_body_credential_strip` 是否为 `1`。使用 chart 安装（不是 `dcctl`）时，请改为设置
+     `functionalAreas.event-sources.config.capture.bodyCredential: strip`。
   2. 推出不再在正文中发送凭据的 SDK 或固件。
   3. 观察 `devicechain_eventsources_total_msg_credential_in_mqtt_body`，直到它停止增长的时间超过你最慢那台设备的
      上报间隔。**请边观察边收集设备清单。** `event-sources` 日志中的警告会写明每个仍在发送凭据的设备所属的租户和设备
@@ -2754,10 +2755,9 @@ dcctl upgrade local devicechain --version v0.24.0
   5. 轮换第 3 步收集的清单中每台设备的凭据（以及第 4 步之后解码失败 stream 点名的设备）。
 
   `strip` 不会消除暴露：代理在这两种设置生效之前就已存下了正文，所以 `strip` 与 `refuse` 留下的静态明文相同，
-  两者都需要第 5 步。`strip` 只作用于平台 MQTT 代理。之后不带该选项的 `dcctl upgrade` 会保留这个值。它是过渡性
-  的，已在 `v0.26.0` 中移除：从该版本起，正文中的凭据一律被拒绝，`--mqtt-body-credential` 标志不复存在，
-  只要仍设置着 `capture.bodyCredential`，`event-sources` 就会拒绝启动。使用 chart 安装（不是 `dcctl`）
-  时，请设置 `functionalAreas.event-sources.config.capture.bodyCredential`。
+  两者都需要第 5 步。`strip` 只作用于平台 MQTT 代理。之后不带该选项的 `dcctl upgrade` 会保留这个值。`strip` 是过渡性
+  的，将在 `v0.26.0` 中移除：从该版本起，正文中的凭据一律被拒绝，`--mqtt-body-credential` 标志不复存在，
+  只要仍设置着 `capture.bodyCredential`，`event-sources` 就会拒绝启动。升级到 `v0.26.0` 之前请删除该键。
 
   升级滚动期间，本版本的 `event-sources` pod 可能会在 `device-management` 完成滚动之前就去掉某个事件的凭据。
   `v0.23.0` 的 `device-management` 会拒绝这个已不带凭据的事件，并让它在一分钟后再次投递，总共最多投递五次；
