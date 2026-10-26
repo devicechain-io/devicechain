@@ -24,6 +24,8 @@ const (
 	provisioningSecretKeyIdLabel = "devicechain/provisioning-secret/key-id"
 	claimSecretKeyInfo           = "devicechain/device-claim-secret/v1"
 	claimSecretKeyIdLabel        = "devicechain/device-claim-secret/key-id"
+	integrationTokenKeyInfo      = "devicechain/integration-token/v1"
+	integrationTokenKeyIdLabel   = "devicechain/integration-token/key-id"
 )
 
 // MaxEnrollmentSecretBytes is the longest enrollment secret a row may be SET to. The plaintext
@@ -40,6 +42,10 @@ type EnrollmentSecretKeys struct {
 	Provisioning *DeviceSecretKey
 	// Claim is the key of a device claim's one-time secret.
 	Claim *DeviceSecretKey
+	// Integration is the key of an inbound integration's bearer token. It is not an
+	// enrollment secret, but it is stored and verified by exactly the same construction, and
+	// deriving it here keeps one place that turns the root key into keyed-digest keys.
+	Integration *DeviceSecretKey
 }
 
 // DeriveEnrollmentSecretKeys derives the enrollment secret keys from the instance root key
@@ -55,5 +61,10 @@ func DeriveEnrollmentSecretKeys(rootKey []byte) (*EnrollmentSecretKeys, error) {
 	if err != nil {
 		return nil, fmt.Errorf("claim secret key: %w", err)
 	}
-	return &EnrollmentSecretKeys{Provisioning: p, Claim: c}, nil
+	i, err := deriveKeyedSecretKey(rootKey, integrationTokenKeyInfo, integrationTokenKeyIdLabel,
+		"integration token")
+	if err != nil {
+		return nil, fmt.Errorf("integration token key: %w", err)
+	}
+	return &EnrollmentSecretKeys{Provisioning: p, Claim: c, Integration: i}, nil
 }

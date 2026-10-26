@@ -36,6 +36,7 @@ const SCALAR_LABEL_KEY: Record<string, string> = {
   geoFencePositionCeiling: 'fencePositionCeilingLabel',
   geoFencePositionBudget: 'fencePositionBudgetLabel',
   calculatedMetricsPerProfile: 'calculatedMetricsPerProfileLabel',
+  integrationsPerTenant: 'integrationsPerTenantLabel',
 };
 
 // SourceBadge names the level that produced the effective value. This is the half of

@@ -27,7 +27,8 @@ export type TierScalar = {
   key: string;
   // The smallest legal value. Omitted means 1: every ceiling but one refuses 0, because 0
   // would admit nothing. calculatedMetricsPerProfile is that one: 0 is how a tier says
-  // calculated metrics are off, and it is the platform default too.
+  // calculated metrics are off, and it is the platform default too. integrationsPerTenant
+  // also takes 0 (a tier that holds no integrations), though its platform default is 5.
   min?: number;
   max: number;
   labelKey: string;
@@ -41,6 +42,7 @@ export const TIER_SCALARS: readonly TierScalar[] = [
   { key: 'geoFencePositionCeiling', max: 1024, labelKey: 'geoFencePositionCeilingLabel', descriptionKey: 'geoFencePositionCeilingDescription' },
   { key: 'geoFencePositionBudget', max: 128000, labelKey: 'geoFencePositionBudgetLabel', descriptionKey: 'geoFencePositionBudgetDescription' },
   { key: 'calculatedMetricsPerProfile', min: 0, max: 32, labelKey: 'calculatedMetricsPerProfileLabel', descriptionKey: 'calculatedMetricsPerProfileDescription' },
+  { key: 'integrationsPerTenant', min: 0, max: 100, labelKey: 'integrationsPerTenantLabel', descriptionKey: 'integrationsPerTenantDescription' },
 ];
 
 /** The smallest legal value of a scalar. */

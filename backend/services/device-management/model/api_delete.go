@@ -237,6 +237,17 @@ func (api *Api) DeleteDeviceType(ctx context.Context, token string) (bool, error
 	if n > 0 {
 		return false, fmt.Errorf("%w: %d provisioning profile(s) reference device type %q", ErrEntityInUse, n, token)
 	}
+	// An inbound integration is scoped to device types: it resolves only devices of those
+	// types, so deleting one would silently narrow what the integration can reach. The scope
+	// row's foreign key to the type carries no cascade, so it is also the backstop for a
+	// scoping that lands after this count.
+	n, err = api.countReferencing(ctx, &IntegrationDeviceType{}, "device_type_id", dt.ID)
+	if err != nil {
+		return false, err
+	}
+	if n > 0 {
+		return false, fmt.Errorf("%w: %d integration(s) are scoped to device type %q", ErrEntityInUse, n, token)
+	}
 	deleted, err := api.hardDeleteByToken(ctx, &DeviceType{}, token)
 	return deleted, inUseOn(err, fmt.Sprintf("device type %q is still referenced", token))
 }

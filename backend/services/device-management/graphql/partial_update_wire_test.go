@@ -101,6 +101,12 @@ var partialUpdateMutations = []partialUpdateMutation{
 		// only restate what is stored or be refused.
 		forbidden: []string{"credentialType"},
 	},
+	{
+		mutation: "updateIntegration", input: "IntegrationUpdateRequest",
+		// The kind of sender fixes the body format its route parses, so changing it would
+		// re-interpret traffic from a sender that has not changed.
+		forbidden: []string{"type"},
+	},
 	{mutation: "updateEntityRelationshipType", input: "EntityRelationshipTypeUpdateRequest"},
 	// The last conversion. Its token was a RENAME channel on this input rather than a
 	// duplicate identity, so it is not listed in `forbidden` — `token` is checked for
@@ -139,6 +145,7 @@ func newPartialUpdateWireCtx(t *testing.T) context.Context {
 		&model.AssetType{}, &model.Asset{}, &model.CustomerType{}, &model.Customer{}, &model.IssuedCustomerToken{},
 		&model.AreaType{}, &model.Area{}, &model.GeoFence{}, &model.GeoFenceSetVersion{},
 		&model.EntityGroup{}, &model.IssuedGroupToken{}, &model.DeviceCredential{}, &model.ProvisioningProfile{},
+		&model.Integration{}, &model.IntegrationDeviceType{},
 		&model.EntityRelationshipType{}, &model.MaintenanceWindow{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}

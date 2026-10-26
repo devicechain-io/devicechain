@@ -447,6 +447,14 @@ type TenantGovernance {
     # Read by device-management when a profile carrying a calculated metric is published.
     calculatedMetricsPerProfile: Int
     """
+    The most inbound integrations (network servers and webhook senders, each authenticated
+    by its own bearer token) the tenant may hold. Set on the tenant's tier; there is no
+    per-tenant override. When null, the platform default applies, which is 5. Zero is a real
+    setting: the tier holds none.
+    """
+    # Read by device-management when an integration is created.
+    integrationsPerTenant: Int
+    """
     Where the tenant is in its deletion lifecycle: `active` for a normal tenant, or
     `purging` once the tenant has been deleted and its data is being erased. Never null.
     """

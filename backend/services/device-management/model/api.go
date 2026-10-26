@@ -200,6 +200,20 @@ type Api struct {
 	// nothing wired, no profile may publish a calculated metric.
 	CalculatedMetricsCeiling CalculatedMetricsCeilingResolver
 
+	// IntegrationsCeiling, when set, supplies how many inbound integrations the tenant may
+	// hold. NIL MEANS THE PLATFORM DEFAULT (governance.DefaultIntegrationsPerTenant), never
+	// unbounded: with nothing wired a tenant is still held to the default.
+	IntegrationsCeiling IntegrationsCeilingResolver
+
+	// IntegrationChecker compares the bearer token of an inbound integration through the
+	// credential Checker (credential.KindIntegration, under EnrollmentKeys.Integration). The
+	// kind is Unthrottled, so it needs no attempt store. It is built by
+	// processor.NewIntegrationChecker from the same key this Api digests with, which is the
+	// property that makes a digest written here verify there. NIL FAILS CLOSED:
+	// AuthenticateIntegration answers ErrIntegrationsUnavailable, and nothing compares a
+	// token itself.
+	IntegrationChecker *credential.Checker
+
 	// GeoFenceCapRefusals, when set, counts refusals by which cap refused. Nil disables
 	// counting only; it never changes a verdict.
 	GeoFenceCapRefusals GeoFenceCapRefusalCounter

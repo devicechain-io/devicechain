@@ -58,6 +58,7 @@ func partialUpdateFamilies() []putest.Family[*Api] {
 		entityGroupFamily(),
 		deviceCredentialFamily(),
 		provisioningProfileFamily(),
+		integrationFamily(),
 		entityRelationshipTypeFamily(),
 		deviceProfileFamily(),
 	}
@@ -1283,6 +1284,79 @@ func provisioningProfileFamily() putest.Family[*Api] {
 				func(r *ProvisioningProfileUpdateRequest) *dcgraphql.OptionalString { return &r.ExpiresAt }),
 			putest.OptionalStringField("metadata", metadataSeed, `{"fleet":"south"}`,
 				func(r *ProvisioningProfileUpdateRequest) *dcgraphql.OptionalString { return &r.Metadata }),
+		},
+	}
+}
+
+// ─── Integration ───────────────────────────────────────────────────────────
+
+func integrationFamily() putest.Family[*Api] {
+	const (
+		nameSeed        = "Original name"
+		descriptionSeed = "Original description"
+		identitySeed    = "ALIAS:custom.alpha"
+		genericSeed     = `{"idFrom":"pointer:/id"}`
+		metadataSeed    = `{"fleet":"north"}`
+	)
+	return putest.Family[*Api]{
+		Name:    "integration",
+		Token:   "int-1",
+		Migrate: append(append([]any{}, deviceProfileTables...), &Integration{}, &IntegrationDeviceType{}),
+		Seed: func(t *testing.T, api *Api, ctx context.Context) {
+			for _, tok := range []string{"dt-a", "dt-b"} {
+				if _, err := api.CreateDeviceType(ctx, &DeviceTypeCreateRequest{Token: tok}); err != nil {
+					t.Fatalf("seed device type %q: %v", tok, err)
+				}
+			}
+			_, err := api.CreateIntegration(ctx, &IntegrationCreateRequest{
+				Token: "int-1", Name: strp(nameSeed), Description: strp(descriptionSeed),
+				Type: string(IntegrationGenericJSON), Enabled: true, DeviceTypeTokens: []string{"dt-a"},
+				Identity: strp(identitySeed), Generic: strp(genericSeed), Metadata: strp(metadataSeed),
+			})
+			if err != nil {
+				t.Fatalf("seed integration: %v", err)
+			}
+		},
+		Read: func(t *testing.T, api *Api, ctx context.Context) map[string]string {
+			rows, err := api.IntegrationsByToken(ctx, []string{"int-1"})
+			e := requireOne(t, "integration", rows, err)
+			scope := make([]string, 0, len(e.DeviceTypes))
+			for _, dt := range e.DeviceTypes {
+				scope = append(scope, dt.Token)
+			}
+			return map[string]string{
+				"name":             nullStr(e.Name),
+				"description":      nullStr(e.Description),
+				"enabled":          boolStr(e.Enabled),
+				"deviceTypeTokens": putest.RenderStringList(scope),
+				"identity":         e.Identity,
+				"generic":          jsonStr(e.Generic),
+				"linkMetrics":      boolStr(e.LinkMetrics),
+				"metadata":         jsonStr(e.Metadata),
+			}
+		},
+		NewRequest: func() any { return new(IntegrationUpdateRequest) },
+		Update: func(api *Api, ctx context.Context, token string, req any) error {
+			_, err := api.UpdateIntegration(ctx, token, req.(*IntegrationUpdateRequest))
+			return err
+		},
+		Fields: []putest.Field{
+			putest.OptionalStringField("name", nameSeed, "Renamed",
+				func(r *IntegrationUpdateRequest) *dcgraphql.OptionalString { return &r.Name }),
+			putest.OptionalStringField("description", descriptionSeed, "Rewritten",
+				func(r *IntegrationUpdateRequest) *dcgraphql.OptionalString { return &r.Description }),
+			putest.RequiredBoolField("enabled", true,
+				func(r *IntegrationUpdateRequest) *dcgraphql.OptionalBool { return &r.Enabled }),
+			putest.RequiredStringListField("deviceTypeTokens", []string{"dt-a"}, []string{"dt-b"},
+				func(r *IntegrationUpdateRequest) *dcgraphql.OptionalStringList { return &r.DeviceTypeTokens }),
+			putest.RequiredStringField("identity", identitySeed, "ALIAS:custom.beta",
+				func(r *IntegrationUpdateRequest) *dcgraphql.OptionalString { return &r.Identity }),
+			putest.RequiredStringField("generic", genericSeed, `{"idFrom":"header:X-Device-Id"}`,
+				func(r *IntegrationUpdateRequest) *dcgraphql.OptionalString { return &r.Generic }),
+			putest.RequiredBoolField("linkMetrics", false,
+				func(r *IntegrationUpdateRequest) *dcgraphql.OptionalBool { return &r.LinkMetrics }),
+			putest.OptionalStringField("metadata", metadataSeed, `{"fleet":"south"}`,
+				func(r *IntegrationUpdateRequest) *dcgraphql.OptionalString { return &r.Metadata }),
 		},
 	}
 }

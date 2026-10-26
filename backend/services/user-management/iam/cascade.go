@@ -302,3 +302,14 @@ func (t *Tenant) EffectiveCalculatedMetricsPerProfile() (*int, SettingSource) {
 	}
 	return nil, SourcePlatformDefault
 }
+
+// EffectiveIntegrationsPerTenant resolves how many inbound integrations this tenant may
+// hold: the tier's setting, else nil (SourcePlatformDefault), which device-management folds
+// onto the platform default. There is no per-tenant override level for this setting; the
+// count is packaging, set on the tier.
+func (t *Tenant) EffectiveIntegrationsPerTenant() (*int, SettingSource) {
+	if v := t.Tier.IntegrationsPerTenant(); v != nil {
+		return v, SourceTier
+	}
+	return nil, SourcePlatformDefault
+}
