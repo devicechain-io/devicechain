@@ -69,27 +69,42 @@ A panel that can fall back this way says so in its description (*"While the read
 is down this shows the message broker's own count"*). Both sources count the same messages, so the panel keeps
 one continuous line when one takes over from the other.
 
-The panels that carry the broker fallback are the *Unread backlog per reader*, *Handed out,
-not yet acknowledged* and *Share of stream capacity left unread* panels on the Messaging
-board; the capture-backlog panels on Ingest; the consumer-lag and backlog panels on Event
-processing; the backlog panels on Delivery (dispatch, notification and update-report); the
-*Events waiting to be stored* and *Updates waiting to be applied* panels on Persistence; and
-the *Largest backlog share* tile on the overview.
+Nineteen panels carry the broker fallback:
+
+- **Messaging:** *Unread backlog per reader*, *Handed out, not yet acknowledged* and
+  *Share of stream capacity left unread*.
+- **Ingest:** *Backlog against its limit*, *Backlog and stream fill over time*, *Arriving vs
+  backlog growth* (its backlog growth line) and *Capture backlog in messages* (its first line).
+- **Event processing:** *Consumer lag (undelivered)*, *In-flight (delivered-unacked)*,
+  *Consumer backlog*, *Derived-event backlog* and *Consumer unread backlog (share of stream
+  capacity)*.
+- **Delivery:** *Waiting to be sent*, *Dispatch backlog*, *Notification backlog* and
+  *Update report backlog*.
+- **Persistence:** *Events waiting to be stored* and *Updates waiting to be applied*.
+- **Overview:** the *Largest backlog share* tile.
+
+*Messages waiting to be redelivered* on Messaging is the broker's own count at all times, so
+it has no reader source to fall back from.
 
 Two limits are worth knowing:
 
 - **The fallback needs the broker's metrics.** The monitoring stack scrapes the broker, so on
   a default install the fallback works. If you run your own Prometheus without scraping the
   broker, a backlog panel goes blank when its reader stops, as it did before.
-- **Loss counters have no fallback.** The panels that count messages the stream *discarded
-  before the reader read them* (*Removed before being read*, *Messages lost unread*) are
-  counted by the reader itself. While it is down they cannot advance, and they pick up where
-  they were when it returns. To judge the risk of loss during an outage, watch the
-  *Share of stream capacity left unread* panel, which keeps working: at 100% the stream starts
-  discarding messages the reader has not seen. See [Messages a consumer never read](./observability.md#unread-loss).
+- **Loss counters have no fallback.** The tiles and lines that count messages the stream
+  *discarded before the reader read them* are counted by the reader itself: on Ingest,
+  *Messages lost before being read, over the range* and *…, any consumer* and the second line
+  of *Capture backlog in messages* (the unread gap); on Messaging, *Messages lost unread
+  (range)* and *Messages lost unread /s*; and the overview's *Messages lost*. While the reader
+  is down these tiles read 0, and that is not evidence that nothing was lost. Messages
+  discarded during the outage are counted only after the reader returns, as a lower bound, at
+  the time it returns. During an outage, judge the risk from *Share of stream capacity left
+  unread*, which keeps working: at 100% the stream starts discarding messages the reader has
+  not seen. See [Messages a consumer never read](./observability.md#unread-loss).
 
-A missing series means "not measured", never "nothing waiting". If a backlog panel is empty
-when the reader is up, wait for the reader's first sample (about 30 seconds after it starts).
+A missing series means "not measured", never "nothing waiting". If a backlog panel is empty,
+neither source has reported: check that the broker is being scraped (Messaging, *Broker servers
+up*) and that the reader's durable exists.
 
 ## The overview {#overview-board}
 
@@ -120,14 +135,16 @@ there:
 
 | Tile | Counts | Colour | Alert |
 | --- | --- | --- | --- |
-| *Areas with no pod available* | Deployments that **want** at least one pod and have none available. | Red from 1. | `InstanceAreaUnavailable`, after ten minutes. |
-| *Areas scaled to 0* | Deployments set to run **zero** pods. | Blue from 1. | None. |
+| *Areas with no pod available* | Areas and the console that **want** at least one pod and have none available. | Red from 1. | `InstanceAreaUnavailable`, after ten minutes. |
+| *Areas scaled to 0* | Areas and the console set to run **zero** pods. | Blue from 1. | None. |
 
-The difference is intent. An area scaled to zero was turned off on purpose, as an optional
-area you do not use or one paused for maintenance, so it is shown as its own state rather
-than as an outage, and it never alerts. The two tiles never count the same area. If an area
+The difference is intent. An area at zero was scaled down by hand
+(`kubectl scale … --replicas=0`), for example paused for maintenance, so it is shown as its own
+state rather than as an outage, and it never alerts. The two tiles never count the same area. If an area
 shows under *Areas scaled to 0* and you did not scale it, scale it back: it is not serving,
-and nothing will page you about it.
+and nothing will page you about it. The tiles count the areas and the console, which is also a
+deployment of the instance; the message broker's debugging pod is left out of both, and out of
+the alert, because it is not an area.
 
 An area the instance's profile does not run has no deployment at all, so it appears in
 neither tile.
@@ -142,7 +159,7 @@ MQTT messages waiting to be forwarded.
 
 | Group | What it shows |
 | --- | --- |
-| Backlog of MQTT messages waiting to be forwarded | The capture stream's backlog against its limit, its fill, messages lost before being read, and leader changes. The backlog panels have the [broker fallback](#backlog-panels). Above 10% and rising, add `event-sources` replicas; at 100% the oldest unread messages are discarded. |
+| Backlog of MQTT messages waiting to be forwarded | The capture stream's backlog against its limit, its fill, messages lost before being read, and leader changes. Its backlog panels have the [broker fallback](#backlog-panels), except the unread-gap line of *Capture backlog in messages*. Above 10% and rising, add `event-sources` replicas; at 100% the oldest unread messages are discarded. |
 | Refused or lost at the door | Messages refused to protect unread data, held back by rate limits, rejected as malformed, refused for a deleted tenant or a credential in the MQTT body, and external publishes that failed. |
 | Protection of the MQTT message store | Required consumers present, store settings put back, gateway streams without a size limit, and connections refused because the store is full or busy. |
 | Device presence and external sources | Online and offline changes not recorded, external MQTT sources without exactly one reader, and the device sign-in cache. |
@@ -154,7 +171,7 @@ Alerts behind it: the MQTT and capture-stream alerts described in
 [Messages a consumer never read](./observability.md#unread-loss), the external-source alerts in
 [An external MQTT source nobody reads](./observability.md#external-mqtt-owner), the
 registration alerts in [Device self-registration](./observability.md#self-registration-alerts), and the
-credential-cache, rate-limiter and edge-service alerts.
+credential-cache and rate-limiter alerts, and the Sparkplug and LwM2M ingest alerts.
 
 ## Messaging {#messaging-board}
 
@@ -178,6 +195,8 @@ Alerts behind it: the [`JetStream*`](./observability.md#consumer-backlog) alerts
 [`BrokerConnectionDiedSilently`](./observability.md#broker-connection-dead),
 [`ReaderHeldMessagePastAckWait`](./observability.md#held-past-ack-wait),
 [`MaxDeliveryRecordsWaiting`](./observability.md#max-delivery-records), the
+[`ReplayCoveredDeliveriesExhausted`](./observability.md#ingest-backpressure),
+[`BrokerPresenceLosingTransitions`](./observability.md#event-resolution), the
 [replication](./observability.md#replication) alerts and the dead-letter alerts.
 
 ## Persistence and state {#persistence-board}
@@ -205,7 +224,7 @@ database, not only this instance's.
 Alerts behind it: [`DeviceStateDroppingEvents`](./observability.md#live-state-projection),
 the [backup-archiving](./observability.md#backup-archiving) and
 [database control plane](./observability.md#database-control-plane) alerts, the
-`Database*` volume alerts and `TenantPurge*`.
+`Database*` volume alerts, `BackupDestination*` and `TenantPurge*`.
 
 ## Event processing {#event-processing-board}
 
@@ -217,9 +236,9 @@ It watches the detection and reaction engine described in
 
 | Group | What it shows |
 | --- | --- |
-| Pipeline health | Consumer lag, in-flight messages, watermark lag, rules active, events applied and checkpoints per second. Consumer lag and in-flight have the [backlog fallback](#backlog-panels). |
+| Pipeline health | Consumer lag, in-flight messages, watermark lag, rules active, events applied and checkpoints per second. Consumer lag, in-flight and the consumer backlog panels have the [backlog fallback](#backlog-panels). |
 | DETECT engine | Fan-out throughput, detections rejected before publish, evaluation errors, and the version-drop safety gates. |
-| REACT dispatcher | Actions dispatched, dispatch faults, the derived-event backlog, concurrency and dispatch lag (p50 and p99). |
+| REACT dispatcher | Actions dispatched, dispatch faults, the derived-event backlog (with the fallback), concurrency and dispatch lag (p50 and p99). |
 | State budget | Live keyed-state entries, and the tenants that are over their rule, live-key or retained-sample budget. |
 | Snapshot and restore | Checkpoint cost, snapshot size and restore cost at startup. |
 | JetStream streams | Stream fill and the consumer's unread share of stream capacity. |
@@ -286,16 +305,19 @@ node under it.** It is the one board that is about the processes, not the messag
 Alerts behind it: [`InstanceContainerRestarted`](./observability.md#container-restarts),
 the `Sso*` and credential-store alerts, `TenantPurge*`,
 [`SafetyGateDisabled`](./observability.md#safety-gates) and
-[`TenantsMeteredAtPlatformDefault`](./observability.md#tenant-ceilings).
+[`TenantsMeteredAtPlatformDefault`](./observability.md#tenant-ceilings), `RateLimiterOverflowInUse`,
+`RateMeteringClockFallback`, `ReactShedLettersOverBudget` and `ConnectorDispatchRateLimited`.
 
 ## What the boards do not cover {#not-covered}
 
-- **The Kubernetes operator** exports no metrics. Only the Kubernetes deployment series show
-  it, through the replica panels on the overview and Platform.
+- **The Kubernetes operator** runs in its own namespace. Nothing scrapes its metrics, and no
+  board shows it, not even the replica panels, which read only this instance's namespace.
 - **HTTP and GraphQL request rate, errors and latency** per service are not exported, so no
   board charts them.
 - **End-to-end event age** from ingest to stored or detected is not measured. The backlog
-  panels are the closest stand-in: a growing backlog is a growing delay.
+  panels are a stand-in: a growing backlog is a growing delay. The nearest actual measure of
+  age is `detect_watermark_lag_seconds`, shown on Event processing as *Watermark lag*, which
+  is how far the detection engine's watermark trails the wall clock.
 - **Edge agents** run on customer hardware and are not scraped.
 
 ## Related {#related}

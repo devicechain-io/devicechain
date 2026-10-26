@@ -35,14 +35,23 @@ title: Grafana 仪表盘
 
 可以这样回退的面板会在说明里写明（*“While the reading service is down this shows the message broker's own count”*）。两个来源统计的是同一批消息，因此一个接替另一个时，面板上的曲线保持连续。
 
-带有代理回退的面板包括：Messaging 仪表盘的 *Unread backlog per reader*、*Handed out, not yet acknowledged* 和 *Share of stream capacity left unread*；Ingest 的捕获积压面板；Event processing 的消费滞后和积压面板；Delivery 的积压面板（分发、通知和更新上报）；Persistence 的 *Events waiting to be stored* 和 *Updates waiting to be applied*；以及总览的 *Largest backlog share* 指标卡。
+共有十九个面板带有代理回退：
+
+- **Messaging：***Unread backlog per reader*、*Handed out, not yet acknowledged* 和 *Share of stream capacity left unread*。
+- **Ingest：***Backlog against its limit*、*Backlog and stream fill over time*、*Arriving vs backlog growth*（其积压增长曲线）和 *Capture backlog in messages*（其第一条线）。
+- **Event processing：***Consumer lag (undelivered)*、*In-flight (delivered-unacked)*、*Consumer backlog*、*Derived-event backlog* 和 *Consumer unread backlog (share of stream capacity)*。
+- **Delivery：***Waiting to be sent*、*Dispatch backlog*、*Notification backlog* 和 *Update report backlog*。
+- **Persistence：***Events waiting to be stored* 和 *Updates waiting to be applied*。
+- **总览：***Largest backlog share* 指标卡。
+
+Messaging 的 *Messages waiting to be redelivered* 始终是代理自己的计数，因此没有可回退的读取方来源。
 
 有两点限制需要了解：
 
 - **回退依赖代理的指标。**监控栈会采集代理，所以默认安装下回退可用。如果你使用自己的 Prometheus 且没有采集代理，读取方停止时积压面板会像以前一样变成空白。
-- **丢失计数器没有回退。**统计流在读取方读取之前就*丢弃*的消息的面板（*Removed before being read*、*Messages lost unread*）由读取方自己计数。它宕机期间无法推进，恢复后从原来的位置继续。要判断中断期间的丢失风险，请观察仍然有效的 *Share of stream capacity left unread* 面板：达到 100% 时，流开始丢弃读取方尚未看到的消息。参见[消费者从未读取的消息](./observability.md#unread-loss)。
+- **丢失计数器没有回退。**统计流在读取方读取之前就丢弃的消息的指标卡和曲线由读取方自己计数：Ingest 的 *Messages lost before being read, over the range* 和 *…, any consumer*，以及 *Capture backlog in messages* 的第二条线（未读缺口）；Messaging 的 *Messages lost unread (range)* 和 *Messages lost unread /s*；以及总览的 *Messages lost*。读取方宕机期间这些指标卡显示 0，这并不能证明没有丢失。中断期间被丢弃的消息只有在读取方恢复后才会被计入，作为下限，并记在其恢复的时间点。中断期间请根据仍然有效的 *Share of stream capacity left unread* 判断风险：达到 100% 时，流开始丢弃读取方尚未看到的消息。参见[消费者从未读取的消息](./observability.md#unread-loss)。
 
-序列缺失表示“未测量”，绝不表示“没有等待的消息”。如果读取方在运行而积压面板为空，请等待读取方的第一次采样（启动后约 30 秒）。
+序列缺失表示“未测量”，绝不表示“没有等待的消息”。如果积压面板为空，说明两个来源都没有上报：请检查代理是否被采集（Messaging 的 *Broker servers up*），以及读取方的 durable 是否存在。
 
 ## 总览 {#overview-board}
 
@@ -66,10 +75,10 @@ title: Grafana 仪表盘
 
 | 指标卡 | 统计 | 颜色 | 告警 |
 | --- | --- | --- | --- |
-| *Areas with no pod available* | **期望**至少一个 Pod 却没有任何可用 Pod 的 deployment。 | 从 1 起为红色。 | `InstanceAreaUnavailable`，十分钟后触发。 |
-| *Areas scaled to 0* | 被设置为运行**零**个 Pod 的 deployment。 | 从 1 起为蓝色。 | 无。 |
+| *Areas with no pod available* | **期望**至少一个 Pod 却没有任何可用 Pod 的领域和控制台。 | 从 1 起为红色。 | `InstanceAreaUnavailable`，十分钟后触发。 |
+| *Areas scaled to 0* | 被设置为运行**零**个 Pod 的领域和控制台。 | 从 1 起为蓝色。 | 无。 |
 
-区别在于意图。缩容到零的领域是被有意关闭的，比如你不使用的可选领域，或因维护而暂停的领域，所以它作为独立状态显示，而不是故障，也绝不会告警。两张指标卡不会重复统计同一个领域。如果某个领域出现在 *Areas scaled to 0* 中而你并没有缩容它，请把它扩回去：它没有在提供服务，而且不会有任何告警通知你。
+区别在于意图。降为零的领域是被手动缩容的（`kubectl scale … --replicas=0`），例如因维护而暂停，所以它作为独立状态显示，而不是故障，也绝不会告警。两张指标卡不会重复统计同一个领域。如果某个领域出现在 *Areas scaled to 0* 中而你并没有缩容它，请把它扩回去：它没有在提供服务，而且不会有任何告警通知你。这两张指标卡统计的是各领域和控制台（它同样是实例的一个 deployment）；消息代理的调试 Pod 不属于领域，因此被排除在两张指标卡和告警之外。
 
 实例的配置档不运行的领域根本没有 deployment，因此两张指标卡里都不会出现。
 
@@ -81,14 +90,14 @@ title: Grafana 仪表盘
 
 | 分组 | 显示内容 |
 | --- | --- |
-| Backlog of MQTT messages waiting to be forwarded | 捕获流的积压相对其上限的比例、占用率、读取前丢失的消息和 leader 变更。积压面板带有[代理回退](#backlog-panels)。超过 10% 且仍在上升时，增加 `event-sources` 副本；达到 100% 时最旧的未读消息会被丢弃。 |
+| Backlog of MQTT messages waiting to be forwarded | 捕获流的积压相对其上限的比例、占用率、读取前丢失的消息和 leader 变更。积压面板带有[代理回退](#backlog-panels)（*Capture backlog in messages* 的未读缺口线除外）。超过 10% 且仍在上升时，增加 `event-sources` 副本；达到 100% 时最旧的未读消息会被丢弃。 |
 | Refused or lost at the door | 为保护未读数据而被拒绝、被速率限制拦下、因格式错误被拒绝、因租户已删除或 MQTT 正文中含凭据被拒绝的消息，以及失败的外部发布。 |
 | Protection of the MQTT message store | 必需消费者是否在位、被恢复的存储设置、没有大小上限的网关流，以及因存储已满或繁忙而被拒绝的连接。 |
 | Device presence and external sources | 未记录的上线与下线变化、读取方不是恰好一个的外部 MQTT 来源，以及设备登录缓存。 |
 | Device self-registration | 已注册设备、按原因划分的拒绝，以及响应时间。 |
 | Sparkplug ingest, LwM2M ingest | 仅在这些可选服务运行时出现：活跃读取方或服务状态、失败，以及各协议的流量。 |
 
-支撑它的告警：[接入链路背压](./observability.md#ingest-backpressure)和[消费者从未读取的消息](./observability.md#unread-loss)中介绍的 MQTT 与捕获流告警，[无人读取的外部 MQTT 来源](./observability.md#external-mqtt-owner)中的外部来源告警，[设备自注册](./observability.md#self-registration-alerts)中的注册告警，以及凭据缓存、速率限制器和边缘服务告警。
+支撑它的告警：[接入链路背压](./observability.md#ingest-backpressure)和[消费者从未读取的消息](./observability.md#unread-loss)中介绍的 MQTT 与捕获流告警，[无人读取的外部 MQTT 来源](./observability.md#external-mqtt-owner)中的外部来源告警，[设备自注册](./observability.md#self-registration-alerts)中的注册告警，以及凭据缓存和速率限制器告警，还有 Sparkplug 与 LwM2M 接入告警。
 
 ## Messaging {#messaging-board}
 
@@ -106,7 +115,7 @@ title: Grafana 仪表盘
 | Failed deliveries and dead letters | 耗尽投递次数的消息、已保存、未保存或丢失的死信，以及静默失效的代理连接。 |
 | Key-value buckets and caches | 由内存应答的缓存读取、已用内存、被逐出的条目、失败和操作耗时。 |
 
-支撑它的告警：[`JetStream*`](./observability.md#consumer-backlog) 告警、[`BrokerConnectionDiedSilently`](./observability.md#broker-connection-dead)、[`ReaderHeldMessagePastAckWait`](./observability.md#held-past-ack-wait)、[`MaxDeliveryRecordsWaiting`](./observability.md#max-delivery-records)、[复制](./observability.md#replication)告警和死信告警。
+支撑它的告警：[`JetStream*`](./observability.md#consumer-backlog) 告警、[`BrokerConnectionDiedSilently`](./observability.md#broker-connection-dead)、[`ReaderHeldMessagePastAckWait`](./observability.md#held-past-ack-wait)、[`MaxDeliveryRecordsWaiting`](./observability.md#max-delivery-records)、[`ReplayCoveredDeliveriesExhausted`](./observability.md#ingest-backpressure)、[`BrokerPresenceLosingTransitions`](./observability.md#event-resolution)、[复制](./observability.md#replication)告警和死信告警。
 
 ## Persistence and state {#persistence-board}
 
@@ -126,7 +135,7 @@ title: Grafana 仪表盘
 
 关系型数据库和备份对象存储位于集群内所有实例共享的命名空间中。这些面板在说明里写明了这一点，显示的是共享数据库，而不只是本实例的。
 
-支撑它的告警：[`DeviceStateDroppingEvents`](./observability.md#live-state-projection)、[备份归档](./observability.md#backup-archiving)和[数据库控制平面](./observability.md#database-control-plane)告警、`Database*` 卷告警，以及 `TenantPurge*`。
+支撑它的告警：[`DeviceStateDroppingEvents`](./observability.md#live-state-projection)、[备份归档](./observability.md#backup-archiving)和[数据库控制平面](./observability.md#database-control-plane)告警、`Database*` 卷告警、`BackupDestination*`，以及 `TenantPurge*`。
 
 ## Event processing {#event-processing-board}
 
@@ -136,9 +145,9 @@ title: Grafana 仪表盘
 
 | 分组 | 显示内容 |
 | --- | --- |
-| Pipeline health | 消费滞后、在途消息、水位线滞后、生效的规则、每秒应用的事件和每秒检查点。消费滞后与在途消息带有[积压回退](#backlog-panels)。 |
+| Pipeline health | 消费滞后、在途消息、水位线滞后、生效的规则、每秒应用的事件和每秒检查点。消费滞后、在途消息和消费者积压面板带有[积压回退](#backlog-panels)。 |
 | DETECT engine | 扇出吞吐量、发布前被拒绝的检测结果、求值错误，以及版本丢弃安全闸。 |
-| REACT dispatcher | 已分发的动作、分发故障、派生事件积压、并发度和分发延迟（p50 与 p99）。 |
+| REACT dispatcher | 已分发的动作、分发故障、派生事件积压（带有回退）、并发度和分发延迟（p50 与 p99）。 |
 | State budget | 存活的按键状态条目，以及超出规则、存活键或保留样本预算的租户。 |
 | Snapshot and restore | 检查点开销、快照大小和启动时的恢复开销。 |
 | JetStream streams | 流的占用率，以及消费者未读部分占流容量的比例。 |
@@ -194,13 +203,13 @@ title: Grafana 仪表盘
 | Limits and safety gates | 被关闭的安全闸、按平台默认值计量的租户、已用的共享额度、被舍弃的出站动作，以及设备流量和出站调用触及的上限。 |
 | AI inference | 按结果划分的推理调用和使用的模型令牌。 |
 
-支撑它的告警：[`InstanceContainerRestarted`](./observability.md#container-restarts)、`Sso*` 和凭据存储告警、`TenantPurge*`、[`SafetyGateDisabled`](./observability.md#safety-gates) 和 [`TenantsMeteredAtPlatformDefault`](./observability.md#tenant-ceilings)。
+支撑它的告警：[`InstanceContainerRestarted`](./observability.md#container-restarts)、`Sso*` 和凭据存储告警、`TenantPurge*`、[`SafetyGateDisabled`](./observability.md#safety-gates) 和 [`TenantsMeteredAtPlatformDefault`](./observability.md#tenant-ceilings)、`RateLimiterOverflowInUse`、`RateMeteringClockFallback`、`ReactShedLettersOverBudget` 和 `ConnectorDispatchRateLimited`。
 
 ## 仪表盘未覆盖的内容 {#not-covered}
 
-- **Kubernetes Operator** 不导出指标。只有 Kubernetes deployment 序列能反映它，体现在总览和 Platform 的副本面板上。
+- **Kubernetes Operator** 运行在它自己的命名空间中。没有任何组件采集它的指标，也没有仪表盘显示它，连副本面板也不显示，因为那些面板只读取本实例的命名空间。
 - 每个服务的 **HTTP 与 GraphQL 请求速率、错误和延迟**没有导出，因此没有仪表盘绘制它们。
-- 从接入到存储或检测的**端到端事件年龄**没有被测量。最接近的替代是积压面板：积压增长就意味着延迟增长。
+- 从接入到存储或检测的**端到端事件年龄**没有被测量。积压面板只是替代：积压增长就意味着延迟增长。最接近的真实年龄度量是 `detect_watermark_lag_seconds`，Event processing 将其显示为 *Watermark lag*，即检测引擎水位线落后墙上时钟多少。
 - **边缘代理**运行在客户硬件上，不被采集。
 
 ## 相关内容 {#related}

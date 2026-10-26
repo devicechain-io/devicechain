@@ -111,8 +111,8 @@
       "translationSha256": "d9ac66375b19e8786e8e4964b5bc1b2d66709366086719d00c086cd8f012dd0a"
     },
     "deployment/grafana-boards.md": {
-      "sourceSha256": "c511601909e98939b498674a0ecca42c1ef9aa7290d7573a4abbdd6dd9b559b6",
-      "translationSha256": "31b6d25c0bc5050d53c955240af9ba18ab17d3ff9ebbb52753f990539aaf8c4e"
+      "sourceSha256": "dcb3e71bc1562c5a1d04b26790b48404340efff24bc75be3f2900eedf4034cf2",
+      "translationSha256": "3b051e1f38ed6656d7645a02085fb390f0359394c1cec79dddaa49ca74de2c51"
     },
     "deployment/kubernetes-operator.md": {
       "sourceSha256": "4947ae8be7d4297b39e5b326c9e5a8001e0fe918c540a343e17ab610e7bf5ef4",

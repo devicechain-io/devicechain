@@ -71,12 +71,23 @@ Un panel que puede recurrir a esta alternativa lo dice en su descripción (*"Whi
 service is down this shows the message broker's own count"*). Ambas fuentes cuentan los mismos
 mensajes, así que el panel mantiene una línea continua cuando una releva a la otra.
 
-Los paneles con la alternativa del broker son *Unread backlog per reader*, *Handed out, not yet
-acknowledged* y *Share of stream capacity left unread* en el panel Messaging; los paneles de
-retraso de captura en Ingest; los paneles de retraso del consumidor y de retraso acumulado en Event
-processing; los paneles de retraso en Delivery (despacho, notificaciones e informes de
-actualización); los paneles *Events waiting to be stored* y *Updates waiting to be applied* en
-Persistence; y el indicador *Largest backlog share* del resumen.
+Diecinueve paneles tienen la alternativa del broker:
+
+- **Messaging:** *Unread backlog per reader*, *Handed out, not yet acknowledged* y
+  *Share of stream capacity left unread*.
+- **Ingest:** *Backlog against its limit*, *Backlog and stream fill over time*, *Arriving vs
+  backlog growth* (su línea de crecimiento del retraso) y *Capture backlog in messages* (su
+  primera línea).
+- **Event processing:** *Consumer lag (undelivered)*, *In-flight (delivered-unacked)*,
+  *Consumer backlog*, *Derived-event backlog* y *Consumer unread backlog (share of stream
+  capacity)*.
+- **Delivery:** *Waiting to be sent*, *Dispatch backlog*, *Notification backlog* y
+  *Update report backlog*.
+- **Persistence:** *Events waiting to be stored* y *Updates waiting to be applied*.
+- **Overview:** el indicador *Largest backlog share*.
+
+*Messages waiting to be redelivered*, en Messaging, es siempre el recuento del propio broker, así
+que no tiene una fuente del lector a la que recurrir.
 
 Conviene conocer dos límites:
 
@@ -84,16 +95,19 @@ Conviene conocer dos límites:
   broker, así que en una instalación por defecto la alternativa funciona. Si usa su propio
   Prometheus sin recoger las del broker, un panel de retraso se queda en blanco cuando su lector se
   detiene, como antes.
-- **Los contadores de pérdida no tienen alternativa.** Los paneles que cuentan los mensajes que el
-  flujo *descartó antes de que el lector los leyera* (*Removed before being read*, *Messages lost
-  unread*) los cuenta el propio lector. Mientras está caído no pueden avanzar, y continúan donde
-  estaban cuando vuelve. Para juzgar el riesgo de pérdida durante una interrupción, vigile el panel
-  *Share of stream capacity left unread*, que sigue funcionando: al 100 % el flujo empieza a
-  descartar mensajes que el lector no ha visto. Consulte
-  [Mensajes que un consumidor nunca leyó](./observability.md#unread-loss).
+- **Los contadores de pérdida no tienen alternativa.** Los indicadores y líneas que cuentan los
+  mensajes que el flujo *descartó antes de que el lector los leyera* los cuenta el propio lector:
+  en Ingest, *Messages lost before being read, over the range* y *…, any consumer* y la segunda
+  línea de *Capture backlog in messages* (la brecha sin leer); en Messaging, *Messages lost unread
+  (range)* y *Messages lost unread /s*; y *Messages lost* del resumen. Mientras el lector está
+  caído, estos indicadores marcan 0, y eso no demuestra que no se haya perdido nada. Los mensajes
+  descartados durante la interrupción se cuentan solo cuando el lector vuelve, como cota inferior
+  y con la hora de su regreso. Durante una interrupción, juzgue el riesgo con *Share of stream
+  capacity left unread*, que sigue funcionando: al 100 % el flujo empieza a descartar mensajes que
+  el lector no ha visto. Consulte [Mensajes que un consumidor nunca leyó](./observability.md#unread-loss).
 
-Una serie ausente significa "no medido", nunca "nada esperando". Si un panel de retraso está vacío
-con el lector en marcha, espere a la primera muestra del lector (unos 30 segundos tras arrancar).
+Una serie ausente significa "no medido", nunca "nada esperando". Si un panel de retraso está vacío, ninguna de las dos fuentes ha reportado: compruebe que el
+broker se está recolectando (Messaging, *Broker servers up*) y que existe el durable del lector.
 
 ## El resumen {#overview-board}
 
@@ -124,14 +138,16 @@ diciendo qué se quiere y qué hay:
 
 | Indicador | Cuenta | Color | Alerta |
 | --- | --- | --- | --- |
-| *Areas with no pod available* | Deployments que **quieren** al menos un pod y no tienen ninguno disponible. | Rojo desde 1. | `InstanceAreaUnavailable`, tras diez minutos. |
-| *Areas scaled to 0* | Deployments configurados para ejecutar **cero** pods. | Azul desde 1. | Ninguna. |
+| *Areas with no pod available* | Áreas y consola que **quieren** al menos un pod y no tienen ninguno disponible. | Rojo desde 1. | `InstanceAreaUnavailable`, tras diez minutos. |
+| *Areas scaled to 0* | Áreas y consola configuradas para ejecutar **cero** pods. | Azul desde 1. | Ninguna. |
 
-La diferencia es la intención. Un área escalada a cero se apagó a propósito, por ser un área
-opcional que no usa o por estar en pausa por mantenimiento, así que se muestra como un estado
-propio y no como una caída, y nunca genera alertas. Los dos indicadores nunca cuentan la misma
+La diferencia es la intención. Un área en cero se redujo a mano
+(`kubectl scale … --replicas=0`), por ejemplo en pausa por mantenimiento, así que se muestra como
+un estado propio y no como una caída, y nunca genera alertas. Los dos indicadores nunca cuentan la misma
 área. Si un área aparece en *Areas scaled to 0* y usted no la escaló, vuelva a escalarla: no está
-sirviendo, y nada le avisará de ello.
+sirviendo, y nada le avisará de ello. Los indicadores cuentan las áreas y la consola, que también
+es un deployment de la instancia; el pod de depuración del broker de mensajes queda fuera de ambos,
+y de la alerta, porque no es un área.
 
 Un área que el perfil de la instancia no ejecuta no tiene ningún deployment, así que no aparece en
 ninguno de los dos indicadores.
@@ -146,7 +162,7 @@ a la espera de ser reenviados.
 
 | Grupo | Qué muestra |
 | --- | --- |
-| Backlog of MQTT messages waiting to be forwarded | El retraso del flujo de captura frente a su límite, su ocupación, los mensajes perdidos antes de ser leídos y los cambios de líder. Los paneles de retraso tienen la [alternativa del broker](#backlog-panels). Por encima del 10 % y subiendo, añada réplicas de `event-sources`; al 100 % se descartan los mensajes sin leer más antiguos. |
+| Backlog of MQTT messages waiting to be forwarded | El retraso del flujo de captura frente a su límite, su ocupación, los mensajes perdidos antes de ser leídos y los cambios de líder. Sus paneles de retraso tienen la [alternativa del broker](#backlog-panels), salvo la línea de brecha sin leer de *Capture backlog in messages*. Por encima del 10 % y subiendo, añada réplicas de `event-sources`; al 100 % se descartan los mensajes sin leer más antiguos. |
 | Refused or lost at the door | Mensajes rechazados para proteger datos sin leer, retenidos por límites de tasa, rechazados por mal formados, rechazados por un tenant eliminado o por una credencial en el cuerpo MQTT, y publicaciones externas fallidas. |
 | Protection of the MQTT message store | Consumidores requeridos presentes, ajustes del almacén restituidos, flujos de pasarela sin límite de tamaño y conexiones rechazadas porque el almacén está lleno u ocupado. |
 | Device presence and external sources | Cambios de conexión y desconexión no registrados, fuentes MQTT externas sin exactamente un lector y la caché de inicio de sesión de dispositivos. |
@@ -158,7 +174,7 @@ Alertas que lo respaldan: las alertas de MQTT y del flujo de captura descritas e
 [Mensajes que un consumidor nunca leyó](./observability.md#unread-loss), las de fuentes externas en
 [Una fuente MQTT externa que nadie lee](./observability.md#external-mqtt-owner), las de registro en
 [Autorregistro de dispositivos](./observability.md#self-registration-alerts) y las de caché de
-credenciales, limitador de tasa y servicios de borde.
+credenciales y limitador de tasa, y las de ingesta Sparkplug y LwM2M.
 
 ## Messaging {#messaging-board}
 
@@ -182,7 +198,9 @@ están sincronizadas.
 Alertas que lo respaldan: las alertas [`JetStream*`](./observability.md#consumer-backlog),
 [`BrokerConnectionDiedSilently`](./observability.md#broker-connection-dead),
 [`ReaderHeldMessagePastAckWait`](./observability.md#held-past-ack-wait),
-[`MaxDeliveryRecordsWaiting`](./observability.md#max-delivery-records), las alertas de
+[`MaxDeliveryRecordsWaiting`](./observability.md#max-delivery-records), 
+[`ReplayCoveredDeliveriesExhausted`](./observability.md#ingest-backpressure),
+[`BrokerPresenceLosingTransitions`](./observability.md#event-resolution), las alertas de
 [replicación](./observability.md#replication) y las de dead letters.
 
 ## Persistence and state {#persistence-board}
@@ -210,7 +228,7 @@ muestran la base de datos compartida, no solo la de esta instancia.
 Alertas que lo respaldan: [`DeviceStateDroppingEvents`](./observability.md#live-state-projection),
 las alertas de [archivado de copias](./observability.md#backup-archiving) y del
 [plano de control de la base de datos](./observability.md#database-control-plane), las alertas de
-volumen `Database*` y `TenantPurge*`.
+volumen `Database*`, `BackupDestination*` y `TenantPurge*`.
 
 ## Event processing {#event-processing-board}
 
@@ -222,9 +240,9 @@ ejecutan.** Vigila el motor de detección y reacción descrito en
 
 | Grupo | Qué muestra |
 | --- | --- |
-| Pipeline health | Retraso del consumidor, mensajes en vuelo, retraso de marca de agua, reglas activas, eventos aplicados y checkpoints por segundo. El retraso del consumidor y los mensajes en vuelo tienen la [alternativa de retraso](#backlog-panels). |
+| Pipeline health | Retraso del consumidor, mensajes en vuelo, retraso de marca de agua, reglas activas, eventos aplicados y checkpoints por segundo. El retraso del consumidor, los mensajes en vuelo y los paneles de retraso del consumidor tienen la [alternativa de retraso](#backlog-panels). |
 | DETECT engine | Rendimiento de fan-out, detecciones rechazadas antes de publicar, errores de evaluación y las compuertas de seguridad de descarte de versión. |
-| REACT dispatcher | Acciones despachadas, fallos de despacho, retraso de eventos derivados, concurrencia y retraso de despacho (p50 y p99). |
+| REACT dispatcher | Acciones despachadas, fallos de despacho, retraso de eventos derivados (con la alternativa), concurrencia y retraso de despacho (p50 y p99). |
 | State budget | Entradas de estado con clave vivas, y los tenants que superan su presupuesto de reglas, de claves vivas o de muestras retenidas. |
 | Snapshot and restore | Coste de checkpoint, tamaño de snapshot y coste de restauración al arrancar. |
 | JetStream streams | Ocupación del flujo y proporción sin leer de la capacidad del flujo para el consumidor. |
@@ -292,17 +310,21 @@ debajo.** Es el único panel que trata de los procesos y no del flujo de mensaje
 Alertas que lo respaldan: [`InstanceContainerRestarted`](./observability.md#container-restarts),
 las alertas `Sso*` y de almacén de credenciales, `TenantPurge*`,
 [`SafetyGateDisabled`](./observability.md#safety-gates) y
-[`TenantsMeteredAtPlatformDefault`](./observability.md#tenant-ceilings).
+[`TenantsMeteredAtPlatformDefault`](./observability.md#tenant-ceilings), `RateLimiterOverflowInUse`,
+`RateMeteringClockFallback`, `ReactShedLettersOverBudget` y `ConnectorDispatchRateLimited`.
 
 ## Lo que los paneles no cubren {#not-covered}
 
-- **El operador de Kubernetes** no exporta métricas. Solo lo muestran las series de deployments de
-  Kubernetes, a través de los paneles de réplicas del resumen y de Platform.
+- **El operador de Kubernetes** se ejecuta en su propio namespace. Nada recolecta sus métricas y
+  ningún panel lo muestra, ni siquiera los paneles de réplicas, que solo leen el namespace de esta
+  instancia.
 - **La tasa de solicitudes HTTP y GraphQL, los errores y la latencia** por servicio no se exportan,
   así que ningún panel los grafica.
 - **La antigüedad de un evento de extremo a extremo**, desde la ingesta hasta su almacenamiento o
-  detección, no se mide. Lo más cercano son los paneles de retraso: un retraso que crece es una
-  demora que crece.
+  detección, no se mide. Los paneles de retraso son un sustituto: un retraso que crece es una
+  demora que crece. La medida real más cercana de antigüedad es `detect_watermark_lag_seconds`,
+  que Event processing muestra como *Watermark lag*: cuánto se retrasa la marca de agua del motor
+  de detección respecto al reloj.
 - **Los agentes de borde** se ejecutan en hardware del cliente y no se recolectan.
 
 ## Relacionado {#related}

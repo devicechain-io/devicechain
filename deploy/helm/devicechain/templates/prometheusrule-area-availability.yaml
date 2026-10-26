@@ -13,7 +13,7 @@ what is wanted and what is there, and they come from kube-state-metrics, not fro
 THE RULE. A deployment that WANTS pods (spec replicas above zero) and has NONE available.
 `unless ... > 0` rather than `== 0` on the available count: kube-state-metrics reports 0
 for such a deployment, but a deployment whose available series is missing altogether has no
-pod available either, and the rule should say so. An area scaled to zero ON PURPOSE wants no
+pod available either, and the rule should say so. An area scaled to zero BY HAND wants no
 pods, so its spec replicas is 0 and it is not counted: an area the profile does not run is
 not an outage, and neither is one an operator turned off.
 
@@ -43,7 +43,7 @@ spec:
       rules:
         - alert: InstanceAreaUnavailable
           expr: |
-            kube_deployment_spec_replicas{namespace="{{ $ns }}"} > 0
+            kube_deployment_spec_replicas{namespace="{{ $ns }}", deployment!~".+-box"} > 0
             unless on (namespace, deployment)
             kube_deployment_status_replicas_available{namespace="{{ $ns }}"} > 0
           for: 10m

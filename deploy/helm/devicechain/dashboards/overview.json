@@ -325,7 +325,7 @@
       "id": 204,
       "type": "stat",
       "title": "Missing replicas",
-      "description": "How many pods the deployments want that are not available right now. Zero is healthy. A non-zero value during a rollout is normal; one that stays up means pods are failing to start or pass their health checks, so describe the pods.",
+      "description": "How many pods the DeviceChain areas and the console want that are not available right now (the broker's debugging pod is left out). Zero is healthy. A non-zero value during a rollout is normal; one that stays up means pods are failing to start or pass their health checks, so describe the pods.",
       "gridPos": {
         "h": 4,
         "w": 4,
@@ -343,7 +343,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "clamp_min(sum(kube_deployment_spec_replicas{namespace=\"$namespace\"}) - sum(kube_deployment_status_replicas_available{namespace=\"$namespace\"}), 0)",
+          "expr": "clamp_min(sum(kube_deployment_spec_replicas{namespace=\"$namespace\", deployment!~\".+-box\"}) - sum(kube_deployment_status_replicas_available{namespace=\"$namespace\", deployment!~\".+-box\"}), 0)",
           "instant": true
         }
       ],
@@ -1362,7 +1362,7 @@
       "id": 222,
       "type": "stat",
       "title": "Areas with no pod available",
-      "description": "How many deployments of this instance want at least one pod and have none available. An area whose pods are all gone stops reporting, so it also vanishes from the readiness count and the scrape count above; this is the panel that still shows it. Zero is healthy. A non-zero value that stays means that area is down: describe its pods. An area you scaled to zero on purpose wants no pods and is not counted here: the Areas scaled to 0 tile below shows it.",
+      "description": "How many areas of this instance, and the console, want at least one pod and have none available. An area whose pods are all gone stops reporting, so it also vanishes from the readiness count and the scrape count above; this is the panel that still shows it. Zero is healthy. A non-zero value that stays means that area is down: describe its pods. An area you scaled to zero by hand wants no pods and is not counted here: the Areas scaled to 0 tile below shows it.",
       "gridPos": {
         "h": 4,
         "w": 6,
@@ -1380,7 +1380,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "count(kube_deployment_spec_replicas{namespace=\"$namespace\"} > 0 unless on (namespace, deployment) kube_deployment_status_replicas_available{namespace=\"$namespace\"} > 0) or vector(0)",
+          "expr": "count(kube_deployment_spec_replicas{namespace=\"$namespace\", deployment!~\".+-box\"} > 0 unless on (namespace, deployment) kube_deployment_status_replicas_available{namespace=\"$namespace\"} > 0) or vector(0)",
           "instant": true
         }
       ],
@@ -1425,7 +1425,7 @@
       "id": 223,
       "type": "stat",
       "title": "Areas scaled to 0",
-      "description": "How many deployments of this instance are set to run zero pods. This is a state, not a fault: scaling an area to zero is deliberate (an optional area you turned off, or one paused for maintenance), so it is shown in blue, it does not count as down, and no alert fires for it. It sits apart from Areas with no pod available, which counts areas that want pods and have none. An area scaled to zero stops reporting its own readiness and metrics, so this tile is where it still shows. If you did not mean to scale an area to zero, scale it back.",
+      "description": "How many areas of this instance, and the console, are set to run zero pods. This is a state, not a fault: an area at zero was scaled down by hand (kubectl scale with --replicas=0), for example paused for maintenance, so it is shown in blue, it does not count as down, and no alert fires for it. It sits apart from Areas with no pod available, which counts areas that want pods and have none. An area scaled to zero stops reporting its own readiness and metrics, so this tile is where it still shows. If you did not mean to scale an area to zero, scale it back.",
       "gridPos": {
         "h": 4,
         "w": 6,
@@ -1443,7 +1443,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "count(kube_deployment_spec_replicas{namespace=\"$namespace\"} == 0) or vector(0)",
+          "expr": "count(kube_deployment_spec_replicas{namespace=\"$namespace\", deployment!~\".+-box\"} == 0) or vector(0)",
           "instant": true
         }
       ],
