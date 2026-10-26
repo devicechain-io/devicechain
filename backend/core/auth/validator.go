@@ -157,6 +157,9 @@ func (v *Validator) Parse(tokenString string) (*Claims, error) {
 	if err := validateScopeClaim(claims); err != nil {
 		return nil, fmt.Errorf("auth: %w", err)
 	}
+	if err := validateAmrClaim(claims); err != nil {
+		return nil, fmt.Errorf("auth: %w", err)
+	}
 	return claims, nil
 }
 
