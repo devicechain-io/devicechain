@@ -31,7 +31,10 @@ type certManagerObject struct {
 		IsCA       bool   `json:"isCA"`
 		CommonName string `json:"commonName"`
 		SecretName string `json:"secretName"`
-		IssuerRef  struct {
+		PrivateKey struct {
+			RotationPolicy string `json:"rotationPolicy"`
+		} `json:"privateKey"`
+		IssuerRef struct {
 			Name string `json:"name"`
 			Kind string `json:"kind"`
 		} `json:"issuerRef"`
@@ -108,6 +111,11 @@ func checkSelfSignedChain(t *testing.T, controller string) {
 	}
 	if !ca.Spec.IsCA {
 		t.Error("the CA Certificate must be isCA: an OpenSSL client needs CA:TRUE to use it as a trust anchor")
+	}
+	// cert-manager's default regenerates the key on every re-issue, which would orphan every
+	// client that holds the old ca.crt at the next host-certificate renewal.
+	if ca.Spec.PrivateKey.RotationPolicy != "Never" {
+		t.Errorf("the CA key rotationPolicy = %q, want Never", ca.Spec.PrivateKey.RotationPolicy)
 	}
 	if ca.Spec.CommonName != "dctest DeviceChain CA" {
 		t.Errorf("CA commonName = %q, want a non-empty subject naming the instance", ca.Spec.CommonName)

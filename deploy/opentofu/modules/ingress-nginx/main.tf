@@ -76,6 +76,19 @@ variable "use_host_port" {
   default     = false
 }
 
+variable "aws_nlb" {
+  description = <<-EOT
+    EKS: annotate the controller's LoadBalancer Service for an AWS Network Load Balancer
+    (service.beta.kubernetes.io/aws-load-balancer-type: nlb). Off by default, because it
+    REPLACES an existing Classic Load Balancer and so changes the hostname clients resolve.
+    It is what makes externalTrafficPolicy: Local deliver the client address on AWS: a
+    LoadBalancer Service with no annotation gets a Classic balancer, which proxies TCP, so
+    the controller sees the balancer's address either way. (PROXY protocol is the other way.)
+  EOT
+  type        = bool
+  default     = false
+}
+
 variable "replicas" {
   description = <<-EOT
     Controller replicas. Forced to 1 with use_host_port (two pods cannot share a node's
@@ -105,12 +118,18 @@ locals {
     # every device on the internet shares one rate-limit bucket per node, and a connection
     # that lands on the controller's own node is SNATed to that node's pod-range gateway,
     # which is inside infrastructure.http.trustedProxies and so is skipped as a proxy hop.
+    # Local keeps the source address ONLY behind a balancer that passes the connection
+    # through (GKE, AKS, an AWS NLB). An AWS Classic balancer, which EKS gives an
+    # unannotated Service, proxies TCP and defeats it: see var.aws_nlb.
     # Local keeps the source address, and the balancer health-checks the Service's
     # healthCheckNodePort so it sends only to nodes that run a controller pod (the cloud
     # balancers provision that themselves). Only meaningful on a LoadBalancer Service: the
     # host-port recipe below replaces the whole `service` block with a NodePort, whose
     # traffic arrives on the node that holds the port and is not SNATed.
-    service = { externalTrafficPolicy = "Local" }
+    service = merge(
+      { externalTrafficPolicy = "Local" },
+      var.aws_nlb ? { annotations = { "service.beta.kubernetes.io/aws-load-balancer-type" = "nlb" } } : {},
+    )
     ingressClassResource = {
       name    = var.ingress_class
       enabled = true

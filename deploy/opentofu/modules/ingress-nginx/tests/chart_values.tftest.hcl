@@ -37,6 +37,28 @@ run "a_cloud_install_keeps_the_client_address" {
   }
 }
 
+run "eks_nlb_is_opt_in" {
+  command = plan
+
+  assert {
+    condition     = !can(yamldecode(helm_release.ingress_nginx.values[0]).controller.service.annotations)
+    error_message = "the AWS NLB annotation must be off by default: it replaces an existing load balancer"
+  }
+}
+
+run "eks_nlb_annotation" {
+  command = plan
+
+  variables {
+    aws_nlb = true
+  }
+
+  assert {
+    condition     = yamldecode(helm_release.ingress_nginx.values[0]).controller.service.annotations["service.beta.kubernetes.io/aws-load-balancer-type"] == "nlb" && yamldecode(helm_release.ingress_nginx.values[0]).controller.service.externalTrafficPolicy == "Local"
+    error_message = "aws_nlb must add the NLB type annotation next to Local"
+  }
+}
+
 run "more_replicas_are_spread_over_nodes" {
   command = plan
 

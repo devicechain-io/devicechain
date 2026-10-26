@@ -232,6 +232,12 @@ variable "ingress_nginx_replicas" {
   }
 }
 
+variable "ingress_nginx_aws_nlb" {
+  description = "EKS: annotate the ingress-nginx LoadBalancer Service for an AWS Network Load Balancer, which passes the client address through (a Classic balancer proxies TCP and hides it). Off by default because it REPLACES an existing Classic balancer and changes its hostname."
+  type        = bool
+  default     = false
+}
+
 variable "ingress_class" {
   description = "IngressClass name the controller registers; set the same on the Helm chart's ingress.className."
   type        = string

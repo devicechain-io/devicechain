@@ -17,8 +17,13 @@ certificate's own Secret as ca.crt:
 
   kubectl -n dci-<id> get secret <tls.secretName> -o jsonpath='{.data.ca\.crt}' | base64 -d
 
-Renewal of the host certificate keeps the CA, so a device that trusts it keeps trusting
-across renewals.
+Renewing the HOST certificate keeps the CA. The CA's private key is pinned with
+rotationPolicy Never: cert-manager's default (Always) generates a new key on every
+re-issue of the CA (its year-9 renewal, an edit to its spec, a deleted -ca Secret), and a
+device that trusts the old ca.crt would then fail at the next host-certificate renewal.
+With Never the CA keeps its key, so a re-issued CA still verifies what the old one signed
+and a device keeps trusting it. Losing the -ca Secret outright is the one case that still
+mints a new CA; fetch ca.crt again afterwards.
 */}}
 {{- $tls := .Values.ingress.tls -}}
 {{- if and .Values.ingress.enabled $tls.enabled $tls.selfSigned }}
@@ -48,6 +53,7 @@ spec:
   privateKey:
     algorithm: ECDSA
     size: 256
+    rotationPolicy: Never
   issuerRef:
     name: {{ $tls.issuerName }}-bootstrap
     kind: Issuer
