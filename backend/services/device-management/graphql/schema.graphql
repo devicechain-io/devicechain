@@ -4206,10 +4206,12 @@ type Query {
         criteria: IntegrationSearchCriteria!
     ): IntegrationSearchResults!
     """
-    Prove a bearer token belongs to the integration with this token. Returns the integration
-    when it does, with enabled false if it is switched off, and null for every failure: no
-    such integration and a wrong token are indistinguishable. Used by the ingest path to
-    authenticate a sender.
+    Service-only: callable with a service token that holds device:read, and refused for any
+    user's access token. Proves a bearer token belongs to the integration with this token.
+    Returns the integration when it does, and null for every failure: no such integration and
+    a wrong token are indistinguishable. A switched-off integration whose token matches is
+    returned with enabled false, so callers MUST check enabled before accepting traffic.
+    Used by the ingest path to authenticate a sender.
     """
     integrationAuth(
         """Token of the integration, as it appears in the sender's URL."""

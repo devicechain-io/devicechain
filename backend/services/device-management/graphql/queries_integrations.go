@@ -39,7 +39,7 @@ func (r *SchemaResolver) Integrations(ctx context.Context, args struct {
 	return &IntegrationSearchResultsResolver{M: *results, S: r, C: ctx}, nil
 }
 
-// Prove a bearer token belongs to an integration. Null is the one answer to every failure to
+// Prove a bearer token belongs to an integration (service plane). Null is the one answer to every failure to
 // authenticate; a disabled integration whose token matched is returned with enabled false.
 // Any other error (the database, an unconfigured key) is an error: it says nothing about the
 // token, and a caller must not read it as a rejection.
@@ -47,7 +47,9 @@ func (r *SchemaResolver) IntegrationAuth(ctx context.Context, args struct {
 	Token  string
 	Secret string
 }) (*IntegrationResolver, error) {
-	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+	// Service plane: only a service token holding device:read may ask. A tenant user's
+	// access token must not be able to probe tokens against integrations.
+	if err := auth.AuthorizeService(ctx, auth.DeviceRead); err != nil {
 		return nil, err
 	}
 	found, err := r.GetApi(ctx).AuthenticateIntegration(ctx, args.Token, args.Secret)

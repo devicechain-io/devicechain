@@ -32,7 +32,7 @@ import (
 var (
 	// ErrIntegrationAuthFailed is the ONE answer to a presented integration token that does
 	// not authenticate: an integration that does not exist, a token that does not match, an
-	// empty or oversized token. Nothing distinguishes them, in the answer or in the work done.
+	// empty or oversized token. Nothing distinguishes them in the answer.
 	ErrIntegrationAuthFailed = errors.New("integration authentication failed")
 	// ErrIntegrationDisabled is the answer to a token that DOES match an integration an
 	// operator has switched off. It is returned only after the token has been proven, so it
@@ -314,10 +314,8 @@ func (api *Api) resolveScope(ctx context.Context, tokens []string) ([]*DeviceTyp
 //
 // The tenant's integrations ceiling is read first, with no cache, and a tenant whose ceiling
 // cannot be read is refused rather than assumed. The count is checked inside the transaction
-// the row is created in. It is a count-then-insert with no lock, so two creates racing at the
-// ceiling can both land and leave the tenant one over: what the ceiling protects is a
-// packaging line, not a shared resource, and one extra row is not worth a lock that every
-// create would pay.
+// the row is created in, after taking a per-tenant advisory lock (lockIntegrationCreates), so
+// two creates racing at the ceiling cannot both land.
 func (api *Api) CreateIntegration(ctx context.Context, request *IntegrationCreateRequest) (*Integration, error) {
 	itype := IntegrationType(request.Type)
 	if !itype.Valid() {
@@ -380,6 +378,9 @@ func (api *Api) CreateIntegration(ctx context.Context, request *IntegrationCreat
 		TokenIssuedAt:  time.Now().UTC(),
 	}
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockIntegrationCreates(tx, tenant); err != nil {
+			return err
+		}
 		var n int64
 		if err := tx.Model(&Integration{}).Count(&n).Error; err != nil {
 			return err
@@ -399,6 +400,18 @@ func (api *Api) CreateIntegration(ctx context.Context, request *IntegrationCreat
 	created.DeviceTypes = scope
 	created.IssuedToken = issued
 	return created, nil
+}
+
+// lockIntegrationCreates serializes the creates of one tenant's integrations for the rest of
+// the transaction, so the count the ceiling is checked against is the count the insert lands
+// on. On PostgreSQL it is a transaction-scoped advisory lock keyed on the tenant and held for
+// the few milliseconds of one create; anywhere else (the SQLite unit-test database, which has
+// one writer at a time) there is nothing to take.
+func lockIntegrationCreates(tx *gorm.DB, tenant string) error {
+	if tx.Dialector.Name() != "postgres" {
+		return nil
+	}
+	return tx.Exec("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", tenant+":integrations").Error
 }
 
 // writeScope replaces an integration's scope rows with one row per device type.
@@ -701,9 +714,11 @@ func (api *Api) Integrations(ctx context.Context, criteria IntegrationSearchCrit
 // the given token, in the tenant of ctx, and returns it with its scope loaded. It is the
 // function the ingest path and the resolve path authenticate an integration through.
 //
-// Every failure is ErrIntegrationAuthFailed and costs the same: an integration that does not
-// exist is compared against the Checker's dummy digest, so the answer and the work are the
-// same whether it exists. The compare is the credential Checker's, under KindIntegration,
+// Every failure is ErrIntegrationAuthFailed, and the credential compare costs the same: an
+// integration that does not exist is compared against the Checker's dummy digest. The
+// database work around it differs slightly between a known and an unknown slug (a known one
+// also loads its scope). That is acceptable because the slug is not a secret; the token is,
+// and nothing about it shows in the answer or in the compare. The compare is the credential Checker's, under KindIntegration,
 // constant-time and bound to the tenant: a digest transplanted from another tenant's row
 // verifies nothing. A token longer than any this server issues is compared as an empty one,
 // so a caller cannot make the compare cost more.

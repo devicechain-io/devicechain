@@ -128,6 +128,32 @@ func Authorize(ctx context.Context, required Authority) error {
 	return nil
 }
 
+// AuthorizeService is Authorize for an operation that only another SERVICE may call: the
+// caller must hold a service token (TokenTypeService), and that token must carry the
+// authority. A tenant user's access token is refused with ErrForbidden even when it holds
+// the authority, because the operation answers a question (does this secret belong to this
+// integration?) that a human session has no business asking. Only a holder of the shared
+// service secret can mint a service token, so no listener of its own is needed.
+//
+// Like Authorize it refuses every scoped caller with ErrScopeUnsupported, and answers
+// ErrUnauthenticated when there are no claims.
+func AuthorizeService(ctx context.Context, required Authority) error {
+	claims, ok := ClaimsFromContext(ctx)
+	if !ok {
+		return ErrUnauthenticated
+	}
+	if scopeOf(claims).IsScoped() {
+		return ErrScopeUnsupported
+	}
+	if claims.TokenType != TokenTypeService {
+		return ErrForbidden
+	}
+	if !satisfies(claims, required) {
+		return ErrForbidden
+	}
+	return nil
+}
+
 // AuthorizeAny enforces that the request's claims grant at least one of the
 // required authorities, at a tier the claims' token may carry it on. With no
 // authorities supplied it authorizes nothing and returns ErrForbidden

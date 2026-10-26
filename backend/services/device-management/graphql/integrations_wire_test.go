@@ -136,7 +136,7 @@ func TestIntegrationAuthOverTheWire(t *testing.T) {
 	issued := serve(t, ctx, wireCreateIntegration, createIntegrationVars("chirp-1", nil)).
 		data["createIntegration"].(map[string]any)["issuedToken"].(string)
 
-	ok := serve(t, ctx, wireIntegrationAuth, map[string]any{"t": "chirp-1", "s": issued})
+	ok := serve(t, service(f), wireIntegrationAuth, map[string]any{"t": "chirp-1", "s": issued})
 	if len(ok.errs) > 0 {
 		t.Fatalf("integrationAuth: %v", ok.errs[0].Message)
 	}
@@ -150,19 +150,19 @@ func TestIntegrationAuthOverTheWire(t *testing.T) {
 		"an empty token":         {"t": "chirp-1", "s": ""},
 		"an unknown integration": {"t": "nope", "s": issued},
 	} {
-		res := serve(t, ctx, wireIntegrationAuth, vars)
+		res := serve(t, service(f), wireIntegrationAuth, vars)
 		if len(res.errs) > 0 || res.data["integrationAuth"] != nil {
 			t.Errorf("%s: want null and no error, got %v %v", name, res.data, res.errs)
 		}
 	}
 
 	serve(t, ctx, `mutation { updateIntegration(token: "chirp-1", request: {enabled: false}) { token } }`, nil)
-	res := serve(t, ctx, wireIntegrationAuth, map[string]any{"t": "chirp-1", "s": issued})
+	res := serve(t, service(f), wireIntegrationAuth, map[string]any{"t": "chirp-1", "s": issued})
 	disabled, _ := res.data["integrationAuth"].(map[string]any)
 	if len(res.errs) > 0 || disabled == nil || disabled["enabled"] != false {
 		t.Fatalf("a disabled integration with its token: %v %v", res.data, res.errs)
 	}
-	res = serve(t, ctx, wireIntegrationAuth, map[string]any{"t": "chirp-1", "s": "wrong"})
+	res = serve(t, service(f), wireIntegrationAuth, map[string]any{"t": "chirp-1", "s": "wrong"})
 	if len(res.errs) > 0 || res.data["integrationAuth"] != nil {
 		t.Fatalf("a disabled integration without its token must look like any failure: %v %v", res.data, res.errs)
 	}
@@ -182,10 +182,10 @@ func TestRotateIntegrationTokenOverTheWire(t *testing.T) {
 	if len(second) != 43 || second == first {
 		t.Fatalf("rotation returned %q after %q", second, first)
 	}
-	if res := serve(t, ctx, wireIntegrationAuth, map[string]any{"t": "chirp-1", "s": first}); res.data["integrationAuth"] != nil {
+	if res := serve(t, service(f), wireIntegrationAuth, map[string]any{"t": "chirp-1", "s": first}); res.data["integrationAuth"] != nil {
 		t.Fatal("the old token authenticates after a rotation")
 	}
-	if res := serve(t, ctx, wireIntegrationAuth, map[string]any{"t": "chirp-1", "s": second}); res.data["integrationAuth"] == nil {
+	if res := serve(t, service(f), wireIntegrationAuth, map[string]any{"t": "chirp-1", "s": second}); res.data["integrationAuth"] == nil {
 		t.Fatal("the rotated token does not authenticate")
 	}
 	if bad := serve(t, ctx, wireRotateIntegration, map[string]any{"token": "nope"}); len(bad.errs) == 0 {
@@ -198,8 +198,7 @@ func TestRotateIntegrationTokenOverTheWire(t *testing.T) {
 func TestIntegrationsNeedUnscopedDeviceAuthorities(t *testing.T) {
 	f := newIntegrationWireFixture(t)
 	admin := f.operator()
-	issued := serve(t, admin, wireCreateIntegration, createIntegrationVars("chirp-1", nil)).
-		data["createIntegration"].(map[string]any)["issuedToken"].(string)
+	serve(t, admin, wireCreateIntegration, createIntegrationVars("chirp-1", nil))
 
 	scoped := f.withClaims(&auth.Claims{TokenType: auth.TokenTypeAccess, Tenant: scopeTenant,
 		Authorities: []string{string(auth.DeviceRead), string(auth.DeviceWrite)}, ScopeAnchors: []string{"customer:acme"}})
@@ -225,9 +224,8 @@ func TestIntegrationsNeedUnscopedDeviceAuthorities(t *testing.T) {
 		}
 	}
 	reads := map[string]call{
-		"integration":     {wireReadIntegration, map[string]any{"t": "chirp-1"}},
-		"integrations":    {wireListIntegrations, nil},
-		"integrationAuth": {wireIntegrationAuth, map[string]any{"t": "chirp-1", "s": issued}},
+		"integration":  {wireReadIntegration, map[string]any{"t": "chirp-1"}},
+		"integrations": {wireListIntegrations, nil},
 	}
 	for name, c := range reads {
 		for who, ctx := range map[string]context.Context{"scoped reader": scoped, "no authority": nothing} {
@@ -284,5 +282,42 @@ func TestDeletingAScopedDeviceTypeIsAReferenceViolation(t *testing.T) {
 	serve(t, admin, wireDeleteIntegration, map[string]any{"t": "chirp-1"})
 	if got := serve(t, admin, `mutation { deleteDeviceType(token: "valve") }`, nil); len(got.errs) > 0 || got.data["deleteDeviceType"] != true {
 		t.Fatalf("delete after the integration is gone: %v %v", got.data, got.errs)
+	}
+}
+
+// service is a caller holding a service token with device:read, the only kind of caller
+// integrationAuth admits.
+func service(f scopeFixture) context.Context {
+	return f.withClaims(&auth.Claims{TokenType: auth.TokenTypeService, Tenant: scopeTenant,
+		Authorities: []string{string(auth.DeviceRead)}})
+}
+
+// integrationAuth is the service plane: a user's access token is refused whatever it holds,
+// a service token needs the authority, and only the combination is admitted.
+func TestIntegrationAuthIsServiceOnly(t *testing.T) {
+	f := newIntegrationWireFixture(t)
+	admin := f.operator()
+	issued := serve(t, admin, wireCreateIntegration, createIntegrationVars("chirp-1", nil)).
+		data["createIntegration"].(map[string]any)["issuedToken"].(string)
+	vars := map[string]any{"t": "chirp-1", "s": issued}
+
+	// The paired positive.
+	if got := serve(t, service(f), wireIntegrationAuth, vars); len(got.errs) > 0 || got.data["integrationAuth"] == nil {
+		t.Fatalf("a service token with device:read: %v %v", got.data, got.errs)
+	}
+	refused := map[string]context.Context{
+		"an access token holding device:read": f.withClaims(&auth.Claims{TokenType: auth.TokenTypeAccess,
+			Tenant: scopeTenant, Authorities: []string{string(auth.DeviceRead)}}),
+		"a tenant administrator": admin,
+		"a service token without device:read": f.withClaims(&auth.Claims{TokenType: auth.TokenTypeService,
+			Tenant: scopeTenant, Authorities: []string{string(auth.EventRead)}}),
+		"a scoped service token": f.withClaims(&auth.Claims{TokenType: auth.TokenTypeService, Tenant: scopeTenant,
+			Authorities: []string{string(auth.DeviceRead)}, ScopeAnchors: []string{"customer:acme"}}),
+	}
+	for who, ctx := range refused {
+		got := serve(t, ctx, wireIntegrationAuth, vars)
+		if len(got.errs) == 0 || got.data["integrationAuth"] != nil {
+			t.Errorf("integrationAuth was admitted for %s: %v %v", who, got.data, got.errs)
+		}
 	}
 }
