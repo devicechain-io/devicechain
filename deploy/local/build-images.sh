@@ -81,9 +81,7 @@ command -v ko >/dev/null 2>&1 || {
 # ko build --bare: image name = $KO_DOCKER_REPO exactly (no import path appended).
 build_one() { # <module-dir> <image-name>
   step "🏗️  $2:$TAG"
-  # ko reads .ko.yaml from its working directory only (the module dir here), so the pinned
-  # base is used only when told where the file is.
-  ( cd "$1" && KO_DOCKER_REPO="$2" KO_CONFIG_PATH="$ROOT/.ko.yaml" ko build --bare --tags "$TAG" --platform "$PLATFORM" ./ >/dev/null )
+  ( cd "$1" && KO_DOCKER_REPO="$2" "$ROOT/hack/ko-build.sh" --bare --tags "$TAG" --platform "$PLATFORM" ./ >/dev/null )
 }
 
 log "📦 Building images → $REGISTRY (tag=$TAG)"

@@ -265,11 +265,8 @@ jobs:
         working-directory: ${{ matrix.module }}
         env:
           KO_DOCKER_REPO: ${{ steps.ko.outputs.repo }}
-          # ko reads .ko.yaml from its WORKING DIRECTORY only, and this step runs in the
-          # module directory, so without this the repo's pinned base is never read and the
-          # build takes whatever the base's tag resolves to that day.
-          # hack/check-ko-base-used.sh proves the pin is the base actually used.
-          KO_CONFIG_PATH: ${{ github.workspace }}/.ko.yaml
+          # Built through hack/ko-build.sh, which points ko at the repo's .ko.yaml: ko reads
+          # it from its working directory only, and this step runs in the module directory.
         run: |
           set -euo pipefail
           # Multi-arch image published verbatim at the repo computed above
@@ -280,7 +277,7 @@ jobs:
           # ko prints the pushed reference BY DIGEST (repo@sha256:...) on stdout. That is
           # the thing the `sign` job signs: not a tag it would re-resolve later, but the
           # bytes this step just pushed.
-          ref="$(ko build --bare \
+          ref="$("$GITHUB_WORKSPACE/hack/ko-build.sh" --bare \
             --platform=linux/amd64,linux/arm64 \
             --tags="${{ steps.ko.outputs.tags }}" \
             ./ | tail -n1)"
