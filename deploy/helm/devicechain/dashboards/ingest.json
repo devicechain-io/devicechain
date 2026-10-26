@@ -643,7 +643,7 @@
       "id": 9,
       "type": "timeseries",
       "title": "Arriving vs backlog growth",
-      "description": "Events arriving per second, and how fast the capture backlog is growing or draining (messages per second). When the backlog line is above zero the forwarder is reading slower than events arrive, and it is the line to watch during a spike. Below zero the backlog is draining. Arrival counts every inbound source, so it is an upper bound for MQTT.",
+      "description": "Events arriving per second, and how fast the capture backlog is growing or draining (messages per second). When the backlog line is above zero the forwarder is reading slower than events arrive, and it is the line to watch during a spike. Below zero the backlog is draining. Arrival counts every inbound source, so it is an upper bound for MQTT. While the reading service is down the backlog growth line uses the message broker's own count; the arrival line does not depend on it.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -706,7 +706,7 @@
       "id": 10,
       "type": "timeseries",
       "title": "Capture backlog in messages",
-      "description": "Messages waiting to be forwarded, and messages already removed from the stream that the forwarder never read. The second line should stay at zero; any value means loss has already happened or is happening. While the reading service is down this shows the message broker's own count.",
+      "description": "Messages waiting to be forwarded, and messages already removed from the stream that the forwarder never read. The second line should stay at zero; any value means loss has already happened or is happening. While the reading service is down the first line shows the message broker's own count; the second line has no broker equivalent and is not shown.",
       "gridPos": {
         "h": 8,
         "w": 12,

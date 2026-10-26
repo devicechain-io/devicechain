@@ -12,10 +12,10 @@ on the cluster, for every instance on it — so a fresh install is watchable fro
 with no separate monitoring project to assemble.
 
 :::note Status
-The monitoring stack (kube-prometheus-stack via `dcctl install`) and the
-event-processing operations dashboard are implemented and validated end-to-end. A
-command-delivery dashboard and its alert rules ship alongside them. Dashboards for
-the remaining functional areas and OTLP distributed tracing are planned follow-ups.
+The monitoring stack (kube-prometheus-stack via `dcctl install`) and its Grafana
+boards are implemented and validated end-to-end: an instance overview and seven stage
+boards, described in [Grafana boards](./grafana-boards.md), with alert rules alongside them.
+OTLP distributed tracing is a planned follow-up.
 :::
 
 ## What every service exposes
@@ -272,7 +272,8 @@ is the component an operator most needs to watch, and it ships with a dedicated
 Grafana dashboard and alerts. The engine emits operator-facing metrics including
 a **consumer-lag gauge** — how far detection has fallen behind the resolved-event
 stream — and **rule firing counts**, so "is the alarm engine keeping up, and what
-is it doing?" is answerable at a glance.
+is it doing?" is answerable at a glance. The board is described, with the rest of the set,
+in [Grafana boards](./grafana-boards.md#event-processing-board).
 
 ## Messages a consumer never read {#unread-loss}
 

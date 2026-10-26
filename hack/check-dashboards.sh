@@ -1134,6 +1134,46 @@ PY
 }
 
 # ---------------------------------------------------------------------------
+# check_tile_parity <root>
+#
+# Gap 9: A UNIT TEST OF A HAND-COPIED EXPRESSION TESTS THE COPY. The overview's "Areas scaled to 0"
+# (panel 223) and "Areas with no pod available" (panel 222) tiles are pinned by promql_expr_test
+# cases in hack/testdata/prometheus-rules-area-availability-tests.yaml. If that file keeps its own
+# copy of each expression, the board can change and the test stays green over the old text. So the
+# tile's `expr` is extracted from overview.json, the instance namespace the test uses is put in for
+# $namespace, and the result must equal a promql_expr_test expr in that file byte for byte.
+# Either side drifting fails; so does a tile or a test expression that is not there at all.
+# ---------------------------------------------------------------------------
+check_tile_parity() {
+  python3 - "$1" <<'PY' || return 1
+import json, re, sys
+root = sys.argv[1]
+board = json.load(open(root + "/deploy/helm/devicechain/dashboards/overview.json", encoding="utf-8"))
+tests = open(root + "/hack/testdata/prometheus-rules-area-availability-tests.yaml", encoding="utf-8").read()
+NS = "dci-devicechain"
+# only the promql_expr_test expressions, not the series or alert tests
+exprs = re.findall(r"^\s*- expr: '(.*)'\s*$", tests, re.M)
+problems = []
+for pid in (222, 223):
+    panels = [p for p in board["panels"] if p.get("id") == pid]
+    if len(panels) != 1 or len(panels[0].get("targets") or []) != 1:
+        problems.append("overview.json has no single-target panel %d" % pid)
+        continue
+    want = panels[0]["targets"][0]["expr"].replace("$namespace", NS)
+    if want not in exprs:
+        problems.append(
+            "TILE PARITY: overview.json panel %d (%s) reads\n      %s\n"
+            "    and no promql_expr_test in hack/testdata/prometheus-rules-area-availability-tests.yaml\n"
+            "    has exactly that expression. Update whichever side drifted: the test must run the tile's own text."
+            % (pid, panels[0].get("title"), want))
+if problems:
+    print("\n".join(problems), file=sys.stderr)
+    sys.exit(1)
+print("    overview tiles 222 and 223 run, byte for byte, in the area-availability promtool tests")
+PY
+}
+
+# ---------------------------------------------------------------------------
 # check_configmaps <chart-dir>
 #
 # Gaps 3 and 4. Renders the chart for two instances and checks the dashboard
@@ -2101,7 +2141,21 @@ FIXTURE
   rm -f "$chart/dashboards/unscoped-board.json"
   echo "  ok: a dashboard with no instance variable is refused by the template"
 
-  echo "self-test passed: 86 defects, each planted alone, each caught; a clean tree and chart pass"
+  # Case 9 -- TILE PARITY. Each side drifting ALONE: the tile's text (board changed, test did not)
+  # and the test's text (test changed, board did not).
+  mkdir -p "$tmp/parity/deploy/helm/devicechain/dashboards" "$tmp/parity/hack/testdata"
+  cp "$ROOT/deploy/helm/devicechain/dashboards/overview.json" "$tmp/parity/deploy/helm/devicechain/dashboards/"
+  cp "$ROOT/hack/testdata/prometheus-rules-area-availability-tests.yaml" "$tmp/parity/hack/testdata/"
+  check_tile_parity "$tmp/parity" >/dev/null 2>&1 || fail "tile parity failed on the clean copy"
+  sed -i 's/ == 0) or vector(0)/ == 1) or vector(0)/' "$tmp/parity/deploy/helm/devicechain/dashboards/overview.json"
+  if check_tile_parity "$tmp/parity" >/dev/null 2>&1; then fail "did not flag a tile that drifted from its test"; fi
+  echo "  ok: a tile that drifted from its promtool expression is caught"
+  cp "$ROOT/deploy/helm/devicechain/dashboards/overview.json" "$tmp/parity/deploy/helm/devicechain/dashboards/"
+  sed -i "s/- expr: 'count(kube_deployment_spec_replicas{namespace=\"dci-devicechain\", deployment!~\".+-box\"} == 0)/- expr: 'count(kube_deployment_spec_replicas{namespace=\"dci-devicechain\"} == 0)/" "$tmp/parity/hack/testdata/prometheus-rules-area-availability-tests.yaml"
+  if check_tile_parity "$tmp/parity" >/dev/null 2>&1; then fail "did not flag a test expression that drifted from its tile"; fi
+  echo "  ok: a promtool expression that drifted from its tile is caught"
+
+  echo "self-test passed: 88 defects, each planted alone, each caught; a clean tree and chart pass"
   exit 0
 fi
 
@@ -2110,6 +2164,9 @@ check_board_list "$ROOT/deploy/helm/devicechain/dashboards" "${BOARDS[@]}"
 
 say "parsing the chart's Grafana dashboards and resolving their series"
 check_content "$ROOT"
+
+say "overview tiles 222 and 223 against their promtool expression tests"
+check_tile_parity "$ROOT"
 
 say "rendering two instances: pinned names and keys, and nothing the two share"
 check_configmaps "$ROOT/deploy/helm/devicechain"
