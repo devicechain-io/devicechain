@@ -3932,9 +3932,9 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 
 No hay que hacer nada.
 
-### La versión posterior a v0.25.2 — los dispositivos pueden registrarse solos {#self-registration-upgrade}
+### La versión posterior a v0.25.2 {#self-registration-upgrade}
 
-Esta sección está escrita antes de la versión que incluirá el [autorregistro de dispositivos](../guides/device-self-registration.md), así que la versión de su encabezado se deja para que la nombre esa versión. Se aplica a una actualización desde `v0.25.2` o anterior. device-management incorpora una migración de base de datos que se ejecuta sola, y los cambios de API siguientes son incompatibles para todo lo que automatice perfiles de aprovisionamiento.
+Esta sección está escrita antes de la versión que describe, así que la versión de su encabezado se deja para que la nombre esa versión. Se aplica a una actualización desde `v0.25.2` o anterior. La versión incluye el [autorregistro de dispositivos](../guides/device-self-registration.md), pasa la instalación de ingress-nginx a Traefik y elimina el filtro transitorio de credenciales en el cuerpo de MQTT. device-management incorpora una migración de base de datos que se ejecuta sola, y los cambios de API de [Perfiles de aprovisionamiento](#self-registration-profiles) son incompatibles para todo lo que automatice perfiles de aprovisionamiento. Lo que exige actuar antes de actualizar es la [clave de credencial en el cuerpo](#after-v0252-body-credential), si la fijas a mano, y, si usas un emisor de certificados ACME, [su solver](#after-v0252-front-end).
 
 Hasta ahora un perfil de aprovisionamiento se podía crear y editar, pero nada lo leía: ningún dispositivo podía registrarse con uno. Así que nada que funcionara ayer deja de funcionar porque una flota lo usara. Lo que cambia es cómo se crean los perfiles y qué necesitan.
 
@@ -3957,6 +3957,44 @@ Hasta ahora un perfil de aprovisionamiento se podía crear y editar, pero nada l
 - **Configuración nueva**, toda opcional, bajo la clave `provisioning` de device-management: `readDeadline`, `maxInFlight`, `maxConcurrentRegistrations`, `sourceBurst` y `sourceEvery`. Los valores por defecto están en [los límites](../reference/device-protocol.md#self-registration-limits).
 - **Métricas nuevas y tres alertas** (`ProvisioningAuthFailuresSustained`, `ProvisioningRateLimited`, `ProvisioningMisconfigured`) llegan con el chart. Están en silencio en una instancia que no usa el endpoint. Consulta [Autorregistro de dispositivos](./observability.md#self-registration-alerts).
 - **Una nueva dimensión de gobernanza** limita los registros que puede hacer un inquilino: por defecto una ráfaga de 500 y 20 por segundo, fijada por nivel o por inquilino. Consulta [Gobernanza y cuotas](../concepts/governance.md).
+
+#### El front end pasa de ingress-nginx a Traefik {#after-v0252-front-end}
+
+Las instalaciones nuevas sirven su host con Traefik y rutas de la Gateway API, y `ingress-nginx` ya no se instala en un clúster que no lo tiene. **Un clúster existente conserva `ingress-nginx`, sirviendo, y recibe Traefik a su lado.** Nada cambia en el host hasta que lo muevas:
+
+- `dcctl install` instala Traefik y las definiciones de la Gateway API a un lado de `ingress-nginx`, con un balanceador de carga y una dirección propios.
+- `dcctl upgrade` da a cada instancia un Gateway y rutas, y mantiene sus objetos Ingress a su lado mientras `ingress-nginx` esté en el clúster. Los dos usan certificados distintos: los objetos Ingress conservan `devicechain-tls` y el Gateway usa `devicechain-tls-gateway`. La actualización espera, hasta cinco minutos, a que el certificado del Gateway esté `Ready`.
+- Mueves el DNS a la dirección de Traefik cuando quieras. Entonces `dcctl upgrade --drop-legacy-ingress` deja de generar los objetos Ingress, y `dcctl install --remove-legacy-ingress` quita `ingress-nginx`. La eliminación se rechaza mientras algún objeto Ingress nombre todavía su clase.
+- `dcctl upgrade --ingress-controller nginx` devuelve una instancia a `ingress-nginx` mientras esté instalado. La elección queda registrada y las actualizaciones posteriores la conservan; `--ingress-controller auto` la borra.
+- **Un emisor ACME que resuelve HTTP-01 a través de la clase de ingress `nginx` falla en sus renovaciones cuando se quita `ingress-nginx`.** Dale antes un solver `gatewayHTTPRoute`.
+- En AWS el Classic Load Balancer oculta a Traefik las direcciones de cliente, y la variable de NLB que ofrece la instalación cubre solo `ingress-nginx`.
+- En un clúster local, `ingress-nginx` conserva los puertos 80 y 443 del nodo hasta `--remove-legacy-ingress`, que se los entrega a Traefik. Un clúster local nuevo tiene Traefik en ellos desde el principio.
+
+Todos los pasos, los comandos, los rechazos que puedes ver y el retroceso están en [Pasar una instalación existente a Traefik](./ingress-cutover.md). Los flags nuevos están en la [referencia de `dcctl`](../reference/dcctl.md).
+
+#### Ingress-nginx conserva la dirección de cliente {#after-v0252-nginx-local}
+
+Mientras `ingress-nginx` esté en el clúster, `dcctl install` fija ahora `externalTrafficPolicy: Local` en su Service LoadBalancer. Sin eso, todos los dispositivos de internet compartían un único cupo por nodo. Consulta [Direcciones de cliente y proxies de confianza](./bootstrap.md#trusted-proxies). El cambio tiene un coste en el momento en que se hace:
+
+- El balanceador deja de enviar tráfico a los nodos que no ejecutan ningún pod del controlador en cuanto su health check los marca como no sanos. **Espera que el tráfico hacia esos nodos se interrumpa unos 25 segundos.**
+- Una instalación sin HA ejecuta una sola réplica del controlador, así que cada actualización del controlador es un corte breve. Una instalación HA ejecuta dos, repartidas entre nodos.
+
+#### Las instancias autofirmadas conservan su certificado anterior {#after-v0252-self-signed}
+
+Una instancia que sirve un certificado autofirmado lo emite ahora desde una autoridad certificadora que crea el chart en el namespace de la instancia, y los clientes pueden confiar en esa autoridad mediante `ca.crt` en el Secret del certificado ([TLS, flags e instalación en un portátil](./bootstrap.md#install-tls-and-flags)). Una instancia existente **conserva su certificado hoja anterior hasta que se renueve**. Elimina el Secret `devicechain-tls` para que se vuelva a emitir desde la autoridad de inmediato; los clientes deben entonces obtener de nuevo `ca.crt` de ese Secret.
+
+#### Se elimina el filtro de credenciales en el cuerpo de MQTT {#after-v0252-body-credential}
+
+Una credencial en el cuerpo de un mensaje en el broker MQTT de la plataforma se rechaza ahora siempre. No queda nada que configurar:
+
+- **`capture.bodyCredential` se elimina, y `event-sources` se niega a arrancar mientras esté fijada**, con cualquier valor. El error nombra la clave y lo que hay que hacer. Si gestionas tú mismo los valores del chart, **elimina `functionalAreas.event-sources.config.capture.bodyCredential` antes de actualizar.**
+- **`dcctl bootstrap` y `dcctl upgrade` ya no aceptan `--mqtt-body-credential`.** Un script que lo pase falla: quita el flag. Es un cambio incompatible de la línea de comandos.
+- Una instancia gestionada por dcctl que estaba en `strip` queda en rechazo tras la actualización, y la actualización imprime un aviso. Los dispositivos que aún enviaban una credencial en el cuerpo dejan de recibirse. Vigílalos con `devicechain_eventsources_total_msg_credential_in_mqtt_body` y actualízalos como describe [Los dispositivos deben dejar de enviar la credencial en el cuerpo por MQTT](#v0240-mqtt-body-credential).
+- El filtrado propio del agente de borde sobre las credenciales de las cargas de los dispositivos (`body_credentials_stripped_total`) no cambia.
+
+#### Se pueden perder mensajes MQTT durante la actualización {#after-v0252-mqtt-roll}
+
+La actualización reinicia el broker de la plataforma, un servidor cada vez. En un ensayo de esta actualización en un clúster en la nube de tres servidores instalado con `--ha`, con dispositivos MQTT enviando QoS 1 a 300 mensajes por segundo todo el tiempo, **23 de 448.346 mensajes que el broker había confirmado no se almacenaron nunca**. Se perdieron en tres ráfagas, una por cada reinicio de un servidor del broker. La entrega QoS 1 al menos una vez **no está garantizada durante un reinicio del broker**: un dispositivo al que se envió un PUBACK no reenviará. Las mediciones anteriores están en [Actualizaciones progresivas](#rolling-upgrades), el comportamiento del broker en [MQTT: el bróker de la plataforma](../reference/transport-matrix.md#mqtt--the-platform-broker), y el ajuste de cierre seguro que lo cambia es `--mqtt-fail-closed`.
 
 ### v0.25.2 — la emisión de tokens de servicio sale del puerto público {#v0252-upgrade}
 

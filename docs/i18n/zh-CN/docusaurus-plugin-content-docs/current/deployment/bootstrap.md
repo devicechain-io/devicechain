@@ -36,7 +36,7 @@ DeviceChain 尚未正式发布。`dcctl install local` 和 `dcctl bootstrap loca
 - CloudNativePG Operator（`cnpg-system`）；
 - cert-manager（`cert-manager`）；
 - 监控 Prometheus、Grafana（`monitoring`），见[可观测性](./observability.md)；
-- ingress 控制器（`ingress-nginx`）。
+- ingress 控制器：Traefik，以及它所服务的 Gateway API 定义。已经运行 `ingress-nginx` 的集群会保留它并继续提供服务，同时在它旁边增加 Traefik，见[将现有安装迁移到 Traefik](./ingress-cutover.md)。
 
 每集群一个 Operator，由全部实例共享。因此由集群命令安装，而非各实例分别安装；集群升级到新版本也从此处开始，参见[发布与升级](./releases-and-upgrades.md#rolling-upgrades)。
 
@@ -168,7 +168,7 @@ Operator 无法接管 StatefulSet 的数据目录，因此不支持原地升级�
 
 同一集群可承载多个 DeviceChain 实例。每个实例的服务、代理（NATS）、事件存储（TimescaleDB）和凭据都在独立命名空间中。名称为实例名加 `dci-` 前缀，例如 `devicechain` 实例位于 `dci-devicechain`。
 
-此前缀避免实例命名空间与集群使用的命名空间冲突。实例 ID 无法占用 `monitoring`、`cert-manager`、`ingress-nginx` 等名称。
+此前缀避免实例命名空间与集群使用的命名空间冲突。实例 ID 无法占用 `monitoring`、`cert-manager`、`traefik` 等名称。
 
 每个实例使用独立登录连接共享关系型数据库，该登录仅拥有一个数据库，因此无法访问其他实例的数据。
 
@@ -181,9 +181,9 @@ Operator 无法接管 StatefulSet 的数据目录，因此不支持原地升级�
 
 #### Ingress 与自带控制器 {#ingress-controller}
 
-集群安装会部署一个 Ingress 控制器，每个实例的路由由 Chart 提供。边缘不承担任何安全控制：服务令牌签发端点和签名密钥集由 `user-management` 在一个没有任何 Ingress 路由指向的内部端口上提供，因此无论使用哪种控制器，公开端口对它们都返回 404。签发端点由共享的服务密钥保护，该密钥以恒定时间比较。Chart 的 Ingress 不带任何配置 snippet。`dcctl install` 部署的控制器在本版本中仍接受 snippet，因为尚未升级的实例依赖它们。
+集群安装会部署一个 Ingress 控制器，每个实例的路由由 Chart 提供。边缘不承担任何安全控制：服务令牌签发端点和签名密钥集由 `user-management` 在一个没有任何 Ingress 路由指向的内部端口上提供，因此无论使用哪种控制器，公开端口对它们都返回 404。签发端点由共享的服务密钥保护，该密钥以恒定时间比较。Chart 的路由不带任何配置 snippet。仍在运行 `ingress-nginx` 的集群上，它在本版本中仍接受 snippet，因为尚未升级的实例依赖它们。
 
-如果你自带控制器，请路由 Chart 的五个 Ingress：
+如果你自带控制器，请路由 Chart 的五个 Ingress。实现了 Gateway API 的控制器也可以改为提供 Chart 渲染出的 Gateway 和 HTTPRoute（`ingress.controller: gateway`；Chart 的 README 列出了这类控制器必须做到的事）：
 
 - 将 `/api/<area>` 路由到各功能区 Service 的 `graphql` 端口并去掉前缀。
 - 将 `/` 路由到控制台。
@@ -432,10 +432,14 @@ chart 会给对象存储的卷加上 `helm.sh/resource-policy: keep`，因此之
 
 要自行设置，请在 `bootstrap` 或 `upgrade` 上传入 `--trusted-proxies`（CIDR，可重复或以逗号分隔）。显式列表会被之后的每次升级原样保留；`--trusted-proxies=auto` 让实例恢复为自动推导。
 
-边缘还必须满足两点，否则服务所信任的头并不是客户端的地址：
+边缘还必须满足下面这些条件，否则服务所信任的头并不是客户端的地址：
 
-- 使用 `ingress-nginx` 时，保持 `use-forwarded-headers` 关闭（dcctl 的 install 就是如此）。这样控制器会把真实的 TCP 对端写入 `X-Forwarded-For`。它的 Service 必须保留客户端地址。安装会在控制器的 LoadBalancer Service 上设置 `externalTrafficPolicy: Local`。这只在直接透传连接的负载均衡器上保留客户端地址（GKE、AKS、AWS 网络负载均衡器 NLB）；AWS 经典负载均衡器不行（EKS 上未加注解的 LoadBalancer Service 会得到它），因为它代理 TCP，控制器看到的是负载均衡器自身的地址。在 EKS 上请使用 NLB（设置 OpenTofu 变量 `ingress_nginx_aws_nlb`，它会添加 `service.beta.kubernetes.io/aws-load-balancer-type: nlb`；更改类型会替换负载均衡器及其主机名）或使用 PROXY 协议。设置 `Local` 的原因：默认值（`Cluster`）下，云负载均衡器的流量会被源地址转换为节点地址，互联网上的所有设备将按节点共享同一份配额。设为 `Local` 后，负载均衡器只会把流量发往运行控制器 Pod 的节点（通过对该 Service 的健康检查判断），因此 HA 安装会运行两个控制器副本并分散到不同节点，以便在滚动更新或节点丢失期间仍有可用目标（可通过 OpenTofu 变量 `ingress_nginx_replicas` 指定其他数量；只有一个副本时，它重启期间没有可用目标）。自带的控制器需要同样的设置，或由负载均衡器提供 PROXY 协议。
-- 位于自行追加该头的七层负载均衡器之后时，除 Pod 地址范围外，还要把负载均衡器的地址范围加入 `--trusted-proxies`，并开启 `use-forwarded-headers`，同时把 `proxy-real-ip-cidr` 设为这些范围。
+- 使用新安装所用的 Traefik 时，无需设置任何东西。它的入口点不信任任何自带的转发头，因此会丢弃客户端发来的所有 `X-Forwarded-*` 和 `X-Real-Ip`，并把真实的 TCP 对端写入 `X-Forwarded-For`。它的 Service 必须保留客户端地址：安装会在 Traefik 的 LoadBalancer Service 上设置 `externalTrafficPolicy: Local`。这在直接透传连接的负载均衡器上保留客户端地址（GKE、AKS、AWS 网络负载均衡器 NLB）。设置 `Local` 的原因：默认值（`Cluster`）下，云负载均衡器的流量会被源地址转换为节点地址，互联网上的所有设备将按节点共享同一份配额。设为 `Local` 后，负载均衡器只会把流量发往运行 Traefik Pod 的节点（通过对该 Service 的健康检查判断）。
+- 在 AWS 上，未加注解的 LoadBalancer Service 会得到经典负载均衡器。它代理 TCP，控制器看到的是负载均衡器自身的地址，`Local` 无法带回客户端地址。本版本没有为 Traefik 的 Service 添加 NLB 注解的 OpenTofu 变量（`ingress_nginx_aws_nlb` 只给 `ingress-nginx` 的 Service 添加注解），所以在 EKS 上按来源的限制会以负载均衡器为键。请使用 NLB 或 PROXY 协议，并自行在该 Service 上配置。
+- 在仍运行 `ingress-nginx` 的集群上使用它时，保持 `use-forwarded-headers` 关闭（dcctl 的 install 就是如此）。这样控制器会把真实的 TCP 对端写入 `X-Forwarded-For`。安装出于同样的原因，也会在它的 LoadBalancer Service 上设置 `externalTrafficPolicy: Local`，AWS 上的同样限制也适用：此时 OpenTofu 变量 `ingress_nginx_aws_nlb` 会添加 `service.beta.kubernetes.io/aws-load-balancer-type: nlb`，更改类型会替换负载均衡器及其主机名。HA 安装会运行两个 `ingress-nginx` 副本并分散到不同节点，以便在滚动更新或节点丢失期间负载均衡器仍有可用目标（可通过 `ingress_nginx_replicas` 指定其他数量；只有一个副本时，它重启期间没有可用目标）。自带的控制器需要同样的设置，或由负载均衡器提供 PROXY 协议。
+- 位于自行追加该头的七层负载均衡器之后时（Google Cloud HTTP(S) 负载均衡、你自己运营的代理），用 OpenTofu 变量 `traefik_trusted_proxy_cidrs` 把负载均衡器的地址范围告知 Traefik，并让 `--trusted-proxies` 在 Pod 地址范围**之外**再加上负载均衡器的范围。Traefik 会把代理的地址追加到链中，服务则从右向左遍历这条链：如果只信任 Pod 地址范围，遍历会停在代理处，所有客户端就会共用一份配额。对 `ingress-nginx`，对应的做法是开启 `use-forwarded-headers`，并把 `proxy-real-ip-cidr` 设为这些范围。
+
+显式的 `--trusted-proxies` 会**替换**推导出的 Pod 地址范围，而不是在其基础上追加。只要传入它，就要同时列出 Pod 地址范围和其他所有受信任的跃点。
 
 同一运营商地址之后的大量用户（运营商级 NAT）仍共用一份配额。这是以源地址为键的固有限制，这些设置无法解决。
 
@@ -452,6 +456,7 @@ chart 会给对象存储的卷加上 `helm.sh/resource-policy: keep`，因此之
 | `--no-tls` | 配合 `--compact` 不安装 cert-manager，也无数据库备份；`--compact --no-tls=false` 保留两者。不带 `--compact` 时拒绝；实例纯 HTTP 用 `dcctl bootstrap --no-tls`。 |
 | `--no-monitoring` | 不安装 Prometheus 和 Grafana 监控栈。 |
 | `--no-cnpg` | 不安装 CloudNativePG Operator 和数据库备份插件。用于**已有 CloudNativePG** 的集群，因为 Helm 无法接管其他安装器创建的对象，不传时安装失败。 |
+| `--remove-legacy-ingress` | 从仍在运行 `ingress-nginx` 的集群中移除它。不加此标志时，安装会让 `ingress-nginx` 继续提供服务，并在它旁边安装 Traefik。只要集群中还有任何 Ingress 对象指向其类，就会拒绝执行：请先按[将现有安装迁移到 Traefik](./ingress-cutover.md)迁移每个实例。在本地集群上，Traefik 会在同一次应用中接管节点的 80 和 443 端口。 |
 | `--backup-credentials-file <path>` | 用 JSON 文件描述已有对象存储，替代集群内存储，见[灾难恢复](./disaster-recovery.md)。 |
 | `--backup-snapshot-class <class>` | 使用此 VolumeSnapshotClass 将每日基础备份改为 CSI 卷快照，每周仍写完整副本，恢复仍读取备份存储。类需已存在，设置 `deletionPolicy: Delete`，属于数据库卷驱动。`--no-cnpg` 或 `--compact --no-tls` 不提供备份，因此拒绝此标志。见[卷快照基础备份](#snapshot-base-backups)。 |
 | `--database-node-selector <key>=<value>` | 数据库仅运行在有此标签的节点，可重复。适用于共享关系型存储和所有实例事件存储。见[数据库放置](#database-placement)。 |

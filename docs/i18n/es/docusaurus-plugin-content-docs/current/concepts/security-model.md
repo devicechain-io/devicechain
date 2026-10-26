@@ -105,8 +105,8 @@ ingress. Nada en el borde es un control de seguridad:
   constante, y una instancia sin secreto configurado se niega a emitir. El puerto interno mantiene el endpoint fuera
   de la red pública; el secreto es lo que autentica a quien logra alcanzarlo.
 - **El chart no establece ninguna anotación snippet de nginx.** Un snippet de configuración permite a quien pueda
-  escribir un objeto Ingress inyectar configuración de nginx, y aquí nada necesita uno. El controlador de ingress que
-  instala `dcctl install` sigue aceptando snippets en esta versión, porque las instancias que aún no se han actualizado
+  escribir un objeto Ingress inyectar configuración de nginx, y aquí nada necesita uno. `ingress-nginx`, en un clúster que
+  aún lo ejecuta, sigue aceptando snippets en esta versión, porque las instancias que aún no se han actualizado
   dependen de ellos; una versión posterior los desactivará cuando ninguna instancia los use.
 - **Una política de red restringe aún más el puerto interno, pero es defensa en profundidad y está desactivada por
   defecto.** Con `networkPolicy.enabled` el chart limita el puerto a los pods del namespace de la propia instancia, en

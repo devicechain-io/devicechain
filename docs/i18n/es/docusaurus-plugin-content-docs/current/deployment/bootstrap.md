@@ -54,7 +54,7 @@ Cada uno en un namespace propio, instala:
 - el operador CloudNativePG (`cnpg-system`);
 - cert-manager (`cert-manager`);
 - la monitorización (Prometheus y Grafana, en `monitoring` —consulta [Observabilidad](./observability.md));
-- el controlador de ingress (`ingress-nginx`).
+- el controlador de ingress: Traefik, con las definiciones de la Gateway API que sirve. Un clúster que ya ejecuta `ingress-nginx` lo conserva, sirviendo, y recibe Traefik a su lado; consulta [Pasar una instalación existente a Traefik](./ingress-cutover.md).
 
 El operador es un solo controlador por clúster, compartido por todas las instancias que haya
 en él. Por eso instalarlo es tarea del comando del clúster y no de cada instancia, y por eso
@@ -312,7 +312,7 @@ propio, que lleva el nombre de la instancia detrás del prefijo `dci-`: la insta
 `devicechain` se ejecuta en el namespace `dci-devicechain`.
 
 El prefijo impide que el namespace de una instancia choque alguna vez con uno de los que usa
-el propio clúster. `monitoring`, `cert-manager`, `ingress-nginx` y los demás quedan fuera de
+el propio clúster. `monitoring`, `cert-manager`, `traefik` y los demás quedan fuera de
 alcance por construcción, así que ningún id de instancia puede ocupar uno de ellos.
 
 Cada instancia se conecta a la base de datos relacional compartida con un login propio que es
@@ -343,11 +343,11 @@ La instalación del clúster configura un controlador de ingress y cada instanci
 el borde es un control de seguridad: el emisor de tokens de servicio y el conjunto de claves de firma los sirve
 `user-management` en un puerto interno al que no apunta ninguna ruta del ingress, de modo que el puerto público
 responde 404 para ellos detrás de cualquier controlador. El emisor está protegido por el secreto de servicio
-compartido, que se compara en tiempo constante. Los ingress del chart no llevan ningún snippet de configuración. El
-controlador que configura `dcctl install` sigue aceptando snippets en esta versión, porque las instancias que aún no
-se han actualizado dependen de ellos.
+compartido, que se compara en tiempo constante. Las rutas del chart no llevan ningún snippet de configuración. `ingress-nginx`, en un clúster que
+aún lo ejecuta, sigue aceptando snippets en esta versión, porque las instancias que aún no se han actualizado
+dependen de ellos.
 
-Si traes tu propio controlador, enruta los cinco ingress del chart:
+Si traes tu propio controlador, enruta los cinco ingress del chart. Un controlador que implemente la Gateway API puede servir en su lugar el Gateway y los HTTPRoutes que genera el chart (`ingress.controller: gateway`; el README del chart lista lo que debe hacer ese controlador):
 
 - `/api/<area>` al puerto `graphql` del Service de cada área, quitando el prefijo.
 - `/` a la consola.
@@ -915,10 +915,14 @@ Por eso `dcctl bootstrap` y `dcctl upgrade` generan `infrastructure.http.trusted
 
 Para fijarla tú mismo, pasa `--trusted-proxies` a `bootstrap` o `upgrade` (CIDR, repetidos o separados por comas). Una lista explícita se conserva tal cual en todas las actualizaciones posteriores; `--trusted-proxies=auto` devuelve la instancia a derivarla.
 
-También deben cumplirse dos cosas en el borde, o la cabecera que creen los servicios no será la del cliente:
+También deben cumplirse estas cosas en el borde, o la cabecera que creen los servicios no será la del cliente:
 
-- Con `ingress-nginx`, deja `use-forwarded-headers` desactivado (la instalación de dcctl lo hace). Así el controlador escribe en `X-Forwarded-For` el par TCP real. Su Service debe conservar la dirección del cliente. La instalación fija `externalTrafficPolicy: Local` en el Service LoadBalancer del controlador. Eso conserva la dirección en los balanceadores que pasan la conexión tal cual (GKE, AKS, un Network Load Balancer de AWS); no lo hace en un Classic Load Balancer de AWS, que un Service LoadBalancer recibe en EKS si no se anota, porque ese balanceador actúa como proxy TCP y el controlador ve la dirección del propio balanceador. En EKS usa un Network Load Balancer (fija la variable de OpenTofu `ingress_nginx_aws_nlb`, que añade `service.beta.kubernetes.io/aws-load-balancer-type: nlb`; cambiar el tipo sustituye el balanceador y su nombre de host) o PROXY protocol. El motivo de `Local`: con el valor por defecto (`Cluster`) el tráfico del balanceador de la nube se traduce al origen de un nodo y todos los dispositivos de internet compartirían una cuota por nodo. Con `Local` el balanceador envía tráfico solo a los nodos que ejecutan un pod del controlador (lo comprueba con un health check del Service), así que una instalación HA ejecuta dos réplicas del controlador, repartidas entre nodos, para conservar un destino durante una actualización progresiva o la pérdida de un nodo (fija la variable de OpenTofu `ingress_nginx_replicas` para otro número; con una sola réplica no queda destino mientras se reinicia). Un controlador propio necesita el mismo ajuste, o PROXY protocol desde el balanceador.
-- Detrás de un balanceador de capa 7 que añade él mismo la cabecera, añade a `--trusted-proxies` los rangos del balanceador además del rango de pods, y activa `use-forwarded-headers` con `proxy-real-ip-cidr` fijado a esos rangos.
+- Con Traefik, que usa una instalación nueva, no hay nada que fijar. Sus entrypoints no confían en ninguna cabecera reenviada propia, así que descarta cualquier `X-Forwarded-*` y `X-Real-Ip` que enviara un cliente y escribe en `X-Forwarded-For` el par TCP real. Su Service debe conservar la dirección del cliente: la instalación fija `externalTrafficPolicy: Local` en el Service LoadBalancer de Traefik. Eso conserva la dirección en los balanceadores que pasan la conexión tal cual (GKE, AKS, un Network Load Balancer de AWS). El motivo de `Local`: con el valor por defecto (`Cluster`) el tráfico del balanceador de la nube se traduce al origen de un nodo y todos los dispositivos de internet compartirían una cuota por nodo. Con `Local` el balanceador envía tráfico solo a los nodos que ejecutan un pod de Traefik, lo cual averigua comprobando el Service con un health check.
+- En AWS un Service LoadBalancer recibe un Classic Load Balancer si no se anota. Actúa como proxy TCP, así que el controlador ve la dirección del propio balanceador y `Local` no devuelve la del cliente. Esta versión no tiene ninguna variable de OpenTofu que anote el Service de Traefik para un Network Load Balancer (`ingress_nginx_aws_nlb` anota solo el Service de `ingress-nginx`), así que en EKS el límite por origen usa como clave el balanceador. Usa un Network Load Balancer o PROXY protocol que configures tú mismo en ese Service.
+- Con `ingress-nginx`, en un clúster que aún lo ejecuta, deja `use-forwarded-headers` desactivado (la instalación de dcctl lo hace). Así el controlador escribe en `X-Forwarded-For` el par TCP real. La instalación también fija `externalTrafficPolicy: Local` en su Service LoadBalancer, por el mismo motivo, y vale la misma salvedad de AWS: allí la variable de OpenTofu `ingress_nginx_aws_nlb` añade `service.beta.kubernetes.io/aws-load-balancer-type: nlb`, y cambiar el tipo sustituye el balanceador y su nombre de host. Una instalación HA ejecuta dos réplicas de `ingress-nginx`, repartidas entre nodos, para que el balanceador conserve un destino durante una actualización progresiva o la pérdida de un nodo (la variable `ingress_nginx_replicas` fija otro número; con una sola réplica no queda destino mientras se reinicia). Un controlador propio necesita el mismo ajuste, o PROXY protocol desde el balanceador.
+- Detrás de un balanceador de capa 7 que añade él mismo la cabecera (el balanceo HTTP(S) de Google Cloud, un proxy que operas tú), indica a Traefik los rangos del balanceador con la variable de OpenTofu `traefik_trusted_proxy_cidrs`, y pasa a `--trusted-proxies` los rangos del balanceador **además** del rango de pods. Traefik añade entonces la dirección del proxy a la cadena, y los servicios la recorren de derecha a izquierda: si solo se confía en el rango de pods, el recorrido se detiene en el proxy y todos los clientes comparten un único cupo. Para `ingress-nginx` lo equivalente es activar `use-forwarded-headers` con `proxy-real-ip-cidr` fijado a esos rangos.
+
+Un `--trusted-proxies` explícito **sustituye** el rango de pods derivado; no se suma a él. Siempre que lo pases, lista el rango de pods y cualquier otro salto de confianza.
 
 Muchos abonados detrás de una misma dirección de operador (CGNAT) siguen compartiendo un cupo. Es un límite de usar la dirección de origen como clave, que estos ajustes no pueden resolver.
 
@@ -936,6 +940,7 @@ arrancada en él los sigue. Ninguno es un flag de `dcctl bootstrap`.
 | `--no-tls` | Con `--compact`: no instala cert-manager y, por tanto, tampoco respaldos de base de datos. `--compact --no-tls=false` conserva ambos. Se rechaza sin `--compact`: usa `dcctl bootstrap --no-tls` para servir una instancia por HTTP simple. |
 | `--no-monitoring` | Omite la pila de monitorización (Prometheus y Grafana). |
 | `--no-cnpg` | Omite el operador CloudNativePG y el plugin de respaldo de base de datos. Para un clúster que **ya ejecuta CloudNativePG**: Helm no puede adoptar objetos creados por otro instalador, así que sin este flag la instalación falla. |
+| `--remove-legacy-ingress` | Quita `ingress-nginx` de un clúster que aún lo ejecuta. Sin este flag, una instalación deja `ingress-nginx` sirviendo e instala Traefik a su lado. Se rechaza mientras algún objeto Ingress del clúster nombre todavía su clase: mueve antes cada instancia, como describe [Pasar una instalación existente a Traefik](./ingress-cutover.md). En un clúster local, Traefik toma los puertos 80 y 443 del nodo en la misma aplicación. |
 | `--backup-credentials-file <path>` | Envía los respaldos de base de datos a un almacén de objetos que ya tengas, descrito por un archivo JSON, en lugar del que hay dentro del clúster. Consulta [Recuperación ante desastres](./disaster-recovery.md). |
 | `--backup-snapshot-class <class>` | Toma el respaldo base diario de cada base de datos como una instantánea de volumen CSI con esta VolumeSnapshotClass, en lugar de una copia completa en el almacén de respaldos; una copia completa sigue yendo al almacén cada semana, y las restauraciones siguen leyendo el almacén. La clase tiene que existir, usar `deletionPolicy: Delete` y pertenecer al controlador que aprovisiona los volúmenes de las bases de datos. Se rechaza con `--no-cnpg` o `--compact --no-tls`, que no dejan respaldos. Consulta [Respaldos base como instantáneas de volumen](#snapshot-base-backups). |
 | `--database-node-selector <clave>=<valor>` | Ejecuta las bases de datos solo en nodos con esta etiqueta (repetible). Se aplica al almacén relacional compartido y al almacén de eventos de cada instancia arrancada en el clúster. Consulta [Ubicación de las bases de datos](#database-placement). |

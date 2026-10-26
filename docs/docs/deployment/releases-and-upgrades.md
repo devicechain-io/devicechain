@@ -3660,9 +3660,9 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 
 Nothing needs doing.
 
-### The release after v0.25.2 — devices can register themselves {#self-registration-upgrade}
+### The release after v0.25.2 {#self-registration-upgrade}
 
-This section is written ahead of the release that ships [device self-registration](../guides/device-self-registration.md), so the version in its heading is left for that release to name. It applies to an upgrade from `v0.25.2` or earlier. Device-management gains a database migration that runs on its own, and the API changes below are breaking for anything that scripts provisioning profiles.
+This section is written ahead of the release it describes, so the version in its heading is left for that release to name. It applies to an upgrade from `v0.25.2` or earlier. The release ships [device self-registration](../guides/device-self-registration.md), moves the install from ingress-nginx to Traefik, and removes the MQTT body-credential strip. Device-management gains a database migration that runs on its own, and the API changes under [Provisioning profiles](#self-registration-profiles) are breaking for anything that scripts provisioning profiles. The two things that need action before you upgrade are the [body-credential key](#after-v0252-body-credential), if you set it by hand, and, if you use an ACME certificate issuer, [its solver](#after-v0252-front-end).
 
 Until now a provisioning profile could be created and edited, but nothing read it: no device could register through one. So nothing that worked yesterday stops working because a fleet used it. What changes is how profiles are made and what they need.
 
@@ -3685,6 +3685,44 @@ Until now a provisioning profile could be created and edited, but nothing read i
 - **New configuration**, all optional, under device-management's `provisioning` key: `readDeadline`, `maxInFlight`, `maxConcurrentRegistrations`, `sourceBurst` and `sourceEvery`. The defaults are in [the limits](../reference/device-protocol.md#self-registration-limits).
 - **New metrics and three alerts** (`ProvisioningAuthFailuresSustained`, `ProvisioningRateLimited`, `ProvisioningMisconfigured`) arrive with the chart. They are quiet on an instance that does not use the endpoint. See [Device self-registration](./observability.md#self-registration-alerts).
 - **A new governance dimension** caps the registrations a tenant can make: a burst of 500 and 20 a second by default, set per tier or per tenant. See [Governance & Quotas](../concepts/governance.md).
+
+#### The front end moves from ingress-nginx to Traefik {#after-v0252-front-end}
+
+New installs serve their host through Traefik and Gateway API routes, and `ingress-nginx` is no longer installed on a cluster that does not already have it. **An existing cluster keeps `ingress-nginx`, still serving, and gains Traefik beside it.** Nothing about the host changes until you move it:
+
+- `dcctl install` installs Traefik and the Gateway API definitions beside `ingress-nginx`, on a load balancer and address of its own.
+- `dcctl upgrade` gives each instance a Gateway and routes, and keeps its Ingress objects beside them while `ingress-nginx` is on the cluster. The two use separate certificates: the Ingress objects keep `devicechain-tls`, and the Gateway uses `devicechain-tls-gateway`. The upgrade waits, up to five minutes, for the Gateway's certificate to be `Ready`.
+- You move DNS to Traefik's address when you choose. Then `dcctl upgrade --drop-legacy-ingress` stops rendering the Ingress objects, and `dcctl install --remove-legacy-ingress` removes `ingress-nginx`. The removal refuses while any Ingress object still names its class.
+- `dcctl upgrade --ingress-controller nginx` puts an instance back on `ingress-nginx` while it is installed. The choice is recorded and kept by later upgrades; `--ingress-controller auto` clears it.
+- **An ACME issuer that solves HTTP-01 through the `nginx` ingress class fails its renewals after `ingress-nginx` is removed.** Give it a `gatewayHTTPRoute` solver first.
+- On AWS the Classic Load Balancer hides client addresses from Traefik, and the NLB variable offered by the install covers `ingress-nginx` only.
+- On a local cluster, `ingress-nginx` keeps the node's ports 80 and 443 until `--remove-legacy-ingress`, which gives them to Traefik. A fresh local cluster has Traefik on them from the start.
+
+Every step, the commands, the refusals you may see and the rollback are in [Moving an existing install to Traefik](./ingress-cutover.md). The new flags are in the [`dcctl` reference](../reference/dcctl.md).
+
+#### Ingress-nginx keeps the client address {#after-v0252-nginx-local}
+
+While `ingress-nginx` is on the cluster, `dcctl install` now sets `externalTrafficPolicy: Local` on its LoadBalancer Service. Without it every device on the internet shared one allowance per node. See [Client addresses and trusted proxies](./bootstrap.md#trusted-proxies). The change has a cost at the moment it is made:
+
+- The load balancer stops sending traffic to nodes that run no controller pod once its health check marks them unhealthy. **Expect traffic to those nodes to drop for about 25 seconds.**
+- A non-HA install runs one controller replica, so each controller rollout is a blip. An HA install runs two, spread over nodes.
+
+#### Self-signed instances keep their old certificate {#after-v0252-self-signed}
+
+An instance that serves a self-signed certificate now issues it from a certificate authority the chart creates in the instance namespace, and clients can trust that authority through `ca.crt` in the certificate's Secret ([TLS, flags and a laptop install](./bootstrap.md#install-tls-and-flags)). An existing instance **keeps its previous leaf certificate until it next renews**, Delete the `devicechain-tls` Secret to have it reissued from the authority at once; clients then fetch `ca.crt` from that Secret again.
+
+#### The MQTT body-credential strip is removed {#after-v0252-body-credential}
+
+A body credential on the platform MQTT broker is now always refused. There is nothing left to configure:
+
+- **`capture.bodyCredential` is removed, and `event-sources` refuses to start while it is set,** to any value. The error names the key and what to do. If you manage the chart values yourself, **delete `functionalAreas.event-sources.config.capture.bodyCredential` before upgrading.**
+- **`dcctl bootstrap` and `dcctl upgrade` no longer take `--mqtt-body-credential`.** A script that passes it fails: remove the flag. This is a breaking change to the command line.
+- An instance dcctl manages that was on `strip` is on refuse after the upgrade, and the upgrade prints a notice. Devices that still sent a body credential go quiet. Watch `devicechain_eventsources_total_msg_credential_in_mqtt_body` for them, and update them as [Devices must stop sending a body credential over MQTT](#v0240-mqtt-body-credential) describes.
+- The edge agent's own stripping of credentials from device payloads (`body_credentials_stripped_total`) is unchanged.
+
+#### MQTT messages can be lost across the upgrade {#after-v0252-mqtt-roll}
+
+The upgrade rolls the platform broker, one server at a time. In a rehearsal of this upgrade on a three-server cloud cluster installed with `--ha`, with MQTT devices sending QoS 1 at 300 messages a second throughout, **23 of 448,346 messages that the broker had acknowledged were never stored**. They were lost in three bursts, one for each broker server restart. QoS 1 at-least-once delivery is **not guaranteed across a broker roll**: a device that was sent a PUBACK will not resend. The earlier measurements are under [Rolling upgrades](#rolling-upgrades), the broker's behaviour is in [MQTT, the platform broker](../reference/transport-matrix.md#mqtt--the-platform-broker), and the fail-closed setting that changes it is `--mqtt-fail-closed`.
 
 ### v0.25.2 — the service-token mint leaves the public port {#v0252-upgrade}
 

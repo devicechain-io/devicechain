@@ -104,7 +104,7 @@ Nothing at the edge is a security control:
   with no secret configured refuses to mint. The internal port keeps the endpoint off the public network; the
   secret is what authenticates a caller that can reach it.
 - **The chart sets no nginx snippet annotation.** A configuration snippet lets whoever can write an Ingress object
-  inject nginx configuration, and nothing here needs one. The ingress controller that `dcctl install` sets up still
+  inject nginx configuration, and nothing here needs one. `ingress-nginx`, on a cluster that still runs it, still
   accepts snippets in this release, because instances not yet upgraded rely on them; a later release turns them off
   once no instance does.
 - **A network policy narrows the internal port further, but it is defence in depth and it is off by default.** With

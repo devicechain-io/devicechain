@@ -51,7 +51,7 @@ Each in a namespace of its own, it installs:
 - the CloudNativePG operator (`cnpg-system`);
 - cert-manager (`cert-manager`);
 - monitoring (Prometheus and Grafana, in `monitoring` — see [Observability](./observability.md));
-- the ingress controller (`ingress-nginx`).
+- the ingress controller: Traefik, with the Gateway API definitions it serves. A cluster that already runs `ingress-nginx` keeps it, still serving, and gains Traefik beside it; see [Moving an existing install to Traefik](./ingress-cutover.md).
 
 The operator is one controller per cluster, shared by every instance on it. That is why
 installing it is the cluster command's job rather than each instance's, and why moving a
@@ -295,7 +295,7 @@ named for the instance behind a `dci-` prefix: instance `devicechain` runs in na
 `dci-devicechain`.
 
 The prefix keeps an instance's namespace from ever colliding with one the cluster itself
-uses. `monitoring`, `cert-manager`, `ingress-nginx` and the rest are out of reach by
+uses. `monitoring`, `cert-manager`, `traefik` and the rest are out of reach by
 construction, so no instance id can take one of them.
 
 Each instance connects to the shared relational database with a login of its own that owns
@@ -323,10 +323,10 @@ The cluster install sets up one ingress controller and every instance gets its r
 at the edge is a security control: the service-token mint and the signing-key set are served by
 `user-management` on an internal port that no ingress route targets, so the public port answers 404
 for them behind any controller. The mint is protected by the shared service secret, compared in constant time.
-The chart's ingresses carry no configuration snippet. The controller `dcctl install` sets up still accepts
+The chart's routes carry no configuration snippet. `ingress-nginx`, on a cluster that still runs it, still accepts
 snippets in this release, because instances not yet upgraded rely on them.
 
-If you bring your own controller, route the chart's five ingresses:
+If you bring your own controller, route the chart's five ingresses. A controller that implements the Gateway API can serve the Gateway and HTTPRoutes the chart renders instead (`ingress.controller: gateway`; the chart's README lists what such a controller must do):
 
 - `/api/<area>` to each area's Service port `graphql`, stripping the prefix.
 - `/` to the console.
@@ -849,10 +849,14 @@ Some endpoints ration requests per client address, and device self-registration 
 
 To set it yourself, pass `--trusted-proxies` to `bootstrap` or `upgrade` (CIDRs, repeated or comma-separated). An explicit list is kept as written by every later upgrade; `--trusted-proxies=auto` returns the instance to deriving it.
 
-Two things must also hold at the edge, or the header the services believe is not the client's:
+These must also hold at the edge, or the header the services believe is not the client's:
 
-- With `ingress-nginx`, leave `use-forwarded-headers` off (dcctl's install does). The controller then writes the real TCP peer into `X-Forwarded-For`. Its Service must preserve the client address. The install sets `externalTrafficPolicy: Local` on the controller's LoadBalancer Service. That keeps the address on load balancers that pass the connection through (GKE, AKS, an AWS Network Load Balancer); it does not on an AWS Classic Load Balancer, which a LoadBalancer Service gets on EKS unless annotated, because that balancer proxies TCP and the controller sees the balancer's own address. On EKS use a Network Load Balancer (set the `ingress_nginx_aws_nlb` OpenTofu variable, which adds `service.beta.kubernetes.io/aws-load-balancer-type: nlb`; changing the type replaces the load balancer and its hostname) or PROXY protocol. The reason for `Local`: with the default (`Cluster`) the cloud load balancer's traffic is source-translated to a node address and every device on the internet would share one allowance per node. With `Local` the load balancer sends traffic only to nodes that run a controller pod (it health-checks the Service for that), so an HA install runs two controller replicas, spread over nodes, to keep a target during a rolling update or a node loss (set the `ingress_nginx_replicas` OpenTofu variable for another count; a single replica leaves no target while it restarts). A controller you bring yourself needs the same setting, or PROXY protocol from the load balancer.
-- Behind a layer-7 load balancer that appends the header itself, add the load balancer's address ranges to `--trusted-proxies` as well as the pod range, and turn `use-forwarded-headers` on with `proxy-real-ip-cidr` set to those ranges.
+- With Traefik, which a new install uses, nothing needs setting. Its entry points trust no forwarded headers of their own, so it discards whatever `X-Forwarded-*` and `X-Real-Ip` a client sent and writes the real TCP peer into `X-Forwarded-For`. Its Service must keep the client address: the install sets `externalTrafficPolicy: Local` on Traefik's LoadBalancer Service. That keeps the address on load balancers that pass the connection through (GKE, AKS, an AWS Network Load Balancer). The reason for `Local`: with the default (`Cluster`) the cloud load balancer's traffic is source-translated to a node address, and every device on the internet would share one allowance per node. With `Local` the load balancer sends traffic only to nodes that run a Traefik pod, which it learns by health-checking the Service.
+- On AWS a LoadBalancer Service gets a Classic Load Balancer unless annotated. It proxies TCP, so the controller sees the balancer's own address and `Local` does not bring the client's back. This release has no OpenTofu variable that annotates Traefik's Service for a Network Load Balancer (`ingress_nginx_aws_nlb` annotates the `ingress-nginx` Service only), so on EKS the per-source limit keys on the balancer. Use a Network Load Balancer or PROXY protocol that you set up on that Service yourself.
+- With `ingress-nginx`, on a cluster that still runs it, leave `use-forwarded-headers` off (dcctl's install does). The controller then writes the real TCP peer into `X-Forwarded-For`. The install also sets `externalTrafficPolicy: Local` on its LoadBalancer Service, for the same reason, and the same AWS caveat holds: there the `ingress_nginx_aws_nlb` OpenTofu variable adds `service.beta.kubernetes.io/aws-load-balancer-type: nlb`, and changing the type replaces the load balancer and its hostname. An HA install runs two `ingress-nginx` replicas, spread over nodes, so the load balancer keeps a target during a rolling update or a node loss (the `ingress_nginx_replicas` variable sets another count; a single replica leaves no target while it restarts). A controller you bring yourself needs the same setting, or PROXY protocol from the load balancer.
+- Behind a layer-7 load balancer that appends the header itself (Google Cloud HTTP(S) load balancing, a proxy you operate), name the load balancer's address ranges to Traefik with the `traefik_trusted_proxy_cidrs` OpenTofu variable, and give `--trusted-proxies` the load balancer's ranges **as well as** the pod range. Traefik then appends the proxy's address to the chain, and the services walk it from the right: if only the pod range is trusted, the walk stops at the proxy and every client shares one allowance. For `ingress-nginx` the equivalent is `use-forwarded-headers` on with `proxy-real-ip-cidr` set to those ranges.
+
+An explicit `--trusted-proxies` **replaces** the derived pod range; it does not add to it. Whenever you pass it, list the pod range and every other trusted hop.
 
 Many subscribers behind one carrier address (carrier-grade NAT) still share one allowance. That is a limit of keying on the source address, not something these settings can fix.
 
@@ -870,6 +874,7 @@ bootstrapped on it follows them. None of them is a `dcctl bootstrap` flag.
 | `--no-tls` | With `--compact`: install no cert-manager, and therefore no database backups. `--compact --no-tls=false` keeps both. Refused without `--compact` — use `dcctl bootstrap --no-tls` to serve an instance over plain HTTP. |
 | `--no-monitoring` | Skip the monitoring stack (Prometheus and Grafana). |
 | `--no-cnpg` | Skip the CloudNativePG operator and the database backup plugin. For a cluster that **already runs CloudNativePG**: Helm cannot adopt objects another installer created, so the install fails without this. |
+| `--remove-legacy-ingress` | Remove `ingress-nginx` from a cluster that still runs it. Without it, an install leaves `ingress-nginx` serving and installs Traefik beside it. Refused while any Ingress object in the cluster still names its class: move each instance first, as [Moving an existing install to Traefik](./ingress-cutover.md) describes. On a local cluster Traefik takes the node's ports 80 and 443 in the same apply. |
 | `--backup-credentials-file <path>` | Send database backups to an object store you already own, described by a JSON file, instead of the in-cluster one. See [Disaster Recovery](./disaster-recovery.md). |
 | `--backup-snapshot-class <class>` | Take each database's daily base backup as a CSI volume snapshot with this VolumeSnapshotClass instead of a full copy in the backup store; a full copy still goes to the store weekly, and restores still read the store. The class must exist, use `deletionPolicy: Delete`, and belong to the driver that provisions the database volumes. Refused with `--no-cnpg` or `--compact --no-tls`, which leave no backups. See [Volume-snapshot base backups](#snapshot-base-backups). |
 | `--database-node-selector <key>=<value>` | Run the databases only on nodes with this label (repeatable). Applies to the shared relational store and to the event store of every instance bootstrapped on the cluster. See [Database placement](#database-placement). |

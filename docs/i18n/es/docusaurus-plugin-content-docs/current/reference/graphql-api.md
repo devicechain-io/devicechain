@@ -102,7 +102,9 @@ deja constancia del cambio a su nombre y avisa al dispositivo. No averigua qué 
 cualquiera de las dos versiones, así que compruebe su inventario antes de dar por buena una u otra. [Actualizaciones over-the-air](../concepts/over-the-air-updates.md) describe el ciclo de vida y los ajustes. El contenido del artefacto no viaja por GraphQL:
 se sube con `PUT /api/update-management/updates/artifacts/{token}/content`, autenticado con un token
 de acceso del inquilino que tenga `artifact:write`. El chart da a esa ruta un Ingress propio, con el límite de cuerpo de petición fijado por
-`ingress.uploadMaxBodySize` (por defecto `1g`) y el almacenamiento en búfer de la petición desactivado. Con
+`ingress.uploadMaxBodySize` (por defecto `1g`) y el almacenamiento en búfer de la petición desactivado. En el front end
+Gateway, que usa una instalación nueva, lo hace en su lugar la propia instalación del controlador: Traefik transmite el
+cuerpo sin límite y el servicio aplica el suyo. Con
 cualquier otro controlador de ingress, fije lo mismo en esa ruta: para ingress-nginx,
 `nginx.ingress.kubernetes.io/proxy-body-size` igual o superior a su artefacto más grande, y
 `nginx.ingress.kubernetes.io/proxy-request-buffering: "off"`. Sin lo segundo, nginx lee todo el cuerpo a disco

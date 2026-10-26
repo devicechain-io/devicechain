@@ -97,7 +97,9 @@ find out what the device runs, which may be either version, so check its invento
 [Over-the-air updates](../concepts/over-the-air-updates.md) describes the lifecycle and the settings. The artifact content itself is not sent
 through GraphQL: it is uploaded with `PUT /api/update-management/updates/artifacts/{token}/content`,
 authenticated with a tenant access token that holds `artifact:write`. The chart gives that route an Ingress of its own, with the request-body limit set by
-`ingress.uploadMaxBodySize` (default `1g`) and request buffering turned off. Behind any other ingress
+`ingress.uploadMaxBodySize` (default `1g`) and request buffering turned off. On the Gateway front end, which a
+new install uses, the controller's own installation does this instead: Traefik streams the body uncapped and the
+service enforces its ceiling. Behind any other ingress
 controller set the same two things on that path: for ingress-nginx, `nginx.ingress.kubernetes.io/proxy-body-size`
 at or above your largest artifact, and `nginx.ingress.kubernetes.io/proxy-request-buffering: "off"`. Without the
 second, nginx reads the whole body to disk before the service sees the request, so the token is not checked

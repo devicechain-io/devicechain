@@ -2117,9 +2117,9 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 
 无须操作。
 
-### v0.25.2 之后的版本：设备可以自行注册 {#self-registration-upgrade}
+### v0.25.2 之后的版本 {#self-registration-upgrade}
 
-本节写在发布[设备自注册](../guides/device-self-registration.md)的版本之前，因此标题中的版本号留待该版本来命名。它适用于从 `v0.25.2` 或更早版本升级。device-management 新增一个会自动运行的数据库迁移，下面的 API 变更对任何用脚本管理自动注册配置的做法都是破坏性的。
+本节写在它所描述的版本之前，因此标题中的版本号留待该版本来命名。它适用于从 `v0.25.2` 或更早版本升级。该版本带来[设备自注册](../guides/device-self-registration.md)，将安装从 ingress-nginx 迁移到 Traefik，并移除 MQTT 正文凭据的过渡性剥离。device-management 新增一个会自动运行的数据库迁移，[自动注册配置](#self-registration-profiles)下的 API 变更对任何用脚本管理自动注册配置的做法都是破坏性的。升级前需要采取行动的有两项：如果你手工设置了[正文凭据键](#after-v0252-body-credential)，要先删除它；如果你使用 ACME 证书签发者，要先调整[它的求解器](#after-v0252-front-end)。
 
 在此之前，自动注册配置可以创建和编辑，但没有任何东西会读取它：没有设备能通过它注册。因此，没有任何昨天还能工作的东西会因为某个设备群在用它而停止工作。变化的是配置的创建方式以及它的要求。
 
@@ -2142,6 +2142,44 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 - **新增配置**，全部可选，位于 device-management 的 `provisioning` 键下：`readDeadline`、`maxInFlight`、`maxConcurrentRegistrations`、`sourceBurst` 和 `sourceEvery`。默认值见[限制](../reference/device-protocol.md#self-registration-limits)。
 - **新增指标和三条告警**（`ProvisioningAuthFailuresSustained`、`ProvisioningRateLimited`、`ProvisioningMisconfigured`）随 Chart 一起提供。在不使用该端点的实例上它们保持安静。见[设备自注册](./observability.md#self-registration-alerts)。
 - **新增一个治理维度**，限制租户能进行的注册数：默认突发 500，每秒 20 次，可按层级或按租户设置。见[治理与配额](../concepts/governance.md)。
+
+#### 前端从 ingress-nginx 迁移到 Traefik {#after-v0252-front-end}
+
+新安装通过 Traefik 和 Gateway API 路由提供主机服务，没有 `ingress-nginx` 的集群也不再安装它。**现有集群会保留 `ingress-nginx` 并继续让它提供服务，同时在它旁边增加 Traefik。** 在你迁移之前，主机不会有任何变化：
+
+- `dcctl install` 在 `ingress-nginx` 旁边安装 Traefik 和 Gateway API 定义，使用自己的负载均衡器和地址。
+- `dcctl upgrade` 为每个实例创建 Gateway 和路由，并且只要集群上有 `ingress-nginx`，就在它们旁边保留实例的 Ingress 对象。两者使用不同的证书：Ingress 对象保留 `devicechain-tls`，Gateway 使用 `devicechain-tls-gateway`。升级最多等待五分钟，直到 Gateway 的证书为 `Ready`。
+- 你在自己选定的时间把 DNS 迁移到 Traefik 的地址。然后 `dcctl upgrade --drop-legacy-ingress` 停止生成 Ingress 对象，`dcctl install --remove-legacy-ingress` 移除 `ingress-nginx`。只要还有 Ingress 对象指向其类，移除就会被拒绝。
+- 只要 `ingress-nginx` 仍已安装，`dcctl upgrade --ingress-controller nginx` 就能把实例放回它上面。该选择会被记录，并由之后的升级保留；`--ingress-controller auto` 将其清除。
+- **通过 `nginx` Ingress 类解决 HTTP-01 的 ACME 签发者，在 `ingress-nginx` 被移除后续期会失败。** 请先为它添加 `gatewayHTTPRoute` 求解器。
+- 在 AWS 上，经典负载均衡器会向 Traefik 隐藏客户端地址，而安装所提供的 NLB 变量只覆盖 `ingress-nginx`。
+- 在本地集群上，`ingress-nginx` 保留节点的 80 和 443 端口，直到 `--remove-legacy-ingress` 把它们交给 Traefik。全新的本地集群从一开始就由 Traefik 占用这些端口。
+
+每一步、命令、你可能看到的拒绝信息以及回滚方法，都在[将现有安装迁移到 Traefik](./ingress-cutover.md)中。新增的标志见 [`dcctl` 参考](../reference/dcctl.md)。
+
+#### Ingress-nginx 保留客户端地址 {#after-v0252-nginx-local}
+
+只要集群上有 `ingress-nginx`，`dcctl install` 现在就会在它的 LoadBalancer Service 上设置 `externalTrafficPolicy: Local`。否则互联网上的每个设备都会按节点共用一份配额。见[客户端地址与受信任代理](./bootstrap.md#trusted-proxies)。这个更改在生效的那一刻有代价：
+
+- 一旦负载均衡器的健康检查把没有运行控制器 Pod 的节点标记为不健康，它就不再向这些节点发送流量。**预计发往这些节点的流量会中断约 25 秒。**
+- 非 HA 安装只运行一个控制器副本，所以每次控制器滚动更新都会有一次短暂中断。HA 安装运行两个，并分散到不同节点。
+
+#### 自签名实例保留旧证书 {#after-v0252-self-signed}
+
+提供自签名证书的实例，现在由 Chart 在实例命名空间中创建的证书颁发机构来签发证书，客户端可以通过证书 Secret 中的 `ca.crt` 信任该机构（见[TLS、标志与笔记本安装](./bootstrap.md#install-tls-and-flags)）。现有实例**在下次续期之前保留原来的叶子证书**。删除 `devicechain-tls` Secret，即可立即用该机构重新签发；客户端随后需要重新从该 Secret 获取 `ca.crt`。
+
+#### MQTT 正文凭据的剥离被移除 {#after-v0252-body-credential}
+
+平台 MQTT 代理上的正文凭据现在一律被拒绝，没有任何东西需要配置：
+
+- **`capture.bodyCredential` 已被移除，只要它被设置，`event-sources` 就拒绝启动**，不论取值如何。错误信息会指出该键以及该怎么做。如果你自己管理 Chart 的值，请在升级前**删除 `functionalAreas.event-sources.config.capture.bodyCredential`**。
+- **`dcctl bootstrap` 和 `dcctl upgrade` 不再接受 `--mqtt-body-credential`。** 传入该标志的脚本会失败：请删除这个标志。这是命令行上的破坏性变更。
+- 此前处于 `strip` 的、由 dcctl 管理的实例，升级后处于拒绝状态，升级时会打印一条通知。仍在发送正文凭据的设备会失去响应。请通过 `devicechain_eventsources_total_msg_credential_in_mqtt_body` 观察它们，并按[设备必须停止在 MQTT 事件正文中发送凭据](#v0240-mqtt-body-credential)更新它们。
+- 边缘代理自身对设备载荷中凭据的剥离（`body_credentials_stripped_total`）不变。
+
+#### 升级期间 MQTT 消息可能丢失 {#after-v0252-mqtt-roll}
+
+升级会逐个重启平台代理的服务器。在一次对本次升级的演练中，集群部署在云上、有三个服务器、以 `--ha` 安装，MQTT 设备全程以每秒 300 条的速度发送 QoS 1 消息，**代理已确认的 448,346 条消息中有 23 条从未被存储**。它们丢失在三次突发中，每次对应一个代理服务器的重启。QoS 1 的至少一次投递在**代理滚动重启期间无法保证**：已收到 PUBACK 的设备不会重发。此前的测量见[滚动升级](#rolling-upgrades)，代理的行为见[MQTT：平台代理](../reference/transport-matrix.md#mqtt--the-platform-broker)，能改变这一结果的故障关闭设置是 `--mqtt-fail-closed`。
 
 ### v0.25.2：服务令牌签发离开公共端口 {#v0252-upgrade}
 
