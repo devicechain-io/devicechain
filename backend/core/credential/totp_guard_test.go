@@ -140,8 +140,8 @@ func TestOneTimeCompareGuardCatchesPlantedRewrites(t *testing.T) {
 		return strings.Replace(clean, from, to, 1)
 	}
 	for name, mutated := range map[string]string{
-		"== on a code": mutate("if constantTimeCompare([]byte(want), []byte(code)) == 1 {", "if want == code {"),
-		"bytes.Equal":  mutate("if constantTimeCompare([]byte(want), []byte(code)) == 1 {", "if bytes.Equal([]byte(want), []byte(code)) {"),
+		"== on a code": mutate("m := constantTimeCompare([]byte(want), []byte(code))", "m := 0; if want == code { m = 1 }"),
+		"bytes.Equal":  mutate("m := constantTimeCompare([]byte(want), []byte(code))", "m := 0; if bytes.Equal([]byte(want), []byte(code)) { m = 1 }"),
 		"digest ==":    mutate("if constantTimeCompare([]byte(d), []byte(presented)) == 1 {", "if d == presented {"),
 	} {
 		require.NotEmpty(t, oneTimeCompareFindings(t, mutated), name)

@@ -249,7 +249,7 @@ func TestRecoveryCodeFormatAndEntropy(t *testing.T) {
 	require.Len(t, codes, 10)
 	seen := map[string]bool{}
 	for _, code := range codes {
-		require.Regexp(t, `^[A-Z2-7]{4}-[A-Z2-7]{4}-[A-Z2-7]{4}-[A-Z2-7]{4}$`, code)
+		require.Regexp(t, `^[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$`, code)
 		norm, ok := credential.NormalizeRecoveryCode(code)
 		require.True(t, ok)
 		require.Len(t, norm, 16, "16 base32 characters is exactly 80 bits")
@@ -276,12 +276,19 @@ func TestRecoveryCodeFormatAndEntropy(t *testing.T) {
 }
 
 func TestNormalizeRecoveryCode(t *testing.T) {
-	for _, in := range []string{"abcd-efgh-jklm-npqr", "ABCDEFGHJKLMNPQR", " abcd efgh jklm npqr ", "ABCD-EFGH-JKLM-NPQR"} {
+	for _, in := range []string{"abcd-efgh-jkmn-pqrs", "ABCDEFGHJKMNPQRS", " abcd efgh jkmn pqrs ", "ABCD-EFGH-JKMN-PQRS"} {
 		got, ok := credential.NormalizeRecoveryCode(in)
 		require.True(t, ok, in)
-		assert.Equal(t, "ABCDEFGHJKLMNPQR", got)
+		assert.Equal(t, "ABCDEFGHJKMNPQRS", got)
 	}
-	for _, in := range []string{"", "123456", "ABCD-EFGH-JKLM-NPQ", "ABCD-EFGH-JKLM-NPQRS", "ABCD-EFGH-JKLM-NPQ1", "ABCD-EFGH-JKLM-NPQ!"} {
+	// Crockford's look-alikes fold: O is 0, and I and L are 1.
+	for in, want := range map[string]string{"0O0O-1I1L-0000-1111": "0000111100001111", "olil-0o0o-abcd-efgh": "0111000 0ABCDEFGH"} {
+		got, ok := credential.NormalizeRecoveryCode(in)
+		require.True(t, ok, in)
+		assert.Equal(t, strings.ReplaceAll(want, " ", ""), got, in)
+	}
+	// U is not in the alphabet and is not folded into anything.
+	for _, in := range []string{"", "123456", "ABCD-EFGH-JKMN-PQR", "ABCD-EFGH-JKMN-PQRST", "ABCD-EFGH-JKMN-PQRU", "ABCD-EFGH-JKMN-PQR!"} {
 		_, ok := credential.NormalizeRecoveryCode(in)
 		assert.False(t, ok, in)
 	}
@@ -295,7 +302,7 @@ func TestNormalizeRecoveryCode(t *testing.T) {
 // does not match B's digest; typing it differently (case, dashes) changes nothing; and a
 // digest is hex SHA-256 with no plaintext in it.
 func TestRecoveryCodeDigestIsBoundToItsIdentity(t *testing.T) {
-	const code = "ABCD-EFGH-JKLM-NPQR"
+	const code = "ABCD-EFGH-JKMN-PQRS"
 	a, err := credential.RecoveryCodeDigest("identity-a", code)
 	require.NoError(t, err)
 	b, err := credential.RecoveryCodeDigest("identity-b", code)
@@ -304,16 +311,21 @@ func TestRecoveryCodeDigestIsBoundToItsIdentity(t *testing.T) {
 	require.Regexp(t, `^[0-9a-f]{64}$`, a)
 	assert.NotContains(t, a, "abcd")
 
-	again, err := credential.RecoveryCodeDigest("identity-a", "abcd efgh jklm npqr")
+	again, err := credential.RecoveryCodeDigest("identity-a", "abcd efgh jkmn pqrs")
 	require.NoError(t, err)
 	assert.Equal(t, a, again, "how the code was typed is not part of it")
 
-	other, err := credential.RecoveryCodeDigest("identity-a", "ABCD-EFGH-JKLM-NPQS")
+	other, err := credential.RecoveryCodeDigest("identity-a", "ABCD-EFGH-JKMN-PQRT")
 	require.NoError(t, err)
 	assert.NotEqual(t, a, other)
 
-	// Known answer: SHA-256("dc-mfa-recovery/v1" || "identity-a" || "ABCDEFGHJKLMNPQR").
-	assert.Equal(t, "180e8ccc37de1ff949309859ff7fca64670b10ad006b524c2a8d1b33b9c5011c", a)
+	// Known answer: SHA-256("dc-mfa-recovery/v1" || "identity-a" || "ABCDEFGHJKMNPQRS").
+	assert.Equal(t, "4e7d26095040215ea60afbcc8134490ac4b4b376c29a5658a9ff90c75c3890b9", a)
+	// A person typing a look-alike redeems the same code.
+	assert.Equal(t, a, mustDigest(t, "identity-a", "abcd-efgh-jkmn-pqrs"))
+	fold1, err := credential.RecoveryCodeDigest("identity-a", "O1L3-4567-89AB-CDEF")
+	require.NoError(t, err)
+	assert.Equal(t, mustDigest(t, "identity-a", "0113-4567-89AB-CDEF"), fold1)
 
 	_, err = credential.RecoveryCodeDigest("", code)
 	assert.Error(t, err)
@@ -335,4 +347,56 @@ func TestRecoveryCodeDigestIsBoundToItsIdentity(t *testing.T) {
 		return nil
 	})
 	require.NoError(t, err)
+}
+
+func mustDigest(t *testing.T, id, code string) string {
+	t.Helper()
+	d, err := credential.RecoveryCodeDigest(id, code)
+	require.NoError(t, err)
+	return d
+}
+
+// 🔴 The OneTime capability does not outlive its CheckOneTime call. A copy kept past the
+// call compares nothing, so an attempt function cannot stash it and keep verifying codes
+// without spending the budget. Twin: the same copy matches inside the call.
+func TestOneTimeDoesNotEscapeItsCheck(t *testing.T) {
+	c, _ := totpChecker(t)
+	now := time.Unix(59, 0)
+	code := credential.GenerateTOTP(rfcSeed, now)
+	digest := mustDigest(t, "identity-a", "ABCD-EFGH-JKMN-PQRS")
+
+	var kept credential.OneTime
+	err := c.CheckOneTime(context.Background(), credential.KindTotp, func(_ context.Context, ot credential.OneTime) error {
+		kept = ot
+		_, ok := kept.VerifyTOTP(rfcSeed, code, now, 1)
+		assert.True(t, ok, "twin: valid inside the call")
+		_, ok = kept.MatchRecoveryDigest(digest, []string{digest})
+		assert.True(t, ok, "twin: valid inside the call")
+		return nil
+	})
+	require.NoError(t, err)
+
+	_, ok := kept.VerifyTOTP(rfcSeed, code, now, 1)
+	assert.False(t, ok, "a kept OneTime must not verify after its check returned")
+	_, ok = kept.MatchRecoveryDigest(digest, []string{digest})
+	assert.False(t, ok)
+
+	// Also disarmed when the attempt returns an error.
+	err = c.CheckOneTime(context.Background(), credential.KindTotp, func(_ context.Context, ot credential.OneTime) error {
+		kept = ot
+		return credential.ErrMismatch
+	})
+	require.ErrorIs(t, err, credential.ErrMismatch)
+	_, ok = kept.VerifyTOTP(rfcSeed, code, now, 1)
+	assert.False(t, ok)
+}
+
+// The step is floored, so a time before the epoch is in the step below zero.
+func TestTOTPStepAtFloorsBeforeTheEpoch(t *testing.T) {
+	assert.Equal(t, int64(-1), credential.TOTPStepAt(time.Unix(-1, 0)))
+	assert.Equal(t, int64(-1), credential.TOTPStepAt(time.Unix(-30, 0)))
+	assert.Equal(t, int64(-2), credential.TOTPStepAt(time.Unix(-31, 0)))
+	assert.Equal(t, int64(0), credential.TOTPStepAt(time.Unix(0, 0)))
+	assert.Equal(t, int64(0), credential.TOTPStepAt(time.Unix(29, 0)))
+	assert.Equal(t, int64(1), credential.TOTPStepAt(time.Unix(30, 0)))
 }

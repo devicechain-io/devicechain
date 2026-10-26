@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"crypto/sha1" //nolint:gosec // RFC 6238 specifies HMAC-SHA1 as the interoperable default every authenticator app implements
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base32"
 	"encoding/binary"
 	"encoding/hex"
@@ -16,6 +17,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -62,12 +64,20 @@ const (
 var ErrOneTimeKind = errors.New("credential: the kind is checked through CheckOneTime, not Check")
 
 // OneTime is the capability CheckOneTime hands its attempt function: the one-time-secret
-// compares. It can be obtained only there, so a code can be compared only inside a check
-// that has already spent the request's credential-check budget.
-type OneTime struct{ armed bool }
+// compares. It can be obtained only there, and it is valid only for the duration of that
+// call: CheckOneTime disarms the shared state it points at when attempt returns, so a copy
+// kept past the call (stored, sent on a channel, captured by a goroutine) compares nothing.
+// A code can therefore be compared only inside a check that spent the request's
+// credential-check budget, once per budget unit.
+type OneTime struct{ s *oneTimeState }
 
-// The zero OneTime, which an outside package can construct, is not armed and compares
-// nothing: every method answers "no match".
+// oneTimeState is the per-call arming flag every copy of one OneTime shares.
+type oneTimeState struct{ armed atomic.Bool }
+
+func (ot OneTime) live() bool { return ot.s != nil && ot.s.armed.Load() }
+
+// The zero OneTime, which an outside package can construct, and any copy kept after its
+// CheckOneTime call returned, compare nothing: every method answers "no match".
 
 // CheckOneTime is Check for a one-time secret whose attempt state is not the Checker's.
 //
@@ -92,7 +102,10 @@ func (c *Checker) CheckOneTime(ctx context.Context, kind Kind, attempt func(ctx 
 	if !comparators[kind].oneTime {
 		return fmt.Errorf("%w: %q", ErrOneTimeKind, kind)
 	}
-	err := attempt(ctx, OneTime{armed: true})
+	st := &oneTimeState{}
+	st.armed.Store(true)
+	defer st.armed.Store(false)
+	err := attempt(ctx, OneTime{s: st})
 	c.observe(kind, err, false)
 	return err
 }
@@ -106,26 +119,26 @@ func (c *Checker) CheckOneTime(ctx context.Context, kind Kind, attempt func(ctx 
 // outcome, so the time taken does not say which step matched or how close a wrong code
 // was. A code that is not exactly TOTPDigits ASCII digits matches nothing.
 func (ot OneTime) VerifyTOTP(seed []byte, code string, now time.Time, skew int) (step int64, ok bool) {
-	if !ot.armed || len(seed) == 0 {
+	if !ot.live() || len(seed) == 0 {
 		return 0, false
 	}
 	if skew < 0 {
 		skew = 0
 	}
 	current := totpStep(now)
-	matched, found := int64(0), 0
+	matched, found := 0, 0
 	for s := current - int64(skew); s <= current+int64(skew); s++ {
 		if s < 0 {
 			continue
 		}
 		want := totpCode(seed, s)
-		if constantTimeCompare([]byte(want), []byte(code)) == 1 {
-			// Ascending, so the latest matching step wins: a replay record that
-			// advanced as far as possible is the safer one to keep.
-			matched, found = s, 1
-		}
+		m := constantTimeCompare([]byte(want), []byte(code))
+		// Ascending, so the latest matching step wins: a replay record that advanced as
+		// far as possible is the safer one to keep. Selected, not branched on.
+		matched = subtle.ConstantTimeSelect(m, int(s), matched)
+		found = subtle.ConstantTimeSelect(m, 1, found)
 	}
-	return matched, found == 1
+	return int64(matched), found == 1
 }
 
 // MatchRecoveryDigest reports which of stored equals presented, comparing every entry in
@@ -134,7 +147,7 @@ func (ot OneTime) VerifyTOTP(seed []byte, code string, now time.Time, skew int) 
 // predicate on the digest (the codes carry 80 bits, so the digest needs no salt); this
 // is the check for a caller that has loaded the identity's digests instead.
 func (ot OneTime) MatchRecoveryDigest(presented string, stored []string) (index int, ok bool) {
-	if !ot.armed {
+	if !ot.live() {
 		return -1, false
 	}
 	index = -1
@@ -147,7 +160,16 @@ func (ot OneTime) MatchRecoveryDigest(presented string, stored []string) (index 
 }
 
 // totpStep is the RFC 6238 time-step counter T = floor(unix / period).
-func totpStep(t time.Time) int64 { return t.Unix() / int64(TOTPPeriod/time.Second) }
+// It floors, so a time before the epoch lands in the step below zero rather than the one
+// above it (Go's integer division truncates toward zero).
+func totpStep(t time.Time) int64 {
+	u, p := t.Unix(), int64(TOTPPeriod/time.Second)
+	q := u / p
+	if u%p < 0 {
+		q--
+	}
+	return q
+}
 
 // totpCode is the RFC 4226 HOTP value for the counter, truncated to TOTPDigits.
 func totpCode(seed []byte, counter int64) string {
@@ -180,6 +202,11 @@ func NewTOTPSeed() ([]byte, error) {
 	}
 	return seed, nil
 }
+
+// recoveryEncoding is Crockford's base32 alphabet: no I, L, O or U, so a code read off a
+// printout has no look-alike pair. NormalizeRecoveryCode applies Crockford's decode mapping
+// (O to 0, I and L to 1) to what a person types.
+var recoveryEncoding = base32.NewEncoding("0123456789ABCDEFGHJKMNPQRSTVWXYZ").WithPadding(base32.NoPadding)
 
 // seedEncoding is the unpadded base32 every authenticator app accepts.
 var seedEncoding = base32.StdEncoding.WithPadding(base32.NoPadding)
@@ -227,7 +254,7 @@ func uriEscape(s string) string {
 }
 
 // NewRecoveryCodes returns n fresh recovery codes, each 80 random bits written as four
-// groups of four base32 characters (ABCD-EFGH-JKLM-NPQR). The set is shown to the user
+// groups of four Crockford base32 characters (ABCD-EFGH-JKMN-PQRS). The set is shown to the user
 // once; only RecoveryCodeDigest of each is stored.
 func NewRecoveryCodes(n int) ([]string, error) {
 	codes := make([]string, 0, n)
@@ -236,14 +263,16 @@ func NewRecoveryCodes(n int) ([]string, error) {
 		if _, err := rand.Read(raw); err != nil {
 			return nil, fmt.Errorf("credential: generate a recovery code: %w", err)
 		}
-		c := seedEncoding.EncodeToString(raw) // 10 bytes -> exactly 16 characters
+		c := recoveryEncoding.EncodeToString(raw) // 10 bytes -> exactly 16 characters
 		codes = append(codes, c[0:4]+"-"+c[4:8]+"-"+c[8:12]+"-"+c[12:16])
 	}
 	return codes, nil
 }
 
 // NormalizeRecoveryCode reduces what a person typed to the canonical form that is
-// digested: separators and spaces removed, upper-cased. ok is false for anything that
+// digested: separators and spaces removed, upper-cased, and Crockford's look-alikes folded
+// (O to 0, I and L to 1). The fold applies the same way when a code is generated and when
+// one is presented, because the digest is always of the normalized form. ok is false for anything that
 // cannot be a recovery code (wrong length or alphabet), so a TOTP code, which is six
 // digits, is told apart from a recovery code by shape before either is evaluated.
 func NormalizeRecoveryCode(input string) (code string, ok bool) {
@@ -252,7 +281,11 @@ func NormalizeRecoveryCode(input string) (code string, ok bool) {
 		switch {
 		case r == '-' || r == ' ':
 			continue
-		case r >= 'A' && r <= 'Z', r >= '2' && r <= '7':
+		case r == 'O':
+			b.WriteByte('0')
+		case r == 'I' || r == 'L':
+			b.WriteByte('1')
+		case r >= '0' && r <= '9', r >= 'A' && r <= 'Z' && r != 'U':
 			b.WriteRune(r)
 		default:
 			return "", false
