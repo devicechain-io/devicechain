@@ -6,15 +6,15 @@ module github.com/devicechain-io/dc-promqlguard
 go 1.26.6
 
 require (
-	github.com/prometheus/prometheus v0.315.0
+	github.com/prometheus/prometheus v0.315.1
 	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
-	github.com/aws/aws-sdk-go-v2 v1.47.3 // indirect
-	github.com/aws/aws-sdk-go-v2/config v1.33.9 // indirect
-	github.com/aws/aws-sdk-go-v2/credentials v1.20.9 // indirect
-	github.com/aws/aws-sdk-go-v2/service/sts v1.51.4 // indirect
+	github.com/aws/aws-sdk-go-v2 v1.47.4 // indirect
+	github.com/aws/aws-sdk-go-v2/config v1.33.10 // indirect
+	github.com/aws/aws-sdk-go-v2/credentials v1.20.10 // indirect
+	github.com/aws/aws-sdk-go-v2/service/sts v1.51.5 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/dennwc/varint v1.0.0 // indirect
