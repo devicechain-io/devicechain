@@ -57,7 +57,14 @@ const envtestVersionHint = `cd backend/k8s && make envtest && ` +
 func renderAPIServer(t *testing.T) (client.Client, string) {
 	t.Helper()
 	env := &envtest.Environment{
-		CRDDirectoryPaths:     []string{filepath.Join("testdata", "apiserver-crds")},
+		// The stubs, and the REAL Gateway API CRDs the OpenTofu install applies (v1.6.3, standard
+		// channel), so the Gateway and HTTPRoutes the chart renders are validated against the
+		// schema a cluster enforces: the 16-rule limit, hostname format, redirect status codes and
+		// the rewrite-filter pairing. The other kinds' stubs preserve unknown fields instead.
+		CRDDirectoryPaths: []string{
+			filepath.Join("testdata", "apiserver-crds"),
+			filepath.Join("..", "..", "..", "deploy", "opentofu", "modules", "gateway-api-crds", "chart", "templates"),
+		},
 		ErrorIfCRDPathMissing: true,
 	}
 	cfg, err := env.Start()

@@ -48,7 +48,9 @@ into the listener's secret. (cert-manager must have Gateway support enabled; the
 install does that.) Every route sets hostnames explicitly, and the Gateway admits only
 routes from its own namespace.
 
-When TLS is on, the application routes attach to the https listener and a small redirect
+When TLS is on, every application rule also sets Strict-Transport-Security (max-age one year,
+includeSubDomains), which ingress-nginx sends by default for a TLS host and nothing else in the
+release sets. The application routes attach to the https listener and a small redirect
 route on the http listener sends every plain-HTTP request to https, which is what
 ingress-nginx does by default for a host that has a TLS section. With TLS off, the
 application routes attach to the http listener.
@@ -170,6 +172,13 @@ spec:
             path:
               type: ReplacePrefixMatch
               replacePrefixMatch: /
+    {{- if $tls.enabled }}
+        - type: ResponseHeaderModifier
+          responseHeaderModifier:
+            set:
+              - name: Strict-Transport-Security
+                value: "max-age=31536000; includeSubDomains"
+    {{- end }}
       backendRefs:
         - name: {{ $area }}
           port: {{ $root.Values.service.port }}
@@ -201,6 +210,14 @@ spec:
         - path:
             type: PathPrefix
             value: /.well-known/oauth-protected-resource
+    {{- if $tls.enabled }}
+      filters:
+        - type: ResponseHeaderModifier
+          responseHeaderModifier:
+            set:
+              - name: Strict-Transport-Security
+                value: "max-age=31536000; includeSubDomains"
+    {{- end }}
       backendRefs:
         - name: mcp
           port: {{ $root.Values.service.port }}
@@ -210,6 +227,14 @@ spec:
         - path:
             type: PathPrefix
             value: /.well-known/oauth-authorization-server
+    {{- if $tls.enabled }}
+      filters:
+        - type: ResponseHeaderModifier
+          responseHeaderModifier:
+            set:
+              - name: Strict-Transport-Security
+                value: "max-age=31536000; includeSubDomains"
+    {{- end }}
       backendRefs:
         - name: user-management
           port: {{ $root.Values.service.port }}
@@ -237,6 +262,14 @@ spec:
         - path:
             type: PathPrefix
             value: /
+    {{- if $tls.enabled }}
+      filters:
+        - type: ResponseHeaderModifier
+          responseHeaderModifier:
+            set:
+              - name: Strict-Transport-Security
+                value: "max-age=31536000; includeSubDomains"
+    {{- end }}
       backendRefs:
         - name: frontend
           port: 80

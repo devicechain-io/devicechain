@@ -430,12 +430,16 @@ instance:
       #
       # With Traefik at the edge (ingress.controller: gateway) the controller discards every
       # incoming X-Forwarded-* header from a peer it does not trust and sets X-Forwarded-For to
-      # the real TCP peer, so list the cluster's POD range here: the controller's pods are the
-      # peers the services see. Behind a load balancer or proxy you operate, name that proxy's
-      # ranges in the controller's trusted_proxy_cidrs AND list them here too, next to the pod
-      # range: the walk has to skip every trusted hop or all clients collapse into the proxy's
-      # address. Never put a client-controlled range in either list. `dcctl` renders the
-      # cluster's pod range itself (read from its nodes), and --trusted-proxies adds the rest. With ingress-nginx at the edge, leave use-forwarded-headers OFF: the
+      # the real TCP peer, so the list must contain the cluster's POD range: the controller's
+      # pods are the peers the services see. `dcctl` derives that range from the cluster's
+      # nodes, but only while --trusted-proxies is not given. An explicit --trusted-proxies
+      # REPLACES the derived list (and is kept on upgrades), so it must name the pod range AND
+      # every other trusted hop. Behind a load balancer or proxy you operate, name that proxy's
+      # ranges in the cluster root's traefik_trusted_proxy_cidrs AND in this list next to the
+      # pod range: the walk has to skip every trusted hop or all clients collapse into the
+      # proxy's address. Never put a client-controlled range in either list.
+      #
+      # With ingress-nginx at the edge, leave use-forwarded-headers OFF: the
       # controller then writes the real TCP peer into X-Forwarded-For. Turn it on only behind
       # a load balancer that itself appends the header, and then set proxy-real-ip-cidr to
       # that load balancer's range (its default, 0.0.0.0/0, makes the client's own header win

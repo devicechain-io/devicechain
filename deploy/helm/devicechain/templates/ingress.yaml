@@ -2,9 +2,11 @@
 Optional Ingress exposing the console + GraphQL/HTTP surface, with cert-manager
 TLS. Rendered when ingress.controller is nginx (the default); gateway.yaml renders the
 same routing as a Gateway API Gateway + HTTPRoutes when it is gateway, and a test in
-dcctl pins the two to the same routing. The self-signed Issuer is issuer.yaml's. The ingress-nginx controller and cert-manager themselves come from the
-OpenTofu infra (deploy/opentofu); this renders the per-instance routing + Issuer
-once those exist. Disabled by default.
+dcctl pins the two to the same routing. The self-signed Issuer is issuer.yaml's.
+
+The ingress-nginx controller and cert-manager themselves come from the OpenTofu infra
+(deploy/opentofu); this renders the per-instance routing once those exist.
+Disabled by default.
 
 Two routing concerns share one host:
 

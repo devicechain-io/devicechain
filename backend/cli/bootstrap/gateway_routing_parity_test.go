@@ -30,14 +30,24 @@ import (
 // text). A route added to one template and forgotten in the other is therefore probed by
 // the side that has it, and answered "nothing" by the side that does not.
 //
-// The two matching models are deliberately small and are written against what each API
-// specifies, not against what either controller does:
+// The two matching models are deliberately small:
 //
-//   - Ingress, as ingress-nginx treats it once any Ingress for the host rewrites: every
-//     path is a case-insensitive regex anchored at the start (a Prefix path matching on
-//     whole path elements), tried longest first, and rewrite-target /$N expands capture N.
-//   - HTTPRoute: PathPrefix matches whole path elements, the longest prefix wins, and
-//     URLRewrite ReplacePrefixMatch swaps the matched prefix.
+//   - Ingress, as ingress-nginx 1.15 renders it once any Ingress for the host rewrites
+//     (the API Ingress does, which turns on its enforceRegex): updateServerLocations
+//     expands a Prefix /p into /p/ plus an Exact /p, and buildLocation then emits EVERY
+//     location as ~* "^<path>", a case-insensitive CHARACTER prefix, tried longest first.
+//     rewrite-target /$N expands capture N. Prefix /p therefore also matches /pX and /P.
+//   - HTTPRoute: PathPrefix is case-sensitive and matches whole path elements, the longest
+//     prefix wins, and URLRewrite ReplacePrefixMatch swaps the matched prefix.
+//
+// Those two leniencies of ingress-nginx (case, and a prefix ending mid-element) are the only
+// places the front ends are ACCEPTED to differ: the Gateway's behaviour is the stricter and
+// the more correct one, since /api/device-managementX is not the device-management API and
+// paths are case-sensitive. The comparison is also run against a strict model of the Ingress
+// (case-sensitive, whole elements). A difference is accepted only when that strict model
+// agrees with the Gateway on the request, or on its lower-cased form, which pins the
+// difference to those two leniencies; anything else fails. Each kind must also be observed
+// in every render, so an acceptance cannot outlive the probe that justifies it.
 
 type routingObject struct {
 	APIVersion string `json:"apiVersion"`
@@ -120,6 +130,12 @@ type httpRouteSpec struct {
 					ReplacePrefixMatch string `json:"replacePrefixMatch"`
 				} `json:"path"`
 			} `json:"urlRewrite"`
+			ResponseHeaderModifier *struct {
+				Set []struct {
+					Name  string `json:"name"`
+					Value string `json:"value"`
+				} `json:"set"`
+			} `json:"responseHeaderModifier"`
 			RequestRedirect *struct {
 				Scheme     string `json:"scheme"`
 				StatusCode int    `json:"statusCode"`
@@ -189,7 +205,10 @@ type ingressEntry struct {
 }
 
 // resolveIngress answers host+path through the Ingress objects.
-func (r renderedRouting) resolveIngress(host, path string) (answer, error) {
+//
+// strict switches the model from ingress-nginx's matching (case-insensitive character
+// prefixes) to the Gateway API's (case-sensitive, whole path elements).
+func (r renderedRouting) resolveIngress(host, path string, strict bool) (answer, error) {
 	var entries []ingressEntry
 	for _, ing := range r.ingresses {
 		var spec ingressSpec
@@ -214,7 +233,11 @@ func (r renderedRouting) resolveIngress(host, path string) (answer, error) {
 					backend: fmt.Sprintf("%s:%d", p.Backend.Service.Name, port),
 				}
 				if p.PathType == "ImplementationSpecific" {
-					re, err := regexp.Compile("(?i)^" + p.Path)
+					flags := "(?i)"
+					if strict {
+						flags = ""
+					}
+					re, err := regexp.Compile(flags + "^" + p.Path)
 					if err != nil {
 						return "", fmt.Errorf("Ingress/%s path %q is not a regular expression: %w", ing.Metadata.Name, p.Path, err)
 					}
@@ -223,6 +246,12 @@ func (r renderedRouting) resolveIngress(host, path string) (answer, error) {
 					return "", fmt.Errorf("Ingress/%s path %q has pathType %q, which this model does not know", ing.Metadata.Name, p.Path, p.PathType)
 				}
 				entries = append(entries, e)
+				if p.PathType == "Prefix" && !strict && p.Path != "/" && !strings.HasSuffix(p.Path, "/") {
+					// updateServerLocations adds the trailing-slash form beside the exact one.
+					e2 := e
+					e2.path = p.Path + "/"
+					entries = append(entries, e2)
+				}
 			}
 		}
 	}
@@ -238,7 +267,9 @@ func (r renderedRouting) resolveIngress(host, path string) (answer, error) {
 				groups = []string{path}
 			}
 		default:
-			if prefixMatches(e.path, path) {
+			if strict && prefixMatches(e.path, path) {
+				groups = []string{path}
+			} else if !strict && strings.HasPrefix(strings.ToLower(path), strings.ToLower(e.path)) {
 				groups = []string{path}
 			}
 		}
@@ -299,6 +330,8 @@ func (r renderedRouting) resolveGateway(host, path string) (answer, error) {
 						return "", fmt.Errorf("HTTPRoute/%s has a URLRewrite this model does not read", rt.Metadata.Name)
 					}
 					c.rewrites, c.replace = true, f.URLRewrite.Path.ReplacePrefixMatch
+				case "ResponseHeaderModifier":
+					// Does not change where the request goes; TestGatewayCarriesTheIngressTLS pins it.
 				default:
 					return "", fmt.Errorf("HTTPRoute/%s has a %s filter on a backend rule, which this model does not read", rt.Metadata.Name, f.Type)
 				}
@@ -353,7 +386,10 @@ func probesFor(declared string) []string {
 		base = base[:i]
 	}
 	base = strings.TrimSuffix(base, "/")
-	out := []string{inst, inst + "/more", base, base + "/", base + "/sub/path", base + "X", base + "/graphql"}
+	// base+"X" ends the prefix mid-element, and the upper-cased forms change only the case:
+	// the two places ingress-nginx's matching is more lenient than a Gateway's.
+	out := []string{inst, inst + "/more", base, base + "/", base + "/sub/path", base + "X", base + "/graphql",
+		strings.ToUpper(inst), strings.ToUpper(base) + "/X"}
 	return out
 }
 
@@ -419,39 +455,61 @@ func (r renderedRouting) ingressHosts() []string {
 
 // routingDifferences compares the two front ends over every probe, and returns one line
 // per disagreement. nginx is the Ingress render, gw the Gateway render.
-func routingDifferences(nginx, gw renderedRouting) ([]string, error) {
+//
+// A difference is returned in unexplained unless it is one of ingress-nginx's two accepted
+// leniencies (see the header), which are counted in accepted under their kind: "case" and
+// "character-prefix".
+func routingDifferences(nginx, gw renderedRouting) (unexplained []string, accepted map[string]int, err error) {
 	hosts := nginx.ingressHosts()
 	if len(hosts) != 1 {
-		return nil, fmt.Errorf("the Ingress render serves %d hosts, want exactly 1", len(hosts))
+		return nil, nil, fmt.Errorf("the Ingress render serves %d hosts, want exactly 1", len(hosts))
 	}
 	// Probes from BOTH renders, so a path only one side declares is still asked of both.
 	union := renderedRouting{ingresses: nginx.ingresses, routes: gw.routes}
 	probes, err := routingProbes(union)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	var diffs []string
+	accepted = map[string]int{}
 	served := 0
+	backend := func(a answer) string { return strings.SplitN(string(a), " ", 2)[0] }
 	for _, p := range probes {
-		a, err := nginx.resolveIngress(hosts[0], p)
+		a, err := nginx.resolveIngress(hosts[0], p, false)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		b, err := gw.resolveGateway(hosts[0], p)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if a != noRoute {
 			served++
 		}
-		if a != b {
-			diffs = append(diffs, fmt.Sprintf("%s%s: Ingress -> %q, Gateway -> %q", hosts[0], p, string(a), string(b)))
+		if a == b {
+			continue
+		}
+		strict, err := nginx.resolveIngress(hosts[0], p, true)
+		if err != nil {
+			return nil, nil, err
+		}
+		if strict != b {
+			unexplained = append(unexplained, fmt.Sprintf("%s%s: Ingress -> %q, Gateway -> %q", hosts[0], p, string(a), string(b)))
+			continue
+		}
+		lower, err := nginx.resolveIngress(hosts[0], strings.ToLower(p), true)
+		if err != nil {
+			return nil, nil, err
+		}
+		if strings.ToLower(p) != p && backend(lower) == backend(a) {
+			accepted["case"]++
+		} else {
+			accepted["character-prefix"]++
 		}
 	}
 	if served == 0 {
-		return nil, fmt.Errorf("no probe reached any Ingress route: the comparison would pass over nothing")
+		return nil, nil, fmt.Errorf("no probe reached any Ingress route: the comparison would pass over nothing")
 	}
-	return diffs, nil
+	return unexplained, accepted, nil
 }
 
 // gatewayVariant renders vals with the given controller and the TLS shape of tlsOn.
@@ -512,9 +570,16 @@ func TestGatewayRoutesServeWhatTheIngressesServe(t *testing.T) {
 					t.Fatalf("the two renders differ in their cert-manager Issuers")
 				}
 
-				diffs, err := routingDifferences(nginx, gw)
+				diffs, accepted, err := routingDifferences(nginx, gw)
 				if err != nil {
 					t.Fatal(err)
+				}
+				// The accepted leniencies of ingress-nginx must still be observed, or the
+				// acceptance has outlived the probe that justifies it.
+				for _, kind := range []string{"case", "character-prefix"} {
+					if accepted[kind] == 0 {
+						t.Fatalf("no probe exercised the accepted %s divergence: %v", kind, accepted)
+					}
 				}
 				if len(diffs) != 0 {
 					t.Fatalf("the Gateway routes do not serve what the Ingresses serve:\n  %s", strings.Join(diffs, "\n  "))
@@ -525,7 +590,8 @@ func TestGatewayRoutesServeWhatTheIngressesServe(t *testing.T) {
 				host := nginx.ingressHosts()[0]
 				want := answer("device-management:8080 /provisioning/acme/register")
 				for label, resolve := range map[string]func(string, string) (answer, error){
-					"Ingress": nginx.resolveIngress, "Gateway": gw.resolveGateway,
+					"Ingress": func(h, p string) (answer, error) { return nginx.resolveIngress(h, p, false) },
+					"Gateway": gw.resolveGateway,
 				} {
 					got, err := resolve(host, reg)
 					if err != nil || got != want {
@@ -642,6 +708,30 @@ func TestGatewayCarriesTheIngressTLS(t *testing.T) {
 				}
 				section := spec.ParentRefs[0].SectionName
 				redirect := len(spec.Rules) == 1 && len(spec.Rules[0].BackendRefs) == 0
+				if !redirect {
+					// ingress-nginx sends HSTS by default for a TLS host, and nothing else in the
+					// release does, so every backend rule on the https listener must set it.
+					const hsts = "max-age=31536000; includeSubDomains"
+					for i, rule := range spec.Rules {
+						got := ""
+						for _, f := range rule.Filters {
+							if f.ResponseHeaderModifier != nil {
+								for _, h := range f.ResponseHeaderModifier.Set {
+									if h.Name == "Strict-Transport-Security" {
+										got = h.Value
+									}
+								}
+							}
+						}
+						want := ""
+						if https >= 0 {
+							want = hsts
+						}
+						if got != want {
+							t.Errorf("HTTPRoute/%s rule %d sets Strict-Transport-Security %q, want %q", rt.Metadata.Name, i, got, want)
+						}
+					}
+				}
 				switch {
 				case redirect:
 					sawRedirect = true
@@ -681,7 +771,7 @@ func TestRoutingParityCheckFailsWhenARouteIsMissing(t *testing.T) {
 	nginx, _ := renderRoutingVariant(t, full, "neg1", "nginx", true, "")
 	gw, _ := renderRoutingVariant(t, full, "neg1", "gateway", true, "")
 
-	if diffs, err := routingDifferences(nginx, gw); err != nil || len(diffs) != 0 {
+	if diffs, _, err := routingDifferences(nginx, gw); err != nil || len(diffs) != 0 {
 		t.Fatalf("the unmodified renders must agree before the control means anything: %v %v", diffs, err)
 	}
 
@@ -751,7 +841,7 @@ func TestRoutingParityCheckFailsWhenARouteIsMissing(t *testing.T) {
 		{"the prefix rewrite is wrong", breakRewrite(), "/x/"},
 	}
 	for _, c := range cases {
-		diffs, err := routingDifferences(nginx, c.mutant)
+		diffs, _, err := routingDifferences(nginx, c.mutant)
 		if err != nil {
 			t.Fatalf("%s: %v", c.name, err)
 		}
@@ -762,5 +852,44 @@ func TestRoutingParityCheckFailsWhenARouteIsMissing(t *testing.T) {
 		if !strings.Contains(strings.Join(diffs, "\n"), c.want) {
 			t.Errorf("%s: the differences do not name %q:\n  %s", c.name, c.want, strings.Join(diffs, "\n  "))
 		}
+	}
+}
+
+// TestAnOverfullAPIRouteFailsTheRender is the negative control for the 16-rule guard in
+// gateway.yaml. No real area set reaches 16 public areas, so the guard's threshold is
+// lowered in an in-memory copy of the chart: the render must then refuse, naming the limit,
+// rather than emit an HTTPRoute a cluster would reject.
+func TestAnOverfullAPIRouteFailsTheRender(t *testing.T) {
+	t.Parallel()
+	ch, err := loadEmbeddedChart()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := renderProfiles[0]
+	vals := profileValues(t, ch, p, "cap1")
+	vals["ingress"].(map[string]interface{})["controller"] = "gateway"
+
+	// Unmodified, the default profile renders.
+	if _, err := renderChartClientSide(t.Context(), ch, vals); err != nil {
+		t.Fatalf("the unmodified chart must render before the control means anything: %v", err)
+	}
+
+	patched := false
+	for _, f := range ch.Templates {
+		if strings.HasSuffix(f.Name, "templates/gateway.yaml") {
+			const guard = "{{- if gt $rules 16 }}"
+			if !strings.Contains(string(f.Data), guard) {
+				t.Fatalf("gateway.yaml no longer carries the rule-count guard %q: update this control", guard)
+			}
+			f.Data = []byte(strings.Replace(string(f.Data), guard, "{{- if gt $rules 2 }}", 1))
+			patched = true
+		}
+	}
+	if !patched {
+		t.Fatal("no gateway.yaml template to patch")
+	}
+	_, err = renderChartClientSide(t.Context(), ch, vals)
+	if err == nil || !strings.Contains(err.Error(), "at most 16") {
+		t.Fatalf("a route over the rule limit rendered (err = %v), want a refusal naming the limit of 16", err)
 	}
 }

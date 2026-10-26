@@ -526,8 +526,24 @@ re-opens every private address for every tenant.
   - replace any incoming `X-Forwarded-For` from an untrusted peer with the real peer, and
     list the pod range of the controller (and every other trusted hop) in
     `instance.config.infrastructure.http.trustedProxies` so the services read the device's
-    address and not the proxy's. Never read `Forwarded` or `X-Real-Ip`: they are not
-    sanitised by every controller.
+    address and not the proxy's. `dcctl` derives the pod range itself, but an explicit
+    `--trusted-proxies` replaces the derived list, so it must then name the pod range AND
+    the other hops. Never read `Forwarded` or `X-Real-Ip`: they are not sanitised by every
+    controller;
+  - send `Strict-Transport-Security` (the chart sets `max-age=31536000; includeSubDomains`
+    on every https rule), which ingress-nginx did by default and no other part of the
+    release sets.
+
+  Two behaviours differ from ingress-nginx's by design: a Gateway API path match is
+  case-sensitive and ends on a path-element boundary, so `/API/<area>` and `/api/<area>X`
+  fall through to the console instead of reaching the area.
+
+  With `gateway` and a real certificate (`ingress.tls.selfSigned: false`), an ACME
+  `ClusterIssuer` must solve HTTP-01 through the Gateway API, not an Ingress: set
+  `gatewayHTTPRoute` in its solver with a `parentRef` to the `http` listener of the Gateway
+  named `devicechain` in the instance's namespace (`kind: Gateway`, `sectionName: http`). The
+  https-redirect route is a less specific match than the solver's challenge path, so it does
+  not intercept it.
 
 ## Values reference
 
