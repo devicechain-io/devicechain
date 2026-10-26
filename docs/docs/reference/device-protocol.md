@@ -237,10 +237,10 @@ POST /api/device-management/provisioning/{tenant}/register
 {
   "outcome": "CREATED",
   "tenant": "acme",
-  "deviceToken": "pv-sn-000123-1a2b3c4d",
+  "deviceToken": "pv-SN-000123-06e08144e3e8",
   "externalId": "SN-000123",
   "credentialType": "ACCESS_TOKEN",
-  "mqtt": { "clientId": "<instanceId>:acme:pv-sn-000123-1a2b3c4d" }
+  "mqtt": { "clientId": "<instanceId>:acme:pv-SN-000123-06e08144e3e8" }
 }
 ```
 
@@ -310,7 +310,7 @@ Persist the credential before the first send, and present **the same credential 
 | Answer | What to do |
 | --- | --- |
 | `429`, or `503` with `Retry-After` | Wait `Retry-After` plus a random extra of 0 to 100% of it, then retry. |
-| A network error, a timeout, `408`, `502`, `504`, or `500` with `PROVISIONING_UNAVAILABLE` | Back off exponentially from 1 second to 5 minutes, with full jitter, then retry. |
+| A network error, a timeout, `408`, `502`, `504`, `503` without `Retry-After`, or `500` with `PROVISIONING_UNAVAILABLE` | Back off exponentially from 1 second to 5 minutes, with full jitter, then retry. |
 | `400`, `413` | Stop. The request is wrong; this is a firmware defect. |
 | `401`, `403`, `404`, `409`, `422`, `501`, `500` with `PROVISIONING_MISCONFIGURED` | Stop and report. Retrying cannot change the answer; an operator has to. |
 

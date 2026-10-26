@@ -237,10 +237,10 @@ POST /api/device-management/provisioning/{tenant}/register
 {
   "outcome": "CREATED",
   "tenant": "acme",
-  "deviceToken": "pv-sn-000123-1a2b3c4d",
+  "deviceToken": "pv-SN-000123-06e08144e3e8",
   "externalId": "SN-000123",
   "credentialType": "ACCESS_TOKEN",
-  "mqtt": { "clientId": "<instanceId>:acme:pv-sn-000123-1a2b3c4d" }
+  "mqtt": { "clientId": "<instanceId>:acme:pv-SN-000123-06e08144e3e8" }
 }
 ```
 
@@ -310,7 +310,7 @@ Guarda la credencial antes del primer envío y presenta **la misma credencial en
 | Respuesta | Qué hacer |
 | --- | --- |
 | `429`, o `503` con `Retry-After` | Espera `Retry-After` más un añadido aleatorio del 0 al 100 % de ese valor y reintenta. |
-| Un error de red, un tiempo de espera agotado, `408`, `502`, `504`, o `500` con `PROVISIONING_UNAVAILABLE` | Retrocede de forma exponencial de 1 segundo a 5 minutos, con jitter completo, y reintenta. |
+| Un error de red, un tiempo de espera agotado, `408`, `502`, `504`, `503` sin `Retry-After`, o `500` con `PROVISIONING_UNAVAILABLE` | Retrocede de forma exponencial de 1 segundo a 5 minutos, con jitter completo, y reintenta. |
 | `400`, `413` | Detente. La petición es incorrecta; es un defecto del firmware. |
 | `401`, `403`, `404`, `409`, `422`, `501`, `500` con `PROVISIONING_MISCONFIGURED` | Detente e informa. Reintentar no puede cambiar la respuesta; tiene que hacerlo un operador. |
 

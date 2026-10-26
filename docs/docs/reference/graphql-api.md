@@ -576,7 +576,7 @@ in the schema rather than a map, so there is no per-key merge to choose between:
 
 ## Provisioning profiles {#provisioning-profiles}
 
-The provisioning-profile operations belong to [device self-registration](../guides/device-self-registration.md). They need the `device:write` permission, and a caller whose membership is scoped to a customer is refused.
+The provisioning-profile operations belong to [device self-registration](../guides/device-self-registration.md). The mutations need `device:write` and the queries `device:read`; a caller whose membership is scoped to a customer is refused on all of them.
 
 | Operation | What it does |
 | --- | --- |
@@ -585,7 +585,7 @@ The provisioning-profile operations belong to [device self-registration](../guid
 | `updateProvisioningProfile` | A partial update. It has no secret field. `maxDevices` can be set, or cleared with `null`. |
 | `revokeProvisionedDevices(profileToken)` | Disables every credential the profile issued, ends those devices' live sessions, and returns how many it disabled. |
 | `resetDeviceProvisioning(deviceToken)` | Deletes the credentials self-registration issued to a device and ends its sessions. The device keeps its earmark, so it can register again. |
-| `deleteProvisioningProfile(token)` | Refused (`IN_USE`) while any device holds a credential the profile issued, revoked ones included. |
+| `deleteProvisioningProfile(token)` | Refused (`REFERENCE_VIOLATION`) while any device holds a credential the profile issued, revoked ones included. |
 
 On the types, `ProvisioningProfile` gains `maxDevices`, `provisionedDeviceCount` and `secretIssued` (false until the server has generated the secret, which is when the profile is **Rotate required**). A device gains `expectedProvisioningProfile`, its earmark, and a credential gains `provisioningProfile`. `createDevice` and `importDevices` take `provisioningProfileToken` to earmark a device, and `DeviceSearchCriteria` takes `provisioningProfile` and `expectedProvisioningProfile`. The endpoint itself is plain HTTP and described in the [device protocol reference](./device-protocol.md#self-registration).
 

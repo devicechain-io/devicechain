@@ -237,10 +237,10 @@ POST /api/device-management/provisioning/{tenant}/register
 {
   "outcome": "CREATED",
   "tenant": "acme",
-  "deviceToken": "pv-sn-000123-1a2b3c4d",
+  "deviceToken": "pv-SN-000123-06e08144e3e8",
   "externalId": "SN-000123",
   "credentialType": "ACCESS_TOKEN",
-  "mqtt": { "clientId": "<instanceId>:acme:pv-sn-000123-1a2b3c4d" }
+  "mqtt": { "clientId": "<instanceId>:acme:pv-SN-000123-06e08144e3e8" }
 }
 ```
 
@@ -310,7 +310,7 @@ POST /api/device-management/provisioning/{tenant}/register
 | 响应 | 怎么做 |
 | --- | --- |
 | `429`，或带 `Retry-After` 的 `503` | 等待 `Retry-After` 再加上其 0 到 100% 的随机额外时间，然后重试。 |
-| 网络错误、超时、`408`、`502`、`504`，或带 `PROVISIONING_UNAVAILABLE` 的 `500` | 从 1 秒到 5 分钟指数退避，并使用完全抖动，然后重试。 |
+| 网络错误、超时、`408`、`502`、`504`、不带 `Retry-After` 的 `503`，或带 `PROVISIONING_UNAVAILABLE` 的 `500` | 从 1 秒到 5 分钟指数退避，并使用完全抖动，然后重试。 |
 | `400`、`413` | 停止。请求有误；这是固件缺陷。 |
 | `401`、`403`、`404`、`409`、`422`、`501`，以及带 `PROVISIONING_MISCONFIGURED` 的 `500` | 停止并上报。重试无法改变答案，需要运维人员处理。 |
 

@@ -43,7 +43,7 @@ Un archivo puede tener hasta 10 000 filas y 5 MiB. Un archivo mayor se rechaza a
 | `name` | No | Hasta 128 caracteres. |
 | `description` | No | Hasta 1024 caracteres. |
 | `metadata` | No | Un documento JSON, hasta 64 KiB. Se compara por valor en una nueva ejecución, así que el orden de las claves y los espacios no importan. |
-| `provisioningProfileToken` | No | El token de un [perfil de aprovisionamiento](./device-self-registration.md#earmarking) para el que reservar el dispositivo, de modo que ese perfil pueda adoptarlo cuando el dispositivo se registre por sí mismo. Debe existir y ser del tipo del dispositivo, o la fila es `INVALID`. Un dispositivo que ya existe con otra reserva hace que la fila sea un `CONFLICT`. |
+| `provisioningProfileToken` | No | El token de un [perfil de aprovisionamiento](./device-self-registration.md#earmarking) para el que reservar el dispositivo, de modo que ese perfil pueda adoptarlo cuando el dispositivo se registre por sí mismo. Debe existir y ser del tipo del dispositivo, o la fila es `INVALID`. Un dispositivo que ya existe hace que la fila sea un `CONFLICT` siempre que su reserva difiera de la que indica la fila, incluido un dispositivo sin reserva: una importación nunca actualiza un dispositivo existente, así que no puede reservarlo. |
 | `credentialType` | Solo credenciales de fábrica | `ACCESS_TOKEN` o `MQTT_BASIC`. |
 | `credentialId` | Solo credenciales de fábrica | Lo que presenta el dispositivo: el propio token de acceso o el nombre de usuario MQTT. |
 | `credentialValue` | Solo `MQTT_BASIC` | La contraseña, de al menos 16 bytes y como máximo 4096. Solo escritura. |

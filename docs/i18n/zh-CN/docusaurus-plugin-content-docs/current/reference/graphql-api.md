@@ -470,7 +470,7 @@ OAuth 客户端的重定向 URI 和 scope 不可清空：空重定向允许列�
 
 ## 自动注册配置 {#provisioning-profiles}
 
-自动注册配置（provisioning profile）的各项操作属于[设备自注册](../guides/device-self-registration.md)。它们需要 `device:write` 权限，成员资格限定到某个客户的调用方会被拒绝。
+自动注册配置（provisioning profile）的各项操作属于[设备自注册](../guides/device-self-registration.md)。变更操作需要 `device:write`，查询需要 `device:read`；成员资格限定到某个客户的调用方对所有这些操作都会被拒绝。
 
 | 操作 | 作用 |
 | --- | --- |
@@ -479,9 +479,9 @@ OAuth 客户端的重定向 URI 和 scope 不可清空：空重定向允许列�
 | `updateProvisioningProfile` | 部分更新。它没有密文字段。`maxDevices` 可以设置，也可以用 `null` 清除。 |
 | `revokeProvisionedDevices(profileToken)` | 禁用该配置签发的每一份凭据，终止这些设备的在线会话，并返回禁用的数量。 |
 | `resetDeviceProvisioning(deviceToken)` | 删除自注册签发给某台设备的凭据并终止其会话。设备保留其预指定，因此可以再次注册。 |
-| `deleteProvisioningProfile(token)` | 只要还有设备持有该配置签发的凭据（包括已吊销的），就会被拒绝（`IN_USE`）。 |
+| `deleteProvisioningProfile(token)` | 只要还有设备持有该配置签发的凭据（包括已吊销的），就会被拒绝（`REFERENCE_VIOLATION`）。 |
 
-在类型上，`ProvisioningProfile` 新增 `maxDevices`、`provisionedDeviceCount` 和 `secretIssued`（在服务器生成密文之前为 false，此时配置处于**需要轮换**状态）。设备新增 `expectedProvisioningProfile`（它的预指定），凭据新增 `provisioningProfile`。`createDevice` 和 `importDevices` 接受 `provisioningProfileToken` 来预指定设备，`DeviceSearchCriteria` 接受 `provisioningProfile` 和 `expectedProvisioningProfile`。端点本身是纯 HTTP，在[设备协议参考](./device-protocol.md#self-registration)中说明。
+在类型上，`ProvisioningProfile` 新增 `maxDevices`、`provisionedDeviceCount` 和 `secretIssued`（在服务器生成密文之前为 false，此时配置处于**需要轮换（Rotate required）**状态）。设备新增 `expectedProvisioningProfile`（它的预指定），凭据新增 `provisioningProfile`。`createDevice` 和 `importDevices` 接受 `provisioningProfileToken` 来预指定设备，`DeviceSearchCriteria` 接受 `provisioningProfile` 和 `expectedProvisioningProfile`。端点本身是纯 HTTP，在[设备协议参考](./device-protocol.md#self-registration)中说明。
 
 ## 输入验证 {#input-validation}
 

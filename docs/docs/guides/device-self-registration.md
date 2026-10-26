@@ -45,7 +45,7 @@ Earmark a device when you create it:
 - in a CSV import, with the `provisioningProfileToken` column ([columns](./importing-devices.md#columns));
 - over GraphQL, with `provisioningProfileToken` on `createDevice` or `importDevices`.
 
-The profile must exist in the tenant and be of the device's type. A device's detail page shows how it came onto the platform and offers **Reset provisioning**; the device list can be filtered by the profile that issued its credential or by the profile it is expected for (`provisioningProfile` and `expectedProvisioningProfile` in `DeviceSearchCriteria`).
+An earmark can only be set when the device is created. Nothing sets one on an existing device, so a device created before you set up the profile cannot be adopted by it. The profile must exist in the tenant and be of the device's type. A device's detail page shows how it came onto the platform and offers **Reset provisioning**; the device list can be filtered by the profile that issued its credential or by the profile it is expected for (`provisioningProfile` and `expectedProvisioningProfile` in `DeviceSearchCriteria`).
 
 Deleting a profile does not delete earmarks: the devices fall back to having none, and are refused (`DEVICE_NOT_EARMARKED`) from then on.
 
@@ -55,8 +55,7 @@ With a profile whose key is `acme-sensors-2026` and a device with serial `SN-000
 
 ```bash
 # once, on the device: make the credential and keep it BEFORE sending anything
-openssl rand -base64 32 | tr '+/' '-_' | tr -d '=
-' > /data/credential
+openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n' > /data/credential
 
 curl -sS https://dc.example.com/api/device-management/provisioning/acme/register \
   -H 'Content-Type: application/json' \
@@ -69,7 +68,7 @@ curl -sS https://dc.example.com/api/device-management/provisioning/acme/register
 ```
 
 ```json
-{"outcome":"CREATED","tenant":"acme","deviceToken":"pv-sn-000123-1a2b3c4d","externalId":"SN-000123","credentialType":"ACCESS_TOKEN","mqtt":{"clientId":"<instanceId>:acme:pv-sn-000123-1a2b3c4d"}}
+{"outcome":"CREATED","tenant":"acme","deviceToken":"pv-SN-000123-06e08144e3e8","externalId":"SN-000123","credentialType":"ACCESS_TOKEN","mqtt":{"clientId":"<instanceId>:acme:pv-SN-000123-06e08144e3e8"}}
 ```
 
 You can try the whole flow without writing firmware. [`dcctl device register`](../reference/dcctl.md#dcctl-device-register) plays the device: it generates the credential, saves it to the file named by `--material-file` **before** it sends anything, follows the retry rules, and prints the device token and client id. Run it again and it reports `REPLAYED`.

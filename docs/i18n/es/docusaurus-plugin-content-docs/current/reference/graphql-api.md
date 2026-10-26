@@ -608,7 +608,7 @@ podido direccionar una clave individual.
 
 ## Perfiles de aprovisionamiento {#provisioning-profiles}
 
-Las operaciones de perfiles de aprovisionamiento pertenecen al [autorregistro de dispositivos](../guides/device-self-registration.md). Requieren el permiso `device:write`, y se rechaza a quien llama con una membresía restringida a un cliente.
+Las operaciones de perfiles de aprovisionamiento pertenecen al [autorregistro de dispositivos](../guides/device-self-registration.md). Las mutaciones requieren `device:write` y las consultas `device:read`; se rechaza a quien llama con una membresía restringida a un cliente en todas ellas.
 
 | Operación | Qué hace |
 | --- | --- |
@@ -617,9 +617,9 @@ Las operaciones de perfiles de aprovisionamiento pertenecen al [autorregistro de
 | `updateProvisioningProfile` | Una actualización parcial. No tiene campo de secreto. `maxDevices` se puede fijar, o limpiar con `null`. |
 | `revokeProvisionedDevices(profileToken)` | Deshabilita todas las credenciales que emitió el perfil, cierra las sesiones activas de esos dispositivos y devuelve cuántas deshabilitó. |
 | `resetDeviceProvisioning(deviceToken)` | Elimina las credenciales que el autorregistro emitió a un dispositivo y cierra sus sesiones. El dispositivo conserva su reserva, así que puede registrarse de nuevo. |
-| `deleteProvisioningProfile(token)` | Se rechaza (`IN_USE`) mientras algún dispositivo conserve una credencial que emitió el perfil, incluidas las revocadas. |
+| `deleteProvisioningProfile(token)` | Se rechaza (`REFERENCE_VIOLATION`) mientras algún dispositivo conserve una credencial que emitió el perfil, incluidas las revocadas. |
 
-En cuanto a los tipos, `ProvisioningProfile` gana `maxDevices`, `provisionedDeviceCount` y `secretIssued` (falso hasta que el servidor ha generado el secreto, que es cuando el perfil está en **Rotate required**). Un dispositivo gana `expectedProvisioningProfile`, su reserva, y una credencial gana `provisioningProfile`. `createDevice` e `importDevices` aceptan `provisioningProfileToken` para reservar un dispositivo, y `DeviceSearchCriteria` acepta `provisioningProfile` y `expectedProvisioningProfile`. El endpoint en sí es HTTP simple y se describe en la [referencia del protocolo de dispositivo](./device-protocol.md#self-registration).
+En cuanto a los tipos, `ProvisioningProfile` gana `maxDevices`, `provisionedDeviceCount` y `secretIssued` (falso hasta que el servidor ha generado el secreto, que es cuando el perfil está en **Requiere rotación**). Un dispositivo gana `expectedProvisioningProfile`, su reserva, y una credencial gana `provisioningProfile`. `createDevice` e `importDevices` aceptan `provisioningProfileToken` para reservar un dispositivo, y `DeviceSearchCriteria` acepta `provisioningProfile` y `expectedProvisioningProfile`. El endpoint en sí es HTTP simple y se describe en la [referencia del protocolo de dispositivo](./device-protocol.md#self-registration).
 
 ## Validación de entrada {#input-validation}
 

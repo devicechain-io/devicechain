@@ -45,7 +45,7 @@ title: 设备自注册
 - 在 CSV 导入中，使用 `provisioningProfileToken` 列（[列说明](./importing-devices.md#columns)）；
 - 通过 GraphQL，在 `createDevice` 或 `importDevices` 上使用 `provisioningProfileToken`。
 
-配置必须存在于该租户中，且设备类型与设备相同。设备详情页会显示它是如何加入平台的，并提供**重置预配（Reset provisioning）**；设备列表可以按签发其凭据的配置，或按它预期所属的配置筛选（`DeviceSearchCriteria` 中的 `provisioningProfile` 和 `expectedProvisioningProfile`）。
+预指定只能在创建设备时设置。没有任何操作可以为已存在的设备设置预指定，因此在设置配置之前创建的设备无法被它采用。配置必须存在于该租户中，且设备类型与设备相同。设备详情页会显示它是如何加入平台的，并提供**重置预配（Reset provisioning）**；设备列表可以按签发其凭据的配置，或按它预期所属的配置筛选（`DeviceSearchCriteria` 中的 `provisioningProfile` 和 `expectedProvisioningProfile`）。
 
 删除配置不会删除预指定：这些设备会回到没有预指定的状态，此后会被拒绝（`DEVICE_NOT_EARMARKED`）。
 
@@ -68,7 +68,7 @@ curl -sS https://dc.example.com/api/device-management/provisioning/acme/register
 ```
 
 ```json
-{"outcome":"CREATED","tenant":"acme","deviceToken":"pv-sn-000123-1a2b3c4d","externalId":"SN-000123","credentialType":"ACCESS_TOKEN","mqtt":{"clientId":"<instanceId>:acme:pv-sn-000123-1a2b3c4d"}}
+{"outcome":"CREATED","tenant":"acme","deviceToken":"pv-SN-000123-06e08144e3e8","externalId":"SN-000123","credentialType":"ACCESS_TOKEN","mqtt":{"clientId":"<instanceId>:acme:pv-SN-000123-06e08144e3e8"}}
 ```
 
 无需编写固件就可以试走整个流程。[`dcctl device register`](../reference/dcctl.md#dcctl-device-register) 扮演设备：它生成凭据，在发送任何内容**之前**先把它保存到 `--material-file` 指定的文件，遵循重试规则，并打印设备令牌和客户端 ID。再运行一次，它会报告 `REPLAYED`。
@@ -81,12 +81,12 @@ dcctl device register --server dc.example.com --tenant acme \
 
 有两条规则比其余都重要：
 
-- **在第一次发送之前保存凭据。**平台只保留摘要。丢失凭据的设备无法通过再次注册来找回：它会为一台已持有凭据的设备出示新内容，并被 `409 ALREADY_PROVISIONED` 拒绝。此时运维人员需要使用**重置预配**，设备才能再次注册。
+- **在第一次发送之前保存凭据。**平台只保留摘要。丢失凭据的设备无法通过再次注册来找回：它会为一台已持有凭据的设备出示新内容，并被 `409 ALREADY_PROVISIONED` 拒绝。此时运维人员需要使用**重置预配（Reset provisioning）**，设备才能再次注册。
 - **用同一份凭据重试，并且要等待。**响应丢失的注册会被识别为重放（`200 REPLAYED`），可以安全重复。遇到 `429` 和 `503` 时，请等待 `Retry-After` 再加随机抖动；不要连续猛发。[重试约定](../reference/device-protocol.md#self-registration-retry)列出了哪些响应应当重试，哪些需要人工处理。
 
 ## 轮换与重叠 {#rotation}
 
-`rotateProvisioningProfileSecret`（控制台的**轮换密文**）是硬切换：旧密文在下一个请求起就失效，没有重叠。已经注册的设备不受影响，因为它们用自己的凭据连接，而不是用设备群密文。
+`rotateProvisioningProfileSecret`（控制台的**轮换密文（Rotate secret）**）是硬切换：旧密文在下一个请求起就失效，没有重叠。已经注册的设备不受影响，因为它们用自己的凭据连接，而不是用设备群密文。
 
 如果轮换需要重叠，例如工厂仍在烧录旧密文，请创建**第二个配置**，使用它自己的密钥和密文，并为旧配置设置过期时间。
 
@@ -97,7 +97,7 @@ dcctl device register --server dc.example.com --tenant acme \
 恢复步骤：
 
 1. **轮换密文**，使泄露的密文失效。
-2. **吊销该配置签发的设备**，如果其中有不属于你的设备（`revokeProvisionedDevices`，控制台的**吊销设备**）。它们的凭据会被禁用，其在线连接会被终止。
+2. **吊销该配置签发的设备**，如果其中有不属于你的设备（`revokeProvisionedDevices`，控制台的**吊销设备（Revoke devices）**）。它们的凭据会被禁用，其在线连接会被终止。
 3. **查明注册了什么、何时注册。**按配置（`provisioningProfile`）筛选设备列表，并查看每台设备的创建时间。注册也会作为 `device.provision.created` 和 `device.provision.adopted` 记录在[审计日志](../user-guide/audit.md)中，归属于 `provisioning-profile:<token>`。重放会被计数，但不写入日志。
 4. **重置你确实拥有的设备**（`resetDeviceProvisioning`），使它们可以用新密文再次注册。被吊销的设备在你这么做之前一直被拒绝。
 

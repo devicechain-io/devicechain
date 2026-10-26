@@ -26,14 +26,14 @@ El dispositivo guarda **su propia credencial**: genera 32 bytes aleatorios, los 
 
 ## Configurar un perfil {#setup}
 
-1. **Crea el perfil** en la consola, en **Provisioning Profiles**, o con `createProvisioningProfile`. Elige el tipo de dispositivo, la estrategia, un tope opcional y, si la flota se entrega por lotes, una caducidad.
+1. **Crea el perfil** en la consola, en **Perfiles de aprovisionamiento**, o con `createProvisioningProfile`. Elige el tipo de dispositivo, la estrategia, un tope opcional y, si la flota se entrega por lotes, una caducidad.
 2. **Copia el secreto** del diálogo que aparece a continuación. Se muestra una sola vez. Si lo pierdes, rótalo; el anterior deja de funcionar al instante.
 3. **Comprueba que el ingress de la API está habilitado.** El endpoint se sirve en la misma ruta `/api/device-management` que la API GraphQL. Con `ingress.enabled: false` la instancia no tiene camino público hasta él.
 4. **Revisa la configuración de la dirección del cliente** si ejecutas tu propio controlador de ingress o un balanceador de carga de la nube: [Direcciones de cliente y proxies de confianza](../deployment/bootstrap.md#trusted-proxies). Un error ahí no impide el registro, pero todos los dispositivos pasan a compartir una sola asignación de peticiones.
 
 ### Rotación necesaria {#rotate-required}
 
-Un perfil creado antes de que el servidor generara secretos tiene un secreto elegido por un operador. Se **rechaza** (`401 PROVISIONING_FAILED`, como cualquier secreto incorrecto) hasta que lo rotes, y la consola lo marca como **Rotate required**. Rotar emite un secreto nuevo, que se muestra una sola vez, y el anterior deja de funcionar al instante. Actualiza el firmware y después los dispositivos se registran con el nuevo.
+Un perfil creado antes de que el servidor generara secretos tiene un secreto elegido por un operador. Se **rechaza** (`401 PROVISIONING_FAILED`, como cualquier secreto incorrecto) hasta que lo rotes, y la consola lo marca como **Requiere rotación**. Rotar emite un secreto nuevo, que se muestra una sola vez, y el anterior deja de funcionar al instante. Actualiza el firmware y después los dispositivos se registran con el nuevo.
 
 ## Reservar {#earmarking}
 
@@ -41,11 +41,11 @@ Una **reserva** (earmark) dice «este dispositivo existente puede ser adoptado p
 
 Reserva un dispositivo al crearlo:
 
-- en la consola, con el campo **Expected provisioning profile** del formulario del dispositivo;
+- en la consola, con el campo **Perfil de aprovisionamiento esperado** del formulario del dispositivo;
 - en una importación CSV, con la columna `provisioningProfileToken` ([columnas](./importing-devices.md#columns));
 - por GraphQL, con `provisioningProfileToken` en `createDevice` o `importDevices`.
 
-El perfil debe existir en el inquilino y ser del tipo del dispositivo. La página de detalle de un dispositivo muestra cómo llegó a la plataforma y ofrece **Reset provisioning**; la lista de dispositivos se puede filtrar por el perfil que emitió su credencial o por el perfil para el que está reservado (`provisioningProfile` y `expectedProvisioningProfile` en `DeviceSearchCriteria`).
+Una reserva solo se puede fijar al crear el dispositivo. Nada la fija en un dispositivo existente, así que un dispositivo creado antes de configurar el perfil no puede ser adoptado por él. El perfil debe existir en el inquilino y ser del tipo del dispositivo. La página de detalle de un dispositivo muestra cómo llegó a la plataforma y ofrece **Restablecer aprovisionamiento**; la lista de dispositivos se puede filtrar por el perfil que emitió su credencial o por el perfil para el que está reservado (`provisioningProfile` y `expectedProvisioningProfile` en `DeviceSearchCriteria`).
 
 Eliminar un perfil no elimina las reservas: los dispositivos vuelven a no tener ninguna y, desde entonces, se rechazan (`DEVICE_NOT_EARMARKED`).
 
@@ -68,7 +68,7 @@ curl -sS https://dc.example.com/api/device-management/provisioning/acme/register
 ```
 
 ```json
-{"outcome":"CREATED","tenant":"acme","deviceToken":"pv-sn-000123-1a2b3c4d","externalId":"SN-000123","credentialType":"ACCESS_TOKEN","mqtt":{"clientId":"<instanceId>:acme:pv-sn-000123-1a2b3c4d"}}
+{"outcome":"CREATED","tenant":"acme","deviceToken":"pv-SN-000123-06e08144e3e8","externalId":"SN-000123","credentialType":"ACCESS_TOKEN","mqtt":{"clientId":"<instanceId>:acme:pv-SN-000123-06e08144e3e8"}}
 ```
 
 Puedes probar todo el flujo sin escribir firmware. [`dcctl device register`](../reference/dcctl.md#dcctl-device-register) hace de dispositivo: genera la credencial, la guarda en el archivo indicado por `--material-file` **antes** de enviar nada, sigue las reglas de reintento e imprime el token del dispositivo y el id de cliente. Ejecútalo de nuevo y informa `REPLAYED`.
@@ -81,12 +81,12 @@ dcctl device register --server dc.example.com --tenant acme \
 
 Dos reglas importan más que el resto:
 
-- **Guarda la credencial antes del primer envío.** La plataforma conserva solo un resumen. Un dispositivo que pierde su credencial no puede recuperarla registrándose de nuevo: presenta material nuevo para un dispositivo que ya tiene una credencial y se rechaza con `409 ALREADY_PROVISIONED`. Entonces un operador usa **Reset provisioning** para que pueda registrarse otra vez.
+- **Guarda la credencial antes del primer envío.** La plataforma conserva solo un resumen. Un dispositivo que pierde su credencial no puede recuperarla registrándose de nuevo: presenta material nuevo para un dispositivo que ya tiene una credencial y se rechaza con `409 ALREADY_PROVISIONED`. Entonces un operador usa **Restablecer aprovisionamiento** para que pueda registrarse otra vez.
 - **Reintenta con la misma credencial y espera.** Un registro cuya respuesta se perdió se reconoce como repetición (`200 REPLAYED`) y se puede repetir sin riesgo. Con `429` y `503`, espera el `Retry-After` más un jitter aleatorio; no bombardees. El [contrato de reintentos](../reference/device-protocol.md#self-registration-retry) enumera qué respuestas reintentar y cuáles requieren a una persona.
 
 ## Rotación y solapamiento {#rotation}
 
-`rotateProvisioningProfileSecret` (el **Rotate secret** de la consola) es un corte brusco: el secreto anterior deja de funcionar en la siguiente petición, sin solapamiento. Los dispositivos que ya se registraron no se ven afectados, porque se conectan con su propia credencial, no con el secreto de la flota.
+`rotateProvisioningProfileSecret` (el **Rotar secreto** de la consola) es un corte brusco: el secreto anterior deja de funcionar en la siguiente petición, sin solapamiento. Los dispositivos que ya se registraron no se ven afectados, porque se conectan con su propia credencial, no con el secreto de la flota.
 
 Para una rotación que necesite solapamiento, por ejemplo mientras una fábrica sigue grabando el secreto anterior, crea un **segundo perfil** con su propia clave y secreto, y fija la caducidad del perfil antiguo.
 
@@ -97,7 +97,7 @@ El secreto es el ancla de confianza completa del primer contacto: quien lo tiene
 Para recuperarte:
 
 1. **Rota el secreto**, para que el filtrado deje de funcionar.
-2. **Revoca los dispositivos que emitió el perfil** si algunos no son tuyos (`revokeProvisionedDevices`, el **Revoke devices** de la consola). Sus credenciales se deshabilitan y se cierran sus conexiones activas.
+2. **Revoca los dispositivos que emitió el perfil** si algunos no son tuyos (`revokeProvisionedDevices`, el **Revocar dispositivos** de la consola). Sus credenciales se deshabilitan y se cierran sus conexiones activas.
 3. **Averigua qué se registró y cuándo.** Filtra la lista de dispositivos por el perfil (`provisioningProfile`) y mira la hora de creación de cada uno. Los registros también están en el [diario de auditoría](../user-guide/audit.md) como `device.provision.created` y `device.provision.adopted`, atribuidos a `provisioning-profile:<token>`. Una repetición se cuenta pero no se registra en el diario.
 4. **Restablece los dispositivos que sí son tuyos** (`resetDeviceProvisioning`) para que puedan registrarse de nuevo con el secreto nuevo. Un dispositivo revocado sigue rechazado hasta que lo hagas.
 
