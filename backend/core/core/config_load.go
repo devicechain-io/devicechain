@@ -78,6 +78,21 @@ type ConfigRenamer interface {
 	RenamedConfigKeys() map[string]string
 }
 
+// ConfigRemover is implemented by configuration types that have REMOVED a setting whose
+// presence must stop the service, not be ignored. It returns the removed key's path
+// (dot-separated from the document root, matched like ConfigRetirer's) mapped to what the
+// operator must do about it.
+//
+// It is the third answer to a key that no longer exists. ConfigRetirer strips it with a
+// warning, which is right when dropping it changes nothing; ConfigRenamer names the
+// replacement. A removed key is REFUSED for ANY value because the setting it carried
+// weakened or reshaped a guarantee, and starting the service on the guarantee's default
+// without the operator having read about it is the outcome to prevent. The bare "unknown
+// field" the strict decode would give says nothing about the remedy.
+type ConfigRemover interface {
+	RemovedConfigKeys() map[string]string
+}
+
 // LoadConfiguration decodes a microservice configuration document into a typed
 // struct with fail-closed semantics (ADR-022 decision 1): unknown fields are
 // rejected so a typo or stale key is an error rather than a silently ignored
@@ -92,6 +107,11 @@ func LoadConfiguration(raw []byte, into any) error {
 	if len(bytes.TrimSpace(raw)) > 0 {
 		if r, ok := into.(ConfigRenamer); ok {
 			if err := refuseRenamedKeys(raw, r.RenamedConfigKeys()); err != nil {
+				return err
+			}
+		}
+		if r, ok := into.(ConfigRemover); ok {
+			if err := refuseRemovedKeys(raw, r.RemovedConfigKeys()); err != nil {
 				return err
 			}
 		}
@@ -139,6 +159,30 @@ func refuseRenamedKeys(raw []byte, renamed map[string]string) error {
 		if written, ok := findConfigPath(doc, strings.Split(old, "."), nil); ok {
 			return fmt.Errorf("config: key %q was renamed to %q; set %q instead (the old key is not read)",
 				written, renamed[old], renamed[old])
+		}
+	}
+	return nil
+}
+
+// refuseRemovedKeys fails the load when the document carries any removed key, whatever its
+// value, naming the key as written and the guidance. Sorted, so the error is the same on every
+// run; a document that does not parse as an object is left to the strict decode.
+func refuseRemovedKeys(raw []byte, removed map[string]string) error {
+	if len(removed) == 0 {
+		return nil
+	}
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return nil
+	}
+	keys := make([]string, 0, len(removed))
+	for k := range removed {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		if written, ok := findConfigPath(doc, strings.Split(k, "."), nil); ok {
+			return fmt.Errorf("config: key %q was removed: %s", written, removed[k])
 		}
 	}
 	return nil

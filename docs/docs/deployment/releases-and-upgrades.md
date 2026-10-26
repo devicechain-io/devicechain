@@ -3853,7 +3853,7 @@ to `dcctl install` and `dcctl upgrade`, and pass `--registry` when the images co
 the default. The `--dry-run` of each run says which of the two it would perform. If the instance was
 bootstrapped without root-key escrow, `dcctl upgrade` prints an escrow warning; that is expected and
 unrelated to this upgrade. A value of `--mqtt-body-credential` set for `v0.24.0` is kept by an upgrade that
-omits the flag; it remains transitional, and `dcctl` documents its removal as planned for `v0.26.0` (see
+omits the flag; the flag was removed in `v0.26.0` (see
 [`v0.24.0`](#v0240-mqtt-body-credential)).
 
 This release does two things about trust. Inside the cluster, **no service shares a broker credential with
@@ -4447,7 +4447,8 @@ with the volume and by its snapshots. The body credential is now refused instead
      Events keep flowing, and each one that carried a credential is counted. The command's `--dry-run`
      does not print this flag's value; to confirm the upgrade took it, look for the `event-sources`
      startup warning that says the setting is transitional, or check that
-     `devicechain_eventsources_capture_body_credential_strip` is `1`.
+     `devicechain_eventsources_capture_body_credential_strip` is `1`. On a chart install (not `dcctl`), set
+     `functionalAreas.event-sources.config.capture.bodyCredential: strip` instead.
   2. Roll out the SDK or firmware that stops sending the body credential.
   3. Watch `devicechain_eventsources_total_msg_credential_in_mqtt_body` until it has stopped rising for
      longer than your slowest device's reporting interval. **Collect the list of devices as you go.** A
@@ -4462,10 +4463,10 @@ with the volume and by its snapshots. The body credential is now refused instead
 
   `strip` does not remove the exposure: the broker stored the body before either setting ran, so `strip`
   and `refuse` leave the same plaintext at rest, and step 5 is needed with both. `strip` applies only
-  to the platform's MQTT broker. A later `dcctl upgrade` without the flag keeps the value. It is
-  transitional: its removal is planned for `v0.26.0`, which is to refuse to start `event-sources` while
-  it is still set. On a chart install (not `dcctl`) set
-  `functionalAreas.event-sources.config.capture.bodyCredential`.
+  to the platform's MQTT broker. A later `dcctl upgrade` without the flag keeps the value. `strip` was
+  transitional and is removed in `v0.26.0`: from that release a body credential is always refused, the
+  `--mqtt-body-credential` flag no longer exists, and `event-sources` refuses to start while
+  `capture.bodyCredential` is still set. Delete the key before upgrading to `v0.26.0`.
 
   While the upgrade rolls, an `event-sources` pod of this release can strip an event before
   `device-management` has rolled. A `v0.23.0` `device-management` refuses that event, because it no
@@ -4709,7 +4710,7 @@ when the event is resolved.
 | `event-processing` `derivedPublishing.maxInFlight` (new) | one detection at a time | 32 | Set `1`. Still at most one outstanding detection per device, so each device's detections arrive in order. Publishing again without duplicates holds within the derived-events stream's 30-minute duplicate window. |
 | `device-management` `raiseAlarm.workers` (new, fixed, read at startup) | one change at a time | `max(1, min(8, pool - resolution.workers - 4))`, which is 6 on the default pool of 20 | Set `1` for the old inline path. Changes to one alarm are always applied in order. An explicit value is validated against the connection pool and never adjusted. |
 | `mcp` `maxBatchEntries`, `callsPerSecond`, `callsBurst` (under `functionalAreas.mcp.config`) | no cap | 16, 20 and 40 | Raise them; `callsBurst` may not be below `maxBatchEntries`. |
-| `event-sources` `capture.bodyCredential` (new, fixed, under `functionalAreas.event-sources.config`) | none: a body credential on the platform's MQTT broker was accepted | `refuse` | Set `strip` for the upgrade only (transitional, removal planned for `v0.26.0`). See [Devices must stop sending a body credential over MQTT](#v0240-mqtt-body-credential). |
+| `event-sources` `capture.bodyCredential` (new, fixed, under `functionalAreas.event-sources.config`) | none: a body credential on the platform's MQTT broker was accepted | `refuse` | Removed in `v0.26.0`: a body credential is always refused. See [Devices must stop sending a body credential over MQTT](#v0240-mqtt-body-credential). |
 | GKE reference module `services_machine_type` (`deploy/gke`) | `n2-custom-4-8192` | `t2d-standard-4` | Set it explicitly. Changing an existing pool's machine type recreates its nodes. |
 
 - **Detection:** detections of different devices are published side by side, up to 32 at a time,

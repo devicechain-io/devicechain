@@ -300,8 +300,34 @@ func releaseValues(ctx context.Context, ch *chart.Chart, st *State, previous map
 	// named, and not ten minutes later as a rollout that never became ready.
 	if st.Evolving {
 		carryReleaseValues(vals, previous)
+		if msg := removedBodyCredentialStripNotice(previous); msg != "" {
+			fmt.Println(color.YellowString(msg))
+		}
 	}
 	return vals, doc, nil
+}
+
+// removedBodyCredentialStripNotice is the one notice an upgrade prints when the release it
+// replaces was bridging with capture.bodyCredential: strip, and "" otherwise. The key is
+// not carried (event-sources refuses to start on it), so the instance is on the refusal after
+// this upgrade; what the operator needs is to hear that before devices go quiet.
+func removedBodyCredentialStripNotice(previous map[string]interface{}) string {
+	node := interface{}(previous)
+	for _, key := range []string{"functionalAreas", "event-sources", "config", "capture", "bodyCredential"} {
+		m, ok := node.(map[string]interface{})
+		if !ok {
+			return ""
+		}
+		if node, ok = m[key]; !ok {
+			return ""
+		}
+	}
+	if v, _ := node.(string); v != "strip" {
+		return ""
+	}
+	return "The release being replaced had capture.bodyCredential set to strip. That setting was removed: an MQTT event whose body " +
+		"carries a device credential is now REFUSED, not accepted with the credential removed, so devices still sending one go quiet. " +
+		"Watch devicechain_eventsources_total_msg_credential_in_mqtt_body, update those devices, and rotate their credentials."
 }
 
 // previousReleaseValues returns the values the release is currently installed with,
@@ -598,8 +624,6 @@ func helmValues(st *State) map[string]interface{} {
 		vals["extraSecrets"] = append(existing, secret)
 		mergeFunctionalArea(vals, "lwm2m-ingest", areaConfig)
 	}
-
-	applyMqttBodyCredential(vals, st)
 
 	return vals
 }

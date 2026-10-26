@@ -341,3 +341,28 @@ func TestRenamedConfigKeyIsRefusedNamingItsReplacement(t *testing.T) {
 		t.Fatalf("got %+v", ok)
 	}
 }
+
+type removedConfig struct {
+	Plain int `json:"plain"`
+}
+
+func (removedConfig) RemovedConfigKeys() map[string]string {
+	return map[string]string{"outer.gone": "Delete it."}
+}
+
+// A removed key is refused for ANY value, in any casing, with the guidance in the error.
+func TestRemovedConfigKeyIsRefusedForAnyValueWithGuidance(t *testing.T) {
+	for _, doc := range []string{`{"outer":{"gone":"a"}}`, `{"Outer":{"GONE":1},"plain":1}`, `{"outer":{"gone":null}}`, `{"outer":{"gone":{}}}`} {
+		err := LoadConfiguration([]byte(doc), &removedConfig{})
+		if err == nil {
+			t.Fatalf("%s loaded; a removed key must be refused", doc)
+		}
+		if !strings.Contains(err.Error(), "was removed: Delete it.") {
+			t.Fatalf("the refusal must carry the guidance, got %v", err)
+		}
+	}
+	// The counterweight: a document without the key loads.
+	if err := LoadConfiguration([]byte(`{"plain":1}`), &removedConfig{}); err != nil {
+		t.Fatalf("a document without the removed key was refused: %v", err)
+	}
+}

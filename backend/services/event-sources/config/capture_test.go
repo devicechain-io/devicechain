@@ -89,42 +89,17 @@ func TestCapturePublishWindowIsBounded(t *testing.T) {
 	}
 }
 
-// capture.bodyCredential: absent is the refusal, the two named values load, anything else
-// fails the load naming both, so a typo cannot quietly leave the bridge off (or on).
-func TestCaptureBodyCredentialDefaultsToRefuseAndRejectsAnythingElse(t *testing.T) {
-	var cfg EventSourcesConfiguration
-	cfg.ApplyDefaults()
-	require.NoError(t, cfg.Validate())
-	assert.Equal(t, BodyCredentialRefuse, cfg.Capture.BodyCredential)
-	assert.False(t, cfg.Capture.StripsBodyCredential())
-	assert.False(t, Capture{}.StripsBodyCredential(), "the zero value is the refusal")
-
-	for _, v := range []string{BodyCredentialRefuse, BodyCredentialStrip} {
-		var c EventSourcesConfiguration
-		c.Capture.BodyCredential = v
-		c.ApplyDefaults()
-		require.NoError(t, c.Validate(), v)
-		assert.Equal(t, v == BodyCredentialStrip, c.Capture.StripsBodyCredential())
-	}
-
-	for _, v := range []string{"Strip", "stripped", "accept", "true", " strip"} {
-		var c EventSourcesConfiguration
-		c.Capture.BodyCredential = v
-		c.ApplyDefaults()
-		err := c.Validate()
+// capture.bodyCredential was REMOVED in v0.26.0 (a body credential on the platform broker is
+// always refused). It is not a retired key that is stripped with a warning: stripping it would
+// start an operator who still set "strip" on a refusal they did not choose, quietly, so the load
+// fails closed on it instead, whatever the value. If this ever loads, the strip has come back.
+func TestCaptureBodyCredentialIsRejectedAtLoad(t *testing.T) {
+	for _, v := range []string{"strip", "refuse", ""} {
+		cfg := &EventSourcesConfiguration{}
+		err := core.LoadConfiguration([]byte(`{"capture":{"bodyCredential":"`+v+`"}}`), cfg)
 		require.Error(t, err, v)
-		assert.Contains(t, err.Error(), `"refuse"`)
-		assert.Contains(t, err.Error(), `"strip"`)
+		assert.Contains(t, err.Error(), "bodyCredential")
+		assert.Contains(t, err.Error(), "was removed: Delete functionalAreas.event-sources.config.capture.bodyCredential.")
+		assert.Contains(t, err.Error(), "total_msg_credential_in_mqtt_body")
 	}
-}
-
-// capture.bodyCredential loads from the document the chart mounts, under the key the docs and
-// dcctl write. A struct field the loader matched under another spelling would leave the bridge
-// off while every unit test that sets the field directly stayed green.
-func TestCaptureBodyCredentialLoadsFromTheMountedDocument(t *testing.T) {
-	cfg := &EventSourcesConfiguration{}
-	require.NoError(t, core.LoadConfiguration([]byte(`{"capture":{"bodyCredential":"strip"}}`), cfg))
-	cfg.ApplyDefaults()
-	require.NoError(t, cfg.Validate())
-	assert.True(t, cfg.Capture.StripsBodyCredential())
 }

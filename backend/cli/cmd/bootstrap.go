@@ -17,10 +17,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// bootstrapMqttBodyCredential is --mqtt-body-credential, kept apart from the block below so
-// its longer name does not realign every line of it.
-var bootstrapMqttBodyCredential string
-
 // bootstrapMqttFailClosed is --mqtt-fail-closed. Whether it was GIVEN is read off the flag set
 // (Changed), because "not given" and "given false" are different things to record.
 var bootstrapMqttFailClosed bool
@@ -173,7 +169,7 @@ func bootstrapOptions(instance string, enableAreas []string, mqttFailClosed *boo
 // bootstrapStateFor is the State a bootstrap run starts its pipeline from, for the same
 // reason bootstrapOptions is a function.
 func bootstrapStateFor(opts bootstrap.Options, binding bootstrap.ClusterBinding, clusterUID, provider string,
-	enabledAreas []string, lwm2mIdentities []bootstrap.Lwm2mIdentity, mqttBodyCredential string,
+	enabledAreas []string, lwm2mIdentities []bootstrap.Lwm2mIdentity,
 	valuesOverlay map[string]interface{}, objectStore *dcv1beta1.ObjectStoreSpec, objectStoreExplicit bool,
 	escrowPlan bootstrap.EscrowPlan) *bootstrap.State {
 	return &bootstrap.State{
@@ -195,7 +191,6 @@ func bootstrapStateFor(opts bootstrap.Options, binding bootstrap.ClusterBinding,
 		EnableAreas:            opts.EnableAreas,
 		EnabledAreas:           enabledAreas,
 		Lwm2mIdentities:        lwm2mIdentities,
-		MqttBodyCredential:     mqttBodyCredential,
 		MqttFailClosed:         opts.MqttFailClosed,
 		TrustedProxiesOverride: opts.TrustedProxies,
 		ValuesOverlay:          valuesOverlay,
@@ -259,10 +254,6 @@ var bootstrapCmd = &cobra.Command{
 		// Parse + validate --lwm2m-identities up front (a short PSK or a missing tenancy
 		// field must fail here, not as a ten-minute helm-timeout when lwm2m-ingest
 		// crash-loops on a bad credential). An empty flag yields no identities.
-		mqttBodyCredential, err := bootstrap.ParseMqttBodyCredential(bootstrapMqttBodyCredential)
-		if err != nil {
-			return fmt.Errorf("--mqtt-body-credential: %w", err)
-		}
 		// Fail-closed MQTT: judged against the area set up front, so a refusal lands before any
 		// cluster exists. nil (flag not given) is a real answer and is recorded as one.
 		mqttFailClosed := mqttFailClosedFlag(cmd.Flags().Changed, bootstrapMqttFailClosed)
@@ -473,7 +464,7 @@ var bootstrapCmd = &cobra.Command{
 		fmt.Printf("object store: %s\n", bootstrap.ObjectStoreSummary(objectStore))
 
 		st := bootstrapStateFor(opts, binding, clusterUID, provider.Name(), enabledAreas, lwm2mIdentities,
-			mqttBodyCredential, valuesOverlay, objectStore, objectStoreFlagGiven(cmd.Flags().Changed), escrowPlan)
+			valuesOverlay, objectStore, objectStoreFlagGiven(cmd.Flags().Changed), escrowPlan)
 		if installRec != nil {
 			bootstrap.FollowInstall(st, installRec)
 		}
@@ -659,7 +650,6 @@ func init() {
 	bootstrapCmd.Flags().BoolVar(&bootstrapDev, "dev", false, "local-developer preset: --build --host localhost --no-tls --yes, and implies --no-escrow (a zero-config http://localhost/ bring-up); rejects contradictory flags")
 
 	bootstrapCmd.Flags().StringSliceVar(&bootstrapEnableAreas, "enable-area", nil, "additionally deploy a functional area on TOP of the profile (repeatable, e.g. --enable-area lwm2m-ingest --enable-area sparkplug-ingest). Composes with the cluster's --compact setting; validated against the area catalog (unknown area or unmet hard dependency fails before any cluster spin-up)")
-	bootstrapCmd.Flags().StringVar(&bootstrapMqttBodyCredential, "mqtt-body-credential", "", mqttBodyCredentialUsage)
 	bootstrapCmd.Flags().StringArrayVar(&bootstrapValues, "values", nil, valuesUsage)
 	bootstrapCmd.Flags().BoolVar(&bootstrapMqttFailClosed, "mqtt-fail-closed", false, mqttFailClosedUsage)
 	bootstrapCmd.Flags().StringSliceVar(&bootstrapTrustedProxies, "trusted-proxies", nil, trustedProxiesUsage)
@@ -737,12 +727,6 @@ func finishClaim(ctx context.Context, st *bootstrap.State, runErr error) error {
 	}
 	return finishErr
 }
-
-// mqttBodyCredentialUsage is the help for --mqtt-body-credential on bootstrap and upgrade.
-const mqttBodyCredentialUsage = "TRANSITIONAL. What event-sources does with an MQTT event whose body carries a device credential: " +
-	"refuse (the default) or strip (accept it with the credential removed). Use strip while a fleet whose firmware still sends one is updated, " +
-	"then refuse; a device that sent one should have its credential rotated. A value given here is kept by later upgrades that omit the flag. " +
-	"Planned for removal in v0.26.0"
 
 // mqttFailClosedUsage is the help for --mqtt-fail-closed on bootstrap and upgrade.
 const mqttFailClosedUsage = "make a QoS 1 PUBACK from the MQTT gateway mean the platform holds the message (infrastructure.nats.mqttFailClosed). " +

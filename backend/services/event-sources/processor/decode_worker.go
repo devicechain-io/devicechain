@@ -128,17 +128,6 @@ type DecodeWorker struct {
 	// Failed routes an undecodable payload to the failed-decode path, likewise
 	// reporting whether that routing itself succeeded.
 	Failed func(string, string, []byte, error) error
-	// StripBodyCredential is the transitional disposition for a body credential on the
-	// platform's own broker (capture.bodyCredential: strip): accept the event with the
-	// three credential members removed instead of refusing it. It is read ONLY inside the
-	// broker-asserted branch below, so it can never change what a non-asserted message
-	// (external MQTT, HTTP) does, and the zero value is the refusal. Set by the capture
-	// source alone.
-	StripBodyCredential bool
-	// OnBodyCredential is told each time a body credential was stripped (stripped is
-	// always true today; the parameter keeps the seam symmetric with a refusal). It is
-	// handed the tenant and the topic-derived device token, never any credential field.
-	OnBodyCredential func(source, tenant, device string, stripped bool)
 }
 
 // Create a new decode worker. A nil readings panics: a worker built without the reading
@@ -177,23 +166,8 @@ func (wrk *DecodeWorker) Process() {
 				// is refused rather than ignored: ignoring it would keep a leaking device
 				// working, silently, forever. The error is static, so the secret is never
 				// in a log line or a counter.
-				//
-				// Transitional exception (capture.bodyCredential: strip): the three members
-				// are dropped and the event accepted. Identity is still the topic, so
-				// nothing the body said was ever trusted, and the secret is not carried
-				// onward. This is the ONLY place the strip happens.
 				if credentialInBody(event) {
-					if wrk.StripBodyCredential {
-						event.CredentialType, event.CredentialId, event.CredentialSecret = nil, nil, nil
-						if wrk.OnBodyCredential != nil {
-							// raw.device, the topic's token, not event.Device: the body may
-							// omit its device, and the WARN must still name one.
-							wrk.OnBodyCredential(wrk.SourceId, raw.tenant, raw.device, true)
-						}
-						raw.assertion.mark(event)
-					} else {
-						err = model.ErrCredentialInMqttBody
-					}
+					err = model.ErrCredentialInMqttBody
 				} else {
 					raw.assertion.mark(event)
 				}

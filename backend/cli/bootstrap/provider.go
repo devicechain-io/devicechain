@@ -44,9 +44,6 @@ type Options struct {
 	// a default/compact bring-up). Resolved+validated by ResolveEnabledAreas into the
 	// State's EnabledAreas before the pipeline runs.
 	EnableAreas []string
-	// MqttBodyCredential is --mqtt-body-credential ("refuse", "strip", or "" for not given):
-	// the transitional capture.bodyCredential of event-sources. See mqttbodycredential.go.
-	MqttBodyCredential string
 	// MqttFailClosed is --mqtt-fail-closed: nil when the flag was not given, otherwise the
 	// operator's explicit choice, recorded on the instance declaration. See mqttfailclosed.go.
 	MqttFailClosed *bool
