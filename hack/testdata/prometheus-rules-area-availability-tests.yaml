@@ -9,6 +9,7 @@
 #   - an area that wants a pod and has none, for ten minutes: PAGES (and does not before)
 #   - the same area when kube-state-metrics has NO available series for it at all: PAGES
 #     (a deployment with no available series has no pod available either)
+#   - an area scaled to zero stays quiet while a wanted-but-unavailable one fires (negative control)
 #   - quiet, each carrying its series: a healthy area, a rollout holding some pods available,
 #     an area scaled to zero on purpose (spec 0), a down area in ANOTHER namespace, and an
 #     area that was down for five minutes and came back (shorter than `for`)
@@ -82,3 +83,49 @@ tests:
       - eval_time: 19m
         alertname: InstanceAreaUnavailable
         exp_alerts: []
+
+  # Scaled to zero is a deliberate state: visible on the overview ("Areas scaled to 0"),
+  # never an alert. The NEGATIVE CONTROL is in the same evaluation: dc-device-state wants a
+  # pod and has none, so it fires, which proves the rule is live and that dc-lwm2m-ingest
+  # and dc-sparkplug-ingest are quiet because they want nothing, not because the rule is
+  # broken. The sparkplug area has NO available series at all, as kube-state-metrics can
+  # report for a deployment scaled to zero.
+  - name: an area scaled to zero does not fire, while a wanted-but-unavailable area does
+    interval: 1m
+    input_series:
+      - series: 'kube_deployment_spec_replicas{namespace="dci-devicechain", deployment="dc-lwm2m-ingest"}'
+        values: '0x30'
+      - series: 'kube_deployment_status_replicas_available{namespace="dci-devicechain", deployment="dc-lwm2m-ingest"}'
+        values: '0x30'
+      - series: 'kube_deployment_spec_replicas{namespace="dci-devicechain", deployment="dc-sparkplug-ingest"}'
+        values: '0x30'
+      - series: 'kube_deployment_spec_replicas{namespace="dci-devicechain", deployment="dc-device-state"}'
+        values: '1x30'
+      - series: 'kube_deployment_status_replicas_available{namespace="dci-devicechain", deployment="dc-device-state"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: InstanceAreaUnavailable
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+              namespace: dci-devicechain
+              deployment: dc-device-state
+            exp_annotations:
+              summary: "an area of this instance has no pod available"
+              description: "Deployment dc-device-state wants 1 pod(s) and has had none available for ten minutes, so that area is not serving. Because its pods are gone, the area also stops reporting its own readiness and metrics, and the instance overview's readiness and scrape panels will not show it: this alert and the panel for areas with no pod available are what do. Describe the deployment and its pods: kubectl describe deployment and kubectl get pods in the instance's namespace show a failing image pull, a pod that cannot be scheduled for want of CPU or memory, a failed readiness probe, or a crash before ready (kubectl logs --previous). If the area was scaled to zero by mistake, scale it back; an area you turned off on purpose has zero wanted pods and does not raise this."
+    # The overview's "Areas scaled to 0" tile and "Areas with no pod available" tile
+    # (deploy/helm/devicechain/dashboards/overview.json) must split these three areas
+    # 2 and 1 and never count one area in both.
+    promql_expr_test:
+      - expr: 'count(kube_deployment_spec_replicas{namespace="dci-devicechain"} == 0) or vector(0)'
+        eval_time: 5m
+        exp_samples:
+          - labels: '{}'
+            value: 2
+      - expr: 'count(kube_deployment_spec_replicas{namespace="dci-devicechain"} > 0 unless on (namespace, deployment) kube_deployment_status_replicas_available{namespace="dci-devicechain"} > 0) or vector(0)'
+        eval_time: 5m
+        exp_samples:
+          - labels: '{}'
+            value: 1

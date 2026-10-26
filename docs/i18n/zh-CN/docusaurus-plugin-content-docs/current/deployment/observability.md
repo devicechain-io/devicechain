@@ -8,7 +8,7 @@ title: 可观测性与指标
 DeviceChain 内置可观测性：每个服务都提供 **Prometheus 指标**和标准 Kubernetes 健康探针。`dcctl install` 在集群上部署完整 **Prometheus + Grafana + Alertmanager** 栈，覆盖该集群上的每个实例，新安装从第一分钟起即可监控，无需另行拼装监控项目。
 
 :::note 状态
-监控栈（由 `dcctl install` 部署 kube-prometheus-stack）及事件处理运维仪表盘已经实现并经过端到端验证。指令投递仪表盘及告警规则同时发布。其余功能领域仪表盘和 OTLP 分布式追踪属于计划中的后续工作。
+监控栈（由 `dcctl install` 部署 kube-prometheus-stack）及其 Grafana 仪表盘已经实现并经过端到端验证：一个实例总览和七个阶段仪表盘，详见 [Grafana 仪表盘](./grafana-boards.md)，并附带告警规则。OTLP 分布式追踪属于计划中的后续工作。
 :::
 
 ## 每个服务暴露什么 {#what-every-service-exposes}
@@ -146,7 +146,7 @@ kubectl -n monitoring rollout restart deployment/kube-prometheus-stack-grafana
 
 ## 事件处理运维仪表盘 {#the-event-processing-operations-board}
 
-DETECT/REACT 引擎（参见[事件处理](../concepts/event-processing.md)）最需要运营方监控，随平台提供独立 Grafana 仪表盘和告警。指标包括**消费滞后**，即检测落后解析事件流多少，以及**规则触发计数**，可快速回答告警引擎是否跟上、正在做什么。
+DETECT/REACT 引擎（参见[事件处理](../concepts/event-processing.md)）最需要运营方监控，随平台提供独立 Grafana 仪表盘和告警。指标包括**消费滞后**，即检测落后解析事件流多少，以及**规则触发计数**，可快速回答告警引擎是否跟上、正在做什么。该仪表盘与其余仪表盘一并在 [Grafana 仪表盘](./grafana-boards.md#event-processing-board)中介绍。
 
 ## 消费者从未读取的消息 {#unread-loss}
 

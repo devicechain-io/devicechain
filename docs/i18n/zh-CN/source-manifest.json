@@ -110,6 +110,10 @@
       "sourceSha256": "84bff610846fd41244a2b2105ded4e8339a3598c35bb1d0b21c0342e23151de3",
       "translationSha256": "d9ac66375b19e8786e8e4964b5bc1b2d66709366086719d00c086cd8f012dd0a"
     },
+    "deployment/grafana-boards.md": {
+      "sourceSha256": "c511601909e98939b498674a0ecca42c1ef9aa7290d7573a4abbdd6dd9b559b6",
+      "translationSha256": "31b6d25c0bc5050d53c955240af9ba18ab17d3ff9ebbb52753f990539aaf8c4e"
+    },
     "deployment/kubernetes-operator.md": {
       "sourceSha256": "4947ae8be7d4297b39e5b326c9e5a8001e0fe918c540a343e17ab610e7bf5ef4",
       "translationSha256": "72c734f9dd84401b607b7226f931a9f258573620022fe7c4c0a0300c12a0526a"
@@ -119,8 +123,8 @@
       "translationSha256": "492d2eb3fa41e6bf04a942a742541bb39527d88dc0ca864e42947267e753f38a"
     },
     "deployment/observability.md": {
-      "sourceSha256": "e971ccdaf9c2e58cde185846a3e67937f5f13dda1bcf4cb7c85859a454d6dabf",
-      "translationSha256": "1ad012cc4b9390f424a4d451991bfebb6c932de904770c8f4a0c5390208e8ffb"
+      "sourceSha256": "6ce558731cab6dc01dc18c5b962bf91dedbb040b586b37bf3af85d6cc902c44b",
+      "translationSha256": "7209e170c091bc3025dcc1615bd5ebcb9a2aef4bbb03d5dc37b9de0ab868f952"
     },
     "deployment/releases-and-upgrades.md": {
       "sourceSha256": "c889cc9588c568fb28112ca795f00b5d52441ed8f7bb3241df61ca1bbb827563",

@@ -12,10 +12,10 @@ en el clúster, para todas sus instancias, de modo que una instalación nueva se
 sin necesidad de armar un proyecto de monitoreo aparte.
 
 :::note Estado
-La pila de monitoreo (kube-prometheus-stack a través de `dcctl install`) y el panel de operaciones
-de event-processing están implementados y validados de extremo a extremo. Un panel de command-delivery
-y sus reglas de alerta se incluyen junto a ellos. Los paneles para las demás áreas funcionales y el
-trazado distribuido OTLP son mejoras planeadas a futuro.
+La pila de monitoreo (kube-prometheus-stack a través de `dcctl install`) y sus paneles de Grafana
+están implementados y validados de extremo a extremo: un resumen de la instancia y siete paneles por etapa,
+descritos en [Paneles de Grafana](./grafana-boards.md), con reglas de alerta incluidas. El trazado
+distribuido OTLP es una mejora planeada a futuro.
 :::
 
 ## Lo que expone cada servicio
@@ -278,7 +278,8 @@ es el componente que un operador más necesita vigilar, y se distribuye con un p
 dedicado y alertas. El motor emite métricas orientadas al operador, incluido
 un **indicador de retraso del consumidor (consumer-lag gauge)**: cuánto se ha retrasado la detección respecto al
 flujo de eventos resueltos, y **recuentos de disparo de reglas**, de modo que "¿el motor de alarmas está al día, y qué
-está haciendo?" se puede responder de un vistazo.
+está haciendo?" se puede responder de un vistazo. El panel se describe, junto con el resto del conjunto,
+en [Paneles de Grafana](./grafana-boards.md#event-processing-board).
 
 ## Mensajes que un consumidor nunca leyó {#unread-loss}
 

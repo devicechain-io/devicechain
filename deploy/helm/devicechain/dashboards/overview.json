@@ -30,7 +30,7 @@
   "timezone": "",
   "weekStart": "",
   "version": 1,
-  "title": "DeviceChain \u2014 Instance overview",
+  "title": "DeviceChain — Instance overview",
   "uid": "dc-overview-ops",
   "tags": [
     "devicechain",
@@ -1362,9 +1362,9 @@
       "id": 222,
       "type": "stat",
       "title": "Areas with no pod available",
-      "description": "How many deployments of this instance want at least one pod and have none available. An area whose pods are all gone stops reporting, so it also vanishes from the readiness count and the scrape count above; this is the panel that still shows it. Zero is healthy. A non-zero value that stays means that area is down: describe its pods. An area you scaled to zero on purpose wants no pods and is not counted.",
+      "description": "How many deployments of this instance want at least one pod and have none available. An area whose pods are all gone stops reporting, so it also vanishes from the readiness count and the scrape count above; this is the panel that still shows it. Zero is healthy. A non-zero value that stays means that area is down: describe its pods. An area you scaled to zero on purpose wants no pods and is not counted here: the Areas scaled to 0 tile below shows it.",
       "gridPos": {
-        "h": 8,
+        "h": 4,
         "w": 6,
         "x": 18,
         "y": 27
@@ -1422,6 +1422,69 @@
       }
     },
     {
+      "id": 223,
+      "type": "stat",
+      "title": "Areas scaled to 0",
+      "description": "How many deployments of this instance are set to run zero pods. This is a state, not a fault: scaling an area to zero is deliberate (an optional area you turned off, or one paused for maintenance), so it is shown in blue, it does not count as down, and no alert fires for it. It sits apart from Areas with no pod available, which counts areas that want pods and have none. An area scaled to zero stops reporting its own readiness and metrics, so this tile is where it still shows. If you did not mean to scale an area to zero, scale it back.",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 31
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "count(kube_deployment_spec_replicas{namespace=\"$namespace\"} == 0) or vector(0)",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "blue",
+                "value": 1
+              }
+            ]
+          },
+          "noValue": "0"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "center"
+      }
+    },
+    {
       "id": 221,
       "type": "text",
       "title": "Stage boards",
@@ -1434,7 +1497,7 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "Drill down: [Ingest](/d/@board:ingest@?var-datasource=${datasource}) \u00b7 [Messaging](/d/@board:messaging@?var-datasource=${datasource}) \u00b7 [Persistence](/d/@board:persistence@?var-datasource=${datasource}) \u00b7 [Event processing](/d/@board:event-processing@?var-datasource=${datasource}) \u00b7 [Command delivery](/d/@board:command-delivery@?var-datasource=${datasource}) \u00b7 [Delivery](/d/@board:delivery@?var-datasource=${datasource}) \u00b7 [Platform](/d/@board:platform@?var-datasource=${datasource})"
+        "content": "Drill down: [Ingest](/d/@board:ingest@?var-datasource=${datasource}) · [Messaging](/d/@board:messaging@?var-datasource=${datasource}) · [Persistence](/d/@board:persistence@?var-datasource=${datasource}) · [Event processing](/d/@board:event-processing@?var-datasource=${datasource}) · [Command delivery](/d/@board:command-delivery@?var-datasource=${datasource}) · [Delivery](/d/@board:delivery@?var-datasource=${datasource}) · [Platform](/d/@board:platform@?var-datasource=${datasource})"
       }
     }
   ]
