@@ -6,6 +6,7 @@ package auth
 import (
 	"crypto/rsa"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -127,8 +128,12 @@ type tokenSpec struct {
 	// scopeAnchors is a scoped membership's scope (the "scp" claim, ADR-081). Set only
 	// by the two scoped access mints, from a Scope that was validated when it was built.
 	scopeAnchors []string
-	jti          string
-	ttl          time.Duration
+	// amr is the sign-in's authentication methods (the "amr" claim); set only through
+	// WithAmr, from the session record.
+	amr    []string
+	amrSet bool
+	jti    string
+	ttl    time.Duration
 }
 
 // IssueAccess mints a short-lived tenant-scoped access token (the data-plane
@@ -144,12 +149,12 @@ func (i *Issuer) IssueAccess(tenant, username string, roles, authorities []strin
 // IssueTenantAccess mints a tenant-scoped access token for a global identity
 // (ADR-033), carrying its email and, when a superuser selected a tenant it holds
 // no membership in, the break-glass actingAsSuperuser marker.
-func (i *Issuer) IssueTenantAccess(tenant, email string, roles, authorities []string, actingAsSuperuser bool, jti string) (IssuedToken, error) {
+func (i *Issuer) IssueTenantAccess(tenant, email string, roles, authorities []string, actingAsSuperuser bool, jti string, opts ...MintOption) (IssuedToken, error) {
 	return i.sign(tokenSpec{
 		tokenType: TokenTypeAccess, tenant: tenant, username: email, email: email,
 		roles: roles, authorities: authorities, actingAsSuperuser: actingAsSuperuser,
 		jti: jti, ttl: i.accessTTL,
-	})
+	}, opts...)
 }
 
 // ErrUnscopedScope is returned by the scoped mints when given an unscoped Scope. An
@@ -176,7 +181,7 @@ func mintableScope(scope Scope) error {
 // superuser entering a tenant is never scoped — the absence is the rule, not a default.
 // Every resolver that has not opted in refuses the token (Authorize), and core/rdb
 // filters what the opted-in ones read.
-func (i *Issuer) IssueScopedTenantAccess(tenant, email string, roles, authorities []string, scope Scope, jti string) (IssuedToken, error) {
+func (i *Issuer) IssueScopedTenantAccess(tenant, email string, roles, authorities []string, scope Scope, jti string, opts ...MintOption) (IssuedToken, error) {
 	if err := mintableScope(scope); err != nil {
 		return IssuedToken{}, err
 	}
@@ -184,7 +189,7 @@ func (i *Issuer) IssueScopedTenantAccess(tenant, email string, roles, authoritie
 		tokenType: TokenTypeAccess, tenant: tenant, username: email, email: email,
 		roles: roles, authorities: authorities, scopeAnchors: scope.Anchors(),
 		jti: jti, ttl: i.scopedAccessTTL,
-	})
+	}, opts...)
 }
 
 // IssueScopedOAuthAccess is IssueOAuthAccess for a SCOPED membership: the OAuth access
@@ -193,7 +198,7 @@ func (i *Issuer) IssueScopedTenantAccess(tenant, email string, roles, authoritie
 // ADR-081). oauthScope is the OAuth scope string (Claims.Scope); scope is the
 // membership's anchors (Claims.ScopeAnchors). Like IssueScopedTenantAccess it has no
 // superuser parameter and uses the scoped access TTL.
-func (i *Issuer) IssueScopedOAuthAccess(tenant, email string, roles, authorities []string, oauthScope string, audience []string, scope Scope, clientID, jti string) (IssuedToken, error) {
+func (i *Issuer) IssueScopedOAuthAccess(tenant, email string, roles, authorities []string, oauthScope string, audience []string, scope Scope, clientID, jti string, opts ...MintOption) (IssuedToken, error) {
 	if err := mintableScope(scope); err != nil {
 		return IssuedToken{}, err
 	}
@@ -201,7 +206,7 @@ func (i *Issuer) IssueScopedOAuthAccess(tenant, email string, roles, authorities
 		tokenType: TokenTypeAccess, tenant: tenant, username: email, email: email,
 		roles: roles, authorities: authorities, scope: oauthScope, audience: audience,
 		scopeAnchors: scope.Anchors(), clientID: clientID, jti: jti, ttl: i.scopedAccessTTL,
-	})
+	}, opts...)
 }
 
 // IssueOAuthAccess mints a tenant-scoped access token for the OAuth 2.1
@@ -213,12 +218,12 @@ func (i *Issuer) IssueScopedOAuthAccess(tenant, email string, roles, authorities
 // the scope's allowance), so the scope cannot be exceeded even for a subject
 // holding "*". This mint does not re-derive the cap — it trusts the caller — so
 // the authorization endpoint is the single place the intersection is applied.
-func (i *Issuer) IssueOAuthAccess(tenant, email string, roles, authorities []string, scope string, audience []string, actingAsSuperuser bool, clientID, jti string) (IssuedToken, error) {
+func (i *Issuer) IssueOAuthAccess(tenant, email string, roles, authorities []string, scope string, audience []string, actingAsSuperuser bool, clientID, jti string, opts ...MintOption) (IssuedToken, error) {
 	return i.sign(tokenSpec{
 		tokenType: TokenTypeAccess, tenant: tenant, username: email, email: email,
 		roles: roles, authorities: authorities, actingAsSuperuser: actingAsSuperuser,
 		scope: scope, audience: audience, clientID: clientID, jti: jti, ttl: i.accessTTL,
-	})
+	}, opts...)
 }
 
 // ServiceAccountSubjectPrefix begins the subject ("sub" and "username") of every token
@@ -267,7 +272,7 @@ func (i *Issuer) IssueServiceAccountAccess(tenant, subject string, roles, author
 // refresh token its jti is persisted server-side (NATS KV) for revocation, and it
 // carries the subject's session epoch so a credential change ends it. An empty
 // epoch is refused (ErrNoSessionEpoch).
-func (i *Issuer) IssueOAuthRefresh(tenant, email string, epoch SessionEpoch, sid SessionID, roles, authorities []string, scope string, audience []string, clientID, jti string) (IssuedToken, error) {
+func (i *Issuer) IssueOAuthRefresh(tenant, email string, epoch SessionEpoch, sid SessionID, roles, authorities []string, scope string, audience []string, clientID, jti string, opts ...MintOption) (IssuedToken, error) {
 	if epoch == "" {
 		return IssuedToken{}, ErrNoSessionEpoch
 	}
@@ -278,14 +283,14 @@ func (i *Issuer) IssueOAuthRefresh(tenant, email string, epoch SessionEpoch, sid
 		tokenType: TokenTypeRefresh, tenant: tenant, username: email, email: email,
 		roles: roles, authorities: authorities, sessionEpoch: epoch, sessionID: sid,
 		scope: scope, audience: audience, clientID: clientID, jti: jti, ttl: i.refreshTTL,
-	})
+	}, opts...)
 }
 
 // IssueRefresh mints a long-lived tenant-scoped refresh token. The caller
 // persists jti in the refresh-token store (NATS KV) so it can be revoked. It
 // carries the subject's session epoch so a credential change ends it; an empty
 // epoch is refused (ErrNoSessionEpoch).
-func (i *Issuer) IssueRefresh(tenant, username string, epoch SessionEpoch, sid SessionID, roles, authorities []string, jti string) (IssuedToken, error) {
+func (i *Issuer) IssueRefresh(tenant, username string, epoch SessionEpoch, sid SessionID, roles, authorities []string, jti string, opts ...MintOption) (IssuedToken, error) {
 	if epoch == "" {
 		return IssuedToken{}, ErrNoSessionEpoch
 	}
@@ -295,7 +300,7 @@ func (i *Issuer) IssueRefresh(tenant, username string, epoch SessionEpoch, sid S
 	return i.sign(tokenSpec{
 		tokenType: TokenTypeRefresh, tenant: tenant, username: username,
 		roles: roles, authorities: authorities, sessionEpoch: epoch, sessionID: sid, jti: jti, ttl: i.refreshTTL,
-	})
+	}, opts...)
 }
 
 // IssueIdentity mints an instance-scoped identity token (ADR-033): no tenant, the
@@ -306,7 +311,7 @@ func (i *Issuer) IssueRefresh(tenant, username string, epoch SessionEpoch, sid S
 // code; an empty epoch is refused (ErrNoSessionEpoch). The admin API does NOT check
 // the epoch — it verifies the signature only — so an identity token already issued
 // keeps its admin authority until it expires (the access-token lifetime).
-func (i *Issuer) IssueIdentity(email string, epoch SessionEpoch, sid SessionID, roles, authorities []string, jti string) (IssuedToken, error) {
+func (i *Issuer) IssueIdentity(email string, epoch SessionEpoch, sid SessionID, roles, authorities []string, jti string, opts ...MintOption) (IssuedToken, error) {
 	if epoch == "" {
 		return IssuedToken{}, ErrNoSessionEpoch
 	}
@@ -316,7 +321,7 @@ func (i *Issuer) IssueIdentity(email string, epoch SessionEpoch, sid SessionID, 
 	return i.sign(tokenSpec{
 		tokenType: TokenTypeIdentity, username: email, email: email,
 		roles: roles, authorities: authorities, sessionEpoch: epoch, sessionID: sid, jti: jti, ttl: i.accessTTL,
-	})
+	}, opts...)
 }
 
 // IssueService mints a short-lived instance-scoped *service* token (ADR-044
@@ -332,7 +337,13 @@ func (i *Issuer) IssueService(subject string, authorities []string, jti string) 
 	})
 }
 
-func (i *Issuer) sign(spec tokenSpec) (IssuedToken, error) {
+func (i *Issuer) sign(spec tokenSpec, opts ...MintOption) (IssuedToken, error) {
+	for _, o := range opts {
+		o(&spec)
+	}
+	if spec.amrSet && !validAmrShape(spec.amr) {
+		return IssuedToken{}, fmt.Errorf("%w: %v", ErrMalformedAmr, spec.amr)
+	}
 	now := time.Now()
 	expires := now.Add(spec.ttl)
 	claims := &Claims{
@@ -344,6 +355,7 @@ func (i *Issuer) sign(spec tokenSpec) (IssuedToken, error) {
 		ActingAsSuperuser: spec.actingAsSuperuser,
 		Scope:             spec.scope,
 		ScopeAnchors:      spec.scopeAnchors,
+		Amr:               spec.amr,
 		ClientId:          spec.clientID,
 		SessionEpoch:      spec.sessionEpoch,
 		SessionID:         spec.sessionID,

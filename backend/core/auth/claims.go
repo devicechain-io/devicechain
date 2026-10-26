@@ -109,6 +109,13 @@ type Claims struct {
 	// service looks it up, whenever one of those tokens is exchanged. A token without it
 	// is refused rather than treated as an older kind.
 	SessionID SessionID `json:"sid,omitempty"`
+	// Amr (the "amr" claim, RFC 8176) records how the sign-in this token descends from
+	// authenticated: ["pwd"], ["pwd","otp","mfa"] or ["pwd","mfa"] (a recovery code). It
+	// rides the tiers a sign-in session mints (access, refresh, identity) and is never
+	// retroactive: it is written from the session record at mint time, so a refresh keeps
+	// the sign-in's value. Validator.Parse refuses it on a service token and on a service
+	// account's token. Read it through Mfa, never by indexing.
+	Amr []string `json:"amr,omitempty"`
 	// TokenType distinguishes access from refresh tokens (see TokenType*).
 	TokenType string `json:"typ"`
 

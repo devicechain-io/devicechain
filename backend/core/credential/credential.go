@@ -187,6 +187,15 @@ const (
 	// way to lock the network server out of its own integration. Spraying is bounded where
 	// the requests arrive, by a per-integration failure bucket.
 	KindIntegration Kind = "integration"
+	// KindTotp is an identity presenting its second factor, a TOTP code or a recovery
+	// code, after its password was right. ID is the identity's email. Unlike every other
+	// kind it is not compared by Check: its attempt state (the charge-first locks and the
+	// replay step) is durable and lives in the owning service's database, so it is checked
+	// through CheckOneTime, which spends the request budget, hands the caller the
+	// constant-time compares and counts the outcome. Its policy must be Unthrottled
+	// (ErrMustBeUnthrottled): the Checker keeps no state for it, and a soft KV backoff
+	// that a password success clears would be the wrong throttle for a 10⁶-value code.
+	KindTotp Kind = "totp"
 )
 
 // comparator is how one kind's presented secret is compared against its stored one.
@@ -201,6 +210,9 @@ type comparator struct {
 	keyed digestKey
 	// unthrottledOnly refuses a policy that is not Unthrottled for this kind (NewChecker).
 	unthrottledOnly bool
+	// oneTime marks a kind verified through CheckOneTime rather than Check: it has no
+	// comparator or dummy here, and Check refuses it (ErrOneTimeKind).
+	oneTime bool
 }
 
 // digestKey names one of the Checker's keyed-digest keys.
@@ -231,6 +243,7 @@ var comparators = map[Kind]comparator{
 	KindProvisioningProfile:   {keyed: keyProvisioning, unthrottledOnly: true},
 	KindProvisionedCredential: {keyed: keyDeviceAccessToken, unthrottledOnly: true},
 	KindIntegration:           {keyed: keyIntegration, unthrottledOnly: true},
+	KindTotp:                  {unthrottledOnly: true, oneTime: true},
 }
 
 // constantTimeCompare is subtle.ConstantTimeCompare. It is a variable only so a test
@@ -644,6 +657,9 @@ func NewChecker(store Store, policies map[Kind]Policy, opts ...Option) (*Checker
 		if cmp.unthrottledOnly && !policies[k].Unthrottled {
 			return nil, fmt.Errorf("%w: kind %q", ErrMustBeUnthrottled, k)
 		}
+		if cmp.oneTime {
+			continue
+		}
 		if cmp.keyed != keyNone {
 			key := c.deviceKey
 			missing := ErrNoDeviceSecretKey
@@ -770,6 +786,9 @@ func (c *Checker) check(ctx context.Context, p Principal, secret string, lookup 
 	policy, ok := c.policies[p.Kind]
 	if !ok {
 		return false, fmt.Errorf("%w: %q", ErrUndeclaredKind, p.Kind)
+	}
+	if comparators[p.Kind].oneTime {
+		return false, fmt.Errorf("%w: %q", ErrOneTimeKind, p.Kind)
 	}
 	compare := c.compares[p.Kind]
 	key := Key(p)
