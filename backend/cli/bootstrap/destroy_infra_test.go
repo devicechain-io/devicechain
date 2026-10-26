@@ -383,7 +383,7 @@ func (s statePlus) Show(ctx context.Context, _ ...tfexec.ShowOption) (*tfjson.St
 func TestTheInstanceRootTeardownSequence(t *testing.T) {
 	// The var the destroy carries is the instance's NAMESPACE, and so is where the
 	// release is uninstalled from when the state does not say otherwise.
-	destroy := "destroy kubeconfig_context=kind-x instance_namespace=" + InstanceNamespace("acme")
+	destroy := "destroy instance_namespace=" + InstanceNamespace("acme")
 	for _, tc := range []struct {
 		name  string
 		state stateLister

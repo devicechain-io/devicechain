@@ -189,7 +189,7 @@ func openInstanceRoot(ctx context.Context, st *State) (_ openedInstanceRoot, err
 
 	// Streams tofu's own progress so a long apply is not a silent wait — and only its
 	// progress: see tofuExec for why a read must never reach the terminal.
-	tf, err := newTofuExec(rootdir, tofuBin)
+	tf, err := newTofuExec(rootdir, tofuBin, st.KubeContext)
 	if err != nil {
 		return openedInstanceRoot{}, err
 	}

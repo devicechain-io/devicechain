@@ -80,7 +80,7 @@ func applyClusterPrereqs(ctx context.Context, st *State, uid string, vars []stri
 		return InstallOutputs{}, fmt.Errorf("extracting cluster prerequisite config: %w", err)
 	}
 
-	tf, err := newTofuExec(rootdir, tofuBin)
+	tf, err := newTofuExec(rootdir, tofuBin, st.KubeContext)
 	if err != nil {
 		return InstallOutputs{}, err
 	}
