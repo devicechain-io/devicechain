@@ -11,7 +11,10 @@ backend/
   services/                   one module per microservice:
     device-management/        devices, device types + versioned device profiles (un-fused, ADR-045),
                               the typed relationship graph, alarm objects as level-state integrators
-                              (ADR-057; detection/authoring now live in event-processing), event resolution
+                              (ADR-057; detection/authoring now live in event-processing), event resolution;
+                              inbound integrations (authenticated HTTP senders — a network server or a
+                              webhook — holding a server-generated bearer token stored as a keyed digest,
+                              scoped to device types, counted against a tier ceiling)
     user-management/          identities, per-tenant memberships, roles, two-tier JWT/JWKS; OAuth 2.1
                               authorization server (PKCE, RFC 8414/8707) securing MCP access (ADR-047);
                               tenant TIER — operator-defined packaging entity subsystems READ but never

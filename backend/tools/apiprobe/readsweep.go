@@ -519,6 +519,7 @@ var sweepTokenArgs = map[string]string{
 	"device-management.entityGroupVersions.token":            "entity-group",
 	"device-management.resolveDeviceGroupTargets.groupToken": "entity-group",
 	"device-management.maintenanceWindowOpening.token":       "maintenance-window",
+	"device-management.integration.token":                    "integration",
 	// The calculated-metric backfill doors read the seeded profile's PUBLISHED version
 	// snapshot and compile its formulas (the version is optional: omitted, it is the active
 	// one, which the publish table makes exist), and walk the devices of its types. A
@@ -543,6 +544,9 @@ var sweepTokenArgs = map[string]string{
 // are different facts, and collapsing them into silence is how a hole becomes invisible.
 // A reader scanning the sweep's output sees each one printed, with its sentence.
 var sweepExemptions = map[string]string{
+	"device-management.integrationAuth": "it authenticates a bearer token the platform showed once, at " +
+		"creation, and stores only a digest of, so the sweep has no value to supply; the integration " +
+		"entity reads the stored row back through integration",
 	"update-management.updateAssignment": "an assignment is addressed by a token the platform mints when " +
 		"the artifact is assigned, so the sweep has no value to supply; the update-assignment entity " +
 		"reads the SAME door back by the token its receipt recorded, and updateAssignments is swept",

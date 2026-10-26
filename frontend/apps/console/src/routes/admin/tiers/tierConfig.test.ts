@@ -123,9 +123,10 @@ describe('tier scalar settings', () => {
     geoFencePositionCeiling: '256',
     geoFencePositionBudget: '20000',
     calculatedMetricsPerProfile: '4',
+    integrationsPerTenant: '12',
   };
 
-  it('carries all six scalar keys the server accepts', () => {
+  it('carries all seven scalar keys the server accepts', () => {
     expect(TIER_SCALARS.map((s) => s.key).sort()).toEqual(Object.keys(ALL).sort());
   });
 
@@ -173,6 +174,10 @@ describe('tier scalar settings', () => {
     expect(invalidTierScalar({ calculatedMetricsPerProfile: '32' })).toBeNull();
     expect(invalidTierScalar({ calculatedMetricsPerProfile: '33' })?.key).toBe('calculatedMetricsPerProfile');
     expect(invalidTierScalar({ calculatedMetricsPerProfile: '-1' })?.key).toBe('calculatedMetricsPerProfile');
+    expect(invalidTierScalar({ integrationsPerTenant: '0' })).toBeNull();
+    expect(invalidTierScalar({ integrationsPerTenant: '100' })).toBeNull();
+    expect(invalidTierScalar({ integrationsPerTenant: '101' })?.key).toBe('integrationsPerTenant');
+    expect(invalidTierScalar({ integrationsPerTenant: '-1' })?.key).toBe('integrationsPerTenant');
     expect(invalidTierScalar({ heldCommandCeiling: '0' })?.key).toBe('heldCommandCeiling');
   });
 });
@@ -213,6 +218,16 @@ describe('tier scalar maxima match the server', () => {
     const s = TIER_SCALARS.find((x) => x.key === 'calculatedMetricsPerProfile');
     expect(s?.max).toBe(Number(m![1].replace(/_/g, '')));
     expect(tierGo).toMatch(/func validateCalculatedMetricsPerProfile[\s\S]*?if f < 0 \|\| f > governance\.MaxCalculatedMetricsPerProfile \{/);
+    expect(s?.min).toBe(0);
+  });
+
+  it('integrations per tenant: 0 to the platform maximum', () => {
+    const gov = readFileSync(resolve(repo, 'backend/core/governance/integrations_ceiling.go'), 'utf8');
+    const m = gov.match(/^\s*MaxIntegrationsPerTenant\s*=\s*([0-9_]+)\s*$/m);
+    expect(m, 'MaxIntegrationsPerTenant not found').not.toBeNull();
+    const s = TIER_SCALARS.find((x) => x.key === 'integrationsPerTenant');
+    expect(s?.max).toBe(Number(m![1].replace(/_/g, '')));
+    expect(tierGo).toMatch(/func validateIntegrationsPerTenant[\s\S]*?if f < 0 \|\| f > governance\.MaxIntegrationsPerTenant \{/);
     expect(s?.min).toBe(0);
   });
 

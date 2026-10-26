@@ -137,5 +137,6 @@
   "fencePositionCeilingDescription": "Cuántos puntos puede tener una sola geocerca. Comprobar si una geocerca se cruza a sí misma cuesta un tiempo que crece con el cuadrado del número de puntos, así que un contorno muy detallado es lento de aceptar y lento de recargar. Déjalo en blanco para heredar el límite del nivel y, en su defecto, el valor predeterminado de la plataforma.",
   "fencePositionCeilingLabel": "Puntos por geocerca",
   "calculatedMetricsPerProfileLabel": "Métricas calculadas por perfil",
+  "integrationsPerTenantLabel": "Integraciones por inquilino",
   "fenceCapMaximumHint": "Cada uno de estos tres tiene además un máximo de plataforma; un número mayor se rechaza en vez de reducirse en silencio."
 }

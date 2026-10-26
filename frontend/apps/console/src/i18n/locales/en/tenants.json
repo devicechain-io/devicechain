@@ -137,5 +137,6 @@
   "fencePositionCeilingDescription": "How many points a single geofence may have. Checking a fence for self-crossings costs time that grows with the square of its point count, so a very detailed outline is slow to accept and slow to reload. Leave blank to inherit the tier's cap, then the platform default.",
   "fencePositionCeilingLabel": "Points per geofence",
   "calculatedMetricsPerProfileLabel": "Calculated metrics per profile",
+  "integrationsPerTenantLabel": "Integrations per tenant",
   "fenceCapMaximumHint": "Each of these three has a platform maximum as well; a larger number is refused rather than quietly reduced."
 }

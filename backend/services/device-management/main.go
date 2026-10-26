@@ -341,6 +341,14 @@ func buildApis(nmgr *messaging.NatsManager, rdbm *rdb.RdbManager, key *credentia
 			return nil, nil, err
 		}
 	}
+	// The Checker inbound integration tokens are compared through, built from the SAME key the
+	// Api digests them with. Without the key there is nothing to compare under, and the Api
+	// answers ErrIntegrationsUnavailable.
+	if enrollment != nil && enrollment.Integration != nil {
+		if api.IntegrationChecker, err = processor.NewIntegrationChecker(enrollment); err != nil {
+			return nil, nil, err
+		}
+	}
 	cached := model.NewCachedApi(api, caches)
 	// The write paths evict the hot-path caches through this seam (ADR-044 F2). The GraphQL
 	// mutations run on the plain *Api, so the evictor is wired onto it.
@@ -717,6 +725,23 @@ func wireCalculatedMetricsCeilingResolver() {
 	Api.CalculatedMetricsCeiling = governance.NewCalculatedMetricsCeilingResolver(client, url)
 }
 
+// wireIntegrationsCeilingResolver injects the per-tenant integrations ceiling: the tenant's
+// tier setting, else the platform default. Left nil — every tenant at the platform default —
+// when the service secret or the user-management coordinate is unset, for the reasons
+// wireGeoFenceCapsResolver gives. It reads tenantGovernance, so tenant:read.
+func wireIntegrationsCeilingResolver() {
+	infra := Microservice.InstanceConfiguration.Infrastructure
+	if infra.ServiceAuth.Secret == "" || infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 {
+		log.Warn().Int("integrationsPerTenant", governance.DefaultIntegrationsPerTenant).
+			Msg("Service secret or user-management endpoint not configured — the integrations ceiling is the platform default for every tenant.")
+		return
+	}
+	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "device-management",
+		[]string{string(auth.TenantRead)})
+	url := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
+	Api.IntegrationsCeiling = governance.NewIntegrationsCeilingResolver(client, url)
+}
+
 // Called after microservice has been initialized.
 // safetyGates reports whether this service's optional safety gates are wired
 // (<area>_safety_gate_enabled). Built once in afterMicroserviceInitialized.
@@ -819,6 +844,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			// defaults are still enforced, so refusals still happen and still need reporting.
 			wireGeoFenceCapsResolver()
 			wireCalculatedMetricsCeilingResolver()
+			wireIntegrationsCeilingResolver()
 			if err = wireProvisioningEndpoint(); err != nil {
 				return err
 			}

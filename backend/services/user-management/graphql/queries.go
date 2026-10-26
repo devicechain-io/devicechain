@@ -216,6 +216,14 @@ func (r *TenantGovernanceResolver) CalculatedMetricsPerProfile() (*int32, error)
 	return util.IntPtrInt32("calculatedMetricsPerProfile", v)
 }
 
+// IntegrationsPerTenant resolves how many inbound integrations this tenant may hold — the
+// tier's setting, else null. Null means the reader (device-management) applies the platform
+// default.
+func (r *TenantGovernanceResolver) IntegrationsPerTenant() (*int32, error) {
+	v, _ := r.t.EffectiveIntegrationsPerTenant()
+	return util.IntPtrInt32("integrationsPerTenant", v)
+}
+
 // PurgeState resolves where the tenant sits in the ADR-077 deletion lifecycle, as the
 // raw state string ("active" | "purging").
 //

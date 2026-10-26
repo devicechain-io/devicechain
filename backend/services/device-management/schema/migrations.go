@@ -54,5 +54,6 @@ var (
 		NewDeviceGatewaySchema(),
 		NewEnrollmentSecretDigestSchema(),
 		NewSelfRegistrationSchema(),
+		NewIntegrationsSchema(),
 	}
 )

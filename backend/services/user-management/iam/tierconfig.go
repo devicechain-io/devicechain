@@ -118,6 +118,17 @@ const (
 // It has NO per-tenant override column: the count is packaging, set on the tier.
 const CalculatedMetricsPerProfileConfigKey = governance.CalculatedMetricsPerProfileField
 
+// IntegrationsPerTenantConfigKey is the tier config key carrying how many inbound
+// integrations (network servers and webhook senders, each with its own bearer token) a
+// tenant may hold. Registered outside the dimension loop like the scalars above.
+//
+// Zero is a legal value — a tier that holds none — and is distinct from omitting the key,
+// which inherits the platform default (governance's DefaultIntegrationsPerTenant). It carries
+// a semantic maximum because every integration is an authenticated route on the ingest path.
+//
+// It has NO per-tenant override column: the count is packaging, set on the tier.
+const IntegrationsPerTenantConfigKey = governance.IntegrationsPerTenantField
+
 // tierConfigKeys is the registry, keyed by config-blob key name.
 var tierConfigKeys = buildTierConfigKeys()
 
@@ -138,6 +149,7 @@ func buildTierConfigKeys() map[string]tierConfigKey {
 	keys[GeoFenceCeilingConfigKey] = tierConfigKey{validate: validateGeoFenceCeiling}
 	keys[GeoFencePositionBudgetConfigKey] = tierConfigKey{validate: validateGeoFencePositionBudget}
 	keys[CalculatedMetricsPerProfileConfigKey] = tierConfigKey{validate: validateCalculatedMetricsPerProfile}
+	keys[IntegrationsPerTenantConfigKey] = tierConfigKey{validate: validateIntegrationsPerTenant}
 	return keys
 }
 
@@ -374,6 +386,35 @@ func validateCalculatedMetricsPerProfile(v any) error {
 			governance.MaxCalculatedMetricsPerProfile, v, governance.CalculatedMetricsPerProfileBecause)
 	}
 	return nil
+}
+
+// validateIntegrationsPerTenant accepts a whole number from 0 to
+// governance.MaxIntegrationsPerTenant. Zero is legal (a tier that holds no integrations), so
+// this cannot delegate to validatePositiveBurst.
+func validateIntegrationsPerTenant(v any) error {
+	f, ok := toFloat(v)
+	if !ok {
+		return fmt.Errorf("must be a number (got %T)", v)
+	}
+	if math.IsInf(f, 0) || math.IsNaN(f) {
+		return fmt.Errorf("must be a finite number (got %v)", f)
+	}
+	if f != math.Trunc(f) {
+		return fmt.Errorf("must be a whole number (got %v)", f)
+	}
+	if f < 0 || f > governance.MaxIntegrationsPerTenant {
+		return fmt.Errorf("must be between 0 and %d integrations per tenant (got %v); %s",
+			governance.MaxIntegrationsPerTenant, v, governance.IntegrationsPerTenantBecause)
+	}
+	return nil
+}
+
+// IntegrationsPerTenant returns how many inbound integrations the tier lets a tenant hold,
+// or nil if the tier declares none (inherit the platform default). Read through the write
+// path's validator, so a junk value parked by an out-of-band write inherits rather than
+// becoming a ceiling. A returned 0 is a real setting (none), not an unusable one.
+func (t *TenantTier) IntegrationsPerTenant() *int {
+	return t.positiveInt(IntegrationsPerTenantConfigKey, validateIntegrationsPerTenant)
 }
 
 // CalculatedMetricsPerProfile returns how many calculated metrics the tier lets one
