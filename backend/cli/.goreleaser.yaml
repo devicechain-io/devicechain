@@ -61,6 +61,13 @@ builds:
       # a real published tag. The release workflow now verifies the built binary's
       # tag actually resolves in the registry, which is the only check that can.
       - -X github.com/devicechain-io/dcctl/bootstrap.DefaultImageVersion={{ .Tag }}
+      # The digest of the broker image this release pushed, so dcctl pins the broker by digest
+      # and a release that did not change it does not roll it. The release's cli job reads it
+      # from the images job's record (ref-dc-nats-server) into DC_BROKER_IMAGE_DIGEST and checks
+      # the built binary reports it. `index` rather than `.Env.X`: a build outside the release
+      # (a snapshot, a dry run) has no such variable and stamps nothing, which dcctl reads as
+      # "pull by tag" rather than failing to build.
+      - -X github.com/devicechain-io/dcctl/bootstrap.DefaultBrokerImageDigest={{ index .Env "DC_BROKER_IMAGE_DIGEST" }}
 
 archives:
   - id: dcctl

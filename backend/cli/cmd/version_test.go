@@ -162,8 +162,27 @@ func TestVersionFieldsRendersEveryStamp(t *testing.T) {
 	}
 
 	got := strings.Join(labels, ",")
-	const want = "commit,built,images,go,platform"
+	const want = "commit,built,images,broker,go,platform"
 	if got != want {
 		t.Errorf("version fields = %q, want %q", got, want)
+	}
+}
+
+// TestVersionReportsTheBrokerDigest: the release reads this line ("broker: <digest>") to check the
+// binary pins the broker image it pushed.
+func TestVersionReportsTheBrokerDigest(t *testing.T) {
+	const d = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	if got := describeBrokerDigest(d); got != d {
+		t.Fatalf("describeBrokerDigest(%q) = %q, want the digest unadorned", d, got)
+	}
+	if got := describeBrokerDigest(""); !strings.HasPrefix(got, "by tag") {
+		t.Fatalf("an unstamped binary reports %q", got)
+	}
+	found := false
+	for _, f := range versionFields(time.Now()) {
+		found = found || f.label == "broker"
+	}
+	if !found {
+		t.Fatal("dcctl version has no broker line")
 	}
 }
