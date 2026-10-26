@@ -286,6 +286,13 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 			return err
 		}
 	}
+	// And so is the front-end choice: a rollback to the Ingress objects has to survive the next
+	// plain upgrade, which re-derives everything from the cluster.
+	if st.IngressControllerChange {
+		if err := recordIngressController(ctx, dyn, opts.Instance, st.IngressControllerOverride); err != nil {
+			return err
+		}
+	}
 
 	// 🔴 UPGRADE TAKES THE CLUSTER LOCK TOO. It no longer applies the cluster-scoped
 	// operator objects that first justified this — that is `dcctl install`'s now — but
@@ -387,7 +394,8 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 			areaReadyTimeout, areaReadyPollInterval); err != nil {
 			return fmt.Errorf("waiting for the services: %w", err)
 		}
-		return nil
+		// A Gateway with no certificate of its own is a green release, so it is waited on.
+		return waitForGatewayCertificate(ctx, dyn, st)
 	}); err != nil {
 		return err
 	}
@@ -418,6 +426,7 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 	fmt.Printf("  %s %s\n", color.WhiteString("Operator:"),
 		color.GreenString("unchanged — the cluster's, already at this release"))
 	sayUpgradeInfrastructure(st, opts)
+	fmt.Printf("  %s %s\n", color.WhiteString("Front end:"), color.GreenString(sayFrontEnd(st)))
 	sayUpgradeCredentialsKept(st, opts)
 	sayIdentityIntroduced(st)
 	sayAreaLoginsIntroduced(st)
@@ -468,6 +477,13 @@ func sayUpgradeInfrastructure(st *State, opts UpgradeOptions) {
 // Its own function so what it says can be tested: Upgrade itself needs a cluster.
 func sayUpgradeDryRun(st *State) {
 	fmt.Println()
+	if st.IngressControllerChange {
+		if st.IngressControllerOverride == "" {
+			wouldDo("clear the front-end choice recorded in the instance declaration (decide from the cluster again)")
+		} else {
+			wouldDo("record front end " + st.IngressControllerOverride + " in the instance declaration, so later upgrades keep it")
+		}
+	}
 	if st.AreaChange != nil && len(st.AreaChange.Added) > 0 {
 		wouldDo("deploy " + strings.Join(st.AreaChange.Added, ", ") + " at the version the instance is on")
 	}

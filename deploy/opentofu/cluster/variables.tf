@@ -362,7 +362,7 @@ variable "traefik_use_host_port" {
 }
 
 variable "traefik_service_type" {
-  description = "Service type for Traefik: LoadBalancer on a cloud, NodePort on kind (a LoadBalancer stays <pending> there and hangs helm --wait). Forced to NodePort by traefik_use_host_port."
+  description = "Service type for Traefik: LoadBalancer on a cloud, NodePort on kind (a LoadBalancer stays <pending> there and hangs helm --wait). Forced to NodePort by traefik_use_host_port. A raw `tofu apply` on kind (no dcctl) must set traefik_service_type=NodePort itself: dcctl does, and the default LoadBalancer stays <pending> there."
   type        = string
   default     = "LoadBalancer"
 

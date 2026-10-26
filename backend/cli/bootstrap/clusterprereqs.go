@@ -7,12 +7,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	assets "github.com/devicechain-io/dc-deploy"
 	"github.com/hashicorp/terraform-exec/tfexec"
+	tfjson "github.com/hashicorp/terraform-json"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -101,6 +104,10 @@ func applyClusterPrereqs(ctx context.Context, st *State, uid string, vars []stri
 	// of a namespace holding every other instance's data. The namespace is a cluster
 	// prerequisite, so it belongs to the cluster's state and outlives every instance.
 	if err := adoptInfraNamespace(ctx, tf, namespace, vars); err != nil {
+		return InstallOutputs{}, err
+	}
+
+	if err := refuseAnApplyThatDropsTraefik(ctx, tf, rootdir, vars); err != nil {
 		return InstallOutputs{}, err
 	}
 
@@ -371,4 +378,77 @@ func refuseAClusterLeftWithNoController(vars []string, outputs map[string]tfexec
 	return fmt.Errorf("this install leaves the cluster with no ingress controller: ingress-nginx is not installed "+
 		"on a cluster that has none, and Traefik was skipped (%s). Instances built on it would render a Gateway "+
 		"that nothing serves. Fix the Gateway API CRDs on the cluster and run `dcctl install` again; nothing has been recorded", reason)
+}
+
+// clusterPlanner is what refuseAnApplyThatDropsTraefik needs of a tofu runner.
+type clusterPlanner interface {
+	stateLister
+	Plan(ctx context.Context, opts ...tfexec.PlanOption) (bool, error)
+	ShowPlanFile(ctx context.Context, planPath string, opts ...tfexec.ShowOption) (*tfjson.Plan, error)
+}
+
+// traefikAddress is Traefik's Helm release in the cluster root's state.
+const traefikAddress = "module.traefik[0].helm_release.traefik"
+
+// traefikDeletions lists what a plan would delete of the Gateway API controller or its CRDs.
+func traefikDeletions(plan *tfjson.Plan) []string {
+	var out []string
+	if plan == nil {
+		return nil
+	}
+	for _, rc := range plan.ResourceChanges {
+		if rc.Change == nil || !(strings.HasPrefix(rc.Address, "module.traefik") ||
+			strings.HasPrefix(rc.Address, "module.gateway_api_crds")) {
+			continue
+		}
+		if rc.Change.Actions.Delete() || rc.Change.Actions.Replace() {
+			out = append(out, rc.Address)
+		}
+	}
+	return out
+}
+
+// refuseAnApplyThatDropsTraefik stops, BEFORE the apply, a re-apply that would remove the Gateway
+// API controller from a cluster that has it.
+//
+// 🔴 refuseAClusterLeftWithNoController CATCHES THIS AFTER THE FACT, which on a cluster that was
+// serving through Traefik is too late: the release is gone by the time it speaks. The case is a
+// re-run whose plan turns ingress-nginx off (as every run on a Traefik-only cluster does) while the
+// Gateway API CRD set has stopped being one the root accepts, so the root skips Traefik and plans
+// its removal. Only a cluster whose state holds Traefik can lose it, so only that cluster pays for
+// the extra plan.
+func refuseAnApplyThatDropsTraefik(ctx context.Context, tf clusterPlanner, rootdir string, vars []string) error {
+	if !slices.Contains(vars, "enable_ingress_nginx=false") {
+		return nil
+	}
+	state, err := tf.Show(ctx)
+	if err != nil {
+		return fmt.Errorf("reading the cluster prerequisites' state to check Traefik is kept: %w", err)
+	}
+	if state == nil || state.Values == nil || findStateResource(state.Values.RootModule, traefikAddress) == nil {
+		return nil
+	}
+	planPath := filepath.Join(rootdir, "traefik-check.tfplan")
+	defer os.Remove(planPath)
+	opts := []tfexec.PlanOption{tfexec.Out(planPath)}
+	for _, v := range vars {
+		opts = append(opts, tfexec.Var(v))
+	}
+	if _, err := tf.Plan(ctx, opts...); err != nil {
+		return fmt.Errorf("planning the cluster prerequisites to check Traefik is kept: %w", err)
+	}
+	if err := os.Chmod(planPath, stateFileMode); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	plan, err := tf.ShowPlanFile(ctx, planPath)
+	if err != nil {
+		return fmt.Errorf("reading the cluster prerequisites' plan: %w", err)
+	}
+	if gone := traefikDeletions(plan); len(gone) > 0 {
+		return fmt.Errorf("this apply would remove the cluster's ingress controller (%s) and the cluster has no other: "+
+			"ingress-nginx is not installed here, and the Gateway API CRD set on the cluster is no longer one Traefik "+
+			"can run against, so the root plans to drop it. Nothing has been changed. Restore a usable CRD set "+
+			"(see the gateway_api_notice output) and run `dcctl install` again", strings.Join(gone, ", "))
+	}
+	return nil
 }

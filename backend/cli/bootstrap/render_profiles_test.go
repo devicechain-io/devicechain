@@ -162,11 +162,11 @@ var renderProfiles = []renderProfile{
 	},
 	{
 		// The cutover window: the Gateway and the Ingress objects beside it, on distinct
-		// certificate Secrets.
+		// certificate Secrets (the Gateway waits for a new one, the Ingress objects keep theirs).
 		name: "--ha --profile full, cutover (Gateway and Ingress)",
 		st: func(instance string) *State {
 			st := profileState(true, false, "full")(instance)
-			st.IngressController, st.LegacyIngress = frontEndGateway, true
+			st.IngressController, st.LegacyIngress, st.GatewayTLSSecret = frontEndGateway, true, gatewayCutoverSecret
 			return st
 		},
 	},

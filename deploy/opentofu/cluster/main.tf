@@ -785,8 +785,13 @@ locals {
     "${o.metadata.namespace}/${o.metadata.name}"
     if(try(o.spec.ingressClassName, "") == var.ingress_class ||
     try(o.metadata.annotations["kubernetes.io/ingress.class"], "") == var.ingress_class) &&
-    # Grafana's own Ingress is this root's, and moves to Traefik in the same apply.
-    !(o.metadata.namespace == var.monitoring_namespace && try(o.metadata.labels["app.kubernetes.io/name"], "") == "grafana")
+    # Grafana's own Ingress is this root's, and moves to Traefik in the same apply: but only
+    # while this root manages monitoring, and only the one this release (the module's default
+    # name) created. Anyone else's Ingress in that namespace still blocks the removal.
+    !(var.enable_monitoring &&
+      o.metadata.namespace == var.monitoring_namespace &&
+      try(o.metadata.labels["app.kubernetes.io/name"], "") == "grafana" &&
+    try(o.metadata.labels["app.kubernetes.io/instance"], "") == "kube-prometheus-stack")
   ]
 }
 

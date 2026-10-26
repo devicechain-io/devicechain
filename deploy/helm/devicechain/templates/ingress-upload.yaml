@@ -53,7 +53,7 @@ spec:
   tls:
     - hosts:
         - {{ .Values.ingress.host | quote }}
-      secretName: {{ include "devicechain.legacyTlsSecret" . }}
+      secretName: {{ $tls.secretName }}
   {{- end }}
   rules:
     - host: {{ .Values.ingress.host | quote }}

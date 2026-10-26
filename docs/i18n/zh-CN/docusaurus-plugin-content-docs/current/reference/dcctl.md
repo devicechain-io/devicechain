@@ -1458,7 +1458,10 @@ on the cluster the instance's Ingress objects are rendered beside them under a c
 Secret of their own, so the host keeps answering where it did until DNS points at the new
 controller; '--drop-legacy-ingress' then stops rendering them, and 'dcctl install
 --remove-legacy-ingress' removes ingress-nginx once no instance has one. '--ingress-controller'
-chooses the front end by hand: 'nginx' is the way back.
+chooses the front end by hand, records the choice on the instance, and 'nginx' is the way back
+that later upgrades keep ('--ingress-controller auto' returns to deciding from the cluster). The
+Gateway names a new certificate Secret while the Ingress objects remain, so the host DNS still
+reaches never waits for a certificate; the upgrade waits for the Gateway's own to be Ready.
 
 Operator tuning is the exception, and it is carried: a values overlay given to
 'dcctl bootstrap --values' or to this command is recorded on the instance and applied
@@ -1515,7 +1518,7 @@ dcctl upgrade <provider> <instance> [flags]
       --escrow-file string              where this instance's root-key escrow artifact lives (default ~/.devicechain/escrow/<instance>-rootkey.escrow). The upgrade checks it still protects the key the instance is running on
       --escrow-passphrase-file string   read the escrow passphrase from this file (or $DCCTL_ESCROW_PASSPHRASE). Only needed to WRITE an escrow for an instance that has none — checking an existing one needs no passphrase
   -h, --help                            help for upgrade
-      --ingress-controller string       which front end serves the instance's host: gateway (a Gateway API Gateway and HTTPRoutes, served by Traefik) or nginx (Ingress objects, served by ingress-nginx). Omitted, it is decided from the cluster: where Traefik runs the instance is served by the Gateway, and while it still has Ingress objects and ingress-nginx remains they are rendered beside it, so the host keeps answering there until --drop-legacy-ingress. nginx is the way back, and gateway is required to put a new instance on a local cluster's Gateway before ingress-nginx is removed
+      --ingress-controller string       which front end serves the instance's host: gateway (a Gateway API Gateway and HTTPRoutes, served by Traefik), nginx (Ingress objects, served by ingress-nginx) or auto. The choice is RECORDED on the instance and kept by every later upgrade, so 'nginx' stays a rollback until 'gateway' or 'auto' says otherwise; auto drops the record and decides from the cluster. With no choice recorded or given, where Traefik runs the instance is served by the Gateway, and while it still has Ingress objects and ingress-nginx remains they are rendered beside it, so the host keeps answering there until --drop-legacy-ingress. nginx needs ingress-nginx on the cluster, and gateway needs Traefik
       --kube-context string             kube-context to target (default: the cluster recorded at bootstrap; a different context is refused)
       --mqtt-fail-closed                make a QoS 1 PUBACK from the MQTT gateway mean the platform holds the message (infrastructure.nats.mqttFailClosed). The trade: a QoS 1 publish is REFUSED (no PUBACK, connection closed, the device resends) while the broker's MQTT message store has no leader, instead of being acknowledged and possibly lost, and the ingest ceiling is lower, so size the instance below it. It covers QoS 1 only, and its guarantee is stated for a replicated broker (a cluster installed with --ha). --mqtt-fail-closed=false turns it off again. Fixed configuration, recorded on the instance and kept by 'dcctl upgrade' when the flag is omitted; not giving the flag leaves the platform default
       --registry string                 image registry to pull from (default: ghcr.io/devicechain-io)

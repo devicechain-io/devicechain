@@ -483,6 +483,10 @@
             "annotations": {
               "type": "object",
               "description": "Annotations merged onto the Gateway, after the cert-manager issuer annotation."
+            },
+            "tlsSecretName": {
+              "type": "string",
+              "description": "The certificate Secret the Gateway's https listener names; empty is ingress.tls.secretName. It must differ from ingress.tls.secretName while ingress.legacy.enabled, so two cert-manager shims never issue into one Secret."
             }
           }
         },
@@ -494,11 +498,6 @@
             "enabled": {
               "type": "boolean",
               "description": "Also render the Ingress objects (class ingress.className). Needs controller gateway."
-            },
-            "tlsSecretName": {
-              "type": "string",
-              "minLength": 1,
-              "description": "The certificate Secret the Ingress objects name while both are rendered. It must differ from tls.secretName, which the Gateway owns, so two cert-manager shims never issue into one Secret."
             }
           }
         },

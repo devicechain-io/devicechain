@@ -108,7 +108,7 @@ spec:
         mode: Terminate
         certificateRefs:
           - kind: Secret
-            name: {{ $tls.secretName }}
+            name: {{ include "devicechain.gatewayTlsSecret" . }}
       allowedRoutes:
         namespaces:
           from: Same

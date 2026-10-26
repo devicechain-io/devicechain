@@ -1099,9 +1099,12 @@ func ingressValues(st *State) map[string]interface{} {
 		"tls":        map[string]interface{}{"enabled": !st.NoTLS},
 	}
 	if controller == frontEndGateway && st.LegacyIngress {
-		// The Ingress objects beside the Gateway while the host moves. Their certificate
-		// Secret is the chart's distinct default, so the two never issue into one.
+		// The Ingress objects beside the Gateway while the host moves. They keep the instance's
+		// own certificate Secret (DNS still reaches them); the Gateway names a new one.
 		ing["legacy"] = map[string]interface{}{"enabled": true}
+	}
+	if controller == frontEndGateway && st.GatewayTLSSecret != "" {
+		ing["gateway"] = map[string]interface{}{"tlsSecretName": st.GatewayTLSSecret}
 	}
 	return ing
 }

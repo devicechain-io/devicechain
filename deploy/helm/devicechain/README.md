@@ -511,8 +511,9 @@ re-opens every private address for every tenant.
   and backends, for any conformant controller (the OpenTofu install registers Traefik's
   `GatewayClass`). Exactly one form is rendered, except during a cutover from `nginx` to `gateway`, when
   `ingress.legacy.enabled` renders the `Ingress` objects beside the `Gateway` (the Ingress
-  objects name `ingress.legacy.tlsSecretName`, the Gateway keeps `ingress.tls.secretName`, so the
-  two never issue into one Secret). Either way a cert-manager TLS `Issuer`
+  objects keep `ingress.tls.secretName`, which is what DNS still reaches, and the Gateway names
+  `ingress.gateway.tlsSecretName`, so the two never issue into one Secret and the serving side
+  never waits for a new certificate). Either way a cert-manager TLS `Issuer`
   (self-signed by default) is rendered. Requires the controller + cert-manager from
   [`deploy/opentofu`](https://github.com/devicechain-io/devicechain/tree/main/deploy/opentofu).
 
@@ -637,9 +638,9 @@ generated from the schema; do not edit it by hand.
 | `ingress.gateway` | object | - | The Gateway API front end, used when controller is gateway. |
 | `ingress.gateway.className` | string | `"traefik"` | GatewayClass the controller registered (the OpenTofu gateway_class). |
 | `ingress.gateway.annotations` | object | `{}` | Annotations merged onto the Gateway, after the cert-manager issuer annotation. |
+| `ingress.gateway.tlsSecretName` | string | `""` | The certificate Secret the Gateway's https listener names; empty is ingress.tls.secretName. It must differ from ingress.tls.secretName while ingress.legacy.enabled, so two cert-manager shims never issue into one Secret. |
 | `ingress.legacy` | object | - | The cutover window from the Ingress front end to the Gateway one: with controller gateway and enabled true, the Ingress objects are rendered beside the Gateway so a cluster still running ingress-nginx keeps serving the host there. dcctl computes it; it is not set by hand. |
 | `ingress.legacy.enabled` | boolean | `false` | Also render the Ingress objects (class ingress.className). Needs controller gateway. |
-| `ingress.legacy.tlsSecretName` | string | `"devicechain-tls-legacy"` | The certificate Secret the Ingress objects name while both are rendered. It must differ from tls.secretName, which the Gateway owns, so two cert-manager shims never issue into one Secret. |
 | `ingress.host` | string | `"devicechain.local"` | Host name the Ingress objects route. The chart renders up to three: the API (https://&lt;host&gt;/api/&lt;area&gt;/graphql), the well-known discovery route for OAuth and MCP, and the web console (https://&lt;host&gt;/). |
 | `ingress.annotations` | object | `{}` | Extra annotations merged onto the Ingress objects (body size, timeouts and so on). Used when controller is nginx; with gateway they must be empty and the render refuses them. |
 | `ingress.uploadMaxBodySize` | string | `"1g"` | Largest request body the update-artifact upload route accepts at the edge, as an nginx size (for example 1g). That route is rendered on its own Ingress with this limit and request buffering off. Keep it at or above the update-management artifact ceiling. Used by the nginx front end and by the legacy Ingress set of a cutover window; a Gateway API controller of the shipped kind caps no request body. |

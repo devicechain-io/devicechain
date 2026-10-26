@@ -61,8 +61,8 @@ func TestChooseFrontEnd(t *testing.T) {
 	}{
 		{name: "a cluster install of this release has not reached: nginx", facts: frontEndFacts{clusterFrontEnd: nginxOnly},
 			want: frontEndChoice{Controller: frontEndNginx}},
-		{name: "a cluster with nothing at all: nginx", facts: frontEndFacts{},
-			want: frontEndChoice{Controller: frontEndNginx}},
+		{name: "a cluster with no controller at all is refused, not defaulted", facts: frontEndFacts{},
+			wantErr: "no ingress controller"},
 		{name: "Traefik alone: the Gateway", facts: frontEndFacts{clusterFrontEnd: traefik},
 			want: frontEndChoice{Controller: frontEndGateway}},
 		{name: "Traefik alone, local: the Gateway", facts: frontEndFacts{clusterFrontEnd: traefik}, local: true,
@@ -91,8 +91,18 @@ func TestChooseFrontEnd(t *testing.T) {
 		{name: "both, a NEW local instance, --ingress-controller gateway: the Gateway anyway",
 			facts: frontEndFacts{clusterFrontEnd: both}, local: true, override: frontEndGateway,
 			want: frontEndChoice{Controller: frontEndGateway}},
-		{name: "--ingress-controller nginx is the way back, even with Traefik alone",
+		{name: "--ingress-controller nginx is the way back while ingress-nginx is there",
+			facts: frontEndFacts{clusterFrontEnd: both, InstanceHasGateway: true}, override: frontEndNginx,
+			want: frontEndChoice{Controller: frontEndNginx}},
+		{name: "--ingress-controller nginx with Traefik alone is refused: nothing would serve it",
 			facts: frontEndFacts{clusterFrontEnd: traefik, InstanceHasGateway: true}, override: frontEndNginx,
+			wantErr: "needs ingress-nginx"},
+		{name: "--ingress-controller nginx on a cluster with no controller is refused",
+			facts: frontEndFacts{}, override: frontEndNginx, wantErr: "no ingress controller"},
+		{name: "an instance on a Gateway is not quietly moved to Ingress when Traefik is gone",
+			facts: frontEndFacts{clusterFrontEnd: nginxOnly, InstanceHasGateway: true}, wantErr: "no GatewayClass"},
+		{name: "...but --ingress-controller nginx says so, and is allowed",
+			facts: frontEndFacts{clusterFrontEnd: nginxOnly, InstanceHasGateway: true}, override: frontEndNginx,
 			want: frontEndChoice{Controller: frontEndNginx}},
 		{name: "--ingress-controller gateway with no Gateway API controller on the cluster is refused",
 			facts: frontEndFacts{clusterFrontEnd: nginxOnly, InstanceHasIngress: true}, override: frontEndGateway,
@@ -140,24 +150,24 @@ func TestFrontEndFactsFromTheObjects(t *testing.T) {
 	other := classedIngress("elsewhere", "c", "traefik")
 	own := classedIngress(InstanceNamespace("alpha"), "devicechain-api", nginxIngressClass)
 	grafana := classedIngress(monitoringNamespace, "grafana", nginxIngressClass)
-	grafana.Labels = map[string]string{"app.kubernetes.io/name": "grafana"}
+	grafana.Labels = map[string]string{"app.kubernetes.io/name": "grafana", "app.kubernetes.io/instance": monitoringReleaseName}
 
 	t.Run("an Ingress with no class is nginx's only while nginx is the default class", func(t *testing.T) {
 		notDefault := frontEndFactsFrom([]networkingv1.IngressClass{nginxClass()},
-			[]networkingv1.Ingress{byDefault}, true, false, "alpha")
+			[]networkingv1.Ingress{byDefault}, true, nil, "alpha", true)
 		if len(notDefault.NginxIngresses) != 0 {
 			t.Errorf("an Ingress naming no class was counted while nginx is not the default: %v", notDefault.NginxIngresses)
 		}
 		def := nginxClass()
 		def.Annotations = map[string]string{defaultIngressClassAnnotation: "true"}
-		isDefault := frontEndFactsFrom([]networkingv1.IngressClass{def}, []networkingv1.Ingress{byDefault}, true, false, "alpha")
+		isDefault := frontEndFactsFrom([]networkingv1.IngressClass{def}, []networkingv1.Ingress{byDefault}, true, nil, "alpha", true)
 		if !slices.Equal(isDefault.NginxIngresses, []string{"defaulted/b"}) {
 			t.Errorf("with nginx the default class, an Ingress naming none is nginx's: %v", isDefault.NginxIngresses)
 		}
 	})
 
 	f := frontEndFactsFrom([]networkingv1.IngressClass{nginxClass()},
-		[]networkingv1.Ingress{annotated, other, own, grafana}, true, true, "alpha")
+		[]networkingv1.Ingress{annotated, other, own, grafana}, true, &instanceGatewayFact{}, "alpha", true)
 	if !f.NginxClass || !f.GatewayClass || !f.InstanceHasGateway {
 		t.Errorf("facts = %+v", f)
 	}
@@ -172,7 +182,7 @@ func TestFrontEndFactsFromTheObjects(t *testing.T) {
 	// An IngressClass served by another controller is not nginx.
 	foreign := nginxClass()
 	foreign.Spec.Controller = "example.com/other"
-	if frontEndFactsFrom([]networkingv1.IngressClass{foreign}, nil, true, false, "").NginxClass {
+	if frontEndFactsFrom([]networkingv1.IngressClass{foreign}, nil, true, nil, "", true).NginxClass {
 		t.Error("an IngressClass of another controller was taken for ingress-nginx")
 	}
 }
@@ -328,7 +338,7 @@ func TestOverlayAllowlistForTheGatewayKeys(t *testing.T) {
 	for _, path := range [][]string{
 		{"ingress", "controller"},
 		{"ingress", "legacy", "enabled"},
-		{"ingress", "legacy", "tlsSecretName"},
+		{"ingress", "gateway", "tlsSecretName"},
 		{"ingress", "gateway", "annotations", "cert-manager.io/issuer"},
 		{"ingress", "gateway", "annotations", "Cert-Manager.io/cluster-issuer"},
 	} {
@@ -421,7 +431,7 @@ func TestRemovalIsRefusedWhileAnIngressOfTheNginxClassRemains(t *testing.T) {
 	classes := []networkingv1.IngressClass{nginxClass()}
 	clean := frontEndFactsFrom(classes, []networkingv1.Ingress{
 		classedIngress("dci-a", "devicechain-api", "traefik"), // another controller's: not a blocker
-	}, true, false, "")
+	}, true, nil, "", true)
 	if _, err := planClusterFrontEnd(clean.clusterFrontEnd, false, true); err != nil {
 		t.Fatalf("the control (no Ingress of nginx's class) was refused: %v", err)
 	}
@@ -429,7 +439,7 @@ func TestRemovalIsRefusedWhileAnIngressOfTheNginxClassRemains(t *testing.T) {
 	dirty := frontEndFactsFrom(classes, []networkingv1.Ingress{
 		classedIngress("dci-a", "devicechain-api", "traefik"),
 		classedIngress("dci-b", "devicechain-api", nginxIngressClass),
-	}, true, false, "")
+	}, true, nil, "", true)
 	_, err := planClusterFrontEnd(dirty.clusterFrontEnd, false, true)
 	var inUse *ErrLegacyIngressInUse
 	if !errors.As(err, &inUse) {
@@ -452,7 +462,7 @@ func TestRemovalIsRefusedWhileAnIngressOfTheNginxClassRemains(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		many = append(many, classedIngress(fmt.Sprintf("dci-%02d", i), "devicechain-api", nginxIngressClass))
 	}
-	big := frontEndFactsFrom(classes, many, true, false, "")
+	big := frontEndFactsFrom(classes, many, true, nil, "", true)
 	_, err = planClusterFrontEnd(big.clusterFrontEnd, false, true)
 	if err == nil || !strings.Contains(err.Error(), "20 Ingress") || !strings.Contains(err.Error(), "and 8 more") {
 		t.Errorf("a long refusal does not keep its count: %v", err)
@@ -581,6 +591,9 @@ func TestEveryProfileRendersEveryFrontEnd(t *testing.T) {
 				instance := fmt.Sprintf("f%02d", i+1)
 				st := p.st(instance)
 				st.IngressController, st.LegacyIngress = v.controller, v.legacy
+				if v.legacy {
+					st.GatewayTLSSecret = gatewayCutoverSecret
+				}
 				vals, _, err := releaseValues(t.Context(), ch, st, nil)
 				if err != nil {
 					t.Fatalf("composing the release values: %v", err)
@@ -654,7 +667,7 @@ func TestTheChartRefusesAMisbuiltCutover(t *testing.T) {
 	ch := chartForTest(t)
 	render := func(mutate func(ing map[string]interface{})) error {
 		st := compactState(false)
-		st.IngressController, st.LegacyIngress = frontEndGateway, true
+		st.IngressController, st.LegacyIngress, st.GatewayTLSSecret = frontEndGateway, true, gatewayCutoverSecret
 		vals, _, err := releaseValues(t.Context(), ch, st, nil)
 		if err != nil {
 			t.Fatal(err)
@@ -666,14 +679,16 @@ func TestTheChartRefusesAMisbuiltCutover(t *testing.T) {
 	if err := render(func(map[string]interface{}) {}); err != nil {
 		t.Fatalf("the control (a well-formed cutover) did not render: %v", err)
 	}
+	// The cutover renders with the Gateway on its own Secret; naming the Ingress objects' one is refused.
 	err := render(func(ing map[string]interface{}) {
-		ing["legacy"].(map[string]interface{})["tlsSecretName"] = ing["tls"].(map[string]interface{})["secretName"]
-		if ing["tls"].(map[string]interface{})["secretName"] == nil {
-			ing["legacy"].(map[string]interface{})["tlsSecretName"] = "devicechain-tls"
-		}
+		ing["gateway"] = map[string]interface{}{"tlsSecretName": "devicechain-tls"}
 	})
 	if err == nil || !strings.Contains(err.Error(), "must differ from ingress.tls.secretName") {
-		t.Errorf("a legacy Secret equal to the Gateway's was not refused by name: %v", err)
+		t.Errorf("a Gateway Secret equal to the Ingress objects' was not refused by name: %v", err)
+	}
+	err = render(func(ing map[string]interface{}) { delete(ing, "gateway") })
+	if err == nil || !strings.Contains(err.Error(), "must differ from ingress.tls.secretName") {
+		t.Errorf("a cutover with no Gateway Secret of its own was not refused by name: %v", err)
 	}
 	err = render(func(ing map[string]interface{}) { ing["controller"] = frontEndNginx })
 	if err == nil || !strings.Contains(err.Error(), "needs ingress.controller: gateway") {
@@ -752,12 +767,15 @@ func TestAnNginxInstanceUpgradesToTheGatewayWithoutCollidingWithItself(t *testin
 	if !k.hosts[host] || len(k.hosts) != 1 {
 		t.Errorf("the window serves %v, want exactly %s: values were not carried", k.hosts, host)
 	}
-	if !slices.Equal(k.gatewaySecrets, []string{"devicechain-tls"}) {
-		t.Errorf("the Gateway names %v: the instance's own certificate Secret stays the Gateway's", k.gatewaySecrets)
+	// 🔴 THE GATEWAY WAITS FOR A NEW SECRET; THE SERVING SIDE KEEPS ITS OWN. DNS still reaches the
+	// Ingress objects, so moving them onto a Secret that does not exist yet would have the live
+	// host present a default certificate until it was issued.
+	if !slices.Equal(k.gatewaySecrets, []string{gatewayCutoverSecret}) {
+		t.Errorf("the Gateway names %v, want the new %s", k.gatewaySecrets, gatewayCutoverSecret)
 	}
 	for _, s := range k.ingressSecrets {
-		if s != "devicechain-tls-legacy" {
-			t.Errorf("a legacy Ingress names Secret %q, want the distinct devicechain-tls-legacy", s)
+		if s != defaultTLSSecret {
+			t.Errorf("a legacy Ingress names Secret %q, want the instance's own %s it already serves on", s, defaultTLSSecret)
 		}
 	}
 	// The overlay carried: replicas, and the legacy upload Ingress still has its limit.
@@ -779,6 +797,12 @@ func TestAnNginxInstanceUpgradesToTheGatewayWithoutCollidingWithItself(t *testin
 		t.Errorf("a second instance on the same host was not refused: holder %q", other.HostHolder)
 	}
 
+	// The cluster now holds the Gateway the window rendered, on its own Secret.
+	readFrontEndFacts = func(context.Context, string, string) (frontEndFacts, error) {
+		return frontEndFacts{clusterFrontEnd: clusterFrontEnd{GatewayClass: true, NginxClass: true},
+			InstanceHasIngress: true, InstanceHasGateway: true, InstanceGatewaySecret: gatewayCutoverSecret}, nil
+	}
+
 	// After --drop-legacy-ingress: the Gateway alone, and the nginx-only keys retire.
 	after := previously()
 	after.DropLegacyIngress = true
@@ -795,6 +819,23 @@ func TestAnNginxInstanceUpgradesToTheGatewayWithoutCollidingWithItself(t *testin
 	}
 	if strings.Contains(afterManifest, "proxy-body-size") {
 		t.Error("an nginx body limit survived into a Gateway-only render")
+	}
+	// 🔴 THE GATEWAY KEEPS ITS OWN SECRET once the Ingress objects are gone: the old name belongs to
+	// the Certificate issued for the Ingress, and handing it back would put two owners on one.
+	if k := routingKindsOf(t, afterManifest); !slices.Equal(k.gatewaySecrets, []string{gatewayCutoverSecret}) {
+		t.Errorf("after the drop the Gateway names %v, want it to keep %s", k.gatewaySecrets, gatewayCutoverSecret)
+	}
+	// And a later plain upgrade, with the Ingress objects gone, keeps it too.
+	readFrontEndFacts = func(context.Context, string, string) (frontEndFacts, error) {
+		return frontEndFacts{clusterFrontEnd: clusterFrontEnd{GatewayClass: true, NginxClass: true},
+			InstanceHasGateway: true, InstanceGatewaySecret: gatewayCutoverSecret}, nil
+	}
+	plain := previously()
+	if err := settleFrontEnd(t.Context(), plain); err != nil {
+		t.Fatal(err)
+	}
+	if plain.LegacyIngress || plain.GatewayTLSSecret != gatewayCutoverSecret {
+		t.Errorf("a plain upgrade after the drop settled legacy=%v secret=%q", plain.LegacyIngress, plain.GatewayTLSSecret)
 	}
 	// The other direction: nothing about a rollback is lost.
 	back := previously()
@@ -860,5 +901,58 @@ func TestAnInstallWithNoControllerLeftIsRefused(t *testing.T) {
 	keep := []string{"enable_traefik=true"} // ingress-nginx kept: a skipped Traefik is a warning there
 	if err := refuseAClusterLeftWithNoController(keep, map[string]tfexec.OutputMeta{"gateway_class": meta(`null`)}); err != nil {
 		t.Errorf("a cluster that kept ingress-nginx was refused: %v", err)
+	}
+}
+
+// An Ingress is nginx's if EITHER field names an nginx class, whatever the other says; the root's
+// guard reads it the same way.
+func TestAnIngressIsNginxsIfEitherFieldSaysSo(t *testing.T) {
+	classes := map[string]bool{nginxIngressClass: true}
+	other := "traefik"
+	for name, c := range map[string]struct {
+		ing  networkingv1.Ingress
+		want bool
+	}{
+		"spec only": {networkingv1.Ingress{Spec: networkingv1.IngressSpec{IngressClassName: ptrTo(nginxIngressClass)}}, true},
+		"annotation only": {networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{
+			Annotations: map[string]string{legacyIngressClassAnnotation: nginxIngressClass}}}, true},
+		"spec says another class, annotation says nginx": {networkingv1.Ingress{
+			ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{legacyIngressClassAnnotation: nginxIngressClass}},
+			Spec:       networkingv1.IngressSpec{IngressClassName: &other}}, true},
+		"spec says nginx, annotation says another class": {networkingv1.Ingress{
+			ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{legacyIngressClassAnnotation: other}},
+			Spec:       networkingv1.IngressSpec{IngressClassName: ptrTo(nginxIngressClass)}}, true},
+		"both say another class": {networkingv1.Ingress{
+			ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{legacyIngressClassAnnotation: other}},
+			Spec:       networkingv1.IngressSpec{IngressClassName: &other}}, false},
+		"names another class while nginx is the default": {networkingv1.Ingress{
+			Spec: networkingv1.IngressSpec{IngressClassName: &other}}, false},
+	} {
+		if got := ingressServedByNginx(c.ing, classes, true); got != c.want {
+			t.Errorf("%s: %v, want %v", name, got, c.want)
+		}
+	}
+}
+
+func ptrTo(s string) *string { return &s }
+
+// Grafana's own Ingress is exempt only while this root manages monitoring, and only the release's.
+func TestGrafanasIngressIsExemptOnlyWhenThisRootOwnsIt(t *testing.T) {
+	g := classedIngress(monitoringNamespace, "grafana", nginxIngressClass)
+	g.Labels = map[string]string{"app.kubernetes.io/name": "grafana", "app.kubernetes.io/instance": monitoringReleaseName}
+	classes := []networkingv1.IngressClass{nginxClass()}
+	count := func(ing networkingv1.Ingress, managed bool) int {
+		return len(frontEndFactsFrom(classes, []networkingv1.Ingress{ing}, true, nil, "", managed).NginxIngresses)
+	}
+	if count(g, true) != 0 {
+		t.Error("the release's own Grafana Ingress blocked the removal")
+	}
+	if count(g, false) != 1 {
+		t.Error("with --no-monitoring the root owns no Grafana, and its Ingress must block")
+	}
+	foreign := g.DeepCopy()
+	foreign.Labels["app.kubernetes.io/instance"] = "somebody-elses"
+	if count(*foreign, true) != 1 {
+		t.Error("another release's Grafana Ingress was exempted")
 	}
 }

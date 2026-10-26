@@ -2264,13 +2264,14 @@ jobs:
               *) echo "ok (renders): the Gateway front end has no $banned" ;;
             esac
           done
-          CUT="$(helm template deploy/helm/devicechain             --set "instance.config.infrastructure.secrets.rootKey=$KEY"             --set "enabledFunctionalAreas={user-management,device-management,update-management}"             --set ingress.enabled=true --set ingress.controller=gateway --set ingress.legacy.enabled=true)"
-          for want in 'kind: Gateway' 'kind: HTTPRoute' 'name: devicechain-update-upload' 'name: devicechain-update-download' 'proxy-request-buffering: "off"' 'proxy-body-size: "1g"' 'enable-access-log: "false"' 'secretName: devicechain-tls-legacy'; do
+          CUT="$(helm template deploy/helm/devicechain             --set "instance.config.infrastructure.secrets.rootKey=$KEY"             --set "enabledFunctionalAreas={user-management,device-management,update-management}"             --set ingress.enabled=true --set ingress.controller=gateway --set ingress.legacy.enabled=true --set ingress.gateway.tlsSecretName=devicechain-tls-gateway)"
+          for want in 'kind: Gateway' 'kind: HTTPRoute' 'name: devicechain-update-upload' 'name: devicechain-update-download' 'proxy-request-buffering: "off"' 'proxy-body-size: "1g"' 'enable-access-log: "false"' 'secretName: devicechain-tls' 'name: devicechain-tls-gateway'; do
             case "$CUT" in
               *"$want"*) echo "ok (renders): the cutover window carries $want" ;;
               *) echo "::error::the cutover window is missing $want"; exit 1 ;;
             esac
           done
+          refuses "a Gateway and an Ingress naming one certificate Secret" "must differ from ingress.tls.secretName" --set "instance.config.infrastructure.secrets.rootKey=$KEY" --set ingress.enabled=true --set ingress.controller=gateway --set ingress.legacy.enabled=true
           refuses "legacy ingress beside the nginx front end" "needs ingress.controller: gateway"             --set "instance.config.infrastructure.secrets.rootKey=$KEY" --set ingress.enabled=true --set ingress.legacy.enabled=true
 
           renders "inline config" --set "instance.config.infrastructure.secrets.rootKey=$KEY"

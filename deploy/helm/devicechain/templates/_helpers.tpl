@@ -1290,26 +1290,30 @@ ingress.legacy.enabled, which is the cutover window in which the Gateway and the
 serve one host side by side (dcctl computes it; see ingress.legacy in values.yaml).
 
 It also refuses the two settings that would make the window misbehave rather than render them:
-legacy.enabled without the gateway front end has nothing to be "legacy" beside, and a legacy
-Ingress that names the Gateway's own certificate Secret would put two cert-manager shims on
-one Certificate, which is the race the distinct name exists to avoid.
+legacy.enabled without the gateway front end has nothing to be "legacy" beside, and a Gateway
+that names the Ingress objects' own certificate Secret would put two cert-manager shims on one
+Certificate, which is the race the distinct name exists to avoid.
+
+THE INGRESS OBJECTS KEEP ingress.tls.secretName AND THE GATEWAY TAKES THE NEW NAME. During the
+window DNS still points at the controller serving the Ingress objects, so it is the Gateway,
+which serves nothing yet, that moves onto a Secret that does not exist yet. Moving the serving
+side would have it present a default certificate until the new one was issued.
 */}}
 {{- define "devicechain.legacyIngress" -}}
 {{- $legacy := .Values.ingress.legacy -}}
 {{- if and .Values.ingress.enabled $legacy.enabled (ne .Values.ingress.controller "gateway") -}}
 {{- fail "ingress.legacy.enabled renders the Ingress objects BESIDE the Gateway and so needs ingress.controller: gateway. With controller nginx the Ingress objects are the only front end; remove ingress.legacy.enabled." -}}
 {{- end -}}
-{{- if and .Values.ingress.enabled .Values.ingress.controller (eq .Values.ingress.controller "gateway") $legacy.enabled .Values.ingress.tls.enabled (eq $legacy.tlsSecretName .Values.ingress.tls.secretName) -}}
-{{- fail (printf "ingress.legacy.tlsSecretName must differ from ingress.tls.secretName (%q) while the Gateway and the Ingress objects serve one host: both would ask cert-manager to issue into one Secret." .Values.ingress.tls.secretName) -}}
+{{- if and .Values.ingress.enabled .Values.ingress.controller (eq .Values.ingress.controller "gateway") $legacy.enabled .Values.ingress.tls.enabled (eq (include "devicechain.gatewayTlsSecret" .) .Values.ingress.tls.secretName) -}}
+{{- fail (printf "ingress.gateway.tlsSecretName must differ from ingress.tls.secretName (%q) while the Gateway and the Ingress objects serve one host: both would ask cert-manager to issue into one Secret." .Values.ingress.tls.secretName) -}}
 {{- end -}}
 {{- if and .Values.ingress.enabled (or (eq .Values.ingress.controller "nginx") $legacy.enabled) -}}true{{- end -}}
 {{- end -}}
 
 {{/*
-devicechain.legacyTlsSecret is the certificate Secret the Ingress objects name: the instance's
-own (ingress.tls.secretName) when they are the only front end, and ingress.legacy.tlsSecretName
-when the Gateway is rendered beside them and owns the instance's own.
+devicechain.gatewayTlsSecret is the certificate Secret the Gateway's https listener names:
+ingress.gateway.tlsSecretName when set, else the instance's own (ingress.tls.secretName).
 */}}
-{{- define "devicechain.legacyTlsSecret" -}}
-{{- if eq .Values.ingress.controller "gateway" -}}{{ .Values.ingress.legacy.tlsSecretName }}{{- else -}}{{ .Values.ingress.tls.secretName }}{{- end -}}
+{{- define "devicechain.gatewayTlsSecret" -}}
+{{- .Values.ingress.gateway.tlsSecretName | default .Values.ingress.tls.secretName -}}
 {{- end -}}

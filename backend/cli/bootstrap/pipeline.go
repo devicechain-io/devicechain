@@ -104,6 +104,14 @@ type State struct {
 	DropLegacyIngress         bool
 	IngressController         string
 	LegacyIngress             bool
+	// GatewayTLSSecret is the certificate Secret the Gateway names (ingress.gateway.tlsSecretName):
+	// empty for the chart's own. It is the existing Gateway's, kept for good, or the new name while
+	// an instance moves off its Ingress objects. See gatewaySecretFor.
+	GatewayTLSSecret string
+	// IngressControllerRecorded is the front-end choice the instance's declaration records
+	// (AnnotationIngressController), and IngressControllerChange says this run's flag changes it.
+	IngressControllerRecorded string
+	IngressControllerChange   bool
 	// RemoveLegacyIngress is `dcctl install --remove-legacy-ingress`, and ClusterFrontEndVars
 	// the cluster root's controller settings the install planned from what the cluster runs
 	// (planClusterFrontEnd). Only install sets them; infraVars emits them when present.
