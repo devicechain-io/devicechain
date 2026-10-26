@@ -112,10 +112,13 @@ type tenantOutcome struct {
 	// Backpressured is HTTP 503 with a Retry-After: the platform's shared gate, a clean
 	// non-accept that is NOT shed priority.
 	Backpressured int64
-	Failed        int64 // real errors / indeterminate outcomes
-	Persisted     int64 // oracle-observed persisted count over the window
-	Reached       bool  // whether persisted reached the accepted target within the quiesce timeout
-	Rate          float64
+	// ConnectRefused is a TCP connect the peer refused: the ingress unreachable, a clean
+	// non-accept that is NOT shed priority either.
+	ConnectRefused int64
+	Failed         int64 // real errors / indeterminate outcomes
+	Persisted      int64 // oracle-observed persisted count over the window
+	Reached        bool  // whether persisted reached the accepted target within the quiesce timeout
+	Rate           float64
 	// Identity is the tenant's identity reconciliation: every accepted event stored
 	// once, every refused (shed or backpressured) event absent.
 	Identity IdentityReport `json:"identity"`
@@ -175,17 +178,18 @@ func runOneTenant(ctx context.Context, role string, hs *sim.Handshake, p Profile
 func outcomeOf(role, tenant string, devices int, snap sim.Snapshot, qr QuiesceResult, id IdentityReport) *tenantOutcome {
 	l := ledgerOf(snap)
 	return &tenantOutcome{
-		Identity:      id,
-		Role:          role,
-		Tenant:        tenant,
-		Devices:       devices,
-		Accepted:      l.Accepted,
-		Shed:          l.Shed,
-		Backpressured: l.Backpressured,
-		Failed:        l.Failed,
-		Persisted:     qr.Persisted,
-		Reached:       qr.Reached,
-		Rate:          l.AchievedRatePS,
+		Identity:       id,
+		Role:           role,
+		Tenant:         tenant,
+		Devices:        devices,
+		Accepted:       l.Accepted,
+		Shed:           l.Shed,
+		Backpressured:  l.Backpressured,
+		ConnectRefused: l.ConnectRefused,
+		Failed:         l.Failed,
+		Persisted:      qr.Persisted,
+		Reached:        qr.Reached,
+		Rate:           l.AchievedRatePS,
 	}
 }
 
@@ -281,8 +285,8 @@ func (r *ContentionReport) Human() string {
 	}
 	fmt.Fprintf(&b, "contention %s — %s, seed %d — %s\n", verdict, r.Manifest, r.Seed, regime)
 	line := func(o tenantOutcome) {
-		fmt.Fprintf(&b, "  %-4s %q: accepted %d, shed %d, backpressured %d, failed %d, persisted %d (%.0f ev/s)\n",
-			o.Role, o.Tenant, o.Accepted, o.Shed, o.Backpressured, o.Failed, o.Persisted, o.Rate)
+		fmt.Fprintf(&b, "  %-4s %q: accepted %d, shed %d, backpressured %d, connect-refused %d, failed %d, persisted %d (%.0f ev/s)\n",
+			o.Role, o.Tenant, o.Accepted, o.Shed, o.Backpressured, o.ConnectRefused, o.Failed, o.Persisted, o.Rate)
 		id := o.Identity
 		fmt.Fprintf(&b, "       identity: missing %d, duplicated %d, unexpected %d (refused stored %d); ambiguous %d; observed until %.0fs after the drive\n",
 			id.Missing, id.DuplicateKeys, id.Unexpected, id.RefusedStored, id.Ambiguous, id.ObservedUntilAfterDriveSecs)
@@ -335,10 +339,19 @@ func classifyContention(cfg ContentionConfig, gold, shed *tenantOutcome) []Invar
 	// measured the platform being behind, not the mechanism. At floor >= 1 the shed
 	// probe being backpressured too does not void the verdict: gold-never-shed and
 	// shed-mechanism-engaged read 429s only, so its 503s cannot satisfy engagement.
-	add(InvContentionUnbackpressured, gold.Backpressured == 0 && (cfg.ExpectFloor >= 1 || shed.Backpressured == 0),
-		fmt.Sprintf("gold %q was refused %d and shed %q %d time(s) by the platform's backpressure (503 with Retry-After) "+
-			"at floor %d — the shared gate refuses every tenant alike, so this run cannot attribute those refusals to shed "+
-			"priority; re-run on a stack that is keeping up", gold.Tenant, gold.Backpressured, shed.Tenant, shed.Backpressured, cfg.ExpectFloor))
+	// A refused connect is the same shape: the ingress was unreachable, which says nothing
+	// about shed priority, for either tenant at any floor.
+	unreachable := gold.ConnectRefused > 0 || shed.ConnectRefused > 0
+	backpressured := gold.Backpressured != 0 || (cfg.ExpectFloor < 1 && shed.Backpressured != 0)
+	detail := fmt.Sprintf("gold %q was refused %d and shed %q %d time(s) by the platform's backpressure (503 with Retry-After) "+
+		"at floor %d -- the shared gate refuses every tenant alike, so this run cannot attribute those refusals to shed "+
+		"priority; re-run on a stack that is keeping up", gold.Tenant, gold.Backpressured, shed.Tenant, shed.Backpressured, cfg.ExpectFloor)
+	if unreachable {
+		detail = fmt.Sprintf("gold %q had %d and shed %q %d connect(s) refused (nothing listening at the ingress) -- the ingress "+
+			"was unreachable, so this run cannot attribute any refusal to shed priority; re-run against a reachable ingress",
+			gold.Tenant, gold.ConnectRefused, shed.Tenant, shed.ConnectRefused)
+	}
+	add(InvContentionUnbackpressured, !unreachable && !backpressured, detail)
 
 	// The promise: gold is NEVER shed, at any floor.
 	add(InvGoldNeverShed, gold.Shed == 0,

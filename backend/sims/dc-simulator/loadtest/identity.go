@@ -226,12 +226,12 @@ func ReconcileIdentity(led sim.IdentitySnapshot, stored storedIdentities, tenant
 	if led.All.Accepted != drive.Emitted {
 		inconclusive("the ledger and the driver's counters disagree: ledger accepted %d, driver accepted %d", led.All.Accepted, drive.Emitted)
 	}
-	if led.All.Refused < drive.Shed+drive.Backpressured {
-		inconclusive("the ledger filed %d refusals, fewer than the driver's %d shed and %d backpressured", led.All.Refused, drive.Shed, drive.Backpressured)
+	if led.All.Refused < drive.Shed+drive.Backpressured+drive.ConnectRefused {
+		inconclusive("the ledger filed %d refusals, fewer than the driver's %d shed, %d backpressured and %d connect-refused", led.All.Refused, drive.Shed, drive.Backpressured, drive.ConnectRefused)
 	}
-	if led.All.Refused+led.All.Ambiguous > drive.Shed+drive.Backpressured+drive.Failed {
-		inconclusive("the ledger filed %d refused and %d ambiguous, more than the driver's %d shed, %d backpressured and %d failed",
-			led.All.Refused, led.All.Ambiguous, drive.Shed, drive.Backpressured, drive.Failed)
+	if led.All.Refused+led.All.Ambiguous > drive.Shed+drive.Backpressured+drive.ConnectRefused+drive.Failed {
+		inconclusive("the ledger filed %d refused and %d ambiguous, more than the driver's %d shed, %d backpressured, %d connect-refused and %d failed",
+			led.All.Refused, led.All.Ambiguous, drive.Shed, drive.Backpressured, drive.ConnectRefused, drive.Failed)
 	}
 	if led.Unparsed > 0 {
 		inconclusive("%d sent occurredTime value(s) did not parse back", led.Unparsed)

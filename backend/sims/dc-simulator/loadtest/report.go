@@ -38,8 +38,13 @@ type EmitLedger struct {
 	// (HTTP 503 with a Retry-After). Like a shed it never entered the pipeline, but
 	// it is the platform being behind for every tenant, not the tenant's ceiling.
 	Backpressured int64 `json:"backpressured"`
-	Failed        int64 `json:"failed"`
-	Ticks         int64 `json:"ticks"`
+	// ConnectRefused counts emits whose TCP connect was refused (nothing listening at the
+	// ingress). No request was written, so they are provably absent and do not fail a clean
+	// drive, but they are the ingress being unreachable, which neither a shed nor
+	// backpressure is.
+	ConnectRefused int64 `json:"connectRefused"`
+	Failed         int64 `json:"failed"`
+	Ticks          int64 `json:"ticks"`
 }
 
 // ledgerOf is the one reader of a driver snapshot into a report's ledger.
@@ -49,6 +54,7 @@ func ledgerOf(s sim.Snapshot) EmitLedger {
 		Accepted:       s.Emitted,
 		Shed:           s.Shed,
 		Backpressured:  s.Backpressured,
+		ConnectRefused: s.ConnectRefused,
 		Failed:         s.Failed,
 		Ticks:          s.Ticks,
 	}
@@ -57,8 +63,8 @@ func ledgerOf(s sim.Snapshot) EmitLedger {
 // outcome renders the ledger's counts — shared by every report's Human(), so no
 // report's log line can drop a refusal its JSON carries.
 func (l EmitLedger) outcome() string {
-	return fmt.Sprintf("accepted %d, shed %d, backpressured %d, failed %d",
-		l.Accepted, l.Shed, l.Backpressured, l.Failed)
+	return fmt.Sprintf("accepted %d, shed %d, backpressured %d, connect-refused %d, failed %d",
+		l.Accepted, l.Shed, l.Backpressured, l.ConnectRefused, l.Failed)
 }
 
 // backgroundRefusals describes a background drive's clean refusals — shed at the
@@ -70,8 +76,8 @@ func backgroundRefusals(snap sim.Snapshot) (desc string, ok bool) {
 	if snap.Refused() == 0 {
 		return "", false
 	}
-	return fmt.Sprintf("refused %d time(s) at the ingress (%d shed at the per-tenant ingest ceiling, %d backpressured by the platform)",
-		snap.Refused(), snap.Shed, snap.Backpressured), true
+	return fmt.Sprintf("refused %d time(s) at the ingress (%d shed at the per-tenant ingest ceiling, %d backpressured by the platform, %d connects refused)",
+		snap.Refused(), snap.Shed, snap.Backpressured, snap.ConnectRefused), true
 }
 
 // DriveStats is the perf-side accounting of what the driver actually applied —

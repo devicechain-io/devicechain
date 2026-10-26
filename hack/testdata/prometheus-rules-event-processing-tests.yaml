@@ -456,6 +456,8 @@ tests:
         values: '40000x20'
       - series: 'nats_consumer_num_pending{namespace="dci-other", pod="dc-nats-1", stream_name="other_resolved-events", consumer_name="other_event-processing_resolved-events_ackfloor"}'
         values: '900000x20'
+      - series: 'nats_consumer_num_pending{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_resolved-events", consumer_name="Xk3pQ9aZ"}'
+        values: '900000x20'
     alert_rule_test:
       - eval_time: 20m
         alertname: DetectConsumerBacklogHigh

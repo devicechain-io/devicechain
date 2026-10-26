@@ -933,7 +933,8 @@ for path in list(dashboards) + list(rule_files):
 # backpressure_unread_ratio (exported by the stream's WRITERS), and mqtt_failclosed_durable_* (sampled
 # from the MQTT gateway's own store, not a platform stream a reader drains).
 #
-# It must carry the broker's own count of the same quantity after an `or`: nats_consumer_num_pending
+# It must carry the broker's own count of the same quantity AND THE SAME AREA after an `or`, built from the
+# exporter's own labels only: nats_consumer_num_pending
 # for pending, nats_consumer_num_ack_pending for ack-pending, both plus nats_stream_limit_* for the
 # ratio. In a rule file the chart's helpers (devicechain.brokerPending, devicechain.brokerUnreadRatio)
 # stand for those. On a dashboard a panel is also covered when ANOTHER of its targets reads the broker
@@ -945,31 +946,128 @@ BACKLOG_READER = {
     "ack": re.compile(r"_jetstream_consumer_ack_pending_messages\b|_detect_consumer_ack_pending\b"),
     "ratio": re.compile(r"_jetstream_consumer_unread_ratio\b"),
 }
-BACKLOG_BROKER = {
-    "pending": re.compile(r"nats_consumer_num_pending\b|devicechain\.broker(?:Pending|UnreadRatio)\b"),
-    "ack": re.compile(r"nats_consumer_num_ack_pending\b|devicechain\.brokerUnreadRatio\b"),
-    "ratio": re.compile(r"nats_stream_limit_|devicechain\.brokerUnreadRatio\b"),
-}
 READER_ONLY = re.compile(r"#\s*reader-only\b")
 OR_WORD = re.compile(r"\bor\b")
+# The label keys the message broker's exporter puts on its consumer series. A selector keyed on
+# anything else (a reader-side label such as `stream` or `durable`) matches nothing: a dead arm.
+BROKER_LABELS = {"__name__", "stream_name", "consumer_name", "namespace", "is_consumer_leader", "pod", "job"}
+BROKER_NAME = re.compile(r"nats_consumer_num_(ack_)?pending\b")
+LABEL_MATCH = re.compile(r'([A-Za-z_][A-Za-z0-9_]*)\s*(=~|!~|!=|=)\s*"((?:[^"\\]|\\.)*)"')
+DURABLE_AREA = re.compile(r"^\.[+*]_([a-z0-9-]+)_")
+READER_NAME_AREA = re.compile(r"devicechain_([a-z0-9]+)_(?:jetstream|detect)_")
+HELPER_INCLUDE = re.compile(r'include\s+"devicechain\.(brokerPending|brokerUnreadRatio)"\s*\(dict((?:[^()"]|"[^"]*")*)\)')
 
-def backlog_kinds(expr):
-    return [k for k, rx in BACKLOG_READER.items() if rx.search(expr)]
+def _norm_area(text):
+    return text.replace("-", "").lower() if text else None
 
-def broker_kinds(expr):
-    return {k for k, rx in BACKLOG_BROKER.items() if rx.search(expr)}
+def _enclosing_selector(expr, pos, end):
+    """The {...} selector holding position pos (a by-name selector), else the one right after it."""
+    depth, i = 0, pos - 1
+    while i >= 0:
+        c = expr[i]
+        if c == "}":
+            depth += 1
+        elif c == "{":
+            if depth == 0:
+                break
+            depth -= 1
+        i -= 1
+    if i >= 0:
+        depth, j = 0, i
+        while j < len(expr):
+            if expr[j] == "{":
+                depth += 1
+            elif expr[j] == "}":
+                depth -= 1
+                if depth == 0:
+                    return expr[i:j + 1]
+            j += 1
+        return expr[i:]
+    m = re.compile(r"\s*\{").match(expr, end)
+    return expr[m.end() - 1:_skip_selector(expr, m.end() - 1)] if m else ""
 
-def uncovered_kinds(expr):
-    """The reader-side backlog kinds expr selects without a broker arm of the same kind after an `or`."""
+def reader_occurrences(expr):
+    """[(kind, start, area)] for every reader-side backlog selector in expr; area None = every area."""
+    found = []
+    for kind, rx in BACKLOG_READER.items():
+        for m in rx.finditer(expr):
+            sel = _enclosing_selector(expr, m.start(), m.end())
+            area = None
+            for key, op, val in LABEL_MATCH.findall(sel):
+                if key == "durable" and op == "=~":
+                    dm = DURABLE_AREA.match(val)
+                    area = _norm_area(dm.group(1)) if dm else "?" + val
+            if area is None:
+                name = expr[max(0, expr.rfind("devicechain_", 0, m.end())):m.end()]
+                am = READER_NAME_AREA.match(name)
+                if am:
+                    area = _norm_area(am.group(1))
+            found.append((kind, m.start(), area))
+    return found
+
+def broker_selectors(expr):
+    """[(kinds, start, area, problem)] for every broker-side consumer selector or chart helper in expr."""
+    found = []
+    for m in BROKER_NAME.finditer(expr):
+        sel = _enclosing_selector(expr, m.start(), m.end())
+        kinds = set()
+        for nm in BROKER_NAME.finditer(sel if "__name__" in sel else m.group(0)):
+            kinds.add("ack" if nm.group(1) else "pending")
+        problem, consumer = None, None
+        for key, op, val in LABEL_MATCH.findall(sel):
+            if key not in BROKER_LABELS:
+                problem = "label `%s` is not one the broker exporter sets (%s)" % (key, ", ".join(sorted(BROKER_LABELS - {"__name__"})))
+            if key == "consumer_name" and op == "=~":
+                consumer = val
+        area = None
+        if consumer is not None:
+            dm = DURABLE_AREA.match(consumer)
+            area = _norm_area(dm.group(1)) if dm else "?" + consumer
+        found.append((kinds, m.start(), area, problem, consumer is not None))
+    for m in HELPER_INCLUDE.finditer(expr):
+        dur = re.search(r'"durable"\s+"([^"]*)"', m.group(2))
+        kinds = {"pending"} if m.group(1) == "brokerPending" else {"pending", "ack"}
+        area = None
+        if dur:
+            dm = DURABLE_AREA.match(dur.group(1))
+            area = _norm_area(dm.group(1)) if dm else "?" + dur.group(1)
+        found.append((kinds, m.start(), area, None, bool(dur)))
+    return found
+
+def _arm_serves(kind, rarea, arm, expr, after):
+    kinds, _pos, barea, problem, has_consumer = arm
+    if problem:
+        return False
+    if kind == "ratio":
+        if not {"pending", "ack"} <= kinds or not ("nats_stream_limit_" in expr[after:] or "brokerUnreadRatio" in expr[after:]):
+            return False
+    elif kind not in kinds:
+        return False
+    if rarea is None:
+        return True
+    return has_consumer and barea == rarea
+
+def arm_problems(expr, beside=()):
+    """Why each reader-side backlog selector in expr has no working broker arm; [] when all do."""
     if READER_ONLY.search(expr):
         return []
+    arms = broker_selectors(expr)
     out = []
-    for kind in backlog_kinds(expr):
-        first = BACKLOG_READER[kind].search(expr).start()
-        tail = expr[first:]
-        arm = [m for m in OR_WORD.finditer(tail) if kind in broker_kinds(tail[m.end():])]
-        if not arm:
-            out.append(kind)
+    for kind, start, rarea, in reader_occurrences(expr):
+        label = "%s%s" % (kind, " (%s)" % rarea if rarea else "")
+        ors = [m.end() for m in OR_WORD.finditer(expr, start)]
+        served = any(_arm_serves(kind, rarea, a, expr, a[1]) for a in arms if any(o <= a[1] for o in ors))
+        if not served:
+            served = any(_arm_serves(kind, rarea, a, expr, 0) for a in beside)
+        if served:
+            continue
+        why = "no broker arm of that kind and area after an `or`"
+        bad = [a[3] for a in arms if a[3]]
+        if bad:
+            why = bad[0]
+        elif any(kind in a[0] for a in arms):
+            why = "the broker arm names a different area than the reader"
+        out.append("%s: %s" % (label, why))
     return out
 
 def _panels(nodes):
@@ -978,13 +1076,15 @@ def _panels(nodes):
         yield from _panels(p.get("panels", []))
 
 BACKLOG_ADVICE = (
-    "    selects a backlog that only the READING service exports, with no broker-side arm. While that\n"
-    "    service is down its series vanish and the panel reads \"No data\" (an alert stays silent) just\n"
+    "    selects a backlog that only the READING service exports, without a working broker-side arm. While\n"
+    "    that service is down its series vanish and the panel reads \"No data\" (an alert stays silent) just\n"
     "    when the backlog is building. Add the broker's own count after an `or`, labelled to match:\n"
     "    ... or max by (durable) (label_replace(nats_consumer_num_pending{namespace=\"$namespace\",\n"
-    "    stream_name=~\"${instance}_.+\", consumer_name=~\"<durable>\"}, \"durable\", \"$1\", \"consumer_name\", \"(.+)\")).\n"
-    "    (num_ack_pending for an ack-pending gauge; a rule file uses the devicechain.brokerPending helper.)\n"
-    "    If the expression truly needs a counter only the reader has, end it with `# reader-only: <why>`.")
+    "    stream_name=~\"${instance}_.+\", consumer_name=~\".+_<same area>_.+\"}, \"durable\", \"$1\", \"consumer_name\", \"(.+)\")).\n"
+    "    The arm must be of the same kind (num_ack_pending for an ack-pending gauge), name the SAME area as\n"
+    "    the reader, and use only the broker's labels (stream_name, consumer_name, namespace); a rule file\n"
+    "    uses the devicechain.brokerPending helper. If the expression truly needs a counter only the\n"
+    "    reader has, end it with `# reader-only: <why>`.")
 backlog_checked = 0
 for path in dashboards:
     try:
@@ -994,29 +1094,29 @@ for path in dashboards:
         continue  # reported as unparseable above
     for panel in _panels(board.get("panels", [])):
         targets = [t.get("expr", "") for t in panel.get("targets", []) if isinstance(t.get("expr"), str)]
-        beside = set()
-        for t in targets:
-            beside |= broker_kinds(t)
         for expr in targets:
-            if not backlog_kinds(expr):
+            if not reader_occurrences(expr):
                 continue
             backlog_checked += 1
-            missing = [k for k in uncovered_kinds(expr) if k not in beside]
-            if missing:
-                problems.append("%s panel %s (%s): %s\n    %s\n%s" % (
+            # A reader line drawn beside the broker's own line (another target of the panel) is covered
+            # by that line, but only for the same kind and area.
+            beside = [a for other in targets if other is not expr for a in broker_selectors(other)]
+            bad = arm_problems(expr, beside)
+            if bad:
+                problems.append("%s panel %s (%s)\n    %s\n    %s\n%s" % (
                     os.path.relpath(path, root), panel.get("id"), panel.get("title"),
-                    "/".join(missing), expr[:160], BACKLOG_ADVICE))
+                    "; ".join(bad), expr[:160], BACKLOG_ADVICE))
 for path in rule_files:
     with open(path, "rb") as fh:
         text = fh.read().decode("utf-8", "replace")
     for line_no, expr in _rule_expr_blocks(text):
-        if not backlog_kinds(expr):
+        if not reader_occurrences(expr):
             continue
         backlog_checked += 1
-        missing = uncovered_kinds(expr)
-        if missing:
-            problems.append("%s:%d (%s)\n    %s\n%s" % (
-                os.path.relpath(path, root), line_no, "/".join(missing), " ".join(expr.split())[:160], BACKLOG_ADVICE))
+        bad = arm_problems(expr)
+        if bad:
+            problems.append("%s:%d\n    %s\n    %s\n%s" % (
+                os.path.relpath(path, root), line_no, "; ".join(bad), " ".join(expr.split())[:160], BACKLOG_ADVICE))
 if backlog_checked == 0:
     sys.exit("found no reader-side backlog target to check -- this rule would pass over nothing")
 
@@ -1424,10 +1524,21 @@ EOF
           "expr": "sum(kube_pod_container_status_restarts_total{namespace=\"$namespace\"}) + max(go_goroutines{namespace=\"$namespace\"}) + max(container_memory_working_set_bytes) + max(process_open_fds) + max(nats_varz_cpu) + min(cnpg_collector_up) + max(kubelet_volume_stats_used_bytes) + max(barman_cloud_cloudnative_pg_io_last_available_backup_timestamp)"
         },
         {
-          "expr": "max(devicechain_selftestarea_detect_consumer_pending{namespace=\"$namespace\"}) or max(nats_consumer_num_pending{namespace=\"$namespace\", consumer_name=~\".+_probe_.+\"})"
+          "expr": "max(devicechain_selftestarea_detect_consumer_pending{namespace=\"$namespace\"}) or max(nats_consumer_num_pending{namespace=\"$namespace\", consumer_name=~\".+_self-test-area_.+\"})"
         },
         {
           "expr": "devicechain_selftestarea_sum_seconds{quantile=\"0.99\"} + histogram_quantile(0.5, sum by (le) (rate(devicechain_selftestarea_loop_duration_seconds_bucket[5m]))) + rate(devicechain_selftestarea_loop_messages_total[5m]) + rate(devicechain_selftestarea_sweep_pass_duration_seconds_count[5m]) + histogram_quantile(0.5, sum by (le) (rate({__name__=~\"devicechain_[a-z0-9]+_core_lat_seconds_bucket\"}[5m]))) # absent-ok: resolver fixture"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "max(devicechain_selftestarea_detect_consumer_pending{namespace=\"$namespace\"})"
+        },
+        {
+          "expr": "max(nats_consumer_num_pending{namespace=\"$namespace\", consumer_name=~\".+_self-test-area_.*\"})"
         }
       ]
     },
@@ -1452,7 +1563,7 @@ spec:
           labels:
             devicechain_instance: dc
         - alert: ProbeBacklog
-          expr: (max(devicechain_selftestarea_detect_consumer_pending{namespace="dc"}) or max(nats_consumer_num_pending{consumer_name=~".+_probe_.+"})) > 100
+          expr: (max(devicechain_selftestarea_detect_consumer_pending{namespace="dc"}) or max(nats_consumer_num_pending{consumer_name=~".+_self-test-area_.+"})) > 100
           labels:
             devicechain_instance: dc
         - alert: ProbeGuardedSum
@@ -1584,10 +1695,23 @@ PY
   # Cases 2w -- A BACKLOG ONLY THE READER EXPORTS. The clean fixture carries the reader's gauge
   # with its broker arm (dashboard and rule) and once more marked `# reader-only`, and Case 0
   # passed over all of them (the accepted half). Each defect below is planted ALONE.
-  absentcase "$dash/probe.json" ' or max(nats_consumer_num_pending{namespace=\"$namespace\", consumer_name=~\".+_probe_.+\"})' ''     'a dashboard backlog target with no broker arm'
-  absentcase "$dash/probe.json" 'nats_consumer_num_pending{namespace=\"$namespace\"' 'nats_consumer_num_ack_pending{namespace=\"$namespace\"'     'a dashboard backlog target whose broker arm is the wrong kind (ack-pending for pending)'
+  absentcase "$dash/probe.json" ' or max(nats_consumer_num_pending{namespace=\"$namespace\", consumer_name=~\".+_self-test-area_.+\"})' ''     'a dashboard backlog target with no broker arm'
+  absentcase "$dash/probe.json" 'nats_consumer_num_pending{namespace=\"$namespace\", consumer_name=~\".+_self-test-area_.+\"}' 'nats_consumer_num_ack_pending{namespace=\"$namespace\", consumer_name=~\".+_self-test-area_.+\"}'     'a dashboard backlog target whose broker arm is the wrong kind (ack-pending for pending)'
   absentcase "$dash/probe.json" '{namespace=\"$namespace\"}) # reader-only: fixture needs a counter only the reader has' '{namespace=\"$namespace\"})'     'a dashboard backlog target that lost its reader-only marker'
-  absentcase "$tmpl/prometheusrule-probe.yaml" ' or max(nats_consumer_num_pending{consumer_name=~".+_probe_.+"})' ''     'an alert over a reader-side backlog with no broker arm'
+  absentcase "$tmpl/prometheusrule-probe.yaml" ' or max(nats_consumer_num_pending{consumer_name=~".+_self-test-area_.+"})' ''     'an alert over a reader-side backlog with no broker arm'
+
+  # ...and the arm must WORK, not merely exist: same area as the reader, labels the broker exporter
+  # sets, on every reader selector, and a line beside the reader counts only for its own area.
+  absentcase "$dash/probe.json" 'consumer_name=~\".+_self-test-area_.+\"})"' 'consumer_name=~\".+_self-tset-area_.+\"})"' \
+    'a dashboard broker arm naming a misspelled area'
+  absentcase "$dash/probe.json" '{namespace=\"$namespace\", consumer_name=~\".+_self-test-area_.+\"})"' '{stream=~\"x\", consumer_name=~\".+_self-test-area_.+\"})"' \
+    'a dashboard broker arm keyed on a label the broker does not set (stream)'
+  absentcase "$dash/probe.json" 'consumer_name=~\".+_self-test-area_.+\"})"' 'consumer_name=~\".+_self-test-area_.+\"}) + max(devicechain_selftestarea_detect_consumer_pending{namespace=\"$namespace\"})"' \
+    'a dashboard with a second reader selector the arm does not cover'
+  absentcase "$dash/probe.json" 'consumer_name=~\".+_self-test-area_.*\"})"' 'consumer_name=~\".+_other-area_.*\"})"' \
+    "a reader line drawn beside another area's broker line"
+  absentcase "$tmpl/prometheusrule-probe.yaml" 'consumer_name=~".+_self-test-area_.+"})) > 100' 'consumer_name=~".+_self-tset-area_.+"})) > 100' \
+    'an alert whose broker arm names a misspelled area'
 
   # Cases 2x -- SERIES THAT ARE NOT DEVICECHAIN'S, one misspelling per prefix family, each alone.
   # The clean fixture names one pinned series of every family and passed Case 0, so the accepted half
@@ -1977,7 +2101,7 @@ FIXTURE
   rm -f "$chart/dashboards/unscoped-board.json"
   echo "  ok: a dashboard with no instance variable is refused by the template"
 
-  echo "self-test passed: 81 defects, each planted alone, each caught; a clean tree and chart pass"
+  echo "self-test passed: 86 defects, each planted alone, each caught; a clean tree and chart pass"
   exit 0
 fi
 
