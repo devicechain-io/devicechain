@@ -2119,7 +2119,7 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 
 ### v0.25.2 之后的版本 {#self-registration-upgrade}
 
-本节写在它所描述的版本之前，因此标题中的版本号留待该版本来命名。它适用于从 `v0.25.2` 或更早版本升级。该版本带来[设备自注册](../guides/device-self-registration.md)，将安装从 ingress-nginx 迁移到 Traefik，并移除 MQTT 正文凭据的过渡性剥离。device-management 新增一个会自动运行的数据库迁移，[自动注册配置](#self-registration-profiles)下的 API 变更对任何用脚本管理自动注册配置的做法都是破坏性的。升级前需要采取行动的有两项：如果你手工设置了[正文凭据键](#after-v0252-body-credential)，要先删除它；如果你使用 ACME 证书签发者，要先调整[它的求解器](#after-v0252-front-end)。
+本节写在它所描述的版本之前，因此标题中的版本号留待该版本来命名。它适用于从 `v0.25.2` 或更早版本升级。该版本带来[设备自注册](../guides/device-self-registration.md)，将安装从 ingress-nginx 迁移到 Traefik，并移除 MQTT 正文凭据的过渡性剥离。device-management 新增一个会自动运行的数据库迁移，[自动注册配置](#self-registration-profiles)下的 API 变更对任何用脚本管理自动注册配置的做法都是破坏性的。升级前需要采取行动的是：如果你手工设置了[正文凭据键](#after-v0252-body-credential)，要先删除它。如果你使用 ACME 证书签发者，它的求解器需要在稍后、[DNS 迁移之后](#after-v0252-front-end)调整。
 
 在此之前，自动注册配置可以创建和编辑，但没有任何东西会读取它：没有设备能通过它注册。因此，没有任何昨天还能工作的东西会因为某个设备群在用它而停止工作。变化的是配置的创建方式以及它的要求。
 
@@ -2148,12 +2148,12 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 新安装通过 Traefik 和 Gateway API 路由提供主机服务，没有 `ingress-nginx` 的集群也不再安装它。**现有集群会保留 `ingress-nginx` 并继续让它提供服务，同时在它旁边增加 Traefik。** 在你迁移之前，主机不会有任何变化：
 
 - `dcctl install` 在 `ingress-nginx` 旁边安装 Traefik 和 Gateway API 定义，使用自己的负载均衡器和地址。
-- `dcctl upgrade` 为每个实例创建 Gateway 和路由，并且只要集群上有 `ingress-nginx`，就在它们旁边保留实例的 Ingress 对象。两者使用不同的证书：Ingress 对象保留 `devicechain-tls`，Gateway 使用 `devicechain-tls-gateway`。升级最多等待五分钟，直到 Gateway 的证书为 `Ready`。
+- `dcctl upgrade` 为每个实例创建 Gateway 和路由，并且只要集群上有 `ingress-nginx`，就在它们旁边保留实例的 Ingress 对象。两者使用不同的证书：Ingress 对象保留 `devicechain-tls`，Gateway 使用 `devicechain-tls-gateway`。升级会检查 Gateway 的证书：在迁移窗口内，证书尚未 `Ready` 时它会给出警告并继续，而 `--drop-legacy-ingress` 会拒绝执行，直到它 `Ready`。
 - 你在自己选定的时间把 DNS 迁移到 Traefik 的地址。然后 `dcctl upgrade --drop-legacy-ingress` 停止生成 Ingress 对象，`dcctl install --remove-legacy-ingress` 移除 `ingress-nginx`。只要还有 Ingress 对象指向其类，移除就会被拒绝。
 - 只要 `ingress-nginx` 仍已安装，`dcctl upgrade --ingress-controller nginx` 就能把实例放回它上面。该选择会被记录，并由之后的升级保留；`--ingress-controller auto` 将其清除。
-- **通过 `nginx` Ingress 类解决 HTTP-01 的 ACME 签发者，在 `ingress-nginx` 被移除后续期会失败。** 请先为它添加 `gatewayHTTPRoute` 求解器。
+- **通过 `nginx` Ingress 类解决 HTTP-01 的 ACME 签发者在迁移窗口内继续可用，`ingress-nginx` 被移除后续期会失败。** 在 DNS 指向 Traefik 之前保持原样，之后在 `--drop-legacy-ingress` 和 `--remove-legacy-ingress` 之前为它添加 `gatewayHTTPRoute` 求解器。更早设置会失败。DNS-01 求解器全程可用。
 - 在 AWS 上，经典负载均衡器会向 Traefik 隐藏客户端地址，而安装所提供的 NLB 变量只覆盖 `ingress-nginx`。
-- 在本地集群上，`ingress-nginx` 保留节点的 80 和 443 端口，直到 `--remove-legacy-ingress` 把它们交给 Traefik。全新的本地集群从一开始就由 Traefik 占用这些端口。
+- 在本地集群上没有 DNS 可迁移：浏览器访问的是占用节点 80 和 443 端口的那个控制器。`ingress-nginx` 占用它们，直到 `--remove-legacy-ingress` 把端口交给 Traefik，所以请连续运行 `--drop-legacy-ingress` 和移除操作：两者之间主机不响应。全新的本地集群从一开始就由 Traefik 占用这些端口。
 
 每一步、命令、你可能看到的拒绝信息以及回滚方法，都在[将现有安装迁移到 Traefik](./ingress-cutover.md)中。新增的标志见 [`dcctl` 参考](../reference/dcctl.md)。
 
@@ -2161,12 +2161,14 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 
 只要集群上有 `ingress-nginx`，`dcctl install` 现在就会在它的 LoadBalancer Service 上设置 `externalTrafficPolicy: Local`。否则互联网上的每个设备都会按节点共用一份配额。见[客户端地址与受信任代理](./bootstrap.md#trusted-proxies)。这个更改在生效的那一刻有代价：
 
-- 一旦负载均衡器的健康检查把没有运行控制器 Pod 的节点标记为不健康，它就不再向这些节点发送流量。**预计发往这些节点的流量会中断约 25 秒。**
+- 在负载均衡器的健康检查把没有运行控制器 Pod 的节点标记为不健康之前，它仍会向这些节点发送流量。**预计发往这些节点的流量会一直中断到那时（几十秒）。**
 - 非 HA 安装只运行一个控制器副本，所以每次控制器滚动更新都会有一次短暂中断。HA 安装运行两个，并分散到不同节点。
 
 #### 自签名实例保留旧证书 {#after-v0252-self-signed}
 
 提供自签名证书的实例，现在由 Chart 在实例命名空间中创建的证书颁发机构来签发证书，客户端可以通过证书 Secret 中的 `ca.crt` 信任该机构（见[TLS、标志与笔记本安装](./bootstrap.md#install-tls-and-flags)）。现有实例**在下次续期之前保留原来的叶子证书**。删除 `devicechain-tls` Secret，即可立即用该机构重新签发；客户端随后需要重新从该 Secret 获取 `ca.crt`。
+
+已迁移到 Gateway 的实例会一直使用 `devicechain-tls-gateway`，其中是同一机构签发的新叶子证书。迁移之后，客户端应从 `devicechain-tls-gateway` 获取 `ca.crt`。
 
 #### MQTT 正文凭据的剥离被移除 {#after-v0252-body-credential}
 
@@ -2179,7 +2181,7 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 
 #### 升级期间 MQTT 消息可能丢失 {#after-v0252-mqtt-roll}
 
-升级会逐个重启平台代理的服务器。在一次对本次升级的演练中，集群部署在云上、有三个服务器、以 `--ha` 安装，MQTT 设备全程以每秒 300 条的速度发送 QoS 1 消息，**代理已确认的 448,346 条消息中有 23 条从未被存储**。它们丢失在三次突发中，每次对应一个代理服务器的重启。QoS 1 的至少一次投递在**代理滚动重启期间无法保证**：已收到 PUBACK 的设备不会重发。此前的测量见[滚动升级](#rolling-upgrades)，代理的行为见[MQTT：平台代理](../reference/transport-matrix.md#mqtt--the-platform-broker)，能改变这一结果的故障关闭设置是 `--mqtt-fail-closed`。
+升级会逐个重启平台代理的服务器。在一次使用预发布构建对本次升级的代理滚动重启所做的演练中，集群是七节点的 GKE 集群（三个服务节点、三个数据库节点和一个负载生成节点），以 `--ha` 安装，其代理运行三个服务器，MQTT 设备全程以每秒 300 条的速度发送 QoS 1 消息，**代理已确认的 448,346 条消息中有 23 条从未被存储**。丢失发生在三次代理服务器重启前后的突发中。QoS 1 的至少一次投递在**代理滚动重启期间无法保证**：已收到 PUBACK 的设备不会重发。此前的测量见[滚动升级](#rolling-upgrades)，代理的行为见[MQTT：平台代理](../reference/transport-matrix.md#mqtt--the-platform-broker)，能改变这一结果的故障关闭设置是 `--mqtt-fail-closed`。
 
 ### v0.25.2：服务令牌签发离开公共端口 {#v0252-upgrade}
 

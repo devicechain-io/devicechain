@@ -24,7 +24,7 @@ Qué hace cada comando en un clúster que todavía tiene `ingress-nginx`:
 
 - Conoce qué cambia en el borde. Consulta [Qué cambia en el borde](#ingress-cutover-differences).
 - Si la instancia obtiene su certificado de un emisor ACME (`ingress.tls.selfSigned: false` y un `ClusterIssuer`),
-  lee antes [Certificados de un emisor ACME](#ingress-cutover-acme).
+  lee [Certificados de un emisor ACME](#ingress-cutover-acme): necesita un cambio una vez movido el DNS, no antes.
 - Pasa a `dcctl install` los ajustes con los que se instaló el clúster, como `--ha`, además de la nueva `--version`,
   igual que en cualquier [actualización progresiva](./releases-and-upgrades.md#rolling-upgrades).
 
@@ -49,7 +49,7 @@ Qué hace cada comando en un clúster que todavía tiene `ingress-nginx`:
    producción nunca espera un certificado nuevo; el Gateway usa `devicechain-tls-gateway`. El Gateway conserva ese
    nombre para siempre, incluso cuando los objetos Ingress ya no existan.
 
-   Después la actualización espera al certificado del Gateway. Consulta [La compuerta del certificado](#ingress-cutover-cert-gate).
+   Después la actualización comprueba el certificado del Gateway. Consulta [La compuerta del certificado](#ingress-cutover-cert-gate).
 
 3. **Busca la dirección de Traefik** y comprueba la instancia a través de ella, antes de mover el DNS.
 
@@ -98,12 +98,11 @@ Qué hace cada comando en un clúster que todavía tiene `ingress-nginx`:
 
 ### En un clúster local {#ingress-cutover-local}
 
-Un clúster local (kind) publica los puertos 80 y 443 de un nodo, y solo un controlador puede ocuparlos. Mientras los
-dos controladores estén instalados, `ingress-nginx` conserva los puertos y Traefik es accesible en un NodePort. La
-eliminación del paso 6 entrega los puertos a Traefik en la misma aplicación, así que espera un corte breve mientras
-ocurre. Un clúster local **nuevo** no tiene `ingress-nginx`, y Traefik ocupa los puertos desde el principio. En un
-clúster local que tiene ambos, una instancia **nueva** la sirve `ingress-nginx` (sus puertos son los que alcanza un
-navegador) hasta la eliminación; `--ingress-controller gateway` toma el Gateway de todos modos.
+Un clúster local (kind) publica los puertos 80 y 443 de un nodo, y solo un controlador puede ocuparlos. Mientras los dos controladores estén instalados, `ingress-nginx` conserva los puertos y Traefik solo es accesible en un NodePort.
+
+En un clúster local no hay DNS que mover: el navegador llega al controlador que ocupe los puertos del nodo. Los pasos 3 y 4 (la dirección externa y el DNS) no se aplican, y un `dcctl upgrade` normal ya lleva a la ventana a una instancia que tiene objetos Ingress. Ejecuta los pasos 5 y 6 seguidos: el host no responde desde `--drop-legacy-ingress` hasta que la eliminación haya entregado los puertos a Traefik, y espera un corte breve mientras ocurre.
+
+Un clúster local **nuevo** no tiene `ingress-nginx`, y Traefik ocupa los puertos desde el principio. En un clúster local que tiene ambos, una instancia **nueva** la sirve `ingress-nginx` hasta la eliminación.
 
 ### Varias instancias {#ingress-cutover-several}
 
@@ -113,29 +112,23 @@ mover el DNS de cada uno.
 
 ## La compuerta del certificado {#ingress-cutover-cert-gate}
 
-Un Gateway sin certificado es una versión que parece correcta y responde `https` con el certificado por defecto del
-controlador. Por eso una actualización que pone una instancia en el Gateway espera, hasta cinco minutos, a que
-cert-manager haya emitido el certificado del Gateway y esté `Ready`. No se aplica con `--no-tls`, ni en un clúster sin
-cert-manager.
+Un Gateway sin certificado es una versión que parece correcta y responde `https` con el certificado por defecto del controlador, así que la actualización comprueba el certificado del Gateway. Se aplica cuando la instancia termina TLS y el clúster tiene cert-manager; `--no-tls` lo omite.
 
-Si falla, los servicios ya están en marcha. El error nombra lo que encontró, y tú lo arreglas y **ejecutas de nuevo la
-misma actualización**. Las causas habituales:
+- Mientras los objetos Ingress sigan sirviendo el host, una actualización cuyo certificado del Gateway aún no está `Ready` avisa y continúa, porque todavía nada depende del Gateway.
+- `--drop-legacy-ingress` convierte al Gateway en el único front end, así que **se niega** hasta que el certificado del Gateway esté `Ready`.
+- Una actualización que deja una instancia solo en el Gateway espera hasta cinco minutos a que lo esté, y falla indicando el motivo.
 
-- **Existe un Certificate para el Secret, pero el Gateway no lo controla.** cert-manager no adopta un Certificate que
-  no creó para el Gateway, así que uno sobrante de un Ingress, o hecho a mano, con el mismo nombre de Secret deja al
-  Gateway sin ninguno. El error imprime el comando que lo elimina
-  (`kubectl -n dci-<instance> delete certificate <name>`); entonces se crea el del propio Gateway.
-- **No se crea ningún Certificate.** El soporte de Gateway API de cert-manager no está activado, o cert-manager arrancó
-  antes de que existieran las definiciones de la Gateway API. `kubectl -n cert-manager logs deploy/cert-manager` lo
-  indica. Un `dcctl install` de esta versión lo activa.
+Los servicios ya están en marcha cuando falla la comprobación. El error nombra lo que encontró: arréglalo y **ejecuta de nuevo el mismo comando**. Las causas habituales:
+
+- **Existe un Certificate para el Secret, pero el Gateway no lo controla.** cert-manager no adopta un Certificate que no creó para el Gateway, así que uno sobrante de un Ingress, o hecho a mano, con el mismo nombre de Secret deja al Gateway sin ninguno. El error imprime el comando que lo elimina (`kubectl -n dci-<instance> delete certificate <name>`); entonces se crea el del propio Gateway.
+- **No se crea ningún Certificate.** El soporte de Gateway API de cert-manager no está activado, o cert-manager arrancó antes de que existieran las definiciones de la Gateway API. `kubectl -n cert-manager logs deploy/cert-manager` lo indica. Un `dcctl install` de esta versión lo activa.
 - **El Certificate no está `Ready`.** El error incluye el mensaje del propio emisor. Con un emisor ACME, véase más abajo.
 
 ## Certificados de un emisor ACME {#ingress-cutover-acme}
 
-Un `ClusterIssuer` HTTP-01 que resuelve a través de la clase de ingress `nginx` no puede responder a un desafío de un
-Gateway, y **sus renovaciones fallan cuando se quita `ingress-nginx`**, también las de cualquier objeto Ingress que aún
-lo use. Dale al emisor un solver `gatewayHTTPRoute`, con un `parentRef` al listener `http` del Gateway de la instancia,
-`devicechain`, en el namespace de la instancia:
+Un emisor HTTP-01 que resuelve a través de la clase de ingress `nginx` sigue funcionando durante la ventana, también para el certificado del Gateway: el desafío lo sirve `ingress-nginx`, adonde el DNS sigue apuntando. Déjalo como está hasta que el DNS se haya movido. Después, antes de `--drop-legacy-ingress` y `--remove-legacy-ingress`, dale un solver `gatewayHTTPRoute`, o sus renovaciones fallarán cuando `ingress-nginx` ya no esté. Un solver `gatewayHTTPRoute` fijado antes de mover el DNS falla, porque el desafío llega a `ingress-nginx`, que no tiene ruta para él. Un solver DNS-01 funciona en todo momento.
+
+El solver `gatewayHTTPRoute` nombra el listener `http` del Gateway de la instancia, `devicechain`:
 
 ```yaml
 apiVersion: cert-manager.io/v1
@@ -152,16 +145,10 @@ spec:
               - group: gateway.networking.k8s.io
                 kind: Gateway
                 name: devicechain
-                namespace: dci-<instance>
                 sectionName: http
 ```
 
-Un emisor compartido por varias instancias lista un `parentRef` por cada Gateway de instancia. La redirección de
-`http` a `https` del chart es una coincidencia menos específica que la ruta del desafío, así que no lo intercepta.
-
-La validación HTTP-01 se conecta a donde resuelva el nombre del host. Mientras el DNS no apunte a Traefik, un desafío
-para el certificado nuevo del Gateway llega a `ingress-nginx` y no tiene ruta allí, así que espera que la compuerta del
-certificado aguarde al cambio de DNS. Un solver DNS-01 no depende de dónde resuelva el host y evita ese orden.
+El `parentRef` no lleva namespace, y uno solo cubre todas las instancias: cert-manager crea la ruta del solver en el namespace del Certificate que se está emitiendo, así que se asocia al Gateway `devicechain` de esa instancia. La redirección de `http` a `https` del chart es una coincidencia menos específica que la ruta del desafío, así que no lo intercepta.
 
 ## Volver atrás {#ingress-cutover-rollback}
 
@@ -180,6 +167,7 @@ se vuelve a decidir según el clúster: el Gateway donde se ejecuta Traefik.
   cuando falta el controlador que nombra.
 - `--ingress-controller nginx` y `--drop-legacy-ingress` juntos se rechazan: uno hace de los objetos Ingress el único
   front end y el otro deja de generarlos.
+- Si el DNS ya apunta a Traefik, vuelve a apuntarlo a la dirección de `ingress-nginx`: el retroceso elimina el Gateway.
 - Una vez quitado `ingress-nginx` ya no hay vuelta atrás a él, y una instalación no devuelve un controlador quitado.
 
 ## Qué cambia en el borde {#ingress-cutover-differences}

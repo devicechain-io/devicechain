@@ -96,7 +96,7 @@ kubectl -n dci-<id> get secret devicechain-tls -o jsonpath='{.data.ca\.crt}' | b
 curl --cacert instance-ca.pem https://<host>/
 ```
 
-该颁发机构有效期十年。主机证书续期不会改变它，且 chart 固定了其私钥（`rotationPolicy: Never`），因此即使颁发机构被重新签发，仍能验证旧机构签发的证书。只有删除该机构自身的 Secret（`devicechain-tls-ca`）才会创建新的机构，此时客户端需要重新获取 `ca.crt`。从旧版 chart 升级的实例会保留原有的自签名证书直到下次续期；删除 `devicechain-tls` Secret 可立即由该颁发机构重新签发。
+该颁发机构有效期十年。主机证书续期不会改变它，且 chart 固定了其私钥（`rotationPolicy: Never`），因此即使颁发机构被重新签发，仍能验证旧机构签发的证书。只有删除该机构自身的 Secret（`devicechain-tls-ca`）才会创建新的机构，此时客户端需要重新获取 `ca.crt`。从旧版 chart 升级的实例会保留原有的自签名证书直到下次续期；删除 `devicechain-tls` Secret 可立即由该颁发机构重新签发。已迁移到 Gateway 的实例会一直使用 `devicechain-tls-gateway`，其中是同一机构签发的新叶子证书，因此请改从该 Secret 获取 `ca.crt`。
 
 完整标志见[安装标志](#install-flags)。笔记本上：
 
@@ -435,7 +435,7 @@ chart 会给对象存储的卷加上 `helm.sh/resource-policy: keep`，因此之
 边缘还必须满足下面这些条件，否则服务所信任的头并不是客户端的地址：
 
 - 使用新安装所用的 Traefik 时，无需设置任何东西。它的入口点不信任任何自带的转发头，因此会丢弃客户端发来的所有 `X-Forwarded-*` 和 `X-Real-Ip`，并把真实的 TCP 对端写入 `X-Forwarded-For`。它的 Service 必须保留客户端地址：安装会在 Traefik 的 LoadBalancer Service 上设置 `externalTrafficPolicy: Local`。这在直接透传连接的负载均衡器上保留客户端地址（GKE、AKS、AWS 网络负载均衡器 NLB）。设置 `Local` 的原因：默认值（`Cluster`）下，云负载均衡器的流量会被源地址转换为节点地址，互联网上的所有设备将按节点共享同一份配额。设为 `Local` 后，负载均衡器只会把流量发往运行 Traefik Pod 的节点（通过对该 Service 的健康检查判断）。
-- 在 AWS 上，未加注解的 LoadBalancer Service 会得到经典负载均衡器。它代理 TCP，控制器看到的是负载均衡器自身的地址，`Local` 无法带回客户端地址。本版本没有为 Traefik 的 Service 添加 NLB 注解的 OpenTofu 变量（`ingress_nginx_aws_nlb` 只给 `ingress-nginx` 的 Service 添加注解），所以在 EKS 上按来源的限制会以负载均衡器为键。请使用 NLB 或 PROXY 协议，并自行在该 Service 上配置。
+- 在 AWS 上，未加注解的 LoadBalancer Service 会得到经典负载均衡器。它代理 TCP，控制器看到的是负载均衡器自身的地址，`Local` 无法带回客户端地址。本版本没有为 Traefik 的 Service 添加 NLB 注解的 OpenTofu 变量（`ingress_nginx_aws_nlb` 只给 `ingress-nginx` 的 Service 添加注解），所以在 EKS 上按来源的限制会以负载均衡器为键。
 - 在仍运行 `ingress-nginx` 的集群上使用它时，保持 `use-forwarded-headers` 关闭（dcctl 的 install 就是如此）。这样控制器会把真实的 TCP 对端写入 `X-Forwarded-For`。安装出于同样的原因，也会在它的 LoadBalancer Service 上设置 `externalTrafficPolicy: Local`，AWS 上的同样限制也适用：此时 OpenTofu 变量 `ingress_nginx_aws_nlb` 会添加 `service.beta.kubernetes.io/aws-load-balancer-type: nlb`，更改类型会替换负载均衡器及其主机名。HA 安装会运行两个 `ingress-nginx` 副本并分散到不同节点，以便在滚动更新或节点丢失期间负载均衡器仍有可用目标（可通过 `ingress_nginx_replicas` 指定其他数量；只有一个副本时，它重启期间没有可用目标）。自带的控制器需要同样的设置，或由负载均衡器提供 PROXY 协议。
 - 位于自行追加该头的七层负载均衡器之后时（Google Cloud HTTP(S) 负载均衡、你自己运营的代理），用 OpenTofu 变量 `traefik_trusted_proxy_cidrs` 把负载均衡器的地址范围告知 Traefik，并让 `--trusted-proxies` 在 Pod 地址范围**之外**再加上负载均衡器的范围。Traefik 会把代理的地址追加到链中，服务则从右向左遍历这条链：如果只信任 Pod 地址范围，遍历会停在代理处，所有客户端就会共用一份配额。对 `ingress-nginx`，对应的做法是开启 `use-forwarded-headers`，并把 `proxy-real-ip-cidr` 设为这些范围。
 

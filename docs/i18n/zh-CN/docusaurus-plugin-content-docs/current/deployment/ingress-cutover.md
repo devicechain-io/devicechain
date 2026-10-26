@@ -18,7 +18,7 @@ title: 迁移到 Traefik
 ## 开始之前 {#ingress-cutover-before}
 
 - 了解边缘有哪些变化，见[边缘有哪些变化](#ingress-cutover-differences)。
-- 如果实例的证书来自 ACME 签发者（`ingress.tls.selfSigned: false` 加一个 `ClusterIssuer`），请先阅读[来自 ACME 签发者的证书](#ingress-cutover-acme)。
+- 如果实例的证书来自 ACME 签发者（`ingress.tls.selfSigned: false` 加一个 `ClusterIssuer`），请阅读[来自 ACME 签发者的证书](#ingress-cutover-acme)：它需要在 DNS 迁移之后调整，而不是之前。
 - 与任何[滚动升级](./releases-and-upgrades.md#rolling-upgrades)一样，给 `dcctl install` 传入集群安装时使用的设置（例如 `--ha`），以及新的 `--version`。
 
 ## 步骤 {#ingress-cutover-steps}
@@ -38,7 +38,7 @@ title: 迁移到 Traefik
 
    实例的命名空间（`dci-<instance>`）中现在有一个名为 `devicechain` 的 Gateway，带有 `http` 和 `https` 两个监听器，后面是 HTTPRoute。它的 Ingress 对象仍然存在。两者使用**各自独立的证书**：Ingress 对象保留 `devicechain-tls`（DNS 仍指向它，所以线上主机从不需要等待新证书），Gateway 使用 `devicechain-tls-gateway`。即使 Ingress 对象之后被移除，Gateway 也会一直保留这个名称。
 
-   随后升级会等待 Gateway 的证书，见[证书关卡](#ingress-cutover-cert-gate)。
+   随后升级会检查 Gateway 的证书，见[证书关卡](#ingress-cutover-cert-gate)。
 
 3. **找到 Traefik 的地址**，并在迁移 DNS 之前通过它检查实例。
 
@@ -80,7 +80,11 @@ title: 迁移到 Traefik
 
 ### 在本地集群上 {#ingress-cutover-local}
 
-本地（kind）集群会发布节点的 80 和 443 端口，而这两个端口只能由一个控制器占用。两个控制器都已安装时，`ingress-nginx` 保留这两个端口，Traefik 通过 NodePort 访问。第 6 步的移除会在同一次应用中把端口交给 Traefik，所以期间会有一小段中断。**全新的**本地集群没有 `ingress-nginx`，Traefik 从一开始就占用这些端口。在两者并存的本地集群上，**新**实例在移除之前由 `ingress-nginx` 提供服务（浏览器访问的正是它的端口）；`--ingress-controller gateway` 则仍然使用 Gateway。
+本地（kind）集群会发布节点的 80 和 443 端口，而这两个端口只能由一个控制器占用。两个控制器都已安装时，`ingress-nginx` 占用这两个端口，Traefik 只能通过 NodePort 访问。
+
+在本地集群上没有 DNS 可迁移：浏览器访问的是占用节点端口的那个控制器。第 3、4 步（外部地址和 DNS）不适用，而普通的 `dcctl upgrade` 已经会把带有 Ingress 对象的实例带入迁移窗口。请连续执行第 5 步和第 6 步：从 `--drop-legacy-ingress` 开始，主机一直不响应，直到移除操作把端口交给 Traefik；期间会有一小段中断。
+
+**全新的**本地集群没有 `ingress-nginx`，Traefik 从一开始就占用这些端口。在两者并存的本地集群上，**新**实例在移除之前由 `ingress-nginx` 提供服务。
 
 ### 多个实例 {#ingress-cutover-several}
 
@@ -88,9 +92,13 @@ title: 迁移到 Traefik
 
 ## 证书关卡 {#ingress-cutover-cert-gate}
 
-没有证书的 Gateway 看起来像一次成功的发布，却会用控制器的默认证书响应 `https`。因此，把实例切换到 Gateway 的升级会最多等待五分钟，直到 cert-manager 签发了 Gateway 的证书并且它处于 `Ready`。使用 `--no-tls`，或者集群没有 cert-manager 时，不适用此关卡。
+没有证书的 Gateway 看起来像一次成功的发布，却会用控制器的默认证书响应 `https`，所以升级会检查 Gateway 的证书。实例终止 TLS 且集群有 cert-manager 时适用；`--no-tls` 会跳过它。
 
-如果失败，服务此时已经启动。错误会说明发现了什么，你修复后**再运行一次相同的升级**。常见原因：
+- 在 Ingress 对象仍然提供该主机的期间，Gateway 证书尚未 `Ready` 的升级会给出警告并继续，因为目前还没有任何东西依赖 Gateway。
+- `--drop-legacy-ingress` 会让 Gateway 成为唯一的前端，所以在 Gateway 的证书 `Ready` 之前它会**拒绝执行**。
+- 让实例仅由 Gateway 提供服务的升级，最多等待五分钟，失败时会给出原因。
+
+检查失败时，服务此时已经启动。错误会说明发现了什么：修复后**再运行一次相同的命令**。常见原因：
 
 - **存在一个指向该 Secret 的 Certificate，但 Gateway 并不控制它。** cert-manager 不会接管不是为该 Gateway 创建的 Certificate，所以由 Ingress 遗留的或手工创建的、使用同一 Secret 名称的 Certificate，会让 Gateway 没有证书。错误会打印删除它的命令（`kubectl -n dci-<instance> delete certificate <name>`），之后会创建 Gateway 自己的 Certificate。
 - **根本没有创建 Certificate。** cert-manager 的 Gateway API 支持未开启，或者它在 Gateway API 定义存在之前就已启动。`kubectl -n cert-manager logs deploy/cert-manager` 会给出说明。运行本版本的 `dcctl install` 会开启它。
@@ -98,7 +106,9 @@ title: 迁移到 Traefik
 
 ## 来自 ACME 签发者的证书 {#ingress-cutover-acme}
 
-通过 `nginx` Ingress 类解决 HTTP-01 的 `ClusterIssuer` 无法应答 Gateway 的质询，并且**在移除 `ingress-nginx` 之后其续期会失败**，包括仍在使用它的任何 Ingress 对象。请为签发者添加 `gatewayHTTPRoute` 求解器，其 `parentRef` 指向该实例命名空间中名为 `devicechain` 的 Gateway 的 `http` 监听器：
+通过 `nginx` Ingress 类解决 HTTP-01 的签发者在迁移窗口内继续可用，包括为 Gateway 签发证书：质询由 `ingress-nginx` 应答，DNS 仍指向它。在 DNS 迁移之前保持原样。DNS 迁移之后，在运行 `--drop-legacy-ingress` 和 `--remove-legacy-ingress` 之前，为它添加 `gatewayHTTPRoute` 求解器，否则 `ingress-nginx` 消失后其续期会失败。在 DNS 迁移之前设置 `gatewayHTTPRoute` 求解器会失败，因为质询会到达没有对应路由的 `ingress-nginx`。DNS-01 求解器全程可用。
+
+`gatewayHTTPRoute` 求解器指向该实例 Gateway `devicechain` 的 `http` 监听器：
 
 ```yaml
 apiVersion: cert-manager.io/v1
@@ -115,13 +125,10 @@ spec:
               - group: gateway.networking.k8s.io
                 kind: Gateway
                 name: devicechain
-                namespace: dci-<instance>
                 sectionName: http
 ```
 
-被多个实例共用的签发者，要为每个实例的 Gateway 各列一个 `parentRef`。Chart 中从 `http` 到 `https` 的重定向，其匹配比质询路径更不具体，因此不会拦截质询。
-
-HTTP-01 校验会连接主机名当前解析到的地方。在 DNS 指向 Traefik 之前，针对 Gateway 新证书的质询会到达 `ingress-nginx`，而那里没有对应的路由，所以证书关卡预计会一直等到 DNS 迁移之后。DNS-01 求解器不依赖主机的解析位置，可以避开这个先后顺序。
+`parentRef` 不带命名空间，一个就能覆盖所有实例：cert-manager 在被签发的 Certificate 所在的命名空间中创建求解器的路由，因此它会关联到该实例的 `devicechain` Gateway。Chart 中从 `http` 到 `https` 的重定向，其匹配比质询路径更不具体，因此不会拦截质询。
 
 ## 回滚 {#ingress-cutover-rollback}
 
@@ -135,6 +142,7 @@ dcctl upgrade <provider> <instance> --ingress-controller nginx
 
 - `nginx` 需要集群上有 `ingress-nginx`，`gateway` 需要 Traefik。所指定的控制器缺失时，该选择会被拒绝，且不做任何更改。
 - 同时给出 `--ingress-controller nginx` 和 `--drop-legacy-ingress` 会被拒绝：前者让 Ingress 对象成为唯一前端，后者停止生成它们。
+- 如果 DNS 已经指向 Traefik，请把它改回 `ingress-nginx` 的地址：回滚会移除 Gateway。
 - `ingress-nginx` 一旦被移除，就无法回滚到它，安装也不会把已移除的控制器装回来。
 
 ## 边缘有哪些变化 {#ingress-cutover-differences}
