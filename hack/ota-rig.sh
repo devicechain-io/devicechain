@@ -17,7 +17,7 @@
 # what it ran before.
 #
 #   hack/ota-rig.sh up      create the kind cluster dc-otarig (its own kubeconfig, its own host
-#                           port), install, and bootstrap an instance with update-management from
+#                           port), install, and bootstrap an instance (default profile; DC_OTA_RIG_BOOTSTRAP_MODE) from
 #                           images built from THIS tree under a unique tag; assert the download base
 #                           was derived from the ingress host
 #   hack/ota-rig.sh run     provision, build the device images, start the device, then the
@@ -132,6 +132,11 @@ state_dir="${DC_OTA_RIG_STATE:-$repo_root/.ota-rig}"
 device_container="${DC_OTA_RIG_DEVICE_CONTAINER:-$cluster-devices}"
 device_image="${DC_OTA_RIG_DEVICE_IMAGE:-alpine:3.22@sha256:2e0b81d60597f449baa56dc25d355367869d2dca4cd57e866f1e2b52af3eb55f}"
 min_free_gb="${DC_OTA_RIG_MIN_FREE_GB:-100}"
+# How the instance gets update-management. profile-default (the default) bootstraps the DEFAULT
+# profile with no --enable-area, which is what the v1 release gate proves: an operator who installs
+# the product as shipped can update a device. enable-area passes --enable-area update-management as
+# well, which is the same instance on a tree where the default profile did not yet carry the area.
+bootstrap_mode="${DC_OTA_RIG_BOOTSTRAP_MODE:-profile-default}"
 tenant="${DC_OTA_RIG_TENANT:-otarig}"
 member_email="ota-rig@$tenant.test"
 profile="ota-rig-profile"
@@ -284,11 +289,17 @@ cmd_up() {
   # explicit filesystem store is refused because two pods mount its ReadWriteOnce claim, which
   # dcctl colocates only on a cluster it owns.
   "$dcctl" install local --yes --cluster "$cluster" --no-monitoring --build --version "$tag" 2>&1 | redact
-  say "bootstrapping $instance with update-management on top of the default profile"
-  # --enable-area rather than a profile: it is what an operator does today to get updates, and it
-  # keeps the instance small. --no-escrow: this instance exists to be torn down.
-  "$dcctl" bootstrap local "$instance" --yes --no-escrow --cluster "$cluster" \
-    --host "$host" --build --version "$tag" --enable-area update-management 2>&1 | redact
+  local area_args=()
+  case "$bootstrap_mode" in
+    profile-default) say "bootstrapping $instance on the default profile (update-management comes with it)" ;;
+    enable-area)
+      say "bootstrapping $instance with update-management enabled explicitly"
+      area_args=(--enable-area update-management)
+      ;;
+    *) fail "DC_OTA_RIG_BOOTSTRAP_MODE must be profile-default or enable-area, got '$bootstrap_mode'" ;;
+  esac
+  # --no-escrow: this instance exists to be torn down.
+  "$dcctl" bootstrap local "$instance" --yes --no-escrow --cluster "$cluster"     --host "$host" --build --version "$tag" ${area_args[@]+"${area_args[@]}"} 2>&1 | redact
   say "UP COMPLETE: run 'hack/ota-rig.sh run'"
 }
 
@@ -398,10 +409,11 @@ um_pods() {
     jq -r '.items[] | select(.metadata.deletionTimestamp == null) | .metadata.name'
 }
 
-# um_metric <metric suffix> <labels> prints the sum of that series across every live
-# update-management pod, read through the API server's pod proxy. <labels> is matched EXACTLY
-# against the series' label set: 'result="aborted"' matches {result="aborted"} and nothing else,
-# "" matches only the unlabelled series, and "*" sums every series of the name. A pod whose
+# um_metric <metric suffix> <label pair | * | ""> prints the sum of that series across every live
+# update-management pod, read through the API server's pod proxy. <labels> is ONE label pair,
+# matched exactly as a pair and anywhere in the series' label set: 'result="aborted"' matches
+# {result="aborted"} and {kind="x",result="aborted"} but not {result="aborted2"}. "" matches only
+# the unlabelled series, and "*" sums every series of the name. A pod whose
 # metrics cannot be read FAILS the rig: reading it as zero would let a control "see" a number it
 # never measured.
 um_metric() {
@@ -417,7 +429,13 @@ um_metric() {
       { i = index($1, "{"); nm = (i ? substr($1, 1, i - 1) : $1)
         if (length(nm) < length(m) || substr(nm, length(nm) - length(m) + 1) != m) next; found = 1
         ls = (i ? substr($1, i + 1, length($1) - i - 1) : "")
-        if (l == "*" || ls == l) s += $NF }
+        # <labels> is ONE label pair (verdict="APPLIED"), matched among the labels of a series wherever
+        # it sits: a series also carries labels the caller does not name (kind="progress"), and
+        # an exact comparison of the whole set read 0 the moment a second label was added.
+        # "" matches only an unlabelled series; "*" matches every series.
+        hit = (l == "*") || (l == "" && ls == "")
+        if (!hit && l != "") { c = split(ls, parts, ","); for (j = 1; j <= c; j++) if (parts[j] == l) hit = 1 }
+        if (hit) s += $NF }
       END { if (!found) exit 3; printf "%d", s }' <<<"$body")" ||
       fail "$pod exposes no *_${name} series; the metric was renamed"
     total=$((total + n))
@@ -1078,6 +1096,13 @@ wait_downloads_configured() {
   local want="$1" deadline=$((SECONDS + 300)) got=""
   k -n "$namespace" rollout status deploy/update-management --timeout=300s >/dev/null ||
     fail "update-management did not roll out"
+  # `rollout status` returns once the NEW pod is ready; the old one is still draining then, and it
+  # still holds its NATS consumer, so it can answer a device's grant request with the OLD
+  # configuration. Nothing is sampled until every old pod is gone.
+  while ((SECONDS < deadline)); do
+    [[ "$(k -n "$namespace" get pods -l "$um_selector" -o json | jq '[.items[] | select(.metadata.deletionTimestamp != null)] | length')" == 0 ]] && break
+    sleep 2
+  done
   while ((SECONDS < deadline)); do
     got="$(updq '{updateManagementInfo{downloadsConfigured}}' | jq -r '.updateManagementInfo.downloadsConfigured')" || got=""
     [[ "$got" == "$want" ]] && return 0
@@ -1111,7 +1136,12 @@ n7_downloads_disabled() {
   while ((SECONDS < deadline)); do
     j="$(assignment_json "$a")"; st="$(jq -r .attempt.state <<<"$j")"
     seen="$seen $st"
-    [[ "$st" == QUEUED || "$st" == INITIATED ]] || fail "with downloads disabled the attempt reached $st"
+    if [[ "$st" != QUEUED && "$st" != INITIATED ]]; then
+      echo "N7 evidence: attempt $(jq -c .attempt <<<"$j")" >&2
+      k -n "$namespace" get pods -l "$um_selector" -o wide >&2 || true
+      k -n "$namespace" logs deploy/update-management --tail=200 2>&1 | grep -a -i "grant\|download\|capab\|not set" >&2 || true
+      fail "with downloads disabled the attempt reached $st"
+    fi
     sleep 3
   done
   [[ "$st" == INITIATED ]] || fail "the attempt is $st after 60 s, expected INITIATED (the device asked and was refused)"
