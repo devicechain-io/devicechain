@@ -50,6 +50,49 @@ La recuperación es automática pero no instantánea. Tarda lo que el pod de ree
 La ingesta de Sparkplug-B está disponible como un servicio opcional (opt-in). Ingiere mediciones e impulsa la [presencia de dispositivo](./device-presence.md) autoritativa. Se conecta a un broker por TLS o texto plano, según la URL configurada. Un segundo protocolo de borde nativo de estándares, [LwM2M](./lwm2m.md), también está disponible. El CA personalizado / mTLS hacia un broker privado está planificado.
 :::
 
+## Comandos {#commands}
+
+DeviceChain puede enviar comandos **hacia abajo** a un nodo o dispositivo Sparkplug, por la misma sesión de Host Application que ya mantiene con tu bróker. Es **opcional y está desactivado por defecto**: hasta que una fuente lo habilita, un comando a un dispositivo Sparkplug falla al instante como no entregable, igual que antes. Habilitarlo es un ajuste de despliegue, descrito en [Comandos Sparkplug](../deployment/edge-services.md#sparkplug-commands), y hoy se hace mediante valores de Helm.
+
+Son [comandos](./commands.md) normales: se declaran en el perfil del dispositivo, se envían desde la página del dispositivo, un lote o una regla de automatización, y están sujetos a los mismos permisos, ventanas de mantenimiento y registro de auditoría. El botón **Añadir comandos estándar de Sparkplug** de la consola declara en un perfil los tres siguientes.
+
+| Clave de comando | Qué envía | Se permite cuando |
+| --- | --- | --- |
+| `sparkplug.write` con `{"metric": nombre, "value": v}` | Un `DCMD` a un dispositivo, o un `NCMD` a un nodo, que fija una métrica | La métrica está en la lista de escritura de la fuente y el nodo la declaró en su nacimiento |
+| `sparkplug.rebirth` | Un `NCMD` que pide al nodo publicar de nuevo su nacimiento, con todos los valores actuales | Siempre, una vez habilitados los comandos |
+| `sparkplug.reboot` | Un `NCMD` que fija `Node Control/Reboot` | El comando está declarado `DISRUPTIVE` o `DESTRUCTIVE`, la fuente tiene `allowReboot`, el nodo declaró la métrica en su nacimiento, está en línea y no se ha reiniciado dentro de la ventana de reinicio |
+
+Si el comando va a un nodo o a un dispositivo depende del destino: un dispositivo bajo un nodo recibe un `DCMD`, un nodo recibe un `NCMD`. Una métrica a la que el nacimiento dio un alias se direcciona por alias, como exige Sparkplug; si no, por nombre. El valor se codifica en el tipo de dato que declaró el nodo, y un valor de tipo incorrecto se rechaza antes de enviar nada, con la métrica, el tipo de dato y tu valor en el motivo. No se admiten arrays, data sets ni otros tipos estructurados. Un comando se publica una sola vez, con QoS 0 y sin retener.
+
+Si el dispositivo aún no ha nacido en la sesión (el nodo está fuera de línea, o la plataforma acaba de reiniciarse y los nacimientos no han llegado), el comando queda **aparcado** y se envía cuando llega el nacimiento. El reinicio es la excepción: solo se envía a un nodo en línea y, si no, se rechaza.
+
+### Qué significan los resultados {#command-outcomes}
+
+**Sparkplug no tiene confirmación de comandos.** Un nodo que recibe un `DCMD` no lo responde. Por eso la plataforma publica el comando y espera a que el nodo **informe** del valor solicitado en un mensaje posterior de datos o de nacimiento, y el resultado indica cuál de estos casos ocurrió:
+
+| Estado | Significado |
+| --- | --- |
+| `SENT` | Publicado; esperando a que el nodo informe del valor. Dura hasta la ventana de confirmación |
+| `SUCCESSFUL`, informado | El nodo informó de la métrica con el valor solicitado después de publicar el comando. El resultado registra la métrica, el valor, cuándo se informó y en qué mensaje |
+| `SUCCESSFUL`, ya en el valor | El nodo ya había informado de ese valor y no informó de nada distinto dentro de la ventana. La plataforma no vio que el nodo actuara por este comando |
+| `TIMEOUT` | Nada lo confirmó dentro de la ventana (2 minutos por defecto). **No es un fallo**: el nodo pudo ignorar o rechazar el comando, el bróker pudo descartarlo, o el nodo obedeció y aún no ha informado |
+| `FAILED`, no entregado | Rechazado antes de enviar nada: comandos no habilitados para esa fuente, un valor no válido, una métrica no permitida, un comando caducado o el cortacircuitos de abajo |
+
+De ahí se desprenden dos precauciones. *Confirmado* significa que la métrica **alcanzó** el valor, no que esta solicitud lo causara: Sparkplug no autentica quién publica, así que cualquiera que pueda publicar en el topic del nodo en tu bróker puede hacer que una métrica lea cualquier valor, y las ACL de publicación del bróker son lo que respalda la evidencia. Y una métrica que un nodo informa solo al cambiar puede dejar un comando en `TIMEOUT` aunque funcionara. Un informe anterior al comando y uno marcado como histórico nunca cuentan como confirmación.
+
+Una escritura más reciente a la misma métrica del mismo dispositivo cierra la anterior que sigue esperando, como `TIMEOUT` con el motivo *superseded*. Un rebirth se confirma con el siguiente nacimiento del nodo, y un reinicio con un nacimiento con un nuevo número de secuencia de nacimiento, dentro de su propia ventana, más larga.
+
+### Host primario y secundario {#primary-and-secondary-host}
+
+Sparkplug recomienda que solo el **host primario** de un nodo le envíe comandos. Una fuente declara cuál es con `hostRole`, que no tiene valor por defecto porque es un hecho sobre tu planta:
+
+- **`primary`**: tus nodos nombran el host id de esta fuente como su host primario. Está disponible el resultado *ya en el valor*.
+- **`secondary`**: otro host es el primario. Los comandos se siguen enviando, pero un nodo, o las ACL del bróker, pueden ignorarlos o bloquearlos, y el primario puede volver a escribir el valor. El resultado *ya en el valor* se desactiva, porque el otro host puede ser quien mantiene el valor, y la consola marca con una advertencia un comando confirmado por un host secundario.
+
+### Cuando el bróker rechaza la publicación {#command-breaker}
+
+Un bróker que rechaza una publicación puede cerrar toda la sesión, lo que marca la fuente como fuera de línea y hace que todos los nodos hagan rebirth, y lo repetiría con cada comando en cola. Por eso cada fuente tiene un **cortacircuitos**: si la sesión se pierde en los 5 segundos siguientes a publicar un comando, el cortacircuitos se abre, ese comando acaba sin confirmar con un motivo que indica que el bróker probablemente lo rechazó, y los comandos a esa fuente fallan al instante como no entregados durante 5 minutos, duplicándose hasta 1 hora en cada reapertura. La telemetría no se ve afectada. Tras la pausa se deja pasar un comando para probarlo, y el cortacircuitos se cierra cuando se publica sin desconexión. La causa habitual es una credencial que no puede publicar en los topics de comandos; consulta [la ACL del bróker](../deployment/edge-services.md#sparkplug-commands-acl).
+
 ## Actualizar un nodo perimetral {#updating-an-edge-node}
 
 Sparkplug B no define actualización de firmware, así que las [actualizaciones over-the-air](./over-the-air-updates.md) de DeviceChain no llegan a un dispositivo a través de este servicio, y DeviceChain no inventa una convención de firmware sobre Sparkplug. Un nodo perimetral que deba actualizarse a través de DeviceChain se conecta también a DeviceChain como un dispositivo MQTT ordinario, con su propia [credencial](../guides/device-credentials.md), y usa el canal de actualización normal. [Construir un dispositivo actualizable](../guides/building-an-updatable-device.md) muestra ese lado del dispositivo.

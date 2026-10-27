@@ -552,6 +552,63 @@ lo que lo supera. No mide la tasa de mensajes, los nacimientos ni las muertes, y
 mensaje solo lo acota el broker. Consulta [Qué acota la ingesta de Sparkplug](#unbounded-sparkplug-ingest).
 :::
 
+### Comandos Sparkplug {#sparkplug-commands}
+
+El canal descendente de comandos descrito en [Comandos Sparkplug](../concepts/sparkplug.md#commands) es **opcional y está desactivado por defecto**. Se configura por fuente y **hoy solo mediante valores de Helm**: `dcctl` se niega a aceptar una fuente de `sparkplug-ingest` en una superposición de valores, así que las fuentes, y con ellas los comandos, se fijan en los valores del chart para `functionalAreas.sparkplug-ingest.config.sources`.
+
+```yaml
+functionalAreas:
+  sparkplug-ingest:
+    config:
+      sources:
+        - tenant: acme
+          hostId: devicechain
+          broker:
+            url: ssl://broker.acme.example:8883
+            username: devicechain
+            passwordEnv: SPARKPLUG_ACME_PW
+          groups: [plant-a]
+          commands:
+            enabled: true
+            hostRole: primary            # obligatorio: primary o secondary
+            writableMetrics:             # vacío (el valor por defecto) no permite escrituras
+              - "Outputs/*"
+            allowReboot: false
+```
+
+| Ajuste | Por defecto | Significado |
+| --- | --- | --- |
+| `enabled` | `false` | Activa el canal descendente para esta fuente |
+| `hostRole` | ninguno, obligatorio | `primary` o `secondary`; consulta [host primario y secundario](../concepts/sparkplug.md#primary-and-secondary-host) |
+| `writableMetrics` | vacío | Métricas a las que puede apuntar `sparkplug.write`: nombres exactos o un prefijo terminado en `/*`. Vacío **no** permite escrituras. `bdSeq` y las métricas `Node Control/` y `Device Control/` no se pueden incluir |
+| `allowReboot` | `false` | Permite que `sparkplug.reboot` llegue a los nodos de esta fuente |
+| `confirmWindowSeconds` | `120` | Cuánto se espera un informe tras una escritura (5 a 900). Auméntalo para nodos con enlaces lentos |
+| `rebootWindowSeconds` | `600` | Cuánto se espera el nuevo nacimiento del nodo tras un reinicio, y el tiempo mínimo entre dos reinicios de un nodo (30 a 3600) |
+| `clockSkewSeconds` | `30` | Cuánto antes de la publicación puede estar la marca de tiempo del propio nodo y aun así contar (0 a 300) |
+| `publishPerSecond`, `burst` | `50`, `200` | Máximo de comandos por segundo que esta fuente pone en el cable, y la ráfaga |
+
+Reglas que el servicio aplica al arrancar, de modo que un error lo detiene con un mensaje en lugar de enviar algo no deseado:
+
+- **Una fuente por bróker.** Una fuente con comandos habilitados debe ser la única fuente Sparkplug de su endpoint de bróker, para que un nodo nunca reciba el mismo comando dos veces. Fusiona los grupos en una sola fuente.
+- **`hostRole` es obligatorio** cuando los comandos están habilitados.
+- **`command-delivery` debe estar desplegado.** El chart fija por sí mismo el ajuste `sparkplugCommands` de command-delivery a partir de las fuentes, y se niega a renderizar cuando una fuente habilita comandos y `command-delivery` no está habilitado, o cuando la dirección interna de `command-delivery` está vacía. Ese ajuste no se puede fijar a mano.
+
+Tras un reinicio gradual con el ajuste aplicado, declara los comandos en el perfil del dispositivo (**Añadir comandos estándar de Sparkplug** en la consola) y publícalo. Los comandos que llegan a una fuente que no los habilita fallan al instante como no entregados.
+
+#### La ACL del bróker {#sparkplug-commands-acl}
+
+La credencial de la fuente necesita permiso para **publicar** comandos, además del acceso de lectura y la publicación de `STATE` que ya necesita. Para Mosquitto, en el archivo de ACL, para el `username` de la fuente y sus grupos:
+
+```
+user devicechain
+topic read spBv1.0/plant-a/#
+topic write spBv1.0/STATE/devicechain
+topic write spBv1.0/plant-a/NCMD/+
+topic write spBv1.0/plant-a/DCMD/+/+
+```
+
+Otros bróker usan su propia sintaxis para la misma regla: publicar en `spBv1.0/<group>/NCMD/<node>` y `spBv1.0/<group>/DCMD/<node>/<device>`. Un bróker que descarta en silencio una publicación rechazada deja los comandos en `TIMEOUT`; uno que desconecta al cliente ante una publicación rechazada abre el cortacircuitos, que lanza `SparkplugCommandBreakerOpen`. Si todos los comandos acaban sin confirmar, se dispara `SparkplugCommandsUnconfirmed`, y lo primero que hay que revisar es el permiso de publicación de la credencial.
+
 ### Qué acota la ingesta de Sparkplug {#unbounded-sparkplug-ingest}
 
 **Las lecturas se cobran contra el techo de ingesta del inquilino.** Cada métrica numérica de un

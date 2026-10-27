@@ -140,10 +140,11 @@ Se aplican cuatro límites:
   publicación pierde el comando igualmente. Lo que elimina la comprobación es el caso que la
   plataforma sí podía prever. Un transporte que mantiene su propia cola para un dispositivo dormido
   se trata aparte; consulta [Estar registrado no es lo mismo que ser alcanzable](#parked-commands).
-- **Los comandos a dispositivos Sparkplug no se entregan en absoluto.** La ruta no está construida:
-  los nodos Sparkplug viven en tu propia infraestructura MQTT y no en la de la plataforma, y nada
-  une ambas. Un comando emitido a uno de ellos se registra como `FAILED` de inmediato, con ese
-  motivo, en lugar de retenerse a la espera de un regreso que no serviría de nada.
+- **Los comandos a dispositivos Sparkplug solo se entregan si la fuente del dispositivo los habilita.** Los
+  nodos Sparkplug viven en tu propia infraestructura MQTT, así que la plataforma envía por la sesión de su
+  Host Application y solo cuando una fuente lo ha activado. Con él desactivado, que es lo habitual, el
+  comando se registra como `FAILED` de inmediato. Con él activado, el comando se confirma porque el nodo
+  informa del valor, no por una confirmación. Consulta [Comandos Sparkplug](./sparkplug.md#commands).
 - **Una retención sobrevive al transporte que la causó.** Solo el transporte que informó de la
   ausencia del dispositivo puede informar de su regreso. Si ese transporte deja de ejecutarse, el
   pendiente espera hasta que caduque cada comando por su cuenta. [Devolver el dispositivo a

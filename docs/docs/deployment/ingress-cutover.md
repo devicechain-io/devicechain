@@ -68,7 +68,30 @@ What each command does to a cluster that still has `ingress-nginx`:
 4. **Move DNS.** Point the host at Traefik's address. Nothing else is needed, and nothing has to be quick:
    the Ingress objects keep answering for as long as clients still resolve the old address.
 
-5. **Drop the Ingress objects.** When traffic has moved, stop rendering them:
+5. **Check the Gateway's certificate.** On an instance that terminates TLS with its own CA (the default
+   self-signed setup), confirm the Gateway's certificate was issued by the instance CA before you drop the
+   Ingress objects. An instance upgraded across the issuer switch can be left with a Gateway certificate
+   issued by the earlier self-signed issuer: it has an empty subject and is not a CA-signed leaf, so an
+   OpenSSL-based client has nothing to anchor it to, although a browser that accepts exceptions does not
+   show the difference.
+
+   ```bash
+   kubectl -n dci-<instance> get secret devicechain-tls-gateway -o jsonpath='{.data.tls\.crt}' \
+     | base64 -d | openssl x509 -noout -subject -issuer
+   ```
+
+   The subject must not be empty, and the issuer must be the instance CA, `CN=<instance> DeviceChain CA`.
+   If it is not, ask cert-manager to issue it again from the instance CA and check once more:
+
+   ```bash
+   cmctl renew -n dci-<instance> devicechain-tls-gateway
+   # without cmctl: delete the Secret and cert-manager recreates it
+   kubectl -n dci-<instance> delete secret devicechain-tls-gateway
+   ```
+
+   An instance whose certificate comes from an ACME or other `ClusterIssuer` has nothing to do here.
+
+6. **Drop the Ingress objects.** When traffic has moved, stop rendering them:
 
    ```bash
    dcctl upgrade <provider> <instance> --drop-legacy-ingress
@@ -76,7 +99,7 @@ What each command does to a cluster that still has `ingress-nginx`:
 
    Do this for every instance on the cluster.
 
-6. **Remove `ingress-nginx`.**
+7. **Remove `ingress-nginx`.**
 
    ```bash
    dcctl install <provider> --remove-legacy-ingress
@@ -101,7 +124,7 @@ What each command does to a cluster that still has `ingress-nginx`:
 
 A local (kind) cluster publishes a node's ports 80 and 443, and only one controller can hold them. While both controllers are installed, `ingress-nginx` holds the ports and Traefik is reachable only on a NodePort.
 
-On a local cluster there is no DNS to move: the browser reaches whichever controller holds the node's ports. Steps 3 and 4 (the external address and DNS) do not apply, and a plain `dcctl upgrade` already moves an instance that has Ingress objects into the window. Run steps 5 and 6 back to back: the host does not answer from `--drop-legacy-ingress` until the removal has handed the ports to Traefik, and expect a short gap while that happens.
+On a local cluster there is no DNS to move: the browser reaches whichever controller holds the node's ports. Steps 3 and 4 (the external address and DNS) do not apply, and a plain `dcctl upgrade` already moves an instance that has Ingress objects into the window. Run steps 6 and 7 back to back: the host does not answer from `--drop-legacy-ingress` until the removal has handed the ports to Traefik, and expect a short gap while that happens.
 
 A **fresh** local cluster has no `ingress-nginx`, and Traefik holds the ports from the start. On a local cluster that has both, a **new** instance is served by `ingress-nginx` until the removal.
 

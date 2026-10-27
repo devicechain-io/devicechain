@@ -53,7 +53,7 @@ Cómo llegan los dispositivos a la plataforma, y cómo llega la plataforma de vu
 | [MQTT](../guides/connecting-a-device.md#mqtt) (bróker de la plataforma) | ○ | ◐ | ◐ |
 | [HTTP](../guides/connecting-a-device.md#http) | ○ | ○ | ● |
 | MQTT (bróker externo) | ○ | ○ | ◐ |
-| [Sparkplug B](../concepts/sparkplug.md) | ○ | ○ | ◐ |
+| [Sparkplug B](../concepts/sparkplug.md) | ○ | ◐ | ◐ |
 | [LwM2M](../concepts/lwm2m.md) | ◐ | ◐ | ◐ |
 | [Integraciones de entrada](../guides/inbound-integrations.md) (servidor de red LoRaWAN, webhook) | ○ | ○ | ◐ |
 
@@ -160,7 +160,7 @@ Un endpoint `POST` para el mismo cuerpo de evento JSON. Sencillo, y de un solo s
   reconoce un transporte no entregable no puede reconocer este. El comando se acepta, se publica
   donde ningún dispositivo está suscrito para recibirlo, se marca `SENT` y acaba en `TIMEOUT`.
   Sparkplug es la única fila de esta página en la que un `○` en esta columna produce un `FAILED`
-  inmediato.
+  inmediato (Sparkplug lo hace cuando sus comandos no están habilitados).
 - El listener de ingesta termina HTTP en claro y no tiene autenticación de transporte propia; las
   credenciales del dispositivo viajan en el cuerpo del evento. Donde necesites TLS, lo aporta lo
   que pongas por delante del servicio.
@@ -265,11 +265,13 @@ Para flotas ya existentes que hablan Sparkplug con su propio bróker.
   [contrapresión en la ruta de ingesta](../deployment/observability.md#ingest-backpressure)), las
   lecturas se descartan sin reintento y se cuentan. BIRTH y DEATH se siguen aceptando, así que la
   presencia sigue siendo correcta.
-- **Escritura ○: deliberadamente fuera de alcance, no inacabado.** No hay salida de comandos
-  Sparkplug (`DCMD`), y ninguna espera trabajo pendiente: una flota Sparkplug reside en la
-  infraestructura MQTT *del cliente*, así que nada tiende un puente entre el flujo de comandos de la
-  plataforma y ella. Un comando emitido a un dispositivo Sparkplug acaba en `FAILED`, no entregable,
-  con dos matices:
+- **Escritura ◐: opcional, confirmada por informe.** Con `commands.enabled` en una fuente, un comando a un
+  dispositivo Sparkplug se publica como `NCMD` o `DCMD` en la sesión de la Host Application, y se
+  confirma cuando el nodo *informa* después del valor solicitado. Sparkplug no tiene confirmación de
+  comandos, así que un comando que el nodo no informa acaba en `TIMEOUT`, no como fallo. Está
+  desactivado por defecto y se habilita mediante valores de Helm; consulta
+  [Comandos Sparkplug](../concepts/sparkplug.md#commands). Con él desactivado, un comando a un
+  dispositivo Sparkplug acaba en `FAILED`, no entregable, con dos matices:
   - **El veredicto suele ser rápido, pero no es sincrónico con el encolado.** Encolar un comando
     desencadena un intento de despacho inmediato para ese dispositivo. Cuando es el único comando
     encolado del dispositivo, la compuerta de presencia lo marca como fallido en el acto. Si el
@@ -283,10 +285,9 @@ Para flotas ya existentes que hablan Sparkplug con su propio bróker.
     se despacha como cualquier otro y acaba en `TIMEOUT`.
 - **Lectura ○**: por la misma razón.
 
-Lo que la plataforma *sí* publica en Sparkplug: ningún `DCMD`, nunca, y ningún `NCMD` alcanzable
-desde la API de comandos. El único `NCMD` que la plataforma emite es un `Node Control/Rebirth`
-interno, emitido por el seguimiento de sesión de la propia Host Application para reparar un hueco de
-secuencia, con QoS 0 y sin retener.
+Lo que la plataforma publica en Sparkplug además de eso: con los comandos habilitados, los `NCMD` y `DCMD` de los
+comandos que envías, con QoS 0 y sin retener; siempre, un `NCMD` interno de `Node Control/Rebirth`, emitido por
+el seguimiento de sesión de la propia Host Application para reparar un hueco de secuencia.
 
 La Host Application sí publica su propio mensaje `STATE` en `spBv1.0/STATE/{host_id}`, retenido y
 con QoS 1: al conectarse, al detenerse limpiamente y como su Last-Will si muere. Ese es el contrato
@@ -437,5 +438,5 @@ Se nombran explícitamente porque, desde fuera de la plataforma, «ausente de la
 | Ingesta de dispositivo por WebSocket | No disponible. Figura como planeada en la [introducción](../intro.md). |
 | CoAP fuera de LwM2M | No disponible. CoAP llega a la plataforma a través de [LwM2M](../concepts/lwm2m.md) y no de otro modo. |
 | NATS en bruto como transporte de dispositivo | No disponible. Una credencial de dispositivo autoriza una conexión MQTT, y no existe un cliente de dispositivo nativo de NATS. |
-| Salida de comandos Sparkplug (`DCMD`) | No disponible, y deliberadamente fuera de alcance en lugar de pendiente; consulta [más arriba](#sparkplug-b). |
+| Salida de comandos Sparkplug (`DCMD`) | Disponible cuando una fuente la habilita, confirmada porque el nodo informa del valor y no por una confirmación, que Sparkplug no tiene; consulta [más arriba](#sparkplug-b). |
 | Protocolos de bus de campo industrial: OPC-UA, Modbus, BACnet | No disponibles como transportes de plataforma, y **nada de lo que publica el proyecto los habla.** La forma admitida es una pasarela local que hable el bus de campo en la red de planta y reenvíe por MQTT o HTTP; la traducción de protocolo la aportas tú. El proyecto sí publica `dc-edge-agent`, que hace la *otra* mitad de ese trabajo: termina localmente la vía MQTT del dispositivo, almacena de forma duradera durante un corte de WAN y reenvía **solo por MQTT**. No habla ningún bus de campo. |

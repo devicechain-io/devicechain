@@ -516,6 +516,63 @@ over it. It does not meter the message rate, births or deaths, and a message's t
 only by the broker. See [What Sparkplug ingest bounds](#unbounded-sparkplug-ingest).
 :::
 
+### Sparkplug commands {#sparkplug-commands}
+
+The command downlink described in [Sparkplug commands](../concepts/sparkplug.md#commands) is **opt-in and off by default**. It is configured per source, and **today only through Helm values**: `dcctl` refuses to take a `sparkplug-ingest` source in a values overlay, so sources, and with them commands, are set in the chart's values for `functionalAreas.sparkplug-ingest.config.sources`.
+
+```yaml
+functionalAreas:
+  sparkplug-ingest:
+    config:
+      sources:
+        - tenant: acme
+          hostId: devicechain
+          broker:
+            url: ssl://broker.acme.example:8883
+            username: devicechain
+            passwordEnv: SPARKPLUG_ACME_PW
+          groups: [plant-a]
+          commands:
+            enabled: true
+            hostRole: primary            # required: primary or secondary
+            writableMetrics:             # empty (the default) allows no writes
+              - "Outputs/*"
+            allowReboot: false
+```
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `false` | Turns the downlink on for this source |
+| `hostRole` | none, required | `primary` or `secondary`; see [primary and secondary host](../concepts/sparkplug.md#primary-and-secondary-host) |
+| `writableMetrics` | empty | Metrics `sparkplug.write` may target: exact names, or a prefix ending in `/*`. Empty allows **no** writes. `bdSeq` and the `Node Control/` and `Device Control/` metrics cannot be listed |
+| `allowReboot` | `false` | Lets `sparkplug.reboot` reach this source's nodes |
+| `confirmWindowSeconds` | `120` | How long a write is awaited for a report (5 to 900). Raise it for nodes on slow links |
+| `rebootWindowSeconds` | `600` | How long a reboot is awaited for the node's new birth, and the least time between two reboots of one node (30 to 3600) |
+| `clockSkewSeconds` | `30` | How far before the publish a node's own timestamp may be and still count (0 to 300) |
+| `publishPerSecond`, `burst` | `50`, `200` | The most commands put on the wire per second by this source, and the burst |
+
+Rules the service enforces at start, so a mistake stops it with a message rather than sending something unintended:
+
+- **One source per broker.** A source with commands enabled must be the only Sparkplug source for its broker endpoint, so a node can never be commanded twice. Merge the groups into one source.
+- **`hostRole` is required** when commands are enabled.
+- **`command-delivery` must be deployed.** The chart sets command-delivery's `sparkplugCommands` setting itself, from the sources, and refuses to render when a source enables commands and `command-delivery` is not enabled, or when the in-cluster `command-delivery` address is blank. That setting cannot be set by hand.
+
+After a rolling restart with the setting applied, declare the commands on the device profile (the console's **Add Sparkplug standard commands**) and publish it. Commands that reach a source that does not enable them fail at once as not delivered.
+
+#### The broker ACL {#sparkplug-commands-acl}
+
+The source's credential needs permission to **publish** commands, in addition to the read access and the `STATE` publish it already needs. For Mosquitto, in the ACL file, for the source's `username` and its groups:
+
+```
+user devicechain
+topic read spBv1.0/plant-a/#
+topic write spBv1.0/STATE/devicechain
+topic write spBv1.0/plant-a/NCMD/+
+topic write spBv1.0/plant-a/DCMD/+/+
+```
+
+Other brokers use their own syntax for the same rule: publish on `spBv1.0/<group>/NCMD/<node>` and `spBv1.0/<group>/DCMD/<node>/<device>`. A broker that silently discards a refused publish leaves commands at `TIMEOUT`; one that disconnects the client on a refused publish opens the circuit breaker, which raises `SparkplugCommandBreakerOpen`. If every command ends unconfirmed, `SparkplugCommandsUnconfirmed` fires, and the credential's publish permission is the first thing to check.
+
 ### What Sparkplug ingest bounds {#unbounded-sparkplug-ingest}
 
 **Readings are charged against the tenant's ingest ceiling.** Every numeric metric in an NDATA or
