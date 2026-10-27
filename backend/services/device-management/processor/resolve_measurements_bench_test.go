@@ -26,10 +26,11 @@ import (
 // baseline through every slice — a profile with no formulas pays one length check and
 // nothing else — while Calc1/Calc4 measure what evaluating formulas adds.
 //
-// The reading is the same in all three: four declared, measured metrics (three DOUBLE, one
+// The reading is the same in all four: four declared, measured metrics (three DOUBLE, one
 // INT), one sample entry. Only the profile changes. Calc1/Calc4 add, in this order, the
 // formulas core/calcfield's own benchmark measures in isolation (calcfield/bench_test.go,
-// benchFormulas), so the two read against each other:
+// benchFormulas), so the two read against each other; Calc8 appends four more single-input
+// formulas (calcBenchFormulas). The first four are:
 //
 //	power_kw  = voltage * current / 1000                               (DOUBLE)
 //	temp_f    = temp * 1.8 + 32                                        (DOUBLE)
@@ -44,7 +45,8 @@ var calcBenchMeasured = []*model.MetricDefinition{
 	{Model: gorm.Model{ID: 4}, MetricKey: "fan", DataType: string(model.MetricInt)},
 }
 
-// calcBenchFormulas are the calculated metrics Calc1 and Calc4 add, in order.
+// calcBenchFormulas are the calculated metrics Calc1, Calc4 and Calc8 add, in order (each takes a
+// prefix).
 var calcBenchFormulas = []*model.MetricDefinition{
 	calcBenchMetric(5, "power_kw", model.MetricDouble, "kW", "voltage * current / 1000"),
 	calcBenchMetric(6, "temp_f", model.MetricDouble, "[degF]", "temp * 1.8 + 32"),
@@ -118,7 +120,7 @@ func BenchmarkResolveMeasurements_Calc1(b *testing.B) {
 	benchResolveMeasurements(b, calcBenchProfile(1))
 }
 
-// BenchmarkResolveMeasurements_Calc4 is the same reading with all four calculated metrics.
+// BenchmarkResolveMeasurements_Calc4 is the same reading with the first four calculated metrics.
 func BenchmarkResolveMeasurements_Calc4(b *testing.B) {
 	benchResolveMeasurements(b, calcBenchProfile(4))
 }

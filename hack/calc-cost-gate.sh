@@ -20,54 +20,65 @@
 #
 # 🔴 A NUMBER FROM AN ARM THAT DID NOT COMPUTE WHAT ITS LABEL SAYS IS WORTH NOTHING. So:
 #   1. `control` runs before anything else and is the harness's negative control: with the tier at
-#      0 a publish of 8 formulas MUST be refused. If it is not, the harness is measuring a
-#      formula-free profile under another label; it exits 3, writes control.failed, and `arm`/`run`
-#      refuse to continue until a later `control` passes.
-#   2. `run` checks each arm after the load: calcmetric_evaluations_total moved (and
-#      calcmetric_skipped_total did not) for N>0 and did not move for N=0; the newest stored
-#      instants hold exactly raws+N rows each; and, when --accepted is given, the stored row count
-#      in the window equals accepted x (raws+N). A failed check exits 4 and the row is written
-#      with ok=false, which tabulate.py never lets pass.
+#      0 a publish of 8 formulas MUST be refused LIMIT_EXCEEDED naming calculated metrics. If it
+#      is not, the harness is measuring a formula-free profile under another label; it exits 3,
+#      writes control.failed, and `arm`/`run` refuse to continue until a later `control` passes.
+#   2. `run` checks each arm after the load, and any failure exits 4 with the row written ok=false
+#      (tabulate.py never lets such a row pass):
+#        - the load command exits 0 (for EVERY N: dc-loadtest-mqtt's oracle counts base events,
+#          one per message, so derived rows do not trip it) and its --report file is fresh;
+#        - calcmetric_evaluations_total moved by exactly N x the events the report says the broker
+#          promised, and calcmetric_skipped_total did not move;
+#        - the newest stored instants hold exactly raws+N distinct rows each;
+#        - the stored row count in the window (measurementEvents totalRecords: every raw and
+#          derived row) equals promised x (raws+N).
+#      The evaluations counter is summed over every device-management pod and every tenant, so run
+#      the gate on an instance with no other calculated-metric traffic.
+#   3. Rows are compared on MEASURED rates (the report's PUBACK rate and the settled stored row
+#      count over the hold), never on the typed target, and tabulate.py refuses to compare arms
+#      run on different device-management / event-management images.
 #
-# 🔴 dc-loadtest / dc-loadtest-mqtt COUNT EVERY STORED MEASUREMENT ROW, derived ones included, so on
-# an N>0 arm their own persisted-beyond-accepted invariant reports an excess. That is expected,
-# not a loss: the harness records the load command's exit code (load_rc) and does NOT abort on it
-# for N>0, and replaces the loss check with the exact one above (--accepted). Pass the number of
-# events the load command PUBACKed/accepted as --accepted; without it the arm is "unverified" and
-# cannot pass. On an N=0 arm a non-zero load_rc fails the arm as usual.
+# THE LOAD COMMAND MUST WRITE A REPORT: pass --report FILE to dc-loadtest-mqtt (after the `--`).
 #
-# THE KUBE CONTEXT IS NEVER TOUCHED. Every kubectl call carries --kubeconfig <file> explicitly,
-# and the script refuses to run without one (--kubeconfig, or KUBECONFIG pointing at an existing
-# file). It never calls `kubectl config use-context`. Give each lane its own file.
+# THE KUBE CONTEXT IS NEVER TOUCHED. Every kubectl call carries --kubeconfig FILE and --context
+# NAME explicitly, and the script refuses to run without both. It never calls
+# `kubectl config use-context`. Give each lane its own kubeconfig.
+#
+# THE TIER EDIT AFFECTS EVERY TENANT AT THAT TIER, not just the sim's: `arm` merges
+# calculatedMetricsPerProfile into the tier's config. Use a tier of its own for the gate (create
+# one and move the sim tenant to it) on any instance that carries other tenants; the original
+# config is saved once and `restore` writes it back.
 #
 # USAGE
 #   export DC_ADMIN_EMAIL=... DC_ADMIN_PASSWORD=...   # a superuser: tier edits are /admin/graphql
 #   hack/calc-cost-gate.sh plan    --c0-rate 10000 [--raws 1]
-#   hack/calc-cost-gate.sh control --handshake H --kubeconfig K
-#   hack/calc-cost-gate.sh arm     --arm C4 --handshake H --kubeconfig K       # tier + draft + publish
-#   hack/calc-cost-gate.sh run     --arm C4 --run 1 --rate 10000 --accepted 6000000 \
-#         --handshake H --kubeconfig K --namespace NS [--raws 1] [--out DIR] \
+#   hack/calc-cost-gate.sh control --handshake H --kubeconfig K --context C
+#   hack/calc-cost-gate.sh arm     --arm C4 --handshake H --kubeconfig K --context C
+#   hack/calc-cost-gate.sh run     --arm C4 --run 1 --handshake H --kubeconfig K --context C \
+#         --namespace NS [--raws 1] [--out DIR] \
 #         [--prom-url URL --prom name='PROMQL with $WINDOW'] [--metric name=value ...] \
-#         -- ./dc-loadtest-mqtt --handshake H --duration 10m ...
+#         -- ./dc-loadtest-mqtt --handshake H --duration 10m --report DIR/C4-1.json ...
 #   hack/calc-cost-gate.sh restore --handshake H                               # tier config back
 #   hack/calc-cost-gate.sh table   [--out DIR]                                 # tabulate.py
 #   hack/calc-cost-gate.sh self-test
 #
+#   Run every gating arm (C0, C1, C8-eq or C4-eq) at least TWICE: tabulate.py fails an arm with
+#   fewer. C0 passes on its two runs' recorded spread plus the Calc0 benchmark
+#   (BenchmarkResolveMeasurements_Calc0); an optional B0 arm (the previous release image, digest
+#   recorded in the row's images, so it is exempt from the same-build rule) adds a +-1% check.
+#
 #   H  the sim record `dcctl sim create` wrote (tenant, sim login, endpoints, adminURL). The sim
 #      profile devicepulse-profile (metric speed_kph) must already exist: provision it by
 #      running the load command once (a short --duration), then wait 30 s (its clean-tenant check).
-#   `arm` sets the tenant's tier ceiling to --ceiling (default 8: the platform default is still 0
-#   until the gate passes), reconciles the draft to exactly N formulas, and publishes. The tier
-#   change reaches device-management within about a minute, so publish is retried for --propagate
+#   `arm` sets the tier ceiling to --ceiling (default 8: the platform default is still 0 until the
+#   gate passes), reconciles the draft to exactly N formulas, and publishes. The tier change
+#   reaches device-management within about a minute, so publish is retried for --propagate
 #   seconds (default 150); `control` waits the whole window before it tries, so a stale cached
 #   ceiling can only make the control fail loudly, never pass falsely.
-#   The tier edit is a MERGE of one key into the tier's existing config (the original is saved in
-#   DIR/tier-<token>.orig.json once, and `restore` writes it back).
-#   Every `run` appends one JSON object to DIR/results.jsonl (default ./calc-cost-gate-out);
-#   `table` / tabulate.py turns that into the verdicts. Metrics the harness cannot read itself
-#   (throughput, p99, EM CPU, lag, bytes) come in through --prom or --metric under the names
-#   tabulate.py documents. Pod metrics are read through the kube API (no port-forward), from every
-#   device-management pod.
+#   Every `run` appends one JSON object to DIR/results.jsonl (default ./calc-cost-gate-out).
+#   Metrics the harness cannot read itself (DM CPU per reading, p99, EM CPU per row, lag, bytes)
+#   come in through --prom or --metric under the names tabulate.py documents. Pod metrics are read
+#   through the kube API (no port-forward), from every device-management pod.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -98,7 +109,7 @@ jq() { command jq "$@" | tr -d '\r'; }
 die() { echo "calc-cost-gate: $*" >&2; exit "${DIE_RC:-1}"; }
 log() { echo "calc-cost-gate: $*" >&2; }
 need() { command -v "$1" >/dev/null 2>&1 || die "$1 is required on PATH"; }
-usage() { sed -n '4,64p' "$SELF" | sed 's/^# \{0,1\}//'; exit 2; }
+usage() { awk 'NR > 3 && /^#/ {sub(/^# ?/, ""); print; next} NR > 3 {exit}' "$SELF"; exit 2; }
 
 # ---- the pure checks (self-tested) --------------------------------------------------------
 
@@ -111,13 +122,16 @@ tier_merge() {
   jq -c --argjson v "$1" '. + {calculatedMetricsPerProfile: $v}' <<<"$raw"
 }
 
-# rows_check WANT N: stdin = measurementEvents results JSON array [{deviceToken,occurredTime,name}].
-# Prints "<complete instants> <bad instants>". The oldest instant is dropped because the page may
-# have cut it. A complete instant is good only when it holds WANT rows, all under distinct names,
-# exactly N of them formula keys.
+# rows_check WANT N: stdin = measurementEvents results JSON array [{deviceToken,occurredTime,name}],
+# NEWEST FIRST. Prints "<complete instants> <bad instants>". The page may have cut the oldest
+# instant for any number of devices, so EVERY row at the last row's occurredTime is dropped. A
+# complete instant is good only when it holds WANT rows, all under distinct names, exactly N of
+# them formula keys.
 rows_check() {
   jq -r --argjson want "$1" --arg prefix "$KEY_PREFIX" --argjson n "$2" '
-    group_by([.deviceToken, .occurredTime]) | sort_by(.[0].occurredTime) | .[1:] as $g
+    (if length == 0 then null else .[-1].occurredTime end) as $cut
+    | map(select(.occurredTime != $cut))
+    | group_by([.deviceToken, .occurredTime]) as $g
     | ($g | map(select(
           ((map(.name) | unique | length) != $want)
           or ((map(.name) | unique | map(select(startswith($prefix))) | length) != $n)
@@ -125,15 +139,13 @@ rows_check() {
     | "\($g | length) \($bad | length)"'
 }
 
-# counters_check N EVAL_DELTA SKIP_DELTA: prints a reason and returns 1 when the counters
-# contradict the arm.
+# counters_check N EVAL_DELTA SKIP_DELTA PROMISED: prints a reason and returns 1 when the counters
+# contradict the arm: N formulas compute once per accepted event, so evaluations must be exactly
+# N x PROMISED, and nothing may be skipped.
 counters_check() {
-  local n="$1" ev="$2" sk="$3"
-  if [[ "$n" -eq 0 ]]; then
-    [[ "$ev" -eq 0 ]] || { echo "N=0 but calcmetric_evaluations_total moved by $ev (the profile still computes formulas)"; return 1; }
-    return 0
-  fi
-  [[ "$ev" -gt 0 ]] || { echo "N=$n but calcmetric_evaluations_total did not move (nothing computed: this arm measured a formula-free profile)"; return 1; }
+  local n="$1" ev="$2" sk="$3" promised="$4" want
+  want=$((n * promised))
+  [[ "$ev" -eq "$want" ]] || { echo "calcmetric_evaluations_total moved by $ev, wanted N x promised = $n x $promised = $want (N>0 with none means the arm measured a formula-free profile; more means another tenant or redelivery)"; return 1; }
   [[ "$sk" -eq 0 ]] || { echo "calcmetric_skipped_total moved by $sk (formulas skipped; the arm is not what its label says)"; return 1; }
   return 0
 }
@@ -143,7 +155,7 @@ counters_check() {
 SUB="${1:-}"
 [[ -n "$SUB" ]] || usage
 shift || true
-HANDSHAKE="" KCFG="" NS="" ARM="" RUN="1" RATE="" ACCEPTED="" RAWS="1" OUT="./calc-cost-gate-out"
+HANDSHAKE="" KCFG="" KCTX="" NS="" ARM="" RUN="1" RAWS="1" OUT="./calc-cost-gate-out"
 CEILING=8 PROPAGATE=150 SETTLE=300 PROM_URL="" C0_RATE=""
 declare -a PROMS=() METRICS=() LOADCMD=()
 while [[ $# -gt 0 ]]; do
@@ -153,8 +165,7 @@ while [[ $# -gt 0 ]]; do
     --namespace) NS="$2"; shift 2 ;;
     --arm) ARM="$2"; shift 2 ;;
     --run) RUN="$2"; shift 2 ;;
-    --rate) RATE="$2"; shift 2 ;;
-    --accepted) ACCEPTED="$2"; shift 2 ;;
+    --context) KCTX="$2"; shift 2 ;;
     --raws) RAWS="$2"; shift 2 ;;
     --out) OUT="$2"; shift 2 ;;
     --ceiling) CEILING="$2"; shift 2 ;;
@@ -193,36 +204,44 @@ self_test() {
   out="$(echo '' | tier_merge 8)"
   [[ "$out" == '{"calculatedMetricsPerProfile":8}' ]] || t "tier_merge of an empty config: $out"
 
-  counters_check 8 1000 0 >/dev/null || t "counters_check refused a good N=8 arm"
-  counters_check 0 0 0 >/dev/null || t "counters_check refused a good N=0 arm"
-  if counters_check 8 0 0 >/dev/null; then t "counters_check admitted an N=8 arm that computed nothing (the label lies)"; fi
-  if counters_check 8 1000 3 >/dev/null; then t "counters_check admitted skipped formulas"; fi
-  if counters_check 0 5 0 >/dev/null; then t "counters_check admitted evaluations on an N=0 arm"; fi
+  counters_check 8 8000 0 1000 >/dev/null || t "counters_check refused a good N=8 arm"
+  counters_check 0 0 0 1000 >/dev/null || t "counters_check refused a good N=0 arm"
+  if counters_check 8 0 0 1000 >/dev/null; then t "counters_check admitted an N=8 arm that computed nothing (the label lies)"; fi
+  if counters_check 8 8000 3 1000 >/dev/null; then t "counters_check admitted skipped formulas"; fi
+  if counters_check 0 5 0 1000 >/dev/null; then t "counters_check admitted evaluations on an N=0 arm"; fi
+  if counters_check 8 7999 0 1000 >/dev/null; then t "counters_check admitted fewer evaluations than N x promised"; fi
+  if counters_check 8 8001 0 1000 >/dev/null; then t "counters_check admitted more evaluations than N x promised"; fi
 
+  # newest first, like the server's page: instants t4..t1, three rows each (raw + 2 derived)
   good='[]'
-  for i in 1 2 3; do
+  for i in 4 3 2 1; do
     good="$(jq -c --arg t "2026-10-27T10:00:0${i}Z" '. + [{deviceToken:"d1",occurredTime:$t,name:"speed_kph"},{deviceToken:"d1",occurredTime:$t,name:"g21_calc_1"},{deviceToken:"d1",occurredTime:$t,name:"g21_calc_2"}]' <<<"$good")"
   done
   out="$(rows_check 3 2 <<<"$good")"
-  [[ "$out" == "2 0" ]] || t "rows_check on good rows: '$out'"
-  # twin: a formula row missing from a complete instant must be counted bad
+  [[ "$out" == "3 0" ]] || t "rows_check on good rows: '$out'"
   bad="$(jq -c 'del(.[4])' <<<"$good")"
   out="$(rows_check 3 2 <<<"$bad")"
-  [[ "$out" == "2 1" ]] || t "rows_check admitted an instant missing a derived row: '$out'"
-  # twin: raw-only instants (a formula-free profile) must all be counted bad for N=2
+  [[ "$out" == "3 1" ]] || t "rows_check admitted an instant missing a derived row: '$out'"
   bad="$(jq -c '[.[] | select(.name == "speed_kph")]' <<<"$good")"
   out="$(rows_check 3 2 <<<"$bad")"
-  [[ "$out" == "2 2" ]] || t "rows_check admitted raw-only instants for N=2: '$out'"
+  [[ "$out" == "3 3" ]] || t "rows_check admitted raw-only instants for N=2: '$out'"
+  bad="$(jq -c '.[:5] + [.[4]] + .[5:]' <<<"$good")"
+  out="$(rows_check 3 2 <<<"$bad")"
+  [[ "$out" == "3 1" ]] || t "rows_check admitted a duplicated row: '$out'"
+  # twin: the page cut the oldest instant for a SECOND device; every row at that instant is dropped
+  bad="$(jq -c '. + [{deviceToken:"d2",occurredTime:"2026-10-27T10:00:01Z",name:"speed_kph"}]' <<<"$good")"
+  out="$(rows_check 3 2 <<<"$bad")"
+  [[ "$out" == "3 0" ]] || t "rows_check judged a cut oldest instant of a second device: '$out'"
+  # ...and a second device's partial instant that is NOT the oldest is still bad
+  bad="$(jq -c '.[:3] + [{deviceToken:"d2",occurredTime:"2026-10-27T10:00:04Z",name:"speed_kph"}] + .[3:]' <<<"$good")"
+  out="$(rows_check 3 2 <<<"$bad")"
+  [[ "$out" == "4 1" ]] || t "rows_check admitted a partial instant that is not the oldest: '$out'"
 
   if [[ -f "$TABULATE" ]]; then
     python3 -I "$TABULATE" --self-test >&2 || rc=1
   else
     t "tabulate.py is missing"
   fi
-  # twin: a duplicated row inside an instant (a derived row stored twice) must be counted bad
-  bad="$(jq -c '. + [.[4]]' <<<"$good")"
-  out="$(rows_check 3 2 <<<"$bad")"
-  [[ "$out" == "2 1" ]] || t "rows_check admitted a duplicated row: '$out'"
 
   if [[ "$rc" -eq 0 ]]; then echo "calc-cost-gate self-test: ok"; fi
   return "$rc"
@@ -236,10 +255,10 @@ if [[ "$SUB" == plan ]]; then
   python3 -I - "$C0_RATE" "$RAWS" <<'PY'
 import sys
 rate, raws = float(sys.argv[1]), int(sys.argv[2])
-print("# readings/s per arm, holding stored rows/s equal to C0 (raws per sample = %d)" % raws)
+print("# events/s per arm, holding stored rows/s equal to C0 (raws per sample = %d)" % raws)
 for arm, n in (("C0", 0), ("C1", 1), ("C4", 4), ("C4-eq", 4), ("C8-eq", 8)):
     r = rate if not arm.endswith("-eq") else rate * raws / (raws + n)
-    print("%-8s N=%d  rate=%.0f readings/s  stored=%.0f rows/s" % (arm, n, r, r * (raws + n)))
+    print("%-8s N=%d  rate=%.0f events/s  stored=%.0f rows/s" % (arm, n, r, r * (raws + n)))
 print("C8-knee  N=8  step up from the C8-eq rate by x1.5 until EM lag starts to grow")
 PY
   exit 0
@@ -252,7 +271,7 @@ fi
 
 # ---- everything below talks to a cluster --------------------------------------------------
 
-need jq; need curl; need python3
+need jq; need curl; need python3; need kubectl
 [[ -n "$HANDSHAKE" && -f "$HANDSHAKE" ]] || die "--handshake FILE (the dcctl sim record) is required"
 HS="$(cat "$HANDSHAKE")"
 hs() { jq -er "$1" <<<"$HS"; }
@@ -319,11 +338,11 @@ tenant_token() {
   jq -er '.data.selectTenant.accessToken' <<<"$r"
 }
 
-# k ARGS...: kubectl against the lane's own kubeconfig, always explicit.
+# k ARGS...: kubectl against the lane's own kubeconfig AND context, always explicit.
 k() {
-  if [[ -z "$KCFG" && -n "${KUBECONFIG:-}" ]]; then KCFG="${KUBECONFIG%%:*}"; fi
-  [[ -n "$KCFG" && -f "$KCFG" ]] || die "a lane-private kubeconfig is required (--kubeconfig FILE); this harness never uses the shared current-context"
-  kubectl --kubeconfig "$KCFG" "$@"
+  [[ -n "$KCFG" && -f "$KCFG" ]] || die "a lane-private kubeconfig is required (--kubeconfig FILE); this harness never uses the shared kubeconfig"
+  [[ -n "$KCTX" ]] || die "a kube context is required (--context NAME); this harness never uses the current-context"
+  kubectl --kubeconfig "$KCFG" --context "$KCTX" "$@"
 }
 
 # ---- tier ---------------------------------------------------------------------------------
@@ -366,14 +385,14 @@ author_formulas() {
     || die "profile $PROFILE has no metric $RAW_KEY: run the load command once (short --duration) so the sim provisions it, then wait 30 s"
   foreign="$(jq -r --arg p "$KEY_PREFIX" '[.data.metricDefinitions.results[] | select(.expression != null and (.metricKey|startswith($p)|not)) | .metricKey] | join(",")' <<<"$r")"
   [[ -z "$foreign" ]] || die "the profile carries calculated metrics this harness did not author ($foreign); refusing to measure over them"
-  for tok in $(jq -r --arg p "$KEY_PREFIX" '.data.metricDefinitions.results[] | select(.expression != null and (.metricKey|startswith($p))) | .token' <<<"$r"); do
-    key="${tok#md-}"
+  while IFS=$'	' read -r tok key; do
+    [[ -n "$tok" ]] || continue
     i="${key#"$KEY_PREFIX"}"
     if [[ "$i" -gt "$n" ]]; then
       gql "$DM_GQL" "$DM_TOKEN" 'mutation($t:String!){deleteMetricDefinition(token:$t)}' "$(jq -nc --arg t "$tok" '{t:$t}')" >/dev/null \
         || die "deleteMetricDefinition $tok failed: $(gql_err)"
     fi
-  done
+  done < <(jq -r --arg p "$KEY_PREFIX" '.data.metricDefinitions.results[] | select(.expression != null and (.metricKey|startswith($p))) | [.token, .metricKey] | @tsv' <<<"$r")
   for ((i = 1; i <= n; i++)); do
     key="$KEY_PREFIX$i"
     if jq -e --arg k "$key" '[.data.metricDefinitions.results[] | select(.metricKey==$k)] | length > 0' <<<"$r" >/dev/null; then continue; fi
@@ -408,9 +427,9 @@ cmd_control() {
     echo "version $v published 8 formulas under a tier at 0" >"$STATE/control.failed"
     DIE_RC=3 die "NEGATIVE CONTROL FAILED: a publish of 8 calculated metrics was ACCEPTED (version $v) with the tier ceiling at 0. The harness cannot tell a calculated profile from a formula-free one; nothing it measures can be believed. Stopping."
   fi
-  if [[ "$(gql_code)" != LIMIT_EXCEEDED ]]; then
+  if [[ "$(gql_code)" != LIMIT_EXCEEDED || "$(gql_err)" != *"calculated metric"* ]]; then
     echo "refused for the wrong reason: $(gql_code): $(gql_err)" >"$STATE/control.failed"
-    DIE_RC=3 die "NEGATIVE CONTROL INCONCLUSIVE: the publish was refused, but with '$(gql_code)' ($(gql_err)), not LIMIT_EXCEEDED."
+    DIE_RC=3 die "NEGATIVE CONTROL INCONCLUSIVE: the publish was refused, but with '$(gql_code)' ($(gql_err)), not LIMIT_EXCEEDED naming calculated metrics."
   fi
   now >"$STATE/control.ok"
   log "negative control passed: the publish was refused LIMIT_EXCEEDED ($(gql_err))"
@@ -457,70 +476,96 @@ epoch() { date -u +%s; }
 iso() { date -u -d "@$1" +%FT%TZ; }
 
 TENANT_TOKEN=""
-# stored_rows FROM TO: measurement rows stored in [FROM, TO] for the tenant.
+# stored_rows FROM TO: every measurement row (raw and derived) stored in [FROM, TO] for the tenant.
+# measurementEvents counts rows; events(eventTypes:[2]) counts one per message and would miss the
+# derived ones.
 stored_rows() {
   local r
-  r="$(gql "$EM_GQL" "$TENANT_TOKEN" 'query($c:EventSearchCriteria!){events(criteria:$c){pagination{totalRecords}}}' \
-      "$(jq -nc --arg a "$1" --arg b "$2" '{c:{pageNumber:1,pageSize:1,eventTypes:[2],startTime:$a,endTime:$b}}')")" \
-    || die "events count failed: $(gql_err)"
-  jq -er '.data.events.pagination.totalRecords' <<<"$r"
+  r="$(gql "$EM_GQL" "$TENANT_TOKEN" 'query($c:EventSearchCriteria!){measurementEvents(criteria:$c){pagination{totalRecords}}}' \
+      "$(jq -nc --arg a "$1" --arg b "$2" '{c:{pageNumber:1,pageSize:1,startTime:$a,endTime:$b}}')")" \
+    || die "measurementEvents count failed: $(gql_err)"
+  jq -er '.data.measurementEvents.pagination.totalRecords' <<<"$r"
+}
+
+# area_images AREA: the distinct image IDs of the area's pods, sorted, comma-joined.
+area_images() {
+  k -n "$NS" get pods -l "devicechain.io/functional-area=$1" \
+    -o jsonpath='{range .items[*]}{range .status.containerStatuses[*]}{.imageID}{"\n"}{end}{end}' | sort -u | paste -sd, -
 }
 
 cmd_run() {
   [[ -n "$ARM" ]] || die "--arm is required"
   [[ ${#LOADCMD[@]} -gt 0 ]] || die "give the load command after --"
-  local n armed_arm armed_n armed_v
+  local n armed_arm armed_n armed_v report="" i
   n="$(arm_formulas "$ARM")"
+  for ((i = 0; i < ${#LOADCMD[@]}; i++)); do
+    case "${LOADCMD[$i]}" in
+      --report) report="${LOADCMD[$((i + 1))]:-}" ;;
+      --report=*) report="${LOADCMD[$i]#--report=}" ;;
+    esac
+  done
+  [[ -n "$report" ]] || die "the load command must write a report: add --report FILE after the --"
   control_ok || die "the negative control has not passed on this state dir ($STATE): run 'control' first"
   [[ -f "$STATE/armed" ]] || die "no arm is armed: run 'arm' first"
   read -r armed_arm armed_n armed_v <"$STATE/armed"
   [[ "$armed_n" == "$n" ]] || die "the armed profile holds $armed_n formula(s) (arm $armed_arm, version $armed_v), not $n for $ARM: run 'arm --arm $ARM'"
   TENANT_TOKEN="$(tenant_token)"
-  local ev0 sk0 ev1 sk1 t0 t1 rc=0 e0 e1 ok=true why="" reason evd skd wall
+  local ok=true why="" reason rc=0 t0 t1 e0 e1 marker
+  local dm0 em0 dm1 em1 ev0 sk0 ev1 sk1
+  marker="$(mktemp)"
+  dm0="$(area_images device-management)"; em0="$(area_images event-management)"
   ev0="$(dm_counter calcmetric_evaluations_total)"; sk0="$(dm_counter calcmetric_skipped_total)"
   t0="$(now)"; e0="$(epoch)"
   log "arm $ARM run $RUN: starting the load command"
   "${LOADCMD[@]}" || rc=$?
   t1="$(now)"; e1="$(epoch)"
-  ev1="$(dm_counter calcmetric_evaluations_total)"; sk1="$(dm_counter calcmetric_skipped_total)"
-  evd=$((ev1 - ev0)); skd=$((sk1 - sk0)); wall=$((e1 - e0))
+  local wall=$((e1 - e0))
 
-  if [[ "$rc" -ne 0 ]]; then
-    if [[ "$n" -eq 0 ]]; then ok=false; why="the load command exited $rc on a formula-free arm"
-    else log "load command exited $rc: on an N>0 arm its persisted-beyond-accepted invariant counts derived rows; relying on the exact row check instead"; fi
+  # The report is the source of the promised count and the measured rate.
+  local promised=0 acked=null target=null hold=null
+  if [[ "$rc" -ne 0 ]]; then ok=false; why="the load command exited $rc"; fi
+  if [[ ! -f "$report" || ! "$report" -nt "$marker" ]]; then
+    ok=false; why="${why:+$why; }the load report $report is missing or older than this run"
+  else
+    promised="$(jq -er '.storage.promised' "$report")" || die "no .storage.promised in $report"
+    acked="$(jq -er '.drive.pubackedRatePerSec' "$report")" || die "no .drive.pubackedRatePerSec in $report"
+    target="$(jq -er '.drive.targetRatePerSec' "$report")" || die "no .drive.targetRatePerSec in $report"
+    hold="$(jq -er '.drive.holdSeconds' "$report")" || die "no .drive.holdSeconds in $report"
   fi
-  if ! reason="$(counters_check "$n" "$evd" "$skd")"; then ok=false; why="${why:+$why; }$reason"; fi
+  rm -f "$marker"
+
+  # The exact stored-row count, once it settles.
+  local want=$((promised * (RAWS + n))) stored=0 prev=-1 cur from to deadline=$((SECONDS + SETTLE))
+  from="$(iso "$((e0 - 5))")"
+  while true; do
+    to="$(iso "$(($(epoch) + 5))")"
+    cur="$(stored_rows "$from" "$to")"
+    if [[ "$cur" == "$prev" && "$cur" -ge "$want" ]] || [[ "$SECONDS" -ge "$deadline" ]]; then break; fi
+    prev="$cur"; sleep 10
+  done
+  stored="$cur"
+  local rows_ok=true
+  if [[ "$promised" -le 0 || "$stored" -ne "$want" ]]; then
+    rows_ok=false; ok=false
+    why="${why:+$why; }stored $stored rows in the window, wanted promised x (raws+N) = $promised x $((RAWS + n)) = $want"
+  fi
+
+  # Counters are read after the rows settle, so the resolver has finished with every event.
+  ev1="$(dm_counter calcmetric_evaluations_total)"; sk1="$(dm_counter calcmetric_skipped_total)"
+  dm1="$(area_images device-management)"; em1="$(area_images event-management)"
+  local evd=$((ev1 - ev0)) skd=$((sk1 - sk0))
+  if [[ "$dm0" != "$dm1" || "$em0" != "$em1" ]]; then ok=false; why="${why:+$why; }the device-management or event-management image changed during the run"; fi
+  if ! reason="$(counters_check "$n" "$evd" "$skd" "$promised")"; then ok=false; why="${why:+$why; }$reason"; fi
 
   # The newest stored instants: every complete one must hold raws + N rows.
   local page rowsres inst bad
   page="$(gql "$EM_GQL" "$TENANT_TOKEN" 'query($c:EventSearchCriteria!){measurementEvents(criteria:$c){results{deviceToken occurredTime name}}}' \
-        "$(jq -nc --arg a "$(iso "$((e1 - 60))")" '{c:{pageNumber:1,pageSize:400,startTime:$a}}')")" \
+        "$(jq -nc --arg a "$(iso "$((e1 - 60))")" --arg b "$(iso "$((e1 + 5))")" '{c:{pageNumber:1,pageSize:400,startTime:$a,endTime:$b}}')")" \
     || die "measurementEvents failed: $(gql_err)"
   rowsres="$(jq -c '.data.measurementEvents.results' <<<"$page" | rows_check "$((RAWS + n))" "$n")"
   inst="${rowsres% *}"; bad="${rowsres#* }"
-  if [[ "$inst" -lt 3 ]]; then ok=false; why="${why:+$why; }only $inst complete stored instant(s) in the last 60 s: nothing to check the row shape against"
+  if [[ "$inst" -lt 3 ]]; then ok=false; why="${why:+$why; }only $inst complete stored instant(s) in the last 60 s of the load: nothing to check the row shape against"
   elif [[ "$bad" -ne 0 ]]; then ok=false; why="${why:+$why; }$bad of $inst stored instants do not hold exactly $((RAWS + n)) rows"; fi
-
-  # The exact stored-row count, once it settles.
-  local stored="null" want="null" rows_ok=null
-  if [[ -n "$ACCEPTED" ]]; then
-    want=$((ACCEPTED * (RAWS + n)))
-    local prev=-1 cur from to deadline=$((SECONDS + SETTLE))
-    from="$(iso "$((e0 - 5))")"
-    while true; do
-      to="$(iso "$(($(epoch) + 5))")"
-      cur="$(stored_rows "$from" "$to")"
-      if [[ "$cur" == "$prev" && "$cur" -ge "$want" ]] || [[ "$SECONDS" -ge "$deadline" ]]; then break; fi
-      prev="$cur"; sleep 10
-    done
-    stored="$cur"
-    if [[ "$stored" -eq "$want" ]]; then rows_ok=true; else
-      rows_ok=false; ok=false
-      why="${why:+$why; }stored $stored rows in the window, wanted accepted x (raws+N) = $ACCEPTED x $((RAWS + n)) = $want"
-    fi
-  else
-    log "no --accepted: the stored-row count is UNVERIFIED and tabulate.py will not let this arm pass"
-  fi
 
   # Optional Prometheus reads, then free-form metrics.
   local extra='{}' spec name expr val
@@ -537,16 +582,19 @@ cmd_run() {
     extra="$(jq -c --arg k "${spec%%=*}" --argjson v "${spec#*=}" '. + {($k): $v}' <<<"$extra")" || die "--metric $spec is not name=<number>"
   done
 
+  local srps=null
+  if [[ "$hold" != null ]] && awk -v h="$hold" 'BEGIN{exit !(h > 0)}'; then srps="$(awk -v s="$stored" -v h="$hold" 'BEGIN{printf "%.3f", s / h}')"; fi
   jq -nc --arg arm "$ARM" --argjson run "$RUN" --argjson n "$n" --argjson raws "$RAWS" \
         --arg t0 "$t0" --arg t1 "$t1" --argjson wall "$wall" --argjson rc "$rc" \
         --argjson evd "$evd" --argjson skd "$skd" --argjson inst "$inst" --argjson bad "$bad" \
-        --argjson rate "${RATE:-null}" --argjson accepted "${ACCEPTED:-null}" \
-        --argjson stored "$stored" --argjson want "$want" --argjson rows_ok "$rows_ok" \
-        --argjson ok "$ok" --arg why "$why" --argjson extra "$extra" \
+        --argjson target "$target" --argjson acked "$acked" --argjson hold "$hold" --argjson promised "$promised" \
+        --argjson stored "$stored" --argjson want "$want" --argjson srps "$srps" --argjson rows_ok "$rows_ok" \
+        --arg dm "$dm1" --arg em "$em1" --argjson ok "$ok" --arg why "$why" --argjson extra "$extra" \
         '{arm:$arm,run:$run,formulas:$n,raws:$raws,start:$t0,end:$t1,wall_s:$wall,load_rc:$rc,
           eval_delta:$evd,skip_delta:$skd,instants_checked:$inst,instants_bad:$bad,
-          readings_per_s:$rate,accepted:$accepted,stored_rows:$stored,expected_rows:$want,rows_ok:$rows_ok,
-          ok:$ok,why:$why} + $extra' >>"$OUT/results.jsonl"
+          target_rate_ps:$target,readings_per_s:$acked,hold_s:$hold,promised:$promised,
+          stored_rows:$stored,expected_rows:$want,stored_rows_per_s:$srps,rows_ok:$rows_ok,
+          dm_image:$dm,em_image:$em,ok:$ok,why:$why} + $extra' >>"$OUT/results.jsonl"
   if [[ "$ok" != true ]]; then DIE_RC=4 die "arm $ARM run $RUN FAILED its checks: $why (row written with ok=false)"; fi
   log "arm $ARM run $RUN ok: evaluations +$evd, skipped +$skd, $inst instants hold $((RAWS + n)) rows"
 }
