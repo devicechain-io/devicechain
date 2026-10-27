@@ -84,3 +84,6 @@ scratchpad/
 # extracted inside frontend/ so module resolution finds frontend/node_modules.
 frontend/.api-baseline/
 frontend/.api-selftest/
+
+# hack/ota-rig.sh: the rig's kubeconfig and state (a cluster credential; never committed)
+/.ota-rig/
