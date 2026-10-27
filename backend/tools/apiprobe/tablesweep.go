@@ -224,6 +224,10 @@ var tableSweepExemptions = map[string]string{
 		"drill claims, so it is a decision rather than an omission.",
 
 	// ---- queues that are empty once they have caught up -----------------------
+	"device-management.pending_session_kicks": "the provisioning session-kick queue: a row is written in the " +
+		"transaction of a profile revoke or a device reset, and deleted once the broker's responder confirmed " +
+		"the device's sessions ended. A seed that revokes or resets with a healthy responder leaves it empty; " +
+		"a row that stays means the kick is still owed, which the repeat of that operation retries.",
 	"device-management.pending_ownership_facts": "the ownership outbox: a row lives from the commit of " +
 		"a write that may move a device's owners until device-management's drain, which runs every " +
 		"second, has published the device's anchors to device-state. Every edge the seed writes queues " +
