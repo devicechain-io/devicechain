@@ -185,6 +185,11 @@ func TestAFailedMarkerWriteIsKeptForTheNextAttempt(t *testing.T) {
 
 func TestTheUndecodedTableIsBounded(t *testing.T) {
 	f, c := newFakeBackend(), newClock()
+	// Writes fail, so every tally stays pending: a tally whose write succeeded is idle and is
+	// evicted to make room, which is correct but would make this count depend on timing.
+	f.mu.Lock()
+	f.down = true
+	f.mu.Unlock()
 	dropped := 0
 	u := NewUndecoded(f, time.Hour, c.now, func() { dropped++ })
 	u.max = 3
