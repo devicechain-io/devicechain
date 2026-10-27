@@ -6,19 +6,25 @@ package processor
 import (
 	"testing"
 
+	"context"
 	"github.com/devicechain-io/dc-device-management/config"
 	"github.com/devicechain-io/dc-device-management/model"
 	dmtest "github.com/devicechain-io/dc-device-management/test"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	esproto "github.com/devicechain-io/dc-event-sources/proto"
 	"github.com/devicechain-io/dc-microservice/credential"
 	"github.com/devicechain-io/dc-microservice/eventtype"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
+	"github.com/devicechain-io/dc-microservice/messaging"
 	putest "github.com/devicechain-io/dc-microservice/rdb/partialupdatetest"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/devicechain-io/dc-microservice/transport"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"time"
 )
 
 // An inbound integration's event is trusted only after the platform has opened the sealed token
@@ -313,4 +319,42 @@ func TestAnAliasMismatchIsDeadLetteredOnTheFirstDeliveryAndCounted(t *testing.T)
 	resolved, failed, _ = processOne(rig.resolveRig, rig.event("dev-b", "chirp-1", rig.token), 1)
 	require.Equal(t, 1, resolved)
 	require.Empty(t, failed)
+}
+
+// THE COUNTER'S WIRING. The pool's resolvers get the counter from the processor's instruments
+// (initializeEventResolvers), and only a processor built over a real registry can show it: a
+// resolver given a counter by hand cannot tell whether the pool does the same.
+func (suite *InboundEventsProcessorTestSuite) TestAnAliasMismatchIsCountedByTheProcessorsInstrument() {
+	reg := suite.withRegistry()
+	for _, r := range suite.IP.resolvers {
+		r.SecretTransit = testSecretTransit(suite.T())
+	}
+	const metric = "devicechain_devicemanagement_resolve_integration_alias_mismatch_total"
+	require.Zero(suite.T(), counterValue(suite, reg, metric), "registered, and zero before any refusal")
+
+	sealed, err := testSecretTransit(suite.T()).SealToken("tenant1", credential.IntegrationSealKind("chirp-1"), "tok")
+	require.NoError(suite.T(), err)
+	now := time.Now().UTC()
+	event := &esmodel.UnresolvedEvent{
+		Source: transport.Qualify(transport.Integration, "chirp-1"), Device: "dev", EventType: eventtype.Measurement,
+		OccurredTime: now, ProcessedTime: now,
+		Payload:     &esmodel.UnresolvedMeasurementsPayload{Entries: []esmodel.UnresolvedMeasurementsEntry{{Measurements: map[string]string{"t": "1"}}}},
+		Integration: "chirp-1", SealedIntegrationToken: sealed, IntegrationIdentifier: rigEUI,
+	}
+	encoded, err := esproto.MarshalUnresolvedEvent(event)
+	require.NoError(suite.T(), err)
+	suite.Inbound.Mock.On("ReadMessage", mock.Anything).Return(messaging.NewConsumedMessage(testTenantSubject, encoded, 1, nil, &atomicAck{}), nil)
+	suite.API.Mock.On("AuthenticateIntegration").Return(&model.Integration{Enabled: true, Identity: model.IntegrationIdentityDevEUI,
+		DeviceTypes: []*model.DeviceType{{}}}, nil)
+	suite.API.Mock.On("DevicesByToken", mock.Anything, mock.Anything).Return([]*model.Device{deviceWithToken("dev")}, nil)
+	suite.API.Mock.On("DeviceHoldsAlias").Return(false, nil)
+
+	readAndHandleOne(suite.IP, context.Background())
+	select {
+	case item := <-suite.IP.failed:
+		assert.Equal(suite.T(), uint(resolvedevent.FailureReason_IntegrationAliasMismatch), item.event.Reason)
+	case <-time.After(10 * time.Second):
+		suite.T().Fatal("the mismatch was not dead-lettered on its first delivery")
+	}
+	assert.Equal(suite.T(), 1.0, counterValue(suite, reg, metric), "the refusal is counted once")
 }
