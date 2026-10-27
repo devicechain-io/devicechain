@@ -10,7 +10,6 @@ import (
 	"strings"
 	"testing"
 
-	"helm.sh/helm/v3/pkg/releaseutil"
 	"sigs.k8s.io/yaml"
 
 	assets "github.com/devicechain-io/dc-deploy"
@@ -100,7 +99,7 @@ func renderCNPGChart(t *testing.T, params map[string]string, backup map[string]i
 		t.Fatalf("rendering the cnpg-cluster chart: %v", err)
 	}
 	var docs []string
-	for _, doc := range releaseutil.SplitManifests(manifest) {
+	for _, doc := range splitManifests(manifest) {
 		docs = append(docs, doc)
 	}
 	return docs

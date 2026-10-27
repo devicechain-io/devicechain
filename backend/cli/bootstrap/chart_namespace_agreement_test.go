@@ -12,7 +12,6 @@ import (
 	"strings"
 	"testing"
 
-	"helm.sh/helm/v3/pkg/releaseutil"
 	"sigs.k8s.io/yaml"
 )
 
@@ -163,7 +162,7 @@ func renderNamespaceFixture(t *testing.T) []renderedChartDoc {
 		t.Fatalf("rendering the embedded chart: %v", err)
 	}
 
-	split := releaseutil.SplitManifests(manifest)
+	split := splitManifests(manifest)
 	keys := make([]string, 0, len(split))
 	for k := range split {
 		keys = append(keys, k)

@@ -167,6 +167,7 @@ func documentWithProxies(t *testing.T, st *State) (loaded []string, raw string) 
 // The settled list reaches the document the services load, and an instance with none renders
 // no key at all (a rendered empty list would change every existing document).
 func TestTrustedProxiesReachTheServicesDocument(t *testing.T) {
+	t.Parallel()
 	st := compactState(false)
 	got, _ := documentWithProxies(t, st)
 	assert.Empty(t, got)

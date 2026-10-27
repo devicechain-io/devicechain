@@ -19,7 +19,6 @@ import (
 	"helm.sh/helm/v3/pkg/action"
 	"helm.sh/helm/v3/pkg/chart"
 	"helm.sh/helm/v3/pkg/release"
-	"helm.sh/helm/v3/pkg/releaseutil"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -139,7 +138,7 @@ func namespacesNamedBy(t *testing.T, manifest string) []string {
 	t.Helper()
 	created := map[string]bool{}
 	var named []string
-	for _, doc := range releaseutil.SplitManifests(manifest) {
+	for _, doc := range splitManifests(manifest) {
 		var obj struct {
 			Kind     string `json:"kind"`
 			Metadata struct {
@@ -247,7 +246,7 @@ func upgradeRelease(t *testing.T, c client.Client, cfg *action.Configuration, na
 func everyObjectIsThere(t *testing.T, c client.Client, manifest string) []string {
 	t.Helper()
 	var missing []string
-	docs := releaseutil.SplitManifests(manifest)
+	docs := splitManifests(manifest)
 	if len(docs) == 0 {
 		t.Fatal("the release manifest holds no documents: nothing was installed to check")
 	}
@@ -325,7 +324,7 @@ func TestEveryRenderedProfileIsAcceptedByAnAPIServer(t *testing.T) {
 		t.Run(p.name, func(t *testing.T) {
 			t.Parallel()
 			cfg, ch := helmInto(t, kubeconfig), chartOfItsOwn(t)
-			instance := fmt.Sprintf("p%02d", i+1)
+			instance := profileInstance(i)
 			rel, err := installProfile(t, cfg, c, ch, instance, profileValues(t, ch, p, instance))
 			if err != nil {
 				t.Fatalf("the API server refused the %s install: %v", p.name, err)

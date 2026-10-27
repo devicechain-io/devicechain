@@ -18,7 +18,7 @@
 # indistinguishable at exactly the moment somebody wants to know. So the step is
 # UNCONDITIONAL and the verdict is a line in the log naming the module and the flag:
 #
-#   race: COVERED backend/core -- go test -race -count=1 -timeout 20m ./...
+#   race: COVERED backend/core -- go test -race -count=1 -timeout 30m ./...
 #   race: NOT COVERED <module> -- exempt (hack/go-race.sh): <reason>
 #
 # The workflow greps its own output for that line, so a future edit that leaves
@@ -60,7 +60,7 @@ ROOT="$(cd "$HACK/.." && pwd)"
 # test` does not track files outside the module, so a cached pass can survive a
 # change that must fail.
 #
-# -timeout 20m because go test's default of 10 minutes is a PER-PACKAGE budget, and
+# -timeout 30m because go test's default of 10 minutes is a PER-PACKAGE budget, and
 # the detector slows a package several times over. backend/cli/bootstrap took 544 s
 # of its 600 under -race on main's CI (and 57 s without it), so the next test added
 # there would have failed this step by timing out with no race in sight: the
@@ -77,9 +77,25 @@ ROOT="$(cd "$HACK/.." && pwd)"
 # cost was production-cost bcrypt hashes minted once per test instead of once per binary, and
 # parallel API-server suites holding a -parallel slot while they waited on their server. The
 # fixture (credentials_fixture_test.go) and the parallelism (main_test.go) took it to 278 s.
-# Measure it again before adding slow tests there. A real hang still fails, after
-# 20 minutes.
-RACE_TEST=(go test -race -count=1 -timeout 20m)
+# It grew back again (2026-10-26, 839-939 s on four CPUs in a golang:1.27.3 container, past
+# the 20 minutes on CI) as the Gateway-routing parity, the self-signed chain and the front-end
+# x profile matrices each rendered every renderProfiles row for themselves. A chart render
+# under the detector is about 1.4 CPU-s, and about a third of that is Helm splitting the
+# ~1 MB manifest with a regular expression (the detector makes that several times slower),
+# so the cost is how many renders there are, and how many times each is split and decoded.
+# What took it to 498-579 s on the same four CPUs (the spread is the host's load; the same
+# tree measured 839 and 939 s before): render_memo_test.go remembers a render, the instance
+# document picked out of it and its split by CONTENT (so a negative control that changes
+# its input misses); the matrix suites share one instance id per row (profileInstance) so
+# their renders are the same renders; the render-only tests that were left sequential run in
+# parallel; and warmRenderMemo renders the matrix in the background during the sequential
+# phase, which is a third of the run on one or two busy cores with the rest idle. That is
+# where the remaining time is: about 1700 CPU-s, 62% of it the race runtime itself.
+# That is still near 60% of the old 20 minutes on a runner slower than that box, so the
+# ceiling is 30 minutes: room for the runner, not for the next suite. Measure it again before
+# adding slow tests there, and prefer a render the memo already holds to a new one. A real
+# hang still fails, after 30 minutes.
+RACE_TEST=(go test -race -count=1 -timeout 30m)
 race_test() { "${RACE_TEST[@]}" "$@"; }
 
 # ---------------------------------------------------------------------------

@@ -7,7 +7,6 @@ import (
 	"runtime"
 	"testing"
 
-	"helm.sh/helm/v3/pkg/releaseutil"
 	appsv1 "k8s.io/api/apps/v1"
 	"sigs.k8s.io/yaml"
 )
@@ -32,7 +31,7 @@ func TestTheAPIServerSuitesAreBuiltOffWindows(t *testing.T) {
 // renderedDeployment returns the named Deployment from manifest, decoded.
 func renderedDeployment(t *testing.T, manifest, name string) *appsv1.Deployment {
 	t.Helper()
-	for _, doc := range releaseutil.SplitManifests(manifest) {
+	for _, doc := range splitManifests(manifest) {
 		var d appsv1.Deployment
 		if err := yaml.Unmarshal([]byte(doc), &d); err != nil {
 			t.Fatalf("decoding a rendered document: %v\n%s", err, doc)
