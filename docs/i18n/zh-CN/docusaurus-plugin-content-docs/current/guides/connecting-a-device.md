@@ -426,7 +426,7 @@ mutation {
 
 ## 空中（OTA）更新 {#over-the-air-updates}
 
-在运行更新服务的实例上（参见[空中（OTA）更新](../concepts/over-the-air-updates.md)），同样的两个主题也传递固件和软件更新。上述规则在此同样适用：每条消息都带有 `"v":1` 和 `kind`，未知或重复的字段会被拒绝，消息不得携带设备身份。任一方向的更新消息最大 4 KiB。
+在运行更新服务的实例上（参见[空中（OTA）更新](../concepts/over-the-air-updates.md)），同样的两个主题也传递固件和软件更新。设备端的完整可运行实现是[构建可更新的设备](./building-an-updatable-device.md)中介绍的参考设备。上述规则在此同样适用：每条消息都带有 `"v":1` 和 `kind`，未知或重复的字段会被拒绝，消息不得携带设备身份。任一方向的更新消息最大 4 KiB。
 
 当某个制品被分配给设备时，平台在 `device-desired` 上发布：
 
@@ -462,7 +462,7 @@ openssl pkeyutl -sign -rawin -inkey k.pem -in digest | base64 | tr -d '\n'
 
 对于 Ed25519，`cosign` 和 `openssl pkeyutl -sign -rawin -in file` 签名的是**文件**而不是其摘要，设备会拒绝这样的签名：请使用上面的 `digest` 形式。ECDSA 是与 `cosign sign-blob` 兼容的算法。
 
-如果签名验证失败，以 `FAILED` 终止更新，`result.code` 为 `SIGNATURE_INVALID`。如果 `keyId` 指向设备不信任的密钥，使用 `UNKNOWN_SIGNER`；当设备要求签名镜像而收到 `UNVERIFIED` 分配时，也使用该代码。二者都在下载结束时报告（在 `DOWNLOADED` 之后，与摘要不匹配相同），并且都不会改变上述阶段。签名覆盖的是镜像而不是版本，因此需要拒绝降级的设备必须自行实施。
+如果签名验证失败，以 `FAILED` 终止更新，`result.code` 为 `SIGNATURE_INVALID`。如果 `keyId` 指向设备不信任的密钥，使用 `UNKNOWN_SIGNER`；当设备要求签名镜像而收到 `UNVERIFIED` 分配时，也使用该代码。签名错误或密钥未知只有在设备持有字节之后才能发现，因此应在 `DOWNLOADED` 之后报告，与摘要不匹配相同。要求签名镜像的设备可以更早拒绝 `UNVERIFIED` 分配，即在 `RECEIVED` 之后、下载任何内容之前，使用相同的代码；设备可以在任何阶段报告 `FAILED`，因此两种方式都有效。二者都不会改变上述阶段。签名覆盖的是镜像而不是版本或部件，因此需要拒绝降级或其他部件镜像的设备必须自行实施；参见[拒绝降级和错误的部件](./building-an-updatable-device.md#refusing-downgrades)。
 
 要获取镜像，请在 `device-reports` 上申请下载授权：
 

@@ -58,7 +58,9 @@
 // VERIFIED means the bytes the device holds hash to the digest the attempt names — integrity
 // only. It says nothing about who produced those bytes. Authenticity is the device's own check of
 // the detached signature a SIGNED assignment carries; a device that refuses one reports a FAILED
-// stage with result code SIGNATURE_INVALID or UNKNOWN_SIGNER (failing at DOWNLOADED, like
-// VERIFICATION_FAILED). No state in this package claims an update is authentic: the platform
+// stage with result code SIGNATURE_INVALID or UNKNOWN_SIGNER. A bad or unknown signature can only be
+// found once the device holds the bytes, so it is reported after DOWNLOADED, like VERIFICATION_FAILED;
+// a device that requires signatures may refuse an UNVERIFIED assignment sooner, right after RECEIVED. A
+// device may report FAILED at any stage. No state in this package claims an update is authentic: the platform
 // relays the signature, the device decides.
 package ota

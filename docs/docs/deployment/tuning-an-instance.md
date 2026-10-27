@@ -110,7 +110,7 @@ uses the relational database, or that area's pool
 (`functionalAreas.<area>.config.rdbConfiguration.maxOpenConnections`), raises that limit, and
 `dcctl` asks the shared database for the larger limit before it changes anything. If the cluster's
 connection budget cannot give it, the run stops with nothing changed: lower the overlay, or raise
-the budget with `dcctl install --max-connections`. Removing the overlay gives the connections back.
+the budget by re-running the `dcctl install` the cluster was installed with, adding `--max-connections` with a larger value (for example `dcctl install local --max-connections 1000`, plus `--kube-context`, `--ha` or `--compact` if it was installed with them). Removing the overlay gives the connections back.
 
 ## Changing or removing the overlay {#changing}
 

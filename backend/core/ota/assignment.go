@@ -53,9 +53,10 @@ const (
 	AlgorithmECDSAP256SHA256 = "ECDSA_P256_SHA256"
 	AlgorithmEd25519         = "ED25519"
 
-	// The failure codes a device reports (result.code, stage FAILED, failing at stage
-	// DOWNLOADED like VERIFICATION_FAILED) when it refuses a SIGNED assignment, or an
-	// UNVERIFIED one while it requires signatures.
+	// The failure codes a device reports (result.code, stage FAILED) when it refuses a SIGNED
+	// assignment, or an UNVERIFIED one while it requires signatures. A bad or unknown signature is
+	// reported after DOWNLOADED, like VERIFICATION_FAILED; an UNVERIFIED refusal may come right after
+	// RECEIVED, since a device may report FAILED at any stage.
 	CodeSignatureInvalid = "SIGNATURE_INVALID"
 	CodeUnknownSigner    = "UNKNOWN_SIGNER"
 

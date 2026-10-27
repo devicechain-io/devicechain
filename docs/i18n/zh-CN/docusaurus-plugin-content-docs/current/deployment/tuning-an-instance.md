@@ -79,7 +79,7 @@ dcctl upgrade local my-instance --version <new-version>
 
 ## 副本数与数据库的连接预算 {#connections}
 
-每个实例的数据库登录账号被限制为其服务能够打开的连接数：每个 Pod 一个完整的连接池，并为滚动更新预留一倍。覆盖层如果提高了使用关系型数据库的区域的副本数，或该区域的连接池（`functionalAreas.<area>.config.rdbConfiguration.maxOpenConnections`），这个上限也会随之提高，`dcctl` 会在做任何更改之前向共享数据库申请更大的上限。如果集群的连接预算无法满足，本次运行会在未做任何更改的情况下停止：降低覆盖层中的值，或用 `dcctl install --max-connections` 提高预算。移除覆盖层会归还这些连接。
+每个实例的数据库登录账号被限制为其服务能够打开的连接数：每个 Pod 一个完整的连接池，并为滚动更新预留一倍。覆盖层如果提高了使用关系型数据库的区域的副本数，或该区域的连接池（`functionalAreas.<area>.config.rdbConfiguration.maxOpenConnections`），这个上限也会随之提高，`dcctl` 会在做任何更改之前向共享数据库申请更大的上限。如果集群的连接预算无法满足，本次运行会在未做任何更改的情况下停止：降低覆盖层中的值，或重新运行安装该集群时使用的 `dcctl install`，并加上取值更大的 `--max-connections`（例如 `dcctl install local --max-connections 1000`；如果集群安装时用了 `--kube-context`、`--ha` 或 `--compact`，也要一并带上）来提高预算。移除覆盖层会归还这些连接。
 
 ## 更改或移除覆盖层 {#changing}
 

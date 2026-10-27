@@ -50,6 +50,10 @@ Recovery is automatic but not instantaneous. It takes as long as the replacement
 Sparkplug-B ingestion is available as an opt-in service. It ingests measurements and drives authoritative [device presence](./device-presence.md). It connects to a broker over TLS or plaintext, per the configured URL. A second standards-native edge protocol, [LwM2M](./lwm2m.md), is also available. Custom-CA / mutual-TLS to a private broker is planned.
 :::
 
+## Updating an edge node {#updating-an-edge-node}
+
+Sparkplug B defines no firmware update, so DeviceChain's [over-the-air updates](./over-the-air-updates.md) do not reach a device through this service, and DeviceChain does not invent a firmware convention on top of Sparkplug. An edge node that should be updated through DeviceChain also connects to DeviceChain as an ordinary MQTT device, with its own [credential](../guides/device-credentials.md), and uses the normal update channel. [Building an Updatable Device](../guides/building-an-updatable-device.md) shows that device side.
+
 ## Operations {#running-it}
 
 Because a single replica owns the broker connection, Sparkplug ingestion has a few operational properties to understand before you depend on it in production: what a changeover costs, why a device can be left showing online, and what the drop counters are telling you. [Running the Edge Services](../deployment/edge-services.md) covers them.

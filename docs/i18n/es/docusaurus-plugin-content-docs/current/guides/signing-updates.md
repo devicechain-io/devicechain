@@ -146,12 +146,13 @@ La revocación es terminal e idempotente. Las firmas del firmante permanecen reg
 
 Comprueba antes `soleSignedArtifactCount` para ver qué afectará una revocación.
 
-## Qué no cubre una firma
+## Qué no cubre una firma {#what-a-signature-does-not-cover}
 
-Una firma vincula **solo el digest**. No vincula la versión, el componente ni los perfiles compatibles del artefacto. Cualquiera con `artifact:write` puede declarar de nuevo una imagen firmada antes bajo una versión nueva, y la firma antigua se verificará. Si necesitas rechazar degradaciones o instalaciones en el componente equivocado, debe imponerlo el propio dispositivo, y los permisos de publicación deben protegerse tanto como los de firma.
+Una firma vincula **solo el digest**. No vincula la versión, el componente ni los perfiles compatibles del artefacto. Cualquiera con `artifact:write` puede declarar de nuevo una imagen firmada antes bajo una versión nueva, y la firma antigua se verificará. Si necesitas rechazar degradaciones o instalaciones en el componente equivocado, debe imponerlo el propio dispositivo, y los permisos de publicación deben protegerse tanto como los de firma. [Construir un dispositivo actualizable](./building-an-updatable-device.md#refusing-downgrades) muestra cómo lo hace un dispositivo de referencia.
 
 ## Relacionado
 
 - **[Firmantes](../concepts/over-the-air-updates.md#signers)**: cómo una firma hace que un artefacto sea de confianza y qué cambia al revocar un firmante.
 - **[Actualizaciones over-the-air](../concepts/over-the-air-updates.md#assigning)**: asignar una actualización y cómo progresa un intento.
 - **[Conexión de un dispositivo](./connecting-a-device.md#over-the-air-updates)**: el mensaje de asignación y la comprobación en el dispositivo.
+- **[Construir un dispositivo actualizable](./building-an-updatable-device.md)**: un dispositivo de referencia que verifica, instala y revierte.

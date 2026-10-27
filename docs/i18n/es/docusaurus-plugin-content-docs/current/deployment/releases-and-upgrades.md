@@ -4013,6 +4013,47 @@ Una cuenta ya puede activar la [autenticación en dos pasos](../guides/two-facto
 - **Dos alertas nuevas, `MfaIdentityLocked` y `MfaVerificationFailuresSustained`,** y cuatro métricas llegan con el chart. Permanecen en silencio mientras nadie tenga un segundo factor. El remedio para un bloqueo es restablecer la contraseña, no el factor. Consulta [Bloqueos del segundo factor](./observability.md#mfa-alerts).
 - **Los nodos necesitan una sincronización horaria correcta.** Un código es válido durante su intervalo de 30 segundos y uno a cada lado.
 
+### La próxima versión: las actualizaciones over-the-air pasan al perfil default {#next-release-updates}
+
+:::note Borrador
+Esta sección está escrita antes de la versión y toma el número de esa versión cuando se publique.
+:::
+
+Las [actualizaciones over-the-air](../concepts/over-the-air-updates.md) forman parte del perfil `default` a
+partir de esta versión, así que una instancia que ejecuta el sistema estándar incorpora el servicio
+`update-management` al actualizarse. Nada más cambia en la actualización. Comprueba esto antes de empezar:
+
+- **Puede que haya que subir antes el presupuesto de conexiones de la base de datos relacional.**
+  `update-management` es un servicio más que usa la base de datos, así que una instancia de perfil `default`
+  reserva ahora 320 conexiones, frente a 280. El presupuesto de un clúster nuevo es ahora `700`, que admite dos
+  instancias de perfil `default`. **Un clúster instalado con el valor anterior de `600` lo conserva**, y si
+  aloja dos instancias de perfil `default`, la actualización de la segunda puede rechazarse. Sube el presupuesto antes de actualizar volviendo a ejecutar el `dcctl install` con el que se instaló el clúster, añadiendo `--max-connections 700`: por ejemplo `dcctl install local --max-connections 700`, más `--kube-context`, `--ha` o `--compact` si el clúster se instaló con ellos.
+  Consulta [el presupuesto de conexiones](./bootstrap.md#connection-budget), que también explica lo que cuesta
+  subirlo: las instancias de la base de datos se reinician una a una.
+- **Si tu almacén de objetos es un volumen `ReadWriteOnce` en un clúster al que apuntaste `dcctl`, el servicio
+  se ejecuta sin almacén.** Un volumen así lo puede montar un solo servicio y los demás ya lo ocupan, así que
+  `dcctl` actualiza la instancia con `update-management` en `updates.objectStore: none` en lugar de rechazarla.
+  La actualización lo indica. Declarar un artefacto y subir su contenido se rechazan con
+  `OBJECT_STORE_NOT_CONFIGURED`, la consola muestra un aviso en las pantallas de Actualizaciones y
+  `updateManagementInfo.objectStoreConfigured` es `false`. Una instancia no puede obtener un almacén al
+  actualizar; para usar actualizaciones, vuelve a crearla con S3 o con un volumen `ReadWriteMany`. Consulta
+  [Una instancia sin almacén de objetos](../concepts/over-the-air-updates.md#no-object-store). Un volumen
+  compartible, S3 y un clúster que creó `dcctl` no se ven afectados.
+- **No se puede asignar ningún artefacto hasta que se registre un firmante.** Por defecto solo se puede asignar
+  un artefacto firmado por un firmante activo, y en caso contrario la asignación se rechaza con
+  `UNVERIFIED_ARTIFACT_REFUSED`. Registrar un firmante requiere la autoridad `artifact:trust`. Sigue
+  [Firmar actualizaciones](../guides/signing-updates.md).
+- **La base de descarga ahora se deriva.** `updates.downloadBaseUrl` estaba sin definir hasta que la
+  establecías, de modo que ningún dispositivo recibía un enlace de descarga. Si la omites, el chart ahora deriva
+  `<origen>/api/update-management` del host del ingress de la instancia, con `https` si el TLS del ingress está
+  activado. Un valor que definas sigue prevaleciendo, y una cadena vacía desactiva las descargas. Una instancia
+  sin ingress no tiene origen del que derivarla, y la consola indica que las descargas no están configuradas.
+- **`dcctl enable-area local <instancia> update-management` en una instancia `default` informa de que ya está activada.**
+  Las instancias de los perfiles `telemetry` e `ingest-only` siguen sin incluirla.
+- **Se llega a los mismos dispositivos que antes.** Solo un dispositivo conectado por MQTT puede recibir una
+  actualización gestionada. Los dispositivos solo HTTP, LwM2M y Sparkplug no se alcanzan; consulta
+  [Qué dispositivos se pueden actualizar](../concepts/over-the-air-updates.md#transports).
+
 ### v0.25.2 — la emisión de tokens de servicio sale del puerto público {#v0252-upgrade}
 
 `v0.25.2` es un parche de seguridad de `v0.25.1`. No hay migración, y no cambia ninguna API, tema ni

@@ -2198,6 +2198,21 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 - **随 chart 到来的有两条新告警 `MfaIdentityLocked` 和 `MfaVerificationFailuresSustained`**，以及四个指标。在没有人设置第二因素时它们保持安静。锁定的补救办法是重置密码，而不是重置因素。参见[第二因素锁定](./observability.md#mfa-alerts)。
 - **节点需要正常的时间同步。** 代码在其 30 秒步长及前后各一个步长内有效。
 
+### 下一个版本：空中（OTA）更新进入 default 配置档 {#next-release-updates}
+
+:::note 草稿
+本节在版本发布前撰写，发布时会改用该版本的版本号。
+:::
+
+从该版本起，[空中（OTA）更新](../concepts/over-the-air-updates.md)属于 `default` 配置档，因此运行标准系统的实例在升级时会获得 `update-management` 服务。升级的其他方面没有变化。开始之前请检查以下几点：
+
+- **可能需要先提高关系型数据库的连接预算。**`update-management` 是又一个使用数据库的服务，所以一个 default 配置档实例现在预留 320 个连接，之前是 280 个。新集群获得的预算现在是 `700`，可容纳两个 default 配置档实例。**用之前的默认值 `600` 安装的集群会保留该值**，如果它容纳了两个 default 配置档实例，第二个实例的升级可能被拒绝。请在升级前提高预算：重新运行安装该集群时使用的 `dcctl install`，并加上 `--max-connections 700`，例如 `dcctl install local --max-connections 700`；如果集群安装时用了 `--kube-context`、`--ha` 或 `--compact`，也要一并带上。参见[连接预算](./bootstrap.md#connection-budget)，其中也说明了提高预算的代价：数据库实例会逐个重启。
+- **如果你的对象存储是你用 `dcctl` 指向的集群上的 `ReadWriteOnce` 卷，服务将在没有存储的情况下运行。**这样的卷只能被一个服务挂载，而其他服务已经占用了它，所以 `dcctl` 不会拒绝，而是把 `update-management` 设为 `updates.objectStore: none` 来升级实例，并在升级时说明这一点。声明制品和上传内容会以 `OBJECT_STORE_NOT_CONFIGURED` 被拒绝，控制台会在“更新”页面显示提示，`updateManagementInfo.objectStoreConfigured` 为 `false`。实例无法通过升级获得存储；要使用更新，请改用 S3 或 `ReadWriteMany` 卷重新创建实例。参见[没有对象存储的实例](../concepts/over-the-air-updates.md#no-object-store)。可共享的卷、S3 以及 `dcctl` 自己创建的集群不受影响。
+- **注册签名者之前，不能分配任何制品。**默认情况下只有由处于活动状态的签名者签名的制品才能被分配，否则分配会以 `UNVERIFIED_ARTIFACT_REFUSED` 被拒绝。注册签名者需要 `artifact:trust` 权限。请按[签名更新](../guides/signing-updates.md)操作。
+- **下载基址现在会被推导。**`updates.downloadBaseUrl` 过去在你设置之前一直未设置，因此没有设备能获得下载链接。现在省略它时，Chart 会根据实例的 Ingress 主机推导出 `<来源>/api/update-management`，Ingress TLS 开启时使用 `https`。你设置的值仍然优先，空字符串则关闭下载。没有 Ingress 的实例无从推导，控制台会提示下载未配置。
+- **在 `default` 实例上执行 `dcctl enable-area local <实例> update-management` 会报告它已启用。**`telemetry` 和 `ingest-only` 配置档的实例仍不包含它。
+- **能送达的设备与以前相同。**只有通过 MQTT 连接的设备才能接收托管更新。仅使用 HTTP 的设备、LwM2M 设备和 Sparkplug 设备无法送达；参见[哪些设备可以更新](../concepts/over-the-air-updates.md#transports)。
+
 ### v0.25.2：服务令牌签发离开公共端口 {#v0252-upgrade}
 
 `v0.25.2` 是 `v0.25.1` 的安全补丁。没有迁移，API、主题、权限均无变化。实例配置新增一个键

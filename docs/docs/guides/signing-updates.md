@@ -148,10 +148,11 @@ Check `soleSignedArtifactCount` first to see what a revocation will affect.
 
 ## What a signature does not cover
 
-A signature binds the **digest only**. It does not bind the artifact's version, component or compatible profiles. Anyone with `artifact:write` can declare a previously signed image again under a new version, and the old signature will verify. If you must refuse downgrades or wrong-component installs, the device has to enforce that itself, and publishing rights should be held as carefully as signing rights.
+A signature binds the **digest only**. It does not bind the artifact's version, component or compatible profiles. Anyone with `artifact:write` can declare a previously signed image again under a new version, and the old signature will verify. If you must refuse downgrades or wrong-component installs, the device has to enforce that itself, and publishing rights should be held as carefully as signing rights. [Building an Updatable Device](./building-an-updatable-device.md#refusing-downgrades) shows how a reference device does it.
 
 ## Related
 
 - **[Signers](../concepts/over-the-air-updates.md#signers)**: how a signature makes an artifact trusted, and what revoking a signer changes.
 - **[Over-the-Air Updates](../concepts/over-the-air-updates.md#assigning)**: assigning an update and how an attempt progresses.
 - **[Connecting a Device](./connecting-a-device.md#over-the-air-updates)**: the assignment message and the device-side check.
+- **[Building an Updatable Device](./building-an-updatable-device.md)**: a reference device that verifies, installs and rolls back.

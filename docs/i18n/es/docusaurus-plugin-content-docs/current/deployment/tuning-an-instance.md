@@ -116,7 +116,7 @@ superposición que sube las réplicas de un área que usa la base de datos relac
 esa área (`functionalAreas.<area>.config.rdbConfiguration.maxOpenConnections`), sube ese límite, y
 `dcctl` pide a la base de datos compartida el límite mayor antes de cambiar nada. Si el
 presupuesto de conexiones del clúster no puede darlo, la ejecución se detiene sin cambiar nada:
-reduce la superposición, o sube el presupuesto con `dcctl install --max-connections`. Quitar la
+reduce la superposición, o sube el presupuesto volviendo a ejecutar el `dcctl install` con el que se instaló el clúster, añadiendo `--max-connections` con un valor mayor (por ejemplo `dcctl install local --max-connections 1000`, más `--kube-context`, `--ha` o `--compact` si se instaló con ellos). Quitar la
 superposición devuelve las conexiones.
 
 ## Cambiar o quitar la superposición {#changing}

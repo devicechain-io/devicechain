@@ -113,9 +113,11 @@ Because `cap` is in the query string, the chart renders this route on an Ingress
 ingress-nginx access log turned off; behind any other ingress controller, make sure the query string of
 `/api/update-management/updates/download/` is not written to an access log.
 The endpoint answers `Range` requests with `206`, so an interrupted download resumes where it stopped, and it
-refuses a forged, expired or no-longer-current capability before it reads any of the artifact. Set
-`updates.downloadBaseUrl` to the public URL devices reach the service at (for example
-`https://<ingress host>/api/update-management`); without it no device can be given a capability.
+refuses a forged, expired or no-longer-current capability before it reads any of the artifact. The public
+URL a device is sent to is `updates.downloadBaseUrl`. Unless you set it, the chart derives it from the
+instance's ingress host as `<origin>/api/update-management`; an instance with no ingress and no value has no
+base, and then no device can be given a capability. `updateManagementInfo.downloadsConfigured` says whether
+a base is set. Setting the value to an empty string turns downloads off.
 
 ### Subscriptions over WebSocket {#subscriptions-over-websocket}
 

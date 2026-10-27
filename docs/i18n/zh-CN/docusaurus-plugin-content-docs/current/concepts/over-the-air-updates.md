@@ -7,21 +7,30 @@ title: 空中（OTA）更新
 **`update-management`** 服务向设备下发固件、软件和配置镜像。它按租户维护**制品**目录，允许你将制品**分配**给设备，向设备发送获取镜像所需的信息，并跟踪每次**更新尝试**，直到设备证明自己正在运行新版本。
 
 :::note 状态
-**目前可用：**带校验的流式上传制品目录、一次分配给一台设备、按设备组分批分配制品的[发布](#rollouts)（限制同时更新的设备数，支持暂停、恢复、中止和失败阈值）、通过短期授权进行可续传的下载，以及带截止期的尝试跟踪。控制台提供制品、签名者和发布页面，每台设备还有一个“更新”选项卡，用于分配和跟踪更新；参见用户指南中的[更新](/user-guide/updates)。
+**目前可用：**带校验的流式上传制品目录、一次分配给一台设备、按设备组分批分配制品的[发布](#rollouts)（限制同时更新的设备数，支持暂停、恢复、中止和失败阈值）、通过短期授权进行可续传的下载，以及带截止期的尝试跟踪。控制台提供制品、签名者和发布页面，每台设备还有一个“更新”选项卡，用于分配和跟踪更新；参见用户指南中的[更新](/user-guide/updates)。仓库中还有一台小型参考设备，完整实现了协议的设备端；参见[构建可更新的设备](../guides/building-an-updatable-device.md)。
 
-**尚未提供：**发布还没有分批（waves）、金丝雀晋级、计划或维护窗口；只使用 HTTP 的设备无法接收更新，因为分配通过设备的 MQTT 通道传递。出于同样的原因，[LwM2M](./lwm2m.md) 和 [Sparkplug](./sparkplug.md) 设备也无法接收更新；LwM2M 设备的固件改为通过普通命令驱动。
+**尚未提供：**发布还没有分批（waves）、金丝雀晋级、计划或维护窗口。只有通过 MQTT 连接的设备才能接收托管更新，因为分配通过设备的 MQTT 通道传递。只使用 HTTP 的设备不能接收；[LwM2M](./lwm2m.md) 设备改为通过普通命令更新；[Sparkplug](./sparkplug.md) 没有固件更新；参见[哪些设备可以更新](#transports)。
 :::
 
 ## 启用 {#enabling}
 
 `update-management` 属于 `default` 配置档（因此也属于 `full`）；只有 `telemetry` 和 `ingest-only` 不包含它，可在 `enabledFunctionalAreas` 中列出。它依赖 `device-management`，并将制品内容保存在[对象存储](./object-storage.md)中：未配置存储时，声明制品会以 `OBJECT_STORE_NOT_CONFIGURED` 被拒绝。在 S3 后端上，上传内容会缓冲在内存中，因此无论配置的上限是多少，制品在该后端上都限制为 64 MiB。
 
+### 第一次更新之前 {#first-update}
+
+设备要能接收更新，必须满足四个条件。前两项与实例有关，第三项是你只需做一次的决定，第四项关乎设备本身。
+
+1. **实例有对象存储。**可以是多个服务都能挂载的文件系统卷，或 S3。参见[没有对象存储的实例](#no-object-store)。
+2. **可以向设备发放下载链接。**Chart 会根据实例的 Ingress 主机推导出链接的基址，因此只要实例有 Ingress 就满足；参见下文的 `downloadBaseUrl`。不满足时，控制台会在“更新”页面显示提示。
+3. **已注册签名者，且制品已由它签名。**默认情况下（`allowUnverifiedArtifacts: false`），没有人签名的制品不能被分配：分配会以 `UNVERIFIED_ARTIFACT_REFUSED` 被拒绝。注册签名者需要 `artifact:trust` 权限和你自己生成的公钥；请按[签名更新](../guides/signing-updates.md)操作。开启 `allowUnverifiedArtifacts` 会取消这一要求，仅适用于开发实例。
+4. **设备通过 MQTT 使用该协议**，并持有签名者的公钥。参见[哪些设备可以更新](#transports)和[构建可更新的设备](../guides/building-an-updatable-device.md)。
+
 有两项设置是需要刻意决定的，而不是可以放任不管的默认值。两者都位于 Chart values 的 `functionalAreas.update-management.config.updates` 下：
 
 | 设置 | 默认值 | 含义 |
 | --- | --- | --- |
 | `allowUnverifiedArtifacts` | `false` | 设为 `false` 时，只有由处于活动状态的[签名者](#signers)签名的制品才能被分配。请在开发或测试实例上设为 `true`，以便也能分配未签名的制品。该值会显示在 `updateManagementInfo` 查询中，从而可以看出实例启用了它。 |
-| `downloadBaseUrl` | 未设置 | 设备访问该服务的公共 URL，例如 `https://<ingress host>/api/update-management`，不含查询参数或片段。未设置时无法向任何设备发放下载授权：设备的请求会被拒绝并计数。 |
+| `downloadBaseUrl` | 由 Ingress 主机推导 | 设备访问该服务的公共 URL，不含查询参数或片段。未设置时，Chart 会将其设为 `<公共来源>/api/update-management`，其中来源是 Ingress 主机：Ingress TLS 开启时用 `https`，否则用 `http`。你设置的键优先，将其设为空字符串则关闭下载。没有 Ingress 时无从推导，因此不设置任何值：无法向任何设备发放下载授权，设备的请求会被拒绝并计数。请在 Chart values 中设置；Instance 的调优覆盖层会拒绝该键，因为它随实例主机而定。主机不是回环地址时，`http` 基址可以启动，但服务会记录警告，而且设备会拒绝 `http` 下载，除非明确告知它可以。 |
 
 其余设置用于限制服务：
 
@@ -36,6 +45,14 @@ title: 空中（OTA）更新
 | `deadlines.*` | 见[下文](#deadlines) | 平台在尝试的每个阶段等待多久。 |
 
 负值、未知键，或者相对路径、包含凭据或查询参数的 `downloadBaseUrl`，都会在启动时被拒绝。
+
+### 没有对象存储的实例 {#no-object-store}
+
+制品内容需要对象存储，而存储在创建实例时就已确定（参见[对象存储](../deployment/bootstrap.md#object-store)）。有一种情况需要留意。`default` 配置档包含 `update-management`。当实例运行 `default` 配置档，且它的存储是 `dcctl` 未创建的集群上的 `ReadWriteOnce` 文件系统卷时，该卷只能被一个服务挂载，而另一个服务已经占用了它。于是 `dcctl` 不会拒绝，而是让 `update-management` 以 `updates.objectStore` 设为 `none` 的方式启动。这适用于新的 bootstrap，也适用于升级时获得该服务的现有实例。另一个取值是默认的 `instance`。只有这一种情况下 `dcctl` 才会设为 `none`：你亲自指定的区域、`full` 配置档、可共享的卷、S3，以及 `dcctl` 自己创建的集群都不受影响。调优覆盖层不能设置该键；仅使用 Chart 的安装可以使用这两个值中的任何一个，其他值会使渲染失败。
+
+在该模式下服务照常运行，不需要内容的功能仍然可用，例如签名者。声明制品和上传内容会以 `OBJECT_STORE_NOT_CONFIGURED` 被拒绝，而不是写入服务根本没有的卷。`dcctl` 在应用变更时会说明这一点，`updateManagementInfo` 的 `objectStoreConfigured` 为 `false`，控制台也会在“更新”页面显示提示。
+
+在没有存储的情况下启动的实例，无法通过升级获得存储。要在其中使用更新，请重新创建实例，使用 `--object-store s3`，或使用文件系统存储并在支持的存储类上指定 `--object-store-access-mode ReadWriteMany`。
 
 ## 制品 {#artifacts}
 
@@ -104,7 +121,7 @@ title: 空中（OTA）更新
 | `UNKNOWN` | 在安装或重启期间超过了某个截止期。 |
 | `CANCELLED` | 更新在安装开始前被取消，或运维人员放弃了一个 `UNKNOWN` 更新。 |
 
-设备若因签名而拒绝某个分配，会在 `DOWNLOADED` 阶段（已持有字节并算出哈希之后）报告 `FAILED`：设备不信任签名者的密钥，或设备要求签名而分配是 `UNVERIFIED` 时，代码为 `UNKNOWN_SIGNER`；签名无法通过校验时，代码为 `SIGNATURE_INVALID`。
+设备若因签名而拒绝某个分配，会报告 `FAILED`：设备不信任签名者的密钥，或设备要求签名而分配是 `UNVERIFIED` 时，代码为 `UNKNOWN_SIGNER`；签名无法通过校验时，代码为 `SIGNATURE_INVALID`。设备要对照已持有的字节来校验签名，所以错误或未知的签名要在 `DOWNLOADED` 之后、算出哈希时才会报告。要求签名镜像的设备可以更早拒绝 `UNVERIFIED` 分配：在 `RECEIVED` 之后、下载任何内容之前，参考设备就是这样做的。设备可以在任何阶段报告 `FAILED`，因此两种方式都有效。
 
 报告只会让尝试向前推进；较早阶段的报告会被忽略。**只有凭证据才能到达 `UPDATED`**：设备报告目标版本正在运行，并且当制品需要重启时（所有 `FIRMWARE` 制品都需要；`SOFTWARE` 和 `CONFIGURATION` 制品不需要），该报告来自与安装时不同的一次启动。确认收到或安装程序自身的“成功”都不算证据。
 
@@ -128,7 +145,7 @@ title: 空中（OTA）更新
 
 签名者就是一个公钥。`registerArtifactSigner(name, publicKeyPem)` 接收一个包含 ECDSA P-256 或 Ed25519 公钥的 SPKI `PUBLIC KEY` PEM 块；其他密钥类型和曲线会被拒绝。只注册公钥这一半：平台从不需要私钥，收到私钥会被拒绝（`SIGNER_KEY_REFUSED`），并且不会回显、不会写入日志、也不会保存。签名者的 `keyId` 是密钥 DER 编码的 SHA-256 小写十六进制，同一个密钥在一个租户内只能注册一次。
 
-你用自己保管的私钥对制品的 **SHA-256 摘要**签名，对象是 32 个原始字节，而不是十六进制文本：ECDSA P-256 生成摘要的 ASN.1 DER 签名，Ed25519 则对这 32 个摘要字节签名。`addArtifactSignature(artifactToken, signerToken, signature)` 接收标准 base64 编码的签名，并用平台在声明制品时保存的摘要来校验。无法通过校验的签名会被拒绝（`SIGNATURE_INVALID`），因此针对其他字节生成的签名无法附加；已吊销的签名者会被拒绝（`SIGNER_REVOKED`）。同一签名者重复签名不会产生任何变化。签名只覆盖摘要：它不说明镜像对应哪个版本、部件或兼容的配置文件，所以以另一个版本声明的同一镜像，同样由这个签名担保。
+你用自己保管的私钥对制品的 **SHA-256 摘要**签名，对象是 32 个原始字节，而不是十六进制文本：ECDSA P-256 生成摘要的 ASN.1 DER 签名，Ed25519 则对这 32 个摘要字节签名。`addArtifactSignature(artifactToken, signerToken, signature)` 接收标准 base64 编码的签名，并用平台在声明制品时保存的摘要来校验。无法通过校验的签名会被拒绝（`SIGNATURE_INVALID`），因此针对其他字节生成的签名无法附加；已吊销的签名者会被拒绝（`SIGNER_REVOKED`）。同一签名者重复签名不会产生任何变化。签名只覆盖摘要：它不说明镜像对应哪个版本、部件或兼容的配置文件，所以以另一个版本声明的同一镜像，同样由这个签名担保。设备必须自行强制检查版本和部件；参见[设备端](#device-side)。
 
 `revokeArtifactSigner(token)` 不可撤销。该签名者的签名仍保留在记录中，但不再计入，因此仅由它担保的制品会立即变为 `UNVERIFIED`，不能再被分配（除非开启了 `allowUnverifiedArtifacts`）；不会改写任何制品。签名者的 `soleSignedArtifactCount` 会预先告诉你这会影响多少制品。已经做出的分配不会被收回。
 
@@ -136,9 +153,22 @@ title: 空中（OTA）更新
 
 `VERIFIED` 以及上传时的大小与摘要检查，确立的是**完整性**：字节与声明的一致。它们不说明这些字节由谁生成；这正是[签名](#signers)补充的内容。已签名制品的分配会告知设备 `SIGNED` 并附上签名，因此持有签名者公钥的设备可以在安装前确认镜像是真实的。两种签名算法签名的都是 SHA-256 摘要的 32 个原始字节，而不是文件本身。
 
+## 哪些设备可以更新 {#transports}
+
+托管更新是设备 MQTT 通道上的一次对话：平台在 `device-desired` 上发布分配和下载链接，设备在 `device-reports` 上回应。只有下载本身走 HTTP。这决定了平台能更新哪些设备。
+
+| 设备 | 托管更新 | 替代做法 |
+| --- | --- | --- |
+| 通过 MQTT 连接 | 可以 | 参见[连接设备](../guides/connecting-a-device.md#over-the-air-updates)。 |
+| 只使用 HTTP | 不可以。它可以通过 HTTP 发送事件，但没有任何途径告知它存在分配，它也没有可供报告的通道。 | 同时让它通过 MQTT 连接，或用你自己的方式更新。 |
+| [LwM2M](./lwm2m.md) | 不可以。平台不会送达 LwM2M 设备。 | 用普通命令驱动标准 Firmware Update 对象，参见[使用对象 5 更新固件](./lwm2m.md#firmware-update-object-5)。该运行手册是受支持的途径，但不是托管任务：没有制品、没有签名转发、也没有尝试跟踪。 |
+| [Sparkplug](./sparkplug.md) 边缘节点 | 不可以。Sparkplug 没有定义固件更新，DeviceChain 也不另行发明。 | 需要通过 DeviceChain 更新的节点，同时以普通 MQTT 设备的身份连接 DeviceChain，并使用此通道。参见[更新边缘节点](./sparkplug.md#updating-an-edge-node)。 |
+
 ## 设备端 {#device-side}
 
 设备在其 `device-desired` 主题上得知分配，申请下载授权，通过 HTTP 以可续传的 `Range` 请求获取镜像，并在 `device-reports` 上报告每个阶段。消息格式见[连接设备](../guides/connecting-a-device.md#over-the-air-updates)。
+
+平台在字节到达时按摘要校验它们，并把针对该摘要的签名交给设备，由设备做决定。由于签名只覆盖摘要，一个签名正确的旧镜像，或为另一个部件构建的镜像，仍然是有效的已签名镜像。平台不会把版本或部件绑定到签名上，因此设备必须拒绝不比当前运行版本更新的版本，也必须拒绝不属于自己部件的镜像。设备还必须在摘要和签名校验完成之前不运行镜像的任何部分，把信任密钥保存在本地而不是从消息中取用，并且只有在有证据表明目标版本确实在运行时才报告 `RUNNING`。[构建可更新的设备](../guides/building-an-updatable-device.md)演示了一个完成上述全部检查的参考实现，并给出检查的顺序。
 
 ## 监控 {#monitoring}
 
@@ -146,6 +176,8 @@ title: 空中（OTA）更新
 
 ## 相关内容 {#related}
 
+- **[构建可更新的设备](../guides/building-an-updatable-device.md)**：以参考设备演示设备端的实现。
+- **[签名更新](../guides/signing-updates.md)**：创建密钥并为制品签名。
 - **[对象存储](./object-storage.md)**：制品内容的保存位置。
 - **[设备配置](../guides/connecting-a-device.md#reserved-device-topics)**：通过相同设备通道下发的单设备设置。
 - **[GraphQL API](../reference/graphql-api.md#endpoints)**：各端点，包括上传和下载路由。

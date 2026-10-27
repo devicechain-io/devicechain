@@ -15,11 +15,13 @@ device at a time, [rollouts](#rollouts) that assign an artifact to a device grou
 devices at a time with pause, resume, abort and a failure threshold, a resumable download through a
 short-lived grant, and tracking of each attempt with deadlines. The console has screens for artifacts,
 signers and rollouts, and an Updates tab on each device for assigning and following an update; see
-[Updates](/user-guide/updates) in the user guide.
+[Updates](/user-guide/updates) in the user guide. A small reference device in the repository follows the
+whole device side of the protocol; see [Building an Updatable Device](../guides/building-an-updatable-device.md).
 
-**Not yet:** rollouts have no waves, canary promotion, schedules or maintenance windows, and devices that speak only HTTP cannot receive updates, because assignments travel on the device's
-MQTT channel. For the same reason [LwM2M](./lwm2m.md) and [Sparkplug](./sparkplug.md) devices cannot receive them either; an LwM2M
-device's firmware is driven with ordinary commands instead.
+**Not yet:** rollouts have no waves, canary promotion, schedules or maintenance windows. Only a device
+connected over MQTT can receive a managed update, because assignments travel on its MQTT channel. Devices that
+speak only HTTP cannot, [LwM2M](./lwm2m.md) devices are updated with ordinary commands instead, and
+[Sparkplug](./sparkplug.md) has no firmware update at all; see [Which devices can be updated](#transports).
 :::
 
 ## Turning it on {#enabling}
@@ -27,11 +29,28 @@ device's firmware is driven with ordinary commands instead.
 `update-management` is part of the `default` profile (and so of `full`); only the `telemetry` and
 `ingest-only` profiles leave it out, and `enabledFunctionalAreas` can name it there. It depends on
 `device-management`, and it stores artifact content in the [object store](./object-storage.md):
-with no store configured, declaring an artifact is refused with `OBJECT_STORE_NOT_CONFIGURED`. An
-instance whose filesystem store is a `ReadWriteOnce` volume that another service already mounts
-runs the service without a store, and refuses artifacts the same way; the console says so on the
-Updates screens. On the S3 backend an upload is buffered in memory, so artifacts
-are limited to 64 MiB there whatever the configured ceiling.
+with no store configured, declaring an artifact is refused with `OBJECT_STORE_NOT_CONFIGURED`. On the
+S3 backend an upload is buffered in memory, so artifacts are limited to 64 MiB there whatever the
+configured ceiling.
+
+### Before the first update {#first-update}
+
+Four things have to be true before a device can take an update. The first two are about the instance,
+the third is a decision you make once, and the fourth is the device.
+
+1. **The instance has an object store.** A filesystem volume that more than one service can mount, or S3.
+   See [An instance with no object store](#no-object-store).
+2. **Devices can be given a download link.** The chart derives the link's base from the instance's
+   ingress host, so this holds on any instance with an ingress; see `downloadBaseUrl` below. The console
+   shows a notice on the Updates screens when it does not.
+3. **A signer is registered and the artifact is signed by it.** By default
+   (`allowUnverifiedArtifacts: false`) an artifact nobody has signed cannot be assigned: the assignment
+   is refused with `UNVERIFIED_ARTIFACT_REFUSED`. Registering a signer takes the `artifact:trust`
+   authority and a public key you generate; follow [Signing Updates](../guides/signing-updates.md).
+   Turning `allowUnverifiedArtifacts` on removes the requirement and is meant for development
+   instances only.
+4. **The device speaks the protocol over MQTT** and holds the signer's public key. See
+   [Which devices can be updated](#transports) and [Building an Updatable Device](../guides/building-an-updatable-device.md).
 
 Two settings are deliberate decisions rather than defaults to leave alone. Both live under
 `functionalAreas.update-management.config.updates` in the chart values:
@@ -39,7 +58,7 @@ Two settings are deliberate decisions rather than defaults to leave alone. Both 
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | `allowUnverifiedArtifacts` | `false` | With this `false`, only an artifact signed by an active [signer](#signers) can be assigned. Set it to `true` on a development or test instance to assign unsigned artifacts too. The value is shown in the `updateManagementInfo` query, so an instance running with it can be seen to be. |
-| `downloadBaseUrl` | unset | The public URL devices reach the service at, for example `https://<ingress host>/api/update-management`, with no query or fragment. Without it no device can be given a download grant: a device's request is refused and counted. |
+| `downloadBaseUrl` | derived from the ingress host | The public URL devices reach the service at, with no query or fragment. When you do not set it, the chart sets it to `<public origin>/api/update-management`, where the origin is the ingress host with `https` if ingress TLS is on and `http` if it is not. A key you set wins, and setting it to an empty string turns downloads off. With no ingress there is no origin to derive from, so nothing is set: no device can be given a download grant, and a device's request is refused and counted. Set it in the chart values; the tuning overlay of an Instance refuses it, because it follows the instance's host. A plain `http` base on a host other than loopback starts, but the service logs a warning, and a device refuses an `http` download unless it was told otherwise. |
 
 The remaining settings bound the service:
 
@@ -55,6 +74,29 @@ The remaining settings bound the service:
 
 A negative value, an unknown key, or a `downloadBaseUrl` that is relative, carries credentials or a
 query is refused at startup.
+
+### An instance with no object store {#no-object-store}
+
+Artifact content needs an object store, and the store is fixed when the instance is created (see
+[the object store](../deployment/bootstrap.md#object-store)). One case needs care. The `default`
+profile includes `update-management`. When an instance runs the `default` profile and its store is a
+`ReadWriteOnce` filesystem volume on a cluster `dcctl` did not create, that volume can be mounted by one
+service and another already holds it. So `dcctl` starts `update-management` with `updates.objectStore` set
+to `none` instead of refusing. This applies to a new bootstrap and to an existing instance that gains the
+service on upgrade. The other
+value is `instance`, the default. `dcctl` sets `none` only in that case: an area you named yourself, the
+`full` profile, a shareable volume, S3 and a cluster `dcctl` created are unchanged. The tuning overlay may
+not set the key, and a chart-only install may use either value; any other value fails the render.
+
+In that mode the service runs, and anything that does not need content works: signers, for example.
+Declaring an artifact and uploading content are refused with `OBJECT_STORE_NOT_CONFIGURED`, rather than
+written to a volume the service does not have. `dcctl` says so when it applies the change,
+`updateManagementInfo` reports `objectStoreConfigured` as `false`, and the console shows a notice on the
+Updates screens.
+
+An instance bootstrapped without a store cannot gain one by upgrading. To use updates there, recreate it
+with `--object-store s3`, or with a filesystem store and `--object-store-access-mode ReadWriteMany` on a
+storage class that supports it.
 
 ## Artifacts {#artifacts}
 
@@ -190,10 +232,12 @@ reports:
 | `UNKNOWN` | A deadline passed during installation or reboot. |
 | `CANCELLED` | The update was cancelled before installation began, or an operator abandoned an `UNKNOWN` update. |
 
-A device that refuses an assignment because of its signature reports `FAILED` at the `DOWNLOADED` stage
-(after it has the bytes and has hashed them) with the code `UNKNOWN_SIGNER`, when it does not trust the
-signer's key, or when it requires a signature and the assignment is `UNVERIFIED`, or `SIGNATURE_INVALID`,
-when the signature does not verify.
+A device that refuses an assignment because of its signature reports `FAILED` with the code
+`UNKNOWN_SIGNER`, when it does not trust the signer's key, or when it requires a signature and the
+assignment is `UNVERIFIED`, or `SIGNATURE_INVALID`, when the signature does not verify. It checks a
+signature against the bytes it holds, so it reports a bad or unknown signature after `DOWNLOADED`, once it
+has hashed them. A device that requires signed images can refuse an `UNVERIFIED` assignment sooner, right
+after `RECEIVED` and before downloading anything, and the reference device does. A device may report `FAILED` at any stage, so both are valid.
 
 Reports only move an attempt forward; a report for an earlier stage is ignored. **`UPDATED` is
 reached only on evidence**: the device reports the target version running, and when the artifact
@@ -242,6 +286,7 @@ that does not verify is refused (`SIGNATURE_INVALID`), so a signature made over 
 attached, and a revoked signer is refused (`SIGNER_REVOKED`). Signing again with the same signer changes
 nothing. The signature covers the digest only: it does not say which version, component or compatible profiles the
 image is for, so the same image declared under another version is vouched for by the same signature.
+The device has to enforce version and component itself; see [On the device](#device-side).
 
 `revokeArtifactSigner(token)` is final. The signer's signatures stay on record but stop counting, so
 every artifact it alone vouched for reads `UNVERIFIED` straight away and can no longer be assigned
@@ -257,11 +302,34 @@ An assignment of a signed artifact tells the device `SIGNED` and hands it the si
 that holds the signer's public key can check that the image is genuine before it installs it. Both
 signature algorithms sign the 32 raw bytes of the SHA-256 digest, not the file.
 
+## Which devices can be updated {#transports}
+
+A managed update is a conversation on the device's MQTT channel: the platform publishes the assignment
+and the download link on `device-desired`, and the device answers on `device-reports`. Only the download
+itself is HTTP. That decides which devices the platform can update.
+
+| Device | Managed update | What to do instead |
+| --- | --- | --- |
+| Connects over MQTT | Yes | Follow [Connecting a Device](../guides/connecting-a-device.md#over-the-air-updates). |
+| Speaks only HTTP | No. It can send events over HTTP, but nothing can tell it an assignment exists, and it has no channel to report on. | Connect it over MQTT as well, or update it by your own means. |
+| [LwM2M](./lwm2m.md) | No. The platform does not reach LwM2M devices. | Drive the standard Firmware Update object with ordinary commands, as in [Firmware update with Object 5](./lwm2m.md#firmware-update-object-5). That runbook is a supported path, but it is not a managed job: no artifact, no signature relay, no attempt tracking. |
+| [Sparkplug](./sparkplug.md) edge node | No. Sparkplug defines no firmware update, and DeviceChain does not invent one. | A node that should be updated through DeviceChain also connects to DeviceChain as an ordinary MQTT device and uses this channel. See [updating an edge node](./sparkplug.md#updating-an-edge-node). |
+
 ## On the device {#device-side}
 
 A device learns of an assignment on its `device-desired` topic, asks for a download grant, fetches
 the image over HTTP with resumable `Range` requests, and reports each stage on `device-reports`. The
 messages are in [Connecting a Device](../guides/connecting-a-device.md#over-the-air-updates).
+
+The platform checks the bytes against the digest when they arrive and hands the device a signature
+over that digest, and the device decides. Because the signature covers only the digest, a correctly
+signed older image, or one built for another component, is still a valid signed image. The platform does
+not bind the version or the component to the signature, so the device must refuse a version that is not
+newer than the one it runs, and an image for a component that is not its own. It must also run none of
+the image before the digest and signature have been checked, keep the trust keys locally rather than
+taking one from a message, and report `RUNNING` only from evidence of the version that is actually running.
+[Building an Updatable Device](../guides/building-an-updatable-device.md) walks through a reference
+implementation that does all of this and shows the order of checks.
 
 ## Watching it {#monitoring}
 
@@ -270,6 +338,8 @@ and what rollouts dispatched, are listed in the [metrics reference](../deploymen
 
 ## Related
 
+- **[Building an Updatable Device](../guides/building-an-updatable-device.md)**: the device side, walked through on a reference device.
+- **[Signing Updates](../guides/signing-updates.md)**: creating keys and signing artifacts.
 - **[Object storage](./object-storage.md)**: where artifact content is kept.
 - **[Device configuration](../guides/connecting-a-device.md#reserved-device-topics)**: per-device settings delivered on the same device channels.
 - **[GraphQL API](../reference/graphql-api.md#endpoints)**: the endpoints, including the upload and download routes.

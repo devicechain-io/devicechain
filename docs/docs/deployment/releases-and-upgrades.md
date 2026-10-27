@@ -3741,6 +3741,46 @@ An account can now turn on [two-factor authentication](../guides/two-factor-auth
 - **Two new alerts, `MfaIdentityLocked` and `MfaVerificationFailuresSustained`,** and four metrics arrive with the chart. They are quiet while nobody has a second factor. The remedy for a lock is to reset the password, not the factor. See [Second-factor lockouts](./observability.md#mfa-alerts).
 - **Nodes need working time synchronisation.** A code is valid for its 30-second step and one step either side.
 
+### The next release — over-the-air updates join the default profile {#next-release-updates}
+
+:::note Draft
+This section is written ahead of the release and takes that release's number when it is cut.
+:::
+
+[Over-the-air updates](../concepts/over-the-air-updates.md) are part of the `default` profile from this
+release, so an instance that runs the standard system gains the `update-management` service when it
+is upgraded. Nothing else about the upgrade changes. Check these before you start:
+
+- **The relational database's connection budget may need to be raised first.** `update-management` is one
+  more service that uses the database, so one default-profile instance now reserves 320 connections,
+  up from 280. The budget a new cluster gets is now `700`, which admits two default-profile instances.
+  **A cluster installed with the earlier default of `600` keeps it**, and if it holds two default-profile
+  instances the upgrade of the second can be refused. Raise the budget before upgrading by re-running the `dcctl install` the cluster was installed with, adding `--max-connections 700`: for example `dcctl install local --max-connections 700`, plus `--kube-context`, `--ha` or `--compact` if the cluster was installed with them. See
+  [the connection budget](./bootstrap.md#connection-budget), which also says what raising it costs: the database's instances restart one at a time.
+- **If your object store is a `ReadWriteOnce` volume on a cluster you pointed `dcctl` at, the service runs
+  without a store.** Such a volume can be mounted by one service and the others already hold it, so
+  `dcctl` upgrades the instance with `update-management` set to `updates.objectStore: none` rather than
+  refusing. The upgrade says so. Declaring an artifact and uploading its content are refused with
+  `OBJECT_STORE_NOT_CONFIGURED`, the console shows a notice on the Updates screens, and
+  `updateManagementInfo.objectStoreConfigured` is `false`. An instance cannot gain a store by upgrading;
+  to use updates, recreate it with S3 or a `ReadWriteMany` volume. See
+  [An instance with no object store](../concepts/over-the-air-updates.md#no-object-store). A shareable
+  volume, S3, and a cluster `dcctl` created itself are unaffected.
+- **No artifact can be assigned until a signer is registered.** By default only an artifact signed by an
+  active signer can be assigned, and the assignment is otherwise refused with
+  `UNVERIFIED_ARTIFACT_REFUSED`. Registering a signer takes the `artifact:trust` authority. Follow
+  [Signing Updates](../guides/signing-updates.md).
+- **The download base is now derived.** `updates.downloadBaseUrl` used to be unset until you set it, so no
+  device could be given a download link. When you leave it out, the chart now derives
+  `<origin>/api/update-management` from the instance's ingress host, with `https` if ingress TLS is on. A
+  value you set still wins, and an empty string turns downloads off. An instance with no ingress has no
+  origin to derive from, and the console says downloads are not configured.
+- **`dcctl enable-area local <instance> update-management` on a `default` instance reports it as already enabled.**
+  Instances of the `telemetry` and `ingest-only` profiles still leave it out.
+- **The same devices are reached as before.** Only a device connected over MQTT can take a managed update.
+  HTTP-only, LwM2M and Sparkplug devices are not reached; see
+  [Which devices can be updated](../concepts/over-the-air-updates.md#transports).
+
 ### v0.25.2 — the service-token mint leaves the public port {#v0252-upgrade}
 
 `v0.25.2` is a security patch for `v0.25.1`. There is no migration, and no API, topic or permission
