@@ -108,6 +108,9 @@ type fakeSource struct {
 	// node died or re-birthed, so the table the command was addressed against is gone).
 	lastVal   host.WireValue
 	tableGone bool
+	// forceLast makes LastReported answer true whatever atValue says (the node reported the value
+	// after the command was published, with a timestamp the match rule does not take).
+	forceLast bool
 	// bdSeq is the bdSeq the table was read under (5 by default).
 	bdSeq uint64
 }
@@ -155,7 +158,7 @@ func (f *fakeSource) SourceID() string { return "sparkplug:h1" }
 func (f *fakeSource) LastReported(host.MetricRef) (host.WireValue, time.Time, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.lastVal, f.lastAt, f.atValue && !f.tableGone
+	return f.lastVal, f.lastAt, (f.atValue || f.forceLast) && !f.tableGone
 }
 func (f *fakeSource) Tenant() string                  { return f.tenant }
 func (f *fakeSource) Commands() config.SourceCommands { return f.cfg }

@@ -4,6 +4,7 @@
 package downlink
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -26,6 +27,7 @@ func TestUnchangedIsRecheckedAtTheEndOfTheWindow(t *testing.T) {
 		unchanged bool
 	}{
 		{"CONTROL still at the value on the same table", func(f *fakeSource) {}, true},
+		{"CONTROL the node was NOT at the value when published, though a fresh read finds it there", func(f *fakeSource) {}, false},
 		{"a contrary value was reported after the mark was read", func(f *fakeSource) { f.lastVal = host.WireValue{Kind: 'i', N: 9} }, false},
 		{"the node died or re-birthed: its table is gone", func(f *fakeSource) { f.tableGone = true }, false},
 	} {
@@ -33,6 +35,9 @@ func TestUnchangedIsRecheckedAtTheEndOfTheWindow(t *testing.T) {
 			r := newRig(t)
 			clk := r.useClock()
 			r.src.atValue, r.src.lastAt, r.src.lastVal = true, clk.now().Add(-time.Hour), i8(t, 5)
+			if strings.Contains(tc.name, "NOT at the value when published") {
+				r.src.atValue, r.src.forceLast = false, true // no mark at the publish; the node is there at the end
+			}
 			r.live("acme", "pump-1", "c", CommandWrite, writeCmd("Setpoint", 5), nil)
 			tc.mutate(r.src)
 			clk.advance(121 * time.Second)
