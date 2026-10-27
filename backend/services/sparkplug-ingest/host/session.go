@@ -74,6 +74,18 @@ type nodeSession struct {
 	// Host missed the birth that defined it → rebirth.
 	aliases map[uint64]string
 
+	// metrics is the BIRTH metric table (G19 S2): for every metric the node's NBIRTH and each
+	// device's DBIRTH declared, the alias (if it aliased) and the datatype it declared, scoped by
+	// device ("" is the node itself). It is what a command is addressed and encoded against. See
+	// birthtable.go; it is rebuilt with the birth, and cleared with the death.
+	metrics map[metricKey]declaredMetric
+
+	// birthGen is the generation of metrics: a value minted from the tracker's monotone counter
+	// every time the table is rebuilt, extended or cleared. A commanded rebirth keeps the
+	// session's epoch and bdSeq but may REMAP every alias, so the epoch alone cannot tell a
+	// command that an alias has gone stale; the generation can.
+	birthGen uint64
+
 	// devices maps each child device that has sent a DBIRTH to its own per-device
 	// session epoch (minted at that DBIRTH). Membership is the born-set (DDATA for a
 	// device not present is data-before-birth → rebirth); the epoch is the device's
@@ -132,6 +144,11 @@ type SessionTracker struct {
 	// skipped accumulates, under mu, the metrics the current step extracted no Sample from;
 	// Observe drains it into the Observation it returns.
 	skipped Skips
+
+	// tableGen mints nodeSession.birthGen, under mu. Monotone across every session of every
+	// node, so a generation captured from a session that has since been replaced can never equal
+	// the replacement's.
+	tableGen uint64
 }
 
 // Observation is everything a single decoded Sparkplug message contributes to the
@@ -322,6 +339,9 @@ func (tr *SessionTracker) onNBirth(key nodeKey, p *sppb.Payload) ([]Sample, []Pr
 		prev.rebirthPending = false
 		prev.lastSeq = uint8(p.GetSeq())
 		addAliases(prev.aliases, p)
+		// The rebirth may have remapped aliases the table held, so the table is rebuilt from this
+		// birth (and the devices' entries dropped until their own DBIRTHs re-declare them).
+		tr.rebuildNodeMetrics(prev, p)
 		// 🔴 AN ANSWER TO A LIVENESS PROBE RE-ASSERTS THE NODE. The probe declares a node
 		// that has not answered within its window DISCONNECTED at an epoch minted before
 		// it asked, and a node whose answer is merely late is still alive. Its devices heal
@@ -360,6 +380,7 @@ func (tr *SessionTracker) onNBirth(key nodeKey, p *sppb.Payload) ([]Sample, []Pr
 	// baseline so the following seq lines up rather than reading as a gap.
 	s.lastSeq = uint8(p.GetSeq())
 	addAliases(s.aliases, p)
+	tr.rebuildNodeMetrics(s, p)
 	tr.sessions[key] = s
 	// 🔴 A NEW SESSION REPLACING AN ONLINE ONE ENDS THAT ONE'S CHILDREN. The previous session
 	// never saw its NDEATH (a lost will, a broker bounce, a Host that was down for it), so its
@@ -432,6 +453,7 @@ func (tr *SessionTracker) onNDeath(key nodeKey, s *nodeSession, p *sppb.Payload)
 	s.online = false
 	s.aliases = map[uint64]string{}
 	s.devices = map[string]uint64{}
+	tr.clearMetrics(s)
 	return presence, false
 }
 
@@ -447,6 +469,7 @@ func (tr *SessionTracker) onDBirth(key nodeKey, s *nodeSession, device string, p
 		return nil, nil, tr.wantRebirth(s)
 	}
 	addAliases(s.aliases, p)
+	tr.recordDeviceMetrics(s, device, p)
 	epoch := tr.nextEpoch()
 	s.devices[device] = epoch
 	presence := []PresenceEvent{{
@@ -469,6 +492,7 @@ func (tr *SessionTracker) onDDeath(key nodeKey, s *nodeSession, device string, p
 	}
 	epoch, known := s.devices[device]
 	delete(s.devices, device)
+	tr.dropDeviceMetrics(s, device)
 	if !known {
 		return nil, false
 	}
@@ -595,6 +619,14 @@ func addAliases(table map[uint64]string, p *sppb.Payload) {
 	}
 }
 
+// rebirthCommand's wire rules: the metric is "Node Control/Rebirth" with value true
+// ([tck-id-operational-behavior-data-commands-ncmd-rebirth-name], [...-ncmd-rebirth-value]) and
+// is ALWAYS addressed by name, never alias: a node's NBIRTH MUST NOT alias it so that any Host can
+// request a rebirth without knowing the node's aliases
+// ([tck-id-operational-behavior-data-commands-rebirth-name-aliases]), which is also why it is
+// the one NCMD exempt from [tck-id-payloads-alias-data-cmd-requirement]. The payload carries a
+// timestamp ([tck-id-payloads-ncmd-timestamp]) and no seq ([tck-id-payloads-ncmd-seq]).
+//
 // rebirthCommand encodes an NCMD payload carrying the reserved "Node Control/
 // Rebirth"=true boolean metric — the Sparkplug command that asks an edge node to
 // re-emit its NBIRTH (and its devices' DBIRTHs). ts is the command timestamp in
