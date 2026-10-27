@@ -137,19 +137,24 @@ spec:
           annotations:
             summary: "Sparkplug commands are being published but not confirmed"
             description: "For at least 15 minutes, more than 90% of the Sparkplug commands sparkplug-ingest published in the last 30 minutes (at least 20 of them) ended without the node reporting the requested value. Sparkplug has no command acknowledgement, so this is how a command path that does not work looks: the customer broker may be dropping the publishes (check the source credential may publish on the NCMD and DCMD topics), the nodes may be ignoring a host that is not their primary (commands.hostRole), or the confirm window may be shorter than the nodes' reporting delay (commands.confirmWindowSeconds). Commands are recorded as TIMEOUT, not as failed."
-        # `>= 1`, not `== 1`: the breaker reads 1 while open and 2 once its backoff has ended and
-        # it is waiting to let one command through. A source that keeps failing alternates between
-        # the two (and sits at 2 while no command arrives to test it), so a test for 1 alone would
-        # reset its `for` clock at every probe and never fire. Only 0 means commands are flowing.
+        # "Opened in the last 20 minutes", not "is not closed". The breaker opens (1) on a trip, moves
+        # to half-open (2) when its pause ends, and closes (0) only when a command is published
+        # afterwards without a disconnect. A source with no commands waiting therefore reads 2 for as
+        # long as it is idle, so any test of "not closed" would fire on one session blip and stay
+        # firing until someone sent a command. Looking for a 1 in the window fires on every trip, and
+        # keeps firing for a source that fails every probe, because each re-open puts a new 1 in the
+        # window (the pause between re-opens, 5 minutes doubling to an hour, is mostly spent at 1).
+        # A pause that outlasts the window is spent at 1 throughout. It resolves 20 minutes after the
+        # last open.
         - alert: SparkplugCommandBreakerOpen
-          expr: max by (tenant, source) (devicechain_sparkplugingest_command_breaker_state{namespace="{{ $ns }}"}) >= 1
-          for: 10m
+          expr: max by (tenant, source) (max_over_time((devicechain_sparkplugingest_command_breaker_state{namespace="{{ $ns }}"} == 1)[20m:1m])) > 0
+          for: 2m
           labels:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
-            summary: "Sparkplug commands to a source are paused"
-            description: "For at least 10 minutes, the command circuit breaker for source {{ "{{ $labels.source }}" }} (tenant {{ "{{ $labels.tenant }}" }}) has not been closed. It opens when the customer broker drops sparkplug-ingest's session right after a command is published, which almost always means the source's credential may not publish on spBv1.0/<group>/NCMD/+ and spBv1.0/<group>/DCMD/+/+. While it is open, commands to that source fail at once as not delivered; telemetry from the source is not affected. Grant the publish permission on the broker and the next probe command closes it."
+            summary: "Sparkplug commands to a source were paused"
+            description: "In the last 20 minutes the command circuit breaker for source {{ "{{ $labels.source }}" }} (tenant {{ "{{ $labels.tenant }}" }}) opened. It opens when the customer broker drops sparkplug-ingest's session right after a command is published, which almost always means the source's credential may not publish on spBv1.0/<group>/NCMD/+ and spBv1.0/<group>/DCMD/+/+. While it is open, commands to that source fail at once as not delivered; telemetry from the source is not affected. Grant the publish permission on the broker. This alert resolves 20 minutes after the last time the breaker opened, whether or not it has closed: after its pause it is half-open and closes only when the next command is published without a disconnect."
         # Every result that is a fault of the service or the platform and not an outcome about the
         # command: a claim, a park, a publish or the awaiting store failing, or a response that could
         # not be delivered to command-delivery. Refusals (disabled, breaker, expired, payload,

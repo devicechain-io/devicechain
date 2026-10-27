@@ -304,6 +304,22 @@ rendered claim and its mount always agree.
 {{- end -}}
 
 {{/*
+devicechain.foldedKeyOnce fails the render when a map holds the same key twice under different
+capitalisation (sources and Sources). The service decodes like encoding/json, which keeps only the
+last one it reads, and Go map order is not that order, so the chart could not say which one is
+live. Takes {map, key (lower case), where}.
+*/}}
+{{- define "devicechain.foldedKeyOnce" -}}
+{{- $key := .key -}}
+{{- $where := .where -}}
+{{- $n := 0 -}}
+{{- range $k, $_ := .map -}}{{- if eq (lower $k) $key -}}{{- $n = add1 $n -}}{{- end -}}{{- end -}}
+{{- if gt $n 1 -}}
+{{- fail (printf "%s sets the key %q more than once under different capitalisation. The service keeps only the last one it reads and the chart cannot tell which that is, so keep one." $where $key) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 devicechain.sparkplugCommandsEnabled renders "true" when some Sparkplug source of this install
 turns the command downlink on (functionalAreas.sparkplug-ingest.config.sources[].commands.enabled),
 and "" otherwise. It is the one place that fact is read, so the flag command-delivery receives
@@ -325,11 +341,14 @@ It fails the render, rather than leaving the pod to find out, when the downlink 
 {{- $on := false -}}
 {{- if has "sparkplug-ingest" $areas -}}
 {{- $cfg := get (get (.Values.functionalAreas | default dict) "sparkplug-ingest" | default dict) "config" | default dict -}}
+{{- $_ := include "devicechain.foldedKeyOnce" (dict "map" $cfg "key" "sources" "where" "functionalAreas.sparkplug-ingest.config") -}}
 {{- range $k, $sources := $cfg -}}
 {{- if eq (lower $k) "sources" -}}
 {{- range $src := ($sources | default list) -}}
+{{- $_ := include "devicechain.foldedKeyOnce" (dict "map" $src "key" "commands" "where" "A Sparkplug source") -}}
 {{- range $sk, $sv := $src -}}
 {{- if eq (lower $sk) "commands" -}}
+{{- $_ := include "devicechain.foldedKeyOnce" (dict "map" ($sv | default dict) "key" "enabled" "where" "A Sparkplug source's commands block") -}}
 {{- range $ck, $cv := ($sv | default dict) -}}
 {{- if eq (lower $ck) "enabled" -}}
 {{- if not (kindIs "bool" $cv) -}}

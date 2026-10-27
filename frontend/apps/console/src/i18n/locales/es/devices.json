@@ -191,6 +191,8 @@
   "sparkplugWriteHint": "Detectar envía true y false como booleano y todo lo que se lee como número, como ese número. Elige Texto para escribir una cadena que se parezca a uno de ellos. Un valor de tipo incorrecto para la métrica se rechaza antes de enviar nada.",
   "sparkplugOutcomeInFlight": "Publicado. Esperando a que el nodo informe del valor solicitado.",
   "sparkplugOutcomeUnconfirmed": "Sin confirmar. Sparkplug no tiene confirmación para los comandos, así que la plataforma solo puede esperar a que el nodo informe del valor solicitado. Puede que el nodo haya ignorado o rechazado el comando, o que el broker lo haya descartado.",
+  "sparkplugOutcomeSuperseded": "Sustituido por una escritura más reciente en la misma métrica antes de confirmarse. Consulta la columna de resultado.",
+  "sparkplugOutcomeLikelyRefused": "El broker cerró la conexión justo después de publicar esto, así que lo más probable es que lo rechazara. Comprueba que la credencial de la fuente pueda publicar en los topics de comandos del nodo.",
   "sparkplugOutcomeConfirmed": "Confirmado por el informe del nodo de {{metric}} = {{value}} a las {{at}} (mediante {{via}}). Esto indica que el valor se informó, no que este comando lo provocara.",
   "sparkplugOutcomeConfirmedBirth": "Confirmado por el nuevo nacimiento del nodo a las {{at}}.",
   "sparkplugOutcomeUnchanged": "Ya estaba en ese valor: el nodo había informado {{metric}} = {{value}} desde {{since}} y no informó nada distinto después. La plataforma no vio que el nodo actuara por este comando.",

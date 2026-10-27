@@ -148,6 +148,9 @@ describe('the Sparkplug write form', () => {
   });
 });
 
+const WINDOW_ERROR =
+  'no report of Outputs/Valve1 at the requested value within 2m0s; Sparkplug has no command acknowledgement';
+
 describe('the Sparkplug outcome help', () => {
   const confirmed = JSON.stringify({
     kind: 'write', metric: 'Outputs/Valve1', value: true, reportedAt: '2026-10-27T12:00:05Z', via: 'DDATA', hostRole: 'primary',
@@ -177,11 +180,24 @@ describe('the Sparkplug outcome help', () => {
   });
 
   it('says a timeout is not a failure and that Sparkplug has no acknowledgement', async () => {
-    install([row('sparkplug.write', 'TIMEOUT', null, 'no report of Outputs/Valve1 at the requested value within 120s')]);
+    install([row('sparkplug.write', 'TIMEOUT', null, WINDOW_ERROR)]);
     render(<DeviceCommandsPanel deviceToken="valve-1" />);
     const note = await screen.findByTestId('sparkplug-outcome');
     expect(note.textContent).toContain('Not confirmed');
     expect(note.textContent).toContain('no acknowledgement');
+  });
+
+  it('does not say a superseded or refused command was ignored by the node', async () => {
+    install([
+      row('sparkplug.write', 'TIMEOUT', null, 'superseded by tok-9 before it was confirmed'),
+      { ...row('sparkplug.write', 'TIMEOUT', null, 'broker disconnected immediately after the publish; likely refused'), id: 'b', token: 'b' },
+    ]);
+    render(<DeviceCommandsPanel deviceToken="valve-1" />);
+    const notes = await screen.findAllByTestId('sparkplug-outcome');
+    const text = notes.map((n) => n.textContent).join('|');
+    expect(text).toContain('Replaced by a newer write');
+    expect(text).toContain('most likely refused');
+    expect(text).not.toContain('ignored or rejected');
   });
 
   it('says a SENT command is still waiting', async () => {
@@ -210,7 +226,7 @@ describe('the Sparkplug outcome help', () => {
   it('is translated', async () => {
     await i18n.changeLanguage('es');
     try {
-      install([row('sparkplug.write', 'TIMEOUT')]);
+      install([row('sparkplug.write', 'TIMEOUT', null, WINDOW_ERROR)]);
       render(<DeviceCommandsPanel deviceToken="valve-1" />);
       expect((await screen.findByTestId('sparkplug-outcome')).textContent).toContain('Sin confirmar');
     } finally {

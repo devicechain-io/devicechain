@@ -82,8 +82,10 @@ run_checks() {
   local out
 
   expect_flag() { # <label> <manifest>
+    # The exact pair, not "the flag somewhere before a true": `"sparkplugCommands":false` beside any
+    # other true value would satisfy that.
     case "$(cd_config <<<"$2")" in
-      *"$flag"*"true"*) printf '  ok: %s\n' "$1" ;;
+      *'\"sparkplugCommands\":true'*) printf '  ok: %s\n' "$1" ;;
       *) bad "$1: command-delivery's config does not carry $flag=true: $(cd_config <<<"$2")" ;;
     esac
   }
@@ -135,6 +137,20 @@ run_checks() {
   out="$(render "$TMP/upper.yaml")" || bad "a differently spelled block did not render: $out"
   expect_flag "Commands/Enabled spelled with capitals" "$out"
 
+  # ...and the top-level key too: a capitalised Sources is the same key to the service.
+  cat >"$TMP/capsources.yaml" <<'YAML'
+enabledFunctionalAreas: [user-management, device-management, command-delivery, sparkplug-ingest]
+functionalAreas:
+  sparkplug-ingest:
+    config:
+      Sources:
+        - tenant: t1
+          broker: {url: "tcp://broker-1:1883"}
+          commands: {enabled: true, hostRole: primary}
+YAML
+  out="$(render "$TMP/capsources.yaml")" || bad "a capitalised Sources key did not render: $out"
+  expect_flag "Sources spelled with a capital" "$out"
+
   # Sources configured under an area that is not deployed are never read.
   values "$TMP/inert.yaml" "$on"
   out="$(render "$TMP/inert.yaml" --set 'enabledFunctionalAreas={user-management,device-management,command-delivery}')" ||
@@ -151,6 +167,41 @@ run_checks() {
   rc=0
   out="$(render "$TMP/on.yaml" --set instance.config.infrastructure.commandDelivery.hostname=)" || rc=$?
   expect_refused "commands enabled with no way to reach command-delivery" "could not reach command-delivery" "$out" "$rc"
+
+  rc=0
+  out="$(render "$TMP/on.yaml" --set instance.config.infrastructure.commandDelivery.port=0)" || rc=$?
+  expect_refused "commands enabled with command-delivery's port unset" "could not reach command-delivery" "$out" "$rc"
+
+  # The same key twice under different capitalisation: the service keeps one of them and the chart
+  # cannot tell which, so it refuses instead of OR-ing them.
+  cat >"$TMP/dup-sources.yaml" <<'YAML'
+enabledFunctionalAreas: [user-management, device-management, command-delivery, sparkplug-ingest]
+functionalAreas:
+  sparkplug-ingest:
+    config:
+      sources:
+        - tenant: t1
+          broker: {url: "tcp://broker-1:1883"}
+          commands: {enabled: false}
+      Sources:
+        - tenant: t1
+          broker: {url: "tcp://broker-1:1883"}
+          commands: {enabled: true, hostRole: primary}
+YAML
+  rc=0
+  out="$(render "$TMP/dup-sources.yaml")" || rc=$?
+  expect_refused "sources and Sources together" "more than once" "$out" "$rc"
+
+  values "$TMP/dup-commands.yaml" '          commands: {enabled: false}
+          Commands: {enabled: true, hostRole: primary}'
+  rc=0
+  out="$(render "$TMP/dup-commands.yaml")" || rc=$?
+  expect_refused "commands and Commands together" "more than once" "$out" "$rc"
+
+  values "$TMP/dup-enabled.yaml" '          commands: {enabled: false, Enabled: true, hostRole: primary}'
+  rc=0
+  out="$(render "$TMP/dup-enabled.yaml")" || rc=$?
+  expect_refused "enabled and Enabled together" "more than once" "$out" "$rc"
 
   rc=0
   out="$(render "$TMP/on.yaml" --set-string 'functionalAreas.sparkplug-ingest.config.sources[0].commands.enabled=true')" || rc=$?
@@ -210,6 +261,10 @@ self_test() {
   plant "a hand-set flag is accepted" 's/{{- if eq (lower \$k) "sparkplugcommands" -}}/{{- if eq (lower $k) "never-matches" -}}/' "$h"
   plant "commands without command-delivery render" 's/{{- if not (has "command-delivery" \$areas) -}}/{{- if false -}}/' "$h"
   plant "an unreachable command-delivery renders" 's/{{- if or (not \$cd.hostname) (not \$cd.port) -}}/{{- if false -}}/' "$h"
+  plant "top-level sources is matched case-sensitively" 's/{{- if eq (lower \$k) "sources" -}}/{{- if eq $k "sources" -}}/' "$h"
+  plant "an unset command-delivery port renders" 's/{{- if or (not \$cd.hostname) (not \$cd.port) -}}/{{- if not $cd.hostname -}}/' "$h"
+  plant "an unset command-delivery hostname renders" 's/{{- if or (not \$cd.hostname) (not \$cd.port) -}}/{{- if not $cd.port -}}/' "$h"
+  plant "case-folded duplicate keys are accepted" 's/{{- if gt \$n 1 -}}/{{- if false -}}/' "$h"
   plant "a non-boolean enabled renders" 's/{{- if not (kindIs "bool" \$cv) -}}/{{- if false -}}/' "$h"
   plant "the refusals are not evaluated without command-delivery" '/^{{- \$_ := include "devicechain.sparkplugCommandsEnabled" \$root -}}$/d' "$h"
 

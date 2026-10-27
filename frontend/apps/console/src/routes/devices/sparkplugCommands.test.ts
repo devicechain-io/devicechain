@@ -112,9 +112,31 @@ describe('sparkplugOutcome', () => {
     }
   });
 
-  it('says TIMEOUT is unconfirmed and SENT is still waiting', () => {
-    expect(sparkplugOutcome({ name: 'sparkplug.write', status: 'TIMEOUT' }).outcome).toEqual({ kind: 'unconfirmed' });
+  const windowError =
+    'no report of m at the requested value within 2m0s; Sparkplug has no command acknowledgement - the node may have ignored or rejected it, or the broker dropped the publish';
+
+  it('says a TIMEOUT that ran out its window is unconfirmed, and SENT is still waiting', () => {
+    expect(sparkplugOutcome({ name: 'sparkplug.write', status: 'TIMEOUT', error: windowError }).outcome).toEqual({
+      kind: 'unconfirmed',
+    });
     expect(sparkplugOutcome({ name: 'sparkplug.write', status: 'SENT' }).outcome).toEqual({ kind: 'inFlight' });
+  });
+
+  it('does not call a superseded or tripped command "unconfirmed", and says nothing for an unknown reason', () => {
+    expect(
+      sparkplugOutcome({ name: 'sparkplug.write', status: 'TIMEOUT', error: 'superseded by tok-2 before it was confirmed' })
+        .outcome,
+    ).toEqual({ kind: 'superseded' });
+    expect(
+      sparkplugOutcome({
+        name: 'sparkplug.write',
+        status: 'TIMEOUT',
+        error: 'broker disconnected immediately after the publish; likely refused',
+      }).outcome,
+    ).toEqual({ kind: 'likelyRefused' });
+    for (const error of [null, undefined, '', 'something else']) {
+      expect(sparkplugOutcome({ name: 'sparkplug.write', status: 'TIMEOUT', error }).outcome, String(error)).toBeNull();
+    }
   });
 
   it('flags a confirmation that came from a secondary host', () => {

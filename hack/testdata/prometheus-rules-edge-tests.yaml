@@ -456,13 +456,13 @@ tests:
         alertname: SparkplugCommandBreakerOpen
         exp_alerts: []
 
-  # ...open for the whole window is quiet until it has held for 10m, then fires.
+  # ...open for the whole window is quiet until the 2m `for` has run, then fires.
   - interval: 1m
     input_series:
       - series: 'devicechain_sparkplugingest_command_breaker_state{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest", tenant="acme", source="acme/plant-a"}'
         values: '1x40'
     alert_rule_test:
-      - eval_time: 5m
+      - eval_time: 1m
         alertname: SparkplugCommandBreakerOpen
         exp_alerts: []
       - eval_time: 15m
@@ -474,12 +474,11 @@ tests:
               tenant: acme
               source: acme/plant-a
             exp_annotations:
-              summary: "Sparkplug commands to a source are paused"
-              description: "For at least 10 minutes, the command circuit breaker for source acme/plant-a (tenant acme) has not been closed. It opens when the customer broker drops sparkplug-ingest's session right after a command is published, which almost always means the source's credential may not publish on spBv1.0/<group>/NCMD/+ and spBv1.0/<group>/DCMD/+/+. While it is open, commands to that source fail at once as not delivered; telemetry from the source is not affected. Grant the publish permission on the broker and the next probe command closes it."
+              summary: "Sparkplug commands to a source were paused"
+              description: "In the last 20 minutes the command circuit breaker for source acme/plant-a (tenant acme) opened. It opens when the customer broker drops sparkplug-ingest's session right after a command is published, which almost always means the source's credential may not publish on spBv1.0/<group>/NCMD/+ and spBv1.0/<group>/DCMD/+/+. While it is open, commands to that source fail at once as not delivered; telemetry from the source is not affected. Grant the publish permission on the broker. This alert resolves 20 minutes after the last time the breaker opened, whether or not it has closed: after its pause it is half-open and closes only when the next command is published without a disconnect."
 
   # ...and it fires on a breaker that keeps alternating open and half-open (a source whose probe
-  # command fails every time): testing for state 1 alone would restart the 10m clock at each
-  # half-open and never fire.
+  # command fails every time).
   - interval: 1m
     input_series:
       - series: 'devicechain_sparkplugingest_command_breaker_state{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest", tenant="acme", source="acme/plant-a"}'
@@ -494,8 +493,55 @@ tests:
               tenant: acme
               source: acme/plant-a
             exp_annotations:
-              summary: "Sparkplug commands to a source are paused"
-              description: "For at least 10 minutes, the command circuit breaker for source acme/plant-a (tenant acme) has not been closed. It opens when the customer broker drops sparkplug-ingest's session right after a command is published, which almost always means the source's credential may not publish on spBv1.0/<group>/NCMD/+ and spBv1.0/<group>/DCMD/+/+. While it is open, commands to that source fail at once as not delivered; telemetry from the source is not affected. Grant the publish permission on the broker and the next probe command closes it."
+              summary: "Sparkplug commands to a source were paused"
+              description: "In the last 20 minutes the command circuit breaker for source acme/plant-a (tenant acme) opened. It opens when the customer broker drops sparkplug-ingest's session right after a command is published, which almost always means the source's credential may not publish on spBv1.0/<group>/NCMD/+ and spBv1.0/<group>/DCMD/+/+. While it is open, commands to that source fail at once as not delivered; telemetry from the source is not affected. Grant the publish permission on the broker. This alert resolves 20 minutes after the last time the breaker opened, whether or not it has closed: after its pause it is half-open and closes only when the next command is published without a disconnect."
+
+  # ...and it keeps firing for a source that re-opens on every probe, even when the pause between
+  # opens (the half-open stretch) is long: each re-open puts a 1 back in the 20m window.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_sparkplugingest_command_breaker_state{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest", tenant="acme", source="acme/plant-a"}'
+        values: '1x4 2x8 1x4 2x8 1x4 2x8 1x4 2x8 2x30'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: SparkplugCommandBreakerOpen
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              tenant: acme
+              source: acme/plant-a
+            exp_annotations:
+              summary: "Sparkplug commands to a source were paused"
+              description: "In the last 20 minutes the command circuit breaker for source acme/plant-a (tenant acme) opened. It opens when the customer broker drops sparkplug-ingest's session right after a command is published, which almost always means the source's credential may not publish on spBv1.0/<group>/NCMD/+ and spBv1.0/<group>/DCMD/+/+. While it is open, commands to that source fail at once as not delivered; telemetry from the source is not affected. Grant the publish permission on the broker. This alert resolves 20 minutes after the last time the breaker opened, whether or not it has closed: after its pause it is half-open and closes only when the next command is published without a disconnect."
+
+  # ...and it goes quiet once the last re-open is more than 20m behind it, with the breaker still
+  # half-open (state 2): an idle source that tripped once and has nothing waiting is not an
+  # ongoing problem. This is what the real breaker does; it does not step from 1 to 0 by itself.
+      - eval_time: 80m
+        alertname: SparkplugCommandBreakerOpen
+        exp_alerts: []
+
+  # ...a single trip fires, then resolves 20m after it, while the breaker sits at 2.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_sparkplugingest_command_breaker_state{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest", tenant="acme", source="acme/plant-a"}'
+        values: '0x5 1x5 2x60'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: SparkplugCommandBreakerOpen
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              tenant: acme
+              source: acme/plant-a
+            exp_annotations:
+              summary: "Sparkplug commands to a source were paused"
+              description: "In the last 20 minutes the command circuit breaker for source acme/plant-a (tenant acme) opened. It opens when the customer broker drops sparkplug-ingest's session right after a command is published, which almost always means the source's credential may not publish on spBv1.0/<group>/NCMD/+ and spBv1.0/<group>/DCMD/+/+. While it is open, commands to that source fail at once as not delivered; telemetry from the source is not affected. Grant the publish permission on the broker. This alert resolves 20 minutes after the last time the breaker opened, whether or not it has closed: after its pause it is half-open and closes only when the next command is published without a disconnect."
+      - eval_time: 45m
+        alertname: SparkplugCommandBreakerOpen
+        exp_alerts: []
 
   # ...and it names the source: a second source that is closed neither hides nor joins the first.
   - interval: 1m
@@ -514,18 +560,8 @@ tests:
               tenant: acme
               source: acme/plant-a
             exp_annotations:
-              summary: "Sparkplug commands to a source are paused"
-              description: "For at least 10 minutes, the command circuit breaker for source acme/plant-a (tenant acme) has not been closed. It opens when the customer broker drops sparkplug-ingest's session right after a command is published, which almost always means the source's credential may not publish on spBv1.0/<group>/NCMD/+ and spBv1.0/<group>/DCMD/+/+. While it is open, commands to that source fail at once as not delivered; telemetry from the source is not affected. Grant the publish permission on the broker and the next probe command closes it."
-
-  # ...and it clears when the breaker closes.
-  - interval: 1m
-    input_series:
-      - series: 'devicechain_sparkplugingest_command_breaker_state{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest", tenant="acme", source="acme/plant-a"}'
-        values: '1x15 0x30'
-    alert_rule_test:
-      - eval_time: 40m
-        alertname: SparkplugCommandBreakerOpen
-        exp_alerts: []
+              summary: "Sparkplug commands to a source were paused"
+              description: "In the last 20 minutes the command circuit breaker for source acme/plant-a (tenant acme) opened. It opens when the customer broker drops sparkplug-ingest's session right after a command is published, which almost always means the source's credential may not publish on spBv1.0/<group>/NCMD/+ and spBv1.0/<group>/DCMD/+/+. While it is open, commands to that source fail at once as not delivered; telemetry from the source is not affected. Grant the publish permission on the broker. This alert resolves 20 minutes after the last time the breaker opened, whether or not it has closed: after its pause it is half-open and closes only when the next command is published without a disconnect."
 
   # Faults: each of the five fault results, alone, fires. A single increment is enough.
   - interval: 1m

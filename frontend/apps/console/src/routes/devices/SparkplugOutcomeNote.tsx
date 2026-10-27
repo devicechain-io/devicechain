@@ -21,7 +21,7 @@ function when(iso: string | undefined): string | undefined {
 export function SparkplugOutcomeNote({
   command,
 }: {
-  command: { name: string; status: string; responsePayload?: string | null };
+  command: { name: string; status: string; responsePayload?: string | null; error?: string | null };
 }) {
   const { t } = useTranslation('devices');
   const { outcome, secondaryHost } = sparkplugOutcome(command);
@@ -34,6 +34,12 @@ export function SparkplugOutcomeNote({
       break;
     case 'unconfirmed':
       text = t('sparkplugOutcomeUnconfirmed');
+      break;
+    case 'superseded':
+      text = t('sparkplugOutcomeSuperseded');
+      break;
+    case 'likelyRefused':
+      text = t('sparkplugOutcomeLikelyRefused');
       break;
     case 'confirmedByReport':
       text = t('sparkplugOutcomeConfirmed', {
