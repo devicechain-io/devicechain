@@ -156,6 +156,9 @@ type natsAck struct{ nm *nats.Msg }
 
 func (a natsAck) Ack() error { return a.nm.Ack() }
 
+// InProgress restarts the message's ack-wait without acknowledging it.
+func (a natsAck) InProgress() error { return a.nm.InProgress() }
+
 // NatsManager manages the lifecycle of NATS JetStream interactions for a
 // microservice. It mirrors the former KafkaManager's lifecycle shape so the
 // service mains change minimally.

@@ -196,6 +196,11 @@ type Metrics struct {
 	// that counts verdicts, and a slot that could not read the projection reached none, which
 	// is exactly the case this series exists to show as a failure.
 	PresenceProbePass *core.PeriodicTaskMetrics
+	// CommandBreakerState is each source's command breaker (0 closed, 1 open, 2 half-open), labelled by
+	// tenant, and CommandBreakerTrips counts the times one opened: a session that ended right after a
+	// command publish, which usually means the broker refused the command. Both may be nil.
+	CommandBreakerState *prometheus.GaugeVec
+	CommandBreakerTrips prometheus.Counter
 }
 
 // Probe trigger labels for Metrics.PresenceProbes and Metrics.PresenceProbeDisconnects.
@@ -368,6 +373,17 @@ type Client struct {
 	retryMu     sync.Mutex
 	retryCh     chan *publishItem
 	retryClosed bool
+
+	// The command downlink (G19 S3); see commands.go. commands is this source's configuration,
+	// cmdIndex the reverse index of the devices born on it, breaker its command circuit breaker, and
+	// hostOnline whether the Host session is live AND has announced ONLINE. resolver builds the index
+	// (nil: no index), and hooks are the dispatcher's callbacks.
+	commands   config.SourceCommands
+	cmdIndex   *commandIndex
+	breaker    *Breaker
+	hostOnline atomic.Bool
+	resolver   TokenResolver
+	hooks      CommandHooks
 }
 
 // publishItem is one prepared publication on its way to the stream, with the attempts spent
@@ -446,6 +462,9 @@ func NewClient(source config.SparkplugSource, broker Broker, ingester SampleInge
 		probeWindow:   config.DefaultPresenceProbeWindowSeconds * time.Second,
 		probeInterval: config.DefaultPresenceProbeSeconds * time.Second,
 		settleTimeout: publishSettleTimeout,
+		commands:      source.Commands,
+		cmdIndex:      newCommandIndex(),
+		breaker:       NewBreaker(now),
 	}
 	c.sessions = NewSessionTracker(now, defaultRebirthBackoff, c.enqueueRebirth)
 	c.rebirthPub = c.publishRebirth
@@ -639,6 +658,9 @@ func (c *Client) runLoop(ctx context.Context) {
 			// live (setSessionIfLive), so once this is cancelled the clearSession below
 			// cannot be undone by a handler that is still finishing.
 			sessionCancel()
+			// A session that ends right after a command was published is read as the broker
+			// refusing it (see Breaker), and commands stop being addressable at once.
+			c.noteSessionLost()
 			// 🔴 AN ABANDONED SESSION ANNOUNCES ITS OWN OFFLINE BEFORE THE CLEAN DISCONNECT.
 			// A clean DISCONNECT discards the Last-Will (see Stop), and an ONLINE publish
 			// that timed out waiting for its PUBACK may still have been stored by the
@@ -792,6 +814,15 @@ func (c *Client) onConnected(sessionCtx context.Context, client mqtt.Client, ses
 	}
 	log.Info().Str("tenant", c.tenant).Str("topic", c.stateTopic).Int64("timestamp", sessionTs).Msg("Announced Host Application ONLINE.")
 	up.Store(true)
+	// Commands may be published only on a session that has announced ONLINE: a node that has not
+	// seen its primary host come online ignores (or buffers) what it is told. The flag is set under
+	// mu and only while this session is still the live one, so a handler finishing after its
+	// session ended cannot mark a dead connection up.
+	c.mu.Lock()
+	if sessionCtx.Err() == nil && c.mc == client {
+		c.hostOnline.Store(true)
+	}
+	c.mu.Unlock()
 
 	// Phase 2 (after ONLINE): probe the asserted set for liveness, under THIS session's
 	// context so a broker drop mid-probe aborts it before it can declare a mass death.
@@ -1186,7 +1217,14 @@ func (c *Client) ingestSamples(externalId string, samples []Sample) {
 func (c *Client) ingestPresence(events []PresenceEvent) {
 	c.ingest(
 		func(ctx context.Context) (*Publication, error) {
-			return c.ingester.PreparePresence(ctx, c.tenant, c.policy, events)
+			pub, err := c.ingester.PreparePresence(ctx, c.tenant, c.policy, events)
+			if err == nil && pub != nil {
+				// The devices the births resolved are exactly the ones a command can now be addressed
+				// to; deaths take them out again. Done here, on the receive goroutine in message
+				// order, so the index never runs ahead of the BIRTH table it points into.
+				c.trackCommandTargets(ctx, events)
+			}
+			return pub, err
 		},
 		func(reason string, err error) {
 			log.Warn().Err(err).Str("tenant", c.tenant).Int("presence", len(events)).
@@ -1712,10 +1750,13 @@ func (c *Client) clearSession(client mqtt.Client) {
 	if c.mc == client {
 		c.mc = nil
 		c.sessionTs = 0
+		c.hostOnline.Store(false)
 		ended = true
 	}
 	c.mu.Unlock()
 	if ended {
+		// Nothing is addressable until a node births again on the next session.
+		c.cmdIndex.clear()
 		// The Host session is over: no node's metric table is addressable until its next birth.
 		c.sessions.EndHostSession()
 	}

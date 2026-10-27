@@ -6,6 +6,7 @@ package processor
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -537,4 +538,34 @@ func TestTheSharedWireTypesAgreeWithThisServicesOwn(t *testing.T) {
 	var sharedResp cmddownlink.ResponseEnvelope
 	require.NoError(t, strict(ownOut, &sharedResp), "this service's response type carries a field the shared type does not know")
 	assert.Equal(t, "z", sharedResp.DispatchNonce)
+}
+
+// A Sparkplug command carries its own expiry as a header, so the adapter can look at it again after
+// a wait of its own; a command that does not expire carries none, and only the Sparkplug path is
+// stamped. Without the flag nothing at all is stamped (covered above).
+func TestASparkplugCommandCarriesItsExpiryAsAHeader(t *testing.T) {
+	expiring := queued(3, "c3")
+	expiring.ExpiresAt = sql.NullTime{Time: time.Date(2026, 10, 27, 12, 30, 0, 0, time.UTC), Valid: true}
+	forever := queued(4, "c4")
+	other := queued(5, "c5")
+	other.ExpiresAt = expiring.ExpiresAt
+
+	api := &fakeApi{lockAvailable: true, pending: []*model.Command{expiring, forever, other}}
+	writer := &recordingWriter{}
+	proc := procWith(api, writer)
+	proc.Presence = &scriptedReader{states: map[string]presence.State{
+		"dev-c3": asserted(true, sparkplugSource),
+		"dev-c4": asserted(true, sparkplugSource),
+		"dev-c5": asserted(true, lwm2mSource),
+	}}
+	proc.CommandImpacts = &impactSpy{impact: "NORMAL"}
+	proc.SparkplugCommands = true
+	proc.sweepLocked(context.Background())
+
+	h := headersByDevice(writer)
+	assert.Equal(t, "2026-10-27T12:30:00Z", h["dev-c3"][cmddownlink.HeaderCommandExpires], "an expiring Sparkplug command lost its expiry")
+	_, has := h["dev-c4"][cmddownlink.HeaderCommandExpires]
+	assert.False(t, has, "a command that never expires was stamped with an expiry")
+	_, has = h["dev-c5"][cmddownlink.HeaderCommandExpires]
+	assert.False(t, has, "another transport's command was stamped with an expiry")
 }

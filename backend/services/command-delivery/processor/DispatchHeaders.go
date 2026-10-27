@@ -192,6 +192,12 @@ func (cproc *CommandDeliveryProcessor) dispatchHeaders(cmd *model.Command, route
 		} else {
 			incr(cproc.ImpactLookupFailures, 1)
 		}
+		// The command's own expiry, so the adapter can look at it again after any wait of its own
+		// before the wire. It is already on the row and costs no lookup; absent means the command
+		// does not expire.
+		if cmd.ExpiresAt.Valid {
+			headers[cmddownlink.HeaderCommandExpires] = cmd.ExpiresAt.Time.UTC().Format(time.RFC3339)
+		}
 	}
 	return headers
 }

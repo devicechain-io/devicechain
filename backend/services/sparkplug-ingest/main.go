@@ -30,6 +30,7 @@ import (
 
 	"github.com/devicechain-io/dc-event-sources/adapter"
 	"github.com/devicechain-io/dc-microservice/auth"
+	"github.com/devicechain-io/dc-microservice/cmddownlink"
 	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/governance"
@@ -38,6 +39,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/devicechain-io/dc-sparkplug-ingest/config"
+	"github.com/devicechain-io/dc-sparkplug-ingest/downlink"
 	"github.com/devicechain-io/dc-sparkplug-ingest/host"
 )
 
@@ -66,6 +68,24 @@ var (
 	// subscription until the connection closes). A term only drains one (Settle, in the
 	// source's Stop); they are closed once, by beforeMicroserviceStopped.
 	PublishWriters []messaging.AsyncWriter
+
+	// Dispatcher is the Sparkplug command dispatcher (G19 S3): nil unless at least one source enables
+	// commands, in which case the service behaves exactly as it did before the downlink existed.
+	// It is built once and run once per leadership term. CommandReader and ResponseWriter are the
+	// durable device-commands consumer and the command-responses writer it uses, also built once.
+	Dispatcher     *downlink.Dispatcher
+	CommandReader  messaging.MessageReader
+	ResponseWriter messaging.MessageWriter
+
+	// dispatchMetrics are the dispatcher's instruments, built once in the initialize phase with the
+	// rest (see buildMetrics) whether or not any source enables commands.
+	dispatchMetrics downlink.Metrics
+
+	// commandRegistrar and tenantGate are the ingest path's registrar and tenant-lifecycle gate,
+	// kept so the command path shares them (the registrar's cache is what lets the reverse index
+	// learn a born device's token without a round trip).
+	commandRegistrar *adapter.Registrar
+	tenantGate       func(string) bool
 
 	// Svc drives the broker and the HTTP surface (probes + metrics) in core/service's one
 	// sequence. The leadership loop is this service's own and is not in it: it starts after
@@ -190,7 +210,89 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	Manager = host.NewManager(clients)
 	log.Info().Int("sources", len(clients)).Msg("Built Sparkplug source connections.")
 
+	if Configuration.AnyCommandsEnabled() {
+		d, err := buildDispatcher(clients, dispatchMetrics)
+		if err != nil {
+			return err
+		}
+		Dispatcher = d
+	}
+
 	return nil
+}
+
+// newCommandReader builds the durable device-commands consumer the dispatcher reads.
+//
+// 🔴 IT IS A NAMED CONSTRUCTOR SO THE DELIVER POLICY HAS SOMETHING TO BE TESTED THROUGH. The reader
+// MUST start at the stream tail (ReaderWithDeliverNew): a durable created without it replays the
+// stream's retained backlog and publishes already-expired commands to nodes as live actuations.
+// Dropping the option changes nothing a compiler or a unit test of the dispatcher can see.
+func newCommandReader(m *messaging.NatsManager) (messaging.MessageReader, error) {
+	return m.NewReader(streams.DeviceCommands, messaging.ReaderWithDeliverNew())
+}
+
+// commandDeliveryEndpoint validates the coordinate the command path needs and returns
+// command-delivery's GraphQL URL. It fails closed: without it no command could be claimed, and a
+// dispatcher that published unclaimed commands would actuate a node twice.
+func commandDeliveryEndpoint(infra mscfg.InfrastructureConfiguration) (string, error) {
+	if infra.ServiceAuth.Secret == "" {
+		return "", fmt.Errorf("service secret not configured (infrastructure.serviceAuth) — sparkplug-ingest cannot claim commands")
+	}
+	if infra.CommandDelivery.Hostname == "" || infra.CommandDelivery.Port == 0 {
+		return "", fmt.Errorf("command-delivery endpoint not configured (infrastructure.commandDelivery) — sparkplug-ingest has sources with commands enabled and cannot claim, park or answer them")
+	}
+	return fmt.Sprintf("http://%s:%d/graphql", infra.CommandDelivery.Hostname, infra.CommandDelivery.Port), nil
+}
+
+// buildDispatcher assembles the command dispatcher over the built sources. It is called only when
+// a source enables commands.
+//
+// 🔑 THE SERVICE TOKEN CARRIES command:read, command:claim AND command:park, AND NOTHING ELSE. It
+// reads a woken device's backlog, takes a command it is about to publish out of the delivery sweep's
+// reach (the claim is the only thing standing between a redelivery and a second actuation), and
+// hands one back when the device cannot be addressed. command:write would also let it create and
+// cancel commands for any tenant, which it has no business doing. It is a client of its own, apart
+// from the ingest path's, so neither can be widened by the other's needs.
+func buildDispatcher(clients []*host.Client, dm downlink.Metrics) (*downlink.Dispatcher, error) {
+	infra := Microservice.InstanceConfiguration.Infrastructure
+	url, err := commandDeliveryEndpoint(infra)
+	if err != nil {
+		return nil, err
+	}
+	if commandRegistrar == nil || tenantGate == nil {
+		return nil, fmt.Errorf("sparkplug sources enable commands but have no ingest path to learn device tokens from")
+	}
+	reader, err := newCommandReader(NatsManager)
+	if err != nil {
+		return nil, err
+	}
+	CommandReader = reader
+	responses, err := NatsManager.NewWriter(streams.CommandResponses)
+	if err != nil {
+		return nil, err
+	}
+	ResponseWriter = responses
+	awaiting, err := NatsManager.SparkplugCommandsAwaitingStore()
+	if err != nil {
+		return nil, err
+	}
+	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "sparkplug-ingest",
+		[]string{string(auth.CommandRead), string(auth.CommandClaim), string(auth.CommandPark)})
+
+	sources := make([]downlink.Source, 0, len(clients))
+	for _, c := range clients {
+		c.SetTokenResolver(host.NewTokenResolver(commandRegistrar))
+		sources = append(sources, c)
+	}
+	d := downlink.New(CommandReader, ResponseWriter,
+		cmddownlink.NewFetcher(client, url, "sparkplug"),
+		cmddownlink.NewClaimer(client, url), cmddownlink.NewParker(client, url),
+		downlink.NewKVAwaitingStore(awaiting), sources, dm, downlink.Options{
+			ReadPacer:     core.NewReadPacer(Microservice, "device commands"),
+			TenantDeleted: tenantGate,
+		})
+	log.Info().Str("commandDelivery", url).Msg("Sparkplug commands are enabled: consuming device-commands, publishing NCMD/DCMD on the Host sessions.")
+	return d, nil
 }
 
 // buildMetrics creates every Prometheus instrument exactly once and returns the ones
@@ -220,7 +322,20 @@ func buildMetrics() host.Metrics {
 	leaderGauge = Microservice.NewGauge("is_leader",
 		"1 when this replica holds the Sparkplug leadership lease and is connecting sources, else 0 (warm standby).")
 
+	dispatchMetrics = downlink.Metrics{
+		Commands: commandsPrecreated(Microservice.NewCounterVec("commands_total",
+			"Sparkplug commands by result: published (put on the wire), parked (handed back for the device's next birth), drained (a backlogged command dispatched), the refused_* results (answered UNSENT before the wire, each naming the gate that refused it), superseded and unconfirmed (resolved without a report), not_served (another protocol's command), and the faults claim_failed, park_failed, publish_failed, kv_failed and response_failed. confirmed, confirmed_unchanged and rearmed belong to the confirmation path.",
+			[]string{"result"})),
+		Awaiting: Microservice.NewGauge("commands_awaiting",
+			"Sparkplug commands published and awaiting an outcome (entries in the awaiting set)."),
+	}
+
 	return host.Metrics{
+		CommandBreakerState: Microservice.NewGaugeVec("command_breaker_state",
+			"Each source's command circuit breaker: 0 closed, 1 open (commands fail fast), 2 half-open (one command is let through). It opens when the broker drops the Host session right after a command publish, which usually means the source's credential may not publish on the NCMD/DCMD topics.",
+			[]string{"tenant"}),
+		CommandBreakerTrips: Microservice.NewCounter("command_breaker_trips_total",
+			"Times a source's command breaker opened (a session ended within five seconds of a command publish). A single trip can be a coincident network blip; a repeating one is a publish permission."),
 		Messages: Microservice.NewCounterVec("messages_total",
 			"Sparkplug messages received, by message type.", []string{"type"}),
 		DecodeErrors: Microservice.NewCounter("decode_errors_total",
@@ -258,6 +373,15 @@ func buildMetrics() host.Metrics {
 func probePrecreated(v *prometheus.CounterVec) *prometheus.CounterVec {
 	for _, tr := range []string{host.ProbeTriggerConnect, host.ProbeTriggerPeriodic} {
 		v.WithLabelValues(tr)
+	}
+	return v
+}
+
+// commandsPrecreated creates every result's child at 0, so a rate over the series has something to
+// read before the first command.
+func commandsPrecreated(v *prometheus.CounterVec) *prometheus.CounterVec {
+	for _, r := range downlink.Results {
+		v.WithLabelValues(r)
 	}
 	return v
 }
@@ -305,6 +429,9 @@ func resolveSources(cfg *config.SparkplugConfiguration, instanceId string, inges
 	clients := make([]*host.Client, 0, len(cfg.Sources))
 	for i := range cfg.Sources {
 		src := cfg.Sources[i]
+		if src.Commands.Enabled && si == nil {
+			return nil, fmt.Errorf("sources[%d]: commands are enabled but the source has no ingest path, so the devices it commands could not be identified", i)
+		}
 		broker, err := resolveBroker(src, instanceId, i)
 		if err != nil {
 			return nil, err
@@ -421,8 +548,10 @@ func buildIngester(writer messaging.MessageWriter) (*host.Ingester, *host.Reconc
 	// CONNECT, and a Sparkplug host application publishes on behalf of devices over its
 	// own long-lived connection, which a purge does not interrupt. A SEPARATE service
 	// token from the client above, scoped to tenant:read alone.
-	tenantGate := governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "sparkplug-ingest", safetyGates)
-	registrar := host.NewRegistrar(client, graphqlURL, tenantGate)
+	gate := governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "sparkplug-ingest", safetyGates)
+	registrar := host.NewRegistrar(client, graphqlURL, gate)
+	commandRegistrar = registrar
+	tenantGate = gate
 	emitter := host.NewEmitter(writer, time.Now)
 	reconciler := host.NewReconciler(client, deviceStateURL)
 	log.Info().Str("deviceManagement", graphqlURL).Str("deviceState", deviceStateURL).
@@ -637,13 +766,22 @@ func serveAsLeader(ctx context.Context, lease leaseTerm) {
 		}
 	}()
 
+	// The command dispatcher runs for the term and is READY before any source connects, so the first
+	// birth's wake finds a shard to land on rather than being dropped into a window where the
+	// device's parked commands would wait for its next birth.
+	dispatcherCancel, dispatcherDone := startDispatcher(leaderCtx)
+
 	Manager.Start()
 	<-leaderCtx.Done()
 
 	// The teardown order is the whole of it, and it matches DETECT's endTerm.
+	// 0. The dispatcher stops publishing first: it publishes over the sources' sessions, so it must
+	//    be finished with them before they are disconnected.
 	// 1. Stop everything that reads or writes: the sources announce OFFLINE and
 	//    disconnect, so past this point nothing is still ingesting for this term.
 	setLeader(false)
+	dispatcherCancel()
+	<-dispatcherDone
 	Manager.Stop()
 	// 2. Join the renewer BEFORE releasing. The revision CAS is NOT what this buys any
 	//    more: Lease.Release serializes itself against an in-flight Renew, so the
@@ -658,6 +796,27 @@ func serveAsLeader(ctx context.Context, lease leaseTerm) {
 		log.Warn().Err(err).Msg("Error releasing the Sparkplug lease (it will age out via its TTL).")
 	}
 	log.Info().Msg("Released Sparkplug leadership; returning to standby.")
+}
+
+// startDispatcher runs the command dispatcher for one leadership term, returning once it is ready
+// (or the term ended first). With no dispatcher, the cancel is a no-op and done is already closed.
+func startDispatcher(leaderCtx context.Context) (cancel context.CancelFunc, done <-chan struct{}) {
+	finished := make(chan struct{})
+	if Dispatcher == nil {
+		close(finished)
+		return func() {}, finished
+	}
+	dctx, dcancel := context.WithCancel(leaderCtx)
+	ready := make(chan struct{})
+	go func() {
+		defer close(finished)
+		Dispatcher.Run(dctx, func() { close(ready) })
+	}()
+	select {
+	case <-ready:
+	case <-leaderCtx.Done():
+	}
+	return dcancel, finished
 }
 
 // setLeader records leadership on the gauge (0/1), tolerating a nil gauge.

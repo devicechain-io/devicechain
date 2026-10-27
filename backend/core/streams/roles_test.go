@@ -83,6 +83,9 @@ func TestRolesMatchKnownUse(t *testing.T) {
 		{"event-management follows resolved-events live", ReadsAs(ResolvedEvents, "event-management", ReadLive)},
 		{"event-sources writes command-responses", Writes(CommandResponses, "event-sources")},
 		{"command-delivery reads command-responses", ReadsAs(CommandResponses, "command-delivery", ReadDurable)},
+		{"sparkplug-ingest writes command-responses", Writes(CommandResponses, "sparkplug-ingest")},
+		{"sparkplug-ingest reads device-commands", ReadsAs(DeviceCommands, "sparkplug-ingest", ReadDurable)},
+		{"sparkplug-ingest writes dead-letters (derived: it now consumes)", Writes(DeadLetters, "sparkplug-ingest")},
 		{"event-sources reads the capture", ReadsAs(DeviceEventsCapture, "event-sources", ReadDurable)},
 		{"dashboard-management writes dead-letters (derived)", Writes(DeadLetters, "dashboard-management")},
 		{"dashboard-management records max-deliveries (derived)", ReadsAs(MaxDeliveries, "dashboard-management", ReadDurable)},
@@ -101,7 +104,9 @@ func TestRolesMatchKnownUse(t *testing.T) {
 		{"event-processing must not write inbound-events", Writes(InboundEvents, "event-processing")},
 		{"device-state must not write resolved-events", Writes(ResolvedEvents, "device-state")},
 		{"update-management must not write command-responses", Writes(CommandResponses, "update-management")},
-		{"sparkplug-ingest must not write dead-letters (it has no reader)", Writes(DeadLetters, "sparkplug-ingest")},
+		// It reads device-commands to publish Sparkplug commands, and answers on command-responses;
+		// reading a stream is not writing it, and it must not be able to issue a command itself.
+		{"sparkplug-ingest must not write device-commands", Writes(DeviceCommands, "sparkplug-ingest")},
 		{"mcp must not administer any stream", func() bool {
 			for _, s := range All {
 				if Administers(s.Suffix, "mcp") || Administers(s.Suffix, "ai-inference") {

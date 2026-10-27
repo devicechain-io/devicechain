@@ -48,20 +48,21 @@ type useCall struct {
 // catalog.go) refuses an undeclared call at start; this scan holds the same calls to the
 // declaration from the other side, so a declared role nothing uses is found too.
 var useMethods = map[string]useCall{
-	"NewWriter":                    {role: useWrite},
-	"NewOrderedWriter":             {role: useWrite},
-	"NewAsyncWriter":               {role: useWrite},
-	"NewReader":                    {role: useRead},
-	"NewReplayReader":              {role: useReplay},
-	"NewReplayReaderFromTime":      {role: useReplay},
-	"NewRangeReader":               {role: useReplay},
-	"SubscribeLive":                {role: useLive, arg: 2},
-	"KeyValueStore":                {role: useBucket},
-	"NewCache":                     {role: useBucket},
-	"NewDistributedLease":          {role: useBucket, arg: -1, bucket: "dc_leases"},
-	"NewDistributedLock":           {role: useBucket, arg: -1, bucket: "dc_locks"},
-	"CredentialAttemptStore":       {role: useBucket, arg: -1, bucket: "dc_credential_attempts"},
-	"DeviceCredentialAttemptStore": {role: useBucket, arg: -1, bucket: "dc_device_credential_attempts"},
+	"NewWriter":                      {role: useWrite},
+	"NewOrderedWriter":               {role: useWrite},
+	"NewAsyncWriter":                 {role: useWrite},
+	"NewReader":                      {role: useRead},
+	"NewReplayReader":                {role: useReplay},
+	"NewReplayReaderFromTime":        {role: useReplay},
+	"NewRangeReader":                 {role: useReplay},
+	"SubscribeLive":                  {role: useLive, arg: 2},
+	"KeyValueStore":                  {role: useBucket},
+	"NewCache":                       {role: useBucket},
+	"NewDistributedLease":            {role: useBucket, arg: -1, bucket: "dc_leases"},
+	"NewDistributedLock":             {role: useBucket, arg: -1, bucket: "dc_locks"},
+	"CredentialAttemptStore":         {role: useBucket, arg: -1, bucket: "dc_credential_attempts"},
+	"DeviceCredentialAttemptStore":   {role: useBucket, arg: -1, bucket: "dc_device_credential_attempts"},
+	"SparkplugCommandsAwaitingStore": {role: useBucket, arg: -1, bucket: "dc_sparkplug_commands_awaiting"},
 }
 
 // scanCatalogUses reads every production Go file under servicesDir/<area>/ and returns each

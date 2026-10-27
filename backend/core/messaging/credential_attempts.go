@@ -35,3 +35,13 @@ func (nmgr *NatsManager) DeviceCredentialAttemptStore() (nats.KeyValue, error) {
 	return nmgr.KeyValueStore(kv.BucketDeviceCredentialAttempts,
 		DeviceCredentialAttemptsBucketName(nmgr.Microservice.InstanceId), credential.AttemptTTL)
 }
+
+// SparkplugCommandsAwaitingStore returns the instance's bucket of Sparkplug commands that were
+// published and are awaiting an outcome (sparkplug-ingest), creating it if it does not exist.
+// Its TTL is the one the inventory declares, longer than the largest confirm window a source can
+// be configured with, so an entry the service never resolved still ages out.
+func (nmgr *NatsManager) SparkplugCommandsAwaitingStore() (nats.KeyValue, error) {
+	b, _ := kv.Lookup(kv.BucketSparkplugCommandsAwaiting)
+	return nmgr.KeyValueStore(kv.BucketSparkplugCommandsAwaiting,
+		SparkplugCommandsAwaitingBucketName(nmgr.Microservice.InstanceId), b.TTL)
+}
