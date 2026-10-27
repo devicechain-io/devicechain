@@ -1373,6 +1373,7 @@ func (d *Dispatcher) supersede(j *job, p plan) {
 		return
 	}
 	d.resolveNow(old, &outcome{
+		reason: ReasonSuperseded,
 		result: ResultSuperseded,
 		text:   fmt.Sprintf("superseded by %s before it was confirmed", j.token),
 	})
@@ -1417,7 +1418,7 @@ func (d *Dispatcher) onTripped(src Source, at time.Time) {
 			e := d.entries[AwaitingKey(r.tenant, r.command)]
 			d.mu.Unlock()
 			if e != nil {
-				d.resolveNow(e, &outcome{result: ResultUnconfirmed, text: msgTripped})
+				d.resolveNow(e, &outcome{reason: ReasonSessionDropped, result: ResultUnconfirmed, text: msgTripped})
 			}
 		}
 	}()

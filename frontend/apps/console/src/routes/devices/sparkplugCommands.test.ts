@@ -59,6 +59,7 @@ describe('sparkplugOutcome', () => {
       status: 'SUCCESSFUL',
       responsePayload: evidence({
         kind: 'write',
+        reason: 'confirmed',
         metric: 'Outputs/V1',
         value: true,
         reportedAt: '2026-10-27T12:00:00Z',
@@ -80,7 +81,7 @@ describe('sparkplugOutcome', () => {
     const v = sparkplugOutcome({
       name: 'sparkplug.write',
       status: 'SUCCESSFUL',
-      responsePayload: evidence({ kind: 'write', metric: 'Mode', value: 'auto', via: 'NDATA', hostRole: 'primary' }),
+      responsePayload: evidence({ kind: 'write', reason: 'confirmed', metric: 'Mode', value: 'auto', via: 'NDATA', hostRole: 'primary' }),
     });
     expect(v.outcome).toMatchObject({ kind: 'confirmedByReport', value: 'auto' });
   });
@@ -91,6 +92,7 @@ describe('sparkplugOutcome', () => {
       status: 'SUCCESSFUL',
       responsePayload: evidence({
         kind: 'write',
+        reason: 'unchanged',
         metric: 'm',
         value: 1,
         via: 'UNCHANGED',
@@ -106,44 +108,49 @@ describe('sparkplugOutcome', () => {
       const v = sparkplugOutcome({
         name: `sparkplug.${kind}`,
         status: 'SUCCESSFUL',
-        responsePayload: evidence({ kind, reportedAt: '2026-10-27T12:00:00Z', via: 'NBIRTH', hostRole: 'primary' }),
+        responsePayload: evidence({ kind, reason: 'confirmed', reportedAt: '2026-10-27T12:00:00Z', via: 'NBIRTH', hostRole: 'primary' }),
       });
       expect(v.outcome, kind).toEqual({ kind: 'confirmedByBirth', at: '2026-10-27T12:00:00Z' });
     }
   });
 
-  const windowError =
-    'no report of m at the requested value within 2m0s; Sparkplug has no command acknowledgement - the node may have ignored or rejected it, or the broker dropped the publish';
+  const reasonOf = (reason: string) => JSON.stringify({ reason });
 
   it('says a TIMEOUT that ran out its window is unconfirmed, and SENT is still waiting', () => {
-    expect(sparkplugOutcome({ name: 'sparkplug.write', status: 'TIMEOUT', error: windowError }).outcome).toEqual({
-      kind: 'unconfirmed',
-    });
+    expect(
+      sparkplugOutcome({ name: 'sparkplug.write', status: 'TIMEOUT', responsePayload: reasonOf('unconfirmed_timeout') }).outcome,
+    ).toEqual({ kind: 'unconfirmed' });
     expect(sparkplugOutcome({ name: 'sparkplug.write', status: 'SENT' }).outcome).toEqual({ kind: 'inFlight' });
   });
 
-  it('does not call a superseded or tripped command "unconfirmed", and says nothing for an unknown reason', () => {
+  it('tells a superseded or session-dropped command apart by its reason code', () => {
     expect(
-      sparkplugOutcome({ name: 'sparkplug.write', status: 'TIMEOUT', error: 'superseded by tok-2 before it was confirmed' })
-        .outcome,
+      sparkplugOutcome({ name: 'sparkplug.write', status: 'TIMEOUT', responsePayload: reasonOf('superseded') }).outcome,
     ).toEqual({ kind: 'superseded' });
+    expect(
+      sparkplugOutcome({ name: 'sparkplug.write', status: 'TIMEOUT', responsePayload: reasonOf('session_dropped') }).outcome,
+    ).toEqual({ kind: 'likelyRefused' });
+  });
+
+  it('says nothing extra for a reason it does not know, or none, however the error text reads', () => {
+    for (const responsePayload of [reasonOf('source_disabled'), reasonOf('something_new'), reasonOf(''), '{}', null, undefined]) {
+      expect(sparkplugOutcome({ name: 'sparkplug.write', status: 'TIMEOUT', responsePayload }).outcome, String(responsePayload)).toBeNull();
+    }
+    // A success with an unknown code is not "confirmed" either.
     expect(
       sparkplugOutcome({
         name: 'sparkplug.write',
-        status: 'TIMEOUT',
-        error: 'broker disconnected immediately after the publish; likely refused',
+        status: 'SUCCESSFUL',
+        responsePayload: evidence({ kind: 'write', reason: 'brand_new', metric: 'm', value: 1, via: 'DDATA' }),
       }).outcome,
-    ).toEqual({ kind: 'likelyRefused' });
-    for (const error of [null, undefined, '', 'something else']) {
-      expect(sparkplugOutcome({ name: 'sparkplug.write', status: 'TIMEOUT', error }).outcome, String(error)).toBeNull();
-    }
+    ).toBeNull();
   });
 
   it('flags a confirmation that came from a secondary host', () => {
     const v = sparkplugOutcome({
       name: 'sparkplug.write',
       status: 'SUCCESSFUL',
-      responsePayload: evidence({ kind: 'write', metric: 'm', value: 1, via: 'DDATA', hostRole: 'secondary' }),
+      responsePayload: evidence({ kind: 'write', reason: 'confirmed', metric: 'm', value: 1, via: 'DDATA', hostRole: 'secondary' }),
     });
     expect(v.secondaryHost).toBe(true);
     expect(v.outcome).toMatchObject({ kind: 'confirmedByReport' });
@@ -159,7 +166,7 @@ describe('sparkplugOutcome', () => {
       secondaryHost: false,
     });
     expect(
-      sparkplugOutcome({ name: 'reboot', status: 'SUCCESSFUL', responsePayload: evidence({ via: 'DDATA' }) }).outcome,
+      sparkplugOutcome({ name: 'reboot', status: 'SUCCESSFUL', responsePayload: evidence({ reason: 'confirmed', via: 'DDATA' }) }).outcome,
     ).toBeNull();
     for (const responsePayload of [null, '', 'not json', '[]', '"x"', '{}', evidence({ via: 3 })]) {
       expect(

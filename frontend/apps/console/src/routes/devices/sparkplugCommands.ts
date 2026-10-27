@@ -83,7 +83,7 @@ export function buildSparkplugWritePayload(
 //                                             act on this command
 //   TIMEOUT, window ran out                   no report in the window: ignored, rejected, or
 //                                             never published
-//   TIMEOUT, superseded / broker dropped      said so in the error, and told apart from the above
+//   TIMEOUT, superseded / broker dropped      told apart by the stored reason code
 //   SENT                                      published; the window is still open
 //
 // The evidence is the JSON the adapter stores as the command's response. It is parsed
@@ -109,6 +109,7 @@ export type SparkplugOutcomeView = {
 };
 
 type Evidence = {
+  reason?: unknown;
   kind?: unknown;
   metric?: unknown;
   value?: unknown;
@@ -137,49 +138,44 @@ function show(v: unknown): string | undefined {
   return typeof v === 'string' ? v : JSON.stringify(v);
 }
 
-// A TIMEOUT is the adapter's word for several unanswered endings, and only one of them is "the
-// window ran out with no report". The others say what happened in their error text, which is
-// the adapter's own wording (sparkplug-ingest downlink/confirm.go and dispatcher.go).
-const ERR_WINDOW = 'no command acknowledgement';
-const ERR_SUPERSEDED = 'superseded by';
-const ERR_TRIPPED = 'disconnected immediately after the publish';
-
 export function sparkplugOutcome(command: {
   name: string;
   status: string;
   responsePayload?: string | null;
-  error?: string | null;
 }): SparkplugOutcomeView {
   const none: SparkplugOutcomeView = { outcome: null, secondaryHost: false };
   if (!isSparkplugCommand(command.name)) return none;
 
   if (command.status === 'SENT') return { outcome: { kind: 'inFlight' }, secondaryHost: false };
+
+  // Everything else is read from the adapter's machine-readable `reason`, never from its error
+  // wording. A code this console does not know, or no code (an older adapter), says nothing extra.
+  const ev = parseEvidence(command.responsePayload);
+  const reason = str(ev?.reason);
+  if (!ev || !reason) return none;
+
   if (command.status === 'TIMEOUT') {
-    const err = command.error ?? '';
-    // Anything else (an older adapter, a TTL expiry) gets no help rather than a wrong one.
-    const kind = err.includes(ERR_SUPERSEDED)
-      ? 'superseded'
-      : err.includes(ERR_TRIPPED)
-        ? 'likelyRefused'
-        : err.includes(ERR_WINDOW)
-          ? 'unconfirmed'
-          : null;
+    const kind =
+      reason === 'unconfirmed_timeout'
+        ? 'unconfirmed'
+        : reason === 'superseded'
+          ? 'superseded'
+          : reason === 'session_dropped'
+            ? 'likelyRefused'
+            : null;
     return { outcome: kind ? { kind } : null, secondaryHost: false };
   }
   if (command.status !== 'SUCCESSFUL') return none;
 
-  const ev = parseEvidence(command.responsePayload);
-  if (!ev) return none;
   const secondaryHost = ev.hostRole === 'secondary';
   const via = str(ev.via);
-  if (!via) return { outcome: null, secondaryHost };
-
-  if (via === 'UNCHANGED') {
+  if (reason === 'unchanged') {
     return {
       outcome: { kind: 'alreadyAtValue', metric: str(ev.metric), value: show(ev.value), since: str(ev.since) },
       secondaryHost,
     };
   }
+  if (reason !== 'confirmed' || !via) return { outcome: null, secondaryHost };
   if (ev.kind === 'rebirth' || ev.kind === 'reboot') {
     return { outcome: { kind: 'confirmedByBirth', at: str(ev.reportedAt) }, secondaryHost };
   }

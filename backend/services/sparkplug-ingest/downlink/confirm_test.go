@@ -117,6 +117,9 @@ func TestAReportOfAnotherValueDoesNotConfirm(t *testing.T) {
 	assert.Equal(t, cmddownlink.ReachUnanswered, res.env.Reach)
 	assert.Contains(t, errorOf(res), "no report of Setpoint at the requested value within 2m0s")
 	assert.Contains(t, errorOf(res), "Sparkplug has no command acknowledgement")
+	// The console keys on the code, not on that wording.
+	require.NotNil(t, res.env.Payload)
+	assert.JSONEq(t, `{"reason":"unconfirmed_timeout"}`, *res.env.Payload)
 	assert.Equal(t, "claim-nonce", res.env.DispatchNonce)
 	assert.Equal(t, 1, r.result(ResultUnconfirmed))
 	assert.Zero(t, r.store.len())

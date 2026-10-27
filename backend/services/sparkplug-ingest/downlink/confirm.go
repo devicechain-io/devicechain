@@ -60,10 +60,42 @@ var (
 
 type targetKey struct{ tenant, source, target string }
 
+// Reason is the machine-readable reason a command was resolved the way it was. It travels with the
+// stored response (in the evidence for a success, in a small document for an unanswered command), so
+// a client such as the console can tell the endings apart without reading the human error text,
+// which is free to change. The set is closed: a client that meets a code it does not know must say
+// nothing extra rather than guess. reasons_test.go pins it.
+type Reason string
+
+const (
+	// ReasonConfirmed: the node reported the requested value (or, for a rebirth or reboot, its birth).
+	ReasonConfirmed Reason = "confirmed"
+	// ReasonUnchanged: the node already held the value and reported nothing different (primary only).
+	ReasonUnchanged Reason = "unchanged"
+	// ReasonUnconfirmedTimeout: the confirm window ended with no report that settled the command.
+	ReasonUnconfirmedTimeout Reason = "unconfirmed_timeout"
+	// ReasonSuperseded: a newer write to the same metric on the same device replaced this one.
+	ReasonSuperseded Reason = "superseded"
+	// ReasonSessionDropped: the broker dropped the Host session right after the publish; the command
+	// was most likely refused.
+	ReasonSessionDropped Reason = "session_dropped"
+	// ReasonSourceDisabled: the source the command went through no longer has commands enabled, so
+	// its outcome can no longer be learned.
+	ReasonSourceDisabled Reason = "source_disabled"
+)
+
+// Reasons lists every Reason this service produces.
+var Reasons = []Reason{
+	ReasonConfirmed, ReasonUnchanged, ReasonUnconfirmedTimeout, ReasonSuperseded,
+	ReasonSessionDropped, ReasonSourceDisabled,
+}
+
 // outcome is what a command is resolved with.
 type outcome struct {
 	success bool
-	text    string
+	// reason is the machine-readable ending; see Reason.
+	reason Reason
+	text   string
 	// payload is the evidence of a success: a JSON document stored with the command.
 	payload string
 	// result is the sparkplug_commands_total result counted when the response is published.
@@ -99,11 +131,11 @@ type entry struct {
 }
 
 func (o *outcome) stored() *StoredOutcome {
-	return &StoredOutcome{Success: o.success, Text: o.text, Payload: o.payload, Result: o.result, Confirmed: o.confirmed}
+	return &StoredOutcome{Success: o.success, Reason: string(o.reason), Text: o.text, Payload: o.payload, Result: o.result, Confirmed: o.confirmed}
 }
 
 func outcomeOf(s *StoredOutcome) *outcome {
-	return &outcome{success: s.Success, text: s.Text, payload: s.Payload, result: s.Result, confirmed: s.Confirmed}
+	return &outcome{success: s.Success, reason: Reason(s.Reason), text: s.Text, payload: s.Payload, result: s.Result, confirmed: s.Confirmed}
 }
 
 func (d *Dispatcher) newEntry(tenant string, a Awaiting, src Source) *entry {
@@ -289,6 +321,7 @@ func (e *entry) observe(r host.Report, skew time.Duration) (*outcome, bool) {
 // evidence is the document stored with a confirmed command (response_payload).
 type evidence struct {
 	Kind        string          `json:"kind"`
+	Reason      Reason          `json:"reason"`
 	Metric      string          `json:"metric,omitempty"`
 	Value       json.RawMessage `json:"value,omitempty"`
 	ReportedAt  *time.Time      `json:"reportedAt,omitempty"`
@@ -305,12 +338,16 @@ func (e *entry) confirmed(via string, at *time.Time, before, after *uint64) *out
 }
 
 func (e *entry) confirmedWith(via string, at, since *time.Time, before, after *uint64, result string) *outcome {
+	reason := ReasonConfirmed
+	if via == "UNCHANGED" {
+		reason = ReasonUnchanged
+	}
 	ev := evidence{
-		Kind: e.a.Kind, Metric: e.a.Metric, Value: e.a.Requested, ReportedAt: at, Via: via, Since: since,
+		Reason: reason, Kind: e.a.Kind, Metric: e.a.Metric, Value: e.a.Requested, ReportedAt: at, Via: via, Since: since,
 		HostRole: e.a.HostRole, BdSeqBefore: before, BdSeqAfter: after, Wire: e.a.Wire,
 	}
 	b, _ := json.Marshal(ev)
-	return &outcome{success: true, payload: string(b), result: result, confirmed: result == ResultConfirmed}
+	return &outcome{success: true, reason: ev.Reason, payload: string(b), result: result, confirmed: result == ResultConfirmed}
 }
 
 // expiry is the outcome of an entry whose window ended with no report that settled it. last reads
@@ -340,6 +377,7 @@ func (e *entry) expiry(last func(host.MetricRef) (host.WireValue, time.Time, boo
 		what = fmt.Sprintf("no report of %s at the requested value within %s", e.a.Metric, w)
 	}
 	return &outcome{
+		reason: ReasonUnconfirmedTimeout,
 		text:   what + "; Sparkplug has no command acknowledgement — the node may have ignored or rejected it, or the broker dropped the publish",
 		result: ResultUnconfirmed,
 	}
@@ -390,6 +428,12 @@ func (d *Dispatcher) settle(e *entry) bool {
 		env.Reach = cmddownlink.ReachUnanswered
 		t := out.text
 		env.Error = &t
+		if out.reason != "" {
+			// The stored response of an unanswered command carries only the reason code; the
+			// human text stays in the error column.
+			p := `{"reason":"` + string(out.reason) + `"}`
+			env.Payload = &p
+		}
 	}
 	if err := d.publishResponse(e.tenant, e.a.Device, env); err != nil {
 		d.mu.Lock()
@@ -578,6 +622,7 @@ func (d *Dispatcher) seedTerm(ctx context.Context) error {
 			out = outcomeOf(a.Decided)
 		case src == nil:
 			out = &outcome{
+				reason: ReasonSourceDisabled,
 				result: ResultUnconfirmed,
 				text:   "the Sparkplug source this command was sent through no longer has commands enabled, so its outcome can no longer be learned",
 			}

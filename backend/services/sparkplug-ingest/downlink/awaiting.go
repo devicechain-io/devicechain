@@ -89,6 +89,7 @@ type Awaiting struct {
 // StoredOutcome is an outcome persisted with its entry (Awaiting.Decided).
 type StoredOutcome struct {
 	Success   bool   `json:"success"`
+	Reason    string `json:"reason,omitempty"`
 	Text      string `json:"text,omitempty"`
 	Payload   string `json:"payload,omitempty"`
 	Result    string `json:"result"`

@@ -148,12 +148,12 @@ describe('the Sparkplug write form', () => {
   });
 });
 
-const WINDOW_ERROR =
-  'no report of Outputs/Valve1 at the requested value within 2m0s; Sparkplug has no command acknowledgement';
+const WINDOW_ERROR = 'no report of Outputs/Valve1 at the requested value within 2m0s';
+const reasonPayload = (reason: string) => JSON.stringify({ reason });
 
 describe('the Sparkplug outcome help', () => {
   const confirmed = JSON.stringify({
-    kind: 'write', metric: 'Outputs/Valve1', value: true, reportedAt: '2026-10-27T12:00:05Z', via: 'DDATA', hostRole: 'primary',
+    kind: 'write', reason: 'confirmed', metric: 'Outputs/Valve1', value: true, reportedAt: '2026-10-27T12:00:05Z', via: 'DDATA', hostRole: 'primary',
   });
 
   it('explains a confirmed write as a report, not as proof the command acted', async () => {
@@ -169,7 +169,7 @@ describe('the Sparkplug outcome help', () => {
 
   it('says an unchanged value is not an observed actuation', async () => {
     const unchanged = JSON.stringify({
-      kind: 'write', metric: 'Outputs/Valve1', value: true, via: 'UNCHANGED', since: '2026-10-27T11:00:00Z', hostRole: 'primary',
+      kind: 'write', reason: 'unchanged', metric: 'Outputs/Valve1', value: true, via: 'UNCHANGED', since: '2026-10-27T11:00:00Z', hostRole: 'primary',
     });
     install([row('sparkplug.write', 'SUCCESSFUL', unchanged)]);
     render(<DeviceCommandsPanel deviceToken="valve-1" />);
@@ -180,7 +180,7 @@ describe('the Sparkplug outcome help', () => {
   });
 
   it('says a timeout is not a failure and that Sparkplug has no acknowledgement', async () => {
-    install([row('sparkplug.write', 'TIMEOUT', null, WINDOW_ERROR)]);
+    install([row('sparkplug.write', 'TIMEOUT', reasonPayload('unconfirmed_timeout'), WINDOW_ERROR)]);
     render(<DeviceCommandsPanel deviceToken="valve-1" />);
     const note = await screen.findByTestId('sparkplug-outcome');
     expect(note.textContent).toContain('Not confirmed');
@@ -189,8 +189,8 @@ describe('the Sparkplug outcome help', () => {
 
   it('does not say a superseded or refused command was ignored by the node', async () => {
     install([
-      row('sparkplug.write', 'TIMEOUT', null, 'superseded by tok-9 before it was confirmed'),
-      { ...row('sparkplug.write', 'TIMEOUT', null, 'broker disconnected immediately after the publish; likely refused'), id: 'b', token: 'b' },
+      row('sparkplug.write', 'TIMEOUT', reasonPayload('superseded'), 'superseded by tok-9 before it was confirmed'),
+      { ...row('sparkplug.write', 'TIMEOUT', reasonPayload('session_dropped'), 'broker disconnected immediately after the publish; likely refused'), id: 'b', token: 'b' },
     ]);
     render(<DeviceCommandsPanel deviceToken="valve-1" />);
     const notes = await screen.findAllByTestId('sparkplug-outcome');
@@ -207,7 +207,7 @@ describe('the Sparkplug outcome help', () => {
   });
 
   it('warns when the confirming host was a secondary host', async () => {
-    const secondary = JSON.stringify({ kind: 'write', metric: 'm', value: 1, via: 'DDATA', hostRole: 'secondary' });
+    const secondary = JSON.stringify({ kind: 'write', reason: 'confirmed', metric: 'm', value: 1, via: 'DDATA', hostRole: 'secondary' });
     install([row('sparkplug.write', 'SUCCESSFUL', secondary)]);
     render(<DeviceCommandsPanel deviceToken="valve-1" />);
     const warning = await screen.findByTestId('sparkplug-secondary-host');
@@ -226,7 +226,7 @@ describe('the Sparkplug outcome help', () => {
   it('is translated', async () => {
     await i18n.changeLanguage('es');
     try {
-      install([row('sparkplug.write', 'TIMEOUT', null, WINDOW_ERROR)]);
+      install([row('sparkplug.write', 'TIMEOUT', reasonPayload('unconfirmed_timeout'), WINDOW_ERROR)]);
       render(<DeviceCommandsPanel deviceToken="valve-1" />);
       expect((await screen.findByTestId('sparkplug-outcome')).textContent).toContain('Sin confirmar');
     } finally {
