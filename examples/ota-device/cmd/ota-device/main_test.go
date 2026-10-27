@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -73,4 +74,22 @@ func TestBrokerMustBeTLSUnlessAllowed(t *testing.T) {
 	code, out := run("--broker", "ssl://127.0.0.1:1", "--ca", filepath.Join(t.TempDir(), "missing.pem"))
 	assert.NotContains(t, out, "not TLS")
 	assert.Equal(t, 1, code)
+}
+
+type fakeToken struct {
+	done bool
+	err  error
+}
+
+func (f fakeToken) Wait() bool                     { return f.done }
+func (f fakeToken) WaitTimeout(time.Duration) bool { return f.done }
+func (f fakeToken) Done() <-chan struct{}          { c := make(chan struct{}); close(c); return c }
+func (f fakeToken) Error() error                   { return f.err }
+
+// A subscription that was never acknowledged, that errored, or whose grant cannot be read is not
+// a subscription: the device must not run deaf.
+func TestSubscribeGrantedRefusesWhatItCannotConfirm(t *testing.T) {
+	assert.Error(t, subscribeGranted(fakeToken{done: false}, "f", time.Millisecond), "no SUBACK")
+	assert.Error(t, subscribeGranted(fakeToken{done: true, err: errors.New("boom")}, "f", time.Millisecond), "error")
+	assert.Error(t, subscribeGranted(fakeToken{done: true}, "f", time.Millisecond), "not a SubscribeToken, so no grant to read")
 }

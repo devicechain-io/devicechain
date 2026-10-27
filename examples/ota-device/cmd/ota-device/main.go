@@ -65,6 +65,28 @@ func (s *mqttSender) Send(payload []byte) error {
 	return t.Error()
 }
 
+// subscribeGranted waits for the SUBACK and reads what the broker granted. paho reports a
+// refusal (return code 0x80) as a successful wait, so waiting is not enough: a device whose
+// credential may not read its own device-desired topic would otherwise run, deaf, forever.
+func subscribeGranted(t mqtt.Token, filter string, timeout time.Duration) error {
+	if !t.WaitTimeout(timeout) {
+		return fmt.Errorf("no SUBACK for %q within %v", filter, timeout)
+	}
+	if err := t.Error(); err != nil {
+		return err
+	}
+	sub, ok := t.(*mqtt.SubscribeToken)
+	if !ok {
+		return fmt.Errorf("cannot read the broker's grant for %q", filter)
+	}
+	for granted, code := range sub.Result() {
+		if code == 0x80 {
+			return fmt.Errorf("the broker refused the subscription to %q (SUBACK 0x80)", granted)
+		}
+	}
+	return nil
+}
+
 func run() int {
 	var (
 		root       = flag.String("root", os.Getenv("OTA_ROOT"), "state directory (shared with ota-boot)")
@@ -190,6 +212,7 @@ func run() int {
 
 	opts.SetOnConnectHandler(func(c mqtt.Client) {
 		go func() {
+			//subconfirm:ok the granted QoS is read below (subscribeGranted); this device cannot import the platform's wrapper
 			t := c.Subscribe(desired, 1, func(_ mqtt.Client, m mqtt.Message) {
 				b := append([]byte(nil), m.Payload()...)
 				select {
@@ -198,8 +221,8 @@ func run() int {
 					lg.Printf("inbox full, dropping a message")
 				}
 			})
-			if !t.WaitTimeout(15*time.Second) || t.Error() != nil {
-				lg.Printf("subscribe failed: %v", t.Error())
+			if err := subscribeGranted(t, desired, 15*time.Second); err != nil {
+				lg.Printf("subscribe failed: %v", err)
 				return
 			}
 			// Subscribed before the sync: nothing is retained, so a reply sent before this point is lost.
