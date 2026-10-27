@@ -21,7 +21,7 @@ function when(iso: string | undefined): string | undefined {
 export function SparkplugOutcomeNote({
   command,
 }: {
-  command: { name: string; status: string; responsePayload?: string | null; error?: string | null };
+  command: { name: string; status: string; responsePayload?: string | null };
 }) {
   const { t } = useTranslation('devices');
   const { outcome, secondaryHost } = sparkplugOutcome(command);
