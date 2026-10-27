@@ -544,6 +544,10 @@ var sweepTokenArgs = map[string]string{
 // are different facts, and collapsing them into silence is how a hole becomes invisible.
 // A reader scanning the sweep's output sees each one printed, with its sentence.
 var sweepExemptions = map[string]string{
+	"user-management.mfaStatus": "it reads the signed-in person's own second-factor status and takes an " +
+		"IDENTITY token, which is the result of a login this sweep does not make (it runs as a tenant " +
+		"administrator with an access token), so there is no value to supply; the factor's rows are " +
+		"seeded and read back by the store's own tests",
 	"device-management.integrationAuth": "it authenticates a bearer token the platform showed once, at " +
 		"creation, and stores only a digest of, so the sweep has no value to supply; the integration " +
 		"entity reads the stored row back through integration",

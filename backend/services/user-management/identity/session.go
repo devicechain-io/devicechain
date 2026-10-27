@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -77,11 +78,22 @@ type sessionRecord struct {
 	ConnectionID   uint        `json:"connection_id,omitempty"`
 	ConnectionKind iam.IdpKind `json:"connection_kind,omitempty"`
 	Anchor         time.Time   `json:"anchor"`
+	// Amr is how a PASSWORD sign-in proved who the person is (auth.AmrPasswordOnly,
+	// AmrPasswordOTP, AmrPasswordRecovery). It is written once, by startSession, and every
+	// token minted from this sign-in takes its "amr" claim from HERE and nowhere else: never
+	// from a token the caller presented, which a forged or older refresh token could
+	// overstate. A record written by a build that predates it has none and reads as no
+	// second factor, so a tenant that requires one refuses it. A single sign-on records none.
+	Amr []string `json:"amr,omitempty"`
 }
 
-// startSession records a new password sign-in for email and returns its id.
-func (m *Manager) startSession(email string) (auth.SessionID, error) {
-	return m.putSession(sessionRecord{Email: email, Method: SessionMethodPassword, Anchor: time.Now().UTC()})
+// secondFactor reports whether the sign-in passed a second factor.
+func (r *sessionRecord) secondFactor() bool { return slices.Contains(r.Amr, auth.AmrMFA) }
+
+// startSession records a new password sign-in for email and returns its id. amr is what the
+// sign-in presented: the password alone, or with a code (see sessionRecord.Amr).
+func (m *Manager) startSession(email string, amr []string) (auth.SessionID, error) {
+	return m.putSession(sessionRecord{Email: email, Method: SessionMethodPassword, Anchor: time.Now().UTC(), Amr: amr})
 }
 
 // startSsoSession records a new single sign-on for email through conn, anchored at the
@@ -183,43 +195,55 @@ func (m *Manager) sessionLive(sid auth.SessionID, email string) error {
 //
 // su is whether the identity is a superuser. The denials are errTenantAccessDenied (the
 // sign-in is open but may not enter this tenant) and errSessionEnded (it is over).
-func (m *Manager) admitTenant(ctx context.Context, sid auth.SessionID, id *iam.Identity, tenant string, su bool) error {
+//
+// It returns the sign-in's "amr" (nil for a single sign-on), read from the SESSION RECORD. A
+// caller that mints tokens takes the claim from this and from nothing a credential carries.
+func (m *Manager) admitTenant(ctx context.Context, sid auth.SessionID, id *iam.Identity, tenant string, su bool) ([]string, error) {
 	rec, err := m.loadSession(sid, id.Email)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if rec.Method != SessionMethodSso {
-		return m.admitPasswordSession(ctx, id, tenant, su)
+		if err := m.admitPasswordSession(ctx, rec, id, tenant, su); err != nil {
+			return nil, err
+		}
+		return rec.Amr, nil
 	}
 	conn, err := m.admitSsoSession(ctx, rec, id)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	switch conn.Kind {
 	case iam.IdpKindTenant:
 		served, err := m.iam.ConnectionTenants(ctx, conn.ID)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		for _, t := range served {
 			if t == tenant {
-				return nil
+				return nil, nil
 			}
 		}
-		return errTenantAccessDenied
+		return nil, errTenantAccessDenied
 	case iam.IdpKindInstance:
 		if su {
 			m.recordAuthLabeled(ctx, rdb.AuditOpSsoBreakGlass, id.Email, tenant, conn.Token)
-			return nil
+			return nil, nil
 		}
-		return errTenantAccessDenied
+		return nil, errTenantAccessDenied
 	}
 	// A kind this build does not know is not admitted: fail closed.
-	return errSessionEnded
+	return nil, errSessionEnded
 }
 
-// admitPasswordSession applies the tenant's own sign-in requirement to a password sign-in.
-func (m *Manager) admitPasswordSession(ctx context.Context, id *iam.Identity, tenant string, su bool) error {
+// admitPasswordSession applies the tenant's own sign-in requirements to a password sign-in:
+// first single sign-on, then a second factor.
+//
+// The order matters. A superuser is let through single sign-on enforcement (audited) and then
+// meets the second-factor rule, which lets them through too (audited): the admin plane is not
+// gated on a second factor in v1, so refusing a superuser's tenant entry would protect nothing,
+// and it would lock the operator out of the very tenant they need to repair.
+func (m *Manager) admitPasswordSession(ctx context.Context, rec *sessionRecord, id *iam.Identity, tenant string, su bool) error {
 	t, err := m.iam.TenantByToken(ctx, tenant)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -229,14 +253,36 @@ func (m *Manager) admitPasswordSession(ctx context.Context, id *iam.Identity, te
 		}
 		return err
 	}
-	if !t.SsoEnforced {
-		return nil
-	}
-	if su {
+	if t.SsoEnforced {
+		if !su {
+			return errSsoRequired
+		}
 		m.recordAuthLabeled(ctx, rdb.AuditOpSsoEnforcementBypassed, id.Email, tenant, "")
-		return nil
 	}
-	return errSsoRequired
+	if t.MfaEffectivelyRequired() && !rec.secondFactor() {
+		if su {
+			m.recordAuthLabeled(ctx, rdb.AuditOpMfaEnforcementBypassed, id.Email, tenant, "")
+			return nil
+		}
+		return m.mfaRefusal(ctx, id)
+	}
+	return nil
+}
+
+// mfaRefusal is the refusal of a password sign-in that lacks the second factor a tenant
+// requires: errMfaEnrollmentRequired when the identity has no factor to present (it must
+// enrol first), errMfaRequired when it has one and this sign-in simply did not use it (it must
+// sign in again). Both are errTenantAccessDenied, so every grant point that does not name them
+// treats them as the denial it always was.
+func (m *Manager) mfaRefusal(ctx context.Context, id *iam.Identity) error {
+	_, err := m.iam.ActiveMfaFactorFor(ctx, id.ID)
+	switch {
+	case err == nil:
+		return errMfaRequired
+	case errors.Is(err, iam.ErrMfaFactorNotFound):
+		return errMfaEnrollmentRequired
+	}
+	return err
 }
 
 // errSsoRequired is admitPasswordSession's refusal. It IS an errTenantAccessDenied, so every
@@ -339,10 +385,19 @@ func (m *Manager) sessionMemberships(ctx context.Context, sid auth.SessionID, id
 		if err != nil {
 			return nil, err
 		}
+		// Marked only when this sign-in lacks the factor the tenant requires: it is exactly
+		// what selectTenant would refuse.
+		var needsMfa map[string]bool
+		if !rec.secondFactor() {
+			if needsMfa, err = m.iam.MfaRequiredAmong(ctx, tokens); err != nil {
+				return nil, err
+			}
+		}
 		out := make([]MembershipInfo, 0, len(id.Memberships))
 		for _, mem := range id.Memberships {
 			out = append(out, MembershipInfo{
 				Tenant: mem.TenantId, Roles: roleTokens(mem.TenantRoles), SsoRequired: enforced[mem.TenantId],
+				MfaRequired: needsMfa[mem.TenantId],
 			})
 		}
 		return out, nil
@@ -355,7 +410,7 @@ func (m *Manager) sessionMemberships(ctx context.Context, sid auth.SessionID, id
 	}
 	out := []MembershipInfo{}
 	for _, mem := range id.Memberships {
-		switch err := m.admitTenant(ctx, sid, id, mem.TenantId, false); {
+		switch _, err := m.admitTenant(ctx, sid, id, mem.TenantId, false); {
 		case err == nil:
 			out = append(out, MembershipInfo{Tenant: mem.TenantId, Roles: roleTokens(mem.TenantRoles)})
 		case errors.Is(err, errTenantAccessDenied):

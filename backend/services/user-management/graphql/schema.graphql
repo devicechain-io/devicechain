@@ -76,6 +76,47 @@ type Membership {
     through single sign-on.
     """
     ssoRequired: Boolean!
+    """
+    True when the tenant requires a second factor and this password sign-in did not use one, so
+    selectTenant refuses it with the error code MFA_REQUIRED (the identity has a factor: sign
+    in again and enter the code) or MFA_ENROLLMENT_REQUIRED (it has none: set up two-factor
+    authentication first, with beginTotpEnrollment, then sign in again). Always false for a
+    superuser, and for a sign-in that already used a second factor.
+    """
+    mfaRequired: Boolean!
+}
+
+"""
+What beginTotpEnrollment hands back, once: everything an authenticator app needs to hold the
+new second factor. Render otpauthUri as a QR code in the browser (it carries the secret) or
+show secret for typing in by hand. Neither is stored in readable form or returned again.
+"""
+type TotpEnrollment {
+    """The otpauth:// URI to render as a QR code."""
+    otpauthUri: String!
+    """The same shared secret as unpadded base32, for typing into an authenticator by hand."""
+    secret: String!
+    """When the pending enrolment stops being confirmable, as an RFC 3339 timestamp. Ten minutes after it began."""
+    expiresAt: String!
+}
+
+"""
+A set of single-use recovery codes, shown ONCE. Each is stored only as a digest, so a lost set
+cannot be shown again: regenerateRecoveryCodes replaces it.
+"""
+type RecoveryCodes {
+    """The codes, such as `ABCD-EFGH-JKMN-PQRS`. Each can sign in once, in place of an authenticator code."""
+    codes: [String!]!
+}
+
+"""An identity's own view of its second factor."""
+type MfaStatus {
+    """True when an authenticator is enrolled and confirmed, so a password sign-in asks for a code."""
+    totpEnabled: Boolean!
+    """When the factor was confirmed, as an RFC 3339 timestamp. Null when it is not enabled."""
+    enrolledAt: String
+    """How many recovery codes are still unused. Zero when the factor is not enabled."""
+    recoveryCodesRemaining: Int!
 }
 
 """
@@ -89,6 +130,17 @@ default language.
 type Tenant {
     """Unique identifier of the tenant on this instance."""
     token: String!
+    """
+    True when the tenant requires a second factor of its password sign-ins: the tenant's own
+    setting or its tier's floor. Single sign-on is governed by its connection's requirements
+    instead. Readable by any member of the tenant.
+    """
+    mfaRequired: Boolean!
+    """
+    True when the tenant's tier requires a second factor, which setTenantMfaRequired cannot
+    turn off. Readable by any member of the tenant.
+    """
+    mfaRequiredByTier: Boolean!
     """Human-readable name of the tenant. Null when none has been set."""
     name: String
     """Free-text description of the tenant. Null when none has been set."""
@@ -601,6 +653,8 @@ type Member {
     managedByIdentityProvider: Boolean!
     """True when the member was invited and has not accepted yet."""
     invitationPending: Boolean!
+    """True when the member has two-factor authentication turned on. Always false while their invitation is pending."""
+    mfaEnabled: Boolean!
 }
 
 """Where a page of search results sits in the full result set. Positions are 1-based and inclusive."""
@@ -908,6 +962,15 @@ type Query {
         identityToken: String!
     ): [Membership!]!
     """
+    The identity's own second-factor status. It takes the identity token returned by login (or
+    verifyMfa), so it works before any tenant is selected. Fails with "invalid or expired token"
+    if the token is expired, malformed, or from a session that has ended.
+    """
+    mfaStatus(
+        """The identity token from login."""
+        identityToken: String!
+    ): MfaStatus!
+    """
     The names of the functional areas deployed on this instance, so a client can tell a
     feature that was never deployed from a server that is failing. It reports what the
     operator enabled, not whether each area is healthy: an area that is enabled but down
@@ -1035,6 +1098,14 @@ type Mutation {
     disabled account, without saying which. Repeated failures for one email are slowed down,
     and a request that is throttled or exceeds its allowance of password checks is refused
     without checking the password.
+
+    An account with two-factor authentication turned on does not get a token from the password
+    alone. When its password is right, login fails with the error code MFA_CHALLENGE and carries
+    `challenge` (an opaque handle), `expiresAt` (RFC 3339, five minutes out) and `methods`
+    (`TOTP`, `RECOVERY_CODE`) in the error's `extensions`. Send the challenge and a code to
+    verifyMfa to finish signing in. The error means the password was right; it is the only
+    thing login reveals about the account, and nothing is issued until the code is accepted.
+    A client that does not handle it reports an error rather than receiving a token.
     """
     # Authenticate with an email and password, returning an identity token + the
     # tenants the identity may select (ADR-033). No tenant is chosen yet.
@@ -1060,6 +1131,83 @@ type Mutation {
         """Token of the tenant to enter."""
         tenant: String!
     ): AuthToken!
+    """
+    Completes a sign-in that login held for its second factor, and returns what login returns:
+    an identity token and the tenants the identity may enter. Needs no token. challenge is the
+    handle from login's MFA_CHALLENGE error; code is a code from the authenticator app (six
+    digits) or one of the account's recovery codes. Every token minted from this sign-in
+    records how the person proved who they are (the `amr` claim: `pwd`, `otp` and `mfa` for an
+    authenticator code, `pwd` and `mfa` for a recovery code).
+
+    A wrong code, a replayed code and a code refused because the account is locked all fail
+    with the same "invalid code" error. A challenge accepts five attempts and five minutes, and
+    one challenge signs in once; an unknown, expired, used-up or outdated challenge (the
+    password was reset since) fails with MFA_CHALLENGE_EXPIRED: sign in again. Repeated wrong
+    authenticator codes lock the account's authenticator for a while (recovery codes keep
+    working), and attempts are limited per source address. One verification per request.
+    """
+    verifyMfa(
+        """The challenge from login's MFA_CHALLENGE error."""
+        challenge: String!
+        """An authenticator code, or a recovery code."""
+        code: String!
+    ): IdentityAuth!
+    """
+    Starts setting up an authenticator app. Returns the new shared secret as an otpauth:// URI
+    and as base32, once; nothing changes about how the account signs in until
+    confirmTotpEnrollment proves the app holds it. Starting again replaces an unconfirmed
+    enrolment, which expires after ten minutes. Needs no Authorization header: the identity
+    token is the argument. The password is re-checked, because identity tokens travel; a wrong
+    one fails with "invalid credentials" and changes nothing. Fails with MFA_ALREADY_ENROLLED
+    while an authenticator is active.
+    """
+    beginTotpEnrollment(
+        """The identity token from login or verifyMfa."""
+        identityToken: String!
+        """The account's password, re-checked."""
+        password: String!
+    ): TotpEnrollment!
+    """
+    Finishes setting up the authenticator: proves it holds the secret by presenting its current
+    code, turns the second factor on, and returns ten recovery codes, once. The session that
+    enrolled keeps the `amr` it signed in with; the factor applies from the next sign-in. The
+    password is re-checked. Five wrong codes cancel the pending enrolment.
+    """
+    confirmTotpEnrollment(
+        """The identity token from login or verifyMfa."""
+        identityToken: String!
+        """The account's password, re-checked."""
+        password: String!
+        """The current six-digit code from the authenticator."""
+        code: String!
+    ): RecoveryCodes!
+    """
+    Replaces the account's recovery codes with a new set of ten and returns them once. Needs
+    the password AND a code (an authenticator code or an unused recovery code), so a stolen
+    identity token is not enough.
+    """
+    regenerateRecoveryCodes(
+        """The identity token from login or verifyMfa."""
+        identityToken: String!
+        """The account's password, re-checked."""
+        password: String!
+        """An authenticator code or a recovery code."""
+        code: String!
+    ): RecoveryCodes!
+    """
+    Turns the second factor off: removes the authenticator, the recovery codes and the stored
+    secret, and ends every session the account has (including this one), so the person signs
+    in again with the password alone. Needs the password AND a code (an authenticator code or
+    a recovery code). Returns true.
+    """
+    disableTotp(
+        """The identity token from login or verifyMfa."""
+        identityToken: String!
+        """The account's password, re-checked."""
+        password: String!
+        """An authenticator code or a recovery code."""
+        code: String!
+    ): Boolean!
     """
     Exchanges a refresh token for a new access and refresh pair, and consumes the refresh
     token: each one can be used once. The roles and authorities in the new tokens are read
@@ -1252,6 +1400,20 @@ type Mutation {
     setTenantLocale(
         """The language tag, such as "en" or "pt-BR". Null clears it."""
         locale: String
+    ): Tenant!
+    """
+    Requires (or stops requiring) a second factor of the caller's own tenant's password
+    sign-ins, and returns the tenant. While it is on, a member whose sign-in did not use a
+    second factor is refused by selectTenant, refresh and the MCP authorization step (error
+    codes MFA_REQUIRED and MFA_ENROLLMENT_REQUIRED), and password sessions already inside the
+    tenant are refused at their next refresh. A member can always still sign in and set up
+    their own authenticator, so turning it on strands nobody. It cannot turn off a requirement
+    the tenant's tier sets (Tenant.mfaRequiredByTier). Requires member:write and an unscoped
+    caller. Service accounts and single sign-on sessions are not affected.
+    """
+    setTenantMfaRequired(
+        """True to require a second factor."""
+        required: Boolean!
     ): Tenant!
 
     """

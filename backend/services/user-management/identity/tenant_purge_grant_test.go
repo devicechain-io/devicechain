@@ -35,7 +35,7 @@ func newGrantTestManager(t *testing.T) (*Manager, *iam.Store) {
 func openPasswordSignIn(t *testing.T, m *Manager) (auth.SessionID, *iam.Identity) {
 	t.Helper()
 	id := &iam.Identity{Email: "pat@example.com"}
-	sid, err := m.startSession(id.Email)
+	sid, err := m.startSession(id.Email, auth.AmrPasswordOnly())
 	require.NoError(t, err)
 	return sid, id
 }
@@ -71,7 +71,7 @@ func TestResolveTenantGrantRefusesAPurgingTenant(t *testing.T) {
 
 	mem := &iam.Membership{Enabled: true}
 	sid, id := openPasswordSignIn(t, m)
-	_, _, _, err := m.resolveTenantGrant(context.Background(), sid, id, "acme", mem, false)
+	_, _, _, _, err := m.resolveTenantGrant(context.Background(), sid, id, "acme", mem, false)
 	require.ErrorIs(t, err, errTenantAccessDenied)
 }
 
@@ -88,7 +88,7 @@ func TestResolveTenantGrantRefusesAPurgingTenantEvenWhenReEnabled(t *testing.T) 
 
 	mem := &iam.Membership{Enabled: true}
 	sid, id := openPasswordSignIn(t, m)
-	_, _, _, err := m.resolveTenantGrant(context.Background(), sid, id, "acme", mem, false)
+	_, _, _, _, err := m.resolveTenantGrant(context.Background(), sid, id, "acme", mem, false)
 	require.ErrorIs(t, err, errTenantAccessDenied,
 		"re-enabling a purging tenant must not readmit its members")
 }
@@ -103,7 +103,7 @@ func TestResolveTenantGrantAllowsSuperuserBreakGlassIntoAPurgingTenant(t *testin
 	seedGrantTenant(t, store, "acme", iam.PurgePurging, false)
 
 	sid, id := openPasswordSignIn(t, m)
-	_, authorities, _, err := m.resolveTenantGrant(context.Background(), sid, id, "acme", nil, true)
+	_, authorities, _, _, err := m.resolveTenantGrant(context.Background(), sid, id, "acme", nil, true)
 	require.NoError(t, err)
 	require.Equal(t, []string{string(auth.AuthorityAll)}, authorities)
 }
@@ -136,6 +136,6 @@ func TestResolveTenantGrantStillAdmitsAnActiveTenant(t *testing.T) {
 
 	mem := &iam.Membership{Enabled: true}
 	sid, id := openPasswordSignIn(t, m)
-	_, _, _, err := m.resolveTenantGrant(context.Background(), sid, id, "acme", mem, false)
+	_, _, _, _, err := m.resolveTenantGrant(context.Background(), sid, id, "acme", mem, false)
 	require.NoError(t, err)
 }

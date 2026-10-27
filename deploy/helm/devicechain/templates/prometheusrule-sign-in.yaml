@@ -26,6 +26,14 @@ cannot be reached, so nobody can sign in through it; a refusal that is a SECURIT
 a provider vouched for someone it should not have been able to; and the state bucket full, where
 sign-in through every connection fails closed. They are on a per-connection or per-outcome
 breakdown deliberately, because the connection label is bounded by what a superuser created.
+
+TWO-FACTOR SIGN-IN (the Mfa* rules at the very end) watches the counters user-management exports
+for an account's second factor (devicechain_usermanagement_mfa_identity_locks_total and
+devicechain_usermanagement_mfa_verifications_total{method,result}). A guess at the second factor
+is only ever made by someone who ALREADY holds the account's password, so a lock is not noise:
+MfaIdentityLocked is REQUIRED, fires on any single occurrence, and its remedy is to reset the
+password -- not the factor. Resetting the factor while the password is compromised would hand the
+account to whoever is using it.
 */}}
 {{- if and .Values.metrics.enabled .Values.metrics.alerts }}
 {{- $ns := include "devicechain.instanceNamespace" . }}
@@ -124,4 +132,32 @@ spec:
           annotations:
             summary: "Single sign-on is refusing every sign-in because its state store is full"
             description: "The single sign-on state store is full, so user-management is refusing to begin any sign-in through any identity provider (it fails closed rather than drop the protection that makes a replayed callback useless). Password sign-in still works. The store fills when an enormous number of sign-ins are begun inside ten minutes, which almost always means someone is calling beginSso in a loop: the call is public and is limited per source address and globally, but a distributed sender can still fill it. Find the traffic in the ingress logs and block it upstream; the store drains on its own ten minutes after the flood stops. If the volume is legitimate, raise instance.config.infrastructure.nats.kvStateMaxBytes, which sizes every state bucket."
+
+        - alert: MfaIdentityLocked
+          # REQUIRED, and no `for`: one occurrence is the signal. The identity-wide lock arms only
+          # after twenty wrong authenticator codes, and every one of those was made by someone who
+          # had already passed the PASSWORD step (a code is never evaluated for a challenge that
+          # was not earned), so a lock is evidence that an account's password is in use by someone
+          # who fails its second factor. increase() sees the first lock only because the counter is
+          # exported at 0 from startup.
+          expr: sum(increase(devicechain_usermanagement_mfa_identity_locks_total{namespace="{{ $ns }}"}[5m])) > 0
+          labels:
+            severity: critical
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "An account's password is in use by someone failing its second factor"
+            description: "A second-factor lock armed on an account: twenty wrong authenticator codes were evaluated, each after a CORRECT password. Someone has this account's password and is guessing its code. The authenticator stays locked for at most fifteen minutes at a time (the person can still sign in with a recovery code), and a password holder can renew the lock. Find the account in the audit journal (operation mfa_locked, preceded by mfa_failed rows and mfa_challenged rows) and RESET ITS PASSWORD with setPassword: that rotates the account's session epoch, which also voids every outstanding sign-in challenge. Do not reset the second factor first -- while the password is known to someone else that would give them the account (the reset refuses without a new password for this reason). The source addresses are in the ingress logs."
+
+        - alert: MfaVerificationFailuresSustained
+          # The instance-wide shape of the same thing at lower volume: wrong, replayed or
+          # locked-out codes arriving steadily for a quarter of an hour. Ordinary typing mistakes
+          # are a handful an hour; this needs a sustained rate.
+          expr: sum(rate(devicechain_usermanagement_mfa_verifications_total{namespace="{{ $ns }}", result=~"invalid|replay|locked"}[10m])) > 0.1
+          for: 15m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "Second-factor codes are being refused at a sustained rate"
+            description: "user-management has refused more than one second-factor code every ten seconds, on average, for fifteen minutes (wrong, replayed, or refused by a lock). Each attempt follows a correct password, so this is people typing their codes wrong in large numbers (a clock-skew problem on the nodes, or an authenticator app out of sync) or someone using passwords they obtained. Check that the nodes' clocks are synchronised (authenticator codes are accepted one 30-second step either side), then look at the audit journal for mfa_failed rows grouped by account and at the ingress logs for the source addresses. An account that has locked raises MfaIdentityLocked on its own."
 {{- end }}

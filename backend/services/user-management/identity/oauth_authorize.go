@@ -195,7 +195,7 @@ func (m *Manager) assertTenantAccess(ctx context.Context, subject IdentitySubjec
 	// The sign-in's own terms (see admitTenant): the authorize step is a grant point like the
 	// others, so a single sign-on session cannot consent its way into a tenant it may not
 	// enter, and a deleted or disabled connection ends it here too.
-	if err := m.admitTenant(ctx, subject.SessionID, id, tenant, su); err != nil {
+	if _, err := m.admitTenant(ctx, subject.SessionID, id, tenant, su); err != nil {
 		if errors.Is(err, errSessionEnded) {
 			return nil, ErrInvalidToken
 		}

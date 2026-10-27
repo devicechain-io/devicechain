@@ -130,6 +130,9 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	require.NoError(t, err, "bucket "+kv.BucketSsoState)
 	_, err = NatsManager.KeyValueStore(kv.BucketSsoCodes, kv.BucketSsoCodes, identity.SsoCodeTTL)
 	require.NoError(t, err, "bucket "+kv.BucketSsoCodes)
+	// main.go: the second-factor challenge bucket (not gated on the issuer URL).
+	_, err = NatsManager.KeyValueStore(kv.BucketMfaChallenges, kv.BucketMfaChallenges, identity.MfaChallengeTTL)
+	require.NoError(t, err, "bucket "+kv.BucketMfaChallenges)
 	// main.go L217: the distributed lock.
 	_, err = NatsManager.NewDistributedLock(5 * time.Second)
 	require.NoError(t, err, "the distributed lock bucket")

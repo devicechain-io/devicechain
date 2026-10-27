@@ -27,7 +27,7 @@ func TestTenantAdministrationIsNotInEitherBaseline(t *testing.T) {
 	}
 
 	e := newMintTestEnv(t)
-	pair, err := e.m.issueTenantTokens("acme", "someone@acme.example", "test-epoch", "test-sid", nil, nil, auth.Scope{}, false)
+	pair, err := e.m.issueTenantTokens("acme", "someone@acme.example", "test-epoch", "test-sid", nil, nil, auth.Scope{}, false, nil)
 	if err != nil {
 		t.Fatalf("issueTenantTokens: %v", err)
 	}

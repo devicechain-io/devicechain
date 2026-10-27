@@ -17,9 +17,10 @@ import (
 // which account the broker has.
 func TestTheCatalogDeclaresTheSignInLifetimesThisPackageUses(t *testing.T) {
 	for name, want := range map[string]time.Duration{
-		AuthCodeBucket:    AuthCodeTTL,
-		kv.BucketSsoState: SsoStateTTL,
-		kv.BucketSsoCodes: SsoCodeTTL,
+		AuthCodeBucket:         AuthCodeTTL,
+		kv.BucketSsoState:      SsoStateTTL,
+		kv.BucketSsoCodes:      SsoCodeTTL,
+		kv.BucketMfaChallenges: MfaChallengeTTL,
 	} {
 		b, ok := kv.Lookup(name)
 		if !ok {

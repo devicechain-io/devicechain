@@ -52,6 +52,9 @@ var (
 	// (ADR-077). nil when disabled by a negative interval.
 	PurgeCoordinator *purge.Coordinator
 
+	// MfaSweeper prunes idle second-factor source-failure rows.
+	MfaSweeper *identity.MfaSourceFailureSweeper
+
 	// DeadLetterStore is the ADR-024 record of work a consumer accepted and gave up on,
 	// with the consumer that fills it and the sweep that bounds it.
 	DeadLetterStore *deadletters.Store
@@ -225,6 +228,13 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			return err
 		}
 	}
+	// The second-factor challenge bucket. NOT gated on the issuer URL: a password sign-in needs
+	// no OAuth, and an enrolled person's password sign-in is completed through this bucket, so
+	// without it that sign-in fails closed (no token is minted without the factor).
+	mfaKV, err := NatsManager.KeyValueStore(kv.BucketMfaChallenges, kv.BucketMfaChallenges, identity.MfaChallengeTTL)
+	if err != nil {
+		return err
+	}
 	// Distributed lock (ADR-007, NATS KV) serializing signing-key work and
 	// bootstrap seeding across replicas.
 	lock, err := NatsManager.NewDistributedLock(5 * time.Second)
@@ -292,6 +302,8 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		IdentityManager.SetSsoStores(ssoStateKV, ssoCodesKV)
 		IdentityManager.SetSsoMetrics(newSsoMetrics(Microservice))
 	}
+	configureMfa(IdentityManager, mfaKV, newMfaMetrics(Microservice),
+		mfaIssuerSource(func() *settings.Service { return SettingsService }, Configuration.Auth.IssuerUrl))
 
 	// Age-based signing-key rotation (ADR-008 follow-up): rotate at startup if the
 	// active key is older than the configured max age, retaining the prior key for
@@ -334,19 +346,11 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// call its catalogue and directory methods, the tenant plane's call its delegated
 	// tenant-administration methods (ADR-081), which take the tenant from the caller's own
 	// token. One instance, so the two planes cannot be wired to different stores.
-	AdminService = admin.NewService(iam.NewStore(RdbManager),
-		Configuration.TenantPurgeSettle(), Configuration.TenantPurgeTokenHold(), DeadLetterStore)
-	AdminService.SetViewerBaseline(identity.ViewerAuthorities())
-	AdminService.SetServiceAccountSecretKey(serviceAccountKey)
-	AdminService.SetSecretStore(secretStore)
+	AdminService = newAdminService(iam.NewStore(RdbManager), Configuration.TenantPurgeSettle(),
+		Configuration.TenantPurgeTokenHold(), DeadLetterStore, serviceAccountKey, secretStore)
 
 	// Map of providers injected into the graphql http context.
-	providers := map[gqlcore.ContextKey]interface{}{
-		graphql.ContextMembersKey:  AdminService,
-		graphql.ContextIdentityKey: IdentityManager,
-		graphql.ContextSettingsKey: SettingsService,
-		graphql.ContextBlobKey:     BlobStore,
-	}
+	providers := dataPlaneProviders(AdminService, IdentityManager, SettingsService, BlobStore)
 
 	// user-management validates its own API requests with the local public key
 	// and depends on no other service, so the readiness gate opens immediately
@@ -405,6 +409,15 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		}
 	} else {
 		log.Info().Msg("Tenant purge coordinator disabled by configuration; deleted tenants stay purging")
+	}
+
+	// The second factor's idle per-source failure rows are pruned on a schedule: they are
+	// otherwise removed only when a sign-in succeeds, so an attacked factor that is then left
+	// alone would keep them forever.
+	MfaSweeper = identity.NewMfaSourceFailureSweeper(Microservice, iam.NewStore(RdbManager), mfaSweepInterval,
+		core.NewNoOpLifecycleCallbacks())
+	if err := MfaSweeper.Initialize(ctx); err != nil {
+		return err
 	}
 
 	// The retention sweep. It needs only the store, so unlike the consumer it can be built
@@ -690,6 +703,11 @@ func afterMicroserviceStarted(ctx context.Context) error {
 			return err
 		}
 	}
+	if MfaSweeper != nil {
+		if err := MfaSweeper.Start(ctx); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -713,6 +731,11 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	// "reverse order" invites someone to restore a symmetry that was never the reason.
 	if PurgeCoordinator != nil {
 		if err := PurgeCoordinator.Stop(ctx); err != nil {
+			return err
+		}
+	}
+	if MfaSweeper != nil {
+		if err := MfaSweeper.Stop(ctx); err != nil {
 			return err
 		}
 	}
@@ -741,6 +764,11 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 	}
 	if PurgeCoordinator != nil {
 		if err := PurgeCoordinator.Terminate(ctx); err != nil {
+			return err
+		}
+	}
+	if MfaSweeper != nil {
+		if err := MfaSweeper.Terminate(ctx); err != nil {
 			return err
 		}
 	}

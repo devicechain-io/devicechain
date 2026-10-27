@@ -184,6 +184,22 @@ var All = []Bucket{
 			"of the sign-in buckets; a full one breaks single sign-on completion only.",
 	},
 	{
+		Name:    BucketMfaChallenges,
+		Tier:    State,
+		Account: Identity,
+		TTL:     5 * time.Minute, // identity.MfaChallengeTTL
+		Writers: []string{"user-management"},
+		Readers: []string{"user-management"},
+		Why: "One entry per password sign-in that is waiting for its second factor: the owner's " +
+			"email, the session epoch it was minted under and a count of the codes tried, written " +
+			"when a correct password belongs to an identity with a second factor and held five " +
+			"minutes or until the code is accepted. It is written only AFTER the password was " +
+			"verified, so it scales with correct-password sign-ins of enrolled people, not with " +
+			"guesses. Kept apart from the refresh-token bucket so a full one breaks only the second " +
+			"step of an enrolled sign-in, never a refresh. A full or unreachable bucket makes an " +
+			"enrolled person's sign-in FAIL CLOSED: no token is minted without the second factor.",
+	},
+	{
 		Name:    BucketCredentialAttempts,
 		Tier:    State,
 		Account: Identity,
@@ -315,6 +331,7 @@ const (
 	BucketOAuthCodes         = "dc_oauth_codes"
 	BucketSsoState           = "dc_sso_state"
 	BucketSsoCodes           = "dc_sso_codes"
+	BucketMfaChallenges      = "dc_mfa_challenges"
 	BucketCredentialAttempts = "dc_credential_attempts"
 	// BucketDeviceCredentialAttempts is kept apart from BucketCredentialAttempts on
 	// purpose: see its entry in All.

@@ -213,7 +213,7 @@ func TestTheConsoleLoginPathUnionsTheViewerBaseline(t *testing.T) {
 
 	// A member with no roles and no authorities of their own: the population this whole
 	// baseline exists for.
-	pair, err := e.m.issueTenantTokens("acme", "someone@acme.example", "test-epoch", "test-sid", nil, nil, auth.Scope{}, false)
+	pair, err := e.m.issueTenantTokens("acme", "someone@acme.example", "test-epoch", "test-sid", nil, nil, auth.Scope{}, false, nil)
 	if err != nil {
 		t.Fatalf("issueTenantTokens: %v", err)
 	}
@@ -248,7 +248,7 @@ func TestTheConsoleLoginPathUnionsTheViewerBaseline(t *testing.T) {
 	// every role-holding member's console session. So mint again for a member who HOLDS
 	// something, and require it to survive beside the baseline.
 	withRole, err := e.m.issueTenantTokens("acme", "someone@acme.example", "test-epoch", "test-sid",
-		[]string{"operator"}, []string{string(auth.DeviceWrite)}, auth.Scope{}, false)
+		[]string{"operator"}, []string{string(auth.DeviceWrite)}, auth.Scope{}, false, nil)
 	if err != nil {
 		t.Fatalf("issueTenantTokens for a member with a role: %v", err)
 	}

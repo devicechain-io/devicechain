@@ -42,6 +42,11 @@ type AdminIdentity {
     """
     # System role tokens held by this identity (e.g. "superuser").
     systemRoles: [String!]!
+    """
+    True when the identity has two-factor authentication turned on, so a password sign-in asks
+    for a code. Reset it with resetIdentityMfa.
+    """
+    mfaEnabled: Boolean!
     """The tenants the identity belongs to, each with its roles there."""
     # The tenants this identity can act in, with its per-tenant roles.
     memberships: [AdminMembership!]!
@@ -276,6 +281,16 @@ type AdminTenant {
     and each of their entries is audited. Change it with setTenantSsoEnforced.
     """
     ssoEnforced: Boolean!
+    """
+    The tenant's own "second factor required" setting. The tenant's effective requirement is
+    this OR its tier's mfaRequired floor (mfaRequiredByTier); either one makes a password
+    sign-in without a second factor unable to enter the tenant. Single sign-on is governed by
+    its connection's requirements instead, and the admin API is never gated on it. Change it
+    with setTenantMfaRequired.
+    """
+    mfaRequired: Boolean!
+    """True when the tenant's tier requires a second factor, which no tenant setting can turn off."""
+    mfaRequiredByTier: Boolean!
     """The tier the tenant is packaged at. Every tenant has exactly one."""
     # The tier this tenant is packaged at (ADR-065). Never null: every tenant has a
     # tier, enforced by a NOT NULL FK, so there is no un-tiered state.
@@ -1878,6 +1893,23 @@ type Mutation {
         """Email of the identity."""
         email: String!
     ): Boolean!
+    """
+    Removes an identity's two-factor authentication (a lost phone): the authenticator, the
+    recovery codes and the stored secret go, every session the identity has ends, and the next
+    password sign-in asks for no code. Returns the identity.
+
+    If the factor has wrong codes on record or is locked, the password may be in use by someone
+    else, so newPassword is required and is set in the same step; without it the call fails
+    with the error code MFA_RESET_NEEDS_PASSWORD and changes nothing. Resetting an identity that
+    holds a system role needs a superuser caller. An identity with no second factor fails with
+    an error. Requires user:write.
+    """
+    resetIdentityMfa(
+        """Email of the identity."""
+        email: String!
+        """A new password to set together with the reset. Required while the factor has failed attempts outstanding."""
+        newPassword: String
+    ): AdminIdentity!
 
     """
     Adds an identity to a tenant with the given tenant roles and returns the identity. The
@@ -2387,6 +2419,20 @@ type Mutation {
         tenant: String!
         """Whether single sign-on is required."""
         enforced: Boolean!
+    ): AdminTenant!
+    """
+    Requires (or stops requiring) a second factor of a tenant's password sign-ins and returns the
+    tenant. While it is on, a member whose sign-in did not use a second factor is refused entry
+    (error codes MFA_REQUIRED and MFA_ENROLLMENT_REQUIRED) and password sessions already inside
+    are refused at their next refresh; a member can still sign in and set up their own
+    authenticator, so nobody is stranded. Superusers are exempt and each of their entries is
+    audited. It cannot turn off a requirement the tenant's tier sets. Requires user:write.
+    """
+    setTenantMfaRequired(
+        """Token of the tenant."""
+        tenant: String!
+        """Whether a second factor is required."""
+        required: Boolean!
     ): AdminTenant!
     """
     Sets how long a session through a connection lasts, in seconds, and returns the connection.

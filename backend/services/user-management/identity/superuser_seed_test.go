@@ -75,6 +75,7 @@ func newSeedFixture(t *testing.T) *seedFixture {
 	require.NoError(t, db.AutoMigrate(
 		&iam.TenantTier{}, &iam.Tenant{}, &iam.Role{}, &iam.Identity{}, &iam.Membership{},
 		&iam.OAuthClient{}, &rdb.AuditEvent{}, &model.SigningKey{},
+		&iam.MfaFactor{}, &iam.MfaSourceFailure{}, &iam.MfaRecoveryCode{},
 	))
 	require.NoError(t, secrets.NewSecretStoreSchema().Migrate(db))
 	store, err := secrets.NewFromConfig(context.Background(), rootKeyConfig(t), db)

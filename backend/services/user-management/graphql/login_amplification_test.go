@@ -58,7 +58,7 @@ type loginFixture struct {
 
 func newLoginFixture(t *testing.T, free int) *loginFixture {
 	t.Helper()
-	db := putest.NewSQLiteDB(t, &iam.Identity{}, &iam.Role{}, &iam.Membership{})
+	db := putest.NewSQLiteDB(t, &iam.Identity{}, &iam.Role{}, &iam.Membership{}, &iam.MfaFactor{}, &iam.MfaSourceFailure{}, &iam.MfaRecoveryCode{})
 	rdbm := &rdb.RdbManager{Database: db}
 	hash, err := bcrypt.GenerateFromPassword([]byte(victimPassword), bcrypt.MinCost)
 	require.NoError(t, err)

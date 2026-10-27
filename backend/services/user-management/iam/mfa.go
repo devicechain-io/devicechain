@@ -233,13 +233,31 @@ const replayCASSQL = "UPDATE iam_mfa_factors SET last_step = ?, failed_count = 0
 // the password was verified: it is the second factor, not a login.
 func (s *Store) MfaVerifyTOTP(ctx context.Context, store secrets.SecretStore, factorID uint, sourceKey string,
 	verify func(seed []byte) (step int64, ok bool, err error)) (MfaAttemptOutcome, error) {
+	res, err := s.MfaVerifyTOTPAttempt(ctx, store, factorID, sourceKey, verify)
+	return res.Outcome, err
+}
+
+// MfaAttemptResult is MfaVerifyTOTP's answer with what a caller that raises alarms needs: whether
+// THIS attempt armed the identity-wide lock.
+type MfaAttemptResult struct {
+	Outcome MfaAttemptOutcome
+	// IdentityLockArmed is true when this attempt was charged, did not succeed, and brought the
+	// identity-wide count to its threshold: the moment the factor locked (or re-locked, with a
+	// longer lock). Evidence the password is in use by someone failing the second factor.
+	IdentityLockArmed bool
+}
+
+// MfaVerifyTOTPAttempt is MfaVerifyTOTP returning MfaAttemptResult.
+func (s *Store) MfaVerifyTOTPAttempt(ctx context.Context, store secrets.SecretStore, factorID uint, sourceKey string,
+	verify func(seed []byte) (step int64, ok bool, err error)) (MfaAttemptResult, error) {
 	if sourceKey == "" || len(sourceKey) > mfaSourceKeySize {
-		return MfaAttemptInvalid, ErrMfaSourceKey
+		return MfaAttemptResult{Outcome: MfaAttemptInvalid}, ErrMfaSourceKey
 	}
 	if store == nil || verify == nil {
-		return MfaAttemptInvalid, errors.New("a TOTP attempt needs the secret store and a verifier")
+		return MfaAttemptResult{Outcome: MfaAttemptInvalid}, errors.New("a TOTP attempt needs the secret store and a verifier")
 	}
 	outcome := MfaAttemptInvalid
+	identityCount := 0
 	var verifierErr error
 	err := s.sys(ctx).Transaction(func(tx *gorm.DB) error {
 		var locked []MfaFactor
@@ -266,6 +284,7 @@ func (s *Store) MfaVerifyTOTP(ctx context.Context, store secrets.SecretStore, fa
 			outcome = MfaAttemptLocked
 			return nil
 		}
+		identityCount = counts[0]
 
 		sealed, err := secrets.BindTx(store, tx)
 		if err != nil {
@@ -306,12 +325,13 @@ func (s *Store) MfaVerifyTOTP(ctx context.Context, store secrets.SecretStore, fa
 			Delete(&MfaSourceFailure{}).Error
 	})
 	if err != nil {
-		return MfaAttemptInvalid, err
+		return MfaAttemptResult{Outcome: MfaAttemptInvalid}, err
 	}
+	armed := identityCount >= MfaIdentityLockAfter && outcome != MfaAttemptSuccess && outcome != MfaAttemptLocked
 	if verifierErr != nil {
-		return MfaAttemptInvalid, verifierErr
+		return MfaAttemptResult{Outcome: MfaAttemptInvalid, IdentityLockArmed: identityCount >= MfaIdentityLockAfter}, verifierErr
 	}
-	return outcome, nil
+	return MfaAttemptResult{Outcome: outcome, IdentityLockArmed: armed}, nil
 }
 
 // MfaFactorFor returns the identity's factor, or ErrMfaFactorNotFound.

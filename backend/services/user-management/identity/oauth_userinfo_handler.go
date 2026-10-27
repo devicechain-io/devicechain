@@ -29,6 +29,11 @@ type userinfoResponse struct {
 	PreferredUsername string `json:"preferred_username,omitempty"`
 	Sudo              bool   `json:"sudo"`
 	Tenant            string `json:"tenant,omitempty"`
+	// Amr is how the sign-in the token descends from proved who the person is (RFC 8176), copied
+	// from the token's own "amr" claim: `["pwd","otp","mfa"]` for a password and an authenticator
+	// code, `["pwd","mfa"]` for a recovery code, `["pwd"]` for a password alone. Absent for a
+	// single sign-on, whose provider's assurance this service does not restate.
+	Amr []string `json:"amr,omitempty"`
 }
 
 // UserinfoHandler builds the OIDC-style userinfo endpoint (ADR-047 SSO / OIDC Core
@@ -75,6 +80,7 @@ func UserinfoHandler(validate func(tokenString string) (*auth.Claims, error)) ht
 			PreferredUsername: claims.Username,
 			Sudo:              claims.ActingAsSuperuser,
 			Tenant:            claims.Tenant,
+			Amr:               claims.Amr,
 		})
 	}), MaxSmallBodyBytes)
 }

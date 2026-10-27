@@ -376,3 +376,89 @@ tests:
       - eval_time: 30m
         alertname: SsoStateStoreFull
         exp_alerts: []
+
+  # ==================================================================
+  # Two-factor sign-in: MfaIdentityLocked (REQUIRED) and MfaVerificationFailuresSustained.
+  #
+  # MfaIdentityLocked reads a counter that user-management exports at 0 from startup, which is
+  # what lets increase() see the very FIRST lock; the cases start it at zero for that reason.
+  # ==================================================================
+
+  # One account locks: the alert fires at once (no pending period) and clears when the window
+  # no longer holds the increase.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_usermanagement_mfa_identity_locks_total{namespace="dci-devicechain", pod="dc-user-management-7c9f-abcde", job="devicechain/user-management"}'
+        values: '0x10 1x50'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: MfaIdentityLocked
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: MfaIdentityLocked
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "An account's password is in use by someone failing its second factor"
+              description: "A second-factor lock armed on an account: twenty wrong authenticator codes were evaluated, each after a CORRECT password. Someone has this account's password and is guessing its code. The authenticator stays locked for at most fifteen minutes at a time (the person can still sign in with a recovery code), and a password holder can renew the lock. Find the account in the audit journal (operation mfa_locked, preceded by mfa_failed rows and mfa_challenged rows) and RESET ITS PASSWORD with setPassword: that rotates the account's session epoch, which also voids every outstanding sign-in challenge. Do not reset the second factor first -- while the password is known to someone else that would give them the account (the reset refuses without a new password for this reason). The source addresses are in the ingress logs."
+      - eval_time: 30m
+        alertname: MfaIdentityLocked
+        exp_alerts: []
+
+  # 🔴 THE QUIET CASE: a steady trickle of mistyped codes (one a minute) and a great many
+  # successes. No account locked, and a trickle is not a sustained failure rate, so neither
+  # alert fires. A lock-count that never moves is the platform doing its job.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_usermanagement_mfa_identity_locks_total{namespace="dci-devicechain", pod="dc-user-management-7c9f-abcde", job="devicechain/user-management"}'
+        values: '0x60'
+      - series: 'devicechain_usermanagement_mfa_verifications_total{namespace="dci-devicechain", pod="dc-user-management-7c9f-abcde", job="devicechain/user-management", method="totp", result="ok"}'
+        values: '0+300x60'
+      - series: 'devicechain_usermanagement_mfa_verifications_total{namespace="dci-devicechain", pod="dc-user-management-7c9f-abcde", job="devicechain/user-management", method="totp", result="invalid"}'
+        values: '0+1x60'
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: MfaIdentityLocked
+        exp_alerts: []
+      - eval_time: 60m
+        alertname: MfaVerificationFailuresSustained
+        exp_alerts: []
+
+  # A sustained failure rate (ten a minute for the whole hour) fires the warning, but only after
+  # its pending period, and does not by itself raise the lock alert.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_usermanagement_mfa_identity_locks_total{namespace="dci-devicechain", pod="dc-user-management-7c9f-abcde", job="devicechain/user-management"}'
+        values: '0x60'
+      - series: 'devicechain_usermanagement_mfa_verifications_total{namespace="dci-devicechain", pod="dc-user-management-7c9f-abcde", job="devicechain/user-management", method="totp", result="invalid"}'
+        values: '0+10x60'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: MfaVerificationFailuresSustained
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: MfaVerificationFailuresSustained
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "Second-factor codes are being refused at a sustained rate"
+              description: "user-management has refused more than one second-factor code every ten seconds, on average, for fifteen minutes (wrong, replayed, or refused by a lock). Each attempt follows a correct password, so this is people typing their codes wrong in large numbers (a clock-skew problem on the nodes, or an authenticator app out of sync) or someone using passwords they obtained. Check that the nodes' clocks are synchronised (authenticator codes are accepted one 30-second step either side), then look at the audit journal for mfa_failed rows grouped by account and at the ingress logs for the source addresses. An account that has locked raises MfaIdentityLocked on its own."
+      - eval_time: 40m
+        alertname: MfaIdentityLocked
+        exp_alerts: []
+
+  # Nothing scraped at all: neither fires (the tenant-purge group's visibility alert is what
+  # reports a user-management nobody is scraping).
+  - interval: 1m
+    input_series: []
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: MfaIdentityLocked
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: MfaVerificationFailuresSustained
+        exp_alerts: []

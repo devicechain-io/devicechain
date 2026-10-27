@@ -231,6 +231,13 @@ func authorizeLoginError(err error) string {
 		return "Too many attempts. Try again in " + throttled.RetryAfterText() + "."
 	case errors.Is(err, credential.ErrUnavailable):
 		return "Sign-in is temporarily unavailable. Try again shortly."
+	case errors.As(err, new(*MfaChallengeError)):
+		// The password was right, and this account has a second factor that this page cannot
+		// ask for yet. Saying "invalid email or password" would tell a person who typed the
+		// right one that it is wrong; no token was issued.
+		return "This account uses two-factor authentication, which this page cannot complete. Sign in to the console to authorize access."
+	case errors.Is(err, ErrMfaUnavailable):
+		return "Sign-in is temporarily unavailable. Try again shortly."
 	default:
 		return "Invalid email or password."
 	}

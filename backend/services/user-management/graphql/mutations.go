@@ -48,6 +48,7 @@ type MembershipResolver struct {
 func (r *MembershipResolver) Tenant() string    { return r.m.Tenant }
 func (r *MembershipResolver) Roles() []string   { return r.m.Roles }
 func (r *MembershipResolver) SsoRequired() bool { return r.m.SsoRequired }
+func (r *MembershipResolver) MfaRequired() bool { return r.m.MfaRequired }
 
 // Login authenticates an email/password and returns an identity token + the
 // identity's memberships (ADR-033). The caller then picks a tenant via

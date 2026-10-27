@@ -72,6 +72,35 @@ const (
 	// (auth.ServiceAccountSubject), the tenant its tenant. A refused attempt writes no row,
 	// so a spray of wrong secrets cannot drive database writes.
 	AuditOpServiceAccountToken = "service_account_token"
+	// The second-factor events. A sign-in that reaches its second factor writes
+	// AuditOpMfaChallenged when the password is right; AuditOpLogin is then written when the
+	// sign-in COMPLETES, labelled "pwd", "pwd+otp" or "pwd+recovery". The label of the rows
+	// below that name an identity is its email; none ever records a code, a seed or a challenge.
+	//
+	// An attempt refused by a lock is counted and never written, so a sender holding the
+	// password cannot drive writes to the journal.
+	AuditOpMfaChallenged = "mfa_challenged"
+	// AuditOpMfaEnrolled and AuditOpMfaDisabled record the person enrolling a factor and
+	// removing it. AuditOpMfaReset records an administrator removing it (the actor).
+	AuditOpMfaEnrolled = "mfa_enrolled"
+	AuditOpMfaDisabled = "mfa_disabled"
+	AuditOpMfaReset    = "mfa_reset"
+	// AuditOpMfaFailed records a code that was evaluated and refused. AuditOpMfaLocked records
+	// an attempt that armed the identity-wide lock, which is evidence the password is in use by
+	// someone failing the second factor.
+	AuditOpMfaFailed = "mfa_failed"
+	AuditOpMfaLocked = "mfa_locked"
+	// AuditOpMfaRecoveryCodeUsed records a sign-in completed with a recovery code.
+	// AuditOpMfaRecoveryCodesRegenerated records the person replacing their codes.
+	AuditOpMfaRecoveryCodeUsed         = "mfa_recovery_code_used"
+	AuditOpMfaRecoveryCodesRegenerated = "mfa_recovery_codes_regenerated"
+	// AuditOpMfaEnforcementBypassed records a superuser with a password-only session entering
+	// a tenant that requires a second factor, the one exemption from that requirement. The
+	// tenant is the one entered.
+	AuditOpMfaEnforcementBypassed = "mfa_enforcement_bypassed"
+	// AuditOpTenantMfaRequiredChanged records a change to a tenant's own "second factor
+	// required" flag. The actor is who changed it, the tenant the one it applies to.
+	AuditOpTenantMfaRequiredChanged = "tenant_mfa_required_changed"
 )
 
 // AuditEvent is one row of the tenant-scoped audit journal (ADR-019): a record,

@@ -24,7 +24,7 @@ import (
 func newServiceAccountWireEnv(t *testing.T) *wireEnv {
 	t.Helper()
 	db := putest.NewSQLiteDB(t, &iam.TenantTier{}, &iam.Tenant{}, &iam.Role{}, &iam.Identity{},
-		&iam.Membership{}, &iam.Invitation{}, &iam.IdentityLink{}, &iam.ServiceAccount{}, &iam.ServiceAccountSecret{})
+		&iam.Membership{}, &iam.Invitation{}, &iam.MfaFactor{}, &iam.MfaSourceFailure{}, &iam.MfaRecoveryCode{}, &iam.IdentityLink{}, &iam.ServiceAccount{}, &iam.ServiceAccountSecret{})
 	rdbm := &rdb.RdbManager{Database: db}
 	store := iam.NewStore(rdbm)
 	svc := admin.NewService(store, 0, 0, nil)
