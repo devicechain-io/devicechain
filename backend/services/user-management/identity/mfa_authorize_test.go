@@ -5,6 +5,8 @@ package identity
 
 import (
 	"context"
+	"errors"
+	"github.com/devicechain-io/dc-microservice/auth"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -162,4 +164,62 @@ func TestTheAuthorizeMfaStepMessages(t *testing.T) {
 	require.Contains(t, rec.Body.String(), `name="step" value="mfa"`)
 	require.NotContains(t, rec.Body.String(), "<c&h>", "the challenge is escaped into its attribute")
 	require.NotContains(t, rec.Body.String(), "Invalid email or password")
+}
+
+func consentForm(identityToken string) url.Values {
+	return authorizeForm("consent", url.Values{"identity_token": {identityToken}, "tenant": {"acme"}, "action": {"allow"}})
+}
+
+// The tenant requires a second factor and the identity has none: the person is told how to fix
+// that, on a page. It is NOT an access_denied redirect, which the client would read as the user
+// refusing. The twin is an identity that has a factor but whose sign-in did not use it.
+func TestTheConsentStepTellsAnUnenrolledPersonToSetUpTwoFactor(t *testing.T) {
+	e := newMfaEnv(t)
+	e.createMember(t, "plain@example.com", "pw-1")
+	e.createMember(t, "pat@example.com", "pw-2")
+	e.enroll(t, "pat@example.com", "pw-2")
+	svc := realAuthorize{e.m}
+
+	// Before the requirement the same consent issues a code (a redirect).
+	ok := postAuthorize(svc, consentForm(e.signInWith(t, "plain@example.com", auth.AmrPasswordOnly())))
+	require.Equal(t, http.StatusFound, ok.Code, ok.Body.String())
+
+	e.requireMfa(t, "acme", true)
+
+	rec := postAuthorize(svc, consentForm(e.signInWith(t, "plain@example.com", auth.AmrPasswordOnly())))
+	require.Equal(t, http.StatusForbidden, rec.Code)
+	require.Empty(t, rec.Header().Get("Location"), "no redirect: the client must not read this as the user refusing")
+	require.Contains(t, rec.Body.String(), "Set up two-factor authentication in the console first")
+
+	rec = postAuthorize(svc, consentForm(e.signInWith(t, "pat@example.com", auth.AmrPasswordOnly())))
+	require.Equal(t, http.StatusForbidden, rec.Code)
+	require.Empty(t, rec.Header().Get("Location"))
+	require.Contains(t, rec.Body.String(), "enter your code")
+	require.NotContains(t, rec.Body.String(), "Set up two-factor")
+
+	// A sign-in that used the factor is admitted.
+	good := postAuthorize(svc, consentForm(e.signInWith(t, "pat@example.com", auth.AmrPasswordOTP())))
+	require.Equal(t, http.StatusFound, good.Code, good.Body.String())
+}
+
+// Anything the code step does not recognise (a mint that failed after the code was accepted) does
+// not claim the sign-in expired, and a spent request budget asks to wait, on the same form.
+func TestTheAuthorizeMfaStepKeepsTheFormForErrorsThatAreNotExpiry(t *testing.T) {
+	for name, c := range map[string]struct {
+		err  error
+		want string
+	}{
+		"a failed mint":  {errors.New("session store down"), "could not be completed"},
+		"a spent budget": {&credential.RequestBudgetError{}, "Too many attempts"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			svc := &fakeAuthorizeSvc{client: validClient(), mfaErr: c.err}
+			rec := postAuthorize(svc, authorizeForm("mfa", url.Values{"challenge": {"ch"}, "code": {"123456"}}))
+			require.Equal(t, http.StatusOK, rec.Code)
+			require.Contains(t, rec.Body.String(), `name="step" value="mfa"`)
+			require.Contains(t, rec.Body.String(), `value="ch"`)
+			require.NotContains(t, rec.Body.String(), "sign-in expired")
+			require.Contains(t, rec.Body.String(), c.want)
+		})
+	}
 }

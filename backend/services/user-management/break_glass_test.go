@@ -263,3 +263,28 @@ func TestBreakGlassMainDispatches(t *testing.T) {
 		require.False(t, handled, "%v must be a plain start", args)
 	}
 }
+
+// A superuser with NO factor is refused, and NOTHING changes: no password is rotated, no epoch
+// moves, no audit row is written. (The reset exists to remove a factor; rotating a password through
+// it would be a second, unaudited way to take over an operator account.)
+func TestBreakGlassRefusesASuperuserWithNoFactor(t *testing.T) {
+	r := newBreakGlassRig(t)
+	ctx := core.WithSystemContext(context.Background())
+	hash, err := bcrypt.GenerateFromPassword([]byte("pw-root"), bcrypt.MinCost)
+	require.NoError(t, err)
+	id := &iam.Identity{Email: "root@example.com", Enabled: true, PasswordHash: string(hash)}
+	require.NoError(t, r.w.store.CreateIdentity(ctx, id))
+	role := iam.Role{Scope: iam.ScopeSystem, Token: iam.SuperuserRoleToken, Authorities: []string{"*"}}
+	require.NoError(t, r.w.store.CreateRole(ctx, &role))
+	require.NoError(t, r.w.store.AssignSystemRoles(ctx, id, []iam.Role{role}))
+	before := r.identity(t, "root@example.com")
+
+	require.Equal(t, 1, r.run(t, "", "mfa-reset", "--email", "root@example.com"))
+	require.Contains(t, r.errOut.String(), "no second factor")
+	require.NotContains(t, r.out.String(), "New password")
+
+	after := r.identity(t, "root@example.com")
+	require.Equal(t, before.PasswordHash, after.PasswordHash)
+	require.Equal(t, before.SessionEpoch, after.SessionEpoch)
+	require.Empty(t, r.resetAudits(t))
+}

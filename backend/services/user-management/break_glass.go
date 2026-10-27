@@ -29,14 +29,17 @@ import (
 // identity when nobody can sign in to do it through the admin API. The case the admin API cannot
 // cover is an enrolled SOLE superuser, who has no one to reset them.
 //
-// 🔴 ITS AUTHORITY IS THE CLUSTER CREDENTIAL THAT RAN IT, and everything below is about not
-// widening that. It runs only inside a pod of this service (the Kubernetes service environment and
-// this area's own functional-area name, read from the container's environment), only with the
-// mounted instance configuration and an instance root key that decodes (so it can open the sealed
-// seed it is about to delete). The account's password is a new value it ALWAYS sets: generated here
-// and printed once, or one line on stdin, never an argument, which a process list shows. It refuses
-// an identity that holds no system role. It starts no server and opens no listener, and it runs the
-// store code the service itself runs, so there is no second copy of the reset to drift.
+// 🔴 THE BOUNDARY IS NOT IN THIS FILE. Whoever can exec into the pod can read its mounted secrets and
+// the instance root key, and could do anything this subcommand does by other means; the boundary is
+// the cluster's pods/exec RBAC plus those mounted secrets. The checks below are a guard against
+// accidental use (a laptop, another service's container, a missing configuration), not a defence
+// against someone who already holds that access. What the subcommand does add is care about what it
+// does with that authority: it runs only where the store can really be opened (the mounted instance
+// configuration and a root key that decodes, so the sealed seed it deletes can be opened), it
+// ALWAYS replaces the password (generated and printed once, or one line on stdin, never an argument,
+// which a process list shows), it refuses an identity that holds no system role, and it starts no
+// server and opens no listener. It runs the store code the service itself runs, so there is no second
+// copy of the reset to drift.
 
 const breakGlassUsage = `usage: user-management break-glass mfa-reset --email <address> [--password-stdin]
 
@@ -91,7 +94,7 @@ func runBreakGlass(ctx context.Context, args []string, env breakGlassEnv) int {
 		return 2
 	}
 
-	// Only inside a pod of this service.
+	// A guard against accidental use, not a boundary (see the note above).
 	if env.getenv("KUBERNETES_SERVICE_HOST") == "" {
 		return fail("this runs only inside a user-management pod (dcctl instances break-glass mfa-reset runs it there); " +
 			"no Kubernetes service environment was found")

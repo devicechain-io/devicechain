@@ -778,21 +778,21 @@ its password, and ends every session it has. For the operator who cannot sign in
 superuser who lost the phone and the recovery codes has no one the admin API could reset them.
 
 It does not talk to the admin API and needs no sign-in. It runs the service's own binary inside a
-ready user-management pod of the instance (`user-management break-glass mfa-reset`), so it needs the
-cluster credentials to exec into that pod, and nothing else. The reset is the store code the service
-itself runs; this command carries no SQL.
+ready user-management pod of the instance (`dc-user-management break-glass mfa-reset`), so it needs the
+cluster credentials to exec into that pod (pods/exec in the instance namespace), and nothing else. The
+reset is the store code the service itself runs; this command carries no SQL.
 
 The password is ALWAYS replaced, because this route has no caller to vouch for: removing the factor
-alone would hand the account to whoever holds the old password. By default a new password is
-generated in the pod and printed ONCE, here. With --password-stdin the first line of stdin is the
-password instead.
+alone would hand the account to whoever holds the old password. dcctl generates the new password
+itself, sends it to the pod on stdin and prints it ONCE, here. For automation, or to choose the
+password yourself, use --password-stdin: the first line of stdin is the password, and nothing is
+printed. If the identity is the instance's seed superuser, dcctl also updates the password key of the
+instance Secret that dcctl sim, the probes and a bootstrap re-run read (only that key), and warns
+loudly if it cannot, since the reset has already happened by then.
 
 It refuses an identity that holds no system role. Reset anyone else through the admin API
 (resetIdentityMfa), where the log names the operator who did it. The reset is recorded as mfa_reset
 by "break-glass:pod-exec".
-
-dcctl sim commands read the seed superuser's password from the instance Secret; if you reset that
-account, pass the new password with --admin-password.
 
 ```
 dcctl instances break-glass mfa-reset [email] [flags]

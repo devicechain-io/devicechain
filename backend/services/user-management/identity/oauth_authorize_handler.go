@@ -276,13 +276,18 @@ func handleAuthorizeMfa(w http.ResponseWriter, r *http.Request, svc AuthorizeSer
 	case errors.Is(err, ErrMfaInvalidCode):
 		// The challenge survives a wrong code (it allows a few), so the same form is shown again.
 		renderAuthorizeMfa(w, p, challenge, "That code is not valid. Check it and try again.")
-	case errors.Is(err, ErrMfaRateLimited):
+	case errors.Is(err, ErrMfaRateLimited), errors.Is(err, credential.ErrRequestBudgetExhausted):
 		renderAuthorizeMfa(w, p, challenge, "Too many attempts. Try again shortly.")
 	case errors.Is(err, ErrMfaUnavailable), errors.Is(err, credential.ErrUnavailable):
 		renderAuthorizeMfa(w, p, challenge, "The code could not be checked right now. Try again shortly.")
-	default:
-		// An expired, spent or voided challenge (or anything this page does not know): start over.
+	case errors.Is(err, ErrMfaChallengeExpired):
+		// Expired, spent, voided or out of attempts: the only answer that says start over.
 		renderAuthorizeLogin(w, p, "Your sign-in expired. Sign in again.", svc.SsoReady())
+	default:
+		// Anything this page does not know (a mint that failed after the code was accepted, say) is
+		// not evidence the challenge is gone, so it does not claim so: the same form, a plain
+		// message. If the challenge was in fact spent, the next try says it expired.
+		renderAuthorizeMfa(w, p, challenge, "The sign-in could not be completed right now. Try again shortly.")
 	}
 }
 
@@ -308,6 +313,18 @@ func handleAuthorizeConsent(w http.ResponseWriter, r *http.Request, svc Authoriz
 		// the client would read as the user refusing.
 		renderAuthorizeError(w, http.StatusBadRequest, "Session expired",
 			"Your sign-in session expired. Start the authorization again.")
+		return
+	}
+	if errors.Is(err, errMfaEnrollmentRequired) {
+		// The tenant requires a second factor and this identity has none. That is something the
+		// person can fix, not the client being refused, so it is a page that says how.
+		renderAuthorizeError(w, http.StatusForbidden, "Two-factor authentication required",
+			"This tenant requires two-factor authentication. Set up two-factor authentication in the console first, then start the authorization again.")
+		return
+	}
+	if errors.Is(err, errMfaRequired) {
+		renderAuthorizeError(w, http.StatusForbidden, "Two-factor authentication required",
+			"This tenant requires a second factor for this sign-in. Start the authorization again and enter your code.")
 		return
 	}
 	if err != nil {
