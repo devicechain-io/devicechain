@@ -83,6 +83,66 @@ spec:
                   name: graphql
           {{- end }}
           {{- end }}
+{{- $integrationsPort := include "devicechain.integrationsIngestPort" $root }}
+{{- if $integrationsPort }}
+---
+{{/*
+The inbound-integration webhook, published at  POST /api/integrations/{tenant}/{integration}
+[/{messageType}]  and forwarded to event-sources' HTTP ingest listener as
+/integrations/{tenant}/{integration}[/{messageType}].
+
+WHY IT IS ITS OWN OBJECT. The API ingress above rewrites every path to /$2, which strips the
+prefix; this one needs the rewrite  /integrations/$2.  A network server (ChirpStack, The Things
+Stack) calls it from the internet, so the console and any sender build the URL from the
+instance's own origin and need no instance id: event-sources supplies its own.
+
+ONLY THIS PATH IS FORWARDED. The listener also serves the general device-ingest route
+(/{instanceId}/{tenant}/events); nothing here matches it, and the route is for POST only in
+the service, which answers any other method 405. The request body is capped by the service at
+256 KiB; ingress-nginx's own limit (1m) is higher and is left at its default.
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: devicechain-integrations
+  namespace: {{ include "devicechain.instanceNamespace" . }}
+  labels:
+    {{- include "devicechain.instanceLabels" . | nindent 4 }}
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /integrations/$2
+    # An edge bound per client address, belt and braces for the service's own: 200 requests a
+    # second with the default burst allowance of five times that. A network server that holds
+    # the webhook open for a whole deployment sends well under that from one address, so it is
+    # never limited; a flood from one address is refused here (ingress-nginx answers 503, which
+    # a network server retries) before it reaches the service. It limits by the address the
+    # controller sees, so it is only per-sender when the controller is told to trust the load
+    # balancer's forwarded address; the service's own per-source limit is the one that is exact.
+    # The Gateway API has no standard equivalent, so the Gateway front end relies on the service.
+    nginx.ingress.kubernetes.io/limit-rps: "200"
+    # No cert-manager annotation: the API ingress owns the Certificate for this host's secret.
+    {{- with .Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- if $tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host | quote }}
+      secretName: {{ $tls.secretName }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: /api/integrations(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: event-sources
+                port:
+                  name: http-ingest
+{{- end }}
 {{- $mcpEnabled := has "mcp" (splitList "," (include "devicechain.enabledAreas" $root)) }}
 {{- $asIssuer := include "devicechain.userManagementIssuerUrl" $root }}
 {{- if or $mcpEnabled $asIssuer }}

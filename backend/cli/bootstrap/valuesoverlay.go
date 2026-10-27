@@ -166,6 +166,7 @@ var refusedIngressAnnotations = []string{
 	"nginx.ingress.kubernetes.io/enable-access-log",
 	"nginx.ingress.kubernetes.io/proxy-body-size",
 	"nginx.ingress.kubernetes.io/proxy-request-buffering",
+	"nginx.ingress.kubernetes.io/limit-rps",
 	"nginx.ingress.kubernetes.io/ssl-redirect",
 	"nginx.ingress.kubernetes.io/force-ssl-redirect",
 }

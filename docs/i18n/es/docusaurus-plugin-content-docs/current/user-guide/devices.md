@@ -372,7 +372,7 @@ La consola no puede conocer algunos valores, así que el comando deja un marcado
 | --- | --- |
 | `<instance-id>` | El id de instancia elegido al instalar la instancia. Es el espacio de nombres de Kubernetes de la instancia sin el prefijo `dci-`. |
 | `<mqtt-host>` | El host en el que se expone el listener MQTT. El listener usa TLS, así que guarda el certificado de la CA de la instancia como `instance-ca.crt`. |
-| `<ingest-host>` | El host del listener de ingesta HTTP, puerto 8081. Una instalación predeterminada no lo expone fuera del clúster; consulta [Tu primer dispositivo](../quickstart/first-device.md#5-open-a-path-to-the-ingest-endpoint). |
+| `<ingest-host>` | El host del listener de ingesta HTTP, puerto 8081. Una instalación predeterminada no lo expone fuera del clúster, salvo el webhook de integración entrante en `/api/integrations/{tenant}/{integration}` de la dirección HTTPS de la instancia; consulta [Tu primer dispositivo](../quickstart/first-device.md#5-open-a-path-to-the-ingest-endpoint). |
 | `<password>` | La contraseña de una credencial `MQTT_BASIC`. Solo se muestra una vez, al establecerla. Si la has perdido, establece una nueva en la pestaña **Credenciales**. |
 
 La pestaña no ofrece ningún comando cuando el comando no podría funcionar, y en su lugar indica

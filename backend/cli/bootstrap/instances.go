@@ -199,12 +199,23 @@ func ValidateInstanceName(instance string) error {
 	if instance[0] == '-' || instance[len(instance)-1] == '-' {
 		return fmt.Errorf("instance name %q must start and end with a lowercase letter or digit", instance)
 	}
+	if instance == integrationsPathSegment {
+		return fmt.Errorf("instance name %q is reserved: the instance id is the first segment of the ingest "+
+			"listener's paths, and a listener whose instance is called %q cannot tell a device-ingest request "+
+			"from the public integrations route, which the front end publishes under /api/%s", instance,
+			integrationsPathSegment, integrationsPathSegment)
+	}
 	if reservedInstanceNames[instance] {
 		return fmt.Errorf("instance name %q is reserved: the relational store already has a database "+
 			"or role by that name, and every instance gets a login and a database named after it", instance)
 	}
 	return nil
 }
+
+// integrationsPathSegment is the first path segment of the event-sources integration route that
+// carries no instance id (/integrations/{tenant}/{integration}). The chart publishes it, so an
+// instance cannot be named it: its device-ingest route would then share that segment.
+const integrationsPathSegment = "integrations"
 
 // reservedInstanceNames are the DNS-1123 labels that name something PostgreSQL itself
 // owns — a built-in database, or a role name it refuses to create.

@@ -187,6 +187,50 @@ spec:
     {{- if gt $rules 16 }}
     {{- fail (printf "the API HTTPRoute would carry %d rules and a Gateway API HTTPRoute holds at most 16; split the route before adding another public area" $rules) }}
     {{- end }}
+{{- $integrationsPort := include "devicechain.integrationsIngestPort" $root }}
+{{- if $integrationsPort }}
+---
+{{/* ingress.yaml's devicechain-integrations: /api/integrations/{tenant}/{integration}[/{messageType}]
+     reaches event-sources' HTTP ingest port at /integrations/{tenant}/{integration}[/...].
+     ReplacePrefixMatch can only replace the matched PREFIX, so it cannot insert the instance id
+     or the "integrations" segment between the tenant and the integration; the service accepts the
+     instance-less path (it knows its own instance), which a prefix replacement can produce. It is a
+     separate route so the 16-rule budget of the API route is not spent on it. */}}
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: devicechain-integrations
+  namespace: {{ $ns }}
+  labels:
+    {{- include "devicechain.instanceLabels" . | nindent 4 }}
+spec:
+  parentRefs:
+    - name: devicechain
+      sectionName: {{ $appSection }}
+  hostnames:
+    - {{ $host | quote }}
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api/integrations
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplacePrefixMatch
+              replacePrefixMatch: /integrations
+    {{- if $tls.enabled }}
+        - type: ResponseHeaderModifier
+          responseHeaderModifier:
+            set:
+              - name: Strict-Transport-Security
+                value: "max-age=31536000; includeSubDomains"
+    {{- end }}
+      backendRefs:
+        - name: event-sources
+          port: {{ $integrationsPort }}
+{{- end }}
 {{- $mcpEnabled := has "mcp" (splitList "," (include "devicechain.enabledAreas" $root)) }}
 {{- $asIssuer := include "devicechain.userManagementIssuerUrl" $root }}
 {{- if or $mcpEnabled $asIssuer }}

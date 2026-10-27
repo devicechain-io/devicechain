@@ -352,7 +352,7 @@ The console cannot know some values, so the command leaves a placeholder for eac
 | --- | --- |
 | `<instance-id>` | The instance id chosen when the instance was installed. It is the instance's Kubernetes namespace without the `dci-` prefix. |
 | `<mqtt-host>` | The host the MQTT listener is exposed on. The listener uses TLS, so save the instance CA certificate as `instance-ca.crt`. |
-| `<ingest-host>` | The host of the HTTP ingest listener, port 8081. A default install does not expose it outside the cluster; see [Your First Device](/quickstart/first-device#5-open-a-path-to-the-ingest-endpoint). |
+| `<ingest-host>` | The host of the HTTP ingest listener, port 8081. A default install does not expose it outside the cluster, apart from the inbound-integration webhook at `/api/integrations/{tenant}/{integration}` on the instance's HTTPS address; see [Your First Device](/quickstart/first-device#5-open-a-path-to-the-ingest-endpoint). |
 | `<password>` | The password of an `MQTT_BASIC` credential. It is shown only once, when it is set. If it is lost, set a new one on the **Credentials** tab. |
 
 The tab offers no command when the command could not work, and says what to fix instead:

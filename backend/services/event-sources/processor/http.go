@@ -137,6 +137,10 @@ func NewHttpEventSource(id string, srcConfig map[string]string, instanceId strin
 	return es, nil
 }
 
+// ingestIdleTimeout is how long a quiet keep-alive connection is kept: longer than the 60 s an
+// ingress-nginx upstream connection is kept, which is what makes the proxy the side that closes.
+const ingestIdleTimeout = 75 * time.Second
+
 // handler builds the routing mux. Exposed (unexported) so the lifecycle and tests
 // share one definition of the routes.
 func (es *HttpEventSource) handler() http.Handler {
@@ -150,6 +154,19 @@ func (es *HttpEventSource) handler() http.Handler {
 	// integration's bearer token, read by its registered type. See http_integration.go.
 	mux.HandleFunc(fmt.Sprintf("POST /%s/{tenant}/integrations/{integration}", es.InstanceId), es.handleIntegration)
 	mux.HandleFunc(fmt.Sprintf("POST /%s/{tenant}/integrations/{integration}/{messageType}", es.InstanceId), es.handleIntegration)
+	// The same route without the instance segment, which is the form the chart's front end
+	// forwards: it publishes /api/integrations/{tenant}/{integration}[/{messageType}] and a
+	// Gateway API prefix rewrite can only replace the leading prefix, so it cannot insert the
+	// instance id (or the "integrations" segment after the tenant). The instance is this
+	// process's own, so a sender that names another instance reaches the form above and gets
+	// a 404, and the alias answers the same handler. Only this route has an alias: the
+	// front end does not forward /events, so nothing else is reachable without the instance.
+	// An instance literally named "integrations" would make /integrations/{tenant}/events
+	// ambiguous with it, so it keeps only the qualified form.
+	if es.InstanceId != "integrations" {
+		mux.HandleFunc("POST /integrations/{tenant}/{integration}", es.handleIntegration)
+		mux.HandleFunc("POST /integrations/{tenant}/{integration}/{messageType}", es.handleIntegration)
+	}
 	return mux
 }
 
@@ -316,6 +333,10 @@ func (es *HttpEventSource) ExecuteStart(ctx context.Context) error {
 		// Bounding a response nobody is waiting on is not worth manufacturing duplicates
 		// for.
 		ReadTimeout: es.Ingest.RequestTimeout(),
+		// Above ingress-nginx's 60 s upstream keep-alive, so the proxy closes a quiet connection
+		// first and never sends a POST down one this server is closing (a reset the sender reads
+		// as a failed uplink). See core.HttpServerOptions.IdleTimeout.
+		IdleTimeout: ingestIdleTimeout,
 		ConnState:   tracker.connState,
 		ConnContext: tracker.connContext,
 	})
