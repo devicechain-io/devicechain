@@ -55,6 +55,7 @@ Cómo llegan los dispositivos a la plataforma, y cómo llega la plataforma de vu
 | MQTT (bróker externo) | ○ | ○ | ◐ |
 | [Sparkplug B](../concepts/sparkplug.md) | ○ | ○ | ◐ |
 | [LwM2M](../concepts/lwm2m.md) | ◐ | ◐ | ◐ |
+| [Integraciones de entrada](../guides/inbound-integrations.md) (servidor de red LoRaWAN, webhook) | ○ | ○ | ◐ |
 
 ### MQTT — el bróker de la plataforma {#mqtt--the-platform-broker}
 
@@ -363,6 +364,25 @@ Para dispositivos con recursos limitados sobre CoAP/UDP con DTLS.
 
 La autenticación de dispositivo es por dispositivo, en el handshake DTLS, con claves precompartidas.
 Las credenciales X.509 y de clave pública en bruto están planeadas.
+
+### Integraciones de entrada {#inbound-integrations}
+
+Un servidor de red como ChirpStack o The Things Stack, o cualquier sistema capaz de enviar un `POST` con
+JSON o bytes, reenvía los datos de un dispositivo a una [integración](../guides/inbound-integrations.md)
+del inquilino. El dispositivo nunca se conecta a DeviceChain.
+
+- **Suscripción ◐**: la plataforma guarda los valores decodificados que aporta el remitente, como
+  mediciones normales. Lo que impide que sea `●`: un mensaje que llega mientras el inquilino supera su
+  asignación de ingesta se responde con `202` y se descarta, porque un rechazo lo perdería de todos modos
+  y algunos servidores de red suspenden un webhook al que se rechaza. Por tanto, no se avisa al remitente.
+  Un uplink sin nada decodificado se confirma y no guarda nada, y se cuenta. `IntegrationShedAccepted` e
+  `IntegrationUndecodedHigh` informan de ambos casos.
+- **Escritura ○ / Lectura ○**: no hay downlink. Un comando emitido a un dispositivo que informó por última
+  vez a través de una integración **se acepta y luego falla** en el siguiente barrido de entrega con
+  `COMMAND_TRANSPORT_UNSUPPORTED`, en lugar de esperar hasta caducar. El fallo es definitivo. Un
+  dispositivo que nunca ha informado no tiene transporte registrado, así que sus comandos se despachan,
+  y caducan, hasta que informa por primera vez. Como el transporte registrado es el último por el que informó el dispositivo, un dispositivo que
+  también envía por MQTT vuelve a recibir comandos en cuanto lo ha hecho.
 
 ## Conectores de salida
 

@@ -19,6 +19,7 @@ package main
 import (
 	"context"
 	"embed"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -33,6 +34,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"github.com/devicechain-io/dc-simulator/lorawan"
 	"github.com/devicechain-io/dc-simulator/sim"
 )
 
@@ -72,7 +74,35 @@ func main() {
 	publishLog := flag.String("publish-log", envOr("DC_SIM_PUBLISH_LOG", ""),
 		"with --play-devices: append every event the ingress accepted to this NDJSON file, so a "+
 			"recording made from the platform can be checked against what the devices sent")
+	lorawanNS := flag.String("lorawan-ns", envOr("DC_SIM_LORAWAN_NS", ""),
+		"integration mode: play a LoRaWAN network server ("+lorawan.ChirpStack+" or "+lorawan.TTS+") posting uplinks to a "+
+			"tenant's inbound integration, then exit. Needs no handshake; see --integration-url")
+	integrationURL := flag.String("integration-url", envOr("DC_SIM_INTEGRATION_URL", ""),
+		"integration mode: the integration's URL, https://<host>/api/integrations/<tenant>/<integration>")
+	integrationToken := flag.String("integration-token", "",
+		"integration mode: the integration's bearer token (prefer DC_SIM_INTEGRATION_TOKEN, which stays out of the process list)")
+	integrationHost := flag.String("integration-host", envOr("DC_SIM_INTEGRATION_HOST", ""),
+		"integration mode: send this as the request's Host, for an ingress host that does not resolve from here")
+	devEUIs := flag.String("deveui", envOr("DC_SIM_DEVEUIS", ""),
+		"integration mode: comma-separated DevEUIs (16 hex digits) of the devices that uplink")
+	uplinks := flag.Int("uplinks", envIntOr("DC_SIM_UPLINKS", 5), "integration mode: uplinks per device")
+	resend := flag.Bool("resend", envBoolOr("DC_SIM_RESEND", false),
+		"integration mode: post every uplink twice, byte for byte, as a network server retrying does")
 	flag.Parse()
+
+	if *lorawanNS != "" {
+		token := *integrationToken
+		if token == "" {
+			token = os.Getenv("DC_SIM_INTEGRATION_TOKEN")
+		}
+		if err := runLoRaWAN(lorawan.Config{
+			NS: *lorawanNS, URL: *integrationURL, Token: token, HostHeader: *integrationHost, DevEUIs: lorawan.ParseDevEUIs(*devEUIs),
+			Uplinks: *uplinks, Interval: *emitInterval, Resend: *resend,
+		}); err != nil {
+			log.Fatal().Err(err).Msg("dc-simulator integration mode failed")
+		}
+		return
+	}
 
 	if *handshakePath == "" {
 		log.Fatal().Msg("--handshake (or DC_SIM_HANDSHAKE) is required")
@@ -89,6 +119,28 @@ func main() {
 	if err := run(*handshakePath, *bind, *port, load, *noFarEnd, devicePlane{play: *playDevices, publishLog: *publishLog}); err != nil {
 		log.Fatal().Err(err).Msg("dc-simulator exited")
 	}
+}
+
+// runLoRaWAN is the integration mode: one run of uplinks, a summary line on stdout, and an exit
+// status that says only whether the run could be made. Whether the platform ANSWERED as expected is
+// for the caller to judge from the summary, because a refusal (a bad token) is a result here, not
+// a failure.
+func runLoRaWAN(c lorawan.Config) error {
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	sum, err := lorawan.Run(ctx, c)
+	if err != nil {
+		return err
+	}
+	out, err := json.Marshal(sum)
+	if err != nil {
+		return err
+	}
+	fmt.Println(string(out))
+	if sum.Errors > 0 {
+		return fmt.Errorf("%d request(s) did not get an answer: %s", sum.Errors, sum.FirstError)
+	}
+	return nil
 }
 
 // devicePlane is the --play-devices choice and its publish log.

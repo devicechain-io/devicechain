@@ -80,6 +80,11 @@ Consulte [Multitenencia](./multi-tenancy.md).
   cliente y un secreto por un token de acceso de 5 minutos (la concesión OAuth `client_credentials`), sin token de
   actualización y sin el inicio de sesión de ninguna persona. Una cuenta tiene exactamente los permisos de sus roles, su
   secreto solo se guarda como un resumen con clave, y lo que hace se audita con su propio nombre.
+- **Integraciones de entrada.** Un servidor de red LoRaWAN o un remitente de webhook se autentica con un token
+  bearer por integración, generado por el servidor, mostrado una sola vez y almacenado solo como un resumen con clave. El
+  token se comprueba antes de leer el cuerpo y otra vez cuando se procesa el evento. Habla en nombre de todos los
+  dispositivos de sus tipos en alcance que tengan un alias, así que limita bien el alcance de una
+  [integración](../guides/inbound-integrations.md#trust) y rota su token si pudo filtrarse.
 - **Inicio de sesión único.** Un inquilino puede exigir el inicio de sesión mediante su propio proveedor de identidad. Consulte
   [Inicio de sesión único](./single-sign-on.md).
 - **Agentes de IA.** El [servidor MCP](./mcp.md) opcional llama a la plataforma con el token del propio llamador. No tiene ningún token

@@ -79,19 +79,20 @@ If you scale a service out, set tier ceilings for the number of replicas you run
 
 ### When ingest can admit a tenant above its ceiling {#ingest-above-ceiling}
 
-Within one `event-sources` replica, a tenant's ingest ceiling applies to each of three allowances separately, not to the tenant as a whole:
+Within one `event-sources` replica, a tenant's ingest ceiling applies to each of four allowances separately, not to the tenant as a whole:
 
 - **Live traffic**: what the tenant's devices send now over MQTT and NATS, including broker presence.
 - **Backlog**: messages the platform broker stored while `event-sources` was down or behind, metered by when they were sent as they drain. A tenant draining a backlog after an outage while also sending live can be admitted up to twice its ceiling until the drain catches up.
 - **HTTP ingest**: metered separately, so a tenant sending over HTTP and MQTT at once can be admitted up to its ceiling on each.
+- **Inbound integrations**: the traffic of [integrations](../guides/inbound-integrations.md#limits) (a LoRaWAN network server or a webhook) has an allowance of its own, so it never spends what the tenant's MQTT traffic spends. An array of N uplinks is charged N times. Over this allowance the route answers `202` and drops the message, rather than `429`.
 
-Within `event-sources`, a tenant can therefore be admitted at up to three times its ceiling on each replica, multiplied by the number of replicas as above. LwM2M and Sparkplug each meter the tenant on an allowance of their own, so with both running the worst case is five times its ceiling.
+Within `event-sources`, a tenant can therefore be admitted at up to four times its ceiling on each replica, multiplied by the number of replicas as above. LwM2M and Sparkplug each meter the tenant on an allowance of their own, so with both running the worst case is six times its ceiling.
 
 ### What the default allows {#ingest-default}
 
 The platform default is 1000 readings per second per tenant, with a burst of 2000. A reading is one stored value: one key of a measurement entry, one location or one alert. A message carrying 256 readings costs 256.
 
-A default high-availability installation on a cluster of three dedicated 4-vCPU/16 GB database nodes and three 4-vCPU/8 GB service nodes, with one `event-sources` replica, was measured storing 6,000 readings per second for 10 minutes, with `event-management` at two pods. At the default, a single tenant's own devices are admitted at most five times 1000, or 5,000 readings per second, even with a backlog draining and both edge services running, which is below that measurement. Without a drain or the edge services it is 2,000.
+A default high-availability installation on a cluster of three dedicated 4-vCPU/16 GB database nodes and three 4-vCPU/8 GB service nodes, with one `event-sources` replica, was measured storing 6,000 readings per second for 10 minutes, with `event-management` at two pods. At the default, a single tenant's own devices are admitted at most six times 1000, or 6,000 readings per second, even with a backlog draining, integrations sending and both edge services running, which is the rate that installation was measured storing, with no headroom. Without a drain or the edge services it is 3,000.
 
 That is not a guarantee in every setup:
 

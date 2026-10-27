@@ -39,8 +39,8 @@
       "translationSha256": "54653152e49c2b3e6387def98cd3279dbe39b18e56f5f8567f7646c5fe5a6746"
     },
     "concepts/governance.md": {
-      "sourceSha256": "1c6ea4b3d1227817246ada1b075a4bd118a2ef2f58d77df4d26ba621296072d0",
-      "translationSha256": "3e3ddf8b2e2b8ccdbe45aab32aeeb8bb3666f5dec166fec7ef3e18d58e66dd4b"
+      "sourceSha256": "77cf80ef5110941c976910e6d31542c179b2aa91c53c6dee489e8620da496a40",
+      "translationSha256": "1ec1f132249d15de56f2e76940057784b4190d2168cf6f4d99f876a1fa11f892"
     },
     "concepts/lwm2m.md": {
       "sourceSha256": "1cd975c5d5360cbcd0c0ba8babaf11bd67f77b400b64d86564ea9c2f9aba95d1",
@@ -83,8 +83,8 @@
       "translationSha256": "1647ce432c42bc809f3abca0358d48535ad1e61ab51a483179775215237a3bb9"
     },
     "concepts/tenant-tiers.md": {
-      "sourceSha256": "3c504e25cf83ebbab495b38ee65837c8ad572e5d2449f5daf006368e0b0fb901",
-      "translationSha256": "ca132ba1057958d2253b3891f2002cb8fb7a825f73da7d315021170869c06d56"
+      "sourceSha256": "7802abaf5c5e276298ef8366a01833636975840d56c5783622cca3e6a8e0f5ec",
+      "translationSha256": "9b853b8f95b72eff6d8ac95903f3d21054649ff7477852925eba57acd46622b2"
     },
     "concepts/white-labeling.md": {
       "sourceSha256": "0f40374af4d5457ba1420643dade0508901094853a245857c6c27ee0fcbadc8c",
@@ -167,8 +167,8 @@
       "translationSha256": "3814a6f85ad3b2821ecae0e6f39606d1851afc45bfaa32ac1d322fdb4bfa0f52"
     },
     "guides/connecting-a-device.md": {
-      "sourceSha256": "5840a31b88a06a3c6852f4e09a7610851346d79c15b2a0c7f17ebafaa7186857",
-      "translationSha256": "ad489fc864bd36ee7f016314090820641f4bfab9e77527cac14675608abfe9cd"
+      "sourceSha256": "ee2dcef5ad0dbf3d2c42c93371e76169877980fb5b168b5e1342f84abfa54d25",
+      "translationSha256": "d9091692135154fbdcb1eec400497cda639296e31d77facd4adf2c2eaf0b1fbb"
     },
     "guides/device-credentials.md": {
       "sourceSha256": "a74a0a42ad6376ec0de65d162af3ea523c6ac385e2dd96df41a68850701c5c73",
@@ -181,6 +181,10 @@
     "guides/importing-devices.md": {
       "sourceSha256": "4fc188fe82bb2cf9172557345925aaaad7411449aa2116898e2d1fd553e21d7a",
       "translationSha256": "8826d7f3c1c4b239c6fe483ec468c97ba39078ce9ab75cc4a52dff48ad447a86"
+    },
+    "guides/inbound-integrations.md": {
+      "sourceSha256": "2601f8f4e551676197994319b807e59c6123a006478a8f1d20329afeb2b45c21",
+      "translationSha256": "3c08059127cf9a240d277339b5987324362e070e2d5d65a70a6f000b10c8d709"
     },
     "guides/local-development.md": {
       "sourceSha256": "303dc72cc573da468c4d47a243f2fbc8b4827bdde42b398d66298eab95cde7c5",
@@ -235,16 +239,16 @@
       "translationSha256": "f58caa5bce7a1fb79df4f29042dd44a3c30a739ccbc52f33e1dfe153a342352f"
     },
     "reference/graphql-api.md": {
-      "sourceSha256": "0cc70e4632947b58665ce6564a4c592f4e5001e4ee120b00b4fbc55b4f7a8312",
-      "translationSha256": "e872a5c12285806bb7e82a69985ead0e9162f5fb6c0b38120a29dd04e4e2f71b"
+      "sourceSha256": "dc730a36f06d54beb37d77487377ac64def918ed04c123989c49f1edd959ed61",
+      "translationSha256": "deba77406222447640caa289d19628ff104489a1b7c8897ad483044093daaf34"
     },
     "reference/npm-packages.md": {
       "sourceSha256": "a2950de3cf160b9a6e5194c6f92f67c99edc262295fe328236b98224fdf73aa4",
       "translationSha256": "0bd6042326c009bc39bb1c428c61320c00b46259113be4d9773b9bd005a955c1"
     },
     "reference/transport-matrix.md": {
-      "sourceSha256": "104ad305f823ef48c463d7d3142d05f139a0e419e6050c121768b09a75a8549d",
-      "translationSha256": "9bbd87e9946f13848688c3e5ff39b33dcfd7b168d668ae7a93526d53746fd30b"
+      "sourceSha256": "c02b2436555151d5b22b9590a32b9783907034a27e2bb0dd24c5229fe610e1bf",
+      "translationSha256": "23426df0afe1e927a08415728d0c3982e7294b86cca45496f26de465ef5143ad"
     },
     "user-guide/administering-the-instance.md": {
       "sourceSha256": "98d2fc81eaa2eef3be3c5e36e6cf2f48bef167f3dfce5793b7c4065a030b3743",

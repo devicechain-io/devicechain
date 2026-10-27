@@ -49,6 +49,7 @@ title: 传输能力矩阵
 | MQTT（外部代理） | ○ | ○ | ◐ |
 | [Sparkplug B](../concepts/sparkplug.md) | ○ | ○ | ◐ |
 | [LwM2M](../concepts/lwm2m.md) | ◐ | ◐ | ◐ |
+| [入站集成](../guides/inbound-integrations.md)（LoRaWAN 网络服务器、webhook） | ○ | ○ | ◐ |
 
 ### MQTT：平台代理 {#mqtt--the-platform-broker}
 
@@ -273,6 +274,13 @@ Sparkplug 设备的身份来自它发布所用的主题，因此逐事件设备�
 | Bootstrap | ○ | 未实现；Bootstrap 服务器在规划中 |
 
 设备认证在 DTLS 握手时逐设备进行，使用预共享密钥。X.509 和原始公钥凭据在规划中。
+
+### 入站集成 {#inbound-integrations}
+
+ChirpStack 或 The Things Stack 这样的网络服务器，或任何能 `POST` JSON 或字节的系统，会把设备的数据转发到租户的[集成](../guides/inbound-integrations.md)。设备从不连接 DeviceChain。
+
+- **订阅 ◐**：平台把发送方提供的解码值存储为普通测量。它不是 `●` 的原因：租户超出接入额度时到达的消息会返回 `202` 并被丢弃，因为拒绝反正也会丢失它，而且有些网络服务器会暂停被拒绝的 webhook。因此发送方得不到通知。没有任何解码内容的上行会被确认，但不存储任何内容，并被计数。`IntegrationShedAccepted` 和 `IntegrationUndecodedHigh` 会报告这两种情况。
+- **写入 ○ / 读取 ○**：没有下行。发给最近一次通过集成上报的设备的命令**会被接受，然后失败**：在下一次投递扫描时以 `COMMAND_TRANSPORT_UNSUPPORTED` 失败，而不是一直等到过期。该失败是最终结果。从未上报过的设备没有记录的传输，因此它的命令会被下发并过期，直到它首次上报为止。由于记录的传输是设备最近一次上报所用的传输，同时通过 MQTT 发送的设备，在通过 MQTT 上报之后即可再次接收命令。
 
 ## 出站连接器 {#outbound-connectors}
 

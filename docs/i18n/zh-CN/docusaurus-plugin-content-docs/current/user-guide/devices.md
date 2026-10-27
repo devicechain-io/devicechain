@@ -36,9 +36,20 @@ DeviceChain 如何判断设备是否在线，参见[设备在线状态](/concept
 1. 选择 **Device type**（设备类型）。
 2. 输入 **Token**，或使用输入框旁的按钮，按安装环境的令牌模式生成一个。模式显示在输入框下方。`{slug}` 会根据你输入的名称自动填充。
 3. 输入 **Name**，也可以填写 **Description**。
-4. 选择 **Create device**（创建设备）。
+4. 如果设备不是自行连接，而是通过 LoRaWAN 网络服务器或其他发送方上报，请添加它的[别名](#aliases)。
+5. 选择 **Create device**（创建设备）。
 
-新设备在拥有凭据之前无法上报任何数据。请在它的 [Credentials](#credentials) 选项卡中添加凭据。
+自行连接的新设备在拥有凭据之前无法上报任何数据。请在它的 [Credentials](#credentials) 选项卡中添加凭据。通过[入站集成](/guides/inbound-integrations)上报的设备则需要别名。
+
+### 别名 {#aliases}
+
+**别名**是其他系统对设备的称呼，例如它的 LoRaWAN DevEUI。设备表单的 **Aliases** 字段最多可保存 8 个，每个方案一个值：
+
+1. 选择 **Add alias**。
+2. 选择方案：**LoRaWAN DevEUI**（16 位十六进制数字）、**Network server device id**（设备在 The Things Stack 中的设备 ID）或 **Custom scheme**（你自己的名称和值）。
+3. 输入值。无论你怎样书写，DevEUI 都以大写形式存储。
+
+一个别名只属于租户内的一台设备。入站集成通过别名找出消息所属的设备。参见[入站集成](/guides/inbound-integrations#aliases)。
 
 ## 批量创建设备 {#creating-many-devices-at-once}
 
@@ -280,3 +291,4 @@ HTTP 返回 `202` 或收到 MQTT 确认，只表示事件已被接收，并不�
 - [设备凭据](/guides/device-credentials)
 - [管理设备分配](/guides/managing-assignments)
 - [连接设备](/guides/connecting-a-device)
+- [入站集成](/guides/inbound-integrations)

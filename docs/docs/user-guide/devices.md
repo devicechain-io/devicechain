@@ -47,10 +47,26 @@ Choose **New device**.
    installation's token pattern. The pattern is shown under the field. `{slug}` is filled in
    from the name you enter.
 3. Enter a **Name** and, if you like, a **Description**.
-4. Choose **Create device**.
+4. If the device reports through a LoRaWAN network server or another sender instead of connecting
+   itself, add its [aliases](#aliases).
+5. Choose **Create device**.
 
-A new device cannot report anything until it has a credential. Add one from its
-[Credentials](#credentials) tab.
+A new device that connects itself cannot report anything until it has a credential. Add one from
+its [Credentials](#credentials) tab. A device that reports through an
+[inbound integration](/guides/inbound-integrations) needs an alias instead.
+
+### Aliases {#aliases}
+
+An **alias** is the name another system knows the device by, such as its LoRaWAN DevEUI. The
+**Aliases** field of the device form holds up to 8, one value per scheme:
+
+1. Choose **Add alias**.
+2. Pick the scheme: **LoRaWAN DevEUI** (16 hexadecimal digits), **Network server device id**
+   (the device id in The Things Stack), or **Custom scheme** (a name of your own and a value).
+3. Type the value. A DevEUI is stored in upper case whichever way you write it.
+
+An alias belongs to one device in the tenant. An inbound integration finds the device a message is
+about by its alias. See [Inbound integrations](/guides/inbound-integrations#aliases).
 
 ## Creating many devices at once
 
@@ -401,3 +417,4 @@ credentials were retired.
 - [Device credentials](/guides/device-credentials)
 - [Managing device assignments](/guides/managing-assignments)
 - [Connecting a device](/guides/connecting-a-device)
+- [Inbound integrations](/guides/inbound-integrations)

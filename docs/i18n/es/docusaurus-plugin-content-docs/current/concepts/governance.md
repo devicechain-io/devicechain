@@ -79,19 +79,20 @@ Si escalas un servicio horizontalmente, fija los techos del nivel según el núm
 
 ### Cuándo la ingesta puede admitir a un inquilino por encima de su techo {#ingest-above-ceiling}
 
-Dentro de una réplica de `event-sources`, el techo de ingesta de un inquilino se aplica por separado a cada una de tres asignaciones, no al inquilino en su conjunto:
+Dentro de una réplica de `event-sources`, el techo de ingesta de un inquilino se aplica por separado a cada una de cuatro asignaciones, no al inquilino en su conjunto:
 
 - **Tráfico en vivo**: lo que los dispositivos del inquilino envían ahora por MQTT y NATS, incluida la presencia del broker.
 - **Atraso (backlog)**: mensajes que el broker de la plataforma guardó mientras `event-sources` estaba caído o retrasado, medidos según cuándo se enviaron a medida que se drenan. Un inquilino que drena un atraso tras una caída mientras también envía en vivo puede ser admitido hasta al doble de su techo hasta que el drenaje se pone al día.
 - **Ingesta HTTP**: se mide por separado, así que un inquilino que envía por HTTP y por MQTT a la vez puede ser admitido hasta su techo en cada uno.
+- **Integraciones de entrada**: el tráfico de las [integraciones](../guides/inbound-integrations.md#limits) (un servidor de red LoRaWAN o un webhook) tiene una asignación propia, así que nunca gasta lo que gasta el tráfico MQTT del inquilino. Un arreglo de N uplinks se cobra N veces. Por encima de esta asignación, la ruta responde `202` y descarta el mensaje, en lugar de `429`.
 
-Dentro de `event-sources`, un inquilino puede ser admitido por tanto hasta el triple de su techo en cada réplica, multiplicado por el número de réplicas como se indica arriba. LwM2M y Sparkplug miden cada uno al inquilino con una asignación propia, así que con ambos en marcha el peor caso es cinco veces su techo.
+Dentro de `event-sources`, un inquilino puede ser admitido por tanto hasta cuatro veces su techo en cada réplica, multiplicado por el número de réplicas como se indica arriba. LwM2M y Sparkplug miden cada uno al inquilino con una asignación propia, así que con ambos en marcha el peor caso es seis veces su techo.
 
 ### Qué permite el valor por defecto {#ingest-default}
 
 El valor por defecto de la plataforma es de 1000 lecturas por segundo por inquilino, con una ráfaga de 2000. Una lectura es un valor almacenado: una clave de una entrada de medición, una ubicación o una alerta. Un mensaje que lleva 256 lecturas cuesta 256.
 
-Se midió que una instalación de alta disponibilidad por defecto, en un clúster de tres nodos de base de datos dedicados de 4 vCPU/16 GB y tres nodos de servicios de 4 vCPU/8 GB, con una réplica de `event-sources`, almacenaba 6000 lecturas por segundo durante 10 minutos, con `event-management` en dos pods. Con el valor por defecto, los dispositivos de un solo inquilino se admiten como máximo a cinco veces 1000, es decir, 5000 lecturas por segundo, incluso con un atraso vaciándose y ambos servicios de borde en marcha, lo que queda por debajo de esa medición. Sin atraso ni servicios de borde son 2000.
+Se midió que una instalación de alta disponibilidad por defecto, en un clúster de tres nodos de base de datos dedicados de 4 vCPU/16 GB y tres nodos de servicios de 4 vCPU/8 GB, con una réplica de `event-sources`, almacenaba 6000 lecturas por segundo durante 10 minutos, con `event-management` en dos pods. Con el valor por defecto, los dispositivos de un solo inquilino se admiten como máximo a seis veces 1000, es decir, 6000 lecturas por segundo, incluso con un atraso vaciándose, integraciones enviando y ambos servicios de borde en marcha, que es la tasa que esa instalación almacenó en la medición, sin margen. Sin atraso ni servicios de borde son 3000.
 
 No es una garantía en todas las configuraciones:
 
