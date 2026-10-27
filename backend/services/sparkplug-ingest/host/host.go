@@ -1549,29 +1549,25 @@ func (c *Client) rebirthWorker(ctx context.Context) {
 
 // publishRebirth publishes an NCMD "Node Control/Rebirth"=true to an edge node,
 // the Sparkplug mechanism for asking a node to re-emit its NBIRTH (and DBIRTHs)
-// after the Host detects a gap it cannot reconcile. Per Sparkplug B 3.0, NCMD is
-// QoS 0, retain false (only STATE is QoS 1 + retained). A rebirth for a node the
+// after the Host detects a gap it cannot reconcile. A rebirth for a node the
 // Host is not currently connected to is dropped (the node is re-validated on its
 // next birth after reconnect). The metric counts commands actually put on the
 // wire. It returns whether the command reached the wire, so the reconcile probe can
 // account for which nodes it actually asked to speak (a node whose rebirth was dropped
 // must not be force-disconnected for staying silent).
 func (c *Client) publishRebirth(group, node string) bool {
-	c.mu.Lock()
-	client := c.mc
-	c.mu.Unlock()
-	if client == nil || !client.IsConnected() {
-		log.Warn().Str("tenant", c.tenant).Str("group", group).Str("node", node).Msg("Not connected; dropping rebirth command.")
-		return false
-	}
-	topic := Namespace + "/" + group + "/" + string(NCMD) + "/" + node
+	target := CommandTarget{Group: group, Node: node}
 	payload, err := rebirthCommand(c.now().UnixMilli())
 	if err != nil {
 		log.Error().Err(err).Str("group", group).Str("node", node).Msg("Failed to encode rebirth command.")
 		return false
 	}
-	if err := mqtt.WaitTokenTimeout(client.Publish(topic, 0, false, payload), publishTimeout); err != nil {
-		log.Error().Err(err).Str("topic", topic).Msg("Failed to publish rebirth command.")
+	if err := c.publishCommand(target, payload); err != nil {
+		if errors.Is(err, errCommandNotConnected) {
+			log.Warn().Str("tenant", c.tenant).Str("group", group).Str("node", node).Msg("Not connected; dropping rebirth command.")
+		} else {
+			log.Error().Err(err).Str("topic", target.Topic()).Msg("Failed to publish rebirth command.")
+		}
 		return false
 	}
 	if c.metrics.RebirthRequests != nil {
@@ -1579,6 +1575,45 @@ func (c *Client) publishRebirth(group, node string) bool {
 	}
 	log.Warn().Str("tenant", c.tenant).Str("group", group).Str("node", node).Msg("Commanded Sparkplug node rebirth.")
 	return true
+}
+
+// errCommandNotConnected: the Host has no live broker session to publish a command on.
+var errCommandNotConnected = errors.New("no live broker session to publish a command on")
+
+// publishCommand puts one encoded NCMD/DCMD payload on the wire, on the Host Application session
+// this Client already holds. The topic comes from the target (node -> NCMD, device -> DCMD:
+// [tck-id-topics-ncmd-topic], [tck-id-topics-dcmd-topic]); the delivery flags are the spec's
+// fixed ones, QoS 0 and retain false ([tck-id-topics-ncmd-mqtt], [tck-id-topics-dcmd-mqtt],
+// [tck-id-payloads-ncmd-qos], [tck-id-payloads-ncmd-retain], [tck-id-payloads-dcmd-qos],
+// [tck-id-payloads-dcmd-retain]). They are constants, not parameters: no caller may choose them.
+func (c *Client) publishCommand(target CommandTarget, payload []byte) error {
+	c.mu.Lock()
+	client := c.mc
+	c.mu.Unlock()
+	if client == nil || !client.IsConnected() {
+		return errCommandNotConnected
+	}
+	return mqtt.WaitTokenTimeout(client.Publish(target.Topic(), commandQoS, commandRetain, payload), publishTimeout)
+}
+
+// SendMetricCommand writes one value to a metric the target's BIRTH declared. ref is what
+// validation resolved earlier; it is checked again here against the CURRENT table, so a rebirth
+// that landed in between re-addresses the command by the new alias (or refuses it if the metric
+// is gone or changed type) rather than sending a stale one. It returns the ref actually used and
+// the encoded payload that went on the wire (the evidence S4 keeps).
+func (c *Client) SendMetricCommand(ref MetricRef, value any) (MetricRef, []byte, error) {
+	cur, err := c.sessions.RevalidateMetric(ref)
+	if err != nil {
+		return MetricRef{}, nil, err
+	}
+	payload, err := BuildMetricCommand(cur, value, c.now().UnixMilli())
+	if err != nil {
+		return cur, nil, err
+	}
+	if err := c.publishCommand(cur.Target, payload); err != nil {
+		return cur, payload, err
+	}
+	return cur, payload, nil
 }
 
 // logRecord emits the structured per-message log line for the decode+log scope,
@@ -1651,12 +1686,18 @@ func (c *Client) setSessionIfLive(sessionCtx context.Context, client mqtt.Client
 // clearSession forgets client as the live connection, if it still is the live one, so
 // the rebirth publisher and Stop stop addressing a connection that has ended.
 func (c *Client) clearSession(client mqtt.Client) {
+	ended := false
 	c.mu.Lock()
 	if c.mc == client {
 		c.mc = nil
 		c.sessionTs = 0
+		ended = true
 	}
 	c.mu.Unlock()
+	if ended {
+		// The Host session is over: no node's metric table is addressable until its next birth.
+		c.sessions.EndHostSession()
+	}
 }
 
 // nextBackoff doubles the backoff up to the ceiling.

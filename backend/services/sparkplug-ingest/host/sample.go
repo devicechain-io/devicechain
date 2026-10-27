@@ -12,16 +12,25 @@ import (
 	sppb "github.com/devicechain-io/dc-sparkplug-ingest/proto"
 )
 
-// Sparkplug B datatype codes (Payload.Metric.datatype). Only the signed integer
-// codes need naming here: they decide whether the unsigned int_value/long_value
-// carrier is reinterpreted as two's-complement. Unsigned ints, floats and doubles
-// are read straight from whichever value arm is set; datatypeBoolean lives in
-// session.go (the rebirth command uses it).
+// Sparkplug B datatype codes (Payload.Metric.datatype; the Sparkplug 3.0.0 enum, section
+// "Datatype Details"). ONE vocabulary for ingest (which signed-integer codes reinterpret the
+// unsigned carrier) and for the command encoder (which scalar types it can carry).
 const (
-	datatypeInt8  = 1
-	datatypeInt16 = 2
-	datatypeInt32 = 3
-	datatypeInt64 = 4
+	datatypeInt8     = 1
+	datatypeInt16    = 2
+	datatypeInt32    = 3
+	datatypeInt64    = 4
+	datatypeUInt8    = 5
+	datatypeUInt16   = 6
+	datatypeUInt32   = 7
+	datatypeUInt64   = 8
+	datatypeFloat    = 9
+	datatypeDouble   = 10
+	datatypeBoolean  = 11
+	datatypeString   = 12
+	datatypeDateTime = 13
+	datatypeText     = 14
+	datatypeUUID     = 15
 )
 
 // Reasons a metric of an accepted message produced no Sample, for the samples-skipped counter.
