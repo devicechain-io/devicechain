@@ -287,7 +287,7 @@ title: 指标参考
 
 前缀：`devicechain_updatemanagement_`。该服务运行于 `default` 和 `full` 配置档；参见[空中（OTA）更新](../concepts/over-the-air-updates.md)。
 
-`update_download_grants_total{result="not_configured"}` 上升表示没有设置下载基址，任何设备都无法下载：`updates.downloadBaseUrl` 被设为空字符串，或实例没有 Ingress 可供推导。`update_attempts_expired_total` 统计更新期间失去响应的设备；处于 `UNKNOWN` 的更新会等待设备的清单报告或运维人员执行 `abandonUnknownUpdate`。
+`update_download_grants_total{result="not_configured"}` 上升表示没有设置下载基址，任何设备都无法下载：`updates.downloadBaseUrl` 被设为空字符串，或实例没有 Ingress 可供推导。`update_attempts_expired_total` 统计更新期间失去响应的设备；处于 `UNKNOWN` 的更新会等待设备的清单报告或运维人员执行 `abandonUnknownUpdate`。`UpdateDownloadsNotConfigured`、`UpdateReportsMostlyRefused`、`UpdateRolloutStepsFailing` 和 `UpdateAttemptsGoingUnknown` 监视这些指标；参见[空中升级告警](./observability.md#update-alerts)。
 
 | 指标 | 含义 |
 | --- | --- |
@@ -298,9 +298,9 @@ title: 指标参考
 | `update_downloads_total{result}` | 制品下载请求，按结果分类：`served`、`aborted`（客户端离开或传输中途无法读取对象），或在发送任何字节前被拒绝的原因（`capability_malformed`、`capability_invalid`、`capability_expired`、`stale`、`gone`、`range_not_satisfiable`、`busy`、`device_disabled`、`error`）。`capability_invalid` 速率上升说明有人在猜测。 |
 | `update_reports_rejected_total{reason}` | update-management 在应用前拒绝的设备消息：`malformed`、`unattributable`、`throttled` 和 `device_disabled`（设备已被停用）。 |
 | `update_rollout_dispatches_total{result}` | 设备组发布对设备作出的决定：`dispatched`（已分配更新，或按其已有的同一制品分配计入），或 `skipped`（被分配规则拒绝：不存在、已停用、不兼容、正忙于另一项更新）。 |
-| `update_rollout_step_failures_total` | 失败并留待下一轮处理的发布步骤。持续上升说明发布没有推进（无法访问 device-management，或数据库出错）。 |
+| `update_rollout_step_failures_total{stage}` | 留待下一轮处理的发布驱动失败：`step`（某个发布的步骤失败：数据库错误、制品上无法读取的兼容配置文档，或因 device-management 不可达、未为 update-management 配置而导致所有设备查询失败）或 `list`（查询运行中发布失败，因此没有任何发布被推进）。持续上升说明发布没有推进。 |
 | `update_rollout_transitions_total{to}` | 服务自行改变状态的发布：`completed`、`paused_failure_threshold` 或 `paused_artifact_not_assignable`（制品被停用或失去要求的签名）。 |
-| `update_reports_total{verdict}` | 更新进度和清单报告，按更新状态机给出的结论分类：`APPLIED`，或未应用的原因（`DUPLICATE`、`STALE_ATTEMPT`、`DIGEST_MISMATCH`、`WRONG_COMPONENT`、`REGRESSION`、`UNCONFIRMED`、`NOT_CANCELLABLE`、`LATE`、`CONFLICT`、`INVALID_ATTEMPT`、`WRONG_KIND`、`UNKNOWN_ASSIGNMENT`）。某一批设备的未应用速率上升说明设备端存在缺陷。 |
+| `update_reports_total{verdict,kind}` | 更新进度和清单报告，按 `kind`（`progress`、`inventory`）和更新状态机给出的结论分类：`APPLIED`，或未应用的原因（`DUPLICATE`、`STALE_ATTEMPT`、`DIGEST_MISMATCH`、`WRONG_COMPONENT`、`REGRESSION`、`UNCONFIRMED`、`NOT_CANCELLABLE`、`LATE`、`CONFLICT`、`INVALID_ATTEMPT`、`WRONG_KIND`、`UNKNOWN_ASSIGNMENT`）。某一批设备的未应用速率上升说明设备端存在缺陷；请按 `kind="progress"` 判断，因为没有任何分配的设备发送的清单报告，按设计会得到 `UNKNOWN_ASSIGNMENT` 或 `UNCONFIRMED`。 |
 
 ## 所有服务 {#every-service}
 

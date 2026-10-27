@@ -1,0 +1,401 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# promtool UNIT TESTS for the update-management (over-the-air updates) alerting rules.
+#
+# WHAT THESE ARE FOR, over and above the parse check
+#
+# The four rules in this group have no production baseline: every threshold and `for:` window
+# was ARGUED, so these tests are what pins a guess. Each rule is asserted in BOTH directions,
+# and the quiet cases carry as much weight as the firing ones:
+#
+#   - UpdateDownloadsNotConfigured must not fire on one device retrying once (14 minutes
+#     true against a 15m `for`), on other refusal results, or on another instance.
+#   - UpdateReportsMostlyRefused needs the ratio AND the volume floor, and must not count
+#     DUPLICATE / STALE_ATTEMPT / LATE as refusals, nor anything on kind=inventory. Delete the verdict exclusion and the
+#     benign-only case goes red; delete the floor and the trickle case goes red.
+#   - UpdateRolloutStepsFailing must not fire on a short blip that recovers.
+#   - UpdateAttemptsGoingUnknown must not fire below five, nor on TIMED_OUT.
+#
+# THE SERIES. All are counters registered at start and seeded at zero (CounterVecs seed every
+# label value), so a healthy instance reads 0 rather than absent.
+#
+#   - devicechain_updatemanagement_update_download_grants_total{result}
+#   - devicechain_updatemanagement_update_reports_total{verdict,kind}   (kind: progress, inventory)
+#   - devicechain_updatemanagement_update_rollout_step_failures_total{stage}   (step, list)
+#   - devicechain_updatemanagement_update_attempts_expired_total{state}   (TIMED_OUT, UNKNOWN)
+#
+# The annotations below are copied from the rendered rules, so a reworded runbook text is a
+# deliberate edit here too.
+#
+# Run via hack/check-prometheus-rules.sh, which renders the chart first and copies the
+# rendered group in beside this file as rendered-rules.yaml.
+rule_files:
+  - rendered-rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # ------------------------------------------------------------------
+  # Downloads: every request is refused not_configured and devices keep asking.
+  # Quiet before the 15m `for` has elapsed, firing after.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_updatemanagement_update_download_grants_total{namespace="dci-devicechain", pod="dc-update-management-aaaaa", result="not_configured"}'
+        values: '0+1x60'
+      - series: 'devicechain_updatemanagement_update_download_grants_total{namespace="dci-devicechain", pod="dc-update-management-aaaaa", result="granted"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: UpdateDownloadsNotConfigured
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: UpdateDownloadsNotConfigured
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: 'Devices are asking for update downloads and none can be granted'
+              description: 'Devices have been asking for a download for at least 15 minutes and update-management refused every request because updates.downloadBaseUrl is not configured, so no assigned update can be fetched. The key is derived from the ingress host when it is left unset; it is empty when it was set to an empty string or the instance has no ingress. Set functionalAreas.update-management.config.updates.downloadBaseUrl to the public URL devices reach the service at, and the pending assignments proceed at the next retry of each device. If downloads are deliberately off, cancel the assignments instead: a device keeps asking for as long as one is current.'
+
+  # ------------------------------------------------------------------
+  # Downloads: REALISTIC. One device re-asks every 5 minutes (a counter that steps by one
+  # every fifth sample). Quiet before the `for`, firing once it has held for 15m.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_updatemanagement_update_download_grants_total{namespace="dci-devicechain", pod="dc-update-management-aaaaa", result="not_configured"}'
+        values: '0 1 1 1 1 1 2 2 2 2 2 3 3 3 3 3 4 4 4 4 4 5 5 5 5 5 6 6 6 6 6 7 7 7 7 7 8 8 8 8 8 9 9 9 9 9 10 10 10 10 10 11 11 11 11 11 12 12 12 12 12'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: UpdateDownloadsNotConfigured
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: UpdateDownloadsNotConfigured
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: 'Devices are asking for update downloads and none can be granted'
+              description: 'Devices have been asking for a download for at least 15 minutes and update-management refused every request because updates.downloadBaseUrl is not configured, so no assigned update can be fetched. The key is derived from the ingress host when it is left unset; it is empty when it was set to an empty string or the instance has no ingress. Set functionalAreas.update-management.config.updates.downloadBaseUrl to the public URL devices reach the service at, and the pending assignments proceed at the next retry of each device. If downloads are deliberately off, cancel the assignments instead: a device keeps asking for as long as one is current.'
+
+  # ------------------------------------------------------------------
+  # Downloads: ONE refusal, then nothing (a single device retrying once). Quiet: the
+  # increase stays true for 14 minutes, one short of the `for`.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_updatemanagement_update_download_grants_total{namespace="dci-devicechain", pod="dc-update-management-aaaaa", result="not_configured"}'
+        values: '0x9 1x60'
+      - series: 'devicechain_updatemanagement_update_download_grants_total{namespace="dci-devicechain", pod="dc-update-management-aaaaa", result="granted"}'
+        values: '0+10x60'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: UpdateDownloadsNotConfigured
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: UpdateDownloadsNotConfigured
+        exp_alerts: []
+      - eval_time: 50m
+        alertname: UpdateDownloadsNotConfigured
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # Downloads: healthy. Grants succeed; other refusals (superseded, finished) climb
+  # but are not a configuration problem. Quiet.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_updatemanagement_update_download_grants_total{namespace="dci-devicechain", pod="dc-update-management-aaaaa", result="granted"}'
+        values: '0+20x60'
+      - series: 'devicechain_updatemanagement_update_download_grants_total{namespace="dci-devicechain", pod="dc-update-management-aaaaa", result="superseded"}'
+        values: '0+5x60'
+      - series: 'devicechain_updatemanagement_update_download_grants_total{namespace="dci-devicechain", pod="dc-update-management-aaaaa", result="finished"}'
+        values: '0+5x60'
+      - series: 'devicechain_updatemanagement_update_download_grants_total{namespace="dci-devicechain", pod="dc-update-management-aaaaa", result="not_configured"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: UpdateDownloadsNotConfigured
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # Downloads: another instance's namespace is misconfigured. Quiet: a rule object
+  # alerts on its own instance only.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_updatemanagement_update_download_grants_total{namespace="dci-other", pod="dc-update-management-aaaaa", result="not_configured"}'
+        values: '0+1x60'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: UpdateDownloadsNotConfigured
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # Reports: one build misreports. DIGEST_MISMATCH at 3/min against APPLIED at 5/min is
+  # 37% refused, over the 20-report floor. Fires after the `for`.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_updatemanagement_update_reports_total{namespace="dci-devicechain", pod="dc-update-management-aaaaa", verdict="APPLIED", kind="progress"}'
+        values: '0+5x60'
+      - series: 'devicechain_updatemanagement_update_reports_total{namespace="dci-devicechain", pod="dc-update-management-aaaaa", verdict="DIGEST_MISMATCH", kind="progress"}'
+        values: '0+3x60'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: UpdateReportsMostlyRefused
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: UpdateReportsMostlyRefused
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: 'More than a quarter of device update reports are being refused by the state machine'
+              description: 'For 15 minutes, over a quarter of the update progress reports devices send have been refused for a reason other than being duplicate, stale or late: a digest that is not the target''s, the wrong component, a sequence going backwards, a conflicting or malformed report. That is a device-side bug, usually one firmware build misreporting across a whole fleet. Read devicechain_updatemanagement_update_reports_total by verdict to see which refusal dominates, then the update-management log, which names the device and the attempt. Pause the rollout feeding that fleet while you look.'
+
+  # ------------------------------------------------------------------
+  # Reports: a busy healthy fleet. Duplicates, stale and late reports are 60% of the
+  # traffic and are NOT refusals; three genuine refusals a minute are about 1%. Quiet.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_updatemanagement_update_reports_total{namespace="dci-devicechain", pod="dc-update-management-aaaaa", verdict="APPLIED", kind="progress"}'
+        values: '0+100x60'
+      - series: 'devicechain_updatemanagement_update_reports_total{namespace="dci-devicechain", pod="dc-update-management-aaaaa", verdict="DUPLICATE", kind="progress"}'
+        values: '0+120x60'
+      - series: 'devicechain_updatemanagement_update_reports_total{namespace="dci-devicechain", pod="dc-update-management-aaaaa", verdict="STALE_ATTEMPT", kind="progress"}'
+        values: '0+60x60'
+      - series: 'devicechain_updatemanagement_update_reports_total{namespace="dci-devicechain", pod="dc-update-management-aaaaa", verdict="LATE", kind="progress"}'
+        values: '0+20x60'
+      - series: 'devicechain_updatemanagement_update_reports_total{namespace="dci-devicechain", pod="dc-update-management-aaaaa", verdict="DIGEST_MISMATCH", kind="progress"}'
+        values: '0+3x60'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: UpdateReportsMostlyRefused
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # Reports: only benign verdicts, in huge ratio to APPLIED. Quiet: proves the benign
+  # set is excluded from the numerator (NEGATIVE CONTROL for the verdict selector).
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_updatemanagement_update_reports_total{namespace="dci-devicechain", pod="dc-update-management-aaaaa", verdict="APPLIED", kind="progress"}'
+        values: '0+1x60'
+      - series: 'devicechain_updatemanagement_update_reports_total{namespace="dci-devicechain", pod="dc-update-management-aaaaa", verdict="DUPLICATE", kind="progress"}'
+        values: '0+30x60'
+      - series: 'devicechain_updatemanagement_update_reports_total{namespace="dci-devicechain", pod="dc-update-management-aaaaa", verdict="STALE_ATTEMPT", kind="progress"}'
+        values: '0+30x60'
+      - series: 'devicechain_updatemanagement_update_reports_total{namespace="dci-devicechain", pod="dc-update-management-aaaaa", verdict="LATE", kind="progress"}'
+        values: '0+30x60'
+      - series: 'devicechain_updatemanagement_update_reports_total{namespace="dci-devicechain", pod="dc-update-management-aaaaa", verdict="DIGEST_MISMATCH", kind="progress"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: UpdateReportsMostlyRefused
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # Reports: a high ratio on a trickle (15 reports in the window, 40% refused). Quiet:
+  # the volume floor is what keeps three reports from paging anyone.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_updatemanagement_update_reports_total{namespace="dci-devicechain", pod="dc-update-management-aaaaa", verdict="APPLIED", kind="progress"}'
+        values: '0+0.6x60'
+      - series: 'devicechain_updatemanagement_update_reports_total{namespace="dci-devicechain", pod="dc-update-management-aaaaa", verdict="CONFLICT", kind="progress"}'
+        values: '0+0.4x60'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: UpdateReportsMostlyRefused
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # Reports: an INVENTORY-ONLY fleet. Healthy devices reconnect and report what they run;
+  # with nothing assigned the machine answers UNKNOWN_ASSIGNMENT / UNCONFIRMED by design, at
+  # well over 2 a minute, with zero APPLIED. Quiet: only kind=progress is judged. NEGATIVE
+  # CONTROL: drop the kind selector and this case goes red (the rule it replaced fired here).
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_updatemanagement_update_reports_total{namespace="dci-devicechain", pod="dc-update-management-aaaaa", verdict="UNKNOWN_ASSIGNMENT", kind="inventory"}'
+        values: '0+3x60'
+      - series: 'devicechain_updatemanagement_update_reports_total{namespace="dci-devicechain", pod="dc-update-management-aaaaa", verdict="UNCONFIRMED", kind="inventory"}'
+        values: '0+2x60'
+      - series: 'devicechain_updatemanagement_update_reports_total{namespace="dci-devicechain", pod="dc-update-management-aaaaa", verdict="APPLIED", kind="progress"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: UpdateReportsMostlyRefused
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # Reports: no traffic at all (nothing in flight). Quiet, and the division by zero
+  # does not fire.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_updatemanagement_update_reports_total{namespace="dci-devicechain", pod="dc-update-management-aaaaa", verdict="APPLIED", kind="progress"}'
+        values: '0x60'
+      - series: 'devicechain_updatemanagement_update_reports_total{namespace="dci-devicechain", pod="dc-update-management-aaaaa", verdict="DIGEST_MISMATCH", kind="progress"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: UpdateReportsMostlyRefused
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # Rollouts: steps fail every pass. Quiet before the `for`, firing after.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_updatemanagement_update_rollout_step_failures_total{namespace="dci-devicechain", pod="dc-update-management-aaaaa", stage="step"}'
+        values: '0+10x60'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: UpdateRolloutStepsFailing
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: UpdateRolloutStepsFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: 'Group rollouts are failing to advance'
+              description: 'The rollout driver has been failing steps for at least 15 minutes and leaving them for the next pass, so group rollouts are not dispatching to new devices even though they read as running. The causes are a database error during a step, an unreadable compatible-profiles document on the artifact, or device-management being unreachable or not configured for update-management. The stage label of the counter tells a failed step from a failed query for the running rollouts. The update-management log names the failing step.'
+
+  # ------------------------------------------------------------------
+  # Rollouts: a device-management restart fails two passes, then recovers. Quiet,
+  # and clears.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_updatemanagement_update_rollout_step_failures_total{namespace="dci-devicechain", pod="dc-update-management-aaaaa", stage="step"}'
+        values: '0x9 2x60'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: UpdateRolloutStepsFailing
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: UpdateRolloutStepsFailing
+        exp_alerts: []
+      - eval_time: 50m
+        alertname: UpdateRolloutStepsFailing
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # Rollouts: the counter is flat at zero. Quiet.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_updatemanagement_update_rollout_step_failures_total{namespace="dci-devicechain", pod="dc-update-management-aaaaa", stage="list"}'
+        values: '0x60'
+      - series: 'devicechain_updatemanagement_update_rollout_step_failures_total{namespace="dci-devicechain", pod="dc-update-management-aaaaa", stage="step"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: UpdateRolloutStepsFailing
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # Unknown: a fleet goes quiet together, 10 attempts moved to UNKNOWN. Fires at once
+  # (no `for`), still firing while the 30m window holds it, clears after.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_updatemanagement_update_attempts_expired_total{namespace="dci-devicechain", pod="dc-update-management-aaaaa", state="UNKNOWN"}'
+        values: '0x9 10x60'
+      - series: 'devicechain_updatemanagement_update_attempts_expired_total{namespace="dci-devicechain", pod="dc-update-management-aaaaa", state="TIMED_OUT"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: UpdateAttemptsGoingUnknown
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: UpdateAttemptsGoingUnknown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: 'A burst of devices went quiet in the middle of an update'
+              description: 'Five or more update attempts in the last 30 minutes were moved to UNKNOWN because the device stopped reporting during installation or reboot. The update may or may not have been applied. A few are routine; a burst means devices are failing together, often on a faulty image. The threshold of five is an absolute count: edit the rule to suit the size of the fleet. Pause the rollout, check whether the affected devices report again (their inventory resolves the attempt) and, for any that never do, decide with abandonUnknownUpdate.'
+      - eval_time: 30m
+        alertname: UpdateAttemptsGoingUnknown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: 'A burst of devices went quiet in the middle of an update'
+              description: 'Five or more update attempts in the last 30 minutes were moved to UNKNOWN because the device stopped reporting during installation or reboot. The update may or may not have been applied. A few are routine; a burst means devices are failing together, often on a faulty image. The threshold of five is an absolute count: edit the rule to suit the size of the fleet. Pause the rollout, check whether the affected devices report again (their inventory resolves the attempt) and, for any that never do, decide with abandonUnknownUpdate.'
+      - eval_time: 50m
+        alertname: UpdateAttemptsGoingUnknown
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # Unknown: four attempts, one under the threshold of five. Quiet.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_updatemanagement_update_attempts_expired_total{namespace="dci-devicechain", pod="dc-update-management-aaaaa", state="UNKNOWN"}'
+        values: '0 0 0 0 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4'
+      - series: 'devicechain_updatemanagement_update_attempts_expired_total{namespace="dci-devicechain", pod="dc-update-management-aaaaa", state="TIMED_OUT"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: UpdateAttemptsGoingUnknown
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # Unknown: a flood of TIMED_OUT (devices never began installing). Quiet: only
+  # UNKNOWN means a lost device (NEGATIVE CONTROL for the state selector).
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_updatemanagement_update_attempts_expired_total{namespace="dci-devicechain", pod="dc-update-management-aaaaa", state="TIMED_OUT"}'
+        values: '0+20x60'
+      - series: 'devicechain_updatemanagement_update_attempts_expired_total{namespace="dci-devicechain", pod="dc-update-management-aaaaa", state="UNKNOWN"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: UpdateAttemptsGoingUnknown
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # Unknown: another instance's namespace. Quiet.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_updatemanagement_update_attempts_expired_total{namespace="dci-other", pod="dc-update-management-aaaaa", state="UNKNOWN"}'
+        values: '0+10x60'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: UpdateAttemptsGoingUnknown
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # No series at all. Quiet, for every rule.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series: []
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: UpdateDownloadsNotConfigured
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: UpdateReportsMostlyRefused
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: UpdateRolloutStepsFailing
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: UpdateAttemptsGoingUnknown
+        exp_alerts: []

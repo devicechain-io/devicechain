@@ -22,8 +22,14 @@ const RolloutInterval = 5 * time.Second
 type RolloutMetrics struct {
 	dispatches  *prometheus.CounterVec
 	transitions *prometheus.CounterVec
-	failures    prometheus.Counter
+	failures    *prometheus.CounterVec
 }
+
+// The stage label values of the failures counter.
+const (
+	rolloutStageStep = "step"
+	rolloutStageList = "list"
+)
 
 // rolloutTransitionLabels is every value of the transitions counter's label, so each series exists
 // at zero from startup.
@@ -41,9 +47,16 @@ func NewRolloutMetrics(ms *core.Microservice) *RolloutMetrics {
 			"Group rollouts the driver moved on its own: completed, or paused because the failure threshold was "+
 				"reached or the artifact stopped being assignable (retired, or its signer revoked).",
 			[]string{"to"}),
-		failures: ms.NewCounter("update_rollout_step_failures_total",
-			"Rollout steps that failed and were left for the next pass. A steady rise means rollouts are not "+
-				"advancing (device-management unreachable, or a database error)."),
+		failures: ms.NewCounterVec("update_rollout_step_failures_total",
+			"Rollout driver failures left for the next pass, by stage: step (one rollout's step failed: a database "+
+				"error, an unreadable compatible-profiles document on the artifact, or every device lookup failed "+
+				"because device-management is unreachable or not configured for update-management) or list (the "+
+				"query for the running rollouts failed, so no rollout was stepped). A steady rise means rollouts "+
+				"are not advancing.",
+			[]string{"stage"}),
+	}
+	for _, st := range []string{rolloutStageStep, rolloutStageList} {
+		m.failures.WithLabelValues(st).Add(0)
 	}
 	for _, r := range []string{"dispatched", "skipped"} {
 		m.dispatches.WithLabelValues(r).Add(0)
@@ -54,13 +67,23 @@ func NewRolloutMetrics(ms *core.Microservice) *RolloutMetrics {
 	return m
 }
 
+// ObserveListFailure records a failed query for the running rollouts. It is the model.Api
+// OnRolloutListFailed hook: with no list there is no step to fail, so without it the outage that
+// stops every rollout would not move the counter at all.
+func (m *RolloutMetrics) ObserveListFailure(error) {
+	if m == nil {
+		return
+	}
+	m.failures.WithLabelValues(rolloutStageList).Inc()
+}
+
 // Observe records one rollout step. It is the model.Api OnRolloutStep hook.
 func (m *RolloutMetrics) Observe(res model.RolloutStepResult, err error) {
 	if m == nil {
 		return
 	}
 	if err != nil {
-		m.failures.Inc()
+		m.failures.WithLabelValues(rolloutStageStep).Inc()
 		return
 	}
 	m.dispatches.WithLabelValues("dispatched").Add(float64(res.Dispatched))

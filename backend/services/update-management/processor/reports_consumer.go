@@ -76,6 +76,22 @@ var reportVerdicts = []ota.Verdict{
 	model.VerdictUnknownAssignment,
 }
 
+// reportKinds is every kind label value of the reports counter.
+var reportKinds = []string{reportKindProgress, reportKindInventory}
+
+const (
+	reportKindProgress  = "progress"
+	reportKindInventory = "inventory"
+)
+
+// reportKind is the counter's kind label for a decoded report's kind.
+func reportKind(kind string) string {
+	if kind == ota.KindInventory {
+		return reportKindInventory
+	}
+	return reportKindProgress
+}
+
 var grantResults = []string{"granted", model.GrantUnknownAssignment, model.GrantSuperseded, model.GrantFinished,
 	model.GrantCancelRequested, model.GrantArtifactGone, model.GrantNotConfigured, "error"}
 
@@ -85,10 +101,12 @@ func NewUpdateReportsMetrics(ms *core.Microservice) UpdateReportsMetrics {
 	m := UpdateReportsMetrics{
 		metrics: ms.NewProcessorMetrics("update_reports"),
 		reports: ms.NewCounterVec("update_reports_total",
-			"Update progress and inventory reports from devices, by the verdict the update state machine gave: "+
+			"Update progress and inventory reports from devices, by the report kind (progress or inventory) and the verdict the update state machine gave: "+
 				"APPLIED, or why it was not (DUPLICATE, STALE_ATTEMPT, DIGEST_MISMATCH, REGRESSION, UNCONFIRMED, LATE, "+
-				"CONFLICT, UNKNOWN_ASSIGNMENT, ...). A rising non-applied rate from one fleet is a device-side bug.",
-			[]string{"verdict"}),
+				"CONFLICT, UNKNOWN_ASSIGNMENT, ...). A rising non-applied rate from one fleet is a device-side bug. "+
+				"Inventory reports routinely answer UNKNOWN_ASSIGNMENT or UNCONFIRMED when a device reconnects with nothing to do, "+
+				"so judge a fleet on kind=progress.",
+			[]string{"verdict", "kind"}),
 		grants: ms.NewCounterVec("update_download_grants_total",
 			"Download capabilities requested by devices, by outcome: granted, or the reason the assignment could not be "+
 				"downloaded (superseded, finished, cancel_requested, artifact_unavailable, ...). not_configured means "+
@@ -108,7 +126,9 @@ func NewUpdateReportsMetrics(ms *core.Microservice) UpdateReportsMetrics {
 				"The device picks the state up at its next sync."),
 	}
 	for _, v := range reportVerdicts {
-		m.reports.WithLabelValues(string(v)).Add(0)
+		for _, k := range reportKinds {
+			m.reports.WithLabelValues(string(v), k).Add(0)
+		}
 	}
 	for _, r := range grantResults {
 		m.grants.WithLabelValues(r).Add(0)
@@ -248,7 +268,7 @@ func (rc *ReportsConsumer) handle(ctx context.Context, msg messaging.Message) {
 			rc.retryOrDrop(msgctx, msg, token, done, err, rep.Kind)
 			return
 		}
-		rc.reports.WithLabelValues(string(verdict)).Inc()
+		rc.reports.WithLabelValues(string(verdict), reportKind(rep.Kind)).Inc()
 		if verdict != ota.VerdictApplied && verdict != ota.VerdictDuplicate {
 			log.Debug().Str("device", token).Str("kind", rep.Kind).Str("verdict", string(verdict)).
 				Msg("Update report not applied.")

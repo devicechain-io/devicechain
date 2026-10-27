@@ -1,0 +1,173 @@
+{{/*
+Alerting rules for over-the-air updates (the update-management area).
+
+A Prometheus-Operator PrometheusRule CRD, gated on metrics.enabled + metrics.alerts (same
+operator assumption as the ServiceMonitor) AND on the area being part of the instance. The
+enabledAreas gate is DELIBERATE, unlike the sibling rule files that gate on alerts alone: the
+telemetry and ingest-only profiles do not run update-management, and a rule over series nobody
+exports evaluates empty and never fires while looking present and healthy. Every expression is scoped to THIS instance's namespace.
+
+WHY THESE FOUR. An update that does not arrive fails far from its cause: the device simply
+never reports, and the first human to notice is whoever asks why a fleet is still on the old
+version. Each alert below is a state the platform can SEE and no person is looking at.
+
+  - downloads that can never work (the download base is unset);
+  - a fleet whose reports the update state machine keeps refusing (a device-side bug);
+  - rollouts that are not advancing (their steps keep failing);
+  - a burst of attempts whose outcome nobody knows (devices gone quiet mid-install).
+
+The counters carry NO tenant label, by design (a tenant is unbounded cardinality), so every
+alert is instance-wide. Finding the tenant is the runbook's job, in the Updates screens.
+
+🔴 THRESHOLDS HERE ARE ARGUED, NOT MEASURED. Each is exercised in BOTH directions by
+hack/testdata/prometheus-rules-update-management-tests.yaml, which pins what a number
+excludes as well as what it catches.
+
+Series names: the service's subsystem is `updatemanagement`, so each exported name is the
+area prefix (devicechain, then updatemanagement) joined to the counter's own name.
+*/}}
+{{- if and .Values.metrics.enabled .Values.metrics.alerts (has "update-management" (splitList "," (include "devicechain.enabledAreas" .))) }}
+{{- $ns := include "devicechain.instanceNamespace" . }}
+{{- $id := .Values.instance.id }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: update-management
+  namespace: {{ $ns }}
+  labels:
+    {{- include "devicechain.instanceLabels" . | nindent 4 }}
+spec:
+  groups:
+    - name: devicechain.update-management
+      rules:
+        # A device asked for a download capability and was told the service has nowhere to
+        # serve it from. updates.downloadBaseUrl is unset (or was set to "" to switch
+        # downloads off, or there is no ingress to derive it from), so EVERY assignment in
+        # this instance is undownloadable. Nothing else shows it: assignments are created,
+        # devices are told, and then each one sits without progress until its deadline.
+        #
+        # 15m window against a 15m `for`: devices must still be asking after the first window
+        # has rolled. One device retrying once does not reach it; a standing misconfiguration
+        # does, because every assigned device retries.
+        - alert: UpdateDownloadsNotConfigured
+          expr: |
+            sum(increase(devicechain_updatemanagement_update_download_grants_total{namespace="{{ $ns }}", result="not_configured"}[15m])) > 0
+          for: 15m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "Devices are asking for update downloads and none can be granted"
+            description: >-
+              Devices have been asking for a download for at least 15 minutes and update-management
+              refused every request because updates.downloadBaseUrl is not configured, so no
+              assigned update can be fetched. The key is derived from the ingress host when it is
+              left unset; it is empty when it was set to an empty string or the instance has no
+              ingress. Set functionalAreas.update-management.config.updates.downloadBaseUrl to the
+              public URL devices reach the service at, and the pending assignments proceed at the
+              next retry of each device. If downloads are deliberately off, cancel the assignments
+              instead: a device keeps asking for as long as one is current.
+        # Reports the update state machine refuses, as a share of all PROGRESS reports.
+        #
+        # 🔑 kind="progress" ON BOTH SIDES. An inventory report is what a device sends on every
+        # reconnect to say what it is running, and when it has nothing assigned the machine
+        # answers UNKNOWN_ASSIGNMENT or UNCONFIRMED by design. A healthy fleet reconnecting
+        # therefore produces a stream of "refusals" with no progress report in sight, and without
+        # the kind selector this alert fires on it. The ratio is judged on progress alone.
+        #
+        # APPLIED is progress. DUPLICATE (a retransmission), STALE_ATTEMPT (an attempt that was
+        # superseded or cancelled) and LATE (progress after the attempt ended) are the ordinary
+        # residue of an unreliable network and an operator changing their mind, so they are
+        # excluded from the numerator. Everything else is a device saying something the state
+        # machine will not accept: a digest that is not the target's, the wrong component, a
+        # sequence going backwards, a conflicting report. A fleet doing that is running a
+        # device-side bug. The exclusion is a negative match, so a verdict added later counts as
+        # bad until somebody decides otherwise.
+        #
+        # 25% AND at least 20 reports in the window. The ratio alone fires on three reports of
+        # which one was odd; the volume floor alone fires on a busy healthy fleet. Both are
+        # needed, and the unit tests pin each.
+        - alert: UpdateReportsMostlyRefused
+          expr: |
+            (
+              sum(rate(devicechain_updatemanagement_update_reports_total{namespace="{{ $ns }}", kind="progress", verdict!~"APPLIED|DUPLICATE|STALE_ATTEMPT|LATE"}[15m]))
+              /
+              sum(rate(devicechain_updatemanagement_update_reports_total{namespace="{{ $ns }}", kind="progress"}[15m]))
+            ) > 0.25
+            and
+            sum(increase(devicechain_updatemanagement_update_reports_total{namespace="{{ $ns }}", kind="progress"}[15m])) >= 20
+          for: 15m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "More than a quarter of device update reports are being refused by the state machine"
+            description: >-
+              For 15 minutes, over a quarter of the update progress reports devices send have been refused
+              for a reason other than being duplicate, stale or late: a digest that is not the
+              target's, the wrong component, a sequence going backwards, a conflicting or
+              malformed report. That is a device-side bug, usually one firmware build misreporting
+              across a whole fleet. Read devicechain_updatemanagement_update_reports_total by
+              verdict to see which refusal dominates, then the update-management log, which names
+              the device and the attempt. Pause the rollout feeding that fleet while you look.
+        # Group rollouts whose driver steps keep failing.
+        #
+        # A step that fails is left for the next pass, so the counter climbs for as long as
+        # the cause lasts. The causes the service counts: a database error during a step; an
+        # unreadable compatible-profiles document on the artifact; every device read of a step
+        # failing because device-management is unreachable or not configured for
+        # update-management; and (stage="list") the query for the running rollouts failing, which
+        # stops every rollout. Meanwhile every
+        # rollout in the instance stands still and looks "in progress". The failure-threshold
+        # pause does not help, because it counts DEVICE failures and this is the driver itself
+        # failing.
+        #
+        # 15m `for` against a 15m window: a restart of device-management fails one pass or two
+        # and recovers well inside it.
+        - alert: UpdateRolloutStepsFailing
+          expr: |
+            sum(increase(devicechain_updatemanagement_update_rollout_step_failures_total{namespace="{{ $ns }}"}[15m])) > 0
+          for: 15m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "Group rollouts are failing to advance"
+            description: >-
+              The rollout driver has been failing steps for at least 15 minutes and leaving them
+              for the next pass, so group rollouts are not dispatching to new devices even though
+              they read as running. The causes are a database error during a step, an unreadable
+              compatible-profiles document on the artifact, or device-management being unreachable
+              or not configured for update-management. The stage label of the counter tells a
+              failed step from a failed query for the running rollouts. The update-management log
+              names the failing step.
+        # Attempts whose outcome is unknown.
+        #
+        # The deadline sweep moves an attempt to UNKNOWN when a device went quiet DURING
+        # installation or reboot: the update may or may not have been applied, and the platform
+        # will not guess. One or two are routine (a device lost power mid-flash). A burst is a
+        # fleet that stopped answering together, which is a bad image bricking devices, a
+        # network event, or an outage of the reports channel.
+        #
+        # Five in thirty minutes is an ABSOLUTE count, not a share of the fleet, and it is the knob
+        # to tune: a very large fleet loses five devices to ordinary power cuts and wants it
+        # raised, a small one wants it lowered. No `for`: the sweep has already waited out the attempt's own
+        # deadline, so the damage is minutes old when this counts it. TIMED_OUT is excluded on
+        # purpose; it means the device never began installing, which is not a lost device.
+        - alert: UpdateAttemptsGoingUnknown
+          expr: |
+            sum(increase(devicechain_updatemanagement_update_attempts_expired_total{namespace="{{ $ns }}", state="UNKNOWN"}[30m])) >= 5
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "A burst of devices went quiet in the middle of an update"
+            description: >-
+              Five or more update attempts in the last 30 minutes were moved to UNKNOWN because the
+              device stopped reporting during installation or reboot. The update may or may not
+              have been applied. A few are routine; a burst means devices are failing together,
+              often on a faulty image. The threshold of five is an absolute count: edit the rule to suit
+              the size of the fleet. Pause the rollout, check whether the affected devices
+              report again (their inventory resolves the attempt) and, for any that never do,
+              decide with abandonUnknownUpdate.
+{{- end }}
