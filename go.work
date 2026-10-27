@@ -71,4 +71,5 @@ use (
 	./backend/tools/rdbguard
 	./backend/tools/subconfirm
 	./deploy
+	./examples/ota-device
 )
