@@ -141,9 +141,10 @@ variable "server_image_tag" {
     that guessed one would install whatever that tag pointed at, so an empty tag with
     no digest is refused at plan time (the precondition on helm_release.nats).
 
-    🔴 A NEW TAG ROLLS THE BROKER. The image is part of the pod template, so moving
-    an instance to a new release restarts every server even when the binary did not
-    change, as a chart or image bump always has.
+    🔴 A new tag rolls the broker unless `server_image_digest` is set (dcctl sets it
+    for its own release); with a digest, only a new digest rolls it. The image is part
+    of the pod template, and the chart pulls repository@digest in place of the tag
+    when a digest is given.
   EOT
   type        = string
   default     = ""

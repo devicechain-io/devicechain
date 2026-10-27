@@ -1145,6 +1145,21 @@ jobs:
           fi
           echo "OK: ${REGISTRY}/device-management:${tag} resolves."
 
+          # The broker by the digest dcctl pins, asked ANONYMOUSLY, as a kubelet would. Not
+          # implied by the probe above: dc-nats-server is its own ghcr package, and a package a
+          # release pushes for the first time can default to private, which every fresh install
+          # would meet as ImagePullBackOff in the infrastructure apply, before any service.
+          btoken="$(curl -fsSL "https://ghcr.io/token?scope=repository:devicechain-io/dc-nats-server:pull&service=ghcr.io" | jq -r .token)"
+          bcode="$(curl -sSL -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer $btoken" \
+            -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json' \
+            "https://ghcr.io/v2/devicechain-io/dc-nats-server/manifests/${DC_BROKER_IMAGE_DIGEST}")"
+          if [ "$bcode" != "200" ]; then
+            echo "::error::dcctl would deploy ${REGISTRY}/dc-nats-server@${DC_BROKER_IMAGE_DIGEST}, which an anonymous pull cannot fetch (HTTP ${bcode}): the package may be private, or the digest absent."
+            exit 1
+          fi
+          echo "OK: ${REGISTRY}/dc-nats-server@${DC_BROKER_IMAGE_DIGEST} is pullable anonymously."
+
           # And the broker digest it pins is the one this release pushed. A dcctl that pinned
           # nothing would roll every broker on every release; one that pinned another digest
           # would install a broker this release did not build.

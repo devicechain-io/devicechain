@@ -70,6 +70,11 @@ func brokerImageVars(st *State) []string {
 // passed through rather than dropped, so the instance root's validation refuses it by name: it is
 // a defect in the release tooling, and pulling by tag instead would hide it behind a working
 // install.
+//
+// 🔴 A dcctl whose release differs from the instance's version pulls by tag, so running dcctl
+// releases alternately against one instance (an upgrade with one, a re-run with another) moves the
+// pod template between repository@digest and repository:tag each time and rolls the broker on
+// every flip, although the image is the same.
 func brokerImageDigest(st *State) string {
 	if DefaultBrokerImageDigest == "" || st.BuildImages ||
 		st.ImageRegistry != DefaultImageRegistry || st.ImageVersion != DefaultImageVersion {
