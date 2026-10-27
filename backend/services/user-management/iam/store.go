@@ -250,6 +250,15 @@ func (s *Store) DeleteIdentity(ctx context.Context, store secrets.SecretStore, i
 		// The second factor's sealed seed lives in the secrets table, which no foreign key
 		// reaches, so it is removed here, in this transaction. store may be nil only for an
 		// identity with no factor; one that has a factor is refused before anything is deleted.
+		// Lock the identity row first, as an enrolment does, so a delete and an enrolment for the
+		// same identity serialize: otherwise the enrolment's seed can be sealed after this
+		// transaction looked for factors, and survive the identity it belonged to. (Find, not
+		// First: an identity already gone is not an error here.)
+		var locked []Identity
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").
+			Where("id = ?", id.ID).Find(&locked).Error; err != nil {
+			return err
+		}
 		if _, err := removeMfaIn(ctx, tx, store, id.ID); err != nil {
 			return err
 		}

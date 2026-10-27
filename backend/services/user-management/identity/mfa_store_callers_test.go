@@ -27,7 +27,8 @@ func enrollFactor(t *testing.T, s *iam.Store, store secrets.SecretStore, identit
 	ctx := context.Background()
 	f, err := s.BeginMfaEnrollment(ctx, store, identityID, factorSeed)
 	require.NoError(t, err)
-	require.NoError(t, s.ConfirmMfaEnrollment(ctx, f.ID, 7, []string{"digest-1", "digest-2"}, time.Now()))
+	require.NoError(t, s.ConfirmMfaEnrollment(ctx, store, identityID,
+		func([]byte) (int64, bool, error) { return 7, true, nil }, []string{"digest-1", "digest-2"}, time.Now()))
 	return f
 }
 

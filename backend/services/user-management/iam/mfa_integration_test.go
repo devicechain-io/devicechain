@@ -78,7 +78,7 @@ func pgFactor(t *testing.T, s *Store, store secrets.SecretStore, email string) (
 	require.NoError(t, s.CreateIdentity(ctx, id))
 	f, err := s.BeginMfaEnrollment(ctx, store, id.ID, mfaSeed)
 	require.NoError(t, err)
-	require.NoError(t, s.ConfirmMfaEnrollment(ctx, f.ID, 100, []string{"c1", "c2", "c3"}, time.Now()))
+	require.NoError(t, s.ConfirmMfaEnrollment(ctx, store, id.ID, stepVerify(100, true), []string{"c1", "c2", "c3"}, time.Now()))
 	return id, f
 }
 
@@ -344,7 +344,7 @@ func TestMfaConcurrentVerifiesOfOneCodeHaveExactlyOneWinner(t *testing.T) {
 
 // A verifier error (or a missing seed) rolls the whole attempt back: nothing is charged and
 // nothing advances, and a factor that is not active is a loud error, not a quiet "locked".
-func TestMfaAFailedEvaluationRollsBackAndAMissingFactorIsLoud(t *testing.T) {
+func TestMfaAVerifierErrorKeepsItsChargeAndAMissingFactorIsLoud(t *testing.T) {
 	s, store := newMfaPostgres(t)
 	ctx := context.Background()
 	_, f := pgFactor(t, s, store, "err@example.com")
@@ -352,7 +352,8 @@ func TestMfaAFailedEvaluationRollsBackAndAMissingFactorIsLoud(t *testing.T) {
 	boom := errors.New("verifier failed")
 	_, err := s.MfaVerifyTOTP(ctx, store, f.ID, "192.0.2.1", func([]byte) (int64, bool, error) { return 0, false, boom })
 	require.ErrorIs(t, err, boom)
-	require.Zero(t, factorRow(t, s, f.ID).FailedCount, "an attempt that errored must not be charged")
+	require.Equal(t, 1, factorRow(t, s, f.ID).FailedCount,
+		"a verifier that errors after comparing must not be a free guess: the charge stands")
 
 	_, err = s.MfaVerifyTOTP(ctx, store, 999999, "192.0.2.1", func([]byte) (int64, bool, error) { return 0, false, nil })
 	require.ErrorIs(t, err, ErrMfaFactorNotFound)
@@ -488,4 +489,219 @@ func TestMfaDeletingAnIdentityLeavesNothingOnPostgres(t *testing.T) {
 		require.NoError(t, s.sys(ctx).Raw(q).Scan(&n).Error)
 		require.Zerof(t, n, "%s must be empty after the identity is deleted", table)
 	}
+}
+
+// One source must never be able to lock the PERSON out. Twenty-five concurrent attempts from ONE
+// address: exactly 5 are evaluated (the source threshold), and the 20 refused ones must not be
+// charged to the identity -- otherwise 5 + 15 more would arm the identity-wide lock from a single
+// IP. A second address is then still evaluated, and the factor is not locked.
+func TestMfaOneSourceCannotLockThePersonOut(t *testing.T) {
+	s, store := newMfaPostgres(t)
+	_, f := pgFactor(t, s, store, "onesrc@example.com")
+	a := &attempt{step: 999, ok: false}
+
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := 0; i < 25; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, err := a.run(t, s, store, f.ID, "203.0.113.50")
+			require.NoError(t, err)
+		}()
+	}
+	close(start)
+	wg.Wait()
+	require.EqualValues(t, 5, a.evaluated.Load(), "one source is evaluated 5 times and no more")
+	row := factorRow(t, s, f.ID)
+	require.Equal(t, 5, row.FailedCount, "refused attempts of a locked source must not be charged to the identity")
+	require.Nil(t, row.LockedUntil, "one address must not arm the identity-wide lock")
+
+	out, err := a.run(t, s, store, f.ID, "203.0.113.51")
+	require.NoError(t, err)
+	require.Equal(t, MfaAttemptInvalid, out, "another source is still evaluated")
+	right := &attempt{step: 101, ok: true}
+	out, err = right.run(t, s, store, f.ID, "203.0.113.51")
+	require.NoError(t, err)
+	require.Equal(t, MfaAttemptSuccess, out, "and the person can still sign in")
+}
+
+// Removal and attempts take the factor, its source rows and its secret in the SAME order, so
+// racing them neither deadlocks nor errors with anything but "no such factor".
+func TestMfaARemovalRacingAttemptsNeverDeadlocks(t *testing.T) {
+	s, store := newMfaPostgres(t)
+	ctx := context.Background()
+	for round := 0; round < 25; round++ {
+		id, f := pgFactor(t, s, store, fmt.Sprintf("race%d@example.com", round))
+		// Source rows exist before the race, so the removal and the attempts contend on them.
+		for i := 0; i < 6; i++ {
+			_, err := (&attempt{step: 999, ok: false}).run(t, s, store, f.ID, fmt.Sprintf("192.0.2.%d", i))
+			require.NoError(t, err)
+		}
+		var wg sync.WaitGroup
+		errs := make(chan error, 16)
+		start := make(chan struct{})
+		for i := 0; i < 6; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				<-start
+				a := &attempt{step: 999, ok: false}
+				_, err := a.run(t, s, store, f.ID, fmt.Sprintf("192.0.2.%d", i))
+				if err != nil && !errors.Is(err, ErrMfaFactorNotFound) {
+					errs <- err
+				}
+			}(i)
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			if _, err := s.RemoveMfa(ctx, store, id.ID); err != nil {
+				errs <- err
+			}
+		}()
+		close(start)
+		wg.Wait()
+		close(errs)
+		for err := range errs {
+			require.NoErrorf(t, err, "round %d", round)
+		}
+		var seeds int64
+		require.NoError(t, s.sys(ctx).Raw("SELECT COUNT(*) FROM secrets WHERE name = ?", f.SecretName).Scan(&seeds).Error)
+		require.Zero(t, seeds, "round %d: the seed must be gone", round)
+	}
+}
+
+// A removal that has deleted the factor but not yet committed must not be followed by a
+// regeneration that inserts codes for it. The regeneration locks the active factor row, so it
+// waits for the removal and then finds no factor.
+func TestMfaRegeneratingCodesCannotOutliveARacingRemoval(t *testing.T) {
+	s, store := newMfaPostgres(t)
+	ctx := context.Background()
+	id, _ := pgFactor(t, s, store, "regen@example.com")
+
+	removed := make(chan struct{})
+	release := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- s.sys(ctx).Transaction(func(tx *gorm.DB) error {
+			if _, err := removeMfaIn(ctx, tx, store, id.ID); err != nil {
+				return err
+			}
+			close(removed)
+			<-release
+			return nil
+		})
+	}()
+	<-removed
+
+	regen := make(chan error, 1)
+	go func() { regen <- s.ReplaceMfaRecoveryCodes(ctx, id.ID, []string{"x1", "x2"}) }()
+	time.Sleep(700 * time.Millisecond) // long enough for an unlocked regeneration to have finished
+	close(release)
+	require.NoError(t, <-done)
+	require.ErrorIs(t, <-regen, ErrMfaFactorNotFound, "the regeneration must see the removal")
+
+	var codes int64
+	require.NoError(t, s.sys(ctx).Model(&MfaRecoveryCode{}).Where("identity_id = ?", id.ID).Count(&codes).Error)
+	require.Zero(t, codes, "recovery codes must not outlive their factor")
+}
+
+// And a code that outlived its factor by any other route is not a way in: redemption requires an
+// ACTIVE factor.
+func TestMfaARecoveryCodeWithoutAnActiveFactorIsRefused(t *testing.T) {
+	s, store := newMfaPostgres(t)
+	ctx := context.Background()
+	id, f := pgFactor(t, s, store, "orphan@example.com")
+	ok, err := s.RedeemMfaRecoveryCode(ctx, id.ID, "c1", time.Now())
+	require.NoError(t, err)
+	require.True(t, ok, "the twin: with an active factor the code works")
+
+	require.NoError(t, s.sys(ctx).Exec("DELETE FROM iam_mfa_factors WHERE id = ?", f.ID).Error)
+	ok, err = s.RedeemMfaRecoveryCode(ctx, id.ID, "c2", time.Now())
+	require.NoError(t, err)
+	require.False(t, ok, "a recovery code with no active factor must not redeem")
+}
+
+// An identity delete racing an enrolment: the delete locks the identity row first (as the
+// enrolment does), so it cannot look for factors, miss the one being sealed, and leave its seed
+// behind.
+func TestMfaDeletingAnIdentityWaitsForARacingEnrollmentAndRemovesItsSeed(t *testing.T) {
+	s, store := newMfaPostgres(t)
+	ctx := context.Background()
+	id := &Identity{Email: "delrace@example.com", Enabled: true}
+	require.NoError(t, s.CreateIdentity(ctx, id))
+	loaded, err := s.IdentityByID(ctx, id.ID)
+	require.NoError(t, err)
+
+	begun := make(chan struct{})
+	release := make(chan struct{})
+	enrol := make(chan error, 1)
+	go func() {
+		enrol <- s.sys(ctx).Transaction(func(tx *gorm.DB) error {
+			if _, err := beginMfaEnrollmentIn(ctx, tx, store, id.ID, mfaSeed); err != nil {
+				return err
+			}
+			close(begun)
+			<-release
+			return nil
+		})
+	}()
+	<-begun
+	del := make(chan error, 1)
+	go func() { del <- s.DeleteIdentity(ctx, store, loaded) }()
+	time.Sleep(700 * time.Millisecond)
+	close(release)
+	require.NoError(t, <-enrol)
+	require.NoError(t, <-del)
+
+	var seeds, ids int64
+	require.NoError(t, s.sys(ctx).Raw("SELECT COUNT(*) FROM secrets WHERE name LIKE 'mfa/totp/%'").Scan(&seeds).Error)
+	require.NoError(t, s.sys(ctx).Model(&Identity{}).Where("id = ?", id.ID).Count(&ids).Error)
+	require.Zero(t, ids)
+	require.Zero(t, seeds, "the seed sealed by the racing enrolment must be removed with the identity")
+}
+
+// Failed confirmations race for the pending enrolment's budget: exactly 4 are charged as wrong
+// codes, the 5th voids it, and the rest find nothing pending.
+func TestMfaConcurrentWrongConfirmationsSpendTheBudgetOnceAndVoidIt(t *testing.T) {
+	s, store := newMfaPostgres(t)
+	ctx := context.Background()
+	id := &Identity{Email: "confirm@example.com", Enabled: true}
+	require.NoError(t, s.CreateIdentity(ctx, id))
+	f, err := s.BeginMfaEnrollment(ctx, store, id.ID, mfaSeed)
+	require.NoError(t, err)
+
+	var invalid, void, none, other atomic.Int64
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := 0; i < 12; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			err := s.ConfirmMfaEnrollment(ctx, store, id.ID, stepVerify(0, false), []string{"d"}, time.Now())
+			switch {
+			case errors.Is(err, ErrMfaCodeInvalid):
+				invalid.Add(1)
+			case errors.Is(err, ErrMfaEnrollmentVoid):
+				void.Add(1)
+			case errors.Is(err, ErrMfaEnrollmentNotPending):
+				none.Add(1)
+			default:
+				other.Add(1)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	require.Zero(t, other.Load())
+	require.EqualValues(t, 4, invalid.Load(), "four wrong codes are tolerated")
+	require.EqualValues(t, 1, void.Load(), "the fifth voids the enrolment")
+	require.EqualValues(t, 7, none.Load(), "the rest find nothing pending")
+	var seeds int64
+	require.NoError(t, s.sys(ctx).Raw("SELECT COUNT(*) FROM secrets WHERE name = ?", f.SecretName).Scan(&seeds).Error)
+	require.Zero(t, seeds, "a void enrolment's seed is removed")
 }

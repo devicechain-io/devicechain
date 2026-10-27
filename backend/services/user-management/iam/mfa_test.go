@@ -38,8 +38,13 @@ func enrolled(t *testing.T, s *Store, store secrets.SecretStore, email string) (
 	id := ssoIdentity(t, s, email)
 	f, err := s.BeginMfaEnrollment(ctx, store, id.ID, mfaSeed)
 	require.NoError(t, err)
-	require.NoError(t, s.ConfirmMfaEnrollment(ctx, f.ID, 100, []string{"d1", "d2", "d3"}, time.Now()))
+	require.NoError(t, s.ConfirmMfaEnrollment(ctx, store, id.ID, stepVerify(100, true), []string{"d1", "d2", "d3"}, time.Now()))
 	return id, f
+}
+
+// stepVerify is a scripted confirmation verifier: it ignores the seed and answers (step, ok).
+func stepVerify(step int64, ok bool) func([]byte) (int64, bool, error) {
+	return func([]byte) (int64, bool, error) { return step, ok, nil }
 }
 
 func TestTheSeedIsSealedWithItsRowAndNeverInIt(t *testing.T) {
@@ -135,13 +140,13 @@ func TestEnrollmentStatesAndExpiry(t *testing.T) {
 	require.EqualValues(t, 1, n)
 
 	// An expired pending factor cannot be confirmed; the twin below confirms in time.
-	require.ErrorIs(t, s.ConfirmMfaEnrollment(ctx, second.ID, 5, []string{"d"}, time.Now().Add(MfaEnrollmentTTL+time.Second)),
-		ErrMfaEnrollmentNotPending)
+	require.ErrorIs(t, s.ConfirmMfaEnrollment(ctx, store, id.ID, stepVerify(5, true), []string{"d"},
+		time.Now().Add(MfaEnrollmentTTL+time.Second)), ErrMfaEnrollmentNotPending)
 	has, err := s.MfaRecoveryCodesRemaining(ctx, id.ID)
 	require.NoError(t, err)
 	require.Zero(t, has, "a refused confirmation must store no recovery codes")
 
-	require.NoError(t, s.ConfirmMfaEnrollment(ctx, second.ID, 5, []string{"d1", "d2"}, time.Now()))
+	require.NoError(t, s.ConfirmMfaEnrollment(ctx, store, id.ID, stepVerify(5, true), []string{"d1", "d2"}, time.Now()))
 	f, err := s.MfaFactorFor(ctx, id.ID)
 	require.NoError(t, err)
 	require.Equal(t, MfaStateActive, f.State)
@@ -149,7 +154,8 @@ func TestEnrollmentStatesAndExpiry(t *testing.T) {
 	require.NotNil(t, f.ConfirmedAt)
 
 	// Confirming twice, and enrolling over an active factor, are both refused.
-	require.ErrorIs(t, s.ConfirmMfaEnrollment(ctx, second.ID, 6, []string{"x"}, time.Now()), ErrMfaEnrollmentNotPending)
+	require.ErrorIs(t, s.ConfirmMfaEnrollment(ctx, store, id.ID, stepVerify(6, true), []string{"x"}, time.Now()),
+		ErrMfaEnrollmentNotPending)
 	_, err = s.BeginMfaEnrollment(ctx, store, id.ID, mfaSeed)
 	require.ErrorIs(t, err, ErrMfaAlreadyEnrolled)
 	require.True(t, secretExists(t, store, MfaSeedRef(second.ID)), "a refused enrolment must not touch the active seed")
@@ -379,4 +385,64 @@ func TestTheChargeStatementsAreTheLockPolicy(t *testing.T) {
 		"the identity charge's literal lock expression has drifted from the policy constants")
 	require.Contains(t, chargeSourceSQL, mfaLockExpr("iam_mfa_source_failures.failed_count + 1", MfaSourceLockAfter),
 		"the source charge's literal lock expression has drifted from the policy constants")
+}
+
+// Failed confirmations are charged against the pending enrolment, and the fifth voids it, seed
+// included. The verifier runs on the sealed seed, inside the transaction.
+func TestAPendingEnrollmentIsVoidAfterFiveWrongConfirmations(t *testing.T) {
+	ctx := context.Background()
+	s, store := newSsoFixture(t)
+	id := ssoIdentity(t, s, "a@example.com")
+	f, err := s.BeginMfaEnrollment(ctx, store, id.ID, mfaSeed)
+	require.NoError(t, err)
+
+	var saw []byte
+	wrong := func(seed []byte) (int64, bool, error) { saw = append([]byte(nil), seed...); return 0, false, nil }
+	for i := 1; i <= 4; i++ {
+		err := s.ConfirmMfaEnrollment(ctx, store, id.ID, wrong, []string{"d"}, time.Now())
+		require.ErrorIs(t, err, ErrMfaCodeInvalid, "wrong code %d", i)
+		require.Equal(t, mfaSeed, saw, "the verifier must be handed the sealed seed")
+		row := factorRowSQLite(t, s, f.ID)
+		require.Equal(t, i, row.FailedCount, "each wrong code is charged")
+		require.Equal(t, MfaStatePending, row.State)
+	}
+	// The twin: a right code before the budget is spent still confirms.
+	// (Checked on a second identity so the void below is not pre-empted.)
+	id2 := ssoIdentity(t, s, "b@example.com")
+	_, err = s.BeginMfaEnrollment(ctx, store, id2.ID, mfaSeed)
+	require.NoError(t, err)
+	for i := 0; i < 4; i++ {
+		require.ErrorIs(t, s.ConfirmMfaEnrollment(ctx, store, id2.ID, wrong, []string{"d"}, time.Now()), ErrMfaCodeInvalid)
+	}
+	require.NoError(t, s.ConfirmMfaEnrollment(ctx, store, id2.ID, stepVerify(9, true), []string{"d"}, time.Now()),
+		"four wrong codes leave the enrolment confirmable")
+
+	// The fifth wrong code voids the first enrolment.
+	require.ErrorIs(t, s.ConfirmMfaEnrollment(ctx, store, id.ID, wrong, []string{"d"}, time.Now()), ErrMfaEnrollmentVoid)
+	has, err := s.HasMfaFactor(ctx, id.ID)
+	require.NoError(t, err)
+	require.False(t, has, "a void enrolment is removed")
+	require.False(t, secretExists(t, store, MfaSeedRef(f.ID)), "and so is its seed")
+	require.ErrorIs(t, s.ConfirmMfaEnrollment(ctx, store, id.ID, stepVerify(9, true), []string{"d"}, time.Now()),
+		ErrMfaEnrollmentNotPending, "even the right code cannot confirm a void enrolment")
+}
+
+func TestAConfirmationVerifierErrorIsChargedAndReturned(t *testing.T) {
+	ctx := context.Background()
+	s, store := newSsoFixture(t)
+	id := ssoIdentity(t, s, "a@example.com")
+	f, err := s.BeginMfaEnrollment(ctx, store, id.ID, mfaSeed)
+	require.NoError(t, err)
+	boom := errors.New("verifier failed")
+	err = s.ConfirmMfaEnrollment(ctx, store, id.ID, func([]byte) (int64, bool, error) { return 0, false, boom },
+		[]string{"d"}, time.Now())
+	require.ErrorIs(t, err, boom)
+	require.Equal(t, 1, factorRowSQLite(t, s, f.ID).FailedCount, "an erroring verifier must not be a free guess")
+}
+
+func factorRowSQLite(t *testing.T, s *Store, id uint) MfaFactor {
+	t.Helper()
+	var f MfaFactor
+	require.NoError(t, s.sys(context.Background()).First(&f, "id = ?", id).Error)
+	return f
 }

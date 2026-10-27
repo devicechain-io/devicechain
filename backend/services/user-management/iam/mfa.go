@@ -211,18 +211,26 @@ const replayCASSQL = "UPDATE iam_mfa_factors SET last_step = ?, failed_count = 0
 
 // MfaVerifyTOTP runs one TOTP attempt against an active factor, charge first.
 //
-// In ONE transaction: the identity-wide charge, the per-source charge, then the caller's verify
-// against the unsealed seed, then (only on a verified code) the replay compare-and-set. A
-// refusal at either charge returns MfaAttemptLocked WITHOUT evaluating the code, and the charge
-// that was made stands; a code that does not verify keeps its charge. The transaction holds the
-// factor's row lock throughout, which is what serializes concurrent attempts so that a burst of
-// N evaluates exactly as many as the thresholds leave free.
+// In ONE transaction: the factor row is locked, the SOURCE is charged, the identity is charged,
+// then the caller's verify runs against the unsealed seed, then (only on a verified code) the
+// replay compare-and-set. Locking the factor first is what serializes concurrent attempts, so a
+// burst of N evaluates exactly as many as the thresholds leave free.
 //
-// verify receives the cleartext seed (zeroed when it returns, so it must not keep it) and
-// returns the matched step. It is the caller's to run through the credential Checker; an error
-// from it, or from unsealing the seed, rolls the whole attempt back and is returned.
+// The source is charged BEFORE the identity, and a refused source returns MfaAttemptLocked
+// without touching the identity count: otherwise one address, locked out after 5 tries, would
+// keep feeding the identity-wide count with refused attempts and lock the person out of their own
+// factor. A refusal at either charge means the code is NOT evaluated, and the charge that was
+// made stands.
 //
-// sourceKey is MfaSourceKey of the client address.
+// The verifier contract: verify receives the cleartext seed (zeroed when it returns, so it must
+// not keep it) and returns the matched step. It is the caller's to run through the credential
+// Checker. A code that does not verify keeps its charge, and so does an ERROR from the verifier:
+// the charge is committed and the error returned, so a failing verifier cannot be used to guess
+// for free. Only a failure before the code was compared (the seed cannot be unsealed, the
+// database fails) rolls the attempt back.
+//
+// sourceKey is MfaSourceKey of the client address. Call this only for a challenge minted after
+// the password was verified: it is the second factor, not a login.
 func (s *Store) MfaVerifyTOTP(ctx context.Context, store secrets.SecretStore, factorID uint, sourceKey string,
 	verify func(seed []byte) (step int64, ok bool, err error)) (MfaAttemptOutcome, error) {
 	if sourceKey == "" || len(sourceKey) > mfaSourceKeySize {
@@ -232,27 +240,26 @@ func (s *Store) MfaVerifyTOTP(ctx context.Context, store secrets.SecretStore, fa
 		return MfaAttemptInvalid, errors.New("a TOTP attempt needs the secret store and a verifier")
 	}
 	outcome := MfaAttemptInvalid
+	var verifierErr error
 	err := s.sys(ctx).Transaction(func(tx *gorm.DB) error {
+		var locked []MfaFactor
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").
+			Where("id = ? AND state = ?", factorID, MfaStateActive).Find(&locked).Error; err != nil {
+			return err
+		}
+		if len(locked) == 0 {
+			return ErrMfaFactorNotFound
+		}
 		var counts []int
-		if err := tx.Raw(chargeFactorSQL, factorID).Scan(&counts).Error; err != nil {
+		if err := tx.Raw(chargeSourceSQL, factorID, sourceKey).Scan(&counts).Error; err != nil {
 			return err
 		}
 		if len(counts) == 0 {
-			// Refused: locked, or not an active factor. Tell the two apart so a missing factor
-			// is a loud error and not a quiet "locked".
-			var n int64
-			if err := tx.Model(&MfaFactor{}).Where("id = ? AND state = ?", factorID, MfaStateActive).
-				Count(&n).Error; err != nil {
-				return err
-			}
-			if n == 0 {
-				return ErrMfaFactorNotFound
-			}
 			outcome = MfaAttemptLocked
 			return nil
 		}
 		counts = counts[:0]
-		if err := tx.Raw(chargeSourceSQL, factorID, sourceKey).Scan(&counts).Error; err != nil {
+		if err := tx.Raw(chargeFactorSQL, factorID).Scan(&counts).Error; err != nil {
 			return err
 		}
 		if len(counts) == 0 {
@@ -273,7 +280,8 @@ func (s *Store) MfaVerifyTOTP(ctx context.Context, store secrets.SecretStore, fa
 			seed[i] = 0
 		}
 		if verr != nil {
-			return verr
+			verifierErr = verr // the charge stands: commit, then return it
+			return nil
 		}
 		if !ok {
 			outcome = MfaAttemptInvalid
@@ -299,6 +307,9 @@ func (s *Store) MfaVerifyTOTP(ctx context.Context, store secrets.SecretStore, fa
 	})
 	if err != nil {
 		return MfaAttemptInvalid, err
+	}
+	if verifierErr != nil {
+		return MfaAttemptInvalid, verifierErr
 	}
 	return outcome, nil
 }
@@ -393,32 +404,90 @@ func beginMfaEnrollmentIn(ctx context.Context, tx *gorm.DB, store secrets.Secret
 	return f, nil
 }
 
-// ConfirmMfaEnrollment activates a pending factor and stores its first recovery codes, in one
-// transaction. step is the TOTP step of the code the person just proved possession with: it is
-// recorded as the last accepted, so that same code cannot then sign in. recoveryDigests replace
-// any codes the identity held. It refuses (ErrMfaEnrollmentNotPending) a factor that is not
-// pending or whose MfaEnrollmentTTL has passed.
-func (s *Store) ConfirmMfaEnrollment(ctx context.Context, factorID uint, step int64, recoveryDigests []string,
-	now time.Time) error {
-	return s.sys(ctx).Transaction(func(tx *gorm.DB) error {
-		res := tx.Model(&MfaFactor{ID: factorID}).
-			Where("state = ? AND created_at > ?", MfaStatePending, now.Add(-MfaEnrollmentTTL)).
-			Updates(map[string]any{
-				"state": MfaStateActive, "last_step": step, "confirmed_at": now, "last_used_at": now,
-				"failed_count": 0, "locked_until": nil,
-			})
-		if res.Error != nil {
-			return res.Error
-		}
-		if res.RowsAffected == 0 {
-			return ErrMfaEnrollmentNotPending
-		}
-		var f MfaFactor
-		if err := tx.First(&f, "id = ?", factorID).Error; err != nil {
+// MfaConfirmBudget is how many wrong codes a pending enrolment tolerates before it is void.
+const MfaConfirmBudget = 5
+
+// ErrMfaCodeInvalid: the confirming code did not verify. The attempt was charged against the
+// pending enrolment.
+var ErrMfaCodeInvalid = errors.New("the confirmation code is not valid")
+
+// ErrMfaEnrollmentVoid: the pending enrolment used up its MfaConfirmBudget and was removed, seed
+// included. The person must begin again.
+var ErrMfaEnrollmentVoid = errors.New("too many wrong confirmation codes; the pending enrolment was cancelled")
+
+// ConfirmMfaEnrollment activates the identity's pending factor and stores its first recovery
+// codes, in one transaction. verify runs inside the transaction on the LOCKED pending row,
+// against the unsealed seed, and returns the TOTP step the person proved possession with; that
+// step is recorded as the last accepted so the same code cannot then sign in.
+//
+// Failed confirmations are charged against the pending enrolment: after MfaConfirmBudget wrong
+// codes (or verifier errors, which are charged too) the enrolment is void and removed with its
+// seed (ErrMfaEnrollmentVoid). A wrong code returns ErrMfaCodeInvalid. A factor that is not
+// pending, or whose MfaEnrollmentTTL has passed, is ErrMfaEnrollmentNotPending. recoveryDigests
+// replace any codes the identity held.
+func (s *Store) ConfirmMfaEnrollment(ctx context.Context, store secrets.SecretStore, identityID uint,
+	verify func(seed []byte) (step int64, ok bool, err error), recoveryDigests []string, now time.Time) error {
+	if store == nil || verify == nil {
+		return errors.New("confirming an enrolment needs the secret store and a verifier")
+	}
+	var result, verifierErr error
+	err := s.sys(ctx).Transaction(func(tx *gorm.DB) error {
+		var pending []MfaFactor
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("identity_id = ? AND state = ? AND created_at > ?", identityID, MfaStatePending,
+				now.Add(-MfaEnrollmentTTL)).Find(&pending).Error; err != nil {
 			return err
 		}
-		return replaceRecoveryCodes(tx, f.IdentityID, recoveryDigests)
+		if len(pending) == 0 {
+			result = ErrMfaEnrollmentNotPending
+			return nil
+		}
+		f := pending[0]
+		sealed, err := secrets.BindTx(store, tx)
+		if err != nil {
+			return err
+		}
+		seed, err := sealed.Resolve(ctx, MfaSeedRef(f.ID))
+		if err != nil {
+			return fmt.Errorf("unsealing the second-factor seed: %w", err)
+		}
+		step, ok, verr := verify(seed)
+		for i := range seed {
+			seed[i] = 0
+		}
+		if verr != nil || !ok {
+			// Charged either way. The budget is spent before the answer is given, so the
+			// last wrong code and the void are the same transaction.
+			if f.FailedCount+1 >= MfaConfirmBudget {
+				if _, err := removeMfaFactors(ctx, tx, sealed, identityID, false); err != nil {
+					return err
+				}
+				result = ErrMfaEnrollmentVoid
+			} else {
+				if err := tx.Model(&MfaFactor{ID: f.ID}).
+					Update("failed_count", gorm.Expr("failed_count + 1")).Error; err != nil {
+					return err
+				}
+				result = ErrMfaCodeInvalid
+			}
+			verifierErr = verr
+			return nil
+		}
+		if err := tx.Model(&MfaFactor{ID: f.ID}).Updates(map[string]any{
+			"state": MfaStateActive, "last_step": step, "confirmed_at": now, "last_used_at": now,
+			"failed_count": 0, "locked_until": nil,
+		}).Error; err != nil {
+			return err
+		}
+		return replaceRecoveryCodes(tx, identityID, recoveryDigests)
 	})
+	if err != nil {
+		return err
+	}
+	if verifierErr != nil {
+		return verifierErr
+	}
+	return result
 }
 
 // ReplaceMfaRecoveryCodes replaces every recovery code the identity holds, used or not, with the
@@ -426,12 +495,15 @@ func (s *Store) ConfirmMfaEnrollment(ctx context.Context, factorID uint, step in
 // way in that the factor's removal could not close.
 func (s *Store) ReplaceMfaRecoveryCodes(ctx context.Context, identityID uint, digests []string) error {
 	return s.sys(ctx).Transaction(func(tx *gorm.DB) error {
-		var n int64
-		if err := tx.Model(&MfaFactor{}).Where("identity_id = ? AND state = ?", identityID, MfaStateActive).
-			Count(&n).Error; err != nil {
+		// Lock the active factor row rather than counting it: a count is a snapshot, and a
+		// removal committing between the count and the insert would leave codes with no factor.
+		// Removal takes the same lock first, so the two serialize.
+		var active []MfaFactor
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").
+			Where("identity_id = ? AND state = ?", identityID, MfaStateActive).Find(&active).Error; err != nil {
 			return err
 		}
-		if n == 0 {
+		if len(active) == 0 {
 			return ErrMfaFactorNotFound
 		}
 		return replaceRecoveryCodes(tx, identityID, digests)
@@ -463,8 +535,12 @@ func (s *Store) RedeemMfaRecoveryCode(ctx context.Context, identityID uint, dige
 	if digest == "" {
 		return false, nil
 	}
+	// Only while the identity has an ACTIVE factor: a code that outlived its factor (a removal
+	// racing a regeneration) must not be a way in.
 	res := s.sys(ctx).Model(&MfaRecoveryCode{}).
 		Where("identity_id = ? AND digest = ? AND used_at IS NULL", identityID, digest).
+		Where("EXISTS (?)", s.sys(ctx).Model(&MfaFactor{}).Select("1").
+			Where("identity_id = ? AND state = ?", identityID, MfaStateActive)).
 		Update("used_at", now)
 	return res.RowsAffected == 1, res.Error
 }
@@ -520,16 +596,20 @@ func removeMfaIn(ctx context.Context, tx *gorm.DB, store secrets.SecretStore, id
 // as well, so the result does not depend on the database enforcing foreign keys.
 func removeMfaFactors(ctx context.Context, tx *gorm.DB, sealed secrets.SecretStore, identityID uint,
 	withCodes bool) (bool, error) {
+	// Lock order is factor, then its source rows, then its secret -- the order an attempt takes
+	// them in (MfaVerifyTOTP). Loading the factors without a lock and deleting the secret first
+	// is the inverse, and a removal racing an attempt would deadlock.
 	var factors []MfaFactor
-	if err := tx.Where("identity_id = ?", identityID).Find(&factors).Error; err != nil {
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("identity_id = ?", identityID).Find(&factors).Error; err != nil {
 		return false, err
 	}
 	for _, f := range factors {
-		if err := sealed.Delete(ctx, MfaSeedRef(f.ID)); err != nil {
-			return false, fmt.Errorf("removing the second-factor seed: %w", err)
-		}
 		if err := tx.Where("factor_id = ?", f.ID).Delete(&MfaSourceFailure{}).Error; err != nil {
 			return false, err
+		}
+		if err := sealed.Delete(ctx, MfaSeedRef(f.ID)); err != nil {
+			return false, fmt.Errorf("removing the second-factor seed: %w", err)
 		}
 	}
 	if len(factors) > 0 {
