@@ -372,6 +372,13 @@ type Tenant struct {
 	// Written only by Store.SetTenantSsoEnforced, never through the tenant update path.
 	SsoEnforced bool `gorm:"not null;default:false"`
 
+	// MfaRequired says the tenant's people must have signed in with a second factor: a password
+	// session without one is refused entry. Together with the tier's mfaRequired floor it forms
+	// the effective requirement (MfaEffectivelyRequired); the tenant can add to the floor and
+	// never subtract from it. Written only by Store.SetTenantMfaRequired, never through the
+	// tenant update path.
+	MfaRequired bool `gorm:"not null;default:false"`
+
 	// The ADR-077 lifecycle. A tenant is not deleted on the spot, it is PURGED: the row
 	// survives FOR AS LONG AS THE PURGE RUNS so its token stays taken, because the token
 	// is the isolation key every other area stores and a successor at a reused token

@@ -87,6 +87,7 @@ func newMintTestEnv(t *testing.T) *mintTestEnv {
 		&iam.TenantTier{}, &iam.Tenant{}, &iam.Role{}, &iam.Identity{}, &iam.Membership{}, &iam.IdentityLink{},
 		&iam.IdpConnection{}, &iam.IdpConnectionTenant{}, &iam.IdpConnectionDomain{}, &iam.IdpRoleMapping{}, &iam.SsoLinkRequest{},
 		&iam.OAuthClient{}, &rdb.AuditEvent{}, &iam.ServiceAccount{}, &iam.ServiceAccountSecret{},
+		&iam.MfaFactor{}, &iam.MfaSourceFailure{}, &iam.MfaRecoveryCode{},
 	))
 	rdbm := &rdb.RdbManager{Database: db}
 	store := iam.NewStore(rdbm)

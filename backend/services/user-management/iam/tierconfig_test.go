@@ -27,11 +27,11 @@ func TestTierConfigKeysCoverEveryDimension(t *testing.T) {
 	}
 	// Two keys per dimension (rate + burst), plus the standalone non-dimension keys: the
 	// shed priority, the HELD-command ceiling, the three geofence caps and the calculated-
-	// metrics ceiling and the integrations ceiling. This +7 is the
+	// metrics ceiling, the integrations ceiling and the MFA floor flag. This +8 is the
 	// guard that a standalone key is neither dropped nor accidentally duplicated per
 	// dimension, and bumping it is meant to be a conscious act: a key that lands without it
 	// fails here.
-	require.Len(t, TierConfigKeys(), len(dims)*2+7)
+	require.Len(t, TierConfigKeys(), len(dims)*2+8)
 }
 
 // TestTierConfigKeysMatchTheKnownDimensions is the half the test above cannot do.
@@ -73,6 +73,8 @@ func TestTierConfigKeysMatchTheKnownDimensions(t *testing.T) {
 		"calculatedMetricsPerProfile",
 		// The inbound-integrations ceiling — standalone, zero legal, default 5.
 		"integrationsPerTenant",
+		// The MFA floor — the one boolean key: a flag, not a ceiling, with no override column.
+		"mfaRequired",
 	}, TierConfigKeys())
 }
 

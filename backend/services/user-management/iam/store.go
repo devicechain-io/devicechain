@@ -12,6 +12,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/secrets"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -242,8 +243,25 @@ func (s *Store) ReplaceSystemRoles(ctx context.Context, id *Identity, roles []Ro
 // is gone, so nothing can match a token's epoch against it, and an identity created
 // again under the same email is a NEW row that BeforeCreate gives a fresh epoch —
 // so the old person's refresh tokens (keyed by email) do not come back with it.
-func (s *Store) DeleteIdentity(ctx context.Context, id *Identity) error {
+//
+// store is the secret store the identity's second-factor seed is sealed in (see RemoveMfa).
+func (s *Store) DeleteIdentity(ctx context.Context, store secrets.SecretStore, id *Identity) error {
 	return s.sys(ctx).Transaction(func(tx *gorm.DB) error {
+		// The second factor's sealed seed lives in the secrets table, which no foreign key
+		// reaches, so it is removed here, in this transaction. store may be nil only for an
+		// identity with no factor; one that has a factor is refused before anything is deleted.
+		// Lock the identity row first, as an enrolment does, so a delete and an enrolment for the
+		// same identity serialize: otherwise the enrolment's seed can be sealed after this
+		// transaction looked for factors, and survive the identity it belonged to. (Find, not
+		// First: an identity already gone is not an error here.)
+		var locked []Identity
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").
+			Where("id = ?", id.ID).Find(&locked).Error; err != nil {
+			return err
+		}
+		if _, err := removeMfaIn(ctx, tx, store, id.ID); err != nil {
+			return err
+		}
 		if err := tx.Model(id).Association("SystemRoles").Clear(); err != nil {
 			return err
 		}

@@ -128,5 +128,9 @@ var (
 		// and burst at which a tenant's devices may register themselves, the fourth
 		// governance dimension. Both columns NULL (inherit the tier, then the platform default).
 		NewTenantProvisioningGovernanceMigration(),
+		// Native multi-factor authentication for password sign-ins: the per-identity factor
+		// (its seed sealed in the secret store, never in this table), the per-source failure
+		// rows behind the lock, the single-use recovery codes, and iam_tenants.mfa_required.
+		NewMfaMigration(),
 	}
 )

@@ -21,6 +21,7 @@ import (
 
 	"errors"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/secrets"
 	"github.com/devicechain-io/dc-user-management/deadletters"
 	"github.com/devicechain-io/dc-user-management/iam"
 	"github.com/devicechain-io/dc-user-management/purge"
@@ -62,7 +63,16 @@ type Service struct {
 	// saKey is what service-account secrets are digested under (SetServiceAccountSecretKey).
 	// Nil refuses every mint rather than writing a digest nothing could verify.
 	saKey *credential.DeviceSecretKey
+
+	// secrets is the secret store an identity's second-factor seed is sealed in
+	// (SetSecretStore). Deleting an identity that has a factor needs it, and is refused
+	// without it rather than leaving the seed behind.
+	secrets secrets.SecretStore
 }
+
+// SetSecretStore installs the secret store second-factor seeds are sealed in. main wires it
+// beside the identity manager, which seals into the same store.
+func (s *Service) SetSecretStore(store secrets.SecretStore) { s.secrets = store }
 
 // SetViewerBaseline tells the service which authorities every enabled tenant member holds
 // without a role granting them. main wires it from the identity package, which owns the
