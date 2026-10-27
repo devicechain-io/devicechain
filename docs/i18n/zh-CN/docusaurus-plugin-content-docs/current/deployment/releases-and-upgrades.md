@@ -2119,7 +2119,7 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 
 ### v0.26.0：设备自行注册，前端迁移到 Traefik {#v0260-upgrade}
 
-`v0.26.0` 是从 `v0.25.2` 起的原地升级：先对集群运行 `dcctl install`，再对每个实例运行一次 `dcctl upgrade`，方法见[v0.17.0 的说明](#v0170-upgrade)。请给 `dcctl install` 传入集群安装时使用的设置（如 `--ha` 和 `--database-node-selector`），以及新的 `--version`。如果从 `v0.25.1` 或 `v0.25.0` 升级，请同时阅读中间各版本的说明。
+`v0.26.0` 是从 `v0.25.2` 起的原地升级：先对集群运行 `dcctl install`，再对每个实例运行一次 `dcctl upgrade`，方法见[v0.17.0 的说明](#v0170-upgrade)。请给 `dcctl install` 传入集群安装时使用的设置（如 `--kube-context`、`--ha`、`--compact` 和 `--database-node-selector`），以及新的 `--version`。如果从 `v0.25.1` 或 `v0.25.0` 升级，请同时阅读中间各版本的说明。
 
 ```bash
 dcctl install local --version v0.26.0
@@ -2127,9 +2127,11 @@ dcctl upgrade local devicechain --version v0.26.0 --dry-run
 dcctl upgrade local devicechain --version v0.26.0
 ```
 
+在承载两个 default 配置档实例的集群上，请给这条 `dcctl install` 加上 `--max-connections 700`。
+
 该版本带来[设备自注册](../guides/device-self-registration.md)、面向 LoRaWAN 网络服务器和 webhook 的[入站集成](../guides/inbound-integrations.md)、面向 Sparkplug B 节点的可选命令下行、[双重身份验证](#after-v0252-mfa)，以及从 ingress-nginx 到 Traefik 的迁移，并移除 MQTT 正文凭据的剥离。需要采取的行动，按执行顺序如下：
 
-- **如果集群承载两个 default 配置档的实例，请在升级前先加大数据库连接预算。** 新集群获得的预算现在是 `700`；用旧默认值安装的集群保持 `600`，第二个实例的升级可能被拒绝。请重新运行安装该集群时使用的 `dcctl install`，并加上 `--max-connections 700`：例如 `dcctl install local --max-connections 700`，如果集群安装时使用了 `--kube-context`、`--ha` 或 `--compact`，也一并带上。参见[下文关于 update-management 的说明](#v0260-updates)和[连接预算](./bootstrap.md#connection-budget)。
+- **如果集群承载两个 default 配置档的实例，请在升级前先加大数据库连接预算。** 新集群获得的预算现在是 `700`；用旧默认值安装的集群保持 `600`，第二个实例的升级可能被拒绝。请重新运行安装该集群时使用的 `dcctl install`，并加上 `--max-connections 700`：例如 `dcctl install local --max-connections 700`，以及安装时使用的其他标志，如 `--kube-context`、`--ha`、`--compact` 和 `--database-node-selector`。参见[下文关于 update-management 的说明](#v0260-updates)和[连接预算](./bootstrap.md#connection-budget)。
 - **如果你设置过 `functionalAreas.event-sources.config.capture.bodyCredential`，请删除它，** 并从脚本中移除 `--mqtt-body-credential`。参见[MQTT 正文凭据的剥离被移除](#after-v0252-body-credential)。
 - **检查所有用脚本管理自动注册配置的做法，** 并轮换每个现有配置的密钥。参见[自动注册配置](#self-registration-profiles)。
 - **登录的 API 客户端必须处理 `MFA_CHALLENGE`。** 参见[双重身份验证](#after-v0252-mfa)。
@@ -2235,7 +2237,7 @@ dcctl upgrade local devicechain --version v0.26.0
 
 DeviceChain 现在可以向 Sparkplug 节点和设备发送命令：写入一个指标、要求节点重新发布出生消息（rebirth），或重启它，命令通过平台已与你的代理建立的 Host Application 会话发布。它默认关闭，按数据源通过图表值中的 `commands.enabled` 开启（`dcctl` 不接受 Sparkplug 数据源，所以这是 Helm 值设置）。Sparkplug 没有命令确认机制，因此命令在节点之后报告了所请求的值时才算确认，节点没有报告的命令以超时而不是失败结束。写入仅限于数据源列出的指标，重启需要显式设置，熔断器会暂停其代理拒绝发布的数据源。数据源的代理凭据需要有在节点和设备命令主题上发布的权限。三个新告警分别涵盖未确认的命令、已打开的熔断器和内部命令失败：`SparkplugCommandsUnconfirmed`、`SparkplugCommandBreakerOpen` 和 `SparkplugCommandResponsesFailing`。
 
-对于 Sparkplug 数据源保持 `commands.enabled` 关闭的安装，没有任何变化。某个数据源开启它时，图表会自行设置 `command-delivery` 的能力标志；如果 `command-delivery` 没有部署，或者你手工设置了该标志，渲染会失败。
+对于 Sparkplug 数据源保持 `commands.enabled` 关闭的安装，没有任何变化。某个数据源开启它时，图表会自行设置 `command-delivery` 的能力标志；如果 `command-delivery` 没有部署，或者你手工设置了 `functionalAreas.command-delivery.config.sparkplugCommands`，渲染会失败。
 
 #### 计算指标 {#v0260-calculated-metrics}
 
@@ -2268,7 +2270,7 @@ DeviceChain 现在可以向 Sparkplug 节点和设备发送命令：写入一个
 
 - **代理滚动重启之后（包括这次升级），最后一个重启的服务器不领导任何流，** 发布确认的 p99 大约翻倍，直到领导权重新平衡。
 - **TLS 证书轮换会使代理重新加载，并断开大多数 MQTT 会话。** 设备会自行重连。
-- **入口控制器的滚动发布可能在 30 到 40 秒内丢弃约 5% 的请求。** 请在安静的时段进行。
+- **入口控制器的滚动发布会在 28 到 40 秒内丢弃约 5% 的请求。** 请在安静的时段进行。
 
 ### v0.25.2：服务令牌签发离开公共端口 {#v0252-upgrade}
 

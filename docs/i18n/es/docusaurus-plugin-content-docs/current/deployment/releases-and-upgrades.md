@@ -3934,7 +3934,7 @@ No hay que hacer nada.
 
 ### v0.26.0 — los dispositivos se registran solos y el front end pasa a Traefik {#v0260-upgrade}
 
-`v0.26.0` es una actualización in situ desde `v0.25.2`: `dcctl install` para el clúster y después un `dcctl upgrade` por cada instancia, como se describe [para v0.17.0](#v0170-upgrade). Pasa a `dcctl install` los ajustes con los que se instaló el clúster, como `--ha` y `--database-node-selector`, además del nuevo `--version`. Si vienes de `v0.25.1` o `v0.25.0`, lee también las notas de las versiones intermedias.
+`v0.26.0` es una actualización in situ desde `v0.25.2`: `dcctl install` para el clúster y después un `dcctl upgrade` por cada instancia, como se describe [para v0.17.0](#v0170-upgrade). Pasa a `dcctl install` los ajustes con los que se instaló el clúster, como `--kube-context`, `--ha`, `--compact` y `--database-node-selector`, además del nuevo `--version`. Si vienes de `v0.25.1` o `v0.25.0`, lee también las notas de las versiones intermedias.
 
 ```bash
 dcctl install local --version v0.26.0
@@ -3942,9 +3942,11 @@ dcctl upgrade local devicechain --version v0.26.0 --dry-run
 dcctl upgrade local devicechain --version v0.26.0
 ```
 
+En un clúster con dos instancias del perfil default, añade `--max-connections 700` a este `dcctl install`.
+
 La versión incluye el [autorregistro de dispositivos](../guides/device-self-registration.md), las [integraciones de entrada](../guides/inbound-integrations.md) para servidores de red LoRaWAN y webhooks, un canal de comandos opcional hacia nodos Sparkplug B, la [autenticación en dos pasos](#after-v0252-mfa) y el paso de ingress-nginx a Traefik. Elimina el filtro de credenciales en el cuerpo de MQTT. Lo que exige actuar, en el orden en que hacerlo:
 
-- **Un clúster con dos instancias del perfil default necesita un presupuesto de conexiones de base de datos mayor antes de actualizar.** El presupuesto de un clúster nuevo es ahora `700`; un clúster instalado con el valor anterior conserva `600`, y la actualización de la segunda instancia puede rechazarse. Vuelve a ejecutar el `dcctl install` con el que se instaló el clúster añadiendo `--max-connections 700`: por ejemplo `dcctl install local --max-connections 700`, más `--kube-context`, `--ha` o `--compact` si el clúster se instaló con ellos. Consulta [la nota de update-management más abajo](#v0260-updates) y [el presupuesto de conexiones](./bootstrap.md#connection-budget).
+- **Un clúster con dos instancias del perfil default necesita un presupuesto de conexiones de base de datos mayor antes de actualizar.** El presupuesto de un clúster nuevo es ahora `700`; un clúster instalado con el valor anterior conserva `600`, y la actualización de la segunda instancia puede rechazarse. Vuelve a ejecutar el `dcctl install` con el que se instaló el clúster añadiendo `--max-connections 700`: por ejemplo `dcctl install local --max-connections 700`, más los indicadores con los que se instaló, como `--kube-context`, `--ha`, `--compact` y `--database-node-selector`. Consulta [la nota de update-management más abajo](#v0260-updates) y [el presupuesto de conexiones](./bootstrap.md#connection-budget).
 - **Elimina `functionalAreas.event-sources.config.capture.bodyCredential` si lo fijaste** y quita `--mqtt-body-credential` de los scripts. Consulta [se elimina el filtro de credenciales en el cuerpo](#after-v0252-body-credential).
 - **Revisa todo lo que automatice perfiles de aprovisionamiento** y rota el secreto de cada perfil existente. Consulta [Perfiles de aprovisionamiento](#self-registration-profiles).
 - **Los clientes de API que inician sesión deben tratar `MFA_CHALLENGE`.** Consulta [Autenticación en dos pasos](#after-v0252-mfa).
@@ -4041,7 +4043,7 @@ partir de esta versión, así que una instancia que ejecuta el sistema estándar
   `update-management` es un servicio más que usa la base de datos, así que una instancia de perfil `default`
   reserva ahora 320 conexiones, frente a 280. El presupuesto de un clúster nuevo es ahora `700`, que admite dos
   instancias de perfil `default`. **Un clúster instalado con el valor anterior de `600` lo conserva**, y si
-  aloja dos instancias de perfil `default`, la actualización de la segunda puede rechazarse. Sube el presupuesto antes de actualizar volviendo a ejecutar el `dcctl install` con el que se instaló el clúster, añadiendo `--max-connections 700`: por ejemplo `dcctl install local --max-connections 700`, más `--kube-context`, `--ha` o `--compact` si el clúster se instaló con ellos.
+  aloja dos instancias de perfil `default`, la actualización de la segunda puede rechazarse. Sube el presupuesto antes de actualizar volviendo a ejecutar el `dcctl install` con el que se instaló el clúster, añadiendo `--max-connections 700`: por ejemplo `dcctl install local --max-connections 700`, más los indicadores con los que se instaló, como `--kube-context`, `--ha`, `--compact` y `--database-node-selector`.
   Consulta [el presupuesto de conexiones](./bootstrap.md#connection-budget), que también explica lo que cuesta
   subirlo: las instancias de la base de datos se reinician una a una.
 - **Si tu almacén de objetos es un volumen `ReadWriteOnce` en un clúster al que apuntaste `dcctl`, el servicio
@@ -4076,7 +4078,7 @@ Las actualizaciones quedan completas en esta versión más allá de entrar en el
 
 DeviceChain ya puede enviar comandos a nodos y dispositivos Sparkplug: escribir una métrica, pedir a un nodo que rehaga su nacimiento (rebirth) o reiniciarlo, publicados en la sesión de Host Application que la plataforma ya mantiene con tu broker. Está desactivado de forma predeterminada y se activa por fuente con `commands.enabled` en los valores del chart (`dcctl` no admite fuentes Sparkplug, así que es un ajuste de valores de Helm). Sparkplug no tiene acuse de recibo de comandos: un comando se confirma cuando el nodo informa después del valor pedido, y uno que el nodo no informa termina como tiempo agotado, no como fallo. Las escrituras se limitan a las métricas que lista una fuente, los reinicios requieren un ajuste explícito y un cortacircuitos pausa una fuente cuyo broker rechaza la publicación. La credencial de broker de la fuente necesita permiso para publicar en los temas de comandos de nodo y de dispositivo. Tres alertas nuevas cubren comandos sin confirmar, un cortacircuitos abierto y fallos internos de comandos: `SparkplugCommandsUnconfirmed`, `SparkplugCommandBreakerOpen` y `SparkplugCommandResponsesFailing`.
 
-No cambia nada en una instalación cuyas fuentes Sparkplug dejan `commands.enabled` desactivado. Cuando una fuente lo activa, el chart fija por sí mismo el indicador de capacidad de `command-delivery`; el renderizado falla si `command-delivery` no está desplegado y si fijas el indicador a mano.
+No cambia nada en una instalación cuyas fuentes Sparkplug dejan `commands.enabled` desactivado. Cuando una fuente lo activa, el chart fija por sí mismo el indicador de capacidad de `command-delivery`; el renderizado falla si `command-delivery` no está desplegado, o si fijas `functionalAreas.command-delivery.config.sparkplugCommands` a mano.
 
 #### Métricas calculadas {#v0260-calculated-metrics}
 
@@ -4109,7 +4111,7 @@ El broker es ahora la compilación propia de DeviceChain de `nats-server`, `dc-n
 
 - **Tras un reinicio progresivo del broker, incluida esta actualización, el último servidor reiniciado no lidera ningún stream,** y el p99 del acuse de publicación se duplica aproximadamente hasta que el liderazgo se reequilibra.
 - **Una rotación de certificado TLS hace que el broker se recargue y desconecta la mayoría de las sesiones MQTT.** Los dispositivos se reconectan solos.
-- **Un despliegue del controlador de ingress puede perder alrededor del 5 % de las solicitudes durante 30 a 40 segundos.** Hazlo en una ventana tranquila.
+- **Un despliegue del controlador de ingress pierde alrededor del 5 % de las solicitudes durante 28 a 40 segundos.** Hazlo en una ventana tranquila.
 
 ### v0.25.2 — la emisión de tokens de servicio sale del puerto público {#v0252-upgrade}
 

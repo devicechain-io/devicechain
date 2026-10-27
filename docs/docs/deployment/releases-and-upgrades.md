@@ -3664,7 +3664,7 @@ Nothing needs doing.
 
 `v0.26.0` is an in-place upgrade from `v0.25.2`: `dcctl install` for the cluster, then one `dcctl upgrade` for
 each instance, as described [for v0.17.0](#v0170-upgrade). Give `dcctl install` the settings the cluster was
-installed with, such as `--ha` and `--database-node-selector`, as well as the new `--version`. Coming from
+installed with, such as `--kube-context`, `--ha`, `--compact` and `--database-node-selector`, as well as the new `--version`. Coming from
 `v0.25.1` or `v0.25.0`, read the notes of the releases in between too.
 
 ```bash
@@ -3673,9 +3673,11 @@ dcctl upgrade local devicechain --version v0.26.0 --dry-run
 dcctl upgrade local devicechain --version v0.26.0
 ```
 
+On a cluster that holds two default-profile instances, add `--max-connections 700` to this `dcctl install`.
+
 The release ships [device self-registration](../guides/device-self-registration.md), [inbound integrations](../guides/inbound-integrations.md) for LoRaWAN network servers and webhooks, an opt-in command downlink for Sparkplug B nodes, [two-factor authentication](#after-v0252-mfa), and the move from ingress-nginx to Traefik. It removes the MQTT body-credential strip. What needs action, in the order to do it:
 
-- **A cluster that holds two default-profile instances needs a larger database connection budget before the upgrade.** The budget a new cluster gets is now `700`; a cluster installed with the earlier default keeps `600`, and the upgrade of the second instance can be refused. Re-run the `dcctl install` the cluster was installed with, adding `--max-connections 700`: for example `dcctl install local --max-connections 700`, plus `--kube-context`, `--ha` or `--compact` if the cluster was installed with them. See [the update-management note below](#v0260-updates) and [the connection budget](./bootstrap.md#connection-budget).
+- **A cluster that holds two default-profile instances needs a larger database connection budget before the upgrade.** The budget a new cluster gets is now `700`; a cluster installed with the earlier default keeps `600`, and the upgrade of the second instance can be refused. Re-run the `dcctl install` the cluster was installed with, adding `--max-connections 700`: for example `dcctl install local --max-connections 700`, plus the flags it was installed with, such as `--kube-context`, `--ha`, `--compact` and `--database-node-selector`. See [the update-management note below](#v0260-updates) and [the connection budget](./bootstrap.md#connection-budget).
 - **Delete `functionalAreas.event-sources.config.capture.bodyCredential` if you set it,** and remove `--mqtt-body-credential` from scripts. See [the body-credential strip is removed](#after-v0252-body-credential).
 - **Check anything that scripts provisioning profiles,** and rotate each existing profile's secret. See [Provisioning profiles](#self-registration-profiles).
 - **API clients that sign in must handle `MFA_CHALLENGE`.** See [Two-factor authentication](#after-v0252-mfa).
@@ -3772,7 +3774,7 @@ is upgraded. Nothing else about the upgrade changes. Check these before you star
   more service that uses the database, so one default-profile instance now reserves 320 connections,
   up from 280. The budget a new cluster gets is now `700`, which admits two default-profile instances.
   **A cluster installed with the earlier default of `600` keeps it**, and if it holds two default-profile
-  instances the upgrade of the second can be refused. Raise the budget before upgrading by re-running the `dcctl install` the cluster was installed with, adding `--max-connections 700`: for example `dcctl install local --max-connections 700`, plus `--kube-context`, `--ha` or `--compact` if the cluster was installed with them. See
+  instances the upgrade of the second can be refused. Raise the budget before upgrading by re-running the `dcctl install` the cluster was installed with, adding `--max-connections 700`: for example `dcctl install local --max-connections 700`, plus the flags it was installed with, such as `--kube-context`, `--ha`, `--compact` and `--database-node-selector`. See
   [the connection budget](./bootstrap.md#connection-budget), which also says what raising it costs: the database's instances restart one at a time.
 - **If your object store is a `ReadWriteOnce` volume on a cluster you pointed `dcctl` at, the service runs
   without a store.** Such a volume can be mounted by one service and the others already hold it, so
@@ -3806,7 +3808,7 @@ Updates are finished for this release beyond joining the default profile. A [ref
 
 DeviceChain can now send commands to Sparkplug nodes and devices: write a metric, ask a node to rebirth, or reboot it, published on the Host Application session the platform already holds with your broker. It is off by default and is enabled per source with `commands.enabled` in the chart values (`dcctl` does not take Sparkplug sources, so this is a Helm values setting). Sparkplug has no command acknowledgement, so a command is confirmed when the node later reports the requested value, and one the node does not report ends as a timeout, not a failure. Writes are limited to the metrics a source lists, reboots need an explicit setting, and a circuit breaker pauses a source whose broker refuses the publish. The source's broker credential needs permission to publish on the node and device command topics. Three new alerts cover unconfirmed commands, an open breaker and internal command failures: `SparkplugCommandsUnconfirmed`, `SparkplugCommandBreakerOpen` and `SparkplugCommandResponsesFailing`.
 
-Nothing changes for an install whose Sparkplug sources leave `commands.enabled` off. When a source turns it on, the chart sets the capability flag of `command-delivery` itself; the render fails if `command-delivery` is not deployed, and if you set the flag by hand.
+Nothing changes for an install whose Sparkplug sources leave `commands.enabled` off. When a source turns it on, the chart sets the capability flag of `command-delivery` itself; the render fails if `command-delivery` is not deployed, or if you set `functionalAreas.command-delivery.config.sparkplugCommands` by hand.
 
 #### Calculated metrics {#v0260-calculated-metrics}
 
@@ -3839,7 +3841,7 @@ The broker is now DeviceChain's own `nats-server` build, `dc-nats-server`: upstr
 
 - **After a rolling restart of the broker, including this upgrade, the last server restarted leads no streams,** and publish-acknowledgement p99 roughly doubles until leadership rebalances.
 - **A TLS certificate rotation makes the broker reload and disconnects most MQTT sessions.** Devices reconnect on their own.
-- **An ingress controller rollout can drop about 5% of requests for 30 to 40 seconds.** Run it in a quiet window.
+- **An ingress controller rollout drops about 5% of requests for 28 to 40 seconds.** Run it in a quiet window.
 
 ### v0.25.2 — the service-token mint leaves the public port {#v0252-upgrade}
 
