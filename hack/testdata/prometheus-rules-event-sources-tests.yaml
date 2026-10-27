@@ -467,3 +467,162 @@ tests:
       - eval_time: 40m
         alertname: MqttGatewayStreamUnbounded
         exp_alerts: []
+
+  # ==================================================================
+  # INBOUND INTEGRATIONS
+  # ==================================================================
+
+  # IntegrationAuthFailuresSustained. Healthy traffic: nothing refused. Quiet.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_integration_requests_total{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources", type="CHIRPSTACK_V4", result="accepted"}'
+        values: '0+20x60'
+      - series: 'devicechain_eventsources_integration_requests_total{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources", type="unknown", result="unauthorized"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: IntegrationAuthFailuresSustained
+        exp_alerts: []
+
+  # A switched-off integration is refused 100 times a minute. That is a decision, not a credential
+  # problem: quiet.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_integration_requests_total{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources", type="CHIRPSTACK_V4", result="disabled"}'
+        values: '0+100x60'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: IntegrationAuthFailuresSustained
+        exp_alerts: []
+
+  # A trickle of one wrong token a minute (a stale token on one device, say) stays under the
+  # threshold: quiet.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_integration_requests_total{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources", type="unknown", result="unauthorized"}'
+        values: '0+1x60'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: IntegrationAuthFailuresSustained
+        exp_alerts: []
+
+  # 🔴 A SPRAY OR A TOKEN NOBODY UPDATED: five refusals a minute from 10m on, some of them the
+  # budget answering for the integration. Quiet inside the pending period, firing after it.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_integration_requests_total{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources", type="unknown", result="unauthorized"}'
+        values: '0x10 5+5x40'
+      - series: 'devicechain_eventsources_integration_requests_total{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources", type="unknown", result="bad_auth_limited"}'
+        values: '0x10 2+2x40'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: IntegrationAuthFailuresSustained
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: IntegrationAuthFailuresSustained
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "Requests to an integration are being refused for a bad token"
+              description: "For at least 10 minutes, more than 30 requests in each 10 minutes to an inbound integration have been refused because the bearer token was wrong, the integration does not exist, or the integration's failure budget was spent. If a sender stopped delivering after you rotated an integration's token, update the token in the network server or webhook. If nothing of yours changed, someone who knows the URL is trying tokens: the integration's 'last authentication failure' time in the console shows which one, and the sprayed integration keeps serving senders that are already known."
+
+  # IntegrationShedAccepted. Nothing shed: quiet.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_integration_requests_total{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources", type="TTS_V3", result="shed_accepted"}'
+        values: '0x60'
+      - series: 'devicechain_eventsources_integration_uplinks_total{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources", result="shed"}'
+        values: '0x60'
+      - series: 'devicechain_eventsources_integration_uplinks_total{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources", result="published"}'
+        values: '0+50x60'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: IntegrationShedAccepted
+        exp_alerts: []
+
+  # 🔴 A TENANT OVER ITS CEILING from 10m on: requests answered 202 and discarded. Quiet inside the
+  # pending period, firing after it, and cleared once it stops.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_integration_requests_total{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources", type="TTS_V3", result="shed_accepted"}'
+        values: '0x10 3+3x25 78x30'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: IntegrationShedAccepted
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: IntegrationShedAccepted
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "Integration uplinks are being accepted and discarded at a tenant's ingest ceiling"
+              description: "For at least 10 minutes, uplinks from inbound integrations have been discarded because a tenant is over its ingest ceiling. They were answered 202 so the network server would not suspend its webhook, which means the sender believes they arrived and they did not. Raise the tenant's ingest ceiling, or reduce what the integration sends."
+      - eval_time: 60m
+        alertname: IntegrationShedAccepted
+        exp_alerts: []
+
+  # The same at the reading stage: uplinks shed one by one while requests are admitted.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_integration_uplinks_total{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources", result="shed"}'
+        values: '0x10 2+2x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: IntegrationShedAccepted
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "Integration uplinks are being accepted and discarded at a tenant's ingest ceiling"
+              description: "For at least 10 minutes, uplinks from inbound integrations have been discarded because a tenant is over its ingest ceiling. They were answered 202 so the network server would not suspend its webhook, which means the sender believes they arrived and they did not. Raise the tenant's ingest ceiling, or reduce what the integration sends."
+
+  # IntegrationUndecodedHigh. Mostly decoded: quiet however many are not.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_integration_uplinks_total{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources", result="undecoded"}'
+        values: '0+5x70'
+      - series: 'devicechain_eventsources_integration_uplinks_total{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources", result="published"}'
+        values: '0+100x70'
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: IntegrationUndecodedHigh
+        exp_alerts: []
+
+  # Mostly undecoded but only a handful of uplinks (a test device, a first connection): quiet.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_integration_uplinks_total{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources", result="undecoded"}'
+        values: '0+0.2x70'
+      - series: 'devicechain_eventsources_integration_uplinks_total{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources", result="published"}'
+        values: '0x70'
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: IntegrationUndecodedHigh
+        exp_alerts: []
+
+  # 🔴 THE CODEC IS MISSING on the sender's side: from 10m on, ten uplinks a minute carry nothing to
+  # store and two are stored. Quiet inside the window, firing once it has lasted.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_integration_uplinks_total{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources", result="undecoded"}'
+        values: '0x10 10+10x70'
+      - series: 'devicechain_eventsources_integration_uplinks_total{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources", result="published"}'
+        values: '0x10 2+2x70'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: IntegrationUndecodedHigh
+        exp_alerts: []
+      - eval_time: 80m
+        alertname: IntegrationUndecodedHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "Most integration uplinks carry nothing to store"
+              description: "For at least 30 minutes, more than half of the uplinks arriving over inbound integrations have had no decoded values to store. The network server forwards the raw frame but the device profile there has no payload codec configured (or the codec returns nothing), or a generic sender posts only text. Configure the codec in the network server; the integration's 'last undecoded' sample in the console shows a frame it could not read."

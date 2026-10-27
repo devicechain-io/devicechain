@@ -83,6 +83,9 @@ type HttpEventSource struct {
 	// request, which is what a header-timeout close looks like from the outside. nil
 	// disables the accounting.
 	earlyClose func(string)
+	// integrations is the inbound-integration route (http_integration.go), set by
+	// UseIntegrations before the source starts. nil answers 503 on that route.
+	integrations *IntegrationRoute
 }
 
 // Create a new HTTP event source based on the given configuration. instanceId is
@@ -143,6 +146,10 @@ func (es *HttpEventSource) handler() http.Handler {
 	// (ADR-006); the ServeMux only matches a non-empty segment, so a missing tenant
 	// — or an event addressed to a different instance — 404s.
 	mux.HandleFunc(fmt.Sprintf("POST /%s/{tenant}/events", es.InstanceId), es.handleEvent)
+	// The inbound integrations (a LoRaWAN network server or a webhook): authenticated by the
+	// integration's bearer token, read by its registered type. See http_integration.go.
+	mux.HandleFunc(fmt.Sprintf("POST /%s/{tenant}/integrations/{integration}", es.InstanceId), es.handleIntegration)
+	mux.HandleFunc(fmt.Sprintf("POST /%s/{tenant}/integrations/{integration}/{messageType}", es.InstanceId), es.handleIntegration)
 	return mux
 }
 

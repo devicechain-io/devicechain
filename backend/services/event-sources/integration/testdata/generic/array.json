@@ -1,0 +1,6 @@
+{
+  "readings": [
+    {"sensor": "pump-7", "ts": "2026-10-26T10:00:00Z", "temp": 21.5, "ok": true, "note": "fine"},
+    {"sensor": "pump-8", "ts": "2026-10-26T10:00:05Z", "temp": 19, "ok": false}
+  ]
+}

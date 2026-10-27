@@ -135,4 +135,45 @@ spec:
           annotations:
             summary: "An MQTT gateway stream has no size limit"
             description: "For at least 10 minutes the broker's MQTT gateway stream {{ "{{ $labels.stream }}" }} has had no size limit and event-sources could not set one. The broker creates these streams without a limit when the first MQTT device connects, and an unbounded one can fill the broker's storage and take the whole instance down. Check that the broker has storage free to reserve the limit and look in the event-sources log for 'Could not bound the MQTT gateway'. It clears on its own once the limit is set."
+        # Inbound integrations (a LoRaWAN network server or a webhook posting under a bearer token).
+        #
+        # IntegrationAuthFailuresSustained counts requests refused for a bad or unknown token, plus
+        # those refused because the integration's own failure budget was spent. A network server whose
+        # token was rotated and never updated looks exactly like this, and so does someone spraying
+        # tokens at a URL they know. Disabled integrations are NOT counted: switching one off is a
+        # decision. The series are exported at 0 from start, so the first failure after a restart is
+        # an increase.
+        - alert: IntegrationAuthFailuresSustained
+          expr: sum(increase(devicechain_eventsources_integration_requests_total{namespace="{{ $ns }}", result=~"unauthorized|bad_auth_limited"}[10m])) > 30
+          for: 10m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "Requests to an integration are being refused for a bad token"
+            description: "For at least 10 minutes, more than 30 requests in each 10 minutes to an inbound integration have been refused because the bearer token was wrong, the integration does not exist, or the integration's failure budget was spent. If a sender stopped delivering after you rotated an integration's token, update the token in the network server or webhook. If nothing of yours changed, someone who knows the URL is trying tokens: the integration's 'last authentication failure' time in the console shows which one, and the sprayed integration keeps serving senders that are already known."
+        # A tenant over its ingest ceiling is answered 202 on these routes, because a refusal would
+        # lose the message anyway and a network server may suspend the webhook for a while after one.
+        # So the data is accepted on paper and discarded here, and this is the only place it is seen.
+        - alert: IntegrationShedAccepted
+          expr: (sum(increase(devicechain_eventsources_integration_requests_total{namespace="{{ $ns }}", result="shed_accepted"}[10m])) > 0) or (sum(increase(devicechain_eventsources_integration_uplinks_total{namespace="{{ $ns }}", result="shed"}[10m])) > 0)
+          for: 10m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "Integration uplinks are being accepted and discarded at a tenant's ingest ceiling"
+            description: "For at least 10 minutes, uplinks from inbound integrations have been discarded because a tenant is over its ingest ceiling. They were answered 202 so the network server would not suspend its webhook, which means the sender believes they arrived and they did not. Raise the tenant's ingest ceiling, or reduce what the integration sends."
+        # An uplink the network server forwarded without decoding is accepted and stores nothing: the
+        # commonest way for an integration to look connected and be empty. More than half of at least
+        # 20 uplinks in half an hour means a codec is missing on the sender's side.
+        - alert: IntegrationUndecodedHigh
+          expr: (sum(increase(devicechain_eventsources_integration_uplinks_total{namespace="{{ $ns }}", result="undecoded"}[30m])) > 20) and (sum(increase(devicechain_eventsources_integration_uplinks_total{namespace="{{ $ns }}", result="undecoded"}[30m])) / sum(increase(devicechain_eventsources_integration_uplinks_total{namespace="{{ $ns }}"}[30m])) > 0.5)
+          for: 30m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "Most integration uplinks carry nothing to store"
+            description: "For at least 30 minutes, more than half of the uplinks arriving over inbound integrations have had no decoded values to store. The network server forwards the raw frame but the device profile there has no payload codec configured (or the codec returns nothing), or a generic sender posts only text. Configure the codec in the network server; the integration's 'last undecoded' sample in the console shows a frame it could not read."
 {{- end }}
