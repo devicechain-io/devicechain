@@ -59,5 +59,7 @@
   "integrationsPerTenantLabel": "Integrations per tenant",
   "integrationsPerTenantDescription": "How many inbound integrations (network servers and webhook senders, each with its own bearer token) a tenant at this tier may hold ({{min}}–{{max}}). 0 means none; blank inherits the platform default of 5.",
   "calculatedMetricsPerProfileDescription": "How many calculated metrics (computed from a formula over a reading's other metrics) one device profile of a tenant at this tier may publish ({{min}}–{{max}}). Each one stores another measurement for every reading. 0 turns them off; blank inherits the platform default, which is also off.",
-  "scalarInvalid": "{{label}} must be a whole number from {{min}} to {{max}}, or blank to inherit the platform default."
+  "scalarInvalid": "{{label}} must be a whole number from {{min}} to {{max}}, or blank to inherit the platform default.",
+  "mfaRequiredLabel": "Require two-factor authentication",
+  "mfaRequiredDescription": "Every tenant at this tier must use a second factor for password sign-ins. It is a floor: a tenant cannot turn it off. Leave it off to let each tenant decide."
 }

@@ -13,7 +13,7 @@ import { SectionPanel } from '@/components/ui/section-panel';
 import { useToast } from '@/components/ui/toast';
 import { serverErrorCode } from '@/i18n/signInError';
 import { resetIdentityMfa } from '@/lib/api/admin';
-import { MFA_CODE } from '@/lib/api/mfa';
+import { MFA_CODE } from '@/lib/mfaChallenge';
 import { errMessage } from '@/routes/common';
 
 // An identity's two-factor state on the operator's identity page, and the reset for a lost

@@ -5,7 +5,7 @@
 // signInError.ts (did the server EVALUATE the request, or did it never answer?), with the
 // codes this feature adds.
 import { GraphQLRequestError } from '@devicechain/client';
-import { MFA_CODE } from '@/lib/api/mfa';
+import { MFA_CODE } from '@/lib/mfaChallenge';
 import { serverErrorCode, serverRejectedRequest } from '@/i18n/signInError';
 
 // 🔴 THE ONE PLACE THIS FEATURE MATCHES PROSE. verifyMfa's per-source rate limit is the only

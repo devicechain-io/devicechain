@@ -193,11 +193,18 @@ const SESSION_EXPIRED_KEY = 'dc-session-expired';
  * (the server refused the refresh with SSO_REQUIRED), which a fresh password sign-in
  * cannot fix, so the login screen says so instead of "your session expired".
  */
-export type SessionEndReason = 'expired' | 'ssoRequired';
+export type SessionEndReason = 'expired' | 'ssoRequired' | 'mfaRequired' | 'mfaEnrollmentRequired';
+
+const REASON_FLAG: Record<SessionEndReason, string> = {
+  expired: '1',
+  ssoRequired: 'sso',
+  mfaRequired: 'mfa',
+  mfaEnrollmentRequired: 'mfa-enroll',
+};
 
 function flagSessionExpired(reason: SessionEndReason = 'expired') {
   try {
-    window.sessionStorage.setItem(SESSION_EXPIRED_KEY, reason === 'ssoRequired' ? 'sso' : '1');
+    window.sessionStorage.setItem(SESSION_EXPIRED_KEY, REASON_FLAG[reason]);
   } catch {
     // sessionStorage unavailable — the login notice is best-effort
   }
@@ -206,9 +213,10 @@ function flagSessionExpired(reason: SessionEndReason = 'expired') {
 export function consumeSessionExpired(): SessionEndReason | null {
   try {
     const v = window.sessionStorage.getItem(SESSION_EXPIRED_KEY);
-    if (v === '1' || v === 'sso') {
+    const reason = (Object.keys(REASON_FLAG) as SessionEndReason[]).find((r) => REASON_FLAG[r] === v);
+    if (reason) {
       window.sessionStorage.removeItem(SESSION_EXPIRED_KEY);
-      return v === 'sso' ? 'ssoRequired' : 'expired';
+      return reason;
     }
   } catch {
     // ignore
@@ -279,6 +287,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // which redirect to /login — instead of leaving a dead session in place to fire
   // failing requests and render a raw error.
   const expireTenant = useCallback((reason: SessionEndReason = 'expired') => {
+    // 🔴 Only forget the pair that is actually being expired. Another tab shares this storage:
+    // when it has since replaced the pair (it just turned two-factor on, which ends every
+    // other session and swaps in a fresh one), this tab's failed refresh of the OLD pair must
+    // not delete the new one. The newer pair is adopted instead, in memory, and is judged on
+    // its own at its next refresh.
+    const stored = readStored();
+    const mine = tokensRef.current;
+    if (stored && mine && stored.refreshToken !== mine.refreshToken) {
+      tokensRef.current = stored;
+      setTokens(stored);
+      return;
+    }
     flagSessionExpired(reason);
     applyTokens(null);
   }, [applyTokens]);
@@ -293,8 +313,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           return { accessToken: pair.accessToken, refreshToken: pair.refreshToken };
         },
         onEnd: (err) => {
+          const code = err !== undefined ? serverErrorCode(err) : undefined;
           expireTenant(
-            err !== undefined && serverErrorCode(err) === 'SSO_REQUIRED' ? 'ssoRequired' : 'expired',
+            code === 'SSO_REQUIRED'
+              ? 'ssoRequired'
+              : code === 'MFA_REQUIRED'
+                ? 'mfaRequired'
+                : code === 'MFA_ENROLLMENT_REQUIRED'
+                  ? 'mfaEnrollmentRequired'
+                  : 'expired',
           );
         },
       }),

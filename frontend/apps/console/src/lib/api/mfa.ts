@@ -16,56 +16,17 @@
 // and drops them on dismissal. They are never routed through useQuery, the cached resource
 // store, storage, a URL or a log. The status read carries no secret and is the only thing
 // here a screen may refetch.
-import { gql, GraphQLRequestError } from '@devicechain/client';
+import { gql } from '@devicechain/client';
 import { graphql } from '@/gql/user-management';
 import type { MfaStatusQuery, TenantMfaQuery } from '@/gql/user-management/graphql';
-import { serverErrorCode } from '@/i18n/signInError';
 import type { IdentityAuth } from '@/lib/api/user-management';
 
 export type MfaStatus = MfaStatusQuery['mfaStatus'];
 export type TenantMfa = TenantMfaQuery['tenant'];
 
-/** The error codes this feature adds, matched on `extensions.code` and never on the prose. */
-export const MFA_CODE = {
-  /** login held the sign-in for a code: ask for it. */
-  challenge: 'MFA_CHALLENGE',
-  /** The challenge lapsed or was used up: sign in again. */
-  challengeExpired: 'MFA_CHALLENGE_EXPIRED',
-  /** The tenant needs a second factor and this sign-in had none, but the account has one. */
-  required: 'MFA_REQUIRED',
-  /** The tenant needs a second factor and the account has none: send them to set one up. */
-  enrollmentRequired: 'MFA_ENROLLMENT_REQUIRED',
-  alreadyEnrolled: 'MFA_ALREADY_ENROLLED',
-  notEnrolled: 'MFA_NOT_ENROLLED',
-  /** Resetting a factor with failures on record needs a new password with it. */
-  resetNeedsPassword: 'MFA_RESET_NEEDS_PASSWORD',
-} as const;
-
-/** What login's MFA_CHALLENGE error carries in its extensions. */
-export interface MfaChallenge {
-  challenge: string;
-  /** RFC 3339; the challenge accepts attempts until then. */
-  expiresAt: string;
-  /** `TOTP` and `RECOVERY_CODE`. */
-  methods: string[];
-}
-
-/**
- * The challenge login held the sign-in for, or null when the error is anything else. The
- * handle is read from the error's extensions and nowhere else, and it never goes to a URL
- * or to storage.
- */
-export function mfaChallengeOf(err: unknown): MfaChallenge | null {
-  if (serverErrorCode(err) !== MFA_CODE.challenge) return null;
-  const ext = (err as GraphQLRequestError).errors?.[0]?.extensions as Record<string, unknown> | undefined;
-  const challenge = ext?.challenge;
-  const expiresAt = ext?.expiresAt;
-  if (typeof challenge !== 'string' || challenge === '' || typeof expiresAt !== 'string') return null;
-  const methods = Array.isArray(ext?.methods)
-    ? (ext.methods as unknown[]).filter((m): m is string => typeof m === 'string')
-    : [];
-  return { challenge, expiresAt, methods };
-}
+// The codes and the challenge reader live in lib/mfaChallenge.ts, which has no GraphQL
+// documents, so the sign-in screen can use them without loading every document in this file.
+export { MFA_CODE, mfaChallengeOf, type MfaChallenge } from '@/lib/mfaChallenge';
 
 // ── Enrolment ─────────────────────────────────────────────────────────────
 

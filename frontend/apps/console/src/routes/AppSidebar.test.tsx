@@ -123,6 +123,13 @@ describe('the Settings group', () => {
     expect(entry('Security')).toBeNull();
   });
 
+  // The page refuses a member limited to part of the tenant, so the entry is not advertised to one.
+  it('hides Security from a scoped member even with member:write', () => {
+    scope.value = ['customer:acme'];
+    renderWith(['member:write', 'member:read'], '/members');
+    expect(entry('Security')).toBeNull();
+  });
+
   // 🔴 The empty-group case. A group whose children are all filtered away must
   // disappear rather than sit there opening onto nothing — this is the failure a tab
   // strip would have had to re-derive, and it is why the group shape was chosen.

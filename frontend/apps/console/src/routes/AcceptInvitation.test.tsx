@@ -7,13 +7,14 @@
 
 import '@/i18n/config';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GraphQLRequestError } from '@devicechain/client';
 
 const h = vi.hoisted(() => ({
   acceptInvitation: vi.fn(),
   login: vi.fn(),
+  verifyMfa: vi.fn(),
   selectTenant: vi.fn(),
   identityToken: null as string | null,
   logout: vi.fn(),
@@ -23,6 +24,7 @@ vi.mock('@/auth/AuthProvider', () => ({
   useAuth: () => ({
     acceptInvitation: h.acceptInvitation,
     login: h.login,
+    verifyMfa: h.verifyMfa,
     selectTenant: h.selectTenant,
     logout: h.logout,
     identityToken: h.identityToken,
@@ -34,12 +36,18 @@ import AcceptInvitationPage from './AcceptInvitation';
 import { heldInvitation } from '@/lib/invitation';
 import { startSso } from '@/lib/sso';
 
+function Where() {
+  const loc = useLocation();
+  return <div data-testid="at">{loc.pathname + JSON.stringify(loc.state)}</div>;
+}
+
 function renderAt() {
   return render(
     <MemoryRouter initialEntries={['/invitation']}>
       <Routes>
         <Route path="/invitation" element={<AcceptInvitationPage />} />
         <Route path="/" element={<div>home</div>} />
+        <Route path="/security" element={<Where />} />
       </Routes>
     </MemoryRouter>,
   );
@@ -56,6 +64,7 @@ beforeEach(() => {
   window.sessionStorage.clear();
   h.acceptInvitation.mockReset();
   h.login.mockReset();
+  h.verifyMfa.mockReset();
   h.selectTenant.mockReset().mockResolvedValue(undefined);
   h.logout.mockReset().mockResolvedValue(undefined);
   vi.mocked(startSso).mockReset();
@@ -210,5 +219,75 @@ describe('accepting an invitation', () => {
     window.history.replaceState(null, '', '/invitation');
     renderAt();
     expect(screen.getByText(/This link is incomplete/)).toBeTruthy();
+  });
+});
+
+// An existing account with two-factor authentication on: its password is right, so login
+// holds the sign-in for a code, and the invitation is accepted as that account only after the
+// code passes. The tenant it joins may itself require a factor the account lacks.
+describe('accepting as an existing account with two-factor authentication', () => {
+  const challenge = (expiresAt = new Date(Date.now() + 300_000).toISOString()) =>
+    new GraphQLRequestError('mfa', 200, [
+      { message: 'mfa', extensions: { code: 'MFA_CHALLENGE', challenge: 'chal-9', expiresAt, methods: ['TOTP', 'RECOVERY_CODE'] } },
+    ]);
+  const enrollRequired = () =>
+    new GraphQLRequestError('x', 200, [{ message: 'x', extensions: { code: 'MFA_ENROLLMENT_REQUIRED' } }]);
+
+  const signInExisting = async () => {
+    window.history.replaceState(null, '', '/invitation#code=abc123');
+    renderAt();
+    fireEvent.click(screen.getByRole('radio', { name: 'I have an account' }));
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'ann@acme.example' } });
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'pw' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in and accept' }));
+    await screen.findByLabelText('Authenticator code');
+  };
+  const enterCode = () => {
+    fireEvent.change(screen.getByLabelText('Authenticator code'), { target: { value: '123456' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Verify' }));
+  };
+
+  it('asks for the code instead of "invalid credentials", then accepts as that account', async () => {
+    h.login.mockRejectedValue(challenge());
+    h.verifyMfa.mockResolvedValue(auth(['other']));
+    h.acceptInvitation.mockResolvedValue(auth(['oem']));
+    await signInExisting();
+    expect(screen.queryByText('Invalid email or password.')).toBeNull();
+    expect(h.acceptInvitation).not.toHaveBeenCalled();
+
+    enterCode();
+    await waitFor(() => expect(h.verifyMfa).toHaveBeenCalledWith('chal-9', '123456'));
+    await waitFor(() => expect(h.acceptInvitation).toHaveBeenCalledWith('abc123', { identityToken: 'id-token' }));
+    await waitFor(() => expect(h.selectTenant).toHaveBeenCalledWith('id-token', 'oem'));
+  });
+
+  it('does not accept the invitation when the code is refused', async () => {
+    h.login.mockRejectedValue(challenge());
+    h.verifyMfa.mockRejectedValue(new GraphQLRequestError('invalid code', 200, [{ message: 'invalid code' }]));
+    await signInExisting();
+    enterCode();
+    await screen.findByText('That code did not work. Check it and try again.');
+    expect(h.acceptInvitation).not.toHaveBeenCalled();
+  });
+
+  it('sends a member to set up a second factor when the tenant they joined requires one', async () => {
+    h.login.mockRejectedValue(challenge());
+    h.verifyMfa.mockResolvedValue(auth(['other']));
+    h.acceptInvitation.mockResolvedValue(auth(['oem']));
+    h.selectTenant.mockRejectedValue(enrollRequired());
+    await signInExisting();
+    enterCode();
+    expect((await screen.findByTestId('at')).textContent).toBe('/security{"enrollForTenant":"oem"}');
+  });
+
+  it('routes MFA_ENROLLMENT_REQUIRED to enrolment for a new account too', async () => {
+    window.history.replaceState(null, '', '/invitation#code=abc123');
+    h.acceptInvitation.mockResolvedValue(auth(['oem']));
+    h.selectTenant.mockRejectedValue(enrollRequired());
+    renderAt();
+    fireEvent.change(screen.getByLabelText('Choose a password'), { target: { value: 's3cret-pass' } });
+    fireEvent.change(screen.getByLabelText('Repeat the password'), { target: { value: 's3cret-pass' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Accept invitation' }));
+    expect((await screen.findByTestId('at')).textContent).toBe('/security{"enrollForTenant":"oem"}');
   });
 });

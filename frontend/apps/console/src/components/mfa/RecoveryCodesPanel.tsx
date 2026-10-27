@@ -42,7 +42,8 @@ export function RecoveryCodesPanel({ codes, onDone }: { codes: string[]; onDone:
     document.body.appendChild(a);
     a.click();
     a.remove();
-    URL.revokeObjectURL(url);
+    // Deferred, as lib/csv.ts does: some browsers start the download after click() returns.
+    setTimeout(() => URL.revokeObjectURL(url), 0);
   };
 
   return (

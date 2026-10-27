@@ -151,11 +151,25 @@ describe('when the code is refused', () => {
     expect(((await screen.findByLabelText(t('signIn:passwordLabel'))) as HTMLInputElement).value).toBe('');
   });
 
-  it('notices a lapsed challenge on its own, without asking the server', async () => {
-    serve({ login: () => { throw challenge(new Date(Date.now() + 80).toISOString()); } });
+  it('still sends the code when the browser clock says the challenge already expired', async () => {
+    let sent: any;
+    serve({
+      login: () => { throw challenge(new Date(Date.now() - 10 * 60_000).toISOString()); },
+      verify: (vars) => { sent = vars; return { verifyMfa: { identityToken: 'id', memberships: [] } }; },
+    });
     render(<App />);
     await reachCodeStep();
-    await screen.findByText(t('signIn:mfaChallengeExpired'), undefined, { timeout: 2000 });
+    expect(screen.getByLabelText(t('signIn:mfaCodeLabel'))).toBeTruthy();
+    typeCode('123456');
+    verify();
+    await waitFor(() => expect(sent).toEqual({ challenge: 'chal-1', code: '123456' }));
+  });
+
+  it('notices a lapsed challenge on its own, without asking the server', async () => {
+    serve({ login: () => { throw challenge(new Date(Date.now() + 1500).toISOString()); } });
+    render(<App />);
+    await reachCodeStep();
+    await screen.findByText(t('signIn:mfaChallengeExpired'), undefined, { timeout: 5000 });
     expect(h.gql.mock.calls.some((c) => c[1] === VERIFY_MFA)).toBe(false);
   });
 });

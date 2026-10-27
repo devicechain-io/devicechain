@@ -45,6 +45,16 @@ export const TIER_SCALARS: readonly TierScalar[] = [
   { key: 'integrationsPerTenant', min: 0, max: 100, labelKey: 'integrationsPerTenantLabel', descriptionKey: 'integrationsPerTenantDescription' },
 ];
 
+// The boolean keys a tier carries. They are flags, not ceilings: absent means off, and there is no
+// platform default to inherit. The editor holds one as the string 'true' (on) or '' (off), in the
+// same settings map as the numbers, so a flag that is off is simply not written. Mirrors
+// TierFlagKeys in iam/tierconfig.go.
+export type TierFlag = { key: string; labelKey: string; descriptionKey: string };
+
+export const TIER_FLAGS: readonly TierFlag[] = [
+  { key: 'mfaRequired', labelKey: 'mfaRequiredLabel', descriptionKey: 'mfaRequiredDescription' },
+];
+
 /** The smallest legal value of a scalar. */
 export function tierScalarMin(s: TierScalar): number {
   return s.min ?? 1;
@@ -75,6 +85,9 @@ export function parseTierConfig(raw: string | null | undefined): Record<string, 
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(parseObject(raw))) {
     if (typeof v === 'number') out[k] = String(v);
+    // A flag is read only when it is exactly true: anything else (false, a junk value parked by
+    // an out-of-band write) is off, as the server reads it.
+    if (v === true && TIER_FLAGS.some((f) => f.key === k)) out[k] = 'true';
   }
   return out;
 }
@@ -136,6 +149,12 @@ export function buildTierConfigPatch(
     if (raw === '') continue;
     const n = Number(raw);
     if (Number.isFinite(n)) rendered[s.key] = n;
+  }
+
+  // A flag that is on is written as true; off omits the key (the server reads absent as off).
+  for (const f of TIER_FLAGS) {
+    known.add(f.key);
+    if (settings[f.key] === 'true') rendered[f.key] = true;
   }
 
   // Anything the editor has no field for survives untouched.

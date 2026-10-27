@@ -125,6 +125,21 @@ export function mfaChallengeOf(err: unknown): MfaChallenge | null {
   return { challenge, expiresAt, methods };
 }
 
+/** The server's challenge lifetime: five minutes from when login issues it. */
+const CHALLENGE_TTL_MS = 5 * 60_000;
+
+/**
+ * How long, from the moment the challenge was RECEIVED, to wait before telling the viewer it has
+ * probably lapsed. The browser's clock can be minutes off the server's, so `expiresAt` is never
+ * compared with Date.now() to REFUSE anything (the server answers MFA_CHALLENGE_EXPIRED); it only
+ * shortens this notice when it plainly says less than the full lifetime remains. A time already
+ * past (a clock ahead) or unparseable means the full lifetime. Never longer than the lifetime.
+ */
+export function challengeNoticeDelayMs(expiresAt: string, now: number = Date.now()): number {
+  const left = Date.parse(expiresAt) - now;
+  return Number.isFinite(left) && left > 0 ? Math.min(left, CHALLENGE_TTL_MS) : CHALLENGE_TTL_MS;
+}
+
 // 🔴 THE ONE PLACE THIS FEATURE MATCHES PROSE. verifyMfa's per-source rate limit is the only
 // refusal in the feature with no `extensions.code` (every other failure of a code check is
 // deliberately the same uniform "invalid code"). Until the server gives it a code, the exact

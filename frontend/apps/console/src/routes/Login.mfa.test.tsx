@@ -210,12 +210,35 @@ describe('when the code is refused', () => {
   });
 
   it('does not even ask the server when the challenge has already lapsed', async () => {
-    login.mockRejectedValue(challengeError(new Date(Date.now() + 80).toISOString()));
+    login.mockRejectedValue(challengeError(new Date(Date.now() + 1500).toISOString()));
     renderLogin();
     await reachCodeStep();
     // The screen notices on its own, without a click.
-    await screen.findByText(t('login:mfaChallengeExpired'), undefined, { timeout: 2000 });
+    await screen.findByText(t('login:mfaChallengeExpired'), undefined, { timeout: 5000 });
     expect(verifyMfa).not.toHaveBeenCalled();
+  });
+
+  // A browser clock minutes ahead of the server's makes a fresh challenge look long expired.
+  // The server alone decides: the code must still be sent, and the step must not vanish.
+  it('still sends the code when the browser clock says the challenge already expired', async () => {
+    login.mockRejectedValue(challengeError(new Date(Date.now() - 10 * 60_000).toISOString()));
+    verifyMfa.mockResolvedValue({ ...AUTH, memberships: [] });
+    renderLogin();
+    await reachCodeStep();
+    expect(screen.getByLabelText(t('login:mfaCodeLabel'))).toBeTruthy();
+    typeCode('123456');
+    submitCode();
+    await waitFor(() => expect(verifyMfa).toHaveBeenCalledWith('chal-1', '123456'));
+  });
+
+  it('lets the server say the challenge expired, whatever the browser clock thinks', async () => {
+    login.mockRejectedValue(challengeError(new Date(Date.now() + 60 * 60_000).toISOString()));
+    verifyMfa.mockRejectedValue(coded('MFA_CHALLENGE_EXPIRED'));
+    renderLogin();
+    await reachCodeStep();
+    typeCode('123456');
+    submitCode();
+    await screen.findByText(t('login:mfaChallengeExpired'));
   });
 
   it('Back drops the held sign-in and the password with it', async () => {

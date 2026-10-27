@@ -53,5 +53,7 @@
   "mfaRateLimited": "Too many attempts. Wait a moment, then try again.",
   "mfaChallengeExpired": "This sign-in timed out. Enter your password again to get a new code prompt.",
   "mfaRequired": "This tenant requires two-factor authentication. Sign in again and enter the code from your authenticator app.",
-  "mfaEnrollmentRequired": "This tenant requires two-factor authentication. Set it up in your account security settings, then sign in again."
+  "mfaEnrollmentRequired": "This tenant requires two-factor authentication. Set it up in your account security settings, then sign in again.",
+  "sessionMfaRequired": "Your organization now requires two-factor authentication for this tenant, so your session has ended. Sign in again and enter the code from your authenticator app.",
+  "sessionMfaEnrollmentRequired": "Your organization now requires two-factor authentication for this tenant, so your session has ended. Sign in, then set up an authenticator when asked."
 }

@@ -5,6 +5,7 @@ import { useState, type ReactNode } from 'react';
 import { Check } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
 import { TokenField } from '@/components/ui/token-field';
@@ -24,7 +25,7 @@ import {
 } from '@/lib/api/admin';
 import { errMessage, dimensionLabel, dimensionUnit } from '@/routes/common';
 import { Textarea } from '@/components/ui/textarea';
-import { parseTierConfig, buildTierConfigPatch, invalidTierScalar, tierScalarMin, TIER_SCALARS } from '@/routes/admin/tiers/tierConfig';
+import { parseTierConfig, buildTierConfigPatch, invalidTierScalar, tierScalarMin, TIER_FLAGS, TIER_SCALARS } from '@/routes/admin/tiers/tierConfig';
 
 // TierForm creates a tier (tier absent) or edits one (tier present, token fixed).
 //
@@ -82,6 +83,8 @@ export function TierForm({
   const setSetting = (key: string, value: string) =>
     setSettings((prev) => ({ ...prev, [key]: value }));
 
+  // A flag is held as 'true' (on) or blank (off), beside the numbers.
+  const setFlag = (key: string, on: boolean) => setSetting(key, on ? 'true' : '');
   // Whether the settings editor actually RENDERED. Load-bearing, not cosmetic: the
   // fields are built from a query, and until it lands there are no fields — so the
   // form cannot claim to know what this tier's settings should be.
@@ -270,6 +273,20 @@ export function TierForm({
                 onChange={(e) => setSetting(s.key, e.target.value)}
               />
             </FormField>
+          ))}
+          {TIER_FLAGS.map((f) => (
+            <label key={f.key} className="col-span-2 flex items-start gap-2 text-sm text-foreground">
+              <Checkbox
+                checked={settings[f.key] === 'true'}
+                onCheckedChange={(v) => setFlag(f.key, v === true)}
+                aria-label={t(f.labelKey)}
+                className="mt-0.5"
+              />
+              <span className="space-y-0.5">
+                <span className="block font-medium">{t(f.labelKey)}</span>
+                <span className="block text-muted-foreground">{t(f.descriptionKey)}</span>
+              </span>
+            </label>
           ))}
         </div>
       )}

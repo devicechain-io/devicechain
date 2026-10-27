@@ -1,7 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useRef, useState, type FormEvent } from 'react';
 import { Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useAuth, consumeSessionExpired } from '@/auth/AuthProvider';
@@ -12,8 +12,8 @@ import { Logo } from '@/components/brand/Logo';
 import { LocaleSwitcher } from '@/components/LocaleSwitcher';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { serverErrorCode, signInErrorKey } from '@/i18n/signInError';
-import { mfaErrorKey } from '@/i18n/mfaError';
-import { MFA_CODE, mfaChallengeOf, type MfaChallenge } from '@/lib/api/mfa';
+import { MfaCodeStep } from '@/components/mfa/MfaCodeStep';
+import { MFA_CODE, mfaChallengeOf, type MfaChallenge } from '@/lib/mfaChallenge';
 import type { IdentityAuth } from '@/lib/api/user-management';
 import { discardPendingSso, startSso } from '@/lib/sso';
 
@@ -49,8 +49,16 @@ import { discardPendingSso, startSso } from '@/lib/sso';
 // flows through the `login` catalog (frontend/apps/console/src/i18n/locales/en),
 // each sentence is one key with no fragment concatenation, and cross-screen copy
 // (Back) is drawn from the `common` namespace. Copy the pattern for the next screen.
+// Why the session ended, as the notice above the form.
+const SESSION_END_KEYS = {
+  expired: 'sessionExpired',
+  ssoRequired: 'sessionSsoRequired',
+  mfaRequired: 'sessionMfaRequired',
+  mfaEnrollmentRequired: 'sessionMfaEnrollmentRequired',
+} as const;
+
 export default function LoginPage() {
-  const { isAuthenticated, login, verifyMfa, selectTenant } = useAuth();
+  const { isAuthenticated, login, selectTenant } = useAuth();
   const { t } = useTranslation('login');
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -65,28 +73,11 @@ export default function LoginPage() {
   const [identity, setIdentity] = useState<IdentityAuth | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  // The second-factor step: the challenge login held the sign-in for, the code being typed,
-  // and whether it is a recovery code. Component state only.
+  // The second-factor step: the challenge login held the sign-in for. Component state only.
   const [mfa, setMfa] = useState<MfaChallenge | null>(null);
-  const [mfaCode, setMfaCode] = useState('');
-  const [useRecovery, setUseRecovery] = useState(false);
   // Read once: true when we landed here because a session expired (not a fresh
   // visit or an explicit sign-out).
   const [expired] = useState(() => consumeSessionExpired());
-
-  // The challenge lapses five minutes after login issues it: say so when it does, rather than
-  // letting the person type a code the server will refuse.
-  useEffect(() => {
-    if (!mfa) return;
-    const wait = Math.max(0, Date.parse(mfa.expiresAt) - Date.now());
-    const timer = setTimeout(() => {
-      setMfa(null);
-      setMfaCode('');
-      setPassword('');
-      setError(t('mfaChallengeExpired'));
-    }, wait);
-    return () => clearTimeout(timer);
-  }, [mfa, t]);
 
   if (isAuthenticated) {
     return <Navigate to="/" replace />;
@@ -159,8 +150,6 @@ export default function LoginPage() {
       const challenge = mfaChallengeOf(err);
       if (challenge) {
         setMfa(challenge);
-        setMfaCode('');
-        setUseRecovery(false);
         setSubmitting(false);
         return;
       }
@@ -172,39 +161,16 @@ export default function LoginPage() {
 
   // Back to the password step from the code step: the held sign-in is dropped, and the
   // password is cleared with it (a new attempt asks for it again).
-  const leaveMfa = (message: string | null) => {
+  const restartFromPassword = (message: string | null) => {
     setMfa(null);
-    setMfaCode('');
     setPassword('');
     setError(message);
     setSubmitting(false);
   };
 
-  const handleVerifyMfa = async (e: FormEvent) => {
-    e.preventDefault();
-    if (!mfa) return;
-    setError(null);
-    if (Date.parse(mfa.expiresAt) <= Date.now()) {
-      leaveMfa(t('mfaChallengeExpired'));
-      return;
-    }
-    setSubmitting(true);
-    let auth: IdentityAuth;
-    try {
-      auth = await verifyMfa(mfa.challenge, mfaCode);
-    } catch (err) {
-      setMfaCode('');
-      if (serverErrorCode(err) === MFA_CODE.challengeExpired) {
-        leaveMfa(t('mfaChallengeExpired'));
-        return;
-      }
-      setError(t(mfaErrorKey(err, 'login:mfaInvalidCode')));
-      setSubmitting(false);
-      return;
-    }
-    // Accepted: the held sign-in is spent. Whatever follows is entering a tenant.
+  // The code was accepted: the held sign-in is spent. Whatever follows is entering a tenant.
+  const handleVerified = async (auth: IdentityAuth) => {
     setMfa(null);
-    setMfaCode('');
     try {
       await proceed(auth);
     } catch (err) {
@@ -324,7 +290,7 @@ export default function LoginPage() {
 
         {expired && !identity && !mfa && (
           <p className="mb-4 rounded-md border border-border bg-muted/50 px-3 py-2 text-center text-sm text-muted-foreground" data-shot="login-session-expired">
-            {expired === 'ssoRequired' ? t('sessionSsoRequired') : t('sessionExpired')}
+            {t(SESSION_END_KEYS[expired])}
           </p>
         )}
 
@@ -360,69 +326,9 @@ export default function LoginPage() {
             </Button>
           </div>
         ) : mfa ? (
-          <form
-            data-shot="login-step-mfa"
-            onSubmit={handleVerifyMfa}
-            className="space-y-4 rounded-lg border border-border bg-card p-6"
-          >
-            {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
-            <FormField
-              label={useRecovery ? t('mfaRecoveryLabel') : t('mfaCodeLabel')}
-              htmlFor="mfa-code"
-              description={useRecovery ? t('mfaRecoveryHint') : t('mfaCodeHint')}
-            >
-              <Input
-                id="mfa-code"
-                data-shot="login-mfa-code"
-                type="text"
-                inputMode={useRecovery ? 'text' : 'numeric'}
-                autoComplete="one-time-code"
-                spellCheck={false}
-                autoFocus
-                value={mfaCode}
-                onChange={(e) =>
-                  setMfaCode(
-                    useRecovery
-                      ? e.target.value.toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 19)
-                      : e.target.value.replace(/\D/g, '').slice(0, 6),
-                  )
-                }
-                required
-              />
-            </FormField>
-            <Button
-              type="submit"
-              className="w-full"
-              loading={submitting}
-              disabled={submitting || (useRecovery ? mfaCode.length < 8 : mfaCode.length !== 6)}
-            >
-              {t('mfaVerify')}
-            </Button>
-            {(mfa.methods.length === 0 || mfa.methods.includes('RECOVERY_CODE')) && (
-              <Button
-                type="button"
-                variant="outline"
-                className="w-full"
-                disabled={submitting}
-                onClick={() => {
-                  setUseRecovery(!useRecovery);
-                  setMfaCode('');
-                  setError(null);
-                }}
-              >
-                {useRecovery ? t('mfaUseAuthenticator') : t('mfaUseRecovery')}
-              </Button>
-            )}
-            <Button
-              type="button"
-              variant="ghost"
-              className="w-full"
-              disabled={submitting}
-              onClick={() => leaveMfa(null)}
-            >
-              {t('common:back')}
-            </Button>
-          </form>
+          <div data-shot="login-step-mfa" className="rounded-lg border border-border bg-card p-6">
+            <MfaCodeStep challenge={mfa} onVerified={handleVerified} onRestart={restartFromPassword} />
+          </div>
         ) : (
           <form
             data-shot={step === 'identify' ? 'login-step-identify' : step === 'password' ? 'login-step-password' : 'login-step-sso'}

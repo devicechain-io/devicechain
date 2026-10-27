@@ -63,7 +63,7 @@ import { LinkNotes } from './LinkNotes';
 import { Playlist } from './Playlist';
 import { SUPPORTED_LOCALES, setUserLocale } from './i18n/config';
 import { loadErrorMessage } from './i18n/loadError';
-import { mfaChallengeOf, mfaVerifyErrorKey, signInErrorKey, type MfaChallenge } from './i18n/signInError';
+import { challengeNoticeDelayMs, mfaChallengeOf, mfaVerifyErrorKey, signInErrorKey, type MfaChallenge } from './i18n/signInError';
 import { listOpenableDashboards, loadDashboard, loadPublishedDashboard, withWidgetCode, type Loaded } from './load';
 import type { DashboardListItem } from './queries';
 import { MAP_RUNTIME } from './map-runtime';
@@ -341,19 +341,21 @@ function SignIn({
   const [mfaCode, setMfaCode] = useState('');
   const [useRecovery, setUseRecovery] = useState(false);
 
-  // The challenge lapses five minutes after login issues it: say so when it does, rather
-  // than letting the viewer type a code the server will refuse.
+  // The challenge lapses about five minutes after login issues it: say so when it probably
+  // has. Counted from when it was RECEIVED, because the browser's clock can be minutes off the
+  // server's; the server alone decides whether a submitted code is too late.
   useEffect(() => {
     if (!mfa) return;
-    const wait = Math.max(0, Date.parse(mfa.expiresAt) - Date.now());
     const timer = setTimeout(() => {
       setMfa(null);
       setMfaCode('');
       setPassword('');
       setError(t('signIn:mfaChallengeExpired'));
-    }, wait);
+    }, challengeNoticeDelayMs(mfa.expiresAt));
     return () => clearTimeout(timer);
-  }, [mfa, t]);
+    // A new challenge restarts the clock; the notice itself must not.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mfa?.challenge, t]);
 
   // 🔴 The two `rejectedKey`s differ because the two failures are different facts. At
   // this point the identity is already proven — the tenant is what did not work — so
@@ -430,10 +432,6 @@ function SignIn({
     e.preventDefault();
     if (!mfa) return;
     setError(null);
-    if (Date.parse(mfa.expiresAt) <= Date.now()) {
-      leaveMfa(t('signIn:mfaChallengeExpired'));
-      return;
-    }
     setBusy(true);
     gql('user-management', VERIFY_MFA, { challenge: mfa.challenge, code: mfaCode }, { anonymous: true })
       .then((r) => {
