@@ -93,8 +93,8 @@ list (not both). An empty selection resolves to `default`.
 
 | Profile | Functional areas |
 |---|---|
-| `default` | user-management, device-management, event-sources, event-management, device-state, dashboard-management, command-delivery, notification-management, event-processing |
-| `full` | everything in `default`, plus `ai-inference`, `outbound-connectors`, `mcp`, `sparkplug-ingest`, `lwm2m-ingest`, `update-management` |
+| `default` | user-management, device-management, event-sources, event-management, device-state, dashboard-management, command-delivery, notification-management, event-processing, update-management |
+| `full` | everything in `default`, plus `ai-inference`, `outbound-connectors`, `mcp`, `sparkplug-ingest`, `lwm2m-ingest` |
 | `telemetry` | user-management, device-management, event-sources, event-management, device-state, dashboard-management |
 | `ingest-only` | user-management, device-management, event-sources |
 
@@ -183,7 +183,7 @@ that is not implemented yet — not because they are second-class. Get them with
 | `ai-inference` | natural-language→rule authoring proxy | no hard dep (fails paths closed); needs `infrastructure.secrets.rootKey` for provider keys; external routing needs `serviceAuth.secret` + `userManagement` and is per-tenant opt-in / fail-closed |
 | `sparkplug-ingest` | Sparkplug B host application ingesting from customer MQTT brokers | hard-depends on `device-management`; each source binds one broker connection to one tenant; single-owner — `replicas: 1` + `Recreate`, the render fails above one |
 | `lwm2m-ingest` | OMA LwM2M over CoAP/UDP + DTLS for constrained devices | hard-depends on `device-management`; serves CoAPS on UDP 5684; single-owner — `replicas: 1` + `Recreate`, the render fails above one |
-| `update-management` | over-the-air update artifacts and assignments | hard-depends on `device-management`; **the artifact catalogue only in this release** — declare, inspect and retire artifacts, and upload their content with a verified size and digest (needs a configured object store); assignment to devices and download are not built yet |
+| `update-management` | over-the-air update artifacts and assignments | hard-depends on `device-management`; in the `default` profile. The artifact catalogue, signers, assignment to devices and groups, and the capability-gated download endpoint. Artifact content needs a configured object store; `functionalAreas.update-management.config.updates.objectStore: none` runs the area without one (artifact declaration and upload are refused) |
 
 ## Per-service configuration
 

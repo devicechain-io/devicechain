@@ -54,10 +54,10 @@ inside the cluster only.
 {{- end }}
 
 {{- define "devicechain.enabledAreas" -}}
-  {{- $standard := list "user-management" "device-management" "event-sources" "event-management" "device-state" "dashboard-management" "command-delivery" "notification-management" "event-processing" -}}
+  {{- $standard := list "user-management" "device-management" "event-sources" "event-management" "device-state" "dashboard-management" "command-delivery" "notification-management" "event-processing" "update-management" -}}
   {{- $profiles := dict
       "default"     $standard
-      "full"        (concat $standard (list "ai-inference" "outbound-connectors" "mcp" "sparkplug-ingest" "lwm2m-ingest" "update-management"))
+      "full"        (concat $standard (list "ai-inference" "outbound-connectors" "mcp" "sparkplug-ingest" "lwm2m-ingest"))
       "telemetry"   (list "user-management" "device-management" "event-sources" "event-management" "device-state" "dashboard-management")
       "ingest-only" (list "user-management" "device-management" "event-sources")
   -}}
@@ -566,6 +566,27 @@ themselves, and every later template would see the edit.
 {{- end -}}
 {{- end -}}
 {{- $cfg | toJson -}}
+{{- end -}}
+
+{{/*
+devicechain.updateObjectStore is how update-management uses the instance object store: "instance"
+(the default; artifact content lives in the store) or "none" (it runs with no store and refuses
+artifact uploads loudly). It reads the same merged config the service receives, so the chart and the
+service cannot disagree. "none" takes update-management out of the pods that mount the filesystem
+volume (devicechain.blobMountAreas / blobConsumers): that is how an instance whose store is a
+ReadWriteOnce volume already held by another area can still run the area. Any other value fails the
+render rather than being read as the default.
+*/}}
+{{- define "devicechain.updateObjectStore" -}}
+{{- $cfg := include "devicechain.updateManagementMergedConfig" . | fromJson -}}
+{{- $mode := "instance" -}}
+{{- range $k, $v := $cfg -}}{{- if eq (lower $k) "updates" -}}
+{{- range $k2, $v2 := $v -}}{{- if eq (lower $k2) "objectstore" -}}{{- $mode = $v2 -}}{{- end -}}{{- end -}}
+{{- end -}}{{- end -}}
+{{- if not (has $mode (list "instance" "none")) -}}
+{{- fail (printf "functionalAreas.update-management.config.updates.objectStore must be \"instance\" or \"none\" (got %v)" $mode) -}}
+{{- end -}}
+{{- $mode -}}
 {{- end -}}
 
 {{/*
@@ -1335,7 +1356,9 @@ blob-pvc.yaml (to validate), so an override that drops an area is judged against
 default the mount uses and the two cannot disagree. Decode with fromJsonArray.
 */}}
 {{- define "devicechain.blobMountAreas" -}}
-{{- (.Values.blobStorage | default dict).mountAreas | default (list "user-management" "update-management") | toJson -}}
+{{- $areas := (.Values.blobStorage | default dict).mountAreas | default (list "user-management" "update-management") -}}
+{{- if eq (include "devicechain.updateObjectStore" .) "none" -}}{{- $areas = without $areas "update-management" -}}{{- end -}}
+{{- $areas | toJson -}}
 {{- end -}}
 
 {{/*
@@ -1345,7 +1368,11 @@ hard-dependency catalog above mirrors backend/k8s/functionalarea. Keep it in syn
 land. As a JSON array; decode with fromJsonArray.
 */}}
 {{- define "devicechain.blobConsumers" -}}
+{{- if eq (include "devicechain.updateObjectStore" .) "none" -}}
+{{- list "user-management" | toJson -}}
+{{- else -}}
 {{- list "user-management" "update-management" | toJson -}}
+{{- end -}}
 {{- end -}}
 
 {{/*

@@ -158,23 +158,29 @@ func TestAiInferenceIsOptInArea(t *testing.T) {
 	assert.NoError(t, Validate([]FunctionalArea{UserManagement, DeviceManagement, AiInference}))
 }
 
-// The update-management area is a known, opt-in area: held back from every standard
-// profile (an install does not grow an update plane it did not ask for), present in
-// ProfileFull, hard-depends on device-management (an update targets devices), and
-// validates only when that dependency is enabled too.
+// The update-management area is a known area that ships in the standard system: it reaches
+// nothing outside the instance (devices pull from it), so it is in ProfileDefault and
+// therefore in ProfileFull, exactly once. The reduced profiles do not carry it. It
+// hard-depends on device-management (an update targets devices), and validates only when
+// that dependency is enabled too.
 //
 // The area is spelled as a literal rather than through its constant on purpose: this
 // test is the failing-first check for the area joining the catalog, and it has to
-// compile — and fail by value — against a catalog that does not know it.
-func TestUpdateManagementIsOptInArea(t *testing.T) {
+// compile -- and fail by value -- against a catalog that does not know it.
+func TestUpdateManagementIsInStandardProfile(t *testing.T) {
 	area := FunctionalArea("update-management")
 	assert.True(t, Known(area), "update-management must be a known area")
-	assert.Contains(t, profiles[ProfileFull], area, "full ships everything, including update-management")
-	for p, areas := range profiles {
-		if p == ProfileFull {
-			continue
+	for _, p := range []Profile{ProfileDefault, ProfileFull} {
+		n := 0
+		for _, a := range profiles[p] {
+			if a == area {
+				n++
+			}
 		}
-		assert.NotContains(t, areas, area, "update-management must not be in profile %s (it is enabled deliberately)", p)
+		assert.Equal(t, 1, n, "profile %s must carry update-management exactly once", p)
+	}
+	for _, p := range []Profile{ProfileTelemetry, ProfileIngestOnly} {
+		assert.NotContains(t, profiles[p], area, "update-management must not be in the reduced profile %s", p)
 	}
 	m, ok := ManifestFor(area)
 	assert.True(t, ok)

@@ -34,7 +34,7 @@ func TestResolveEnabledAreas(t *testing.T) {
 		want := []string{
 			"user-management", "device-management", "event-sources", "event-management",
 			"device-state", "dashboard-management", "command-delivery",
-			"notification-management", "event-processing", "lwm2m-ingest",
+			"notification-management", "event-processing", "update-management", "lwm2m-ingest",
 		}
 		gotSorted := slices.Clone(got)
 		wantSorted := slices.Clone(want)
@@ -86,12 +86,13 @@ func TestResolveEnabledAreas(t *testing.T) {
 		}
 	})
 
-	t.Run("update-management is an opt-in area the default profile can add", func(t *testing.T) {
-		// It is held back from every profile but full, so --enable-area is how a default
-		// install gets it — and the CLI must accept it before any cluster is touched.
-		got, err := ResolveEnabledAreas("default", []string{"update-management"})
+	t.Run("update-management ships in the default profile and is opt-in on the reduced ones", func(t *testing.T) {
+		// Devices pull from it and it reaches nothing outside the instance, so the default
+		// profile deploys it; the telemetry profile does not, and --enable-area is how that
+		// one gets it -- the CLI must accept it before any cluster is touched.
+		got, err := ResolveEnabledAreas("telemetry", []string{"update-management"})
 		if err != nil {
-			t.Fatalf("enabling update-management on the default profile was refused: %v", err)
+			t.Fatalf("enabling update-management on the telemetry profile was refused: %v", err)
 		}
 		if !slices.Contains(got, "update-management") {
 			t.Fatalf("update-management is missing from the resolved set: %v", got)
@@ -100,12 +101,16 @@ func TestResolveEnabledAreas(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if slices.Contains(def, "update-management") {
-			t.Fatal("the default profile deploys update-management; it must be opt-in")
+		if !slices.Contains(def, "update-management") {
+			t.Fatal("the default profile no longer deploys update-management")
 		}
-		// It hard-depends on device-management, which every profile carries as a core
-		// area, so there is no profile on which it can be refused for a missing dep —
-		// asserting the refusal path here would need a selection the CLI cannot express.
+		bare, err := ResolveEnabledAreas("telemetry", []string{"device-management"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if slices.Contains(bare, "update-management") {
+			t.Fatal("the telemetry profile deploys update-management; it must be opt-in there")
+		}
 	})
 
 	t.Run("blank extras are ignored", func(t *testing.T) {

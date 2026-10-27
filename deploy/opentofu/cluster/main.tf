@@ -521,12 +521,12 @@ module "cnpg_rdb" {
   # whose selector is byte-identical to `dc-rdb-rw` — so every pool lands on the
   # SAME primary and they all draw from one budget:
   #
-  #   default profile  7 services x 20 = 140
+  #   default profile  8 services x 20 = 160   (7 x 20 = 140 before update-management joined it)
   #   full profile     9 services x 20 = 180   (adds ai-inference, outbound-connectors)
   #                    (10 x 20 = 200 since update-management joined `full`)
   #
   # against `max_connections - superuser_reserved_connections` = 100 - 3 = 97.
-  # The default profile oversubscribes the primary 1.44x, full 2.06x (200/97; it was
+  # The default profile oversubscribes the primary 1.65x (1.44x before update-management joined it), full 2.06x (200/97; it was
   # 1.86x before update-management joined `full`). Confirmed by
   # opening connections as the application role until refusal: number 94 failed with
   # `FATAL: remaining connection slots are reserved for roles with the SUPERUSER

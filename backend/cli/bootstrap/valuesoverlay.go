@@ -144,6 +144,8 @@ var ownedWithinTunable = []struct {
 		"the MCP server's issuer is the authorization server tokens are trusted from; it follows the instance's host"},
 	{"functionalAreas.update-management.config.updates.allowUnverifiedArtifacts",
 		"assigning unverified firmware turns off the signature check on every update"},
+	{"functionalAreas.update-management.config.updates.objectStore",
+		"whether update-management uses the instance object store follows how the store is mounted: it is set by dcctl where the store's volume cannot be shared with it, and is not a tuning value"},
 	{"functionalAreas.update-management.config.updates.downloadBaseURL",
 		"the download URL devices are sent to follows the instance's host"},
 	{"functionalAreas.event-sources.config.eventSources",

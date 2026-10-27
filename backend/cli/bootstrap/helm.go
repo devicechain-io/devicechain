@@ -563,6 +563,14 @@ func helmValues(st *State) map[string]interface{} {
 	if len(blobStorageVals) > 0 {
 		vals["blobStorage"] = blobStorageVals
 	}
+	// update-management without the instance store: the chart takes the area out of the pods
+	// that mount the volume, and the service builds no store whatever the instance configures.
+	// See updateStoreMountless. Absent otherwise, so a shareable store renders the default.
+	if updateStoreMountless(st) {
+		mergeFunctionalArea(vals, "update-management", map[string]interface{}{
+			"config": map[string]interface{}{"updates": map[string]interface{}{"objectStore": "none"}},
+		})
+	}
 
 	// Deployment selection: normally the named profile (or "" → the chart's default).
 	// When --enable-area added extra areas, ResolveEnabledAreas already expanded

@@ -208,9 +208,10 @@ var catalog = map[FunctionalArea]Manifest{
 		// per-device and per-group assignment, and the capability-gated download endpoint.
 		// device-management is a Hard dep because an update is assigned to devices and
 		// groups, and an update area without the device registry has nothing to target.
-		// It is held back from ProfileDefault — an install does not grow an update plane it
-		// did not ask for — and shipped by ProfileFull, or named explicitly in
-		// enabledFunctionalAreas.
+		// Unlike the opt-in areas it reaches nothing outside the instance (devices pull from
+		// it), so it ships in ProfileDefault. It needs an object store for artifact content;
+		// where an instance has none it still runs and refuses artifact uploads loudly
+		// (updates.objectStore: none, or no store configured).
 		Area:     UpdateMgmt,
 		HardDeps: []FunctionalArea{DeviceManagement},
 		SoftDeps: []FunctionalArea{UserManagement},
@@ -223,7 +224,8 @@ type Profile string
 
 const (
 	// ProfileDefault is the standard instance: the whole device/telemetry/automation
-	// system, and what an unset selection resolves to. It omits the areas that reach
+	// system, and what an unset selection resolves to (OTA update management included:
+	// devices pull from it and it reaches nothing outside the instance). It omits the areas that reach
 	// OUTSIDE the instance — AI inference, outbound connectors, and MCP — because each
 	// carries a decision an operator should make deliberately (a paid provider key, an
 	// egress surface, an agent-facing API), not inherit from a default.
@@ -247,12 +249,12 @@ const (
 var standardAreas = []FunctionalArea{
 	UserManagement, DeviceManagement, EventSources,
 	EventManagement, DeviceState, DashboardMgmt, CommandDelivery,
-	NotificationMgmt, EventProcessing,
+	NotificationMgmt, EventProcessing, UpdateMgmt,
 }
 
 var profiles = map[Profile][]FunctionalArea{
 	ProfileDefault: standardAreas,
-	ProfileFull:    append(append([]FunctionalArea{}, standardAreas...), AiInference, OutboundConn, Mcp, SparkplugIngest, Lwm2mIngest, UpdateMgmt),
+	ProfileFull:    append(append([]FunctionalArea{}, standardAreas...), AiInference, OutboundConn, Mcp, SparkplugIngest, Lwm2mIngest),
 	ProfileTelemetry: {
 		UserManagement, DeviceManagement, EventSources, EventManagement, DeviceState, DashboardMgmt,
 	},
