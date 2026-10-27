@@ -236,7 +236,7 @@ func buildMetrics() host.Metrics {
 		SubscribeFailures: Microservice.NewCounter("subscribe_failures_total",
 			"Sessions abandoned because a Sparkplug group subscription failed after the broker accepted the connection (most often a refusal: the source's credential may not read that group). The source never announces ONLINE and ingests none of its groups while any group is refused; it retries with backoff."),
 		SamplesSkipped: skippedPrecreated(Microservice.NewCounterVec("samples_skipped_total",
-			"Metrics of accepted Sparkplug messages that produced no sample, by reason: non_numeric (a boolean, string, bytes, dataset or template value), null (is_null), unnamed (no name and no resolvable alias) or oversize (the message carried more metrics than one message may, so none were read). A node publishing only such metrics otherwise looks identical to an idle one.",
+			"Metrics of accepted Sparkplug messages that produced no sample, by reason: non_numeric (a boolean, string, bytes, dataset or template value), null (is_null), unnamed (no name and no resolvable alias), oversize (the message carried more metrics than one message may, so none were read) or untyped (an integer whose datatype neither the message nor its birth declared, and whose value reads differently as signed and unsigned). A node publishing only such metrics otherwise looks identical to an idle one.",
 			[]string{"reason"})),
 		IngestFailures: Microservice.NewCounter("ingest_failures_total",
 			"Accepted messages whose samples or presence transitions were dropped, plus presence-reconciliation disconnect batches that could not be stored: samples at once when inbound-events refused them under backpressure; "+

@@ -279,7 +279,7 @@ because a node that publishes only values with no numeric sample otherwise looks
 | Metric | Means |
 | --- | --- |
 | `devices_registered_total` | Devices auto-registered on first sight of their Sparkplug identity. |
-| `samples_skipped_total{reason}` | Metrics of accepted Sparkplug messages that produced no sample, by reason: non_numeric (a boolean, string, bytes, dataset or template value), null (is_null), unnamed (no name and no resolvable alias) or oversize (the message carried more than 16,384 metrics, so none of its readings were stored; the service logs a warning naming the topic). A node publishing only such metrics otherwise looks identical to an idle one. |
+| `samples_skipped_total{reason}` | Metrics of accepted Sparkplug messages that produced no sample, by reason: non_numeric (a boolean, string, bytes, dataset or template value), null (is_null), unnamed (no name and no resolvable alias), untyped (an integer whose datatype neither the message nor its birth declared, and whose value reads differently as signed and unsigned, so it is not guessed; the service logs a rate-limited warning naming the topic and metric) or oversize (the message carried more than 16,384 metrics, so none of its readings were stored; the service logs a warning naming the topic). A node publishing only such metrics otherwise looks identical to an idle one. |
 
 ## Notification management {#notification-management}
 

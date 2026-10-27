@@ -288,7 +288,7 @@ uno inactivo.
 | Métrica | Significa |
 | --- | --- |
 | `devices_registered_total` | Dispositivos registrados automáticamente en el primer avistamiento de su identidad Sparkplug. |
-| `samples_skipped_total{reason}` | Métricas de mensajes Sparkplug aceptados que no produjeron ninguna muestra, por motivo: non_numeric (un valor booleano, de texto, bytes, dataset o plantilla), null (is_null), unnamed (sin nombre y sin alias resoluble) u oversize (el mensaje traía más de 16.384 métricas, así que no se almacenó ninguna de sus lecturas; el servicio registra una advertencia con el tema). Un nodo que publica solo esas métricas, de otro modo, se ve igual que uno inactivo. |
+| `samples_skipped_total{reason}` | Métricas de mensajes Sparkplug aceptados que no produjeron ninguna muestra, por motivo: non_numeric (un valor booleano, de texto, bytes, dataset o plantilla), null (is_null), unnamed (sin nombre y sin alias resoluble), untyped (un entero cuyo tipo de dato no declararon ni el mensaje ni su nacimiento y cuyo valor se lee distinto con y sin signo, por lo que no se adivina; el servicio registra una advertencia limitada en frecuencia con el tema y la métrica) u oversize (el mensaje traía más de 16.384 métricas, así que no se almacenó ninguna de sus lecturas; el servicio registra una advertencia con el tema). Un nodo que publica solo esas métricas, de otro modo, se ve igual que uno inactivo. |
 
 ## Notification management {#notification-management}
 

@@ -27,5 +27,6 @@ skipped_precreated_test{reason="non_numeric"} 0
 skipped_precreated_test{reason="null"} 0
 skipped_precreated_test{reason="oversize"} 0
 skipped_precreated_test{reason="unnamed"} 0
+skipped_precreated_test{reason="untyped"} 0
 `)))
 }
