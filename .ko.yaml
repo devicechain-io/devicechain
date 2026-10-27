@@ -16,9 +16,12 @@
 #
 # A bare `:latest` is not a pin. It cannot be reproduced (rebuilding the same
 # commit can yield a different base), it changes with no pull request to review,
-# and a bad or compromised publish lands in all of those images at once — ko
-# records no base-image label, so afterwards you cannot even tell which base a
-# published image was built on. The digest fixes all of that.
+# and a bad or compromised publish lands in all of those images at once. ko
+# records the base it used in each image's manifest (org.opencontainers.image.base.name):
+# the digest reference for a pinned build, only the bare tag for an unpinned one, which is
+# how a build that ignored this file looks. The digest fixes all of that, and
+# hack/check-ko-base-used.sh checks that builds actually read it (ko finds this file in
+# its working directory only; every build goes through hack/ko-build.sh).
 #
 # But a digest with nothing moving it is WORSE than the tag it replaced.
 # Chainguard rebuilds this image frequently, and those rebuilds are how its CVE

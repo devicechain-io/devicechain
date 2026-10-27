@@ -4,6 +4,7 @@
 package bootstrap
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"regexp"
@@ -13,7 +14,7 @@ import (
 	"strings"
 	"testing"
 
-	"helm.sh/helm/v3/pkg/releaseutil"
+	"helm.sh/helm/v3/pkg/chart"
 	"sigs.k8s.io/yaml"
 )
 
@@ -161,7 +162,7 @@ type renderedRouting struct {
 func collectRouting(t *testing.T, manifest string) renderedRouting {
 	t.Helper()
 	r := renderedRouting{servicePorts: map[string]int{}}
-	for _, doc := range releaseutil.SplitManifests(manifest) {
+	for _, doc := range splitManifests(manifest) {
 		var o routingObject
 		if err := yaml.Unmarshal([]byte(doc), &o); err != nil {
 			t.Fatalf("decoding a rendered document: %v\n%s", err, doc)
@@ -512,17 +513,15 @@ func routingDifferences(nginx, gw renderedRouting) (unexplained []string, accept
 	return unexplained, accepted, nil
 }
 
-// gatewayVariant renders vals with the given controller and the TLS shape of tlsOn.
-func renderRoutingVariant(t *testing.T, p renderProfile, instance, controller string, tlsOn bool, clusterIssuer string) (renderedRouting, string) {
-	t.Helper()
-	ch, err := loadEmbeddedChart()
+// routingVariantValues is the install values of profile p with the given front end and TLS shape.
+func routingVariantValues(ctx context.Context, ch *chart.Chart, p renderProfile, instance, controller string, tlsOn bool, clusterIssuer string) (map[string]interface{}, error) {
+	vals, err := profileValuesE(ctx, ch, p, instance)
 	if err != nil {
-		t.Fatalf("loading the embedded chart: %v", err)
+		return nil, err
 	}
-	vals := profileValues(t, ch, p, instance)
 	ing, _ := vals["ingress"].(map[string]interface{})
 	if ing == nil {
-		t.Fatalf("%s: the install values carry no ingress block: %v", p.name, vals)
+		return nil, fmt.Errorf("%s: the install values carry no ingress block: %v", p.name, vals)
 	}
 	ing["controller"] = controller
 	// The parity is between the two PURE front ends; the cutover window renders both at once
@@ -537,6 +536,20 @@ func renderRoutingVariant(t *testing.T, p renderProfile, instance, controller st
 	if clusterIssuer != "" {
 		tls["selfSigned"] = false
 		tls["clusterIssuer"] = clusterIssuer
+	}
+	return vals, nil
+}
+
+// gatewayVariant renders vals with the given controller and the TLS shape of tlsOn.
+func renderRoutingVariant(t *testing.T, p renderProfile, instance, controller string, tlsOn bool, clusterIssuer string) (renderedRouting, string) {
+	t.Helper()
+	ch, err := loadEmbeddedChart()
+	if err != nil {
+		t.Fatalf("loading the embedded chart: %v", err)
+	}
+	vals, err := routingVariantValues(t.Context(), ch, p, instance, controller, tlsOn, clusterIssuer)
+	if err != nil {
+		t.Fatal(err)
 	}
 	manifest, err := renderChartClientSide(t.Context(), ch, vals)
 	if err != nil {
@@ -553,7 +566,7 @@ func TestGatewayRoutesServeWhatTheIngressesServe(t *testing.T) {
 			name := fmt.Sprintf("%s/tls=%v", p.name, tlsOn)
 			t.Run(name, func(t *testing.T) {
 				t.Parallel()
-				instance := fmt.Sprintf("g%02d", i+1)
+				instance := profileInstance(i)
 				nginx, nginxManifest := renderRoutingVariant(t, p, instance, "nginx", tlsOn, "")
 				gw, gwManifest := renderRoutingVariant(t, p, instance, "gateway", tlsOn, "")
 
@@ -626,8 +639,8 @@ func TestGatewayCarriesTheIngressTLS(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			nginx, _ := renderRoutingVariant(t, p, "tls1", "nginx", c.tlsOn, c.clusterIssuer)
-			gw, _ := renderRoutingVariant(t, p, "tls1", "gateway", c.tlsOn, c.clusterIssuer)
+			nginx, _ := renderRoutingVariant(t, p, profileInstance(0), "nginx", c.tlsOn, c.clusterIssuer)
+			gw, _ := renderRoutingVariant(t, p, profileInstance(0), "gateway", c.tlsOn, c.clusterIssuer)
 
 			var api *routingObject
 			for i := range nginx.ingresses {
@@ -763,16 +776,17 @@ func TestGatewayCarriesTheIngressTLS(t *testing.T) {
 func TestRoutingParityCheckFailsWhenARouteIsMissing(t *testing.T) {
 	t.Parallel()
 	var full renderProfile
-	for _, p := range renderProfiles {
+	var fullInstance string
+	for i, p := range renderProfiles {
 		if p.name == "--profile full" {
-			full = p
+			full, fullInstance = p, profileInstance(i)
 		}
 	}
 	if full.name == "" {
 		t.Fatal("no --profile full row in renderProfiles")
 	}
-	nginx, _ := renderRoutingVariant(t, full, "neg1", "nginx", true, "")
-	gw, _ := renderRoutingVariant(t, full, "neg1", "gateway", true, "")
+	nginx, _ := renderRoutingVariant(t, full, fullInstance, "nginx", true, "")
+	gw, _ := renderRoutingVariant(t, full, fullInstance, "gateway", true, "")
 
 	if diffs, _, err := routingDifferences(nginx, gw); err != nil || len(diffs) != 0 {
 		t.Fatalf("the unmodified renders must agree before the control means anything: %v %v", diffs, err)
@@ -869,7 +883,7 @@ func TestAnOverfullAPIRouteFailsTheRender(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := renderProfiles[0]
-	vals := profileValues(t, ch, p, "cap1")
+	vals := profileValues(t, ch, p, profileInstance(0))
 	vals["ingress"].(map[string]interface{})["controller"] = "gateway"
 
 	// Unmodified, the default profile renders.

@@ -58,8 +58,8 @@ else
     exit 1
   }
   # ko --bare names the image exactly $REGISTRY/$TARGET:$TAG (what the chart pulls).
-  ( cd "$DIR" && KO_DOCKER_REPO="$REGISTRY/$TARGET" KO_CONFIG_PATH="$ROOT/.ko.yaml" \
-      ko build --bare --tags "$TAG" --platform linux/amd64 ./ >/dev/null )
+  ( cd "$DIR" && KO_DOCKER_REPO="$REGISTRY/$TARGET" \
+      "$ROOT/hack/ko-build.sh" --bare --tags "$TAG" --platform linux/amd64 ./ >/dev/null )
 fi
 
 # The chart names each container after the area (or "frontend"), == the

@@ -4,6 +4,7 @@
 package bootstrap
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"strings"
@@ -12,7 +13,6 @@ import (
 	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
 	"helm.sh/helm/v3/pkg/chart"
 	"helm.sh/helm/v3/pkg/chartutil"
-	"helm.sh/helm/v3/pkg/releaseutil"
 	"sigs.k8s.io/yaml"
 )
 
@@ -219,20 +219,36 @@ var renderProfiles = []renderProfile{
 	},
 }
 
+// profileInstance is the instance id every suite that renders renderProfiles[i] gives it. One id
+// per row, not one per suite: the render is a pure function of the values, the id is one of
+// them, and suites that each invented their own (p01, f01, g01) rendered the same row again for
+// nothing (render_memo_test.go remembers a render by its values, so equal ids are equal renders).
+func profileInstance(i int) string { return fmt.Sprintf("p%02d", i+1) }
+
 // profileValues returns the values dcctl would install for p under instance id: the
 // production releaseValues (helmValues, composed into the instance configuration
 // document, then the install values that name that document), with p.overrides
 // merged over them, the overrides winning.
 func profileValues(t *testing.T, ch *chart.Chart, p renderProfile, instance string) map[string]interface{} {
 	t.Helper()
-	vals, _, err := releaseValues(t.Context(), ch, p.st(instance), nil)
+	vals, err := profileValuesE(t.Context(), ch, p, instance)
 	if err != nil {
-		t.Fatalf("%s: composing the release values: %v", p.name, err)
+		t.Fatal(err)
+	}
+	return vals
+}
+
+// profileValuesE is profileValues without a test, so the render warm-up (render_memo_test.go)
+// composes exactly what the suites do.
+func profileValuesE(ctx context.Context, ch *chart.Chart, p renderProfile, instance string) (map[string]interface{}, error) {
+	vals, _, err := releaseValues(ctx, ch, p.st(instance), nil)
+	if err != nil {
+		return nil, fmt.Errorf("%s: composing the release values: %w", p.name, err)
 	}
 	if p.overrides == nil {
-		return vals
+		return vals, nil
 	}
-	return chartutil.MergeTables(p.overrides(), vals)
+	return chartutil.MergeTables(p.overrides(), vals), nil
 }
 
 // podTemplateSpread is the part of a rendered object these checks read: its kind,
@@ -280,7 +296,7 @@ var podTemplateKinds = []string{"Deployment", "StatefulSet", "DaemonSet", "Repli
 func repeatedSpreadPairs(t *testing.T, manifest string) []string {
 	t.Helper()
 	var out []string
-	for _, doc := range releaseutil.SplitManifests(manifest) {
+	for _, doc := range splitManifests(manifest) {
 		var kind struct {
 			Kind string `json:"kind"`
 		}
@@ -413,7 +429,7 @@ func TestNoRenderedPodSpecRepeatsASpreadPair(t *testing.T) {
 			if err != nil {
 				t.Fatalf("loading the embedded chart: %v", err)
 			}
-			instance := fmt.Sprintf("p%02d", i+1)
+			instance := profileInstance(i)
 			vals := profileValues(t, ch, p, instance)
 
 			// The values are the INSTALL values, not the authoring ones: the instance

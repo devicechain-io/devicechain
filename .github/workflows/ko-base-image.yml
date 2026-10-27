@@ -268,7 +268,7 @@ jobs:
           cd "backend/services/${svc}"
           # This is the PR's only evidence — see the GITHUB_TOKEN note at the top
           # of this file. A base that cannot build must never be proposed.
-          ko build --local --bare ./
+          "$GITHUB_WORKSPACE/hack/ko-build.sh" --local --bare ./
 
       # Runs every week, like the smoke-build above: the object store's image
       # — the current pin, or the one just written — must start and name its

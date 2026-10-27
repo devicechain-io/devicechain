@@ -134,8 +134,16 @@ func Resolved(states map[string]State, token string, err error) bool {
 // stop), while against an ALLOW list the collision makes a foreign transport's device look
 // like a member and the caller ACTS on a device the list was written to exclude. The
 // stranded-SENT reconciler is that first allow list, and this is the groundwork it asked for.
+//
+// 🔑 THE SECOND ENTRY IS AN INBOUND INTEGRATION, and it is the same verdict for a different
+// reason. A device that reports through a network server's or a webhook's HTTP delivery has
+// no connection to us to send a command down: nothing bridges the device-commands stream to
+// the sender's downlink API in this build. The transport is recognized and not executable,
+// which is a terminal answer ("COMMAND_TRANSPORT_UNSUPPORTED" on the failed command), never a
+// command left queued until its TTL.
 var nonDeliveringTransports = map[transport.Name]bool{
-	transport.Sparkplug: true,
+	transport.Sparkplug:   true,
+	transport.Integration: true,
 }
 
 // Decide reduces one device's projected state to a verdict.

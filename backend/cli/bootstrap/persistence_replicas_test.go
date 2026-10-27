@@ -11,7 +11,6 @@ import (
 	"strings"
 	"testing"
 
-	"helm.sh/helm/v3/pkg/releaseutil"
 	"sigs.k8s.io/yaml"
 )
 
@@ -49,7 +48,7 @@ func renderedAreas(t *testing.T, manifest string) map[string]*renderedArea {
 		}
 		return out[name]
 	}
-	for _, doc := range releaseutil.SplitManifests(manifest) {
+	for _, doc := range splitManifests(manifest) {
 		var obj struct {
 			Kind     string `json:"kind"`
 			Metadata struct {

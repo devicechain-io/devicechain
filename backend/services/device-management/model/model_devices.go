@@ -162,6 +162,11 @@ type DeviceCreateRequest struct {
 	// must exist in the tenant and be of the device's own type, otherwise the create is refused
 	// with INVALID_VALUE. An earmark authorizes nothing by itself; the profile's secret does.
 	ProvisioningProfileToken *string
+	// Aliases are the names a sender other than the platform knows the device by, such as a
+	// LoRaWAN DevEUI. Each is validated and normalized (a DevEUI is stored upper case), a device
+	// has at most one per scheme, and a (scheme, value) another device in the tenant holds fails
+	// the create with CONFLICT.
+	Aliases *[]DeviceAliasInput
 }
 
 // MaxBulkDeviceCount bounds how many devices one CreateDevices call renders and
@@ -215,6 +220,10 @@ type DeviceUpdateRequest struct {
 	// is. An explicit NULL IS REFUSED rather than read as false: a null that quietly
 	// quarantined a device would cut it off from ingest and commanding with a 200.
 	Enabled dcgraphql.OptionalBool
+	// Aliases REPLACES the device's alias set when sent: the list becomes the whole set, and null
+	// or an empty list removes them all. Omitted leaves the aliases alone. A (scheme, value)
+	// another device holds refuses the whole update with CONFLICT.
+	Aliases OptionalDeviceAliasList
 }
 
 // ErrDeviceDisabled is the refusal for a device an operator has disabled: its events are
@@ -347,6 +356,9 @@ type DeviceSearchCriteria struct {
 	// ExpectedProvisioningProfile selects the devices earmarked for the provisioning profile
 	// with this token. An unknown token matches nothing.
 	ExpectedProvisioningProfile *string
+	// Alias selects the device a sender's identifier names. The value is matched in its canonical
+	// spelling, so a DevEUI in either case finds the same device.
+	Alias *DeviceAliasInput
 }
 
 // Search criteria for the devices of one customer: those with a live edge of one

@@ -55,5 +55,6 @@ var (
 		NewEnrollmentSecretDigestSchema(),
 		NewSelfRegistrationSchema(),
 		NewIntegrationsSchema(),
+		NewDeviceAliasesSchema(),
 	}
 )

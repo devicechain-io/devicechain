@@ -122,6 +122,7 @@ func TestFailClosedReachesTheServicesDocument(t *testing.T) {
 // 🔴 THE POINT OF THE OPTION. Installed on, an instance is still on after a plain upgrade
 // with no flag repeated -- and the upgrade after that.
 func TestFailClosedOnSurvivesPlainUpgrades(t *testing.T) {
+	t.Parallel()
 	dyn := builtWith(t, boolPtr(true))
 	for i := 1; i <= 2; i++ {
 		_, on, _ := upgradeRender(t, dyn, nil)
@@ -141,6 +142,7 @@ func TestFailClosedOnSurvivesPlainUpgrades(t *testing.T) {
 
 // An explicit off stays off, and is recorded as off rather than as "never chose".
 func TestFailClosedExplicitOffStaysOff(t *testing.T) {
+	t.Parallel()
 	dyn := builtWith(t, boolPtr(true))
 
 	st, on, raw := upgradeRender(t, dyn, boolPtr(false))
@@ -171,6 +173,7 @@ func TestFailClosedExplicitOffStaysOff(t *testing.T) {
 // A default install is off, stays off, and writes nothing; turning it on later is
 // recorded and kept.
 func TestFailClosedDefaultInstallIsOffAndCanBeTurnedOnLater(t *testing.T) {
+	t.Parallel()
 	dyn := builtWith(t, nil)
 
 	_, on, raw := upgradeRender(t, dyn, nil)

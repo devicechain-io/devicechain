@@ -14,7 +14,7 @@ import (
 // own definitions are listed because gorm resolves their associations on the profile's
 // preload, so migrating the profile alone leaves the fixture failing on a missing table
 // rather than on whatever it meant to assert.
-var deviceProfileTables = []any{&Device{}, &DeviceType{}, &DeviceProfile{}, &DeviceProfileVersion{}, &DeviceProfileActivation{},
+var deviceProfileTables = []any{&Device{}, &DeviceAlias{}, &DeviceType{}, &DeviceProfile{}, &DeviceProfileVersion{}, &DeviceProfileActivation{},
 	&MetricDefinition{}, &CommandDefinition{}, &DetectionRule{}, &DetectionRuleScopeRef{}}
 
 // seedDeviceProfile creates the device profile the profile-scoped fixtures hang off.

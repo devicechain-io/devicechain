@@ -94,6 +94,22 @@ type UnresolvedEvent struct {
 	// can obtain a value that carries it, no decoder has a field for it, and an external-broker
 	// or HTTP source can never set it. Empty on every other event.
 	Gateway string
+
+	// Integration is the token of the inbound integration (a LoRaWAN network server or a
+	// webhook sender) that delivered this event over HTTP, set only by the integration route
+	// after it authenticated the sender's bearer token. The resolver does not take that on
+	// trust: it opens SealedIntegrationToken, authenticates the integration, requires it to be
+	// enabled and requires the device's type to be in its scope, and only then accepts the
+	// event's device token (resolveIntegrationDevice). Empty on every other event.
+	//
+	// Like BrokerAsserted and Gateway it is never settable from device input: no decoder has a
+	// field for it, and only the integration route can obtain a value that carries it.
+	Integration string
+	// SealedIntegrationToken is the integration's bearer token as the sender presented it,
+	// sealed for the hop to device-management (credential.SecretTransit.SealToken, bound to the
+	// tenant and to the integration token). The stream never carries it as presented. nil on
+	// every event that is not an integration's.
+	SealedIntegrationToken []byte
 }
 
 // WithoutPresentedCredential returns a copy of the event with the credential the
@@ -123,6 +139,7 @@ func (unrez UnresolvedEvent) WithoutPresentedCredential() UnresolvedEvent {
 	unrez.CredentialSecret = nil
 	unrez.SealedCredentialSecret = nil
 	unrez.SealedCredentialId = nil
+	unrez.SealedIntegrationToken = nil
 	return unrez
 }
 

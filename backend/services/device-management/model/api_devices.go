@@ -300,6 +300,10 @@ func (api *Api) CreateDevice(ctx context.Context, request *DeviceCreateRequest) 
 	if err != nil {
 		return nil, err
 	}
+	aliases, err := normalizeAliasInputs(aliasListOf(request.Aliases))
+	if err != nil {
+		return nil, err
+	}
 	created := &Device{
 		TokenReference: rdb.TokenReference{
 			Token: request.Token,
@@ -336,7 +340,12 @@ func (api *Api) CreateDevice(ctx context.Context, request *DeviceCreateRequest) 
 			return err
 		}
 		created.GatewayId = gatewayId
-		return tx.Create(created).Error
+		if err := tx.Create(created).Error; err != nil {
+			return err
+		}
+		// The aliases land with the device or not at all: an alias another device holds fails
+		// the whole create (CONFLICT) rather than leaving a device a sender cannot find.
+		return insertAliasesOnTx(tx, created.ID, aliases)
 	})
 	if err != nil {
 		return nil, err
@@ -402,6 +411,14 @@ func (api *Api) CreateDevices(ctx context.Context, requests []*DeviceCreateReque
 		}
 		metadataByIndex[i] = metadataJSON
 	}
+	aliasesByIndex := make([][]DeviceAliasInput, len(requests))
+	for i, request := range requests {
+		aliases, err := normalizeAliasInputs(aliasListOf(request.Aliases))
+		if err != nil {
+			return nil, fmt.Errorf("device %q: %w", request.Token, err)
+		}
+		aliasesByIndex[i] = aliases
+	}
 
 	created := make([]*Device, 0, len(requests))
 	now := time.Now()
@@ -447,6 +464,9 @@ func (api *Api) CreateDevices(ctx context.Context, requests []*DeviceCreateReque
 				ExpectedProvisioningProfileId: earmarkId,
 			}
 			if err := tx.Create(device).Error; err != nil {
+				return err
+			}
+			if err := insertAliasesOnTx(tx, device.ID, aliasesByIndex[i]); err != nil {
 				return err
 			}
 			device.DeviceType = dt
@@ -738,6 +758,16 @@ func (api *Api) UpdateDevice(ctx context.Context, token string, request *DeviceU
 		return nil, err
 	}
 	updated.Metadata = metadataJSON
+	// The alias set is validated before anything is written, like the type hop above: a bad
+	// alias refuses the WHOLE update.
+	var aliases []DeviceAliasInput
+	aliasesSet := false
+	if proposed, set := request.Aliases.ApplyTo(); set {
+		if aliases, err = normalizeAliasInputs(proposed); err != nil {
+			return nil, err
+		}
+		aliasesSet = true
+	}
 	now := time.Now()
 	disabledAt, err := applyEnabled(request.Enabled, updated.DisabledAt, now)
 	if err != nil {
@@ -782,9 +812,18 @@ func (api *Api) UpdateDevice(ctx context.Context, token string, request *DeviceU
 	if !request.Enabled.Set {
 		omit = append(omit, "DisabledAt")
 	}
-	result := api.RDB.DB(ctx).Omit(omit...).Save(updated)
-	if result.Error != nil {
-		return nil, result.Error
+	// The row and its alias set are written in ONE transaction, so an alias another device holds
+	// (CONFLICT) refuses the whole update rather than applying the fields it liked first.
+	if err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Omit(omit...).Save(updated).Error; err != nil {
+			return err
+		}
+		if !aliasesSet {
+			return nil
+		}
+		return replaceAliasesOnTx(tx, updated.ID, aliases)
+	}); err != nil {
+		return nil, err
 	}
 	// A credentialed event takes its device from the credential cache, which holds the
 	// device as it was read: drop it so the next event sees the new type, external id and
@@ -879,6 +918,14 @@ func (api *Api) DevicesByExternalId(ctx context.Context, externalIds []string) (
 
 // Search for devices that meet criteria.
 func (api *Api) Devices(ctx context.Context, criteria DeviceSearchCriteria) (*DeviceSearchResults, error) {
+	var aliasSearch *DeviceAliasInput
+	if criteria.Alias != nil {
+		normalized, err := normalizeAliasInputs([]DeviceAliasInput{*criteria.Alias})
+		if err != nil {
+			return nil, err
+		}
+		aliasSearch = &normalized[0]
+	}
 	results := make([]Device, 0)
 	db, pag := api.RDB.ListOf(ctx, &Device{}, func(result *gorm.DB) *gorm.DB {
 		if criteria.DeviceType != nil {
@@ -890,6 +937,13 @@ func (api *Api) Devices(ctx context.Context, criteria DeviceSearchCriteria) (*De
 			result = result.Where("id IN (?)",
 				api.RDB.DB(ctx).Model(&DeviceCredential{}).Select("device_id").Where("provisioning_profile_id = (?)",
 					api.RDB.DB(ctx).Model(&ProvisioningProfile{}).Select("id").Where("token = ?", *criteria.ProvisioningProfile)))
+		}
+		// The alias: the device a sender's identifier names. The value is normalized exactly as
+		// a write normalizes it, so the spelling in the query does not matter.
+		if aliasSearch != nil {
+			result = result.Where("id IN (?)",
+				api.RDB.DB(ctx).Model(&DeviceAlias{}).Select("device_id").
+					Where("scheme = ? AND value = ?", aliasSearch.Scheme, aliasSearch.Value))
 		}
 		// The earmark: the devices a profile may adopt.
 		if criteria.ExpectedProvisioningProfile != nil {

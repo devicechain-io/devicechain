@@ -5,6 +5,7 @@ package graphql
 
 import (
 	"context"
+	"math"
 
 	"github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-microservice/auth"
@@ -63,4 +64,46 @@ func (r *SchemaResolver) DeleteIntegration(ctx context.Context, args struct{ Tok
 		return false, err
 	}
 	return r.GetApi(ctx).DeleteIntegration(ctx, args.Token)
+}
+
+// Remove the unregistered devices an integration has recorded.
+func (r *SchemaResolver) ClearUnregisteredIntegrationDevices(ctx context.Context, args struct {
+	Integration string
+}) (int32, error) {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
+		return 0, err
+	}
+	n, err := r.GetApi(ctx).ClearUnregisteredIntegrationDevices(ctx, args.Integration)
+	if err != nil {
+		return 0, err
+	}
+	if n > math.MaxInt32 {
+		n = math.MaxInt32
+	}
+	return int32(n), nil
+}
+
+// Turn a sender's identifier into a device (service plane). The caller is a SERVICE: a service
+// token holding device:read, and a user's access token is refused even when it holds the
+// authority, because the operation answers a question (does this secret belong to this
+// integration?) that a human session has no business asking.
+//
+// It is a mutation because it records a sighting when no device in scope carries the alias, and
+// it asks for device:read, not device:write, on purpose: the service token that asks is the
+// ingest path's, which must not hold the authority to change or delete devices. The only write
+// is an observation row, capped per integration and not journalled.
+func (r *SchemaResolver) ResolveIntegrationDevice(ctx context.Context, args struct {
+	Integration string
+	Secret      string
+	Scheme      string
+	Value       string
+}) (*IntegrationDeviceResolutionResolver, error) {
+	if err := auth.AuthorizeService(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+	resolved, err := r.GetApi(ctx).ResolveIntegrationDevice(ctx, args.Integration, args.Secret, args.Scheme, args.Value)
+	if err != nil {
+		return nil, err
+	}
+	return &IntegrationDeviceResolutionResolver{M: resolved}, nil
 }

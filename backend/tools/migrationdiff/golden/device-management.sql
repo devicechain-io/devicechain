@@ -10,6 +10,7 @@ ALTER SEQUENCE "device-management".customer_types_id_seq OWNED BY "device-manage
 ALTER SEQUENCE "device-management".customers_id_seq OWNED BY "device-management".customers.id;
 ALTER SEQUENCE "device-management".detection_rule_scope_refs_id_seq OWNED BY "device-management".detection_rule_scope_refs.id;
 ALTER SEQUENCE "device-management".detection_rules_id_seq OWNED BY "device-management".detection_rules.id;
+ALTER SEQUENCE "device-management".device_aliases_id_seq OWNED BY "device-management".device_aliases.id;
 ALTER SEQUENCE "device-management".device_claims_id_seq OWNED BY "device-management".device_claims.id;
 ALTER SEQUENCE "device-management".device_configuration_revisions_id_seq OWNED BY "device-management".device_configuration_revisions.id;
 ALTER SEQUENCE "device-management".device_configuration_states_id_seq OWNED BY "device-management".device_configuration_states.id;
@@ -32,6 +33,7 @@ ALTER SEQUENCE "device-management".geo_fence_geometry_blobs_id_seq OWNED BY "dev
 ALTER SEQUENCE "device-management".geo_fence_set_versions_id_seq OWNED BY "device-management".geo_fence_set_versions.id;
 ALTER SEQUENCE "device-management".geo_fences_id_seq OWNED BY "device-management".geo_fences.id;
 ALTER SEQUENCE "device-management".integration_device_types_id_seq OWNED BY "device-management".integration_device_types.id;
+ALTER SEQUENCE "device-management".integration_unregistered_devices_id_seq OWNED BY "device-management".integration_unregistered_devices.id;
 ALTER SEQUENCE "device-management".integrations_id_seq OWNED BY "device-management".integrations.id;
 ALTER SEQUENCE "device-management".maintenance_windows_id_seq OWNED BY "device-management".maintenance_windows.id;
 ALTER SEQUENCE "device-management".metric_definitions_id_seq OWNED BY "device-management".metric_definitions.id;
@@ -80,6 +82,11 @@ ALTER TABLE ONLY "device-management".detection_rule_scope_refs ALTER COLUMN id S
 ALTER TABLE ONLY "device-management".detection_rules
  ADD CONSTRAINT detection_rules_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-management".detection_rules ALTER COLUMN id SET DEFAULT nextval('"device-management".detection_rules_id_seq'::regclass);
+ALTER TABLE ONLY "device-management".device_aliases
+ ADD CONSTRAINT device_aliases_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "device-management".device_aliases
+ ADD CONSTRAINT fk_device_aliases_device FOREIGN KEY (device_id) REFERENCES "device-management".devices(id) ON DELETE CASCADE;
+ALTER TABLE ONLY "device-management".device_aliases ALTER COLUMN id SET DEFAULT nextval('"device-management".device_aliases_id_seq'::regclass);
 ALTER TABLE ONLY "device-management".device_claims
  ADD CONSTRAINT device_claims_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-management".device_claims ALTER COLUMN id SET DEFAULT nextval('"device-management".device_claims_id_seq'::regclass);
@@ -166,6 +173,11 @@ ALTER TABLE ONLY "device-management".integration_device_types
 ALTER TABLE ONLY "device-management".integration_device_types
  ADD CONSTRAINT integration_device_types_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-management".integration_device_types ALTER COLUMN id SET DEFAULT nextval('"device-management".integration_device_types_id_seq'::regclass);
+ALTER TABLE ONLY "device-management".integration_unregistered_devices
+ ADD CONSTRAINT fk_integration_unregistered_devices_integration FOREIGN KEY (integration_id) REFERENCES "device-management".integrations(id) ON DELETE CASCADE;
+ALTER TABLE ONLY "device-management".integration_unregistered_devices
+ ADD CONSTRAINT integration_unregistered_devices_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "device-management".integration_unregistered_devices ALTER COLUMN id SET DEFAULT nextval('"device-management".integration_unregistered_devices_id_seq'::regclass);
 ALTER TABLE ONLY "device-management".integrations
  ADD CONSTRAINT integrations_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-management".integrations ALTER COLUMN id SET DEFAULT nextval('"device-management".integrations_id_seq'::regclass);
@@ -277,6 +289,7 @@ CREATE INDEX "idx_device-management_geo_fences_tenant_id" ON "device-management"
 CREATE INDEX "idx_device-management_geo_fences_token" ON "device-management".geo_fences USING btree (token);
 CREATE INDEX "idx_device-management_integration_device_types_device_type_id" ON "device-management".integration_device_types USING btree (device_type_id);
 CREATE INDEX "idx_device-management_integration_device_types_tenant_id" ON "device-management".integration_device_types USING btree (tenant_id);
+CREATE INDEX "idx_device-management_integration_unregistered_devices_5bb945cd" ON "device-management".integration_unregistered_devices USING btree (tenant_id);
 CREATE INDEX "idx_device-management_integrations_deleted_at" ON "device-management".integrations USING btree (deleted_at);
 CREATE INDEX "idx_device-management_integrations_tenant_id" ON "device-management".integrations USING btree (tenant_id);
 CREATE INDEX "idx_device-management_integrations_token" ON "device-management".integrations USING btree (token);
@@ -383,6 +396,12 @@ CREATE SEQUENCE "device-management".detection_rule_scope_refs_id_seq
  NO MAXVALUE
  CACHE 1;
 CREATE SEQUENCE "device-management".detection_rules_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE SEQUENCE "device-management".device_aliases_id_seq
  START WITH 1
  INCREMENT BY 1
  NO MINVALUE
@@ -515,6 +534,12 @@ CREATE SEQUENCE "device-management".geo_fences_id_seq
  NO MAXVALUE
  CACHE 1;
 CREATE SEQUENCE "device-management".integration_device_types_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE SEQUENCE "device-management".integration_unregistered_devices_id_seq
  START WITH 1
  INCREMENT BY 1
  NO MINVALUE
@@ -722,6 +747,14 @@ CREATE TABLE "device-management".detection_rules (
  authoring_graph jsonb,
  entity_group_token text,
  entity_group_version integer
+);
+CREATE TABLE "device-management".device_aliases (
+ id bigint NOT NULL,
+ created_at timestamp with time zone,
+ tenant_id character varying(128) NOT NULL,
+ device_id bigint NOT NULL,
+ scheme character varying(70) NOT NULL,
+ value character varying(128) NOT NULL
 );
 CREATE TABLE "device-management".device_claims (
  id bigint NOT NULL,
@@ -1025,6 +1058,17 @@ CREATE TABLE "device-management".integration_device_types (
  integration_id bigint NOT NULL,
  device_type_id bigint NOT NULL
 );
+CREATE TABLE "device-management".integration_unregistered_devices (
+ id bigint NOT NULL,
+ created_at timestamp with time zone,
+ tenant_id character varying(128) NOT NULL,
+ integration_id bigint NOT NULL,
+ scheme character varying(70) NOT NULL,
+ value character varying(128) NOT NULL,
+ first_seen timestamp with time zone NOT NULL,
+ last_seen timestamp with time zone NOT NULL,
+ count bigint DEFAULT 1 NOT NULL
+);
 CREATE TABLE "device-management".integrations (
  id bigint NOT NULL,
  created_at timestamp with time zone,
@@ -1141,6 +1185,8 @@ CREATE UNIQUE INDEX uix_customers_tenant_token ON "device-management".customers 
 CREATE UNIQUE INDEX uix_dcr_device_revision ON "device-management".device_configuration_revisions USING btree (device_id, revision);
 CREATE UNIQUE INDEX uix_dcs_device ON "device-management".device_configuration_states USING btree (device_id);
 CREATE UNIQUE INDEX uix_detection_rules_tenant_token ON "device-management".detection_rules USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
+CREATE UNIQUE INDEX uix_device_aliases_device_scheme ON "device-management".device_aliases USING btree (device_id, scheme);
+CREATE UNIQUE INDEX uix_device_aliases_tenant_scheme_value ON "device-management".device_aliases USING btree (tenant_id, scheme, value);
 CREATE UNIQUE INDEX uix_device_credentials_tenant_token ON "device-management".device_credentials USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_device_profile_versions_profile_version ON "device-management".device_profile_versions USING btree (device_profile_id, version);
 CREATE UNIQUE INDEX uix_device_profiles_tenant_token ON "device-management".device_profiles USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
@@ -1159,6 +1205,7 @@ CREATE UNIQUE INDEX uix_geo_fence_geometry_blobs_tenant_hash ON "device-manageme
 CREATE UNIQUE INDEX uix_geo_fence_set_versions_tenant_version ON "device-management".geo_fence_set_versions USING btree (tenant_id, version);
 CREATE UNIQUE INDEX uix_geo_fences_tenant_token ON "device-management".geo_fences USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_integration_device_types_pair ON "device-management".integration_device_types USING btree (integration_id, device_type_id);
+CREATE UNIQUE INDEX uix_integration_unregistered_devices_key ON "device-management".integration_unregistered_devices USING btree (integration_id, scheme, value);
 CREATE UNIQUE INDEX uix_integrations_tenant_token ON "device-management".integrations USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_maintenance_windows_tenant_token ON "device-management".maintenance_windows USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_metric_definitions_tenant_token ON "device-management".metric_definitions USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
