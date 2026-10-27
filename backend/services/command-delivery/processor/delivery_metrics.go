@@ -111,7 +111,8 @@ type DeliveryMetrics struct {
 	PresenceReadErrors  prometheus.Counter
 
 	// ImpactLookupFailures counts commands dispatched to a transport that gates on impact
-	// whose impact could not be decided, so the message went out WITHOUT the impact stamp. The
+	// whose impact was not resolved (the owner could not decide, timed out, or is not wired), so
+	// the message went out WITHOUT the impact stamp. The
 	// adapter reads an absent stamp as unknown and refuses the dangerous class, so a standing
 	// rate here is a transport that cannot actuate disruptive commands, not a harmless blip.
 	ImpactLookupFailures prometheus.Counter

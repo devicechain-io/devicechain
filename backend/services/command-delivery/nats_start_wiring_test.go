@@ -133,8 +133,8 @@ func TestTheNudgerIsBoundDuringTheNatsStart(t *testing.T) {
 // impactStub is a model.CommandImpactResolver whose identity the wiring test compares.
 type impactStub struct{}
 
-func (*impactStub) CommandImpact(context.Context, string, string) (string, error) {
-	return "NORMAL", nil
+func (*impactStub) ImpactsFor(context.Context, []string, string) (map[string]string, error) {
+	return nil, nil
 }
 
 // TestTheSparkplugCapabilityAndImpactResolverReachTheProcessor builds the processor the way main

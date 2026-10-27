@@ -59,32 +59,38 @@ func TestCurrentWindowsFailsClosedOnAMissingList(t *testing.T) {
 	}
 }
 
-// CommandImpact returns the impact the owner named for exactly the device asked about.
-func TestCommandImpactRelaysTheOwnersClassification(t *testing.T) {
+// ImpactsFor returns exactly the impacts the owner named, keyed by device, in one call.
+func TestImpactsForRelaysTheOwnersClassification(t *testing.T) {
 	s := newWindowSchedulerAgainst(t, `{"data":{"commandDispatchSchedule":{"impacts":[
 	  {"deviceToken":"other","impact":"NORMAL"},{"deviceToken":"node-1","impact":"DISRUPTIVE"}]}}}`)
-	got, err := s.CommandImpact(batchCtx(), "node-1", "sparkplug.reboot")
-	if err != nil || got != "DISRUPTIVE" {
-		t.Fatalf("impact = %q, err %v; want DISRUPTIVE for the device asked about, not its neighbour's", got, err)
+	got, err := s.ImpactsFor(batchCtx(), []string{"node-1", "other", "gone"}, "sparkplug.reboot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got["node-1"] != "DISRUPTIVE" || got["other"] != "NORMAL" {
+		t.Fatalf("impacts = %v, want each device's own", got)
+	}
+	if _, ok := got["gone"]; ok {
+		t.Fatal("a device the owner decided nothing about must be ABSENT, never NORMAL")
 	}
 }
 
-// 🔴 SILENCE IS NEVER NORMAL. The owner lists impacts only for enabled devices whose type defines
-// the command, so an empty list, a list without the device, an empty impact, and a response that
-// lost the field (an older owner) are all failures to decide. Reading any of them as NORMAL would
-// let an adapter that gates on impact treat the unknown as the safe class.
-func TestCommandImpactFailsClosedWhenTheOwnerDecidedNothing(t *testing.T) {
+// An empty impact is undecided, and a response that lost the field (an older owner) or the whole
+// schedule is a failure, not an empty decision.
+func TestImpactsForTreatsSilenceAsUndecidedAndALostFieldAsAFailure(t *testing.T) {
+	s := newWindowSchedulerAgainst(t, `{"data":{"commandDispatchSchedule":{"impacts":[{"deviceToken":"node-1","impact":""}]}}}`)
+	got, err := s.ImpactsFor(batchCtx(), []string{"node-1"}, "x")
+	if err != nil || len(got) != 0 {
+		t.Fatalf("empty impact: %v, %v; want no entry and no error", got, err)
+	}
 	for name, body := range map[string]string{
-		"empty list":        `{"data":{"commandDispatchSchedule":{"impacts":[]}}}`,
-		"other device only": `{"data":{"commandDispatchSchedule":{"impacts":[{"deviceToken":"other","impact":"NORMAL"}]}}}`,
-		"empty impact":      `{"data":{"commandDispatchSchedule":{"impacts":[{"deviceToken":"node-1","impact":""}]}}}`,
-		"field missing":     `{"data":{"commandDispatchSchedule":{"holds":[],"refusals":[]}}}`,
-		"no schedule":       `{"data":{"commandDispatchSchedule":null}}`,
+		"field missing": `{"data":{"commandDispatchSchedule":{"holds":[],"refusals":[]}}}`,
+		"no schedule":   `{"data":{"commandDispatchSchedule":null}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			s := newWindowSchedulerAgainst(t, body)
-			if got, err := s.CommandImpact(batchCtx(), "node-1", "sparkplug.reboot"); err == nil {
-				t.Fatalf("got impact %q with no error; an undecided impact must be an error", got)
+			if got, err := s.ImpactsFor(batchCtx(), []string{"node-1"}, "x"); err == nil {
+				t.Fatalf("got %v with no error; a lost field must be an error", got)
 			}
 		})
 	}

@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -20,21 +21,45 @@ import (
 	"github.com/devicechain-io/dc-command-delivery/model"
 	"github.com/devicechain-io/dc-command-delivery/presence"
 	"github.com/devicechain-io/dc-microservice/cmddownlink"
+	"github.com/devicechain-io/dc-microservice/core"
 )
 
-// impactSpy is a model.CommandImpactResolver that records how often it was asked.
+// impactSpy is a model.CommandImpactResolver that records how it was asked. It answers every
+// device it is given with impact, unless err is set or answer is.
 type impactSpy struct {
 	mu     sync.Mutex
 	calls  int
+	asked  [][]string
 	impact string
 	err    error
+	// answer, when set, decides the reply from the tenant in ctx and the command key.
+	answer func(tenant, key string) string
+	// block makes the call wait for its context to end, like a device-management that hangs.
+	block bool
 }
 
-func (s *impactSpy) CommandImpact(_ context.Context, _, _ string) (string, error) {
+func (s *impactSpy) ImpactsFor(ctx context.Context, devices []string, key string) (map[string]string, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.calls++
-	return s.impact, s.err
+	s.asked = append(s.asked, append([]string(nil), devices...))
+	block, err, impact, answer := s.block, s.err, s.impact, s.answer
+	s.mu.Unlock()
+	if block {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	if err != nil {
+		return nil, err
+	}
+	if answer != nil {
+		tenant, _ := core.TenantFromContext(ctx)
+		impact = answer(tenant, key)
+	}
+	out := map[string]string{}
+	for _, d := range devices {
+		out[d] = impact
+	}
+	return out, nil
 }
 
 func (s *impactSpy) count() int {
@@ -202,37 +227,43 @@ func TestImpactIsLeftOffWhenItCannotBeDecided(t *testing.T) {
 	}
 }
 
-// TestImpactIsMemoizedButAFailureIsNot: the second command to the same device and key reuses the
-// answer (one call to the owner), and a failure is retried on the next command instead of being
-// cached for the TTL, because the header a failure leaves off is the fail-closed direction and
-// caching it would stretch an outage.
+// TestImpactIsMemoizedButAFailureIsNot: a second sweep over the same device and key reuses the
+// answer (no further call to the owner), and a failure is retried on the next sweep instead of
+// being cached for the TTL, because the header a failure leaves off is the fail-closed direction
+// and caching it would stretch an outage.
 func TestImpactIsMemoizedButAFailureIsNot(t *testing.T) {
-	cmds := func() []*model.Command {
-		a, b := queued(1, "c1"), queued(2, "c2")
-		a.DeviceToken, b.DeviceToken = "dev-s", "dev-s"
-		return []*model.Command{a, b}
-	}
 	state := map[string]presence.State{"dev-s": asserted(true, sparkplugSource)}
+	one := func() []*model.Command {
+		a := queued(1, "c1")
+		a.DeviceToken = "dev-s"
+		return []*model.Command{a}
+	}
 
 	t.Run("success is cached", func(t *testing.T) {
 		spy := &impactSpy{impact: "DESTRUCTIVE"}
-		proc := procWith(&fakeApi{lockAvailable: true, pending: cmds()}, &recordingWriter{})
+		api := &fakeApi{lockAvailable: true, pending: one()}
+		proc := procWith(api, &recordingWriter{})
 		proc.Presence = &scriptedReader{states: state}
 		proc.SparkplugCommands, proc.CommandImpacts = true, spy
 
 		proc.sweepLocked(context.Background())
+		api.pending = one()
+		proc.sweepLocked(context.Background())
 
-		assert.Equal(t, 1, spy.count(), "two commands to one device and key resolve the impact once")
+		assert.Equal(t, 1, spy.count(), "the second sweep reuses the first sweep's answer")
 	})
 	t.Run("failure is not cached", func(t *testing.T) {
 		spy := &impactSpy{err: errors.New("down")}
-		proc := procWith(&fakeApi{lockAvailable: true, pending: cmds()}, &recordingWriter{})
+		api := &fakeApi{lockAvailable: true, pending: one()}
+		proc := procWith(api, &recordingWriter{})
 		proc.Presence = &scriptedReader{states: state}
 		proc.SparkplugCommands, proc.CommandImpacts = true, spy
 
 		proc.sweepLocked(context.Background())
+		api.pending = one()
+		proc.sweepLocked(context.Background())
 
-		assert.Equal(t, 2, spy.count(), "a failed lookup is retried for the next command")
+		assert.Equal(t, 2, spy.count(), "a failed lookup is retried on the next sweep")
 	})
 	t.Run("an entry expires", func(t *testing.T) {
 		now := time.Now()
@@ -246,6 +277,122 @@ func TestImpactIsMemoizedButAFailureIsNot(t *testing.T) {
 		_, hit = c.get(k)
 		assert.False(t, hit, "a stale impact must not outlive the TTL")
 	})
+}
+
+// TestAFleetWriteIsOneImpactCall: N Sparkplug devices and one command key resolve in ONE call that
+// names every device, not N serial ones; a second key adds exactly one more. Devices the gate will
+// not dispatch (held for absence) and devices on other transports are not asked about.
+func TestAFleetWriteIsOneImpactCall(t *testing.T) {
+	const n = 40
+	var cmds []*model.Command
+	states := map[string]presence.State{}
+	for i := uint(1); i <= n; i++ {
+		c := queued(i, fmt.Sprintf("c%d", i))
+		cmds = append(cmds, c)
+		states[c.DeviceToken] = asserted(true, sparkplugSource)
+	}
+	held := queued(n+1, "held")
+	states[held.DeviceToken] = asserted(false, sparkplugSource)
+	plain := queued(n+2, "plain")
+	states[plain.DeviceToken] = asserted(true, mqttSource)
+	other := queued(n+3, "other")
+	other.Name = "wipe"
+	states[other.DeviceToken] = asserted(true, sparkplugSource)
+	cmds = append(cmds, held, plain, other)
+
+	spy := &impactSpy{impact: "DISRUPTIVE"}
+	writer := &recordingWriter{}
+	proc := procWith(&fakeApi{lockAvailable: true, pending: cmds}, writer)
+	proc.Presence = &scriptedReader{states: states}
+	proc.SparkplugCommands, proc.CommandImpacts = true, spy
+
+	proc.sweepLocked(context.Background())
+
+	require.Equal(t, 2, spy.count(), "one call per distinct command key (reboot, wipe), not per device")
+	sizes := map[int]bool{}
+	for _, asked := range spy.asked {
+		sizes[len(asked)] = true
+	}
+	assert.True(t, sizes[n] && sizes[1], "the reboot call names all %d dispatchable devices and the wipe call one: %v", n, spy.asked)
+	for _, asked := range spy.asked {
+		assert.NotContains(t, asked, held.DeviceToken, "a command the gate holds is not dispatched, so not asked about")
+		assert.NotContains(t, asked, plain.DeviceToken, "a non-Sparkplug device is not asked about")
+	}
+}
+
+// TestASlowImpactOwnerCannotStallDispatch: a device-management that never answers delays a sweep by
+// the batch deadline at most, once, and every command is still dispatched: the non-Sparkplug one
+// unaffected, the Sparkplug ones without an impact stamp and counted. Control: with the owner
+// answering, the same sweep stamps the impact.
+func TestASlowImpactOwnerCannotStallDispatch(t *testing.T) {
+	build := func(spy *impactSpy) (*CommandDeliveryProcessor, *recordingWriter) {
+		cmds := []*model.Command{queued(1, "c1"), queued(2, "c2"), queued(3, "c3")}
+		writer := &recordingWriter{}
+		proc := procWith(&fakeApi{lockAvailable: true, pending: cmds}, writer)
+		proc.Presence = &scriptedReader{states: map[string]presence.State{
+			"dev-c1": asserted(true, sparkplugSource),
+			"dev-c2": asserted(true, sparkplugSource),
+			"dev-c3": asserted(true, mqttSource),
+		}}
+		proc.SparkplugCommands, proc.CommandImpacts = true, spy
+		proc.impactTimeout = 50 * time.Millisecond
+		proc.ImpactLookupFailures = prometheus.NewCounter(prometheus.CounterOpts{Name: "slow_impact_failures"})
+		return proc, writer
+	}
+
+	proc, writer := build(&impactSpy{block: true})
+	start := time.Now()
+	proc.sweepLocked(context.Background())
+	assert.Less(t, time.Since(start), 2*time.Second, "the sweep waited on a hung owner far beyond the deadline")
+	require.Equal(t, 3, writer.count(), "every command is dispatched whatever the owner does")
+	headers := headersByDevice(writer)
+	for _, d := range []string{"dev-c1", "dev-c2"} {
+		assert.Equal(t, map[string]string{cmddownlink.HeaderTransport: "sparkplug"}, headers[d],
+			"%s: no impact stamp when the owner timed out", d)
+	}
+	assert.Nil(t, headers["dev-c3"])
+	assert.Equal(t, 2.0, testutil.ToFloat64(proc.ImpactLookupFailures), "each unstamped Sparkplug command is counted")
+
+	proc, writer = build(&impactSpy{impact: "DISRUPTIVE"})
+	proc.sweepLocked(context.Background())
+	assert.Equal(t, "DISRUPTIVE", headersByDevice(writer)["dev-c1"][cmddownlink.HeaderCommandImpact],
+		"control: with the owner answering the stamp is present")
+}
+
+// TestTheImpactCacheKeyNamesTenantDeviceAndCommand pins every part of the key through the sweep.
+// The same device token exists in two tenants and the same device receives two command keys; the
+// owner answers a DIFFERENT impact for each (tenant, key). Each message must carry its own. Dropping
+// the tenant, or the command, from impactKey makes two of these share one cached answer.
+func TestTheImpactCacheKeyNamesTenantDeviceAndCommand(t *testing.T) {
+	mk := func(id uint, token, tenant, name string) *model.Command {
+		c := queuedFor(id, token, tenant)
+		c.DeviceToken = "dev-shared"
+		c.Name = name
+		return c
+	}
+	cmds := []*model.Command{
+		mk(1, "a-reboot", "acme", "reboot"), mk(2, "a-wipe", "acme", "wipe"),
+		mk(3, "o-reboot", "other", "reboot"), mk(4, "o-wipe", "other", "wipe"),
+	}
+	spy := &impactSpy{answer: func(tenant, key string) string { return tenant + "/" + key }}
+	writer := &recordingWriter{}
+	proc := procWith(&fakeApi{lockAvailable: true, pending: cmds}, writer)
+	proc.Presence = &scriptedReader{states: map[string]presence.State{"dev-shared": asserted(true, sparkplugSource)}}
+	proc.SparkplugCommands, proc.CommandImpacts = true, spy
+
+	proc.sweepLocked(context.Background())
+
+	require.Equal(t, 4, writer.count())
+	got := map[string]string{}
+	for _, m := range writer.messages {
+		var env cmddownlink.DeliveryEnvelope
+		require.NoError(t, json.Unmarshal(m.Value, &env))
+		got[env.Token] = m.Headers[cmddownlink.HeaderCommandImpact]
+	}
+	assert.Equal(t, map[string]string{
+		"a-reboot": "acme/reboot", "a-wipe": "acme/wipe",
+		"o-reboot": "other/reboot", "o-wipe": "other/wipe",
+	}, got)
 }
 
 // TestTheHoldReconcilerAgreesWithTheSweepAboutSparkplug: one reading a held Sparkplug command as
@@ -357,23 +504,37 @@ func TestAnAdapterRefusalReachesTheCommandAsNotDelivered(t *testing.T) {
 // this service's own response type with no unknown field. A field added on one side only fails
 // here instead of being silently dropped by the other.
 func TestTheSharedWireTypesAgreeWithThisServicesOwn(t *testing.T) {
+	strict := func(data []byte, into any) error {
+		dec := json.NewDecoder(bytes.NewReader(data))
+		dec.DisallowUnknownFields()
+		return dec.Decode(into)
+	}
 	raw := json.RawMessage(`{"metric":"x"}`)
+	msg := "no"
+
+	// Delivery: published here, read by the adapter, and back.
 	out, err := json.Marshal(deliveryEnvelope{Token: "c", DeviceToken: "d", Name: "n", Payload: &raw, DispatchNonce: "z"})
 	require.NoError(t, err)
-	dec := json.NewDecoder(bytes.NewReader(out))
-	dec.DisallowUnknownFields()
 	var shared cmddownlink.DeliveryEnvelope
-	require.NoError(t, dec.Decode(&shared), "this service publishes a field the shared type does not know")
+	require.NoError(t, strict(out, &shared), "this service publishes a field the shared type does not know")
 	assert.Equal(t, "z", shared.DispatchNonce)
+	back, err := json.Marshal(shared)
+	require.NoError(t, err)
+	var own deliveryEnvelope
+	require.NoError(t, strict(back, &own), "the shared delivery type sends a field this service does not read")
+	assert.Equal(t, "z", own.DispatchNonce)
 
-	msg := "no"
+	// Response: published by the adapter, read here, and back.
 	in, err := json.Marshal(cmddownlink.ResponseEnvelope{CommandToken: "c", Error: &msg,
 		Reach: cmddownlink.ReachUnsent, DispatchNonce: "z"})
 	require.NoError(t, err)
-	dec = json.NewDecoder(bytes.NewReader(in))
-	dec.DisallowUnknownFields()
-	var own responseEnvelope
-	require.NoError(t, dec.Decode(&own), "the shared type sends a field this service does not read")
-	assert.Equal(t, model.ReachUnsent, own.Reach)
-	assert.Equal(t, "z", own.DispatchNonce)
+	var ownResp responseEnvelope
+	require.NoError(t, strict(in, &ownResp), "the shared response type sends a field this service does not read")
+	assert.Equal(t, model.ReachUnsent, ownResp.Reach)
+	assert.Equal(t, "z", ownResp.DispatchNonce)
+	ownOut, err := json.Marshal(ownResp)
+	require.NoError(t, err)
+	var sharedResp cmddownlink.ResponseEnvelope
+	require.NoError(t, strict(ownOut, &sharedResp), "this service's response type carries a field the shared type does not know")
+	assert.Equal(t, "z", sharedResp.DispatchNonce)
 }

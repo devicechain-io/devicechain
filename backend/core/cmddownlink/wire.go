@@ -22,9 +22,9 @@ const HeaderTransport = "Dc-Transport"
 
 // HeaderCommandImpact is the impact (NORMAL, DISRUPTIVE or DESTRUCTIVE) of the command
 // definition the device's profile gives the command, resolved by command-delivery at dispatch
-// from the same owner that decides maintenance windows. It is absent when the lookup failed, and
-// an adapter that gates on impact must read absent as NORMAL-or-unknown and refuse the dangerous
-// class: fail closed.
+// from the same owner that decides maintenance windows. It is absent when the lookup failed or
+// timed out, and absent is UNKNOWN: an adapter must refuse anything that requires DISRUPTIVE or
+// higher, never assume NORMAL.
 const HeaderCommandImpact = "Dc-Command-Impact"
 
 // DeliveryEnvelope is command-delivery's wire payload on the device-commands subject. Its fields

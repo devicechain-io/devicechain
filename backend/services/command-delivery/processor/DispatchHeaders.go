@@ -14,6 +14,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/transport"
 
 	"github.com/devicechain-io/dc-command-delivery/model"
+	"github.com/devicechain-io/dc-command-delivery/presence"
 )
 
 // routing is what the delivery gate learned about a command's device that the transport adapter
@@ -93,6 +94,76 @@ func (c *impactCache) clock() time.Time {
 	return time.Now()
 }
 
+// impactTimeout bounds the whole of one batch's impact resolution, however many command keys it
+// names. It is deliberately short: the sweep holds the cluster-wide sweep lock while it runs, so
+// a slow device-management would otherwise stall every tenant's dispatch. What a timeout costs is
+// an absent impact stamp, which the adapter reads as unknown and fails closed on.
+const impactTimeout = 2 * time.Second
+
+// resolveImpacts fills the impact cache for one tenant batch BEFORE any command in it is claimed.
+//
+// 🔴 BEFORE THE CLAIMS, AND BATCHED, FOR THE SAME REASON. Resolving at publish time was one
+// synchronous query per command, with the claim already taken and the sweep lock held: a tenant
+// rebooting ten thousand Sparkplug nodes was ten thousand serial round trips, and one hung
+// device-management stalled dispatch for every tenant behind it. Here a batch costs one call per
+// distinct command key over the Sparkplug devices it would dispatch, under one short deadline,
+// and a miss is just a missing header.
+//
+// Only commands the gate will DISPATCH are asked about (not those it holds or fails), only
+// Sparkplug devices, and only keys the cache does not already hold.
+func (cproc *CommandDeliveryProcessor) resolveImpacts(ctx context.Context, batch tenantBatch,
+	states map[string]presence.State) {
+	if !cproc.SparkplugCommands || cproc.CommandImpacts == nil {
+		return
+	}
+	devicesByKey := map[string][]string{}
+	var keys []string
+	seen := map[impactKey]bool{}
+	for _, cmd := range batch.commands {
+		state := states[cmd.DeviceToken]
+		if presence.Decide(state, true) != presence.Dispatch ||
+			routingOf(state.Known, state.Source).transport != transport.Sparkplug {
+			continue
+		}
+		k := impactKey{tenant: cmd.TenantId, device: cmd.DeviceToken, command: cmd.Name}
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		if _, hit := cproc.impacts.get(k); hit {
+			continue
+		}
+		if _, ok := devicesByKey[cmd.Name]; !ok {
+			keys = append(keys, cmd.Name)
+		}
+		devicesByKey[cmd.Name] = append(devicesByKey[cmd.Name], cmd.DeviceToken)
+	}
+	if len(keys) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, cproc.impactDeadline())
+	defer cancel()
+	for _, name := range keys {
+		found, err := cproc.CommandImpacts.ImpactsFor(ctx, devicesByKey[name], name)
+		if err != nil {
+			log.Warn().Err(err).Str("tenant", batch.tenant).Str("command", name).
+				Int("devices", len(devicesByKey[name])).
+				Msg("Could not decide command impacts; these commands are dispatched without an impact stamp, which the transport adapter reads as unknown and fails closed on.")
+			continue
+		}
+		for device, impact := range found {
+			cproc.impacts.put(impactKey{tenant: batch.tenant, device: device, command: name}, impact)
+		}
+	}
+}
+
+func (cproc *CommandDeliveryProcessor) impactDeadline() time.Duration {
+	if cproc.impactTimeout > 0 {
+		return cproc.impactTimeout
+	}
+	return impactTimeout
+}
+
 // dispatchHeaders builds the routing headers for one command's device-commands message.
 //
 // 🔴 NOTHING IS STAMPED UNLESS SPARKPLUG COMMANDS ARE ENABLED. With the flag off, the message is
@@ -102,44 +173,25 @@ func (c *impactCache) clock() time.Time {
 //
 //   - Dc-Transport is stamped whenever the device is on a transport the platform mints. It is
 //     routing only; it authorizes nothing, and an absent header means unknown, not "not yours".
-//   - Dc-Command-Impact is stamped only for a Sparkplug device, because only that adapter gates
-//     on it, and resolving it costs a call to device-management. If the lookup fails the header
-//     is LEFT OFF (and counted): the adapter reads absent as unknown and refuses the dangerous
-//     class, so a failure here can only make a command refused, never actuated.
+//   - Dc-Command-Impact is stamped only for a Sparkplug device, from the cache resolveImpacts
+//     filled for this batch. It makes NO network call: a miss (the owner could not decide, timed
+//     out, or is not wired) leaves the header OFF and is counted, and the adapter reads absent as
+//     unknown and refuses the dangerous class, so a failure here can only make a command refused,
+//     never actuated.
 //
 // It returns nil when there is nothing to stamp, so the message keeps a nil Headers map.
-func (cproc *CommandDeliveryProcessor) dispatchHeaders(ctx context.Context, cmd *model.Command,
-	route routing) map[string]string {
+func (cproc *CommandDeliveryProcessor) dispatchHeaders(cmd *model.Command, route routing) map[string]string {
 	if !cproc.SparkplugCommands || route.transport == "" {
 		return nil
 	}
 	headers := map[string]string{cmddownlink.HeaderTransport: string(route.transport)}
 	if route.transport == transport.Sparkplug {
-		if impact, ok := cproc.commandImpact(ctx, cmd); ok {
+		key := impactKey{tenant: cmd.TenantId, device: cmd.DeviceToken, command: cmd.Name}
+		if impact, ok := cproc.impacts.get(key); ok {
 			headers[cmddownlink.HeaderCommandImpact] = impact
+		} else {
+			incr(cproc.ImpactLookupFailures, 1)
 		}
 	}
 	return headers
-}
-
-// commandImpact resolves a command's impact through the owner, memoized. It reports false when
-// no resolver is wired or the owner could not decide.
-func (cproc *CommandDeliveryProcessor) commandImpact(ctx context.Context, cmd *model.Command) (string, bool) {
-	if cproc.CommandImpacts == nil {
-		incr(cproc.ImpactLookupFailures, 1)
-		return "", false
-	}
-	key := impactKey{tenant: cmd.TenantId, device: cmd.DeviceToken, command: cmd.Name}
-	if impact, ok := cproc.impacts.get(key); ok {
-		return impact, true
-	}
-	impact, err := cproc.CommandImpacts.CommandImpact(ctx, cmd.DeviceToken, cmd.Name)
-	if err != nil {
-		incr(cproc.ImpactLookupFailures, 1)
-		log.Warn().Err(err).Str("command", cmd.Token).Str("device", cmd.DeviceToken).
-			Msg("Could not decide a command's impact; it is dispatched without an impact stamp, which the transport adapter reads as unknown and fails closed on.")
-		return "", false
-	}
-	cproc.impacts.put(key, impact)
-	return impact, true
 }

@@ -210,6 +210,9 @@ type CommandDeliveryProcessor struct {
 	// impacts memoizes resolved impacts. Its zero value is ready to use, so a processor built
 	// by literal needs no setup.
 	impacts impactCache
+	// impactTimeout overrides the batch deadline for impact resolution; zero means the default.
+	// Only a test sets it.
+	impactTimeout time.Duration
 
 	// DisabledSource is where the disabled-device record is corrected from, at startup and every
 	// few minutes (see DisabledGate.go). MAY BE NIL, and nil is a degraded mode, not a clean
@@ -567,6 +570,8 @@ func (cproc *CommandDeliveryProcessor) deliverTenantBatch(ctx context.Context, b
 	}
 	batch.commands = commands
 	states := cproc.presenceStates(tenantCtx, distinctDevices(batch.commands))
+	// Impacts are resolved for the whole batch before the first claim; see resolveImpacts.
+	cproc.resolveImpacts(tenantCtx, batch, states)
 	for _, cmd := range batch.commands {
 		// 🔴 A MISSING KEY READS AS State{Known:false}, WHICH Decide ANSWERS Dispatch.
 		// That is the fail-open, and it carries three separate cases on one line: a
@@ -797,7 +802,7 @@ func (cproc *CommandDeliveryProcessor) deliverCommand(ctx context.Context, cmd *
 	msg := messaging.Message{
 		Key:     []byte(cmd.Token),
 		Value:   value,
-		Headers: cproc.dispatchHeaders(tenantCtx, cmd, route),
+		Headers: cproc.dispatchHeaders(cmd, route),
 	}
 
 	if err := cproc.DeviceCommandsWriter.WriteToDevice(tenantCtx, cmd.DeviceToken, msg); err != nil {

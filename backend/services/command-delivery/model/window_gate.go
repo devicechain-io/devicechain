@@ -42,14 +42,19 @@ type DispatchScheduler interface {
 }
 
 // CommandImpactResolver asks the same owner, through the same question the window gate asks, what
-// impact (NORMAL, DISRUPTIVE or DESTRUCTIVE) the profile gives a command on a device's type.
+// impact (NORMAL, DISRUPTIVE or DESTRUCTIVE) the profile gives one command on each of a set of
+// devices' types.
 //
 // The impact is NOT stored on the command row: enqueue resolves it only to decide the window, and
 // keeps the hold. A transport adapter that gates on impact itself therefore gets it stamped at
-// DISPATCH, from here. An error means the impact could not be decided, including a device the
-// owner decided nothing about; the caller must leave the impact off rather than guess NORMAL.
+// DISPATCH, from here. It is asked per tenant batch and per command key, never per command, so a
+// fleet-wide write is one call and not one per device.
+//
+// The map holds an entry only for a device the owner DECIDED an impact for; a device it decided
+// nothing about (disabled, gone, command not in its vocabulary) is simply absent, and absence must
+// never be read as NORMAL. An error means nothing was decided for any of them.
 type CommandImpactResolver interface {
-	CommandImpact(ctx context.Context, deviceToken, commandKey string) (string, error)
+	ImpactsFor(ctx context.Context, deviceTokens []string, commandKey string) (map[string]string, error)
 }
 
 // WindowOpening is the owner's current answer for one maintenance window.
