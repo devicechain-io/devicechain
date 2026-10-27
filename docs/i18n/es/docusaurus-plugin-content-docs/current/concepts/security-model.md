@@ -93,6 +93,26 @@ Consulte [Multitenencia](./multi-tenancy.md).
   limita a cada llamador, las solicitudes GraphQL tienen ejecución y tamaño de cuerpo acotados, y los intentos fallidos de inicio de sesión tienen límite de tasa.
   No hay un límite de tasa de solicitudes por inquilino en la propia API GraphQL.
 
+## Autenticación en dos pasos {#two-factor}
+
+Una cuenta puede exigir un código de una aplicación de autenticación después de su contraseña. [Cómo usarla](../guides/two-factor-authentication.md); aquí se explica qué garantiza y dónde termina.
+
+- **El segundo factor controla la emisión del token.** Cuando la contraseña de una cuenta con segundo factor es correcta, el inicio de sesión no emite nada: ni sesión ni token, solo un desafío de corta duración. Los tokens se emiten cuando se acepta el código. Como el token no existe hasta entonces, también queda cubierta la API de administración de los operadores, que confía en cualquier token válido.
+- **El servidor registra cómo demostró la persona quién es.** Todo token derivado del inicio de sesión lleva una afirmación `amr`: `["pwd","otp","mfa"]` para un código de la aplicación, `["pwd","mfa"]` para un código de recuperación y `["pwd"]` para una contraseña sola. Se lee del registro de la sesión, nunca del cliente. La exigencia de un inquilino se comprueba ahí en cada concesión de entrada al inquilino: al seleccionarlo, al renovar una sesión y en el paso de autorización de una conexión MCP u OAuth. Una sesión anterior a la actualización no tiene ese registro y es rechazada por un inquilino que exige el factor. Los tokens de servicio y los de cuentas de servicio nunca llevan la afirmación, y un token que la declara es rechazado.
+- **Secretos en reposo.** El secreto del autenticador se guarda cifrado en el [almacén de secretos](#secrets) bajo la clave raíz de la instancia. Se lee solo para comprobar un código, nunca se devuelve y no se guarda en caché. Un código de recuperación lleva 80 bits aleatorios y se guarda solo como un resumen unidireccional.
+- **Un código sirve una sola vez.** Un código solo se acepta para un intervalo posterior al último aceptado, y dos peticiones con el mismo código producen un único ganador. Se aceptan códigos de un intervalo de 30 segundos a cada lado del momento actual.
+- **Los intentos se cuentan antes de comprobarse.** Cada código incorrecto se carga a la cuenta antes de evaluarse, de modo que una ráfaga de intentos simultáneos no puede superar el límite. Tras 5 códigos incorrectos desde una misma dirección de origen, y tras 20 desde todas las direcciones juntas, el autenticador se bloquea durante un minuto, duplicándose con cada fallo adicional hasta 15 minutos. Un intento bloqueado recibe exactamente la misma respuesta que un código incorrecto. Los códigos de recuperación están exentos del bloqueo, porque no se pueden adivinar.
+- **Las cuentas de servicio, los dispositivos y el inicio de sesión único quedan fuera.** Una cuenta de servicio nunca inicia sesión con contraseña. Una sesión de inicio de sesión único se rige por los métodos de autenticación que exige su conexión, no por el ajuste de un inquilino. Consulta [Inicio de sesión único](./single-sign-on.md).
+
+Lo que no hace, dicho con claridad:
+
+- **Protege una cuenta cuya contraseña ya se conoce, no una cuya contraseña se desconoce.** Cada intento de adivinar un código viene de alguien que superó el paso de la contraseña. En el límite, después de los primeros 20 intentos, un atacante obtiene unos cuatro intentos por hora, y cada uno tiene tres códigos válidos entre un millón que acertar. Quien siga adivinando a ese ritmo durante un año tiene alrededor de un **10 % de probabilidad** de entrar. La alerta `MfaIdentityLocked` se dispara con el primer bloqueo por esa razón, y su remedio es restablecer la contraseña.
+- **Quien conoce la contraseña puede mantener bloqueado el autenticador del dueño.** Renovar el bloqueo exige un código incorrecto cada vez que caduca. El dueño aún puede iniciar sesión con un código de recuperación, y restablecer la contraseña lo termina. No hay bloqueo permanente, porque uno permanente permitiría a cualquiera que conozca una dirección dejar fuera a su dueño.
+- **Un emisor que controle la cabecera de dirección reenviada puede renovar la asignación por dirección.** El límite global entre todas las direcciones se mantiene.
+- **La exigencia de un inquilino obliga a ese inquilino, no a los operadores.** Decide quién puede entrar en el inquilino. No controla la consola de administración ni la API de administración, y todavía no existe una exigencia para toda la instancia dirigida a los operadores. Un superusuario con una sesión solo de contraseña puede entrar en un inquilino que exige el factor, y cada entrada se audita. Los operadores deberían activarlo, y el registro de auditoría y las alertas son la forma de vigilar los intentos contra sus cuentas.
+- **El desafío indica que la contraseña era correcta.** Es inherente a cualquier segundo factor que sigue a la contraseña. No se revela nada más sobre la cuenta hasta que se acepta el código.
+- **Los códigos de recuperación se consumen antes de emitir el token.** Si el servicio falla entre ambos pasos, el código se pierde y la persona inicia sesión de nuevo con otro.
+
 ## Endpoints que nunca salen del clúster {#internal-endpoints}
 
 Dos endpoints existen solo para los servicios de la propia plataforma. `/auth/service-token` intercambia el secreto
@@ -191,7 +211,8 @@ Estas carencias son conocidas y se aceptan en la versión actual. Planifique en 
    [Observabilidad](../deployment/observability.md#mqtt-fail-closed) describe el equilibrio.
 4. **La clave raíz es legible para cualquiera que pueda leer el Secret de Kubernetes de la instancia.** Restrinja el acceso a ese
    Secret y al etcd del clúster en consecuencia.
-5. **No se ha publicado ninguna prueba de penetración externa.**
+5. **La autenticación en dos pasos protege la contraseña, y solo la contraseña.** No obliga al plano de administración de los operadores a cumplir la exigencia de un inquilino, un atacante que conoce una contraseña y sigue adivinando al límite de bloqueo tiene alrededor de un 10 % de probabilidad al año, y quien conoce una contraseña puede mantener bloqueado el autenticador de una cuenta renovando el bloqueo. Consulta [Autenticación en dos pasos](#two-factor).
+6. **No se ha publicado ninguna prueba de penetración externa.**
 
 Nada de esta página sustituye su propia revisión. Si una entrada de aquí es un problema para su despliegue, la sección
 correspondiente de arriba indica dónde está el control.

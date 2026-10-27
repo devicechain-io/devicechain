@@ -61,6 +61,15 @@ How single sign-on works, and how an administrator sets it up, is covered in
 [Single sign-on](/concepts/single-sign-on) and
 [Configuring single sign-on](/guides/configuring-sso).
 
+## Two-factor authentication {#two-factor}
+
+If your account has two-factor authentication, entering the right password is not enough. The console asks for a **verification code** next:
+
+- Enter the six-digit code from your authenticator app. A code works once, so if you have just used one, wait for the next.
+- Or choose **Use a recovery code instead** and enter one of the codes you saved when you set it up. It works once.
+
+If the step times out (five minutes, five attempts), you are returned to the password. To turn it on, open the user menu and choose **Account security**; the steps are in [Two-factor authentication](/guides/two-factor-authentication#enrol). If your organization requires it and you have not set it up, the console takes you there after you sign in.
+
 ## Choosing a tenant
 
 A tenant is the workspace that holds your organization's devices, rules and dashboards. Your

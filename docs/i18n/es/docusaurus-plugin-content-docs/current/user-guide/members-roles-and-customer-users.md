@@ -76,6 +76,10 @@ inquilino. Si pertenece a más de un inquilino, elige cuál abrir.
 Un enlace que no se puede usar (caducó, se revocó, ya se usó o se envió a otra cuenta) recibe una
 única respuesta, "Esta invitación no se puede usar", sea cual sea el motivo. Pide uno nuevo.
 
+### Autenticación en dos pasos {#member-two-factor}
+
+La columna **Dos pasos** de la lista de miembros muestra si cada persona ha activado la autenticación en dos pasos. El inquilino puede exigirla a todos los que inician sesión con contraseña: abre **Configuración → Seguridad** y elige **Exigir**. Hace falta el permiso para gestionar miembros, para todo el inquilino. A un miembro que no la tiene se le envía a configurarla la próxima vez que entre, y las sesiones con contraseña que ya están dentro terminan en su siguiente renovación. Un inquilino cuyo nivel la exige no puede desactivarla. Restablecer a una persona que ha perdido el teléfono es tarea de un operador, porque la cuenta la comparten todos los inquilinos. Consulta [Autenticación en dos pasos](/guides/two-factor-authentication#require).
+
 ### Cambiar el acceso de un miembro {#changing-access}
 
 Desde el menú de una fila:

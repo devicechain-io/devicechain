@@ -699,6 +699,15 @@ chart 覆盖链条各环节：
 | `ProvisioningRateLimited` | warning | 连续 15 分钟，自注册请求以 `429` 被拒绝的速率超过每十秒一次。`result` 标签说明是哪个限制：`rate_limited_source` 表示某个客户端地址用完了配额，`rate_limited_tenant` 表示租户每秒注册数已达其治理上限。设备会等待收到的 `Retry-After` 后重试。 | 对于 `rate_limited_source`，确认 `infrastructure.http.trustedProxies` 列出了 ingress 控制器，并且控制器保留了客户端地址。否则所有设备共用同一份配额。对于 `rate_limited_tenant`，请提高租户的注册上限，或把产线批次错开。 |
 | `ProvisioningMisconfigured` | warning | 最近 10 分钟内至少有一个请求被一个无法工作的配置拒绝：其设备类型已被删除、其策略不是平台已知的策略，或其签发的凭据类型不受此构建支持。使用该配置的所有设备都会被拒绝，直到修复为止。 | 在服务日志中找到该配置（令牌以 `ERROR` 级别记录），然后修复或重建。 |
 
+## 第二因素锁定 {#mfa-alerts}
+
+两条告警监视[双重身份验证](../guides/two-factor-authentication.md)。代码只会被已经通过密码这一步的人猜测，因此这些告警关乎的是密码，而不是代码。它们背后的计数器见[指标参考](./metrics-reference.md#user-management)。
+
+| 告警 | 严重级别 | 含义 | 处理办法 |
+| --- | --- | --- | --- |
+| `MfaIdentityLocked` | critical | 某个账号的验证器在二十次错误代码后被锁定，每次都发生在密码正确之后。有人掌握了该密码并在猜测。只要出现一次就会触发。 | 在审计日志中找到该账号（`mfa_locked`，其前有 `mfa_failed` 和 `mfa_challenged` 记录），并**重置它的密码**；不要先重置它的第二因素，那会把账号交给正在猜测的人。来源地址见 ingress 日志。参见[锁定](../guides/two-factor-authentication.md#lockouts)。 |
+| `MfaVerificationFailuresSustained` | warning | 连续十五分钟，错误、重放或被锁定的代码以高于每十秒一次的速度被拒绝。要么是大量用户输错（节点时钟问题，或应用不同步），要么是有人在使用获取到的密码。 | 检查各节点的时钟是否同步，然后查看按账号分组的 `mfa_failed` 记录以及 ingress 日志。 |
+
 ## 自行关闭的安全门 {#safety-gates}
 
 有几个服务带有依赖另一个服务的安全门，当其配置缺失时，每个安全门都会以**关闭**状态启动，并在启动时输出一条警告。这是刻意的可用性权衡：设备平面不能硬依赖这些服务。它同时也是不可见的，因为工作仍在流动，没有任何报错，而安全门本应阻止的事情已经恢复。chart 安装总会提供该配置，因此安全门关闭意味着安装配置错误或被手工修改。

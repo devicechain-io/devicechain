@@ -79,6 +79,8 @@ puede cambiar. Un cambio de nivel se aplica en menos de un minuto.
 
 <GuideShot id="admin-tenant-basic" alt="La página del inquilino acme (sim), con token sim-acme, insignias de nivel silver y Habilitado, y botones Deshabilitar y Eliminar. El panel Inicio de sesión único explica el ajuste, indica que no se exige y ofrece el botón Exigir SSO. Debajo están las pestañas Básico, Ajustes, Ajustes efectivos y Modelos de IA, con Básico abierta: el token sim-acme en gris, el nombre acme (sim), el nivel Silver y un campo de configuración JSON vacío." />
 
+La página del inquilino también tiene un panel **Autenticación en dos pasos** con **Exigir dos pasos** (o **Dejar de exigir**). Exige un segundo factor a los inicios de sesión con contraseña del inquilino, y el botón no está disponible cuando el nivel del inquilino ya lo exige. Los superusuarios están exentos, y el inicio de sesión único sigue los requisitos de su propia conexión. Consulta [Autenticación en dos pasos](/guides/two-factor-authentication#require).
+
 ### Los ajustes de un inquilino {#a-tenants-settings}
 
 La pestaña **Ajustes** contiene los límites de este inquilino concreto, cuando deben diferir de los de
@@ -200,6 +202,8 @@ el del nivel.
 nivel no se puede eliminar mientras algún inquilino lo tenga. Consulta
 [Niveles de inquilino y empaquetado](../concepts/tenant-tiers.md).
 
+La pestaña **Settings** de un nivel también tiene **Exigir autenticación en dos pasos**. Si se marca, todos los inquilinos del nivel deben usar un segundo factor en los inicios de sesión con contraseña, y un inquilino no puede desactivarlo. Consulta [Autenticación en dos pasos](/guides/two-factor-authentication#tier-floor).
+
 ## Identidades
 
 **Identidades → Lista** es el directorio de personas de la instancia. Una persona es una identidad,
@@ -227,6 +231,8 @@ membresías.
   elige un inquilino y unos roles en **Añadir a inquilino** y pulsa **Añadir membresía**.
 
 <GuideShot id="admin-identity-detail" alt="La página de Maria Chen, maria.chen@acme-properties.example, habilitada, con botones Deshabilitar y Eliminar. El panel Acceso tiene un selector de roles de sistema con Guardar y un campo para establecer la contraseña. El panel Membresías muestra sim-acme, habilitada, con el rol Facilities viewer y los botones Guardar roles, Deshabilitar y Quitar. Debajo, los selectores para añadir a un inquilino con roles y el botón Añadir membresía." />
+
+La lista tiene una columna **Dos pasos**. En la página de una identidad, la sección **Autenticación en dos pasos** muestra si está activada y tiene **Restablecer dos pasos** para una persona que perdió el teléfono: elimina el autenticador y los códigos de recuperación y termina todas las sesiones. Si la identidad ha tenido códigos incorrectos recientemente, es posible que otra persona conozca su contraseña, así que el restablecimiento también pide una contraseña nueva. Consulta [Autenticación en dos pasos](/guides/two-factor-authentication#reset) y, para un operador que no puede iniciar sesión, [break-glass](/guides/two-factor-authentication#break-glass).
 
 ## Roles
 

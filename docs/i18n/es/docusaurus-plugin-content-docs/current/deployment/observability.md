@@ -1423,6 +1423,15 @@ no medidos, y cada uno se comprueba en ambos sentidos con pruebas unitarias.
 | `ProvisioningRateLimited` | aviso | Durante 15 minutos se han rechazado solicitudes de autorregistro con `429` a más de una cada diez segundos. La etiqueta `result` indica qué límite: `rate_limited_source` es una dirección de cliente que agotó su cupo, `rate_limited_tenant` son los registros por segundo del tenant en su techo de gobernanza. Los dispositivos esperan el `Retry-After` que se les indica y reintentan. | Para `rate_limited_source`, comprueba que `infrastructure.http.trustedProxies` nombra al controlador de ingress y que este conserva la dirección del cliente. Sin ello, todos los dispositivos comparten un único cupo. Para `rate_limited_tenant`, sube el techo de aprovisionamiento del tenant o reparte la tirada de fábrica. |
 | `ProvisioningMisconfigured` | aviso | En los últimos 10 minutos se rechazó al menos una solicitud por un perfil de aprovisionamiento que no puede funcionar: se borró su tipo de dispositivo, su estrategia no es una que la plataforma conozca, o emite un tipo de credencial que esta compilación no admite. Todos los dispositivos que usan ese perfil se rechazan hasta que se corrija. | Localiza el perfil en el registro del servicio (el token se registra con nivel `ERROR`) y corrígelo o recréalo. |
 
+## Bloqueos del segundo factor {#mfa-alerts}
+
+Dos alertas vigilan la [autenticación en dos pasos](../guides/two-factor-authentication.md). Un código solo lo adivina alguien que ya superó el paso de la contraseña, así que estas alertas tratan de contraseñas, no de códigos. Los contadores que las alimentan están en la [referencia de métricas](./metrics-reference.md#user-management).
+
+| Alerta | Gravedad | Qué significa | Qué hacer |
+| --- | --- | --- | --- |
+| `MfaIdentityLocked` | critical | El autenticador de una cuenta se bloqueó tras veinte códigos incorrectos, cada uno después de una contraseña correcta. Alguien tiene esa contraseña y está adivinando. Se dispara con una sola ocurrencia. | Encuentra la cuenta en el registro de auditoría (`mfa_locked`, tras filas `mfa_failed` y `mfa_challenged`) y **restablece su contraseña**; no restablezcas primero su segundo factor, porque entregaría la cuenta a quien está adivinando. Las direcciones de origen están en los registros del ingress. Consulta los [bloqueos](../guides/two-factor-authentication.md#lockouts). |
+| `MfaVerificationFailuresSustained` | warning | Durante quince minutos se han rechazado códigos incorrectos, repetidos o bloqueados a más de uno cada diez segundos. O bien muchas personas se equivocan al escribir (un problema de reloj en los nodos, o aplicaciones desincronizadas) o alguien usa contraseñas que ha obtenido. | Comprueba que los relojes de los nodos estén sincronizados y busca filas `mfa_failed` agrupadas por cuenta y los registros del ingress. |
+
 ## Puertas de seguridad que se apagaron solas {#safety-gates}
 
 Algunos servicios llevan una puerta de seguridad que depende de otro servicio, y cada una arranca

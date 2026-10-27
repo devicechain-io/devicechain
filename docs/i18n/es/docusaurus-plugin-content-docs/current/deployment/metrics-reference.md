@@ -328,6 +328,15 @@ Estas cuentan el coordinador de eliminación de inquilinos, que borra los datos 
 | `tenant_purge_duration_seconds` | Histograma de segundos desde la eliminación de un inquilino hasta la liberación de su identificador. Incluye la retención del identificador. |
 | `tenant_purge_clean_duration_seconds` | Histograma de segundos desde la eliminación de un inquilino hasta que el último almacén informó de que estaba limpio. Excluye las esperas de asentamiento y retención posteriores: lo que tardó el borrado en sí. |
 
+Estas métricas cuentan la [autenticación en dos pasos](../guides/two-factor-authentication.md). La primera y la última son las que vigilan las alertas `MfaVerificationFailuresSustained` y `MfaIdentityLocked`. Ninguna lleva una etiqueta de cuenta ni de inquilino.
+
+| Métrica | Significado |
+| --- | --- |
+| `mfa_verifications_total{method,result}` | Códigos comprobados, por método (`totp`, `recovery`) y resultado: `ok`, `invalid` (incorrecto), `replay` (un código correcto ya usado), `locked` (rechazado por un bloqueo), `expired` (un desafío que no se pudo usar), `budget` (una petición con más comprobaciones de las permitidas), `rate_limited` y `unavailable` (no se pudo hacer la comprobación). |
+| `mfa_challenges_total` | Inicios de sesión con contraseña retenidos a la espera de un código. |
+| `mfa_enrollments_total{result}` | Eventos de configuración: `begun`, `confirmed`, `disabled` por la persona, `reset` por un operador. |
+| `mfa_identity_locks_total` | Intentos que activaron un bloqueo global de una cuenta. Cualquier aumento significa que alguien está usando la contraseña de una cuenta y falla su segundo factor. La vigila `MfaIdentityLocked`. |
+
 ## Update management {#update-management}
 
 Prefijo: `devicechain_updatemanagement_`. El servicio es opcional; consulta [Actualizaciones over-the-air](../concepts/over-the-air-updates.md).

@@ -870,6 +870,67 @@ so the next access token carries the narrower grant, and a disabled or removed m
 your tenant is refused. An access token already issued keeps working until it expires. The member's
 sessions in other tenants are not affected.
 
+## Signing in with two-factor authentication {#two-factor-sign-in}
+
+An account that has [two-factor authentication](../guides/two-factor-authentication.md) does not get a token from `login`. When the password is right, `login` fails with the error code `MFA_CHALLENGE`, which carries a challenge in `extensions`, and nothing is issued until the client sends a code to `verifyMfa`. **A client that only handles a successful `login` now fails for these accounts**, with an error, and never receives a token it should not have.
+
+```json
+{
+  "errors": [{
+    "message": "a second factor is required to finish signing in; send the challenge and a code to verifyMfa",
+    "path": ["login"],
+    "extensions": {
+      "code": "MFA_CHALLENGE",
+      "challenge": "...",
+      "expiresAt": "2026-10-27T12:05:00Z",
+      "methods": ["TOTP", "RECOVERY_CODE"]
+    }
+  }],
+  "data": null
+}
+```
+
+```graphql
+mutation Verify($challenge: String!, $code: String!) {
+  verifyMfa(challenge: $challenge, code: $code) {
+    identityToken
+    memberships { tenant }
+  }
+}
+```
+
+`verifyMfa` returns what `login` returns, and the client carries on with `selectTenant` as before. `code` is the six-digit app code or a recovery code (`ABCD-EFGH-JKMN-PQRS`, in any case, with or without the hyphens). A challenge lasts five minutes, takes five attempts and signs in once.
+
+The operations are on the user-management endpoint and take the identity token, not a tenant token:
+
+| Operation | What it does |
+|---|---|
+| `mfaStatus` | Whether the factor is on, when it was set up and how many recovery codes are left. |
+| `beginTotpEnrollment` | Starts setup: returns the `otpauth://` URI and the key. Needs the password. |
+| `confirmTotpEnrollment` | Proves the app holds the key, turns the factor on, returns ten recovery codes **once** and a fresh sign-in. Turning it on ends every other session. |
+| `regenerateRecoveryCodes` | Replaces the codes. Needs the password and a code. |
+| `disableTotp` | Turns the factor off and ends every session, the caller's included. Needs the password and a code. |
+| `setTenantMfaRequired` | Requires the factor of a tenant's password sign-ins. On the tenant plane it needs `member:write` and cannot go below the tier's floor. On the admin API it names the tenant. |
+| `resetIdentityMfa` | Admin API. Removes an identity's factor. Asks for `newPassword` while wrong codes are outstanding. |
+
+`Membership.mfaRequired` and the member list's `mfaEnabled` tell a client what to expect. A sign-in into a tenant that requires the factor is refused with one of the error codes below.
+
+### The error codes {#two-factor-error-codes}
+
+The set is closed. A wrong code, a replayed code and a code refused because of a lock are all the same answer, "invalid code", with no code of their own, so the answer is no oracle.
+
+| `extensions.code` | Where | Meaning |
+|---|---|---|
+| `MFA_CHALLENGE` | `login` | The password was right and a code is needed. The challenge is in `extensions`. |
+| `MFA_CHALLENGE_EXPIRED` | `verifyMfa` | The challenge is unknown, expired, used up, or outdated by a password change. Sign in again. |
+| `MFA_REQUIRED` | `selectTenant`, refresh | The tenant requires a second factor, this sign-in did not use one, and the account has one. Sign in again and enter the code. |
+| `MFA_ENROLLMENT_REQUIRED` | `selectTenant`, refresh | The same, and the account has none. Set it up first with `beginTotpEnrollment`. |
+| `MFA_ALREADY_ENROLLED` | `beginTotpEnrollment` | A factor is already on. Turn it off first. |
+| `MFA_NOT_ENROLLED` | `regenerateRecoveryCodes`, `disableTotp` | There is no factor. |
+| `MFA_RESET_NEEDS_PASSWORD` | `resetIdentityMfa` (admin API) | The account has outstanding wrong codes; send `newPassword` with the reset. |
+
+The error for too many attempts carries no code, like the sign-in [backoff](#sign-in-backoff). Each of these operations spends one of the request's [credential checks](#credential-checks-per-request), the password and the code together counting as one. The C# SDK reports the challenge as `MfaRequiredException`; see [Two-factor authentication](../guides/two-factor-authentication.md#csharp).
+
 ## Request limits {#request-limits}
 
 Every GraphQL endpoint refuses a request that is too large or does too much, before any of it runs.

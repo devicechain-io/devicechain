@@ -3666,6 +3666,8 @@ This section is written ahead of the release it describes, so the version in its
 
 Until now a provisioning profile could be created and edited, but nothing read it: no device could register through one. So nothing that worked yesterday stops working because a fleet used it. What changes is how profiles are made and what they need.
 
+The release also adds [two-factor authentication](#after-v0252-mfa), which changes how API clients sign in to an account that turns it on.
+
 #### Provisioning profiles {#self-registration-profiles}
 
 - **The server generates the provision secret.** `createProvisioningProfile` no longer takes `provisionSecret`. It returns `{ profile, issuedSecret }` where it used to return the profile, and `issuedSecret` is shown **once**. A script that selects `token` from the result must now select `profile { token }`. `updateProvisioningProfile` no longer takes `provisionSecret` either. `rotateProvisioningProfileSecret(token)` is the only way to replace a secret. Both are breaking: regenerate any client built against the old schema and check your scripts. The new operations are listed under [Provisioning profiles](../reference/graphql-api.md#provisioning-profiles).
@@ -3726,6 +3728,18 @@ A body credential on the platform MQTT broker is now always refused. There is no
 #### MQTT messages can be lost across the upgrade {#after-v0252-mqtt-roll}
 
 The upgrade rolls the platform broker, one server at a time. In a rehearsal of this upgrade's broker roll on a pre-release build, on a seven-node GKE cluster (three service, three database and one load-generator node) installed with `--ha`, whose broker runs three servers, with MQTT devices sending QoS 1 at 300 messages a second throughout, **23 of 448,346 messages that the broker had acknowledged were never stored**. The losses came in bursts around each of the three broker server restarts. QoS 1 at-least-once delivery is **not guaranteed across a broker roll**: a device that was sent a PUBACK will not resend. The earlier measurements are under [Rolling upgrades](#rolling-upgrades), the broker's behaviour is in [MQTT, the platform broker](../reference/transport-matrix.md#mqtt--the-platform-broker), and the fail-closed setting that changes it is `--mqtt-fail-closed`.
+
+#### Two-factor authentication {#after-v0252-mfa}
+
+An account can now turn on [two-factor authentication](../guides/two-factor-authentication.md): a code from an authenticator app after the password, with ten single-use recovery codes. It is off for every account until its owner turns it on, so nothing changes for a person who does nothing. The console, the dashboard app and the MCP authorization page ask for the code, and tenants and tiers can require it. The user-management database gains tables for the factor and its recovery codes through an automatic migration.
+
+- **`login` can now fail with `MFA_CHALLENGE`, so API clients must handle it.** For an account with a second factor, a correct password no longer returns a token: `login` fails with the error code `MFA_CHALLENGE` and a challenge in `extensions`, and the client finishes with the new `verifyMfa(challenge, code)`. A client that does not know about it sees a failed sign-in with a legible message, never a token. Accounts without a second factor sign in exactly as before. The C# SDK throws `MfaRequiredException` and gains `VerifyMfaAsync`; `dcctl` gains `--otp` on `dead-letters`, `presence` and `sim`. See [Signing in with two-factor authentication](../reference/graphql-api.md#two-factor-sign-in).
+- **The `login` audit row changed meaning.** It is now written when a sign-in **completes**, with a label of `pwd`, `pwd+otp` or `pwd+recovery`. For an account with a second factor the password step is a new `mfa_challenged` row, so a query that counted `login` rows as password successes now counts completed sign-ins. New rows record enrolment, resets, failed and locked attempts and recovery-code use.
+- **Enrolling, and turning the factor off, ends the account's sessions.** Enrolling ends every other session and the console swaps in a fresh one. Turning it off ends every session including the caller's.
+- **A tenant can require it,** and a tier can set a floor with the `mfaRequired` tier key. Members without a factor are sent to set one up, and sessions already inside end at their next refresh. Superusers, service accounts and single sign-on sessions are not held to a tenant's setting.
+- **A new break-glass command, `dcctl instances break-glass mfa-reset`,** resets an operator who has lost their factor and cannot sign in. It needs cluster credentials, always replaces the password and prints the new one once.
+- **Two new alerts, `MfaIdentityLocked` and `MfaVerificationFailuresSustained`,** and four metrics arrive with the chart. They are quiet while nobody has a second factor. The remedy for a lock is to reset the password, not the factor. See [Second-factor lockouts](./observability.md#mfa-alerts).
+- **Nodes need working time synchronisation.** A code is valid for its 30-second step and one step either side.
 
 ### v0.25.2 — the service-token mint leaves the public port {#v0252-upgrade}
 

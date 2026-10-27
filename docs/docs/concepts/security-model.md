@@ -92,6 +92,26 @@ See [Multi-Tenancy](./multi-tenancy.md).
   limits each caller, GraphQL requests have bounded execution and body size, and failed sign-in attempts are rate limited.
   There is no per-tenant request-rate limit on the GraphQL API itself.
 
+## Two-factor authentication {#two-factor}
+
+An account can require a code from an authenticator app after its password. [How to use it](../guides/two-factor-authentication.md); this is what it guarantees and where it stops.
+
+- **The second factor gates the token.** When the password of an account with a second factor is right, sign-in issues nothing: no session and no token, only a short-lived challenge. The tokens are minted when the code is accepted. Because the token does not exist until then, the operators' admin API, which trusts any valid token, is covered as well.
+- **How the person proved who they are is recorded by the server.** Every token descended from the sign-in carries an `amr` claim: `["pwd","otp","mfa"]` for an app code, `["pwd","mfa"]` for a recovery code and `["pwd"]` for a password alone. It is read from the session record, never taken from the client. A tenant's requirement is checked there on every grant into the tenant: selecting it, refreshing a session, and the authorization step of an MCP or OAuth connection. A session that predates the upgrade has no record and is refused by a tenant that requires the factor. Service tokens and service-account tokens never carry the claim, and a token that claims it is refused.
+- **Secrets at rest.** The authenticator's secret is sealed in the [secret store](#secrets) under the instance root key. It is read only to check a code, is never returned, and is not cached. A recovery code carries 80 random bits and is stored only as a one-way digest.
+- **A code works once.** A code is accepted only for a step newer than the last one accepted, and two requests with the same code produce one winner. Codes are accepted one 30-second step either side of now.
+- **Guessing is counted before it is checked.** Every wrong code is charged to the account before it is evaluated, so a burst of simultaneous guesses cannot outrun the limit. After 5 wrong codes from one source address, and after 20 from all addresses together, the authenticator locks for a minute, doubling with each further failure up to 15 minutes. A locked attempt is answered exactly like a wrong code. Recovery codes are exempt from the lock, because they cannot be guessed.
+- **Service accounts, devices and single sign-on are outside it.** A service account never signs in with a password. A single sign-on session is governed by its connection's required authentication methods, not by a tenant's setting. See [Single sign-on](./single-sign-on.md).
+
+What it does not do, stated plainly:
+
+- **It protects an account whose password is already known, not one whose password is unknown.** Every guess at a code comes from someone who passed the password step. At the cap, after the first 20 guesses, an attacker gets about four guesses an hour, and each has three valid codes in a million to hit. Someone who keeps guessing at that rate for a year has about a **10% chance** of getting in. The `MfaIdentityLocked` alert fires on the first lock for that reason, and its remedy is to reset the password.
+- **A password holder can keep the owner's authenticator locked.** Renewing the lock needs one wrong code each time it expires. The owner can still sign in with a recovery code, and resetting the password ends it. There is no permanent lock, because a permanent one would let anyone who knows an address lock its owner out.
+- **The per-address allowance can be refreshed by a sender who controls the forwarded-address header.** The limit across all addresses still holds.
+- **A tenant's requirement binds that tenant, not the operators.** It decides who may enter the tenant. It does not gate the admin console or the admin API, and an instance-wide requirement for operators is not available yet. A superuser with a password-only session can enter a tenant that requires the factor, and each entry is audited. Operators should enrol, and the audit journal and alerts are how you watch for attempts on their accounts.
+- **The challenge says the password was right.** That is inherent to any second factor that follows the password. Nothing else about the account is revealed until the code is accepted.
+- **Recovery codes are spent before the token is minted.** If the service fails in between, the code is gone and the person signs in again with another.
+
 ## Endpoints that never leave the cluster {#internal-endpoints}
 
 Two endpoints exist only for the platform's own services. `/auth/service-token` exchanges the shared service
@@ -188,7 +208,8 @@ These are known and accepted for the current release. Plan around them.
    describes the trade-off.
 4. **The root key is readable by anyone who can read the instance's Kubernetes Secret.** Restrict access to that
    Secret and to the cluster's etcd accordingly.
-5. **No external penetration test has been published.**
+5. **Two-factor authentication guards the password, and only the password.** It does not bind the operators' admin plane to a tenant's requirement, an attacker who holds a password and keeps guessing at the lockout cap has about a 10% chance a year, and a password holder can keep an account's authenticator locked by renewing the lock. See [Two-factor authentication](#two-factor).
+6. **No external penetration test has been published.**
 
 Nothing on this page replaces your own review. If an entry here is a problem for your deployment, the matching
 section above says where the control sits.

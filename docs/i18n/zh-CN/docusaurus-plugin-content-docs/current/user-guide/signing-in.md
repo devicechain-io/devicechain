@@ -43,6 +43,15 @@ import GuideShot from '@site/src/components/GuideShot';
 
 单点登录的工作原理以及管理员如何配置，参见[单点登录](/concepts/single-sign-on)和[配置单点登录](/guides/configuring-sso)。
 
+## 双重身份验证 {#two-factor}
+
+如果你的账号设有双重身份验证，输入正确的密码还不够。控制台接下来会要求输入**验证码**：
+
+- 输入验证器应用中的六位代码。一个代码只能用一次，所以如果刚用过一个，请等待下一个。
+- 或者选择 **Use a recovery code instead（改用恢复码）**，输入设置时保存的恢复码之一。它只能用一次。
+
+如果该步骤超时（五分钟、五次尝试），你会回到密码步骤。要开启它，请打开用户菜单并选择 **Account security（账号安全）**；步骤见[双重身份验证](/guides/two-factor-authentication#enrol)。如果你的组织要求使用而你尚未设置，登录后控制台会带你前往设置。
+
 ## 选择租户 {#choosing-a-tenant}
 
 租户是容纳贵组织设备、规则和仪表板的工作空间。一个账户可以属于多个租户。

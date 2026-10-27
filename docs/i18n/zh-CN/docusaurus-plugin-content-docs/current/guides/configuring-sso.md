@@ -32,6 +32,10 @@ title: 配置单点登录
 
 实例连接（供你自己的运营人员使用）的创建方式相同，类型为 `instance`，另外需要 `requiredAmr`（例如 `["mfa"]`）或 `mfaEnforcedByIdp: true`。请用 `linkIdentity` 逐个显式链接运营人员；系统不会自动链接任何人。
 
+## 双重身份验证 {#two-factor}
+
+租户的[双重验证要求](./two-factor-authentication.md#require)只约束**密码**登录。通过单点登录登录的人不会遇到它，租户的该项设置也不适用于他们。决定 SSO 登录的是连接：在连接上要求某种认证方式（`requiredAmr`，例如 `["mfa"]`），使身份提供商必须已执行自己的第二因素；或者用 `mfaEnforcedByIdp` 确认提供商会强制执行。开启 **Require SSO** 的租户已没有可适用该要求的密码登录。
+
 ## 在提供商处退出登录 {#provider-sign-out}
 
 默认情况下，从控制台或仪表盘应用退出登录只会结束 DeviceChain 会话。用户在身份提供商处仍保持登录状态，因此下次 **Sign in with SSO** 可能无需输入密码即可直接通过。连接也可以在用户退出登录时将其发送到提供商自己的退出登录页面（OpenID Connect RP 发起的登出）。此功能**默认关闭**，因为在提供商处退出登录通常会结束该用户在提供商所服务的所有应用中的会话。

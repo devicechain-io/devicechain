@@ -32,6 +32,10 @@ The same steps are available in the admin GraphQL API: `createIdpConnection`, `a
 
 An instance connection (for your own operators) is created the same way with kind `instance`, and additionally needs `requiredAmr` (for example `["mfa"]`) or `mfaEnforcedByIdp: true`. Link each operator explicitly with `linkIdentity`; nothing links them automatically.
 
+## Two-factor authentication {#two-factor}
+
+A tenant's [two-factor requirement](./two-factor-authentication.md#require) binds **password** sign-ins only. A person who signs in through single sign-on does not meet it, and the tenant's setting does not apply to them. What governs an SSO sign-in is the connection: require an authentication method on it (`requiredAmr`, for example `["mfa"]`) so that the identity provider must have performed its own second factor, or confirm the provider enforces one with `mfaEnforcedByIdp`. A tenant that turns on **Require SSO** has no password sign-ins left for the requirement to apply to.
+
 ## Sign out at the provider {#provider-sign-out}
 
 By default, signing out of the console or the dashboard app ends the DeviceChain session only. The person stays signed in at the identity provider, so their next **Sign in with SSO** may go straight through without asking for a password. A connection can also send people to the provider's own sign-out page when they sign out (OpenID Connect RP-initiated logout). It is **off by default**, because signing out at the provider usually ends the person's session there for every application the provider serves.

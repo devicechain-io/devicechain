@@ -74,6 +74,8 @@ Changing the tier applies within a minute.
 
 <GuideShot id="admin-tenant-basic" alt="The page of the tenant acme (sim), token sim-acme, with silver and Enabled badges and Disable and Delete buttons. The Single sign-on panel explains the setting and shows Not required, with a Require SSO button. Below are the tabs Basic, Settings, Effective settings and AI models, with Basic open: Token sim-acme (greyed out), Name acme (sim), Tier Silver and an empty Config (JSON) field." />
 
+The tenant's page also has a **Two-factor authentication** panel with **Require two-factor** (or **Stop requiring**). It requires a second factor of the tenant's password sign-ins, and the button is unavailable when the tenant's tier already requires it. Superusers are exempt, and single sign-on follows its connection's own requirements. See [Two-factor authentication](/guides/two-factor-authentication#require).
+
 ### A tenant's settings {#a-tenants-settings}
 
 The **Settings** tab holds the limits this one tenant is held to, when they should differ from its
@@ -179,6 +181,8 @@ its Settings tab still takes precedence over the tier's.
 **AI models** chooses which AI models the tier grants, and needs the optional AI service. A tier
 cannot be deleted while any tenant is on it. See [Tenant tiers](/concepts/tenant-tiers).
 
+A tier's **Settings** tab also has **Require two-factor authentication**. Ticked, every tenant at the tier must use a second factor for password sign-ins, and a tenant cannot turn it off. See [Two-factor authentication](/guides/two-factor-authentication#tier-floor).
+
 ## Identities
 
 **Identities → List** is the instance's directory of people. A person is one identity, keyed by
@@ -204,6 +208,8 @@ its sessions end at their next refresh. Deleting removes the identity and all it
   **Add to tenant** and choose **Add membership**.
 
 <GuideShot id="admin-identity-detail" alt="The page of Maria Chen, maria.chen@acme-properties.example, Enabled, with Disable and Delete buttons. The Access panel has a System roles picker with Save, and a Set password field with Set. The Memberships panel shows sim-acme, Enabled, with the role Facilities viewer and Save roles, Disable and Remove buttons. Below, Add to tenant and Roles pickers and an Add membership button." />
+
+The list has a **Two-factor** column. On an identity's page, the **Two-factor authentication** section shows whether it is on and has **Reset two-factor** for a person who lost their phone: it removes the authenticator and recovery codes and ends every session. If the identity has had wrong codes recently, its password may be known to someone else, so the reset also asks for a new password. See [Two-factor authentication](/guides/two-factor-authentication#reset) and, for an operator who cannot sign in, [break-glass](/guides/two-factor-authentication#break-glass).
 
 ## Roles
 

@@ -53,6 +53,8 @@ import GuideShot from '@site/src/components/GuideShot';
 
 <GuideShot id="admin-tenant-basic" alt="租户 acme (sim) 的页面，令牌 sim-acme，带有 silver 和 Enabled 徽章，以及 Disable 和 Delete 按钮。Single sign-on 面板说明该设置并显示 Not required，带有“Require SSO”按钮。下方的选项卡为 Basic、Settings、Effective settings 和 AI models，当前打开 Basic：Token sim-acme（灰色）、Name acme (sim)、Tier Silver 和空的 Config (JSON) 字段。" />
 
+租户页面还有一个 **Two-factor authentication（双重身份验证）** 面板，带有 **Require two-factor（要求双重验证）**（或 **Stop requiring（停止要求）**）。它对租户的密码登录要求第二因素；当租户的层级已要求时，该按钮不可用。超级用户不受约束，单点登录遵循其连接自身的要求。参见[双重身份验证](/guides/two-factor-authentication#require)。
+
 ### 租户的设置 {#a-tenants-settings}
 
 **Settings** 选项卡保存这个租户所遵循的限额，适用于需要与其层级不同的情形。留空的字段会继承：先取层级的值，再取平台默认值。这些字段包括摄取速率和突发量、出站连接器的出站速率和突发量、**External AI routing**（租户是否同意把规则描述发送给外部 AI 模型，默认关闭）、AI 起草速率和突发量、**Held command ceiling**（暂存命令上限）、**Shed priority**（负载削减优先级）以及三个地理围栏限额：**Geofence count**（地理围栏数量）、**Points per geofence**（每个地理围栏的角点数）和 **Geofence point budget**（地理围栏角点总预算）。控制台中的每个字段都带有简短说明。**Save changes**（保存更改）会同时保存 Basic 和 Settings 选项卡。
@@ -116,6 +118,8 @@ import GuideShot from '@site/src/components/GuideShot';
 
 **AI models** 选择该层级授予哪些 AI 模型，需要可选的 AI 服务。只要还有任何租户属于某个层级，该层级就不能删除。参见[租户层级](/concepts/tenant-tiers)。
 
+层级的 **Settings** 选项卡也有 **Require two-factor authentication（要求双重身份验证）**。勾选后，该层级的每个租户都必须对密码登录使用第二因素，且租户无法关闭。参见[双重身份验证](/guides/two-factor-authentication#tier-floor)。
+
 ## 身份 {#identities}
 
 **Identities → List**（身份 → 列表）是实例的人员目录。一个人就是一个以电子邮件地址为键的身份，可以是多个租户的成员。列表显示每个身份的电子邮件、姓名、状态、任何系统角色，以及所属租户的数量。
@@ -132,6 +136,8 @@ import GuideShot from '@site/src/components/GuideShot';
 - **Memberships**（成员关系）列出它所属的租户，每个都带有状态和租户角色。更改角色后选择 **Save roles**（保存角色），或对该成员关系执行 **Disable** 或 **Remove**（移除）。禁用成员关系只会让此人无法进入那一个租户。要添加成员关系，请在 **Add to tenant**（添加到租户）下选择租户和角色，然后选择 **Add membership**（添加成员关系）。
 
 <GuideShot id="admin-identity-detail" alt="Maria Chen（maria.chen@acme-properties.example）的页面，状态为 Enabled，带有 Disable 和 Delete 按钮。Access 面板包含带 Save 的 System roles 选择器，以及带 Set 的 Set password 字段。Memberships 面板显示 sim-acme，Enabled，角色为 Facilities viewer，以及 Save roles、Disable 和 Remove 按钮。下方是 Add to tenant 和 Roles 选择器以及“Add membership”按钮。" />
+
+列表有一个 **Two-factor（双重验证）** 列。在身份页面上，**Two-factor authentication（双重身份验证）** 区域显示它是否已开启，并为丢了手机的人提供 **Reset two-factor（重置双重验证）**：它会移除验证器和恢复码，并结束所有会话。如果该身份近期有过错误代码，其密码可能已被他人知晓，因此重置还会要求提供新密码。参见[双重身份验证](/guides/two-factor-authentication#reset)，以及无法登录的运维人员适用的 [break-glass](/guides/two-factor-authentication#break-glass)。
 
 ## 角色 {#roles}
 
