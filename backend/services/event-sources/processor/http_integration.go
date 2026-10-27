@@ -63,13 +63,14 @@ const (
 	ResultDisabled            = "disabled"
 	ResultResolveUnavailable  = "resolve_unavailable"
 	ResultPublishFailed       = "publish_failed"
+	ResultInternalError       = "internal_error"
 )
 
 // IntegrationRequestResults lists every request result, so a series can be exported at zero.
 var IntegrationRequestResults = []string{
 	ResultAccepted, ResultIgnoredType, ResultBadEnvelope, ResultUnsupportedEncoding, ResultUnauthorized,
 	ResultBadAuthLimited, ResultTooLarge, ResultShedAccepted, ResultBackpressure, ResultPrecheckStale,
-	ResultPrecheckUnavailable, ResultDisabled, ResultResolveUnavailable, ResultPublishFailed,
+	ResultPrecheckUnavailable, ResultDisabled, ResultResolveUnavailable, ResultPublishFailed, ResultInternalError,
 }
 
 // Results of one uplink (the result label of integration_uplinks_total).
@@ -246,7 +247,7 @@ func (es *HttpEventSource) handleIntegration(w http.ResponseWriter, r *http.Requ
 	}
 
 	// 3. The tenant's message gate, with the integration as the origin: its token is proven.
-	if es.allow != nil && !es.allow(es.Id, tenant, time.Time{}, false, OriginAuthenticated) {
+	if es.allow != nil && !es.allow(es.Id, tenant, time.Time{}, false, OriginIntegration) {
 		m.request(typ, ResultShedAccepted)
 		w.WriteHeader(http.StatusAccepted)
 		return
@@ -288,7 +289,7 @@ func (es *HttpEventSource) handleIntegration(w http.ResponseWriter, r *http.Requ
 	default:
 		// A defect or a settings document the codec cannot use: the sender did nothing wrong.
 		log.Error().Err(err).Str("integration", slug).Msg("Integration codec failed")
-		m.request(typ, ResultPrecheckUnavailable)
+		m.request(typ, ResultInternalError)
 		http.Error(w, "the integration cannot be read; retry later", http.StatusServiceUnavailable)
 		return
 	}
@@ -296,6 +297,16 @@ func (es *HttpEventSource) handleIntegration(w http.ResponseWriter, r *http.Requ
 		m.request(typ, ResultIgnoredType)
 		w.WriteHeader(http.StatusNoContent)
 		return
+	}
+	// The message gate was charged once before the body was read, so a flood is shed having cost
+	// no read. An array carries up to 100 uplinks, each a device lookup that can record a sighting,
+	// so the rest are charged now, before any lookup: one charge cannot buy a hundred resolves.
+	for i := 1; i < len(result.Uplinks); i++ {
+		if es.allow != nil && !es.allow(es.Id, tenant, time.Time{}, false, OriginIntegration) {
+			m.request(typ, ResultShedAccepted)
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
 	}
 
 	// Each uplink's device and readings, all before anything is published, so a request that is
@@ -414,7 +425,7 @@ func (es *HttpEventSource) handleIntegration(w http.ResponseWriter, r *http.Requ
 			return
 		}
 		for _, o := range out {
-			if !es.readings(es.Id, tenant, time.Time{}, false, OriginAuthenticated, o.readings) {
+			if !es.readings(es.Id, tenant, time.Time{}, false, OriginIntegration, o.readings) {
 				// Over the tenant's reading ceiling: accepted and counted, never a 429.
 				m.uplink(UplinkShed)
 				continue

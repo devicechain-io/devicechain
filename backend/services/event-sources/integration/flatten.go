@@ -62,7 +62,7 @@ type Flattened struct {
 
 // Flatten turns a decoded object into measurement readings: every numeric or boolean leaf,
 // keyed by its dot-joined path (temperature, battery.voltage, sensors.0.value). Numbers keep
-// their shortest round-trip form and booleans become true or false. Strings, nulls, values
+// their shortest round-trip form and booleans become 1 or 0. Strings, nulls, values
 // nested deeper than MaxDepth and paths that fail the key grammar are skipped, counted by
 // reason in Skipped.
 //
@@ -116,7 +116,14 @@ func walk(node any, path string, depth int, out map[string]string, skipped map[s
 		}
 		put(path, text, out, skipped, link)
 	case bool:
-		put(path, strconv.FormatBool(v), out, skipped, link)
+		// 1 and 0, not true and false: a reading with no declared metric takes the lenient path, which
+		// keeps only values that parse as numbers, so a word would be dropped there while the uplink
+		// still counted as published.
+		text := "0"
+		if v {
+			text = "1"
+		}
+		put(path, text, out, skipped, link)
 	case string:
 		skipped[SkipString]++
 	case nil:

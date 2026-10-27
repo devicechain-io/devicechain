@@ -6,6 +6,7 @@ package integration
 import (
 	"encoding/base64"
 	"encoding/json"
+	"regexp"
 
 	"github.com/devicechain-io/dc-microservice/devicealias"
 )
@@ -28,6 +29,8 @@ import (
 //     default (fCnt 0) may be absent.
 //
 // The recorded bodies under testdata/chirpstack are the goldens that pin this.
+
+var uuidShape = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 type csUplink struct {
 	DeduplicationId string  `json:"deduplicationId"`
@@ -62,6 +65,11 @@ func decodeChirpStack(d *Descriptor, r *Request) (*Result, error) {
 	}
 	if up.DeduplicationId == "" {
 		return nil, malformed("the uplink has no deduplicationId")
+	}
+	// ChirpStack's deduplication id is a UUID. It becomes the broker message id, so anything else is
+	// the sender's mistake and not a key to hold.
+	if !uuidShape.MatchString(up.DeduplicationId) {
+		return nil, malformed("the deduplicationId is not a UUID")
 	}
 	eui, err := normalized(devicealias.SchemeDevEUI, up.DeviceInfo.DevEui)
 	if err != nil {

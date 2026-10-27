@@ -88,7 +88,7 @@ func TestChirpStackUplinkWithADecodedObject(t *testing.T) {
 	flat, err := Flatten(u.Decoded, u.Link)
 	require.NoError(t, err)
 	require.Equal(t, map[string]string{
-		"temperature": "21.5", "humidity": "45", "battery.voltage": "3.31", "battery.low": "false",
+		"temperature": "21.5", "humidity": "45", "battery.voltage": "3.31", "battery.low": "0",
 		"sensors.0.value": "1.5", "sensors.1.value": "2",
 		"lorawan.rssi": "-36", "lorawan.snr": "10.5", "lorawan.gateways": "2",
 	}, flat.Readings)
@@ -178,7 +178,7 @@ func TestTTSUplinkWithADecodedPayload(t *testing.T) {
 	flat, err := Flatten(u.Decoded, u.Link)
 	require.NoError(t, err)
 	require.Equal(t, map[string]string{
-		"temperature": "1", "luminosity": "0.64", "motion": "true",
+		"temperature": "1", "luminosity": "0.64", "motion": "1",
 		"lorawan.rssi": "-35", "lorawan.snr": "5", "lorawan.gateways": "2",
 	}, flat.Readings)
 	require.Equal(t, map[string]int{SkipString: 1}, flat.Skipped)
@@ -263,7 +263,7 @@ func TestGenericJSONArraysAreAllOrNothing(t *testing.T) {
 	require.NotContains(t, a.Decoded, "ts")
 	flat, err := Flatten(a.Decoded, nil)
 	require.NoError(t, err)
-	require.Equal(t, map[string]string{"temp": "21.5", "ok": "true"}, flat.Readings)
+	require.Equal(t, map[string]string{"temp": "21.5", "ok": "1"}, flat.Readings)
 	require.NotEqual(t, a.AltId, b.AltId)
 	require.True(t, strings.HasSuffix(a.AltId, ":2026-10-26T10:00:00Z"), "a sender time makes a retry dedup: %s", a.AltId)
 
@@ -390,4 +390,70 @@ func TestAnUnknownTypeOrBrokenSettingsAreNotParsedAsAGuess(t *testing.T) {
 	require.Error(t, g.Prepare(), "generic settings are required")
 	g = &Descriptor{Token: "x", Type: ChirpStackV4, Enabled: true, Identity: "nonsense"}
 	require.Error(t, g.Prepare())
+}
+
+// THE DEDUP KEY IS SENDER-CONTROLLED AND IS THE BROKER MESSAGE ID. It must be bounded and free of
+// the characters the broker's header encoding rewrites, whatever the sender writes.
+func TestTheDedupKeyIsBoundedAndPrintable(t *testing.T) {
+	good := string(fixture(t, "chirpstack/up_decoded.json"))
+	const id = "3ac7e3c4-4401-4b8d-9386-a5c902f9202d"
+	for name, bad := range map[string]string{
+		"not a UUID":                "not-a-uuid",
+		"a UUID with a trailing LF": id + "\\n",
+		"CR and LF in the middle":   "3ac7e3c4-4401-4b8d-9386-a5c902f9\\r\\n02d",
+		"a long id":                 strings.Repeat("a", 60_000),
+		"a UUID and more":           id + "-extra",
+		"spaces":                    "3ac7e3c4 4401 4b8d 9386 a5c902f9202d",
+	} {
+		body := strings.Replace(good, id, bad, 1)
+		_, err := Decode(chirp(false), req([]byte(body), "up"))
+		require.ErrorIs(t, err, ErrMalformed, name)
+	}
+	// Paired: the UUID in either case is accepted.
+	body := strings.Replace(good, id, strings.ToUpper(id), 1)
+	_, err := Decode(chirp(false), req([]byte(body), "up"))
+	require.NoError(t, err)
+
+	// The TTS key is built from the PARSED time, so a received_at with a 5,000-digit fraction (which
+	// parses) cannot make the key 5,000 characters long.
+	long := strings.Repeat("9", 5000)
+	tt := strings.ReplaceAll(string(fixture(t, "tts/up_decoded.json")), "15:15:45.789585559Z", "15:15:45."+long+"Z")
+	res, err := Decode(tts("DEV_EUI", false), ttsReq([]byte(tt), ""))
+	require.NoError(t, err, "a fraction that long still parses")
+	require.Equal(t, "tts:0004A30B001C0530:1:2020-02-12T15:15:45.999999999Z", res.Uplinks[0].AltId,
+		"the key is built from the parsed time, not the sender's text")
+
+	// And a device id that fits its grammar still yields a bounded key.
+	res, err = Decode(tts("DEVICE_ID", false), ttsReq(fixture(t, "tts/up_decoded.json"), ""))
+	require.NoError(t, err)
+	require.LessOrEqual(t, len(res.Uplinks[0].AltId), MaxAltIdLen)
+
+	// The check itself, on keys no codec produces today, so a codec added later is held to it.
+	require.NoError(t, checkAltId(strings.Repeat("a", MaxAltIdLen)))
+	require.Error(t, checkAltId(strings.Repeat("a", MaxAltIdLen+1)))
+	for _, c := range []string{"a\nb", "a\rb", "a b", "a\x00b", "a\x7fb", "a\u00e9b"} {
+		require.Error(t, checkAltId(c), "%q", c)
+	}
+}
+
+// Decode holds every codec to the dedup-key rules, including one added later that builds its key
+// differently: a codec that returns a bad key is refused whole.
+func TestDecodeRefusesAnyCodecsBadDedupKey(t *testing.T) {
+	saved := decodeBy
+	t.Cleanup(func() { decodeBy = saved })
+	for name, key := range map[string]string{
+		"too long": strings.Repeat("a", MaxAltIdLen+1), "with a line break": "gen:a\r\nb", "empty-ish space": "gen: x",
+	} {
+		decodeBy = func(*Descriptor, *Request) (*Result, error) {
+			return &Result{Uplinks: []Uplink{{AltId: "gen:ok"}, {AltId: key}}}, nil
+		}
+		res, err := Decode(chirp(false), req(nil, "up"))
+		require.ErrorIs(t, err, ErrMalformed, name)
+		require.Nil(t, res, "nothing of the request survives a bad key")
+	}
+	decodeBy = func(*Descriptor, *Request) (*Result, error) {
+		return &Result{Uplinks: []Uplink{{AltId: "gen:ok"}}}, nil
+	}
+	_, err := Decode(chirp(false), req(nil, "up"))
+	require.NoError(t, err, "the paired positive")
 }

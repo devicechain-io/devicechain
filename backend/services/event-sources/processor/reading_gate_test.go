@@ -36,7 +36,7 @@ type readingShed struct {
 
 func newTestReadingGate(rps float64, burst int) (ReadingGate, *[]readingShed) {
 	var sheds []readingShed
-	gate := NewReadingGate(readingLimiter(rps, burst), readingLimiter(rps, burst), readingLimiter(rps, burst),
+	gate := NewReadingGate(readingLimiter(rps, burst), readingLimiter(rps, burst), readingLimiter(rps, burst), readingLimiter(rps, burst),
 		func(source, tenant string, n int) { sheds = append(sheds, readingShed{source, tenant, n}) })
 	return gate, &sheds
 }
@@ -100,20 +100,25 @@ func TestAReadingRedeliveryIsNotCharged(t *testing.T) {
 }
 
 func TestNewReadingGateRefusesANilLimiter(t *testing.T) {
-	assert.Panics(t, func() { NewReadingGate(nil, readingLimiter(1, 1), readingLimiter(1, 1), nil) })
-	assert.Panics(t, func() { NewReadingGate(readingLimiter(1, 1), nil, readingLimiter(1, 1), nil) })
-	assert.Panics(t, func() { NewReadingGate(readingLimiter(1, 1), readingLimiter(1, 1), nil, nil) })
+	assert.Panics(t, func() { NewReadingGate(nil, readingLimiter(1, 1), readingLimiter(1, 1), readingLimiter(1, 1), nil) })
+	assert.Panics(t, func() { NewReadingGate(readingLimiter(1, 1), nil, readingLimiter(1, 1), readingLimiter(1, 1), nil) })
+	assert.Panics(t, func() {
+		NewReadingGate(readingLimiter(1, 1), readingLimiter(1, 1), nil, readingLimiter(1, 1), nil)
+	})
+	assert.Panics(t, func() {
+		NewReadingGate(readingLimiter(1, 1), readingLimiter(1, 1), readingLimiter(1, 1), nil, nil)
+	})
 }
 
 // The message stage still charges ONE token per message, whatever it carries: the routing
 // both gates share must not have changed what RateGate charges.
 func TestARateGateIsStillOneTokenPerMessage(t *testing.T) {
 	lim := core.StaticCeiling(1e-9, 3)
-	gate := NewRateGate(core.NewTenantRateLimiter(lim), core.NewTenantRateLimiter(lim), core.NewTenantRateLimiter(lim), nil)
+	gate := NewRateGate(core.NewTenantRateLimiter(lim), core.NewTenantRateLimiter(lim), core.NewTenantRateLimiter(lim), core.NewTenantRateLimiter(lim), nil)
 	for _, origin := range []Origin{OriginAuthenticated, OriginUntrusted} {
 		gate := gate
 		if origin == OriginUntrusted {
-			gate = NewRateGate(core.NewTenantRateLimiter(lim), core.NewTenantRateLimiter(lim), core.NewTenantRateLimiter(lim), nil)
+			gate = NewRateGate(core.NewTenantRateLimiter(lim), core.NewTenantRateLimiter(lim), core.NewTenantRateLimiter(lim), core.NewTenantRateLimiter(lim), nil)
 		}
 		admitted := 0
 		for i := 0; i < 10; i++ {

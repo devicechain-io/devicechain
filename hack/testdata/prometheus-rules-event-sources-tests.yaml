@@ -542,17 +542,17 @@ tests:
         alertname: IntegrationShedAccepted
         exp_alerts: []
 
-  # 🔴 A TENANT OVER ITS CEILING from 10m on: requests answered 202 and discarded. Quiet inside the
-  # pending period, firing after it, and cleared once it stops.
+  # 🔴 A TENANT OVER ITS CEILING from 10m on: requests answered 202 and discarded. Quiet before it
+  # starts, firing shortly after, and cleared once the window has passed.
   - interval: 1m
     input_series:
       - series: 'devicechain_eventsources_integration_requests_total{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources", type="TTS_V3", result="shed_accepted"}'
         values: '0x10 3+3x25 78x30'
     alert_rule_test:
-      - eval_time: 15m
+      - eval_time: 10m
         alertname: IntegrationShedAccepted
         exp_alerts: []
-      - eval_time: 25m
+      - eval_time: 15m
         alertname: IntegrationShedAccepted
         exp_alerts:
           - exp_labels:
@@ -560,7 +560,7 @@ tests:
               devicechain_instance: devicechain
             exp_annotations:
               summary: "Integration uplinks are being accepted and discarded at a tenant's ingest ceiling"
-              description: "For at least 10 minutes, uplinks from inbound integrations have been discarded because a tenant is over its ingest ceiling. They were answered 202 so the network server would not suspend its webhook, which means the sender believes they arrived and they did not. Raise the tenant's ingest ceiling, or reduce what the integration sends."
+              description: "In the last 10 minutes, uplinks from inbound integrations were discarded because a tenant is over its ingest ceiling. They were answered 202 so the network server would not suspend its webhook, which means the sender believes they arrived and they did not. Raise the tenant's ingest ceiling, or reduce what the integration sends."
       - eval_time: 60m
         alertname: IntegrationShedAccepted
         exp_alerts: []
@@ -579,7 +579,7 @@ tests:
               devicechain_instance: devicechain
             exp_annotations:
               summary: "Integration uplinks are being accepted and discarded at a tenant's ingest ceiling"
-              description: "For at least 10 minutes, uplinks from inbound integrations have been discarded because a tenant is over its ingest ceiling. They were answered 202 so the network server would not suspend its webhook, which means the sender believes they arrived and they did not. Raise the tenant's ingest ceiling, or reduce what the integration sends."
+              description: "In the last 10 minutes, uplinks from inbound integrations were discarded because a tenant is over its ingest ceiling. They were answered 202 so the network server would not suspend its webhook, which means the sender believes they arrived and they did not. Raise the tenant's ingest ceiling, or reduce what the integration sends."
 
   # IntegrationUndecodedHigh. Mostly decoded: quiet however many are not.
   - interval: 1m
@@ -626,3 +626,26 @@ tests:
             exp_annotations:
               summary: "Most integration uplinks carry nothing to store"
               description: "For at least 30 minutes, more than half of the uplinks arriving over inbound integrations have had no decoded values to store. The network server forwards the raw frame but the device profile there has no payload codec configured (or the codec returns nothing), or a generic sender posts only text. Configure the codec in the network server; the integration's 'last undecoded' sample in the console shows a frame it could not read."
+
+  # A SHORT BURST: a single minute of shed requests at 11m, then nothing. It is still seen, because
+  # the window holds it for ten minutes and the pending period is one.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_integration_requests_total{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources", type="TTS_V3", result="shed_accepted"}'
+        values: '0x10 4x40'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: IntegrationShedAccepted
+        exp_alerts: []
+      - eval_time: 14m
+        alertname: IntegrationShedAccepted
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "Integration uplinks are being accepted and discarded at a tenant's ingest ceiling"
+              description: "In the last 10 minutes, uplinks from inbound integrations were discarded because a tenant is over its ingest ceiling. They were answered 202 so the network server would not suspend its webhook, which means the sender believes they arrived and they did not. Raise the tenant's ingest ceiling, or reduce what the integration sends."
+      - eval_time: 40m
+        alertname: IntegrationShedAccepted
+        exp_alerts: []

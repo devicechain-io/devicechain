@@ -387,6 +387,12 @@ kube-state-metrics 本身因节点失效等原因移动期间的重启，只要�
 
 当代理 MQTT 网关的某个流（`$MQTT_msgs`、`$MQTT_out` 或 `$MQTT_qos2in`）持续十分钟没有大小上限，且 `event-sources` 无法设置上限（`devicechain_eventsources_mqtt_gateway_stream_unbounded` 为 1）时，`MqttGatewayStreamUnbounded`（warning）触发。第一个 MQTT 设备连接时，代理会以无上限方式创建这些流，在新实例上这远晚于 `event-sources` 启动，因此每个副本每 30 秒检查一次，流一出现就设置上限；`devicechain_eventsources_mqtt_gateway_stream_bounded_late_total` 记录这种事后设置的次数。该告警表示上限设置失败，最常见的原因是代理已没有可供预留的存储。无上限的流可能写满代理存储并使整个实例宕机，请释放代理上的存储，并在 `event-sources` 日志中查找 `Could not bound the MQTT gateway`。
 
+当过去十分钟内每十分钟都有超过 30 个请求，因令牌错误、令牌未知，或该集成自身的失败额度已用尽而在入站集成路由上被拒绝（`devicechain_eventsources_integration_requests_total` 中 `result` 为 `unauthorized` 或 `bad_auth_limited`），且持续十分钟时，`IntegrationAuthFailuresSustained`（warning）触发。轮换令牌后仍使用旧令牌的网络服务器或 webhook 看起来与此完全一样，知道 URL 的人在尝试令牌时也是如此。如果您轮换过令牌，请在发送方更新；否则集成的最近一次认证失败时间会显示被尝试的是哪一个。被您停用的集成会以 `disabled` 被拒绝，不计入这里。
+
+当过去十分钟内，经入站集成到达的上行数据因租户超出其摄入上限而被丢弃（`devicechain_eventsources_integration_requests_total` 中 `result="shed_accepted"`，或 `devicechain_eventsources_integration_uplinks_total` 中 `result="shed"`）时，`IntegrationShedAccepted`（warning）触发。这些路由对此类请求回答 202 而不是 429，因为拒绝同样会丢失消息，而且有些网络服务器会暂停被拒绝的 webhook，从而丢掉本来在上限之内的流量。因此发送方会以为数据已到达，实际并没有。请提高该租户的摄入上限，或减少该集成发送的数据。
+
+当过去 30 分钟内至少 20 条经入站集成到达的上行数据中，超过一半没有可存储的内容（`devicechain_eventsources_integration_uplinks_total` 中 `result="undecoded"`），且持续 30 分钟时，`IntegrationUndecodedHigh`（warning）触发。常见原因是网络服务器中的 LoRaWAN 设备配置文件没有配置载荷编解码器，服务器只转发原始帧，平台没有解码后的值可读。请在网络服务器中配置编解码器；集成的最近一次未解码样本会显示它读不了的那一帧。
+
 ### MQTT 故障关闭确认 {#mqtt-fail-closed}
 
 要开启它，请给 `dcctl bootstrap <provider> <instance>` 传入 `--mqtt-fail-closed`；对已在运行的实例，则传给 `dcctl upgrade <provider> <instance>`；`--mqtt-fail-closed=false` 可再次关闭。`dcctl` 会把这一选择记录在实例上，因此之后每次 `dcctl upgrade` 都无需重复该参数就会保留它，被明确设为关闭的实例也会保持关闭。手动写入实例配置的值不会持久，因为 `dcctl` 每次升级都会重新生成该文档，且 `--values` 不接受此设置。代价与上文相同：消息代理的消息存储没有 leader 期间，QoS 1 发布会被拒绝而不是被确认，实例能跟上的流量也更低，因此请按低于该上限的规模部署。该保证是针对多副本代理而言的，所以请用 `--ha` 安装集群；在未使用 `--ha` 安装的集群上开启该设置时，`dcctl` 会给出提示。该设置需要 `event-sources` 和 `device-management` 两个区域（所有配置档都包含），若区域集合缺少其中之一，`dcctl` 会拒绝。在改动任何内容之前，`dcctl upgrade` 还会检查新配置预留的各流上限是否能放进消息代理的 JetStream 文件存储上限（实例沿用其建成时的卷），放不下则连同具体数字一并拒绝；`--mqtt-fail-closed=false` 是退回的办法。该选择属于实例声明，因此先 `dcctl destroy` 再 `dcctl bootstrap` 会从默认值重新开始。

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/devicechain-io/dc-event-sources/config"
 	"github.com/devicechain-io/dc-event-sources/model"
@@ -17,6 +18,7 @@ import (
 	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/credential"
+	"github.com/devicechain-io/dc-microservice/eventlimit"
 	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
@@ -120,7 +122,7 @@ func TestTheBuiltHttpSourceServesTheIntegrationRoute(t *testing.T) {
 	source, _ := buildHttpSourceFor(t, integrationInfra())
 	code, body := postIntegration(t, source, "")
 	require.Equal(t, http.StatusUnauthorized, code, body)
-	require.NotNil(t, integrationUndecoded, "the undecoded recorder the service runs is the route's")
+	require.Len(t, integrationUndecoded, 1, "the undecoded recorder the service runs is the route's")
 }
 
 // Without a way to reach device-management the route is present and says so (503), rather than
@@ -168,4 +170,78 @@ func TestTheIntegrationSeriesAreExportedAtZero(t *testing.T) {
 		series["devicechain_eventsources_integration_requests_total"])
 	require.Equal(t, len(processor.IntegrationUplinkResults), series["devicechain_eventsources_integration_uplinks_total"])
 	require.Equal(t, 7, series["devicechain_eventsources_integration_flatten_skipped_total"])
+}
+
+// Every HTTP source has its own route and so its own undecoded recorder, and every one of them is
+// run: a second source must not replace the first's.
+func TestEveryHttpSourcesRecorderIsRun(t *testing.T) {
+	savedConfig, savedSources, savedMs := Configuration, EventSources, Microservice
+	savedUndecoded := integrationUndecoded
+	t.Cleanup(func() {
+		Configuration, EventSources, Microservice, integrationUndecoded = savedConfig, savedSources, savedMs, savedUndecoded
+	})
+	Microservice = &core.Microservice{InstanceId: "inst-1", FunctionalArea: "event-sources"}
+	Microservice.InstanceConfiguration.Infrastructure = integrationInfra()
+	Microservice.UseMetricsRegistry(prometheus.NewRegistry())
+	initializeMetrics()
+	http := func(id, port string) config.EventSource {
+		return config.EventSource{Id: id, Type: config.SourceTypeHttp, Configuration: map[string]string{"port": port},
+			Decoder: config.EventDecoder{Type: processor.DECODER_TYPE_JSON}}
+	}
+	Configuration = &config.EventSourcesConfiguration{EventSources: []config.EventSource{http("http1", "8081"), http("http2", "8082")}}
+	buildTestRateLimiters(t)
+	require.NoError(t, buildEventSources())
+	require.Len(t, integrationUndecoded, 2)
+	require.NoError(t, buildEventSources())
+	require.Len(t, integrationUndecoded, 2, "a second build does not stack on the first")
+}
+
+// THE ALLOWANCE, through the code that wires it. The gates the service builds route an integration
+// request to limiters of its own: spending one tenant's integration allowance leaves its captured
+// traffic admitted, and the other way round.
+func TestTheServiceGatesMeterIntegrationTrafficApart(t *testing.T) {
+	savedConfig, savedSources, savedMs := Configuration, EventSources, Microservice
+	savedUndecoded := integrationUndecoded
+	t.Cleanup(func() {
+		Configuration, EventSources, Microservice, integrationUndecoded = savedConfig, savedSources, savedMs, savedUndecoded
+	})
+	Microservice = &core.Microservice{InstanceId: "inst-1", FunctionalArea: "event-sources"}
+	Microservice.UseMetricsRegistry(prometheus.NewRegistry())
+	initializeMetrics()
+	Configuration = &config.EventSourcesConfiguration{
+		// A tiny ceiling that does not refill inside the test, so spending it is quick and final.
+		IngestRateLimit: config.IngestRateLimit{ReadingsPerSecond: 0.001, Burst: 400},
+		EventSources: []config.EventSource{{
+			Id: "http1", Type: config.SourceTypeHttp, Configuration: map[string]string{"port": "8081"},
+			Decoder: config.EventDecoder{Type: processor.DECODER_TYPE_JSON}}},
+	}
+	buildTestRateLimiters(t)
+	require.NoError(t, buildEventSources())
+
+	spend := func(admit func() bool) {
+		t.Helper()
+		for i := 0; i < 1_000_000; i++ {
+			if !admit() {
+				return
+			}
+		}
+		t.Fatal("the allowance never ran out")
+	}
+	msg := func(tenant string, origin processor.Origin) bool {
+		return ingestGate("http1", tenant, time.Time{}, false, origin)
+	}
+	rd := func(tenant string, origin processor.Origin) bool {
+		return readingGate("http1", tenant, time.Time{}, false, origin, eventlimit.MaxReadingsPerEvent)
+	}
+
+	spend(func() bool { return msg("acme", processor.OriginIntegration) })
+	require.True(t, msg("acme", processor.OriginAuthenticated), "spent integration messages took captured traffic's allowance")
+	require.True(t, msg("acme", processor.OriginUntrusted))
+	spend(func() bool { return msg("globex", processor.OriginAuthenticated) })
+	require.True(t, msg("globex", processor.OriginIntegration), "spent captured traffic took the integration's allowance")
+
+	spend(func() bool { return rd("acme", processor.OriginIntegration) })
+	require.True(t, rd("acme", processor.OriginAuthenticated), "spent integration readings took captured traffic's allowance")
+	spend(func() bool { return rd("globex", processor.OriginAuthenticated) })
+	require.True(t, rd("globex", processor.OriginIntegration))
 }

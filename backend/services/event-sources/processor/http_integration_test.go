@@ -120,12 +120,20 @@ func newRouteHarness(t *testing.T) *routeHarness {
 	h.readingsOK.Store(true)
 	h.backend = &routeBackend{good: goodBearer, enabled: true}
 
-	allow := func(string, string, time.Time, bool, Origin) bool {
+	// 🔴 BOTH GATES ASSERT THE ORIGIN. An integration request metered as anything else would draw on
+	// the allowance captured MQTT traffic spends, or on the unauthenticated HTTP pool.
+	allow := func(_ string, _ string, _ time.Time, redelivery bool, origin Origin) bool {
 		h.allowCalls.Add(1)
+		if origin != OriginIntegration || redelivery {
+			t.Errorf("the message gate was charged with origin %d, want OriginIntegration", origin)
+		}
 		return h.allowOK.Load()
 	}
-	readings := func(string, string, time.Time, bool, Origin, int) bool {
+	readings := func(_ string, _ string, _ time.Time, redelivery bool, origin Origin, n int) bool {
 		h.readingsCalls.Add(1)
+		if origin != OriginIntegration || redelivery || n < 1 {
+			t.Errorf("the reading gate was charged %d with origin %d, want OriginIntegration", n, origin)
+		}
 		return h.readingsOK.Load()
 	}
 	es, _, _ := newTestHttpSourceGated(t, allow, readings, func(string) error { return h.admitErr }, config.HttpIngest{}, nil)
@@ -483,7 +491,7 @@ func TestARefusedBodyIsReportedAndNeverPublished(t *testing.T) {
 func TestAnUplinkOverTheReadingLimitIsRefusedWholeAndNeverTruncated(t *testing.T) {
 	h := newRouteHarness(t)
 	var sb strings.Builder
-	sb.WriteString(`{"deduplicationId":"d1","time":"2022-07-18T09:34:15Z","deviceInfo":{"devEui":"0101010101010101"},"object":{`)
+	sb.WriteString(`{"deduplicationId":"3ac7e3c4-4401-4b8d-9386-a5c902f9202d","time":"2022-07-18T09:34:15Z","deviceInfo":{"devEui":"0101010101010101"},"object":{`)
 	for i := 0; i < 257; i++ {
 		if i > 0 {
 			sb.WriteString(",")
@@ -619,4 +627,53 @@ func TestTheSameUplinkTwiceInOneRequestIsPublishedOnce(t *testing.T) {
 	require.Equal(t, http.StatusAccepted, h.post(csPath, goodBearer, "["+item+","+item+"]").Code)
 	h.published1()
 	require.Equal(t, 1, h.count("uplink/duplicate_suppressed"))
+}
+
+// ONE CHARGE CANNOT BUY A HUNDRED LOOKUPS. The message gate is charged once before the body is read
+// and once more for each further uplink after the codec, before any device is looked up.
+func TestEachUplinkOfAnArrayIsChargedToTheMessageGateBeforeAnyLookup(t *testing.T) {
+	h := newRouteHarness(t)
+	h.backend.desc = func() integration.Descriptor {
+		g := `{"idFrom":"pointer:/id"}`
+		return integration.Descriptor{Type: integration.GenericJSON, Identity: "ALIAS:custom.pump", Generic: &g}
+	}
+	lookups := 0
+	h.backend.resolve = func(_, v string) (integration.Resolution, error) {
+		lookups++
+		return integration.Resolution{Outcome: integration.Resolved, DeviceToken: v}, nil
+	}
+	items := make([]string, 5)
+	for i := range items {
+		items[i] = fmt.Sprintf(`{"id":"p%d","v":1}`, i)
+	}
+	body := "[" + strings.Join(items, ",") + "]"
+	require.Equal(t, http.StatusAccepted, h.post(csPath, goodBearer, body).Code)
+	require.EqualValues(t, 5, h.allowCalls.Load(), "one charge per uplink")
+	require.Equal(t, 5, lookups)
+
+	// The gate refusing partway: accepted and counted as a shed, with not one lookup made.
+	h2 := newRouteHarness(t)
+	h2.backend.desc = h.backend.desc
+	n := 0
+	h2.es.allow = func(string, string, time.Time, bool, Origin) bool { n++; return n < 3 }
+	h2.backend.resolve = func(_, v string) (integration.Resolution, error) {
+		t.Error("a lookup was made for a request the gate refused")
+		return integration.Resolution{}, nil
+	}
+	require.Equal(t, http.StatusAccepted, h2.post(csPath, goodBearer, body).Code)
+	h2.nothingPublished()
+	require.Equal(t, 1, h2.count("request/GENERIC_JSON/shed_accepted"))
+}
+
+// A codec failure that is not the sender's mistake has a label of its own, not the pre-check's.
+func TestACodecDefectIsCountedAsAnInternalErrorNotAPreCheckOutage(t *testing.T) {
+	h := newRouteHarness(t)
+	h.backend.desc = func() integration.Descriptor {
+		g := `{"idFrom":"pointer:/id"}` // a binary integration cannot name a pointer into a body it cannot read
+		return integration.Descriptor{Type: integration.GenericBinary, Identity: "ALIAS:custom.pump", Generic: &g}
+	}
+	rec := h.post(csPath, goodBearer, "")
+	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	require.Equal(t, 1, h.count("request/GENERIC_BINARY/internal_error"))
+	require.Zero(t, h.count("request/unknown/precheck_unavailable"))
 }

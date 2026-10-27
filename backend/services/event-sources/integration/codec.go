@@ -110,8 +110,45 @@ type Result struct {
 	Uplinks []Uplink
 }
 
+// MaxAltIdLen bounds a dedup key. It is the inbound message id too, held in the broker's memory for
+// the whole duplicate window, and an indexed column: an unbounded one is memory in the broker and
+// an index entry the database refuses.
+const MaxAltIdLen = 192
+
+// checkAltId refuses a dedup key that could harm either place it lands: too long, or holding a
+// character the broker's header encoding rewrites (CR and LF become spaces, so two keys that differ
+// only by them would be one on the wire) or a database cannot index sanely. Printable ASCII only.
+func checkAltId(id string) error {
+	if len(id) > MaxAltIdLen {
+		return malformed("the dedup key is %d bytes, over the limit of %d", len(id), MaxAltIdLen)
+	}
+	for i := 0; i < len(id); i++ {
+		if c := id[i]; c <= 0x20 || c >= 0x7f {
+			return malformed("the dedup key holds a character that is not printable ASCII")
+		}
+	}
+	return nil
+}
+
 // Decode parses a request by the integration's registered type. Nothing is sniffed.
 func Decode(d *Descriptor, r *Request) (*Result, error) {
+	res, err := decodeBy(d, r)
+	if err != nil {
+		return nil, err
+	}
+	for i := range res.Uplinks {
+		if err := checkAltId(res.Uplinks[i].AltId); err != nil {
+			return nil, err
+		}
+	}
+	return res, nil
+}
+
+// decodeBy is the codec dispatch. A variable only so a test can stand a codec in its place; nothing
+// in production reassigns it.
+var decodeBy = decode
+
+func decode(d *Descriptor, r *Request) (*Result, error) {
 	switch d.Type {
 	case ChirpStackV4:
 		return decodeChirpStack(d, r)

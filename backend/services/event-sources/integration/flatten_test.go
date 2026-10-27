@@ -34,7 +34,7 @@ func TestFlattenLeafRules(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, map[string]string{
 		"a": "1.5", "b": "2", "c": "3", "d": "1000", "e": "1.5e-07", "f": "12345678901234567890",
-		"g": "true", "h": "false",
+		"g": "1", "h": "0",
 		"nest.x": "1", "nest.y.z": "2",
 		"list.0": "10", "list.1.v": "11",
 		"ok_key-1": "6", "p.q": "8",

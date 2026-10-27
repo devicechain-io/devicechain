@@ -124,17 +124,7 @@ func (d *Devices) put(key string, e deviceEntry) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if _, ok := d.entries[key]; !ok && len(d.entries) >= d.cfg.Entries {
-		for k, old := range d.entries {
-			if e.at.Sub(old.at) >= d.ttl(old.res.Outcome) {
-				delete(d.entries, k)
-			}
-		}
-		for k := range d.entries {
-			if len(d.entries) < d.cfg.Entries {
-				break
-			}
-			delete(d.entries, k)
-		}
+		evictSome(d.entries, d.cfg.Entries/16+1, func(old deviceEntry) bool { return e.at.Sub(old.at) >= d.ttl(old.res.Outcome) })
 	}
 	d.entries[key] = e
 }

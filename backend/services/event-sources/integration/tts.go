@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/devicealias"
 )
@@ -120,7 +121,7 @@ func decodeTTS(d *Descriptor, r *Request) (*Result, error) {
 	}
 	u := Uplink{
 		Identifier: id, Scheme: scheme,
-		AltId: "tts:" + deviceKey + ":" + fcnt + ":" + *stamp,
+		AltId: "tts:" + deviceKey + ":" + fcnt + ":" + at.Format(time.RFC3339Nano),
 		Time:  at, SenderTime: true, Decoded: object,
 	}
 	if m.FrmPayload != "" {

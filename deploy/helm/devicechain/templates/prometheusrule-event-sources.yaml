@@ -155,15 +155,17 @@ spec:
         # A tenant over its ingest ceiling is answered 202 on these routes, because a refusal would
         # lose the message anyway and a network server may suspend the webhook for a while after one.
         # So the data is accepted on paper and discarded here, and this is the only place it is seen.
+        # A short `for`: the window is already ten minutes, so a burst that stops still holds the alert
+        # for that long, and a long `for` would let a short burst of discarded data pass unseen.
         - alert: IntegrationShedAccepted
           expr: (sum(increase(devicechain_eventsources_integration_requests_total{namespace="{{ $ns }}", result="shed_accepted"}[10m])) > 0) or (sum(increase(devicechain_eventsources_integration_uplinks_total{namespace="{{ $ns }}", result="shed"}[10m])) > 0)
-          for: 10m
+          for: 1m
           labels:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
             summary: "Integration uplinks are being accepted and discarded at a tenant's ingest ceiling"
-            description: "For at least 10 minutes, uplinks from inbound integrations have been discarded because a tenant is over its ingest ceiling. They were answered 202 so the network server would not suspend its webhook, which means the sender believes they arrived and they did not. Raise the tenant's ingest ceiling, or reduce what the integration sends."
+            description: "In the last 10 minutes, uplinks from inbound integrations were discarded because a tenant is over its ingest ceiling. They were answered 202 so the network server would not suspend its webhook, which means the sender believes they arrived and they did not. Raise the tenant's ingest ceiling, or reduce what the integration sends."
         # An uplink the network server forwarded without decoding is accepted and stores nothing: the
         # commonest way for an integration to look connected and be empty. More than half of at least
         # 20 uplinks in half an hour means a codec is missing on the sender's side.

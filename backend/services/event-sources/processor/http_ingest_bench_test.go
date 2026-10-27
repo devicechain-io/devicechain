@@ -109,8 +109,8 @@ func httpBenchSource(b *testing.B,
 	es, err := NewHttpEventSource("http", map[string]string{}, "inst", config.HttpIngest{}, NewJsonDecoder(nil),
 		func(string, []byte) {}, decoded,
 		func(string, string, []byte, error) error { return nil },
-		NewRateGate(msgs(), msgs(), msgs(), nil),
-		NewReadingGate(reads(), reads(), reads(), nil),
+		NewRateGate(msgs(), msgs(), msgs(), msgs(), nil),
+		NewReadingGate(reads(), reads(), reads(), reads(), nil),
 		func(string) error { return nil }, nil)
 	if err != nil {
 		b.Fatal(err)

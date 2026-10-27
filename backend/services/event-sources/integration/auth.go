@@ -98,6 +98,9 @@ type Authenticator struct {
 	buckets  map[string]*bucket
 	overflow *bucket
 	failed   map[string]time.Time
+	// proven holds, per integration name, when a positive answer for it was last stored. Only
+	// device-management can create one, so a name in it belongs to a real integration.
+	proven map[string]time.Time
 }
 
 type authEntry struct {
@@ -114,6 +117,7 @@ func NewAuthenticator(backend Backend, cfg AuthConfig) *Authenticator {
 		buckets:  make(map[string]*bucket),
 		overflow: newBucket(cfg.BadBurst, cfg.Now()),
 		failed:   make(map[string]time.Time),
+		proven:   make(map[string]time.Time),
 	}
 	return a
 }
@@ -153,18 +157,29 @@ func (a *Authenticator) Check(ctx context.Context, tenant, integration, bearer s
 func (a *Authenticator) refresh(ctx context.Context, key, tenant, integration, bearer string) (Checked, error) {
 	now := a.cfg.Now()
 	stale, haveStale := a.lookup(key, now)
-	b := a.bucketFor(tenant, integration, now)
 
-	if !b.take(now, a.cfg) {
-		if haveStale {
-			return Checked{Descriptor: stale.desc, Stale: true}, nil
+	// 🔴 A TOKEN DEVICE-MANAGEMENT HAS ALREADY ACCEPTED IS NOT CHARGED. Only device-management can
+	// create a positive entry, so holding one proves this exact bearer was right, and re-asking is
+	// the integration's own good traffic, not a guess. Charging it would let a spray of bad tokens
+	// empty the bucket and then lock out the sender the bucket exists to protect, for as long as
+	// the spray lasts. A token that is NOT remembered (a first sight, or one rotated since) is
+	// charged before the question, because it may be a guess: during an active spray a right token
+	// never seen before is therefore answered 429 until the spray stops or the bucket refills.
+	took := false
+	var b *bucket
+	if !haveStale {
+		b = a.bucketFor(tenant, integration, now)
+		if !b.take(now, a.cfg) {
+			return Checked{}, ErrLimited
 		}
-		return Checked{}, ErrLimited
+		took = true
 	}
 	desc, err := a.backend.Auth(ctx, tenant, integration, bearer)
 	switch {
 	case err != nil:
-		b.give(a.cfg)
+		if took {
+			b.give(a.cfg)
+		}
 		if haveStale {
 			return Checked{Descriptor: stale.desc, Stale: true}, nil
 		}
@@ -174,8 +189,10 @@ func (a *Authenticator) refresh(ctx context.Context, key, tenant, integration, b
 		a.noteFailure(tenant, integration, now)
 		return Checked{}, ErrUnauthorized
 	}
-	b.give(a.cfg)
-	a.store(key, authEntry{desc: desc, at: a.cfg.Now()})
+	if took {
+		b.give(a.cfg)
+	}
+	a.store(tenant, integration, key, authEntry{desc: desc, at: a.cfg.Now()})
 	return Checked{Descriptor: desc}, nil
 }
 
@@ -199,23 +216,42 @@ func (a *Authenticator) lookup(key string, now time.Time) (authEntry, bool) {
 	return e, true
 }
 
-func (a *Authenticator) store(key string, e authEntry) {
+func (a *Authenticator) store(tenant, integration, key string, e authEntry) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if _, ok := a.entries[key]; !ok && len(a.entries) >= a.cfg.Entries {
-		for k, old := range a.entries {
-			if e.at.Sub(old.at) > a.cfg.StaleMax {
-				delete(a.entries, k)
-			}
-		}
-		for k := range a.entries {
-			if len(a.entries) < a.cfg.Entries {
-				break
-			}
-			delete(a.entries, k)
-		}
+		evictSome(a.entries, a.cfg.Entries/16+1, func(old authEntry) bool { return e.at.Sub(old.at) > a.cfg.StaleMax })
 	}
 	a.entries[key] = e
+	a.proven[tenant+"\x00"+integration] = e.at
+	if len(a.proven) > a.cfg.Entries {
+		evictSome(a.proven, a.cfg.Entries/16+1, func(t time.Time) bool { return e.at.Sub(t) > a.cfg.StaleMax })
+	}
+}
+
+// evictSome removes up to n entries from m with a bounded amount of work: it looks at no more than
+// 4n of them, preferring those expired says are dead, and removes arbitrary ones to make room if it
+// finds fewer. A full-map scan under the lock on every insert would let a flood of distinct keys
+// hold the lock for the whole table each time.
+func evictSome[V any](m map[string]V, n int, expired func(V) bool) {
+	removed, looked := 0, 0
+	for k, v := range m {
+		looked++
+		if expired(v) {
+			delete(m, k)
+			removed++
+		}
+		if removed >= n || looked >= 4*n {
+			break
+		}
+	}
+	for k := range m {
+		if removed >= n {
+			break
+		}
+		delete(m, k)
+		removed++
+	}
 }
 
 func (a *Authenticator) forget(key string) {
@@ -224,7 +260,10 @@ func (a *Authenticator) forget(key string) {
 	a.mu.Unlock()
 }
 
-// bucketFor returns the bad-credential bucket for an integration name. A name past the bound shares the overflow bucket.
+// bucketFor returns the bad-credential bucket for an integration name. A name past the bound shares
+// the overflow bucket, EXCEPT a name device-management has vouched for (a live positive entry): a
+// real integration is never pushed into the pool a spray of invented names has emptied, and makes
+// room instead by evicting a bucket of a name nobody has vouched for.
 func (a *Authenticator) bucketFor(tenant, integration string, now time.Time) *bucket {
 	name := tenant + "\x00" + integration
 	a.mu.Lock()
@@ -233,15 +272,33 @@ func (a *Authenticator) bucketFor(tenant, integration string, now time.Time) *bu
 		return b
 	}
 	if len(a.buckets) >= a.cfg.Buckets {
-		// Idle full buckets carry no state worth keeping: a fresh one is the same bucket.
+		// Idle full buckets carry no state worth keeping: a fresh one is the same bucket. Only a
+		// bounded number are looked at.
+		looked := 0
 		for k, b := range a.buckets {
+			if looked++; looked > 64 {
+				break
+			}
 			if b.idle(now, a.cfg) {
 				delete(a.buckets, k)
 			}
 		}
 	}
 	if len(a.buckets) >= a.cfg.Buckets {
-		return a.overflow
+		at, vouched := a.proven[name]
+		if !vouched || now.Sub(at) > a.cfg.StaleMax {
+			return a.overflow
+		}
+		looked := 0
+		for k := range a.buckets {
+			if looked++; looked > 64 {
+				break
+			}
+			if v, ok := a.proven[k]; !ok || now.Sub(v) > a.cfg.StaleMax {
+				delete(a.buckets, k)
+				break
+			}
+		}
 	}
 	b := newBucket(a.cfg.BadBurst, now)
 	a.buckets[name] = b
@@ -259,11 +316,7 @@ func (a *Authenticator) noteFailure(tenant, integration string, now time.Time) {
 		return
 	}
 	if !seen && len(a.failed) >= a.cfg.Buckets {
-		for k, t := range a.failed {
-			if now.Sub(t) >= time.Minute {
-				delete(a.failed, k)
-			}
-		}
+		evictSome(a.failed, 16, func(t time.Time) bool { return now.Sub(t) >= time.Minute })
 		if len(a.failed) >= a.cfg.Buckets {
 			a.mu.Unlock()
 			return

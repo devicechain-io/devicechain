@@ -181,9 +181,10 @@ func TestASprayOfBadTokensIsBoundedBeforeItReachesDeviceManagementAndLeavesGoodT
 	require.ErrorIs(t, err, ErrUnauthorized)
 }
 
-// Past the freshness window and with the bucket spent, the integration's good token is served its
-// last-known-good answer; with nothing held it is refused (429), because the credential was not
-// even checked.
+// Past the freshness window and with the bucket spent, the integration's good token is re-asked
+// without being charged (only device-management can have made it remembered); a token NEVER SEEN
+// is refused (429) while the spray lasts, because the credential was not even checked. That
+// residual is documented: a right token first presented during an active spray waits it out.
 func TestAGoodTokenIsNotLockedOutByASprayThatEmptiedTheBucket(t *testing.T) {
 	f, c := newFakeBackend(), newClock()
 	a := newAuth(f, c)
@@ -199,7 +200,7 @@ func TestAGoodTokenIsNotLockedOutByASprayThatEmptiedTheBucket(t *testing.T) {
 	}
 	got, err := a.Check(ctx, "acme", "cs", "right-token")
 	require.NoError(t, err)
-	require.True(t, got.Stale, "served last-known-good rather than refused")
+	require.False(t, got.Stale, "a remembered token is re-asked without being charged, so the spent bucket does not matter")
 
 	// A token never seen before, with the bucket spent, is refused unchecked.
 	f.good["acme/cs"] = "rotated-token"
@@ -319,4 +320,58 @@ func TestInventedNamesShareABoundedPoolOfBuckets(t *testing.T) {
 	require.LessOrEqual(t, n, 4)
 	// The overflow bucket is bounded too: far fewer than 100 reached device-management.
 	require.Less(t, f.authCalls.Load(), int64(100))
+}
+
+// 🔴 A SPRAY THAT OUTLASTS THE LAST-KNOWN-GOOD WINDOW. A remembered token is re-asked uncharged each
+// time it goes stale, so refreshing keeps it remembered and the integration's good traffic is never
+// locked out, however long the spray: here an hour, four times StaleMax.
+func TestASpraySustainedLongerThanTheStaleWindowLeavesTheGoodTokenAccepted(t *testing.T) {
+	f, c := newFakeBackend(), newClock()
+	a := newAuth(f, c)
+	ctx := context.Background()
+	_, err := a.Check(ctx, "acme", "cs", "right-token")
+	require.NoError(t, err)
+
+	for second := 1; second <= 3600; second++ {
+		c.advance(time.Second)
+		for i := 0; i < 3; i++ { // three guesses a second, double what the bucket refills
+			_, _ = a.Check(ctx, "acme", "cs", fmt.Sprintf("guess-%d-%d", second, i))
+		}
+		if second%61 == 0 {
+			got, err := a.Check(ctx, "acme", "cs", "right-token")
+			require.NoError(t, err, "at second %d", second)
+			require.False(t, got.Stale, "at second %d", second)
+		}
+	}
+	// And a token never seen before is refused for as long as the spray keeps the bucket empty.
+	f.good["acme/cs"] = "rotated-token"
+	_, err = a.Check(ctx, "acme", "cs", "rotated-token")
+	require.ErrorIs(t, err, ErrLimited, "the documented residual")
+}
+
+// A full pool of buckets does not touch a known integration: its name is never sent to the shared
+// overflow bucket, so a spray of invented names that emptied the overflow cannot refuse it.
+func TestAFullPoolOfInventedNamesDoesNotAffectAKnownIntegration(t *testing.T) {
+	f, c := newFakeBackend(), newClock()
+	a := newAuth(f, c, func(cfg *AuthConfig) { cfg.Buckets = 4 })
+	ctx := context.Background()
+	_, err := a.Check(ctx, "acme", "cs", "right-token") // vouched for
+	require.NoError(t, err)
+	a.mu.Lock()
+	delete(a.buckets, "acme\x00cs") // as if its bucket had been evicted
+	a.mu.Unlock()
+
+	for i := 0; i < 500; i++ { // fill the pool and empty the overflow bucket
+		_, _ = a.Check(ctx, "acme", fmt.Sprintf("invented-%d", i), "x")
+	}
+	_, err = a.Check(ctx, "acme", "invented-final", "x")
+	require.ErrorIs(t, err, ErrLimited, "the overflow bucket is empty")
+
+	f.good["acme/cs"] = "rotated-token" // a token not remembered: it needs a bucket of its own
+	got, err := a.Check(ctx, "acme", "cs", "rotated-token")
+	require.NoError(t, err, "the known integration was sent to the exhausted overflow bucket")
+	require.False(t, got.Stale)
+	a.mu.Lock()
+	require.LessOrEqual(t, len(a.buckets), 4+1)
+	a.mu.Unlock()
 }
