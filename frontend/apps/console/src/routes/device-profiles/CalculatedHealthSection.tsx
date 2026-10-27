@@ -36,6 +36,7 @@ import { skipLabel } from './FormulaEditor';
 import {
   HEALTH_WINDOWS,
   loadCalcHealth,
+  showsSeparateInputsHint,
   statusOf,
   type HealthStatus,
   type HealthWindow,
@@ -45,6 +46,8 @@ import {
 
 const DEVICE_READ = 'device:read';
 const EVENT_READ = 'event:read';
+
+const SEPARATE_INPUTS_GUIDE_URL = 'https://docs.devicechain.io/user-guide/calculated-metrics#inputs-that-arrive-separately';
 
 const STATUS_VARIANT: Record<HealthStatus, 'success' | 'destructive' | 'secondary' | 'warning'> = {
   computing: 'success',
@@ -174,6 +177,14 @@ function MetricRow({ metric, hours, onWhy }: { metric: MetricHealth; hours: Heal
           </div>
         ) : (
           <HintText size="md">{t('calcHealthInputsUnknown')}</HintText>
+        )}
+        {showsSeparateInputsHint(status, metric.directMeasured) && (
+          <p className="mt-1 text-xs text-muted-foreground" data-testid="calc-health-separate">
+            {t('calcHealthSeparateInputs')}{' '}
+            <a className="underline" href={SEPARATE_INPUTS_GUIDE_URL} target="_blank" rel="noreferrer">
+              {t('calcHealthSeparateInputsLink')}
+            </a>
+          </p>
         )}
         {metric.nameShared && (
           <p className="mt-1 text-xs text-warning" data-testid="calc-health-shared">

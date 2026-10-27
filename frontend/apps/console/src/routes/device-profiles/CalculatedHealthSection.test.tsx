@@ -53,6 +53,7 @@ type Setup = {
   shared?: boolean;
   activeSince?: string | null;
   counts: Record<string, { bucketStart: string; count: number }[]>;
+  samples?: unknown[];
 };
 
 type Call = { op: string; vars: Record<string, any> };
@@ -95,7 +96,7 @@ function install(s: Setup) {
       }
       case 'CalculatedEvents':
         return Promise.resolve({
-          calculatedEvents: { computed: 0, skipped: [], samples: [], truncated: false, sampleCount: 0 },
+          calculatedEvents: { computed: 0, skipped: [], samples: s.samples ?? [], truncated: false, sampleCount: 0 },
         });
       case 'HourlyMeasurementCounts':
         return Promise.resolve({ bucketedMeasurements: s.counts[vars.criteria.name] ?? [] });
@@ -243,6 +244,55 @@ describe('calculated-metric health', () => {
       { key: 'amps', dataType: 'INT' },
     ]);
     expect(calls.some((c) => c.op === 'MetricDefinitions')).toBe(false);
+  });
+
+  it('explains separate messages under Not computing when the formula reads two reported inputs', async () => {
+    install({ counts: { volts: hourly(60, 24), amps: hourly(60, 24) } });
+    mount();
+    expect(await statusOf()).toBe('not_computing');
+    const hint = screen.getByTestId('calc-health-separate');
+    expect(hint.textContent).toContain('A formula reads one message at one instant.');
+    expect(within(hint).getByRole('link').getAttribute('href')).toContain('calculated-metrics#inputs-that-arrive-separately');
+  });
+
+  it('shows no separate-messages hint when the metric is computing, or reads fewer than two reported inputs', async () => {
+    // Control: the same two-input fixture, but values are stored, so the status is Computing.
+    install({ counts: { power_kw: hourly(60, 24), volts: hourly(60, 24), amps: hourly(60, 24) } });
+    mount();
+    expect(await statusOf()).toBe('computing');
+    expect(screen.queryByTestId('calc-health-separate')).toBeNull();
+    cleanup();
+    // One reported input cannot be split across messages.
+    install({ inputs: ['volts'], measuredInputs: ['volts'], counts: { volts: hourly(60, 24) } });
+    mount();
+    expect(await statusOf()).toBe('not_computing');
+    expect(screen.queryByTestId('calc-health-separate')).toBeNull();
+    cleanup();
+    // Not computing, nothing stored for the inputs: Not computing is not the status, so no hint.
+    install({ counts: {} });
+    mount();
+    expect(await statusOf()).toBe('no_input_readings');
+    expect(screen.queryByTestId('calc-health-separate')).toBeNull();
+  });
+
+  it('names the inputs a skipped sample lacked in Why?, and none for a sample that held them all', async () => {
+    const samples = [
+      { occurredTime: '2026-10-20T12:00:00Z', eventId: 'a', inputs: [{ key: 'volts', value: '230' }], value: null, skippedReason: 'missing_input' },
+      { occurredTime: '2026-10-20T12:01:00Z', eventId: 'b', inputs: [{ key: 'volts', value: '230' }, { key: 'amps', value: '4' }], value: '0.92', skippedReason: null },
+      { occurredTime: '2026-10-20T12:02:00Z', eventId: 'c', inputs: [{ key: 'volts', value: '230' }, { key: 'amps', value: '4' }], value: null, skippedReason: 'invalid_input' },
+      // A skip that is not missing_input keeps today's rendering even when an input is absent (a has()-guarded one).
+      { occurredTime: '2026-10-20T12:03:00Z', eventId: 'd', inputs: [{ key: 'volts', value: '230' }], value: null, skippedReason: 'out_of_range' },
+    ];
+    install({ counts: { volts: hourly(60, 24), amps: hourly(60, 24) }, samples });
+    mount();
+    await statusOf();
+    fireEvent.click(screen.getByRole('button', { name: 'Why?' }));
+    const hist = await screen.findByTestId('formula-history');
+    fireEvent.change(within(hist).getByLabelText('Device token'), { target: { value: 'dev-1' } });
+    fireEvent.click(within(hist).getByRole('button', { name: 'Run on history' }));
+    const lacked = await screen.findAllByTestId('formula-history-lacked');
+    // Only the missing_input sample, and only for the input it did not carry.
+    expect(lacked.map((e) => e.textContent)).toEqual(['lacked: amps']);
   });
 
   it('renders nothing for a customer-scoped caller, without the read authorities, or with no active version', () => {

@@ -22,6 +22,7 @@ import { errMessage } from '@/routes/common';
 import { getDevice, listMetricDefinitions } from '@/lib/api/device-management';
 import { calculatedEvents, type CalculatedEventsResult } from '@/lib/api/event-management';
 import { optNum } from '@/lib/utils';
+import { absentInputs } from './calcHealth';
 
 /** The most samples the server evaluates in one request (it refuses above this). */
 export const HISTORY_SAMPLE_CAP = 50_000;
@@ -156,7 +157,7 @@ export function FormulaHistory({
           {t('formulaHistoryConstants', { names: constants.map((c) => `device.${c}`).join(', ') })}
         </p>
       )}
-      {state.status === 'done' && <HistoryOutcome result={state.result} skipLabel={skipLabel} />}
+      {state.status === 'done' && <HistoryOutcome result={state.result} skipLabel={skipLabel} inputs={inputs} />}
     </div>
   );
 }
@@ -183,7 +184,15 @@ async function deviceConstants(deviceToken: string, names: string[]): Promise<{ 
     .map((key) => ({ key, value: typeof held[key] === 'number' && Number.isFinite(held[key]) ? String(held[key]) : '' }));
 }
 
-function HistoryOutcome({ result, skipLabel }: { result: CalculatedEventsResult; skipLabel: (reason: string) => string }) {
+function HistoryOutcome({
+  result,
+  skipLabel,
+  inputs,
+}: {
+  result: CalculatedEventsResult;
+  skipLabel: (reason: string) => string;
+  inputs: string[];
+}) {
   const { t } = useTranslation('deviceProfiles');
   const total = result.samples.length;
   // Newest first, and only the newest few: a chart-length history is summarized by the tally.
@@ -218,11 +227,25 @@ function HistoryOutcome({ result, skipLabel }: { result: CalculatedEventsResult;
                   {'→ '}
                   {s.value != null ? s.value : t('formulaSkipped', { reason: skipLabel(s.skippedReason ?? '') })}
                 </span>
+                {s.value == null && s.skippedReason === 'missing_input' && (
+                  <MissingInputs lacked={absentInputs(inputs, s.inputs)} />
+                )}
               </li>
             ))}
           </ul>
         </>
       )}
     </div>
+  );
+}
+
+/** Names the inputs a skipped sample did not carry; says nothing when it carried them all. */
+function MissingInputs({ lacked }: { lacked: string[] }) {
+  const { t } = useTranslation('deviceProfiles');
+  if (lacked.length === 0) return null;
+  return (
+    <span className="text-warning" data-testid="formula-history-lacked">
+      {t('formulaHistoryLacked', { keys: lacked.join(', ') })}
+    </span>
   );
 }
