@@ -114,7 +114,7 @@ spec:
         #
         # A step that fails is left for the next pass, so the counter climbs for as long as
         # the cause lasts. The causes the service counts: a database error during a step; an
-        # unreadable compatible-profiles document on the artifact; every device lookup of a step
+        # unreadable compatible-profiles document on the artifact; every device read of a step
         # failing because device-management is unreachable or not configured for
         # update-management; and (stage="list") the query for the running rollouts failing, which
         # stops every rollout. Meanwhile every
