@@ -156,6 +156,11 @@ type nopStore struct{}
 
 func (nopStore) Put(context.Context, string, downlink.Awaiting) error { return nil }
 func (nopStore) Delete(context.Context, string) error                 { return nil }
+func (nopStore) List(context.Context) (downlink.Stored, error)        { return downlink.Stored{}, nil }
+func (nopStore) PutReboot(context.Context, string, string, string, time.Time) error {
+	return nil
+}
+func (nopStore) DeleteReboot(context.Context, string, string, string) error { return nil }
 
 // newBareDispatcher builds a dispatcher over no sources and no reader: it serves a term (workers,
 // ready, stop) and does nothing else.

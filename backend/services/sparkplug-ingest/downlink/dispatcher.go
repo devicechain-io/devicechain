@@ -6,13 +6,14 @@
 // NCMD or DCMD on the Host Application session the host package already holds with the customer's
 // broker.
 //
-// 🔴 IT PUBLISHES COMMANDS; IT DOES NOT YET CLAIM THEY WORKED. Sparkplug has no command
-// acknowledgement. A published command leaves its row SENT, and what settles it afterwards (a
-// later report of the requested value, the confirmation window, re-arming across a change of
-// leader) is the confirmation slice's, which ships in the same release. This package settles a
-// command itself only when it knows the outcome without a report: it refused the command before
-// the wire (UNSENT), a newer command for the same metric replaced it, or the broker dropped the
-// session right after the publish (UNANSWERED).
+// 🔴 IT PUBLISHES COMMANDS, AND IT DOES NOT CLAIM THEY WORKED. Sparkplug has no command
+// acknowledgement. A published command leaves its row SENT, and is settled afterwards by what the
+// node REPORTS (see confirm.go): a later report of the requested value confirms it, the end of
+// the confirmation window leaves it UNANSWERED, and the awaiting set is re-armed from the KV
+// bucket across a change of leader. "Confirmed" means the node reported the value; it does not
+// mean the node obeyed. A command is also settled without a report when its outcome is already
+// known: refused before the wire (UNSENT), replaced by a newer command for the same metric, or
+// followed at once by the broker dropping the session (UNANSWERED).
 //
 // The gate order is the contract (see live, drain and the numbered comments): the first gate that
 // matches decides, and the order is what keeps a refusal honest. A command that is not this
@@ -145,6 +146,9 @@ type Source interface {
 	BreakerState() host.BreakerState
 	SessionUp() bool
 	SetCommandHooks(h host.CommandHooks)
+	// SourceID names the source (its ingest identity), which an awaiting entry records so a
+	// report is matched only against the commands published on the same broker.
+	SourceID() string
 }
 
 // Reader is the durable device-commands consumer (a messaging reader built with
@@ -177,6 +181,9 @@ type Metrics struct {
 	Commands *prometheus.CounterVec
 	// Awaiting is sparkplug_commands_awaiting: entries in the awaiting set.
 	Awaiting prometheus.Gauge
+	// ConfirmSeconds is sparkplug_command_confirm_seconds: the time from the publish to the report
+	// that confirmed a command.
+	ConfirmSeconds prometheus.Observer
 }
 
 // Options configure a Dispatcher. Zero values take the defaults.
@@ -191,6 +198,8 @@ type Options struct {
 	Now func() time.Time
 	// ProgressEvery is how often a waiting message is reported as in progress.
 	ProgressEvery time.Duration
+	// SweepEvery is how often the awaiting set is looked at for windows that have ended.
+	SweepEvery time.Duration
 }
 
 type deviceKey struct{ tenant, device string }
@@ -211,6 +220,7 @@ type Dispatcher struct {
 	tenantDeleted func(string) bool
 	now           func() time.Time
 	progressEvery time.Duration
+	sweepEvery    time.Duration
 	workers       int
 
 	byTenant map[string][]Source
@@ -222,10 +232,17 @@ type Dispatcher struct {
 
 	// mu guards the in-memory state below, all of it per term (reset by Run).
 	mu sync.Mutex
-	// awaiting is the in-memory mirror of the awaiting set for writes: the command that is
-	// currently waiting on each (device, metric), so a newer command for the same metric can
-	// supersede it.
-	awaiting map[awaitKey]awaitRef
+	// entries is the in-memory mirror of the awaiting set (see confirm.go), by KV key; byTarget
+	// finds the entries a report can settle, and byMetric the write waiting on each (device,
+	// metric), so a newer command for the same metric can supersede it. nEntries lets the receive
+	// path skip the lock when nothing is awaited.
+	entries  map[string]*entry
+	byTarget map[targetKey][]*entry
+	byMetric map[awaitKey]*entry
+	nEntries atomic.Int64
+	// unseeded is set from the start of a term until the previous term's state (the reboot marks
+	// and the awaiting entries) has been read from the bucket.
+	unseeded atomic.Bool
 	// recent is what each source published in the last tripWindow, for the breaker.
 	recent map[Source][]recentPub
 	// reboots is when each node was last rebooted by this term.
@@ -243,12 +260,6 @@ type Dispatcher struct {
 
 type awaitKey struct {
 	tenant, device, metric string
-}
-
-type awaitRef struct {
-	command string
-	nonce   string
-	src     Source
 }
 
 type recentPub struct {
@@ -282,10 +293,13 @@ func New(rdr Reader, responses cmddownlink.ResponseWriter, fetcher Fetcher, clai
 	if opts.ProgressEvery <= 0 {
 		opts.ProgressEvery = defaultProgressEvery
 	}
+	if opts.SweepEvery <= 0 {
+		opts.SweepEvery = defaultSweepEvery
+	}
 	d := &Dispatcher{
 		reader: rdr, responses: responses, fetcher: fetcher, claimer: claimer, parker: parker, store: store,
 		metrics: metrics, pacer: opts.ReadPacer, tenantDeleted: opts.TenantDeleted, now: opts.Now,
-		progressEvery: opts.ProgressEvery, workers: opts.Workers,
+		progressEvery: opts.ProgressEvery, sweepEvery: opts.SweepEvery, workers: opts.Workers,
 		byTenant: map[string][]Source{}, limiters: map[Source]*bucket{},
 	}
 	for _, s := range sources {
@@ -294,8 +308,9 @@ func New(rdr Reader, responses cmddownlink.ResponseWriter, fetcher Fetcher, clai
 		d.limiters[s] = newBucket(cfg.PublishPerSecond, cfg.Burst, d.now())
 		src := s
 		s.SetCommandHooks(host.CommandHooks{
-			Born:    d.OnBorn,
-			Tripped: func(at time.Time) { d.onTripped(src, at) },
+			Born:     d.OnBorn,
+			Tripped:  func(at time.Time) { d.onTripped(src, at) },
+			Reported: func(tenant string, rs []host.Report) { d.onReports(src, tenant, rs) },
 		})
 	}
 	d.resetTerm()
@@ -305,7 +320,13 @@ func New(rdr Reader, responses cmddownlink.ResponseWriter, fetcher Fetcher, clai
 func (d *Dispatcher) resetTerm() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.awaiting = map[awaitKey]awaitRef{}
+	d.entries = map[string]*entry{}
+	d.byTarget = map[targetKey][]*entry{}
+	d.byMetric = map[awaitKey]*entry{}
+	d.nEntries.Store(0)
+	if d.metrics.Awaiting != nil {
+		d.metrics.Awaiting.Set(0)
+	}
 	d.recent = map[Source][]recentPub{}
 	d.reboots = map[nodeKey]time.Time{}
 	d.parkedNotBorn = map[deviceKey]struct{}{}
@@ -316,12 +337,6 @@ func (d *Dispatcher) resetTerm() {
 func (d *Dispatcher) count(result string) {
 	if d.metrics.Commands != nil {
 		d.metrics.Commands.WithLabelValues(result).Inc()
-	}
-}
-
-func (d *Dispatcher) awaitingDelta(n float64) {
-	if d.metrics.Awaiting != nil {
-		d.metrics.Awaiting.Add(n)
 	}
 }
 
@@ -398,8 +413,17 @@ func (d *Dispatcher) Run(ctx context.Context, ready func()) {
 	runCtx, stop := context.WithCancel(ctx)
 	defer stop()
 
-	shards := make([]*shard, d.workers)
 	var wg sync.WaitGroup
+	// Before anything is served: pick up what the previous term left awaiting an outcome, and the
+	// record of the reboots it sent.
+	d.seedStart(runCtx, func(f func()) {
+		wg.Add(1)
+		go func() { defer wg.Done(); f() }()
+	})
+	wg.Add(1)
+	go func() { defer wg.Done(); d.sweepLoop(runCtx) }()
+
+	shards := make([]*shard, d.workers)
 	for i := range shards {
 		shards[i] = newShard()
 		wg.Add(1)
@@ -1053,6 +1077,9 @@ func (d *Dispatcher) validate(j *job) (plan, *refusal, bool) {
 		if ref.Datatype != 11 { // Boolean
 			return refuse(ResultRefusedRebootGate, "%s is declared with datatype %d, not Boolean", nodeControlReboot, ref.Datatype)
 		}
+		if d.unseeded.Load() {
+			return refuse(ResultRefusedRebootGate, "the record of recent reboots could not be read yet, so the one-reboot-per-window rule cannot be applied; re-issue the reboot shortly")
+		}
 		if last, ok := d.lastReboot(j, cfg); ok {
 			return refuse(ResultRefusedRebootGate, "node %s was already rebooted %s ago; at most one reboot per %s", j.target,
 				d.now().Sub(last).Round(time.Second), cfg.RebootWindow())
@@ -1143,12 +1170,14 @@ func (d *Dispatcher) send(ctx context.Context, j *job, p plan) {
 	// 12 and 13. The awaiting entry is written inside the publish, after its last re-check and
 	// immediately before the bytes go out, so the record describes exactly what was sent.
 	key := AwaitingKey(j.tenant, j.token)
-	wrote := false
+	wrote, marked := false, false
 	hook := func(w host.CommandWire) error {
 		a := Awaiting{
-			Command: j.token, Device: j.device, Nonce: j.nonce, Kind: p.kind, Metric: p.metric, Alias: w.Alias,
+			Command: j.token, Device: j.device, Source: j.src.SourceID(), Target: p.target.String(), Nonce: j.nonce,
+			Kind: p.kind, Metric: p.metric, Alias: w.Alias,
 			Requested: p.requested, Datatype: w.Datatype, SessionEpoch: w.Epoch, BdSeq: w.BdSeq, HasBdSeq: w.HasBdSeq,
-			HostRole: cfg.HostRole, PublishedAt: w.PublishedAt, Wire: awaitingWire(w),
+			HostRole: cfg.HostRole, AtRequestedValue: w.AtRequestedValue, LastReportedAt: w.LastReportedAt,
+			PublishedAt: w.PublishedAt, Wire: awaitingWire(w),
 		}
 		a.Deadline = w.PublishedAt.Add(d.windowOf(cfg, p.kind))
 		if !j.expires.IsZero() && j.expires.Before(a.Deadline) {
@@ -1160,55 +1189,90 @@ func (d *Dispatcher) send(ctx context.Context, j *job, p plan) {
 			return err
 		}
 		wrote = true
-		d.awaitingDelta(1)
+		if p.kind == KindReboot {
+			// The one-reboot-per-window rule is kept in the bucket, not only in this term's memory:
+			// a new leader must not send a second reboot into the same window. Written with the
+			// record and before the bytes go out, like it, and taken back if nothing was sent.
+			if err := d.store.PutReboot(ctx, j.tenant, p.target.Group, p.target.Node, w.PublishedAt); err != nil {
+				d.count(ResultKVFailed)
+				log.Warn().Err(err).Str("tenant", j.tenant).Str("command", j.token).Msg("Could not record a Sparkplug reboot before publishing it; not publishing.")
+				return err
+			}
+			marked = true
+			d.mu.Lock()
+			d.reboots[nodeKey{j.tenant, p.target.Group, p.target.Node}] = w.PublishedAt
+			d.mu.Unlock()
+		}
+		// In the mirror BEFORE the bytes are on the wire: a node that answers at once must find
+		// the entry it is answering.
+		d.addEntry(d.newEntry(j.tenant, a, j.src))
 		return nil
 	}
+	undo := func() {
+		d.forget(key)
+		if wrote {
+			d.deleteEntry(key)
+			wrote = false
+		}
+		if marked {
+			d.unmarkReboot(j.tenant, p.target)
+			marked = false
+		}
+	}
 
-	var (
-		w   host.CommandWire
-		err error
-	)
+	var err error
 	// 14. Publish QoS 0, retain false, on the session the Client holds. If the node's table moved
 	// while the record was being written, the record is retracted and the command is asked again
 	// against the new table (it is re-resolved by name there); a node that keeps moving is refused.
 	for attempt := 0; ; attempt++ {
 		switch p.kind {
 		case KindRebirth:
-			w, err = j.src.PublishRebirth(ctx, p.target, hook)
+			_, err = j.src.PublishRebirth(ctx, p.target, hook)
 		default:
-			w, err = j.src.PublishMetric(ctx, p.ref, p.value, hook)
+			_, err = j.src.PublishMetric(ctx, p.ref, p.value, hook)
 		}
 		if !errors.Is(err, host.ErrTableMoved) {
 			break
 		}
-		if wrote {
-			d.deleteEntry(key)
-			wrote = false
-		}
+		undo()
 		if attempt >= 2 {
 			d.refuseClaimed(j, ResultRefusedMetric, fmt.Sprintf("the node %s kept re-birthing while the command was being recorded", p.target))
 			return
 		}
 	}
 	if err != nil {
-		d.failedSend(ctx, j, p, key, wrote, err)
+		d.failedSend(ctx, j, p, undo, err)
 		return
 	}
 
 	d.count(ResultPublished)
+	d.watch(j)
+	// 15. Ack. The row stays SENT: what became of the command is learned from the node's reports.
+	j.settle(d)
+}
+
+// watch notes a command that reached (or may have reached) the wire, for the breaker's watch.
+func (d *Dispatcher) watch(j *job) {
 	d.mu.Lock()
-	if p.kind == KindWrite {
-		d.awaiting[awaitKey{j.tenant, j.device, p.metric}] = awaitRef{command: j.token, nonce: j.nonce, src: j.src}
-	}
-	if p.kind == KindReboot {
-		d.reboots[nodeKey{j.tenant, p.target.Group, p.target.Node}] = w.PublishedAt
-	}
 	d.recent[j.src] = append(pruneRecent(d.recent[j.src], d.now()), recentPub{
 		tenant: j.tenant, device: j.device, command: j.token, nonce: j.nonce, at: d.now(),
 	})
 	d.mu.Unlock()
-	// 15. Ack. The row stays SENT: what became of the command is learned from the node's reports.
-	j.settle(d)
+}
+
+// unmarkReboot takes back a reboot mark for a reboot that was not sent.
+func (d *Dispatcher) unmarkReboot(tenant string, t host.CommandTarget) {
+	ctx, cancel := context.WithTimeout(context.Background(), bgTimeout)
+	defer cancel()
+	if err := d.store.DeleteReboot(ctx, tenant, t.Group, t.Node); err != nil {
+		d.count(ResultKVFailed)
+		log.Warn().Err(err).Str("tenant", tenant).Str("node", t.String()).
+			Msg("Could not take back the mark of a reboot that was not sent; the node cannot be rebooted again until its window ends.")
+		return
+	}
+	d.mu.Lock()
+	delete(d.reboots, nodeKey{tenant, t.Group, t.Node})
+	d.mu.Unlock()
 }
 
 func (d *Dispatcher) windowOf(cfg config.SourceCommands, kind string) time.Duration {
@@ -1219,19 +1283,23 @@ func (d *Dispatcher) windowOf(cfg config.SourceCommands, kind string) time.Durat
 }
 
 // failedSend settles a command whose publish did not happen, undoing what was done for it.
-func (d *Dispatcher) failedSend(ctx context.Context, j *job, p plan, key string, wrote bool, err error) {
+func (d *Dispatcher) failedSend(ctx context.Context, j *job, p plan, undo func(), err error) {
 	var indeterminate *host.PublishIndeterminateError
-	if wrote && !errors.As(err, &indeterminate) {
-		d.deleteEntry(key)
+	if !errors.As(err, &indeterminate) {
+		undo()
 	}
 	var before *host.BeforeWireError
 	switch {
 	case errors.As(err, &indeterminate):
 		// The outcome is unknown: the bytes may have reached the node, so this is NOT "not sent".
-		// The record stays (it is the only account of what may have gone out), and the command is
-		// resolved UNANSWERED, which is TIMEOUT/UNKNOWN and not the retry-safe NOT_DELIVERED.
+		// The record STAYS, in the bucket and in memory, armed: it is the only account of what may
+		// have gone out, and the window settles it like any other published command (a report of
+		// the value confirms it; the end of the window leaves it UNANSWERED, which is TIMEOUT/UNKNOWN
+		// and not the retry-safe NOT_DELIVERED). It is never handed back to be sent a second time.
 		d.count(ResultPublishFailed)
-		_ = d.respond(j, false, cmddownlink.ReachUnanswered, msgIndeterminate+": "+indeterminate.Err.Error())
+		d.watch(j)
+		log.Warn().Err(indeterminate.Err).Str("tenant", j.tenant).Str("command", j.token).
+			Msg("A Sparkplug command's publish did not complete; it may have reached the node and is awaited like any other.")
 		j.settle(d)
 	case errors.Is(err, host.ErrTermEnded):
 		// The term ended between the claim and the wire. Nothing was published. The claim already
@@ -1284,9 +1352,7 @@ func (d *Dispatcher) deleteEntry(key string) {
 	if err := d.store.Delete(ctx, key); err != nil {
 		d.count(ResultKVFailed)
 		log.Warn().Err(err).Str("key", key).Msg("Could not delete an awaiting entry; it ages out with the bucket's lifetime.")
-		return
 	}
-	d.awaitingDelta(-1)
 }
 
 // supersede resolves the awaiting write this command replaces, if any.
@@ -1294,22 +1360,16 @@ func (d *Dispatcher) supersede(j *job, p plan) {
 	if p.kind != KindWrite {
 		return
 	}
-	k := awaitKey{j.tenant, j.device, p.metric}
 	d.mu.Lock()
-	old, ok := d.awaiting[k]
-	if ok {
-		delete(d.awaiting, k)
-	}
+	old := d.byMetric[awaitKey{j.tenant, j.device, p.metric}]
 	d.mu.Unlock()
-	if !ok || old.command == j.token {
+	if old == nil || old.a.Command == j.token {
 		return
 	}
-	d.count(ResultSuperseded)
-	text := fmt.Sprintf("superseded by %s before it was confirmed", j.token)
-	_ = d.publishResponse(j.tenant, j.device, cmddownlink.ResponseEnvelope{
-		CommandToken: old.command, Success: false, Reach: cmddownlink.ReachUnanswered, Error: &text, DispatchNonce: old.nonce,
+	d.resolveNow(old, &outcome{
+		result: ResultSuperseded,
+		text:   fmt.Sprintf("superseded by %s before it was confirmed", j.token),
 	})
-	d.deleteEntry(AwaitingKey(j.tenant, old.command))
 }
 
 func pruneRecent(in []recentPub, now time.Time) []recentPub {
@@ -1335,13 +1395,6 @@ func (d *Dispatcher) onTripped(src Source, at time.Time) {
 		}
 	}
 	d.recent[src] = nil
-	for k, ref := range d.awaiting {
-		for _, r := range hit {
-			if ref.command == r.command {
-				delete(d.awaiting, k)
-			}
-		}
-	}
 	open := d.termOpen
 	if open && len(hit) > 0 {
 		d.bg.Add(1)
@@ -1353,12 +1406,13 @@ func (d *Dispatcher) onTripped(src Source, at time.Time) {
 	go func() {
 		defer d.bg.Done()
 		for _, r := range hit {
-			d.count(ResultUnconfirmed)
-			text := msgTripped
-			_ = d.publishResponse(r.tenant, r.device, cmddownlink.ResponseEnvelope{
-				CommandToken: r.command, Success: false, Reach: cmddownlink.ReachUnanswered, Error: &text, DispatchNonce: r.nonce,
-			})
-			d.deleteEntry(AwaitingKey(r.tenant, r.command))
+			// Only a command still awaiting is blamed: one a report already confirmed is not.
+			d.mu.Lock()
+			e := d.entries[AwaitingKey(r.tenant, r.command)]
+			d.mu.Unlock()
+			if e != nil {
+				d.resolveNow(e, &outcome{result: ResultUnconfirmed, text: msgTripped})
+			}
 		}
 	}()
 }

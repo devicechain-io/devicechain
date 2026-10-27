@@ -257,7 +257,7 @@ var All = []Bucket{
 	{
 		Name:    BucketSparkplugCommandsAwaiting,
 		Tier:    State,
-		TTL:     2 * time.Hour, // longer than the largest per-source reboot window (3600 s), the longest an entry is awaited
+		TTL:     2 * time.Hour, // longer than the largest per-source reboot window (3600 s), the longest an entry is awaited or a reboot mark is needed
 		Writers: []string{"sparkplug-ingest"},
 		Readers: []string{"sparkplug-ingest"},
 		Why: "One entry per Sparkplug command that was published to a node and has not yet been " +
@@ -268,7 +268,11 @@ var All = []Bucket{
 			"sparkplug-ingest is deployed and is written only when a source enables commands. A full " +
 			"bucket REFUSES the write, and the command is then not " +
 			"published but handed back to command-delivery (PARKED), so the failure is a delayed " +
-			"command, never an unrecorded actuation.",
+			"command, never an unrecorded actuation. It also holds one small mark per node that was " +
+			"sent a reboot (tenant|reboot|group/node), which is NOT deleted when the reboot " +
+			"resolves: it is how the rule of one reboot per window survives a change of leader, and " +
+			"it ages out with the lifetime, which exceeds the largest window. At most one per node " +
+			"rebooted inside the last two hours.",
 	},
 	{
 		Name:    BucketLeases,

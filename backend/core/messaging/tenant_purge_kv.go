@@ -295,7 +295,8 @@ func KvPurgeExemptions() []string {
 			"connects are refused before they are counted",
 		kv.BucketSparkplugCommandsAwaiting + ": the Sparkplug commands sparkplug-ingest has published " +
 			"and not yet resolved, keyed tenant|commandToken. An entry names the command, the device, " +
-			"the metric and the requested value, and it does name a tenant. It is not scanned here " +
+			"the metric and the requested value, and it does name a tenant (as does a node's reboot " +
+			"mark, which names the node). It is not scanned here " +
 			"because nothing it holds outlives its two-hour lifetime and the service resolves it " +
 			"into command-delivery's own record, which this purge does erase; and a deleted " +
 			"tenant's commands are refused before they are published, so no entry is written for it " +

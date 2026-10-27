@@ -154,22 +154,28 @@ func TestARebootIsNeverParked(t *testing.T) {
 
 // ---- an unknown publish outcome is not "not sent" ----
 
-func TestAPublishWithAnUnknownOutcomeIsUnansweredAndKeepsItsRecord(t *testing.T) {
+func TestAPublishWithAnUnknownOutcomeKeepsItsRecordAndIsSettledByTheWindow(t *testing.T) {
 	r := newRig(t)
+	clk := r.useClock()
 	r.src.publishErr = &host.PublishIndeterminateError{Err: errBoom}
 	spy := r.live("acme", "pump-1", "c", CommandWrite, writeCmd("Setpoint", 5), nil)
 
-	res := r.responses.of("c")
-	require.Len(t, res, 1)
-	assert.Equal(t, cmddownlink.ReachUnanswered, res[0].env.Reach, "a publish that may have reached the node is TIMEOUT, not the retry-safe NOT_DELIVERED")
-	assert.Contains(t, errorOf(res[0]), "may have reached the node")
-	assert.Equal(t, "claim-nonce", res[0].env.DispatchNonce)
+	// Not answered at once: it may have reached the node, and the window will say what became of it.
+	assert.Empty(t, r.responses.of("c"))
 	_, ok := r.store.get(AwaitingKey("acme", "c"))
 	assert.True(t, ok, "the record of a command that may have gone out was deleted")
 	assert.False(t, r.log.has("kvdel:"))
 	assert.False(t, r.log.has("park:"), "a command that may have been sent was handed back to be sent again")
 	assert.Equal(t, int32(1), spy.acks.Load())
 	assert.Equal(t, 1, r.result(ResultPublishFailed))
+
+	// The window settles it: UNANSWERED, which is TIMEOUT, not the retry-safe NOT_DELIVERED.
+	clk.advance(121 * time.Second)
+	r.d.sweep()
+	res := r.responses.of("c")
+	require.Len(t, res, 1)
+	assert.Equal(t, cmddownlink.ReachUnanswered, res[0].env.Reach)
+	assert.Equal(t, "claim-nonce", res[0].env.DispatchNonce)
 
 	// Control: an error that says nothing reached the wire still refuses it as not delivered.
 	r2 := newRig(t)
@@ -188,9 +194,8 @@ func TestOnlyAnEndedTermIsReSent(t *testing.T) {
 	w, _ := r.msg("acme", "pump-1", "c", CommandWrite, writeCmd("Setpoint", 5), nil)
 	r.d.live(ctx, w)
 	assert.False(t, r.log.has("park:"), "a command that may have been published was parked for a second send")
-	res := r.responses.of("c")
-	require.Len(t, res, 1)
-	assert.Equal(t, cmddownlink.ReachUnanswered, res[0].env.Reach)
+	_, ok := r.store.get(AwaitingKey("acme", "c"))
+	assert.True(t, ok, "the record of a command that may have gone out was dropped with the term")
 }
 
 // ---- the table moved while the record was written ----

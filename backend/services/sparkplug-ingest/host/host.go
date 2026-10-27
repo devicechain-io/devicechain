@@ -467,6 +467,11 @@ func NewClient(source config.SparkplugSource, broker Broker, ingester SampleInge
 		breaker:       NewBreaker(now),
 	}
 	c.sessions = NewSessionTracker(now, defaultRebirthBackoff, c.enqueueRebirth)
+	if source.Commands.Enabled {
+		// The reports and last-reported values a command is confirmed by; a source that commands
+		// nothing does not pay for them.
+		c.sessions.EnableReports()
+	}
 	c.rebirthPub = c.publishRebirth
 	return c
 }
@@ -1096,6 +1101,7 @@ func (c *Client) onMessage(_ mqtt.Client, msg mqtt.Message) {
 	// has no node session.
 	if !rec.Topic.IsState && rec.Payload != nil && c.ingester != nil {
 		obs := c.sessions.Observe(rec.Topic, rec.Payload)
+		c.reported(obs.Reports)
 		c.countSkipped(obs.Skipped)
 		if obs.Skipped.Oversize > 0 {
 			log.Warn().Str("topic", msg.Topic()).Int("metrics", obs.Skipped.Oversize).
@@ -1128,7 +1134,7 @@ func (c *Client) onMessage(_ mqtt.Client, msg mqtt.Message) {
 	} else if !rec.Topic.IsState && rec.Payload != nil {
 		// Decode-only (nil ingester, the SP1/SP2 posture): still advance the session
 		// machine so rebirth decisions and logging are unchanged.
-		c.sessions.Observe(rec.Topic, rec.Payload)
+		c.reported(c.sessions.Observe(rec.Topic, rec.Payload).Reports)
 	}
 	c.logRecord(rec)
 }

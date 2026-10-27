@@ -159,6 +159,13 @@ type SessionTracker struct {
 	// node, so a generation captured from a session that has since been replaced can never equal
 	// the replacement's.
 	tableGen uint64
+
+	// capture turns on the report capture (see report.go); cur is the message the current step is
+	// processing and reports accumulates, under mu, what its accepted metrics said. Observe drains
+	// reports into the Observation it returns, after the lock is released.
+	capture bool
+	cur     stepContext
+	reports []Report
 }
 
 // Observation is everything a single decoded Sparkplug message contributes to the
@@ -170,6 +177,9 @@ type Observation struct {
 	Presence []PresenceEvent
 	// Skipped accounts for the metrics of this message that produced no Sample.
 	Skipped Skips
+	// Reports are copies of what the message's accepted metrics said, for the command path to match
+	// against the commands it is waiting on. Empty unless the tracker was asked to capture them.
+	Reports []Report
 }
 
 // nodeExternalId / deviceExternalId build the ADR-049 external id the projection keys
@@ -262,14 +272,17 @@ func (tr *SessionTracker) Observe(top Topic, p *sppb.Payload) Observation {
 	tr.mu.Lock()
 	skipped := tr.skipped
 	tr.skipped = Skips{}
+	reports := tr.reports
+	tr.reports = nil
 	tr.mu.Unlock()
-	return Observation{Samples: samples, Presence: presence, Skipped: skipped}
+	return Observation{Samples: samples, Presence: presence, Skipped: skipped, Reports: reports}
 }
 
 // extract is samplesFrom plus the accounting of what it skipped. The caller holds tr.mu.
 func (tr *SessionTracker) extract(p *sppb.Payload, s *nodeSession, device string) []Sample {
 	samples, skips := samplesFrom(p, s.aliases, s.types, device, tr.now)
 	tr.skipped.add(skips)
+	tr.captureReports(p, s, device)
 	return samples
 }
 
@@ -282,6 +295,7 @@ func (tr *SessionTracker) extract(p *sppb.Payload, s *nodeSession, device string
 func (tr *SessionTracker) step(key nodeKey, top Topic, p *sppb.Payload) ([]Sample, []PresenceEvent, bool) {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
+	tr.cur = stepContext{key: key, mt: top.MessageType}
 
 	// NBIRTH is the authoritative reset: it rebuilds the session from scratch, so
 	// it never needs a prior session and never triggers a rebirth (a replayed

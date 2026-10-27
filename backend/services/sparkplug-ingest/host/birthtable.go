@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	sppb "github.com/devicechain-io/dc-sparkplug-ingest/proto"
 )
@@ -41,6 +42,13 @@ type declaredMetric struct {
 	alias    uint64
 	hasAlias bool
 	datatype uint32
+
+	// last is the value the node last reported for the metric (a non-historical, non-null report
+	// of an accepted BIRTH or DATA message) and lastAt when it says that was; hasLast is false until
+	// one has been, and again after a null. Kept only when the tracker captures reports.
+	last    WireValue
+	hasLast bool
+	lastAt  time.Time
 }
 
 // CommandTarget is the Sparkplug identity a command is addressed to: a node (Device empty,
