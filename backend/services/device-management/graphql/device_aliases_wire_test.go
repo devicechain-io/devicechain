@@ -280,3 +280,41 @@ func TestClearUnregisteredIntegrationDevicesOverTheWire(t *testing.T) {
 		t.Fatalf("rows survived the clear: %v", seen.data)
 	}
 }
+
+// The marker mutations are the same service plane as resolveIntegrationDevice.
+func TestIntegrationMarkerMutationsAreServiceOnly(t *testing.T) {
+	const undecoded = `mutation ($i: String!, $s: String!) { recordIntegrationUndecoded(integration: $i, secret: $s, count: 2, sample: "aabb") }`
+	const authFailure = `mutation ($i: String!) { recordIntegrationAuthFailure(integration: $i) }`
+	f := newIntegrationWireFixture(t)
+	admin := f.operator()
+	issued := serve(t, admin, wireCreateIntegration, createIntegrationVars("chirp-1", nil)).
+		data["createIntegration"].(map[string]any)["issuedToken"].(string)
+	uv := map[string]any{"i": "chirp-1", "s": issued}
+	av := map[string]any{"i": "chirp-1"}
+
+	if got := serve(t, service(f), undecoded, uv); len(got.errs) > 0 || got.data["recordIntegrationUndecoded"] != true {
+		t.Fatalf("the paired positive (undecoded): %v %v", got.data, got.errs)
+	}
+	if got := serve(t, service(f), authFailure, av); len(got.errs) > 0 || got.data["recordIntegrationAuthFailure"] != true {
+		t.Fatalf("the paired positive (auth failure): %v %v", got.data, got.errs)
+	}
+	refused := map[string]context.Context{
+		"an access token holding device:read": f.withClaims(&auth.Claims{TokenType: auth.TokenTypeAccess,
+			Tenant: scopeTenant, Authorities: []string{string(auth.DeviceRead)}}),
+		"a tenant administrator":              admin,
+		"a service token without device:read": serviceWith(f, auth.EventRead),
+	}
+	for who, ctx := range refused {
+		if got := serve(t, ctx, undecoded, uv); len(got.errs) == 0 || got.data["recordIntegrationUndecoded"] == true {
+			t.Errorf("recordIntegrationUndecoded was admitted for %s", who)
+		}
+		if got := serve(t, ctx, authFailure, av); len(got.errs) == 0 || got.data["recordIntegrationAuthFailure"] == true {
+			t.Errorf("recordIntegrationAuthFailure was admitted for %s", who)
+		}
+	}
+	// A wrong token is refused and the tally is untouched.
+	bad := serve(t, service(f), undecoded, map[string]any{"i": "chirp-1", "s": "x" + issued[1:]})
+	if len(bad.errs) == 0 {
+		t.Errorf("a wrong token wrote a marker: %v", bad.data)
+	}
+}

@@ -4977,6 +4977,33 @@ type Mutation {
         """The sender's identifier for the device."""
         value: String!
     ): IntegrationDeviceResolution!
+    """
+    Service-only: callable with a service token that holds device:read, and refused for any
+    user's access token. Adds count uplinks to the integration's undecoded tally and keeps the
+    latest frame sample (hex, at most 1024 characters). It authenticates the integration with its
+    bearer token, so a service token alone cannot write another sender's markers; a wrong token or a
+    switched-off integration is refused and nothing is written. The ingest path batches these.
+    """
+    recordIntegrationUndecoded(
+        """Token of the integration, as it appears in the sender's URL."""
+        integration: String!
+        """The bearer token the sender presented."""
+        secret: String!
+        """How many uplinks to add; at least 1."""
+        count: Int!
+        """Hex encoding of the latest frame, if the uplink carried one."""
+        sample: String
+    ): Boolean!
+    """
+    Service-only: callable with a service token that holds device:read, and refused for any
+    user's access token. Stamps the time a request for the integration last failed
+    authentication, at most once a minute. A token that names no integration is not an error and
+    writes nothing.
+    """
+    recordIntegrationAuthFailure(
+        """Token of the integration, as it appears in the sender's URL."""
+        integration: String!
+    ): Boolean!
     # Open (or reopen) a possession claim on a device with a secret an eventual
     # owner will present.
     initiateDeviceClaim(request: DeviceClaimInitiateRequest!): DeviceClaim!

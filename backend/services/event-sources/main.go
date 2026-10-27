@@ -11,6 +11,8 @@ import (
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/rs/zerolog/log"
 
+	"github.com/devicechain-io/dc-event-sources/integration"
+
 	"github.com/devicechain-io/dc-event-sources/config"
 	"github.com/devicechain-io/dc-event-sources/graphql"
 	"github.com/devicechain-io/dc-event-sources/model"
@@ -111,6 +113,13 @@ var (
 	ReadingRateLimiter        *core.TenantRateLimiter
 	BacklogReadingRateLimiter *core.TenantRateLimiter
 	HttpReadingRateLimiter    *core.TenantRateLimiter
+
+	// IntegrationRateLimiter and IntegrationReadingRateLimiter meter the inbound-integration route
+	// (processor.OriginIntegration) apart from every other path: its tenant is proven by the
+	// pre-check, so these are confirmed buckets at the tenant's own ceiling, and integration traffic
+	// never spends the allowance captured MQTT traffic does nor the unauthenticated HTTP pool.
+	IntegrationRateLimiter        *core.TenantRateLimiter
+	IntegrationReadingRateLimiter *core.TenantRateLimiter
 
 	// ShedPriorityResolver resolves a tenant's ADR-063 shed priority (band) from
 	// user-management, cached like the ingest ceiling. It is what turns the contention
@@ -226,6 +235,20 @@ var (
 	// attribute a cut-off device to. Labelled by SOURCE only — a connection that never
 	// sent a request named no tenant.
 	EarlyCloseCounter *prometheus.CounterVec
+
+	// IntegrationRequestsCounter, IntegrationUplinksCounter, IntegrationFlattenSkippedCounter and
+	// IntegrationUnregisteredOverflowCounter are the inbound-integration route's accounting. None
+	// carries a tenant or an integration name: both are strings a sender chose before its
+	// credential was checked. Every series is exported at zero from the start, so the first
+	// refusal after a restart is an increase.
+	IntegrationRequestsCounter             *prometheus.CounterVec
+	IntegrationUplinksCounter              *prometheus.CounterVec
+	IntegrationFlattenSkippedCounter       *prometheus.CounterVec
+	IntegrationUnregisteredOverflowCounter prometheus.Counter
+	// integrationUndecoded batches the undecoded-uplink markers and is run from start to stop.
+	integrationUndecoded               []*integration.Undecoded
+	IntegrationUndecodedDroppedCounter prometheus.Counter
+	integrationStop                    context.CancelFunc
 
 	// ExternalMqttOwnerGauge is 1 on the pod that reads an external MQTT source and 0 on
 	// every other, per source; see processor.OwnedMqttSource.
@@ -348,8 +371,109 @@ func initializeMetrics() {
 		"Count of decoded messages from an external MQTT broker that were not stored because the publish to "+
 			"the platform's inbound-events stream failed. That source does not retry, so each one is lost",
 		[]string{"source"})
+	initializeIntegrationMetrics()
 	seedRefusalCounters(configuredSourceIDs())
 	initializePresenceMetrics()
+}
+
+// initializeIntegrationMetrics registers the inbound-integration route's counters and exports
+// every series at zero.
+func initializeIntegrationMetrics() {
+	IntegrationRequestsCounter = Microservice.NewCounterVec(
+		"integration_requests_total",
+		"Count of requests to the inbound-integration route by integration type and result. A request has "+
+			"one result; precheck_stale is counted in addition to it, for a request answered from a "+
+			"last-known-good authentication because device-management could not be asked",
+		[]string{"type", "result"})
+	IntegrationUplinksCounter = Microservice.NewCounterVec(
+		"integration_uplinks_total",
+		"Count of uplinks read from accepted integration requests by what became of each",
+		[]string{"result"})
+	IntegrationFlattenSkippedCounter = Microservice.NewCounterVec(
+		"integration_flatten_skipped_total",
+		"Count of leaves of a network server's decoded object that were not stored as readings, by reason",
+		[]string{"reason"})
+	IntegrationUndecodedDroppedCounter = Microservice.NewCounter(
+		"integration_undecoded_dropped_total",
+		"Count of undecoded-uplink tallies not recorded on an integration because too many integrations were waiting to be written")
+	IntegrationUnregisteredOverflowCounter = Microservice.NewCounter(
+		"integration_unregistered_overflow_total",
+		"Count of unregistered-device sightings not recorded because an integration already records the most it may")
+	for _, t := range processor.IntegrationTypes {
+		for _, r := range processor.IntegrationRequestResults {
+			IntegrationRequestsCounter.WithLabelValues(t, r)
+		}
+	}
+	for _, r := range processor.IntegrationUplinkResults {
+		IntegrationUplinksCounter.WithLabelValues(r)
+	}
+	for _, r := range integration.SkipReasons {
+		IntegrationFlattenSkippedCounter.WithLabelValues(r)
+	}
+}
+
+// integrationMetrics is the route's reporting, reading the counters when called: the route is
+// built before the counters are registered.
+func integrationMetrics() processor.IntegrationMetrics {
+	return processor.IntegrationMetrics{
+		Request: func(t, result string) {
+			if IntegrationRequestsCounter != nil {
+				IntegrationRequestsCounter.WithLabelValues(t, result).Inc()
+			}
+		},
+		Uplink: func(result string) {
+			if IntegrationUplinksCounter != nil {
+				IntegrationUplinksCounter.WithLabelValues(result).Inc()
+			}
+		},
+		FlattenSkipped: func(reason string, n int) {
+			if IntegrationFlattenSkippedCounter != nil {
+				IntegrationFlattenSkippedCounter.WithLabelValues(reason).Add(float64(n))
+			}
+		},
+		UnregisteredOverflow: func() {
+			if IntegrationUnregisteredOverflowCounter != nil {
+				IntegrationUnregisteredOverflowCounter.Inc()
+			}
+		},
+	}
+}
+
+// buildIntegrationRoute builds the inbound-integration route over a service-token client that
+// holds device:read and nothing else. It returns nil, with the reason logged, when device-
+// management cannot be reached from here (no service secret or no endpoint): the route then
+// answers 503 rather than authenticating against nothing.
+func buildIntegrationRoute() *processor.IntegrationRoute {
+	infra := Microservice.InstanceConfiguration.Infrastructure
+	if infra.ServiceAuth.Secret == "" || infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 ||
+		infra.DeviceManagement.Hostname == "" || infra.DeviceManagement.Port == 0 {
+		log.Warn().Msg("Service secret or user-management or device-management endpoint not configured - " +
+			"the inbound-integration route will answer 503.")
+		return nil
+	}
+	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "event-sources", []string{string(auth.DeviceRead)})
+	dmURL := fmt.Sprintf("http://%s:%d/graphql", infra.DeviceManagement.Hostname, infra.DeviceManagement.Port)
+	backend := integration.NewDM(client, dmURL)
+	undecoded := integration.NewUndecoded(backend, 0, nil, func() {
+		if IntegrationUndecodedDroppedCounter != nil {
+			IntegrationUndecodedDroppedCounter.Inc()
+		}
+	})
+	integrationUndecoded = append(integrationUndecoded, undecoded)
+	route := &processor.IntegrationRoute{
+		Auth:      integration.NewAuthenticator(backend, integration.AuthConfig{}),
+		Devices:   integration.NewDevices(backend, integration.DeviceConfig{}),
+		Undecoded: undecoded,
+		Seal: func(tenant, integrationToken, bearer string) ([]byte, error) {
+			if SecretTransit == nil {
+				return nil, errors.New("no transit key to seal the integration token with")
+			}
+			return SecretTransit.SealToken(tenant, credential.IntegrationSealKind(integrationToken), bearer)
+		},
+		Publish: onIntegrationEventDecoded,
+		Metrics: integrationMetrics(),
+	}
+	return route
 }
 
 // contentionLevel is the effective ADR-063 shed level. At GA it is just the operator
@@ -433,6 +557,7 @@ func buildRateLimiter() {
 		RateLimiter = core.NewTenantRateLimiter(shedAdjusted(flat, shedPrio), unresolved)
 		BacklogRateLimiter = core.NewTenantRateLimiter(flat, unresolved)
 		HttpRateLimiter = core.NewTenantRateLimiter(shedAdjusted(flat, shedPrio), unresolved, overflow)
+		IntegrationRateLimiter = core.NewTenantRateLimiter(shedAdjusted(flat, shedPrio), unresolved)
 		buildReadingRateLimiters(flat, shedPrio)
 		return
 	}
@@ -457,6 +582,7 @@ func buildRateLimiter() {
 	RateLimiter = core.NewTenantRateLimiter(shedAdjusted(resolver.Ceiling, ShedPriorityResolver.Resolve), unresolved)
 	BacklogRateLimiter = core.NewTenantRateLimiter(resolver.Ceiling, unresolved)
 	HttpRateLimiter = core.NewTenantRateLimiter(shedAdjusted(resolver.Ceiling, ShedPriorityResolver.Resolve), unresolved, overflow)
+	IntegrationRateLimiter = core.NewTenantRateLimiter(shedAdjusted(resolver.Ceiling, ShedPriorityResolver.Resolve), unresolved)
 	buildReadingRateLimiters(resolver.Ceiling, ShedPriorityResolver.Resolve)
 	log.Info().Str("userManagement", umURL).Int("contentionFloor", contentionLevel()).
 		Msg("Per-tenant ingest overrides + ADR-063 shed priorities enabled (fail-open to platform default).")
@@ -472,6 +598,7 @@ func buildReadingRateLimiters(base core.TenantCeilingResolver, shedPriority func
 	ReadingRateLimiter = core.NewTenantRateLimiter(governance.ReadingCeiling(shedAdjusted(base, shedPriority)))
 	BacklogReadingRateLimiter = core.NewTenantRateLimiter(governance.ReadingCeiling(base))
 	HttpReadingRateLimiter = core.NewTenantRateLimiter(governance.ReadingCeiling(shedAdjusted(base, shedPriority)))
+	IntegrationReadingRateLimiter = core.NewTenantRateLimiter(governance.ReadingCeiling(shedAdjusted(base, shedPriority)))
 }
 
 // Create decoder based on event source configuration.
@@ -487,6 +614,9 @@ func createDecoder(source config.EventSource) (processor.Decoder, error) {
 // Use configuration to build event sources.
 func buildEventSources() error {
 	created := make([]core.LifecycleComponent, 0)
+	// Every HTTP source builds a route with a recorder of its own; start from none so a build run
+	// again does not run the earlier ones twice.
+	integrationUndecoded = nil
 	gatewaySourceBuilt := false
 
 	// ONE admission gate for every transport, built once and shared. Each source takes
@@ -502,11 +632,11 @@ func buildEventSources() error {
 	infra := Microservice.InstanceConfiguration.Infrastructure
 	ingestGate = processor.RefuseDeletedTenants(
 		ingestTenantGate(infra, safetyGates),
-		processor.NewRateGate(RateLimiter, BacklogRateLimiter, HttpRateLimiter, onRateShed),
+		processor.NewRateGate(RateLimiter, BacklogRateLimiter, HttpRateLimiter, IntegrationRateLimiter, onRateShed),
 		onTenantGone)
 	// The reading stage, charged after decode on every transport. One gate, built once,
 	// for the same reason as ingestGate.
-	readingGate = processor.NewReadingGate(ReadingRateLimiter, BacklogReadingRateLimiter, HttpReadingRateLimiter,
+	readingGate = processor.NewReadingGate(ReadingRateLimiter, BacklogReadingRateLimiter, HttpReadingRateLimiter, IntegrationReadingRateLimiter,
 		onReadingShed)
 
 	for _, source := range Configuration.EventSources {
@@ -629,6 +759,13 @@ func buildEventSources() error {
 				ingestGate, readingGate, admitInbound, onConnectionClosedBeforeRequest)
 			if err != nil {
 				return err
+			}
+			// Every HTTP source serves the integration route. Without a way to reach
+			// device-management from here it answers 503.
+			if route := buildIntegrationRoute(); route != nil {
+				if err := http.UseIntegrations(route); err != nil {
+					return err
+				}
 			}
 			created = append(created, http)
 		default:
@@ -804,10 +941,28 @@ func shedClassOf(tenant string) string {
 // dropped identically forever.
 func inboundEventMessage(source string, tenant string, event *model.UnresolvedEvent, payload interface{},
 	dedupID string) (context.Context, messaging.Message, bool) {
+	event.Source = source
+	// Like the transport-authenticated clamp below: whatever produced this event, it is not the
+	// integration route, so it carries no integration's authority. Only that route sets the marks,
+	// and it publishes through integrationEventMessage.
+	processor.ClearIntegrationMark(event)
+	return buildInboundMessage(source, tenant, event, payload, dedupID)
+}
+
+// integrationEventMessage is inboundEventMessage for the integration route's events. It differs
+// in exactly one way: it keeps the Source and the integration marks the route stamped, where the
+// device-facing path stamps the source's id and clears the marks.
+func integrationEventMessage(source string, tenant string, event *model.UnresolvedEvent, payload interface{},
+	dedupID string) (context.Context, messaging.Message, bool) {
+	return buildInboundMessage(source, tenant, event, payload, dedupID)
+}
+
+// buildInboundMessage is the part of building an inbound-events message that every path shares.
+func buildInboundMessage(source string, tenant string, event *model.UnresolvedEvent, payload interface{},
+	dedupID string) (context.Context, messaging.Message, bool) {
 	// Increment counter for metrics.
 	DecodedCounter.WithLabelValues(source).Inc()
 
-	event.Source = source
 	event.Payload = payload
 	// A device controls the raw bytes a Decoder parses, so the device-facing decode
 	// path must NEVER be able to mark an event transport-authenticated (that marker
@@ -946,6 +1101,22 @@ func onEventDecoded(source string, tenant string, event *model.UnresolvedEvent, 
 	if !ok {
 		return nil
 	}
+	return writeInbound(ctx, source, msg)
+}
+
+// onIntegrationEventDecoded publishes an integration route's event, synchronously like
+// onEventDecoded, with the route's own source and marks kept.
+func onIntegrationEventDecoded(source string, tenant string, event *model.UnresolvedEvent, payload interface{},
+	dedupID string) error {
+	ctx, msg, ok := integrationEventMessage(source, tenant, event, payload, dedupID)
+	if !ok {
+		return nil
+	}
+	return writeInbound(ctx, source, msg)
+}
+
+// writeInbound writes one message to inbound-events and accounts for a backpressure refusal.
+func writeInbound(ctx context.Context, source string, msg messaging.Message) error {
 	err := InboundEventsWriter.WriteMessages(ctx, msg)
 	InboundEventsWriter.HandleResponse(err)
 	// The gate can close between a source's admit check and this publish; the refusal is
@@ -1197,6 +1368,16 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		}
 	}
 
+	// The integration route's undecoded markers are written in batches; this flushes the ones a
+	// quiet integration would otherwise leave waiting for its next uplink.
+	if len(integrationUndecoded) > 0 {
+		var runCtx context.Context
+		runCtx, integrationStop = context.WithCancel(context.Background())
+		for _, u := range integrationUndecoded {
+			go u.Run(runCtx)
+		}
+	}
+
 	// A capture stream created before it became a work queue keeps its old retention until
 	// its backlog has been forwarded; the source started above is what drains it, so this
 	// runs after it. The wait is bounded, and failing here stops the service rather than
@@ -1288,6 +1469,10 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	// writer that is about to close.
 	stopSessionKick()
 	stopBrokerPresence()
+	if integrationStop != nil {
+		integrationStop()
+		integrationStop = nil
+	}
 	// The fail-closed store's watch holds no writer, but it uses the broker connection the
 	// manager drains below.
 	MqttFailClosedWatch.Stop()

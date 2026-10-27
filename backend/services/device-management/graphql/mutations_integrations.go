@@ -107,3 +107,37 @@ func (r *SchemaResolver) ResolveIntegrationDevice(ctx context.Context, args stru
 	}
 	return &IntegrationDeviceResolutionResolver{M: resolved}, nil
 }
+
+// Record uplinks an integration accepted with nothing to read (service plane). Same caller
+// rule as resolveIntegrationDevice: a service token holding device:read, never a user's.
+func (r *SchemaResolver) RecordIntegrationUndecoded(ctx context.Context, args struct {
+	Integration string
+	Secret      string
+	Count       int32
+	Sample      *string
+}) (bool, error) {
+	if err := auth.AuthorizeService(ctx, auth.DeviceRead); err != nil {
+		return false, err
+	}
+	sample := ""
+	if args.Sample != nil {
+		sample = *args.Sample
+	}
+	if err := r.GetApi(ctx).RecordIntegrationUndecoded(ctx, args.Integration, args.Secret, int64(args.Count), sample); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// Stamp the time a request for an integration last failed authentication (service plane).
+func (r *SchemaResolver) RecordIntegrationAuthFailure(ctx context.Context, args struct {
+	Integration string
+}) (bool, error) {
+	if err := auth.AuthorizeService(ctx, auth.DeviceRead); err != nil {
+		return false, err
+	}
+	if err := r.GetApi(ctx).RecordIntegrationAuthFailure(ctx, args.Integration); err != nil {
+		return false, err
+	}
+	return true, nil
+}

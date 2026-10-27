@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/eventlimit"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -22,6 +23,7 @@ func newTestGate() (RateGate, *int) {
 	shed := 0
 	limits := core.StaticCeiling(testCeiling, testBurst)
 	gate := NewRateGate(
+		core.NewTenantRateLimiter(limits),
 		core.NewTenantRateLimiter(limits),
 		core.NewTenantRateLimiter(limits),
 		core.NewTenantRateLimiter(limits),
@@ -167,12 +169,12 @@ func TestAnHTTPFloodCannotSpendAuthenticatedAllowance(t *testing.T) {
 
 // A gate missing an allowance cannot meter what would be routed to it; building one
 // fails at construction rather than at the first message.
-func TestARateGateNeedsAllThreeLimiters(t *testing.T) {
+func TestARateGateNeedsAllFourLimiters(t *testing.T) {
 	l := core.NewTenantRateLimiter(core.StaticCeiling(1, 1))
-	for name, args := range map[string][3]*core.TenantRateLimiter{
-		"live": {nil, l, l}, "backlog": {l, nil, l}, "untrusted": {l, l, nil},
+	for name, args := range map[string][4]*core.TenantRateLimiter{
+		"live": {nil, l, l, l}, "backlog": {l, nil, l, l}, "untrusted": {l, l, nil, l}, "integration": {l, l, l, nil},
 	} {
-		assert.Panicsf(t, func() { NewRateGate(args[0], args[1], args[2], nil) }, "missing %s limiter", name)
+		assert.Panicsf(t, func() { NewRateGate(args[0], args[1], args[2], args[3], nil) }, "missing %s limiter", name)
 	}
 }
 
@@ -319,7 +321,7 @@ func TestARedeliveryIsNotMetered(t *testing.T) {
 	limiter := core.NewTenantRateLimiter(core.StaticCeiling(0, 1))
 	// The same limiter in every position, so a redelivery that reached ANY of them
 	// would spend the one token.
-	gate := NewRateGate(limiter, limiter, limiter, nil)
+	gate := NewRateGate(limiter, limiter, limiter, limiter, nil)
 
 	for i := 0; i < 5; i++ {
 		if !gate("gw", "acme", time.Time{}, true, OriginAuthenticated) {
@@ -332,4 +334,32 @@ func TestARedeliveryIsNotMetered(t *testing.T) {
 	if gate("gw", "acme", time.Time{}, false, OriginAuthenticated) {
 		t.Error("the limiter never sheds, so this test cannot show an exemption at all")
 	}
+}
+
+// THE INTEGRATION ALLOWANCE IS ITS OWN. A runaway network server cannot spend what captured MQTT
+// traffic spends (shedding a captured message is permanent loss of data the broker acknowledged),
+// nor the unauthenticated HTTP pool; and neither of those can spend the integration's.
+func TestIntegrationTrafficHasAnAllowanceOfItsOwn(t *testing.T) {
+	one := func() *core.TenantRateLimiter { return core.NewTenantRateLimiter(core.StaticCeiling(0.001, 1)) }
+	live, backlog, untrusted, integration := one(), one(), one(), one()
+	gate := NewRateGate(live, backlog, untrusted, integration, nil)
+
+	require.True(t, gate("s", "acme", time.Time{}, false, OriginIntegration))
+	require.False(t, gate("s", "acme", time.Time{}, false, OriginIntegration), "the integration allowance is spent")
+	require.True(t, gate("s", "acme", time.Time{}, false, OriginAuthenticated), "captured traffic is untouched by it")
+	require.True(t, gate("s", "acme", time.Time{}, false, OriginUntrusted), "so is the unauthenticated pool")
+
+	// And the other way round, for a tenant whose integration allowance is untouched.
+	require.True(t, gate("s", "globex", time.Time{}, false, OriginAuthenticated))
+	require.False(t, gate("s", "globex", time.Time{}, false, OriginAuthenticated))
+	require.True(t, gate("s", "globex", time.Time{}, false, OriginIntegration), "spent live allowance does not touch the integration's")
+
+	// The same for the reading stage.
+	rone := func() *core.TenantRateLimiter { return readingLimiter(0.001, 5) }
+	rgate := NewReadingGate(rone(), rone(), rone(), rone(), nil)
+	full := eventlimit.MaxReadingsPerEvent // the reading ceiling always lets one full event through
+	require.True(t, rgate("s", "acme", time.Time{}, false, OriginIntegration, full))
+	require.False(t, rgate("s", "acme", time.Time{}, false, OriginIntegration, full))
+	require.True(t, rgate("s", "acme", time.Time{}, false, OriginAuthenticated, full))
+	require.True(t, rgate("s", "acme", time.Time{}, false, OriginUntrusted, full))
 }

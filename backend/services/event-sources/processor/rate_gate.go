@@ -80,6 +80,13 @@ const (
 	// The zero Origin is neither constant and is treated as untrusted, so a transport
 	// that forgets to say is bounded, never unbounded.
 	OriginUntrusted
+	// OriginIntegration: the request came through an inbound integration (a LoRaWAN network server
+	// or a webhook) whose bearer token the pre-check has just proven, so the tenant is a tenant that
+	// exists. It is metered in allowances of its own, at the tenant's ceiling: it never draws on the
+	// allowance the platform MQTT broker's captured traffic spends (shedding a captured message is
+	// the permanent loss of data the broker already acknowledged), and never on the pool the
+	// unauthenticated HTTP path shares.
+	OriginIntegration
 )
 
 // RefuseDeletedTenants composes the ADR-077 lifecycle refusal in front of an ingest
@@ -144,7 +151,15 @@ const BacklogThreshold = 5 * time.Second
 // behind it), and in a bounded pool of buckets unless its tenant is confirmed. It never
 // reaches the live or the backlog limiter.
 //
-// # Why three limiters
+// # Why four limiters
+//
+// A fourth meters inbound integrations (OriginIntegration) apart from the other three, for the
+// reason the HTTP one is apart from the live one: an integration's traffic must not be able to
+// spend what the platform broker's captured traffic spends. It differs from the HTTP limiter in
+// what it is spared: its tenant is proven by the pre-check, so its buckets are confirmed ones and
+// not the bounded pool unproven names share.
+//
+// The first three:
 //
 // The live and backlog limiters meter authenticated traffic on two clocks; the untrusted
 // limiter meters what HTTP ingest admits.
@@ -185,14 +200,14 @@ const BacklogThreshold = 5 * time.Second
 // Each limiter resolves the tenant's ceiling independently, so the ceiling is a ceiling
 // per allowance, not per tenant. A tenant simultaneously live AND draining a genuine
 // backlog may be admitted up to twice its ceiling until the drain catches up; one also
-// sending over HTTP, up to one ceiling more — three times its ceiling per replica at
-// worst. That is bounded and predictable, and it multiplies with the exposure the
+// sending over HTTP, up to one ceiling more, and one also posting through an inbound
+// integration, one more again — four times its ceiling per replica at worst. That is bounded and predictable, and it multiplies with the exposure the
 // platform already carries from running N replicas with independent limiters. The same
 // holds, allowance by allowance, for the readings NewReadingGate charges.
-func NewRateGate(live, backlog, untrusted *core.TenantRateLimiter,
+func NewRateGate(live, backlog, untrusted, integration *core.TenantRateLimiter,
 	onShed func(source string, tenant string)) RateGate {
-	if live == nil || backlog == nil || untrusted == nil {
-		panic("processor.NewRateGate: the live, backlog and untrusted limiters are all required")
+	if live == nil || backlog == nil || untrusted == nil || integration == nil {
+		panic("processor.NewRateGate: the live, backlog, untrusted and integration limiters are all required")
 	}
 	return func(source string, tenant string, sentAt time.Time, redelivery bool, origin Origin) bool {
 		// A redelivery already paid for its admission on delivery 1 — the broker is
@@ -213,7 +228,7 @@ func NewRateGate(live, backlog, untrusted *core.TenantRateLimiter,
 		if redelivery {
 			return true
 		}
-		if admitN(live, backlog, untrusted, tenant, sentAt, origin, 1) {
+		if admitN(live, backlog, untrusted, integration, tenant, sentAt, origin, 1) {
 			return true
 		}
 		if onShed != nil {
@@ -243,8 +258,13 @@ func meterTime(sentAt time.Time) time.Time {
 // rule both gates share (see NewRateGate for why there are three limiters): an untrusted
 // origin to the untrusted limiter, always at now; an authenticated backlog message to the
 // backlog limiter at its send time; everything else to the live limiter at now.
-func admitN(live, backlog, untrusted *core.TenantRateLimiter, tenant string, sentAt time.Time,
+func admitN(live, backlog, untrusted, integration *core.TenantRateLimiter, tenant string, sentAt time.Time,
 	origin Origin, n int) bool {
+	if origin == OriginIntegration {
+		// Always at now: an integration request is admitted as it arrives, with no durable
+		// backlog behind it. A confirmed bucket, because the pre-check proved the tenant.
+		return integration.AllowNAt(tenant, time.Time{}, n)
+	}
 	if origin != OriginAuthenticated {
 		return untrusted.AllowUntrustedN(tenant, n)
 	}
@@ -273,16 +293,16 @@ type ReadingGate func(source, tenant string, sentAt time.Time, redelivery bool, 
 // an idle bucket. They must be separate from the message limiters: one bucket charged both
 // would spend a tenant's message allowance on its readings. onShed, when non-nil, receives
 // each shed message's reading count. A nil limiter panics, as in NewRateGate.
-func NewReadingGate(live, backlog, untrusted *core.TenantRateLimiter,
+func NewReadingGate(live, backlog, untrusted, integration *core.TenantRateLimiter,
 	onShed func(source, tenant string, readings int)) ReadingGate {
-	if live == nil || backlog == nil || untrusted == nil {
-		panic("processor.NewReadingGate: the live, backlog and untrusted reading limiters are all required")
+	if live == nil || backlog == nil || untrusted == nil || integration == nil {
+		panic("processor.NewReadingGate: the live, backlog, untrusted and integration reading limiters are all required")
 	}
 	return func(source, tenant string, sentAt time.Time, redelivery bool, origin Origin, readings int) bool {
 		if redelivery || readings <= 0 {
 			return true
 		}
-		if admitN(live, backlog, untrusted, tenant, sentAt, origin, readings) {
+		if admitN(live, backlog, untrusted, integration, tenant, sentAt, origin, readings) {
 			return true
 		}
 		if onShed != nil {

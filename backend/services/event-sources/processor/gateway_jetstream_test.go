@@ -778,6 +778,7 @@ func TestADeletedTenantsRedeliveryIsStillRefused(t *testing.T) {
 		func(tenant string) bool { return true }, // this tenant has been deleted
 		NewRateGate(core.NewTenantRateLimiter(core.StaticCeiling(1000, 1000)),
 			core.NewTenantRateLimiter(core.StaticCeiling(1000, 1000)),
+			core.NewTenantRateLimiter(core.StaticCeiling(1000, 1000)),
 			core.NewTenantRateLimiter(core.StaticCeiling(1000, 1000)), nil),
 		nil)
 
@@ -799,6 +800,7 @@ func TestALiveTenantsRedeliveryIsStillAdmitted(t *testing.T) {
 	h.gate = RefuseDeletedTenants(
 		func(tenant string) bool { return false }, // live
 		NewRateGate(core.NewTenantRateLimiter(core.StaticCeiling(1000, 1000)),
+			core.NewTenantRateLimiter(core.StaticCeiling(1000, 1000)),
 			core.NewTenantRateLimiter(core.StaticCeiling(1000, 1000)),
 			core.NewTenantRateLimiter(core.StaticCeiling(1000, 1000)), nil),
 		nil)

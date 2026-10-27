@@ -54,7 +54,7 @@ func TestUntrustedAndUnsaidOriginsAreBounded(t *testing.T) {
 		live := core.NewTenantRateLimiter(core.StaticCeiling(0.001, 1))
 		backlog := core.NewTenantRateLimiter(core.StaticCeiling(0.001, 1))
 		untrusted := core.NewTenantRateLimiter(core.StaticCeiling(0.001, 1))
-		gate := NewRateGate(live, backlog, untrusted, nil)
+		gate := NewRateGate(live, backlog, untrusted, core.NewTenantRateLimiter(core.StaticCeiling(0.001, 1)), nil)
 
 		for i := 0; i < 5000; i++ {
 			gate("http", fmt.Sprintf("invented-%d", i), time.Time{}, false, origin)
