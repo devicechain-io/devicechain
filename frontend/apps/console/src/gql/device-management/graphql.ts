@@ -883,6 +883,71 @@ export type GeoFenceUpdateRequest = {
   name?: string | null | undefined;
 };
 
+/** Data required to create an integration. */
+export type IntegrationCreateRequest = {
+  /** Free-text description. */
+  description?: string | null | undefined;
+  /** Tokens of the device types the integration may resolve devices of; at least one, at most 50. */
+  deviceTypeTokens: Array<string>;
+  /** Whether the integration accepts traffic. A disabled integration can be enabled later. */
+  enabled: boolean;
+  /**
+   * The generic settings as a JSON object. Required for the generic types and refused for the
+   * others. idFrom is pointer:/path, header:Name or query:name; a binary body can only name a
+   * header or a query value.
+   */
+  generic?: string | null | undefined;
+  /**
+   * DEV_EUI (the default) for CHIRPSTACK_V4; DEV_EUI (the default) or DEVICE_ID for TTS_V3;
+   * required, as ALIAS:custom.name, for the generic types.
+   */
+  identity?: string | null | undefined;
+  /** Store the receive-link readings beside the decoded values. Defaults to false. */
+  linkMetrics?: boolean | null | undefined;
+  /** Free-form JSON the platform stores and does not interpret. */
+  metadata?: string | null | undefined;
+  /** Human-readable name. */
+  name?: string | null | undefined;
+  /** Identifier of the integration, unique within the tenant. It is part of the sender's URL. */
+  token: string;
+  /** CHIRPSTACK_V4, TTS_V3, GENERIC_JSON or GENERIC_BINARY. */
+  type: string;
+};
+
+/** Criteria used when searching for integrations. */
+export type IntegrationSearchCriteria = {
+  /** Return only integrations whose scope includes the device type with this token. */
+  deviceType?: string | null | undefined;
+  /** Return only integrations that are enabled (true) or disabled (false). */
+  enabled?: boolean | null | undefined;
+  /** 1-based page number. */
+  pageNumber: number;
+  /** Rows per page. */
+  pageSize: number;
+  /** Return only integrations of this type. */
+  type?: string | null | undefined;
+};
+
+/** A partial update of an integration. Omitted fields keep their stored value. */
+export type IntegrationUpdateRequest = {
+  /** Free-text description. Null clears it. */
+  description?: string | null | undefined;
+  /** Replaces the scope. At least one device type; null is refused. */
+  deviceTypeTokens?: Array<string> | null | undefined;
+  /** Required and unclearable. */
+  enabled?: boolean | null | undefined;
+  /** Replaces the generic settings; refused for the network-server types, and null is refused for the generic ones. */
+  generic?: string | null | undefined;
+  /** Required and unclearable; validated against the integration's type. */
+  identity?: string | null | undefined;
+  /** Required and unclearable. */
+  linkMetrics?: boolean | null | undefined;
+  /** Free-form JSON the platform stores and does not interpret. Null clears it. */
+  metadata?: string | null | undefined;
+  /** Human-readable name. Null clears it. */
+  name?: string | null | undefined;
+};
+
 /** Fields for a new maintenance window. */
 export type MaintenanceWindowCreateRequest = {
   /** Free-text description, up to 1024 characters. */
@@ -1079,6 +1144,16 @@ export type ProvisioningProfileUpdateRequest = {
   name?: string | null | undefined;
   provisionKey?: string | null | undefined;
   strategy?: string | null | undefined;
+};
+
+/** Which integration's unregistered devices to return, and the page. Most recently seen first. */
+export type UnregisteredIntegrationDeviceSearchCriteria = {
+  /** Token of the integration. An unknown token matches nothing. */
+  integration: string;
+  /** Page to return, starting at 1. Values below 1 are read as 1. */
+  pageNumber: number;
+  /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
+  pageSize: number;
 };
 
 export type AlarmsQueryVariables = Exact<{
@@ -1530,7 +1605,7 @@ export type DeviceByTokenQueryVariables = Exact<{
 }>;
 
 
-export type DeviceByTokenQuery = { devicesByToken: Array<{ id: string, token: string, name: string | null, description: string | null, externalId: string | null, metadata: string | null, createdAt: string | null, enabled: boolean, disabledAt: string | null, gateway: { token: string, name: string | null } | null, deviceType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }> };
+export type DeviceByTokenQuery = { devicesByToken: Array<{ id: string, token: string, name: string | null, description: string | null, externalId: string | null, metadata: string | null, createdAt: string | null, enabled: boolean, disabledAt: string | null, aliases: Array<{ scheme: string, value: string }> | null, gateway: { token: string, name: string | null } | null, deviceType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }> };
 
 export type CreateDeviceMutationVariables = Exact<{
   request?: DeviceCreateRequest | null | undefined;
@@ -2033,6 +2108,63 @@ export type GeoFenceSetSnapshotQueryVariables = Exact<{
 
 
 export type GeoFenceSetSnapshotQuery = { geoFenceSetSnapshot: { version: number, fences: { results: Array<{ token: string, geometry: string }>, pagination: { totalRecords: number | null } } } };
+
+export type IntegrationsQueryVariables = Exact<{
+  criteria: IntegrationSearchCriteria;
+}>;
+
+
+export type IntegrationsQuery = { integrations: { results: Array<{ id: string, token: string, name: string | null, description: string | null, type: string, enabled: boolean, identity: string, generic: string | null, linkMetrics: boolean, tokenIssuedAt: string, undecodedCount: number, lastUndecodedAt: string | null, lastUndecodedSample: string | null, lastAuthFailureAt: string | null, createdAt: string | null, updatedAt: string | null, deviceTypes: Array<{ id: string, token: string, name: string | null }> }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+
+export type IntegrationByTokenQueryVariables = Exact<{
+  token: string;
+}>;
+
+
+export type IntegrationByTokenQuery = { integration: { id: string, token: string, name: string | null, description: string | null, type: string, enabled: boolean, identity: string, generic: string | null, linkMetrics: boolean, tokenIssuedAt: string, undecodedCount: number, lastUndecodedAt: string | null, lastUndecodedSample: string | null, lastAuthFailureAt: string | null, createdAt: string | null, updatedAt: string | null, deviceTypes: Array<{ id: string, token: string, name: string | null }> } | null };
+
+export type CreateIntegrationMutationVariables = Exact<{
+  request: IntegrationCreateRequest;
+}>;
+
+
+export type CreateIntegrationMutation = { createIntegration: { issuedToken: string, integration: { id: string, token: string, name: string | null, description: string | null, type: string, enabled: boolean, identity: string, generic: string | null, linkMetrics: boolean, tokenIssuedAt: string, undecodedCount: number, lastUndecodedAt: string | null, lastUndecodedSample: string | null, lastAuthFailureAt: string | null, createdAt: string | null, updatedAt: string | null, deviceTypes: Array<{ id: string, token: string, name: string | null }> } } };
+
+export type RotateIntegrationTokenMutationVariables = Exact<{
+  token: string;
+}>;
+
+
+export type RotateIntegrationTokenMutation = { rotateIntegrationToken: { issuedToken: string, integration: { id: string, token: string, name: string | null, description: string | null, type: string, enabled: boolean, identity: string, generic: string | null, linkMetrics: boolean, tokenIssuedAt: string, undecodedCount: number, lastUndecodedAt: string | null, lastUndecodedSample: string | null, lastAuthFailureAt: string | null, createdAt: string | null, updatedAt: string | null, deviceTypes: Array<{ id: string, token: string, name: string | null }> } } };
+
+export type UpdateIntegrationMutationVariables = Exact<{
+  token: string;
+  request: IntegrationUpdateRequest;
+}>;
+
+
+export type UpdateIntegrationMutation = { updateIntegration: { id: string, token: string, name: string | null, description: string | null, type: string, enabled: boolean, identity: string, generic: string | null, linkMetrics: boolean, tokenIssuedAt: string, undecodedCount: number, lastUndecodedAt: string | null, lastUndecodedSample: string | null, lastAuthFailureAt: string | null, createdAt: string | null, updatedAt: string | null, deviceTypes: Array<{ id: string, token: string, name: string | null }> } };
+
+export type DeleteIntegrationMutationVariables = Exact<{
+  token: string;
+}>;
+
+
+export type DeleteIntegrationMutation = { deleteIntegration: boolean };
+
+export type UnregisteredIntegrationDevicesQueryVariables = Exact<{
+  criteria: UnregisteredIntegrationDeviceSearchCriteria;
+}>;
+
+
+export type UnregisteredIntegrationDevicesQuery = { unregisteredIntegrationDevices: { results: Array<{ id: string, integration: string, scheme: string, value: string, firstSeen: string, lastSeen: string, count: number }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+
+export type ClearUnregisteredIntegrationDevicesMutationVariables = Exact<{
+  integration: string;
+}>;
+
+
+export type ClearUnregisteredIntegrationDevicesMutation = { clearUnregisteredIntegrationDevices: number };
 
 export type MaintenanceWindowsQueryVariables = Exact<{
   criteria: MaintenanceWindowSearchCriteria;
@@ -3209,6 +3341,10 @@ export const DeviceByTokenDocument = new TypedDocumentString(`
     name
     description
     externalId
+    aliases {
+      scheme
+      value
+    }
     metadata
     createdAt
     enabled
@@ -4182,6 +4318,184 @@ export const GeoFenceSetSnapshotDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<GeoFenceSetSnapshotQuery, GeoFenceSetSnapshotQueryVariables>;
+export const IntegrationsDocument = new TypedDocumentString(`
+    query Integrations($criteria: IntegrationSearchCriteria!) {
+  integrations(criteria: $criteria) {
+    results {
+      id
+      token
+      name
+      description
+      type
+      enabled
+      identity
+      generic
+      linkMetrics
+      tokenIssuedAt
+      undecodedCount
+      lastUndecodedAt
+      lastUndecodedSample
+      lastAuthFailureAt
+      createdAt
+      updatedAt
+      deviceTypes {
+        id
+        token
+        name
+      }
+    }
+    pagination {
+      pageStart
+      pageEnd
+      totalRecords
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<IntegrationsQuery, IntegrationsQueryVariables>;
+export const IntegrationByTokenDocument = new TypedDocumentString(`
+    query IntegrationByToken($token: String!) {
+  integration(token: $token) {
+    id
+    token
+    name
+    description
+    type
+    enabled
+    identity
+    generic
+    linkMetrics
+    tokenIssuedAt
+    undecodedCount
+    lastUndecodedAt
+    lastUndecodedSample
+    lastAuthFailureAt
+    createdAt
+    updatedAt
+    deviceTypes {
+      id
+      token
+      name
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<IntegrationByTokenQuery, IntegrationByTokenQueryVariables>;
+export const CreateIntegrationDocument = new TypedDocumentString(`
+    mutation CreateIntegration($request: IntegrationCreateRequest!) {
+  createIntegration(request: $request) {
+    issuedToken
+    integration {
+      id
+      token
+      name
+      description
+      type
+      enabled
+      identity
+      generic
+      linkMetrics
+      tokenIssuedAt
+      undecodedCount
+      lastUndecodedAt
+      lastUndecodedSample
+      lastAuthFailureAt
+      createdAt
+      updatedAt
+      deviceTypes {
+        id
+        token
+        name
+      }
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<CreateIntegrationMutation, CreateIntegrationMutationVariables>;
+export const RotateIntegrationTokenDocument = new TypedDocumentString(`
+    mutation RotateIntegrationToken($token: String!) {
+  rotateIntegrationToken(token: $token) {
+    issuedToken
+    integration {
+      id
+      token
+      name
+      description
+      type
+      enabled
+      identity
+      generic
+      linkMetrics
+      tokenIssuedAt
+      undecodedCount
+      lastUndecodedAt
+      lastUndecodedSample
+      lastAuthFailureAt
+      createdAt
+      updatedAt
+      deviceTypes {
+        id
+        token
+        name
+      }
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<RotateIntegrationTokenMutation, RotateIntegrationTokenMutationVariables>;
+export const UpdateIntegrationDocument = new TypedDocumentString(`
+    mutation UpdateIntegration($token: String!, $request: IntegrationUpdateRequest!) {
+  updateIntegration(token: $token, request: $request) {
+    id
+    token
+    name
+    description
+    type
+    enabled
+    identity
+    generic
+    linkMetrics
+    tokenIssuedAt
+    undecodedCount
+    lastUndecodedAt
+    lastUndecodedSample
+    lastAuthFailureAt
+    createdAt
+    updatedAt
+    deviceTypes {
+      id
+      token
+      name
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<UpdateIntegrationMutation, UpdateIntegrationMutationVariables>;
+export const DeleteIntegrationDocument = new TypedDocumentString(`
+    mutation DeleteIntegration($token: String!) {
+  deleteIntegration(token: $token)
+}
+    `) as unknown as TypedDocumentString<DeleteIntegrationMutation, DeleteIntegrationMutationVariables>;
+export const UnregisteredIntegrationDevicesDocument = new TypedDocumentString(`
+    query UnregisteredIntegrationDevices($criteria: UnregisteredIntegrationDeviceSearchCriteria!) {
+  unregisteredIntegrationDevices(criteria: $criteria) {
+    results {
+      id
+      integration
+      scheme
+      value
+      firstSeen
+      lastSeen
+      count
+    }
+    pagination {
+      pageStart
+      pageEnd
+      totalRecords
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<UnregisteredIntegrationDevicesQuery, UnregisteredIntegrationDevicesQueryVariables>;
+export const ClearUnregisteredIntegrationDevicesDocument = new TypedDocumentString(`
+    mutation ClearUnregisteredIntegrationDevices($integration: String!) {
+  clearUnregisteredIntegrationDevices(integration: $integration)
+}
+    `) as unknown as TypedDocumentString<ClearUnregisteredIntegrationDevicesMutation, ClearUnregisteredIntegrationDevicesMutationVariables>;
 export const MaintenanceWindowsDocument = new TypedDocumentString(`
     query MaintenanceWindows($criteria: MaintenanceWindowSearchCriteria!) {
   maintenanceWindows(criteria: $criteria) {

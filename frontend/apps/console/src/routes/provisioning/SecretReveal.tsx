@@ -106,7 +106,18 @@ export function SecretReveal({
  * clipboard is missing (an http:// origin) it falls back to copying the selected field, and
  * failing that leaves the field selected and says to copy it by hand.
  */
-function CopyField({ value, inputId, label }: { value: string; inputId: string; label: string }) {
+export function CopyField({
+  value,
+  inputId,
+  label,
+  manualHint,
+}: {
+  value: string;
+  inputId: string;
+  label: string;
+  /** What to say when copying failed; defaults to this dialog's own wording. */
+  manualHint?: string;
+}) {
   const { t } = useTranslation('provisioning');
   const { toast } = useToast();
   const [copied, setCopied] = useState(false);
@@ -138,7 +149,7 @@ function CopyField({ value, inputId, label }: { value: string; inputId: string; 
       clearTimeout(timer.current);
       timer.current = setTimeout(() => setCopied(false), 1500);
     } else {
-      toast(t('revealCopyManually'), 'error');
+      toast(manualHint ?? t('revealCopyManually'), 'error');
     }
   };
 

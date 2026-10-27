@@ -196,6 +196,8 @@ export function RegistryInstanceForm<T extends NamedEntity>({
   onDone,
   readOnly = false,
   renderCreateExtra,
+  renderExtra,
+  extraInvalid = false,
 }: {
   entity?: T;
   /** Family prefix in the `entities` catalog, e.g. "asset". */
@@ -216,6 +218,10 @@ export function RegistryInstanceForm<T extends NamedEntity>({
    * in `create`; an edit never shows them, so an edit cannot send them.
    */
   renderCreateExtra?: (ctx: { typeToken: string; disabled: boolean }) => ReactNode;
+  /** Extra fields shown on create AND edit, in the same place. Same ownership rule: the family keeps the values. */
+  renderExtra?: (ctx: { typeToken: string; disabled: boolean }) => ReactNode;
+  /** Extra save-blockers the family computes from its own extra fields. */
+  extraInvalid?: boolean;
 }) {
   const { t } = useTranslation(['entities', 'common']);
   const e = (suffix: string, opts?: Record<string, unknown>) =>
@@ -308,12 +314,13 @@ export function RegistryInstanceForm<T extends NamedEntity>({
         <Textarea id="r-description" value={description} disabled={readOnly} onChange={(ev) => setDescription(ev.target.value)} />
       </FormField>
       {!editing && renderCreateExtra?.({ typeToken, disabled: readOnly || busy })}
+      {renderExtra?.({ typeToken, disabled: readOnly || busy })}
       {!readOnly && (
         <div className="flex gap-2">
           <Button
             onClick={submit}
             loading={busy}
-            disabled={busy || noTypes || (!editing && !token.trim()) || !typeToken}
+            disabled={busy || noTypes || extraInvalid || (!editing && !token.trim()) || !typeToken}
           >
             {editing ? t('common:saveChanges') : e('CreateAction')}
           </Button>

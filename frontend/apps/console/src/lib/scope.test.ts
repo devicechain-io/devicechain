@@ -19,6 +19,8 @@ describe('the routes a scoped member may open', () => {
       '/device-profiles/p1',
       '/provisioning-profiles',
       '/provisioning-profiles/acme-sensors',
+      '/integrations',
+      '/integrations/eu868-gw',
       '/customers',
       '/customers/acme',
       '/members',

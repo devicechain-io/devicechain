@@ -35,6 +35,7 @@ export const NAV_SECTION_KEY: Record<string, string> = {
   'device-types': 'deviceTypes',
   'device-profiles': 'deviceProfiles',
   'provisioning-profiles': 'provisioningProfiles',
+  integrations: 'integrations',
   'device-groups': 'deviceGroups',
   'maintenance-windows': 'maintenanceWindows',
   dashboards: 'dashboards',

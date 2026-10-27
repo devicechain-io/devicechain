@@ -1,7 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Plus, Layers, Upload, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -28,6 +28,7 @@ import { getDeviceEarmarks, listProvisioningProfiles, type ProfileRef } from '@/
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox';
 import { FormDrawer } from '@/components/registry';
 import { DeviceForm } from '@/routes/devices/DeviceForm';
+import { NEW_ALIAS_PARAM, NEW_TYPE_PARAM, rowFromParam } from '@/routes/devices/deviceAliases';
 import { DeviceBulkForm } from '@/routes/devices/DeviceBulkForm';
 import { DeviceImportForm } from '@/routes/devices/DeviceImportForm';
 import {
@@ -80,7 +81,20 @@ export default function DevicesPage() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const [pageNumber, setPageNumber] = useState(1);
-  const [creating, setCreating] = useState(false);
+  const [params, setParams] = useSearchParams();
+  // An integration's unregistered list links here with the alias it saw (and the type it can
+  // resolve), so the drawer opens ready to create that device.
+  const aliasSeed = useMemo(() => rowFromParam(params.get(NEW_ALIAS_PARAM)), [params]);
+  const [creating, setCreating] = useState(() => aliasSeed != null);
+  const setCreateOpen = (open: boolean) => {
+    setCreating(open);
+    if (!open && params.has(NEW_ALIAS_PARAM)) {
+      const next = new URLSearchParams(params);
+      next.delete(NEW_ALIAS_PARAM);
+      next.delete(NEW_TYPE_PARAM);
+      setParams(next, { replace: true });
+    }
+  };
   const [bulkCreating, setBulkCreating] = useState(false);
   const [importing, setImporting] = useState(false);
   const [version, reload] = useReload();
@@ -89,7 +103,6 @@ export default function DevicesPage() {
   // names them (no filter, no column, no extra request).
   const { claims } = useAuth();
   const scoped = isScoped(claims);
-  const [params, setParams] = useSearchParams();
   const provisioningProfile = scoped ? '' : (params.get(REGISTERED_PARAM) ?? '');
   const expectedProvisioningProfile = scoped ? '' : (params.get(EXPECTED_PARAM) ?? '');
   const filtered = provisioningProfile !== '' || expectedProvisioningProfile !== '';
@@ -171,12 +184,20 @@ export default function DevicesPage() {
         </div>
       }
     >
-      <FormDrawer shot="device-new" open={creating} onOpenChange={setCreating} title={t('newDevice')}>
+      <FormDrawer
+        shot="device-new"
+        open={creating}
+        onOpenChange={setCreateOpen}
+        title={t('newDevice')}
+      >
         <DeviceForm
           offerEarmark={!scoped}
+          offerAliases={!scoped}
+          initialAliases={aliasSeed ? [aliasSeed] : undefined}
+          initialTypeToken={params.get(NEW_TYPE_PARAM) ?? undefined}
           onDone={(m) => {
             toast(m);
-            setCreating(false);
+            setCreateOpen(false);
             reload();
           }}
         />

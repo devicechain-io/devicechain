@@ -170,6 +170,10 @@ const DEVICE_BY_TOKEN = graphql(`
       name
       description
       externalId
+      aliases {
+        scheme
+        value
+      }
       metadata
       createdAt
       enabled

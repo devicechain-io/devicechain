@@ -190,7 +190,10 @@ export default function DeviceDetailPage() {
         <TabsContent value="basic">
           <SectionPanel>
             <DeviceForm
+              // Re-seeded when the stored aliases change, so the form is measured against them.
+              key={JSON.stringify(device.aliases ?? null)}
               device={device}
+              offerAliases
               // Saves are refused for a member without device:write (and for any scoped
               // member), so the form is shown but not offered.
               readOnly={!canWriteDevice}
