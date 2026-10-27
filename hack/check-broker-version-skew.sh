@@ -198,7 +198,7 @@ trap 'rm -rf "$st"' EXIT
 fresh() {
   rm -rf "$st/t"
   mkdir -p "$st/t"
-  (cd "$root" && git ls-files -z -- go.work backend/*/*/go.mod backend/*/go.mod deploy/go.mod deploy/opentofu hack .github |
+  (cd "$root" && git ls-files -z -- go.work backend/*/*/go.mod backend/*/go.mod deploy/go.mod examples/*/go.mod deploy/opentofu hack .github |
     xargs -0 -I{} cp --parents {} "$st/t/")
   (cd "$st/t" && git init -q && git add -A >/dev/null 2>&1)
 }
