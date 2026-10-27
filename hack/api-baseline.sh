@@ -40,6 +40,9 @@ resolve_baseline() {
 extract_baseline() {
   local baseline="$1" dir="$2" paths=(go.work backend deploy)
   git cat-file -e "${baseline}:go.work.sum" 2>/dev/null && paths+=(go.work.sum)
+  # A release cut after the reference device joined the workspace lists it in go.work, and the
+  # workspace does not load without it. Older releases have no such directory.
+  git cat-file -e "${baseline}:examples" 2>/dev/null && paths+=(examples)
   git archive --format=tar "$baseline" "${paths[@]}" | tar -x -C "$dir"
   [ -f "$dir/go.work" ] && [ -d "$dir/backend" ] || {
     echo "::error::$baseline has no Go workspace to compare against." >&2
@@ -57,7 +60,7 @@ build_apicompat() {
 # A copy of the working tree's workspace, for a self-test to plant a difference in.
 copy_workspace() {
   local dir="$1" p
-  for p in go.work go.work.sum backend deploy; do
+  for p in go.work go.work.sum backend deploy examples; do
     [ -e "$ROOT/$p" ] && cp -R "$ROOT/$p" "$dir/"
   done
   return 0
