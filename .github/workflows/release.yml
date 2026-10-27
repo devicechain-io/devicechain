@@ -1060,6 +1060,34 @@ jobs:
             echo "No earlier stable tag; leaving goreleaser to pick its own range."
           fi
 
+      # The broker image's digest, as the images job pushed it, for goreleaser to stamp into
+      # dcctl (bootstrap.DefaultBrokerImageDigest): a dcctl that pins the broker by digest does
+      # not roll it on a release that left it unchanged. Downloaded OUTSIDE the workspace, which
+      # goreleaser requires to be clean.
+      - name: Fetch the broker image's pushed digest
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ref-dc-nats-server
+          path: ${{ runner.temp }}/broker-ref
+
+      - name: The broker digest dcctl pins
+        env:
+          WANT: ghcr.io/devicechain-io/dc-nats-server
+        run: |
+          set -euo pipefail
+          ref="$(cat "${RUNNER_TEMP}/broker-ref/ref.txt")"
+          if [ "${ref%@*}" != "$WANT" ]; then
+            echo "::error::the broker's pushed reference is '$ref', not in $WANT"
+            exit 1
+          fi
+          digest="${ref#*@}"
+          if ! [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::the broker's pushed reference '$ref' carries no sha256 digest"
+            exit 1
+          fi
+          echo "DC_BROKER_IMAGE_DIGEST=$digest" >> "$GITHUB_ENV"
+          echo "dcctl will pin the broker at $WANT@$digest"
+
       # Build ONE target first, with the same ldflags the release will use, so the
       # verification below can gate publication. Verifying after `release` would
       # only tell us the broken release is already public.
@@ -1116,6 +1144,32 @@ jobs:
             exit 1
           fi
           echo "OK: ${REGISTRY}/device-management:${tag} resolves."
+
+          # The broker by the digest dcctl pins, asked ANONYMOUSLY, as a kubelet would. Not
+          # implied by the probe above: dc-nats-server is its own ghcr package, and a package a
+          # release pushes for the first time can default to private, which every fresh install
+          # would meet as ImagePullBackOff in the infrastructure apply, before any service.
+          btoken="$(curl -fsSL "https://ghcr.io/token?scope=repository:devicechain-io/dc-nats-server:pull&service=ghcr.io" | jq -r .token)"
+          bcode="$(curl -sSL -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer $btoken" \
+            -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json' \
+            "https://ghcr.io/v2/devicechain-io/dc-nats-server/manifests/${DC_BROKER_IMAGE_DIGEST}")"
+          if [ "$bcode" != "200" ]; then
+            echo "::error::dcctl would deploy ${REGISTRY}/dc-nats-server@${DC_BROKER_IMAGE_DIGEST}, which an anonymous pull cannot fetch (HTTP ${bcode}): the package may be private, or the digest absent."
+            exit 1
+          fi
+          echo "OK: ${REGISTRY}/dc-nats-server@${DC_BROKER_IMAGE_DIGEST} is pullable anonymously."
+
+          # And the broker digest it pins is the one this release pushed. A dcctl that pinned
+          # nothing would roll every broker on every release; one that pinned another digest
+          # would install a broker this release did not build.
+          broker="$("$binary" version | awk '$1 == "broker:" { print $2 }')"
+          if [ "$broker" != "$DC_BROKER_IMAGE_DIGEST" ]; then
+            echo "::error::the released dcctl pins the broker at '$broker', but this release pushed $DC_BROKER_IMAGE_DIGEST"
+            "$binary" version
+            exit 1
+          fi
+          echo "OK: dcctl pins the broker at ${REGISTRY}/dc-nats-server@${broker}."
 
       # THE RELEASE BODY IS THIS HEADER PLUS GORELEASER'S CHANGELOG. goreleaser
       # generates the changelog from commit subjects, which answers "what changed"

@@ -152,7 +152,7 @@ variable "nats_server_image_repository" {
 }
 
 variable "nats_server_image_tag" {
-  description = "Tag of the broker image: the DeviceChain release, which dcctl passes. Empty is refused at plan time unless nats_server_image_digest is set. A new tag rolls the broker."
+  description = "Tag of the broker image: the DeviceChain release, which dcctl passes. Empty is refused at plan time unless nats_server_image_digest is set. A new tag rolls the broker unless `nats_server_image_digest` is set (dcctl sets it for its own release); with a digest, only a new digest rolls it."
   type        = string
   default     = ""
 

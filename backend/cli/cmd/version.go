@@ -58,9 +58,19 @@ func versionFields(now time.Time) []versionField {
 		{"commit", describeCommit(gitCommit, gitTreeState)},
 		{"built", describeBuildDate(buildDate, now)},
 		{"images", bootstrap.DefaultImageVersion},
+		{"broker", describeBrokerDigest(bootstrap.DefaultBrokerImageDigest)},
 		{"go", runtime.Version()},
 		{"platform", runtime.GOOS + "/" + runtime.GOARCH},
 	}
+}
+
+// describeBrokerDigest renders the broker image digest this binary pins. The release verifies
+// this line against the digest its images job pushed, so it is the digest itself, unadorned.
+func describeBrokerDigest(digest string) string {
+	if strings.TrimSpace(digest) == "" {
+		return "by tag (no digest stamped; not a release build)"
+	}
+	return digest
 }
 
 // describeCommit renders the source commit and whether the tree was clean. The
