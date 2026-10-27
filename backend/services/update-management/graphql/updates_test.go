@@ -284,3 +284,20 @@ func TestSignedByNamesThePinnedSignerAndIsNullWhenNothingIsPinned(t *testing.T) 
 	resp = p.exec(reader, `{ updateAssignments(criteria:{pageNumber:1,pageSize:5,deviceToken:"dev-1"}) { results { signedBy { token } } } }`, nil)
 	require.NotEmpty(t, resp.Errors)
 }
+
+// updateManagementInfo.objectStoreConfigured is read from the catalogue API's store, so an
+// instance that runs without one (the area is in the default profile and a store cannot always be
+// shared with it) says so instead of looking like a working artifact plane.
+func TestUpdateManagementInfoSaysWhetherAnObjectStoreIsConfigured(t *testing.T) {
+	p, _ := updatePlane(t, false)
+	const q = `{ updateManagementInfo { objectStoreConfigured } }`
+	resp := p.exec(p.ctx("acme"), q, nil)
+	require.Empty(t, resp.Errors)
+	require.JSONEq(t, `{"updateManagementInfo":{"objectStoreConfigured":true}}`, string(resp.Data))
+
+	p.api.Blobs = nil
+	resp = p.exec(p.ctx("acme"), q, nil)
+	require.Empty(t, resp.Errors)
+	require.JSONEq(t, `{"updateManagementInfo":{"objectStoreConfigured":false}}`, string(resp.Data),
+		"a plane with no store must say so, not default to working")
+}

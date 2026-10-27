@@ -2234,9 +2234,16 @@ jobs:
           # update-management without the instance store (updates.objectStore: none) leaves the
           # pods that mount the claim, so two areas on a ReadWriteOnce claim become one pod -- and
           # the mountAreas rule above no longer applies to it. Anything but instance|none is refused.
-          renders "update-management without the store beside a ReadWriteOnce claim"             "${BLOB[@]}" --set blobStorage.persistence.enabled=true             --set functionalAreas.update-management.config.updates.objectStore=none
-          renders "update-management without the store, absent from mountAreas"             "${BLOB[@]}" --set blobStorage.persistence.enabled=true             --set functionalAreas.update-management.config.updates.objectStore=none             --set "blobStorage.mountAreas={user-management}"
-          refuses "an updates.objectStore the chart does not know" 'must be "instance" or "none"'             "${BLOB[@]}" --set blobStorage.persistence.enabled=true             --set functionalAreas.update-management.config.updates.objectStore=off
+          renders "update-management without the store beside a ReadWriteOnce claim" \
+            "${BLOB[@]}" --set blobStorage.persistence.enabled=true \
+            --set functionalAreas.update-management.config.updates.objectStore=none
+          renders "update-management without the store, absent from mountAreas" \
+            "${BLOB[@]}" --set blobStorage.persistence.enabled=true \
+            --set functionalAreas.update-management.config.updates.objectStore=none \
+            --set "blobStorage.mountAreas={user-management}"
+          refuses "an updates.objectStore the chart does not know" 'must be "instance" or "none"' \
+            "${BLOB[@]}" --set blobStorage.persistence.enabled=true \
+            --set functionalAreas.update-management.config.updates.objectStore=off
 
           # The artifact upload route needs its own Ingress: nginx's defaults refuse a body
           # over 1 MiB and buffer the whole body before the service can authenticate it.
@@ -2251,7 +2258,7 @@ jobs:
               *) echo "::error::the upload ingress is missing $want"; exit 1 ;;
             esac
           done
-          NOUPLOAD="$(helm template deploy/helm/devicechain --set "instance.config.infrastructure.secrets.rootKey=$KEY" --set ingress.enabled=true --set ingress.controller=nginx)"
+          NOUPLOAD="$(helm template deploy/helm/devicechain --set "instance.config.infrastructure.secrets.rootKey=$KEY" --set profile=telemetry --set ingress.enabled=true --set ingress.controller=nginx)"
           case "$NOUPLOAD" in
             *devicechain-update-upload*) echo "::error::the upload ingress renders without update-management"; exit 1 ;;
             *) echo "ok (renders): no upload ingress without update-management" ;;

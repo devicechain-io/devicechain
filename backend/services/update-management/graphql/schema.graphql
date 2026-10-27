@@ -43,6 +43,13 @@ type ServiceInfo {
     but nothing assigned will install until a download base is configured.
     """
     downloadsConfigured: Boolean!
+    """
+    Whether an object store is configured for artifact content. False means the service runs but
+    refuses every artifact declaration and upload (OBJECT_STORE_NOT_CONFIGURED): the instance was
+    built without a store, or its store cannot be shared with this service. No update can be
+    assigned until a store exists, and a store cannot be added to a running instance.
+    """
+    objectStoreConfigured: Boolean!
 }
 
 """What an update artifact is."""

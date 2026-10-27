@@ -252,7 +252,7 @@ func TestUndeployedAreasStreamsAreNotRequired(t *testing.T) {
 	deployed := []string{
 		"user-management", "device-management", "event-sources", "event-management",
 		"device-state", "dashboard-management", "command-delivery",
-		"notification-management", "event-processing",
+		"notification-management", "event-processing", "update-management",
 	} // the `default` profile
 	exp := ReplicationExpectation("inst", 3, deployed)
 

@@ -540,6 +540,26 @@ func TestUpgradeRefusesAnAreaSetTheObjectStoreCannotMountBeforeRecording(t *test
 	if err := precheckUpgradeMount(t.Context(), st); err != nil {
 		t.Errorf("a ReadWriteMany store was refused on a plain upgrade: %v", err)
 	}
+
+	// The other case: the same instance never asked for the area (the default profile grew
+	// it). A plain upgrade is NOT refused -- the area runs without the store -- and the values
+	// it composes say so. Without that, this upgrade would be the permanent dead end.
+	inst.Spec.ObjectStore.AccessMode = ""
+	inst.Spec.ExtraFunctionalAreas = nil
+	st = &State{Instance: "guide", Provider: "local", Values: maps.Clone(compactState(false).Values)}
+	if err := applyUpgradeDeclaration(st, inst, UpgradeOptions{Options: Options{Instance: "guide"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := precheckUpgradeMount(t.Context(), st); err != nil {
+		t.Fatalf("a plain upgrade that only gained update-management from the profile was refused: %v", err)
+	}
+	fa, _ := helmValues(st)["functionalAreas"].(map[string]interface{})
+	um, _ := fa["update-management"].(map[string]interface{})
+	cfg, _ := um["config"].(map[string]interface{})
+	updates, _ := cfg["updates"].(map[string]interface{})
+	if updates["objectStore"] != "none" {
+		t.Errorf("the upgrade does not tell update-management to run without the store: %v", fa)
+	}
 }
 
 // Upgrade must make that check before the version is recorded, and must act on its answer.

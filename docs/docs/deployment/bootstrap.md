@@ -196,9 +196,15 @@ remove (see
 ### The connection budget {#connection-budget}
 
 The relational database has a fixed number of connections, set by `--max-connections`
-(default `600`). Each instance reserves a connection limit on its database login, sized from
+(default `700`). Each instance reserves a connection limit on its database login, sized from
 the areas it enables. `dcctl bootstrap` refuses an instance whose reservation does not fit in
 what is left.
+
+The default profile runs eight services that use the database, so one default-profile instance
+reserves 320 connections and `700` admits two of them. A cluster installed with an earlier
+default (`600`) keeps its budget on a re-run, so a second default-profile instance, or an
+upgrade that grows an instance's reservation, can be refused: raise the budget first with
+`dcctl install --max-connections 700`.
 
 That check runs **before anything of the instance is written** — no namespace, database or
 login — so a refused bootstrap leaves nothing to clean up. A cluster meant to hold many
@@ -707,8 +713,8 @@ chart and operator are identical.
 |------|---------|
 | `--cluster <name>` | `local` provider: the kind cluster to create the instance on (default `devicechain`). It must already have been [installed](#install); bootstrap never creates a cluster. |
 | `--kube-context <name>` | Target an installed cluster through this kube-context instead. |
-| `--profile <profile>` | Functional-area profile: `default` (the standard system, used when omitted), `full` (everything — adds AI inference, outbound connectors, MCP, Sparkplug B ingest, LwM2M ingest, and update management), `telemetry`, or `ingest-only`. |
-| `--enable-area <area>` | Deploy a functional area on top of the profile, such as `--enable-area update-management`. Repeatable. To add one to an instance that is already running, see [Adding a functional area later](#enable-area). |
+| `--profile <profile>` | Functional-area profile: `default` (the standard system, used when omitted), `full` (everything — adds AI inference, outbound connectors, MCP, Sparkplug B ingest and LwM2M ingest; over-the-air update management is part of `default`), `telemetry`, or `ingest-only`. |
+| `--enable-area <area>` | Deploy a functional area on top of the profile, such as `--enable-area outbound-connectors`. Repeatable. To add one to an instance that is already running, see [Adding a functional area later](#enable-area). |
 | `--build` | Build images from source into a local registry (developer path; needs the source tree + Docker + ko). |
 | `--registry` / `--version` | Override the image registry / tag (defaults: published `ghcr.io/devicechain-io`, or `localhost:5000` + `dev` with `--build`). |
 | `--host <name>` | Ingress host to expose the instance on (default `devicechain.local`). Use `localhost` on a local cluster to reach the console with no `/etc/hosts` edit. |
@@ -881,7 +887,7 @@ bootstrapped on it follows them. None of them is a `dcctl bootstrap` flag.
 | `--database-toleration <key>[=<value>][:<effect>]` | Let the databases run on nodes with this taint, written as `kubectl taint` writes it (repeatable). Needs `--database-node-selector`. |
 | `--restore-rdb-from <archive>` | Disaster recovery: recover the shared relational store from this archive path inside the backup bucket (`dc-rdb` for a store that has never been restored) instead of initialising an empty one. It takes effect only when the store is **created** — against a cluster whose store already exists it moves no data — so it is a rebuild lever, not a repair. Needs the backup plugin, so it is refused on a cluster installed with `--no-cnpg` or `--compact --no-tls`. See [Recovering an instance](./disaster-recovery.md#recover). |
 | `--restore-rdb-at <timestamp>` | Stop that recovery at a point in time instead of replaying the whole archive — for data destroyed *correctly*, by a bad migration or a mistaken delete; pick a moment strictly before the damage. Needs `--restore-rdb-from`, and an RFC 3339 timestamp with an explicit offset (`2026-07-27T13:59:00Z`): without one PostgreSQL reads it in the recovering server's own timezone and stops at a different moment than you named. |
-| `--max-connections <n>` | The relational database's connection budget (default `600` on a first install; a re-run without it keeps the current budget) — see [the connection budget](#connection-budget). May be raised, but not lowered, while instances run. |
+| `--max-connections <n>` | The relational database's connection budget (default `700` on a first install; a re-run without it keeps the current budget) — see [the connection budget](#connection-budget). May be raised, but not lowered, while instances run. |
 | `--allow-legacy-db-removal` | The relational-database half of the one-time exception described under [What bootstrap does](#what-it-does). |
 | `--dry-run` | Print what each step would do without changing anything. A dry run creates no cluster, so checks that need to read one — the `--ha` node-capacity check in particular — report what they could not see rather than failing the rehearsal. What such a check *does* see is still fatal: a cluster that answers and cannot host `--ha` fails a dry run too. On a cluster that answers, a dry run also makes the refusals a re-install makes — an install from a machine without the cluster's state, changed settings under running instances, an unusable `--backup-snapshot-class` — and fails with the same message the install would. On a cluster it cannot reach, it says those were not checked. |
 | `--yes` | Do not ask before creating a kind cluster. |
@@ -910,8 +916,8 @@ already exist rather than adding a tuning axis of its own:
 It does **not** change which services run. That stays on each instance's `--profile`, where
 it is named and visible. A profile *larger* than `default` — today only `full` — is rejected
 on a compact cluster. The published compact numbers are measured on `default`, so they would
-not describe an instance running six more services (AI inference, outbound connectors, MCP,
-Sparkplug B ingest, LwM2M ingest, and update management). The smaller profiles (`telemetry`, `ingest-only`) are
+not describe an instance running five more services (AI inference, outbound connectors, MCP,
+Sparkplug B ingest and LwM2M ingest). The smaller profiles (`telemetry`, `ingest-only`) are
 accepted.
 
 You can keep both TLS and monitoring. An explicit `--no-tls=false` or `--no-monitoring=false`
@@ -1740,12 +1746,12 @@ uses — see [Trying it with simulated data](../intro.md#trying-it-with-simulate
 ### Adding a functional area later {#enable-area}
 
 An instance runs the areas its profile names, plus any added with `--enable-area` at bootstrap.
-To add one to an instance that is already running (for example over-the-air updates, outbound
+To add one to an instance that is already running (for example outbound
 connectors, AI inference or MCP on a `default` instance), use `dcctl enable-area`:
 
 ```bash
-dcctl enable-area local my-instance update-management --dry-run
-dcctl enable-area local my-instance update-management
+dcctl enable-area local my-instance outbound-connectors --dry-run
+dcctl enable-area local my-instance outbound-connectors
 ```
 
 - The names are checked against the area catalog before the cluster is touched. The instance's
@@ -1770,7 +1776,9 @@ dcctl enable-area local my-instance update-management
   chosen at bootstrap and cannot be added later; without one, the service runs and refuses every
   artifact, and the command says so. On a cluster `dcctl` did not create, a `filesystem` store
   with the `ReadWriteOnce` access mode can back only one pod, so adding `update-management` beside
-  `user-management` is refused before anything is written. `lwm2m-ingest` authenticates devices
+  `user-management` is refused before anything is written. (The `default` profile already
+  includes `update-management`; on such an instance with that kind of store it runs without an
+  object store and refuses artifacts, and the bootstrap or upgrade says so.) `lwm2m-ingest` authenticates devices
   against the pre-shared keys given at bootstrap (`--lwm2m-identities`); added later, it runs and
   refuses every handshake.
 

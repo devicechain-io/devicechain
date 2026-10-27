@@ -4,7 +4,7 @@ title: 空中（OTA）更新
 
 # 空中（OTA）更新 {#over-the-air-updates}
 
-可选启用的 **`update-management`** 服务向设备下发固件、软件和配置镜像。它按租户维护**制品**目录，允许你将制品**分配**给设备，向设备发送获取镜像所需的信息，并跟踪每次**更新尝试**，直到设备证明自己正在运行新版本。
+**`update-management`** 服务向设备下发固件、软件和配置镜像。它按租户维护**制品**目录，允许你将制品**分配**给设备，向设备发送获取镜像所需的信息，并跟踪每次**更新尝试**，直到设备证明自己正在运行新版本。
 
 :::note 状态
 **目前可用：**带校验的流式上传制品目录、一次分配给一台设备、按设备组分批分配制品的[发布](#rollouts)（限制同时更新的设备数，支持暂停、恢复、中止和失败阈值）、通过短期授权进行可续传的下载，以及带截止期的尝试跟踪。控制台提供制品、签名者和发布页面，每台设备还有一个“更新”选项卡，用于分配和跟踪更新；参见用户指南中的[更新](/user-guide/updates)。
@@ -14,7 +14,7 @@ title: 空中（OTA）更新
 
 ## 启用 {#enabling}
 
-`update-management` 不在 `default` 配置档中。使用 `--profile full` 安装，或在 `enabledFunctionalAreas` 中列出它。它依赖 `device-management`，并将制品内容保存在[对象存储](./object-storage.md)中：未配置存储时，声明制品会以 `OBJECT_STORE_NOT_CONFIGURED` 被拒绝。在 S3 后端上，上传内容会缓冲在内存中，因此无论配置的上限是多少，制品在该后端上都限制为 64 MiB。
+`update-management` 属于 `default` 配置档（因此也属于 `full`）；只有 `telemetry` 和 `ingest-only` 不包含它，可在 `enabledFunctionalAreas` 中列出。它依赖 `device-management`，并将制品内容保存在[对象存储](./object-storage.md)中：未配置存储时，声明制品会以 `OBJECT_STORE_NOT_CONFIGURED` 被拒绝。在 S3 后端上，上传内容会缓冲在内存中，因此无论配置的上限是多少，制品在该后端上都限制为 64 MiB。
 
 有两项设置是需要刻意决定的，而不是可以放任不管的默认值。两者都位于 Chart values 的 `functionalAreas.update-management.config.updates` 下：
 

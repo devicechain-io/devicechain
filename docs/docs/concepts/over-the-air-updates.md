@@ -4,7 +4,7 @@ title: Over-the-Air Updates
 
 # Over-the-Air Updates
 
-The opt-in **`update-management`** service delivers firmware, software and configuration images to
+The **`update-management`** service delivers firmware, software and configuration images to
 devices. It keeps a per-tenant catalogue of **artifacts**, lets you **assign** an artifact to a
 device, sends the device what it needs to fetch the image, and tracks each **update attempt** until
 the device proves it is running the new version.
@@ -24,10 +24,13 @@ device's firmware is driven with ordinary commands instead.
 
 ## Turning it on {#enabling}
 
-`update-management` is not part of the `default` profile. Install with `--profile full`, or name it
-in `enabledFunctionalAreas`. It depends on `device-management`, and it stores artifact content in
-the [object store](./object-storage.md): with no store configured, declaring an artifact is refused
-with `OBJECT_STORE_NOT_CONFIGURED`. On the S3 backend an upload is buffered in memory, so artifacts
+`update-management` is part of the `default` profile (and so of `full`); only the `telemetry` and
+`ingest-only` profiles leave it out, and `enabledFunctionalAreas` can name it there. It depends on
+`device-management`, and it stores artifact content in the [object store](./object-storage.md):
+with no store configured, declaring an artifact is refused with `OBJECT_STORE_NOT_CONFIGURED`. An
+instance whose filesystem store is a `ReadWriteOnce` volume that another service already mounts
+runs the service without a store, and refuses artifacts the same way; the console says so on the
+Updates screens. On the S3 backend an upload is buffered in memory, so artifacts
 are limited to 64 MiB there whatever the configured ceiling.
 
 Two settings are deliberate decisions rather than defaults to leave alone. Both live under

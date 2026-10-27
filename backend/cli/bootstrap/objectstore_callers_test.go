@@ -844,3 +844,29 @@ func TestTheOverlayCannotSetTheUpdateObjectStore(t *testing.T) {
 		t.Fatalf("an overlay setting updates.objectStore was accepted: %v", err)
 	}
 }
+
+// An instance with no object store at all says so on bootstrap and upgrade: update-management is
+// in the default profile now, so it comes up healthy and refuses every artifact, and the run is
+// the one place that can tell the operator why. Not said where a store exists, or where the area
+// is not part of the instance, and not repeated by an enable-area run that adds the area itself.
+func TestAnInstanceWithoutAStoreIsToldUpdatesRefuseArtifacts(t *testing.T) {
+	t.Parallel()
+	bare := &State{Instance: "dc-os", Profile: "default", Values: map[string]string{}}
+	if n := updateStoreNotes(bare); len(n) != 1 || n[0] != noObjectStoreNote {
+		t.Errorf("notes for an instance with no store = %q", n)
+	}
+	withStore := &State{Instance: "dc-os", Profile: "default", Values: map[string]string{}, ObjectStore: s3Store()}
+	if n := updateStoreNotes(withStore); len(n) != 0 {
+		t.Errorf("an instance with a store was told it has none: %q", n)
+	}
+	telemetry := &State{Instance: "dc-os", Profile: "telemetry", Values: map[string]string{}}
+	if n := updateStoreNotes(telemetry); len(n) != 0 {
+		t.Errorf("an instance without update-management was told about its store: %q", n)
+	}
+	adding := &State{Instance: "dc-os", Profile: "telemetry", Values: map[string]string{},
+		EnableAreas: []string{"update-management"}, EnabledAreas: []string{"user-management", "device-management", "update-management"},
+		AreaChange: &AreaChange{Added: []string{"update-management"}}}
+	if n := updateStoreNotes(adding); len(n) != 0 {
+		t.Errorf("an enable-area run was told twice: %q", n)
+	}
+}

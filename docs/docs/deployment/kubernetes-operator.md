@@ -47,8 +47,8 @@ You choose which services to run with either a named profile or an explicit set:
 
 | Profile | Functional areas |
 |---|---|
-| `default` | user-management, device-management, event-sources, event-management, device-state, dashboard-management, command-delivery, notification-management, event-processing — the standard system, and what an unset profile resolves to |
-| `full` | everything this build ships: `default`, plus `ai-inference`, `outbound-connectors`, `mcp`, `sparkplug-ingest`, `lwm2m-ingest` and `update-management` — the areas held back from `default` because each carries a decision to make deliberately (a paid provider key, an egress surface, an agent-facing API, a Sparkplug B or LwM2M device transport that binds its own inbound port, an over-the-air update service that serves device downloads and must be told, deliberately, whether unverified artifacts may be assigned) |
+| `default` | user-management, device-management, event-sources, event-management, device-state, dashboard-management, command-delivery, notification-management, event-processing, update-management — the standard system, and what an unset profile resolves to |
+| `full` | everything this build ships: `default`, plus `ai-inference`, `outbound-connectors`, `mcp`, `sparkplug-ingest`, `lwm2m-ingest` — the areas held back from `default` because each carries a decision to make deliberately (a paid provider key, an egress surface, an agent-facing API, a Sparkplug B or LwM2M device transport that binds its own inbound port) |
 | `telemetry` | user-management, device-management, event-sources, event-management, device-state, dashboard-management |
 | `ingest-only` | user-management, device-management, event-sources |
 

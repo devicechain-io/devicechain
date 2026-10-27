@@ -496,10 +496,35 @@ const updateStoreMountlessNote = "update-management runs WITHOUT an object store
 	"to use OTA, build the instance with a ReadWriteMany volume or an S3 store (--object-store-access-mode " +
 	"ReadWriteMany, or --object-store s3)."
 
-// sayUpdateStoreMountless prints updateStoreMountlessNote, in yellow, when it applies.
-func sayUpdateStoreMountless(st *State) {
+// noObjectStoreNote is what an operator must be told when update-management runs on an instance
+// built without an object store: the area is in the default profile, so it comes up healthy and
+// refuses every artifact. Shared with the enable-area note, which says the same thing.
+const noObjectStoreNote = "update-management keeps artifact content in the instance's object store, " +
+	"and this instance was built without one: the service will run and refuse every artifact. " +
+	"An object store cannot be added to a running instance; it is chosen at bootstrap " +
+	"(--object-store)."
+
+// updateStoreNotes are the notes a bootstrap or upgrade prints about update-management and the
+// object store: it runs without the shared volume, or the instance has no store at all.
+func updateStoreNotes(st *State) []string {
+	var notes []string
 	if updateStoreMountless(st) {
-		fmt.Println(color.YellowString("  note: %s", updateStoreMountlessNote))
+		notes = append(notes, updateStoreMountlessNote)
+	}
+	if st.ObjectStore == nil {
+		if areas, err := instanceAreas(st); err == nil && slices.Contains(areas, functionalarea.UpdateMgmt) &&
+			// An enable-area run that adds the area says it in its own opening notes.
+			!(st.AreaChange != nil && slices.Contains(st.AreaChange.Added, string(functionalarea.UpdateMgmt))) {
+			notes = append(notes, noObjectStoreNote)
+		}
+	}
+	return notes
+}
+
+// sayUpdateStoreMountless prints updateStoreNotes, in yellow.
+func sayUpdateStoreMountless(st *State) {
+	for _, n := range updateStoreNotes(st) {
+		fmt.Println(color.YellowString("  note: %s", n))
 	}
 }
 

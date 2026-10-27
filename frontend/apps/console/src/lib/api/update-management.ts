@@ -88,6 +88,7 @@ const UPDATE_MANAGEMENT_INFO = graphql(`
       allowUnverifiedArtifacts
       maxArtifactBytes
       downloadsConfigured
+      objectStoreConfigured
     }
   }
 `);

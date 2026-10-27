@@ -632,3 +632,27 @@ func TestSettlingTheRelationalArchivePathLeavesAnOrdinaryInstallAlone(t *testing
 			"every instance on the cluster depends on", got)
 	}
 }
+
+// 🔴 THE DEFAULT BUDGET ADMITS TWO DEFAULT-PROFILE INSTANCES, and that sentence is in the
+// --max-connections help and the OpenTofu default. It is derived here from the same sizing the
+// bootstrap admits an instance against, so it cannot stay true in prose while a profile grows.
+func TestTheDefaultBudgetAdmitsTwoDefaultProfileInstances(t *testing.T) {
+	limit, err := instanceConnectionLimit(&State{Profile: "default"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if need := 2*limit + rdbReservedConnections; need > defaultMaxConnections {
+		t.Errorf("two default-profile instances need %d connections (2 x %d + %d reserved) and the default budget is %d: "+
+			"raise defaultMaxConnections and postgres_max_connections together, and the texts that say \"two\"",
+			need, limit, rdbReservedConnections, defaultMaxConnections)
+	}
+	// ...and the cluster root's default is the same number, or a first install and a re-run disagree.
+	raw, err := os.ReadFile("../../../deploy/opentofu/cluster/variables.tf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`(?s)variable "postgres_max_connections" \{.*?default\s*=\s*(\d+)`).FindSubmatch(raw)
+	if m == nil || string(m[1]) != strconv.Itoa(defaultMaxConnections) {
+		t.Errorf("postgres_max_connections defaults to %q in variables.tf; defaultMaxConnections is %d", m, defaultMaxConnections)
+	}
+}

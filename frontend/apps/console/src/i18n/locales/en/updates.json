@@ -99,6 +99,8 @@
   "signatureAdded": "Signature added. Trust is now {{trust}}.",
   "downloadsNotConfiguredTitle": "Updates cannot be downloaded yet",
   "downloadsNotConfiguredBody": "This instance has no download address configured, so devices are never given a link to fetch an assigned image from. Assignments are accepted but will not install. Set the download base URL of the update service (updates.downloadBaseUrl), or serve the instance behind an ingress host so it can be derived.",
+  "storeNotConfiguredTitle": "Update artifacts cannot be stored",
+  "storeNotConfiguredBody": "This instance has no object store for update artifacts: it was built without one, or its store cannot be shared with the update service. Artifacts cannot be declared or uploaded, so nothing can be assigned to a device. A store cannot be added to a running instance; it is chosen when the instance is created (dcctl bootstrap --object-store, or a ReadWriteMany volume).",
   "unverifiedTitle": "This artifact is unverified",
   "unverifiedBlocked": "This instance does not allow unverified artifacts to be assigned, so this one cannot be assigned to a device until it is signed.",
   "unverifiedAllowed": "This instance allows unverified artifacts to be assigned. That is a development setting; do not rely on it in production.",
