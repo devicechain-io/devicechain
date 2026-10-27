@@ -160,12 +160,8 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		GraphQL: &service.GraphQLSpec{
 			Schema: graphql.SchemaContent,
 			Resolver: func() interface{} {
-				return &graphql.SchemaResolver{
-					Area:                     string(Microservice.FunctionalArea),
-					AllowUnverifiedArtifacts: Configuration.Updates.AllowUnverifiedArtifacts,
-					MaxArtifactBytes: Configuration.EffectiveMaxArtifactBytes(
-						Microservice.InstanceConfiguration.Infrastructure.Blob.Backend),
-				}
+				return newSchemaResolver(Configuration, string(Microservice.FunctionalArea),
+					Microservice.InstanceConfiguration.Infrastructure.Blob.Backend)
 			},
 			Providers: func() map[gqlcore.ContextKey]interface{} {
 				return map[gqlcore.ContextKey]interface{}{
@@ -277,6 +273,11 @@ func buildApi(ctx context.Context) (*model.Api, error) {
 	if api.AllowUnverified {
 		log.Warn().Msg("updates.allowUnverifiedArtifacts is set: artifacts with no active-signer signature can be assigned to devices. " +
 			"Nothing authenticates who produced them; this is a development setting.")
+	}
+	if Configuration.Updates.DownloadBaseIsInsecure() {
+		log.Warn().Str("downloadBaseUrl", api.DownloadBaseURL).
+			Msg("updates.downloadBaseUrl is plain http on a non-loopback host - devices are sent download links that are not encrypted in transit, " +
+				"and a device that requires TLS will refuse them. Serve the instance over TLS (a lab with no TLS can ignore this).")
 	}
 	if api.DownloadBaseURL == "" {
 		log.Warn().Msg("updates.downloadBaseUrl is not set - no device can be given a download capability, so no assigned update can be fetched.")
@@ -422,4 +423,15 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 		}
 	}
 	return Svc.Terminate(ctx)
+}
+
+// newSchemaResolver is the data-plane root resolver for a configuration: what updateManagementInfo
+// reports is read from the configuration here, in one place a test can pin.
+func newSchemaResolver(cfg *config.UpdateManagementConfiguration, area, blobBackend string) *graphql.SchemaResolver {
+	return &graphql.SchemaResolver{
+		Area:                     area,
+		AllowUnverifiedArtifacts: cfg.Updates.AllowUnverifiedArtifacts,
+		DownloadsConfigured:      cfg.Updates.DownloadBaseURL != "",
+		MaxArtifactBytes:         cfg.EffectiveMaxArtifactBytes(blobBackend),
+	}
 }

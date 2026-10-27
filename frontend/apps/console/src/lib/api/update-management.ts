@@ -87,6 +87,7 @@ const UPDATE_MANAGEMENT_INFO = graphql(`
       area
       allowUnverifiedArtifacts
       maxArtifactBytes
+      downloadsConfigured
     }
   }
 `);

@@ -5,7 +5,9 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/blob"
@@ -203,6 +205,21 @@ func (c *UpdateManagementConfiguration) EffectiveMaxArtifactBytes(backend string
 		return S3BufferedPutCap
 	}
 	return max
+}
+
+// DownloadBaseIsInsecure reports a configured download base that is plain http on a host other
+// than loopback. It is a warning, not a refusal: a lab instance installed without TLS derives
+// exactly this, and the device side decides whether to accept an http link.
+func (u UpdatesConfiguration) DownloadBaseIsInsecure() bool {
+	parsed, err := url.Parse(u.DownloadBaseURL)
+	if err != nil || parsed.Scheme != "http" {
+		return false
+	}
+	h := strings.ToLower(parsed.Hostname())
+	if ip := net.ParseIP(h); (ip != nil && ip.IsLoopback()) || h == "localhost" || strings.HasSuffix(h, ".localhost") {
+		return false
+	}
+	return true
 }
 
 func (u UpdatesConfiguration) validateBaseURL() error {

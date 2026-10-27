@@ -137,6 +137,20 @@ func TestAssignmentOperationsAreGatedByTheirAuthority(t *testing.T) {
 		`{ updateAssignments(criteria:{pageNumber:1,pageSize:5}){ results { token } } }`, nil)))
 }
 
+func TestUpdateManagementInfoSaysWhetherDownloadsCanWork(t *testing.T) {
+	p, _ := updatePlane(t, false)
+	const q = `{ updateManagementInfo { downloadsConfigured } }`
+	resp := p.exec(p.ctx("acme"), q, nil)
+	require.Empty(t, resp.Errors)
+	require.JSONEq(t, `{"updateManagementInfo":{"downloadsConfigured":false}}`, string(resp.Data),
+		"a plane with no download base must say so, not default to working")
+
+	p.schema = gql.MustParseSchema(SchemaContent, &SchemaResolver{Area: "update-management", DownloadsConfigured: true})
+	resp = p.exec(p.ctx("acme"), q, nil)
+	require.Empty(t, resp.Errors)
+	require.JSONEq(t, `{"updateManagementInfo":{"downloadsConfigured":true}}`, string(resp.Data))
+}
+
 func TestAssignRefusalsCarryTheirCodes(t *testing.T) {
 	p, _ := updatePlane(t, false)
 	p.available("fw-1", []byte("image"))

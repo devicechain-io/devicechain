@@ -33,6 +33,7 @@ import {
 import { FormDrawer } from '@/components/registry';
 import { rolloutStateLabel } from '@/lib/enumLabel';
 import { NewRolloutForm } from './NewRolloutForm';
+import { DownloadsNotice } from './DownloadsNotice';
 import { RolloutProgressBar, RolloutStateBadge, pauseReasonText } from './rolloutBadges';
 
 const pageSize = 50;
@@ -77,6 +78,7 @@ export default function RolloutsPage() {
         </>
       }
     >
+      <DownloadsNotice />
       {canWrite && (
         <FormDrawer
           shot="rollout-new"

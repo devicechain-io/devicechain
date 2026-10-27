@@ -64,6 +64,25 @@ func TestEffectiveCeilingIsClampedOnS3Only(t *testing.T) {
 	require.Equal(t, int64(1<<20), cfg.EffectiveMaxArtifactBytes("s3"))
 }
 
+func TestDownloadBaseIsInsecureOnlyForPlainHttpOffLoopback(t *testing.T) {
+	for base, want := range map[string]bool{
+		"": false,
+		"https://dc.example.com/api/update-management": false,
+		"http://dc.example.com/api/update-management":  true,
+		"http://localhost/api/update-management":       false,
+		"http://127.0.0.1:8080/x":                      false,
+		"http://[::1]:8080/x":                          false,
+		"http://LOCALHOST/x":                           false,
+		"http://127.0.0.2/x":                           false,
+		"http://dc.localhost/x":                        false,
+		"http://notlocalhost/x":                        true,
+		"http://10.0.0.5/x":                            true,
+	} {
+		u := config.UpdatesConfiguration{DownloadBaseURL: base}
+		require.Equal(t, want, u.DownloadBaseIsInsecure(), base)
+	}
+}
+
 func TestUpdatePlaneDefaultsAndBounds(t *testing.T) {
 	cfg := &config.UpdateManagementConfiguration{}
 	require.NoError(t, core.LoadConfiguration([]byte("{}"), cfg))

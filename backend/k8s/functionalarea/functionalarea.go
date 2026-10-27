@@ -204,15 +204,13 @@ var catalog = map[FunctionalArea]Manifest{
 	},
 	UpdateMgmt: {
 		// The update-management service: over-the-air update artifacts, their assignment
-		// to devices and the download plane (OTA). Today it is a SCAFFOLD — an empty
-		// baseline and an explicitly unimplemented GraphQL plane — so nothing depends on
-		// it and it depends on nothing at runtime. device-management is a Hard dep all the
-		// same, because the area is DESIGNED around it: an update is assigned to devices
-		// and device types, and an update area without the device registry has nothing to
-		// target. Declaring that edge now means the first feature does not move the
-		// dependency gate under existing selections. It is held back from ProfileDefault —
-		// an install does not grow an update plane it did not ask for — and shipped by
-		// ProfileFull, or named explicitly in enabledFunctionalAreas.
+		// to devices and the download plane (OTA): the immutable artifact catalogue, signers,
+		// per-device and per-group assignment, and the capability-gated download endpoint.
+		// device-management is a Hard dep because an update is assigned to devices and
+		// groups, and an update area without the device registry has nothing to target.
+		// It is held back from ProfileDefault — an install does not grow an update plane it
+		// did not ask for — and shipped by ProfileFull, or named explicitly in
+		// enabledFunctionalAreas.
 		Area:     UpdateMgmt,
 		HardDeps: []FunctionalArea{DeviceManagement},
 		SoftDeps: []FunctionalArea{UserManagement},

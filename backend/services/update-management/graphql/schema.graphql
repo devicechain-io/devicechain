@@ -37,6 +37,12 @@ type ServiceInfo {
     ceiling already clamped to what the object store can take in one upload.
     """
     maxArtifactBytes: String!
+    """
+    Whether a download base is set (updates.downloadBaseUrl). It does not prove devices can reach
+    that address. False means no device can be given a download link: an assignment is published
+    but nothing assigned will install until a download base is configured.
+    """
+    downloadsConfigured: Boolean!
 }
 
 """What an update artifact is."""

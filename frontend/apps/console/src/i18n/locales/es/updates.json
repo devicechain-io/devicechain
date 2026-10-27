@@ -97,6 +97,8 @@
   "signatureVerifiedByService": "El servicio verifica la firma contra la huella almacenada del artefacto y rechaza la que no se verifica.",
   "addSignature": "Añadir firma",
   "signatureAdded": "Firma añadida. La confianza ahora es {{trust}}.",
+  "downloadsNotConfiguredTitle": "Aún no se pueden descargar actualizaciones",
+  "downloadsNotConfiguredBody": "Esta instancia no tiene configurada una dirección de descarga, por lo que nunca se da a los dispositivos un enlace para obtener una imagen asignada. Las asignaciones se aceptan pero no se instalarán. Defina la URL base de descarga del servicio de actualizaciones (updates.downloadBaseUrl) o publique la instancia tras un host de ingress para que se derive.",
   "unverifiedTitle": "Este artefacto no está verificado",
   "unverifiedBlocked": "Esta instancia no permite asignar artefactos sin verificar, así que este no se puede asignar a un dispositivo hasta que se firme.",
   "unverifiedAllowed": "Esta instancia permite asignar artefactos sin verificar. Es un ajuste de desarrollo; no confíe en él en producción.",
