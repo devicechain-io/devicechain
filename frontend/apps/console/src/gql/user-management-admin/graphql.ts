@@ -365,12 +365,12 @@ export type TenantDeletionSearchCriteria = {
 export type IdentitiesQueryVariables = Exact<{ [key: string]: never; }>;
 
 
-export type IdentitiesQuery = { identities: Array<{ id: string, email: string, firstName: string | null, lastName: string | null, enabled: boolean, systemRoles: Array<string>, createdAt: string | null, updatedAt: string | null, memberships: Array<{ tenant: string, enabled: boolean, roles: Array<string> }> }> };
+export type IdentitiesQuery = { identities: Array<{ id: string, email: string, firstName: string | null, lastName: string | null, enabled: boolean, systemRoles: Array<string>, mfaEnabled: boolean, createdAt: string | null, updatedAt: string | null, memberships: Array<{ tenant: string, enabled: boolean, roles: Array<string> }> }> };
 
 export type TenantsQueryVariables = Exact<{ [key: string]: never; }>;
 
 
-export type TenantsQuery = { tenants: Array<{ id: string, token: string, name: string | null, enabled: boolean, purgeState: string, purgeEpoch: string | null, ssoEnforced: boolean, config: string | null, ingestReadingsPerSecond: number | null, ingestBurst: number | null, outboundCallsPerSecond: number | null, outboundBurst: number | null, aiExternalEnabled: boolean | null, aiInferenceRequestsPerMinute: number | null, aiInferenceBurst: number | null, provisioningRegistrationsPerSecond: number | null, provisioningBurst: number | null, heldCommandCeiling: number | null, shedPriority: number | null, geoFencePositionCeiling: number | null, geoFenceCeiling: number | null, geoFencePositionBudget: number | null, createdAt: string | null, updatedAt: string | null, tier: { token: string, name: string | null, color: string | null }, effectiveSettings: Array<{ dimension: { name: string, label: string, rateUnit: string }, rate: { source: string, value: number | null, tier: number | null, override: number | null }, burst: { source: string, value: number | null, tier: number | null, override: number | null } }>, effectiveScalarSettings: Array<{ key: string, label: string, source: string, value: number | null, tier: number | null, override: number | null }> }> };
+export type TenantsQuery = { tenants: Array<{ id: string, token: string, name: string | null, enabled: boolean, purgeState: string, purgeEpoch: string | null, ssoEnforced: boolean, mfaRequired: boolean, mfaRequiredByTier: boolean, config: string | null, ingestReadingsPerSecond: number | null, ingestBurst: number | null, outboundCallsPerSecond: number | null, outboundBurst: number | null, aiExternalEnabled: boolean | null, aiInferenceRequestsPerMinute: number | null, aiInferenceBurst: number | null, provisioningRegistrationsPerSecond: number | null, provisioningBurst: number | null, heldCommandCeiling: number | null, shedPriority: number | null, geoFencePositionCeiling: number | null, geoFenceCeiling: number | null, geoFencePositionBudget: number | null, createdAt: string | null, updatedAt: string | null, tier: { token: string, name: string | null, color: string | null }, effectiveSettings: Array<{ dimension: { name: string, label: string, rateUnit: string }, rate: { source: string, value: number | null, tier: number | null, override: number | null }, burst: { source: string, value: number | null, tier: number | null, override: number | null } }>, effectiveScalarSettings: Array<{ key: string, label: string, source: string, value: number | null, tier: number | null, override: number | null }> }> };
 
 export type GovernanceDimensionsQueryVariables = Exact<{ [key: string]: never; }>;
 
@@ -447,7 +447,7 @@ export type CreateIdentityMutationVariables = Exact<{
 }>;
 
 
-export type CreateIdentityMutation = { createIdentity: { id: string, email: string, firstName: string | null, lastName: string | null, enabled: boolean, systemRoles: Array<string>, createdAt: string | null, updatedAt: string | null, memberships: Array<{ tenant: string, enabled: boolean, roles: Array<string> }> } };
+export type CreateIdentityMutation = { createIdentity: { id: string, email: string, firstName: string | null, lastName: string | null, enabled: boolean, systemRoles: Array<string>, mfaEnabled: boolean, createdAt: string | null, updatedAt: string | null, memberships: Array<{ tenant: string, enabled: boolean, roles: Array<string> }> } };
 
 export type SetIdentityEnabledMutationVariables = Exact<{
   email: string;
@@ -455,7 +455,7 @@ export type SetIdentityEnabledMutationVariables = Exact<{
 }>;
 
 
-export type SetIdentityEnabledMutation = { setIdentityEnabled: { id: string, email: string, firstName: string | null, lastName: string | null, enabled: boolean, systemRoles: Array<string>, createdAt: string | null, updatedAt: string | null, memberships: Array<{ tenant: string, enabled: boolean, roles: Array<string> }> } };
+export type SetIdentityEnabledMutation = { setIdentityEnabled: { id: string, email: string, firstName: string | null, lastName: string | null, enabled: boolean, systemRoles: Array<string>, mfaEnabled: boolean, createdAt: string | null, updatedAt: string | null, memberships: Array<{ tenant: string, enabled: boolean, roles: Array<string> }> } };
 
 export type SetSystemRolesMutationVariables = Exact<{
   email: string;
@@ -463,7 +463,7 @@ export type SetSystemRolesMutationVariables = Exact<{
 }>;
 
 
-export type SetSystemRolesMutation = { setSystemRoles: { id: string, email: string, firstName: string | null, lastName: string | null, enabled: boolean, systemRoles: Array<string>, createdAt: string | null, updatedAt: string | null, memberships: Array<{ tenant: string, enabled: boolean, roles: Array<string> }> } };
+export type SetSystemRolesMutation = { setSystemRoles: { id: string, email: string, firstName: string | null, lastName: string | null, enabled: boolean, systemRoles: Array<string>, mfaEnabled: boolean, createdAt: string | null, updatedAt: string | null, memberships: Array<{ tenant: string, enabled: boolean, roles: Array<string> }> } };
 
 export type SetPasswordMutationVariables = Exact<{
   email: string;
@@ -569,6 +569,22 @@ export type SetTenantSsoEnforcedMutationVariables = Exact<{
 
 
 export type SetTenantSsoEnforcedMutation = { setTenantSsoEnforced: { token: string, ssoEnforced: boolean } };
+
+export type SetTenantMfaRequiredMutationVariables = Exact<{
+  tenant: string;
+  required: boolean;
+}>;
+
+
+export type SetTenantMfaRequiredMutation = { setTenantMfaRequired: { token: string, mfaRequired: boolean, mfaRequiredByTier: boolean } };
+
+export type ResetIdentityMfaMutationVariables = Exact<{
+  email: string;
+  newPassword?: string | null | undefined;
+}>;
+
+
+export type ResetIdentityMfaMutation = { resetIdentityMfa: { id: string, email: string, mfaEnabled: boolean } };
 
 export type DeleteTenantMutationVariables = Exact<{
   token: string;
@@ -742,6 +758,7 @@ export const IdentitiesDocument = new TypedDocumentString(`
     lastName
     enabled
     systemRoles
+    mfaEnabled
     memberships {
       tenant
       enabled
@@ -762,6 +779,8 @@ export const TenantsDocument = new TypedDocumentString(`
     purgeState
     purgeEpoch
     ssoEnforced
+    mfaRequired
+    mfaRequiredByTier
     tier {
       token
       name
@@ -957,6 +976,7 @@ export const CreateIdentityDocument = new TypedDocumentString(`
     lastName
     enabled
     systemRoles
+    mfaEnabled
     memberships {
       tenant
       enabled
@@ -976,6 +996,7 @@ export const SetIdentityEnabledDocument = new TypedDocumentString(`
     lastName
     enabled
     systemRoles
+    mfaEnabled
     memberships {
       tenant
       enabled
@@ -995,6 +1016,7 @@ export const SetSystemRolesDocument = new TypedDocumentString(`
     lastName
     enabled
     systemRoles
+    mfaEnabled
     memberships {
       tenant
       enabled
@@ -1208,6 +1230,24 @@ export const SetTenantSsoEnforcedDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<SetTenantSsoEnforcedMutation, SetTenantSsoEnforcedMutationVariables>;
+export const SetTenantMfaRequiredDocument = new TypedDocumentString(`
+    mutation SetTenantMfaRequired($tenant: String!, $required: Boolean!) {
+  setTenantMfaRequired(tenant: $tenant, required: $required) {
+    token
+    mfaRequired
+    mfaRequiredByTier
+  }
+}
+    `) as unknown as TypedDocumentString<SetTenantMfaRequiredMutation, SetTenantMfaRequiredMutationVariables>;
+export const ResetIdentityMfaDocument = new TypedDocumentString(`
+    mutation ResetIdentityMfa($email: String!, $newPassword: String) {
+  resetIdentityMfa(email: $email, newPassword: $newPassword) {
+    id
+    email
+    mfaEnabled
+  }
+}
+    `) as unknown as TypedDocumentString<ResetIdentityMfaMutation, ResetIdentityMfaMutationVariables>;
 export const DeleteTenantDocument = new TypedDocumentString(`
     mutation DeleteTenant($token: String!) {
   deleteTenant(token: $token)

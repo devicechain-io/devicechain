@@ -47,6 +47,31 @@ export const LOGIN = `
   }
 ` as unknown as TypedDocument<LoginResult, LoginVariables>;
 
+// ── user-management: finish a sign-in login held for its second factor ───────
+// Anonymous. An account with two-factor authentication on gets the error code MFA_CHALLENGE
+// from login; the challenge handle and a code (six digits, or a recovery code) complete it
+// and answer what login answers.
+
+export interface VerifyMfaResult {
+  verifyMfa: { identityToken: string; memberships: Membership[] };
+}
+export interface VerifyMfaVariables {
+  challenge: string;
+  code: string;
+}
+export const VERIFY_MFA = `
+  mutation VerifyMfa($challenge: String!, $code: String!) {
+    verifyMfa(challenge: $challenge, code: $code) {
+      identityToken
+      memberships {
+        tenant
+        roles
+        ssoRequired
+      }
+    }
+  }
+` as unknown as TypedDocument<VerifyMfaResult, VerifyMfaVariables>;
+
 // ── user-management: exchange the identity token for a tenant session ────────
 // Anonymous (the identity token is validated as an argument). Returns the
 // tenant-scoped access token the viewer attaches to every subsequent request.

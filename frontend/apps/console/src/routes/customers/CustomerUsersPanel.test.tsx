@@ -32,6 +32,7 @@ const member = (email: string, scope: string[]) => ({
   scope: scope.map((token) => ({ kind: 'CUSTOMER', token })),
   managedByIdentityProvider: false,
   invitationPending: false,
+  mfaEnabled: false,
 });
 vi.mock('@/lib/api/members', async (orig) => ({
   ...(await orig<typeof import('@/lib/api/members')>()),

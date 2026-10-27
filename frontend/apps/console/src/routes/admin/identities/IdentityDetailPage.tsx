@@ -35,6 +35,7 @@ import {
 } from '@/lib/api/admin';
 import { StatusBadge, errMessage, useReload } from '@/routes/common';
 import { CopyToken } from '@/components/ui/copy-token';
+import { IdentityMfaPanel } from '@/routes/admin/identities/IdentityMfaPanel';
 
 // toOptions turns a token+name record (tenant or role) into combobox options:
 // the token is the value, a friendlier name is the label, and the raw token is
@@ -247,6 +248,8 @@ function IdentityDetail({
           </FormField>
         </div>
       </SectionPanel>
+
+      <IdentityMfaPanel email={identity.email} enabled={identity.mfaEnabled} onChanged={onChanged} />
 
       <SectionPanel title={t('membershipsSectionTitle')}>
         {identity.memberships.length === 0 ? (

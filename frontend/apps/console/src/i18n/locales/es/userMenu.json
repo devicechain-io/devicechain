@@ -21,5 +21,6 @@
   "signOut": "Cerrar sesión",
   "superuser": "Superusuario",
   "switchToTenant": "Cambiar de inquilino",
-  "noTenantMemberships": "No tienes membresías de inquilino. Agrega una desde Identidades para acceder a un inquilino."
+  "noTenantMemberships": "No tienes membresías de inquilino. Agrega una desde Identidades para acceder a un inquilino.",
+  "security": "Seguridad de la cuenta"
 }

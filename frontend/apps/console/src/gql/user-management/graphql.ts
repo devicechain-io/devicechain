@@ -213,7 +213,7 @@ export type MembersQueryVariables = Exact<{
 }>;
 
 
-export type MembersQuery = { members: { results: Array<{ email: string, firstName: string | null, lastName: string | null, enabled: boolean, managedByIdentityProvider: boolean, invitationPending: boolean, roles: Array<{ token: string, name: string | null, owner: RoleOwner }>, scope: Array<{ kind: ScopeAnchorKind, token: string }> }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+export type MembersQuery = { members: { results: Array<{ email: string, firstName: string | null, lastName: string | null, enabled: boolean, managedByIdentityProvider: boolean, invitationPending: boolean, mfaEnabled: boolean, roles: Array<{ token: string, name: string | null, owner: RoleOwner }>, scope: Array<{ kind: ScopeAnchorKind, token: string }> }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
 export type InvitationsQueryVariables = Exact<{
   criteria: InvitationSearchCriteria;
@@ -324,6 +324,60 @@ export type AcceptInvitationMutationVariables = Exact<{
 
 export type AcceptInvitationMutation = { acceptInvitation: { identityToken: string, expiresAt: string, superuser: boolean, memberships: Array<{ tenant: string, roles: Array<string>, ssoRequired: boolean }> } };
 
+export type BeginTotpEnrollmentMutationVariables = Exact<{
+  identityToken: string;
+  password: string;
+}>;
+
+
+export type BeginTotpEnrollmentMutation = { beginTotpEnrollment: { otpauthUri: string, secret: string, expiresAt: string } };
+
+export type ConfirmTotpEnrollmentMutationVariables = Exact<{
+  identityToken: string;
+  password: string;
+  code: string;
+}>;
+
+
+export type ConfirmTotpEnrollmentMutation = { confirmTotpEnrollment: { codes: Array<string>, auth: { identityToken: string, expiresAt: string, superuser: boolean, memberships: Array<{ tenant: string, roles: Array<string>, ssoRequired: boolean }> } } };
+
+export type RegenerateRecoveryCodesMutationVariables = Exact<{
+  identityToken: string;
+  password: string;
+  code: string;
+}>;
+
+
+export type RegenerateRecoveryCodesMutation = { regenerateRecoveryCodes: { codes: Array<string> } };
+
+export type DisableTotpMutationVariables = Exact<{
+  identityToken: string;
+  password: string;
+  code: string;
+}>;
+
+
+export type DisableTotpMutation = { disableTotp: boolean };
+
+export type MfaStatusQueryVariables = Exact<{
+  identityToken: string;
+}>;
+
+
+export type MfaStatusQuery = { mfaStatus: { totpEnabled: boolean, enrolledAt: string | null, recoveryCodesRemaining: number } };
+
+export type TenantMfaQueryVariables = Exact<{ [key: string]: never; }>;
+
+
+export type TenantMfaQuery = { tenant: { token: string, mfaRequired: boolean, mfaRequiredByTier: boolean } };
+
+export type SetOwnTenantMfaRequiredMutationVariables = Exact<{
+  required: boolean;
+}>;
+
+
+export type SetOwnTenantMfaRequiredMutation = { setTenantMfaRequired: { token: string, mfaRequired: boolean, mfaRequiredByTier: boolean } };
+
 export type ServiceAccountsQueryVariables = Exact<{
   criteria: ServiceAccountSearchCriteria;
 }>;
@@ -378,6 +432,14 @@ export type LoginMutationVariables = Exact<{
 
 
 export type LoginMutation = { login: { identityToken: string, expiresAt: string, superuser: boolean, memberships: Array<{ tenant: string, roles: Array<string>, ssoRequired: boolean }> } };
+
+export type VerifyMfaMutationVariables = Exact<{
+  challenge: string;
+  code: string;
+}>;
+
+
+export type VerifyMfaMutation = { verifyMfa: { identityToken: string, expiresAt: string, superuser: boolean, memberships: Array<{ tenant: string, roles: Array<string>, ssoRequired: boolean }> } };
 
 export type BeginSsoMutationVariables = Exact<{
   email?: string | null | undefined;
@@ -571,6 +633,7 @@ export const MembersDocument = new TypedDocumentString(`
       }
       managedByIdentityProvider
       invitationPending
+      mfaEnabled
     }
     pagination {
       pageStart
@@ -712,6 +775,79 @@ export const AcceptInvitationDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<AcceptInvitationMutation, AcceptInvitationMutationVariables>;
+export const BeginTotpEnrollmentDocument = new TypedDocumentString(`
+    mutation BeginTotpEnrollment($identityToken: String!, $password: String!) {
+  beginTotpEnrollment(identityToken: $identityToken, password: $password) {
+    otpauthUri
+    secret
+    expiresAt
+  }
+}
+    `) as unknown as TypedDocumentString<BeginTotpEnrollmentMutation, BeginTotpEnrollmentMutationVariables>;
+export const ConfirmTotpEnrollmentDocument = new TypedDocumentString(`
+    mutation ConfirmTotpEnrollment($identityToken: String!, $password: String!, $code: String!) {
+  confirmTotpEnrollment(
+    identityToken: $identityToken
+    password: $password
+    code: $code
+  ) {
+    codes
+    auth {
+      identityToken
+      expiresAt
+      superuser
+      memberships {
+        tenant
+        roles
+        ssoRequired
+      }
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<ConfirmTotpEnrollmentMutation, ConfirmTotpEnrollmentMutationVariables>;
+export const RegenerateRecoveryCodesDocument = new TypedDocumentString(`
+    mutation RegenerateRecoveryCodes($identityToken: String!, $password: String!, $code: String!) {
+  regenerateRecoveryCodes(
+    identityToken: $identityToken
+    password: $password
+    code: $code
+  ) {
+    codes
+  }
+}
+    `) as unknown as TypedDocumentString<RegenerateRecoveryCodesMutation, RegenerateRecoveryCodesMutationVariables>;
+export const DisableTotpDocument = new TypedDocumentString(`
+    mutation DisableTotp($identityToken: String!, $password: String!, $code: String!) {
+  disableTotp(identityToken: $identityToken, password: $password, code: $code)
+}
+    `) as unknown as TypedDocumentString<DisableTotpMutation, DisableTotpMutationVariables>;
+export const MfaStatusDocument = new TypedDocumentString(`
+    query MfaStatus($identityToken: String!) {
+  mfaStatus(identityToken: $identityToken) {
+    totpEnabled
+    enrolledAt
+    recoveryCodesRemaining
+  }
+}
+    `) as unknown as TypedDocumentString<MfaStatusQuery, MfaStatusQueryVariables>;
+export const TenantMfaDocument = new TypedDocumentString(`
+    query TenantMfa {
+  tenant {
+    token
+    mfaRequired
+    mfaRequiredByTier
+  }
+}
+    `) as unknown as TypedDocumentString<TenantMfaQuery, TenantMfaQueryVariables>;
+export const SetOwnTenantMfaRequiredDocument = new TypedDocumentString(`
+    mutation SetOwnTenantMfaRequired($required: Boolean!) {
+  setTenantMfaRequired(required: $required) {
+    token
+    mfaRequired
+    mfaRequiredByTier
+  }
+}
+    `) as unknown as TypedDocumentString<SetOwnTenantMfaRequiredMutation, SetOwnTenantMfaRequiredMutationVariables>;
 export const ServiceAccountsDocument = new TypedDocumentString(`
     query ServiceAccounts($criteria: ServiceAccountSearchCriteria!) {
   serviceAccounts(criteria: $criteria) {
@@ -810,6 +946,20 @@ export const LoginDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<LoginMutation, LoginMutationVariables>;
+export const VerifyMfaDocument = new TypedDocumentString(`
+    mutation VerifyMfa($challenge: String!, $code: String!) {
+  verifyMfa(challenge: $challenge, code: $code) {
+    identityToken
+    expiresAt
+    superuser
+    memberships {
+      tenant
+      roles
+      ssoRequired
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<VerifyMfaMutation, VerifyMfaMutationVariables>;
 export const BeginSsoDocument = new TypedDocumentString(`
     mutation BeginSso($email: String, $connection: String, $returnTo: String!, $codeChallenge: String!) {
   beginSso(

@@ -176,6 +176,7 @@ export function MemberTable({
         <DataTableHeaderCell>{t('colRoles')}</DataTableHeaderCell>
         <DataTableHeaderCell>{t('colAccess')}</DataTableHeaderCell>
         <DataTableHeaderCell>{t('common:colStatus')}</DataTableHeaderCell>
+        <DataTableHeaderCell>{t('colTwoFactor')}</DataTableHeaderCell>
         {canWrite && <DataTableHeaderCell> </DataTableHeaderCell>}
       </DataTableHead>
       <DataTableBody>
@@ -205,6 +206,16 @@ export function MemberTable({
             </DataTableCell>
             <DataTableCell>
               <MemberStatus member={m} />
+            </DataTableCell>
+            <DataTableCell>
+              {/* A pending invitation has no account yet to hold a second factor. */}
+              {m.invitationPending ? (
+                <span className="text-sm text-muted-foreground">{t('twoFactorNone')}</span>
+              ) : (
+                <Badge variant={m.mfaEnabled ? 'success' : 'outline'} data-shot="member-mfa">
+                  {m.mfaEnabled ? t('twoFactorOn') : t('twoFactorOff')}
+                </Badge>
+              )}
             </DataTableCell>
             {canWrite && (
               <DataTableCell className="text-right">

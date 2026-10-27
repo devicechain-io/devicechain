@@ -15,7 +15,7 @@ import * as types from './graphql';
  * Learn more about it here: https://the-guild.dev/graphql/codegen/plugins/presets/preset-client#reducing-bundle-size
  */
 type Documents = {
-    "\n  query Members($criteria: MemberSearchCriteria!) {\n    members(criteria: $criteria) {\n      results {\n        email\n        firstName\n        lastName\n        enabled\n        roles {\n          token\n          name\n          owner\n        }\n        scope {\n          kind\n          token\n        }\n        managedByIdentityProvider\n        invitationPending\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": typeof types.MembersDocument,
+    "\n  query Members($criteria: MemberSearchCriteria!) {\n    members(criteria: $criteria) {\n      results {\n        email\n        firstName\n        lastName\n        enabled\n        roles {\n          token\n          name\n          owner\n        }\n        scope {\n          kind\n          token\n        }\n        managedByIdentityProvider\n        invitationPending\n        mfaEnabled\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": typeof types.MembersDocument,
     "\n  query Invitations($criteria: InvitationSearchCriteria!) {\n    invitations(criteria: $criteria) {\n      results {\n        email\n        state\n        createdAt\n        expiresAt\n        acceptedAt\n        revokedAt\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": typeof types.InvitationsDocument,
     "\n  query TenantRoles {\n    tenantRoles {\n      token\n      name\n      description\n      authorities\n      owner\n    }\n  }\n": typeof types.TenantRolesDocument,
     "\n  query TenantAuthorities {\n    tenantAuthorities\n  }\n": typeof types.TenantAuthoritiesDocument,
@@ -31,6 +31,13 @@ type Documents = {
     "\n  mutation UpdateTenantRole($token: String!, $request: TenantRoleUpdateRequest!) {\n    updateTenantRole(token: $token, request: $request) {\n      token\n    }\n  }\n": typeof types.UpdateTenantRoleDocument,
     "\n  mutation DeleteTenantRole($token: String!) {\n    deleteTenantRole(token: $token)\n  }\n": typeof types.DeleteTenantRoleDocument,
     "\n  mutation AcceptInvitation($code: String!, $password: String, $identityToken: String) {\n    acceptInvitation(code: $code, password: $password, identityToken: $identityToken) {\n      identityToken\n      expiresAt\n      superuser\n      memberships {\n        tenant\n        roles\n        ssoRequired\n      }\n    }\n  }\n": typeof types.AcceptInvitationDocument,
+    "\n  mutation BeginTotpEnrollment($identityToken: String!, $password: String!) {\n    beginTotpEnrollment(identityToken: $identityToken, password: $password) {\n      otpauthUri\n      secret\n      expiresAt\n    }\n  }\n": typeof types.BeginTotpEnrollmentDocument,
+    "\n  mutation ConfirmTotpEnrollment($identityToken: String!, $password: String!, $code: String!) {\n    confirmTotpEnrollment(identityToken: $identityToken, password: $password, code: $code) {\n      codes\n      auth {\n        identityToken\n        expiresAt\n        superuser\n        memberships {\n          tenant\n          roles\n          ssoRequired\n        }\n      }\n    }\n  }\n": typeof types.ConfirmTotpEnrollmentDocument,
+    "\n  mutation RegenerateRecoveryCodes($identityToken: String!, $password: String!, $code: String!) {\n    regenerateRecoveryCodes(identityToken: $identityToken, password: $password, code: $code) {\n      codes\n    }\n  }\n": typeof types.RegenerateRecoveryCodesDocument,
+    "\n  mutation DisableTotp($identityToken: String!, $password: String!, $code: String!) {\n    disableTotp(identityToken: $identityToken, password: $password, code: $code)\n  }\n": typeof types.DisableTotpDocument,
+    "\n  query MfaStatus($identityToken: String!) {\n    mfaStatus(identityToken: $identityToken) {\n      totpEnabled\n      enrolledAt\n      recoveryCodesRemaining\n    }\n  }\n": typeof types.MfaStatusDocument,
+    "\n  query TenantMfa {\n    tenant {\n      token\n      mfaRequired\n      mfaRequiredByTier\n    }\n  }\n": typeof types.TenantMfaDocument,
+    "\n  mutation SetOwnTenantMfaRequired($required: Boolean!) {\n    setTenantMfaRequired(required: $required) {\n      token\n      mfaRequired\n      mfaRequiredByTier\n    }\n  }\n": typeof types.SetOwnTenantMfaRequiredDocument,
     "\n  query ServiceAccounts($criteria: ServiceAccountSearchCriteria!) {\n    serviceAccounts(criteria: $criteria) {\n      results {\n        token\n        name\n        description\n        clientId\n        enabled\n        createdBy\n        createdAt\n        roles {\n          token\n          name\n          owner\n        }\n        scope {\n          kind\n          token\n        }\n        secrets {\n          hint\n          createdAt\n          expiresAt\n          lastUsedAt\n          active\n        }\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n    serviceAccountTokenEndpoint\n  }\n": typeof types.ServiceAccountsDocument,
     "\n  mutation CreateServiceAccount($request: ServiceAccountCreateRequest!) {\n    createServiceAccount(request: $request) {\n      clientId\n      clientSecret\n      tokenEndpoint\n      serviceAccount {\n        token\n      }\n    }\n  }\n": typeof types.CreateServiceAccountDocument,
     "\n  mutation SetServiceAccountAccess($token: String!, $roleTokens: [String!]!, $scope: [ScopeAnchorInput!]!) {\n    setServiceAccountAccess(token: $token, roleTokens: $roleTokens, scope: $scope) {\n      token\n    }\n  }\n": typeof types.SetServiceAccountAccessDocument,
@@ -38,6 +45,7 @@ type Documents = {
     "\n  mutation RotateServiceAccountSecret($token: String!, $overlapHours: Int, $expiresInDays: Int) {\n    rotateServiceAccountSecret(token: $token, overlapHours: $overlapHours, expiresInDays: $expiresInDays) {\n      clientId\n      clientSecret\n      tokenEndpoint\n      serviceAccount {\n        token\n      }\n    }\n  }\n": typeof types.RotateServiceAccountSecretDocument,
     "\n  mutation DeleteServiceAccount($token: String!) {\n    deleteServiceAccount(token: $token)\n  }\n": typeof types.DeleteServiceAccountDocument,
     "\n  mutation Login($email: String!, $password: String!) {\n    login(email: $email, password: $password) {\n      identityToken\n      expiresAt\n      superuser\n      memberships {\n        tenant\n        roles\n        ssoRequired\n      }\n    }\n  }\n": typeof types.LoginDocument,
+    "\n  mutation VerifyMfa($challenge: String!, $code: String!) {\n    verifyMfa(challenge: $challenge, code: $code) {\n      identityToken\n      expiresAt\n      superuser\n      memberships {\n        tenant\n        roles\n        ssoRequired\n      }\n    }\n  }\n": typeof types.VerifyMfaDocument,
     "\n  mutation BeginSso($email: String, $connection: String, $returnTo: String!, $codeChallenge: String!) {\n    beginSso(\n      email: $email\n      connection: $connection\n      returnTo: $returnTo\n      codeChallenge: $codeChallenge\n    ) {\n      authorizationUrl\n    }\n  }\n": typeof types.BeginSsoDocument,
     "\n  mutation CompleteSso($code: String!, $codeVerifier: String!) {\n    completeSso(code: $code, codeVerifier: $codeVerifier) {\n      identityToken\n      expiresAt\n      superuser\n      memberships {\n        tenant\n        roles\n        ssoRequired\n      }\n    }\n  }\n": typeof types.CompleteSsoDocument,
     "\n  mutation BeginSsoLink($identityToken: String!, $returnTo: String!) {\n    beginSsoLink(identityToken: $identityToken, returnTo: $returnTo) {\n      authorizationUrl\n    }\n  }\n": typeof types.BeginSsoLinkDocument,
@@ -57,7 +65,7 @@ type Documents = {
     "\n  query TenantTokenMasks {\n    tokenMasks\n  }\n": typeof types.TenantTokenMasksDocument,
 };
 const documents: Documents = {
-    "\n  query Members($criteria: MemberSearchCriteria!) {\n    members(criteria: $criteria) {\n      results {\n        email\n        firstName\n        lastName\n        enabled\n        roles {\n          token\n          name\n          owner\n        }\n        scope {\n          kind\n          token\n        }\n        managedByIdentityProvider\n        invitationPending\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.MembersDocument,
+    "\n  query Members($criteria: MemberSearchCriteria!) {\n    members(criteria: $criteria) {\n      results {\n        email\n        firstName\n        lastName\n        enabled\n        roles {\n          token\n          name\n          owner\n        }\n        scope {\n          kind\n          token\n        }\n        managedByIdentityProvider\n        invitationPending\n        mfaEnabled\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.MembersDocument,
     "\n  query Invitations($criteria: InvitationSearchCriteria!) {\n    invitations(criteria: $criteria) {\n      results {\n        email\n        state\n        createdAt\n        expiresAt\n        acceptedAt\n        revokedAt\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.InvitationsDocument,
     "\n  query TenantRoles {\n    tenantRoles {\n      token\n      name\n      description\n      authorities\n      owner\n    }\n  }\n": types.TenantRolesDocument,
     "\n  query TenantAuthorities {\n    tenantAuthorities\n  }\n": types.TenantAuthoritiesDocument,
@@ -73,6 +81,13 @@ const documents: Documents = {
     "\n  mutation UpdateTenantRole($token: String!, $request: TenantRoleUpdateRequest!) {\n    updateTenantRole(token: $token, request: $request) {\n      token\n    }\n  }\n": types.UpdateTenantRoleDocument,
     "\n  mutation DeleteTenantRole($token: String!) {\n    deleteTenantRole(token: $token)\n  }\n": types.DeleteTenantRoleDocument,
     "\n  mutation AcceptInvitation($code: String!, $password: String, $identityToken: String) {\n    acceptInvitation(code: $code, password: $password, identityToken: $identityToken) {\n      identityToken\n      expiresAt\n      superuser\n      memberships {\n        tenant\n        roles\n        ssoRequired\n      }\n    }\n  }\n": types.AcceptInvitationDocument,
+    "\n  mutation BeginTotpEnrollment($identityToken: String!, $password: String!) {\n    beginTotpEnrollment(identityToken: $identityToken, password: $password) {\n      otpauthUri\n      secret\n      expiresAt\n    }\n  }\n": types.BeginTotpEnrollmentDocument,
+    "\n  mutation ConfirmTotpEnrollment($identityToken: String!, $password: String!, $code: String!) {\n    confirmTotpEnrollment(identityToken: $identityToken, password: $password, code: $code) {\n      codes\n      auth {\n        identityToken\n        expiresAt\n        superuser\n        memberships {\n          tenant\n          roles\n          ssoRequired\n        }\n      }\n    }\n  }\n": types.ConfirmTotpEnrollmentDocument,
+    "\n  mutation RegenerateRecoveryCodes($identityToken: String!, $password: String!, $code: String!) {\n    regenerateRecoveryCodes(identityToken: $identityToken, password: $password, code: $code) {\n      codes\n    }\n  }\n": types.RegenerateRecoveryCodesDocument,
+    "\n  mutation DisableTotp($identityToken: String!, $password: String!, $code: String!) {\n    disableTotp(identityToken: $identityToken, password: $password, code: $code)\n  }\n": types.DisableTotpDocument,
+    "\n  query MfaStatus($identityToken: String!) {\n    mfaStatus(identityToken: $identityToken) {\n      totpEnabled\n      enrolledAt\n      recoveryCodesRemaining\n    }\n  }\n": types.MfaStatusDocument,
+    "\n  query TenantMfa {\n    tenant {\n      token\n      mfaRequired\n      mfaRequiredByTier\n    }\n  }\n": types.TenantMfaDocument,
+    "\n  mutation SetOwnTenantMfaRequired($required: Boolean!) {\n    setTenantMfaRequired(required: $required) {\n      token\n      mfaRequired\n      mfaRequiredByTier\n    }\n  }\n": types.SetOwnTenantMfaRequiredDocument,
     "\n  query ServiceAccounts($criteria: ServiceAccountSearchCriteria!) {\n    serviceAccounts(criteria: $criteria) {\n      results {\n        token\n        name\n        description\n        clientId\n        enabled\n        createdBy\n        createdAt\n        roles {\n          token\n          name\n          owner\n        }\n        scope {\n          kind\n          token\n        }\n        secrets {\n          hint\n          createdAt\n          expiresAt\n          lastUsedAt\n          active\n        }\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n    serviceAccountTokenEndpoint\n  }\n": types.ServiceAccountsDocument,
     "\n  mutation CreateServiceAccount($request: ServiceAccountCreateRequest!) {\n    createServiceAccount(request: $request) {\n      clientId\n      clientSecret\n      tokenEndpoint\n      serviceAccount {\n        token\n      }\n    }\n  }\n": types.CreateServiceAccountDocument,
     "\n  mutation SetServiceAccountAccess($token: String!, $roleTokens: [String!]!, $scope: [ScopeAnchorInput!]!) {\n    setServiceAccountAccess(token: $token, roleTokens: $roleTokens, scope: $scope) {\n      token\n    }\n  }\n": types.SetServiceAccountAccessDocument,
@@ -80,6 +95,7 @@ const documents: Documents = {
     "\n  mutation RotateServiceAccountSecret($token: String!, $overlapHours: Int, $expiresInDays: Int) {\n    rotateServiceAccountSecret(token: $token, overlapHours: $overlapHours, expiresInDays: $expiresInDays) {\n      clientId\n      clientSecret\n      tokenEndpoint\n      serviceAccount {\n        token\n      }\n    }\n  }\n": types.RotateServiceAccountSecretDocument,
     "\n  mutation DeleteServiceAccount($token: String!) {\n    deleteServiceAccount(token: $token)\n  }\n": types.DeleteServiceAccountDocument,
     "\n  mutation Login($email: String!, $password: String!) {\n    login(email: $email, password: $password) {\n      identityToken\n      expiresAt\n      superuser\n      memberships {\n        tenant\n        roles\n        ssoRequired\n      }\n    }\n  }\n": types.LoginDocument,
+    "\n  mutation VerifyMfa($challenge: String!, $code: String!) {\n    verifyMfa(challenge: $challenge, code: $code) {\n      identityToken\n      expiresAt\n      superuser\n      memberships {\n        tenant\n        roles\n        ssoRequired\n      }\n    }\n  }\n": types.VerifyMfaDocument,
     "\n  mutation BeginSso($email: String, $connection: String, $returnTo: String!, $codeChallenge: String!) {\n    beginSso(\n      email: $email\n      connection: $connection\n      returnTo: $returnTo\n      codeChallenge: $codeChallenge\n    ) {\n      authorizationUrl\n    }\n  }\n": types.BeginSsoDocument,
     "\n  mutation CompleteSso($code: String!, $codeVerifier: String!) {\n    completeSso(code: $code, codeVerifier: $codeVerifier) {\n      identityToken\n      expiresAt\n      superuser\n      memberships {\n        tenant\n        roles\n        ssoRequired\n      }\n    }\n  }\n": types.CompleteSsoDocument,
     "\n  mutation BeginSsoLink($identityToken: String!, $returnTo: String!) {\n    beginSsoLink(identityToken: $identityToken, returnTo: $returnTo) {\n      authorizationUrl\n    }\n  }\n": types.BeginSsoLinkDocument,
@@ -102,7 +118,7 @@ const documents: Documents = {
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
-export function graphql(source: "\n  query Members($criteria: MemberSearchCriteria!) {\n    members(criteria: $criteria) {\n      results {\n        email\n        firstName\n        lastName\n        enabled\n        roles {\n          token\n          name\n          owner\n        }\n        scope {\n          kind\n          token\n        }\n        managedByIdentityProvider\n        invitationPending\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n"): typeof import('./graphql').MembersDocument;
+export function graphql(source: "\n  query Members($criteria: MemberSearchCriteria!) {\n    members(criteria: $criteria) {\n      results {\n        email\n        firstName\n        lastName\n        enabled\n        roles {\n          token\n          name\n          owner\n        }\n        scope {\n          kind\n          token\n        }\n        managedByIdentityProvider\n        invitationPending\n        mfaEnabled\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n"): typeof import('./graphql').MembersDocument;
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
@@ -166,6 +182,34 @@ export function graphql(source: "\n  mutation AcceptInvitation($code: String!, $
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
+export function graphql(source: "\n  mutation BeginTotpEnrollment($identityToken: String!, $password: String!) {\n    beginTotpEnrollment(identityToken: $identityToken, password: $password) {\n      otpauthUri\n      secret\n      expiresAt\n    }\n  }\n"): typeof import('./graphql').BeginTotpEnrollmentDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation ConfirmTotpEnrollment($identityToken: String!, $password: String!, $code: String!) {\n    confirmTotpEnrollment(identityToken: $identityToken, password: $password, code: $code) {\n      codes\n      auth {\n        identityToken\n        expiresAt\n        superuser\n        memberships {\n          tenant\n          roles\n          ssoRequired\n        }\n      }\n    }\n  }\n"): typeof import('./graphql').ConfirmTotpEnrollmentDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation RegenerateRecoveryCodes($identityToken: String!, $password: String!, $code: String!) {\n    regenerateRecoveryCodes(identityToken: $identityToken, password: $password, code: $code) {\n      codes\n    }\n  }\n"): typeof import('./graphql').RegenerateRecoveryCodesDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation DisableTotp($identityToken: String!, $password: String!, $code: String!) {\n    disableTotp(identityToken: $identityToken, password: $password, code: $code)\n  }\n"): typeof import('./graphql').DisableTotpDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query MfaStatus($identityToken: String!) {\n    mfaStatus(identityToken: $identityToken) {\n      totpEnabled\n      enrolledAt\n      recoveryCodesRemaining\n    }\n  }\n"): typeof import('./graphql').MfaStatusDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query TenantMfa {\n    tenant {\n      token\n      mfaRequired\n      mfaRequiredByTier\n    }\n  }\n"): typeof import('./graphql').TenantMfaDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation SetOwnTenantMfaRequired($required: Boolean!) {\n    setTenantMfaRequired(required: $required) {\n      token\n      mfaRequired\n      mfaRequiredByTier\n    }\n  }\n"): typeof import('./graphql').SetOwnTenantMfaRequiredDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
 export function graphql(source: "\n  query ServiceAccounts($criteria: ServiceAccountSearchCriteria!) {\n    serviceAccounts(criteria: $criteria) {\n      results {\n        token\n        name\n        description\n        clientId\n        enabled\n        createdBy\n        createdAt\n        roles {\n          token\n          name\n          owner\n        }\n        scope {\n          kind\n          token\n        }\n        secrets {\n          hint\n          createdAt\n          expiresAt\n          lastUsedAt\n          active\n        }\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n    serviceAccountTokenEndpoint\n  }\n"): typeof import('./graphql').ServiceAccountsDocument;
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
@@ -191,6 +235,10 @@ export function graphql(source: "\n  mutation DeleteServiceAccount($token: Strin
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
 export function graphql(source: "\n  mutation Login($email: String!, $password: String!) {\n    login(email: $email, password: $password) {\n      identityToken\n      expiresAt\n      superuser\n      memberships {\n        tenant\n        roles\n        ssoRequired\n      }\n    }\n  }\n"): typeof import('./graphql').LoginDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation VerifyMfa($challenge: String!, $code: String!) {\n    verifyMfa(challenge: $challenge, code: $code) {\n      identityToken\n      expiresAt\n      superuser\n      memberships {\n        tenant\n        roles\n        ssoRequired\n      }\n    }\n  }\n"): typeof import('./graphql').VerifyMfaDocument;
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */

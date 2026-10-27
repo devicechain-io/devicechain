@@ -51,5 +51,17 @@
   "systemRolesDescription": "Roles that gate the admin API.",
   "systemRolesFormDescription": "System roles gate the admin API (e.g. superuser). Leave empty for none.",
   "systemRolesUpdatedToast": "System roles updated",
-  "title": "Identities"
+  "title": "Identities",
+  "colTwoFactor": "Two-factor",
+  "mfaOn": "On",
+  "mfaOff": "Off",
+  "mfaSectionTitle": "Two-factor authentication",
+  "mfaSectionDescription": "Whether a password sign-in for this identity asks for a code from an authenticator app.",
+  "mfaReset": "Reset two-factor",
+  "mfaResetConfirmTitle": "Reset two-factor authentication",
+  "mfaResetConfirm": "This removes {{email}}'s authenticator and recovery codes and ends every session they have. Their next sign-in asks for the password only, and they can set up two-factor authentication again.",
+  "mfaResetToast": "Two-factor authentication reset for {{email}}",
+  "mfaResetNeedsPassword": "This identity has had wrong codes recently, so its password may be known to someone else. Set a new password together with the reset.",
+  "mfaNewPasswordLabel": "New password",
+  "mfaResetWithPassword": "Reset and set password"
 }

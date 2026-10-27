@@ -81,6 +81,8 @@ function tenant(overrides: Partial<AdminTenant> = {}): AdminTenant {
     purgeState: 'NONE',
     purgeEpoch: null,
     ssoEnforced: false,
+    mfaRequired: false,
+    mfaRequiredByTier: false,
     tier: TIER,
     config: '{"region":"eu-west"}',
     ingestReadingsPerSecond: 500,

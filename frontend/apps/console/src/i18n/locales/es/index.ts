@@ -29,6 +29,7 @@ import esAudit from './audit.json';
 import esIdentities from './identities.json';
 import esRoles from './roles.json';
 import esMembers from './members.json';
+import esSecurity from './security.json';
 import esAiProviders from './aiProviders.json';
 import esIdentityProviders from './identityProviders.json';
 import esAiPackaging from './aiPackaging.json';
@@ -72,6 +73,7 @@ const es = {
     versions: esVersions,
     updates: esUpdates,
     members: esMembers,
+    security: esSecurity,
 } as const;
 
 export default es;

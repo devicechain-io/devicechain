@@ -196,5 +196,9 @@
   "saCopyManually": "Could not copy automatically. The secret is selected: copy it with your keyboard.",
   "saUsingTitle": "Obtaining a token",
   "saUsingDescription": "An integration exchanges its client ID and secret for an access token with the OAuth client_credentials grant, then sends it as a Bearer token. Tokens last 5 minutes; request a new one when it expires.",
-  "saNoTokenEndpoint": "This instance has no OAuth issuer configured, so service accounts cannot obtain tokens yet. Ask your operator to set one."
+  "saNoTokenEndpoint": "This instance has no OAuth issuer configured, so service accounts cannot obtain tokens yet. Ask your operator to set one.",
+  "colTwoFactor": "Two-factor",
+  "twoFactorOn": "On",
+  "twoFactorOff": "Off",
+  "twoFactorNone": "—"
 }

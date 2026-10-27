@@ -14,6 +14,7 @@ import {
 } from 'react';
 import {
   login as apiLogin,
+  verifyMfa as apiVerifyMfa,
   completeSso as apiCompleteSso,
   selectTenant as apiSelectTenant,
   refresh as apiRefresh,
@@ -73,6 +74,24 @@ interface AuthContextValue {
    * returned identityToken to do that.
    */
   login: (email: string, password: string) => Promise<IdentityAuth>;
+  /**
+   * Finish a sign-in that login held for a second factor (it failed with MFA_CHALLENGE):
+   * `code` is an authenticator code or a recovery code. Answers and stores exactly what login
+   * does, so everything after (selectTenant, refresh, logout) is the same.
+   */
+  verifyMfa: (challenge: string, code: string) => Promise<IdentityAuth>;
+  /**
+   * Replace the identity session with a fresh sign-in the server handed back (turning two-factor
+   * authentication on ends every session the account had, and answers the caller's
+   * replacement). A tenant session already held is renewed against the new identity so the
+   * person carries on where they are; the identity session stays even when that fails.
+   */
+  adoptIdentity: (auth: IdentityAuth) => Promise<void>;
+  /**
+   * Drop every local session WITHOUT asking the server to end them, for the moment the server
+   * has just ended them itself (two-factor authentication turned off). Sign-out proper is logout.
+   */
+  forgetSessions: () => void;
   /**
    * Redeem the one-time code a single sign-on returned (with the verifier held since the
    * sign-in began). The result is stored exactly as login's is, so every later step
@@ -362,6 +381,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [applyIdentity],
   );
 
+  // A held sign-in finishes with the code: the result is stored exactly as login's is.
+  const verifyMfa = useCallback(
+    async (challenge: string, code: string) => {
+      const auth = await apiVerifyMfa(challenge, code);
+      applyIdentity({
+        identityToken: auth.identityToken,
+        method: 'password',
+        superuser: auth.superuser,
+        memberships: auth.memberships,
+      });
+      return auth;
+    },
+    [applyIdentity],
+  );
+
   // Single sign-on's step 1: the code from the provider's return replaces the password.
   const completeSso = useCallback(
     async (code: string, verifier: string) => {
@@ -418,6 +452,38 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [applyIdentity]);
 
+  // Turning two-factor on rotates the account's session epoch: the identity token that enrolled
+  // and the tenant session beside it both stop working, and the server hands back a fresh
+  // identity. Swap it in, then re-enter the tenant the person was in so they are not thrown out
+  // at the next refresh.
+  const adoptIdentity = useCallback(
+    async (auth: IdentityAuth) => {
+      const tenant = decodeToken(tokensRef.current?.accessToken ?? '')?.tenant ?? null;
+      applyIdentity({
+        identityToken: auth.identityToken,
+        method: 'password',
+        superuser: auth.superuser,
+        memberships: auth.memberships,
+      });
+      if (tenant) {
+        try {
+          const pair = await apiSelectTenant(auth.identityToken, tenant);
+          applyTokens({ accessToken: pair.accessToken, refreshToken: pair.refreshToken });
+        } catch {
+          // The old tenant session ends on its own at its next refresh; the identity
+          // session above is already the fresh one, so signing in again is one step away.
+        }
+      }
+    },
+    [applyIdentity, applyTokens],
+  );
+
+  const forgetSessions = useCallback(() => {
+    session.reset();
+    applyTokens(null);
+    applyIdentity(null);
+  }, [session, applyTokens, applyIdentity]);
+
   const claims = useMemo(
     () => (tokens ? decodeToken(tokens.accessToken) : null),
     [tokens],
@@ -437,6 +503,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isAuthenticated: sessionAlive,
       isLoading,
       login,
+      verifyMfa,
+      adoptIdentity,
+      forgetSessions,
       completeSso,
       acceptInvitation,
       selectTenant,
@@ -454,6 +523,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       identityAlive,
       isLoading,
       login,
+      verifyMfa,
+      adoptIdentity,
+      forgetSessions,
       completeSso,
       acceptInvitation,
       selectTenant,

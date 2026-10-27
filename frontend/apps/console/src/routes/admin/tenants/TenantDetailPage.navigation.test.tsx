@@ -24,6 +24,8 @@ function tenant(token: string, name: string): AdminTenant {
     purgeState: 'NONE',
     purgeEpoch: null,
     ssoEnforced: false,
+    mfaRequired: false,
+    mfaRequiredByTier: false,
     tier: TIER,
     config: '',
     ingestReadingsPerSecond: null,

@@ -138,5 +138,16 @@
   "fencePositionCeilingLabel": "Puntos por geocerca",
   "calculatedMetricsPerProfileLabel": "Métricas calculadas por perfil",
   "integrationsPerTenantLabel": "Integraciones por inquilino",
-  "fenceCapMaximumHint": "Cada uno de estos tres tiene además un máximo de plataforma; un número mayor se rechaza en vez de reducirse en silencio."
+  "fenceCapMaximumHint": "Cada uno de estos tres tiene además un máximo de plataforma; un número mayor se rechaza en vez de reducirse en silencio.",
+  "mfaPanelTitle": "Autenticación en dos pasos",
+  "mfaPanelDescription": "Exige un código de una aplicación de autenticación cuando las personas del inquilino inician sesión con contraseña. Los superusuarios están exentos, y el inicio de sesión único sigue los requisitos de su propia conexión.",
+  "mfaRequire": "Exigir dos pasos",
+  "mfaStopRequiring": "Dejar de exigir",
+  "mfaRequiredBadge": "Exigida",
+  "mfaNotRequiredBadge": "No exigida",
+  "mfaByTierNote": "El nivel del inquilino exige la autenticación en dos pasos, así que no se puede desactivar aquí.",
+  "mfaEnableConfirmTitle": "Exigir dos pasos en {{token}}",
+  "mfaEnableConfirm": "Los miembros de {{token}} que inicien sesión con contraseña y sin segundo factor tendrán que configurar uno antes de entrar, y las sesiones con contraseña que ya estén dentro terminan en su próxima renovación.",
+  "mfaEnabledToast": "{{token}} ahora exige autenticación en dos pasos",
+  "mfaDisabledToast": "{{token}} ya no exige autenticación en dos pasos"
 }

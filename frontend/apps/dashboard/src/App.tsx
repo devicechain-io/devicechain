@@ -63,12 +63,12 @@ import { LinkNotes } from './LinkNotes';
 import { Playlist } from './Playlist';
 import { SUPPORTED_LOCALES, setUserLocale } from './i18n/config';
 import { loadErrorMessage } from './i18n/loadError';
-import { signInErrorKey } from './i18n/signInError';
+import { mfaChallengeOf, mfaVerifyErrorKey, signInErrorKey, type MfaChallenge } from './i18n/signInError';
 import { listOpenableDashboards, loadDashboard, loadPublishedDashboard, withWidgetCode, type Loaded } from './load';
 import type { DashboardListItem } from './queries';
 import { MAP_RUNTIME } from './map-runtime';
 import { type DashDensity, type DashTheme, parseDashParams } from './params';
-import { LOGIN, type Membership, REFRESH, SELECT_TENANT, TENANT_BASEMAP } from './queries';
+import { LOGIN, type Membership, REFRESH, SELECT_TENANT, TENANT_BASEMAP, VERIFY_MFA } from './queries';
 import { endServerSession, finishSignOut } from './signOut';
 import {
   SSO_COMPLETE_PATH,
@@ -335,6 +335,25 @@ function SignIn({
   const [memberships, setMemberships] = useState<Membership[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The second-factor step: the challenge login held the sign-in for, the code being typed,
+  // and whether it is a recovery code. Component state only.
+  const [mfa, setMfa] = useState<MfaChallenge | null>(null);
+  const [mfaCode, setMfaCode] = useState('');
+  const [useRecovery, setUseRecovery] = useState(false);
+
+  // The challenge lapses five minutes after login issues it: say so when it does, rather
+  // than letting the viewer type a code the server will refuse.
+  useEffect(() => {
+    if (!mfa) return;
+    const wait = Math.max(0, Date.parse(mfa.expiresAt) - Date.now());
+    const timer = setTimeout(() => {
+      setMfa(null);
+      setMfaCode('');
+      setPassword('');
+      setError(t('signIn:mfaChallengeExpired'));
+    }, wait);
+    return () => clearTimeout(timer);
+  }, [mfa, t]);
 
   // 🔴 The two `rejectedKey`s differ because the two failures are different facts. At
   // this point the identity is already proven — the tenant is what did not work — so
@@ -351,38 +370,88 @@ function SignIn({
       });
   };
 
+  // Everything after the identity is established, by password or by password plus code.
+  const afterIdentity = (idToken: string, mships: Membership[]) => {
+    if (mships.length === 0) {
+      setError(t('signIn:noTenants'));
+      setBusy(false);
+      return;
+    }
+    // Every tenant requires single sign-on, which a password cannot enter: say so on
+    // the form, where the SSO button is, rather than offering choices that fail.
+    if (mships.every((m) => m.ssoRequired)) {
+      setError(t('signIn:ssoRequired'));
+      setBusy(false);
+      return;
+    }
+    if (mships.length === 1) {
+      selectTenant(idToken, mships[0].tenant);
+      return;
+    }
+    // More than one — hold the identity token and let the user pick a tenant.
+    setIdentityToken(idToken);
+    setMemberships(mships);
+    setBusy(false);
+  };
+
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true);
     setError(null);
     gql('user-management', LOGIN, { email, password }, { anonymous: true })
-      .then((r) => {
-        const { identityToken: idToken, memberships: mships } = r.login;
-        if (mships.length === 0) {
-          setError(t('signIn:noTenants'));
-          setBusy(false);
-          return;
-        }
-        // Every tenant requires single sign-on, which a password cannot enter: say so on
-        // the form, where the SSO button is, rather than offering choices that fail.
-        if (mships.every((m) => m.ssoRequired)) {
-          setError(t('signIn:ssoRequired'));
-          setBusy(false);
-          return;
-        }
-        if (mships.length === 1) {
-          selectTenant(idToken, mships[0].tenant);
-          return;
-        }
-        // More than one — hold the identity token and let the user pick a tenant.
-        setIdentityToken(idToken);
-        setMemberships(mships);
-        setBusy(false);
-      })
+      .then((r) => afterIdentity(r.login.identityToken, r.login.memberships))
       .catch((err: unknown) => {
+        // The password was right but the account is held for its second factor.
+        const challenge = mfaChallengeOf(err);
+        if (challenge) {
+          setMfa(challenge);
+          setMfaCode('');
+          setUseRecovery(false);
+          setBusy(false);
+          return;
+        }
         // The backend deliberately does not distinguish a bad email from a bad
         // password, so neither does this.
         setError(t(signInErrorKey(err, 'signIn:invalidCredentials')));
+        setBusy(false);
+      });
+  };
+
+  // Back to the password step: the held sign-in is dropped, and the password with it.
+  const leaveMfa = (message: string | null) => {
+    setMfa(null);
+    setMfaCode('');
+    setPassword('');
+    setError(message);
+    setBusy(false);
+  };
+
+  const submitMfa = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!mfa) return;
+    setError(null);
+    if (Date.parse(mfa.expiresAt) <= Date.now()) {
+      leaveMfa(t('signIn:mfaChallengeExpired'));
+      return;
+    }
+    setBusy(true);
+    gql('user-management', VERIFY_MFA, { challenge: mfa.challenge, code: mfaCode }, { anonymous: true })
+      .then((r) => {
+        // Accepted: the held sign-in is spent.
+        setMfa(null);
+        setMfaCode('');
+        afterIdentity(r.verifyMfa.identityToken, r.verifyMfa.memberships);
+      })
+      .catch((err: unknown) => {
+        setMfaCode('');
+        const key = mfaVerifyErrorKey(err);
+        if (key === 'signIn:mfaChallengeExpired') {
+          leaveMfa(t(key));
+          return;
+        }
+        // Every refusal of the code is the same message: the server does not say whether it
+        // was wrong, replayed or locked.
+        setError(t(key));
         setBusy(false);
       });
   };
@@ -435,6 +504,55 @@ function SignIn({
           </div>
           <LocaleSwitcher />
         </Card>
+      </Centered>
+    );
+  }
+
+  if (mfa) {
+    const recoveryToggle = mfa.methods.length === 0 || mfa.methods.includes('RECOVERY_CODE');
+    const ready = useRecovery ? mfaCode.length >= 8 : mfaCode.length === 6;
+    return (
+      <Centered>
+        <form onSubmit={submitMfa} style={{ display: 'contents' }}>
+          <Card data-shot="dash-signin-mfa">
+            <div style={{ fontSize: 18, fontWeight: 600 }}>{t('signIn:mfaTitle')}</div>
+            <Field label={useRecovery ? t('signIn:mfaRecoveryLabel') : t('signIn:mfaCodeLabel')}>
+              <TextInput
+                value={mfaCode}
+                onChange={(v) =>
+                  setMfaCode(
+                    useRecovery
+                      ? v.toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 19)
+                      : v.replace(/\D/g, '').slice(0, 6),
+                  )
+                }
+                autoComplete="one-time-code"
+                autoFocus
+                data-shot="dash-mfa-code"
+              />
+            </Field>
+            {error && <ErrorText>{error}</ErrorText>}
+            <HeaderButton type="submit" primary disabled={busy || !ready}>
+              {busy ? t('signIn:submitting') : t('signIn:mfaVerify')}
+            </HeaderButton>
+            {recoveryToggle && (
+              <HeaderButton
+                disabled={busy}
+                onClick={() => {
+                  setUseRecovery(!useRecovery);
+                  setMfaCode('');
+                  setError(null);
+                }}
+              >
+                {useRecovery ? t('signIn:mfaUseAuthenticator') : t('signIn:mfaUseRecovery')}
+              </HeaderButton>
+            )}
+            <HeaderButton disabled={busy} onClick={() => leaveMfa(null)}>
+              {t('signIn:ssoBack')}
+            </HeaderButton>
+            <LocaleSwitcher />
+          </Card>
+        </form>
       </Centered>
     );
   }

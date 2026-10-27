@@ -45,6 +45,7 @@ import enAudit from './locales/en/audit.json';
 import enIdentities from './locales/en/identities.json';
 import enRoles from './locales/en/roles.json';
 import enMembers from './locales/en/members.json';
+import enSecurity from './locales/en/security.json';
 import enAiProviders from './locales/en/aiProviders.json';
 import enIdentityProviders from './locales/en/identityProviders.json';
 import enAiPackaging from './locales/en/aiPackaging.json';
@@ -141,6 +142,8 @@ export const NAMESPACES = [
   // The tenant's own team: members, invitations, the tenant's roles, and the customer
   // users seen from a customer's page.
   'members',
+  // The signed-in person's own two-factor authentication, and the tenant's requirement of it.
+  'security',
 ] as const;
 
 // English — the fallback — is bundled and synchronous, so the first paint in English needs no
@@ -182,6 +185,7 @@ const enResources = {
     versions: enVersions,
     updates: enUpdates,
     members: enMembers,
+    security: enSecurity,
   },
 } as const;
 

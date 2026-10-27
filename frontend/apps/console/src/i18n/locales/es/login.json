@@ -40,5 +40,18 @@
   "ssoRequiredBadge": "Requiere inicio de sesión único",
   "ssoUnavailable": "El inicio de sesión único no está disponible en este momento.",
   "tooManyAttempts": "Demasiados intentos fallidos de inicio de sesión para esta cuenta. Espera un momento y vuelve a intentarlo.",
-  "usePassword": "Usar una contraseña"
+  "usePassword": "Usar una contraseña",
+  "mfaSubtitle": "Introduce tu código de verificación para terminar de iniciar sesión",
+  "mfaCodeLabel": "Código del autenticador",
+  "mfaCodeHint": "El código de 6 dígitos de tu aplicación de autenticación.",
+  "mfaRecoveryLabel": "Código de recuperación",
+  "mfaRecoveryHint": "Uno de los códigos de recuperación que guardaste al configurar la autenticación en dos pasos. Cada uno sirve una sola vez.",
+  "mfaVerify": "Verificar",
+  "mfaUseRecovery": "Usar un código de recuperación",
+  "mfaUseAuthenticator": "Usar un código del autenticador",
+  "mfaInvalidCode": "Ese código no funcionó. Compruébalo e inténtalo de nuevo.",
+  "mfaRateLimited": "Demasiados intentos. Espera un momento e inténtalo de nuevo.",
+  "mfaChallengeExpired": "Este inicio de sesión caducó. Introduce tu contraseña de nuevo para que se te pida un código.",
+  "mfaRequired": "Este inquilino exige autenticación en dos pasos. Inicia sesión de nuevo e introduce el código de tu aplicación de autenticación.",
+  "mfaEnrollmentRequired": "Este inquilino exige autenticación en dos pasos. Configúrala en los ajustes de seguridad de tu cuenta y vuelve a iniciar sesión."
 }

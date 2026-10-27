@@ -35,6 +35,7 @@ import {
   Webhook,
   type LucideIcon,
   KeyRound,
+  LockKeyhole,
   PlugZap,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -222,6 +223,9 @@ export const NAV: NavNode[] = [
       // the first two are separate, so the group keeps working at every combination:
       // one authority shows one child, none hides Settings entirely.
       { labelKey: 'language', href: '/locale', icon: Languages, requires: 'locale:write' },
+      // Whether the tenant requires a second factor of its people's password sign-ins. It
+      // changes who can get in, so it is gated on the member grant, not a cosmetic one.
+      { labelKey: 'security', href: '/tenant-security', icon: LockKeyhole, requires: 'member:write' },
     ],
   },
   // Inference providers for NL→rule authoring (ADR-056) are NOT here: they are

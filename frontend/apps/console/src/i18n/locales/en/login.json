@@ -40,5 +40,18 @@
   "ssoRequiredBadge": "Requires single sign-on",
   "ssoUnavailable": "Single sign-on is not available right now.",
   "tooManyAttempts": "Too many failed sign-in attempts for this account. Wait a moment, then try again.",
-  "usePassword": "Use a password instead"
+  "usePassword": "Use a password instead",
+  "mfaSubtitle": "Enter your verification code to finish signing in",
+  "mfaCodeLabel": "Authenticator code",
+  "mfaCodeHint": "The 6-digit code from your authenticator app.",
+  "mfaRecoveryLabel": "Recovery code",
+  "mfaRecoveryHint": "One of the recovery codes you saved when you set up two-factor authentication. Each works once.",
+  "mfaVerify": "Verify",
+  "mfaUseRecovery": "Use a recovery code instead",
+  "mfaUseAuthenticator": "Use an authenticator code instead",
+  "mfaInvalidCode": "That code did not work. Check it and try again.",
+  "mfaRateLimited": "Too many attempts. Wait a moment, then try again.",
+  "mfaChallengeExpired": "This sign-in timed out. Enter your password again to get a new code prompt.",
+  "mfaRequired": "This tenant requires two-factor authentication. Sign in again and enter the code from your authenticator app.",
+  "mfaEnrollmentRequired": "This tenant requires two-factor authentication. Set it up in your account security settings, then sign in again."
 }

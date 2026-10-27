@@ -45,6 +45,29 @@ export async function login(email: string, password: string): Promise<IdentityAu
   return data.login;
 }
 
+// An account with two-factor authentication on does not get its token from login: login fails
+// with the error code MFA_CHALLENGE (see lib/api/mfa.ts, mfaChallengeOf) and verifyMfa finishes
+// the sign-in with a code. It answers exactly what login answers, so everything after is shared.
+const VERIFY_MFA = graphql(`
+  mutation VerifyMfa($challenge: String!, $code: String!) {
+    verifyMfa(challenge: $challenge, code: $code) {
+      identityToken
+      expiresAt
+      superuser
+      memberships {
+        tenant
+        roles
+        ssoRequired
+      }
+    }
+  }
+`);
+
+export async function verifyMfa(challenge: string, code: string): Promise<IdentityAuth> {
+  const data = await gql('user-management', VERIFY_MFA, { challenge, code }, { anonymous: true });
+  return data.verifyMfa;
+}
+
 // ── Single sign-on (unauthenticated) ────────────────────────────────────
 //
 // beginSso answers with where to send the browser (the identity provider's own sign-in

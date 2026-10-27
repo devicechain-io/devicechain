@@ -113,6 +113,16 @@ describe('the Settings group', () => {
     expect(entry('Map')).toBeNull();
   });
 
+  // Whether the tenant requires a second factor changes who can get in, so it is gated on
+  // the member grant and not on a cosmetic one.
+  it('shows Security to a holder of member:write, and not to the cosmetic grants', () => {
+    renderWith(['member:write'], '/tenant-security');
+    expect(entry('Security')).toBeTruthy();
+    cleanup();
+    renderWith(['branding:write', 'basemap:write', 'locale:write'], '/branding');
+    expect(entry('Security')).toBeNull();
+  });
+
   // 🔴 The empty-group case. A group whose children are all filtered away must
   // disappear rather than sit there opening onto nothing — this is the failure a tab
   // strip would have had to re-derive, and it is why the group shape was chosen.

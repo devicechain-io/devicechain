@@ -87,8 +87,73 @@ export function signInErrorKey(err: unknown, rejectedKey: string): string {
     // the code like the two above, never on the message text.
     case 'SSO_REQUIRED':
       return 'signIn:ssoRequired';
+    // The tenant needs a second factor and this sign-in had none. The account has one
+    // (MFA_REQUIRED): signing in again and entering the code is the remedy. It has none yet
+    // (MFA_ENROLLMENT_REQUIRED): this viewer cannot set one up, the console can.
+    case 'MFA_REQUIRED':
+      return 'signIn:mfaRequired';
+    case 'MFA_ENROLLMENT_REQUIRED':
+      return 'signIn:mfaEnrollmentRequired';
   }
   return serverRejectedRequest(err) ? rejectedKey : 'signIn:serverUnreachable';
+}
+
+/** What login's MFA_CHALLENGE error carries: the handle verifyMfa needs, and when it lapses. */
+export interface MfaChallenge {
+  challenge: string;
+  /** RFC 3339; the challenge accepts attempts until then. */
+  expiresAt: string;
+  /** `TOTP` and `RECOVERY_CODE`. */
+  methods: string[];
+}
+
+/**
+ * The challenge login held the sign-in for, or null when the error is anything else. An
+ * account with two-factor authentication on does not get a token from its password alone:
+ * login fails with the code MFA_CHALLENGE, and the handle rides in the error's extensions.
+ * It lives in component state only: never in the address, never in storage.
+ */
+export function mfaChallengeOf(err: unknown): MfaChallenge | null {
+  if (serverErrorCode(err) !== 'MFA_CHALLENGE') return null;
+  const ext = (err as GraphQLRequestError).errors?.[0]?.extensions as Record<string, unknown> | undefined;
+  const challenge = ext?.challenge;
+  const expiresAt = ext?.expiresAt;
+  if (typeof challenge !== 'string' || challenge === '' || typeof expiresAt !== 'string') return null;
+  const methods = Array.isArray(ext?.methods)
+    ? (ext.methods as unknown[]).filter((m): m is string => typeof m === 'string')
+    : [];
+  return { challenge, expiresAt, methods };
+}
+
+// 🔴 THE ONE PLACE THIS FEATURE MATCHES PROSE. verifyMfa's per-source rate limit is the only
+// refusal in the feature with no `extensions.code` (every other failure of a code check is
+// deliberately the same uniform "invalid code"). Until the server gives it a code, the exact
+// message is the only way to tell "slow down" from "wrong code". If the match goes stale the
+// rate limit reads as "invalid code", which is the safe direction.
+const RATE_LIMITED_MESSAGE = 'too many attempts; try again shortly';
+
+/**
+ * The catalog key for a failed verifyMfa. A wrong, replayed or locked code are ONE answer on
+ * the server and one message here; an expired challenge means signing in again; a rate limit
+ * and an outage read as themselves.
+ */
+export function mfaVerifyErrorKey(err: unknown): string {
+  switch (serverErrorCode(err)) {
+    case 'MFA_CHALLENGE_EXPIRED':
+      return 'signIn:mfaChallengeExpired';
+    case 'THROTTLED':
+      return 'signIn:tooManyAttempts';
+    case 'UNAVAILABLE':
+      return 'signIn:signInUnavailable';
+    case undefined:
+      if (
+        err instanceof GraphQLRequestError &&
+        err.errors?.[0]?.message?.trim().toLowerCase() === RATE_LIMITED_MESSAGE
+      ) {
+        return 'signIn:mfaRateLimited';
+      }
+  }
+  return serverRejectedRequest(err) ? 'signIn:mfaInvalidCode' : 'signIn:serverUnreachable';
 }
 
 /** The machine-readable code on the server's first error, when it sent one. */
