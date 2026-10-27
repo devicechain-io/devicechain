@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -33,6 +34,8 @@ func NewHTTPClient(caFile, serverName string, origin *url.URL, allowInsecure boo
 	}
 	tr := &http.Transport{
 		TLSClientConfig:       &tls.Config{RootCAs: pool, ServerName: serverName, MinVersion: tls.VersionTLS12},
+		DialContext:           (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		TLSHandshakeTimeout:   10 * time.Second,
 		ResponseHeaderTimeout: 30 * time.Second,
 		IdleConnTimeout:       30 * time.Second,
 	}

@@ -25,12 +25,13 @@ import (
 	"os"
 	"os/signal"
 	"sync"
+	"syscall"
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 
 	"devicechain.io/examples/ota-device/internal/boot"
-	"devicechain.io/examples/ota-device/internal/build"
+	"devicechain.io/examples/ota-device/internal/buildinfo"
 	"devicechain.io/examples/ota-device/internal/device"
 	"devicechain.io/examples/ota-device/internal/verify"
 )
@@ -39,11 +40,14 @@ func main() {
 	// `describe` comes first and touches nothing: no flags, no files, no network. The preflight
 	// runs an image that has only just been verified, with an empty environment.
 	if len(os.Args) == 2 && os.Args[1] == "describe" {
-		_ = json.NewEncoder(os.Stdout).Encode(verify.Identity{Product: build.Product, Version: build.Version})
+		_ = json.NewEncoder(os.Stdout).Encode(verify.Identity{Product: buildinfo.Product, Version: buildinfo.Version})
 		return
 	}
 	os.Exit(run())
 }
+
+// tlsScheme lists the broker URL schemes that carry TLS.
+var tlsScheme = map[string]bool{"ssl": true, "tls": true, "mqtts": true, "tcps": true, "wss": true}
 
 type mqttSender struct {
 	c     mqtt.Client
@@ -75,10 +79,11 @@ func run() int {
 		origin     = flag.String("origin", "", "instance origin that download grants must point at, e.g. https://dc.example.com")
 		downloadCA = flag.String("download-ca", "", "extra CA certificate (PEM) for the download origin (defaults to --ca)")
 		component  = flag.String("component", "firmware", "the component this image is")
-		product    = flag.String("product", build.Product, "the product this device is; an image for another product is refused")
+		product    = flag.String("product", buildinfo.Product, "the product this device is; an image for another product is refused")
 		trustFile  = flag.String("trust", "", "PEM file of the public keys this device trusts to sign images")
 		allowUnsig = flag.Bool("allow-unsigned", false, "accept an UNVERIFIED assignment (labs only)")
 		allowDown  = flag.Bool("allow-downgrade", false, "accept a version that is not newer than the running one (labs only)")
+		allowPlain = flag.Bool("allow-insecure-broker", false, "accept a broker URL that is not TLS (labs only)")
 		allowHTTP  = flag.Bool("allow-insecure-download", false, "accept a plain-http download base (labs only)")
 	)
 	flag.Parse()
@@ -89,6 +94,13 @@ func run() int {
 			lg.Printf("--%s is required", name)
 			return 2
 		}
+	}
+	if bu, err := url.Parse(*broker); err != nil || bu.Host == "" {
+		lg.Printf("--broker must be a URL such as ssl://mqtt.example.com:8883")
+		return 2
+	} else if !tlsScheme[bu.Scheme] && !*allowPlain {
+		lg.Printf("--broker scheme %q is not TLS (ssl, tls, mqtts, tcps, wss); pass --allow-insecure-broker to accept that", bu.Scheme)
+		return 2
 	}
 	secret := *secretFlag
 	if secret == "" {
@@ -132,7 +144,7 @@ func run() int {
 	_, _ = rand.Read(rb[:])
 	bootID := fmt.Sprintf("%d-%s", time.Now().UnixNano(), hex.EncodeToString(rb[:]))
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	rebootCh := make(chan struct{})
 	var once sync.Once
@@ -166,7 +178,7 @@ func run() int {
 	sender := &mqttSender{topic: reports}
 	agent, err := device.New(device.Config{
 		Root: *root, Slot: os.Getenv("OTA_SLOT"), Component: *component, Product: *product,
-		Version: build.Version, BootID: bootID, Trust: trust, RequireSigned: !*allowUnsig,
+		Version: buildinfo.Version, BootID: bootID, Trust: trust, RequireSigned: !*allowUnsig,
 		AllowDowngrade: *allowDown, Origin: org, AllowInsecure: *allowHTTP, HTTP: httpc, Async: true,
 		Reboot: func() { once.Do(func() { close(rebootCh) }) },
 		Log:    func(f string, a ...any) { lg.Printf(f, a...) },
@@ -201,10 +213,14 @@ func run() int {
 	client := mqtt.NewClient(opts)
 	sender.c = client
 	client.Connect() // retries in the background (SetConnectRetry)
-	lg.Printf("version %s (product %s) slot %q bootId %s", build.Version, *product, os.Getenv("OTA_SLOT"), bootID)
+	lg.Printf("version %s (product %s) slot %q bootId %s", buildinfo.Version, *product, os.Getenv("OTA_SLOT"), bootID)
 
+	tick := time.NewTicker(30 * time.Second)
+	defer tick.Stop()
 	for {
 		select {
+		case <-tick.C:
+			agent.Tick(ctx)
 		case b := <-inbox:
 			agent.Handle(ctx, b)
 		case <-rebootCh:

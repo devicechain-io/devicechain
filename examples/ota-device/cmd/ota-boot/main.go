@@ -15,6 +15,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"syscall"
 	"time"
 
 	"devicechain.io/examples/ota-device/internal/boot"
@@ -32,7 +33,7 @@ func main() {
 	if err := boot.Init(*root); err != nil {
 		lg.Fatal(err)
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	sup := &boot.Supervisor{
 		Root: *root, Run: boot.ProcessRunner(*root, flag.Args(), *confirm, nil),

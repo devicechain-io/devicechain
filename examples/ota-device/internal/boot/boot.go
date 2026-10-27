@@ -55,6 +55,9 @@ func (s State) Validate() error {
 	if s.Pending != "" && !validSlot(s.Pending) {
 		return fmt.Errorf("pending slot %q is not a or b", s.Pending)
 	}
+	if s.Pending != "" && s.Pending == s.Confirmed {
+		return errors.New("the pending slot is the confirmed one")
+	}
 	if s.Pending == "" && s.Tries != 0 {
 		return errors.New("tries is set with nothing pending")
 	}

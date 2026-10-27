@@ -105,7 +105,14 @@ func ParseTrust(data []byte) (*TrustSet, error) {
 		if err != nil {
 			return nil, fmt.Errorf("trust set: %w", err)
 		}
-		sum := sha256.Sum256(blk.Bytes)
+		// The id is over the key's canonical DER, as the platform computes it, not over the bytes
+		// this PEM happened to carry: an encoding the key can be written in two ways must not
+		// give one key two ids.
+		der, err := x509.MarshalPKIXPublicKey(pub)
+		if err != nil {
+			return nil, fmt.Errorf("trust set: %w", err)
+		}
+		sum := sha256.Sum256(der)
 		id := hex.EncodeToString(sum[:])
 		switch k := pub.(type) {
 		case *ecdsa.PublicKey:
@@ -137,10 +144,18 @@ func LoadTrust(path string) (*TrustSet, error) {
 }
 
 // Len is the number of keys held.
-func (t *TrustSet) Len() int { return len(t.keys) }
+func (t *TrustSet) Len() int {
+	if t == nil {
+		return 0
+	}
+	return len(t.keys)
+}
 
 // KeyIDs lists the held keys' ids.
 func (t *TrustSet) KeyIDs() []string {
+	if t == nil {
+		return nil
+	}
 	out := make([]string, 0, len(t.keys))
 	for id := range t.keys {
 		out = append(out, id)
@@ -152,6 +167,9 @@ func (t *TrustSet) KeyIDs() []string {
 // what both algorithms sign. digest is the "sha256:<hex>" of the bytes the device holds. A keyId
 // the set does not hold is UNKNOWN_SIGNER; every other refusal is SIGNATURE_INVALID.
 func (t *TrustSet) VerifySignature(digest, keyID, algorithm, sigB64 string) error {
+	if t == nil {
+		return fail(wire.CodeUnknownSigner, "this device holds no trusted keys")
+	}
 	key, ok := t.keys[keyID]
 	if !ok {
 		return fail(wire.CodeUnknownSigner, "key %s is not in this device's trust set", keyID)
@@ -383,6 +401,7 @@ func Describe(ctx context.Context, image string, timeout time.Duration) (Identit
 	defer cancel()
 	cmd := exec.CommandContext(ctx, image, "describe")
 	cmd.Dir = scratch
+	cmd.WaitDelay = time.Second // a killed image that left a child holding the pipe must not hold us
 	cmd.Env = []string{}
 	var out limitedBuffer
 	cmd.Stdout = &out

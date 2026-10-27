@@ -68,3 +68,15 @@ func SyncDir(dir string) error {
 	defer d.Close()
 	return d.Sync()
 }
+
+// RemoveStaleTemps deletes the temporary files an interrupted WriteFileAtomic leaves beside the
+// named files (<name>.tmp*). Each is a complete copy of a state file that was never renamed into
+// place, so it is never state, only litter.
+func RemoveStaleTemps(dir string, names ...string) {
+	for _, n := range names {
+		m, _ := filepath.Glob(filepath.Join(dir, n+".tmp*"))
+		for _, f := range m {
+			_ = os.Remove(f)
+		}
+	}
+}

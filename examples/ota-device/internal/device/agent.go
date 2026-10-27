@@ -15,6 +15,11 @@
 //
 // No image executes before the first two have passed. TestNothingRunsBeforeIntegrityAndAuthenticity
 // holds that order.
+//
+// The agent keeps two stages per attempt. Stage is what THIS device has done and is made durable
+// BEFORE each step is taken (and before its report is sent), because the device's decisions must
+// not depend on the link being up. Reported is the last stage the platform is known to have
+// received. When they differ the difference is resent on the next connect.
 package device
 
 import (
@@ -22,6 +27,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"os"
@@ -74,13 +80,16 @@ type Config struct {
 
 	PreflightTimeout time.Duration
 	ProgressEvery    time.Duration
+	IdleTimeout      time.Duration // a download that delivers nothing for this long is cut
 	GrantAttempts    int
 	RetryDelay       time.Duration
+	AskMin, AskMax   time.Duration // bounds of the periodic grant re-request (default 1m, 5m)
 	Sleep            func(context.Context, time.Duration)
 	Now              func() time.Time
-	SelfPath         string // the running executable, hashed to prove what runs
-	Async            bool   // run a grant's download on its own goroutine
-	Reboot           func() // called once the new slot is staged
+	Jitter           func() float64 // in [0,1); default math/rand
+	SelfPath         string         // the running executable, hashed to prove what runs
+	Async            bool           // run a grant's download on its own goroutine
+	Reboot           func()         // called once the new slot is staged
 	Log              func(format string, args ...any)
 }
 
@@ -98,7 +107,11 @@ type attempt struct {
 	Algorithm      string `json:"algorithm,omitempty"`
 	RequiresReboot bool   `json:"requiresReboot"`
 	Seq            uint64 `json:"seq"`
-	Stage          string `json:"stage"`
+	Stage          string `json:"stage"`    // what this device has done
+	Reported       string `json:"reported"` // the last stage known to have been sent
+	FailCode       string `json:"failCode,omitempty"`
+	FailDetail     string `json:"failDetail,omitempty"`
+	RunDigest      string `json:"runDigest,omitempty"`
 }
 
 // Agent is the update agent.
@@ -109,9 +122,12 @@ type Agent struct {
 	mu       sync.Mutex
 	at       *attempt
 	busy     bool
+	gen      uint64 // bumped whenever the attempt a download belongs to is ended or replaced
 	cancelDL context.CancelFunc
 	asks     int
 	lastProg time.Time
+	nextAsk  time.Time
+	backoff  time.Duration
 }
 
 // New builds an agent and loads the attempt it was working on, if any. An attempt file that cannot
@@ -126,14 +142,26 @@ func New(cfg Config, send Sender) (*Agent, error) {
 	if cfg.Sleep == nil {
 		cfg.Sleep = sleep
 	}
+	if cfg.Jitter == nil {
+		cfg.Jitter = rand.Float64
+	}
 	if cfg.PreflightTimeout == 0 {
 		cfg.PreflightTimeout = 5 * time.Second
 	}
 	if cfg.ProgressEvery == 0 {
 		cfg.ProgressEvery = time.Second
 	}
+	if cfg.IdleTimeout == 0 {
+		cfg.IdleTimeout = 30 * time.Second
+	}
 	if cfg.GrantAttempts == 0 {
 		cfg.GrantAttempts = 5
+	}
+	if cfg.AskMin == 0 {
+		cfg.AskMin = time.Minute
+	}
+	if cfg.AskMax == 0 {
+		cfg.AskMax = 5 * time.Minute
 	}
 	if cfg.HTTP == nil {
 		cfg.HTTP = &http.Client{}
@@ -145,6 +173,7 @@ func New(cfg Config, send Sender) (*Agent, error) {
 		return nil, errors.New("device: signatures are required but the trust set is empty")
 	}
 	a := &Agent{cfg: cfg, send: send}
+	fsutil.RemoveStaleTemps(cfg.Root, "attempt.json", "rollback.json")
 	b, err := os.ReadFile(a.attemptPath())
 	switch {
 	case errors.Is(err, os.ErrNotExist):
@@ -152,7 +181,7 @@ func New(cfg Config, send Sender) (*Agent, error) {
 		cfg.Log("attempt state unreadable, ignoring it: %v", err)
 	default:
 		var at attempt
-		if err := json.Unmarshal(b, &at); err != nil || wire.StageRank(at.Stage) == 0 {
+		if err := json.Unmarshal(b, &at); err != nil || (at.Stage != "" && wire.StageRank(at.Stage) == 0) {
 			cfg.Log("attempt state corrupt, ignoring it")
 		} else {
 			a.at = &at
@@ -182,13 +211,21 @@ func (a *Agent) inactive() string {
 	return boot.Other(a.cfg.Slot)
 }
 
+// partPath is where a download accumulates. Only the download writes there. Once the bytes are
+// complete the file is renamed to stagePath, a name nothing writes to, and everything after that
+// (hashing, verifying, running describe, installing) works on the renamed file.
 func (a *Agent) partPath() string {
 	return filepath.Join(boot.SlotDir(a.cfg.Root, a.inactive()), "ota-device.part"+fsutil.ExeSuffix())
 }
 
-func (a *Agent) removePart() {
+func (a *Agent) stagePath() string {
+	return filepath.Join(boot.SlotDir(a.cfg.Root, a.inactive()), "ota-device.stage"+fsutil.ExeSuffix())
+}
+
+func (a *Agent) removeFiles() {
 	if a.inactive() != "" {
 		_ = os.Remove(a.partPath())
+		_ = os.Remove(a.stagePath())
 	}
 }
 
@@ -200,14 +237,18 @@ func (a *Agent) saveLocked() error {
 	return fsutil.WriteFileAtomic(a.attemptPath(), b, 0o600)
 }
 
-// reportLocked sends one update.progress for the current attempt. The sequence number is made
-// durable BEFORE the frame is sent, so a crash can only ever skip a number, never reuse one for a
-// different report. The stage is committed only once the frame has gone out, so a RUNNING that
-// could not be sent is sent again on the next connect.
+// reportLocked makes the stage durable and then sends the report. The stage and the sequence
+// number are written BEFORE the frame goes out: what the device does next must not depend on the
+// link, and a crash can only ever skip a sequence number, never reuse one for a different report.
+// Reported advances only once the frame has been sent. The returned error is the send's (or the
+// write's); callers that go on regardless are right to, because the stage is already durable.
 func (a *Agent) reportLocked(stage string, mod func(*wire.Report)) error {
 	at := a.at
+	prevSeq, prevStage := at.Seq, at.Stage
 	at.Seq++
+	at.Stage = stage
 	if err := a.saveLocked(); err != nil {
+		at.Seq, at.Stage = prevSeq, prevStage // not durable, so it did not happen
 		return err
 	}
 	r := wire.Report{
@@ -224,7 +265,7 @@ func (a *Agent) reportLocked(stage string, mod func(*wire.Report)) error {
 	if err := a.send.Send(b); err != nil {
 		return err
 	}
-	at.Stage = stage
+	at.Reported = stage
 	return a.saveLocked()
 }
 
@@ -234,12 +275,15 @@ func (a *Agent) failLocked(code, format string, args ...any) {
 		detail = detail[:500]
 	}
 	a.cfg.Log("update %s failed: %s: %s", a.at.AttemptID, code, detail)
-	a.removePart()
-	if err := a.reportLocked(wire.StageFailed, func(r *wire.Report) {
-		r.Result = &wire.Result{Code: code, Detail: detail}
-	}); err != nil {
-		a.cfg.Log("could not report the failure: %v", err)
+	a.removeFiles()
+	a.at.FailCode, a.at.FailDetail = code, detail
+	if err := a.reportLocked(wire.StageFailed, failResult(a.at)); err != nil {
+		a.cfg.Log("could not report the failure (it is resent on the next connect): %v", err)
 	}
+}
+
+func failResult(at *attempt) func(*wire.Report) {
+	return func(r *wire.Report) { r.Result = &wire.Result{Code: at.FailCode, Detail: at.FailDetail} }
 }
 
 func (a *Agent) failVerifyLocked(err error) {
@@ -263,28 +307,30 @@ func (a *Agent) requestGrantLocked() error {
 	return a.sendFrame(wire.DownloadRequest{V: wire.Version, Kind: wire.KindDownloadRequest, AssignmentID: a.at.AssignmentID})
 }
 
+func (a *Agent) inFlightLocked() bool {
+	return a.at != nil && !wire.Terminal(a.at.Stage) && wire.StageRank(a.at.Stage) >= wire.StageRank(wire.StageInstalling)
+}
+
 // OnConnect runs on every (re)connect, after the subscription to device-desired is in place. It
 // settles whatever the last boot left undecided, tells the platform what really runs, and syncs.
 //
 //  1. a rollback note from the launcher: the update the platform is waiting for did not arrive,
-//     so report it FAILED/ROLLED_BACK;
-//  2. if this slot is the pending one, it has come up healthy (it is connected), so confirm it,
-//     and report RUNNING with the version compiled into THIS binary and the digest of THIS file;
-//  3. an inventory, which is how an update the platform marked UNKNOWN is resolved;
-//  4. the sync, which makes the platform resend anything this device should still be doing.
+//     so it is FAILED/ROLLED_BACK;
+//  2. an inventory and the sync, sent before anything is confirmed: a slot is confirmed only once
+//     the platform has been told, and (when an update is in flight) only if what runs really is
+//     the update's version and file;
+//  3. RUNNING, carrying the version compiled into THIS binary and the digest of THIS file;
+//  4. whatever an earlier link outage kept from being reported.
 func (a *Agent) OnConnect(ctx context.Context) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	inFlight := func() bool {
-		return a.at != nil && !wire.Terminal(a.at.Stage) && wire.StageRank(a.at.Stage) >= wire.StageRank(wire.StageInstalling)
-	}
 
 	rb, err := boot.ReadRollback(a.cfg.Root)
 	if err != nil {
 		a.cfg.Log("rollback note unreadable: %v", err)
 	}
 	if rb != nil {
-		if inFlight() {
+		if a.inFlightLocked() {
 			a.failLocked(CodeRolledBack, "booted %s, expected %s: %s", a.cfg.Version, a.at.Version, rb.Reason)
 		}
 		if err := boot.ClearRollback(a.cfg.Root); err != nil {
@@ -292,27 +338,18 @@ func (a *Agent) OnConnect(ctx context.Context) error {
 		}
 	}
 
-	if a.cfg.Slot != "" {
-		if changed, err := boot.Confirm(a.cfg.Root, a.cfg.Slot); err != nil {
-			a.cfg.Log("could not confirm slot %s: %v", a.cfg.Slot, err)
-		} else if changed {
-			a.cfg.Log("slot %s is healthy and confirmed", a.cfg.Slot)
-		}
-	}
-
-	if inFlight() {
-		self, _, err := verify.FileDigest(a.selfPath())
+	evidenceOK, running, self := true, false, ""
+	if a.inFlightLocked() {
+		d, _, err := verify.FileDigest(a.selfPath())
 		switch {
 		case err != nil:
 			a.cfg.Log("cannot hash the running image: %v", err)
-		case a.cfg.Version == a.at.Version && self == a.at.Digest:
-			if err := a.reportLocked(wire.StageRunning, func(r *wire.Report) {
-				r.Running = &wire.Running{Version: a.cfg.Version, Digest: self}
-			}); err != nil {
-				a.cfg.Log("could not report RUNNING (will retry on the next connect): %v", err)
-			}
+			evidenceOK = false
+		case a.cfg.Version == a.at.Version && d == a.at.Digest:
+			running, self = true, d
 		default:
-			a.failLocked(verify.CodeImageMismatch, "running %s (%s), the update was for %s (%s)", a.cfg.Version, self, a.at.Version, a.at.Digest)
+			evidenceOK = false
+			a.failLocked(verify.CodeImageMismatch, "running %s (%s), the update was for %s (%s)", a.cfg.Version, d, a.at.Version, a.at.Digest)
 		}
 	}
 
@@ -322,7 +359,50 @@ func (a *Agent) OnConnect(ctx context.Context) error {
 	}); err != nil {
 		return fmt.Errorf("inventory: %w", err)
 	}
-	return a.sendFrame(wire.Sync{V: wire.Version, Kind: wire.KindSync, BootID: a.cfg.BootID})
+	if err := a.sendFrame(wire.Sync{V: wire.Version, Kind: wire.KindSync, BootID: a.cfg.BootID}); err != nil {
+		return fmt.Errorf("sync: %w", err)
+	}
+
+	if a.cfg.Slot != "" && evidenceOK {
+		if changed, err := boot.Confirm(a.cfg.Root, a.cfg.Slot); err != nil {
+			a.cfg.Log("could not confirm slot %s: %v", a.cfg.Slot, err)
+		} else if changed {
+			a.cfg.Log("slot %s is healthy and confirmed", a.cfg.Slot)
+		}
+	}
+
+	if running {
+		a.at.RunDigest = self
+		if err := a.reportLocked(wire.StageRunning, runningMod(a.at)); err != nil {
+			a.cfg.Log("could not report RUNNING (resent on the next connect): %v", err)
+		}
+	}
+	a.resendLocked()
+	return nil
+}
+
+func runningMod(at *attempt) func(*wire.Report) {
+	return func(r *wire.Report) { r.Running = &wire.Running{Version: at.Version, Digest: at.RunDigest} }
+}
+
+// resendLocked reports the stage the platform has not yet been told. A skipped intermediate stage
+// is allowed by the contract, and a DOWNLOADING that was never delivered is not worth resending.
+func (a *Agent) resendLocked() {
+	at := a.at
+	if at == nil || at.Stage == "" || at.Stage == at.Reported || at.Stage == wire.StageDownloading ||
+		wire.StageRank(at.Reported) > wire.StageRank(at.Stage) {
+		return
+	}
+	var mod func(*wire.Report)
+	switch at.Stage {
+	case wire.StageFailed:
+		mod = failResult(at)
+	case wire.StageRunning:
+		mod = runningMod(at)
+	}
+	if err := a.reportLocked(at.Stage, mod); err != nil {
+		a.cfg.Log("resend %s: %v", at.Stage, err)
+	}
 }
 
 func (a *Agent) selfPath() string {
@@ -358,8 +438,39 @@ func (a *Agent) Handle(ctx context.Context, payload []byte) {
 	}
 }
 
+// rejectForeign answers an assignment for another component without touching the attempt in
+// flight: a standalone FAILED under the assignment's own ids. Sending it again is harmless.
+func (a *Agent) rejectForeign(asg wire.Assignment) {
+	r := wire.Report{
+		V: wire.Version, Kind: wire.KindProgress, AttemptID: asg.AttemptID, AssignmentID: asg.AssignmentID,
+		Component: asg.Component, ArtifactDigest: asg.Artifact.Digest, Seq: 1, Stage: wire.StageFailed, BootID: a.cfg.BootID,
+		Result: &wire.Result{Code: verify.CodeWrongComponent, Detail: fmt.Sprintf("this device updates %q, the assignment is for %q", a.cfg.Component, asg.Component)},
+	}
+	if err := a.sendFrame(r); err != nil {
+		a.cfg.Log("could not answer a foreign assignment: %v", err)
+	}
+}
+
+// supersedeLocked ends whatever download is running and forgets its files.
+func (a *Agent) supersedeLocked() {
+	a.gen++
+	if a.cancelDL != nil {
+		a.cancelDL()
+	}
+	a.cancelDL, a.busy = nil, false
+	a.removeFiles()
+}
+
+func (a *Agent) policy() verify.Policy {
+	return verify.Policy{Component: a.cfg.Component, Current: a.cfg.Version, RequireSigned: a.cfg.RequireSigned, AllowDowngrade: a.cfg.AllowDowngrade}
+}
+
 // OnAssignment accepts, resumes or refuses an assignment.
 func (a *Agent) OnAssignment(ctx context.Context, asg wire.Assignment) {
+	if asg.Component != a.cfg.Component {
+		a.rejectForeign(asg)
+		return
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if at := a.at; at != nil {
@@ -367,46 +478,55 @@ func (a *Agent) OnAssignment(ctx context.Context, asg wire.Assignment) {
 			if wire.Terminal(at.Stage) || wire.StageRank(at.Stage) >= wire.StageRank(wire.StageInstalling) {
 				return // done, or past the point of recall
 			}
-			if !a.busy { // a resend after a reconnect or a restart: carry on from the bytes held
-				if err := a.requestGrantLocked(); err != nil {
-					a.cfg.Log("download.request: %v", err)
-				}
+			if !a.busy {
+				a.resumeLocked(ctx, asg)
 			}
 			return
 		}
 		if !wire.Terminal(at.Stage) && wire.StageRank(at.Stage) >= wire.StageRank(wire.StageInstalling) {
 			return // installing something else: it cannot be recalled
 		}
-		if a.cancelDL != nil {
-			a.cancelDL()
-		}
-		a.removePart()
+		a.supersedeLocked()
 	}
 
 	a.at = &attempt{
 		AttemptID: asg.AttemptID, AssignmentID: asg.AssignmentID, Component: asg.Component,
 		Version: asg.Artifact.Version, Digest: asg.Artifact.Digest, Size: asg.Artifact.Size,
 		Trust: asg.Trust, Signature: asg.Signature, KeyID: asg.KeyID, Algorithm: asg.Algorithm,
-		RequiresReboot: asg.Artifact.RequiresReboot, Stage: "",
+		RequiresReboot: asg.Artifact.RequiresReboot,
 	}
-	a.asks = 0
+	a.asks, a.backoff = 0, 0
 	if err := a.saveLocked(); err != nil {
 		a.cfg.Log("cannot persist the attempt, refusing it: %v", err)
 		a.at = nil
 		return
 	}
-	if err := a.reportLocked(wire.StageReceived, nil); err != nil {
-		a.cfg.Log("RECEIVED: %v", err)
-		return
-	}
+	a.acceptLocked(asg)
+}
 
-	pol := verify.Policy{Component: a.cfg.Component, Current: a.cfg.Version, RequireSigned: a.cfg.RequireSigned, AllowDowngrade: a.cfg.AllowDowngrade}
-	if err := pol.CheckPolicy(asg); err != nil {
+// acceptLocked runs the acceptance of an attempt: RECEIVED, then every check that can be made
+// without the image, then the first download request. It is also what a resumed attempt goes
+// through, so a policy that has changed since (the device now runs that version, say) applies.
+func (a *Agent) acceptLocked(asg wire.Assignment) {
+	if a.at.Stage == "" {
+		if err := a.reportLocked(wire.StageReceived, nil); err != nil {
+			a.cfg.Log("RECEIVED: %v", err)
+			if a.at.Stage == "" { // not even durable: leave the attempt unaccepted
+				a.at = nil
+				return
+			}
+		}
+	}
+	if err := a.policy().CheckPolicy(asg); err != nil {
 		a.failVerifyLocked(err)
 		return
 	}
 	if a.cfg.Slot == "" {
 		a.failLocked(CodeNoLauncher, "this process was not started by the launcher, so there is no slot to install into")
+		return
+	}
+	if err := a.canInstallLocked(); err != nil {
+		a.failLocked(CodeInstallFailed, "%v", err)
 		return
 	}
 	if err := os.MkdirAll(boot.SlotDir(a.cfg.Root, a.inactive()), 0o700); err != nil {
@@ -418,7 +538,7 @@ func (a *Agent) OnAssignment(ctx context.Context, asg wire.Assignment) {
 		held = fi.Size()
 	}
 	if free, err := fsutil.FreeBytes(boot.SlotDir(a.cfg.Root, a.inactive())); err == nil {
-		if need := uint64(asg.Artifact.Size-min(held, asg.Artifact.Size)) + diskHeadroomBytes; free < need {
+		if need := uint64(a.at.Size-min(held, a.at.Size)) + diskHeadroomBytes; free < need {
 			a.failLocked(CodeNoSpace, "need %d bytes, %d free", need, free)
 			return
 		}
@@ -426,6 +546,43 @@ func (a *Agent) OnAssignment(ctx context.Context, asg wire.Assignment) {
 	if err := a.requestGrantLocked(); err != nil {
 		a.cfg.Log("download.request: %v", err)
 	}
+	a.scheduleAskLocked()
+}
+
+// resumeLocked carries on an attempt this device already holds, after a resend or a restart.
+func (a *Agent) resumeLocked(ctx context.Context, asg wire.Assignment) {
+	at := a.at
+	if at.Stage == "" || wire.StageRank(at.Stage) <= wire.StageRank(wire.StageDownloading) {
+		a.acceptLocked(asg)
+		return
+	}
+	// DOWNLOADED or VERIFIED: the bytes are complete or they are not.
+	if err := a.policy().CheckPolicy(asg); err != nil {
+		a.failVerifyLocked(err)
+		return
+	}
+	if fi, err := os.Stat(a.stagePath()); err == nil && fi.Size() == at.Size {
+		a.verifyAndInstallLocked(ctx)
+		return
+	}
+	at.Stage = wire.StageDownloading // back a step, locally
+	if err := a.saveLocked(); err != nil {
+		a.cfg.Log("persist: %v", err)
+	}
+	a.acceptLocked(asg)
+}
+
+// canInstallLocked refuses an install unless this process is the confirmed slot with nothing
+// pending: only a slot that has proved itself may replace the other one.
+func (a *Agent) canInstallLocked() error {
+	st, _, err := boot.Load(a.cfg.Root)
+	if err != nil {
+		return err
+	}
+	if st.Confirmed != a.cfg.Slot || st.Pending != "" {
+		return fmt.Errorf("this process (slot %s) is not the confirmed slot with nothing pending (confirmed %s, pending %q)", a.cfg.Slot, st.Confirmed, st.Pending)
+	}
+	return nil
 }
 
 // CheckGrantURL is the grant-origin pin. A grant is a URL chosen by the platform, delivered over a
@@ -486,7 +643,9 @@ func (a *Agent) OnGrant(ctx context.Context, g wire.Grant) {
 		a.mu.Unlock()
 		return
 	}
+	a.backoff = 0
 	a.busy = true
+	gen := a.gen
 	dlCtx, cancel := context.WithCancel(ctx)
 	a.cancelDL = cancel
 	held := int64(0)
@@ -502,17 +661,20 @@ func (a *Agent) OnGrant(ctx context.Context, g wire.Grant) {
 	a.mu.Unlock()
 
 	ferr := download.Fetch(dlCtx, g.URL, download.Options{
-		Client: a.cfg.HTTP, Size: at.Size, Part: a.partPath(),
-		OnBytes: func(n int64) { a.progress(at, n) },
+		Client: a.cfg.HTTP, Size: at.Size, Part: a.partPath(), IdleTimeout: a.cfg.IdleTimeout,
+		IfRange: `"` + at.Digest + `"`,
+		OnBytes: func(n int64) { a.progress(at, gen, n) },
 	})
 	cancel()
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.busy = false
-	a.cancelDL = nil
-	if a.at != at || wire.Terminal(at.Stage) || ctx.Err() != nil {
-		return // cancelled, superseded, or shutting down
+	if a.gen != gen || a.at != at {
+		return // superseded or cancelled: the new owner of busy/cancelDL is not ours to reset
+	}
+	a.busy, a.cancelDL = false, nil
+	if wire.Terminal(at.Stage) || ctx.Err() != nil {
+		return
 	}
 	switch {
 	case ferr == nil:
@@ -525,6 +687,12 @@ func (a *Agent) OnGrant(ctx context.Context, g wire.Grant) {
 		return
 	}
 
+	// The bytes are complete. Move them to a name no writer targets before anything reads them.
+	_ = os.Remove(a.stagePath())
+	if err := os.Rename(a.partPath(), a.stagePath()); err != nil {
+		a.failLocked(CodeInstallFailed, "%v", err)
+		return
+	}
 	if err := a.reportLocked(wire.StageDownloaded, nil); err != nil {
 		a.cfg.Log("DOWNLOADED: %v", err)
 	}
@@ -534,7 +702,7 @@ func (a *Agent) OnGrant(ctx context.Context, g wire.Grant) {
 // askAgainLocked asks for a fresh grant, up to a bound, pausing between tries. It must be called
 // with the lock held and returns with it held. It reports DOWNLOAD_FAILED when the bound is hit.
 func (a *Agent) askAgainLocked(ctx context.Context, why string) bool {
-	at := a.at
+	at, gen := a.at, a.gen
 	a.asks++
 	if a.asks >= a.cfg.GrantAttempts {
 		a.failLocked(CodeDownloadFailed, "gave up after %d grants: %s", a.asks, why)
@@ -543,7 +711,7 @@ func (a *Agent) askAgainLocked(ctx context.Context, why string) bool {
 	a.mu.Unlock()
 	a.cfg.Sleep(ctx, a.cfg.RetryDelay)
 	a.mu.Lock()
-	if a.at != at || wire.Terminal(at.Stage) || ctx.Err() != nil {
+	if a.at != at || a.gen != gen || wire.Terminal(at.Stage) || ctx.Err() != nil {
 		return false
 	}
 	if err := a.requestGrantLocked(); err != nil {
@@ -552,10 +720,39 @@ func (a *Agent) askAgainLocked(ctx context.Context, why string) bool {
 	return true
 }
 
-func (a *Agent) progress(at *attempt, held int64) {
+// scheduleAskLocked sets when the next unprompted grant request is due: 1 minute, doubling to 5,
+// each jittered by up to 20% so a fleet that lost its platform together does not return together.
+func (a *Agent) scheduleAskLocked() {
+	if a.backoff == 0 {
+		a.backoff = a.cfg.AskMin
+	} else if a.backoff *= 2; a.backoff > a.cfg.AskMax {
+		a.backoff = a.cfg.AskMax
+	}
+	j := 1 + (a.cfg.Jitter()*2-1)*0.2
+	a.nextAsk = a.cfg.Now().Add(time.Duration(float64(a.backoff) * j))
+}
+
+// Tick is called periodically. If an accepted attempt is still waiting for its bytes and nothing
+// is downloading, it asks again for a grant: the reply to an earlier ask may have been lost, and
+// nothing else would ever start the download.
+func (a *Agent) Tick(ctx context.Context) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.at != at || wire.Terminal(at.Stage) || at.Stage != wire.StageDownloading {
+	at := a.at
+	if at == nil || a.busy || (at.Stage != wire.StageReceived && at.Stage != wire.StageDownloading) ||
+		a.cfg.Now().Before(a.nextAsk) {
+		return
+	}
+	if err := a.requestGrantLocked(); err != nil {
+		a.cfg.Log("download.request: %v", err)
+	}
+	a.scheduleAskLocked()
+}
+
+func (a *Agent) progress(at *attempt, gen uint64, held int64) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.at != at || a.gen != gen || at.Stage != wire.StageDownloading {
 		return
 	}
 	now := a.cfg.Now()
@@ -570,13 +767,18 @@ func (a *Agent) progress(at *attempt, held int64) {
 	}
 }
 
-// verifyAndInstallLocked is the ordered gate described in the package comment.
+// verifyAndInstallLocked is the ordered gate described in the package comment. It works on the
+// staged file, which only this function and its callers touch.
 func (a *Agent) verifyAndInstallLocked(ctx context.Context) {
 	at := a.at
-	part := a.partPath()
+	staged := a.stagePath()
 
+	if err := a.canInstallLocked(); err != nil {
+		a.failLocked(CodeInstallFailed, "%v", err)
+		return
+	}
 	// 1. integrity. Nothing has been executed.
-	if err := verify.CheckDigest(part, at.Digest); err != nil {
+	if err := verify.CheckDigest(staged, at.Digest); err != nil {
 		a.failVerifyLocked(err)
 		return
 	}
@@ -590,12 +792,17 @@ func (a *Agent) verifyAndInstallLocked(ctx context.Context) {
 		a.failLocked(wire.CodeUnknownSigner, "this device requires a signed image")
 		return
 	}
-	if err := a.reportLocked(wire.StageVerified, nil); err != nil {
-		a.cfg.Log("VERIFIED: %v", err)
+	if at.Stage != wire.StageVerified {
+		if err := a.reportLocked(wire.StageVerified, nil); err != nil {
+			a.cfg.Log("VERIFIED: %v", err)
+		}
 	}
 	// 3. identity. The image is run for the first time, and only because 1 and 2 passed.
-	id, err := verify.Describe(ctx, part, a.cfg.PreflightTimeout)
+	id, err := verify.Describe(ctx, staged, a.cfg.PreflightTimeout)
 	if err != nil {
+		if ctx.Err() != nil {
+			return // shutting down is not a verdict on the image; the attempt resumes from VERIFIED
+		}
 		a.failLocked(verify.CodeImageMismatch, "preflight: %v", err)
 		return
 	}
@@ -604,12 +811,18 @@ func (a *Agent) verifyAndInstallLocked(ctx context.Context) {
 		return
 	}
 
+	// From here each irreversible step is made durable first: the stage is written whether or not
+	// the report that carries it can be sent.
 	if err := a.reportLocked(wire.StageInstalling, nil); err != nil {
 		a.cfg.Log("INSTALLING: %v", err)
+		if at.Stage != wire.StageInstalling {
+			a.failLocked(CodeInstallFailed, "cannot record the install: %v", err)
+			return
+		}
 	}
 	target := boot.ImagePath(a.cfg.Root, a.inactive())
 	_ = os.Remove(target) // Windows will not rename over an existing file by every route
-	if err := os.Rename(part, target); err != nil {
+	if err := os.Rename(staged, target); err != nil {
 		a.failLocked(CodeInstallFailed, "%v", err)
 		return
 	}
@@ -641,10 +854,7 @@ func (a *Agent) OnCancel(c wire.Cancel) {
 	if wire.Terminal(at.Stage) || wire.StageRank(at.Stage) >= wire.StageRank(wire.StageInstalling) {
 		return
 	}
-	if a.cancelDL != nil {
-		a.cancelDL()
-	}
-	a.removePart()
+	a.supersedeLocked()
 	if err := a.reportLocked(wire.StageAbandoned, nil); err != nil {
 		a.cfg.Log("ABANDONED: %v", err)
 	}

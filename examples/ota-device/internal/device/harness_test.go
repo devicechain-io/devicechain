@@ -47,17 +47,29 @@ func TestMain(m *testing.M) {
 type recorder struct {
 	mu     sync.Mutex
 	frames [][]byte
-	failOn string // when set, a frame containing this text fails to send once
+	failOn string // when set, frames containing this text fail to send, failN times
+	failN  int
+	downAt string // once a frame containing this text is sent, every later send fails (until up())
+	down   bool
 }
+
+// up brings the link back.
+func (r *recorder) up() { r.mu.Lock(); r.down = false; r.downAt = ""; r.mu.Unlock() }
 
 func (r *recorder) Send(b []byte) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.failOn != "" && contains(b, r.failOn) {
-		r.failOn = ""
+	if r.down {
+		return errors.New("link down")
+	}
+	if r.failOn != "" && r.failN > 0 && contains(b, r.failOn) {
+		r.failN--
 		return errors.New("link down")
 	}
 	r.frames = append(r.frames, append([]byte(nil), b...))
+	if r.downAt != "" && contains(b, r.downAt) {
+		r.down = true
+	}
 	return nil
 }
 
@@ -155,19 +167,25 @@ type env struct {
 	agent  *device.Agent
 
 	mu       sync.Mutex
-	served   map[string][]byte // download name -> bytes the server will return
-	requests []string          // Range header of every download request
-	cutFirst map[string]int    // download name -> cut the first response after this many bytes
-	status   map[string]int    // download name -> force this status
+	served   map[string][]byte        // download name -> bytes the server will return
+	etag     map[string]string        // download name -> ETag (the genuine artifact digest)
+	requests []string                 // Range header of every download request
+	cutFirst map[string]int           // download name -> cut the first response after this many bytes
+	hold     map[string]chan struct{} // download name -> block the response until closed or the request ends
+	async    bool
+	now      func() time.Time
+	status   map[string]int // download name -> force this status
 	rebooted bool
 	seq      int
 	version  string
 }
 
-func newEnv(t *testing.T) *env {
+func newEnv(t *testing.T) *env { return newEnvOpt(t, false) }
+
+func newEnvOpt(t *testing.T, async bool) *env {
 	t.Helper()
 	e := &env{t: t, root: t.TempDir(), signer: testutil.NewECDSA(), rec: &recorder{},
-		served: map[string][]byte{}, cutFirst: map[string]int{}, status: map[string]int{}, version: "1.0.0"}
+		served: map[string][]byte{}, cutFirst: map[string]int{}, hold: map[string]chan struct{}{}, etag: map[string]string{}, status: map[string]int{}, version: "1.0.0", async: async}
 	var err error
 	e.trust, err = verify.ParseTrust(e.signer.PEM)
 	require.NoError(t, err)
@@ -200,6 +218,7 @@ func (e *env) newAgent(slot, version, bootID string) *device.Agent {
 		Root: e.root, Slot: slot, Component: "firmware", Product: product, Version: version, BootID: bootID,
 		Trust: e.trust, RequireSigned: true, Origin: e.origin(), AllowInsecure: true, HTTP: e.srv.Client(),
 		SelfPath: boot.ImagePath(e.root, slot), GrantAttempts: 3, ProgressEvery: time.Hour,
+		Async: e.async, Now: e.now,
 		Reboot: func() { e.mu.Lock(); e.rebooted = true; e.mu.Unlock() },
 		Log:    func(f string, a ...any) { e.t.Logf("device: "+f, a...) },
 	}, e.rec)
@@ -216,11 +235,23 @@ func (e *env) serve(w http.ResponseWriter, r *http.Request) {
 		delete(e.cutFirst, name)
 	}
 	forced := e.status[name]
+	hold := e.hold[name]
+	etag := e.etag[name]
 	e.requests = append(e.requests, r.Header.Get("Range"))
 	e.mu.Unlock()
 	if r.URL.Query().Get("cap") != capSecret || !ok {
 		w.WriteHeader(http.StatusForbidden)
 		return
+	}
+	if hold != nil {
+		select {
+		case <-hold:
+		case <-r.Context().Done():
+			return
+		}
+	}
+	if etag != "" {
+		w.Header().Set("ETag", `"`+etag+`"`)
 	}
 	if forced != 0 {
 		w.WriteHeader(forced)
@@ -255,6 +286,7 @@ func (e *env) didReboot() bool {
 func (e *env) publish(img image, served []byte, signer *testutil.Signer, mod func(*wire.Assignment)) wire.Assignment {
 	e.mu.Lock()
 	e.served[img.name] = served
+	e.etag[img.name] = img.digest
 	e.seq++
 	n := e.seq
 	e.mu.Unlock()

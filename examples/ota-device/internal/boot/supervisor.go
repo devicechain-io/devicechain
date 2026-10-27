@@ -10,6 +10,8 @@ import (
 	"os"
 	"os/exec"
 	"time"
+
+	"devicechain.io/examples/ota-device/internal/fsutil"
 )
 
 // ExitReboot is the exit status by which the payload asks to be started again at once, the way a
@@ -41,6 +43,7 @@ type Result struct {
 // Init creates boot.json for a root that has none, with slot a confirmed. It refuses to if there
 // is no image in slot a: a launcher with nothing to launch should say so, not loop.
 func Init(root string) error {
+	fsutil.RemoveStaleTemps(root, "boot.json", "boot.json.good", "rollback.json")
 	if _, _, err := Load(root); err == nil {
 		return nil
 	}
@@ -104,6 +107,11 @@ func (s *Supervisor) Loop(ctx context.Context, maxLaunches int) (Result, error) 
 		}
 		switch {
 		case err == nil && code == 0:
+			// A clean exit ends the loop, unless it came from a slot that never confirmed itself:
+			// that is a failed try like any other, and the next turn decides.
+			if cur, _, e := Load(s.Root); e == nil && cur.Pending != "" {
+				continue
+			}
 			return res, nil
 		case err == nil && code == ExitReboot:
 			backoff = s.MinBackoff

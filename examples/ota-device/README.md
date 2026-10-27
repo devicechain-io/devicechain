@@ -60,7 +60,18 @@ When an assignment arrives:
    correctly signed older or foreign image is a perfectly valid replay unless the device refuses it.
 7. **Install** into the inactive slot, stage it as pending, report `REBOOTING`, exit 75.
 
-On the next boot the new process confirms itself once it is connected (moving `pending` to
+Every stage is made **durable before it is acted on and before it is reported**, so a dead link
+never changes what the device does: it keeps installing, and after the reboot the stages the
+platform missed are sent (the contract allows skipping stages whose report was lost). `attempt.json`
+therefore holds two stages, what the device has done and what is known to have been sent. A restart
+at any point carries on from the bytes held, or from the staged file if the download had finished;
+the policy is checked again on resume. While an accepted attempt is still waiting for its bytes the
+device asks again for a grant on a jittered 1 to 5 minute backoff, because a lost reply would
+otherwise leave it waiting forever. The device installs only while it is the confirmed slot with
+nothing pending.
+
+On the next boot the new process confirms itself once the platform has been told (inventory and
+sync sent) and, if an update is in flight, once what runs is that update's version and file (moving `pending` to
 `confirmed`) and reports `RUNNING` with the compiled version and the digest of its own file. If the
 launcher rolled back instead, the old image reports `FAILED` with code `ROLLED_BACK` and a detail
 like `booted 1.0.1, expected 1.0.2`; it never reports `RUNNING` for an update that did not take.
@@ -69,11 +80,15 @@ Two more rules protect the device from the platform side of the wire:
 
 - **Grant-origin pin.** The download URL is chosen by the platform and delivered over a broker. The
   device fetches only from the origin it was configured with (scheme, host and port; no userinfo; an
-  `/updates/download/` path), and a redirect must pass the same pin. A compromised or misconfigured
+  `/updates/download/` path), and a redirect must pass the same origin pin (scheme, host, port;
+  the path rule applies to the grant itself, so **a redirect may go to any path on the pinned
+  origin**). A compromised or misconfigured
   component that can publish on `device-desired` therefore cannot make the device fetch from, or
   send its capability to, another host.
 - **TLS always.** There is no switch that turns certificate verification off. A plain-`http` origin
-  is refused unless `--allow-insecure-download` is given (a lab on a compact install without TLS).
+  is refused unless `--allow-insecure-download` is given, and a broker URL without TLS (`tcp://`,
+  `mqtt://`, `ws://`) is refused unless `--allow-insecure-broker` is given (a lab on a compact
+  install without TLS).
   The download capability is a bearer secret in the URL; the device never logs the URL or its query
   and strips URLs out of transport errors.
 
@@ -83,7 +98,7 @@ Build the two binaries and put the first image in slot `a`:
 
 ```bash
 ROOT=$PWD/state
-go build -ldflags "-X devicechain.io/examples/ota-device/internal/build.Version=1.0.0" -o bin/ota-device ./cmd/ota-device
+go build -ldflags "-X devicechain.io/examples/ota-device/internal/buildinfo.Version=1.0.0" -o bin/ota-device ./cmd/ota-device
 go build -o bin/ota-boot ./cmd/ota-boot
 mkdir -p "$ROOT/slots/a" && cp bin/ota-device "$ROOT/slots/a/"
 ```
@@ -133,7 +148,13 @@ outside the module.
 | Failed boot rolls back and is never `RUNNING` | `TestFailedBootRollsBack...`, `TestSupervisor...`, `TestProcessRunnerRealImages` | making the launcher retry a pending slot forever |
 | `RUNNING` is evidence of the file that runs | `TestRightVersionWrongFileIsNotRunning` | dropping the digest comparison |
 | Grant-origin pin | `TestGrantOriginPin`, `TestGrantForAnotherHostIsNeverFetched` | removing the host, scheme or userinfo rule |
-| Resume, wrong range, size cap | `internal/download` tests | removing each check |
+| Resume, wrong range, size cap, stall, `If-Range` | `internal/download` tests | removing each check |
+| A dead link does not change what the device does | `TestLinkDownAfterDownloadingStillInstalls...` | persisting the stage only after a successful send |
+| A restart resumes at any stage; policy re-checked | `TestResumeAtEveryStage` | ignoring DOWNLOADED/VERIFIED, skipping the re-check |
+| The platform reducer agrees with what the device emits | `foldPlatform` in the device tests | (the reducer is the platform's own) |
+| Another component never clobbers the attempt in flight | `TestForeignComponentDoesNotDisturb...` | checking the component after taking the attempt |
+| Replaced downloads leave their replacement alone (async path) | `TestSupersededDownloadDoesNotDisturbItsReplacement` | removing the generation guard |
+| No plain-text broker by default | `TestBrokerMustBeTLSUnlessAllowed` | accepting any scheme |
 | Capability never in an error or report | `TestErrorsNeverCarryTheCapability`, `TestCapabilityNeverAppearsInAReport` | un-redacting transport errors |
 | Wire grammar equals the platform's | `internal/wire/conformance_test.go` | duplicate or case-folded keys accepted |
 

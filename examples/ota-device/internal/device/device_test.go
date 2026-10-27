@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/ota"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -71,7 +72,17 @@ func TestSuccessfulUpdateEndToEnd(t *testing.T) {
 	assert.Equal(t, img.digest, last.Running.Digest, "the digest is of the file that runs")
 	assert.Equal(t, "boot-2", last.BootID)
 	assert.NotEqual(t, installBoot, last.BootID, "RUNNING comes from a boot other than the install boot")
-	assert.Equal(t, []string{wire.KindProgress, wire.KindInventory, wire.KindSync}, e.rec.kinds(t)[before:])
+	assert.Equal(t, []string{wire.KindInventory, wire.KindSync, wire.KindProgress}, e.rec.kinds(t)[before:],
+		"the platform is told before the slot is confirmed, then RUNNING")
+
+	// The platform's own reducer, fed the stream this device emitted, applies every report and
+	// lands on UPDATED.
+	final, verdicts := foldPlatform(t, e.rec, img)
+	for _, v := range verdicts {
+		assert.Equal(t, ota.VerdictApplied, v)
+	}
+	assert.Equal(t, ota.StateUpdated, final.State)
+	platformDecodesEverything(t, e.rec)
 
 	// seq rises by one with every report of the attempt.
 	var seqs []uint64
@@ -117,6 +128,13 @@ func TestFailedBootRollsBackAndIsReportedNeverAsRunning(t *testing.T) {
 	assert.Equal(t, "ROLLED_BACK", code)
 	assert.Contains(t, detail, "booted 1.0.0, expected 1.0.2")
 	assert.NotContains(t, e.rec.stages(t), "RUNNING", "a rolled-back update is never reported as running")
+	final, verdicts := foldPlatform(t, e.rec, img)
+	for _, v := range verdicts {
+		assert.Equal(t, ota.VerdictApplied, v)
+	}
+	assert.Equal(t, ota.StateFailed, final.State, "the platform ends the attempt FAILED, not UPDATED")
+	require.NotNil(t, final.Failure)
+	assert.Equal(t, "ROLLED_BACK", final.Failure.Code)
 	rb, err := boot.ReadRollback(e.root)
 	require.NoError(t, err)
 	assert.Nil(t, rb, "the note is consumed")
@@ -136,7 +154,7 @@ func TestRunningIsRetriedIfTheLinkWasDown(t *testing.T) {
 	runLauncher(t, e, 1)
 
 	e.agent = e.newAgent("b", "1.0.1", "boot-2")
-	e.rec.failOn = `"stage":"RUNNING"`
+	e.rec.failOn, e.rec.failN = `"stage":"RUNNING"`, 2 // the send and the immediate resend both fail
 	require.NoError(t, e.agent.OnConnect(context.Background()))
 	assert.NotContains(t, e.rec.stages(t), "RUNNING")
 	assert.Equal(t, boot.State{Confirmed: "b"}, e.bootState(), "it confirmed even though the report was lost")

@@ -16,6 +16,7 @@ import (
 	"os"
 	"regexp"
 	"strconv"
+	"time"
 )
 
 // Errors a caller distinguishes.
@@ -40,6 +41,12 @@ type Options struct {
 	Size int64
 	// Part is the file the bytes accumulate in; its current length is the resume offset.
 	Part string
+	// IdleTimeout cuts a transfer that delivers nothing for this long, covering the wait for the
+	// response headers as well as the body. Zero means 30 seconds.
+	IdleTimeout time.Duration
+	// IfRange, when set, is sent with a resume as If-Range (the artifact's ETag, quoted): a server
+	// whose object has changed answers with the whole of the new one rather than a slice of it.
+	IfRange string
 	// OnBytes is called with the number of bytes held after each chunk. It may be nil.
 	OnBytes func(held int64)
 }
@@ -67,6 +74,14 @@ func Fetch(ctx context.Context, rawURL string, opts Options) error {
 	if held == opts.Size {
 		return nil
 	}
+	idle := opts.IdleTimeout
+	if idle <= 0 {
+		idle = 30 * time.Second
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stall := time.AfterFunc(idle, cancel)
+	defer stall.Stop()
 	client := opts.Client
 	if client == nil {
 		client = http.DefaultClient
@@ -77,6 +92,9 @@ func Fetch(ctx context.Context, rawURL string, opts Options) error {
 	}
 	if held > 0 {
 		req.Header.Set("Range", "bytes="+strconv.FormatInt(held, 10)+"-")
+		if opts.IfRange != "" {
+			req.Header.Set("If-Range", opts.IfRange)
+		}
 	}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -134,6 +152,7 @@ func Fetch(ctx context.Context, rawURL string, opts Options) error {
 	for {
 		n, rerr := r.Read(buf)
 		if n > 0 {
+			stall.Reset(idle)
 			if int64(n) > remaining {
 				_ = f.Close()
 				_ = os.Remove(opts.Part)

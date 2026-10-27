@@ -201,3 +201,12 @@ func TestDescribeFailsOnAnImageThatCannotRun(t *testing.T) {
 	_, err := verify.Describe(context.Background(), filepath.Join(t.TempDir(), "nothing"), time.Second)
 	assert.Error(t, err)
 }
+
+func TestNilTrustSetRefusesInsteadOfPanicking(t *testing.T) {
+	var ts *verify.TrustSet
+	s := testutil.NewECDSA()
+	d := digestOf([]byte("image"))
+	assert.Equal(t, wire.CodeUnknownSigner, code(t, ts.VerifySignature(d, s.KeyID, s.Algorithm, s.Sign(d))))
+	assert.Equal(t, 0, ts.Len())
+	assert.Empty(t, ts.KeyIDs())
+}

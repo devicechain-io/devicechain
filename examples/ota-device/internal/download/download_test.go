@@ -179,3 +179,70 @@ func TestErrorsNeverCarryTheCapability(t *testing.T) {
 	assert.NotContains(t, err.Error(), "TOPSECRETCAP")
 	assert.False(t, strings.Contains(err.Error(), "cap="), err.Error())
 }
+
+// A server that goes quiet mid-body is cut after the idle timeout, the partial bytes are kept, and
+// the error says the transfer was interrupted (so the next grant resumes it).
+func TestStalledTransferIsCutByTheIdleTimeout(t *testing.T) {
+	stop := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", fmt.Sprint(len(payload)))
+		_, _ = w.Write(payload[:1000])
+		w.(http.Flusher).Flush()
+		select {
+		case <-stop:
+		case <-r.Context().Done():
+		}
+	}))
+	defer srv.Close()
+	defer close(stop)
+	part := filepath.Join(t.TempDir(), "p")
+	start := time.Now()
+	err := download.Fetch(context.Background(), srv.URL, download.Options{Size: int64(len(payload)), Part: part, IdleTimeout: 300 * time.Millisecond})
+	assert.True(t, errors.Is(err, download.ErrInterrupted), "%v", err)
+	assert.Less(t, time.Since(start), 10*time.Second)
+	fi, statErr := os.Stat(part)
+	require.NoError(t, statErr)
+	assert.Equal(t, int64(1000), fi.Size())
+}
+
+// A resume sends If-Range with the artifact's ETag; a server whose ETag differs answers with the
+// whole object, which replaces what was held rather than being appended to it.
+func TestResumeSendsIfRangeAndAChangedObjectReplacesThePartial(t *testing.T) {
+	var gotIfRange atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotIfRange.Store(r.Header.Get("If-Range"))
+		w.Header().Set("ETag", `"v2"`)
+		http.ServeContent(w, r, "img", testModTime, bytes.NewReader(payload))
+	}))
+	defer srv.Close()
+	part := filepath.Join(t.TempDir(), "p")
+	require.NoError(t, os.WriteFile(part, []byte("bytes-of-the-old-object"), 0o600))
+	require.NoError(t, download.Fetch(context.Background(), srv.URL, download.Options{Size: int64(len(payload)), Part: part, IfRange: `"v1"`}))
+	assert.Equal(t, `"v1"`, gotIfRange.Load())
+	got, _ := os.ReadFile(part)
+	assert.Equal(t, payload, got, "the stale prefix is gone")
+
+	// the matching ETag resumes
+	require.NoError(t, os.WriteFile(part, payload[:500], 0o600))
+	require.NoError(t, download.Fetch(context.Background(), srv.URL, download.Options{Size: int64(len(payload)), Part: part, IfRange: `"v2"`}))
+	got, _ = os.ReadFile(part)
+	assert.Equal(t, payload, got)
+}
+
+// The wait for the response headers is covered too: a server that accepts the connection and
+// never answers does not hold the device.
+func TestSilentServerIsCutByTheIdleTimeout(t *testing.T) {
+	stop := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-stop:
+		case <-r.Context().Done():
+		}
+	}))
+	defer srv.Close()
+	defer close(stop)
+	start := time.Now()
+	err := download.Fetch(context.Background(), srv.URL, download.Options{Size: 100, Part: filepath.Join(t.TempDir(), "p"), IdleTimeout: 300 * time.Millisecond})
+	assert.True(t, errors.Is(err, download.ErrInterrupted), "%v", err)
+	assert.Less(t, time.Since(start), 10*time.Second)
+}

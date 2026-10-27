@@ -277,3 +277,33 @@ func TestProcessRunnerRealImages(t *testing.T) {
 		assert.Equal(t, boot.State{Confirmed: "b"}, s, "the replacement image, not the old one, ran")
 	})
 }
+
+func TestPendingEqualToConfirmedIsInvalid(t *testing.T) {
+	assert.Error(t, boot.State{Confirmed: "a", Pending: "a", Tries: 1}.Validate())
+	assert.Error(t, boot.Save(t.TempDir(), boot.State{Confirmed: "b", Pending: "b"}))
+}
+
+func TestInitRemovesInterruptedWriteLeftovers(t *testing.T) {
+	root := newRoot(t, "a")
+	for _, n := range []string{"boot.json.tmp123", "boot.json.good.tmp9", "rollback.json.tmp1"} {
+		require.NoError(t, os.WriteFile(filepath.Join(root, n), []byte("{"), 0o600))
+	}
+	require.NoError(t, boot.Init(root))
+	left, _ := filepath.Glob(filepath.Join(root, "*.tmp*"))
+	assert.Empty(t, left)
+	s, _, err := boot.Load(root)
+	require.NoError(t, err)
+	assert.Equal(t, boot.State{Confirmed: "a"}, s, "real state untouched")
+}
+
+// A slot that exits 0 without ever confirming itself has not proved anything: it is a failed try,
+// not a clean shutdown.
+func TestCleanExitFromAnUnconfirmedPendingSlotIsAFailedTry(t *testing.T) {
+	root := newRoot(t, "a")
+	require.NoError(t, boot.Stage(root, "b"))
+	var ran []string
+	res := loop(t, root, fakeRunner(root, []step{{code: 0}, {code: 0}}, &ran), 5)
+	assert.Equal(t, []string{"b", "a"}, res.Launches, "b exited 0 unconfirmed, so a runs next")
+	rb, _ := boot.ReadRollback(root)
+	require.NotNil(t, rb)
+}
