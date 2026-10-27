@@ -683,5 +683,8 @@
   "calcHealthShared": "Otro perfil también declara una métrica llamada {{key}}, así que estos recuentos incluyen sus lecturas y no demuestran que esta fórmula funcione. Usa ¿Por qué? en un dispositivo de este perfil.",
   "calcHealthWhy": "¿Por qué?",
   "calcHealthWhyTitle": "Por qué {{key}} puede no calcularse",
-  "calcHealthWhyDescription": "Ejecuta la fórmula sobre las lecturas almacenadas de un dispositivo para ver los motivos por los que no produjo valor. Elige un dispositivo que informe las entradas de la fórmula."
+  "calcHealthWhyDescription": "Ejecuta la fórmula sobre las lecturas almacenadas de un dispositivo para ver los motivos por los que no produjo valor. Elige un dispositivo que informe las entradas de la fórmula.",
+  "calcHealthSeparateInputs": "Una fórmula lee un mensaje en un instante. Si los dispositivos envían estas entradas en mensajes separados, o con marcas de tiempo distintas, nunca se combinan. Usa ¿Por qué? en un dispositivo para ver el motivo de cada omisión.",
+  "calcHealthSeparateInputsLink": "Entradas que llegan por separado",
+  "formulaHistoryLacked": "faltan: {{keys}}"
 }

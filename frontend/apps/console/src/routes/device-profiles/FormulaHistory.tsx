@@ -22,6 +22,7 @@ import { errMessage } from '@/routes/common';
 import { getDevice, listMetricDefinitions } from '@/lib/api/device-management';
 import { calculatedEvents, type CalculatedEventsResult } from '@/lib/api/event-management';
 import { optNum } from '@/lib/utils';
+import { absentInputs } from './calcHealth';
 
 /** The most samples the server evaluates in one request (it refuses above this). */
 export const HISTORY_SAMPLE_CAP = 50_000;
@@ -35,7 +36,7 @@ const WINDOWS: { hours: number }[] = [{ hours: 1 }, { hours: 24 }, { hours: 168 
 type State =
   | { status: 'idle' }
   | { status: 'running' }
-  | { status: 'done'; result: CalculatedEventsResult }
+  | { status: 'done'; result: CalculatedEventsResult; missingConstants: string[]; sent: string[] }
   | { status: 'error'; message: string };
 
 export function FormulaHistory({
@@ -92,20 +93,22 @@ export function FormulaHistory({
       // A formula that reads device constants is run with THIS device's constants as its metadata
       // holds them now (the server holds no device records, so the console reads them).
       const held = constants.length > 0 ? await deviceConstants(deviceToken.trim(), constants) : [];
+      const missingConstants = constants.filter((k) => !held.some((h) => h.key === k));
+      const sent = inputs.filter((k) => types.has(k));
       const to = new Date();
       const from = new Date(to.getTime() - hours * 3_600_000);
       const result = await calculatedEvents({
         deviceToken: deviceToken.trim(),
         expression,
         dataType,
-        inputs: inputs.filter((k) => types.has(k)).map((key) => ({ key, dataType: types.get(key) ?? '' })),
+        inputs: sent.map((key) => ({ key, dataType: types.get(key) ?? '' })),
         minValue: optNum(minValue),
         maxValue: optNum(maxValue),
         constants: held,
         from: from.toISOString(),
         to: to.toISOString(),
       });
-      if (mine === runToken.current) setState({ status: 'done', result });
+      if (mine === runToken.current) setState({ status: 'done', result, missingConstants, sent });
     } catch (err) {
       if (mine !== runToken.current) return;
       setState({
@@ -156,7 +159,12 @@ export function FormulaHistory({
           {t('formulaHistoryConstants', { names: constants.map((c) => `device.${c}`).join(', ') })}
         </p>
       )}
-      {state.status === 'done' && <HistoryOutcome result={state.result} skipLabel={skipLabel} />}
+      {state.status === 'done' && <HistoryOutcome
+          result={state.result}
+          skipLabel={skipLabel}
+          inputs={state.sent}
+          missingConstants={state.missingConstants}
+        />}
     </div>
   );
 }
@@ -183,7 +191,17 @@ async function deviceConstants(deviceToken: string, names: string[]): Promise<{ 
     .map((key) => ({ key, value: typeof held[key] === 'number' && Number.isFinite(held[key]) ? String(held[key]) : '' }));
 }
 
-function HistoryOutcome({ result, skipLabel }: { result: CalculatedEventsResult; skipLabel: (reason: string) => string }) {
+function HistoryOutcome({
+  result,
+  skipLabel,
+  inputs,
+  missingConstants,
+}: {
+  result: CalculatedEventsResult;
+  skipLabel: (reason: string) => string;
+  inputs: string[];
+  missingConstants: string[];
+}) {
   const { t } = useTranslation('deviceProfiles');
   const total = result.samples.length;
   // Newest first, and only the newest few: a chart-length history is summarized by the tally.
@@ -218,11 +236,25 @@ function HistoryOutcome({ result, skipLabel }: { result: CalculatedEventsResult;
                   {'→ '}
                   {s.value != null ? s.value : t('formulaSkipped', { reason: skipLabel(s.skippedReason ?? '') })}
                 </span>
+                {s.value == null && s.skippedReason === 'missing_input' && (
+                  <MissingInputs lacked={[...absentInputs(inputs, s.inputs), ...missingConstants.map((k) => `device.${k}`)]} />
+                )}
               </li>
             ))}
           </ul>
         </>
       )}
     </div>
+  );
+}
+
+/** Names the inputs a skipped sample did not carry; says nothing when it carried them all. */
+function MissingInputs({ lacked }: { lacked: string[] }) {
+  const { t } = useTranslation('deviceProfiles');
+  if (lacked.length === 0) return null;
+  return (
+    <span className="text-warning" data-testid="formula-history-lacked">
+      {t('formulaHistoryLacked', { keys: lacked.join(', ') })}
+    </span>
   );
 }

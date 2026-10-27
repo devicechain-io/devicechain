@@ -111,6 +111,29 @@ export function statusOf(c: WindowCounts, nameShared: boolean): HealthStatus {
   return c.inputTotal > 0 ? 'not_computing' : 'no_input_readings';
 }
 
+/**
+ * A formula over this many direct inputs, measured or calculated, can have them arrive apart:
+ * a calculated input is only as present as ITS inputs, so kw + aux with kw calculated from a
+ * reading that arrives separately from aux is split just the same.
+ */
+export const SEPARATE_INPUTS_MIN = 2;
+
+/**
+ * Whether to explain that a formula reads one message at one instant. It hangs on the existing
+ * Not computing status and adds no ratio of its own: a count of skipped samples against samples
+ * seen is what this file refuses above, because a device that reports its metrics in separate
+ * messages would look broken by it. The hint only names the one cause the counts cannot rule out.
+ */
+export function showsSeparateInputsHint(status: HealthStatus | 'unknown', directInputs: string[] | null): boolean {
+  return status === 'not_computing' && (directInputs?.length ?? 0) >= SEPARATE_INPUTS_MIN;
+}
+
+/** The inputs a formula reads that a sample did not carry, in the formula's own order. */
+export function absentInputs(inputs: string[], present: { key: string }[]): string[] {
+  const have = new Set(present.map((p) => p.key));
+  return inputs.filter((k) => !have.has(k));
+}
+
 const FETCH_CONCURRENCY = 4;
 
 async function fetchAll(names: string[], start: Date): Promise<Map<string, HourlyCount[]>> {
