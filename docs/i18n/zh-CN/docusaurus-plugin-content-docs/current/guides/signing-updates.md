@@ -146,12 +146,13 @@ mutation {
 
 撤销前，请先查看 `soleSignedArtifactCount`，了解撤销会影响哪些制品。
 
-## 签名不涵盖什么
+## 签名不涵盖什么 {#what-a-signature-does-not-cover}
 
-签名**只绑定摘要**，不绑定制品的版本、组件或兼容的配置文件。任何拥有 `artifact:write` 的人都可以把先前已签名的镜像以新版本重新声明，旧签名仍然能通过校验。如果需要拒绝降级或装错组件，必须由设备自己强制执行，并且发布权限应与签名权限一样谨慎持有。
+签名**只绑定摘要**，不绑定制品的版本、组件或兼容的配置文件。任何拥有 `artifact:write` 的人都可以把先前已签名的镜像以新版本重新声明，旧签名仍然能通过校验。如果需要拒绝降级或装错组件，必须由设备自己强制执行，并且发布权限应与签名权限一样谨慎持有。[构建可更新的设备](./building-an-updatable-device.md#refusing-downgrades)演示了参考设备如何做到这一点。
 
 ## 相关
 
 - **[签名者](../concepts/over-the-air-updates.md#signers)**：签名如何使制品受信任，以及吊销签名者会改变什么。
 - **[空中（OTA）更新](../concepts/over-the-air-updates.md#assigning)**：分配更新，以及一次尝试如何推进。
 - **[连接设备](./connecting-a-device.md#over-the-air-updates)**：分配消息和设备端的校验。
+- **[构建可更新的设备](./building-an-updatable-device.md)**：一台会校验、安装并回滚的参考设备。

@@ -285,9 +285,9 @@ title: 指标参考
 
 ## 更新管理 {#update-management}
 
-前缀：`devicechain_updatemanagement_`。该服务为可选启用；参见[空中（OTA）更新](../concepts/over-the-air-updates.md)。
+前缀：`devicechain_updatemanagement_`。该服务运行于 `default` 和 `full` 配置档；参见[空中（OTA）更新](../concepts/over-the-air-updates.md)。
 
-`update_download_grants_total{result="not_configured"}` 上升表示未设置 `updates.downloadBaseUrl`，任何设备都无法下载。`update_attempts_expired_total` 统计更新期间失去响应的设备；处于 `UNKNOWN` 的更新会等待设备的清单报告或运维人员执行 `abandonUnknownUpdate`。
+`update_download_grants_total{result="not_configured"}` 上升表示没有设置下载基址，任何设备都无法下载：`updates.downloadBaseUrl` 被设为空字符串，或实例没有 Ingress 可供推导。`update_attempts_expired_total` 统计更新期间失去响应的设备；处于 `UNKNOWN` 的更新会等待设备的清单报告或运维人员执行 `abandonUnknownUpdate`。
 
 | 指标 | 含义 |
 | --- | --- |

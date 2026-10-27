@@ -50,6 +50,10 @@ DeviceChain 有意严格限制哪些离线消息会生效：
 Sparkplug-B 接入作为可选服务提供。它接入测量数据，并驱动明确的[设备在线状态](./device-presence.md)。根据配置 URL，它通过 TLS 或明文连接消息代理。第二种原生标准边缘协议 [LwM2M](./lwm2m.md) 也已提供。连接私有消息代理所需的自定义 CA / 双向 TLS 仍在计划中。
 :::
 
+## 更新边缘节点 {#updating-an-edge-node}
+
+Sparkplug B 没有定义固件更新，因此 DeviceChain 的[空中（OTA）更新](./over-the-air-updates.md)不会通过该服务送达设备，DeviceChain 也不会在 Sparkplug 之上另行发明固件约定。需要通过 DeviceChain 更新的边缘节点，同时以普通 MQTT 设备的身份连接 DeviceChain，使用自己的[凭据](../guides/device-credentials.md)，并走正常的更新通道。[构建可更新的设备](../guides/building-an-updatable-device.md)演示了这一设备端。
+
 ## 运维 {#running-it}
 
 由于消息代理连接由单个副本持有，在生产环境依赖 Sparkplug 接入前，应了解几个运维特性：切换的代价、设备为什么可能一直显示在线，以及丢弃计数器说明什么。[运行边缘服务](../deployment/edge-services.md)介绍了这些内容。
