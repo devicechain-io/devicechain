@@ -98,6 +98,21 @@ type fakeSource struct {
 	afterHook func()
 	pubs      []pubRec
 	hooks     host.CommandHooks
+
+	// now is the clock the publish is stamped with (time.Now when nil). atValue/lastAt say the node
+	// already held a written value when the command was published.
+	now     func() time.Time
+	atValue bool
+	lastAt  time.Time
+	// lastVal is what LastReported answers while atValue holds; tableGone makes it answer false (the
+	// node died or re-birthed, so the table the command was addressed against is gone).
+	lastVal   host.WireValue
+	tableGone bool
+	// forceLast makes LastReported answer true whatever atValue says (the node reported the value
+	// after the command was published, with a timestamp the match rule does not take).
+	forceLast bool
+	// bdSeq is the bdSeq the table was read under (5 by default).
+	bdSeq uint64
 }
 
 func newSource(log *evlog, tenant string) *fakeSource {
@@ -139,6 +154,12 @@ func (f *fakeSource) declare(target host.CommandTarget, name string, dt uint32) 
 	return f
 }
 
+func (f *fakeSource) SourceID() string { return "sparkplug:h1" }
+func (f *fakeSource) LastReported(host.MetricRef) (host.WireValue, time.Time, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastVal, f.lastAt, (f.atValue || f.forceLast) && !f.tableGone
+}
 func (f *fakeSource) Tenant() string                  { return f.tenant }
 func (f *fakeSource) Commands() config.SourceCommands { return f.cfg }
 func (f *fakeSource) SetCommandHooks(h host.CommandHooks) {
@@ -189,8 +210,19 @@ func (f *fakeSource) put(ctx context.Context, kind string, target host.CommandTa
 		return host.CommandWire{}, host.ErrBreakerOpen
 	}
 	alias := uint64(7)
+	at := time.Now()
+	if f.now != nil {
+		at = f.now()
+	}
+	bd := f.bdSeq
+	if bd == 0 {
+		bd = 5
+	}
 	wire := host.CommandWire{Topic: target.Topic(), Alias: &alias, Datatype: ref.Datatype, Value: value, SHA256: "abc", Size: 3,
-		Epoch: 1, Gen: 1, BdSeq: 5, HasBdSeq: true, PublishedAt: time.Now()}
+		Epoch: 1, Gen: 1, BdSeq: bd, HasBdSeq: true, PublishedAt: at}
+	if kind == KindWrite {
+		wire.AtRequestedValue, wire.LastReportedAt = f.atValue, f.lastAt
+	}
 	if kind == KindRebirth {
 		wire.Alias, wire.Name = nil, "Node Control/Rebirth"
 	}
@@ -368,7 +400,13 @@ type fakeStore struct {
 	log     *evlog
 	mu      sync.Mutex
 	entries map[string]Awaiting
+	reboots map[rebootKey]time.Time
 	putErr  error
+	// putRebootErr and listErr fail the reboot mark's write and the term-start listing.
+	putRebootErr error
+	listErr      error
+	// staleList, when set, is what List answers: a listing taken before later settlements.
+	staleList *Stored
 }
 
 func (s *fakeStore) Put(_ context.Context, key string, a Awaiting) error {
@@ -390,6 +428,49 @@ func (s *fakeStore) Delete(_ context.Context, key string) error {
 	defer s.mu.Unlock()
 	delete(s.entries, key)
 	s.log.add("kvdel:%s", key)
+	return nil
+}
+
+func (s *fakeStore) List(_ context.Context) (Stored, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.listErr != nil {
+		return Stored{}, s.listErr
+	}
+	if s.staleList != nil {
+		return *s.staleList, nil
+	}
+	out := Stored{Entries: map[string]Awaiting{}}
+	for k, a := range s.entries {
+		out.Entries[k] = a
+	}
+	for k, at := range s.reboots {
+		out.Reboots = append(out.Reboots, RebootMark{Tenant: k.tenant, Group: k.group, Node: k.node, At: at})
+	}
+	return out, nil
+}
+
+type rebootKey struct{ tenant, group, node string }
+
+func (s *fakeStore) PutReboot(_ context.Context, tenant, group, node string, at time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.putRebootErr != nil {
+		return s.putRebootErr
+	}
+	if s.reboots == nil {
+		s.reboots = map[rebootKey]time.Time{}
+	}
+	s.reboots[rebootKey{tenant, group, node}] = at
+	s.log.add("kvreboot:%s/%s", group, node)
+	return nil
+}
+
+func (s *fakeStore) DeleteReboot(_ context.Context, tenant, group, node string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.reboots, rebootKey{tenant, group, node})
+	s.log.add("kvunreboot:%s/%s", group, node)
 	return nil
 }
 
@@ -489,6 +570,33 @@ type rig struct {
 	commands  *prometheus.CounterVec
 	awaiting  prometheus.Gauge
 	d         *Dispatcher
+	clk       *testClock
+}
+
+// testClock is a clock a test moves by hand.
+type testClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *testClock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *testClock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.t = c.t.Add(d)
+}
+
+// useClock puts the rig, its source and its dispatcher on a clock the test moves.
+func (r *rig) useClock() *testClock {
+	r.clk = &testClock{t: time.Now()}
+	r.src.now = r.clk.now
+	r.build(nil)
+	return r.clk
 }
 
 // newRig builds a dispatcher over one source for tenant "acme" with pump-1 born on it (Setpoint is
@@ -517,6 +625,9 @@ func newRig(t *testing.T, opts ...func(*rig)) *rig {
 
 func (r *rig) build(mutate func(*Options)) {
 	opts := Options{Workers: 2, ProgressEvery: 10 * time.Millisecond}
+	if r.clk != nil {
+		opts.Now = r.clk.now
+	}
 	if mutate != nil {
 		mutate(&opts)
 	}

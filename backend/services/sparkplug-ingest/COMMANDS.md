@@ -50,12 +50,101 @@ Gate order (the first gate that matches decides; the numbers are the ones in the
 A drained row (woken by a birth) runs the same gates on a row it has already claimed, so its
 refusals quote the claim's nonce and a table that is not there yet hands the row back again.
 
-What is NOT here yet (the confirmation slice): matching a report against the awaiting entries,
-the window expiry, UNCHANGED, re-arming entries at the start of a term. Until it lands a published
-command stays SENT and ends TIMEOUT, so `commands.enabled` must not be switched on in a release
-that does not carry it. This slice resolves a command itself only when it knows the outcome
-without a report: refused before the wire, superseded, or the broker dropped the session right
-after the publish.
+## Confirmation (`downlink/confirm.go`, `host/report.go`)
+
+**"Confirmed" means the node REPORTED the requested value. It does not mean the node obeyed.**
+Sparkplug has no command acknowledgement; the evidence is only as trustworthy as the broker's
+publish ACLs (anything that can publish to the node's topic can make the metric read that value).
+
+- **The tap.** `SessionTracker` copies out, under its lock, a `Report` per accepted
+  non-historical, non-null metric of a BIRTH or DATA message (resolved through the alias table, the
+  value in the form of the BIRTH-declared datatype: `WireValue`, which compares with `==`), and one
+  per accepted NBIRTH. A redelivered NBIRTH of the live session, and any message the session
+  machine rejected, report nothing. It is switched on by `EnableReports` only for a source with
+  commands enabled. The Client hands the reports to the dispatcher's `Reported` hook AFTER
+  `Observe` returned: matching and the response publish never run under `tr.mu`, and the response
+  publish runs on a goroutine of its own, tracked by the term.
+- **The mirror.** The awaiting set is mirrored in memory (`Dispatcher.entries`, by KV key;
+  `byTarget` for matching; `byMetric` for supersede). An entry is added in the publish hook, after
+  the KV write and before the bytes go out, so a node that answers in a millisecond finds it.
+  Reports are matched on (tenant, source, target): the same names on another source's broker are
+  another node.
+- **Matching a write:** same metric, `isNull` false, not historical, value equal, and the metric's
+  timestamp (else the payload's, else receipt) no earlier than `publishedAt - clockSkew`. A report
+  of the metric at ANY OTHER value marks the entry contrary. Floats compare exactly.
+- **Rebirth** is confirmed by any NBIRTH of the node received at or after the publish; **reboot**
+  by an NBIRTH whose bdSeq differs from the one the node had at the publish (a same-bdSeq NBIRTH is
+  the node answering a rebirth). A command addressed to a device resolves its rebirth to the node.
+- **UNCHANGED.** At the publish the Client reads the table's last-reported value; if it already
+  was the requested value the entry is marked. That read comes BEFORE the entry joins the mirror,
+  so it is not trusted at the end: the window's end re-reads the value (`Source.LastReported`, off
+  `d.mu`) on the table the command was addressed against (epoch and generation are kept on the
+  entry), and it must still be the requested one. A contrary report in the gap, or a node that died
+  or re-birthed meanwhile (no table any more), ends UNANSWERED. With the mark, no contrary report,
+  that re-check and `hostRole: primary` the window resolves SUCCESSFUL `via: UNCHANGED, since:
+  <last report>`. Secondary hosts never get it (another host may be driving the value).
+- **What is captured.** Reports and last-reported values are kept only for the metrics the
+  source's `writableMetrics` allowlist names (plus node births, which a rebirth and a reboot are
+  confirmed by); the table would otherwise hold a value for every metric of every node. An integer
+  a datatype cannot hold (300 in an Int8) is not a report of that datatype.
+- **A commanded rebirth is marked pending BEFORE the bytes go out** (`putOnWire`), because a node
+  can answer with its same-bdSeq NBIRTH before the publish call returns, and an answer that finds no
+  mark is dropped as a redelivery. A definitely-not-sent rebirth gives the mark back (restoring a
+  request the session machine had made itself); an unknown outcome keeps it.
+- **Window expiry.** A sweep (`SweepEvery`, 1 s) resolves entries past their deadline
+  UNANSWERED, which command-delivery records as TIMEOUT/UNKNOWN at once. The deadline is the
+  publish plus the source's window (120 s write/rebirth, 600 s reboot), clamped to the command's
+  expiry.
+- **Every resolution deletes the KV key after the response is published.** A response that cannot
+  be published leaves the entry decided and in place; the sweep retries it every 5 s with the
+  SAME outcome (a confirmed command is never re-decided into a timeout). The decided outcome is
+  also stored with the record (`Awaiting.Decided`), so a new leader settles the command with it.
+  Retrying stops at the command's own expiry (command-delivery has ended the row by then), or two
+  hours after the publish (the bucket's lifetime), whichever is first.
+- **Handover.** A graceful end of term resolves nothing and leaves every entry. The next term's
+  `seedTerm` runs before it serves (and before its sources connect): it lists the bucket, re-arms
+  every entry of a tenant it serves with the time left on its deadline, resolves at once the ones
+  past it (UNANSWERED, with the nonce stored with the entry), and loads the reboot marks. The new
+  leader's rebirth-all then delivers BIRTHs that carry the current values, which settle most
+  re-armed entries. Entries of tenants this service has no source for are left alone.
+  An entry is decided and claimed BEFORE it joins the mirror, and the "already there" check and
+  the add are one critical section (`addEntryIfAbsent`). While the bucket could not be read, the
+  keys settled meanwhile are remembered and skipped, because the listing the load finally gets may
+  predate their settlement: without that a settled command is re-armed and answered a second time.
+- **Two leaders can overlap.** A lost lease does not stop the old leader instantly, and the
+  dispatch nonce does NOT fence the two: both hold the nonce stored with the entry, so both can
+  publish a response for the same command. command-delivery keeps the FIRST terminal answer and
+  ignores the rest (`MarkResponse` on a terminal row is a no-op). The window of overlap is the lease
+  TTL; nothing here tries to close it, and nothing relies on it being closed.
+- **The one-reboot-per-window rule is persisted.** `PutReboot` writes `tenant|reboot|group/node`
+  (value: publishedAt) in the same bucket, with the awaiting record and before the bytes go out;
+  it is NOT deleted when the reboot resolves, it is seeded into `d.reboots` at term start, and it
+  ages out with the bucket's two-hour lifetime (which exceeds the largest reboot window). A reboot
+  that is not sent (the session dropped, the table moved, the mark could not be written) takes its
+  mark back. A leader that cannot read the bucket refuses reboots (`refused_reboot_gate`) until it
+  can, and keeps retrying in the background; writes and rebirths are served meanwhile.
+
+Decisions taken in this slice, so the next does not reopen them:
+
+- **A re-armed entry never confirms UNCHANGED**, including one resolved at the start of a term
+  because its deadline passed. The reports that would have shown a contrary value may have been the
+  previous leader's to see (or nobody's), so "nothing contrary was seen" cannot be asserted. It can
+  still be confirmed by a report of the value (the rebirth-all BIRTH), and otherwise ends UNANSWERED.
+  Success is never claimed without evidence.
+- **An unknown-outcome publish is awaited, not answered.** It is counted `publish_failed`, kept in
+  the bucket and in memory, watched by the breaker, and settled by the window like any other: a
+  report of the value confirms it, none ends it UNANSWERED. It is never handed back to be sent
+  again. (The dispatcher answered it UNANSWERED at once before this slice; with the window running
+  there is nothing to gain by answering early, and a report would have been thrown away.)
+- **Late reports.** A response that loses to the row's TTL in command-delivery is ignored there
+  (`MarkResponse` on a terminal row is a no-op), so nothing extra is needed.
+- The `command_confirm_seconds` histogram observes only confirmed commands; unconfirmed ones are
+  `commands_total{result="unconfirmed"}`.
+
+What is NOT here (later slices): the chart/dcctl render of `sources[].commands.*` and the derived
+flag, the PrometheusRule (the unconfirmed-ratio and response-failure alerts, and the rule test that
+fires them), and the console. The service does not publish a command that it cannot account for,
+but until the chart can switch the feature on, `commands.enabled` is set by hand.
 
 Accepted deviations from the design, and rulings recorded here so the next slice does not reopen
 them:
@@ -71,17 +160,12 @@ them:
   it is refused (`refused_reboot_gate`, "re-issue it when the node is online"), live and drained.
 - **A publish whose outcome is unknown is not "not sent".** Only "not connected" and the pre-wire
   errors are answered UNSENT. Any other failure leaves the record in place, counts for the breaker's
-  watch, and resolves the command UNANSWERED ("the publish did not complete; it may have reached the
-  node"). Only a finished term (`ErrTermEnded`) hands a claimed row back to be sent again.
+  watch, and is awaited like a published command (see Confirmation). Only a finished term
+  (`ErrTermEnded`) hands a claimed row back to be sent again.
 - **Stopping a client ends its Host session** exactly as a lost one is ended (not up, no index, no
   tables), so a next term cannot publish before ONLINE or on a stale alias.
 - **Ordering:** a wake already pending for a device is drained before its next live command is
   taken, so a live command does not overtake rows parked before it.
-
-For the confirmation slice:
-
-- **The one-reboot-per-window rule must be persisted** as a per-node key in the KV store, seeded at
-  term start (it is held in memory per term here, so a change of leader forgets it).
 
 Things worth knowing:
 
@@ -93,13 +177,13 @@ Things worth knowing:
   state is exported as `command_breaker_state{tenant,source}`, read at scrape time so a backoff that
   has ended reads half-open without anything having to touch it.
 - **Metric names** are the service's usual `devicechain_sparkplugingest_` prefix plus
-  `commands_total{result}`, `commands_awaiting`, `command_breaker_state{tenant,source}` and
-  `command_breaker_trips_total` (not the design's `sparkplug_` spelling).
+  `commands_total{result}`, `commands_awaiting`, `command_confirm_seconds`,
+  `command_breaker_state{tenant,source}` and `command_breaker_trips_total` (not the design's
+  `sparkplug_` spelling).
 - **`Dc-Command-Expires`** is a routing-side header command-delivery stamps for Sparkplug commands
   so the rate wait can look at the expiry again. Absent means unknown; the claim is still the
   authority on expiry.
 - **A reboot that had to be parked is refused when drained**: the impact header exists only on the
   live message, and an unknown impact fails closed. Re-issue it.
-- **The one-reboot-per-window rule is held in memory**, per term, so a change of leader forgets it.
 - **Stranded-SENT**: Sparkplug stays off the allow list, deliberately. Re-arming a QoS 0 DCMD would
   actuate it a second time.

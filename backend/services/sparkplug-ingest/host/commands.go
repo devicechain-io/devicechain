@@ -80,6 +80,12 @@ type CommandWire struct {
 	// PublishedAt is the payload timestamp, which is also the instant the confirmation window and
 	// the clock-skew rule are measured from.
 	PublishedAt time.Time
+	// AtRequestedValue is set on a write when the node's last report of the metric, on the table the
+	// command was addressed against, was already the requested value, and LastReportedAt is when it
+	// says so. It is what lets a window that closes with nothing contrary seen say "already at the
+	// value" instead of "not confirmed".
+	AtRequestedValue bool
+	LastReportedAt   time.Time
 }
 
 func wireOf(topic string, payload []byte, ref MetricRef, value any, at time.Time) CommandWire {
@@ -195,10 +201,29 @@ type CommandHooks struct {
 	// Tripped is called, off the receive goroutine, when the breaker opens, with the instant the
 	// session was lost.
 	Tripped func(at time.Time)
+	// Reported is called on the receive goroutine, after the session tracker's lock is released,
+	// with what an accepted message's metrics said (and the NBIRTH it was part of) on an ENABLED
+	// source. It must not block: matching is in-memory and anything slower is the hook's to hand
+	// off.
+	Reported func(tenant string, reports []Report)
 }
 
 // Tenant is the tenant every message on this connection is attributed to.
 func (c *Client) Tenant() string { return c.tenant }
+
+// LastReported is the value the node last reported for the metric ref was read from, on that same
+// table; false when the table has since been replaced or ended.
+func (c *Client) LastReported(ref MetricRef) (WireValue, time.Time, bool) {
+	return c.sessions.LastReported(ref)
+}
+
+// ParseTarget is the inverse of CommandTarget.String ("group/node" or "group/node/device").
+func ParseTarget(s string) (CommandTarget, bool) { return targetOfExternalId(s) }
+
+// SourceID is the source's ingest identity ("sparkplug:<hostId>"), the one its devices carry. A
+// command's awaiting entry records it, so a report is matched only against the commands published
+// on the same broker.
+func (c *Client) SourceID() string { return c.policy.Source }
 
 // Commands is the source's command-downlink configuration.
 func (c *Client) Commands() config.SourceCommands { return c.commands }
@@ -228,6 +253,14 @@ func (c *Client) BreakerState() BreakerState {
 
 // IndexSize is the number of devices the source can currently address; for tests and metrics.
 func (c *Client) IndexSize() int { return c.cmdIndex.size() }
+
+// reported hands the dispatcher what an accepted message said. It runs after Observe returned, so
+// no session lock is held.
+func (c *Client) reported(reports []Report) {
+	if len(reports) > 0 && c.hooks.Reported != nil {
+		c.hooks.Reported(c.tenant, reports)
+	}
+}
 
 // BreakerSample is a source's breaker state at this moment, for the scrape-time collector.
 func (c *Client) BreakerSample() (tenant, source string, state BreakerState) {
@@ -300,12 +333,23 @@ func (c *Client) PublishMetric(ctx context.Context, ref MetricRef, value any, be
 		return CommandWire{}, err
 	}
 	wire := wireOf(cur.Target.Topic(), payload, cur, value, at)
+	// Is the node already at this value? Read from the table just now, for a node that has not
+	// re-declared since (a replaced table says nothing about what the node holds). A reserved
+	// control metric (Reboot) is a trigger, not a value, and is never "already there".
+	if !isReservedMetric(cur.Name) {
+		if want, werr := RequestedWire(cur.Datatype, value); werr == nil {
+			if last, lastAt, ok := c.sessions.LastReported(cur); ok && last == want {
+				wire.AtRequestedValue, wire.LastReportedAt = true, lastAt
+			}
+		}
+	}
 	return c.putOnWire(ctx, cur.Target, &cur, payload, wire, beforeWire)
 }
 
 // PublishRebirth asks a node to rebirth (NCMD "Node Control/Rebirth"), addressed by name as the
 // protocol requires of this one command. The node of a device target is used. It marks the rebirth
-// as commanded, so the NBIRTH that answers it is taken as the answer it is.
+// as commanded (in putOnWire, immediately BEFORE the bytes go out), so the NBIRTH that answers it is
+// taken as the answer it is even when the node answers before the publish call returns.
 func (c *Client) PublishRebirth(ctx context.Context, target CommandTarget, beforeWire func(CommandWire) error) (CommandWire, error) {
 	node := CommandTarget{Group: target.Group, Node: target.Node}
 	if err := c.commandReady(ctx); err != nil {
@@ -318,11 +362,7 @@ func (c *Client) PublishRebirth(ctx context.Context, target CommandTarget, befor
 	}
 	ref := MetricRef{Target: node, Name: nodeControlRebirthMetric, Datatype: datatypeBoolean}
 	wire := wireOf(node.Topic(), payload, ref, true, at)
-	out, err := c.putOnWire(ctx, node, nil, payload, wire, beforeWire)
-	if err == nil {
-		c.sessions.MarkCommandedRebirth(node.Group, node.Node)
-	}
-	return out, err
+	return c.putOnWire(ctx, node, nil, payload, wire, beforeWire)
 }
 
 // putOnWire is the shared tail of every command publish: the before-wire hook, the last checks, and
@@ -351,8 +391,21 @@ func (c *Client) putOnWire(ctx context.Context, target CommandTarget, ref *Metri
 	if !c.breaker.Admit() {
 		return wire, ErrBreakerOpen
 	}
+	// A rebirth (the only command with no table ref) is marked as commanded BEFORE the publish: a
+	// node can answer with its same-bdSeq NBIRTH before the publish call returns, and an answer that
+	// finds no mark is dropped as a QoS-1 redelivery, so the rebirth would never confirm. It is
+	// given back only when nothing was sent; an outcome that is unknown keeps it, because the node
+	// may well have answered.
+	rebirth := ref == nil
+	prevPending := false
+	if rebirth {
+		prevPending = c.sessions.MarkCommandedRebirth(target.Group, target.Node)
+	}
 	if err := c.publishCommand(target, payload); err != nil {
 		if errors.Is(err, errCommandNotConnected) {
+			if rebirth {
+				c.sessions.RestoreRebirthPending(target.Group, target.Node, prevPending)
+			}
 			c.breaker.Release()
 			return wire, ErrSessionDown
 		}

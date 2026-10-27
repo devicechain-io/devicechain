@@ -48,6 +48,9 @@ type fakeClient struct {
 	disconnects atomic.Int32
 	// sent is every Publish in call order, including the ones pubErr failed.
 	sent []sentMsg
+	// onPublish, when set, runs inside Publish after the message is recorded: the node answering
+	// before the publish call has returned.
+	onPublish func(topic string)
 }
 
 // sentMsg is one recorded Publish.
@@ -91,6 +94,12 @@ func (f *fakeClient) Publish(topic string, _ byte, retained bool, payload interf
 	f.sent = append(f.sent, sentMsg{topic: topic, retained: retained, payload: payload.([]byte)})
 	f.mu.Unlock()
 	f.record("pub:" + topic)
+	f.mu.Lock()
+	hook := f.onPublish
+	f.mu.Unlock()
+	if hook != nil {
+		hook(topic)
+	}
 	if f.pubErr != nil {
 		return failedToken{f.pubErr}
 	}

@@ -159,6 +159,14 @@ type SessionTracker struct {
 	// node, so a generation captured from a session that has since been replaced can never equal
 	// the replacement's.
 	tableGen uint64
+
+	// capture turns on the report capture (see report.go); cur is the message the current step is
+	// processing and reports accumulates, under mu, what its accepted metrics said. Observe drains
+	// reports into the Observation it returns, after the lock is released.
+	capture bool
+	wanted  func(name string) bool
+	cur     stepContext
+	reports []Report
 }
 
 // Observation is everything a single decoded Sparkplug message contributes to the
@@ -170,6 +178,9 @@ type Observation struct {
 	Presence []PresenceEvent
 	// Skipped accounts for the metrics of this message that produced no Sample.
 	Skipped Skips
+	// Reports are copies of what the message's accepted metrics said, for the command path to match
+	// against the commands it is waiting on. Empty unless the tracker was asked to capture them.
+	Reports []Report
 }
 
 // nodeExternalId / deviceExternalId build the ADR-049 external id the projection keys
@@ -262,14 +273,17 @@ func (tr *SessionTracker) Observe(top Topic, p *sppb.Payload) Observation {
 	tr.mu.Lock()
 	skipped := tr.skipped
 	tr.skipped = Skips{}
+	reports := tr.reports
+	tr.reports = nil
 	tr.mu.Unlock()
-	return Observation{Samples: samples, Presence: presence, Skipped: skipped}
+	return Observation{Samples: samples, Presence: presence, Skipped: skipped, Reports: reports}
 }
 
 // extract is samplesFrom plus the accounting of what it skipped. The caller holds tr.mu.
 func (tr *SessionTracker) extract(p *sppb.Payload, s *nodeSession, device string) []Sample {
 	samples, skips := samplesFrom(p, s.aliases, s.types, device, tr.now)
 	tr.skipped.add(skips)
+	tr.captureReports(p, s, device)
 	return samples
 }
 
@@ -282,6 +296,7 @@ func (tr *SessionTracker) extract(p *sppb.Payload, s *nodeSession, device string
 func (tr *SessionTracker) step(key nodeKey, top Topic, p *sppb.Payload) ([]Sample, []PresenceEvent, bool) {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
+	tr.cur = stepContext{key: key, mt: top.MessageType}
 
 	// NBIRTH is the authoritative reset: it rebuilds the session from scratch, so
 	// it never needs a prior session and never triggers a rebirth (a replayed
@@ -619,11 +634,27 @@ func (tr *SessionTracker) MarkRebirthPending(group, node string) {
 // re-adopted and the metric table rebuilt, instead of the birth being skipped as a QoS-1
 // redelivery. Unlike MarkRebirthPending it is not a liveness probe, so the answer does not
 // re-assert the node. A node with no live session is a no-op: its next NBIRTH rebuilds everything.
-func (tr *SessionTracker) MarkCommandedRebirth(group, node string) {
+//
+// It returns whether a rebirth was already pending, so a caller whose publish turns out not to have
+// been sent can put that back (RestoreRebirthPending) without clearing a request the session
+// machine had made of its own.
+func (tr *SessionTracker) MarkCommandedRebirth(group, node string) (wasPending bool) {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
 	if s := tr.sessions[nodeKey{group, node}]; s != nil && s.online {
+		wasPending = s.rebirthPending
 		s.rebirthPending = true
+	}
+	return wasPending
+}
+
+// RestoreRebirthPending undoes MarkCommandedRebirth for a rebirth command that was definitely not
+// sent.
+func (tr *SessionTracker) RestoreRebirthPending(group, node string, was bool) {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	if s := tr.sessions[nodeKey{group, node}]; s != nil && s.online {
+		s.rebirthPending = was
 	}
 }
 

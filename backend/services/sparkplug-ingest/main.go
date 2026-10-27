@@ -347,10 +347,13 @@ func buildMetrics() host.Metrics {
 
 	dispatchMetrics = downlink.Metrics{
 		Commands: commandsPrecreated(Microservice.NewCounterVec("commands_total",
-			"Sparkplug commands by result: published (put on the wire), parked (handed back for the device's next birth), drained (a backlogged command dispatched), the refused_* results (answered UNSENT before the wire, each naming the gate that refused it), superseded and unconfirmed (resolved without a report), not_served (another protocol's command), and the faults claim_failed, park_failed, publish_failed, kv_failed and response_failed. confirmed, confirmed_unchanged and rearmed belong to the confirmation path.",
+			"Sparkplug commands by result: published (put on the wire), parked (handed back for the device's next birth), drained (a backlogged command dispatched), the refused_* results (answered UNSENT before the wire, each naming the gate that refused it), confirmed (a report of the requested value, or the node's new birth, settled it), confirmed_unchanged (the window ended with the node still at the value, on a primary host), unconfirmed (the window ended with no report, or the broker dropped the session right after the publish), superseded (a newer command for the same metric replaced it), rearmed (a new term picked it up from the awaiting set), not_served (another protocol's command), and the faults claim_failed, park_failed, publish_failed, kv_failed and response_failed.",
 			[]string{"result"})),
 		Awaiting: Microservice.NewGauge("commands_awaiting",
 			"Sparkplug commands published and awaiting an outcome (entries in the awaiting set)."),
+		ConfirmSeconds: Microservice.NewHistogramVec("command_confirm_seconds",
+			"Seconds from a Sparkplug command's publish to the report that confirmed it (a report of the requested value, or the node's new birth). Commands that were never confirmed are not observed; they are counted by commands_total{result=\"unconfirmed\"}.",
+			nil, []float64{0.5, 1, 2, 5, 10, 20, 40, 60, 90, 120, 300, 600, 1800}).WithLabelValues(),
 	}
 
 	return host.Metrics{
