@@ -198,6 +198,7 @@ func TestChartOverriddenCeilingsReachTheStruct(t *testing.T) {
 // ceiling cannot notice the PV shrinking underneath it. Both halves have to come
 // from the artifact for the comparison to mean anything.
 func TestRenderedReservationFitsTheJetStreamStore(t *testing.T) {
+	t.Parallel()
 	cfg := renderInstanceConfig(t, nil)
 	n := cfg.Infrastructure.Nats
 
@@ -314,6 +315,7 @@ func shippedMaxFileStore(t *testing.T) int64 {
 // pods that have already been replaced. The gate does not add a rule; it moves an
 // existing rule's verdict to where someone can act on it.
 func TestBootstrapRejectsAConfigTheServicesWouldRefuse(t *testing.T) {
+	t.Parallel()
 	ch, err := loadEmbeddedChart()
 	if err != nil {
 		t.Fatalf("loading embedded chart: %v", err)

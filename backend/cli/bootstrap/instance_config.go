@@ -63,6 +63,17 @@ func renderedInstanceConfigSecretName(ch *chart.Chart, vals map[string]interface
 // is right, because these checks are about the instance config, not about which
 // CRDs exist.
 func renderChartClientSide(ctx context.Context, ch *chart.Chart, vals map[string]interface{}) (string, error) {
+	return clientSideRender(ctx, ch, vals)
+}
+
+// clientSideRender is the seam renderChartClientSide goes through. Production leaves it as the
+// render itself; the package's tests replace it with one that remembers what a (chart, values)
+// pair rendered to (render_memo_test.go), because the render is a pure function of those two
+// and the suites that render every profile under the race detector repeat the same pair many
+// times over.
+var clientSideRender = renderChartClientSideUncached
+
+func renderChartClientSideUncached(ctx context.Context, ch *chart.Chart, vals map[string]interface{}) (string, error) {
 	inst := action.NewInstall(&action.Configuration{})
 	// 🔑 A PLACEHOLDER, AND SAFE ONLY BECAUSE THE CHART READS NOTHING FROM IT. No
 	// template in deploy/helm/devicechain references .Release.Name or .Release.Namespace
@@ -116,6 +127,14 @@ func renderedFunctionalAreas(manifest string) []string {
 }
 
 func renderInstanceConfigDocument(ctx context.Context, ch *chart.Chart, vals map[string]interface{}) ([]byte, error) {
+	return instanceConfigDocument(ctx, ch, vals)
+}
+
+// instanceConfigDocument is renderInstanceConfigDocument's seam, for the same reason as
+// clientSideRender: the document is a pure function of (chart, values), and the tests remember it.
+var instanceConfigDocument = renderInstanceConfigDocumentUncached
+
+func renderInstanceConfigDocumentUncached(ctx context.Context, ch *chart.Chart, vals map[string]interface{}) ([]byte, error) {
 	manifest, err := renderChartClientSide(ctx, ch, vals)
 	if err != nil {
 		return nil, err

@@ -12,7 +12,6 @@ import (
 	"testing"
 
 	"helm.sh/helm/v3/pkg/action"
-	"helm.sh/helm/v3/pkg/releaseutil"
 	"sigs.k8s.io/yaml"
 )
 
@@ -140,7 +139,7 @@ func renderDocs(t *testing.T, vals map[string]interface{}) []map[string]interfac
 		t.Fatalf("rendering chart: %v", err)
 	}
 	var out []map[string]interface{}
-	for _, doc := range releaseutil.SplitManifests(rel.Manifest) {
+	for _, doc := range splitManifests(rel.Manifest) {
 		m := map[string]interface{}{}
 		if err := yaml.Unmarshal([]byte(doc), &m); err != nil || len(m) == 0 {
 			continue
@@ -257,6 +256,7 @@ func TestLwm2mIdentitiesRenderEndToEnd(t *testing.T) {
 // would keep its old key. Rendering the same identity with two different PSKs must
 // produce two different lwm2m-ingest pod hashes, so `helm upgrade` actually rolls.
 func TestLwm2mPSKRotationRollsPod(t *testing.T) {
+	t.Parallel()
 	extraSecretsChecksum := func(psk string) string {
 		enabled, err := ResolveEnabledAreas("default", []string{"lwm2m-ingest"})
 		if err != nil {

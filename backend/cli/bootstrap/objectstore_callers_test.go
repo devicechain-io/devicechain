@@ -275,6 +275,7 @@ func TestASingleTrailingNewlineIsTrimmedFromACopiedValue(t *testing.T) {
 // container start, and the copy keeps its name when its content changes, so without a digest
 // the pods keep the old key after a same-version `dcctl upgrade`.
 func TestRotatingTheKeyChangesTheDigestAndTheRenderedPodAnnotation(t *testing.T) {
+	t.Parallel()
 	src := sourceSecret(map[string]string{awsAccessKeyID: sentinelAccess, awsSecretAccessKey: "secret-one"})
 	client := fake.NewSimpleClientset(src)
 	st := &State{Instance: "acme", InstanceUID: testUID, ObjectStore: s3Store()}
@@ -406,6 +407,7 @@ func TestOtherClustersDoNotColocate(t *testing.T) {
 // The chart's own guard against several pods on one ReadWriteOnce claim learns the rule:
 // colocation is a placement answer to it, not an exemption from it.
 func TestTheChartRefusesTwoReplicasOnAReadWriteOnceClaimUnlessColocated(t *testing.T) {
+	t.Parallel()
 	two := func(v map[string]interface{}) {
 		v["functionalAreas"] = map[string]interface{}{"user-management": map[string]interface{}{"replicas": 2}}
 	}
