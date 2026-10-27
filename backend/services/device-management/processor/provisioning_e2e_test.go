@@ -52,7 +52,7 @@ func (k *recordingKicker) KickDeviceSessions(_ context.Context, _, _ string, tok
 func TestARegisteredDeviceCanConnectAndIsCutOffWhenRevoked(t *testing.T) {
 	tables := []any{&model.Device{}, &model.DeviceType{}, &model.DeviceProfile{}, &model.DeviceProfileVersion{},
 		&model.DeviceProfileActivation{}, &model.MetricDefinition{}, &model.CommandDefinition{}, &model.DetectionRule{},
-		&model.DetectionRuleScopeRef{}, &model.ProvisioningProfile{}, &model.DeviceCredential{}}
+		&model.DetectionRuleScopeRef{}, &model.ProvisioningProfile{}, &model.DeviceCredential{}, &model.PendingSessionKick{}}
 	api := model.NewApi(&rdb.RdbManager{Database: putest.NewSQLiteDB(t, tables...)})
 	api.DeviceSecretKey = dmtest.DeviceSecretKey()
 	api.EnrollmentKeys = dmtest.EnrollmentKeys()

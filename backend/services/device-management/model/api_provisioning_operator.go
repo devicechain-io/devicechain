@@ -33,6 +33,10 @@ var errResetRetry = errors.New("the device's provisioning changed while it was b
 // A credential an operator created is not touched. A device that holds none from any profile
 // is a no-op returning zero. An unknown device is gorm.ErrRecordNotFound.
 //
+// A kick that could not be confirmed is recorded (PendingSessionKick) with the delete, so
+// repeating the reset asks the broker again even though no credential is left to remove: the
+// repeat returns zero and the kick's outcome.
+//
 // LOCK ORDER: the profiles that issued the credentials, in id order, then the device. Which
 // profiles those are is learned from an unlocked read, so after locking the answer is read again
 // and, if a credential from a profile that is not locked has appeared, the whole thing is tried
@@ -47,11 +51,14 @@ func (api *Api) ResetDeviceProvisioning(ctx context.Context, deviceToken string)
 		if err != nil {
 			return 0, err
 		}
-		if removed == 0 {
-			return 0, nil
+		if removed > 0 {
+			api.evictDeviceCredentials(ctx, tenant, deviceId)
 		}
-		api.evictDeviceCredentials(ctx, tenant, deviceId)
-		if kerr := api.endDeviceSessions(ctx, tenant, messaging.SessionKickCredentialDeleted, deviceToken); kerr != nil {
+		// Pending kicks are drained whether or not this call removed anything: a retry after a
+		// failed kick finds no credentials left, and still owes the broker the kick.
+		if kerr := api.drainSessionKicks(ctx, tenant, func(db *gorm.DB) *gorm.DB {
+			return db.Where("device_token = ?", deviceToken)
+		}); kerr != nil {
 			return removed, kerr
 		}
 		return removed, nil
@@ -110,7 +117,9 @@ func (api *Api) resetDeviceProvisioningOnce(ctx context.Context, deviceToken str
 			return err
 		}
 		removed = len(gone)
-		return nil
+		// The kick is recorded in the same transaction as the delete, because the credentials
+		// are about to be gone and a retry could not rediscover the device from them.
+		return api.queueSessionKicksOnTx(tx, device.TenantId, messaging.SessionKickCredentialDeleted, nil, []string{device.Token})
 	})
 	return removed, device.TenantId, device.ID, err
 }
@@ -132,43 +141,45 @@ func (api *Api) resetDeviceProvisioningOnce(ctx context.Context, deviceToken str
 // count is the number disabled, and repeating the call asks again.
 func (api *Api) RevokeProvisionedDevices(ctx context.Context, profileToken string) (int, error) {
 	var disabled []DeviceCredential
+	var profileId uint
+	var tenant string
 	err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		disabled = disabled[:0]
 		profile, err := lockProfileByToken(tx, profileToken)
 		if err != nil {
 			return err
 		}
-		return tx.Clauses(clause.Returning{Columns: []clause.Column{{Name: "tenant_id"}, {Name: "device_id"}}}).
+		profileId, tenant = profile.ID, profile.TenantId
+		if err := tx.Clauses(clause.Returning{Columns: []clause.Column{{Name: "tenant_id"}, {Name: "device_id"}}}).
 			Model(&disabled).
 			Where("provisioning_profile_id = ? AND enabled = ?", profile.ID, true).
-			Update("enabled", false).Error
+			Update("enabled", false).Error; err != nil || len(disabled) == 0 {
+			return err
+		}
+		// Record the kick with the disable, in the same transaction: a repeat finds nothing
+		// enabled, and must still know which devices' sessions were never confirmed ended.
+		ids := make([]uint, 0, len(disabled))
+		for _, c := range disabled {
+			ids = append(ids, c.DeviceId)
+		}
+		var tokens []string
+		if err := tx.Unscoped().Model(&Device{}).Where("id IN ?", ids).Pluck("token", &tokens).Error; err != nil {
+			return err
+		}
+		return api.queueSessionKicksOnTx(tx, tenant, messaging.SessionKickCredentialChanged, &profileId, tokens)
 	})
 	if err != nil {
 		return 0, err
 	}
-	if len(disabled) == 0 {
-		return 0, nil
-	}
-	byTenant := map[string][]uint{}
 	for _, c := range disabled {
 		api.evictDeviceCredentials(ctx, c.TenantId, c.DeviceId)
-		byTenant[c.TenantId] = append(byTenant[c.TenantId], c.DeviceId)
 	}
-	var errs []error
-	for tenant, ids := range byTenant {
-		tokens, terr := api.deviceTokensOf(ctx, tenant, ids)
-		if terr != nil {
-			errs = append(errs, terr)
-			continue
-		}
-		for chunk := range slices.Chunk(tokens, messaging.MaxSessionKickTokens) {
-			if kerr := api.endDeviceSessions(ctx, tenant, messaging.SessionKickCredentialChanged, chunk...); kerr != nil {
-				errs = append(errs, kerr)
-			}
-		}
-	}
-	if len(errs) > 0 {
-		return len(disabled), errors.Join(errs...)
+	// Drained whether or not this call disabled anything: kicks left pending by an earlier
+	// revoke of the profile are retried here, and success means they were all confirmed.
+	if kerr := api.drainSessionKicks(ctx, tenant, func(db *gorm.DB) *gorm.DB {
+		return db.Where("provisioning_profile_id = ?", profileId)
+	}); kerr != nil {
+		return len(disabled), kerr
 	}
 	return len(disabled), nil
 }
