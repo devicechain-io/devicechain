@@ -21,7 +21,7 @@ import (
 )
 
 // The calculated-metrics watcher: the in-process cost of ResolveMeasurementsEventPayload for
-// one meter reading, on a profile with 0, 1 and 4 calculated metrics. It is committed BEFORE
+// one meter reading, on a profile with 0, 1, 4 and 8 calculated metrics. It is committed BEFORE
 // the feature so the feature is measured against it: Calc0 must stay within noise of its
 // baseline through every slice — a profile with no formulas pays one length check and
 // nothing else — while Calc1/Calc4 measure what evaluating formulas adds.
@@ -50,6 +50,12 @@ var calcBenchFormulas = []*model.MetricDefinition{
 	calcBenchMetric(6, "temp_f", model.MetricDouble, "[degF]", "temp * 1.8 + 32"),
 	calcBenchMetric(7, "apparent", model.MetricDouble, "", "math.sqrt(voltage * voltage + current * current)"),
 	calcBenchMetric(8, "over_temp", model.MetricBoolean, "", "temp > 80.0 && (has(m.fan) ? fan == 0 : true)"),
+	// The last four exist for Calc8 (the default ceiling the cost gate measures). Calc1 and
+	// Calc4 take a prefix of this slice, so appending here leaves them unchanged.
+	calcBenchMetric(9, "voltage_sq", model.MetricDouble, "", "voltage * voltage"),
+	calcBenchMetric(10, "current_ma", model.MetricDouble, "mA", "current * 1000.0"),
+	calcBenchMetric(11, "temp_k", model.MetricDouble, "K", "temp + 273.15"),
+	calcBenchMetric(12, "fan_on", model.MetricBoolean, "", "fan > 0"),
 }
 
 func calcBenchMetric(id uint, key string, t model.MetricDataType, unit, expr string) *model.MetricDefinition {
@@ -115,6 +121,14 @@ func BenchmarkResolveMeasurements_Calc1(b *testing.B) {
 // BenchmarkResolveMeasurements_Calc4 is the same reading with all four calculated metrics.
 func BenchmarkResolveMeasurements_Calc4(b *testing.B) {
 	benchResolveMeasurements(b, calcBenchProfile(4))
+}
+
+// BenchmarkResolveMeasurements_Calc8 is the same reading with eight calculated metrics: the
+// per-profile count the calculated-metrics cost gate (hack/calc-cost-gate.sh) measures as the
+// proposed default. It is the in-process watcher for that arm: the gate decides the default on a
+// cluster, and this is what a change to the resolver is held to before it gets there.
+func BenchmarkResolveMeasurements_Calc8(b *testing.B) {
+	benchResolveMeasurements(b, calcBenchProfile(8))
 }
 
 // calcChainFormulas are CalcChain4's calculated metrics: a chain of depth four (the most a
