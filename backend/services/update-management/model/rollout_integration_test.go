@@ -128,11 +128,13 @@ func (e *pgRollouts) inFlightAttempts(t *testing.T, a *Api) []UpdateAttempt {
 	return rows
 }
 
-// barrier lets n callers through together, or each one alone after timeout.
-func barrier(n int, timeout time.Duration) func() {
+// barrier lets n callers through together, or each one alone after timeout. timedOut reports
+// whether any caller gave up waiting, i.e. whether the callers did NOT meet.
+func barrier(n int, timeout time.Duration) (wait func(), timedOut *atomic.Bool) {
 	var mu sync.Mutex
 	arrived := 0
 	release := make(chan struct{})
+	timedOut = new(atomic.Bool)
 	return func() {
 		mu.Lock()
 		arrived++
@@ -143,8 +145,9 @@ func barrier(n int, timeout time.Duration) func() {
 		select {
 		case <-release:
 		case <-time.After(timeout):
+			timedOut.Store(true)
 		}
-	}
+	}, timedOut
 }
 
 // 🔴 THE CAP IS EXACT WITH TWO REPLICAS AT ONCE, and the control shows the lock is why. Both
@@ -163,9 +166,20 @@ func TestTwoReplicasSteppingOneRolloutNeverExceedTheCapOnPostgres(t *testing.T) 
 			_, err := a.CreateRollout(e.ctx(), RolloutCreateRequest{Token: "r1", ArtifactToken: "fw-2", GroupToken: "fleet", MaxInFlight: 2})
 			require.NoError(t, err)
 			// Start with the driver not yet holding a step of its own: the inline step would fill the cap.
-			gate := barrier(2, 2*time.Second)
+			// Without the lock BOTH replicas must reach the hook, so the control waits for the other
+			// one as long as a loaded CI runner could possibly take: the timeout is only the backstop
+			// that turns a replica that never arrives into a failure rather than a hang, and the
+			// meeting is asserted below. A short wait here is what made the control flaky — the
+			// replica that arrived first gave up, ran alone, and the cap was never exceeded. With
+			// the lock the second replica is skipped and never reaches the hook, so the first waits
+			// out the (short) timeout alone, which is the intended interleaving.
+			wait := 2 * time.Second
+			if tc.noLock {
+				wait = 60 * time.Second
+			}
+			gate, gaveUp := barrier(2, wait)
 			for _, r := range []*Api{a, b} {
-				r.beforeDispatch, r.noRolloutLock = gate, tc.noLock
+				r.noRolloutLock = tc.noLock
 			}
 			e.groups.mu.Lock()
 			saved := e.groups.members[e.tenant+"/fleet"]
@@ -175,6 +189,11 @@ func TestTwoReplicasSteppingOneRolloutNeverExceedTheCapOnPostgres(t *testing.T) 
 			require.NoError(t, err)
 			require.Equal(t, len(saved), v.Progress.Pending)
 			a.Devices = e.devices
+			// Armed only now: the start's inline step passes through the same hook, and an arrival
+			// there would count toward the barrier and let the first real step through alone.
+			for _, r := range []*Api{a, b} {
+				r.beforeDispatch = gate
+			}
 
 			var wg sync.WaitGroup
 			var dispatched atomic.Int64
@@ -188,6 +207,9 @@ func TestTwoReplicasSteppingOneRolloutNeverExceedTheCapOnPostgres(t *testing.T) 
 				}(r)
 			}
 			wg.Wait()
+			if tc.noLock {
+				require.False(t, gaveUp.Load(), "the replicas never met at the hook, so the control did not exercise the race")
+			}
 			require.Equal(t, int64(tc.want), dispatched.Load())
 			require.Equal(t, tc.want, e.progress(t, a, "r1").Occupied())
 		})
