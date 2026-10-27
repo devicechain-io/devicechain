@@ -71,6 +71,7 @@ export function ConnectSnippet({
     binary: integration.type === 'GENERIC_BINARY',
     idKind: g.idKind ?? 'header',
     idValue: g.idValue ?? '',
+    itemsPointer: g.itemsPointer,
   });
   return (
     <div className="space-y-3" data-shot="integration-snippet-generic">
