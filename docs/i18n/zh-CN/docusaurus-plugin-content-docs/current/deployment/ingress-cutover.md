@@ -52,7 +52,28 @@ title: 迁移到 Traefik
 
 4. **迁移 DNS。** 把主机指向 Traefik 的地址。无需其他操作，也不必赶时间：只要仍有客户端解析到旧地址，Ingress 对象就会继续响应。
 
-5. **移除 Ingress 对象。** 流量迁移完成后，停止生成它们：
+5. **检查 Gateway 的证书。**对于使用自带 CA 终结 TLS 的实例（默认的自签名配置），在移除 Ingress
+   对象之前，确认 Gateway 的证书由实例 CA 签发。跨越签发者切换升级的实例，Gateway 证书可能仍由先前的
+   自签名签发者签发：它的主题为空，也不是由 CA 签发的叶子证书，因此基于 OpenSSL 的客户端没有可用于
+   锚定它的根，而接受例外的浏览器看不出区别。
+
+   ```bash
+   kubectl -n dci-<instance> get secret devicechain-tls-gateway -o jsonpath='{.data.tls\.crt}' \
+     | base64 -d | openssl x509 -noout -subject -issuer
+   ```
+
+   主题不能为空，签发者必须是实例 CA，即 `CN=<instance> DeviceChain CA`。如果不是，请让 cert-manager
+   从实例 CA 重新签发，然后再次检查：
+
+   ```bash
+   cmctl renew -n dci-<instance> devicechain-tls-gateway
+   # 没有 cmctl：删除该 Secret，cert-manager 会重新创建
+   kubectl -n dci-<instance> delete secret devicechain-tls-gateway
+   ```
+
+   证书来自 ACME 或其他 `ClusterIssuer` 的实例无需此步。
+
+6. **移除 Ingress 对象。** 流量迁移完成后，停止生成它们：
 
    ```bash
    dcctl upgrade <provider> <instance> --drop-legacy-ingress
@@ -60,7 +81,7 @@ title: 迁移到 Traefik
 
    对集群上的每个实例都这样做。
 
-6. **移除 `ingress-nginx`。**
+7. **移除 `ingress-nginx`。**
 
    ```bash
    dcctl install <provider> --remove-legacy-ingress
@@ -82,7 +103,7 @@ title: 迁移到 Traefik
 
 本地（kind）集群会发布节点的 80 和 443 端口，而这两个端口只能由一个控制器占用。两个控制器都已安装时，`ingress-nginx` 占用这两个端口，Traefik 只能通过 NodePort 访问。
 
-在本地集群上没有 DNS 可迁移：浏览器访问的是占用节点端口的那个控制器。第 3、4 步（外部地址和 DNS）不适用，而普通的 `dcctl upgrade` 已经会把带有 Ingress 对象的实例带入迁移窗口。请连续执行第 5 步和第 6 步：从 `--drop-legacy-ingress` 开始，主机一直不响应，直到移除操作把端口交给 Traefik；期间会有一小段中断。
+在本地集群上没有 DNS 可迁移：浏览器访问的是占用节点端口的那个控制器。第 3、4 步（外部地址和 DNS）不适用，而普通的 `dcctl upgrade` 已经会把带有 Ingress 对象的实例带入迁移窗口。请连续执行第 6 步和第 7 步：从 `--drop-legacy-ingress` 开始，主机一直不响应，直到移除操作把端口交给 Traefik；期间会有一小段中断。
 
 **全新的**本地集群没有 `ingress-nginx`，Traefik 从一开始就占用这些端口。在两者并存的本地集群上，**新**实例在移除之前由 `ingress-nginx` 提供服务。
 

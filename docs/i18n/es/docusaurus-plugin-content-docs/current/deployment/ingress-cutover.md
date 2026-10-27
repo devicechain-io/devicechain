@@ -67,7 +67,30 @@ Qué hace cada comando en un clúster que todavía tiene `ingress-nginx`:
 4. **Mueve el DNS.** Apunta el host a la dirección de Traefik. No hace falta nada más, y nada tiene que ser rápido:
    los objetos Ingress siguen respondiendo mientras haya clientes que resuelvan la dirección antigua.
 
-5. **Quita los objetos Ingress.** Cuando el tráfico se haya movido, deja de generarlos:
+5. **Comprueba el certificado del Gateway.** En una instancia que termina TLS con su propia CA (la
+   configuración autofirmada por defecto), confirma que el certificado del Gateway lo emitió la CA de la
+   instancia antes de quitar los objetos Ingress. Una instancia actualizada a través del cambio de emisor
+   puede quedar con un certificado del Gateway emitido por el emisor autofirmado anterior: tiene el sujeto
+   vacío y no es una hoja firmada por una CA, así que un cliente basado en OpenSSL no tiene nada con lo que
+   anclarlo, aunque un navegador que acepta excepciones no muestra la diferencia.
+
+   ```bash
+   kubectl -n dci-<instance> get secret devicechain-tls-gateway -o jsonpath='{.data.tls\.crt}' \
+     | base64 -d | openssl x509 -noout -subject -issuer
+   ```
+
+   El sujeto no debe estar vacío y el emisor debe ser la CA de la instancia, `CN=<instance> DeviceChain CA`.
+   Si no lo es, pide a cert-manager que lo emita de nuevo desde la CA de la instancia y vuelve a comprobar:
+
+   ```bash
+   cmctl renew -n dci-<instance> devicechain-tls-gateway
+   # sin cmctl: borra el Secret y cert-manager lo vuelve a crear
+   kubectl -n dci-<instance> delete secret devicechain-tls-gateway
+   ```
+
+   Una instancia cuyo certificado procede de un `ClusterIssuer` ACME u otro no tiene nada que hacer aquí.
+
+6. **Quita los objetos Ingress.** Cuando el tráfico se haya movido, deja de generarlos:
 
    ```bash
    dcctl upgrade <provider> <instance> --drop-legacy-ingress
@@ -75,7 +98,7 @@ Qué hace cada comando en un clúster que todavía tiene `ingress-nginx`:
 
    Hazlo para todas las instancias del clúster.
 
-6. **Quita `ingress-nginx`.**
+7. **Quita `ingress-nginx`.**
 
    ```bash
    dcctl install <provider> --remove-legacy-ingress
@@ -100,7 +123,7 @@ Qué hace cada comando en un clúster que todavía tiene `ingress-nginx`:
 
 Un clúster local (kind) publica los puertos 80 y 443 de un nodo, y solo un controlador puede ocuparlos. Mientras los dos controladores estén instalados, `ingress-nginx` conserva los puertos y Traefik solo es accesible en un NodePort.
 
-En un clúster local no hay DNS que mover: el navegador llega al controlador que ocupe los puertos del nodo. Los pasos 3 y 4 (la dirección externa y el DNS) no se aplican, y un `dcctl upgrade` normal ya lleva a la ventana a una instancia que tiene objetos Ingress. Ejecuta los pasos 5 y 6 seguidos: el host no responde desde `--drop-legacy-ingress` hasta que la eliminación haya entregado los puertos a Traefik, y espera un corte breve mientras ocurre.
+En un clúster local no hay DNS que mover: el navegador llega al controlador que ocupe los puertos del nodo. Los pasos 3 y 4 (la dirección externa y el DNS) no se aplican, y un `dcctl upgrade` normal ya lleva a la ventana a una instancia que tiene objetos Ingress. Ejecuta los pasos 6 y 7 seguidos: el host no responde desde `--drop-legacy-ingress` hasta que la eliminación haya entregado los puertos a Traefik, y espera un corte breve mientras ocurre.
 
 Un clúster local **nuevo** no tiene `ingress-nginx`, y Traefik ocupa los puertos desde el principio. En un clúster local que tiene ambos, una instancia **nueva** la sirve `ingress-nginx` hasta la eliminación.
 

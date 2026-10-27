@@ -141,10 +141,25 @@ Decisions taken in this slice, so the next does not reopen them:
 - The `command_confirm_seconds` histogram observes only confirmed commands; unconfirmed ones are
   `commands_total{result="unconfirmed"}`.
 
-What is NOT here (later slices): the chart/dcctl render of `sources[].commands.*` and the derived
-flag, the PrometheusRule (the unconfirmed-ratio and response-failure alerts, and the rule test that
-fires them), and the console. The service does not publish a command that it cannot account for,
-but until the chart can switch the feature on, `commands.enabled` is set by hand.
+## Enablement (chart, alerts, console)
+
+- **Turning it on.** `functionalAreas.sparkplug-ingest.config.sources[].commands.*` in the chart values.
+  dcctl's values overlay refuses `sparkplug-ingest` sources, so commands are enabled through Helm values
+  only. The chart derives command-delivery's `sparkplugCommands` flag from the sources (matching keys
+  without regard to case, as the service binds them) and fails the render on a hand-set flag, on commands
+  without `command-delivery` or its in-cluster address, on a non-boolean `enabled`, and on the same key
+  spelled twice under different capitalisation. `hack/check-sparkplug-commands-chart.sh` pins all of it,
+  with a self-test that plants each defect.
+- **Alerts** (edge rule group): `SparkplugCommandsUnconfirmed`, `SparkplugCommandBreakerOpen` (fires when
+  the breaker OPENED in the last 20 minutes; the real breaker goes open -> half-open on its own and only a
+  published probe closes it, so "not closed" would fire forever on an idle source) and
+  `SparkplugCommandResponsesFailing` (the five fault results: claim_failed, park_failed, publish_failed,
+  kv_failed, response_failed).
+- **Console.** "Add Sparkplug standard commands" on the profile, a free-text metric and value form for
+  `sparkplug.write`, and outcome help under the command's status. The help reads the stored response
+  and keys on its machine-readable `reason` code, not on the human error text. A code the console does
+  not know says nothing extra.
+- **Not shipped:** the Tahu and Mosquitto interop run, and the amendment of the Sparkplug ADR.
 
 Accepted deviations from the design, and rulings recorded here so the next slice does not reopen
 them:

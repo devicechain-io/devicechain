@@ -51,7 +51,7 @@ How devices reach the platform, and how the platform reaches back.
 | [MQTT](../guides/connecting-a-device.md#mqtt) (platform broker) | ○ | ◐ | ◐ |
 | [HTTP](../guides/connecting-a-device.md#http) | ○ | ○ | ● |
 | MQTT (external broker) | ○ | ○ | ◐ |
-| [Sparkplug B](../concepts/sparkplug.md) | ○ | ○ | ◐ |
+| [Sparkplug B](../concepts/sparkplug.md) | ○ | ◐ | ◐ |
 | [LwM2M](../concepts/lwm2m.md) | ◐ | ◐ | ◐ |
 | [Inbound integrations](../guides/inbound-integrations.md) (LoRaWAN network server, webhook) | ○ | ○ | ◐ |
 
@@ -150,7 +150,7 @@ A `POST` endpoint for the same JSON event body. Simple, and one-way.
   operator gave the event source), so the gate that recognises an undeliverable transport cannot
   recognise this one. The command is accepted, published where no device is subscribed to
   receive it, marked `SENT`, and ends as `TIMEOUT`. Sparkplug is the only row on this page where
-  a `○` in this column produces a prompt `FAILED` instead.
+  a `○` in this column produces a prompt `FAILED` instead (Sparkplug does so when its commands are not enabled).
 - The ingest listener terminates plain HTTP and has no transport authentication of its own;
   device credentials ride in the event body. Where you need TLS, it comes from whatever fronts the
   service.
@@ -249,10 +249,12 @@ For brownfield fleets already speaking Sparkplug to their own broker.
   [backpressure on the ingest path](../deployment/observability.md#ingest-backpressure)), readings
   are dropped without a retry and counted. BIRTH and DEATH are still accepted, so presence stays
   correct.
-- **Write ○ — deliberately out of scope, not unfinished.** There is no Sparkplug command egress
-  (`DCMD`), and none is waiting on work: a Sparkplug fleet sits on the *customer's* MQTT
-  infrastructure, so nothing bridges the platform's command stream to it. A command issued to a
-  Sparkplug device ends as `FAILED`, undeliverable, with two qualifications:
+- **Write ◐: opt-in, confirmed by report.** With a source's `commands.enabled` set, a command to a
+  Sparkplug device is published as an `NCMD` or `DCMD` on the Host Application's session, and is
+  confirmed when the node later *reports* the requested value. Sparkplug has no command acknowledgement,
+  so a command the node does not report ends as `TIMEOUT`, not as a failure. It is off by default and
+  enabled through Helm values; see [Sparkplug commands](../concepts/sparkplug.md#commands). With it
+  off, a command to a Sparkplug device ends as `FAILED`, undeliverable, with two qualifications:
   - **The verdict is normally prompt, but not synchronous with the enqueue.** Enqueueing a command
     triggers an immediate dispatch attempt for that device. When it is the device's only queued
     command, the presence gate fails it right away. If the device already has other commands
@@ -264,9 +266,9 @@ For brownfield fleets already speaking Sparkplug to their own broker.
     that at startup — and the command dispatches like any other and ends as `TIMEOUT` instead.
 - **Read ○** — same reason.
 
-What the platform *does* publish on Sparkplug: no `DCMD`, ever, and no `NCMD` reachable from the
-command API. The single `NCMD` the platform emits is an internal `Node Control/Rebirth`, issued by
-the Host Application's own session tracking to repair a sequence gap, at QoS 0 and unretained.
+What the platform publishes on Sparkplug beyond that: with commands enabled, the `NCMD` and `DCMD` of the
+commands you send, at QoS 0 and unretained; always, an internal `Node Control/Rebirth` `NCMD`, issued by
+the Host Application's own session tracking to repair a sequence gap.
 
 The Host Application does publish its own `STATE` message on `spBv1.0/STATE/{host_id}`, retained
 and at QoS 1: when it connects, when it stops cleanly, and as its Last-Will if it dies. That is the
@@ -413,5 +415,5 @@ These are named explicitly because, from outside the platform, "absent from the 
 | WebSocket device ingest | Not available. Named as planned in the [introduction](../intro.md). |
 | CoAP outside LwM2M | Not available. CoAP reaches the platform through [LwM2M](../concepts/lwm2m.md) and not otherwise. |
 | Raw NATS as a device transport | Not available. A device credential authorizes an MQTT connection, and there is no NATS-native device client. |
-| Sparkplug command egress (`DCMD`) | Not available, and deliberately out of scope rather than pending — see [above](#sparkplug-b). |
+| Sparkplug command egress (`DCMD`) | Available when a source enables it, confirmed by the node reporting the value rather than by an acknowledgement, which Sparkplug does not have — see [above](#sparkplug-b). |
 | Industrial fieldbus protocols — OPC-UA, Modbus, BACnet | Not available as platform transports, and **nothing the project ships speaks them.** The supported shape is a local gateway that speaks the fieldbus on the plant network and forwards over MQTT or HTTP; you supply the protocol translation. The project does ship `dc-edge-agent`, which does the *other* half of that job: it terminates the device MQTT path locally, spools durably across a WAN outage, and forwards **over MQTT only**. It speaks no fieldbus itself. |

@@ -133,10 +133,11 @@ Four limits apply:
   loses the command. What the check removes is the case the platform could see coming. A transport
   that keeps its own queue for a sleeping device is handled separately; see
   [Registered is not the same as reachable](#parked-commands).
-- **Commands to Sparkplug devices are not delivered at all.** The path is not built: Sparkplug
-  nodes live on your own MQTT infrastructure rather than the platform's, and nothing bridges the
-  two. A command issued to one is recorded `FAILED` immediately, with that as its reason, rather
-  than being held for a return that would not help.
+- **Commands to Sparkplug devices are delivered only when the device's source enables them.** Sparkplug
+  nodes live on your own MQTT infrastructure, so the platform sends over its Host Application session
+  and only when a source has opted in. With it off, which is the default, a command is recorded `FAILED`
+  immediately. With it on, a command is confirmed by the node reporting the value, not by an
+  acknowledgement. See [Sparkplug commands](./sparkplug.md#commands).
 - **A hold outlives the transport that caused it.** Only the transport that reported the device
   absent can report it back. If that transport stops running, the backlog waits until each
   command's own expiry. [Returning the device to inferred

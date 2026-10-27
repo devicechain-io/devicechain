@@ -281,6 +281,63 @@ SenML 在 LwM2M 1.1 才引入。仅支持 1.0 的设备可注册、维持会话�
 Sparkplug 按租户接入上限计量 DATA 消息中的读数，并丢弃超出部分。不计量消息速率、birth 或 death；消息总大小只受代理限制。参见 [Sparkplug 接入限制](#unbounded-sparkplug-ingest)。
 :::
 
+### Sparkplug 命令 {#sparkplug-commands}
+
+[Sparkplug 命令](../concepts/sparkplug.md#commands)所述的命令下行通道**需要主动启用，默认关闭**。它按来源配置，**目前只能通过 Helm values**：`dcctl` 拒绝在 values 覆盖文件中接受 `sparkplug-ingest` 的来源，因此来源以及其中的命令都设置在 chart 的 `functionalAreas.sparkplug-ingest.config.sources` 里。
+
+```yaml
+functionalAreas:
+  sparkplug-ingest:
+    config:
+      sources:
+        - tenant: acme
+          hostId: devicechain
+          broker:
+            url: ssl://broker.acme.example:8883
+            username: devicechain
+            passwordEnv: SPARKPLUG_ACME_PW
+          groups: [plant-a]
+          commands:
+            enabled: true
+            hostRole: primary            # 必填：primary 或 secondary
+            writableMetrics:             # 为空（默认）则不允许任何写入
+              - "Outputs/*"
+            allowReboot: false
+```
+
+| 设置 | 默认值 | 含义 |
+| --- | --- | --- |
+| `enabled` | `false` | 为该来源启用下行通道 |
+| `hostRole` | 无，必填 | `primary` 或 `secondary`，参见[主主机与次主机](../concepts/sparkplug.md#primary-and-secondary-host) |
+| `writableMetrics` | 空 | `sparkplug.write` 可以针对的指标：精确名称，或以 `/*` 结尾的前缀。为空表示**不允许**任何写入。`bdSeq` 以及 `Node Control/`、`Device Control/` 指标不能列入 |
+| `allowReboot` | `false` | 允许 `sparkplug.reboot` 到达该来源的节点 |
+| `confirmWindowSeconds` | `120` | 写入后等待上报的时间（5 到 900）。链路较慢的节点请调大 |
+| `rebootWindowSeconds` | `600` | 重启后等待节点新 birth 的时间，也是同一节点两次重启之间的最短间隔（30 到 3600） |
+| `clockSkewSeconds` | `30` | 节点自身时间戳可以早于发布时间多少仍算有效（0 到 300） |
+| `publishPerSecond`、`burst` | `50`、`200` | 该来源每秒最多发出的命令数及突发量 |
+
+服务在启动时强制执行下列规则，出错时会带着消息停止，而不是发出非预期的内容：
+
+- **每个代理一个来源。**启用命令的来源必须是其代理端点上唯一的 Sparkplug 来源，这样节点绝不会被重复下发。请把各分组合并到一个来源。
+- 启用命令时**必须提供 `hostRole`**。
+- **必须部署 `command-delivery`。**chart 会根据来源自行设置 command-delivery 的 `sparkplugCommands`，当来源启用命令而 `command-delivery` 未启用，或集群内 `command-delivery` 地址为空时，渲染会失败。该设置不能手动设置。
+
+应用设置并滚动重启之后，在设备配置文件上声明这些命令（控制台的**添加 Sparkplug 标准命令**）并发布。发往未启用命令的来源的命令会立即以未投递失败。
+
+#### 代理 ACL {#sparkplug-commands-acl}
+
+除了已有的读取权限和发布 `STATE` 的权限外，来源的凭据还需要**发布**命令的权限。对 Mosquitto，在 ACL 文件中为来源的 `username` 及其分组设置：
+
+```
+user devicechain
+topic read spBv1.0/plant-a/#
+topic write spBv1.0/STATE/devicechain
+topic write spBv1.0/plant-a/NCMD/+
+topic write spBv1.0/plant-a/DCMD/+/+
+```
+
+其他代理用各自的语法表达同一条规则：允许在 `spBv1.0/<group>/NCMD/<node>` 和 `spBv1.0/<group>/DCMD/<node>/<device>` 上发布。静默丢弃被拒绝发布的代理会使命令停在 `TIMEOUT`；在发布被拒绝时断开客户端的代理会打开断路器，触发 `SparkplugCommandBreakerOpen`。如果所有命令都以未确认结束，会触发 `SparkplugCommandsUnconfirmed`，首先应检查凭据的发布权限。
+
 ### Sparkplug 接入限制 {#unbounded-sparkplug-ingest}
 
 **读数消耗租户接入限额。** NDATA 或 DDATA 中每个数值指标算一个读数，使用与其他设备传输相同的按读数计量的租户上限（参见[默认允许量](../concepts/governance.md#ingest-default)）。每条消息在存储前计费一次，处理器内部重试不重复计费。超限读数丢弃并计入 `ingest_samples_shed_total`。clean-session 主机没有代理重投递，因此丢弃即丢失，与其他传输超限读数相同。

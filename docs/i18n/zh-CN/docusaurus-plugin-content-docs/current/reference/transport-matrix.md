@@ -47,7 +47,7 @@ title: 传输能力矩阵
 | [MQTT](../guides/connecting-a-device.md#mqtt)（平台代理） | ○ | ◐ | ◐ |
 | [HTTP](../guides/connecting-a-device.md#http) | ○ | ○ | ● |
 | MQTT（外部代理） | ○ | ○ | ◐ |
-| [Sparkplug B](../concepts/sparkplug.md) | ○ | ○ | ◐ |
+| [Sparkplug B](../concepts/sparkplug.md) | ○ | ◐ | ◐ |
 | [LwM2M](../concepts/lwm2m.md) | ◐ | ◐ | ◐ |
 | [入站集成](../guides/inbound-integrations.md)（LoRaWAN 网络服务器、webhook） | ○ | ○ | ◐ |
 
@@ -119,7 +119,7 @@ title: 传输能力矩阵
   平台不会为通过 HTTP 到达的设备生成传输名称（设备记录的来源是运维人员给事件源指定的 ID），
   因此识别不可投递传输的门控无法识别这种情况。
   命令会被接受，发布到没有设备订阅的位置，标记为 `SENT`，最后成为 `TIMEOUT`。
-  本页只有 Sparkplug 在此列为 `○` 时，会迅速得到 `FAILED`。
+  本页只有 Sparkplug 在此列为 `○` 时，会迅速得到 `FAILED`（Sparkplug 在未启用命令时如此）。
 - 接入监听器终止的是明文 HTTP，本身没有传输认证；设备凭据放在事件正文中。
   需要 TLS 时，由服务前面的组件提供。
 
@@ -198,20 +198,20 @@ title: 传输能力矩阵
 
   平台施加背压期间（参见[接入路径上的背压](../deployment/observability.md#ingest-backpressure)），
   读数会被丢弃并计数，不重试。BIRTH 和 DEATH 仍被接受，因此在线状态保持正确。
-- **写入 ○：有意不在范围内，而非尚未完成。**没有 Sparkplug 命令出口（`DCMD`），也不是等待开发：
-  Sparkplug 设备群位于*客户自己的* MQTT 基础设施中，没有组件把平台命令流桥接过去。
-  发给 Sparkplug 设备的命令会以不可投递的 `FAILED` 结束，有两项限定：
-  - **结果通常很快，但与入队不同步。**命令入队会立即尝试为该设备派发。
-    如果这是设备唯一排队的命令，在线状态门控会立即令其失败。
-    如果已有其他排队命令，该次尝试会让出，结果在下一轮投递扫描中产生；扫描默认每 30 秒进行一次，可配置为 5 到 300 秒。
-  - **必须配置在线状态门控。**门控根据设备传输报告的状态扣留或拒绝命令，
-    需要跨服务密钥和 `device-state` 端点。缺少任一项时，门控关闭，并在启动时记录；
-    命令会像其他命令一样派发，最终成为 `TIMEOUT`。
+- **写入 ◐：需主动启用，以上报确认。**来源设置 `commands.enabled` 后，发给 Sparkplug 设备的命令会在
+  Host Application 的会话上作为 `NCMD` 或 `DCMD` 发布，并在节点之后*上报*所请求的值时确认。Sparkplug
+  没有命令确认机制，因此节点未上报的命令以 `TIMEOUT` 结束，而不是失败。该功能默认关闭，通过
+  Helm values 启用，参见 [Sparkplug 命令](../concepts/sparkplug.md#commands)。关闭时，发给
+  Sparkplug 设备的命令会以不可投递的 `FAILED` 结束，有两项限定：
+  - **结果通常很快，但与入队不同步。**命令入队会立即尝试派发。如果这是设备唯一排队的命令，
+    在线状态门控会立即令其失败。如果已有其他排队命令，该次尝试会让出，结果在下一轮投递扫描时出现，
+    默认每 30 秒一次（可在 5 到 300 之间配置）。
+  - **必须配置在线状态门控。**门控根据设备传输报告的状态扣留命令或令其失败。它需要跨服务密钥和
+    `device-state` 端点。缺少任一项时，门控关闭（启动时会记录），命令会像其他命令一样派发，最终成为 `TIMEOUT`。
 - **读取 ○**：原因相同。
 
-平台*确实*在 Sparkplug 上发布的内容：永远没有 `DCMD`，也没有可通过命令 API 触发的 `NCMD`。
-唯一发送的 `NCMD` 是内部的 `Node Control/Rebirth`，由 Host Application 自身的会话跟踪发出，
-用于修复序列缺口，使用 QoS 0，不保留。
+除此之外，平台在 Sparkplug 上发布的内容：启用命令后，是你所发命令的 `NCMD` 和 `DCMD`，QoS 0，不保留；
+此外始终有一个内部的 `Node Control/Rebirth` `NCMD`，由 Host Application 自身的会话跟踪发出，用于修复序列缺口。
 
 Host Application 会在 `spBv1.0/STATE/{host_id}` 发布自己的 `STATE` 消息，使用 QoS 1 并保留：
 连接时、正常停止时，以及异常终止时作为 Last-Will 发布。
@@ -324,5 +324,5 @@ Kafka 有真正的 `tls` 开关；MQTT 连接器配置则**没有任何 TLS 字�
 | WebSocket 设备接入 | 尚不可用。[简介](../intro.md) 中列为计划能力。 |
 | LwM2M 之外的 CoAP | 尚不可用。CoAP 只能通过 [LwM2M](../concepts/lwm2m.md) 接入平台。 |
 | 使用原始 NATS 作为设备传输 | 尚不可用。设备凭据授权的是 MQTT 连接，没有 NATS 原生设备客户端。 |
-| Sparkplug 命令出口（`DCMD`） | 尚不可用，且有意不在范围内，而非等待开发；参见[上文](#sparkplug-b)。 |
+| Sparkplug 命令出口（`DCMD`） | 来源启用后可用，以节点上报该值而非应答来确认，因为 Sparkplug 没有应答机制；参见[上文](#sparkplug-b)。 |
 | 工业现场总线协议：OPC-UA、Modbus、BACnet | 不作为平台传输提供，**项目发布的任何组件都不会这些协议。**受支持的形态是在工厂网络中部署能使用现场总线的本地网关，通过 MQTT 或 HTTP 转发；协议转换由你提供。项目确实发布 `dc-edge-agent`，但它做的是这项工作的*另一半*：在本地终止设备 MQTT 路径，WAN 中断时持久暂存，并**仅通过 MQTT** 转发。它自身不会任何现场总线协议。 |
