@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
-	"helm.sh/helm/v3/pkg/releaseutil"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -243,7 +242,7 @@ func composeStore(t *testing.T, store *dcv1beta1.ObjectStoreSpec) composedStore 
 
 func (c composedStore) deployment(t *testing.T, area string) appsv1.Deployment {
 	t.Helper()
-	for _, d := range releaseutil.SplitManifests(c.manifest) {
+	for _, d := range splitManifests(c.manifest) {
 		var dep appsv1.Deployment
 		if err := yaml.Unmarshal([]byte(d), &dep); err != nil || dep.Kind != "Deployment" {
 			continue
@@ -258,7 +257,7 @@ func (c composedStore) deployment(t *testing.T, area string) appsv1.Deployment {
 
 func (c composedStore) pvc(t *testing.T) *corev1.PersistentVolumeClaim {
 	t.Helper()
-	for _, d := range releaseutil.SplitManifests(c.manifest) {
+	for _, d := range splitManifests(c.manifest) {
 		var pvc corev1.PersistentVolumeClaim
 		if err := yaml.Unmarshal([]byte(d), &pvc); err == nil && pvc.Kind == "PersistentVolumeClaim" &&
 			pvc.Name == "dci-dc-os-blob" {

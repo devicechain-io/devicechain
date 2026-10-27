@@ -380,6 +380,7 @@ func TestNetworkPolicyNeedsItsPortsRestatedUnderAnExternalSecret(t *testing.T) {
 // accepts both, which is precisely why the strict load alone was closing half a
 // hole.
 func TestAuthoredConfigMustCarryTheTransformsTheChartWouldHaveApplied(t *testing.T) {
+	t.Parallel()
 	ch := chartForTest(t)
 	external := externalValues(digest("a"))
 

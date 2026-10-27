@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"helm.sh/helm/v3/pkg/action"
-	"helm.sh/helm/v3/pkg/releaseutil"
 	"sigs.k8s.io/yaml"
 )
 
@@ -108,7 +107,7 @@ func containersOf(t *testing.T, manifest string) []renderedContainer {
 	t.Helper()
 
 	var out []renderedContainer
-	for _, doc := range releaseutil.SplitManifests(manifest) {
+	for _, doc := range splitManifests(manifest) {
 		var kind struct {
 			Kind string `json:"kind"`
 		}

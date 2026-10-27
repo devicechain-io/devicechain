@@ -219,6 +219,7 @@ func cores(t *testing.T, s string) int64 {
 // v0.19.0 notes, in both locales, to the requests, replica counts and rollout strategies
 // dcctl renders for --ha, a plain install and --compact.
 func TestUpgradeNotesMakeRoomIsTheRenderedArithmetic(t *testing.T) {
+	t.Parallel()
 	areas := measuredAreas(t)
 	ha := haState(true)
 	plain := haState(false)
