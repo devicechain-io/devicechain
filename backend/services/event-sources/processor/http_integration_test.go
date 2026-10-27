@@ -677,3 +677,47 @@ func TestACodecDefectIsCountedAsAnInternalErrorNotAPreCheckOutage(t *testing.T) 
 	require.Equal(t, 1, h.count("request/GENERIC_BINARY/internal_error"))
 	require.Zero(t, h.count("request/unknown/precheck_unavailable"))
 }
+
+// The route the chart's front end forwards: the public /api/integrations/... arrives here with
+// no instance segment, and it must be the SAME route, not a lookalike.
+func TestTheInstanceLessPathIsTheSameRouteAsTheQualifiedOne(t *testing.T) {
+	h := newRouteHarness(t)
+	rec := h.post("/integrations/acme/cs"+upQuery, goodBearer, fixtureBody(t, "chirpstack/up_decoded.json"))
+	require.Equal(t, http.StatusAccepted, rec.Code, rec.Body.String())
+	p := h.published1()
+	require.Equal(t, "acme", p.tenant)
+	require.Equal(t, "integration:cs", p.event.Source)
+
+	// The message-type form, and the same refusals: no token, a bad name.
+	require.Equal(t, http.StatusUnauthorized, h.post("/integrations/acme/cs/up", "", "{}").Code)
+	require.Equal(t, http.StatusBadRequest, h.post("/integrations/bad.tenant/cs", goodBearer, "{}").Code)
+	require.Equal(t, http.StatusBadRequest, h.post("/integrations/acme/cs/"+strings.Repeat("a", 65), goodBearer, "{}").Code)
+}
+
+// NEGATIVE CONTROL: the instance-less form reaches the integration handler and nothing else.
+// /events is not reachable without the instance, and the integration route takes POST only.
+func TestTheInstanceLessPathReachesNoOtherRoute(t *testing.T) {
+	h := newRouteHarness(t)
+	for _, path := range []string{"/integrations/acme/events", "/acme/events", "/integrations/acme", "/integrations"} {
+		rec := h.post(path, goodBearer, fixtureBody(t, "chirpstack/up_decoded.json"))
+		require.NotEqual(t, http.StatusAccepted, rec.Code, path)
+		h.nothingPublished()
+	}
+	// "events" there is an integration NAME, authenticated like any other, never the ingest route.
+	require.Equal(t, http.StatusUnauthorized, h.post("/integrations/acme/events", goodBearer, "{}").Code)
+
+	// A traversal out of the integration path is cleaned by the mux and redirected, never served
+	// as the device-ingest route.
+	for _, path := range []string{"/integrations/../inst-1/acme/events", "/integrations/acme/../../inst-1/acme/events"} {
+		rec := h.post(path, goodBearer, fixtureBody(t, "chirpstack/up_decoded.json"))
+		require.NotEqual(t, http.StatusAccepted, rec.Code, path)
+		h.nothingPublished()
+	}
+
+	for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodDelete, http.MethodPatch} {
+		r := httptest.NewRequest(method, "/integrations/acme/cs", nil)
+		rec := httptest.NewRecorder()
+		h.es.handler().ServeHTTP(rec, r)
+		require.Equal(t, http.StatusMethodNotAllowed, rec.Code, method)
+	}
+}

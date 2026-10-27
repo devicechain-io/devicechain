@@ -285,6 +285,14 @@ curl -X POST http://localhost:8081/devicechain/acme/events \
 La ingesta HTTP no tiene autenticación de transporte: la credencial del dispositivo va en el cuerpo de la petición y se comprueba después de admitirla. Por tanto, cualquiera que pueda llegar al puerto 8081 y conozca el nombre de un inquilino puede consumir la asignación HTTP de ese inquilino. El ingress del chart no enruta este puerto y, por defecto, cualquier pod del clúster puede llegar a él. Ponlo detrás de una NetworkPolicy, o de un ingress o gateway que autentique a quien llama, antes de depender de él.
 :::
 
+La única ruta que el chart sí publica es el webhook de integración entrante, pensado para un servidor de red como ChirpStack o The Things Stack. Se sirve en la dirección HTTPS de la instancia, sin el id de la instancia y con el token bearer propio del remitente en la cabecera `Authorization`:
+
+```text
+POST https://<instance-host>/api/integrations/{tenant}/{integration}[/{messageType}]
+```
+
+Solo esa ruta, y solo con `POST`, llega al listener de este modo; `/{instanceId}/{tenant}/events` permanece dentro del clúster.
+
 ### Límites de tiempo en una petición
 
 El listener de ingesta limita cuánto puede tardar una petición. Un dispositivo dispone de **5 segundos** para enviar las cabeceras de la petición y de **60 segundos** para enviar la petición completa, cabeceras y cuerpo. Ambos son configurables por instancia, en los ajustes `httpIngest` del área `event-sources`.

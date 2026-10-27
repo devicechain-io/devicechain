@@ -614,6 +614,68 @@ func TestGatewayRoutesServeWhatTheIngressesServe(t *testing.T) {
 						t.Fatalf("%s: POST %s -> %q (%v), want %q", label, reg, got, err, want)
 					}
 				}
+
+				// The inbound integration webhook (G17): the public path carries no instance id and
+				// reaches the event-sources ingest listener at the instance-less route, with the
+				// tenant, the integration and the optional message type intact.
+				const ingest = "event-sources:8081"
+				resolvers := map[string]func(string, string) (answer, error){
+					"Ingress": func(h, p string) (answer, error) { return nginx.resolveIngress(h, p, false) },
+					"Gateway": gw.resolveGateway,
+				}
+				for in, out := range map[string]string{
+					"/api/integrations/acme/cs":           "/integrations/acme/cs",
+					"/api/integrations/acme/cs/up":        "/integrations/acme/cs/up",
+					"/api/integrations/acme/cs/join-acpt": "/integrations/acme/cs/join-acpt",
+				} {
+					for label, resolve := range resolvers {
+						got, err := resolve(host, in)
+						if want := answer(ingest + " " + out); err != nil || got != want {
+							t.Fatalf("%s: POST %s -> %q (%v), want %q", label, in, got, err, want)
+						}
+					}
+				}
+
+				// NEGATIVE CONTROL. Of everything either front end is asked, the only requests that
+				// reach the ingest listener are /api/integrations/..., and they arrive at
+				// /integrations/...: never at /events, and never at an instance-qualified path.
+				probes, err := routingProbes(renderedRouting{ingresses: nginx.ingresses, routes: gw.routes})
+				if err != nil {
+					t.Fatal(err)
+				}
+				probes = append(probes, "/events", "/acme/events", instance+"/acme/events", "/"+instance+"/acme/events",
+					"/api/integrations/acme/events", "/api/integrationsX/acme/cs",
+					"/api/event-sources/events", "/api/event-sources/integrations/acme/cs", "/integrations/acme/cs",
+					"/api/integrations", "/api/integrations/")
+				reached := 0
+				for _, pth := range probes {
+					for label, resolve := range resolvers {
+						got, err := resolve(host, pth)
+						if err != nil {
+							t.Fatal(err)
+						}
+						backend, upstream, _ := strings.Cut(string(got), " ")
+						if backend != ingest {
+							continue
+						}
+						reached++
+						if !strings.HasPrefix(strings.ToLower(pth), "/api/integrations") || !strings.HasPrefix(upstream, "/integrations/") {
+							t.Fatalf("%s: %s reaches the ingest listener at %q; only /api/integrations/... may, and only at /integrations/...", label, pth, upstream)
+						}
+					}
+				}
+				if reached == 0 {
+					t.Fatalf("no probe reached the ingest listener: the negative control looked at nothing")
+				}
+				// The listener's general device-ingest route is not published by either front end.
+				for label, resolve := range resolvers {
+					for _, pth := range []string{"/" + instance + "/acme/events", "/events", "/api/integrations/acme/events"} {
+						got, _ := resolve(host, pth)
+						if strings.HasSuffix(string(got), "/"+instance+"/acme/events") && strings.HasPrefix(string(got), ingest) {
+							t.Fatalf("%s: %s reaches the device-ingest route: %q", label, pth, got)
+						}
+					}
+				}
 			})
 		}
 	}

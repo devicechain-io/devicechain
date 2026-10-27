@@ -289,6 +289,14 @@ curl -X POST http://localhost:8081/devicechain/acme/events \
 HTTP ingest has no transport authentication: the device credential is in the request body and is checked after the request is admitted. Anyone who can reach port 8081 and knows a tenant's name can therefore spend that tenant's HTTP allowance. The chart's ingress does not route this port, and by default any pod in the cluster can reach it. Put it behind a NetworkPolicy, or behind an ingress or gateway that authenticates callers, before you rely on it.
 :::
 
+The one path the chart does publish is the inbound-integration webhook, for a network server such as ChirpStack or The Things Stack. It is served on the instance's HTTPS address, with the instance id left out and the sender's own bearer token in the `Authorization` header:
+
+```text
+POST https://<instance-host>/api/integrations/{tenant}/{integration}[/{messageType}]
+```
+
+Only that path, and only `POST`, reaches the listener this way; `/{instanceId}/{tenant}/events` stays inside the cluster.
+
 ### Time limits on a request
 
 The ingest listener bounds how long a request may take. A device has **5 seconds** to send its request headers and **60 seconds** to send the whole request, headers and body. Both are configurable per instance, in the `event-sources` area's `httpIngest` settings.

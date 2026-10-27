@@ -31,6 +31,25 @@ that serves no schema, add it here in the same commit.
 sparkplug-ingest,lwm2m-ingest
 {{- end }}
 
+{{/*
+devicechain.integrationsIngestPort — the port the public /api/integrations route forwards to,
+or "" when there is none (event-sources is not enabled, or its http-ingest port is not listed
+in functionalAreas.event-sources.extraPorts), in which case neither front end renders the route.
+
+It is the event-sources HTTP listener's port, the one the Service publishes as http-ingest. The
+route forwards ONLY the inbound-integration path to it (/integrations/{tenant}/{integration}),
+never the general device-ingest /{instanceId}/{tenant}/events: that listener stays reachable from
+inside the cluster only.
+*/}}
+{{- define "devicechain.integrationsIngestPort" -}}
+{{- if has "event-sources" (splitList "," (include "devicechain.enabledAreas" .)) -}}
+{{- $cfg := get (.Values.functionalAreas | default dict) "event-sources" | default dict -}}
+{{- range $p := get $cfg "extraPorts" | default list -}}
+{{- if eq $p.name "http-ingest" -}}{{ $p.port }}{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+
 {{- define "devicechain.enabledAreas" -}}
   {{- $standard := list "user-management" "device-management" "event-sources" "event-management" "device-state" "dashboard-management" "command-delivery" "notification-management" "event-processing" -}}
   {{- $profiles := dict

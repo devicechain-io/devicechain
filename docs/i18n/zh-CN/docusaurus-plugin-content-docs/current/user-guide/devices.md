@@ -240,7 +240,7 @@ MQTT 密码只显示一次：在你添加凭据之后，或选择 **Set new pass
 | --- | --- |
 | `<instance-id>` | 安装实例时选定的实例 ID，即去掉 `dci-` 前缀后的实例 Kubernetes 命名空间。 |
 | `<mqtt-host>` | MQTT 监听器对外暴露的主机。该监听器使用 TLS，因此请将实例 CA 证书保存为 `instance-ca.crt`。 |
-| `<ingest-host>` | HTTP 摄取监听器的主机，端口 8081。默认安装不会将其暴露到集群之外；参见[你的第一台设备](/quickstart/first-device#5-open-a-path-to-the-ingest-endpoint)。 |
+| `<ingest-host>` | HTTP 摄取监听器的主机，端口 8081。默认安装不会将其暴露到集群之外，唯一例外是实例 HTTPS 地址上的入站集成 webhook `/api/integrations/{tenant}/{integration}`；参见[你的第一台设备](/quickstart/first-device#5-open-a-path-to-the-ingest-endpoint)。 |
 | `<password>` | `MQTT_BASIC` 凭据的密码。它只在设置时显示一次。如果遗失，请在 **Credentials** 选项卡中设置新密码。 |
 
 当命令不可能成功时，该选项卡不提供命令，而是说明需要修正什么：

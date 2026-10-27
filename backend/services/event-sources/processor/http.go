@@ -150,6 +150,19 @@ func (es *HttpEventSource) handler() http.Handler {
 	// integration's bearer token, read by its registered type. See http_integration.go.
 	mux.HandleFunc(fmt.Sprintf("POST /%s/{tenant}/integrations/{integration}", es.InstanceId), es.handleIntegration)
 	mux.HandleFunc(fmt.Sprintf("POST /%s/{tenant}/integrations/{integration}/{messageType}", es.InstanceId), es.handleIntegration)
+	// The same route without the instance segment, which is the form the chart's front end
+	// forwards: it publishes /api/integrations/{tenant}/{integration}[/{messageType}] and a
+	// Gateway API prefix rewrite can only replace the leading prefix, so it cannot insert the
+	// instance id (or the "integrations" segment after the tenant). The instance is this
+	// process's own, so a sender that names another instance reaches the form above and gets
+	// a 404, and the alias answers the same handler. Only this route has an alias: the
+	// front end does not forward /events, so nothing else is reachable without the instance.
+	// An instance literally named "integrations" would make /integrations/{tenant}/events
+	// ambiguous with it, so it keeps only the qualified form.
+	if es.InstanceId != "integrations" {
+		mux.HandleFunc("POST /integrations/{tenant}/{integration}", es.handleIntegration)
+		mux.HandleFunc("POST /integrations/{tenant}/{integration}/{messageType}", es.handleIntegration)
+	}
 	return mux
 }
 

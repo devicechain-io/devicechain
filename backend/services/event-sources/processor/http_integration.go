@@ -24,6 +24,10 @@ import (
 //
 //	POST /{instanceId}/{tenant}/integrations/{integration}
 //	POST /{instanceId}/{tenant}/integrations/{integration}/{messageType}
+//	POST /integrations/{tenant}/{integration}[/{messageType}]   (the same, this instance implied)
+//
+// The second form is what the chart's front end forwards for the public
+// POST /api/integrations/{tenant}/{integration}[/{messageType}].
 //
 // A network server or a webhook posts here under a bearer token that belongs to the integration
 // the URL names. The body is read by the integration's REGISTERED type and never by what it looks
