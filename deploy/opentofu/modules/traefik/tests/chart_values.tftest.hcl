@@ -445,3 +445,123 @@ run "a_digest_reaches_the_image" {
     error_message = "a configured digest must reach the chart"
   }
 }
+
+# --- the AWS Network Load Balancer ------------------------------------------------------
+
+run "no_nlb_annotation_by_default" {
+  command = plan
+
+  assert {
+    condition     = !can(yamldecode(helm_release.traefik.values[0]).service.annotations)
+    error_message = "the Service is annotated for an NLB by default: switching an existing Service replaces its load balancer and its hostname"
+  }
+}
+
+run "aws_nlb_annotates_the_service_next_to_local" {
+  command = plan
+
+  variables {
+    aws_nlb = true
+  }
+
+  assert {
+    condition     = yamldecode(helm_release.traefik.values[0]).service.annotations["service.beta.kubernetes.io/aws-load-balancer-type"] == "nlb" && yamldecode(helm_release.traefik.values[0]).service.spec.externalTrafficPolicy == "Local"
+    error_message = "aws_nlb must add the NLB type annotation next to externalTrafficPolicy: Local"
+  }
+
+  assert {
+    condition     = !can(yamldecode(helm_release.traefik.values[0]).service.annotations["service.beta.kubernetes.io/aws-load-balancer-proxy-protocol"])
+    error_message = "PROXY protocol must not be switched on: the controller would have to be told to expect it"
+  }
+}
+
+run "aws_nlb_means_nothing_on_a_node_port" {
+  command = plan
+
+  variables {
+    aws_nlb      = true
+    service_type = "NodePort"
+  }
+
+  assert {
+    condition     = !can(yamldecode(helm_release.traefik.values[0]).service.annotations)
+    error_message = "an NLB annotation on a NodePort Service asks the cloud for a balancer that is not wanted"
+  }
+}
+
+# --- replicas: spread, and kept up through a drain ---------------------------------------
+
+run "one_replica_has_no_spread_and_no_budget" {
+  command = plan
+
+  assert {
+    condition     = !can(yamldecode(helm_release.traefik.values[0]).affinity) && !can(yamldecode(helm_release.traefik.values[0]).podDisruptionBudget)
+    error_message = "a single replica must carry no anti-affinity and no PodDisruptionBudget (a budget of one on one pod blocks every drain)"
+  }
+}
+
+run "several_replicas_are_spread_and_budgeted" {
+  command = plan
+
+  variables {
+    replicas = 2
+  }
+
+  assert {
+    condition     = yamldecode(helm_release.traefik.values[0]).deployment.replicas == 2
+    error_message = "replicas must reach the Deployment"
+  }
+
+  assert {
+    condition = (
+      yamldecode(helm_release.traefik.values[0]).affinity.podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution[0].podAffinityTerm.topologyKey == "kubernetes.io/hostname" &&
+      yamldecode(helm_release.traefik.values[0]).affinity.podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution[0].podAffinityTerm.labelSelector.matchLabels["app.kubernetes.io/instance"] == "traefik-traefik" &&
+      yamldecode(helm_release.traefik.values[0]).affinity.podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution[0].podAffinityTerm.labelSelector.matchLabels["app.kubernetes.io/name"] == "traefik"
+    )
+    error_message = "the replicas must be spread over nodes by a PREFERRED hostname anti-affinity on the chart's own labels (instance is <release>-<namespace>)"
+  }
+
+  assert {
+    condition     = !can(yamldecode(helm_release.traefik.values[0]).affinity.podAntiAffinity.requiredDuringSchedulingIgnoredDuringExecution)
+    error_message = "the anti-affinity must not be required: a one-node cluster still has to schedule both"
+  }
+
+  assert {
+    condition     = yamldecode(helm_release.traefik.values[0]).podDisruptionBudget.enabled == true && yamldecode(helm_release.traefik.values[0]).podDisruptionBudget.minAvailable == 1
+    error_message = "the chart renders no PodDisruptionBudget unless asked: more than one replica must keep one up through a drain"
+  }
+}
+
+run "the_spread_follows_a_renamed_release" {
+  command = plan
+
+  variables {
+    replicas     = 2
+    release_name = "edge"
+    namespace    = "ingress"
+  }
+
+  assert {
+    condition     = yamldecode(helm_release.traefik.values[0]).affinity.podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution[0].podAffinityTerm.labelSelector.matchLabels["app.kubernetes.io/instance"] == "edge-ingress"
+    error_message = "the anti-affinity selector must follow the release name and namespace, or it selects nothing"
+  }
+}
+
+run "host_ports_force_one_replica_and_no_spread" {
+  command = plan
+
+  variables {
+    replicas      = 3
+    use_host_port = true
+  }
+
+  assert {
+    condition     = output.replicas == 1 && yamldecode(helm_release.traefik.values[0]).deployment.replicas == 1
+    error_message = "two pods cannot share a node's host ports: host-port mode is one replica however many were asked for"
+  }
+
+  assert {
+    condition     = !can(yamldecode(helm_release.traefik.values[0]).affinity) && !can(yamldecode(helm_release.traefik.values[0]).podDisruptionBudget)
+    error_message = "the forced single replica must not get a budget that blocks its own drain"
+  }
+}

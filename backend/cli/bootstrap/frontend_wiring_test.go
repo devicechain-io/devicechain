@@ -108,6 +108,7 @@ func TestHydrationCarriesTheFrontEndFlagsOntoTheState(t *testing.T) {
 		}
 	})
 	t.Run("--drop-legacy-ingress stops rendering the Ingress objects", func(t *testing.T) {
+		stubGatewayCertificates(t, readyGatewayCert(InstanceNamespace("prod")), nil)
 		st := hydrateUpgrade(t, UpgradeOptions{Options: Options{DropLegacyIngress: true}}, nil, bothControllers)
 		if st.IngressController != frontEndGateway || st.LegacyIngress || !st.DropLegacyIngress {
 			t.Errorf("settled %s legacy=%v drop=%v", st.IngressController, st.LegacyIngress, st.DropLegacyIngress)
@@ -151,6 +152,7 @@ func TestInstallStateCarriesRemoveLegacyIngressToTheClusterVariables(t *testing.
 	cls := nginxClass()
 	for _, remove := range []bool{false, true} {
 		t.Run(fmt.Sprintf("remove=%v", remove), func(t *testing.T) {
+			stubGatewayCertificates(t, readyGatewayCert("dci-prod"), nil)
 			st := installState(ClusterBinding{KubeContext: "gke_p_z_c"}, "local", InstallOptions{RemoveLegacyIngress: remove})
 			if st.RemoveLegacyIngress != remove {
 				t.Fatalf("installState dropped RemoveLegacyIngress: %v", st.RemoveLegacyIngress)
@@ -261,27 +263,35 @@ func TestWaitForGatewayCertificate(t *testing.T) {
 	st := compactState(false)
 	st.Instance = "prod"
 	st.IngressController, st.GatewayTLSSecret = frontEndGateway, "devicechain-tls-gateway"
-	st.Install = &InstallRecord{Settings: InstallSettings{CertManager: true}}
+	issued := map[string]string{"cert-manager.io/cluster-issuer": "letsencrypt"}
+	gw := gwObj("dci-prod", issued, "devicechain-tls-gateway")
 
 	good := cert("gw", "devicechain-tls-gateway", true, "True")
-	if err := waitForGatewayCertificate(t.Context(), newFakeCertDynamic(&good), st); err != nil {
+	if err := waitForGatewayCertificate(t.Context(), newFakeCertDynamic(gw, &good), st); err != nil {
 		t.Fatalf("a Ready Gateway Certificate was waited on in vain: %v", err)
 	}
 	// Negative control: the same cluster, with the Certificate the Ingress owns instead.
 	foreign := cert("devicechain-tls", "devicechain-tls-gateway", false, "True")
-	err := waitForGatewayCertificate(t.Context(), newFakeCertDynamic(&foreign), st)
+	err := waitForGatewayCertificate(t.Context(), newFakeCertDynamic(gw, &foreign), st)
 	if err == nil || !strings.Contains(err.Error(), "not controlled by the Gateway") {
 		t.Fatalf("a Certificate the Gateway does not control passed the gate: %v", err)
 	}
-	// Not expected: no TLS, no cert-manager, or no Gateway.
-	for name, mutate := range map[string]func(*State){
-		"no TLS":     func(s *State) { s.NoTLS = true },
-		"nginx":      func(s *State) { s.IngressController = frontEndNginx },
-		"no manager": func(s *State) { s.Install = &InstallRecord{Settings: InstallSettings{CertManager: false}} },
+	// Nothing expected: the Gateway asks cert-manager for nothing, names no Secret, is not
+	// there, or is not the front end.
+	for name, tc := range map[string]struct {
+		objs   []*unstructured.Unstructured
+		mutate func(*State)
+	}{
+		"an operator-supplied Secret": {objs: []*unstructured.Unstructured{gwObj("dci-prod", nil, "devicechain-tls-gateway")}},
+		"no https Secret":             {objs: []*unstructured.Unstructured{gwObj("dci-prod", issued, "")}},
+		"no Gateway":                  {},
+		"nginx":                       {objs: []*unstructured.Unstructured{gw}, mutate: func(s *State) { s.IngressController = frontEndNginx }},
 	} {
 		c := *st
-		mutate(&c)
-		if err := waitForGatewayCertificate(t.Context(), newFakeCertDynamic(), &c); err != nil {
+		if tc.mutate != nil {
+			tc.mutate(&c)
+		}
+		if err := waitForGatewayCertificate(t.Context(), newFakeCertDynamic(tc.objs...), &c); err != nil {
 			t.Errorf("%s: waited for a certificate nothing was to issue: %v", name, err)
 		}
 	}
@@ -311,13 +321,20 @@ func (f *fakeClusterPlanner) ShowPlanFile(context.Context, string, ...tfexec.Sho
 }
 
 // newFakeCertDynamic is a dynamic client holding the Certificates given.
-func newFakeCertDynamic(certs ...*unstructured.Unstructured) dynamic.Interface {
-	objs := make([]runtime.Object, 0, len(certs))
-	for _, c := range certs {
-		objs = append(objs, c)
+func newFakeCertDynamic(objs ...*unstructured.Unstructured) dynamic.Interface {
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{certificateGVR: "CertificateList", gatewayGVR: "GatewayList"})
+	// Created by hand: the tracker would guess "gatewaies" for a Gateway.
+	for _, o := range objs {
+		gvr := certificateGVR
+		if o.GetKind() == "Gateway" {
+			gvr = gatewayGVR
+		}
+		if _, err := dyn.Resource(gvr).Namespace(o.GetNamespace()).Create(context.Background(), o, metav1.CreateOptions{}); err != nil {
+			panic(err)
+		}
 	}
-	return dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
-		map[schema.GroupVersionResource]string{certificateGVR: "CertificateList"}, objs...)
+	return dyn
 }
 
 func stateWithTraefik() *tfjson.State {

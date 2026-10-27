@@ -319,3 +319,26 @@ func rolloutWithLoginResize(ctx context.Context, st *State, rollout func() error
 	}
 	return resizeUpgradeLogin(ctx, st, loginResizeShrink)
 }
+
+// upgradeRollout is the upgrade's rollout and everything that follows it, in the order that
+// leaves the instance finished before anything is allowed to fail the run:
+//
+//  1. rollout, bracketed by the login grow and shrink (rolloutWithLoginResize);
+//  2. afterRollout, the work owed because the services now run the new release (the broker's
+//     callout encryption);
+//  3. gate, a check on the result that fails the run with its reason (the Gateway's
+//     certificate).
+//
+// 🔴 THE GATE IS LAST ON PURPOSE. It used to run inside the bracket, so a gate that failed
+// after the services had rolled skipped the shrink (the login stayed grown) and the callout
+// encryption (the broker stayed held back) on an upgrade whose services already ran the new
+// release. A gate reports; it must never be what leaves work undone.
+func upgradeRollout(ctx context.Context, st *State, rollout, afterRollout, gate func() error) error {
+	if err := rolloutWithLoginResize(ctx, st, rollout); err != nil {
+		return err
+	}
+	if err := afterRollout(); err != nil {
+		return err
+	}
+	return gate()
+}

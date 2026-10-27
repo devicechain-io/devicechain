@@ -748,7 +748,8 @@ module "traefik" {
 
   use_host_port       = var.traefik_use_host_port
   service_type        = var.traefik_service_type
-  replicas            = var.traefik_replicas
+  aws_nlb             = var.traefik_aws_nlb
+  replicas            = var.traefik_replicas > 0 ? var.traefik_replicas : (var.ha ? 2 : 1)
   trusted_proxy_cidrs = var.traefik_trusted_proxy_cidrs
   max_artifact_bytes  = var.traefik_max_artifact_bytes
   gateway_allow_list  = var.traefik_gateway_allow_list
@@ -785,6 +786,9 @@ locals {
     "${o.metadata.namespace}/${o.metadata.name}"
     if(try(o.spec.ingressClassName, "") == var.ingress_class ||
     try(o.metadata.annotations["kubernetes.io/ingress.class"], "") == var.ingress_class) &&
+    # cert-manager's HTTP-01 solver Ingress lives for one challenge and is nobody's host: it does
+    # not hold the removal up (and the controller going away ends the challenge, which retries).
+    try(o.metadata.labels["acme.cert-manager.io/http01-solver"], "") != "true" &&
     # Grafana's own Ingress is this root's, and moves to Traefik in the same apply: but only
     # while this root manages monitoring, and only the one this release (the module's default
     # name) created. Anyone else's Ingress in that namespace still blocks the removal.

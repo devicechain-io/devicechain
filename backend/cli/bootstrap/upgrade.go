@@ -371,9 +371,9 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 		}
 	}
 
-	// Grown before the release, shrunk once its services have rolled over: see
-	// rolloutWithLoginResize.
-	if err := rolloutWithLoginResize(ctx, st, func() error {
+	// Grown before the release, shrunk once its services have rolled over, then the broker's
+	// callout encryption, and only then the Gateway's certificate gate: see upgradeRollout.
+	if err := upgradeRollout(ctx, st, func() error {
 		if err := runStreamed("Upgrading the instance's services", "helm upgrade", func() error {
 			return helmInstall(ctx, st)
 		}); err != nil {
@@ -394,20 +394,21 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 			areaReadyTimeout, areaReadyPollInterval); err != nil {
 			return fmt.Errorf("waiting for the services: %w", err)
 		}
+		return nil
+	}, func() error {
+		// The services now run a responder that opens the broker's encrypted callout requests, so a
+		// broker that was held back from encrypting is applied again, this time with the key. The
+		// reconnects this causes are the broker's ordinary rolling restart: the responder reads both
+		// forms throughout. See upgradexkey.go.
+		if infra != nil && xkeyPending(st) {
+			return enableCalloutEncryption(ctx, st, typed, dyn)
+		}
+		return nil
+	}, func() error {
 		// A Gateway with no certificate of its own is a green release, so it is waited on.
 		return waitForGatewayCertificate(ctx, dyn, st)
 	}); err != nil {
 		return err
-	}
-
-	// The services now run a responder that opens the broker's encrypted callout requests, so a
-	// broker that was held back from encrypting is applied again, this time with the key. The
-	// reconnects this causes are the broker's ordinary rolling restart: the responder reads both
-	// forms throughout. See upgradexkey.go.
-	if infra != nil && xkeyPending(st) {
-		if err := enableCalloutEncryption(ctx, st, typed, dyn); err != nil {
-			return err
-		}
 	}
 
 	if st.AreaChange != nil {

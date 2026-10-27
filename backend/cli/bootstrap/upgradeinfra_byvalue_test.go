@@ -99,7 +99,7 @@ func TestTheUpgradePlansBeforeItWritesAndAppliesBeforeTheServices(t *testing.T) 
 		return true
 	})
 	for _, name := range []string{"planUpgradeInfra", "recordUpgradedVersion", "renewBrokerCertificate",
-		"applyUpgradeInfra", "rolloutWithLoginResize"} {
+		"applyUpgradeInfra", "upgradeRollout"} {
 		if _, ok := first[name]; !ok {
 			t.Fatalf("Upgrade does not call %s, so an upgraded instance's broker and event store are "+
 				"never applied, or applied out of order", name)
@@ -113,9 +113,9 @@ func TestTheUpgradePlansBeforeItWritesAndAppliesBeforeTheServices(t *testing.T) 
 		t.Errorf("the infrastructure is planned at %s, after the declaration is rewritten at %s: a "+
 			"refusal would no longer mean nothing moved", fset.Position(first[order[0]]), fset.Position(first[order[1]]))
 	}
-	if !(first["renewBrokerCertificate"] < first["applyUpgradeInfra"] && first["applyUpgradeInfra"] < first["rolloutWithLoginResize"]) {
-		t.Errorf("want renewBrokerCertificate < applyUpgradeInfra < rolloutWithLoginResize, got %s, %s, %s",
+	if !(first["renewBrokerCertificate"] < first["applyUpgradeInfra"] && first["applyUpgradeInfra"] < first["upgradeRollout"]) {
+		t.Errorf("want renewBrokerCertificate < applyUpgradeInfra < upgradeRollout, got %s, %s, %s",
 			fset.Position(first["renewBrokerCertificate"]), fset.Position(first["applyUpgradeInfra"]),
-			fset.Position(first["rolloutWithLoginResize"]))
+			fset.Position(first["upgradeRollout"]))
 	}
 }

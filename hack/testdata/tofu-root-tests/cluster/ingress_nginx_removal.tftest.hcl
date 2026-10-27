@@ -151,3 +151,63 @@ run "someone_elses_grafana_named_ingress_blocks" {
   }
   expect_failures = [terraform_data.ingress_nginx_removal_guard]
 }
+
+# cert-manager's HTTP-01 solver Ingress is neither a host nor the operator's: it carries the
+# controller's class for the length of one challenge and must not hold the removal up.
+run "an_acme_http01_solver_ingress_does_not_block" {
+  command = plan
+  override_data {
+    target = data.kubernetes_resources.ingresses_of_the_nginx_class
+    values = {
+      objects = [
+        {
+          metadata = {
+            name        = "cm-acme-http-solver-abcde"
+            namespace   = "dci-x"
+            annotations = {}
+            labels      = { "acme.cert-manager.io/http01-solver" = "true" }
+          }
+          spec = { ingressClassName = "nginx" }
+        },
+      ]
+    }
+  }
+}
+
+# The control: the same solver beside a real Ingress of the class still blocks, so the case above
+# passes because of the label and not because the guard stopped looking.
+run "a_solver_ingress_beside_a_real_one_still_blocks" {
+  command = plan
+  override_data {
+    target = data.kubernetes_resources.ingresses_of_the_nginx_class
+    values = {
+      objects = [
+        {
+          metadata = {
+            name        = "cm-acme-http-solver-abcde"
+            namespace   = "dci-x"
+            annotations = {}
+            labels      = { "acme.cert-manager.io/http01-solver" = "true" }
+          }
+          spec = { ingressClassName = "nginx" }
+        },
+        { metadata = { name = "devicechain-web", namespace = "dci-x", annotations = {} }, spec = { ingressClassName = "nginx" } },
+      ]
+    }
+  }
+  expect_failures = [terraform_data.ingress_nginx_removal_guard]
+}
+
+# A solver Ingress whose label is not "true" is not one.
+run "a_solver_label_that_is_not_true_is_not_a_solver" {
+  command = plan
+  override_data {
+    target = data.kubernetes_resources.ingresses_of_the_nginx_class
+    values = {
+      objects = [
+        { metadata = { name = "x", namespace = "dci-x", annotations = {}, labels = { "acme.cert-manager.io/http01-solver" = "false" } }, spec = { ingressClassName = "nginx" } },
+      ]
+    }
+  }
+  expect_failures = [terraform_data.ingress_nginx_removal_guard]
+}

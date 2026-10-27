@@ -117,6 +117,8 @@ type State struct {
 	// (planClusterFrontEnd). Only install sets them; infraVars emits them when present.
 	RemoveLegacyIngress bool
 	ClusterFrontEndVars []string
+	// AWSNLB is `dcctl install --aws-nlb`; see awsNLBPlan.
+	AWSNLB string
 	// NoMonitoring records that the cluster was installed WITHOUT the observability
 	// stack. It is `dcctl install`'s flag, applied to the cluster root there; a
 	// bootstrap has no flag for it and reads it back from the install record

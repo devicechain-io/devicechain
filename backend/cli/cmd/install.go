@@ -35,6 +35,7 @@ var (
 	installVersion           string
 	installBuild             bool
 	installRemoveLegacy      bool
+	installAWSNLB            string
 )
 
 // installRestoreFlagsFromArgv assembles the relational-store restore inputs from the
@@ -155,6 +156,9 @@ func resolveCompactMode(changed func(string) bool, noTLS, noMonitoring bool) com
 // built leaves no such hand-off.
 func installOptions(dest *bootstrap.BackupDestination, restore bootstrap.RestorePlan,
 	img bootstrap.ImageSource) (bootstrap.InstallOptions, error) {
+	if err := bootstrap.ValidateAWSNLB(installAWSNLB); err != nil {
+		return bootstrap.InstallOptions{}, err
+	}
 	placement, err := installPlacementFromArgv()
 	if err != nil {
 		return bootstrap.InstallOptions{}, err
@@ -187,6 +191,7 @@ func installOptions(dest *bootstrap.BackupDestination, restore bootstrap.Restore
 		DcctlVersion:      Version,
 
 		RemoveLegacyIngress: installRemoveLegacy,
+		AWSNLB:              installAWSNLB,
 	}, nil
 }
 
@@ -404,6 +409,7 @@ func init() {
 			"local registry, instead of pulling a published one. Builds ONLY the operator; the "+
 			"service images are an instance's and are built by dcctl bootstrap --build")
 	installCmd.Flags().BoolVar(&installRemoveLegacy, "remove-legacy-ingress", false, "remove ingress-nginx from a cluster that still runs it. An install otherwise leaves it serving and installs Traefik beside it. Refused while any Ingress object in the cluster still names its class (each instance must first be moved with 'dcctl upgrade --drop-legacy-ingress'); on a local cluster Traefik takes the node's ports 80 and 443 in the same apply")
+	installCmd.Flags().StringVar(&installAWSNLB, "aws-nlb", "", "EKS: which ingress controllers' LoadBalancer Services get an AWS Network Load Balancer (service.beta.kubernetes.io/aws-load-balancer-type: nlb) instead of the Classic one a plain Service gets: traefik, nginx, all, or none (turns it off). Only a Network Load Balancer passes the client's address through, which the per-source rate limits and the trusted-proxy rule depend on. Left off, each controller's Service keeps what it has. A value that CHANGES an existing Service replaces its load balancer and so changes the hostname clients resolve: repoint DNS afterwards (the install says so). traefik alone leaves ingress-nginx's Service as it is, for a cluster mid-cutover")
 	installCmd.Flags().IntVar(&installMaxConnections, "max-connections", 0, "the relational store's connection budget (default 600 on a first install, and what the cluster has on a re-run). Each instance reserves (its relational services x 40) of it when bootstrapped; the default admits two default-profile instances")
 
 	rootCmd.AddCommand(installCmd)
