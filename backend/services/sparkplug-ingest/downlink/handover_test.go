@@ -166,6 +166,8 @@ func TestReArmingLeavesOtherTenantsAloneAndResolvesAnEntryWhoseSourceIsGone(t *t
 	res := r.responseTo(t, "orphan")
 	assert.False(t, res.env.Success)
 	assert.Contains(t, errorOf(res), "no longer has commands enabled")
+	require.NotNil(t, res.env.Payload)
+	assert.JSONEq(t, `{"reason":"source_disabled"}`, *res.env.Payload)
 	assert.Empty(t, r.responses.of("mine"), "a live entry was resolved at the start of the term")
 	assert.Equal(t, 1, r.result(ResultRearmed))
 }

@@ -39,7 +39,9 @@ func TestAReasonSurvivesTheStoredOutcome(t *testing.T) {
 }
 
 // Every way a command can end without an answer sets a reason, so the console never has to read
-// the error text to tell them apart.
+// the error text to tell them apart. The window endings are asserted here; the superseded and
+// session-dropped endings (dispatcher_test.go) and the source-disabled one (handover_test.go) are
+// asserted on the response each actually publishes, which is where their code is set.
 func TestEveryUnansweredEndingCarriesAReason(t *testing.T) {
 	for _, tc := range []struct {
 		name string
