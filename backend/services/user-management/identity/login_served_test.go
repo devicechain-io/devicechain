@@ -35,7 +35,7 @@ import (
 // the test tolerated errors.
 func TestSingleServedLoginIsAcceptedAndMintsAToken(t *testing.T) {
 	const email, password = "victim@devicechain.local", "correct-horse-battery-staple"
-	db := putest.NewSQLiteDB(t, &iam.Identity{}, &iam.Role{}, &iam.Membership{})
+	db := putest.NewSQLiteDB(t, &iam.Identity{}, &iam.Role{}, &iam.Membership{}, &iam.MfaFactor{}, &iam.MfaSourceFailure{}, &iam.MfaRecoveryCode{})
 	rdbm := &rdb.RdbManager{Database: db}
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.MinCost)
 	require.NoError(t, err)
@@ -82,7 +82,7 @@ func TestSingleServedLoginIsAcceptedAndMintsAToken(t *testing.T) {
 // is briefly unwritable would turn a journal outage into a platform-wide lockout.
 func TestASignInSucceedsWhenItsAuditRowCannotBeWritten(t *testing.T) {
 	const email, password = "jo@devicechain.local", "correct-horse-battery-staple"
-	db := putest.NewSQLiteDB(t, &iam.Identity{}, &iam.Role{}, &iam.Membership{})
+	db := putest.NewSQLiteDB(t, &iam.Identity{}, &iam.Role{}, &iam.Membership{}, &iam.MfaFactor{}, &iam.MfaSourceFailure{}, &iam.MfaRecoveryCode{})
 	rdbm := &rdb.RdbManager{Database: db}
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.MinCost)
 	require.NoError(t, err)

@@ -96,6 +96,12 @@ func (c *Checker) CheckOneTime(ctx context.Context, kind Kind, attempt func(ctx 
 		c.observe(kind, err, false)
 		return err
 	}
+	return c.runOneTime(ctx, kind, attempt)
+}
+
+// runOneTime arms a OneTime for the duration of attempt. The caller has already spent the
+// request's budget.
+func (c *Checker) runOneTime(ctx context.Context, kind Kind, attempt func(ctx context.Context, ot OneTime) error) error {
 	if _, ok := c.policies[kind]; !ok {
 		return fmt.Errorf("%w: %q", ErrUndeclaredKind, kind)
 	}
@@ -108,6 +114,39 @@ func (c *Checker) CheckOneTime(ctx context.Context, kind Kind, attempt func(ctx 
 	err := attempt(ctx, OneTime{s: st})
 	c.observe(kind, err, false)
 	return err
+}
+
+// CheckPasswordAndOneTime is ONE re-authentication that presents two secrets: a password,
+// checked exactly as Check checks it, and then a one-time code, checked as CheckOneTime
+// checks it. It is for the operations that must see both -- confirming an enrolment,
+// replacing the recovery codes, switching the factor off -- and it spends ONE unit of the
+// request's budget for the pair.
+//
+// 🔴 WHY ONE UNIT, AND WHY THIS IS NOT A WIDENING. A budget exists to bound the BCRYPT
+// compares a request can buy (see budget.go), and this pair makes one: the one-time code
+// is an HMAC behind charge-first durable locks, not a hashing cost. Spending two units
+// instead would make the pair impossible under the default budget of one, and a budget can
+// be tightened but never widened, so there is no way to ask for two. Aliasing the
+// mutation N times in one document still buys exactly one pair: the second and later
+// copies are refused before anything is read.
+//
+// The one-time attempt runs ONLY when the password matched, so a wrong password evaluates
+// no code and charges no lock. Any password failure (a mismatch, a throttle, an
+// unavailable store) is returned as Check returns it.
+func (c *Checker) CheckPasswordAndOneTime(ctx context.Context, p Principal, password string,
+	lookup func(context.Context) (string, error), kind Kind,
+	attempt func(ctx context.Context, ot OneTime) error) error {
+	if !spend(ctx) {
+		err := &RequestBudgetError{}
+		c.observe(p.Kind, err, false)
+		return err
+	}
+	failedOpen, err := c.check(ctx, p, password, lookup)
+	c.observe(p.Kind, err, failedOpen)
+	if err != nil {
+		return err
+	}
+	return c.runOneTime(ctx, kind, attempt)
 }
 
 // VerifyTOTP checks code against the seed at time now, accepting the current step and

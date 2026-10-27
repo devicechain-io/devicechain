@@ -198,6 +198,17 @@ type Manager struct {
 	ssoStateKV, ssoCodesKV nats.KeyValue
 	ssoMetrics             SsoMetrics
 	ssoLimiter             beginLimiter
+	// mfaKV holds the sign-ins waiting for their second factor (dc_mfa_challenges), apart from
+	// every other bucket. Nil means the instance cannot complete an enrolled person's sign-in,
+	// and it FAILS CLOSED: no token is minted without the factor.
+	mfaKV nats.KeyValue
+	// mfaLimiter rations verifyMfa per source address (the shape beginSso uses).
+	mfaLimiter beginLimiter
+	mfaMetrics MfaMetrics
+	// mfaIssuer names this instance for an authenticator app (the otpauth issuer label), read
+	// when an enrolment begins so a change to the instance's branding applies to the next one.
+	// Nil, or an empty answer, falls back to DefaultMfaIssuer.
+	mfaIssuer func(ctx context.Context) string
 	// saAttempts, saGlobal and saMints ration the client_credentials grant, and saTrusted
 	// is the sources exempt from saGlobal (client_credentials.go).
 	saAttempts, saGlobal, saMints *sourcelimit.Limiter
@@ -244,6 +255,7 @@ func NewManager(ms *core.Microservice, db *rdb.RdbManager, locker *messaging.Dis
 // allowing them unmetered: the limiters' zero value is the refusing one.
 func (m *Manager) initLimiters() {
 	m.ssoLimiter = newBeginLimiter()
+	m.mfaLimiter = newMfaVerifyLimiter()
 	m.saAttempts = sourcelimit.Must(serviceAccountAttemptLimits)
 	m.saGlobal = sourcelimit.Must(serviceAccountGlobalLimits)
 	m.saMints = sourcelimit.Must(serviceAccountMintLimits)
@@ -275,6 +287,11 @@ func (m *Manager) initLimiters() {
 var CredentialPolicies = map[credential.Kind]credential.Policy{
 	credential.KindIdentity:    {Free: 5, Base: time.Second, Cap: 5 * time.Minute},
 	credential.KindOAuthClient: {Unthrottled: true},
+	// A TOTP code is checked through CheckOneTime and is UNTHROTTLED here on purpose: its attempt
+	// state is the durable, charge-first lock in the database (iam.Store.MfaVerifyTOTP), because
+	// a soft backoff that a password success clears would be the wrong throttle for a code with
+	// a million values.
+	credential.KindTotp: {Unthrottled: true},
 	// A SERVICE ACCOUNT's secret is minted by the server from 256 random bits, exactly as
 	// a client secret is, and is unthrottled for the same two reasons: a backoff buys no
 	// guessing resistance, and it would let anyone who learns an account's client id hold
@@ -412,6 +429,11 @@ type MembershipInfo struct {
 	// The grant itself is still refused (admitTenant). Always false for a superuser, whose
 	// password sign-in is let through, and for a single sign-on.
 	SsoRequired bool
+	// MfaRequired marks a tenant that requires a second factor when this password sign-in did
+	// not use one, so selectTenant refuses it (MFA_REQUIRED, or MFA_ENROLLMENT_REQUIRED when the
+	// identity has no factor to present). Always false for a superuser, who is let in, and for
+	// a sign-in that already used a second factor.
+	MfaRequired bool
 }
 
 // Login verifies an email/password and returns an identity token plus the
@@ -472,8 +494,26 @@ func (m *Manager) Login(ctx context.Context, email, password string) (*IdentityA
 	default:
 		return nil, err
 	}
-	m.recordAuth(ctx, rdb.AuditOpLogin, id.Email, "")
+	// The password was right. An identity with a second factor does not get a token yet: it gets
+	// a challenge, and the token is minted by verifyMfa once the code is accepted. NOTHING below
+	// this point runs for it -- no session record, no token -- so a client that ignores the
+	// challenge holds nothing.
+	_, ferr := m.iam.ActiveMfaFactorFor(ctx, id.ID)
+	switch {
+	case ferr == nil:
+		return nil, m.beginMfaChallenge(ctx, id)
+	case errors.Is(ferr, iam.ErrMfaFactorNotFound):
+	default:
+		return nil, ferr
+	}
+	m.recordAuthLabeled(ctx, rdb.AuditOpLogin, id.Email, "", mfaLoginLabelPassword)
+	return m.completeSignIn(ctx, id, auth.AmrPasswordOnly())
+}
 
+// completeSignIn starts the sign-in of an identity whose credentials have all been checked and
+// mints its identity token. amr is what the sign-in presented, and is recorded on the session
+// record (the only place a later token reads it from).
+func (m *Manager) completeSignIn(ctx context.Context, id *iam.Identity, amr []string) (*IdentityAuth, error) {
 	m.mu.RLock()
 	issuer := m.issuer
 	m.mu.RUnlock()
@@ -485,11 +525,11 @@ func (m *Manager) Login(ctx context.Context, email, password string) (*IdentityA
 	// only ErrInvalidCredentials, the same as every other sign-in failure: this branch
 	// is reached only after the password matched, so a distinct error would tell
 	// whoever sent it that the password was right.
-	sid, err := m.startSession(id.Email)
+	sid, err := m.startSession(id.Email, amr)
 	if err != nil {
 		return nil, err
 	}
-	tok, err := issuer.IssueIdentity(id.Email, auth.SessionEpoch(id.SessionEpoch), sid, roleTokens(id.SystemRoles), id.SystemAuthorities(), uuid.NewString())
+	tok, err := issuer.IssueIdentity(id.Email, auth.SessionEpoch(id.SessionEpoch), sid, roleTokens(id.SystemRoles), id.SystemAuthorities(), uuid.NewString(), auth.WithAmr(amr))
 	if err != nil {
 		if errors.Is(err, auth.ErrNoSessionEpoch) {
 			log.Error().Str("email", id.Email).
@@ -563,13 +603,17 @@ func (m *Manager) SelectTenant(ctx context.Context, identityToken, tenant string
 		return nil, ErrInvalidCredentials
 	}
 
-	roles, authorities, scope, err := m.resolveTenantGrant(ctx, claims.SessionID, id, tenant, mem, su)
+	roles, authorities, scope, amr, err := m.resolveTenantGrant(ctx, claims.SessionID, id, tenant, mem, su)
 	if err != nil {
 		// Named only to a member (the non-member refusal above comes first): see
 		// SsoRequiredError for why that leaks nothing.
 		if errors.Is(err, errSsoRequired) {
 			m.recordAuth(ctx, rdb.AuditOpLoginFailed, id.Email, tenant)
 			return nil, ErrSsoRequired
+		}
+		if mfaErr := mfaRefusalError(err); mfaErr != nil {
+			m.recordAuth(ctx, rdb.AuditOpLoginFailed, id.Email, tenant)
+			return nil, mfaErr
 		}
 		if errors.Is(err, errTenantAccessDenied) {
 			m.recordAuth(ctx, rdb.AuditOpLoginFailed, id.Email, tenant)
@@ -581,7 +625,7 @@ func (m *Manager) SelectTenant(ctx context.Context, identityToken, tenant string
 		return nil, err
 	}
 	m.recordAuth(ctx, rdb.AuditOpLogin, id.Email, tenant)
-	return m.issueTenantTokens(tenant, id.Email, auth.SessionEpoch(id.SessionEpoch), claims.SessionID, roles, authorities, scope, su)
+	return m.issueTenantTokens(tenant, id.Email, auth.SessionEpoch(id.SessionEpoch), claims.SessionID, roles, authorities, scope, su, amr)
 }
 
 // Memberships re-reads the live memberships for the identity a valid identity
@@ -891,7 +935,10 @@ func (m *Manager) Refresh(ctx context.Context, refreshToken string) (*TokenPair,
 	if err := m.admitRefreshTenant(ctx, claims); err != nil {
 		return nil, m.refuseRefresh(claims.ID, rev, err)
 	}
-	roles, authorities, scope, err := m.resolveTenantGrant(ctx, claims.SessionID, id, claims.Tenant, mem, su)
+	// 🔴 amr COMES FROM THE SESSION RECORD resolveTenantGrant read, never from claims.Amr: a
+	// refresh token is a credential the caller holds, and what it says about how the person
+	// signed in is exactly what must not be believed.
+	roles, authorities, scope, amr, err := m.resolveTenantGrant(ctx, claims.SessionID, id, claims.Tenant, mem, su)
 	if err != nil {
 		return nil, m.refuseRefresh(claims.ID, rev, err)
 	}
@@ -907,7 +954,7 @@ func (m *Manager) Refresh(ctx context.Context, refreshToken string) (*TokenPair,
 		return nil, ErrRefreshUnavailable
 	}
 	m.recordAuth(ctx, rdb.AuditOpRefresh, id.Email, claims.Tenant)
-	return m.issueTenantTokens(claims.Tenant, id.Email, auth.SessionEpoch(id.SessionEpoch), claims.SessionID, roles, authorities, scope, su)
+	return m.issueTenantTokens(claims.Tenant, id.Email, auth.SessionEpoch(id.SessionEpoch), claims.SessionID, roles, authorities, scope, su, amr)
 }
 
 // refuseRefresh turns a failed re-check of a refresh grant into the error Refresh returns.
@@ -928,6 +975,11 @@ func (m *Manager) refuseRefresh(jti string, rev uint64, cause error) error {
 		// non-member first) is told why, so it can send the person to their provider.
 		if errors.Is(cause, errSsoRequired) {
 			return ErrSsoRequired
+		}
+		// Likewise a tenant that has started requiring a second factor under a password
+		// session that did not use one.
+		if mfaErr := mfaRefusalError(cause); mfaErr != nil {
+			return mfaErr
 		}
 		return sessionRefusal(cause)
 	}
@@ -1014,12 +1066,14 @@ var errTenantAccessDenied = errors.New("tenant access denied")
 // whichever of the three mints (select, refresh, OAuth) asks. A superuser is never
 // scoped. A stored scope that does not parse is a DENIAL, never the whole tenant: a
 // membership whose bound cannot be read must not be minted unbounded.
-func (m *Manager) resolveTenantGrant(ctx context.Context, sid auth.SessionID, id *iam.Identity, tenant string, mem *iam.Membership, su bool) (roles, authorities []string, scope auth.Scope, err error) {
+func (m *Manager) resolveTenantGrant(ctx context.Context, sid auth.SessionID, id *iam.Identity, tenant string, mem *iam.Membership, su bool) (roles, authorities []string, scope auth.Scope, amr []string, err error) {
 	// The sign-in's own terms come first: a session that may not enter this tenant gets no
 	// grant from the identity's memberships, superuser or not (admitTenant says which
-	// sessions a superuser's break-glass still applies to).
-	if err := m.admitTenant(ctx, sid, id, tenant, su); err != nil {
-		return nil, nil, auth.Scope{}, err
+	// sessions a superuser's break-glass still applies to). It also hands back the sign-in's
+	// amr, which the caller mints into every token.
+	amr, err = m.admitTenant(ctx, sid, id, tenant, su)
+	if err != nil {
+		return nil, nil, auth.Scope{}, nil, err
 	}
 	if su {
 		if mem != nil {
@@ -1031,14 +1085,14 @@ func (m *Manager) resolveTenantGrant(ctx context.Context, sid auth.SessionID, id
 		// The cost is real and belongs with the sweep's design — a break-glass session
 		// can write rows into a tenant an area has already swept, which is why slice 2's
 		// fences are epoch-bounded rather than "swept once".
-		return roles, []string{string(auth.AuthorityAll)}, auth.Scope{}, nil
+		return roles, []string{string(auth.AuthorityAll)}, auth.Scope{}, amr, nil
 	}
 	t, err := m.iam.TenantByToken(ctx, tenant)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, nil, auth.Scope{}, errTenantAccessDenied
+			return nil, nil, auth.Scope{}, nil, errTenantAccessDenied
 		}
-		return nil, nil, auth.Scope{}, err
+		return nil, nil, auth.Scope{}, nil, err
 	}
 	// A deleted tenant admits nobody but a superuser, checked on the LIFECYCLE rather
 	// than on Enabled. Both are set at the cut, but only one of them is permanent:
@@ -1046,20 +1100,29 @@ func (m *Manager) resolveTenantGrant(ctx context.Context, sid auth.SessionID, id
 	// tenant mid-purge would otherwise readmit its members to data that is being erased
 	// underneath them.
 	if t.PurgeState.Deleted() {
-		return nil, nil, auth.Scope{}, errTenantAccessDenied
+		return nil, nil, auth.Scope{}, nil, errTenantAccessDenied
 	}
 	if !t.Enabled || !mem.Enabled {
-		return nil, nil, auth.Scope{}, errTenantAccessDenied
+		return nil, nil, auth.Scope{}, nil, errTenantAccessDenied
 	}
 	if mem.IsScoped() {
 		scope, err = auth.NewScope(mem.Scope)
 		if err != nil {
 			log.Error().Err(err).Str("tenant", tenant).Uint("membership", mem.ID).
 				Msg("A membership's stored scope does not parse; it is refused rather than minted unscoped.")
-			return nil, nil, auth.Scope{}, errTenantAccessDenied
+			return nil, nil, auth.Scope{}, nil, errTenantAccessDenied
 		}
 	}
-	return roleTokens(mem.TenantRoles), mem.TenantAuthorities(), scope, nil
+	return roleTokens(mem.TenantRoles), mem.TenantAuthorities(), scope, amr, nil
+}
+
+// amrOptions is the mint option that stamps a sign-in's "amr" on a token, or none when the
+// sign-in recorded none (a single sign-on, or a session written before amr was recorded).
+func amrOptions(amr []string) []auth.MintOption {
+	if len(amr) == 0 {
+		return nil
+	}
+	return []auth.MintOption{auth.WithAmr(amr)}
 }
 
 // viewerAuthorities is the read-only baseline every enabled tenant member
@@ -1136,7 +1199,11 @@ func unionStrings(a, b []string) []string {
 // the scoped access lifetime (ADR-081). The refresh token never carries it: every refresh
 // re-reads the membership, so a scope on it would be one nothing reads (and the validator
 // refuses "scp" on a refresh token).
-func (m *Manager) issueTenantTokens(tenant, email string, epoch auth.SessionEpoch, sid auth.SessionID, roles, authorities []string, scope auth.Scope, sudo bool) (*TokenPair, error) {
+//
+// amr is the sign-in's, read from its session record by the caller (see admitTenant). It is
+// stamped on both tokens; an empty one (a single sign-on, or a record from before amr was
+// recorded) writes no claim.
+func (m *Manager) issueTenantTokens(tenant, email string, epoch auth.SessionEpoch, sid auth.SessionID, roles, authorities []string, scope auth.Scope, sudo bool, amr []string) (*TokenPair, error) {
 	// Every enabled tenant member can view the domain objects by default (the
 	// `viewer` baseline); writes stay role-gated, as does reading a device
 	// credential (see viewerAuthorities). Superusers already hold `*`.
@@ -1151,15 +1218,15 @@ func (m *Manager) issueTenantTokens(tenant, email string, epoch auth.SessionEpoc
 	var access auth.IssuedToken
 	var err error
 	if scope.IsScoped() && !sudo {
-		access, err = issuer.IssueScopedTenantAccess(tenant, email, roles, authorities, scope, uuid.NewString())
+		access, err = issuer.IssueScopedTenantAccess(tenant, email, roles, authorities, scope, uuid.NewString(), amrOptions(amr)...)
 	} else {
-		access, err = issuer.IssueTenantAccess(tenant, email, roles, authorities, sudo, uuid.NewString())
+		access, err = issuer.IssueTenantAccess(tenant, email, roles, authorities, sudo, uuid.NewString(), amrOptions(amr)...)
 	}
 	if err != nil {
 		return nil, err
 	}
 	refreshJti := uuid.NewString()
-	refresh, err := issuer.IssueRefresh(tenant, email, epoch, sid, roles, authorities, refreshJti)
+	refresh, err := issuer.IssueRefresh(tenant, email, epoch, sid, roles, authorities, refreshJti, amrOptions(amr)...)
 	if err != nil {
 		return nil, err
 	}

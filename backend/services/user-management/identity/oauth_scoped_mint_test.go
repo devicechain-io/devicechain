@@ -127,7 +127,7 @@ func (e *mintTestEnv) epochOf(t *testing.T, email string) auth.SessionEpoch {
 // code or refresh token minted for it would carry.
 func (e *mintTestEnv) sidOf(t *testing.T, email string) auth.SessionID {
 	t.Helper()
-	sid, err := e.m.startSession(email)
+	sid, err := e.m.startSession(email, auth.AmrPasswordOnly())
 	require.NoError(t, err)
 	return sid
 }

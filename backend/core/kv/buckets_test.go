@@ -131,7 +131,7 @@ func TestIdentityAccountBucketsBelongToUserManagementAlone(t *testing.T) {
 			}
 		}
 	}
-	if n != 5 {
-		t.Errorf("%d buckets are in the identity account, want the 5 sign-in buckets", n)
+	if n != 6 {
+		t.Errorf("%d buckets are in the identity account, want the 6 sign-in buckets", n)
 	}
 }

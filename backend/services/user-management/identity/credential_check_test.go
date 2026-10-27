@@ -68,7 +68,7 @@ type credFixture struct {
 
 func newCredFixture(t *testing.T) *credFixture {
 	t.Helper()
-	db := putest.NewSQLiteDB(t, &iam.Identity{}, &iam.Role{}, &iam.Membership{}, &iam.OAuthClient{})
+	db := putest.NewSQLiteDB(t, &iam.Identity{}, &iam.Role{}, &iam.Membership{}, &iam.OAuthClient{}, &iam.MfaFactor{}, &iam.MfaSourceFailure{}, &iam.MfaRecoveryCode{})
 	rdbm := &rdb.RdbManager{Database: db}
 
 	// Count identity lookups at the database, so "a throttled attempt makes no lookup"

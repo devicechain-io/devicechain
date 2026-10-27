@@ -278,6 +278,11 @@ func KvPurgeExemptions() []string {
 			"state record) and completed sign-ins awaiting completion (a single-use record with " +
 			"a 60-second lifetime). A record names an external account and the connection it came " +
 			"through, never a tenant, and both expire inside the settle window",
+		kv.BucketMfaChallenges + ": password sign-ins waiting for their second factor, one entry per " +
+			"correct password of an enrolled person, keyed by a hash of an opaque handle and holding " +
+			"the owner's email, a session epoch and a count. It names no tenant, because a sign-in " +
+			"belongs to the PERSON, like the refresh-token store, and every entry expires five " +
+			"minutes after it is written, well inside the settle window",
 		kv.BucketCredentialAttempts + ": sign-in backoff state, one entry per recently failing " +
 			"principal of a throttled kind, keyed by a hash of the presented identifier (today an " +
 			"email). It names no tenant — a sign-in attempt belongs to the PERSON, like the refresh-token store — and " +

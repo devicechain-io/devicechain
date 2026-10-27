@@ -17,6 +17,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // rfcSeed is the RFC 6238 Appendix B SHA-1 shared secret, ASCII "12345678901234567890".
@@ -399,4 +400,59 @@ func TestTOTPStepAtFloorsBeforeTheEpoch(t *testing.T) {
 	assert.Equal(t, int64(0), credential.TOTPStepAt(time.Unix(0, 0)))
 	assert.Equal(t, int64(0), credential.TOTPStepAt(time.Unix(29, 0)))
 	assert.Equal(t, int64(1), credential.TOTPStepAt(time.Unix(30, 0)))
+}
+
+// pairChecker declares a password kind and the one-time kind, the way user-management does,
+// with a stored bcrypt hash for "secret" behind principal a@example.com.
+func pairChecker(t *testing.T) (*credential.Checker, func(context.Context) (string, error)) {
+	t.Helper()
+	c, err := credential.NewChecker(credentialtest.NewStore(), map[credential.Kind]credential.Policy{
+		credential.KindIdentity: testPolicy,
+		credential.KindTotp:     {Unthrottled: true},
+	})
+	require.NoError(t, err)
+	hash, err := bcrypt.GenerateFromPassword([]byte("secret"), bcrypt.MinCost)
+	require.NoError(t, err)
+	return c, func(context.Context) (string, error) { return string(hash), nil }
+}
+
+// CheckPasswordAndOneTime is ONE re-authentication: it spends one unit of the request's
+// budget for the pair, so it works under the default budget of one, and an aliased second
+// copy in the same request is refused before anything is read.
+// The code is evaluated only after the password matched.
+func TestCheckPasswordAndOneTimeSpendsOneUnitForThePair(t *testing.T) {
+	c, lookup := pairChecker(t)
+	p := credential.Principal{Kind: credential.KindIdentity, ID: "a@example.com"}
+	ran := 0
+	attempt := func(context.Context, credential.OneTime) error { ran++; return nil }
+
+	ctx := credential.WithRequestBudget(context.Background(), 1)
+	require.NoError(t, c.CheckPasswordAndOneTime(ctx, p, "secret", lookup, credential.KindTotp, attempt))
+	assert.Equal(t, 1, ran)
+	// The second copy in the same request: refused, nothing evaluated.
+	err := c.CheckPasswordAndOneTime(ctx, p, "secret", lookup, credential.KindTotp, attempt)
+	require.ErrorIs(t, err, credential.ErrRequestBudgetExhausted)
+	assert.Equal(t, 1, ran, "a copy past the budget evaluates no code")
+	// And the pair shares the budget with a plain check.
+	require.ErrorIs(t, c.CheckOneTime(ctx, credential.KindTotp, attempt), credential.ErrRequestBudgetExhausted)
+}
+
+func TestCheckPasswordAndOneTimeEvaluatesNoCodeForAWrongPassword(t *testing.T) {
+	c, lookup := pairChecker(t)
+	p := credential.Principal{Kind: credential.KindIdentity, ID: "a@example.com"}
+	ran := 0
+	attempt := func(context.Context, credential.OneTime) error { ran++; return nil }
+
+	err := c.CheckPasswordAndOneTime(context.Background(), p, "wrong", lookup, credential.KindTotp, attempt)
+	require.ErrorIs(t, err, credential.ErrMismatch)
+	assert.Zero(t, ran, "a wrong password must not reach the code")
+
+	// The twin: the right password reaches it, and the code's own refusal is returned.
+	err = c.CheckPasswordAndOneTime(context.Background(), p, "secret", lookup, credential.KindTotp,
+		func(context.Context, credential.OneTime) error { return credential.ErrMismatch })
+	require.ErrorIs(t, err, credential.ErrMismatch)
+
+	// The pair is not a door to a non-one-time kind.
+	err = c.CheckPasswordAndOneTime(context.Background(), p, "secret", lookup, credential.KindIdentity, attempt)
+	require.ErrorIs(t, err, credential.ErrOneTimeKind)
 }

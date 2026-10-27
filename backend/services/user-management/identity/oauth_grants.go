@@ -478,6 +478,9 @@ type scopedGrant struct {
 	// so MCP tools — which forward the caller's own token — inherit it. Unscoped for a
 	// superuser and for a membership with no scope.
 	anchors auth.Scope
+	// amr is the sign-in's, read from its session record (never from the code or refresh token
+	// presented), and stamped on both tokens.
+	amr []string
 }
 
 // resolveScopedGrant is the READ half of mintScopedGrant: it re-resolves the identity's
@@ -518,7 +521,7 @@ func (m *Manager) resolveScopedGrant(ctx context.Context, email string, epoch au
 	if mem == nil && !su {
 		return scopedGrant{}, errInvalidGrant("subject is no longer a member of the tenant")
 	}
-	roles, authorities, anchors, err := m.resolveTenantGrant(ctx, sid, id, tenant, mem, su)
+	roles, authorities, anchors, amr, err := m.resolveTenantGrant(ctx, sid, id, tenant, mem, su)
 	if err != nil {
 		if errors.Is(err, errTenantAccessDenied) {
 			return scopedGrant{}, errInvalidGrant("tenant access denied")
@@ -538,7 +541,7 @@ func (m *Manager) resolveScopedGrant(ctx context.Context, email string, epoch au
 		email: email, tenant: tenant, epoch: auth.SessionEpoch(id.SessionEpoch), sid: sid, roles: roles,
 		accessCapped: capToScope(authorities, su, accessAllow),
 		refreshCaps:  capToScope(authorities, su, refreshAllow),
-		accessScope:  accessScope, refreshScope: refreshScope, su: su, anchors: anchors,
+		accessScope:  accessScope, refreshScope: refreshScope, su: su, anchors: anchors, amr: amr,
 	}, nil
 }
 
@@ -552,15 +555,15 @@ func (m *Manager) mintScoped(g scopedGrant, audience []string, clientID string) 
 	var access auth.IssuedToken
 	var err error
 	if g.anchors.IsScoped() && !g.su {
-		access, err = issuer.IssueScopedOAuthAccess(g.tenant, g.email, g.roles, g.accessCapped, g.accessScope, audience, g.anchors, clientID, uuid.NewString())
+		access, err = issuer.IssueScopedOAuthAccess(g.tenant, g.email, g.roles, g.accessCapped, g.accessScope, audience, g.anchors, clientID, uuid.NewString(), amrOptions(g.amr)...)
 	} else {
-		access, err = issuer.IssueOAuthAccess(g.tenant, g.email, g.roles, g.accessCapped, g.accessScope, audience, g.su, clientID, uuid.NewString())
+		access, err = issuer.IssueOAuthAccess(g.tenant, g.email, g.roles, g.accessCapped, g.accessScope, audience, g.su, clientID, uuid.NewString(), amrOptions(g.amr)...)
 	}
 	if err != nil {
 		return nil, errServer(err.Error())
 	}
 	refreshJti := uuid.NewString()
-	refresh, err := issuer.IssueOAuthRefresh(g.tenant, g.email, g.epoch, g.sid, g.roles, g.refreshCaps, g.refreshScope, audience, clientID, refreshJti)
+	refresh, err := issuer.IssueOAuthRefresh(g.tenant, g.email, g.epoch, g.sid, g.roles, g.refreshCaps, g.refreshScope, audience, clientID, refreshJti, amrOptions(g.amr)...)
 	if err != nil {
 		return nil, errServer(err.Error())
 	}

@@ -379,6 +379,10 @@ type MemberView struct {
 	Identity          iam.Identity
 	Membership        iam.Membership
 	InvitationPending bool
+	// MfaEnabled is whether the member has two-factor authentication on. False while the
+	// invitation is open: a pending member has had no session to enrol from, and showing
+	// anything about their account before they accept would leak whether it already existed.
+	MfaEnabled bool
 }
 
 // memberViews decorates memberships with whether an invitation is still open.
@@ -391,10 +395,19 @@ func memberViews(ctx context.Context, tx *iam.Store, members []iam.TenantMember)
 	if err != nil {
 		return nil, err
 	}
+	identityIDs := make([]uint, 0, len(members))
+	for _, m := range members {
+		identityIDs = append(identityIDs, m.Identity.ID)
+	}
+	withMfa, err := tx.MfaEnabledAmong(ctx, identityIDs)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]MemberView, 0, len(members))
 	for _, m := range members {
+		pending := hasOpenInvitation(invs[m.Membership.ID])
 		out = append(out, MemberView{Identity: m.Identity, Membership: m.Membership,
-			InvitationPending: hasOpenInvitation(invs[m.Membership.ID])})
+			InvitationPending: pending, MfaEnabled: withMfa[m.Identity.ID] && !pending})
 	}
 	return out, nil
 }
