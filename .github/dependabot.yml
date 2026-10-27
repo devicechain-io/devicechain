@@ -47,6 +47,9 @@ updates:
       - "/backend/sims/*"
       - "/backend/tools/*"
       - "/deploy"
+      # The reference updatable device. Same rule as above: it replaces core locally (its tests
+      # read the contract fixtures through core), so it must move with core.
+      - "/examples/ota-device"
     schedule:
       interval: "weekly"
       day: "monday"

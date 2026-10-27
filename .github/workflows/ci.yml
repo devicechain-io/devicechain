@@ -1204,7 +1204,7 @@ jobs:
           -ignore 'demos/**/*.meta' -ignore 'demos/**/*.asset' -ignore 'demos/**/*.unity'
           -ignore 'demos/**/*.prefab' -ignore 'demos/**/*.mat' -ignore 'demos/**/*.inputactions'
           -ignore 'demos/**/ProjectSettings/**' -ignore 'demos/**/Packages/packages-lock.json'
-          -f hack/license-header.txt backend sdks demos
+          -f hack/license-header.txt backend sdks demos examples
 
       # The step above proves every SOURCE FILE says Apache-2.0. Nothing proved that
       # the ECOSYSTEM agrees — GitHub runs its own detector over LICENSE and publishes
