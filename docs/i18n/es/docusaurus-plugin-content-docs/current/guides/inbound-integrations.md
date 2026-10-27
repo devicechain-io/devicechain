@@ -114,7 +114,7 @@ Para encontrar un dispositivo por alias, da a `devices` el criterio `alias: {sch
 
 El **Identificador del dispositivo** de la integración decide qué esquema se busca: `DEV_EUI` lee `lorawan.deveui`, `DEVICE_ID` lee `tts.device-id` y `ALIAS:custom.serial` lee `custom.serial`. Un dispositivo que solo tiene otro esquema no se encuentra.
 
-Quitar un alias de un dispositivo, o pasarlo a otro dispositivo, puede tardar hasta una hora en llegar al endpoint: hasta entonces los uplinks de ese identificador siguen llegando al dispositivo que lo tenía. Un dispositivo que crees para un identificador que ya estaba llegando empieza a recibir en menos de un minuto.
+**Cambiar o quitar el identificador de un dispositivo.** Pasar un identificador (un DevEUI, un id de dispositivo) a otro dispositivo, o quitarlo, surte efecto en unos cinco minutos. Hasta entonces el endpoint de integración puede seguir nombrando al dispositivo anterior para ese identificador, pero la plataforma comprueba en el evento que el dispositivo aún tiene el identificador, así que esos uplinks se rechazan y se conservan en el almacén de mensajes fallidos para inspeccionarlos (motivo `IntegrationAliasMismatch`, contado por `resolve_integration_alias_mismatch_total`). Nunca se guardan en ningún dispositivo y no se pueden reproducir. Cuando el cambio se ha propagado, los uplinks llegan al dispositivo que tiene ahora el identificador. Un dispositivo que crees para un identificador que ya estaba llegando empieza a recibir en menos de un minuto.
 
 ## ChirpStack v4 {#chirpstack}
 

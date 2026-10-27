@@ -321,6 +321,15 @@ These count the tenant-deletion coordinator, which erases a deleted tenant's dat
 | `tenant_purge_duration_seconds` | Histogram of seconds from a tenant's deletion to its token being released. Includes the token hold. |
 | `tenant_purge_clean_duration_seconds` | Histogram of seconds from a tenant's deletion to the last store reporting clean. Excludes the settle and token-hold waits that follow: the time the erasure itself took. |
 
+These count [two-factor authentication](../guides/two-factor-authentication.md). The first and last are what the `MfaVerificationFailuresSustained` and `MfaIdentityLocked` alerts watch. None carries an account or a tenant label.
+
+| Metric | Means |
+| --- | --- |
+| `mfa_verifications_total{method,result}` | Codes checked, by method (`totp`, `recovery`) and result: `ok`, `invalid` (wrong), `replay` (a correct code already used), `locked` (refused by a lock), `expired` (a challenge that could not be used), `budget` (a request with more checks than its allowance), `rate_limited` and `unavailable` (the check could not be made). |
+| `mfa_challenges_total` | Password sign-ins held for a code. |
+| `mfa_enrollments_total{result}` | Setup events: `begun`, `confirmed`, `disabled` by the person, `reset` by an operator. |
+| `mfa_identity_locks_total` | Attempts that armed an account-wide lock. Any increase means an account's password is in use by someone failing its second factor. `MfaIdentityLocked` watches it. |
+
 ## Update management {#update-management}
 
 Prefix: `devicechain_updatemanagement_`. The service is opt-in; see [Over-the-air updates](../concepts/over-the-air-updates.md).

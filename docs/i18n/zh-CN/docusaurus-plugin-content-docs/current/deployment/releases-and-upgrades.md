@@ -2123,6 +2123,8 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 
 在此之前，自动注册配置可以创建和编辑，但没有任何东西会读取它：没有设备能通过它注册。因此，没有任何昨天还能工作的东西会因为某个设备群在用它而停止工作。变化的是配置的创建方式以及它的要求。
 
+该版本还新增了[双重身份验证](#after-v0252-mfa)，它改变了 API 客户端登录已开启该功能的账号的方式。
+
 #### 自动注册配置 {#self-registration-profiles}
 
 - **预配密文由服务器生成。**`createProvisioningProfile` 不再接受 `provisionSecret`。它返回 `{ profile, issuedSecret }`，而过去返回的是配置本身，并且 `issuedSecret` **只显示一次**。从结果中选取 `token` 的脚本现在必须选取 `profile { token }`。`updateProvisioningProfile` 同样不再接受 `provisionSecret`。`rotateProvisioningProfileSecret(token)` 是替换密文的唯一方式。两者对基于旧 Schema 构建的客户端都是破坏性的：请重新生成基于旧 Schema 构建的客户端，并检查你的脚本。新增操作列在[自动注册配置](../reference/graphql-api.md#provisioning-profiles)下。
@@ -2183,6 +2185,18 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 #### 升级期间 MQTT 消息可能丢失 {#after-v0252-mqtt-roll}
 
 升级会逐个重启平台代理的服务器。在一次使用预发布构建对本次升级的代理滚动重启所做的演练中，集群是七节点的 GKE 集群（三个服务节点、三个数据库节点和一个负载生成节点），以 `--ha` 安装，其代理运行三个服务器，MQTT 设备全程以每秒 300 条的速度发送 QoS 1 消息，**代理已确认的 448,346 条消息中有 23 条从未被存储**。丢失发生在三次代理服务器重启前后的突发中。QoS 1 的至少一次投递在**代理滚动重启期间无法保证**：已收到 PUBACK 的设备不会重发。此前的测量见[滚动升级](#rolling-upgrades)，代理的行为见[MQTT：平台代理](../reference/transport-matrix.md#mqtt--the-platform-broker)，能改变这一结果的故障关闭设置是 `--mqtt-fail-closed`。
+
+#### 双重身份验证 {#after-v0252-mfa}
+
+账号现在可以开启[双重身份验证](../guides/two-factor-authentication.md)：密码之后再输入验证器应用生成的代码，并附十个一次性恢复码。在所有者主动开启之前，所有账号均为关闭状态，因此对什么都不做的用户没有任何变化。控制台、仪表板应用和 MCP 授权页面都会要求输入代码，租户和层级可以强制要求它。user-management 数据库通过一次自动迁移新增了保存该因素及其恢复码的表。
+
+- **`login` 现在可能以 `MFA_CHALLENGE` 失败，因此 API 客户端必须处理它。** 对设有第二因素的账号，正确的密码不再返回令牌：`login` 以错误码 `MFA_CHALLENGE` 失败，并在 `extensions` 中带有质询，客户端用新的 `verifyMfa(challenge, code)` 完成登录。不了解它的客户端会看到一个带有清晰信息的登录失败，而不会拿到令牌。没有第二因素的账号登录方式与以前完全相同。C# SDK 会抛出 `MfaRequiredException` 并新增 `VerifyMfaAsync`；`dcctl` 在 `dead-letters`、`presence` 和 `sim` 上新增 `--otp`。参见[使用双重身份验证登录](../reference/graphql-api.md#two-factor-sign-in)。
+- **`login` 审计记录的含义变了。** 它现在在登录**完成**时写入，标签为 `pwd`、`pwd+otp` 或 `pwd+recovery`。对设有第二因素的账号，密码这一步是新的 `mfa_challenged` 记录，因此原先把 `login` 记录当作密码验证成功来统计的查询，现在统计的是已完成的登录。新增的记录涵盖设置、重置、失败与被锁定的尝试以及恢复码的使用。
+- **设置和关闭该因素都会结束账号的会话。** 设置会结束其他所有会话，控制台会换上一个新的。关闭会结束所有会话，包括调用者的会话。
+- **租户可以强制要求它**，层级可以用层级键 `mfaRequired` 设置下限。没有该因素的成员会被引导去设置，已在租户内的会话在下一次刷新时结束。超级用户、服务账号和单点登录会话不受租户设置约束。
+- **新的 break-glass 命令 `dcctl instances break-glass mfa-reset`** 用于重置丢失了因素、无法登录的运维人员。它需要集群凭据，总会更换密码，并只打印一次新密码。
+- **随 chart 到来的有两条新告警 `MfaIdentityLocked` 和 `MfaVerificationFailuresSustained`**，以及四个指标。在没有人设置第二因素时它们保持安静。锁定的补救办法是重置密码，而不是重置因素。参见[第二因素锁定](./observability.md#mfa-alerts)。
+- **节点需要正常的时间同步。** 代码在其 30 秒步长及前后各一个步长内有效。
 
 ### v0.25.2：服务令牌签发离开公共端口 {#v0252-upgrade}
 

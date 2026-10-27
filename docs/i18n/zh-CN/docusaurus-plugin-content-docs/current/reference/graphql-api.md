@@ -695,6 +695,67 @@ token 会拼入基础设施命名空间：租户 ID 成为 NATS subject 中按 `
 
 对成员的更改（包括从其身上移除某些内容：缩小其范围、移除某项权限、禁用或移除该成员）会在该成员下次刷新令牌时生效：15 分钟之内；对于仅限部分客户的访问，5 分钟之内。每次刷新都会读取成员资格的当前状态，因此下一个访问令牌携带的是缩小后的授权；已禁用或已移除的成员在你的租户中的刷新会被拒绝。已经签发的访问令牌会继续有效，直到过期。该成员在其他租户中的会话不受影响。
 
+## 使用双重身份验证登录 {#two-factor-sign-in}
+
+设有[双重身份验证](../guides/two-factor-authentication.md)的账号无法从 `login` 获得令牌。密码正确时，`login` 以错误码 `MFA_CHALLENGE` 失败，并在 `extensions` 中携带一个质询；在客户端把代码发给 `verifyMfa` 之前不会签发任何东西。**只处理 `login` 成功情形的客户端，对这些账号现在会失败**，得到一个错误，而不会拿到不该拿到的令牌。
+
+```json
+{
+  "errors": [{
+    "message": "a second factor is required to finish signing in; send the challenge and a code to verifyMfa",
+    "path": ["login"],
+    "extensions": {
+      "code": "MFA_CHALLENGE",
+      "challenge": "...",
+      "expiresAt": "2026-10-27T12:05:00Z",
+      "methods": ["TOTP", "RECOVERY_CODE"]
+    }
+  }],
+  "data": null
+}
+```
+
+```graphql
+mutation Verify($challenge: String!, $code: String!) {
+  verifyMfa(challenge: $challenge, code: $code) {
+    identityToken
+    memberships { tenant }
+  }
+}
+```
+
+`verifyMfa` 返回与 `login` 相同的内容，客户端像以前一样继续调用 `selectTenant`。`code` 是六位应用代码或恢复码（`ABCD-EFGH-JKMN-PQRS`，大小写均可，带不带连字符均可）。质询有效期五分钟，允许五次尝试，只能完成一次登录。
+
+这些操作位于 user-management 端点。`mfaStatus`、`beginTotpEnrollment`、`confirmTotpEnrollment`、`regenerateRecoveryCodes` 和 `disableTotp` 以参数形式接收身份令牌（不放在 `Authorization` 头中），而不是租户令牌。`verifyMfa` 不接收令牌。租户平面的 `setTenantMfaRequired` 使用租户访问令牌，需要 `member:write`，且调用者不能带有范围限制。`resetIdentityMfa` 和管理 API 的 `setTenantMfaRequired` 位于管理 API，需要 `user:write`：
+
+| 操作 | 作用 |
+|---|---|
+| `mfaStatus` | 该因素是否已开启、何时设置、还剩多少恢复码。 |
+| `beginTotpEnrollment` | 开始设置：返回 `otpauth://` URI 和密钥。需要密码。 |
+| `confirmTotpEnrollment` | 证明应用持有密钥，开启该因素，**一次性**返回十个恢复码和一个新的登录会话（`auth`）。开启会结束该账号的所有会话，包括调用者自己的：传入的身份令牌会失效，因此请继续使用返回的 `auth`。 |
+| `regenerateRecoveryCodes` | 替换恢复码。需要密码和一个代码。 |
+| `disableTotp` | 关闭该因素并结束所有会话，包括调用者的会话。需要密码和一个代码。 |
+| `setTenantMfaRequired` | 对租户的密码登录要求该因素。在租户平面上需要 `member:write`，且不能低于层级的下限。在管理 API 上需要指明租户。 |
+| `resetIdentityMfa` | 管理 API。移除某个身份的因素。存在未处理的错误代码时要求提供 `newPassword`。 |
+
+`Membership.mfaRequired` 和成员列表的 `mfaEnabled` 让客户端知道会发生什么。进入要求该因素的租户的登录会被拒绝，并返回下列错误码之一。
+
+### 错误码 {#two-factor-error-codes}
+
+该集合是封闭的。错误的代码、被重放的代码，以及因锁定而被拒绝的代码，得到的是同一个回答"invalid code"，没有各自的错误码，因此回答不会成为判断依据。
+
+| `extensions.code` | 出现位置 | 含义 |
+|---|---|---|
+| `MFA_CHALLENGE` | `login` | 密码正确，需要输入代码。质询位于 `extensions` 中。 |
+| `MFA_CHALLENGE_EXPIRED` | `verifyMfa` | 质询未知、已过期、已用完，或已因密码变更而失效。请重新登录。 |
+| `MFA_REQUIRED` | `selectTenant`、刷新 | 租户要求第二因素，本次登录没有使用，而账号设有该因素。请重新登录并输入代码。 |
+| `MFA_ENROLLMENT_REQUIRED` | `selectTenant`、刷新 | 同上，但账号尚未设置。请先用 `beginTotpEnrollment` 设置。 |
+| `MFA_ALREADY_ENROLLED` | `beginTotpEnrollment` | 已开启一个因素。请先关闭。 |
+| `MFA_NOT_ENROLLED` | `regenerateRecoveryCodes`、`disableTotp` | 没有因素。 |
+| `MFA_RESET_NEEDS_PASSWORD` | `resetIdentityMfa`（管理 API） | 账号存在未处理的错误代码；重置时请同时提供 `newPassword`。 |
+
+尝试次数过多的错误不带错误码，与登录[退避](#sign-in-backoff)相同。`verifyMfa`、`beginTotpEnrollment`、`confirmTotpEnrollment`、`regenerateRecoveryCodes` 和 `disableTotp` 各会消耗请求的一次[凭据检查](#credential-checks-per-request)，密码和代码合起来算一次。`mfaStatus`、`setTenantMfaRequired` 和 `resetIdentityMfa` 不消耗。C# SDK 把质询报告为 `MfaRequiredException`；参见[双重身份验证](../guides/two-factor-authentication.md#csharp)。
+
 ## 请求限制 {#request-limits}
 
 每个 GraphQL 端点都会在执行前拒绝过大或工作量过多的请求。

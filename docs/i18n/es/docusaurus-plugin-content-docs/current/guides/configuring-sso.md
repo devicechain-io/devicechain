@@ -32,6 +32,10 @@ Los mismos pasos están disponibles en la API GraphQL de administración: `creat
 
 Una conexión de instancia (para tus propios operadores) se crea del mismo modo con el tipo `instance`, y además necesita `requiredAmr` (por ejemplo `["mfa"]`) o `mfaEnforcedByIdp: true`. Vincula a cada operador explícitamente con `linkIdentity`; nada los vincula automáticamente.
 
+## Autenticación en dos pasos {#two-factor}
+
+La [exigencia de dos pasos](./two-factor-authentication.md#require) de un inquilino obliga solo a los inicios de sesión **con contraseña**. Una persona que inicia sesión mediante el inicio de sesión único no la encuentra, y el ajuste del inquilino no se le aplica. Lo que rige un inicio de sesión SSO es la conexión: exige un método de autenticación en ella (`requiredAmr`, por ejemplo `["mfa"]`) para que el proveedor de identidad tenga que haber aplicado su propio segundo factor. Un inquilino que activa **Require SSO** ya no tiene inicios de sesión con contraseña a los que aplicar la exigencia.
+
 ## Cerrar sesión en el proveedor {#provider-sign-out}
 
 Por defecto, cerrar sesión en la consola o en la aplicación de paneles termina solo la sesión de DeviceChain. La persona sigue con la sesión iniciada en el proveedor de identidad, así que su siguiente **Sign in with SSO** puede pasar directamente sin pedir contraseña. Una conexión también puede enviar a las personas a la página de cierre de sesión del propio proveedor cuando cierran sesión (cierre de sesión iniciado por el RP de OpenID Connect). Está **desactivado por defecto**, porque cerrar sesión en el proveedor suele terminar la sesión de la persona allí para todas las aplicaciones a las que sirve el proveedor.

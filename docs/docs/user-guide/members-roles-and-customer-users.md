@@ -76,6 +76,10 @@ A link that cannot be used (it expired, was revoked, was already used, or was se
 account) gets one answer, "This invitation cannot be used", whichever reason it is. Ask for a new
 one.
 
+### Two-factor authentication {#member-two-factor}
+
+The **Two-factor** column of the Members list shows whether each person has turned on two-factor authentication. The tenant can require it of everyone who signs in with a password: open **Settings → Security** and choose **Require**. It needs the permission to manage members, for the whole tenant. A member without it is sent to set it up when they next enter, and password sessions already inside end at their next refresh. A tenant whose tier requires it cannot turn it off. Resetting a person who has lost their phone is an operator's job, because the account is shared by every tenant. See [Two-factor authentication](/guides/two-factor-authentication#require).
+
 ### Changing a member's access {#changing-access}
 
 From a row's menu:

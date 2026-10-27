@@ -918,6 +918,67 @@ reducida, y la actualización de un miembro deshabilitado o eliminado se rechaza
 token de acceso ya emitido sigue funcionando hasta que caduca. Las sesiones del miembro en otros
 tenants no se ven afectadas.
 
+## Iniciar sesión con autenticación en dos pasos {#two-factor-sign-in}
+
+Una cuenta con [autenticación en dos pasos](../guides/two-factor-authentication.md) no recibe un token de `login`. Cuando la contraseña es correcta, `login` falla con el código de error `MFA_CHALLENGE`, que lleva un desafío en `extensions`, y no se emite nada hasta que el cliente envía un código a `verifyMfa`. **Un cliente que solo gestiona un `login` correcto ahora falla para estas cuentas**, con un error, y nunca recibe un token que no debería tener.
+
+```json
+{
+  "errors": [{
+    "message": "a second factor is required to finish signing in; send the challenge and a code to verifyMfa",
+    "path": ["login"],
+    "extensions": {
+      "code": "MFA_CHALLENGE",
+      "challenge": "...",
+      "expiresAt": "2026-10-27T12:05:00Z",
+      "methods": ["TOTP", "RECOVERY_CODE"]
+    }
+  }],
+  "data": null
+}
+```
+
+```graphql
+mutation Verify($challenge: String!, $code: String!) {
+  verifyMfa(challenge: $challenge, code: $code) {
+    identityToken
+    memberships { tenant }
+  }
+}
+```
+
+`verifyMfa` devuelve lo mismo que `login`, y el cliente continúa con `selectTenant` como antes. `code` es el código de seis dígitos de la aplicación o un código de recuperación (`ABCD-EFGH-JKMN-PQRS`, en mayúsculas o minúsculas, con o sin guiones). Un desafío dura cinco minutos, admite cinco intentos e inicia sesión una sola vez.
+
+Las operaciones están en el endpoint de user-management. `mfaStatus`, `beginTotpEnrollment`, `confirmTotpEnrollment`, `regenerateRecoveryCodes` y `disableTotp` toman el token de identidad como argumento (no en una cabecera `Authorization`), no un token de inquilino. `verifyMfa` no toma ningún token. `setTenantMfaRequired` del plano del inquilino toma el token de acceso del inquilino y requiere `member:write` y un llamador sin alcance restringido. `resetIdentityMfa` y el `setTenantMfaRequired` de la API de administración están en la API de administración y requieren `user:write`:
+
+| Operación | Qué hace |
+|---|---|
+| `mfaStatus` | Si el factor está activado, cuándo se configuró y cuántos códigos de recuperación quedan. |
+| `beginTotpEnrollment` | Inicia la configuración: devuelve el URI `otpauth://` y la clave. Exige la contraseña. |
+| `confirmTotpEnrollment` | Demuestra que la aplicación tiene la clave, activa el factor, devuelve diez códigos de recuperación **una sola vez** y un inicio de sesión nuevo (`auth`). Al activarlo terminan todas las sesiones de la cuenta, la de quien llama incluida: el token de identidad enviado deja de funcionar, así que continúa con el `auth` devuelto. |
+| `regenerateRecoveryCodes` | Sustituye los códigos. Exige la contraseña y un código. |
+| `disableTotp` | Desactiva el factor y termina todas las sesiones, incluida la del llamante. Exige la contraseña y un código. |
+| `setTenantMfaRequired` | Exige el factor a los inicios de sesión con contraseña de un inquilino. En el plano del inquilino exige `member:write` y no puede bajar del mínimo del nivel. En la API de administración nombra al inquilino. |
+| `resetIdentityMfa` | API de administración. Elimina el factor de una identidad. Pide `newPassword` mientras haya códigos incorrectos pendientes. |
+
+`Membership.mfaRequired` y el `mfaEnabled` de la lista de miembros indican al cliente qué esperar. Un inicio de sesión en un inquilino que exige el factor se rechaza con uno de los códigos de error siguientes.
+
+### Los códigos de error {#two-factor-error-codes}
+
+El conjunto es cerrado. Un código incorrecto, un código repetido y un código rechazado por un bloqueo reciben la misma respuesta, "invalid code", sin código propio, de modo que la respuesta no es un oráculo.
+
+| `extensions.code` | Dónde | Significado |
+|---|---|---|
+| `MFA_CHALLENGE` | `login` | La contraseña era correcta y hace falta un código. El desafío va en `extensions`. |
+| `MFA_CHALLENGE_EXPIRED` | `verifyMfa` | El desafío es desconocido, ha caducado, se ha agotado o lo dejó obsoleto un cambio de contraseña. Inicia sesión de nuevo. |
+| `MFA_REQUIRED` | `selectTenant`, renovación | El inquilino exige un segundo factor, este inicio de sesión no lo usó y la cuenta tiene uno. Inicia sesión de nuevo e introduce el código. |
+| `MFA_ENROLLMENT_REQUIRED` | `selectTenant`, renovación | Lo mismo, y la cuenta no tiene ninguno. Configúralo primero con `beginTotpEnrollment`. |
+| `MFA_ALREADY_ENROLLED` | `beginTotpEnrollment` | Ya hay un factor activado. Desactívalo primero. |
+| `MFA_NOT_ENROLLED` | `regenerateRecoveryCodes`, `disableTotp` | No hay ningún factor. |
+| `MFA_RESET_NEEDS_PASSWORD` | `resetIdentityMfa` (API de administración) | La cuenta tiene códigos incorrectos pendientes; envía `newPassword` con el restablecimiento. |
+
+El error por demasiados intentos no lleva código, igual que la [espera entre intentos](#sign-in-backoff). `verifyMfa`, `beginTotpEnrollment`, `confirmTotpEnrollment`, `regenerateRecoveryCodes` y `disableTotp` gastan cada una una de las [comprobaciones de credenciales](#credential-checks-per-request) de la petición, y la contraseña y el código juntos cuentan como una. `mfaStatus`, `setTenantMfaRequired` y `resetIdentityMfa` no gastan ninguna. El SDK de C# informa del desafío como `MfaRequiredException`; consulta [Autenticación en dos pasos](../guides/two-factor-authentication.md#csharp).
+
 ## Límites de las solicitudes {#request-limits}
 
 Todos los endpoints de GraphQL rechazan una solicitud demasiado grande o que hace demasiado trabajo,

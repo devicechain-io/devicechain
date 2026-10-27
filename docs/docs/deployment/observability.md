@@ -1351,6 +1351,15 @@ rather than measured, and each is checked in both directions by unit tests.
 | `ProvisioningRateLimited` | warning | For 15 minutes, self-registration requests have been refused with `429` at more than one every ten seconds. The `result` label says which limit: `rate_limited_source` is one client address using up its allowance, `rate_limited_tenant` is the tenant's registrations per second at its governance ceiling. Devices wait the `Retry-After` they are told and try again. | For `rate_limited_source`, check that `infrastructure.http.trustedProxies` names the ingress controller and that the controller preserves the client address. Without them every device shares one allowance. For `rate_limited_tenant`, raise the tenant's provisioning ceiling or spread the factory run out. |
 | `ProvisioningMisconfigured` | warning | In the last 10 minutes at least one request was refused by a provisioning profile that cannot work: its device type was deleted, its strategy is not one the platform knows, or it mints a credential type this build does not support. Every device using that profile is refused until it is fixed. | Find the profile in the service log (the token is logged at `ERROR`) and fix or recreate it. |
 
+## Second-factor lockouts {#mfa-alerts}
+
+Two alerts watch [two-factor authentication](../guides/two-factor-authentication.md). A code is only ever guessed by someone who already passed the password step, so these are about passwords, not about codes. The counters behind them are in the [metrics reference](./metrics-reference.md#user-management).
+
+| Alert | Severity | What it means | What to do |
+| --- | --- | --- | --- |
+| `MfaIdentityLocked` | critical | An account's authenticator locked after twenty wrong codes, each after a correct password. Someone has that password and is guessing. It fires on a single occurrence. | Find the account in the audit journal (`mfa_locked`, after `mfa_failed` and `mfa_challenged` rows) and **reset its password**; do not reset its second factor first, which would give the account to whoever is guessing. The source addresses are in the ingress logs. See [lockouts](../guides/two-factor-authentication.md#lockouts). |
+| `MfaVerificationFailuresSustained` | warning | For fifteen minutes, wrong, replayed or locked-out codes have been refused at more than one every ten seconds. Either people are mistyping in large numbers (a clock problem on the nodes, or apps out of sync) or someone is using passwords they obtained. | Check that the nodes' clocks are synchronised, then look for `mfa_failed` rows grouped by account and at the ingress logs. |
+
 ## Safety gates that switched themselves off {#safety-gates}
 
 A few services carry a safety gate that depends on another service, and each comes up **off**, with

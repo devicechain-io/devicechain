@@ -114,7 +114,7 @@ To find a device by alias, give `devices` a criteria `alias: {scheme: "lorawan.d
 
 The integration's **Device identifier** decides which scheme it looks up: `DEV_EUI` reads `lorawan.deveui`, `DEVICE_ID` reads `tts.device-id`, and `ALIAS:custom.serial` reads `custom.serial`. A device that carries only a different scheme is not found.
 
-Removing an alias from a device, or moving it to another device, can take up to an hour to reach the endpoint: until then uplinks for that identifier still land on the device that held it. A device you create for an identifier that was already arriving starts receiving within a minute.
+**Changing or removing a device's identifier.** Moving an identifier (a DevEUI, a device id) to another device, or removing it, takes effect within about five minutes. Until then the integration endpoint may still name the old device for that identifier, but the platform checks at the event that the device still holds the identifier, so those uplinks are refused and kept in the dead-letter store for inspection (reason `IntegrationAliasMismatch`, counted by `resolve_integration_alias_mismatch_total`). They are never stored on any device and cannot be replayed. Once the change has propagated, uplinks land on the device that holds the identifier now. A device you create for an identifier that was already arriving starts receiving within a minute.
 
 ## ChirpStack v4 {#chirpstack}
 

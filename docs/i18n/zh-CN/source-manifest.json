@@ -163,8 +163,8 @@
       "translationSha256": "d24ae6bfbe4839d32fa48428b4eb6f7bdac4767ae5e59b6fdb276abb83f043ea"
     },
     "guides/configuring-sso.md": {
-      "sourceSha256": "598bc26bb73ea8902d75b99c84d4653eccd2499860de95167b9586ed2dbd04d9",
-      "translationSha256": "3814a6f85ad3b2821ecae0e6f39606d1851afc45bfaa32ac1d322fdb4bfa0f52"
+      "sourceSha256": "525061b81fa9d90510fbe35a3beb49414fe35d8dd39442e945df7550c4184599",
+      "translationSha256": "eff23b8192bcc2336cdc2a2faab59715197e9a8a02ee62d7cb91318f2db5d12a"
     },
     "guides/connecting-a-device.md": {
       "sourceSha256": "ee2dcef5ad0dbf3d2c42c93371e76169877980fb5b168b5e1342f84abfa54d25",
@@ -183,8 +183,8 @@
       "translationSha256": "8826d7f3c1c4b239c6fe483ec468c97ba39078ce9ab75cc4a52dff48ad447a86"
     },
     "guides/inbound-integrations.md": {
-      "sourceSha256": "2601f8f4e551676197994319b807e59c6123a006478a8f1d20329afeb2b45c21",
-      "translationSha256": "3c08059127cf9a240d277339b5987324362e070e2d5d65a70a6f000b10c8d709"
+      "sourceSha256": "f4a1785a721504d1948aa3051ecde1860f9e261da298334d923a6163b2ce0dfe",
+      "translationSha256": "74dee0274c375a048424b5d1b64724ebeeda6d851c171576b4c4f6f48e084828"
     },
     "guides/local-development.md": {
       "sourceSha256": "303dc72cc573da468c4d47a243f2fbc8b4827bdde42b398d66298eab95cde7c5",
@@ -214,6 +214,10 @@
       "sourceSha256": "94b760582ade2045591f2668dce3aca5831ca2d5620d58da58842a7c2212ea73",
       "translationSha256": "0dd46bfb66b76d0089a4283b39973d5089bf6e9798bb4b724542d71984ca6f92"
     },
+    "guides/two-factor-authentication.md": {
+      "sourceSha256": "dc90430515b3df19ef9673adfc1c32e846f0ffcd4e35c360b49df5505ac7bef6",
+      "translationSha256": "274994685cefc9aced50a8e4e05768a765b70d52456133ecc0eca4681e20cabc"
+    },
     "guides/widget-versions-and-compatibility.md": {
       "sourceSha256": "11cdfdffa5b333142fb41b13646e9aa523d0abb5c605fe55835569c2232a0098",
       "translationSha256": "a39e7ad7208d03548a365a4499ce22b3208871ededb3fd44174b4f4720e94a4d"
@@ -239,8 +243,8 @@
       "translationSha256": "f58caa5bce7a1fb79df4f29042dd44a3c30a739ccbc52f33e1dfe153a342352f"
     },
     "reference/graphql-api.md": {
-      "sourceSha256": "dc730a36f06d54beb37d77487377ac64def918ed04c123989c49f1edd959ed61",
-      "translationSha256": "deba77406222447640caa289d19628ff104489a1b7c8897ad483044093daaf34"
+      "sourceSha256": "c1a71f54c16607a5ed86efaaeef2c10ca91d8fb6f6fd4bb9bd78511492a459a3",
+      "translationSha256": "4f1963689e3be11a2c5e57ffed876f99c02fb4b726945631b07bef33cf458972"
     },
     "reference/npm-packages.md": {
       "sourceSha256": "a2950de3cf160b9a6e5194c6f92f67c99edc262295fe328236b98224fdf73aa4",
@@ -251,8 +255,8 @@
       "translationSha256": "23426df0afe1e927a08415728d0c3982e7294b86cca45496f26de465ef5143ad"
     },
     "user-guide/administering-the-instance.md": {
-      "sourceSha256": "98d2fc81eaa2eef3be3c5e36e6cf2f48bef167f3dfce5793b7c4065a030b3743",
-      "translationSha256": "62766245b81ccab0e61f15c468f5a09f9c0092643551bb72a45c1d1e27fcbd02"
+      "sourceSha256": "a0f69435dbc0c437f8a68d982f03d64df7ad9822db03fe7898feb6fb94933f03",
+      "translationSha256": "f5916162480a8a50fba93f91c5a2f80029dc8621fceed87db61e7f8436b8694a"
     },
     "user-guide/alarms.md": {
       "sourceSha256": "dcb305f33f8f6dab0d27730014864c7b05da7afd0bffe4e7439d4ed0ff154227",
@@ -323,8 +327,8 @@
       "translationSha256": "42c03f0d0a05459c617f7dd4bb4a085df8d77ec26930627ef20ab9b6f0db0f54"
     },
     "user-guide/signing-in.md": {
-      "sourceSha256": "e8305918933769a1b71827e6ce1bf93333ab2aa889fd9bec721fb1af30436679",
-      "translationSha256": "f097bf5f6f2fdd74c7b6a81db477442746631576f49d2767dc2d29d01218ce43"
+      "sourceSha256": "dc25b72b3f4ad5901a99f9984bf88472e31f4f98cf7c1dbc39a0a7db64090328",
+      "translationSha256": "b7b16aa6f0ce11293609da4a07923c8ce305eb0cd049b072accf331887fee2e1"
     },
     "user-guide/tenant-settings.md": {
       "sourceSha256": "6d33c73966574661dbe82bdc6ae21655ad5c7494d2e57139e049ba38585468d7",

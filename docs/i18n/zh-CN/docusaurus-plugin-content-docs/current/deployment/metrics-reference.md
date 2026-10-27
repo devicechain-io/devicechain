@@ -274,6 +274,15 @@ title: 指标参考
 | `tenant_purge_duration_seconds` | 从租户删除到其令牌被释放的秒数直方图。包含令牌保留时间。 |
 | `tenant_purge_clean_duration_seconds` | 从租户删除到最后一个存储报告已清空的秒数直方图。不含随后的稳定等待和令牌保留等待：即擦除本身所用时间。 |
 
+这些指标统计[双重身份验证](../guides/two-factor-authentication.md)。第一个和最后一个是 `MfaVerificationFailuresSustained` 与 `MfaIdentityLocked` 两条告警所监视的。都不带账号或租户标签。
+
+| 指标 | 含义 |
+| --- | --- |
+| `mfa_verifications_total{method,result}` | 已检查的代码，按方式（`totp`、`recovery`）和结果统计：`ok`、`invalid`（错误）、`replay`（已使用过的正确代码）、`locked`（因锁定被拒绝）、`expired`（无法使用的质询）、`budget`（检查次数超出额度的请求）、`rate_limited` 和 `unavailable`（无法执行检查）。 |
+| `mfa_challenges_total` | 因等待代码而被挂起的密码登录。 |
+| `mfa_enrollments_total{result}` | 设置事件：`begun`、`confirmed`、用户自行 `disabled`、运维人员 `reset`。 |
+| `mfa_identity_locks_total` | 触发账号全局锁定的尝试。任何增长都意味着有人在使用某个账号的密码，却无法通过它的第二因素。由 `MfaIdentityLocked` 监视。 |
+
 ## 更新管理 {#update-management}
 
 前缀：`devicechain_updatemanagement_`。该服务为可选启用；参见[空中（OTA）更新](../concepts/over-the-air-updates.md)。

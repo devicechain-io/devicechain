@@ -63,6 +63,15 @@ Cómo funciona el inicio de sesión único, y cómo lo configura un administrado
 [Inicio de sesión único](../concepts/single-sign-on.md) y en
 [Configurar el inicio de sesión único](../guides/configuring-sso.md).
 
+## Autenticación en dos pasos {#two-factor}
+
+Si tu cuenta tiene autenticación en dos pasos, introducir la contraseña correcta no basta. La consola pide a continuación un **código de verificación**:
+
+- Introduce el código de seis dígitos de tu aplicación de autenticación. Un código sirve una sola vez, así que si acabas de usar uno, espera al siguiente.
+- O elige **Usar un código de recuperación** e introduce uno de los códigos que guardaste al configurarla. Sirve una sola vez.
+
+Si el paso caduca (cinco minutos, cinco intentos), vuelves a la contraseña. Para activarla, abre el menú de usuario y elige **Seguridad de la cuenta**; los pasos están en [Autenticación en dos pasos](/guides/two-factor-authentication#enrol). Si tu organización la exige y no la has configurado, la consola te lleva allí después de iniciar sesión.
+
 ## Elegir un inquilino
 
 Un inquilino es el espacio de trabajo que contiene los dispositivos, reglas y paneles de tu
