@@ -1058,7 +1058,7 @@ settings were introduced keeps the in-place restart until `dcctl upgrade` applie
 instance's infrastructure
 ([What an upgrade applies to the infrastructure](./releases-and-upgrades.md#upgrade-infrastructure)),
 or until it is patched as described in the
-[release notes](./releases-and-upgrades.md#database-primary-failover-in-seconds).
+[release notes](https://github.com/devicechain-io/devicechain/blob/v0.18.0/docs/docs/deployment/releases-and-upgrades.md#database-primary-failover-in-seconds).
 
 A single-instance install has no standby to promote. Its database is unavailable until the
 instance has restarted, and writes wait for it. In testing, on a small database, writes
@@ -1086,7 +1086,7 @@ removed when the two minutes are up. A pod that does not yet carry this limit (o
 it was introduced, or any instance of an event store that predates the limit and has not yet
 been reached by an upgrade or by the patch the release notes describe) still carries thirty
 minutes; the
-[release notes](./releases-and-upgrades.md#database-primary-failover-in-seconds) say how to
+[release notes](https://github.com/devicechain-io/devicechain/blob/v0.18.0/docs/docs/deployment/releases-and-upgrades.md#database-primary-failover-in-seconds) say how to
 recognise that case and clear it.
 
 Under `--ha`, a primary that is being demoted (by a switchover, or because it is failing) is
@@ -1238,7 +1238,7 @@ that node ran at 94 to 98% CPU while the other two ran at 45 to 51%.
   scope: it refuses pods whose placement looks at other namespaces, preferred or not, so it
   refuses these database pods in a namespace where it forbids that. The API server's quota
   admission configuration can impose the same limit on every namespace without a matching quota;
-  see the [release notes](./releases-and-upgrades.md#v0190-primary-spread).
+  see the [release notes](https://github.com/devicechain-io/devicechain/blob/v0.19.0/docs/docs/deployment/releases-and-upgrades.md#v0190-primary-spread).
 - **It applies when a database pod is scheduled.** Under `--ha` on three nodes, each node already
   runs one instance of each database, so in practice the preference decides one thing: when an
   instance's event store is created, its first primary goes to a node that is not running the

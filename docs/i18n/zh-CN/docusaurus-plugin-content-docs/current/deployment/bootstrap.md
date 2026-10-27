@@ -540,7 +540,7 @@ dcctl bootstrap local my-instance
 
 删除 Pod、drain 节点或滚动更新配置时，数据库实例会停止。它先写 checkpoint，再停止接受新连接，给已连接客户端五秒离开。平台服务在运行期间一直保持数据库连接，等待更久只会延迟后续操作。五秒后，实例终止所有连接并关闭。正在执行的写入失败，由服务重试。
 
-`--ha` 下，旧主节点停止后提升 standby，`dc-postgresql` 或 `dc-timescaledb-single` 指向它。测试中，新主节点在旧节点结束连接后 20–25 秒接受写入，即删除 Pod 后约半分钟。采用这些设置的数据库，配置滚动更新不再原地重启主节点：先重启 standby，将主角色切换到已更新 standby，再让旧主节点作为 standby 重启。测试中 switchover 约中断写入十秒。旧事件存储仍保留原地重启，直到 `dcctl upgrade` 应用实例基础设施（参见[升级应用哪些基础设施变更](./releases-and-upgrades.md#upgrade-infrastructure)），或按[发布说明](./releases-and-upgrades.md#database-primary-failover-in-seconds)进行 patch。
+`--ha` 下，旧主节点停止后提升 standby，`dc-postgresql` 或 `dc-timescaledb-single` 指向它。测试中，新主节点在旧节点结束连接后 20–25 秒接受写入，即删除 Pod 后约半分钟。采用这些设置的数据库，配置滚动更新不再原地重启主节点：先重启 standby，将主角色切换到已更新 standby，再让旧主节点作为 standby 重启。测试中 switchover 约中断写入十秒。旧事件存储仍保留原地重启，直到 `dcctl upgrade` 应用实例基础设施（参见[升级应用哪些基础设施变更](./releases-and-upgrades.md#upgrade-infrastructure)），或按[发布说明](https://github.com/devicechain-io/devicechain/blob/v0.18.0/docs/docs/deployment/releases-and-upgrades.md#database-primary-failover-in-seconds)进行 patch。
 
 单实例没有 standby 可提升，数据库在实例重启完成前不可用，写入等待。小数据库测试中，停止写入后约 15 秒恢复；需要重放更多预写日志时更久。
 
@@ -548,7 +548,7 @@ dcctl bootstrap local my-instance
 
 停止实例总共最多允许两分钟，之后强制停止并移除 Pod。最可能的原因是仍在向不可达备份存储复制最后的预写日志。已提交数据保留，但备份归档可能有缺口：时间点恢复可能无法到达缺口内时刻，且 `PostgresWALArchivingFailing` 已在触发。下一次基础备份之后的恢复点不受影响。主节点停止时正在运行的基础备份会被放弃，下次计划仍正常执行。
 
-两分钟上限也覆盖数据库 Operator 的已知问题：实例正常关闭 PostgreSQL 后可能无法退出，日志以 `failed waiting for all runnables to end within grace period of 30s` 结束，Pod 保持 `Terminating`，但数据库已停止。数据没有问题，满两分钟后 Pod 被移除。尚未应用此上限的 Pod（设置引入前创建，或更早事件存储尚未通过升级或发布说明的 patch 更新）仍带三十分钟上限。[发布说明](./releases-and-upgrades.md#database-primary-failover-in-seconds)说明如何识别并处理。
+两分钟上限也覆盖数据库 Operator 的已知问题：实例正常关闭 PostgreSQL 后可能无法退出，日志以 `failed waiting for all runnables to end within grace period of 30s` 结束，Pod 保持 `Terminating`，但数据库已停止。数据没有问题，满两分钟后 Pod 被移除。尚未应用此上限的 Pod（设置引入前创建，或更早事件存储尚未通过升级或发布说明的 patch 更新）仍带三十分钟上限。[发布说明](https://github.com/devicechain-io/devicechain/blob/v0.18.0/docs/docs/deployment/releases-and-upgrades.md#database-primary-failover-in-seconds)说明如何识别并处理。
 
 `--ha` 下，被降级的主节点（因 switchover 或故障）若两分钟内未关闭，也会突然停止。关系存储不会丢失数据，因为每次提交都等 standby 收到；事件存储在没有 standby 时不等待，因此该期间的提交仅存在于主节点，若 standby 追赶前替换主节点就会丢失。这就是上述恢复点取舍，突然停止是另一种触发方式。
 
@@ -604,7 +604,7 @@ kubectl get clusters.postgresql.cnpg.io -A
 
 每个数据库优先选择没有其他 DeviceChain 数据库主节点的节点。在三个 8 vCPU 节点测试中，关系存储和事件存储主节点共置时，该节点 CPU 为 94–98%，另两个为 45–51%。
 
-- **这是偏好，不是硬性要求。** 节点更少的集群仍能调度每个数据库实例。例外是带 `CrossNamespacePodAffinity` scope 的 `ResourceQuota`：它拒绝放置规则跨命名空间的 Pod，无论规则是偏好还是要求，因此会在禁止此行为的命名空间拒绝数据库 Pod。API server 的 quota admission 配置也可在没有匹配 quota 时，对所有命名空间施加同一限制，参见[发布说明](./releases-and-upgrades.md#v0190-primary-spread)。
+- **这是偏好，不是硬性要求。** 节点更少的集群仍能调度每个数据库实例。例外是带 `CrossNamespacePodAffinity` scope 的 `ResourceQuota`：它拒绝放置规则跨命名空间的 Pod，无论规则是偏好还是要求，因此会在禁止此行为的命名空间拒绝数据库 Pod。API server 的 quota admission 配置也可在没有匹配 quota 时，对所有命名空间施加同一限制，参见[发布说明](https://github.com/devicechain-io/devicechain/blob/v0.19.0/docs/docs/deployment/releases-and-upgrades.md#v0190-primary-spread)。
 - **只在数据库 Pod 调度时应用。** 三节点 `--ha` 中，每个节点已有各数据库一个实例，因此实际主要决定一件事：创建实例事件存储时，首个主节点选择不运行关系存储主节点的节点。[故障切换](#ha-database-failover)、switchover 或数据库滚动更新结束时的 switchover，仍可能让两个主节点共置；偏好不会自动迁回。
 - **此偏好引入前创建的事件存储，在实例升级时获得它。** 升级前，其 Pod 既没有其他数据库查找的标签，也没有偏好。`dcctl upgrade` 应用实例事件存储（参见[升级应用哪些基础设施变更](./releases-and-upgrades.md#upgrade-infrastructure)）并添加两者。标签无需重启即可到达运行中的 Pod；偏好改变 Pod spec，因此实例会重启一次：`--ha` 下先 standby，再 switchover；单实例则直接重启，事件在接入 stream 等待。使用 `--skip-infrastructure` 会让事件存储继续缺少两者，直到不带该标志升级。获得偏好并不迁移主节点：`--ha` 的重启结束时切换到已调度 standby，因此之后仍可能共置。请检查并按下述方式迁移一个。
 
