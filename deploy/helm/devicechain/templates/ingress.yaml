@@ -110,6 +110,15 @@ metadata:
     {{- include "devicechain.instanceLabels" . | nindent 4 }}
   annotations:
     nginx.ingress.kubernetes.io/rewrite-target: /integrations/$2
+    # An edge bound per client address, belt and braces for the service's own: 200 requests a
+    # second with the default burst allowance of five times that. A network server that holds
+    # the webhook open for a whole deployment sends well under that from one address, so it is
+    # never limited; a flood from one address is refused here (ingress-nginx answers 503, which
+    # a network server retries) before it reaches the service. It limits by the address the
+    # controller sees, so it is only per-sender when the controller is told to trust the load
+    # balancer's forwarded address; the service's own per-source limit is the one that is exact.
+    # The Gateway API has no standard equivalent, so the Gateway front end relies on the service.
+    nginx.ingress.kubernetes.io/limit-rps: "200"
     # No cert-manager annotation: the API ingress owns the Certificate for this host's secret.
     {{- with .Values.ingress.annotations }}
     {{- toYaml . | nindent 4 }}

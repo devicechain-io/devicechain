@@ -23,6 +23,9 @@ var (
 	// ErrLimited: the integration's bad-credential budget is spent, so the credential was not
 	// even checked.
 	ErrLimited = errors.New("too many failed authentications for this integration")
+	// ErrBudget: this replica's budget for asking device-management about names it has not vouched
+	// for is spent, so it was not asked.
+	ErrBudget = errors.New("the budget for unrecognised integrations is spent")
 	// ErrUnavailable: device-management could not answer and nothing last-known-good is held.
 	ErrUnavailable = errors.New("integration authentication is unavailable")
 )
@@ -42,6 +45,13 @@ type AuthConfig struct {
 	// Buckets bounds the per-integration buckets held; past it, names share one overflow
 	// bucket. An integration name is a string a sender chose before any credential was checked.
 	Buckets int
+	// UnvouchedBurst and UnvouchedRate are this replica's total budget for questions to
+	// device-management about an integration name nobody has vouched for (no positive answer for
+	// it is held). Names are strings a sender chose, so a spray of invented ones gets a fresh
+	// bad-credential bucket each and the per-integration bound alone never closes; this is the
+	// bound on all of them together. A name that device-management HAS accepted is not charged.
+	UnvouchedBurst int
+	UnvouchedRate  float64
 	// Entries bounds the positive cache.
 	Entries int
 	Now     func() time.Time
@@ -59,6 +69,12 @@ func (c AuthConfig) withDefaults() AuthConfig {
 	}
 	if c.BadRate <= 0 {
 		c.BadRate = 1
+	}
+	if c.UnvouchedBurst <= 0 {
+		c.UnvouchedBurst = 100
+	}
+	if c.UnvouchedRate <= 0 {
+		c.UnvouchedRate = 20
 	}
 	if c.Buckets <= 0 {
 		c.Buckets = 1024
@@ -97,7 +113,11 @@ type Authenticator struct {
 	entries  map[string]authEntry
 	buckets  map[string]*bucket
 	overflow *bucket
-	failed   map[string]time.Time
+	// budget is the replica-wide allowance for questions about unvouched names, kept as a bucket
+	// whose bounds are budgetCfg's.
+	budget    *bucket
+	budgetCfg AuthConfig
+	failed    map[string]time.Time
 	// proven holds, per integration name, when a positive answer for it was last stored. Only
 	// device-management can create one, so a name in it belongs to a real integration.
 	proven map[string]time.Time
@@ -113,11 +133,13 @@ func NewAuthenticator(backend Backend, cfg AuthConfig) *Authenticator {
 	cfg = cfg.withDefaults()
 	a := &Authenticator{
 		cfg: cfg, backend: backend,
-		entries:  make(map[string]authEntry),
-		buckets:  make(map[string]*bucket),
-		overflow: newBucket(cfg.BadBurst, cfg.Now()),
-		failed:   make(map[string]time.Time),
-		proven:   make(map[string]time.Time),
+		entries:   make(map[string]authEntry),
+		buckets:   make(map[string]*bucket),
+		overflow:  newBucket(cfg.BadBurst, cfg.Now()),
+		budget:    newBucket(cfg.UnvouchedBurst, cfg.Now()),
+		budgetCfg: AuthConfig{BadBurst: cfg.UnvouchedBurst, BadRate: cfg.UnvouchedRate},
+		failed:    make(map[string]time.Time),
+		proven:    make(map[string]time.Time),
 	}
 	return a
 }
@@ -165,11 +187,25 @@ func (a *Authenticator) refresh(ctx context.Context, key, tenant, integration, b
 	// the spray lasts. A token that is NOT remembered (a first sight, or one rotated since) is
 	// charged before the question, because it may be a guess: during an active spray a right token
 	// never seen before is therefore answered 429 until the spray stops or the bucket refills.
-	took := false
+	//
+	// 🔴 A NAME NOBODY HAS VOUCHED FOR ALSO DRAWS ON THE REPLICA-WIDE BUDGET, taken first so a spray
+	// of invented names neither reaches device-management nor allocates a bucket each. Over it, the
+	// request is refused without a call. A vouched name (device-management accepted a token for it
+	// within StaleMax) never touches it, so real integrations keep their path while a spray runs.
+	took, budgeted := false, false
 	var b *bucket
 	if !haveStale {
+		if !a.Vouched(tenant, integration, now) {
+			if !a.budget.take(now, a.budgetCfg) {
+				return Checked{}, ErrBudget
+			}
+			budgeted = true
+		}
 		b = a.bucketFor(tenant, integration, now)
 		if !b.take(now, a.cfg) {
+			if budgeted {
+				a.budget.give(a.budgetCfg)
+			}
 			return Checked{}, ErrLimited
 		}
 		took = true
@@ -179,6 +215,9 @@ func (a *Authenticator) refresh(ctx context.Context, key, tenant, integration, b
 	case err != nil:
 		if took {
 			b.give(a.cfg)
+		}
+		if budgeted {
+			a.budget.give(a.budgetCfg)
 		}
 		if haveStale {
 			return Checked{Descriptor: stale.desc, Stale: true}, nil
@@ -192,8 +231,29 @@ func (a *Authenticator) refresh(ctx context.Context, key, tenant, integration, b
 	if took {
 		b.give(a.cfg)
 	}
+	if budgeted {
+		a.budget.give(a.budgetCfg)
+	}
 	a.store(tenant, integration, key, authEntry{desc: desc, at: a.cfg.Now()})
 	return Checked{Descriptor: desc}, nil
+}
+
+// Vouched reports whether device-management has accepted a token for this integration name
+// within StaleMax. Only it can create that record, so a name in it belongs to a real integration.
+func (a *Authenticator) Vouched(tenant, integration string, now time.Time) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	at, ok := a.proven[tenant+"\x00"+integration]
+	return ok && now.Sub(at) <= a.cfg.StaleMax
+}
+
+// WouldAsk reports whether Check on this exact token would have to ask device-management: no
+// answer for it is held that is still fresh. A request for which it is false costs the pre-check
+// one map read, so a caller rationing by source charges only the requests for which it is true.
+func (a *Authenticator) WouldAsk(tenant, integration, bearer string) bool {
+	now := a.cfg.Now()
+	e, ok := a.lookup(cacheKey(tenant, integration, bearer), now)
+	return !ok || now.Sub(e.at) >= a.cfg.Fresh
 }
 
 // Forget drops a token's positive answer, for a caller that has learned from device-management

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"strings"
 	"sync"
@@ -21,6 +22,7 @@ import (
 	"github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/sourcelimit"
 	"github.com/stretchr/testify/require"
 )
 
@@ -150,6 +152,7 @@ func newRouteHarness(t *testing.T) *routeHarness {
 		Auth:      integration.NewAuthenticator(h.backend, integration.AuthConfig{Now: clock}),
 		Devices:   integration.NewDevices(h.backend, integration.DeviceConfig{Now: clock}),
 		Undecoded: integration.NewUndecoded(h.backend, time.Minute, clock, nil),
+		Sources:   sourcelimit.Must(sourcelimit.Limits{Burst: 100000, Every: time.Millisecond, MaxKeys: 1000}),
 		Seal: func(tenant, slug, bearer string) ([]byte, error) {
 			return []byte("sealed|" + tenant + "|" + slug + "|" + bearer), nil
 		},
@@ -720,4 +723,87 @@ func TestTheInstanceLessPathReachesNoOtherRoute(t *testing.T) {
 		h.es.handler().ServeHTTP(rec, r)
 		require.Equal(t, http.StatusMethodNotAllowed, rec.Code, method)
 	}
+}
+
+// The route is public and its names and tokens are the sender's. A spray of invented ones must
+// cost device-management a bounded number of calls, however it is spread across addresses.
+
+func fromAddr(addr string) func(*http.Request) {
+	return func(r *http.Request) { r.RemoteAddr = addr + ":4000" }
+}
+
+func TestASprayOfInventedNamesFromOneSourceIsBoundedByTheSourceBeforeDeviceManagement(t *testing.T) {
+	h := newRouteHarness(t)
+	h.route.Sources = sourcelimit.Must(sourcelimit.Limits{Burst: 10, Every: time.Hour, MaxKeys: 100})
+	// A vouched integration, proven before the spray.
+	require.Equal(t, http.StatusAccepted, h.up().Code)
+	base := h.backend.authCalls.Load()
+
+	limited := 0
+	for i := 0; i < 200; i++ {
+		rec := h.post(fmt.Sprintf("/inst-1/t%d/integrations/n%d?event=up", i, i), fmt.Sprintf("guess-%d", i), "{}", fromAddr("198.51.100.7"))
+		if rec.Code == http.StatusTooManyRequests {
+			limited++
+		}
+	}
+	require.LessOrEqual(t, h.backend.authCalls.Load()-base, int64(10), "more calls to device-management than the source's burst")
+	require.GreaterOrEqual(t, limited, 190)
+	require.GreaterOrEqual(t, h.count("request/unknown/source_limited"), 190)
+
+	// The vouched integration's steady traffic is answered from memory and is not charged to
+	// anyone, the spraying source's address included.
+	require.Equal(t, http.StatusAccepted, h.post(csPath+upQuery, goodBearer, fixtureBody(t, "chirpstack/up_decoded.json"), fromAddr("198.51.100.7")).Code)
+}
+
+func TestASprayFromManySourcesIsBoundedByTheReplicaBudgetAndLeavesAVouchedIntegrationAlone(t *testing.T) {
+	h := newRouteHarness(t)
+	clock := func() time.Time { return h.now }
+	h.route.Auth = integration.NewAuthenticator(h.backend, integration.AuthConfig{Now: clock, UnvouchedBurst: 5, UnvouchedRate: 0.001})
+	body := fixtureBody(t, "chirpstack/up_decoded.json")
+	require.Equal(t, http.StatusAccepted, h.post(csPath+upQuery, goodBearer, body).Code)
+	base := h.backend.authCalls.Load()
+
+	for i := 0; i < 300; i++ {
+		src := fmt.Sprintf("203.0.%d.%d", i/200, i%200+1)
+		rec := h.post(fmt.Sprintf("/inst-1/t%d/integrations/n%d?event=up", i, i), fmt.Sprintf("guess-%d", i), "{}", fromAddr(src))
+		if i < 5 { // the budgeted few reach device-management and are refused there
+			require.Equal(t, http.StatusUnauthorized, rec.Code, "request %d", i)
+		} else {
+			require.Equal(t, http.StatusTooManyRequests, rec.Code, "request %d", i)
+		}
+	}
+	require.LessOrEqual(t, h.backend.authCalls.Load()-base, int64(5), "more calls to device-management than the replica budget")
+	require.GreaterOrEqual(t, h.count("request/unknown/precheck_budget"), 295)
+
+	// The vouched integration: still accepted, from a fresh address, with its token remembered,
+	// and again after the remembered answer has gone stale (a vouched name is never budgeted).
+	require.Equal(t, http.StatusAccepted, h.post(csPath+upQuery, goodBearer, body, fromAddr("192.0.2.200")).Code)
+	h.now = h.now.Add(5 * time.Minute)
+	require.Equal(t, http.StatusAccepted, h.post(csPath+upQuery, goodBearer, body, fromAddr("192.0.2.201")).Code)
+	// A rotated token for the vouched name is a question device-management is asked, not a guess
+	// the budget refuses.
+	require.Equal(t, http.StatusUnauthorized, h.post(csPath+upQuery, "rotated", body, fromAddr("192.0.2.202")).Code)
+}
+
+// A source address is the peer unless the peer is a trusted proxy, which a sender cannot
+// make true by writing a header.
+func TestTheSourceBucketBelievesForwardedForOnlyFromATrustedProxy(t *testing.T) {
+	h := newRouteHarness(t)
+	h.route.Sources = sourcelimit.Must(sourcelimit.Limits{Burst: 2, Every: time.Hour, MaxKeys: 100})
+	h.route.TrustedProxies = []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}
+	send := func(peer, xff string, i int) int {
+		return h.post(fmt.Sprintf("/inst-1/acme/integrations/n%d", i), "guess", "{}", fromAddr(peer),
+			func(r *http.Request) { r.Header.Set("X-Forwarded-For", xff) }).Code
+	}
+	// Behind the proxy, two clients have two allowances; one client has one.
+	for i := 0; i < 2; i++ {
+		require.NotEqual(t, http.StatusTooManyRequests, send("10.1.1.1", "198.51.100.1", i))
+		require.NotEqual(t, http.StatusTooManyRequests, send("10.1.1.1", "198.51.100.2", i))
+	}
+	require.Equal(t, http.StatusTooManyRequests, send("10.1.1.1", "198.51.100.1", 9))
+	// From an untrusted peer the header is ignored: varying it buys no new allowance.
+	for i := 0; i < 2; i++ {
+		send("203.0.113.9", fmt.Sprintf("198.51.100.%d", 50+i), i)
+	}
+	require.Equal(t, http.StatusTooManyRequests, send("203.0.113.9", "198.51.100.99", 9))
 }

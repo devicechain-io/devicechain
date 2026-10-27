@@ -42,6 +42,9 @@ never the general device-ingest /{instanceId}/{tenant}/events: that listener sta
 inside the cluster only.
 */}}
 {{- define "devicechain.integrationsIngestPort" -}}
+{{- if eq (.Values.instance.id | default "") "integrations" -}}
+{{- fail "instance.id \"integrations\" is reserved: the front end publishes the inbound-integration webhook under /api/integrations, and an instance with that name would make the device-ingest listener's own paths indistinguishable from it. Choose another instance name." -}}
+{{- end -}}
 {{- if has "event-sources" (splitList "," (include "devicechain.enabledAreas" .)) -}}
 {{- $cfg := get (.Values.functionalAreas | default dict) "event-sources" | default dict -}}
 {{- range $p := get $cfg "extraPorts" | default list -}}

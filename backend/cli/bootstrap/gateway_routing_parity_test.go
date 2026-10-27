@@ -659,7 +659,7 @@ func TestGatewayRoutesServeWhatTheIngressesServe(t *testing.T) {
 							continue
 						}
 						reached++
-						if !strings.HasPrefix(strings.ToLower(pth), "/api/integrations") || !strings.HasPrefix(upstream, "/integrations/") {
+						if !(strings.EqualFold(pth, "/api/integrations") || strings.HasPrefix(strings.ToLower(pth), "/api/integrations/")) || !strings.HasPrefix(upstream, "/integrations/") {
 							t.Fatalf("%s: %s reaches the ingest listener at %q; only /api/integrations/... may, and only at /integrations/...", label, pth, upstream)
 						}
 					}
@@ -970,5 +970,41 @@ func TestAnOverfullAPIRouteFailsTheRender(t *testing.T) {
 	_, err = renderChartClientSide(t.Context(), ch, vals)
 	if err == nil || !strings.Contains(err.Error(), "at most 16") {
 		t.Fatalf("a route over the rule limit rendered (err = %v), want a refusal naming the limit of 16", err)
+	}
+}
+
+// An instance named "integrations" would make the ingest listener's own first path segment the
+// segment the public integrations route is published under, so the chart refuses it on both
+// front ends rather than render a route that could reach the device-ingest path.
+func TestAnInstanceNamedIntegrationsIsRefusedByBothFrontEnds(t *testing.T) {
+	t.Parallel()
+	ch, err := loadEmbeddedChart()
+	if err != nil {
+		t.Fatalf("loading the embedded chart: %v", err)
+	}
+	for _, controller := range []string{"nginx", "gateway"} {
+		for _, name := range []string{"integrations", "integrations-x"} {
+			// Composing the install values renders the chart, so the refusal can surface from either step.
+			vals, err := routingVariantValues(t.Context(), ch, renderProfiles[0], name, controller, true, "")
+			if err == nil {
+				_, err = renderChartClientSide(t.Context(), ch, vals)
+			}
+			if name == "integrations" {
+				if err == nil || !strings.Contains(err.Error(), "reserved") {
+					t.Fatalf("%s: instance %q rendered (err %v), want a refusal naming the reservation", controller, name, err)
+				}
+			} else if err != nil {
+				// The paired positive: a neighbouring name is fine, so the refusal is the name's.
+				t.Fatalf("%s: instance %q was refused: %v", controller, name, err)
+			}
+		}
+	}
+	for _, name := range []string{"integrations", "Integrations"} {
+		if err := ValidateInstanceName(name); err == nil {
+			t.Errorf("dcctl accepts the instance name %q", name)
+		}
+	}
+	if err := ValidateInstanceName("integrations-x"); err != nil {
+		t.Errorf("dcctl refuses the neighbouring name: %v", err)
 	}
 }

@@ -282,7 +282,7 @@ curl -X POST http://localhost:8081/devicechain/acme/events \
 ```
 
 :::warning Expón el puerto 8081 solo detrás de controles de red
-La ingesta HTTP no tiene autenticación de transporte: la credencial del dispositivo va en el cuerpo de la petición y se comprueba después de admitirla. Por tanto, cualquiera que pueda llegar al puerto 8081 y conozca el nombre de un inquilino puede consumir la asignación HTTP de ese inquilino. El ingress del chart no enruta este puerto y, por defecto, cualquier pod del clúster puede llegar a él. Ponlo detrás de una NetworkPolicy, o de un ingress o gateway que autentique a quien llama, antes de depender de él.
+La ingesta HTTP no tiene autenticación de transporte: la credencial del dispositivo va en el cuerpo de la petición y se comprueba después de admitirla. Por tanto, cualquiera que pueda llegar al puerto 8081 y conozca el nombre de un inquilino puede consumir la asignación HTTP de ese inquilino. Salvo la ruta de integración que se describe más abajo, el ingress del chart no enruta este puerto y, por defecto, cualquier pod del clúster puede llegar a él. Ponlo detrás de una NetworkPolicy, o de un ingress o gateway que autentique a quien llama, antes de depender de él.
 :::
 
 La única ruta que el chart sí publica es el webhook de integración entrante, pensado para un servidor de red como ChirpStack o The Things Stack. Se sirve en la dirección HTTPS de la instancia, sin el id de la instancia y con el token bearer propio del remitente en la cabecera `Authorization`:
@@ -291,7 +291,9 @@ La única ruta que el chart sí publica es el webhook de integración entrante, 
 POST https://<instance-host>/api/integrations/{tenant}/{integration}[/{messageType}]
 ```
 
-Solo esa ruta, y solo con `POST`, llega al listener de este modo; `/{instanceId}/{tenant}/events` permanece dentro del clúster.
+Solo se publica esa ruta y admite `POST`; cualquier otro método recibe `405`. `/{instanceId}/{tenant}/events` permanece dentro del clúster.
+
+El remitente es un servidor de red operado por un tercero, así que debe confiar en el certificado de la instancia: una instancia con certificado autofirmado no puede usarla un servidor de red alojado, porque no confiará en su CA. Usa un certificado de una CA pública (`ingress.tls.clusterIssuer`) para el host.
 
 ### Límites de tiempo en una petición
 

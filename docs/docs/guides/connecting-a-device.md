@@ -286,7 +286,7 @@ curl -X POST http://localhost:8081/devicechain/acme/events \
 ```
 
 :::warning Expose port 8081 only behind network controls
-HTTP ingest has no transport authentication: the device credential is in the request body and is checked after the request is admitted. Anyone who can reach port 8081 and knows a tenant's name can therefore spend that tenant's HTTP allowance. The chart's ingress does not route this port, and by default any pod in the cluster can reach it. Put it behind a NetworkPolicy, or behind an ingress or gateway that authenticates callers, before you rely on it.
+HTTP ingest has no transport authentication: the device credential is in the request body and is checked after the request is admitted. Anyone who can reach port 8081 and knows a tenant's name can therefore spend that tenant's HTTP allowance. Apart from the integration path below, the chart's ingress does not route this port, and by default any pod in the cluster can reach it. Put it behind a NetworkPolicy, or behind an ingress or gateway that authenticates callers, before you rely on it.
 :::
 
 The one path the chart does publish is the inbound-integration webhook, for a network server such as ChirpStack or The Things Stack. It is served on the instance's HTTPS address, with the instance id left out and the sender's own bearer token in the `Authorization` header:
@@ -295,7 +295,9 @@ The one path the chart does publish is the inbound-integration webhook, for a ne
 POST https://<instance-host>/api/integrations/{tenant}/{integration}[/{messageType}]
 ```
 
-Only that path, and only `POST`, reaches the listener this way; `/{instanceId}/{tenant}/events` stays inside the cluster.
+Only that path is published, and it takes `POST`; any other method is answered `405`. `/{instanceId}/{tenant}/events` stays inside the cluster.
+
+The sender is a network server run by someone else, so it must trust the instance's certificate: an instance with a self-signed certificate cannot be used by a hosted network server, because it will not trust the instance's CA. Use a certificate from a public CA (`ingress.tls.clusterIssuer`) for the host.
 
 ### Time limits on a request
 

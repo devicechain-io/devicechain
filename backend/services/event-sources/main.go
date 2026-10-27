@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/rs/zerolog/log"
@@ -27,6 +28,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/payloadredact"
 	"github.com/devicechain-io/dc-microservice/service"
+	"github.com/devicechain-io/dc-microservice/sourcelimit"
 	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -439,6 +441,16 @@ func integrationMetrics() processor.IntegrationMetrics {
 	}
 }
 
+// The per-source allowance for requests the inbound-integration pre-check would have to ask
+// device-management about: a burst of 60 and one more every 200 ms (5 a second sustained). A network
+// server's steady traffic is answered from the pre-check's memory and is not charged, so this meets
+// only first sights, rotated or wrong tokens and guesses.
+const (
+	integrationSourceBurst = 60
+	integrationSourceEvery = 200 * time.Millisecond
+	integrationSourceKeys  = 4096
+)
+
 // buildIntegrationRoute builds the inbound-integration route over a service-token client that
 // holds device:read and nothing else. It returns nil, with the reason logged, when device-
 // management cannot be reached from here (no service secret or no endpoint): the route then
@@ -451,6 +463,23 @@ func buildIntegrationRoute() *processor.IntegrationRoute {
 			"the inbound-integration route will answer 503.")
 		return nil
 	}
+	// The same typed key, and the same value dcctl renders, that device-management reads for its
+	// per-source limits. Without it every sender behind the ingress controller is one address.
+	trusted, err := infra.Http.TrustedProxyPrefixes()
+	if err != nil {
+		log.Error().Err(err).Msg("infrastructure.http.trustedProxies is invalid - the inbound-integration route will answer 503.")
+		return nil
+	}
+	if len(trusted) == 0 {
+		log.Warn().Msg("infrastructure.http.trustedProxies is empty: the inbound-integration route's per-source " +
+			"limit keys on the ingress, not the sender, so every sender behind it shares one allowance. Name the " +
+			"ingress controller's range to key on the client address.")
+	}
+	sources, err := sourcelimit.New(sourcelimit.Limits{Burst: integrationSourceBurst, Every: integrationSourceEvery, MaxKeys: integrationSourceKeys})
+	if err != nil {
+		log.Error().Err(err).Msg("Unable to build the inbound-integration source limiter - the route will answer 503.")
+		return nil
+	}
 	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "event-sources", []string{string(auth.DeviceRead)})
 	dmURL := fmt.Sprintf("http://%s:%d/graphql", infra.DeviceManagement.Hostname, infra.DeviceManagement.Port)
 	backend := integration.NewDM(client, dmURL)
@@ -461,9 +490,11 @@ func buildIntegrationRoute() *processor.IntegrationRoute {
 	})
 	integrationUndecoded = append(integrationUndecoded, undecoded)
 	route := &processor.IntegrationRoute{
-		Auth:      integration.NewAuthenticator(backend, integration.AuthConfig{}),
-		Devices:   integration.NewDevices(backend, integration.DeviceConfig{}),
-		Undecoded: undecoded,
+		Auth:           integration.NewAuthenticator(backend, integration.AuthConfig{}),
+		Sources:        sources,
+		TrustedProxies: trusted,
+		Devices:        integration.NewDevices(backend, integration.DeviceConfig{}),
+		Undecoded:      undecoded,
 		Seal: func(tenant, integrationToken, bearer string) ([]byte, error) {
 			if SecretTransit == nil {
 				return nil, errors.New("no transit key to seal the integration token with")

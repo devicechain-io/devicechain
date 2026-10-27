@@ -137,6 +137,10 @@ func NewHttpEventSource(id string, srcConfig map[string]string, instanceId strin
 	return es, nil
 }
 
+// ingestIdleTimeout is how long a quiet keep-alive connection is kept: longer than the 60 s an
+// ingress-nginx upstream connection is kept, which is what makes the proxy the side that closes.
+const ingestIdleTimeout = 75 * time.Second
+
 // handler builds the routing mux. Exposed (unexported) so the lifecycle and tests
 // share one definition of the routes.
 func (es *HttpEventSource) handler() http.Handler {
@@ -329,6 +333,10 @@ func (es *HttpEventSource) ExecuteStart(ctx context.Context) error {
 		// Bounding a response nobody is waiting on is not worth manufacturing duplicates
 		// for.
 		ReadTimeout: es.Ingest.RequestTimeout(),
+		// Above ingress-nginx's 60 s upstream keep-alive, so the proxy closes a quiet connection
+		// first and never sends a POST down one this server is closing (a reset the sender reads
+		// as a failed uplink). See core.HttpServerOptions.IdleTimeout.
+		IdleTimeout: ingestIdleTimeout,
 		ConnState:   tracker.connState,
 		ConnContext: tracker.connContext,
 	})

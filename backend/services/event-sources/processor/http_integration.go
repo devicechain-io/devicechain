@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/netip"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,7 +17,9 @@ import (
 	"github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/eventtype"
+	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/sourcelimit"
 	"github.com/devicechain-io/dc-microservice/transport"
 	"github.com/rs/zerolog/log"
 )
@@ -68,6 +72,11 @@ const (
 	ResultResolveUnavailable  = "resolve_unavailable"
 	ResultPublishFailed       = "publish_failed"
 	ResultInternalError       = "internal_error"
+	// ResultSourceLimited: one source address spent its allowance for requests the pre-check
+	// would have to ask device-management about. ResultPrecheckBudget: this replica's budget for
+	// names nobody has vouched for was spent. Neither called device-management.
+	ResultSourceLimited  = "source_limited"
+	ResultPrecheckBudget = "precheck_budget"
 )
 
 // IntegrationRequestResults lists every request result, so a series can be exported at zero.
@@ -75,6 +84,7 @@ var IntegrationRequestResults = []string{
 	ResultAccepted, ResultIgnoredType, ResultBadEnvelope, ResultUnsupportedEncoding, ResultUnauthorized,
 	ResultBadAuthLimited, ResultTooLarge, ResultShedAccepted, ResultBackpressure, ResultPrecheckStale,
 	ResultPrecheckUnavailable, ResultDisabled, ResultResolveUnavailable, ResultPublishFailed, ResultInternalError,
+	ResultSourceLimited, ResultPrecheckBudget,
 }
 
 // Results of one uplink (the result label of integration_uplinks_total).
@@ -124,9 +134,13 @@ func (m IntegrationMetrics) uplink(result string) {
 // IntegrationRoute is everything the route needs besides the source's own gates.
 type IntegrationRoute struct {
 	// Auth is the pre-check, Devices the cached device lookup and Undecoded the batched marker.
-	Auth      *integration.Authenticator
-	Devices   *integration.Devices
-	Undecoded *integration.Undecoded
+	Auth *integration.Authenticator
+	// Sources rations the requests the pre-check would have to ask device-management about, per
+	// source address (TrustedProxies decides whose X-Forwarded-For is believed). Required.
+	Sources        *sourcelimit.Limiter
+	TrustedProxies []netip.Prefix
+	Devices        *integration.Devices
+	Undecoded      *integration.Undecoded
 	// Seal seals the bearer token the sender presented for the hop to device-management, bound to
 	// the tenant and the integration (credential.IntegrationSealKind).
 	Seal func(tenant, integrationToken, bearer string) ([]byte, error)
@@ -151,6 +165,8 @@ func (rt *IntegrationRoute) Validate() error {
 	switch {
 	case rt == nil:
 		return errors.New("no integration route")
+	case rt.Sources == nil:
+		return errors.New("an integration route needs a per-source limiter")
 	case rt.Auth == nil, rt.Devices == nil, rt.Undecoded == nil:
 		return errors.New("an integration route needs its pre-check, its device lookup and its undecoded recorder")
 	case rt.Seal == nil, rt.Publish == nil:
@@ -218,6 +234,20 @@ func (es *HttpEventSource) handleIntegration(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "an Authorization: Bearer header carrying the integration's token is required", http.StatusUnauthorized)
 		return
 	}
+	// 🔴 A SOURCE IS CHARGED FOR EVERY REQUEST THAT WOULD MAKE THE PRE-CHECK ASK DEVICE-MANAGEMENT:
+	// a spray of invented names or tokens is, a sender whose token was accepted a moment ago is
+	// not. The network server's steady traffic therefore costs its address nothing, however many
+	// uplinks it sends, and a stranger's guesses are bounded by address before they are bounded by
+	// name. The address is the connection's peer unless the peer is a trusted proxy.
+	if rt.Auth.WouldAsk(tenant, slug, bearer) {
+		src := gqlcore.TrustedSourceAddr(r, rt.TrustedProxies)
+		if !rt.Sources.Allow(sourcelimit.SourceKey(src)) {
+			m.request("unknown", ResultSourceLimited)
+			w.Header().Set("Retry-After", strconv.Itoa(max(1, int(rt.Sources.Every().Seconds()+0.999))))
+			http.Error(w, "too many unauthenticated requests from this source; retry later", http.StatusTooManyRequests)
+			return
+		}
+	}
 	checked, err := rt.Auth.Check(r.Context(), tenant, slug, bearer)
 	switch {
 	case err == nil:
@@ -225,6 +255,11 @@ func (es *HttpEventSource) handleIntegration(w http.ResponseWriter, r *http.Requ
 		m.request("unknown", ResultUnauthorized)
 		w.Header().Set("WWW-Authenticate", "Bearer")
 		http.Error(w, "integration authentication failed", http.StatusUnauthorized)
+		return
+	case errors.Is(err, integration.ErrBudget):
+		m.request("unknown", ResultPrecheckBudget)
+		w.Header().Set("Retry-After", "1")
+		http.Error(w, "too many unrecognised integrations; retry later", http.StatusTooManyRequests)
 		return
 	case errors.Is(err, integration.ErrLimited):
 		m.request("unknown", ResultBadAuthLimited)

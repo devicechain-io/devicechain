@@ -208,6 +208,16 @@ type HttpServerOptions struct {
 	// long-lived WebSocket is not a bound this package can choose for them. A listener
 	// that serves ordinary bounded requests — device ingest — sets it.
 	ReadTimeout time.Duration
+	// IdleTimeout bounds how long a keep-alive connection may sit between requests. Zero
+	// leaves it unset (net/http then uses ReadTimeout, which is also unset by default).
+	//
+	// Opt-in for the same reason ReadTimeout is: only a listener that serves ordinary bounded
+	// requests may set it, never one that carries a WebSocket. A listener behind a reverse proxy
+	// sets it ABOVE the proxy's upstream keep-alive (ingress-nginx closes an idle upstream
+	// connection after 60 s), so the proxy, not this server, is the side that closes a quiet
+	// connection; the other way round, a proxy can send a POST on a connection this server is
+	// closing in that instant and read the reset as a failure of an event that never arrived.
+	IdleTimeout time.Duration
 	// ConnState, when non-nil, is net/http's per-connection state hook. It runs on the
 	// connection's own goroutine for every transition but the first — StateNew runs on
 	// the serve loop's goroutine, which Shutdown and Close wait for — so an
@@ -232,7 +242,7 @@ type HttpServerOptions struct {
 // NewHttpServerForHandlerWithOptions builds an HTTP server for an arbitrary handler,
 // overriding the per-listener settings the zero-valued options leave alone. See
 // NewHttpServerForHandler for everything else about the server it returns, including
-// why WriteTimeout and IdleTimeout are not offered here at all.
+// why WriteTimeout is not offered here at all and IdleTimeout is opt-in.
 func NewHttpServerForHandlerWithOptions(port int32, handler http.Handler, opts HttpServerOptions) *HttpServer {
 	return NewHttpServerAt(fmt.Sprintf(":%d", port), handler, opts)
 }
@@ -256,6 +266,9 @@ func NewHttpServerAt(addr string, handler http.Handler, opts HttpServerOptions) 
 	}
 	if opts.ReadTimeout > 0 {
 		srv.ReadTimeout = opts.ReadTimeout
+	}
+	if opts.IdleTimeout > 0 {
+		srv.IdleTimeout = opts.IdleTimeout
 	}
 	return &HttpServer{server: srv, listen: net.Listen}
 }

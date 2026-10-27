@@ -273,7 +273,7 @@ curl -X POST http://localhost:8081/devicechain/acme/events \
 ```
 
 :::warning 8081 端口必须置于网络控制之后
-HTTP 摄取没有传输认证：设备凭据位于请求正文，在请求获准进入后才检查。因此，任何能访问 8081 端口且知道租户名称的人，都能消耗该租户的 HTTP 额度。Chart 的入口不路由此端口，默认情况下集群中的任意 Pod 都可访问。依赖它之前，应将其置于 NetworkPolicy 之后，或置于对调用方进行认证的入口或网关之后。
+HTTP 摄取没有传输认证：设备凭据位于请求正文，在请求获准进入后才检查。因此，任何能访问 8081 端口且知道租户名称的人，都能消耗该租户的 HTTP 额度。除下文的集成路径外，Chart 的入口不路由此端口，默认情况下集群中的任意 Pod 都可访问。依赖它之前，应将其置于 NetworkPolicy 之后，或置于对调用方进行认证的入口或网关之后。
 :::
 
 Chart 唯一对外发布的路径是入站集成 webhook，供 ChirpStack 或 The Things Stack 等网络服务器使用。它通过实例的 HTTPS 地址提供服务，路径中不含实例 ID，发送方使用自己的 bearer 令牌放在 `Authorization` 请求头中：
@@ -282,7 +282,9 @@ Chart 唯一对外发布的路径是入站集成 webhook，供 ChirpStack 或 Th
 POST https://<instance-host>/api/integrations/{tenant}/{integration}[/{messageType}]
 ```
 
-只有该路径、且只有 `POST` 能以这种方式到达该监听器；`/{instanceId}/{tenant}/events` 仍只在集群内部可达。
+只发布该路径，且它只接受 `POST`；其他方法返回 `405`。`/{instanceId}/{tenant}/events` 仍只在集群内部可达。
+
+发送方是由他人运营的网络服务器，因此必须信任实例的证书：使用自签名证书的实例无法被托管的网络服务器使用，因为它们不会信任该实例的 CA。请为该主机使用公共 CA 签发的证书（`ingress.tls.clusterIssuer`）。
 
 ### 请求时间限制 {#time-limits-on-a-request}
 
