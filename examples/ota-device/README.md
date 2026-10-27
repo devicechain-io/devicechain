@@ -125,6 +125,16 @@ sign the raw digest bytes (Ed25519).
 `--allow-unsigned`, `--allow-downgrade` and `--allow-insecure-download` exist for labs and are off by
 default.
 
+### Against a live instance: `hack/ota-rig.sh`
+
+The repository's manual rig runs this device against a real instance on a local kind cluster:
+`hack/ota-rig.sh up` builds and bootstraps one with the update service, and `hack/ota-rig.sh run`
+provisions a device, uploads and signs the images with `openssl` as the device guide shows, takes the
+device from 1.0.0 to 1.0.1, plants seven defects that must each be refused (an untrusted signer, a
+crashing image, a downgrade, a tampered resumed download, an image that lies about itself, a checker
+that must be able to fail, and an instance with downloads switched off), and finishes with a
+four-device rollout. `hack/ota-rig.sh down` removes it all. The script's header lists every check.
+
 ## What is tested
 
 ```bash
