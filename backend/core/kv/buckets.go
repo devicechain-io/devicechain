@@ -255,6 +255,22 @@ var All = []Bucket{
 			"DistributedLock.WithLock is fail-closed, so guarded reconcilers stop.",
 	},
 	{
+		Name:    BucketSparkplugCommandsAwaiting,
+		Tier:    State,
+		TTL:     2 * time.Hour, // longer than the largest per-source reboot window (3600 s), the longest an entry is awaited
+		Writers: []string{"sparkplug-ingest"},
+		Readers: []string{"sparkplug-ingest"},
+		Why: "One entry per Sparkplug command that was published to a node and has not yet been " +
+			"resolved, keyed tenant|commandToken, written BEFORE the publish so a change of leader " +
+			"can find what the last one left in flight. It scales with the commands outstanding " +
+			"inside a confirm window, not with the fleet, and the source's publish rate ceiling " +
+			"(commands.publishPerSecond) bounds how fast it can fill. The bucket is created wherever " +
+			"sparkplug-ingest is deployed and is written only when a source enables commands. A full " +
+			"bucket REFUSES the write, and the command is then not " +
+			"published but handed back to command-delivery (PARKED), so the failure is a delayed " +
+			"command, never an unrecorded actuation.",
+	},
+	{
 		Name:    BucketLeases,
 		Tier:    State,
 		TTL:     30 * time.Second, // messaging.DefaultLeaseTTL
@@ -337,12 +353,15 @@ const (
 	// purpose: see its entry in All.
 	BucketDeviceCredentialAttempts = "dc_device_credential_attempts"
 	BucketLocks                    = "dc_locks"
-	BucketLeases                   = "dc_leases"
-	BucketDeviceByToken            = "device-by-token"
-	BucketRelationshipsBySource    = "relationships-by-source"
-	BucketMembershipsByEntity      = "memberships-by-entity"
-	BucketProfileResolutionByType  = "profile-resolution-by-type"
-	BucketScopedGroupsExist        = "scoped-groups-exist"
+	// BucketSparkplugCommandsAwaiting holds the Sparkplug commands sparkplug-ingest has published
+	// and is still waiting to hear an outcome for. See its entry in All.
+	BucketSparkplugCommandsAwaiting = "dc_sparkplug_commands_awaiting"
+	BucketLeases                    = "dc_leases"
+	BucketDeviceByToken             = "device-by-token"
+	BucketRelationshipsBySource     = "relationships-by-source"
+	BucketMembershipsByEntity       = "memberships-by-entity"
+	BucketProfileResolutionByType   = "profile-resolution-by-type"
+	BucketScopedGroupsExist         = "scoped-groups-exist"
 )
 
 // TierFor returns the tier of the named bucket.

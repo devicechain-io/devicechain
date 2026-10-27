@@ -413,6 +413,23 @@ func (m Message) Ack() error {
 	return m.ack.Ack()
 }
 
+// progressAcknowledger is the optional half of an Acknowledger that can tell the broker a
+// message is still being worked on, restarting its ack-wait clock without settling it.
+type progressAcknowledger interface {
+	InProgress() error
+}
+
+// InProgress tells the broker the message is still being processed, which restarts its ack-wait
+// so a slow handler is not redelivered the message it is still holding. It settles nothing: the
+// message must still be acked (or left to redeliver). It is a no-op, reporting nil, on a message
+// whose acknowledger cannot do it (a produced or synthetic message, or a reader without one).
+func (m Message) InProgress() error {
+	if p, ok := m.ack.(progressAcknowledger); ok {
+		return p.InProgress()
+	}
+	return nil
+}
+
 // ErrConcurrentRead is returned by ReadMessage when a second goroutine calls it
 // while a first call is still in flight on the same reader. It is a programming
 // error, not a transport condition: a caller cannot retry its way out of it, and it

@@ -762,7 +762,7 @@ var All = []Stream{
 	// these names: a second literal is how the two drift apart.
 	// Window: command-delivery publishes it with no Nats-Msg-Id.
 	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
-	{Suffix: DeviceCommands, DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"command-delivery"}, Readers: []Reader{{"lwm2m-ingest", ReadDurable}}, Tier: Hot, Shape: ShapeTenantDevice, DeadLetterKind: kindCommand, Why: "outbound commands — scale with fleet size"},
+	{Suffix: DeviceCommands, DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"command-delivery"}, Readers: []Reader{{"lwm2m-ingest", ReadDurable}, {"sparkplug-ingest", ReadDurable}}, Tier: Hot, Shape: ShapeTenantDevice, DeadLetterKind: kindCommand, Why: "outbound commands — scale with fleet size"},
 
 	// PER-DEVICE, PLATFORM -> DEVICE: the desired-state downlink (configuration revisions,
 	// and later update assignments). Like DeviceCommands, the concrete subject ends in the
@@ -862,7 +862,7 @@ var All = []Stream{
 	// the two must move together is the point of deriving both from here.
 	// Window: devices and lwm2m-ingest publish it with no Nats-Msg-Id.
 	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
-	{Suffix: CommandResponses, DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, Writers: []string{"event-sources", "lwm2m-ingest"}, Readers: []Reader{{"command-delivery", ReadDurable}}, Tier: Hot, Shape: ShapeTenantDevice, DeadLetterKind: kindCommandResponse, Why: "device replies to commands — scale with fleet size"},
+	{Suffix: CommandResponses, DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, Writers: []string{"event-sources", "lwm2m-ingest", "sparkplug-ingest"}, Readers: []Reader{{"command-delivery", ReadDurable}}, Tier: Hot, Shape: ShapeTenantDevice, DeadLetterKind: kindCommandResponse, Why: "device replies to commands — scale with fleet size"},
 
 	// One message per fired httpCall/publish action. The stream is auto-provisioned
 	// when event-processing creates the writer, so publishing is safe before the

@@ -4,6 +4,7 @@
 package host
 
 import (
+	"context"
 	"time"
 
 	"github.com/devicechain-io/dc-event-sources/adapter"
@@ -45,6 +46,24 @@ type (
 func NewRegistrar(client adapter.GraphQLClient, graphqlURL string, tenantDeleted func(string) bool) *adapter.Registrar {
 	return adapter.NewRegistrar(client, graphqlURL, tokenPrefix, tenantDeleted)
 }
+
+// registrarResolver adapts the shared registrar to TokenResolver.
+type registrarResolver struct{ r *adapter.Registrar }
+
+// ResolveToken returns the token of an already-registered device. It never registers one: a device
+// that is not (or no longer) ingestible is simply not addressable by a command. The registrar's
+// cache holds the answer for any device a birth has just resolved, so this is not a round trip in
+// the ordinary case.
+func (x registrarResolver) ResolveToken(ctx context.Context, tenant, externalId string, policy IngestPolicy) (string, bool, error) {
+	token, outcome, err := x.r.Resolve(ctx, tenant, externalId, policy)
+	if err != nil {
+		return "", false, err
+	}
+	return token, outcome.Ingestible(), nil
+}
+
+// NewTokenResolver exposes a registrar to Client.SetTokenResolver.
+func NewTokenResolver(r *adapter.Registrar) TokenResolver { return registrarResolver{r: r} }
 
 // NewEmitter binds the shared emitter with Sparkplug's dedup-id prefix.
 //

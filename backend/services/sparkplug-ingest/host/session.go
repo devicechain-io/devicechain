@@ -614,6 +614,19 @@ func (tr *SessionTracker) MarkRebirthPending(group, node string) {
 	}
 }
 
+// MarkCommandedRebirth records that an operator's command asked a node to rebirth, so the NBIRTH
+// that answers it (the same bdSeq, seq back at 0) is taken as the answer it is: the seq baseline is
+// re-adopted and the metric table rebuilt, instead of the birth being skipped as a QoS-1
+// redelivery. Unlike MarkRebirthPending it is not a liveness probe, so the answer does not
+// re-assert the node. A node with no live session is a no-op: its next NBIRTH rebuilds everything.
+func (tr *SessionTracker) MarkCommandedRebirth(group, node string) {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	if s := tr.sessions[nodeKey{group, node}]; s != nil && s.online {
+		s.rebirthPending = true
+	}
+}
+
 // bdSeqOf returns the bdSeq metric value from a payload, if present.
 func bdSeqOf(p *sppb.Payload) (uint64, bool) {
 	for _, m := range p.GetMetrics() {

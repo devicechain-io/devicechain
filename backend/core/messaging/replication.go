@@ -126,6 +126,13 @@ func DeviceCredentialAttemptsBucketName(instanceId string) string {
 	return sanitizeName(fmt.Sprintf("%s_%s", instanceId, kv.BucketDeviceCredentialAttempts))
 }
 
+// SparkplugCommandsAwaitingBucketName is the concrete KV bucket holding an instance's Sparkplug
+// commands that were published and not yet resolved. Instance-prefixed because the entries name
+// a tenant's commands, so two instances sharing a broker must not share them.
+func SparkplugCommandsAwaitingBucketName(instanceId string) string {
+	return sanitizeName(fmt.Sprintf("%s_%s", instanceId, kv.BucketSparkplugCommandsAwaiting))
+}
+
 // deviceCredentialStoreArea is the functional area that creates the device
 // credential-attempt bucket: device-management, when it serves the MQTT auth callout.
 const deviceCredentialStoreArea = "device-management"

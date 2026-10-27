@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	dctest "github.com/devicechain-io/dc-microservice/test"
 	"github.com/rs/zerolog"
@@ -490,5 +491,35 @@ func TestPendingEmptyIsNotAnError(t *testing.T) {
 	got, err := f.Pending(context.Background(), "t", "d", 10)
 	if err != nil || len(got) != 0 {
 		t.Fatalf("got %d cmds, err %v; want 0/nil", len(got), err)
+	}
+}
+
+// expiresAt rides the drain query and is carried to the adapter as a time. A row that does not
+// expire, or whose instant cannot be read, carries the zero time: the server has already applied
+// its own horizon, so an unreadable value costs the adapter's re-check and nothing else.
+func TestPendingCarriesTheCommandsExpiry(t *testing.T) {
+	q := &fakeQuerier{rows: []drainRow{
+		{Token: "a", Name: "n", Status: "PARKED", ExpiresAt: strp("2026-10-27T12:30:00Z")},
+		{Token: "b", Name: "n", Status: "PARKED"},
+		{Token: "c", Name: "n", Status: "PARKED", ExpiresAt: strp("not a time")},
+		{Token: "d", Name: "n", Status: "PARKED", ExpiresAt: strp("")},
+	}}
+	got, err := NewFetcher(q, "http://cd/graphql", "sparkplug").Pending(context.Background(), "t", "dev", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(q.gotQuery, "expiresAt") {
+		t.Fatalf("the drain query does not select expiresAt: %s", q.gotQuery)
+	}
+	if len(got) != 4 {
+		t.Fatalf("got %d rows", len(got))
+	}
+	if want := time.Date(2026, 10, 27, 12, 30, 0, 0, time.UTC); !got[0].ExpiresAt.Equal(want) {
+		t.Errorf("a readable expiry was lost: %v", got[0].ExpiresAt)
+	}
+	for _, i := range []int{1, 2, 3} {
+		if !got[i].ExpiresAt.IsZero() {
+			t.Errorf("row %d: an absent or unreadable expiry must be the zero time, got %v", i, got[i].ExpiresAt)
+		}
 	}
 }

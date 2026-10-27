@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/rs/zerolog/log"
 )
@@ -127,7 +128,7 @@ func drainable(status string) bool {
 // drainableCommands is not a paged query, so there is no results/pagination envelope.
 const DrainQuery = `query($deviceToken: String!, $limit: Int) {
   drainableCommands(deviceToken: $deviceToken, limit: $limit) {
-    token name payload status
+    token name payload status expiresAt
   }
 }`
 
@@ -153,16 +154,23 @@ type DrainCommand struct {
 	Name    string
 	Payload []byte
 	Status  string
+	// ExpiresAt is when command-delivery stops dispatching the command; the zero time when the
+	// command does not expire (or the server sent none we could read). The server has already
+	// applied this horizon when it chose the rows, so it is carried for an adapter that waits
+	// between the fetch and the wire and must look again.
+	ExpiresAt time.Time
 }
 
 // drainRow decodes one row of the drainableCommands query. Payload is nullable (GraphQL
-// String). There is no id and no expiresAt: nothing here sorts or expires any more, and a
-// field selected but unused is a field a reader has to disprove.
+// String). There is no id: nothing here sorts any more, and a field selected but unused is a
+// field a reader has to disprove. expiresAt is selected for the one reader that waits between
+// the fetch and the wire (see DrainCommand.ExpiresAt).
 type drainRow struct {
-	Token   string  `json:"token"`
-	Name    string  `json:"name"`
-	Payload *string `json:"payload"`
-	Status  string  `json:"status"`
+	Token     string  `json:"token"`
+	Name      string  `json:"name"`
+	Payload   *string `json:"payload"`
+	Status    string  `json:"status"`
+	ExpiresAt *string `json:"expiresAt"`
 }
 
 // drainResponse decodes the query's BARE list — drainableCommands is not paged, so there is
@@ -262,7 +270,14 @@ func (f *Fetcher) Pending(ctx context.Context, tenant, deviceToken string, limit
 		// no-claimer refusal logs, so an operator can see which half of a backlog went
 		// undispatched. Dropping it would cost that field, which is the shape a fake omitting a
 		// field produces — the caller's omission hides.
-		out = append(out, DrainCommand{Token: r.Token, Name: r.Name, Payload: payload, Status: r.Status})
+		var expires time.Time
+		if r.ExpiresAt != nil && *r.ExpiresAt != "" {
+			// An unreadable instant is treated as none: the server's own horizon already applied.
+			if t, err := time.Parse(time.RFC3339, *r.ExpiresAt); err == nil {
+				expires = t
+			}
+		}
+		out = append(out, DrainCommand{Token: r.Token, Name: r.Name, Payload: payload, Status: r.Status, ExpiresAt: expires})
 	}
 	// ONE line per fetch, not one per row, and that is the point rather than tidiness: this fires
 	// only on contract drift, and drift is not per-device — it hits EVERY draining device on the

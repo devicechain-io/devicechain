@@ -137,7 +137,7 @@ func (tr *SessionTracker) RevalidateMetric(ref MetricRef) (MetricRef, error) {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
 	s := tr.sessions[nodeKey{ref.Target.Group, ref.Target.Node}]
-	if s != nil && s.online && s.sessionEpoch == ref.Epoch && s.birthGen == ref.Gen {
+	if s != nil && s.online && !s.invalidated && s.sessionEpoch == ref.Epoch && s.birthGen == ref.Gen {
 		return ref, nil
 	}
 	cur, err := tr.lookupLocked(ref.Target, ref.Name)
@@ -148,6 +148,17 @@ func (tr *SessionTracker) RevalidateMetric(ref MetricRef) (MetricRef, error) {
 		return MetricRef{}, fmt.Errorf("%w: %s was datatype %d when validated, is %d now", ErrDatatypeChanged, ref.Name, ref.Datatype, cur.Datatype)
 	}
 	return cur, nil
+}
+
+// Current reports whether the table ref was read from is still the node's current one: the node
+// is born and not invalidated, in the same session epoch and the same table generation. It is the
+// last look before a publish, taken under the tracker lock, so an alias is never put on the wire
+// after the table it came from has been replaced.
+func (tr *SessionTracker) Current(ref MetricRef) bool {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	s := tr.sessions[nodeKey{ref.Target.Group, ref.Target.Node}]
+	return s != nil && s.online && !s.invalidated && s.sessionEpoch == ref.Epoch && s.birthGen == ref.Gen
 }
 
 // EndHostSession forgets every node's metric table: the Host's broker session has ended, so a

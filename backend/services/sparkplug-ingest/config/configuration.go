@@ -253,12 +253,149 @@ type SparkplugSource struct {
 	// a device type they created up front. Required when AutoRegister is true.
 	DeviceTypeToken string
 
+	// Commands is this source's command downlink: whether the Host publishes NCMD/DCMD to the
+	// nodes and devices on Broker, and under which limits. Off unless Enabled.
+	Commands SourceCommands
+
 	// AutoRegister decides what happens the first time this source sees a Sparkplug
 	// identity with no matching DeviceChain device (matched by external id, ADR-049).
 	// True: the adapter creates the device (stamped DeviceTypeToken) and ingests it.
 	// False: the identity is dropped — counted, never silently created — until an
 	// operator pre-registers it (the curated-roster / CHECK_PRE_PROVISIONED posture).
 	AutoRegister bool
+}
+
+// Host roles for SourceCommands.HostRole.
+const (
+	// HostRolePrimary: the customer's edge nodes name this source's hostId as their primary host
+	// application, which is the one Sparkplug expects to issue commands.
+	HostRolePrimary = "primary"
+	// HostRoleSecondary: the source is not the nodes' primary host. Sparkplug recommends that only
+	// the primary host issue commands, and nodes or broker ACLs may ignore or block a secondary's,
+	// so the command downlink is allowed but the platform will not infer that a value stayed put.
+	HostRoleSecondary = "secondary"
+)
+
+// Defaults and bounds of SourceCommands, in seconds unless stated.
+const (
+	DefaultCommandConfirmWindowSeconds = 120
+	MinCommandConfirmWindowSeconds     = 5
+	MaxCommandConfirmWindowSeconds     = 900
+
+	DefaultCommandRebootWindowSeconds = 600
+	MinCommandRebootWindowSeconds     = 30
+	MaxCommandRebootWindowSeconds     = 3600
+
+	DefaultCommandClockSkewSeconds = 30
+	MaxCommandClockSkewSeconds     = 300
+
+	// MinCommandPublishPerSecond is the floor a written rate must clear: below one command every ten
+	// seconds a command can wait out its whole lifetime for a token.
+	MinCommandPublishPerSecond     = 0.1
+	DefaultCommandPublishPerSecond = 50
+	DefaultCommandBurst            = 200
+)
+
+// SourceCommands configures the command downlink of one source. The whole block is opt-in: a
+// source with Enabled false publishes nothing but its own STATE and rebirth requests, exactly as
+// before the downlink existed.
+type SourceCommands struct {
+	// Enabled turns the downlink on for this source. It needs HostRole, and it is refused when any
+	// other source shares this source's broker endpoint (see Validate).
+	Enabled bool
+
+	// HostRole declares whether this source is the nodes' primary host application. Required when
+	// Enabled; there is no default, because the right answer is a fact about the customer's plant
+	// and a guessed one would turn the platform's recommendation warning off for the wrong sources.
+	HostRole string
+
+	// WritableMetrics is the allowlist of metric names `sparkplug.write` may target: an exact name,
+	// or a prefix pattern ending in "/*" ("Outputs/*"). Empty means NO writes at all, and that is
+	// the default: a write actuates a plant, so the operator lists what may be written. The
+	// reserved control metrics can not be listed (they are Rebirth/Reboot, which have commands of
+	// their own).
+	WritableMetrics []string
+
+	// AllowReboot lets `sparkplug.reboot` reach this source's nodes. Default false.
+	AllowReboot bool
+
+	// ConfirmWindowSeconds is how long a published write is awaited for a report of the requested
+	// value; the default is 120, from 5 to 900. A node on a slow link can need more.
+	ConfirmWindowSeconds int
+
+	// RebootWindowSeconds is how long a reboot is awaited for the node's new birth, and also the
+	// least time between two reboots of one node. The default is 600, from 30 to 3600.
+	RebootWindowSeconds int
+
+	// ClockSkewSeconds is the tolerance a node's own metric timestamp gets when it is compared with
+	// the moment the command was published. The default is 30, from 0 to 300.
+	ClockSkewSeconds int
+
+	// PublishPerSecond and Burst are the per-source ceiling on commands put on the wire, charged
+	// before a command is claimed. Defaults 50 and 200.
+	PublishPerSecond float64
+	Burst            int
+}
+
+// ConfirmWindow, RebootWindow and ClockSkew render the configured seconds as durations.
+func (c SourceCommands) ConfirmWindow() time.Duration {
+	return time.Duration(c.ConfirmWindowSeconds) * time.Second
+}
+func (c SourceCommands) RebootWindow() time.Duration {
+	return time.Duration(c.RebootWindowSeconds) * time.Second
+}
+func (c SourceCommands) ClockSkew() time.Duration {
+	return time.Duration(c.ClockSkewSeconds) * time.Second
+}
+
+// reservedCommandMetric reports whether a metric name belongs to the protocol's own control
+// namespace: the birth/death sequence number and the "Node Control/" and "Device Control/"
+// families. A write may never target one, whatever the allowlist says.
+func reservedCommandMetric(name string) bool {
+	return name == "bdSeq" || strings.HasPrefix(name, "Node Control/") || strings.HasPrefix(name, "Device Control/")
+}
+
+// ReservedCommandMetric is reservedCommandMetric for callers outside this package.
+func ReservedCommandMetric(name string) bool { return reservedCommandMetric(name) }
+
+// WritableMetric reports whether `sparkplug.write` may target the metric: it is not reserved and
+// the allowlist names it exactly or by a "prefix/*" pattern. An empty allowlist allows nothing.
+func (c SourceCommands) WritableMetric(name string) bool {
+	if name == "" || reservedCommandMetric(name) {
+		return false
+	}
+	for _, p := range c.WritableMetrics {
+		if prefix, ok := strings.CutSuffix(p, "/*"); ok {
+			if strings.HasPrefix(name, prefix+"/") && len(name) > len(prefix)+1 {
+				return true
+			}
+			continue
+		}
+		if name == p {
+			return true
+		}
+	}
+	return false
+}
+
+// validateWritablePattern requires one allowlist entry to be an exact name or a "prefix/*"
+// pattern, and not to reach into the reserved namespace. Anything looser (a bare "*", a wildcard
+// in the middle) is refused rather than guessed at.
+func validateWritablePattern(field, p string) error {
+	if strings.TrimSpace(p) == "" || p != strings.TrimSpace(p) {
+		return fmt.Errorf("%s: must be a non-empty metric name or prefix pattern with no surrounding space (got %q)", field, p)
+	}
+	body, pattern := strings.CutSuffix(p, "/*")
+	if strings.Contains(body, "*") {
+		return fmt.Errorf("%s: %q: '*' is allowed only as a trailing \"/*\" after a non-empty prefix", field, p)
+	}
+	if pattern && body == "" {
+		return fmt.Errorf("%s: %q: a pattern needs a prefix before \"/*\"", field, p)
+	}
+	if reservedCommandMetric(body) || (pattern && (strings.HasPrefix("Node Control/", body+"/") || strings.HasPrefix("Device Control/", body+"/"))) {
+		return fmt.Errorf("%s: %q reaches the reserved control metrics (bdSeq, Node Control/*, Device Control/*), which a write may not target", field, p)
+	}
+	return nil
 }
 
 // SourceBroker is the MQTT connection detail for one customer broker.
@@ -286,6 +423,77 @@ type SourceBroker struct {
 	PasswordEnv string
 }
 
+// applyDefaults fills the unset (zero) tuning of a source's command downlink. Unset only: a
+// negative value is a written mistake that Validate refuses, not one to rewrite into the default.
+func (c *SourceCommands) applyDefaults() {
+	if c.ConfirmWindowSeconds == 0 {
+		c.ConfirmWindowSeconds = DefaultCommandConfirmWindowSeconds
+	}
+	if c.RebootWindowSeconds == 0 {
+		c.RebootWindowSeconds = DefaultCommandRebootWindowSeconds
+	}
+	if c.ClockSkewSeconds == 0 {
+		c.ClockSkewSeconds = DefaultCommandClockSkewSeconds
+	}
+	if c.PublishPerSecond == 0 {
+		c.PublishPerSecond = DefaultCommandPublishPerSecond
+	}
+	if c.Burst == 0 {
+		c.Burst = DefaultCommandBurst
+	}
+}
+
+// validate checks one source's command downlink. Bounds apply whether or not it is enabled: a
+// written value outside them is a mistake today and a surprise the day the downlink is switched on.
+func (c *SourceCommands) validate(i int) error {
+	f := func(k string) string { return fmt.Sprintf("sources[%d].commands.%s", i, k) }
+	// Zero is "unset" (ApplyDefaults fills it), so Validate is as safe on a configuration that has
+	// not been defaulted yet; anything written must be inside its bounds.
+	if w := c.ConfirmWindowSeconds; w != 0 && (w < MinCommandConfirmWindowSeconds || w > MaxCommandConfirmWindowSeconds) {
+		return fmt.Errorf("%s must be between %d and %d (got %d)", f("confirmWindowSeconds"), MinCommandConfirmWindowSeconds, MaxCommandConfirmWindowSeconds, w)
+	}
+	if w := c.RebootWindowSeconds; w != 0 && (w < MinCommandRebootWindowSeconds || w > MaxCommandRebootWindowSeconds) {
+		return fmt.Errorf("%s must be between %d and %d (got %d)", f("rebootWindowSeconds"), MinCommandRebootWindowSeconds, MaxCommandRebootWindowSeconds, w)
+	}
+	if w := c.ClockSkewSeconds; w < 0 || w > MaxCommandClockSkewSeconds {
+		return fmt.Errorf("%s must be between 0 and %d (got %d)", f("clockSkewSeconds"), MaxCommandClockSkewSeconds, w)
+	}
+	if c.PublishPerSecond != 0 && !(c.PublishPerSecond >= MinCommandPublishPerSecond) {
+		return fmt.Errorf("%s must be at least %v (got %v)", f("publishPerSecond"), MinCommandPublishPerSecond, c.PublishPerSecond)
+	}
+	if c.Burst < 0 {
+		return fmt.Errorf("%s must be positive (got %d)", f("burst"), c.Burst)
+	}
+	for j, p := range c.WritableMetrics {
+		if err := validateWritablePattern(fmt.Sprintf("%s[%d]", f("writableMetrics"), j), p); err != nil {
+			return err
+		}
+	}
+	if !c.Enabled {
+		return nil
+	}
+	switch c.HostRole {
+	case HostRolePrimary, HostRoleSecondary:
+	case "":
+		return fmt.Errorf("%s is required when commands are enabled (%q or %q): whether this source is the nodes' primary host application is a fact about the plant, and a guessed value would hide the warning a secondary host needs", f("hostRole"), HostRolePrimary, HostRoleSecondary)
+	default:
+		return fmt.Errorf("%s must be %q or %q (got %q)", f("hostRole"), HostRolePrimary, HostRoleSecondary, c.HostRole)
+	}
+	return nil
+}
+
+// AnyCommandsEnabled reports whether at least one source enables the command downlink. It is the
+// condition the service builds the dispatcher on, and the one the chart derives command-delivery's
+// capability flag from.
+func (c *SparkplugConfiguration) AnyCommandsEnabled() bool {
+	for i := range c.Sources {
+		if c.Sources[i].Commands.Enabled {
+			return true
+		}
+	}
+	return false
+}
+
 // NewSparkplugConfiguration builds a defaulted (empty) configuration.
 func NewSparkplugConfiguration() *SparkplugConfiguration {
 	cfg := &SparkplugConfiguration{}
@@ -303,6 +511,7 @@ func (c *SparkplugConfiguration) ApplyDefaults() {
 		if strings.TrimSpace(c.Sources[i].HostId) == "" {
 			c.Sources[i].HostId = DefaultHostId
 		}
+		c.Sources[i].Commands.applyDefaults()
 	}
 	if !(c.IngestRateLimit.ReadingsPerSecond > 0) {
 		c.IngestRateLimit.ReadingsPerSecond = DefaultIngestReadingsPerSecond
@@ -357,6 +566,9 @@ func (c *SparkplugConfiguration) Validate() error {
 	// variant of the same URL cannot dodge either check.
 	endpointTenant := map[string]string{}
 	stateIdentity := map[string]int{}
+	// endpointSources counts the sources on each normalized endpoint, for the command downlink's
+	// one-source-per-broker rule below.
+	endpointSources := map[string][]int{}
 	for i := range c.Sources {
 		s := &c.Sources[i]
 		if strings.TrimSpace(s.Tenant) == "" {
@@ -395,12 +607,29 @@ func (c *SparkplugConfiguration) Validate() error {
 			return fmt.Errorf("sources[%d]: broker %q is already bound to tenant %q and cannot also serve tenant %q — a broker connection is the tenant trust boundary (M7)", i, s.Broker.URL, prev, s.Tenant)
 		}
 		endpointTenant[endpoint] = s.Tenant
+		endpointSources[endpoint] = append(endpointSources[endpoint], i)
+		if err := s.Commands.validate(i); err != nil {
+			return err
+		}
 
 		key := endpoint + "\x00" + s.HostId
 		if prev, dup := stateIdentity[key]; dup {
 			return fmt.Errorf("sources[%d]: broker %q + hostId %q collides with sources[%d] (two Host Applications cannot share a STATE identity on one broker)", i, s.Broker.URL, s.HostId, prev)
 		}
 		stateIdentity[key] = i
+	}
+	// One broker, one commanding source. Several same-tenant sources may share an endpoint for
+	// ingest, but their group lists can overlap (an empty one is "every group"), which would put
+	// one node on two Host sessions and have a command published twice. Refusing it removes the
+	// double-send class instead of arbitrating it.
+	for i := range c.Sources {
+		if !c.Sources[i].Commands.Enabled {
+			continue
+		}
+		endpoint, _ := normalizeBrokerEndpoint(c.Sources[i].Broker.URL)
+		if len(endpointSources[endpoint]) > 1 {
+			return fmt.Errorf("sources[%d]: commands need exactly one Sparkplug source per broker, but broker %q is shared with sources %v; merge the sources' groups into one source", i, c.Sources[i].Broker.URL, endpointSources[endpoint])
+		}
 	}
 	return nil
 }

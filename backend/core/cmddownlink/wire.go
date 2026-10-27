@@ -27,6 +27,15 @@ const HeaderTransport = "Dc-Transport"
 // higher, never assume NORMAL.
 const HeaderCommandImpact = "Dc-Command-Impact"
 
+// HeaderCommandExpires is the instant after which command-delivery will no longer dispatch the
+// command, as an RFC 3339 timestamp, stamped by command-delivery from the command's own expiry.
+// An adapter that may hold a command for a while before it publishes (a rate wait) re-checks it
+// before the wire, so a command is not actuated after the platform has already given up on it.
+// It is absent when the command does not expire or the publisher predates the header, and absent
+// means unknown: the claim command-delivery makes before the wire still refuses an expired row,
+// so a missing header costs only the earlier refusal, never a late actuation.
+const HeaderCommandExpires = "Dc-Command-Expires"
+
 // DeliveryEnvelope is command-delivery's wire payload on the device-commands subject. Its fields
 // and JSON tags MUST stay byte-identical to command-delivery/processor.deliveryEnvelope: the
 // services agree on this shape with no shared type, which is why command-delivery pins it with a

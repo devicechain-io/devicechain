@@ -46,7 +46,7 @@ const (
 //	Safe — they behave as they do on a constructed Microservice:
 //	  Banner, Mux, RegisterProbes, Live, MarkNotLive, NewHttpServer, MetricsSubsystem,
 //	  MetricsRegisterer, MetricsHandler, UseMetricsRegistry, NewCounter, NewCounterVec, NewGauge,
-//	  NewGaugeVec, NewHistogramVec, NewProcessorMetrics, NewPeriodicTaskMetrics, LoadInstanceConfiguration,
+//	  NewGaugeVec, NewScrapedGaugeVec, NewHistogramVec, NewProcessorMetrics, NewPeriodicTaskMetrics, LoadInstanceConfiguration,
 //	  LoadInstanceConfigurationFrom, LoadMicroserviceConfiguration,
 //	  LoadMicroserviceConfigurationFrom, ExecuteInitialize,
 //	  ExecuteStart, ExecuteStop, ExecuteTerminate, InitializeAndStart, Run, ShutDownNow,
