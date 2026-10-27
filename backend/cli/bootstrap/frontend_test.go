@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/hashicorp/terraform-exec/tfexec"
+	"helm.sh/helm/v3/pkg/chart"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -588,23 +589,9 @@ func TestEveryProfileRendersEveryFrontEnd(t *testing.T) {
 		for _, v := range frontEndVariants {
 			t.Run(p.name+"/"+v.name, func(t *testing.T) {
 				t.Parallel()
-				instance := fmt.Sprintf("f%02d", i+1)
-				st := p.st(instance)
-				st.IngressController, st.LegacyIngress = v.controller, v.legacy
-				if v.legacy {
-					st.GatewayTLSSecret = gatewayCutoverSecret
-				}
-				vals, _, err := releaseValues(t.Context(), ch, st, nil)
+				vals, err := frontEndVariantValues(t.Context(), ch, p, i, v)
 				if err != nil {
-					t.Fatalf("composing the release values: %v", err)
-				}
-				if p.overrides != nil {
-					ov := p.overrides()
-					// A row that names its own front end is a row about that front end.
-					if ing, ok := ov["ingress"].(map[string]interface{}); ok {
-						delete(ing, "controller")
-					}
-					vals = mergeFrontEndOverride(ov, vals)
+					t.Fatal(err)
 				}
 				manifest, err := renderChartClientSide(t.Context(), ch, vals)
 				if err != nil {
@@ -643,6 +630,28 @@ func TestEveryProfileRendersEveryFrontEnd(t *testing.T) {
 	}
 }
 
+// frontEndVariantValues is the install values of renderProfiles row i under front end variant v.
+func frontEndVariantValues(ctx context.Context, ch *chart.Chart, p renderProfile, i int, v frontEndVariant) (map[string]interface{}, error) {
+	st := p.st(profileInstance(i))
+	st.IngressController, st.LegacyIngress = v.controller, v.legacy
+	if v.legacy {
+		st.GatewayTLSSecret = gatewayCutoverSecret
+	}
+	vals, _, err := releaseValues(ctx, ch, st, nil)
+	if err != nil {
+		return nil, fmt.Errorf("composing the release values: %w", err)
+	}
+	if p.overrides != nil {
+		ov := p.overrides()
+		// A row that names its own front end is a row about that front end.
+		if ing, ok := ov["ingress"].(map[string]interface{}); ok {
+			delete(ing, "controller")
+		}
+		vals = mergeFrontEndOverride(ov, vals)
+	}
+	return vals, nil
+}
+
 // mergeFrontEndOverride merges overrides over base the way profileValues does.
 func mergeFrontEndOverride(override, base map[string]interface{}) map[string]interface{} {
 	out := copyValues(base)
@@ -664,6 +673,7 @@ func mergeFrontEndOverride(override, base map[string]interface{}) map[string]int
 
 // The chart refuses the combinations that would make the cutover window misbehave, by message.
 func TestTheChartRefusesAMisbuiltCutover(t *testing.T) {
+	t.Parallel()
 	ch := chartForTest(t)
 	render := func(mutate func(ing map[string]interface{})) error {
 		st := compactState(false)

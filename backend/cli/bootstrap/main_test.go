@@ -63,6 +63,13 @@ func TestMain(m *testing.M) {
 	readInstanceCredentialSecret = func(context.Context, string, string) (bool, error) {
 		return false, nil
 	}
-	go installMemoizedBrokerCredentials()()
-	os.Exit(kubeisolation.Run(m))
+	clientSideRender = memoizedClientSideRender // render_memo_test.go
+	instanceConfigDocument = memoizedInstanceConfigDocument
+	prewarmBrokerCredentials := installMemoizedBrokerCredentials()
+	if fullRun() { // see fullRun: the child kubeisolation starts for one test must not mint fifteen hashes
+		go prewarmBrokerCredentials()
+	}
+	go warmRenderMemo()
+	rc := kubeisolation.Run(m)
+	os.Exit(rc)
 }

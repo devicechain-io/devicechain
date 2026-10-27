@@ -146,6 +146,7 @@ func TestAHandWrittenShutdownBlockIsRefusedByTheChart(t *testing.T) {
 // operator who sets a drain window their pods cannot survive learns about it here
 // rather than from a pod that was SIGKILLed mid-drain and logged nothing about why.
 func TestBootstrapRejectsADrainWindowTheGracePeriodCannotHold(t *testing.T) {
+	t.Parallel()
 	ch, err := loadEmbeddedChart()
 	if err != nil {
 		t.Fatalf("loading embedded chart: %v", err)

@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"testing"
 
-	"helm.sh/helm/v3/pkg/releaseutil"
 	"sigs.k8s.io/yaml"
 )
 
@@ -70,7 +69,7 @@ func renderIssuerChain(t *testing.T, controller string, tls map[string]interface
 		t.Fatalf("rendering chart: %v", err)
 	}
 	out := map[string]certManagerObject{}
-	for _, doc := range releaseutil.SplitManifests(manifest) {
+	for _, doc := range splitManifests(manifest) {
 		var obj certManagerObject
 		if err := yaml.Unmarshal([]byte(doc), &obj); err != nil {
 			continue

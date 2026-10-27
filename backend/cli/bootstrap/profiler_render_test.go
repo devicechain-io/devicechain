@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"helm.sh/helm/v3/pkg/action"
-	"helm.sh/helm/v3/pkg/releaseutil"
 	"sigs.k8s.io/yaml"
 )
 
@@ -53,7 +52,7 @@ func podsOf(t *testing.T, manifest string) map[string]*renderedPod {
 		}
 		return pods[name]
 	}
-	for _, doc := range releaseutil.SplitManifests(manifest) {
+	for _, doc := range splitManifests(manifest) {
 		var obj struct {
 			Kind     string `json:"kind"`
 			Metadata struct {
