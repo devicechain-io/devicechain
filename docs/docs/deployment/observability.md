@@ -1358,7 +1358,7 @@ Two alerts watch [two-factor authentication](../guides/two-factor-authentication
 | Alert | Severity | What it means | What to do |
 | --- | --- | --- | --- |
 | `MfaIdentityLocked` | critical | An account's authenticator locked after twenty wrong codes, each after a correct password. Someone has that password and is guessing. It fires on a single occurrence. | Find the account in the audit journal (`mfa_locked`, after `mfa_failed` and `mfa_challenged` rows) and **reset its password**; do not reset its second factor first, which would give the account to whoever is guessing. The source addresses are in the ingress logs. See [lockouts](../guides/two-factor-authentication.md#lockouts). |
-| `MfaVerificationFailuresSustained` | warning | For fifteen minutes, wrong, replayed or locked-out codes have been refused at more than one every ten seconds. Either people are mistyping in numbers (a clock problem on the nodes, or apps out of sync) or someone is using passwords they obtained. | Check that the nodes' clocks are synchronised, then look for `mfa_failed` rows grouped by account and at the ingress logs. |
+| `MfaVerificationFailuresSustained` | warning | For fifteen minutes, wrong, replayed or locked-out codes have been refused at more than one every ten seconds. Either people are mistyping in large numbers (a clock problem on the nodes, or apps out of sync) or someone is using passwords they obtained. | Check that the nodes' clocks are synchronised, then look for `mfa_failed` rows grouped by account and at the ingress logs. |
 
 ## Safety gates that switched themselves off {#safety-gates}
 

@@ -20,7 +20,7 @@ Esta guía tiene tres partes: [para las personas](#enrol) que quieren activarla 
 Abre el menú de usuario y elige **Seguridad de la cuenta**.
 
 1. Elige **Configurar la autenticación en dos pasos** e introduce tu contraseña. La consola la pide de nuevo porque un token de sesión puede viajar, y configurar el factor exige algo más que un token.
-2. Escanea el código QR con una aplicación de autenticación (sirve cualquiera que admita códigos basados en el tiempo), o elige **¿No puedes escanear? Introduce esta clave** y escribe la clave. El código QR se dibuja en tu navegador a partir de un secreto que solo se muestra ahora; DeviceChain lo guarda cifrado y nunca lo devuelve. La aplicación etiqueta la cuenta con el nombre de la instancia o, si no tiene nombre, con su nombre de host.
+2. Escanea el código QR con una aplicación de autenticación (sirve cualquiera que admita códigos basados en el tiempo), o escribe la clave que aparece en **¿No puedes escanear? Introduce esta clave**. El código QR se dibuja en tu navegador a partir de un secreto que solo se muestra ahora; DeviceChain lo guarda cifrado y nunca lo devuelve. La aplicación etiqueta la cuenta con el nombre de la instancia o, si no tiene nombre, con su nombre de host.
 3. Introduce el código de seis dígitos que muestra la aplicación y elige **Activar**. Hasta que lo hagas, nada cambia en cómo inicias sesión. Una configuración sin confirmar caduca a los diez minutos, y cinco códigos incorrectos la cancelan.
 4. La consola muestra diez **códigos de recuperación**, una sola vez. Cópialos o descárgalos y guárdalos en un lugar que no sea el teléfono. Cada uno inicia sesión una vez, en lugar de un código de la aplicación. Tienen este aspecto: `ABCD-EFGH-JKMN-PQRS`.
 
@@ -38,7 +38,7 @@ Inicia sesión como siempre. Cuando la contraseña es correcta y la cuenta tiene
 - Introduce el código de seis dígitos de la aplicación. Un código sirve **una sola vez**. Si acabas de usar uno, espera a que la aplicación muestre el siguiente.
 - O elige **Usar un código de recuperación** e introduce uno. Escríbelo como quieras: en mayúsculas o no, con o sin guiones o espacios. Se perdonan los caracteres parecidos: la letra O se lee como cero, y la letra I o la L como uno. Cada código de recuperación sirve una sola vez.
 
-El paso del código caduca a los cinco minutos y admite cinco intentos. Después, vuelve a iniciar sesión. El mismo paso aparece allí donde hay un inicio de sesión con contraseña: la consola, la aplicación de paneles (`/dash`), la aceptación de una invitación y la página a la que te lleva la conexión [MCP](../concepts/mcp.md) de un agente de IA. La aplicación de paneles y la página MCP pueden pedir el código, pero no pueden configurarlo: te envían a **Seguridad de la cuenta** en la consola.
+El paso del código caduca a los cinco minutos y admite cinco intentos. Después, vuelve a iniciar sesión. El mismo paso aparece allí donde hay un inicio de sesión con contraseña: la consola, la aplicación de paneles (`/dash`), la aceptación de una invitación y la página a la que te lleva la conexión [MCP](../concepts/mcp.md) de un agente de IA. La aplicación de paneles y la página MCP pueden pedir el código, pero no pueden configurarlo: te indican que la configures en **Seguridad de la cuenta** en la consola.
 
 Un inicio de sesión con un código de recuperación queda registrado como tal. **Seguridad de la cuenta** te avisa cuando te quedan pocos códigos.
 
@@ -109,7 +109,7 @@ catch (MfaRequiredException mfa)
 Abre **Admin → Identities**, abre a la persona y, en la sección **Autenticación en dos pasos**, elige **Restablecer dos pasos**. Se eliminan el autenticador, los códigos de recuperación y el secreto guardado, y terminan todas las sesiones de la persona. Su siguiente inicio de sesión pide solo la contraseña, y puede volver a configurar la autenticación en dos pasos. La lista tiene una columna **Dos pasos** para ver quién la tiene.
 
 - Hace falta el permiso para gestionar usuarios. Restablecer una identidad que tiene un **rol de sistema** exige un superusuario.
-- **Si la cuenta ha tenido códigos incorrectos recientemente, el restablecimiento pide una contraseña nueva y la establece en el mismo paso.** Los códigos incorrectos significan que alguien que conoce la contraseña ha estado adivinando el código, así que quitar solo el segundo factor le entregaría la cuenta. La consola muestra el campo adicional cuando el servidor lo exige; la API responde `MFA_RESET_NEEDS_PASSWORD` y no cambia nada hasta que envías `newPassword`.
+- **Si la cuenta ha tenido códigos incorrectos desde el último correcto, el restablecimiento pide una contraseña nueva y la establece en el mismo paso.** Los códigos incorrectos significan que alguien que conoce la contraseña ha estado adivinando el código, así que quitar solo el segundo factor le entregaría la cuenta. La consola muestra el campo adicional cuando el servidor lo exige; la API responde `MFA_RESET_NEEDS_PASSWORD` y no cambia nada hasta que envías `newPassword`.
 - El restablecimiento queda registrado como `mfa_reset`, con el nombre de quien lo hizo.
 - La llamada de la API es `resetIdentityMfa(email, newPassword)` en la API de administración.
 
@@ -170,3 +170,4 @@ El servicio de inicio de sesión registra `mfa_challenged` cuando una contraseñ
 | "This sign-in timed out" | El desafío dura cinco minutos y cinco intentos. Inicia sesión de nuevo. Un cambio de contraseña también lo invalida. |
 | A un miembro se le envía a **Seguridad de la cuenta** | Su inquilino exige la autenticación en dos pasos y no la ha configurado. |
 | Todas las sesiones terminaron tras configurarla | Es lo previsto: activarla termina las demás sesiones de la cuenta. |
+| **Seguridad de la cuenta** dice "Administrar la autenticación en dos pasos requiere un inicio de sesión reciente con contraseña. Inicia sesión de nuevo" | La página necesita un inicio de sesión con contraseña reciente, porque el token de identidad que usa dura 15 minutos. Cierra sesión, vuelve a iniciarla con tu contraseña y abre **Seguridad de la cuenta** de nuevo. |

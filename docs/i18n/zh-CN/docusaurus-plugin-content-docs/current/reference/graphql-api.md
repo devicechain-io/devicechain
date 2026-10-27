@@ -726,13 +726,13 @@ mutation Verify($challenge: String!, $code: String!) {
 
 `verifyMfa` 返回与 `login` 相同的内容，客户端像以前一样继续调用 `selectTenant`。`code` 是六位应用代码或恢复码（`ABCD-EFGH-JKMN-PQRS`，大小写均可，带不带连字符均可）。质询有效期五分钟，允许五次尝试，只能完成一次登录。
 
-这些操作位于 user-management 端点，使用身份令牌而不是租户令牌：
+这些操作位于 user-management 端点。`mfaStatus`、`beginTotpEnrollment`、`confirmTotpEnrollment`、`regenerateRecoveryCodes` 和 `disableTotp` 以参数形式接收身份令牌（不放在 `Authorization` 头中），而不是租户令牌。`verifyMfa` 不接收令牌。租户平面的 `setTenantMfaRequired` 使用租户访问令牌，需要 `member:write`，且调用者不能带有范围限制。`resetIdentityMfa` 和管理 API 的 `setTenantMfaRequired` 位于管理 API，需要 `user:write`：
 
 | 操作 | 作用 |
 |---|---|
 | `mfaStatus` | 该因素是否已开启、何时设置、还剩多少恢复码。 |
 | `beginTotpEnrollment` | 开始设置：返回 `otpauth://` URI 和密钥。需要密码。 |
-| `confirmTotpEnrollment` | 证明应用持有密钥，开启该因素，**一次性**返回十个恢复码和一个新的登录会话。开启会结束其他所有会话。 |
+| `confirmTotpEnrollment` | 证明应用持有密钥，开启该因素，**一次性**返回十个恢复码和一个新的登录会话（`auth`）。开启会结束该账号的所有会话，包括调用者自己的：传入的身份令牌会失效，因此请继续使用返回的 `auth`。 |
 | `regenerateRecoveryCodes` | 替换恢复码。需要密码和一个代码。 |
 | `disableTotp` | 关闭该因素并结束所有会话，包括调用者的会话。需要密码和一个代码。 |
 | `setTenantMfaRequired` | 对租户的密码登录要求该因素。在租户平面上需要 `member:write`，且不能低于层级的下限。在管理 API 上需要指明租户。 |
@@ -754,7 +754,7 @@ mutation Verify($challenge: String!, $code: String!) {
 | `MFA_NOT_ENROLLED` | `regenerateRecoveryCodes`、`disableTotp` | 没有因素。 |
 | `MFA_RESET_NEEDS_PASSWORD` | `resetIdentityMfa`（管理 API） | 账号存在未处理的错误代码；重置时请同时提供 `newPassword`。 |
 
-尝试次数过多的错误不带错误码，与登录[退避](#sign-in-backoff)相同。这些操作中的每一个都会消耗请求的一次[凭据检查](#credential-checks-per-request)，密码和代码合起来算一次。C# SDK 把质询报告为 `MfaRequiredException`；参见[双重身份验证](../guides/two-factor-authentication.md#csharp)。
+尝试次数过多的错误不带错误码，与登录[退避](#sign-in-backoff)相同。`verifyMfa`、`beginTotpEnrollment`、`confirmTotpEnrollment`、`regenerateRecoveryCodes` 和 `disableTotp` 各会消耗请求的一次[凭据检查](#credential-checks-per-request)，密码和代码合起来算一次。`mfaStatus`、`setTenantMfaRequired` 和 `resetIdentityMfa` 不消耗。C# SDK 把质询报告为 `MfaRequiredException`；参见[双重身份验证](../guides/two-factor-authentication.md#csharp)。
 
 ## 请求限制 {#request-limits}
 

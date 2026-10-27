@@ -137,7 +137,7 @@ import GuideShot from '@site/src/components/GuideShot';
 
 <GuideShot id="admin-identity-detail" alt="Maria Chen（maria.chen@acme-properties.example）的页面，状态为 Enabled，带有 Disable 和 Delete 按钮。Access 面板包含带 Save 的 System roles 选择器，以及带 Set 的 Set password 字段。Memberships 面板显示 sim-acme，Enabled，角色为 Facilities viewer，以及 Save roles、Disable 和 Remove 按钮。下方是 Add to tenant 和 Roles 选择器以及“Add membership”按钮。" />
 
-列表有一个 **Two-factor（双重验证）** 列。在身份页面上，**Two-factor authentication（双重身份验证）** 区域显示它是否已开启，并为丢了手机的人提供 **Reset two-factor（重置双重验证）**：它会移除验证器和恢复码，并结束所有会话。如果该身份近期有过错误代码，其密码可能已被他人知晓，因此重置还会要求提供新密码。参见[双重身份验证](/guides/two-factor-authentication#reset)，以及无法登录的运维人员适用的 [break-glass](/guides/two-factor-authentication#break-glass)。 管理 API 的 `clearPassword` 也会移除此人的第二因素，因为没有密码后，它已无物可保护。
+列表有一个 **Two-factor（双重验证）** 列。在身份页面上，**Two-factor authentication（双重身份验证）** 区域显示它是否已开启，并为丢了手机的人提供 **Reset two-factor（重置双重验证）**：它会移除验证器和恢复码，并结束所有会话。如果该身份自上一次成功验证以来出现过错误代码，其密码可能已被他人知晓，因此重置还会要求提供新密码。参见[双重身份验证](/guides/two-factor-authentication#reset)，以及无法登录的运维人员适用的 [break-glass](/guides/two-factor-authentication#break-glass)。 管理 API 的 `clearPassword` 也会移除此人的第二因素，因为没有密码后，它已无物可保护。
 
 ## 角色 {#roles}
 

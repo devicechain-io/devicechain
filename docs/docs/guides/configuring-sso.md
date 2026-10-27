@@ -34,7 +34,7 @@ An instance connection (for your own operators) is created the same way with kin
 
 ## Two-factor authentication {#two-factor}
 
-A tenant's [two-factor requirement](./two-factor-authentication.md#require) binds **password** sign-ins only. A person who signs in through single sign-on does not meet it, and the tenant's setting does not apply to them. What governs an SSO sign-in is the connection: require an authentication method on it (`requiredAmr`, for example `["mfa"]`) so that the identity provider must have performed its own second factor, or confirm the provider enforces one with `mfaEnforcedByIdp`. A tenant that turns on **Require SSO** has no password sign-ins left for the requirement to apply to.
+A tenant's [two-factor requirement](./two-factor-authentication.md#require) binds **password** sign-ins only. A person who signs in through single sign-on does not meet it, and the tenant's setting does not apply to them. What governs an SSO sign-in is the connection: require an authentication method on it (`requiredAmr`, for example `["mfa"]`) so that the identity provider must have performed its own second factor. A tenant that turns on **Require SSO** has no password sign-ins left for the requirement to apply to.
 
 ## Sign out at the provider {#provider-sign-out}
 

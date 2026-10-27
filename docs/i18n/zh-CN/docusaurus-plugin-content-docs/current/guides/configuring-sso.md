@@ -34,7 +34,7 @@ title: 配置单点登录
 
 ## 双重身份验证 {#two-factor}
 
-租户的[双重验证要求](./two-factor-authentication.md#require)只约束**密码**登录。通过单点登录登录的人不会遇到它，租户的该项设置也不适用于他们。决定 SSO 登录的是连接：在连接上要求某种认证方式（`requiredAmr`，例如 `["mfa"]`），使身份提供商必须已执行自己的第二因素；或者用 `mfaEnforcedByIdp` 确认提供商会强制执行。开启 **Require SSO** 的租户已没有可适用该要求的密码登录。
+租户的[双重验证要求](./two-factor-authentication.md#require)只约束**密码**登录。通过单点登录登录的人不会遇到它，租户的该项设置也不适用于他们。决定 SSO 登录的是连接：在连接上要求某种认证方式（`requiredAmr`，例如 `["mfa"]`），使身份提供商必须已执行自己的第二因素。开启 **Require SSO** 的租户已没有可适用该要求的密码登录。
 
 ## 在提供商处退出登录 {#provider-sign-out}
 

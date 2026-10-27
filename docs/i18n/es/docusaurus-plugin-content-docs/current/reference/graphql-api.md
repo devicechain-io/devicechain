@@ -949,13 +949,13 @@ mutation Verify($challenge: String!, $code: String!) {
 
 `verifyMfa` devuelve lo mismo que `login`, y el cliente continúa con `selectTenant` como antes. `code` es el código de seis dígitos de la aplicación o un código de recuperación (`ABCD-EFGH-JKMN-PQRS`, en mayúsculas o minúsculas, con o sin guiones). Un desafío dura cinco minutos, admite cinco intentos e inicia sesión una sola vez.
 
-Las operaciones están en el endpoint de user-management y toman el token de identidad, no un token de inquilino:
+Las operaciones están en el endpoint de user-management. `mfaStatus`, `beginTotpEnrollment`, `confirmTotpEnrollment`, `regenerateRecoveryCodes` y `disableTotp` toman el token de identidad como argumento (no en una cabecera `Authorization`), no un token de inquilino. `verifyMfa` no toma ningún token. `setTenantMfaRequired` del plano del inquilino toma el token de acceso del inquilino y requiere `member:write` y un llamador sin alcance restringido. `resetIdentityMfa` y el `setTenantMfaRequired` de la API de administración están en la API de administración y requieren `user:write`:
 
 | Operación | Qué hace |
 |---|---|
 | `mfaStatus` | Si el factor está activado, cuándo se configuró y cuántos códigos de recuperación quedan. |
 | `beginTotpEnrollment` | Inicia la configuración: devuelve el URI `otpauth://` y la clave. Exige la contraseña. |
-| `confirmTotpEnrollment` | Demuestra que la aplicación tiene la clave, activa el factor, devuelve diez códigos de recuperación **una sola vez** y un inicio de sesión nuevo. Al activarlo terminan todas las demás sesiones. |
+| `confirmTotpEnrollment` | Demuestra que la aplicación tiene la clave, activa el factor, devuelve diez códigos de recuperación **una sola vez** y un inicio de sesión nuevo (`auth`). Al activarlo terminan todas las sesiones de la cuenta, la de quien llama incluida: el token de identidad enviado deja de funcionar, así que continúa con el `auth` devuelto. |
 | `regenerateRecoveryCodes` | Sustituye los códigos. Exige la contraseña y un código. |
 | `disableTotp` | Desactiva el factor y termina todas las sesiones, incluida la del llamante. Exige la contraseña y un código. |
 | `setTenantMfaRequired` | Exige el factor a los inicios de sesión con contraseña de un inquilino. En el plano del inquilino exige `member:write` y no puede bajar del mínimo del nivel. En la API de administración nombra al inquilino. |
@@ -977,7 +977,7 @@ El conjunto es cerrado. Un código incorrecto, un código repetido y un código 
 | `MFA_NOT_ENROLLED` | `regenerateRecoveryCodes`, `disableTotp` | No hay ningún factor. |
 | `MFA_RESET_NEEDS_PASSWORD` | `resetIdentityMfa` (API de administración) | La cuenta tiene códigos incorrectos pendientes; envía `newPassword` con el restablecimiento. |
 
-El error por demasiados intentos no lleva código, igual que la [espera entre intentos](#sign-in-backoff). Cada una de estas operaciones gasta una de las [comprobaciones de credenciales](#credential-checks-per-request) de la petición, y la contraseña y el código juntos cuentan como una. El SDK de C# informa del desafío como `MfaRequiredException`; consulta [Autenticación en dos pasos](../guides/two-factor-authentication.md#csharp).
+El error por demasiados intentos no lleva código, igual que la [espera entre intentos](#sign-in-backoff). `verifyMfa`, `beginTotpEnrollment`, `confirmTotpEnrollment`, `regenerateRecoveryCodes` y `disableTotp` gastan cada una una de las [comprobaciones de credenciales](#credential-checks-per-request) de la petición, y la contraseña y el código juntos cuentan como una. `mfaStatus`, `setTenantMfaRequired` y `resetIdentityMfa` no gastan ninguna. El SDK de C# informa del desafío como `MfaRequiredException`; consulta [Autenticación en dos pasos](../guides/two-factor-authentication.md#csharp).
 
 ## Límites de las solicitudes {#request-limits}
 

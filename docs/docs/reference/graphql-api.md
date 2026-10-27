@@ -901,13 +901,13 @@ mutation Verify($challenge: String!, $code: String!) {
 
 `verifyMfa` returns what `login` returns, and the client carries on with `selectTenant` as before. `code` is the six-digit app code or a recovery code (`ABCD-EFGH-JKMN-PQRS`, in any case, with or without the hyphens). A challenge lasts five minutes, takes five attempts and signs in once.
 
-The operations are on the user-management endpoint and take the identity token, not a tenant token:
+The operations are on the user-management endpoint. `mfaStatus`, `beginTotpEnrollment`, `confirmTotpEnrollment`, `regenerateRecoveryCodes` and `disableTotp` take the identity token as an argument (not in an `Authorization` header), not a tenant token. `verifyMfa` takes no token. The tenant-plane `setTenantMfaRequired` takes the tenant access token and needs `member:write` and an unscoped caller. `resetIdentityMfa` and the admin API's `setTenantMfaRequired` are on the admin API and need `user:write`:
 
 | Operation | What it does |
 |---|---|
 | `mfaStatus` | Whether the factor is on, when it was set up and how many recovery codes are left. |
 | `beginTotpEnrollment` | Starts setup: returns the `otpauth://` URI and the key. Needs the password. |
-| `confirmTotpEnrollment` | Proves the app holds the key, turns the factor on, returns ten recovery codes **once** and a fresh sign-in. Turning it on ends every other session. |
+| `confirmTotpEnrollment` | Proves the app holds the key, turns the factor on, returns ten recovery codes **once** and a fresh sign-in (`auth`). Turning it on ends every session the account has, the caller's included: the identity token passed in stops working, so carry on with the returned `auth`. |
 | `regenerateRecoveryCodes` | Replaces the codes. Needs the password and a code. |
 | `disableTotp` | Turns the factor off and ends every session, the caller's included. Needs the password and a code. |
 | `setTenantMfaRequired` | Requires the factor of a tenant's password sign-ins. On the tenant plane it needs `member:write` and cannot go below the tier's floor. On the admin API it names the tenant. |
@@ -929,7 +929,7 @@ The set is closed. A wrong code, a replayed code and a code refused because of a
 | `MFA_NOT_ENROLLED` | `regenerateRecoveryCodes`, `disableTotp` | There is no factor. |
 | `MFA_RESET_NEEDS_PASSWORD` | `resetIdentityMfa` (admin API) | The account has outstanding wrong codes; send `newPassword` with the reset. |
 
-The error for too many attempts carries no code, like the sign-in [backoff](#sign-in-backoff). Each of these operations spends one of the request's [credential checks](#credential-checks-per-request), the password and the code together counting as one. The C# SDK reports the challenge as `MfaRequiredException`; see [Two-factor authentication](../guides/two-factor-authentication.md#csharp).
+The error for too many attempts carries no code, like the sign-in [backoff](#sign-in-backoff). `verifyMfa`, `beginTotpEnrollment`, `confirmTotpEnrollment`, `regenerateRecoveryCodes` and `disableTotp` each spend one of the request's [credential checks](#credential-checks-per-request), the password and the code together counting as one. `mfaStatus`, `setTenantMfaRequired` and `resetIdentityMfa` spend none. The C# SDK reports the challenge as `MfaRequiredException`; see [Two-factor authentication](../guides/two-factor-authentication.md#csharp).
 
 ## Request limits {#request-limits}
 

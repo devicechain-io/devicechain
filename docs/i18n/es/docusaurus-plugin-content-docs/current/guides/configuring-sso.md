@@ -34,7 +34,7 @@ Una conexión de instancia (para tus propios operadores) se crea del mismo modo 
 
 ## Autenticación en dos pasos {#two-factor}
 
-La [exigencia de dos pasos](./two-factor-authentication.md#require) de un inquilino obliga solo a los inicios de sesión **con contraseña**. Una persona que inicia sesión mediante el inicio de sesión único no la encuentra, y el ajuste del inquilino no se le aplica. Lo que rige un inicio de sesión SSO es la conexión: exige un método de autenticación en ella (`requiredAmr`, por ejemplo `["mfa"]`) para que el proveedor de identidad tenga que haber aplicado su propio segundo factor, o confirma que el proveedor aplica uno con `mfaEnforcedByIdp`. Un inquilino que activa **Require SSO** ya no tiene inicios de sesión con contraseña a los que aplicar la exigencia.
+La [exigencia de dos pasos](./two-factor-authentication.md#require) de un inquilino obliga solo a los inicios de sesión **con contraseña**. Una persona que inicia sesión mediante el inicio de sesión único no la encuentra, y el ajuste del inquilino no se le aplica. Lo que rige un inicio de sesión SSO es la conexión: exige un método de autenticación en ella (`requiredAmr`, por ejemplo `["mfa"]`) para que el proveedor de identidad tenga que haber aplicado su propio segundo factor. Un inquilino que activa **Require SSO** ya no tiene inicios de sesión con contraseña a los que aplicar la exigencia.
 
 ## Cerrar sesión en el proveedor {#provider-sign-out}
 

@@ -114,7 +114,7 @@ mutation {
 
 集成的 **Device identifier** 决定查找哪个方案：`DEV_EUI` 读取 `lorawan.deveui`，`DEVICE_ID` 读取 `tts.device-id`，`ALIAS:custom.serial` 读取 `custom.serial`。只带有其他方案的设备不会被找到。
 
-**更改或移除设备的标识符。** 把标识符（DevEUI、设备 ID）移到另一台设备，或将其移除，约五分钟内生效。在此之前，网关一侧仍可能把上行路由到原来的设备，但平台会在处理事件时检查该设备是否仍持有该标识符，因此这些上行会被拒绝，并保留在死信存储中供检查（原因为 `IntegrationAliasMismatch`，由 `resolve_integration_alias_mismatch_total` 计数）。它们不会存入任何设备，也无法重放。变更传播完成后，上行会落到现在持有该标识符的设备上。为一个已经在到达的标识符创建设备后，一分钟内就会开始接收。
+**更改或移除设备的标识符。** 把标识符（DevEUI、设备 ID）移到另一台设备，或将其移除，约五分钟内生效。在此之前，集成端点仍可能为该标识符指向原来的设备，但平台会在处理事件时检查该设备是否仍持有该标识符，因此这些上行会被拒绝，并保留在死信存储中供检查（原因为 `IntegrationAliasMismatch`，由 `resolve_integration_alias_mismatch_total` 计数）。它们不会存入任何设备，也无法重放。变更传播完成后，上行会落到现在持有该标识符的设备上。为一个已经在到达的标识符创建设备后，一分钟内就会开始接收。
 
 ## ChirpStack v4 {#chirpstack}
 

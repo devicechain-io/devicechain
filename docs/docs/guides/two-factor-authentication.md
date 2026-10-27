@@ -20,7 +20,7 @@ This guide has three parts: [for people](#enrol) who want to turn it on for thei
 Open the user menu and choose **Account security**.
 
 1. Choose **Set up two-factor authentication** and enter your password. The console asks again because a sign-in token can travel, and enrolling needs more than a token.
-2. Scan the QR code with an authenticator app (any app that supports time-based codes will do), or choose **Can't scan? Enter this key** and type the key in. The QR code is drawn in your browser from a secret that is shown only now; DeviceChain keeps the secret sealed and never returns it. The app labels the account with the instance's display name, or with the instance's host name when no display name is set.
+2. Scan the QR code with an authenticator app (any app that supports time-based codes will do), or type in the key shown under **Can't scan? Enter this key**. The QR code is drawn in your browser from a secret that is shown only now; DeviceChain keeps the secret sealed and never returns it. The app labels the account with the instance's display name, or with the instance's host name when no display name is set.
 3. Enter the six-digit code the app shows and choose **Turn on**. Until you do, nothing about how you sign in has changed. An unconfirmed setup expires after ten minutes, and five wrong codes cancel it.
 4. The console shows ten **recovery codes**, once. Copy or download them and keep them somewhere other than the phone. Each one signs you in once, in place of an app code. They look like `ABCD-EFGH-JKMN-PQRS`.
 
@@ -38,7 +38,7 @@ Sign in as usual. When the password is right and the account has a second factor
 - Enter the six-digit code from the app. A code works **once**. If you have just used one, wait for the app to show the next.
 - Or choose **Use a recovery code instead** and enter one. Type it any way you like: capitals or not, with or without the hyphens or spaces. The look-alikes are forgiven: a letter O is read as zero, and a letter I or L as one. Each recovery code works once.
 
-The code step times out after five minutes and accepts five attempts. After that, sign in again. The same step appears wherever a password sign-in does: the console, the dashboard app (`/dash`), accepting an invitation, and the page an AI agent's [MCP](../concepts/mcp.md) connection sends you to. The dashboard app and the MCP page can ask for the code, but cannot set it up: they send you to **Account security** in the console.
+The code step times out after five minutes and accepts five attempts. After that, sign in again. The same step appears wherever a password sign-in does: the console, the dashboard app (`/dash`), accepting an invitation, and the page an AI agent's [MCP](../concepts/mcp.md) connection sends you to. The dashboard app and the MCP page can ask for the code, but cannot set it up: they tell you to set it up under **Account security** in the console.
 
 A sign-in that used a recovery code is recorded as such. **Account security** warns you when you are running low on codes.
 
@@ -109,7 +109,7 @@ catch (MfaRequiredException mfa)
 Open **Admin → Identities**, open the person, and in the **Two-factor authentication** section choose **Reset two-factor**. The authenticator, the recovery codes and the stored secret are removed, and every session the person has ends. Their next sign-in asks for the password only, and they can set up two-factor authentication again. The list shows a **Two-factor** column so you can see who has it.
 
 - It needs the permission to manage users. Resetting an identity that holds a **system role** needs a superuser.
-- **If the account has had wrong codes recently, the reset asks for a new password and sets it in the same step.** Wrong codes mean someone who holds the password has been guessing the code, so removing the second factor alone would hand the account to them. The console shows the extra field when the server requires it; the API answers `MFA_RESET_NEEDS_PASSWORD` and changes nothing until you send `newPassword`.
+- **If the account has had wrong codes since its last successful one, the reset asks for a new password and sets it in the same step.** Wrong codes mean someone who holds the password has been guessing the code, so removing the second factor alone would hand the account to them. The console shows the extra field when the server requires it; the API answers `MFA_RESET_NEEDS_PASSWORD` and changes nothing until you send `newPassword`.
 - The reset is recorded as `mfa_reset`, naming who did it.
 - The API call is `resetIdentityMfa(email, newPassword)` on the admin API.
 
@@ -170,3 +170,4 @@ The sign-in service records `mfa_challenged` when a password was right and a cod
 | "This sign-in timed out" | The challenge lasts five minutes and five attempts. Sign in again. A password change also voids it. |
 | A member is sent to **Account security** | Their tenant requires two-factor authentication and they have not set it up. |
 | Every session ended after setting it up | Intended: turning it on ends the account's other sessions. |
+| **Account security** says "Managing two-factor authentication needs a recent password sign-in. Sign in again" | The page needs a recent password sign-in, because the identity token it uses lasts 15 minutes. Sign out, sign in again with your password and open **Account security** again. |
