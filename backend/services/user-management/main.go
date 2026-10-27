@@ -78,8 +78,23 @@ var (
 )
 
 func main() {
+	// `user-management break-glass ...` is an operator tool run by hand inside the pod (see
+	// break_glass.go). It is decided BEFORE the microservice is built, so it starts no server.
+	if handled, code := runSubcommand(os.Args, productionBreakGlassEnv()); handled {
+		os.Exit(code)
+	}
 	Microservice = core.NewMicroservice(lifecycleCallbacks())
 	Microservice.Run()
+}
+
+// runSubcommand runs the operator subcommand named by args (the process arguments, program name
+// first), if there is one. handled is false for a plain start, which is every real deployment.
+// It is a function of its own so a test can prove main dispatches `break-glass` and nothing else.
+func runSubcommand(args []string, env breakGlassEnv) (handled bool, code int) {
+	if len(args) > 1 && args[1] == "break-glass" {
+		return true, runBreakGlass(context.Background(), args[2:], env)
+	}
+	return false, 0
 }
 
 // lifecycleCallbacks is the service's whole lifecycle wiring, as a function so a test can build

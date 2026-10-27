@@ -62,6 +62,7 @@ func init() {
 	deadLettersCmd.PersistentFlags().Bool("tls", false, "use https for platform endpoints")
 	deadLettersCmd.PersistentFlags().StringVar(&dlEmail, "email", "", "identity to authenticate as (required)")
 	deadLettersCmd.PersistentFlags().StringVar(&dlPassword, "password", "", "password for the identity (required)")
+	deadLettersCmd.PersistentFlags().String("otp", "", otpFlagHelp)
 
 	deadLettersListCmd.Flags().StringVarP(&dlTenant, "tenant", "t", "", "only this tenant's records")
 	// 🔑 THE VOCABULARY IS DERIVED, NOT TYPED OUT. This help used to carry its own copy of
@@ -105,7 +106,7 @@ func runDeadLettersList(cmd *cobra.Command, args []string) error {
 	}
 
 	endpoints := sim.ResolveEndpoints(server, "", "", tls)
-	session := userclient.NewAdminSession(nil, endpoints.UserGraphQL, dlEmail, dlPassword)
+	session := userclient.NewAdminSession(nil, endpoints.UserGraphQL, dlEmail, dlPassword).WithOTP(otpFunc(otpFlag(cmd)))
 
 	// 🔴 NO SUPERUSER PRE-CHECK HERE, and an earlier version had one. The server gates
 	// this on audit:read, which is deliberately grantable on a non-superuser system role —

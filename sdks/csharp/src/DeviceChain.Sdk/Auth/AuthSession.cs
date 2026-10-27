@@ -40,6 +40,9 @@ public sealed class AuthSession
     private const string LoginMutation =
         "mutation Login($email:String!,$password:String!){login(email:$email,password:$password){" +
         "identityToken expiresAt superuser memberships{tenant roles}}}";
+    private const string VerifyMfaMutation =
+        "mutation VerifyMfa($challenge:String!,$code:String!){verifyMfa(challenge:$challenge,code:$code){" +
+        "identityToken expiresAt superuser memberships{tenant roles}}}";
     private const string SelectTenantMutation =
         "mutation SelectTenant($identityToken:String!,$tenant:String!){" +
         "selectTenant(identityToken:$identityToken,tenant:$tenant){accessToken refreshToken expiresAt}}";
@@ -80,18 +83,57 @@ public sealed class AuthSession
     /// Authenticates an email/password identity, capturing the identity token + memberships.
     /// Step 1 of the flow; pick a tenant next with <see cref="SelectTenantAsync"/>.
     /// </summary>
+    /// <exception cref="MfaRequiredException">
+    /// The identity has a second factor. The password was right and no token was issued; finish the
+    /// sign-in with <see cref="VerifyMfaAsync"/> and the exception's <see cref="MfaRequiredException.Challenge"/>.
+    /// </exception>
     public async Task<IdentityAuth> LoginAsync(string email, string password, CancellationToken cancellationToken = default)
     {
-        LoginData data = await _gql.SendAsync(
-            Area.UserManagement, LoginMutation,
-            new LoginVariables { Email = email, Password = password },
-            SdkJson.Default.LoginVariables, SdkJson.Default.LoginData,
+        LoginData data;
+        try
+        {
+            data = await _gql.SendAsync(
+                Area.UserManagement, LoginMutation,
+                new LoginVariables { Email = email, Password = password },
+                SdkJson.Default.LoginVariables, SdkJson.Default.LoginData,
+                _anonymous, cancellationToken).ConfigureAwait(false);
+        }
+        catch (GraphQlRequestException ex) when (MfaRequiredException.TryFrom(ex, out MfaRequiredException? mfa))
+        {
+            throw mfa!;
+        }
+
+        return ApplyIdentity(data.Login);
+    }
+
+    /// <summary>
+    /// Completes a sign-in that <see cref="LoginAsync"/> held for its second factor, with the
+    /// challenge from <see cref="MfaRequiredException"/> and a one-time code (a 6-digit
+    /// authenticator code, or a recovery code). The result is the same as a password-only
+    /// <see cref="LoginAsync"/>: pick a tenant next with <see cref="SelectTenantAsync"/>.
+    /// </summary>
+    /// <remarks>
+    /// A wrong code is a <see cref="GraphQlRequestException"/> and the challenge stays usable for a few
+    /// more tries. A challenge that expired, was spent, or was voided by a password change is a
+    /// <see cref="GraphQlRequestException"/> whose error code is <c>MFA_CHALLENGE_EXPIRED</c>; sign in again.
+    /// </remarks>
+    public async Task<IdentityAuth> VerifyMfaAsync(string challenge, string code, CancellationToken cancellationToken = default)
+    {
+        VerifyMfaData data = await _gql.SendAsync(
+            Area.UserManagement, VerifyMfaMutation,
+            new VerifyMfaVariables { Challenge = challenge, Code = code },
+            SdkJson.Default.VerifyMfaVariables, SdkJson.Default.VerifyMfaData,
             _anonymous, cancellationToken).ConfigureAwait(false);
 
-        _identityToken = data.Login.IdentityToken;
-        Memberships = data.Login.Memberships;
-        Superuser = data.Login.Superuser;
-        return data.Login;
+        return ApplyIdentity(data.VerifyMfa);
+    }
+
+    private IdentityAuth ApplyIdentity(IdentityAuth identity)
+    {
+        _identityToken = identity.IdentityToken;
+        Memberships = identity.Memberships;
+        Superuser = identity.Superuser;
+        return identity;
     }
 
     /// <summary>

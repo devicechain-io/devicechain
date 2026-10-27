@@ -43,6 +43,7 @@ func init() {
 	// 🔴 NO DEFAULT. It used to be the literal every instance was seeded with; dcctl now
 	// generates the password per instance, so the only true default is that instance's
 	// own Secret — see resolveAdminPassword.
+	simCmd.PersistentFlags().String("otp", "", otpFlagHelp)
 	simCmd.PersistentFlags().String("admin-password", "", "superuser password (default: $"+adminPasswordEnv+", else read from the instance's Secret on the cluster)")
 	simCmd.PersistentFlags().String("kube-context", "", "kube-context to read the superuser password from when none is given (default: the one the instance was bootstrapped on)")
 	simCmd.PersistentFlags().Bool("tls", false, "use https/wss for platform endpoints")

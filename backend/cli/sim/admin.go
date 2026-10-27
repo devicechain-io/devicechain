@@ -28,6 +28,13 @@ func NewAdmin(userGraphQL, adminURL, email, password string) *Admin {
 	}
 }
 
+// WithOTP sets how the admin session answers a second-factor challenge (an account with two-factor
+// authentication). Without it such a sign-in fails at once. It returns a.
+func (a *Admin) WithOTP(otp userclient.OTPFunc) *Admin {
+	a.session.WithOTP(otp)
+	return a
+}
+
 // EnsureSuperuser logs in and confirms the admin identity is a superuser, failing
 // fast with a clear message rather than letting each mutation reject on authority.
 func (a *Admin) EnsureSuperuser(ctx context.Context) error {

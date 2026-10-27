@@ -242,6 +242,7 @@ This reads the operator plane and authenticates as an identity, not as a tenant.
 ```
       --email string      identity to authenticate as (required)
   -h, --help              help for dead-letters
+      --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
       --password string   password for the identity (required)
   -s, --server string     instance host for platform API calls (default "localhost")
       --tls               use https for platform endpoints
@@ -284,6 +285,7 @@ dcctl dead-letters list [flags]
 
 ```
       --email string      identity to authenticate as (required)
+      --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
       --password string   password for the identity (required)
   -s, --server string     instance host for platform API calls (default "localhost")
       --tls               use https for platform endpoints
@@ -745,9 +747,71 @@ Inspect the DeviceChain instances on this machine
 ### SEE ALSO
 
 * [dcctl](#dcctl)	 - DeviceChain CLI
+* [dcctl instances break-glass](#dcctl-instances-break-glass)	 - Recover an operator account without signing in, with cluster credentials
 * [dcctl instances list](#dcctl-instances-list)	 - List the instances bootstrapped on this machine and the clusters they live in
 * [dcctl instances reclaim](#dcctl-instances-reclaim)	 - Take the cluster lock from an operator whose run has stopped
 * [dcctl instances release](#dcctl-instances-release)	 - Remove an instance declaration without destroying the instance
+
+## dcctl instances break-glass {#dcctl-instances-break-glass}
+
+Recover an operator account without signing in, with cluster credentials
+
+### Options
+
+```
+  -h, --help   help for break-glass
+```
+
+### SEE ALSO
+
+* [dcctl instances](#dcctl-instances)	 - Inspect the DeviceChain instances on this machine
+* [dcctl instances break-glass mfa-reset](#dcctl-instances-break-glass-mfa-reset)	 - Remove an operator's second factor and replace its password, from inside a pod
+
+## dcctl instances break-glass mfa-reset {#dcctl-instances-break-glass-mfa-reset}
+
+Remove an operator's second factor and replace its password, from inside a pod
+
+### Synopsis
+
+Removes the two-factor authentication from an identity that holds a system role, replaces
+its password, and ends every session it has. For the operator who cannot sign in: an enrolled
+superuser who lost the phone and the recovery codes has no one the admin API could reset them.
+
+It does not talk to the admin API and needs no sign-in. It runs the service's own binary inside a
+ready user-management pod of the instance (`user-management break-glass mfa-reset`), so it needs the
+cluster credentials to exec into that pod, and nothing else. The reset is the store code the service
+itself runs; this command carries no SQL.
+
+The password is ALWAYS replaced, because this route has no caller to vouch for: removing the factor
+alone would hand the account to whoever holds the old password. By default a new password is
+generated in the pod and printed ONCE, here. With --password-stdin the first line of stdin is the
+password instead.
+
+It refuses an identity that holds no system role. Reset anyone else through the admin API
+(resetIdentityMfa), where the log names the operator who did it. The reset is recorded as mfa_reset
+by "break-glass:pod-exec".
+
+dcctl sim commands read the seed superuser's password from the instance Secret; if you reset that
+account, pass the new password with --admin-password.
+
+```
+dcctl instances break-glass mfa-reset [email] [flags]
+```
+
+### Options
+
+```
+      --email string          the operator identity's address (or give it as the argument)
+  -h, --help                  help for mfa-reset
+      --instance string       instance whose pod to run in (required)
+      --kube-context string   kube context of the cluster the instance runs in (default: the one recorded for the instance, else the current one)
+      --password-stdin        read the new password as one line from stdin instead of generating one
+  -y, --yes                   skip the confirmation prompt
+```
+
+### SEE ALSO
+
+* [dcctl instances break-glass](#dcctl-instances-break-glass)	 - Recover an operator account without signing in, with cluster credentials
 
 ## dcctl instances list {#dcctl-instances-list}
 
@@ -905,6 +969,7 @@ hands them to inference again.
 ```
       --email string      identity to authenticate as; it must be a member of the tenant (required)
   -h, --help              help for presence
+      --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
       --password string   password for the identity (required)
   -s, --server string     instance host for platform API calls (default "localhost")
   -t, --tenant string     tenant whose devices are affected (required)
@@ -970,6 +1035,7 @@ dcctl presence demote [flags]
 
 ```
       --email string      identity to authenticate as; it must be a member of the tenant (required)
+      --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
       --password string   password for the identity (required)
   -s, --server string     instance host for platform API calls (default "localhost")
   -t, --tenant string     tenant whose devices are affected (required)
@@ -1135,6 +1201,7 @@ instance was bootstrapped on).
   -h, --help                    help for sim
   -i, --instance string         instance id (the literal event-ingress path segment; must match the deployed instance.id) (default "devicechain")
       --kube-context string     kube-context to read the superuser password from when none is given (default: the one the instance was bootstrapped on)
+      --otp string              one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
   -s, --server string           instance host for platform API calls (default "localhost")
       --tls                     use https/wss for platform endpoints
 ```
@@ -1191,6 +1258,7 @@ dcctl sim create <name> [flags]
       --control-addr string     the dc-simulator process's control API address (default "http://localhost:8090")
   -i, --instance string         instance id (the literal event-ingress path segment; must match the deployed instance.id) (default "devicechain")
       --kube-context string     kube-context to read the superuser password from when none is given (default: the one the instance was bootstrapped on)
+      --otp string              one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
   -s, --server string           instance host for platform API calls (default "localhost")
       --tls                     use https/wss for platform endpoints
 ```
@@ -1257,6 +1325,7 @@ dcctl sim destroy <name> [flags]
       --control-addr string     the dc-simulator process's control API address (default "http://localhost:8090")
   -i, --instance string         instance id (the literal event-ingress path segment; must match the deployed instance.id) (default "devicechain")
       --kube-context string     kube-context to read the superuser password from when none is given (default: the one the instance was bootstrapped on)
+      --otp string              one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
   -s, --server string           instance host for platform API calls (default "localhost")
       --tls                     use https/wss for platform endpoints
 ```
@@ -1303,6 +1372,7 @@ dcctl sim run <name> [flags]
       --control-addr string     the dc-simulator process's control API address (default "http://localhost:8090")
   -i, --instance string         instance id (the literal event-ingress path segment; must match the deployed instance.id) (default "devicechain")
       --kube-context string     kube-context to read the superuser password from when none is given (default: the one the instance was bootstrapped on)
+      --otp string              one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
   -s, --server string           instance host for platform API calls (default "localhost")
       --tls                     use https/wss for platform endpoints
 ```
@@ -1333,6 +1403,7 @@ dcctl sim start <name> [flags]
       --control-addr string     the dc-simulator process's control API address (default "http://localhost:8090")
   -i, --instance string         instance id (the literal event-ingress path segment; must match the deployed instance.id) (default "devicechain")
       --kube-context string     kube-context to read the superuser password from when none is given (default: the one the instance was bootstrapped on)
+      --otp string              one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
   -s, --server string           instance host for platform API calls (default "localhost")
       --tls                     use https/wss for platform endpoints
 ```
@@ -1363,6 +1434,7 @@ dcctl sim status <name> [flags]
       --control-addr string     the dc-simulator process's control API address (default "http://localhost:8090")
   -i, --instance string         instance id (the literal event-ingress path segment; must match the deployed instance.id) (default "devicechain")
       --kube-context string     kube-context to read the superuser password from when none is given (default: the one the instance was bootstrapped on)
+      --otp string              one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
   -s, --server string           instance host for platform API calls (default "localhost")
       --tls                     use https/wss for platform endpoints
 ```
@@ -1393,6 +1465,7 @@ dcctl sim stop <name> [flags]
       --control-addr string     the dc-simulator process's control API address (default "http://localhost:8090")
   -i, --instance string         instance id (the literal event-ingress path segment; must match the deployed instance.id) (default "devicechain")
       --kube-context string     kube-context to read the superuser password from when none is given (default: the one the instance was bootstrapped on)
+      --otp string              one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
   -s, --server string           instance host for platform API calls (default "localhost")
       --tls                     use https/wss for platform endpoints
 ```

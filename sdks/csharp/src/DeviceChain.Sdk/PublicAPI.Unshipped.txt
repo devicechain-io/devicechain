@@ -1,1 +1,10 @@
 #nullable enable
+const DeviceChain.Sdk.Auth.MfaRequiredException.ErrorCode = "MFA_CHALLENGE" -> string!
+DeviceChain.Sdk.Auth.AuthSession.VerifyMfaAsync(string! challenge, string! code, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<DeviceChain.Sdk.Auth.IdentityAuth!>!
+DeviceChain.Sdk.Auth.MfaRequiredException
+DeviceChain.Sdk.Auth.MfaRequiredException.Challenge.get -> string!
+DeviceChain.Sdk.Auth.MfaRequiredException.ExpiresAt.get -> System.DateTimeOffset?
+DeviceChain.Sdk.Auth.MfaRequiredException.Methods.get -> System.Collections.Generic.IReadOnlyList<string!>!
+DeviceChain.Sdk.DeviceChainClient.VerifyMfaAsync(string! challenge, string! code, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<DeviceChain.Sdk.Auth.IdentityAuth!>!
+DeviceChain.Sdk.GraphQlError.Code.get -> string?
+DeviceChain.Sdk.GraphQlError.Code.set -> void

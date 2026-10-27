@@ -95,6 +95,7 @@ func init() {
 	presenceCmd.PersistentFlags().Bool("tls", false, "use https for platform endpoints")
 	presenceCmd.PersistentFlags().StringVar(&presenceEmail, "email", "", "identity to authenticate as; it must be a member of the tenant (required)")
 	presenceCmd.PersistentFlags().StringVar(&presencePassword, "password", "", "password for the identity (required)")
+	presenceCmd.PersistentFlags().String("otp", "", otpFlagHelp)
 
 	presenceDemoteCmd.Flags().StringVar(&presenceSource, "source", "", "event source whose devices are released, exactly as they report it (required)")
 	presenceDemoteCmd.Flags().StringArrayVar(&presenceDevices, "device", nil, "limit the run to this device token, within the source; repeat for more (default: the whole source)")
@@ -143,7 +144,8 @@ func runPresenceDemote(cmd *cobra.Command, args []string) error {
 		},
 	}
 
-	session := userclient.NewTenantSession(nil, endpoints.UserGraphQL, presenceEmail, presencePassword, presenceTenant)
+	session := userclient.NewTenantSession(nil, endpoints.UserGraphQL, presenceEmail, presencePassword, presenceTenant).
+		WithOTP(otpFunc(otpFlag(cmd)))
 	sum, err := presence.Run(cmd.Context(), session, opts)
 	if errors.Is(err, presence.ErrDeclined) {
 		fmt.Fprintln(cmd.OutOrStdout(), color.YellowString("Aborted."))

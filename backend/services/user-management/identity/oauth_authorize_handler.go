@@ -32,6 +32,9 @@ type AuthorizeService interface {
 	// Login authenticates an email/password and returns the identity token +
 	// memberships (no tenant chosen yet).
 	Login(ctx context.Context, email, password string) (*IdentityAuth, error)
+	// VerifyMfa completes a Login that answered with an *MfaChallengeError: the challenge it
+	// carried plus a TOTP or recovery code. source is the caller's address, for the limiter.
+	VerifyMfa(ctx context.Context, challenge, code, source string) (*IdentityAuth, error)
 	// IdentitySubject validates the identity token carried across steps → the subject
 	// (email + session epoch) it names.
 	IdentitySubject(identityToken string) (IdentitySubject, error)
@@ -107,6 +110,8 @@ func AuthorizeHandler(svc AuthorizeService) http.Handler {
 			handleAuthorizeLogin(w, r, svc, client, p)
 		case "consent":
 			handleAuthorizeConsent(w, r, svc, client, p)
+		case "mfa":
+			handleAuthorizeMfa(w, r, svc, client, p)
 		case "sso":
 			handleAuthorizeSsoBegin(w, r, svc, p)
 		default:
@@ -216,6 +221,13 @@ func setNoReferrer(w http.ResponseWriter) {
 // unknown email is throttled on the same schedule as a real one.
 func handleAuthorizeLogin(w http.ResponseWriter, r *http.Request, svc AuthorizeService, client *iam.OAuthClient, p AuthorizeParams) {
 	ident, err := svc.Login(r.Context(), r.PostFormValue("email"), r.PostFormValue("password"))
+	var challenge *MfaChallengeError
+	if errors.As(err, &challenge) {
+		// The password was right and the account has a second factor: ask for the code. The
+		// challenge goes to the browser in the BODY of this page, never in an address.
+		renderAuthorizeMfa(w, p, challenge.Challenge, "")
+		return
+	}
 	if err != nil {
 		renderAuthorizeLogin(w, p, authorizeLoginError(err), svc.SsoReady())
 		return
@@ -231,15 +243,46 @@ func authorizeLoginError(err error) string {
 		return "Too many attempts. Try again in " + throttled.RetryAfterText() + "."
 	case errors.Is(err, credential.ErrUnavailable):
 		return "Sign-in is temporarily unavailable. Try again shortly."
-	case errors.As(err, new(*MfaChallengeError)):
-		// The password was right, and this account has a second factor that this page cannot
-		// ask for yet. Saying "invalid email or password" would tell a person who typed the
-		// right one that it is wrong; no token was issued.
-		return "This account uses two-factor authentication, which this page cannot complete. Sign in to the console to authorize access."
 	case errors.Is(err, ErrMfaUnavailable):
 		return "Sign-in is temporarily unavailable. Try again shortly."
 	default:
 		return "Invalid email or password."
+	}
+}
+
+// handleAuthorizeMfa is the second step of a password sign-in for an account with a second factor:
+// the person types the code, and the page completes the sign-in the challenge was earned for.
+//
+// A POST only, and never from a page elsewhere. The challenge is read from the form body (the
+// page that asked for the code put it there) and is NEVER accepted from, or rendered into, an
+// address: a GET of this step shows the ordinary sign-in form. What binds the step to the browser
+// that did the password step is that secret itself -- 256 random bits that exist only in that
+// page -- so a request forged from another site has nothing to send; the Sec-Fetch-Site check
+// refuses the browser-marked cross-site ones before they spend an attempt.
+func handleAuthorizeMfa(w http.ResponseWriter, r *http.Request, svc AuthorizeService, client *iam.OAuthClient, p AuthorizeParams) {
+	if r.Method != http.MethodPost {
+		renderAuthorizeLogin(w, p, "", svc.SsoReady())
+		return
+	}
+	if r.Header.Get("Sec-Fetch-Site") == "cross-site" {
+		renderAuthorizeError(w, http.StatusBadRequest, "Invalid request", "The request could not be processed.")
+		return
+	}
+	challenge := r.PostFormValue("challenge")
+	ident, err := svc.VerifyMfa(r.Context(), challenge, r.PostFormValue("code"), gqlcore.RequestSourceAddr(r))
+	switch {
+	case err == nil:
+		renderAuthorizeConsentFor(w, p, client, ident, "")
+	case errors.Is(err, ErrMfaInvalidCode):
+		// The challenge survives a wrong code (it allows a few), so the same form is shown again.
+		renderAuthorizeMfa(w, p, challenge, "That code is not valid. Check it and try again.")
+	case errors.Is(err, ErrMfaRateLimited):
+		renderAuthorizeMfa(w, p, challenge, "Too many attempts. Try again shortly.")
+	case errors.Is(err, ErrMfaUnavailable), errors.Is(err, credential.ErrUnavailable):
+		renderAuthorizeMfa(w, p, challenge, "The code could not be checked right now. Try again shortly.")
+	default:
+		// An expired, spent or voided challenge (or anything this page does not know): start over.
+		renderAuthorizeLogin(w, p, "Your sign-in expired. Sign in again.", svc.SsoReady())
 	}
 }
 
@@ -349,6 +392,13 @@ type authorizeFormData struct {
 	Sso bool
 }
 
+type authorizeMfaData struct {
+	Params AuthorizeParams
+	// Challenge is the handle verifyMfa takes, carried in a hidden field of this page's form.
+	Challenge string
+	Error     string
+}
+
 type authorizeConsentData struct {
 	Params     AuthorizeParams
 	ClientName string
@@ -400,6 +450,11 @@ func authorizePageHeaders(w http.ResponseWriter) {
 func renderAuthorizeLogin(w http.ResponseWriter, p AuthorizeParams, errMsg string, sso bool) {
 	authorizePageHeaders(w)
 	_ = authorizeLoginTmpl.Execute(w, authorizeFormData{Params: p, Error: errMsg, Sso: sso})
+}
+
+func renderAuthorizeMfa(w http.ResponseWriter, p AuthorizeParams, challenge, errMsg string) {
+	authorizePageHeaders(w)
+	_ = authorizeMfaTmpl.Execute(w, authorizeMfaData{Params: p, Challenge: challenge, Error: errMsg})
 }
 
 func renderAuthorizeConsentFor(w http.ResponseWriter, p AuthorizeParams, client *iam.OAuthClient, ident *IdentityAuth, signedInAs string) {
@@ -454,7 +509,7 @@ body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#
 .card{background:#1e293b;padding:2rem;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.4);width:100%;max-width:380px}
 h1{font-size:1.25rem;margin:0 0 1rem}
 label{display:block;font-size:.8rem;margin:.75rem 0 .25rem;color:#94a3b8}
-input[type=email],input[type=password],select{width:100%;box-sizing:border-box;padding:.6rem;border-radius:8px;border:1px solid #334155;background:#0f172a;color:#e2e8f0}
+input[type=email],input[type=password],input[type=text],select{width:100%;box-sizing:border-box;padding:.6rem;border-radius:8px;border:1px solid #334155;background:#0f172a;color:#e2e8f0}
 button{margin-top:1.25rem;padding:.6rem 1rem;border:0;border-radius:8px;background:#6366f1;color:#fff;font-weight:600;cursor:pointer}
 button.secondary{background:#334155}
 .err{background:#7f1d1d;color:#fecaca;padding:.5rem .75rem;border-radius:8px;font-size:.85rem;margin-bottom:.5rem}
@@ -483,6 +538,21 @@ var authorizeLoginTmpl = template.Must(template.New("login").Parse(hiddenParamsP
 <label>Work email</label><input type="email" name="email" autocomplete="username" required>
 <button type="submit" class="secondary">Sign in with SSO</button>
 </form>{{end}}
+</div></body></html>`))
+
+var authorizeMfaTmpl = template.Must(template.New("mfa").Parse(hiddenParamsPartial + `
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Verify — DeviceChain</title>` + pageStyle + `</head>
+<body><div class="card">
+<h1>Two-factor authentication</h1>
+<p class="muted">Enter the code from your authenticator app, or one of your recovery codes.</p>
+{{if .Error}}<div class="err">{{.Error}}</div>{{end}}
+<form method="post" action="">
+{{template "hidden" .Params}}
+<input type="hidden" name="step" value="mfa">
+<input type="hidden" name="challenge" value="{{.Challenge}}">
+<label>Code</label><input type="text" name="code" autocomplete="one-time-code" inputmode="text" autocapitalize="characters" spellcheck="false" required autofocus>
+<button type="submit">Verify</button>
+</form>
 </div></body></html>`))
 
 var authorizeConsentTmpl = template.Must(template.New("consent").Parse(hiddenParamsPartial + `
