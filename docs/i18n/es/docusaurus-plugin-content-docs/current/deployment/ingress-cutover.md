@@ -112,11 +112,11 @@ mover el DNS de cada uno.
 
 ## La compuerta del certificado {#ingress-cutover-cert-gate}
 
-Un Gateway sin certificado responde `https` con el certificado por defecto del controlador, así que el paso comprueba el certificado del Gateway en cuatro momentos. Las comprobaciones se aplican cuando la instancia termina TLS y el clúster tiene cert-manager; `--no-tls` las omite. Un Gateway cuyo Secret aportas tú (no lleva anotación de emisor de cert-manager) no tiene nada que esperar y las supera.
+Un Gateway sin certificado responde `https` con el certificado por defecto del controlador, así que el paso comprueba el certificado del Gateway en cuatro momentos. Las comprobaciones se aplican cuando la instancia termina TLS y el clúster tiene cert-manager; `--no-tls` las omite. Un Gateway cuyo Secret aportas tú (no lleva anotación de emisor de cert-manager ni `kubernetes.io/tls-acme: "true"`) no tiene nada que esperar y las supera.
 
 - **Durante la ventana,** `dcctl upgrade` espera 30 segundos al certificado y después **avisa y continúa**. Los objetos Ingress siguen sirviendo el host, y muchos emisores solo pueden emitir el certificado del Gateway cuando el DNS apunta a Traefik.
 - **`dcctl upgrade --drop-legacy-ingress`** se niega, antes de generar o cambiar nada, salvo que el Certificate de cert-manager del Gateway esté `Ready` y lo controle el Gateway. También se niega cuando la instancia aún no tiene Gateway. Mueve antes el DNS para que se pueda emitir el certificado, comprueba `kubectl -n dci-<instance> get certificate` y ejecuta de nuevo el comando.
-- **`dcctl install --remove-legacy-ingress`** comprueba el Gateway de cada instancia del clúster y nombra las que no tienen el certificado `Ready`.
+- **`dcctl install --remove-legacy-ingress`** comprueba el Gateway de cada instancia del clúster y nombra las que no tienen el certificado `Ready`. Quitar `ingress-nginx` no cambia cómo se sirven esas instancias; la comprobación evita que un certificado roto del Gateway pase inadvertido hasta que nada más sirva el host.
 - **Una actualización que deja una instancia solo en el Gateway** espera hasta cinco minutos y falla indicando el motivo. Los servicios ya están en marcha cuando falla.
 
 Un rechazo termina con "Nothing has been changed". Arregla lo que nombra y **ejecuta de nuevo el mismo comando**. Las causas habituales:
@@ -193,7 +193,7 @@ el borde:
   consola en lugar de llegar al área.
 - **Direcciones de cliente.** Traefik escribe el par real en `X-Forwarded-For` y su Service usa
   `externalTrafficPolicy: Local`; consulta [Direcciones de cliente y proxies de confianza](./bootstrap.md#trusted-proxies).
-  En AWS un Classic Load Balancer oculta la dirección del cliente. `dcctl install --aws-nlb` da a los Services de los controladores un Network Load Balancer, lo que sustituye el balanceador y cambia su nombre de host, así que repunta el DNS después.
+  En AWS un Classic Load Balancer oculta la dirección del cliente. `dcctl install --aws-nlb traefik` da al Service de Traefik un Network Load Balancer, y es el valor que conviene durante la ventana porque `ingress-nginx` sigue sirviendo con su propio balanceador. Cambiar un Service sustituye su balanceador y cambia su nombre de host, así que repunta el DNS después.
 
 ## Relacionado {#ingress-cutover-related}
 

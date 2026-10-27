@@ -112,11 +112,11 @@ instance has run `--drop-legacy-ingress`. A cluster whose instances use differen
 
 ## The certificate gate {#ingress-cutover-cert-gate}
 
-A Gateway with no certificate answers `https` with the controller's default certificate, so the move checks the Gateway's certificate at four points. The checks apply when the instance terminates TLS and the cluster has cert-manager; `--no-tls` skips them. A Gateway whose Secret you supply yourself (it carries no cert-manager issuer annotation) has nothing to wait for and passes.
+A Gateway with no certificate answers `https` with the controller's default certificate, so the move checks the Gateway's certificate at four points. The checks apply when the instance terminates TLS and the cluster has cert-manager; `--no-tls` skips them. A Gateway whose Secret you supply yourself (it carries no cert-manager issuer annotation and no `kubernetes.io/tls-acme: "true"`) has nothing to wait for and passes.
 
 - **During the window,** `dcctl upgrade` waits 30 seconds for the certificate, then **warns and continues**. The Ingress objects still serve the host, and many issuers can only issue the Gateway's certificate once DNS points at Traefik.
 - **`dcctl upgrade --drop-legacy-ingress`** refuses, before it renders or changes anything, unless the Gateway's cert-manager Certificate is `Ready` and controlled by the Gateway. It also refuses when the instance has no Gateway yet. Move DNS first so the certificate can be issued, check `kubectl -n dci-<instance> get certificate`, and run the command again.
-- **`dcctl install --remove-legacy-ingress`** checks the Gateway of every instance on the cluster, and names each one whose certificate is not `Ready`.
+- **`dcctl install --remove-legacy-ingress`** checks the Gateway of every instance on the cluster, and names each one whose certificate is not `Ready`. Removing `ingress-nginx` does not change how those instances are served; the check keeps a broken Gateway certificate from going unnoticed until nothing else serves the host.
 - **An upgrade that leaves an instance on the Gateway alone** waits up to five minutes, and fails with the reason. The services are already up when it fails.
 
 A refusal ends with "Nothing has been changed". Fix what it names and **run the same command again**. The common causes:
@@ -191,7 +191,7 @@ the edge:
 - **Paths are case-sensitive and end on a path boundary.** `/API/<area>` and `/api/<area>X` fall through to the
   console instead of reaching the area.
 - **Client addresses.** Traefik writes the real peer into `X-Forwarded-For` and its Service uses
-  `externalTrafficPolicy: Local`; see [Client addresses and trusted proxies](./bootstrap.md#trusted-proxies). On AWS a Classic Load Balancer hides the client address. `dcctl install --aws-nlb` gives the controllers' Services a Network Load Balancer, which replaces the load balancer and changes its hostname, so repoint DNS afterwards.
+  `externalTrafficPolicy: Local`; see [Client addresses and trusted proxies](./bootstrap.md#trusted-proxies). On AWS a Classic Load Balancer hides the client address. `dcctl install --aws-nlb traefik` gives Traefik's Service a Network Load Balancer, and it is the value to use during the window because `ingress-nginx` keeps serving on its own load balancer. Changing a Service replaces its load balancer and changes its hostname, so repoint DNS afterwards.
 
 ## Related {#ingress-cutover-related}
 

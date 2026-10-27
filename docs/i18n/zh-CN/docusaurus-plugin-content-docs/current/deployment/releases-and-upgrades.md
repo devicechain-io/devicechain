@@ -2152,7 +2152,7 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 - 你在自己选定的时间把 DNS 迁移到 Traefik 的地址。然后 `dcctl upgrade --drop-legacy-ingress` 停止生成 Ingress 对象，`dcctl install --remove-legacy-ingress` 移除 `ingress-nginx`。只要还有 Ingress 对象指向其类，移除就会被拒绝。
 - 只要 `ingress-nginx` 仍已安装，`dcctl upgrade --ingress-controller nginx` 就能把实例放回它上面。该选择会被记录，并由之后的升级保留；`--ingress-controller auto` 将其清除。
 - **通过 `nginx` Ingress 类解决 HTTP-01 的 ACME 签发者在迁移窗口内继续可用，`ingress-nginx` 被移除后续期会失败。** 在 DNS 指向 Traefik 之前保持原样，之后在 `--drop-legacy-ingress` 和 `--remove-legacy-ingress` 之前为它添加 `gatewayHTTPRoute` 求解器。更早设置会失败。DNS-01 求解器全程可用。
-- 在 AWS 上，经典负载均衡器会隐藏客户端地址。`dcctl install --aws-nlb` 会为各控制器的 Service 配置 NLB，这会替换负载均衡器并更改其主机名。
+- 在 AWS 上，经典负载均衡器会隐藏客户端地址。`dcctl install --aws-nlb traefik` 会为 Traefik 的 Service 配置 NLB（其他取值是 `nginx`、`all` 和 `none`）；更改 Service 会替换其负载均衡器并更改主机名。
 - HA 安装运行两个 Traefik 副本，分散到不同节点，并带有保持一个副本可用的 PodDisruptionBudget。
 - 在本地集群上没有 DNS 可迁移：浏览器访问的是占用节点 80 和 443 端口的那个控制器。`ingress-nginx` 占用它们，直到 `--remove-legacy-ingress` 把端口交给 Traefik，所以请连续运行 `--drop-legacy-ingress` 和移除操作：两者之间主机不响应。全新的本地集群从一开始就由 Traefik 占用这些端口。
 
