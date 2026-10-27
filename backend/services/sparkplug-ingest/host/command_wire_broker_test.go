@@ -88,16 +88,16 @@ func encodeT(t *testing.T, p *sppb.Payload) []byte {
 func nbirthWire(t *testing.T, setpointAlias uint64) []byte {
 	return encodeT(t, &sppb.Payload{Seq: proto.Uint64(0), Metrics: []*sppb.Payload_Metric{
 		bdSeqM(7),
-		{Name: proto.String("Setpoint"), Alias: proto.Uint64(setpointAlias), Datatype: proto.Uint32(dtInt8),
+		{Name: proto.String("Setpoint"), Alias: proto.Uint64(setpointAlias), Datatype: proto.Uint32(datatypeInt8),
 			Value: &sppb.Payload_Metric_IntValue{IntValue: 1}},
-		{Name: proto.String("Mode"), Datatype: proto.Uint32(dtString), Value: &sppb.Payload_Metric_StringValue{StringValue: "auto"}},
-		{Name: proto.String("Node Control/Rebirth"), Datatype: proto.Uint32(dtBoolean), Value: &sppb.Payload_Metric_BooleanValue{BooleanValue: false}},
+		{Name: proto.String("Mode"), Datatype: proto.Uint32(datatypeString), Value: &sppb.Payload_Metric_StringValue{StringValue: "auto"}},
+		{Name: proto.String("Node Control/Rebirth"), Datatype: proto.Uint32(datatypeBoolean), Value: &sppb.Payload_Metric_BooleanValue{BooleanValue: false}},
 	}})
 }
 
 func dbirthWire(t *testing.T) []byte {
 	return encodeT(t, &sppb.Payload{Seq: proto.Uint64(1), Metrics: []*sppb.Payload_Metric{
-		{Name: proto.String("Run"), Alias: proto.Uint64(50), Datatype: proto.Uint32(dtBoolean), Value: &sppb.Payload_Metric_BooleanValue{BooleanValue: false}},
+		{Name: proto.String("Run"), Alias: proto.Uint64(50), Datatype: proto.Uint32(datatypeBoolean), Value: &sppb.Payload_Metric_BooleanValue{BooleanValue: false}},
 	}})
 }
 
@@ -299,7 +299,7 @@ func TestSendMetricCommandWithoutASession(t *testing.T) {
 	require.NoError(t, err)
 	c.sessions.EndHostSession()
 	_, _, err = c.SendMetricCommand(ref, 1)
-	assert.ErrorIs(t, err, ErrMetricUnknown, "the Host session's tables are gone")
+	assert.ErrorIs(t, err, ErrNotBorn, "the Host session's tables are gone: park and wait for the rebuild")
 }
 
 // 🔴 THE HOST SESSION ENDING CLEARS THE TABLES, through the real teardown path (clearSession is
@@ -319,5 +319,5 @@ func TestHostSessionEndClearsTheTables(t *testing.T) {
 
 	c.clearSession(live)
 	_, err = c.sessions.LookupMetric(wireNodeT, "Setpoint")
-	assert.ErrorIs(t, err, ErrMetricUnknown)
+	assert.ErrorIs(t, err, ErrNotBorn)
 }

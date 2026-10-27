@@ -19,9 +19,6 @@ import (
 // single byte that wraps 255→0, so a wire value above it is malformed.
 const maxSeq = 255
 
-// datatypeBoolean is the Sparkplug B datatype code for a Boolean metric.
-const datatypeBoolean = 11
-
 // bdSeqMetric is the reserved Sparkplug metric name carrying the birth/death
 // sequence. It appears in NBIRTH and its matching NDEATH will; the Host uses it
 // ONLY to correlate a death with the birth that opened the session (B3) — never
@@ -85,6 +82,17 @@ type nodeSession struct {
 	// session's epoch and bdSeq but may REMAP every alias, so the epoch alone cannot tell a
 	// command that an alias has gone stale; the generation can.
 	birthGen uint64
+
+	// declared records which devices have declared their metrics (sent a DBIRTH) since the last
+	// NBIRTH rebuilt the table. It is a flag per device, not a count of entries: a DBIRTH may name
+	// no metrics at all, and a device that is born but has not yet re-declared after a rebirth has
+	// no addressable table, which is "not born yet", not "metric unknown".
+	declared map[string]bool
+
+	// invalidated is set when the Host's broker session ended while this node's session was live:
+	// the node did not die, but the Host can no longer vouch for what it declared. Lookups answer
+	// ErrNotBorn until a rebirth rebuilds the table, and the first lookup asks for one.
+	invalidated bool
 
 	// devices maps each child device that has sent a DBIRTH to its own per-device
 	// session epoch (minted at that DBIRTH). Membership is the born-set (DDATA for a

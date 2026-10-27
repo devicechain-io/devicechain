@@ -42,25 +42,6 @@ const (
 	commandRetain = false
 )
 
-// Sparkplug B datatype codes (the Sparkplug 3.0.0 enum; section "Datatype Details").
-const (
-	dtInt8     uint32 = 1
-	dtInt16    uint32 = 2
-	dtInt32    uint32 = 3
-	dtInt64    uint32 = 4
-	dtUInt8    uint32 = 5
-	dtUInt16   uint32 = 6
-	dtUInt32   uint32 = 7
-	dtUInt64   uint32 = 8
-	dtFloat    uint32 = 9
-	dtDouble   uint32 = 10
-	dtBoolean  uint32 = 11
-	dtString   uint32 = 12
-	dtDateTime uint32 = 13
-	dtText     uint32 = 14
-	dtUUID     uint32 = 15
-)
-
 // maxCommandString bounds a String/Text/UUID command value. A write to an output is not a bulk
 // transfer, and an unbounded string is an unbounded publish.
 const maxCommandString = 8 * 1024
@@ -93,15 +74,15 @@ func rng(min, max string) intRange {
 }
 
 var intRanges = map[uint32]intRange{
-	dtInt8:     rng("-128", "127"),
-	dtInt16:    rng("-32768", "32767"),
-	dtInt32:    rng("-2147483648", "2147483647"),
-	dtInt64:    rng("-9223372036854775808", "9223372036854775807"),
-	dtUInt8:    rng("0", "255"),
-	dtUInt16:   rng("0", "65535"),
-	dtUInt32:   rng("0", "4294967295"),
-	dtUInt64:   rng("0", "18446744073709551615"),
-	dtDateTime: rng("0", "18446744073709551615"),
+	datatypeInt8:     rng("-128", "127"),
+	datatypeInt16:    rng("-32768", "32767"),
+	datatypeInt32:    rng("-2147483648", "2147483647"),
+	datatypeInt64:    rng("-9223372036854775808", "9223372036854775807"),
+	datatypeUInt8:    rng("0", "255"),
+	datatypeUInt16:   rng("0", "65535"),
+	datatypeUInt32:   rng("0", "4294967295"),
+	datatypeUInt64:   rng("0", "18446744073709551615"),
+	datatypeDateTime: rng("0", "18446744073709551615"),
 }
 
 var uuidRE = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
@@ -119,12 +100,14 @@ var digitsRE = regexp.MustCompile(`^-?[0-9]+$`)
 // Tahu Java (SparkplugBPayloadEncoder: setIntValue((Byte) v), a sign-extending widening to a
 // 32-bit int) and Tahu C (tahu.c: int_value = *(int8_t *)value, a sign-extending conversion to
 // uint32). So a signed value is its two's complement SIGN-EXTENDED to the carrier's full width:
-// Int8 -1 is int_value 0xFFFFFFFF, not 0xFF. (Tahu Python alone truncates to the type's width,
-// 0xFF; every decoder narrows by the declared width, as ours does in intValueAsFloat, so a
-// sign-extended value is read back correctly by all of them.)
+// Int8 -1 is int_value 0xFFFFFFFF, not 0xFF. (Tahu Python alone truncates to the type's width.)
+// Decoders differ in what they do with the carrier: Tahu Java narrows by the declared width, Tahu
+// JS reinterprets it as int32, and Tahu C and Python leave it to the application. A sign-extended
+// value reads back correctly in every one that decodes it; a width-truncated one would not (JS
+// would read 255 for Int8 -1).
 func EncodeMetricValue(datatype uint32, value any) (func(*sppb.Payload_Metric), error) {
 	switch datatype {
-	case dtInt8, dtInt16, dtInt32, dtUInt8, dtUInt16, dtUInt32:
+	case datatypeInt8, datatypeInt16, datatypeInt32, datatypeUInt8, datatypeUInt16, datatypeUInt32:
 		n, err := exactInteger(datatype, value, false)
 		if err != nil {
 			return nil, err
@@ -138,9 +121,9 @@ func EncodeMetricValue(datatype uint32, value any) (func(*sppb.Payload_Metric), 
 		}
 		return func(m *sppb.Payload_Metric) { m.Value = &sppb.Payload_Metric_IntValue{IntValue: wire} }, nil
 
-	case dtInt64, dtUInt64, dtDateTime:
+	case datatypeInt64, datatypeUInt64, datatypeDateTime:
 		// DateTime is epoch milliseconds, a uint64 on the wire.
-		n, err := exactInteger(datatype, value, datatype != dtDateTime)
+		n, err := exactInteger(datatype, value, datatype != datatypeDateTime)
 		if err != nil {
 			return nil, err
 		}
@@ -152,28 +135,31 @@ func EncodeMetricValue(datatype uint32, value any) (func(*sppb.Payload_Metric), 
 		}
 		return func(m *sppb.Payload_Metric) { m.Value = &sppb.Payload_Metric_LongValue{LongValue: wire} }, nil
 
-	case dtFloat, dtDouble:
+	case datatypeFloat, datatypeDouble:
 		f, err := exactFloat(value)
 		if err != nil {
 			return nil, err
 		}
-		if datatype == dtFloat {
+		if datatype == datatypeFloat {
 			if math.Abs(f) > math.MaxFloat32 {
 				return nil, refuse("%v overflows Float", f)
 			}
 			f32 := float32(f)
+			if f != 0 && f32 == 0 {
+				return nil, refuse("%v underflows Float to zero", f)
+			}
 			return func(m *sppb.Payload_Metric) { m.Value = &sppb.Payload_Metric_FloatValue{FloatValue: f32} }, nil
 		}
 		return func(m *sppb.Payload_Metric) { m.Value = &sppb.Payload_Metric_DoubleValue{DoubleValue: f} }, nil
 
-	case dtBoolean:
+	case datatypeBoolean:
 		b, ok := value.(bool)
 		if !ok {
 			return nil, refuse("a Boolean takes true or false, got %s", className(value))
 		}
 		return func(m *sppb.Payload_Metric) { m.Value = &sppb.Payload_Metric_BooleanValue{BooleanValue: b} }, nil
 
-	case dtString, dtText, dtUUID:
+	case datatypeString, datatypeText, datatypeUUID:
 		s, ok := value.(string)
 		if !ok {
 			return nil, refuse("a string type takes a string, got %s", className(value))
@@ -184,7 +170,7 @@ func EncodeMetricValue(datatype uint32, value any) (func(*sppb.Payload_Metric), 
 		if len(s) > maxCommandString {
 			return nil, refuse("%d bytes exceeds the %d byte limit", len(s), maxCommandString)
 		}
-		if datatype == dtUUID && !uuidRE.MatchString(s) {
+		if datatype == datatypeUUID && !uuidRE.MatchString(s) {
 			return nil, refuse("not a UUID (8-4-4-4-12 hex)")
 		}
 		return func(m *sppb.Payload_Metric) { m.Value = &sppb.Payload_Metric_StringValue{StringValue: s} }, nil
@@ -234,11 +220,11 @@ func exactInteger(datatype uint32, value any, allowString bool) (*big.Int, error
 	case uint64:
 		n = new(big.Int).SetUint64(v)
 	case float32:
-		if n, err = integralFloat(float64(v)); err != nil {
+		if n, err = integralFloat(datatype, float64(v)); err != nil {
 			return nil, err
 		}
 	case float64:
-		if n, err = integralFloat(v); err != nil {
+		if n, err = integralFloat(datatype, v); err != nil {
 			return nil, err
 		}
 	case json.Number:
@@ -251,7 +237,7 @@ func exactInteger(datatype uint32, value any, allowString bool) (*big.Int, error
 		if ferr != nil {
 			return nil, refuse("%q is not a number", s)
 		}
-		if n, err = integralFloat(f); err != nil {
+		if n, err = integralFloat(datatype, f); err != nil {
 			return nil, err
 		}
 	case string:
@@ -273,7 +259,7 @@ func exactInteger(datatype uint32, value any, allowString bool) (*big.Int, error
 }
 
 // integralFloat converts a float to an integer only when that loses nothing.
-func integralFloat(f float64) (*big.Int, error) {
+func integralFloat(datatype uint32, f float64) (*big.Int, error) {
 	if math.IsNaN(f) || math.IsInf(f, 0) {
 		return nil, refuse("not a finite number")
 	}
@@ -281,7 +267,10 @@ func integralFloat(f float64) (*big.Int, error) {
 		return nil, refuse("%v is not integral", f)
 	}
 	if math.Abs(f) >= maxExactFloatInt {
-		return nil, refuse("%v is beyond 2^53: send a 64-bit integer as a string of digits", f)
+		if datatype == datatypeInt64 || datatype == datatypeUInt64 {
+			return nil, refuse("%v is beyond 2^53: send a 64-bit integer as a string of digits", f)
+		}
+		return nil, refuse("%v is beyond 2^53 and cannot be an exact integer", f)
 	}
 	return big.NewInt(int64(f)), nil
 }

@@ -112,8 +112,19 @@ var (
 // LookupMetric resolves name against the target's BIRTH table.
 func (tr *SessionTracker) LookupMetric(target CommandTarget, name string) (MetricRef, error) {
 	tr.mu.Lock()
-	defer tr.mu.Unlock()
-	return tr.lookupLocked(target, name)
+	ref, err := tr.lookupLocked(target, name)
+	askRebirth := false
+	if s := tr.sessions[nodeKey{target.Group, target.Node}]; s != nil && s.online && s.invalidated {
+		// The table was dropped when the Host session ended. The node never died, so nothing will
+		// re-declare it unprompted (a secondary Host is not bound to ask for one): ask, once per
+		// backoff window. The commanded-rebirth NBIRTH rebuilds the table.
+		askRebirth = tr.wantRebirth(s)
+	}
+	tr.mu.Unlock()
+	if askRebirth && tr.rebirth != nil {
+		tr.rebirth(target.Group, target.Node)
+	}
+	return ref, err
 }
 
 // RevalidateMetric is the check made immediately before a publish. If the table the ref was
@@ -141,23 +152,27 @@ func (tr *SessionTracker) RevalidateMetric(ref MetricRef) (MetricRef, error) {
 
 // EndHostSession forgets every node's metric table: the Host's broker session has ended, so a
 // table is no longer something a command may be addressed against. The sessions themselves are
-// kept (their rebirth bookkeeping outlives a reconnect); the next birth, commanded or not,
-// rebuilds the tables.
+// kept (their rebirth bookkeeping outlives a reconnect), but each live one is marked INVALIDATED,
+// so a lookup answers ErrNotBorn (park, and wait for the rebuild) rather than ErrMetricUnknown
+// (refuse). The next lookup asks the node to rebirth; its answer rebuilds the table.
 func (tr *SessionTracker) EndHostSession() {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
 	for _, s := range tr.sessions {
 		tr.clearMetrics(s)
+		s.invalidated = s.online
 	}
 }
 
 func (tr *SessionTracker) lookupLocked(target CommandTarget, name string) (MetricRef, error) {
 	s := tr.sessions[nodeKey{target.Group, target.Node}]
-	if s == nil || !s.online {
+	if s == nil || !s.online || s.invalidated {
 		return MetricRef{}, fmt.Errorf("%w: %s", ErrNotBorn, target)
 	}
 	if target.IsDevice() {
-		if _, born := s.devices[target.Device]; !born {
+		// Born AND declared since the last NBIRTH: after a rebirth the device is still in the born
+		// set, but its metrics are not known again until its own DBIRTH.
+		if _, born := s.devices[target.Device]; !born || !s.declared[target.Device] {
 			return MetricRef{}, fmt.Errorf("%w: %s", ErrNotBorn, target)
 		}
 	}
@@ -182,6 +197,8 @@ func (tr *SessionTracker) bump(s *nodeSession) {
 // until it does their aliases are exactly what must not be trusted.
 func (tr *SessionTracker) rebuildNodeMetrics(s *nodeSession, p *sppb.Payload) {
 	s.metrics = map[metricKey]declaredMetric{}
+	s.declared = map[string]bool{}
+	s.invalidated = false
 	addBirthMetrics(s.metrics, "", p)
 	tr.bump(s)
 }
@@ -196,12 +213,17 @@ func (tr *SessionTracker) recordDeviceMetrics(s *nodeSession, device string, p *
 			delete(s.metrics, k)
 		}
 	}
+	if s.declared == nil {
+		s.declared = map[string]bool{}
+	}
+	s.declared[device] = true
 	addBirthMetrics(s.metrics, device, p)
 	tr.bump(s)
 }
 
 // dropDeviceMetrics removes one device's entries (its DDEATH).
 func (tr *SessionTracker) dropDeviceMetrics(s *nodeSession, device string) {
+	delete(s.declared, device)
 	for k := range s.metrics {
 		if k.device == device {
 			delete(s.metrics, k)
@@ -213,6 +235,7 @@ func (tr *SessionTracker) dropDeviceMetrics(s *nodeSession, device string) {
 // clearMetrics empties the table (NDEATH, end of the Host session).
 func (tr *SessionTracker) clearMetrics(s *nodeSession) {
 	s.metrics = nil
+	s.declared = nil
 	tr.bump(s)
 }
 

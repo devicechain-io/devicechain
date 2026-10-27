@@ -13,14 +13,6 @@ import (
 	sppb "github.com/devicechain-io/dc-sparkplug-ingest/proto"
 )
 
-// Sparkplug datatype codes used in these tests (only the ones without a named
-// constant in sample.go).
-const (
-	datatypeUInt32 = 7
-	datatypeFloat  = 9
-	datatypeDouble = 10
-)
-
 func namedMetric(name string, datatype uint32, value any) *sppb.Payload_Metric {
 	m := &sppb.Payload_Metric{Name: proto.String(name), Datatype: proto.Uint32(datatype)}
 	setValue(m, value)

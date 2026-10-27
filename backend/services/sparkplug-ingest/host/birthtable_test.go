@@ -31,8 +31,8 @@ var (
 // bornNode sends an NBIRTH (bdSeq 5) and a DBIRTH for d1.
 func bornNode(h *sessionHarness) {
 	h.tr.Observe(nTop(NBIRTH), pl(0, bdSeqM(5),
-		declared("Setpoint", dtInt8, 1), declared("Mode", dtString, 0), declared("Node Control/Rebirth", dtBoolean, 0)))
-	h.tr.Observe(dTop(DBIRTH, "d1"), pl(1, declared("Valve", dtBoolean, 2), declared("Setpoint", dtInt32, 3)))
+		declared("Setpoint", datatypeInt8, 1), declared("Mode", datatypeString, 0), declared("Node Control/Rebirth", datatypeBoolean, 0)))
+	h.tr.Observe(dTop(DBIRTH, "d1"), pl(1, declared("Valve", datatypeBoolean, 2), declared("Setpoint", datatypeInt32, 3)))
 }
 
 func TestBirthTableCapturesAliasDatatypeAndScope(t *testing.T) {
@@ -43,20 +43,20 @@ func TestBirthTableCapturesAliasDatatypeAndScope(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, r.HasAlias)
 	assert.Equal(t, uint64(1), r.Alias)
-	assert.Equal(t, uint32(dtInt8), r.Datatype)
+	assert.Equal(t, uint32(datatypeInt8), r.Datatype)
 	assert.Equal(t, uint64(5), r.BdSeq)
 	assert.Equal(t, h.sess().sessionEpoch, r.Epoch)
 
 	r, err = h.tr.LookupMetric(nodeT, "Mode")
 	require.NoError(t, err)
 	assert.False(t, r.HasAlias, "a metric the BIRTH did not alias has no alias")
-	assert.Equal(t, uint32(dtString), r.Datatype)
+	assert.Equal(t, uint32(datatypeString), r.Datatype)
 
 	// Device-scoped: the same name on the device is a different metric with its own alias/type.
 	r, err = h.tr.LookupMetric(devT, "Setpoint")
 	require.NoError(t, err)
 	assert.Equal(t, uint64(3), r.Alias)
-	assert.Equal(t, uint32(dtInt32), r.Datatype)
+	assert.Equal(t, uint32(datatypeInt32), r.Datatype)
 
 	_, err = h.tr.LookupMetric(nodeT, "Valve")
 	assert.ErrorIs(t, err, ErrMetricUnknown, "a device's metric is not the node's")
@@ -69,7 +69,7 @@ func TestBirthTableNotBornTargets(t *testing.T) {
 	_, err := h.tr.LookupMetric(nodeT, "Setpoint")
 	assert.ErrorIs(t, err, ErrNotBorn, "never seen")
 
-	h.tr.Observe(nTop(NBIRTH), pl(0, bdSeqM(5), declared("Setpoint", dtInt8, 1)))
+	h.tr.Observe(nTop(NBIRTH), pl(0, bdSeqM(5), declared("Setpoint", datatypeInt8, 1)))
 	_, err = h.tr.LookupMetric(devT, "Valve")
 	assert.ErrorIs(t, err, ErrNotBorn, "the node is born, the device has not sent a DBIRTH")
 	_, err = h.tr.LookupMetric(nodeT, "Setpoint")
@@ -95,7 +95,7 @@ func TestRevalidateAfterACommandedRebirthUsesTheNewAlias(t *testing.T) {
 	// reset, aliases REMAPPED (Setpoint 1 -> 9).
 	h.tr.Observe(nTop(NDATA), pl(99, dataMetric(1)))
 	require.Equal(t, 1, h.rec.count(), "the gap commanded a rebirth")
-	h.tr.Observe(nTop(NBIRTH), pl(0, bdSeqM(5), declared("Setpoint", dtInt8, 9), declared("Mode", dtString, 0)))
+	h.tr.Observe(nTop(NBIRTH), pl(0, bdSeqM(5), declared("Setpoint", datatypeInt8, 9), declared("Mode", datatypeString, 0)))
 	cur, err := h.tr.LookupMetric(nodeT, "Setpoint")
 	require.NoError(t, err)
 	assert.Equal(t, uint64(9), cur.Alias)
@@ -117,13 +117,13 @@ func TestRevalidateRefusesAMetricThatWentOrChangedType(t *testing.T) {
 
 	// The rebirth re-declares Setpoint as Int16: the value was validated against Int8.
 	h.tr.MarkRebirthPending("g", "n")
-	h.tr.Observe(nTop(NBIRTH), pl(0, bdSeqM(5), declared("Setpoint", dtInt16, 1)))
+	h.tr.Observe(nTop(NBIRTH), pl(0, bdSeqM(5), declared("Setpoint", datatypeInt16, 1)))
 	_, err = h.tr.RevalidateMetric(old)
 	assert.ErrorIs(t, err, ErrDatatypeChanged)
 
 	// The rebirth no longer declares it at all.
 	h.tr.MarkRebirthPending("g", "n")
-	h.tr.Observe(nTop(NBIRTH), pl(0, bdSeqM(5), declared("Other", dtInt8, 1)))
+	h.tr.Observe(nTop(NBIRTH), pl(0, bdSeqM(5), declared("Other", datatypeInt8, 1)))
 	_, err = h.tr.RevalidateMetric(old)
 	assert.ErrorIs(t, err, ErrMetricUnknown)
 }
@@ -137,14 +137,17 @@ func TestRebirthDropsDeviceEntriesUntilTheirDBirth(t *testing.T) {
 	require.NoError(t, err)
 
 	h.tr.MarkRebirthPending("g", "n")
-	h.tr.Observe(nTop(NBIRTH), pl(0, bdSeqM(5), declared("Setpoint", dtInt8, 1)))
+	h.tr.Observe(nTop(NBIRTH), pl(0, bdSeqM(5), declared("Setpoint", datatypeInt8, 1)))
+	// Born (still in the node's born set) but not yet re-declared: "not born yet" - park and wait
+	// for the DBIRTH - not "metric unknown", which would refuse a command the DBIRTH is about to make
+	// valid.
 	_, err = h.tr.LookupMetric(devT, "Valve")
-	assert.ErrorIs(t, err, ErrMetricUnknown)
+	assert.ErrorIs(t, err, ErrNotBorn)
 	_, err = h.tr.RevalidateMetric(old)
-	assert.ErrorIs(t, err, ErrMetricUnknown, "the old device alias is not used")
+	assert.ErrorIs(t, err, ErrNotBorn, "the old device alias is not used")
 
 	// The device re-births with a remapped alias.
-	h.tr.Observe(dTop(DBIRTH, "d1"), pl(1, declared("Valve", dtBoolean, 20)))
+	h.tr.Observe(dTop(DBIRTH, "d1"), pl(1, declared("Valve", datatypeBoolean, 20)))
 	got, err := h.tr.RevalidateMetric(old)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(20), got.Alias)
@@ -156,7 +159,7 @@ func TestRedeliveredBirthLeavesTheTableAlone(t *testing.T) {
 	h := newHarness(defaultRebirthBackoff)
 	bornNode(h)
 	old, _ := h.tr.LookupMetric(nodeT, "Setpoint")
-	h.tr.Observe(nTop(NBIRTH), pl(0, bdSeqM(5), declared("Setpoint", dtInt8, 77)))
+	h.tr.Observe(nTop(NBIRTH), pl(0, bdSeqM(5), declared("Setpoint", datatypeInt8, 77)))
 	cur, err := h.tr.LookupMetric(nodeT, "Setpoint")
 	require.NoError(t, err)
 	assert.Equal(t, old, cur)
@@ -168,7 +171,7 @@ func TestNewSessionReplacesTheTable(t *testing.T) {
 	h := newHarness(defaultRebirthBackoff)
 	bornNode(h)
 	old, _ := h.tr.LookupMetric(nodeT, "Setpoint")
-	h.tr.Observe(nTop(NBIRTH), pl(0, bdSeqM(6), declared("Setpoint", dtInt8, 4)))
+	h.tr.Observe(nTop(NBIRTH), pl(0, bdSeqM(6), declared("Setpoint", datatypeInt8, 4)))
 	cur, err := h.tr.LookupMetric(nodeT, "Setpoint")
 	require.NoError(t, err)
 	assert.NotEqual(t, old.Epoch, cur.Epoch)
@@ -217,13 +220,60 @@ func TestTableClearedOnDeviceDeathOnly(t *testing.T) {
 	assert.NoError(t, err, "the node's own entries survive a device's death")
 }
 
-func TestTableClearedAtHostSessionEnd(t *testing.T) {
+// A DBIRTH that names no metrics still declares the device: its metrics are then known to be
+// none, which is "metric unknown", where a device that has not re-declared is "not born yet".
+func TestEmptyDBirthStillDeclaresTheDevice(t *testing.T) {
+	h := newHarness(defaultRebirthBackoff)
+	h.tr.Observe(nTop(NBIRTH), pl(0, bdSeqM(5), declared("Setpoint", datatypeInt8, 1)))
+	_, err := h.tr.LookupMetric(devT, "Valve")
+	assert.ErrorIs(t, err, ErrNotBorn, "control: no DBIRTH yet")
+	h.tr.Observe(dTop(DBIRTH, "d1"), pl(1))
+	_, err = h.tr.LookupMetric(devT, "Valve")
+	assert.ErrorIs(t, err, ErrMetricUnknown, "declared, with nothing in it")
+}
+
+// 🔴 THE HOST SESSION ENDING INVALIDATES THE TABLES. The node never died, so nothing re-declares
+// it unprompted (a secondary Host is not bound to ask): a lookup must read "not born" (park), not
+// "metric unknown" (refuse, forever, with a false reason), and must ask for the rebirth whose
+// answer rebuilds the table.
+func TestHostSessionEndInvalidatesAndTheLookupAsksForARebirth(t *testing.T) {
 	h := newHarness(defaultRebirthBackoff)
 	bornNode(h)
 	old, _ := h.tr.LookupMetric(nodeT, "Setpoint")
+	require.Equal(t, 0, h.rec.count())
+
+	h.tr.EndHostSession()
+	assert.Equal(t, 0, h.rec.count(), "ending the session asks nothing: there is no connection to ask on")
+	_, err := h.tr.LookupMetric(nodeT, "Setpoint")
+	assert.ErrorIs(t, err, ErrNotBorn, "the node's session is kept, its table is not addressable")
+	assert.Equal(t, 1, h.rec.count(), "the first lookup asks the node to rebirth")
+	_, err = h.tr.LookupMetric(devT, "Valve")
+	assert.ErrorIs(t, err, ErrNotBorn)
+	assert.Equal(t, 1, h.rec.count(), "inside the backoff window it does not ask again")
+	_, err = h.tr.RevalidateMetric(old)
+	assert.ErrorIs(t, err, ErrNotBorn)
+
+	// Paired control: the node's answer (same bdSeq) rebuilds the table, and a lookup works again
+	// without asking.
+	h.tr.Observe(nTop(NBIRTH), pl(0, bdSeqM(5), declared("Setpoint", datatypeInt8, 8)))
+	got, err := h.tr.LookupMetric(nodeT, "Setpoint")
+	require.NoError(t, err)
+	assert.Equal(t, uint64(8), got.Alias)
+	assert.Equal(t, 1, h.rec.count())
+	_, err = h.tr.LookupMetric(devT, "Valve")
+	assert.ErrorIs(t, err, ErrNotBorn, "the device waits for its own DBIRTH")
+	h.tr.Observe(dTop(DBIRTH, "d1"), pl(1, declared("Valve", datatypeBoolean, 9)))
+	_, err = h.tr.LookupMetric(devT, "Valve")
+	assert.NoError(t, err)
+}
+
+// A node that is not live is not asked: an invalidated flag belongs to a live session only.
+func TestHostSessionEndAsksOnlyForLiveNodes(t *testing.T) {
+	h := newHarness(defaultRebirthBackoff)
+	bornNode(h)
+	h.tr.Observe(nTop(NDEATH), pl(-1, bdSeqM(5)))
 	h.tr.EndHostSession()
 	_, err := h.tr.LookupMetric(nodeT, "Setpoint")
-	assert.ErrorIs(t, err, ErrMetricUnknown, "the node's session is kept, its table is not addressable")
-	_, err = h.tr.RevalidateMetric(old)
-	assert.Error(t, err)
+	assert.ErrorIs(t, err, ErrNotBorn)
+	assert.Equal(t, 0, h.rec.count(), "a dead node is not asked to rebirth")
 }

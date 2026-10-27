@@ -155,7 +155,7 @@ func TestCommandRefusals(t *testing.T) {
 		{"1.5 into an integer", 3, 1.5}, {"1.5 json.Number into an integer", 3, json.Number("1.5")},
 		{"NaN into an integer", 3, nan()}, {"string into Int32", 3, "5"}, {"bool into Int32", 3, true},
 		{"nil into Int32", 3, nil}, {"string into Float", 9, "1.5"}, {"bool into Double", 10, true},
-		{"Float overflow", 9, 1e39}, {"Double inf", 10, inf()},
+		{"Float overflow", 9, 1e39}, {"Float underflow to zero", 9, 1e-50}, {"Double inf", 10, inf()},
 		{"number into Boolean", 11, 1}, {"string into Boolean", 11, "true"}, {"nil into Boolean", 11, nil},
 		{"number into String", 12, 5}, {"bool into Text", 14, false},
 		{"string too long", 12, long}, {"invalid UTF-8", 12, "\xff\xfe"},
@@ -169,6 +169,19 @@ func TestCommandRefusals(t *testing.T) {
 			assert.Nil(t, got, "a refused value must produce no payload")
 		})
 	}
+}
+
+// The 2^53 refusal tells the caller what would work, and only where it would: a string of digits
+// is not accepted for Int8/16/32, so it must not be suggested there.
+func TestBeyondExactFloatMessageDependsOnTheType(t *testing.T) {
+	_, err := EncodeMetricValue(datatypeInt64, 1e17)
+	require.ErrorIs(t, err, ErrValueRefused)
+	assert.Contains(t, err.Error(), "string of digits")
+	_, err = EncodeMetricValue(datatypeInt32, 1e17)
+	require.ErrorIs(t, err, ErrValueRefused)
+	assert.NotContains(t, err.Error(), "string of digits")
+	_, err = EncodeMetricValue(datatypeFloat, 1e-39) // a float32 subnormal, not zero: accepted
+	assert.NoError(t, err)
 }
 
 // Datatypes commands do not carry are refused by their own error, so S3 can word the reason.
