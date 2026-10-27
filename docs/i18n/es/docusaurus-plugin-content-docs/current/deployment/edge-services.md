@@ -748,18 +748,18 @@ agente de borde, haz que tu tratamiento de las lecturas tolere una repetición.
 
 ## Qué vigilar {#what-to-watch}
 
-:::note Se distribuyen siete alertas para estos dos servicios
-El chart distribuye siete reglas de alerta para sparkplug-ingest y lwm2m-ingest, descritas en
+:::note Se distribuyen diez alertas para estos dos servicios
+El chart distribuye diez reglas de alerta para sparkplug-ingest y lwm2m-ingest, descritas en
 [Alertas que se distribuyen](#edge-alerts): si cada transporte se está leyendo siquiera, un líder de
-LwM2M atascado y las maneras en que los dos servicios pierden datos. **Cualquier otra métrica de las
+LwM2M atascado las maneras en que los dos servicios pierden datos y el canal descendente de comandos de Sparkplug. **Cualquier otra métrica de las
 tablas de abajo no tiene alerta ni panel.** Se emite y se recoge, y nada te avisará de ella hasta que
 escribas la regla tú mismo. El agente de borde no tiene ninguna alerta distribuida.
 :::
 
 Todas las métricas llevan el prefijo `devicechain_` y el segmento de su propio servicio:
 `devicechain_sparkplugingest_`, `devicechain_lwm2mingest_`, `devicechain_edge_`. Ninguna está
-etiquetada por dispositivo ni por inquilino, así que ninguna supone un riesgo de cardinalidad al
-recogerla.
+etiquetada por dispositivo. Solo `command_breaker_state` lleva las etiquetas `tenant` y `source`, acotadas
+por las fuentes que configuras, así que ninguna supone un riesgo de cardinalidad al recogerla.
 
 ### Alertas que se distribuyen {#edge-alerts}
 
@@ -772,6 +772,9 @@ recogerla.
 | `SparkplugIngestBrokerUnreachable` | warning | En los últimos 10 minutos, durante 10 minutos, sparkplug-ingest no ha logrado conectar con un broker Sparkplug configurado. La preparación deliberadamente no depende de que el broker sea alcanzable, así que el pod parece sano mientras esa fuente no ingiere nada. | Lo provocan un host incorrecto, una credencial rechazada o una caída del broker. El log de sparkplug-ingest nombra la fuente y el motivo. Se cuenta en `connect_failures_total`. |
 | `SparkplugIngestSubscriptionRefused` | warning | En los últimos 15 minutos, durante 5 minutos, una fuente Sparkplug ha sido abandonada y reintentada porque su broker aceptó la conexión pero rechazó, o nunca confirmó, la suscripción a un grupo. Mientras se rechace algún grupo, la fuente no ingiere ninguno de sus grupos y nunca anuncia ONLINE. | Compara las reglas de acceso del broker para la credencial de la fuente con los grupos configurados para ella; lo más probable es que la credencial no pueda leer alguno. Se cuenta en `subscribe_failures_total`. |
 | `SparkplugIngestDroppingData` | warning | En los últimos 10 minutos, durante 10 minutos, sparkplug-ingest ha abandonado mensajes que aceptó: sus lecturas o transiciones de presencia se descartaron tras agotarse el presupuesto de reintentos, en el acto bajo contrapresión, o al apagarse. Un Host Sparkplug no recibe reentrega del broker, así que cada uno se pierde. | Revisa device-management y el broker de mensajes, y el log de sparkplug-ingest en busca de `Dropping Sparkplug samples`. Se cuenta en `ingest_failures_total`. |
+| `SparkplugCommandsUnconfirmed` | warning | Durante 15 minutos, más del 90 % de los comandos Sparkplug publicados en los últimos 30 minutos (al menos 20) terminaron sin que el nodo informara del valor solicitado. Sparkplug no tiene confirmación de comandos, así que así se ve una vía de comandos que no funciona. Los comandos se registran como TIMEOUT, no como fallidos. | Comprueba que la credencial de la fuente puede publicar en los topics `NCMD` y `DCMD`, que `commands.hostRole` corresponde a cómo están configurados los nodos (un nodo puede ignorar a un host que no es su primario) y si `commands.confirmWindowSeconds` es menor que el retraso con que informan los nodos. Se cuenta en `commands_total{result="unconfirmed"}`. |
+| `SparkplugCommandBreakerOpen` | warning | En los últimos 20 minutos, el cortacircuitos de comandos de una fuente se abrió. Se abre cuando el broker del cliente cierra la sesión del Host justo después de publicar un comando, lo que casi siempre significa que la credencial no puede publicar en `spBv1.0/<group>/NCMD/+` ni en `spBv1.0/<group>/DCMD/+/+`. Mientras está abierto, los comandos a esa fuente fallan al instante como no entregados; la telemetría de la fuente no se ve afectada. | Concede el permiso de publicación en el broker. La alerta se silencia 20 minutos después de la última apertura del cortacircuitos; no espera a que se cierre. Tras su pausa (5 minutos, que se duplica hasta 1 hora en cada reapertura) queda semiabierto, con valor 2 en `command_breaker_state`, y solo se cierra cuando se publica el siguiente comando sin desconexión, así que una fuente sin comandos en espera se queda en 2 sin alertar. La alerta indica el tenant y la fuente. |
+| `SparkplugCommandResponsesFailing` | warning | Durante 5 minutos, sparkplug-ingest ha contado comandos que no pudo llevar a término, por `result`: `claim_failed`, `park_failed` y `response_failed` significan que no se pudo contactar con command-delivery o que rechazó la llamada; `kv_failed` significa que no se pudo escribir el almacén de comandos pendientes de confirmación, así que el comando no se publicó; `publish_failed` significa que una publicación pudo llegar o no al nodo. | Revisa command-delivery y el broker de mensajes, y el log de sparkplug-ingest. Los rechazos y los comandos sin confirmar son resultados, no fallos, y no cuentan aquí. Se cuenta en `commands_total`. |
 
 ### Las alertas de líder {#no-leader-alert}
 
@@ -820,6 +823,11 @@ Prefijo: `devicechain_sparkplugingest_`.
 | `ingest_samples_shed_total` | Lecturas DATA descartadas porque un inquilino supera su techo de ingesta. Un inquilino que descarta aquí envía más lecturas de las que permite su nivel. |
 | `tenant_deleted_dropped_total` | Tráfico rechazado porque su inquilino está siendo eliminado. |
 | `samples_too_old_dropped_total` | Lecturas descartadas porque su marca de tiempo es anterior en más de 366 días al momento en que el host las recibió; el resto de su mensaje se almacena. Una métrica cuyo valor no ha cambiado en ese tiempo se descarta de cada nacimiento, y un nodo sin reloj configurado (horas cercanas a 1970) ve descartadas todas sus lecturas. El servicio registra un aviso que nombra el dispositivo. |
+| `commands_total` | Comandos que gestionó el canal descendente, por `result`. Resultados: `published`, `confirmed`, `confirmed_unchanged`, `unconfirmed`, `superseded`, `rearmed`, `parked`, `drained`; rechazos: `refused_disabled`, `refused_breaker`, `refused_expired`, `refused_payload`, `refused_not_allowed`, `refused_metric`, `refused_datatype`, `refused_reboot_gate`; que no son de este servicio: `not_served`, `poison`, `claim_lost`, `tenant_gone`; fallos: `claim_failed`, `park_failed`, `publish_failed`, `kv_failed`, `response_failed`. Es cero hasta que una fuente habilita los comandos. Alimenta `SparkplugCommandsUnconfirmed` (sin confirmar sobre publicados) y `SparkplugCommandResponsesFailing` (los cinco fallos). |
+| `commands_awaiting` | Comandos publicados a la espera de que el nodo informe del valor solicitado. |
+| `command_confirm_seconds` | Cuánto tardaron los comandos confirmados desde la publicación hasta el informe del nodo. Los comandos sin confirmar no se observan aquí. |
+| `command_breaker_state` | Por `tenant` y `source`: 0 cerrado, 1 abierto (los comandos fallan al instante), 2 semiabierto (se deja pasar un comando). Alimenta `SparkplugCommandBreakerOpen`. |
+| `command_breaker_trips_total` | Veces que se ha abierto un cortacircuitos. Una tasa aquí con `SparkplugCommandBreakerOpen` en silencio indica un broker que cerró la sesión una vez. |
 
 ### Métricas de la ingesta LwM2M {#lwm2m-ingestion-metrics}
 

@@ -700,17 +700,18 @@ the readings tolerant of a repeat.
 
 ## What to watch {#what-to-watch}
 
-:::note Seven alerts ship for these two services
-The chart ships seven alert rules for sparkplug-ingest and lwm2m-ingest, described under
+:::note Ten alerts ship for these two services
+The chart ships ten alert rules for sparkplug-ingest and lwm2m-ingest, described under
 [Alerts that ship](#edge-alerts): whether each transport is being read at all, a LwM2M leader that is
-stuck, and the ways the two services drop data. **Every other metric in the tables below has no alert
+stuck, the ways the two services drop data, and the Sparkplug command downlink. **Every other metric in the tables below has no alert
 and no dashboard panel.** It is emitted and scraped, and nothing will page you about it until you write
 the rule yourself. The edge agent has no shipped alert at all.
 :::
 
 All metrics carry the `devicechain_` prefix and their service's own segment:
 `devicechain_sparkplugingest_`, `devicechain_lwm2mingest_`, `devicechain_edge_`. None of them is
-labelled per device or per tenant, so none of them is a cardinality risk to scrape.
+labelled per device. Only `command_breaker_state` carries `tenant` and `source` labels, and those are
+bounded by the sources you configure, so none of them is a cardinality risk to scrape.
 
 ### Alerts that ship {#edge-alerts}
 
@@ -723,6 +724,9 @@ labelled per device or per tenant, so none of them is a cardinality risk to scra
 | `SparkplugIngestBrokerUnreachable` | warning | In the last 10 minutes, for 10 minutes, sparkplug-ingest has failed to connect to a configured Sparkplug broker. Readiness is deliberately not gated on broker reachability, so the pod looks healthy while that source ingests nothing. | A bad host, a rejected credential or a broker outage all raise it. The sparkplug-ingest log names the source and the reason. Counted in `connect_failures_total`. |
 | `SparkplugIngestSubscriptionRefused` | warning | In the last 15 minutes, for 5 minutes, a Sparkplug source has been abandoned and retried because its broker accepted the connection but refused, or never acknowledged, a group subscription. While any group is refused, the source ingests none of its groups and never announces ONLINE. | Compare the broker's access rules for the source's credential with the groups configured for it; the credential most likely may not read one of them. Counted in `subscribe_failures_total`. |
 | `SparkplugIngestDroppingData` | warning | In the last 10 minutes, for 10 minutes, sparkplug-ingest has abandoned messages it accepted: their readings or presence transitions were dropped after the retry budget was spent, at once under backpressure, or at shutdown. A Sparkplug Host gets no broker redelivery, so each one is lost. | Check device-management and the message broker, and the sparkplug-ingest log for `Dropping Sparkplug samples`. Counted in `ingest_failures_total`. |
+| `SparkplugCommandsUnconfirmed` | warning | For 15 minutes, more than 90% of the Sparkplug commands published in the last 30 minutes (at least 20 of them) ended without the node reporting the requested value. Sparkplug has no command acknowledgement, so this is how a command path that does not work looks. The commands are recorded as TIMEOUT, not as failed. | Check that the source's credential may publish on the `NCMD` and `DCMD` topics, that `commands.hostRole` matches how the nodes are configured (a node may ignore a host that is not its primary), and whether `commands.confirmWindowSeconds` is shorter than the nodes' reporting delay. Counted in `commands_total{result="unconfirmed"}`. |
+| `SparkplugCommandBreakerOpen` | warning | In the last 20 minutes, the command circuit breaker of a source opened. It opens when the customer broker drops the Host session right after a command is published, which almost always means the credential may not publish on `spBv1.0/<group>/NCMD/+` and `spBv1.0/<group>/DCMD/+/+`. While it is open, commands to that source fail at once as not delivered; the source's telemetry is not affected. | Grant the publish permission on the broker. The alert goes quiet 20 minutes after the last time the breaker opened; it does not wait for the breaker to close. After its pause (5 minutes, doubling to 1 hour on each re-open) the breaker is half-open, reading 2 in `command_breaker_state`, and closes only when the next command is published without a disconnect, so a source with no commands waiting stays at 2 without alerting. The alert names the tenant and the source. |
+| `SparkplugCommandResponsesFailing` | warning | For 5 minutes, sparkplug-ingest has counted commands it could not carry through, by `result`: `claim_failed`, `park_failed` and `response_failed` mean command-delivery could not be reached or refused the call; `kv_failed` means the store of commands awaiting confirmation could not be written, so the command was not published; `publish_failed` means a publish may or may not have reached the node. | Check command-delivery and the message broker, and the sparkplug-ingest log. Refusals and unconfirmed commands are outcomes, not faults, and do not count here. Counted in `commands_total`. |
 
 ### The leader alerts {#no-leader-alert}
 
@@ -770,6 +774,11 @@ Prefix: `devicechain_sparkplugingest_`.
 | `ingest_samples_shed_total` | DATA readings dropped because a tenant is over its ingest ceiling. A tenant shedding here sends more readings than its tier allows. |
 | `tenant_deleted_dropped_total` | Traffic refused because its tenant is being deleted. |
 | `samples_too_old_dropped_total` | Readings dropped because their timestamp is more than 366 days before the host received them; the rest of their message is stored. A metric whose value has not changed for that long is dropped from every birth, and a node with no clock set (times near 1970) has all its readings dropped. The service logs a warning naming the device. |
+| `commands_total` | Commands the downlink handled, by `result`. Outcomes: `published`, `confirmed`, `confirmed_unchanged`, `unconfirmed`, `superseded`, `rearmed`, `parked`, `drained`; refusals: `refused_disabled`, `refused_breaker`, `refused_expired`, `refused_payload`, `refused_not_allowed`, `refused_metric`, `refused_datatype`, `refused_reboot_gate`; not this service's: `not_served`, `poison`, `claim_lost`, `tenant_gone`; faults: `claim_failed`, `park_failed`, `publish_failed`, `kv_failed`, `response_failed`. Zero until a source enables commands. Feeds `SparkplugCommandsUnconfirmed` (unconfirmed over published) and `SparkplugCommandResponsesFailing` (the five faults). |
+| `commands_awaiting` | Published commands waiting for the node to report the requested value. |
+| `command_confirm_seconds` | How long confirmed commands took from publish to the node's report. Unconfirmed commands are not observed here. |
+| `command_breaker_state` | Per `tenant` and `source`: 0 closed, 1 open (commands fail fast), 2 half-open (one command is let through). Feeds `SparkplugCommandBreakerOpen`. |
+| `command_breaker_trips_total` | Times a breaker has opened. A rate here with `SparkplugCommandBreakerOpen` quiet is a broker that dropped the session once. |
 
 ### LwM2M ingestion metrics {#lwm2m-ingestion-metrics}
 

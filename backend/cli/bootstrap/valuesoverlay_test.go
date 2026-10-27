@@ -218,6 +218,9 @@ func TestARefusedKeyIsNamedAndRefusedBeforeAnyChange(t *testing.T) {
 		"functionalAreas.user-management.config.auth.issuerUrl":                        "functionalAreas:\n  user-management:\n    config:\n      auth:\n        issuerUrl: https://evil.example\n",
 		"functionalAreas.device-state.config.rdbConfiguration.sqlDebug":                "functionalAreas:\n  device-state:\n    config:\n      rdbConfiguration:\n        sqlDebug: true\n",
 		"functionalAreas.event-management.config.tsdbConfiguration.maxOpenConnections": "functionalAreas:\n  event-management:\n    config:\n      tsdbConfiguration:\n        maxOpenConnections: 80\n",
+		// Derived by the chart from the Sparkplug sources, in any spelling the service would bind.
+		"functionalAreas.command-delivery.config.sparkplugCommands": "functionalAreas:\n  command-delivery:\n    config:\n      sparkplugCommands: true\n",
+		"functionalAreas.command-delivery.config.SparkplugCommands": "functionalAreas:\n  command-delivery:\n    config:\n      SparkplugCommands: true\n",
 		// ...in any spelling the service would bind: the services match keys as encoding/json does.
 		"functionalAreas.device-management.config.DeviceAuthMode":                "functionalAreas:\n  device-management:\n    config:\n      DeviceAuthMode: disabled\n",
 		"functionalAreas.event-management.config.TsdbConfiguration.MaxOpenConns": "functionalAreas:\n  event-management:\n    config:\n      TsdbConfiguration:\n        MaxOpenConns: 80\n",

@@ -395,11 +395,11 @@ Sparkplug 按租户接入上限计量 DATA 消息中的读数，并丢弃超出�
 
 ## 应监控什么 {#what-to-watch}
 
-:::note 这两个服务附带七条告警
-Chart 为 sparkplug-ingest 和 lwm2m-ingest 附带七条告警规则，见[随附告警](#edge-alerts)：每种传输是否在被读取、卡住的 LwM2M 主实例，以及两个服务丢弃数据的几种情形。**下表中其余所有指标都没有告警，也没有仪表盘面板。** 指标都会发出并被抓取，但编写自己的规则前，不会通知你。边缘代理没有任何随附告警。
+:::note 这两个服务附带十条告警
+Chart 为 sparkplug-ingest 和 lwm2m-ingest 附带十条告警规则，见[随附告警](#edge-alerts)：每种传输是否在被读取、卡住的 LwM2M 主实例，两个服务丢弃数据的几种情形，以及 Sparkplug 命令下行通道。**下表中其余所有指标都没有告警，也没有仪表盘面板。** 指标都会发出并被抓取，但编写自己的规则前，不会通知你。边缘代理没有任何随附告警。
 :::
 
-所有指标带 `devicechain_` 和服务段前缀：`devicechain_sparkplugingest_`、`devicechain_lwm2mingest_`、`devicechain_edge_`。没有逐设备或逐租户标签，因此抓取不存在相应高基数风险。
+所有指标带 `devicechain_` 和服务段前缀：`devicechain_sparkplugingest_`、`devicechain_lwm2mingest_`、`devicechain_edge_`。没有逐设备标签。只有 `command_breaker_state` 带有 `tenant` 和 `source` 标签，其数量受你配置的来源限制，因此抓取不存在高基数风险。
 
 ### 随附告警 {#edge-alerts}
 
@@ -412,6 +412,9 @@ Chart 为 sparkplug-ingest 和 lwm2m-ingest 附带七条告警规则，见[随�
 | `SparkplugIngestBrokerUnreachable` | warning | 过去 10 分钟内，持续 10 分钟，sparkplug-ingest 连接某个已配置的 Sparkplug 代理失败。就绪状态刻意不以代理可达为条件，因此 Pod 看起来健康，而该来源什么也没有接入。 | 主机错误、凭据被拒绝或代理故障都会触发。sparkplug-ingest 日志会指出来源和原因。计入 `connect_failures_total`。 |
 | `SparkplugIngestSubscriptionRefused` | warning | 过去 15 分钟内，持续 5 分钟，某个 Sparkplug 来源因其代理接受了连接，却拒绝或从未确认某个分组订阅，而被放弃并重试。只要有任一分组被拒绝，该来源就不接入其任何分组，也从不宣告 ONLINE。 | 将代理对该来源凭据的访问规则与为其配置的分组进行比较；最可能是该凭据无权读取其中某个分组。计入 `subscribe_failures_total`。 |
 | `SparkplugIngestDroppingData` | warning | 过去 10 分钟内，持续 10 分钟，sparkplug-ingest 放弃了它已接受的消息：其读数或在线状态转换在重试预算用尽后、在背压下立即，或在关闭时被丢弃。Sparkplug 主机不会得到代理的重投递，因此每一条都会丢失。 | 检查 device-management 和消息代理，并在 sparkplug-ingest 日志中查找 `Dropping Sparkplug samples`。计入 `ingest_failures_total`。 |
+| `SparkplugCommandsUnconfirmed` | warning | 持续 15 分钟，过去 30 分钟内发布的 Sparkplug 命令（至少 20 条）中超过 90% 在结束时节点都没有报告所请求的值。Sparkplug 没有命令确认机制，命令通路不通时就是这种表现。这些命令记录为 TIMEOUT，而不是失败。 | 检查来源的凭据是否可以在 `NCMD` 和 `DCMD` 主题上发布，`commands.hostRole` 是否与节点的配置相符（节点可能忽略不是其主主机的主机），以及 `commands.confirmWindowSeconds` 是否短于节点的上报延迟。计入 `commands_total{result="unconfirmed"}`。 |
+| `SparkplugCommandBreakerOpen` | warning | 过去 20 分钟内，某个来源的命令断路器曾打开。客户代理在命令刚发布后就断开 Host 会话时它会打开，这几乎总是意味着凭据无权在 `spBv1.0/<group>/NCMD/+` 和 `spBv1.0/<group>/DCMD/+/+` 上发布。打开期间，发往该来源的命令立即以未送达失败；该来源的遥测不受影响。 | 在代理上授予发布权限。告警在断路器最后一次打开 20 分钟后恢复安静，不等待断路器关闭。暂停（5 分钟，每次重新打开翻倍，最长 1 小时）结束后断路器进入半开，`command_breaker_state` 读数为 2，只有下一条命令发布后没有断连才会关闭，因此没有待发命令的来源会停在 2，但不会告警。告警会指出租户和来源。 |
+| `SparkplugCommandResponsesFailing` | warning | 持续 5 分钟，sparkplug-ingest 一直在统计无法完成处理的命令，按 `result` 区分：`claim_failed`、`park_failed` 和 `response_failed` 表示无法连接 command-delivery 或其拒绝了调用；`kv_failed` 表示无法写入待确认命令的存储，因此该命令未发布；`publish_failed` 表示一次发布可能到达也可能没有到达节点。 | 检查 command-delivery 和消息代理，以及 sparkplug-ingest 日志。被拒绝的命令和未确认的命令是结果而不是故障，不计入此处。计入 `commands_total`。 |
 
 ### 主实例告警 {#no-leader-alert}
 
@@ -446,6 +449,11 @@ Chart 为 sparkplug-ingest 和 lwm2m-ingest 附带七条告警规则，见[随�
 | `ingest_samples_shed_total` | 租户超过接入限额而丢弃的 DATA 读数，表示发送量超过层级允许值。 |
 | `tenant_deleted_dropped_total` | 租户正在删除而拒绝的流量。 |
 | `samples_too_old_dropped_total` | 时间戳早于主机接收时刻超过 366 天的读数，消息其他部分仍存储。超过这么久未变化的指标，每次 birth 都会丢弃；未设时钟、时间接近 1970 的节点全部读数会丢弃。服务警告日志列出设备。 |
+| `commands_total` | 下行通道处理的命令，按 `result` 区分。结果：`published`、`confirmed`、`confirmed_unchanged`、`unconfirmed`、`superseded`、`rearmed`、`parked`、`drained`；拒绝：`refused_disabled`、`refused_breaker`、`refused_expired`、`refused_payload`、`refused_not_allowed`、`refused_metric`、`refused_datatype`、`refused_reboot_gate`；不属于本服务：`not_served`、`poison`、`claim_lost`、`tenant_gone`；故障：`claim_failed`、`park_failed`、`publish_failed`、`kv_failed`、`response_failed`。在有来源启用命令之前为零。供给 `SparkplugCommandsUnconfirmed`（未确认除以已发布）和 `SparkplugCommandResponsesFailing`（五种故障）。 |
+| `commands_awaiting` | 已发布、正等待节点上报所请求值的命令。 |
+| `command_confirm_seconds` | 已确认命令从发布到节点上报所用的时间。未确认的命令不在此处观测。 |
+| `command_breaker_state` | 按 `tenant` 和 `source`：0 关闭，1 打开（命令立即失败），2 半开（放行一条命令）。供给 `SparkplugCommandBreakerOpen`。 |
+| `command_breaker_trips_total` | 断路器打开的次数。此处有速率而 `SparkplugCommandBreakerOpen` 保持安静，说明代理曾断开过一次会话。 |
 
 ### LwM2M 接入指标 {#lwm2m-ingestion-metrics}
 

@@ -304,12 +304,111 @@ rendered claim and its mount always agree.
 {{- end -}}
 
 {{/*
+devicechain.foldedKeyOnce fails the render when a map holds the same key twice under different
+capitalisation (sources and Sources). The service decodes like encoding/json, which keeps only the
+last one it reads, and Go map order is not that order, so the chart could not say which one is
+live. Takes {map, key (lower case), where}.
+*/}}
+{{- define "devicechain.foldedKeyOnce" -}}
+{{- $key := .key -}}
+{{- $where := .where -}}
+{{- $n := 0 -}}
+{{- range $k, $_ := .map -}}{{- if eq (lower $k) $key -}}{{- $n = add1 $n -}}{{- end -}}{{- end -}}
+{{- if gt $n 1 -}}
+{{- fail (printf "%s sets the key %q more than once under different capitalisation. The service keeps only the last one it reads and the chart cannot tell which that is, so keep one." $where $key) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+devicechain.sparkplugCommandsEnabled renders "true" when some Sparkplug source of this install
+turns the command downlink on (functionalAreas.sparkplug-ingest.config.sources[].commands.enabled),
+and "" otherwise. It is the one place that fact is read, so the flag command-delivery receives
+and the refusals below cannot disagree about it.
+
+The service decodes its configuration the way encoding/json does, which matches keys without
+regard to case, so every key is found the same way here: a block spelled Commands/Enabled turns
+the downlink on in the service, and a chart that missed it would leave command-delivery refusing
+every Sparkplug command while the adapter was ready to send them.
+
+It fails the render, rather than leaving the pod to find out, when the downlink is on but
+  - command-delivery is not among the enabled areas (the adapter claims, parks and answers every
+    command through it, so with the area absent each command would sit unclaimed), or
+  - infrastructure.commandDelivery has no hostname or port (the adapter has nowhere to reach it), or
+  - enabled is not a boolean (a string "true" would be refused by the service at start).
+*/}}
+{{- define "devicechain.sparkplugCommandsEnabled" -}}
+{{- $areas := splitList "," (include "devicechain.enabledAreas" .) -}}
+{{- $on := false -}}
+{{- if has "sparkplug-ingest" $areas -}}
+{{- $cfg := get (get (.Values.functionalAreas | default dict) "sparkplug-ingest" | default dict) "config" | default dict -}}
+{{- $_ := include "devicechain.foldedKeyOnce" (dict "map" $cfg "key" "sources" "where" "functionalAreas.sparkplug-ingest.config") -}}
+{{- range $k, $sources := $cfg -}}
+{{- if eq (lower $k) "sources" -}}
+{{- range $src := ($sources | default list) -}}
+{{- $_ := include "devicechain.foldedKeyOnce" (dict "map" $src "key" "commands" "where" "A Sparkplug source") -}}
+{{- range $sk, $sv := $src -}}
+{{- if eq (lower $sk) "commands" -}}
+{{- $_ := include "devicechain.foldedKeyOnce" (dict "map" ($sv | default dict) "key" "enabled" "where" "A Sparkplug source's commands block") -}}
+{{- range $ck, $cv := ($sv | default dict) -}}
+{{- if eq (lower $ck) "enabled" -}}
+{{- if not (kindIs "bool" $cv) -}}
+{{- fail (printf "functionalAreas.sparkplug-ingest.config.sources[].commands.enabled must be true or false (got %v)" $cv) -}}
+{{- end -}}
+{{- if $cv -}}{{- $on = true -}}{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if $on -}}
+{{- if not (has "command-delivery" $areas) -}}
+{{- fail "a Sparkplug source has commands.enabled, which needs command-delivery: the adapter claims, parks and answers every command through it. Enable the area (it is part of every profile except ingest-only and telemetry), or turn commands off on the source." -}}
+{{- end -}}
+{{- $cd := (((.Values.instance.config | default dict).infrastructure | default dict).commandDelivery | default dict) -}}
+{{- if or (not $cd.hostname) (not $cd.port) -}}
+{{- fail "a Sparkplug source has commands.enabled, but instance.config.infrastructure.commandDelivery has no hostname and port, so sparkplug-ingest could not reach command-delivery. Restore the chart default (hostname command-delivery, port 8080) or turn commands off on the source." -}}
+{{- end -}}
+true
+{{- end -}}
+{{- end -}}
+
+{{/*
+devicechain.commandDeliveryMergedConfig is the config command-delivery actually receives, as JSON:
+the operator's explicit value with sparkplugCommands set to true exactly when
+devicechain.sparkplugCommandsEnabled says some source sends commands. Nobody authors that key. A
+hand-set copy, in any spelling, fails the render: a value that can be written independently of the
+sources is a value that can say "Sparkplug commands are deliverable" while no source sends them, or
+the reverse, and command-delivery's verdict for every Sparkplug device follows it.
+
+The explicit config is COPIED first -- `set` on a dict from .Values would edit the values
+themselves, and every later template would see the edit.
+*/}}
+{{- define "devicechain.commandDeliveryMergedConfig" -}}
+{{- $cfg := deepCopy (get (get (.Values.functionalAreas | default dict) "command-delivery" | default dict) "config" | default dict) -}}
+{{- range $k, $_ := $cfg -}}
+{{- if eq (lower $k) "sparkplugcommands" -}}
+{{- fail "functionalAreas.command-delivery.config.sparkplugCommands is derived by the chart from the Sparkplug sources' commands.enabled and cannot be set by hand. Set commands.enabled on the source in functionalAreas.sparkplug-ingest.config.sources instead." -}}
+{{- end -}}
+{{- end -}}
+{{- if include "devicechain.sparkplugCommandsEnabled" . -}}
+{{- $_ := set $cfg "sparkplugCommands" true -}}
+{{- end -}}
+{{- $cfg | toJson -}}
+{{- end -}}
+
+{{/*
 The per-service config ConfigMap `data` block: one key per enabled area. Factored
 out so the rendered ConfigMap and the E8 checksum annotation are computed from the
 exact same source. Takes the root context.
 */}}
 {{- define "devicechain.microserviceConfig" -}}
 {{- $root := . -}}
+{{- /* Evaluated here, not only where command-delivery's config is built: the refusals inside it
+       are about command-delivery being ABSENT, and that branch never runs then. */ -}}
+{{- $_ := include "devicechain.sparkplugCommandsEnabled" $root -}}
 {{- range $area := splitList "," (include "devicechain.enabledAreas" $root) }}
 {{- $areaCfg := get ($root.Values.functionalAreas | default dict) $area | default dict }}
 {{- $cfg := get $areaCfg "config" | default dict }}
@@ -320,6 +419,8 @@ exact same source. Takes the root context.
 {{- $cfg = include "devicechain.userManagementMergedConfig" $root | fromJson }}
 {{- else if eq $area "update-management" }}
 {{- $cfg = include "devicechain.updateManagementMergedConfig" $root | fromJson }}
+{{- else if eq $area "command-delivery" }}
+{{- $cfg = include "devicechain.commandDeliveryMergedConfig" $root | fromJson }}
 {{- end }}
 {{ $area }}: {{ $cfg | toJson | quote }}
 {{- end }}

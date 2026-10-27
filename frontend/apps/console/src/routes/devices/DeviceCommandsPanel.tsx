@@ -21,6 +21,9 @@ import { HintText } from '@/components/ui/hint-text';
 import { FormField } from '@/components/ui/form-field';
 import { CommandParameterForm } from './CommandParameterForm';
 import { HeldWhileDisabledNotice } from './HeldWhileDisabledNotice';
+import { EMPTY_SPARKPLUG_WRITE, SparkplugWriteForm, type SparkplugWriteValues } from './SparkplugWriteForm';
+import { SparkplugOutcomeNote } from './SparkplugOutcomeNote';
+import { SPARKPLUG_WRITE_KEY, buildSparkplugWritePayload, type SparkplugWriteErrors } from './sparkplugCommands';
 import { LoadingState } from '@/components/ui/loading-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -81,6 +84,11 @@ export function DeviceCommandsPanel({ deviceToken }: { deviceToken: string }) {
   const [selectedKey, setSelectedKey] = useState('');
   const [paramValues, setParamValues] = useState<Record<string, string>>({});
   const [paramErrors, setParamErrors] = useState<Record<string, string>>({});
+  // `sparkplug.write` is the one command whose form is not generated from a parameter
+  // schema: the metric and its datatype belong to the node's birth, so the console offers
+  // two free-text fields and the adapter checks them. See sparkplugCommands.ts.
+  const [sparkplugWrite, setSparkplugWrite] = useState<SparkplugWriteValues>(EMPTY_SPARKPLUG_WRITE);
+  const [sparkplugErrors, setSparkplugErrors] = useState<SparkplugWriteErrors>({});
   const [submitting, setSubmitting] = useState(false);
   const [version, reload] = useReload();
 
@@ -123,6 +131,7 @@ export function DeviceCommandsPanel({ deviceToken }: { deviceToken: string }) {
   // command-button omits it. Two send paths that disagreed about which commands are
   // form-fillable would be the same divergence this slice exists to remove.
   const needsRawPayload = params.some((p) => !isScalar(p) && p.required);
+  const isSparkplugWrite = constrained && selectedKey === SPARKPLUG_WRITE_KEY;
 
   // Seed the value map whenever the selected command changes, so declared defaults are
   // pre-filled and a previous command's values never leak into the next one's payload.
@@ -131,6 +140,13 @@ export function DeviceCommandsPanel({ deviceToken }: { deviceToken: string }) {
     setParamErrors({});
     setPayload('');
   }, [params]);
+
+  // The same for the Sparkplug write form: another command's choice never carries a
+  // half-typed metric into this one, nor this one's into the next.
+  useEffect(() => {
+    setSparkplugWrite(EMPTY_SPARKPLUG_WRITE);
+    setSparkplugErrors({});
+  }, [selectedKey]);
 
   const issue = async () => {
     // Unconstrained devices keep the free-text path; constrained ones send the key the
@@ -142,7 +158,15 @@ export function DeviceCommandsPanel({ deviceToken }: { deviceToken: string }) {
     }
 
     let body: string | undefined;
-    if (constrained && !needsRawPayload) {
+    if (isSparkplugWrite) {
+      const built = buildSparkplugWritePayload(sparkplugWrite.metric, sparkplugWrite.value, sparkplugWrite.mode);
+      setSparkplugErrors(built.errors);
+      if (built.payload === undefined) {
+        toast(t('fixHighlightedParameters'), 'error');
+        return;
+      }
+      body = built.payload;
+    } else if (constrained && !needsRawPayload) {
       const errors = validateParams(params, paramValues);
       if (Object.keys(errors).length > 0) {
         setParamErrors(errors);
@@ -183,6 +207,7 @@ export function DeviceCommandsPanel({ deviceToken }: { deviceToken: string }) {
       setPayload('');
       setSelectedKey('');
       setParamValues({});
+      setSparkplugWrite(EMPTY_SPARKPLUG_WRITE);
       reload();
     } catch {
       // 🔴 ONE FIXED MESSAGE, not errMessage(err) — and this is the ONE mutation in the
@@ -260,7 +285,14 @@ export function DeviceCommandsPanel({ deviceToken }: { deviceToken: string }) {
               />
               </div>
             </FormField>
-            {selected && needsRawPayload ? (
+            {isSparkplugWrite ? (
+              <SparkplugWriteForm
+                values={sparkplugWrite}
+                errors={sparkplugErrors}
+                disabled={submitting}
+                onChange={setSparkplugWrite}
+              />
+            ) : selected && needsRawPayload ? (
               <FormField
                 label={t('payloadLabel')}
                 description={t('payloadStructuredHint')}
@@ -379,6 +411,7 @@ export function DeviceCommandsPanel({ deviceToken }: { deviceToken: string }) {
                 <DataTableCell>
                   <Badge variant={commandStatusVariant(command.status)}>{commandStatusLabel(t, command.status)}</Badge>
                   <CommandWaitingNote command={command} />
+                  <SparkplugOutcomeNote command={command} />
                 </DataTableCell>
                 <DataTableCell className="max-w-xs truncate text-muted-foreground">
                   {command.error || command.responsePayload || '—'}

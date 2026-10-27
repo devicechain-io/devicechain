@@ -2510,6 +2510,17 @@ jobs:
         # It also covers telemetry and ingest-only, which were rendered by nothing.
         run: hack/check-profile-workloads.sh
 
+      - name: Sparkplug commands flag derivation
+        # command-delivery's Sparkplug verdict follows one flag that nobody authors: the chart sets
+        # it exactly when a Sparkplug source enables commands. Off while a source sends leaves every
+        # command refused as having no downlink; on with no source sending leaves commands accepted
+        # and never answered. `helm lint` reports a template `fail` as INFO and exits 0, so this
+        # asserts the flag both ways through `helm template`, and that the combinations that cannot
+        # work fail the render. --self-test plants each defect alone first.
+        run: |
+          hack/check-sparkplug-commands-chart.sh --self-test
+          hack/check-sparkplug-commands-chart.sh
+
       - name: OAuth discovery routing
         # An MCP client's discovery walk is three requests, each derived from a string a
         # service handed it, and nothing inside a service can tell whether the URL it
