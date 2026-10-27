@@ -71,7 +71,7 @@ func TestAClaimRefusedForADisabledDeviceIsNotCountedAsLost(t *testing.T) {
 	off := queueFor(t, api, "c-off", "dev-off")
 	_, err := api.SetDeviceDisabled(gateTenantCtx(), "dev-off", true)
 	require.NoError(t, err)
-	require.NoError(t, proc.deliverCommand(context.Background(), off, pathSweep))
+	require.NoError(t, proc.deliverCommand(context.Background(), off, pathSweep, routing{}))
 
 	assert.Equal(t, 1.0, testutil.ToFloat64(refused), "the disabled refusal is not counted as one")
 	assert.Equal(t, 0.0, testutil.ToFloat64(lost.WithLabelValues(string(pathSweep))),
@@ -82,7 +82,7 @@ func TestAClaimRefusedForADisabledDeviceIsNotCountedAsLost(t *testing.T) {
 	_, claimed, err := api.MarkSent(gateTenantCtx(), on.ID)
 	require.NoError(t, err)
 	require.True(t, claimed)
-	require.NoError(t, proc.deliverCommand(context.Background(), on, pathSweep))
+	require.NoError(t, proc.deliverCommand(context.Background(), on, pathSweep, routing{}))
 
 	assert.Equal(t, 1.0, testutil.ToFloat64(lost.WithLabelValues(string(pathSweep))), "a real lost claim is still counted")
 	assert.Equal(t, 1.0, testutil.ToFloat64(refused), "a real lost claim was counted as a disabled refusal")

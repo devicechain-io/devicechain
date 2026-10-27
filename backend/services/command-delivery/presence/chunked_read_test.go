@@ -183,7 +183,7 @@ func TestAnUnreachedDeviceIsNotTheSameAsAnUnknownOne(t *testing.T) {
 	}
 	// A device nobody asked about is in neither map, and Decide still answers Dispatch —
 	// the fail-open the gate has always taken.
-	if v := Decide(states["a-device-not-in-this-batch"]); v != Dispatch {
+	if v := Decide(states["a-device-not-in-this-batch"], false); v != Dispatch {
 		t.Fatalf("an unknown device decided %v, want Dispatch", v)
 	}
 }

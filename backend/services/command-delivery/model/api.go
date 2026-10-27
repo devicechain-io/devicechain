@@ -201,6 +201,10 @@ type Api struct {
 	// WindowOpenings, when set, lets the re-stamp pass move waiting commands after their
 	// window is edited. Nil leaves stamps where they were written.
 	WindowOpenings WindowOpeningResolver
+	// CommandImpacts, when set, lets dispatch stamp a command's impact on the message for a
+	// transport adapter that gates on it. Nil leaves the stamp off, which an adapter reads as
+	// "impact unknown" and fails closed on.
+	CommandImpacts CommandImpactResolver
 	// GroupTargetResolver, when set, resolves a group-targeted batch to its devices.
 	// Nil makes a group target FAIL rather than resolve to nothing: an empty batch would
 	// report success for a fleet write that reached nobody.

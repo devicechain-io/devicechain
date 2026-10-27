@@ -58,3 +58,40 @@ func TestCurrentWindowsFailsClosedOnAMissingList(t *testing.T) {
 		})
 	}
 }
+
+// ImpactsFor returns exactly the impacts the owner named, keyed by device, in one call.
+func TestImpactsForRelaysTheOwnersClassification(t *testing.T) {
+	s := newWindowSchedulerAgainst(t, `{"data":{"commandDispatchSchedule":{"impacts":[
+	  {"deviceToken":"other","impact":"NORMAL"},{"deviceToken":"node-1","impact":"DISRUPTIVE"}]}}}`)
+	got, err := s.ImpactsFor(batchCtx(), []string{"node-1", "other", "gone"}, "sparkplug.reboot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got["node-1"] != "DISRUPTIVE" || got["other"] != "NORMAL" {
+		t.Fatalf("impacts = %v, want each device's own", got)
+	}
+	if _, ok := got["gone"]; ok {
+		t.Fatal("a device the owner decided nothing about must be ABSENT, never NORMAL")
+	}
+}
+
+// An empty impact is undecided, and a response that lost the field (an older owner) or the whole
+// schedule is a failure, not an empty decision.
+func TestImpactsForTreatsSilenceAsUndecidedAndALostFieldAsAFailure(t *testing.T) {
+	s := newWindowSchedulerAgainst(t, `{"data":{"commandDispatchSchedule":{"impacts":[{"deviceToken":"node-1","impact":""}]}}}`)
+	got, err := s.ImpactsFor(batchCtx(), []string{"node-1"}, "x")
+	if err != nil || len(got) != 0 {
+		t.Fatalf("empty impact: %v, %v; want no entry and no error", got, err)
+	}
+	for name, body := range map[string]string{
+		"field missing": `{"data":{"commandDispatchSchedule":{"holds":[],"refusals":[]}}}`,
+		"no schedule":   `{"data":{"commandDispatchSchedule":null}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := newWindowSchedulerAgainst(t, body)
+			if got, err := s.ImpactsFor(batchCtx(), []string{"node-1"}, "x"); err == nil {
+				t.Fatalf("got %v with no error; a lost field must be an error", got)
+			}
+		})
+	}
+}

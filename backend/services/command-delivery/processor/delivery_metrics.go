@@ -110,6 +110,13 @@ type DeliveryMetrics struct {
 	UndeliverableFailed prometheus.Counter
 	PresenceReadErrors  prometheus.Counter
 
+	// ImpactLookupFailures counts commands dispatched to a transport that gates on impact
+	// whose impact was not resolved (the owner could not decide, timed out, or is not wired), so
+	// the message went out WITHOUT the impact stamp. The
+	// adapter reads an absent stamp as unknown and refuses the dangerous class, so a standing
+	// rate here is a transport that cannot actuate disruptive commands, not a harmless blip.
+	ImpactLookupFailures prometheus.Counter
+
 	// DisabledGateErrors counts the times the disabled-device record could not be read for a
 	// dispatch batch (the batch is then NOT dispatched, because publishing is an actuation and
 	// the record is the only thing that says the device is shut out) or could not be corrected
@@ -304,6 +311,10 @@ func NewDeliveryMetrics(ms *core.Microservice) DeliveryMetrics {
 		PresenceReadErrors: ms.NewCounter("command_delivery_presence_read_errors_total",
 			"Sweep passes that could not read the presence projection; the gate fails OPEN, so a "+
 				"standing rate here means commands are being dispatched ungated"),
+		ImpactLookupFailures: ms.NewCounter("command_delivery_impact_lookup_failures_total",
+			"Commands dispatched without a command-impact stamp because device-management could not "+
+				"decide the impact. A transport that gates on impact (Sparkplug reboot) fails closed on "+
+				"an absent stamp, so a standing rate means those commands are being refused"),
 		DisabledGateErrors: ms.NewCounter("command_delivery_disabled_gate_errors_total",
 			"Times the disabled-device record could not be read for a dispatch batch (that batch "+
 				"is not dispatched) or could not be synced from device-management"),

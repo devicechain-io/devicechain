@@ -253,6 +253,17 @@ type DispatchSchedule struct {
 	Ungated []string
 	// Undefined: the profile version the device's type is on now does not define the command.
 	Undefined []string
+	// Impacts is the impact (NORMAL, DISRUPTIVE or DESTRUCTIVE) the device's type's current
+	// profile version gives the command, for every device whose type DEFINES it. It is the
+	// classification the window gate decided on, exposed so a transport adapter that gates on
+	// impact itself reads the same answer rather than re-deriving it.
+	Impacts []*CommandDispatchImpact
+}
+
+// CommandDispatchImpact is one device's command impact, as decided with the dispatch schedule.
+type CommandDispatchImpact struct {
+	DeviceToken string
+	Impact      string
 }
 
 // DispatchScheduleFor is CommandDispatchSchedule with the fourth list, UNDEFINED, and the mode
@@ -280,6 +291,7 @@ func (api *Api) DispatchScheduleFor(ctx context.Context, deviceTokens []string, 
 	refusals := make([]*BatchEnqueueRefusal, 0)
 	ungated := make([]string, 0)
 	undefined := make([]string, 0)
+	impacts := make([]*CommandDispatchImpact, 0)
 	ordered := dedupeTokens(deviceTokens)
 
 	verdicts := make(map[uint]typeWindowDecision)
@@ -318,6 +330,7 @@ func (api *Api) DispatchScheduleFor(ctx context.Context, deviceTokens []string, 
 				undefined = append(undefined, token)
 				continue
 			}
+			impacts = append(impacts, &CommandDispatchImpact{DeviceToken: token, Impact: v.impact})
 			if !v.gated {
 				ungated = append(ungated, token)
 				continue
@@ -337,7 +350,8 @@ func (api *Api) DispatchScheduleFor(ctx context.Context, deviceTokens []string, 
 			})
 		}
 	}
-	return &DispatchSchedule{Holds: holds, Refusals: refusals, Ungated: ungated, Undefined: undefined}, nil
+	return &DispatchSchedule{Holds: holds, Refusals: refusals, Ungated: ungated, Undefined: undefined,
+		Impacts: impacts}, nil
 }
 
 // typeWindowDecision is the part of a dispatch schedule that depends only on the device TYPE.
@@ -346,7 +360,9 @@ type typeWindowDecision struct {
 	defined bool
 	// gated: the command is DISRUPTIVE or DESTRUCTIVE (or, asked with alreadyHeld, defined at
 	// all) on a type that has a window.
-	gated       bool
+	gated bool
+	// impact is the definition's effective impact, set whenever defined is.
+	impact      string
 	windowToken string
 	// [after, until) is the opening the command must start in: the one open now (after is
 	// then not later than the instant asked about), or the next.
@@ -385,11 +401,12 @@ func (api *Api) typeWindowVerdict(ctx context.Context, deviceTypeId uint, comman
 	if matched == nil {
 		return result{}, nil // not defined by the profile version the type is on now
 	}
+	impact := matched.EffectiveImpact()
 	if !alreadyHeld && !matched.WindowGated() {
-		return result{defined: true}, nil
+		return result{defined: true, impact: impact}, nil
 	}
 	if types[0].MaintenanceWindowId == nil {
-		return result{defined: true}, nil // gated command, but the type has no window: nothing to wait for
+		return result{defined: true, impact: impact}, nil // gated command, but the type has no window: nothing to wait for
 	}
 	windowId := *types[0].MaintenanceWindowId
 	window, cached := windows[windowId]
@@ -410,7 +427,8 @@ func (api *Api) typeWindowVerdict(ctx context.Context, deviceTypeId uint, comman
 		return result{}, fmt.Errorf("maintenance window %q cannot be evaluated: %w", window.Token, err)
 	}
 	iv := schedule.Next(at)
-	return result{defined: true, gated: true, windowToken: window.Token, after: iv.Start, until: iv.End}, nil
+	return result{defined: true, impact: impact, gated: true, windowToken: window.Token,
+		after: iv.Start, until: iv.End}, nil
 }
 
 // decidedCommandDefinitions is the command vocabulary of the profile version a device type is

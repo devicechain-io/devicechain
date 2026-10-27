@@ -162,7 +162,7 @@ func TestDecide(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := Decide(c.state); got != c.want {
+			if got := Decide(c.state, false); got != c.want {
 				t.Errorf("Decide(%+v) = %v, want %v\n%s", c.state, got, c.want, c.why)
 			}
 		})
@@ -184,7 +184,7 @@ func TestOnlyPositiveEvidenceWithholds(t *testing.T) {
 		{Known: true, Asserted: false, Active: false, Source: mqttSource},
 		{Known: true, Asserted: true, Active: true},
 	} {
-		if got := Decide(s); got != Dispatch {
+		if got := Decide(s, false); got != Dispatch {
 			t.Errorf("Decide(%+v) = %v; nothing here is positive evidence of absence or of a "+
 				"missing delivery path, so it must dispatch", s, got)
 		}
@@ -256,7 +256,7 @@ func TestStatesForMarksMissingDevicesUnknown(t *testing.T) {
 		t.Fatalf("a device absent from the response must not appear in the result at all, got %+v", got)
 	}
 	// And the gate's own reduction of that must be Dispatch, not Hold.
-	if v := Decide(states["never-seen"]); v != Dispatch {
+	if v := Decide(states["never-seen"], false); v != Dispatch {
 		t.Fatalf("a device the projection has never seen decided %v, want Dispatch", v)
 	}
 
@@ -289,5 +289,41 @@ func TestStatesForSkipsTheRoundTripWhenThereIsNothingToAsk(t *testing.T) {
 	}
 	if len(states) != 0 {
 		t.Fatalf("expected no states, got %+v", states)
+	}
+}
+
+// TestDecideFollowsTheSparkplugCapabilityFlag walks the flag across every Sparkplug state, paired
+// with the transports it must NOT touch. The off column is TestDecide's: the point of the pairing is
+// that the flag moves exactly one transport and leaves the rest where they were.
+func TestDecideFollowsTheSparkplugCapabilityFlag(t *testing.T) {
+	cases := []struct {
+		name       string
+		state      State
+		off, on    Verdict
+		commentary string
+	}{
+		{"sparkplug present", State{Known: true, Asserted: true, Active: true, Source: sparkplugSource},
+			Undeliverable, Dispatch, "enabled, a present node's command is dispatched"},
+		{"sparkplug absent", State{Known: true, Asserted: true, Active: false, Source: sparkplugSource},
+			Undeliverable, Hold, "enabled, an absent node's command waits for its next birth"},
+		{"sparkplug unasserted", State{Known: true, Asserted: false, Active: false, Source: sparkplugSource},
+			Undeliverable, Dispatch, "inferred silence is not evidence of absence"},
+		{"unqualified sparkplug", State{Known: true, Asserted: true, Active: true, Source: "sparkplug"},
+			Undeliverable, Dispatch, "classified by transport, qualifier or not"},
+		{"integration is unaffected", State{Known: true, Asserted: true, Active: true, Source: "integration:chirp-1"},
+			Undeliverable, Undeliverable, "the flag widens ONE transport, never the deny list as a whole"},
+		{"mqtt is unaffected", State{Known: true, Asserted: true, Active: false, Source: mqttSource},
+			Hold, Hold, "an absent MQTT device holds either way"},
+		{"unknown device is unaffected", State{Known: false}, Dispatch, Dispatch, "no row, no verdict"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := Decide(c.state, false); got != c.off {
+				t.Errorf("flag off: Decide(%+v) = %v, want %v", c.state, got, c.off)
+			}
+			if got := Decide(c.state, true); got != c.on {
+				t.Errorf("flag on: Decide(%+v) = %v, want %v\n%s", c.state, got, c.on, c.commentary)
+			}
+		})
 	}
 }

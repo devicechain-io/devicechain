@@ -98,7 +98,7 @@ func TestAStaleBatchCannotDispatchToADeviceDisabledSinceItWasRead(t *testing.T) 
 	_, err := api.SetDeviceDisabled(gateTenantCtx(), "dev-off", true)
 	require.NoError(t, err)
 
-	require.NoError(t, proc.deliverCommand(context.Background(), created, pathSweep))
+	require.NoError(t, proc.deliverCommand(context.Background(), created, pathSweep, routing{}))
 
 	assert.Empty(t, writer.devices, "the claim was refused, so nothing may be published")
 	assert.Equal(t, model.CommandQueued.String(), gateStatusOf(t, api, "c-1"))

@@ -244,6 +244,19 @@ type CommandDeliveryConfiguration struct {
 	// Fail-safe in the same direction as the two above: absent, zero, negative or NaN
 	// means the platform reserve, never "no reserve".
 	DeliveryMachineryReserve float64
+
+	// SparkplugCommands says that at least one Sparkplug source of this instance publishes
+	// commands (NCMD/DCMD) on its Host Application session. It makes the delivery gate treat
+	// Sparkplug as a transport with a command path, so a Sparkplug command is dispatched (or
+	// withheld for an absent device) rather than failed on sight.
+	//
+	// 🔴 NOBODY AUTHORS IT. The chart sets it to true exactly when some rendered Sparkplug source
+	// has commands enabled, so it cannot disagree with the sources: an operator who could set it
+	// alone would either strand commands (flag on, no source enabled) or hide a working path
+	// (flag off, source enabled). Absent is false, which is the behaviour that predates the
+	// feature, byte for byte: a Sparkplug command fails within seconds, naming the platform.
+	// The adapter, not this flag, refuses a command to a source that is not itself enabled.
+	SparkplugCommands bool
 }
 
 // NewCommandDeliveryConfiguration creates the default command delivery configuration.

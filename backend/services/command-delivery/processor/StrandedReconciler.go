@@ -230,8 +230,13 @@ func (cproc *CommandDeliveryProcessor) reconcileStrandedCommand(ctx context.Cont
 	//     Nothing reads PARKED on MQTT either, so the row would simply be stuck in a
 	//     state with no exit rather than in one with a wrong label. For MQTT this pass is
 	//     a deliberate no-op, and the floor is exactly what it was before.
-	//   - Sparkplug never reaches SENT at all: the presence gate answers Undeliverable
-	//     for it, because it has no command egress by construction.
+	//   - Sparkplug is excluded WHETHER OR NOT its commands are enabled, and the reason changed
+	//     with the feature. With them off it never reaches SENT at all (the presence gate
+	//     answers Undeliverable). With them on it does reach SENT, and this pass still must not
+	//     touch it: the adapter settles every SENT row itself — confirmed, unanswered or
+	//     refused — from a store it writes before it publishes, and a Sparkplug command is a
+	//     QoS 0 publish that nothing acknowledges. Re-arming one would send the command a
+	//     SECOND time to a node that may already have acted on the first.
 	//
 	// 🔑 THE LIST IS SAFE TO KEY ON THE PROJECTED SOURCE ONLY BECAUSE THE VOCABULARY IS
 	// NOW VALIDATED. The source is `transport` or `transport:qualifier`, and its MQTT/HTTP

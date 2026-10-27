@@ -258,3 +258,21 @@ func TestMaxDispatchFailuresIsAcceptedFromYaml(t *testing.T) {
 	assert.Equal(t, 7, cfg.MaxDispatchFailures, "maxDispatchFailures did not reach the struct")
 	assert.NoError(t, cfg.Validate())
 }
+
+// SparkplugCommands is derived by the chart, never authored, and absent means OFF: the behaviour
+// that predates the feature. A default that landed on true would change every Sparkplug fleet's
+// commands from failing fast to being dispatched at a source that may not be enabled.
+func TestSparkplugCommandsDefaultsOffAndLoadsWhenSet(t *testing.T) {
+	absent := &CommandDeliveryConfiguration{}
+	assert.NoError(t, core.LoadConfiguration([]byte(``), absent))
+	assert.False(t, absent.SparkplugCommands)
+
+	set := &CommandDeliveryConfiguration{}
+	assert.NoError(t, core.LoadConfiguration([]byte(`{"sparkplugCommands": true}`), set))
+	assert.True(t, set.SparkplugCommands, "the key the chart renders must reach the field")
+	assert.NoError(t, set.Validate())
+
+	typo := &CommandDeliveryConfiguration{}
+	assert.Error(t, core.LoadConfiguration([]byte(`{"sparkplugCommand": true}`), typo),
+		"a misspelled key must be refused, not read as off")
+}
