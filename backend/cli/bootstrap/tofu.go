@@ -477,6 +477,9 @@ func infraVars(st *State) []string {
 	// path rather than only when the flag is set — a conditional here would leave
 	// the disagreement reachable again by the narrow route of turning HA off on an
 	// instance that had it on. See haTopology.
+	// The broker image: DeviceChain's own nats-server build, at the release this run
+	// deploys. See brokerImageVars.
+	vars = append(vars, brokerImageVars(st)...)
 	vars = append(vars, haFor(st.HA).infraVars()...)
 	// The OpenTofu half of the event-management pod count, for the same reason: the
 	// event store reserves its connections per pod. See persistenceTopology.

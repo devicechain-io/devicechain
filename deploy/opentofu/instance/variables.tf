@@ -136,6 +136,43 @@ variable "nats_chart_version" {
   }
 }
 
+# The broker image: DeviceChain's own nats-server build (backend/broker/dc-nats-server).
+# See modules/nats for what it adds and for the upstream rollback. dcctl sets the
+# repository from the image registry the instance runs from and the tag from its
+# DeviceChain release, as for every service image.
+variable "nats_server_image_repository" {
+  description = "Repository of the broker image, without a tag or digest (see modules/nats server_image_repository). The upstream rollback is \"nats\" with tag \"2.15.1-alpine\"; it disables certificate device authentication."
+  type        = string
+  default     = "ghcr.io/devicechain-io/dc-nats-server"
+
+  validation {
+    condition     = can(regex("^[a-z0-9]+([._-][a-z0-9]+)*(:[0-9]+)?(/[a-z0-9]+([._-][a-z0-9]+)*)*$", var.nats_server_image_repository))
+    error_message = "nats_server_image_repository must be an image repository with no tag or digest (for example ghcr.io/devicechain-io/dc-nats-server); the tag goes in nats_server_image_tag and the digest in nats_server_image_digest."
+  }
+}
+
+variable "nats_server_image_tag" {
+  description = "Tag of the broker image: the DeviceChain release, which dcctl passes. Empty is refused at plan time unless nats_server_image_digest is set. A new tag rolls the broker."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.nats_server_image_tag == "" || can(regex("^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$", var.nats_server_image_tag))
+    error_message = "nats_server_image_tag must be a valid image tag: letters, digits, underscore, period and dash, at most 128, not starting with a period or a dash."
+  }
+}
+
+variable "nats_server_image_digest" {
+  description = "Optional digest of the broker image (sha256:<64 hex>); when set the chart pulls by digest."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.nats_server_image_digest == "" || can(regex("^sha256:[0-9a-f]{64}$", var.nats_server_image_digest))
+    error_message = "nats_server_image_digest must be empty or sha256: followed by 64 lowercase hex digits."
+  }
+}
+
 variable "nats_jetstream_storage" {
   description = <<-EOT
     PersistentVolume size for NATS JetStream file storage. The default must fit the

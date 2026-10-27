@@ -322,6 +322,19 @@ DETECT/REACT 引擎（参见[事件处理](../concepts/event-processing.md)）�
 
 kube-state-metrics 本身因节点失效等原因移动期间的重启，只要十五分钟内恢复，也会报告。这种中断后，在 kube-state-metrics 中断前最近报告时刻十五分钟后解除。更长中断期间的重启不报告。
 
+## 代理请求设备证书 {#broker-client-certificates}
+
+消息代理是 DeviceChain 自行构建的 NATS 服务器：上游服务器保持不变，只增加一项设置。它的 MQTT
+监听器会向每台设备请求 TLS 客户端证书，但不强制要求。因此，用证书认证的设备在 TLS 握手中证明自己持有证书的私钥，而使用令牌或密码的设备与连接任何 NATS 服务器时完全一样。代理每次重新加载配置时都会重新应用这项设置，并在启动时、每次重新加载后以及每分钟检查一次自己的监听器。
+
+| 告警 | 含义 | 处理方法 |
+| --- | --- | --- |
+| `BrokerMqttClientAuthLost`（warning） | 在十分钟内，`pod` 标签所指的代理服务器要么通过 TLS 提供 MQTT 却没有请求客户端证书，要么没有运行 DeviceChain 代理镜像（指标边车报告了该服务器，但服务器本身没有报告任何自己的指标）。用证书认证的设备无法连接；使用令牌或密码的设备不受影响。 | 检查服务器的镜像：`kubectl get pod -n <namespace> <pod> -o jsonpath='{.spec.containers[0].image}'`。如果是上游 `nats` 镜像，说明实例已回退到该镜像，在恢复 DeviceChain 镜像之前，证书设备会一直被拒绝。如果是 DeviceChain 镜像，请阅读服务器最近一次重新加载配置前后的日志，查找说明监听器没有请求客户端证书、或检查无法完成的那一行，然后重启该 Pod 并报告日志。 |
+
+代理在自己的指标端口（`dc-metrics`，7778）上导出以下指标：监听器请求证书时
+`dc_broker_mqtt_client_auth_request` 为 1，终止 TLS 时 `dc_broker_mqtt_tls` 为 1，`dc_broker_info`
+标明该构建所基于的 NATS 服务器版本。MQTT 未启用 TLS 的代理无法请求证书，也不会触发该告警。在没有指标边车的实例上（compact 预设），只能检测到上述两种状态中的第一种。
+
 ## 按平台默认限额计量的租户 {#tenant-ceilings}
 
 执行租户限额的服务从用户管理读取各租户值。尚未获得响应前，按平台默认计量；HTTP 接入为无法确认的租户名字提供有界额度。[治理](../concepts/governance.md#unresolved-ceilings)介绍两者。

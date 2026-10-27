@@ -103,6 +103,68 @@ variable "chart_version" {
   }
 }
 
+# --- The broker image ---------------------------------------------------------
+#
+# 🔑 THE SERVER IS DEVICECHAIN'S OWN BUILD, NOT THE CHART'S DEFAULT IMAGE. It is
+# upstream nats-server's main on the unmodified upstream library (the same version as
+# the chart, kept in lockstep by hack/check-broker-version-skew.sh), plus one setting
+# the config file cannot express: the MQTT listener REQUESTS, but does not require, a
+# client certificate, so devices that authenticate by certificate prove their key in
+# the TLS handshake while token and password devices are unaffected. The binary
+# re-applies that setting on every reload (upstream's reload silently drops it) and
+# watches it: dc_broker_mqtt_client_auth_request and the BrokerMqttClientAuthLost
+# alert. Source: backend/broker/dc-nats-server.
+#
+# ROLLBACK, and what it costs. The upstream image still runs this module unchanged:
+#   server_image_repository = "nats"
+#   server_image_tag        = "2.15.1-alpine"
+# The broker then requests no client certificate, so devices that authenticate by
+# certificate cannot connect (token and password devices are unaffected), and
+# BrokerMqttClientAuthLost fires to say so. It is a rollback, not a supported
+# configuration.
+
+variable "server_image_repository" {
+  description = "Repository of the broker image, without a tag or digest. DeviceChain's own build by default; see the note above for the upstream rollback."
+  type        = string
+  default     = "ghcr.io/devicechain-io/dc-nats-server"
+
+  validation {
+    condition     = can(regex("^[a-z0-9]+([._-][a-z0-9]+)*(:[0-9]+)?(/[a-z0-9]+([._-][a-z0-9]+)*)*$", var.server_image_repository))
+    error_message = "server_image_repository must be an image repository with no tag or digest (for example ghcr.io/devicechain-io/dc-nats-server); the tag goes in server_image_tag and the digest in server_image_digest."
+  }
+}
+
+variable "server_image_tag" {
+  description = <<-EOT
+    Tag of the broker image. dcctl passes the DeviceChain release the instance runs,
+    the same tag every service image carries. There is no usable default: a module
+    that guessed one would install whatever that tag pointed at, so an empty tag with
+    no digest is refused at plan time (the precondition on helm_release.nats).
+
+    🔴 A NEW TAG ROLLS THE BROKER. The image is part of the pod template, so moving
+    an instance to a new release restarts every server even when the binary did not
+    change, as a chart or image bump always has.
+  EOT
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.server_image_tag == "" || can(regex("^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$", var.server_image_tag))
+    error_message = "server_image_tag must be a valid image tag: letters, digits, underscore, period and dash, at most 128, not starting with a period or a dash."
+  }
+}
+
+variable "server_image_digest" {
+  description = "Optional digest of the broker image (sha256:<64 hex>). When set, the chart pulls the image by digest and the tag is not used."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.server_image_digest == "" || can(regex("^sha256:[0-9a-f]{64}$", var.server_image_digest))
+    error_message = "server_image_digest must be empty or sha256: followed by 64 lowercase hex digits."
+  }
+}
+
 variable "jetstream_storage" {
   description = <<-EOT
     Size of the JetStream PV.
@@ -864,6 +926,12 @@ locals {
     "localhost",
   ], local.route_dns_names)
 
+  # The broker binary's metrics port and its name, which the instance chart's PodMonitor
+  # selects (deploy/helm/devicechain/templates/podmonitor-nats.yaml). 7777 is the
+  # exporter sidecar's.
+  broker_metrics_port_name = "dc-metrics"
+  broker_metrics_port      = 7778
+
   # Base chart values (TLS material + listeners). config.merge (broker-auth) is
   # added conditionally below.
   chart_values = {
@@ -1136,11 +1204,46 @@ locals {
     # ha_topology reads this path back out (see reported below), and
     # tests/resources.tftest.hcl reads it out of the values Helm is handed.
     container = {
+      # DeviceChain's broker build (see server_image_repository). The chart's
+      # nats.image helper uses the digest in place of the tag when one is set.
+      image = {
+        repository = var.server_image_repository
+        tag        = var.server_image_tag
+        digest     = var.server_image_digest == "" ? null : var.server_image_digest
+      }
       resources = {
         requests = { cpu = var.cpu_request, memory = var.memory_request }
         limits   = { memory = var.memory_limit }
       }
       env = { GOMEMLIMIT = local.go_mem_limit }
+      # The broker binary's own /metrics (dc_broker_info and the client-certificate
+      # gauge), on a NAMED container port so the instance chart's PodMonitor selects it
+      # the way it selects the exporter. Chart 2.15.1 renders only its own protocol
+      # ports and has no extra-ports value, so the port is appended with the container
+      # JSON patch, which files/stateful-set/nats-container.yaml applies. It is declared
+      # under the upstream rollback image too, where nothing listens on it: the scrape
+      # target is then down, which is accurate.
+      patch = [{
+        op    = "add"
+        path  = "/ports/-"
+        value = { name = local.broker_metrics_port_name, containerPort = local.broker_metrics_port }
+      }]
+      # 🔴 THE SERVER RUNS AS ROOT, AS THE UPSTREAM IMAGE DOES. The DeviceChain image is
+      # built on the Chainguard static base, whose default user is 65532, and a broker
+      # that changed user on its first roll could not open the JetStream store the
+      # root-run upstream server wrote: nats-server creates it 0700 and its files 0600,
+      # owned by root, and fsGroup does not help, because it only adds group access on
+      # the volume types the kubelet relabels (not hostPath, which kind's local-path
+      # provisioner uses, nor most NFS). Measured on the upgrade drill: dc-nats-0
+      # crash-looped with "storage directory is not writable". The broker's change from
+      # upstream is meant to be packaging only, so the user stays upstream's; running it
+      # unprivileged is a separate change that has to migrate existing stores first.
+      merge = {
+        securityContext = {
+          runAsUser  = 0
+          runAsGroup = 0
+        }
+      }
     }
   }
 
@@ -1209,6 +1312,12 @@ locals {
     # check that asks for s2_fast fails instead of reporting a setting that is not
     # in the values.
     route_compression = try(local.chart_values.config.cluster.merge.compression, "off")
+    # The broker image and the user its server runs as, read back for the same reason as
+    # the rest: the chart ships no values schema, so an image map or a securityContext
+    # under the wrong parent is accepted in silence, and then the chart's own upstream
+    # image, or a server that cannot open its JetStream store, is what runs.
+    server_image = local.chart_values.container.image
+    run_as_user  = local.chart_values.container.merge.securityContext.runAsUser
   }
 }
 
@@ -1312,6 +1421,13 @@ resource "helm_release" "nats" {
   values = [local.chart_values_encoded]
 
   lifecycle {
+    # The broker image must name a version. An empty tag would render "repository:"
+    # (which Kubernetes reads as :latest), installing whatever that pointed at today.
+    precondition {
+      condition     = var.server_image_tag != "" || var.server_image_digest != ""
+      error_message = "nats server_image_tag (or server_image_digest) is required: it names the broker build to run, which dcctl sets to the DeviceChain release. An empty one would pull whatever the repository's latest image is."
+    }
+
     # Fail closed on a manual apply that turns auth on without minting the
     # credentials (the bring-up always provides them together): an empty issuer /
     # password would render a broker that rejects every device and every service.
@@ -1457,6 +1573,16 @@ output "ca_pem" {
 # hack/check-tofu-validations.sh asserts against it via `tofu console`.
 #
 # Deliberately carries no secret material, so it is safe to print.
+# The broker image the chart is handed and the user its server runs as, read back
+# from the values (local.reported). Asserted by tests/server_image.tftest.hcl.
+output "server_image" {
+  description = "The broker image (repository, tag, digest) handed to the chart, and the user its server container runs as. Safe to print."
+  value = {
+    image       = local.reported.server_image
+    run_as_user = local.reported.run_as_user
+  }
+}
+
 output "ha_topology" {
   description = "The resolved HA topology: server count, whether clustering is on, the MQTT gateway's replica factor, whether route TLS is mutually verified, the route compression mode, the pod spread constraints, and each server's resources. Verified in CI; safe to print."
   value = {

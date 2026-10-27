@@ -1065,6 +1065,30 @@ run_assertions() {
   accepts nats_chart_version "2.16.0"
   accepts nats_chart_version "3.0.0"
 
+  # The broker image (DeviceChain's own nats-server build). The repository must carry no
+  # tag or digest, because each has its own variable and a tag smuggled into the
+  # repository would render "repo:tag:tag"; the tag and the digest each have a grammar.
+  # The ACCEPTS side carries the documented upstream rollback, which must stay reachable.
+  rejects nats_server_image_repository ""
+  rejects nats_server_image_repository "ghcr.io/devicechain-io/dc-nats-server:v0.26.0"
+  rejects nats_server_image_repository "ghcr.io/devicechain-io/dc-nats-server@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  rejects nats_server_image_repository "GHCR.io/DeviceChain/Broker"
+  accepts nats_server_image_repository "ghcr.io/devicechain-io/dc-nats-server"
+  accepts nats_server_image_repository "localhost:5001/dc-nats-server"
+  accepts nats_server_image_repository "nats"
+  rejects nats_server_image_tag "-v1"
+  rejects nats_server_image_tag ".v1"
+  rejects nats_server_image_tag "v0.26.0@sha256:abc"
+  accepts nats_server_image_tag ""
+  accepts nats_server_image_tag "v0.26.0"
+  accepts nats_server_image_tag "0.24.0-drill.1"
+  accepts nats_server_image_tag "2.15.1-alpine"
+  rejects nats_server_image_digest "sha256:abc"
+  rejects nats_server_image_digest "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  rejects nats_server_image_digest "sha256:0123456789ABCDEF0123456789abcdef0123456789abcdef0123456789abcdef"
+  accepts nats_server_image_digest ""
+  accepts nats_server_image_digest "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
   # --- the instance namespace ---------------------------------------------------
   #
   # It is `dci-` plus the instance id — NOT the id, which still names the database, the

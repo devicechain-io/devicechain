@@ -601,13 +601,13 @@ func ensureLocalRegistry(ctx context.Context, st *State) error {
 // operator on a cluster, bootstrap puts services in a namespace — and a shared
 // builder that always built everything would make `dcctl install --build` spend a
 // full bootstrap's worth of ko builds on images it never applies.
-func koBuild(ctx context.Context, root string, st *State, moduleDir, imageName string) error {
+func koBuild(ctx context.Context, root string, st *State, moduleDir, imageName string, extraEnv ...string) error {
 	cmd := exec.CommandContext(ctx, "ko", "build", "--bare",
 		"--tags", st.ImageVersion, "--platform", "linux/amd64", "./")
 	cmd.Dir = moduleDir
-	cmd.Env = append(os.Environ(),
+	cmd.Env = append(append(os.Environ(),
 		"KO_DOCKER_REPO="+imageName,
-		"KO_CONFIG_PATH="+filepath.Join(root, ".ko.yaml"))
+		"KO_CONFIG_PATH="+filepath.Join(root, ".ko.yaml")), extraEnv...)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("ko build %s: %w\n%s", imageName, err, out)
 	}
@@ -640,8 +640,8 @@ func buildImages(ctx context.Context, root string, st *State) error {
 	if _, err := dockerBuildNetwork(); err != nil {
 		return err
 	}
-	build := func(moduleDir, imageName string) error {
-		return koBuild(ctx, root, st, moduleDir, imageName)
+	build := func(moduleDir, imageName string, extraEnv ...string) error {
+		return koBuild(ctx, root, st, moduleDir, imageName, extraEnv...)
 	}
 
 	servicesDir := filepath.Join(root, "backend", "services")
@@ -665,6 +665,13 @@ func buildImages(ctx context.Context, root string, st *State) error {
 	// (it serves nothing, and the chart gives it no Deployment), so it is not under services/;
 	// the image is named for the module, as the chart pulls it.
 	if err := build(filepath.Join(root, brokerAdminModuleDir), fmt.Sprintf("%s/%s", st.ImageRegistry, brokerAdminImageName)); err != nil {
+		return err
+	}
+	// The broker itself: DeviceChain's nats-server build, which the infrastructure apply's nats
+	// module pulls as {registry}/dc-nats-server:{tag}. Built here, ahead of that apply, because
+	// the apply waits for the broker to be ready and a missing image would hold it in
+	// ImagePullBackOff until the release times out.
+	if err := build(filepath.Join(root, brokerModuleDir), fmt.Sprintf("%s/%s", st.ImageRegistry, brokerImageName), brokerBuildEnv...); err != nil {
 		return err
 	}
 	// Through buildOperatorImage rather than inline, so "which module is the

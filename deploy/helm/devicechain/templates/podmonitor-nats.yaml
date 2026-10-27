@@ -30,6 +30,11 @@ different broker than the one in use. The default is the short in-namespace name
 Harmless when the exporter is off: `port` names a CONTAINER port, so with no
 prom-exporter container the operator generates no targets at all, rather than a
 permanently-down one.
+
+It also scrapes the broker binary itself (the dc-metrics port): the server is DeviceChain's
+own nats-server build, which reports whether its MQTT listener is requesting device client
+certificates (prometheusrule-broker.yaml). Under the upstream rollback image the port is
+still declared but nothing listens, so that target is down, which is accurate.
 */}}
 {{- if and .Values.metrics.enabled .Values.metrics.natsPodMonitor }}
 {{- $host := .Values.metrics.natsBrokerHost | default .Values.instance.config.infrastructure.nats.hostname | required "instance.config.infrastructure.nats.hostname is required to render the NATS PodMonitor; set metrics.natsPodMonitor=false if this instance uses a broker it does not name" }}
@@ -73,5 +78,11 @@ spec:
   podMetricsEndpoints:
     # The exporter's container port name, from the nats chart's promExporter block.
     - port: prom-metrics
+      path: /metrics
+    # The broker binary's own /metrics: dc_broker_info and the device certificate gauges
+    # prometheusrule-broker.yaml alerts on. The port is declared by the OpenTofu nats
+    # module (container.patch, named dc-metrics), and the binary always serves it, so
+    # unlike the exporter it is there on every instance, compact included.
+    - port: dc-metrics
       path: /metrics
 {{- end }}

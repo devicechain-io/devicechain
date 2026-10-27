@@ -214,6 +214,23 @@ func TestReleaseImageSetMatchesDeployAndVerifier(t *testing.T) {
 			expected = append(expected, "dc-broker-admin")
 			continue
 		}
+		if mod == "backend/broker/dc-nats-server" {
+			// Not a chart image either: the OpenTofu nats module pulls it, at the repository dcctl
+			// passes as nats_server_image_repository ({registry}/dc-nats-server) and the module
+			// defaults to. Expected is that name, read from both, not the release's own.
+			tofu := readRepoFile(t, "deploy/opentofu/modules/nats/main.tf")
+			if !strings.Contains(tofu, `default     = "ghcr.io/devicechain-io/dc-nats-server"`) {
+				t.Error("the nats module's server_image_repository no longer defaults to ghcr.io/devicechain-io/dc-nats-server -- update the release, the verifier and the module together")
+			}
+			if cli := readRepoFile(t, "backend/cli/bootstrap/brokerimage.go"); !strings.Contains(cli, `brokerImageName = "dc-nats-server"`) {
+				t.Error("dcctl no longer passes the broker image as {registry}/dc-nats-server")
+			}
+			if build := readRepoFile(t, "deploy/local/build-images.sh"); !strings.Contains(build, `build_one "$ROOT/backend/broker/dc-nats-server" "$REGISTRY/dc-nats-server"`) {
+				t.Error("deploy/local/build-images.sh does not build the broker image ({registry}/dc-nats-server), which the infrastructure apply pulls")
+			}
+			expected = append(expected, "dc-nats-server")
+			continue
+		}
 		names := map[string]bool{}
 		for _, m := range runbookImage.FindAllStringSubmatch(readRepoFile(t, mod+"/RUNBOOK.md"), -1) {
 			names[m[1]] = true

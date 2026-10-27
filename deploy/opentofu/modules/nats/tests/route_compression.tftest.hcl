@@ -18,10 +18,11 @@ mock_provider "helm" {}
 mock_provider "kubernetes" {}
 
 variables {
-  namespace   = "dci-test"
-  enable_tls  = false
-  enable_auth = false
-  ha          = true
+  namespace        = "dci-test"
+  server_image_tag = "v0.0.0-test"
+  enable_tls       = false
+  enable_auth      = false
+  ha               = true
 }
 
 run "s2_fast_by_default_on_a_cluster" {

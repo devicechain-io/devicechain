@@ -164,6 +164,7 @@ jobs:
               echo "backend/k8s"
               echo "backend/edge/dc-edge-agent"
               echo "backend/admin/dc-broker-admin"
+              echo "backend/broker/dc-nats-server"
             } | jq -R . | jq -s -c .
           )"
           echo "smoke=$smoke" >> "$GITHUB_OUTPUT"
@@ -267,6 +268,14 @@ jobs:
           KO_DOCKER_REPO: ${{ steps.ko.outputs.repo }}
           # Built through hack/ko-build.sh, which points ko at the repo's .ko.yaml: ko reads
           # it from its working directory only, and this step runs in the module directory.
+          # 🔴 THE BROKER IS BUILT REPRODUCIBLY, so a release that did not change it publishes the
+          # SAME digest and does not roll it: from its own go.mod (GOWORK=off; in workspace mode it
+          # would link whatever versions the whole workspace selects, so a bump in an unrelated
+          # module would change it) and with no VCS stamp (-buildvcs=false; the revision would make
+          # every commit a new binary, and nats-server reports it as its git_commit). Every path that
+          # builds the broker sets both: backend/broker/dc-nats-server/build_paths_test.go checks.
+          GOWORK: ${{ matrix.module == 'backend/broker/dc-nats-server' && 'off' || '' }}
+          GOFLAGS: ${{ matrix.module == 'backend/broker/dc-nats-server' && '-buildvcs=false' || '' }}
         run: |
           set -euo pipefail
           # Multi-arch image published verbatim at the repo computed above

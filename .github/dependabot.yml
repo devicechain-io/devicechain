@@ -43,6 +43,7 @@ updates:
       # workspace modules with a local replace onto core, so leaving them out
       # does not merely skip them, it breaks them on every core bump.
       - "/backend/admin/*"
+      - "/backend/broker/*"
       - "/backend/edge/*"
       - "/backend/sims/*"
       - "/backend/tools/*"

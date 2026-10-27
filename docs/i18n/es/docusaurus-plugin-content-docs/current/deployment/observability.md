@@ -693,6 +693,27 @@ ejemplo tras perder su nodo, siempre que kube-state-metrics vuelva antes de 15 m
 caída así se despeja 15 minutos después de la última vez que kube-state-metrics informó antes de la
 caída. Un reinicio durante una caída más larga de kube-state-metrics no se notifica.
 
+## La solicitud de certificados de dispositivo del broker {#broker-client-certificates}
+
+El broker de mensajes es la compilación propia de DeviceChain del servidor NATS: el servidor
+original, sin cambios, con un añadido. Su listener MQTT pide a cada dispositivo un certificado de
+cliente TLS sin exigirlo, de modo que un dispositivo que se autentica con certificado demuestra que
+posee la clave del certificado durante el handshake TLS, y un dispositivo que usa un token o una
+contraseña se conecta exactamente como lo haría con cualquier servidor NATS. El broker vuelve a
+aplicar ese ajuste cada vez que recarga su configuración, y comprueba su propio listener al
+arrancar, después de cada recarga y una vez por minuto.
+
+| Alerta | Qué significa | Qué hacer |
+| --- | --- | --- |
+| `BrokerMqttClientAuthLost` (warning) | Durante diez minutos, el servidor del broker indicado por la etiqueta `pod` ha servido MQTT sobre TLS sin pedir certificados de cliente, o no ha ejecutado la imagen del broker de DeviceChain (el sidecar de métricas informa del servidor, pero el servidor no publica ninguna de sus propias métricas). Los dispositivos que se autentican con certificado no pueden conectarse; los dispositivos con token o contraseña no se ven afectados. | Compruebe la imagen del servidor: `kubectl get pod -n <namespace> <pod> -o jsonpath='{.spec.containers[0].image}'`. Si es la imagen original `nats`, la instancia volvió a ella, y los dispositivos con certificado seguirán rechazados hasta que se restaure la imagen de DeviceChain. Si es la imagen de DeviceChain, lea el log del servidor en torno a su última recarga de configuración y busque la línea que dice que el listener no está pidiendo certificados de cliente, o que la comprobación no pudo completarse; después reinicie el pod e informe del log. |
+
+El broker exporta estas series en su propio puerto de métricas (`dc-metrics`, 7778):
+`dc_broker_mqtt_client_auth_request` vale 1 mientras el listener pide certificados,
+`dc_broker_mqtt_tls` vale 1 mientras termina TLS, y `dc_broker_info` indica la versión del
+servidor NATS en la que se basa la compilación. Un broker sin TLS en MQTT no puede pedir
+certificados y no dispara la alerta. En una instancia sin el sidecar de métricas (el preset
+compacto) solo se detecta el primero de los dos estados anteriores.
+
 ## Inquilinos medidos con el valor por defecto de la plataforma {#tenant-ceilings}
 
 Cada servicio que aplica un techo por inquilino lee el techo de cada inquilino desde
