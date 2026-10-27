@@ -60,6 +60,12 @@ const (
 	// Sparkplug is ALWAYS qualified, as "sparkplug:"+hostId — see Qualify. The bare word
 	// appears in no row a producer wrote.
 	Sparkplug Name = "sparkplug"
+
+	// Integration is ALWAYS qualified, as "integration:"+the integration's token: an
+	// uplink an inbound integration (a LoRaWAN network server or a webhook) delivered over
+	// HTTP. The bare word appears in no row a producer wrote. A device on it has no command
+	// path in this build, and a command to it is refused terminally.
+	Integration Name = "integration"
 )
 
 // Minted is every transport name the platform itself writes into a source.
@@ -68,7 +74,7 @@ const (
 // MQTT and HTTP are missing because they mint no name (see the package doc). It is the set
 // of names an operator-chosen identifier must not be mistaken for, which is what makes it
 // the right set for a reservation and the wrong set for a menu.
-var Minted = []Name{LwM2M, Sparkplug}
+var Minted = []Name{LwM2M, Sparkplug, Integration}
 
 // Of reduces a projected source to the transport it names, dropping any runtime qualifier:
 // "sparkplug:plant-a" -> "sparkplug", "lwm2m" -> "lwm2m", "mqtt1" -> "mqtt1".

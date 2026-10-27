@@ -547,6 +547,10 @@ var sweepExemptions = map[string]string{
 	"device-management.integrationAuth": "it authenticates a bearer token the platform showed once, at " +
 		"creation, and stores only a digest of, so the sweep has no value to supply; the integration " +
 		"entity reads the stored row back through integration",
+	"device-management.unregisteredIntegrationDevices": "it lists the sightings of ONE integration, named " +
+		"inside its criteria, which are written only by the ingest path's service-plane lookup " +
+		"(resolveIntegrationDevice, which needs the integration's bearer token), so the drill has no " +
+		"row to seed and nothing to read back through it",
 	"update-management.updateAssignment": "an assignment is addressed by a token the platform mints when " +
 		"the artifact is assigned, so the sweep has no value to supply; the update-assignment entity " +
 		"reads the SAME door back by the token its receipt recorded, and updateAssignments is swept",

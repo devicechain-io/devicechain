@@ -147,6 +147,12 @@ var tableSweepExemptions = map[string]string{
 	// These hold what DEVICES produce, not what a tenant creates. The load-test harness
 	// drives them hard with real oracles; a second, weaker set of assertions here would
 	// be worse than none, and the drill deliberately sends no telemetry.
+	"device-management.integration_unregistered_devices": "sightings of sender-named devices, written " +
+		"only by the ingest path's service-plane lookup (resolveIntegrationDevice). That call needs a " +
+		"service token and the integration's bearer token, which is shown once at creation, so a " +
+		"tenant user's session cannot make it; the drill sends no device traffic by design. The table " +
+		"is an observation list (capped, clearable), and its foreign key and tenant column are " +
+		"proved by the purge coverage gate.",
 	"device-state.device_states": "the live last-known-state projection, written from device traffic. " +
 		"The drill sends no telemetry by design, and the load harness owns this with real oracles.",
 	"device-state.latest_locations": "the latest-location projection, written from device traffic. " +

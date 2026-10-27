@@ -1256,7 +1256,14 @@ func (rez *EventResolver) ResolveEvent(ctx context.Context, unrez *esmodel.Unres
 	// this event rather than following it: the identity is the broker's (the gateway) plus the
 	// assignment (the child), and a gateway event carries no credential to authenticate.
 	resolve := rez.resolveDevice
-	if unrez.Gateway != "" {
+	switch {
+	// An integration's event is decided by the integration's own authentication and device type
+	// scope (integration_resolve.go), BEFORE the gateway and credential rules: it carries no
+	// other authority, and one that claims another is refused rather than resolved by whichever
+	// check came first.
+	case unrez.Integration != "" || unrez.SealedIntegrationToken != nil:
+		resolve = rez.resolveIntegrationEvent
+	case unrez.Gateway != "":
 		resolve = rez.resolveGatewayChild
 	}
 	device, reason, err := resolve(ctx, unrez)

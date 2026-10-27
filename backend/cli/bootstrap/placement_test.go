@@ -8,7 +8,6 @@ import (
 	"maps"
 	"testing"
 
-	"helm.sh/helm/v3/pkg/releaseutil"
 	"sigs.k8s.io/yaml"
 )
 
@@ -46,7 +45,7 @@ func renderedAntiAffinity(t *testing.T, manifest string) map[string]renderedAffi
 	t.Helper()
 
 	out := map[string]renderedAffinity{}
-	for _, doc := range releaseutil.SplitManifests(manifest) {
+	for _, doc := range splitManifests(manifest) {
 		var kind struct {
 			Kind string `json:"kind"`
 		}
@@ -306,7 +305,7 @@ func renderedSpread(t *testing.T, manifest string) map[string]spreadView {
 	t.Helper()
 
 	out := map[string]spreadView{}
-	for _, doc := range releaseutil.SplitManifests(manifest) {
+	for _, doc := range splitManifests(manifest) {
 		var kind struct {
 			Kind string `json:"kind"`
 		}

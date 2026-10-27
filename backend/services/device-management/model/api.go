@@ -465,6 +465,12 @@ type DeviceManagementApi interface {
 	// id, tenant and token.
 	ResolveDeviceCredential(ctx context.Context, presented *PresentedCredential, now time.Time) (*Device, string, error)
 
+	// AuthenticateIntegration proves an inbound integration's bearer token (the resolver's check
+	// of an integration's event). It returns the integration with its scope loaded; every
+	// failure is ErrIntegrationAuthFailed, and a matching token on a disabled integration is
+	// ErrIntegrationDisabled.
+	AuthenticateIntegration(ctx context.Context, integrationToken, presented string) (*Integration, error)
+
 	// Entity relationships (uniform edge model, ADR-013).
 	EntityRelationshipsById(ctx context.Context, ids []uint) ([]*EntityRelationship, error)
 	EntityRelationshipsByToken(ctx context.Context, tokens []string) ([]*EntityRelationship, error)

@@ -231,6 +231,38 @@ func (r *DeviceResolver) ExpectedProvisioningProfile(ctx context.Context) (*Prov
 	return r.S.provisioningProfileByID(ctx, *r.M.ExpectedProvisioningProfileId)
 }
 
+// Aliases are the names a sender other than the platform knows the device by. They are shown to
+// an unscoped caller holding device:read. The alias table declares no scope rule, so a caller
+// limited to part of the tenant gets NULL, not an empty list: the field is nullable for that
+// reason, "none" is [] and "not shown to you" is null, and the rest of the device is unaffected
+// (the same answer Gateway gives for a gateway the caller cannot see).
+func (r *DeviceResolver) Aliases(ctx context.Context) (*[]*DeviceAliasResolver, error) {
+	scope, err := auth.AuthorizeScoped(ctx, auth.DeviceRead)
+	if err != nil {
+		return nil, err
+	}
+	if scope.IsScoped() {
+		return nil, nil
+	}
+	found, err := r.S.GetApi(ctx).DeviceAliases(ctx, r.M.ID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*DeviceAliasResolver, 0, len(found))
+	for _, a := range found {
+		out = append(out, &DeviceAliasResolver{M: a})
+	}
+	return &out, nil
+}
+
+// DeviceAliasResolver serves one alias of a device.
+type DeviceAliasResolver struct {
+	M model.DeviceAlias
+}
+
+func (r *DeviceAliasResolver) Scheme() string { return r.M.Scheme }
+func (r *DeviceAliasResolver) Value() string  { return r.M.Value }
+
 func (r *DeviceResolver) DeviceType() *DeviceTypeResolver {
 	if r.M.DeviceType != nil {
 		return &DeviceTypeResolver{

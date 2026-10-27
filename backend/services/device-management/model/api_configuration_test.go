@@ -41,7 +41,7 @@ func configTestApiAt(t *testing.T, dsn string) (*Api, context.Context) {
 	if err := rdb.RegisterTenantScoping(db); err != nil {
 		t.Fatalf("register tenant scoping: %v", err)
 	}
-	if err := db.AutoMigrate(&Device{}, &DeviceType{}, &DeviceCredential{}, &DeviceReplacement{},
+	if err := db.AutoMigrate(&Device{}, &DeviceType{}, &DeviceCredential{}, &DeviceReplacement{}, &DeviceAlias{},
 		&EntityAttribute{}, &EntityGroup{}, &IssuedGroupToken{}, &EntityGroupVersion{}, &EntityGroupMembership{},
 		&EntityGroupFacetRef{}, &EntityRelationship{}, &PendingOwnershipFact{}, &Alarm{},
 		&DeviceProfile{}, &DeviceProfileVersion{}, &DeviceProfileActivation{}, &MetricDefinition{}, &CommandDefinition{},

@@ -60,7 +60,7 @@ func replacementTestApi(t *testing.T) (*Api, context.Context) {
 	// memberships before the cascade closure runs, so a fixture missing any of them
 	// fails the delete for the wrong reason and hides the one under test.
 	require.NoError(t, db.AutoMigrate(
-		&DeviceType{}, &Device{}, &DeviceCredential{}, &DeviceReplacement{},
+		&DeviceType{}, &Device{}, &DeviceCredential{}, &DeviceReplacement{}, &DeviceAlias{},
 		&DeviceConfigurationRevision{}, &DeviceConfigurationState{},
 		&AssetType{}, &Asset{},
 		&EntityRelationshipType{}, &EntityRelationship{}, &PendingOwnershipFact{},

@@ -9,7 +9,6 @@ import (
 	"reflect"
 	"testing"
 
-	"helm.sh/helm/v3/pkg/releaseutil"
 	"sigs.k8s.io/yaml"
 
 	assets "github.com/devicechain-io/dc-deploy"
@@ -68,7 +67,7 @@ func renderedClusterAffinity(t *testing.T, extra map[string]interface{}) (map[st
 	}
 	var raws []map[string]interface{}
 	var typed []renderedPlacement
-	for _, doc := range releaseutil.SplitManifests(manifest) {
+	for _, doc := range splitManifests(manifest) {
 		var obj struct {
 			Kind string `json:"kind"`
 			Spec struct {
