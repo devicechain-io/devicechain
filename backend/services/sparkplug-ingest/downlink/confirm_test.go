@@ -200,7 +200,7 @@ func TestAWindowThatEndsWithTheNodeAlreadyAtTheValueConfirmsUnchanged(t *testing
 			r := newRig(t)
 			clk := r.useClock()
 			r.src.cfg.HostRole = tc.role
-			r.src.atValue, r.src.lastAt = tc.atValue, since
+			r.src.atValue, r.src.lastAt, r.src.lastVal = tc.atValue, since, i8(t, 5)
 			r.live("acme", "pump-1", "c", CommandWrite, writeCmd("Setpoint", 5), nil)
 			if tc.contrary {
 				r.report(metric(t, "Setpoint", i8(t, 9), clk.now().Add(time.Second)))
@@ -353,7 +353,12 @@ func TestAResponseThatCannotBePublishedIsRetriedNotForgotten(t *testing.T) {
 	r.responses.err = errBoom
 	r.responses.mu.Unlock()
 	r.report(metric(t, "Setpoint", i8(t, 5), clk.now()))
-	require.Eventually(t, func() bool { return r.result(ResultResponseFailed) >= 1 }, confirmWait, 5*time.Millisecond)
+	require.Eventually(t, func() bool {
+		r.d.mu.Lock()
+		defer r.d.mu.Unlock()
+		e := r.d.entries[AwaitingKey("acme", "c")]
+		return e != nil && !e.resolving && !e.retryAt.IsZero()
+	}, confirmWait, 5*time.Millisecond, "the failed response was never put back for a retry")
 	assert.Empty(t, r.responses.of("c"))
 	_, ok := r.store.get(AwaitingKey("acme", "c"))
 	assert.True(t, ok, "the record was deleted although the response was never published")

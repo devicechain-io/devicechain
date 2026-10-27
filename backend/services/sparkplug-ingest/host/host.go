@@ -470,7 +470,7 @@ func NewClient(source config.SparkplugSource, broker Broker, ingester SampleInge
 	if source.Commands.Enabled {
 		// The reports and last-reported values a command is confirmed by; a source that commands
 		// nothing does not pay for them.
-		c.sessions.EnableReports()
+		c.sessions.EnableReports(source.Commands.WritableMetric)
 	}
 	c.rebirthPub = c.publishRebirth
 	return c

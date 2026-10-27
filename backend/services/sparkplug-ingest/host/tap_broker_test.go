@@ -64,7 +64,7 @@ func tapClient(t *testing.T, rig *spRig) (*Client, *tapCollector, *prometheus.Co
 	t.Helper()
 	msgs := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "tap_messages"}, []string{"type"})
 	col := &tapCollector{}
-	c := NewClient(config.SparkplugSource{Tenant: "acme", HostId: "h1", Groups: []string{"plant-a"}, Commands: enabledCommands()},
+	c := NewClient(config.SparkplugSource{Tenant: "acme", HostId: "h1", Groups: []string{"plant-a"}, Commands: tapCommands()},
 		Broker{URL: rig.mqttURL, ClientID: "sp-tap-host"}, nil, nil, time.Now, Metrics{Messages: msgs})
 	c.SetCommandHooks(CommandHooks{Reported: col.add})
 	c.Connect()
@@ -96,7 +96,7 @@ func TestTheTapReportsOnTheIngestingPathToo(t *testing.T) {
 	ing := NewIngester(NewRegistrar(fakeCreateGQL{}, "url", nil), NewEmitter(failingWriter{}, time.Now),
 		IngestMetrics{MeasurementsEmitted: m.emitted, PresenceEmitted: m.presence})
 	src := config.SparkplugSource{Tenant: "acme", HostId: "h1", Groups: []string{"plant-a"}, AutoRegister: true,
-		DeviceTypeToken: "sp-node", Commands: enabledCommands()}
+		DeviceTypeToken: "sp-node", Commands: tapCommands()}
 	c := NewClient(src, Broker{URL: rig.mqttURL, ClientID: "sp-tap-ingest"}, ing, admitAllSamples{}, time.Now, m.host())
 	c.SetPublisher(rig.writer)
 	col := &tapCollector{}
@@ -219,4 +219,11 @@ func TestAWriteToTheValueTheNodeLastReportedIsMarkedAtTheValue(t *testing.T) {
 	back, err := c.PublishMetric(context.Background(), ref, 1, nil)
 	require.NoError(t, err)
 	assert.False(t, back.AtRequestedValue)
+}
+
+// tapCommands enables commands and lets the tests write the metrics they script.
+func tapCommands() config.SourceCommands {
+	c := enabledCommands()
+	c.WritableMetrics = []string{"Setpoint", "Run", "Mode"}
+	return c
 }

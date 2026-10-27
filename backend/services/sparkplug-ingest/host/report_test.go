@@ -19,7 +19,7 @@ import (
 
 func reportingHarness() *sessionHarness {
 	h := newHarness(defaultRebirthBackoff)
-	h.tr.EnableReports()
+	h.tr.EnableReports(nil)
 	return h
 }
 

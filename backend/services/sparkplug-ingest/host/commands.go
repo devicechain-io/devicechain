@@ -211,6 +211,15 @@ type CommandHooks struct {
 // Tenant is the tenant every message on this connection is attributed to.
 func (c *Client) Tenant() string { return c.tenant }
 
+// LastReported is the value the node last reported for the metric ref was read from, on that same
+// table; false when the table has since been replaced or ended.
+func (c *Client) LastReported(ref MetricRef) (WireValue, time.Time, bool) {
+	return c.sessions.LastReported(ref)
+}
+
+// ParseTarget is the inverse of CommandTarget.String ("group/node" or "group/node/device").
+func ParseTarget(s string) (CommandTarget, bool) { return targetOfExternalId(s) }
+
 // SourceID is the source's ingest identity ("sparkplug:<hostId>"), the one its devices carry. A
 // command's awaiting entry records it, so a report is matched only against the commands published
 // on the same broker.
@@ -339,7 +348,8 @@ func (c *Client) PublishMetric(ctx context.Context, ref MetricRef, value any, be
 
 // PublishRebirth asks a node to rebirth (NCMD "Node Control/Rebirth"), addressed by name as the
 // protocol requires of this one command. The node of a device target is used. It marks the rebirth
-// as commanded, so the NBIRTH that answers it is taken as the answer it is.
+// as commanded (in putOnWire, immediately BEFORE the bytes go out), so the NBIRTH that answers it is
+// taken as the answer it is even when the node answers before the publish call returns.
 func (c *Client) PublishRebirth(ctx context.Context, target CommandTarget, beforeWire func(CommandWire) error) (CommandWire, error) {
 	node := CommandTarget{Group: target.Group, Node: target.Node}
 	if err := c.commandReady(ctx); err != nil {
@@ -352,11 +362,7 @@ func (c *Client) PublishRebirth(ctx context.Context, target CommandTarget, befor
 	}
 	ref := MetricRef{Target: node, Name: nodeControlRebirthMetric, Datatype: datatypeBoolean}
 	wire := wireOf(node.Topic(), payload, ref, true, at)
-	out, err := c.putOnWire(ctx, node, nil, payload, wire, beforeWire)
-	if err == nil {
-		c.sessions.MarkCommandedRebirth(node.Group, node.Node)
-	}
-	return out, err
+	return c.putOnWire(ctx, node, nil, payload, wire, beforeWire)
 }
 
 // putOnWire is the shared tail of every command publish: the before-wire hook, the last checks, and
@@ -385,8 +391,21 @@ func (c *Client) putOnWire(ctx context.Context, target CommandTarget, ref *Metri
 	if !c.breaker.Admit() {
 		return wire, ErrBreakerOpen
 	}
+	// A rebirth (the only command with no table ref) is marked as commanded BEFORE the publish: a
+	// node can answer with its same-bdSeq NBIRTH before the publish call returns, and an answer that
+	// finds no mark is dropped as a QoS-1 redelivery, so the rebirth would never confirm. It is
+	// given back only when nothing was sent; an outcome that is unknown keeps it, because the node
+	// may well have answered.
+	rebirth := ref == nil
+	prevPending := false
+	if rebirth {
+		prevPending = c.sessions.MarkCommandedRebirth(target.Group, target.Node)
+	}
 	if err := c.publishCommand(target, payload); err != nil {
 		if errors.Is(err, errCommandNotConnected) {
+			if rebirth {
+				c.sessions.RestoreRebirthPending(target.Group, target.Node, prevPending)
+			}
 			c.breaker.Release()
 			return wire, ErrSessionDown
 		}

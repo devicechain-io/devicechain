@@ -146,6 +146,9 @@ type Source interface {
 	BreakerState() host.BreakerState
 	SessionUp() bool
 	SetCommandHooks(h host.CommandHooks)
+	// LastReported is the value the node last reported for the metric ref was read from, on that
+	// same table; it answers false once the table has been replaced or has ended.
+	LastReported(ref host.MetricRef) (host.WireValue, time.Time, bool)
 	// SourceID names the source (its ingest identity), which an awaiting entry records so a
 	// report is matched only against the commands published on the same broker.
 	SourceID() string
@@ -243,6 +246,8 @@ type Dispatcher struct {
 	// unseeded is set from the start of a term until the previous term's state (the reboot marks
 	// and the awaiting entries) has been read from the bucket.
 	unseeded atomic.Bool
+	// settledUnseeded are the keys settled while unseeded; see addEntryIfAbsent.
+	settledUnseeded map[string]struct{}
 	// recent is what each source published in the last tripWindow, for the breaker.
 	recent map[Source][]recentPub
 	// reboots is when each node was last rebooted by this term.
@@ -323,6 +328,7 @@ func (d *Dispatcher) resetTerm() {
 	d.entries = map[string]*entry{}
 	d.byTarget = map[targetKey][]*entry{}
 	d.byMetric = map[awaitKey]*entry{}
+	d.settledUnseeded = map[string]struct{}{}
 	d.nEntries.Store(0)
 	if d.metrics.Awaiting != nil {
 		d.metrics.Awaiting.Set(0)
@@ -1174,7 +1180,7 @@ func (d *Dispatcher) send(ctx context.Context, j *job, p plan) {
 	hook := func(w host.CommandWire) error {
 		a := Awaiting{
 			Command: j.token, Device: j.device, Source: j.src.SourceID(), Target: p.target.String(), Nonce: j.nonce,
-			Kind: p.kind, Metric: p.metric, Alias: w.Alias,
+			Kind: p.kind, Metric: p.metric, Alias: w.Alias, TableGen: w.Gen, Expires: j.expires,
 			Requested: p.requested, Datatype: w.Datatype, SessionEpoch: w.Epoch, BdSeq: w.BdSeq, HasBdSeq: w.HasBdSeq,
 			HostRole: cfg.HostRole, AtRequestedValue: w.AtRequestedValue, LastReportedAt: w.LastReportedAt,
 			PublishedAt: w.PublishedAt, Wire: awaitingWire(w),

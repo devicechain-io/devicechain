@@ -106,28 +106,28 @@ func wireValueOf(datatype uint32, m *sppb.Payload_Metric) (WireValue, bool) {
 	}
 	switch datatype {
 	case datatypeInt8:
-		if isInt || isLong {
+		if (isInt || isLong) && fitsSigned(carrier, 8) {
 			return WireValue{Kind: 'i', N: uint64(int64(int8(uint8(carrier))))}, true
 		}
 	case datatypeInt16:
-		if isInt || isLong {
+		if (isInt || isLong) && fitsSigned(carrier, 16) {
 			return WireValue{Kind: 'i', N: uint64(int64(int16(uint16(carrier))))}, true
 		}
 	case datatypeInt32:
-		if isInt || isLong {
+		if (isInt || isLong) && fitsSigned(carrier, 32) {
 			return WireValue{Kind: 'i', N: uint64(int64(int32(uint32(carrier))))}, true
 		}
 	case datatypeUInt8:
-		if isInt || isLong {
-			return WireValue{Kind: 'i', N: carrier & 0xFF}, true
+		if (isInt || isLong) && carrier < 1<<8 {
+			return WireValue{Kind: 'i', N: carrier}, true
 		}
 	case datatypeUInt16:
-		if isInt || isLong {
-			return WireValue{Kind: 'i', N: carrier & 0xFFFF}, true
+		if (isInt || isLong) && carrier < 1<<16 {
+			return WireValue{Kind: 'i', N: carrier}, true
 		}
 	case datatypeUInt32:
-		if isInt || isLong {
-			return WireValue{Kind: 'i', N: carrier & 0xFFFFFFFF}, true
+		if (isInt || isLong) && carrier < 1<<32 {
+			return WireValue{Kind: 'i', N: carrier}, true
 		}
 	case datatypeInt64, datatypeUInt64, datatypeDateTime:
 		if isLong {
@@ -157,12 +157,29 @@ func wireValueOf(datatype uint32, m *sppb.Payload_Metric) (WireValue, bool) {
 	return WireValue{}, false
 }
 
-// EnableReports turns on the capture of Reports and last-reported values. A tracker whose source
-// does not command anything pays nothing for it.
-func (tr *SessionTracker) EnableReports() {
+// fitsSigned reports whether an integer carrier can be a signed value of the given width under any
+// encoder convention: truncated to the width, sign-extended to 32 bits, or sign-extended to 64.
+// Anything else (300 in an Int8, say) is a value the type cannot hold, so it is not a report of
+// that type, and must not be narrowed into one that happens to equal what was asked for.
+func fitsSigned(c uint64, bits uint) bool {
+	if c < uint64(1)<<bits {
+		return true
+	}
+	if c <= 0xFFFFFFFF && c >= (uint64(1)<<32)-(uint64(1)<<(bits-1)) {
+		return true
+	}
+	return c >= uint64(int64(-1)<<(bits-1))
+}
+
+// EnableReports turns on the capture of Reports and last-reported values for the metrics wanted
+// accepts (nil: every metric). A tracker whose source does not command anything pays nothing for
+// it, and one that does keeps state only for the metrics a write may target - the table would
+// otherwise hold a value for every metric of every node of the fleet.
+func (tr *SessionTracker) EnableReports(wanted func(name string) bool) {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
 	tr.capture = true
+	tr.wanted = wanted
 }
 
 // stepContext is the message the current step is processing, for the report capture. Set under mu.
@@ -199,7 +216,7 @@ func (tr *SessionTracker) captureReports(p *sppb.Payload, s *nodeSession, device
 			continue
 		}
 		name := metricName(m, s.aliases)
-		if name == "" || isReservedMetric(name) {
+		if name == "" || isReservedMetric(name) || (tr.wanted != nil && !tr.wanted(name)) {
 			continue
 		}
 		key := metricKey{device, name}

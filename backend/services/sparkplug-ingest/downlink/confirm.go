@@ -47,6 +47,8 @@ const (
 	// seedAttempts bounds the synchronous load at the start of a term; past it the load keeps going
 	// in the background while reboots stay refused.
 	seedAttempts = 3
+	// awaitingLifetime is the lifetime of the awaiting bucket's entries (core/kv declares it).
+	awaitingLifetime = 2 * time.Hour
 )
 
 // seedRetryDelay is the wait between the synchronous load attempts and seedBackground the one
@@ -81,6 +83,8 @@ type entry struct {
 	// want is the requested value of a write, in the form a report of it has.
 	want    host.WireValue
 	hasWant bool
+	// ref names the BIRTH table a write was addressed against.
+	ref host.MetricRef
 
 	// contrary is set when a report of the metric arrived that is not the requested value.
 	contrary bool
@@ -94,8 +98,20 @@ type entry struct {
 	retryAt   time.Time
 }
 
+func (o *outcome) stored() *StoredOutcome {
+	return &StoredOutcome{Success: o.success, Text: o.text, Payload: o.payload, Result: o.result, Confirmed: o.confirmed}
+}
+
+func outcomeOf(s *StoredOutcome) *outcome {
+	return &outcome{success: s.Success, text: s.Text, payload: s.Payload, result: s.Result, confirmed: s.Confirmed}
+}
+
 func (d *Dispatcher) newEntry(tenant string, a Awaiting, src Source) *entry {
 	e := &entry{key: AwaitingKey(tenant, a.Command), tenant: tenant, a: a, src: src}
+	if t, ok := host.ParseTarget(a.Target); ok && a.Kind == KindWrite {
+		// The table the command was addressed against: UNCHANGED is re-checked on it.
+		e.ref = host.MetricRef{Target: t, Name: a.Metric, Datatype: a.Datatype, Epoch: a.SessionEpoch, Gen: a.TableGen}
+	}
 	if a.Kind == KindWrite {
 		var v any
 		dec := json.NewDecoder(bytes.NewReader(a.Requested))
@@ -131,6 +147,29 @@ func (d *Dispatcher) addEntry(e *entry) {
 		d.byMetric[awaitKey{e.tenant, e.a.Device, e.a.Metric}] = e
 	}
 	d.gaugeLocked()
+}
+
+// addEntryIfAbsent is addEntry for the start of a term: the entry is added only if nothing of that
+// key is in the mirror AND the key was not settled while the bucket could not be read (the
+// listing the term is working from may predate that settlement). The check and the add are one
+// critical section, so nothing can settle the key between them.
+func (d *Dispatcher) addEntryIfAbsent(e *entry) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if _, have := d.entries[e.key]; have {
+		return false
+	}
+	if _, settled := d.settledUnseeded[e.key]; settled {
+		return false
+	}
+	d.entries[e.key] = e
+	tk := e.targetKey()
+	d.byTarget[tk] = append(d.byTarget[tk], e)
+	if e.a.Kind == KindWrite {
+		d.byMetric[awaitKey{e.tenant, e.a.Device, e.a.Metric}] = e
+	}
+	d.gaugeLocked()
+	return true
 }
 
 // forget removes an entry from the in-memory mirror by key.
@@ -274,12 +313,21 @@ func (e *entry) confirmedWith(via string, at, since *time.Time, before, after *u
 	return &outcome{success: true, payload: string(b), result: result, confirmed: result == ResultConfirmed}
 }
 
-// expiry is the outcome of an entry whose window ended with no report that settled it.
-func (e *entry) expiry() *outcome {
-	if e.a.Kind == KindWrite && e.a.AtRequestedValue && !e.contrary && !e.rearmed &&
+// expiry is the outcome of an entry whose window ended with no report that settled it. last reads
+// the node's last-reported value from the source (nil: not available, as for a re-armed entry).
+//
+// UNCHANGED is decided HERE, from a fresh read, not from the value read when the command was
+// published: that read came before the entry joined the mirror, so a contrary report could have
+// landed between the two. The value must still be the requested one, on the same BIRTH table (a
+// node that died or re-birthed in the meantime has a new table, and says nothing about the old).
+// The caller must not hold d.mu: last takes the session tracker's lock.
+func (e *entry) expiry(last func(host.MetricRef) (host.WireValue, time.Time, bool)) *outcome {
+	if e.a.Kind == KindWrite && e.a.AtRequestedValue && !e.contrary && !e.rearmed && last != nil && e.hasWant &&
 		e.a.HostRole == config.HostRolePrimary {
-		since := e.a.LastReportedAt
-		return e.confirmedWith("UNCHANGED", nil, &since, nil, nil, ResultConfirmedUnchanged)
+		if v, _, ok := last(e.ref); ok && v == e.want {
+			since := e.a.LastReportedAt
+			return e.confirmedWith("UNCHANGED", nil, &since, nil, nil, ResultConfirmedUnchanged)
+		}
 	}
 	w := e.a.Deadline.Sub(e.a.PublishedAt).Round(time.Second)
 	var what string
@@ -347,7 +395,23 @@ func (d *Dispatcher) settle(e *entry) bool {
 		d.mu.Lock()
 		e.resolving = false
 		e.retryAt = d.now().Add(responseRetryEvery)
+		persist := e.a.Decided == nil
+		if persist {
+			e.a.Decided = out.stored()
+		}
+		a := e.a
 		d.mu.Unlock()
+		if persist {
+			// Keep what was decided with the record: if this leader goes before the response is
+			// out, the next one settles the command with THIS outcome. A command that was confirmed
+			// must not come back as a timeout because the confirmation could not be published.
+			pctx, cancel := context.WithTimeout(context.Background(), bgTimeout)
+			if perr := d.store.Put(pctx, e.key, a); perr != nil {
+				d.count(ResultKVFailed)
+				log.Warn().Err(perr).Str("key", e.key).Msg("Could not store a decided outcome whose response could not be published.")
+			}
+			cancel()
+		}
 		return false
 	}
 	d.count(out.result)
@@ -355,8 +419,34 @@ func (d *Dispatcher) settle(e *entry) bool {
 		d.metrics.ConfirmSeconds.Observe(d.now().Sub(e.a.PublishedAt).Seconds())
 	}
 	d.deleteEntry(e.key)
-	d.forget(e.key)
+	d.finish(e)
 	return true
+}
+
+// finish takes an entry out of the mirror once it has been settled for good. While the bucket has
+// not been read yet it also remembers the key, so a listing taken before this settlement cannot
+// bring the entry back.
+func (d *Dispatcher) finish(e *entry) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.unseeded.Load() {
+		d.settledUnseeded[e.key] = struct{}{}
+	}
+	if cur, ok := d.entries[e.key]; ok {
+		d.dropLocked(cur)
+		d.gaugeLocked()
+	}
+}
+
+// giveUpAt is when a response that cannot be published stops being retried: past the command's own
+// expiry command-delivery has ended the row itself, and past the bucket's lifetime the record
+// would have aged out anyway.
+func (e *entry) giveUpAt() time.Time {
+	t := e.a.PublishedAt.Add(awaitingLifetime)
+	if !e.a.Expires.IsZero() && e.a.Expires.Before(t) {
+		t = e.a.Expires
+	}
+	return t
 }
 
 // resolveNow claims an entry for a resolution of the caller's own (superseded, tripped) and
@@ -376,25 +466,46 @@ func (d *Dispatcher) resolveNow(e *entry, out *outcome) bool {
 // sweep resolves the entries whose window has ended, and retries the responses that failed.
 func (d *Dispatcher) sweep() {
 	now := d.now()
-	var due []*entry
+	var due, ended, abandoned []*entry
 	d.mu.Lock()
 	for _, e := range d.entries {
 		if e.resolving {
 			continue
 		}
 		if e.decided != nil {
-			if !now.Before(e.retryAt) {
+			if !now.Before(e.giveUpAt()) {
+				e.resolving = true
+				abandoned = append(abandoned, e)
+			} else if !now.Before(e.retryAt) {
 				e.resolving = true
 				due = append(due, e)
 			}
 			continue
 		}
 		if !now.Before(e.a.Deadline) {
-			e.decided, e.resolving = e.expiry(), true
-			due = append(due, e)
+			e.resolving = true // claimed; its outcome is decided below, off the lock
+			ended = append(ended, e)
 		}
 	}
 	d.mu.Unlock()
+	for _, e := range abandoned {
+		log.Warn().Str("tenant", e.tenant).Str("command", e.a.Command).
+			Msg("Giving up publishing a Sparkplug command's response: the command has expired, so command-delivery has ended it itself.")
+		d.deleteEntry(e.key)
+		d.finish(e)
+	}
+	for _, e := range ended {
+		// Decided off d.mu: the UNCHANGED check reads the session tracker, which has a lock of its own.
+		var last func(host.MetricRef) (host.WireValue, time.Time, bool)
+		if e.src != nil {
+			last = e.src.LastReported
+		}
+		out := e.expiry(last)
+		d.mu.Lock()
+		e.decided = out
+		d.mu.Unlock()
+		due = append(due, e)
+	}
 	for _, e := range due {
 		d.settle(e)
 	}
@@ -445,12 +556,6 @@ func (d *Dispatcher) seedTerm(ctx context.Context) error {
 		if _, ours := d.byTenant[tenant]; !ours {
 			continue
 		}
-		d.mu.Lock()
-		_, have := d.entries[key]
-		d.mu.Unlock()
-		if have {
-			continue
-		}
 		if d.tenantDeleted(tenant) {
 			d.deleteEntry(key)
 			continue
@@ -463,27 +568,35 @@ func (d *Dispatcher) seedTerm(ctx context.Context) error {
 		}
 		e := d.newEntry(tenant, a, src)
 		e.rearmed = true
-		d.addEntry(e)
+		// The outcome is decided, and the entry claimed, BEFORE it is added: once it is in the
+		// mirror a report or a sweep can reach it, and an entry that is added first and claimed
+		// afterwards can be resolved twice.
+		var out *outcome
 		switch {
+		case a.Decided != nil:
+			// Its response could not be published by the last leader: settle it with what was decided.
+			out = outcomeOf(a.Decided)
 		case src == nil:
-			e.decided = &outcome{
+			out = &outcome{
 				result: ResultUnconfirmed,
 				text:   "the Sparkplug source this command was sent through no longer has commands enabled, so its outcome can no longer be learned",
 			}
-			immediate = append(immediate, e)
 		case !d.now().Before(a.Deadline):
-			e.decided = e.expiry()
+			out = e.expiry(nil)
+		}
+		if out != nil {
+			e.decided, e.resolving = out, true
+		}
+		if !d.addEntryIfAbsent(e) {
+			continue
+		}
+		if out != nil {
 			immediate = append(immediate, e)
-		default:
+		} else {
 			rearmed++
 			d.count(ResultRearmed)
 		}
 	}
-	d.mu.Lock()
-	for _, e := range immediate {
-		e.resolving = true
-	}
-	d.mu.Unlock()
 	for _, e := range immediate {
 		d.settle(e)
 	}
@@ -492,6 +605,15 @@ func (d *Dispatcher) seedTerm(ctx context.Context) error {
 			Msg("Picked up the Sparkplug commands the previous term left awaiting an outcome.")
 	}
 	return nil
+}
+
+// seeded ends the unseeded phase: the bucket has been read, so the keys remembered as settled
+// meanwhile are no longer needed.
+func (d *Dispatcher) seeded() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.settledUnseeded = map[string]struct{}{}
+	d.unseeded.Store(false)
 }
 
 // seedStart loads the previous term's state before the term serves anything. Reboots are refused
@@ -505,7 +627,7 @@ func (d *Dispatcher) seedStart(ctx context.Context, spawn func(func())) {
 		}
 		err := d.seedTerm(ctx)
 		if err == nil {
-			d.unseeded.Store(false)
+			d.seeded()
 			return
 		}
 		log.Warn().Err(err).Int("attempt", attempt+1).Msg("Could not read the Sparkplug awaiting bucket at the start of the term.")
@@ -524,7 +646,7 @@ func (d *Dispatcher) seedStart(ctx context.Context, spawn func(func())) {
 			case <-time.After(seedBackground):
 			}
 			if err := d.seedTerm(ctx); err == nil {
-				d.unseeded.Store(false)
+				d.seeded()
 				return
 			}
 		}

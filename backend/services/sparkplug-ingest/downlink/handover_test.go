@@ -107,7 +107,7 @@ func testutilGauge(r *rig) float64 {
 func TestEntriesPastTheirDeadlineAreResolvedAtOnceWithTheirStoredNonce(t *testing.T) {
 	r := newRig(t)
 	clk := r.useClock()
-	r.src.atValue, r.src.lastAt = true, clk.now().Add(-time.Hour)
+	r.src.atValue, r.src.lastAt, r.src.lastVal = true, clk.now().Add(-time.Hour), i8(t, 5)
 	ctxA, stopA := r.term(t)
 	r.liveIn(ctxA, "late", CommandWrite, writeCmd("Setpoint", 5), nil)
 	stopA()
@@ -127,7 +127,7 @@ func TestAReArmedEntryCannotConfirmUnchangedWhereAnUninterruptedOneCan(t *testin
 	for _, handover := range []bool{false, true} {
 		r := newRig(t)
 		clk := r.useClock()
-		r.src.atValue, r.src.lastAt = true, clk.now().Add(-time.Hour)
+		r.src.atValue, r.src.lastAt, r.src.lastVal = true, clk.now().Add(-time.Hour), i8(t, 5)
 		ctxA, stopA := r.term(t)
 		r.liveIn(ctxA, "c", CommandWrite, writeCmd("Setpoint", 5), nil)
 		if handover {

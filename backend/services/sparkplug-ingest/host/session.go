@@ -164,6 +164,7 @@ type SessionTracker struct {
 	// processing and reports accumulates, under mu, what its accepted metrics said. Observe drains
 	// reports into the Observation it returns, after the lock is released.
 	capture bool
+	wanted  func(name string) bool
 	cur     stepContext
 	reports []Report
 }
@@ -633,11 +634,27 @@ func (tr *SessionTracker) MarkRebirthPending(group, node string) {
 // re-adopted and the metric table rebuilt, instead of the birth being skipped as a QoS-1
 // redelivery. Unlike MarkRebirthPending it is not a liveness probe, so the answer does not
 // re-assert the node. A node with no live session is a no-op: its next NBIRTH rebuilds everything.
-func (tr *SessionTracker) MarkCommandedRebirth(group, node string) {
+//
+// It returns whether a rebirth was already pending, so a caller whose publish turns out not to have
+// been sent can put that back (RestoreRebirthPending) without clearing a request the session
+// machine had made of its own.
+func (tr *SessionTracker) MarkCommandedRebirth(group, node string) (wasPending bool) {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
 	if s := tr.sessions[nodeKey{group, node}]; s != nil && s.online {
+		wasPending = s.rebirthPending
 		s.rebirthPending = true
+	}
+	return wasPending
+}
+
+// RestoreRebirthPending undoes MarkCommandedRebirth for a rebirth command that was definitely not
+// sent.
+func (tr *SessionTracker) RestoreRebirthPending(group, node string, was bool) {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	if s := tr.sessions[nodeKey{group, node}]; s != nil && s.online {
+		s.rebirthPending = was
 	}
 }
 

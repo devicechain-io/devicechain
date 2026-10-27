@@ -67,6 +67,16 @@ type Awaiting struct {
 	// closes with no contrary report then confirms it as UNCHANGED (never on a secondary host).
 	AtRequestedValue bool      `json:"atRequestedValue,omitempty"`
 	LastReportedAt   time.Time `json:"lastReportedAt,omitempty"`
+	// TableGen is the generation of the BIRTH table the command was addressed against (with
+	// SessionEpoch, it names the table). UNCHANGED is re-checked against that table at the end of
+	// the window.
+	TableGen uint64 `json:"tableGen,omitempty"`
+	// Expires is the command's own expiry, when it has one; a response is not retried past it.
+	Expires time.Time `json:"expires,omitempty"`
+	// Decided is the outcome chosen for the command when its response could not be published. It is
+	// stored so a new leader settles the command with what was decided, not with a fresh guess: a
+	// command that was confirmed is never re-decided into a timeout.
+	Decided *StoredOutcome `json:"decided,omitempty"`
 	// PublishedAt is the payload timestamp and Deadline the end of the confirmation window, clamped
 	// to the command's own expiry.
 	PublishedAt time.Time `json:"publishedAt"`
@@ -74,6 +84,15 @@ type Awaiting struct {
 	// Wire is what was sent: the topic, the alias or name, the datatype, the value, and the digest
 	// of the bytes. It is the evidence kept with the outcome.
 	Wire AwaitingWire `json:"wire"`
+}
+
+// StoredOutcome is an outcome persisted with its entry (Awaiting.Decided).
+type StoredOutcome struct {
+	Success   bool   `json:"success"`
+	Text      string `json:"text,omitempty"`
+	Payload   string `json:"payload,omitempty"`
+	Result    string `json:"result"`
+	Confirmed bool   `json:"confirmed,omitempty"`
 }
 
 // AwaitingWire is the decoded wire form of the published command.

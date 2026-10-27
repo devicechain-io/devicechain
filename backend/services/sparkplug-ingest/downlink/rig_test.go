@@ -104,6 +104,10 @@ type fakeSource struct {
 	now     func() time.Time
 	atValue bool
 	lastAt  time.Time
+	// lastVal is what LastReported answers while atValue holds; tableGone makes it answer false (the
+	// node died or re-birthed, so the table the command was addressed against is gone).
+	lastVal   host.WireValue
+	tableGone bool
 	// bdSeq is the bdSeq the table was read under (5 by default).
 	bdSeq uint64
 }
@@ -147,7 +151,12 @@ func (f *fakeSource) declare(target host.CommandTarget, name string, dt uint32) 
 	return f
 }
 
-func (f *fakeSource) SourceID() string                { return "sparkplug:h1" }
+func (f *fakeSource) SourceID() string { return "sparkplug:h1" }
+func (f *fakeSource) LastReported(host.MetricRef) (host.WireValue, time.Time, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastVal, f.lastAt, f.atValue && !f.tableGone
+}
 func (f *fakeSource) Tenant() string                  { return f.tenant }
 func (f *fakeSource) Commands() config.SourceCommands { return f.cfg }
 func (f *fakeSource) SetCommandHooks(h host.CommandHooks) {
@@ -393,6 +402,8 @@ type fakeStore struct {
 	// putRebootErr and listErr fail the reboot mark's write and the term-start listing.
 	putRebootErr error
 	listErr      error
+	// staleList, when set, is what List answers: a listing taken before later settlements.
+	staleList *Stored
 }
 
 func (s *fakeStore) Put(_ context.Context, key string, a Awaiting) error {
@@ -422,6 +433,9 @@ func (s *fakeStore) List(_ context.Context) (Stored, error) {
 	defer s.mu.Unlock()
 	if s.listErr != nil {
 		return Stored{}, s.listErr
+	}
+	if s.staleList != nil {
+		return *s.staleList, nil
 	}
 	out := Stored{Entries: map[string]Awaiting{}}
 	for k, a := range s.entries {

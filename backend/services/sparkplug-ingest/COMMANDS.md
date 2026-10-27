@@ -76,22 +76,46 @@ publish ACLs (anything that can publish to the node's topic can make the metric 
   by an NBIRTH whose bdSeq differs from the one the node had at the publish (a same-bdSeq NBIRTH is
   the node answering a rebirth). A command addressed to a device resolves its rebirth to the node.
 - **UNCHANGED.** At the publish the Client reads the table's last-reported value; if it already
-  was the requested value the entry is marked. A window that ends with the mark, no contrary
-  report, and `hostRole: primary` resolves SUCCESSFUL `via: UNCHANGED, since: <last report>`.
-  Secondary hosts never get it (another host may be driving the value).
+  was the requested value the entry is marked. That read comes BEFORE the entry joins the mirror,
+  so it is not trusted at the end: the window's end re-reads the value (`Source.LastReported`, off
+  `d.mu`) on the table the command was addressed against (epoch and generation are kept on the
+  entry), and it must still be the requested one. A contrary report in the gap, or a node that died
+  or re-birthed meanwhile (no table any more), ends UNANSWERED. With the mark, no contrary report,
+  that re-check and `hostRole: primary` the window resolves SUCCESSFUL `via: UNCHANGED, since:
+  <last report>`. Secondary hosts never get it (another host may be driving the value).
+- **What is captured.** Reports and last-reported values are kept only for the metrics the
+  source's `writableMetrics` allowlist names (plus node births, which a rebirth and a reboot are
+  confirmed by); the table would otherwise hold a value for every metric of every node. An integer
+  a datatype cannot hold (300 in an Int8) is not a report of that datatype.
+- **A commanded rebirth is marked pending BEFORE the bytes go out** (`putOnWire`), because a node
+  can answer with its same-bdSeq NBIRTH before the publish call returns, and an answer that finds no
+  mark is dropped as a redelivery. A definitely-not-sent rebirth gives the mark back (restoring a
+  request the session machine had made itself); an unknown outcome keeps it.
 - **Window expiry.** A sweep (`SweepEvery`, 1 s) resolves entries past their deadline
   UNANSWERED, which command-delivery records as TIMEOUT/UNKNOWN at once. The deadline is the
   publish plus the source's window (120 s write/rebirth, 600 s reboot), clamped to the command's
   expiry.
 - **Every resolution deletes the KV key after the response is published.** A response that cannot
   be published leaves the entry decided and in place; the sweep retries it every 5 s with the
-  SAME outcome (a confirmed command is never re-decided into a timeout).
+  SAME outcome (a confirmed command is never re-decided into a timeout). The decided outcome is
+  also stored with the record (`Awaiting.Decided`), so a new leader settles the command with it.
+  Retrying stops at the command's own expiry (command-delivery has ended the row by then), or two
+  hours after the publish (the bucket's lifetime), whichever is first.
 - **Handover.** A graceful end of term resolves nothing and leaves every entry. The next term's
   `seedTerm` runs before it serves (and before its sources connect): it lists the bucket, re-arms
   every entry of a tenant it serves with the time left on its deadline, resolves at once the ones
   past it (UNANSWERED, with the nonce stored with the entry), and loads the reboot marks. The new
   leader's rebirth-all then delivers BIRTHs that carry the current values, which settle most
   re-armed entries. Entries of tenants this service has no source for are left alone.
+  An entry is decided and claimed BEFORE it joins the mirror, and the "already there" check and
+  the add are one critical section (`addEntryIfAbsent`). While the bucket could not be read, the
+  keys settled meanwhile are remembered and skipped, because the listing the load finally gets may
+  predate their settlement: without that a settled command is re-armed and answered a second time.
+- **Two leaders can overlap.** A lost lease does not stop the old leader instantly, and the
+  dispatch nonce does NOT fence the two: both hold the nonce stored with the entry, so both can
+  publish a response for the same command. command-delivery keeps the FIRST terminal answer and
+  ignores the rest (`MarkResponse` on a terminal row is a no-op). The window of overlap is the lease
+  TTL; nothing here tries to close it, and nothing relies on it being closed.
 - **The one-reboot-per-window rule is persisted.** `PutReboot` writes `tenant|reboot|group/node`
   (value: publishedAt) in the same bucket, with the awaiting record and before the bytes go out;
   it is NOT deleted when the reboot resolves, it is seeded into `d.reboots` at term start, and it
