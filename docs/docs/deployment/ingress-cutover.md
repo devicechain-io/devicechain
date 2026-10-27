@@ -112,17 +112,18 @@ instance has run `--drop-legacy-ingress`. A cluster whose instances use differen
 
 ## The certificate gate {#ingress-cutover-cert-gate}
 
-A Gateway with no certificate is a release that looks green and answers `https` with the controller's default certificate, so the upgrade checks the Gateway's certificate. It applies when the instance terminates TLS and the cluster has cert-manager; `--no-tls` skips it.
+A Gateway with no certificate answers `https` with the controller's default certificate, so the move checks the Gateway's certificate at four points. The checks apply when the instance terminates TLS and the cluster has cert-manager; `--no-tls` skips them. A Gateway whose Secret you supply yourself (it carries no cert-manager issuer annotation) has nothing to wait for and passes.
 
-- While the Ingress objects still serve the host, an upgrade whose Gateway certificate is not yet `Ready` warns and continues, because nothing depends on the Gateway yet.
-- `--drop-legacy-ingress` makes the Gateway the only front end, so it **refuses** until the Gateway's certificate is `Ready`.
-- An upgrade that leaves an instance on the Gateway alone waits up to five minutes for it, and fails with the reason.
+- **During the window,** `dcctl upgrade` waits 30 seconds for the certificate, then **warns and continues**. The Ingress objects still serve the host, and many issuers can only issue the Gateway's certificate once DNS points at Traefik.
+- **`dcctl upgrade --drop-legacy-ingress`** refuses, before it renders or changes anything, unless the Gateway's cert-manager Certificate is `Ready` and controlled by the Gateway. It also refuses when the instance has no Gateway yet. Move DNS first so the certificate can be issued, check `kubectl -n dci-<instance> get certificate`, and run the command again.
+- **`dcctl install --remove-legacy-ingress`** checks the Gateway of every instance on the cluster, and names each one whose certificate is not `Ready`.
+- **An upgrade that leaves an instance on the Gateway alone** waits up to five minutes, and fails with the reason. The services are already up when it fails.
 
-The services are already up when the check fails. The error names what it found: fix that and **run the same command again**. The common causes:
+A refusal ends with "Nothing has been changed". Fix what it names and **run the same command again**. The common causes:
 
-- **A Certificate exists for the Secret, but the Gateway does not control it.** cert-manager will not adopt a Certificate it did not create for the Gateway, so one left over from an Ingress, or made by hand, under the same Secret name leaves the Gateway with none. The error prints the command that deletes it (`kubectl -n dci-<instance> delete certificate <name>`); the Gateway's own is then created.
+- **A Certificate exists for the Secret, but the Gateway does not control it.** cert-manager will not adopt a Certificate it did not create for the Gateway, so one left over from an Ingress, or made by hand, under the same Secret name leaves the Gateway with none. The message prints the command that deletes it (`kubectl -n dci-<instance> delete certificate <name>`); the Gateway's own is then created.
 - **No Certificate is created at all.** cert-manager's Gateway API support is not on, or it started before the Gateway API definitions existed. `kubectl -n cert-manager logs deploy/cert-manager` says. A `dcctl install` of this release turns it on.
-- **The Certificate is not `Ready`.** The error carries the issuer's own message. With an ACME issuer, see below.
+- **The Certificate is not `Ready`.** The message carries the issuer's own text. With an ACME issuer, see below.
 
 ## Certificates from an ACME issuer {#ingress-cutover-acme}
 
@@ -190,9 +191,7 @@ the edge:
 - **Paths are case-sensitive and end on a path boundary.** `/API/<area>` and `/api/<area>X` fall through to the
   console instead of reaching the area.
 - **Client addresses.** Traefik writes the real peer into `X-Forwarded-For` and its Service uses
-  `externalTrafficPolicy: Local`; see [Client addresses and trusted proxies](./bootstrap.md#trusted-proxies). On
-  AWS a Classic Load Balancer hides the client address, and the NLB variable that dcctl's install offers covers
-  `ingress-nginx` only.
+  `externalTrafficPolicy: Local`; see [Client addresses and trusted proxies](./bootstrap.md#trusted-proxies). On AWS a Classic Load Balancer hides the client address. `dcctl install --aws-nlb` gives the controllers' Services a Network Load Balancer, which replaces the load balancer and changes its hostname, so repoint DNS afterwards.
 
 ## Related {#ingress-cutover-related}
 

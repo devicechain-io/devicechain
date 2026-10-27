@@ -92,17 +92,18 @@ title: 迁移到 Traefik
 
 ## 证书关卡 {#ingress-cutover-cert-gate}
 
-没有证书的 Gateway 看起来像一次成功的发布，却会用控制器的默认证书响应 `https`，所以升级会检查 Gateway 的证书。实例终止 TLS 且集群有 cert-manager 时适用；`--no-tls` 会跳过它。
+没有证书的 Gateway 会用控制器的默认证书响应 `https`，所以迁移会在四个时间点检查 Gateway 的证书。实例终止 TLS 且集群有 cert-manager 时适用这些检查；`--no-tls` 会跳过它们。Secret 由你自己提供的 Gateway（没有 cert-manager 签发者注解）无需等待，直接通过。
 
-- 在 Ingress 对象仍然提供该主机的期间，Gateway 证书尚未 `Ready` 的升级会给出警告并继续，因为目前还没有任何东西依赖 Gateway。
-- `--drop-legacy-ingress` 会让 Gateway 成为唯一的前端，所以在 Gateway 的证书 `Ready` 之前它会**拒绝执行**。
-- 让实例仅由 Gateway 提供服务的升级，最多等待五分钟，失败时会给出原因。
+- **在迁移窗口内，** `dcctl upgrade` 会等待证书 30 秒，然后**给出警告并继续**。主机仍由 Ingress 对象提供，而且许多签发者只有在 DNS 指向 Traefik 之后才能签发 Gateway 的证书。
+- **`dcctl upgrade --drop-legacy-ingress`** 会在渲染或更改任何内容之前拒绝执行，除非 Gateway 的 cert-manager Certificate 处于 `Ready` 且由 Gateway 控制。实例还没有 Gateway 时它同样拒绝。请先迁移 DNS，让证书得以签发，用 `kubectl -n dci-<instance> get certificate` 查看，然后再运行该命令。
+- **`dcctl install --remove-legacy-ingress`** 会检查集群上每个实例的 Gateway，并列出证书未 `Ready` 的实例。
+- **让实例仅由 Gateway 提供服务的升级** 最多等待五分钟，失败时给出原因。失败时服务已经启动。
 
-检查失败时，服务此时已经启动。错误会说明发现了什么：修复后**再运行一次相同的命令**。常见原因：
+拒绝信息以 “Nothing has been changed” 结尾。修复其中指出的问题后，**再运行一次相同的命令**。常见原因：
 
-- **存在一个指向该 Secret 的 Certificate，但 Gateway 并不控制它。** cert-manager 不会接管不是为该 Gateway 创建的 Certificate，所以由 Ingress 遗留的或手工创建的、使用同一 Secret 名称的 Certificate，会让 Gateway 没有证书。错误会打印删除它的命令（`kubectl -n dci-<instance> delete certificate <name>`），之后会创建 Gateway 自己的 Certificate。
+- **存在一个指向该 Secret 的 Certificate，但 Gateway 并不控制它。** cert-manager 不会接管不是为该 Gateway 创建的 Certificate，所以由 Ingress 遗留的或手工创建的、使用同一 Secret 名称的 Certificate，会让 Gateway 没有证书。消息会打印删除它的命令（`kubectl -n dci-<instance> delete certificate <name>`），之后会创建 Gateway 自己的 Certificate。
 - **根本没有创建 Certificate。** cert-manager 的 Gateway API 支持未开启，或者它在 Gateway API 定义存在之前就已启动。`kubectl -n cert-manager logs deploy/cert-manager` 会给出说明。运行本版本的 `dcctl install` 会开启它。
-- **Certificate 不是 `Ready`。** 错误中带有签发者自己的消息。使用 ACME 签发者时，见下文。
+- **Certificate 不是 `Ready`。** 消息中带有签发者自己的文字。使用 ACME 签发者时，见下文。
 
 ## 来自 ACME 签发者的证书 {#ingress-cutover-acme}
 
@@ -153,7 +154,7 @@ Gateway 提供与 Ingress 对象相同的主机、路径和后端。变化的是
 - **上传不设上限也不缓冲。** Traefik 以流方式传递请求正文，更新服务自行执行其上限。Traefik 的读取超时约束的是**整个请求**（包括正文），因此它由集群接受的最大制品推导而来：OpenTofu 变量 `traefik_max_artifact_bytes`，默认 512 MiB，对应 2,228 秒的窗口。要提高某个实例的 `updates.maxArtifactBytes`，请**先**提高它。同一个窗口也是慢速发送请求头的客户端可以占用一条连接的时长，之前是 60 秒。
 - **下载的查询字符串不会进入访问日志**（访问日志默认关闭）。下载授权就在 `?cap=` 中。
 - **路径区分大小写，并在路径段边界结束。** `/API/<area>` 和 `/api/<area>X` 会落到控制台，而不会到达该功能区。
-- **客户端地址。** Traefik 把真实的对端地址写入 `X-Forwarded-For`，其 Service 使用 `externalTrafficPolicy: Local`；见[客户端地址与受信任代理](./bootstrap.md#trusted-proxies)。在 AWS 上，经典负载均衡器会隐藏客户端地址，而 dcctl 安装所提供的 NLB 变量只覆盖 `ingress-nginx`。
+- **客户端地址。** Traefik 把真实的对端地址写入 `X-Forwarded-For`，其 Service 使用 `externalTrafficPolicy: Local`；见[客户端地址与受信任代理](./bootstrap.md#trusted-proxies)。在 AWS 上，经典负载均衡器会隐藏客户端地址。`dcctl install --aws-nlb` 会为各控制器的 Service 配置 NLB，这会替换负载均衡器并更改其主机名，所以之后要重新指向 DNS。
 
 ## 相关 {#ingress-cutover-related}
 

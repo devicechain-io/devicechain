@@ -2148,11 +2148,12 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 新安装通过 Traefik 和 Gateway API 路由提供主机服务，没有 `ingress-nginx` 的集群也不再安装它。**现有集群会保留 `ingress-nginx` 并继续让它提供服务，同时在它旁边增加 Traefik。** 在你迁移之前，主机不会有任何变化：
 
 - `dcctl install` 在 `ingress-nginx` 旁边安装 Traefik 和 Gateway API 定义，使用自己的负载均衡器和地址。
-- `dcctl upgrade` 为每个实例创建 Gateway 和路由，并且只要集群上有 `ingress-nginx`，就在它们旁边保留实例的 Ingress 对象。两者使用不同的证书：Ingress 对象保留 `devicechain-tls`，Gateway 使用 `devicechain-tls-gateway`。升级会检查 Gateway 的证书：在迁移窗口内，证书尚未 `Ready` 时它会给出警告并继续，而 `--drop-legacy-ingress` 会拒绝执行，直到它 `Ready`。
+- `dcctl upgrade` 为每个实例创建 Gateway 和路由，并且只要集群上有 `ingress-nginx`，就在它们旁边保留实例的 Ingress 对象。两者使用不同的证书：Ingress 对象保留 `devicechain-tls`，Gateway 使用 `devicechain-tls-gateway`。在迁移窗口内，升级会等待 Gateway 的证书 30 秒，然后给出警告并继续；`--drop-legacy-ingress` 会拒绝执行，直到它 `Ready`，而 `--remove-legacy-ingress` 会检查每个实例。
 - 你在自己选定的时间把 DNS 迁移到 Traefik 的地址。然后 `dcctl upgrade --drop-legacy-ingress` 停止生成 Ingress 对象，`dcctl install --remove-legacy-ingress` 移除 `ingress-nginx`。只要还有 Ingress 对象指向其类，移除就会被拒绝。
 - 只要 `ingress-nginx` 仍已安装，`dcctl upgrade --ingress-controller nginx` 就能把实例放回它上面。该选择会被记录，并由之后的升级保留；`--ingress-controller auto` 将其清除。
 - **通过 `nginx` Ingress 类解决 HTTP-01 的 ACME 签发者在迁移窗口内继续可用，`ingress-nginx` 被移除后续期会失败。** 在 DNS 指向 Traefik 之前保持原样，之后在 `--drop-legacy-ingress` 和 `--remove-legacy-ingress` 之前为它添加 `gatewayHTTPRoute` 求解器。更早设置会失败。DNS-01 求解器全程可用。
-- 在 AWS 上，经典负载均衡器会向 Traefik 隐藏客户端地址，而安装所提供的 NLB 变量只覆盖 `ingress-nginx`。
+- 在 AWS 上，经典负载均衡器会隐藏客户端地址。`dcctl install --aws-nlb` 会为各控制器的 Service 配置 NLB，这会替换负载均衡器并更改其主机名。
+- HA 安装运行两个 Traefik 副本，分散到不同节点，并带有保持一个副本可用的 PodDisruptionBudget。
 - 在本地集群上没有 DNS 可迁移：浏览器访问的是占用节点 80 和 443 端口的那个控制器。`ingress-nginx` 占用它们，直到 `--remove-legacy-ingress` 把端口交给 Traefik，所以请连续运行 `--drop-legacy-ingress` 和移除操作：两者之间主机不响应。全新的本地集群从一开始就由 Traefik 占用这些端口。
 
 每一步、命令、你可能看到的拒绝信息以及回滚方法，都在[将现有安装迁移到 Traefik](./ingress-cutover.md)中。新增的标志见 [`dcctl` 参考](../reference/dcctl.md)。
