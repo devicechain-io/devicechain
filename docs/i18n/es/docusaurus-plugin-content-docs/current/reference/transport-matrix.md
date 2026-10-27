@@ -380,8 +380,8 @@ del inquilino. El dispositivo nunca se conecta a DeviceChain.
 - **Escritura ○ / Lectura ○**: no hay downlink. Un comando emitido a un dispositivo que informó por última
   vez a través de una integración **se acepta y luego falla** en el siguiente barrido de entrega con
   `COMMAND_TRANSPORT_UNSUPPORTED`, en lugar de esperar hasta caducar. El fallo es definitivo. Un
-  dispositivo que nunca ha informado no tiene transporte registrado, así que su primer comando se despacha
-  y caduca. Como el transporte registrado es el último por el que informó el dispositivo, un dispositivo que
+  dispositivo que nunca ha informado no tiene transporte registrado, así que sus comandos se despachan,
+  y caducan, hasta que informa por primera vez. Como el transporte registrado es el último por el que informó el dispositivo, un dispositivo que
   también envía por MQTT vuelve a recibir comandos en cuanto lo ha hecho.
 
 ## Conectores de salida

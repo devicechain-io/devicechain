@@ -9,6 +9,7 @@
 #   hack/integrations-rig.sh test    # create the integration + devices, drive the simulator, assert
 #   hack/integrations-rig.sh down    # destroy the instance (the cluster stays)
 #   hack/integrations-rig.sh all     # up, test, down (down runs even when test fails)
+#   hack/integrations-rig.sh selftest  # offline: each assertion refuses a planted bad value
 #
 # WHAT IT PROVES, through the ingress and across every service, not against a unit double:
 #
@@ -23,10 +24,11 @@
 #   5. A wrong bearer token is answered 401 and stores nothing; a message type that is not an
 #      uplink is acknowledged 204 and stores nothing.
 #
-# NEGATIVE CONTROL. A check that cannot fail proves nothing, so before the assertions the rig
-# disables the integration and shows the same simulator run is then refused (403) and adds
-# nothing to the stored count. The assertions above are only worth anything because that
-# refusal is visible in the same counters.
+# CONTROLS. A check that cannot fail proves nothing, so the rig shows its counters can move both
+# ways. Before the assertions it disables the integration and shows the same simulator run is
+# refused (403) and adds nothing to the stored count; after them, one genuinely new uplink must
+# raise the exact count by its seven readings. `selftest` (offline) shows each content assertion
+# refuses a planted bad value.
 #
 # THE CLUSTER. It reuses the kind cluster `dcctl install local` prepared (DC_INT_CLUSTER, default
 # devicechain) and puts its own instance, tenant and ingress host (DC_INT_HOST) beside whatever else
@@ -326,21 +328,65 @@ expect_status() {
   [[ "$got" == "$want" ]] || fail "expected $want response(s) with status $code, got $got: $summary"
 }
 
-assert_stored() {
-  local dev="$1" label="$2" body temp
-  body="$(measurements_of "$dev")"
-  local n
+# check_body <label> <body> asserts what a device's stored measurements ("name value unit" lines)
+# must hold after $uplinks uplinks. Every test captures its text first and tests the capture: a
+# pipe into grep -q or head under pipefail is killed by SIGPIPE (status 141) and turns an
+# assertion that should fail into one that never runs. `selftest` plants a bad value for each.
+check_body() {
+  local label="$1" body="$2" n c first bad
   for n in temperature humidity battery.voltage door lorawan.rssi lorawan.snr lorawan.gateways; do
-    [[ "$(grep -c "^$n " <<<"$body")" == "$uplinks" ]] || fail "$label: wanted $uplinks '$n' measurements, got: $(grep -c "^$n " <<<"$body")"
+    c="$(awk -v n="$n" '$1 == n { c++ } END { print c + 0 }' <<<"$body")"
+    [[ "$c" == "$uplinks" ]] || fail "$label: wanted $uplinks '$n' measurements, got: $c"
   done
-  temp="$(grep '^temperature ' <<<"$body" | head -n1)"
-  [[ "$temp" == *" C" ]] || fail "$label: the declared metric's unit was not applied: $temp"
-  grep '^humidity ' <<<"$body" | grep -q ' null$' || fail "$label: an undeclared key should carry no unit"
-  grep '^door ' <<<"$body" | awk '{print $2}' | grep -qvE '^(0|1)$' && fail "$label: a boolean must be stored as 0 or 1"
-  [[ "$(grep -c '^door 1' <<<"$body")" == "2" ]] || fail "$label: door is open on the odd uplinks (2 of $uplinks)"
-  grep '^lorawan.gateways ' <<<"$body" | awk '{print $2}' | grep -qvE '^2$' && fail "$label: two gateways reported every uplink"
-  grep -q '^status ' <<<"$body" && fail "$label: a string leaf must not be stored"
+  first="$(sed -n '/^temperature /{p;q;}' <<<"$body")"
+  [[ "$first" == *" C" ]] || fail "$label: the declared metric's unit was not applied: $first"
+  bad="$(awk '$1 == "humidity" && $3 != "null"' <<<"$body")"
+  [[ -z "$bad" ]] || fail "$label: an undeclared key should carry no unit: $bad"
+  bad="$(awk '$1 == "door" && $2 != "0" && $2 != "1"' <<<"$body")"
+  [[ -z "$bad" ]] || fail "$label: a boolean must be stored as 0 or 1: $bad"
+  c="$(awk '$1 == "door" && $2 == "1" { c++ } END { print c + 0 }' <<<"$body")"
+  [[ "$c" == 2 ]] || fail "$label: door is open on the odd uplinks (2 of $uplinks), got $c"
+  bad="$(awk '$1 == "lorawan.gateways" && $2 != "2"' <<<"$body")"
+  [[ -z "$bad" ]] || fail "$label: two gateways reported every uplink: $bad"
+  bad="$(awk '$1 == "status"' <<<"$body")"
+  [[ -z "$bad" ]] || fail "$label: a string leaf must not be stored: $bad"
   note "$label: all 7 keys stored $uplinks times, unit and 1/0 booleans as declared"
+}
+
+assert_stored() { check_body "$2" "$(measurements_of "$1")"; }
+
+# good_body prints a body check_body accepts.
+good_body() {
+  local i door
+  for i in $(seq 0 $((uplinks - 1))); do
+    door=$((i % 2))
+    printf 'temperature 21.5 C\nhumidity 50 null\nbattery.voltage 3.1 V\ndoor %s null\nlorawan.rssi -80 null\nlorawan.snr 8.5 null\nlorawan.gateways 2 null\n' "$door"
+  done
+}
+
+# cmd_selftest shows each assertion in check_body FAILS on a planted bad value, and that the
+# unplanted body passes, so a green run means something.
+cmd_selftest() {
+  local good mutated name
+  good="$(good_body)"
+  (check_body "good body" "$good") >/dev/null || fail "selftest: the good body was refused"
+  declare -A planted=(
+    ["a missing key"]="$(sed '0,/^lorawan.snr /{//d;}' <<<"$good")"
+    ["a wrong unit"]="${good/temperature 21.5 C/temperature 21.5 F}"
+    ["a unit on an undeclared key"]="${good/humidity 50 null/humidity 50 %}"
+    ["a boolean stored as 2"]="${good/door 1 null/door 2 null}"
+    ["a door that is never open"]="$(sed 's/^door 1 /door 0 /' <<<"$good")"
+    ["a gateway count of 3"]="${good/lorawan.gateways 2 null/lorawan.gateways 3 null}"
+    ["a stored string leaf"]="$good"$'\n'"status 0 null"
+  )
+  for name in "${!planted[@]}"; do
+    mutated="${planted[$name]}"
+    if (check_body "planted: $name" "$mutated") >/dev/null 2>&1; then
+      fail "selftest: check_body accepted $name"
+    fi
+    note "refused: $name"
+  done
+  say "selftest: the good body passes and all ${#planted[@]} planted faults are refused"
 }
 
 cmd_test() {
@@ -441,12 +487,12 @@ case "${1:-}" in
   up) cmd_up ;;
   test) cmd_test ;;
   down) cmd_down ;;
+  selftest) cmd_selftest ;;
   all)
+    # The instance is destroyed whatever the test does: fail exits the script, and a trap runs then.
+    trap 'cmd_down || true; rm -rf "$rig_tmp"' EXIT
     cmd_up
-    rc=0
-    cmd_test || rc=$?
-    cmd_down || true
-    exit "$rc"
+    cmd_test
     ;;
-  *) fail "usage: $0 up|test|down|all" ;;
+  *) fail "usage: $0 up|test|down|all|selftest" ;;
 esac

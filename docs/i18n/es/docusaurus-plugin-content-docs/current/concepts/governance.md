@@ -92,7 +92,7 @@ Dentro de `event-sources`, un inquilino puede ser admitido por tanto hasta cuatr
 
 El valor por defecto de la plataforma es de 1000 lecturas por segundo por inquilino, con una ráfaga de 2000. Una lectura es un valor almacenado: una clave de una entrada de medición, una ubicación o una alerta. Un mensaje que lleva 256 lecturas cuesta 256.
 
-Se midió que una instalación de alta disponibilidad por defecto, en un clúster de tres nodos de base de datos dedicados de 4 vCPU/16 GB y tres nodos de servicios de 4 vCPU/8 GB, con una réplica de `event-sources`, almacenaba 6000 lecturas por segundo durante 10 minutos, con `event-management` en dos pods. Con el valor por defecto, los dispositivos de un solo inquilino se admiten como máximo a cinco veces 1000, es decir, 5000 lecturas por segundo, incluso con un atraso vaciándose y ambos servicios de borde en marcha, lo que queda por debajo de esa medición. Sin atraso ni servicios de borde son 2000.
+Se midió que una instalación de alta disponibilidad por defecto, en un clúster de tres nodos de base de datos dedicados de 4 vCPU/16 GB y tres nodos de servicios de 4 vCPU/8 GB, con una réplica de `event-sources`, almacenaba 6000 lecturas por segundo durante 10 minutos, con `event-management` en dos pods. Con el valor por defecto, los dispositivos de un solo inquilino se admiten como máximo a seis veces 1000, es decir, 6000 lecturas por segundo, incluso con un atraso vaciándose, integraciones enviando y ambos servicios de borde en marcha, que es la tasa que esa instalación almacenó en la medición, sin margen. Sin atraso ni servicios de borde son 3000.
 
 No es una garantía en todas las configuraciones:
 

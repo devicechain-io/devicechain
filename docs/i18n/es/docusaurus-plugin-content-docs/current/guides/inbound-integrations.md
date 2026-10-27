@@ -90,7 +90,7 @@ Un mensaje nombra un dispositivo como lo conoce el remitente, no como lo conoce 
 | --- | --- | --- |
 | `lorawan.deveui` | El DevEUI de LoRaWAN: exactamente 16 dígitos hexadecimales. | En mayúsculas. `70b3d57ed0012345` y `70B3D57ED0012345` son el mismo alias. |
 | `tts.device-id` | El id que tiene el dispositivo en The Things Stack: de 1 a 36 letras, dígitos y guiones, sin empezar ni terminar con guion. | En minúsculas. |
-| `custom.<name>` | Cualquier identificador propio, para un remitente genérico: de 1 a 128 caracteres sin caracteres de control. El nombre son letras minúsculas, dígitos, guiones y guiones bajos, hasta 63 caracteres. | Tal como se escribe. Importan las mayúsculas. |
+| `custom.<name>` | Cualquier identificador propio, para un remitente genérico: de 1 a 128 caracteres sin caracteres de control. El nombre empieza por una letra minúscula o un dígito y sigue con letras minúsculas, dígitos, guiones y guiones bajos, hasta 63 caracteres en total. | Tal como se escribe. Importan las mayúsculas. |
 
 Un dispositivo tiene como máximo 8 alias y un valor por esquema, y un esquema y un valor solo pueden pertenecer a un dispositivo del inquilino. Escribir un DevEUI en minúsculas, o con espacios alrededor, es válido: se normaliza al guardarlo y cuando llega un mensaje. Todo lo que no sean 16 dígitos hexadecimales se rechaza.
 
@@ -114,6 +114,8 @@ Para encontrar un dispositivo por alias, da a `devices` el criterio `alias: {sch
 
 El **Identificador del dispositivo** de la integración decide qué esquema se busca: `DEV_EUI` lee `lorawan.deveui`, `DEVICE_ID` lee `tts.device-id` y `ALIAS:custom.serial` lee `custom.serial`. Un dispositivo que solo tiene otro esquema no se encuentra.
 
+Quitar un alias de un dispositivo, o pasarlo a otro dispositivo, puede tardar hasta una hora en llegar al endpoint: hasta entonces los uplinks de ese identificador siguen llegando al dispositivo que lo tenía. Un dispositivo que crees para un identificador que ya estaba llegando empieza a recibir en menos de un minuto.
+
 ## ChirpStack v4 {#chirpstack}
 
 ChirpStack envía los uplinks mediante una **integración HTTP** en una aplicación.
@@ -124,7 +126,7 @@ ChirpStack envía los uplinks mediante una **integración HTTP** en una aplicaci
    | Campo de ChirpStack | Valor |
    | --- | --- |
    | Payload encoding | **JSON**. Una integración Protobuf se rechaza con `415`, y el mensaje nombra este ajuste. |
-   | Event endpoint URL | `https://<host>/api/integrations/{tenant}/{integration}`. ChirpStack añade `?event=up` por sí mismo. |
+   | Event endpoint URL(s) | `https://<host>/api/integrations/{tenant}/{integration}`. ChirpStack añade `?event=up` por sí mismo. |
    | Headers | Nombre `Authorization`, valor `Bearer <bearer-token>`. |
 
 3. **Configura un códec en el perfil de dispositivo de ChirpStack** (un códec de payload en JavaScript). La plataforma guarda los valores que decodifica el servidor de red; no decodifica la trama cruda. Sin códec, ChirpStack envía la trama cruda y ningún objeto decodificado, y el uplink se [cuenta como no decodificado](#undecoded) en lugar de guardarse.
@@ -142,10 +144,10 @@ The Things Stack envía los uplinks mediante un **webhook** en una aplicación.
    | Campo de The Things Stack | Valor |
    | --- | --- |
    | Base URL | `https://<host>/api/integrations/{tenant}/{integration}` |
-   | Additional header | Nombre `Authorization`, valor `Bearer <bearer-token>`. |
-   | Uplink message | Activado, con la ruta `/uplink-message`. La plataforma también lee las rutas `/up`, `/uplink` y `/uplinks`. |
+   | Additional headers | Nombre `Authorization`, valor `Bearer <bearer-token>`. |
+   | Enabled event types | Uplink message, activado, con la ruta `/uplink-message`. La plataforma también lee las rutas `/up`, `/uplink` y `/uplinks`. |
 
-3. **Configura un payload formatter** en la aplicación o en el dispositivo (el repositorio de modelos de dispositivo ofrece uno para muchos sensores). La plataforma guarda lo que produce el formatter; no decodifica la trama cruda. Sin uno, el uplink se [cuenta como no decodificado](#undecoded).
+3. **Configura un payload formatter** en la aplicación o en el dispositivo (el LoRaWAN Device Repository ofrece uno para muchos sensores). La plataforma guarda lo que produce el formatter; no decodifica la trama cruda. Sin uno, el uplink se [cuenta como no decodificado](#undecoded).
 4. Añade los dispositivos en DeviceChain con su DevEUI como alias `lorawan.deveui`, o con su id de dispositivo como alias `tts.device-id` si elegiste **Id de dispositivo**.
 
 Un mensaje enviado a cualquier otra ruta (un join accept, una confirmación de downlink) se responde con `204` y se ignora, de modo que puedes activar otros tipos de mensaje sin cambiar nada en DeviceChain, aunque no hay motivo para hacerlo. La hora del mensaje es el `received_at` del uplink, que debe estar presente y no tener más de 366 días. La clave de deduplicación es el dispositivo, el contador de tramas y esa hora juntos, porque el contador se reinicia cuando un dispositivo vuelve a unirse.
@@ -207,18 +209,18 @@ Un servidor de red que no recibe respuesta a tiempo envía el mensaje otra vez, 
 | Remitente | La clave |
 | --- | --- |
 | ChirpStack v4 | El `deduplicationId`. |
-| The Things Stack v3 | El DevEUI del dispositivo, el contador de tramas y `received_at`. |
+| The Things Stack v3 | El DevEUI del dispositivo (su id de dispositivo, cuando la integración identifica los dispositivos por `DEVICE_ID` y el mensaje no trae DevEUI), el contador de tramas y `received_at`. |
 | Genérico, con `timePointer` | Un resumen del dispositivo y del elemento, más la hora del remitente. Un reintento lleva el mismo elemento y la misma hora, así que se guarda una vez. |
 | Genérico, sin `timePointer` | Un resumen del dispositivo y del elemento, más la hora de recepción. Un reintento es una clave nueva, así que **se guarda dos veces**. |
 
-La plataforma también descarta, antes de procesarla, una repetición exacta de un mensaje que llega dentro de los diez minutos posteriores al primero. Ninguna regla fusiona dos uplinks distintos que casualmente tengan los mismos valores.
+La plataforma también descarta, antes de procesarlo, un repetido que lleva la misma clave dentro de los diez minutos posteriores al primero; un remitente genérico sin `timePointer` obtiene una clave nueva en cada envío, así que esto no lo cubre. Una clave tiene como máximo 192 bytes; una más larga se rechaza con `400`. Ninguna regla fusiona dos uplinks distintos que casualmente tengan los mismos valores.
 
 ## Dispositivos no registrados {#unregistered}
 
-Cuando un mensaje nombra un identificador que no lleva ningún dispositivo dentro del alcance de la integración, la plataforma no lo guarda. En su lugar registra el identificador en la integración, para que veas qué dispositivos te están hablando sin que los hayas añadido. Abre la integración en la consola y mira en **Dispositivos no registrados vistos**: cada fila muestra el esquema, el identificador, cuántas veces se vio y cuándo. **Crear un dispositivo con este alias** abre el formulario del dispositivo con el alias y el tipo rellenados. Con GraphQL, la lista es `unregisteredIntegrationDevices(criteria)`.
+Cuando un mensaje nombra un identificador que no lleva ningún dispositivo dentro del alcance de la integración, la plataforma no lo guarda. En su lugar registra el identificador en la integración, para que veas qué dispositivos te están hablando sin que los hayas añadido. Abre la integración en la consola y mira en **Dispositivos no registrados vistos**: cada fila muestra el esquema, el identificador, cuántas veces se vio y cuándo. **Crear un dispositivo con este alias** abre el formulario del dispositivo con el alias rellenado, y también el tipo cuando la integración tiene en su alcance exactamente un tipo de dispositivo. Con GraphQL, la lista es `unregisteredIntegrationDevices(criteria)`.
 
 - La lista guarda como máximo 1.000 identificadores por integración. Pasado ese punto, los nuevos se cuentan y no se listan.
-- Un avistamiento se registra como máximo una vez por minuto para cada identificador, así que el recuento mide actividad y no es un número exacto de mensajes.
+- Un avistamiento se registra como máximo una vez por minuto para cada identificador en cada réplica de `event-sources`, así que el recuento mide actividad y no es un número exacto de mensajes.
 - Un identificador que ya lleva un dispositivo fuera del alcance de la integración no se lista, de modo que la lista nunca muestra un valor que un dispositivo ya tiene.
 - **Vaciar lista** (`clearUnregisteredIntegrationDevices(integration)`) la vacía. Es una lista de observaciones, así que un identificador que el remitente sigue enviando vuelve a aparecer.
 
@@ -236,10 +238,10 @@ Un servidor de red solo ve el código de estado, y algunos suspenden un webhook 
 | `405` | El método no es `POST`. |
 | `413` | El cuerpo supera los 256 KiB. |
 | `415` | ChirpStack está enviando Protobuf. Cambia su codificación de payload a JSON. |
-| `429` | Demasiados inicios de sesión fallidos para esta integración, o demasiadas peticiones sin autenticar desde una misma dirección. Reintenta pasado el intervalo de `Retry-After`. |
-| `503` | La plataforma no puede comprobar el token ni recibir el mensaje ahora, o está aplicando contrapresión. Reintenta; una cabecera `Retry-After` significa que el mensaje con certeza no se guardó. |
+| `429` | Demasiados inicios de sesión fallidos para esta integración, demasiadas peticiones desde una misma dirección cuyo token la plataforma no acaba de verificar o, en una réplica, demasiadas peticiones para integraciones que nunca ha verificado. Reintenta pasado el intervalo de `Retry-After`. |
+| `503` | La plataforma no puede comprobar el token ni recibir el mensaje ahora, o está aplicando contrapresión. Reintenta. Una cabecera `Retry-After` significa que la plataforma aplica contrapresión: un uplink suelto no se guardó, pero en un arreglo genérico los elementos anteriores al rechazo pueden haberse guardado, así que da a un remitente genérico un `timePointer` para que el reintento sea seguro. |
 
-Un cambio en una integración es rápido pero no instantáneo en el endpoint, que recuerda lo que averiguó sobre una integración hasta un minuto. Después de rotar un token o desactivar una integración, puede seguir respondiendo `202` hasta un minuto a un remitente que aún use el token anterior, pero nada de lo enviado en ese minuto se guarda. Después de volver a activar una integración, puede seguir respondiendo `403` hasta un minuto.
+Un cambio en una integración es rápido pero no instantáneo en el endpoint, que recuerda lo que averiguó sobre una integración hasta un minuto (hasta 15 minutos mientras device-management no está disponible). Después de rotar un token o desactivar una integración, puede seguir respondiendo `202` hasta un minuto a un remitente que aún use el token anterior, pero nada de lo enviado en ese minuto se guarda. Después de volver a activar una integración, puede seguir respondiendo `403` hasta un minuto.
 
 ## Límites {#limits}
 
@@ -258,7 +260,7 @@ Un cambio en una integración es rápido pero no instantáneo en el endpoint, qu
 
 **Por encima de la asignación, la respuesta es `202`, no `429`.** Un rechazo perdería el mensaje de todos modos, y algunos servidores de red suspenden un webhook al que se rechaza, lo que haría perder tráfico que estaba dentro de la asignación. La consecuencia es que el remitente cree que los datos llegaron y no fue así. La alerta `IntegrationShedAccepted` avisa a un operador cuando esto ocurre; sube el techo del inquilino o reduce lo que envía la integración.
 
-**Límites al tráfico sin autenticar.** Quien conozca la URL de una integración no puede usarla para gastar la asignación del inquilino ni el tráfico bueno de una integración: los tokens incorrectos se limitan por integración (una ráfaga de 30 y luego 1 por segundo), las peticiones que obligan a la plataforma a consultar una integración desconocida se limitan por dirección de origen (una ráfaga de 60 y luego 5 por segundo) y por réplica, y un front end `ingress-nginx` limita cada dirección a 200 peticiones por segundo. El tráfico constante de un servidor de red con un token válido no le cuesta nada a su dirección frente a estos límites. La alerta `IntegrationAuthFailuresSustained` salta cuando los fallos se mantienen diez minutos, que es el aspecto de un remitente que sigue usando un token rotado.
+**Límites al tráfico sin autenticar.** Quien conozca la URL de una integración no puede usarla para gastar la asignación del inquilino ni el tráfico bueno de una integración: los tokens incorrectos se limitan por integración (una ráfaga de 30 y luego 1 por segundo), las peticiones cuyo token la plataforma no ha verificado en el último minuto se limitan por dirección de origen (una ráfaga de 60 y luego 5 por segundo) y, para nombres de integración que nunca ha verificado, por réplica (una ráfaga de 100 y luego 20 por segundo). El front end `ingress-nginx` limita además cada dirección a 200 peticiones por segundo y responde `503` por encima; limita por cliente solo cuando el controlador está configurado para confiar en la dirección reenviada del balanceador, y el front end de la Gateway API no tiene ese límite. El tráfico constante de un servidor de red con un token válido le cuesta a su dirección aproximadamente una petición por minuto frente a los límites de la plataforma. La alerta `IntegrationAuthFailuresSustained` salta cuando los fallos se mantienen diez minutos, que es el aspecto de un remitente que sigue usando un token rotado.
 
 ## Comandos a dispositivos de integración {#commands}
 
@@ -267,7 +269,7 @@ Un dispositivo que informa a través de una integración no tiene una conexión 
 Conviene conocer dos casos:
 
 - Un dispositivo que además se conecta por MQTT se juzga por el último transporte por el que informó. Mientras su último informe fue a través de la integración, sus comandos fallan; cuando informa por MQTT, se entregan.
-- Un dispositivo que nunca ha informado no tiene transporte registrado, así que su primer comando se despacha como de costumbre y caduca sin respuesta.
+- Un dispositivo que nunca ha informado no tiene transporte registrado, así que sus comandos se despachan como de costumbre, y caducan sin respuesta, hasta que informa por primera vez.
 
 Para un dispositivo que debe recibir comandos, dale también una conexión MQTT. Consulta la [matriz de transportes](../reference/transport-matrix.md).
 

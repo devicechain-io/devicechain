@@ -90,7 +90,7 @@ A message names a device the way the sender knows it, not the way DeviceChain do
 | --- | --- | --- |
 | `lorawan.deveui` | The LoRaWAN DevEUI: exactly 16 hexadecimal digits. | Upper case. `70b3d57ed0012345` and `70B3D57ED0012345` are the same alias. |
 | `tts.device-id` | The device id the device has in The Things Stack: 1 to 36 letters, digits and hyphens, not starting or ending with a hyphen. | Lower case. |
-| `custom.<name>` | Any identifier of your own, for a generic sender: 1 to 128 characters with no control characters. The name is lower-case letters, digits, hyphens and underscores, up to 63 characters. | As written. Case matters. |
+| `custom.<name>` | Any identifier of your own, for a generic sender: 1 to 128 characters with no control characters. The name starts with a lower-case letter or digit and continues with lower-case letters, digits, hyphens and underscores, up to 63 characters in all. | As written. Case matters. |
 
 A device holds at most 8 aliases and one value per scheme, and a scheme and value can belong to only one device in the tenant. Writing a DevEUI in lower case, or with surrounding spaces, is fine: it is normalized when it is stored and when a message arrives. Anything that is not 16 hexadecimal digits is refused.
 
@@ -114,6 +114,8 @@ To find a device by alias, give `devices` a criteria `alias: {scheme: "lorawan.d
 
 The integration's **Device identifier** decides which scheme it looks up: `DEV_EUI` reads `lorawan.deveui`, `DEVICE_ID` reads `tts.device-id`, and `ALIAS:custom.serial` reads `custom.serial`. A device that carries only a different scheme is not found.
 
+Removing an alias from a device, or moving it to another device, can take up to an hour to reach the endpoint: until then uplinks for that identifier still land on the device that held it. A device you create for an identifier that was already arriving starts receiving within a minute.
+
 ## ChirpStack v4 {#chirpstack}
 
 ChirpStack sends uplinks through an **HTTP integration** on an application.
@@ -124,7 +126,7 @@ ChirpStack sends uplinks through an **HTTP integration** on an application.
    | ChirpStack field | Value |
    | --- | --- |
    | Payload encoding | **JSON**. A Protobuf integration is refused with `415`, and the message names this setting. |
-   | Event endpoint URL | `https://<host>/api/integrations/{tenant}/{integration}`. ChirpStack adds `?event=up` itself. |
+   | Event endpoint URL(s) | `https://<host>/api/integrations/{tenant}/{integration}`. ChirpStack adds `?event=up` itself. |
    | Headers | Name `Authorization`, value `Bearer <bearer-token>`. |
 
 3. **Set a codec on the ChirpStack device profile** (a JavaScript payload codec). The platform stores the values the network server decodes; it does not decode the raw frame. Without a codec, ChirpStack sends the raw frame and no decoded object, and the uplink is [counted as undecoded](#undecoded) instead of stored.
@@ -142,10 +144,10 @@ The Things Stack sends uplinks through a **webhook** on an application.
    | The Things Stack field | Value |
    | --- | --- |
    | Base URL | `https://<host>/api/integrations/{tenant}/{integration}` |
-   | Additional header | Name `Authorization`, value `Bearer <bearer-token>`. |
-   | Uplink message | Enabled, with the path `/uplink-message`. The platform also reads the paths `/up`, `/uplink` and `/uplinks`. |
+   | Additional headers | Name `Authorization`, value `Bearer <bearer-token>`. |
+   | Enabled event types | Uplink message, enabled, with the path `/uplink-message`. The platform also reads the paths `/up`, `/uplink` and `/uplinks`. |
 
-3. **Set a payload formatter** on the application or on the device (the repository of device models offers one for many sensors). The platform stores the formatter's output; it does not decode the raw frame. Without one, the uplink is [counted as undecoded](#undecoded).
+3. **Set a payload formatter** on the application or on the device (the LoRaWAN Device Repository offers one for many sensors). The platform stores the formatter's output; it does not decode the raw frame. Without one, the uplink is [counted as undecoded](#undecoded).
 4. Add the devices in DeviceChain with their DevEUI as a `lorawan.deveui` alias, or their device id as a `tts.device-id` alias if you chose **Device id**.
 
 A message posted to any other path (a join accept, a downlink acknowledgement) is answered `204` and ignored, so you can enable other message types without changing anything in DeviceChain, but there is no reason to. The message time is the uplink's `received_at`, which must be present and not older than 366 days. The deduplication key is the device, the frame counter and that time together, because the counter restarts when a device rejoins.
@@ -207,18 +209,18 @@ A network server that does not get an answer in time sends a message again, and 
 | Sender | The key |
 | --- | --- |
 | ChirpStack v4 | The `deduplicationId`. |
-| The Things Stack v3 | The device's DevEUI, the frame counter and `received_at`. |
+| The Things Stack v3 | The device's DevEUI (its device id, when the integration identifies devices by `DEVICE_ID` and the message carries no DevEUI), the frame counter and `received_at`. |
 | Generic, with `timePointer` | A digest of the device and the item, plus the sender's time. A retry carries the same item and time, so it is stored once. |
 | Generic, without `timePointer` | A digest of the device and the item, plus the time of receipt. A retry is a new key, so it is **stored twice**. |
 
-The platform also drops an exact repeat of a message that arrives within ten minutes of the first, before it is processed. Neither rule merges two different uplinks that happen to hold the same values.
+The platform also drops a repeat that carries the same key within ten minutes of the first, before it is processed; a generic sender without `timePointer` gets a new key on every send, so this does not cover it. A key is at most 192 bytes; a longer one is refused with `400`. Neither rule merges two different uplinks that happen to hold the same values.
 
 ## Unregistered devices {#unregistered}
 
-When a message names an identifier that no device in the integration's scope carries, the platform does not store it. It records the identifier on the integration instead, so you can see which devices are talking to you that you have not added. Open the integration in the console and look under **Unregistered devices seen**: each row shows the scheme, the identifier, how many times it was seen and when. **Create a device with this alias** opens the device form with the alias and type filled in. Over GraphQL, the list is `unregisteredIntegrationDevices(criteria)`.
+When a message names an identifier that no device in the integration's scope carries, the platform does not store it. It records the identifier on the integration instead, so you can see which devices are talking to you that you have not added. Open the integration in the console and look under **Unregistered devices seen**: each row shows the scheme, the identifier, how many times it was seen and when. **Create a device with this alias** opens the device form with the alias filled in, and the type too when the integration is scoped to exactly one device type. Over GraphQL, the list is `unregisteredIntegrationDevices(criteria)`.
 
 - The list holds at most 1,000 identifiers per integration. Past that, new ones are counted and not listed.
-- A sighting is recorded at most once a minute for each identifier, so the count is a measure of activity and not an exact message count.
+- A sighting is recorded at most once a minute for each identifier on each `event-sources` replica, so the count is a measure of activity and not an exact message count.
 - An identifier that a device outside the integration's scope already carries is not listed, so the list never shows a value a device already holds.
 - **Clear list** (`clearUnregisteredIntegrationDevices(integration)`) empties it. It is a list of observations, so an identifier the sender is still sending is listed again.
 
@@ -236,10 +238,10 @@ A network server sees only the status code, and some suspend a webhook that is r
 | `405` | The method is not `POST`. |
 | `413` | The body is over 256 KiB. |
 | `415` | ChirpStack is sending Protobuf. Change its payload encoding to JSON. |
-| `429` | Too many failed logins for this integration, or too many unauthenticated requests from one address. Retry after the `Retry-After` interval. |
-| `503` | The platform cannot check the token or take the message right now, or is applying backpressure. Retry; a `Retry-After` header means the message was certainly not stored. |
+| `429` | Too many failed logins for this integration, too many requests from one address whose token the platform has not just verified, or, on one replica, too many requests for integrations it has never verified. Retry after the `Retry-After` interval. |
+| `503` | The platform cannot check the token or take the message right now, or is applying backpressure. Retry. A `Retry-After` header means the platform is applying backpressure: a single uplink was not stored, but in a generic array the items before the refusal may have been, so give a generic sender a `timePointer` to make the retry safe. |
 
-A change to an integration is quick but not instant at the endpoint, which remembers what it learned about an integration for up to a minute. After you rotate a token or switch an integration off, it can keep answering `202` for up to a minute to a sender that is still using the old one, but nothing sent in that minute is stored. After you switch an integration back on, it can keep answering `403` for up to a minute.
+A change to an integration is quick but not instant at the endpoint, which remembers what it learned about an integration for up to a minute (up to 15 minutes while device-management is unreachable). After you rotate a token or switch an integration off, it can keep answering `202` for up to a minute to a sender that is still using the old one, but nothing sent in that minute is stored. After you switch an integration back on, it can keep answering `403` for up to a minute.
 
 ## Limits {#limits}
 
@@ -258,7 +260,7 @@ A change to an integration is quick but not instant at the endpoint, which remem
 
 **Over the allowance, the answer is `202`, not `429`.** A refusal would lose the message anyway, and some network servers suspend a webhook that is refused, which would then drop traffic that was within the allowance. The consequence is that the sender believes the data arrived and it did not. The `IntegrationShedAccepted` alert tells an operator when this is happening; raise the tenant's ceiling or reduce what the integration sends.
 
-**Bounds on unauthenticated traffic.** Someone who knows an integration's URL cannot use it to spend the tenant's allowance or an integration's good traffic: wrong tokens are limited per integration (a burst of 30, then 1 a second), requests that make the platform look up an unknown integration are limited per source address (a burst of 60, then 5 a second) and per replica, and an `ingress-nginx` front end limits each address to 200 requests a second. A network server's steady traffic with a valid token costs its address nothing against these. The `IntegrationAuthFailuresSustained` alert fires when failures keep up for ten minutes, which is what a sender still using a rotated token looks like.
+**Bounds on unauthenticated traffic.** Someone who knows an integration's URL cannot use it to spend the tenant's allowance or an integration's good traffic: wrong tokens are limited per integration (a burst of 30, then 1 a second), requests whose token the platform has not verified in the last minute are limited per source address (a burst of 60, then 5 a second) and, for integration names it has never verified, per replica (a burst of 100, then 20 a second). The `ingress-nginx` front end also limits each address to 200 requests a second and answers `503` beyond that; it limits per client only when the controller is told to trust the load balancer's forwarded address, and the Gateway API front end has no such limit. A network server's steady traffic with a valid token costs its address about one request a minute against the platform's own limits. The `IntegrationAuthFailuresSustained` alert fires when failures keep up for ten minutes, which is what a sender still using a rotated token looks like.
 
 ## Commands to integration devices {#commands}
 
@@ -267,7 +269,7 @@ A device that reports through an integration has no connection to DeviceChain to
 Two cases are worth knowing:
 
 - A device that also connects over MQTT is judged by the last transport it reported on. While it last reported through the integration its commands fail; after it reports over MQTT they are delivered.
-- A device that has never reported has no recorded transport, so its first command is dispatched as usual and expires unanswered.
+- A device that has never reported has no recorded transport, so its commands are dispatched as usual, and expire unanswered, until it first reports.
 
 For a device that must be commanded, give it an MQTT connection as well. See the [transport matrix](../reference/transport-matrix.md).
 

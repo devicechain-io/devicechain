@@ -90,7 +90,7 @@ mutation {
 | --- | --- | --- |
 | `lorawan.deveui` | LoRaWAN DevEUI：恰好 16 位十六进制数字。 | 大写。`70b3d57ed0012345` 与 `70B3D57ED0012345` 是同一个别名。 |
 | `tts.device-id` | 设备在 The Things Stack 中的设备 ID：1 到 36 个字母、数字和连字符，不能以连字符开头或结尾。 | 小写。 |
-| `custom.<name>` | 通用发送方使用的你自己的标识符：1 到 128 个字符，不含控制字符。名称由小写字母、数字、连字符和下划线组成，最长 63 个字符。 | 保持原样。区分大小写。 |
+| `custom.<name>` | 通用发送方使用的你自己的标识符：1 到 128 个字符，不含控制字符。名称以小写字母或数字开头，其后是小写字母、数字、连字符和下划线，总共最长 63 个字符。 | 保持原样。区分大小写。 |
 
 一台设备最多有 8 个别名，每个方案一个值；同一租户内，一个方案和值只能属于一台设备。DevEUI 用小写或带空格书写都可以：存储时和消息到达时都会规范化。不是 16 位十六进制数字的值会被拒绝。
 
@@ -114,6 +114,8 @@ mutation {
 
 集成的 **Device identifier** 决定查找哪个方案：`DEV_EUI` 读取 `lorawan.deveui`，`DEVICE_ID` 读取 `tts.device-id`，`ALIAS:custom.serial` 读取 `custom.serial`。只带有其他方案的设备不会被找到。
 
+从设备上移除别名，或把别名移到另一台设备，最长可能需要一小时才会传到端点：在此之前，该标识符的上行仍会落到原先持有它的设备上。为一个已经在到达的标识符创建设备后，一分钟内就会开始接收。
+
 ## ChirpStack v4 {#chirpstack}
 
 ChirpStack 通过应用上的 **HTTP 集成**发送上行。
@@ -124,7 +126,7 @@ ChirpStack 通过应用上的 **HTTP 集成**发送上行。
    | ChirpStack 字段 | 值 |
    | --- | --- |
    | Payload encoding | **JSON**。Protobuf 集成会被以 `415` 拒绝，消息中会指明这项设置。 |
-   | Event endpoint URL | `https://<host>/api/integrations/{tenant}/{integration}`。ChirpStack 会自行追加 `?event=up`。 |
+   | Event endpoint URL(s) | `https://<host>/api/integrations/{tenant}/{integration}`。ChirpStack 会自行追加 `?event=up`。 |
    | Headers | 名称 `Authorization`，值 `Bearer <bearer-token>`。 |
 
 3. **在 ChirpStack 设备配置文件上设置编解码器**（JavaScript 载荷编解码器）。平台存储的是网络服务器解码出的值，不会自己解码原始帧。没有编解码器时，ChirpStack 发送原始帧而没有解码对象，该上行会被[计为未解码](#undecoded)，而不会被存储。
@@ -142,10 +144,10 @@ The Things Stack 通过应用上的 **webhook** 发送上行。
    | The Things Stack 字段 | 值 |
    | --- | --- |
    | Base URL | `https://<host>/api/integrations/{tenant}/{integration}` |
-   | Additional header | 名称 `Authorization`，值 `Bearer <bearer-token>`。 |
-   | Uplink message | 启用，路径为 `/uplink-message`。平台也会读取路径 `/up`、`/uplink` 和 `/uplinks`。 |
+   | Additional headers | 名称 `Authorization`，值 `Bearer <bearer-token>`。 |
+   | Enabled event types | Uplink message，启用，路径为 `/uplink-message`。平台也会读取路径 `/up`、`/uplink` 和 `/uplinks`。 |
 
-3. **在应用或设备上设置载荷格式化器（payload formatter）**（设备型号库为许多传感器提供了现成的格式化器）。平台存储格式化器的输出，不会自己解码原始帧。没有格式化器时，该上行会被[计为未解码](#undecoded)。
+3. **在应用或设备上设置载荷格式化器（payload formatter）**（LoRaWAN Device Repository 为许多传感器提供了现成的格式化器）。平台存储格式化器的输出，不会自己解码原始帧。没有格式化器时，该上行会被[计为未解码](#undecoded)。
 4. 在 DeviceChain 中添加设备，把 DevEUI 设为 `lorawan.deveui` 别名；如果选择了 **Device id**，则把设备 ID 设为 `tts.device-id` 别名。
 
 发送到其他任何路径的消息（join accept、下行确认）会返回 `204` 并被忽略，因此启用其他消息类型不需要在 DeviceChain 中改动任何内容，但也没有必要这样做。消息时间是上行的 `received_at`，它必须存在，且不得早于 366 天前。去重键由设备、帧计数器和该时间共同组成，因为设备重新入网时计数器会重置。
@@ -207,18 +209,18 @@ curl -X POST https://dc.example.com/api/integrations/acme/vendor-cloud \
 | 发送方 | 键 |
 | --- | --- |
 | ChirpStack v4 | `deduplicationId`。 |
-| The Things Stack v3 | 设备的 DevEUI、帧计数器和 `received_at`。 |
+| The Things Stack v3 | 设备的 DevEUI（当集成按 `DEVICE_ID` 识别设备且消息不带 DevEUI 时，用设备 ID）、帧计数器和 `received_at`。 |
 | 通用，带 `timePointer` | 设备与条目的摘要，加上发送方时间。重试带有相同的条目和时间，因此只存储一次。 |
 | 通用，不带 `timePointer` | 设备与条目的摘要，加上接收时间。重试会得到新的键，因此会被**存储两次**。 |
 
-平台还会在处理之前，丢弃在第一条消息之后十分钟内到达的完全相同的重复消息。两条恰好数值相同的不同上行不会被合并。
+平台还会在处理之前，丢弃在第一条消息之后十分钟内到达、带有相同键的重复消息；不带 `timePointer` 的通用发送方每次发送都会得到新的键，因此这一条对它不起作用。键最长 192 字节，更长的键会被以 `400` 拒绝。两条恰好数值相同的不同上行不会被合并。
 
 ## 未注册设备 {#unregistered}
 
-当消息中的标识符不属于集成范围内的任何设备时，平台不会存储它，而是把该标识符记录在集成上，让你看到有哪些尚未添加的设备在向你发送数据。在控制台打开集成，查看 **Unregistered devices seen**（已见的未注册设备）：每行显示方案、标识符、出现次数和时间。**Create a device with this alias**（用此别名创建设备）会打开设备表单，并已填好别名和类型。通过 GraphQL，该列表是 `unregisteredIntegrationDevices(criteria)`。
+当消息中的标识符不属于集成范围内的任何设备时，平台不会存储它，而是把该标识符记录在集成上，让你看到有哪些尚未添加的设备在向你发送数据。在控制台打开集成，查看 **Unregistered devices seen**（已见的未注册设备）：每行显示方案、标识符、出现次数和时间。**Create a device with this alias**（用此别名创建设备）会打开设备表单，并已填好别名；只有当集成的范围恰好是一个设备类型时，才会同时填好类型。通过 GraphQL，该列表是 `unregisteredIntegrationDevices(criteria)`。
 
 - 每个集成的列表最多保存 1,000 个标识符。超出后，新的标识符只计数，不再列出。
-- 每个标识符最多每分钟记录一次，因此计数反映的是活跃程度，而不是精确的消息数量。
+- 每个标识符在每个 `event-sources` 副本上最多每分钟记录一次，因此计数反映的是活跃程度，而不是精确的消息数量。
 - 已被集成范围之外的设备持有的标识符不会被列出，因此列表绝不会显示设备已经持有的值。
 - **Clear list**（`clearUnregisteredIntegrationDevices(integration)`）会清空列表。它只是观察记录，发送方仍在发送的标识符会再次出现。
 
@@ -236,10 +238,10 @@ curl -X POST https://dc.example.com/api/integrations/acme/vendor-cloud \
 | `405` | 方法不是 `POST`。 |
 | `413` | 正文超过 256 KiB。 |
 | `415` | ChirpStack 正在发送 Protobuf。请把它的载荷编码改为 JSON。 |
-| `429` | 该集成的登录失败次数过多，或同一地址发出的未认证请求过多。请在 `Retry-After` 指示的时间后重试。 |
-| `503` | 平台目前无法校验令牌或接收消息，或正在施加背压。请重试；带有 `Retry-After` 头表示该消息肯定没有被存储。 |
+| `429` | 该集成的登录失败次数过多，同一地址发出的、其令牌平台最近没有验证过的请求过多，或者在单个副本上，针对从未验证过的集成的请求过多。请在 `Retry-After` 指示的时间后重试。 |
+| `503` | 平台目前无法校验令牌或接收消息，或正在施加背压。请重试；带有 `Retry-After` 头表示平台正在施加背压：单条上行没有被存储，但在通用数组中，被拒绝之前的条目可能已被存储，因此请给通用发送方设置 `timePointer`，让重试是安全的。 |
 
-对集成的更改很快，但在端点处并非瞬时生效，端点会把它了解到的集成信息缓存最多一分钟。轮换令牌或关闭集成之后，端点仍可能对继续使用旧令牌的发送方返回 `202`，最长一分钟，但这一分钟内发送的内容都不会被存储。重新开启集成之后，端点仍可能返回 `403`，最长一分钟。
+对集成的更改很快，但在端点处并非瞬时生效，端点会把它了解到的集成信息缓存最多一分钟（device-management 不可用期间最多 15 分钟）。轮换令牌或关闭集成之后，端点仍可能对继续使用旧令牌的发送方返回 `202`，最长一分钟，但这一分钟内发送的内容都不会被存储。重新开启集成之后，端点仍可能返回 `403`，最长一分钟。
 
 ## 限制 {#limits}
 
@@ -258,7 +260,7 @@ curl -X POST https://dc.example.com/api/integrations/acme/vendor-cloud \
 
 **超出额度时，应答是 `202`，而不是 `429`。**拒绝反正也会丢失消息，而且有些网络服务器会暂停被拒绝的 webhook，进而丢弃本来在额度之内的流量。其后果是发送方以为数据已送达，实际上并没有。出现这种情况时，`IntegrationShedAccepted` 告警会通知运营人员；请调高租户上限，或减少集成发送的数据量。
 
-**对未认证流量的限制。**知道集成 URL 的人无法借此耗尽租户的额度，或影响集成的正常流量：错误令牌按集成限制（突发 30 次，之后每秒 1 次），迫使平台去查询未知集成的请求按来源地址限制（突发 60 次，之后每秒 5 次）并按副本限制，`ingress-nginx` 前端还将每个地址限制为每秒 200 个请求。网络服务器使用有效令牌发送的稳定流量不会占用其地址在这些限制下的额度。失败持续十分钟时，`IntegrationAuthFailuresSustained` 告警触发；仍在使用已轮换令牌的发送方就是这种表现。
+**对未认证流量的限制。**知道集成 URL 的人无法借此耗尽租户的额度，或影响集成的正常流量：错误令牌按集成限制（突发 30 次，之后每秒 1 次），平台在最近一分钟内未验证过其令牌的请求按来源地址限制（突发 60 次，之后每秒 5 次），对从未验证过的集成名称则按副本限制（突发 100 次，之后每秒 20 次）。`ingress-nginx` 前端还将每个地址限制为每秒 200 个请求，超出时返回 `503`；只有在控制器被告知信任负载均衡器转发的地址时，它才按客户端限制，Gateway API 前端没有这项限制。网络服务器使用有效令牌发送的稳定流量，在平台自身的限制下，每分钟大约只占其地址一个请求。失败持续十分钟时，`IntegrationAuthFailuresSustained` 告警触发；仍在使用已轮换令牌的发送方就是这种表现。
 
 ## 发给集成设备的命令 {#commands}
 
@@ -267,7 +269,7 @@ curl -X POST https://dc.example.com/api/integrations/acme/vendor-cloud \
 有两种情况值得了解：
 
 - 同时通过 MQTT 连接的设备，按它最近一次上报所用的传输来判断。最近一次通过集成上报时，其命令会失败；改为通过 MQTT 上报之后，命令即可投递。
-- 从未上报过的设备没有记录的传输，因此它的第一条命令会照常下发，并因无人应答而过期。
+- 从未上报过的设备没有记录的传输，因此它的命令会照常下发，并因无人应答而过期，直到它首次上报为止。
 
 对必须接收命令的设备，请同时为它配置 MQTT 连接。参见[传输能力矩阵](../reference/transport-matrix.md)。
 

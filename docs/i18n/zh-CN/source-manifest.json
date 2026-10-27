@@ -39,8 +39,8 @@
       "translationSha256": "54653152e49c2b3e6387def98cd3279dbe39b18e56f5f8567f7646c5fe5a6746"
     },
     "concepts/governance.md": {
-      "sourceSha256": "196aeb60a109bcfe74d9b493be643e86e9fec22abb2cdae0e29243e3bbddce69",
-      "translationSha256": "836e3276e8de31cdae1017ace58b6cf3a6f0f6ade40b9526d86c4a9be5b83a96"
+      "sourceSha256": "77cf80ef5110941c976910e6d31542c179b2aa91c53c6dee489e8620da496a40",
+      "translationSha256": "1ec1f132249d15de56f2e76940057784b4190d2168cf6f4d99f876a1fa11f892"
     },
     "concepts/lwm2m.md": {
       "sourceSha256": "1cd975c5d5360cbcd0c0ba8babaf11bd67f77b400b64d86564ea9c2f9aba95d1",
@@ -183,8 +183,8 @@
       "translationSha256": "8826d7f3c1c4b239c6fe483ec468c97ba39078ce9ab75cc4a52dff48ad447a86"
     },
     "guides/inbound-integrations.md": {
-      "sourceSha256": "b14ceb0302e0ae361dd1c66144c305718342ca98e8f38b02fd93f89bbf13342b",
-      "translationSha256": "2aa8271364c452cc51e6bf754314e857d2e67792183ae03ee0cd9035e56cfb8d"
+      "sourceSha256": "2601f8f4e551676197994319b807e59c6123a006478a8f1d20329afeb2b45c21",
+      "translationSha256": "3c08059127cf9a240d277339b5987324362e070e2d5d65a70a6f000b10c8d709"
     },
     "guides/local-development.md": {
       "sourceSha256": "303dc72cc573da468c4d47a243f2fbc8b4827bdde42b398d66298eab95cde7c5",
@@ -247,8 +247,8 @@
       "translationSha256": "0bd6042326c009bc39bb1c428c61320c00b46259113be4d9773b9bd005a955c1"
     },
     "reference/transport-matrix.md": {
-      "sourceSha256": "94c7b83baa98123542bb0631be99eb2b4eea019b7a7c72a55935530b10df9353",
-      "translationSha256": "9d47d8ea17014dd993639a6834f6c27d024246548c8f5bf44e8b9d0336d341bd"
+      "sourceSha256": "c02b2436555151d5b22b9590a32b9783907034a27e2bb0dd24c5229fe610e1bf",
+      "translationSha256": "23426df0afe1e927a08415728d0c3982e7294b86cca45496f26de465ef5143ad"
     },
     "user-guide/administering-the-instance.md": {
       "sourceSha256": "98d2fc81eaa2eef3be3c5e36e6cf2f48bef167f3dfce5793b7c4065a030b3743",

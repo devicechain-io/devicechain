@@ -357,8 +357,8 @@ never connects to DeviceChain.
 - **Write ○ / Read ○** — there is no downlink. A command issued to a device that last reported
   through an integration **is accepted, and then fails** at the next delivery sweep with
   `COMMAND_TRANSPORT_UNSUPPORTED`, instead of waiting until it expires. The failure is final. A
-  device that has never reported has no recorded transport, so its first command is dispatched and
-  expires. Because the recorded transport is the last one the device reported on, a device that also
+  device that has never reported has no recorded transport, so its commands are dispatched, and
+  expire, until it first reports. Because the recorded transport is the last one the device reported on, a device that also
   sends over MQTT is commanded again once it has.
 
 ## Outbound connectors
