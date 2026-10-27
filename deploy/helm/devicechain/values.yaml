@@ -2288,6 +2288,27 @@ functionalAreas:
       #                                # false: drop its telemetry (counted) until an operator pre-registers it.
       #     deviceTypeToken: sparkplug-node   # REQUIRED when autoRegister is true — the device type stamped on a
       #                                # created device (a Sparkplug birth carries no DeviceChain type). Must exist.
+      #     commands:                  # OPT-IN command downlink (NCMD/DCMD) over this source's Host session. Off unless
+      #       enabled: true            # enabled; with every source off, Sparkplug commands fail fast as before. The chart
+      #                                # derives command-delivery's capability flag from it (do not set that by hand), and
+      #                                # the render fails if command-delivery is not deployed. REFUSED at start when
+      #                                # another source shares this source's broker endpoint.
+      #       hostRole: primary        # REQUIRED when enabled: primary (the nodes name this source's hostId as their primary
+      #                                # host application) or secondary. Sparkplug recommends only the primary host command;
+      #                                # a secondary's commands may be ignored or blocked, and the platform will not infer
+      #                                # that a value stayed put.
+      #       writableMetrics:         # Metrics `sparkplug.write` may target: exact names or "prefix/*". Empty (the default)
+      #         - "Outputs/*"          # allows NO writes. Rebirth/Reboot control metrics can not be listed.
+      #       allowReboot: false       # Lets `sparkplug.reboot` reach this source's nodes. Default false.
+      #       confirmWindowSeconds: 120    # How long a write is awaited for the node to report the value (5 to 900).
+      #       rebootWindowSeconds: 600     # How long a reboot is awaited for the node's new birth, and the least time between
+      #                                    # two reboots of one node (30 to 3600).
+      #       clockSkewSeconds: 30     # Tolerance for a node's own timestamp against the publish time (0 to 300).
+      #       publishPerSecond: 50     # Per-source ceiling on commands put on the wire, and its burst (defaults 50 and 200).
+      #       burst: 200
+      #                                # The source's broker credential must be allowed to PUBLISH on spBv1.0/<group>/NCMD/+
+      #                                # and spBv1.0/<group>/DCMD/+/+. A refused publish may drop the session; a circuit
+      #                                # breaker then pauses commands to the source (SparkplugCommandBreakerOpen).
       # ingestRateLimit:               # Per-tenant ingest ceiling, counted in READINGS (one numeric metric). A
       #   readingsPerSecond: 1000      # DATA message's readings are charged before they are ingested; readings
       #   burst: 2000                  # over it are dropped (no redelivery) and counted on ingest_samples_shed_total.

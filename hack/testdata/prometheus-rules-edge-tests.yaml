@@ -374,3 +374,308 @@ tests:
       - eval_time: 30m
         alertname: SparkplugIngestSubscriptionRefused
         exp_alerts: []
+
+  # ---------------------------------------------------------------------------------------------
+  # Sparkplug command downlink: SparkplugCommandsUnconfirmed, SparkplugCommandBreakerOpen and
+  # SparkplugCommandResponsesFailing. The series are
+  # devicechain_sparkplugingest_commands_total{result} (a counter, one series per result, present
+  # at zero from start) and devicechain_sparkplugingest_command_breaker_state{tenant,source} (0
+  # closed, 1 open, 2 half-open). The expected annotations are the rendered ones.
+  # ---------------------------------------------------------------------------------------------
+
+  # Unconfirmed: every command published and none confirmed, 30 per 30 minutes. Quiet while the
+  # 30m window fills and the 15m `for` runs, firing once the ratio has held.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_sparkplugingest_commands_total{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest", result="published"}'
+        values: '0+1x80'
+      - series: 'devicechain_sparkplugingest_commands_total{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest", result="unconfirmed"}'
+        values: '0+1x80'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: SparkplugCommandsUnconfirmed
+        exp_alerts: []
+      - eval_time: 70m
+        alertname: SparkplugCommandsUnconfirmed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "Sparkplug commands are being published but not confirmed"
+              description: "For at least 15 minutes, more than 90% of the Sparkplug commands sparkplug-ingest published in the last 30 minutes (at least 20 of them) ended without the node reporting the requested value. Sparkplug has no command acknowledgement, so this is how a command path that does not work looks: the customer broker may be dropping the publishes (check the source credential may publish on the NCMD and DCMD topics), the nodes may be ignoring a host that is not their primary (commands.hostRole), or the confirm window may be shorter than the nodes' reporting delay (commands.confirmWindowSeconds). Commands are recorded as TIMEOUT, not as failed."
+
+  # ...paired control: the SAME ratio (all unconfirmed) at half the volume is 15 commands per
+  # window, under the floor of 20, and stays quiet. A handful of non-responders on a quiet site is
+  # not an outage.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_sparkplugingest_commands_total{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest", result="published"}'
+        values: '0+0.5x80'
+      - series: 'devicechain_sparkplugingest_commands_total{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest", result="unconfirmed"}'
+        values: '0+0.5x80'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: SparkplugCommandsUnconfirmed
+        exp_alerts: []
+
+  # ...and is quiet when half of a busy stream is confirmed: the ratio is 0.5, far under 0.9.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_sparkplugingest_commands_total{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest", result="published"}'
+        values: '0+2x80'
+      - series: 'devicechain_sparkplugingest_commands_total{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest", result="unconfirmed"}'
+        values: '0+1x80'
+      - series: 'devicechain_sparkplugingest_commands_total{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest", result="confirmed"}'
+        values: '0+1x80'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: SparkplugCommandsUnconfirmed
+        exp_alerts: []
+
+  # ...and is quiet on a deployment with the downlink off: every result exported at zero, so the
+  # division is 0/0 and the comparison has no sample.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_sparkplugingest_commands_total{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest", result="published"}'
+        values: '0x80'
+      - series: 'devicechain_sparkplugingest_commands_total{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest", result="unconfirmed"}'
+        values: '0x80'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: SparkplugCommandsUnconfirmed
+        exp_alerts: []
+
+  # Breaker: closed is quiet.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_sparkplugingest_command_breaker_state{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest", tenant="acme", source="acme/plant-a"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: SparkplugCommandBreakerOpen
+        exp_alerts: []
+
+  # ...open for the whole window is quiet until it has held for 10m, then fires.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_sparkplugingest_command_breaker_state{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest", tenant="acme", source="acme/plant-a"}'
+        values: '1x40'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: SparkplugCommandBreakerOpen
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: SparkplugCommandBreakerOpen
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              tenant: acme
+              source: acme/plant-a
+            exp_annotations:
+              summary: "Sparkplug commands to a source are paused"
+              description: "For at least 10 minutes, the command circuit breaker for source acme/plant-a (tenant acme) has not been closed. It opens when the customer broker drops sparkplug-ingest's session right after a command is published, which almost always means the source's credential may not publish on spBv1.0/<group>/NCMD/+ and spBv1.0/<group>/DCMD/+/+. While it is open, commands to that source fail at once as not delivered; telemetry from the source is not affected. Grant the publish permission on the broker and the next probe command closes it."
+
+  # ...and it fires on a breaker that keeps alternating open and half-open (a source whose probe
+  # command fails every time): testing for state 1 alone would restart the 10m clock at each
+  # half-open and never fire.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_sparkplugingest_command_breaker_state{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest", tenant="acme", source="acme/plant-a"}'
+        values: '1x4 2x4 1x4 2x4 1x4 2x4 1x20'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: SparkplugCommandBreakerOpen
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              tenant: acme
+              source: acme/plant-a
+            exp_annotations:
+              summary: "Sparkplug commands to a source are paused"
+              description: "For at least 10 minutes, the command circuit breaker for source acme/plant-a (tenant acme) has not been closed. It opens when the customer broker drops sparkplug-ingest's session right after a command is published, which almost always means the source's credential may not publish on spBv1.0/<group>/NCMD/+ and spBv1.0/<group>/DCMD/+/+. While it is open, commands to that source fail at once as not delivered; telemetry from the source is not affected. Grant the publish permission on the broker and the next probe command closes it."
+
+  # ...and it names the source: a second source that is closed neither hides nor joins the first.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_sparkplugingest_command_breaker_state{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest", tenant="acme", source="acme/plant-a"}'
+        values: '1x40'
+      - series: 'devicechain_sparkplugingest_command_breaker_state{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest", tenant="acme", source="acme/plant-b"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: SparkplugCommandBreakerOpen
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              tenant: acme
+              source: acme/plant-a
+            exp_annotations:
+              summary: "Sparkplug commands to a source are paused"
+              description: "For at least 10 minutes, the command circuit breaker for source acme/plant-a (tenant acme) has not been closed. It opens when the customer broker drops sparkplug-ingest's session right after a command is published, which almost always means the source's credential may not publish on spBv1.0/<group>/NCMD/+ and spBv1.0/<group>/DCMD/+/+. While it is open, commands to that source fail at once as not delivered; telemetry from the source is not affected. Grant the publish permission on the broker and the next probe command closes it."
+
+  # ...and it clears when the breaker closes.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_sparkplugingest_command_breaker_state{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest", tenant="acme", source="acme/plant-a"}'
+        values: '1x15 0x30'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: SparkplugCommandBreakerOpen
+        exp_alerts: []
+
+  # Faults: each of the five fault results, alone, fires. A single increment is enough.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_sparkplugingest_commands_total{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest", result="claim_failed"}'
+        values: '0 0 1x20'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: SparkplugCommandResponsesFailing
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: SparkplugCommandResponsesFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              result: claim_failed
+            exp_annotations:
+              summary: "Sparkplug commands are failing inside the platform"
+              description: "For at least 5 minutes, sparkplug-ingest has been counting commands it could not carry through, with result claim_failed: claim_failed, park_failed and response_failed mean command-delivery could not be reached or refused the call (the command stays SENT or is never answered until its lifetime ends); kv_failed means the store of commands awaiting confirmation could not be written, so the command was not published; publish_failed means a publish may or may not have reached the node. Check command-delivery and the message broker, and the sparkplug-ingest log."
+
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_sparkplugingest_commands_total{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest", result="park_failed"}'
+        values: '0 0 1x20'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: SparkplugCommandResponsesFailing
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: SparkplugCommandResponsesFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              result: park_failed
+            exp_annotations:
+              summary: "Sparkplug commands are failing inside the platform"
+              description: "For at least 5 minutes, sparkplug-ingest has been counting commands it could not carry through, with result park_failed: claim_failed, park_failed and response_failed mean command-delivery could not be reached or refused the call (the command stays SENT or is never answered until its lifetime ends); kv_failed means the store of commands awaiting confirmation could not be written, so the command was not published; publish_failed means a publish may or may not have reached the node. Check command-delivery and the message broker, and the sparkplug-ingest log."
+
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_sparkplugingest_commands_total{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest", result="publish_failed"}'
+        values: '0 0 1x20'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: SparkplugCommandResponsesFailing
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: SparkplugCommandResponsesFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              result: publish_failed
+            exp_annotations:
+              summary: "Sparkplug commands are failing inside the platform"
+              description: "For at least 5 minutes, sparkplug-ingest has been counting commands it could not carry through, with result publish_failed: claim_failed, park_failed and response_failed mean command-delivery could not be reached or refused the call (the command stays SENT or is never answered until its lifetime ends); kv_failed means the store of commands awaiting confirmation could not be written, so the command was not published; publish_failed means a publish may or may not have reached the node. Check command-delivery and the message broker, and the sparkplug-ingest log."
+
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_sparkplugingest_commands_total{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest", result="kv_failed"}'
+        values: '0 0 1x20'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: SparkplugCommandResponsesFailing
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: SparkplugCommandResponsesFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              result: kv_failed
+            exp_annotations:
+              summary: "Sparkplug commands are failing inside the platform"
+              description: "For at least 5 minutes, sparkplug-ingest has been counting commands it could not carry through, with result kv_failed: claim_failed, park_failed and response_failed mean command-delivery could not be reached or refused the call (the command stays SENT or is never answered until its lifetime ends); kv_failed means the store of commands awaiting confirmation could not be written, so the command was not published; publish_failed means a publish may or may not have reached the node. Check command-delivery and the message broker, and the sparkplug-ingest log."
+
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_sparkplugingest_commands_total{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest", result="response_failed"}'
+        values: '0 0 1x20'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: SparkplugCommandResponsesFailing
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: SparkplugCommandResponsesFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              result: response_failed
+            exp_annotations:
+              summary: "Sparkplug commands are failing inside the platform"
+              description: "For at least 5 minutes, sparkplug-ingest has been counting commands it could not carry through, with result response_failed: claim_failed, park_failed and response_failed mean command-delivery could not be reached or refused the call (the command stays SENT or is never answered until its lifetime ends); kv_failed means the store of commands awaiting confirmation could not be written, so the command was not published; publish_failed means a publish may or may not have reached the node. Check command-delivery and the message broker, and the sparkplug-ingest log."
+
+  # ...and none of the outcomes that are not faults count, however hard they climb: refusals,
+  # unconfirmed commands, a lost claim, a poison message, a command that is not this service's.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_sparkplugingest_commands_total{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest", result="published"}'
+        values: '0+3x30'
+      - series: 'devicechain_sparkplugingest_commands_total{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest", result="confirmed"}'
+        values: '0+3x30'
+      - series: 'devicechain_sparkplugingest_commands_total{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest", result="confirmed_unchanged"}'
+        values: '0+3x30'
+      - series: 'devicechain_sparkplugingest_commands_total{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest", result="unconfirmed"}'
+        values: '0+3x30'
+      - series: 'devicechain_sparkplugingest_commands_total{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest", result="superseded"}'
+        values: '0+3x30'
+      - series: 'devicechain_sparkplugingest_commands_total{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest", result="parked"}'
+        values: '0+3x30'
+      - series: 'devicechain_sparkplugingest_commands_total{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest", result="drained"}'
+        values: '0+3x30'
+      - series: 'devicechain_sparkplugingest_commands_total{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest", result="refused_disabled"}'
+        values: '0+3x30'
+      - series: 'devicechain_sparkplugingest_commands_total{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest", result="refused_breaker"}'
+        values: '0+3x30'
+      - series: 'devicechain_sparkplugingest_commands_total{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest", result="refused_expired"}'
+        values: '0+3x30'
+      - series: 'devicechain_sparkplugingest_commands_total{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest", result="refused_payload"}'
+        values: '0+3x30'
+      - series: 'devicechain_sparkplugingest_commands_total{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest", result="refused_not_allowed"}'
+        values: '0+3x30'
+      - series: 'devicechain_sparkplugingest_commands_total{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest", result="refused_metric"}'
+        values: '0+3x30'
+      - series: 'devicechain_sparkplugingest_commands_total{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest", result="refused_datatype"}'
+        values: '0+3x30'
+      - series: 'devicechain_sparkplugingest_commands_total{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest", result="refused_reboot_gate"}'
+        values: '0+3x30'
+      - series: 'devicechain_sparkplugingest_commands_total{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest", result="not_served"}'
+        values: '0+3x30'
+      - series: 'devicechain_sparkplugingest_commands_total{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest", result="poison"}'
+        values: '0+3x30'
+      - series: 'devicechain_sparkplugingest_commands_total{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest", result="claim_lost"}'
+        values: '0+3x30'
+      - series: 'devicechain_sparkplugingest_commands_total{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest", result="tenant_gone"}'
+        values: '0+3x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: SparkplugCommandResponsesFailing
+        exp_alerts: []
+
+  # ...and a single fault older than the 10m window is quiet again.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_sparkplugingest_commands_total{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest", result="kv_failed"}'
+        values: '0 0 1x40'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: SparkplugCommandResponsesFailing
+        exp_alerts: []

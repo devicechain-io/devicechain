@@ -109,4 +109,59 @@ spec:
           annotations:
             summary: "LwM2M ingest is dropping Notify samples"
             description: "For at least 10 minutes, lwm2m-ingest has been dropping the samples of Notify messages because ingest failed or refused them, backpressure included. There is no retry in the Notify path (the next Notify supersedes), so a device that reports rarely loses its reading. Check the platform's message broker and the inbound-events stream's backlog, and the lwm2m-ingest log."
+        # --- Sparkplug command downlink -------------------------------------------------------
+        # Off unless a source sets commands.enabled, and then these watch it. A deployment with the
+        # downlink off exports commands_total at zero and a breaker at 0, so none of the three
+        # can fire there.
+        #
+        # Sparkplug has no command acknowledgement, so a command is "confirmed" only when the node
+        # later REPORTS the requested value. A whole fleet of unconfirmed commands is therefore the
+        # sign of a path that does not work (publish ACL, wrong host role, nodes that ignore a
+        # secondary host), not of any one device. The ratio needs 20 published commands in the
+        # window so that a handful of ordinary non-responders on a quiet site cannot page, and it is
+        # over 30m because a command is only counted unconfirmed when its confirm window (2 minutes
+        # by default, 10 for a reboot) ends, after it was counted published.
+        - alert: SparkplugCommandsUnconfirmed
+          expr: |
+            (
+              sum(increase(devicechain_sparkplugingest_commands_total{namespace="{{ $ns }}", result="unconfirmed"}[30m]))
+              /
+              sum(increase(devicechain_sparkplugingest_commands_total{namespace="{{ $ns }}", result="published"}[30m]))
+            ) > 0.9
+            and
+            sum(increase(devicechain_sparkplugingest_commands_total{namespace="{{ $ns }}", result="published"}[30m])) >= 20
+          for: 15m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "Sparkplug commands are being published but not confirmed"
+            description: "For at least 15 minutes, more than 90% of the Sparkplug commands sparkplug-ingest published in the last 30 minutes (at least 20 of them) ended without the node reporting the requested value. Sparkplug has no command acknowledgement, so this is how a command path that does not work looks: the customer broker may be dropping the publishes (check the source credential may publish on the NCMD and DCMD topics), the nodes may be ignoring a host that is not their primary (commands.hostRole), or the confirm window may be shorter than the nodes' reporting delay (commands.confirmWindowSeconds). Commands are recorded as TIMEOUT, not as failed."
+        # `>= 1`, not `== 1`: the breaker reads 1 while open and 2 once its backoff has ended and
+        # it is waiting to let one command through. A source that keeps failing alternates between
+        # the two (and sits at 2 while no command arrives to test it), so a test for 1 alone would
+        # reset its `for` clock at every probe and never fire. Only 0 means commands are flowing.
+        - alert: SparkplugCommandBreakerOpen
+          expr: max by (tenant, source) (devicechain_sparkplugingest_command_breaker_state{namespace="{{ $ns }}"}) >= 1
+          for: 10m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "Sparkplug commands to a source are paused"
+            description: "For at least 10 minutes, the command circuit breaker for source {{ "{{ $labels.source }}" }} (tenant {{ "{{ $labels.tenant }}" }}) has not been closed. It opens when the customer broker drops sparkplug-ingest's session right after a command is published, which almost always means the source's credential may not publish on spBv1.0/<group>/NCMD/+ and spBv1.0/<group>/DCMD/+/+. While it is open, commands to that source fail at once as not delivered; telemetry from the source is not affected. Grant the publish permission on the broker and the next probe command closes it."
+        # Every result that is a fault of the service or the platform and not an outcome about the
+        # command: a claim, a park, a publish or the awaiting store failing, or a response that could
+        # not be delivered to command-delivery. Refusals (disabled, breaker, expired, payload,
+        # metric, datatype, not allowed, reboot gate) and unconfirmed commands are NOT faults and are
+        # not counted here.
+        - alert: SparkplugCommandResponsesFailing
+          expr: sum by (result) (increase(devicechain_sparkplugingest_commands_total{namespace="{{ $ns }}", result=~"claim_failed|park_failed|publish_failed|kv_failed|response_failed"}[10m])) > 0
+          for: 5m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "Sparkplug commands are failing inside the platform"
+            description: "For at least 5 minutes, sparkplug-ingest has been counting commands it could not carry through, with result {{ "{{ $labels.result }}" }}: claim_failed, park_failed and response_failed mean command-delivery could not be reached or refused the call (the command stays SENT or is never answered until its lifetime ends); kv_failed means the store of commands awaiting confirmation could not be written, so the command was not published; publish_failed means a publish may or may not have reached the node. Check command-delivery and the message broker, and the sparkplug-ingest log."
 {{- end }}

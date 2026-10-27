@@ -152,6 +152,8 @@ var ownedWithinTunable = []struct {
 		"event-sources' listeners and broker connections are wiring, not tuning"},
 	{"functionalAreas.sparkplug-ingest.config.sources",
 		"sparkplug-ingest's broker connections, credential references and tenant bindings are wiring, not tuning"},
+	{"functionalAreas.command-delivery.config.sparkplugCommands",
+		"whether Sparkplug commands are deliverable is derived by the chart from the Sparkplug sources' commands.enabled; a value written here could say they are while no source sends them, or the reverse"},
 }
 
 // refusedIngressAnnotations are ingress.annotations keys an overlay may not set. The chart
