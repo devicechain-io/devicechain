@@ -88,6 +88,25 @@ func (c *tapCollector) wait(t *testing.T, what string, cond func() bool) {
 	require.Eventually(t, cond, 20*time.Second, 5*time.Millisecond, what)
 }
 
+// The same hook on the INGESTING path (a Client with an ingester, as the service builds it): the
+// reports reach the dispatcher from there too, not only from a decode-only Client.
+func TestTheTapReportsOnTheIngestingPathToo(t *testing.T) {
+	rig := newSpRig(t, spWindow, 0)
+	m := newSpMetrics()
+	ing := NewIngester(NewRegistrar(fakeCreateGQL{}, "url", nil), NewEmitter(failingWriter{}, time.Now),
+		IngestMetrics{MeasurementsEmitted: m.emitted, PresenceEmitted: m.presence})
+	src := config.SparkplugSource{Tenant: "acme", HostId: "h1", Groups: []string{"plant-a"}, AutoRegister: true,
+		DeviceTypeToken: "sp-node", Commands: enabledCommands()}
+	c := NewClient(src, Broker{URL: rig.mqttURL, ClientID: "sp-tap-ingest"}, ing, admitAllSamples{}, time.Now, m.host())
+	c.SetPublisher(rig.writer)
+	col := &tapCollector{}
+	c.SetCommandHooks(CommandHooks{Reported: col.add})
+	rig.online(c)
+	t.Cleanup(func() { stopWithin(t, c, 30*time.Second) })
+	rig.feeder().publish(wireNBirth, nbirthWire(t, 11))
+	col.wait(t, "the ingesting path never reported the birth", func() bool { return len(col.births()) == 1 && len(col.metrics("Setpoint")) == 1 })
+}
+
 // 🔴 A scripted node: its births are reported with their values; a Boolean DDATA is a report of the
 // value (by name, resolved through the BIRTH's alias); a HISTORICAL metric is not; a null is not;
 // and the Host's OWN command, echoed back by the broker's wildcard subscription, is never evidence.

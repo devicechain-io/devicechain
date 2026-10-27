@@ -114,6 +114,7 @@ func TestABirthReportsItsMetricsAndTheNodeBirth(t *testing.T) {
 func TestADataMetricIsReportedByNameInTheFormOfItsDeclaredDatatype(t *testing.T) {
 	want, err := RequestedWire(datatypeInt8, -1)
 	require.NoError(t, err)
+	assert.Equal(t, WireValue{Kind: 'i', N: ^uint64(0)}, want, "a signed value is its two's complement, sign-extended")
 	for name, carrier := range map[string]uint32{"sign-extended": 0xFFFFFFFF, "truncated": 0xFF} {
 		t.Run(name, func(t *testing.T) {
 			h := reportingHarness()
@@ -296,9 +297,16 @@ func TestLastReportedIsKeptPerTableAndDroppedWithIt(t *testing.T) {
 
 	// A rebirth replaces the table: a ref from before it says nothing about what the node holds now.
 	h.tr.MarkCommandedRebirth("g", "n")
-	h.tr.Observe(nTop(NBIRTH), pl(0, bdSeqM(5), declared("Setpoint", datatypeInt8, 1)))
+	again := declared("Setpoint", datatypeInt8, 1)
+	again.Value = &sppb.Payload_Metric_IntValue{IntValue: 7}
+	h.tr.Observe(nTop(NBIRTH), pl(0, bdSeqM(5), again))
 	_, _, ok = h.tr.LastReported(ref)
 	assert.False(t, ok, "a last value from a replaced table was trusted")
+	fresh, err := h.tr.LookupMetric(nodeT, "Setpoint")
+	require.NoError(t, err)
+	last, _, ok = h.tr.LastReported(fresh)
+	require.True(t, ok, "control: the same value is read through a ref to the new table")
+	assert.Equal(t, WireValue{Kind: 'i', N: 7}, last)
 
 	// And the end of the Host session forgets it.
 	cur, err := h.tr.LookupMetric(nodeT, "Setpoint")
