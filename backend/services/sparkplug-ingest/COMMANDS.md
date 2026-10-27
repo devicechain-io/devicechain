@@ -157,8 +157,8 @@ Decisions taken in this slice, so the next does not reopen them:
   kv_failed, response_failed).
 - **Console.** "Add Sparkplug standard commands" on the profile, a free-text metric and value form for
   `sparkplug.write`, and outcome help under the command's status. The help reads the stored response
-  evidence and, for a TIMEOUT, the adapter's error wording, which is therefore part of the interface the
-  console depends on.
+  and keys on its machine-readable `reason` code, not on the human error text. A code the console does
+  not know says nothing extra.
 - **Not shipped:** the Tahu and Mosquitto interop run, and the amendment of the Sparkplug ADR.
 
 Accepted deviations from the design, and rulings recorded here so the next slice does not reopen
