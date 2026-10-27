@@ -318,6 +318,8 @@ exact same source. Takes the root context.
 {{- include "devicechain.validateMcpConfig" (dict "root" $root "cfg" $cfg) }}
 {{- else if eq $area "user-management" }}
 {{- $cfg = include "devicechain.userManagementMergedConfig" $root | fromJson }}
+{{- else if eq $area "update-management" }}
+{{- $cfg = include "devicechain.updateManagementMergedConfig" $root | fromJson }}
 {{- end }}
 {{ $area }}: {{ $cfg | toJson | quote }}
 {{- end }}
@@ -521,6 +523,38 @@ would edit the values themselves, and every later template would see the edit.
 {{- $auth := get $cfg "auth" | default dict -}}
 {{- $_ := set $auth "issuerUrl" $issuer -}}
 {{- $_ := set $cfg "auth" $auth -}}
+{{- end -}}
+{{- $cfg | toJson -}}
+{{- end -}}
+
+{{/*
+devicechain.updateManagementMergedConfig is the config update-management actually receives, as
+JSON: the operator's explicit value with updates.downloadBaseUrl filled in from the public origin
+when the operator set none. It is the URL a device is sent to fetch an assigned image from, so it
+is derived from the same host the download route is served on (ingress-download.yaml for the
+Ingress front end; the update-management rule of the API route for the Gateway front end, which
+share ingress.host and the /api/<area> prefix): <origin>/api/update-management.
+
+An explicit updates.downloadBaseUrl wins. With no ingress there is no external origin to speak
+of, so nothing is derived and the service reports that downloads are not configured (its WARN
+at start, and downloadsConfigured=false on updateManagementInfo, which the console surfaces).
+
+Under ingress.tls.enabled=false the derived base is plain http. That is deliberate: a compact lab
+needs no TLS, the service WARNs about an http base on a non-loopback host, and a device
+refuses an http grant unless told otherwise.
+
+The explicit config is COPIED first -- `set` on a dict from .Values would edit the values
+themselves, and every later template would see the edit.
+*/}}
+{{- define "devicechain.updateManagementMergedConfig" -}}
+{{- $cfg := deepCopy (get (get (.Values.functionalAreas | default dict) "update-management" | default dict) "config" | default dict) -}}
+{{- $origin := include "devicechain.publicOrigin" . -}}
+{{- if $origin -}}
+{{- $updates := get $cfg "updates" | default dict -}}
+{{- if not (get $updates "downloadBaseUrl") -}}
+{{- $_ := set $updates "downloadBaseUrl" (printf "%s/api/update-management" $origin) -}}
+{{- $_ := set $cfg "updates" $updates -}}
+{{- end -}}
 {{- end -}}
 {{- $cfg | toJson -}}
 {{- end -}}

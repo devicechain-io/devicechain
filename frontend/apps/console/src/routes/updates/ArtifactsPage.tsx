@@ -41,6 +41,7 @@ import { formatBytes } from '@/lib/artifactUpload';
 import { artifactStateLabel } from '@/lib/enumLabel';
 import { ArtifactStateBadge, DigestChip, TrustBadge } from './badges';
 import { NewArtifactForm } from './NewArtifactForm';
+import { DownloadsNotice } from './DownloadsNotice';
 
 const pageSize = 50;
 
@@ -124,6 +125,7 @@ export default function ArtifactsPage() {
         </>
       }
     >
+      <DownloadsNotice />
       {canWrite && (
         <FormDrawer
           shot="artifact-new"

@@ -33,6 +33,11 @@ type SchemaResolver struct {
 	AllowUnverifiedArtifacts bool
 	// MaxArtifactBytes is the effective per-artifact ceiling, reported by updateManagementInfo.
 	MaxArtifactBytes int64
+	// DownloadsConfigured is whether updates.downloadBaseUrl is set, reported by
+	// updateManagementInfo. Unset, no device can be given a download capability, so an
+	// assignment is published and never fetched; the console says so rather than let that
+	// look like a slow fleet.
+	DownloadsConfigured bool
 }
 
 // GetApi returns the catalogue API injected into the request context. It fails loudly
@@ -47,9 +52,10 @@ func (r *SchemaResolver) GetApi(ctx context.Context) (*model.Api, error) {
 }
 
 type serviceInfoResolver struct {
-	area             string
-	allowUnverified  bool
-	maxArtifactBytes int64
+	area                string
+	allowUnverified     bool
+	maxArtifactBytes    int64
+	downloadsConfigured bool
 }
 
 func (r *serviceInfoResolver) MaxArtifactBytes() string {
@@ -58,10 +64,12 @@ func (r *serviceInfoResolver) MaxArtifactBytes() string {
 
 func (r *serviceInfoResolver) Area() string                   { return r.area }
 func (r *serviceInfoResolver) AllowUnverifiedArtifacts() bool { return r.allowUnverified }
+func (r *serviceInfoResolver) DownloadsConfigured() bool      { return r.downloadsConfigured }
 
 // UpdateManagementInfo is the non-sensitive service identity.
 func (r *SchemaResolver) UpdateManagementInfo() *serviceInfoResolver {
-	return &serviceInfoResolver{area: r.Area, allowUnverified: r.AllowUnverifiedArtifacts, maxArtifactBytes: r.MaxArtifactBytes}
+	return &serviceInfoResolver{area: r.Area, allowUnverified: r.AllowUnverifiedArtifacts, maxArtifactBytes: r.MaxArtifactBytes,
+		downloadsConfigured: r.DownloadsConfigured}
 }
 
 // Artifact looks an artifact up by token.

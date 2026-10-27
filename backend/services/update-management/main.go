@@ -163,6 +163,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 				return &graphql.SchemaResolver{
 					Area:                     string(Microservice.FunctionalArea),
 					AllowUnverifiedArtifacts: Configuration.Updates.AllowUnverifiedArtifacts,
+					DownloadsConfigured:      Configuration.Updates.DownloadBaseURL != "",
 					MaxArtifactBytes: Configuration.EffectiveMaxArtifactBytes(
 						Microservice.InstanceConfiguration.Infrastructure.Blob.Backend),
 				}
@@ -277,6 +278,11 @@ func buildApi(ctx context.Context) (*model.Api, error) {
 	if api.AllowUnverified {
 		log.Warn().Msg("updates.allowUnverifiedArtifacts is set: artifacts with no active-signer signature can be assigned to devices. " +
 			"Nothing authenticates who produced them; this is a development setting.")
+	}
+	if Configuration.Updates.DownloadBaseIsInsecure() {
+		log.Warn().Str("downloadBaseUrl", api.DownloadBaseURL).
+			Msg("updates.downloadBaseUrl is plain http on a non-loopback host - devices are sent download links that are not encrypted in transit, " +
+				"and a device that requires TLS will refuse them. Serve the instance over TLS (a lab with no TLS can ignore this).")
 	}
 	if api.DownloadBaseURL == "" {
 		log.Warn().Msg("updates.downloadBaseUrl is not set - no device can be given a download capability, so no assigned update can be fetched.")

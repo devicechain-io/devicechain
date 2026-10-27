@@ -2214,9 +2214,12 @@ functionalAreas:
     #                                     # signer (registered per tenant with artifact:trust)
     #                                     # can be assigned; set it true on a development
     #                                     # instance only, to assign unsigned artifacts
-    #   downloadBaseUrl: ""               # the public URL devices reach this service at, for
-    #                                     # example https://<ingress.host>/api/update-management;
-    #                                     # unset, no device can be given a download capability
+    #   downloadBaseUrl: ""               # the public URL devices reach this service at. Left
+    #                                     # unset it is DERIVED from the ingress host as
+    #                                     # <scheme>://<ingress.host>/api/update-management
+    #                                     # (http under ingress.tls.enabled=false); set it only to
+    #                                     # point devices somewhere else. With no ingress nothing is
+    #                                     # derived, and no device can be given a download capability
     # OPT-IN area: held back from
     # `default`, shipped by `full`, or named explicitly (enabledFunctionalAreas:
     # [..., update-management]). It hard-depends on device-management (an update targets
