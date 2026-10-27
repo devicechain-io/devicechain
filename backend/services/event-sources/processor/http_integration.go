@@ -4,6 +4,8 @@
 package processor
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -427,7 +429,7 @@ func (es *HttpEventSource) handleIntegration(w http.ResponseWriter, r *http.Requ
 			rt.Undecoded.Note(tenant, slug, bearer, up.SampleHex())
 			continue
 		}
-		dedup := looked.DeviceToken + "\x00" + up.AltId
+		dedup := integrationDedupKey(looked.DeviceToken, up.AltId)
 		if _, dup := seen[dedup]; dup {
 			m.uplink(UplinkDuplicateSuppress)
 			continue
@@ -476,7 +478,7 @@ func (es *HttpEventSource) handleIntegration(w http.ResponseWriter, r *http.Requ
 			o.event.Integration = slug
 			o.event.SealedIntegrationToken = sealed
 			o.event.IntegrationIdentifier = o.identifier
-			if err := rt.Publish(es.Id, tenant, o.event, o.payload, tenant+":"+*o.event.AltId); err != nil {
+			if err := rt.Publish(es.Id, tenant, o.event, o.payload, integrationDedupID(tenant, o.event.Device, *o.event.AltId)); err != nil {
 				if errors.Is(err, messaging.ErrStreamBackpressure) {
 					m.request(typ, ResultBackpressure)
 					writeBackpressured(w)
@@ -491,6 +493,32 @@ func (es *HttpEventSource) handleIntegration(w http.ResponseWriter, r *http.Requ
 	}
 	m.request(typ, ResultAccepted)
 	w.WriteHeader(http.StatusAccepted)
+}
+
+// integrationDedupKey is the identity of one uplink within a request: the device it resolved to
+// and the sender's own dedup key, joined by a byte neither can hold (a token is printable and an
+// AltId is checked to be printable ASCII).
+func integrationDedupKey(deviceToken, altId string) string {
+	return deviceToken + "\x00" + altId
+}
+
+// integrationDedupID names one integration event for the broker's duplicate window (its
+// Nats-Msg-Id): tenant, resolved device and the sender's AltId.
+//
+// 🔴 THE DEVICE IS PART OF THE IDENTITY. An AltId is the sender's own key and carries only the
+// codec's prefix, not the alias scheme the sender-local identifier was resolved under, so two
+// integrations on different schemes can send the same identifier, body and time and reach
+// DIFFERENT devices. Keyed on tenant:AltId alone the broker stored the first device's event and
+// silently dropped the second's while both requests answered 202. The same device's retransmission
+// still produces the same id, which is the dedup this exists for.
+//
+// The device and AltId are hashed rather than concatenated: a device token and an AltId (up to
+// integration.MaxAltIdLen bytes) together would make a long id held for the whole window in every
+// replica, and a hash is a fixed 43 bytes whatever either holds. 256 bits, so a collision is not a
+// concern. The tenant stays in the clear, as on every other inbound id.
+func integrationDedupID(tenant, deviceToken, altId string) string {
+	sum := sha256.Sum256([]byte(integrationDedupKey(deviceToken, altId)))
+	return tenant + ":" + base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
 // ClearIntegrationMark removes the integration markers from an event. The device-facing decode
