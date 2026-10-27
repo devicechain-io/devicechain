@@ -325,3 +325,34 @@ tests:
       - eval_time: 15m
         alertname: ProvisioningMisconfigured
         exp_alerts: []
+
+  # An unconfirmed session kick: quiet while the oldest is young or the queue is empty (0), fires
+  # once the oldest is past 10m for 5m, clears when the queue drains.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_session_kick_oldest_pending_age_seconds{namespace="dci-devicechain", pod="dc-device-management-aaaaa"}'
+        values: '0+60x40 0+0x20'
+      - series: 'devicechain_devicemanagement_session_kick_oldest_pending_age_seconds{namespace="dci-devicechain", pod="dc-device-management-bbbbb"}'
+        values: '0+0x60'
+    alert_rule_test:
+      # 9m old at 9m: under the threshold.
+      - eval_time: 9m
+        alertname: ProvisioningSessionKickUnconfirmed
+        exp_alerts: []
+      # Past 10m but not yet held for 5m.
+      - eval_time: 13m
+        alertname: ProvisioningSessionKickUnconfirmed
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: ProvisioningSessionKickUnconfirmed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "A revoked or reset device may still be connected: its broker session was never confirmed ended"
+              description: "For at least 5m, the oldest session kick that a provisioning revoke or reset still owes has waited more than 10 minutes (20m 0s now). The credentials were withdrawn, so the device cannot reconnect, but an MQTT session it already had open can keep publishing until its token expires (12 hours by default). device-management retries every 30 seconds, so the responder that ends sessions (event-sources) is down or unreachable: check that event-sources is running and its MQTT auth callout is healthy."
+      # Drained.
+      - eval_time: 50m
+        alertname: ProvisioningSessionKickUnconfirmed
+        exp_alerts: []

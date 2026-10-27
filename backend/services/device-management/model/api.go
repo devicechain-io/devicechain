@@ -158,6 +158,10 @@ type Api struct {
 	// owners queued it (ADR-081, ownership_outbox.go). Writes queue the fact whether or not
 	// it is set; the drain refuses to run without it rather than discard what is queued.
 	DeviceOwnershipPublisher DeviceOwnershipPublisher
+	// SessionKickObserver, when set, is told how many session kicks are still owed and how long
+	// the oldest has waited, on every pass of the session-kick drain (DrainSessionKicksLocked).
+	// Wired to the service gauges; nil in tests that do not measure them.
+	SessionKickObserver func(pending int, oldest time.Duration)
 	// ownershipNow replaces the process clock where the engine keeps no clock of its own
 	// (ownershipChangedTime). Tests only.
 	ownershipNow func() time.Time

@@ -16,8 +16,10 @@ import (
 //
 // # What the table is
 //
-// One row per device whose authority a committed provisioning revoke or reset withdrew and
-// whose live broker sessions have not yet been confirmed ended. The write inserts the row in
+// One row per (device, origin) whose authority a committed provisioning revoke or reset
+// withdrew and whose live broker sessions have not yet been confirmed ended. Origin is the
+// provisioning profile id of a revoke, or 0 for a device reset, so each operation finds its own
+// debt however many others the device owes. The write inserts the row in
 // its own transaction; the kick deletes it once the broker's responder confirmed. Without it
 // a repeat of the operation, which finds no credential left to change, could not know the
 // kick was still owed. It is a queue, so it is empty whenever every kick has been confirmed.
@@ -27,12 +29,11 @@ import (
 // The table carries tenant_id, so the catalog-driven tenant purge classifies and erases it
 // with no exemption to register.
 type pendingSessionKick struct {
-	TenantId              string `gorm:"primaryKey;not null;size:128"`
-	DeviceToken           string `gorm:"primaryKey;not null;size:255"`
-	Reason                string `gorm:"not null;size:64"`
-	ProvisioningProfileId *uint
-	Generation            int64     `gorm:"not null"`
-	RequestedAt           time.Time `gorm:"not null"`
+	TenantId    string    `gorm:"primaryKey;not null;size:128"`
+	DeviceToken string    `gorm:"primaryKey;not null;size:255"`
+	Origin      uint      `gorm:"primaryKey;not null;autoIncrement:false"`
+	Generation  int64     `gorm:"not null"`
+	RequestedAt time.Time `gorm:"not null"`
 }
 
 // TableName is NOT declared: it would bypass the area's TablePrefix (see

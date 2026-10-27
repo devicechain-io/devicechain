@@ -194,7 +194,7 @@ ALTER TABLE ONLY "device-management".metric_definitions ALTER COLUMN id SET DEFA
 ALTER TABLE ONLY "device-management".pending_ownership_facts
  ADD CONSTRAINT pending_ownership_facts_pkey PRIMARY KEY (tenant_id, device_id);
 ALTER TABLE ONLY "device-management".pending_session_kicks
- ADD CONSTRAINT pending_session_kicks_pkey PRIMARY KEY (tenant_id, device_token);
+ ADD CONSTRAINT pending_session_kicks_pkey PRIMARY KEY (tenant_id, device_token, origin);
 ALTER TABLE ONLY "device-management".provisioning_profiles
  ADD CONSTRAINT provisioning_profiles_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-management".provisioning_profiles ALTER COLUMN id SET DEFAULT nextval('"device-management".provisioning_profiles_id_seq'::regclass);
@@ -1145,8 +1145,7 @@ CREATE TABLE "device-management".pending_ownership_facts (
 CREATE TABLE "device-management".pending_session_kicks (
  tenant_id character varying(128) NOT NULL,
  device_token character varying(255) NOT NULL,
- reason character varying(64) NOT NULL,
- provisioning_profile_id bigint,
+ origin bigint NOT NULL,
  generation bigint NOT NULL,
  requested_at timestamp with time zone NOT NULL
 );

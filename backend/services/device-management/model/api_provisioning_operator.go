@@ -8,7 +8,6 @@ import (
 	"errors"
 	"slices"
 
-	"github.com/devicechain-io/dc-microservice/messaging"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -56,7 +55,8 @@ func (api *Api) ResetDeviceProvisioning(ctx context.Context, deviceToken string)
 		}
 		// Pending kicks are drained whether or not this call removed anything: a retry after a
 		// failed kick finds no credentials left, and still owes the broker the kick.
-		if kerr := api.drainSessionKicks(ctx, tenant, func(db *gorm.DB) *gorm.DB {
+		if kerr := api.drainSessionKicks(ctx, tenant, 0, func(db *gorm.DB) *gorm.DB {
+			// Every origin: a reset ends the device's sessions, which settles a revoke's debt too.
 			return db.Where("device_token = ?", deviceToken)
 		}); kerr != nil {
 			return removed, kerr
@@ -119,7 +119,7 @@ func (api *Api) resetDeviceProvisioningOnce(ctx context.Context, deviceToken str
 		removed = len(gone)
 		// The kick is recorded in the same transaction as the delete, because the credentials
 		// are about to be gone and a retry could not rediscover the device from them.
-		return api.queueSessionKicksOnTx(tx, device.TenantId, messaging.SessionKickCredentialDeleted, nil, []string{device.Token})
+		return api.queueSessionKicksOnTx(tx, device.TenantId, kickOriginReset, []string{device.Token})
 	})
 	return removed, device.TenantId, device.ID, err
 }
@@ -166,7 +166,7 @@ func (api *Api) RevokeProvisionedDevices(ctx context.Context, profileToken strin
 		if err := tx.Unscoped().Model(&Device{}).Where("id IN ?", ids).Pluck("token", &tokens).Error; err != nil {
 			return err
 		}
-		return api.queueSessionKicksOnTx(tx, tenant, messaging.SessionKickCredentialChanged, &profileId, tokens)
+		return api.queueSessionKicksOnTx(tx, tenant, profileId, tokens)
 	})
 	if err != nil {
 		return 0, err
@@ -176,8 +176,8 @@ func (api *Api) RevokeProvisionedDevices(ctx context.Context, profileToken strin
 	}
 	// Drained whether or not this call disabled anything: kicks left pending by an earlier
 	// revoke of the profile are retried here, and success means they were all confirmed.
-	if kerr := api.drainSessionKicks(ctx, tenant, func(db *gorm.DB) *gorm.DB {
-		return db.Where("provisioning_profile_id = ?", profileId)
+	if kerr := api.drainSessionKicks(ctx, tenant, 0, func(db *gorm.DB) *gorm.DB {
+		return db.Where("origin = ?", profileId)
 	}); kerr != nil {
 		return len(disabled), kerr
 	}

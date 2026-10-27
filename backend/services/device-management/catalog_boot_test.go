@@ -52,12 +52,12 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	prevMs, prevCfg, prevNats, prevRdb, prevSvc := Microservice, Configuration, NatsManager, RdbManager, Svc
 	prevApi, prevCached, prevKey, prevTransit, prevGates := Api, CachedApi, DeviceSecretKey, SecretTransit, safetyGates
 	prevProc, prevRA, prevDR, prevDrain := InboundEventsProcessor, RaiseAlarmConsumer, DeviceReportsConsumer, OwnershipDrain
-	prevCallout, prevBackoff := CalloutResponder, MqttStoreBackoff
+	prevCallout, prevBackoff, prevKickDrain := CalloutResponder, MqttStoreBackoff, SessionKickDrain
 	t.Cleanup(func() {
 		Microservice, Configuration, NatsManager, RdbManager, Svc = prevMs, prevCfg, prevNats, prevRdb, prevSvc
 		Api, CachedApi, DeviceSecretKey, SecretTransit, safetyGates = prevApi, prevCached, prevKey, prevTransit, prevGates
 		InboundEventsProcessor, RaiseAlarmConsumer, DeviceReportsConsumer, OwnershipDrain = prevProc, prevRA, prevDR, prevDrain
-		CalloutResponder, MqttStoreBackoff = prevCallout, prevBackoff
+		CalloutResponder, MqttStoreBackoff, SessionKickDrain = prevCallout, prevBackoff, prevKickDrain
 	})
 
 	issuer, err := nkeys.CreateAccount()
@@ -85,7 +85,7 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	require.NoError(t, parseConfiguration())
 	safetyGates = governance.NewSafetyGates(Microservice)
 
-	db := putest.NewSQLiteDB(t, append(credentialTables(), &model.PendingOwnershipFact{})...)
+	db := putest.NewSQLiteDB(t, append(credentialTables(), &model.PendingOwnershipFact{}, &model.PendingSessionKick{})...)
 	RdbManager = &rdb.RdbManager{Database: db}
 	DeviceSecretKey = dmtest.DeviceSecretKey()
 	SecretTransit = testTransit(t)
@@ -100,6 +100,9 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 				return err
 			}
 			if err = initOwnershipDrain(); err != nil {
+				return err
+			}
+			if err = initSessionKickDrain(); err != nil {
 				return err
 			}
 			// The third: the self-registration endpoint is mounted on the real mux here, so
@@ -123,6 +126,28 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 
 	require.NotNil(t, CalloutResponder, "the callout responder (and its credential-attempt bucket) was not started")
 	require.NotNil(t, MqttStoreBackoff, "the MQTT store back-off was not started")
+
+	// The session-kick drain is started by the real start hook, not merely built: its first pass
+	// is immediate, so a drain that was never Start()ed leaves its pass counter at zero. The
+	// observer is wired to the gauges the alert reads.
+	require.NotNil(t, Api.SessionKickObserver, "the session-kick gauges are not wired to the drain")
+	for _, series := range []string{"session_kicks_pending", "session_kick_oldest_pending_age_seconds", "session_kick_drain_passes_total"} {
+		require.NotEmpty(t, registeredSeries(t, reg, series), "%s is not registered", series)
+	}
+	require.Eventually(t, func() bool {
+		families, err := reg.Gather()
+		require.NoError(t, err)
+		for _, f := range families {
+			if f.GetName() == "devicechain_devicemanagement_session_kick_drain_passes_total" {
+				for _, m := range f.GetMetric() {
+					if m.GetCounter().GetValue() > 0 {
+						return true
+					}
+				}
+			}
+		}
+		return false
+	}, 10*time.Second, 50*time.Millisecond, "the session-kick drain never made a pass: main did not start it")
 
 	// The callout runs with its in-flight cap, its lookup bound and its load metrics attached,
 	// and the three series exist on the service's registry. Without the Configure call in the

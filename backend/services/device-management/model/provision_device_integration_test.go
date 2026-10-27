@@ -43,11 +43,15 @@ var itTenantSeq atomic.Int64
 // pgFixture is one fresh tenant on the shared server. Every test makes its own, so tests that
 // run in one process never see each other's rows.
 type pgFixture struct {
-	t       *testing.T
-	mgr     *rdb.RdbManager
-	api     *Api
-	ctx     context.Context
-	tenant  string
+	t      *testing.T
+	mgr    *rdb.RdbManager
+	api    *Api
+	ctx    context.Context
+	tenant string
+	// kicker is the session kicker every operator call ends sessions through. Without one the
+	// kick queue is never written, and the ON CONFLICT upsert, the row-value delete and the
+	// row locks it takes would be untested on Postgres.
+	kicker  *togglingKicker
 	secrets map[string]string
 	keys    map[string]string
 }
@@ -59,8 +63,10 @@ func newPgFixture(t *testing.T) *pgFixture {
 	api.DeviceSecretKey = testSecretKey
 	api.EnrollmentKeys = testEnrollmentKeys
 	api.ProvisioningChecker, _ = provisioningChecker(t, testSecretKey, testEnrollmentKeys.Provisioning)
+	kicker := &togglingKicker{up: true}
+	api.SessionKicker = kicker
 	tenant := fmt.Sprintf("it%d-%d", time.Now().UnixNano(), itTenantSeq.Add(1))
-	f := &pgFixture{t: t, mgr: mgr, api: api, ctx: core.WithTenant(context.Background(), tenant), tenant: tenant,
+	f := &pgFixture{t: t, mgr: mgr, api: api, ctx: core.WithTenant(context.Background(), tenant), tenant: tenant, kicker: kicker,
 		secrets: map[string]string{}, keys: map[string]string{}}
 	for _, tok := range []string{"dt-a", "dt-b"} {
 		_, err := api.CreateDeviceType(f.ctx, &DeviceTypeCreateRequest{Token: tok})
@@ -596,6 +602,21 @@ func TestProvisionMixedOperationsOnOneProfileNeverDeadlock(t *testing.T) {
 	// attempts are refused (IN_USE) instead of removing the profile out from under the test.
 	_, err := f.register("pp-1", "SN-KEEPER", material(1000))
 	require.NoError(t, err)
+	// The responder flaps, so revokes and resets leave rows in the kick queue and later ones
+	// re-queue, retry and delete them while registrations and profile deletes run: the queue's
+	// row locks join the lock order this test exists to keep free of cycles.
+	stopFlap := make(chan struct{})
+	go func() {
+		for up := false; ; up = !up {
+			select {
+			case <-stopFlap:
+				return
+			case <-time.After(15 * time.Millisecond):
+				f.kicker.set(up)
+			}
+		}
+	}()
+	defer close(stopFlap)
 	var wg sync.WaitGroup
 	var bad atomic.Int64
 	var mu sync.Mutex
@@ -605,7 +626,8 @@ func TestProvisionMixedOperationsOnOneProfileNeverDeadlock(t *testing.T) {
 			return
 		}
 		var refusal *ProvisioningRefusal
-		if errors.As(err, &refusal) || errors.Is(err, ErrEntityInUse) || errors.Is(err, gorm.ErrRecordNotFound) {
+		if errors.As(err, &refusal) || errors.Is(err, ErrEntityInUse) || errors.Is(err, gorm.ErrRecordNotFound) ||
+			errors.Is(err, ErrSessionsNotEnded) {
 			return
 		}
 		bad.Add(1)
@@ -775,4 +797,45 @@ func TestProvisionACredentialUpdateNeverWritesTheProvenance(t *testing.T) {
 	pb, err := f.api.ProvisioningProfilesByToken(f.ctx, []string{"pp-b"})
 	require.NoError(t, err)
 	assert.Equal(t, pb[0].ID, *rows[0].ProvisioningProfileId, "the update wrote back the provenance it loaded")
+}
+
+// ─── The session-kick queue, on the engine whose SQL it depends on ──────────────────────────
+
+// A failed revoke and a failed reset of one device write two rows (the ON CONFLICT upsert is
+// exercised by the second failure of each); a repeat of the revoke still reports the failure; and
+// once the responder is back the repeat settles its own row through the row-value delete while
+// the reset's stays until its own repeat.
+func TestSessionKickQueueOnPostgres(t *testing.T) {
+	f := newPgFixture(t)
+	f.profile("pp-1", ProvisionAllowNew)
+	_, err := f.register("pp-1", "SN-1", material(1))
+	require.NoError(t, err)
+	dev := core.DeriveDeviceToken("SN-1", "pv-")
+	f.kicker.set(false)
+
+	_, err = f.api.RevokeProvisionedDevices(f.ctx, "pp-1")
+	require.ErrorIs(t, err, ErrSessionsNotEnded)
+	_, err = f.api.ResetDeviceProvisioning(f.ctx, dev)
+	require.ErrorIs(t, err, ErrSessionsNotEnded)
+	require.EqualValues(t, 2, f.count(&PendingSessionKick{}))
+	for i := 0; i < 2; i++ { // re-queues: ON CONFLICT DO UPDATE on both keys
+		_, err = f.api.RevokeProvisionedDevices(f.ctx, "pp-1")
+		require.ErrorIs(t, err, ErrSessionsNotEnded)
+		_, err = f.api.ResetDeviceProvisioning(f.ctx, dev)
+		require.ErrorIs(t, err, ErrSessionsNotEnded)
+	}
+	require.EqualValues(t, 2, f.count(&PendingSessionKick{}))
+
+	f.kicker.set(true)
+	n, err := f.api.RevokeProvisionedDevices(f.ctx, "pp-1")
+	require.NoError(t, err)
+	assert.Zero(t, n)
+	require.EqualValues(t, 1, f.count(&PendingSessionKick{}), "the revoke settles its own row only")
+
+	// The pass is cross-tenant and the database is shared with every other test, so it is
+	// asserted on this tenant's rows, not on how many tenants it visited.
+	res, err := f.api.DrainSessionKicks(f.ctx, SessionKickDrainPageSize)
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, res.Tenants, 1)
+	require.EqualValues(t, 0, f.count(&PendingSessionKick{}))
 }
