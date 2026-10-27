@@ -51,10 +51,28 @@ Elige **Nuevo dispositivo**.
    tokens de tu instalación. El patrón se muestra bajo el campo. `{slug}` se rellena a partir del
    nombre que escribas.
 3. Escribe un **Nombre** y, si quieres, una **Descripción**.
-4. Elige **Crear dispositivo**.
+4. Si el dispositivo informa a través de un servidor de red LoRaWAN u otro remitente en lugar de
+   conectarse por sí mismo, añade sus [alias](#aliases).
+5. Elige **Crear dispositivo**.
 
-Un dispositivo nuevo no puede enviar nada hasta que tenga una credencial. Añádela desde su pestaña
-[Credenciales](#credentials).
+Un dispositivo nuevo que se conecta por sí mismo no puede enviar nada hasta que tenga una credencial.
+Añádela desde su pestaña [Credenciales](#credentials). Un dispositivo que informa a través de una
+[integración de entrada](../guides/inbound-integrations.md) necesita un alias en su lugar.
+
+### Alias {#aliases}
+
+Un **alias** es el nombre con el que otro sistema conoce al dispositivo, como su DevEUI de LoRaWAN. El
+campo **Alias** del formulario del dispositivo admite hasta 8, un valor por esquema:
+
+1. Elige **Añadir alias**.
+2. Escoge el esquema: **DevEUI de LoRaWAN** (16 dígitos hexadecimales), **Id de dispositivo del
+   servidor de red** (el id del dispositivo en The Things Stack) o **Esquema propio** (un nombre tuyo y
+   un valor).
+3. Escribe el valor. Un DevEUI se guarda en mayúsculas, lo escribas como lo escribas.
+
+Un alias pertenece a un solo dispositivo del inquilino. Una integración de entrada encuentra el
+dispositivo al que se refiere un mensaje por su alias. Consulta
+[Integraciones de entrada](../guides/inbound-integrations.md#aliases).
 
 ## Crear muchos dispositivos a la vez
 
@@ -424,3 +442,4 @@ cuántas credenciales se retiraron.
 - [Credenciales de dispositivo](../guides/device-credentials.md)
 - [Gestión de asignaciones de dispositivos](../guides/managing-assignments.md)
 - [Conexión de un dispositivo](../guides/connecting-a-device.md)
+- [Integraciones de entrada](../guides/inbound-integrations.md)

@@ -366,7 +366,7 @@ renameNotificationChannel(token: String!, newToken: String!): NotificationChanne
 `updateCustomer` · `updateAreaType` · `updateArea` · `updateMetricDefinition` ·
 `updateCommandDefinition` · `updateDetectionRule` · `updateGeoFence` · `updateEntityGroup` ·
 `updateDeviceCredential` · `updateProvisioningProfile` · `updateEntityRelationshipType` ·
-`updateDeviceProfile`
+`updateDeviceProfile` · `updateIntegration`
 
 **出站连接器和 AI 推理。**各自转换了一个更新：`updateConnector` 和 `updateAiProvider`。
 原来通过载荷 token 重命名的能力都迁移到[专用重命名变更](#renaming-a-record)，没有被移除。
@@ -482,6 +482,24 @@ OAuth 客户端的重定向 URI 和 scope 不可清空：空重定向允许列�
 | `deleteProvisioningProfile(token)` | 只要还有设备持有该配置签发的凭据（包括已吊销的），就会被拒绝（`REFERENCE_VIOLATION`）。 |
 
 在类型上，`ProvisioningProfile` 新增 `maxDevices`、`provisionedDeviceCount` 和 `secretIssued`（在服务器生成密文之前为 false，此时配置处于**需要轮换（Rotate required）**状态）。设备新增 `expectedProvisioningProfile`（它的预指定），凭据新增 `provisioningProfile`。`createDevice` 和 `importDevices` 接受 `provisioningProfileToken` 来预指定设备，`DeviceSearchCriteria` 接受 `provisioningProfile` 和 `expectedProvisioningProfile`。端点本身是纯 HTTP，在[设备协议参考](./device-protocol.md#self-registration)中说明。
+
+## 入站集成 {#integrations}
+
+集成的各项操作属于[入站集成](../guides/inbound-integrations.md)。变更需要 `device:write`，查询需要 `device:read`；成员资格限定在某个客户范围内的调用方，对所有这些操作都会被拒绝。
+
+| 操作 | 作用 |
+| --- | --- |
+| `createIntegration` | 创建集成并返回 `{ integration, issuedToken }`。bearer 令牌由服务器生成（43 个字符，256 位），此响应是它唯一出现的地方：平台只存储带密钥的摘要。请求本身没有用于密钥的字段。当租户已拥有其层级允许的集成数量时被拒绝（`LIMIT_EXCEEDED`）。 |
+| `rotateIntegrationToken(token)` | 替换 bearer 令牌并只返回一次新令牌。旧令牌立即失效，没有重叠期。 |
+| `updateIntegration(token, request)` | 部分更新。令牌和 `type` 都不能更改。`deviceTypeTokens` 会替换范围，且至少需要一个类型；对网络服务器类型，`generic` 会被拒绝。 |
+| `deleteIntegration(token)` | 删除集成，并返回此前是否存在。设备上的别名保留。被集成列入范围的设备类型不能删除（`REFERENCE_VIOLATION`）。 |
+| `integration(token)`、`integrations(criteria)` | 读取一个集成，或按 `type`、`enabled` 或范围内的 `deviceType` 搜索。bearer 令牌绝不会返回。 |
+| `unregisteredIntegrationDevices(criteria)` | 集成收到的、其范围内没有任何设备持有的标识符，按最近出现的时间倒序排列。 |
+| `clearUnregisteredIntegrationDevices(integration)` | 清空该列表，并返回删除的行数。 |
+
+在类型上，`Integration` 带有 `undecodedCount`、`lastUndecodedAt`、`lastUndecodedSample` 和 `lastAuthFailureAt`。设备新增 `aliases`（`{scheme, value}` 的列表），`DeviceCreateRequest`、`DeviceUpdateRequest` 以及 `importDevices` 的行都接受 `aliases`。更新时，该列表会替换设备的别名，`null` 或空列表会将其全部移除。`DeviceSearchCriteria` 接受 `alias`。值在写入时会按其方案规范化，因此 DevEUI 以大写形式存储，格式错误的值会被以 `INVALID_VALUE` 拒绝。
+
+`integrationAuth`、`resolveIntegrationDevice` 和 `recordIntegrationUndecoded` 供接入服务使用。它们只接受服务令牌，对用户的访问令牌会被拒绝。
 
 ## 输入验证 {#input-validation}
 

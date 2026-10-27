@@ -79,13 +79,14 @@ If you scale a service out, set tier ceilings for the number of replicas you run
 
 ### When ingest can admit a tenant above its ceiling {#ingest-above-ceiling}
 
-Within one `event-sources` replica, a tenant's ingest ceiling applies to each of three allowances separately, not to the tenant as a whole:
+Within one `event-sources` replica, a tenant's ingest ceiling applies to each of four allowances separately, not to the tenant as a whole:
 
 - **Live traffic**: what the tenant's devices send now over MQTT and NATS, including broker presence.
 - **Backlog**: messages the platform broker stored while `event-sources` was down or behind, metered by when they were sent as they drain. A tenant draining a backlog after an outage while also sending live can be admitted up to twice its ceiling until the drain catches up.
 - **HTTP ingest**: metered separately, so a tenant sending over HTTP and MQTT at once can be admitted up to its ceiling on each.
+- **Inbound integrations**: the traffic of [integrations](../guides/inbound-integrations.md#limits) (a LoRaWAN network server or a webhook) has an allowance of its own, so it never spends what the tenant's MQTT traffic spends. An array of N uplinks is charged N times. Over this allowance the route answers `202` and drops the message, rather than `429`.
 
-Within `event-sources`, a tenant can therefore be admitted at up to three times its ceiling on each replica, multiplied by the number of replicas as above. LwM2M and Sparkplug each meter the tenant on an allowance of their own, so with both running the worst case is five times its ceiling.
+Within `event-sources`, a tenant can therefore be admitted at up to four times its ceiling on each replica, multiplied by the number of replicas as above. LwM2M and Sparkplug each meter the tenant on an allowance of their own, so with both running the worst case is six times its ceiling.
 
 ### What the default allows {#ingest-default}
 

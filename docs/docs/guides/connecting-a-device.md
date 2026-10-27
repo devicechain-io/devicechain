@@ -11,6 +11,8 @@ Devices send events to DeviceChain over **MQTT** or **HTTP**. MQTT is served dir
 MQTT and HTTP ingestion are available. Constrained devices can instead connect over CoAP/UDP with DTLS via [LwM2M ingestion](../concepts/lwm2m.md), and brownfield fleets over [Sparkplug B](../concepts/sparkplug.md). A WebSocket transport and the full self-service provisioning/claiming flow are still planned.
 :::
 
+A device that reports through a LoRaWAN network server (ChirpStack, The Things Stack) or another system's webhook does not connect itself; see [Inbound Integrations](./inbound-integrations.md).
+
 Connections are secured at the broker. The MQTT/NATS listeners are TLS, and a NATS auth-callout authenticates each connection and binds it to that one device's subjects, so a device can only publish its own events and read its own commands. Device authentication is also enforced per event by credential. The default device-auth mode is `required`, so a credential is expected on both the connection and the event. See [Device credentials](./device-credentials.md). LwM2M and Sparkplug B authenticate at the transport handshake rather than per event.
 
 ## Three identifiers {#three-identifiers}

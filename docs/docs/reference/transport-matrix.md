@@ -53,6 +53,7 @@ How devices reach the platform, and how the platform reaches back.
 | MQTT (external broker) | ○ | ○ | ◐ |
 | [Sparkplug B](../concepts/sparkplug.md) | ○ | ○ | ◐ |
 | [LwM2M](../concepts/lwm2m.md) | ◐ | ◐ | ◐ |
+| [Inbound integrations](../guides/inbound-integrations.md) (LoRaWAN network server, webhook) | ○ | ○ | ◐ |
 
 ### MQTT — the platform broker
 
@@ -340,6 +341,25 @@ For constrained devices over CoAP/UDP with DTLS.
 
 Device authentication is per device, at the DTLS handshake, using pre-shared keys. X.509 and
 raw-public-key credentials are planned.
+
+### Inbound integrations {#inbound-integrations}
+
+A network server such as ChirpStack or The Things Stack, or any system that can `POST` JSON or bytes,
+forwards a device's data to a tenant's [integration](../guides/inbound-integrations.md). The device
+never connects to DeviceChain.
+
+- **Subscribe ◐** — the platform stores the decoded values the sender supplies, as ordinary
+  measurements. What keeps it from `●`: a message that arrives while the tenant is over its ingest
+  allowance is answered `202` and dropped, because a refusal would lose it anyway and some network
+  servers suspend a webhook that is refused. The sender is therefore not told. An uplink with nothing
+  decoded in it is acknowledged and stores nothing, and is counted. `IntegrationShedAccepted` and
+  `IntegrationUndecodedHigh` report both.
+- **Write ○ / Read ○** — there is no downlink. A command issued to a device that last reported
+  through an integration **is accepted, and then fails** at the next delivery sweep with
+  `COMMAND_TRANSPORT_UNSUPPORTED`, instead of waiting until it expires. The failure is final. A
+  device that has never reported has no recorded transport, so its first command is dispatched and
+  expires. Because the recorded transport is the last one the device reported on, a device that also
+  sends over MQTT is commanded again once it has.
 
 ## Outbound connectors
 

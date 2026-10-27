@@ -79,13 +79,14 @@ Si escalas un servicio horizontalmente, fija los techos del nivel según el núm
 
 ### Cuándo la ingesta puede admitir a un inquilino por encima de su techo {#ingest-above-ceiling}
 
-Dentro de una réplica de `event-sources`, el techo de ingesta de un inquilino se aplica por separado a cada una de tres asignaciones, no al inquilino en su conjunto:
+Dentro de una réplica de `event-sources`, el techo de ingesta de un inquilino se aplica por separado a cada una de cuatro asignaciones, no al inquilino en su conjunto:
 
 - **Tráfico en vivo**: lo que los dispositivos del inquilino envían ahora por MQTT y NATS, incluida la presencia del broker.
 - **Atraso (backlog)**: mensajes que el broker de la plataforma guardó mientras `event-sources` estaba caído o retrasado, medidos según cuándo se enviaron a medida que se drenan. Un inquilino que drena un atraso tras una caída mientras también envía en vivo puede ser admitido hasta al doble de su techo hasta que el drenaje se pone al día.
 - **Ingesta HTTP**: se mide por separado, así que un inquilino que envía por HTTP y por MQTT a la vez puede ser admitido hasta su techo en cada uno.
+- **Integraciones de entrada**: el tráfico de las [integraciones](../guides/inbound-integrations.md#limits) (un servidor de red LoRaWAN o un webhook) tiene una asignación propia, así que nunca gasta lo que gasta el tráfico MQTT del inquilino. Un arreglo de N uplinks se cobra N veces. Por encima de esta asignación, la ruta responde `202` y descarta el mensaje, en lugar de `429`.
 
-Dentro de `event-sources`, un inquilino puede ser admitido por tanto hasta el triple de su techo en cada réplica, multiplicado por el número de réplicas como se indica arriba. LwM2M y Sparkplug miden cada uno al inquilino con una asignación propia, así que con ambos en marcha el peor caso es cinco veces su techo.
+Dentro de `event-sources`, un inquilino puede ser admitido por tanto hasta cuatro veces su techo en cada réplica, multiplicado por el número de réplicas como se indica arriba. LwM2M y Sparkplug miden cada uno al inquilino con una asignación propia, así que con ambos en marcha el peor caso es seis veces su techo.
 
 ### Qué permite el valor por defecto {#ingest-default}
 

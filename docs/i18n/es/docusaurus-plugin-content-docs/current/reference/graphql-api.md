@@ -474,7 +474,7 @@ cada área, porque un cliente escrito contra el comportamiento antiguo necesita 
 `updateCustomer` · `updateAreaType` · `updateArea` · `updateMetricDefinition` ·
 `updateCommandDefinition` · `updateDetectionRule` · `updateGeoFence` · `updateEntityGroup` ·
 `updateDeviceCredential` · `updateProvisioningProfile` · `updateEntityRelationshipType` ·
-`updateDeviceProfile`
+`updateDeviceProfile` · `updateIntegration`
 
 **Conectores salientes e inferencia de IA.** Cada área convirtió su única actualización:
 `updateConnector` y `updateAiProvider`. Todos los canales de renombrado que llevaban los tokens de
@@ -622,6 +622,24 @@ Las operaciones de perfiles de aprovisionamiento pertenecen al [autorregistro de
 | `deleteProvisioningProfile(token)` | Se rechaza (`REFERENCE_VIOLATION`) mientras algún dispositivo conserve una credencial que emitió el perfil, incluidas las revocadas. |
 
 En cuanto a los tipos, `ProvisioningProfile` gana `maxDevices`, `provisionedDeviceCount` y `secretIssued` (falso hasta que el servidor ha generado el secreto, que es cuando el perfil está en **Requiere rotación**). Un dispositivo gana `expectedProvisioningProfile`, su reserva, y una credencial gana `provisioningProfile`. `createDevice` e `importDevices` aceptan `provisioningProfileToken` para reservar un dispositivo, y `DeviceSearchCriteria` acepta `provisioningProfile` y `expectedProvisioningProfile`. El endpoint en sí es HTTP simple y se describe en la [referencia del protocolo de dispositivo](./device-protocol.md#self-registration).
+
+## Integraciones de entrada {#integrations}
+
+Las operaciones de integración pertenecen a las [integraciones de entrada](../guides/inbound-integrations.md). Las mutaciones requieren `device:write` y las consultas `device:read`; un llamador cuya membresía está limitada a un cliente se rechaza en todas ellas.
+
+| Operación | Qué hace |
+| --- | --- |
+| `createIntegration` | Crea una integración y devuelve `{ integration, issuedToken }`. El servidor genera el token bearer (43 caracteres, 256 bits) y esta respuesta es el único lugar donde aparece: la plataforma almacena un resumen con clave. La solicitud no tiene un campo propio para el secreto. Se rechaza (`LIMIT_EXCEEDED`) cuando el inquilino ya tiene tantas integraciones como permite su nivel. |
+| `rotateIntegrationToken(token)` | Reemplaza el token bearer y devuelve el nuevo una sola vez. El anterior deja de funcionar al instante, sin solapamiento. |
+| `updateIntegration(token, request)` | Una actualización parcial. No se pueden cambiar ni el token ni el `type`. `deviceTypeTokens` reemplaza el alcance y necesita al menos un tipo; `generic` se rechaza en los tipos de servidor de red. |
+| `deleteIntegration(token)` | Elimina la integración y devuelve si existía. Los alias de los dispositivos permanecen. Un tipo de dispositivo que una integración tiene en su alcance no se puede eliminar (`REFERENCE_VIOLATION`). |
+| `integration(token)`, `integrations(criteria)` | Lee una integración, o busca por `type`, `enabled` o `deviceType` en el alcance. El token bearer nunca se devuelve. |
+| `unregisteredIntegrationDevices(criteria)` | Los identificadores que recibió una integración y que ningún dispositivo de su alcance lleva, del visto más recientemente al más antiguo. |
+| `clearUnregisteredIntegrationDevices(integration)` | Vacía esa lista y devuelve cuántas filas eliminó. |
+
+En cuanto a los tipos, `Integration` incluye `undecodedCount`, `lastUndecodedAt`, `lastUndecodedSample` y `lastAuthFailureAt`. Un dispositivo gana `aliases`, una lista de `{scheme, value}`, y `DeviceCreateRequest`, `DeviceUpdateRequest` y las filas de `importDevices` aceptan `aliases`. En una actualización la lista reemplaza los alias del dispositivo, y `null` o una lista vacía los elimina. `DeviceSearchCriteria` acepta `alias`. Un valor se normaliza según su esquema al escribirlo, así que un DevEUI se guarda en mayúsculas, y uno mal formado se rechaza con `INVALID_VALUE`.
+
+`integrationAuth`, `resolveIntegrationDevice` y `recordIntegrationUndecoded` son para el servicio de ingesta. Aceptan solo un token de servicio y se rechazan para el token de acceso de un usuario.
 
 ## Validación de entrada {#input-validation}
 

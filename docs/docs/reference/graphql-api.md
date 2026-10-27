@@ -454,7 +454,7 @@ what changed in each area, because a client written against the old behaviour ne
 `updateCustomer` · `updateAreaType` · `updateArea` · `updateMetricDefinition` ·
 `updateCommandDefinition` · `updateDetectionRule` · `updateGeoFence` · `updateEntityGroup` ·
 `updateDeviceCredential` · `updateProvisioningProfile` · `updateEntityRelationshipType` ·
-`updateDeviceProfile`
+`updateDeviceProfile` · `updateIntegration`
 
 **Outbound connectors and AI inference.** Each converted its one update: `updateConnector` and
 `updateAiProvider`. Every rename channel those areas' payload tokens carried moved to a
@@ -590,6 +590,24 @@ The provisioning-profile operations belong to [device self-registration](../guid
 | `deleteProvisioningProfile(token)` | Refused (`REFERENCE_VIOLATION`) while any device holds a credential the profile issued, revoked ones included. |
 
 On the types, `ProvisioningProfile` gains `maxDevices`, `provisionedDeviceCount` and `secretIssued` (false until the server has generated the secret, which is when the profile is **Rotate required**). A device gains `expectedProvisioningProfile`, its earmark, and a credential gains `provisioningProfile`. `createDevice` and `importDevices` take `provisioningProfileToken` to earmark a device, and `DeviceSearchCriteria` takes `provisioningProfile` and `expectedProvisioningProfile`. The endpoint itself is plain HTTP and described in the [device protocol reference](./device-protocol.md#self-registration).
+
+## Inbound integrations {#integrations}
+
+The integration operations belong to [inbound integrations](../guides/inbound-integrations.md). The mutations need `device:write` and the queries `device:read`; a caller whose membership is scoped to a customer is refused on all of them.
+
+| Operation | What it does |
+| --- | --- |
+| `createIntegration` | Creates an integration and returns `{ integration, issuedToken }`. The server generates the bearer token (43 characters, 256 bits) and this response is the only place it appears: the platform stores a keyed digest. The request has no token field of its own for the secret. Refused (`LIMIT_EXCEEDED`) when the tenant already holds as many integrations as its tier allows. |
+| `rotateIntegrationToken(token)` | Replaces the bearer token and returns the new one once. The old token stops working at once, with no overlap. |
+| `updateIntegration(token, request)` | A partial update. Neither the token nor the `type` can be changed. `deviceTypeTokens` replaces the scope and needs at least one type; `generic` is refused for the network-server types. |
+| `deleteIntegration(token)` | Deletes the integration and returns whether there was one. Aliases on devices stay. A device type that an integration scopes cannot be deleted (`REFERENCE_VIOLATION`). |
+| `integration(token)`, `integrations(criteria)` | Read one integration, or search by `type`, `enabled` or scoped `deviceType`. The bearer token is never returned. |
+| `unregisteredIntegrationDevices(criteria)` | The identifiers an integration received that no device in its scope carries, most recently seen first. |
+| `clearUnregisteredIntegrationDevices(integration)` | Empties that list and returns how many rows it removed. |
+
+On the types, `Integration` carries `undecodedCount`, `lastUndecodedAt`, `lastUndecodedSample` and `lastAuthFailureAt`. A device gains `aliases`, a list of `{scheme, value}`, and `DeviceCreateRequest`, `DeviceUpdateRequest` and the `importDevices` rows take `aliases`. On an update the list replaces the device's aliases, and `null` or an empty list removes them. `DeviceSearchCriteria` takes `alias`. A value is normalized by its scheme when it is written, so a DevEUI is stored in upper case, and a malformed one is refused with `INVALID_VALUE`.
+
+`integrationAuth`, `resolveIntegrationDevice` and `recordIntegrationUndecoded` are for the ingest service. They accept a service token only and are refused for a user's access token.
 
 ## Input validation {#input-validation}
 

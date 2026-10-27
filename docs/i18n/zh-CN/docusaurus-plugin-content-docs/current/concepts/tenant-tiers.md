@@ -16,7 +16,7 @@ title: 租户层级与服务组合
 
 层级是一组有名称的设置，来自**配置键注册表**，即平台允许层级设置的参数列表。目前有两类使用方读取租户层级。
 
-- **治理上限。** 每租户配额通过层级解析：接入速率、出站速率、AI 推理速率、[未投递命令上限](./commands.md#held-command-ceiling)，以及三项[地理围栏限制](./geofencing.md#what-a-boundary-may-be)。参见[治理与配额](./governance.md)。安全回退规则仍贯穿始终：缺失或为零的限制解析为**平台默认值，绝不表示无限制**。上限按副本执行，参见[上限按副本计算](./governance.md#per-replica)。
+- **治理上限。** 每租户配额通过层级解析：接入速率、出站速率、AI 推理速率、[未投递命令上限](./commands.md#held-command-ceiling)，三项[地理围栏限制](./geofencing.md#what-a-boundary-may-be)，以及租户可以拥有的[入站集成](../guides/inbound-integrations.md)数量。参见[治理与配额](./governance.md)。安全回退规则仍贯穿始终：缺失或为零的限制解析为**平台默认值，绝不表示无限制**。上限按副本执行，参见[上限按副本计算](./governance.md#per-replica)。
 - **AI 模型使用资格。** 层级组合租户可以使用的 [AI 模型](./ai-authoring.md)；运维人员也可以在层级之外向单个租户授予模型。租户用于某项功能的模型由 `(tenant, function) → model` 分配决定，如果层级标记了默认模型，则回退到**层级默认值**。如果层级和租户专属授权都没有为租户菜单提供模型，那么租户就没有模型：菜单为空即没有模型。
 
 要查看某个租户实际受到的限制以及由哪一级设定，请在实例管理平面读取该租户：`AdminTenant.effectiveSettings` 报告每一对速率与突发限制，`AdminTenant.effectiveScalarSettings` 报告单值设置（未投递命令上限、负载削减优先级和三项地理围栏限制）。每个条目给出其 `source`（`override`、`tier` 或 `platform-default`）、生效的 `value`，以及 `tier` 和租户自身 `override` 的设置。来源为 `platform-default` 时 `value` 为 `null`，表示执行该限制的服务使用其内置默认值，并不表示无限制。控制台的层级表单设置的正是这些单值设置，留空的字段继承平台默认值。

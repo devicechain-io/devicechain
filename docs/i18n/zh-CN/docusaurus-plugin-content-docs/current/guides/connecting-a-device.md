@@ -11,6 +11,8 @@ title: 连接设备
 MQTT 和 HTTP 摄取已可用。资源受限设备也可通过 [LwM2M 摄取](../concepts/lwm2m.md)，使用带 DTLS 的 CoAP/UDP 连接；既有设备群可使用 [Sparkplug B](../concepts/sparkplug.md)。WebSocket 传输及完整的自助配置/认领流程仍在规划中。
 :::
 
+通过 LoRaWAN 网络服务器（ChirpStack、The Things Stack）或其他系统的 webhook 上报的设备不会自行连接，参见[入站集成](./inbound-integrations.md)。
+
 连接在消息代理处受到保护。MQTT/NATS 监听器使用 TLS，NATS auth-callout 对每个连接进行认证，并将其绑定到该设备自己的主题，因此设备只能发布自己的事件、读取自己的命令。流水线还根据凭据逐事件强制执行设备认证。默认设备认证模式为 `required`，因此连接和事件都需要凭据。参见[设备凭据](./device-credentials.md)。LwM2M 和 Sparkplug B 在传输握手时认证，而不是逐事件认证。
 
 ## 三种标识符 {#three-identifiers}
