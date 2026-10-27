@@ -42,7 +42,10 @@ export default function IntegrationDetailPage() {
   const { token: rawToken } = useParams<{ token: string }>();
   const token = decodeURIComponent(rawToken ?? '');
   const [version, reload] = useReload();
-  const { data: integration, loading, error } = useQuery(() => getIntegration(token), [token, version]);
+  const { data, loading, error } = useQuery(() => getIntegration(token), [token, version]);
+  // useQuery keeps the previous data while a new read is in flight, so after an in-place move to
+  // another :token it still holds the OLD integration. Show a record only when it is this one.
+  const integration = data && data.token === token ? data : null;
 
   // Only the first load takes the page over; a reload after a rotate keeps the page (and the
   // open reveal dialog) in place.
@@ -68,10 +71,19 @@ export default function IntegrationDetailPage() {
     );
   }
   // Keyed by token so no state survives a move to another integration.
-  return <IntegrationDetail key={token} integration={integration} reload={reload} />;
+  return <IntegrationDetail key={token} integration={integration} reload={reload} refreshError={error} />;
 }
 
-function IntegrationDetail({ integration, reload }: { integration: Integration; reload: () => void }) {
+function IntegrationDetail({
+  integration,
+  reload,
+  refreshError,
+}: {
+  integration: Integration;
+  reload: () => void;
+  /** A failed re-read after the page had loaded (a rotate or clear): the data shown may be stale. */
+  refreshError: string | null;
+}) {
   const { t } = useTranslation('integrations');
   const navigate = useNavigate();
   const { toast } = useToast();
@@ -146,6 +158,7 @@ function IntegrationDetail({ integration, reload }: { integration: Integration; 
     >
       <IntegrationTokenReveal revealed={revealed} onClose={() => setRevealed(null)} />
       <div className="max-w-3xl space-y-4">
+        {refreshError && <ErrorBanner message={refreshError} />}
         {actionError && <ErrorBanner message={actionError} onDismiss={() => setActionError(null)} />}
         <SectionPanel title={t('healthTitle')} description={t('healthDescription')}>
           <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 text-sm">

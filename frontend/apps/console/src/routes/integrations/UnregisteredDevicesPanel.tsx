@@ -17,6 +17,7 @@ import { Button } from '@/components/ui/button';
 import { SectionPanel } from '@/components/ui/section-panel';
 import { LoadingState } from '@/components/ui/loading-state';
 import { ErrorState } from '@/components/ui/error-state';
+import { ErrorBanner } from '@/components/ui/error-banner';
 import { Pagination } from '@/components/ui/pagination';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useToast } from '@/components/ui/toast';
@@ -126,6 +127,7 @@ export function UnregisteredDevicesPanel({
         ) : undefined
       }
     >
+      {error && data && <ErrorBanner message={error} />}
       {body}
     </SectionPanel>
   );

@@ -3,18 +3,16 @@
 
 // What an operator types into the sender to connect it: the URL, the header and, for the two
 // network servers, the settings that decide whether an uplink is read at all. Pure, so the exact
-// strings are pinned by connectSnippet.test.ts.
+// strings are pinned by connectInstructions.test.ts.
 //
-// 🔴 WHAT IS REAL AND WHAT IS A VISIBLE PLACEHOLDER. The tenant and the integration's token are
-// the caller's own and are filled in. The instance id and the public host are deployment facts no
-// API serves (the same position the device connect helper is in, so it uses the same
-// placeholders): they are left as `<instance-id>` and `<ingest-host>` and never guessed, because a
-// guessed host is a URL that looks right and fails. A caller that DOES know them passes them in.
+// 🔴 THE URL IS BUILT FROM FACTS THE CONSOLE HAS: its own origin (the instance's HTTPS front end,
+// where the integrations route is published as /api/integrations/<tenant>/<integration>) and the
+// signed-in tenant. Nothing in it is a guessed host or a placeholder.
 //
 // 🔴 THE BEARER TOKEN IS NEVER IN THE URL, only in the Authorization header: a token in a path
 // lands in the ingress access log. It is also stored only as a digest, so it can be shown only
 // once, when it was generated; everywhere else the header holds `<bearer-token>`.
-import { PLACEHOLDER } from '@/routes/devices/connectSnippet';
+import { shellQuote } from '@/routes/devices/connectSnippet';
 
 /** The header value placeholder used wherever the real token can no longer be shown. */
 export const BEARER_PLACEHOLDER = '<bearer-token>';
@@ -29,27 +27,29 @@ export interface SnippetInput {
   tenant: string;
   /** The integration's own token: the last segment of the URL. */
   integrationToken: string;
-  /** The public host (and port, if any) senders reach ingest at, when known. */
-  host?: string;
-  /** The instance id, when known. */
-  instanceId?: string;
+  /** The instance's public origin; defaults to the console's own, where the route is served. */
+  origin?: string;
   /** The bearer token, only while it is being shown for the first time. */
   bearerToken?: string;
 }
 
-/** `https://<host>/<instance>/<tenant>/integrations/<token>`. */
+/** `<console origin>/api/integrations/<tenant>/<integration token>`. */
 export function integrationUrl(i: SnippetInput): string {
-  const host = i.host?.trim() || PLACEHOLDER.ingestHost;
-  const instance = i.instanceId?.trim() || PLACEHOLDER.instanceId;
-  return `https://${host}/${instance}/${encodeURIComponent(i.tenant)}/integrations/${encodeURIComponent(i.integrationToken)}`;
+  const origin = (i.origin ?? window.location.origin).replace(/\/+$/, '');
+  return `${origin}/api/integrations/${encodeURIComponent(i.tenant)}/${encodeURIComponent(i.integrationToken)}`;
 }
 
-/** `Authorization: Bearer <token>`, with the real token only when it is being shown once. */
+export const AUTH_HEADER_NAME = 'Authorization';
+
+/** The value of the Authorization header, with the real token only when it is being shown once. */
+export function authorizationValue(i: SnippetInput): string {
+  return `Bearer ${i.bearerToken || BEARER_PLACEHOLDER}`;
+}
+
+/** `Authorization: Bearer <token>` on one line, for a curl. */
 export function authorizationHeader(i: SnippetInput): string {
-  return `Authorization: Bearer ${i.bearerToken || BEARER_PLACEHOLDER}`;
+  return `${AUTH_HEADER_NAME}: ${authorizationValue(i)}`;
 }
-
-export type SnippetKind = 'chirpstack' | 'tts' | 'generic-json' | 'generic-binary';
 
 /** One labelled value to copy; `labelKey` is a key in the `integrations` catalog. */
 export interface SnippetField {
@@ -59,12 +59,20 @@ export interface SnippetField {
   secret?: boolean;
 }
 
+// Both network servers take a header as a name and a value in separate boxes.
+function headerFields(i: SnippetInput): SnippetField[] {
+  return [
+    { labelKey: 'snippetHeaderName', value: AUTH_HEADER_NAME },
+    { labelKey: 'snippetHeaderValue', value: authorizationValue(i), secret: i.bearerToken != null },
+  ];
+}
+
 /** The fields to enter into a ChirpStack v4 HTTP integration. */
 export function chirpstackFields(i: SnippetInput): SnippetField[] {
   return [
     { labelKey: 'snippetEncoding', value: 'JSON' },
     { labelKey: 'snippetEndpoint', value: integrationUrl(i) },
-    { labelKey: 'snippetHeader', value: authorizationHeader(i), secret: i.bearerToken != null },
+    ...headerFields(i),
   ];
 }
 
@@ -72,7 +80,7 @@ export function chirpstackFields(i: SnippetInput): SnippetField[] {
 export function ttsFields(i: SnippetInput): SnippetField[] {
   return [
     { labelKey: 'snippetBaseUrl', value: integrationUrl(i) },
-    { labelKey: 'snippetHeader', value: authorizationHeader(i), secret: i.bearerToken != null },
+    ...headerFields(i),
     { labelKey: 'snippetUplinkPath', value: `/${TTS_SUGGESTED_PATH}` },
   ];
 }
@@ -94,9 +102,9 @@ export function genericCurl(
     headers.push('Content-Type: application/json');
     if (settings.idKind === 'header') headers.push(`${settings.idValue}: <device-id>`);
     if (settings.idKind === 'query') url += `?${settings.idValue}=<device-id>`;
-    body = `-d '${exampleJsonBody(settings)}'`;
+    body = `-d ${shellQuote(exampleJsonBody(settings))}`;
   }
-  return [`curl -i -X POST '${url}'`, ...headers.map((h) => `  -H '${h}'`), `  ${body}`].join(' \\\n');
+  return [`curl -i -X POST ${shellQuote(url)}`, ...headers.map((h) => `  -H ${shellQuote(h)}`), `  ${body}`].join(' \\\n');
 }
 
 // A body with the identifier where a pointer says it is, and one reading.

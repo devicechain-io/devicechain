@@ -7,7 +7,7 @@
 
 import '@/i18n/config';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConfirmProvider } from '@/components/ui/confirm-dialog';
 
@@ -55,10 +55,14 @@ const UNREGISTERED = [
 
 let sent: { op: string; text: string; variables: any }[] = [];
 let unregistered = UNREGISTERED;
+let failUnregistered = false;
+let holdOther: Promise<void> | null = null;
 
 function install() {
   sent = [];
   unregistered = UNREGISTERED;
+  failUnregistered = false;
+  holdOther = null;
   h.gql.mockImplementation((service: string, doc: unknown, variables: any) => {
     if (service === 'user-management/settings') return Promise.resolve({ tokenMasks: '{}' });
     const text = String(doc);
@@ -66,12 +70,16 @@ function install() {
     sent.push({ op, text, variables });
     switch (op) {
       case 'IntegrationByToken':
+        if (variables.token === 'other') {
+          return (holdOther ?? Promise.resolve()).then(() => ({ integration: { ...INTEGRATION, id: 'i-2', token: 'other', name: 'Other one' } }));
+        }
         return Promise.resolve({ integration: INTEGRATION });
       case 'DeviceTypes':
         return Promise.resolve({
           deviceTypes: { results: [{ id: 'dt-1', token: 'meter', name: 'Meter' }], pagination: { pageStart: 1, pageEnd: 1, totalRecords: 1 } },
         });
       case 'UnregisteredIntegrationDevices':
+        if (failUnregistered) return Promise.reject(new Error('the read failed'));
         return Promise.resolve({
           unregisteredIntegrationDevices: {
             results: unregistered,
@@ -98,9 +106,15 @@ function Where() {
   return <p data-testid="where">{l.pathname + l.search}</p>;
 }
 
+function GoOther() {
+  const navigate = useNavigate();
+  return <button onClick={() => navigate('/integrations/other')}>go other</button>;
+}
+
 function renderPage() {
   return render(
     <MemoryRouter initialEntries={['/integrations/eu868-gw']}>
+      <GoOther />
       <ConfirmProvider>
         <Routes>
           <Route path="/integrations/:token" element={<IntegrationDetailPage />} />
@@ -135,8 +149,10 @@ describe('the connect snippet', () => {
     renderPage();
     await screen.findByText('Connect the sender');
     const values = Array.from(document.querySelectorAll('input')).map((i) => i.value);
-    expect(values).toContain('https://<ingest-host>/<instance-id>/acme/integrations/eu868-gw');
-    expect(values).toContain('Authorization: Bearer <bearer-token>');
+    expect(values).toContain(`${window.location.origin}/api/integrations/acme/eu868-gw`);
+    // Name and value are two separate copyable fields.
+    expect(values).toContain('Authorization');
+    expect(values).toContain('Bearer <bearer-token>');
     expect(values).toContain('/uplink-message');
     // The Things Stack guidance: the paths read, and that others are ignored.
     expect(screen.getByText(/up, uplink, uplinks, uplink-message/)).toBeTruthy();
@@ -152,7 +168,7 @@ describe('rotating the token', () => {
     await waitFor(() => expect(document.querySelector('[data-shot="integration-token"]')).not.toBeNull());
     expect((document.getElementById('ig-reveal-token') as HTMLInputElement).value).toBe(ROTATED);
     // The snippet inside the dialog carries the new token in the header.
-    expect(Array.from(document.querySelectorAll('input')).map((i) => i.value)).toContain(`Authorization: Bearer ${ROTATED}`);
+    expect(Array.from(document.querySelectorAll('input')).map((i) => i.value)).toContain(`Bearer ${ROTATED}`);
 
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     await waitFor(() => expect(document.querySelector('[data-shot="integration-token"]')).toBeNull());
@@ -220,5 +236,29 @@ describe('editing', () => {
     expect(u.variables).toEqual({ token: 'eu868-gw', request: { name: 'Renamed' } });
     // The type control is shown disabled: it is fixed at creation.
     expect((document.getElementById('ig-type') as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
+describe('stale data and failed re-reads', () => {
+  it('does not show the previous integration while another :token is still loading', async () => {
+    renderPage();
+    await screen.findByText('EU868 gateway fleet');
+    let release!: () => void;
+    holdOther = new Promise<void>((r) => (release = r));
+    fireEvent.click(screen.getByText('go other'));
+    await waitFor(() => expect(sent.some((s) => s.op === 'IntegrationByToken' && s.variables.token === 'other')).toBe(true));
+    expect(screen.queryByText('EU868 gateway fleet')).toBeNull();
+    release();
+    expect(await screen.findByText('Other one')).toBeTruthy();
+  });
+
+  it('says so when a re-read fails after the list was loaded', async () => {
+    renderPage();
+    await screen.findByText('70B3D57ED0012345');
+    failUnregistered = true;
+    fireEvent.click(screen.getByRole('button', { name: 'Clear list' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Clear list', hidden: false }));
+    await waitFor(() => expect(sent.filter((s) => s.op === 'UnregisteredIntegrationDevices').length).toBe(2));
+    expect(await screen.findByText('Failed to load data.')).toBeTruthy();
   });
 });

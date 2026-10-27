@@ -37,7 +37,7 @@ export function DeviceAliasesField({
   const patch = (i: number, p: Partial<AliasRow>) => onChange(rows.map((r, j) => (j === i ? { ...r, ...p } : r)));
 
   return (
-    <FormField label={t('aliasesLabel')} htmlFor="device-alias-0" description={t('aliasesHelp')}>
+    <FormField label={t('aliasesLabel')} htmlFor={rows.length > 0 ? 'device-alias-0' : undefined} description={t('aliasesHelp')}>
       <div className="space-y-2" data-shot="device-aliases">
         {rows.map((row, i) => {
           const problem = problems[i];

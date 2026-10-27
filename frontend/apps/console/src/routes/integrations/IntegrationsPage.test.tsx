@@ -243,12 +243,12 @@ describe('creating an integration reveals the token exactly once', () => {
     await findRevealDialog();
 
     const inputs = Array.from(revealDialog()!.querySelectorAll('input')).map((i) => i.value);
-    // The URL uses the signed-in tenant and the integration's own token; the host and instance
-    // are deployment facts no API serves, so they stay visible placeholders rather than a guess.
-    const url = inputs.find((v) => v.includes('/integrations/'))!;
-    expect(url).toBe('https://<ingest-host>/<instance-id>/acme/integrations/eu868-gw');
+    // The URL is the console's own origin with the signed-in tenant and the integration's token.
+    const url = inputs.find((v) => v.includes('/api/integrations/'))!;
+    expect(url).toBe(`${window.location.origin}/api/integrations/acme/eu868-gw`);
     expect(url).not.toContain(TOKEN);
-    expect(inputs).toContain(`Authorization: Bearer ${TOKEN}`);
+    expect(inputs).toContain('Authorization');
+    expect(inputs).toContain(`Bearer ${TOKEN}`);
     expect(inputs).toContain('JSON');
   });
 
