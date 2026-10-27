@@ -435,7 +435,7 @@ mutation {
 
 ## Actualizaciones over-the-air {#over-the-air-updates}
 
-En una instancia que ejecuta el servicio de actualizaciones (consulta [Actualizaciones over-the-air](../concepts/over-the-air-updates.md)), los mismos dos topics transportan actualizaciones de firmware y software. Las reglas anteriores también se aplican aquí: cada mensaje lleva `"v":1` y un `kind`, los campos desconocidos o repetidos se rechazan, y un mensaje no debe llevar una identidad de dispositivo. Los mensajes de actualización, en cualquier sentido, ocupan como máximo 4 KiB.
+En una instancia que ejecuta el servicio de actualizaciones (consulta [Actualizaciones over-the-air](../concepts/over-the-air-updates.md)), los mismos dos topics transportan actualizaciones de firmware y software. Una implementación completa y funcional del lado del dispositivo es el dispositivo de referencia descrito en [Construir un dispositivo actualizable](./building-an-updatable-device.md). Las reglas anteriores también se aplican aquí: cada mensaje lleva `"v":1` y un `kind`, los campos desconocidos o repetidos se rechazan, y un mensaje no debe llevar una identidad de dispositivo. Los mensajes de actualización, en cualquier sentido, ocupan como máximo 4 KiB.
 
 Cuando se asigna un artefacto al dispositivo, la plataforma publica en `device-desired`:
 
@@ -471,7 +471,7 @@ openssl pkeyutl -sign -rawin -inkey k.pem -in digest | base64 | tr -d '\n'
 
 Para Ed25519, `cosign` y `openssl pkeyutl -sign -rawin -in file` firman el **archivo**, no su resumen, así que un dispositivo rechazaría sus firmas: usa la forma con `digest` de arriba. ECDSA es el algoritmo con el que `cosign sign-blob` es compatible.
 
-Si la firma no se verifica, falla la actualización con `FAILED` y `result.code` `SIGNATURE_INVALID`. Si `keyId` nombra una clave en la que el dispositivo no confía, usa `UNKNOWN_SIGNER`; usa el mismo código para una asignación `UNVERIFIED` cuando el dispositivo exige imágenes firmadas. Ambos se informan cuando termina la descarga (después de `DOWNLOADED`, como una discrepancia de resumen), y ninguno cambia las etapas anteriores. La firma cubre la imagen, no la versión, así que un dispositivo que deba rechazar degradaciones tiene que imponerlo por su cuenta.
+Si la firma no se verifica, falla la actualización con `FAILED` y `result.code` `SIGNATURE_INVALID`. Si `keyId` nombra una clave en la que el dispositivo no confía, usa `UNKNOWN_SIGNER`; usa el mismo código para una asignación `UNVERIFIED` cuando el dispositivo exige imágenes firmadas. Una firma incorrecta o una clave desconocida solo pueden detectarse cuando el dispositivo ya tiene los bytes, así que infórmalas después de `DOWNLOADED`, como una discrepancia de resumen. Un dispositivo que exige imágenes firmadas puede rechazar antes una asignación `UNVERIFIED`, justo después de `RECEIVED` y sin descargar nada, con el mismo código; un dispositivo puede omitir una etapa, así que ambos órdenes son válidos. Ninguno cambia las etapas anteriores. La firma cubre la imagen, no la versión ni el componente, así que un dispositivo que deba rechazar degradaciones o una imagen de otro componente tiene que imponerlo por su cuenta; consulta [Rechazar degradaciones y componentes equivocados](./building-an-updatable-device.md#refusing-downgrades).
 
 Para obtener la imagen, pide una concesión de descarga en `device-reports`:
 

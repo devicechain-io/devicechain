@@ -119,9 +119,11 @@ nueva para el mismo artefacto. Como `cap` va en la cadena de consulta, el chart 
 registro de accesos de ingress-nginx desactivado; con cualquier otro controlador de ingress, asegúrese de que la cadena de
 consulta de `/api/update-management/updates/download/` no se escriba en un registro de accesos. El endpoint responde a las peticiones `Range` con `206`, de modo que una descarga
 interrumpida continúa donde se detuvo, y rechaza una capacidad falsificada, caducada o que ya no está vigente antes
-de leer nada del artefacto. Fije `updates.downloadBaseUrl` a la URL pública por la que los dispositivos llegan al
-servicio (por ejemplo `https://<host del ingress>/api/update-management`); sin ella ningún dispositivo puede recibir
-una capacidad.
+de leer nada del artefacto. La URL pública a la que se envía a un dispositivo es `updates.downloadBaseUrl`. Si no la
+fija, el chart la deriva del host del ingress de la instancia como `<origen>/api/update-management`; una instancia
+sin ingress y sin valor no tiene base, y entonces ningún dispositivo puede recibir una capacidad.
+`updateManagementInfo.downloadsConfigured` indica si hay una base definida. Fijar el valor como cadena vacía desactiva
+las descargas.
 
 ### Suscripciones por WebSocket {#subscriptions-over-websocket}
 

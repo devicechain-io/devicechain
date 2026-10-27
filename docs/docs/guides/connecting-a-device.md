@@ -439,7 +439,7 @@ mutation {
 
 ## Over-the-air updates {#over-the-air-updates}
 
-On an instance running the update service (see [Over-the-Air Updates](../concepts/over-the-air-updates.md)), the same two topics carry firmware and software updates. The rules above apply here too: every message carries `"v":1` and a `kind`, unknown or repeated fields are refused, and a message must not carry a device identity. Update messages in either direction are at most 4 KiB.
+On an instance running the update service (see [Over-the-Air Updates](../concepts/over-the-air-updates.md)), the same two topics carry firmware and software updates. A complete, working implementation of the device side is the reference device described in [Building an Updatable Device](./building-an-updatable-device.md). The rules above apply here too: every message carries `"v":1` and a `kind`, unknown or repeated fields are refused, and a message must not carry a device identity. Update messages in either direction are at most 4 KiB.
 
 When an artifact is assigned to the device, the platform publishes on `device-desired`:
 
@@ -475,7 +475,7 @@ openssl pkeyutl -sign -rawin -inkey k.pem -in digest | base64 | tr -d '\n'
 
 For Ed25519, `cosign` and `openssl pkeyutl -sign -rawin -in file` sign the **file**, not its digest, so a device would reject their signatures: use the `digest` form above. ECDSA is the algorithm `cosign sign-blob` is compatible with.
 
-If the signature does not verify, fail the update with `FAILED` and `result.code` `SIGNATURE_INVALID`. If `keyId` names a key the device does not trust, use `UNKNOWN_SIGNER`; use the same code for an `UNVERIFIED` assignment when the device requires signed images. Both are reported at the point the download ends (after `DOWNLOADED`, like a digest mismatch), and neither changes the stages above. A signature covers the image, not the version, so a device that must refuse downgrades has to enforce that itself.
+If the signature does not verify, fail the update with `FAILED` and `result.code` `SIGNATURE_INVALID`. If `keyId` names a key the device does not trust, use `UNKNOWN_SIGNER`; use the same code for an `UNVERIFIED` assignment when the device requires signed images. A bad signature or an unknown key can only be found once the device holds the bytes, so report them after `DOWNLOADED`, like a digest mismatch. A device that requires signed images can refuse an `UNVERIFIED` assignment earlier, right after `RECEIVED` and before it downloads anything, with the same code; a device may skip a stage, so both orders are valid. Neither changes the stages above. A signature covers the image, not the version or the component, so a device that must refuse downgrades or an image for another component has to enforce that itself; see [Refusing downgrades and wrong components](./building-an-updatable-device.md#refusing-downgrades).
 
 To fetch the image, ask for a download grant on `device-reports`:
 

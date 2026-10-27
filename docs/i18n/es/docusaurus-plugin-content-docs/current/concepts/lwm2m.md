@@ -48,7 +48,7 @@ Hoy solo se decodifican las notificaciones en **SenML-JSON**, y conviene que lo 
 
 Los comandos de la plataforma se convierten en operaciones LwM2M de **Read / Write / Execute** sobre los recursos del dispositivo.
 
-Una actualización de firmware se impulsa de la misma manera, como una secuencia que ejecuta el operador y no como una única operación de la plataforma. Eres tú quien emite los Write y el Execute contra el objeto estándar Firmware Update, como comandos ordinarios. DeviceChain mantiene los comandos de un mismo dispositivo en el orden en que los encolaste, así que un write de firmware y su execute nunca pueden reordenarse. No modela la actualización como un único trabajo gestionado, y las [actualizaciones por aire (OTA)](./over-the-air-updates.md) de la plataforma no llegan a los dispositivos LwM2M.
+Una actualización de firmware se impulsa de la misma manera, como una secuencia que ejecuta el operador y no como una única operación de la plataforma. Eres tú quien emite los Write y el Execute contra el objeto estándar Firmware Update, como comandos ordinarios. DeviceChain mantiene los comandos de un mismo dispositivo en el orden en que los encolaste, así que un write de firmware y su execute nunca pueden reordenarse. No modela la actualización como un único trabajo gestionado, y las [actualizaciones por aire (OTA)](./over-the-air-updates.md) de la plataforma no llegan a los dispositivos LwM2M. Los pasos están en [Actualización de firmware con el objeto 5](#firmware-update-object-5).
 
 Cuando un dispositivo tarda en responder y sus comandos se acumulan, los siguientes comandos para él se apartan y se entregan momentos después, todavía en orden. Un dispositivo lento no retrasa los comandos de los demás.
 
@@ -58,6 +58,39 @@ Un comando para un dispositivo que está dormido se **retiene de forma durable y
 - `HELD`, cuando la presencia ya ha marcado al dispositivo como ausente y el comando se retiene antes siquiera de publicarse.
 
 En cualquier caso, la plataforma sigue teniendo el comando en su poder, así que todavía puedes cancelarlo. Si su tiempo de vida se agota antes, el registro dice que nunca llegó a un dispositivo en lugar de culpar al dispositivo por no responder.
+
+### Actualización de firmware con el objeto 5 {#firmware-update-object-5}
+
+Esta es la forma admitida de actualizar el firmware de un dispositivo LwM2M hoy. Usa tres comandos que el perfil del dispositivo declara como cualquier otro comando: `lwm2m.write`, `lwm2m.execute` y `lwm2m.read`, cada uno con un `path` en su payload (y, en una escritura, un `value` escalar). Emite los pasos **en orden y espera a que cada comando llegue a `SUCCESSFUL` antes de emitir el siguiente**. DeviceChain mantiene los comandos de un mismo dispositivo en el orden en que los encolaste, pero la propia máquina de estados de firmware del dispositivo también necesita el orden.
+
+1. **Fija el URI del paquete.** Escribe la ubicación de la imagen en el recurso Package URI del objeto Firmware Update. El dispositivo empieza a descargar.
+
+   ```json
+   {"path": "/5/0/1", "value": "coaps://fw.example/image.bin"}
+   ```
+
+   Envía ese payload con `lwm2m.write`. La imagen se sirve desde donde tú la alojes; DeviceChain no la guarda ni entrega un enlace. Escribir el paquete en sí (`/5/0/0`) no está admitido, porque una escritura lleva un único valor escalar de como máximo 8 KiB.
+
+2. **Dispara la actualización.** Cuando la descarga haya terminado, ejecuta el recurso Update.
+
+   ```json
+   {"path": "/5/0/2"}
+   ```
+
+   Envía ese payload con `lwm2m.execute`.
+
+3. **Sigue el progreso y el resultado.** Lee el recurso State (`/5/0/3`; `0` es inactivo y `3` es actualizando) y el recurso Update Result (`/5/0/5`; `0` es inicial, `1` es éxito y `2` o más es un error) con `lwm2m.read`.
+
+Leer es la única forma de seguir el progreso. DeviceChain solo observa el rango de objetos de sensores (3200 a 3441), así que el objeto 5 nunca se observa y su estado y resultado no llegan como mediciones. Para un dispositivo en modo cola, toda la secuencia sigue la misma vía de retención y entrega que cualquier comando: cada comando se retiene y se entrega cuando el dispositivo despierta, el más antiguo primero.
+
+**Las actualizaciones gestionadas todavía no llegan a los dispositivos LwM2M.** Un artefacto, la retransmisión de una firma, un intento que termina en `UPDATED` y un despliegue necesitan cosas que este transporte no tiene hoy:
+
+- Los enlaces de descarga de la plataforma son más largos de lo que admite el recurso Package URI: en la versión 1.0 del objeto 5 el recurso es una cadena de como máximo 255 bytes.
+- El objeto 5 no tiene ningún recurso que lleve una firma. El propio formato de firmware del dispositivo hace su verificación, y la plataforma no tiene adónde retransmitir una firma, así que una asignación podría parecer autenticada sin serlo.
+- LwM2M no tiene identificador de arranque, así que la prueba que necesita un intento, un arranque nuevo que ejecuta la versión objetivo, habría que inferirla de un registro nuevo y del objeto Device.
+- La plataforma sirve las descargas solo por HTTPS, y un dispositivo puede admitir solo CoAP para descargar firmware.
+
+Trata el procedimiento como la forma de actualizar dispositivos LwM2M. Las pruebas automáticas de interoperabilidad cubren el registro y la telemetría, no los comandos, así que prueba la secuencia con el modelo de tu dispositivo antes de depender de ella.
 
 ### Operaciones con nombre e información del dispositivo {#named-operations-and-device-information}
 
@@ -72,7 +105,7 @@ Son comandos ordinarios. Decláralos en el perfil de dispositivo como cualquier 
 
 `lwm2m.reboot` se crea con impacto `DISRUPTIVE`, así que un tipo de dispositivo con una [ventana de mantenimiento](./commands.md#maintenance-windows) lo retiene hasta que la ventana se abre. Un `lwm2m.execute` sin procesar no se controla.
 
-El restablecimiento de fábrica (Factory Reset) no se ofrece por nombre a propósito: es destructivo y no se puede deshacer. Tampoco puede enviarse como un `lwm2m.execute` sin procesar: un Execute de `/3/0/5` (en cualquier instancia del objeto Device) se rechaza con `COMMAND_DESTRUCTIVE_REFUSED`, ya sea como comando individual, en un lote o desde una regla de automatización. Está prevista una operación con nombre y confirmación. La actualización de firmware también sigue siendo la secuencia del operador descrita arriba.
+El restablecimiento de fábrica (Factory Reset) no se ofrece por nombre a propósito: es destructivo y no se puede deshacer. Tampoco puede enviarse como un `lwm2m.execute` sin procesar: un Execute de `/3/0/5` (en cualquier instancia del objeto Device) se rechaza con `COMMAND_DESTRUCTIVE_REFUSED`, ya sea como comando individual, en un lote o desde una regla de automatización. Está prevista una operación con nombre y confirmación. La actualización de firmware también sigue siendo la secuencia del operador descrita en [Actualización de firmware con el objeto 5](#firmware-update-object-5).
 
 La misma información del objeto Device también se recopila por ti. Cuando un dispositivo se registra, DeviceChain lee esos recursos una vez y los guarda en el dispositivo como **atributos de cliente** (`manufacturer`, `modelNumber`, `serialNumber`, `firmwareVersion`, `batteryLevel`), de modo que aparecen en la página del dispositivo. Los recursos que el dispositivo no informó se listan en el atributo `lwm2m.deviceInfoMissing`. Esto nunca retrasa el registro ni la telemetría: se ejecuta cuando el registro ya terminó, en el mismo orden por dispositivo que los comandos, pide cada recurso una sola vez, reintenta una sola vez a un dispositivo que no responde y lee un mismo dispositivo como máximo una vez por hora. Los valores que no han cambiado no se reescriben.
 

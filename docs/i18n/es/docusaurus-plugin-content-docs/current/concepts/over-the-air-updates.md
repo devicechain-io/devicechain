@@ -15,13 +15,15 @@ a un dispositivo cada vez, [despliegues](#rollouts) que asignan un artefacto a u
 un número limitado de dispositivos a la vez, con pausa, reanudación, aborto y umbral de fallos, una descarga reanudable mediante una concesión de corta duración y el
 seguimiento de cada intento con plazos. La consola tiene pantallas para los artefactos, los
 firmantes y los despliegues, y una pestaña Actualizaciones en cada dispositivo para asignar una actualización y
-seguirla; consulta [Actualizaciones](../user-guide/updates.md) en la guía de usuario.
+seguirla; consulta [Actualizaciones](../user-guide/updates.md) en la guía de usuario. Un pequeño
+dispositivo de referencia del repositorio sigue todo el lado del dispositivo del protocolo; consulta
+[Construir un dispositivo actualizable](../guides/building-an-updatable-device.md).
 
 **Todavía no:** los despliegues no tienen oleadas, promoción canario, programaciones ni ventanas de
-mantenimiento, y los dispositivos que solo usan HTTP no pueden recibir actualizaciones, porque las asignaciones viajan
-por el canal MQTT del dispositivo. Por la misma razón, los dispositivos [LwM2M](./lwm2m.md) y
-[Sparkplug](./sparkplug.md) tampoco pueden recibirlas; el firmware de un dispositivo LwM2M se
-impulsa en cambio con comandos ordinarios.
+mantenimiento. Solo un dispositivo conectado por MQTT puede recibir una actualización gestionada, porque las
+asignaciones viajan por su canal MQTT. Los dispositivos que solo usan HTTP no pueden, los dispositivos
+[LwM2M](./lwm2m.md) se actualizan con comandos ordinarios y [Sparkplug](./sparkplug.md) no tiene
+actualización de firmware; consulta [Qué dispositivos se pueden actualizar](#transports).
 :::
 
 ## Activarlo {#enabling}
@@ -32,13 +34,32 @@ en el [almacén de objetos](./object-storage.md): sin almacén configurado, decl
 rechaza con `OBJECT_STORE_NOT_CONFIGURED`. En el backend S3 una subida se almacena en memoria, así
 que allí los artefactos están limitados a 64 MiB sea cual sea el límite configurado.
 
+### Antes de la primera actualización {#first-update}
+
+Cuatro cosas tienen que cumplirse antes de que un dispositivo pueda recibir una actualización. Las dos
+primeras son de la instancia, la tercera es una decisión que tomas una sola vez y la cuarta es el dispositivo.
+
+1. **La instancia tiene un almacén de objetos.** Un volumen de sistema de archivos que más de un servicio pueda
+   montar, o S3. Consulta [Una instancia sin almacén de objetos](#no-object-store).
+2. **Se puede dar a los dispositivos un enlace de descarga.** El chart deriva la base del enlace del host del
+   ingress de la instancia, así que esto se cumple en cualquier instancia con ingress; consulta
+   `downloadBaseUrl` más abajo. La consola muestra un aviso en las pantallas de Actualizaciones cuando no es así.
+3. **Hay un firmante registrado y el artefacto está firmado por él.** Por defecto
+   (`allowUnverifiedArtifacts: false`) un artefacto que nadie ha firmado no se puede asignar: la asignación se
+   rechaza con `UNVERIFIED_ARTIFACT_REFUSED`. Registrar un firmante requiere la autoridad `artifact:trust` y una
+   clave pública que generas tú; sigue [Firmar actualizaciones](../guides/signing-updates.md). Activar
+   `allowUnverifiedArtifacts` elimina el requisito y está pensado solo para instancias de desarrollo.
+4. **El dispositivo habla el protocolo por MQTT** y tiene la clave pública del firmante. Consulta
+   [Qué dispositivos se pueden actualizar](#transports) y
+   [Construir un dispositivo actualizable](../guides/building-an-updatable-device.md).
+
 Dos ajustes son decisiones deliberadas, no valores por defecto que dejar tal cual. Ambos están bajo
 `functionalAreas.update-management.config.updates` en los values del chart:
 
 | Ajuste | Por defecto | Significado |
 | --- | --- | --- |
 | `allowUnverifiedArtifacts` | `false` | Con `false`, solo se puede asignar un artefacto firmado por un [firmante](#signers) activo. Ponlo a `true` en una instancia de desarrollo o de pruebas para asignar también artefactos sin firmar. El valor se muestra en la consulta `updateManagementInfo`, de modo que se puede ver que una instancia lo tiene activado. |
-| `downloadBaseUrl` | sin definir | La URL pública por la que los dispositivos llegan al servicio, por ejemplo `https://<ingress host>/api/update-management`, sin query ni fragmento. Sin ella no se puede dar a ningún dispositivo una concesión de descarga: la petición del dispositivo se rechaza y se cuenta. |
+| `downloadBaseUrl` | derivada del host del ingress | La URL pública por la que los dispositivos llegan al servicio, sin query ni fragmento. Si no la defines, el chart la fija en `<origen público>/api/update-management`, donde el origen es el host del ingress con `https` si el TLS del ingress está activado y `http` si no. Una clave que definas prevalece, y ponerla como cadena vacía desactiva las descargas. Sin ingress no hay origen del que derivarla, así que no se fija nada: no se puede dar a ningún dispositivo una concesión de descarga, y la petición del dispositivo se rechaza y se cuenta. Defínela en los values del chart; la superposición de ajuste de una Instance la rechaza, porque sigue al host de la instancia. Una base `http` en un host que no es loopback arranca, pero el servicio registra una advertencia, y un dispositivo rechaza una descarga `http` salvo que se le indique lo contrario. |
 
 Los demás ajustes acotan el servicio:
 
@@ -54,6 +75,29 @@ Los demás ajustes acotan el servicio:
 
 Un valor negativo, una clave desconocida, o una `downloadBaseUrl` relativa, con credenciales o con
 query se rechazan al arrancar.
+
+### Una instancia sin almacén de objetos {#no-object-store}
+
+El contenido de los artefactos necesita un almacén de objetos, y el almacén se fija al crear la instancia
+(consulta [el almacén de objetos](../deployment/bootstrap.md#object-store)). Hay un caso que requiere
+cuidado. El perfil `default` incluye `update-management`, así que una instancia creada antes de que el perfil
+creciera incorpora el servicio al actualizar. Si su almacén es un volumen de sistema de archivos
+`ReadWriteOnce` en un clúster que `dcctl` no creó, ese volumen lo puede montar un solo servicio y los demás ya
+lo ocupan, así que `dcctl` arranca `update-management` con `updates.objectStore` en `none` en lugar de
+rechazar la actualización. El otro valor es `instance`, el predeterminado. `dcctl` fija `none` solo en ese
+caso: un área que nombraste tú, el perfil `full`, un volumen compartible, S3 y un clúster que creó `dcctl` no
+cambian. La superposición de ajuste no puede definir la clave, y una instalación solo con el chart puede usar
+cualquiera de los dos valores; cualquier otro valor hace fallar el renderizado.
+
+En ese modo el servicio funciona, y lo que no necesita contenido sigue funcionando: los firmantes, por ejemplo.
+Declarar un artefacto y subir su contenido se rechazan con `OBJECT_STORE_NOT_CONFIGURED`, en lugar de
+escribirse en un volumen que el servicio no tiene. `dcctl` lo indica al aplicar el cambio,
+`updateManagementInfo` informa `objectStoreConfigured` como `false` y la consola muestra un aviso en las
+pantallas de Actualizaciones.
+
+Una instancia creada sin almacén no puede obtener uno al actualizar. Para usar actualizaciones en ella,
+vuelve a crearla con `--object-store s3`, o con un almacén de sistema de archivos y
+`--object-store-access-mode ReadWriteMany` sobre una clase de almacenamiento que lo admita.
 
 ## Artefactos {#artifacts}
 
@@ -195,9 +239,12 @@ dispositivo:
 | `UNKNOWN` | Pasó un plazo durante la instalación o el reinicio. |
 | `CANCELLED` | La actualización se canceló antes de empezar la instalación, o un operador abandonó una actualización `UNKNOWN`. |
 
-Un dispositivo que rechaza una asignación por su firma informa `FAILED` en la etapa `DOWNLOADED` (cuando ya
-tiene los bytes y ha calculado su hash) con el código `UNKNOWN_SIGNER`, si no confía en la clave del firmante
-o si exige una firma y la asignación es `UNVERIFIED`, o `SIGNATURE_INVALID`, si la firma no se verifica.
+Un dispositivo que rechaza una asignación por su firma informa `FAILED` con el código `UNKNOWN_SIGNER`, si no
+confía en la clave del firmante o si exige una firma y la asignación es `UNVERIFIED`, o `SIGNATURE_INVALID`, si
+la firma no se verifica. Comprueba una firma contra los bytes que tiene, así que informa de una firma incorrecta
+o desconocida después de `DOWNLOADED`, cuando ya ha calculado su hash. Un dispositivo que exige imágenes
+firmadas puede rechazar antes una asignación `UNVERIFIED`, justo después de `RECEIVED` y sin descargar nada, y el
+dispositivo de referencia lo hace. Ambas formas son válidas, porque un dispositivo puede omitir una etapa.
 
 Los informes solo hacen avanzar un intento; un informe de una etapa anterior se ignora. **`UPDATED`
 solo se alcanza con pruebas**: el dispositivo informa de que la versión objetivo está en ejecución
@@ -248,7 +295,8 @@ contra el digest que la plataforma guardó al declarar el artefacto. Una firma q
 (`SIGNATURE_INVALID`), de modo que no se puede adjuntar una firma hecha sobre otros bytes, y un firmante
 revocado se rechaza (`SIGNER_REVOKED`). Volver a firmar con el mismo firmante no cambia nada. La firma cubre
 solo el digest: no indica para qué versión, componente o perfiles compatibles es la imagen, así que la misma imagen declarada con otra
-versión queda avalada por la misma firma.
+versión queda avalada por la misma firma. El dispositivo tiene que hacer cumplir por sí mismo la versión y el
+componente; consulta [En el dispositivo](#device-side).
 
 `revokeArtifactSigner(token)` es definitivo. Las firmas del firmante siguen registradas pero dejan de contar,
 así que todo artefacto que solo él avalaba pasa a `UNVERIFIED` de inmediato y ya no se puede asignar (salvo que
@@ -264,11 +312,34 @@ Una asignación de un artefacto firmado comunica `SIGNED` al dispositivo y le en
 dispositivo que tenga la clave pública del firmante puede comprobar que la imagen es auténtica antes de
 instalarla. Ambos algoritmos firman los 32 bytes sin procesar del digest SHA-256, no el archivo.
 
+## Qué dispositivos se pueden actualizar {#transports}
+
+Una actualización gestionada es una conversación por el canal MQTT del dispositivo: la plataforma publica la
+asignación y el enlace de descarga en `device-desired`, y el dispositivo responde en `device-reports`. Solo la
+descarga en sí es HTTP. Eso decide qué dispositivos puede actualizar la plataforma.
+
+| Dispositivo | Actualización gestionada | Qué hacer en su lugar |
+| --- | --- | --- |
+| Se conecta por MQTT | Sí | Sigue [Conectar un dispositivo](../guides/connecting-a-device.md#over-the-air-updates). |
+| Solo usa HTTP | No. Puede enviar eventos por HTTP, pero nada puede avisarle de que existe una asignación y no tiene canal por el que informar. | Conéctalo también por MQTT, o actualízalo por tus propios medios. |
+| [LwM2M](./lwm2m.md) | No. La plataforma no llega a los dispositivos LwM2M. | Impulsa el objeto estándar Firmware Update con comandos ordinarios, como en [Actualización de firmware con el objeto 5](./lwm2m.md#firmware-update-object-5). Ese procedimiento es una vía admitida, pero no es un trabajo gestionado: sin artefacto, sin retransmisión de la firma y sin seguimiento del intento. |
+| Nodo perimetral [Sparkplug](./sparkplug.md) | No. Sparkplug no define actualización de firmware, y DeviceChain no inventa una. | Un nodo que deba actualizarse a través de DeviceChain se conecta también a DeviceChain como un dispositivo MQTT ordinario y usa este canal. Consulta [actualizar un nodo perimetral](./sparkplug.md#updating-an-edge-node). |
+
 ## En el dispositivo {#device-side}
 
 Un dispositivo se entera de una asignación en su topic `device-desired`, pide una concesión de
 descarga, obtiene la imagen por HTTP con peticiones `Range` reanudables e informa de cada etapa en
 `device-reports`. Los mensajes están en [Conectar un dispositivo](../guides/connecting-a-device.md#over-the-air-updates).
+
+La plataforma comprueba los bytes contra el digest cuando llegan y entrega al dispositivo una firma de ese
+digest, y es el dispositivo quien decide. Como la firma cubre solo el digest, una imagen más antigua
+correctamente firmada, o una construida para otro componente, sigue siendo una imagen firmada válida. La
+plataforma no vincula la versión ni el componente a la firma, así que el dispositivo debe rechazar una versión
+que no sea más reciente que la que ejecuta, y una imagen para un componente que no es el suyo. También debe no
+ejecutar nada de la imagen antes de comprobar el digest y la firma, conservar las claves de confianza en local en
+lugar de tomar una de un mensaje, e informar `RUNNING` solo con pruebas de la versión que realmente se ejecuta.
+[Construir un dispositivo actualizable](../guides/building-an-updatable-device.md) recorre una implementación de
+referencia que hace todo esto y muestra el orden de las comprobaciones.
 
 ## Seguimiento {#monitoring}
 
@@ -278,6 +349,8 @@ los intentos que movieron los plazos, se enumeran en la
 
 ## Relacionado
 
+- **[Construir un dispositivo actualizable](../guides/building-an-updatable-device.md)**: el lado del dispositivo, recorrido sobre un dispositivo de referencia.
+- **[Firmar actualizaciones](../guides/signing-updates.md)**: crear claves y firmar artefactos.
 - **[Almacenamiento de objetos](./object-storage.md)**: dónde se guarda el contenido de los artefactos.
 - **[Configuración del dispositivo](../guides/connecting-a-device.md#reserved-device-topics)**: ajustes por dispositivo entregados por los mismos canales del dispositivo.
 - **[API GraphQL](../reference/graphql-api.md#endpoints)**: los endpoints, incluidas las rutas de subida y descarga.

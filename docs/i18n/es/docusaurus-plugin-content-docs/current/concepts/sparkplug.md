@@ -50,6 +50,10 @@ La recuperación es automática pero no instantánea. Tarda lo que el pod de ree
 La ingesta de Sparkplug-B está disponible como un servicio opcional (opt-in). Ingiere mediciones e impulsa la [presencia de dispositivo](./device-presence.md) autoritativa. Se conecta a un broker por TLS o texto plano, según la URL configurada. Un segundo protocolo de borde nativo de estándares, [LwM2M](./lwm2m.md), también está disponible. El CA personalizado / mTLS hacia un broker privado está planificado.
 :::
 
+## Actualizar un nodo perimetral {#updating-an-edge-node}
+
+Sparkplug B no define actualización de firmware, así que las [actualizaciones over-the-air](./over-the-air-updates.md) de DeviceChain no llegan a un dispositivo a través de este servicio, y DeviceChain no inventa una convención de firmware sobre Sparkplug. Un nodo perimetral que deba actualizarse a través de DeviceChain se conecta también a DeviceChain como un dispositivo MQTT ordinario, con su propia [credencial](../guides/device-credentials.md), y usa el canal de actualización normal. [Construir un dispositivo actualizable](../guides/building-an-updatable-device.md) muestra ese lado del dispositivo.
+
 ## Operación {#running-it}
 
 Como una única réplica es propietaria de la conexión al broker, la ingesta de Sparkplug tiene algunas propiedades operativas que conviene conocer antes de depender de ella en producción: qué cuesta un relevo, por qué un dispositivo puede quedarse mostrando en línea y qué te están diciendo los contadores de descartes. [Cómo operar los servicios de borde](../deployment/edge-services.md) las cubre.
