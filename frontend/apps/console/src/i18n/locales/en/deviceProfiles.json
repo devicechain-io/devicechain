@@ -684,7 +684,7 @@
   "calcHealthWhy": "Why?",
   "calcHealthWhyTitle": "Why {{key}} may not be computed",
   "calcHealthWhyDescription": "Run the formula over one device's stored readings to see the reasons it produced no value. Pick a device that reports the formula's inputs.",
-  "calcHealthSeparateInputs": "A formula reads one message at one instant. If this device sends these inputs in separate messages, or timestamps them separately, they are never combined.",
+  "calcHealthSeparateInputs": "A formula reads one message at one instant. If devices send these inputs in separate messages, or with different timestamps, they are never combined. Use Why? on one device to see each skip's reason.",
   "calcHealthSeparateInputsLink": "Inputs that arrive separately",
   "formulaHistoryLacked": "lacked: {{keys}}"
 }

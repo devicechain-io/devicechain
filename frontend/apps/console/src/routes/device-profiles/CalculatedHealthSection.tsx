@@ -178,7 +178,7 @@ function MetricRow({ metric, hours, onWhy }: { metric: MetricHealth; hours: Heal
         ) : (
           <HintText size="md">{t('calcHealthInputsUnknown')}</HintText>
         )}
-        {showsSeparateInputsHint(status, metric.directMeasured) && (
+        {showsSeparateInputsHint(status, metric.directInputs) && (
           <p className="mt-1 text-xs text-muted-foreground" data-testid="calc-health-separate">
             {t('calcHealthSeparateInputs')}{' '}
             <a className="underline" href={SEPARATE_INPUTS_GUIDE_URL} target="_blank" rel="noreferrer">

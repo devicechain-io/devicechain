@@ -684,7 +684,7 @@
   "calcHealthWhy": "¿Por qué?",
   "calcHealthWhyTitle": "Por qué {{key}} puede no calcularse",
   "calcHealthWhyDescription": "Ejecuta la fórmula sobre las lecturas almacenadas de un dispositivo para ver los motivos por los que no produjo valor. Elige un dispositivo que informe las entradas de la fórmula.",
-  "calcHealthSeparateInputs": "Una fórmula lee un mensaje en un instante. Si este dispositivo envía estas entradas en mensajes separados, o les pone marcas de tiempo distintas, nunca se combinan.",
+  "calcHealthSeparateInputs": "Una fórmula lee un mensaje en un instante. Si los dispositivos envían estas entradas en mensajes separados, o con marcas de tiempo distintas, nunca se combinan. Usa ¿Por qué? en un dispositivo para ver el motivo de cada omisión.",
   "calcHealthSeparateInputsLink": "Entradas que llegan por separado",
-  "formulaHistoryLacked": "faltaba: {{keys}}"
+  "formulaHistoryLacked": "faltan: {{keys}}"
 }

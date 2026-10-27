@@ -51,8 +51,6 @@ export interface MetricHealth {
   nameShared: boolean;
   /** The metrics the formula reads directly, as the active version compiles it; null when it cannot run there. */
   directInputs: string[] | null;
-  /** The subset of `directInputs` that devices report (measured), as opposed to calculated metrics. */
-  directMeasured: string[];
   /** The device constants the formula reads, through its whole chain. */
   constants: string[];
   /** The data type of every metric the formula may read, from the active version. */
@@ -113,7 +111,11 @@ export function statusOf(c: WindowCounts, nameShared: boolean): HealthStatus {
   return c.inputTotal > 0 ? 'not_computing' : 'no_input_readings';
 }
 
-/** A formula over this many reported inputs can have them arrive apart, so the hint applies. */
+/**
+ * A formula over this many direct inputs, measured or calculated, can have them arrive apart:
+ * a calculated input is only as present as ITS inputs, so kw + aux with kw calculated from a
+ * reading that arrives separately from aux is split just the same.
+ */
 export const SEPARATE_INPUTS_MIN = 2;
 
 /**
@@ -122,8 +124,8 @@ export const SEPARATE_INPUTS_MIN = 2;
  * seen is what this file refuses above, because a device that reports its metrics in separate
  * messages would look broken by it. The hint only names the one cause the counts cannot rule out.
  */
-export function showsSeparateInputsHint(status: HealthStatus | 'unknown', directMeasured: string[]): boolean {
-  return status === 'not_computing' && directMeasured.length >= SEPARATE_INPUTS_MIN;
+export function showsSeparateInputsHint(status: HealthStatus | 'unknown', directInputs: string[] | null): boolean {
+  return status === 'not_computing' && (directInputs?.length ?? 0) >= SEPARATE_INPUTS_MIN;
 }
 
 /** The inputs a formula reads that a sample did not carry, in the formula's own order. */
@@ -171,7 +173,6 @@ export async function loadCalcHealth(profileToken: string, now: Date): Promise<C
   for (const m of plan.measured) inputTypes[m.key] = m.dataType;
   for (const m of plan.calculated) inputTypes[m.key] = m.dataType;
 
-  const measuredKeys = new Set(plan.measured.map((m) => m.key));
   const metrics = plan.calculated.map((m): MetricHealth => {
     const measured = m.measuredInputs ?? null;
     const windows = Object.fromEntries(
@@ -186,7 +187,6 @@ export async function loadCalcHealth(profileToken: string, now: Date): Promise<C
       unit: m.unit ?? null,
       nameShared: m.nameSharedWithOtherProfiles,
       directInputs: m.inputs ?? null,
-      directMeasured: (m.inputs ?? []).filter((k) => measuredKeys.has(k)),
       constants: m.constants ?? [],
       inputTypes,
       windows,

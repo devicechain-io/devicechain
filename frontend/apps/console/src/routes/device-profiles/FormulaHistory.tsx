@@ -36,7 +36,7 @@ const WINDOWS: { hours: number }[] = [{ hours: 1 }, { hours: 24 }, { hours: 168 
 type State =
   | { status: 'idle' }
   | { status: 'running' }
-  | { status: 'done'; result: CalculatedEventsResult }
+  | { status: 'done'; result: CalculatedEventsResult; missingConstants: string[]; sent: string[] }
   | { status: 'error'; message: string };
 
 export function FormulaHistory({
@@ -93,20 +93,22 @@ export function FormulaHistory({
       // A formula that reads device constants is run with THIS device's constants as its metadata
       // holds them now (the server holds no device records, so the console reads them).
       const held = constants.length > 0 ? await deviceConstants(deviceToken.trim(), constants) : [];
+      const missingConstants = constants.filter((k) => !held.some((h) => h.key === k));
+      const sent = inputs.filter((k) => types.has(k));
       const to = new Date();
       const from = new Date(to.getTime() - hours * 3_600_000);
       const result = await calculatedEvents({
         deviceToken: deviceToken.trim(),
         expression,
         dataType,
-        inputs: inputs.filter((k) => types.has(k)).map((key) => ({ key, dataType: types.get(key) ?? '' })),
+        inputs: sent.map((key) => ({ key, dataType: types.get(key) ?? '' })),
         minValue: optNum(minValue),
         maxValue: optNum(maxValue),
         constants: held,
         from: from.toISOString(),
         to: to.toISOString(),
       });
-      if (mine === runToken.current) setState({ status: 'done', result });
+      if (mine === runToken.current) setState({ status: 'done', result, missingConstants, sent });
     } catch (err) {
       if (mine !== runToken.current) return;
       setState({
@@ -157,7 +159,12 @@ export function FormulaHistory({
           {t('formulaHistoryConstants', { names: constants.map((c) => `device.${c}`).join(', ') })}
         </p>
       )}
-      {state.status === 'done' && <HistoryOutcome result={state.result} skipLabel={skipLabel} inputs={inputs} />}
+      {state.status === 'done' && <HistoryOutcome
+          result={state.result}
+          skipLabel={skipLabel}
+          inputs={state.sent}
+          missingConstants={state.missingConstants}
+        />}
     </div>
   );
 }
@@ -188,10 +195,12 @@ function HistoryOutcome({
   result,
   skipLabel,
   inputs,
+  missingConstants,
 }: {
   result: CalculatedEventsResult;
   skipLabel: (reason: string) => string;
   inputs: string[];
+  missingConstants: string[];
 }) {
   const { t } = useTranslation('deviceProfiles');
   const total = result.samples.length;
@@ -228,7 +237,7 @@ function HistoryOutcome({
                   {s.value != null ? s.value : t('formulaSkipped', { reason: skipLabel(s.skippedReason ?? '') })}
                 </span>
                 {s.value == null && s.skippedReason === 'missing_input' && (
-                  <MissingInputs lacked={absentInputs(inputs, s.inputs)} />
+                  <MissingInputs lacked={[...absentInputs(inputs, s.inputs), ...missingConstants.map((k) => `device.${k}`)]} />
                 )}
               </li>
             ))}

@@ -54,6 +54,8 @@ type Setup = {
   activeSince?: string | null;
   counts: Record<string, { bucketStart: string; count: number }[]>;
   samples?: unknown[];
+  constants?: string[];
+  deviceMetadata?: string;
 };
 
 type Call = { op: string; vars: Record<string, any> };
@@ -88,12 +90,14 @@ function install(s: Setup) {
                 nameSharedWithOtherProfiles: s.shared ?? false,
                 inputs: unknown ? null : (s.inputs ?? ['volts', 'amps']),
                 measuredInputs: unknown ? null : (s.measuredInputs ?? ['volts', 'amps']),
-                constants: unknown ? null : [],
+                constants: unknown ? null : (s.constants ?? []),
               },
             ],
           },
         });
       }
+      case 'DeviceByToken':
+        return Promise.resolve({ devicesByToken: [{ id: '1', token: 'dev-1', metadata: s.deviceMetadata ?? '{}' }] });
       case 'CalculatedEvents':
         return Promise.resolve({
           calculatedEvents: { computed: 0, skipped: [], samples: s.samples ?? [], truncated: false, sampleCount: 0 },
@@ -255,7 +259,7 @@ describe('calculated-metric health', () => {
     expect(within(hint).getByRole('link').getAttribute('href')).toContain('calculated-metrics#inputs-that-arrive-separately');
   });
 
-  it('shows no separate-messages hint when the metric is computing, or reads fewer than two reported inputs', async () => {
+  it('shows no separate-messages hint when the metric is computing, or reads fewer than two direct inputs', async () => {
     // Control: the same two-input fixture, but values are stored, so the status is Computing.
     install({ counts: { power_kw: hourly(60, 24), volts: hourly(60, 24), amps: hourly(60, 24) } });
     mount();
@@ -273,6 +277,44 @@ describe('calculated-metric health', () => {
     mount();
     expect(await statusOf()).toBe('no_input_readings');
     expect(screen.queryByTestId('calc-health-separate')).toBeNull();
+  });
+
+  it('explains separate messages when one direct input is itself calculated', async () => {
+    // kw_total = kw + aux, kw calculated from volts: kw is not reported, but it is only as present as volts.
+    install({ inputs: ['kw', 'amps'], measuredInputs: ['volts', 'amps'], counts: { volts: hourly(60, 24), amps: hourly(60, 24) } });
+    mount();
+    expect(await statusOf()).toBe('not_computing');
+    expect(screen.getByTestId('calc-health-separate')).toBeTruthy();
+  });
+
+  it('names a device constant the device does not hold, with every input present', async () => {
+    const samples = [
+      { occurredTime: '2026-10-20T12:00:00Z', eventId: 'a', inputs: [{ key: 'volts', value: '230' }, { key: 'amps', value: '4' }], value: null, skippedReason: 'missing_input' },
+    ];
+    const calls = install({ counts: { volts: hourly(60, 24), amps: hourly(60, 24) }, samples, constants: ['gain'], deviceMetadata: '{}' });
+    mount();
+    await statusOf();
+    fireEvent.click(screen.getByRole('button', { name: 'Why?' }));
+    const hist = await screen.findByTestId('formula-history');
+    fireEvent.change(within(hist).getByLabelText('Device token'), { target: { value: 'dev-1' } });
+    fireEvent.click(within(hist).getByRole('button', { name: 'Run on history' }));
+    expect((await screen.findAllByTestId('formula-history-lacked')).map((e) => e.textContent)).toEqual(['lacked: device.gain']);
+    expect(calls.some((c) => c.op === 'CalculatedEvents')).toBe(true);
+  });
+
+  it('names a held device constant as not lacking', async () => {
+    const samples = [
+      { occurredTime: '2026-10-20T12:00:00Z', eventId: 'a', inputs: [{ key: 'volts', value: '230' }, { key: 'amps', value: '4' }], value: null, skippedReason: 'missing_input' },
+    ];
+    install({ counts: { volts: hourly(60, 24), amps: hourly(60, 24) }, samples, constants: ['gain'], deviceMetadata: '{"gain": 2}' });
+    mount();
+    await statusOf();
+    fireEvent.click(screen.getByRole('button', { name: 'Why?' }));
+    const hist = await screen.findByTestId('formula-history');
+    fireEvent.change(within(hist).getByLabelText('Device token'), { target: { value: 'dev-1' } });
+    fireEvent.click(within(hist).getByRole('button', { name: 'Run on history' }));
+    await screen.findByTestId('formula-history-result');
+    expect(screen.queryByTestId('formula-history-lacked')).toBeNull();
   });
 
   it('names the inputs a skipped sample lacked in Why?, and none for a sample that held them all', async () => {
