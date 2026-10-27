@@ -129,3 +129,35 @@ func TestTheNudgerIsBoundDuringTheNatsStart(t *testing.T) {
 		"the NATS manager started but Api.Nudger is still nil, so a command created now would take "+
 			"the nil-nudger branch and wait for the sweep rather than dispatching")
 }
+
+// impactStub is a model.CommandImpactResolver whose identity the wiring test compares.
+type impactStub struct{}
+
+func (*impactStub) CommandImpact(context.Context, string, string) (string, error) {
+	return "NORMAL", nil
+}
+
+// TestTheSparkplugCapabilityAndImpactResolverReachTheProcessor builds the processor the way main
+// does (createNatsComponents, against a real embedded broker) and asks what it ended up with.
+// The processor's own tests set these fields by hand, so they cannot see this line go missing: a
+// service that never copies the configured flag across would dispatch with the capability off
+// whatever the chart rendered, and one that never binds the resolver would dispatch Sparkplug
+// commands without an impact stamp, failing every reboot closed with nothing in the logs but a
+// counter. Both directions are run, so a constant true or a constant false fails one of them.
+func TestTheSparkplugCapabilityAndImpactResolverReachTheProcessor(t *testing.T) {
+	for _, enabled := range []bool{true, false} {
+		mgr := startNatsWiringFixture(t)
+		Configuration.SparkplugCommands = enabled
+		stub := &impactStub{}
+		Api.CommandImpacts = stub
+
+		require.NoError(t, mgr.Initialize(context.Background()))
+		require.NoError(t, mgr.Start(context.Background()))
+
+		require.NotNil(t, CommandDeliveryProcessor)
+		require.Equal(t, enabled, CommandDeliveryProcessor.SparkplugCommands,
+			"the configured sparkplugCommands flag did not reach the processor (enabled=%v)", enabled)
+		require.Same(t, stub, CommandDeliveryProcessor.CommandImpacts,
+			"the Api's impact resolver was not bound to the processor")
+	}
+}

@@ -109,6 +109,54 @@ func (s *WindowScheduler) ScheduleDispatch(ctx context.Context, deviceTokens []s
 }
 
 var _ model.WindowAssignmentResolver = (*WindowScheduler)(nil)
+var _ model.CommandImpactResolver = (*WindowScheduler)(nil)
+
+const commandDispatchImpact = `query($deviceTokens: [String!]!, $commandKey: String!) {
+  commandDispatchSchedule(deviceTokens: $deviceTokens, commandKey: $commandKey) {
+    impacts { deviceToken impact }
+  }
+}`
+
+// CommandImpact implements model.CommandImpactResolver over the same owner-side decision
+// enqueue asks for: the schedule the window gate is computed from also names the impact the
+// profile gives the command, so the two cannot be read from different places.
+//
+// 🔴 A DEVICE THE OWNER NAMED NO IMPACT FOR IS AN ERROR, NEVER NORMAL. The owner lists impacts only
+// for enabled devices whose type defines the command, so an absent entry means "nothing decided"
+// (disabled, gone, or the command is not in the vocabulary). Reading it as NORMAL would let an
+// adapter that gates on impact treat the unknown as the safe class. An absent LIST is the same
+// kind of failure (an older owner that does not know the field), and is decoded through a
+// pointer so it can be told apart from an empty one.
+func (s *WindowScheduler) CommandImpact(ctx context.Context, deviceToken, commandKey string) (string, error) {
+	tenant, ok := core.TenantFromContext(ctx)
+	if !ok {
+		return "", fmt.Errorf("verify: no tenant in context")
+	}
+	var out struct {
+		CommandDispatchSchedule *struct {
+			Impacts *[]struct {
+				DeviceToken string `json:"deviceToken"`
+				Impact      string `json:"impact"`
+			} `json:"impacts"`
+		} `json:"commandDispatchSchedule"`
+	}
+	vars := map[string]any{"deviceTokens": []string{deviceToken}, "commandKey": commandKey}
+	if err := s.client.Query(ctx, s.url, tenant, commandDispatchImpact, vars, &out); err != nil {
+		return "", err
+	}
+	if out.CommandDispatchSchedule == nil || out.CommandDispatchSchedule.Impacts == nil {
+		return "", fmt.Errorf("verify: device-management returned no command impacts")
+	}
+	for _, i := range *out.CommandDispatchSchedule.Impacts {
+		if i.DeviceToken == deviceToken {
+			if i.Impact == "" {
+				return "", fmt.Errorf("verify: device-management returned an empty impact for %q", deviceToken)
+			}
+			return i.Impact, nil
+		}
+	}
+	return "", fmt.Errorf("verify: device-management decided no impact for command %q on device %q", commandKey, deviceToken)
+}
 
 const currentDispatchWindows = `query($deviceTokens: [String!]!, $commandKey: String!) {
   commandDispatchSchedule(deviceTokens: $deviceTokens, commandKey: $commandKey, alreadyHeld: true) {

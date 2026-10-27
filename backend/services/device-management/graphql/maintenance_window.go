@@ -184,7 +184,23 @@ type CommandDispatchScheduleResolver struct {
 	refusals  []*model.BatchEnqueueRefusal
 	ungated   []string
 	undefined []string
+	impacts   []*model.CommandDispatchImpact
 }
+
+// Impacts lists, for each device whose type defines the command, the impact it carries.
+func (r *CommandDispatchScheduleResolver) Impacts() []*CommandDispatchImpactResolver {
+	out := make([]*CommandDispatchImpactResolver, 0, len(r.impacts))
+	for _, i := range r.impacts {
+		out = append(out, &CommandDispatchImpactResolver{M: *i})
+	}
+	return out
+}
+
+// CommandDispatchImpactResolver exposes one device's command impact.
+type CommandDispatchImpactResolver struct{ M model.CommandDispatchImpact }
+
+func (r *CommandDispatchImpactResolver) DeviceToken() string { return r.M.DeviceToken }
+func (r *CommandDispatchImpactResolver) Impact() string      { return r.M.Impact }
 
 // Undefined lists the devices whose type's current profile version does not define the command.
 func (r *CommandDispatchScheduleResolver) Undefined() []string {
@@ -249,7 +265,7 @@ func (r *SchemaResolver) CommandDispatchSchedule(ctx context.Context, args struc
 		return nil, err
 	}
 	return &CommandDispatchScheduleResolver{holds: schedule.Holds, refusals: schedule.Refusals,
-		ungated: schedule.Ungated, undefined: schedule.Undefined}, nil
+		ungated: schedule.Ungated, undefined: schedule.Undefined, impacts: schedule.Impacts}, nil
 }
 
 // ------------

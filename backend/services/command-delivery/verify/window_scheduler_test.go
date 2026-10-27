@@ -58,3 +58,34 @@ func TestCurrentWindowsFailsClosedOnAMissingList(t *testing.T) {
 		})
 	}
 }
+
+// CommandImpact returns the impact the owner named for exactly the device asked about.
+func TestCommandImpactRelaysTheOwnersClassification(t *testing.T) {
+	s := newWindowSchedulerAgainst(t, `{"data":{"commandDispatchSchedule":{"impacts":[
+	  {"deviceToken":"other","impact":"NORMAL"},{"deviceToken":"node-1","impact":"DISRUPTIVE"}]}}}`)
+	got, err := s.CommandImpact(batchCtx(), "node-1", "sparkplug.reboot")
+	if err != nil || got != "DISRUPTIVE" {
+		t.Fatalf("impact = %q, err %v; want DISRUPTIVE for the device asked about, not its neighbour's", got, err)
+	}
+}
+
+// 🔴 SILENCE IS NEVER NORMAL. The owner lists impacts only for enabled devices whose type defines
+// the command, so an empty list, a list without the device, an empty impact, and a response that
+// lost the field (an older owner) are all failures to decide. Reading any of them as NORMAL would
+// let an adapter that gates on impact treat the unknown as the safe class.
+func TestCommandImpactFailsClosedWhenTheOwnerDecidedNothing(t *testing.T) {
+	for name, body := range map[string]string{
+		"empty list":        `{"data":{"commandDispatchSchedule":{"impacts":[]}}}`,
+		"other device only": `{"data":{"commandDispatchSchedule":{"impacts":[{"deviceToken":"other","impact":"NORMAL"}]}}}`,
+		"empty impact":      `{"data":{"commandDispatchSchedule":{"impacts":[{"deviceToken":"node-1","impact":""}]}}}`,
+		"field missing":     `{"data":{"commandDispatchSchedule":{"holds":[],"refusals":[]}}}`,
+		"no schedule":       `{"data":{"commandDispatchSchedule":null}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := newWindowSchedulerAgainst(t, body)
+			if got, err := s.CommandImpact(batchCtx(), "node-1", "sparkplug.reboot"); err == nil {
+				t.Fatalf("got impact %q with no error; an undecided impact must be an error", got)
+			}
+		})
+	}
+}

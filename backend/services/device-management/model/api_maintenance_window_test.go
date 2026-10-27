@@ -469,3 +469,91 @@ func TestAnUnreadableVocabularyIsAnErrorNeverUndefined(t *testing.T) {
 		}
 	}
 }
+
+// Impacts carries the classification the window gate decided on, per device, for every device
+// whose type DEFINES the command. A transport adapter that gates on impact reads it, so it must
+// hold on every path out of the verdict: gated, not gated, and a type with no window at all.
+// Devices the schedule decides nothing about (disabled, unknown, command undefined) have no
+// entry, and the absence is the signal: it must never read as NORMAL.
+func TestImpactsNameTheClassificationForEveryDeviceThatDefinesTheCommand(t *testing.T) {
+	api := newWindowTestApi(t)
+	ctx := core.WithTenant(context.Background(), "A")
+	tokens := seedGatedType(t, api, ctx, "plant", 3)
+	at := utcAt(2026, 1, 14, 12, 0)
+
+	byToken := func(s *DispatchSchedule) map[string]string {
+		out := map[string]string{}
+		for _, i := range s.Impacts {
+			out[i.DeviceToken] = i.Impact
+		}
+		return out
+	}
+
+	// Gated path: the disruptive command is held, and its impact is reported.
+	reboot, err := api.DispatchScheduleFor(ctx, tokens, "reboot", nil, at, false)
+	if err != nil || len(reboot.Holds) != 3 {
+		t.Fatalf("control: %+v err=%v", reboot, err)
+	}
+	for _, token := range tokens {
+		if got := byToken(reboot)[token]; got != ImpactDisruptive {
+			t.Fatalf("reboot impact for %s = %q, want DISRUPTIVE", token, got)
+		}
+	}
+	wipe, err := api.DispatchScheduleFor(ctx, tokens, "wipe", nil, at, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, token := range tokens {
+		if got := byToken(wipe)[token]; got != ImpactDestructive {
+			t.Fatalf("wipe impact for %s = %q, want DESTRUCTIVE: the field must follow the definition", token, got)
+		}
+	}
+	// Not-gated path: a NORMAL command is ungated and still carries its (NORMAL) impact. The
+	// two must differ, or the field is a constant.
+	read, err := api.DispatchScheduleFor(ctx, tokens, "read", nil, at, false)
+	if err != nil || len(read.Ungated) != 3 {
+		t.Fatalf("control: %+v err=%v", read, err)
+	}
+	for _, token := range tokens {
+		if got := byToken(read)[token]; got != ImpactNormal {
+			t.Fatalf("read impact for %s = %q, want NORMAL", token, got)
+		}
+	}
+	// An undefined command has NO entry: silence is not NORMAL.
+	gone, err := api.DispatchScheduleFor(ctx, tokens, "gone", nil, at, false)
+	if err != nil || len(gone.Undefined) != 3 || len(gone.Impacts) != 0 {
+		t.Fatalf("undefined command: %+v err=%v, want no impacts", gone, err)
+	}
+	// A disabled device and an unknown token are decided nothing about.
+	if err := api.RDB.DB(ctx).Model(&Device{}).Where("token = ?", tokens[0]).
+		Update("disabled_at", time.Now()).Error; err != nil {
+		t.Fatal(err)
+	}
+	some, err := api.DispatchScheduleFor(ctx, append(tokens, "nobody"), "reboot", nil, at, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := byToken(some)
+	if _, ok := got[tokens[0]]; ok {
+		t.Fatalf("a disabled device has an impact entry: %v", got)
+	}
+	if _, ok := got["nobody"]; ok || len(got) != 2 {
+		t.Fatalf("impacts = %v, want exactly the two enabled devices", got)
+	}
+	// No-window path: the type carries no window, the command is ungated, and its impact is
+	// still reported as DISRUPTIVE rather than defaulting.
+	if _, err := api.UpdateDeviceType(ctx, "type-plant", &DeviceTypeUpdateRequest{
+		MaintenanceWindowToken: dcgraphql.OptionalString{Set: true, Value: nil},
+	}); err != nil {
+		t.Fatalf("unassign window: %v", err)
+	}
+	free, err := api.DispatchScheduleFor(ctx, tokens[1:], "reboot", nil, at, false)
+	if err != nil || len(free.Ungated) != 2 {
+		t.Fatalf("no window: %+v err=%v", free, err)
+	}
+	for _, token := range tokens[1:] {
+		if got := byToken(free)[token]; got != ImpactDisruptive {
+			t.Fatalf("no-window reboot impact for %s = %q, want its declared class, not a default", token, got)
+		}
+	}
+}

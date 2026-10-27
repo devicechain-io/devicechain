@@ -163,7 +163,7 @@ func TestAnAnswerToAReleasedCommandSettlesItByTheNonceItNames(t *testing.T) {
 
 	// Steps 1-3, through the real dispatch path rather than by hand.
 	writer := &failingWriter{err: errors.New("publish acknowledgement timed out")}
-	if err := procWith(api, writer).deliverCommand(ctx, created, pathSweep); err == nil {
+	if err := procWith(api, writer).deliverCommand(ctx, created, pathSweep, routing{}); err == nil {
 		t.Fatal("premise lost: the publish was expected to report an error")
 	}
 	nonce := dispatchNonceOf(t, writer.messages)
@@ -242,7 +242,7 @@ func TestAnAnswerToASupersededDispatchDoesNotSettleTheOneThatReplacedIt(t *testi
 
 	// The first dispatch: delivered, unacknowledged, released.
 	lost := &failingWriter{err: errors.New("publish acknowledgement timed out")}
-	if err := procWith(api, lost).deliverCommand(ctx, created, pathSweep); err == nil {
+	if err := procWith(api, lost).deliverCommand(ctx, created, pathSweep, routing{}); err == nil {
 		t.Fatal("premise lost: the publish was expected to report an error")
 	}
 	released := dispatchNonceOf(t, lost.messages)
@@ -250,7 +250,7 @@ func TestAnAnswerToASupersededDispatchDoesNotSettleTheOneThatReplacedIt(t *testi
 	// The second dispatch, by the sweep, on the row the release returned to the queue.
 	requeued := loadByToken(t, api, ctx, "cmd-1")
 	live := &recordingWriter{}
-	if err := procWith(api, live).deliverCommand(ctx, requeued, pathSweep); err != nil {
+	if err := procWith(api, live).deliverCommand(ctx, requeued, pathSweep, routing{}); err != nil {
 		t.Fatalf("re-dispatching the released command: %v", err)
 	}
 	current := dispatchNonceOf(t, live.messages)
@@ -334,7 +334,7 @@ func TestAnAnswerNamingNoDispatchIsRefusedAndRecorded(t *testing.T) {
 	}
 	// Dispatched normally: the row is SENT, which is the state that WOULD have accepted this
 	// answer before the nonce was required. Anything weaker would pass for other reasons.
-	if err := procWith(api, &recordingWriter{}).deliverCommand(ctx, created, pathSweep); err != nil {
+	if err := procWith(api, &recordingWriter{}).deliverCommand(ctx, created, pathSweep, routing{}); err != nil {
 		t.Fatalf("deliverCommand: %v", err)
 	}
 
@@ -399,7 +399,7 @@ func TestAnAnswerToADispatchedCommandStillSettlesIt(t *testing.T) {
 		t.Fatalf("CreateCommand: %v", err)
 	}
 	writer := &recordingWriter{}
-	if err := procWith(api, writer).deliverCommand(ctx, created, pathSweep); err != nil {
+	if err := procWith(api, writer).deliverCommand(ctx, created, pathSweep, routing{}); err != nil {
 		t.Fatalf("deliverCommand: %v", err)
 	}
 
@@ -481,7 +481,7 @@ func TestTheWritebackDoesNotSettleACommandItsProducerDeclinedToSettle(t *testing
 		t.Fatalf("CreateCommand: %v", err)
 	}
 	if err := procWith(api, &failingWriter{err: errors.New("publish acknowledgement timed out")}).
-		deliverCommand(ctx, created, pathSweep); err == nil {
+		deliverCommand(ctx, created, pathSweep, routing{}); err == nil {
 		t.Fatal("premise lost: the publish was expected to report an error")
 	}
 
@@ -506,7 +506,7 @@ func TestTheWritebackDoesNotSettleACommandItsProducerDeclinedToSettle(t *testing
 	// what makes the final state a lie rather than merely a wrong status.
 	requeued := loadByToken(t, api, ctx, "cmd-1")
 	redispatch := &recordingWriter{}
-	if err := procWith(api, redispatch).deliverCommand(ctx, requeued, pathSweep); err != nil {
+	if err := procWith(api, redispatch).deliverCommand(ctx, requeued, pathSweep, routing{}); err != nil {
 		t.Fatalf("re-dispatch: %v", err)
 	}
 	if redispatch.count() != 1 {
@@ -554,7 +554,7 @@ func TestTheWritebackStillSettlesAnExhaustedLetter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateCommand: %v", err)
 	}
-	if err := procWith(api, &recordingWriter{}).deliverCommand(ctx, created, pathSweep); err != nil {
+	if err := procWith(api, &recordingWriter{}).deliverCommand(ctx, created, pathSweep, routing{}); err != nil {
 		t.Fatalf("deliverCommand: %v", err)
 	}
 
@@ -588,7 +588,7 @@ func TestTheWritebackIsANoOpBeforeTheRedispatch(t *testing.T) {
 		t.Fatalf("CreateCommand: %v", err)
 	}
 	if err := procWith(api, &failingWriter{err: errors.New("publish acknowledgement timed out")}).
-		deliverCommand(ctx, created, pathSweep); err == nil {
+		deliverCommand(ctx, created, pathSweep, routing{}); err == nil {
 		t.Fatal("premise lost: the publish was expected to report an error")
 	}
 

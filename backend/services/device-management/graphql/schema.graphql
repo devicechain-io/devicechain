@@ -872,6 +872,22 @@ type CommandDispatchSchedule {
     define this command at all.
     """
     undefined: [String!]!
+    """
+    For every device that exists, is enabled and whose device type's current profile version
+    defines the command, the impact (NORMAL, DISRUPTIVE or DESTRUCTIVE) it carries. It is the
+    classification the maintenance-window gate decided on, so a transport that gates on impact
+    reads the same answer. A device that does not exist, is disabled, or whose type does not
+    define the command has no entry.
+    """
+    impacts: [CommandDispatchImpact!]!
+}
+
+"""One device's command impact, decided together with its dispatch schedule."""
+type CommandDispatchImpact {
+    """Token of the device."""
+    deviceToken: String!
+    """NORMAL, DISRUPTIVE or DESTRUCTIVE."""
+    impact: String!
 }
 
 """One page of the devices an entity group contains, for use as the target of a command."""

@@ -94,10 +94,10 @@ func Resolved(states map[string]State, token string, err error) bool {
 // silence. The gate withholds only where the absence of a delivery path is established.
 //
 // 🔴🔴 THE ENTRY THAT MATTERS IS SPARKPLUG, AND IT IS NOT A BUG BEING WORKED AROUND.
-// Sparkplug has no command egress by construction: nothing bridges the device-commands
-// stream to a Sparkplug host, the host publishes only the Node Control/Rebirth control
-// toward nodes, and its devices sit on the CUSTOMER's MQTT infrastructure rather than
-// ours — so a publish onto our own subject reaches nothing.
+// Sparkplug has no command egress BY DEFAULT: unless a source opts in (see nonDelivering),
+// nothing bridges the device-commands stream to a Sparkplug host, the host publishes only the
+// Node Control/Rebirth control toward nodes, and its devices sit on the CUSTOMER's MQTT
+// infrastructure rather than ours — so a publish onto our own subject reaches nothing.
 //
 // 🔑 A SPARKPLUG COMMAND IS THEREFORE NOT "HELD", IT IS UNDELIVERABLE, and that
 // distinction is why this list exists at all. HELD means "waiting for the device to come
@@ -146,6 +146,27 @@ var nonDeliveringTransports = map[transport.Name]bool{
 	transport.Integration: true,
 }
 
+// nonDelivering reports whether a transport is positively known to have no command path in this
+// deployment.
+//
+// 🔴🔴 SPARKPLUG IS THE ONE ENTRY THAT IS CONDITIONAL, AND THE CONDITION IS NOT A PER-COMMAND
+// DECISION. A Sparkplug source can be configured to publish commands (NCMD/DCMD) on the Host
+// Application session it already holds; the chart derives sparkplugCommands from that and nobody
+// authors it. With it off, this answers exactly what the table above says and a Sparkplug
+// command fails within seconds with an honest reason, as it always did. With it on, Sparkplug
+// takes the ordinary path (asserted-absent holds, otherwise it dispatches), and it is the
+// ADAPTER's gates that refuse a command to a source that is not itself enabled: this flag says
+// only that SOME source can carry commands, never that THIS device's can.
+//
+// Every other entry is unconditional on purpose. Widening the flag to a general "capabilities"
+// bag would make the next transport's verdict a thing an operator can flip.
+func nonDelivering(t transport.Name, sparkplugCommands bool) bool {
+	if t == transport.Sparkplug && sparkplugCommands {
+		return false
+	}
+	return nonDeliveringTransports[t]
+}
+
 // Decide reduces one device's projected state to a verdict.
 //
 // 🔴 THE `Asserted` CONJUNCT IS WHAT STOPS THIS BEING A DISASTER, AND IT IS NOT OBVIOUS.
@@ -163,13 +184,19 @@ var nonDeliveringTransports = map[transport.Name]bool{
 // refused until the presence reconciler re-files it). In both, commands wait until that
 // reconciler catches up. The gate withholds on positive evidence; the evidence is not
 // infallible.
-func Decide(s State) Verdict {
+//
+// sparkplugCommands is the deployment's derived capability flag (see nonDelivering). It is a
+// REQUIRED argument and not a package variable or an option with a zero default, so a caller
+// that forgets it does not compile: the call sites are the sweep and the hold reconciler, and
+// they must agree, because one reading a Sparkplug command as Undeliverable while the other
+// reads it as releasable would flap a row between the two.
+func Decide(s State, sparkplugCommands bool) Verdict {
 	if !s.Known {
 		// No row at all: the platform has never been told anything about this device.
 		// Dispatch, exactly as before the gate existed.
 		return Dispatch
 	}
-	if nonDeliveringTransports[transport.Of(s.Source)] {
+	if nonDelivering(transport.Of(s.Source), sparkplugCommands) {
 		return Undeliverable
 	}
 	if s.Asserted && !s.Active {

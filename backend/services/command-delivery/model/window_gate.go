@@ -41,6 +41,17 @@ type DispatchScheduler interface {
 		expiresAt sql.NullTime) ([]DispatchHold, []BatchDeviceRefusal, error)
 }
 
+// CommandImpactResolver asks the same owner, through the same question the window gate asks, what
+// impact (NORMAL, DISRUPTIVE or DESTRUCTIVE) the profile gives a command on a device's type.
+//
+// The impact is NOT stored on the command row: enqueue resolves it only to decide the window, and
+// keeps the hold. A transport adapter that gates on impact itself therefore gets it stamped at
+// DISPATCH, from here. An error means the impact could not be decided, including a device the
+// owner decided nothing about; the caller must leave the impact off rather than guess NORMAL.
+type CommandImpactResolver interface {
+	CommandImpact(ctx context.Context, deviceToken, commandKey string) (string, error)
+}
+
 // WindowOpening is the owner's current answer for one maintenance window.
 type WindowOpening struct {
 	// Found is false when the window no longer exists.

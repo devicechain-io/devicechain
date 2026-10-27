@@ -141,7 +141,7 @@ func (cproc *CommandDeliveryProcessor) reconcileTenantBatch(ctx context.Context,
 		// a row held before its device's transport was known to carry no commands gets
 		// returned to QUEUED, and the sweep then fails it properly on the next tick with
 		// a reason recorded. One place decides what happens to a dispatchable command.
-		if presence.Decide(states[cmd.DeviceToken]) == presence.Hold {
+		if presence.Decide(states[cmd.DeviceToken], cproc.SparkplugCommands) == presence.Hold {
 			continue
 		}
 		cproc.releaseHold(tenantCtx, cmd)

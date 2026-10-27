@@ -117,7 +117,7 @@ func TestACommandThatCanNeverBePublishedStopsAtTheBoundAndBlamesThePlatform(t *t
 	// Attempt 1 and 2: the command must come BACK, or the bound is not a bound, it is a
 	// one-strike rule wearing one.
 	for attempt := 1; attempt <= 2; attempt++ {
-		if err := proc.deliverCommand(ctx, created, pathSweep); err == nil {
+		if err := proc.deliverCommand(ctx, created, pathSweep, routing{}); err == nil {
 			t.Fatalf("attempt %d: premise lost, the publish was expected to fail", attempt)
 		}
 		row := loadByToken(t, api, ctx, "poison-1")
@@ -134,7 +134,7 @@ func TestACommandThatCanNeverBePublishedStopsAtTheBoundAndBlamesThePlatform(t *t
 	}
 
 	// Attempt 3 reaches the bound.
-	if err := proc.deliverCommand(ctx, created, pathSweep); err == nil {
+	if err := proc.deliverCommand(ctx, created, pathSweep, routing{}); err == nil {
 		t.Fatal("attempt 3: premise lost, the publish was expected to fail")
 	}
 	row := loadByToken(t, api, ctx, "poison-1")
@@ -164,7 +164,7 @@ func TestACommandThatCanNeverBePublishedStopsAtTheBoundAndBlamesThePlatform(t *t
 
 	// And the retries really do STOP: a further tick must not claim or publish it again.
 	before := writer.attemptCount()
-	if err := proc.deliverCommand(ctx, created, pathSweep); err != nil {
+	if err := proc.deliverCommand(ctx, created, pathSweep, routing{}); err != nil {
 		t.Fatalf("a further dispatch of a terminal command must be a benign no-op, got %v", err)
 	}
 	if got := loadByToken(t, api, ctx, "poison-1"); got.Status != model.CommandFailed.String() {
@@ -201,7 +201,7 @@ func TestACommandThatSucceedsOnItsSecondAttemptIsNotTreatedAsPoison(t *testing.T
 	writer := &flakyWriter{failures: 1}
 	proc := exhaustionProc(api, writer)
 
-	if err := proc.deliverCommand(ctx, created, pathSweep); err == nil {
+	if err := proc.deliverCommand(ctx, created, pathSweep, routing{}); err == nil {
 		t.Fatal("premise lost: the first publish was expected to fail")
 	}
 	if got := statusOf(t, api, ctx, "flaky-1"); got != model.CommandQueued.String() {
@@ -210,7 +210,7 @@ func TestACommandThatSucceedsOnItsSecondAttemptIsNotTreatedAsPoison(t *testing.T
 
 	// The second attempt is the one under test. deliverCommand re-claims from QUEUED, so
 	// this also pins that a released row is still claimable.
-	if err := proc.deliverCommand(ctx, created, pathSweep); err != nil {
+	if err := proc.deliverCommand(ctx, created, pathSweep, routing{}); err != nil {
 		t.Fatalf("the second attempt must succeed, got %v", err)
 	}
 	if writer.publishes() != 1 {
@@ -268,7 +268,7 @@ func TestAParkedCommandsWakesAreNotCountedAsFailedDispatches(t *testing.T) {
 	// asleep — one more than the bound, so a claim-counting implementation would have
 	// failed the row by now.
 	for wake := 1; wake <= 3; wake++ {
-		if err := proc.deliverCommand(ctx, created, pathSweep); err != nil {
+		if err := proc.deliverCommand(ctx, created, pathSweep, routing{}); err != nil {
 			t.Fatalf("wake %d: publish must succeed, got %v", wake, err)
 		}
 		row := loadByToken(t, api, ctx, "sleeper-1")
@@ -311,7 +311,7 @@ func TestTheConstructorWiresTheExhaustionCounter(t *testing.T) {
 		core.NewNoOpLifecycleCallbacks(), api, nil, nil, nil, NewDeliveryMetrics(ms))
 
 	if err := proc.deliverCommand(context.Background(),
-		&model.Command{DeviceToken: "pump-1", Name: "reboot"}, pathSweep); err == nil {
+		&model.Command{DeviceToken: "pump-1", Name: "reboot"}, pathSweep, routing{}); err == nil {
 		t.Fatal("premise lost: the publish was expected to fail")
 	}
 

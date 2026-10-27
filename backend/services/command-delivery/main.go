@@ -174,6 +174,12 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// The re-stamp pass reads windows from the same owner enqueue asked. Set here for the
 	// reason the line above is: the processor does not exist until this callback runs.
 	CommandDeliveryProcessor.WindowOpenings = Api.WindowOpenings
+	// Dispatch stamps the command's impact for an adapter that gates on it, from the same owner
+	// and for the same reason as the line above: the processor exists only inside this callback.
+	CommandDeliveryProcessor.CommandImpacts = Api.CommandImpacts
+	// Whether a Sparkplug command is dispatched or failed on sight. Set here for the reason the
+	// lines above are; the chart derives it from the rendered Sparkplug sources.
+	CommandDeliveryProcessor.SparkplugCommands = Configuration.SparkplugCommands
 
 	// The dispatch nudge: enqueueing a command hands its DEVICE to the processor's bounded
 	// queue, whose workers dispatch that device's backlog through the same gates the sweep
@@ -349,6 +355,7 @@ func wireDeviceManagementGates() {
 	windows := verify.NewWindowScheduler(client, url)
 	Api.DispatchScheduler = windows
 	Api.WindowOpenings = windows
+	Api.CommandImpacts = windows
 	log.Info().Str("deviceManagement", url).Msg("Command enqueue will be validated against device-management (device existence + published command vocabulary + payload schema, ADR-043), for single commands and for fleet batches; entity groups will be resolved there as batch targets; disruptive commands will be held for their device type's maintenance window.")
 }
 

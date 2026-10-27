@@ -198,6 +198,19 @@ type CommandDeliveryProcessor struct {
 	// configuration, not a misconfiguration.
 	Presence presence.Reader
 
+	// SparkplugCommands is the deployment's derived capability flag: some Sparkplug source
+	// publishes commands. FALSE (the zero value) is the behaviour that predates the feature,
+	// byte for byte: a Sparkplug command is failed as undeliverable and no routing header is
+	// stamped. Read by the sweep, the nudge and the hold reconciler alike, which must agree.
+	SparkplugCommands bool
+
+	// CommandImpacts resolves a command's impact for the impact stamp (see dispatchHeaders).
+	// MAY BE NIL, which leaves the stamp off; the adapter fails closed on an absent stamp.
+	CommandImpacts model.CommandImpactResolver
+	// impacts memoizes resolved impacts. Its zero value is ready to use, so a processor built
+	// by literal needs no setup.
+	impacts impactCache
+
 	// DisabledSource is where the disabled-device record is corrected from, at startup and every
 	// few minutes (see DisabledGate.go). MAY BE NIL, and nil is a degraded mode, not a clean
 	// one: the record then rests on the device-roster facts alone, so a device disabled before
@@ -559,13 +572,14 @@ func (cproc *CommandDeliveryProcessor) deliverTenantBatch(ctx context.Context, b
 		// That is the fail-open, and it carries three separate cases on one line: a
 		// device the projection has never seen, a device whose chunk of the read failed,
 		// and an instance with no gate wired at all. All three must deliver.
-		switch presence.Decide(states[cmd.DeviceToken]) {
+		state := states[cmd.DeviceToken]
+		switch presence.Decide(state, cproc.SparkplugCommands) {
 		case presence.Hold:
 			cproc.holdCommand(tenantCtx, cmd)
 		case presence.Undeliverable:
 			cproc.failUndeliverable(tenantCtx, cmd)
 		default:
-			if err := cproc.deliverCommand(ctx, cmd, path); err != nil {
+			if err := cproc.deliverCommand(ctx, cmd, path, routingOf(state.Known, state.Source)); err != nil {
 				log.Error().Err(err).Uint("command", cmd.ID).Str("device", cmd.DeviceToken).
 					Msg("unable to deliver command")
 			}
@@ -721,7 +735,7 @@ func (cproc *CommandDeliveryProcessor) tenantDeleted(tenant string) bool {
 // rather than being re-queued another twenty thousand times over its TTL. That decision is
 // the API's, not this function's — see releaseFailedClaim and model.ReleaseClaim.
 func (cproc *CommandDeliveryProcessor) deliverCommand(ctx context.Context, cmd *model.Command,
-	path dispatchPath) error {
+	path dispatchPath, route routing) error {
 	// Publish to the command's tenant subject and mark it SENT under the same
 	// tenant context.
 	tenantCtx := core.WithTenant(ctx, cmd.TenantId)
@@ -781,8 +795,9 @@ func (cproc *CommandDeliveryProcessor) deliverCommand(ctx context.Context, cmd *
 		return err
 	}
 	msg := messaging.Message{
-		Key:   []byte(cmd.Token),
-		Value: value,
+		Key:     []byte(cmd.Token),
+		Value:   value,
+		Headers: cproc.dispatchHeaders(tenantCtx, cmd, route),
 	}
 
 	if err := cproc.DeviceCommandsWriter.WriteToDevice(tenantCtx, cmd.DeviceToken, msg); err != nil {
