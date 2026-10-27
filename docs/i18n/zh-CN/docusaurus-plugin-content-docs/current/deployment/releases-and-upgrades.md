@@ -2117,9 +2117,29 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 
 无须操作。
 
-### v0.25.2 之后的版本 {#self-registration-upgrade}
+### v0.26.0：设备自行注册，前端迁移到 Traefik {#v0260-upgrade}
 
-本节写在它所描述的版本之前，因此标题中的版本号留待该版本来命名。它适用于从 `v0.25.2` 或更早版本升级。该版本带来[设备自注册](../guides/device-self-registration.md)，将安装从 ingress-nginx 迁移到 Traefik，并移除 MQTT 正文凭据的过渡性剥离。device-management 新增一个会自动运行的数据库迁移，[自动注册配置](#self-registration-profiles)下的 API 变更对任何用脚本管理自动注册配置的做法都是破坏性的。升级前需要采取行动的是：如果你手工设置了[正文凭据键](#after-v0252-body-credential)，要先删除它。如果你使用 ACME 证书签发者，它的求解器需要在稍后、[DNS 迁移之后](#after-v0252-front-end)调整。
+`v0.26.0` 是从 `v0.25.2` 起的原地升级：先对集群运行 `dcctl install`，再对每个实例运行一次 `dcctl upgrade`，方法见[v0.17.0 的说明](#v0170-upgrade)。请给 `dcctl install` 传入集群安装时使用的设置（如 `--kube-context`、`--ha`、`--compact` 和 `--database-node-selector`），以及新的 `--version`。如果从 `v0.25.1` 或 `v0.25.0` 升级，请同时阅读中间各版本的说明。
+
+```bash
+dcctl install local --version v0.26.0
+dcctl upgrade local devicechain --version v0.26.0 --dry-run
+dcctl upgrade local devicechain --version v0.26.0
+```
+
+在承载两个 default 配置档实例的集群上，请给这条 `dcctl install` 加上 `--max-connections 700`。
+
+该版本带来[设备自注册](../guides/device-self-registration.md)、面向 LoRaWAN 网络服务器和 webhook 的[入站集成](../guides/inbound-integrations.md)、面向 Sparkplug B 节点的可选命令下行、[双重身份验证](#after-v0252-mfa)，以及从 ingress-nginx 到 Traefik 的迁移，并移除 MQTT 正文凭据的剥离。需要采取的行动，按执行顺序如下：
+
+- **如果集群承载两个 default 配置档的实例，请在升级前先加大数据库连接预算。** 新集群获得的预算现在是 `700`；用旧默认值安装的集群保持 `600`，第二个实例的升级可能被拒绝。请重新运行安装该集群时使用的 `dcctl install`，并加上 `--max-connections 700`：例如 `dcctl install local --max-connections 700`，以及安装时使用的其他标志，如 `--kube-context`、`--ha`、`--compact` 和 `--database-node-selector`。参见[下文关于 update-management 的说明](#v0260-updates)和[连接预算](./bootstrap.md#connection-budget)。
+- **如果你设置过 `functionalAreas.event-sources.config.capture.bodyCredential`，请删除它，** 并从脚本中移除 `--mqtt-body-credential`。参见[MQTT 正文凭据的剥离被移除](#after-v0252-body-credential)。
+- **检查所有用脚本管理自动注册配置的做法，** 并轮换每个现有配置的密钥。参见[自动注册配置](#self-registration-profiles)。
+- **登录的 API 客户端必须处理 `MFA_CHALLENGE`。** 参见[双重身份验证](#after-v0252-mfa)。
+- **如果你把现有安装迁移到 Traefik，请在删除 Ingress 对象之前检查 Gateway 的证书。** 跨越签发者切换升级的实例，可能留下一份不是由实例自己的证书颁发机构签发的 `devicechain-tls-gateway` 证书。请检查其签发者，如果不是实例 CA，就重新签发；这项检查是[迁移指南](./ingress-cutover.md#ingress-cutover-steps)中的一个步骤，位于删除 Ingress 对象之前。
+- **监控栈升级到新的主版本线**（Prometheus 3）。参见[监控栈](#v0260-monitoring)。
+- **从此版本只能向前，不要回退。** device-management 中把自动注册配置和设备认领的密钥替换为摘要的迁移无法撤销，采集读取器也迁移到了新的持久消费者（参见[消息](#v0260-messaging)）。
+
+升级会运行六个迁移，每个在拥有它的服务首次启动时运行，被中断后都可以再次运行：`device-management` 中是设备自注册、录入密钥摘要、集成和设备别名；`user-management` 中是第二因素和自注册治理维度。启动时，`device-management` 还会把所有已存的自动注册配置密钥和设备认领密钥转换为带密钥的摘要；升级时处于打开状态的认领，仍可使用交给其持有人的密钥。
 
 在此之前，自动注册配置可以创建和编辑，但没有任何东西会读取它：没有设备能通过它注册。因此，没有任何昨天还能工作的东西会因为某个设备群在用它而停止工作。变化的是配置的创建方式以及它的要求。
 
@@ -2198,11 +2218,7 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 - **随 chart 到来的有两条新告警 `MfaIdentityLocked` 和 `MfaVerificationFailuresSustained`**，以及四个指标。在没有人设置第二因素时它们保持安静。锁定的补救办法是重置密码，而不是重置因素。参见[第二因素锁定](./observability.md#mfa-alerts)。
 - **节点需要正常的时间同步。** 代码在其 30 秒步长及前后各一个步长内有效。
 
-### 下一个版本：空中（OTA）更新进入 default 配置档 {#next-release-updates}
-
-:::note 草稿
-本节在版本发布前撰写，发布时会改用该版本的版本号。
-:::
+#### 空中（OTA）更新进入 default 配置档 {#v0260-updates}
 
 从该版本起，[空中（OTA）更新](../concepts/over-the-air-updates.md)属于 `default` 配置档，因此运行标准系统的实例在升级时会获得 `update-management` 服务。升级的其他方面没有变化。开始之前请检查以下几点：
 
@@ -2212,6 +2228,49 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 - **下载基址现在会被推导。**`updates.downloadBaseUrl` 过去在你设置之前一直未设置，因此没有设备能获得下载链接。现在省略它时，Chart 会根据实例的 Ingress 主机推导出 `<来源>/api/update-management`，Ingress TLS 开启时使用 `https`。你设置的值仍然优先，空字符串则关闭下载。没有 Ingress 的实例无从推导，控制台会提示下载未配置。
 - **在 `default` 实例上执行 `dcctl enable-area local <实例> update-management` 会报告它已启用。**`telemetry` 和 `ingest-only` 配置档的实例仍不包含它。
 - **能送达的设备与以前相同。**只有通过 MQTT 连接的设备才能接收托管更新。仅使用 HTTP 的设备、LwM2M 设备和 Sparkplug 设备无法送达；参见[哪些设备可以更新](../concepts/over-the-air-updates.md#transports)。
+
+#### 关于空中（OTA）更新的更多内容 {#v0260-updates-more}
+
+除加入 default 配置档外，更新功能在该版本中已经完成。一个[可更新的参考设备](../guides/building-an-updatable-device.md)（A/B 槽位、启动器和回滚）随 `examples/ota-device` 提供。四个新告警 `UpdateDownloadsNotConfigured`、`UpdateReportsMostlyRefused`、`UpdateRolloutStepsFailing` 和 `UpdateAttemptsGoingUnknown` 随图表到来，仅在拥有 `update-management` 的实例上生成；不使用更新的实例上它们保持静默。参见[告警运行手册](./observability.md)。
+
+#### Sparkplug B 命令（可选） {#v0260-sparkplug-commands}
+
+DeviceChain 现在可以向 Sparkplug 节点和设备发送命令：写入一个指标、要求节点重新发布出生消息（rebirth），或重启它，命令通过平台已与你的代理建立的 Host Application 会话发布。它默认关闭，按数据源通过图表值中的 `commands.enabled` 开启（`dcctl` 不接受 Sparkplug 数据源，所以这是 Helm 值设置）。Sparkplug 没有命令确认机制，因此命令在节点之后报告了所请求的值时才算确认，节点没有报告的命令以超时而不是失败结束。写入仅限于数据源列出的指标，重启需要显式设置，熔断器会暂停其代理拒绝发布的数据源。数据源的代理凭据需要有在节点和设备命令主题上发布的权限。三个新告警分别涵盖未确认的命令、已打开的熔断器和内部命令失败：`SparkplugCommandsUnconfirmed`、`SparkplugCommandBreakerOpen` 和 `SparkplugCommandResponsesFailing`。
+
+对于 Sparkplug 数据源保持 `commands.enabled` 关闭的安装，没有任何变化。某个数据源开启它时，图表会自行设置 `command-delivery` 的能力标志；如果 `command-delivery` 没有部署，或者你手工设置了 `functionalAreas.command-delivery.config.sparkplugCommands`，渲染会失败。
+
+#### 计算指标 {#v0260-calculated-metrics}
+
+[计算指标](../user-guide/calculated-metrics.md)仍然保持关闭：允许租户编写它们的层级上限默认仍为 `0`，该版本没有改变它。围绕它有两处变化。**把设备配置回滚到较早版本，现在与发布一样受同一个上限约束：** 上限在发布之后被调低的租户，不能再重新启用计算指标数量超出其层级允许值的版本；这样的回滚会以 `LIMIT_EXCEEDED` 被拒绝，读不到上限时同样被拒绝。回滚到不含计算指标的版本，从不依赖该上限。控制台现在会说明为什么计算指标不能组合它的输入。`hack/` 中提供了一个衡量计算指标成本的测试工具，供维护者使用，不属于安装的一部分。
+
+#### 入站集成与设备别名 {#v0260-integrations}
+
+[集成](../guides/inbound-integrations.md)是租户通过 HTTP 发送设备数据的已认证发送方，例如 LoRaWAN 网络服务器，类型有 ChirpStack v4、The Things Stack v3、通用 JSON 和通用二进制。图表在实例的前端上只发布一条路径，`POST /api/integrations/{tenant}/{integration}[/{messageType}]`，同时经过 Gateway 和 Ingress 对象。通用的设备摄取路由不会发布。租户默认最多可以有五个集成（层级键 `integrationsPerTenant`，取值 0 到 100）。被集成限定范围的设备类型不能删除。设备通过**别名**匹配，来自已不再持有该别名的设备的上行消息会被拒绝为 `IntegrationAliasMismatch`，因此移除或移动别名最迟五分钟生效，而不是一小时。控制台新增集成页面、连接代码片段、未注册设备和设备别名。
+
+#### 监控栈 {#v0260-monitoring}
+
+`dcctl install` 会升级监控栈（kube-prometheus-stack 65.1.1 到 92.13.1）：**Prometheus 2.54 到 3.15**、Grafana 11.2 到 13.2、Prometheus Operator 0.77 到 0.94。Prometheus、Alertmanager、Grafana、kube-state-metrics 和 operator 各重启一次。operator 的 CRD 由一个升级前作业更新，该作业会拉取 `docker.io/busybox:1.37.0` 和 `registry.k8s.io/kubectl`，无法访问这些镜像仓库的集群必须自行镜像。Grafana 保留其管理员登录、文件夹和看板。在本地集群上，Prometheus 的数据只保存在节点磁盘上，因此其历史会从空开始。对该 Prometheus 使用自己的 PromQL 的人应当知道它现在是 Prometheus 3：范围选择器左开，正则表达式中的 `.` 会匹配换行，经典直方图的 `le` 标签会被规范化。DeviceChain 自带的规则和看板加载时没有规则错误。
+
+图表附带的 Grafana 看板也已补全：摄取、消息、持久化与状态、投递和平台看板，一个链接到各看板的实例概览，以及概览上的缩容至 0 状态。
+
+#### 消息与命令行 {#v0260-messaging}
+
+- **设备采集读取器迁移到新的持久消费者** `<instance>_event-sources_device-events-capture_unfiltered`，它创建时不带代理过滤器。在带过滤器的消费者上落后的读取器会降到每秒约 2,000 个事件，并且无法追上。滚动升级期间，旧的 `event-sources` Pod 保留自己的消费者。回退到 `v0.25.x` 需要先删除新消费者（`nats consumer rm <instance>_device-events-capture <instance>_event-sources_device-events-capture_unfiltered`），否则它的采集读取器会一直处于重试状态；告警选择器和看板已同时匹配两个名称。
+- **REACT 现在按设备为键并发分发派生事件，** 过去由一个工作线程依次处理；挂起的设备不再让同一通道的其他设备损失投递尝试。无需配置。
+- **`dcctl bootstrap` 和 `dcctl upgrade` 新增 `--mqtt-fail-closed`**（以及 `--mqtt-fail-closed=false`），用于开启和关闭故障关闭的 MQTT 确认；省略时保留已记录的选择。此外，每次 `dcctl upgrade` 现在都会在更改任何内容之前，拒绝流预留超出代理文件存储上限的配置。
+- **OpenTofu 作用于 `dcctl` 解析出的集群。** 它的提供程序现在收到与客户端相同的 kubeconfig 和上下文；当两者指向不同集群，或设置了覆盖提供程序的环境变量（`KUBE_HOST`、`KUBE_TOKEN` 等）时，`dcctl` 拒绝运行。
+
+#### 请求设备证书的代理 {#v0260-broker}
+
+代理现在是 DeviceChain 自己构建的 `nats-server`，即 `dc-nats-server`：上游 `v2.15.1` 加一项设置，在启动时和每次重新加载时应用，使 MQTT 监听器请求（但不要求）TLS 客户端证书。使用令牌或密码的设备不受影响，目前还没有设备通过证书认证。该镜像与其他镜像一样经过签名，像上游镜像一样以 root 运行，并在 7778 端口导出 `dc_broker_mqtt_client_auth_request`、`dc_broker_mqtt_tls` 和 `dc_broker_info`。新告警 `BrokerMqttClientAuthLost` 在监听器不再请求证书，或代理 Pod 不是该构建时触发。**要回退到上游镜像，** 设置 `server_image_repository = "nats"` 和 `server_image_tag = "2.15.1-alpine"`；这会停用证书设备。请把 `dc-nats-server` 加入你镜像的镜像列表。
+
+`dcctl` 按版本推送的摘要（digest）固定代理，因此代理部分没有变化的版本不会重启它。从较旧的 `dcctl` 进行的第一次升级会把 Pod 模板从标签改为摘要，这相当于一次滚动重启。`dcctl version` 会输出一行 `broker:`，内容为摘要或 `by tag`。
+
+#### 已知问题 {#v0260-known-issues}
+
+- **代理滚动重启之后（包括这次升级），最后一个重启的服务器不领导任何流，** 发布确认的 p99 大约翻倍，直到领导权重新平衡。
+- **TLS 证书轮换会使代理重新加载，并断开大多数 MQTT 会话。** 设备会自行重连。
+- **入口控制器的滚动发布会在 28 到 40 秒内丢弃约 5% 的请求。** 请在安静的时段进行。
 
 ### v0.25.2：服务令牌签发离开公共端口 {#v0252-upgrade}
 

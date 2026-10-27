@@ -3660,9 +3660,32 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 
 Nothing needs doing.
 
-### The release after v0.25.2 {#self-registration-upgrade}
+### v0.26.0 — devices enrol themselves, and the front end moves to Traefik {#v0260-upgrade}
 
-This section is written ahead of the release it describes, so the version in its heading is left for that release to name. It applies to an upgrade from `v0.25.2` or earlier. The release ships [device self-registration](../guides/device-self-registration.md), moves the install from ingress-nginx to Traefik, and removes the MQTT body-credential strip. Device-management gains a database migration that runs on its own, and the API changes under [Provisioning profiles](#self-registration-profiles) are breaking for anything that scripts provisioning profiles. The thing that needs action before you upgrade is the [body-credential key](#after-v0252-body-credential), if you set it by hand. If you use an ACME certificate issuer, its solver needs a change later, [after DNS moves](#after-v0252-front-end).
+`v0.26.0` is an in-place upgrade from `v0.25.2`: `dcctl install` for the cluster, then one `dcctl upgrade` for
+each instance, as described [for v0.17.0](#v0170-upgrade). Give `dcctl install` the settings the cluster was
+installed with, such as `--kube-context`, `--ha`, `--compact` and `--database-node-selector`, as well as the new `--version`. Coming from
+`v0.25.1` or `v0.25.0`, read the notes of the releases in between too.
+
+```bash
+dcctl install local --version v0.26.0
+dcctl upgrade local devicechain --version v0.26.0 --dry-run
+dcctl upgrade local devicechain --version v0.26.0
+```
+
+On a cluster that holds two default-profile instances, add `--max-connections 700` to this `dcctl install`.
+
+The release ships [device self-registration](../guides/device-self-registration.md), [inbound integrations](../guides/inbound-integrations.md) for LoRaWAN network servers and webhooks, an opt-in command downlink for Sparkplug B nodes, [two-factor authentication](#after-v0252-mfa), and the move from ingress-nginx to Traefik. It removes the MQTT body-credential strip. What needs action, in the order to do it:
+
+- **A cluster that holds two default-profile instances needs a larger database connection budget before the upgrade.** The budget a new cluster gets is now `700`; a cluster installed with the earlier default keeps `600`, and the upgrade of the second instance can be refused. Re-run the `dcctl install` the cluster was installed with, adding `--max-connections 700`: for example `dcctl install local --max-connections 700`, plus the flags it was installed with, such as `--kube-context`, `--ha`, `--compact` and `--database-node-selector`. See [the update-management note below](#v0260-updates) and [the connection budget](./bootstrap.md#connection-budget).
+- **Delete `functionalAreas.event-sources.config.capture.bodyCredential` if you set it,** and remove `--mqtt-body-credential` from scripts. See [the body-credential strip is removed](#after-v0252-body-credential).
+- **Check anything that scripts provisioning profiles,** and rotate each existing profile's secret. See [Provisioning profiles](#self-registration-profiles).
+- **API clients that sign in must handle `MFA_CHALLENGE`.** See [Two-factor authentication](#after-v0252-mfa).
+- **If you move an existing install to Traefik, check the Gateway's certificate before you drop the Ingress objects.** An instance upgraded across the issuer switch can be left with a `devicechain-tls-gateway` certificate that the instance's own certificate authority did not issue. Check its issuer and reissue it if it is not the instance CA; the check is a step of [the cutover guide](./ingress-cutover.md#ingress-cutover-steps), before the Ingress objects are dropped.
+- **The monitoring stack is upgraded to a new major line** (Prometheus 3). See [The monitoring stack](#v0260-monitoring).
+- **Roll forward from this release, not back.** The device-management migration that replaces provisioning-profile and device-claim secrets with digests cannot be undone, and the capture reader moves to a new durable consumer (see [Messaging](#v0260-messaging)).
+
+Six migrations run, one per first start of the service that owns it, and each can be run again if it is interrupted: in `device-management`, device self-registration, enrolment-secret digests, integrations and device aliases; in `user-management`, the second factor and the self-registration governance dimension. At start, `device-management` also converts every stored provisioning-profile secret and device-claim secret to a keyed digest; a claim that is open at the upgrade keeps working with the secret its owner was given.
 
 Until now a provisioning profile could be created and edited, but nothing read it: no device could register through one. So nothing that worked yesterday stops working because a fleet used it. What changes is how profiles are made and what they need.
 
@@ -3741,11 +3764,7 @@ An account can now turn on [two-factor authentication](../guides/two-factor-auth
 - **Two new alerts, `MfaIdentityLocked` and `MfaVerificationFailuresSustained`,** and four metrics arrive with the chart. They are quiet while nobody has a second factor. The remedy for a lock is to reset the password, not the factor. See [Second-factor lockouts](./observability.md#mfa-alerts).
 - **Nodes need working time synchronisation.** A code is valid for its 30-second step and one step either side.
 
-### The next release — over-the-air updates join the default profile {#next-release-updates}
-
-:::note Draft
-This section is written ahead of the release and takes that release's number when it is cut.
-:::
+#### Over-the-air updates join the default profile {#v0260-updates}
 
 [Over-the-air updates](../concepts/over-the-air-updates.md) are part of the `default` profile from this
 release, so an instance that runs the standard system gains the `update-management` service when it
@@ -3755,7 +3774,7 @@ is upgraded. Nothing else about the upgrade changes. Check these before you star
   more service that uses the database, so one default-profile instance now reserves 320 connections,
   up from 280. The budget a new cluster gets is now `700`, which admits two default-profile instances.
   **A cluster installed with the earlier default of `600` keeps it**, and if it holds two default-profile
-  instances the upgrade of the second can be refused. Raise the budget before upgrading by re-running the `dcctl install` the cluster was installed with, adding `--max-connections 700`: for example `dcctl install local --max-connections 700`, plus `--kube-context`, `--ha` or `--compact` if the cluster was installed with them. See
+  instances the upgrade of the second can be refused. Raise the budget before upgrading by re-running the `dcctl install` the cluster was installed with, adding `--max-connections 700`: for example `dcctl install local --max-connections 700`, plus the flags it was installed with, such as `--kube-context`, `--ha`, `--compact` and `--database-node-selector`. See
   [the connection budget](./bootstrap.md#connection-budget), which also says what raising it costs: the database's instances restart one at a time.
 - **If your object store is a `ReadWriteOnce` volume on a cluster you pointed `dcctl` at, the service runs
   without a store.** Such a volume can be mounted by one service and the others already hold it, so
@@ -3780,6 +3799,49 @@ is upgraded. Nothing else about the upgrade changes. Check these before you star
 - **The same devices are reached as before.** Only a device connected over MQTT can take a managed update.
   HTTP-only, LwM2M and Sparkplug devices are not reached; see
   [Which devices can be updated](../concepts/over-the-air-updates.md#transports).
+
+#### More on over-the-air updates {#v0260-updates-more}
+
+Updates are finished for this release beyond joining the default profile. A [reference updatable device](../guides/building-an-updatable-device.md) (A/B slots, a launcher and rollback) ships in `examples/ota-device`. Four new alerts, `UpdateDownloadsNotConfigured`, `UpdateReportsMostlyRefused`, `UpdateRolloutStepsFailing` and `UpdateAttemptsGoingUnknown`, arrive with the chart and render only on an instance that has `update-management`; an instance that does not use updates stays quiet. See [the alert runbook](./observability.md).
+
+#### Sparkplug B commands (opt-in) {#v0260-sparkplug-commands}
+
+DeviceChain can now send commands to Sparkplug nodes and devices: write a metric, ask a node to rebirth, or reboot it, published on the Host Application session the platform already holds with your broker. It is off by default and is enabled per source with `commands.enabled` in the chart values (`dcctl` does not take Sparkplug sources, so this is a Helm values setting). Sparkplug has no command acknowledgement, so a command is confirmed when the node later reports the requested value, and one the node does not report ends as a timeout, not a failure. Writes are limited to the metrics a source lists, reboots need an explicit setting, and a circuit breaker pauses a source whose broker refuses the publish. The source's broker credential needs permission to publish on the node and device command topics. Three new alerts cover unconfirmed commands, an open breaker and internal command failures: `SparkplugCommandsUnconfirmed`, `SparkplugCommandBreakerOpen` and `SparkplugCommandResponsesFailing`.
+
+Nothing changes for an install whose Sparkplug sources leave `commands.enabled` off. When a source turns it on, the chart sets the capability flag of `command-delivery` itself; the render fails if `command-delivery` is not deployed, or if you set `functionalAreas.command-delivery.config.sparkplugCommands` by hand.
+
+#### Calculated metrics {#v0260-calculated-metrics}
+
+[Calculated metrics](../user-guide/calculated-metrics.md) stay off: the tier ceiling that allows a tenant to author them is still `0` by default, and this release does not change it. Two things change around it. **Rolling a device profile back to an earlier version now meets the same ceiling that publishing does:** a tenant whose ceiling was lowered after a publish can no longer reactivate a version that carries more calculated metrics than the tier allows; the rollback is refused as `LIMIT_EXCEEDED`, and it is also refused when the ceiling cannot be read. A rollback to a version without calculated metrics never depends on the ceiling. The console now says why a calculated metric may not combine its inputs. A measurement harness for the cost of calculated metrics ships in `hack/`; it is for maintainers and is not part of an install.
+
+#### Inbound integrations and device aliases {#v0260-integrations}
+
+An [integration](../guides/inbound-integrations.md) is a tenant's authenticated sender of device data over HTTP, such as a LoRaWAN network server, with ChirpStack v4, The Things Stack v3, generic JSON and generic binary types. The chart publishes exactly one path for it on the instance's front end, `POST /api/integrations/{tenant}/{integration}[/{messageType}]`, through both the Gateway and the Ingress objects. The general device-ingest route is not published. A tenant can hold five integrations by default (the `integrationsPerTenant` tier key, 0 to 100). A device type that an integration is scoped to cannot be deleted. Devices are matched by **aliases**, and an uplink for a device that no longer holds the alias it arrived under is refused as `IntegrationAliasMismatch`, so removing or moving an alias takes effect within five minutes at most, never an hour. The console gains an Integrations page, connect snippets, unregistered devices and device aliases.
+
+#### The monitoring stack {#v0260-monitoring}
+
+`dcctl install` upgrades the monitoring stack (kube-prometheus-stack 65.1.1 to 92.13.1): **Prometheus 2.54 to 3.15**, Grafana 11.2 to 13.2 and the Prometheus Operator 0.77 to 0.94. Prometheus, Alertmanager, Grafana, kube-state-metrics and the operator each restart once. The operator's CRDs are updated by a pre-upgrade job that pulls `docker.io/busybox:1.37.0` and `registry.k8s.io/kubectl`, so a cluster with no route to those registries must mirror them. Grafana keeps its admin login, folders and boards. On a local cluster Prometheus keeps its data on the node's disk only, so its history restarts empty. Anyone with their own PromQL against this Prometheus should know it is Prometheus 3: range selectors are left-open, `.` in a regular expression matches a newline, and classic-histogram `le` labels are normalised. DeviceChain's own rules and boards load with no rule errors.
+
+The chart's Grafana boards are filled in: Ingest, Messaging, Persistence and state, Delivery and Platform boards, an Instance overview that links to each, and a scaled-to-0 state on the overview.
+
+#### Messaging and the command line {#v0260-messaging}
+
+- **The device capture reader moves to a new durable consumer,** `<instance>_event-sources_device-events-capture_unfiltered`, created without a broker filter. A reader behind on a filtered consumer fell to about 2,000 events a second and could not catch up. During the roll an older `event-sources` pod keeps its own consumer. Going back to `v0.25.x` needs the new consumer deleted first (`nats consumer rm <instance>_device-events-capture <instance>_event-sources_device-events-capture_unfiltered`), or its capture reader stays in retry; the alert selectors and boards already match both names.
+- **REACT dispatches derived events concurrently, keyed by device,** where one worker did it in turn; a hung device no longer costs the others in its lane their delivery attempts. Nothing is configured.
+- **`dcctl bootstrap` and `dcctl upgrade` gain `--mqtt-fail-closed`** (and `--mqtt-fail-closed=false`) to turn the fail-closed MQTT acknowledgement on and off; omitting it keeps the recorded choice. Every `dcctl upgrade` now also refuses, before changing anything, a configuration whose stream reservation does not fit the broker's file-store ceiling.
+- **OpenTofu acts on the cluster `dcctl` resolved.** Its provider now receives the same kubeconfig and context as the client, and `dcctl` refuses to run when they reach different clusters or when a provider environment override (`KUBE_HOST`, `KUBE_TOKEN` and similar) is set.
+
+#### A broker that requests device certificates {#v0260-broker}
+
+The broker is now DeviceChain's own `nats-server` build, `dc-nats-server`: upstream `v2.15.1` plus one setting, applied at start and on every reload, so the MQTT listener requests (but does not require) a TLS client certificate. Token and password devices are unaffected, and no device authenticates by certificate yet. The image is signed like the others, runs as root as the upstream image does, and exports `dc_broker_mqtt_client_auth_request`, `dc_broker_mqtt_tls` and `dc_broker_info` on port 7778. The new alert `BrokerMqttClientAuthLost` fires when a listener stops requesting certificates, or when a broker pod is not this build. **To go back to the upstream image,** set `server_image_repository = "nats"` and `server_image_tag = "2.15.1-alpine"`; that disables certificate devices. Add `dc-nats-server` to the images you mirror.
+
+`dcctl` pins the broker by the digest the release pushed, so a release that changes nothing under the broker does not restart it. The first upgrade from an older `dcctl` moves the pod template from the tag to the digest, which is one roll. `dcctl version` prints a `broker:` line, the digest or `by tag`.
+
+#### Known issues {#v0260-known-issues}
+
+- **After a rolling restart of the broker, including this upgrade, the last server restarted leads no streams,** and publish-acknowledgement p99 roughly doubles until leadership rebalances.
+- **A TLS certificate rotation makes the broker reload and disconnects most MQTT sessions.** Devices reconnect on their own.
+- **An ingress controller rollout drops about 5% of requests for 28 to 40 seconds.** Run it in a quiet window.
 
 ### v0.25.2 — the service-token mint leaves the public port {#v0252-upgrade}
 
