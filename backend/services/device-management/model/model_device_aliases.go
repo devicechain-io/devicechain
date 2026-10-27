@@ -140,6 +140,10 @@ func integrationIdentityScheme(identity string) string {
 	return ""
 }
 
+// AliasScheme is the alias scheme this integration resolves devices by, "" for an identity this
+// build does not know.
+func (i *Integration) AliasScheme() string { return integrationIdentityScheme(i.Identity) }
+
 // IntegrationUnregisteredDevice is a sender-named device the tenant has no device for, as an
 // integration saw it: one row per (integration, scheme, value), with the first and last time
 // it was seen and how many times. It is what the console offers to turn into a device with

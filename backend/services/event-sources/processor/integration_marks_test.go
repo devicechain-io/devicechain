@@ -33,7 +33,7 @@ func markFields(t *testing.T) []string {
 			out = append(out, typ.Field(i).Name)
 		}
 	}
-	require.ElementsMatch(t, []string{"Integration", "SealedIntegrationToken"}, out,
+	require.ElementsMatch(t, []string{"Integration", "SealedIntegrationToken", "IntegrationIdentifier"}, out,
 		"the event's integration fields changed: decide whether the new one is an authority marker, and update this guard")
 	return out
 }
@@ -85,7 +85,7 @@ func TestADeviceBodyThatNamesIntegrationMarksSetsNone(t *testing.T) {
 		"upper camel": `{"device":"sensor-001","eventType":"Measurement","Integration":"cs","SealedIntegrationToken":"AAAA",` +
 			`"payload":{"entries":[{"measurements":{"temp":"21.5"}}]}}`,
 		"after the payload": `{"device":"sensor-001","eventType":"Measurement","payload":{"entries":[{"measurements":{"temp":"21.5"}}]},` +
-			`"integration":"cs","sealedIntegrationToken":"AAAA"}`,
+			`"integration":"cs","sealedIntegrationToken":"AAAA","integrationIdentifier":"70B3D57ED0000001"}`,
 		"inside the payload": `{"device":"sensor-001","eventType":"Measurement","payload":{"integration":"cs",` +
 			`"entries":[{"integration":"cs","measurements":{"temp":"21.5"}}]}}`,
 		"with a credential, forcing the reference path": `{"device":"sensor-001","eventType":"Measurement","integration":"cs",` +
@@ -148,9 +148,9 @@ func TestNothingOutsideTheIntegrationRouteWritesTheIntegrationMarks(t *testing.T
 
 // integrationMarkClear is a write that REMOVES authority (nil or the empty string), which grants
 // nothing: the copy that strips what a device presented, and the route's own clamp, do it.
-var integrationMarkClear = regexp.MustCompile(`\.(Integration|SealedIntegrationToken)\s*=\s*(nil|"")\s*$`)
+var integrationMarkClear = regexp.MustCompile(`\.(Integration|SealedIntegrationToken|IntegrationIdentifier)\s*=\s*(nil|"")\s*$`)
 
-var integrationMarkWrite = regexp.MustCompile(`(\b(Integration|SealedIntegrationToken)\s*:[^:=]|\.(Integration|SealedIntegrationToken)\s*=[^=])`)
+var integrationMarkWrite = regexp.MustCompile(`(\b(Integration|SealedIntegrationToken|IntegrationIdentifier)\s*:[^:=]|\.(Integration|SealedIntegrationToken|IntegrationIdentifier)\s*=[^=])`)
 
 // writesIntegrationMark reports whether Go source assigns either field, by struct literal or by
 // selector assignment. Comment lines are not code.
@@ -178,6 +178,8 @@ func TestTheWorkspaceGuardSeesEveryFormOfWrite(t *testing.T) {
 		`ev := &model.UnresolvedEvent{Integration: "cs"}`,
 		"x := &UnresolvedEvent{\n\tSealedIntegrationToken: tok,\n}",
 		`Integration:            event.Integration,`,
+		`e.IntegrationIdentifier = "70B3D57ED0000001"`,
+		`ev := &model.UnresolvedEvent{IntegrationIdentifier: id}`,
 	} {
 		require.True(t, writesIntegrationMark(writes), writes)
 	}
@@ -189,6 +191,8 @@ func TestTheWorkspaceGuardSeesEveryFormOfWrite(t *testing.T) {
 		`x.Integration != ""`,
 		`unrez.SealedIntegrationToken = nil`,
 		`event.Integration = ""`,
+		`event.IntegrationIdentifier = ""`,
+		`use(event.IntegrationIdentifier)`,
 	} {
 		require.False(t, writesIntegrationMark(reads), reads)
 	}

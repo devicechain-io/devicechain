@@ -355,6 +355,8 @@ func (es *HttpEventSource) handleIntegration(w http.ResponseWriter, r *http.Requ
 		event    *model.UnresolvedEvent
 		payload  *model.UnresolvedMeasurementsPayload
 		readings int
+		// identifier is the sender's name the device was resolved from; the resolver re-checks it.
+		identifier string
 	}
 	var out []outgoing
 	seen := make(map[string]struct{}, len(result.Uplinks))
@@ -446,6 +448,7 @@ func (es *HttpEventSource) handleIntegration(w http.ResponseWriter, r *http.Requ
 				// this, and the device's transport is read from it (commands to it are refused).
 				Source: source,
 			},
+			identifier: up.Identifier,
 		})
 	}
 
@@ -472,6 +475,7 @@ func (es *HttpEventSource) handleIntegration(w http.ResponseWriter, r *http.Requ
 			// Marked as the integration's, and only here: the resolver opens the sealed token.
 			o.event.Integration = slug
 			o.event.SealedIntegrationToken = sealed
+			o.event.IntegrationIdentifier = o.identifier
 			if err := rt.Publish(es.Id, tenant, o.event, o.payload, tenant+":"+*o.event.AltId); err != nil {
 				if errors.Is(err, messaging.ErrStreamBackpressure) {
 					m.request(typ, ResultBackpressure)
@@ -495,4 +499,5 @@ func (es *HttpEventSource) handleIntegration(w http.ResponseWriter, r *http.Requ
 func ClearIntegrationMark(event *model.UnresolvedEvent) {
 	event.Integration = ""
 	event.SealedIntegrationToken = nil
+	event.IntegrationIdentifier = ""
 }

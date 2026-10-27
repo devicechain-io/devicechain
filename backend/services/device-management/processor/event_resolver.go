@@ -82,6 +82,10 @@ type EventResolver struct {
 	// for the pool (initializeEventResolvers sets it), label-free; nil in tests that do not
 	// look at it.
 	deviceDisabled prometheus.Counter
+	// integrationAliasMismatch counts integration events refused because their device no longer
+	// holds the alias they were resolved from. Pool-wide, label-free; nil in tests that do not
+	// look at it.
+	integrationAliasMismatch prometheus.Counter
 	// gateway is what a refused gateway publish does besides being dead-lettered: count it, log
 	// it and tell the gateway. SHARED across the pool (initializeEventResolvers replaces the
 	// private one NewEventResolver gives); see gateway_refusal.go.
@@ -1425,7 +1429,10 @@ func (rez *EventResolver) Process(ctx context.Context) {
 					rez.gateway.refused(tenant, event, err)
 					rez.Failed(unresolved, tenant, reason, *event, err)
 					done(core.ResultFailed)
-				} else if disposition == messaging.Exhausted || errors.Is(err, eventtime.ErrTooOld) {
+				} else if disposition == messaging.Exhausted || errors.Is(err, eventtime.ErrTooOld) ||
+					errors.Is(err, ErrIntegrationAliasMismatch) {
+					// An alias mismatch is dead-lettered on its first delivery, like a refusal for age:
+					// a redelivery reads the same alias row and answers the same.
 					rez.Failed(unresolved, tenant, reason, *event, err)
 					done(core.ResultFailed)
 				} else {

@@ -110,6 +110,16 @@ type UnresolvedEvent struct {
 	// tenant and to the integration token). The stream never carries it as presented. nil on
 	// every event that is not an integration's.
 	SealedIntegrationToken []byte
+	// IntegrationIdentifier is the sender's own name for the device (a DevEUI, a TTS device id, a
+	// webhook id) in its canonical spelling, as the route resolved it to Device. The resolver
+	// requires Device to hold an alias under the integration's scheme with exactly this value at
+	// the moment it resolves the event, so the route's cached answer (a device that has since
+	// lost or handed on the alias) can never store the event on the old device. Empty on every
+	// event that is not an integration's; an integration event without it is refused.
+	//
+	// Same trust rule as the two fields above: no decoder has a field for it, and only the
+	// integration route sets it.
+	IntegrationIdentifier string
 }
 
 // WithoutPresentedCredential returns a copy of the event with the credential the

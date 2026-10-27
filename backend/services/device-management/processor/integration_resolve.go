@@ -46,6 +46,18 @@ import (
 // transport mark or a device credential on an integration event means a producer is confused or
 // forging, and neither is a case for picking a winner.
 
+// ErrIntegrationAliasMismatch is the refusal of an integration event whose device no longer holds
+// the alias the event was resolved from (removed, or moved to another device). Terminal on the
+// first delivery: a redelivery reads the same row, and the event is dead-lettered with its
+// payload so it can be replayed once the alias is where the operator wants it.
+var ErrIntegrationAliasMismatch = errors.New("the device no longer holds the integration's alias")
+
+func (rez *EventResolver) countAliasMismatch() {
+	if rez.integrationAliasMismatch != nil {
+		rez.integrationAliasMismatch.Inc()
+	}
+}
+
 // errIntegrationEvent builds the refusal text of an integration event. It names the integration
 // (a slug, not a secret) and never the token.
 func errIntegrationEvent(integration, why string) error {
@@ -105,6 +117,28 @@ func (rez *EventResolver) resolveIntegrationEvent(ctx context.Context, unrez *es
 	}
 	if !integration.ScopeHas(matches[0].DeviceTypeId) {
 		return nil, unauthenticated, errIntegrationEvent(unrez.Integration, "the device's type is not in the integration's scope")
+	}
+	// 🔴 THE DEVICE MUST STILL HOLD THE ALIAS THE ROUTE RESOLVED IT FROM. The route remembers a
+	// resolved device for minutes, so an alias an operator has since removed, or moved to another
+	// device, still names the OLD device in events already published and in uplinks the cache
+	// still answers. Token and scope say nothing about that; only the alias row does, and it is
+	// read as it is now. A mismatch is refused, never stored on the device: those readings
+	// belong to whichever device holds the identifier today (or to none).
+	scheme := integration.AliasScheme()
+	if scheme == "" || unrez.IntegrationIdentifier == "" {
+		rez.countAliasMismatch()
+		return nil, uint(resolvedevent.FailureReason_IntegrationAliasMismatch),
+			fmt.Errorf("%w: integration %q: the event does not say which identifier it was resolved from", ErrIntegrationAliasMismatch, unrez.Integration)
+	}
+	held, err := rez.Api.DeviceHoldsAlias(ctx, matches[0].ID, scheme, unrez.IntegrationIdentifier)
+	if err != nil {
+		return nil, uint(resolvedevent.FailureReason_ApiCallFailed), err
+	}
+	if !held {
+		rez.countAliasMismatch()
+		return nil, uint(resolvedevent.FailureReason_IntegrationAliasMismatch),
+			fmt.Errorf("%w: integration %q: device %q no longer holds the %s alias the event was resolved from",
+				ErrIntegrationAliasMismatch, unrez.Integration, matches[0].Token, scheme)
 	}
 	return matches[0], 0, nil
 }

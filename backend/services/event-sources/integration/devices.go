@@ -11,6 +11,18 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
+// DefaultPositiveTTL is how long a resolved device is remembered. It is the bound on how long
+// uplinks for an identifier keep going to a device that has since lost the alias (removed, or moved
+// to another device) as far as THIS replica's route is concerned. It does not decide where an
+// event lands: device-management re-checks, at the event, that the device still holds the alias
+// the event was resolved from, and refuses the event if it does not. So a stale entry costs
+// refused (dead-lettered) uplinks until it expires, never data on the wrong device.
+//
+// Event-sources cannot see device-management's per-event refusal (the event is published to a
+// stream and resolved asynchronously, and a refusal is recorded there), so there is no feedback
+// to evict an entry on; the TTL alone bounds the window.
+const DefaultPositiveTTL = 5 * time.Minute
+
 // DeviceConfig tunes the device lookup cache. A zero field takes its default.
 type DeviceConfig struct {
 	// Positive is how long a resolved device is remembered.
@@ -25,7 +37,7 @@ type DeviceConfig struct {
 
 func (c DeviceConfig) withDefaults() DeviceConfig {
 	if c.Positive <= 0 {
-		c.Positive = time.Hour
+		c.Positive = DefaultPositiveTTL
 	}
 	if c.Negative <= 0 {
 		c.Negative = time.Minute
@@ -43,9 +55,10 @@ func (c DeviceConfig) withDefaults() DeviceConfig {
 // the answer.
 //
 // 🔴 THE CACHE IS NOT AN AUTHORITY. Device-management re-checks the integration's token, that it
-// is enabled and that the device's type is in its scope when the event reaches its resolver, so
-// a device moved out of scope, a rotated token or a disabled integration is refused at the next
-// event whatever this holds. What the cache saves is the round trip, and what it bounds is the
+// is enabled, that the device's type is in its scope and that the device still holds the alias
+// the event was resolved from, when the event reaches its resolver, so a device moved out of
+// scope, a rotated token, a disabled integration or an alias removed or moved to another device
+// is refused at the next event whatever this holds. What the cache saves is the round trip, and what it bounds is the
 // sighting write for an unregistered device.
 //
 // Only RESOLVED and UNREGISTERED are remembered. A DISABLED or UNAUTHENTICATED answer is about

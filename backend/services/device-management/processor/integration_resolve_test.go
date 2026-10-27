@@ -6,17 +6,25 @@ package processor
 import (
 	"testing"
 
+	"context"
 	"github.com/devicechain-io/dc-device-management/config"
 	"github.com/devicechain-io/dc-device-management/model"
 	dmtest "github.com/devicechain-io/dc-device-management/test"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	esproto "github.com/devicechain-io/dc-event-sources/proto"
 	"github.com/devicechain-io/dc-microservice/credential"
 	"github.com/devicechain-io/dc-microservice/eventtype"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
+	"github.com/devicechain-io/dc-microservice/messaging"
 	putest "github.com/devicechain-io/dc-microservice/rdb/partialupdatetest"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/devicechain-io/dc-microservice/transport"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"time"
 )
 
 // An inbound integration's event is trusted only after the platform has opened the sealed token
@@ -24,15 +32,29 @@ import (
 // the device's type in its scope. Each refusal below is paired with the control that shows the
 // same event resolving when the one thing is right.
 
+// rigEUI is the DevEUI the rig's integration resolves to the device "dev".
+const rigEUI = "70B3D57ED0000001"
+
 type integrationRig struct {
 	*resolveRig
 	token string // the integration's issued bearer token
 }
 
+// setAliases REPLACES a device's alias set, as an operator's device edit does.
+func (r *integrationRig) setAliases(device string, euis ...string) {
+	r.t.Helper()
+	in := make([]model.DeviceAliasInput, 0, len(euis))
+	for _, e := range euis {
+		in = append(in, model.DeviceAliasInput{Scheme: "lorawan.deveui", Value: e})
+	}
+	_, err := r.api.UpdateDevice(r.ctx, device, &model.DeviceUpdateRequest{Aliases: model.OptionalDeviceAliasListOf(in)})
+	require.NoError(r.t, err)
+}
+
 func newIntegrationRig(t *testing.T) *integrationRig {
 	t.Helper()
 	tables := append(append([]any{}, resolveRigTables...),
-		&model.Integration{}, &model.IntegrationDeviceType{}, &model.DeviceAlias{})
+		&model.Integration{}, &model.IntegrationDeviceType{}, &model.DeviceAlias{}, &model.IntegrationUnregisteredDevice{})
 	rig := buildResolveRig(t, putest.NewSQLiteDB(t, tables...), false, 0, nil)
 	keys := dmtest.EnrollmentKeys()
 	rig.api.EnrollmentKeys = keys
@@ -51,7 +73,16 @@ func newIntegrationRig(t *testing.T) *integrationRig {
 	created, err := rig.api.CreateIntegration(rig.ctx, &model.IntegrationCreateRequest{
 		Token: "chirp-1", Type: string(model.IntegrationChirpStackV4), Enabled: true, DeviceTypeTokens: []string{"dt"}})
 	require.NoError(t, err)
-	return &integrationRig{resolveRig: rig, token: created.IssuedToken}
+	r := &integrationRig{resolveRig: rig, token: created.IssuedToken}
+	// "dev" holds the alias the events below are resolved from; "dev-b" is a second in-scope
+	// device that holds none.
+	found, err := rig.api.DevicesByToken(rig.ctx, []string{"dev"})
+	require.NoError(t, err)
+	devB := &model.Device{DeviceTypeId: found[0].DeviceTypeId}
+	devB.Token = "dev-b"
+	mustCreate(t, rig.db.WithContext(rig.ctx), devB, "second in-scope device")
+	r.setAliases("dev", rigEUI)
+	return r
 }
 
 func (r *integrationRig) resolver(mode string) *EventResolver {
@@ -66,6 +97,7 @@ func (r *integrationRig) event(device, integration, token string) *esmodel.Unres
 	e := tempEvent("21")
 	e.Device = device
 	e.Integration = integration
+	e.IntegrationIdentifier = rigEUI
 	e.Source = transport.Qualify(transport.Integration, integration)
 	sealed, err := testSecretTransit(r.t).SealToken("acme", credential.IntegrationSealKind(integration), token)
 	require.NoError(r.t, err)
@@ -198,4 +230,131 @@ func TestARevokedIntegrationIsRefusedAtTheNextEvent(t *testing.T) {
 	require.NoError(t, err)
 	_ = devices
 	rig.refused(rez, rig.event("dev", "chirp-1", rotated.IssuedToken), resolvedevent.FailureReason_Unauthenticated, "moved out of scope")
+}
+
+// THE ROUTE'S CACHE CAN OUTLIVE AN ALIAS. event-sources remembers a resolved device for minutes,
+// so an uplink (or an event already on the stream) can name a device that no longer holds the
+// identifier it was resolved from. The resolver reads the alias row as it is now: such an event
+// is refused with its own reason, counted, and never stored on the old device.
+func TestAnIntegrationEventIsRefusedWhenItsDeviceNoLongerHoldsTheAlias(t *testing.T) {
+	rig := newIntegrationRig(t)
+	rez := rig.resolver(config.AuthModeRequired)
+	counter := prometheus.NewCounter(prometheus.CounterOpts{Name: "alias_mismatch_test"})
+	rez.integrationAliasMismatch = counter
+	mismatch := resolvedevent.FailureReason_IntegrationAliasMismatch
+
+	// Control: the alias is on "dev", and an event resolved from it lands there.
+	results, reason, err := rez.ResolveEvent(rig.ctx, rig.event("dev", "chirp-1", rig.token))
+	require.NoError(t, err)
+	require.Zero(t, reason)
+	require.Len(t, results, 1)
+	require.Equal(t, "dev", results[0].Device.Token)
+	require.Zero(t, testutil.ToFloat64(counter))
+
+	// The operator MOVES the alias from "dev" to "dev-b". An event still naming "dev" (the route's
+	// cached answer) is refused; the same identifier, once the route re-resolves, lands on "dev-b".
+	rig.setAliases("dev")
+	rig.setAliases("dev-b", rigEUI)
+	stale := rig.event("dev", "chirp-1", rig.token)
+	rig.refused(rez, stale, mismatch, "moved to another device")
+	_, _, err = rez.ResolveEvent(rig.ctx, stale)
+	require.ErrorIs(t, err, ErrIntegrationAliasMismatch, "the loop dead-letters on this error on the first delivery")
+	require.EqualValues(t, 2, testutil.ToFloat64(counter))
+	results, reason, err = rez.ResolveEvent(rig.ctx, rig.event("dev-b", "chirp-1", rig.token))
+	require.NoError(t, err)
+	require.Zero(t, reason)
+	require.Equal(t, "dev-b", results[0].Device.Token)
+
+	// The operator REMOVES the alias: nothing holds it, so both are refused.
+	rig.setAliases("dev-b")
+	rig.refused(rez, rig.event("dev-b", "chirp-1", rig.token), mismatch, "removed")
+	rig.refused(rez, rig.event("dev", "chirp-1", rig.token), mismatch, "removed, old device")
+
+	// An alias the device holds under another value is not the one the event came from; a
+	// different spelling of the same value is.
+	rig.setAliases("dev", "70B3D57ED0000002")
+	rig.refused(rez, rig.event("dev", "chirp-1", rig.token), mismatch, "holds a different DevEUI")
+	rig.setAliases("dev", rigEUI)
+	lower := rig.event("dev", "chirp-1", rig.token)
+	lower.IntegrationIdentifier = "70b3d57ed0000001"
+	_, _, err = rez.ResolveEvent(rig.ctx, lower)
+	require.NoError(t, err, "the comparison is on the canonical value")
+
+	// An event that does not say which identifier it came from cannot be checked, so it is refused.
+	none := rig.event("dev", "chirp-1", rig.token)
+	none.IntegrationIdentifier = ""
+	rig.refused(rez, none, mismatch, "no identifier")
+}
+
+// THROUGH THE FRONT DOOR: the wire (the identifier survives the stream's protobuf hop), the
+// Process loop (a mismatch is dead-lettered on its FIRST delivery, with its own reason and
+// payload, and counted), and the control that the same event lands while the alias is held.
+func TestAnAliasMismatchIsDeadLetteredOnTheFirstDeliveryAndCounted(t *testing.T) {
+	rig := newIntegrationRig(t)
+	counter := prometheus.NewCounter(prometheus.CounterOpts{Name: "test_integration_alias_mismatch_total"})
+	rig.rez = rig.resolver(config.AuthModeRequired)
+	rig.rez.integrationAliasMismatch = counter
+
+	resolved, failed, _ := processOne(rig.resolveRig, rig.event("dev", "chirp-1", rig.token), 1)
+	require.Equal(t, 1, resolved, "control: the alias is held, the event is stored")
+	require.Empty(t, failed)
+	require.Zero(t, testutil.ToFloat64(counter))
+
+	rig.setAliases("dev")
+	rig.setAliases("dev-b", rigEUI)
+	resolved, failed, acked := processOne(rig.resolveRig, rig.event("dev", "chirp-1", rig.token), 1)
+	require.Zero(t, resolved, "an event for an alias the device no longer holds was stored")
+	require.Len(t, failed, 1, "dead-lettered on the first delivery, not retried")
+	require.Equal(t, 1, acked)
+	require.Equal(t, uint(resolvedevent.FailureReason_IntegrationAliasMismatch), failed[0].reason)
+	require.ErrorIs(t, failed[0].err, ErrIntegrationAliasMismatch)
+	require.Equal(t, "dev", failed[0].event.Device)
+	require.NotNil(t, failed[0].event.Payload, "the refused event keeps its payload so it can be replayed")
+	archived := failed[0].event.WithoutPresentedCredential()
+	require.Nil(t, archived.SealedIntegrationToken, "the archived dead letter carries no bearer token")
+	require.Equal(t, rigEUI, archived.IntegrationIdentifier, "and keeps the identifier it was resolved from")
+	require.EqualValues(t, 1, testutil.ToFloat64(counter))
+
+	// After the route re-resolves, the same identifier lands on the new holder.
+	resolved, failed, _ = processOne(rig.resolveRig, rig.event("dev-b", "chirp-1", rig.token), 1)
+	require.Equal(t, 1, resolved)
+	require.Empty(t, failed)
+}
+
+// THE COUNTER'S WIRING. The pool's resolvers get the counter from the processor's instruments
+// (initializeEventResolvers), and only a processor built over a real registry can show it: a
+// resolver given a counter by hand cannot tell whether the pool does the same.
+func (suite *InboundEventsProcessorTestSuite) TestAnAliasMismatchIsCountedByTheProcessorsInstrument() {
+	reg := suite.withRegistry()
+	for _, r := range suite.IP.resolvers {
+		r.SecretTransit = testSecretTransit(suite.T())
+	}
+	const metric = "devicechain_devicemanagement_resolve_integration_alias_mismatch_total"
+	require.Zero(suite.T(), counterValue(suite, reg, metric), "registered, and zero before any refusal")
+
+	sealed, err := testSecretTransit(suite.T()).SealToken("tenant1", credential.IntegrationSealKind("chirp-1"), "tok")
+	require.NoError(suite.T(), err)
+	now := time.Now().UTC()
+	event := &esmodel.UnresolvedEvent{
+		Source: transport.Qualify(transport.Integration, "chirp-1"), Device: "dev", EventType: eventtype.Measurement,
+		OccurredTime: now, ProcessedTime: now,
+		Payload:     &esmodel.UnresolvedMeasurementsPayload{Entries: []esmodel.UnresolvedMeasurementsEntry{{Measurements: map[string]string{"t": "1"}}}},
+		Integration: "chirp-1", SealedIntegrationToken: sealed, IntegrationIdentifier: rigEUI,
+	}
+	encoded, err := esproto.MarshalUnresolvedEvent(event)
+	require.NoError(suite.T(), err)
+	suite.Inbound.Mock.On("ReadMessage", mock.Anything).Return(messaging.NewConsumedMessage(testTenantSubject, encoded, 1, nil, &atomicAck{}), nil)
+	suite.API.Mock.On("AuthenticateIntegration").Return(&model.Integration{Enabled: true, Identity: model.IntegrationIdentityDevEUI,
+		DeviceTypes: []*model.DeviceType{{}}}, nil)
+	suite.API.Mock.On("DevicesByToken", mock.Anything, mock.Anything).Return([]*model.Device{deviceWithToken("dev")}, nil)
+	suite.API.Mock.On("DeviceHoldsAlias").Return(false, nil)
+
+	readAndHandleOne(suite.IP, context.Background())
+	select {
+	case item := <-suite.IP.failed:
+		assert.Equal(suite.T(), uint(resolvedevent.FailureReason_IntegrationAliasMismatch), item.event.Reason)
+	case <-time.After(10 * time.Second):
+		suite.T().Fatal("the mismatch was not dead-lettered on its first delivery")
+	}
+	assert.Equal(suite.T(), 1.0, counterValue(suite, reg, metric), "the refusal is counted once")
 }

@@ -470,6 +470,10 @@ type DeviceManagementApi interface {
 	// failure is ErrIntegrationAuthFailed, and a matching token on a disabled integration is
 	// ErrIntegrationDisabled.
 	AuthenticateIntegration(ctx context.Context, integrationToken, presented string) (*Integration, error)
+	// DeviceHoldsAlias reports, from the database as it is now, whether the device holds the alias
+	// (scheme, canonical form of value). The resolver asks it of every integration event: the route's
+	// device cache can name a device that has since lost or handed on the alias.
+	DeviceHoldsAlias(ctx context.Context, deviceId uint, scheme, value string) (bool, error)
 
 	// Entity relationships (uniform edge model, ADR-013).
 	EntityRelationshipsById(ctx context.Context, ids []uint) ([]*EntityRelationship, error)

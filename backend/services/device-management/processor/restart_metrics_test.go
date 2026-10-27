@@ -79,6 +79,7 @@ func TestSecondStartDoesNotReRegisterMetrics(t *testing.T) {
 		"devicechain_devicemanagement_resolve_event_time_bounded_total",
 		"devicechain_devicemanagement_resolve_event_time_too_old_total",
 		"devicechain_devicemanagement_resolve_device_disabled_total",
+		"devicechain_devicemanagement_resolve_integration_alias_mismatch_total",
 		"devicechain_devicemanagement_resolve_workers",
 		// Underscore, not hyphen. This line read `raise-alarm_inflight` for as long as
 		// the consumer passed that loop name, which is how an illegal metric name

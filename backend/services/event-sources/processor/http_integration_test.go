@@ -237,6 +237,8 @@ func TestAnIntegrationUplinkIsPublishedAsAnOrdinaryMeasurementMarkedAsTheIntegra
 	require.Equal(t, "cs", e.Integration)
 	require.Equal(t, []byte("sealed|acme|cs|"+goodBearer), e.SealedIntegrationToken)
 	require.Equal(t, "integration:cs", e.Source)
+	require.Equal(t, "0101010101010101", e.IntegrationIdentifier,
+		"the resolver re-checks that the device still holds THIS alias; the identifier must travel with the event")
 	require.NotNil(t, e.AltId)
 	require.Equal(t, "cs:3ac7e3c4-4401-4b8d-9386-a5c902f9202d", *e.AltId)
 	require.Equal(t, "acme:cs:3ac7e3c4-4401-4b8d-9386-a5c902f9202d", p.dedupID, "the broker dedups on tenant:AltId")

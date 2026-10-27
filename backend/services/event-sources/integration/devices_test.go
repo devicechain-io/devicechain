@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestAResolvedDeviceIsRememberedForAnHour(t *testing.T) {
+func TestAResolvedDeviceIsRememberedForFiveMinutes(t *testing.T) {
 	f, c := newFakeBackend(), newClock()
 	d := NewDevices(f, DeviceConfig{Now: c.now})
 	ctx := context.Background()
@@ -24,7 +24,8 @@ func TestAResolvedDeviceIsRememberedForAnHour(t *testing.T) {
 	require.Equal(t, "dev-0101010101010101", got.DeviceToken)
 	require.False(t, got.Cached)
 
-	c.advance(59 * time.Minute)
+	require.Equal(t, 5*time.Minute, DefaultPositiveTTL, "the bound on a stale alias is a documented number")
+	c.advance(4 * time.Minute)
 	got, err = d.Resolve(ctx, "acme", "cs", "tok", "lorawan.deveui", "0101010101010101")
 	require.NoError(t, err)
 	require.True(t, got.Cached)
