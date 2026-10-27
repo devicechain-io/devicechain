@@ -46,9 +46,10 @@ const (
 	// SkipOversize: the metric arrived in a message carrying more than MaxMetricsPerMessage
 	// metrics, so none of that message's metrics were read.
 	SkipOversize = "oversize"
-	// SkipUntyped: the metric carries an integer whose signedness cannot be known - it names no
-	// datatype (a conformant DATA message omits it) and no BIRTH declared one for it - so reading it
-	// would be a guess, and a wrong guess turns a negative reading into a number near 4.29e9.
+	// SkipUntyped: the metric carries an integer that names no datatype (a conformant DATA message
+	// omits it), that no BIRTH declared one for, and whose value reads differently as signed and
+	// unsigned (see ambiguousCarrier) - so reading it would be a guess, and a wrong guess turns a
+	// negative reading into a number near 4.29e9.
 	SkipUntyped = "untyped"
 )
 
@@ -83,7 +84,11 @@ const MaxMetricsPerMessage = 64 * eventlimit.MaxReadingsPerEvent
 // Skips counts, by reason, the metrics of one accepted message that produced no Sample.
 // Reserved control metrics (bdSeq, Node Control/*, Device Control/*) are not counted: they
 // are protocol, not telemetry that was lost.
-type Skips struct{ NonNumeric, Null, Unnamed, Oversize, Untyped int }
+type Skips struct {
+	NonNumeric, Null, Unnamed, Oversize, Untyped int
+	// UntypedFirst names the first metric of the step that was skipped as untyped, for the warning.
+	UntypedFirst string
+}
 
 // Total is every skipped metric.
 func (k Skips) Total() int { return k.NonNumeric + k.Null + k.Unnamed + k.Oversize + k.Untyped }
@@ -95,6 +100,9 @@ func (k *Skips) add(o Skips) {
 	k.Unnamed += o.Unnamed
 	k.Oversize += o.Oversize
 	k.Untyped += o.Untyped
+	if k.UntypedFirst == "" {
+		k.UntypedFirst = o.UntypedFirst
+	}
 }
 
 // samplesFrom extracts the numeric measurements from an ACCEPTED Sparkplug payload:
@@ -129,6 +137,9 @@ func samplesFrom(p *sppb.Payload, aliases map[uint64]string, types birthTypes, d
 		v, ok, untyped := numericValue(m, types.of(device, name))
 		if untyped {
 			skips.Untyped++
+			if skips.UntypedFirst == "" {
+				skips.UntypedFirst = name
+			}
 			continue
 		}
 		if !ok {
@@ -164,46 +175,54 @@ func isReservedMetric(name string) bool {
 		strings.HasPrefix(name, "Device Control/")
 }
 
-// birthTypes is the datatype each metric declared at its BIRTH, by (device, name); a metric sent
-// by alias is resolved to its name first, through the session's alias table. A conformant DATA message omits the datatype
+// birthTypes is the datatype each metric declared at its BIRTH, by device then name ("" is the
+// edge node itself); a metric sent by alias is resolved to its name first, through the session's
+// alias table. A conformant DATA message omits the datatype
 // ([tck-id-payloads-metric-datatype-not-req]: it SHOULD NOT be included), so the signedness of
-// an integer carried in one is known only from here.
+// an integer carried in one is known only from here. Keyed device-first so that a device's death
+// is one delete, under the tracker lock, however many metrics the node has.
 type birthTypes struct {
-	byName map[typeKey]uint32
+	byDevice map[string]map[string]uint32
 }
-
-type typeKey struct{ device, name string }
 
 // of resolves the datatype a BIRTH declared for the metric named name under device. Zero is
 // "none declared".
 func (t birthTypes) of(device, name string) uint32 {
-	return t.byName[typeKey{device, name}]
+	return t.byDevice[device][name]
 }
 
-// record folds a BIRTH's declared datatypes in. Metrics that declare none (zero is Unknown) are
-// not recorded: they would only mask a later declaration with a guess.
+// record replaces device's declarations with those of a BIRTH. Replaced, not merged: a metric
+// that a re-BIRTH no longer declares must not keep a type it was given by an earlier one. Metrics
+// that declare none (zero is Unknown) are not recorded.
 func (t *birthTypes) record(device string, p *sppb.Payload) {
-	if t.byName == nil {
-		t.byName = map[typeKey]uint32{}
+	if t.byDevice == nil {
+		t.byDevice = map[string]map[string]uint32{}
 	}
+	names := map[string]uint32{}
 	for _, m := range p.GetMetrics() {
-		dt := m.GetDatatype()
-		if dt == 0 {
-			continue
-		}
-		if m.GetName() != "" {
-			t.byName[typeKey{device, m.GetName()}] = dt
+		if dt := m.GetDatatype(); dt != 0 && m.GetName() != "" {
+			names[m.GetName()] = dt
 		}
 	}
+	t.byDevice[device] = names
 }
 
-// dropDevice forgets a dead device's by-name declarations.
+// dropDevice forgets a dead device's declarations.
 func (t *birthTypes) dropDevice(device string) {
-	for k := range t.byName {
-		if k.device == device {
-			delete(t.byName, k)
-		}
+	delete(t.byDevice, device)
+}
+
+// ambiguousCarrier reports whether an integer carrier reads DIFFERENTLY as signed and as
+// unsigned, so that without a datatype its meaning is a guess. The bands are exactly the values
+// with a high bit set at some integer width (8, 16, 32, and 64 for long_value), under either
+// encoder convention (sign-extended or truncated to the width): [0x80, 0xFF], [0x8000, 0xFFFF],
+// [0x80000000, 0xFFFFFFFF], and for long_value also >= 2^63. Everything else - a counter at 1000, a
+// setpoint at 70 - reads identically under every integer type, so it is safe to read as magnitude.
+func ambiguousCarrier(v uint64, long bool) bool {
+	if long && v >= 1<<63 {
+		return true
 	}
+	return (v >= 0x80 && v <= 0xFF) || (v >= 0x8000 && v <= 0xFFFF) || (v >= 0x80000000 && v <= 0xFFFFFFFF)
 }
 
 // numericValue reads a metric's value as a float64 when it is a numeric Sparkplug type,
@@ -212,8 +231,10 @@ func (t *birthTypes) dropDevice(device string) {
 // encoders disagree on where a UInt32 rides (Tahu Java uses long_value, others int_value).
 //
 // An integer arm needs its datatype for signedness: the metric's own if it names one, else
-// declared, the one its BIRTH gave it. With neither, untyped is true and the value is NOT read:
-// treating a possibly-signed carrier as magnitude turns every negative reading into ~4.29e9.
+// declared, the one its BIRTH gave it. With neither, a value that reads the same under every
+// integer type is read as magnitude; one that does not (see ambiguousCarrier) is NOT read and
+// untyped is true: treating a possibly-signed carrier as magnitude turns a negative reading into
+// ~4.29e9.
 func numericValue(m *sppb.Payload_Metric, declared uint32) (v float64, ok bool, untyped bool) {
 	dt := m.GetDatatype()
 	if dt == 0 {
@@ -221,12 +242,12 @@ func numericValue(m *sppb.Payload_Metric, declared uint32) (v float64, ok bool, 
 	}
 	switch m.GetValue().(type) {
 	case *sppb.Payload_Metric_IntValue:
-		if dt == 0 {
+		if dt == 0 && ambiguousCarrier(uint64(m.GetIntValue()), false) {
 			return 0, false, true
 		}
 		return intValueAsFloat(m.GetIntValue(), dt), true, false
 	case *sppb.Payload_Metric_LongValue:
-		if dt == 0 {
+		if dt == 0 && ambiguousCarrier(m.GetLongValue(), true) {
 			return 0, false, true
 		}
 		return longValueAsFloat(m.GetLongValue(), dt), true, false
@@ -263,7 +284,16 @@ func intValueAsFloat(v uint32, datatype uint32) float64 {
 // magnitude. A float64 cannot represent an integer magnitude above 2^53 exactly —
 // inherent to storing measurements as float64, not fixable here.
 func longValueAsFloat(v uint64, datatype uint32) float64 {
-	if datatype == datatypeInt64 {
+	switch datatype {
+	case datatypeInt8:
+		// A signed type narrower than 64 bits an encoder placed in long_value: narrow by its
+		// width, as intValueAsFloat does, so -1 is -1 whether sign-extended or truncated.
+		return float64(int8(uint8(v)))
+	case datatypeInt16:
+		return float64(int16(uint16(v)))
+	case datatypeInt32:
+		return float64(int32(uint32(v)))
+	case datatypeInt64:
 		return float64(int64(v))
 	}
 	return float64(v)

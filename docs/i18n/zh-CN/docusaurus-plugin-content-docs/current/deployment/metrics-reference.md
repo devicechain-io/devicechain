@@ -235,7 +235,7 @@ title: 指标参考
 | 指标 | 含义 |
 | --- | --- |
 | `devices_registered_total` | 首次见到其 Sparkplug 身份时自动注册的设备。 |
-| `samples_skipped_total{reason}` | 被接受的 Sparkplug 消息中没有产生样本的指标，按原因区分：non_numeric（布尔、字符串、字节、数据集或模板值）、null（is_null）、unnamed（没有名称且没有可解析的别名）或 oversize（消息携带的指标超过 16,384 个，因此其读数均未存储；服务会记录一条指明主题的警告）。只发布此类指标的节点，否则看起来与空闲节点完全相同。 |
+| `samples_skipped_total{reason}` | 被接受的 Sparkplug 消息中没有产生样本的指标，按原因区分：non_numeric（布尔、字符串、字节、数据集或模板值）、null（is_null）、unnamed（没有名称且没有可解析的别名）、untyped（整数的数据类型既未在消息中声明，也未在其 birth 中声明，且其值按有符号和无符号读取时不同，因此不做猜测；服务会记录一条限频警告，指明主题和指标）或 oversize（消息携带的指标超过 16,384 个，因此其读数均未存储；服务会记录一条指明主题的警告）。只发布此类指标的节点，否则看起来与空闲节点完全相同。 |
 
 ## 通知管理 {#notification-management}
 

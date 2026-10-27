@@ -5,6 +5,7 @@ package host
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -115,31 +116,101 @@ func TestUnsignedAndFloatingPointAreUnchanged(t *testing.T) {
 	assert.Zero(t, obs.Skipped.Total())
 }
 
-// A metric's own datatype, when it names one, is honoured as before.
-func TestAnExplicitDatatypeOnDataStillWins(t *testing.T) {
+// A metric's own datatype, when it names one, WINS over the BIRTH's. The two are made to
+// disagree, so swapping the precedence changes the answer: t8 was born Int8.
+func TestAnExplicitDatatypeOnDataWinsOverTheBirthsType(t *testing.T) {
 	h := newHarness(defaultRebirthBackoff)
 	bornTyped(h)
+	// Explicit UInt32: 0xFFFFFFFF is 4294967295 (the birth's Int8 would read it as -1).
 	m := untypedInt(1, "", 0xFFFFFFFF)
+	m.Datatype = proto.Uint32(datatypeUInt32)
+	assert.Equal(t, 4294967295.0, valuesOf(h.tr.Observe(nTop(NDATA), pl(2, m)))["t8"])
+	// Explicit Int16: 0xFF00 is -256 (the birth's Int8 would narrow it to 0).
+	m = untypedInt(1, "", 0xFF00)
 	m.Datatype = proto.Uint32(datatypeInt16)
-	assert.Equal(t, -1.0, valuesOf(h.tr.Observe(nTop(NDATA), pl(2, m)))["t8"])
+	assert.Equal(t, -256.0, valuesOf(h.tr.Observe(nTop(NDATA), pl(3, m)))["t8"])
 }
 
-// 🔴 NEITHER KNOWN => REFUSED AND COUNTED, NOT GUESSED. A by-name integer the BIRTH never
-// declared has no signedness: reading it as magnitude is exactly the old bug.
-func TestAnUntypedIntegerWithNoBirthDeclarationIsCountedNotGuessed(t *testing.T) {
+// Signed types narrower than 64 bits that an encoder put in long_value are narrowed by width too.
+func TestNarrowSignedTypesInLongValueAreNarrowedByWidth(t *testing.T) {
+	for _, c := range []struct {
+		dt   uint32
+		v    uint64
+		want float64
+	}{
+		{datatypeInt8, 0xFF, -1}, {datatypeInt8, ^uint64(0), -1}, {datatypeInt16, 0xFFFF, -1},
+		{datatypeInt32, 0xFFFFFFFF, -1}, {datatypeInt32, 0x80000000, -2147483648}, {datatypeInt8, 5, 5},
+		{datatypeInt64, ^uint64(0), -1}, {datatypeUInt32, 0xFFFFFFFF, 4294967295},
+	} {
+		assert.Equal(t, c.want, longValueAsFloat(c.v, c.dt), "datatype %d value %#x", c.dt, c.v)
+	}
+}
+
+// A re-BIRTH replaces a scope's declarations: a metric it no longer declares keeps no type.
+func TestARebirthDoesNotKeepTypesItNoLongerDeclares(t *testing.T) {
 	h := newHarness(defaultRebirthBackoff)
 	bornTyped(h)
-	obs := h.tr.Observe(nTop(NDATA), pl(2, untypedInt(0, "never-declared", 0xFFFFFFFF), untypedInt(1, "", 7)))
-	assert.NotContains(t, valuesOf(obs), "never-declared", "no value is invented for it")
-	assert.Equal(t, 1, obs.Skipped.Untyped)
-	assert.Equal(t, 7.0, valuesOf(obs)["t8"], "control: the declared metric of the same message is read")
-	assert.Equal(t, 0, h.rec.count(), "an undeclared name is not a session fault")
+	h.tr.Observe(dTop(DBIRTH, "d1"), pl(2, birthTyped("other", 30, datatypeInt8)))
+	obs := h.tr.Observe(dTop(DDATA, "d1"), pl(3, untypedInt(0, "dv16", 0xFFFF)))
+	assert.Equal(t, 1, obs.Skipped.Untyped, "dv16 was dropped from the device's declarations")
+	assert.Equal(t, "dv16", obs.Skipped.UntypedFirst)
+}
 
-	// The 64-bit arm is refused the same way.
-	obs = h.tr.Observe(nTop(NDATA), pl(3, &sppb.Payload_Metric{Name: proto.String("never-declared-64"),
-		Value: &sppb.Payload_Metric_LongValue{LongValue: ^uint64(0)}}))
-	assert.Empty(t, obs.Samples)
-	assert.Equal(t, 1, obs.Skipped.Untyped)
+// 🔴 NEITHER KNOWN: READ WHAT CANNOT BE MISREAD, REFUSE AND COUNT WHAT CAN. A by-name integer the
+// BIRTH never declared has no signedness. A value that reads the same under every integer type (a
+// counter at 1000) is stored as magnitude; one with a high bit set at some width - the bands
+// [0x80,0xFF] [0x8000,0xFFFF] [0x80000000,0xFFFFFFFF], and for long_value also >= 2^63 - reads
+// differently as signed and unsigned, and is skipped as untyped rather than guessed.
+func TestAnUntypedIntegerWithNoBirthDeclarationIsStoredOrSkippedByBand(t *testing.T) {
+	stored := []uint32{0, 1, 127, 128 - 1, 256, 1000, 0x7FFF, 0x10000, 0x7FFFFFFF}
+	skipped := []uint32{0x80, 255, 0xFF, 0x8000, 0xFF00, 65535, 0x80000000, 0xFFFFFFFE, 0xFFFFFFFF}
+	for _, v := range stored {
+		h := newHarness(defaultRebirthBackoff)
+		bornTyped(h)
+		obs := h.tr.Observe(nTop(NDATA), pl(2, untypedInt(0, "counter", v)))
+		assert.Equal(t, float64(v), valuesOf(obs)["counter"], "%#x reads the same under every type", v)
+		assert.Zero(t, obs.Skipped.Untyped)
+	}
+	for _, v := range skipped {
+		h := newHarness(defaultRebirthBackoff)
+		bornTyped(h)
+		obs := h.tr.Observe(nTop(NDATA), pl(2, untypedInt(0, "counter", v), untypedInt(1, "", 7)))
+		assert.NotContains(t, valuesOf(obs), "counter", "%#x is ambiguous and is not invented", v)
+		assert.Equal(t, 1, obs.Skipped.Untyped, "%#x", v)
+		assert.Equal(t, "counter", obs.Skipped.UntypedFirst)
+		assert.Equal(t, 7.0, valuesOf(obs)["t8"], "control: the declared metric of the same message is read")
+		assert.Equal(t, 0, h.rec.count(), "an undeclared name is not a session fault: no rebirth")
+	}
+
+	// The 64-bit arm: the same three bands, and everything from 2^63 up.
+	for v, wantSkip := range map[uint64]bool{
+		1000: false, 0x100000000: false, 1<<63 - 1: false,
+		0xFF: true, 0xFFFF: true, 0xFFFFFFFF: true, 1 << 63: true, ^uint64(0): true,
+	} {
+		h := newHarness(defaultRebirthBackoff)
+		bornTyped(h)
+		obs := h.tr.Observe(nTop(NDATA), pl(2, &sppb.Payload_Metric{Name: proto.String("big"),
+			Value: &sppb.Payload_Metric_LongValue{LongValue: v}}))
+		if wantSkip {
+			assert.Empty(t, obs.Samples, "%#x", v)
+			assert.Equal(t, 1, obs.Skipped.Untyped, "%#x", v)
+		} else {
+			assert.Equal(t, float64(v), valuesOf(obs)["big"], "%#x", v)
+			assert.Zero(t, obs.Skipped.Untyped, "%#x", v)
+		}
+	}
+}
+
+// The untyped warning is due once per window, not once per message.
+func TestUntypedWarningIsRateLimited(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	c := &Client{now: func() time.Time { return now }}
+	assert.True(t, c.shouldWarnUntyped(), "the first is due")
+	assert.False(t, c.shouldWarnUntyped(), "the next, in the same window, is not")
+	now = now.Add(untypedWarnEvery - time.Second)
+	assert.False(t, c.shouldWarnUntyped())
+	now = now.Add(2 * time.Second)
+	assert.True(t, c.shouldWarnUntyped(), "due again once the window has passed")
 }
 
 // A death forgets the declarations: a dead device's by-name type does not survive into a rebirth
@@ -148,6 +219,7 @@ func TestDeclarationsDoNotOutliveTheirBirth(t *testing.T) {
 	h := newHarness(defaultRebirthBackoff)
 	bornTyped(h)
 	h.tr.Observe(dTop(DDEATH, "d1"), pl(2))
+	assert.NotContains(t, h.sess().types.byDevice, "d1", "a dead device's declarations are dropped with it")
 	h.tr.Observe(dTop(DBIRTH, "d1"), pl(3, birthTyped("other", 20, datatypeInt8)))
 	obs := h.tr.Observe(dTop(DDATA, "d1"), pl(4, untypedInt(0, "byname8", 0xFFFFFFFF)))
 	assert.Equal(t, 1, obs.Skipped.Untyped, "the old device's by-name declaration is gone")

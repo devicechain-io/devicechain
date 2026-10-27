@@ -295,6 +295,8 @@ type Client struct {
 	// verdict, so a periodic tick that lands inside another probe's window is skipped
 	// rather than rebirthing the same nodes a second time.
 	probing atomic.Bool
+	// untypedWarnedAt is when the untyped-integer warning last fired (unix nanos; 0 = never).
+	untypedWarnedAt atomic.Int64
 	// rebirthPub publishes a rebirth NCMD directly and reports whether it reached the
 	// wire; defaulted to publishRebirth, overridable in tests so the probe is drivable
 	// without a live broker. The reconcile probe uses it (off the receive goroutine, so
@@ -1069,6 +1071,10 @@ func (c *Client) onMessage(_ mqtt.Client, msg mqtt.Message) {
 				Int("limit", MaxMetricsPerMessage).
 				Msg("Refusing the readings of a Sparkplug message with more metrics than one message may carry; none of them were stored.")
 		}
+		if obs.Skipped.Untyped > 0 && c.shouldWarnUntyped() {
+			log.Warn().Str("topic", msg.Topic()).Str("metric", obs.Skipped.UntypedFirst).Int("metrics", obs.Skipped.Untyped).
+				Msg("Skipped integer metrics whose datatype neither the message nor its birth declared and whose value reads differently as signed and unsigned (counted as untyped; logged at most once a minute).")
+		}
 		samples := obs.Samples
 		// Only a DATA message's readings are charged against the tenant's ingest ceiling.
 		// A BIRTH's are not: Sparkplug reports by exception, so a birth is the only place
@@ -1094,6 +1100,21 @@ func (c *Client) onMessage(_ mqtt.Client, msg mqtt.Message) {
 		c.sessions.Observe(rec.Topic, rec.Payload)
 	}
 	c.logRecord(rec)
+}
+
+// untypedWarnEvery bounds the untyped-integer warning to one per client per window: a node that
+// never declared a type for a counter sends the same metric on every message.
+const untypedWarnEvery = time.Minute
+
+// shouldWarnUntyped reports whether the rate-limited untyped warning is due now, and arms the
+// next window if it is.
+func (c *Client) shouldWarnUntyped() bool {
+	now := c.now().UnixNano()
+	last := c.untypedWarnedAt.Load()
+	if last != 0 && now-last < int64(untypedWarnEvery) {
+		return false
+	}
+	return c.untypedWarnedAt.CompareAndSwap(last, now)
 }
 
 // countSkipped records the metrics a message produced no sample from.
