@@ -3932,9 +3932,27 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 
 No hay que hacer nada.
 
-### La versión posterior a v0.25.2 {#self-registration-upgrade}
+### v0.26.0 — los dispositivos se registran solos y el front end pasa a Traefik {#v0260-upgrade}
 
-Esta sección está escrita antes de la versión que describe, así que la versión de su encabezado se deja para que la nombre esa versión. Se aplica a una actualización desde `v0.25.2` o anterior. La versión incluye el [autorregistro de dispositivos](../guides/device-self-registration.md), pasa la instalación de ingress-nginx a Traefik y elimina el filtro transitorio de credenciales en el cuerpo de MQTT. device-management incorpora una migración de base de datos que se ejecuta sola, y los cambios de API de [Perfiles de aprovisionamiento](#self-registration-profiles) son incompatibles para todo lo que automatice perfiles de aprovisionamiento. Lo que exige actuar antes de actualizar es la [clave de credencial en el cuerpo](#after-v0252-body-credential), si la fijas a mano. Si usas un emisor de certificados ACME, su solver necesita un cambio más tarde, [cuando el DNS se haya movido](#after-v0252-front-end).
+`v0.26.0` es una actualización in situ desde `v0.25.2`: `dcctl install` para el clúster y después un `dcctl upgrade` por cada instancia, como se describe [para v0.17.0](#v0170-upgrade). Pasa a `dcctl install` los ajustes con los que se instaló el clúster, como `--ha` y `--database-node-selector`, además del nuevo `--version`. Si vienes de `v0.25.1` o `v0.25.0`, lee también las notas de las versiones intermedias.
+
+```bash
+dcctl install local --version v0.26.0
+dcctl upgrade local devicechain --version v0.26.0 --dry-run
+dcctl upgrade local devicechain --version v0.26.0
+```
+
+La versión incluye el [autorregistro de dispositivos](../guides/device-self-registration.md), las [integraciones de entrada](../guides/inbound-integrations.md) para servidores de red LoRaWAN y webhooks, un canal de comandos opcional hacia nodos Sparkplug B, la [autenticación en dos pasos](#after-v0252-mfa) y el paso de ingress-nginx a Traefik. Elimina el filtro de credenciales en el cuerpo de MQTT. Lo que exige actuar, en el orden en que hacerlo:
+
+- **Un clúster con dos instancias del perfil default necesita un presupuesto de conexiones de base de datos mayor antes de actualizar.** El presupuesto de un clúster nuevo es ahora `700`; un clúster instalado con el valor anterior conserva `600`, y la actualización de la segunda instancia puede rechazarse. Vuelve a ejecutar el `dcctl install` con el que se instaló el clúster añadiendo `--max-connections 700`: por ejemplo `dcctl install local --max-connections 700`, más `--kube-context`, `--ha` o `--compact` si el clúster se instaló con ellos. Consulta [la nota de update-management más abajo](#v0260-updates) y [el presupuesto de conexiones](./bootstrap.md#connection-budget).
+- **Elimina `functionalAreas.event-sources.config.capture.bodyCredential` si lo fijaste** y quita `--mqtt-body-credential` de los scripts. Consulta [se elimina el filtro de credenciales en el cuerpo](#after-v0252-body-credential).
+- **Revisa todo lo que automatice perfiles de aprovisionamiento** y rota el secreto de cada perfil existente. Consulta [Perfiles de aprovisionamiento](#self-registration-profiles).
+- **Los clientes de API que inician sesión deben tratar `MFA_CHALLENGE`.** Consulta [Autenticación en dos pasos](#after-v0252-mfa).
+- **Si pasas una instalación existente a Traefik, comprueba el certificado del Gateway antes de retirar los objetos Ingress.** Una instancia actualizada a través del cambio de emisor puede quedarse con un certificado `devicechain-tls-gateway` que la autoridad certificadora propia de la instancia no emitió. Comprueba su emisor y vuelve a emitirlo si no es la CA de la instancia; la comprobación es un paso de [la guía de la migración](./ingress-cutover.md#ingress-cutover-steps), antes de retirar los objetos Ingress.
+- **La pila de monitorización pasa a una nueva línea mayor** (Prometheus 3). Consulta [La pila de monitorización](#v0260-monitoring).
+- **Avanza desde esta versión; no retrocedas.** La migración de device-management que sustituye por resúmenes los secretos de los perfiles de aprovisionamiento y de las reclamaciones de dispositivo no se puede deshacer, y el lector de captura pasa a un consumidor duradero nuevo (consulta [Mensajería](#v0260-messaging)).
+
+Se ejecutan seis migraciones, una en el primer arranque del servicio que la posee, y cada una puede volver a ejecutarse si se interrumpe: en `device-management`, autorregistro de dispositivos, resúmenes de secretos de alta, integraciones y alias de dispositivo; en `user-management`, el segundo factor y la dimensión de gobernanza del autorregistro. Al arrancar, `device-management` también convierte en resumen con clave todo secreto de perfil de aprovisionamiento y de reclamación de dispositivo almacenado; una reclamación abierta durante la actualización sigue funcionando con el secreto que se entregó a su titular.
 
 Hasta ahora un perfil de aprovisionamiento se podía crear y editar, pero nada lo leía: ningún dispositivo podía registrarse con uno. Así que nada que funcionara ayer deja de funcionar porque una flota lo usara. Lo que cambia es cómo se crean los perfiles y qué necesitan.
 
@@ -4013,11 +4031,7 @@ Una cuenta ya puede activar la [autenticación en dos pasos](../guides/two-facto
 - **Dos alertas nuevas, `MfaIdentityLocked` y `MfaVerificationFailuresSustained`,** y cuatro métricas llegan con el chart. Permanecen en silencio mientras nadie tenga un segundo factor. El remedio para un bloqueo es restablecer la contraseña, no el factor. Consulta [Bloqueos del segundo factor](./observability.md#mfa-alerts).
 - **Los nodos necesitan una sincronización horaria correcta.** Un código es válido durante su intervalo de 30 segundos y uno a cada lado.
 
-### La próxima versión: las actualizaciones over-the-air pasan al perfil default {#next-release-updates}
-
-:::note Borrador
-Esta sección está escrita antes de la versión y toma el número de esa versión cuando se publique.
-:::
+#### Las actualizaciones over-the-air pasan al perfil default {#v0260-updates}
 
 Las [actualizaciones over-the-air](../concepts/over-the-air-updates.md) forman parte del perfil `default` a
 partir de esta versión, así que una instancia que ejecuta el sistema estándar incorpora el servicio
@@ -4053,6 +4067,49 @@ partir de esta versión, así que una instancia que ejecuta el sistema estándar
 - **Se llega a los mismos dispositivos que antes.** Solo un dispositivo conectado por MQTT puede recibir una
   actualización gestionada. Los dispositivos solo HTTP, LwM2M y Sparkplug no se alcanzan; consulta
   [Qué dispositivos se pueden actualizar](../concepts/over-the-air-updates.md#transports).
+
+#### Más sobre las actualizaciones over-the-air {#v0260-updates-more}
+
+Las actualizaciones quedan completas en esta versión más allá de entrar en el perfil default. Un [dispositivo de referencia actualizable](../guides/building-an-updatable-device.md) (ranuras A/B, un lanzador y reversión) se incluye en `examples/ota-device`. Cuatro alertas nuevas, `UpdateDownloadsNotConfigured`, `UpdateReportsMostlyRefused`, `UpdateRolloutStepsFailing` y `UpdateAttemptsGoingUnknown`, llegan con el chart y solo se generan en una instancia que tiene `update-management`; una instancia que no usa actualizaciones permanece en silencio. Consulta [el runbook de alertas](./observability.md).
+
+#### Comandos Sparkplug B (opcional) {#v0260-sparkplug-commands}
+
+DeviceChain ya puede enviar comandos a nodos y dispositivos Sparkplug: escribir una métrica, pedir a un nodo que rehaga su nacimiento (rebirth) o reiniciarlo, publicados en la sesión de Host Application que la plataforma ya mantiene con tu broker. Está desactivado de forma predeterminada y se activa por fuente con `commands.enabled` en los valores del chart (`dcctl` no admite fuentes Sparkplug, así que es un ajuste de valores de Helm). Sparkplug no tiene acuse de recibo de comandos: un comando se confirma cuando el nodo informa después del valor pedido, y uno que el nodo no informa termina como tiempo agotado, no como fallo. Las escrituras se limitan a las métricas que lista una fuente, los reinicios requieren un ajuste explícito y un cortacircuitos pausa una fuente cuyo broker rechaza la publicación. La credencial de broker de la fuente necesita permiso para publicar en los temas de comandos de nodo y de dispositivo. Tres alertas nuevas cubren comandos sin confirmar, un cortacircuitos abierto y fallos internos de comandos: `SparkplugCommandsUnconfirmed`, `SparkplugCommandBreakerOpen` y `SparkplugCommandResponsesFailing`.
+
+No cambia nada en una instalación cuyas fuentes Sparkplug dejan `commands.enabled` desactivado. Cuando una fuente lo activa, el chart fija por sí mismo el indicador de capacidad de `command-delivery`; el renderizado falla si `command-delivery` no está desplegado y si fijas el indicador a mano.
+
+#### Métricas calculadas {#v0260-calculated-metrics}
+
+Las [métricas calculadas](../user-guide/calculated-metrics.md) siguen desactivadas: el techo de nivel que permite a un inquilino crearlas sigue siendo `0` de forma predeterminada, y esta versión no lo cambia. Cambian dos cosas a su alrededor. **Revertir un perfil de dispositivo a una versión anterior ahora cumple el mismo techo que publicar:** un inquilino cuyo techo se bajó después de publicar ya no puede reactivar una versión con más métricas calculadas de las que permite su nivel; la reversión se rechaza como `LIMIT_EXCEEDED`, y también cuando no se puede leer el techo. Revertir a una versión sin métricas calculadas nunca depende del techo. La consola ahora explica por qué una métrica calculada no puede combinar sus entradas. En `hack/` se incluye un arnés para medir el coste de las métricas calculadas; es para mantenedores y no forma parte de una instalación.
+
+#### Integraciones de entrada y alias de dispositivo {#v0260-integrations}
+
+Una [integración](../guides/inbound-integrations.md) es un emisor autenticado de datos de dispositivo por HTTP de un inquilino, como un servidor de red LoRaWAN, con los tipos ChirpStack v4, The Things Stack v3, JSON genérico y binario genérico. El chart publica exactamente una ruta para ella en el front end de la instancia, `POST /api/integrations/{tenant}/{integration}[/{messageType}]`, tanto por el Gateway como por los objetos Ingress. La ruta general de ingesta de dispositivos no se publica. Un inquilino puede tener cinco integraciones de forma predeterminada (la clave de nivel `integrationsPerTenant`, de 0 a 100). No se puede eliminar un tipo de dispositivo al que está acotada una integración. Los dispositivos se identifican con **alias**, y un uplink de un dispositivo que ya no tiene el alias con el que llegó se rechaza como `IntegrationAliasMismatch`, de modo que quitar o mover un alias surte efecto como mucho en cinco minutos, nunca en una hora. La consola incorpora una página de Integraciones, fragmentos de conexión, dispositivos sin registrar y alias de dispositivo.
+
+#### La pila de monitorización {#v0260-monitoring}
+
+`dcctl install` actualiza la pila de monitorización (kube-prometheus-stack 65.1.1 a 92.13.1): **Prometheus 2.54 a 3.15**, Grafana 11.2 a 13.2 y Prometheus Operator 0.77 a 0.94. Prometheus, Alertmanager, Grafana, kube-state-metrics y el operador se reinician una vez cada uno. Los CRD del operador se actualizan con un trabajo previo a la actualización que descarga `docker.io/busybox:1.37.0` y `registry.k8s.io/kubectl`, así que un clúster sin ruta a esos registros debe replicarlos. Grafana conserva su acceso de administrador, sus carpetas y sus paneles. En un clúster local Prometheus guarda sus datos solo en el disco del nodo, por lo que su historial empieza vacío. Quien tenga PromQL propio contra este Prometheus debe saber que es Prometheus 3: los selectores de rango son abiertos por la izquierda, `.` en una expresión regular coincide con un salto de línea y las etiquetas `le` de los histogramas clásicos se normalizan. Las reglas y paneles propios de DeviceChain se cargan sin errores de reglas.
+
+Los paneles de Grafana del chart se completan: paneles de Ingesta, Mensajería, Persistencia y estado, Entrega y Plataforma, una vista general de la instancia que enlaza con cada uno y un estado de escalado a 0 en la vista general.
+
+#### Mensajería y línea de comandos {#v0260-messaging}
+
+- **El lector de captura de dispositivos pasa a un consumidor duradero nuevo,** `<instance>_event-sources_device-events-capture_unfiltered`, creado sin filtro en el broker. Un lector retrasado sobre un consumidor filtrado caía a unos 2.000 eventos por segundo y no se ponía al día. Durante la actualización progresiva un pod antiguo de `event-sources` conserva su propio consumidor. Para volver a `v0.25.x` hay que borrar antes el consumidor nuevo (`nats consumer rm <instance>_device-events-capture <instance>_event-sources_device-events-capture_unfiltered`), o su lector de captura se queda reintentando; los selectores de alertas y paneles ya coinciden con ambos nombres.
+- **REACT despacha los eventos derivados de forma concurrente, por dispositivo,** donde un solo trabajador lo hacía en serie; un dispositivo colgado ya no cuesta a los demás de su carril sus intentos de entrega. No hay nada que configurar.
+- **`dcctl bootstrap` y `dcctl upgrade` incorporan `--mqtt-fail-closed`** (y `--mqtt-fail-closed=false`) para activar y desactivar el acuse MQTT con cierre ante fallos; si se omite, se conserva la elección registrada. Además, cada `dcctl upgrade` rechaza ahora, antes de cambiar nada, una configuración cuya reserva de streams no cabe en el techo de almacenamiento de archivos del broker.
+- **OpenTofu actúa sobre el clúster que `dcctl` resolvió.** Su proveedor recibe ahora el mismo kubeconfig y contexto que el cliente, y `dcctl` se niega a ejecutarse cuando alcanzan clústeres distintos o cuando hay una variable de entorno que anula el proveedor (`KUBE_HOST`, `KUBE_TOKEN` y similares).
+
+#### Un broker que solicita certificados de dispositivo {#v0260-broker}
+
+El broker es ahora la compilación propia de DeviceChain de `nats-server`, `dc-nats-server`: la `v2.15.1` original más un ajuste, aplicado al arrancar y en cada recarga, para que el listener MQTT solicite (sin exigir) un certificado de cliente TLS. Los dispositivos con token o contraseña no se ven afectados y todavía ningún dispositivo se autentica con certificado. La imagen se firma como las demás, se ejecuta como root igual que la imagen original y exporta `dc_broker_mqtt_client_auth_request`, `dc_broker_mqtt_tls` y `dc_broker_info` en el puerto 7778. La alerta nueva `BrokerMqttClientAuthLost` se dispara cuando un listener deja de solicitar certificados o cuando un pod del broker no es esta compilación. **Para volver a la imagen original,** fija `server_image_repository = "nats"` y `server_image_tag = "2.15.1-alpine"`; eso desactiva los dispositivos con certificado. Añade `dc-nats-server` a las imágenes que replicas.
+
+`dcctl` fija el broker por el resumen (digest) que publicó la versión, de modo que una versión que no cambia nada del broker no lo reinicia. La primera actualización desde un `dcctl` anterior pasa la plantilla del pod de la etiqueta al resumen, lo que supone un reinicio progresivo. `dcctl version` imprime una línea `broker:`, con el resumen o `by tag`.
+
+#### Problemas conocidos {#v0260-known-issues}
+
+- **Tras un reinicio progresivo del broker, incluida esta actualización, el último servidor reiniciado no lidera ningún stream,** y el p99 del acuse de publicación se duplica aproximadamente hasta que el liderazgo se reequilibra.
+- **Una rotación de certificado TLS hace que el broker se recargue y desconecta la mayoría de las sesiones MQTT.** Los dispositivos se reconectan solos.
+- **Un despliegue del controlador de ingress puede perder alrededor del 5 % de las solicitudes durante 30 a 40 segundos.** Hazlo en una ventana tranquila.
 
 ### v0.25.2 — la emisión de tokens de servicio sale del puerto público {#v0252-upgrade}
 

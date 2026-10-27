@@ -221,5 +221,5 @@ el borde:
 ## Relacionado {#ingress-cutover-related}
 
 - [`dcctl install`](../reference/dcctl.md) y [`dcctl upgrade`](../reference/dcctl.md) listan todos los flags usados aquí.
-- [Versiones y actualizaciones](./releases-and-upgrades.md#self-registration-upgrade) contiene las notas de la versión
+- [Versiones y actualizaciones](./releases-and-upgrades.md#v0260-upgrade) contiene las notas de la versión
   que incluye este cambio.
