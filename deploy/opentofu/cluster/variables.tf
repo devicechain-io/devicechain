@@ -373,14 +373,27 @@ variable "traefik_service_type" {
 }
 
 variable "traefik_replicas" {
-  description = "Traefik replicas (forced to 1 with traefik_use_host_port)."
+  description = <<-EOT
+    Traefik replicas. 0 (default) derives it from var.ha: 2 when HA is on, otherwise 1;
+    traefik_use_host_port forces 1 (two pods cannot share a node's host ports). The Service
+    keeps the client address (externalTrafficPolicy: Local), so a cloud load balancer sends
+    traffic only to nodes that run a controller pod: with one replica a rolling update or a
+    node loss leaves no target until the pod is back. Replicas are spread over nodes by a
+    preferred anti-affinity and covered by a PodDisruptionBudget.
+  EOT
   type        = number
-  default     = 1
+  default     = 0
 
   validation {
-    condition     = var.traefik_replicas >= 1 && var.traefik_replicas == floor(var.traefik_replicas)
-    error_message = "traefik_replicas must be a whole number of at least 1."
+    condition     = var.traefik_replicas >= 0 && var.traefik_replicas == floor(var.traefik_replicas)
+    error_message = "traefik_replicas must be 0 (derive from var.ha) or a whole number of at least 1."
   }
+}
+
+variable "traefik_aws_nlb" {
+  description = "EKS: annotate the Traefik LoadBalancer Service for an AWS Network Load Balancer, which passes the client address through (a Classic balancer proxies TCP and hides it). Off by default. Switching an existing Service REPLACES its load balancer, and with it the hostname clients resolve: repoint DNS afterwards. PROXY protocol is not configured."
+  type        = bool
+  default     = false
 }
 
 variable "traefik_trusted_proxy_cidrs" {

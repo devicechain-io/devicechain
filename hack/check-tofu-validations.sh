@@ -1004,10 +1004,16 @@ run_assertions() {
   accepts ingress_nginx_replicas 1
   accepts ingress_nginx_replicas 2
 
-  rejects traefik_replicas 0
+  rejects traefik_replicas -1
   rejects traefik_replicas 1.5
+  accepts traefik_replicas 0
   accepts traefik_replicas 1
   accepts traefik_replicas 3
+
+  # The AWS Network Load Balancer switches (booleans: the type is the check, there is no
+  # validation block to reject by).
+  accepts traefik_aws_nlb true
+  accepts ingress_nginx_aws_nlb true
 
   # A trusted-proxy entry that is not a CIDR would be handed to the controller as-is.
   rejects traefik_trusted_proxy_cidrs '["not-a-cidr"]'

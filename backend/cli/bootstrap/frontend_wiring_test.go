@@ -108,6 +108,7 @@ func TestHydrationCarriesTheFrontEndFlagsOntoTheState(t *testing.T) {
 		}
 	})
 	t.Run("--drop-legacy-ingress stops rendering the Ingress objects", func(t *testing.T) {
+		stubGatewayCertificates(t, readyGatewayCert(InstanceNamespace("prod")), nil)
 		st := hydrateUpgrade(t, UpgradeOptions{Options: Options{DropLegacyIngress: true}}, nil, bothControllers)
 		if st.IngressController != frontEndGateway || st.LegacyIngress || !st.DropLegacyIngress {
 			t.Errorf("settled %s legacy=%v drop=%v", st.IngressController, st.LegacyIngress, st.DropLegacyIngress)
@@ -151,6 +152,7 @@ func TestInstallStateCarriesRemoveLegacyIngressToTheClusterVariables(t *testing.
 	cls := nginxClass()
 	for _, remove := range []bool{false, true} {
 		t.Run(fmt.Sprintf("remove=%v", remove), func(t *testing.T) {
+			stubGatewayCertificates(t, readyGatewayCert("dci-prod"), nil)
 			st := installState(ClusterBinding{KubeContext: "gke_p_z_c"}, "local", InstallOptions{RemoveLegacyIngress: remove})
 			if st.RemoveLegacyIngress != remove {
 				t.Fatalf("installState dropped RemoveLegacyIngress: %v", st.RemoveLegacyIngress)

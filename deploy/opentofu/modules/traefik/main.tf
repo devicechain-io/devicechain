@@ -156,8 +156,31 @@ variable "service_type" {
   }
 }
 
+variable "aws_nlb" {
+  description = <<-EOT
+    EKS: annotate the controller's LoadBalancer Service for an AWS Network Load Balancer
+    (service.beta.kubernetes.io/aws-load-balancer-type: nlb). Off by default. Only a Network
+    Load Balancer passes the client's address through, which externalTrafficPolicy: Local
+    relies on: a LoadBalancer Service with no annotation gets a Classic balancer, which
+    proxies TCP, so the controller sees the balancer's own address and every device shares
+    one rate-limit allowance. SWITCHING AN EXISTING SERVICE REPLACES ITS LOAD BALANCER, and
+    with it the hostname clients resolve: repoint DNS afterwards. Has no effect unless the
+    Service is a LoadBalancer. (PROXY protocol is the other way to keep the address; this
+    module does not configure it.)
+  EOT
+  type        = bool
+  default     = false
+}
+
 variable "replicas" {
-  description = "Controller replicas. Forced to 1 with use_host_port: two pods cannot share a node's host ports."
+  description = <<-EOT
+    Controller replicas. Forced to 1 with use_host_port: two pods cannot share a node's host
+    ports. On a cloud LoadBalancer the Service keeps the client address
+    (externalTrafficPolicy: Local), so the balancer sends traffic ONLY to nodes that run a
+    controller pod: with one replica a rolling update or a node loss leaves no target until
+    the pod is back. Two or more are spread over nodes by a preferred anti-affinity and
+    protected by a PodDisruptionBudget (the chart renders none of its own).
+  EOT
   type        = number
   default     = 1
 
@@ -321,6 +344,34 @@ locals {
 
   replicas = var.use_host_port ? 1 : var.replicas
 
+  # The chart's own labels, which the anti-affinity selects on: the instance label is
+  # "<release>-<namespace>" (read off the rendered chart).
+  pod_labels = {
+    "app.kubernetes.io/name"     = "traefik"
+    "app.kubernetes.io/instance" = "${var.release_name}-${var.namespace}"
+  }
+
+  # More than one replica: spread them over nodes (Local sends traffic only to nodes running
+  # a pod, so two on one node are one target; preferred, not required, so a one-node cluster
+  # still schedules both) and keep one up through a voluntary disruption (a node drain). The
+  # chart renders a PodDisruptionBudget only when asked, and not by default.
+  spread = {
+    for k, v in {
+      affinity = {
+        podAntiAffinity = {
+          preferredDuringSchedulingIgnoredDuringExecution = [{
+            weight = 100
+            podAffinityTerm = {
+              topologyKey   = "kubernetes.io/hostname"
+              labelSelector = { matchLabels = local.pod_labels }
+            }
+          }]
+        }
+      }
+      podDisruptionBudget = { enabled = true, minAvailable = 1 }
+    } : k => v if local.replicas > 1
+  }
+
   image = merge(
     {
       registry   = var.image_registry
@@ -402,14 +453,19 @@ locals {
 
       # The key is service.spec.type. `service.type` is silently ignored by the chart's
       # schema, which is why this is read back by a test.
-      service = {
-        spec = merge(
-          { type = var.use_host_port ? "NodePort" : var.service_type },
-          # Keep the client's address: with the default (Cluster) the peer Traefik sees is a
-          # SNAT'd node IP and every client looks like one.
-          { for k, v in { externalTrafficPolicy = "Local" } : k => v if !var.use_host_port && var.service_type == "LoadBalancer" },
-        )
-      }
+      service = merge(
+        {
+          spec = merge(
+            { type = var.use_host_port ? "NodePort" : var.service_type },
+            # Keep the client's address: with the default (Cluster) the peer Traefik sees is a
+            # SNAT'd node IP and every client looks like one.
+            { for k, v in { externalTrafficPolicy = "Local" } : k => v if !var.use_host_port && var.service_type == "LoadBalancer" },
+          )
+        },
+        # Local keeps the address only behind a balancer that passes the connection through; an
+        # unannotated Service gets AWS's Classic one, which proxies TCP. See var.aws_nlb.
+        { for k, v in { annotations = { "service.beta.kubernetes.io/aws-load-balancer-type" = "nlb" } } : k => v if var.aws_nlb && !var.use_host_port && var.service_type == "LoadBalancer" },
+      )
 
       additionalArguments = [
         "--serversTransport.forwardingTimeouts.responseHeaderTimeout=${local.response_header_timeout_seconds}s",
@@ -419,6 +475,7 @@ locals {
         requests = { cpu = "50m", memory = "64Mi" }
       }
     },
+    local.spread,
     # The chart's default update strategy is maxUnavailable 0 / maxSurge 1. With a hostPort
     # on a single node the surge pod can never schedule, so EVERY `helm upgrade` deadlocks:
     # the new pod stays Pending on the port and the old one is never removed.
@@ -460,6 +517,11 @@ output "gateway_class" {
 
 output "namespace" {
   value = var.namespace
+}
+
+output "replicas" {
+  description = "The controller replicas in force (1 with use_host_port, whatever replicas says)."
+  value       = local.replicas
 }
 
 output "read_timeout" {

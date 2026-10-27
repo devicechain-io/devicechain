@@ -203,7 +203,7 @@ func TestTheSecondBrokerApplyFollowsTheServiceRollout(t *testing.T) {
 		}
 		return true
 	})
-	for _, before := range []string{"applyUpgradeInfra", "rolloutWithLoginResize"} {
+	for _, before := range []string{"applyUpgradeInfra", "upgradeRollout"} {
 		if first[before] == 0 || first["enableCalloutEncryption"] < first[before] {
 			t.Errorf("enableCalloutEncryption (%s) does not come after %s (%s)",
 				fset.Position(first["enableCalloutEncryption"]), before, fset.Position(first[before]))

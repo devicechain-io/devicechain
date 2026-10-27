@@ -294,7 +294,7 @@ func TestTheRolloutIsBracketedByAGrowAndAShrink(t *testing.T) {
 // that then leaves the instance declared on a release it cannot run — or a helm upgrade
 // moved out of the bracket would break nothing above.
 func TestUpgradeChecksTheBudgetFirstAndRollsOutInsideTheBracket(t *testing.T) {
-	want := []string{"precheckUpgradeLogin", "recordUpgradedVersion", "rolloutWithLoginResize"}
+	want := []string{"precheckUpgradeLogin", "recordUpgradedVersion", "upgradeRollout"}
 	if got := callsWithin(t, "Upgrade", want...); strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("Upgrade calls %v; want %v, in that order", got, want)
 	}
@@ -312,7 +312,7 @@ func TestUpgradeChecksTheBudgetFirstAndRollsOutInsideTheBracket(t *testing.T) {
 				if call, ok := n.(*ast.CallExpr); ok {
 					if id, ok := call.Fun.(*ast.Ident); ok {
 						everywhere[id.Name]++
-						if id.Name == "rolloutWithLoginResize" {
+						if id.Name == "upgradeRollout" {
 							bracket = call
 						}
 					}
@@ -321,11 +321,11 @@ func TestUpgradeChecksTheBudgetFirstAndRollsOutInsideTheBracket(t *testing.T) {
 			})
 		}
 	}
-	if bracket == nil || len(bracket.Args) == 0 {
-		t.Fatal("Upgrade does not call rolloutWithLoginResize")
+	if bracket == nil || len(bracket.Args) < 3 {
+		t.Fatal("Upgrade does not call upgradeRollout")
 	}
 	inside := map[string]int{}
-	ast.Inspect(bracket.Args[len(bracket.Args)-1], func(n ast.Node) bool {
+	ast.Inspect(bracket.Args[2], func(n ast.Node) bool {
 		if call, ok := n.(*ast.CallExpr); ok {
 			if id, ok := call.Fun.(*ast.Ident); ok {
 				inside[id.Name]++
@@ -375,5 +375,84 @@ func TestAFailedShrinkWarnsAndDoesNotFailTheUpgrade(t *testing.T) {
 	captureStdout(t, func() { err = resizeUpgradeLogin(context.Background(), st, loginResizeGrow) })
 	if !errors.Is(err, alterErr) {
 		t.Fatalf("a failed grow did not fail the upgrade: %v", err)
+	}
+}
+
+// 🔴 A GATE THAT FAILS LEAVES NOTHING UNDONE. The Gateway's certificate gate used to run inside
+// the login bracket, so its failure skipped the shrink and the callout encryption on an upgrade
+// whose services were already on the new release.
+func TestAFailedGateLeavesTheLoginShrunkAndTheCalloutEncrypted(t *testing.T) {
+	ctx := context.Background()
+	gateErr := errors.New("the Gateway has no certificate")
+
+	calls := resizeCalls(t, nil)
+	step := func(name string, err error) func() error {
+		return func() error { *calls = append(*calls, name); return err }
+	}
+	if err := upgradeRollout(ctx, &State{}, step("rollout", nil), step("callout", nil), step("gate", gateErr)); !errors.Is(err, gateErr) {
+		t.Fatalf("a failed gate returned %v, want its own error", err)
+	}
+	if got := strings.Join(*calls, ","); got != "grow,rollout,shrink,callout,gate" {
+		t.Fatalf("the upgrade ran as %s; want grow,rollout,shrink,callout,gate", got)
+	}
+
+	// Negative controls: the gate does not run when the work before it did not finish.
+	calls = resizeCalls(t, nil)
+	rolloutErr := errors.New("services did not roll over")
+	if err := upgradeRollout(ctx, &State{}, step("rollout", rolloutErr), step("callout", nil), step("gate", gateErr)); !errors.Is(err, rolloutErr) {
+		t.Fatalf("a failed rollout returned %v", err)
+	}
+	if got := strings.Join(*calls, ","); got != "grow,rollout" {
+		t.Fatalf("a failed rollout ran as %s; want grow,rollout", got)
+	}
+	calls = resizeCalls(t, nil)
+	calloutErr := errors.New("broker apply failed")
+	if err := upgradeRollout(ctx, &State{}, step("rollout", nil), step("callout", calloutErr), step("gate", gateErr)); !errors.Is(err, calloutErr) {
+		t.Fatalf("a failed callout apply returned %v", err)
+	}
+	if got := strings.Join(*calls, ","); got != "grow,rollout,shrink,callout" {
+		t.Fatalf("a failed callout apply ran as %s; want grow,rollout,shrink,callout", got)
+	}
+}
+
+// And Upgrade hands each piece to the slot that gives it that order: the callout encryption as
+// the work after the rollout, the certificate gate as the gate, and the gate NOT inside the
+// rollout the login is sized around.
+func TestUpgradeHandsTheGateToTheGateSlot(t *testing.T) {
+	upgrade, _ := upgradeFuncDecl(t)
+	var call *ast.CallExpr
+	ast.Inspect(upgrade.Body, func(n ast.Node) bool {
+		if c, ok := n.(*ast.CallExpr); ok {
+			if id, ok := c.Fun.(*ast.Ident); ok && id.Name == "upgradeRollout" {
+				call = c
+			}
+		}
+		return true
+	})
+	if call == nil || len(call.Args) != 5 {
+		t.Fatal("Upgrade does not call upgradeRollout(ctx, st, rollout, afterRollout, gate)")
+	}
+	callsIn := func(arg ast.Expr, name string) bool {
+		found := false
+		ast.Inspect(arg, func(n ast.Node) bool {
+			if c, ok := n.(*ast.CallExpr); ok {
+				if id, ok := c.Fun.(*ast.Ident); ok && id.Name == name {
+					found = true
+				}
+			}
+			return true
+		})
+		return found
+	}
+	for slot, want := range map[int]map[string]bool{
+		2: {"helmInstall": true, "waitForAreasStep": true, "enableCalloutEncryption": false, "waitForGatewayCertificate": false},
+		3: {"enableCalloutEncryption": true, "waitForGatewayCertificate": false},
+		4: {"waitForGatewayCertificate": true, "enableCalloutEncryption": false, "helmInstall": false},
+	} {
+		for fn, in := range want {
+			if callsIn(call.Args[slot], fn) != in {
+				t.Errorf("upgradeRollout argument %d: calls %s = %v, want %v", slot, fn, !in, in)
+			}
+		}
 	}
 }

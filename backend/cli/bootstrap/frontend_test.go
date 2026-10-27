@@ -804,6 +804,7 @@ func TestAnNginxInstanceUpgradesToTheGatewayWithoutCollidingWithItself(t *testin
 	}
 
 	// After --drop-legacy-ingress: the Gateway alone, and the nginx-only keys retire.
+	stubGatewayCertificates(t, readyGatewayCert(InstanceNamespace(instance)), nil)
 	after := previously()
 	after.DropLegacyIngress = true
 	err := settleFrontEnd(t.Context(), after)

@@ -86,6 +86,9 @@ type InstallOptions struct {
 	// object names its class (planClusterFrontEnd refuses otherwise). Without it an install
 	// leaves ingress-nginx serving and installs Traefik beside it.
 	RemoveLegacyIngress bool
+	// AWSNLB asks for an AWS Network Load Balancer on the ingress controllers' LoadBalancer Services
+	// (EKS): see awsNLBVars.
+	AWSNLB bool
 }
 
 // Install prepares a cluster for instances: it creates or names the cluster, applies
@@ -452,6 +455,7 @@ func installState(binding ClusterBinding, provider string, opts InstallOptions) 
 		MaxConnections:      opts.MaxConnections,
 		Restore:             opts.Restore,
 		RemoveLegacyIngress: opts.RemoveLegacyIngress,
+		AWSNLB:              opts.AWSNLB,
 		Values:              map[string]string{},
 	}
 }
