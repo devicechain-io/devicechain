@@ -1482,6 +1482,11 @@ func (api *Api) HoldCommand(ctx context.Context, id uint) (bool, error) {
 	return res.RowsAffected == 1, nil
 }
 
+// CommandTransportUnsupported is the code a command fails with when its device's transport is
+// recognized and has no command path (Sparkplug, an inbound integration). It is the first
+// token of the failed command's error text and a wire contract: clients match it.
+const CommandTransportUnsupported = "COMMAND_TRANSPORT_UNSUPPORTED"
+
 // MarkUndeliverable drives a queued command to FAILED because its transport cannot carry
 // a command at all, recording the reason. It reports whether THIS caller performed the
 // transition.

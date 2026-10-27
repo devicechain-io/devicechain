@@ -185,7 +185,8 @@ func (r *SchemaResolver) Devices(ctx context.Context, args struct {
 	// The provenance and earmark filters name provisioning profiles, which a scoped caller may
 	// not read, and the scoped device rule cannot be combined with their subqueries. Refused up
 	// front rather than left to fail in the database with its own wording.
-	if scope.IsScoped() && (args.Criteria.ProvisioningProfile != nil || args.Criteria.ExpectedProvisioningProfile != nil) {
+	if scope.IsScoped() && (args.Criteria.ProvisioningProfile != nil || args.Criteria.ExpectedProvisioningProfile != nil ||
+		args.Criteria.Alias != nil) {
 		return nil, auth.ErrScopeUnsupported
 	}
 

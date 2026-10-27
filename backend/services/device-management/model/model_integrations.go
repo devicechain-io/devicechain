@@ -132,6 +132,21 @@ type Integration struct {
 	IssuedToken string `gorm:"-"`
 }
 
+// ScopeHas reports whether the integration's scope includes the device type with this id. The
+// scope is the DeviceTypes loaded by the API: an integration read any other way has none, and
+// resolves nothing.
+func (i *Integration) ScopeHas(deviceTypeId uint) bool {
+	if i == nil {
+		return false
+	}
+	for _, dt := range i.DeviceTypes {
+		if dt != nil && dt.ID == deviceTypeId {
+			return true
+		}
+	}
+	return false
+}
+
 // DefaultOrder implements rdb.Sortable: newest first, token as the unique tiebreak.
 func (Integration) DefaultOrder() string {
 	return "integrations.created_at DESC, integrations.token ASC"

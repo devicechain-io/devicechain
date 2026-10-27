@@ -278,6 +278,41 @@ func TestAnUndeliverableTransportFailsTheCommandRatherThanHoldingIt(t *testing.T
 	}
 }
 
+// integrationSource is the source string a device that reports through an inbound
+// integration is projected with: the integration's token, qualified by the minted transport.
+const integrationSource = "integration:chirp-1"
+
+// TestACommandToAnIntegrationDeviceFailsTerminallyWithTheTransportCode.
+//
+// A device whose uplinks arrive through a network server's or a webhook's HTTP delivery has no
+// connection to command. The command must end FAILED, in one sweep, with the stable code in
+// its error text, and must never be published nor left queued. Paired with the MQTT case in
+// the same test: a device off the deny list still dispatches.
+func TestACommandToAnIntegrationDeviceFailsTerminallyWithTheTransportCode(t *testing.T) {
+	api := &fakeApi{lockAvailable: true, pending: []*model.Command{queued(1, "c1"), queued(2, "c2")}}
+	writer := &recordingWriter{}
+	proc := procWith(api, writer)
+	proc.Presence = &scriptedReader{states: map[string]presence.State{
+		"dev-c1": {Known: true, Source: integrationSource},
+		"dev-c2": {Known: true, Source: mqttSource},
+	}}
+
+	proc.sweepLocked(context.Background())
+
+	if len(api.undeliverable) != 1 || api.undeliverable[0] != 1 {
+		t.Fatalf("the integration device's command must be failed as undeliverable, got %v", api.undeliverable)
+	}
+	if reason := api.failReasons[0]; !strings.HasPrefix(reason, model.CommandTransportUnsupported+":") {
+		t.Fatalf("the failure must lead with the stable code %q, got %q", model.CommandTransportUnsupported, reason)
+	}
+	if len(api.held) != 0 {
+		t.Fatalf("it is terminal, not held: %v", api.held)
+	}
+	if writer.count() != 1 {
+		t.Fatalf("exactly the MQTT device's command is published, got %d", writer.count())
+	}
+}
+
 // TestOnePresenceReadPerTenant pins the batching.
 //
 // 🔑 A READ PER COMMAND WOULD PUT A NETWORK CALL BETWEEN THE PLATFORM AND EVERY DISPATCH.

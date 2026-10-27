@@ -215,3 +215,38 @@ func TestMarshalRoundTripCarriesTheGateway(t *testing.T) {
 		assert.Equal(t, "child-1", got.Device)
 	}
 }
+
+// The integration and its sealed token cross the messaging hop: a dropped Integration would turn
+// an integration's event into a plain one, trusted (or refused) by the credential policy instead
+// of by the integration's own authentication and device type scope. Both wire formats carry them.
+func TestMarshalRoundTripCarriesTheIntegration(t *testing.T) {
+	for _, format := range []eventtime.WireFormat{eventtime.WireCompact, eventtime.WireLegacy} {
+		event := &model.UnresolvedEvent{
+			Source:                 "integration:chirp-1",
+			Device:                 "dev-1",
+			OccurredTime:           time.Now().UTC().Truncate(time.Second),
+			ProcessedTime:          time.Now().UTC().Truncate(time.Second),
+			EventType:              eventtype.StateChange,
+			Payload:                &model.UnresolvedStateChangePayload{State: presence.StateConnected, SessionId: "1"},
+			Integration:            "chirp-1",
+			SealedIntegrationToken: []byte{1, 2, 3, 4},
+		}
+		bytes, err := MarshalUnresolvedEventAs(event, format)
+		assert.NoError(t, err)
+		got, err := UnmarshalUnresolvedEvent(bytes)
+		assert.NoError(t, err)
+		assert.Equal(t, "chirp-1", got.Integration)
+		assert.Equal(t, []byte{1, 2, 3, 4}, got.SealedIntegrationToken)
+	}
+	plain := &model.UnresolvedEvent{
+		Source: "s", Device: "d", OccurredTime: time.Now().UTC().Truncate(time.Second),
+		ProcessedTime: time.Now().UTC().Truncate(time.Second), EventType: eventtype.StateChange,
+		Payload: &model.UnresolvedStateChangePayload{State: presence.StateConnected, SessionId: "1"},
+	}
+	bytes, err := MarshalUnresolvedEventAs(plain, eventtime.WireCompact)
+	assert.NoError(t, err)
+	got, err := UnmarshalUnresolvedEvent(bytes)
+	assert.NoError(t, err)
+	assert.Empty(t, got.Integration, "an event that is not an integration's reads as none")
+	assert.Nil(t, got.SealedIntegrationToken)
+}

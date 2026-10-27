@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -441,10 +442,11 @@ func areaFamily() putest.Family[*Api] {
 
 func deviceFamily() putest.Family[*Api] {
 	const externalIdSeed = "ext-original"
+	const aliasSeed = "alias-original"
 	return putest.Family[*Api]{
 		Name:  "device",
 		Token: "d-1",
-		Migrate: []any{&Device{}, &DeviceType{}, &DeviceProfile{}, &DeviceProfileVersion{}, &DeviceProfileActivation{},
+		Migrate: []any{&Device{}, &DeviceAlias{}, &IntegrationUnregisteredDevice{}, &DeviceType{}, &DeviceProfile{}, &DeviceProfileVersion{}, &DeviceProfileActivation{},
 			&MetricDefinition{}, &CommandDefinition{}, &DetectionRule{}, &DetectionRuleScopeRef{}},
 		Seed: func(t *testing.T, api *Api, ctx context.Context) {
 			for _, tok := range []string{seededTypeToken, otherTypeToken} {
@@ -456,6 +458,7 @@ func deviceFamily() putest.Family[*Api] {
 				Token: "d-1", DeviceTypeToken: seededTypeToken, ExternalId: strp(externalIdSeed),
 				Name: strp(memberSeed.Name), Description: strp(memberSeed.Description),
 				Metadata: strp(memberSeed.Metadata),
+				Aliases:  &[]DeviceAliasInput{{Scheme: "custom.acme", Value: aliasSeed}},
 			}); err != nil {
 				t.Fatalf("seed device: %v", err)
 			}
@@ -467,6 +470,11 @@ func deviceFamily() putest.Family[*Api] {
 				refTokenOf(t, e.DeviceType == nil, func() string { return e.DeviceType.Token }))
 			got["externalId"] = nullStr(e.ExternalId)
 			got["enabled"] = boolStr(!e.IsDisabled())
+			aliases, err := api.DeviceAliases(ctx, e.ID)
+			if err != nil {
+				t.Fatalf("read device aliases: %v", err)
+			}
+			got["aliases"] = putest.RenderStringList(renderDeviceAliases(aliases))
 			return got
 		},
 		NewRequest: func() any { return new(DeviceUpdateRequest) },
@@ -487,7 +495,31 @@ func deviceFamily() putest.Family[*Api] {
 			// API exposes. Required: a null is refused, never read as "disable".
 			putest.RequiredBoolField("enabled", true,
 				func(r *DeviceUpdateRequest) *dcgraphql.OptionalBool { return &r.Enabled }),
+			// A list of {scheme, value} objects, rendered as "scheme=value" strings. Like every
+			// list it folds null and [] onto an EMPTY set, so it is Clearable and clears to "[]".
+			deviceAliasesField("aliases", []string{"custom.acme=" + aliasSeed}, []string{"custom.acme=alias-replaced"}),
 		),
+	}
+}
+
+// deviceAliasesField describes a device's alias set for the partial-update harness. The harness
+// carries every value as a string, so an alias is rendered "scheme=value" and parsed back here.
+func deviceAliasesField(name string, seeded, replace []string) putest.Field {
+	parse := func(v string) []DeviceAliasInput {
+		out := []DeviceAliasInput{}
+		for _, entry := range putest.ParseStringList(v) {
+			scheme, value, _ := strings.Cut(entry, "=")
+			out = append(out, DeviceAliasInput{Scheme: scheme, Value: value})
+		}
+		return out
+	}
+	pick := func(req any) *OptionalDeviceAliasList { return &req.(*DeviceUpdateRequest).Aliases }
+	return putest.Field{
+		Name: name, Seeded: putest.RenderStringList(seeded), Replace: putest.RenderStringList(replace),
+		Cleared: putest.RenderStringList(nil), Kind: putest.Clearable,
+		Set:      func(req any, v string) { *pick(req) = OptionalDeviceAliasListOf(parse(v)) },
+		SetNull:  func(req any) { *pick(req) = OptionalDeviceAliasList{Set: true} },
+		SetEmpty: func(req any) { *pick(req) = OptionalDeviceAliasListOf([]DeviceAliasInput{}) },
 	}
 }
 

@@ -46,7 +46,7 @@ type intFixture struct {
 func newIntFixture(t *testing.T) *intFixture {
 	t.Helper()
 	api := newPartialUpdateApi(t, append(append([]any{}, deviceProfileTables...),
-		&ProvisioningProfile{}, &Integration{}, &IntegrationDeviceType{}, &rdb.AuditEvent{})...)
+		&ProvisioningProfile{}, &Integration{}, &IntegrationDeviceType{}, &DeviceAlias{}, &IntegrationUnregisteredDevice{}, &rdb.AuditEvent{})...)
 	ctx := partialUpdateCtx()
 	seen := &[][]byte{}
 	checker, err := credential.NewChecker(credentialtest.NewStore(), map[credential.Kind]credential.Policy{

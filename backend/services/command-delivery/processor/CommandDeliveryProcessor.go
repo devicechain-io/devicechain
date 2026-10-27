@@ -664,7 +664,10 @@ func (cproc *CommandDeliveryProcessor) failUndeliverable(ctx context.Context, cm
 // working perfectly. Nor is it the protocol's fault — Sparkplug does define a command
 // message; what is missing is our path for carrying one. "Does not support commands"
 // would be a claim about the transport, and it would be false.
-const undeliverableReason = "This platform has no command delivery path for the device's " +
+//
+// It leads with the stable code, so a caller can recognize the outcome without matching prose:
+// the transport is recognized and has no command path in this build.
+const undeliverableReason = model.CommandTransportUnsupported + ": This platform has no command delivery path for the device's " +
 	"transport, so the command was never dispatched."
 
 // incr adds to an optional counter, skipping a nil one so a literal-built processor

@@ -182,6 +182,11 @@ func (api *MockApi) AuthenticateDeviceConnect(ctx context.Context, presented *mo
 	return args.Get(0).(*model.Device), args.Error(1)
 }
 
+func (api *MockApi) AuthenticateIntegration(ctx context.Context, integrationToken, presented string) (*model.Integration, error) {
+	args := api.Mock.Called()
+	return args.Get(0).(*model.Integration), args.Error(1)
+}
+
 func (api *MockApi) ResolveDeviceCredential(ctx context.Context, presented *model.PresentedCredential, now time.Time) (*model.Device, string, error) {
 	args := api.Mock.Called()
 	return args.Get(0).(*model.Device), args.String(1), args.Error(2)
