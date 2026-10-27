@@ -76,6 +76,8 @@ const (
 		`login(email:$email,password:$password){identityToken expiresAt superuser memberships{tenant roles}}}`
 	selectTenantMutation = `mutation($identityToken:String!,$tenant:String!){` +
 		`selectTenant(identityToken:$identityToken,tenant:$tenant){accessToken refreshToken expiresAt}}`
+	verifyMfaMutation = `mutation($challenge:String!,$code:String!){` +
+		`verifyMfa(challenge:$challenge,code:$code){identityToken expiresAt superuser memberships{tenant roles}}}`
 	refreshMutation = `mutation($refreshToken:String!){` +
 		`refresh(refreshToken:$refreshToken){accessToken refreshToken expiresAt}}`
 )
@@ -95,6 +97,65 @@ func Login(ctx context.Context, httpc *http.Client, userGraphQL, email, password
 		return IdentityAuth{}, fmt.Errorf("userclient: login returned an empty identity token")
 	}
 	return out.Login, nil
+}
+
+// codeMfaChallenge is the extensions.code login answers with for an identity that has a second
+// factor: the password was right, no token was minted, and the challenge completes the sign-in.
+const codeMfaChallenge = "MFA_CHALLENGE"
+
+// MfaRequiredError is Login's answer for an identity with a second factor. It is not a failure of
+// the password: the password was right, and the sign-in completes with VerifyMfa (or LoginWithOTP)
+// and a code. A caller that cannot supply a code must surface this, loudly, and not sign in again:
+// a second Login mints a second challenge and gets the same answer.
+type MfaRequiredError struct {
+	// Challenge is the handle VerifyMfa takes. It is single-use and short-lived.
+	Challenge string
+	// ExpiresAt is when the challenge stops being accepted (zero if the server sent none).
+	ExpiresAt time.Time
+	// Methods is what the server will accept as the code: "TOTP" and "RECOVERY_CODE".
+	Methods []string
+}
+
+// Error names what the person has to do, since this is the text a command-line user sees.
+func (e *MfaRequiredError) Error() string {
+	return "userclient: this account requires a second factor; supply a one-time code (or a recovery code)"
+}
+
+// OTPFunc supplies the second-factor code for a challenge: from a flag, a prompt, a vault. It is
+// called at most once per Login and may block; ctx is the login's.
+type OTPFunc func(ctx context.Context, challenge *MfaRequiredError) (string, error)
+
+// VerifyMfa completes a Login that answered with *MfaRequiredError: challenge plus a TOTP code (or a
+// recovery code). Its refusals are *GraphQLError; an expired, spent or voided challenge carries
+// code MFA_CHALLENGE_EXPIRED and needs a new Login.
+func VerifyMfa(ctx context.Context, httpc *http.Client, userGraphQL, challenge, code string) (IdentityAuth, error) {
+	var out struct {
+		VerifyMfa IdentityAuth `json:"verifyMfa"`
+	}
+	err := graphqlPost(ctx, httpc, userGraphQL, nil, verifyMfaMutation,
+		map[string]any{"challenge": challenge, "code": code}, &out)
+	if err != nil {
+		return IdentityAuth{}, err
+	}
+	if out.VerifyMfa.IdentityToken == "" {
+		return IdentityAuth{}, fmt.Errorf("userclient: verifyMfa returned an empty identity token")
+	}
+	return out.VerifyMfa, nil
+}
+
+// LoginWithOTP is Login that finishes a second-factor sign-in with otp. With a nil otp it is Login:
+// an account with a second factor gets *MfaRequiredError. An error from otp is returned as it is.
+func LoginWithOTP(ctx context.Context, httpc *http.Client, userGraphQL, email, password string, otp OTPFunc) (IdentityAuth, error) {
+	ia, err := Login(ctx, httpc, userGraphQL, email, password)
+	var mfa *MfaRequiredError
+	if err == nil || otp == nil || !errors.As(err, &mfa) {
+		return ia, err
+	}
+	code, err := otp(ctx, mfa)
+	if err != nil {
+		return IdentityAuth{}, err
+	}
+	return VerifyMfa(ctx, httpc, userGraphQL, mfa.Challenge, code)
 }
 
 // SelectTenant exchanges an identity token + a chosen tenant for a tenant access+refresh pair.
@@ -177,12 +238,22 @@ func graphqlPost(ctx context.Context, httpc *http.Client, url string, headers ma
 		Errors []struct {
 			Message    string `json:"message"`
 			Extensions struct {
-				Code string `json:"code"`
+				Code      string   `json:"code"`
+				Challenge string   `json:"challenge"`
+				ExpiresAt string   `json:"expiresAt"`
+				Methods   []string `json:"methods"`
 			} `json:"extensions"`
 		} `json:"errors"`
 	}
 	if err := json.Unmarshal(raw, &envelope); err != nil {
 		return fmt.Errorf("userclient: decode response: %w", err)
+	}
+	// The password was right and the account has a second factor: a typed answer carrying the
+	// challenge, not a refusal to be read from a message. Only a lone, well-formed one counts.
+	if len(envelope.Errors) == 1 && envelope.Errors[0].Extensions.Code == codeMfaChallenge &&
+		envelope.Errors[0].Extensions.Challenge != "" {
+		x := envelope.Errors[0].Extensions
+		return &MfaRequiredError{Challenge: x.Challenge, ExpiresAt: parseExpiry(x.ExpiresAt), Methods: x.Methods}
 	}
 	if len(envelope.Errors) > 0 {
 		gqlErr := &GraphQLError{

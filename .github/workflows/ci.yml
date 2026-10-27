@@ -2831,6 +2831,32 @@ jobs:
           echo "::error::ko build failed after 3 attempts" >&2
           exit 1
 
+      # The break-glass path, in the REAL image. `dcctl instances break-glass mfa-reset` execs the
+      # service binary at a fixed path inside the pod; ko names that binary after the last element
+      # of the main package's import path (dc-user-management, not user-management), and nothing
+      # but a built image can say so. This step runs the path the command uses, taken from the
+      # constant itself, and expects the subcommand's own refusal outside a pod: that proves the
+      # path exists AND that main hands `break-glass` to the subcommand instead of starting the
+      # service. A wrong path fails at docker run, not at an operator's worst moment.
+      - name: break-glass subcommand exists at the path dcctl execs
+        if: matrix.module == 'backend/services/user-management'
+        working-directory: ${{ matrix.module }}
+        env:
+          KO_DOCKER_REPO: ghcr.io/devicechain-io
+        run: |
+          set -euo pipefail
+          bin="$(sed -n 's/^[[:space:]]*userManagementBinary[[:space:]]*=[[:space:]]*"\(.*\)"$/\1/p' "$GITHUB_WORKSPACE/backend/cli/bootstrap/breakglass.go")"
+          [ -n "$bin" ] || { echo "::error::userManagementBinary not found in backend/cli/bootstrap/breakglass.go"; exit 1; }
+          img="$("$GITHUB_WORKSPACE/hack/ko-build.sh" --local --base-import-paths ./ | tail -n 1)"
+          echo "image: $img  binary: $bin"
+          set +e
+          out="$(docker run --rm --entrypoint "$bin" "$img" break-glass mfa-reset --email x@example.com 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          [ "$rc" -eq 1 ] || { echo "::error::expected exit 1 (the subcommand's refusal), got $rc"; exit 1; }
+          echo "$out" | grep -q "inside a user-management pod" || { echo "::error::the refusal was not the break-glass subcommand's"; exit 1; }
+
       # The watcher for the config line above. Builds ONE image (the operator, whose modules
       # this job has already downloaded) and reads the base ko recorded in it; it must be the
       # digest .ko.yaml pins. Without KO_CONFIG_PATH it records the bare tag and fails.

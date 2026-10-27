@@ -10,6 +10,13 @@ namespace DeviceChain.Sdk;
 public sealed class GraphQlError
 {
     public string Message { get; set; } = "";
+
+    /// <summary>The error's <c>extensions.code</c> (for example <c>MFA_CHALLENGE</c>), or null if it set none.</summary>
+    public string? Code { get; set; }
+
+    // The error's raw extensions object, kept so a typed exception can read the fields it needs
+    // without the SDK growing a public bag of untyped values. Filled by GraphQlClient, never by JSON.
+    internal string? ExtensionsJson { get; set; }
 }
 
 /// <summary>
@@ -18,7 +25,7 @@ public sealed class GraphQlError
 /// <c>errors</c> payload (<see cref="Errors"/> carries them). Mirrors the TS SDK's
 /// <c>GraphQLRequestError</c>.
 /// </summary>
-public sealed class GraphQlRequestException : Exception
+public class GraphQlRequestException : Exception
 {
     public int Status { get; }
     public IReadOnlyList<GraphQlError> Errors { get; }

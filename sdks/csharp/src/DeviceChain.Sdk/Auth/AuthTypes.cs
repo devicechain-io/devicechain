@@ -45,6 +45,17 @@ internal sealed class LoginData
     public IdentityAuth Login { get; set; } = new();
 }
 
+internal sealed class VerifyMfaVariables
+{
+    public string Challenge { get; set; } = "";
+    public string Code { get; set; } = "";
+}
+
+internal sealed class VerifyMfaData
+{
+    public IdentityAuth VerifyMfa { get; set; } = new();
+}
+
 internal sealed class SelectTenantVariables
 {
     public string IdentityToken { get; set; } = "";

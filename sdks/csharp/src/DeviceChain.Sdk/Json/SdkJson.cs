@@ -27,6 +27,8 @@ namespace DeviceChain.Sdk.Json;
 [JsonSerializable(typeof(SelectTenantData))]
 [JsonSerializable(typeof(RefreshVariables))]
 [JsonSerializable(typeof(RefreshData))]
+[JsonSerializable(typeof(VerifyMfaVariables))]
+[JsonSerializable(typeof(VerifyMfaData))]
 [JsonSerializable(typeof(IdentityAuth))]
 [JsonSerializable(typeof(AuthToken))]
 // Ingest

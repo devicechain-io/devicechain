@@ -33,6 +33,7 @@ type TenantSession struct {
 	email       string
 	password    string
 	tenant      string
+	otp         OTPFunc
 
 	group singleflight.Group
 
@@ -54,6 +55,14 @@ func NewTenantSession(httpc *http.Client, userGraphQL, email, password, tenant s
 		password:    password,
 		tenant:      tenant,
 	}
+}
+
+// WithOTP sets how the session answers a second-factor challenge when it signs in. Without it, an
+// account with a second factor makes every sign-in fail at once with *MfaRequiredError (never a
+// retry). Call it before the session is used; it returns s.
+func (s *TenantSession) WithOTP(otp OTPFunc) *TenantSession {
+	s.otp = otp
+	return s
 }
 
 // Tenant returns the tenant this session is scoped to.
@@ -282,7 +291,7 @@ func (s *TenantSession) reauth(ctx context.Context) (AuthToken, error) {
 		}
 		// Refresh token expired/revoked — fall through to a full re-login.
 	}
-	ia, err := Login(ctx, s.httpc, s.userGraphQL, s.email, s.password)
+	ia, err := LoginWithOTP(ctx, s.httpc, s.userGraphQL, s.email, s.password, s.otp)
 	if err != nil {
 		return AuthToken{}, err
 	}
@@ -298,6 +307,7 @@ type AdminSession struct {
 	userGraphQL string
 	email       string
 	password    string
+	otp         OTPFunc
 
 	group singleflight.Group
 
@@ -316,6 +326,13 @@ func NewAdminSession(httpc *http.Client, userGraphQL, email, password string) *A
 		email:       email,
 		password:    password,
 	}
+}
+
+// WithOTP sets how the session answers a second-factor challenge when it signs in; see
+// TenantSession.WithOTP. Call it before the session is used; it returns a.
+func (a *AdminSession) WithOTP(otp OTPFunc) *AdminSession {
+	a.otp = otp
+	return a
 }
 
 // Query executes a GraphQL operation against adminBaseURL (the /admin/graphql
@@ -357,7 +374,7 @@ func (a *AdminSession) token(ctx context.Context) (string, error) {
 		if tok != "" && time.Now().Before(exp.Add(-refreshSkew)) {
 			return tok, nil
 		}
-		ia, err := Login(context.Background(), a.httpc, a.userGraphQL, a.email, a.password)
+		ia, err := LoginWithOTP(context.Background(), a.httpc, a.userGraphQL, a.email, a.password, a.otp)
 		if err != nil {
 			return "", err
 		}

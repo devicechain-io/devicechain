@@ -170,7 +170,31 @@ public sealed class GraphQlClient
         return null;
     }
 
-    private static GraphQlError[] ReadErrors(JsonElement errors) =>
-        JsonSerializer.Deserialize(errors.GetRawText(), SdkJson.Default.GraphQlErrorArray)
-        ?? Array.Empty<GraphQlError>();
+    private static GraphQlError[] ReadErrors(JsonElement errors)
+    {
+        GraphQlError[] parsed = JsonSerializer.Deserialize(errors.GetRawText(), SdkJson.Default.GraphQlErrorArray)
+            ?? Array.Empty<GraphQlError>();
+        // The message came from the generated deserializer; the code and the raw extensions are read
+        // from the same elements, in order, so a typed exception can be built from an error that
+        // carries more than a message.
+        int i = 0;
+        foreach (JsonElement element in errors.EnumerateArray())
+        {
+            if (i >= parsed.Length)
+            {
+                break;
+            }
+            if (element.ValueKind == JsonValueKind.Object
+                && element.TryGetProperty("extensions", out JsonElement ext) && ext.ValueKind == JsonValueKind.Object)
+            {
+                parsed[i].ExtensionsJson = ext.GetRawText();
+                if (ext.TryGetProperty("code", out JsonElement code) && code.ValueKind == JsonValueKind.String)
+                {
+                    parsed[i].Code = code.GetString();
+                }
+            }
+            i++;
+        }
+        return parsed;
+    }
 }

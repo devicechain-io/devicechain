@@ -519,18 +519,6 @@ func TestTheMfaErrorCodeSetIsClosed(t *testing.T) {
 	require.False(t, errors.As(ErrMfaInvalidCode, &coded))
 }
 
-// The MCP authorize page signs in with a password alone. Until it can ask for the code, an
-// enrolled account's sign-in there renders an honest refusal and issues no token.
-func TestTheAuthorizePageDoesNotCallAnEnrolledPasswordWrong(t *testing.T) {
-	e := newMfaEnv(t)
-	e.createMember(t, "pat@example.com", "pw-1")
-	e.enroll(t, "pat@example.com", "pw-1")
-	_, err := e.m.Login(context.Background(), "pat@example.com", "pw-1")
-	require.Contains(t, authorizeLoginError(err), "two-factor")
-	require.NotContains(t, authorizeLoginError(err), "Invalid email or password")
-	require.Contains(t, authorizeLoginError(ErrInvalidCredentials), "Invalid email or password", "the control")
-}
-
 // The checker main builds from CredentialPolicies must answer for the one-time kind: without its
 // policy every verifyMfa would fail with ErrUndeclaredKind at the first enrolled sign-in rather
 // than at startup. The kind is unthrottled because its attempt state is the database's.

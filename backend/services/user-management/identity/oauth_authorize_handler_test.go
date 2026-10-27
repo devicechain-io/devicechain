@@ -26,6 +26,9 @@ type fakeAuthorizeSvc struct {
 	emailErr    error
 	code        string
 	codeErr     error
+	mfaResult   *IdentityAuth
+	mfaErr      error
+	mfaGot      [3]string // challenge, code, source of the last VerifyMfa
 }
 
 func (f *fakeAuthorizeSvc) ResolveAuthorizeClient(context.Context, string, string) (*iam.OAuthClient, error) {
@@ -33,6 +36,10 @@ func (f *fakeAuthorizeSvc) ResolveAuthorizeClient(context.Context, string, strin
 }
 func (f *fakeAuthorizeSvc) Login(context.Context, string, string) (*IdentityAuth, error) {
 	return f.loginResult, f.loginErr
+}
+func (f *fakeAuthorizeSvc) VerifyMfa(_ context.Context, challenge, code, source string) (*IdentityAuth, error) {
+	f.mfaGot = [3]string{challenge, code, source}
+	return f.mfaResult, f.mfaErr
 }
 func (f *fakeAuthorizeSvc) IdentitySubject(string) (IdentitySubject, error) {
 	return IdentitySubject{Email: f.email, SessionEpoch: "epoch"}, f.emailErr

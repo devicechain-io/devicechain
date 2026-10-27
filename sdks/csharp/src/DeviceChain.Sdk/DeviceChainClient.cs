@@ -99,6 +99,12 @@ public sealed class DeviceChainClient : IAsyncDisposable
     public Task<IdentityAuth> LoginAsync(string email, string password, CancellationToken cancellationToken = default) =>
         Auth.LoginAsync(email, password, cancellationToken);
 
+    /// <summary>
+    /// Completes a sign-in held for its second factor. Convenience over <see cref="AuthSession.VerifyMfaAsync"/>.
+    /// </summary>
+    public Task<IdentityAuth> VerifyMfaAsync(string challenge, string code, CancellationToken cancellationToken = default) =>
+        Auth.VerifyMfaAsync(challenge, code, cancellationToken);
+
     /// <summary>Selects a tenant (step 2), yielding the access/refresh pair.</summary>
     public Task<AuthToken> SelectTenantAsync(string tenant, CancellationToken cancellationToken = default) =>
         Auth.SelectTenantAsync(tenant, cancellationToken);
