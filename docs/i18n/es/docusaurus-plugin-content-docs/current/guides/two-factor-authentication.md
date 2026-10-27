@@ -113,6 +113,8 @@ Abre **Admin → Identities**, abre a la persona y, en la sección **Autenticaci
 - El restablecimiento queda registrado como `mfa_reset`, con el nombre de quien lo hizo.
 - La llamada de la API es `resetIdentityMfa(email, newPassword)` en la API de administración.
 
+Borrar la contraseña de una identidad (`clearPassword` en la API de administración, que la convierte en solo inicio de sesión único) también elimina su segundo factor, los códigos de recuperación y el secreto guardado, en el mismo paso. El factor protege solo los inicios de sesión con contraseña, así que sin contraseña no protegería nada y quedaría huérfano.
+
 ### Break-glass: el operador que no puede iniciar sesión {#break-glass}
 
 Si el único superusuario tiene un segundo factor y ha perdido tanto el teléfono como los códigos de recuperación, nadie puede restablecerlo con la API de administración. `dcctl instances break-glass mfa-reset` lo hace desde dentro del clúster:

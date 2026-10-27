@@ -113,6 +113,8 @@ catch (MfaRequiredException mfa)
 - 重置会记录为 `mfa_reset`，并注明操作者。
 - API 调用是管理 API 上的 `resetIdentityMfa(email, newPassword)`。
 
+清除某个身份的密码（管理 API 上的 `clearPassword`，会把它转为仅单点登录）时，会在同一步中一并移除它的第二因素、恢复码和保存的密钥。该因素只保护密码登录，没有密码后它不再保护任何东西，只会成为孤立的残留。
+
 ### Break-glass：无法登录的运维人员 {#break-glass}
 
 如果唯一的超级用户设有第二因素，却同时丢失了手机和恢复码，就没人能通过管理 API 重置它。`dcctl instances break-glass mfa-reset` 可从集群内部完成：

@@ -113,6 +113,8 @@ Open **Admin → Identities**, open the person, and in the **Two-factor authenti
 - The reset is recorded as `mfa_reset`, naming who did it.
 - The API call is `resetIdentityMfa(email, newPassword)` on the admin API.
 
+Clearing an identity's password (`clearPassword` on the admin API, which converts it to single sign-on only) also removes its second factor, the recovery codes and the stored secret, in the same step. The factor protects password sign-ins only, so with no password it would guard nothing and would be left orphaned.
+
 ### Break-glass: the operator who cannot sign in {#break-glass}
 
 If the only superuser has a second factor and has lost both the phone and the recovery codes, nobody can reset them through the admin API. `dcctl instances break-glass mfa-reset` does it from inside the cluster:
