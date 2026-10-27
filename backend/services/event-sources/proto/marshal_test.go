@@ -230,6 +230,7 @@ func TestMarshalRoundTripCarriesTheIntegration(t *testing.T) {
 			Payload:                &model.UnresolvedStateChangePayload{State: presence.StateConnected, SessionId: "1"},
 			Integration:            "chirp-1",
 			SealedIntegrationToken: []byte{1, 2, 3, 4},
+			IntegrationIdentifier:  "70B3D57ED0000001",
 		}
 		bytes, err := MarshalUnresolvedEventAs(event, format)
 		assert.NoError(t, err)
@@ -237,6 +238,7 @@ func TestMarshalRoundTripCarriesTheIntegration(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, "chirp-1", got.Integration)
 		assert.Equal(t, []byte{1, 2, 3, 4}, got.SealedIntegrationToken)
+		assert.Equal(t, "70B3D57ED0000001", got.IntegrationIdentifier)
 	}
 	plain := &model.UnresolvedEvent{
 		Source: "s", Device: "d", OccurredTime: time.Now().UTC().Truncate(time.Second),
@@ -249,4 +251,5 @@ func TestMarshalRoundTripCarriesTheIntegration(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Empty(t, got.Integration, "an event that is not an integration's reads as none")
 	assert.Nil(t, got.SealedIntegrationToken)
+	assert.Empty(t, got.IntegrationIdentifier)
 }

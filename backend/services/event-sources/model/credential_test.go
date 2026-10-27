@@ -35,6 +35,7 @@ func eventWithCredentialMarkers() UnresolvedEvent {
 		// An integration's sealed bearer token is secret material of the same standing.
 		Integration:            "an-integration",
 		SealedIntegrationToken: []byte(secret),
+		IntegrationIdentifier:  "70B3D57ED0000001",
 	}
 }
 
@@ -65,6 +66,10 @@ func TestWithoutPresentedCredentialClearsEveryField(t *testing.T) {
 	// The integration's NAME is not secret and stays, so a dead letter says which sender it was.
 	if got.Integration != "an-integration" {
 		t.Errorf("Integration = %q, want it kept", got.Integration)
+	}
+	// The identifier is the sender's own name for a device, not secret, and the resolver needs it.
+	if got.IntegrationIdentifier != "70B3D57ED0000001" {
+		t.Errorf("IntegrationIdentifier = %q, want it kept", got.IntegrationIdentifier)
 	}
 }
 

@@ -98,6 +98,13 @@ message PUnresolvedEvent {
     // sender presented it. A value that does not open for this tenant and integration is refused
     // as unauthenticated.
     optional bytes sealed_integration_token = 21;
+    // integration_identifier is the sender's own name for the device, as the integration route
+    // resolved it to the device in this event (a DevEUI, a TTS device id, a webhook id), in the
+    // canonical spelling. The resolver requires the device to hold an alias under the integration's
+    // scheme with exactly this value NOW, so an alias removed or moved after the route cached its
+    // answer refuses the event instead of storing it on the old device. Set only with integration.
+    // NEVER set from device-controlled input, and NEVER by any other source.
+    string integration_identifier = 22;
 }
 
 /**

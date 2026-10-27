@@ -31,7 +31,7 @@ import (
 func integrationEvent() *model.UnresolvedEvent {
 	return &model.UnresolvedEvent{
 		Device: "sensor-001", EventType: eventtype.Measurement, Source: "integration:cs",
-		Integration: "cs", SealedIntegrationToken: []byte("sealed"),
+		Integration: "cs", SealedIntegrationToken: []byte("sealed"), IntegrationIdentifier: "70B3D57ED0000001",
 	}
 }
 
@@ -47,6 +47,7 @@ func TestOnlyTheIntegrationRoutesPublishKeepsItsMarksAndSource(t *testing.T) {
 	require.Equal(t, "http1", decoded.Source)
 	require.Empty(t, decoded.Integration, "the device-facing path published an integration's authority")
 	require.Nil(t, decoded.SealedIntegrationToken)
+	require.Empty(t, decoded.IntegrationIdentifier, "the device-facing path published an integration's identifier")
 
 	// The route's publish keeps what the route stamped.
 	_, msg, ok = integrationEventMessage("http1", "acme", integrationEvent(), &model.UnresolvedMeasurementsPayload{}, "acme:cs:1")
@@ -57,6 +58,7 @@ func TestOnlyTheIntegrationRoutesPublishKeepsItsMarksAndSource(t *testing.T) {
 	require.Equal(t, "integration:cs", decoded.Source)
 	require.Equal(t, "cs", decoded.Integration)
 	require.Equal(t, []byte("sealed"), decoded.SealedIntegrationToken)
+	require.Equal(t, "70B3D57ED0000001", decoded.IntegrationIdentifier)
 }
 
 func integrationInfra() mscfg.InfrastructureConfiguration {

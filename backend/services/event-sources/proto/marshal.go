@@ -456,6 +456,7 @@ func MarshalUnresolvedEventAs(event *model.UnresolvedEvent, format eventtime.Wir
 		Gateway:                event.Gateway,
 		Integration:            event.Integration,
 		SealedIntegrationToken: event.SealedIntegrationToken,
+		IntegrationIdentifier:  event.IntegrationIdentifier,
 	}
 
 	// Marshal event to bytes.
@@ -511,6 +512,7 @@ func UnmarshalUnresolvedEvent(encoded []byte) (*model.UnresolvedEvent, error) {
 		Gateway:                pbevent.Gateway,
 		Integration:            pbevent.Integration,
 		SealedIntegrationToken: pbevent.SealedIntegrationToken,
+		IntegrationIdentifier:  pbevent.IntegrationIdentifier,
 	}
 
 	return event, nil

@@ -187,6 +187,10 @@ type ResolveMetrics struct {
 	// for the pool, for the same reason.
 	deviceDisabled prometheus.Counter
 
+	// integrationAliasMismatch counts inbound integration events refused because their device no
+	// longer holds the alias they were resolved from.
+	integrationAliasMismatch prometheus.Counter
+
 	// notGatewayChild counts a gateway's publishes refused because the device it named is not
 	// assigned to it (or does not exist). ONE label-free counter for the pool; each refusal is
 	// also dead-lettered with reason NotGatewayChild.
@@ -225,6 +229,9 @@ func NewResolveMetrics(ms *core.Microservice) ResolveMetrics {
 		notGatewayChild: ms.NewCounter(
 			"resolve_not_gateway_child_total",
 			"Events a gateway published for a device that is not assigned to it, or that does not exist; each is refused, dead-lettered with reason NotGatewayChild and announced to the gateway"),
+		integrationAliasMismatch: ms.NewCounter(
+			"resolve_integration_alias_mismatch_total",
+			"Inbound integration events refused because their device no longer holds the alias the event was resolved from (removed or moved); each is dead-lettered with reason IntegrationAliasMismatch"),
 		workers: ms.NewGauge("resolve_workers",
 			"Resolvers this pod runs (resolution.workers). resolve_inflight held at this value means every resolver is busy and inbound events are queueing in front of them."),
 	}
@@ -762,6 +769,7 @@ func (iproc *InboundEventsProcessor) initializeEventResolvers(ctx context.Contex
 		resolver.SecretTransit = iproc.secretTransit
 		resolver.tenantDeleted = iproc.tenantDeleted
 		resolver.deviceDisabled = iproc.metrics.deviceDisabled
+		resolver.integrationAliasMismatch = iproc.metrics.integrationAliasMismatch
 		resolver.gateway = gateway
 		resolver.calcObs.metrics = iproc.metrics.calc
 		iproc.resolvers = append(iproc.resolvers, resolver)

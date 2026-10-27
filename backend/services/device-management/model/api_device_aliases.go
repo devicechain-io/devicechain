@@ -203,6 +203,22 @@ func (api *Api) aliasHolders(ctx context.Context, aliases []DeviceAliasInput) (m
 	return out, nil
 }
 
+// DeviceHoldsAlias reports whether the device holds an alias under scheme whose value is the
+// canonical form of value, read from the database as it is now. A value the scheme refuses is
+// not held by anyone.
+func (api *Api) DeviceHoldsAlias(ctx context.Context, deviceId uint, scheme, value string) (bool, error) {
+	canonical, err := devicealias.Normalize(scheme, value)
+	if err != nil {
+		return false, nil
+	}
+	var n int64
+	if err := api.RDB.DB(ctx).Model(&DeviceAlias{}).
+		Where("device_id = ? AND scheme = ? AND value = ?", deviceId, scheme, canonical).Count(&n).Error; err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
 // aliasKey is the map key of a (scheme, value) pair.
 func aliasKey(scheme, value string) string { return scheme + "\x00" + value }
 
