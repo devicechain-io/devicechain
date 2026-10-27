@@ -341,7 +341,7 @@ Estas métricas cuentan la [autenticación en dos pasos](../guides/two-factor-au
 
 Prefijo: `devicechain_updatemanagement_`. El servicio se ejecuta en los perfiles `default` y `full`; consulta [Actualizaciones over-the-air](../concepts/over-the-air-updates.md).
 
-Si sube `update_download_grants_total{result="not_configured"}`, no hay una base de descarga definida y ningún dispositivo puede descargar: `updates.downloadBaseUrl` se puso como cadena vacía, o la instancia no tiene ingress del que derivarla. `update_attempts_expired_total` cuenta los dispositivos que callaron durante una actualización; uno en `UNKNOWN` espera el inventario del dispositivo o un `abandonUnknownUpdate` de un operador.
+Si sube `update_download_grants_total{result="not_configured"}`, no hay una base de descarga definida y ningún dispositivo puede descargar: `updates.downloadBaseUrl` se puso como cadena vacía, o la instancia no tiene ingress del que derivarla. `update_attempts_expired_total` cuenta los dispositivos que callaron durante una actualización; uno en `UNKNOWN` espera el inventario del dispositivo o un `abandonUnknownUpdate` de un operador. `UpdateDownloadsNotConfigured`, `UpdateReportsMostlyRefused`, `UpdateRolloutStepsFailing` y `UpdateAttemptsGoingUnknown` los vigilan; consulta las [alertas de actualizaciones por aire](./observability.md#update-alerts).
 
 | Métrica | Significado |
 | --- | --- |

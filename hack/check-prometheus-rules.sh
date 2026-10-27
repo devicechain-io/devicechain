@@ -1157,7 +1157,7 @@ helm template dc "$chart" --set "instance.config.infrastructure.secrets.rootKey=
 
 # The rule files this repository knows it ships. Literal, not derived from what
 # rendered: deriving it would restate the render's own output and assert nothing.
-required_groups=(database-backup database-storage jetstream-replication database-control-plane command-delivery tenant-purge sign-in jetstream-delivery governance dead-letter event-processing event-sources device-management container-restarts area-availability safety-gates edge device-state)
+required_groups=(database-backup database-storage jetstream-replication database-control-plane command-delivery tenant-purge sign-in jetstream-delivery governance dead-letter event-processing event-sources device-management container-restarts area-availability safety-gates edge device-state update-management)
 
 extract_rules "$work/rendered.yaml" "$work" "${required_groups[@]}" ||
   fail "the chart did not render the PrometheusRules this check requires"
@@ -1266,6 +1266,7 @@ declare -A rule_tests=(
   [edge]="$repo_root/hack/testdata/prometheus-rules-edge-tests.yaml"
   [device-management]="$repo_root/hack/testdata/prometheus-rules-device-management-tests.yaml"
   [device-state]="$repo_root/hack/testdata/prometheus-rules-device-state-tests.yaml"
+  [update-management]="$repo_root/hack/testdata/prometheus-rules-update-management-tests.yaml"
 )
 
 # 🔴 AND THE GROUPS THAT ARE KNOWINGLY UNTESTED, NAMED. Without this list the loop
@@ -1396,3 +1397,22 @@ for want in "0:600 1800" "-1:600 1800" "60:600 1800" "600:1800 3600"; do
     fail "intervalSeconds: ${want%%:*} rendered TenantPurgeCoordinatorFailing's window/for as '${got}', not '${want#*:}'"
 done
 note "the coordinator-failure window follows the pass interval, and 0 or disabled render the default"
+
+# The update-management rules render only when the area is part of the instance AND metrics
+# and alerts are on. A rule over series nobody exports evaluates empty and never fires, so
+# the ABSENT directions are asserted as firmly as the present ones, and the counterweight
+# (the default and full profiles DO render it) keeps the gate from swallowing every render.
+say "rendering the update-management rules under each gate"
+update_alerts() { # <helm --set args...> -> number of Update* alerts rendered
+  helm template dc "$chart" --set "instance.config.infrastructure.secrets.rootKey=$root_key" "$@" |
+    grep -c '^ *- alert: Update' || true
+}
+for want in "default:4:" "full:4:--set profile=full --set ingress.enabled=true --set ingress.host=dc.example.test" "telemetry:0:--set profile=telemetry" "ingest-only:0:--set profile=ingest-only" \
+  "alerts-off:0:--set metrics.alerts=false" "metrics-off:0:--set metrics.enabled=false"; do
+  label="${want%%:*}"; rest="${want#*:}"; n="${rest%%:*}"; args="${rest#*:}"
+  # shellcheck disable=SC2086 # the --set arguments are deliberately word-split
+  got="$(update_alerts $args)"
+  [ "$got" = "$n" ] ||
+    fail "the $label render holds $got update-management alert(s), want $n"
+done
+note "update-management alerts render in default and full, and in no other gate state"

@@ -1410,6 +1410,24 @@ direcciones con pruebas unitarias.
 | `CommandPresenceReadErrors` | warning | Durante 15 minutos, la pasada de despacho no ha podido leer la proyección de presencia. La puerta de presencia, que retiene los comandos de los dispositivos ausentes, **falla en abierto** por diseño, así que los comandos se están despachando sin la comprobación. Nada más lo muestra: el despacho parece normal y el contador de retenciones cae a cero, lo que se lee como «ningún dispositivo está ausente» y no como «no se está comprobando nada». | Revisa el servicio device-state y la salud de la proyección de presencia. Hasta que se arregle, un panel de retenciones tranquilo no tranquiliza. |
 | `CommandBatchReserveRefusals` | warning | Durante 30 minutos, se han rechazado escrituras de flota que habrían cabido en el techo de comandos sin entregar del propio inquilino, y solo las rechazó el margen que la maquinaria de entrega reserva para sí misma. Nada está roto y se avisó a cada llamante; el techo y la reserva no coinciden sobre lo que es una escritura de flota normal. | Sube el techo del inquilino o baja la reserva, de forma deliberada. Los contadores no llevan etiqueta de inquilino, así que el panel muestra qué códigos y qué cota pero no qué inquilino. Encuentra el inquilino en los lotes de comandos registrados: un lote que se expandió parcialmente registra un rechazo `HELD_CEILING_EXCEEDED` por dispositivo, mientras que uno rechazado entero no registra nada. |
 
+## Actualizaciones por aire {#update-alerts}
+
+Cuatro alertas cubren los estados en los que una actualización no llega y nadie lo está mirando: el
+dispositivo simplemente no informa, y la primera persona en notarlo es quien pregunta por qué una
+flota sigue en la versión anterior. Solo existen en una instancia que ejecuta el área
+update-management. Los contadores que las alimentan están en la
+[referencia de métricas](./metrics-reference.md#update-management). Ninguno lleva etiqueta de
+inquilino, así que toda alerta es de la instancia entera; las pantallas de Actualizaciones de la
+consola muestran qué inquilino y qué despliegue. Los umbrales están razonados, no medidos, y cada
+uno se comprueba en ambas direcciones con pruebas unitarias.
+
+| Alerta | Severidad | Qué significa | Qué hacer |
+| --- | --- | --- | --- |
+| `UpdateDownloadsNotConfigured` | warning | Durante 15 minutos, los dispositivos han pedido una descarga y todas las solicitudes se rechazaron porque `updates.downloadBaseUrl` no está configurada. Ninguna actualización asignada puede descargarse, y nada más lo muestra: las asignaciones se crean y luego no avanzan hasta su plazo. | Define `functionalAreas.update-management.config.updates.downloadBaseUrl` con la URL pública por la que los dispositivos llegan al servicio. Si no se define se deriva del host del ingress, así que solo queda vacía si se fijó una cadena vacía o la instancia no tiene ingress. Las asignaciones continúan en el siguiente reintento de cada dispositivo. |
+| `UpdateReportsMostlyRefused` | warning | Durante 15 minutos, con al menos 20 informes en la ventana, más de una cuarta parte de los informes de los dispositivos se rechazaron por un motivo distinto de ser duplicados, obsoletos o tardíos: un digest que no es el del objetivo, el componente equivocado, una secuencia que retrocede, un informe en conflicto. Es un error del lado del dispositivo, normalmente una compilación que informa mal en toda una flota. | Lee `update_reports_total` por `verdict` para ver qué rechazo domina y luego el registro de update-management, que nombra el dispositivo y el intento. Pausa el despliegue que alimenta esa flota mientras investigas. |
+| `UpdateRolloutStepsFailing` | warning | Durante 15 minutos, el controlador de despliegues ha estado fallando pasos y dejándolos para la siguiente pasada. Los despliegues de grupo figuran como en curso pero no despachan a dispositivos nuevos, y la pausa por umbral de fallos no ayuda porque cuenta fallos de dispositivos. | Comprueba que device-management es alcanzable desde update-management y revisa la base de datos y el registro de update-management. |
+| `UpdateAttemptsGoingUnknown` | warning | En los últimos 30 minutos, cinco o más intentos pasaron a `UNKNOWN` porque el dispositivo dejó de informar durante la instalación o el reinicio. La actualización puede haberse aplicado o no. Unos pocos son normales; una ráfaga indica que los dispositivos fallan a la vez, a menudo por una imagen defectuosa. | Pausa el despliegue. Comprueba si los dispositivos afectados vuelven a informar, ya que su inventario resuelve el intento; para los que nunca lo hagan, decide con `abandonUnknownUpdate`. |
+
 ## Autorregistro de dispositivos {#self-registration-alerts}
 
 Tres alertas cubren el endpoint por el que los dispositivos se registran solos

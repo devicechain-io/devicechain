@@ -334,7 +334,7 @@ These count [two-factor authentication](../guides/two-factor-authentication.md).
 
 Prefix: `devicechain_updatemanagement_`. The service runs in the `default` and `full` profiles; see [Over-the-air updates](../concepts/over-the-air-updates.md).
 
-`update_download_grants_total{result="not_configured"}` rising means no download base is set and no device can download: `updates.downloadBaseUrl` was set to an empty string, or the instance has no ingress to derive it from. `update_attempts_expired_total` counts devices that went quiet during an update; an `UNKNOWN` one waits for the device's inventory or an operator's `abandonUnknownUpdate`.
+`update_download_grants_total{result="not_configured"}` rising means no download base is set and no device can download: `updates.downloadBaseUrl` was set to an empty string, or the instance has no ingress to derive it from. `update_attempts_expired_total` counts devices that went quiet during an update; an `UNKNOWN` one waits for the device's inventory or an operator's `abandonUnknownUpdate`. `UpdateDownloadsNotConfigured`, `UpdateReportsMostlyRefused`, `UpdateRolloutStepsFailing` and `UpdateAttemptsGoingUnknown` watch these; see [over-the-air update alerts](./observability.md#update-alerts).
 
 | Metric | Means |
 | --- | --- |
