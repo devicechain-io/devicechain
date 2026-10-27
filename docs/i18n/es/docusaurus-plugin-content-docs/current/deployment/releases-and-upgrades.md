@@ -4027,8 +4027,7 @@ partir de esta versión, así que una instancia que ejecuta el sistema estándar
   `update-management` es un servicio más que usa la base de datos, así que una instancia de perfil `default`
   reserva ahora 320 conexiones, frente a 280. El presupuesto de un clúster nuevo es ahora `700`, que admite dos
   instancias de perfil `default`. **Un clúster instalado con el valor anterior de `600` lo conserva**, y si
-  aloja dos instancias de perfil `default`, la actualización de la segunda puede rechazarse. Sube el presupuesto
-  antes de actualizar, con los ajustes con los que se instaló el clúster: `dcctl install local --max-connections 700`.
+  aloja dos instancias de perfil `default`, la actualización de la segunda puede rechazarse. Sube el presupuesto antes de actualizar volviendo a ejecutar el `dcctl install` con el que se instaló el clúster, añadiendo `--max-connections 700`: por ejemplo `dcctl install local --max-connections 700`, más `--kube-context`, `--ha` o `--compact` si el clúster se instaló con ellos.
   Consulta [el presupuesto de conexiones](./bootstrap.md#connection-budget), que también explica lo que cuesta
   subirlo: las instancias de la base de datos se reinician una a una.
 - **Si tu almacén de objetos es un volumen `ReadWriteOnce` en un clúster al que apuntaste `dcctl`, el servicio
@@ -4049,7 +4048,7 @@ partir de esta versión, así que una instancia que ejecuta el sistema estándar
   `<origen>/api/update-management` del host del ingress de la instancia, con `https` si el TLS del ingress está
   activado. Un valor que definas sigue prevaleciendo, y una cadena vacía desactiva las descargas. Una instancia
   sin ingress no tiene origen del que derivarla, y la consola indica que las descargas no están configuradas.
-- **`dcctl enable-area <área> update-management` en una instancia `default` informa de que ya está activada.**
+- **`dcctl enable-area local <instancia> update-management` en una instancia `default` informa de que ya está activada.**
   Las instancias de los perfiles `telemetry` e `ingest-only` siguen sin incluirla.
 - **Se llega a los mismos dispositivos que antes.** Solo un dispositivo conectado por MQTT puede recibir una
   actualización gestionada. Los dispositivos solo HTTP, LwM2M y Sparkplug no se alcanzan; consulta

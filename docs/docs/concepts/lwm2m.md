@@ -71,7 +71,7 @@ This is the supported way to update the firmware of an LwM2M device today. It us
 
    Send that payload with `lwm2m.write`. The image is served from wherever you host it; DeviceChain does not store it or hand out a link. Writing the package itself (`/5/0/0`) is not supported, because a write carries one scalar value of at most 8 KiB.
 
-2. **Trigger the update.** Once the download has completed, execute the Update resource.
+2. **Trigger the update.** Read `/5/0/3` until it is `2` (downloaded; `1` is downloading), then execute the Update resource.
 
    ```json
    {"path": "/5/0/2"}
@@ -79,7 +79,7 @@ This is the supported way to update the firmware of an LwM2M device today. It us
 
    Send that payload with `lwm2m.execute`.
 
-3. **Watch progress and outcome.** Read the State resource (`/5/0/3`; `0` is idle and `3` is updating) and the Update Result resource (`/5/0/5`; `0` is initial, `1` is success and `2` or more is an error) with `lwm2m.read`.
+3. **Watch progress and outcome.** Read the State resource (`/5/0/3`; `0` is idle, `1` downloading, `2` downloaded and `3` updating) and the Update Result resource (`/5/0/5`; `0` is initial, `1` is success and `2` or more is an error) with `lwm2m.read`.
 
 Reading is the only way to follow progress. DeviceChain observes only the sensor object range (3200 to 3441), so Object 5 is never observed and its state and result do not arrive as measurements. For a device in queue mode the whole sequence rides the same hold-and-deliver path as any command: each command is held, then delivered when the device wakes, oldest first.
 

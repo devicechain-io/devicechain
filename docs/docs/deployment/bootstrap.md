@@ -203,8 +203,7 @@ what is left.
 The default profile runs eight services that use the database, so one default-profile instance
 reserves 320 connections and `700` admits two of them. A cluster installed with an earlier
 default (`600`) keeps its budget on a re-run, so a second default-profile instance, or an
-upgrade that grows an instance's reservation, can be refused: raise the budget first with
-`dcctl install --max-connections 700`.
+upgrade that grows an instance's reservation, can be refused: raise the budget first by re-running the `dcctl install` the cluster was installed with, adding `--max-connections 700` (for example `dcctl install local --max-connections 700`).
 
 That check runs **before anything of the instance is written** — no namespace, database or
 login — so a refused bootstrap leaves nothing to clean up. A cluster meant to hold many

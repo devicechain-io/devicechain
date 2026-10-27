@@ -214,7 +214,7 @@ El perfil por defecto ejecuta ocho servicios que usan la base de datos, así que
 con el perfil por defecto reserva 320 conexiones y `700` admite dos. Un clúster instalado con un
 valor por defecto anterior (`600`) conserva su presupuesto en una nueva ejecución, por lo que una
 segunda instancia con el perfil por defecto, o una actualización que aumente la reserva de una
-instancia, puede rechazarse: sube antes el presupuesto con `dcctl install --max-connections 700`.
+instancia, puede rechazarse: sube antes el presupuesto volviendo a ejecutar el `dcctl install` con el que se instaló el clúster, añadiendo `--max-connections 700` (por ejemplo `dcctl install local --max-connections 700`).
 
 Esa comprobación se hace **antes de escribir nada de la instancia** —ni namespace, ni base de
 datos, ni login—, así que un arranque rechazado no deja nada que limpiar. Un clúster pensado

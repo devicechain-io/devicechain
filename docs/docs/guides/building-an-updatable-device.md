@@ -45,7 +45,7 @@ When an assignment arrives, the device does these in order. The order is the poi
 6. **Identity.** Only now is the image run, once, in a mode that prints its product and version and exits, with an empty environment, a scratch working directory and a deadline. It must name this device's product and the version the assignment named.
 7. **Install.** The image goes into the inactive slot, is staged as pending, and the device reports `REBOOTING` and exits so the launcher starts it.
 
-Every stage is written to disk before it is acted on and before it is reported. A broken link therefore never changes what the device does: it carries on installing, and after the reboot it sends the stages the platform missed, which the protocol allows because a device may skip a stage whose report was lost. A restart at any point resumes from the bytes held. The device installs only while it is the confirmed slot with nothing pending.
+Every stage is written to disk before it is acted on and before it is reported. A broken link therefore never changes what the device does: it carries on installing, and after the reboot it reports the stage it has reached, skipping those whose report was lost, which the protocol allows. A restart at any point resumes from the bytes held. The device installs only while it is the confirmed slot with nothing pending.
 
 ## Rollback {#rollback}
 
@@ -55,7 +55,7 @@ If the new image does not make it, the launcher starts the old one. The old imag
 
 ## Refusing downgrades and wrong components {#refusing-downgrades}
 
-The platform signs a digest. It does not sign the version, the component or the product, so it cannot stop a correctly signed older image, or an image built for a different product, from being a perfectly valid signed image. Anyone who may publish artifacts can declare an old image again under a new version, and its old signature still verifies. See [What a signature does not cover](./signing-updates.md#what-a-signature-does-not-cover).
+A signature covers only the digest. It does not cover the version, the component or the product, so nothing stops a correctly signed older image, or an image built for a different product, from being a perfectly valid signed image. Anyone who may publish artifacts can declare an old image again under a new version, and its old signature still verifies. See [What a signature does not cover](./signing-updates.md#what-a-signature-does-not-cover).
 
 The device is therefore the only place that can enforce these, and the reference device does, twice. Before the download it compares the assignment's component and version with its own. After the download it runs the image once and checks that the image names this device's product and the version the assignment named, so an image that lies about itself is refused. There is no way to switch the downgrade check off except an explicit lab flag, `--allow-downgrade`.
 
@@ -76,6 +76,8 @@ go build -o bin/ota-boot ./cmd/ota-boot
 mkdir -p "$ROOT/slots/a" && cp bin/ota-device "$ROOT/slots/a/"
 ```
 
+On Windows, build `ota-device.exe`; the launcher expects that name.
+
 Put the signer's public key in a trust file, then start the device under the launcher:
 
 ```bash
@@ -91,7 +93,7 @@ bin/ota-boot --root "$ROOT" -- \
 
 `--credential-id` is the credential id, not the MQTT username: the program sends `{tenant}:{credentialId}` as the username and `{instance}:{tenant}:{device}` as the client id, as [Connecting a Device](./connecting-a-device.md) describes. `--tls-server-name` verifies the broker certificate against a name other than the broker host, for a local cluster whose certificate does not cover `localhost`.
 
-Build a second image with a higher version, declare it as an artifact with component `firmware`, sign it, and assign it to the device. You can follow the attempt on the device's Updates tab as it moves from `RECEIVED` through `DOWNLOADING`, `VERIFIED` and `REBOOTING` to `UPDATED`. Assign an image signed by a key the device does not hold and the attempt ends `FAILED` with `UNKNOWN_SIGNER`, after the download. Assign one whose version is not newer and the device refuses it before downloading anything.
+Build a second image with a higher version, declare it as an artifact with component `firmware`, sign it, and assign it to the device. You can follow the attempt on the device's Updates tab as it moves from `INITIATED` through `DOWNLOADING`, `VERIFIED` and `REBOOTING` to `UPDATED`. Assign an image signed by a key the device does not hold and the attempt ends `FAILED` with `UNKNOWN_SIGNER`, after the download. Assign one whose version is not newer and the device refuses it before downloading anything.
 
 ## What a real device must add {#what-a-real-device-must-add}
 

@@ -45,7 +45,7 @@ Cuando llega una asignación, el dispositivo hace esto en orden. El orden es lo 
 6. **Identidad.** Solo ahora se ejecuta la imagen, una vez, en un modo que imprime su producto y su versión y termina, con un entorno vacío, un directorio de trabajo temporal y un plazo. Debe nombrar el producto de este dispositivo y la versión que nombró la asignación.
 7. **Instalación.** La imagen pasa a la ranura inactiva, se deja pendiente, y el dispositivo informa `REBOOTING` y termina para que el lanzador lo arranque.
 
-Cada etapa se escribe en disco antes de actuar sobre ella y antes de informarla. Por eso un enlace caído nunca cambia lo que hace el dispositivo: sigue instalando, y tras el reinicio envía las etapas que la plataforma no recibió, algo que el protocolo permite porque un dispositivo puede omitir una etapa cuyo informe se perdió. Un reinicio en cualquier punto continúa desde los bytes que tiene. El dispositivo solo instala mientras es la ranura confirmada y no hay nada pendiente.
+Cada etapa se escribe en disco antes de actuar sobre ella y antes de informarla. Por eso un enlace caído nunca cambia lo que hace el dispositivo: sigue instalando, y tras el reinicio informa de la etapa que ha alcanzado, omitiendo aquellas cuyo informe se perdió, algo que el protocolo permite. Un reinicio en cualquier punto continúa desde los bytes que tiene. El dispositivo solo instala mientras es la ranura confirmada y no hay nada pendiente.
 
 ## Reversión {#rollback}
 
@@ -55,7 +55,7 @@ Si la imagen nueva no lo consigue, el lanzador arranca la antigua. La imagen ant
 
 ## Rechazar degradaciones y componentes equivocados {#refusing-downgrades}
 
-La plataforma firma un digest. No firma la versión, el componente ni el producto, así que no puede impedir que una imagen más antigua correctamente firmada, o una imagen construida para otro producto, sea una imagen firmada perfectamente válida. Quien pueda publicar artefactos puede declarar de nuevo una imagen antigua bajo una versión nueva, y su firma antigua se sigue verificando. Consulta [Lo que una firma no cubre](./signing-updates.md#what-a-signature-does-not-cover).
+Una firma cubre solo el digest. No cubre la versión, el componente ni el producto, así que nada impide que una imagen más antigua correctamente firmada, o una imagen construida para otro producto, sea una imagen firmada perfectamente válida. Quien pueda publicar artefactos puede declarar de nuevo una imagen antigua bajo una versión nueva, y su firma antigua se sigue verificando. Consulta [Lo que una firma no cubre](./signing-updates.md#what-a-signature-does-not-cover).
 
 Por eso el dispositivo es el único lugar que puede imponerlo, y el dispositivo de referencia lo hace dos veces. Antes de la descarga compara el componente y la versión de la asignación con los suyos. Después de la descarga ejecuta la imagen una vez y comprueba que nombra el producto de este dispositivo y la versión que nombró la asignación, de modo que una imagen que miente sobre sí misma se rechaza. No hay forma de desactivar la comprobación de degradación salvo una opción explícita de laboratorio, `--allow-downgrade`.
 
@@ -76,6 +76,8 @@ go build -o bin/ota-boot ./cmd/ota-boot
 mkdir -p "$ROOT/slots/a" && cp bin/ota-device "$ROOT/slots/a/"
 ```
 
+En Windows, compila `ota-device.exe`; el lanzador espera ese nombre.
+
 Pon la clave pública del firmante en un archivo de confianza y arranca el dispositivo bajo el lanzador:
 
 ```bash
@@ -91,7 +93,7 @@ bin/ota-boot --root "$ROOT" -- \
 
 `--credential-id` es el id de la credencial, no el nombre de usuario MQTT: el programa envía `{tenant}:{credentialId}` como nombre de usuario y `{instance}:{tenant}:{device}` como id de cliente, como describe [Conexión de un dispositivo](./connecting-a-device.md). `--tls-server-name` verifica el certificado del broker contra un nombre distinto del host del broker, para un clúster local cuyo certificado no cubre `localhost`.
 
-Compila una segunda imagen con una versión superior, declárala como artefacto con el componente `firmware`, fírmalo y asígnalo al dispositivo. Puedes seguir el intento en la pestaña Actualizaciones del dispositivo mientras pasa de `RECEIVED` por `DOWNLOADING`, `VERIFIED` y `REBOOTING` hasta `UPDATED`. Si asignas una imagen firmada con una clave que el dispositivo no tiene, el intento termina en `FAILED` con `UNKNOWN_SIGNER`, después de la descarga. Si asignas una cuya versión no es más reciente, el dispositivo la rechaza antes de descargar nada.
+Compila una segunda imagen con una versión superior, declárala como artefacto con el componente `firmware`, fírmalo y asígnalo al dispositivo. Puedes seguir el intento en la pestaña Actualizaciones del dispositivo mientras pasa de `INITIATED` por `DOWNLOADING`, `VERIFIED` y `REBOOTING` hasta `UPDATED`. Si asignas una imagen firmada con una clave que el dispositivo no tiene, el intento termina en `FAILED` con `UNKNOWN_SIGNER`, después de la descarga. Si asignas una cuya versión no es más reciente, el dispositivo la rechaza antes de descargar nada.
 
 ## Lo que debe añadir un dispositivo real {#what-a-real-device-must-add}
 

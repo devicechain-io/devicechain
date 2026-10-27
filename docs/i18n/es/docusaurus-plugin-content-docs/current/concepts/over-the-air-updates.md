@@ -80,11 +80,11 @@ query se rechazan al arrancar.
 
 El contenido de los artefactos necesita un almacén de objetos, y el almacén se fija al crear la instancia
 (consulta [el almacén de objetos](../deployment/bootstrap.md#object-store)). Hay un caso que requiere
-cuidado. El perfil `default` incluye `update-management`, así que una instancia creada antes de que el perfil
-creciera incorpora el servicio al actualizar. Si su almacén es un volumen de sistema de archivos
-`ReadWriteOnce` en un clúster que `dcctl` no creó, ese volumen lo puede montar un solo servicio y los demás ya
-lo ocupan, así que `dcctl` arranca `update-management` con `updates.objectStore` en `none` en lugar de
-rechazar la actualización. El otro valor es `instance`, el predeterminado. `dcctl` fija `none` solo en ese
+cuidado. El perfil `default` incluye `update-management`. Cuando una instancia ejecuta el perfil `default` y su
+almacén es un volumen de sistema de archivos `ReadWriteOnce` en un clúster que `dcctl` no creó, ese volumen lo
+puede montar un solo servicio y otro ya lo ocupa. Por eso `dcctl` arranca `update-management` con
+`updates.objectStore` en `none` en lugar de rechazar. Esto se aplica a un bootstrap nuevo y a una instancia
+existente que incorpora el servicio al actualizar. El otro valor es `instance`, el predeterminado. `dcctl` fija `none` solo en ese
 caso: un área que nombraste tú, el perfil `full`, un volumen compartible, S3 y un clúster que creó `dcctl` no
 cambian. La superposición de ajuste no puede definir la clave, y una instalación solo con el chart puede usar
 cualquiera de los dos valores; cualquier otro valor hace fallar el renderizado.
@@ -244,7 +244,7 @@ confía en la clave del firmante o si exige una firma y la asignación es `UNVER
 la firma no se verifica. Comprueba una firma contra los bytes que tiene, así que informa de una firma incorrecta
 o desconocida después de `DOWNLOADED`, cuando ya ha calculado su hash. Un dispositivo que exige imágenes
 firmadas puede rechazar antes una asignación `UNVERIFIED`, justo después de `RECEIVED` y sin descargar nada, y el
-dispositivo de referencia lo hace. Ambas formas son válidas, porque un dispositivo puede omitir una etapa.
+dispositivo de referencia lo hace. Un dispositivo puede informar `FAILED` en cualquier etapa, así que ambas formas son válidas.
 
 Los informes solo hacen avanzar un intento; un informe de una etapa anterior se ignora. **`UPDATED`
 solo se alcanza con pruebas**: el dispositivo informa de que la versión objetivo está en ejecución

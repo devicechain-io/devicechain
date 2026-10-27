@@ -3755,8 +3755,7 @@ is upgraded. Nothing else about the upgrade changes. Check these before you star
   more service that uses the database, so one default-profile instance now reserves 320 connections,
   up from 280. The budget a new cluster gets is now `700`, which admits two default-profile instances.
   **A cluster installed with the earlier default of `600` keeps it**, and if it holds two default-profile
-  instances the upgrade of the second can be refused. Raise the budget before upgrading, with the settings
-  the cluster was installed with: `dcctl install local --max-connections 700`. See
+  instances the upgrade of the second can be refused. Raise the budget before upgrading by re-running the `dcctl install` the cluster was installed with, adding `--max-connections 700`: for example `dcctl install local --max-connections 700`, plus `--kube-context`, `--ha` or `--compact` if the cluster was installed with them. See
   [the connection budget](./bootstrap.md#connection-budget), which also says what raising it costs: the database's instances restart one at a time.
 - **If your object store is a `ReadWriteOnce` volume on a cluster you pointed `dcctl` at, the service runs
   without a store.** Such a volume can be mounted by one service and the others already hold it, so
@@ -3776,7 +3775,7 @@ is upgraded. Nothing else about the upgrade changes. Check these before you star
   `<origin>/api/update-management` from the instance's ingress host, with `https` if ingress TLS is on. A
   value you set still wins, and an empty string turns downloads off. An instance with no ingress has no
   origin to derive from, and the console says downloads are not configured.
-- **`dcctl enable-area <area> update-management` on a `default` instance reports it as already enabled.**
+- **`dcctl enable-area local <instance> update-management` on a `default` instance reports it as already enabled.**
   Instances of the `telemetry` and `ingest-only` profiles still leave it out.
 - **The same devices are reached as before.** Only a device connected over MQTT can take a managed update.
   HTTP-only, LwM2M and Sparkplug devices are not reached; see

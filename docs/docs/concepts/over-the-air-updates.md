@@ -79,10 +79,11 @@ query is refused at startup.
 
 Artifact content needs an object store, and the store is fixed when the instance is created (see
 [the object store](../deployment/bootstrap.md#object-store)). One case needs care. The `default`
-profile includes `update-management`, so an instance created before the profile grew gains the service
-on upgrade. If its store is a `ReadWriteOnce` filesystem volume on a cluster `dcctl` did not create,
-that volume can be mounted by one service and the others already hold it, so `dcctl` starts
-`update-management` with `updates.objectStore` set to `none` instead of refusing the upgrade. The other
+profile includes `update-management`. When an instance runs the `default` profile and its store is a
+`ReadWriteOnce` filesystem volume on a cluster `dcctl` did not create, that volume can be mounted by one
+service and another already holds it. So `dcctl` starts `update-management` with `updates.objectStore` set
+to `none` instead of refusing. This applies to a new bootstrap and to an existing instance that gains the
+service on upgrade. The other
 value is `instance`, the default. `dcctl` sets `none` only in that case: an area you named yourself, the
 `full` profile, a shareable volume, S3 and a cluster `dcctl` created are unchanged. The tuning overlay may
 not set the key, and a chart-only install may use either value; any other value fails the render.
@@ -236,8 +237,7 @@ A device that refuses an assignment because of its signature reports `FAILED` wi
 assignment is `UNVERIFIED`, or `SIGNATURE_INVALID`, when the signature does not verify. It checks a
 signature against the bytes it holds, so it reports a bad or unknown signature after `DOWNLOADED`, once it
 has hashed them. A device that requires signed images can refuse an `UNVERIFIED` assignment sooner, right
-after `RECEIVED` and before downloading anything, and the reference device does. Both are valid, because a
-device may skip a stage.
+after `RECEIVED` and before downloading anything, and the reference device does. A device may report `FAILED` at any stage, so both are valid.
 
 Reports only move an attempt forward; a report for an earlier stage is ignored. **`UPDATED` is
 reached only on evidence**: the device reports the target version running, and when the artifact

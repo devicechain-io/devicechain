@@ -48,7 +48,7 @@ title: 空中（OTA）更新
 
 ### 没有对象存储的实例 {#no-object-store}
 
-制品内容需要对象存储，而存储在创建实例时就已确定（参见[对象存储](../deployment/bootstrap.md#object-store)）。有一种情况需要留意。`default` 配置档包含 `update-management`，因此在该配置档扩充之前创建的实例会在升级时获得这项服务。如果它的存储是 `dcctl` 未创建的集群上的 `ReadWriteOnce` 文件系统卷，该卷只能被一个服务挂载，而其他服务已经占用了它，于是 `dcctl` 不会拒绝升级，而是让 `update-management` 以 `updates.objectStore` 设为 `none` 的方式启动。另一个取值是默认的 `instance`。只有这一种情况下 `dcctl` 才会设为 `none`：你亲自指定的区域、`full` 配置档、可共享的卷、S3，以及 `dcctl` 自己创建的集群都不受影响。调优覆盖层不能设置该键；仅使用 Chart 的安装可以使用这两个值中的任何一个，其他值会使渲染失败。
+制品内容需要对象存储，而存储在创建实例时就已确定（参见[对象存储](../deployment/bootstrap.md#object-store)）。有一种情况需要留意。`default` 配置档包含 `update-management`。当实例运行 `default` 配置档，且它的存储是 `dcctl` 未创建的集群上的 `ReadWriteOnce` 文件系统卷时，该卷只能被一个服务挂载，而另一个服务已经占用了它。于是 `dcctl` 不会拒绝，而是让 `update-management` 以 `updates.objectStore` 设为 `none` 的方式启动。这适用于新的 bootstrap，也适用于升级时获得该服务的现有实例。另一个取值是默认的 `instance`。只有这一种情况下 `dcctl` 才会设为 `none`：你亲自指定的区域、`full` 配置档、可共享的卷、S3，以及 `dcctl` 自己创建的集群都不受影响。调优覆盖层不能设置该键；仅使用 Chart 的安装可以使用这两个值中的任何一个，其他值会使渲染失败。
 
 在该模式下服务照常运行，不需要内容的功能仍然可用，例如签名者。声明制品和上传内容会以 `OBJECT_STORE_NOT_CONFIGURED` 被拒绝，而不是写入服务根本没有的卷。`dcctl` 在应用变更时会说明这一点，`updateManagementInfo` 的 `objectStoreConfigured` 为 `false`，控制台也会在“更新”页面显示提示。
 
@@ -121,7 +121,7 @@ title: 空中（OTA）更新
 | `UNKNOWN` | 在安装或重启期间超过了某个截止期。 |
 | `CANCELLED` | 更新在安装开始前被取消，或运维人员放弃了一个 `UNKNOWN` 更新。 |
 
-设备若因签名而拒绝某个分配，会报告 `FAILED`：设备不信任签名者的密钥，或设备要求签名而分配是 `UNVERIFIED` 时，代码为 `UNKNOWN_SIGNER`；签名无法通过校验时，代码为 `SIGNATURE_INVALID`。设备要对照已持有的字节来校验签名，所以错误或未知的签名要在 `DOWNLOADED` 之后、算出哈希时才会报告。要求签名镜像的设备可以更早拒绝 `UNVERIFIED` 分配：在 `RECEIVED` 之后、下载任何内容之前，参考设备就是这样做的。两种方式都有效，因为设备可以跳过某个阶段。
+设备若因签名而拒绝某个分配，会报告 `FAILED`：设备不信任签名者的密钥，或设备要求签名而分配是 `UNVERIFIED` 时，代码为 `UNKNOWN_SIGNER`；签名无法通过校验时，代码为 `SIGNATURE_INVALID`。设备要对照已持有的字节来校验签名，所以错误或未知的签名要在 `DOWNLOADED` 之后、算出哈希时才会报告。要求签名镜像的设备可以更早拒绝 `UNVERIFIED` 分配：在 `RECEIVED` 之后、下载任何内容之前，参考设备就是这样做的。设备可以在任何阶段报告 `FAILED`，因此两种方式都有效。
 
 报告只会让尝试向前推进；较早阶段的报告会被忽略。**只有凭证据才能到达 `UPDATED`**：设备报告目标版本正在运行，并且当制品需要重启时（所有 `FIRMWARE` 制品都需要；`SOFTWARE` 和 `CONFIGURATION` 制品不需要），该报告来自与安装时不同的一次启动。确认收到或安装程序自身的“成功”都不算证据。
 

@@ -71,7 +71,7 @@ Esta es la forma admitida de actualizar el firmware de un dispositivo LwM2M hoy.
 
    Envía ese payload con `lwm2m.write`. La imagen se sirve desde donde tú la alojes; DeviceChain no la guarda ni entrega un enlace. Escribir el paquete en sí (`/5/0/0`) no está admitido, porque una escritura lleva un único valor escalar de como máximo 8 KiB.
 
-2. **Dispara la actualización.** Cuando la descarga haya terminado, ejecuta el recurso Update.
+2. **Dispara la actualización.** Lee `/5/0/3` hasta que sea `2` (descargado; `1` es descargando) y entonces ejecuta el recurso Update.
 
    ```json
    {"path": "/5/0/2"}
@@ -79,7 +79,7 @@ Esta es la forma admitida de actualizar el firmware de un dispositivo LwM2M hoy.
 
    Envía ese payload con `lwm2m.execute`.
 
-3. **Sigue el progreso y el resultado.** Lee el recurso State (`/5/0/3`; `0` es inactivo y `3` es actualizando) y el recurso Update Result (`/5/0/5`; `0` es inicial, `1` es éxito y `2` o más es un error) con `lwm2m.read`.
+3. **Sigue el progreso y el resultado.** Lee el recurso State (`/5/0/3`; `0` es inactivo, `1` descargando, `2` descargado y `3` actualizando) y el recurso Update Result (`/5/0/5`; `0` es inicial, `1` es éxito y `2` o más es un error) con `lwm2m.read`.
 
 Leer es la única forma de seguir el progreso. DeviceChain solo observa el rango de objetos de sensores (3200 a 3441), así que el objeto 5 nunca se observa y su estado y resultado no llegan como mediciones. Para un dispositivo en modo cola, toda la secuencia sigue la misma vía de retención y entrega que cualquier comando: cada comando se retiene y se entrega cuando el dispositivo despierta, el más antiguo primero.
 
