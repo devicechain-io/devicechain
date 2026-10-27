@@ -257,7 +257,7 @@ var All = []Bucket{
 	{
 		Name:    BucketSparkplugCommandsAwaiting,
 		Tier:    State,
-		TTL:     30 * time.Minute, // longer than the largest per-source confirm window (900 s) with room to spare
+		TTL:     2 * time.Hour, // longer than the largest per-source reboot window (3600 s), the longest an entry is awaited
 		Writers: []string{"sparkplug-ingest"},
 		Readers: []string{"sparkplug-ingest"},
 		Why: "One entry per Sparkplug command that was published to a node and has not yet been " +

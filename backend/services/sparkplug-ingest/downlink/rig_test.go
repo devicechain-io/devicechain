@@ -91,6 +91,8 @@ type fakeSource struct {
 	up      bool
 
 	publishErr error
+	// moves is how many publishes find, after the record is written, that the node's table moved.
+	moves int
 	// afterHook, when set, runs after the before-wire hook succeeded and before the publish: where
 	// a term ends or a session drops while the record is being written.
 	afterHook func()
@@ -200,14 +202,25 @@ func (f *fakeSource) put(ctx context.Context, kind string, target host.CommandTa
 	if after != nil {
 		after()
 	}
+	var ind *host.PublishIndeterminateError
+	if errors.As(perr, &ind) {
+		return wire, perr // the publish was attempted, whatever became of the term meanwhile
+	}
 	if ctx.Err() != nil {
 		return wire, host.ErrTermEnded
 	}
 	f.mu.Lock()
 	up = f.up
+	moved := f.moves > 0
+	if moved {
+		f.moves--
+	}
 	f.mu.Unlock()
 	if !up {
 		return wire, host.ErrSessionDown
+	}
+	if moved {
+		return wire, host.ErrTableMoved
 	}
 	if perr != nil {
 		return wire, perr
@@ -251,6 +264,8 @@ type fakeClaimer struct {
 	drainWon   bool
 	drainErr   error
 	calls      atomic.Int32
+	// onClaim runs when a drain claim succeeds (the backlog loses the row).
+	onClaim func(token string)
 }
 
 func newClaimer(log *evlog) *fakeClaimer {
@@ -270,6 +285,9 @@ func (c *fakeClaimer) Claim(_ context.Context, _, token string) (string, bool, e
 	c.log.add("drainclaim:%s", token)
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.drainWon && c.drainErr == nil && c.onClaim != nil {
+		c.onClaim(token)
+	}
 	return c.drainNonce, c.drainWon, c.drainErr
 }
 
@@ -278,12 +296,17 @@ type fakeParker struct {
 	mu     sync.Mutex
 	parked bool
 	err    error
+	// onPark runs when a park succeeds (the backlog gets the row back).
+	onPark func(token string)
 }
 
 func (p *fakeParker) Park(_ context.Context, _, token, nonce string) (bool, error) {
 	p.log.add("park:%s:%s", token, nonce)
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.err == nil && p.onPark != nil {
+		p.onPark(token)
+	}
 	return p.parked || p.err == nil, p.err
 }
 
@@ -297,9 +320,14 @@ type fakeResponses struct {
 	mu  sync.Mutex
 	got []response
 	err error
+	// delay slows every write, to show a caller waits for it.
+	delay time.Duration
 }
 
 func (r *fakeResponses) WriteToDevice(_ context.Context, device string, msgs ...messaging.Message) error {
+	if r.delay > 0 {
+		time.Sleep(r.delay)
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.err != nil {
@@ -378,11 +406,14 @@ func (s *fakeStore) len() int {
 	return len(s.entries)
 }
 
+// fakeFetcher is command-delivery's backlog for one device: rows stay until a claim takes them and
+// come back when one is parked, so a drain that claims a row it just handed back would find it again.
 type fakeFetcher struct {
-	log  *evlog
-	mu   sync.Mutex
-	rows []cmddownlink.DrainCommand // returned once, then empty
-	err  error
+	log   *evlog
+	mu    sync.Mutex
+	rows  []cmddownlink.DrainCommand
+	known map[string]cmddownlink.DrainCommand
+	err   error
 }
 
 func (f *fakeFetcher) Pending(_ context.Context, _, device string, limit int) ([]cmddownlink.DrainCommand, error) {
@@ -392,10 +423,36 @@ func (f *fakeFetcher) Pending(_ context.Context, _, device string, limit int) ([
 	if f.err != nil {
 		return nil, f.err
 	}
+	if f.known == nil {
+		f.known = map[string]cmddownlink.DrainCommand{}
+	}
 	n := min(len(f.rows), limit)
-	out := f.rows[:n]
-	f.rows = f.rows[n:]
+	out := append([]cmddownlink.DrainCommand(nil), f.rows[:n]...)
+	for _, r := range out {
+		f.known[r.Token] = r
+	}
 	return out, nil
+}
+
+// remove takes a claimed row out of the backlog.
+func (f *fakeFetcher) remove(token string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i, r := range f.rows {
+		if r.Token == token {
+			f.rows = append(f.rows[:i:i], f.rows[i+1:]...)
+			return
+		}
+	}
+}
+
+// requeue puts a parked row back at the end of the backlog.
+func (f *fakeFetcher) requeue(token string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if r, ok := f.known[token]; ok {
+		f.rows = append(f.rows, r)
+	}
 }
 
 // ackSpy is a message's acknowledger: it records acks and in-progress marks.
@@ -452,6 +509,8 @@ func newRig(t *testing.T, opts ...func(*rig)) *rig {
 	for _, o := range opts {
 		o(r)
 	}
+	r.claimer.onClaim = r.fetcher.remove
+	r.parker.onPark = r.fetcher.requeue
 	r.build(nil)
 	return r
 }

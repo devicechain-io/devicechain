@@ -5,11 +5,13 @@ package config
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/kv"
 )
 
 func src(tenant, url string, cmds SourceCommands) SparkplugSource {
@@ -79,6 +81,7 @@ func TestTheWindowsAndRatesAreBounded(t *testing.T) {
 		{"skew negative", func(c *SourceCommands) { c.ClockSkewSeconds = -1 }, "clockSkewSeconds"},
 		{"skew above ceiling", func(c *SourceCommands) { c.ClockSkewSeconds = MaxCommandClockSkewSeconds + 1 }, "clockSkewSeconds"},
 		{"rate negative", func(c *SourceCommands) { c.PublishPerSecond = -1 }, "publishPerSecond"},
+		{"rate below the floor", func(c *SourceCommands) { c.PublishPerSecond = MinCommandPublishPerSecond / 2 }, "publishPerSecond"},
 		{"burst negative", func(c *SourceCommands) { c.Burst = -1 }, "burst"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -97,6 +100,7 @@ func TestTheWindowsAndRatesAreBounded(t *testing.T) {
 		"reboot floor":    func(c *SourceCommands) { c.RebootWindowSeconds = MinCommandRebootWindowSeconds },
 		"reboot ceiling":  func(c *SourceCommands) { c.RebootWindowSeconds = MaxCommandRebootWindowSeconds },
 		"skew ceiling":    func(c *SourceCommands) { c.ClockSkewSeconds = MaxCommandClockSkewSeconds },
+		"rate floor":      func(c *SourceCommands) { c.PublishPerSecond = MinCommandPublishPerSecond },
 	} {
 		c := primary()
 		edit(&c)
@@ -183,4 +187,16 @@ func TestCommandsKeysLoadAndUnknownOnesAreRefused(t *testing.T) {
 	assert.Error(t, core.LoadConfiguration([]byte(`{"sources":[{"tenant":"acme","broker":{"url":"tcp://b:1883"},
 		"commands":{"enabled":true,"hostRole":"primary","writableMetric":["Outputs/*"]}}]}`), bad),
 		"a misspelled commands key loaded silently")
+}
+
+// An awaiting entry must outlive the longest time it can be awaited, or the bucket's own expiry would
+// quietly resolve a command nobody resolved. The longest wait is the larger of the two windows a source
+// can be configured with; the bucket's lifetime is declared in core and must clear both.
+func TestTheAwaitingBucketOutlivesTheLargestWindows(t *testing.T) {
+	b, ok := kv.Lookup(kv.BucketSparkplugCommandsAwaiting)
+	require.True(t, ok, "the awaiting bucket is not declared")
+	longest := time.Duration(max(MaxCommandConfirmWindowSeconds, MaxCommandRebootWindowSeconds)) * time.Second
+	assert.Greater(t, b.TTL, longest, "an entry for a command at the largest window would expire before its window ends")
+	assert.Greater(t, b.TTL, time.Duration(MaxCommandConfirmWindowSeconds)*time.Second)
+	assert.Greater(t, b.TTL, time.Duration(MaxCommandRebootWindowSeconds)*time.Second)
 }

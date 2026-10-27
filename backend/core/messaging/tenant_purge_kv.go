@@ -296,7 +296,7 @@ func KvPurgeExemptions() []string {
 		kv.BucketSparkplugCommandsAwaiting + ": the Sparkplug commands sparkplug-ingest has published " +
 			"and not yet resolved, keyed tenant|commandToken. An entry names the command, the device, " +
 			"the metric and the requested value, and it does name a tenant. It is not scanned here " +
-			"because nothing it holds outlives its 30-minute lifetime and the service resolves it " +
+			"because nothing it holds outlives its two-hour lifetime and the service resolves it " +
 			"into command-delivery's own record, which this purge does erase; and a deleted " +
 			"tenant's commands are refused before they are published, so no entry is written for it " +
 			"once the delete is seen. The residue is bounded by that lifetime, not by the purge",

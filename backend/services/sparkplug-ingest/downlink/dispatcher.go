@@ -29,6 +29,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"io"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -103,6 +104,8 @@ const (
 	msgDisabledSource = "COMMAND_TRANSPORT_UNSUPPORTED: commands are not enabled for the Sparkplug source this device is on"
 	msgBreaker        = "the customer broker refused the command publish; commands to this source are paused"
 	msgTripped        = "broker disconnected immediately after the publish; likely refused"
+	msgIndeterminate  = "the publish did not complete; it may have reached the node"
+	msgRebootOffline  = "a reboot is sent only to a node that is online when it is dispatched — re-issue it when the node is online"
 )
 
 const (
@@ -230,6 +233,12 @@ type Dispatcher struct {
 	// parkedNotBorn are the devices a command was parked for because their table was not yet there,
 	// so their next birth wakes a drain even though their token is already in the index.
 	parkedNotBorn map[deviceKey]struct{}
+	// timers are the drain retries waiting to fire, stopped when the term ends; bg tracks the
+	// goroutines the breaker's report starts, which Run waits for. termOpen gates their start so a
+	// report arriving as the term ends does not Add to a WaitGroup that is being waited on.
+	timers   map[*time.Timer]struct{}
+	bg       sync.WaitGroup
+	termOpen bool
 }
 
 type awaitKey struct {
@@ -300,6 +309,8 @@ func (d *Dispatcher) resetTerm() {
 	d.recent = map[Source][]recentPub{}
 	d.reboots = map[nodeKey]time.Time{}
 	d.parkedNotBorn = map[deviceKey]struct{}{}
+	d.timers = map[*time.Timer]struct{}{}
+	d.termOpen = true
 }
 
 func (d *Dispatcher) count(result string) {
@@ -337,6 +348,15 @@ func (s *shard) wake(k deviceKey) {
 	case s.nudge <- struct{}{}:
 	default:
 	}
+}
+
+// takeWake removes and reports a pending wake for one device.
+func (s *shard) takeWake(k deviceKey) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.wakes[k]
+	delete(s.wakes, k)
+	return ok
 }
 
 func (s *shard) takeWakes() []deviceKey {
@@ -403,6 +423,20 @@ func (d *Dispatcher) Run(ctx context.Context, ready func()) {
 	}
 	stop()
 	wg.Wait()
+	d.endTerm()
+}
+
+// endTerm stops what the term left behind: pending drain retries, and the goroutines resolving
+// commands after a breaker trip, which are waited for (they are bounded by the response retries).
+func (d *Dispatcher) endTerm() {
+	d.mu.Lock()
+	d.termOpen = false
+	for t := range d.timers {
+		t.Stop()
+	}
+	d.timers = map[*time.Timer]struct{}{}
+	d.mu.Unlock()
+	d.bg.Wait()
 }
 
 // serve is one worker: a live command if there is one, otherwise a wake, otherwise wait.
@@ -412,6 +446,15 @@ func (d *Dispatcher) serve(ctx context.Context, s *shard) {
 		case <-ctx.Done():
 			return
 		case w := <-s.ch:
+			// A wake already waiting for this device is served FIRST. A live command that arrived
+			// after older rows were parked for the device must not overtake them: the older rows are
+			// the device's to send before it.
+			if s.takeWake(deviceKey{w.tenant, w.env.DeviceToken}) {
+				d.drain(ctx, deviceKey{w.tenant, w.env.DeviceToken})
+				if ctx.Err() != nil {
+					return
+				}
+			}
 			d.live(ctx, w)
 		case <-s.nudge:
 			for _, k := range s.takeWakes() {
@@ -533,6 +576,10 @@ type job struct {
 
 	src    Source
 	target host.CommandTarget
+
+	// parkedBack is set once the row has been handed back to command-delivery (or the attempt was
+	// made): a drain must stop there, or it would claim the same row again at once.
+	parkedBack bool
 }
 
 func (j *job) settle(d *Dispatcher) {
@@ -593,6 +640,10 @@ func (d *Dispatcher) live(ctx context.Context, w work) {
 			d.refuseLive(j, ResultRefusedDisabled, msgDisabledSource)
 			return
 		}
+		if j.name == CommandReboot {
+			d.refuseLive(j, ResultRefusedRebootGate, msgRebootOffline)
+			return
+		}
 		d.parkLive(ctx, j, "not born on an enabled source")
 		return
 	}
@@ -611,6 +662,10 @@ func (d *Dispatcher) live(ctx context.Context, w work) {
 	// 8. Validate.
 	p, ref, park := d.validate(j)
 	if park {
+		if j.name == CommandReboot {
+			d.refuseLive(j, ResultRefusedRebootGate, msgRebootOffline)
+			return
+		}
 		d.mu.Lock()
 		d.parkedNotBorn[deviceKey{j.tenant, j.device}] = struct{}{}
 		d.mu.Unlock()
@@ -666,9 +721,11 @@ func (d *Dispatcher) refuseLive(j *job, result, text string) {
 func (d *Dispatcher) parkLive(ctx context.Context, j *job, why string) {
 	if j.nonce == "" {
 		// Nothing to name: a park on status alone could hand back a row that has since been
-		// re-claimed and actuated. Better left to ride its TTL.
+		// re-claimed and actuated. It is answered UNSENT rather than acked in silence, so the
+		// operator is told it was not delivered and can re-issue it.
 		log.Warn().Str("tenant", j.tenant).Str("command", j.token).Msg("Not parking a command whose delivery names no dispatch.")
 		d.count(ResultParkFailed)
+		_ = d.respond(j, false, cmddownlink.ReachUnsent, "the delivery names no dispatch, so the command cannot be parked or confirmed; re-issue it")
 		j.settle(d)
 		return
 	}
@@ -694,14 +751,16 @@ func (d *Dispatcher) drain(ctx context.Context, k deviceKey) {
 	if d.tenantDeleted(k.tenant) {
 		return
 	}
-	enabled, _ := d.sourcesOf(k.tenant)
-	src, target, found := locate(enabled, k.device)
-	if !found {
-		return // not born on an enabled source: its next birth wakes it again
-	}
 	for {
 		if ctx.Err() != nil {
 			return
+		}
+		// Located afresh for every batch: a node that died or rebirthed while a batch was worked
+		// is no longer where the last one found it.
+		enabled, _ := d.sourcesOf(k.tenant)
+		src, target, found := locate(enabled, k.device)
+		if !found {
+			return // not born on an enabled source: its next birth wakes it again
 		}
 		cmds, err := d.fetcher.Pending(ctx, k.tenant, k.device, drainBatch)
 		if err != nil {
@@ -749,6 +808,12 @@ func (d *Dispatcher) drain(ctx context.Context, k deviceKey) {
 			won++
 			d.count(ResultDrained)
 			j.nonce, j.claimed = nonce, true
+			// A reboot is never parked or carried over a birth: it is refused here, before any other
+			// gate, with its own reason.
+			if j.name == CommandReboot {
+				d.refuseClaimed(j, ResultRefusedRebootGate, msgRebootOffline)
+				continue
+			}
 			// 6-8 on the claimed row: the claim is what lets a refusal be answered.
 			if src.BreakerState() == host.BreakerOpen {
 				d.refuseClaimed(j, ResultRefusedBreaker, msgBreaker)
@@ -761,13 +826,16 @@ func (d *Dispatcher) drain(ctx context.Context, k deviceKey) {
 			p, ref, park := d.validate(j)
 			if park {
 				d.parkClaimed(j)
-				continue
+				return // handed back: claiming it again now would only spin; the next birth wakes us
 			}
 			if ref != nil {
 				d.refuseClaimed(j, ref.result, ref.text)
 				continue
 			}
 			d.send(ctx, j, p)
+			if j.parkedBack {
+				return // the send handed the row back (session down, record not written)
+			}
 		}
 		if won == 0 {
 			d.retryDrain(ctx, k) // every row was refused at the claim: back off rather than spin
@@ -780,11 +848,18 @@ func (d *Dispatcher) drain(ctx context.Context, k deviceKey) {
 }
 
 func (d *Dispatcher) retryDrain(ctx context.Context, k deviceKey) {
-	time.AfterFunc(drainRetryDelay, func() {
+	var t *time.Timer
+	t = time.AfterFunc(drainRetryDelay, func() {
+		d.mu.Lock()
+		delete(d.timers, t)
+		d.mu.Unlock()
 		if ctx.Err() == nil {
 			d.Drain(k.tenant, k.device)
 		}
 	})
+	d.mu.Lock()
+	d.timers[t] = struct{}{}
+	d.mu.Unlock()
 }
 
 // refuseClaimed answers a claimed command UNSENT.
@@ -797,6 +872,7 @@ func (d *Dispatcher) refuseClaimed(j *job, result, text string) {
 // parkClaimed hands a claimed command back (SENT -> PARKED) naming the claim's nonce, on a context
 // of its own: it runs after the term may have ended.
 func (d *Dispatcher) parkClaimed(j *job) {
+	j.parkedBack = true
 	pctx, cancel := context.WithTimeout(context.Background(), bgTimeout)
 	defer cancel()
 	parked, err := d.parker.Park(pctx, j.tenant, j.token, j.nonce)
@@ -868,6 +944,13 @@ const (
 // slice of the wait.
 func (d *Dispatcher) awaitRate(ctx context.Context, j *job) waitResult {
 	wait := d.limiters[j.src].reserve(d.now())
+	if wait > 0 && j.msg != nil {
+		// Reported as soon as it is known to be waiting, not only after the first slice: a wait
+		// that is shorter than the progress interval would otherwise never be reported at all.
+		if err := j.msg.InProgress(); err != nil {
+			log.Debug().Err(err).Msg("Could not mark a waiting command message as in progress.")
+		}
+	}
 	for wait > 0 {
 		slice := min(wait, d.progressEvery)
 		t := time.NewTimer(slice)
@@ -925,6 +1008,12 @@ type writeParams struct {
 
 func trimJSON(b []byte) []byte { return bytes.TrimSpace(b) }
 
+// endOfJSON reports whether nothing but whitespace follows what the decoder has read.
+func endOfJSON(dec *json.Decoder) bool {
+	_, err := dec.Token()
+	return err == io.EOF
+}
+
 // validate decides whether a command may be sent and what exactly would go out. It returns a plan,
 // or a refusal, or park=true when the only thing missing is a BIRTH table that a later birth will
 // bring.
@@ -974,7 +1063,11 @@ func (d *Dispatcher) validate(j *job) (plan, *refusal, bool) {
 		var p writeParams
 		dec := json.NewDecoder(bytes.NewReader(trimJSON(j.payload)))
 		dec.DisallowUnknownFields()
-		if err := dec.Decode(&p); err != nil || p.Metric == nil || *p.Metric == "" || len(p.Value) == 0 {
+		err := dec.Decode(&p)
+		if err == nil && !endOfJSON(dec) {
+			err = errors.New("unexpected data after the parameters")
+		}
+		if err != nil || p.Metric == nil || *p.Metric == "" || len(p.Value) == 0 {
 			if err == nil {
 				err = errors.New("both \"metric\" (a name) and \"value\" are required")
 			}
@@ -983,7 +1076,7 @@ func (d *Dispatcher) validate(j *job) (plan, *refusal, bool) {
 		vdec := json.NewDecoder(bytes.NewReader(p.Value))
 		vdec.UseNumber()
 		var value any
-		if err := vdec.Decode(&value); err != nil || value == nil {
+		if err := vdec.Decode(&value); err != nil || value == nil || !endOfJSON(vdec) {
 			return refuse(ResultRefusedPayload, "the value for %q must be a boolean, a number or a string, got %s", *p.Metric, strings.TrimSpace(string(p.Value)))
 		}
 		name := *p.Metric
@@ -1075,12 +1168,27 @@ func (d *Dispatcher) send(ctx context.Context, j *job, p plan) {
 		w   host.CommandWire
 		err error
 	)
-	// 14. Publish QoS 0, retain false, on the session the Client holds.
-	switch p.kind {
-	case KindRebirth:
-		w, err = j.src.PublishRebirth(ctx, p.target, hook)
-	default:
-		w, err = j.src.PublishMetric(ctx, p.ref, p.value, hook)
+	// 14. Publish QoS 0, retain false, on the session the Client holds. If the node's table moved
+	// while the record was being written, the record is retracted and the command is asked again
+	// against the new table (it is re-resolved by name there); a node that keeps moving is refused.
+	for attempt := 0; ; attempt++ {
+		switch p.kind {
+		case KindRebirth:
+			w, err = j.src.PublishRebirth(ctx, p.target, hook)
+		default:
+			w, err = j.src.PublishMetric(ctx, p.ref, p.value, hook)
+		}
+		if !errors.Is(err, host.ErrTableMoved) {
+			break
+		}
+		if wrote {
+			d.deleteEntry(key)
+			wrote = false
+		}
+		if attempt >= 2 {
+			d.refuseClaimed(j, ResultRefusedMetric, fmt.Sprintf("the node %s kept re-birthing while the command was being recorded", p.target))
+			return
+		}
 	}
 	if err != nil {
 		d.failedSend(ctx, j, p, key, wrote, err)
@@ -1112,30 +1220,31 @@ func (d *Dispatcher) windowOf(cfg config.SourceCommands, kind string) time.Durat
 
 // failedSend settles a command whose publish did not happen, undoing what was done for it.
 func (d *Dispatcher) failedSend(ctx context.Context, j *job, p plan, key string, wrote bool, err error) {
-	if wrote {
+	var indeterminate *host.PublishIndeterminateError
+	if wrote && !errors.As(err, &indeterminate) {
 		d.deleteEntry(key)
 	}
 	var before *host.BeforeWireError
 	switch {
-	case errors.Is(err, host.ErrTermEnded) || ctx.Err() != nil:
+	case errors.As(err, &indeterminate):
+		// The outcome is unknown: the bytes may have reached the node, so this is NOT "not sent".
+		// The record stays (it is the only account of what may have gone out), and the command is
+		// resolved UNANSWERED, which is TIMEOUT/UNKNOWN and not the retry-safe NOT_DELIVERED.
+		d.count(ResultPublishFailed)
+		_ = d.respond(j, false, cmddownlink.ReachUnanswered, msgIndeterminate+": "+indeterminate.Err.Error())
+		j.settle(d)
+	case errors.Is(err, host.ErrTermEnded):
 		// The term ended between the claim and the wire. Nothing was published. The claim already
 		// moved the row onto a new dispatch, so the redelivered envelope will lose its own
 		// confirmation: hand the row back so the next leader's wake delivers it, and leave the
 		// message unacked.
 		d.parkClaimed(j)
-	case errors.As(err, &before):
-		// The record could not be written, so the command is not sent. Back to PARKED, to try again
-		// at the next birth.
-		d.parkClaimed(j)
-		j.settle(d)
-	case errors.Is(err, host.ErrSessionDown):
-		d.parkClaimed(j)
-		j.settle(d)
+	case errors.As(err, &before), errors.Is(err, host.ErrSessionDown), errors.Is(err, host.ErrNotBorn):
+		// Not sent (the record could not be written, the session is down, or the table is not
+		// there): back to PARKED, to try again at the next birth. A reboot is never parked.
+		d.handBack(j)
 	case errors.Is(err, host.ErrBreakerOpen):
 		d.refuseClaimed(j, ResultRefusedBreaker, msgBreaker)
-	case errors.Is(err, host.ErrNotBorn):
-		d.parkClaimed(j)
-		j.settle(d)
 	case errors.Is(err, host.ErrMetricUnknown):
 		d.refuseClaimed(j, ResultRefusedMetric, fmt.Sprintf("metric %q is no longer declared in the BIRTH of %s (the node re-birthed)", p.metric, p.target))
 	case errors.Is(err, host.ErrDatatypeChanged):
@@ -1146,8 +1255,21 @@ func (d *Dispatcher) failedSend(ctx context.Context, j *job, p plan, key string,
 		d.refuseClaimed(j, ResultRefusedPayload, err.Error())
 	default:
 		d.count(ResultPublishFailed)
-		d.refuseClaimedKeepCount(j, "the command could not be published to the broker: "+err.Error())
+		d.refuseClaimedKeepCount(j, "the command could not be sent: "+err.Error())
 	}
+}
+
+// handBack returns a claimed command that was not sent to command-delivery for the device's next
+// birth, except a reboot, which is refused instead: it is sent to a node that is online when it is
+// dispatched, or not at all.
+func (d *Dispatcher) handBack(j *job) {
+	if j.name == CommandReboot {
+		j.parkedBack = true // the row is settled; a drain must still stop and look again
+		d.refuseClaimed(j, ResultRefusedRebootGate, msgRebootOffline)
+		return
+	}
+	d.parkClaimed(j)
+	j.settle(d)
 }
 
 // refuseClaimedKeepCount answers UNSENT without counting a refusal result (the caller counted).
@@ -1220,11 +1342,16 @@ func (d *Dispatcher) onTripped(src Source, at time.Time) {
 			}
 		}
 	}
+	open := d.termOpen
+	if open && len(hit) > 0 {
+		d.bg.Add(1)
+	}
 	d.mu.Unlock()
-	if len(hit) == 0 {
+	if len(hit) == 0 || !open {
 		return
 	}
 	go func() {
+		defer d.bg.Done()
 		for _, r := range hit {
 			d.count(ResultUnconfirmed)
 			text := msgTripped

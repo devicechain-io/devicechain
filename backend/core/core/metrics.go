@@ -285,3 +285,44 @@ const (
 // processorResults is every result a ProcessorMetrics reports, in the order above. Each
 // is exported at zero from construction; see NewProcessorMetrics.
 var processorResults = []string{ResultOK, ResultInvalid, ResultFailed, ResultDropped, ResultRetry, ResultErased}
+
+// GaugeSample is one series of a gauge read at scrape time: the label values (in the order the
+// gauge was declared with) and the value.
+type GaugeSample struct {
+	Labels []string
+	Value  float64
+}
+
+// NewScrapedGaugeVec registers a gauge, named like NewGaugeVec, whose series are read by calling
+// sample at every scrape rather than set when something changes.
+//
+// It is for state that moves with the clock and not only with events. A gauge set on transitions
+// reads whatever the last transition left, which is wrong exactly when it matters: a circuit
+// breaker whose backoff has ended is half-open, but nothing happens at that moment to set it. sample
+// must be quick and safe to call from the scrape goroutine, and it must return the same label
+// names every time (the cardinality is the caller's to bound).
+//
+// With no registry attached (a struct-literal Microservice in a test) nothing is registered and the
+// call is a no-op, as for the other constructors.
+func (ms *Microservice) NewScrapedGaugeVec(name string, help string, labels []string, sample func() []GaugeSample) {
+	sub, name := ms.requireMetricName("NewScrapedGaugeVec", name)
+	reg := ms.MetricsRegisterer()
+	if reg == nil {
+		return
+	}
+	desc := prometheus.NewDesc(prometheus.BuildFQName(METRICS_NAMESPACE, sub, name), help, labels, nil)
+	reg.MustRegister(scrapedGauge{desc: desc, sample: sample})
+}
+
+type scrapedGauge struct {
+	desc   *prometheus.Desc
+	sample func() []GaugeSample
+}
+
+func (g scrapedGauge) Describe(ch chan<- *prometheus.Desc) { ch <- g.desc }
+
+func (g scrapedGauge) Collect(ch chan<- prometheus.Metric) {
+	for _, s := range g.sample() {
+		ch <- prometheus.MustNewConstMetric(g.desc, prometheus.GaugeValue, s.Value, s.Labels...)
+	}
+}

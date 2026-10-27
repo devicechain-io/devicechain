@@ -4,6 +4,7 @@
 package host
 
 import (
+	"context"
 	"strings"
 	"sync"
 	"testing"
@@ -21,7 +22,7 @@ import (
 // These tests drive the REAL Client over a REAL paho connection to the embedded broker, and read
 // what a Sparkplug node would receive: the topic, the QoS and retain flag the BROKER delivers,
 // and the payload bytes. publishCommand is tested through the caller that uses it
-// (SendMetricCommand, publishRebirth), not as a bare function.
+// (PublishMetric, publishRebirth), not as a bare function.
 
 type wireMsg struct {
 	topic    string
@@ -165,17 +166,17 @@ func TestCommandsOnTheWire(t *testing.T) {
 	// Aliased node metric: alias only, no name.
 	ref, err := c.sessions.LookupMetric(wireNodeT, "Setpoint")
 	require.NoError(t, err)
-	_, _, err = c.SendMetricCommand(ref, -2)
+	_, err = c.PublishMetric(context.Background(), ref, -2, nil)
 	require.NoError(t, err)
 	// Un-aliased node metric: name only.
 	ref, err = c.sessions.LookupMetric(wireNodeT, "Mode")
 	require.NoError(t, err)
-	_, _, err = c.SendMetricCommand(ref, "manual")
+	_, err = c.PublishMetric(context.Background(), ref, "manual", nil)
 	require.NoError(t, err)
 	// Aliased device metric on the DCMD topic.
 	ref, err = c.sessions.LookupMetric(wireDevT, "Run")
 	require.NoError(t, err)
-	_, _, err = c.SendMetricCommand(ref, true)
+	_, err = c.PublishMetric(context.Background(), ref, true, nil)
 	require.NoError(t, err)
 	// Rebirth: by name, even though this node aliases other metrics.
 	require.True(t, c.publishRebirth(wireNodeT.Group, wireNodeT.Node))
@@ -239,8 +240,8 @@ func TestCommandsOnTheWire(t *testing.T) {
 
 // 🔴 EPOCH CONTROL THROUGH THE CALLER. A command is validated against the table, then a rebirth
 // lands and the node remaps the alias, then the command is published: the wire must carry the NEW
-// alias. The paired mutant (SendMetricCommand skipping RevalidateMetric) puts alias 11 on the wire.
-func TestSendMetricCommandAfterARebirthUsesTheNewAlias(t *testing.T) {
+// alias. The paired mutant (PublishMetric skipping RevalidateMetric) puts alias 11 on the wire.
+func TestPublishMetricAfterARebirthUsesTheNewAlias(t *testing.T) {
 	rig := newSpRig(t, spWindow, 0)
 	c, feed := onlineWithBirths(t, rig, 11)
 	w := watchWire(t, rig.mqttURL, "cmd-watch", "spBv1.0/plant-a/#")
@@ -258,9 +259,10 @@ func TestSendMetricCommandAfterARebirthUsesTheNewAlias(t *testing.T) {
 		return err == nil && r.Alias == 12
 	}, 20*time.Second, 5*time.Millisecond)
 
-	used, _, err := c.SendMetricCommand(stale, 3)
+	used, err := c.PublishMetric(context.Background(), stale, 3, nil)
 	require.NoError(t, err)
-	assert.Equal(t, uint64(12), used.Alias)
+	require.NotNil(t, used.Alias)
+	assert.Equal(t, uint64(12), *used.Alias)
 
 	require.Eventually(t, func() bool { return len(w.writes(t)) >= 1 }, 20*time.Second, 5*time.Millisecond)
 	msgs := w.writes(t)
@@ -278,12 +280,11 @@ func TestRefusedValueIsNotPublished(t *testing.T) {
 
 	ref, err := c.sessions.LookupMetric(wireNodeT, "Setpoint")
 	require.NoError(t, err)
-	_, payload, err := c.SendMetricCommand(ref, 300) // 300 into the BIRTH-declared Int8
+	_, err = c.PublishMetric(context.Background(), ref, 300, nil) // 300 into the BIRTH-declared Int8
 	require.ErrorIs(t, err, ErrValueRefused)
-	assert.Nil(t, payload)
 
 	// Control: the same call with an in-range value does publish, so silence above is the refusal.
-	_, _, err = c.SendMetricCommand(ref, 100)
+	_, err = c.PublishMetric(context.Background(), ref, 100, nil)
 	require.NoError(t, err)
 	msgs := awaitMsgs(t, w, 1)
 	time.Sleep(300 * time.Millisecond)
@@ -292,13 +293,13 @@ func TestRefusedValueIsNotPublished(t *testing.T) {
 }
 
 // With no live broker session there is nothing to publish on, and no table to address against.
-func TestSendMetricCommandWithoutASession(t *testing.T) {
+func TestPublishMetricWithoutATable(t *testing.T) {
 	rig := newSpRig(t, spWindow, 0)
 	c, _ := onlineWithBirths(t, rig, 11)
 	ref, err := c.sessions.LookupMetric(wireNodeT, "Setpoint")
 	require.NoError(t, err)
 	c.sessions.EndHostSession()
-	_, _, err = c.SendMetricCommand(ref, 1)
+	_, err = c.PublishMetric(context.Background(), ref, 1, nil)
 	assert.ErrorIs(t, err, ErrNotBorn, "the Host session's tables are gone: park and wait for the rebuild")
 }
 

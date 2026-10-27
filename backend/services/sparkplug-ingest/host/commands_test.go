@@ -388,3 +388,103 @@ func TestAHalfOpenBreakerPutsExactlyOneCommandOnTheWire(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, BreakerClosed, c.BreakerState())
 }
+
+// Stop ends the term's Host session exactly as a lost one is ended: not up, nothing addressable, no
+// tables. A client connected again by the next term must not take a command before it has announced
+// ONLINE, nor on an alias from the last term's table.
+func TestStoppingAClientEndsItsHostSessionLikeALostOne(t *testing.T) {
+	c, fc, _ := bornClient(t, enabledCommands())
+	stale, err := c.LookupMetric(wireNodeT, "Setpoint")
+	require.NoError(t, err)
+	require.True(t, c.SessionUp())
+	c.cancel = func() {}
+
+	c.Stop()
+
+	assert.False(t, c.SessionUp(), "a stopped client still reads as up")
+	assert.Zero(t, c.IndexSize(), "a stopped client kept its reverse index")
+	_, err = c.LookupMetric(wireNodeT, "Setpoint")
+	assert.ErrorIs(t, err, ErrNotBorn, "a stopped client kept its BIRTH tables")
+
+	// The next term connects: before ONLINE is announced a command is not taken.
+	before := len(fc.sentTo(wireNodeT.Topic()))
+	_, err = c.PublishMetric(context.Background(), stale, 5, nil)
+	assert.ErrorIs(t, err, ErrSessionDown)
+
+	// And even if the session were up before the node births again, the old alias is not used.
+	c.hostOnline.Store(true)
+	_, err = c.PublishMetric(context.Background(), stale, 5, nil)
+	assert.ErrorIs(t, err, ErrNotBorn, "the last term's alias was published on the next term's session")
+	assert.Equal(t, before, len(fc.sentTo(wireNodeT.Topic())), "a command went out from a stopped client")
+}
+
+// An invalidated table is not current even when its generation matches.
+func TestAnInvalidatedTableIsNotRevalidated(t *testing.T) {
+	c, _, _ := bornClient(t, enabledCommands())
+	ref, err := c.LookupMetric(wireNodeT, "Setpoint")
+	require.NoError(t, err)
+	require.True(t, c.sessions.Current(ref))
+
+	c.sessions.mu.Lock()
+	s := c.sessions.sessions[nodeKey{"plant-a", "node-3"}]
+	s.invalidated = true // the generation and epoch are untouched
+	c.sessions.mu.Unlock()
+
+	assert.False(t, c.sessions.Current(ref), "an invalidated table reads as current")
+	_, err = c.sessions.RevalidateMetric(ref)
+	assert.Error(t, err, "an invalidated table was revalidated by its unchanged generation")
+}
+
+// The last look, under the tracker's lock, after the record and right before the publish: a rebirth
+// that lands while the record is written stops the command, which is not published.
+func TestARebirthWhileTheRecordIsWrittenStopsThePublish(t *testing.T) {
+	c, fc, _ := bornClient(t, enabledCommands())
+	ref, _ := c.LookupMetric(wireNodeT, "Setpoint")
+
+	_, err := c.PublishMetric(context.Background(), ref, 5, func(CommandWire) error {
+		// A new session of the node, remapping Setpoint, lands while the record is being written.
+		c.onMessage(nil, fakeMessage{topic: wireNBirth, payload: encodeT(t, &sppb.Payload{Seq: proto.Uint64(0), Metrics: []*sppb.Payload_Metric{
+			bdSeqM(9),
+			{Name: proto.String("Setpoint"), Alias: proto.Uint64(77), Datatype: proto.Uint32(datatypeInt8), Value: &sppb.Payload_Metric_IntValue{IntValue: 1}},
+		}})})
+		return nil
+	})
+	require.ErrorIs(t, err, ErrTableMoved)
+	assert.Empty(t, fc.sentTo(wireNodeT.Topic()), "a command went out on an alias from a table that had been replaced")
+
+	// Asked again against the new table, it goes out under the new alias.
+	fresh, err := c.LookupMetric(wireNodeT, "Setpoint")
+	require.NoError(t, err)
+	w, err := c.PublishMetric(context.Background(), fresh, 5, nil)
+	require.NoError(t, err)
+	require.NotNil(t, w.Alias)
+	assert.Equal(t, uint64(77), *w.Alias)
+}
+
+// A publish whose outcome is unknown is an indeterminate error, not "not connected", and it counts
+// for the breaker's watch: a disconnect right after it is blamed on it.
+func TestAPublishThatFailsOnTheWireIsIndeterminateAndCountsForTheBreaker(t *testing.T) {
+	c, fc, _ := bornClient(t, enabledCommands())
+	fc.pubErr = errors.New("PUBACK not received in time")
+	ref, _ := c.LookupMetric(wireNodeT, "Setpoint")
+
+	_, err := c.PublishMetric(context.Background(), ref, 5, nil)
+	var ind *PublishIndeterminateError
+	require.ErrorAs(t, err, &ind, "a publish that may have reached the broker was reported as not sent")
+	assert.NotErrorIs(t, err, ErrSessionDown)
+	assert.True(t, c.breaker.Disconnected(), "an unknown-outcome publish did not count as a publish for the breaker")
+}
+
+// A token that moves to another identity leaves no stale entry for the old one.
+func TestAMovedTokenLeavesNoStaleIdentityBehind(t *testing.T) {
+	x := newCommandIndex()
+	x.add("plant-a/node-3/pump-1", "tok")
+	x.add("plant-b/node-9/pump-2", "tok")
+	x.remove("plant-a/node-3/pump-1") // the old identity's death must not take the moved token with it
+	got, ok := x.locate("tok")
+	require.True(t, ok, "the old identity's death removed the token's new home")
+	assert.Equal(t, CommandTarget{Group: "plant-b", Node: "node-9", Device: "pump-2"}, got)
+	x.remove("plant-b/node-9/pump-2")
+	_, ok = x.locate("tok")
+	assert.False(t, ok)
+}

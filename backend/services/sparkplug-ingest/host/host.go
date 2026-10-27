@@ -196,10 +196,10 @@ type Metrics struct {
 	// that counts verdicts, and a slot that could not read the projection reached none, which
 	// is exactly the case this series exists to show as a failure.
 	PresenceProbePass *core.PeriodicTaskMetrics
-	// CommandBreakerState is each source's command breaker (0 closed, 1 open, 2 half-open), labelled by
-	// tenant, and CommandBreakerTrips counts the times one opened: a session that ended right after a
-	// command publish, which usually means the broker refused the command. Both may be nil.
-	CommandBreakerState *prometheus.GaugeVec
+	// CommandBreakerTrips counts the times a source's command breaker opened: a session that ended
+	// right after a command publish, which usually means the broker refused the command. The breaker's
+	// state itself is read at scrape time (Client.BreakerSample), not set on transitions, so a breaker
+	// whose backoff has ended reads half-open without anything having to touch it. May be nil.
 	CommandBreakerTrips prometheus.Counter
 }
 
@@ -1655,26 +1655,6 @@ func (c *Client) publishCommand(target CommandTarget, payload []byte) error {
 	return mqtt.WaitTokenTimeout(client.Publish(target.Topic(), commandQoS, commandRetain, payload), publishTimeout)
 }
 
-// SendMetricCommand writes one value to a metric the target's BIRTH declared. ref is what
-// validation resolved earlier; it is checked again here against the CURRENT table, so a rebirth
-// that landed in between re-addresses the command by the new alias (or refuses it if the metric
-// is gone or changed type) rather than sending a stale one. It returns the ref actually used and
-// the encoded payload that went on the wire (the evidence S4 keeps).
-func (c *Client) SendMetricCommand(ref MetricRef, value any) (MetricRef, []byte, error) {
-	cur, err := c.sessions.RevalidateMetric(ref)
-	if err != nil {
-		return MetricRef{}, nil, err
-	}
-	payload, err := BuildMetricCommand(cur, value, c.now().UnixMilli())
-	if err != nil {
-		return cur, nil, err
-	}
-	if err := c.publishCommand(cur.Target, payload); err != nil {
-		return cur, payload, err
-	}
-	return cur, payload, nil
-}
-
 // logRecord emits the structured per-message log line for the decode+log scope,
 // tagged with the source's tenant so attribution is visible per connection.
 func (c *Client) logRecord(rec Record) {
@@ -1715,6 +1695,16 @@ func (c *Client) Stop() {
 		client.Disconnect(disconnectQuiesceMs)
 	}
 	c.wg.Wait() // runLoop exited: no new session, so no new probe can be launched
+	// The term's Host session is over exactly as a lost one is: not up, nothing addressable, and
+	// no BIRTH table to address against. Without this a stopped client that is connected again by
+	// the next term would take a command before it had announced ONLINE, or on an alias from
+	// the last term's table.
+	if client != nil {
+		c.clearSession(client)
+	}
+	c.hostOnline.Store(false)
+	c.cmdIndex.clear()
+	c.sessions.EndHostSession()
 	// Drain any in-flight reconcile probe. runLoop's exit cancelled the session context,
 	// so a probe in its window aborts promptly; this just makes shutdown wait for it.
 	c.probeWG.Wait()

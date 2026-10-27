@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"sync/atomic"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -210,6 +211,20 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	Manager = host.NewManager(clients)
 	log.Info().Int("sources", len(clients)).Msg("Built Sparkplug source connections.")
 
+	// Each source's command breaker, read at scrape time: its state moves with the clock (a backoff
+	// that has ended is half-open) and not only when a command or a disconnect touches it. Labelled
+	// by tenant and by the source's own qualified id, both bounded by the configured sources.
+	Microservice.NewScrapedGaugeVec("command_breaker_state",
+		"Each source's command circuit breaker: 0 closed, 1 open (commands fail fast), 2 half-open (one command is let through). It opens when the broker drops the Host session right after a command publish, which usually means the source's credential may not publish on the NCMD/DCMD topics.",
+		[]string{"tenant", "source"}, func() []core.GaugeSample {
+			out := make([]core.GaugeSample, 0, len(clients))
+			for _, c := range clients {
+				tenant, source, state := c.BreakerSample()
+				out = append(out, core.GaugeSample{Labels: []string{tenant, source}, Value: float64(state)})
+			}
+			return out
+		})
+
 	if Configuration.AnyCommandsEnabled() {
 		d, err := buildDispatcher(clients, dispatchMetrics)
 		if err != nil {
@@ -227,9 +242,17 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 // MUST start at the stream tail (ReaderWithDeliverNew): a durable created without it replays the
 // stream's retained backlog and publishes already-expired commands to nodes as live actuations.
 // Dropping the option changes nothing a compiler or a unit test of the dispatcher can see.
+//
+// It is also TERM-GATED, like REACT's: it hands out nothing unless this replica is serving a
+// leadership term (commandTermHeld), and gives back what it has buffered when the term ends, so a
+// batch fetched across a handover is redelivered to the new leader at once instead of after the ack
+// wait. The dispatcher only reads while its term is live, so the gate is a second fence, not the first.
 func newCommandReader(m *messaging.NatsManager) (messaging.MessageReader, error) {
-	return m.NewReader(streams.DeviceCommands, messaging.ReaderWithDeliverNew())
+	return m.NewReader(streams.DeviceCommands, downlink.ReaderOptions(commandTermHeld.Load)...)
 }
+
+// commandTermHeld is true while this replica serves a leadership term with a running dispatcher.
+var commandTermHeld atomic.Bool
 
 // commandDeliveryEndpoint validates the coordinate the command path needs and returns
 // command-delivery's GraphQL URL. It fails closed: without it no command could be claimed, and a
@@ -331,9 +354,6 @@ func buildMetrics() host.Metrics {
 	}
 
 	return host.Metrics{
-		CommandBreakerState: Microservice.NewGaugeVec("command_breaker_state",
-			"Each source's command circuit breaker: 0 closed, 1 open (commands fail fast), 2 half-open (one command is let through). It opens when the broker drops the Host session right after a command publish, which usually means the source's credential may not publish on the NCMD/DCMD topics.",
-			[]string{"tenant"}),
 		CommandBreakerTrips: Microservice.NewCounter("command_breaker_trips_total",
 			"Times a source's command breaker opened (a session ended within five seconds of a command publish). A single trip can be a coincident network blip; a repeating one is a publish permission."),
 		Messages: Microservice.NewCounterVec("messages_total",
@@ -808,8 +828,10 @@ func startDispatcher(leaderCtx context.Context) (cancel context.CancelFunc, done
 	}
 	dctx, dcancel := context.WithCancel(leaderCtx)
 	ready := make(chan struct{})
+	commandTermHeld.Store(true)
 	go func() {
 		defer close(finished)
+		defer commandTermHeld.Store(false)
 		Dispatcher.Run(dctx, func() { close(ready) })
 	}()
 	select {

@@ -156,6 +156,10 @@ func TestStructLiteralMicroserviceMethods(t *testing.T) {
 				gv.WithLabelValues("v").Set(1)
 			}
 		}},
+		// Safe: with no registry attached it registers nothing and returns.
+		{name: "NewScrapedGaugeVec", call: func(t *testing.T, ms *Microservice) {
+			ms.NewScrapedGaugeVec("literal_scraped", "h", []string{"l"}, func() []GaugeSample { return nil })
+		}},
 		{name: "NewHistogramVec", call: func(t *testing.T, ms *Microservice) {
 			hv := ms.NewHistogramVec("literal_histogram_vec", "h", []string{"l"}, []float64{1})
 			if assert.NotNil(t, hv) {

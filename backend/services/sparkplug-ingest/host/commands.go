@@ -8,7 +8,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -36,7 +35,21 @@ var (
 	ErrBreakerOpen = errors.New("the source's command breaker is open")
 	// ErrTermEnded: the leadership term that was publishing has ended.
 	ErrTermEnded = errors.New("the leadership term has ended")
+	// ErrTableMoved: the node's BIRTH table was replaced between the last check and the publish, so
+	// the command that was about to go out is stale. Nothing was published; the caller retracts
+	// its record and asks again against the new table.
+	ErrTableMoved = errors.New("the node's BIRTH table changed while the command was being recorded")
 )
+
+// PublishIndeterminateError is a publish that failed in a way that does not say whether the bytes
+// reached the broker (a timeout waiting for the client library, a token error). The command may
+// have been delivered, so it is NOT "not sent": the caller must not treat it as safe to retry.
+type PublishIndeterminateError struct{ Err error }
+
+func (e *PublishIndeterminateError) Error() string {
+	return "the publish did not complete and may have reached the node: " + e.Err.Error()
+}
+func (e *PublishIndeterminateError) Unwrap() error { return e.Err }
 
 // BeforeWireError wraps what the before-wire hook returned, so a caller can tell "my hook refused"
 // from "the publish failed".
@@ -127,6 +140,12 @@ func (x *commandIndex) add(ext, token string) (CommandTarget, bool, bool) {
 		delete(x.byToken, old)
 	}
 	prev, had := x.byToken[token]
+	if had {
+		// The token moved to another identity: the old identity must not keep pointing at it.
+		if oldExt := prev.String(); oldExt != ext {
+			delete(x.byExtID, oldExt)
+		}
+	}
 	x.byToken[token] = t
 	x.byExtID[ext] = token
 	return t, !had || prev != t, true
@@ -204,18 +223,15 @@ func (c *Client) SessionUp() bool { return c.hostOnline.Load() }
 
 // BreakerState is the source's command breaker state.
 func (c *Client) BreakerState() BreakerState {
-	s := c.breaker.State()
-	c.noteBreakerState(s)
-	return s
+	return c.breaker.State()
 }
 
 // IndexSize is the number of devices the source can currently address; for tests and metrics.
 func (c *Client) IndexSize() int { return c.cmdIndex.size() }
 
-func (c *Client) noteBreakerState(s BreakerState) {
-	if c.metrics.CommandBreakerState != nil {
-		c.metrics.CommandBreakerState.WithLabelValues(c.tenant).Set(float64(s))
-	}
+// BreakerSample is a source's breaker state at this moment, for the scrape-time collector.
+func (c *Client) BreakerSample() (tenant, source string, state BreakerState) {
+	return c.tenant, c.policy.Source, c.breaker.State()
 }
 
 // trackCommandTargets updates the reverse index from the presence events an accepted message
@@ -284,7 +300,7 @@ func (c *Client) PublishMetric(ctx context.Context, ref MetricRef, value any, be
 		return CommandWire{}, err
 	}
 	wire := wireOf(cur.Target.Topic(), payload, cur, value, at)
-	return c.putOnWire(ctx, cur.Target, payload, wire, beforeWire)
+	return c.putOnWire(ctx, cur.Target, &cur, payload, wire, beforeWire)
 }
 
 // PublishRebirth asks a node to rebirth (NCMD "Node Control/Rebirth"), addressed by name as the
@@ -302,7 +318,7 @@ func (c *Client) PublishRebirth(ctx context.Context, target CommandTarget, befor
 	}
 	ref := MetricRef{Target: node, Name: nodeControlRebirthMetric, Datatype: datatypeBoolean}
 	wire := wireOf(node.Topic(), payload, ref, true, at)
-	out, err := c.putOnWire(ctx, node, payload, wire, beforeWire)
+	out, err := c.putOnWire(ctx, node, nil, payload, wire, beforeWire)
 	if err == nil {
 		c.sessions.MarkCommandedRebirth(node.Group, node.Node)
 	}
@@ -311,7 +327,7 @@ func (c *Client) PublishRebirth(ctx context.Context, target CommandTarget, befor
 
 // putOnWire is the shared tail of every command publish: the before-wire hook, the last checks, and
 // the publish itself.
-func (c *Client) putOnWire(ctx context.Context, target CommandTarget, payload []byte, wire CommandWire, beforeWire func(CommandWire) error) (CommandWire, error) {
+func (c *Client) putOnWire(ctx context.Context, target CommandTarget, ref *MetricRef, payload []byte, wire CommandWire, beforeWire func(CommandWire) error) (CommandWire, error) {
 	if beforeWire != nil {
 		if err := beforeWire(wire); err != nil {
 			return wire, &BeforeWireError{Err: err}
@@ -326,19 +342,26 @@ func (c *Client) putOnWire(ctx context.Context, target CommandTarget, payload []
 	if !c.hostOnline.Load() {
 		return wire, ErrSessionDown
 	}
+	// And the table the alias came from must still be the node's current one: a rebirth can land
+	// while the record is written, and the check is taken under the tracker's lock, after the
+	// record and immediately before the publish. A rebirth is addressed by name and has no table.
+	if ref != nil && !c.sessions.Current(*ref) {
+		return wire, ErrTableMoved
+	}
 	if !c.breaker.Admit() {
-		c.noteBreakerState(c.breaker.State())
 		return wire, ErrBreakerOpen
 	}
 	if err := c.publishCommand(target, payload); err != nil {
-		c.breaker.Release()
 		if errors.Is(err, errCommandNotConnected) {
+			c.breaker.Release()
 			return wire, ErrSessionDown
 		}
-		return wire, fmt.Errorf("publishing the command: %w", err)
+		// Anything else leaves the outcome unknown: the bytes may have reached the broker. It
+		// counts as a publish for the breaker's watch, and a half-open probe slot stays taken.
+		c.breaker.Published()
+		return wire, &PublishIndeterminateError{Err: err}
 	}
 	c.breaker.Published()
-	c.noteBreakerState(c.breaker.State())
 	return wire, nil
 }
 
@@ -350,7 +373,6 @@ func (c *Client) noteSessionLost() {
 	if !c.breaker.Disconnected() {
 		return
 	}
-	c.noteBreakerState(BreakerOpen)
 	if c.metrics.CommandBreakerTrips != nil {
 		c.metrics.CommandBreakerTrips.Inc()
 	}

@@ -289,6 +289,9 @@ const (
 	DefaultCommandClockSkewSeconds = 30
 	MaxCommandClockSkewSeconds     = 300
 
+	// MinCommandPublishPerSecond is the floor a written rate must clear: below one command every ten
+	// seconds a command can wait out its whole lifetime for a token.
+	MinCommandPublishPerSecond     = 0.1
 	DefaultCommandPublishPerSecond = 50
 	DefaultCommandBurst            = 200
 )
@@ -455,8 +458,8 @@ func (c *SourceCommands) validate(i int) error {
 	if w := c.ClockSkewSeconds; w < 0 || w > MaxCommandClockSkewSeconds {
 		return fmt.Errorf("%s must be between 0 and %d (got %d)", f("clockSkewSeconds"), MaxCommandClockSkewSeconds, w)
 	}
-	if c.PublishPerSecond != 0 && !(c.PublishPerSecond > 0) {
-		return fmt.Errorf("%s must be positive (got %v)", f("publishPerSecond"), c.PublishPerSecond)
+	if c.PublishPerSecond != 0 && !(c.PublishPerSecond >= MinCommandPublishPerSecond) {
+		return fmt.Errorf("%s must be at least %v (got %v)", f("publishPerSecond"), MinCommandPublishPerSecond, c.PublishPerSecond)
 	}
 	if c.Burst < 0 {
 		return fmt.Errorf("%s must be positive (got %d)", f("burst"), c.Burst)
