@@ -4639,8 +4639,9 @@ type Mutation {
     """
     Makes an existing published version the one devices use again. The draft and the version
     history are untouched, so a later version can be made active the same way. Fails if the
-    profile or the version does not exist. Returns the updated profile. Requires
-    device:write.
+    profile or the version does not exist, and is refused with LIMIT_EXCEEDED when the version
+    carries more calculated metrics than the tenant's tier allows (a version without any is
+    never refused for this). Returns the updated profile. Requires device:write.
     """
     rollbackDeviceProfile(
         """Token of the profile."""

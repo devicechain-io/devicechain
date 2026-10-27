@@ -454,8 +454,9 @@ func (api *Api) RollbackDeviceProfile(ctx context.Context, token string, version
 	// rollback is the other writer of active_version, so without this a tenant whose tier was
 	// lowered could reactivate an older version carrying more calculated metrics than the
 	// tier allows. A formula-free target pays one parse and never reads the ceiling, so a
-	// revert to it does not depend on user-management. The refusal wording is publish's.
-	if err := api.checkCalculatedMetrics(ctx, target.Snapshot); err != nil {
+	// revert to it does not depend on user-management. Only the count is checked, not the
+	// formulas: an emergency revert must not be blocked by compiler-rule drift.
+	if err := api.checkRollbackCalculatedMetrics(ctx, target.Snapshot, token, version); err != nil {
 		return nil, err
 	}
 

@@ -64,15 +64,28 @@ func (api *Api) calculatedMetricsCeiling(ctx context.Context) (int, error) {
 // metrics than the tenant's tier allows. extensions.code LIMIT_EXCEEDED.
 type CalculatedMetricsCeilingError struct {
 	Count, Ceiling int
+	// Action is what was refused, as the clause after "cannot": the empty value is a publish.
+	Action string
+}
+
+// actionPublishProfile is the refused action of a publish, and what an empty Action means, so
+// the served publish wording stays byte-identical.
+const actionPublishProfile = "publish device profile"
+
+func (e *CalculatedMetricsCeilingError) action() string {
+	if e.Action == "" {
+		return actionPublishProfile
+	}
+	return e.Action
 }
 
 func (e *CalculatedMetricsCeilingError) Error() string {
 	if e.Ceiling == 0 {
-		return fmt.Sprintf("cannot publish device profile: it has %d calculated metric(s), and calculated "+
-			"metrics are not enabled for this tenant's tier", e.Count)
+		return fmt.Sprintf("cannot %s: it has %d calculated metric(s), and calculated "+
+			"metrics are not enabled for this tenant's tier", e.action(), e.Count)
 	}
-	return fmt.Sprintf("cannot publish device profile: it has %d calculated metrics, and this tenant's tier "+
-		"allows at most %d per profile", e.Count, e.Ceiling)
+	return fmt.Sprintf("cannot %s: it has %d calculated metrics, and this tenant's tier "+
+		"allows at most %d per profile", e.action(), e.Count, e.Ceiling)
 }
 
 // Extensions gives the refusal its wire code.
@@ -327,14 +340,46 @@ func (api *Api) checkCalculatedMetrics(ctx context.Context, snapshot datatypes.J
 		return &InvalidArgumentError{Msg: fmt.Sprintf("cannot publish device profile: %d calculated metric "+
 			"problem(s): %s", len(problems), strings.Join(problems, "; "))}
 	}
+	return api.checkCalculatedMetricsCeiling(ctx, len(p.calculated), actionPublishProfile)
+}
+
+// checkRollbackCalculatedMetrics holds a rollback to the tier ceiling, and ONLY the ceiling. A
+// rollback is the emergency revert, so it must not be blocked by compiler-rule drift in a
+// version that was valid when it was published (the resolver already degrades per metric); what
+// it must not do is reactivate more calculated metrics than the tier allows. A formula-free
+// target reads no ceiling.
+func (api *Api) checkRollbackCalculatedMetrics(ctx context.Context, snapshot datatypes.JSON, token string, version int32) error {
+	snap, err := parseProfileSnapshot(snapshot)
+	if err != nil {
+		return err
+	}
+	n := 0
+	for _, m := range snap.Metrics {
+		if m.Expression.Valid {
+			n++
+		}
+	}
+	return api.checkCalculatedMetricsCeiling(ctx, n, fmt.Sprintf("make version %d of device profile %q active", version, token))
+}
+
+// checkCalculatedMetricsCeiling refuses n calculated metrics over the platform maximum or the
+// tenant's tier ceiling; action names what is refused ("publish device profile", ...). Zero
+// reads no ceiling. An unreadable ceiling refuses: there is no safe number to assume.
+func (api *Api) checkCalculatedMetricsCeiling(ctx context.Context, n int, action string) error {
+	if n == 0 {
+		return nil
+	}
+	if n > governance.MaxCalculatedMetricsPerProfile {
+		return &CalculatedMetricsCeilingError{Count: n, Ceiling: governance.MaxCalculatedMetricsPerProfile, Action: action}
+	}
 	ceiling, err := api.calculatedMetricsCeiling(ctx)
 	if err != nil {
-		log.Error().Err(err).Msg("Calculated-metrics ceiling could not be resolved; refusing profile publish.")
-		return errors.New("cannot publish device profile: this tenant's calculated-metrics ceiling could not " +
-			"be read, and there is no safe number to assume")
+		log.Error().Err(err).Str("action", action).Msg("Calculated-metrics ceiling could not be resolved; refusing.")
+		return fmt.Errorf("cannot %s: this tenant's calculated-metrics ceiling could not "+
+			"be read, and there is no safe number to assume", action)
 	}
-	if n := len(p.calculated); n > ceiling {
-		return &CalculatedMetricsCeilingError{Count: n, Ceiling: ceiling}
+	if n > ceiling {
+		return &CalculatedMetricsCeilingError{Count: n, Ceiling: ceiling, Action: action}
 	}
 	return nil
 }

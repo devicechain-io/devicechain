@@ -17,6 +17,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/limit"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 // stubCeiling answers a fixed calculated-metrics ceiling, or an error, and counts calls.
@@ -605,6 +606,8 @@ func TestRollbackEnforcesTheCalculatedMetricsCeiling(t *testing.T) {
 		assert.Equal(t, 2, ce.Count)
 		assert.Equal(t, 1, ce.Ceiling)
 		assert.Equal(t, limit.Code, codeOf(err))
+		assert.NotContains(t, err.Error(), "publish", "a rollback refusal does not talk about publishing")
+		assert.Contains(t, err.Error(), `make version 2 of device profile "meter" active`)
 		assert.EqualValues(t, 1, active(f), "a refused rollback does not move the pointer")
 	})
 	t.Run("a tier lowered to zero refuses it", func(t *testing.T) {
@@ -614,6 +617,7 @@ func TestRollbackEnforcesTheCalculatedMetricsCeiling(t *testing.T) {
 		err := rollback(f, 2)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "not enabled for this tenant's tier")
+		assert.NotContains(t, err.Error(), "publish")
 		assert.EqualValues(t, 1, active(f))
 	})
 	t.Run("a version within the ceiling is admitted", func(t *testing.T) {
@@ -631,7 +635,18 @@ func TestRollbackEnforcesTheCalculatedMetricsCeiling(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "could not be read")
 		assert.NotContains(t, err.Error(), "user-management down")
+		assert.NotContains(t, err.Error(), "publish")
 		assert.EqualValues(t, 1, active(f))
+	})
+	t.Run("a formula the current rules reject, under the ceiling, still rolls back", func(t *testing.T) {
+		f := setup(t)
+		require.NoError(t, rollback(f, 1))
+		// Compiler-rule drift: the frozen v2 now holds a formula the current rules refuse.
+		require.NoError(t, f.api.RDB.DB(f.ctx).Model(&DeviceProfileVersion{}).
+			Where("version = ?", 2).
+			Update("snapshot", gorm.Expr("REPLACE(CAST(snapshot AS TEXT), ?, ?)", "voltage * 2.0", "voltage *")).Error)
+		require.NoError(t, rollback(f, 2), "an emergency revert is not blocked by compile-rule drift")
+		assert.EqualValues(t, 2, active(f))
 	})
 	t.Run("a formula-free version never reads the ceiling", func(t *testing.T) {
 		f := setup(t)
