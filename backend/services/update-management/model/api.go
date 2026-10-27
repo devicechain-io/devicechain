@@ -153,6 +153,9 @@ type Api struct {
 	// OnRolloutStep observes every rollout step (the driver's and the inline one after a start or
 	// resume): the service records its metrics through it. Nil observes nothing.
 	OnRolloutStep func(res RolloutStepResult, err error)
+	// OnRolloutListFailed observes a failed query for the RUNNING rollouts, which stops every
+	// rollout's step before one is attempted. Nil observes nothing.
+	OnRolloutListFailed func(err error)
 
 	// beforeDispatch runs inside a rollout step after the in-flight count is taken under the
 	// rollout's lock and before any device is dispatched. A seam for the concurrency tests: two

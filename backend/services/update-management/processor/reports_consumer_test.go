@@ -117,7 +117,11 @@ const reportsSubject = "inst.acme.device-reports.dev-1"
 func counter(c *ReportsConsumer, vec string, label string) float64 {
 	switch vec {
 	case "reports":
-		return testutil.ToFloat64(c.reports.WithLabelValues(label))
+		verdict, kind, found := strings.Cut(label, "/")
+		if !found {
+			kind = reportKindProgress
+		}
+		return testutil.ToFloat64(c.reports.WithLabelValues(verdict, kind))
 	case "grants":
 		return testutil.ToFloat64(c.grants.WithLabelValues(label))
 	default:
@@ -315,4 +319,20 @@ func TestAFailedApplyIsRetriedNotAcknowledged(t *testing.T) {
 	api.applyErr = nil
 	c.handle(context.Background(), msg(reportsSubject, progressBody("RECEIVED")))
 	require.EqualValues(t, 1, handled(t, reg, core.ResultOK))
+}
+
+// An inventory report is counted under kind=inventory, a progress report under kind=progress, so
+// the refused-reports alert can judge a fleet on progress alone: inventory reports answer
+// UNKNOWN_ASSIGNMENT or UNCONFIRMED on every healthy reconnect.
+func TestReportsAreCountedByKind(t *testing.T) {
+	api := &fakeApi{verdict: model.VerdictUnknownAssignment}
+	c := newConsumer(t, api)
+	inventory := `{"v":1,"kind":"update.inventory","component":"firmware","bootId":"b","running":{"version":"1.0.0"}}`
+	c.handle(context.Background(), msg(reportsSubject, inventory))
+	require.EqualValues(t, 1, counter(c, "reports", "UNKNOWN_ASSIGNMENT/inventory"))
+	require.EqualValues(t, 0, counter(c, "reports", "UNKNOWN_ASSIGNMENT/progress"))
+
+	c.handle(context.Background(), msg(reportsSubject, progressBody("RECEIVED")))
+	require.EqualValues(t, 1, counter(c, "reports", "UNKNOWN_ASSIGNMENT/progress"))
+	require.EqualValues(t, 1, counter(c, "reports", "UNKNOWN_ASSIGNMENT/inventory"))
 }

@@ -270,6 +270,7 @@ func buildApi(ctx context.Context) (*model.Api, error) {
 	api.DownloadBaseURL = Configuration.Updates.DownloadBaseURL
 	api.CapabilityTTL = time.Duration(Configuration.Updates.CapabilityTTLSeconds) * time.Second
 	api.OnRolloutStep = RolloutStats.Observe
+	api.OnRolloutListFailed = RolloutStats.ObserveListFailure
 	if api.AllowUnverified {
 		log.Warn().Msg("updates.allowUnverifiedArtifacts is set: artifacts with no active-signer signature can be assigned to devices. " +
 			"Nothing authenticates who produced them; this is a development setting.")

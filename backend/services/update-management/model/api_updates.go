@@ -984,9 +984,6 @@ func (api *Api) GrantDownload(ctx context.Context, deviceToken, assignmentToken 
 	if err := api.refuseIfDisabled(ctx, deviceToken); err != nil {
 		return nil, err
 	}
-	if api.DownloadBaseURL == "" {
-		return nil, &GrantRefusal{Reason: GrantNotConfigured}
-	}
 	asg, err := api.assignmentByToken(ctx, deviceToken, assignmentToken)
 	if err != nil {
 		return nil, err
@@ -1008,6 +1005,12 @@ func (api *Api) GrantDownload(ctx context.Context, deviceToken, assignmentToken 
 		return nil, &GrantRefusal{Reason: GrantFinished, AttemptToken: row.Token, Stale: true}
 	case row.CancelRequested:
 		return nil, &GrantRefusal{Reason: GrantCancelRequested, AttemptToken: row.Token, Stale: true}
+	}
+	// Only now: with downloads off, an assignment that is stale or unknown must still be answered
+	// with its cancel (Stale), so the device stops asking for something that is gone. Only a
+	// CURRENT assignment is refused as not_configured.
+	if api.DownloadBaseURL == "" {
+		return nil, &GrantRefusal{Reason: GrantNotConfigured}
 	}
 	artifact, err := api.artifactByID(ctx, asg.ArtifactId)
 	if err != nil {

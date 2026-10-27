@@ -31,10 +31,18 @@ func TestRolloutMetricsRecordWhatAStepDid(t *testing.T) {
 	require.EqualValues(t, 1, testutil.ToFloat64(m.transitions.WithLabelValues("paused_failure_threshold")))
 	require.EqualValues(t, 1, testutil.ToFloat64(m.transitions.WithLabelValues("paused_artifact_not_assignable")))
 	require.EqualValues(t, 1, testutil.ToFloat64(m.transitions.WithLabelValues("completed")))
-	require.EqualValues(t, 1, testutil.ToFloat64(m.failures))
+	require.EqualValues(t, 1, testutil.ToFloat64(m.failures.WithLabelValues("step")))
+	require.EqualValues(t, 0, testutil.ToFloat64(m.failures.WithLabelValues("list")))
+
+	// A failed list query is its own, bounded stage: no step ran, and without it the outage that
+	// stops every rollout would not move the counter.
+	m.ObserveListFailure(errors.New("database down"))
+	require.EqualValues(t, 1, testutil.ToFloat64(m.failures.WithLabelValues("list")))
+	require.EqualValues(t, 1, testutil.ToFloat64(m.failures.WithLabelValues("step")))
 
 	var nilMetrics *RolloutMetrics
 	nilMetrics.Observe(model.RolloutStepResult{}, nil) // an unwired observer is a no-op, not a panic
+	nilMetrics.ObserveListFailure(nil)
 }
 
 func TestTheRolloutDriverRefusesANonPositiveInterval(t *testing.T) {

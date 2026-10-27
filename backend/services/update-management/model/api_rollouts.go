@@ -749,20 +749,31 @@ func (api *Api) StepRollout(ctx context.Context, id uint) (RolloutStepResult, er
 		want = min(free+rolloutLookupSpare, rolloutDispatchPerStep)
 	}
 	var cands []candidate
+	// lookupErr is the last device-lookup failure of a step in which EVERY lookup failed. A step that
+	// looked up nothing dispatches nothing, and read as a silent success it would hide an
+	// unreachable device-management behind a rollout that reads as running; it is returned as the
+	// step's error below so the failure counter sees it.
+	var lookupErr error
 	if want > 0 {
 		var pending []UpdateRolloutTarget
 		if err := api.RDB.DB(ctx).Where("rollout_id = ? AND status = ?", id, TargetPending).
 			Order("id ASC").Limit(want).Find(&pending).Error; err != nil {
 			return res, err
 		}
+		var lastErr error
 		for _, t := range pending {
 			facts, found, err := api.Devices.DeviceOf(ctx, tenant, t.DeviceToken)
 			if err != nil {
+				lastErr = err
 				log.Warn().Err(err).Str("device", t.DeviceToken).Uint("rollout", id).
 					Msg("A rollout target could not be looked up; it is tried again at the next step.")
 				continue
 			}
 			cands = append(cands, candidate{target: t, facts: facts, found: found})
+		}
+		if len(pending) > 0 && len(cands) == 0 && lastErr != nil {
+			lookupErr = fmt.Errorf("none of the %d rollout targets looked up this step could be read from device-management: %w",
+				len(pending), lastErr)
 		}
 	}
 
@@ -855,6 +866,9 @@ func (api *Api) StepRollout(ctx context.Context, id uint) (RolloutStepResult, er
 	}
 	for _, v := range toPublish {
 		api.publishAssignment(ctx, v)
+	}
+	if lookupErr != nil {
+		return res, lookupErr
 	}
 	return res, nil
 }
@@ -1014,6 +1028,9 @@ func (api *Api) AdvanceRollouts(ctx context.Context) (AdvanceResult, error) {
 		if err := api.RDB.DB(core.WithSystemContext(ctx)).Select("id", "tenant_id").
 			Where("state = ? AND id > ?", RolloutRunning, after).
 			Order("id ASC").Limit(limit).Find(&running).Error; err != nil {
+			if api.OnRolloutListFailed != nil {
+				api.OnRolloutListFailed(err)
+			}
 			return out, err
 		}
 		if len(running) > 0 || after == 0 {
