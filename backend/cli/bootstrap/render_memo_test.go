@@ -13,7 +13,6 @@ import (
 	"runtime"
 	"slices"
 	"sync"
-	"sync/atomic"
 	"testing"
 
 	"helm.sh/helm/v3/pkg/chart"
@@ -46,9 +45,8 @@ type renderMemoEntry struct {
 }
 
 var (
-	renderMemoMu      sync.Mutex
-	renderMemo        = map[[sha256.Size]byte]*renderMemoEntry{}
-	renderMemoRenders atomic.Int64 // renders actually performed, for the memo's own test
+	renderMemoMu sync.Mutex
+	renderMemo   = map[[sha256.Size]byte]*renderMemoEntry{}
 )
 
 func memoizedClientSideRender(ctx context.Context, ch *chart.Chart, vals map[string]interface{}) (string, error) {
@@ -67,7 +65,6 @@ func memoizedClientSideRender(ctx context.Context, ch *chart.Chart, vals map[str
 	renderMemoMu.Unlock()
 
 	e.once.Do(func() {
-		renderMemoRenders.Add(1)
 		e.out, e.err = renderChartClientSideUncached(ctx, ch, vals)
 		if e.err != nil && (errors.Is(e.err, context.Canceled) || errors.Is(e.err, context.DeadlineExceeded)) {
 			// Forget it: the next caller renders for itself.
@@ -289,7 +286,31 @@ func TestTheRenderMemoKeysOnContent(t *testing.T) {
 	}
 	// Compose every input first: composing the values is itself a render.
 	a1v, a2v, bv, ev := vals("memo-a.example.io"), vals("memo-a.example.io"), vals("memo-b.example.io"), vals("memo-a.example.io")
-	before := renderMemoRenders.Load()
+	edited := chartForTest(t)
+	edited.Templates[0].Data = append(append([]byte{}, edited.Templates[0].Data...), []byte("\n# memo probe\n")...)
+
+	// The key is the whole story: the memo renders once per key (sync.Once per entry), so the
+	// same key must come from the same content however it was loaded, and a different one from
+	// any change to the values or the chart. (Counting renders globally would also count the
+	// background warm-up's, which runs beside this test.)
+	key := func(c *chart.Chart, v map[string]interface{}) [sha256.Size]byte {
+		k, ok := renderMemoKey(c, v)
+		if !ok {
+			t.Fatal("the values could not be keyed")
+		}
+		return k
+	}
+	if key(ch, a1v) != key(chartForTest(t), a2v) {
+		t.Fatal("the same chart and values (loaded separately) got different keys: the memo would render twice")
+	}
+	if key(ch, a1v) == key(ch, bv) {
+		t.Fatal("a different host got the same key: the memo is not keyed on the values")
+	}
+	if key(ch, a1v) == key(edited, ev) {
+		t.Fatal("an edited template got the same key: the key does not cover the chart")
+	}
+
+	// And through the real entry point: the answers differ exactly when the inputs do.
 	a1, err := renderChartClientSide(t.Context(), ch, a1v)
 	if err != nil {
 		t.Fatal(err)
@@ -298,26 +319,11 @@ func TestTheRenderMemoKeysOnContent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if a1 != a2 {
-		t.Fatal("the same chart and values rendered two different manifests")
-	}
-	if n := renderMemoRenders.Load() - before; n != 1 {
-		t.Fatalf("the same pair rendered %d times, want 1", n)
-	}
 	b, err := renderChartClientSide(t.Context(), ch, bv)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if b == a1 {
-		t.Fatal("a different host rendered the same manifest: the memo is not keyed on the values")
-	}
-	edited := chartForTest(t)
-	edited.Templates[0].Data = append(append([]byte{}, edited.Templates[0].Data...), []byte("\n# memo probe\n")...)
-	before = renderMemoRenders.Load()
-	if _, err := renderChartClientSide(t.Context(), edited, ev); err != nil {
-		t.Fatal(err)
-	}
-	if renderMemoRenders.Load()-before != 1 {
-		t.Fatal("an edited template was served from the memo: the key does not cover the chart")
+	if a1 != a2 || a1 == b {
+		t.Fatal("the memo's answers do not follow its inputs")
 	}
 }
