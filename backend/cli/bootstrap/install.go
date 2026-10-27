@@ -87,8 +87,8 @@ type InstallOptions struct {
 	// leaves ingress-nginx serving and installs Traefik beside it.
 	RemoveLegacyIngress bool
 	// AWSNLB asks for an AWS Network Load Balancer on the ingress controllers' LoadBalancer Services
-	// (EKS): see awsNLBVars.
-	AWSNLB bool
+	// (EKS): see awsNLBPlan.
+	AWSNLB string
 }
 
 // Install prepares a cluster for instances: it creates or names the cluster, applies

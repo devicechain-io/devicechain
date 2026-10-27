@@ -477,7 +477,8 @@ func refuseDropWithoutGatewayCertificate(ctx context.Context, st *State) error {
 		return err
 	}
 	return refuseUnlessGatewayCertificatesReady(vs, true,
-		"--drop-legacy-ingress stops rendering the Ingress objects that serve this instance's host",
+		"--drop-legacy-ingress stops rendering the Ingress objects that serve this instance's host, but its Gateway "+
+			"has no Ready certificate, so the host would stop answering over https (or present the controller's default one)",
 		"Move DNS to the new controller so the certificate can be issued, wait for `kubectl -n "+
 			InstanceNamespace(st.Instance)+" get certificate` to show it Ready, then run it again.")
 }
@@ -676,38 +677,93 @@ func planClusterFrontEnd(f clusterFrontEnd, local, removeLegacy bool) (clusterFr
 	return p, nil
 }
 
-// awsNLBVars is the cluster root's NLB settings for both ingress controllers: on when asked for
-// (--aws-nlb), and ALSO when the controller's Service on the cluster already carries the NLB
-// annotation. The second half is what keeps a re-run that forgot the flag from silently taking
-// the annotation off, which replaces the load balancer and changes the hostname clients
-// resolve; like the controllers themselves, it is read from the cluster, not recorded.
-func awsNLBVars(ctx context.Context, typed kubernetes.Interface, asked bool) ([]string, error) {
-	nginx, traefik := asked, asked
-	svcs, err := typed.CoreV1().Services(metav1.NamespaceAll).List(ctx, metav1.ListOptions{
-		LabelSelector: "app.kubernetes.io/name in (traefik,ingress-nginx)",
-	})
+// The --aws-nlb values.
+const (
+	awsNLBTraefik = "traefik"
+	awsNLBNginx   = "nginx"
+	awsNLBAll     = "all"
+	awsNLBNone    = "none"
+)
+
+// ValidateAWSNLB refuses a value --aws-nlb does not take. Empty is "keep what is there".
+func ValidateAWSNLB(v string) error {
+	switch v {
+	case "", awsNLBTraefik, awsNLBNginx, awsNLBAll, awsNLBNone:
+		return nil
+	}
+	return fmt.Errorf("--aws-nlb %q: want traefik, nginx, all or none (or leave it off to keep what each controller's "+
+		"Service already has)", v)
+}
+
+// The namespaces of the controllers this root installs (the root's defaults, which dcctl does
+// not override). The read is scoped to them and to the release's own labels, never cluster-wide,
+// so a controller someone else runs elsewhere with the annotation decides nothing here.
+const (
+	traefikNamespace      = "traefik"
+	ingressNginxNamespace = "ingress-nginx"
+)
+
+// awsNLBOnService is whether the root's controller Service carries the NLB annotation, and
+// whether such a Service (a LoadBalancer) exists at all.
+func awsNLBOnService(ctx context.Context, typed kubernetes.Interface, ns, selector string) (annotated, exists bool, err error) {
+	svcs, err := typed.CoreV1().Services(ns).List(ctx, metav1.ListOptions{LabelSelector: selector})
 	if err != nil {
-		return nil, fmt.Errorf("listing the ingress controllers' Services: %w", err)
+		return false, false, fmt.Errorf("listing the Services in %s: %w", ns, err)
 	}
 	for _, s := range svcs.Items {
-		if s.Spec.Type != corev1.ServiceTypeLoadBalancer || s.Annotations[awsLoadBalancerTypeAnnotation] != "nlb" {
+		if s.Spec.Type != corev1.ServiceTypeLoadBalancer {
 			continue
 		}
-		switch s.Labels["app.kubernetes.io/name"] {
-		case "traefik":
-			traefik = true
-		case "ingress-nginx":
-			nginx = true
+		exists = true
+		if s.Annotations[awsLoadBalancerTypeAnnotation] == "nlb" {
+			annotated = true
 		}
 	}
-	var out []string
-	if nginx {
-		out = append(out, "ingress_nginx_aws_nlb=true")
+	return annotated, exists, nil
+}
+
+// awsNLBPlan is the cluster root's NLB settings for both controllers, and a warning for each
+// that would change an existing Service.
+//
+//	""        keep what each of THIS root's controller Services already has
+//	traefik   Traefik's on, nginx's as it is;  nginx: the reverse;  all: both on
+//	none      both off
+//
+// 🔴 ABSENT MEANS KEEP, BECAUSE THE ROOT'S VARIABLE DEFAULTS TO OFF. A re-run that forgot the flag
+// would otherwise take the annotation off, which replaces the load balancer and the hostname
+// clients resolve. Like the controllers themselves, it is read from the cluster, not recorded.
+func awsNLBPlan(ctx context.Context, typed kubernetes.Interface, mode string) (vars, warnings []string, err error) {
+	controllers := []struct{ name, variable, ns, selector string }{
+		{awsNLBTraefik, "traefik_aws_nlb", traefikNamespace,
+			"app.kubernetes.io/name=traefik,app.kubernetes.io/instance=traefik-" + traefikNamespace},
+		{awsNLBNginx, "ingress_nginx_aws_nlb", ingressNginxNamespace,
+			"app.kubernetes.io/name=ingress-nginx,app.kubernetes.io/instance=ingress-nginx,app.kubernetes.io/component=controller"},
 	}
-	if traefik {
-		out = append(out, "traefik_aws_nlb=true")
+	for _, c := range controllers {
+		have, exists, err := awsNLBOnService(ctx, typed, c.ns, c.selector)
+		if err != nil {
+			return nil, nil, err
+		}
+		want := have
+		switch mode {
+		case c.name, awsNLBAll:
+			want = true
+		case awsNLBNone:
+			want = false
+		}
+		if want {
+			vars = append(vars, c.variable+"=true")
+		}
+		if exists && want != have {
+			what := "gives the " + c.name + " Service a Network Load Balancer"
+			if !want {
+				what = "takes the " + c.name + " Service's Network Load Balancer off"
+			}
+			warnings = append(warnings, "--aws-nlb "+what+": AWS REPLACES the load balancer, so the hostname "+
+				"clients resolve changes. Repoint DNS to the new one afterwards")
+		}
 	}
-	return out, nil
+	return vars, warnings, nil
 }
 
 // awsLoadBalancerTypeAnnotation is what makes EKS provision a Network Load Balancer.
@@ -740,16 +796,21 @@ func settleClusterFrontEnd(ctx context.Context, st *State, typed kubernetes.Inte
 			return err
 		}
 		if err := refuseUnlessGatewayCertificatesReady(vs, false,
-			"--remove-legacy-ingress removes the controller that may still be what serves an instance",
-			"Wait for each instance's Certificate to show Ready (`kubectl get certificate -A`), then run it again."); err != nil {
+			"--remove-legacy-ingress is refused while these instances' Gateways have no Ready certificate. Removing "+
+				"ingress-nginx does not change how they are served, but the check keeps a broken Gateway "+
+				"certificate from going unnoticed until nothing else serves the host",
+			"Wait for each Certificate to show Ready (`kubectl get certificate -A`), then run it again."); err != nil {
 			return err
 		}
 	}
-	nlb, err := awsNLBVars(ctx, typed, st.AWSNLB)
+	nlb, nlbWarnings, err := awsNLBPlan(ctx, typed, st.AWSNLB)
 	if err != nil {
 		return err
 	}
 	plan.Vars = append(plan.Vars, nlb...)
+	for _, w := range nlbWarnings {
+		fmt.Println(color.YellowString("  warning: %s", w))
+	}
 	st.ClusterFrontEndVars = plan.Vars
 	for _, n := range plan.Notes {
 		fmt.Printf("  ingress          %s\n", n)
@@ -783,10 +844,20 @@ var (
 	gatewayCertPoll    = 3 * time.Second
 )
 
-// gatewayCertificateExpected is whether this run must see a Certificate issued for the Gateway:
-// the Gateway front end terminating TLS under a cert-manager the cluster has.
-func gatewayCertificateExpected(st *State) bool {
-	return st.IngressController == frontEndGateway && !st.NoTLS && certManagerEnabled(st)
+// gatewayCertificateSecret is the ONE predicate for "a cert-manager Certificate is expected for
+// this Gateway": its https listener names a Secret AND the Gateway asks cert-manager to fill it
+// (an Issuer or ClusterIssuer annotation, or the ACME shorthand). It returns that Secret, or ""
+// when nothing is expected (no TLS, or a Secret the operator supplies). Read off the Gateway
+// itself, so it is what is deployed, not a second reading of the flags. The wait after an
+// upgrade and the drop/remove checks both ask it.
+func gatewayCertificateSecret(g *unstructured.Unstructured) string {
+	secret := gatewayListenerSecret(g.Object)
+	ann := g.GetAnnotations()
+	if secret != "" && (ann["cert-manager.io/issuer"] != "" || ann["cert-manager.io/cluster-issuer"] != "" ||
+		ann["kubernetes.io/tls-acme"] == "true") {
+		return secret
+	}
+	return ""
 }
 
 // servingTLSSecret is the Secret whose ca.crt a client that should verify the instance trusts: the
@@ -864,10 +935,21 @@ var gatewayCertLegacyTimeout = 30 * time.Second
 // the step that makes the Gateway the only front end: --drop-legacy-ingress refuses until it is
 // Ready (settleFrontEnd), and --remove-legacy-ingress re-checks every instance.
 func waitForGatewayCertificate(ctx context.Context, dyn dynamic.Interface, st *State) error {
-	if !gatewayCertificateExpected(st) {
+	if st.IngressController != frontEndGateway {
 		return nil
 	}
-	ns, secret := InstanceNamespace(st.Instance), gatewaySecretOf(st)
+	ns := InstanceNamespace(st.Instance)
+	g, err := getGatewayAPIObject(ctx, dyn, gatewayGVR, ns, instanceGatewayName)
+	if err != nil {
+		return fail("reading the instance's Gateway", err)
+	}
+	if g == nil {
+		return nil
+	}
+	secret := gatewayCertificateSecret(g)
+	if secret == "" {
+		return nil
+	}
 	timeout := gatewayCertTimeout
 	if st.LegacyIngress {
 		timeout = gatewayCertLegacyTimeout
@@ -930,6 +1012,11 @@ var readGatewayCertificates = func(ctx context.Context, kubeContext, instance st
 	if err != nil {
 		return nil, fmt.Errorf("connecting to the cluster to read the Gateway's certificate: %w", err)
 	}
+	return gatewayCertificatesFrom(ctx, dyn, instance)
+}
+
+// gatewayCertificatesFrom is readGatewayCertificates' read, over a client.
+func gatewayCertificatesFrom(ctx context.Context, dyn dynamic.Interface, instance string) ([]gatewayCertVerdict, error) {
 	var gws []unstructured.Unstructured
 	if instance != "" {
 		obj, err := getGatewayAPIObject(ctx, dyn, gatewayGVR, InstanceNamespace(instance), instanceGatewayName)
@@ -958,9 +1045,8 @@ var readGatewayCertificates = func(ctx context.Context, kubeContext, instance st
 	for i := range gws {
 		g := &gws[i]
 		v := gatewayCertVerdict{Namespace: g.GetNamespace(), Gateway: true}
-		secret := gatewayListenerSecret(g.Object)
-		ann := g.GetAnnotations()
-		v.Expected = secret != "" && (ann["cert-manager.io/issuer"] != "" || ann["cert-manager.io/cluster-issuer"] != "")
+		secret := gatewayCertificateSecret(g)
+		v.Expected = secret != ""
 		if v.Expected {
 			certs, err := dyn.Resource(certificateGVR).Namespace(v.Namespace).List(ctx, metav1.ListOptions{})
 			switch {
@@ -996,7 +1082,5 @@ func refuseUnlessGatewayCertificatesReady(vs []gatewayCertVerdict, missingIsRefu
 	if len(bad) == 0 {
 		return nil
 	}
-	return fmt.Errorf("%s, but the Gateway's certificate is not Ready, so the host would stop answering over https "+
-		"(or answer with the controller's default certificate):\n  %s\n%s Nothing has been changed",
-		what, strings.Join(bad, "\n  "), remedy)
+	return fmt.Errorf("%s:\n  %s\n%s Nothing has been changed", what, strings.Join(bad, "\n  "), remedy)
 }
