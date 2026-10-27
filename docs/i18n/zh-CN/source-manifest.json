@@ -114,6 +114,10 @@
       "sourceSha256": "dcb3e71bc1562c5a1d04b26790b48404340efff24bc75be3f2900eedf4034cf2",
       "translationSha256": "3b051e1f38ed6656d7645a02085fb390f0359394c1cec79dddaa49ca74de2c51"
     },
+    "deployment/ingress-cutover.md": {
+      "sourceSha256": "5172bec86f67d6dfdb9c38b2d93e90e7c4b412f6465b758667101a8a123d8f49",
+      "translationSha256": "125941a448e27228bda4a83f2c3bdb4f99ebfeeaba1df19577ff997bcae19743"
+    },
     "deployment/kubernetes-operator.md": {
       "sourceSha256": "4947ae8be7d4297b39e5b326c9e5a8001e0fe918c540a343e17ab610e7bf5ef4",
       "translationSha256": "72c734f9dd84401b607b7226f931a9f258573620022fe7c4c0a0300c12a0526a"
@@ -231,8 +235,8 @@
       "translationSha256": "f58caa5bce7a1fb79df4f29042dd44a3c30a739ccbc52f33e1dfe153a342352f"
     },
     "reference/graphql-api.md": {
-      "sourceSha256": "687d454c610ab0b9a370c195c7e2b68149851d2ef0ead354f4a3c3e20c9b3b50",
-      "translationSha256": "672dc21a4d55ba3bccc32f37c3cf15beb98b2902efb0a251644465ed15406dcf"
+      "sourceSha256": "0cc70e4632947b58665ce6564a4c592f4e5001e4ee120b00b4fbc55b4f7a8312",
+      "translationSha256": "e872a5c12285806bb7e82a69985ead0e9162f5fb6c0b38120a29dd04e4e2f71b"
     },
     "reference/npm-packages.md": {
       "sourceSha256": "a2950de3cf160b9a6e5194c6f92f67c99edc262295fe328236b98224fdf73aa4",
