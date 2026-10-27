@@ -14,9 +14,14 @@ import { useQuery } from '@/lib/hooks/use-query';
 import { getUpdateManagementInfo } from '@/lib/api/update-management';
 
 export function DownloadsNotice() {
-  const { t } = useTranslation('updates');
   const info = useQuery(getUpdateManagementInfo, []);
-  if (info.data?.downloadsConfigured !== false) return null;
+  return <DownloadsNoticeView downloadsConfigured={info.data?.downloadsConfigured} />;
+}
+
+// The banner itself, for a screen that has already read the service info and should not read it twice.
+export function DownloadsNoticeView({ downloadsConfigured }: { downloadsConfigured: boolean | undefined }) {
+  const { t } = useTranslation('updates');
+  if (downloadsConfigured !== false) return null;
   return (
     <div
       role="alert"

@@ -535,7 +535,7 @@ is derived from the same host the download route is served on (ingress-download.
 Ingress front end; the update-management rule of the API route for the Gateway front end, which
 share ingress.host and the /api/<area> prefix): <origin>/api/update-management.
 
-An explicit updates.downloadBaseUrl wins. With no ingress there is no external origin to speak
+An explicit updates.downloadBaseUrl (any key spelling, even "") wins. With no ingress there is no external origin to speak
 of, so nothing is derived and the service reports that downloads are not configured (its WARN
 at start, and downloadsConfigured=false on updateManagementInfo, which the console surfaces).
 
@@ -550,10 +550,19 @@ themselves, and every later template would see the edit.
 {{- $cfg := deepCopy (get (get (.Values.functionalAreas | default dict) "update-management" | default dict) "config" | default dict) -}}
 {{- $origin := include "devicechain.publicOrigin" . -}}
 {{- if $origin -}}
-{{- $updates := get $cfg "updates" | default dict -}}
-{{- if not (get $updates "downloadBaseUrl") -}}
+{{- /* The service decodes with encoding/json, which matches keys case-insensitively, so the
+       operator's key may be spelled downloadBaseURL (as dcctl's overlay refusal spells it).
+       Find both the block and the key the same way, or two spellings render and the derived
+       one silently wins. KEY PRESENCE IS INTENT: any spelling, even set to "", is the operator's
+       and is left alone ("" disables downloads). */ -}}
+{{- $updatesKey := "updates" -}}
+{{- range $k, $_ := $cfg -}}{{- if eq (lower $k) "updates" -}}{{- $updatesKey = $k -}}{{- end -}}{{- end -}}
+{{- $updates := get $cfg $updatesKey | default dict -}}
+{{- $present := false -}}
+{{- range $k, $_ := $updates -}}{{- if eq (lower $k) "downloadbaseurl" -}}{{- $present = true -}}{{- end -}}{{- end -}}
+{{- if not $present -}}
 {{- $_ := set $updates "downloadBaseUrl" (printf "%s/api/update-management" $origin) -}}
-{{- $_ := set $cfg "updates" $updates -}}
+{{- $_ := set $cfg $updatesKey $updates -}}
 {{- end -}}
 {{- end -}}
 {{- $cfg | toJson -}}

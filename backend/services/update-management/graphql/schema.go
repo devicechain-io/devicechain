@@ -33,7 +33,7 @@ type SchemaResolver struct {
 	AllowUnverifiedArtifacts bool
 	// MaxArtifactBytes is the effective per-artifact ceiling, reported by updateManagementInfo.
 	MaxArtifactBytes int64
-	// DownloadsConfigured is whether updates.downloadBaseUrl is set, reported by
+	// DownloadsConfigured is whether a download base is set (not that devices can reach it), reported by
 	// updateManagementInfo. Unset, no device can be given a download capability, so an
 	// assignment is published and never fetched; the console says so rather than let that
 	// look like a slow fleet.

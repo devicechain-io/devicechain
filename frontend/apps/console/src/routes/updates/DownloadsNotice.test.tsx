@@ -13,7 +13,7 @@ vi.mock('@devicechain/client', async (importOriginal) => {
   return { ...actual, gql: (...args: unknown[]) => gqlMock(...args) };
 });
 
-import { DownloadsNotice } from './DownloadsNotice';
+import { DownloadsNotice, DownloadsNoticeView } from './DownloadsNotice';
 
 const info = (downloadsConfigured: boolean) => ({
   updateManagementInfo: { area: 'update-management', allowUnverifiedArtifacts: false, maxArtifactBytes: '1', downloadsConfigured },
@@ -42,6 +42,15 @@ describe('DownloadsNotice', () => {
     gqlMock.mockRejectedValue(new Error('boom'));
     render(<DownloadsNotice />);
     await waitFor(() => expect(gqlMock).toHaveBeenCalled());
+    expect(screen.queryByTestId('downloads-notice')).toBeNull();
+  });
+
+  it('the view speaks only for an explicit false', () => {
+    const { rerender } = render(<DownloadsNoticeView downloadsConfigured={false} />);
+    expect(screen.queryByTestId('downloads-notice')).toBeTruthy();
+    rerender(<DownloadsNoticeView downloadsConfigured={undefined} />);
+    expect(screen.queryByTestId('downloads-notice')).toBeNull();
+    rerender(<DownloadsNoticeView downloadsConfigured={true} />);
     expect(screen.queryByTestId('downloads-notice')).toBeNull();
   });
 });

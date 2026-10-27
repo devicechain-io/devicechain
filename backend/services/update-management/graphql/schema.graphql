@@ -38,9 +38,9 @@ type ServiceInfo {
     """
     maxArtifactBytes: String!
     """
-    Whether this deployment can give a device a download link (updates.downloadBaseUrl is set).
-    False means an assignment is published but no device can fetch the image, so nothing assigned
-    will ever install until the download base is configured.
+    Whether a download base is set (updates.downloadBaseUrl). It does not prove devices can reach
+    that address. False means no device can be given a download link: an assignment is published
+    but nothing assigned will install until a download base is configured.
     """
     downloadsConfigured: Boolean!
 }

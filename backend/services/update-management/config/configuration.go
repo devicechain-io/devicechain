@@ -5,6 +5,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"strings"
 	"time"
@@ -214,8 +215,8 @@ func (u UpdatesConfiguration) DownloadBaseIsInsecure() bool {
 	if err != nil || parsed.Scheme != "http" {
 		return false
 	}
-	switch strings.ToLower(parsed.Hostname()) {
-	case "localhost", "127.0.0.1", "::1":
+	h := strings.ToLower(parsed.Hostname())
+	if ip := net.ParseIP(h); (ip != nil && ip.IsLoopback()) || h == "localhost" || strings.HasSuffix(h, ".localhost") {
 		return false
 	}
 	return true

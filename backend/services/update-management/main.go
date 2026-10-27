@@ -160,13 +160,8 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		GraphQL: &service.GraphQLSpec{
 			Schema: graphql.SchemaContent,
 			Resolver: func() interface{} {
-				return &graphql.SchemaResolver{
-					Area:                     string(Microservice.FunctionalArea),
-					AllowUnverifiedArtifacts: Configuration.Updates.AllowUnverifiedArtifacts,
-					DownloadsConfigured:      Configuration.Updates.DownloadBaseURL != "",
-					MaxArtifactBytes: Configuration.EffectiveMaxArtifactBytes(
-						Microservice.InstanceConfiguration.Infrastructure.Blob.Backend),
-				}
+				return newSchemaResolver(Configuration, string(Microservice.FunctionalArea),
+					Microservice.InstanceConfiguration.Infrastructure.Blob.Backend)
 			},
 			Providers: func() map[gqlcore.ContextKey]interface{} {
 				return map[gqlcore.ContextKey]interface{}{
@@ -428,4 +423,15 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 		}
 	}
 	return Svc.Terminate(ctx)
+}
+
+// newSchemaResolver is the data-plane root resolver for a configuration: what updateManagementInfo
+// reports is read from the configuration here, in one place a test can pin.
+func newSchemaResolver(cfg *config.UpdateManagementConfiguration, area, blobBackend string) *graphql.SchemaResolver {
+	return &graphql.SchemaResolver{
+		Area:                     area,
+		AllowUnverifiedArtifacts: cfg.Updates.AllowUnverifiedArtifacts,
+		DownloadsConfigured:      cfg.Updates.DownloadBaseURL != "",
+		MaxArtifactBytes:         cfg.EffectiveMaxArtifactBytes(blobBackend),
+	}
 }

@@ -5,6 +5,9 @@ package bootstrap
 
 import (
 	"encoding/json"
+	"fmt"
+	"net/url"
+	"strings"
 	"testing"
 
 	"sigs.k8s.io/yaml"
@@ -40,6 +43,22 @@ func renderedUpdateManagementDownloadBase(t *testing.T, ingress map[string]inter
 // of the named per-service ConfigMap in a rendered manifest.
 func updateManagementDownloadBaseOf(t *testing.T, manifest, configMap string) string {
 	t.Helper()
+	for k, v := range updateManagementUpdatesBlockOf(t, manifest, configMap) {
+		if strings.EqualFold(k, "downloadBaseUrl") {
+			var s string
+			if err := json.Unmarshal(v, &s); err != nil {
+				t.Fatalf("%s is not a string: %v", k, err)
+			}
+			return s
+		}
+	}
+	return ""
+}
+
+// updateManagementUpdatesBlockOf returns the raw `updates` block of the update-management config
+// exactly as delivered, keys as spelled, so a test can see a second spelling of one key.
+func updateManagementUpdatesBlockOf(t *testing.T, manifest, configMap string) map[string]json.RawMessage {
+	t.Helper()
 	for _, doc := range splitManifests(manifest) {
 		var cm struct {
 			Kind     string                `json:"kind"`
@@ -53,18 +72,22 @@ func updateManagementDownloadBaseOf(t *testing.T, manifest, configMap string) st
 		if !ok {
 			t.Fatalf("the per-service ConfigMap has no update-management key: %v", cm.Data)
 		}
-		var cfg struct {
-			Updates struct {
-				DownloadBaseURL string `json:"downloadBaseUrl"`
-			} `json:"updates"`
-		}
+		var cfg map[string]json.RawMessage
 		if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
 			t.Fatalf("update-management config %q is not JSON: %v", raw, err)
 		}
-		return cfg.Updates.DownloadBaseURL
+		var block map[string]json.RawMessage
+		for k, v := range cfg {
+			if strings.EqualFold(k, "updates") {
+				if err := json.Unmarshal(v, &block); err != nil {
+					t.Fatalf("updates block %s: %v", v, err)
+				}
+			}
+		}
+		return block
 	}
 	t.Fatalf("no per-service ConfigMap %s in the render", configMap)
-	return ""
+	return nil
 }
 
 func TestChartDerivesTheUpdateDownloadBaseFromTheIngressHost(t *testing.T) {
@@ -105,6 +128,13 @@ func TestChartDerivesTheUpdateDownloadBaseFromTheIngressHost(t *testing.T) {
 			want: "https://updates.example.net/api/update-management",
 		},
 		{
+			name:    "an explicit empty value stays empty: downloads are switched off on purpose",
+			ingress: map[string]interface{}{"enabled": true, "host": "iot.example.com", "tls": tlsOn},
+			areaConfig: map[string]interface{}{"updates": map[string]interface{}{
+				"downloadBaseUrl": ""}},
+			want: "",
+		},
+		{
 			name:    "an operator-set updates block without a base still gets one",
 			ingress: map[string]interface{}{"enabled": true, "host": "iot.example.com", "tls": tlsOn},
 			areaConfig: map[string]interface{}{"updates": map[string]interface{}{
@@ -143,5 +173,92 @@ func TestDcctlFullProfileDeliversTheUpdateDownloadBase(t *testing.T) {
 	}
 	if got := updateManagementDownloadBaseOf(t, manifest, "dct-dctest-config"); got != want {
 		t.Fatalf("updates.downloadBaseUrl = %q, want %q", got, want)
+	}
+}
+
+// The service decodes with encoding/json, which matches keys case-insensitively, and dcctl's own
+// overlay refusal spells the key downloadBaseURL. The chart must treat every spelling as the
+// operator's, or two spellings render and the derived one silently wins.
+func TestChartLeavesAnyCaseSpellingOfTheDownloadBaseAlone(t *testing.T) {
+	t.Parallel()
+	ingress := map[string]interface{}{"enabled": true, "host": "iot.example.com", "tls": map[string]interface{}{"enabled": true}}
+	for _, c := range []struct {
+		name  string
+		block map[string]interface{}
+		key   string
+		want  string
+	}{
+		{"downloadBaseURL", map[string]interface{}{"updates": map[string]interface{}{"DownloadBaseURL": "https://updates.example.net/x"}}, "DownloadBaseURL", "https://updates.example.net/x"},
+		{"updates block spelled differently", map[string]interface{}{"Updates": map[string]interface{}{"downloadbaseurl": "https://updates.example.net/y"}}, "downloadbaseurl", "https://updates.example.net/y"},
+		{"empty in another spelling", map[string]interface{}{"updates": map[string]interface{}{"DownloadBaseURL": ""}}, "DownloadBaseURL", ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			vals := map[string]interface{}{
+				"enabledFunctionalAreas": []interface{}{"user-management", "device-management", "update-management"},
+				"ingress":                ingress,
+				"functionalAreas":        map[string]interface{}{"update-management": map[string]interface{}{"config": c.block}},
+			}
+			manifest, err := renderChart(t, vals)
+			if err != nil {
+				t.Fatal(err)
+			}
+			block := updateManagementUpdatesBlockOf(t, manifest, "dct-dctest-config")
+			if len(block) != 1 {
+				t.Fatalf("updates block has %d keys, want exactly the operator's one: %v", len(block), block)
+			}
+			raw, ok := block[c.key]
+			if !ok {
+				t.Fatalf("the operator's key %q is gone: %v", c.key, block)
+			}
+			var got string
+			if err := json.Unmarshal(raw, &got); err != nil || got != c.want {
+				t.Fatalf("%s = %s, want %q", c.key, raw, c.want)
+			}
+		})
+	}
+}
+
+// The derived base is only worth anything if the route it names exists: a device that GETs
+// <base>/updates/download/<artifact> must reach update-management, with the prefix stripped, on
+// both front ends and with TLS on and off.
+func TestDerivedDownloadBaseIsRoutedToUpdateManagement(t *testing.T) {
+	t.Parallel()
+	var full renderProfile
+	for _, p := range renderProfiles {
+		if p.name == "--profile full" {
+			full = p
+		}
+	}
+	if full.name == "" {
+		t.Fatal("no --profile full row in renderProfiles")
+	}
+	for _, ctl := range []string{"nginx", "gateway"} {
+		for _, tlsOn := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/tls=%v", ctl, tlsOn), func(t *testing.T) {
+				t.Parallel()
+				// Each variant renders ONE front end, so each is asked through its own resolver.
+				routing, manifest := renderRoutingVariant(t, full, "dctest", ctl, tlsOn, "")
+				base := updateManagementDownloadBaseOf(t, manifest, "dct-dctest-config")
+				u, err := url.Parse(base + "/updates/download/tok")
+				if err != nil || u.Host == "" {
+					t.Fatalf("derived base %q does not form a URL: %v", base, err)
+				}
+				if wantScheme := map[bool]string{true: "https", false: "http"}[tlsOn]; u.Scheme != wantScheme {
+					t.Fatalf("scheme of %q = %s, want %s", base, u.Scheme, wantScheme)
+				}
+				var a answer
+				if ctl == "nginx" {
+					a, err = routing.resolveIngress(u.Hostname(), u.Path, false)
+				} else {
+					a, err = routing.resolveGateway(u.Hostname(), u.Path)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !strings.HasPrefix(string(a), "update-management:") || !strings.HasSuffix(string(a), " /updates/download/tok") {
+					t.Errorf("%s answers %q for %s, want update-management:<port> /updates/download/tok", ctl, a, u.Path)
+				}
+			})
+		}
 	}
 }

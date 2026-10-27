@@ -73,6 +73,10 @@ func TestDownloadBaseIsInsecureOnlyForPlainHttpOffLoopback(t *testing.T) {
 		"http://127.0.0.1:8080/x":                      false,
 		"http://[::1]:8080/x":                          false,
 		"http://LOCALHOST/x":                           false,
+		"http://127.0.0.2/x":                           false,
+		"http://dc.localhost/x":                        false,
+		"http://notlocalhost/x":                        true,
+		"http://10.0.0.5/x":                            true,
 	} {
 		u := config.UpdatesConfiguration{DownloadBaseURL: base}
 		require.Equal(t, want, u.DownloadBaseIsInsecure(), base)
