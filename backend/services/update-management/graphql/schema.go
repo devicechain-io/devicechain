@@ -52,10 +52,11 @@ func (r *SchemaResolver) GetApi(ctx context.Context) (*model.Api, error) {
 }
 
 type serviceInfoResolver struct {
-	area                string
-	allowUnverified     bool
-	maxArtifactBytes    int64
-	downloadsConfigured bool
+	area                  string
+	allowUnverified       bool
+	maxArtifactBytes      int64
+	downloadsConfigured   bool
+	objectStoreConfigured bool
 }
 
 func (r *serviceInfoResolver) MaxArtifactBytes() string {
@@ -65,11 +66,18 @@ func (r *serviceInfoResolver) MaxArtifactBytes() string {
 func (r *serviceInfoResolver) Area() string                   { return r.area }
 func (r *serviceInfoResolver) AllowUnverifiedArtifacts() bool { return r.allowUnverified }
 func (r *serviceInfoResolver) DownloadsConfigured() bool      { return r.downloadsConfigured }
+func (r *serviceInfoResolver) ObjectStoreConfigured() bool    { return r.objectStoreConfigured }
 
-// UpdateManagementInfo is the non-sensitive service identity.
-func (r *SchemaResolver) UpdateManagementInfo() *serviceInfoResolver {
-	return &serviceInfoResolver{area: r.Area, allowUnverified: r.AllowUnverifiedArtifacts, maxArtifactBytes: r.MaxArtifactBytes,
-		downloadsConfigured: r.DownloadsConfigured}
+// UpdateManagementInfo is the non-sensitive service identity. Whether a store is configured is
+// read from the catalogue API the request carries (its blob store), not assumed: a plane served
+// without its API is a wiring error and fails here rather than reporting a store that is not there.
+func (r *SchemaResolver) UpdateManagementInfo(ctx context.Context) (*serviceInfoResolver, error) {
+	api, err := r.GetApi(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &serviceInfoResolver{objectStoreConfigured: api.Blobs != nil, area: r.Area, allowUnverified: r.AllowUnverifiedArtifacts, maxArtifactBytes: r.MaxArtifactBytes,
+		downloadsConfigured: r.DownloadsConfigured}, nil
 }
 
 // Artifact looks an artifact up by token.

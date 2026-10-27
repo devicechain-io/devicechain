@@ -40,7 +40,10 @@ func readyGuide() *dcv1beta1.Instance {
 // composes must deploy it, alongside every area the profile already ran.
 func TestEnablingAnAreaDeploysItAlongsideTheProfile(t *testing.T) {
 	t.Parallel()
-	st, err := enableAreaState(t, readyGuide(), "update-management")
+	// The telemetry profile is the one that does not already run update-management.
+	inst := readyGuide()
+	inst.Spec.Profile = "telemetry"
+	st, err := enableAreaState(t, inst, "update-management")
 	if err != nil {
 		t.Fatalf("settling the request: %v", err)
 	}
@@ -60,7 +63,7 @@ func TestEnablingAnAreaDeploysItAlongsideTheProfile(t *testing.T) {
 	if !slices.Contains(rendered, "update-management") {
 		t.Errorf("the chart rendered %v: update-management was asked for and is not deployed", rendered)
 	}
-	for _, a := range []string{"user-management", "device-management", "event-management", "event-processing"} {
+	for _, a := range []string{"user-management", "device-management", "event-management", "device-state"} {
 		if !slices.Contains(rendered, a) {
 			t.Errorf("the chart rendered %v: %s, which the profile already ran, was dropped", rendered, a)
 		}
@@ -146,8 +149,8 @@ func TestPlanAreaChange(t *testing.T) {
 		wantErr            string
 	}{
 		{name: "a new area is appended", profile: "default",
-			requested: []string{"update-management"},
-			wantDelta: []string{"update-management"}, wantAdd: []string{"update-management"}},
+			requested: []string{"outbound-connectors"},
+			wantDelta: []string{"outbound-connectors"}, wantAdd: []string{"outbound-connectors"}},
 		{name: "the existing delta is kept, first", profile: "default",
 			delta: []string{"lwm2m-ingest"}, requested: []string{"mcp"},
 			wantDelta: []string{"lwm2m-ingest", "mcp"}, wantAdd: []string{"mcp"}},
@@ -157,8 +160,13 @@ func TestPlanAreaChange(t *testing.T) {
 			delta: []string{"mcp"}, requested: []string{"mcp"},
 			wantDelta: []string{"mcp"}},
 		{name: "only the new half of a mixed request is added", profile: "default",
-			delta: []string{"mcp"}, requested: []string{"mcp", "update-management", "event-processing"},
-			wantDelta: []string{"mcp", "update-management"}, wantAdd: []string{"update-management"}},
+			delta: []string{"mcp"}, requested: []string{"mcp", "outbound-connectors", "event-processing"},
+			wantDelta: []string{"mcp", "outbound-connectors"}, wantAdd: []string{"outbound-connectors"}},
+		{name: "update-management, in the default profile, is not recorded", profile: "default",
+			requested: []string{"update-management"}},
+		{name: "update-management is recorded where the profile lacks it", profile: "telemetry",
+			requested: []string{"update-management"},
+			wantDelta: []string{"update-management"}, wantAdd: []string{"update-management"}},
 		{name: "an unknown area is refused with the catalog", profile: "default",
 			requested: []string{"update-managment"}, wantErr: "update-management"},
 		{name: "an unmet hard dependency is refused", profile: "telemetry",
@@ -196,7 +204,7 @@ func TestPlanAreaChange(t *testing.T) {
 func TestNothingToDoOnlyWhenTheAreaIsDeclaredAndTheLastRunEndedReady(t *testing.T) {
 	declared := func(phase string) *dcv1beta1.Instance {
 		inst := guideDeclaration()
-		inst.Spec.ExtraFunctionalAreas = []string{"update-management"}
+		inst.Spec.ExtraFunctionalAreas = []string{"outbound-connectors"}
 		setPhase(inst, phase)
 		return inst
 	}
@@ -206,10 +214,10 @@ func TestNothingToDoOnlyWhenTheAreaIsDeclaredAndTheLastRunEndedReady(t *testing.
 		areas   []string
 		settled bool
 	}{
-		{"declared, Ready", declared(dcv1beta1.PhaseReady), []string{"update-management"}, true},
+		{"declared, Ready", declared(dcv1beta1.PhaseReady), []string{"outbound-connectors"}, true},
 		{"in the profile, Ready", readyGuide(), []string{"device-management"}, true},
-		{"declared, the last run Failed", declared(dcv1beta1.PhaseFailed), []string{"update-management"}, false},
-		{"declared, an upgrade that never ended", declared(dcv1beta1.PhaseUpgrading), []string{"update-management"}, false},
+		{"declared, the last run Failed", declared(dcv1beta1.PhaseFailed), []string{"outbound-connectors"}, false},
+		{"declared, an upgrade that never ended", declared(dcv1beta1.PhaseUpgrading), []string{"outbound-connectors"}, false},
 		{"new to a Ready instance", readyGuide(), []string{"mcp"}, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -229,7 +237,7 @@ func TestNothingToDoOnlyWhenTheAreaIsDeclaredAndTheLastRunEndedReady(t *testing.
 	// And an unfinished first bootstrap is never settled, even reading Ready-adjacent.
 	inst := declared(dcv1beta1.PhaseFailed)
 	inst.Annotations[dcv1beta1.AnnotationBootstrapUnfinished] = dcv1beta1.BootstrapUnfinished
-	st, err := enableAreaState(t, inst, "update-management")
+	st, err := enableAreaState(t, inst, "outbound-connectors")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -317,6 +325,7 @@ func TestCheckAreaRequest(t *testing.T) {
 // artifact. The run says so, because nothing it does can add a store.
 func TestAddingUpdatesWithoutAnObjectStoreIsSaid(t *testing.T) {
 	bare := readyGuide()
+	bare.Spec.Profile = "telemetry" // the default profile already runs update-management
 	bare.Spec.ObjectStore = nil
 	st, err := enableAreaState(t, bare, "update-management")
 	if err != nil {
@@ -328,7 +337,9 @@ func TestAddingUpdatesWithoutAnObjectStoreIsSaid(t *testing.T) {
 	}
 
 	// The control: the same request over an instance with a store says nothing.
-	st, err = enableAreaState(t, readyGuide(), "update-management")
+	withStore := readyGuide()
+	withStore.Spec.Profile = "telemetry"
+	st, err = enableAreaState(t, withStore, "update-management")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -355,6 +366,7 @@ func TestAddingUpdatesWithoutAnObjectStoreIsSaid(t *testing.T) {
 func TestEnableAreaRefusesAnAreaSetTheObjectStoreCannotMount(t *testing.T) {
 	pointedAt := func(accessMode string) *dcv1beta1.Instance {
 		inst := readyGuide()
+		inst.Spec.Profile = "telemetry" // the default profile already runs update-management
 		inst.Spec.Managed = false
 		inst.Spec.ObjectStore = &dcv1beta1.ObjectStoreSpec{
 			Backend: dcv1beta1.ObjectStoreFilesystem, Size: "1Gi", AccessMode: accessMode,
@@ -388,8 +400,17 @@ func TestEnableAreaRefusesAnAreaSetTheObjectStoreCannotMount(t *testing.T) {
 		t.Errorf("mcp, which mounts no store, was refused: %v", err)
 	}
 	// And dcctl's own cluster colocates the pods, so the same store takes the area there.
-	if err := precheck(readyGuide(), "update-management"); err != nil {
+	colocated := readyGuide()
+	colocated.Spec.Profile = "telemetry"
+	if err := precheck(colocated, "update-management"); err != nil {
 		t.Errorf("a colocated store on dcctl's own cluster was refused: %v", err)
+	}
+	// On the default profile the area is already part of the instance (the request adds
+	// nothing), and it runs without the store rather than being refused: see updateStoreMountless.
+	def := pointedAt("")
+	def.Spec.Profile = "default"
+	if err := precheck(def, "update-management"); err != nil {
+		t.Errorf("the default profile's own update-management was refused on a ReadWriteOnce store: %v", err)
 	}
 }
 
@@ -518,6 +539,26 @@ func TestUpgradeRefusesAnAreaSetTheObjectStoreCannotMountBeforeRecording(t *test
 	}
 	if err := precheckUpgradeMount(t.Context(), st); err != nil {
 		t.Errorf("a ReadWriteMany store was refused on a plain upgrade: %v", err)
+	}
+
+	// The other case: the same instance never asked for the area (the default profile grew
+	// it). A plain upgrade is NOT refused -- the area runs without the store -- and the values
+	// it composes say so. Without that, this upgrade would be the permanent dead end.
+	inst.Spec.ObjectStore.AccessMode = ""
+	inst.Spec.ExtraFunctionalAreas = nil
+	st = &State{Instance: "guide", Provider: "local", Values: maps.Clone(compactState(false).Values)}
+	if err := applyUpgradeDeclaration(st, inst, UpgradeOptions{Options: Options{Instance: "guide"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := precheckUpgradeMount(t.Context(), st); err != nil {
+		t.Fatalf("a plain upgrade that only gained update-management from the profile was refused: %v", err)
+	}
+	fa, _ := helmValues(st)["functionalAreas"].(map[string]interface{})
+	um, _ := fa["update-management"].(map[string]interface{})
+	cfg, _ := um["config"].(map[string]interface{})
+	updates, _ := cfg["updates"].(map[string]interface{})
+	if updates["objectStore"] != "none" {
+		t.Errorf("the upgrade does not tell update-management to run without the store: %v", fa)
 	}
 }
 

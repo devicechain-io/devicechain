@@ -4,7 +4,7 @@ title: Actualizaciones over-the-air
 
 # Actualizaciones over-the-air
 
-El servicio opcional **`update-management`** entrega imágenes de firmware, software y configuración
+El servicio **`update-management`** entrega imágenes de firmware, software y configuración
 a los dispositivos. Mantiene un catálogo de **artefactos** por inquilino, te permite **asignar** un
 artefacto a un dispositivo, envía al dispositivo lo que necesita para obtener la imagen y sigue cada
 **intento de actualización** hasta que el dispositivo demuestra que ejecuta la nueva versión.
@@ -26,8 +26,8 @@ impulsa en cambio con comandos ordinarios.
 
 ## Activarlo {#enabling}
 
-`update-management` no forma parte del perfil `default`. Instala con `--profile full`, o nómbralo
-en `enabledFunctionalAreas`. Depende de `device-management` y guarda el contenido de los artefactos
+`update-management` forma parte del perfil `default` (y por tanto de `full`); solo los perfiles
+`telemetry` e `ingest-only` lo dejan fuera, y `enabledFunctionalAreas` puede nombrarlo allí. Depende de `device-management` y guarda el contenido de los artefactos
 en el [almacén de objetos](./object-storage.md): sin almacén configurado, declarar un artefacto se
 rechaza con `OBJECT_STORE_NOT_CONFIGURED`. En el backend S3 una subida se almacena en memoria, así
 que allí los artefactos están limitados a 64 MiB sea cual sea el límite configurado.

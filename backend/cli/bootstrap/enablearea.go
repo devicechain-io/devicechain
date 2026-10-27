@@ -290,10 +290,7 @@ func areaChangeNotes(st *State) []string {
 			"every handshake.")
 	}
 	if slices.Contains(st.AreaChange.Added, string(functionalarea.UpdateMgmt)) && st.ObjectStore == nil {
-		notes = append(notes, "update-management keeps artifact content in the instance's object store, "+
-			"and this instance was built without one: the service will run and refuse every artifact. "+
-			"An object store cannot be added to a running instance; it is chosen at bootstrap "+
-			"(--object-store).")
+		notes = append(notes, noObjectStoreNote)
 	}
 	return notes
 }

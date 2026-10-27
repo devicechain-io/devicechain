@@ -27,7 +27,7 @@ const DefaultClusterName = "devicechain"
 
 // defaultMaxConnections is the relational store's connection budget on a first install
 // that does not ask for one. See postgres_max_connections in the cluster root.
-const defaultMaxConnections = 600
+const defaultMaxConnections = 700
 
 // InstallOptions drives `dcctl install`.
 type InstallOptions struct {

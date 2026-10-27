@@ -308,7 +308,18 @@ func buildApi(ctx context.Context) (*model.Api, error) {
 // buildBlobStore constructs the object store from the instance infrastructure config. The
 // filesystem backend with no directory is "not configured" (nil), so a deployment that has
 // not mounted a blob volume still starts; an unknown backend fails closed in blob.New.
+//
+// updates.objectStore: none is the explicit form of "no store": the service ignores the instance's
+// blob configuration altogether (its volume is not mounted here, so a configured filesystem
+// directory would be an unmounted path on a read-only root that fails at upload time instead of
+// refusing up front). Every artifact declaration and upload is then refused loudly.
 func buildBlobStore(ctx context.Context) (blob.Store, error) {
+	if Configuration.Updates.ObjectStore == config.ObjectStoreNone {
+		log.Warn().Msg("updates.objectStore is none - this service runs WITHOUT an object store: every artifact declaration and upload is refused " +
+			"(OBJECT_STORE_NOT_CONFIGURED). The instance's store volume is not shared with update-management; use an S3 store or a " +
+			"ReadWriteMany volume to run OTA artifact storage here.")
+		return nil, nil
+	}
 	cfg := Microservice.InstanceConfiguration.Infrastructure.Blob
 	if cfg.Backend == blob.BackendFilesystem && strings.TrimSpace(cfg.Directory) == "" {
 		return nil, nil

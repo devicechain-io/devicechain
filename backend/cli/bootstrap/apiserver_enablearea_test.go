@@ -43,18 +43,18 @@ func TestEnablingAnAreaIsAcceptedByAnAPIServer(t *testing.T) {
 	}
 	ns := renderedDeployment(t, rel.Manifest, "device-management").Namespace
 
-	// Negative control: before the change, the server holds no update-management.
+	// Negative control: before the change, the server holds no outbound-connectors.
 	var d appsv1.Deployment
-	if err := c.Get(t.Context(), client.ObjectKey{Namespace: ns, Name: "update-management"}, &d); !apierrors.IsNotFound(err) {
-		t.Fatalf("control: before enable-area the server answered %v for update-management, want NotFound", err)
+	if err := c.Get(t.Context(), client.ObjectKey{Namespace: ns, Name: "outbound-connectors"}, &d); !apierrors.IsNotFound(err) {
+		t.Fatalf("control: before enable-area the server answered %v for outbound-connectors, want NotFound", err)
 	}
 
-	rel, err = upgradeRelease(t, c, cfg, helmReleaseNameFor("guide"), ch, valuesFor("update-management"))
+	rel, err = upgradeRelease(t, c, cfg, helmReleaseNameFor("guide"), ch, valuesFor("outbound-connectors"))
 	if err != nil {
 		t.Fatalf("the API server refused the enable-area upgrade: %v", err)
 	}
-	if err := c.Get(t.Context(), client.ObjectKey{Namespace: ns, Name: "update-management"}, &d); err != nil {
-		t.Errorf("after enable-area the server does not hold the update-management Deployment: %v", err)
+	if err := c.Get(t.Context(), client.ObjectKey{Namespace: ns, Name: "outbound-connectors"}, &d); err != nil {
+		t.Errorf("after enable-area the server does not hold the outbound-connectors Deployment: %v", err)
 	}
 	if missing := everyObjectIsThere(t, c, rel.Manifest); len(missing) != 0 {
 		t.Errorf("the enable-area upgrade reported success but the server does not hold: %v", missing)

@@ -521,13 +521,11 @@ module "cnpg_rdb" {
   # whose selector is byte-identical to `dc-rdb-rw` — so every pool lands on the
   # SAME primary and they all draw from one budget:
   #
-  #   default profile  7 services x 20 = 140
-  #   full profile     9 services x 20 = 180   (adds ai-inference, outbound-connectors)
-  #                    (10 x 20 = 200 since update-management joined `full`)
+  #   default profile  8 services x 20 = 160
+  #   full profile     10 services x 20 = 200   (adds ai-inference, outbound-connectors)
   #
   # against `max_connections - superuser_reserved_connections` = 100 - 3 = 97.
-  # The default profile oversubscribes the primary 1.44x, full 2.06x (200/97; it was
-  # 1.86x before update-management joined `full`). Confirmed by
+  # The default profile oversubscribes the primary 1.65x (160/97), full 2.06x (200/97). Confirmed by
   # opening connections as the application role until refusal: number 94 failed with
   # `FATAL: remaining connection slots are reserved for roles with the SUPERUSER
   # attribute`.
@@ -568,7 +566,7 @@ module "cnpg_rdb" {
   #
   # At 300 the last three of those exceed the budget, so the fix would have been
   # undone by a routine upgrade of the profile we ship, with the silent
-  # Ready-but-locked-out symptom described above. 600 covers the recommended
+  # Ready-but-locked-out symptom described above. 700 covers the recommended
   # production configuration mid-rollout with margin for the operator, the exporter,
   # dcctl bootstrap/migrations and drdrill. The next break point is replicas 3 on the
   # full profile (9x4 + 1 = 37 pods = 740); re-derive before going there.
@@ -576,7 +574,7 @@ module "cnpg_rdb" {
   # 🔴 THAT IS ONE INSTANCE'S DEMAND, AND THE STORE IS SHARED BY EVERY INSTANCE ON THE
   # CLUSTER. Each instance's login carries a CONNECTION LIMIT sized the same way (its
   # relational areas x 20 x 2), and dcctl admits a new instance only while the limits
-  # already granted plus its own fit under this value — so the default admits two
+  # already granted plus its own fit under this value — so the default (700 = 2 x 320 + 20) admits two
   # default-profile instances, and `dcctl install --max-connections` is the knob.
   #
   # 🔑 RAISE THIS BEFORE RAISING `replicas` OR THE POOL CAP, and note that changing

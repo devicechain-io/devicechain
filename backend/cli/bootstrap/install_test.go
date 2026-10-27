@@ -342,10 +342,10 @@ func TestAnInstancesConnectionLimitCountsItsRelationalAreas(t *testing.T) {
 		st   *State
 		want int
 	}{
-		// user, device, state, dashboards, commands, notifications, processing.
-		{"no profile is the default", &State{}, 7 * per},
-		{"default", &State{Profile: "default"}, 7 * per},
-		// ...plus ai-inference, outbound-connectors and update-management; mcp and the
+		// user, device, state, dashboards, commands, notifications, processing, updates.
+		{"no profile is the default", &State{}, 8 * per},
+		{"default", &State{Profile: "default"}, 8 * per},
+		// ...plus ai-inference and outbound-connectors; mcp and the
 		// ingests hold none.
 		{"full", &State{Profile: "full"}, 10 * per},
 		{"explicit areas win over the profile", &State{Profile: "full",
@@ -630,5 +630,29 @@ func TestSettlingTheRelationalArchivePathLeavesAnOrdinaryInstallAlone(t *testing
 	if got := live.Values["backupServerNameRdb"]; got != "dc-rdb-2026" {
 		t.Errorf("a live store's archive path became %q; moving it retargets a WAL archiver "+
 			"every instance on the cluster depends on", got)
+	}
+}
+
+// 🔴 THE DEFAULT BUDGET ADMITS TWO DEFAULT-PROFILE INSTANCES, and that sentence is in the
+// --max-connections help and the OpenTofu default. It is derived here from the same sizing the
+// bootstrap admits an instance against, so it cannot stay true in prose while a profile grows.
+func TestTheDefaultBudgetAdmitsTwoDefaultProfileInstances(t *testing.T) {
+	limit, err := instanceConnectionLimit(&State{Profile: "default"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if need := 2*limit + rdbReservedConnections; need > defaultMaxConnections {
+		t.Errorf("two default-profile instances need %d connections (2 x %d + %d reserved) and the default budget is %d: "+
+			"raise defaultMaxConnections and postgres_max_connections together, and the texts that say \"two\"",
+			need, limit, rdbReservedConnections, defaultMaxConnections)
+	}
+	// ...and the cluster root's default is the same number, or a first install and a re-run disagree.
+	raw, err := os.ReadFile("../../../deploy/opentofu/cluster/variables.tf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`(?s)variable "postgres_max_connections" \{.*?default\s*=\s*(\d+)`).FindSubmatch(raw)
+	if m == nil || string(m[1]) != strconv.Itoa(defaultMaxConnections) {
+		t.Errorf("postgres_max_connections defaults to %q in variables.tf; defaultMaxConnections is %d", m, defaultMaxConnections)
 	}
 }

@@ -34,7 +34,7 @@ DeviceChain is a set of cooperating microservices over a shared core library:
 | **event-management** | Persists resolved events to TimescaleDB and serves time-series queries, including live subscriptions over a graphql-ws bridge. |
 | **device-state** | The live last-known-state projection per device (the current reading per measurement). |
 | **command-delivery** | Persistent two-way command dispatch to devices. |
-| **update-management** _(opt-in)_ | [Over-the-air updates](./concepts/over-the-air-updates.md): a per-tenant catalog of firmware, software and configuration images, each checked against its declared size and digest, their assignment to devices, and tracking of each update attempt to the running version. |
+| **update-management** | [Over-the-air updates](./concepts/over-the-air-updates.md): a per-tenant catalog of firmware, software and configuration images, each checked against its declared size and digest, their assignment to devices, and tracking of each update attempt to the running version. |
 | **dashboard-management** | Versioned dashboard definitions (draft, publish/rollback, export), rendered by the embeddable widget packages. |
 | **notification-management** | Routes triggered alarms to people over email (SMTP) and webhook, with per-severity routing and escalation of alarms that stay unacknowledged and uncleared. |
 | **outbound-connectors** | Delivers the pipeline's outbound actions (webhook `httpCall`, and `publish` to MQTT/Kafka/AWS SNS/SQS) to external systems over versioned, secret-authenticated connectors. |

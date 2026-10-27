@@ -195,6 +195,7 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 	}
 	sayValuesOverlay(st)
 	sayMqttFailClosed(st)
+	sayUpdateStoreMountless(st)
 	// 🔴 THE OPERATOR IS NOT LISTED AS SOMETHING THIS RUN WILL MOVE, because it is
 	// not. hydrateUpgradeState has already refused unless the cluster's operator is
 	// the one this build expects; what this verb moves is the instance.

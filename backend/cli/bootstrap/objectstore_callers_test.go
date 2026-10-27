@@ -5,20 +5,25 @@ package bootstrap
 
 import (
 	"context"
+	"encoding/json"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"io"
 	"os"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
 	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
+	"github.com/devicechain-io/dc-k8s/functionalarea"
+	"helm.sh/helm/v3/pkg/releaseutil"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
+	"sigs.k8s.io/yaml"
 )
 
 // The default size is the chart's own. A second opinion on how big a store is would drift.
@@ -711,5 +716,157 @@ func TestTwoConsumingAreasNeedAColocatedOrSharedClaim(t *testing.T) {
 	rwx.ObjectStore.AccessMode = "ReadWriteMany"
 	if err := checkObjectStoreMountable(t.Context(), &rwx); err != nil {
 		t.Errorf("a ReadWriteMany store was refused: %v", err)
+	}
+}
+
+// --- update-management in the default profile ----------------------------------------
+
+// updateManagementConfigIn reads the config update-management receives out of a rendered
+// manifest (the per-area ConfigMap), as a decoded map.
+func updateManagementConfigIn(t *testing.T, manifest string) map[string]interface{} {
+	t.Helper()
+	for _, doc := range releaseutil.SplitManifests(manifest) {
+		var cm corev1.ConfigMap
+		if yaml.Unmarshal([]byte(doc), &cm) != nil || cm.Kind != "ConfigMap" {
+			continue
+		}
+		raw, ok := cm.Data["update-management"]
+		if !ok {
+			continue
+		}
+		var out map[string]interface{}
+		if err := json.Unmarshal([]byte(raw), &out); err != nil {
+			t.Fatalf("update-management's config is not JSON: %v", err)
+		}
+		return out
+	}
+	t.Fatal("no ConfigMap carries update-management's config: the area is not rendered")
+	return nil
+}
+
+// podsMountingTheStore counts the pods in a render that mount the store volume, per area.
+func podsMountingTheStore(t *testing.T, c composedStore) map[string]bool {
+	t.Helper()
+	out := map[string]bool{}
+	for _, a := range []string{"user-management", "update-management"} {
+		for _, v := range c.deployment(t, a).Spec.Template.Spec.Volumes {
+			if v.Name == "blob-store" {
+				out[a] = true
+			}
+		}
+	}
+	return out
+}
+
+// 🔴 THE DEAD END THE DEFAULT PROFILE WOULD OTHERWISE BE. update-management is in `default`,
+// so an instance on a cluster dcctl did not create, whose filesystem store is a ReadWriteOnce
+// volume user-management already mounts, would be refused at bootstrap and at every upgrade,
+// and its store cannot be changed. The area instead runs with no store: ONE pod mounts the
+// claim, the preflight passes, and the service is told objectStore none so it refuses artifacts
+// loudly rather than writing into a volume it does not have.
+func TestUpdateManagementRunsWithoutTheStoreWhereTheVolumeCannotBeShared(t *testing.T) {
+	t.Parallel()
+	if areas, err := functionalarea.ResolveEnabled("default", nil); err != nil ||
+		!slices.Contains(areas, functionalarea.UpdateMgmt) {
+		t.Fatalf("update-management must be in the default profile (%v, %v)", areas, err)
+	}
+	remote := &State{Instance: "dc-os", Profile: "default", Values: map[string]string{}, ObjectStore: fsStore0()}
+	if !updateStoreMountless(remote) {
+		t.Fatal("a ReadWriteOnce store on a cluster dcctl was pointed at must run update-management without the store")
+	}
+	if err := checkObjectStoreMountable(t.Context(), remote); err != nil {
+		t.Fatalf("the preflight refused an instance that mounts the store in ONE pod: %v", err)
+	}
+
+	c := composeStoreWith(t, fsStore0(), nil, nil)
+	mounts := podsMountingTheStore(t, c)
+	if !mounts["user-management"] || mounts["update-management"] {
+		t.Errorf("pods mounting the claim = %v; want user-management only", mounts)
+	}
+	cfg := updateManagementConfigIn(t, c.manifest)
+	updates, _ := cfg["updates"].(map[string]interface{})
+	if updates["objectStore"] != "none" {
+		t.Errorf("update-management is not told to run without the store: %v", cfg)
+	}
+}
+
+// ...and everywhere the store CAN be shared, or the operator asked for the area, nothing degrades:
+// the area mounts the store and is told nothing.
+func TestUpdateManagementKeepsTheStoreWhereItCanBeShared(t *testing.T) {
+	t.Parallel()
+	rwx := fsStore0()
+	rwx.AccessMode = "ReadWriteMany"
+	cases := map[string]struct {
+		store *dcv1beta1.ObjectStoreSpec
+		st    func(*State)
+	}{
+		"a ReadWriteMany volume":              {rwx, nil},
+		"a cluster dcctl created (colocated)": {fsStore0(), managedLocal},
+		"an S3 store":                         {s3Store(), nil},
+	}
+	for name, tc := range cases {
+		st := &State{Instance: "dc-os", Profile: "default", Values: map[string]string{}, ObjectStore: tc.store}
+		if tc.st != nil {
+			tc.st(st)
+		}
+		if updateStoreMountless(st) {
+			t.Errorf("%s: update-management was taken off the store", name)
+		}
+	}
+	// Asked for by name: the refusal stays (the operator wants a working artifact plane).
+	asked := &State{Instance: "dc-os", Profile: "default", EnableAreas: []string{"update-management"},
+		Values: map[string]string{}, ObjectStore: fsStore0()}
+	if updateStoreMountless(asked) {
+		t.Error("an explicitly requested update-management was silently taken off the store")
+	}
+	// The full profile on a ReadWriteOnce store keeps today's refusal as well.
+	full := &State{Instance: "dc-os", Profile: "full", Values: map[string]string{}, ObjectStore: fsStore0()}
+	if updateStoreMountless(full) {
+		t.Error("the full profile was silently taken off the store")
+	}
+
+	c := composeStoreWith(t, rwx, nil, nil)
+	if !podsMountingTheStore(t, c)["update-management"] {
+		t.Error("update-management does not mount a shareable store")
+	}
+	if updates, _ := updateManagementConfigIn(t, c.manifest)["updates"].(map[string]interface{}); updates["objectStore"] != nil {
+		t.Errorf("a shareable store renders objectStore = %v", updates["objectStore"])
+	}
+}
+
+// The setting is dcctl's: an overlay may not set it (it would put the area back on a volume it
+// cannot share, or take it off a store it should use).
+func TestTheOverlayCannotSetTheUpdateObjectStore(t *testing.T) {
+	t.Parallel()
+	overlay := map[string]interface{}{"functionalAreas": map[string]interface{}{"update-management": map[string]interface{}{
+		"config": map[string]interface{}{"updates": map[string]interface{}{"objectStore": "none"}}}}}
+	if err := ValidateValuesOverlay(overlay); err == nil || !strings.Contains(err.Error(), "objectStore") {
+		t.Fatalf("an overlay setting updates.objectStore was accepted: %v", err)
+	}
+}
+
+// An instance with no object store at all says so on bootstrap and upgrade: update-management is
+// in the default profile now, so it comes up healthy and refuses every artifact, and the run is
+// the one place that can tell the operator why. Not said where a store exists, or where the area
+// is not part of the instance, and not repeated by an enable-area run that adds the area itself.
+func TestAnInstanceWithoutAStoreIsToldUpdatesRefuseArtifacts(t *testing.T) {
+	t.Parallel()
+	bare := &State{Instance: "dc-os", Profile: "default", Values: map[string]string{}}
+	if n := updateStoreNotes(bare); len(n) != 1 || n[0] != noObjectStoreNote {
+		t.Errorf("notes for an instance with no store = %q", n)
+	}
+	withStore := &State{Instance: "dc-os", Profile: "default", Values: map[string]string{}, ObjectStore: s3Store()}
+	if n := updateStoreNotes(withStore); len(n) != 0 {
+		t.Errorf("an instance with a store was told it has none: %q", n)
+	}
+	telemetry := &State{Instance: "dc-os", Profile: "telemetry", Values: map[string]string{}}
+	if n := updateStoreNotes(telemetry); len(n) != 0 {
+		t.Errorf("an instance without update-management was told about its store: %q", n)
+	}
+	adding := &State{Instance: "dc-os", Profile: "telemetry", Values: map[string]string{},
+		EnableAreas: []string{"update-management"}, EnabledAreas: []string{"user-management", "device-management", "update-management"},
+		AreaChange: &AreaChange{Added: []string{"update-management"}}}
+	if n := updateStoreNotes(adding); len(n) != 0 {
+		t.Errorf("an enable-area run was told twice: %q", n)
 	}
 }

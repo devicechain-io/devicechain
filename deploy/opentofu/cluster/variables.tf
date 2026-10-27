@@ -151,9 +151,9 @@ variable "postgres_storage" {
 }
 
 variable "postgres_max_connections" {
-  description = "max_connections on the shared relational store: the connection budget every instance on this cluster is admitted against. Each instance's login is limited to (its relational areas x 20 x 2), so 600 admits two default-profile instances. Changing it restarts the store's instances one at a time."
+  description = "max_connections on the shared relational store: the connection budget every instance on this cluster is admitted against. Each instance's login is limited to (its relational areas x 20 x 2), so 700 admits two default-profile instances (2 x 320 + 20 for the operator, the exporter and dcctl). Changing it restarts the store's instances one at a time."
   type        = number
-  default     = 600
+  default     = 700
 
   validation {
     condition     = var.postgres_max_connections >= 100 && floor(var.postgres_max_connections) == var.postgres_max_connections

@@ -30,6 +30,7 @@ import { isScoped } from '@devicechain/client';
 import { useQuery } from '@/lib/hooks/use-query';
 import { errMessage, useReload } from '@/routes/common';
 import { DownloadsNoticeView } from '@/routes/updates/DownloadsNotice';
+import { StoreNoticeView } from '@/routes/updates/StoreNotice';
 import {
   abandonUnknownUpdate,
   assignArtifact,
@@ -545,6 +546,7 @@ function AssignForm({
     <section className="space-y-3 rounded-lg border border-border bg-muted/40 p-4" aria-label={t('updAssignTitle')}>
       <h3 className="text-sm font-semibold text-foreground">{t('updAssignTitle')}</h3>
       <DownloadsNoticeView downloadsConfigured={info.data?.downloadsConfigured} />
+      <StoreNoticeView objectStoreConfigured={info.data?.objectStoreConfigured} />
       {artifacts.error && !artifacts.data ? (
         <ErrorState description={artifacts.error} />
       ) : (

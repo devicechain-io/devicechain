@@ -8,12 +8,12 @@
 # A named profile: one of "default", "full", "telemetry", "ingest-only".
 #
 #   default  the standard system: the whole device/telemetry/automation platform.
-#   full     everything this build ships — `default` PLUS the six areas held back
-#            from it: ai-inference, outbound-connectors, mcp, sparkplug-ingest,
-#            lwm2m-ingest and update-management. Each carries a decision to make
-#            deliberately (a paid provider key, an egress surface, an agent-facing API,
-#            a device transport that binds its own inbound port, or an update plane
-#            that is not yet implemented), which is why they are not in `default`. Of these, outbound-connectors and ai-inference own a secret
+#   full     everything this build ships — `default` PLUS the five areas held back
+#            from it: ai-inference, outbound-connectors, mcp, sparkplug-ingest and
+#            lwm2m-ingest. Each carries a decision to make deliberately (a paid
+#            provider key, an egress surface, an agent-facing API, or a device
+#            transport that binds its own inbound port), which is why they are not
+#            in `default`. Of these, outbound-connectors and ai-inference own a secret
 #            store and so need infrastructure.secrets.rootKey below — but so does
 #            notification-management, which is in `default`, so every install owes one.
 #
@@ -2209,7 +2209,7 @@ functionalAreas:
     # rides the device-reports channel. It stores the bytes in the object store
     # (blobStorage), so artifacts cannot be declared until a blob backend is configured.
     #
-    # Two settings are deliberate decisions, both under `config.updates`:
+    # Three settings are deliberate decisions, all under `config.updates`:
     #   allowUnverifiedArtifacts: false   # with this false only an artifact signed by an active
     #                                     # signer (registered per tenant with artifact:trust)
     #                                     # can be assigned; set it true on a development
@@ -2221,11 +2221,19 @@ functionalAreas:
     #                                     # point devices somewhere else. Set to "" it DISABLES
     #                                     # downloads: no device can be given a download capability
     #                                     # (so does having no ingress, where nothing is derived)
-    # OPT-IN area: held back from
-    # `default`, shipped by `full`, or named explicitly (enabledFunctionalAreas:
-    # [..., update-management]). It hard-depends on device-management (an update targets
-    # devices). It opens a pool on the shared relational store, so it counts toward an
-    # instance's connection budget when enabled.
+    #   objectStore: instance             # "instance" (the default) keeps artifact content in the
+    #                                     # instance object store. "none" runs the area with NO
+    #                                     # store: it starts, and refuses every artifact
+    #                                     # declaration and upload (OBJECT_STORE_NOT_CONFIGURED).
+    #                                     # It also takes the area out of the pods that mount
+    #                                     # the filesystem store volume, so an instance whose
+    #                                     # ReadWriteOnce volume another area already mounts can
+    #                                     # still run it. dcctl sets it where that applies; any
+    #                                     # other value fails the render.
+    # Part of the `default` profile (devices pull from it; it reaches nothing outside the
+    # instance), so every profile but telemetry and ingest-only runs it. It hard-depends on
+    # device-management (an update targets devices). It opens a pool on the shared relational
+    # store, so it counts toward an instance's connection budget.
     config: {}
   sparkplug-ingest:
     # The Sparkplug ingest service (ADR-069): a stateful Sparkplug B Host Application

@@ -34,7 +34,7 @@ DeviceChain 由一组基于共享核心库协作的微服务组成：
 | **event-management** | 将已解析事件持久化到 TimescaleDB，并提供时序查询，包括通过 graphql-ws 桥接提供的实时订阅。 |
 | **device-state** | 每台设备的实时最新已知状态投影（每项测量的当前读数）。 |
 | **command-delivery** | 向设备持久化投递双向命令。 |
-| **update-management** _（可选启用）_ | [空中（OTA）更新](./concepts/over-the-air-updates.md)：按租户保存固件、软件和配置镜像目录（每个镜像都按声明的大小和摘要校验），将其分配给设备，并跟踪每次更新尝试直至设备运行目标版本。 |
+| **update-management** | [空中（OTA）更新](./concepts/over-the-air-updates.md)：按租户保存固件、软件和配置镜像目录（每个镜像都按声明的大小和摘要校验），将其分配给设备，并跟踪每次更新尝试直至设备运行目标版本。 |
 | **dashboard-management** | 支持版本管理的仪表板定义（草稿、发布/回滚、导出），由可嵌入的组件包渲染。 |
 | **notification-management** | 通过电子邮件（SMTP）和 webhook 将已触发的告警通知相关人员，支持按严重程度路由，并升级持续未确认、未解除的告警。 |
 | **outbound-connectors** | 通过支持版本管理、使用密钥认证的连接器，将流水线的出站动作（webhook `httpCall`，以及向 MQTT/Kafka/AWS SNS/SQS 执行 `publish`）投递到外部系统。 |

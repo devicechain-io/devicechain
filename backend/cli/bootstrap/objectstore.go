@@ -15,6 +15,8 @@ import (
 	"time"
 
 	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
+	"github.com/devicechain-io/dc-k8s/functionalarea"
+	"github.com/fatih/color"
 	"helm.sh/helm/v3/pkg/releaseutil"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -447,6 +449,83 @@ func objectStoreCredentialsDigest(creds map[string]string) string {
 		h.Write([]byte{0})
 	}
 	return fmt.Sprintf("%x", h.Sum(nil))
+}
+
+// updateStoreMountless says whether update-management runs WITHOUT the instance object
+// store (updates.objectStore: none) on this instance.
+//
+// 🔴 IT IS THE ANSWER TO A DEAD END, NOT A CONVENIENCE. update-management is in the default
+// profile, so an instance that was built (or upgraded from a release that predates it) with a
+// filesystem store on a ReadWriteOnce volume dcctl did not create would, with the area mounting
+// the store beside user-management, be two pods on a volume that attaches to one node. That is
+// refused up front at bootstrap and at plain `dcctl upgrade` ("Nothing has been changed") --
+// and the store cannot be changed on a running instance, so the refusal would be permanent. The
+// area then runs with no store instead: it starts, and refuses artifact declarations and
+// uploads with OBJECT_STORE_NOT_CONFIGURED (the run says so).
+//
+// It applies only where the area is present BECAUSE THE PROFILE GREW: the default profile, with
+// update-management not asked for by name. An operator who asked for it (--enable-area on
+// bootstrap, or the full profile) asked for a working artifact plane, and keeps the refusal.
+// Where the store is shareable (ReadWriteMany, colocated on a cluster dcctl created, S3) or
+// absent there is nothing to degrade.
+func updateStoreMountless(st *State) bool {
+	spec := st.ObjectStore
+	if spec == nil || spec.Backend != dcv1beta1.ObjectStoreFilesystem || spec.AccessMode == "ReadWriteMany" ||
+		DefaultsToFilesystemObjectStore(st.Provider, st.Binding) {
+		return false
+	}
+	if st.Profile != "" && st.Profile != string(functionalarea.ProfileDefault) {
+		return false
+	}
+	if slices.Contains(st.EnableAreas, string(functionalarea.UpdateMgmt)) {
+		return false
+	}
+	areas, err := instanceAreas(st)
+	if err != nil {
+		return false
+	}
+	return slices.Contains(areas, functionalarea.UpdateMgmt)
+}
+
+// updateStoreMountlessNote is what an operator must be told when update-management runs without
+// the instance object store, because the area comes up healthy and refuses every artifact.
+const updateStoreMountlessNote = "update-management runs WITHOUT an object store on this instance: its filesystem store is a " +
+	"ReadWriteOnce volume that another area already mounts, and a second pod cannot share it. The service " +
+	"starts and refuses every artifact declaration and upload (OBJECT_STORE_NOT_CONFIGURED), so no update can " +
+	"be assigned. The store is fixed when the instance is created and cannot be changed on a running one; " +
+	"to use OTA, build the instance with a ReadWriteMany volume or an S3 store (--object-store-access-mode " +
+	"ReadWriteMany, or --object-store s3)."
+
+// noObjectStoreNote is what an operator must be told when update-management runs on an instance
+// built without an object store: the area is in the default profile, so it comes up healthy and
+// refuses every artifact. Shared with the enable-area note, which says the same thing.
+const noObjectStoreNote = "update-management keeps artifact content in the instance's object store, " +
+	"and this instance was built without one: the service will run and refuse every artifact. " +
+	"An object store cannot be added to a running instance; it is chosen at bootstrap " +
+	"(--object-store)."
+
+// updateStoreNotes are the notes a bootstrap or upgrade prints about update-management and the
+// object store: it runs without the shared volume, or the instance has no store at all.
+func updateStoreNotes(st *State) []string {
+	var notes []string
+	if updateStoreMountless(st) {
+		notes = append(notes, updateStoreMountlessNote)
+	}
+	if st.ObjectStore == nil {
+		if areas, err := instanceAreas(st); err == nil && slices.Contains(areas, functionalarea.UpdateMgmt) &&
+			// An enable-area run that adds the area says it in its own opening notes.
+			!(st.AreaChange != nil && slices.Contains(st.AreaChange.Added, string(functionalarea.UpdateMgmt))) {
+			notes = append(notes, noObjectStoreNote)
+		}
+	}
+	return notes
+}
+
+// sayUpdateStoreMountless prints updateStoreNotes, in yellow.
+func sayUpdateStoreMountless(st *State) {
+	for _, n := range updateStoreNotes(st) {
+		fmt.Println(color.YellowString("  note: %s", n))
+	}
 }
 
 // precheckObjectStore is the early, read-only half: it refuses a store the cluster cannot

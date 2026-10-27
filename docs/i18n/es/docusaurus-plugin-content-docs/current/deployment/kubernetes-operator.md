@@ -48,8 +48,8 @@ Eliges qué servicios ejecutar con un perfil con nombre o con un conjunto explí
 
 | Perfil | Áreas funcionales |
 |---|---|
-| `default` | user-management, device-management, event-sources, event-management, device-state, dashboard-management, command-delivery, notification-management, event-processing — el sistema estándar, y a lo que resuelve un perfil sin establecer |
-| `full` | todo lo que incluye esta compilación: `default`, más `ai-inference`, `outbound-connectors`, `mcp`, `sparkplug-ingest`, `lwm2m-ingest` y `update-management` — las áreas que `default` deja fuera porque cada una conlleva una decisión que conviene tomar deliberadamente (una clave de proveedor de pago, una superficie de salida, una API orientada a agentes, un transporte de dispositivos Sparkplug B o LwM2M que abre su propio puerto de entrada, un servicio de actualizaciones over-the-air que sirve descargas a dispositivos y al que hay que indicar, de forma deliberada, si se pueden asignar artefactos sin verificar) |
+| `default` | user-management, device-management, event-sources, event-management, device-state, dashboard-management, command-delivery, notification-management, event-processing, update-management — el sistema estándar, y a lo que resuelve un perfil sin establecer |
+| `full` | todo lo que incluye esta compilación: `default`, más `ai-inference`, `outbound-connectors`, `mcp`, `sparkplug-ingest`, `lwm2m-ingest` — las áreas que `default` deja fuera porque cada una conlleva una decisión que conviene tomar deliberadamente (una clave de proveedor de pago, una superficie de salida, una API orientada a agentes, un transporte de dispositivos Sparkplug B o LwM2M que abre su propio puerto de entrada) |
 | `telemetry` | user-management, device-management, event-sources, event-management, device-state, dashboard-management |
 | `ingest-only` | user-management, device-management, event-sources |
 

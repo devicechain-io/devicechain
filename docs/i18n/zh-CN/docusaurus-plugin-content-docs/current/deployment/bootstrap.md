@@ -122,7 +122,9 @@ kind 不知道本地状态目录，因此留下它。下次销毁该集群曾承
 
 ### 连接预算 {#connection-budget}
 
-关系数据库有固定连接数，由 `--max-connections` 设置，默认 `600`。各实例按启用领域，为自己的数据库登录预留连接上限。预留超过剩余量时，bootstrap 拒绝。
+关系数据库有固定连接数，由 `--max-connections` 设置，默认 `700`。各实例按启用领域，为自己的数据库登录预留连接上限。预留超过剩余量时，bootstrap 拒绝。
+
+`default` 配置档运行八个使用数据库的服务，因此一个 `default` 实例预留 320 个连接，`700` 可容纳两个。以较早默认值（`600`）安装的集群在重跑时保留原预算，所以第二个 `default` 实例，或使实例预留增加的升级，可能被拒绝：请先用 `dcctl install --max-connections 700` 提高预算。
 
 检查在**写入任何实例内容之前**执行，不创建命名空间、数据库或登录，因此被拒绝后无需清理。承载多个实例或大量领域的集群需更大预算。
 
@@ -323,8 +325,8 @@ dcctl bootstrap local my-instance --build
 |------|---------|
 | `--cluster <name>` | `local` 提供方：创建实例的 kind 集群，默认 `devicechain`。必须已[安装](#install)，初始化不创建集群。 |
 | `--kube-context <name>` | 通过此 kube-context 选择已安装集群。 |
-| `--profile <profile>` | 功能领域配置档：默认 `default` 标准系统；`full` 包含全部，增加 AI 推理、出站连接器、MCP、Sparkplug B 和 LwM2M 摄取以及更新管理；还可选 `telemetry` 或 `ingest-only`。 |
-| `--enable-area <area>` | 在配置档之外额外部署一个功能领域，例如 `--enable-area update-management`。可重复使用。要为已在运行的实例添加，见[稍后添加功能领域](#enable-area)。 |
+| `--profile <profile>` | 功能领域配置档：默认 `default` 标准系统；`full` 包含全部，增加 AI 推理、出站连接器、MCP、Sparkplug B 和 LwM2M 摄取，空中（OTA）更新管理已包含在 `default` 中；还可选 `telemetry` 或 `ingest-only`。 |
+| `--enable-area <area>` | 在配置档之外额外部署一个功能领域，例如 `--enable-area outbound-connectors`。可重复使用。要为已在运行的实例添加，见[稍后添加功能领域](#enable-area)。 |
 | `--build` | 将源码镜像构建至本地仓库，开发路径需源码、Docker、ko。 |
 | `--registry` / `--version` | 覆盖镜像仓库或标签，默认已发布 `ghcr.io/devicechain-io`；`--build` 时为 `localhost:5000` 和 `dev`。 |
 | `--host <name>` | 暴露实例的 Ingress 主机名，默认 `devicechain.local`。本地使用 `localhost` 无需修改 `/etc/hosts`。 |
@@ -463,7 +465,7 @@ chart 会给对象存储的卷加上 `helm.sh/resource-policy: keep`，因此之
 | `--database-toleration <key>[=<value>][:<effect>]` | 允许数据库运行在具有此污点的节点，格式与 `kubectl taint` 相同，可重复。需 `--database-node-selector`。 |
 | `--restore-rdb-from <archive>` | 灾难恢复：从备份桶内归档路径恢复共享关系型存储（未恢复过时为 `dc-rdb`），不初始化空库。仅**创建**时生效，已有存储时不移动数据，是重建而非修复操作。需备份插件，`--no-cnpg` 或 `--compact --no-tls` 时拒绝。见[恢复实例](./disaster-recovery.md#recover)。 |
 | `--restore-rdb-at <timestamp>` | 在指定时间停止恢复，而非重放全部归档。用于错误迁移或误删除等被系统正常执行的数据破坏，必须选破坏之前的时间。需 `--restore-rdb-from` 和带显式偏移的 RFC 3339 时间（`2026-07-27T13:59:00Z`），否则 PostgreSQL 按恢复服务器时区解释，停止时间不同。 |
-| `--max-connections <n>` | 关系型数据库连接预算，首次默认 `600`，重跑未指定时保留当前值。见[连接预算](#connection-budget)。运行实例存在时只能提高，不可降低。 |
+| `--max-connections <n>` | 关系型数据库连接预算，首次默认 `700`，重跑未指定时保留当前值。见[连接预算](#connection-budget)。运行实例存在时只能提高，不可降低。 |
 | `--allow-legacy-db-removal` | [初始化过程](#what-it-does)所述一次性例外的关系型数据库部分。 |
 | `--dry-run` | 打印行为，不改变内容、不创建集群。因此需读取集群的检查，尤其 `--ha` 节点容量检查，无法读取时报告未检查，不阻止演练。但可读集群若无法承载高可用，试运行也失败。可访问时，同样拒绝缺少集群本地状态的机器重安装、在运行实例下改变设置、不可用快照类，并使用相同错误消息；不可访问时说明未检查。 |
 | `--yes` | 创建 kind 集群前不询问。 |
@@ -479,7 +481,7 @@ chart 会给对象存储的卷加上 `helm.sh/resource-policy: keep`，因此之
 - 不安装占用最大的监控栈；
 - 不安装 cert-manager，因为关闭 TLS 后不需要签发证书（保留 TLS 则保留 cert-manager，见下文），因此也不安装数据库备份插件。
 
-它**不改变**运行哪些服务，仍由每个实例明确可见的 `--profile` 决定。Compact 集群拒绝比 `default` *更大*的配置，目前只有 `full`。公布的 compact 数据在 `default` 上测得，不能代表多运行六个服务（AI inference、出站连接器、MCP、Sparkplug B ingest、LwM2M ingest 和 update management）的实例。较小的 `telemetry` 和 `ingest-only` 被接受。
+它**不改变**运行哪些服务，仍由每个实例明确可见的 `--profile` 决定。Compact 集群拒绝比 `default` *更大*的配置，目前只有 `full`。公布的 compact 数据在 `default` 上测得，不能代表多运行五个服务（AI inference、出站连接器、MCP、Sparkplug B ingest 和 LwM2M ingest）的实例。较小的 `telemetry` 和 `ingest-only` 被接受。
 
 可以保留 TLS 和监控。`dcctl install` 显式传入 `--no-tls=false` 或 `--no-monitoring=false` 会被遵守，其他 compact 调节仍应用。保留 TLS 也保留负责签发证书的 cert-manager。没有安装 cert-manager 的集群，所有实例都不使用 TLS：`dcctl bootstrap` 默认启用 `--no-tls`，并拒绝 `--no-tls=false`。
 
@@ -809,11 +811,11 @@ dcctl sim create demo --instance my-instance --server localhost
 
 ### 稍后添加功能领域 {#enable-area}
 
-实例运行其配置档所列的功能领域，以及初始化时通过 `--enable-area` 添加的领域。要为已在运行的实例添加领域（例如在 `default` 实例上添加空中升级、出站连接器、AI 推理或 MCP），使用 `dcctl enable-area`：
+实例运行其配置档所列的功能领域，以及初始化时通过 `--enable-area` 添加的领域。要为已在运行的实例添加领域（例如在 `default` 实例上添加出站连接器、AI 推理或 MCP），使用 `dcctl enable-area`：
 
 ```bash
-dcctl enable-area local my-instance update-management --dry-run
-dcctl enable-area local my-instance update-management
+dcctl enable-area local my-instance outbound-connectors --dry-run
+dcctl enable-area local my-instance outbound-connectors
 ```
 
 - 在接触集群之前，先按功能领域目录检查名称。在写入任何内容之前，检查实例新的领域集合是否缺少依赖：例如 `outbound-connectors` 需要 `event-processing`，而 `telemetry` 配置档不运行它，因此两者都要列出。
@@ -822,7 +824,7 @@ dcctl enable-area local my-instance update-management
 - 它不改变版本。当你的 `dcctl` 与实例属于不同发布版本时会拒绝执行；请先[升级](./releases-and-upgrades.md)实例。
 - 列出实例已在运行的领域不会改变任何内容。如果实例上一次运行没有完成，命令会重新应用实例，从而完成中途停止的 `enable-area`。
 - 该领域在应用任何内容之前就已记录。如果命令中途停止，该领域仍保持记录：再次运行 `dcctl enable-area`，或下一次 `dcctl upgrade`，都会完成其部署。
-- 启用领域只会部署它，不会配置它。有些领域需要先设置才能发挥作用。`update-management` 将制品保存在[对象存储](#object-store)中，对象存储在初始化时选定，之后无法添加；没有对象存储时，服务会运行但拒绝所有制品，命令会对此给出提示。在并非由 `dcctl` 创建的集群上，访问模式为 `ReadWriteOnce` 的 `filesystem` 存储只能供一个 Pod 使用，因此在 `user-management` 之外添加 `update-management` 会在写入任何内容之前被拒绝。`lwm2m-ingest` 使用初始化时提供的预共享密钥（`--lwm2m-identities`）认证设备；之后再添加时，它会运行但拒绝所有握手。
+- 启用领域只会部署它，不会配置它。有些领域需要先设置才能发挥作用。`update-management` 将制品保存在[对象存储](#object-store)中，对象存储在初始化时选定，之后无法添加；没有对象存储时，服务会运行但拒绝所有制品，命令会对此给出提示。在并非由 `dcctl` 创建的集群上，访问模式为 `ReadWriteOnce` 的 `filesystem` 存储只能供一个 Pod 使用，因此在 `user-management` 之外添加 `update-management` 会在写入任何内容之前被拒绝。（`default` 配置档已包含 `update-management`；在这类实例上，使用这种存储时它会在没有对象存储的情况下运行并拒绝制品，初始化或升级时会给出提示。）`lwm2m-ingest` 使用初始化时提供的预共享密钥（`--lwm2m-identities`）认证设备；之后再添加时，它会运行但拒绝所有握手。
 
 没有移除领域的命令。领域可能保存数据，将其从部署中移除会使这些数据无服务可用。
 

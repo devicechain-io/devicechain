@@ -16,7 +16,7 @@ vi.mock('@devicechain/client', async (importOriginal) => {
 import { DownloadsNotice, DownloadsNoticeView } from './DownloadsNotice';
 
 const info = (downloadsConfigured: boolean) => ({
-  updateManagementInfo: { area: 'update-management', allowUnverifiedArtifacts: false, maxArtifactBytes: '1', downloadsConfigured },
+  updateManagementInfo: { area: 'update-management', allowUnverifiedArtifacts: false, maxArtifactBytes: '1', downloadsConfigured, objectStoreConfigured: true },
 });
 
 describe('DownloadsNotice', () => {

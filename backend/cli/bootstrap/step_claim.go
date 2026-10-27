@@ -64,6 +64,7 @@ func stepDeclareInstance(ctx context.Context, st *State) error {
 	}
 	spec := InstanceSpecFrom(st, st.Binding, st.Provider)
 	sayMqttFailClosed(st)
+	sayUpdateStoreMountless(st)
 
 	if st.DryRun {
 		// 🔴 A dry run takes no lock and writes no declaration, because both are

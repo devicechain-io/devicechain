@@ -12,6 +12,7 @@ import (
 	"time"
 
 	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
+	"github.com/devicechain-io/dc-k8s/functionalarea"
 	"github.com/devicechain-io/dcctl/bootstrap"
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
@@ -105,7 +106,7 @@ func resolveDevMode(changed func(string) bool, host string, noTLS, build, noEscr
 
 // The profile catalog, split by size relative to `default`, mirroring
 // devicechain.enabledAreas in the chart's _helpers.tpl (itself a mirror of
-// backend/k8s/functionalarea). `full` is `default` plus the three areas that reach
+// backend/k8s/functionalarea). `full` is `default` plus the five areas that reach
 // outside the instance; the other two are strict subsets.
 //
 // Split this way rather than compared by name so that adding a profile forces a
@@ -118,7 +119,7 @@ func resolveDevMode(changed func(string) bool, host string, noTLS, build, noEscr
 // storage budget: the JetStream reservation sums streams.Suffixes() and kv.All
 // unconditionally, so the budget holds for every profile. What `full` breaks is the
 // published compact number, measured on `default`, which would not describe an
-// instance running three more services. The smaller two are accepted: asking for the
+// instance running five more services. The smaller two are accepted: asking for the
 // smallest thing the platform ships is the one request a small-footprint preset must
 // not refuse.
 var (
@@ -563,8 +564,17 @@ func followClusterShape(changed func(string) bool, st *bootstrap.State) error {
 				st.Profile, strings.Join(profilesSmallerThanDefault, ", "))
 		}
 		fmt.Printf("compact cluster: %s\n", bootstrap.CompactSummary())
-		if len(st.EnableAreas) > 0 {
-			fmt.Printf("note: --enable-area adds %s beyond the compact-measured default; the printed footprint is a floor, not the total\n", strings.Join(st.EnableAreas, ", "))
+		// Only what the default profile does not already run: the compact number covers that.
+		var beyond []string
+		if base, err := functionalarea.ResolveEnabled(string(functionalarea.ProfileDefault), nil); err == nil {
+			for _, a := range st.EnableAreas {
+				if !slices.Contains(base, functionalarea.FunctionalArea(a)) {
+					beyond = append(beyond, a)
+				}
+			}
+		}
+		if len(beyond) > 0 {
+			fmt.Printf("note: --enable-area adds %s beyond the compact-measured default; the printed footprint is a floor, not the total\n", strings.Join(beyond, ", "))
 		}
 	}
 	if st.HA {

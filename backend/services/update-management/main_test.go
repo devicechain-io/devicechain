@@ -85,3 +85,25 @@ func TestBuildApiWiresTheProfileCheckAndTheLifecycleGate(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, api.Profiles)
 }
+
+// With updates.objectStore: none the service builds NO store even when the instance's blob
+// configuration names a usable directory: the volume is not mounted for it, so using the
+// directory would fail at upload time. Without the setting the same configuration builds a store.
+func TestBuildBlobStoreHonoursObjectStoreNone(t *testing.T) {
+	prevMs, prevCfg := Microservice, Configuration
+	t.Cleanup(func() { Microservice, Configuration = prevMs, prevCfg })
+
+	Microservice = &core.Microservice{InstanceId: "test", FunctionalArea: "update-management"}
+	Microservice.InstanceConfiguration.Infrastructure.Blob = mscfg.BlobConfiguration{Backend: "filesystem", Directory: t.TempDir()}
+
+	Configuration = config.NewUpdateManagementConfiguration()
+	store, err := buildBlobStore(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, store, "the default mode uses the instance store")
+
+	Configuration = config.NewUpdateManagementConfiguration()
+	Configuration.Updates.ObjectStore = config.ObjectStoreNone
+	store, err = buildBlobStore(context.Background())
+	require.NoError(t, err)
+	require.Nil(t, store, "none must build no store even though a directory is configured")
+}

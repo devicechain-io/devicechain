@@ -460,7 +460,7 @@ Turn on a functional area on a running instance
 ### Synopsis
 
 Deploys one or more functional areas on an instance that is already running —
-for example update-management, outbound-connectors, ai-inference or mcp on an
+for example outbound-connectors, ai-inference or mcp on an
 instance bootstrapped with the default profile. It is the day-2 form of
 'dcctl bootstrap --enable-area'.
 
@@ -494,8 +494,8 @@ There is no command that disables an area. An enabled area may hold data, and
 taking it out of the deployment would leave that data with nothing serving it.
 
 ```
-  # Add the over-the-air update area to an instance
-  dcctl enable-area local devicechain update-management
+  # Add the outbound connectors area to an instance
+  dcctl enable-area local devicechain outbound-connectors
 
   # Add two areas at once, and see what would happen first
   dcctl enable-area local devicechain outbound-connectors mcp --dry-run
@@ -713,7 +713,7 @@ dcctl install <provider> [flags]
       --ha                               a replicated relational store (3 CloudNativePG instances, synchronous), and every instance bootstrapped on this cluster HA too: a 3-server NATS cluster with replicated streams and a replicated event store. Needs at least 3 schedulable nodes; database volumes are sized per instance
   -h, --help                             help for install
       --kube-context string              install into this existing cluster instead of a local kind cluster (never created or deleted by dcctl)
-      --max-connections int              the relational store's connection budget (default 600 on a first install, and what the cluster has on a re-run). Each instance reserves (its relational services x 40) of it when bootstrapped; the default admits two default-profile instances
+      --max-connections int              the relational store's connection budget (default 700 on a first install, and what the cluster has on a re-run). Each instance reserves (its relational services x 40) of it when bootstrapped; the default admits two default-profile instances
       --no-cnpg                          skip the CloudNativePG operator and the database backup plugin — for a cluster that ALREADY runs CNPG, since Helm cannot adopt objects another installer created
       --no-monitoring                    skip the monitoring stack (Prometheus/Grafana); instances on the cluster render no ServiceMonitors or alerts
       --no-tls                           with --compact: instances serve plain HTTP, so cert-manager is not installed and database backups (whose plugin needs it) are off. --compact --no-tls=false keeps both

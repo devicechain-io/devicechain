@@ -113,3 +113,20 @@ func TestUpdatePlaneDefaultsAndBounds(t *testing.T) {
 		require.Error(t, core.LoadConfiguration([]byte(doc), &config.UpdateManagementConfiguration{}), name)
 	}
 }
+
+// updates.objectStore is a closed vocabulary: the default is the instance store, "none" is the
+// explicit no-store mode, and anything else is refused at startup rather than read as the default.
+func TestObjectStoreModeDefaultsAndFailsClosed(t *testing.T) {
+	cfg := &config.UpdateManagementConfiguration{}
+	require.NoError(t, core.LoadConfiguration([]byte("{}"), cfg))
+	require.Equal(t, config.ObjectStoreInstance, cfg.Updates.ObjectStore)
+
+	none := &config.UpdateManagementConfiguration{}
+	require.NoError(t, core.LoadConfiguration([]byte(`{"updates":{"objectStore":"none"}}`), none))
+	require.Equal(t, config.ObjectStoreNone, none.Updates.ObjectStore)
+
+	for _, bad := range []string{"None", "off", "s3", "filesystem"} {
+		c := &config.UpdateManagementConfiguration{}
+		require.Error(t, core.LoadConfiguration([]byte(`{"updates":{"objectStore":"`+bad+`"}}`), c), bad)
+	}
+}

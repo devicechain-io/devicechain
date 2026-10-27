@@ -94,7 +94,20 @@ type UpdatesConfiguration struct {
 	// Deadlines are how long the platform waits in each phase of an update, measured from the
 	// last accepted device report. Zero selects each default; negative is refused.
 	Deadlines DeadlinesConfiguration
+	// ObjectStore says whether this service uses the instance object store: ObjectStoreInstance
+	// (the default) keeps artifact content in it, ObjectStoreNone runs the service with NO store
+	// whatever the instance configures, so every artifact declaration and upload is refused with
+	// OBJECT_STORE_NOT_CONFIGURED. It is for an instance whose store volume this service cannot
+	// share; the deploy tooling sets it, an operator does not. Anything else is refused at startup.
+	ObjectStore string
 }
+
+const (
+	// ObjectStoreInstance is the default: artifact content lives in the instance object store.
+	ObjectStoreInstance = "instance"
+	// ObjectStoreNone runs the service without an object store (see UpdatesConfiguration.ObjectStore).
+	ObjectStoreNone = "none"
+)
 
 // DeadlinesConfiguration is the per-phase wait of an update attempt, in seconds.
 type DeadlinesConfiguration struct {
@@ -137,6 +150,9 @@ func (c *UpdateManagementConfiguration) ApplyDefaults() {
 	}
 	if c.Updates.SweepIntervalSeconds == 0 {
 		c.Updates.SweepIntervalSeconds = DefaultSweepIntervalSeconds
+	}
+	if c.Updates.ObjectStore == "" {
+		c.Updates.ObjectStore = ObjectStoreInstance
 	}
 	d := &c.Updates.Deadlines
 	for _, f := range []struct {
@@ -181,6 +197,9 @@ func (c *UpdateManagementConfiguration) Validate() error {
 	}
 	if err := c.Updates.validateBaseURL(); err != nil {
 		return err
+	}
+	if c.Updates.ObjectStore != ObjectStoreInstance && c.Updates.ObjectStore != ObjectStoreNone {
+		return fmt.Errorf("updates.objectStore must be %q or %q (got %q)", ObjectStoreInstance, ObjectStoreNone, c.Updates.ObjectStore)
 	}
 	if err := c.Policy().Validate(); err != nil {
 		return fmt.Errorf("updates.deadlines: %w", err)

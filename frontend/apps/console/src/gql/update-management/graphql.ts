@@ -242,7 +242,7 @@ export type AssignmentSignerQuery = { updateAssignment: { token: string, signedB
 export type UpdateManagementInfoQueryVariables = Exact<{ [key: string]: never; }>;
 
 
-export type UpdateManagementInfoQuery = { updateManagementInfo: { area: string, allowUnverifiedArtifacts: boolean, maxArtifactBytes: string, downloadsConfigured: boolean } };
+export type UpdateManagementInfoQuery = { updateManagementInfo: { area: string, allowUnverifiedArtifacts: boolean, maxArtifactBytes: string, downloadsConfigured: boolean, objectStoreConfigured: boolean } };
 
 export type ArtifactsQueryVariables = Exact<{
   criteria: ArtifactSearchCriteria;
@@ -583,6 +583,7 @@ export const UpdateManagementInfoDocument = new TypedDocumentString(`
     allowUnverifiedArtifacts
     maxArtifactBytes
     downloadsConfigured
+    objectStoreConfigured
   }
 }
     `) as unknown as TypedDocumentString<UpdateManagementInfoQuery, UpdateManagementInfoQueryVariables>;

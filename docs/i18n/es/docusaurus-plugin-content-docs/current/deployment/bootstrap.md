@@ -206,9 +206,15 @@ posterior en el clúster trabaja a partir de él (consulta
 ### El presupuesto de conexiones {#connection-budget}
 
 La base de datos relacional tiene un número fijo de conexiones, fijado por `--max-connections`
-(por defecto `600`). Cada instancia reserva un límite de conexiones en su login de base de
+(por defecto `700`). Cada instancia reserva un límite de conexiones en su login de base de
 datos, dimensionado a partir de las áreas que habilita. `dcctl bootstrap` rechaza una
 instancia cuya reserva no cabe en lo que queda.
+
+El perfil por defecto ejecuta ocho servicios que usan la base de datos, así que una instancia
+con el perfil por defecto reserva 320 conexiones y `700` admite dos. Un clúster instalado con un
+valor por defecto anterior (`600`) conserva su presupuesto en una nueva ejecución, por lo que una
+segunda instancia con el perfil por defecto, o una actualización que aumente la reserva de una
+instancia, puede rechazarse: sube antes el presupuesto con `dcctl install --max-connections 700`.
 
 Esa comprobación se hace **antes de escribir nada de la instancia** —ni namespace, ni base de
 datos, ni login—, así que un arranque rechazado no deja nada que limpiar. Un clúster pensado
@@ -769,8 +775,8 @@ imágenes. La canalización, el chart y el operador son idénticos.
 |------|-----------|
 | `--cluster <name>` | Proveedor `local`: el clúster de kind en el que crear la instancia (por defecto `devicechain`). Debe estar ya [instalado](#install); el arranque inicial nunca crea un clúster. |
 | `--kube-context <name>` | Apunta en su lugar a un clúster instalado a través de este kube-context. |
-| `--profile <profile>` | Perfil de área funcional: `default` (el sistema estándar, usado cuando se omite), `full` (todo: añade inferencia de IA, conectores salientes, MCP, ingesta de Sparkplug B, ingesta de LwM2M y gestión de actualizaciones), `telemetry` o `ingest-only`. |
-| `--enable-area <area>` | Despliega un área funcional además de las del perfil, por ejemplo `--enable-area update-management`. Repetible. Para añadir una a una instancia que ya está en marcha, consulta [Añadir un área funcional más adelante](#enable-area). |
+| `--profile <profile>` | Perfil de área funcional: `default` (el sistema estándar, usado cuando se omite), `full` (todo: añade inferencia de IA, conectores salientes, MCP, ingesta de Sparkplug B e ingesta de LwM2M; la gestión de actualizaciones over-the-air forma parte de `default`), `telemetry` o `ingest-only`. |
+| `--enable-area <area>` | Despliega un área funcional además de las del perfil, por ejemplo `--enable-area outbound-connectors`. Repetible. Para añadir una a una instancia que ya está en marcha, consulta [Añadir un área funcional más adelante](#enable-area). |
 | `--build` | Compila las imágenes desde el código fuente en un registro local (ruta para desarrolladores; necesita el árbol de código fuente + Docker + ko). |
 | `--registry` / `--version` | Sobrescribe el registro/etiqueta de imagen (por defecto: `ghcr.io/devicechain-io` publicado, o `localhost:5000` + `dev` con `--build`). |
 | `--host <name>` | Host de ingress en el que exponer la instancia (por defecto `devicechain.local`). Usa `localhost` en un clúster local para llegar a la consola sin editar `/etc/hosts`. |
@@ -947,7 +953,7 @@ arrancada en él los sigue. Ninguno es un flag de `dcctl bootstrap`.
 | `--database-toleration <clave>[=<valor>][:<efecto>]` | Permite que las bases de datos se ejecuten en nodos con este taint, escrito como lo escribe `kubectl taint` (repetible). Necesita `--database-node-selector`. |
 | `--restore-rdb-from <archive>` | Recuperación ante desastres: recupera el almacén relacional compartido desde esta ruta de archivo dentro del bucket de respaldos (`dc-rdb` para un almacén que nunca se ha restaurado) en lugar de inicializar uno vacío. Solo surte efecto cuando el almacén se **crea** —contra un clúster cuyo almacén ya existe no mueve ningún dato—, así que es una palanca de reconstrucción, no de reparación. Necesita el plugin de respaldo, así que se rechaza en un clúster instalado con `--no-cnpg` o con `--compact --no-tls`. Consulta [Recuperar una instancia](./disaster-recovery.md#recover). |
 | `--restore-rdb-at <timestamp>` | Detiene esa recuperación en un instante en lugar de reproducir todo el archivo, para datos destruidos *correctamente*, por una migración defectuosa o un borrado por error; elige un momento estrictamente anterior al daño. Necesita `--restore-rdb-from`, y una marca de tiempo RFC 3339 con desfase explícito (`2026-07-27T13:59:00Z`): sin él, PostgreSQL la interpreta en la zona horaria del propio servidor en recuperación y se detiene en un momento distinto del que nombraste. |
-| `--max-connections <n>` | El presupuesto de conexiones de la base de datos relacional (por defecto `600` en una primera instalación; una nueva ejecución sin él conserva el presupuesto actual); consulta [el presupuesto de conexiones](#connection-budget). Puede aumentarse, pero no reducirse, con instancias en marcha. |
+| `--max-connections <n>` | El presupuesto de conexiones de la base de datos relacional (por defecto `700` en una primera instalación; una nueva ejecución sin él conserva el presupuesto actual); consulta [el presupuesto de conexiones](#connection-budget). Puede aumentarse, pero no reducirse, con instancias en marcha. |
 | `--allow-legacy-db-removal` | La mitad relacional de la excepción única descrita en [Qué hace bootstrap](#what-it-does). |
 | `--dry-run` | Imprime lo que haría cada paso sin cambiar nada. Una ejecución en seco no crea ningún clúster, así que las comprobaciones que necesitan leer uno —en particular la de capacidad de nodos de `--ha`— informan de lo que no pudieron ver en lugar de hacer fallar el ensayo. Lo que *sí* llegan a ver sigue siendo fatal: un clúster que responde y no puede alojar `--ha` también hace fallar una ejecución en seco. En un clúster que responde, una ejecución en seco también aplica los rechazos de una reinstalación —una instalación desde una máquina sin el estado del clúster, ajustes cambiados bajo instancias en ejecución, un `--backup-snapshot-class` inutilizable— y falla con el mismo mensaje que daría la instalación. En un clúster al que no llega, dice que no los comprobó. |
 | `--yes` | No pregunta antes de crear un clúster de kind. |
@@ -977,8 +983,8 @@ que ya existen en lugar de añadir un eje de ajuste propio:
 **No** cambia qué servicios se ejecutan. Eso sigue en el `--profile` de cada instancia, donde
 queda nombrado y visible. Un perfil *más grande* que `default` —hoy solo `full`— se rechaza en
 un clúster compacto. Las cifras compactas publicadas se miden sobre `default`, así que no
-describirían una instancia que ejecuta seis servicios más (inferencia de IA, conectores
-salientes, MCP, ingesta de Sparkplug B, ingesta de LwM2M y gestión de actualizaciones). Los perfiles más pequeños
+describirían una instancia que ejecuta cinco servicios más (inferencia de IA, conectores
+salientes, MCP, ingesta de Sparkplug B e ingesta de LwM2M). Los perfiles más pequeños
 (`telemetry`, `ingest-only`) sí se aceptan.
 
 Puedes conservar tanto TLS como la monitorización. Un `--no-tls=false` o
@@ -1890,12 +1896,12 @@ el hardware real; consulta
 
 Una instancia ejecuta las áreas que nombra su perfil, más las que se añadieron con
 `--enable-area` en el bootstrap. Para añadir una a una instancia que ya está en marcha (por
-ejemplo, actualizaciones por aire, conectores salientes, inferencia de IA o MCP en una instancia
+ejemplo, conectores salientes, inferencia de IA o MCP en una instancia
 `default`), usa `dcctl enable-area`:
 
 ```bash
-dcctl enable-area local my-instance update-management --dry-run
-dcctl enable-area local my-instance update-management
+dcctl enable-area local my-instance outbound-connectors --dry-run
+dcctl enable-area local my-instance outbound-connectors
 ```
 
 - Los nombres se comprueban contra el catálogo de áreas antes de tocar el clúster. El nuevo
@@ -1922,7 +1928,9 @@ dcctl enable-area local my-instance update-management
   sin él, el servicio se ejecuta y rechaza todos los artefactos, y el comando lo avisa. En un
   clúster que `dcctl` no creó, un almacén `filesystem` con el modo de acceso `ReadWriteOnce` solo
   puede servir a un pod, así que añadir `update-management` junto a `user-management` se rechaza
-  antes de escribir nada. `lwm2m-ingest` autentica los dispositivos con las claves precompartidas
+  antes de escribir nada. (El perfil `default` ya incluye `update-management`; en una instancia así,
+  con ese tipo de almacén, se ejecuta sin almacén de objetos y rechaza los artefactos, y el
+  bootstrap o la actualización lo avisa.) `lwm2m-ingest` autentica los dispositivos con las claves precompartidas
   indicadas en el bootstrap (`--lwm2m-identities`); si se añade después, se ejecuta y rechaza
   todos los handshakes.
 

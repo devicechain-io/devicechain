@@ -543,7 +543,7 @@ func TestEveryTunableValueExistsInTheChart(t *testing.T) {
 // the store reported healthy.
 func TestTheConnectionLimitCountsTheOverlaysReplicasAndPools(t *testing.T) {
 	per := servicePoolSize * rolloutSurge
-	base := 7 * per // the default profile's seven relational areas, one pod each
+	base := 8 * per // the default profile's eight relational areas, one pod each
 	for _, tc := range []struct {
 		name    string
 		overlay string
@@ -552,8 +552,8 @@ func TestTheConnectionLimitCountsTheOverlaysReplicasAndPools(t *testing.T) {
 		{"no overlay", "", base},
 		{"one relational area's replicas", "functionalAreas:\n  device-management:\n    replicas: 3\n", base + 2*per},
 		// event-processing's chart default pins its own count at 1, so the top-level count
-		// reaches the other six.
-		{"the top-level replicas", "replicas: 2\n", base + 6*per},
+		// reaches the other seven.
+		{"the top-level replicas", "replicas: 2\n", base + 7*per},
 		{"an area's own pool", "functionalAreas:\n  device-state:\n    config:\n      rdbConfiguration:\n        maxOpenConnections: 50\n",
 			base - per + 50*rolloutSurge},
 		{"a pool in another spelling", "functionalAreas:\n  device-state:\n    config:\n      RdbConfiguration:\n        MaxOpenConnections: 50\n",

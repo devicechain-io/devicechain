@@ -99,6 +99,8 @@
   "signatureAdded": "Firma añadida. La confianza ahora es {{trust}}.",
   "downloadsNotConfiguredTitle": "Aún no se pueden descargar actualizaciones",
   "downloadsNotConfiguredBody": "Esta instancia no tiene configurada una dirección de descarga, por lo que nunca se da a los dispositivos un enlace para obtener una imagen asignada. Las asignaciones se aceptan pero no se instalarán. Defina la URL base de descarga del servicio de actualizaciones (updates.downloadBaseUrl) o publique la instancia tras un host de ingress para que se derive.",
+  "storeNotConfiguredTitle": "No se pueden almacenar los artefactos de actualización",
+  "storeNotConfiguredBody": "Esta instancia no tiene un almacén de objetos para artefactos de actualización: se creó sin uno, o su almacén no puede compartirse con el servicio de actualizaciones. No se pueden declarar ni subir artefactos, por lo que no se puede asignar nada a un dispositivo. No se puede añadir un almacén a una instancia en ejecución; se elige al crearla (dcctl bootstrap --object-store, o un volumen ReadWriteMany).",
   "unverifiedTitle": "Este artefacto no está verificado",
   "unverifiedBlocked": "Esta instancia no permite asignar artefactos sin verificar, así que este no se puede asignar a un dispositivo hasta que se firme.",
   "unverifiedAllowed": "Esta instancia permite asignar artefactos sin verificar. Es un ajuste de desarrollo; no confíe en él en producción.",
