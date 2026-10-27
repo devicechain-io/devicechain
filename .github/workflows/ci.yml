@@ -57,6 +57,12 @@ jobs:
       - name: release-candidate run script self-test
         run: hack/loadtest-rc-run.sh --self-test
 
+      # The calculated-metrics cost gate's pure checks (tier merge, counter and stored-row-shape
+      # checks, the verdict table), each against a twin that must be refused. The rest of the
+      # harness needs a cluster.
+      - name: calculated-metrics cost gate self-test
+        run: hack/calc-cost-gate.sh self-test
+
       # Proves the coverage check can fail before its green run is used as evidence.
       - name: dependabot module-coverage self-test
         run: hack/check-dependabot-modules.sh --self-test
