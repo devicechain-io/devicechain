@@ -39,26 +39,48 @@
 #      device guide shows; nothing here signs with a Go helper of ours
 #   4  ota-boot starts the device in a container on the kind network: outside the cluster, as a
 #      real device is, reaching the broker's node port and the ingress by the instance host
-#   5  POSITIVE: 1.0.1 is assigned and reaches UPDATED; then, from independent sources, the
-#      current assignment is 1.0.1 and UPDATED, the payload's PID changed, the RUNNING boot is
-#      not the install boot, slot b hashes to the artifact digest, the RUNNING binary describes
-#      itself as 1.0.1, and update_reports_total{verdict="APPLIED"} rose
+#   5  POSITIVE: 1.0.1 is assigned and reaches UPDATED. The checker (check_updated) then reads
+#      THREE DISCRIMINATING SOURCES, each of which can tell 1.0.1 from anything else: the
+#      platform (the current assignment is UPDATED for 1.0.1), the device's confirmed slot (it
+#      hashes to the artifact digest, and it is the file the payload process executes), and the
+#      running binary itself (its `describe` says 1.0.1). It also reads THREE LIVENESS SIGNALS,
+#      which say something happened but not what: the payload PID changed, the bootId changed,
+#      and update_reports_total{verdict="APPLIED"} rose (it counts a FAILED report as readily as
+#      a RUNNING one). Every sub-check is evaluated and each failure is named by a tag (state,
+#      pid, boot, slot, exe, describe, applied), so a control can assert WHICH ones went red
 #   6  NEGATIVE CONTROLS, each asserting the platform's verdict and what the device still runs:
 #        N1  1.0.4 signed only by the Ed25519 signer (registered, not trusted by the device)
 #            -> FAILED UNKNOWN_SIGNER; the inactive slot is untouched
-#        N2  1.0.2-crash -> FAILED ROLLED_BACK, never UPDATED
+#        N2  1.0.2-crash -> FAILED ROLLED_BACK, never UPDATED; the crash image booted exactly once
 #        N3  1.0.0, signed -> FAILED DOWNGRADE_REFUSED
 #        N4  1.0.4: the device is killed at ~40% of the download, one byte of what it holds is
 #            flipped, it restarts -> FAILED VERIFICATION_FAILED, after a RANGE resume (the bytes
-#            served after the restart equal exactly size - held)
+#            served after the restart equal exactly size - held), and the digest the device
+#            reports is the one the rig computes for "flipped prefix + true tail"
 #        N5  1.0.3-liar -> FAILED IMAGE_MISMATCH; the liar was only ever run as `describe`
-#        N6  the step-5 UPDATED checker run against N2's attempt MUST FAIL
-#        N7  downloadBaseUrl set to "" by a rig-only helm upgrade ->
-#            update_download_grants_total{result="not_configured"} rises and the attempt never
-#            leaves INITIATED; the release is then rolled back and downloads work again
+#        N6  the step-5 UPDATED checker run against N2's attempt MUST FAIL on exactly
+#            {state, slot, describe}; N6b runs it against the step-5 attempt with the CURRENT
+#            PID and bootId as "before" and it must fail on pid and boot (and not on slot, exe or
+#            describe). A transport error is never counted as red
+#        N7  downloadBaseUrl set to "" by a rig-only helm upgrade -> the step-1 check goes red on
+#            that value, update_download_grants_total{result="not_configured"} rises and the
+#            attempt never leaves INITIATED; the release is then rolled back (also on any failure
+#            while N7 holds it) and downloads work again
 #   7  FLEET: three more devices, a static group of four, a rollout of 1.0.4 (ECDSA-signed) with
-#      maxInFlight=1: never more than one unfinished attempt (sampled every second), COMPLETED
-#      with 4/4 UPDATED and every device describing itself as 1.0.4
+#      maxInFlight=1. While it runs, every sample (about one a second) must see at most one
+#      unfinished attempt AND the platform's own progress.inFlight <= 1, and at least one sample
+#      must have caught an attempt in flight. After COMPLETED (4/4), a deterministic check: each
+#      device's dispatchedAt is no earlier than the previous device's last report, compared as
+#      RFC 3339 instants (a fabricated overlapping timeline must fail it, offline, first). Then
+#      the device-state checker is shown red twice against the new state
+#
+# OFFLINE CONTROLS run first, with no cluster: the rollout-overlap check must reject a fabricated
+# overlapping timeline (including one a naive string compare of timestamps would pass) and accept
+# a fabricated sequential one.
+#
+# EVIDENCE. `run` prints the git HEAD, the number of dirty paths, `git hash-object` of this script
+# and the update-management image, and refuses an image whose tag is not the one `up` recorded.
+# Every invocation also writes .ota-rig/run-<UTC timestamp>.log with its real exit status last.
 #
 # THE DEVICE RUNS IN A CONTAINER, AND WHY. A download grant's URL is <origin>/api/update-
 # management/..., where <origin> is https://<instance host> on port 443, and the device pins it
@@ -76,6 +98,26 @@
 # Requires: kind, kubectl, helm, docker, jq, openssl (3.x, for Ed25519 pkeyutl -rawin), curl, ko,
 # `tofu` OR `terraform`, and a Go toolchain. It pushes images under a unique tag to the local
 # registry at localhost:5000 (dcctl's developer path); it never removes anything from it.
+#
+# PRUNING THE RIG'S IMAGES, by hand and only this rig's tags. Every tag `up` pushes starts with
+# `ota-` (the tag is also kept in .ota-rig/image-tag until `down`). The registry is SHARED with
+# other lanes, so never delete a tag you did not push and never wipe the registry's volume:
+#
+#   reg=http://localhost:5000; tag=ota-<sha8>-<timestamp>
+#   for repo in $(curl -s $reg/v2/_catalog | jq -r '.repositories[]'); do
+#     d=$(curl -sI -H 'Accept: application/vnd.oci.image.index.v1+json' \
+#           -H 'Accept: application/vnd.docker.distribution.manifest.v2+json' \
+#           "$reg/v2/$repo/manifests/$tag" | tr -d '\r' | awk 'tolower($1)=="docker-content-digest:"{print $2}')
+#     [ -n "$d" ] && curl -s -X DELETE "$reg/v2/$repo/manifests/$d"
+#   done
+#
+# 🔴 A manifest is deleted BY DIGEST, and that removes every tag pointing at the same digest. ko
+# builds reproducibly, so another lane that built the same source may hold a tag on that very
+# digest: before each DELETE, list the repo's tags (/v2/<repo>/tags/list), resolve each one, and
+# skip the digest if any tag but yours names it.
+# A DELETE needs the registry to allow deletes (REGISTRY_STORAGE_DELETE_ENABLED); if it answers
+# 405 it does not, and nothing was removed. Deleting a manifest frees no disk until the registry's
+# garbage collector runs, which is a registry-wide operation: run it only when no lane is pushing.
 
 set -euo pipefail
 
@@ -108,11 +150,34 @@ mkdir -p "$state_dir"
 kubeconfig="$(winpath "$state_dir/kubeconfig")"
 export KUBECONFIG="$kubeconfig"
 
+# 🔴 NEVER the shared developer cluster. Other lanes build on `devicechain` (and its registry);
+# `down` deletes the cluster it is pointed at, so the name is refused before anything runs.
+[[ "$cluster" != devicechain ]] || { echo "refusing: DC_OTA_RIG_CLUSTER=devicechain is the shared developer cluster" >&2; exit 2; }
+
+# Every invocation keeps its own log, ending in its real exit status (written by the EXIT trap,
+# so a `fail` deep inside a step is recorded as the failure it is).
+run_log="$state_dir/run-$(date -u +%Y%m%dT%H%M%SZ).log"
+exec > >(tee -a "$run_log") 2>&1
+
 rig_tmp="$(mktemp -d "${TMPDIR:-/tmp}/dc-ota-rig.XXXXXX")"
+n4_watcher=""
+n7_restore_rev=""
 cleanup() {
+  local rc=$?
+  # N7 holds the release with downloads disabled; a failure while it does must not leave the
+  # instance that way.
+  if [[ -n "$n7_restore_rev" ]]; then
+    echo "cleanup: rolling $helm_release back to revision $n7_restore_rev (N7 did not finish)"
+    helm --kubeconfig "$kubeconfig" --kube-context "$kube_context" -n "$helm_ns" rollback "$helm_release" "$n7_restore_rev" >/dev/null 2>&1 ||
+      echo "cleanup: the rollback FAILED; restore it by hand: helm -n $helm_ns rollback $helm_release $n7_restore_rev"
+  fi
+  if [[ -n "$n4_watcher" ]]; then
+    kill "$n4_watcher" 2>/dev/null || true
+    MSYS_NO_PATHCONV=1 docker exec "$device_container" pkill -f /tmp/killat.sh 2>/dev/null || true
+  fi
   # The private keys live only here. Removed however the run ends, including a failed check.
   rm -rf "$rig_tmp"
-  [[ -z "${pf_pid:-}" ]] || kill "$pf_pid" 2>/dev/null || true
+  printf 'ota-rig: %s exited with status %d\n' "${rig_cmd:-?}" "$rc" >>"$run_log"
 }
 trap cleanup EXIT
 
@@ -250,10 +315,18 @@ cmd_down() {
     say "removing the device container $device_container"
     docker rm -f "$device_container" >/dev/null
   fi
-  local uid=""
+  local uid="" rec="${HOME:?}/.devicechain/instances/$instance/instance.json" recctx
   if cluster_exists; then
-    uid="$(k get ns kube-system -o jsonpath='{.metadata.uid}' 2>/dev/null || true)"
-    if [[ -d "${HOME:?}/.devicechain/instances/$instance" ]]; then
+    # Only a cluster this rig's own kubeconfig reaches is this rig's to delete: a kind cluster of
+    # the same name made by someone else is not in that file.
+    uid="$(k get ns kube-system -o jsonpath='{.metadata.uid}' 2>/dev/null)" ||
+      fail "kind cluster $cluster exists but $kubeconfig does not reach it: it is not this rig's; refusing to delete it"
+    [[ -n "$uid" ]] || fail "cannot read the kube-system UID of $cluster through $kubeconfig; refusing to delete it"
+    if [[ -f "$rec" ]]; then
+      # dcctl destroys by the instance's RECORD; only a record naming this rig's context is ours.
+      recctx="$(jq -r '.kubeContext // empty' "$rec")"
+      [[ "$recctx" == "$kube_context" ]] ||
+        fail "$rec names context '$recctx', not $kube_context: instance $instance is not this rig's; refusing to destroy it"
       [[ -x "$dcctl" ]] || build_dcctl
       say "destroying instance $instance"
       "$dcctl" destroy local "$instance" --yes 2>&1 | redact ||
@@ -318,25 +391,33 @@ login() {
 # Reading the platform: the update service's metrics, and attempts
 # ---------------------------------------------------------------------------
 
+# um_pods lists the running update-management pods that are not on their way out: a pod being
+# deleted during a rollout still answers, with counters the new pods do not carry.
 um_pods() {
-  k -n "$namespace" get pods -l "$um_selector" --field-selector=status.phase=Running -o name
+  k -n "$namespace" get pods -l "$um_selector" --field-selector=status.phase=Running -o json |
+    jq -r '.items[] | select(.metadata.deletionTimestamp == null) | .metadata.name'
 }
 
-# um_metric <metric suffix> <label="value"> prints the sum of that series across every running
-# update-management pod, read through the API server's pod proxy. A pod whose metrics cannot be read
-# FAILS the rig: reading it as zero would let a control "see" a number it never measured.
+# um_metric <metric suffix> <labels> prints the sum of that series across every live
+# update-management pod, read through the API server's pod proxy. <labels> is matched EXACTLY
+# against the series' label set: 'result="aborted"' matches {result="aborted"} and nothing else,
+# "" matches only the unlabelled series, and "*" sums every series of the name. A pod whose
+# metrics cannot be read FAILS the rig: reading it as zero would let a control "see" a number it
+# never measured.
 um_metric() {
   local name="$1" label="$2" pod body total=0 n pods
   pods="$(um_pods)"
-  [[ -n "$pods" ]] || fail "no running update-management pod to read metrics from"
+  [[ -n "$pods" ]] || fail "no live update-management pod to read metrics from"
   for pod in $pods; do
-    body="$(k get --raw "/api/v1/namespaces/$namespace/pods/${pod#pod/}:$um_port/proxy/metrics")" ||
+    body="$(k get --raw "/api/v1/namespaces/$namespace/pods/$pod:$um_port/proxy/metrics")" ||
       fail "could not read the metrics of $pod"
-    # The series name ends in _<name>, with or without labels; an empty label matches every series.
+    # The series name ends in _<name>; its labels are what sits between the braces.
     n="$(awk -v m="_${name}" -v l="$label" '
       /^#/ { next }
-      { split($1, a, "{"); if (substr(a[1], length(a[1]) - length(m) + 1) != m) next; found = 1
-        if (l == "" || index($1, l)) s += $NF }
+      { i = index($1, "{"); nm = (i ? substr($1, 1, i - 1) : $1)
+        if (length(nm) < length(m) || substr(nm, length(nm) - length(m) + 1) != m) next; found = 1
+        ls = (i ? substr($1, i + 1, length($1) - i - 1) : "")
+        if (l == "*" || ls == l) s += $NF }
       END { if (!found) exit 3; printf "%d", s }' <<<"$body")" ||
       fail "$pod exposes no *_${name} series; the metric was renamed"
     total=$((total + n))
@@ -385,8 +466,10 @@ expect_failed() {
 
 # payload_pid <n> prints the PID of device n's running payload (an ota-device image under its slots).
 payload_pid() {
+  # The first match ends the loop INSIDE the container: a `| head -1` here would close the pipe
+  # early, and under pipefail the writer's SIGPIPE fails the whole read.
   dx sh -c 'for p in /proc/[0-9]*; do e="$(readlink "$p/exe" 2>/dev/null)" || continue
-    case "$e" in /dev'"$1"'/slots/*/ota-device) echo "${p#/proc/}";; esac; done' | head -1
+    case "$e" in /dev'"$1"'/slots/*/ota-device) echo "${p#/proc/}"; break;; esac; done'
 }
 
 # wait_payload <n> waits for device n's payload to be running and connected (its boot line printed).
@@ -418,37 +501,84 @@ dump_device_logs() {
   done
 }
 
-# check_updated <n> <assignment> <version> <pid-before> <boot-before> <applied-before> returns 0
-# only if EVERY source agrees the update took; otherwise it prints which one disagrees and returns
-# 1. It is a function that RETURNS rather than fails so that N6 can run it against an attempt that
-# did not take and require it to go red.
+# CHECKERS. A checker RETURNS instead of failing, so a control can run it against a state that
+# must not pass and require it to go red. Its verdict is its last line:
+#
+#   GREEN               every sub-check agreed (status 0)
+#   RED: <tag> <tag>    these sub-checks disagreed, each explained on a line of its own (status 1)
+#   TRANSPORT: <why>    it could not read what it needed (status 2)
+#
+# A checker evaluates EVERY sub-check before it answers, so the set of tags says which sources
+# disagreed, not merely the first. TRANSPORT, a crash, or a `fail` inside a checker is never red:
+# expect_red refuses anything without a RED line.
+
+# check_updated <n> <assignment> <version> <pid-before> <boot-before> <applied-before>
+#
+# Three DISCRIMINATING sources, each able to tell <version> from anything else:
+#   state     the platform: the assignment is the device's current one, UPDATED, for <version>
+#   slot      the confirmed slot hashes to the artifact digest
+#   exe       ...and it is the file the payload process executes
+#   describe  the running binary (its /proc exe, not a slot file) says <product> <version>
+# Three LIVENESS signals, which say that something happened but not what:
+#   pid       the payload PID is not <pid-before>
+#   boot      the latest bootId is not <boot-before>
+#   applied   update_reports_total{verdict="APPLIED"} rose past <applied-before>; a FAILED
+#             report is applied as readily as RUNNING, so this alone proves nothing
 check_updated() {
-  local n="$1" a="$2" want="$3" pid0="$4" boot0="$5" applied0="$6" j pid boot slot digest h id applied
-  j="$(assignment_json "$a")" || { echo "the assignment could not be read" >&2; return 1; }
-  [[ "$(jq -r '.current' <<<"$j")" == true ]] || { echo "the assignment is not the device's current one" >&2; return 1; }
-  [[ "$(jq -r '.attempt.state' <<<"$j")" == UPDATED ]] ||
-    { echo "the platform says $(jq -r '.attempt.state' <<<"$j"), not UPDATED" >&2; return 1; }
-  [[ "$(jq -r '.attempt.targetVersion' <<<"$j")" == "$want" ]] ||
-    { echo "the platform's target is $(jq -r '.attempt.targetVersion' <<<"$j"), not $want" >&2; return 1; }
-  pid="$(payload_pid "$n")"
-  [[ -n "$pid" && "$pid" != "$pid0" ]] || { echo "the payload PID did not change (was $pid0, is ${pid:-none})" >&2; return 1; }
-  boot="$(last_boot "$n")"
-  [[ -n "$boot" && "$boot" != "$boot0" ]] || { echo "the running boot is the install boot ($boot0)" >&2; return 1; }
-  slot="$(boot_state "$n" | jq -r '.confirmed')"
+  local n="$1" a="$2" want="$3" pid0="$4" boot0="$5" applied0="$6" j cur st tv pid boot bs slot digest h exe id applied
+  local -a red=()
+  j="$(assignment_json "$a")" || { echo "TRANSPORT: assignment $a could not be read"; return 2; }
+  [[ -n "$j" && "$j" != null ]] || { echo "TRANSPORT: there is no assignment $a"; return 2; }
+  cur="$(jq -r '.current' <<<"$j")"; st="$(jq -r '.attempt.state' <<<"$j")"; tv="$(jq -r '.attempt.targetVersion' <<<"$j")"
+  [[ "$cur" == true && "$st" == UPDATED && "$tv" == "$want" ]] ||
+    { red+=(state); echo "  state: current=$cur state=$st target=$tv, wanted current=true UPDATED $want"; }
+  pid="$(payload_pid "$n")" || { echo "TRANSPORT: cannot list device $n's processes"; return 2; }
+  [[ -n "$pid" ]] || { echo "TRANSPORT: device $n has no running payload to read"; return 2; }
+  [[ "$pid" != "$pid0" ]] || { red+=(pid); echo "  pid: the payload is still PID $pid"; }
+  boot="$(last_boot "$n")" || { echo "TRANSPORT: cannot read device $n's log"; return 2; }
+  [[ -n "$boot" && "$boot" != "$boot0" ]] || { red+=(boot); echo "  boot: the latest boot is still $boot0"; }
+  bs="$(boot_state "$n")" || { echo "TRANSPORT: cannot read device $n's boot.json"; return 2; }
+  slot="$(jq -r '.confirmed' <<<"$bs")"
   digest="$(jq -r '.attempt.targetDigest' <<<"$j")"
-  h="$(slot_hash "$n" "$slot")"
-  [[ "sha256:$h" == "$digest" ]] || { echo "confirmed slot $slot hashes to sha256:$h, the artifact is $digest" >&2; return 1; }
-  [[ "$(running_exe "$pid")" == "/dev$n/slots/$slot/ota-device" ]] ||
-    { echo "the payload runs $(running_exe "$pid"), not the confirmed slot $slot" >&2; return 1; }
-  id="$(describe_running "$pid")"
+  h="$(slot_hash "$n" "$slot")" || { echo "TRANSPORT: cannot hash device $n's slot $slot"; return 2; }
+  [[ "sha256:$h" == "$digest" ]] || { red+=(slot); echo "  slot: confirmed slot $slot is sha256:$h, the artifact is $digest"; }
+  exe="$(running_exe "$pid")" || { echo "TRANSPORT: cannot read /proc/$pid/exe"; return 2; }
+  [[ "$exe" == "/dev$n/slots/$slot/ota-device" ]] || { red+=(exe); echo "  exe: the payload executes $exe, not confirmed slot $slot"; }
+  id="$(dx "$exe" describe)" || { echo "TRANSPORT: $exe describe did not answer"; return 2; }
   [[ "$(jq -r '.version' <<<"$id")" == "$want" && "$(jq -r '.product' <<<"$id")" == "$product" ]] ||
-    { echo "the running binary describes itself as $id" >&2; return 1; }
+    { red+=(describe); echo "  describe: the running binary says $id, wanted $product $want"; }
   applied="$(um_metric update_reports_total 'verdict="APPLIED"')"
-  ((applied > applied0)) || { echo "update_reports_total{verdict=\"APPLIED\"} did not rise ($applied0 -> $applied)" >&2; return 1; }
-  note "platform: assignment $a current, UPDATED, target $want"
-  note "device: payload PID $pid0 -> $pid; bootId $boot0 -> $boot"
-  note "device: confirmed slot $slot = sha256:$h = artifact digest; the running binary says $id"
-  note "metrics: update_reports_total{verdict=\"APPLIED\"} $applied0 -> $applied"
+  ((applied > applied0)) || { red+=(applied); echo "  applied: update_reports_total{verdict=\"APPLIED\"} $applied0 -> $applied"; }
+  if ((${#red[@]})); then echo "RED: ${red[*]}"; return 1; fi
+  note "platform (state): assignment $a current, UPDATED, target $want"
+  note "device (slot, exe): confirmed slot $slot = sha256:$h = the artifact digest = the file PID $pid executes"
+  note "device (describe): the running binary says $id"
+  note "liveness: PID $pid0 -> $pid; bootId $boot0 -> $boot; APPLIED reports $applied0 -> $applied"
+  echo GREEN
+}
+
+# expect_red <label> <required tags> <other tags: "*" = none allowed, else a list forbidden>
+#            <reason text, or ""> <checker...>
+# runs a checker that MUST go red, and red for the right reason: every required tag present, no
+# tag it may not carry, and (when given) the reason text in its explanation.
+expect_red() {
+  local label="$1" need="$2" forbid="$3" reason="$4" out rc=0 tags t
+  shift 4
+  out="$("$@" 2>&1)" || rc=$?
+  printf '%s\n' "$out" | sed 's/^/    | /'
+  ((rc != 0)) || fail "$label: the checker PASSED a state it must refuse: it cannot go red"
+  tags="$(sed -n 's/^RED: //p' <<<"$out" | tail -n 1)"
+  [[ -n "$tags" ]] || fail "$label: the checker stopped without a verdict (status $rc); a transport error is not red"
+  for t in $need; do
+    [[ " $tags " == *" $t "* ]] || fail "$label: red for the wrong reason: [$tags] lacks '$t'"
+  done
+  if [[ "$forbid" == "*" ]]; then
+    for t in $tags; do [[ " $need " == *" $t "* ]] || fail "$label: red for the wrong reason: '$t' in [$tags], wanted exactly [$need]"; done
+  else
+    for t in $forbid; do [[ " $tags " != *" $t "* ]] || fail "$label: red for the wrong reason: '$t' in [$tags]"; done
+  fi
+  [[ -z "$reason" || "$out" == *"$reason"* ]] || fail "$label: red, but the explanation does not say \"$reason\""
+  note "$label: red on [$tags]${reason:+, saying \"$reason\"}"
 }
 
 # ---------------------------------------------------------------------------
@@ -485,16 +615,28 @@ discover() {
   [[ -n "$node_ip" ]] || fail "cannot read the kind node's address on the kind network"
 }
 
+# check_download_base: the update-management config the chart rendered carries the base derived
+# from the instance host. A checker (see CHECKERS): its one tag is `base`.
+check_download_base() {
+  local cfgs cfg base
+  cfgs="$(k -n "$namespace" get configmap -o json)" || { echo "TRANSPORT: cannot list ConfigMaps in $namespace"; return 2; }
+  cfg="$(jq -r '[.items[] | .data["update-management"] // empty][0] // empty' <<<"$cfgs")"
+  [[ -n "$cfg" ]] || { echo "TRANSPORT: no ConfigMap in $namespace carries the update-management config"; return 2; }
+  base="$(jq -r '.updates.downloadBaseUrl // "<absent>"' <<<"$cfg")"
+  if [[ "$base" != "$origin/api/update-management" ]]; then
+    echo "  base: the rendered downloadBaseUrl is '$base', expected '$origin/api/update-management'"
+    echo "RED: base"
+    return 1
+  fi
+  echo "rendered updates.downloadBaseUrl = $base"
+  echo GREEN
+}
+
 step1_download_base() {
   say "STEP 1: the download base is derived from the ingress host"
-  local cfg base
-  cfg="$(k -n "$namespace" get configmap -o json |
-    jq -r '[.items[] | .data["update-management"] // empty][0] // empty')"
-  [[ -n "$cfg" ]] || fail "no ConfigMap in $namespace carries the update-management config"
-  base="$(jq -r '.updates.downloadBaseUrl // "<absent>"' <<<"$cfg")"
-  [[ "$base" == "$origin/api/update-management" ]] ||
-    fail "the rendered downloadBaseUrl is '$base', expected '$origin/api/update-management'"
-  pass "rendered updates.downloadBaseUrl = $base"
+  local out
+  out="$(check_download_base)" || fail "$out"
+  pass "${out%$'\n'GREEN}"
 }
 
 # ---------------------------------------------------------------------------
@@ -683,7 +825,7 @@ EOF
 # reports_total prints every report the update service has judged, whatever the verdict. A device
 # that connects sends update.inventory, so this rising is the platform's own word that the devices
 # are on the broker, subscribed and heard.
-reports_total() { um_metric update_reports_total ''; }
+reports_total() { um_metric update_reports_total '*'; }
 
 # wait_heard <base> <how-many> waits until the service has judged that many reports since <base>.
 wait_heard() {
@@ -715,8 +857,10 @@ step4_device() {
 # Step 5: the positive update
 # ---------------------------------------------------------------------------
 
+step5_assignment=""
+
 step5_positive() {
-  say "STEP 5: assign 1.0.1 to device 1; it must be UPDATED on every source's evidence"
+  say "STEP 5: assign 1.0.1 to device 1; three discriminating sources and three liveness signals must agree"
   local pid0 boot0 applied0 a j
   pid0="$(payload_pid 1)"; boot0="$(last_boot 1)"
   applied0="$(um_metric update_reports_total 'verdict="APPLIED"')"
@@ -725,7 +869,10 @@ step5_positive() {
   [[ "$(jq -r .attempt.state <<<"$j")" == UPDATED ]] || fail "1.0.1 did not take: $(jq -c .attempt <<<"$j")"
   # The device confirms and reports RUNNING from the new boot; give the launcher a moment to settle.
   sleep 3
-  check_updated 1 "$a" 1.0.1 "$pid0" "$boot0" "$applied0" || fail "the UPDATED checker disagrees with the platform"
+  check_updated 1 "$a" 1.0.1 "$pid0" "$boot0" "$applied0" >"$rig_tmp/check5" ||
+    fail "the UPDATED checker disagrees with the platform: $(cat "$rig_tmp/check5")"
+  grep -v '^GREEN$' "$rig_tmp/check5"
+  step5_assignment="$a"
   pass "1.0.1 is running on device 1"
 }
 
@@ -733,19 +880,36 @@ step5_positive() {
 # Step 6: the negative controls
 # ---------------------------------------------------------------------------
 
-# still_on <n> <version> <slot>: the device runs what it ran before, from the slot it ran it from.
+# check_still_on <n> <version> <slot>: the device runs what it ran before, from the slot it ran it
+# from, with nothing pending. A checker (see CHECKERS); its tags are version, exe and boot.
+check_still_on() {
+  local n="$1" want="$2" slot="$3" pid exe id bs
+  local -a red=()
+  pid="$(payload_pid "$n")" || { echo "TRANSPORT: cannot list device $n's processes"; return 2; }
+  [[ -n "$pid" ]] || { echo "TRANSPORT: device $n has no running payload to read"; return 2; }
+  exe="$(running_exe "$pid")" || { echo "TRANSPORT: cannot read /proc/$pid/exe"; return 2; }
+  id="$(dx "$exe" describe)" || { echo "TRANSPORT: $exe describe did not answer"; return 2; }
+  bs="$(boot_state "$n")" || { echo "TRANSPORT: cannot read device $n's boot.json"; return 2; }
+  [[ "$(jq -r .version <<<"$id")" == "$want" ]] || { red+=(version); echo "  version: device $n runs $id, expected $want"; }
+  [[ "$exe" == "/dev$n/slots/$slot/ota-device" ]] || { red+=(exe); echo "  exe: device $n executes $exe, not slot $slot"; }
+  [[ "$(jq -r '.confirmed + "/" + (.pending // "")' <<<"$bs")" == "$slot/" ]] ||
+    { red+=(boot); echo "  boot: device $n boot.json is $(jq -c . <<<"$bs"), expected confirmed=$slot with nothing pending"; }
+  if ((${#red[@]})); then echo "RED: ${red[*]}"; return 1; fi
+  echo "device: still runs $id from slot $slot, nothing pending"
+  echo GREEN
+}
+
 still_on() {
-  local n="$1" want="$2" slot="$3" pid id
-  pid="$(wait_payload "$n")"
-  id="$(describe_running "$pid")"
-  [[ "$(jq -r .version <<<"$id")" == "$want" ]] || fail "device $n should still run $want, it runs $id"
-  [[ "$(running_exe "$pid")" == "/dev$n/slots/$slot/ota-device" ]] || fail "device $n runs $(running_exe "$pid"), not slot $slot"
-  [[ "$(boot_state "$n" | jq -r '.confirmed + "/" + (.pending // "")')" == "$slot/" ]] ||
-    fail "device $n boot state is $(boot_state "$n"), expected confirmed=$slot with nothing pending"
-  note "device: still runs $id from slot $slot, nothing pending"
+  local out
+  wait_payload "$1" >/dev/null
+  out="$(check_still_on "$@")" || fail "device $1 is not where it should be: $out"
+  note "${out%$'\n'GREEN}"
 }
 
 n2_assignment=""
+n2_pid0=""
+n2_boot0=""
+n2_applied0=""
 
 n1_unknown_signer() {
   say "N1: 1.0.4 signed only by the Ed25519 signer the device does not trust"
@@ -763,26 +927,39 @@ n1_unknown_signer() {
 
 n2_rolled_back() {
   say "N2: 1.0.2-crash exits before it confirms; the launcher must roll back"
-  local a j
+  local a j runs boots
+  # What N6 will compare against: the state of the device BEFORE this update.
+  n2_pid0="$(payload_pid 1)"; n2_boot0="$(last_boot 1)"
+  n2_applied0="$(um_metric update_reports_total 'verdict="APPLIED"')"
   a="$(assign ota-dev-1 fw-102)"
   j="$(wait_terminal "$a" 300)"
   expect_failed "$j" ROLLED_BACK
   still_on 1 1.0.1 b
-  # The crash image was started as a slot exactly once (plus its describe), and then never again.
-  note "device: the crash image's own record of its runs: $(dx cat /dev1/slots/a/ran.marker | tr '\n' '|')"
-  dx grep -q -- '--root /dev1' /dev1/slots/a/ran.marker || fail "the crash image was never booted: the rollback was not exercised"
+  # The crash image's own record: one `describe` (the preflight) and EXACTLY ONE boot. Zero means
+  # the rollback was never exercised; two would mean the launcher gave a failed slot a second try.
+  runs="$(dx cat /dev1/slots/a/ran.marker)"
+  note "device: the crash image's own record of its runs: $(tr '\n' '|' <<<"$runs")"
+  boots="$(grep -cv '^describe$' <<<"$runs" || true)"
+  [[ "$boots" == 1 ]] || fail "the crash image booted $boots times, expected exactly 1"
+  note "device: the crash image booted exactly once"
   n2_assignment="$a"
-  red "N2 -> FAILED ROLLED_BACK (never UPDATED); device on 1.0.1"
+  red "N2 -> FAILED ROLLED_BACK (never UPDATED); one boot of the crash image; device on 1.0.1"
 }
 
 n6_checker_goes_red() {
-  say "N6: the step-5 UPDATED checker, run against N2's attempt, must FAIL"
-  local why
-  if why="$(check_updated 1 "$n2_assignment" 1.0.2 "" "" 0 2>&1)"; then
-    fail "the UPDATED checker PASSED an attempt that rolled back: it cannot go red"
-  fi
-  note "checker said: $why"
-  red "N6 -> the checker refused N2's attempt"
+  say "N6: the step-5 UPDATED checker, run against N2's attempt, must go red on exactly {state, slot, describe}"
+  # N2's device rolled back: a new process, a new boot and applied reports all happened, so pid,
+  # boot and applied are GREEN and must not be what turns the checker red. What says "not 1.0.2"
+  # is the platform (state), the confirmed slot's bytes (slot) and the running binary (describe).
+  expect_red N6 "state slot describe" "*" "" check_updated 1 "$n2_assignment" 1.0.2 "$n2_pid0" "$n2_boot0" "$n2_applied0"
+  red "N6 -> the checker refused N2's attempt on the three discriminating sources"
+
+  say "N6b: the same checker against the step-5 attempt, with the CURRENT PID and bootId as 'before'"
+  # Nothing has restarted since this reading, so the liveness checks must go red, while slot, exe
+  # and describe (the device really does run 1.0.1 from its confirmed slot) must stay green.
+  expect_red N6b "pid boot" "slot exe describe" "" \
+    check_updated 1 "$step5_assignment" 1.0.1 "$(payload_pid 1)" "$(last_boot 1)" "$(um_metric update_reports_total 'verdict="APPLIED"')"
+  red "N6b -> the liveness checks can go red on their own"
 }
 
 n3_downgrade() {
@@ -822,12 +999,12 @@ EOF
   dx test ! -e /dev1/slots/a/ota-device.part || fail "a .part file is already in slot a before N4 starts"
   dx sh -c 'echo "--- N4 kill watcher armed" >> /dev1/device.log'
   # The watcher is armed BEFORE the assignment: the whole download takes about a second.
-  local wpid
   dx sh /tmp/killat.sh >"$rig_tmp/held" &
-  wpid=$!
+  n4_watcher=$!
   sleep 2
   a="$(assign ota-dev-1 fw-104)"
-  wait "$wpid" || fail "the download never reached 40% of $size bytes"
+  wait "$n4_watcher" || fail "the download never reached 40% of $size bytes"
+  n4_watcher=""
   held="$(tr -d '\r\n ' <"$rig_tmp/held")"
   [[ "$held" =~ ^[0-9]+$ && "$held" -gt 0 && "$held" -lt "$size" ]] ||
     fail "the kill did not land mid-download (held '$held' of $size); raise DC_OTA_RIG_PAD_MB"
@@ -857,6 +1034,20 @@ EOF
   start_device 1
   j="$(wait_terminal "$a" 300)"
   expect_failed "$j" VERIFICATION_FAILED
+  # What the device must have hashed if it kept the bytes it held (the flipped one included) and
+  # fetched only the rest: the image's first <held> bytes with byte 4096 set to the flipped value,
+  # then the image's true tail. Built on the host from the original image, never from the device.
+  local expect_file expect_digest
+  expect_file="$rig_tmp/n4-expected"
+  head -c "$held" "$images/ota-device-1.0.4" >"$expect_file"
+  # shellcheck disable=SC2059 # the format IS the octal escape of the flipped byte
+  printf "\\$(printf '%03o' "$fa")" | dd of="$expect_file" bs=1 seek=4096 count=1 conv=notrunc 2>/dev/null
+  tail -c +"$((held + 1))" "$images/ota-device-1.0.4" >>"$expect_file"
+  [[ "$(wc -c <"$expect_file" | tr -d ' ')" == "$size" ]] || fail "the reconstructed image is not $size bytes"
+  expect_digest="sha256:$(openssl dgst -sha256 -r "$expect_file" | cut -d' ' -f1)"
+  [[ "$(jq -r .attempt.failure.detail <<<"$j")" == *"$expect_digest"* ]] ||
+    fail "the device's failure does not name $expect_digest, the digest of (flipped held prefix + true tail)"
+  note "rig: (flipped held prefix + true tail) hashes to $expect_digest: the digest the device reported"
   bytes1="$(um_metric update_download_bytes_total '')"
   served=$((bytes1 - bytes0))
   note "server: bytes streamed after the restart = $served; size - held = $((size - held))"
@@ -904,10 +1095,14 @@ n7_downloads_disabled() {
   [[ -n "$helm_ns" ]] || fail "no helm release $helm_release on $cluster"
   rev="$(helm --kubeconfig "$kubeconfig" --kube-context "$kube_context" -n "$helm_ns" history "$helm_release" -o json | jq -r '.[-1].revision')"
   [[ -n "$rev" && "$rev" != null ]] || fail "cannot read the helm history of $helm_release"
+  # From here until the rollback below, ANY exit rolls the release back (see cleanup).
+  n7_restore_rev="$rev"
   helm --kubeconfig "$kubeconfig" --kube-context "$kube_context" -n "$helm_ns" upgrade "$helm_release" \
     "$(winpath "$repo_root/deploy/helm/devicechain")" --reuse-values \
     --set-json 'functionalAreas.update-management.config.updates.downloadBaseUrl=""' >/dev/null ||
     fail "the rig-only helm upgrade failed"
+  # The step-1 checker must see what was done: the rendered base is now "".
+  expect_red "N7 step-1 check" "base" "*" "the rendered downloadBaseUrl is ''" check_download_base
   wait_downloads_configured false
   note "platform: updateManagementInfo.downloadsConfigured=false"
   nc0="$(um_metric update_download_grants_total 'result="not_configured"')"
@@ -934,6 +1129,7 @@ n7_downloads_disabled() {
   [[ "$(jq -r .attempt.state <<<"$j")" == CANCELLED ]] || fail "the cancelled attempt ended $(jq -c .attempt <<<"$j")"
   helm --kubeconfig "$kubeconfig" --kube-context "$kube_context" -n "$helm_ns" rollback "$helm_release" "$rev" >/dev/null ||
     fail "helm rollback to $rev failed"
+  n7_restore_rev=""
   wait_downloads_configured true
   step1_download_base
   pass "downloads restored: downloadsConfigured=true and the derived base is back"
@@ -943,9 +1139,79 @@ n7_downloads_disabled() {
 # Step 7: the fleet
 # ---------------------------------------------------------------------------
 
+# OVERLAP is the deterministic half of the maxInFlight=1 check. Its input is one object per rollout
+# target, {device, dispatchedAt, lastReportAt}; it prints a JSON array of everything wrong: a
+# missing timestamp, a target count that is not 4, or a device dispatched BEFORE the device
+# dispatched just ahead of it made its last report (two updates overlapping in time). Instants are
+# compared as RFC 3339 values, [epoch seconds, nanoseconds], never as strings: "...:05Z" sorts
+# after "...:05.1Z" as text although it is the earlier instant.
+OVERLAP_JQ='
+def inst:
+  if . == null then error("a missing timestamp") else
+  (capture("^(?<b>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})(\\.(?<f>[0-9]{1,9}))?(?<z>Z|[+-][0-9]{2}:[0-9]{2})$")
+    // error("not an RFC 3339 instant: \(.)")) as $c
+  | (($c.b + "Z") | fromdateiso8601) as $s
+  | ($c.z | if . == "Z" then 0 else (((.[1:3] | tonumber) * 3600 + (.[4:6] | tonumber) * 60) * (if .[0:1] == "+" then -1 else 1 end)) end) as $off
+  | [$s + $off, ((($c.f // "") + "000000000")[0:9] | tonumber)]
+  end;
+[ (if length != 4 then "expected 4 targets, got \(length)" else empty end),
+  (.[] | select(.dispatchedAt == null or .lastReportAt == null) | "\(.device) has no dispatchedAt or lastReportAt"),
+  ( [.[] | select(.dispatchedAt != null and .lastReportAt != null)] | sort_by(.dispatchedAt | inst) | . as $t
+    | range(1; length)
+    | select(($t[.].dispatchedAt | inst) < ($t[. - 1].lastReportAt | inst))
+    | "\($t[.].device) was dispatched at \($t[.].dispatchedAt), before \($t[. - 1].device) last reported at \($t[. - 1].lastReportAt)" ) ]'
+
+# overlap_problems <targets-json> prints one line per problem; none means the updates were serial.
+overlap_problems() { jq -r "$OVERLAP_JQ | .[]" <<<"$1"; }
+
+# offline_controls proves, with no cluster, that the overlap check can fail, and fails for the
+# right reason, before its green answer on the real rollout is believed.
+offline_controls() {
+  say "OFFLINE CONTROLS: the rollout-overlap check, on fabricated timelines"
+  local good bad naive nulls p
+  good='[{"device":"d1","dispatchedAt":"2026-10-27T10:00:00Z","lastReportAt":"2026-10-27T10:00:04.9Z"},
+         {"device":"d2","dispatchedAt":"2026-10-27T10:00:05Z","lastReportAt":"2026-10-27T10:00:09.123456789Z"},
+         {"device":"d3","dispatchedAt":"2026-10-27T10:00:09.2Z","lastReportAt":"2026-10-27T10:00:14Z"},
+         {"device":"d4","dispatchedAt":"2026-10-27T06:00:15-04:00","lastReportAt":"2026-10-27T10:00:20Z"}]'
+  # d2 starts 3 s before d1 finishes.
+  bad='[{"device":"d1","dispatchedAt":"2026-10-27T10:00:00Z","lastReportAt":"2026-10-27T10:00:08Z"},
+        {"device":"d2","dispatchedAt":"2026-10-27T10:00:05Z","lastReportAt":"2026-10-27T10:00:12Z"},
+        {"device":"d3","dispatchedAt":"2026-10-27T10:00:13Z","lastReportAt":"2026-10-27T10:00:14Z"},
+        {"device":"d4","dispatchedAt":"2026-10-27T10:00:15Z","lastReportAt":"2026-10-27T10:00:20Z"}]'
+  # d2 starts 100 ms before d1 finishes; compared as TEXT, "...:05Z" > "...:05.1Z" would pass it.
+  naive='[{"device":"d1","dispatchedAt":"2026-10-27T10:00:00Z","lastReportAt":"2026-10-27T10:00:05.1Z"},
+          {"device":"d2","dispatchedAt":"2026-10-27T10:00:05Z","lastReportAt":"2026-10-27T10:00:06Z"},
+          {"device":"d3","dispatchedAt":"2026-10-27T10:00:07Z","lastReportAt":"2026-10-27T10:00:08Z"},
+          {"device":"d4","dispatchedAt":"2026-10-27T10:00:09Z","lastReportAt":"2026-10-27T10:00:10Z"}]'
+  nulls='[{"device":"d1","dispatchedAt":"2026-10-27T10:00:00Z","lastReportAt":null},
+          {"device":"d2","dispatchedAt":"2026-10-27T10:00:05Z","lastReportAt":"2026-10-27T10:00:06Z"},
+          {"device":"d3","dispatchedAt":"2026-10-27T10:00:07Z","lastReportAt":"2026-10-27T10:00:08Z"}]'
+  p="$(overlap_problems "$good")" || fail "the overlap check crashed on a valid timeline"
+  [[ -z "$p" ]] || fail "the overlap check rejects a sequential timeline: $p"
+  note "sequential timeline (mixed precision, one -04:00 offset): accepted"
+  p="$(overlap_problems "$bad")" || fail "the overlap check crashed on the overlapping timeline"
+  [[ "$p" == *"d2 was dispatched at 2026-10-27T10:00:05Z, before d1 last reported"* ]] ||
+    fail "the overlap check did not reject d2 overlapping d1 (got: '${p:-nothing}')"
+  red "overlap check: d2 dispatched 3 s before d1 finished -> rejected"
+  p="$(overlap_problems "$naive")" || fail "the overlap check crashed on the sub-second timeline"
+  [[ "$p" == *"d2 was dispatched at 2026-10-27T10:00:05Z, before d1 last reported at 2026-10-27T10:00:05.1Z"* ]] ||
+    fail "the overlap check passed a 100 ms overlap a string compare would miss (got: '${p:-nothing}')"
+  red "overlap check: a 100 ms overlap that string comparison would pass -> rejected"
+  p="$(overlap_problems "$nulls")" || fail "the overlap check crashed on missing timestamps"
+  [[ "$p" == *"expected 4 targets, got 3"* && "$p" == *"d1 has no dispatchedAt or lastReportAt"* ]] ||
+    fail "the overlap check accepted a missing timestamp or a short list (got: '${p:-nothing}')"
+  red "overlap check: three targets, one with no lastReportAt -> rejected on both counts"
+}
+
+# last_report_at <assignment> prints the attempt's lastReportAt, or nothing.
+last_report_at() {
+  updq 'query($t:String!){updateAssignment(token:$t){attempt{lastReportAt}}}' "$(jq -n --arg t "$1" '{t:$t}')" |
+    jq -r '.updateAssignment.attempt.lastReportAt // empty'
+}
+
 step7_fleet() {
   say "STEP 7: three more devices, a static group of four, a rollout of 1.0.4 with maxInFlight=1"
-  local n reqs r j st max=0 inflight deadline samples=0 prog r0
+  local n reqs r j st max=0 inflight pinflight deadline samples=0 prog r0 targets timeline p id dev asg disp last
   for n in 2 3 4; do create_device "$n"; done
   r0="$(reports_total)"
   for n in 2 3 4; do start_device "$n"; done
@@ -966,31 +1232,58 @@ step7_fleet() {
   [[ "$(jq -r .startUpdateRollout.targetCount "$rig_tmp/start.json")" == 4 ]] || fail "the rollout froze $(cat "$rig_tmp/start.json"), not 4 devices"
   deadline=$((SECONDS + 900))
   while ((SECONDS < deadline)); do
-    # One read per second: every device's current firmware assignment that is this rollout's
-    # artifact and not finished. UNKNOWN keeps its place under the cap, so it counts.
+    # Two reads per sample. From the assignments: every device's current firmware assignment for
+    # this artifact that is not finished (UNKNOWN keeps its place under the cap, so it counts).
+    # From the rollout: the platform's own count of devices in flight.
     j="$(updq 'query{updateAssignments(criteria:{pageNumber:1,pageSize:50,component:"firmware",currentOnly:true}){results{deviceToken artifact{token} attempt{state}}}}')" ||
       fail "updateAssignments"
     inflight="$(jq '[.updateAssignments.results[] | select(.artifact.token == "fw-104")
       | select(.attempt.state | test("^(UPDATED|FAILED|TIMED_OUT|CANCELLED)$") | not)] | length' <<<"$j")"
-    samples=$((samples + 1))
-    ((inflight > max)) && max="$inflight"
-    ((inflight <= 1)) || fail "$inflight attempts unfinished at once under maxInFlight=1: $j"
     prog="$(updq 'query($t:String!){updateRollout(token:$t){state progress{total pending inFlight succeeded failed unknown cancelled skipped}}}' \
       "$(jq -n --arg t "$r" '{t:$t}')" | jq -c .updateRollout)" || fail "updateRollout"
+    pinflight="$(jq -r .progress.inFlight <<<"$prog")"
+    samples=$((samples + 1))
+    ((inflight > max)) && max="$inflight"
+    ((pinflight > max)) && max="$pinflight"
+    ((inflight <= 1)) || fail "$inflight attempts unfinished at once under maxInFlight=1: $j"
+    ((pinflight <= 1)) || fail "the rollout itself reports $pinflight in flight under maxInFlight=1: $prog"
     st="$(jq -r .state <<<"$prog")"
     [[ "$st" == RUNNING ]] || break
     sleep 1
   done
-  note "rollout: $prog after $samples one-second samples; most unfinished at once: $max"
+  note "rollout: $prog after $samples samples; most in flight at once: $max"
   [[ "$st" == COMPLETED ]] || fail "the rollout ended $st, not COMPLETED: $prog"
   [[ "$(jq -r .progress.succeeded <<<"$prog")" == 4 ]] || fail "the rollout did not succeed on 4/4: $prog"
+  # A sampler that never saw anything in flight has shown nothing about the cap.
+  ((max >= 1)) || fail "no sample ever saw an update in flight: the cap was never observed"
+
+  # The deterministic half: each dispatch against the previous device's last report.
+  targets="$(updq 'query($t:String!){updateRolloutTargets(token:$t,criteria:{pageNumber:1,pageSize:50}){results{deviceToken assignmentToken dispatchedAt outcome}}}' \
+    "$(jq -n --arg t "$r" '{t:$t}')")" || fail "updateRolloutTargets"
+  timeline="[]"
+  while read -r dev asg disp; do
+    last=""
+    [[ "$asg" == null ]] || last="$(last_report_at "$asg")"
+    timeline="$(jq -c --arg d "$dev" --arg s "$disp" --arg l "$last" \
+      '. + [{device:$d, dispatchedAt:(if $s == "null" then null else $s end), lastReportAt:(if $l == "" then null else $l end)}]' <<<"$timeline")"
+  done < <(jq -r '.updateRolloutTargets.results[] | "\(.deviceToken) \(.assignmentToken // "null") \(.dispatchedAt // "null")"' <<<"$targets")
+  jq -r '.[] | "    \(.device): dispatched \(.dispatchedAt), last report \(.lastReportAt)"' <<<"$timeline"
+  p="$(overlap_problems "$timeline")" || fail "the overlap check could not read the rollout's timeline: $timeline"
+  [[ -z "$p" ]] || fail "the rollout's updates overlapped: $p"
+  note "platform: every dispatch came after the previous device's last report (4 non-null pairs)"
   for n in 1 2 3 4; do
-    local id
     id="$(describe_running "$(wait_payload "$n")")"
     [[ "$(jq -r .version <<<"$id")" == 1.0.4 ]] || fail "device $n runs $id after the rollout"
     note "device $n: $id"
   done
-  pass "rollout COMPLETED, 4/4 SUCCEEDED, never more than $max unfinished at once, every device describes itself as 1.0.4"
+  pass "rollout COMPLETED, 4/4 SUCCEEDED, serial by its own timestamps, every device describes itself as 1.0.4"
+
+  say "STEP 7: the device-state checker must go red against the new state"
+  # Device 1 went 1.0.1 (slot b) -> 1.0.4 (slot a). Asked about its OLD version on its new slot,
+  # only the version may disagree; asked about its new version on its OLD slot, only the slot may.
+  expect_red "still_on 1 1.0.1 a" "version" "*" "expected 1.0.1" check_still_on 1 1.0.1 a
+  expect_red "still_on 1 1.0.4 b" "exe boot" "*" "not slot b" check_still_on 1 1.0.4 b
+  red "the still_on checker names what moved, and only that"
 }
 
 cmd_run() {
@@ -1003,6 +1296,17 @@ cmd_run() {
   tenant="${DC_OTA_RIG_TENANT:-ota$run_id}"
   member_email="ota-rig@$tenant.test"
   say "run $run_id: tenant $tenant on instance $instance (cluster $cluster)"
+  # What was tested, recorded with the result: the tree, this script, and the image actually running.
+  local image want_tag
+  image="$(k -n "$namespace" get deploy update-management -o jsonpath='{.spec.template.spec.containers[0].image}')"
+  note "git HEAD $(git -C "$repo_root" rev-parse HEAD); $(git -C "$repo_root" status --porcelain | wc -l | tr -d ' ') dirty path(s)"
+  note "hack/ota-rig.sh blob $(git -C "$repo_root" hash-object hack/ota-rig.sh)"
+  note "update-management image: $image"
+  [[ -f "$state_dir/image-tag" ]] || fail "$state_dir/image-tag is missing: this instance was not brought up by this rig's 'up'"
+  want_tag="$(tr -d '\r\n' <"$state_dir/image-tag")"
+  [[ "${image##*:}" == "$want_tag" ]] ||
+    fail "update-management runs tag '${image##*:}', but 'up' built '$want_tag': this is not the build under test"
+  offline_controls
   discover
   step1_download_base
   step2_provision
@@ -1018,15 +1322,19 @@ cmd_run() {
   n7_downloads_disabled
   step7_fleet
   say "OTA RIG GREEN: a separately built device took 1.0.1 over the instance's broker and ingress,
-proved it on six independent sources, and every planted defect (N1-N7) turned the platform's
-verdict red while the device kept running what it ran before; the four-device rollout held its
-cap and completed 4/4."
+proved by three discriminating sources (the platform's UPDATED, the confirmed slot's hash, the
+running binary's describe) and three liveness signals (PID, bootId, applied reports). Every
+planted defect (N1-N7) turned its verdict red for the reason it was planted, while the device
+kept running what it ran before; the four-device rollout completed 4/4 and was serial by its
+own timestamps."
 }
 
-case "${1:-}" in
+rig_cmd="${1:-}"
+case "$rig_cmd" in
   up) cmd_up ;;
   run) cmd_run ;;
   all) cmd_up; cmd_run ;;
   down) cmd_down ;;
-  *) fail "usage: hack/ota-rig.sh up | run | all | down" ;;
+  controls) offline_controls ;;
+  *) fail "usage: hack/ota-rig.sh up | run | all | down | controls" ;;
 esac
