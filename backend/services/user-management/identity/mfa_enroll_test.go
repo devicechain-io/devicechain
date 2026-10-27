@@ -6,6 +6,7 @@ package identity
 import (
 	"context"
 	"encoding/base32"
+	"errors"
 	"testing"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-user-management/iam"
 	"github.com/google/uuid"
+	nats "github.com/nats-io/nats.go"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 )
@@ -92,29 +94,104 @@ func TestEnrollmentNeedsThePasswordAndTheRightCode(t *testing.T) {
 	require.Equal(t, iam.MfaStatePending, state, "a refused confirmation activated the factor")
 	require.Zero(t, codes)
 
-	// The twin confirms, once, and gets ten recovery codes.
-	recovery, err := e.m.ConfirmTotpEnrollment(ctx, ia.IdentityToken, "pw-1", good)
+	// A session that predates the enrolment, with a tenant refresh chain under it.
+	oldPair, err := e.m.SelectTenant(ctx, ia.IdentityToken, "acme")
 	require.NoError(t, err)
-	require.Len(t, recovery, 10)
+
+	epochBefore := e.rowEpoch(t, "pat@example.com")
+
+	// The twin confirms, once, and gets ten recovery codes and a REPLACEMENT sign-in.
+	res, err := e.m.ConfirmTotpEnrollment(ctx, ia.IdentityToken, "pw-1", good)
+	require.NoError(t, err)
+	require.Len(t, res.RecoveryCodes, 10)
 	_, state, codes, _ = e.factorState(t, "pat@example.com")
 	require.Equal(t, iam.MfaStateActive, state)
 	require.EqualValues(t, 10, codes)
 	require.Equal(t, int64(1), e.auditCount(t, rdb.AuditOpMfaEnrolled))
 
-	// The session that enrolled is NOT upgraded: its token still says password only.
-	require.Equal(t, auth.AmrPasswordOnly(), e.claims(t, ia.IdentityToken).Amr)
-	// The proving code cannot sign in (its step is recorded as used), and a second begin is refused.
-	_, err = e.m.BeginTotpEnrollment(ctx, ia.IdentityToken, "pw-1")
+	require.NotEqual(t, epochBefore, e.rowEpoch(t, "pat@example.com"), "activation rotates the session epoch in the same transaction")
+
+	// Enrolling ends every session that began before it: the identity token that enrolled, and
+	// the refresh chain under it. (The person who enrols because their password leaked must not
+	// leave the thief's session standing.)
+	_, err = e.m.Memberships(ctx, ia.IdentityToken)
+	require.ErrorIs(t, err, ErrInvalidToken, "the enrolling session survived the enrolment")
+	_, err = e.m.Refresh(ctx, oldPair.RefreshToken)
+	require.ErrorIs(t, err, ErrInvalidToken, "a pre-enrolment refresh token survived the enrolment")
+	_, err = e.m.SelectTenant(ctx, ia.IdentityToken, "acme")
+	require.ErrorIs(t, err, ErrInvalidToken)
+
+	// The caller's new sign-in works and says an authenticator code was presented.
+	require.Equal(t, auth.AmrPasswordOTP(), e.claims(t, res.Auth.IdentityToken).Amr)
+	newPair, err := e.m.SelectTenant(ctx, res.Auth.IdentityToken, "acme")
+	require.NoError(t, err)
+	access, err := e.validator.Validate(newPair.AccessToken)
+	require.NoError(t, err)
+	require.Equal(t, auth.AmrPasswordOTP(), access.Amr)
+	require.Len(t, res.Auth.Memberships, 1)
+
+	// A second begin is refused (with the new token).
+	_, err = e.m.BeginTotpEnrollment(ctx, res.Auth.IdentityToken, "pw-1")
 	require.True(t, isCode(err, CodeMfaAlreadyEnrolled), "got %v", err)
 
-	status, err := e.m.MfaStatusFor(ctx, ia.IdentityToken)
+	status, err := e.m.MfaStatusFor(ctx, res.Auth.IdentityToken)
 	require.NoError(t, err)
 	require.True(t, status.TotpEnabled)
 	require.EqualValues(t, 10, status.RecoveryCodesRemaining)
 	require.NotNil(t, status.EnrolledAt)
-	plain, err := e.m.MfaStatusFor(ctx, e.signInWith(t, "pat@example.com", auth.AmrPasswordOnly()))
+}
+
+// Twin of the above for a refused confirmation: nothing ends.
+func TestARefusedConfirmationEndsNoSession(t *testing.T) {
+	e := newMfaEnv(t)
+	e.createMember(t, "pat@example.com", "pw-1")
+	ctx := context.Background()
+	ia, err := e.m.Login(ctx, "pat@example.com", "pw-1")
 	require.NoError(t, err)
-	require.True(t, plain.TotpEnabled)
+	_, err = e.m.BeginTotpEnrollment(ctx, ia.IdentityToken, "pw-1")
+	require.NoError(t, err)
+	_, err = e.m.ConfirmTotpEnrollment(ctx, ia.IdentityToken, "pw-1", "000000")
+	require.Error(t, err)
+	_, err = e.m.Memberships(ctx, ia.IdentityToken)
+	require.NoError(t, err, "a wrong code must not sign the person out")
+}
+
+// Regenerating or disabling with no factor says so, with a code of its own.
+func TestRegenerateAndDisableSayWhenThereIsNoFactor(t *testing.T) {
+	e := newMfaEnv(t)
+	e.createMember(t, "pat@example.com", "pw-1")
+	ctx := context.Background()
+	ia, err := e.m.Login(ctx, "pat@example.com", "pw-1")
+	require.NoError(t, err)
+	_, err = e.m.RegenerateRecoveryCodes(ctx, ia.IdentityToken, "pw-1", "ABCD-EFGH-JKMN-PQRS", "203.0.113.5")
+	require.True(t, isCode(err, CodeMfaNotEnrolled), "got %v", err)
+	err = e.m.DisableTotp(ctx, ia.IdentityToken, "pw-1", "123456", "203.0.113.5")
+	require.True(t, isCode(err, CodeMfaNotEnrolled), "got %v", err)
+	// The password is still checked first: a wrong one is not told whether a factor exists.
+	err = e.m.DisableTotp(ctx, ia.IdentityToken, "wrong", "123456", "203.0.113.5")
+	require.ErrorIs(t, err, ErrInvalidCredentials)
+}
+
+type failPutKV struct{ nats.KeyValue }
+
+func (failPutKV) Put(string, []byte) (uint64, error) { return 0, errors.New("session store down") }
+
+// A sign-in that did not happen is not journalled, and says nothing about a recovery code.
+func TestAFailedMintWritesNoLoginRow(t *testing.T) {
+	e := newMfaEnv(t)
+	e.createMember(t, "pat@example.com", "pw-1")
+	_, recovery := e.enroll(t, "pat@example.com", "pw-1")
+	ctx := context.Background()
+	ch := e.challenge(t, "pat@example.com", "pw-1")
+	logins := e.auditCount(t, rdb.AuditOpLogin)
+
+	real := e.m.refreshKV
+	e.m.refreshKV = failPutKV{real}
+	_, err := e.m.VerifyMfa(ctx, ch.Challenge, recovery[0], "203.0.113.5")
+	require.Error(t, err)
+	e.m.refreshKV = real
+	require.Equal(t, logins, e.auditCount(t, rdb.AuditOpLogin), "a login row was written for a sign-in that failed")
+	require.Zero(t, e.auditCount(t, rdb.AuditOpMfaRecoveryCodeUsed))
 }
 
 func TestFiveWrongConfirmationCodesCancelThePendingEnrollment(t *testing.T) {
@@ -255,8 +332,8 @@ func TestTheLoginAuditRowSaysHowTheSignInCompleted(t *testing.T) {
 		return out
 	}
 	require.Equal(t, []string{"pwd"}, labels("sam@example.com"))
-	require.Equal(t, []string{"pwd", "pwd+recovery"}, labels("pat@example.com"),
-		"the enrolling sign-in is a password one; the challenged one is recorded when it completed")
+	require.Equal(t, []string{"pwd", "pwd+otp", "pwd+recovery"}, labels("pat@example.com"),
+		"the enrolling sign-in, the replacement confirming gives (an authenticator code was presented), and the challenged one recorded when it completed")
 }
 
 // T10. A service account never goes near the second factor: a tenant and a tier that require one

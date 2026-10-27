@@ -37,6 +37,14 @@ func (r *TotpEnrollmentResolver) OtpauthUri() string { return r.e.OtpauthURI }
 func (r *TotpEnrollmentResolver) Secret() string     { return r.e.Secret }
 func (r *TotpEnrollmentResolver) ExpiresAt() string  { return r.e.ExpiresAt.UTC().Format(time.RFC3339) }
 
+// TotpEnrollmentResultResolver resolves TotpEnrollmentResult.
+type TotpEnrollmentResultResolver struct{ c *identity.TotpConfirmation }
+
+func (r *TotpEnrollmentResultResolver) Codes() []string { return r.c.RecoveryCodes }
+func (r *TotpEnrollmentResultResolver) Auth() *IdentityAuthResolver {
+	return &IdentityAuthResolver{auth: r.c.Auth}
+}
+
 // RecoveryCodesResolver resolves RecoveryCodes.
 type RecoveryCodesResolver struct{ codes []string }
 
@@ -72,12 +80,12 @@ func (r *SchemaResolver) ConfirmTotpEnrollment(ctx context.Context, args struct 
 	IdentityToken string
 	Password      string
 	Code          string
-}) (*RecoveryCodesResolver, error) {
-	codes, err := r.getIdentityManager(ctx).ConfirmTotpEnrollment(ctx, args.IdentityToken, args.Password, args.Code)
+}) (*TotpEnrollmentResultResolver, error) {
+	c, err := r.getIdentityManager(ctx).ConfirmTotpEnrollment(ctx, args.IdentityToken, args.Password, args.Code)
 	if err != nil {
 		return nil, err
 	}
-	return &RecoveryCodesResolver{codes: codes}, nil
+	return &TotpEnrollmentResultResolver{c: c}, nil
 }
 
 // RegenerateRecoveryCodes replaces the recovery codes (password and a code).

@@ -80,6 +80,9 @@ const (
 	CodeMfaChallengeExpired = "MFA_CHALLENGE_EXPIRED"
 	// CodeMfaAlreadyEnrolled: the identity already has an active factor.
 	CodeMfaAlreadyEnrolled = "MFA_ALREADY_ENROLLED"
+	// CodeMfaNotEnrolled: regenerating the recovery codes or turning the factor off, for an
+	// identity that has no active factor.
+	CodeMfaNotEnrolled = "MFA_NOT_ENROLLED"
 	// CodeMfaResetNeedsPassword is the operator reset's refusal while failures are outstanding
 	// (admin plane only).
 	CodeMfaResetNeedsPassword = "MFA_RESET_NEEDS_PASSWORD"
@@ -88,7 +91,7 @@ const (
 // MfaCodes is the data plane's closed set of second-factor error codes.
 func MfaCodes() []string {
 	return []string{CodeMfaChallenge, CodeMfaRequired, CodeMfaEnrollmentRequired,
-		CodeMfaChallengeExpired, CodeMfaAlreadyEnrolled}
+		CodeMfaChallengeExpired, CodeMfaAlreadyEnrolled, CodeMfaNotEnrolled}
 }
 
 // MfaError is a second-factor refusal that carries its wire code.
@@ -116,6 +119,9 @@ var (
 	// ErrMfaChallengeExpired is verifyMfa's refusal of a challenge it cannot use.
 	ErrMfaChallengeExpired error = &MfaError{CodeMfaChallengeExpired,
 		"the sign-in has expired or can no longer be completed; sign in again"}
+	// ErrMfaNotEnabled refuses regenerating codes or disabling for an identity with no factor.
+	ErrMfaNotEnabled error = &MfaError{CodeMfaNotEnrolled,
+		"two-factor authentication is not set up for this account"}
 	// ErrMfaAlreadyEnrolled refuses beginning an enrolment while a factor is active.
 	ErrMfaAlreadyEnrolled error = &MfaError{CodeMfaAlreadyEnrolled,
 		"two-factor authentication is already set up; turn it off first to set it up again"}
@@ -430,10 +436,17 @@ func (m *Manager) VerifyMfa(ctx context.Context, challenge, code, source string)
 	if out.method == "recovery" {
 		amr = auth.AmrPasswordRecovery()
 		label = mfaLoginLabelRecovery
+	}
+	// The rows are written only once the sign-in has happened: a mint that failed is not a login.
+	ia, err := m.completeSignIn(ctx, out.id, amr)
+	if err != nil {
+		return nil, err
+	}
+	if out.method == "recovery" {
 		m.recordAuthLabeled(ctx, rdb.AuditOpMfaRecoveryCodeUsed, out.id.Email, "", "")
 	}
 	m.recordAuthLabeled(ctx, rdb.AuditOpLogin, out.id.Email, "", label)
-	return m.completeSignIn(ctx, out.id, amr)
+	return ia, nil
 }
 
 // verifyChallenge is VerifyMfa's body, run inside a budgeted one-time check. It returns the
@@ -455,6 +468,13 @@ func (m *Manager) verifyChallenge(ctx context.Context, ot credential.OneTime, ch
 	}
 	var ch mfaChallenge
 	if json.Unmarshal(entry.Value(), &ch) != nil {
+		m.dropChallenge(key)
+		return fail("expired", ErrMfaChallengeExpired)
+	}
+	// 🔴 THE LIFETIME IS READ FROM THE ENTRY, not left to the bucket: every attempt rewrites the
+	// entry, and a rewrite restarts the bucket's own expiry, so five attempts would stretch five
+	// minutes to twenty-five. The issue time never moves.
+	if m.clock().Sub(ch.Issued) > MfaChallengeTTL {
 		m.dropChallenge(key)
 		return fail("expired", ErrMfaChallengeExpired)
 	}

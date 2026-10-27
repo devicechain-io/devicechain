@@ -165,8 +165,9 @@ func (e *mfaEnv) enroll(t *testing.T, email, password string) (seed []byte, reco
 	require.NoError(t, err)
 	seed, err = base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(enr.Secret)
 	require.NoError(t, err)
-	recovery, err = e.m.ConfirmTotpEnrollment(ctx, ia.IdentityToken, password, credential.GenerateTOTP(seed, time.Now()))
+	res, err := e.m.ConfirmTotpEnrollment(ctx, ia.IdentityToken, password, credential.GenerateTOTP(seed, time.Now()))
 	require.NoError(t, err)
+	recovery = res.RecoveryCodes
 	require.Len(t, recovery, MfaRecoveryCodeCount)
 	return seed, recovery
 }
@@ -507,8 +508,8 @@ func TestAChallengeOutlivesNeitherItsFactorNorItsIdentity(t *testing.T) {
 // The set of data-plane codes is closed. A test pins it so a new code is a decision.
 func TestTheMfaErrorCodeSetIsClosed(t *testing.T) {
 	require.Equal(t, []string{"MFA_CHALLENGE", "MFA_REQUIRED", "MFA_ENROLLMENT_REQUIRED",
-		"MFA_CHALLENGE_EXPIRED", "MFA_ALREADY_ENROLLED"}, MfaCodes())
-	for _, err := range []error{ErrMfaRequired, ErrMfaEnrollmentRequired, ErrMfaChallengeExpired, ErrMfaAlreadyEnrolled} {
+		"MFA_CHALLENGE_EXPIRED", "MFA_ALREADY_ENROLLED", "MFA_NOT_ENROLLED"}, MfaCodes())
+	for _, err := range []error{ErrMfaRequired, ErrMfaEnrollmentRequired, ErrMfaChallengeExpired, ErrMfaAlreadyEnrolled, ErrMfaNotEnabled} {
 		var coded *MfaError
 		require.True(t, errors.As(err, &coded))
 		require.Contains(t, MfaCodes(), coded.Code())
@@ -540,5 +541,35 @@ func TestCredentialPoliciesDeclareTheOneTimeKind(t *testing.T) {
 	c, err := credential.NewChecker(credentialtest.NewStore(), CredentialPolicies, credential.WithServiceAccountSecretKey(saKey))
 	require.NoError(t, err)
 	err = c.CheckOneTime(context.Background(), credential.KindTotp, func(context.Context, credential.OneTime) error { return nil })
+	require.NoError(t, err)
+}
+
+// The challenge's five minutes are counted from when it was ISSUED. An attempt rewrites the entry,
+// which restarts the bucket's own expiry, so without reading the issue time a challenge would live
+// five minutes past its last attempt. The twin: with no attempts it expires on the same clock.
+func TestAnAttemptDoesNotExtendTheChallenge(t *testing.T) {
+	e := newMfaEnv(t)
+	e.createMember(t, "pat@example.com", "pw-1")
+	_, recovery := e.enroll(t, "pat@example.com", "pw-1")
+	ctx := context.Background()
+	now := time.Now()
+	e.m.now = func() time.Time { return now }
+
+	ch := e.challenge(t, "pat@example.com", "pw-1")
+	idle := e.challenge(t, "pat@example.com", "pw-1")
+	now = now.Add(4 * time.Minute)
+	_, err := e.m.VerifyMfa(ctx, ch.Challenge, "ABCD-EFGH-JKMN-PQRS", "203.0.113.5") // rewrites the entry
+	require.ErrorIs(t, err, ErrMfaInvalidCode)
+
+	now = now.Add(2 * time.Minute) // six minutes after issue, two after the last attempt
+	_, err = e.m.VerifyMfa(ctx, ch.Challenge, recovery[0], "203.0.113.5")
+	require.True(t, isCode(err, CodeMfaChallengeExpired), "an attempt extended the challenge: %v", err)
+	_, err = e.m.VerifyMfa(ctx, idle.Challenge, recovery[0], "203.0.113.5")
+	require.True(t, isCode(err, CodeMfaChallengeExpired), "the control: an untouched challenge expires too: %v", err)
+
+	// And inside the window the same code signs in.
+	fresh := e.challenge(t, "pat@example.com", "pw-1")
+	now = now.Add(4 * time.Minute)
+	_, err = e.m.VerifyMfa(ctx, fresh.Challenge, recovery[0], "203.0.113.5")
 	require.NoError(t, err)
 }

@@ -109,6 +109,22 @@ type RecoveryCodes {
     codes: [String!]!
 }
 
+"""
+What confirmTotpEnrollment returns: the recovery codes, shown once, and the caller's replacement
+sign-in.
+"""
+type TotpEnrollmentResult {
+    """The ten recovery codes, shown once. Each is stored only as a digest and cannot be shown again."""
+    codes: [String!]!
+    """
+    The sign-in to continue with. Turning the second factor on ends every session the account
+    had, the one that enrolled included (so a session started by someone who had only the
+    password does not outlast it), and this is a fresh sign-in whose tokens record a password
+    and an authenticator code. Same shape as login's answer.
+    """
+    auth: IdentityAuth!
+}
+
 """An identity's own view of its second factor."""
 type MfaStatus {
     """True when an authenticator is enrolled and confirmed, so a password sign-in asks for a code."""
@@ -1169,9 +1185,11 @@ type Mutation {
     ): TotpEnrollment!
     """
     Finishes setting up the authenticator: proves it holds the secret by presenting its current
-    code, turns the second factor on, and returns ten recovery codes, once. The session that
-    enrolled keeps the `amr` it signed in with; the factor applies from the next sign-in. The
-    password is re-checked. Five wrong codes cancel the pending enrolment.
+    code, turns the second factor on, and returns ten recovery codes, once. Turning it on ends
+    every session the account had, including the one that enrolled (the identity token passed
+    here stops working); the answer carries a fresh sign-in, with `amr` recording the code
+    just presented, so the caller carries on without signing in again. The password is
+    re-checked. Five wrong codes cancel the pending enrolment.
     """
     confirmTotpEnrollment(
         """The identity token from login or verifyMfa."""
@@ -1180,11 +1198,12 @@ type Mutation {
         password: String!
         """The current six-digit code from the authenticator."""
         code: String!
-    ): RecoveryCodes!
+    ): TotpEnrollmentResult!
     """
     Replaces the account's recovery codes with a new set of ten and returns them once. Needs
     the password AND a code (an authenticator code or an unused recovery code), so a stolen
-    identity token is not enough.
+    identity token is not enough. Fails with MFA_NOT_ENROLLED if two-factor authentication is
+    not set up.
     """
     regenerateRecoveryCodes(
         """The identity token from login or verifyMfa."""
@@ -1198,7 +1217,8 @@ type Mutation {
     Turns the second factor off: removes the authenticator, the recovery codes and the stored
     secret, and ends every session the account has (including this one), so the person signs
     in again with the password alone. Needs the password AND a code (an authenticator code or
-    a recovery code). Returns true.
+    a recovery code). Returns true. Fails with MFA_NOT_ENROLLED if two-factor authentication is
+    not set up.
     """
     disableTotp(
         """The identity token from login or verifyMfa."""

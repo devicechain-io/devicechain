@@ -447,6 +447,26 @@ var ErrMfaEnrollmentVoid = errors.New("too many wrong confirmation codes; the pe
 // replace any codes the identity held.
 func (s *Store) ConfirmMfaEnrollment(ctx context.Context, store secrets.SecretStore, identityID uint,
 	verify func(seed []byte) (step int64, ok bool, err error), recoveryDigests []string, now time.Time) error {
+	return s.confirmMfaEnrollment(ctx, store, identityID, verify, recoveryDigests, now, "")
+}
+
+// ConfirmMfaEnrollmentRotating is ConfirmMfaEnrollment that also rotates the identity's session
+// epoch IN THE SAME TRANSACTION as the activation, so every session started before the factor
+// existed ends with it: a person who enrols because their password leaked must not leave the
+// thief's session standing. It sets id.SessionEpoch to the new epoch on success.
+func (s *Store) ConfirmMfaEnrollmentRotating(ctx context.Context, store secrets.SecretStore, id *Identity,
+	verify func(seed []byte) (step int64, ok bool, err error), recoveryDigests []string, now time.Time) error {
+	epoch := NewSessionEpoch()
+	if err := s.confirmMfaEnrollment(ctx, store, id.ID, verify, recoveryDigests, now, epoch); err != nil {
+		return err
+	}
+	id.SessionEpoch = epoch
+	return nil
+}
+
+func (s *Store) confirmMfaEnrollment(ctx context.Context, store secrets.SecretStore, identityID uint,
+	verify func(seed []byte) (step int64, ok bool, err error), recoveryDigests []string, now time.Time,
+	rotateEpoch string) error {
 	if store == nil || verify == nil {
 		return errors.New("confirming an enrolment needs the secret store and a verifier")
 	}
@@ -499,7 +519,13 @@ func (s *Store) ConfirmMfaEnrollment(ctx context.Context, store secrets.SecretSt
 		}).Error; err != nil {
 			return err
 		}
-		return replaceRecoveryCodes(tx, identityID, recoveryDigests)
+		if err := replaceRecoveryCodes(tx, identityID, recoveryDigests); err != nil {
+			return err
+		}
+		if rotateEpoch != "" {
+			return tx.Model(&Identity{}).Where("id = ?", identityID).Update("session_epoch", rotateEpoch).Error
+		}
+		return nil
 	})
 	if err != nil {
 		return err

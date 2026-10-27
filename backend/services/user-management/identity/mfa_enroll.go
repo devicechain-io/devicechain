@@ -165,7 +165,7 @@ func (m *Manager) BeginTotpEnrollment(ctx context.Context, identityToken, passwo
 // ConfirmTotpEnrollment activates the pending factor once the person proves their authenticator
 // holds the seed, and returns the recovery codes ONCE: they are stored as digests and cannot be
 // shown again. The session that enrolled is not upgraded -- its amr stays what it was.
-func (m *Manager) ConfirmTotpEnrollment(ctx context.Context, identityToken, password, code string) ([]string, error) {
+func (m *Manager) ConfirmTotpEnrollment(ctx context.Context, identityToken, password, code string) (*TotpConfirmation, error) {
 	id, err := m.mfaIdentity(ctx, identityToken)
 	if err != nil {
 		return nil, err
@@ -182,7 +182,7 @@ func (m *Manager) ConfirmTotpEnrollment(ctx context.Context, identityToken, pass
 	}
 	var confirmErr error
 	err = m.reauthenticate(ctx, id, password, func(ctx context.Context, ot credential.OneTime) error {
-		confirmErr = m.iam.ConfirmMfaEnrollment(ctx, m.secrets, id.ID, func(seed []byte) (int64, bool, error) {
+		confirmErr = m.iam.ConfirmMfaEnrollmentRotating(ctx, m.secrets, id, func(seed []byte) (int64, bool, error) {
 			step, ok := ot.VerifyTOTP(seed, code, m.clock(), MfaTOTPSkew)
 			return step, ok, nil
 		}, digests, m.clock())
@@ -206,7 +206,23 @@ func (m *Manager) ConfirmTotpEnrollment(ctx context.Context, identityToken, pass
 	}
 	m.recordAuthLabeled(ctx, rdb.AuditOpMfaEnrolled, id.Email, "", "")
 	m.countMfaEnrollment("confirmed")
-	return codes, nil
+	// The epoch rotated with the activation, so every session started before it is over -- the
+	// person who enrols because their password leaked does not leave the thief's session standing.
+	// The caller just proved a code, so they get a fresh sign-in that says so, not a forced re-login.
+	m.endSessionsBestEffort(id.Email)
+	m.recordAuthLabeled(ctx, rdb.AuditOpLogin, id.Email, "", mfaLoginLabelOTP)
+	ia, err := m.completeSignIn(ctx, id, auth.AmrPasswordOTP())
+	if err != nil {
+		return nil, err
+	}
+	return &TotpConfirmation{RecoveryCodes: codes, Auth: ia}, nil
+}
+
+// TotpConfirmation is what confirming an enrolment returns: the recovery codes, once, and the
+// caller's REPLACEMENT sign-in (the one they enrolled in has ended).
+type TotpConfirmation struct {
+	RecoveryCodes []string
+	Auth          *IdentityAuth
 }
 
 // RegenerateRecoveryCodes replaces the identity's recovery codes with a fresh set and returns
@@ -225,7 +241,7 @@ func (m *Manager) RegenerateRecoveryCodes(ctx context.Context, identityToken, pa
 	}
 	if err := m.iam.ReplaceMfaRecoveryCodes(ctx, id.ID, digests); err != nil {
 		if errors.Is(err, iam.ErrMfaFactorNotFound) {
-			return nil, ErrMfaChallengeExpired
+			return nil, ErrMfaNotEnabled
 		}
 		return nil, err
 	}
@@ -246,7 +262,7 @@ func (m *Manager) DisableTotp(ctx context.Context, identityToken, password, code
 	}
 	if err := m.iam.DisableMfa(ctx, m.secrets, id); err != nil {
 		if errors.Is(err, iam.ErrMfaFactorNotFound) {
-			return ErrMfaChallengeExpired
+			return ErrMfaNotEnabled
 		}
 		return err
 	}
@@ -271,7 +287,7 @@ func (m *Manager) reauthenticateWithCode(ctx context.Context, id *iam.Identity, 
 			if perr := m.checkPassword(ctx, id, password); perr != nil {
 				return perr
 			}
-			return ErrMfaInvalidCode
+			return ErrMfaNotEnabled
 		}
 		return err
 	}

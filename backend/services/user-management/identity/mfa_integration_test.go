@@ -132,9 +132,9 @@ func (e *mfaPgEnv) enroll(t *testing.T, email, password string) ([]byte, []strin
 	require.NoError(t, err)
 	seed, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(enr.Secret)
 	require.NoError(t, err)
-	recovery, err := e.m.ConfirmTotpEnrollment(ctx, ia.IdentityToken, password, credential.GenerateTOTP(seed, time.Now()))
+	res, err := e.m.ConfirmTotpEnrollment(ctx, ia.IdentityToken, password, credential.GenerateTOTP(seed, time.Now()))
 	require.NoError(t, err)
-	return seed, recovery
+	return seed, res.RecoveryCodes
 }
 
 func (e *mfaPgEnv) challenge(t *testing.T, email, password string) *MfaChallengeError {
