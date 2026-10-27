@@ -46,11 +46,15 @@ const (
 	// SkipOversize: the metric arrived in a message carrying more than MaxMetricsPerMessage
 	// metrics, so none of that message's metrics were read.
 	SkipOversize = "oversize"
+	// SkipUntyped: the metric carries an integer whose signedness cannot be known - it names no
+	// datatype (a conformant DATA message omits it) and no BIRTH declared one for it - so reading it
+	// would be a guess, and a wrong guess turns a negative reading into a number near 4.29e9.
+	SkipUntyped = "untyped"
 )
 
 // SkipReasons is every reason a metric is counted as skipped, for pre-creating the counter's
 // series at zero.
-var SkipReasons = []string{SkipNonNumeric, SkipNull, SkipUnnamed, SkipOversize}
+var SkipReasons = []string{SkipNonNumeric, SkipNull, SkipUnnamed, SkipOversize, SkipUntyped}
 
 // MaxMetricsPerMessage is the most metrics one Sparkplug message may carry and still have its
 // readings taken: 64 events' worth at the platform's per-event bound. A message over it has
@@ -79,10 +83,10 @@ const MaxMetricsPerMessage = 64 * eventlimit.MaxReadingsPerEvent
 // Skips counts, by reason, the metrics of one accepted message that produced no Sample.
 // Reserved control metrics (bdSeq, Node Control/*, Device Control/*) are not counted: they
 // are protocol, not telemetry that was lost.
-type Skips struct{ NonNumeric, Null, Unnamed, Oversize int }
+type Skips struct{ NonNumeric, Null, Unnamed, Oversize, Untyped int }
 
 // Total is every skipped metric.
-func (k Skips) Total() int { return k.NonNumeric + k.Null + k.Unnamed + k.Oversize }
+func (k Skips) Total() int { return k.NonNumeric + k.Null + k.Unnamed + k.Oversize + k.Untyped }
 
 // add folds o into k.
 func (k *Skips) add(o Skips) {
@@ -90,6 +94,7 @@ func (k *Skips) add(o Skips) {
 	k.Null += o.Null
 	k.Unnamed += o.Unnamed
 	k.Oversize += o.Oversize
+	k.Untyped += o.Untyped
 }
 
 // samplesFrom extracts the numeric measurements from an ACCEPTED Sparkplug payload:
@@ -101,7 +106,7 @@ func (k *Skips) add(o Skips) {
 // (DATA) to the name its birth declared. Every metric that yields no Sample is accounted
 // in the returned Skips rather than vanishing. A message carrying more than
 // MaxMetricsPerMessage metrics yields no Sample at all; see MaxMetricsPerMessage.
-func samplesFrom(p *sppb.Payload, aliases map[uint64]string, now func() time.Time) ([]Sample, Skips) {
+func samplesFrom(p *sppb.Payload, aliases map[uint64]string, types birthTypes, device string, now func() time.Time) ([]Sample, Skips) {
 	if n := len(p.GetMetrics()); n > MaxMetricsPerMessage {
 		return nil, Skips{Oversize: n}
 	}
@@ -121,7 +126,11 @@ func samplesFrom(p *sppb.Payload, aliases map[uint64]string, now func() time.Tim
 		if isReservedMetric(name) {
 			continue
 		}
-		v, ok := numericValue(m)
+		v, ok, untyped := numericValue(m, types.of(device, name))
+		if untyped {
+			skips.Untyped++
+			continue
+		}
 		if !ok {
 			skips.NonNumeric++ // boolean/string/bytes/dataset/template — not a measurement
 			continue
@@ -155,24 +164,78 @@ func isReservedMetric(name string) bool {
 		strings.HasPrefix(name, "Device Control/")
 }
 
-// numericValue reads a metric's value as a float64 when it is a numeric Sparkplug
-// type, reporting false for every non-numeric type (boolean/string/bytes/dataset/
-// template/extension/absent). It keys on WHICH value arm is actually set — not on
-// the declared datatype — because encoders disagree on where a UInt32 rides (Tahu
-// Java uses long_value, others int_value); the datatype is consulted only to decide
-// signedness of an integer carrier.
-func numericValue(m *sppb.Payload_Metric) (float64, bool) {
+// birthTypes is the datatype each metric declared at its BIRTH, by (device, name); a metric sent
+// by alias is resolved to its name first, through the session's alias table. A conformant DATA message omits the datatype
+// ([tck-id-payloads-metric-datatype-not-req]: it SHOULD NOT be included), so the signedness of
+// an integer carried in one is known only from here.
+type birthTypes struct {
+	byName map[typeKey]uint32
+}
+
+type typeKey struct{ device, name string }
+
+// of resolves the datatype a BIRTH declared for the metric named name under device. Zero is
+// "none declared".
+func (t birthTypes) of(device, name string) uint32 {
+	return t.byName[typeKey{device, name}]
+}
+
+// record folds a BIRTH's declared datatypes in. Metrics that declare none (zero is Unknown) are
+// not recorded: they would only mask a later declaration with a guess.
+func (t *birthTypes) record(device string, p *sppb.Payload) {
+	if t.byName == nil {
+		t.byName = map[typeKey]uint32{}
+	}
+	for _, m := range p.GetMetrics() {
+		dt := m.GetDatatype()
+		if dt == 0 {
+			continue
+		}
+		if m.GetName() != "" {
+			t.byName[typeKey{device, m.GetName()}] = dt
+		}
+	}
+}
+
+// dropDevice forgets a dead device's by-name declarations.
+func (t *birthTypes) dropDevice(device string) {
+	for k := range t.byName {
+		if k.device == device {
+			delete(t.byName, k)
+		}
+	}
+}
+
+// numericValue reads a metric's value as a float64 when it is a numeric Sparkplug type,
+// reporting false for every non-numeric type (boolean/string/bytes/dataset/template/extension/
+// absent). It keys on WHICH value arm is actually set - not on the declared datatype - because
+// encoders disagree on where a UInt32 rides (Tahu Java uses long_value, others int_value).
+//
+// An integer arm needs its datatype for signedness: the metric's own if it names one, else
+// declared, the one its BIRTH gave it. With neither, untyped is true and the value is NOT read:
+// treating a possibly-signed carrier as magnitude turns every negative reading into ~4.29e9.
+func numericValue(m *sppb.Payload_Metric, declared uint32) (v float64, ok bool, untyped bool) {
+	dt := m.GetDatatype()
+	if dt == 0 {
+		dt = declared
+	}
 	switch m.GetValue().(type) {
 	case *sppb.Payload_Metric_IntValue:
-		return intValueAsFloat(m.GetIntValue(), m.GetDatatype()), true
+		if dt == 0 {
+			return 0, false, true
+		}
+		return intValueAsFloat(m.GetIntValue(), dt), true, false
 	case *sppb.Payload_Metric_LongValue:
-		return longValueAsFloat(m.GetLongValue(), m.GetDatatype()), true
+		if dt == 0 {
+			return 0, false, true
+		}
+		return longValueAsFloat(m.GetLongValue(), dt), true, false
 	case *sppb.Payload_Metric_FloatValue:
-		return float64(m.GetFloatValue()), true
+		return float64(m.GetFloatValue()), true, false
 	case *sppb.Payload_Metric_DoubleValue:
-		return m.GetDoubleValue(), true
+		return m.GetDoubleValue(), true, false
 	default:
-		return 0, false
+		return 0, false, false
 	}
 }
 

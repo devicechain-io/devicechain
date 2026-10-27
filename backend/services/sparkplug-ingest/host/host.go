@@ -1101,7 +1101,7 @@ func (c *Client) countSkipped(k Skips) {
 	if c.metrics.SamplesSkipped == nil || k.Total() == 0 {
 		return
 	}
-	for reason, n := range map[string]int{SkipNonNumeric: k.NonNumeric, SkipNull: k.Null, SkipUnnamed: k.Unnamed, SkipOversize: k.Oversize} {
+	for reason, n := range map[string]int{SkipNonNumeric: k.NonNumeric, SkipNull: k.Null, SkipUnnamed: k.Unnamed, SkipOversize: k.Oversize, SkipUntyped: k.Untyped} {
 		if n > 0 {
 			c.metrics.SamplesSkipped.WithLabelValues(reason).Add(float64(n))
 		}
