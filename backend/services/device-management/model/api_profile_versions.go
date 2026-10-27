@@ -450,6 +450,15 @@ func (api *Api) RollbackDeviceProfile(ctx context.Context, token string, version
 		return nil, err
 	}
 
+	// The calculated-metrics tier ceiling binds a rollback as it binds a publish (ADR-082): a
+	// rollback is the other writer of active_version, so without this a tenant whose tier was
+	// lowered could reactivate an older version carrying more calculated metrics than the
+	// tier allows. A formula-free target pays one parse and never reads the ceiling, so a
+	// revert to it does not depend on user-management. The refusal wording is publish's.
+	if err := api.checkCalculatedMetrics(ctx, target.Snapshot); err != nil {
+		return nil, err
+	}
+
 	var evictions []membershipEviction
 	var changed bool
 	var activeSince time.Time
