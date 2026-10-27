@@ -241,7 +241,8 @@ func TestAnIntegrationUplinkIsPublishedAsAnOrdinaryMeasurementMarkedAsTheIntegra
 		"the resolver re-checks that the device still holds THIS alias; the identifier must travel with the event")
 	require.NotNil(t, e.AltId)
 	require.Equal(t, "cs:3ac7e3c4-4401-4b8d-9386-a5c902f9202d", *e.AltId)
-	require.Equal(t, "acme:cs:3ac7e3c4-4401-4b8d-9386-a5c902f9202d", p.dedupID, "the broker dedups on tenant:AltId")
+	require.Equal(t, integrationDedupID("acme", "dev-0101010101010101", "cs:3ac7e3c4-4401-4b8d-9386-a5c902f9202d"), p.dedupID,
+		"the broker dedups on tenant, resolved device and AltId")
 	require.Equal(t, time.Date(2022, 7, 18, 9, 34, 15, 775023242, time.UTC), e.OccurredTime)
 	require.Equal(t, h.now, e.ProcessedTime)
 
