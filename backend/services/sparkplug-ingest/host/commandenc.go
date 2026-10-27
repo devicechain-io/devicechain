@@ -10,6 +10,7 @@ import (
 	"math"
 	"math/big"
 	"regexp"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -233,11 +234,10 @@ func exactInteger(datatype uint32, value any, allowString bool) (*big.Int, error
 			n, _ = new(big.Int).SetString(s, 10)
 			break
 		}
-		f, ferr := v.Float64()
-		if ferr != nil {
-			return nil, refuse("%q is not a number", s)
-		}
-		if n, err = integralFloat(datatype, f); err != nil {
+		// A decimal or exponent form is judged EXACTLY, never through a float64: 1.0000000000000001
+		// rounds to 1 and 1e-400 underflows to 0, and either would be sent as an integer value the
+		// operator did not ask for.
+		if n, err = integralDecimal(s); err != nil {
 			return nil, err
 		}
 	case string:
@@ -256,6 +256,50 @@ func exactInteger(datatype uint32, value any, allowString bool) (*big.Int, error
 		return nil, refuse("%s is outside [%s, %s]", n, r.min, r.max)
 	}
 	return n, nil
+}
+
+// maxDecimalLen and maxDecimalExp bound the decimal text integralDecimal will expand: an exponent
+// is a request to build a number of that many digits, and the value here is a command argument, not
+// a bulk transfer. Every integer type is far below 10^40, so a larger exponent can only be refused.
+const (
+	maxDecimalLen = 128
+	maxDecimalExp = 1000
+)
+
+var jsonNumberRE = regexp.MustCompile(`^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?$`)
+
+// integralDecimal reads a JSON decimal or exponent number exactly and returns it only when it is a
+// whole number (7.0 and 1e3 are; 1.0000000000000001 and 1e-400 are not).
+func integralDecimal(s string) (*big.Int, error) {
+	if len(s) > maxDecimalLen || !jsonNumberRE.MatchString(s) {
+		return nil, refuse("%q is not a number this command accepts", clip(s))
+	}
+	if i := strings.IndexAny(s, "eE"); i >= 0 {
+		exp := strings.TrimPrefix(s[i+1:], "+")
+		neg := strings.HasPrefix(exp, "-")
+		digits := strings.TrimLeft(strings.TrimPrefix(exp, "-"), "0")
+		if len(digits) > 4 || (len(digits) > 0 && func() bool { e, _ := strconv.Atoi(digits); return e > maxDecimalExp }()) {
+			if neg {
+				return nil, refuse("%q is not integral", clip(s))
+			}
+			return nil, refuse("%q is outside any integer range", clip(s))
+		}
+	}
+	r, ok := new(big.Rat).SetString(s)
+	if !ok {
+		return nil, refuse("%q is not a number", clip(s))
+	}
+	if !r.IsInt() {
+		return nil, refuse("%s is not integral", clip(s))
+	}
+	return new(big.Int).Set(r.Num()), nil
+}
+
+func clip(s string) string {
+	if len(s) > 40 {
+		return s[:40] + "..."
+	}
+	return s
 }
 
 // integralFloat converts a float to an integer only when that loses nothing.

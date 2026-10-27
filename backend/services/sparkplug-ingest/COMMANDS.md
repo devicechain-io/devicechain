@@ -74,7 +74,8 @@ publish ACLs (anything that can publish to the node's topic can make the metric 
   of the metric at ANY OTHER value marks the entry contrary. Floats compare exactly.
 - **Rebirth** is confirmed by any NBIRTH of the node received at or after the publish; **reboot**
   by an NBIRTH whose bdSeq differs from the one the node had at the publish (a same-bdSeq NBIRTH is
-  the node answering a rebirth). A command addressed to a device resolves its rebirth to the node.
+  the node answering a rebirth). Both sequences must be known: a birth, or a baseline, without a bdSeq
+  proves nothing, so the reboot stays awaiting and ends UNANSWERED at its window. A command addressed to a device resolves its rebirth to the node.
 - **UNCHANGED.** At the publish the Client reads the table's last-reported value; if it already
   was the requested value the entry is marked. That read comes BEFORE the entry joins the mirror,
   so it is not trusted at the end: the window's end re-reads the value (`Source.LastReported`, off

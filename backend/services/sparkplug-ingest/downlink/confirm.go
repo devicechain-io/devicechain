@@ -266,22 +266,15 @@ func (e *entry) observe(r host.Report, skew time.Duration) (*outcome, bool) {
 		if r.Kind != host.ReportNodeBirth || r.ReceivedAt.Before(e.a.PublishedAt) {
 			return nil, false
 		}
-		// The same bdSeq is the node re-announcing the session it was in (a rebirth), not coming
-		// back from a restart.
-		if e.a.HasBdSeq && r.HasBdSeq && r.BdSeq == e.a.BdSeq {
+		// A reboot is proved by a DIFFERENT birth sequence number, and only by one: the same bdSeq
+		// is the node re-announcing the session it was in (a rebirth), and a birth, or a baseline,
+		// without a bdSeq proves nothing either way. Without two comparable values the command stays
+		// awaiting and ends UNANSWERED at its window, rather than reporting an unproven reboot.
+		if !e.a.HasBdSeq || !r.HasBdSeq || r.BdSeq == e.a.BdSeq {
 			return nil, false
 		}
-		var after *uint64
-		if r.HasBdSeq {
-			b := r.BdSeq
-			after = &b
-		}
-		var before *uint64
-		if e.a.HasBdSeq {
-			b := e.a.BdSeq
-			before = &b
-		}
-		return e.confirmed(r.Via, &r.ReceivedAt, before, after), true
+		after, before := r.BdSeq, e.a.BdSeq
+		return e.confirmed(r.Via, &r.ReceivedAt, &before, &after), true
 	}
 	return nil, false
 }
