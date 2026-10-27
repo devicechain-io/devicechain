@@ -58,6 +58,7 @@ const MEMBERS = graphql(`
         }
         managedByIdentityProvider
         invitationPending
+        mfaEnabled
       }
       pagination {
         pageStart

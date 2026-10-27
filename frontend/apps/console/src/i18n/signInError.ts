@@ -91,6 +91,14 @@ export function signInErrorKey(err: unknown, rejectedKey: string): string {
     // the code like the two above, never on the message text.
     case 'SSO_REQUIRED':
       return 'login:ssoRequired';
+    // The tenant needs a second factor and this sign-in had none (the account has one, so
+    // signing in again and entering the code is the remedy), or the account has none yet
+    // (MFA_ENROLLMENT_REQUIRED; the sign-in screen routes that to setting one up before it
+    // gets here, so this is the fallback for a caller that does not).
+    case 'MFA_REQUIRED':
+      return 'login:mfaRequired';
+    case 'MFA_ENROLLMENT_REQUIRED':
+      return 'login:mfaEnrollmentRequired';
   }
   return serverRejectedRequest(err) ? rejectedKey : 'login:serverUnreachable';
 }

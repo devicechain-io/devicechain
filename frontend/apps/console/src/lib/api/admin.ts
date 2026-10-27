@@ -84,6 +84,8 @@ const IDENTITIES = graphql(`
       lastName
       enabled
       systemRoles
+      # Whether the identity has two-factor authentication on (a password sign-in asks for a code).
+      mfaEnabled
       memberships {
         tenant
         enabled
@@ -116,6 +118,10 @@ const TENANTS = graphql(`
       purgeEpoch
       # Whether the tenant's people must sign in through single sign-on.
       ssoEnforced
+      # The tenant's own second-factor requirement, and whether its tier requires one (which
+      # no tenant setting can turn off).
+      mfaRequired
+      mfaRequiredByTier
       tier {
         token
         name
@@ -467,6 +473,7 @@ const CREATE_IDENTITY = graphql(`
       lastName
       enabled
       systemRoles
+      mfaEnabled
       memberships {
         tenant
         enabled
@@ -492,6 +499,7 @@ const SET_IDENTITY_ENABLED = graphql(`
       lastName
       enabled
       systemRoles
+      mfaEnabled
       memberships {
         tenant
         enabled
@@ -517,6 +525,7 @@ const SET_SYSTEM_ROLES = graphql(`
       lastName
       enabled
       systemRoles
+      mfaEnabled
       memberships {
         tenant
         enabled
@@ -869,6 +878,57 @@ export async function setTenantSsoEnforced(
     { identity: true },
   );
   return data.setTenantSsoEnforced;
+}
+
+// Requires (or stops requiring) a second factor of a tenant's password sign-ins. It cannot
+// turn off a requirement the tenant's tier sets: the answer says whether the tier does.
+const SET_TENANT_MFA_REQUIRED = graphql(`
+  mutation SetTenantMfaRequired($tenant: String!, $required: Boolean!) {
+    setTenantMfaRequired(tenant: $tenant, required: $required) {
+      token
+      mfaRequired
+      mfaRequiredByTier
+    }
+  }
+`);
+
+export async function setTenantMfaRequired(
+  tenant: string,
+  required: boolean,
+): Promise<{ token: string; mfaRequired: boolean; mfaRequiredByTier: boolean }> {
+  const data = await gql(
+    'user-management/admin',
+    SET_TENANT_MFA_REQUIRED,
+    { tenant, required },
+    { identity: true },
+  );
+  return data.setTenantMfaRequired;
+}
+
+// Removes an identity's second factor (a lost phone) and ends its sessions. While the factor
+// has failed attempts on record the server wants a new password set in the same step and
+// answers MFA_RESET_NEEDS_PASSWORD without changing anything.
+const RESET_IDENTITY_MFA = graphql(`
+  mutation ResetIdentityMfa($email: String!, $newPassword: String) {
+    resetIdentityMfa(email: $email, newPassword: $newPassword) {
+      id
+      email
+      mfaEnabled
+    }
+  }
+`);
+
+export async function resetIdentityMfa(
+  email: string,
+  newPassword?: string,
+): Promise<{ id: string; email: string; mfaEnabled: boolean }> {
+  const data = await gql(
+    'user-management/admin',
+    RESET_IDENTITY_MFA,
+    { email, newPassword: newPassword ?? null },
+    { identity: true },
+  );
+  return data.resetIdentityMfa;
 }
 
 const DELETE_TENANT = graphql(`

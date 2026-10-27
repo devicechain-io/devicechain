@@ -138,5 +138,16 @@
   "fencePositionCeilingLabel": "Points per geofence",
   "calculatedMetricsPerProfileLabel": "Calculated metrics per profile",
   "integrationsPerTenantLabel": "Integrations per tenant",
-  "fenceCapMaximumHint": "Each of these three has a platform maximum as well; a larger number is refused rather than quietly reduced."
+  "fenceCapMaximumHint": "Each of these three has a platform maximum as well; a larger number is refused rather than quietly reduced.",
+  "mfaPanelTitle": "Two-factor authentication",
+  "mfaPanelDescription": "Require a code from an authenticator app when the tenant's people sign in with a password. Superusers are exempt, and single sign-on follows its connection's own requirements.",
+  "mfaRequire": "Require two-factor",
+  "mfaStopRequiring": "Stop requiring",
+  "mfaRequiredBadge": "Required",
+  "mfaNotRequiredBadge": "Not required",
+  "mfaByTierNote": "The tenant's tier requires two-factor authentication, so it cannot be turned off here.",
+  "mfaEnableConfirmTitle": "Require two-factor for {{token}}",
+  "mfaEnableConfirm": "Members of {{token}} who sign in with a password and no second factor will be asked to set one up before they can enter, and password sessions already inside end at their next refresh.",
+  "mfaEnabledToast": "{{token}} now requires two-factor authentication",
+  "mfaDisabledToast": "{{token}} no longer requires two-factor authentication"
 }

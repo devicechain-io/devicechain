@@ -5,6 +5,8 @@ import { useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { errorCode } from '@devicechain/client';
+import { MfaCodeStep } from '@/components/mfa/MfaCodeStep';
+import { MFA_CODE, mfaChallengeOf, type MfaChallenge } from '@/lib/mfaChallenge';
 import { useAuth } from '@/auth/AuthProvider';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -13,7 +15,7 @@ import { ErrorBanner } from '@/components/ui/error-banner';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { Logo } from '@/components/brand/Logo';
 import { LocaleSwitcher } from '@/components/LocaleSwitcher';
-import { signInErrorKey } from '@/i18n/signInError';
+import { serverErrorCode, signInErrorKey } from '@/i18n/signInError';
 import { startSso } from '@/lib/sso';
 import { codeFromHash, dropInvitation, heldInvitation, holdInvitation, INVITATION_PATH } from '@/lib/invitation';
 import type { IdentityAuth } from '@/lib/api/user-management';
@@ -52,9 +54,22 @@ export default function AcceptInvitationPage() {
   const [ssoRequired, setSsoRequired] = useState(false);
   const [busy, setBusy] = useState(false);
   const [accepted, setAccepted] = useState<IdentityAuth | null>(null);
+  // The challenge the existing account's sign-in was held for: its password was right but it has
+  // two-factor authentication on. Component state only.
+  const [mfa, setMfa] = useState<MfaChallenge | null>(null);
 
   const enter = async (auth: IdentityAuth, tenant: string) => {
-    await selectTenant(auth.identityToken, tenant);
+    try {
+      await selectTenant(auth.identityToken, tenant);
+    } catch (err) {
+      // The tenant requires a second factor and the account has none: the next step is setting
+      // one up with the identity session this page just started, not an error.
+      if (serverErrorCode(err) === MFA_CODE.enrollmentRequired) {
+        navigate('/security', { replace: true, state: { enrollForTenant: tenant } });
+        return;
+      }
+      throw err;
+    }
     navigate('/', { replace: true });
   };
 
@@ -96,6 +111,14 @@ export default function AcceptInvitationPage() {
     try {
       await finish(await op());
     } catch (err) {
+      // The existing account's password was right but it is held for its second factor: ask
+      // for the code, then accept as that account.
+      const challenge = mfaChallengeOf(err);
+      if (challenge) {
+        setMfa(challenge);
+        setBusy(false);
+        return;
+      }
       fail(err);
     }
   };
@@ -152,6 +175,19 @@ export default function AcceptInvitationPage() {
     void logout();
   };
 
+  // The code was accepted, which signed the account in: accept the invitation as it.
+  const handleVerified = async (auth: IdentityAuth) => {
+    setMfa(null);
+    await run(() => acceptInvitation(code!, { identityToken: auth.identityToken }));
+  };
+
+  const restartFromPassword = (message: string | null) => {
+    setMfa(null);
+    setPassword('');
+    setError(message);
+    setBusy(false);
+  };
+
   const wayOptions = [
     { value: 'new' as const, label: t('acceptNewAccount') },
     { value: 'existing' as const, label: t('acceptExistingAccount') },
@@ -168,6 +204,8 @@ export default function AcceptInvitationPage() {
           {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
           {!code ? (
             <p className="text-sm text-muted-foreground">{t('acceptNoCode')}</p>
+          ) : mfa ? (
+            <MfaCodeStep challenge={mfa} onVerified={handleVerified} onRestart={restartFromPassword} />
           ) : accepted ? (
             <>
               <p className="text-sm text-muted-foreground">{t('acceptChooseTenant')}</p>

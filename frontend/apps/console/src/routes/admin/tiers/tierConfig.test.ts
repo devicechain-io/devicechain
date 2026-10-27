@@ -237,3 +237,32 @@ describe('tier scalar maxima match the server', () => {
     expect(max('heldCommandCeiling')).toBe(2 ** 31 - 1);
   });
 });
+
+describe('the mfaRequired tier flag', () => {
+  it('reads true as on, and anything else as off', () => {
+    expect(parseTierConfig(JSON.stringify({ mfaRequired: true })).mfaRequired).toBe('true');
+    expect(parseTierConfig(JSON.stringify({ mfaRequired: false })).mfaRequired).toBeUndefined();
+    expect(parseTierConfig(JSON.stringify({ mfaRequired: 'true' })).mfaRequired).toBeUndefined();
+  });
+
+  it('writes a boolean true beside the numbers, and omits it when off', () => {
+    const on = JSON.parse(buildTierConfigPatch(DIMS, { ...parseTierConfig(GOLD), mfaRequired: 'true' }, GOLD)!);
+    expect(on.mfaRequired).toBe(true);
+    const off = JSON.parse(buildTierConfigPatch(DIMS, { ...parseTierConfig(GOLD), mfaRequired: '' }, GOLD)!);
+    expect(off).not.toHaveProperty('mfaRequired');
+  });
+
+  it('turning it off removes a stored true instead of preserving it as an unknown key', () => {
+    const stored = JSON.stringify({ ingestBurst: 4000, mfaRequired: true });
+    const settings = parseTierConfig(stored);
+    delete settings.mfaRequired;
+    const out = JSON.parse(buildTierConfigPatch(DIMS, settings, stored)!);
+    expect(out).not.toHaveProperty('mfaRequired');
+  });
+
+  it('keeps a stored true when the form is saved untouched', () => {
+    const stored = JSON.stringify({ ingestBurst: 4000, mfaRequired: true });
+    const out = JSON.parse(buildTierConfigPatch(DIMS, parseTierConfig(stored), stored)!);
+    expect(out.mfaRequired).toBe(true);
+  });
+});

@@ -118,6 +118,38 @@ describe('TierForm scalar settings', () => {
     });
   });
 
+  it('shows, toggles and sends the mfaRequired flag as a boolean', async () => {
+    render(<TierForm tier={tier()} onDone={() => {}} aiModelsPanel={<div />} />);
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: /settings/i }));
+    const box = await screen.findByRole('checkbox', { name: 'Require two-factor authentication' });
+    expect(box.getAttribute('aria-checked')).toBe('false');
+    fireEvent.click(box);
+    expect(box.getAttribute('aria-checked')).toBe('true');
+    fireEvent.click(screen.getAllByRole('button', { name: /save/i })[0]);
+    await waitFor(() => expect(updateRequest()).toBeDefined());
+    expect(JSON.parse(updateRequest()!.config as string)).toEqual({
+      ingestReadingsPerSecond: 2000,
+      mfaRequired: true,
+    });
+  });
+
+  it('shows a stored mfaRequired as on and clears it when unchecked', async () => {
+    render(
+      <TierForm
+        tier={tier({ config: '{"ingestReadingsPerSecond":2000,"mfaRequired":true}' })}
+        onDone={() => {}}
+        aiModelsPanel={<div />}
+      />,
+    );
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: /settings/i }));
+    const box = await screen.findByRole('checkbox', { name: 'Require two-factor authentication' });
+    expect(box.getAttribute('aria-checked')).toBe('true');
+    fireEvent.click(box);
+    fireEvent.click(screen.getAllByRole('button', { name: /save/i })[0]);
+    await waitFor(() => expect(updateRequest()).toBeDefined());
+    expect(JSON.parse(updateRequest()!.config as string)).toEqual({ ingestReadingsPerSecond: 2000 });
+  });
+
   it('refuses an out-of-range value without sending anything', async () => {
     render(<TierForm tier={tier()} onDone={() => {}} aiModelsPanel={<div />} />);
     fireEvent.mouseDown(await screen.findByRole('tab', { name: /settings/i }));

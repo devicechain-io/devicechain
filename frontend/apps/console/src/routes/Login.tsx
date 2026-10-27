@@ -11,7 +11,9 @@ import { FormField } from '@/components/ui/form-field';
 import { Logo } from '@/components/brand/Logo';
 import { LocaleSwitcher } from '@/components/LocaleSwitcher';
 import { ErrorBanner } from '@/components/ui/error-banner';
-import { signInErrorKey } from '@/i18n/signInError';
+import { serverErrorCode, signInErrorKey } from '@/i18n/signInError';
+import { MfaCodeStep } from '@/components/mfa/MfaCodeStep';
+import { MFA_CODE, mfaChallengeOf, type MfaChallenge } from '@/lib/mfaChallenge';
 import type { IdentityAuth } from '@/lib/api/user-management';
 import { discardPendingSso, startSso } from '@/lib/sso';
 
@@ -32,10 +34,29 @@ import { discardPendingSso, startSso } from '@/lib/sso';
 // one step behind "Use a password instead" rather than removing it, so an account that has
 // only a password (an operator, say) can still sign in.
 //
+// A password that is right does not always finish the sign-in: an account with two-factor
+// authentication on is HELD, and login fails with the code MFA_CHALLENGE and a challenge handle.
+// The screen then asks for the code (an authenticator's six digits, or a recovery code) and
+// verifyMfa completes the sign-in. The handle lives in this component's state only: never in the
+// address, never in storage. Every failure of the code is the same "invalid code" on purpose --
+// the server does not say whether a code was wrong, replayed or locked, and neither does this.
+//
+// A member whose tenant requires a second factor but who has none yet is refused entry with
+// MFA_ENROLLMENT_REQUIRED; that is not an error to show but a next step, so they are taken to
+// set one up (/security) with the identity session they already hold.
+//
 // This is the reference i18n-converted screen (ADR-066): every user-facing string
 // flows through the `login` catalog (frontend/apps/console/src/i18n/locales/en),
 // each sentence is one key with no fragment concatenation, and cross-screen copy
 // (Back) is drawn from the `common` namespace. Copy the pattern for the next screen.
+// Why the session ended, as the notice above the form.
+const SESSION_END_KEYS = {
+  expired: 'sessionExpired',
+  ssoRequired: 'sessionSsoRequired',
+  mfaRequired: 'sessionMfaRequired',
+  mfaEnrollmentRequired: 'sessionMfaEnrollmentRequired',
+} as const;
+
 export default function LoginPage() {
   const { isAuthenticated, login, selectTenant } = useAuth();
   const { t } = useTranslation('login');
@@ -52,6 +73,8 @@ export default function LoginPage() {
   const [identity, setIdentity] = useState<IdentityAuth | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // The second-factor step: the challenge login held the sign-in for. Component state only.
+  const [mfa, setMfa] = useState<MfaChallenge | null>(null);
   // Read once: true when we landed here because a session expired (not a fresh
   // visit or an explicit sign-out).
   const [expired] = useState(() => consumeSessionExpired());
@@ -68,8 +91,51 @@ export default function LoginPage() {
   const failure = (err: unknown, rejectedKey: string) => setError(t(signInErrorKey(err, rejectedKey)));
 
   const enterTenant = async (auth: IdentityAuth, tenant: string) => {
-    await selectTenant(auth.identityToken, tenant);
+    try {
+      await selectTenant(auth.identityToken, tenant);
+    } catch (err) {
+      // The tenant requires a second factor and the account has none: the next step is
+      // setting one up, with the identity session just started, then coming back in.
+      if (serverErrorCode(err) === MFA_CODE.enrollmentRequired) {
+        navigate('/security', { replace: true, state: { enrollForTenant: tenant } });
+        return;
+      }
+      throw err;
+    }
     navigate('/', { replace: true });
+  };
+
+  // Everything after the identity is established, whether by password or by password plus code.
+  const proceed = async (auth: IdentityAuth) => {
+    if (auth.superuser) {
+      // A superuser's home is the admin console (ADR-033); from there they can
+      // create tenants and switch into one. This is also the only landing for a
+      // superuser on a tenant-less instance.
+      navigate('/admin', { replace: true });
+      return;
+    }
+    if (auth.memberships.length === 0) {
+      // No tenant to enter yet. The admin console is where tenants get created
+      // and memberships assigned (ADR-033 phase 4).
+      setError(t('noTenantAccess'));
+      setSubmitting(false);
+      return;
+    }
+    // A tenant that requires single sign-on is listed (ssoRequired) so it does not just
+    // vanish, but this password sign-in cannot enter it. When none can be entered, say
+    // so here, next to the SSO button, instead of offering choices that would fail.
+    if (auth.memberships.every((m) => m.ssoRequired)) {
+      setError(t('ssoRequired'));
+      setSubmitting(false);
+      return;
+    }
+    if (auth.memberships.length === 1) {
+      await enterTenant(auth, auth.memberships[0].tenant);
+      return;
+    }
+    // Multiple tenants — let the user choose.
+    setIdentity(auth);
+    setSubmitting(false);
   };
 
   const handleCredentials = async (e: FormEvent) => {
@@ -78,38 +144,37 @@ export default function LoginPage() {
     setSubmitting(true);
     try {
       const auth = await login(email.trim(), password);
-      if (auth.superuser) {
-        // A superuser's home is the admin console (ADR-033); from there they can
-        // create tenants and switch into one. This is also the only landing for a
-        // superuser on a tenant-less instance.
-        navigate('/admin', { replace: true });
-        return;
-      }
-      if (auth.memberships.length === 0) {
-        // No tenant to enter yet. The admin console is where tenants get created
-        // and memberships assigned (ADR-033 phase 4).
-        setError(t('noTenantAccess'));
-        setSubmitting(false);
-        return;
-      }
-      // A tenant that requires single sign-on is listed (ssoRequired) so it does not just
-      // vanish, but this password sign-in cannot enter it. When none can be entered, say
-      // so here, next to the SSO button, instead of offering choices that would fail.
-      if (auth.memberships.every((m) => m.ssoRequired)) {
-        setError(t('ssoRequired'));
-        setSubmitting(false);
-        return;
-      }
-      if (auth.memberships.length === 1) {
-        await enterTenant(auth, auth.memberships[0].tenant);
-        return;
-      }
-      // Multiple tenants — let the user choose.
-      setIdentity(auth);
-      setSubmitting(false);
+      await proceed(auth);
     } catch (err) {
+      // The password was right but the account is held for its second factor.
+      const challenge = mfaChallengeOf(err);
+      if (challenge) {
+        setMfa(challenge);
+        setSubmitting(false);
+        return;
+      }
       // The backend deliberately doesn't distinguish bad-email vs bad-password.
       failure(err, 'login:invalidCredentials');
+      setSubmitting(false);
+    }
+  };
+
+  // Back to the password step from the code step: the held sign-in is dropped, and the
+  // password is cleared with it (a new attempt asks for it again).
+  const restartFromPassword = (message: string | null) => {
+    setMfa(null);
+    setPassword('');
+    setError(message);
+    setSubmitting(false);
+  };
+
+  // The code was accepted: the held sign-in is spent. Whatever follows is entering a tenant.
+  const handleVerified = async (auth: IdentityAuth) => {
+    setMfa(null);
+    try {
+      await proceed(auth);
+    } catch (err) {
+      failure(err, 'login:enterTenantFailed');
       setSubmitting(false);
     }
   };
@@ -219,13 +284,13 @@ export default function LoginPage() {
               both light and dark backgrounds; "Chain" and the cube stay brand. */}
           <Logo deviceColor="currentColor" className="mb-4 h-16 w-auto" />
           <p className="text-sm text-muted-foreground">
-            {identity ? t('chooseTenantSubtitle') : t('signInSubtitle')}
+            {identity ? t('chooseTenantSubtitle') : mfa ? t('mfaSubtitle') : t('signInSubtitle')}
           </p>
         </div>
 
-        {expired && !identity && (
+        {expired && !identity && !mfa && (
           <p className="mb-4 rounded-md border border-border bg-muted/50 px-3 py-2 text-center text-sm text-muted-foreground" data-shot="login-session-expired">
-            {expired === 'ssoRequired' ? t('sessionSsoRequired') : t('sessionExpired')}
+            {t(SESSION_END_KEYS[expired])}
           </p>
         )}
 
@@ -259,6 +324,10 @@ export default function LoginPage() {
             >
               {t('common:back')}
             </Button>
+          </div>
+        ) : mfa ? (
+          <div data-shot="login-step-mfa" className="rounded-lg border border-border bg-card p-6">
+            <MfaCodeStep challenge={mfa} onVerified={handleVerified} onRestart={restartFromPassword} />
           </div>
         ) : (
           <form

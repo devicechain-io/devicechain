@@ -19,6 +19,8 @@ import { scopedRouteAllowed } from '@/lib/scope';
 // Route-level code splitting: every page except the sign-in, the layout and the landing page loads
 // on first visit, so the first download carries only what those three need.
 const LoginSsoCompletePage = lazy(() => import('@/routes/LoginSsoComplete'));
+const SecurityPage = lazy(() => import('@/routes/SecurityPage'));
+const TenantSecurityPage = lazy(() => import('@/routes/TenantSecurityPage'));
 const DevicesPage = lazy(() => import('@/routes/devices/DevicesPage'));
 const DeviceDetailPage = lazy(() => import('@/routes/devices/DeviceDetailPage'));
 const ProvisioningProfilesPage = lazy(() => import('@/routes/provisioning/ProvisioningProfilesPage'));
@@ -108,6 +110,10 @@ export default function App() {
       {/* Where an invitation link lands. Public: the person has no session yet, and the
           one-time code rides the URL fragment, which a browser never sends to a server. */}
       <Route path="/invitation" element={<AcceptInvitationPage />} />
+      {/* The signed-in person's own two-factor authentication. Outside the tenant guard on
+          purpose: a member whose tenant requires a second factor, and who has none, is sent
+          here with only an identity session. The page guards itself. */}
+      <Route path="/security" element={<SecurityPage />} />
 
       <Route element={<ProtectedRoute />}>
         <Route path="/" element={<AppLayout />}>
@@ -143,6 +149,7 @@ export default function App() {
           <Route path="branding" element={<BrandingPage />} />
           <Route path="basemap" element={<BasemapPage />} />
           <Route path="locale" element={<LocalePage />} />
+          <Route path="tenant-security" element={<TenantSecurityPage />} />
           <Route path="members" element={<MembersPage />} />
           <Route path="service-accounts" element={<ServiceAccountsPage />} />
           <Route path="roles" element={<RolesPage />} />

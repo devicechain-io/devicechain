@@ -51,5 +51,17 @@
   "systemRolesDescription": "Roles que controlan el acceso a la API de administración.",
   "systemRolesFormDescription": "Los roles de sistema controlan el acceso a la API de administración (p. ej., superuser). Déjalo vacío si no aplica ninguno.",
   "systemRolesUpdatedToast": "Roles de sistema actualizados",
-  "title": "Identidades"
+  "title": "Identidades",
+  "colTwoFactor": "Dos pasos",
+  "mfaOn": "Activa",
+  "mfaOff": "Desactivada",
+  "mfaSectionTitle": "Autenticación en dos pasos",
+  "mfaSectionDescription": "Indica si el inicio de sesión con contraseña de esta identidad pide un código de una aplicación de autenticación.",
+  "mfaReset": "Restablecer dos pasos",
+  "mfaResetConfirmTitle": "Restablecer la autenticación en dos pasos",
+  "mfaResetConfirm": "Esto elimina el autenticador y los códigos de recuperación de {{email}} y cierra todas sus sesiones. En su próximo inicio de sesión solo se le pedirá la contraseña, y podrá configurar de nuevo la autenticación en dos pasos.",
+  "mfaResetToast": "Autenticación en dos pasos restablecida para {{email}}",
+  "mfaResetNeedsPassword": "Esta identidad ha tenido códigos incorrectos recientemente, así que su contraseña podría ser conocida por otra persona. Establece una contraseña nueva junto con el restablecimiento.",
+  "mfaNewPasswordLabel": "Contraseña nueva",
+  "mfaResetWithPassword": "Restablecer y fijar contraseña"
 }

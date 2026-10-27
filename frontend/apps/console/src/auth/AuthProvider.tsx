@@ -14,6 +14,7 @@ import {
 } from 'react';
 import {
   login as apiLogin,
+  verifyMfa as apiVerifyMfa,
   completeSso as apiCompleteSso,
   selectTenant as apiSelectTenant,
   refresh as apiRefresh,
@@ -73,6 +74,24 @@ interface AuthContextValue {
    * returned identityToken to do that.
    */
   login: (email: string, password: string) => Promise<IdentityAuth>;
+  /**
+   * Finish a sign-in that login held for a second factor (it failed with MFA_CHALLENGE):
+   * `code` is an authenticator code or a recovery code. Answers and stores exactly what login
+   * does, so everything after (selectTenant, refresh, logout) is the same.
+   */
+  verifyMfa: (challenge: string, code: string) => Promise<IdentityAuth>;
+  /**
+   * Replace the identity session with a fresh sign-in the server handed back (turning two-factor
+   * authentication on ends every session the account had, and answers the caller's
+   * replacement). A tenant session already held is renewed against the new identity so the
+   * person carries on where they are; the identity session stays even when that fails.
+   */
+  adoptIdentity: (auth: IdentityAuth) => Promise<void>;
+  /**
+   * Drop every local session WITHOUT asking the server to end them, for the moment the server
+   * has just ended them itself (two-factor authentication turned off). Sign-out proper is logout.
+   */
+  forgetSessions: () => void;
   /**
    * Redeem the one-time code a single sign-on returned (with the verifier held since the
    * sign-in began). The result is stored exactly as login's is, so every later step
@@ -174,11 +193,18 @@ const SESSION_EXPIRED_KEY = 'dc-session-expired';
  * (the server refused the refresh with SSO_REQUIRED), which a fresh password sign-in
  * cannot fix, so the login screen says so instead of "your session expired".
  */
-export type SessionEndReason = 'expired' | 'ssoRequired';
+export type SessionEndReason = 'expired' | 'ssoRequired' | 'mfaRequired' | 'mfaEnrollmentRequired';
+
+const REASON_FLAG: Record<SessionEndReason, string> = {
+  expired: '1',
+  ssoRequired: 'sso',
+  mfaRequired: 'mfa',
+  mfaEnrollmentRequired: 'mfa-enroll',
+};
 
 function flagSessionExpired(reason: SessionEndReason = 'expired') {
   try {
-    window.sessionStorage.setItem(SESSION_EXPIRED_KEY, reason === 'ssoRequired' ? 'sso' : '1');
+    window.sessionStorage.setItem(SESSION_EXPIRED_KEY, REASON_FLAG[reason]);
   } catch {
     // sessionStorage unavailable — the login notice is best-effort
   }
@@ -187,9 +213,10 @@ function flagSessionExpired(reason: SessionEndReason = 'expired') {
 export function consumeSessionExpired(): SessionEndReason | null {
   try {
     const v = window.sessionStorage.getItem(SESSION_EXPIRED_KEY);
-    if (v === '1' || v === 'sso') {
+    const reason = (Object.keys(REASON_FLAG) as SessionEndReason[]).find((r) => REASON_FLAG[r] === v);
+    if (reason) {
       window.sessionStorage.removeItem(SESSION_EXPIRED_KEY);
-      return v === 'sso' ? 'ssoRequired' : 'expired';
+      return reason;
     }
   } catch {
     // ignore
@@ -260,6 +287,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // which redirect to /login — instead of leaving a dead session in place to fire
   // failing requests and render a raw error.
   const expireTenant = useCallback((reason: SessionEndReason = 'expired') => {
+    // 🔴 Only forget the pair that is actually being expired. Another tab shares this storage:
+    // when it has since replaced the pair (it just turned two-factor on, which ends every
+    // other session and swaps in a fresh one), this tab's failed refresh of the OLD pair must
+    // not delete the new one. The newer pair is adopted instead, in memory, and is judged on
+    // its own at its next refresh.
+    const stored = readStored();
+    const mine = tokensRef.current;
+    if (stored && mine && stored.refreshToken !== mine.refreshToken) {
+      tokensRef.current = stored;
+      setTokens(stored);
+      return;
+    }
     flagSessionExpired(reason);
     applyTokens(null);
   }, [applyTokens]);
@@ -274,8 +313,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           return { accessToken: pair.accessToken, refreshToken: pair.refreshToken };
         },
         onEnd: (err) => {
+          const code = err !== undefined ? serverErrorCode(err) : undefined;
           expireTenant(
-            err !== undefined && serverErrorCode(err) === 'SSO_REQUIRED' ? 'ssoRequired' : 'expired',
+            code === 'SSO_REQUIRED'
+              ? 'ssoRequired'
+              : code === 'MFA_REQUIRED'
+                ? 'mfaRequired'
+                : code === 'MFA_ENROLLMENT_REQUIRED'
+                  ? 'mfaEnrollmentRequired'
+                  : 'expired',
           );
         },
       }),
@@ -362,6 +408,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [applyIdentity],
   );
 
+  // A held sign-in finishes with the code: the result is stored exactly as login's is.
+  const verifyMfa = useCallback(
+    async (challenge: string, code: string) => {
+      const auth = await apiVerifyMfa(challenge, code);
+      applyIdentity({
+        identityToken: auth.identityToken,
+        method: 'password',
+        superuser: auth.superuser,
+        memberships: auth.memberships,
+      });
+      return auth;
+    },
+    [applyIdentity],
+  );
+
   // Single sign-on's step 1: the code from the provider's return replaces the password.
   const completeSso = useCallback(
     async (code: string, verifier: string) => {
@@ -418,6 +479,38 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [applyIdentity]);
 
+  // Turning two-factor on rotates the account's session epoch: the identity token that enrolled
+  // and the tenant session beside it both stop working, and the server hands back a fresh
+  // identity. Swap it in, then re-enter the tenant the person was in so they are not thrown out
+  // at the next refresh.
+  const adoptIdentity = useCallback(
+    async (auth: IdentityAuth) => {
+      const tenant = decodeToken(tokensRef.current?.accessToken ?? '')?.tenant ?? null;
+      applyIdentity({
+        identityToken: auth.identityToken,
+        method: 'password',
+        superuser: auth.superuser,
+        memberships: auth.memberships,
+      });
+      if (tenant) {
+        try {
+          const pair = await apiSelectTenant(auth.identityToken, tenant);
+          applyTokens({ accessToken: pair.accessToken, refreshToken: pair.refreshToken });
+        } catch {
+          // The old tenant session ends on its own at its next refresh; the identity
+          // session above is already the fresh one, so signing in again is one step away.
+        }
+      }
+    },
+    [applyIdentity, applyTokens],
+  );
+
+  const forgetSessions = useCallback(() => {
+    session.reset();
+    applyTokens(null);
+    applyIdentity(null);
+  }, [session, applyTokens, applyIdentity]);
+
   const claims = useMemo(
     () => (tokens ? decodeToken(tokens.accessToken) : null),
     [tokens],
@@ -437,6 +530,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isAuthenticated: sessionAlive,
       isLoading,
       login,
+      verifyMfa,
+      adoptIdentity,
+      forgetSessions,
       completeSso,
       acceptInvitation,
       selectTenant,
@@ -454,6 +550,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       identityAlive,
       isLoading,
       login,
+      verifyMfa,
+      adoptIdentity,
+      forgetSessions,
       completeSso,
       acceptInvitation,
       selectTenant,

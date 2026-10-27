@@ -7,7 +7,7 @@ const config: CodegenConfig = {
   generates: {
     './src/gql/user-management/': {
       schema: '../../../backend/services/user-management/graphql/schema.graphql',
-      documents: ['src/lib/api/user-management.ts', 'src/lib/api/members.ts', 'src/lib/api/service-accounts.ts'],
+      documents: ['src/lib/api/user-management.ts', 'src/lib/api/members.ts', 'src/lib/api/service-accounts.ts', 'src/lib/api/mfa.ts'],
       preset: 'client',
       presetConfig: { fragmentMasking: false },
       config: { documentMode: 'string' },

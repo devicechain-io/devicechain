@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useState } from 'react';
-import { ChevronsUpDown, LineChart, Link2, LogOut, ShieldCheck, UserPen } from 'lucide-react';
+import { ChevronsUpDown, LineChart, Link2, LockKeyhole, LogOut, ShieldCheck, UserPen } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/auth/AuthProvider';
@@ -109,6 +109,15 @@ export function NavUser() {
               <UserPen size={16} />
               {t('editProfile')}
             </DropdownMenuItem>
+
+            {/* Two-factor authentication guards a PASSWORD sign-in: a session that came through
+                a provider is governed by the provider's own requirements instead. */}
+            {signInMethod !== 'sso' && (
+              <DropdownMenuItem onClick={() => navigate('/security')} className="cursor-pointer" data-shot="user-menu-security">
+                <LockKeyhole size={16} />
+                {t('security')}
+              </DropdownMenuItem>
+            )}
 
             {canLinkSso && (
               <DropdownMenuItem onClick={() => setLinking(true)} className="cursor-pointer">

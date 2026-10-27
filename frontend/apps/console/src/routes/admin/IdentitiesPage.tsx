@@ -50,6 +50,7 @@ export default function IdentitiesPage() {
               <DataTableHeaderCell>{t('colEmail')}</DataTableHeaderCell>
               <DataTableHeaderCell>{t('common:colName')}</DataTableHeaderCell>
               <DataTableHeaderCell>{t('common:colStatus')}</DataTableHeaderCell>
+              <DataTableHeaderCell>{t('colTwoFactor')}</DataTableHeaderCell>
               <DataTableHeaderCell>{t('systemRoles')}</DataTableHeaderCell>
               <DataTableHeaderCell>{t('colTenants')}</DataTableHeaderCell>
             </DataTableHead>
@@ -63,6 +64,11 @@ export default function IdentitiesPage() {
                   <DataTableCell>{[i.firstName, i.lastName].filter(Boolean).join(' ') || '—'}</DataTableCell>
                   <DataTableCell>
                     <StatusBadge enabled={i.enabled} />
+                  </DataTableCell>
+                  <DataTableCell>
+                    <Badge variant={i.mfaEnabled ? 'success' : 'outline'}>
+                      {i.mfaEnabled ? t('mfaOn') : t('mfaOff')}
+                    </Badge>
                   </DataTableCell>
                   <DataTableCell>
                     <div className="flex flex-wrap gap-1">

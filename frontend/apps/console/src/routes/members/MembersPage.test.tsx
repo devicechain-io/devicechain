@@ -72,6 +72,7 @@ const member = (over: Record<string, unknown>) => ({
   scope: [],
   managedByIdentityProvider: false,
   invitationPending: false,
+  mfaEnabled: false,
   ...over,
 });
 
@@ -122,6 +123,21 @@ describe('the members list', () => {
     expect(within(nora).getByText('retired')).toBeTruthy();
     expect(within(nora).getAllByTitle('Group of devices')).toHaveLength(2);
     expect(within(nora).queryByText('Whole tenant')).toBeNull();
+  });
+
+  it('shows whether each member has two-factor authentication on, and nothing for a pending invitation', async () => {
+    h.members = [
+      member({ email: 'on@oem.example', mfaEnabled: true }),
+      member({ email: 'off@oem.example' }),
+      member({ email: 'new@oem.example', invitationPending: true }),
+    ];
+    renderPage();
+    const on = (await screen.findByText('on@oem.example')).closest('tr')!;
+    expect(within(on).getByText('On')).toBeTruthy();
+    expect(within(screen.getByText('off@oem.example').closest('tr')!).getByText('Off')).toBeTruthy();
+    const pending = screen.getByText('new@oem.example').closest('tr')!;
+    expect(within(pending).queryByText('On')).toBeNull();
+    expect(within(pending).queryByText('Off')).toBeNull();
   });
 
   it('offers no actions on your own row or on a membership the identity provider manages', async () => {

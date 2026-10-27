@@ -19,6 +19,7 @@ import { PurgeBadge, StatusBadge, errMessage, useReload } from '@/routes/common'
 import { TenantForm } from '@/routes/admin/tenants/TenantForm';
 import { TenantSettingsPanel } from '@/routes/admin/tenants/TenantSettingsPanel';
 import { TenantSsoPanel } from '@/routes/admin/tenants/TenantSsoPanel';
+import { TenantMfaPanel } from '@/routes/admin/tenants/TenantMfaPanel';
 import { TenantDeletionPanel } from './TenantDeletionPanel';
 import { TenantAiModelsPanel } from '@/routes/admin/tenants/TenantAiModelsPanel';
 import { TierPill } from '@/components/tiers/TierPill';
@@ -157,6 +158,16 @@ function TenantDetail() {
           <TenantSsoPanel
             tenant={tenant.token}
             enforced={tenant.ssoEnforced}
+            onChanged={reload}
+          />
+        </div>
+      )}
+      {!purged && (
+        <div className="mb-6">
+          <TenantMfaPanel
+            tenant={tenant.token}
+            required={tenant.mfaRequired}
+            byTier={tenant.mfaRequiredByTier}
             onChanged={reload}
           />
         </div>

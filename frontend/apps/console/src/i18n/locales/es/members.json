@@ -196,5 +196,9 @@
   "saCopyManually": "No se pudo copiar automáticamente. El secreto está seleccionado: cópialo con el teclado.",
   "saUsingTitle": "Obtener un token",
   "saUsingDescription": "Una integración intercambia su ID de cliente y su secreto por un token de acceso con la concesión OAuth client_credentials y lo envía como token Bearer. Los tokens duran 5 minutos; solicita uno nuevo cuando caduque.",
-  "saNoTokenEndpoint": "Esta instancia no tiene configurado un emisor OAuth, así que las cuentas de servicio aún no pueden obtener tokens. Pide a tu operador que configure uno."
+  "saNoTokenEndpoint": "Esta instancia no tiene configurado un emisor OAuth, así que las cuentas de servicio aún no pueden obtener tokens. Pide a tu operador que configure uno.",
+  "colTwoFactor": "Dos pasos",
+  "twoFactorOn": "Activa",
+  "twoFactorOff": "Desactivada",
+  "twoFactorNone": "—"
 }
