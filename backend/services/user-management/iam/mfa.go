@@ -523,7 +523,7 @@ func (s *Store) confirmMfaEnrollment(ctx context.Context, store secrets.SecretSt
 			return err
 		}
 		if rotateEpoch != "" {
-			return tx.Model(&Identity{}).Where("id = ?", identityID).Update("session_epoch", rotateEpoch).Error
+			return tx.Model(&Identity{Model: gorm.Model{ID: identityID}}).Update("session_epoch", rotateEpoch).Error
 		}
 		return nil
 	})

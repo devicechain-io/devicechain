@@ -425,7 +425,7 @@ func (m *Manager) callerIsSuperuser(ctx context.Context) (bool, error) {
 	if !ok || claims.Username == "" {
 		return false, auth.ErrForbidden
 	}
-	caller, err := m.iam.IdentityByEmail(core.WithSystemContext(ctx), claims.Username)
+	caller, err := m.iam.IdentityByEmail(ctx, claims.Username)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return false, auth.ErrForbidden
