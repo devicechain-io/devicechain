@@ -35,6 +35,7 @@ import {
   Webhook,
   type LucideIcon,
   KeyRound,
+  PlugZap,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Logomark, LogoHorizontal } from '@/components/brand/Logo';
@@ -111,6 +112,10 @@ export const NAV: NavNode[] = [
       // beside the device registry rather than earning a group of one. Not marked `scoped`: the
       // server refuses profiles to a member limited to part of the tenant.
       { labelKey: 'provisioningProfiles', href: '/provisioning-profiles', icon: KeyRound, requires: 'device:read' },
+      // Authenticated senders of device data over HTTP (a LoRaWAN network server, a webhook). The
+      // same authority and the same reasoning: the server refuses them to a member limited to part
+      // of the tenant, so the entry is not marked `scoped`.
+      { labelKey: 'integrations', href: '/integrations', icon: PlugZap, requires: 'device:read' },
       // A maintenance window is configuration OF device types (a type names the window
       // that holds its disruptive commands), so it lives beside them.
       { labelKey: 'maintenanceWindows', href: '/maintenance-windows', icon: CalendarClock, requires: 'device:read' },

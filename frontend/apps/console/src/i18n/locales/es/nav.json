@@ -49,5 +49,6 @@
   "signers": "Firmantes",
   "serviceAccounts": "Cuentas de servicio",
   "rollouts": "Despliegues",
-  "provisioningProfiles": "Perfiles de aprovisionamiento"
+  "provisioningProfiles": "Perfiles de aprovisionamiento",
+  "integrations": "Integraciones"
 }

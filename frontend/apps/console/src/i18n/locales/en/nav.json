@@ -49,5 +49,6 @@
   "signers": "Signers",
   "serviceAccounts": "Service accounts",
   "rollouts": "Rollouts",
-  "provisioningProfiles": "Provisioning Profiles"
+  "provisioningProfiles": "Provisioning Profiles",
+  "integrations": "Integrations"
 }
