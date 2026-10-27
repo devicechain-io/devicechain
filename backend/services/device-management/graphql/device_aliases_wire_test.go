@@ -313,7 +313,7 @@ func TestIntegrationMarkerMutationsAreServiceOnly(t *testing.T) {
 		}
 	}
 	// A wrong token is refused and the tally is untouched.
-	bad := serve(t, service(f), undecoded, map[string]any{"i": "chirp-1", "s": "x" + issued[1:]})
+	bad := serve(t, service(f), undecoded, map[string]any{"i": "chirp-1", "s": differentToken(issued)})
 	if len(bad.errs) == 0 {
 		t.Errorf("a wrong token wrote a marker: %v", bad.data)
 	}
