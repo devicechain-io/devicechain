@@ -194,7 +194,8 @@ func (api *Api) DrainSessionKicks(ctx context.Context, pageSize int) (SessionKic
 		return res, nil
 	}
 	tenants := make([]string, 0)
-	// Cross-tenant by necessity: which tenants owe a kick. No row is read here.
+	// Cross-tenant by necessity: which tenants owe a kick. Only the tenant ids are read; every
+	// row is then read and deleted under that tenant (drainSessionKicks).
 	if err := api.RDB.DB(core.WithSystemContext(ctx)).Model(&PendingSessionKick{}).
 		Distinct().Order("tenant_id").Pluck("tenant_id", &tenants).Error; err != nil {
 		return res, fmt.Errorf("listing tenants with pending session kicks: %w", err)
@@ -218,6 +219,8 @@ func (api *Api) observeSessionKicks(ctx context.Context) {
 	if api.SessionKickObserver == nil {
 		return
 	}
+	// Cross-tenant by necessity: one gauge for the whole instance. Reads a count and the oldest
+	// request time, nothing a tenant could be told.
 	db := api.RDB.DB(core.WithSystemContext(ctx))
 	var n int64
 	if err := db.Model(&PendingSessionKick{}).Count(&n).Error; err != nil {
