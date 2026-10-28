@@ -18,8 +18,8 @@ title: 设备凭据
 | `ACCESS_TOKEN` | bearer 令牌（凭据 ID） | 令牌带密钥的单向摘要 |
 | `MQTT_BASIC` | 用户名（凭据 ID）+ 密码 | 密码带密钥的单向摘要 |
 
-:::note 不接受 X.509 凭据
-在证书验证功能发布之前，不支持 `X509_CERTIFICATE` 类型。创建或更新该类型的凭据会被拒绝（`UNSUPPORTED`），已存在的该类型凭据也不再通过认证。请使用 `ACCESS_TOKEN` 或 `MQTT_BASIC`。
+:::note X.509 凭据
+`X509_CERTIFICATE` 凭据会指定其证书所通向的[信任锚](../user-guide/provisioning-and-trust-anchors.md#trust-anchors)。创建凭据时平台会验证证书链，并把凭据 id 设为证书的 SHA-256 pin（它是公开的）。一台设备最多持有三个，没有信任锚的证书凭据不会通过认证。目前证书能做什么，参见[目前证书方面可用的功能](../user-guide/provisioning-and-trust-anchors.md#certificates-today)。
 :::
 
 ## 读取凭据需要 `device:write` {#reading-a-credential}

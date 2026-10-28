@@ -18,8 +18,8 @@ Available. You manage credentials from the **Credentials** tab of the device det
 | `ACCESS_TOKEN` | a bearer token (the credential id) | a one-way, keyed digest of the token |
 | `MQTT_BASIC` | a username (the credential id) + password | a one-way, keyed digest of the password |
 
-:::note X.509 credentials are not accepted
-The `X509_CERTIFICATE` type is not supported until certificate verification ships. Creating or updating a credential of that type is refused (`UNSUPPORTED`), and a credential of that type that already exists no longer authenticates. Use `ACCESS_TOKEN` or `MQTT_BASIC`.
+:::note X.509 credentials
+An `X509_CERTIFICATE` credential names the [trust anchor](../user-guide/provisioning-and-trust-anchors.md#trust-anchors) its certificate chains to. The platform verifies the chain when you create the credential and sets the credential's id to the certificate's SHA-256 pin, which is public. A device holds at most three, and a certificate credential with no trust anchor does not authenticate. What a certificate can do today is in [What works today with certificates](../user-guide/provisioning-and-trust-anchors.md#certificates-today).
 :::
 
 ## Reading a credential requires `device:write` {#reading-a-credential}

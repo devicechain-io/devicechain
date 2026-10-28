@@ -12,7 +12,7 @@ and receives a short-lived access token, which it sends to the APIs like any oth
 sign-in is involved, so the integration keeps working when someone leaves, resets a password or
 changes roles.
 
-**Service accounts** is under **Settings** in the sidebar, next to **Members**. It uses the same
+**Service accounts** is under **Access** in the sidebar, next to **Members**. It uses the same
 permissions: `member:read` to list accounts and `member:write` to create or change them. A member
 limited to part of the tenant (a customer user) cannot see the page.
 

@@ -10,7 +10,7 @@ tu inquilino, los roles que tienen y los accesos que das a tus propios clientes 
 vigilar sus equipos sin ver los de nadie más, tanto si los limitas a clientes como a grupos de
 dispositivos.
 
-Dos páginas del grupo **Configuración** de la barra lateral se encargan de esto: **Miembros** y
+Dos páginas del grupo **Acceso** de la barra lateral se encargan de esto: **Miembros** y
 **Roles**. Cada una necesita su propio permiso. **Miembros** lista a las personas con `member:read`
 y las cambia con `member:write`; **Roles** lista los roles con `role:read` y los cambia con
 `role:write`. El rol integrado de administrador del inquilino tiene los cuatro. Sin un permiso, su
@@ -78,7 +78,29 @@ Un enlace que no se puede usar (caducó, se revocó, ya se usó o se envió a ot
 
 ### Autenticación en dos pasos {#member-two-factor}
 
-La columna **Dos pasos** de la lista de miembros muestra si cada persona ha activado la autenticación en dos pasos. El inquilino puede exigirla a todos los que inician sesión con contraseña: abre **Configuración → Seguridad** y elige **Exigir**. Hace falta el permiso para gestionar miembros, para todo el inquilino. A un miembro que no la tiene se le envía a configurarla la próxima vez que entre, y las sesiones con contraseña que ya están dentro terminan en su siguiente renovación. Un inquilino cuyo nivel la exige no puede desactivarla. Restablecer a una persona que ha perdido el teléfono es tarea de un operador, porque la cuenta la comparten todos los inquilinos. Consulta [Autenticación en dos pasos](/guides/two-factor-authentication#require).
+La columna **Dos pasos** de la lista de miembros muestra si cada persona ha activado la autenticación en dos pasos. El inquilino puede exigirla a todos los que inician sesión con contraseña; consulta [Seguridad de inicio de sesión](#sign-in-security). Restablecer a una persona que ha perdido el teléfono es tarea de un operador, porque la cuenta la comparten todos los inquilinos. Consulta [Autenticación en dos pasos](/guides/two-factor-authentication#require).
+
+### Seguridad de inicio de sesión {#sign-in-security}
+
+**Acceso → Seguridad de inicio de sesión** contiene los requisitos de inicio de sesión para las personas
+de tu inquilino. Su panel **Autenticación en dos pasos** tiene un único ajuste, **Exigir autenticación
+en dos pasos**: los miembros que inician sesión con contraseña deben usar un código de una aplicación
+de autenticación, y a quien no tenga una se le pide configurarla la próxima vez que entre en el
+inquilino.
+
+Elige **Exigir**. La consola te pide confirmación antes: a los miembros que inician sesión con
+contraseña y sin segundo factor se les pedirá configurar uno antes de poder entrar, y las sesiones con
+contraseña que ya están dentro terminan en su siguiente renovación. Para dejar de exigirla, usa el mismo
+control.
+
+- Cambiarlo requiere el permiso para gestionar miembros, para todo el inquilino. Sin él, la página te
+  lo indica.
+- Si el nivel del inquilino exige la autenticación en dos pasos, la página lo dice y el requisito no se
+  puede desactivar aquí.
+- El inicio de sesión único se rige por los requisitos de su conexión y este ajuste no lo afecta.
+- Cada persona configura su propio segundo factor en **Seguridad de la cuenta**, en el menú de usuario.
+  La guía de [Autenticación en dos pasos](/guides/two-factor-authentication#require) explica qué obliga
+  y qué no obliga el requisito.
 
 ### Cambiar el acceso de un miembro {#changing-access}
 

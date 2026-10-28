@@ -41,12 +41,14 @@ Chapters are published as they are completed.
 | 10 | [Detection rules](./detection-rules.md) | Authoring rules as a form, on the canvas, or in plain language; replay preview; rule health and the live feed. |
 | 11 | [Commanding a fleet](./commanding-a-fleet.md) | Command batches: creating one, following its progress, refusals and cancellation. |
 | 12 | [Updates (over the air)](./updates.md) | Artifacts: uploading an update image, its trust and signatures, and retiring it; registering and revoking signers; and the device Updates tab: assigning, cancelling and abandoning an update, and what a disabled device means for updates. |
-| 13 | [Connectors](./connectors.md) | Outbound connectors: creating, configuring and versioning them. |
-| 14 | [Assets, customers and areas](./assets-customers-areas.md) | The registry families: lists, hierarchy, property schemas and members. |
-| 15 | [Geofences](./geofences.md) | Drawing and editing fences, and their history. |
-| 16 | [Groups, facets and Browse](./groups-facets-browse.md) | Facet keys, the Browse query builder, and saving a result as a dynamic group. |
-| 17 | [Members, roles and customer users](./members-roles-and-customer-users.md) | Inviting members and changing their access, the tenant's own roles, and logins limited to your customers: what they see, and sharing dashboards with them. |
-| 18 | [Service accounts](./service-accounts.md) | Machine identities for scripts and integrations: what an account can do, creating one, obtaining a token, rotating a secret, and disabling or deleting it. |
-| 19 | [Audit](./audit.md) | The tenant audit journal, filters and export. |
-| 20 | [Tenant settings](./tenant-settings.md) | Branding, map and language. |
-| 21 | [Administering the instance](./administering-the-instance.md) | Tenants, deletions, tiers, identities, roles, identity providers, AI providers, instance audit and settings. |
+| 13 | [Provisioning and trust anchors](./provisioning-and-trust-anchors.md) | Provisioning profiles for fleets that register themselves, expecting a device, trust anchors, certificate credentials and certificate profiles, and what works today with certificates. |
+| 14 | [Inbound integrations](./inbound-integrations.md) | Receiving device data from ChirpStack, The Things Stack or a generic HTTP sender: creating an integration, connecting the sender, device aliases, unregistered devices and traffic. |
+| 15 | [Connectors](./connectors.md) | Outbound connectors: creating, configuring and versioning them. |
+| 16 | [Assets, customers and areas](./assets-customers-areas.md) | The registry families: lists, hierarchy, property schemas and members. |
+| 17 | [Geofences](./geofences.md) | Drawing and editing fences, and their history. |
+| 18 | [Groups, facets and Browse](./groups-facets-browse.md) | Facet keys, the Browse query builder, and saving a result as a dynamic group. |
+| 19 | [Members, roles and customer users](./members-roles-and-customer-users.md) | Inviting members and changing their access, the tenant's own roles, and logins limited to your customers: what they see, and sharing dashboards with them. |
+| 20 | [Service accounts](./service-accounts.md) | Machine identities for scripts and integrations: what an account can do, creating one, obtaining a token, rotating a secret, and disabling or deleting it. |
+| 21 | [Audit](./audit.md) | The tenant audit journal, filters and export. |
+| 22 | [Tenant settings](./tenant-settings.md) | Branding, map and language. |
+| 23 | [Administering the instance](./administering-the-instance.md) | Tenants, deletions, tiers, identities, roles, identity providers, AI providers, instance audit and settings. |
