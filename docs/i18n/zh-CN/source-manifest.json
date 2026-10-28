@@ -315,8 +315,8 @@
       "translationSha256": "121e1fa11cf6695dd1735895bf5b6c0f47e713c7ede3b2f5d76b48f39203dc09"
     },
     "user-guide/inbound-integrations.md": {
-      "sourceSha256": "10ad60887327a05482379c6f4906ed5e1d7c46bd257b9b8e3506dcb5db3e99a0",
-      "translationSha256": "f64878ac5bdc787aea979a865ad6aa7e196f73e41f3cce0dfbf4493e4bdc74f1"
+      "sourceSha256": "3ff180447116a4e6614ed5017809c4ebb20ea1e1bd43c87dc96962cb84c24726",
+      "translationSha256": "28080f130c070430def40916698d912831cb4461317efd0b236865c90f1c0336"
     },
     "user-guide/index.md": {
       "sourceSha256": "f37be643e9f3f2efa46b466dc49760963bb3e6eaa6480be451af0fa2f9e43853",
@@ -331,8 +331,8 @@
       "translationSha256": "bc78c190ad7bfbe0750f190906a186ae85f783b891a3999b14510cba185540fb"
     },
     "user-guide/provisioning-and-trust-anchors.md": {
-      "sourceSha256": "5a7343df70e057731aa9b62077065933e898a7017950c8d8f21b4b67812df8d4",
-      "translationSha256": "1ead5832ebd4907d5eca9097927c90cc1f87015bdb744894f66a7627390527ed"
+      "sourceSha256": "6dbbbfdd4b098d62e6b1f709ae12f1101478dc33e81312df5119ab0f38585166",
+      "translationSha256": "943ce0d870aa9e76d2c27fb47b22982f424d6e95fd3c015fc9d4d50bc2d1954c"
     },
     "user-guide/service-accounts.md": {
       "sourceSha256": "45810478c29a05428ef21e3d5183b17b5bd1a00d45fa5fb1ef409030e4679044",

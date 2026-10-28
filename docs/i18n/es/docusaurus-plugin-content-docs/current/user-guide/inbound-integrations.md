@@ -3,6 +3,8 @@ title: Integraciones de entrada
 sidebar_position: 12.6
 ---
 
+import GuideShot from '@site/src/components/GuideShot';
+
 # Integraciones de entrada
 
 Algunos dispositivos nunca se conectan por sí mismos a DeviceChain. Un sensor LoRaWAN habla con una
@@ -80,6 +82,8 @@ ahora en el remitente.
 Selecciona una integración para abrir su página. **Conectar el remitente** enumera lo que hay que
 introducir en el remitente, según su tipo, con un botón de copia en cada valor: la URL del endpoint, el
 nombre de la cabecera y el valor de la cabecera. El token de portador en sí no se vuelve a mostrar aquí.
+
+<GuideShot id="integration-detail" alt="La página de la integración ChirpStack EU868, token chirpstack-eu868, con los botones Rotar token y Eliminar arriba a la derecha. Un panel Tráfico muestra 0 envíos sin nada que leer y la fecha en que se generó el token. Debajo, un panel Conectar el remitente enumera la codificación JSON, la URL del endpoint de eventos, el nombre de cabecera Authorization y el valor de cabecera 'Bearer <bearer-token>', cada uno con un botón de copia." />
 
 ### ChirpStack v4 {#chirpstack}
 

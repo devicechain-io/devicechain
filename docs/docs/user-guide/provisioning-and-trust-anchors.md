@@ -3,6 +3,8 @@ title: Provisioning and trust anchors
 sidebar_position: 12.5
 ---
 
+import GuideShot from '@site/src/components/GuideShot';
+
 # Provisioning and trust anchors
 
 This chapter is for **tenant administrators** who bring fleets of devices onto DeviceChain without
@@ -95,6 +97,8 @@ A **trust anchor** is a certificate authority (CA) certificate. A device certifi
 if its chain leads to a trust anchor you have registered. Open **Connect → Trust Anchors**. The list
 shows each anchor's subject, expiry and how many credentials and profiles use it, with badges for an
 anchor that is **Disabled**, **Expired** or **Expires in N d**.
+
+<GuideShot id="trust-anchors-list" alt="The Trust anchors page. The description reads 'The certificate authorities this tenant trusts to vouch for its devices' client certificates'. A New trust anchor button is at the top right. The table has one row: Acme device CA, token acme-device-ca, subject CN=Acme Device CA,O=Acme Properties, an expiry date, In use 'Credentials 0 · Profiles 0' and a green Enabled badge." />
 
 ### Adding an anchor {#adding-an-anchor}
 
