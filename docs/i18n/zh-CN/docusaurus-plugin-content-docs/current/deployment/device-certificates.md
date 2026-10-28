@@ -4,7 +4,7 @@ title: 证书认证
 
 # 证书认证 {#certificate-authentication}
 
-本页是[设备客户端证书](../concepts/device-certificates.md)的运维一侧：使其成为可能的消息代理构建、限定首次连接时注册的设置、需要监控什么，以及升级会给已在运行的实例带来什么变化。要连接设备，见[使用证书连接设备](../guides/device-x509.md)。
+本页是[设备客户端证书](../concepts/device-certificates.md)的运维一侧：使其成为可能的消息代理构建、限定首次连接时注册的设置、需要监控什么，以及升级会给已在运行的实例带来什么变化。要连接设备，见[使用证书连接设备](../guides/device-x509.md)；控制台一侧见 [预配置与信任锚](../user-guide/provisioning-and-trust-anchors.md)。
 
 ## 消息代理构建 {#broker}
 
@@ -50,7 +50,7 @@ functionalAreas:
 | `callout.jitMaxInFlight` | 一个副本同时处理多少个首次连接时的注册。再来的一个会被拒绝（`jit_busy`），设备退避后重试。这些名额取自回调自身的并发上限，所以一波首次连接绝不会占用重新连接的设备所需的名额，已固定的证书、令牌或密码也无需等待它们。 |
 | `callout.jitSourceTrusted` | 增加按客户端地址的限制，其大小由 `provisioning.sourceBurst` 和 `provisioning.sourceEvery` 决定。**仅当** MQTT Service 保留客户端地址（`externalTrafficPolicy: Local` 或 kind 的 NodePort）时才启用。在源地址 NAT 之后，所有设备共用一个地址和一份额度，一台设备的重试就会拒绝整个设备群。关闭时，持续的拒绝会触发告警，而不是按地址限流。 |
 
-每租户的限制不在这里设置：它是租户的注册上限，与[自注册](../guides/device-self-registration.md)计入的是同一个，与租户的其他治理限制一起管理。对同一配置的注册在该配置上轮流进行，所有副本合计约每个配置每秒 100 到 200 个，所以一万台设备的首次连接高峰，会在设备一两分钟的重试内完成注册。
+每租户的限制不在这里设置：它是租户的注册上限，与[自注册](../guides/device-self-registration.md)计入的是同一个，与租户的其他治理限制一起管理。对同一配置的注册在该配置上轮流进行，所有副本合计约每个配置每秒 100 到 200 个，所以一万台设备的首次连接高峰，会在设备一两分钟的重试内完成注册。每租户额度对每次证书链验证通过的尝试都计费，包括之后被拒绝的那次，所以用轮换后的证书反复重试的设备会消耗它。
 
 `callout` 下出现未知的键，或值超出范围，服务会在启动时停止。
 

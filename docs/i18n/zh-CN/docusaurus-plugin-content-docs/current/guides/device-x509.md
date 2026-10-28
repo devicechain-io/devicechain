@@ -53,7 +53,7 @@ openssl verify -CAfile ca.crt -purpose sslclient device.crt
 
 ## 将 CA 添加为信任锚 {#trust-anchor}
 
-信任锚告诉租户该相信哪个 CA。在控制台中打开**信任锚（Trust Anchors）**，选择添加，然后粘贴或上传 `ca.crt`。控制台会拒绝包含私钥的文件。通过 GraphQL：
+信任锚告诉租户该相信哪个 CA。在控制台中打开**信任锚（Trust Anchors）**，选择添加，然后粘贴或上传 `ca.crt`。控制台会拒绝包含私钥的文件。控制台页面见 [预配置与信任锚](../user-guide/provisioning-and-trust-anchors.md)。通过 GraphQL：
 
 ```graphql
 mutation {

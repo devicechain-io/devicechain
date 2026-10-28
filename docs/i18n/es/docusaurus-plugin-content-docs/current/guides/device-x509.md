@@ -53,7 +53,7 @@ La plataforma acepta claves RSA de 2.048 a 8.192 bits, ECDSA en P-256 o P-384 y 
 
 ## Añadir la CA como ancla de confianza {#trust-anchor}
 
-Un ancla de confianza le dice al tenant en qué CA creer. En la consola, abre **Anclas de confianza**, elige añadir una y pega o sube `ca.crt`. La consola rechaza un archivo que contenga una clave privada. Con GraphQL:
+Un ancla de confianza le dice al tenant en qué CA creer. En la consola, abre **Anclas de confianza**, elige añadir una y pega o sube `ca.crt`. La consola rechaza un archivo que contenga una clave privada. Las páginas de la consola se describen en [Aprovisionamiento y anclas de confianza](../user-guide/provisioning-and-trust-anchors.md). Con GraphQL:
 
 ```graphql
 mutation {

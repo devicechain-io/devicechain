@@ -4,7 +4,7 @@ title: Autenticación por certificado
 
 # Autenticación por certificado {#certificate-authentication}
 
-Esta página es el lado del operador de los [certificados de cliente de dispositivo](../concepts/device-certificates.md): la compilación del broker que los hace posibles, los ajustes que acotan el registro en la primera conexión, qué vigilar y qué cambia una actualización en una instancia que ya está en marcha. Para conectar un dispositivo, consulta [Conectar con un certificado](../guides/device-x509.md).
+Esta página es el lado del operador de los [certificados de cliente de dispositivo](../concepts/device-certificates.md): la compilación del broker que los hace posibles, los ajustes que acotan el registro en la primera conexión, qué vigilar y qué cambia una actualización en una instancia que ya está en marcha. Para conectar un dispositivo, consulta [Conectar con un certificado](../guides/device-x509.md) y, para la consola, [Aprovisionamiento y anclas de confianza](../user-guide/provisioning-and-trust-anchors.md).
 
 ## La compilación del broker {#broker}
 
@@ -50,7 +50,7 @@ functionalAreas:
 | `callout.jitMaxInFlight` | Cuántos registros en la primera conexión atiende a la vez una réplica. El siguiente se rechaza (`jit_busy`) y el dispositivo espera y reintenta. Estos puestos salen del límite propio del callout, así que una oleada de primeras conexiones nunca quita los puestos que necesitan los dispositivos que se reconectan, y un certificado fijado, un token o una contraseña nunca esperan por ellos. |
 | `callout.jitSourceTrusted` | Añade un límite por dirección de cliente, dimensionado por `provisioning.sourceBurst` y `provisioning.sourceEvery`. Actívalo **solo** cuando el Service de MQTT conserve las direcciones de cliente (`externalTrafficPolicy: Local`, o un NodePort de kind). Tras un NAT de origen todos los dispositivos comparten una dirección y una cuota, y los reintentos de un dispositivo rechazarían a toda la flota. Desactivado, los rechazos sostenidos generan alertas en lugar de limitarse por dirección. |
 
-El límite por tenant no es un ajuste de aquí: es el techo de aprovisionamiento del tenant, el mismo que cobra el [autorregistro](../guides/device-self-registration.md), que se gestiona con los demás límites de gobernanza del tenant. Los registros contra un perfil se turnan en ese perfil, a unos 100 a 200 por segundo por perfil entre todas las réplicas, así que una oleada de primeras conexiones de 10.000 dispositivos se registra en uno o dos minutos de reintentos de los dispositivos.
+El límite por tenant no es un ajuste de aquí: es el techo de aprovisionamiento del tenant, el mismo que cobra el [autorregistro](../guides/device-self-registration.md), que se gestiona con los demás límites de gobernanza del tenant. Los registros contra un perfil se turnan en ese perfil, a unos 100 a 200 por segundo por perfil entre todas las réplicas, así que una oleada de primeras conexiones de 10.000 dispositivos se registra en uno o dos minutos de reintentos de los dispositivos. La cuota del tenant se cobra por cada intento cuya cadena se verificó, incluso uno rechazado después, así que un dispositivo que reintenta con un certificado rotado la gasta.
 
 Una clave desconocida bajo `callout`, o un valor fuera de rango, detiene el servicio al arrancar.
 

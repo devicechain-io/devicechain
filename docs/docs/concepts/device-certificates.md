@@ -6,7 +6,7 @@ title: Certificate Identity
 
 A device can prove who it is with a **client certificate** instead of a token or a password. It presents the certificate in the TLS handshake of its MQTT connection, and the platform checks that the certificate was issued by a certificate authority (CA) that the tenant trusts. There is no shared secret to flash into firmware, and nothing the device holds can be replayed by someone who copies a message off the wire: the private key never leaves the device.
 
-This page explains how the platform decides to trust a certificate, and where that trust stops. To set it up, follow [Connecting with a certificate](../guides/device-x509.md). To run the broker and watch it, see [Certificate authentication](../deployment/device-certificates.md).
+This page explains how the platform decides to trust a certificate, and where that trust stops. To set it up, follow [Connecting with a certificate](../guides/device-x509.md); the console side is in [Provisioning and trust anchors](../user-guide/provisioning-and-trust-anchors.md). To run the broker and watch it, see [Certificate authentication](../deployment/device-certificates.md).
 
 :::note Status
 Available over **MQTT on the platform broker**. HTTP ingest and LwM2M do not accept client certificates, the C# SDK cannot yet present one, and renewal of a certificate on its own is not available yet. [What is not supported](#not-supported) lists everything left out.

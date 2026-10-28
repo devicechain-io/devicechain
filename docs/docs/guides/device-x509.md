@@ -53,7 +53,7 @@ The platform accepts RSA keys of 2,048 to 8,192 bits, ECDSA on P-256 or P-384, a
 
 ## Add the CA as a trust anchor {#trust-anchor}
 
-A trust anchor tells the tenant which CA to believe. In the console, open **Trust Anchors**, choose to add one, and paste or upload `ca.crt`. The console refuses a file that contains a private key. Over GraphQL:
+A trust anchor tells the tenant which CA to believe. In the console, open **Trust Anchors**, choose to add one, and paste or upload `ca.crt`. The console refuses a file that contains a private key. The console pages are described in [Provisioning and trust anchors](../user-guide/provisioning-and-trust-anchors.md). Over GraphQL:
 
 ```graphql
 mutation {

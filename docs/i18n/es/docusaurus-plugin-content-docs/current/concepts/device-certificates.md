@@ -6,7 +6,7 @@ title: Identidad por certificado
 
 Un dispositivo puede demostrar quién es con un **certificado de cliente** en lugar de un token o una contraseña. Presenta el certificado en el handshake TLS de su conexión MQTT, y la plataforma comprueba que lo emitió una autoridad certificadora (CA) en la que el tenant confía. No hay ningún secreto compartido que grabar en el firmware, y nada de lo que guarda el dispositivo puede reproducir alguien que copie un mensaje de la red: la clave privada nunca sale del dispositivo.
 
-Esta página explica cómo decide la plataforma confiar en un certificado y dónde se detiene esa confianza. Para configurarlo, sigue [Conectar con un certificado](../guides/device-x509.md). Para operar el broker y vigilarlo, consulta [Autenticación por certificado](../deployment/device-certificates.md).
+Esta página explica cómo decide la plataforma confiar en un certificado y dónde se detiene esa confianza. Para configurarlo, sigue [Conectar con un certificado](../guides/device-x509.md); la parte de la consola está en [Aprovisionamiento y anclas de confianza](../user-guide/provisioning-and-trust-anchors.md). Para operar el broker y vigilarlo, consulta [Autenticación por certificado](../deployment/device-certificates.md).
 
 :::note Estado
 Disponible por **MQTT en el broker de la plataforma**. HTTP y LwM2M no aceptan certificados de cliente, el SDK de C# todavía no puede presentar uno, y la renovación de un certificado por sí sola aún no está disponible. [Lo que no se admite](#not-supported) enumera todo lo que queda fuera.

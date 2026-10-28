@@ -4,7 +4,7 @@ title: Certificate Authentication
 
 # Certificate Authentication {#certificate-authentication}
 
-This page is the operator's side of [device client certificates](../concepts/device-certificates.md): the broker build that makes them possible, the settings that bound registration on first connect, what to watch, and what an upgrade changes on an instance that already runs. To connect a device, see [Connecting with a certificate](../guides/device-x509.md).
+This page is the operator's side of [device client certificates](../concepts/device-certificates.md): the broker build that makes them possible, the settings that bound registration on first connect, what to watch, and what an upgrade changes on an instance that already runs. To connect a device, see [Connecting with a certificate](../guides/device-x509.md) and, for the console, [Provisioning and trust anchors](../user-guide/provisioning-and-trust-anchors.md).
 
 ## The broker build {#broker}
 
@@ -50,7 +50,7 @@ functionalAreas:
 | `callout.jitMaxInFlight` | How many registrations on first connect one replica works on at once. The next is refused (`jit_busy`) and the device backs off and retries. These places come out of the callout's own bound, so a wave of first connects never takes the places that reconnecting devices need, and a pinned certificate, a token or a password never waits on them. |
 | `callout.jitSourceTrusted` | Adds a limit per client address, sized by `provisioning.sourceBurst` and `provisioning.sourceEvery`. Turn it on **only** when the MQTT Service preserves client addresses (`externalTrafficPolicy: Local`, or a kind NodePort). Behind source NAT every device shares one address and one allowance, and one device's retries would refuse a fleet. With it off, sustained refusals are alerted on rather than throttled by address. |
 
-The per-tenant limit is not a setting here: it is the tenant's provisioning ceiling, the same one [self-registration](../guides/device-self-registration.md) charges, managed with the tenant's other governance limits. Registrations against one profile take turns on that profile, roughly 100 to 200 a second per profile across all replicas, so a first-connect wave of 10,000 devices registers over a minute or two of device retries.
+The per-tenant limit is not a setting here: it is the tenant's provisioning ceiling, the same one [self-registration](../guides/device-self-registration.md) charges, managed with the tenant's other governance limits. Registrations against one profile take turns on that profile, roughly 100 to 200 a second per profile across all replicas, so a first-connect wave of 10,000 devices registers over a minute or two of device retries. The tenant allowance is charged for every attempt whose chain verified, including one refused afterwards, so a device retrying with a rotated certificate spends it.
 
 An unknown key under `callout`, or a value outside its range, stops the service at start.
 
