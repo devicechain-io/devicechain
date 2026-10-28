@@ -901,7 +901,21 @@ func TestWriterFollowsAnElectionWhoseLeaderCannotBeDialledAtFirst(t *testing.T) 
 }
 
 // A stream leader elected while a window is in flight: every acknowledged publish is in the
-// stream exactly once, in submission order, and the writer is on the new leader within 5 s.
+// stream exactly once, in submission order, and the writer ends up on the new leader.
+//
+// HOW LONG "ends up" MAY TAKE is the writer's own schedule, not a wall-clock constant. An
+// election strands the publishes in flight; they settle only at their deadline (publishWait),
+// which leaves the writer in a failure episode, and an episode closes only when a publish
+// succeeds. follow changes connection only outside an episode and with an empty window, so a
+// probe submitted during the episode blocks for a free slot, publishes on the OLD connection,
+// and the swap happens on the NEXT submission. A swap attempt whose window does not settle in
+// affinitySwapSettle is held off for affinitySwapRetry. The worst case after the last report is
+// therefore the episode closing, one failed attempt with its hold-off, and one that succeeds.
+// The test used to allow 5 s from the last report and checked the clock after a probe that had
+// itself blocked on the episode, so a loaded runner reached the deadline with the target already
+// on the new leader and no episode open, one probe short of the swap. What is asserted is
+// unchanged: the writer reaches the new leader, and every acknowledged publish is in the stream
+// once and in order. Only the bound comes from the design's constants.
 func TestOrderedWriterSurvivesLeaderMoveMidWindow(t *testing.T) {
 	const n = 4000
 	servers := dctest.StartJetStreamCluster(t, 3)
@@ -935,10 +949,11 @@ func TestOrderedWriterSurvivesLeaderMoveMidWindow(t *testing.T) {
 		lc := ow.conn.Load()
 		return lc != nil && lc.ConnectedServerName() == second
 	}
-	for deadline := time.Now().Add(5 * time.Second); !onSecond(); time.Sleep(50 * time.Millisecond) {
+	followBound := 2*affinitySwapSettle + affinitySwapRetry + 5*time.Second
+	for deadline := time.Now().Add(followBound); !onSecond(); time.Sleep(50 * time.Millisecond) {
 		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for the writer to publish on the new leader %s: its stream target is %q, "+
-				"it is in a failure episode: %v", second, ow.target.Load().server, ow.inEpisode.Load())
+			t.Fatalf("timed out after %v waiting for the writer to publish on the new leader %s: its stream target is %q, "+
+				"it is in a failure episode: %v", followBound, second, ow.target.Load().server, ow.inEpisode.Load())
 		}
 	}
 	t.Logf("writer on the new leader %s after the election", time.Since(moved))
