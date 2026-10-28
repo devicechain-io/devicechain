@@ -662,9 +662,19 @@ func markMetadataUnread(found []*DeviceCredential) {
 // ambiguous.
 func (api *Api) presentedCredentialStatement(ctx context.Context, credentialType string, credentialId string,
 	deviceJoin ...any) *gorm.DB {
-	return api.RDB.DB(ctx).Joins("Device", deviceJoin...).
+	return api.credentialsWithDevice(ctx, deviceJoin...).
 		Where("device_credentials.credential_type = ? AND device_credentials.credential_id = ? AND device_credentials.enabled = ?",
 			credentialType, credentialId, true)
+}
+
+// credentialsWithDevice is the credential table, tenant-scoped by the callback on its own table,
+// with the owning device on a LEFT JOIN carrying the device's soft-delete predicate. It is the
+// ONE place a credential lookup joins its device, so the join's tenant provenance is stated and
+// allow-listed once. The notes on presentedCredentialStatement apply to every caller: the joined
+// device is not tenant-scoped by the query, and must be checked against the credential
+// (credentialDevice) before it is trusted.
+func (api *Api) credentialsWithDevice(ctx context.Context, deviceJoin ...any) *gorm.DB {
+	return api.RDB.DB(ctx).Joins("Device", deviceJoin...)
 }
 
 // oneLiveCredential is what a presentedCredentialStatement found, as one credential: the

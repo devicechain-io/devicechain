@@ -130,7 +130,7 @@ var rawSQLAllowList = []siteEntry{
 // the entry.
 var rawJoinAllowList = []siteEntry{
 	{
-		Path: "backend/services/device-management/model/api_credentials.go", Func: "Api.presentedCredentialStatement", Count: 1,
+		Path: "backend/services/device-management/model/api_credentials.go", Func: "Api.credentialsWithDevice", Count: 1,
 		Why: "association join to the credential's device, which the callback does not scope; the " +
 			"caller re-checks the joined device against the credential (credentialDevice) before " +
 			"trusting it, as the function's own comment explains",

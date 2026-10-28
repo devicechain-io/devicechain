@@ -70,7 +70,7 @@ func (api *Api) ResolveX509Connect(ctx context.Context, fingerprint string, now 
 	}
 	found := make([]*DeviceCredential, 0, 1)
 	device := api.RDB.Database.Session(&gorm.Session{NewDB: true}).Select(connectDeviceFields)
-	result := api.RDB.DB(ctx).Joins("Device", device).
+	result := api.credentialsWithDevice(ctx, device).
 		Where("device_credentials.credential_type = ? AND device_credentials.credential_id = ?",
 			string(CredentialX509Certificate), fingerprint).
 		Select(x509ConnectColumns).
