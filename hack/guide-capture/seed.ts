@@ -519,6 +519,53 @@ async function seedConnector() {
   assertThat('the connector exists with two versions', async () => !!(await connector()) && (await versions()).length >= 2);
 }
 
+async function seedConnectAreas() {
+  // A throwaway CA, generated once for this seed and its private key discarded: the guide only
+  // ever shows the certificate, which is public. Trust anchors and integrations live in
+  // device-management; an instance that predates them fails the ensure() with the server's own
+  // message, which is the right outcome for a capture of a screen that does not exist there.
+  const CA_PEM =
+    '-----BEGIN CERTIFICATE-----\n' +
+    'MIIBzjCCAXSgAwIBAgIUXEhJacONEjite9XnSj3n5UlozV8wCgYIKoZIzj0EAwIw\n' +
+    'MzEYMBYGA1UECgwPQWNtZSBQcm9wZXJ0aWVzMRcwFQYDVQQDDA5BY21lIERldmlj\n' +
+    'ZSBDQTAeFw0yNjEwMjgxMzE3MTRaFw0zNjEwMjUxMzE3MTRaMDMxGDAWBgNVBAoM\n' +
+    'D0FjbWUgUHJvcGVydGllczEXMBUGA1UEAwwOQWNtZSBEZXZpY2UgQ0EwWTATBgcq\n' +
+    'hkjOPQIBBggqhkjOPQMBBwNCAARccInN5/feWG7vPFNHkCcXpziQlsUw6IsYSA86\n' +
+    'mPbd+u8y5dMeUQfqrHwhdqb/ToaiRW+sqH1ntni31Mrmuccyo2YwZDAdBgNVHQ4E\n' +
+    'FgQU8cetIJ+iFCwoxiUfZxbcaA3EE1IwHwYDVR0jBBgwFoAU8cetIJ+iFCwoxiUf\n' +
+    'ZxbcaA3EE1IwEgYDVR0TAQH/BAgwBgEB/wIBADAOBgNVHQ8BAf8EBAMCAQYwCgYI\n' +
+    'KoZIzj0EAwIDSAAwRQIhAKewFj/8MvnlK3ebgy16b9fuJ8gYCNNWGIpGap6Ju+nd\n' +
+    'AiBtOo/BrtGOSF0dIHgrX99EVbumjZ+kDwTCol3ffWuUrQ==\n' +
+    '-----END CERTIFICATE-----\n';
+  const anchor = async () =>
+    (await gql(DM, `query($t:[String!]!){deviceTrustAnchorsByToken(tokens:$t){token}}`, { t: ['acme-device-ca'] })).deviceTrustAnchorsByToken.length === 1;
+  await ensure('trust anchor acme-device-ca', anchor, () =>
+    gql(DM, `mutation($r:DeviceTrustAnchorCreateRequest!){createDeviceTrustAnchor(request:$r){token}}`, {
+      r: { token: 'acme-device-ca', name: 'Acme device CA', description: 'Signs the certificates flashed into Acme thermostats at the factory.', certificatePem: CA_PEM },
+    }),
+  );
+  assertThat('the trust anchor exists', anchor);
+
+  const integration = async () =>
+    (await gql(DM, `query($c:IntegrationSearchCriteria!){integrations(criteria:$c){results{token}}}`, { c: { pageNumber: 1, pageSize: 50 } })).integrations.results.some(
+      (i: { token: string }) => i.token === 'chirpstack-eu868',
+    );
+  await ensure('integration chirpstack-eu868', integration, () =>
+    gql(DM, `mutation($r:IntegrationCreateRequest!){createIntegration(request:$r){integration{token}}}`, {
+      r: {
+        token: 'chirpstack-eu868',
+        name: 'ChirpStack EU868',
+        description: 'The LoRaWAN network server for the Acme Properties sensors.',
+        type: 'CHIRPSTACK_V4',
+        enabled: true,
+        deviceTypeTokens: ['bp-thermostat'],
+        linkMetrics: true,
+      },
+    }),
+  );
+  assertThat('the integration exists', integration);
+}
+
 async function seedAlarmAck() {
   const acked = async () =>
     (await gql(DM, `query{alarms(criteria:{pageNumber:1,pageSize:5,acknowledged:true}){pagination{totalRecords}}}`)).alarms.pagination.totalRecords as number;
@@ -1155,6 +1202,7 @@ async function main() {
     ['rule', seedRule],
     ['geofence', seedGeofence],
     ['connector', seedConnector],
+    ['trust anchor and integration', seedConnectAreas],
     ['alarm acknowledgement', seedAlarmAck],
     ['assignment', seedAssignment],
     ['assets', seedAssets],

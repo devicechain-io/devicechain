@@ -3,6 +3,8 @@ title: Inbound integrations
 sidebar_position: 12.6
 ---
 
+import GuideShot from '@site/src/components/GuideShot';
+
 # Inbound integrations
 
 Some devices never connect to DeviceChain themselves. A LoRaWAN sensor talks to a gateway, and a
@@ -73,6 +75,8 @@ Choose **Create integration**. The next dialog, **Integration created**, shows t
 Select an integration to open its page. **Connect the sender** lists what to enter in the sender, for
 that sender type, with a copy button on each value: the endpoint URL, the header name and the header
 value. The bearer token itself is not shown again here.
+
+<GuideShot id="integration-detail" alt="The page of the integration ChirpStack EU868, token chirpstack-eu868, with Rotate token and Delete buttons at the top right. A Traffic panel shows 0 uplinks with nothing to read and the date the token was generated. Below it, a Connect the sender panel lists the Payload encoding JSON, the Event endpoint URL, the header name Authorization and the header value 'Bearer <bearer-token>', each with a copy button." />
 
 ### ChirpStack v4 {#chirpstack}
 

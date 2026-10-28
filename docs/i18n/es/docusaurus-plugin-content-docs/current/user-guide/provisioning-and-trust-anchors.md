@@ -3,6 +3,8 @@ title: Aprovisionamiento y anclas de confianza
 sidebar_position: 12.5
 ---
 
+import GuideShot from '@site/src/components/GuideShot';
+
 # Aprovisionamiento y anclas de confianza
 
 Este capítulo es para los **administradores del inquilino** que incorporan flotas de dispositivos a
@@ -103,6 +105,8 @@ dispositivo solo se acepta si su cadena llega a un ancla de confianza que hayas 
 **Conectar → Anclas de confianza**. La lista muestra el sujeto y la caducidad de cada ancla y cuántas
 credenciales y perfiles la usan, con insignias para un ancla **Deshabilitada**, **Caducada** o que
 **Caduca en N d**.
+
+<GuideShot id="trust-anchors-list" alt="La página Anclas de confianza. Su descripción dice que son las autoridades de certificación en las que este inquilino confía para avalar los certificados de cliente de sus dispositivos. Arriba a la derecha hay un botón Nueva ancla de confianza. La tabla tiene una fila: Acme device CA, token acme-device-ca, sujeto CN=Acme Device CA,O=Acme Properties, una fecha de caducidad, En uso 'Credenciales 0 · Perfiles 0' y una insignia verde Habilitada." />
 
 ### Añadir un ancla {#adding-an-anchor}
 

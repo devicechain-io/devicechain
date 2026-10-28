@@ -3,6 +3,8 @@ title: 入站集成
 sidebar_position: 12.6
 ---
 
+import GuideShot from '@site/src/components/GuideShot';
+
 # 入站集成 {#inbound-integrations}
 
 有些设备从不自己连接 DeviceChain。LoRaWAN 传感器与网关通信，由 ChirpStack 或 The Things Stack 这类**网络服务器**把解码结果通过 HTTPS 转发过来。**入站集成**（inbound integration）就是这种转发的接收端。它给发送方一个 URL 和一个承载令牌，找到每条消息所属的设备，并把读数存为普通测量值。
@@ -45,6 +47,8 @@ sidebar_position: 12.6
 ## 连接发送方 {#connecting}
 
 选择一个集成即可打开其页面。**Connect the sender**（连接发送方）按该发送方类型列出需要在发送方中填写的内容，每个值旁都有复制按钮：端点 URL、请求头名称和请求头值。承载令牌本身不会在这里再次显示。
+
+<GuideShot id="integration-detail" alt="集成 ChirpStack EU868（令牌 chirpstack-eu868）的页面，右上角有 Rotate token 和 Delete 按钮。Traffic 面板显示 0 条无可读内容的上行消息以及令牌的生成日期。其下的 Connect the sender 面板列出 Payload encoding（JSON）、Event endpoint URL、请求头名称 Authorization 和请求头值“Bearer <bearer-token>”，每项都有复制按钮。" />
 
 ### ChirpStack v4 {#chirpstack}
 

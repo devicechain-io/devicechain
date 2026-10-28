@@ -3,6 +3,8 @@ title: 预配置与信任锚
 sidebar_position: 12.5
 ---
 
+import GuideShot from '@site/src/components/GuideShot';
+
 # 预配置与信任锚 {#provisioning-and-trust-anchors}
 
 本章面向**租户管理员**，介绍如何在不逐台创建、配置设备的前提下，把成批设备接入 DeviceChain。内容涉及侧边栏 **Connect**（连接）下和设备页面上的三项功能：
@@ -57,6 +59,8 @@ sidebar_position: 12.5
 ## 信任锚 {#trust-anchors}
 
 **信任锚**（trust anchor）是一份证书颁发机构（CA）证书。只有证书链通向你已登记的某个信任锚时，设备证书才会被接受。打开 **Connect → Trust Anchors**。列表显示每个信任锚的主体、过期时间，以及有多少凭据和预配置文件在使用它，已禁用、已过期或 **Expires in N d**（N 天后过期）的信任锚会带徽标。
+
+<GuideShot id="trust-anchors-list" alt="Trust anchors（信任锚）页面。描述说明这些是本租户信任的、用来为其设备的客户端证书担保的证书颁发机构。右上角有 New trust anchor 按钮。表格只有一行：Acme device CA，令牌 acme-device-ca，主体 CN=Acme Device CA,O=Acme Properties，一个过期日期，In use 为“Credentials 0 · Profiles 0”，以及绿色的 Enabled 徽标。" />
 
 ### 添加信任锚 {#adding-an-anchor}
 

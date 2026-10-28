@@ -820,6 +820,22 @@ export const recipes: Recipe[] = [
     sources: ['routes/browse/BrowsePage.tsx'],
   },
 
+  // ---- Connect: trust anchors and inbound integrations ------------------------------------------------
+  {
+    id: 'trust-anchors-list',
+    session: 'tenant',
+    route: '/trust-anchors',
+    anchor: ROWS,
+    minRows: { selector: ROWS, count: 1 },
+    sources: ['routes/trust-anchors/TrustAnchorsPage.tsx'],
+  },
+  {
+    id: 'integration-detail',
+    session: 'tenant',
+    route: '/integrations/chirpstack-eu868',
+    anchor: PAGE,
+    sources: ['routes/integrations/IntegrationDetailPage.tsx'],
+  },
   // ---- Chapter 12: Connectors ------------------------------------------------------------------------
   {
     id: 'connectors-list',
