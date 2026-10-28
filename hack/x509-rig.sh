@@ -55,7 +55,9 @@
 #        N10 the issuer pin (6): every certificate connect above was admitted by a callout that
 #            pins requests to the broker's live server ids, learned over the system account.
 #            The pin must hold the live broker servers, its system connection must be up, and
-#            no genuine request may have been counted issuer_unpinned or issuer_pin_unavailable.
+#            no genuine request may have been counted issuer_unpinned or issuer_pin_unavailable
+#            (issuer_pin_pending, a request that met a broker pod before the pin had learned it, is
+#            reported but tolerated: the device retries).
 #            The checker is shown red on a pin that holds no servers, one whose system connection
 #            is down, and one that refused the broker's own requests. A request FORGED onto the
 #            callout subject is not driven from here: the broker's publish-deny refuses it before
@@ -1167,12 +1169,15 @@ step6_issuer_pin() {
   snap="$(dm_snap)"
   unpinned="$(snap_get "$snap" issuer_unpinned)"
   unavail="$(snap_get "$snap" issuer_pin_unavailable)"
+  # issuer_pin_pending is a genuine request refused for want of a ping (a broker pod that joined during a
+  # roll, a rate-limited re-ping): the device retried and got in. It is reported, never red.
+  pending="$(snap_get "$snap" issuer_pin_pending)"
   # The per-pod gauges are paired by pod; the counters are summed over pods, which is the stricter reading.
   while read -r pod conn; do
     servers="$(dm_gauge callout_issuer_pin_servers | awk -v p="$pod" '$1 == p { print $2 }')"
     out="$(check_pin_state "${conn%.*}" "${servers%.*}" "${#broker_pods[@]}" "$unpinned" "$unavail")" ||
       fail "N10: device-management pod $pod: $out"
-    pass "N10: $pod holds ${servers%.*} server id(s) of ${#broker_pods[@]} broker pod(s), its system connection is up, and no genuine request was refused by the pin (issuer_unpinned=$unpinned issuer_pin_unavailable=$unavail)"
+    pass "N10: $pod holds ${servers%.*} server id(s) of ${#broker_pods[@]} broker pod(s), its system connection is up, and no genuine request was refused by the pin (issuer_unpinned=$unpinned issuer_pin_unavailable=$unavail; issuer_pin_pending=$pending is tolerated: those devices retried)"
     n=$((n + 1))
   done < <(dm_gauge callout_issuer_pin_connected)
   ((n > 0)) || fail "N10: no device-management pod reported the pin"

@@ -70,6 +70,14 @@ The certificate alerts watch devices that connect with a client certificate (MQT
     certificate profile that cannot register anything (its device type was deleted, or it mints a
     credential type this build does not support), or two profiles at one trust anchor, which a
     certificate cannot choose between. The devices are refused until it is fixed.
+  - DeviceX509IssuerPinUnavailable is a total outage of certificate devices, and the one alert in
+    this group that is critical: the callout pins certificate requests to the broker's live servers,
+    learned over the system account, and refuses every certificate connect when it cannot (the
+    system connection is down, or nothing was learned for three refresh periods). It reads the
+    refusals, not callout_issuer_pin_connected, because that gauge sits at zero on an instance
+    whose pin is off or whose callout is not running and would fire there for nothing; a connection
+    that is down while no certificate device is trying refuses nobody. Forged requests are a
+    different counter (issuer_unpinned) and are not an outage.
   - DeviceTrustAnchorsExpiringSoon is one instance-wide count, not a series per anchor or per
     tenant, which would be unbounded. A CA that expires takes every device that chains to it off
     the platform on the same day.
@@ -187,6 +195,15 @@ spec:
           annotations:
             summary: "A certificate provisioning profile cannot register devices because it is misconfigured"
             description: "In the last 10m device-management refused {{ "{{ $value | humanize }}" }} certificate registration(s) as {{ "{{ $labels.result }}" }}. jit_provisioning_misconfigured and jit_credential_type_unsupported mean the profile's device type was deleted or it mints a credential type this build does not support; jit_ambiguous means a device's certificate chains to the trust anchor of more than one enabled profile at the same depth and cannot say which was meant. Every device concerned is refused until the profile is fixed or each profile has a trust anchor of its own. The service logs the cause."
+        - alert: DeviceX509IssuerPinUnavailable
+          expr: sum(increase(devicechain_devicemanagement_callout_x509_total{result="issuer_pin_unavailable",namespace="{{ $ns }}"}[5m])) > 0
+          for: 5m
+          labels:
+            severity: critical
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "Certificate devices are being refused because the auth callout cannot vouch for the broker's servers"
+            description: "For 5m device-management has refused certificate connects ({{ "{{ $value | humanize }}" }} in the last 5m) because its issuer pin has no usable list of the broker's live servers: its system-account connection is down, or no refresh has succeeded for three refresh periods. Every certificate device is refused until it recovers; token and password devices are not affected. Check callout_issuer_pin_connected and callout_issuer_pin_refresh_total{result=\"error\"}, the device-management log for the system-account connection, and that infrastructure.nats.auth.sysUser and sysPassword are valid."
         - alert: DeviceTrustAnchorsExpiringSoon
           expr: max(devicechain_devicemanagement_device_trust_anchors_expiring{window="30d",namespace="{{ $ns }}"}) > 0
           for: 1h

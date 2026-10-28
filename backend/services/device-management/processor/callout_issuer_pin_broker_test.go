@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/natsauth"
 	"github.com/nats-io/jwt/v2"
@@ -41,7 +42,10 @@ func newPinnedFixture(t *testing.T) *pinnedFixture {
 	pin, err := NewIssuerPin(IssuerPinConfig{
 		Gather:    NewSystemGather(sys, 2*time.Second),
 		Connected: sys.IsConnected,
-		Metrics:   NewIssuerPinMetrics(ms),
+		// Small, so the forgeries below each find the pin free to re-ping and are counted as
+		// forgeries (issuer_unpinned); the rate-limited case has its own subtest.
+		MinRefreshInterval: time.Millisecond,
+		Metrics:            NewIssuerPinMetrics(ms),
 	})
 	require.NoError(t, err)
 	pf.issuerPin = pin
@@ -184,6 +188,16 @@ func TestIssuerPinOnARealBroker(t *testing.T) {
 		f.moved(before, x509ResultIssuerUnpinned)
 	})
 
+	t.Run("a forgery inside the re-ping interval is refused as pending, not as unpinned", func(t *testing.T) {
+		f.issuerPin.minGap = time.Hour
+		defer func() { f.issuerPin.minGap = time.Millisecond }()
+		// Spend the one allowed ping, then the next unknown issuer is inside the interval.
+		f.issuerPin.refresh(context.Background(), true)
+		before := f.counts()
+		require.False(t, f.forgedRequest(t, stranger, strangerID, "sensor-001", leaf))
+		f.moved(before, x509ResultIssuerPending)
+	})
+
 	t.Run("negative control: with the pin removed the same forgery is granted", func(t *testing.T) {
 		f.resp.WithIssuerPin(nil)
 		defer f.resp.WithIssuerPin(f.issuerPin)
@@ -193,12 +207,18 @@ func TestIssuerPinOnARealBroker(t *testing.T) {
 
 	t.Run("a password connect is not pinned", func(t *testing.T) {
 		// The pin is for the grant that needs no secret. A token or password connect from an
-		// unpinned issuer still goes through its own credential check, unchanged.
-		req := testRequestFromClient(t, x509Tenant+":nobody", "", clientIDOf("sensor-001"))
+		// unpinned issuer goes through its own credential check, unchanged: a VALID credential
+		// is granted, so the test fails if the pin ever reaches this path.
+		_, err := f.api.CreateDeviceCredential(f.ctx, &model.DeviceCredentialCreateRequest{
+			Token: "tok-pin", DeviceToken: "sensor-001", CredentialType: string(model.CredentialAccessToken),
+			CredentialId: "tok-pin-0123456789", Enabled: true})
+		require.NoError(t, err)
+		req := testRequestFromClient(t, x509Tenant+":tok-pin-0123456789", "", clientIDOf("sensor-001"))
 		before := f.counts()
-		_, why := f.resp.authorizeRequest(req, true, strangerID)
-		require.Equal(t, genericAuthFailure, why) // refused for its unknown token, not for the issuer
-		require.Equal(t, before, f.counts(), "no certificate result may move for a password connect")
+		jwtOut, why := f.resp.authorizeRequest(req, true, strangerID)
+		require.Empty(t, why, "a valid token connect from an unpinned issuer was refused: the pin reached a non-certificate path")
+		require.NotEmpty(t, jwtOut)
+		require.Equal(t, before, f.counts(), "no certificate result may move for a token connect")
 	})
 
 	t.Run("with the system connection down every certificate connect is refused", func(t *testing.T) {

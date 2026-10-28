@@ -26,7 +26,6 @@ type pinHarness struct {
 	mu        sync.Mutex
 	now       time.Time
 	live      []string
-	expected  int
 	gatherErr error
 	up        bool
 	pings     atomic.Int64
@@ -43,18 +42,18 @@ func newServerID(t *testing.T) string {
 
 func newPinHarness(t *testing.T, live ...string) *pinHarness {
 	t.Helper()
-	h := &pinHarness{now: time.Unix(1_800_000_000, 0), live: live, expected: len(live), up: true}
+	h := &pinHarness{now: time.Unix(1_800_000_000, 0), live: live, up: true}
 	ms := &core.Microservice{InstanceId: "inst-1", FunctionalArea: "device-management"}
 	ms.UseMetricsRegistry(prometheus.NewRegistry())
 	pin, err := NewIssuerPin(IssuerPinConfig{
-		Gather: func(context.Context) ([]string, int, error) {
+		Gather: func(context.Context) ([]string, error) {
 			h.pings.Add(1)
 			h.mu.Lock()
 			defer h.mu.Unlock()
 			if h.gatherErr != nil {
-				return nil, 0, h.gatherErr
+				return nil, h.gatherErr
 			}
-			return append([]string(nil), h.live...), h.expected, nil
+			return append([]string(nil), h.live...), nil
 		},
 		Connected: func() bool { h.mu.Lock(); defer h.mu.Unlock(); return h.up },
 		Now:       func() time.Time { h.mu.Lock(); defer h.mu.Unlock(); return h.now },
@@ -66,9 +65,9 @@ func newPinHarness(t *testing.T, live ...string) *pinHarness {
 }
 
 func (h *pinHarness) advance(d time.Duration) { h.mu.Lock(); h.now = h.now.Add(d); h.mu.Unlock() }
-func (h *pinHarness) setLive(expected int, ids ...string) {
+func (h *pinHarness) setLive(ids ...string) {
 	h.mu.Lock()
-	h.live, h.expected = ids, expected
+	h.live = ids
 	h.mu.Unlock()
 }
 func (h *pinHarness) setUp(up bool) { h.mu.Lock(); h.up = up; h.mu.Unlock() }
@@ -103,7 +102,7 @@ func TestIssuerPinLearnsAServerThatJoinedSinceTheLastRefresh(t *testing.T) {
 	a, b := newServerID(t), newServerID(t)
 	h := newPinHarness(t, a)
 	h.learn()
-	h.setLive(2, a, b)
+	h.setLive(a, b)
 	h.advance(5 * time.Second)
 	require.Equal(t, pinPinned, h.pin.Check(context.Background(), b, b), "the new server was not learned on the re-ping")
 	require.EqualValues(t, 2, h.pings.Load())
@@ -117,9 +116,9 @@ func TestIssuerPinRollingRestartLockoutIsBoundedByTheMinimumInterval(t *testing.
 	a, b := newServerID(t), newServerID(t)
 	h := newPinHarness(t, a)
 	h.learn()
-	h.setLive(2, a, b)
+	h.setLive(a, b)
 	h.advance(500 * time.Millisecond)
-	require.Equal(t, pinUnknown, h.pin.Check(context.Background(), b, b), "inside the interval: refused, not failed open")
+	require.Equal(t, pinPending, h.pin.Check(context.Background(), b, b), "inside the interval: refused as pending (not learned yet), not failed open")
 	require.EqualValues(t, 1, h.pings.Load())
 	h.advance(DefaultIssuerPinMinRefreshInterval)
 	require.Equal(t, pinPinned, h.pin.Check(context.Background(), b, b), "one interval later the device gets in")
@@ -164,18 +163,48 @@ func TestIssuerPinReRingIsRateLimitedAgainstAFloodOfForgedRequests(t *testing.T)
 	h := newPinHarness(t, a)
 	h.learn()
 	h.advance(10 * time.Second)
+	const n = 200
+	forged := make([]string, n)
+	for i := range forged {
+		forged[i] = newServerID(t)
+	}
+	verdicts := make([]pinVerdict, n)
 	var wg sync.WaitGroup
-	for i := 0; i < 200; i++ {
-		forged := newServerID(t)
+	for i := 0; i < n; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			require.Equal(t, pinUnknown, h.pin.Check(context.Background(), forged, forged))
+			verdicts[i] = h.pin.Check(context.Background(), forged[i], forged[i])
 		}()
 	}
-	wg.Wait()
+	wg.Wait() // asserted here, on the test goroutine, never inside the workers
+	unknown, pending := 0, 0
+	for _, v := range verdicts {
+		switch v {
+		case pinUnknown:
+			unknown++
+		case pinPending:
+			pending++
+		default:
+			t.Fatalf("a forged request got verdict %d", v)
+		}
+	}
 	require.EqualValues(t, 2, h.pings.Load(), "200 forged requests inside one interval amplified into more than one $SYS ping")
-	require.GreaterOrEqual(t, h.refreshCount(pinRefreshRateLimited), float64(190))
+	require.Equal(t, 1, unknown, "exactly the request that pinged finds nothing; the rest are not-yet-learned")
+	require.Equal(t, n-1, pending)
+	require.GreaterOrEqual(t, h.refreshCount(pinRefreshRateLimited), float64(n-1))
+}
+
+func TestIssuerPinAFailedPingIsPendingNotAForgery(t *testing.T) {
+	a, b := newServerID(t), newServerID(t)
+	h := newPinHarness(t, a)
+	h.learn()
+	h.mu.Lock()
+	h.gatherErr = errors.New("sys account hiccup")
+	h.mu.Unlock()
+	h.advance(10 * time.Second)
+	require.Equal(t, pinPending, h.pin.Check(context.Background(), b, b),
+		"a request refused for want of a working ping was counted as a forgery")
 }
 
 func TestIssuerPinMismatchedClaimedServerIsRefusedEvenForALiveIssuer(t *testing.T) {
@@ -187,28 +216,50 @@ func TestIssuerPinMismatchedClaimedServerIsRefusedEvenForALiveIssuer(t *testing.
 	require.Equal(t, pinUnknown, h.pin.Check(context.Background(), "", ""))
 }
 
-func TestIssuerPinPartialAnswerNeverEvictsACompleteOneDoes(t *testing.T) {
+func TestIssuerPinAnAnswerNeverShrinksTheSetAServerAgesOutOnItsOwnClock(t *testing.T) {
 	a, b := newServerID(t), newServerID(t)
 	h := newPinHarness(t, a, b)
 	h.learn()
-	h.advance(time.Minute)
-	h.setLive(2, a) // b answered late: the cluster still claims two
+	// Only a answers from now on (b is slow, or the ping rode a freshly booted pod).
+	h.setLive(a)
+	h.advance(40 * time.Second)
 	h.pin.refresh(context.Background(), true)
-	require.ElementsMatch(t, []string{a, b}, h.pin.Members(), "a partial answer evicted a live server")
-	require.EqualValues(t, 1, h.refreshCount(pinRefreshIncomplete))
+	require.ElementsMatch(t, []string{a, b}, h.pin.Members(), "an answer that heard only one server evicted the other")
+	require.Equal(t, pinPinned, h.pin.Check(context.Background(), b, b))
 
-	h.setLive(1, a) // the cluster now claims one: b has really gone
+	// b stays silent past the max age while a keeps answering: only b ages out.
+	h.advance(60 * time.Second)
 	h.pin.refresh(context.Background(), true)
-	require.ElementsMatch(t, []string{a}, h.pin.Members(), "a complete answer left a departed server pinned")
+	require.ElementsMatch(t, []string{a}, h.pin.Members(), "a server not heard for the max age stayed pinned")
+	require.Equal(t, pinPinned, h.pin.Check(context.Background(), a, a), "the server that kept answering was dropped with it")
+	h.advance(10 * time.Second)
+	require.Equal(t, pinUnknown, h.pin.Check(context.Background(), b, b))
+}
+
+func TestIssuerPinAnIdNotHeardForTheMaxAgeIsNotPinnedEvenIfTheSnapshotIsFresh(t *testing.T) {
+	// The per-id clock is read at lookup too, not only when a refresh prunes: between a refresh that
+	// stamped a and the next one, b's own stamp may have run out.
+	a, b := newServerID(t), newServerID(t)
+	h := newPinHarness(t, a, b)
+	h.learn()
+	h.setLive(a)
+	h.advance(60 * time.Second)
+	h.pin.refresh(context.Background(), true) // a restamped, b 60s old: still believed
+	require.Equal(t, pinPinned, h.pin.Check(context.Background(), b, b))
+	h.advance(40 * time.Second) // b now 100s old (> 90s); snapshot is 40s old (fresh)
+	h.mu.Lock()
+	h.gatherErr = errors.New("quiet")
+	h.mu.Unlock()
+	require.NotEqual(t, pinPinned, h.pin.Check(context.Background(), b, b), "an id past the max age was believed on its neighbour's freshness")
 }
 
 func TestIssuerPinConstructorRefusesWhatCouldNotWork(t *testing.T) {
 	_, err := NewIssuerPin(IssuerPinConfig{Connected: func() bool { return true }})
 	require.Error(t, err)
-	_, err = NewIssuerPin(IssuerPinConfig{Gather: func(context.Context) ([]string, int, error) { return nil, 0, nil }})
+	_, err = NewIssuerPin(IssuerPinConfig{Gather: func(context.Context) ([]string, error) { return nil, nil }})
 	require.Error(t, err)
 	_, err = NewIssuerPin(IssuerPinConfig{
-		Gather:    func(context.Context) ([]string, int, error) { return nil, 0, nil },
+		Gather:    func(context.Context) ([]string, error) { return nil, nil },
 		Connected: func() bool { return true }, RefreshInterval: time.Second, MinRefreshInterval: time.Minute})
 	require.Error(t, err)
 }

@@ -52,13 +52,12 @@ const (
 
 // Pin refresh results (callout_issuer_pin_refresh_total), a closed list.
 const (
-	pinRefreshOK          = "ok"           // every server the cluster claims answered; the set was replaced
-	pinRefreshIncomplete  = "incomplete"   // fewer answered than claimed; the set only grew
+	pinRefreshOK          = "ok"           // at least one server answered; the ids that did were (re)stamped as seen
 	pinRefreshError       = "error"        // nobody answered, or the request failed; the set is unchanged
 	pinRefreshRateLimited = "rate_limited" // an unknown issuer arrived inside the minimum interval; no ping sent
 )
 
-var pinRefreshResults = []string{pinRefreshOK, pinRefreshIncomplete, pinRefreshError, pinRefreshRateLimited}
+var pinRefreshResults = []string{pinRefreshOK, pinRefreshError, pinRefreshRateLimited}
 
 // pinVerdict is the pin's answer for one request.
 type pinVerdict int
@@ -68,6 +67,11 @@ const (
 	pinPinned pinVerdict = iota
 	// pinUnknown: the membership was current and the issuer is not in it (after a re-ping when one was allowed).
 	pinUnknown
+	// pinPending: the issuer is not (yet) known and the re-ping that could have learned it was not
+	// allowed or did not finish (inside the minimum interval, or the wait timed out). Refused, like
+	// pinUnknown, but counted apart so that pinUnknown stays a clean forgery signal: it means a
+	// re-ping WAS made and found nothing. A server that joined during a roll lands here.
+	pinPending
 	// pinUnavailable: the membership cannot be vouched for (system connection down, no refresh has
 	// succeeded recently). Refused, like pinUnknown, but counted apart: it is the operator's problem,
 	// not an attack.
@@ -84,9 +88,9 @@ type IssuerPinMetrics struct {
 	Connected prometheus.Gauge
 }
 
-// IssuerPinGather asks the system account which servers are live: the server ids that answered,
-// and the largest cluster size any of them claimed (0 when none claimed one).
-type IssuerPinGather func(ctx context.Context) (ids []string, expected int, err error)
+// IssuerPinGather asks the system account which servers are live: the server ids that answered
+// within its window. It returns an error when none did.
+type IssuerPinGather func(ctx context.Context) (ids []string, err error)
 
 // IssuerPinConfig assembles an IssuerPin.
 type IssuerPinConfig struct {
@@ -116,9 +120,9 @@ type IssuerPin struct {
 	slot chan struct{}
 
 	mu          sync.Mutex
-	ids         map[string]struct{}
-	lastOK      time.Time // last refresh that produced a usable answer
-	lastAttempt time.Time // last time a ping was sent
+	ids         map[string]time.Time // server id -> when a ping last heard it
+	lastOK      time.Time            // last refresh that produced a usable answer
+	lastAttempt time.Time            // last time a ping was sent
 
 	downLog rateLimitedLog
 	started bool
@@ -151,7 +155,7 @@ func NewIssuerPin(cfg IssuerPinConfig) (*IssuerPin, error) {
 		maxAge:  issuerPinMaxAgeIntervals * cfg.RefreshInterval,
 		metrics: cfg.Metrics, now: cfg.Now,
 		slot: make(chan struct{}, 1),
-		ids:  make(map[string]struct{}),
+		ids:  make(map[string]time.Time),
 		stop: make(chan struct{}), done: make(chan struct{}),
 	}, nil
 }
@@ -175,11 +179,22 @@ func (p *IssuerPin) Check(ctx context.Context, issuer, claimedServerID string) p
 	}
 	// Not in the snapshot (or the snapshot is too old to believe): one re-ping, if the minimum
 	// interval allows one.
-	p.refresh(ctx, false)
+	outcome := p.refresh(ctx, false)
 	if !p.isConnected() {
 		return pinUnavailable
 	}
-	return p.lookup(issuer)
+	switch v := p.lookup(issuer); v {
+	case pinUnknown:
+		// The id is absent from a current snapshot. That is a verdict only if a ping of OUR OWN
+		// just found nothing; a refusal for want of a ping (rate limit, timeout, failed ping) is
+		// "not learned yet", which a rolling restart produces and a forger does not need to.
+		if outcome != refreshDone {
+			return pinPending
+		}
+		return pinUnknown
+	default:
+		return v
+	}
 }
 
 // lookup answers from the snapshot alone: pinned, unknown (a current snapshot without the
@@ -190,7 +205,9 @@ func (p *IssuerPin) lookup(issuer string) pinVerdict {
 	if p.lastOK.IsZero() || p.now().Sub(p.lastOK) > p.maxAge {
 		return pinUnavailable
 	}
-	if _, ok := p.ids[issuer]; ok {
+	// Per id, not per snapshot: an answer that heard only some servers refreshes only those, so a
+	// server that stopped answering ages out on its own clock instead of riding on its neighbours.
+	if seen, ok := p.ids[issuer]; ok && p.now().Sub(seen) <= p.maxAge {
 		return pinPinned
 	}
 	return pinUnknown
@@ -215,14 +232,34 @@ func (p *IssuerPin) logDown(why string) {
 	}
 }
 
+// refreshOutcome is what refresh did, for Check.
+type refreshOutcome int
+
+const (
+	// refreshDone: a ping was sent and answered; the snapshot now reflects it.
+	refreshDone refreshOutcome = iota
+	// refreshSkipped: inside the minimum interval, or the wait for a refresh in flight ran out.
+	refreshSkipped
+	// refreshFailed: a ping was sent and nobody answered, or it could not be sent.
+	refreshFailed
+)
+
 // refresh pings the system account and updates the membership. force skips the rate limit (the
 // periodic refresh and the first one). A caller that finds a refresh in flight waits for it
 // (bounded by ctx) rather than sending a second ping: its answer is the one both want.
-func (p *IssuerPin) refresh(ctx context.Context, force bool) {
+//
+// 🔴 AN ANSWER NEVER SHRINKS THE SET. The count a server reports of its cluster is not a promise
+// that the others have been heard: a server that has just booted reports a small one for its first
+// seconds, and the connection this ping rides on reconnects to exactly such a server during a
+// rolling restart. Treating "this many answered" as "this is everyone" would have replaced the set
+// with that one pod and refused the rest of the fleet. So the ids that answered are stamped with the
+// time, the rest are left alone, and an id leaves only by not being heard for maxAge.
+func (p *IssuerPin) refresh(ctx context.Context, force bool) refreshOutcome {
 	select {
 	case p.slot <- struct{}{}:
 	case <-ctx.Done():
-		return
+		p.countRefresh(pinRefreshRateLimited)
+		return refreshSkipped
 	}
 	defer func() { <-p.slot }()
 
@@ -231,12 +268,12 @@ func (p *IssuerPin) refresh(ctx context.Context, force bool) {
 	if !force && !p.lastAttempt.IsZero() && now.Sub(p.lastAttempt) < p.minGap {
 		p.mu.Unlock()
 		p.countRefresh(pinRefreshRateLimited)
-		return
+		return refreshSkipped
 	}
 	p.lastAttempt = now
 	p.mu.Unlock()
 
-	ids, expected, err := p.gather(ctx)
+	ids, err := p.gather(ctx)
 	if err != nil || len(ids) == 0 {
 		p.countRefresh(pinRefreshError)
 		if err != nil {
@@ -244,26 +281,25 @@ func (p *IssuerPin) refresh(ctx context.Context, force bool) {
 		} else {
 			p.logDown("no server answered the ping")
 		}
-		return
+		return refreshFailed
 	}
+	p.countRefresh(pinRefreshOK)
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if expected > 0 && len(ids) >= expected {
-		// Every server the cluster claims answered: the set is exactly the live set, and a
-		// server that has gone drops out.
-		p.ids = make(map[string]struct{}, len(ids))
-		p.countRefresh(pinRefreshOK)
-	} else {
-		// A partial answer must not evict a live server that merely replied late.
-		p.countRefresh(pinRefreshIncomplete)
-	}
+	at := p.now()
 	for _, id := range ids {
-		p.ids[id] = struct{}{}
+		p.ids[id] = at
 	}
-	p.lastOK = p.now()
+	for id, seen := range p.ids {
+		if at.Sub(seen) > p.maxAge {
+			delete(p.ids, id)
+		}
+	}
+	p.lastOK = at
 	if p.metrics != nil && p.metrics.Servers != nil {
 		p.metrics.Servers.Set(float64(len(p.ids)))
 	}
+	return refreshDone
 }
 
 func (p *IssuerPin) countRefresh(result string) {
@@ -335,8 +371,8 @@ func NewIssuerPinMetrics(ms issuerPinRegistry) *IssuerPinMetrics {
 	m := &IssuerPinMetrics{
 		Refresh: ms.NewCounterVec("callout_issuer_pin_refresh_total",
 			"Refreshes of the set of live broker server ids the auth callout pins certificate requests to, by result. "+
-				"ok replaced the set; incomplete only added to it (fewer servers answered than the cluster claims); error left it "+
-				"unchanged (nobody answered); rate_limited is an unknown issuer that arrived inside the minimum interval and sent no ping.",
+				"ok heard at least one server (and stamped those ids as seen; an id leaves only by not being heard for three refresh periods); "+
+				"error left the set unchanged (nobody answered); rate_limited is an unknown issuer that arrived inside the minimum interval, or whose wait for a ping in flight ran out, and sent no ping.",
 			[]string{"result"}),
 		Servers: ms.NewGauge("callout_issuer_pin_servers",
 			"Live broker server ids the auth callout currently believes."),
@@ -360,31 +396,42 @@ type statszServer struct {
 }
 
 // NewSystemGather is the IssuerPinGather over a system-account connection. It collects replies
-// until every server the answers claim has answered, or the window closes: a fan-out request must
-// not be a plain Request, which returns the FIRST reply and would learn one server of three.
+// until the window closes, or earlier ONLY when the replies agree: every reply so far claims the
+// same cluster size and that many distinct servers have answered. A fan-out request must not be a
+// plain Request, which returns the FIRST reply and would learn one server of three.
+//
+// 🔴 THE CLAIM IS NOT TRUSTED TO END THE WAIT ALONE. active_servers is each server's own count of
+// the cluster, and a server that has just booted counts few. "The largest claim so far has been
+// met" therefore ended the wait on the first reply of a freshly started pod (claiming one) and
+// returned one server of three. Disagreeing claims mean somebody has not seen the cluster yet, so
+// the wait runs to the end of the window.
 func NewSystemGather(nc *nats.Conn, window time.Duration) IssuerPinGather {
 	if window <= 0 {
 		window = DefaultIssuerPinGatherWindow
 	}
-	return func(ctx context.Context) ([]string, int, error) {
+	return func(ctx context.Context) ([]string, error) {
+		// Bounded by the window as well as the caller's context: a flush on a wedged connection
+		// must not outlast the connect this runs inside.
+		fctx, cancel := context.WithTimeout(ctx, window+time.Second)
+		defer cancel()
 		inbox := nc.NewRespInbox()
 		sub, err := nc.SubscribeSync(inbox)
 		if err != nil {
-			return nil, 0, fmt.Errorf("subscribing for server replies: %w", err)
+			return nil, fmt.Errorf("subscribing for server replies: %w", err)
 		}
 		defer func() { _ = sub.Unsubscribe() }()
 		// Flushed before publishing: an unflushed subscription may register after the servers
 		// have answered, and every reply would be dropped, reading as an empty cluster.
-		if err := nc.Flush(); err != nil {
-			return nil, 0, fmt.Errorf("flushing the reply subscription: %w", err)
+		if err := nc.FlushWithContext(fctx); err != nil {
+			return nil, fmt.Errorf("flushing the reply subscription: %w", err)
 		}
 		if err := nc.PublishRequest(issuerPinSysPing, inbox, []byte("{}")); err != nil {
-			return nil, 0, fmt.Errorf("publishing the server ping: %w", err)
+			return nil, fmt.Errorf("publishing the server ping: %w", err)
 		}
 		deadline := time.Now().Add(window)
 		seen := make(map[string]struct{})
 		ids := make([]string, 0, 3)
-		expected := 0
+		claim, agreed := 0, true
 		for ctx.Err() == nil {
 			remaining := time.Until(deadline)
 			if remaining <= 0 {
@@ -402,16 +449,22 @@ func NewSystemGather(nc *nats.Conn, window time.Duration) IssuerPinGather {
 				seen[r.Server.ID] = struct{}{}
 				ids = append(ids, r.Server.ID)
 			}
-			if r.Statsz.ActiveServers > expected {
-				expected = r.Statsz.ActiveServers
+			if claim == 0 {
+				claim = r.Statsz.ActiveServers
+			} else if r.Statsz.ActiveServers != claim {
+				agreed = false
 			}
-			if expected > 0 && len(ids) >= expected {
-				break // everyone the cluster claims has answered; no reason to wait out the window
+			if agreed && claim > 1 && len(ids) >= claim {
+				// Every reply agrees on the cluster size and that many have answered. A claim of one
+				// is never enough to stop: it is what a server that has just booted says, and the
+				// first reply of a lone server is indistinguishable from it. A genuinely single
+				// server costs the window.
+				break
 			}
 		}
 		if len(ids) == 0 {
-			return nil, 0, fmt.Errorf("no server answered %s within %s", issuerPinSysPing, window)
+			return nil, fmt.Errorf("no server answered %s within %s", issuerPinSysPing, window)
 		}
-		return ids, expected, nil
+		return ids, nil
 	}
 }

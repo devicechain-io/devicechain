@@ -67,7 +67,7 @@ functionalAreas:
 证书连接不需要设备提供任何密钥：证书是公开的。因此 callout 不会仅因为请求到达了 callout 的 subject 就信任它。代理用启动时生成的密钥为每个授权请求签名，其服务器 ID 就是该密钥的公钥部分。所以 device-management 通过 NATS 系统账户获取在线代理服务器的 ID，只对由其中之一签名、且以其自身为发送方的请求授予证书连接。由其他任何对象签名的请求都会被拒绝（`issuer_unpinned`），无论其中的证书多么合格。
 
 - **为什么需要。** 客户端不能向 callout 的 subject 发布，这是第一道防线。固定机制是第二道，用于该限制被误配置的那一天：伪造请求需要代理服务器的私钥，而私钥从不离开其进程。
-- **自动获取，无需配置。** device-management 每隔 `callout.issuerPinRefresh` 向系统账户探测一次服务器 ID。来自未见过的 ID 的请求会在被拒绝之前多触发一次探测，因此滚动重启期间新加入的代理 Pod 会被第一个遇到它的设备学到。无论到达多少请求，探测都限制为每 `callout.issuerPinMinRefresh` 一次，所以大量伪造请求不会变成大量系统账户流量。在该间隔内被拒绝的设备按自己的退避重试，之后即可被接纳。
+- **自动获取，无需配置。** device-management 每隔 `callout.issuerPinRefresh` 向系统账户探测一次服务器 ID。来自未见过的 ID 的请求会在被拒绝之前多触发一次探测，因此滚动重启期间新加入的代理 Pod 会被第一个遇到它的设备学到。无论到达多少请求，探测都限制为每 `callout.issuerPinMinRefresh` 一次，所以大量伪造请求不会变成大量系统账户流量。在该间隔内被拒绝的设备，或等待进行中的探测超时的设备，会被计为 `issuer_pin_pending`（而不是 `issuer_unpinned`，后者表示已探测过且一无所获），按自己的退避重试，之后即可被接纳。一次应答绝不会把服务器从列表中移除：每个服务器的 ID 在应答时被标记，三个刷新周期没有应答才会移出，因此刚启动、只知道自己的代理 Pod 无法缩小列表。持续故障时会触发告警 [`DeviceX509IssuerPinUnavailable`](./observability.md#certificate-alerts)。
 - **失败即关闭。** 当系统账户连接断开，或最近三个刷新周期内没有获取到列表时，所有证书连接都会被拒绝（`issuer_pin_unavailable`）。令牌和密码连接不受固定机制约束，也不受影响。
 - **需要系统登录。** 引导流程会在每个运行 callout 的实例上配置它。开启了固定机制却没有系统登录的服务不会启动。设置 `callout.issuerPinDisabled` 可在没有固定机制的情况下运行，此时代理的发布限制是唯一的防线；服务启动时会记录一条警告。
 
@@ -83,9 +83,9 @@ functionalAreas:
 
 ## 需要监控什么 {#monitoring}
 
-计数器 `callout_x509_total{result}` 按结果统计每一次证书连接，所有结果从启动起即以零存在。结果包括 `ok`、`no_cert`、`chain_invalid`、`anchor_disabled`、`revoked`、`client_id_mismatch`、`unknown_pin`、`issuer_unpinned`、`issuer_pin_unavailable`、`x509_cert_ignored`、`jit_created`、`jit_replayed`、`jit_rate_limited`、`jit_busy`、`jit_ambiguous`，以及每种注册拒绝对应的一个 `jit_<code>`。`callout_jit_in_flight` 是当前正在进行的注册数，`device_trust_anchors_expiring{window="30d"}` 是整个实例中 30 天内到期的已启用信任锚的计数。
+计数器 `callout_x509_total{result}` 按结果统计每一次证书连接，所有结果从启动起即以零存在。结果包括 `ok`、`no_cert`、`chain_invalid`、`anchor_disabled`、`revoked`、`client_id_mismatch`、`unknown_pin`、`issuer_unpinned`、`issuer_pin_pending`、`issuer_pin_unavailable`、`x509_cert_ignored`、`jit_created`、`jit_replayed`、`jit_rate_limited`、`jit_busy`、`jit_ambiguous`，以及每种注册拒绝对应的一个 `jit_<code>`。`callout_jit_in_flight` 是当前正在进行的注册数，`device_trust_anchors_expiring{window="30d"}` 是整个实例中 30 天内到期的已启用信任锚的计数。
 
-[告警](./observability.md#certificate-alerts)包括 `DeviceX509ChainFailuresSustained`、`DeviceX509JitRefusedSustained`、`DeviceX509JitMisconfigured`、`DeviceTrustAnchorsExpiringSoon`，以及消息代理一侧的 `BrokerMqttClientAuthLost`。
+[告警](./observability.md#certificate-alerts)包括 `DeviceX509ChainFailuresSustained`、`DeviceX509JitRefusedSustained`、`DeviceX509JitMisconfigured`、`DeviceX509IssuerPinUnavailable`、`DeviceTrustAnchorsExpiringSoon`，以及消息代理一侧的 `BrokerMqttClientAuthLost`。
 
 信任锚和凭据的变更会记入审计日志。连接结果只计数，不记入日志。
 

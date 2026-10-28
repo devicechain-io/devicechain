@@ -40,6 +40,10 @@ const (
 	// server the pin could not learn). x509ResultPinUnavailable: the pin cannot vouch for the
 	// server ids at all (system connection down, no membership learned); an operator's problem.
 	x509ResultIssuerUnpinned = "issuer_unpinned"
+	// x509ResultIssuerPending: the issuer was not known and the re-ping that could have learned it
+	// was not allowed or did not finish (a server that joined during a broker roll). Refused; kept
+	// apart so issuer_unpinned stays a clean forgery signal.
+	x509ResultIssuerPending  = "issuer_pin_pending"
 	x509ResultPinUnavailable = "issuer_pin_unavailable"
 	x509ResultCertMalformed  = "cert_malformed"
 	x509ResultTenantRefused  = "tenant_refused"
@@ -60,7 +64,7 @@ const (
 
 var x509Results = []string{
 	x509ResultOK, x509ResultNoCert, x509ResultChainInvalid, x509ResultAnchorDisabled, x509ResultRevoked,
-	x509ResultClientIDMismatch, x509ResultUnknownPin, x509ResultMisconfigured, x509ResultPasswordPresented, x509ResultUnsealed, x509ResultIssuerUnpinned, x509ResultPinUnavailable, x509ResultCertMalformed,
+	x509ResultClientIDMismatch, x509ResultUnknownPin, x509ResultMisconfigured, x509ResultPasswordPresented, x509ResultUnsealed, x509ResultIssuerUnpinned, x509ResultIssuerPending, x509ResultPinUnavailable, x509ResultCertMalformed,
 	x509ResultTenantRefused, x509ResultError, x509ResultCertIgnored,
 	x509ResultJitCreated, x509ResultJitAdopted, x509ResultJitRenewed, x509ResultJitReplayed,
 	x509ResultJitRateLimited, x509ResultJitBusy, x509ResultJitAmbiguous,
@@ -129,6 +133,8 @@ func (c *CalloutResponder) authorizeX509(req jwt.AuthorizationRequest, tenant st
 		case pinPinned:
 		case pinUnavailable:
 			return c.refuseX509(x509ResultPinUnavailable)
+		case pinPending:
+			return c.refuseX509(x509ResultIssuerPending)
 		default:
 			log.Warn().Str("tenant", tenant).Str("issuer", issuer).Str("claimedServer", req.Server.ID).
 				Msg("Auth-callout refused a certificate connect: the request was not signed by a live broker server.")
@@ -266,7 +272,7 @@ func newX509Counter(ms *core.Microservice) *prometheus.CounterVec {
 	v := ms.NewCounterVec("callout_x509_total",
 		"Device connects by certificate (MQTT username {tenant}:@x509), by result. ok is a granted session; "+
 			"no_cert, chain_invalid, anchor_disabled, revoked, client_id_mismatch, unknown_pin, misconfigured, "+
-			"password_presented, unsealed, issuer_unpinned, issuer_pin_unavailable, cert_malformed, tenant_refused and error are refusals, each answered with the same generic denial. "+
+			"password_presented, unsealed, issuer_unpinned, issuer_pin_pending, issuer_pin_unavailable, cert_malformed, tenant_refused and error are refusals, each answered with the same generic denial. "+
 			"x509_cert_ignored counts a certificate presented with a token or password username, which authenticates "+
 			"on that credential alone. The jit_ results are registration on first connect: jit_created, jit_adopted, "+
 			"jit_renewed and jit_replayed are granted connects (counted by what registration did, and not again as ok); "+
