@@ -6,6 +6,7 @@ package sim
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/devicechain-io/dc-microservice/conflict"
 	"github.com/devicechain-io/dc-microservice/userclient"
@@ -77,9 +78,11 @@ const (
 	setSystemRolesMutation     = `mutation($email:String!){setSystemRoles(email:$email,roleTokens:[]){email}}`
 	setMembershipRolesMutation = `mutation($email:String!,$tenant:String!){` +
 		`setMembershipRoles(email:$email,tenant:$tenant,roleTokens:["tenant-admin"]){email}}`
-	setPasswordMutation    = `mutation($email:String!,$password:String!){setPassword(email:$email,password:$password){email}}`
-	deleteIdentityMutation = `mutation($email:String!){deleteIdentity(email:$email)}`
-	deleteTenantMutation   = `mutation($token:String!){deleteTenant(token:$token)}`
+	setPasswordMutation      = `mutation($email:String!,$password:String!){setPassword(email:$email,password:$password){email}}`
+	deleteIdentityMutation   = `mutation($email:String!){deleteIdentity(email:$email)}`
+	deleteTenantMutation     = `mutation($token:String!){deleteTenant(token:$token)}`
+	removeMembershipMutation = `mutation($email:String!,$tenant:String!){removeMembership(email:$email,tenant:$tenant){email}}`
+	identityMembershipsQuery = `query{identities{email memberships{tenant}}}`
 )
 
 // CreateTenant creates the sim's tenant at the given tier, optionally with an ADR-063
@@ -155,6 +158,68 @@ func (a *Admin) DeleteIdentity(ctx context.Context, email string) (bool, error) 
 		return false, fmt.Errorf("delete identity %q: %w", email, err)
 	}
 	return out.DeleteIdentity, nil
+}
+
+// OwnedMember is a scenario-owned person found in a sim's tenant, and every tenant they belong to.
+type OwnedMember struct {
+	Email   string
+	Tenants []string
+}
+
+// ScenarioIdentityOwnedBy reports whether email is an account the sim of this tenant minted for a
+// scenario person: its local part ends in "+<tenant>". The scenario derives the address that way
+// (dc-simulator's ScenarioIdentityEmail), which is the whole ownership record -- nothing is
+// persisted, so an interrupted create or a lost sim record still leaves the accounts findable.
+//
+// The tag is matched whole, after the LAST plus: "+sim-a" must not claim an account of sim "sim-a-b".
+func ScenarioIdentityOwnedBy(email, tenant string) bool {
+	email = strings.ToLower(strings.TrimSpace(email))
+	at := strings.LastIndex(email, "@")
+	if at <= 0 || tenant == "" {
+		return false
+	}
+	local := email[:at]
+	plus := strings.LastIndex(local, "+")
+	return plus > 0 && local[plus+1:] == strings.ToLower(tenant)
+}
+
+// OwnedMembers lists the scenario-owned people with a membership in the sim's tenant, with every
+// tenant each belongs to (so teardown can tell an account that is only this sim's from one that is
+// not). The identity directory is unpaged by the API; this is a teardown, not a hot path.
+func (a *Admin) OwnedMembers(ctx context.Context, tenant string) ([]OwnedMember, error) {
+	var out struct {
+		Identities []struct {
+			Email       string `json:"email"`
+			Memberships []struct {
+				Tenant string `json:"tenant"`
+			} `json:"memberships"`
+		} `json:"identities"`
+	}
+	if err := a.session.Query(ctx, a.adminURL, identityMembershipsQuery, nil, &out); err != nil {
+		return nil, fmt.Errorf("list identities: %w", err)
+	}
+	var owned []OwnedMember
+	for _, id := range out.Identities {
+		if !ScenarioIdentityOwnedBy(id.Email, tenant) {
+			continue
+		}
+		m := OwnedMember{Email: id.Email}
+		for _, ms := range id.Memberships {
+			m.Tenants = append(m.Tenants, ms.Tenant)
+		}
+		owned = append(owned, m)
+	}
+	return owned, nil
+}
+
+// RemoveMembership removes one identity's membership in one tenant and nothing else: the identity
+// and its memberships elsewhere stay.
+func (a *Admin) RemoveMembership(ctx context.Context, email, tenant string) error {
+	if err := a.session.Query(ctx, a.adminURL, removeMembershipMutation,
+		map[string]any{"email": email, "tenant": tenant}, nil); err != nil {
+		return fmt.Errorf("remove membership of %q in %q: %w", email, tenant, err)
+	}
+	return nil
 }
 
 // DeleteTenant removes the sim's tenant. It is rejected by the server while any

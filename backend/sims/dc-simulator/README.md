@@ -348,17 +348,50 @@ operator sets it to at least 1 on a tier (console, Administration, Tiers, or `up
 and creates the sim on that tier with `dcctl sim create --manifest towerpulse --tier <tier>`.
 Nothing in the scenario or its defaults changes the ceiling.
 
-**The annex owner.** Bootstrap invites `owner@halden-labs.example` into the tenant with the
-read-only `viewer` role and a scope of exactly one customer, the annex owner, and accepts the
-invitation with the sim's own password (the one in the sim record), so the account can sign in
-at once. A member limited to a customer sees only the devices assigned to it. A second board,
-`tp-annex-dashboard`, is the same board opened on the annex and is shared with the annex owner
-(a member limited to a customer lists only what is shared with it); the operator's is
-`tp-dashboard`, shared with nobody. A re-run repairs a member left with a pending invitation, a
-wrong role or a disabled account, and never widens the scope. The area selectors list every area, floors and plants included, because the
-platform has no hierarchy to filter a building list by.
+**The annex owner.** Bootstrap invites a customer user into the tenant with the read-only `viewer`
+role and a scope of exactly one customer, the annex owner, and accepts the invitation with the
+sim's own password (the one in the sim record), so the account can sign in at once. A member
+limited to a customer sees only the devices assigned to it.
 
-**The board** (`tp-dashboard`) carries a building, floor and zone selector (the zone is a
+*Each sim has its own owner account.* Identities are global to the instance but every sim record
+carries a password of its own, so one fixed address could belong to only one sim. The address is
+derived from the sim's tenant: `owner@halden-labs.example` in tenant `sim-tp-live` is
+**`owner+sim-tp-live@halden-labs.example`**, and the sim logs the exact address it provisioned on
+every converge (`customer login: sign in as this address with the sim password`). The password is
+the sim record's `simPassword`. Nothing resets the password of an account the sim did not mint, so
+a second Towerpulse sim on the same instance gets its own owner and neither sign-in touches the
+other. `dcctl sim destroy` recognises the accounts a sim minted by the `+<tenant>` ending of the
+address: it removes their memberships from that tenant before deleting it, deletes an account that
+belongs to nothing else, and only removes the membership of one that also belongs to another tenant.
+
+Two boards. The operator's, `tp-dashboard`, shows both buildings and carries the setpoint control;
+it is shared with nobody. The annex owner's, `tp-annex-dashboard`, is a different board, not the
+operator's re-opened: it binds only the annex's building, floors, zones, chiller and meter, and
+carries no command widget, so a read-only member sees no write affordance and no widget that names a
+Tower device. It is shared with the annex owner (a member limited to a customer lists only what is
+shared with it). A re-run repairs a member left with a pending invitation, a wrong role or a
+disabled account, and never widens the scope. The operator board's area selectors list every area,
+floors and plants included, because the platform has no hierarchy to filter a building list by.
+
+**An external device plane (`--external-device-plane`).** When a Unity player (or another
+simulator) is the 31 devices, start this process with `--external-device-plane` (or
+`DC_SIM_EXTERNAL_DEVICE_PLANE=1`). It then provisions and converges the whole tenant (profiles,
+rules, devices, credentials, boards, the owner account) and idles with the control API and
+presentation page up: it runs no `Tick`, publishes no reading, and opens no MQTT session as any
+device, so there is exactly one writer per device. `POST /start` is refused (409) and `GET /status`
+reports `externalDevicePlane: true` with the command far end in `external` mode; `POST /reset`
+re-converges without publishing. `GET /config.json`, the only endpoint the Unity plane's config client and token broker call, is served as normal (fresh operator token on every request). This is not `--no-command-far-end`, which stops the command
+replies but leaves the telemetry running. The broker address is still required in the handshake,
+because the external client learns it from the same record.
+
+**Command replies survive a re-dispatch.** command-delivery accepts a response only against the
+dispatch nonce it currently holds, and it dispatches a command again, with a new nonce, when it
+cannot be sure the first frame arrived. The command engine therefore deduplicates the physical
+work by command token (a boost or restart is actuated once) but keeps one reply callback per
+distinct nonce, up to a bound, and answers every live attempt when the work finishes. A late frame
+of an older dispatch never replaces a newer one's callback.
+
+**The operator board** (`tp-dashboard`) carries a building, floor and zone selector (the zone is a
 slot scoped to the building), alarms by severity, devices online, each building's power with a
 sparkline, a status card per chiller, each building's energy per floor area, the zones of a
 floor compared on one chart with their alarms marked, the annex chiller's COP, the alarm table
@@ -682,7 +715,7 @@ a snapshot taken at page load would not.
   accounting, jittered reconnect, observed TLS. `loadtest/mqtt.go` is its storage verdict.
 - `sim/towerpulse*.go` — the building-management scenario: the manifest and rules
   (`towerpulse.go`), the seeded thermal model and the command engine that answers a command
-  only when its job is done (`towerpulse_model.go`), and the board (`towerpulse_dashboard.go`).
+  only when its job is done (`towerpulse_model.go`), and the boards (`towerpulse_dashboard.go`, and the annex owner's `towerpulse_annex_dashboard.go`).
   `sim/windowrule.go` builds its windowed and absence rules, and `sim/customeruser.go`
   provisions a member limited to one customer.
 - `sim/lifecycle.go` — the `CREATED -> BOOTSTRAPPED -> RUNNING <-> STOPPED`

@@ -680,3 +680,66 @@ func TestADashboardSharedWithAnUnknownCustomerDoesNotValidate(t *testing.T) {
 		t.Error("a dashboard shared with a customer that does not exist validated")
 	}
 }
+
+// ---- One account per sim (TP-1) ---------------------------------------------------------------
+
+// Two Towerpulse sims on one instance each get their OWN annex-owner account. Identities are global
+// and every sim record carries a password of its own, so a fixed address made the second sim's
+// owner the first sim's account: it could neither accept (it exists) nor sign in (wrong password).
+// The shared store below is the instance's identity table: an address can be invited once.
+func TestTwoSimsOnOneInstanceEachGetTheirOwnAnnexOwner(t *testing.T) {
+	var mu sync.Mutex
+	owners := map[string]string{} // email -> tenant that minted it
+	sharedStore := func(tenant string) func(string, map[string]any) map[string]any {
+		inner := membersFake(nil, "code-"+tenant)
+		return func(q string, vars map[string]any) map[string]any {
+			if strings.Contains(q, "inviteMember(") {
+				email := vars["request"].(map[string]any)["email"].(string)
+				mu.Lock()
+				defer mu.Unlock()
+				if first, taken := owners[email]; taken {
+					// What the live instance answered the second sim: the account is the first one's.
+					t.Errorf("sim %s invited %s, which sim %s already owns", tenant, email, first)
+				}
+				owners[email] = tenant
+			}
+			return inner(q, vars)
+		}
+	}
+	var emails []string
+	for _, tenant := range []string{"sim-tp-a", "sim-tp-b"} {
+		g, rt := newRecordingGraphQL(t, sharedStore(tenant))
+		rt.Tenant = tenant
+		if err := ensureCustomerUsers(context.Background(), rt, []CustomerUserSpec{annexOwner()}); err != nil {
+			t.Fatalf("%s: %v", tenant, err)
+		}
+		invite := g.called("inviteMember(")[0].vars["request"].(map[string]any)
+		emails = append(emails, invite["email"].(string))
+		if want := "owner+" + tenant + "@halden-labs.example"; invite["email"] != want {
+			t.Errorf("%s invited %v, want %s", tenant, invite["email"], want)
+		}
+		if accept := g.called("acceptInvitation(")[0].vars; accept["password"] != "sim-password" {
+			t.Errorf("%s accepted with %v, want the sim's own password", tenant, accept["password"])
+		}
+	}
+	if emails[0] == emails[1] {
+		t.Fatalf("both sims share %s", emails[0])
+	}
+}
+
+// The address is a pure function of the tenant, so a re-bootstrap (and an interrupted create that
+// is run again) finds the account it made rather than minting a second one.
+func TestScenarioIdentityEmailIsDeterministicAndRefusesWhatItCannotNamespace(t *testing.T) {
+	a, err := ScenarioIdentityEmail("Owner@Halden-Labs.example", "sim-x")
+	if err != nil || a != "owner+sim-x@halden-labs.example" {
+		t.Fatalf("got %q, %v", a, err)
+	}
+	if b, _ := ScenarioIdentityEmail("owner@halden-labs.example", "sim-x"); b != a {
+		t.Errorf("not deterministic: %q vs %q", a, b)
+	}
+	for _, c := range [][2]string{{"owner@halden-labs.example", ""}, {"not-an-email", "sim-x"}, {"o+tag@x.example", "sim-x"}} {
+		if got, err := ScenarioIdentityEmail(c[0], c[1]); err == nil {
+			t.Errorf("ScenarioIdentityEmail(%q, %q) = %q, want an error", c[0], c[1], got)
+		}
+	}
+}

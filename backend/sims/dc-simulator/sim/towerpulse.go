@@ -358,11 +358,11 @@ func (s *towerpulse) Manifest() SimManifest {
 	}
 
 	devices := manifest.Expand(manifest.Seed)
-	operator, err := buildTowerpulseDashboard(devices, towerpulseTowerDefault)
+	operator, err := buildTowerpulseDashboard(devices)
 	if err != nil {
 		panic(fmt.Sprintf("towerpulse: build dashboard definition: %v", err))
 	}
-	annex, err := buildTowerpulseDashboard(devices, towerpulseAnnexDefault)
+	annex, err := buildTowerpulseAnnexDashboard(devices)
 	if err != nil {
 		panic(fmt.Sprintf("towerpulse: build annex dashboard definition: %v", err))
 	}
@@ -376,7 +376,7 @@ func (s *towerpulse) Manifest() SimManifest {
 		{
 			Token:       TowerpulseAnnexDashboardToken,
 			Name:        "Towerpulse annex",
-			Description: "The same board opened on the annex, for the annex owner.",
+			Description: "The annex owner board: the annex alarms, power, chiller, zones and history, read-only.",
 			Definition:  annex,
 			// A member limited to the annex owner lists only what is shared with it.
 			SharedWithCustomers: []string{TowerpulseAnnexOwnerToken},
@@ -551,7 +551,7 @@ type towerpulseHandler struct{ commands *towerpulseCommands }
 
 // Receive hands a frame to the command engine.
 func (h towerpulseHandler) Receive(device string, c cmdreceiver.Command, answer func(success bool)) {
-	h.commands.receive(device, c.Token, c.Name, c.Payload, answer)
+	h.commands.receive(device, c.Token, c.Nonce, c.Name, c.Payload, answer)
 }
 
 // commandHandlerSource is what a Sim implements to answer its own commands.

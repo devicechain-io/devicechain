@@ -266,6 +266,17 @@ type Runtime struct {
 	// changed nothing, so it is never simply ignored.
 	FarEndDisabled bool
 
+	// ExternalDevicePlane is the operator's statement that something OUTSIDE this process is the
+	// device plane (--external-device-plane): a player or another simulator owns the devices'
+	// telemetry and answers their commands. This process then provisions and converges the tenant and
+	// does nothing else -- it runs no Tick, publishes no reading, and subscribes as no device (its
+	// command far end is treated as external, see NewLifecycle) -- because two writers under one
+	// device identity publish contradictory measurements and take each other's MQTT sessions.
+	//
+	// It is NOT FarEndDisabled: that one leaves this process publishing telemetry and merely stops
+	// answering commands, which is why disabling replies alone never stopped a scenario's Tick.
+	ExternalDevicePlane bool
+
 	// NewFarEnd builds the command far end. Nil in production (the real MQTT
 	// cmdreceiver); a test substitutes a fake so the ATTACH WIRING is gated without
 	// a broker — which is the half that was missing, not the receiver itself.

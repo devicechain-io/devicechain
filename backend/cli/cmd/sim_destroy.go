@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -29,8 +30,12 @@ by a superuser breaking glass into it through the API. (This used to be opt-in b
 --purge, whose default claimed to keep the tenant "for inspection" while deleting the
 membership that made inspection routine.)
 
-Teardown order is enforced: the identity goes first, because the server refuses a
-tenant delete while any membership still references it.
+Teardown order is enforced: the people go first, because the server refuses a tenant
+delete while any membership still references it. That is the sim's scoped identity and any
+account the scenario minted for its own people (a customer user), which the sim names
+local+tenant@domain. An account that belongs to this tenant alone is deleted; one that
+also belongs to another tenant only loses its membership here. Anyone else added to the
+tenant by hand is not touched, and the tenant delete will say so.
 
 🔴 THE NAME STAYS TAKEN UNTIL THE PURGE FINISHES. 'dcctl sim create <name>' refuses a
 name whose tenant is still being deleted, and that refusal is the point: the tenant
@@ -65,6 +70,8 @@ func init() {
 // teardown below can be driven over a fake in a test — the network is what gets
 // replaced, not the ordering logic under test.
 type simTeardown interface {
+	OwnedMembers(ctx context.Context, tenant string) ([]sim.OwnedMember, error)
+	RemoveMembership(ctx context.Context, email, tenant string) error
 	DeleteIdentity(ctx context.Context, email string) (bool, error)
 	DeleteTenant(ctx context.Context, token string) (bool, error)
 }
@@ -78,6 +85,31 @@ type simTeardown interface {
 // no test can hold. Behind the seam, a record deleted too early is a failing test
 // rather than an operator left with a live tenant and nothing naming it.
 func destroySim(ctx context.Context, admin simTeardown, rec *sim.Record, deleteRecord func() error, out io.Writer) error {
+	// The scenario's own people first: a scenario that provisions members (a customer user) leaves
+	// memberships the server will not let the tenant outlive. An account that belongs to this tenant
+	// alone goes with its membership; one that also belongs elsewhere only loses THIS membership,
+	// so tearing down a sim never signs a person out of another tenant. A retry after a partial
+	// teardown finds whoever is left.
+	owned, err := admin.OwnedMembers(ctx, rec.Tenant)
+	if err != nil {
+		return err
+	}
+	for _, m := range owned {
+		if slices.ContainsFunc(m.Tenants, func(t string) bool { return t != rec.Tenant }) {
+			if slices.Contains(m.Tenants, rec.Tenant) {
+				if err := admin.RemoveMembership(ctx, m.Email, rec.Tenant); err != nil {
+					return err
+				}
+			}
+			fmt.Fprintf(out, "membership of %q in %q removed; the identity is kept (it belongs to other tenants)\n", m.Email, rec.Tenant)
+			continue
+		}
+		if _, err := admin.DeleteIdentity(ctx, m.Email); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "identity %q removed\n", m.Email)
+	}
+
 	// DeleteIdentity removes the identity AND its memberships, which is what makes
 	// the tenant delete below legal.
 	removed, err := admin.DeleteIdentity(ctx, rec.SimEmail)
@@ -89,10 +121,11 @@ func destroySim(ctx context.Context, admin simTeardown, rec *sim.Record, deleteR
 	tenantRemoved, err := admin.DeleteTenant(ctx, rec.Tenant)
 	if err != nil {
 		// The advice is CONDITIONAL because this path catches every failure, most of
-		// which are not the memberships case — a refused connection told to go hunt
-		// for a membership that does not exist is a confident diagnosis nothing made.
+		// which are not the memberships case. The sim's own people were removed above, so
+		// a refusal over memberships means someone ELSE was added to the tenant.
 		return fmt.Errorf("%w (the sim record was kept, so destroy can be retried; if the server "+
-			"refused because memberships remain, remove the one added outside the sim flow first)", err)
+			"refused because memberships remain, they belong to members added outside the sim "+
+			"flow -- the sim's own were removed above -- so remove those first)", err)
 	}
 	// false here means the tenant was already gone — the server's delete is
 	// idempotent, so an out-of-band removal is reported rather than failed on.

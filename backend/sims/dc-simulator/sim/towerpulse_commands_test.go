@@ -6,6 +6,7 @@ package sim
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"sort"
 	"sync"
@@ -26,6 +27,7 @@ type tpAnswer struct {
 	token string
 	ok    bool
 	at    float64
+	nonce string
 }
 
 type tpRig struct {
@@ -52,15 +54,19 @@ func (r *tpRig) now() float64 {
 }
 
 func (r *tpRig) send(device, token, key string, payload any) {
+	r.sendNonce(device, token, "", key, payload)
+}
+
+func (r *tpRig) sendNonce(device, token, nonce, key string, payload any) {
 	r.t.Helper()
 	raw, err := json.Marshal(payload)
 	if err != nil {
 		r.t.Fatal(err)
 	}
-	r.cmds.receive(device, token, key, raw, func(ok bool) {
+	r.cmds.receive(device, token, nonce, key, raw, func(ok bool) {
 		at := r.now()
 		r.mu.Lock()
-		r.answers = append(r.answers, tpAnswer{token, ok, at})
+		r.answers = append(r.answers, tpAnswer{token, ok, at, nonce})
 		r.mu.Unlock()
 	})
 }
@@ -508,5 +514,164 @@ func TestTickAndTheHandlerShareOneCampus(t *testing.T) {
 	}
 	if model1.reading("tp-chiller-tower") != nil {
 		t.Error("DropChiller on the Sim did not reach the campus the Tick reads")
+	}
+}
+
+// ---- Re-dispatch with a new nonce (TP-5) -------------------------------------------------------
+//
+// command-delivery accepts a response only against the dispatch nonce it currently holds. After a
+// lost acknowledgement it releases the claim and dispatches the same command again with a NEW nonce
+// while a long job is still running, so the device must answer EVERY live attempt when the work
+// finishes. Dropping the later frame as a duplicate leaves only the old nonce, which the server
+// rejects: a successful restart reads as a timeout.
+
+// restartRig sends a restart to the dropped chiller and returns the second the work started.
+func restartRig(t *testing.T) (*tpRig, float64) {
+	t.Helper()
+	r := newTPRig(t)
+	r.step(towerpulseChillerDropSecond+30, 5, nil)
+	return r, r.now()
+}
+
+func (r *tpRig) nonces(token string) []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []string
+	for _, a := range r.answers {
+		if a.token == token {
+			out = append(out, a.nonce)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func eq(a []string, b ...string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// The same nonce twice (a plain redelivery) is one attempt: one answer, one actuation.
+func TestASameNonceDuplicateWhilePendingIsOneAttempt(t *testing.T) {
+	r, at := restartRig(t)
+	r.sendNonce(TowerpulseDropChiller, "restart-n", "n1", "restart", map[string]any{})
+	r.sendNonce(TowerpulseDropChiller, "restart-n", "n1", "restart", map[string]any{})
+	r.step(at+towerpulseRestartSeconds+10, 1, nil)
+	if got := r.nonces("restart-n"); !eq(got, "n1") {
+		t.Errorf("answered nonces = %v, want exactly [n1]", got)
+	}
+}
+
+// A NEW nonce while the work is pending is a live attempt of its own, answered with the outcome
+// without actuating again.
+func TestANewNonceWhilePendingIsAnsweredWithoutActuatingAgain(t *testing.T) {
+	r, at := restartRig(t)
+	r.sendNonce(TowerpulseDropChiller, "restart-n", "old", "restart", map[string]any{})
+	r.step(at+20, 1, nil)
+	restartAt := r.model.byToken[TowerpulseDropChiller].(*towerpulseChiller).restartAt
+	r.sendNonce(TowerpulseDropChiller, "restart-n", "new", "restart", map[string]any{})
+	if got := r.model.byToken[TowerpulseDropChiller].(*towerpulseChiller).restartAt; got != restartAt {
+		t.Errorf("the re-dispatch restarted the restart (%v -> %v): the work must not be actuated twice", restartAt, got)
+	}
+	if r.cmds.pendingCount() != 1 {
+		t.Errorf("%d pending, want 1", r.cmds.pendingCount())
+	}
+	r.step(at+towerpulseRestartSeconds+10, 1, nil)
+	if got := r.nonces("restart-n"); !eq(got, "new", "old") {
+		t.Errorf("answered nonces = %v, want both live attempts [new old]", got)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, a := range r.answers {
+		if !a.ok {
+			t.Errorf("attempt %s was answered FAILED for a restart that worked", a.nonce)
+		}
+	}
+}
+
+// The new frame arrives, then a late frame of the OLD dispatch: the late one must not replace the
+// newer callback, and the newer attempt is still answered.
+func TestALateOldNonceDoesNotReplaceTheNewerAttempt(t *testing.T) {
+	r, at := restartRig(t)
+	r.sendNonce(TowerpulseDropChiller, "restart-n", "n1", "restart", map[string]any{})
+	r.step(at+10, 1, nil)
+	r.sendNonce(TowerpulseDropChiller, "restart-n", "n2", "restart", map[string]any{})
+	r.sendNonce(TowerpulseDropChiller, "restart-n", "n1", "restart", map[string]any{}) // late, old
+	r.step(at+towerpulseRestartSeconds+10, 1, nil)
+	if got := r.nonces("restart-n"); !eq(got, "n1", "n2") {
+		t.Errorf("answered nonces = %v, want [n1 n2] once each", got)
+	}
+}
+
+// After the work is settled, a frame with ANY nonce is answered with the cached outcome.
+func TestACompletedCommandReplayedWithANewNonceIsAnswered(t *testing.T) {
+	r, at := restartRig(t)
+	r.sendNonce(TowerpulseDropChiller, "restart-n", "n1", "restart", map[string]any{})
+	r.step(at+towerpulseRestartSeconds+10, 1, nil)
+	r.sendNonce(TowerpulseDropChiller, "restart-n", "n3", "restart", map[string]any{})
+	if got := r.nonces("restart-n"); !eq(got, "n1", "n3") {
+		t.Errorf("answered nonces = %v, want [n1 n3]", got)
+	}
+	if r.model.byToken[TowerpulseDropChiller].(*towerpulseChiller).dropped {
+		t.Error("the replay of a settled restart dropped the chiller again")
+	}
+}
+
+// The attempts held are bounded: a flood of distinct nonces cannot grow the command without limit,
+// and the newest are the ones kept.
+func TestLiveAttemptsAreBounded(t *testing.T) {
+	r, at := restartRig(t)
+	for i := 0; i < 3*towerpulseMaxAttempts; i++ {
+		r.sendNonce(TowerpulseDropChiller, "restart-n", fmt.Sprintf("n%02d", i), "restart", map[string]any{})
+	}
+	r.step(at+towerpulseRestartSeconds+10, 1, nil)
+	got := r.nonces("restart-n")
+	if len(got) != towerpulseMaxAttempts {
+		t.Fatalf("%d attempts answered, want the bound %d", len(got), towerpulseMaxAttempts)
+	}
+	if want := fmt.Sprintf("n%02d", 3*towerpulseMaxAttempts-1); got[len(got)-1] != want {
+		t.Errorf("newest answered nonce = %s, want %s", got[len(got)-1], want)
+	}
+}
+
+// The delivery/receiver/model join for a lost PubAck: the receiver binds each frame's nonce into the
+// reply it hands the handler, the handler is the Sim's own, and the model does the work once. What
+// reaches the broker is a response for the old nonce AND the new one.
+func TestALostPubAckRedispatchIsAnsweredOnBothNoncesThroughTheHandler(t *testing.T) {
+	s := NewTowerpulse(1, Load{}).(*towerpulse)
+	model, commands := s.ensureModel()
+	commands.dispatch = func(f func()) { f() }
+	h := s.CommandHandler()
+	var mu sync.Mutex
+	var replied []string
+	reply := func(nonce string) func(bool) {
+		return func(ok bool) {
+			mu.Lock()
+			defer mu.Unlock()
+			replied = append(replied, fmt.Sprintf("%s:%t", nonce, ok))
+		}
+	}
+	// What the receiver does per frame: bind the frame's nonce into the answer func.
+	frame := func(nonce string) {
+		h.Receive("tp-chiller-tower", cmdreceiver.Command{Token: "restart-lost", Nonce: nonce, Name: "restart", Payload: json.RawMessage(`{}`)}, reply(nonce))
+	}
+	frame("old")
+	frame("new")
+	for now := 0.0; now <= towerpulseRideThroughRestart+30; now += 5 {
+		model.advanceTo(now)
+		commands.settle()
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	sort.Strings(replied)
+	if len(replied) != 2 || replied[0] != "new:true" || replied[1] != "old:true" {
+		t.Errorf("replies = %v, want [new:true old:true]", replied)
 	}
 }

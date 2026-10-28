@@ -29,6 +29,12 @@ type fakeTeardown struct {
 	tenantErr       error
 }
 
+func (f *fakeTeardown) OwnedMembers(context.Context, string) ([]sim.OwnedMember, error) {
+	return nil, nil
+}
+
+func (f *fakeTeardown) RemoveMembership(context.Context, string, string) error { return nil }
+
 func (f *fakeTeardown) DeleteIdentity(_ context.Context, email string) (bool, error) {
 	f.calls = append(f.calls, "identity")
 	f.gotEmail = email
