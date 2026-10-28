@@ -126,12 +126,26 @@ resource "google_container_node_pool" "this" {
 # operation in progress (it fails, rather than returning, if that never happens). It runs again
 # when a pool is added, removed or resized, since each of those starts operations of its own.
 # The outputs depend on it, so nothing that reads them is handed a cluster that is still moving.
+#
+# 🔴 AN IN-PLACE UPDATE STARTS OPERATIONS TOO, and it changes neither the cluster's ID nor a pool's:
+# a new release channel or a pool's machine settings is an UPDATE_CLUSTER or UPDATE_NODEPOOL that
+# leaves the cluster RECONCILING after the apply returns, which is exactly what this wait exists for.
+# So the settings that are INPUTS to those updates are in the triggers below (release channel, labels
+# and every pool's definition): a plan shows them, tests/ read them, and an apply that changes none
+# of them plans nothing for the waiter, so the wait does not run again.
+#
+# This is deliberately the only mechanism. The price is that the list is explicit: a setting edited
+# in place that is not in it (the monitoring configuration, say, which is a literal above) does not
+# re-run the wait, so a new in-place setting on the cluster or a pool belongs here when it is added.
 resource "terraform_data" "cluster_settled" {
   count = var.wait_for_cluster_operations ? 1 : 0
 
   triggers_replace = {
-    cluster = google_container_cluster.this.id
-    pools   = join(",", sort([for name, pool in google_container_node_pool.this : "${name}:${pool.id}:${pool.node_count}"]))
+    cluster         = google_container_cluster.this.id
+    pools           = join(",", sort([for name, pool in google_container_node_pool.this : "${name}:${pool.id}:${pool.node_count}"]))
+    release_channel = var.release_channel
+    labels          = jsonencode(var.labels)
+    pool_settings   = jsonencode({ for name, pool in local.pools : name => pool if pool.node_count > 0 })
   }
 
   provisioner "local-exec" {

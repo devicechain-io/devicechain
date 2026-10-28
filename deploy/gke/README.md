@@ -218,7 +218,9 @@ install started in that window timed out against an API server that was being
 reconfigured, so the last step of the apply waits for the cluster to be `RUNNING`
 with no operation in progress (`wait-for-cluster-operations.sh`, using `bash` and
 `gcloud`; it fails after `cluster_operations_timeout_seconds`, 30 minutes by
-default, rather than returning early). Without `gcloud`, set
+default, rather than returning early). It runs again after any later apply that changes the
+cluster or a pool, including an in-place change such as a new release channel, and not after one
+that changes neither. A cluster created before this was added runs the wait once more on its next apply, because the waiter's keys changed; it returns at once when the cluster is already settled. Without `gcloud`, set
 `wait_for_cluster_operations = false` and check
 `gcloud container clusters describe devicechain --location us-east4-b --format='value(status)'`
 says `RUNNING` before you install. If a node pool sits in `PROVISIONING`

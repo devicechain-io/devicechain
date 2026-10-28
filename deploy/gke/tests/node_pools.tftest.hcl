@@ -256,3 +256,68 @@ run "the_wait_has_a_floor" {
 
   expect_failures = [var.cluster_operations_timeout_seconds]
 }
+
+# The wait that ends the apply must run again after an in-place update, not only when an ID or a
+# node count changes: a new release channel or a pool's machine settings leaves the cluster
+# RECONCILING while the apply is already done. Plan-only, so what is held is that those settings
+# are in the waiter's triggers (a change to any of them changes the trigger map and so replaces
+# it), and that settings with no operation of their own are not.
+run "the_waiter_is_keyed_to_the_release_channel" {
+  command = plan
+
+  variables {
+    release_channel = "STABLE"
+  }
+
+  assert {
+    condition     = terraform_data.cluster_settled[0].triggers_replace.release_channel == "STABLE"
+    error_message = "The waiter's triggers should carry the release channel, so changing it replaces the waiter."
+  }
+}
+
+run "the_waiter_is_keyed_to_every_pools_settings" {
+  command = plan
+
+  variables {
+    services_machine_type = "n2-standard-8"
+    services_disk_size_gb = 200
+  }
+
+  assert {
+    condition     = strcontains(terraform_data.cluster_settled[0].triggers_replace.pool_settings, "n2-standard-8")
+    error_message = "The waiter's triggers should carry each pool's machine type."
+  }
+  assert {
+    condition     = strcontains(terraform_data.cluster_settled[0].triggers_replace.pool_settings, "\"disk_size_gb\":200")
+    error_message = "The waiter's triggers should carry each pool's disk size."
+  }
+}
+
+run "the_waiter_is_keyed_to_the_labels" {
+  command = plan
+
+  variables {
+    labels = { team = "perf" }
+  }
+
+  assert {
+    condition     = terraform_data.cluster_settled[0].triggers_replace.labels == "{\"team\":\"perf\"}"
+    error_message = "The waiter's triggers should carry the cluster's labels."
+  }
+}
+
+# Not every variable is a cluster change. The wait's own timeout does not start an operation, so
+# it stays out of the triggers: a no-change apply, or one that only moves the timeout, does not
+# run the waiter again.
+run "the_waiters_own_timeout_is_not_a_trigger" {
+  command = plan
+
+  variables {
+    cluster_operations_timeout_seconds = 600
+  }
+
+  assert {
+    condition     = join(",", sort(keys(terraform_data.cluster_settled[0].triggers_replace))) == "cluster,labels,pool_settings,pools,release_channel"
+    error_message = "The waiter should be keyed to exactly the cluster, its pools, the release channel, the labels and the pool settings."
+  }
+}

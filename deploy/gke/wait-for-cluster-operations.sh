@@ -27,8 +27,12 @@ POLL="${DC_GKE_WAIT_POLL_SECONDS:-10}"
 
 cluster_status() { gcloud container clusters describe "$2" --project "$1" --location "$3" --format='value(status)'; }
 
-running_operations() {
-  gcloud container operations list --project "$1" \
+# 🔴 THE LOCATION IS PASSED, NOT INHERITED. `operations list` with no --location reads the CLI's own
+# configured compute region or zone, which need not be this cluster's, and then lists the operations
+# of whatever cluster of the same name lives there (or fails for a location that has nothing to do
+# with this one, which the wait retries until its timeout). Both calls name the location they were given.
+running_operations() { # project cluster location
+  gcloud container operations list --project "$1" --location "$3" \
     --filter="status!=DONE AND targetLink~/clusters/$2(/|\$)" --format='value(name,operationType,status)'
 }
 
@@ -46,7 +50,7 @@ wait_for_cluster() { # project cluster location timeout-seconds
   while :; do
     status="" ops=""
     # stderr stays out of the answers: a gcloud notice must not turn RUNNING into something else.
-    if status="$(cluster_status "$project" "$cluster" "$location" 2>"$err")" && ops="$(running_operations "$project" "$cluster" 2>"$err")"; then
+    if status="$(cluster_status "$project" "$cluster" "$location" 2>"$err")" && ops="$(running_operations "$project" "$cluster" "$location" 2>"$err")"; then
       if [[ "$status" == RUNNING && -z "$ops" ]]; then
         echo "wait-for-cluster-operations: $cluster is RUNNING with no operation in progress"
         return 0
@@ -73,16 +77,29 @@ self_test() {
   # A gcloud that answers from the environment. FAKE_STATUSES is the cluster status on successive
   # calls (the last one repeats); FAKE_OPS_CALLS is how many `operations list` calls still report an
   # operation; FAKE_FAIL makes every call fail.
+  #
+  # It models the CLI's configured default location, deliberately CONFLICTING with the cluster's:
+  # the cluster lives in "l" (the location the wait is given) and the default is "other-zone". A call
+  # that names no --location acts on the default, where a same-named cluster has an operation that
+  # never ends; a call that names any location other than "l" finds nothing there and fails.
   cat >"$d/bin/gcloud" <<'FAKE'
 #!/usr/bin/env bash
 [[ -z "${FAKE_FAIL:-}" ]] || { echo "ERROR: (gcloud) boom" >&2; exit 1; }
 n() { local f="$FAKE_DIR/$1"; local c; c="$(cat "$f" 2>/dev/null || echo 0)"; echo $((c + 1)) >"$f"; echo "$c"; }
+loc=other-zone
+args=("$@")
+for ((k = 0; k < ${#args[@]}; k++)); do
+  [[ "${args[$k]}" == --location ]] && loc="${args[$((k + 1))]}"
+done
 case "$2 $3" in
   "clusters describe")
+    [[ "$loc" == l ]] || { echo "ERROR: (gcloud) cluster not found in $loc" >&2; exit 1; }
     i="$(n status)"; read -ra all <<<"$FAKE_STATUSES"
     (( i < ${#all[@]} )) || i=$((${#all[@]} - 1))
     echo "${all[$i]}" ;;
   "operations list")
+    if [[ "$loc" == other-zone ]]; then echo "operation-other UPDATE_CLUSTER RUNNING"; exit 0; fi
+    [[ "$loc" == l ]] || { echo "ERROR: (gcloud) no such location $loc" >&2; exit 1; }
     i="$(n ops)"
     if (( i < ${FAKE_OPS_CALLS:-0} )); then echo "operation-1 UPDATE_CLUSTER RUNNING"; fi ;;
   *) echo "fake gcloud: unexpected $*" >&2; exit 2 ;;
@@ -111,6 +128,31 @@ FAKE
   run 1 FAKE_STATUSES="RUNNING" FAKE_OPS_CALLS=1000
   run 1 FAKE_STATUSES="RUNNING" FAKE_FAIL=1
   grep -q "still not settled" "$d/out" || { echo "self-test: a gcloud that always fails did not end in a timeout message" >&2; rc=1; }
+  # The location is the target's and nothing else. The fake's default location has a same-named
+  # cluster with an operation that never ends, so a list that inherits the default can never
+  # settle, and one given the wrong location fails. The runs above pass only because both calls
+  # name "l". Negative controls on the script itself, each checked to have applied: with the
+  # --location taken off the list, or pointed somewhere else, the wait must fail.
+  mutated() { # sed-expression: runs a mutated copy of this script and returns its exit code
+    local mutant="$d/mutant.sh"
+    sed "$1" "${BASH_SOURCE[0]}" >"$mutant"
+    if cmp -s "$mutant" "${BASH_SOURCE[0]}"; then echo "self-test: the mutation '$1' did not apply" >&2; return 99; fi
+    rm -f "$d/status" "$d/ops"
+    env FAKE_DIR="$d" FAKE_STATUSES="RUNNING" DC_GKE_WAIT_POLL_SECONDS=0.2 PATH="$d/bin:$PATH" \
+      bash "$mutant" p c l 3 >"$d/out" 2>&1
+  }
+  code=0
+  # shellcheck disable=SC2016 # the sed expression matches a literal $1, $2, $3
+  mutated 's/operations list --project "\$1" --location "\$3"/operations list --project "$1"/' || code=$?
+  [[ "$code" -ne 0 && "$code" -ne 99 ]] || { echo "self-test: an operations list that names no location passed ($code)" >&2; rc=1; }
+  code=0
+  # shellcheck disable=SC2016 # the sed expression matches a literal $1, $2, $3
+  mutated 's/operations list --project "\$1" --location "\$3"/operations list --project "$1" --location wrong/' || code=$?
+  [[ "$code" -ne 0 && "$code" -ne 99 ]] || { echo "self-test: an operations list for the wrong location passed ($code)" >&2; rc=1; }
+  code=0
+  # shellcheck disable=SC2016 # the sed expression matches a literal $1, $2, $3
+  mutated 's/clusters describe "\$2" --project "\$1" --location "\$3"/clusters describe "$2" --project "$1"/' || code=$?
+  [[ "$code" -ne 0 && "$code" -ne 99 ]] || { echo "self-test: a describe that names no location passed ($code)" >&2; rc=1; }
   # No gcloud at all: PATH holds only a directory with no gcloud (and the bash this runs under).
   mkdir -p "$d/empty"
   code=0
