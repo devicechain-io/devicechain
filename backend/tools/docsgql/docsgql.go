@@ -766,9 +766,6 @@ var allowedSkips = func() []AllowedSkip {
 		"docs/i18n/es/docusaurus-plugin-content-docs/current/",
 		"docs/i18n/zh-CN/docusaurus-plugin-content-docs/current/",
 	} {
-		// The v0.18 upgrade note shows a list call before and after; "before" is the
-		// retired shape, so the block is deliberately not valid against any schema.
-		out = append(out, AllowedSkip{tree + "deployment/releases-and-upgrades.md", "selection", "tenantDeletions(completed: false"})
 		// The rename mutations are quoted as signatures to show one contract.
 		out = append(out, AllowedSkip{tree + "reference/graphql-api.md", "signature", "renameDeviceProfile(token: String!"})
 	}
