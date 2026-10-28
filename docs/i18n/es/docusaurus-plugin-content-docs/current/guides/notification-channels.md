@@ -9,6 +9,8 @@ Las notificaciones llevan una **alarma** levantada la última milla, hasta una p
 
 Esta ruta de máquina a humano está deliberadamente separada de los **[conectores de salida](../concepts/outbound-connectors.md)** de máquina a máquina. Los conectores llevan payloads a *sistemas*; las notificaciones llevan alertas a *personas*, con destinatarios y enrutamiento por severidad. Para saber cómo se levantan las alarmas en primer lugar, consulta [Procesamiento de Eventos y Alarmas](../concepts/event-processing.md).
 
+Para gestionar las políticas y las horas de silencio desde la consola web, consulta [Políticas de notificación](../user-guide/notification-policies.md) en la guía del usuario.
+
 :::note Estado
 Disponible. Gestionas los canales y las políticas a través de la API GraphQL de notification-management. La lectura requiere la autoridad `notification:read`; crear o modificar cualquier cosa requiere `notification:write`.
 :::

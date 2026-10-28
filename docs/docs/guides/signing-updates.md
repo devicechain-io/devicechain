@@ -156,3 +156,4 @@ A signature binds the **digest only**. It does not bind the artifact's version, 
 - **[Over-the-Air Updates](../concepts/over-the-air-updates.md#assigning)**: assigning an update and how an attempt progresses.
 - **[Connecting a Device](./connecting-a-device.md#over-the-air-updates)**: the assignment message and the device-side check.
 - **[Building an Updatable Device](./building-an-updatable-device.md)**: a reference device that verifies, installs and rolls back.
+- **[Updates in the console](../user-guide/updates.md)**: uploading artifacts, registering signers and assigning updates from the web console.

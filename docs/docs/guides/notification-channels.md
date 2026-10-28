@@ -9,6 +9,8 @@ Notifications carry a raised **alarm** the last mile, to a person. When a detect
 
 This machine-to-human path is deliberately separate from the machine-to-machine **[outbound connectors](../concepts/outbound-connectors.md)**. Connectors carry payloads to *systems*; notifications carry alerts to *people*, with recipients and per-severity routing. For how alarms are raised in the first place, see [Event Processing & Alarms](../concepts/event-processing.md).
 
+To manage policies and quiet hours from the web console instead, see [Notification policies](../user-guide/notification-policies.md) in the user guide.
+
 :::note Status
 Available. You manage channels and policies over the notification-management GraphQL API. Reading requires the `notification:read` authority; creating or changing anything requires `notification:write`.
 :::

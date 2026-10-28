@@ -23,28 +23,21 @@ import GuideShot from '@site/src/components/GuideShot';
 
 左侧的侧边栏是你在控制台中导航的方式。它按固定顺序列出租户的各个功能区。
 
-<GuideShot id="console-sidebar" alt="控制台侧边栏。DeviceChain 徽标和 Management Console 字样下方依次列出 Home、Dashboards、Alarms、Connectors、Devices、Assets、Customers、Areas、Facets、Browse、Audit、Updates 和 Settings。Devices、Assets、Customers、Areas、Updates 和 Settings 带有箭头，表示可展开子菜单。底部是当前登录用户的姓名和邮箱。" />
+<GuideShot id="console-sidebar" alt="控制台侧边栏。DeviceChain 徽标和 Management Console 字样下方列出 Home，以及六个可折叠的分区：Monitor、Devices、Connect、Organization、Access 和 Settings。每个分区标题都带有箭头，表示可展开和收起。底部是当前登录用户的姓名和邮箱。" />
 
-有些条目打开的是子菜单而不是页面。选择这类条目会展开其子菜单，并进入第一个页面。同一时间只会展开一个子菜单。
+**Home**（主页）是单个页面。其余每个条目都是一个**可折叠分区**，把相关页面归为一组。选择分区标题即可展开或收起，选择其中的页面即可进入该页面。
 
 | 条目 | 内容 |
 | --- | --- |
 | **Home** | 主页。 |
-| **Dashboards** | 团队创建的仪表板。 |
-| **Alarms**（告警） | 规则已触发的告警。 |
-| **Notification Policies**（通知策略） | 告警会通知谁，以及暂存这些通知的静默时段。 |
-| **Connectors**（连接器） | 通向其他系统的出站连接。 |
-| **Devices** | **Devices**、**Device Types**、**Device Profiles**（设备配置文件）、**Device Groups**（设备分组）、**Maintenance Windows**（维护窗口）和 **Command Batches**（命令批次）。 |
-| **Assets**（资产） | **Assets**、**Asset Types**（资产类型）和 **Asset Groups**（资产分组）。 |
-| **Customers**（客户） | **Customers**、**Customer Types**（客户类型）和 **Customer Groups**（客户分组）。 |
-| **Areas**（区域） | **Areas**、**Area Types**（区域类型）、**Area Groups**（区域分组）和 **Geofences**（地理围栏）。 |
-| **Facets**（分面） | 用于描述和筛选设备及其他实体的键。 |
-| **Browse**（浏览） | 按分面查找实体的查询构建器。 |
-| **Audit**（审计） | 租户内“谁修改了什么”的记录。 |
-| **Updates**（更新） | 用于空中升级的 **Artifacts**（制品）和 **Signers**（签名者）。 |
-| **Settings**（设置） | **Members**（成员）、**Roles**（角色）、**Branding**（品牌）、**Map**（地图）和 **Language**（语言）。 |
+| **Monitor**（监控） | 团队创建的 **Dashboards**（仪表板）、规则已触发的 **Alarms**（告警），以及 **Notification Policies**（通知策略）：告警会通知谁，以及暂存这些通知的静默时段。 |
+| **Devices** | **Devices**、**Device Types**（设备类型）、**Device Profiles**（设备配置文件，包含该配置文件的规则、指标和命令）、**Device Groups**（设备分组）、**Command Batches**（命令批次）、**Maintenance Windows**（维护窗口）和 **Updates**（更新，其中的 **Artifacts**（制品）、**Rollouts**（发布）和 **Signers**（签名者）用于空中升级）。 |
+| **Connect**（连接） | 设备和其他系统接入租户的方式：**Provisioning Profiles**（预配置文件）、**Trust Anchors**（信任锚）、**Integrations**（集成）和 **Connectors**（连接器，通向其他系统的出站连接）。 |
+| **Organization**（组织） | **Assets**（资产）、**Customers**（客户）和 **Areas**（区域，含 **Geofences** 地理围栏）；**Facets**（分面），即用于描述和筛选实体的键；以及 **Browse**（浏览），按分面查找实体的查询构建器。 |
+| **Access**（访问） | **Members**（成员）、**Service Accounts**（服务账号）、**Roles**（角色）、**Sign-in Security**（登录安全）和 **Audit**（审计，租户内“谁修改了什么”的记录）。 |
+| **Settings**（设置） | **Branding**（品牌）、**Map**（地图）和 **Language**（语言）。 |
 
-你只会看到角色允许访问的条目。例如，如果你的角色无权读取告警，侧边栏中就没有 **Alarms**。只有当你的安装环境运行了更新服务时，才会出现 **Updates**。**Settings** 下的各项面向租户管理员。
+你只会看到角色允许访问的条目。例如，如果你的角色无权读取告警，侧边栏中就没有 **Alarms**。只有当你的安装环境运行了更新服务时，才会出现 **Updates**。**Access** 和 **Settings** 两个分区面向租户管理员。
 
 如果你的访问权限仅限于租户的部分客户，侧边栏只有 **Home**、**Dashboards**、**Alarms** 和 **Devices**。参见[客户用户能看到什么](/user-guide/members-roles-and-customer-users#what-a-customer-user-sees)。
 

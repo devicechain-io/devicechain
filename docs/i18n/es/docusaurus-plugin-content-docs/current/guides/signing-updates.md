@@ -156,3 +156,4 @@ Una firma vincula **solo el digest**. No vincula la versión, el componente ni l
 - **[Actualizaciones over-the-air](../concepts/over-the-air-updates.md#assigning)**: asignar una actualización y cómo progresa un intento.
 - **[Conexión de un dispositivo](./connecting-a-device.md#over-the-air-updates)**: el mensaje de asignación y la comprobación en el dispositivo.
 - **[Construir un dispositivo actualizable](./building-an-updatable-device.md)**: un dispositivo de referencia que verifica, instala y revierte.
+- **[Actualizaciones en la consola](../user-guide/updates.md)**: subir artefactos, registrar firmantes y asignar actualizaciones desde la consola web.

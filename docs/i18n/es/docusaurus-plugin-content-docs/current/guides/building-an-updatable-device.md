@@ -114,3 +114,4 @@ Tampoco hace actualizaciones delta ni imágenes cifradas, ni gestiona configurac
 - **[Actualizaciones over-the-air](../concepts/over-the-air-updates.md)**: asignaciones, intentos y despliegues, desde el lado de la plataforma.
 - **[Conexión de un dispositivo](./connecting-a-device.md#over-the-air-updates)**: cada mensaje que el dispositivo envía y recibe.
 - **[Firmar actualizaciones](./signing-updates.md)**: crear claves, firmar y rotarlas.
+- **[Actualizaciones en la consola](../user-guide/updates.md)**: el lado del operador: subir artefactos y asignar actualizaciones desde la consola web.

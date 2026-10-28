@@ -139,8 +139,8 @@
       "translationSha256": "1360a981574dd6e834bbe927ff4b2efadbf94cebb5f4f0d951d1a66fa0adb58f"
     },
     "deployment/tuning-an-instance.md": {
-      "sourceSha256": "c53aceee48c5646f9dcdb637f4487d3e78939880d89e8d4333a23262afd4176a",
-      "translationSha256": "892703475e7bfefcc842c9ce3cc3ebb229cc36a98f835faadc0bb1c12f778861"
+      "sourceSha256": "41f1906dcee998b49de1fb411c730381dad1699273f2fa8501cb2805f5f7ef91",
+      "translationSha256": "f5918c3ece76820ad101439f4cd26d85695a33dcc2a1500ad27df72bc48a62ec"
     },
     "deployment/verifying-releases.md": {
       "sourceSha256": "c2e42ac0b21a51829bd8c3a46b40cf2a75bc40cdb3bb32fc6ddd9714e5c2898d",
@@ -158,13 +158,17 @@
       "sourceSha256": "afe424503a36f137586695e18a84afaf83c6e3fca72e57e9535ef702f980b67f",
       "translationSha256": "bf5fa90e0bd4b40509212944e4b5edd5b0f7c58118d2d36a52b7ec16faefea66"
     },
+    "guides/building-an-updatable-device.md": {
+      "sourceSha256": "ab1b33bf895adf2b645b5cc83a197aca4c03299de194f0dabcc71f56dc0d92af",
+      "translationSha256": "d5da4f5b52482682ab093fb73c15bb50df7725d9c1d04718464c87254b349fe5"
+    },
     "guides/commanding-a-fleet.md": {
-      "sourceSha256": "a3a7e8ee7ef09597efb482d857989879d9314e34e7dd8b2dd352accb57c8c7da",
-      "translationSha256": "d24ae6bfbe4839d32fa48428b4eb6f7bdac4767ae5e59b6fdb276abb83f043ea"
+      "sourceSha256": "84fe639c49ffc9ad6b5383bf246a8d07c448aa0ada1c8b930307d1c3b8f58d04",
+      "translationSha256": "92a447676b11f8545c5b6c8c1085ebb082af7c681c3fc8ded8ffd1574d685af8"
     },
     "guides/configuring-sso.md": {
-      "sourceSha256": "525061b81fa9d90510fbe35a3beb49414fe35d8dd39442e945df7550c4184599",
-      "translationSha256": "eff23b8192bcc2336cdc2a2faab59715197e9a8a02ee62d7cb91318f2db5d12a"
+      "sourceSha256": "71792f488d5f2bbe1cfb6bd1eae8554cf0f435eb69872045f8848a94ccc46d92",
+      "translationSha256": "dcddb0fc8bf872e5a744e64994db9c68cbd51f23a4e1ade425503938c971978e"
     },
     "guides/connecting-a-device.md": {
       "sourceSha256": "ee2dcef5ad0dbf3d2c42c93371e76169877980fb5b168b5e1342f84abfa54d25",
@@ -199,24 +203,24 @@
       "translationSha256": "db30cc813825c01bd7d0d5f9760ae90909e262c3c49de2642d1df09b1c152bdf"
     },
     "guides/notification-channels.md": {
-      "sourceSha256": "379926b42270b57497860c7f47f6de429843e6ab36768077e09aff2f6cccf650",
-      "translationSha256": "ea11e775e14fd6cfea1f6b9bb59ffb9132a477b9715ddddf2504502175d9e52c"
+      "sourceSha256": "45588e46ff266395dbb9a2771c029fbec25ab08d9c2ac1dabba17f84c6e3b4e4",
+      "translationSha256": "f6711f3ef0278317dce87c1837fbe842e75e520c2027ec08fb8cd57cadf68222"
     },
     "guides/sending-commands.md": {
       "sourceSha256": "7b5e3c76278a37cc3aa2a69cb48546ee5434503af27fae1388451fd8a10927ca",
       "translationSha256": "82895852a6b5f9fef58cc858d7a530c1384bb2a9802ae27c7a0f974e30141e4e"
     },
     "guides/signing-updates.md": {
-      "sourceSha256": "3bb500cbdb112260366ff34cc95af8b0093db047ee2f482f5d36aed2d89a9909",
-      "translationSha256": "49bae8d9a1e11da9af88e90d64ea59d4621dbe78f58f05c389bdc7060de4815c"
+      "sourceSha256": "f440451578c75d38d4f99934e1cd463ee90baf7534f9cec956f50f1960135864",
+      "translationSha256": "0d2618c96e721ef65bc19cd13fd05fa134e2802d2a5adab76e93e6825d85d409"
     },
     "guides/sql-and-bi-access.md": {
-      "sourceSha256": "94b760582ade2045591f2668dce3aca5831ca2d5620d58da58842a7c2212ea73",
-      "translationSha256": "0dd46bfb66b76d0089a4283b39973d5089bf6e9798bb4b724542d71984ca6f92"
+      "sourceSha256": "bc1bc84e2588e2fe5c0419fb0ba336ad204399d357dc1e1ab3a9cf27323713cc",
+      "translationSha256": "8657e9dd0473542f9384cfd513d91e1a76be1bd2fea5916fd67d96d9aa8e46bd"
     },
     "guides/two-factor-authentication.md": {
-      "sourceSha256": "dc90430515b3df19ef9673adfc1c32e846f0ffcd4e35c360b49df5505ac7bef6",
-      "translationSha256": "274994685cefc9aced50a8e4e05768a765b70d52456133ecc0eca4681e20cabc"
+      "sourceSha256": "567a78994885b60055f487012aaf57fb37bee0edede2078dff7af200f513b26f",
+      "translationSha256": "f38b1a785d91ed0c3228b8f00b27d90dec29f5946e846e86e1edc7a8f9cecf56"
     },
     "guides/widget-versions-and-compatibility.md": {
       "sourceSha256": "11cdfdffa5b333142fb41b13646e9aa523d0abb5c605fe55835569c2232a0098",
@@ -283,8 +287,8 @@
       "translationSha256": "6dbc86c3539c1103ea3fd3a4751561ced59722461dd3a3d81f358ee75d09cb16"
     },
     "user-guide/console-at-a-glance.md": {
-      "sourceSha256": "e415c7e9f147f0036b1d2ed3a6fcebf8e60909f125ac52fde6851adabe7fb0f4",
-      "translationSha256": "98dff69ec499ce936a7a0beba510fcb0928dad3cac0388d80673a529bca76138"
+      "sourceSha256": "993f09c18cf59222db82a609d557ca7e638f09e7f66d6887b00351e6edaa2167",
+      "translationSha256": "a2958231174f0aa693932a8e429683091cdad9c262c48a1532bb0a1eea06d5c0"
     },
     "user-guide/dashboards.md": {
       "sourceSha256": "4e3314e90df4e002a8bc76c4c6a67df1502ea0f8b128b5a4d31aba95eea06421",
@@ -311,8 +315,8 @@
       "translationSha256": "1fad2752a4f06c1bb1358c2183655418b4682af986e109a2b107ef40408c2b45"
     },
     "user-guide/index.md": {
-      "sourceSha256": "c8ab5b96a1f0918b470c8ccdb2eea359a95dd946e7bf9242bd03a5b3e342e086",
-      "translationSha256": "ec3e96d197156cd6e0e7a58407b8c01ad56c4df0298bfb552fd278fe3162632e"
+      "sourceSha256": "6a53a944f4fa86ff46c2f2375dd1ec3fa4c9d738b92f650cc64b15287c653ef2",
+      "translationSha256": "143e91be4c709360bd7bdc0d1e7dd5d86ebe6b8f95ae381826172e77f6b5a979"
     },
     "user-guide/members-roles-and-customer-users.md": {
       "sourceSha256": "d15e2b24ce353e5feb1125c5194a1bbca07ebb60be31ee6f7dc54fda0bdf98ed",
@@ -335,8 +339,8 @@
       "translationSha256": "59ca1513c69a4b6665554e100c885a35f7ed7cfd982fac9e9a08d03fa2de9a13"
     },
     "user-guide/updates.md": {
-      "sourceSha256": "7e0b352272026df3f770c324108cc8fa5fdcb7f6d747804712858fc8c52b8173",
-      "translationSha256": "e2d7ca0ca8b2434e280aa7a6a836109ac59f3b53f73a252a452bb98fa3f77470"
+      "sourceSha256": "0e36595d4f8690230904b6c577d83b817fe5dafeb018176ee1d3d5481e278af8",
+      "translationSha256": "2eb30eea3a7b71f9bbebd6f6e951e3578717896de27e5a96ee811b98ed8e57a5"
     },
     "user-guide/viewing-dashboards-in-dash.md": {
       "sourceSha256": "bba0944ff3eae43f2d5e6e0f770cd43a60c83c8010a5376c9f60768d01973316",

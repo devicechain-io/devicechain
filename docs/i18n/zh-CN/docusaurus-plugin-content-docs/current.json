@@ -16,7 +16,7 @@
     "description": "The label for category 'Guides' in sidebar 'docs'"
   },
   "sidebar.docs.category.Guides.link.generated-index.description": {
-    "message": "运行和使用 DeviceChain 的实用指南。",
+    "message": "面向 API 和设备一侧的任务式操作指南：连接设备、向设备下发命令和更新、告警、登录、数据访问以及扩展控制台。若想在 Web 控制台中完成同样的工作，请参阅用户指南。",
     "description": "The generated-index page description for category 'Guides' in sidebar 'docs'"
   },
   "sidebar.docs.category.Reference": {
@@ -62,5 +62,49 @@
   "sidebar.docs.category.User guide": {
     "message": "用户指南",
     "description": "The label for category 'User guide' in sidebar 'docs'"
+  },
+  "sidebar.docs.category.Connect devices": {
+    "message": "连接设备",
+    "description": "The label for category 'Connect devices' in sidebar 'docs'"
+  },
+  "sidebar.docs.category.Command and update": {
+    "message": "命令与更新",
+    "description": "The label for category 'Command and update' in sidebar 'docs'"
+  },
+  "sidebar.docs.category.Alerts": {
+    "message": "告警",
+    "description": "The label for category 'Alerts' in sidebar 'docs'"
+  },
+  "sidebar.docs.category.Secure sign-in": {
+    "message": "安全登录",
+    "description": "The label for category 'Secure sign-in' in sidebar 'docs'"
+  },
+  "sidebar.docs.category.Data access": {
+    "message": "数据访问",
+    "description": "The label for category 'Data access' in sidebar 'docs'"
+  },
+  "sidebar.docs.category.Extend": {
+    "message": "扩展",
+    "description": "The label for category 'Extend' in sidebar 'docs'"
+  },
+  "sidebar.docs.category.Contribute": {
+    "message": "参与贡献",
+    "description": "The label for category 'Contribute' in sidebar 'docs'"
+  },
+  "sidebar.docs.category.Install": {
+    "message": "安装",
+    "description": "The label for category 'Install' in sidebar 'docs'"
+  },
+  "sidebar.docs.category.Operate": {
+    "message": "运维",
+    "description": "The label for category 'Operate' in sidebar 'docs'"
+  },
+  "sidebar.docs.category.Releases and upgrades": {
+    "message": "版本与升级",
+    "description": "The label for category 'Releases and upgrades' in sidebar 'docs'"
+  },
+  "sidebar.docs.link.All releases on GitHub": {
+    "message": "GitHub 上的所有版本",
+    "description": "The label for link 'All releases on GitHub' in sidebar 'docs', linking to 'https://github.com/devicechain-io/devicechain/releases'"
   }
 }

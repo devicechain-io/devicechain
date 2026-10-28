@@ -30,32 +30,26 @@ lo mismo que **Paneles**, que contiene los paneles que crea tu equipo.
 La barra lateral de la izquierda es la forma de moverte por la consola. Enumera las áreas de tu
 inquilino en un orden fijo.
 
-<GuideShot id="console-sidebar" alt="La barra lateral de la consola. Bajo el logotipo de DeviceChain y las palabras Consola de gestión enumera Inicio, Paneles, Alarmas, Conectores, Dispositivos, Activos, Clientes, Áreas, Facetas, Explorar, Auditoría, Actualizaciones y Configuración. Dispositivos, Activos, Clientes, Áreas, Actualizaciones y Configuración llevan una flecha que indica que abren un submenú. El nombre y el correo de la persona que inició sesión están al pie." />
+<GuideShot id="console-sidebar" alt="La barra lateral de la consola. Bajo el logotipo de DeviceChain y las palabras Consola de gestión enumera Inicio y seis secciones plegables: Supervisión, Dispositivos, Conectar, Organización, Acceso y Configuración. El encabezado de cada sección lleva una flecha que indica que se abre y se cierra. El nombre y el correo de la persona que inició sesión están al pie." />
 
-Algunas entradas abren un submenú en lugar de una página. Al seleccionar una se abre su submenú y
-se te lleva a su primera página. Solo hay un submenú abierto a la vez.
+**Inicio** es una sola página. Cada una de las demás entradas es una **sección plegable** que agrupa
+páginas relacionadas. Selecciona el encabezado de una sección para abrirla o cerrarla, y selecciona
+una página dentro de ella para ir allí.
 
 | Entrada | Qué contiene |
 | --- | --- |
 | **Inicio** | La página de inicio. |
-| **Paneles** | Los paneles que crea tu equipo. |
-| **Alarmas** | Las alarmas que han generado tus reglas. |
-| **Políticas de notificación** | A quién se avisa de las alarmas y las horas de silencio que retienen esos avisos. |
-| **Conectores** | Conexiones salientes con otros sistemas. |
-| **Dispositivos** | **Dispositivos**, **Tipos de dispositivo**, **Perfiles de dispositivo**, **Grupos de dispositivos**, **Ventanas de mantenimiento** y **Lotes de comandos**. |
-| **Activos** | **Activos**, **Tipos de activo** y **Grupos de activos**. |
-| **Clientes** | **Clientes**, **Tipos de cliente** y **Grupos de clientes**. |
-| **Áreas** | **Áreas**, **Tipos de área**, **Grupos de áreas** y **Geocercas**. |
-| **Facetas** | Las claves con las que describes y filtras dispositivos y otras entidades. |
-| **Explorar** | Un generador de consultas para encontrar entidades por sus facetas. |
-| **Auditoría** | El registro del inquilino de quién cambió qué. |
-| **Actualizaciones** | **Artefactos** y **Firmantes** para las actualizaciones remotas (OTA). |
-| **Configuración** | **Miembros**, **Roles**, **Marca**, **Mapa** e **Idioma**. |
+| **Supervisión** | Los **Paneles** que crea tu equipo, las **Alarmas** que han generado tus reglas y las **Políticas de notificación**: a quién se avisa de las alarmas y las horas de silencio que retienen esos avisos. |
+| **Dispositivos** | **Dispositivos**, **Tipos de dispositivo**, **Perfiles de dispositivo** (que contienen las reglas, métricas y comandos del perfil), **Grupos de dispositivos**, **Lotes de comandos**, **Ventanas de mantenimiento** y **Actualizaciones** (**Artefactos**, **Despliegues** y **Firmantes** para las actualizaciones remotas, OTA). |
+| **Conectar** | Cómo llegan al inquilino los dispositivos y otros sistemas: **Perfiles de aprovisionamiento**, **Anclas de confianza**, **Integraciones** y **Conectores** (conexiones salientes con otros sistemas). |
+| **Organización** | **Activos**, **Clientes** y **Áreas** (incluidas las **Geocercas**); **Facetas**, las claves con las que describes y filtras entidades; y **Explorar**, un generador de consultas para encontrar entidades por sus facetas. |
+| **Acceso** | **Miembros**, **Cuentas de servicio**, **Roles**, **Seguridad de inicio de sesión** y **Auditoría**, el registro del inquilino de quién cambió qué. |
+| **Configuración** | **Marca**, **Mapa** e **Idioma**. |
 
 Solo ves las entradas que tu rol permite. Si tu rol no puede leer alarmas, por ejemplo,
-**Alarmas** no aparece en tu barra lateral. **Actualizaciones** solo aparece cuando tu instalación
-ejecuta el servicio de actualizaciones. Las entradas de **Configuración** son para los
-administradores del inquilino.
+**Alarmas** no aparece en tu barra lateral. **Actualizaciones** solo aparece cuando tu instalación ejecuta el servicio
+de actualizaciones. Las secciones **Acceso** y **Configuración** son para los administradores del
+inquilino.
 
 Si tu acceso está limitado a algunos de los clientes del inquilino, la barra lateral contiene solo
 **Inicio**, **Paneles**, **Alarmas** y **Dispositivos**. Consulta

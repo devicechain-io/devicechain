@@ -33,6 +33,8 @@ require **`device:read`** on top of the command authority. Naming devices explic
 command authority, because a caller doing that already knows them.
 :::
 
+To fire and follow a batch from the web console instead, see [Commanding a fleet](../user-guide/commanding-a-fleet.md) in the user guide.
+
 ## Choose the target: devices or a group {#name-the-target-devices-or-a-group}
 
 `deviceTokens` and `groupToken` are alternatives, and you supply **exactly one**. Both or neither is

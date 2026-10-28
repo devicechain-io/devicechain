@@ -279,3 +279,5 @@ to such a member.
   deadlines and signers.
 - [Signing updates](/guides/signing-updates): generating a key, registering it, signing an
   artifact and rotating keys.
+- [Building an updatable device](/guides/building-an-updatable-device): a reference device that verifies,
+  installs and rolls back an update.
