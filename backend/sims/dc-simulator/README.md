@@ -50,7 +50,7 @@ go run . --handshake /path/to/handshake.json [--port 8090]
 ### Driving load
 
 The built-in scenarios are sized as **demos** — devicepulse is 1 device,
-buildingpulse is 12, widgetlab is 7, fleetpulse is 6 and sitepulse is 19 (18 machines and one
+buildingpulse is 12, widgetlab is 7, fleetpulse is 6, towerpulse is 31 and sitepulse is 19 (18 machines and one
 plant; its devices publish their own telemetry, so the sim itself emits nothing), all at a 5s cadence, which is
 the right default for watching the presentation page and far too small to measure what
 an instance costs. Three flags override that; each also reads an env var, and each
@@ -66,7 +66,7 @@ defaults to the scenario's own sizing:
 devices chosen in source for their behaviour is a composed fixture, not a scale vehicle:
 resizing it would leave its boards pointing at devices the run never provisions, so it
 refuses the flag at startup rather than provisioning a topology its own boards do not
-match. widgetlab is one. devicepulse, buildingpulse and fleetpulse take any size
+match. widgetlab and towerpulse are. devicepulse, buildingpulse and fleetpulse take any size
 (buildingpulse's board binds named devices too, but it is rebuilt from the resized
 population). sitepulse takes any machine count: `--devices n` gives each of its three
 machine kinds `n` devices and leaves its single crusher plant at one. Its board
@@ -297,6 +297,99 @@ counter cannot separate them either, since a total that grew an hour ago reads t
 same as one growing now. Only the runner does this; the load harness drives the emit
 loop directly and is unaffected.
 
+### Towerpulse (building management)
+
+`towerpulse` is `buildingpulse` grown into the model of the second showcase: an office
+campus run by a facility-services tenant, a five-floor tower and a two-floor lab annex,
+31 devices in all. It is the **headless backbone**: everything the platform side of the
+story needs, with none of the scene. (`buildingpulse` keeps its id and its small board;
+`towerpulse` is the name the showcase uses.)
+
+🔴 **Every device is an MQTT-native controller (a connected retrofit).** The platform has
+no BACnet, Modbus or OPC-UA support, so this scenario must never be described as
+integrating with a building management system.
+
+| Devices | Count | Metrics | Commands |
+| --- | --- | --- | --- |
+| `tp-vav-zone` (VAV zone controller) | 24 (20 tower, 4 annex) | `temp_c`, `setpoint_c`, `co2_ppm`, `occupancy`, `damper_pct` | `boost-cooling{minutes}`, `set-setpoint{celsius}` |
+| `tp-ahu` (air handler) | 3 | `supply_air_c`, `fan_pct`, `filter_dp_pa`, `mode` (0 normal, 1 economy, 2 boost) | `set-mode{mode}` |
+| `tp-chiller` | 2 | `chw_supply_c`, `power_kw`, `cooling_kw`, `running`, and the calculated `cop` | `restart` |
+| `tp-energy-meter` | 2 | `kw`, `kwh`, and the calculated `kwh_per_m2` | none |
+
+**Hierarchy.** Two customers (the tower's owner and the annex's owner), a building area for
+each, a floor area per floor and a plant area per building. Every device is assigned to its
+floor (or plant), its building and its owner, so every event carries a building and a customer
+anchor. The platform has no area-in-area hierarchy, so the floor-to-building link is carried by
+the device's two assignments rather than by an edge between the areas.
+
+**Rules.**
+
+| | Rule | Alarm | Command |
+| --- | --- | --- | --- |
+| R1 | the 5-minute average zone temperature is above 26 C **while the room is occupied** | MAJOR | `boost-cooling{15}` to the same controller |
+| R2 | CO2 above 1000 ppm | MINOR | none |
+| R3 | air-handler filter pressure drop above 250 Pa | MINOR | none, the human beat |
+| R4 | a chiller sends nothing for 2 minutes | CRITICAL | none |
+
+🔴 **A rule can only command the device that produced the event.** REACT's `sendCommand`
+targets the detection's own device, so "a hot zone sensor commands its air handler" is not
+expressible. Sensing and actuation live in one VAV controller, which is also how a real VAV box
+is built. R1 is a sliding **aggregate** rule, and a windowed rule CAN carry `sendCommand`: the
+action chain is independent of the detection kind (only a correlation rule, whose series is an
+area, is refused), and event-processing's real publish gate and DETECT engine were run against
+the document this scenario publishes.
+
+**Calculated metrics need a tier that allows them.** `cop = cooling_kw / power_kw` and
+`kwh_per_m2 = kwh / device.floor_area_m2` (the meters carry `floor_area_m2` as a device
+constant, written into their metadata). A tenant's tier sets `calculatedMetricsPerProfile`, and
+it is **0 by default**, so bootstrap fails at the publish with a message naming the key. The
+sim's tenant cannot raise it (the tier is operator-defined and edited on the admin plane); an
+operator sets it to at least 1 on a tier (console, Administration, Tiers, or `updateTenantTier`)
+and creates the sim on that tier with `dcctl sim create --manifest towerpulse --tier <tier>`.
+Nothing in the scenario or its defaults changes the ceiling.
+
+**The annex owner.** Bootstrap invites `owner@halden-labs.example` into the tenant with the
+read-only `viewer` role and a scope of exactly one customer, the annex owner, and accepts the
+invitation with the sim's own password (the one in the sim record), so the account can sign in
+at once. A member limited to a customer sees only the devices assigned to it. A second board,
+`tp-annex-dashboard`, is the same board opened on the annex; the operator's is
+`tp-dashboard`. The area selectors list every area, floors and plants included, because the
+platform has no hierarchy to filter a building list by.
+
+**The board** (`tp-dashboard`) carries a building, floor and zone selector (the zone is a
+slot scoped to the building), alarms by severity, devices online, each building's power with a
+sparkline, a status card per chiller, each building's energy per floor area, the zones of a
+floor compared on one chart with their alarms marked, the annex chiller's COP, the alarm table
+with a tab per kind of equipment, a setpoint stepper that sends `set-setpoint` to the selected
+zone, the zone's temperature and CO2, and the tower's power history, which the widget frame can
+download as CSV. The time range is the board header's own control, an hour by default, and the
+viewer can move it to an absolute window; nothing about it is authored beyond the default.
+
+**The device plane is this process.** `Tick` advances a small, seeded thermal model and
+posts every device's reading. It is a pure function of the elapsed time, advanced in fixed
+one-second steps, so two runs agree at the same moment whatever the tick jitter. The real
+thermal model, with its day timeline, is the Unity showcase's own; this one is the smallest
+thing that is plausible, and should not grow toward it.
+
+A fixed script, in minutes from the start of the run, crosses each rule once on a named device
+and nothing else crosses any:
+
+| At | Event | Rule |
+| --- | --- | --- |
+| 0:30 | a meeting fills `tp-vav-tower-f4-east` and the afternoon sun warms it | R1 raises at about 8:25 |
+| 0:30 | the same sun on `tp-vav-tower-f5-north`, **which nobody is in** | R1 does not raise: the gate |
+| 2:00 | a crowded room on `tp-vav-tower-f2-west` | R2 raises at about 11 |
+| 2:00 to 20:00 | the filter of `tp-ahu-tower-2` clogs | R3 raises at about 16 |
+| 15:00 | `tp-chiller-annex` goes silent | R4 raises two minutes after its last reading |
+
+Commands are answered by the scenario, not by the answer-at-once receiver (`cmdreceiver.Handler`):
+**`boost-cooling` is `SUCCESSFUL` only once the zone reaches its setpoint**, and `FAILED` if its
+minutes run out first; `restart` is `SUCCESSFUL` once the chiller is back and reporting;
+`set-setpoint` and `set-mode` take effect at once. A redelivered command is not worked twice.
+A presenter can drop a chiller out of turn (`DropChiller` on the Sim); a restart brings it back.
+The silent chiller keeps its MQTT session in this process, so the online doughnut does not drop
+here: a presence drop is the Unity device plane's business.
+
 ### The command far end
 
 A device that only POSTs telemetry cannot receive anything, so a scenario with a
@@ -312,7 +405,7 @@ on its manifest, which has three settings:
 | `internal` | this process, per device | yes | allowed |
 | `external` | a presentation client in another process — a Unity player that IS the device | no | allowed |
 
-widgetlab is `internal`; sitepulse is `external`; devicepulse and buildingpulse are `none`. Both far-end modes
+widgetlab and towerpulse are `internal`; sitepulse is `external`; devicepulse and buildingpulse are `none`. Both far-end modes
 must still declare a command vocabulary on a profile: for `external` that vocabulary
 is the whole contract with the other process, since it is what that client subscribes
 for and what the board's widget enqueues against.
@@ -585,6 +678,11 @@ a snapshot taken at page load would not.
 - `x509sim/` — the `--x509` mode: test CA and device certificate minting, trust-anchor and credential registration, and the certificate-presenting MQTT connect.
 - `mqttload/` — the MQTT fleet behind `dc-loadtest-mqtt`: one session per device, PUBACK-true
   accounting, jittered reconnect, observed TLS. `loadtest/mqtt.go` is its storage verdict.
+- `sim/towerpulse*.go` — the building-management scenario: the manifest and rules
+  (`towerpulse.go`), the seeded thermal model and the command engine that answers a command
+  only when its job is done (`towerpulse_model.go`), and the board (`towerpulse_dashboard.go`).
+  `sim/windowrule.go` builds its windowed and absence rules, and `sim/customeruser.go`
+  provisions a member limited to one customer.
 - `sim/lifecycle.go` — the `CREATED -> BOOTSTRAPPED -> RUNNING <-> STOPPED`
   FSM and the control HTTP API.
 - `sim/presentation.go` — serves the static page + its `/config.json`.

@@ -179,6 +179,20 @@ func (l *Lifecycle) attachCommandFarEnd(ctx context.Context) error {
 	}
 	fe := newFarEnd(l.rt.InstanceId, l.rt.Tenant, broker, brokerTLSConfig(broker, l.rt.MqttTLSInsecure))
 
+	// A scenario whose commands take time to take effect answers them itself. The handler is
+	// set BEFORE any device subscribes, so no frame is ever answered under the default
+	// behaviour and then under another. A far end that cannot take one is refused rather than
+	// quietly left answering at once, which is exactly the false success the handler exists to
+	// prevent.
+	if source, ok := l.sim.(commandHandlerSource); ok {
+		taker, ok := fe.(interface{ SetHandler(cmdreceiver.Handler) })
+		if !ok {
+			fe.Close()
+			return fmt.Errorf("scenario %q answers its own commands but the command far end cannot take a handler", l.name)
+		}
+		taker.SetHandler(source.CommandHandler())
+	}
+
 	for _, d := range l.rt.Devices {
 		if err := fe.Subscribe(ctx, d.Token, d.CredentialId); err != nil {
 			// Close what did attach: leaving half a cohort connected to a broker on a

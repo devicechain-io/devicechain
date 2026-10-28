@@ -26,6 +26,7 @@ import (
 //  4. devices (+ credentials)
 //  5. assignments (bulk createEntityRelationships, "assigned" type)
 //  6. dashboards (create -> publish)
+//  7. customer users (invite -> accept, limited to one customer)
 //
 // Every step checks-then-creates by token (a *ByToken query first, a create
 // only if it comes back empty), so re-running Provision against an already-
@@ -143,6 +144,14 @@ func Provision(ctx context.Context, rt *Runtime, manifest SimManifest) error {
 			return fmt.Errorf("provision dashboard %q: %w", ds.Token, err)
 		}
 	}
+
+	// Last: a customer user is limited to a customer that must already exist, and the
+	// devices they are meant to see assigned to it.
+	for _, u := range manifest.CustomerUsers {
+		if err := ensureCustomerUser(ctx, rt, u); err != nil {
+			return fmt.Errorf("provision customer user %q: %w", u.Email, err)
+		}
+	}
 	return nil
 }
 
@@ -155,10 +164,12 @@ type deviceProfileInfo struct {
 	Token             string `json:"token"`
 	ActiveVersion     *int   `json:"activeVersion"`
 	MetricDefinitions []struct {
-		Token    string `json:"token"`
-		Name     string `json:"name"`
-		DataType string `json:"dataType"`
-		Unit     string `json:"unit"`
+		Token      string  `json:"token"`
+		Name       string  `json:"name"`
+		DataType   string  `json:"dataType"`
+		Unit       string  `json:"unit"`
+		Expression *string `json:"expression"`
+		Calculated bool    `json:"calculated"`
 	} `json:"metricDefinitions"`
 	CommandDefinitions []struct {
 		Token           string `json:"token"`
@@ -176,7 +187,7 @@ type deviceProfileInfo struct {
 
 const queryDeviceProfilesByToken = `query($tokens:[String!]!){` +
 	`deviceProfilesByToken(tokens:$tokens){token activeVersion ` +
-	`metricDefinitions{token name dataType unit} ` +
+	`metricDefinitions{token name dataType unit expression calculated} ` +
 	`commandDefinitions{token commandKey name parameterSchema} ` +
 	`detectionRules{token name definition enabled}}}`
 
@@ -280,6 +291,13 @@ func ensureProfile(ctx context.Context, rt *Runtime, p ProfileSpec) error {
 				"label":       profileVersionLabel(p),
 				"description": profileVersionDescription(marker),
 			}, &out); err != nil {
+			if n := calculatedMetricCount(p); n > 0 {
+				return fmt.Errorf("publishDeviceProfile: %w (profile %q declares %d calculated metric(s), which the "+
+					"tenant's tier must allow: set calculatedMetricsPerProfile to at least %d on the tier the sim "+
+					"tenant is packaged at, in the console under Administration > Tiers or with updateTenantTier, "+
+					"then create the sim at that tier with `dcctl sim create --tier`. The default is 0, so a "+
+					"calculated metric is refused until an operator raises it)", err, p.Token, n, n)
+			}
 			return fmt.Errorf("publishDeviceProfile: %w", err)
 		}
 		log.Info().Str("token", p.Token).Int("version", out.PublishDeviceProfile.Version).
@@ -325,6 +343,13 @@ func profileContentMarker(p ProfileSpec) string {
 	h := sha256.New()
 	for _, m := range p.Metrics {
 		fmt.Fprintf(h, "metric\x00%s\x00%s\x00%s\x00%s\n", m.Key, m.Name, m.DataType, m.Unit)
+	}
+	for _, m := range p.Metrics {
+		// Only a calculated metric adds a line, so a profile with none keeps the marker it
+		// had before formulas existed and is not republished by this build for nothing.
+		if m.Expression != "" {
+			fmt.Fprintf(h, "formula\x00%s\x00%s\n", m.Key, m.Expression)
+		}
 	}
 	for _, c := range p.Commands {
 		fmt.Fprintf(h, "command\x00%s\x00%s\x00%s\x00%s\n", c.Token, c.CommandKey, c.Name, c.ParameterSchema)
@@ -463,12 +488,28 @@ func ensureMetricDefinition(ctx context.Context, rt *Runtime, profileToken strin
 		"dataType":           m.DataType,
 		"unit":               m.Unit,
 	}
+	if m.Expression != "" {
+		req["expression"] = m.Expression
+	}
 
 	for _, existing := range profile.MetricDefinitions {
 		if existing.Token != metricToken {
 			continue
 		}
-		if existing.Name == m.Name && existing.DataType == m.DataType && existing.Unit == m.Unit {
+		// Measured or calculated is fixed when a metric is created, so a draft holding the
+		// other kind cannot be converged by an update. Said plainly, because the platform's
+		// refusal would name neither the metric nor the scenario that asked.
+		if existing.Calculated != (m.Expression != "") {
+			return fmt.Errorf("metric %q on profile %q is %s but the scenario declares it %s, and a metric's kind "+
+				"cannot change after it is created: delete the metric (or recreate the sim) and bootstrap again",
+				m.Key, profileToken, kindOf(existing.Calculated), kindOf(m.Expression != ""))
+		}
+		currentFormula := ""
+		if existing.Expression != nil {
+			currentFormula = *existing.Expression
+		}
+		if existing.Name == m.Name && existing.DataType == m.DataType && existing.Unit == m.Unit &&
+			currentFormula == m.Expression {
 			return nil
 		}
 		var updated struct {
@@ -495,6 +536,25 @@ func ensureMetricDefinition(ctx context.Context, rt *Runtime, profileToken strin
 	}
 	log.Info().Str("token", metricToken).Str("profile", profileToken).Msg("created metric definition")
 	return nil
+}
+
+// kindOf names a metric's kind for the messages that compare two of them.
+func kindOf(calculated bool) string {
+	if calculated {
+		return "calculated"
+	}
+	return "measured"
+}
+
+// calculatedMetricCount is how many of a profile's metrics are calculated.
+func calculatedMetricCount(p ProfileSpec) int {
+	n := 0
+	for _, m := range p.Metrics {
+		if m.Expression != "" {
+			n++
+		}
+	}
+	return n
 }
 
 // --- command definitions + detection rules (ADR-043 / ADR-051, ADR-057) ---------
@@ -665,7 +725,10 @@ func ensureDeviceType(ctx context.Context, rt *Runtime, dt DeviceTypeSpec) error
 
 // --- device + credential ---------------------------------------------------------
 
-const queryDevicesByToken = `query($tokens:[String!]!){devicesByToken(tokens:$tokens){token}}`
+const queryDevicesByToken = `query($tokens:[String!]!){devicesByToken(tokens:$tokens){token metadata}}`
+
+const mutationUpdateDevice = `mutation($token:String!,$request:DeviceUpdateRequest!){` +
+	`updateDevice(token:$token,request:$request){token}}`
 
 const mutationCreateDevice = `mutation($request:DeviceCreateRequest){createDevice(request:$request){token}}`
 
@@ -682,7 +745,8 @@ const credentialTypeAccessToken = "ACCESS_TOKEN"
 func ensureDevice(ctx context.Context, rt *Runtime, d DeviceInstance) error {
 	var existingDevice struct {
 		DevicesByToken []struct {
-			Token string `json:"token"`
+			Token    string  `json:"token"`
+			Metadata *string `json:"metadata"`
 		} `json:"devicesByToken"`
 	}
 	if err := rt.Session.Query(ctx, rt.Endpoints.DeviceMgmtGraphQL, queryDevicesByToken,
@@ -695,6 +759,9 @@ func ensureDevice(ctx context.Context, rt *Runtime, d DeviceInstance) error {
 			"externalId":      d.ExternalId,
 			"deviceTypeToken": d.DeviceTypeToken,
 		}
+		if d.Metadata != "" {
+			req["metadata"] = d.Metadata
+		}
 		var created struct {
 			CreateDevice struct {
 				Token string `json:"token"`
@@ -705,6 +772,26 @@ func ensureDevice(ctx context.Context, rt *Runtime, d DeviceInstance) error {
 			return fmt.Errorf("createDevice: %w", err)
 		}
 		log.Info().Str("token", d.Token).Str("externalId", d.ExternalId).Msg("created device")
+	} else if d.Metadata != "" {
+		// The constants a formula reads live in the device's metadata, so a device created
+		// by an earlier run with other values would silently feed a calculated metric the
+		// wrong number. Converge them; leave a device that already agrees alone.
+		current := ""
+		if m := existingDevice.DevicesByToken[0].Metadata; m != nil {
+			current = *m
+		}
+		if !sameJSON(current, d.Metadata) {
+			var updated struct {
+				UpdateDevice struct {
+					Token string `json:"token"`
+				} `json:"updateDevice"`
+			}
+			if err := rt.Session.Query(ctx, rt.Endpoints.DeviceMgmtGraphQL, mutationUpdateDevice,
+				map[string]any{"token": d.Token, "request": map[string]any{"metadata": d.Metadata}}, &updated); err != nil {
+				return fmt.Errorf("updateDevice: %w", err)
+			}
+			log.Info().Str("token", d.Token).Msg("updated device metadata")
+		}
 	}
 
 	var existingCred struct {

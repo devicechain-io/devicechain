@@ -1,0 +1,327 @@
+// Copyright The DeviceChain Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package sim
+
+import (
+	"encoding/json"
+	"sort"
+	"strings"
+	"testing"
+)
+
+type tpBoard struct {
+	Slots map[string]struct {
+		Type           string `json:"type"`
+		DefaultBinding struct {
+			Kind        string `json:"kind"`
+			DeviceToken string `json:"deviceToken"`
+			Anchor      struct {
+				TargetType  string `json:"targetType"`
+				TargetToken string `json:"targetToken"`
+			} `json:"anchor"`
+		} `json:"defaultBinding"`
+		Scope *struct {
+			Parent   string `json:"parent"`
+			Strategy string `json:"strategy"`
+		} `json:"scope"`
+	} `json:"slots"`
+	TimeRange struct {
+		DefaultSeconds int `json:"defaultSeconds"`
+	} `json:"timeRange"`
+	Widgets []struct {
+		ID         string `json:"id"`
+		Type       string `json:"type"`
+		Datasource *struct {
+			Slot         string   `json:"slot"`
+			Measurements []string `json:"measurements"`
+		} `json:"datasource"`
+		Layout  map[string]dashboardPlacement `json:"layout"`
+		Options map[string]any                `json:"options"`
+	} `json:"widgets"`
+}
+
+func towerpulseBoards(t *testing.T) map[string]tpBoard {
+	t.Helper()
+	out := map[string]tpBoard{}
+	for _, d := range towerpulseManifest(t).Dashboards {
+		var b tpBoard
+		if err := json.Unmarshal([]byte(d.Definition), &b); err != nil {
+			t.Fatalf("%s: %v", d.Token, err)
+		}
+		out[d.Token] = b
+	}
+	return out
+}
+
+func (b tpBoard) ofType(widgetType string) []int {
+	var idx []int
+	for i, w := range b.Widgets {
+		if w.Type == widgetType {
+			idx = append(idx, i)
+		}
+	}
+	return idx
+}
+
+func (b tpBoard) widget(t *testing.T, id string) int {
+	t.Helper()
+	for i, w := range b.Widgets {
+		if w.ID == id {
+			return i
+		}
+	}
+	t.Fatalf("no widget %q", id)
+	return -1
+}
+
+// The board carries every widget the showcase's model lists, each on the subject it is about.
+func TestTowerpulseBoardCarriesTheModelsWidgets(t *testing.T) {
+	b := towerpulseBoards(t)[TowerpulseDashboardToken]
+	need := map[string]int{
+		"entity-selector":  3, // building, floor, zone
+		"alarm-severity":   1, // alarm count by severity
+		"online-doughnut":  1,
+		"stat-card":        4, // two building kW cards with a sparkline, two energy-per-area cards
+		"device-status":    2, // the chillers
+		"timeseries-chart": 2, // the zone compare chart, the chiller COP
+		"alarm-table":      1,
+		"command-slider":   1, // the setpoint stepper
+		"history-table":    1,
+		"gauge":            2,
+	}
+	for widgetType, want := range need {
+		if got := len(b.ofType(widgetType)); got != want {
+			t.Errorf("%d %s widgets, want %d", got, widgetType, want)
+		}
+	}
+	if b.TimeRange.DefaultSeconds != 3600 {
+		t.Errorf("time range default = %d, want an hour; the header's range control is what makes the window absolute", b.TimeRange.DefaultSeconds)
+	}
+}
+
+// The widgets whose options are the point of the board.
+func TestTowerpulseBoardWidgetsAreConfiguredForTheStory(t *testing.T) {
+	b := towerpulseBoards(t)[TowerpulseDashboardToken]
+
+	// kW cards: a sparkline, on each building's meter, on the kw metric.
+	for id, slot := range map[string]string{"tp-kw-tower": towerpulseSlotMeterTower, "tp-kw-annex": towerpulseSlotMeterAnnex} {
+		w := b.Widgets[b.widget(t, id)]
+		if w.Options["sparkline"] != true || w.Options["measurement"] != "kw" || w.Datasource.Slot != slot {
+			t.Errorf("%s = %+v", id, w)
+		}
+	}
+
+	// The compare chart: one line per zone of the FLOOR, the alarms drawn on it.
+	cmp := b.Widgets[b.widget(t, "tp-floor-compare")]
+	if cmp.Options["groupBy"] != "device" || cmp.Options["measurement"] != "temp_c" || cmp.Options["markAlarms"] != true ||
+		cmp.Datasource.Slot != towerpulseSlotFloor {
+		t.Errorf("compare chart = %+v", cmp)
+	}
+	if _, pinned := cmp.Options["windowSeconds"]; pinned {
+		t.Error("the compare chart pins its own window, so the board's range picker would not move it")
+	}
+
+	// The alarm table: active alarms, a tab per device type of the scenario, and drilling to the zone.
+	at := b.Widgets[b.widget(t, "tp-alarms")]
+	if at.Options["groupBy"] != "deviceType" || at.Options["state"] != AlarmStateActiveWire || at.Options["selectionTarget"] != towerpulseSlotZone {
+		t.Errorf("alarm table options = %v", at.Options)
+	}
+	var tabs []string
+	for _, tab := range at.Options["deviceTypes"].([]any) {
+		tabs = append(tabs, tab.(map[string]any)["token"].(string))
+	}
+	var types []string
+	for _, dt := range towerpulseManifest(t).DeviceTypes {
+		types = append(types, dt.Token)
+	}
+	sort.Strings(tabs)
+	sort.Strings(types)
+	if strings.Join(tabs, ",") != strings.Join(types, ",") {
+		t.Errorf("alarm tabs %v do not cover the scenario's device types %v", tabs, types)
+	}
+
+	// The stepper sends the profile's own command, with the profile's own schema.
+	st := b.Widgets[b.widget(t, "tp-setpoint")]
+	vav := profileByToken(t, towerpulseManifest(t), TowerpulseVAVProfileToken)
+	var setpoint CommandSpec
+	for _, c := range vav.Commands {
+		if c.CommandKey == TowerpulseSetpointCommandKey {
+			setpoint = c
+		}
+	}
+	if st.Options["mode"] != "stepper" || st.Options["commandName"] != TowerpulseSetpointCommandKey ||
+		st.Options["parameter"] != TowerpulseSetpointParameter || st.Datasource.Slot != towerpulseSlotZone {
+		t.Errorf("setpoint control = %v", st.Options)
+	}
+	if st.Options["parameterSchema"] != setpoint.ParameterSchema {
+		t.Errorf("the stepper bakes a schema that is not the command's: %v vs %s", st.Options["parameterSchema"], setpoint.ParameterSchema)
+	}
+	if !isCommandWidgetType(st.Type) {
+		t.Fatal("the stepper is not a command widget")
+	}
+
+	// Status cards go stale when the chiller's own alarm would: one number, two uses.
+	for _, id := range []string{"tp-chiller-tower-status", "tp-chiller-annex-status"} {
+		if got := b.Widgets[b.widget(t, id)].Options["staleAfterSeconds"]; got != float64(120) {
+			t.Errorf("%s stale after %v s, want the rule's 120", id, got)
+		}
+	}
+
+	// The calculated metrics are shown by the cards and chart that exist for them.
+	for _, id := range []string{"tp-kwh-m2-tower", "tp-kwh-m2-annex"} {
+		if got := b.Widgets[b.widget(t, id)].Options["measurement"]; got != "kwh_per_m2" {
+			t.Errorf("%s shows %v, want kwh_per_m2", id, got)
+		}
+	}
+	if ds := b.Widgets[b.widget(t, "tp-annex-cop")].Datasource; ds.Slot != towerpulseSlotChillerAnnex || len(ds.Measurements) != 1 || ds.Measurements[0] != "cop" {
+		t.Errorf("COP chart datasource = %+v", ds)
+	}
+}
+
+// Every measurement a widget reads is one its subject's profile declares (calculated ones
+// included), so no card is bound to a number nothing ever produces.
+func TestTowerpulseBoardReadsOnlyMetricsItsSubjectsDeclare(t *testing.T) {
+	m := towerpulseManifest(t)
+	b := towerpulseBoards(t)[TowerpulseDashboardToken]
+	profileOf := map[string]string{}
+	for _, dt := range m.DeviceTypes {
+		profileOf[dt.Token] = dt.ProfileToken
+	}
+	typeOf := map[string]string{}
+	for _, d := range m.Expand(m.Seed) {
+		typeOf[d.Token] = d.DeviceTypeToken
+	}
+	declared := func(profile string) map[string]bool {
+		out := map[string]bool{}
+		for _, mx := range profileByToken(t, m, profile).Metrics {
+			out[mx.Key] = true
+		}
+		return out
+	}
+	checked := 0
+	for _, w := range b.Widgets {
+		if w.Datasource == nil {
+			continue
+		}
+		slot := b.Slots[w.Datasource.Slot]
+		// Anchor slots hold devices of every kind, so only a DEVICE slot names a profile.
+		if slot.Type != "device" {
+			continue
+		}
+		have := declared(profileOf[typeOf[slot.DefaultBinding.DeviceToken]])
+		keys := append([]string(nil), w.Datasource.Measurements...)
+		if mm, ok := w.Options["measurement"].(string); ok {
+			keys = append(keys, mm)
+		}
+		if w.Type == "history-table" {
+			for _, c := range w.Options["columns"].([]any) {
+				keys = append(keys, c.(map[string]any)["measurement"].(string))
+			}
+		}
+		for _, k := range keys {
+			checked++
+			if !have[k] {
+				t.Errorf("%s reads %q from %s, whose profile does not declare it", w.ID, k, slot.DefaultBinding.DeviceToken)
+			}
+		}
+	}
+	if checked < 10 {
+		t.Errorf("only %d bindings were checked; the walk has gone blind", checked)
+	}
+}
+
+// Every slot a widget names is declared, every device a slot binds exists, and a scoped slot's
+// parent exists.
+func TestTowerpulseBoardSlotsResolve(t *testing.T) {
+	m := towerpulseManifest(t)
+	live := map[string]bool{}
+	for _, d := range m.Expand(m.Seed) {
+		live[d.Token] = true
+	}
+	areas := map[string]bool{}
+	for _, a := range m.Areas {
+		areas[a.Token] = true
+	}
+	for token, b := range towerpulseBoards(t) {
+		for _, w := range b.Widgets {
+			if w.Datasource != nil {
+				if _, ok := b.Slots[w.Datasource.Slot]; !ok {
+					t.Errorf("%s/%s binds undeclared slot %q", token, w.ID, w.Datasource.Slot)
+				}
+			}
+			if target, ok := w.Options["selectionTarget"].(string); ok {
+				if _, declared := b.Slots[target]; !declared {
+					t.Errorf("%s/%s selects into undeclared slot %q", token, w.ID, target)
+				}
+			}
+		}
+		for name, s := range b.Slots {
+			switch s.Type {
+			case "device":
+				if !live[s.DefaultBinding.DeviceToken] {
+					t.Errorf("%s: slot %s binds device %q, which the scenario does not have", token, name, s.DefaultBinding.DeviceToken)
+				}
+			case "anchor":
+				if !areas[s.DefaultBinding.Anchor.TargetToken] || s.DefaultBinding.Anchor.TargetType != "area" {
+					t.Errorf("%s: slot %s anchors on %+v, not an area the scenario has", token, name, s.DefaultBinding.Anchor)
+				}
+			}
+			if s.Scope != nil {
+				if _, ok := b.Slots[s.Scope.Parent]; !ok {
+					t.Errorf("%s: slot %s is scoped to undeclared %q", token, name, s.Scope.Parent)
+				}
+			}
+		}
+	}
+}
+
+// The annex board is the same board opened on the annex: what a customer scoped to the annex lands
+// on, so it must default to the annex at every level and share everything else.
+func TestTowerpulseAnnexBoardOpensOnTheAnnex(t *testing.T) {
+	boards := towerpulseBoards(t)
+	op, annex := boards[TowerpulseDashboardToken], boards[TowerpulseAnnexDashboardToken]
+	if got := op.Slots[towerpulseSlotBuilding].DefaultBinding.Anchor.TargetToken; got != TowerpulseTowerToken {
+		t.Errorf("operator board opens on %s", got)
+	}
+	if got := annex.Slots[towerpulseSlotBuilding].DefaultBinding.Anchor.TargetToken; got != TowerpulseAnnexToken {
+		t.Errorf("annex board opens on building %s", got)
+	}
+	if got := annex.Slots[towerpulseSlotFloor].DefaultBinding.Anchor.TargetToken; !strings.HasPrefix(got, "tp-annex-") {
+		t.Errorf("annex board opens on floor %s", got)
+	}
+	if got := annex.Slots[towerpulseSlotZone].DefaultBinding.DeviceToken; !strings.HasPrefix(got, "tp-vav-annex-") {
+		t.Errorf("annex board opens on zone %s", got)
+	}
+	if len(op.Widgets) != len(annex.Widgets) {
+		t.Errorf("the two boards differ in widgets: %d vs %d", len(op.Widgets), len(annex.Widgets))
+	}
+}
+
+// Widgets sit on the 12-column grid without overlapping, and the board's controls are answered:
+// the scenario declares an in-process far end, so a command widget is legal on it (Validate refuses
+// one against a scenario nobody answers for).
+func TestTowerpulseBoardLayoutIsAGridWithoutOverlap(t *testing.T) {
+	for token, b := range towerpulseBoards(t) {
+		type rect struct{ c0, c1, r0, r1 int }
+		var rects []rect
+		for _, w := range b.Widgets {
+			p := w.Layout["base"]
+			if p.Col < 0 || p.Col+p.Cols > dashboardGridColumns || p.Cols < 1 || p.Rows < 1 {
+				t.Errorf("%s/%s is off the grid: %+v", token, w.ID, p)
+			}
+			r := rect{p.Col, p.Col + p.Cols, p.Row, p.Row + p.Rows}
+			for i, o := range rects {
+				if r.c0 < o.c1 && o.c0 < r.c1 && r.r0 < o.r1 && o.r0 < r.r1 {
+					t.Errorf("%s/%s overlaps %s", token, w.ID, b.Widgets[i].ID)
+				}
+			}
+			rects = append(rects, r)
+		}
+	}
+	m := towerpulseManifest(t)
+	m.CommandFarEnd = FarEndNone
+	if err := m.Validate(); err == nil {
+		t.Error("a board with a command widget validated against a scenario nothing answers for")
+	}
+}

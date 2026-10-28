@@ -44,11 +44,15 @@ type fakeRule struct {
 }
 
 type fakeProfileServer struct {
-	mu       sync.Mutex
-	exists   bool
-	metrics  map[string]fakeMetric
-	commands map[string]fakeCommand
-	rules    map[string]fakeRule
+	mu      sync.Mutex
+	exists  bool
+	metrics map[string]fakeMetric
+	// expressions is the formula of each CALCULATED metric, by metric token. A metric is
+	// calculated exactly when it has an entry, which is how the real server reports it:
+	// the kind is fixed at create, so an update never adds or removes one.
+	expressions map[string]string
+	commands    map[string]fakeCommand
+	rules       map[string]fakeRule
 	// Published version labels, in order. The active version is the last one.
 	versions []string
 	// descriptions[i] is versions[i]'s notes; shorter than versions when a test
@@ -101,10 +105,11 @@ type fakeProfileServer struct {
 func newFakeProfileServer(t *testing.T) (*fakeProfileServer, *Runtime) {
 	t.Helper()
 	f := &fakeProfileServer{
-		metrics:   map[string]fakeMetric{},
-		commands:  map[string]fakeCommand{},
-		rules:     map[string]fakeRule{},
-		liveRules: map[string]string{},
+		metrics:     map[string]fakeMetric{},
+		expressions: map[string]string{},
+		commands:    map[string]fakeCommand{},
+		rules:       map[string]fakeRule{},
+		liveRules:   map[string]string{},
 	}
 	srv := httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(srv.Close)
@@ -283,11 +288,21 @@ func (f *fakeProfileServer) dispatch(query string, vars map[string]any) (map[str
 	case strings.Contains(query, "createMetricDefinition"):
 		r := requestArg(vars)
 		f.metrics[str(r, "token")] = fakeMetric{str(r, "name"), str(r, "dataType"), str(r, "unit")}
+		if expr := str(r, "expression"); expr != "" {
+			f.expressions[str(r, "token")] = expr
+		}
 		return map[string]any{"createMetricDefinition": map[string]any{"token": str(r, "token")}}, 0
 	case strings.Contains(query, "updateMetricDefinition"):
 		r, token := updateArgs(vars)
 		f.updates++
 		f.metrics[token] = fakeMetric{str(r, "name"), str(r, "dataType"), str(r, "unit")}
+		if expr, ok := r["expression"].(string); ok {
+			if _, calculated := f.expressions[token]; !calculated {
+				// The real server refuses this outright: a measured metric cannot become calculated.
+				return nil, http.StatusBadRequest
+			}
+			f.expressions[token] = expr
+		}
 		return map[string]any{"updateMetricDefinition": map[string]any{"token": token}}, 0
 
 	case strings.Contains(query, "createCommandDefinition"):
@@ -322,8 +337,13 @@ func (f *fakeProfileServer) profileJSON() map[string]any {
 	}
 	metrics := make([]any, 0, len(f.metrics))
 	for token, m := range f.metrics {
-		metrics = append(metrics, map[string]any{
-			"token": token, "name": m.Name, "dataType": m.DataType, "unit": m.Unit})
+		entry := map[string]any{
+			"token": token, "name": m.Name, "dataType": m.DataType, "unit": m.Unit,
+			"expression": nil, "calculated": false}
+		if expr, ok := f.expressions[token]; ok {
+			entry["expression"], entry["calculated"] = expr, true
+		}
+		metrics = append(metrics, entry)
 	}
 	commands := make([]any, 0, len(f.commands))
 	for token, c := range f.commands {

@@ -259,17 +259,14 @@ func TestThePublishGateStillRejectsAStrayKey(t *testing.T) {
 	for _, m := range strayKeyMutations {
 		mutated := 0
 		for _, r := range rules {
-			// Exactly one occurrence, or `strings.Replace(..., 1)` is choosing between
-			// candidates. Two occurrences would leave the second one valid, so the document
-			// might be rejected for a reason this test did not author — and the count is
-			// cheap, so there is no reason to find out later.
-			switch n := strings.Count(r.Definition, m.key); n {
-			case 0:
+			// Every occurrence is mutated, so no key is left valid. A rule can legitimately
+			// carry one key twice — a windowed rule has its own `threshold` AND its gate's — and
+			// replacing only the first would leave the second valid, so the document might be
+			// rejected for a reason this test did not author. Replacing them all removes the
+			// ambiguity, and the count below proves every one moved.
+			occurrences := strings.Count(r.Definition, m.key)
+			if occurrences == 0 {
 				continue
-			case 1:
-			default:
-				t.Fatalf("%s/%s carries %s %d times; a single-replacement mutation would be "+
-					"ambiguous about which one it hit", r.Producer, r.RuleToken, m.key, n)
 			}
 
 			// The decoys must be present before the replacement, or "unchanged after" is a
@@ -279,14 +276,15 @@ func TestThePublishGateStillRejectsAStrayKey(t *testing.T) {
 				before[s] = strings.Count(r.Definition, s)
 			}
 
-			def := strings.Replace(r.Definition, m.key, m.typo, 1)
+			def := strings.ReplaceAll(r.Definition, m.key, m.typo)
 			// Prove the bytes moved, rather than trusting the replace.
 			if def == r.Definition {
 				t.Fatalf("the %s mutation did not change %s/%s, so it proved nothing",
 					m.key, r.Producer, r.RuleToken)
 			}
-			if !strings.Contains(def, m.typo) {
-				t.Fatalf("the %s mutation did not leave %s in %s/%s", m.key, m.typo, r.Producer, r.RuleToken)
+			if got := strings.Count(def, m.typo); got != occurrences {
+				t.Fatalf("the %s mutation left %s %d times in %s/%s, want %d", m.key, m.typo, got,
+					r.Producer, r.RuleToken, occurrences)
 			}
 			// Prove it hit the FIELD KEY and not a decoy carrying the same text.
 			for _, s := range m.survives {

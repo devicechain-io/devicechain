@@ -138,7 +138,7 @@ test.beforeEach(async ({ page, baseURL }) => {
 test('the gate covers every committed sim board', () => {
   // A board added to testdata/sim-dashboards is gated without a change here; this pins that
   // the directory was read at all (a wrong path would gate nothing and pass).
-  expect(BOARDS).toEqual(['bp-dashboard', 'sp-dashboard', 'wl-gallery', 'wl-stress']);
+  expect(BOARDS).toEqual(['bp-dashboard', 'sp-dashboard', 'tp-annex-dashboard', 'tp-dashboard', 'wl-gallery', 'wl-stress']);
 });
 
 test('every known failure names a gated board and width', () => {

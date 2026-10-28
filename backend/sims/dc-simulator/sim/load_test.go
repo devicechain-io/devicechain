@@ -603,6 +603,17 @@ func TestEveryScenarioDashboardBindsToADeviceThatExists(t *testing.T) {
 func deviceTokensIn(m SimManifest, definition string) []string {
 	var found []string
 	for _, pop := range m.Populations {
+		// A population that NAMES its devices has no pattern to derive a shape from: each
+		// token is looked for exactly. (An empty pattern would match the empty string
+		// instead, and report a device called "".)
+		if len(pop.Instances) > 0 {
+			for _, in := range pop.Instances {
+				if strings.Contains(definition, `"`+in.Token+`"`) {
+					found = append(found, in.Token)
+				}
+			}
+			continue
+		}
 		// Split on the placeholder and quote the literal parts, rather than
 		// quoting the whole pattern and trying to un-quote the placeholder
 		// back out — QuoteMeta escapes both braces, so the placeholder no

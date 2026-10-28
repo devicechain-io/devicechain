@@ -93,6 +93,31 @@ type responseEnvelope struct {
 	DispatchNonce string `json:"dispatchNonce"`
 }
 
+// Command is one command frame as a Handler sees it: what was asked of the device, and which
+// delivery it is.
+type Command struct {
+	// Token is the delivery token the answer is matched by.
+	Token string
+	// Name is the command's key on the device's profile.
+	Name string
+	// Payload is the command's argument object, as the platform sent it.
+	Payload json.RawMessage
+}
+
+// Handler decides WHEN a received command is answered, and with what outcome. Without one the
+// receiver answers SUCCESSFUL the instant a frame arrives, which is right for a harness whose
+// devices have nothing to do and wrong for a scenario whose command takes time to take effect:
+// there it reports a perfect round trip for work that has not happened.
+//
+// Receive is called on every receipt of a frame, redeliveries included (the platform delivers
+// at least once), so an implementation must recognise a command it already holds. It must not
+// block: the broker's goroutine is calling it. The answer func publishes the outcome and may
+// block on the broker, so call it from a goroutine of its own, once the command's job is done;
+// it is safe to call again for a redelivery of a command that is already settled.
+type Handler interface {
+	Receive(deviceToken string, c Command, answer func(success bool))
+}
+
 // Tuning — bounded waits so a broker that is unreachable or a subscription that is
 // never acked fails a device fast (as blind) rather than hanging the whole run.
 const (
@@ -162,6 +187,18 @@ type Receiver struct {
 
 	mu      sync.Mutex
 	devices map[string]*deviceState
+	// handler, when set, owns the answers (see Handler). Guarded by mu.
+	handler Handler
+}
+
+// SetHandler makes h decide when commands are answered. Call it before Subscribe: a frame that
+// arrives on a device attached earlier is answered by whichever behaviour is in force at that
+// moment, and a handler that appears mid-run would split one cohort between two meanings of
+// "answered".
+func (r *Receiver) SetHandler(h Handler) {
+	r.mu.Lock()
+	r.handler = h
+	r.mu.Unlock()
 }
 
 // New builds a receiver for one instance/tenant against the MQTT broker (the NATS
@@ -393,7 +430,21 @@ func (r *Receiver) onMessage(ds *deviceState) mqtt.MessageHandler {
 			log.Warn().Str("device", ds.token).Msg("received a malformed command envelope")
 			return
 		}
-		r.respond(ds, token, nonce)
+		r.mu.Lock()
+		h := r.handler
+		r.mu.Unlock()
+		if h == nil {
+			r.respond(ds, token, nonce)
+			return
+		}
+		// recordFrame has already proved the frame decodes; the handler also wants the name
+		// and the arguments, which it does not return.
+		var env deliveryEnvelope
+		if err := json.Unmarshal(msg.Payload(), &env); err != nil {
+			return
+		}
+		h.Receive(ds.token, Command{Token: token, Name: env.Name, Payload: env.Payload},
+			func(success bool) { r.recordResponse(ds, r.publishOutcome(ds, token, nonce, success)) })
 	}
 }
 
@@ -480,15 +531,26 @@ func (r *Receiver) respond(ds *deviceState, commandToken, dispatchNonce string) 
 // not: this is published over the platform MQTT broker, which authenticated the CONNECT and
 // asserts the device from the subject (a test builds it and inspects the keys).
 func responsePayload(commandToken, dispatchNonce string) ([]byte, error) {
+	return outcomePayload(commandToken, dispatchNonce, true)
+}
+
+// outcomePayload is responsePayload with the outcome chosen: a Handler answers FAILED for a
+// command whose job could not be done, and that is a different statement from silence.
+func outcomePayload(commandToken, dispatchNonce string, success bool) ([]byte, error) {
 	return json.Marshal(responseEnvelope{
-		CommandToken: commandToken, Success: true, DispatchNonce: dispatchNonce})
+		CommandToken: commandToken, Success: success, DispatchNonce: dispatchNonce})
 }
 
 // publishResponse marshals and publishes one response, returning the first failure
 // or nil once the broker has ACKED it. A timeout is a failure: an unacked QoS-1
 // publish is not a delivered response.
 func (r *Receiver) publishResponse(ds *deviceState, commandToken, dispatchNonce string) error {
-	payload, err := responsePayload(commandToken, dispatchNonce)
+	return r.publishOutcome(ds, commandToken, dispatchNonce, true)
+}
+
+// publishOutcome marshals and publishes one answer with the outcome given.
+func (r *Receiver) publishOutcome(ds *deviceState, commandToken, dispatchNonce string, success bool) error {
+	payload, err := outcomePayload(commandToken, dispatchNonce, success)
 	if err != nil {
 		return err
 	}

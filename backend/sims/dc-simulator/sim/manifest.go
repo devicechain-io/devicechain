@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"regexp"
 	"strings"
 
@@ -24,6 +25,12 @@ type MetricSpec struct {
 	Name     string
 	DataType string
 	Unit     string
+	// Expression, when set, makes the metric CALCULATED: the platform computes it from the
+	// profile's measured metrics (and, as `device.name`, numbers the device carries in its
+	// metadata) on every reading, so a device never reports it. Which of the two a metric is
+	// is fixed when it is created, and a calculated metric counts against the tenant tier's
+	// calculatedMetricsPerProfile ceiling, which is 0 until an operator raises it.
+	Expression string
 }
 
 // CommandSpec is one typed command a profile declares (ADR-043): the key a
@@ -251,6 +258,39 @@ type PopulationSpec struct {
 	TokenPattern      string
 	ExternalIdPattern string
 	DistributeAcross  []string
+	// Instances, when set, NAMES every device of the population instead of numbering them:
+	// each carries its own token, business id, placement and device constants. Count must
+	// equal len(Instances) and the patterns and DistributeAcross must be empty, because a
+	// population states its devices one way or the other and never both. It is for a
+	// scenario whose devices are individually meaningful (a building's "floor 4, east
+	// zone"), where a numbered pattern would hide which device is which.
+	Instances []InstanceSpec
+}
+
+// InstanceSpec is one named device of a population (see PopulationSpec.Instances).
+type InstanceSpec struct {
+	Token      string
+	ExternalId string
+	// Areas are the area tokens the device is assigned to, in order. A device may be
+	// assigned to several (a floor and the building that holds it), and every one is a
+	// tracked anchor on its events.
+	Areas []string
+	// Customer is the customer token the device is assigned to. Empty falls back to the
+	// manifest's first customer, as a numbered population's devices do.
+	Customer string
+	// Constants are numbers the device carries in its metadata under these names, which a
+	// calculated metric's formula reads as `device.name`. Written as the device's metadata
+	// JSON at create, and converged on a re-run.
+	Constants map[string]float64
+}
+
+// CustomerUserSpec is a person who belongs to one customer: a tenant member limited to the
+// devices assigned to that customer, so the console and a board show them nothing else.
+// Bootstrap invites them (the built-in read-only viewer role) and accepts the invitation
+// with the sim's own password, so they can sign in at once.
+type CustomerUserSpec struct {
+	Email         string
+	CustomerToken string
 }
 
 // Assignment is one rendered device->target "assigned" EntityRelationship
@@ -279,6 +319,9 @@ type DeviceInstance struct {
 	CredentialToken string
 	CredentialId    string
 	Assignments     []Assignment
+	// Metadata is the device's metadata JSON: the numbers a calculated metric reads as
+	// `device.name`. Empty for a device that carries none.
+	Metadata string
 }
 
 // CommandFarEndMode says WHO answers a scenario's commands. It is a mode rather
@@ -424,6 +467,8 @@ type SimManifest struct {
 	DeviceTypes   []DeviceTypeSpec
 	Populations   []PopulationSpec
 	Dashboards    []DashboardSpec
+	// CustomerUsers are the customer-scoped members the scenario provisions.
+	CustomerUsers []CustomerUserSpec
 }
 
 // placeholderPattern matches "{n}" or "{n:0Wd}" (W one or more digits). The
@@ -502,6 +547,46 @@ func (m SimManifest) renderAssignments(pop PopulationSpec, deviceToken string, n
 	return assignments
 }
 
+// renderInstanceAssignments is renderAssignments for a named device: its areas in the order
+// declared, then its customer.
+func (m SimManifest) renderInstanceAssignments(in InstanceSpec) []Assignment {
+	var assignments []Assignment
+	for _, area := range in.Areas {
+		assignments = append(assignments, Assignment{
+			TargetType:        "area",
+			TargetToken:       area,
+			RelationshipToken: assignmentToken(in.Token, area),
+		})
+	}
+	customer := in.Customer
+	if customer == "" && len(m.Customers) > 0 {
+		customer = m.Customers[0].Token
+	}
+	if customer != "" {
+		assignments = append(assignments, Assignment{
+			TargetType:        "customer",
+			TargetToken:       customer,
+			RelationshipToken: assignmentToken(in.Token, customer),
+		})
+	}
+	return assignments
+}
+
+// constantsMetadata renders a device's constants as its metadata JSON (keys sorted, so the
+// same constants always give the same bytes), or "" for none.
+func constantsMetadata(constants map[string]float64) string {
+	if len(constants) == 0 {
+		return ""
+	}
+	raw, err := json.Marshal(constants)
+	if err != nil {
+		// A map of strings to finite floats cannot fail; NaN or Inf would, and Validate
+		// refuses them before this runs.
+		panic(fmt.Sprintf("sim: marshal device constants: %v", err))
+	}
+	return string(raw)
+}
+
 // Expand deterministically renders every PopulationSpec into concrete
 // DeviceInstances, including each device's Assignment set. The same (manifest,
 // seed) always yields identical output — no unseeded randomness anywhere in
@@ -509,6 +594,21 @@ func (m SimManifest) renderAssignments(pop PopulationSpec, deviceToken string, n
 func (m SimManifest) Expand(seed int64) []DeviceInstance {
 	instances := make([]DeviceInstance, 0)
 	for _, pop := range m.Populations {
+		if len(pop.Instances) > 0 {
+			for _, in := range pop.Instances {
+				credToken, credId := deriveCredential(seed, in.Token)
+				instances = append(instances, DeviceInstance{
+					Token:           in.Token,
+					ExternalId:      in.ExternalId,
+					DeviceTypeToken: pop.OfType,
+					CredentialToken: credToken,
+					CredentialId:    credId,
+					Assignments:     m.renderInstanceAssignments(in),
+					Metadata:        constantsMetadata(in.Constants),
+				})
+			}
+			continue
+		}
 		for n := 1; n <= pop.Count; n++ {
 			token := renderPattern(pop.TokenPattern, n)
 			externalId := ""
@@ -725,10 +825,21 @@ func (m SimManifest) Validate() error {
 			// single metric there, and inventing a traversal of a JSON shape this
 			// package deliberately treats as opaque would reject rules it cannot
 			// actually judge. So: check the shape we can see, stay quiet on the rest.
-			if predicate := ruleTopLevelMetric(r.Definition); predicate != "" && predicate != r.Metric {
+			//
+			// A windowed rule reads TWO: the value it folds (`metric`) and an optional gate on
+			// the event (`when.metric`). The declared one may be either, and BOTH must be
+			// reported by the profile, or the gate silently passes nothing.
+			reads := ruleReadMetrics(r.Definition)
+			if len(reads) > 0 && !sliceContains(reads, r.Metric) {
 				return fmt.Errorf("detection rule %q declares metric %q but its predicate reads %q; "+
 					"the declared one is what Validate checks against the profile, so the rule "+
-					"would pass this check and still never fire", r.Token, r.Metric, predicate)
+					"would pass this check and still never fire", r.Token, r.Metric, strings.Join(reads, ", "))
+			}
+			for _, read := range reads {
+				if !metricKeys[read] {
+					return fmt.Errorf("detection rule %q reads metric %q, which profile %q does not "+
+						"declare — the rule would be published and never fire", r.Token, read, p.Token)
+				}
 			}
 			// The sendCommand twin of the metric checks above, and the seam it closes is
 			// open on BOTH sides of the wire: nothing anywhere else compares a rule's
@@ -760,6 +871,17 @@ func (m SimManifest) Validate() error {
 			}
 		}
 		for _, mx := range p.Metrics {
+			if mx.Expression != "" {
+				// The platform checks a formula when the profile is published; these are the
+				// shape errors it would report there, caught before any network call.
+				if strings.TrimSpace(mx.Expression) == "" {
+					return fmt.Errorf("metric %q of profile %q has a blank formula", mx.Key, p.Token)
+				}
+				if len(mx.Expression) > maxMetricExpressionBytes {
+					return fmt.Errorf("metric %q of profile %q has a formula of %d bytes; the platform accepts at most %d",
+						mx.Key, p.Token, len(mx.Expression), maxMetricExpressionBytes)
+				}
+			}
 			// Mirrors bootstrap.go's ensureMetricDefinition token derivation
 			// (profileToken + "-" + metricKey) so a grammar-unsafe metric key
 			// fails here rather than deep inside a GraphQL round-trip.
@@ -785,6 +907,9 @@ func (m SimManifest) Validate() error {
 		if !typeTokens[pop.OfType] {
 			return fmt.Errorf("population references unknown device type %q", pop.OfType)
 		}
+		if err := validateInstances(pop); err != nil {
+			return err
+		}
 		if pop.Count < 0 {
 			return fmt.Errorf("population for %q has a negative count", pop.OfType)
 		}
@@ -797,6 +922,15 @@ func (m SimManifest) Validate() error {
 			default:
 				return fmt.Errorf("population for %q has unsupported distributeAcross value %q (only \"area\" is implemented)", pop.OfType, da)
 			}
+		}
+	}
+
+	for _, u := range m.CustomerUsers {
+		if !emailShape.MatchString(u.Email) {
+			return fmt.Errorf("customer user %q is not an email address", u.Email)
+		}
+		if !customerTokens[u.CustomerToken] {
+			return fmt.Errorf("customer user %q is limited to unknown customer %q", u.Email, u.CustomerToken)
 		}
 	}
 
@@ -875,6 +1009,63 @@ func (m SimManifest) Validate() error {
 		}
 	}
 	return nil
+}
+
+// maxMetricExpressionBytes is device-management's cap on a calculated metric's formula.
+const maxMetricExpressionBytes = 1024
+
+// emailShape is the minimum an invitation needs; the platform is the real judge.
+var emailShape = regexp.MustCompile(`^[^@\s]+@[^@\s]+\.[^@\s]+$`)
+
+// validateInstances checks a population that names its devices (PopulationSpec.Instances):
+// it must not also number them, every token must be distinct, and every constant must be a
+// finite number a formula can read.
+func validateInstances(pop PopulationSpec) error {
+	if len(pop.Instances) == 0 {
+		return nil
+	}
+	if pop.Count != len(pop.Instances) {
+		return fmt.Errorf("population for %q names %d devices but declares Count %d", pop.OfType, len(pop.Instances), pop.Count)
+	}
+	if pop.TokenPattern != "" || pop.ExternalIdPattern != "" || len(pop.DistributeAcross) > 0 {
+		return fmt.Errorf("population for %q names its devices and also numbers them; it states them one way or the other", pop.OfType)
+	}
+	seen := make(map[string]bool, len(pop.Instances))
+	for _, in := range pop.Instances {
+		if seen[in.Token] {
+			return fmt.Errorf("population for %q names device %q twice", pop.OfType, in.Token)
+		}
+		seen[in.Token] = true
+		for name, v := range in.Constants {
+			if math.IsNaN(v) || math.IsInf(v, 0) {
+				return fmt.Errorf("device %q constant %q is not a finite number", in.Token, name)
+			}
+		}
+	}
+	return nil
+}
+
+// ruleReadMetrics returns every metric a rules.Rule's predicate reads at the two depths
+// this package looks: the value selector (`metric`, a windowed or delta rule's folded value)
+// and the leaf comparison (`when.metric`, a threshold or a windowed rule's gate). Distinct,
+// in that order. Empty means no opinion, exactly as ruleTopLevelMetric's "" does.
+func ruleReadMetrics(definition string) []string {
+	var rule struct {
+		Metric string `json:"metric"`
+		When   struct {
+			Metric string `json:"metric"`
+		} `json:"when"`
+	}
+	if err := json.Unmarshal([]byte(definition), &rule); err != nil {
+		return nil
+	}
+	var out []string
+	for _, m := range []string{rule.Metric, rule.When.Metric} {
+		if m != "" && !sliceContains(out, m) {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // ruleTopLevelMetric reads the metric a rules.Rule reads, or "" when the

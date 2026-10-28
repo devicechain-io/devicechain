@@ -49,6 +49,38 @@
       "definition": "{\"actions\":[{\"raiseAlarm\":{\"alarmKey\":\"tyre-pressure-low\"},\"type\":\"raiseAlarm\"}],\"name\":\"Site Pulse low tyre pressure\",\"severity\":\"major\",\"type\":\"threshold\",\"when\":{\"metric\":\"tyre_pressure_kpa\",\"op\":\"lt\",\"threshold\":600}}"
     },
     {
+      "producer": "towerpulse",
+      "ruleToken": "tp-rule-chiller-silent",
+      "profileToken": "tp-chiller-profile",
+      "enabled": true,
+      "alarmSeverityWire": "CRITICAL",
+      "definition": "{\"actions\":[{\"raiseAlarm\":{\"alarmKey\":\"chiller-silent\"},\"type\":\"raiseAlarm\"}],\"name\":\"Towerpulse chiller silent\",\"severity\":\"critical\",\"timeout\":\"2m0s\",\"type\":\"absence\",\"when\":{}}"
+    },
+    {
+      "producer": "towerpulse",
+      "ruleToken": "tp-rule-co2-high",
+      "profileToken": "tp-vav-profile",
+      "enabled": true,
+      "alarmSeverityWire": "MINOR",
+      "definition": "{\"actions\":[{\"raiseAlarm\":{\"alarmKey\":\"co2-high\"},\"type\":\"raiseAlarm\"}],\"name\":\"Towerpulse CO2 high\",\"severity\":\"minor\",\"type\":\"threshold\",\"when\":{\"metric\":\"co2_ppm\",\"op\":\"gt\",\"threshold\":1000}}"
+    },
+    {
+      "producer": "towerpulse",
+      "ruleToken": "tp-rule-filter-due",
+      "profileToken": "tp-ahu-profile",
+      "enabled": true,
+      "alarmSeverityWire": "MINOR",
+      "definition": "{\"actions\":[{\"raiseAlarm\":{\"alarmKey\":\"filter-service-due\"},\"type\":\"raiseAlarm\"}],\"name\":\"Towerpulse filter service due\",\"severity\":\"minor\",\"type\":\"threshold\",\"when\":{\"metric\":\"filter_dp_pa\",\"op\":\"gt\",\"threshold\":250}}"
+    },
+    {
+      "producer": "towerpulse",
+      "ruleToken": "tp-rule-zone-hot",
+      "profileToken": "tp-vav-profile",
+      "enabled": true,
+      "alarmSeverityWire": "MAJOR",
+      "definition": "{\"actions\":[{\"raiseAlarm\":{\"alarmKey\":\"zone-hot\"},\"type\":\"raiseAlarm\"},{\"sendCommand\":{\"command\":\"boost-cooling\",\"expiresAfter\":\"30m\",\"payload\":\"{\\\"minutes\\\":15}\"},\"type\":\"sendCommand\"}],\"agg\":\"avg\",\"metric\":\"temp_c\",\"name\":\"Towerpulse zone hot while occupied\",\"op\":\"gt\",\"severity\":\"major\",\"threshold\":26,\"type\":\"aggregate\",\"when\":{\"metric\":\"occupancy\",\"op\":\"gt\",\"threshold\":0},\"window\":\"5m0s\",\"windowMode\":\"sliding\"}"
+    },
+    {
       "producer": "widgetlab",
       "ruleToken": "wl-over-temp",
       "profileToken": "wl-sensor-profile",
