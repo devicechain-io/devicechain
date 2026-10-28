@@ -15,31 +15,40 @@
 set -uo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-src="$here/../Assets/Towerpulse/Scripts/Model/BuildingModel.cs"
-backup="$(mktemp)"
-cp "$src" "$backup"
-trap 'cp "$backup" "$src"; rm -f "$backup"' EXIT
+scripts="$here/../Assets/Towerpulse/Scripts"
+# every file a mutant touches is backed up whole and restored on exit
+files=(Model/BuildingModel.cs Plane/CommandEngine.cs Plane/Readings.cs Plane/Vocabulary.cs)
+backups="$(mktemp -d)"
+for f in "${files[@]}"; do mkdir -p "$backups/$(dirname "$f")"; cp "$scripts/$f" "$backups/$f"; done
+restore() { for f in "${files[@]}"; do cp "$backups/$f" "$scripts/$f"; done; }
+trap 'restore; rm -rf "$backups"' EXIT
 
 run_tests() { (cd "$here/Tests" && dotnet test -c Release --nologo -v q >/dev/null 2>&1); }
 
 if ! run_tests; then echo "ABORT: the baseline is not green; no mutant means anything yet" >&2; exit 2; fi
 
 survived=0; bad=0
-# label | exact text in BuildingModel.cs | replacement
+# file | label | exact text in that file | replacement
 mutants=(
-  "completion: always complete|if (z.TempC <= z.SetpointC + SetpointToleranceC) {|if (true) {"
-  "completion: complete while still hot|if (z.TempC <= z.SetpointC + SetpointToleranceC) {|if (z.TempC >= z.SetpointC + SetpointToleranceC) {"
-  "completion: never complete|if (z.TempC <= z.SetpointC + SetpointToleranceC) {|if (false) {"
-  "expiry: never expire|else if (t - b.IssuedAtS >= b.WindowS) {|else if (false) {"
-  "solar: no gain|return z.GlassM2 * PeakSolarWPerM2 * facing * elevation * clear;|return 0.0;"
-  "solar: ignore the facade|return z.GlassM2 * PeakSolarWPerM2 * facing * elevation * clear;|return z.GlassM2 * PeakSolarWPerM2 * elevation * clear;"
-  "solar: sun cools|if (facing < 0) facing = 0;|"
-  "restart: complete when merely running|c.Running && c.ChwSupplyC <= CompleteChwC|c.Running"
-  "boost: damper not forced open|if (z.BoostOverride) cmd = 100.0;|if (false) cmd = 100.0;"
+  "Model/BuildingModel.cs|completion: always complete|if (z.TempC <= z.SetpointC + SetpointToleranceC) {|if (true) {"
+  "Model/BuildingModel.cs|completion: complete while still hot|if (z.TempC <= z.SetpointC + SetpointToleranceC) {|if (z.TempC >= z.SetpointC + SetpointToleranceC) {"
+  "Model/BuildingModel.cs|completion: never complete|if (z.TempC <= z.SetpointC + SetpointToleranceC) {|if (false) {"
+  "Model/BuildingModel.cs|expiry: never expire|else if (t - b.IssuedAtS >= b.WindowS) {|else if (false) {"
+  "Model/BuildingModel.cs|solar: no gain|return z.GlassM2 * PeakSolarWPerM2 * facing * elevation * clear;|return 0.0;"
+  "Model/BuildingModel.cs|solar: ignore the facade|return z.GlassM2 * PeakSolarWPerM2 * facing * elevation * clear;|return z.GlassM2 * PeakSolarWPerM2 * elevation * clear;"
+  "Model/BuildingModel.cs|solar: sun cools|if (facing < 0) facing = 0;|"
+  "Model/BuildingModel.cs|restart: complete when merely running|c.Running && c.ChwSupplyC <= CompleteChwC|c.Running"
+  "Model/BuildingModel.cs|boost: damper not forced open|if (z.BoostOverride) cmd = 100.0;|if (false) cmd = 100.0;"
+  "Plane/CommandEngine.cs|plane: answer a command on arrival, before its ticket is final|if (!p.Ticket.IsFinal) continue;|"
+  "Plane/CommandEngine.cs|plane: a redelivered token actuates again|if (!string.IsNullOrEmpty(commandToken) && byToken.TryGetValue(commandToken, out var seen))|if (false && byToken.TryGetValue(commandToken, out var seen))"
+  "Plane/Vocabulary.cs|plane: setpoint ceiling wider than the profile|SetpointMax = 28;|SetpointMax = 35;"
+  "Plane/CommandEngine.cs|plane: a fractional boost accepted|whole && v != Math.Floor(v)|false && v != Math.Floor(v)"
+  "Plane/Readings.cs|plane: a tripped chiller keeps reporting|if (!c.Online) return null;|"
 )
 for m in "${mutants[@]}"; do
-  IFS='|' read -r label from to <<<"$m"
-  cp "$backup" "$src"
+  IFS='|' read -r file label from to <<<"$m"
+  restore
+  src="$scripts/$file"
   FROM="$from" TO="$to" python3 - "$src" <<'PY' || { echo "BAD MUTANT (pattern not found): $label"; bad=1; continue; }
 import os, sys
 p = sys.argv[1]
@@ -51,5 +60,5 @@ open(p, 'w', newline='').write(s.replace(f, t))
 PY
   if run_tests; then echo "SURVIVED: $label"; survived=1; else echo "killed:   $label"; fi
 done
-cp "$backup" "$src"
+restore
 [ "$survived" -eq 0 ] && [ "$bad" -eq 0 ]

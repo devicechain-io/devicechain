@@ -21,6 +21,7 @@
 
   <ItemGroup>
     <ProjectReference Include="../Model/DeviceChain.Towerpulse.Model.csproj" />
+    <ProjectReference Include="../Plane/DeviceChain.Towerpulse.Plane.csproj" />
   </ItemGroup>
 
   <ItemGroup>

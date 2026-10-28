@@ -1,0 +1,33 @@
+{
+    "name": "DeviceChain.Towerpulse.Tests.DevicePlane",
+    "rootNamespace": "DeviceChain.Towerpulse.Tests",
+    "references": [
+        "DeviceChain.Towerpulse.Model",
+        "DeviceChain.Towerpulse.Plane",
+        "DeviceChain.Towerpulse.DevicePlane",
+        "DeviceChain.Sdk.Unity",
+        "UnityEngine.TestRunner",
+        "UnityEditor.TestRunner",
+        "DeviceChain.Demos.Core",
+        "DeviceChain.Demos.Platform",
+        "DeviceChain.Demos.DevicePlane"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "nunit.framework.dll",
+        "DeviceChain.Sdk.dll",
+        "System.Text.Json.dll",
+        "Microsoft.Bcl.AsyncInterfaces.dll"
+    ],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "UNITY_INCLUDE_TESTS"
+    ],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

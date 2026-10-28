@@ -1,0 +1,16 @@
+{
+    "name": "DeviceChain.Towerpulse.Plane",
+    "rootNamespace": "DeviceChain.Towerpulse.Plane",
+    "references": [
+        "DeviceChain.Towerpulse.Model"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": true
+}
