@@ -15,7 +15,7 @@ and updates are not in this journal. Entries are never edited. Use this screen t
 questions such as "who deleted that device?" or "what did this script create last night?". It is
 for tenant administrators and anyone reviewing activity in a tenant.
 
-Open **Audit** in the sidebar. It appears only if your role grants the `audit:read` permission. The
+Open **Access → Audit** in the sidebar. It appears only if your role grants the `audit:read` permission. The
 journal only ever shows your own tenant's entries.
 
 ## Reading the journal

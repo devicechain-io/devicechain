@@ -51,7 +51,7 @@ A sign-in that used a recovery code is recorded as such. **Account security** wa
 
 ## Requiring it for a tenant {#require}
 
-A tenant administrator can require a second factor of everyone who signs in to the tenant with a password. Open **Settings → Security** and choose **Require**. This needs the permission to manage members, for the whole tenant: a member limited to some customers cannot change it. An operator can set the same flag from **Admin → Tenants**, on the tenant's page.
+A tenant administrator can require a second factor of everyone who signs in to the tenant with a password. Open **Access → Sign-in Security** and choose **Require**. This needs the permission to manage members, for the whole tenant: a member limited to some customers cannot change it. An operator can set the same flag from **Admin → Tenants**, on the tenant's page.
 
 What requiring it does:
 

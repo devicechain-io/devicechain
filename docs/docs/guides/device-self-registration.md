@@ -26,7 +26,7 @@ The device holds **its own credential**: it generates 32 random bytes, encodes t
 
 ## Set up a profile {#setup}
 
-1. **Create the profile** in the console under **Provisioning Profiles**, or with `createProvisioningProfile`. Pick the device type, the strategy, an optional cap and, if the fleet ships in batches, an expiry.
+1. **Create the profile** in the console under **Connect → Provisioning Profiles**, or with `createProvisioningProfile`. Pick the device type, the strategy, an optional cap and, if the fleet ships in batches, an expiry.
 2. **Copy the secret** from the dialog that follows. It is shown once. If you lose it, rotate it; the old one stops working at once.
 3. **Make sure the API ingress is enabled.** The endpoint is served on the same `/api/device-management` route as the GraphQL API. With `ingress.enabled: false` the instance has no public path to it.
 4. **Check the client address setup** if you run your own ingress controller or a cloud load balancer: [Client addresses and trusted proxies](../deployment/bootstrap.md#trusted-proxies). A mistake there does not stop registration, but every device then shares one request allowance.

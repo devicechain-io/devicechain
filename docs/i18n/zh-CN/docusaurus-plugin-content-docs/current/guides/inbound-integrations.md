@@ -59,7 +59,7 @@ Authorization: Bearer <bearer-token>
 ## 连接发送方之前 {#before-you-start}
 
 1. **准备一个带配置文件的设备类型。**该类型的设备才是集成可以访问的设备。为每个需要单位或校验的解码值声明一个[指标](../user-guide/device-types-and-profiles.md#metrics)，其键与解码对象产生的键相同。未声明的键同样会被存储，只是没有单位。
-2. **创建集成。**在控制台侧边栏打开 **Integrations**（集成），选择 **New integration**（新建集成）。选择 **Sender type**、它可以访问的 **Device types**，对网络服务器还要选择 **Device identifier**。如果需要信号数据，开启 **Store link metrics**。选择 **Create integration**，并从对话框中复制 bearer 令牌。它只显示一次；如果丢失，请轮换。打开 Integrations 页面需要 `device:read` 权限，修改需要 `device:write`。
+2. **创建集成。**在控制台侧边栏打开 **Connect → Integrations**（集成），选择 **New integration**（新建集成）。选择 **Sender type**、它可以访问的 **Device types**，对网络服务器还要选择 **Device identifier**。如果需要信号数据，开启 **Store link metrics**。选择 **Create integration**，并从对话框中复制 bearer 令牌。它只显示一次；如果丢失，请轮换。打开 Integrations 页面需要 `device:read` 权限，修改需要 `device:write`。
 3. **添加带别名的设备**，见下一节。可以在发送方开始发送之前或之后进行：尚不存在的设备的消息会被列出，方便你[根据所见内容创建设备](#unregistered)。
 
 使用 GraphQL 时，`createIntegration` 会同时返回集成和令牌：

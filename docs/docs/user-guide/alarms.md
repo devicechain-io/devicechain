@@ -14,7 +14,7 @@ acknowledging and clearing alarms, and exporting the list.
 
 ## The alarm list
 
-Choose **Alarms** in the sidebar. Each row is one alarm.
+Choose **Monitor → Alarms** in the sidebar. Each row is one alarm.
 
 <GuideShot id="alarms-list" alt="The Alarms page with the filters All states, All severities and Any acknowledgement and an Export CSV button. A green Live indicator sits beside the description. The table lists Major bp-over-temp alarms on the temperature metric for thermostats bp-therm-001 to bp-therm-012: three are Active with Acknowledge and Clear buttons, the rest are Cleared." />
 

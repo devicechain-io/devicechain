@@ -13,7 +13,7 @@ import GuideShot from '@site/src/components/GuideShot';
 
 ## 设备列表 {#the-device-list}
 
-在侧边栏中打开 **Devices**（设备），再打开其子菜单中的 **Devices**。
+在侧边栏中打开 **Devices**（设备），再打开其下的 **Devices**。
 
 <GuideShot id="devices-list" alt="Devices 页面。右上角的按钮依次为 Export CSV、Import、Bulk create 和 New device。下方的表格包含 Status、Token、Name、Type、Description 和 Created 列。十二行显示 Online，第一行 Boiler room thermostat 的状态显示为短横线。每一行的类型都是 Building Pulse Thermostat。页脚显示“Showing 1–13 of 13 results”，并带有 Prev 和 Next 按钮。" />
 

@@ -11,7 +11,7 @@ import GuideShot from '@site/src/components/GuideShot';
 
 ## 告警列表 {#the-alarm-list}
 
-在侧边栏中选择 **Alarms**。每一行是一条告警。
+在侧边栏中选择 **Monitor → Alarms**。每一行是一条告警。
 
 <GuideShot id="alarms-list" alt="Alarms 页面，带有 All states、All severities 和 Any acknowledgement 筛选器以及 Export CSV 按钮。描述旁有一个绿色的 Live 指示。表格列出恒温器 bp-therm-001 至 bp-therm-012 在 temperature 指标上的 Major 级 bp-over-temp 告警：三条为 Active，带 Acknowledge 和 Clear 按钮，其余为 Cleared。" />
 

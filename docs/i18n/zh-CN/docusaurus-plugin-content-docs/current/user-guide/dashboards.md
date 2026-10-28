@@ -17,7 +17,7 @@ import GuideShot from '@site/src/components/GuideShot';
 
 ## 仪表板列表 {#the-dashboard-list}
 
-在侧边栏中选择 **Dashboards**（仪表板）。
+在侧边栏中选择 **Monitor → Dashboards**（仪表板）。
 
 <GuideShot id="dashboards-list" alt="Dashboards 页面，带有 Import dashboard 和 New dashboard 按钮。列出两个仪表板 Widget Lab — Stress 和 Widget Lab，每个都有描述、更新时间以及 Clone 和 Delete 操作。" />
 

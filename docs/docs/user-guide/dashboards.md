@@ -25,7 +25,7 @@ draft. If a dashboard has never been published, they are told to ask an author t
 
 ## The dashboard list
 
-Choose **Dashboards** in the sidebar.
+Choose **Monitor → Dashboards** in the sidebar.
 
 <GuideShot id="dashboards-list" alt="The Dashboards page with Import dashboard and New dashboard buttons. Two dashboards are listed, Widget Lab — Stress and Widget Lab, each with a description, an updated time, and Clone and Delete actions." />
 

@@ -22,8 +22,8 @@ It is for tenant users and administrators who organize a fleet. For the model be
 
 ## Groups
 
-Each family has its own group screen: **Devices → Device Groups**, **Assets → Asset Groups**,
-**Customers → Customer Groups** and **Areas → Area Groups**. A group holds members of one family
+Each family has its own group screen: **Devices → Device Groups**, **Organization → Assets → Asset Groups**,
+**Organization → Customers → Customer Groups** and **Organization → Areas → Area Groups**. A group holds members of one family
 only. The list shows each group's token, name, description and creation date.
 
 <GuideShot id="device-groups-list" alt="The Device Groups list under the Devices menu, with one group, rooftop-units, named Rooftop units and described as every thermostat on the roof. A New device group button is at the top right." />
@@ -50,7 +50,7 @@ Browse screen, and it gives the key a value field on each entity's **Facets** ta
 The values themselves live on the entities, not on this screen. A facet that is declared but has
 no value on any entity matches nothing.
 
-Open **Facets** in the sidebar. The chips at the top filter the list by member family: **All**,
+Open **Organization → Facets** in the sidebar. The chips at the top filter the list by member family: **All**,
 **Device**, **Asset**, **Area** or **Customer**. Each row shows the member family, the key, the value
 type, the suggested values and the label.
 

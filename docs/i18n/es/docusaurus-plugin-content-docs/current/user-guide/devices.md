@@ -19,7 +19,7 @@ un dispositivo. Los tipos de dispositivo se tratan en el
 
 ## La lista de dispositivos
 
-Abre **Dispositivos** en la barra lateral y luego **Dispositivos** en su submenú.
+Abre **Dispositivos** en la barra lateral y luego **Dispositivos** dentro de él.
 
 <GuideShot id="devices-list" alt="La página Dispositivos. Arriba a la derecha están los botones Exportar CSV, Importar, Creación masiva y Nuevo dispositivo. Debajo hay una tabla con las columnas Estado, Token, Nombre, Tipo, Descripción y Creado. Doce filas muestran En línea y la primera, Boiler room thermostat, muestra un guion como estado. El tipo de todas las filas es Building Pulse Thermostat. El pie dice 'Mostrando 1–13 de 13 resultados' con los botones Anterior y Siguiente." />
 

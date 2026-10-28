@@ -51,7 +51,7 @@ Un inicio de sesión con un código de recuperación queda registrado como tal. 
 
 ## Exigirla en un inquilino {#require}
 
-Un administrador del inquilino puede exigir un segundo factor a todos los que inician sesión en el inquilino con contraseña. Abre **Configuración → Seguridad** y elige **Exigir**. Hace falta el permiso para gestionar miembros, para todo el inquilino: un miembro limitado a algunos clientes no puede cambiarlo. Un operador puede cambiar el mismo ajuste desde **Admin → Tenants**, en la página del inquilino.
+Un administrador del inquilino puede exigir un segundo factor a todos los que inician sesión en el inquilino con contraseña. Abre **Acceso → Seguridad de inicio de sesión** y elige **Exigir**. Hace falta el permiso para gestionar miembros, para todo el inquilino: un miembro limitado a algunos clientes no puede cambiarlo. Un operador puede cambiar el mismo ajuste desde **Admin → Tenants**, en la página del inquilino.
 
 Qué hace exigirla:
 

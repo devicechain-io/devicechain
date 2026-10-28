@@ -13,7 +13,7 @@ import GuideShot from '@site/src/components/GuideShot';
 
 更新服务是可选的，并非每个安装都运行它。如果你的实例没有运行，侧边栏中就没有 **Updates** 组，设备也没有 Updates 选项卡。参见[启用](/concepts/over-the-air-updates#enabling)。
 
-侧边栏中，**Updates** 有三个界面：**Artifacts**（制品）、**Rollouts**（发布）和 **Signers**（签名者）。更新整个设备组在 [Rollouts](#rollouts) 上进行。为设备分配更新在设备自己的页面上进行，即其 [Updates 选项卡](#assigning-an-update-to-a-device)。
+侧边栏中，**Devices → Updates** 有三个界面：**Artifacts**（制品）、**Rollouts**（发布）和 **Signers**（签名者）。更新整个设备组在 [Rollouts](#rollouts) 上进行。为设备分配更新在设备自己的页面上进行，即其 [Updates 选项卡](#assigning-an-update-to-a-device)。
 
 ## 制品 {#artifacts}
 
@@ -83,7 +83,7 @@ import GuideShot from '@site/src/components/GuideShot';
 
 ## 签名者 {#signers}
 
-**签名者**是你的租户信任的、可为制品担保的公钥。只存储公钥；私钥保留在签名者手中。打开 **Updates → Signers**。
+**签名者**是你的租户信任的、可为制品担保的公钥。只存储公钥；私钥保留在签名者手中。打开 **Devices → Updates → Signers**。
 
 <GuideShot id="updates-signers-list" alt="Signers 列表，有两个签名者：Acme release signing key，ED25519，Active，有 2 个仅由它签名的制品和 Revoke 按钮；以及 Contract manufacturer key (2025)，ECDSA_P256，Revoked，附有吊销时间和 0 个仅由它签名的制品。" />
 

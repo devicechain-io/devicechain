@@ -221,7 +221,7 @@ The counter `devicechain_notificationmanagement_quiet_hours_total` counts what q
 | `dropped_exhausted` | A held notification was dropped after 5 releases reached no channel. It is also recorded as a dead letter. |
 | `superseded` | A held notification was dropped because the policy paged a newer event for the same alarm. |
 
-In the console, quiet hours are edited on the **Notification Policies** page; see [Notification policies](../user-guide/notification-policies.md).
+In the console, quiet hours are edited on the **Monitor → Notification Policies** page; see [Notification policies](../user-guide/notification-policies.md).
 
 ## Verify the path end to end
 

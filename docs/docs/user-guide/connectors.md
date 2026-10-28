@@ -21,7 +21,7 @@ The connector service is not part of every installation. If your instance does n
 
 ## The connector list
 
-Open **Connectors** in the sidebar. The list shows each connector's name, type and description.
+Open **Connect → Connectors** in the sidebar. The list shows each connector's name, type and description.
 Click a row to open it. **Delete** on a row removes the connector after you confirm. Any rule that
 publishes through a deleted connector fails to deliver until you point it at another one, and the
 deletion cannot be undone.

@@ -13,7 +13,7 @@ se reparte tu flota. Este capítulo es para los usuarios y administradores de un
 y mantienen esa estructura.
 
 Las tres familias funcionan igual: si aprendes una, conoces las tres. Cada familia tiene tres
-pantallas en la barra lateral:
+pantallas en **Organización**, en la barra lateral:
 
 | Familia | Instancias | Plantillas | Colecciones |
 | --- | --- | --- | --- |

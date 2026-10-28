@@ -25,7 +25,7 @@ nunca el borrador. Si un panel nunca se ha publicado, se le indica que pida a un
 
 ## La lista de paneles
 
-Elige **Paneles** en la barra lateral.
+Elige **Supervisión → Paneles** en la barra lateral.
 
 <GuideShot id="dashboards-list" alt="La página Paneles con los botones Importar panel y Nuevo panel. Hay dos paneles, Widget Lab — Stress y Widget Lab, cada uno con una descripción, la hora de actualización y las acciones Clonar y Eliminar." />
 

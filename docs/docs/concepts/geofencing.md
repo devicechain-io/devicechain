@@ -12,7 +12,7 @@ Available: geofence authoring in the console (draw, edit, delete) or over GraphQ
 
 ## Drawing a fence {#drawing-a-fence}
 
-In the console, geofences live under **Areas → Geofences**. Click the map to place a corner, click the first corner to close the shape, and save. On an existing fence, you can:
+In the console, geofences live under **Organization → Areas → Geofences**. Click the map to place a corner, click the first corner to close the shape, and save. On an existing fence, you can:
 
 - drag a corner to move it,
 - Alt-click a corner to remove it, or

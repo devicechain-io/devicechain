@@ -14,7 +14,7 @@ y cómo ver la forma que tenía una geocerca en el pasado. Es para los usuarios 
 inquilino que mantienen las geocercas. Para las reglas que las usan, consulta
 [usar una geocerca en una regla](../concepts/geofencing.md#using-a-fence-in-a-rule).
 
-Las geocercas están en **Áreas → Geocercas**, en la barra lateral.
+Las geocercas están en **Organización → Áreas → Geocercas**, en la barra lateral.
 
 ## La lista de geocercas
 
