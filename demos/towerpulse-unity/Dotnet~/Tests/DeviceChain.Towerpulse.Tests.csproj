@@ -1,0 +1,30 @@
+<!--
+  Copyright The DeviceChain Authors
+  SPDX-License-Identifier: Apache-2.0
+
+  Runs Assets/Towerpulse/Tests/EditMode under NUnit on net8.0. The Unity Test Runner runs the very
+  same files in the Editor, so they keep to the NUnit subset both runners share.
+-->
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>DeviceChain.Towerpulse.Tests</RootNamespace>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="NUnit" Version="3.14.0" />
+    <PackageReference Include="NUnit3TestAdapter" Version="4.6.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Model/DeviceChain.Towerpulse.Model.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="../../Assets/Towerpulse/Tests/EditMode/**/*.cs" />
+  </ItemGroup>
+
+</Project>

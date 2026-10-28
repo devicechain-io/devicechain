@@ -1,0 +1,14 @@
+{
+    "name": "DeviceChain.Towerpulse.Model",
+    "rootNamespace": "DeviceChain.Towerpulse.Model",
+    "references": [],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": true
+}
