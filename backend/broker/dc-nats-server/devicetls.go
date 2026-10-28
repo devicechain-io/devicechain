@@ -51,5 +51,14 @@ func applyDeviceTLS(opts *server.Options) {
 	}
 	c := tc.Clone()
 	c.ClientAuth = tls.RequestClientCert
+	// 🔴 NO ACCEPTABLE-CA LIST. GenTLSConfig fills ClientCAs from the listener's ca_file (the chart
+	// mounts the instance CA there), and under RequestClientCert a non-empty ClientCAs is sent in
+	// the CertificateRequest as the list of acceptable issuers. A conforming client (Go's crypto/tls,
+	// and others that honour the list) then withholds any certificate that does not chain to a
+	// listed CA, and sends an empty Certificate message instead: the callout sees no certificate
+	// at all. Device trust anchors are per tenant and are never the instance CA, so every
+	// certificate device would be turned away this way. Nothing is verified at the broker (that is
+	// the callout's job), so the pool has no other use on this listener.
+	c.ClientCAs = nil
 	opts.MQTT.TLSConfig = c
 }

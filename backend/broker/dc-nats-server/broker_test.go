@@ -5,6 +5,7 @@ package main
 
 import (
 	"crypto/tls"
+	"crypto/x509"
 	"net"
 	"net/http/httptest"
 	"os"
@@ -34,11 +35,18 @@ type running struct {
 // shape, which the negative controls use.
 func startBroker(t *testing.T, withHook bool) *running {
 	t.Helper()
+	return startBrokerWith(t, withHook, false)
+}
+
+// startBrokerWith is startBroker with the MQTT listener's ca_file as the chart sets it
+// (clientCA), which is what makes the server's TLS config carry a ClientCAs pool.
+func startBrokerWith(t *testing.T, withHook, clientCA bool) *running {
+	t.Helper()
 	dir := t.TempDir()
 	if err := smoke.Prepare(dir, smoke.PrepareOptions{
 		PidFile:    filepath.ToSlash(filepath.Join(dir, "nats.pid")),
 		StoreDir:   filepath.ToSlash(filepath.Join(dir, "js")),
-		ClientPort: -1, MQTTPort: -1, HTTPPort: -1,
+		ClientPort: -1, MQTTPort: -1, HTTPPort: -1, MQTTClientCA: clientCA,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -109,6 +117,19 @@ func TestApplyDeviceTLS(t *testing.T) {
 			}
 		})
 	}
+	t.Run("the acceptable-CA pool is dropped from a clone, not from the original", func(t *testing.T) {
+		pool := x509.NewCertPool()
+		in := &tls.Config{ClientAuth: tls.NoClientCert, ClientCAs: pool}
+		opts := &server.Options{}
+		opts.MQTT.TLSConfig = in
+		applyDeviceTLS(opts)
+		if opts.MQTT.TLSConfig.ClientCAs != nil {
+			t.Fatal("ClientCAs survived: the CertificateRequest would carry an acceptable-CA list")
+		}
+		if in.ClientCAs != pool {
+			t.Fatal("the original *tls.Config lost its ClientCAs; it must be cloned")
+		}
+	})
 	t.Run("no MQTT TLS is left without one", func(t *testing.T) {
 		opts := &server.Options{}
 		applyDeviceTLS(opts)
@@ -116,6 +137,32 @@ func TestApplyDeviceTLS(t *testing.T) {
 			t.Fatal("a TLS config appeared where there was none")
 		}
 	})
+}
+
+// TestForeignCAClientCertificateIsPresented is the deployed shape's test: the MQTT listener has a
+// ca_file (the instance CA), the devices' certificates come from ANOTHER CA, and a stock Go
+// crypto/tls client (Certificates set the ordinary way, no GetClientCertificate) must present its
+// certificate and have it reach the callout. A request that names the instance CA as the one
+// acceptable issuer makes such a client withhold the certificate, which is how every certificate
+// device was refused with no_cert.
+func TestForeignCAClientCertificateIsPresented(t *testing.T) {
+	r := startBrokerWith(t, true, true)
+	n, err := smoke.AcceptableCAs(r.dir, r.mqtt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Errorf("the CertificateRequest names %d acceptable CAs, want 0", n)
+	}
+	steps, err := smoke.Check(r.dir, r.nats, r.mqtt, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range steps {
+		if s.Err != nil {
+			t.Errorf("%s: %v", s.Name, s.Err)
+		}
+	}
 }
 
 // TestStartRequestsClientCertificates: a server prepared the way main prepares one requests a
