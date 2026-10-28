@@ -22,13 +22,22 @@ const customerUserRole = "viewer"
 const scopeKindCustomer = "CUSTOMER"
 
 const queryMembersByEmail = `query($criteria:MemberSearchCriteria!){` +
-	`members(criteria:$criteria){results{email enabled invitationPending scope{kind token}}}}`
+	`members(criteria:$criteria){results{email enabled invitationPending roles{token} scope{kind token}}}}`
 
 const mutationInviteMember = `mutation($request:InviteMemberRequest!){` +
 	`inviteMember(request:$request){invitationCode member{email}}}`
 
 const mutationAcceptInvitation = `mutation($code:String!,$password:String){` +
 	`acceptInvitation(code:$code,password:$password){identityToken}}`
+
+const mutationReissueInvitation = `mutation($email:String!){` +
+	`reissueInvitation(email:$email){invitationCode}}`
+
+const mutationSetMemberAccess = `mutation($email:String!,$roleTokens:[String!]!,$scope:[ScopeAnchorInput!]!){` +
+	`setMemberAccess(email:$email,roleTokens:$roleTokens,scope:$scope){email}}`
+
+const mutationSetMemberEnabled = `mutation($email:String!,$enabled:Boolean!){` +
+	`setMemberEnabled(email:$email,enabled:$enabled){email}}`
 
 const mutationSetMemberScope = `mutation($email:String!,$scope:[ScopeAnchorInput!]!){` +
 	`setMemberScope(email:$email,scope:$scope){email}}`
@@ -38,7 +47,10 @@ const mutationSetMemberScope = `mutation($email:String!,$scope:[ScopeAnchorInput
 // Create-or-converge like every step of Provision: a member who is absent is invited with
 // the viewer role and the customer scope and accepts at once (with the sim's own password,
 // so the sim record already tells the operator how to sign in), and one who exists has its
-// scope converged to the manifest's, so a re-bootstrap repairs a member someone widened.
+// scope, role and enabled state converged to the manifest's, so a re-bootstrap repairs a member
+// someone widened, promoted or disabled. A member whose invitation is still pending (an earlier
+// run invited them and failed before accepting) gets a fresh code and accepts it, because
+// nothing else can ever let them sign in.
 //
 // 🔴 IT NEVER WIDENS. An empty scope means the WHOLE tenant to user-management, so any path
 // that could write one for a customer user turns a "sees only the annex" account into a
@@ -59,7 +71,10 @@ func ensureCustomerUser(ctx context.Context, rt *Runtime, u CustomerUserSpec) er
 				Email             string `json:"email"`
 				Enabled           bool   `json:"enabled"`
 				InvitationPending bool   `json:"invitationPending"`
-				Scope             []struct {
+				Roles             []struct {
+					Token string `json:"token"`
+				} `json:"roles"`
+				Scope []struct {
 					Kind  string `json:"kind"`
 					Token string `json:"token"`
 				} `json:"scope"`
@@ -75,19 +90,53 @@ func ensureCustomerUser(ctx context.Context, rt *Runtime, u CustomerUserSpec) er
 		if !strings.EqualFold(m.Email, u.Email) {
 			continue
 		}
-		if len(m.Scope) == 1 && m.Scope[0].Kind == scopeKindCustomer && m.Scope[0].Token == u.CustomerToken {
+		var ignored map[string]any
+		scopeOK := len(m.Scope) == 1 && m.Scope[0].Kind == scopeKindCustomer && m.Scope[0].Token == u.CustomerToken
+		rolesOK := len(m.Roles) == 1 && m.Roles[0].Token == customerUserRole
+		switch {
+		case !rolesOK:
+			// Replaces roles and scope together, so a refused scope cannot leave the roles changed.
+			if err := rt.Session.Query(ctx, rt.Endpoints.UserGraphQL, mutationSetMemberAccess,
+				map[string]any{"email": m.Email, "roleTokens": []string{customerUserRole}, "scope": scope}, &ignored); err != nil {
+				return fmt.Errorf("setMemberAccess: %w", err)
+			}
+		case !scopeOK:
+			if err := rt.Session.Query(ctx, rt.Endpoints.UserGraphQL, mutationSetMemberScope,
+				map[string]any{"email": m.Email, "scope": scope}, &ignored); err != nil {
+				return fmt.Errorf("setMemberScope: %w", err)
+			}
+		}
+		if !scopeOK || !rolesOK {
+			log.Info().Str("email", u.Email).Str("customer", u.CustomerToken).Msg("converged customer user access")
+		}
+		if m.InvitationPending {
+			// Left half-created by an earlier run. The old code is unrecoverable (it is shown once),
+			// so issue a new one and accept it.
+			var re struct {
+				ReissueInvitation struct {
+					InvitationCode string `json:"invitationCode"`
+				} `json:"reissueInvitation"`
+			}
+			if err := rt.Session.Query(ctx, rt.Endpoints.UserGraphQL, mutationReissueInvitation,
+				map[string]any{"email": m.Email}, &re); err != nil {
+				return fmt.Errorf("customer user %q has a pending invitation and reissueInvitation failed (revoke it and re-run, or remove the member): %w", u.Email, err)
+			}
+			if re.ReissueInvitation.InvitationCode == "" {
+				return fmt.Errorf("reissueInvitation for %q returned no invitation code", u.Email)
+			}
+			if err := acceptInvitation(ctx, rt, re.ReissueInvitation.InvitationCode); err != nil {
+				return err
+			}
+			log.Info().Str("email", u.Email).Msg("accepted the pending customer user invitation")
 			return nil
 		}
-		var out struct {
-			SetMemberScope struct {
-				Email string `json:"email"`
-			} `json:"setMemberScope"`
+		if !m.Enabled {
+			if err := rt.Session.Query(ctx, rt.Endpoints.UserGraphQL, mutationSetMemberEnabled,
+				map[string]any{"email": m.Email, "enabled": true}, &ignored); err != nil {
+				return fmt.Errorf("setMemberEnabled: %w", err)
+			}
+			log.Info().Str("email", u.Email).Msg("re-enabled customer user")
 		}
-		if err := rt.Session.Query(ctx, rt.Endpoints.UserGraphQL, mutationSetMemberScope,
-			map[string]any{"email": m.Email, "scope": scope}, &out); err != nil {
-			return fmt.Errorf("setMemberScope: %w", err)
-		}
-		log.Info().Str("email", u.Email).Str("customer", u.CustomerToken).Msg("converged customer user scope")
 		return nil
 	}
 
@@ -104,16 +153,23 @@ func ensureCustomerUser(ctx context.Context, rt *Runtime, u CustomerUserSpec) er
 	if invited.InviteMember.InvitationCode == "" {
 		return fmt.Errorf("inviteMember for %q returned no invitation code", u.Email)
 	}
+	if err := acceptInvitation(ctx, rt, invited.InviteMember.InvitationCode); err != nil {
+		return err
+	}
+	log.Info().Str("email", u.Email).Str("customer", u.CustomerToken).Msg("created customer user")
+	return nil
+}
+
+func acceptInvitation(ctx context.Context, rt *Runtime, code string) error {
 	var accepted struct {
 		AcceptInvitation struct {
 			IdentityToken string `json:"identityToken"`
 		} `json:"acceptInvitation"`
 	}
 	if err := rt.Session.Query(ctx, rt.Endpoints.UserGraphQL, mutationAcceptInvitation, map[string]any{
-		"code": invited.InviteMember.InvitationCode, "password": rt.SimPassword,
+		"code": code, "password": rt.SimPassword,
 	}, &accepted); err != nil {
 		return fmt.Errorf("acceptInvitation: %w", err)
 	}
-	log.Info().Str("email", u.Email).Str("customer", u.CustomerToken).Msg("created customer user")
 	return nil
 }
