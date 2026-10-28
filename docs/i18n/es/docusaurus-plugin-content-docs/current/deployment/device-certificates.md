@@ -34,7 +34,7 @@ Fija las variables de infraestructura `server_image_repository = "nats"` y `serv
 
 ## Ajustes {#settings}
 
-El registro en la primera conexión tiene dos ajustes fijos, que se leen al arrancar device-management, bajo el `config` del área:
+El registro en la primera conexión y el anclaje del emisor tienen estos ajustes fijos, que se leen al arrancar device-management, bajo el `config` del área:
 
 ```yaml
 functionalAreas:
@@ -43,16 +43,33 @@ functionalAreas:
       callout:
         jitMaxInFlight: 16       # default 16, 1 to 128
         jitSourceTrusted: false  # default false
+        issuerPinDisabled: false      # default false
+        issuerPinRefresh: 30s         # default 30s, 5s to 10m
+        issuerPinMinRefresh: 2s       # default 2s, 100ms up to issuerPinRefresh
+        issuerPinGatherWindow: 750ms  # default 750ms, 100ms to 2s
 ```
 
 | Clave | Significado |
 | --- | --- |
 | `callout.jitMaxInFlight` | Cuántos registros en la primera conexión atiende a la vez una réplica. El siguiente se rechaza (`jit_busy`) y el dispositivo espera y reintenta. Estos puestos salen del límite propio del callout, así que una oleada de primeras conexiones nunca quita los puestos que necesitan los dispositivos que se reconectan, y un certificado fijado, un token o una contraseña nunca esperan por ellos. |
 | `callout.jitSourceTrusted` | Añade un límite por dirección de cliente, dimensionado por `provisioning.sourceBurst` y `provisioning.sourceEvery`. Actívalo **solo** cuando el Service de MQTT conserve las direcciones de cliente (`externalTrafficPolicy: Local`, o un NodePort de kind). Tras un NAT de origen todos los dispositivos comparten una dirección y una cuota, y los reintentos de un dispositivo rechazarían a toda la flota. Desactivado, los rechazos sostenidos generan alertas en lugar de limitarse por dirección. |
+| `callout.issuerPinDisabled` | Desactiva el [anclaje del emisor](#issuer-pin). Activado por defecto. |
+| `callout.issuerPinRefresh` | Cada cuánto device-management vuelve a aprender los servidores activos del broker. Una lista sin refrescar durante el triple de este valor deja de creerse. |
+| `callout.issuerPinMinRefresh` | El tiempo mínimo entre dos sondeos de servidores, por muchas solicitudes que nombren un servidor que el anclaje no conoce. Es también lo máximo que puede rechazarse a un dispositivo por un servidor del broker que se unió tras el último refresco. |
+| `callout.issuerPinGatherWindow` | Cuánto espera un sondeo a que respondan los servidores. Termina antes si ya han respondido todos. |
 
 El límite por tenant no es un ajuste de aquí: es el techo de aprovisionamiento del tenant, el mismo que cobra el [autorregistro](../guides/device-self-registration.md), que se gestiona con los demás límites de gobernanza del tenant. Los registros contra un perfil se turnan en ese perfil, a unos 100 a 200 por segundo por perfil entre todas las réplicas, así que una oleada de primeras conexiones de 10.000 dispositivos se registra en uno o dos minutos de reintentos de los dispositivos. La cuota del tenant se cobra por cada intento cuya cadena se verificó, incluso uno rechazado después, así que un dispositivo que reintenta con un certificado rotado la gasta.
 
 Una clave desconocida bajo `callout`, o un valor fuera de rango, detiene el servicio al arrancar.
+
+## Anclaje de las solicitudes al broker {#issuer-pin}
+
+Una conexión por certificado no necesita ningún secreto del dispositivo: el certificado es público. Por eso el callout no se fía de una solicitud solo porque llegue al subject del callout. El broker firma cada solicitud de autorización con una clave que genera al arrancar, y el id de su servidor es la mitad pública de esa clave. Device-management aprende por tanto los ids de los servidores activos del broker a través de la cuenta de sistema de NATS y concede una conexión por certificado solo a una solicitud firmada por uno de ellos y que lo nombre como remitente. Una solicitud firmada por cualquier otra cosa se rechaza (`issuer_unpinned`), por bueno que sea el certificado que lleve.
+
+- **Para qué sirve.** Los clientes no pueden publicar en el subject del callout, y esa es la primera defensa. El anclaje es la segunda, para el día en que eso esté mal configurado: falsificar una solicitud exigiría la clave privada de un servidor del broker, que nunca sale de su proceso.
+- **Se aprende, no se configura.** Device-management sondea la cuenta de sistema por los ids de los servidores cada `callout.issuerPinRefresh`. Una solicitud de un id que no ha visto provoca un sondeo más antes de rechazarla, de modo que un pod del broker que se unió durante un reinicio progresivo lo aprende el primer dispositivo que lo encuentra. Los sondeos se limitan a uno por `callout.issuerPinMinRefresh` por muchas solicitudes que lleguen, así que una avalancha de solicitudes falsas no puede convertirse en una avalancha de tráfico hacia la cuenta de sistema. Un dispositivo rechazado dentro de ese intervalo reintenta con su propio retroceso y es admitido después.
+- **Falla cerrado.** Mientras la conexión con la cuenta de sistema está caída, o no se ha aprendido ninguna lista en los últimos tres periodos de refresco, toda conexión por certificado se rechaza (`issuer_pin_unavailable`). Las conexiones por token y contraseña no se anclan y no se ven afectadas.
+- **Necesita el login de sistema.** La puesta en marcha lo configura en toda instancia que ejecuta el callout. Un servicio con el anclaje activado y sin login de sistema no arranca. Con `callout.issuerPinDisabled` se ejecuta sin el anclaje, y la restricción de publicación del broker queda como única defensa; el servicio registra una advertencia al arrancar.
 
 ## Límites {#limits}
 
@@ -66,7 +83,7 @@ Una clave desconocida bajo `callout`, o un valor fuera de rango, detiene el serv
 
 ## Qué vigilar {#monitoring}
 
-El contador `callout_x509_total{result}` cuenta cada conexión con certificado por resultado, y todos los resultados existen a cero desde el arranque. Los resultados incluyen `ok`, `no_cert`, `chain_invalid`, `anchor_disabled`, `revoked`, `client_id_mismatch`, `unknown_pin`, `x509_cert_ignored`, `jit_created`, `jit_replayed`, `jit_rate_limited`, `jit_busy`, `jit_ambiguous` y un `jit_<code>` por cada rechazo de registro. `callout_jit_in_flight` son los registros en curso ahora, y `device_trust_anchors_expiring{window="30d"}` es un recuento de toda la instancia de anclas habilitadas que caducan en 30 días.
+El contador `callout_x509_total{result}` cuenta cada conexión con certificado por resultado, y todos los resultados existen a cero desde el arranque. Los resultados incluyen `ok`, `no_cert`, `chain_invalid`, `anchor_disabled`, `revoked`, `client_id_mismatch`, `unknown_pin`, `issuer_unpinned`, `issuer_pin_unavailable`, `x509_cert_ignored`, `jit_created`, `jit_replayed`, `jit_rate_limited`, `jit_busy`, `jit_ambiguous` y un `jit_<code>` por cada rechazo de registro. `callout_jit_in_flight` son los registros en curso ahora, y `device_trust_anchors_expiring{window="30d"}` es un recuento de toda la instancia de anclas habilitadas que caducan en 30 días.
 
 Las [alertas](./observability.md#certificate-alerts) son `DeviceX509ChainFailuresSustained`, `DeviceX509JitRefusedSustained`, `DeviceX509JitMisconfigured`, `DeviceTrustAnchorsExpiringSoon` y, para el broker, `BrokerMqttClientAuthLost`.
 

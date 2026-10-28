@@ -36,10 +36,15 @@ const (
 	x509ResultMisconfigured     = "misconfigured"
 	x509ResultPasswordPresented = "password_presented"
 	x509ResultUnsealed          = "unsealed"
-	x509ResultCertMalformed     = "cert_malformed"
-	x509ResultTenantRefused     = "tenant_refused"
-	x509ResultError             = "error"
-	x509ResultCertIgnored       = "x509_cert_ignored"
+	// x509ResultIssuerUnpinned: the request was not signed by a live broker server (a forgery, or a
+	// server the pin could not learn). x509ResultPinUnavailable: the pin cannot vouch for the
+	// server ids at all (system connection down, no membership learned); an operator's problem.
+	x509ResultIssuerUnpinned = "issuer_unpinned"
+	x509ResultPinUnavailable = "issuer_pin_unavailable"
+	x509ResultCertMalformed  = "cert_malformed"
+	x509ResultTenantRefused  = "tenant_refused"
+	x509ResultError          = "error"
+	x509ResultCertIgnored    = "x509_cert_ignored"
 	// The registration results belong to registration on first connect, which counts them (see
 	// callout_x509_jit.go). A connect that registered its device is counted by what registration
 	// did, and not again as ok.
@@ -55,7 +60,7 @@ const (
 
 var x509Results = []string{
 	x509ResultOK, x509ResultNoCert, x509ResultChainInvalid, x509ResultAnchorDisabled, x509ResultRevoked,
-	x509ResultClientIDMismatch, x509ResultUnknownPin, x509ResultMisconfigured, x509ResultPasswordPresented, x509ResultUnsealed, x509ResultCertMalformed,
+	x509ResultClientIDMismatch, x509ResultUnknownPin, x509ResultMisconfigured, x509ResultPasswordPresented, x509ResultUnsealed, x509ResultIssuerUnpinned, x509ResultPinUnavailable, x509ResultCertMalformed,
 	x509ResultTenantRefused, x509ResultError, x509ResultCertIgnored,
 	x509ResultJitCreated, x509ResultJitAdopted, x509ResultJitRenewed, x509ResultJitReplayed,
 	x509ResultJitRateLimited, x509ResultJitBusy, x509ResultJitAmbiguous,
@@ -107,11 +112,28 @@ func (c *CalloutResponder) refuseX509(result string) (string, string) {
 // Every refusal is the generic denial. The certificate is public and so is its pin, so none of
 // this authenticates on what a device SAYS: the proof of possession is the TLS handshake on this
 // very connection, which the broker has already completed before it asks us.
-func (c *CalloutResponder) authorizeX509(req jwt.AuthorizationRequest, tenant string, presented *model.PresentedCredential, trusted bool) (string, string) {
+func (c *CalloutResponder) authorizeX509(req jwt.AuthorizationRequest, tenant string, presented *model.PresentedCredential, trusted bool, issuer string) (string, string) {
 	if !trusted {
 		log.Warn().Str("tenant", tenant).Msg("Auth-callout refused a certificate connect whose request arrived unsealed " +
 			"although an xkey is configured: the broker never sends one.")
 		return c.refuseX509(x509ResultUnsealed)
+	}
+	// 🔴 THE ISSUER PIN: the request must have been signed by a live broker server. A certificate
+	// grant needs no secret, so this is what stands between a forged request and a grant if the
+	// broker's publish-deny on the callout subject were ever wrong. Before any credential work.
+	if c.pin != nil {
+		ctx, cancel := context.WithTimeout(c.base, c.lookupTimeout)
+		verdict := c.pin.Check(ctx, issuer, req.Server.ID)
+		cancel()
+		switch verdict {
+		case pinPinned:
+		case pinUnavailable:
+			return c.refuseX509(x509ResultPinUnavailable)
+		default:
+			log.Warn().Str("tenant", tenant).Str("issuer", issuer).Str("claimedServer", req.Server.ID).
+				Msg("Auth-callout refused a certificate connect: the request was not signed by a live broker server.")
+			return c.refuseX509(x509ResultIssuerUnpinned)
+		}
 	}
 	if c.tenantDeleted(tenant) {
 		log.Debug().Str("tenant", tenant).Msg("Auth-callout refused a certificate connect for a deleted tenant.")
@@ -244,7 +266,7 @@ func newX509Counter(ms *core.Microservice) *prometheus.CounterVec {
 	v := ms.NewCounterVec("callout_x509_total",
 		"Device connects by certificate (MQTT username {tenant}:@x509), by result. ok is a granted session; "+
 			"no_cert, chain_invalid, anchor_disabled, revoked, client_id_mismatch, unknown_pin, misconfigured, "+
-			"password_presented, unsealed, cert_malformed, tenant_refused and error are refusals, each answered with the same generic denial. "+
+			"password_presented, unsealed, issuer_unpinned, issuer_pin_unavailable, cert_malformed, tenant_refused and error are refusals, each answered with the same generic denial. "+
 			"x509_cert_ignored counts a certificate presented with a token or password username, which authenticates "+
 			"on that credential alone. The jit_ results are registration on first connect: jit_created, jit_adopted, "+
 			"jit_renewed and jit_replayed are granted connects (counted by what registration did, and not again as ok); "+

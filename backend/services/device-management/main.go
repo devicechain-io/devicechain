@@ -90,6 +90,9 @@ var (
 	// (ADR-025). Non-nil only when the broker is configured for auth callout (the
 	// issuer seed is present in the instance config).
 	CalloutResponder *processor.CalloutResponder
+	// IssuerPin is the callout's pin to the broker's live server ids; nil when it is off or the
+	// callout is.
+	IssuerPin *issuerPinRuntime
 	// MqttStoreBackoff samples the broker's MQTT message store and has the callout refuse
 	// device connects while it is above its high-water mark. Non-nil only when the callout
 	// runs and infrastructure.nats.mqttFailClosed is on.
@@ -1012,6 +1015,12 @@ func afterMicroserviceStarted(ctx context.Context) error {
 				return err
 			}
 		}
+		// The issuer pin: a certificate connect is granted only for a request signed by a live
+		// broker server, learned over the system account. Fails closed (no login, no start).
+		IssuerPin, err = wireCalloutIssuerPin(ctx, CalloutResponder, Configuration, infra.Nats, Microservice)
+		if err != nil {
+			return err
+		}
 		// A certificate that pins no credential yet registers its device, under the tenant's
 		// certificate profile, on its first connect.
 		if err = wireCalloutCertificateRegistration(CalloutResponder, Api, Configuration, infra); err != nil {
@@ -1040,6 +1049,7 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 			return err
 		}
 	}
+	IssuerPin.stop()
 	MqttStoreBackoff.Stop()
 
 	// Stop the ownership drain before the NATS connection drains. What it has not published

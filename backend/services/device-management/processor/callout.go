@@ -141,6 +141,10 @@ type CalloutResponder struct {
 	// jit is registration on first connect by certificate; nil when it is off. See
 	// WithCertificateRegistration.
 	jit *jitState
+
+	// pin, when set, refuses a certificate connect whose request was not signed by a live broker
+	// server. See WithIssuerPin.
+	pin *IssuerPin
 }
 
 // Defaults for the bounds above. The lookup timeout sits under the broker's 5 s
@@ -292,6 +296,17 @@ func (c *CalloutResponder) openRequest(msg *nats.Msg) (data []byte, replyTo stri
 		return nil, "", false
 	}
 	return plain, serverKey, true
+}
+
+// WithIssuerPin makes a certificate connect (username {tenant}:@x509) require that the request
+// was signed by a live nats-server, as the pin learns them from the system account (see
+// callout_issuer_pin.go). It is the second defence behind the broker's publish-deny on the
+// callout subject for the one grant that needs no secret from the device, and it fails closed:
+// with the system connection down, or no membership learned, every certificate connect is refused.
+// Other connects are not pinned. Call it before Start.
+func (c *CalloutResponder) WithIssuerPin(pin *IssuerPin) *CalloutResponder {
+	c.pin = pin
+	return c
 }
 
 // WithStoreBackoff makes the responder refuse every device connect, at once and before any
@@ -556,7 +571,7 @@ func (c *CalloutResponder) handle(msg *nats.Msg) {
 	// A request is TRUSTED, for the grants that need no secret, only if it came the way the
 	// broker sends one: sealed to this responder's key when a key is configured. See
 	// WithRequestEncryption for what that does and does not establish.
-	userJWT, errMsg := c.authorizeRequest(req, c.xkey == nil || sealTo != "")
+	userJWT, errMsg := c.authorizeRequest(req, c.xkey == nil || sealTo != "", reqClaims.Issuer)
 	c.respond(msg, sealTo, req.Server.ID, req.UserNkey, userJWT, errMsg)
 }
 
@@ -566,13 +581,16 @@ func (c *CalloutResponder) handle(msg *nats.Msg) {
 // isolation. Every failure returns the same generic message (see
 // genericAuthFailure).
 func (c *CalloutResponder) authorize(req jwt.AuthorizationRequest) (userJWT string, errMsg string) {
-	return c.authorizeRequest(req, true)
+	// No signed claims here, so no issuer: with an issuer pin configured a certificate connect
+	// through this entry point is refused. Tests of the pin go through handle.
+	return c.authorizeRequest(req, true, "")
 }
 
 // authorizeRequest is authorize for a request whose arrival channel is known. trusted is false
 // for a request that arrived unsealed while an xkey is configured, which the broker never sends;
-// a certificate connect (which needs no secret from the device) is refused for one.
-func (c *CalloutResponder) authorizeRequest(req jwt.AuthorizationRequest, trusted bool) (userJWT string, errMsg string) {
+// a certificate connect (which needs no secret from the device) is refused for one. issuer is the
+// request JWT's signer (its "iss"), which a certificate connect is pinned to when a pin is set.
+func (c *CalloutResponder) authorizeRequest(req jwt.AuthorizationRequest, trusted bool, issuer string) (userJWT string, errMsg string) {
 	tenant, presented, ok := parseDeviceCredential(req.ConnectOptions.Username, req.ConnectOptions.Password)
 	if !ok {
 		return "", genericAuthFailure
@@ -580,7 +598,7 @@ func (c *CalloutResponder) authorizeRequest(req jwt.AuthorizationRequest, truste
 	// A certificate connect is its own path (callout_x509.go): the credential is the TLS client
 	// certificate, never anything in the username or password.
 	if presented.CredentialType == string(model.CredentialX509Certificate) {
-		return c.authorizeX509(req, tenant, presented, trusted)
+		return c.authorizeX509(req, tenant, presented, trusted, issuer)
 	}
 	// A certificate offered with a token or password username is ignored: the connect
 	// authenticates on that credential and nothing else.

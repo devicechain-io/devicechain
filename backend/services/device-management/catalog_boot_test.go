@@ -21,6 +21,7 @@ import (
 	dmtest "github.com/devicechain-io/dc-device-management/test"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/governance"
+	"github.com/devicechain-io/dc-microservice/natsauth"
 	"github.com/devicechain-io/dc-microservice/natsauth/permtest"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	putest "github.com/devicechain-io/dc-microservice/rdb/partialupdatetest"
@@ -53,9 +54,10 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	prevApi, prevCached, prevKey, prevTransit, prevGates := Api, CachedApi, DeviceSecretKey, SecretTransit, safetyGates
 	prevProc, prevRA, prevDR, prevDrain := InboundEventsProcessor, RaiseAlarmConsumer, DeviceReportsConsumer, OwnershipDrain
 	prevCallout, prevBackoff, prevKickDrain, prevTenants := CalloutResponder, MqttStoreBackoff, SessionKickDrain, ProvisioningTenants
+	prevPin := IssuerPin
 	ProvisioningTenants = nil
 	t.Cleanup(func() {
-		ProvisioningTenants = prevTenants
+		ProvisioningTenants, IssuerPin = prevTenants, prevPin
 		Microservice, Configuration, NatsManager, RdbManager, Svc = prevMs, prevCfg, prevNats, prevRdb, prevSvc
 		Api, CachedApi, DeviceSecretKey, SecretTransit, safetyGates = prevApi, prevCached, prevKey, prevTransit, prevGates
 		InboundEventsProcessor, RaiseAlarmConsumer, DeviceReportsConsumer, OwnershipDrain = prevProc, prevRA, prevDR, prevDrain
@@ -82,6 +84,10 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	*nats = broker.NatsConfiguration("device-management")
 	nats.MqttFailClosed = true
 	nats.Auth.CalloutIssuerPublic = issuerPublic
+	// The callout pins certificate connects to the broker's live server ids over the system account,
+	// as the generated permissions give the dc_sys login: the pin is wired against them here, and a
+	// permission it lacked would show in the violations asserted empty at the end.
+	nats.Auth.SysUser, nats.Auth.SysPassword = natsauth.SysUser, permtest.Password(natsauth.SysUser)
 	Microservice.Readiness.MarkReadyWithoutAuthSurface()
 	Microservice.MicroserviceConfigurationRaw = []byte(`{}`)
 	require.NoError(t, parseConfiguration())
@@ -169,6 +175,14 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	require.True(t, jitOn, "registration on first connect was never turned on: main did not wire it")
 	require.Equal(t, 16, jitSlots, "the registration in-flight bound is not the configured default")
 	require.False(t, jitPerSource, "the per-source registration bucket must be off by default")
+	// The issuer pin is wired and has learned this broker's server id over the system account under
+	// the generated dc_sys permissions (the broker's violation log is asserted empty below).
+	require.NotNil(t, IssuerPin, "the issuer pin was never wired: certificate connects are unpinned")
+	require.Eventually(t, func() bool { return len(IssuerPin.pin.Members()) == 1 },
+		10*time.Second, 50*time.Millisecond, "the issuer pin never learned the broker's server id")
+	for _, series := range []string{"callout_issuer_pin_refresh_total", "callout_issuer_pin_servers", "callout_issuer_pin_connected"} {
+		require.NotEmpty(t, registeredSeries(t, reg, series), "%s is not registered", series)
+	}
 	for _, series := range []string{"callout_in_flight", "callout_refused_busy_total", "callout_plaintext_requests_total",
 		"callout_x509_total", "callout_jit_in_flight"} {
 		require.NotEmpty(t, registeredSeries(t, reg, series), "%s is not registered", series)
@@ -192,7 +206,7 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 		}
 	}
 	for _, result := range []string{"ok", "no_cert", "chain_invalid", "anchor_disabled", "revoked", "client_id_mismatch",
-		"unknown_pin", "unsealed", "cert_malformed", "x509_cert_ignored", "jit_created", "jit_adopted", "jit_renewed", "jit_replayed",
+		"unknown_pin", "unsealed", "issuer_unpinned", "issuer_pin_unavailable", "cert_malformed", "x509_cert_ignored", "jit_created", "jit_adopted", "jit_renewed", "jit_replayed",
 		"jit_rate_limited", "jit_busy", "jit_ambiguous", "jit_revoked", "jit_provisioning_failed", "jit_invalid_value",
 		"jit_device_not_registered", "jit_device_not_earmarked", "jit_device_disabled", "jit_device_type_mismatch",
 		"jit_device_token_collision", "jit_already_provisioned", "jit_limit_exceeded", "jit_provisioning_unavailable",

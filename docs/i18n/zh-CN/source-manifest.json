@@ -111,8 +111,8 @@
       "translationSha256": "a5354fe6780122a031d14ef2739db5ab7a8e48c79a58eaf615e50b851ad0ad4f"
     },
     "deployment/device-certificates.md": {
-      "sourceSha256": "602b34ce6b0c175c23708227dfbfcad443c3ec3583b6112e9a80936cf44d5556",
-      "translationSha256": "ec113dc4f2623a0422e1f4c8661b3c196de1b90fa8bd5abbeec42a99628c0132"
+      "sourceSha256": "d755ae0c9333724da5cf26b8f4e0485ff4d639b974a9ff52034fcbf31e11d8bf",
+      "translationSha256": "08bd0d582cc251cc4b6dedca04123e0d1ccfe58526bbfce1686a534cd516e89e"
     },
     "deployment/disaster-recovery.md": {
       "sourceSha256": "c5561eb2e1300b8061c680ef30e90ffc591b83d0333480fe6085b5dd106eca3d",
