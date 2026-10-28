@@ -303,30 +303,32 @@ func TestIntegrationIndexTrimRefusesTooManyChunksBeforeLocking(t *testing.T) {
 	assertAfterRekeyIndexes(t, systemDB(after), 2)
 }
 
-// documentedDropChunks returns the batched drop_chunks procedure the upgrade notes publish,
-// so this test runs exactly what an operator is told to run. The Spanish page must carry the
-// identical statement: two copies of a procedure are one more chance to publish a broken one.
+// documentedDropChunks returns the batched drop_chunks procedure the v0.19.0 upgrade notes
+// published, so this test runs exactly what an operator was told to run. The notes now live
+// at the v0.19.0 tag rather than in the tree, so the statement is held here verbatim.
 func documentedDropChunks(t *testing.T) string {
 	t.Helper()
-	root := filepath.Join("..", "..", "..", "..", "docs")
-	blocks := func(path string) []string {
-		body, err := os.ReadFile(path)
-		require.NoError(t, err)
-		var out []string
-		for _, m := range regexp.MustCompile("(?s)```sql\n(.*?)```").FindAllStringSubmatch(string(body), -1) {
-			if strings.Contains(m[1], "drop_chunks(") {
-				out = append(out, m[1])
-			}
-		}
-		return out
-	}
-	en := blocks(filepath.Join(root, "docs", "deployment", "releases-and-upgrades.md"))
-	require.Len(t, en, 1, "the English upgrade notes publish exactly one drop_chunks procedure")
-	es := blocks(filepath.Join(root, "i18n", "es", "docusaurus-plugin-content-docs", "current", "deployment",
-		"releases-and-upgrades.md"))
-	require.Len(t, es, 1, "the Spanish upgrade notes publish exactly one drop_chunks procedure")
-	require.Equal(t, en[0], es[0], "both locales publish the same statement")
-	return en[0]
+	return `DO $$
+DECLARE
+  cutoff constant timestamptz := TIMESTAMPTZ '2024-01-01';
+  tbl text;
+  step timestamptz;
+BEGIN
+  FOREACH tbl IN ARRAY ARRAY['events', 'measurement_events', 'location_events',
+                             'alert_events', 'event_anchors', 'state_change_events'] LOOP
+    LOOP
+      SELECT max(range_end) INTO step FROM (
+        SELECT range_end FROM timescaledb_information.chunks
+        WHERE hypertable_schema = 'event-management' AND hypertable_name = tbl
+          AND range_end <= cutoff
+        ORDER BY range_end LIMIT 100) oldest;
+      EXIT WHEN step IS NULL;
+      PERFORM drop_chunks(format('%I.%I', 'event-management', tbl)::regclass, older_than => step);
+      COMMIT;
+    END LOOP;
+  END LOOP;
+END $$;
+`
 }
 
 // TestIntegrationChunkCeilingIsPerTableAndInclusive pins the ceiling's three properties on a
