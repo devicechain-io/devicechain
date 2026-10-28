@@ -65,7 +65,7 @@
   },
   "timepicker": {},
   "timezone": "",
-  "title": "DeviceChain \u2014 Messaging",
+  "title": "DeviceChain — Messaging",
   "uid": "dc-messaging-ops",
   "description": "Operations board for the message broker and the streams that carry events between services: broker server health, stream size against limits, how far behind each reader is and whether any has lost messages, publishing delays and backpressure, copies and leader changes (including the stream that stores device events arriving over MQTT), failed deliveries and dead letters, and the key-value caches. Broker server panels need the broker's metrics sidecar, which the compact install leaves off. Counts for events that should never happen are shown as a total over the selected time range, so one occurrence stays visible instead of fading into a rate. Each instance gets its own copy of this board, scoped to it.",
   "version": 1,
@@ -3842,6 +3842,69 @@
               "group": "A"
             }
           }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 101,
+      "type": "timeseries",
+      "title": "Stream leaders per server",
+      "description": "How many streams each broker server currently leads. The three should be close to equal. After a rolling restart the server restarted last can lead nothing while the others lead everything, which raises publish latency; dcctl upgrade evens this out, and dcctl broker rebalance does it on demand.",
+      "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 146
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "count by (pod) (max by (pod, stream_name) (nats_stream_total_messages{namespace=\"$namespace\", is_stream_leader=\"true\"})) or (max by (pod) (nats_varz_connections{namespace=\"$namespace\"}) * 0)",
+          "legendFormat": "{{pod}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "decimals": 0
         },
         "overrides": []
       },

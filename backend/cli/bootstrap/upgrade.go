@@ -412,6 +412,13 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 		return err
 	}
 
+	// THE BROKER'S LEADERSHIP, EVEN AGAIN. Last, once nothing is left to roll: a roll leaves the
+	// server restarted last leading nothing, which costs latency on every upgrade that rolls the
+	// broker. Warns and never fails: see brokerbalance.go.
+	if (infra != nil || restarted) && !st.DryRun {
+		runBrokerRebalance(ctx, st, typed)
+	}
+
 	if st.AreaChange != nil {
 		fmt.Println(color.HiGreenString("\nAreas enabled."))
 		sayAreaChangeDone(st)

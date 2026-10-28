@@ -111,6 +111,7 @@ Operate on the message broker an instance runs on.
 
 * [dcctl](#dcctl)	 - DeviceChain CLI
 * [dcctl broker permissions](#dcctl-broker-permissions)	 - Print the broker permissions every platform login is held to
+* [dcctl broker rebalance](#dcctl-broker-rebalance)	 - Even out which message broker server leads which streams and consumers
 * [dcctl broker reconcile](#dcctl-broker-reconcile)	 - Create and reconcile the instance's message broker streams and buckets
 
 ## dcctl broker permissions {#dcctl-broker-permissions}
@@ -163,6 +164,46 @@ dcctl broker permissions [flags]
       --instance-id string        the instance id the services run under (their DC_INSTANCE_ID); it is part of every subject and stream name (required)
       --profile string            limit the output to the areas of this deployment profile (default: every area)
       --with-shared-login         also include the transitional dc_service block, for an installation upgraded from a release that had a shared login and not yet retired it
+```
+
+### SEE ALSO
+
+* [dcctl broker](#dcctl-broker)	 - Message broker operations
+
+## dcctl broker rebalance {#dcctl-broker-rebalance}
+
+Even out which message broker server leads which streams and consumers
+
+### Synopsis
+
+Spread the message broker's stream and consumer leaders evenly across its servers.
+
+A rolling restart of the broker leaves the server restarted last leading nothing, and the other
+servers lead everything: at the load this was measured under, publish acknowledgement latency
+roughly doubled. `dcctl upgrade` does this after it rolls the broker; this runs the same step on
+demand, for a broker restarted some other way (a node drain, a pod loss).
+
+It asks the leader of each over-loaded group to hand over to a replica that is current, and
+moves nothing else: no data, no configuration. A broker that is already even is left alone. It
+is safe to run on a live instance, and each move is a brief leader election for one stream or
+consumer.
+
+```
+dcctl broker rebalance <instance> [flags]
+```
+
+### Examples
+
+```
+  dcctl broker rebalance devicechain
+  dcctl broker rebalance devicechain --kube-context kind-devicechain
+```
+
+### Options
+
+```
+  -h, --help                  help for rebalance
+      --kube-context string   kube-context to target (default: the cluster recorded at bootstrap; a different context is refused)
 ```
 
 ### SEE ALSO

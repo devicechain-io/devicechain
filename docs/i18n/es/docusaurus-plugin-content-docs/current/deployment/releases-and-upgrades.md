@@ -554,6 +554,15 @@ Una versión que cambie la imagen del almacén de eventos llega ahora por este p
 instancias existentes: sus instancias se reinician con ella. Las notas de una versión así dicen
 qué más necesita.
 
+#### Se reparte el liderazgo del broker {#upgrade-broker-leadership}
+
+Reiniciar de forma gradual los servidores del broker deja al reiniciado en último lugar sin liderar ningún stream
+ni consumidor, mientras los demás lideran todo; con una carga medida, eso casi duplicó la latencia de confirmación
+de publicación. Cuando los servicios ya se han reiniciado, una actualización que tocó el broker pide al líder de cada
+stream y consumidor sobrecargado que ceda el liderazgo a una réplica al día, e imprime cuántos lidera cada servidor
+antes y después. El paso está acotado y es de mejor esfuerzo: si no puede terminar, avisa y la actualización sigue
+siendo correcta. `dcctl broker rebalance <instance>` ejecuta el mismo paso a demanda, para un broker reiniciado de otro modo.
+
 ### Qué más comprueba una actualización {#upgrade-checks}
 
 Dos cosas viajan con ella, porque un cambio de versión es lo que le ocurre de forma fiable a

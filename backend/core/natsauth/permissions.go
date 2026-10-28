@@ -443,6 +443,11 @@ func AdminPermissions(instanceId string) (Permissions, error) {
 	// message. This is the operator plane's login: the one the instance's Secrets hand to a person
 	// who holds them, and the one dcctl presents now that no shared login exists to borrow.
 	g.api("STREAM.LIST", "STREAM.NAMES", "CONSUMER.LIST.>", "CONSUMER.NAMES.>")
+	// Hand a leader over (`dcctl upgrade` evens out which server leads what after the broker
+	// rolls: the server restarted last otherwise leads nothing). It changes who coordinates a
+	// group, never what the group holds, and the verbs name a stream or a consumer, so it adds no
+	// right to read or write a message.
+	g.api("STREAM.LEADER.STEPDOWN.>", "CONSUMER.LEADER.STEPDOWN.>")
 	shape := func(stream string) { g.api("STREAM.INFO."+stream, "STREAM.CREATE."+stream, "STREAM.UPDATE."+stream) }
 	for _, st := range streams.All {
 		name := messaging.StreamName(instanceId, st.Suffix)

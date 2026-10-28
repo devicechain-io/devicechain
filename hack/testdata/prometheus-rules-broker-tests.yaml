@@ -126,3 +126,118 @@ tests:
       - eval_time: 30m
         alertname: BrokerMqttClientAuthLost
         exp_alerts: []
+
+  # Leadership after a rolling restart: dc-nats-0 (restarted last) leads nothing, dc-nats-1 and
+  # dc-nats-2 lead six streams each. dc-nats-0 has no is_stream_leader="true" series at all, so
+  # only the connection series reveals that it exists; the rule has to count it as zero.
+  - name: a server that leads nothing fires after thirty minutes, and clears once leadership is even
+    interval: 1m
+    input_series:
+      - series: 'nats_varz_connections{namespace="dci-devicechain", pod="dc-nats-0"}'
+        values: '10x120'
+      - series: 'nats_varz_connections{namespace="dci-devicechain", pod="dc-nats-1"}'
+        values: '10x120'
+      - series: 'nats_varz_connections{namespace="dci-devicechain", pod="dc-nats-2"}'
+        values: '10x120'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="s1", is_stream_leader="true"}'
+        values: '1x60 stale'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="s2", is_stream_leader="true"}'
+        values: '1x60 stale'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="s3", is_stream_leader="true"}'
+        values: '1x60 stale'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="s4", is_stream_leader="true"}'
+        values: '1x60 stale'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="s5", is_stream_leader="true"}'
+        values: '1x60 stale'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="s6", is_stream_leader="true"}'
+        values: '1x60 stale'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-2", stream_name="s7", is_stream_leader="true"}'
+        values: '1x60 stale'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-2", stream_name="s8", is_stream_leader="true"}'
+        values: '1x60 stale'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-2", stream_name="s9", is_stream_leader="true"}'
+        values: '1x60 stale'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-2", stream_name="s10", is_stream_leader="true"}'
+        values: '1x60 stale'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-2", stream_name="s11", is_stream_leader="true"}'
+        values: '1x60 stale'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-2", stream_name="s12", is_stream_leader="true"}'
+        values: '1x60 stale'
+      # Minute 60: the rebalance ran; every server leads four of the twelve.
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-0", stream_name="s1", is_stream_leader="true"}'
+        values: '_x60 1x59'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-0", stream_name="s2", is_stream_leader="true"}'
+        values: '_x60 1x59'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-0", stream_name="s7", is_stream_leader="true"}'
+        values: '_x60 1x59'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-0", stream_name="s8", is_stream_leader="true"}'
+        values: '_x60 1x59'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="s9", is_stream_leader="true"}'
+        values: '_x60 1x59'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="s10", is_stream_leader="true"}'
+        values: '_x60 1x59'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="s11", is_stream_leader="true"}'
+        values: '_x60 1x59'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="s12", is_stream_leader="true"}'
+        values: '_x60 1x59'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-2", stream_name="s3", is_stream_leader="true"}'
+        values: '_x60 1x59'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-2", stream_name="s4", is_stream_leader="true"}'
+        values: '_x60 1x59'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-2", stream_name="s5", is_stream_leader="true"}'
+        values: '_x60 1x59'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-2", stream_name="s6", is_stream_leader="true"}'
+        values: '_x60 1x59'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: BrokerLeadershipImbalanced
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: BrokerLeadershipImbalanced
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "one broker server leads far fewer streams than the others"
+              description: "At least one broker server leads fewer than half the streams an even share would give it, so the others carry the replication and acknowledgement work for it. After a rolling restart of the broker the server restarted last leads nothing, and at the load this was measured under that doubled publish acknowledgement latency and cost a few percent of HTTP ingest. dcctl upgrade evens leadership out after it rolls the broker, so this fires after a restart done any other way (a node drain, a pod loss, a manual rollout), or when that step was skipped or warned. Run dcctl broker rebalance <instance> to even it out; each move is a brief election for one stream. If it keeps returning, check the broker pods for repeated restarts."
+      - eval_time: 100m
+        alertname: BrokerLeadershipImbalanced
+        exp_alerts: []
+
+  - name: an evenly led broker, and a broker too small to judge, stay quiet
+    interval: 1m
+    input_series:
+      - series: 'nats_varz_connections{namespace="dci-devicechain", pod="dc-nats-0"}'
+        values: '10x60'
+      - series: 'nats_varz_connections{namespace="dci-devicechain", pod="dc-nats-1"}'
+        values: '10x60'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-0", stream_name="a", is_stream_leader="true"}'
+        values: '1x60'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-0", stream_name="b", is_stream_leader="true"}'
+        values: '1x60'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="c", is_stream_leader="true"}'
+        values: '1x60'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="d", is_stream_leader="true"}'
+        values: '1x60'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: BrokerLeadershipImbalanced
+        exp_alerts: []
+
+  # Two streams on one server of three is a small broker, not an imbalance worth a page.
+  - name: fewer than three streams per server on average is not judged
+    interval: 1m
+    input_series:
+      - series: 'nats_varz_connections{namespace="dci-devicechain", pod="dc-nats-0"}'
+        values: '10x60'
+      - series: 'nats_varz_connections{namespace="dci-devicechain", pod="dc-nats-1"}'
+        values: '10x60'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="a", is_stream_leader="true"}'
+        values: '1x60'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="b", is_stream_leader="true"}'
+        values: '1x60'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: BrokerLeadershipImbalanced
+        exp_alerts: []

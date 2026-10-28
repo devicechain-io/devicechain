@@ -75,4 +75,36 @@ spec:
           annotations:
             summary: "the broker is not requesting device client certificates"
             description: "The broker server named by the pod label is not asking MQTT devices for a client certificate, so devices that authenticate by certificate cannot connect. Devices that use a token or a password are not affected. Either the server is running but its MQTT listener stopped requesting certificates (a configuration reload that did not keep the setting, or the broker's own check of its listener keeps failing; its log says which), or the server is not running the DeviceChain broker image, for example after a rollback to the upstream nats image. Check the server's image with kubectl get pod -o jsonpath='{.spec.containers[0].image}'. On the DeviceChain image, restart the server pod, and report the log lines around the last configuration reload. On the upstream image, certificate devices stay refused until the DeviceChain image is restored."
+        - alert: BrokerLeadershipImbalanced
+          expr: |
+            min(
+              (
+                count by (pod) (max by (pod, stream_name) (nats_stream_total_messages{namespace="{{ $natsNamespace }}", is_stream_leader="true"}))
+                or
+                (max by (pod) (nats_varz_connections{namespace="{{ $natsNamespace }}"}) * 0)
+              )
+            )
+            <
+            0.5 * avg(
+              (
+                count by (pod) (max by (pod, stream_name) (nats_stream_total_messages{namespace="{{ $natsNamespace }}", is_stream_leader="true"}))
+                or
+                (max by (pod) (nats_varz_connections{namespace="{{ $natsNamespace }}"}) * 0)
+              )
+            )
+            and on ()
+            avg(
+              (
+                count by (pod) (max by (pod, stream_name) (nats_stream_total_messages{namespace="{{ $natsNamespace }}", is_stream_leader="true"}))
+                or
+                (max by (pod) (nats_varz_connections{namespace="{{ $natsNamespace }}"}) * 0)
+              )
+            ) >= 3
+          for: 30m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "one broker server leads far fewer streams than the others"
+            description: "At least one broker server leads fewer than half the streams an even share would give it, so the others carry the replication and acknowledgement work for it. After a rolling restart of the broker the server restarted last leads nothing, and at the load this was measured under that doubled publish acknowledgement latency and cost a few percent of HTTP ingest. dcctl upgrade evens leadership out after it rolls the broker, so this fires after a restart done any other way (a node drain, a pod loss, a manual rollout), or when that step was skipped or warned. Run dcctl broker rebalance <instance> to even it out; each move is a brief election for one stream. If it keeps returning, check the broker pods for repeated restarts."
 {{- end }}

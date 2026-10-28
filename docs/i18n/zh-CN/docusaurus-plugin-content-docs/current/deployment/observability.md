@@ -330,6 +330,7 @@ kube-state-metrics 本身因节点失效等原因移动期间的重启，只要�
 | 告警 | 含义 | 处理方法 |
 | --- | --- | --- |
 | `BrokerMqttClientAuthLost`（warning） | 在十分钟内，`pod` 标签所指的代理服务器要么通过 TLS 提供 MQTT 却没有请求客户端证书，要么没有运行 DeviceChain 代理镜像（指标边车报告了该服务器，但服务器本身没有报告任何自己的指标）。用证书认证的设备无法连接；使用令牌或密码的设备不受影响。 | 检查服务器的镜像：`kubectl get pod -n <namespace> <pod> -o jsonpath='{.spec.containers[0].image}'`。如果是上游 `nats` 镜像，说明实例已回退到该镜像，在恢复 DeviceChain 镜像之前，证书设备会一直被拒绝。如果是 DeviceChain 镜像，请阅读服务器最近一次重新加载配置前后的日志，查找说明监听器没有请求客户端证书、或检查无法完成的那一行，然后重启该 Pod 并报告日志。 |
+| `BrokerLeadershipImbalanced`（warning） | 在三十分钟内，至少有一台代理服务器所领导的流不到均分份额的一半。滚动重启之后，最后重启的服务器不领导任何流，其余服务器领导全部，这会增加发布延迟并略微降低摄入吞吐量。`dcctl upgrade` 会在滚动代理后重新均衡领导权，所以只有在以其他方式重启（节点排空、Pod 丢失、手动滚动）或该步骤给出警告时才会触发。 | 运行 `dcctl broker rebalance <instance>`；每次移动只是针对一个流的短暂选举，已经均衡的代理不会被改动。消息仪表板上的 *Stream leaders per server* 面板显示分布情况。如果不久后再次出现，请检查代理是否反复重启。 |
 
 代理在自己的指标端口（`dc-metrics`，7778）上导出以下指标：监听器请求证书时
 `dc_broker_mqtt_client_auth_request` 为 1，终止 TLS 时 `dc_broker_mqtt_tls` 为 1，`dc_broker_info`

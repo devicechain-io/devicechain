@@ -630,6 +630,21 @@ func TestTheBrokerAdministratorCanEnumerateButNotRead(t *testing.T) {
 	}
 }
 
+// The administrator may hand a leader over (dcctl upgrade evens leadership out after the broker
+// rolls), and that is the whole of what it gains: no verb that reads, writes or removes.
+func TestTheBrokerAdministratorCanStepALeaderDown(t *testing.T) {
+	p, err := AdminPermissions(permInstance)
+	require.NoError(t, err)
+	for _, s := range []string{
+		"$JS.API.STREAM.LEADER.STEPDOWN." + messaging.MqttSessionStore,
+		"$JS.API.STREAM.LEADER.STEPDOWN." + messaging.StreamName(permInstance, streams.All[0].Suffix),
+		"$JS.API.CONSUMER.LEADER.STEPDOWN.s.c",
+	} {
+		require.True(t, p.publishes(s), s)
+	}
+	require.False(t, p.publishes("$JS.API.META.LEADER.STEPDOWN"), "the meta group is not the administrator's to move")
+}
+
 // The capture reader binds a durable under a new name and deletes the one an earlier build read
 // with (messaging.CaptureDurableName). Its login must be able to manage the first and DELETE the
 // second; a grant missing the delete would leave the old filtered durable on the work queue, where
