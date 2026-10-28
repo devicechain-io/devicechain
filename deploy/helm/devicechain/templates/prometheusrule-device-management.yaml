@@ -66,6 +66,10 @@ The certificate alerts watch devices that connect with a client certificate (MQT
     look like, and neither is a fault.
   - DeviceX509JitRefusedSustained is registration on first connect saying no to its own devices,
     because the tenant's registration allowance is spent or the registration slots are busy.
+  - DeviceX509JitMisconfigured is an operator's problem alone, like ProvisioningMisconfigured: a
+    certificate profile that cannot register anything (its device type was deleted, or it mints a
+    credential type this build does not support), or two profiles at one trust anchor, which a
+    certificate cannot choose between. The devices are refused until it is fixed.
   - DeviceTrustAnchorsExpiringSoon is one instance-wide count, not a series per anchor or per
     tenant, which would be unbounded. A CA that expires takes every device that chains to it off
     the platform on the same day.
@@ -174,7 +178,15 @@ spec:
             devicechain_instance: {{ $id }}
           annotations:
             summary: "Devices are being refused registration on first connect because registration is over its limit"
-            description: "For 15m device-management has refused certificate registrations at {{ "{{ $value | humanize }}" }}/s, from the {{ "{{ $labels.result }}" }} limit. jit_rate_limited means the tenant's registrations per second are at its governance ceiling; jit_busy means the registration slots of every replica are taken, usually by a factory run on one provisioning profile, whose registrations take turns. Devices back off and retry on their own; raise the tenant's provisioning ceiling or spread the run out."
+            description: "For 15m device-management has refused certificate registrations at {{ "{{ $value | humanize }}" }}/s, from the {{ "{{ $labels.result }}" }} limit. jit_rate_limited means the tenant's registrations per second are at its governance ceiling; jit_busy means the registration slots of every replica are taken, usually by a factory run on one provisioning profile, whose registrations take turns. Devices back off and retry on their own; raise the tenant's provisioning ceiling or spread the run out. A device that keeps retrying with a rotated certificate, before certificate renewal is available, spends the same allowance: every attempt that passes chain verification is charged to the tenant, including one refused afterwards."
+        - alert: DeviceX509JitMisconfigured
+          expr: sum by (result) (increase(devicechain_devicemanagement_callout_x509_total{result=~"jit_provisioning_misconfigured|jit_credential_type_unsupported|jit_ambiguous",namespace="{{ $ns }}"}[10m])) > 0
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "A certificate provisioning profile cannot register devices because it is misconfigured"
+            description: "In the last 10m device-management refused {{ "{{ $value | humanize }}" }} certificate registration(s) as {{ "{{ $labels.result }}" }}. jit_provisioning_misconfigured and jit_credential_type_unsupported mean the profile's device type was deleted or it mints a credential type this build does not support; jit_ambiguous means a device's certificate chains to the trust anchor of more than one enabled profile at the same depth and cannot say which was meant. Every device concerned is refused until the profile is fixed or each profile has a trust anchor of its own. The service logs the cause."
         - alert: DeviceTrustAnchorsExpiringSoon
           expr: max(devicechain_devicemanagement_device_trust_anchors_expiring{window="30d",namespace="{{ $ns }}"}) > 0
           for: 1h

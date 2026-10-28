@@ -52,8 +52,10 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	prevMs, prevCfg, prevNats, prevRdb, prevSvc := Microservice, Configuration, NatsManager, RdbManager, Svc
 	prevApi, prevCached, prevKey, prevTransit, prevGates := Api, CachedApi, DeviceSecretKey, SecretTransit, safetyGates
 	prevProc, prevRA, prevDR, prevDrain := InboundEventsProcessor, RaiseAlarmConsumer, DeviceReportsConsumer, OwnershipDrain
-	prevCallout, prevBackoff, prevKickDrain := CalloutResponder, MqttStoreBackoff, SessionKickDrain
+	prevCallout, prevBackoff, prevKickDrain, prevTenants := CalloutResponder, MqttStoreBackoff, SessionKickDrain, ProvisioningTenants
+	ProvisioningTenants = nil
 	t.Cleanup(func() {
+		ProvisioningTenants = prevTenants
 		Microservice, Configuration, NatsManager, RdbManager, Svc = prevMs, prevCfg, prevNats, prevRdb, prevSvc
 		Api, CachedApi, DeviceSecretKey, SecretTransit, safetyGates = prevApi, prevCached, prevKey, prevTransit, prevGates
 		InboundEventsProcessor, RaiseAlarmConsumer, DeviceReportsConsumer, OwnershipDrain = prevProc, prevRA, prevDR, prevDrain
@@ -160,6 +162,13 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	require.Equal(t, processor.DefaultCalloutLookupTimeout, lookup)
 	require.Equal(t, processor.DefaultCalloutStopWait, stop)
 	require.True(t, metrics, "the callout's load metrics were never attached to the responder")
+	// Registration of devices by certificate on their first connect is ON, with the bounds the
+	// configuration says (defaults here), and the per-source bucket is OFF by default. Without the
+	// call in the start hook a certificate that pins nothing is refused as unknown_pin forever.
+	jitOn, jitSlots, jitPerSource := CalloutResponder.JitEnabled()
+	require.True(t, jitOn, "registration on first connect was never turned on: main did not wire it")
+	require.Equal(t, 16, jitSlots, "the registration in-flight bound is not the configured default")
+	require.False(t, jitPerSource, "the per-source registration bucket must be off by default")
 	for _, series := range []string{"callout_in_flight", "callout_refused_busy_total", "callout_plaintext_requests_total",
 		"callout_x509_total", "callout_jit_in_flight"} {
 		require.NotEmpty(t, registeredSeries(t, reg, series), "%s is not registered", series)
@@ -184,7 +193,10 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	}
 	for _, result := range []string{"ok", "no_cert", "chain_invalid", "anchor_disabled", "revoked", "client_id_mismatch",
 		"unknown_pin", "unsealed", "cert_malformed", "x509_cert_ignored", "jit_created", "jit_adopted", "jit_renewed", "jit_replayed",
-		"jit_rate_limited", "jit_busy"} {
+		"jit_rate_limited", "jit_busy", "jit_ambiguous", "jit_revoked", "jit_provisioning_failed", "jit_invalid_value",
+		"jit_device_not_registered", "jit_device_not_earmarked", "jit_device_disabled", "jit_device_type_mismatch",
+		"jit_device_token_collision", "jit_already_provisioned", "jit_limit_exceeded", "jit_provisioning_unavailable",
+		"jit_provisioning_misconfigured", "jit_credential_type_unsupported"} {
 		v, ok := seen[result]
 		require.True(t, ok, "callout_x509_total{result=%q} does not exist at startup", result)
 		require.Zero(t, v, "callout_x509_total{result=%q} is not zero on an idle service", result)

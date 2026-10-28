@@ -87,7 +87,7 @@ func lockEarmarkProfile(tx *gorm.DB, token string, deviceType *DeviceType) (*Pro
 
 // x509DeviceTokenPrefix namespaces a token derived from a certificate's common name, as "sp-" and
 // "lw-" do for their protocols.
-const x509DeviceTokenPrefix = "pv-"
+const x509DeviceTokenPrefix = provisionedDeviceTokenPrefix
 
 // DeriveX509DeviceToken is the token of a device that registers itself by certificate: a pure
 // function of the certificate's common name (the device's external id), so the MQTT client id

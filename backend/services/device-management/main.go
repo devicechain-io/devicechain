@@ -1012,6 +1012,11 @@ func afterMicroserviceStarted(ctx context.Context) error {
 				return err
 			}
 		}
+		// A certificate that pins no credential yet registers its device, under the tenant's
+		// certificate profile, on its first connect.
+		if err = wireCalloutCertificateRegistration(CalloutResponder, Api, Configuration, infra); err != nil {
+			return err
+		}
 		// The back-off ahead of overflow: with the fail-closed MQTT acknowledgement on, a full
 		// message store closes the connections it refuses, and their reconnects would land here.
 		// Above the store's high-water mark every device connect is refused at once instead, so
