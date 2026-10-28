@@ -106,6 +106,14 @@ var (
 	OwnershipDrain        *core.PeriodicTask
 	OwnershipDrainMetrics *core.PeriodicTaskMetrics
 
+	// SessionKickDrain retries the broker session kicks a provisioning revoke or reset left
+	// unconfirmed (model.PendingSessionKick), so a kick does not wait for an operator to
+	// repeat the operation. SessionKicksPending and SessionKickOldestAge are what an alert reads.
+	SessionKickDrain        *core.PeriodicTask
+	SessionKickDrainMetrics *core.PeriodicTaskMetrics
+	SessionKicksPending     prometheus.Gauge
+	SessionKickOldestAge    prometheus.Gauge
+
 	// The Prometheus instruments this service exports. All are built ONCE, in the
 	// initialize phase, and shared by every component the NATS manager's oncreate
 	// callback builds. See buildMetrics.
@@ -207,6 +215,14 @@ func buildMetrics() {
 		CredentialMisconfigured.WithLabelValues(path)
 	}
 	OwnershipDrainMetrics = Microservice.NewPeriodicTaskMetrics("ownership_drain")
+	SessionKickDrainMetrics = Microservice.NewPeriodicTaskMetrics("session_kick_drain")
+	SessionKicksPending = Microservice.NewGauge("session_kicks_pending",
+		"Devices whose broker sessions a provisioning revoke or reset still owes an ended-session "+
+			"confirmation for (one per device and operation). Zero when every kick was confirmed.")
+	SessionKickOldestAge = Microservice.NewGauge("session_kick_oldest_pending_age_seconds",
+		"How long the oldest unconfirmed session kick has been owed, in seconds; 0 when none is. "+
+			"While it is above zero a device whose credentials were withdrawn may still be connected "+
+			"and publishing.")
 	MqttStoreBackoffMetrics, CalloutRefusedStoreFull = buildMqttStoreBackoffMetrics()
 	CalloutMetrics = processor.NewCalloutMetrics(Microservice)
 	GeoFencePublishFails = Microservice.NewCounter(
@@ -583,6 +599,24 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 // healthy; one pass on an empty queue is a lock round trip and one indexed read.
 const ownershipDrainInterval = time.Second
 
+// sessionKickDrainInterval is how often unconfirmed session kicks are retried. A kick that failed
+// is usually the responder restarting, which is over within a minute or two; thirty seconds
+// bounds how long a session outlives that outage without hammering a responder that is down.
+const sessionKickDrainInterval = 30 * time.Second
+
+// initSessionKickDrain builds and initializes the session-kick drain and hands the Api the
+// observer that feeds its gauges. Once, in the initialize path, after the Api exists.
+func initSessionKickDrain() error {
+	Api.SessionKickObserver = func(pending int, oldest time.Duration) {
+		SessionKicksPending.Set(float64(pending))
+		SessionKickOldestAge.Set(oldest.Seconds())
+	}
+	SessionKickDrain = core.NewPeriodicTask(Microservice.FunctionalArea, "session-kick-drain", sessionKickDrainInterval,
+		func(ctx context.Context) error { return Api.DrainSessionKicksLocked(ctx) },
+		core.NewNoOpLifecycleCallbacks(), core.WithImmediateFirstPass(), core.WithPassMetrics(SessionKickDrainMetrics))
+	return SessionKickDrain.Initialize(context.Background())
+}
+
 // initOwnershipDrain builds and initializes the ownership drain. Once, in the initialize
 // phase: the task belongs to the process, and the publisher it drains through is re-wired by
 // createNatsComponents on every broker start.
@@ -820,6 +854,9 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			if err = initOwnershipDrain(); err != nil {
 				return err
 			}
+			if err = initSessionKickDrain(); err != nil {
+				return err
+			}
 
 			// Report the size of this schema's append-only history tables (ADR-023). Every one of
 			// them only grows — nothing prunes a version history short of purging the whole tenant —
@@ -922,6 +959,12 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		return err
 	}
 
+	// Start retrying unconfirmed provisioning session kicks. After Svc.Start, which wired the
+	// NATS connection the kicker requests through.
+	if err = SessionKickDrain.Start(ctx); err != nil {
+		return err
+	}
+
 	// Start the device auth-callout responder once the broker is configured for it
 	// (ADR-025): it authenticates every device connect at the broker against the
 	// device credential store. Absent an issuer seed the broker isn't running callout,
@@ -998,6 +1041,9 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	if err := OwnershipDrain.Stop(ctx); err != nil {
 		return err
 	}
+	if err := SessionKickDrain.Stop(ctx); err != nil {
+		return err
+	}
 
 	// Stop inbound events processor.
 	err := InboundEventsProcessor.Stop(ctx)
@@ -1027,6 +1073,9 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 // Called before microservice has been terminated.
 func beforeMicroserviceTerminated(ctx context.Context) error {
 	if err := OwnershipDrain.Terminate(ctx); err != nil {
+		return err
+	}
+	if err := SessionKickDrain.Terminate(ctx); err != nil {
 		return err
 	}
 

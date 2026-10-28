@@ -133,4 +133,13 @@ spec:
           annotations:
             summary: "A provisioning profile cannot register devices because it is misconfigured"
             description: "In the last 10m device-management refused {{ "{{ $value | humanize }}" }} self-registration request(s) against a provisioning profile that cannot work: its device type was deleted, its strategy is not one the platform knows, or it mints a credential type this build does not support. Every device using that profile is refused until the profile is fixed. The service logs the profile's token at ERROR."
+        - alert: ProvisioningSessionKickUnconfirmed
+          expr: max(devicechain_devicemanagement_session_kick_oldest_pending_age_seconds{namespace="{{ $ns }}"}) > 600
+          for: 5m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "A revoked or reset device may still be connected: its broker session was never confirmed ended"
+            description: "For at least 5m, the oldest session kick that a provisioning revoke or reset still owes has waited more than 10 minutes ({{ "{{ $value | humanizeDuration }}" }} now). The credentials were withdrawn, so the device cannot reconnect, but an MQTT session it already had open can keep publishing until its token expires (12 hours by default). device-management retries every 30 seconds, so the responder that ends sessions (event-sources) is down or unreachable: check that event-sources is running and its MQTT auth callout is healthy."
 {{- end }}

@@ -436,6 +436,49 @@ func TestMainStartsStopsAndTerminatesTheDeviceReportsConsumer(t *testing.T) {
 	}
 }
 
+// The session-kick drain is the only retry a provisioning revoke or reset has that does not wait
+// for an operator, so main must start, stop and terminate it, and build it where the Api exists.
+// A drain that is built and never started leaves every unconfirmed kick owed for ever.
+func TestMainStartsStopsAndTerminatesTheSessionKickDrain(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "main.go", nil, 0)
+	require.NoError(t, err)
+	want := map[string]string{
+		"afterMicroserviceStarted":     "Start",
+		"beforeMicroserviceStopped":    "Stop",
+		"beforeMicroserviceTerminated": "Terminate",
+	}
+	found := map[string]bool{}
+	var initCalled bool
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			continue
+		}
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			if id, ok := call.Fun.(*ast.Ident); ok && id.Name == "initSessionKickDrain" && fn.Name.Name != "initSessionKickDrain" {
+				initCalled = true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			if id, ok := sel.X.(*ast.Ident); ok && id.Name == "SessionKickDrain" && sel.Sel.Name == want[fn.Name.Name] {
+				found[fn.Name.Name] = true
+			}
+			return true
+		})
+	}
+	for fn, call := range want {
+		require.True(t, found[fn], "%s never calls SessionKickDrain.%s", fn, call)
+	}
+	require.True(t, initCalled, "nothing in main.go calls initSessionKickDrain")
+}
+
 // A sync or report resolves its device by token. Through the cached Api a device deleted on
 // another replica would stay resolvable here until its copy expired, so the consumer is handed the
 // plain one.

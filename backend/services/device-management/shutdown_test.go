@@ -93,11 +93,11 @@ func TestTheStopperStopsEachManagerExactlyOnce(t *testing.T) {
 
 	prevMs, prevGql, prevNats, prevSvc := Microservice, GraphQLManager, NatsManager, Svc
 	prevIep, prevRac, prevCallout, prevDrc := InboundEventsProcessor, RaiseAlarmConsumer, CalloutResponder, DeviceReportsConsumer
-	prevDrain := OwnershipDrain
+	prevDrain, prevKickDrain := OwnershipDrain, SessionKickDrain
 	t.Cleanup(func() {
 		Microservice, GraphQLManager, NatsManager, Svc = prevMs, prevGql, prevNats, prevSvc
 		InboundEventsProcessor, RaiseAlarmConsumer, CalloutResponder, DeviceReportsConsumer = prevIep, prevRac, prevCallout, prevDrc
-		OwnershipDrain = prevDrain
+		OwnershipDrain, SessionKickDrain = prevDrain, prevKickDrain
 	})
 
 	area := fmt.Sprintf("device-management-shutdown-%d", time.Now().UnixNano())
@@ -151,6 +151,9 @@ func TestTheStopperStopsEachManagerExactlyOnce(t *testing.T) {
 	OwnershipDrain = core.NewPeriodicTask(area, "ownership-drain", time.Hour,
 		func(context.Context) error { return nil }, core.NewNoOpLifecycleCallbacks())
 	require.NoError(t, OwnershipDrain.Initialize(context.Background()))
+	SessionKickDrain = core.NewPeriodicTask(area, "session-kick-drain", time.Hour,
+		func(context.Context) error { return nil }, core.NewNoOpLifecycleCallbacks())
+	require.NoError(t, SessionKickDrain.Initialize(context.Background()))
 
 	// The callout responder is nil-guarded in the stopper; there is nothing to stop.
 	CalloutResponder = nil

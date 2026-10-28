@@ -57,7 +57,7 @@ type provFixture struct {
 func newProvFixture(t *testing.T) *provFixture {
 	t.Helper()
 	api := newPartialUpdateApi(t, append(append([]any{}, deviceProfileTables...),
-		&ProvisioningProfile{}, &DeviceCredential{}, &Integration{}, &IntegrationDeviceType{})...)
+		&ProvisioningProfile{}, &DeviceCredential{}, &Integration{}, &IntegrationDeviceType{}, &PendingSessionKick{})...)
 	ctx := partialUpdateCtx()
 	var store *credentialtest.Store
 	api.ProvisioningChecker, store = provisioningChecker(t, testSecretKey, testEnrollmentKeys.Provisioning)
@@ -1242,4 +1242,102 @@ func foreignKeyViolation(t *testing.T) error {
 	}))
 	require.Error(t, got)
 	return got
+}
+
+// A revoke or a reset commits its credential change and THEN kicks. When the kick fails the
+// caller is told to repeat the operation, and the repeat finds nothing left to change (the
+// credentials are already disabled, or already hard-deleted). It must still ask the broker
+// again, and only report success once the kick is confirmed: otherwise the open session keeps
+// publishing until its JWT expires while the operator has been told all is well.
+func TestProvisioningKickIsRetriedAfterTheChangeCommitted(t *testing.T) {
+	for _, action := range []string{"revoke", "reset"} {
+		t.Run(action, func(t *testing.T) {
+			f := newProvFixture(t)
+			f.profile("pp-1", ProvisionAllowNew)
+			dev := core.DeriveDeviceToken("SN-RETRY", "pv-")
+			_, err := f.register("pp-1", "SN-RETRY", material(31))
+			require.NoError(t, err)
+			var calls int
+			var last []string
+			f.api.SessionKicker = kickRecorder(func(_ context.Context, _, _ string, tokens []string) error {
+				calls++
+				last = tokens
+				if calls == 1 {
+					return errors.New("temporary broker outage")
+				}
+				return nil
+			})
+			invoke := func() (int, error) {
+				if action == "revoke" {
+					return f.api.RevokeProvisionedDevices(f.ctx, "pp-1")
+				}
+				return f.api.ResetDeviceProvisioning(f.ctx, dev)
+			}
+			n, err := invoke()
+			require.ErrorIs(t, err, ErrSessionsNotEnded)
+			assert.Equal(t, 1, n, "the change is saved and counted")
+
+			n, err = invoke()
+			require.NoError(t, err)
+			assert.Zero(t, n, "nothing is left to change, so the count stays honest")
+			require.Equal(t, 2, calls, "the repeat must ask the broker again")
+			assert.Equal(t, []string{dev}, last)
+
+			// Confirmed, so the debt is cleared and a third call does not kick again.
+			_, err = invoke()
+			require.NoError(t, err)
+			assert.Equal(t, 2, calls)
+		})
+	}
+}
+
+// The kick responder being DOWN for several attempts and then recovering: every attempt in
+// between reports the failure, and the first one after recovery confirms and reports success.
+func TestProvisioningKickSurvivesAResponderOutage(t *testing.T) {
+	for _, action := range []string{"revoke", "reset"} {
+		t.Run(action, func(t *testing.T) {
+			f := newProvFixture(t)
+			f.profile("pp-1", ProvisionAllowNew)
+			for i := 1; i <= 2; i++ {
+				_, err := f.register("pp-1", fmt.Sprintf("SN-%d", i), material(i))
+				require.NoError(t, err)
+			}
+			devs := []string{core.DeriveDeviceToken("SN-1", "pv-"), core.DeriveDeviceToken("SN-2", "pv-")}
+			up := false
+			confirmed := map[string]bool{}
+			f.api.SessionKicker = kickRecorder(func(_ context.Context, _, _ string, tokens []string) error {
+				if !up {
+					return errors.New("no responder")
+				}
+				for _, tk := range tokens {
+					confirmed[tk] = true
+				}
+				return nil
+			})
+			invoke := func() error {
+				if action == "revoke" {
+					_, err := f.api.RevokeProvisionedDevices(f.ctx, "pp-1")
+					return err
+				}
+				var errs []error
+				for _, d := range devs {
+					_, err := f.api.ResetDeviceProvisioning(f.ctx, d)
+					errs = append(errs, err)
+				}
+				return errors.Join(errs...)
+			}
+			for i := 0; i < 3; i++ {
+				require.ErrorIs(t, invoke(), ErrSessionsNotEnded, "outage attempt %d", i)
+				assert.Empty(t, confirmed)
+			}
+			up = true
+			require.NoError(t, invoke())
+			for _, d := range devs {
+				assert.True(t, confirmed[d], "%s was never confirmed", d)
+			}
+			var pending int64
+			require.NoError(t, f.api.RDB.DB(f.ctx).Model(&PendingSessionKick{}).Count(&pending).Error)
+			assert.Zero(t, pending)
+		})
+	}
 }

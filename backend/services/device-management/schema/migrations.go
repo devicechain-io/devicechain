@@ -56,5 +56,6 @@ var (
 		NewSelfRegistrationSchema(),
 		NewIntegrationsSchema(),
 		NewDeviceAliasesSchema(),
+		NewPendingSessionKicksSchema(),
 	}
 )

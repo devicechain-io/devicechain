@@ -619,7 +619,7 @@ UPDATE "event-management".calculated_backfills
 | event-management | `anchor_sweep` |
 | device-state | `inactivity_sweep` |
 | event-sources | `presence_demote`, `presence_reconcile`, `presence_canary` |
-| device-management | `ownership_drain` |
+| device-management | `ownership_drain`, `session_kick_drain` |
 | command-delivery | `command_sweep`, `hold_reconcile`, `stranded_reconcile` |
 | event-processing | `detect_tick`, `rule_health_flush`, `shed_summary` |
 | lwm2m-ingest | `tenant_sweep` |
@@ -726,6 +726,7 @@ chart 覆盖链条各环节：
 | `ProvisioningAuthFailuresSustained` | warning | 连续 15 分钟，每秒有超过一个自注册请求因配置密钥或密文无效而被拒绝。所有原因有意合并计数并给出相同的应答：未知租户、未知密钥、错误密文，以及已停用或已过期的配置。持续的速率要么是某批设备在使用错误或已轮换的密文注册，要么是有人在探测该端点。 | 检查该批设备应使用的配置：已启用、未过期、密文为当前版本（泄露时请轮换）。查看 ingress 日志中的来源。对于探测无需额外处理：密文是 256 位随机数，无法猜出。 |
 | `ProvisioningRateLimited` | warning | 连续 15 分钟，自注册请求以 `429` 被拒绝的速率超过每十秒一次。`result` 标签说明是哪个限制：`rate_limited_source` 表示某个客户端地址用完了配额，`rate_limited_tenant` 表示租户每秒注册数已达其治理上限。设备会等待收到的 `Retry-After` 后重试。 | 对于 `rate_limited_source`，确认 `infrastructure.http.trustedProxies` 列出了 ingress 控制器，并且控制器保留了客户端地址。否则所有设备共用同一份配额。对于 `rate_limited_tenant`，请提高租户的注册上限，或把产线批次错开。 |
 | `ProvisioningMisconfigured` | warning | 最近 10 分钟内至少有一个请求被一个无法工作的配置拒绝：其设备类型已被删除、其策略不是平台已知的策略，或其签发的凭据类型不受此构建支持。使用该配置的所有设备都会被拒绝，直到修复为止。 | 在服务日志中找到该配置（令牌以 `ERROR` 级别记录），然后修复或重建。 |
+| `ProvisioningSessionKickUnconfirmed` | warning | 配置的撤销或重置已撤回某设备的凭据，但平台超过 10 分钟（并持续 5 分钟）无法确认该设备已打开的 MQTT 会话已被结束。设备无法重新连接，但已打开的会话可继续发布数据，直到其令牌过期（默认 12 小时）。 | 平台每 30 秒重试一次，因此负责结束会话的组件（event-sources）已停止或无法访问：请检查它是否在运行，以及其 MQTT 认证调用是否正常。它恢复响应后，待处理的结束请求会自行清除，也可以重复执行撤销或重置。 |
 
 ## 第二因素锁定 {#mfa-alerts}
 

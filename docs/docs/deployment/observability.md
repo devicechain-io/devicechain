@@ -1238,7 +1238,7 @@ exports three series under its own service's name, `devicechain_<area>_<task>_â€
 | event-management | `anchor_sweep` |
 | device-state | `inactivity_sweep` |
 | event-sources | `presence_demote`, `presence_reconcile`, `presence_canary` |
-| device-management | `ownership_drain` |
+| device-management | `ownership_drain`, `session_kick_drain` |
 | command-delivery | `command_sweep`, `hold_reconcile`, `stranded_reconcile` |
 | event-processing | `detect_tick`, `rule_health_flush`, `shed_summary` |
 | lwm2m-ingest | `tenant_sweep` |
@@ -1387,6 +1387,7 @@ rather than measured, and each is checked in both directions by unit tests.
 | `ProvisioningAuthFailuresSustained` | warning | For 15 minutes, more than one self-registration request a second has been refused because the provision key or secret was not valid. Every cause is counted together and answered the same way, on purpose: an unknown tenant, an unknown key, a wrong secret, and a profile that is disabled or expired. A steady rate is either a fleet registering with a secret that is wrong or was rotated, or someone probing the endpoint. | Check the provisioning profile the fleet should be using: enabled, not expired, secret current (rotate it if it leaked). Look at the sources in the ingress log. Nothing else needs to be done for a probe: the secret is 256 random bits and cannot be guessed. |
 | `ProvisioningRateLimited` | warning | For 15 minutes, self-registration requests have been refused with `429` at more than one every ten seconds. The `result` label says which limit: `rate_limited_source` is one client address using up its allowance, `rate_limited_tenant` is the tenant's registrations per second at its governance ceiling. Devices wait the `Retry-After` they are told and try again. | For `rate_limited_source`, check that `infrastructure.http.trustedProxies` names the ingress controller and that the controller preserves the client address. Without them every device shares one allowance. For `rate_limited_tenant`, raise the tenant's provisioning ceiling or spread the factory run out. |
 | `ProvisioningMisconfigured` | warning | In the last 10 minutes at least one request was refused by a provisioning profile that cannot work: its device type was deleted, its strategy is not one the platform knows, or it mints a credential type this build does not support. Every device using that profile is refused until it is fixed. | Find the profile in the service log (the token is logged at `ERROR`) and fix or recreate it. |
+| `ProvisioningSessionKickUnconfirmed` | warning | A provisioning revoke or reset withdrew a device's credentials, but the platform has not been able to confirm that the device's open MQTT session was ended for more than 10 minutes (and this held for 5 minutes). The device cannot reconnect, but a session it already had open can keep publishing until its token expires (12 hours by default). | The platform retries every 30 seconds, so the component that ends sessions (event-sources) is down or unreachable: check that it is running and that its MQTT auth callout is healthy. Once it answers, the pending kicks clear on their own, or repeat the revoke or reset. |
 
 ## Second-factor lockouts {#mfa-alerts}
 
