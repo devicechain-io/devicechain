@@ -2051,6 +2051,33 @@ jobs:
         run: hack/check-unity-metas.sh demos/shared/io.devicechain.sim-traffic
 
   # ---------------------------------------------------------------------------
+  # Towerpulse model (demos/towerpulse-unity): the engine-free thermal, CO2 and occupancy model and
+  # its scripted day. Its Dotnet~/ sidecar compiles the SAME .cs files Unity compiles (Scripts/Model
+  # through the asmdef, Tests/EditMode through the test asmdef), at LangVersion 9 for netstandard2.1
+  # and net8.0 with warnings as errors, and runs the tests under NUnit. No CI job runs Unity.
+  # ---------------------------------------------------------------------------
+  towerpulse-model:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: demos/towerpulse-unity/Dotnet~
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore --locked-mode
+
+      - name: Build
+        run: dotnet build --no-restore -c Release
+
+      - name: Test
+        run: dotnet test --no-build -c Release --blame-hang-timeout 2m
+
+  # ---------------------------------------------------------------------------
   # Helm chart: lint and template render.
   # ---------------------------------------------------------------------------
   helm:
@@ -3130,6 +3157,7 @@ jobs:
       - csharp
       - unity-compile-check
       - sim-traffic
+      - towerpulse-model
       - helm
       - opentofu
       - image-smoke

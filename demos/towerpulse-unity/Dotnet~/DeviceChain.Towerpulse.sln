@@ -1,0 +1,28 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DeviceChain.Towerpulse.Model", "Model\DeviceChain.Towerpulse.Model.csproj", "{D345DD2E-C146-4CD0-96C1-CA451B2E150F}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DeviceChain.Towerpulse.Tests", "Tests\DeviceChain.Towerpulse.Tests.csproj", "{C081C554-D7F4-4CF3-9367-8A34E453F7EE}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{D345DD2E-C146-4CD0-96C1-CA451B2E150F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D345DD2E-C146-4CD0-96C1-CA451B2E150F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D345DD2E-C146-4CD0-96C1-CA451B2E150F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D345DD2E-C146-4CD0-96C1-CA451B2E150F}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C081C554-D7F4-4CF3-9367-8A34E453F7EE}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C081C554-D7F4-4CF3-9367-8A34E453F7EE}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C081C554-D7F4-4CF3-9367-8A34E453F7EE}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C081C554-D7F4-4CF3-9367-8A34E453F7EE}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal

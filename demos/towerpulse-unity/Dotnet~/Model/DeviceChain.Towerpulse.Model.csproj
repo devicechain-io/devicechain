@@ -1,0 +1,24 @@
+<!--
+  Copyright The DeviceChain Authors
+  SPDX-License-Identifier: Apache-2.0
+
+  The Towerpulse model, compiled from the SAME .cs files Unity compiles through
+  DeviceChain.Towerpulse.Model.asmdef (no engine references).
+-->
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>netstandard2.1;net8.0</TargetFrameworks>
+    <RootNamespace>DeviceChain.Towerpulse.Model</RootNamespace>
+    <AssemblyName>DeviceChain.Towerpulse.Model</AssemblyName>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net8.0'">
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="../../Assets/Towerpulse/Scripts/Model/**/*.cs" />
+  </ItemGroup>
+
+</Project>
