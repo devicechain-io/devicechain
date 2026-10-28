@@ -8,6 +8,8 @@ using System.Text;
 using System.Text.Json;
 using DeviceChain.Sitepulse.Domain;
 using DeviceChain.Sitepulse.Recording;
+using DeviceChain.Demos.Platform;
+using DeviceChain.Demos.Platform.Recording;
 
 namespace DeviceChain.Sitepulse.Replay
 {

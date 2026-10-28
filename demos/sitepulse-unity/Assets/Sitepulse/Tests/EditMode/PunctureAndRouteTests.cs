@@ -12,6 +12,7 @@ using DeviceChain.Sitepulse.Replay;
 using DeviceChain.Sitepulse.Simulation;
 using DeviceChain.Sitepulse.Tasks;
 using NUnit.Framework;
+using DeviceChain.Demos.Platform.Recording;
 
 namespace DeviceChain.Sitepulse.Tests
 {

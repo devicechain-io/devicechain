@@ -7,6 +7,7 @@ using System.Text;
 using DeviceChain.Sitepulse.Domain;
 using DeviceChain.Sitepulse.Recording;
 using DeviceChain.Sitepulse.Tasks;
+using DeviceChain.Demos.Platform.Recording;
 
 namespace DeviceChain.Sitepulse.Replay
 {

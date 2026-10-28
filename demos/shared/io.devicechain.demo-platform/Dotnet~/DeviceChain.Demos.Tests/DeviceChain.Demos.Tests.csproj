@@ -1,0 +1,31 @@
+<!--
+  Copyright The DeviceChain Authors
+  SPDX-License-Identifier: Apache-2.0
+
+  Runs the package's Tests/Runtime/ files under NUnit on net8.0. The Unity Test Runner runs the very
+  same files in the Editor, so they keep to the NUnit API both runners share and are not async.
+-->
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>DeviceChain.Demos.Tests</RootNamespace>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="NUnit" Version="3.14.0" />
+    <PackageReference Include="NUnit3TestAdapter" Version="4.6.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../DeviceChain.Demos.Core/DeviceChain.Demos.Core.csproj" />
+    <ProjectReference Include="../DeviceChain.Demos.Recording/DeviceChain.Demos.Recording.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="../../Tests/Runtime/**/*.cs" />
+  </ItemGroup>
+
+</Project>

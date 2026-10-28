@@ -17,6 +17,8 @@ using DeviceChain.Sitepulse.Simulation;
 using DeviceChain.Sitepulse.Tasks;
 using DeviceChain.Sitepulse.Visuals;
 using NUnit.Framework;
+using DeviceChain.Demos.Platform;
+using DeviceChain.Demos.Platform.DevicePlane;
 
 namespace DeviceChain.Sitepulse.Tests
 {
@@ -492,7 +494,7 @@ namespace DeviceChain.Sitepulse.Tests
         [Test]
         public void TheProbeExpectsWhatEachKindOfMachineEmits()
         {
-            foreach (SceneKind kind in Enum.GetValues(typeof(SceneKind)))
+            foreach (var kind in SceneKind.All)
             {
                 var emitted = new MachineModel(DeviceSessionHost.ToEquipment(kind), "SP-X-0001").Measurements().Keys;
                 CollectionAssert.AreEquivalent(emitted, PhaseAProbe.ExpectedKeys(kind), kind.ToString());

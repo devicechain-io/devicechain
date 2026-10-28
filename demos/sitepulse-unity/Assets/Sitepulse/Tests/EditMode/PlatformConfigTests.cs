@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using DeviceChain.Sitepulse.Platform;
 using NUnit.Framework;
+using DeviceChain.Demos.Platform;
 
 namespace DeviceChain.Sitepulse.Tests
 {

@@ -18,6 +18,9 @@ using DeviceChain.Sitepulse.Tasks;
 using DeviceChain.Sitepulse.Visuals;
 using UnityEngine;
 using UnityEngine.InputSystem;
+using DeviceChain.Demos.Platform;
+using DeviceChain.Demos.Platform.DevicePlane;
+using DeviceChain.Demos.Platform.Recording;
 
 namespace DeviceChain.Sitepulse.App
 {

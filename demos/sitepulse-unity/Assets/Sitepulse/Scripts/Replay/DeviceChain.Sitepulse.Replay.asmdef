@@ -4,7 +4,9 @@
     "references": [
         "DeviceChain.Sitepulse",
         "DeviceChain.Sitepulse.Recording",
-        "Unity.InputSystem"
+        "Unity.InputSystem",
+        "DeviceChain.Demos.Core",
+        "DeviceChain.Demos.Recording"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

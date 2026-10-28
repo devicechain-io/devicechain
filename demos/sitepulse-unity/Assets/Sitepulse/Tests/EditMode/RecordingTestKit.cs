@@ -6,6 +6,8 @@ using System.Collections.Generic;
 using System.IO;
 using DeviceChain.Sitepulse.Recording;
 using NUnit.Framework;
+using DeviceChain.Demos.Platform.DevicePlane;
+using DeviceChain.Demos.Platform.Recording;
 
 namespace DeviceChain.Sitepulse.Tests
 {

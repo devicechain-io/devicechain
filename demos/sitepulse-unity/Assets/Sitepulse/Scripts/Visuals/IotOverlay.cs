@@ -11,6 +11,7 @@ using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.Rendering;
 using UnityEngine.UI;
+using DeviceChain.Demos.Platform;
 
 namespace DeviceChain.Sitepulse.Visuals
 {

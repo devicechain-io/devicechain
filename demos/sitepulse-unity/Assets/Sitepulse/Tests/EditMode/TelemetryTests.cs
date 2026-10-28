@@ -4,6 +4,7 @@
 using System;
 using DeviceChain.Sitepulse.Domain;
 using NUnit.Framework;
+using DeviceChain.Demos.Platform;
 
 namespace DeviceChain.Sitepulse.Tests
 {

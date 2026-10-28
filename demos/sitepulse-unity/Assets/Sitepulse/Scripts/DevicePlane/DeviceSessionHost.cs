@@ -9,6 +9,8 @@ using DeviceChain.Sdk.Mqtt;
 using DeviceChain.Sitepulse.Platform;
 using DeviceChain.Sitepulse.Simulation;
 using DeviceChain.Sitepulse.Tasks;
+using DeviceChain.Demos.Platform;
+using DeviceChain.Demos.Platform.DevicePlane;
 
 namespace DeviceChain.Sitepulse.DevicePlane
 {
@@ -89,7 +91,7 @@ namespace DeviceChain.Sitepulse.DevicePlane
 
         public bool CanPublish => Volatile.Read(ref halted) == 0 && link.CanPublish;
 
-        public static EquipmentKind ToEquipment(SceneKind kind)
+        public static EquipmentKind ToEquipment(string kind)
         {
             switch (kind)
             {

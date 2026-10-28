@@ -37,7 +37,12 @@ import (
 //
 // 🔴 The C# and the SDL both live outside this module; run with -count=1.
 
-var sitepulsePlatformDir = filepath.Join("..", "..", "..", "..", "demos", "sitepulse-unity", "Assets", "Sitepulse", "Scripts", "Platform")
+// The platform code that sends the documents lives in two places: the shared demo platform package (binding, credentials,
+// the observer's queries) and Sitepulse's own Platform folder (its zone-name query). Both are scanned.
+var sitepulsePlatformDirs = []string{
+	filepath.Join("..", "..", "..", "..", "demos", "shared", "io.devicechain.demo-platform", "Runtime", "Platform"),
+	filepath.Join("..", "..", "..", "..", "demos", "sitepulse-unity", "Assets", "Sitepulse", "Scripts", "Platform"),
+}
 
 // sitepulseDocumentAreas says where each document is sent, by operation name (or, for an
 // anonymous subscription, by its root field). A document found in the source and not
@@ -81,7 +86,7 @@ func TestSitepulseDocumentsValidateAgainstTheServedSchemas(t *testing.T) {
 	}
 	for _, want := range []string{"Resolve", "Creds", "CreateCred", "RotateCred"} {
 		if _, ok := byKey[want]; !ok {
-			t.Fatalf("no %s document found in %s (found %v)", want, sitepulsePlatformDir, documentKeys(byKey))
+			t.Fatalf("no %s document found in %v (found %v)", want, sitepulsePlatformDirs, documentKeys(byKey))
 		}
 	}
 	for name := range sitepulseDynamicDocuments {
@@ -288,11 +293,13 @@ func withoutMissingVariableValues(errs []*gqlerrors.QueryError) []*gqlerrors.Que
 
 func readPlatformFile(t *testing.T, name string) string {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join(sitepulsePlatformDir, name))
-	if err != nil {
-		t.Fatal(err)
+	for _, dir := range sitepulsePlatformDirs {
+		if b, err := os.ReadFile(filepath.Join(dir, name)); err == nil {
+			return string(b)
+		}
 	}
-	return string(b)
+	t.Fatalf("%s is in none of %v", name, sitepulsePlatformDirs)
+	return ""
 }
 
 // sitepulseDocuments extracts every GraphQL document from the Platform C#: each run of
@@ -301,9 +308,13 @@ func readPlatformFile(t *testing.T, name string) string {
 // at run time and is returned by operation name in the second result.
 func sitepulseDocuments(t *testing.T) ([]csDocument, map[string]bool) {
 	t.Helper()
-	files, err := filepath.Glob(filepath.Join(sitepulsePlatformDir, "*.cs"))
-	if err != nil || len(files) == 0 {
-		t.Fatalf("no C# under %s (%v); a scan of nothing validates nothing", sitepulsePlatformDir, err)
+	var files []string
+	for _, dir := range sitepulsePlatformDirs {
+		found, err := filepath.Glob(filepath.Join(dir, "*.cs"))
+		if err != nil || len(found) == 0 {
+			t.Fatalf("no C# under %s (%v); a scan of nothing validates nothing", dir, err)
+		}
+		files = append(files, found...)
 	}
 	var docs []csDocument
 	dynamic := map[string]bool{}

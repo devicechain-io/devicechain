@@ -11,7 +11,11 @@
         "DeviceChain.Sim.Traffic",
         "DeviceChain.Sdk.Unity",
         "UnityEngine.TestRunner",
-        "UnityEditor.TestRunner"
+        "UnityEditor.TestRunner",
+        "DeviceChain.Demos.Core",
+        "DeviceChain.Demos.Platform",
+        "DeviceChain.Demos.DevicePlane",
+        "DeviceChain.Demos.Recording"
     ],
     "includePlatforms": [
         "Editor"

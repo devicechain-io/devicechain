@@ -1,0 +1,22 @@
+{
+    "name": "DeviceChain.Demos.DevicePlane",
+    "rootNamespace": "DeviceChain.Demos.Platform.DevicePlane",
+    "references": [
+        "DeviceChain.Demos.Core",
+        "DeviceChain.Demos.Platform",
+        "DeviceChain.Sdk.Unity"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "DeviceChain.Sdk.dll",
+        "System.Text.Json.dll",
+        "Microsoft.Bcl.AsyncInterfaces.dll"
+    ],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

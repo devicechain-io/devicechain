@@ -2,7 +2,9 @@
     "name": "DeviceChain.Sitepulse.Recording",
     "rootNamespace": "DeviceChain.Sitepulse.Recording",
     "references": [
-        "DeviceChain.Sitepulse"
+        "DeviceChain.Sitepulse",
+        "DeviceChain.Demos.Core",
+        "DeviceChain.Demos.Recording"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

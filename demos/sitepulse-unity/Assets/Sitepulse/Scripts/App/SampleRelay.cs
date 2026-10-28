@@ -3,6 +3,7 @@
 
 using DeviceChain.Sitepulse.DevicePlane;
 using DeviceChain.Sitepulse.Simulation;
+using DeviceChain.Demos.Platform.DevicePlane;
 
 namespace DeviceChain.Sitepulse.App
 {

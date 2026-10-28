@@ -12,12 +12,13 @@ using NUnit.Framework;
 using UnityEditor;
 using UnityEngine;
 using static DeviceChain.Sitepulse.Tests.PlatformTestData;
+using DeviceChain.Demos.Platform;
 
 namespace DeviceChain.Sitepulse.Tests
 {
     public sealed class PlatformBinderTests
     {
-        static BindResult One(Dev dev, SceneKind kind, string externalId = null)
+        static BindResult One(Dev dev, string kind, string externalId = null)
         {
             var devices = new[] { new SceneDevice(externalId ?? dev.ExternalId, kind) };
             return DeviceBinder.Classify(Contract(), devices, Devices(dev)).Single();
@@ -218,9 +219,9 @@ namespace DeviceChain.Sitepulse.Tests
         public void TheContractReadsItsKeysFromTheSceneVocabulary()
         {
             var c = Contract();
-            CollectionAssert.AreEqual(Domain.MeasurementKeys.Equipment, c.EquipmentMetrics);
-            CollectionAssert.AreEqual(Domain.CommandKeys.Equipment, c.EquipmentCommands);
-            CollectionAssert.Contains(c.PlantFlags, "plant_running");
+            CollectionAssert.AreEqual(Domain.MeasurementKeys.Equipment, c.Kinds[SceneKind.Hauler].NumericMetrics);
+            CollectionAssert.AreEqual(Domain.CommandKeys.Equipment, c.Kinds[SceneKind.Hauler].Commands);
+            CollectionAssert.Contains(c.Kinds[SceneKind.Plant].BooleanMetrics, "plant_running");
         }
 
         // ---- the whole bind, over a fake platform

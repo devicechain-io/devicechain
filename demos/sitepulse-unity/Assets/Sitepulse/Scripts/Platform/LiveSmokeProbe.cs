@@ -19,6 +19,7 @@ using DeviceChain.Sdk.Unity;
 using UnityEngine;
 using UnityEngine.Networking;
 using Debug = UnityEngine.Debug;
+using DeviceChain.Demos.Platform;
 
 namespace DeviceChain.Sitepulse.Platform
 {

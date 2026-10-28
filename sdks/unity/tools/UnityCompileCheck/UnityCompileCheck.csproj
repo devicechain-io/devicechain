@@ -32,6 +32,9 @@
   <ItemGroup>
     <Compile Include="../../io.devicechain.sdk/Runtime/**/*.cs" />
     <Compile Include="../../io.devicechain.sdk/Samples~/**/*.cs" />
+    <!-- The shared demo platform package builds on this SDK (per-device MQTT sessions, event publishing), so its
+         engine-bound assemblies are compiled here too, against the same reference assemblies. -->
+    <Compile Include="../../../../demos/shared/io.devicechain.demo-platform/Runtime/**/*.cs" />
   </ItemGroup>
 
 </Project>

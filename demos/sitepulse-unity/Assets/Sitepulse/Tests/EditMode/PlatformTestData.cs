@@ -9,6 +9,7 @@ using System.Text.Json;
 using DeviceChain.Sitepulse.App;
 using DeviceChain.Sitepulse.Domain;
 using DeviceChain.Sitepulse.Platform;
+using DeviceChain.Demos.Platform;
 
 namespace DeviceChain.Sitepulse.Tests
 {

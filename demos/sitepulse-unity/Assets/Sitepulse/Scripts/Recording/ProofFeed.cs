@@ -3,6 +3,7 @@
 
 using System;
 using DeviceChain.Sitepulse.Domain;
+using DeviceChain.Demos.Platform.Recording;
 
 namespace DeviceChain.Sitepulse.Recording
 {
