@@ -20,6 +20,8 @@ describe('the routes a scoped member may open', () => {
       '/provisioning-profiles',
       '/provisioning-profiles/acme-sensors',
       '/integrations',
+      '/trust-anchors',
+      '/trust-anchors/acme-ca',
       '/integrations/eu868-gw',
       '/customers',
       '/customers/acme',

@@ -38,6 +38,8 @@ import {
   type CredentialType,
   type DeviceCredential,
 } from '@/lib/api/credentials';
+import { X509CredentialForm } from './X509CredentialForm';
+import { X509CredentialDetails, X509Expiry } from './X509CredentialDetails';
 
 // MQTT_BASIC is the only type that carries a stored secret (the password); the
 // others prove possession out of band, so only the id is registered.
@@ -333,9 +335,19 @@ export function DeviceCredentialsPanel({ deviceToken }: { deviceToken: string })
           </div>
         )}
 
-        <Button onClick={add} loading={submitting} disabled={submitting}>
-          <Plus size={14} /> {t('addCredential')}
-        </Button>
+        {type === 'X509_CERTIFICATE' ? (
+          // A certificate credential is verified against a trust anchor at creation, so it has
+          // its own form (paste the PEM, pick the anchor); its pin is computed by the server.
+          <X509CredentialForm
+            deviceToken={deviceToken}
+            heldCount={credentials.filter((c) => c.credentialType === 'X509_CERTIFICATE').length}
+            onAdded={reload}
+          />
+        ) : (
+          <Button onClick={add} loading={submitting} disabled={submitting}>
+            <Plus size={14} /> {t('addCredential')}
+          </Button>
+        )}
       </div>
 
       {/* Existing credentials. */}
@@ -364,6 +376,8 @@ export function DeviceCredentialsPanel({ deviceToken }: { deviceToken: string })
                   {c.credentialType === 'ACCESS_TOKEN' ? (
                     // The token is stored only as a digest: there is nothing to show or copy.
                     <div className="text-xs text-muted-foreground">{t('accessTokenIsSet')}</div>
+                  ) : c.credentialType === 'X509_CERTIFICATE' ? (
+                    <X509CredentialDetails credential={c} />
                   ) : (
                     <div className="flex items-center gap-1.5">
                       <span className="font-mono text-xs text-foreground">{c.credentialId}</span>
@@ -437,7 +451,13 @@ export function DeviceCredentialsPanel({ deviceToken }: { deviceToken: string })
                   )}
                 </DataTableCell>
                 <DataTableCell className="text-muted-foreground">
-                  {c.expiresAt ? formatTime(c.expiresAt) : '—'}
+                  {c.credentialType === 'X509_CERTIFICATE' ? (
+                    <X509Expiry expiresAt={c.expiresAt} />
+                  ) : c.expiresAt ? (
+                    formatTime(c.expiresAt)
+                  ) : (
+                    '—'
+                  )}
                 </DataTableCell>
                 <DataTableCell className="text-right">
                   {c.credentialType === 'MQTT_BASIC' && rotating !== c.token && (

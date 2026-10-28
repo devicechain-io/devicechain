@@ -50,6 +50,7 @@
   "serviceAccounts": "Service accounts",
   "rollouts": "Rollouts",
   "provisioningProfiles": "Provisioning Profiles",
+  "trustAnchors": "Trust anchors",
   "integrations": "Integrations",
   "security": "Security"
 }

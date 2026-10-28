@@ -35,8 +35,12 @@ export type ProvisioningStrategy = (typeof PROVISIONING_STRATEGIES)[number];
 /** A profile as the server returned it together with the secret it just generated. */
 export interface IssuedProfileSecret {
   profile: ProvisioningProfile;
-  /** Shown once. Never stored by the caller beyond the dialog that displays it. */
-  issuedSecret: string;
+  /**
+   * Shown once. Never stored by the caller beyond the dialog that displays it. NULL for a
+   * certificate profile, which authenticates by client certificate and has no secret: read it
+   * as a state to render (nothing to reveal), never as a fault and never as an empty string.
+   */
+  issuedSecret: string | null;
 }
 
 const PROFILES = graphql(`
@@ -59,6 +63,10 @@ const PROFILES = graphql(`
         updatedAt
         deviceType {
           id
+          token
+          name
+        }
+        trustAnchor {
           token
           name
         }
@@ -109,6 +117,10 @@ const PROFILE_BY_TOKEN = graphql(`
         token
         name
       }
+      trustAnchor {
+        token
+        name
+      }
     }
   }
 `);
@@ -142,29 +154,21 @@ const CREATE_PROFILE = graphql(`
           token
           name
         }
+        trustAnchor {
+          token
+          name
+        }
       }
     }
   }
 `);
 
-/**
- * The server returns no secret for a certificate profile (one that authenticates devices by
- * client certificate). This screen only creates and rotates secret profiles, so a missing
- * secret here is a fault to surface, not a state to render.
- */
-function withSecret<T extends { issuedSecret: string | null }>(result: T): T & { issuedSecret: string } {
-  if (result.issuedSecret === null) {
-    throw new Error('the server issued no provision secret for this profile');
-  }
-  return { ...result, issuedSecret: result.issuedSecret };
-}
-
-/** Creates a profile. The returned secret is the only time it can be seen. */
+/** Creates a profile. The returned secret (null for a certificate profile) is the only time it can be seen. */
 export async function createProvisioningProfile(
   request: ProvisioningProfileCreateRequest,
 ): Promise<IssuedProfileSecret> {
   const data = await gql('device-management', CREATE_PROFILE, { request });
-  return withSecret(data.createProvisioningProfile);
+  return data.createProvisioningProfile;
 }
 
 const ROTATE_SECRET = graphql(`
@@ -191,6 +195,10 @@ const ROTATE_SECRET = graphql(`
           token
           name
         }
+        trustAnchor {
+          token
+          name
+        }
       }
     }
   }
@@ -202,7 +210,7 @@ const ROTATE_SECRET = graphql(`
  */
 export async function rotateProvisioningProfileSecret(token: string): Promise<IssuedProfileSecret> {
   const data = await gql('device-management', ROTATE_SECRET, { token });
-  return withSecret(data.rotateProvisioningProfileSecret);
+  return data.rotateProvisioningProfileSecret;
 }
 
 const UPDATE_PROFILE = graphql(`
@@ -224,6 +232,10 @@ const UPDATE_PROFILE = graphql(`
       updatedAt
       deviceType {
         id
+        token
+        name
+      }
+      trustAnchor {
         token
         name
       }

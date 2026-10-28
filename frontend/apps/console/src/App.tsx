@@ -25,6 +25,8 @@ const DevicesPage = lazy(() => import('@/routes/devices/DevicesPage'));
 const DeviceDetailPage = lazy(() => import('@/routes/devices/DeviceDetailPage'));
 const ProvisioningProfilesPage = lazy(() => import('@/routes/provisioning/ProvisioningProfilesPage'));
 const ProvisioningProfileDetailPage = lazy(() => import('@/routes/provisioning/ProvisioningProfileDetailPage'));
+const TrustAnchorsPage = lazy(() => import('@/routes/trust-anchors/TrustAnchorsPage'));
+const TrustAnchorDetailPage = lazy(() => import('@/routes/trust-anchors/TrustAnchorDetailPage'));
 const IntegrationsPage = lazy(() => import('@/routes/integrations/IntegrationsPage'));
 const IntegrationDetailPage = lazy(() => import('@/routes/integrations/IntegrationDetailPage'));
 const DashboardsPage = lazy(() => import('@/routes/dashboards/DashboardsPage'));
@@ -122,6 +124,8 @@ export default function App() {
           <Route path="devices/:token" element={<DeviceDetailPage />} />
           <Route path="provisioning-profiles" element={<ProvisioningProfilesPage />} />
           <Route path="provisioning-profiles/:token" element={<ProvisioningProfileDetailPage />} />
+          <Route path="trust-anchors" element={<TrustAnchorsPage />} />
+          <Route path="trust-anchors/:token" element={<TrustAnchorDetailPage />} />
           <Route path="integrations" element={<IntegrationsPage />} />
           <Route path="integrations/:token" element={<IntegrationDetailPage />} />
           <Route path="dashboards" element={<DashboardsPage />} />

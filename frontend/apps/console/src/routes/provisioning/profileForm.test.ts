@@ -160,3 +160,50 @@ describe('small helpers', () => {
     expect(isExpired(null)).toBe(false);
   });
 });
+
+describe('a certificate profile draft', () => {
+  const certProfile = profile({
+    trustAnchor: { token: 'acme-ca', name: 'Acme CA' },
+    secretIssued: false,
+  });
+
+  it('is seeded as a certificate profile naming its anchor', () => {
+    const d = draftOf(certProfile);
+    expect(d.certificate).toBe(true);
+    expect(d.trustAnchorToken).toBe('acme-ca');
+    expect(draftOf(profile()).certificate).toBe(false);
+  });
+
+  it('needs an anchor and no provision key', () => {
+    const d = { ...emptyDraft(), deviceTypeToken: 'gateway', certificate: true };
+    expect(profileProblems(d)).toEqual(['anchor']);
+    expect(profileProblems({ ...d, trustAnchorToken: 'acme-ca' })).toEqual([]);
+  });
+
+  it('creates with the anchor and the certificate credential type, never a secret', () => {
+    const d = { ...emptyDraft(), deviceTypeToken: 'gateway', certificate: true, trustAnchorToken: 'acme-ca' };
+    const r = profileCreateRequest('cert-fleet', d);
+    expect(r.trustAnchorToken).toBe('acme-ca');
+    expect(r.credentialType).toBe('X509_CERTIFICATE');
+    expect(r.provisionKey).toBe('cert-fleet');
+    expect(Object.keys(r)).not.toContain('provisionSecret');
+  });
+
+  it('sends no trust anchor for a secret profile', () => {
+    const r = profileCreateRequest('p', { ...emptyDraft(), deviceTypeToken: 'gateway', provisionKey: 'k' });
+    expect('trustAnchorToken' in r).toBe(false);
+  });
+
+  it('an edit names the anchor only when it changed, and never the hidden key', () => {
+    const initial = draftOf(certProfile);
+    expect(profileEditRequest(initial, initial)).toEqual({});
+    expect(profileEditRequest(initial, { ...initial, trustAnchorToken: 'other-ca' })).toEqual({ trustAnchorToken: 'other-ca' });
+    // The key field is not shown for a certificate profile, so a stray change to it is not sent.
+    expect(profileEditRequest(initial, { ...initial, provisionKey: 'changed' })).toEqual({});
+  });
+
+  it('an edit of a secret profile never names an anchor', () => {
+    const initial = draftOf(profile());
+    expect(profileEditRequest(initial, { ...initial, trustAnchorToken: 'sneaky' })).toEqual({});
+  });
+});

@@ -113,6 +113,9 @@ export const NAV: NavNode[] = [
       // beside the device registry rather than earning a group of one. Not marked `scoped`: the
       // server refuses profiles to a member limited to part of the tenant.
       { labelKey: 'provisioningProfiles', href: '/provisioning-profiles', icon: KeyRound, requires: 'device:read' },
+      // The CA certificates the tenant trusts to vouch for its devices' client certificates. Same
+      // authority and the same scoping as the profiles beside it.
+      { labelKey: 'trustAnchors', href: '/trust-anchors', icon: ShieldCheck, requires: 'device:read' },
       // Authenticated senders of device data over HTTP (a LoRaWAN network server, a webhook). The
       // same authority and the same reasoning: the server refuses them to a member limited to part
       // of the tenant, so the entry is not marked `scoped`.

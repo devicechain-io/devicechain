@@ -19,7 +19,7 @@ export type DeviceCredential = DeviceCredentialsQuery['deviceCredentials']['resu
 export type { DeviceCredentialCreateRequest };
 
 // The credential types the platform understands (ADR-014).
-export const CREDENTIAL_TYPES = ['ACCESS_TOKEN', 'MQTT_BASIC'] as const;
+export const CREDENTIAL_TYPES = ['ACCESS_TOKEN', 'MQTT_BASIC', 'X509_CERTIFICATE'] as const;
 export type CredentialType = (typeof CREDENTIAL_TYPES)[number];
 
 const DEVICE_CREDENTIALS = graphql(`
@@ -33,6 +33,17 @@ const DEVICE_CREDENTIALS = graphql(`
         enabled
         expiresAt
         createdAt
+        certificate {
+          fingerprintSha256
+          subjectCn
+          serialHex
+          notAfter
+          trustAnchor {
+            token
+            name
+            enabled
+          }
+        }
       }
       pagination {
         totalRecords
@@ -49,6 +60,12 @@ const CREATE_DEVICE_CREDENTIAL = graphql(`
       credentialType
       credentialId
       enabled
+      expiresAt
+      certificate {
+        fingerprintSha256
+        subjectCn
+        notAfter
+      }
     }
   }
 `);
@@ -80,6 +97,10 @@ export async function listDeviceCredentials(deviceToken: string): Promise<Device
   });
   return data.deviceCredentials.results;
 }
+
+// The most X.509 certificate credentials one device may hold (the server's cap; this mirror
+// only saves a round trip and is never the authority).
+export const MAX_X509_CREDENTIALS_PER_DEVICE = 3;
 
 // Register a credential for a device. The caller supplies a fresh unique token
 // (the credential's own id) and the credential id/secret. Requires device:write.

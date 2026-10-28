@@ -73,12 +73,15 @@ export default function ProvisioningProfilesPage() {
             toast(t('createdToast', { token: profile.token }));
             setCreating(false);
             reload();
-            setRevealed({
-              profileToken: profile.token,
-              provisionKey: profile.provisionKey,
-              secret: issuedSecret,
-              rotated: false,
-            });
+            // A certificate profile has no secret (issuedSecret is null): there is nothing to reveal.
+            if (issuedSecret !== null) {
+              setRevealed({
+                profileToken: profile.token,
+                provisionKey: profile.provisionKey,
+                secret: issuedSecret,
+                rotated: false,
+              });
+            }
           }}
         />
       </FormDrawer>

@@ -17,6 +17,7 @@ import esTenants from './tenants.json';
 import esTiers from './tiers.json';
 import esConnectors from './connectors.json';
 import esProvisioning from './provisioning.json';
+import esTrustAnchors from './trustAnchors.json';
 import esIntegrations from './integrations.json';
 import esCommandBatches from './commandBatches.json';
 import esUpdateSigners from './updateSigners.json';
@@ -53,6 +54,7 @@ const es = {
     tiers: esTiers,
     connectors: esConnectors,
     provisioning: esProvisioning,
+    trustAnchors: esTrustAnchors,
     integrations: esIntegrations,
     commandBatches: esCommandBatches,
     updateSigners: esUpdateSigners,

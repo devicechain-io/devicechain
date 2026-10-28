@@ -50,6 +50,7 @@
   "serviceAccounts": "Cuentas de servicio",
   "rollouts": "Despliegues",
   "provisioningProfiles": "Perfiles de aprovisionamiento",
+  "trustAnchors": "Anclas de confianza",
   "integrations": "Integraciones",
   "security": "Seguridad"
 }
