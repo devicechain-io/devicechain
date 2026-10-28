@@ -79,6 +79,9 @@ Qué hace cada comando en un clúster que todavía tiene `ingress-nginx`:
    niega, nombrando el Secret, cuando es autofirmado o no lo firmó su propio `ca.crt`. Lo que sigue es la
    alternativa: para una instancia cuyo certificado emitió una versión anterior, y para cuando esa negativa
    nombra el Secret.
+   El cambio de nombre también hace que cert-manager emita una vez más cada certificado de host de la instancia,
+   desde la misma CA; cada Secret sigue sirviendo su certificado actual hasta que el nuevo esté listo, así que no
+   hay corte.
 
    ```bash
    kubectl -n dci-<instance> get secret devicechain-tls-gateway -o jsonpath='{.data.tls\.crt}' \

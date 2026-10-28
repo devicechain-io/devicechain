@@ -46,7 +46,7 @@ const certManagerIssuerAnnotation = "cert-manager.io/issuer"
 //
 // A Secret that cannot be read as a certificate is a problem, never a pass.
 func gatewayCertificateIssuerProblem(secret string, tlsCrt, caCrt []byte, expectCA bool) string {
-	leaf, err := firstCertificate(tlsCrt)
+	leaf, intermediates, err := parseChain(tlsCrt)
 	if err != nil {
 		return fmt.Sprintf("Secret %s holds no readable certificate (%v)", secret, err)
 	}
@@ -60,8 +60,10 @@ func gatewayCertificateIssuerProblem(secret string, tlsCrt, caCrt []byte, expect
 			return fmt.Sprintf("Secret %s has a ca.crt that holds no readable certificate", secret)
 		}
 		// The time is the leaf's own start: whether it has expired is not the question here.
+		// The anchors are ca.crt and nothing else; the certificates after the leaf in tls.crt are
+		// only the path from the leaf to one of them.
 		if _, err := leaf.Verify(x509.VerifyOptions{
-			Roots: pool, Intermediates: pool, CurrentTime: leaf.NotBefore.Add(time.Second),
+			Roots: pool, Intermediates: intermediates, CurrentTime: leaf.NotBefore.Add(time.Second),
 			KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
 		}); err != nil {
 			return fmt.Sprintf("the certificate in Secret %s was not signed by the ca.crt beside it (%v)", secret, err)
@@ -70,17 +72,33 @@ func gatewayCertificateIssuerProblem(secret string, tlsCrt, caCrt []byte, expect
 	return ""
 }
 
-func firstCertificate(bundle []byte) (*x509.Certificate, error) {
+// parseChain reads every CERTIFICATE block of a tls.crt: the first is the leaf, the rest the
+// intermediates cert-manager appended after it.
+func parseChain(bundle []byte) (leaf *x509.Certificate, intermediates *x509.CertPool, err error) {
+	intermediates = x509.NewCertPool()
 	for {
 		var block *pem.Block
 		block, bundle = pem.Decode(bundle)
 		if block == nil {
-			return nil, fmt.Errorf("no CERTIFICATE block")
+			break
 		}
-		if block.Type == "CERTIFICATE" {
-			return x509.ParseCertificate(block.Bytes)
+		if block.Type != "CERTIFICATE" {
+			continue
+		}
+		c, perr := x509.ParseCertificate(block.Bytes)
+		if perr != nil {
+			return nil, nil, perr
+		}
+		if leaf == nil {
+			leaf = c
+		} else {
+			intermediates.AddCert(c)
 		}
 	}
+	if leaf == nil {
+		return nil, nil, fmt.Errorf("no CERTIFICATE block")
+	}
+	return leaf, intermediates, nil
 }
 
 // gatewayCertificateIssued reads the Secret a Ready Certificate left and judges who signed it.

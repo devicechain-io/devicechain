@@ -182,3 +182,57 @@ func TestAReadyCertificateWithNoSecretIsNotUsable(t *testing.T) {
 		t.Fatalf("a Ready Certificate whose Secret is missing passed: %+v %v", vs, err)
 	}
 }
+
+// chainMaterial is a root, an intermediate it signed and a leaf the intermediate signed: the shape
+// of an issuer that signs through an intermediate, where cert-manager writes the leaf and then the
+// intermediate into tls.crt and the root into ca.crt.
+func chainMaterial() (leaf, intermediate, root []byte) {
+	rootKey, interKey, leafKey := mustKey(), mustKey(), mustKey()
+	ca := func(serial int64, cn string) *x509.Certificate {
+		return &x509.Certificate{
+			SerialNumber: big.NewInt(serial), Subject: pkix.Name{CommonName: cn},
+			NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(24 * time.Hour),
+			IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign,
+		}
+	}
+	rootT := ca(10, "root")
+	rootDER, err := x509.CreateCertificate(rand.Reader, rootT, rootT, &rootKey.PublicKey, rootKey)
+	if err != nil {
+		panic(err)
+	}
+	rootC, _ := x509.ParseCertificate(rootDER)
+	interDER, err := x509.CreateCertificate(rand.Reader, ca(11, "intermediate"), rootC, &interKey.PublicKey, rootKey)
+	if err != nil {
+		panic(err)
+	}
+	interC, _ := x509.ParseCertificate(interDER)
+	leafT := &x509.Certificate{
+		SerialNumber: big.NewInt(12), Subject: pkix.Name{CommonName: "prod.example.com"}, DNSNames: []string{"prod.example.com"},
+		NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour),
+	}
+	leafDER, err := x509.CreateCertificate(rand.Reader, leafT, interC, &leafKey.PublicKey, interKey)
+	if err != nil {
+		panic(err)
+	}
+	return pemOf(leafDER), pemOf(interDER), pemOf(rootDER)
+}
+
+// A leaf signed through an intermediate is judged along the whole tls.crt: the leaf is the first
+// block, the rest are the path, and only ca.crt is trusted.
+func TestGatewayCertificateIssuerFollowsTheChainInTlsCrt(t *testing.T) {
+	leaf, inter, root := chainMaterial()
+	const name = "devicechain-tls-gateway"
+	both := append(append([]byte{}, leaf...), inter...)
+	if p := gatewayCertificateIssuerProblem(name, both, root, false); p != "" {
+		t.Errorf("a leaf with its intermediate and the root in ca.crt was refused: %s", p)
+	}
+	if p := gatewayCertificateIssuerProblem(name, leaf, root, false); p == "" {
+		t.Error("a leaf whose intermediate is missing from tls.crt was accepted")
+	}
+	// Trust comes from ca.crt only: an intermediate that is merely present in tls.crt, with the
+	// wrong root in ca.crt, does not make the chain good.
+	other := caSignedMaterial()
+	if p := gatewayCertificateIssuerProblem(name, both, other.caCrt, false); p == "" {
+		t.Error("a chain was accepted against a ca.crt that did not sign it")
+	}
+}

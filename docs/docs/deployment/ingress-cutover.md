@@ -79,6 +79,8 @@ What each command does to a cluster that still has `ingress-nginx`:
    that way, and `dcctl upgrade --drop-legacy-ingress` reads the certificate itself and refuses, naming the
    Secret, when it is self-signed or was not signed by its own `ca.crt`. What follows is the fallback: for an
    instance whose certificate was issued by an earlier release, and for when that refusal names the Secret.
+   The rename also makes cert-manager issue every host certificate of the instance once more, from the same CA;
+   each Secret keeps serving its current certificate until the new one is ready, so there is no outage.
 
    ```bash
    kubectl -n dci-<instance> get secret devicechain-tls-gateway -o jsonpath='{.data.tls\.crt}' \
