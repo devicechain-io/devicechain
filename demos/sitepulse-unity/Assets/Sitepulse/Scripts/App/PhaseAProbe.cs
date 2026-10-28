@@ -12,6 +12,7 @@ using DeviceChain.Sitepulse.DevicePlane;
 using DeviceChain.Sitepulse.Platform;
 using DeviceChain.Sitepulse.Simulation;
 using DeviceChain.Sitepulse.Tasks;
+using DeviceChain.Demos.Platform;
 
 namespace DeviceChain.Sitepulse.App
 {
@@ -371,7 +372,7 @@ namespace DeviceChain.Sitepulse.App
         }
 
         /// <summary>The measurement keys a device of this kind emits, from the simulation's own model (one source).</summary>
-        public static IReadOnlyList<string> ExpectedKeys(SceneKind kind) => MachineModel.KeysFor(DeviceSessionHost.ToEquipment(kind));
+        public static IReadOnlyList<string> ExpectedKeys(string kind) => MachineModel.KeysFor(DeviceSessionHost.ToEquipment(kind));
 
         static int CheckReading(DeviceReading r, List<string> problems)
         {

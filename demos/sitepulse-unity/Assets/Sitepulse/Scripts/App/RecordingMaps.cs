@@ -7,6 +7,9 @@ using DeviceChain.Sitepulse.DevicePlane;
 using DeviceChain.Sitepulse.Platform;
 using DeviceChain.Sitepulse.Recording;
 using DeviceChain.Sitepulse.Simulation;
+using DeviceChain.Demos.Platform;
+using DeviceChain.Demos.Platform.DevicePlane;
+using DeviceChain.Demos.Platform.Recording;
 
 namespace DeviceChain.Sitepulse.App
 {

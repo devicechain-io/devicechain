@@ -49,7 +49,8 @@ run it again after regenerating anything under `ArtSource/`.
 Assets/Sitepulse/
   Scenes/              scenes
   Scripts/Domain/      machine and task state, free of Unity and transport types
-  Scripts/Platform/    the DeviceChain connection
+  Scripts/Platform/    the quarry's side of the DeviceChain connection (the scene contract, the modes, the acceptance controls);
+                       the connection itself is the shared package below
   Scripts/Simulation/  movement, tasks and the simulation clock
   Scripts/Visuals/     machine rigs (FleetRig, MachineRig), the quarry terrain, the fleet preview,
                        the effects and the data overlay
@@ -67,6 +68,12 @@ Assets/Sitepulse/
   Tests/EditMode/      Edit Mode tests
 ArtSource/             the code that builds the models, props and terrain (see ArtSource/README.md)
 ```
+
+The scenario-agnostic half of the demo (device binding and credentials, the operator token broker, the observer,
+per-device MQTT sessions, secret redaction, the recording format) is the shared package
+[`demos/shared/io.devicechain.demo-platform`](../shared/io.devicechain.demo-platform), which this project adds to
+its manifest and lists under `testables`. Sitepulse keeps the quarry: its scene contract, simulation, visuals and
+the session host that runs the machines over the package's device link.
 
 ## The machine models
 

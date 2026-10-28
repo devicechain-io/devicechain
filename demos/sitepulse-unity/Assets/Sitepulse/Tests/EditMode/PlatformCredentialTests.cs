@@ -10,6 +10,7 @@ using DeviceChain.Sitepulse.Platform;
 using NUnit.Framework;
 using static DeviceChain.Sitepulse.Tests.PlatformTestData;
 using DeviceChain.Sitepulse.Domain;
+using DeviceChain.Demos.Platform;
 
 namespace DeviceChain.Sitepulse.Tests
 {

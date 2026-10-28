@@ -14,6 +14,8 @@ using DeviceChain.Sitepulse.Platform;
 using DeviceChain.Sitepulse.Simulation;
 using DeviceChain.Sitepulse.Tasks;
 using NUnit.Framework;
+using DeviceChain.Demos.Platform;
+using DeviceChain.Demos.Platform.DevicePlane;
 
 namespace DeviceChain.Sitepulse.Tests
 {
@@ -128,7 +130,7 @@ namespace DeviceChain.Sitepulse.Tests
             public ValueTask DisposeAsync() => default;
         }
 
-        static DeviceSessionHost Host(string id, SceneKind kind, DeviceInbox inbox, int generation = 1) =>
+        static DeviceSessionHost Host(string id, string kind, DeviceInbox inbox, int generation = 1) =>
             new DeviceSessionHost(new SceneDevice(id, kind), "tok-" + id, new NoLink(), generation, inbox, new CommandContext(Areas, z => Areas.Contains(z)));
 
         static DeviceCommand Cmd(string token, string name, string payload, long seq) => new DeviceCommand(token, name, payload == null ? (JsonElement?)null : Json(payload), seq);

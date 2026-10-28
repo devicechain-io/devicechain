@@ -11,6 +11,7 @@ using DeviceChain.Sitepulse.Platform;
 using DeviceChain.Sitepulse.Tasks;
 using DeviceChain.Sitepulse.Visuals;
 using NUnit.Framework;
+using DeviceChain.Demos.Platform;
 
 namespace DeviceChain.Sitepulse.Tests
 {

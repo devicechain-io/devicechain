@@ -8,6 +8,7 @@ using DeviceChain.Sitepulse.Replay;
 using DeviceChain.Sitepulse.Visuals;
 using NUnit.Framework;
 using UnityEngine;
+using DeviceChain.Demos.Platform;
 
 namespace DeviceChain.Sitepulse.Tests
 {

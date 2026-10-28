@@ -1,0 +1,27 @@
+{
+    "name": "DeviceChain.Demos.Tests.Runtime",
+    "rootNamespace": "DeviceChain.Demos.Tests",
+    "references": [
+        "DeviceChain.Demos.Core",
+        "DeviceChain.Demos.Recording",
+        "UnityEngine.TestRunner",
+        "UnityEditor.TestRunner"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "nunit.framework.dll",
+        "System.Text.Json.dll",
+        "Microsoft.Bcl.AsyncInterfaces.dll"
+    ],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "UNITY_INCLUDE_TESTS"
+    ],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

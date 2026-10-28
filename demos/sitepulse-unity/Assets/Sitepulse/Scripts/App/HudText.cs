@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Text;
 using DeviceChain.Sitepulse.Platform;
 using UnityEngine;
+using DeviceChain.Demos.Platform;
 
 namespace DeviceChain.Sitepulse.App
 {

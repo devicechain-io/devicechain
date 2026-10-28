@@ -1,0 +1,34 @@
+<!--
+  Copyright The DeviceChain Authors
+  SPDX-License-Identifier: Apache-2.0
+
+  The run recording format, compiled from the package's Runtime/Recording folder (the same files Unity
+  compiles through DeviceChain.Demos.Recording.asmdef, which has no engine references). Unity gets
+  System.Text.Json from the SDK package's plugin folder; here it is the framework's on net8.0 and the
+  package on netstandard2.1.
+-->
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>netstandard2.1;net8.0</TargetFrameworks>
+    <RootNamespace>DeviceChain.Demos.Platform.Recording</RootNamespace>
+    <AssemblyName>DeviceChain.Demos.Recording</AssemblyName>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net8.0'">
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.1'">
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../DeviceChain.Demos.Core/DeviceChain.Demos.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="../../Runtime/Recording/**/*.cs" />
+  </ItemGroup>
+
+</Project>

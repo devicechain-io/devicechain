@@ -7,6 +7,7 @@ using System.Text;
 using DeviceChain.Sitepulse.Platform;
 using UnityEngine;
 using UnityEngine.UI;
+using DeviceChain.Demos.Platform;
 
 namespace DeviceChain.Sitepulse.App
 {

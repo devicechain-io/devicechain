@@ -17,6 +17,8 @@ using DeviceChain.Sitepulse.Tasks;
 using DeviceChain.Sitepulse.Visuals;
 using NUnit.Framework;
 using UnityEngine;
+using DeviceChain.Demos.Platform;
+using DeviceChain.Demos.Platform.Recording;
 
 namespace DeviceChain.Sitepulse.Tests
 {
@@ -42,7 +44,13 @@ namespace DeviceChain.Sitepulse.Tests
             return seen;
         }
 
-        static readonly string[] Forbidden = { "DeviceChain.Sitepulse.Platform", "DeviceChain.Sitepulse.DevicePlane", "DeviceChain.Sitepulse.App", "DeviceChain.Sdk", "DeviceChain.Sdk.Unity", "MQTTnet" };
+        // the shared package's network-side assemblies are as forbidden as Sitepulse's own; its Core and Recording are pure and allowed
+        static readonly string[] Forbidden =
+        {
+            "DeviceChain.Sitepulse.Platform", "DeviceChain.Sitepulse.DevicePlane", "DeviceChain.Sitepulse.App",
+            "DeviceChain.Demos.Platform", "DeviceChain.Demos.DevicePlane",
+            "DeviceChain.Sdk", "DeviceChain.Sdk.Unity", "MQTTnet",
+        };
 
         [Test]
         public void TheReplayRootReferencesNothingThatCanTouchTheNetwork()
@@ -91,8 +99,16 @@ namespace DeviceChain.Sitepulse.Tests
         public void NoRecordingOrReplaySourceUsesReflectionJson()
         {
             // IL2CPP strips what reflection needs: these files read and write by hand
-            foreach (var dir in new[] { "Recording", "Replay" })
-                foreach (var f in Directory.GetFiles(Path.Combine(Application.dataPath, "Sitepulse", "Scripts", dir), "*.cs"))
+            // the recording format now lives in the shared package, so its sources are read too
+            var package = UnityEditor.PackageManager.PackageInfo.FindForAssembly(typeof(RecordLine).Assembly).resolvedPath;
+            var dirs = new[]
+            {
+                Path.Combine(Application.dataPath, "Sitepulse", "Scripts", "Recording"),
+                Path.Combine(Application.dataPath, "Sitepulse", "Scripts", "Replay"),
+                Path.Combine(package, "Runtime", "Recording"),
+            };
+            foreach (var dir in dirs)
+                foreach (var f in Directory.GetFiles(dir, "*.cs"))
                 {
                     var text = File.ReadAllText(f);
                     foreach (var banned in new[] { "JsonSerializer.", "JsonUtility", "System.Reflection", "Activator.CreateInstance", "Newtonsoft" })

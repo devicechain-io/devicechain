@@ -5,6 +5,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Threading;
 using DeviceChain.Sitepulse.Tasks;
+using DeviceChain.Demos.Platform.DevicePlane;
 
 namespace DeviceChain.Sitepulse.DevicePlane
 {

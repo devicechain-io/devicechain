@@ -4,7 +4,11 @@
     "references": [
         "DeviceChain.Sitepulse",
         "DeviceChain.Sitepulse.Platform",
-        "DeviceChain.Sdk.Unity"
+        "DeviceChain.Sdk.Unity",
+        "DeviceChain.Demos.Core",
+        "DeviceChain.Demos.Platform",
+        "DeviceChain.Demos.DevicePlane",
+        "DeviceChain.Demos.Recording"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

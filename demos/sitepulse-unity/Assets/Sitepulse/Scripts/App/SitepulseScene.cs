@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using DeviceChain.Sitepulse.Domain;
 using DeviceChain.Sitepulse.Platform;
 using UnityEngine;
+using DeviceChain.Demos.Platform;
 
 namespace DeviceChain.Sitepulse.App
 {
@@ -36,7 +37,7 @@ namespace DeviceChain.Sitepulse.App
             var list = new List<SceneDevice>();
             foreach (var m in file.machines)
             {
-                SceneKind kind;
+                string kind;
                 switch (m.kind)
                 {
                     case "Hauler": kind = SceneKind.Hauler; break;
@@ -62,20 +63,30 @@ namespace DeviceChain.Sitepulse.App
             return zones;
         }
 
+        // a machine takes the equipment metrics and commands, and its goto-area lists areas; the plant takes its own
+        // metrics and flags, and no command
+        static KindContract Equipment(string typeToken) => new KindContract
+        {
+            TypeToken = typeToken,
+            NumericMetrics = MeasurementKeys.Equipment,
+            Commands = CommandKeys.Equipment,
+            AreaCommand = CommandKeys.GotoArea,
+        };
+
         public static SceneContract Contract(ISet<string> zones) => new SceneContract
         {
-            TypeTokens = new Dictionary<SceneKind, string>
+            Kinds = new Dictionary<string, KindContract>
             {
-                [SceneKind.Hauler] = HaulerType,
-                [SceneKind.Loader] = LoaderType,
-                [SceneKind.Dozer] = DozerType,
-                [SceneKind.Plant] = PlantType,
+                [SceneKind.Hauler] = Equipment(HaulerType),
+                [SceneKind.Loader] = Equipment(LoaderType),
+                [SceneKind.Dozer] = Equipment(DozerType),
+                [SceneKind.Plant] = new KindContract
+                {
+                    TypeToken = PlantType,
+                    NumericMetrics = MeasurementKeys.Plant,
+                    BooleanMetrics = MeasurementKeys.PlantFlags,
+                },
             },
-            EquipmentMetrics = MeasurementKeys.Equipment,
-            PlantMetrics = MeasurementKeys.Plant,
-            PlantFlags = MeasurementKeys.PlantFlags,
-            EquipmentCommands = CommandKeys.Equipment,
-            AreaCommand = CommandKeys.GotoArea,
             Zones = zones,
         };
     }

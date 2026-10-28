@@ -15,6 +15,8 @@ using DeviceChain.Sitepulse.Simulation;
 using DeviceChain.Sitepulse.Visuals;
 using NUnit.Framework;
 using UnityEngine;
+using DeviceChain.Demos.Platform;
+using DeviceChain.Demos.Platform.DevicePlane;
 
 namespace DeviceChain.Sitepulse.Tests
 {

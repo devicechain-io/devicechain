@@ -3,6 +3,7 @@
 
 using System;
 using System.Collections.Generic;
+using DeviceChain.Demos.Platform;
 
 namespace DeviceChain.Sitepulse.Domain
 {

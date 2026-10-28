@@ -2051,6 +2051,47 @@ jobs:
         run: hack/check-unity-metas.sh demos/shared/io.devicechain.sim-traffic
 
   # ---------------------------------------------------------------------------
+  # Shared demo platform (demos/shared/io.devicechain.demo-platform): the scenario-agnostic half of the
+  # Unity demos. Its Core and Recording assemblies have no engine references, so the Dotnet~/ sidecar
+  # compiles the SAME .cs files Unity compiles (Runtime/Core and Runtime/Recording through their asmdefs,
+  # Tests/Runtime through the tests asmdef) at LangVersion 9 for netstandard2.1 and net8.0 with warnings
+  # as errors, and runs the tests under NUnit. The engine- and SDK-bound assemblies (Platform, DevicePlane)
+  # are compiled against the UnityEngine reference assemblies by the unity-compile-check job above. No CI
+  # job runs Unity; the demos' own EditMode suites run in the Editor.
+  # ---------------------------------------------------------------------------
+  demo-platform:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: demos/shared/io.devicechain.demo-platform/Dotnet~
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore --locked-mode
+
+      - name: Build
+        run: dotnet build --no-restore -c Release
+
+      - name: Test
+        run: dotnet test --no-build -c Release --blame-hang-timeout 2m
+
+      # Unity imports the package from these files with whatever .meta files are committed; a missing
+      # one gets a new GUID on every machine. The self-test runs first so the green run below is one
+      # that could have been red.
+      - name: Unity .meta check self-test
+        working-directory: .
+        run: hack/check-unity-metas.sh --self-test
+
+      - name: Every package file and folder has a committed .meta
+        working-directory: .
+        run: hack/check-unity-metas.sh demos/shared/io.devicechain.demo-platform
+
+  # ---------------------------------------------------------------------------
   # Towerpulse model (demos/towerpulse-unity): the engine-free thermal, CO2 and occupancy model and
   # its scripted day. Its Dotnet~/ sidecar compiles the SAME .cs files Unity compiles (Scripts/Model
   # through the asmdef, Tests/EditMode through the test asmdef), at LangVersion 9 for netstandard2.1
@@ -3157,6 +3198,7 @@ jobs:
       - csharp
       - unity-compile-check
       - sim-traffic
+      - demo-platform
       - towerpulse-model
       - helm
       - opentofu

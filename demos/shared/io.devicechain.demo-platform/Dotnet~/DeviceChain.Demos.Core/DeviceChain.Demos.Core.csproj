@@ -1,0 +1,30 @@
+<!--
+  Copyright The DeviceChain Authors
+  SPDX-License-Identifier: Apache-2.0
+
+  The pure core of the shared demo platform, compiled from the package's Runtime/Core folder (the
+  same files Unity compiles through DeviceChain.Demos.Core.asmdef, which has no engine references):
+  secret redaction, the command and provenance vocabulary, the demo's identity, and the device-side
+  sample queue. The engine- and SDK-bound assemblies (Platform, DevicePlane) are compiled only by
+  Unity.
+-->
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>netstandard2.1;net8.0</TargetFrameworks>
+    <RootNamespace>DeviceChain.Demos.Platform</RootNamespace>
+    <AssemblyName>DeviceChain.Demos.Core</AssemblyName>
+  </PropertyGroup>
+
+  <!-- The trim and AOT analyzers only run on a target that supports them. The library must
+       stay free of reflection and runtime code generation, since Unity players run it under
+       IL2CPP. -->
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net8.0'">
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="../../Runtime/Core/**/*.cs" />
+  </ItemGroup>
+
+</Project>

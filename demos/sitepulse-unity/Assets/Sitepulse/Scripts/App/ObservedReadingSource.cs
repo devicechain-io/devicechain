@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using DeviceChain.Sitepulse.Domain;
 using DeviceChain.Sitepulse.Platform;
 using DeviceChain.Sitepulse.Visuals;
+using DeviceChain.Demos.Platform;
 
 namespace DeviceChain.Sitepulse.App
 {
