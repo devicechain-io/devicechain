@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -51,7 +52,6 @@ const (
 	importCodeInvalidValue    = "INVALID_VALUE"
 	importCodeNotFound        = "NOT_FOUND"
 	importCodeDuplicateInFile = "DUPLICATE_IN_FILE"
-	importCodeUnsupported     = "UNSUPPORTED"
 )
 
 // DeviceImportRow is one device of an import file. It carries the fields of a single
@@ -231,8 +231,8 @@ func validateImportRow(row *DeviceImportRow, mode string) (outcome, code, messag
 	}
 	ctype := strings.TrimSpace(*row.CredentialType)
 	switch {
-	case CredentialType(ctype).Retired():
-		return DeviceImportRefused, importCodeUnsupported, (&UnsupportedCredentialTypeError{Type: CredentialType(ctype)}).Error(), nil
+	case CredentialType(ctype) == CredentialX509Certificate:
+		return DeviceImportInvalid, importCodeInvalidValue, refuseX509Elsewhere().Error(), nil
 	case !CredentialType(ctype).Valid():
 		return DeviceImportInvalid, importCodeInvalidValue, "credentialType must be ACCESS_TOKEN or MQTT_BASIC", nil
 	}
@@ -385,6 +385,14 @@ func (api *Api) ImportDevices(ctx context.Context, rows []*DeviceImportRow, mode
 	}
 
 	result := &DeviceImportResult{DryRun: dryRun, Rows: make([]*DeviceImportRowResult, len(rows))}
+
+	// A row earmarked for a certificate profile may leave its token out: it is the one derived
+	// from its external id, as a single create and a bulk create derive it. The rows are copied
+	// first so the caller's are not edited.
+	rows, err := api.deriveCertificateTokens(ctx, rows)
+	if err != nil {
+		return nil, err
+	}
 
 	// Pure checks and in-file duplicates. A rejected row claims no slot, so a later valid row
 	// is not blamed for it.
@@ -606,6 +614,19 @@ func (api *Api) decideImportRows(ctx context.Context, result *DeviceImportResult
 				fmt.Sprintf("provisioning profile %q is for a different device type than %q", p.earmarkToken, dt.Token))
 			continue
 		}
+		if p.earmark != nil {
+			// A certificate profile's devices carry the token derived from their external id
+			// (x509EarmarkToken); an import row names its token, so it must be that one.
+			ext := p.external
+			if _, err := x509EarmarkToken(p.earmark, row.Token, &ext); err != nil || (p.earmark.TrustAnchorId != nil && strings.TrimSpace(row.Token) == "") {
+				msg := "the token must be the one derived from the externalId for a certificate profile"
+				if err != nil {
+					msg = err.Error()
+				}
+				result.set(i, row, DeviceImportInvalid, importCodeInvalidValue, msg)
+				continue
+			}
+		}
 		if p.external != "" && byExternal[p.external] != nil {
 			result.set(i, row, DeviceImportConflict, conflict.Code, "externalId is already in use by another device")
 			continue
@@ -676,11 +697,12 @@ func (api *Api) createImportedDevice(ctx context.Context, p *importRow, dt *Devi
 		// The earmarked profile is locked before the device is inserted, the order a registration
 		// takes them in (see lockEarmarkProfiles).
 		if p.earmarkToken != "" {
-			id, err := lockEarmarkProfile(tx, p.earmarkToken, dt)
+			profile, err := lockEarmarkProfile(tx, p.earmarkToken, dt)
 			if err != nil {
 				return err
 			}
-			device.ExpectedProvisioningProfileId = id
+			id := profile.ID
+			device.ExpectedProvisioningProfileId = &id
 		}
 		if err := tx.Create(device).Error; err != nil {
 			return err
@@ -711,4 +733,42 @@ func (api *Api) createImportedDevice(ctx context.Context, p *importRow, dt *Devi
 	}
 	device.DeviceType = dt
 	return device, nil
+}
+
+// deriveCertificateTokens fills in the omitted token of every row that names a certificate
+// profile and an external id. Rows that name neither, or whose profile is not found or is not a
+// certificate profile, are left exactly as given (and refused later, by the usual checks).
+func (api *Api) deriveCertificateTokens(ctx context.Context, rows []*DeviceImportRow) ([]*DeviceImportRow, error) {
+	tokens := make([]string, 0)
+	wants := func(row *DeviceImportRow) bool {
+		return row != nil && strings.TrimSpace(row.Token) == "" && !blank(row.ProvisioningProfileToken) && !blank(row.ExternalId)
+	}
+	for _, row := range rows {
+		if wants(row) {
+			if t := strings.TrimSpace(*row.ProvisioningProfileToken); !slices.Contains(tokens, t) {
+				tokens = append(tokens, t)
+			}
+		}
+	}
+	if len(tokens) == 0 {
+		return rows, nil
+	}
+	found, err := api.ProvisioningProfilesByToken(ctx, tokens)
+	if err != nil {
+		return nil, err
+	}
+	certificate := map[string]bool{}
+	for _, p := range found {
+		certificate[p.Token] = p.TrustAnchorId != nil
+	}
+	out := make([]*DeviceImportRow, len(rows))
+	for i, row := range rows {
+		out[i] = row
+		if wants(row) && certificate[strings.TrimSpace(*row.ProvisioningProfileToken)] {
+			cp := *row
+			cp.Token = DeriveX509DeviceToken(strings.TrimSpace(*row.ExternalId))
+			out[i] = &cp
+		}
+	}
+	return out, nil
 }

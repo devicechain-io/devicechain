@@ -147,12 +147,24 @@ const CREATE_PROFILE = graphql(`
   }
 `);
 
+/**
+ * The server returns no secret for a certificate profile (one that authenticates devices by
+ * client certificate). This screen only creates and rotates secret profiles, so a missing
+ * secret here is a fault to surface, not a state to render.
+ */
+function withSecret<T extends { issuedSecret: string | null }>(result: T): T & { issuedSecret: string } {
+  if (result.issuedSecret === null) {
+    throw new Error('the server issued no provision secret for this profile');
+  }
+  return { ...result, issuedSecret: result.issuedSecret };
+}
+
 /** Creates a profile. The returned secret is the only time it can be seen. */
 export async function createProvisioningProfile(
   request: ProvisioningProfileCreateRequest,
 ): Promise<IssuedProfileSecret> {
   const data = await gql('device-management', CREATE_PROFILE, { request });
-  return data.createProvisioningProfile;
+  return withSecret(data.createProvisioningProfile);
 }
 
 const ROTATE_SECRET = graphql(`
@@ -190,7 +202,7 @@ const ROTATE_SECRET = graphql(`
  */
 export async function rotateProvisioningProfileSecret(token: string): Promise<IssuedProfileSecret> {
   const data = await gql('device-management', ROTATE_SECRET, { token });
-  return data.rotateProvisioningProfileSecret;
+  return withSecret(data.rotateProvisioningProfileSecret);
 }
 
 const UPDATE_PROFILE = graphql(`

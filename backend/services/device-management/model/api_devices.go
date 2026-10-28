@@ -329,13 +329,18 @@ func (api *Api) CreateDevice(ctx context.Context, request *DeviceCreateRequest) 
 		// An earmark is checked and its profile locked BEFORE the device is inserted (see
 		// lockEarmarkProfiles for why the order matters).
 		if token := earmarkToken(request.ProvisioningProfileToken); token != "" {
-			id, err := lockEarmarkProfile(tx, token, matches[0])
+			profile, err := lockEarmarkProfile(tx, token, matches[0])
 			if err != nil {
 				return err
 			}
-			created.ExpectedProvisioningProfileId = id
+			// A certificate profile's devices carry the token derived from their external id.
+			if created.Token, err = x509EarmarkToken(profile, created.Token, request.ExternalId); err != nil {
+				return err
+			}
+			id := profile.ID
+			created.ExpectedProvisioningProfileId = &id
 		}
-		gatewayId, err := gatewayForNewDevice(tx, request.Token, request.GatewayToken)
+		gatewayId, err := gatewayForNewDevice(tx, created.Token, request.GatewayToken)
 		if err != nil {
 			return err
 		}
@@ -440,16 +445,21 @@ func (api *Api) CreateDevices(ctx context.Context, requests []*DeviceCreateReque
 				return fmt.Errorf("device type %q: %w", request.DeviceTypeToken, gorm.ErrRecordNotFound)
 			}
 			var earmarkId *uint
+			deviceToken := request.Token
 			if token := earmarkToken(request.ProvisioningProfileToken); token != "" {
 				if err := checkEarmark(token, earmarkProfiles[token], dt.ID, dt.Token); err != nil {
 					return fmt.Errorf("device %q: %w", request.Token, err)
 				}
 				id := earmarkProfiles[token].ID
 				earmarkId = &id
+				// A certificate profile's devices carry the token derived from their external id.
+				if deviceToken, err = x509EarmarkToken(earmarkProfiles[token], request.Token, request.ExternalId); err != nil {
+					return fmt.Errorf("device %q: %w", request.Token, err)
+				}
 			}
 			metadataJSON := metadataByIndex[i]
 			device := &Device{
-				TokenReference:    rdb.TokenReference{Token: request.Token},
+				TokenReference:    rdb.TokenReference{Token: deviceToken},
 				ExternalReference: rdb.ExternalReference{ExternalId: rdb.NullStrOf(request.ExternalId)},
 				NamedEntity: rdb.NamedEntity{
 					Name:        rdb.NullStrOf(request.Name),
@@ -750,6 +760,13 @@ func (api *Api) UpdateDevice(ctx context.Context, token string, request *DeviceU
 		updated.DeviceTypeId = types[0].ID
 	}
 
+	if proposed := request.ExternalId.ApplyToNullString(updated.ExternalId); proposed != updated.ExternalId {
+		// A device earmarked for a certificate profile has the token derived from its external id,
+		// which is the certificate common name; changing the one would orphan the other.
+		if err := api.refuseExternalIdChangeUnderCertificateEarmark(ctx, updated); err != nil {
+			return nil, err
+		}
+	}
 	updated.ExternalId = request.ExternalId.ApplyToNullString(updated.ExternalId)
 	updated.Name = request.Name.ApplyToNullString(updated.Name)
 	updated.Description = request.Description.ApplyToNullString(updated.Description)

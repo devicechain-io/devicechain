@@ -39,13 +39,16 @@ import (
 // writes instead. Setting both means neither caller has to reach around this
 // function to get a correct row.
 func buildDeviceCredential(key *credential.DeviceSecretKey, device *Device, request *DeviceCredentialCreateRequest) (*DeviceCredential, error) {
-	// Validate credential type against the known vocabulary. A retired type is refused
-	// with its own typed error, not as an unknown one.
-	if CredentialType(request.CredentialType).Retired() {
-		return nil, &UnsupportedCredentialTypeError{Type: CredentialType(request.CredentialType)}
+	// Validate credential type against the known vocabulary. A certificate credential is built
+	// by createX509Credential, which resolves the trust anchor; this function does no I/O.
+	if CredentialType(request.CredentialType) == CredentialX509Certificate {
+		return nil, refuseX509Elsewhere()
 	}
 	if !CredentialType(request.CredentialType).Valid() {
 		return nil, fmt.Errorf("invalid credential type: %s", request.CredentialType)
+	}
+	if err := refuseX509Fields(request); err != nil {
+		return nil, err
 	}
 
 	// Parse optional expiration timestamp (RFC3339).
@@ -222,6 +225,9 @@ func (api *Api) CreateDeviceCredential(ctx context.Context, request *DeviceCrede
 		return nil, gorm.ErrRecordNotFound
 	}
 
+	if CredentialType(request.CredentialType) == CredentialX509Certificate {
+		return api.createX509Credential(ctx, matches[0], request)
+	}
 	created, err := buildDeviceCredential(api.DeviceSecretKey, matches[0], request)
 	if err != nil {
 		return nil, err
@@ -278,11 +284,21 @@ func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 	// The vocabulary check runs only when the caller named the type: an absent field has
 	// nothing to validate, and checking the stored value instead would refuse a metadata
 	// edit over a type the caller never sent.
-	if request.CredentialType.Set && CredentialType(credentialType).Retired() {
-		return nil, &UnsupportedCredentialTypeError{Type: CredentialType(credentialType)}
-	}
 	if request.CredentialType.Set && !CredentialType(credentialType).Valid() {
 		return nil, fmt.Errorf("invalid credential type: %s", credentialType)
+	}
+	// A certificate credential is its certificate: the type, the pin, the chain's expiry and
+	// the anchor are all derived at create and none can be edited, so a credential cannot be
+	// turned into one (it would have no certificate) nor out of one (its pin would be read as
+	// some other type's id). What can change is whether it is enabled, its metadata, and which
+	// device holds it.
+	if CredentialType(updated.CredentialType) == CredentialX509Certificate &&
+		(request.CredentialType.Set || request.CredentialId.Set || request.CredentialValue.Set || request.ExpiresAt.Set) {
+		return nil, invalidAnchor("a %s credential's type, id, secret and expiry come from its certificate and cannot be edited; "+
+			"create a new credential for a new certificate", CredentialX509Certificate)
+	}
+	if request.CredentialType.Set && CredentialType(credentialType) == CredentialX509Certificate {
+		return nil, refuseX509Elsewhere()
 	}
 	credentialId, err := request.CredentialId.ApplyToRequired("credentialId", updated.CredentialId)
 	if err != nil {
@@ -353,10 +369,30 @@ func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 
 	// provisioning_profile_id is provenance: the self-registration operation sets it and nothing
 	// else may change it, so an update never writes it (a stale copy would otherwise put back the
-	// profile of a credential that was removed and re-issued meanwhile).
-	result := api.RDB.DB(ctx).Omit("ProvisioningProfileId").Save(updated)
-	if result.Error != nil {
-		return nil, result.Error
+	// profile of a credential that was removed and re-issued meanwhile). trust_anchor_id and
+	// certificate_pem are the certificate credential's, fixed at create, so an update has no
+	// reason to write them either.
+	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		// A certificate credential moved onto another device counts against THAT device's limit,
+		// counted under its row lock so two moves (or a move and a create) cannot both fit the
+		// last slot. Any other credential type moves freely.
+		if repoint && CredentialType(updated.CredentialType) == CredentialX509Certificate {
+			if err := lockDeviceRow(tx, device.ID); err != nil {
+				return err
+			}
+			n, err := countX509Credentials(tx, device.ID)
+			if err != nil {
+				return err
+			}
+			if n >= MaxX509CredentialsPerDevice {
+				return invalidAnchor("device %q already holds %d certificate credentials, the most it may hold; remove one first",
+					device.Token, n)
+			}
+		}
+		return tx.Omit("ProvisioningProfileId", "TrustAnchorId", "CertificatePem").Save(updated).Error
+	})
+	if err != nil {
+		return nil, err
 	}
 	// EVERY committed update evicts, a metadata-only edit included: one database read on
 	// the device's next event, in place of a field-by-field judgement of which changes

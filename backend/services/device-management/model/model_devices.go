@@ -6,7 +6,6 @@ package model
 import (
 	"database/sql"
 	"errors"
-	"fmt"
 
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -389,54 +388,33 @@ const (
 	CredentialAccessToken CredentialType = "ACCESS_TOKEN"
 	CredentialMqttBasic   CredentialType = "MQTT_BASIC"
 
-	// CredentialX509Certificate is RETIRED, not part of the vocabulary: it is not accepted
-	// until certificate verification ships, so the type is refused at create and update
-	// (typed UNSUPPORTED) and at authentication (a stored row can never authenticate). The
-	// constant survives only so that refusal can name it, and so a test can seed a stored
-	// row. It returns to Valid() when certificate verification ships.
+	// CredentialX509Certificate is a client certificate pinned by the SHA-256 of its leaf DER
+	// and bound to the trust anchor its chain must reach. Unlike the other two types it is NOT
+	// presented by id: the id is a public value (the pin), so a connect that offered it as a
+	// bearer would authenticate on a readable string. The device proves possession of the
+	// certificate's key in the TLS handshake instead, and the chain is verified at every
+	// connect (core x509trust). It is therefore created only by CreateDeviceCredential, which
+	// computes the pin from the certificate, and PresentedById is false for it.
 	CredentialX509Certificate CredentialType = "X509_CERTIFICATE"
 )
 
 // Valid reports whether the credential type names one of the supported types.
 func (t CredentialType) Valid() bool {
 	switch t {
-	case CredentialAccessToken, CredentialMqttBasic:
+	case CredentialAccessToken, CredentialMqttBasic, CredentialX509Certificate:
 		return true
 	default:
 		return false
 	}
 }
 
-// Retired reports whether the type is a recognized but unsupported member of the
-// vocabulary: refused with a typed code rather than as an unknown type.
-func (t CredentialType) Retired() bool {
-	return t == CredentialX509Certificate
-}
-
-// UnsupportedCredentialTypeError is the typed refusal of a retired credential type. It
-// carries extensions.code UNSUPPORTED, and must reach graphql-go UNWRAPPED for the code to
-// be served (see UnsupportedCredentialTypeOf).
-type UnsupportedCredentialTypeError struct {
-	Type CredentialType
-}
-
-func (e *UnsupportedCredentialTypeError) Error() string {
-	return fmt.Sprintf("credential type %s is not supported until certificate verification ships; use ACCESS_TOKEN or MQTT_BASIC", e.Type)
-}
-
-// Extensions gives the refusal its wire code.
-func (e *UnsupportedCredentialTypeError) Extensions() map[string]any {
-	return map[string]any{"code": "UNSUPPORTED"}
-}
-
-// UnsupportedCredentialTypeOf returns the typed refusal found anywhere in err's chain, or
-// err unchanged. A resolver returns its result so the code reaches the wire.
-func UnsupportedCredentialTypeOf(err error) error {
-	var unsupported *UnsupportedCredentialTypeError
-	if errors.As(err, &unsupported) {
-		return unsupported
-	}
-	return err
+// PresentedById reports whether a device authenticates with this type by presenting its
+// credential id (an access token, an MQTT username), as opposed to proving possession of a
+// key. It is the gate every id-based authentication path applies BEFORE it looks anything up:
+// a certificate's pin is public, so a path that treated it like an id would authenticate on
+// a value anyone who has seen the certificate can type.
+func (t CredentialType) PresentedById() bool {
+	return t == CredentialAccessToken || t == CredentialMqttBasic
 }
 
 // String returns the underlying string value.
@@ -454,6 +432,13 @@ type DeviceCredentialCreateRequest struct {
 	Enabled         bool
 	ExpiresAt       *string
 	Metadata        *string
+	// CertificatePem and TrustAnchorToken create an X509_CERTIFICATE credential: the device's
+	// certificate (optionally followed by the intermediates that link it to the anchor) and
+	// the token of the tenant trust anchor its chain must reach. The credentialId is computed
+	// from the certificate and a caller-supplied one is refused; the expiry is the chain's.
+	// Both are refused for any other type.
+	CertificatePem   *string
+	TrustAnchorToken *string
 }
 
 // A PARTIAL update to a device credential: omit a field to leave the stored value
@@ -519,6 +504,14 @@ type DeviceCredential struct {
 	// a readable sentence, and the constraint is the backstop that turns a missed check into a
 	// refused delete instead of a dangling id.
 	ProvisioningProfileId *uint
+	// TrustAnchorId is the tenant trust anchor an X509_CERTIFICATE credential's chain must reach
+	// at every connect, nil for any other type (and for a certificate credential stored before
+	// anchors existed, which therefore never authenticates). ON DELETE RESTRICT.
+	TrustAnchorId *uint
+	// CertificatePem is the pinned leaf certificate of an X509_CERTIFICATE credential, for
+	// display and audit. It is public; nothing authenticates from it (the pin in CredentialId
+	// and the presented chain do).
+	CertificatePem sql.NullString
 	// CredentialId is what the credential is looked up by. For MQTT_BASIC it is the
 	// username as sent. For ACCESS_TOKEN it is the keyed digest of the token, never the
 	// token: the token is a bearer secret, and a copy of the database must not hold one.

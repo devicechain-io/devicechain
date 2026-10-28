@@ -271,6 +271,9 @@ func replacementCredentialRequest(request *DeviceReplaceRequest, deviceToken str
 		// buildDeviceCredential's vocabulary check either way. Only report the missing
 		// id for a type that actually exists, so an operator who mistyped the TYPE is
 		// not told to supply an id for it.
+		if CredentialType(credentialType) == CredentialX509Certificate {
+			return nil, refuseX509Elsewhere()
+		}
 		if CredentialType(credentialType).Valid() {
 			return nil, fmt.Errorf("%w (%s)", ErrCredentialIdRequired, credentialType)
 		}

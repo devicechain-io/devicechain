@@ -4,9 +4,11 @@
 package model
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/integrity"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -70,9 +72,8 @@ func checkEarmark(token string, profile *ProvisioningProfile, deviceTypeId uint,
 	return nil
 }
 
-// lockEarmarkProfile locks and checks the one profile a device is earmarked for, returning its
-// id for the device row.
-func lockEarmarkProfile(tx *gorm.DB, token string, deviceType *DeviceType) (*uint, error) {
+// lockEarmarkProfile locks and checks the one profile a device is earmarked for, returning it.
+func lockEarmarkProfile(tx *gorm.DB, token string, deviceType *DeviceType) (*ProvisioningProfile, error) {
 	profiles, err := lockEarmarkProfiles(tx, []string{token})
 	if err != nil {
 		return nil, err
@@ -81,6 +82,64 @@ func lockEarmarkProfile(tx *gorm.DB, token string, deviceType *DeviceType) (*uin
 	if err := checkEarmark(token, profile, deviceType.ID, deviceType.Token); err != nil {
 		return nil, err
 	}
-	id := profile.ID
-	return &id, nil
+	return profile, nil
+}
+
+// x509DeviceTokenPrefix namespaces a token derived from a certificate's common name, as "sp-" and
+// "lw-" do for their protocols.
+const x509DeviceTokenPrefix = "pv-"
+
+// DeriveX509DeviceToken is the token of a device that registers itself by certificate: a pure
+// function of the certificate's common name (the device's external id), so the MQTT client id
+// the broker requires, which carries the token, can be computed from the certificate alone and
+// checked BEFORE anything is written.
+func DeriveX509DeviceToken(commonName string) string {
+	return core.DeriveDeviceToken(commonName, x509DeviceTokenPrefix)
+}
+
+// x509EarmarkToken applies the rule for a device earmarked for a certificate profile: its token
+// must be the derived one, because a profile that adopts the device when its certificate first
+// connects pins the MQTT client id to the device's token, and the connecting side can only
+// compute the derived token. An omitted token takes the derived value; one that differs is
+// refused. The device's external id is the certificate's common name, so it is required. A
+// profile that is not a certificate profile leaves the token as given.
+func x509EarmarkToken(profile *ProvisioningProfile, token string, externalId *string) (string, error) {
+	if profile == nil || profile.TrustAnchorId == nil {
+		return token, nil
+	}
+	cn := ""
+	if externalId != nil {
+		cn = strings.TrimSpace(*externalId)
+	}
+	if cn == "" {
+		return "", fmt.Errorf("%w: externalId is required for a device earmarked for certificate profile %q: it is the certificate's common name",
+			ErrInvalidEarmark, profile.Token)
+	}
+	derived := DeriveX509DeviceToken(cn)
+	switch {
+	case strings.TrimSpace(token) == "":
+		return derived, nil
+	case token != derived:
+		return "", fmt.Errorf("%w: a device earmarked for certificate profile %q must have the token %q, derived from its externalId; omit the token to take it",
+			ErrInvalidEarmark, profile.Token, derived)
+	}
+	return token, nil
+}
+
+// refuseExternalIdChangeUnderCertificateEarmark refuses a change of a device external id while
+// the device is earmarked for a certificate profile (see x509EarmarkToken): its token is a
+// function of the external id, so the pair must stay as it was created.
+func (api *Api) refuseExternalIdChangeUnderCertificateEarmark(ctx context.Context, device *Device) error {
+	if device.ExpectedProvisioningProfileId == nil {
+		return nil
+	}
+	profiles, err := api.ProvisioningProfilesById(ctx, []uint{*device.ExpectedProvisioningProfileId})
+	if err != nil {
+		return err
+	}
+	if len(profiles) == 1 && profiles[0].TrustAnchorId != nil {
+		return fmt.Errorf("%w: the externalId of a device earmarked for certificate profile %q cannot change: "+
+			"its token %q is derived from it", ErrInvalidEarmark, profiles[0].Token, device.Token)
+	}
+	return nil
 }

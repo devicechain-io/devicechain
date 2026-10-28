@@ -412,6 +412,13 @@ export type DeviceCreateRequest = {
 
 export type DeviceCredentialCreateRequest = {
   /**
+   * X509_CERTIFICATE only: the device certificate in PEM, optionally followed by the
+   * intermediates that link it to the trust anchor. The chain is verified when the credential
+   * is created, so one that could not authenticate is refused with INVALID_VALUE. Only the
+   * device certificate is stored. Requires trustAnchorToken. Refused for any other type.
+   */
+  certificatePem?: string | null | undefined;
+  /**
    * The MQTT username, or the access token for ACCESS_TOKEN (at most 256 bytes). The token
    * is stored only as a keyed digest and is returned once, in this mutation's response.
    */
@@ -429,6 +436,8 @@ export type DeviceCredentialCreateRequest = {
   expiresAt?: string | null | undefined;
   metadata?: string | null | undefined;
   token: string;
+  /** X509_CERTIFICATE only: the trust anchor the certificate's chain must reach, at creation and at every connect. */
+  trustAnchorToken?: string | null | undefined;
 };
 
 export type DeviceCredentialSearchCriteria = {
@@ -1120,6 +1129,14 @@ export type ProvisioningProfileCreateRequest = {
   provisionKey: string;
   strategy: string;
   token: string;
+  /**
+   * Makes this a certificate profile: its devices authenticate by a client certificate whose
+   * chain reaches this trust anchor, and it has no provision secret. credentialType, when
+   * sent, must be X509_CERTIFICATE. A tenant may hold eight certificate profiles. A device
+   * earmarked for one must have the token derived from its externalId, and takes it when the
+   * token is left empty.
+   */
+  trustAnchorToken?: string | null | undefined;
 };
 
 export type ProvisioningProfileSearchCriteria = {
@@ -1144,6 +1161,11 @@ export type ProvisioningProfileUpdateRequest = {
   name?: string | null | undefined;
   provisionKey?: string | null | undefined;
   strategy?: string | null | undefined;
+  /**
+   * Re-points a certificate profile at another trust anchor. Null is refused, and so is naming
+   * an anchor on a profile that authenticates by secret.
+   */
+  trustAnchorToken?: string | null | undefined;
 };
 
 /** Which integration's unregistered devices to return, and the page. Most recently seen first. */
@@ -2229,14 +2251,14 @@ export type CreateProvisioningProfileMutationVariables = Exact<{
 }>;
 
 
-export type CreateProvisioningProfileMutation = { createProvisioningProfile: { issuedSecret: string, profile: { id: string, token: string, name: string | null, description: string | null, provisionKey: string, strategy: string, credentialType: string, enabled: boolean, expiresAt: string | null, maxDevices: number | null, provisionedDeviceCount: number, secretIssued: boolean, createdAt: string | null, updatedAt: string | null, deviceType: { id: string, token: string, name: string | null } } } };
+export type CreateProvisioningProfileMutation = { createProvisioningProfile: { issuedSecret: string | null, profile: { id: string, token: string, name: string | null, description: string | null, provisionKey: string, strategy: string, credentialType: string, enabled: boolean, expiresAt: string | null, maxDevices: number | null, provisionedDeviceCount: number, secretIssued: boolean, createdAt: string | null, updatedAt: string | null, deviceType: { id: string, token: string, name: string | null } } } };
 
 export type RotateProvisioningProfileSecretMutationVariables = Exact<{
   token: string;
 }>;
 
 
-export type RotateProvisioningProfileSecretMutation = { rotateProvisioningProfileSecret: { issuedSecret: string, profile: { id: string, token: string, name: string | null, description: string | null, provisionKey: string, strategy: string, credentialType: string, enabled: boolean, expiresAt: string | null, maxDevices: number | null, provisionedDeviceCount: number, secretIssued: boolean, createdAt: string | null, updatedAt: string | null, deviceType: { id: string, token: string, name: string | null } } } };
+export type RotateProvisioningProfileSecretMutation = { rotateProvisioningProfileSecret: { issuedSecret: string | null, profile: { id: string, token: string, name: string | null, description: string | null, provisionKey: string, strategy: string, credentialType: string, enabled: boolean, expiresAt: string | null, maxDevices: number | null, provisionedDeviceCount: number, secretIssued: boolean, createdAt: string | null, updatedAt: string | null, deviceType: { id: string, token: string, name: string | null } } } };
 
 export type UpdateProvisioningProfileMutationVariables = Exact<{
   token: string;

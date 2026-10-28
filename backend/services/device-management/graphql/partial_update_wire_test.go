@@ -107,6 +107,11 @@ var partialUpdateMutations = []partialUpdateMutation{
 		// re-interpret traffic from a sender that has not changed.
 		forbidden: []string{"type"},
 	},
+	{
+		mutation: "updateDeviceTrustAnchor", input: "DeviceTrustAnchorUpdateRequest",
+		// Another CA is another anchor: the certificate cannot be edited.
+		forbidden: []string{"certificatePem"},
+	},
 	{mutation: "updateEntityRelationshipType", input: "EntityRelationshipTypeUpdateRequest"},
 	// The last conversion. Its token was a RENAME channel on this input rather than a
 	// duplicate identity, so it is not listed in `forbidden` — `token` is checked for

@@ -2581,7 +2581,9 @@ type DeviceCredential implements Model & TokenReference & MetadataEntity {
     which is the one time it can be read: the platform stores an access token as a keyed
     digest and cannot return it afterwards. Every later read returns a fingerprint that
     identifies the credential and cannot be presented as the token. If the token is lost,
-    set a new one with updateDeviceCredential.
+    set a new one with updateDeviceCredential. For X509_CERTIFICATE it is the SHA-256 of the
+    device certificate (hex), computed by the server; it is public and is not something a
+    device presents.
     """
     credentialId: String!
     # Write-only: accepted on create/update but never returned on read (always
@@ -2596,6 +2598,25 @@ type DeviceCredential implements Model & TokenReference & MetadataEntity {
     an operator created. Requires device:read, unscoped.
     """
     provisioningProfile: ProvisioningProfile
+    """
+    The certificate an X509_CERTIFICATE credential pins, or null for any other type. Requires
+    device:read, unscoped.
+    """
+    certificate: X509Certificate
+}
+
+"""The pinned device certificate of an X509_CERTIFICATE credential, read back from what is stored."""
+type X509Certificate {
+    """SHA-256 of the certificate, hex. The credential's id."""
+    fingerprintSha256: String!
+    """The certificate's subject common name: the device's external id when it registers itself."""
+    subjectCn: String!
+    """The certificate's serial number, hex."""
+    serialHex: String!
+    """When the certificate itself expires. The credential's expiresAt is the earliest expiry over its whole chain."""
+    notAfter: String!
+    """The trust anchor the certificate's chain must reach at every connect."""
+    trustAnchor: DeviceTrustAnchor
 }
 
 # Data required to create a device credential.
@@ -2618,6 +2639,15 @@ input DeviceCredentialCreateRequest {
     enabled: Boolean!
     expiresAt: String
     metadata: String
+    """
+    X509_CERTIFICATE only: the device certificate in PEM, optionally followed by the
+    intermediates that link it to the trust anchor. The chain is verified when the credential
+    is created, so one that could not authenticate is refused with INVALID_VALUE. Only the
+    device certificate is stored. Requires trustAnchorToken. Refused for any other type.
+    """
+    certificatePem: String
+    """X509_CERTIFICATE only: the trust anchor the certificate's chain must reach, at creation and at every connect."""
+    trustAnchorToken: String
 }
 
 # A PARTIAL update. Every field is optional in three senses, not two: omit it to leave
@@ -2924,9 +2954,15 @@ type ProvisioningProfile implements Model & TokenReference & NamedEntity & Metad
     """
     False for a profile whose secret was chosen by an operator (every profile created before
     the server generated secrets). The registration endpoint refuses such a profile with
-    PROVISIONING_FAILED until rotateProvisioningProfileSecret issues it a secret.
+    PROVISIONING_FAILED until rotateProvisioningProfileSecret issues it a secret. Always false
+    for a certificate profile, which has no secret.
     """
     secretIssued: Boolean!
+    """
+    The trust anchor a certificate profile authenticates its devices against, or null for a
+    profile that authenticates by secret. A certificate profile has no provision secret.
+    """
+    trustAnchor: DeviceTrustAnchor
 }
 
 """
@@ -2939,9 +2975,10 @@ type ProvisioningProfileSecretResult {
     profile: ProvisioningProfile!
     """
     43 characters, 256 bits. Show it to the operator once; devices present it, with the
-    profile's provisionKey, to the registration endpoint.
+    profile's provisionKey, to the registration endpoint. Null for a certificate profile,
+    which has no secret.
     """
-    issuedSecret: String!
+    issuedSecret: String
 }
 
 # Data required to create a provisioning profile.
@@ -2964,6 +3001,14 @@ input ProvisioningProfileCreateRequest {
     metadata: String
     """The most devices the profile may register; at least 1. Omit or send null for no cap."""
     maxDevices: Int
+    """
+    Makes this a certificate profile: its devices authenticate by a client certificate whose
+    chain reaches this trust anchor, and it has no provision secret. credentialType, when
+    sent, must be X509_CERTIFICATE. A tenant may hold eight certificate profiles. A device
+    earmarked for one must have the token derived from its externalId, and takes it when the
+    token is left empty.
+    """
+    trustAnchorToken: String
 }
 
 # A PARTIAL update. Every field is optional in three senses, not two: omit it to leave
@@ -3000,6 +3045,11 @@ input ProvisioningProfileUpdateRequest {
     """
     maxDevices: Int
     metadata: String
+    """
+    Re-points a certificate profile at another trust anchor. Null is refused, and so is naming
+    an anchor on a profile that authenticates by secret.
+    """
+    trustAnchorToken: String
 }
 
 # Criteria used when searching for provisioning profiles.
@@ -3014,6 +3064,111 @@ input ProvisioningProfileSearchCriteria {
 # Search results returned from provisioning profile query.
 type ProvisioningProfileSearchResults {
     results: [ProvisioningProfile!]!
+    pagination: SearchResultsPagination!
+}
+
+"""
+A CA certificate a tenant trusts to vouch for its devices' client certificates. It is public
+material. An X509_CERTIFICATE credential, and a certificate provisioning profile, name the
+anchor their chain must reach, and it is checked at EVERY connect: disabling the anchor
+withdraws the CA at once and ends the live sessions of the devices that rely on it. A root or
+an intermediate may be an anchor; anchor at the narrowest intermediate to trust one sub-CA of a
+manufacturer's PKI. Name constraints on an anchor or on any CA below it are not supported and
+are refused: identity is the certificate's subject common name, which name constraints do not
+cover.
+"""
+type DeviceTrustAnchor implements Model & TokenReference & NamedEntity & MetadataEntity {
+    """Server-assigned numeric identifier, as a string."""
+    id: ID!
+    """When the anchor was created, as an RFC 3339 timestamp."""
+    createdAt: String
+    """When the anchor was last written, as an RFC 3339 timestamp."""
+    updatedAt: String
+    """Always null: deleted anchors are not returned by this API."""
+    deletedAt: String
+    """Identifier of the anchor, unique within the tenant."""
+    token: String!
+    """Human-readable name. Null when none is set."""
+    name: String
+    """Free-text description. Null when none is set."""
+    description: String
+    """Free-form JSON the platform stores and does not interpret. Null when none is set."""
+    metadata: String
+    """The CA certificate, PEM."""
+    certificatePem: String!
+    """SHA-256 of the certificate, hex. Unique within the tenant."""
+    fingerprintSha256: String!
+    """The certificate's subject distinguished name."""
+    subject: String!
+    """The certificate's issuer distinguished name; equal to the subject for a root."""
+    issuer: String!
+    """When the certificate becomes valid, as an RFC 3339 timestamp."""
+    notBefore: String!
+    """When the certificate expires, as an RFC 3339 timestamp. Chains to it stop authenticating then."""
+    notAfter: String!
+    """False withdraws the CA: no chain to it authenticates, and the devices relying on it are disconnected."""
+    enabled: Boolean!
+    """How many credentials rely on the anchor, soft-deleted ones included (they hold the delete refusal too)."""
+    credentialCount: Int!
+    """How many provisioning profiles authenticate against the anchor."""
+    profileCount: Int!
+}
+
+"""Data required to create a trust anchor."""
+input DeviceTrustAnchorCreateRequest {
+    """Identifier of the anchor, unique within the tenant."""
+    token: String!
+    """Human-readable name."""
+    name: String
+    """Free-text description."""
+    description: String
+    """
+    Exactly one CA certificate in PEM: it must be a CA that may sign certificates, unexpired,
+    use an RSA (2048 to 8192 bits), P-256, P-384 or Ed25519 key, be signed with a modern hash,
+    and carry no name constraints. A private key anywhere in the text is refused. A tenant may
+    hold 32 anchors.
+    """
+    certificatePem: String!
+    """Defaults to true."""
+    enabled: Boolean
+    """Free-form JSON the platform stores and does not interpret."""
+    metadata: String
+}
+
+"""
+A PARTIAL update: omit a field to leave it, send null to clear a nullable one. The
+certificate cannot be changed (another CA is another anchor).
+"""
+input DeviceTrustAnchorUpdateRequest {
+    """Human-readable name. Null clears it."""
+    name: String
+    """Free-text description. Null clears it."""
+    description: String
+    """
+    Required and unclearable. Setting it false ends the live sessions of the devices that rely
+    on the anchor; if that cannot be confirmed the change is saved and the call answers that the
+    sessions were not confirmed ended, and repeating it asks again.
+    """
+    enabled: Boolean
+    """Free-form JSON the platform stores and does not interpret. Null clears it."""
+    metadata: String
+}
+
+"""Criteria used when searching for trust anchors."""
+input DeviceTrustAnchorSearchCriteria {
+    """1-based page number."""
+    pageNumber: Int!
+    """Anchors per page."""
+    pageSize: Int!
+    """Only anchors that are (or are not) enabled."""
+    enabled: Boolean
+}
+
+"""A page of trust anchors."""
+type DeviceTrustAnchorSearchResults {
+    """The anchors on this page."""
+    results: [DeviceTrustAnchor!]!
+    """Where this page sits in the whole result."""
     pagination: SearchResultsPagination!
 }
 
@@ -4382,6 +4537,21 @@ type Query {
     ): UnregisteredIntegrationDeviceSearchResults!
     # List provisioning profiles that meet criteria.
     provisioningProfiles(criteria: ProvisioningProfileSearchCriteria!): ProvisioningProfileSearchResults!
+    """Find trust anchors by unique id."""
+    deviceTrustAnchorsById(
+        """Ids of the anchors."""
+        ids: [ID!]!
+    ): [DeviceTrustAnchor!]!
+    """Find trust anchors by unique token."""
+    deviceTrustAnchorsByToken(
+        """Tokens of the anchors."""
+        tokens: [String!]!
+    ): [DeviceTrustAnchor!]!
+    """List trust anchors that meet the criteria."""
+    deviceTrustAnchors(
+        """Paging and filters."""
+        criteria: DeviceTrustAnchorSearchCriteria!
+    ): DeviceTrustAnchorSearchResults!
     # Get a device's current possession claim, or null if it has none.
     deviceClaim(deviceToken: String!): DeviceClaim
 
@@ -4936,6 +5106,26 @@ type Mutation {
     updateProvisioningProfile(token: String!, request: ProvisioningProfileUpdateRequest!): ProvisioningProfile!
     # Delete a single provisioning profile.
     deleteProvisioningProfile(token: String!): Boolean!
+    """Create a trust anchor from a CA certificate. Refused when the tenant already holds 32."""
+    createDeviceTrustAnchor(
+        """The anchor to create."""
+        request: DeviceTrustAnchorCreateRequest!
+    ): DeviceTrustAnchor!
+    """Update a trust anchor. Disabling one ends the live sessions of the devices that rely on it."""
+    updateDeviceTrustAnchor(
+        """Token of the anchor."""
+        token: String!
+        """The fields to change."""
+        request: DeviceTrustAnchorUpdateRequest!
+    ): DeviceTrustAnchor!
+    """
+    Delete a trust anchor nothing relies on. Refused with extensions.code REFERENCE_VIOLATION while a
+    credential or a provisioning profile still names it.
+    """
+    deleteDeviceTrustAnchor(
+        """Token of the anchor."""
+        token: String!
+    ): Boolean!
     """
     Create an inbound integration. The response carries the bearer token the server
     generated for it, once. Refused when the tenant already holds as many integrations as its

@@ -139,8 +139,9 @@ func hasPEMBlock(b []byte) bool {
 // anywhere on the path, anchor included; a chain that is expired or not yet valid; anything
 // that does not build to the anchor.
 //
-// Time: now, except that a leaf whose notBefore lies within NotBeforeSkew in the future is
-// verified at its notBefore.
+// Time: now, except that the instant is moved forward to the notBefore of the leaf, or of the
+// anchor, when that lies within NotBeforeSkew in the future (a freshly issued certificate, or a
+// freshly minted CA, on a clock slightly behind the issuer's); notAfter is always enforced.
 //
 // 🔴 THE TRUST ANCHOR IS THE IDENTITY BOUNDARY, and name constraints are NOT honoured. A device
 // is identified by its certificate's subject common name, but Go applies a CA's name constraints
@@ -199,8 +200,10 @@ func VerifyClientChain(anchor *x509.Certificate, presented []*x509.Certificate, 
 	}
 
 	at := now
-	if leaf.NotBefore.After(now) && leaf.NotBefore.Sub(now) <= NotBeforeSkew {
-		at = leaf.NotBefore
+	for _, c := range []*x509.Certificate{leaf, anchor} {
+		if c.NotBefore.After(at) && c.NotBefore.Sub(now) <= NotBeforeSkew {
+			at = c.NotBefore
+		}
 	}
 	roots := x509.NewCertPool()
 	roots.AddCert(anchor)

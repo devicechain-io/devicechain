@@ -9,6 +9,7 @@ import (
 	"fmt"
 
 	"github.com/devicechain-io/dc-device-management/model"
+	"github.com/devicechain-io/dc-microservice/auth"
 	util "github.com/devicechain-io/dc-microservice/graphql"
 	gql "github.com/graph-gophers/graphql-go"
 )
@@ -95,6 +96,37 @@ func (r *DeviceCredentialResolver) ProvisioningProfile(ctx context.Context) (*Pr
 		return nil, nil
 	}
 	return r.S.provisioningProfileByID(ctx, *r.M.ProvisioningProfileId)
+}
+
+// Certificate is the pinned certificate of an X509_CERTIFICATE credential, or nil. Requires
+// device:read, unscoped, because it can name the credential's trust anchor.
+func (r *DeviceCredentialResolver) Certificate(ctx context.Context) (*X509CertificateResolver, error) {
+	info := r.M.X509Info()
+	if info == nil {
+		return nil, nil
+	}
+	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+	return &X509CertificateResolver{M: *info, S: r.S, C: r.C}, nil
+}
+
+// X509CertificateResolver resolves the X509Certificate type.
+type X509CertificateResolver struct {
+	M model.X509CertificateInfo
+	S *SchemaResolver
+	C context.Context
+}
+
+func (r *X509CertificateResolver) FingerprintSha256() string { return r.M.FingerprintSha256 }
+func (r *X509CertificateResolver) SubjectCn() string         { return r.M.SubjectCn }
+func (r *X509CertificateResolver) SerialHex() string         { return r.M.SerialHex }
+func (r *X509CertificateResolver) NotAfter() string          { return *util.FormatTime(r.M.NotAfter) }
+func (r *X509CertificateResolver) TrustAnchor(ctx context.Context) (*DeviceTrustAnchorResolver, error) {
+	if r.M.TrustAnchorId == 0 {
+		return nil, nil
+	}
+	return r.S.trustAnchorByID(ctx, r.M.TrustAnchorId)
 }
 
 func (r *DeviceCredentialResolver) Device() *DeviceResolver {

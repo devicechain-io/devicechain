@@ -148,3 +148,10 @@ func parseBundle(text string) (string, []*x509.Certificate, error) {
 	}
 	return string(out), certs, nil
 }
+
+// ParseCertificates is ParseCaBundle for a caller that needs the certificates themselves, not
+// their description: the same text rules, the certificates in the order they were given, and the
+// canonical text. An empty text returns no certificates and no error.
+func ParseCertificates(text string) (string, []*x509.Certificate, error) {
+	return parseBundle(text)
+}

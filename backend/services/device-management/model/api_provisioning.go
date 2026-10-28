@@ -125,12 +125,25 @@ func (api *Api) CreateProvisioningProfile(ctx context.Context, request *Provisio
 		return nil, fmt.Errorf("invalid provisioning strategy: %s", request.Strategy)
 	}
 
+	// A profile that names a trust anchor authenticates its devices by certificate chain: it
+	// has no secret and mints no credential, so the secret path below does not apply to it.
+	anchorToken := trimmedToken(request.TrustAnchorToken)
+	x509Profile := anchorToken != ""
+
 	// Default and constrain the minted credential type.
 	credentialType := string(CredentialAccessToken)
+	if x509Profile {
+		credentialType = string(CredentialX509Certificate)
+	}
 	if request.CredentialType != nil {
 		credentialType = *request.CredentialType
 	}
-	if !provisionableCredentialType(credentialType) {
+	if x509Profile {
+		if credentialType != string(CredentialX509Certificate) {
+			return nil, invalidAnchor("a profile with a trustAnchorToken authenticates by %s; credentialType %q does not apply",
+				CredentialX509Certificate, credentialType)
+		}
+	} else if !provisionableCredentialType(credentialType) {
 		return nil, fmt.Errorf("provisioning cannot mint credential type %q (only %s)",
 			credentialType, CredentialAccessToken)
 	}
@@ -153,14 +166,28 @@ func (api *Api) CreateProvisioningProfile(ctx context.Context, request *Provisio
 		return nil, err
 	}
 	// The secret is the server's: generated here, digested for storage, and shown ONCE, on the
-	// row handed back. ProvisionSecretIssued is what tells the endpoint it may trust it.
-	issued, err := generateProvisionSecret()
-	if err != nil {
-		return nil, err
-	}
-	secretDigest, err := api.digestProvisionSecret(deviceTypes[0].TenantId, issued)
-	if err != nil {
-		return nil, err
+	// row handed back. ProvisionSecretIssued is what tells the endpoint it may trust it. A
+	// certificate profile has none: nothing is generated, stored or shown, and the endpoint
+	// refuses a profile whose secret was never issued.
+	var (
+		issued       string
+		secretDigest sql.NullString
+		anchor       *DeviceTrustAnchor
+	)
+	if x509Profile {
+		if anchor, err = api.trustAnchorByToken(ctx, anchorToken); err != nil {
+			return nil, err
+		}
+		if err := requireUsableAnchor(anchor); err != nil {
+			return nil, err
+		}
+	} else {
+		if issued, err = generateProvisionSecret(); err != nil {
+			return nil, err
+		}
+		if secretDigest, err = api.digestProvisionSecret(deviceTypes[0].TenantId, issued); err != nil {
+			return nil, err
+		}
 	}
 	created := &ProvisioningProfile{
 		TokenReference: rdb.TokenReference{
@@ -175,7 +202,7 @@ func (api *Api) CreateProvisioningProfile(ctx context.Context, request *Provisio
 		},
 		ProvisionKey:          request.ProvisionKey,
 		ProvisionSecretDigest: secretDigest,
-		ProvisionSecretIssued: true,
+		ProvisionSecretIssued: !x509Profile,
 		Strategy:              request.Strategy,
 		DeviceType:            deviceTypes[0],
 		CredentialType:        credentialType,
@@ -183,9 +210,38 @@ func (api *Api) CreateProvisioningProfile(ctx context.Context, request *Provisio
 		ExpiresAt:             expiresAt,
 		MaxDevices:            intPtrOf(request.MaxDevices),
 	}
-	result := api.RDB.DB(ctx).Create(created)
-	if result.Error != nil {
-		return nil, result.Error
+	if anchor != nil {
+		created.TrustAnchorId = &anchor.ID
+	}
+	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		if x509Profile {
+			// The anchor is held FOR SHARE and re-checked, as for a credential: it was read
+			// before this transaction.
+			locked, err := lockTrustAnchorShareByToken(tx, anchorToken)
+			if err != nil {
+				return err
+			}
+			if locked.ID != anchor.ID || locked.FingerprintSha256 != anchor.FingerprintSha256 {
+				return invalidAnchor("trust anchor %q changed while the profile was being created; try again", anchorToken)
+			}
+			if err := requireUsableAnchor(locked); err != nil {
+				return err
+			}
+			if err := lockTenantCreates(tx, deviceTypes[0].TenantId, "x509_profiles"); err != nil {
+				return err
+			}
+			var n int64
+			if err := tx.Model(&ProvisioningProfile{}).Where("trust_anchor_id IS NOT NULL").Count(&n).Error; err != nil {
+				return err
+			}
+			if n >= MaxX509ProfilesPerTenant {
+				return limit.Exceeded("certificate provisioning profiles", int(n)+1, MaxX509ProfilesPerTenant)
+			}
+		}
+		return tx.Create(created).Error
+	})
+	if err != nil {
+		return nil, referenceToNotFound(err, anchorToken)
 	}
 	created.IssuedSecret = issued
 	return created, nil
@@ -234,6 +290,9 @@ func (api *Api) RotateProvisioningProfileSecret(ctx context.Context, token strin
 		locked, err := lockProfileByToken(tx, token)
 		if err != nil {
 			return err
+		}
+		if locked.TrustAnchorId != nil {
+			return invalidAnchor("provisioning profile %q authenticates by certificate and has no provision secret to rotate", token)
 		}
 		digest, err := api.digestProvisionSecret(locked.TenantId, issued)
 		if err != nil {
@@ -308,6 +367,25 @@ func (api *Api) UpdateProvisioningProfile(ctx context.Context, token string,
 			return nil, err
 		}
 	}
+	// A profile is a certificate profile or a secret profile for its whole life. Re-pointing a
+	// certificate profile at another anchor is the only change of anchor there is; naming one on
+	// a secret profile is refused by apply below, on the row as locked.
+	var newAnchor *DeviceTrustAnchor
+	if request.TrustAnchorToken.Set {
+		tok := ""
+		if request.TrustAnchorToken.Value != nil {
+			tok = strings.TrimSpace(*request.TrustAnchorToken.Value)
+		}
+		if tok == "" {
+			return nil, invalidAnchor("trustAnchorToken cannot be cleared: a certificate profile stays one; create a new profile instead")
+		}
+		if newAnchor, err = api.trustAnchorByToken(ctx, tok); err != nil {
+			return nil, err
+		}
+		if err := requireUsableAnchor(newAnchor); err != nil {
+			return nil, err
+		}
+	}
 
 	// apply folds the request's fields onto base. It runs twice: once on the copy read above, so
 	// every refusal comes before a transaction opens, and once on the row read UNDER THE LOCK,
@@ -349,6 +427,14 @@ func (api *Api) UpdateProvisioningProfile(ctx context.Context, token string,
 		if deviceType != nil {
 			base.DeviceType = deviceType
 			base.DeviceTypeId = deviceType.ID
+		}
+		if newAnchor != nil {
+			// Checked on the locked row too: the unlocked read above said this was a
+			// certificate profile, and that is the row that is written.
+			if base.TrustAnchorId == nil {
+				return invalidAnchor("provisioning profile %q authenticates by secret; a trust anchor cannot be added to it", base.Token)
+			}
+			base.TrustAnchorId = &newAnchor.ID
 		}
 		return nil
 	}
