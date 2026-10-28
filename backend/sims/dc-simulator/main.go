@@ -88,7 +88,34 @@ func main() {
 	uplinks := flag.Int("uplinks", envIntOr("DC_SIM_UPLINKS", 5), "integration mode: uplinks per device")
 	resend := flag.Bool("resend", envBoolOr("DC_SIM_RESEND", false),
 		"integration mode: post every uplink twice, byte for byte, as a network server retrying does")
+	x509Mode := flag.Bool("x509", envBoolOr("DC_SIM_X509", false),
+		"X.509 (mTLS) device mode: mint a throwaway test CA and device certificates into --x509-dir, "+
+			"optionally register them (--x509-register), connect to the handshake's MQTT gateway "+
+			"presenting each certificate, then hold the sessions until interrupted. Needs --handshake")
+	x509 := x509Flags{
+		dir:        flag.String("x509-dir", envOr("DC_SIM_X509_DIR", "x509-state"), "x509 mode: state dir (CA, its key at mode 0600, device certificates, manifest)"),
+		pinned:     flag.Int("x509-pinned", envIntOr("DC_SIM_X509_PINNED", 1), "x509 mode: devices with a pinned credential"),
+		jit:        flag.Int("x509-jit", envIntOr("DC_SIM_X509_JIT", 0), "x509 mode: certificates for devices that are NOT registered, for the registration path"),
+		prefix:     flag.String("x509-prefix", envOr("DC_SIM_X509_PREFIX", "sim-"), "x509 mode: externalId (CN) prefix"),
+		anchor:     flag.String("x509-anchor", envOr("DC_SIM_X509_ANCHOR", ""), "x509 mode: trust anchor token (default dc-sim-x509-ca)"),
+		deviceType: flag.String("x509-device-type", envOr("DC_SIM_X509_DEVICE_TYPE", ""), "x509 mode: device type token pinned devices are created under (required with --x509-register)"),
+		register:   flag.Bool("x509-register", envBoolOr("DC_SIM_X509_REGISTER", false), "x509 mode: register the CA as a trust anchor and create the pinned devices + credentials"),
+		mintOnly:   flag.Bool("x509-mint-only", false, "x509 mode: mint (and register if asked) and exit without connecting"),
+		serverCA:   flag.String("x509-server-ca", envOr("DC_SIM_X509_SERVER_CA", ""), "x509 mode: PEM bundle verifying the broker's certificate (default: system roots, or the handshake's mqttTLSInsecure)"),
+		validity:   flag.Duration("x509-validity", envDurationOr("DC_SIM_X509_VALIDITY", 0), "x509 mode: device certificate lifetime (default 1 year)"),
+		holdFor:    flag.Duration("x509-hold", envDurationOr("DC_SIM_X509_HOLD", 0), "x509 mode: disconnect after this long (0 holds until interrupted)"),
+	}
 	flag.Parse()
+
+	if *x509Mode {
+		if *handshakePath == "" {
+			log.Fatal().Msg("--x509 needs --handshake (tenant, instance and endpoints)")
+		}
+		if err := runX509(*handshakePath, x509); err != nil {
+			log.Fatal().Err(err).Msg("dc-simulator x509 mode failed")
+		}
+		return
+	}
 
 	if *lorawanNS != "" {
 		token := *integrationToken
