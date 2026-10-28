@@ -157,8 +157,34 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	require.Equal(t, processor.DefaultCalloutLookupTimeout, lookup)
 	require.Equal(t, processor.DefaultCalloutStopWait, stop)
 	require.True(t, metrics, "the callout's load metrics were never attached to the responder")
-	for _, series := range []string{"callout_in_flight", "callout_refused_busy_total", "callout_plaintext_requests_total"} {
+	for _, series := range []string{"callout_in_flight", "callout_refused_busy_total", "callout_plaintext_requests_total",
+		"callout_x509_total", "callout_jit_in_flight"} {
 		require.NotEmpty(t, registeredSeries(t, reg, series), "%s is not registered", series)
+	}
+	// The certificate connect counter exists at zero for EVERY result, so an alert on a rate
+	// sees a zero series on a healthy instance rather than none. The results are stated here
+	// as literals, independently of the processor's list.
+	families, err := reg.Gather()
+	require.NoError(t, err)
+	seen := map[string]float64{}
+	for _, f := range families {
+		if f.GetName() != "devicechain_devicemanagement_callout_x509_total" {
+			continue
+		}
+		for _, m := range f.GetMetric() {
+			for _, l := range m.GetLabel() {
+				if l.GetName() == "result" {
+					seen[l.GetValue()] = m.GetCounter().GetValue()
+				}
+			}
+		}
+	}
+	for _, result := range []string{"ok", "no_cert", "chain_invalid", "anchor_disabled", "revoked", "client_id_mismatch",
+		"unknown_pin", "x509_cert_ignored", "jit_created", "jit_adopted", "jit_renewed", "jit_replayed",
+		"jit_rate_limited", "jit_busy"} {
+		v, ok := seen[result]
+		require.True(t, ok, "callout_x509_total{result=%q} does not exist at startup", result)
+		require.Zero(t, v, "callout_x509_total{result=%q} is not zero on an idle service", result)
 	}
 
 	// The alarm subscription opens its live feed on first request, not at start:

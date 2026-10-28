@@ -106,6 +106,10 @@ func TestParseDeviceCredential(t *testing.T) {
 		{"empty credential", "acme-corp:", "x", "", "", false, false},
 		{"empty username", "", "x", "", "", false, false},
 		{"credential id may not be split further", "acme:a:b", "", "acme", string(model.CredentialAccessToken), false, true},
+		{"certificate connect", "acme-corp:@x509", "", "acme-corp", string(model.CredentialX509Certificate), false, true},
+		{"certificate connect with a password is still the certificate path", "acme-corp:@x509", "s3cret", "acme-corp", string(model.CredentialX509Certificate), true, true},
+		{"@x509 is exact: another case is a token", "acme-corp:@X509", "", "acme-corp", string(model.CredentialAccessToken), false, true},
+		{"@x509 is exact: a suffix is a token", "acme-corp:@x509x", "", "acme-corp", string(model.CredentialAccessToken), false, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
