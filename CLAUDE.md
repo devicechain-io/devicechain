@@ -61,7 +61,8 @@ backend/
                               verifies size + SHA-256 (a mismatch deletes the object); signers and pinned signatures;
                               append-only device assignments driven by the core/ota attempt reducer over the device's
                               desired/reports channels; and a capability-gated, range-resumable download endpoint
-                              (`GET /updates/download/{artifact}?cap=`). Held out of `default`, shipped by `full`
+                              (`GET /updates/download/{artifact}?cap=`). Shipped by `default` and `full`; opt-in
+                              on the reduced profiles (`--enable-area update-management`)
   k8s/                        controller-runtime operator (Instance CRD; tenants are control-plane DB rows, ADR-033)
   cli/                        dcctl — install/bootstrap/destroy + admin tooling
   tools/                      maintainer-only Go tools, in the workspace but not shipped:
