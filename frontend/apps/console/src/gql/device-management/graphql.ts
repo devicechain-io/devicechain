@@ -662,6 +662,56 @@ export type DeviceSearchCriteria = {
   provisioningProfile?: string | null | undefined;
 };
 
+/** Data required to create a trust anchor. */
+export type DeviceTrustAnchorCreateRequest = {
+  /**
+   * Exactly one CA certificate in PEM: it must be a CA that may sign certificates, unexpired,
+   * use an RSA (2048 to 8192 bits), P-256, P-384 or Ed25519 key, be signed with a modern hash,
+   * and carry no name constraints. A private key anywhere in the text is refused. A tenant may
+   * hold 32 anchors.
+   */
+  certificatePem: string;
+  /** Free-text description. */
+  description?: string | null | undefined;
+  /** Defaults to true. */
+  enabled?: boolean | null | undefined;
+  /** Free-form JSON the platform stores and does not interpret. */
+  metadata?: string | null | undefined;
+  /** Human-readable name. */
+  name?: string | null | undefined;
+  /** Identifier of the anchor, unique within the tenant. */
+  token: string;
+};
+
+/** Criteria used when searching for trust anchors. */
+export type DeviceTrustAnchorSearchCriteria = {
+  /** Only anchors that are (or are not) enabled. */
+  enabled?: boolean | null | undefined;
+  /** 1-based page number. */
+  pageNumber: number;
+  /** Anchors per page. */
+  pageSize: number;
+};
+
+/**
+ * A PARTIAL update: omit a field to leave it, send null to clear a nullable one. The
+ * certificate cannot be changed (another CA is another anchor).
+ */
+export type DeviceTrustAnchorUpdateRequest = {
+  /** Free-text description. Null clears it. */
+  description?: string | null | undefined;
+  /**
+   * Required and unclearable. Setting it false ends the live sessions of the devices that rely
+   * on the anchor; if that cannot be confirmed the change is saved and the call answers that the
+   * sessions were not confirmed ended, and repeating it asks again.
+   */
+  enabled?: boolean | null | undefined;
+  /** Free-form JSON the platform stores and does not interpret. Null clears it. */
+  metadata?: string | null | undefined;
+  /** Human-readable name. Null clears it. */
+  name?: string | null | undefined;
+};
+
 /** Fields for a new device type. */
 export type DeviceTypeCreateRequest = {
   /** Background colour, up to 32 characters. */
@@ -1458,14 +1508,14 @@ export type DeviceCredentialsQueryVariables = Exact<{
 }>;
 
 
-export type DeviceCredentialsQuery = { deviceCredentials: { results: Array<{ id: string, token: string, credentialType: string, credentialId: string, enabled: boolean, expiresAt: string | null, createdAt: string | null }>, pagination: { totalRecords: number | null } } };
+export type DeviceCredentialsQuery = { deviceCredentials: { results: Array<{ id: string, token: string, credentialType: string, credentialId: string, enabled: boolean, expiresAt: string | null, createdAt: string | null, certificate: { fingerprintSha256: string, subjectCn: string, serialHex: string, notAfter: string, trustAnchor: { token: string, name: string | null, enabled: boolean } | null } | null }>, pagination: { totalRecords: number | null } } };
 
 export type CreateDeviceCredentialMutationVariables = Exact<{
   request?: DeviceCredentialCreateRequest | null | undefined;
 }>;
 
 
-export type CreateDeviceCredentialMutation = { createDeviceCredential: { id: string, token: string, credentialType: string, credentialId: string, enabled: boolean } };
+export type CreateDeviceCredentialMutation = { createDeviceCredential: { id: string, token: string, credentialType: string, credentialId: string, enabled: boolean, expiresAt: string | null, certificate: { fingerprintSha256: string, subjectCn: string, notAfter: string } | null } };
 
 export type UpdateDeviceCredentialMutationVariables = Exact<{
   token: string;
@@ -2237,28 +2287,28 @@ export type ProvisioningProfilesQueryVariables = Exact<{
 }>;
 
 
-export type ProvisioningProfilesQuery = { provisioningProfiles: { results: Array<{ id: string, token: string, name: string | null, description: string | null, provisionKey: string, strategy: string, credentialType: string, enabled: boolean, expiresAt: string | null, maxDevices: number | null, provisionedDeviceCount: number, secretIssued: boolean, createdAt: string | null, updatedAt: string | null, deviceType: { id: string, token: string, name: string | null } }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+export type ProvisioningProfilesQuery = { provisioningProfiles: { results: Array<{ id: string, token: string, name: string | null, description: string | null, provisionKey: string, strategy: string, credentialType: string, enabled: boolean, expiresAt: string | null, maxDevices: number | null, provisionedDeviceCount: number, secretIssued: boolean, createdAt: string | null, updatedAt: string | null, deviceType: { id: string, token: string, name: string | null }, trustAnchor: { token: string, name: string | null } | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
 export type ProvisioningProfileByTokenQueryVariables = Exact<{
   tokens: Array<string> | string;
 }>;
 
 
-export type ProvisioningProfileByTokenQuery = { provisioningProfilesByToken: Array<{ id: string, token: string, name: string | null, description: string | null, provisionKey: string, strategy: string, credentialType: string, enabled: boolean, expiresAt: string | null, maxDevices: number | null, provisionedDeviceCount: number, secretIssued: boolean, createdAt: string | null, updatedAt: string | null, deviceType: { id: string, token: string, name: string | null } }> };
+export type ProvisioningProfileByTokenQuery = { provisioningProfilesByToken: Array<{ id: string, token: string, name: string | null, description: string | null, provisionKey: string, strategy: string, credentialType: string, enabled: boolean, expiresAt: string | null, maxDevices: number | null, provisionedDeviceCount: number, secretIssued: boolean, createdAt: string | null, updatedAt: string | null, deviceType: { id: string, token: string, name: string | null }, trustAnchor: { token: string, name: string | null } | null }> };
 
 export type CreateProvisioningProfileMutationVariables = Exact<{
   request?: ProvisioningProfileCreateRequest | null | undefined;
 }>;
 
 
-export type CreateProvisioningProfileMutation = { createProvisioningProfile: { issuedSecret: string | null, profile: { id: string, token: string, name: string | null, description: string | null, provisionKey: string, strategy: string, credentialType: string, enabled: boolean, expiresAt: string | null, maxDevices: number | null, provisionedDeviceCount: number, secretIssued: boolean, createdAt: string | null, updatedAt: string | null, deviceType: { id: string, token: string, name: string | null } } } };
+export type CreateProvisioningProfileMutation = { createProvisioningProfile: { issuedSecret: string | null, profile: { id: string, token: string, name: string | null, description: string | null, provisionKey: string, strategy: string, credentialType: string, enabled: boolean, expiresAt: string | null, maxDevices: number | null, provisionedDeviceCount: number, secretIssued: boolean, createdAt: string | null, updatedAt: string | null, deviceType: { id: string, token: string, name: string | null }, trustAnchor: { token: string, name: string | null } | null } } };
 
 export type RotateProvisioningProfileSecretMutationVariables = Exact<{
   token: string;
 }>;
 
 
-export type RotateProvisioningProfileSecretMutation = { rotateProvisioningProfileSecret: { issuedSecret: string | null, profile: { id: string, token: string, name: string | null, description: string | null, provisionKey: string, strategy: string, credentialType: string, enabled: boolean, expiresAt: string | null, maxDevices: number | null, provisionedDeviceCount: number, secretIssued: boolean, createdAt: string | null, updatedAt: string | null, deviceType: { id: string, token: string, name: string | null } } } };
+export type RotateProvisioningProfileSecretMutation = { rotateProvisioningProfileSecret: { issuedSecret: string | null, profile: { id: string, token: string, name: string | null, description: string | null, provisionKey: string, strategy: string, credentialType: string, enabled: boolean, expiresAt: string | null, maxDevices: number | null, provisionedDeviceCount: number, secretIssued: boolean, createdAt: string | null, updatedAt: string | null, deviceType: { id: string, token: string, name: string | null }, trustAnchor: { token: string, name: string | null } | null } } };
 
 export type UpdateProvisioningProfileMutationVariables = Exact<{
   token: string;
@@ -2266,7 +2316,7 @@ export type UpdateProvisioningProfileMutationVariables = Exact<{
 }>;
 
 
-export type UpdateProvisioningProfileMutation = { updateProvisioningProfile: { id: string, token: string, name: string | null, description: string | null, provisionKey: string, strategy: string, credentialType: string, enabled: boolean, expiresAt: string | null, maxDevices: number | null, provisionedDeviceCount: number, secretIssued: boolean, createdAt: string | null, updatedAt: string | null, deviceType: { id: string, token: string, name: string | null } } };
+export type UpdateProvisioningProfileMutation = { updateProvisioningProfile: { id: string, token: string, name: string | null, description: string | null, provisionKey: string, strategy: string, credentialType: string, enabled: boolean, expiresAt: string | null, maxDevices: number | null, provisionedDeviceCount: number, secretIssued: boolean, createdAt: string | null, updatedAt: string | null, deviceType: { id: string, token: string, name: string | null }, trustAnchor: { token: string, name: string | null } | null } };
 
 export type DeleteProvisioningProfileMutationVariables = Exact<{
   token: string;
@@ -2357,6 +2407,42 @@ export type ReplaceDeviceMutationVariables = Exact<{
 
 
 export type ReplaceDeviceMutation = { replaceDevice: { retiredCredentialTokens: Array<string>, device: { id: string, token: string }, replacement: { id: string, occurredTime: string, actor: string, reason: string | null, unitIdentifier: string | null }, newCredential: { id: string, token: string, credentialType: string, credentialId: string } } };
+
+export type DeviceTrustAnchorsQueryVariables = Exact<{
+  criteria: DeviceTrustAnchorSearchCriteria;
+}>;
+
+
+export type DeviceTrustAnchorsQuery = { deviceTrustAnchors: { results: Array<{ id: string, token: string, name: string | null, description: string | null, certificatePem: string, fingerprintSha256: string, subject: string, issuer: string, notBefore: string, notAfter: string, enabled: boolean, credentialCount: number, profileCount: number, createdAt: string | null, updatedAt: string | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+
+export type DeviceTrustAnchorByTokenQueryVariables = Exact<{
+  tokens: Array<string> | string;
+}>;
+
+
+export type DeviceTrustAnchorByTokenQuery = { deviceTrustAnchorsByToken: Array<{ id: string, token: string, name: string | null, description: string | null, certificatePem: string, fingerprintSha256: string, subject: string, issuer: string, notBefore: string, notAfter: string, enabled: boolean, credentialCount: number, profileCount: number, createdAt: string | null, updatedAt: string | null }> };
+
+export type CreateDeviceTrustAnchorMutationVariables = Exact<{
+  request: DeviceTrustAnchorCreateRequest;
+}>;
+
+
+export type CreateDeviceTrustAnchorMutation = { createDeviceTrustAnchor: { id: string, token: string, name: string | null, fingerprintSha256: string, subject: string, notAfter: string, enabled: boolean } };
+
+export type SetDeviceTrustAnchorEnabledMutationVariables = Exact<{
+  token: string;
+  request: DeviceTrustAnchorUpdateRequest;
+}>;
+
+
+export type SetDeviceTrustAnchorEnabledMutation = { updateDeviceTrustAnchor: { id: string, token: string, enabled: boolean } };
+
+export type DeleteDeviceTrustAnchorMutationVariables = Exact<{
+  token: string;
+}>;
+
+
+export type DeleteDeviceTrustAnchorMutation = { deleteDeviceTrustAnchor: boolean };
 
 export class TypedDocumentString<TResult, TVariables>
   extends String
@@ -2996,6 +3082,17 @@ export const DeviceCredentialsDocument = new TypedDocumentString(`
       enabled
       expiresAt
       createdAt
+      certificate {
+        fingerprintSha256
+        subjectCn
+        serialHex
+        notAfter
+        trustAnchor {
+          token
+          name
+          enabled
+        }
+      }
     }
     pagination {
       totalRecords
@@ -3011,6 +3108,12 @@ export const CreateDeviceCredentialDocument = new TypedDocumentString(`
     credentialType
     credentialId
     enabled
+    expiresAt
+    certificate {
+      fingerprintSha256
+      subjectCn
+      notAfter
+    }
   }
 }
     `) as unknown as TypedDocumentString<CreateDeviceCredentialMutation, CreateDeviceCredentialMutationVariables>;
@@ -4623,6 +4726,10 @@ export const ProvisioningProfilesDocument = new TypedDocumentString(`
         token
         name
       }
+      trustAnchor {
+        token
+        name
+      }
     }
     pagination {
       pageStart
@@ -4654,6 +4761,10 @@ export const ProvisioningProfileByTokenDocument = new TypedDocumentString(`
       token
       name
     }
+    trustAnchor {
+      token
+      name
+    }
   }
 }
     `) as unknown as TypedDocumentString<ProvisioningProfileByTokenQuery, ProvisioningProfileByTokenQueryVariables>;
@@ -4678,6 +4789,10 @@ export const CreateProvisioningProfileDocument = new TypedDocumentString(`
       updatedAt
       deviceType {
         id
+        token
+        name
+      }
+      trustAnchor {
         token
         name
       }
@@ -4709,6 +4824,10 @@ export const RotateProvisioningProfileSecretDocument = new TypedDocumentString(`
         token
         name
       }
+      trustAnchor {
+        token
+        name
+      }
     }
   }
 }
@@ -4732,6 +4851,10 @@ export const UpdateProvisioningProfileDocument = new TypedDocumentString(`
     updatedAt
     deviceType {
       id
+      token
+      name
+    }
+    trustAnchor {
       token
       name
     }
@@ -4883,3 +5006,79 @@ export const ReplaceDeviceDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<ReplaceDeviceMutation, ReplaceDeviceMutationVariables>;
+export const DeviceTrustAnchorsDocument = new TypedDocumentString(`
+    query DeviceTrustAnchors($criteria: DeviceTrustAnchorSearchCriteria!) {
+  deviceTrustAnchors(criteria: $criteria) {
+    results {
+      id
+      token
+      name
+      description
+      certificatePem
+      fingerprintSha256
+      subject
+      issuer
+      notBefore
+      notAfter
+      enabled
+      credentialCount
+      profileCount
+      createdAt
+      updatedAt
+    }
+    pagination {
+      pageStart
+      pageEnd
+      totalRecords
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<DeviceTrustAnchorsQuery, DeviceTrustAnchorsQueryVariables>;
+export const DeviceTrustAnchorByTokenDocument = new TypedDocumentString(`
+    query DeviceTrustAnchorByToken($tokens: [String!]!) {
+  deviceTrustAnchorsByToken(tokens: $tokens) {
+    id
+    token
+    name
+    description
+    certificatePem
+    fingerprintSha256
+    subject
+    issuer
+    notBefore
+    notAfter
+    enabled
+    credentialCount
+    profileCount
+    createdAt
+    updatedAt
+  }
+}
+    `) as unknown as TypedDocumentString<DeviceTrustAnchorByTokenQuery, DeviceTrustAnchorByTokenQueryVariables>;
+export const CreateDeviceTrustAnchorDocument = new TypedDocumentString(`
+    mutation CreateDeviceTrustAnchor($request: DeviceTrustAnchorCreateRequest!) {
+  createDeviceTrustAnchor(request: $request) {
+    id
+    token
+    name
+    fingerprintSha256
+    subject
+    notAfter
+    enabled
+  }
+}
+    `) as unknown as TypedDocumentString<CreateDeviceTrustAnchorMutation, CreateDeviceTrustAnchorMutationVariables>;
+export const SetDeviceTrustAnchorEnabledDocument = new TypedDocumentString(`
+    mutation SetDeviceTrustAnchorEnabled($token: String!, $request: DeviceTrustAnchorUpdateRequest!) {
+  updateDeviceTrustAnchor(token: $token, request: $request) {
+    id
+    token
+    enabled
+  }
+}
+    `) as unknown as TypedDocumentString<SetDeviceTrustAnchorEnabledMutation, SetDeviceTrustAnchorEnabledMutationVariables>;
+export const DeleteDeviceTrustAnchorDocument = new TypedDocumentString(`
+    mutation DeleteDeviceTrustAnchor($token: String!) {
+  deleteDeviceTrustAnchor(token: $token)
+}
+    `) as unknown as TypedDocumentString<DeleteDeviceTrustAnchorMutation, DeleteDeviceTrustAnchorMutationVariables>;

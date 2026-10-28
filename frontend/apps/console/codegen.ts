@@ -24,6 +24,7 @@ const config: CodegenConfig = {
         'src/lib/api/relationships.ts',
         'src/lib/api/audit.ts',
         'src/lib/api/credentials.ts',
+        'src/lib/api/trust-anchors.ts',
         'src/lib/api/alarms.ts',
         'src/lib/api/facet-keys.ts',
         'src/lib/api/entity-attributes.ts',

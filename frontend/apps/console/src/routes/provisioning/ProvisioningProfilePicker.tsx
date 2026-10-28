@@ -1,12 +1,14 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
+import '@/routes/trust-anchors/catalog';
 import { useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox';
 import { FormField } from '@/components/ui/form-field';
 import { useQuery } from '@/lib/hooks/use-query';
 import { listProvisioningProfiles } from '@/lib/api/provisioning';
+import { DERIVED_TOKEN_PREFIX } from '@/routes/trust-anchors/anchorRules';
 
 /**
  * The "expected provisioning profile" field of a device: an OPTIONAL pick of the profile that
@@ -42,6 +44,8 @@ export function ProvisioningProfilePicker({
     description: p.name ? p.token : undefined,
   }));
 
+  const selectedIsCertificate = (data?.results ?? []).some((p) => p.token === value && p.trustAnchor != null);
+
   // A pick the (new) type does not admit would be refused by the server: drop it once the
   // list for the current type has actually loaded.
   useEffect(() => {
@@ -49,7 +53,14 @@ export function ProvisioningProfilePicker({
   });
 
   return (
-    <FormField label={t('earmarkLabel')} htmlFor={id} description={t('earmarkHelp')}>
+    <FormField
+      label={t('earmarkLabel')}
+      htmlFor={id}
+      // A certificate profile adopts the device by its certificate: the token is not free text.
+      description={
+        selectedIsCertificate ? t('trustAnchors:earmarkDerivedHint', { prefix: DERIVED_TOKEN_PREFIX }) : t('earmarkHelp')
+      }
+    >
       <Combobox
         id={id}
         value={value}

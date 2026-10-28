@@ -52,6 +52,7 @@ export const ENTITY_TYPES = [
   'role',
   'tenant',
   'tenant-tier',
+  'trust-anchor',
 ] as const;
 
 export type EntityType = (typeof ENTITY_TYPES)[number];

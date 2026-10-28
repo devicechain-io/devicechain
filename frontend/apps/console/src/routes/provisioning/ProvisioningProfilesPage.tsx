@@ -5,6 +5,7 @@
 // register itself, plus the rules for which devices it may register. This page lists them and
 // hosts the create drawer; creating one shows the server-generated secret exactly once.
 
+import '@/routes/trust-anchors/catalog';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus } from 'lucide-react';
@@ -73,12 +74,15 @@ export default function ProvisioningProfilesPage() {
             toast(t('createdToast', { token: profile.token }));
             setCreating(false);
             reload();
-            setRevealed({
-              profileToken: profile.token,
-              provisionKey: profile.provisionKey,
-              secret: issuedSecret,
-              rotated: false,
-            });
+            // A certificate profile has no secret (issuedSecret is null): there is nothing to reveal.
+            if (issuedSecret !== null) {
+              setRevealed({
+                profileToken: profile.token,
+                provisionKey: profile.provisionKey,
+                secret: issuedSecret,
+                rotated: false,
+              });
+            }
           }}
         />
       </FormDrawer>

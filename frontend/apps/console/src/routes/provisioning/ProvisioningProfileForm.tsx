@@ -5,6 +5,7 @@
 // and hands it straight to `onCreated` without keeping it; an edit is a PARTIAL update that names
 // only the fields the operator changed (profileForm.ts).
 
+import '@/routes/trust-anchors/catalog';
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
@@ -19,6 +20,7 @@ import { SegmentedControl } from '@/components/ui/segmented-control';
 import { useQuery } from '@/lib/hooks/use-query';
 import { errMessage } from '@/routes/common';
 import { listDeviceTypes } from '@/lib/api/device-management';
+import { listTrustAnchors } from '@/lib/api/trust-anchors';
 import {
   PROVISIONING_STRATEGIES,
   createProvisioningProfile,
@@ -35,6 +37,7 @@ import {
   profileProblems,
   type ProfileDraft,
 } from './profileForm';
+import { DERIVED_TOKEN_PREFIX } from '@/routes/trust-anchors/anchorRules';
 
 export function ProvisioningProfileForm({
   entity,
@@ -50,7 +53,7 @@ export function ProvisioningProfileForm({
   /** Edit only. */
   onSaved?: (message: string) => void;
 }) {
-  const { t } = useTranslation(['provisioning', 'common']);
+  const { t } = useTranslation(['provisioning', 'trustAnchors', 'common']);
   const editing = entity != null;
   // The draft the form was seeded from; an edit names only what differs from it.
   const initial = useMemo<ProfileDraft>(() => (entity ? draftOf(entity) : emptyDraft()), [entity]);
@@ -72,6 +75,19 @@ export function ProvisioningProfileForm({
   // A profile whose type is not in the first page still shows it.
   if (entity && !typeOptions.some((o) => o.value === entity.deviceType.token)) {
     typeOptions.push({ value: entity.deviceType.token, label: entity.deviceType.name || entity.deviceType.token });
+  }
+
+  // The anchors a certificate profile can name. Only enabled ones are offered (the server refuses
+  // the rest), plus the one the profile already names so the field never reads as empty.
+  const { data: anchors } = useQuery(
+    () => (draft.certificate ? listTrustAnchors({ pageNumber: 1, pageSize: 100 }) : Promise.resolve(null)),
+    [draft.certificate],
+  );
+  const anchorOptions: ComboboxOption[] = (anchors?.results ?? [])
+    .filter((a) => a.enabled || a.token === initial.trustAnchorToken)
+    .map((a) => ({ value: a.token, label: a.name || a.token, description: a.name ? a.token : undefined }));
+  if (entity?.trustAnchor && !anchorOptions.some((o) => o.value === entity.trustAnchor!.token)) {
+    anchorOptions.push({ value: entity.trustAnchor.token, label: entity.trustAnchor.name || entity.trustAnchor.token });
   }
 
   const problems = profileProblems(draft);
@@ -101,7 +117,7 @@ export function ProvisioningProfileForm({
   return (
     <div className="space-y-4">
       {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
-      {editing && !entity.secretIssued && (
+      {editing && !entity.secretIssued && !draft.certificate && (
         <p className="rounded-md border border-warning/40 bg-warning/5 p-3 text-sm text-foreground">
           {t('provisioning:rotateRequiredNotice')}
         </p>
@@ -136,21 +152,60 @@ export function ProvisioningProfileForm({
           onChange={(e) => set({ description: e.target.value })}
         />
       </FormField>
-      <FormField
-        label={t('provisioning:keyLabel')}
-        htmlFor="pp-key"
-        description={t('provisioning:keyHelp')}
-      >
-        <Input
-          id="pp-key"
-          value={draft.provisionKey}
-          disabled={disabled}
-          onChange={(e) => set({ provisionKey: e.target.value })}
-          className="font-mono text-xs"
-          placeholder={t('provisioning:keyPlaceholder')}
-          autoComplete="off"
-        />
-      </FormField>
+      {!editing && (
+        <FormField
+          label={t('trustAnchors:authLabel')}
+          htmlFor="pp-auth"
+          description={t(draft.certificate ? 'trustAnchors:authHelp_CERTIFICATE' : 'trustAnchors:authHelp_SECRET')}
+        >
+          <SegmentedControl
+            ariaLabel={t('trustAnchors:authLabel')}
+            tone="joined"
+            size="sm"
+            fill
+            value={draft.certificate ? 'CERTIFICATE' : 'SECRET'}
+            onValueChange={(v) => set({ certificate: v === 'CERTIFICATE' })}
+            options={[
+              { value: 'SECRET', label: t('trustAnchors:auth_SECRET') },
+              { value: 'CERTIFICATE', label: t('trustAnchors:auth_CERTIFICATE') },
+            ]}
+          />
+        </FormField>
+      )}
+      {draft.certificate ? (
+        <FormField
+          label={t('trustAnchors:anchorLabel')}
+          htmlFor="pp-anchor"
+          description={t('trustAnchors:anchorHelp', { prefix: DERIVED_TOKEN_PREFIX })}
+        >
+          <Combobox
+            id="pp-anchor"
+            value={draft.trustAnchorToken}
+            onChange={(v) => set({ trustAnchorToken: v })}
+            options={anchorOptions}
+            placeholder={t('trustAnchors:anchorSelect')}
+            emptyMessage={t('trustAnchors:anchorEmpty')}
+            disabled={disabled}
+            allowClear={false}
+          />
+        </FormField>
+      ) : (
+        <FormField
+          label={t('provisioning:keyLabel')}
+          htmlFor="pp-key"
+          description={t('provisioning:keyHelp')}
+        >
+          <Input
+            id="pp-key"
+            value={draft.provisionKey}
+            disabled={disabled}
+            onChange={(e) => set({ provisionKey: e.target.value })}
+            className="font-mono text-xs"
+            placeholder={t('provisioning:keyPlaceholder')}
+            autoComplete="off"
+          />
+        </FormField>
+      )}
       <FormField
         label={t('provisioning:typeLabel')}
         htmlFor="pp-type"

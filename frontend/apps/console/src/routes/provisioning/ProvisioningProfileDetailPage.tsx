@@ -5,6 +5,7 @@
 // for a fleet that registers itself — rotate the secret, revoke the devices it registered, delete.
 // The edit form below the summary sends only the fields that changed.
 
+import '@/routes/trust-anchors/catalog';
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -33,6 +34,7 @@ import {
 import { ProvisioningProfileForm } from './ProvisioningProfileForm';
 import { ProfileBadges } from './ProfileBadges';
 import { SecretReveal, type RevealedSecret } from './SecretReveal';
+import { DERIVED_TOKEN_PREFIX } from '@/routes/trust-anchors/anchorRules';
 
 export default function ProvisioningProfileDetailPage() {
   const { t } = useTranslation('provisioning');
@@ -93,6 +95,11 @@ function ProfileDetail({ profile, reload }: { profile: ProvisioningProfile; relo
     setBusy(true);
     try {
       const { profile: updated, issuedSecret } = await rotateProvisioningProfileSecret(profile.token);
+      if (issuedSecret === null) {
+        // Only a certificate profile answers with no secret, and it is not offered a rotation.
+        setActionError(t('trustAnchors:rotateNoSecret'));
+        return;
+      }
       setRevealed({
         profileToken: updated.token,
         provisionKey: updated.provisionKey,
@@ -159,6 +166,8 @@ function ProfileDetail({ profile, reload }: { profile: ProvisioningProfile; relo
     }
   };
 
+  const isCertificate = profile.trustAnchor != null;
+
   const filterLink = (param: string) =>
     `/devices?${param}=${encodeURIComponent(profile.token)}`;
 
@@ -171,9 +180,12 @@ function ProfileDetail({ profile, reload }: { profile: ProvisioningProfile; relo
       action={
         canWrite ? (
           <div className="flex flex-wrap items-center gap-2">
-            <Button variant="outline" size="sm" onClick={rotate} disabled={busy}>
-              <KeyRound size={14} /> {t('rotateAction')}
-            </Button>
+            {/* A certificate profile authenticates by certificate chain: no secret to rotate. */}
+            {!isCertificate && (
+              <Button variant="outline" size="sm" onClick={rotate} disabled={busy}>
+                <KeyRound size={14} /> {t('rotateAction')}
+              </Button>
+            )}
             <Button variant="outline" size="sm" onClick={revoke} disabled={busy}>
               <ShieldOff size={14} /> {t('revokeAction')}
             </Button>
@@ -189,6 +201,19 @@ function ProfileDetail({ profile, reload }: { profile: ProvisioningProfile; relo
         {actionError && <ErrorBanner message={actionError} onDismiss={() => setActionError(null)} />}
         <SectionPanel title={t('summaryTitle')}>
           <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 text-sm">
+            {profile.trustAnchor && (
+              <>
+                <dt className="text-muted-foreground">{t('trustAnchors:summaryAnchor')}</dt>
+                <dd className="text-foreground">
+                  <Link
+                    className="text-primary underline-offset-2 hover:underline"
+                    to={`/trust-anchors/${encodeURIComponent(profile.trustAnchor.token)}`}
+                  >
+                    {profile.trustAnchor.name || profile.trustAnchor.token}
+                  </Link>
+                </dd>
+              </>
+            )}
             <dt className="text-muted-foreground">{t('summaryRegistered')}</dt>
             <dd className="text-foreground tabular-nums">
               {profile.maxDevices == null
@@ -216,7 +241,9 @@ function ProfileDetail({ profile, reload }: { profile: ProvisioningProfile; relo
               )}
             </dd>
           </dl>
-          <p className="mt-3 text-xs text-muted-foreground">{t('summaryNote')}</p>
+          <p className="mt-3 text-xs text-muted-foreground">
+            {isCertificate ? t('trustAnchors:summaryNoteCertificate', { prefix: DERIVED_TOKEN_PREFIX }) : t('summaryNote')}
+          </p>
         </SectionPanel>
         <SectionPanel>
           <ProvisioningProfileForm

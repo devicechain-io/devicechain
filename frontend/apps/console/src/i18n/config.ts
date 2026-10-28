@@ -114,6 +114,7 @@ export const NAMESPACES = [
   'tiers',
   'connectors',
   'provisioning',
+  'trustAnchors',
   'integrations',
   'commandBatches',
   'updateSigners',

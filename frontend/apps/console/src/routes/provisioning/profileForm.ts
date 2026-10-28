@@ -17,7 +17,7 @@
 //     an expiry that has since been changed elsewhere is not reverted by a rename.
 //
 // The provision secret is not here at all: it is not an input of create or update. The server
-// generates it (see SecretReveal.tsx).
+// generates it (see SecretReveal.tsx), and generates none for a certificate profile.
 
 import type {
   ProvisioningProfile,
@@ -38,6 +38,14 @@ export interface ProfileDraft {
   expiresAt: string;
   /** A whole number of devices, or '' for no cap. */
   maxDevices: string;
+  /**
+   * A certificate profile authenticates its devices by a client certificate that chains to a
+   * trust anchor: it has no provision secret and no key to choose. Fixed once the profile exists
+   * (a profile cannot change how it authenticates, only which anchor it names).
+   */
+  certificate: boolean;
+  /** The token of the trust anchor a certificate profile names; '' until one is picked. */
+  trustAnchorToken: string;
 }
 
 export const emptyDraft = (): ProfileDraft => ({
@@ -49,6 +57,8 @@ export const emptyDraft = (): ProfileDraft => ({
   enabled: true,
   expiresAt: '',
   maxDevices: '',
+  certificate: false,
+  trustAnchorToken: '',
 });
 
 const pad = (n: number) => String(n).padStart(2, '0');
@@ -79,6 +89,8 @@ export function draftOf(p: ProvisioningProfile): ProfileDraft {
     enabled: p.enabled,
     expiresAt: toLocalInput(p.expiresAt),
     maxDevices: p.maxDevices == null ? '' : String(p.maxDevices),
+    certificate: p.trustAnchor != null,
+    trustAnchorToken: p.trustAnchor?.token ?? '',
   };
 }
 
@@ -91,12 +103,15 @@ export function parseMaxDevices(value: string): number | null | undefined {
   return Number.isSafeInteger(n) && n >= 1 ? n : undefined;
 }
 
-export type ProfileProblem = 'key' | 'type' | 'cap' | 'expiry';
+export type ProfileProblem = 'key' | 'type' | 'cap' | 'expiry' | 'anchor';
 
 /** What is wrong with the draft, as a hint. The server decides; this only saves a round trip. */
 export function profileProblems(draft: ProfileDraft): ProfileProblem[] {
   const out: ProfileProblem[] = [];
-  if (!draft.provisionKey.trim()) out.push('key');
+  // A certificate profile has no key to choose (see profileCreateRequest); it must name an anchor.
+  if (draft.certificate) {
+    if (!draft.trustAnchorToken) out.push('anchor');
+  } else if (!draft.provisionKey.trim()) out.push('key');
   if (!draft.deviceTypeToken) out.push('type');
   if (parseMaxDevices(draft.maxDevices) === undefined) out.push('cap');
   if (draft.expiresAt && fromLocalInput(draft.expiresAt) === null) out.push('expiry');
@@ -114,6 +129,13 @@ export function profileCreateRequest(token: string, draft: ProfileDraft): Provis
     deviceTypeToken: draft.deviceTypeToken,
     enabled: draft.enabled,
   };
+  if (draft.certificate) {
+    request.trustAnchorToken = draft.trustAnchorToken;
+    request.credentialType = 'X509_CERTIFICATE';
+    // The server still requires a provision key to be present, though nothing presents it for a
+    // certificate profile (no secret exists). The profile's own token is unique, so it is used.
+    request.provisionKey = request.token;
+  }
   const expires = fromLocalInput(draft.expiresAt);
   if (expires) request.expiresAt = expires;
   const cap = parseMaxDevices(draft.maxDevices);
@@ -131,8 +153,14 @@ export function profileEditRequest(initial: ProfileDraft, next: ProfileDraft): P
   if (next.description.trim() !== initial.description.trim()) {
     request.description = next.description.trim() || null;
   }
-  // Compared and sent as typed: a key is stored exactly as sent, padding included.
-  if (next.provisionKey !== initial.provisionKey) request.provisionKey = next.provisionKey;
+  // Compared and sent as typed: a key is stored exactly as sent, padding included. A
+  // certificate profile's key is not shown or editable, so it is never named.
+  if (!next.certificate && next.provisionKey !== initial.provisionKey) request.provisionKey = next.provisionKey;
+  // Re-pointing a certificate profile at another anchor. Never sent for a secret profile (the
+  // server refuses it) and never cleared (the server refuses that too).
+  if (next.certificate && next.trustAnchorToken && next.trustAnchorToken !== initial.trustAnchorToken) {
+    request.trustAnchorToken = next.trustAnchorToken;
+  }
   if (next.strategy !== initial.strategy) request.strategy = next.strategy;
   if (next.deviceTypeToken !== initial.deviceTypeToken) request.deviceTypeToken = next.deviceTypeToken;
   if (next.enabled !== initial.enabled) request.enabled = next.enabled;
