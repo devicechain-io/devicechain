@@ -8,22 +8,24 @@ import { AdminSidebar } from '@/routes/admin/AdminSidebar';
 import { ErrorBoundary } from '@/components/ui/error-boundary';
 import { RouteSuspense } from '@/components/RouteSuspense';
 import { BackLink } from '@/routes/common';
+import '@/routes/admin/catalog';
 
-// Each admin section maps to a `nav` catalog key (ADR-066) so the top bar localizes.
+// Each admin section maps to a catalog key (ADR-066) so the top bar localizes. Namespace-qualified:
+// the admin labels live in the lazily loaded `adminNav` catalog, `audit` is shared from `nav`.
 export const PAGE_TITLES: { pattern: string; key: string }[] = [
-  { pattern: '/admin/tenants', key: 'adminTenants' },
-  { pattern: '/admin/tiers', key: 'adminTiers' },
-  { pattern: '/admin/deletions', key: 'adminDeletions' },
-  { pattern: '/admin/identities', key: 'adminIdentities' },
-  { pattern: '/admin/roles', key: 'adminRoles' },
-  { pattern: '/admin/identity-providers', key: 'adminIdentityProviders' },
-  { pattern: '/admin/ai-providers', key: 'adminAiProviders' },
+  { pattern: '/admin/tenants', key: 'adminNav:adminTenants' },
+  { pattern: '/admin/tiers', key: 'adminNav:adminTiers' },
+  { pattern: '/admin/deletions', key: 'adminNav:adminDeletions' },
+  { pattern: '/admin/identities', key: 'adminNav:adminIdentities' },
+  { pattern: '/admin/roles', key: 'adminNav:adminRoles' },
+  { pattern: '/admin/identity-providers', key: 'adminNav:adminIdentityProviders' },
+  { pattern: '/admin/ai-providers', key: 'adminNav:adminAiProviders' },
   // Reached from the AI Providers screen (not a sidebar entry); listed so its top-bar
   // title reads "AI Packaging" rather than the generic "Admin". Not a detail route, so it
   // gets no back-link.
-  { pattern: '/admin/ai-packaging', key: 'adminAiPackaging' },
-  { pattern: '/admin/audit', key: 'audit' },
-  { pattern: '/admin/settings', key: 'adminSettings' },
+  { pattern: '/admin/ai-packaging', key: 'adminNav:adminAiPackaging' },
+  { pattern: '/admin/audit', key: 'nav:audit' },
+  { pattern: '/admin/settings', key: 'adminNav:adminSettings' },
 ];
 
 // The section the current admin route belongs to, and whether we're on a detail
@@ -43,7 +45,7 @@ export default function AdminLayout() {
   // (the entity's own name is the big title in the page header below). Localizing the
   // English "New <Singular>" / "<Singular> Detail" affordance needs number-aware rules
   // and is deferred to sweep (b). Mirrors AppLayout.
-  const title = section ? t(section.key) : t('adminBadge');
+  const title = section ? t(section.key) : t('adminNav:adminBadge');
 
   return (
     <SidebarProvider>
@@ -60,7 +62,7 @@ export default function AdminLayout() {
           <div className="ml-auto flex items-center gap-3">
             {section?.isDetail && <BackLink to={section.base}>{t(section.key)}</BackLink>}
             <span className="rounded bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
-              {t('adminBadge')}
+              {t('adminNav:adminBadge')}
             </span>
           </div>
         </header>

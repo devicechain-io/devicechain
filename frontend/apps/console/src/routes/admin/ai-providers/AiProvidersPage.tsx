@@ -58,6 +58,7 @@ import {
   type ProviderEditorState,
 } from './AiProviderForm';
 import { aiProviderPath } from './paths';
+import '@/routes/admin/ai-providers/catalog';
 
 const pageSize = 20;
 

@@ -16,6 +16,7 @@ import { Combobox } from '@/components/ui/combobox';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Textarea } from '@/components/ui/textarea';
 import type { AiProvider } from '@/lib/api/ai-inference-admin';
+import '@/routes/admin/ai-providers/catalog';
 
 // How the API key is being edited. On create the meaningful modes are 'set' (type a
 // value) and, implicitly, leaving it empty (no key). On edit, 'keep' preserves the

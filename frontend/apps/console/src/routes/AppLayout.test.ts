@@ -10,10 +10,10 @@ import { describe, expect, it } from 'vitest';
 import en from '@/i18n/locales/en/nav.json';
 import es from '@/i18n/locales/es/nav.json';
 import { NAV_SECTION_KEY } from '@/routes/AppLayout';
-import { NAV, isLeaf } from '@/routes/AppSidebar';
+import { navLeaves } from '@/routes/AppSidebar';
 import { REGISTRY_RESOURCES } from '@/routes/resources';
 
-const leaves = NAV.flatMap((n) => (isLeaf(n) ? [n] : n.children));
+const leaves = navLeaves();
 const seg0 = (href: string) => href.split('/').filter(Boolean)[0] ?? '';
 
 describe('NAV_SECTION_KEY', () => {

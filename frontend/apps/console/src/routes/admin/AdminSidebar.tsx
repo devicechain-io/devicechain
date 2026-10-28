@@ -37,8 +37,9 @@ import {
   SidebarRail,
 } from '@/components/ui/sidebar';
 import { AdminUser } from '@/routes/admin/AdminUser';
+import '@/routes/admin/catalog';
 
-// labelKey indexes the `nav` catalog (ADR-066), resolved with t() at render.
+// labelKey is a namespace-qualified catalog key (`adminNav:` or `nav:`), resolved with t() at render.
 type NavLeaf = { labelKey: string; href: string; icon: LucideIcon };
 type NavGroupNode = { labelKey: string; icon: LucideIcon; children: NavLeaf[] };
 type NavNode = NavLeaf | NavGroupNode;
@@ -54,35 +55,35 @@ export const isLeaf = (n: NavNode): n is NavLeaf => 'href' in n;
 // top-level peer (ADR-065 — a tier is packaging OF tenants, not a separate domain).
 export const NAV: NavNode[] = [
   {
-    labelKey: 'adminTenants',
+    labelKey: 'adminNav:adminTenants',
     icon: Building2,
     children: [
-      { labelKey: 'adminList', href: '/admin/tenants', icon: List },
-      { labelKey: 'adminTiers', href: '/admin/tiers', icon: Layers },
+      { labelKey: 'adminNav:adminList', href: '/admin/tenants', icon: List },
+      { labelKey: 'adminNav:adminTiers', href: '/admin/tiers', icon: Layers },
       // /admin/deletions rather than /admin/tenants/deletions: childActive is a PREFIX
       // match, so a path under /admin/tenants would light this AND the list entry at once.
-      { labelKey: 'adminDeletions', href: '/admin/deletions', icon: Trash2 },
+      { labelKey: 'adminNav:adminDeletions', href: '/admin/deletions', icon: Trash2 },
     ],
   },
   {
-    labelKey: 'adminIdentities',
+    labelKey: 'adminNav:adminIdentities',
     icon: Users,
     children: [
-      { labelKey: 'adminList', href: '/admin/identities', icon: List },
+      { labelKey: 'adminNav:adminList', href: '/admin/identities', icon: List },
       // Roles are the RBAC vocabulary identities are assigned, so the catalog nests under
       // Identities (the same "configuration OF the parent" logic that puts Tiers under
       // Tenants) rather than sitting as its own top-level peer.
-      { labelKey: 'adminRoles', href: '/admin/roles', icon: ShieldCheck },
+      { labelKey: 'adminNav:adminRoles', href: '/admin/roles', icon: ShieldCheck },
       // Sign-in providers are how identities authenticate, so they nest here as well.
-      { labelKey: 'adminIdentityProviders', href: '/admin/identity-providers', icon: KeyRound },
+      { labelKey: 'adminNav:adminIdentityProviders', href: '/admin/identity-providers', icon: KeyRound },
     ],
   },
-  { labelKey: 'adminAiProviders', href: '/admin/ai-providers', icon: Sparkles },
+  { labelKey: 'adminNav:adminAiProviders', href: '/admin/ai-providers', icon: Sparkles },
   // AI packaging (which models each tier grants) is not a top-level screen: it is
   // configuration OF the tiers, reached from a tier's detail page. The route still exists
   // (a cross-tier comparison matrix); it is just not its own nav entry.
-  { labelKey: 'audit', href: '/admin/audit', icon: ScrollText },
-  { labelKey: 'adminSettings', href: '/admin/settings', icon: Settings },
+  { labelKey: 'nav:audit', href: '/admin/audit', icon: ScrollText },
+  { labelKey: 'adminNav:adminSettings', href: '/admin/settings', icon: Settings },
 ];
 
 // A child href matches the current route by prefix, so a tenant/tier DETAIL page keeps its
@@ -121,7 +122,7 @@ export function AdminSidebar() {
             <SidebarMenuButton
               size="lg"
               asChild
-              tooltip={t('adminTooltip')}
+              tooltip={t('adminNav:adminTooltip')}
               className="justify-center"
             >
               <Link to="/admin">
@@ -144,7 +145,7 @@ export function AdminSidebar() {
 
       <SidebarContent>
         <SidebarGroup>
-          <SidebarGroupLabel>{t('adminPlatform')}</SidebarGroupLabel>
+          <SidebarGroupLabel>{t('adminNav:adminPlatform')}</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
               {NAV.map((node) =>

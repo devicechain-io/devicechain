@@ -51,6 +51,7 @@ import {
   type ProviderEditorState,
   type SecretState,
 } from './AiProviderForm';
+import '@/routes/admin/ai-providers/catalog';
 
 // 🔴 WHY THIS PAGE IS STILL ONE STATE AND ONE save(), AND WHY IT IS NOT THE OLD REASON.
 //

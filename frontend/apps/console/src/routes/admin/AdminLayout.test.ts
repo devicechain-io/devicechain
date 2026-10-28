@@ -11,6 +11,8 @@ import { matchPath } from 'react-router-dom';
 import { describe, expect, it } from 'vitest';
 import en from '@/i18n/locales/en/nav.json';
 import es from '@/i18n/locales/es/nav.json';
+import enAdmin from '@/i18n/locales/en/adminNav.json';
+import esAdmin from '@/i18n/locales/es/adminNav.json';
 import { PAGE_TITLES } from '@/routes/admin/AdminLayout';
 import { NAV, isLeaf } from '@/routes/admin/AdminSidebar';
 
@@ -42,9 +44,11 @@ describe('admin page titles', () => {
   });
 
   it('only names keys that exist in both locales', () => {
+    const catalogs = { nav: [en, es], adminNav: [enAdmin, esAdmin] } as const;
     for (const { key } of PAGE_TITLES) {
-      expect(en, key).toHaveProperty([key]);
-      expect(es, key).toHaveProperty([key]);
+      const [ns, k] = key.split(':') as [keyof typeof catalogs, string];
+      expect(catalogs[ns], key).toBeDefined();
+      for (const c of catalogs[ns]) expect(c, key).toHaveProperty([k]);
     }
   });
 });

@@ -7,6 +7,7 @@
 import esCommon from './common.json';
 import esLogin from './login.json';
 import esNav from './nav.json';
+import esAdminNav from './adminNav.json';
 import esUserMenu from './userMenu.json';
 import esTheme from './theme.json';
 import esDevices from './devices.json';
@@ -44,6 +45,7 @@ const es = {
     common: esCommon,
     login: esLogin,
     nav: esNav,
+    adminNav: esAdminNav,
     userMenu: esUserMenu,
     theme: esTheme,
     devices: esDevices,
