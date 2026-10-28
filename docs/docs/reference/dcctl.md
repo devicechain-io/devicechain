@@ -1325,8 +1325,12 @@ by a superuser breaking glass into it through the API. (This used to be opt-in b
 --purge, whose default claimed to keep the tenant "for inspection" while deleting the
 membership that made inspection routine.)
 
-Teardown order is enforced: the identity goes first, because the server refuses a
-tenant delete while any membership still references it.
+Teardown order is enforced: the people go first, because the server refuses a tenant
+delete while any membership still references it. That is the sim's scoped identity and any
+account the scenario minted for its own people (a customer user), which the sim names
+local+tenant@domain. An account that belongs to this tenant alone is deleted; one that
+also belongs to another tenant only loses its membership here. Anyone else added to the
+tenant by hand is not touched, and the tenant delete will say so.
 
 🔴 THE NAME STAYS TAKEN UNTIL THE PURGE FINISHES. 'dcctl sim create \<name>' refuses a
 name whose tenant is still being deleted, and that refusal is the point: the tenant
