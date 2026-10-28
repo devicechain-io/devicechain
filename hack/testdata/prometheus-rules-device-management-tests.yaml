@@ -356,3 +356,133 @@ tests:
       - eval_time: 50m
         alertname: ProvisioningSessionKickUnconfirmed
         exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # Certificate connects. The series (counters, scraped every minute) is
+  # devicechain_devicemanagement_callout_x509_total{result}; every result exists at zero.
+  # ------------------------------------------------------------------
+
+  # Two chain failures a second, sustained: nothing at 10m (inside the hold), fires at 40m.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_callout_x509_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="chain_invalid"}'
+        values: '0+120x60'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: DeviceX509ChainFailuresSustained
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: DeviceX509ChainFailuresSustained
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "Devices with registered certificates are being refused because their certificate chain does not verify, steadily"
+              description: "For 15m device-management has refused more than one certificate connect a second (2/s now) because a registered certificate's chain does not build to its trust anchor, or has expired. Only certificates that are pinned to a credential count: certificates nothing pins and malformed presentations are separate results, so a client outside the tenant cannot raise this alert. Either the devices stopped sending the intermediate certificates that link them to the anchor, the chain or the anchor has expired, or a CA was replaced without the devices being re-registered. The answer on the wire is the same for every cause: check what the device presents with openssl s_client against the broker, and the expiry of the certificate, its intermediates and the trust anchor."
+
+  # Half a failure a second is under the line, and a flood of the OTHER refusals (an unregistered
+  # device, a revocation, no certificate) and of granted connects does not count: none of those is
+  # a broken chain.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_callout_x509_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="chain_invalid"}'
+        values: '0+30x60'
+      - series: 'devicechain_devicemanagement_callout_x509_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="unknown_pin"}'
+        values: '0+600x60'
+      - series: 'devicechain_devicemanagement_callout_x509_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="revoked"}'
+        values: '0+600x60'
+      - series: 'devicechain_devicemanagement_callout_x509_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="ok"}'
+        values: '0+6000x60'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: DeviceX509ChainFailuresSustained
+        exp_alerts: []
+
+  # A burst that ends before the hold is over does not page, and an idle service (every result at
+  # zero) does not either.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_callout_x509_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="chain_invalid"}'
+        values: '0+120x13 1560+0x47'
+      - series: 'devicechain_devicemanagement_callout_x509_total{namespace="dci-devicechain", pod="dc-device-management-bbbbb", result="chain_invalid"}'
+        values: '0+0x60'
+    alert_rule_test:
+      # 12m: the expression is true (2/s for 12m) but the 15m hold has not elapsed, so this is the
+      # case that fails if the hold is removed.
+      - eval_time: 12m
+        alertname: DeviceX509ChainFailuresSustained
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: DeviceX509ChainFailuresSustained
+        exp_alerts: []
+
+  # Registration on first connect refused at one a second for want of a slot: fires and names the
+  # limit. A tenant allowance refusing 3 a minute is under the line on the same pod.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_callout_x509_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="jit_busy"}'
+        values: '0+60x60'
+      - series: 'devicechain_devicemanagement_callout_x509_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="jit_rate_limited"}'
+        values: '0+3x60'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: DeviceX509JitRefusedSustained
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: DeviceX509JitRefusedSustained
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              result: jit_busy
+            exp_annotations:
+              summary: "Devices are being refused registration on first connect because registration is over its limit"
+              description: "For 15m device-management has refused certificate registrations at 1/s, from the jit_busy limit. jit_rate_limited means the tenant's registrations per second are at its governance ceiling; jit_busy means the registration slots of every replica are taken, usually by a factory run on one provisioning profile, whose registrations take turns. Devices back off and retry on their own; raise the tenant's provisioning ceiling or spread the run out."
+
+  # Registrations that succeed, and an idle service, do not fire it.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_callout_x509_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="jit_created"}'
+        values: '0+600x60'
+      - series: 'devicechain_devicemanagement_callout_x509_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="jit_busy"}'
+        values: '0+0x60'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: DeviceX509JitRefusedSustained
+        exp_alerts: []
+
+  # Trust anchors expiring: the instance-wide count is zero (quiet), then two for longer than the
+  # hold (fires), then back to zero (clears). A service that exports no series is quiet.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_device_trust_anchors_expiring{namespace="dci-devicechain", pod="dc-device-management-aaaaa", window="30d"}'
+        values: '0x30 2x90 0x60'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: DeviceTrustAnchorsExpiringSoon
+        exp_alerts: []
+      # Two anchors for 30m: inside the 1h hold.
+      - eval_time: 60m
+        alertname: DeviceTrustAnchorsExpiringSoon
+        exp_alerts: []
+      - eval_time: 100m
+        alertname: DeviceTrustAnchorsExpiringSoon
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "A trust anchor expires within 30 days"
+              description: "For 1h, 2 enabled trust anchor(s) across the instance's tenants expire within 30 days or already have. When a trust anchor expires, every device whose certificate chains to it is refused. List them with the deviceTrustAnchors query (the notAfter field), and add the replacement CA as a new anchor and pin each device's certificate to it before the date."
+      - eval_time: 150m
+        alertname: DeviceTrustAnchorsExpiringSoon
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_credential_cache_lookups_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="hit"}'
+        values: '0+1x120'
+    alert_rule_test:
+      - eval_time: 100m
+        alertname: DeviceTrustAnchorsExpiringSoon
+        exp_alerts: []

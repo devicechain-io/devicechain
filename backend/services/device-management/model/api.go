@@ -468,6 +468,11 @@ type DeviceManagementApi interface {
 	// NOT authenticated until that compare succeeds, and the device carries only its
 	// id, tenant and token.
 	ResolveDeviceCredential(ctx context.Context, presented *PresentedCredential, now time.Time) (*Device, string, error)
+	// ResolveX509Connect finds the certificate credential that pins a presented leaf's
+	// fingerprint, with its device and trust anchor, for the MQTT auth callout. Like
+	// AuthenticateDeviceConnect it is never answered from memory. What it returns is NOT
+	// authenticated until the caller has verified the presented chain to the anchor.
+	ResolveX509Connect(ctx context.Context, fingerprint string, now time.Time) (*X509Connect, error)
 
 	// AuthenticateIntegration proves an inbound integration's bearer token (the resolver's check
 	// of an integration's event). It returns the integration with its scope loaded; every

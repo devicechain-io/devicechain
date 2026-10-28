@@ -182,6 +182,11 @@ func (api *MockApi) AuthenticateDeviceConnect(ctx context.Context, presented *mo
 	return args.Get(0).(*model.Device), args.Error(1)
 }
 
+func (api *MockApi) ResolveX509Connect(ctx context.Context, fingerprint string, now time.Time) (*model.X509Connect, error) {
+	args := api.Mock.Called()
+	return args.Get(0).(*model.X509Connect), args.Error(1)
+}
+
 func (api *MockApi) AuthenticateIntegration(ctx context.Context, integrationToken, presented string) (*model.Integration, error) {
 	args := api.Mock.Called()
 	return args.Get(0).(*model.Integration), args.Error(1)

@@ -225,6 +225,7 @@ func buildMetrics() {
 			"and publishing.")
 	MqttStoreBackoffMetrics, CalloutRefusedStoreFull = buildMqttStoreBackoffMetrics()
 	CalloutMetrics = processor.NewCalloutMetrics(Microservice)
+	buildTrustAnchorExpiryGauge()
 	GeoFencePublishFails = Microservice.NewCounter(
 		"geofence_set_publish_failures_total",
 		"Geofence-set manifests that could not be published — a marshal error, a broker refusal, or a transport fault. Each one means event-processing was not told about a fence edit, so containment for that tenant holds its previous fence set until a reconcile sweep repairs it. A sustained non-zero rate means fence edits are not reaching the detection engine.")

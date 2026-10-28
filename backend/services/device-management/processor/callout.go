@@ -156,6 +156,12 @@ type CalloutMetrics struct {
 	// arrived unencrypted. It is expected to be nonzero only across the broker roll that turns
 	// encryption on; a standing nonzero rate means the broker is not sealing its requests.
 	PlaintextRequests prometheus.Counter
+	// X509 counts certificate connects (username "{tenant}:@x509") by result, one increment per
+	// connect; see the x509Result constants. Every result exists at zero from startup.
+	X509 *prometheus.CounterVec
+	// JitInFlight is the certificate registrations being decided right now. It stays zero until
+	// registration on first connect exists.
+	JitInFlight prometheus.Gauge
 }
 
 // NewCalloutMetrics registers the callout's metrics on the microservice.
@@ -167,6 +173,9 @@ func NewCalloutMetrics(ms *core.Microservice) *CalloutMetrics {
 			"Device auth-callout requests refused with the generic denial because the in-flight bound was reached."),
 		PlaintextRequests: ms.NewCounter("callout_plaintext_requests_total",
 			"Device auth-callout requests that arrived unencrypted although an xkey is configured (expected only across the broker roll that enables encryption)."),
+		X509: newX509Counter(ms),
+		JitInFlight: ms.NewGauge("callout_jit_in_flight",
+			"Certificate registrations on first connect being decided right now."),
 	}
 }
 
@@ -203,6 +212,20 @@ func (c *CalloutResponder) Limits() (maxInFlight int, lookupTimeout, stopWait ti
 // It refuses a seed that is not a curve seed, and a seed whose public key is not wantPublic when
 // that is given: a Secret from another instance, or the issuer seed in the wrong key, would
 // otherwise start cleanly and then fail to open a single request.
+//
+// 🔴 WHAT SEALING DOES AND DOES NOT ESTABLISH. The responder's public key is public, so anyone can
+// seal a request to it: encryption authenticates nothing. The broker's request JWT is signed by
+// the server's nkey, but that key is generated at server start (nats-server's NewServer) and
+// cannot be seeded or read from configuration, so there is no known issuer to pin. What stands
+// between a forged request and a grant is therefore the broker's publish-deny on the callout
+// subject (TestNoClientInTheCalloutAccountCanPublishARequest). A password grant still needs the
+// device's secret on top of that; a CERTIFICATE grant (username {tenant}:@x509) needs only a
+// public certificate, so it is the first grant for which the deny is the whole defence. The one
+// thing this adds for it: with an xkey configured, an @x509 request that arrives UNSEALED is
+// refused (result "unsealed"), since the broker never sends one and only a publisher bypassing it
+// would. Residual risk, plainly: a publisher that could publish on the callout subject AND seal to
+// the public key could forge a certificate grant, and an instance with no xkey configured has only
+// the deny.
 //
 // 🔴 PLAINTEXT IS STILL ANSWERED. A request without the server's xkey header is answered as
 // before (and counted, and logged). That is what lets this responder be rolled out BEFORE the
@@ -526,7 +549,10 @@ func (c *CalloutResponder) handle(msg *nats.Msg) {
 		log.Warn().Msg("Dropping auth-callout request with no user nkey.")
 		return
 	}
-	userJWT, errMsg := c.authorize(req)
+	// A request is TRUSTED, for the grants that need no secret, only if it came the way the
+	// broker sends one: sealed to this responder's key when a key is configured. See
+	// WithRequestEncryption for what that does and does not establish.
+	userJWT, errMsg := c.authorizeRequest(req, c.xkey == nil || sealTo != "")
 	c.respond(msg, sealTo, req.Server.ID, req.UserNkey, userJWT, errMsg)
 }
 
@@ -536,9 +562,26 @@ func (c *CalloutResponder) handle(msg *nats.Msg) {
 // isolation. Every failure returns the same generic message (see
 // genericAuthFailure).
 func (c *CalloutResponder) authorize(req jwt.AuthorizationRequest) (userJWT string, errMsg string) {
+	return c.authorizeRequest(req, true)
+}
+
+// authorizeRequest is authorize for a request whose arrival channel is known. trusted is false
+// for a request that arrived unsealed while an xkey is configured, which the broker never sends;
+// a certificate connect (which needs no secret from the device) is refused for one.
+func (c *CalloutResponder) authorizeRequest(req jwt.AuthorizationRequest, trusted bool) (userJWT string, errMsg string) {
 	tenant, presented, ok := parseDeviceCredential(req.ConnectOptions.Username, req.ConnectOptions.Password)
 	if !ok {
 		return "", genericAuthFailure
+	}
+	// A certificate connect is its own path (callout_x509.go): the credential is the TLS client
+	// certificate, never anything in the username or password.
+	if presented.CredentialType == string(model.CredentialX509Certificate) {
+		return c.authorizeX509(req, tenant, presented, trusted)
+	}
+	// A certificate offered with a token or password username is ignored: the connect
+	// authenticates on that credential and nothing else.
+	if req.TLS != nil && len(req.TLS.Certs) > 0 {
+		c.countX509(x509ResultCertIgnored)
 	}
 
 	// The ADR-077 lifecycle gate. A device credential outlives the operator's delete —
@@ -597,6 +640,32 @@ func (c *CalloutResponder) authorize(req jwt.AuthorizationRequest) (userJWT stri
 		return "", genericAuthFailure
 	}
 
+	userJWT, why := c.grantSession(ctx, req, tenant, device)
+	if why != "" {
+		return "", genericAuthFailure
+	}
+	return userJWT, ""
+}
+
+// grantRefusal names which of grantSession's checks refused a connect, "" when none did. It is
+// for the caller's counters and logs only; it never reaches the device.
+type grantRefusal string
+
+const (
+	grantGranted        grantRefusal = ""
+	grantRefusedDevice  grantRefusal = "device_disabled"
+	grantRefusedClient  grantRefusal = "client_id_mismatch"
+	grantRefusedFence   grantRefusal = "tenant_fenced"
+	grantRefusedExpiry  grantRefusal = "expires_too_soon"
+	grantRefusedFailure grantRefusal = "error"
+)
+
+// grantSession is the half of a device connect that is the same whatever the credential was:
+// everything after the credential has named the device. The device must be enabled, the MQTT
+// client id must be its own, the tenant's erasure fence must not stand, and the session is
+// clamped to the credential's expiry before it is signed. The order matters and is part of the
+// contract (see the notes on each check).
+func (c *CalloutResponder) grantSession(ctx context.Context, req jwt.AuthorizationRequest, tenant string, device *model.Device) (string, grantRefusal) {
 	// A disabled device is refused a session, with the same generic answer as every other
 	// refusal. Checked after the credential succeeded, like the client-id pin below: it is a
 	// property of the DEVICE, which only a successful credential check names, and it is not
@@ -607,7 +676,7 @@ func (c *CalloutResponder) authorize(req jwt.AuthorizationRequest) (userJWT stri
 	if device.IsDisabled() {
 		log.Debug().Str("tenant", tenant).Str("device", device.Token).
 			Msg("Auth-callout refused a device connect: the device is disabled.")
-		return "", genericAuthFailure
+		return "", grantRefusedDevice
 	}
 
 	// An MQTT client id is a SESSION KEY: unchecked, any device that can authenticate at
@@ -637,7 +706,7 @@ func (c *CalloutResponder) authorize(req jwt.AuthorizationRequest) (userJWT stri
 		// Unreachable while the ADR-042 grammar guard holds on all three values; a
 		// denial rather than an admission if it ever does not.
 		log.Error().Err(err).Str("tenant", tenant).Msg("Auth-callout could not derive the required MQTT client id.")
-		return "", genericAuthFailure
+		return "", grantRefusedFailure
 	}
 	if !messaging.DeviceClientIDMatches(req.ClientInformation.MQTT, required) {
 		// Logged with both values because "my device will not connect" is otherwise
@@ -647,7 +716,7 @@ func (c *CalloutResponder) authorize(req jwt.AuthorizationRequest) (userJWT stri
 		log.Debug().Str("tenant", tenant).Str("presented", req.ClientInformation.MQTT).
 			Str("required", required).
 			Msg("Auth-callout refused a device connect whose MQTT client id is not the device's own.")
-		return "", genericAuthFailure
+		return "", grantRefusedClient
 	}
 
 	// The erasure fence, read from this area's own schema immediately before minting. The
@@ -666,7 +735,7 @@ func (c *CalloutResponder) authorize(req jwt.AuthorizationRequest) (userJWT stri
 	if err := c.tenantFenced(ctx, tenant); err != nil {
 		log.Debug().Err(err).Str("tenant", tenant).
 			Msg("Auth-callout refused a device connect: this tenant's data is being erased, or the erasure fence could not be read.")
-		return "", genericAuthFailure
+		return "", grantRefusedFence
 	}
 
 	// A session must not outlive the credential that opened it. The broker force-closes a
@@ -678,14 +747,14 @@ func (c *CalloutResponder) authorize(req jwt.AuthorizationRequest) (userJWT stri
 	if !ok {
 		log.Debug().Str("tenant", tenant).Str("device", device.Token).
 			Msg("Auth-callout refused a device connect: the credential expires too soon to mint a session.")
-		return "", genericAuthFailure
+		return "", grantRefusedExpiry
 	}
 	signed, err := natsauth.SignDeviceUserJWT(c.issuerSeed, req.UserNkey, c.instanceId, tenant, device.Token, c.now(), ttl)
 	if err != nil {
 		log.Error().Err(err).Msg("Auth-callout failed to sign a device user JWT.")
-		return "", genericAuthFailure
+		return "", grantRefusedFailure
 	}
-	return signed, ""
+	return signed, grantGranted
 }
 
 // checkPassword authenticates an MQTT_BASIC connect through the credential Checker, so
@@ -838,6 +907,20 @@ func parseDeviceCredential(username, password string) (string, *model.PresentedC
 	// callout rather than resting on a distant invariant.
 	if core.ValidateToken(tenant) != nil {
 		return "", nil, false
+	}
+	// "@x509" selects the certificate path. '@' is outside core.ValidateToken, so the name can
+	// never collide with a credential id an operator chose. The credential type alone routes it,
+	// and the presented value carries no credential id to look up: a certificate connect that
+	// somehow reached an id-based lookup would be refused there (the type is not presented by
+	// id), not authenticated on the literal "@x509". A password is carried so the certificate
+	// path can refuse it.
+	if credentialID == X509Username {
+		p := &model.PresentedCredential{CredentialType: string(model.CredentialX509Certificate)}
+		if password != "" {
+			secret := password
+			p.Secret = &secret
+		}
+		return tenant, p, true
 	}
 	if password != "" {
 		secret := password
