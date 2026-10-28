@@ -48,6 +48,8 @@
 // rather than a description of it.
 package streams
 
+import "slices"
+
 // Tier is a stream's disk-budget class. The two tiers exist because the streams
 // divide cleanly by what drives their volume, and sizing them alike wastes most
 // of the platform's disk floor on streams that will never fill.
@@ -1204,4 +1206,25 @@ func Suffixes() []string {
 		out = append(out, s.Suffix)
 	}
 	return out
+}
+
+// ingestAreas are the areas that accept a device's message and acknowledge it (an MQTT PUBACK, an
+// HTTP 202) once it is in a stream.
+var ingestAreas = []string{"event-sources", "lwm2m-ingest", "sparkplug-ingest"}
+
+// OnIngestPath reports whether a stream holds device data that has been ACKNOWLEDGED to the device
+// on the strength of landing there: the capture stream the broker writes device publishes into, and
+// every stream an ingest area writes. Moving such a stream's leader can lose messages the device
+// was told were safe, which a latency gain never justifies, so nothing that moves leaders touches
+// it. Derived from the declaration so a new ingest stream is on the path the day it is declared.
+func (s Stream) OnIngestPath() bool {
+	if s.Shape == ShapeDeviceEvents {
+		return true
+	}
+	for _, w := range s.Writers {
+		if slices.Contains(ingestAreas, w) {
+			return true
+		}
+	}
+	return false
 }

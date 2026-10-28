@@ -406,12 +406,23 @@ func operatorLogin(natscfg config.NatsConfiguration) (user, password string, err
 // InsecureSkipVerify, would quietly make this the one tool that does not check
 // the thing it is inspecting.
 func dialBroker(url string, natscfg config.NatsConfiguration) (*nats.Conn, error) {
+	return dialBrokerCtx(context.Background(), url, natscfg)
+}
+
+// dialBrokerCtx is dialBroker with the connect bounded by ctx's deadline as well as its own 10 s.
+func dialBrokerCtx(ctx context.Context, url string, natscfg config.NatsConfiguration) (*nats.Conn, error) {
+	timeout := 10 * time.Second
+	if dl, ok := ctx.Deadline(); ok {
+		if left := time.Until(dl); left < timeout {
+			timeout = max(left, time.Millisecond)
+		}
+	}
 	opts := []nats.Option{
 		nats.Name("dcctl-ha-verify"),
 		// No reconnect. This is a one-shot check, and a client that retries in the
 		// background turns "the broker is unreachable" into a hang.
 		nats.MaxReconnects(0),
-		nats.Timeout(10 * time.Second),
+		nats.Timeout(timeout),
 	}
 	tlsConfig, err := natscfg.TLSConfig(natscfg.Hostname)
 	if err != nil {
@@ -450,6 +461,11 @@ func dialBroker(url string, natscfg config.NatsConfiguration) (*nats.Conn, error
 // Port 0 asks the kernel for a free local port, so two checks can run at once and
 // neither collides with anything already bound.
 func forwardPort(restCfg *rest.Config, namespace, pod string, remote int) (int, func(), error) {
+	return forwardPortCtx(context.Background(), restCfg, namespace, pod, remote)
+}
+
+// forwardPortCtx is forwardPort that gives up when ctx ends.
+func forwardPortCtx(ctx context.Context, restCfg *rest.Config, namespace, pod string, remote int) (int, func(), error) {
 	roundTripper, upgrader, err := spdy.RoundTripperFor(restCfg)
 	if err != nil {
 		return 0, nil, err
@@ -480,6 +496,9 @@ func forwardPort(restCfg *rest.Config, namespace, pod string, remote int) (int, 
 	case <-readyChan:
 	case err := <-errChan:
 		return 0, nil, fmt.Errorf("port-forward to %s/%s failed: %w", namespace, pod, err)
+	case <-ctx.Done():
+		close(stopChan)
+		return 0, nil, fmt.Errorf("port-forward to %s/%s: %w", namespace, pod, ctx.Err())
 	case <-time.After(20 * time.Second):
 		close(stopChan)
 		return 0, nil, fmt.Errorf("port-forward to %s/%s did not become ready", namespace, pod)

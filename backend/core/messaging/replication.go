@@ -279,3 +279,21 @@ func replicationExpectation(instanceId string, replicas int, deployedAreas []str
 	}
 	return exp
 }
+
+// RebalanceableStreams are the streams of an instance whose leaders may be moved to even out
+// the broker: the declared streams that are not on the acknowledged-ingest path (see
+// streams.Stream.OnIngestPath), by their concrete names. It is a positive list on purpose. A
+// stream not named here is not moved: the broker's own MQTT streams, the device capture stream,
+// every stream an ingest area writes, key-value buckets and anything undeclared. The broker
+// alert for imbalance selects the same names (templates/prometheusrule-broker.yaml), and a test
+// holds the two together.
+func RebalanceableStreams(instanceId string) []string {
+	var out []string
+	for _, s := range streams.All {
+		if !s.OnIngestPath() {
+			out = append(out, StreamName(instanceId, s.Suffix))
+		}
+	}
+	slices.Sort(out)
+	return out
+}

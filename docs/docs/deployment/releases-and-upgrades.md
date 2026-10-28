@@ -498,6 +498,16 @@ A release that changes the event store's image now reaches existing instances th
 step: their instances restart onto it. The release notes for such a release say what else it
 needs.
 
+#### The broker's leadership is evened out {#upgrade-broker-leadership}
+
+Rolling the broker's servers leaves the one restarted last leading no streams or consumers while the others
+lead everything, and at a measured load that roughly doubled publish acknowledgement latency. After the
+services have rolled, an upgrade that touched the broker asks the leader of each over-loaded stream and
+consumer to hand over to a replica that is up to date, and prints how many each server leads before and
+after. Moves run one at a time, each waiting for the new leader to be current before the next. The step is bounded and best effort: if it cannot finish it warns and the upgrade still succeeds.
+Streams that hold device data already acknowledged to the device are deliberately never rebalanced: the broker's MQTT streams, the device capture stream and every stream an ingest service writes. A leader change on them has lost messages that devices had been told were safe, so no latency gain is worth it and there is no option to include them. Their imbalance clears at the next broker roll, or on its own.
+`dcctl broker rebalance <instance>` runs the same step on demand, for a broker restarted some other way.
+
 ### What else an upgrade checks {#upgrade-checks}
 
 Two things ride along with it, because a version bump is the thing that reliably happens to a

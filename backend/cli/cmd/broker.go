@@ -18,6 +18,7 @@ import (
 
 var (
 	brokerReconcileKubeContext string
+	brokerRebalanceKubeContext string
 	brokerPermissionsInstance  string
 	brokerPermissionsProfile   string
 	brokerPermissionsAreas     []string
@@ -98,7 +99,40 @@ it is recreated as declared, which can take a few minutes.`,
 	SilenceUsage: true,
 }
 
+// brokerRebalanceCmd evens out which broker server leads what.
+var brokerRebalanceCmd = &cobra.Command{
+	Use:   "rebalance <instance>",
+	Short: "Even out which message broker server leads which streams and consumers",
+	Long: `Spread the message broker's stream and consumer leaders evenly across its servers.
+
+A rolling restart of the broker leaves the server restarted last leading nothing, and the other
+servers lead everything: at the load this was measured under, publish acknowledgement latency
+roughly doubled. ` + "`dcctl upgrade`" + ` does this after it rolls the broker; this runs the same step on
+demand, for a broker restarted some other way (a node drain, a pod loss).
+
+It asks the leader of each over-loaded group to hand over to a replica that is current, one
+group at a time, each waiting for the new leader to be current, and moves nothing else: no data,
+no configuration. A broker that is already even is left alone. Each move is a brief leader
+election for one stream or consumer.
+
+Streams that hold device data already acknowledged to the device are never moved, and there is no
+option to include them: the broker's MQTT streams, the device capture stream and every stream an
+ingest service writes. A leader change on them has lost messages devices had been told were safe,
+so their imbalance clears at the next broker roll, or on its own.`,
+	Example: `  dcctl broker rebalance devicechain
+  dcctl broker rebalance devicechain --kube-context kind-devicechain`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return bootstrap.RebalanceBroker(cmd.Context(), bootstrap.RebalanceBrokerOptions{
+			Options: bootstrap.Options{Instance: args[0], KubeContext: brokerRebalanceKubeContext},
+		})
+	},
+	SilenceUsage: true,
+}
+
 func init() {
+	brokerRebalanceCmd.Flags().StringVar(&brokerRebalanceKubeContext, "kube-context", "", "kube-context to target (default: the cluster recorded at bootstrap; a different context is refused)")
+	brokerCmd.AddCommand(brokerRebalanceCmd)
 	brokerReconcileCmd.Flags().StringVar(&brokerReconcileKubeContext, "kube-context", "", "kube-context to target (default: the cluster recorded at bootstrap; a different context is refused)")
 	brokerCmd.AddCommand(brokerReconcileCmd)
 	brokerPermissionsCmd.Flags().StringVar(&brokerPermissionsInstance, "instance-id", "", "the instance id the services run under (their DC_INSTANCE_ID); it is part of every subject and stream name (required)")

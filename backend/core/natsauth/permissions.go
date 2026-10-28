@@ -443,7 +443,16 @@ func AdminPermissions(instanceId string) (Permissions, error) {
 	// message. This is the operator plane's login: the one the instance's Secrets hand to a person
 	// who holds them, and the one dcctl presents now that no shared login exists to borrow.
 	g.api("STREAM.LIST", "STREAM.NAMES", "CONSUMER.LIST.>", "CONSUMER.NAMES.>")
-	shape := func(stream string) { g.api("STREAM.INFO."+stream, "STREAM.CREATE."+stream, "STREAM.UPDATE."+stream) }
+	// Each stream the administrator shapes it may also ask to hand its leader over (`dcctl upgrade`
+	// evens leadership out after the broker rolls), and its consumers' leaders. Named per stream,
+	// never as a wildcard: the account is shared, and one instance's administrator must not be
+	// able to force an election on another instance's streams, nor on the broker's own MQTT streams.
+	// It changes who coordinates a group, never what it holds, and adds no right to read, write
+	// or remove a message.
+	shape := func(stream string) {
+		g.api("STREAM.INFO."+stream, "STREAM.CREATE."+stream, "STREAM.UPDATE."+stream,
+			"STREAM.LEADER.STEPDOWN."+stream, "CONSUMER.LEADER.STEPDOWN."+stream+".>")
+	}
 	for _, st := range streams.All {
 		name := messaging.StreamName(instanceId, st.Suffix)
 		shape(name)

@@ -630,6 +630,36 @@ func TestTheBrokerAdministratorCanEnumerateButNotRead(t *testing.T) {
 	}
 }
 
+// The administrator may hand a leader over (dcctl upgrade evens leadership out after the broker
+// rolls), and that is the whole of what it gains: no verb that reads, writes or removes.
+func TestTheBrokerAdministratorCanStepALeaderDown(t *testing.T) {
+	p, err := AdminPermissions(permInstance)
+	require.NoError(t, err)
+	for _, st := range streams.All {
+		name := messaging.StreamName(permInstance, st.Suffix)
+		require.True(t, p.publishes("$JS.API.STREAM.LEADER.STEPDOWN."+name), name)
+		require.True(t, p.publishes("$JS.API.CONSUMER.LEADER.STEPDOWN."+name+".some-durable"), name)
+	}
+	require.False(t, p.publishes("$JS.API.META.LEADER.STEPDOWN"), "the meta group is not the administrator's to move")
+}
+
+// The account is shared between instances and with the broker's own MQTT gateway. An instance's
+// administrator holds the step-down verbs for ITS OWN streams only: it cannot force an election
+// on another instance's stream, on the MQTT streams, or on anything undeclared.
+func TestTheBrokerAdministratorCannotStepDownAnotherInstancesStreams(t *testing.T) {
+	p, err := AdminPermissions(permInstance)
+	require.NoError(t, err)
+	other := permInstance + "x"
+	for _, st := range streams.All {
+		name := messaging.StreamName(other, st.Suffix)
+		require.False(t, p.publishes("$JS.API.STREAM.LEADER.STEPDOWN."+name), "another instance's stream %s", name)
+		require.False(t, p.publishes("$JS.API.CONSUMER.LEADER.STEPDOWN."+name+".d"), "another instance's consumer on %s", name)
+	}
+	require.False(t, p.publishes("$JS.API.STREAM.LEADER.STEPDOWN."+messaging.MqttSessionStore), "the MQTT session store")
+	require.False(t, p.publishes("$JS.API.STREAM.LEADER.STEPDOWN.anything"), "an undeclared stream")
+	require.False(t, p.publishes("$JS.API.CONSUMER.LEADER.STEPDOWN.anything.d"), "an undeclared stream's consumer")
+}
+
 // The capture reader binds a durable under a new name and deletes the one an earlier build read
 // with (messaging.CaptureDurableName). Its login must be able to manage the first and DELETE the
 // second; a grant missing the delete would leave the old filtered durable on the work queue, where

@@ -530,6 +530,16 @@ Una versión que cambie la imagen del almacén de eventos llega ahora por este p
 instancias existentes: sus instancias se reinician con ella. Las notas de una versión así dicen
 qué más necesita.
 
+#### Se reparte el liderazgo del broker {#upgrade-broker-leadership}
+
+Reiniciar de forma gradual los servidores del broker deja al reiniciado en último lugar sin liderar ningún stream
+ni consumidor, mientras los demás lideran todo; con una carga medida, eso casi duplicó la latencia de confirmación
+de publicación. Cuando los servicios ya se han reiniciado, una actualización que tocó el broker pide al líder de cada
+stream y consumidor sobrecargado que ceda el liderazgo a una réplica al día, e imprime cuántos lidera cada servidor
+antes y después. Los movimientos se hacen de uno en uno, y cada uno espera a que el nuevo líder esté al día antes del siguiente. El paso está acotado y es de mejor esfuerzo: si no puede terminar, avisa y la actualización sigue
+siendo correcta.
+Los streams con datos de dispositivo ya confirmados al dispositivo no se reequilibran deliberadamente nunca: los streams MQTT del broker, el stream de captura de dispositivos y todo stream en el que escribe un servicio de ingesta. Un cambio de líder en ellos ha perdido mensajes que se habían dicho seguros a los dispositivos, así que ninguna ganancia de latencia lo compensa y no hay opción para incluirlos. Su desequilibrio se resuelve en el siguiente reinicio del broker, o por sí solo. `dcctl broker rebalance <instance>` ejecuta el mismo paso a demanda, para un broker reiniciado de otro modo.
+
 ### Qué más comprueba una actualización {#upgrade-checks}
 
 Dos cosas viajan con ella, porque un cambio de versión es lo que le ocurre de forma fiable a
