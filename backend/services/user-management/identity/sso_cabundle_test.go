@@ -8,11 +8,9 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/hex"
 	"encoding/pem"
 	"io"
 	"log"
@@ -20,7 +18,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -118,107 +115,6 @@ func requireUnknownAuthority(t *testing.T, err error) {
 	require.ErrorAs(t, err, &ua, "the refusal must be the certificate's, not some other failure: %v", err)
 }
 
-func TestParseCaBundleAcceptsCertificatesAndCanonicalisesThem(t *testing.T) {
-	ca := newTestCA(t, "Acme Root")
-	other := newTestCA(t, "Acme Issuing")
-
-	// Comments between blocks and a duplicate are dropped; the stored text is the
-	// certificates alone.
-	in := "# Acme roots\n" + ca.certPEM + "\nsome note\n" + other.certPEM + ca.certPEM
-	canon, certs, err := ParseCaBundle(in)
-	require.NoError(t, err)
-	require.Len(t, certs, 2)
-	require.Equal(t, ca.certPEM+other.certPEM, canon)
-	require.NotContains(t, canon, "note")
-
-	sum := sha256.Sum256(ca.der)
-	require.Equal(t, hex.EncodeToString(sum[:]), certs[0].FingerprintSHA256)
-	require.Equal(t, "CN=Acme Root", certs[0].Subject)
-	require.True(t, certs[0].IsCA)
-	require.True(t, certs[0].NotAfter.After(time.Now()))
-}
-
-func TestParseCaBundleEmptyMeansNoBundle(t *testing.T) {
-	for _, in := range []string{"", "  \n\t"} {
-		canon, certs, err := ParseCaBundle(in)
-		require.NoError(t, err)
-		require.Empty(t, canon)
-		require.Empty(t, certs)
-	}
-}
-
-// A certificate that is not a CA is accepted (pinning a provider's own certificate is
-// legitimate) and reported as such, so the console can say so.
-func TestParseCaBundleAcceptsAnExactCertificateAndReportsItIsNotACA(t *testing.T) {
-	_, certs, err := ParseCaBundle(newTestCA(t, "r").leafPEM())
-	require.NoError(t, err)
-	require.Len(t, certs, 1)
-	require.False(t, certs[0].IsCA)
-}
-
-func TestParseCaBundleRefusesAPrivateKeyWithoutEchoingIt(t *testing.T) {
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	require.NoError(t, err)
-	der, err := x509.MarshalPKCS8PrivateKey(key)
-	require.NoError(t, err)
-	pkcs8 := string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}))
-	ec, err := x509.MarshalECPrivateKey(key)
-	require.NoError(t, err)
-	sec1 := string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: ec}))
-	ca := newTestCA(t, "r")
-
-	cases := map[string]string{
-		"pkcs8 alone":           pkcs8,
-		"sec1 alone":            sec1,
-		"after a certificate":   ca.certPEM + pkcs8,
-		"before a certificate":  sec1 + ca.certPEM,
-		"truncated key block":   ca.certPEM + "-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49\n",
-		"lower-case marker":     ca.certPEM + "-----begin private key-----\nAAAA\n",
-		"encrypted key marker":  ca.certPEM + "-----BEGIN ENCRYPTED PRIVATE KEY-----\nAAAA\n-----END ENCRYPTED PRIVATE KEY-----\n",
-		"rsa key marker, junk":  ca.certPEM + "-----BEGIN RSA PRIVATE KEY-----\n!!!\n",
-		"key between two certs": ca.certPEM + pkcs8 + ca.leafPEM(),
-	}
-	for name, in := range cases {
-		canon, certs, err := ParseCaBundle(in)
-		require.ErrorIs(t, err, ErrCaBundleInvalid, name)
-		require.Empty(t, canon, name)
-		require.Empty(t, certs, name)
-		// Neither the key's body nor the certificate bytes may travel in the error.
-		body := strings.TrimSpace(strings.SplitN(strings.SplitN(pkcs8, "\n", 2)[1], "\n-----END", 2)[0])
-		require.NotContains(t, err.Error(), body, name)
-		require.NotContains(t, err.Error(), "MIGH", name)
-	}
-}
-
-func TestParseCaBundleRefusesWhatIsNotACertificate(t *testing.T) {
-	ca := newTestCA(t, "r")
-	badDER := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("not a certificate")}))
-	pub := string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: ca.der}))
-	withHeaders := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Headers: map[string]string{"Proc-Type": "4,ENCRYPTED"}, Bytes: ca.der}))
-
-	for name, in := range map[string]string{
-		"prose":              "this is not PEM at all",
-		"unterminated block": "-----BEGIN CERTIFICATE-----\nMIIB\n",
-		"garbage base64":     "-----BEGIN CERTIFICATE-----\n!!!!\n-----END CERTIFICATE-----\n",
-		"valid PEM, bad DER": badDER,
-		"a public key":       pub,
-		"block with headers": withHeaders,
-		"a URL":              "https://pki.example.com/root.pem",
-		"one bad of two":     ca.certPEM + badDER,
-	} {
-		_, _, err := ParseCaBundle(in)
-		require.ErrorIs(t, err, ErrCaBundleInvalid, name)
-		require.NotContains(t, err.Error(), "pki.example.com", name)
-	}
-}
-
-func TestParseCaBundleRefusesAnOversizedBundle(t *testing.T) {
-	ca := newTestCA(t, "r")
-	_, _, err := ParseCaBundle(ca.certPEM + strings.Repeat("# padding\n", maxCaBundleBytes/10))
-	require.ErrorIs(t, err, ErrCaBundleInvalid)
-	require.Contains(t, err.Error(), "64 KiB")
-}
-
 // fakeDiscoveryHandler answers discovery for the server it is mounted on.
 func tlsDiscovery(baseOf func() string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -242,14 +138,14 @@ func TestDiscoveryOfAPrivateCAProviderNeedsTheBundle(t *testing.T) {
 	_, err := m.FetchIdpDiscovery(ctx, srv.URL, "")
 	requireUnknownAuthority(t, err)
 
-	canon, _, err := ParseCaBundle(ca.certPEM)
+	canon, _, err := parseCaBundle(ca.certPEM)
 	require.NoError(t, err)
 	snap, err := m.FetchIdpDiscovery(ctx, srv.URL, canon)
 	require.NoError(t, err)
 	require.Equal(t, srv.URL, snap.Issuer)
 
 	// A bundle for a different CA does not vouch for this provider.
-	otherCanon, _, err := ParseCaBundle(newTestCA(t, "Somebody Else").certPEM)
+	otherCanon, _, err := parseCaBundle(newTestCA(t, "Somebody Else").certPEM)
 	require.NoError(t, err)
 	_, err = m.FetchIdpDiscovery(ctx, srv.URL, otherCanon)
 	requireUnknownAuthority(t, err)
@@ -262,7 +158,7 @@ func TestABundleCannotMakeAForbiddenDestinationReachable(t *testing.T) {
 	ca := newTestCA(t, "Acme Root")
 	hits := 0
 	srv := ca.startTLS(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hits++ }))
-	canon, _, err := ParseCaBundle(ca.certPEM)
+	canon, _, err := parseCaBundle(ca.certPEM)
 	require.NoError(t, err)
 
 	m := NewManager(nil, nil, nil, nil, 0, 0, "", BootstrapConfig{}, nil)
@@ -285,7 +181,7 @@ func TestABundleWithNoClientFactoryRefusesRatherThanIgnoringIt(t *testing.T) {
 
 func TestTheClientIsCachedPerConnectionVersionAndRebuiltOnChange(t *testing.T) {
 	ca := newTestCA(t, "Acme Root")
-	canon, _, err := ParseCaBundle(ca.certPEM)
+	canon, _, err := parseCaBundle(ca.certPEM)
 	require.NoError(t, err)
 	m := NewManager(nil, nil, nil, nil, 0, 0, "", BootstrapConfig{}, nil)
 	installFactory(t, m, allowLoopback)
@@ -430,7 +326,7 @@ func TestSetIdpCaBundleVerifiesTheProviderBeforeSaving(t *testing.T) {
 // d2fp is the SHA-256 fingerprint of a test CA's certificate.
 func d2fp(t *testing.T, ca *testCA) string {
 	t.Helper()
-	_, certs, err := ParseCaBundle(ca.certPEM)
+	_, certs, err := parseCaBundle(ca.certPEM)
 	require.NoError(t, err)
 	return certs[0].FingerprintSHA256
 }
@@ -479,7 +375,7 @@ func TestABundleIsTrustedInAdditionToTheSystemRoots(t *testing.T) {
 
 	m := NewManager(nil, nil, nil, nil, 0, 0, "", BootstrapConfig{}, nil)
 	installFactory(t, m, allowLoopback)
-	bundle, _, err := ParseCaBundle(private.certPEM)
+	bundle, _, err := parseCaBundle(private.certPEM)
 	require.NoError(t, err)
 	client, err := m.clientForBundle(bundle)
 	require.NoError(t, err)
@@ -497,23 +393,15 @@ func TestABundleIsTrustedInAdditionToTheSystemRoots(t *testing.T) {
 	requireUnknownAuthority(t, get(stranger))
 }
 
-func TestParseCaBundleCountsAndMarkers(t *testing.T) {
-	var pems []string
-	for i := 0; i < maxCaBundleCerts+1; i++ {
-		pems = append(pems, newTestCA(t, "ca-"+string(rune('A'+i%26))+string(rune('a'+i/26))).certPEM)
-	}
-	_, certs, err := ParseCaBundle(strings.Join(pems[:maxCaBundleCerts], ""))
-	require.NoError(t, err)
-	require.Len(t, certs, maxCaBundleCerts)
-	_, _, err = ParseCaBundle(strings.Join(pems, ""))
-	require.ErrorIs(t, err, ErrCaBundleInvalid, "65 certificates")
-
-	// A middle block corrupted past decoding is refused, not silently dropped.
-	good := pems[0] + pems[1]
-	broken := "-----BEGIN CERTIFICATE-----\n!!!not base64!!!\n-----END CERTIFICATE-----\n"
-	_, _, err = ParseCaBundle(pems[0] + broken + pems[1])
+// The shared parser's refusals reach identity callers as an invalid connection, with the
+// parser's own reason and no echo of the input. (The parser itself is tested in core/x509trust.)
+func TestParseCaBundleRefusalIsAnInvalidConnection(t *testing.T) {
+	canon, certs, err := parseCaBundle("https://pki.example.com")
+	require.ErrorIs(t, err, ErrIdpInvalid)
 	require.ErrorIs(t, err, ErrCaBundleInvalid)
-	require.Contains(t, err.Error(), "could not be read")
-	_, _, err = ParseCaBundle(good)
-	require.NoError(t, err)
+	require.NotContains(t, err.Error(), "pki.example.com")
+	require.Empty(t, canon)
+	require.Empty(t, certs)
+	// The wording an administrator sees did not change when the parser moved.
+	require.Equal(t, "invalid identity provider connection: invalid CA bundle: no PEM certificate was found (expected -----BEGIN CERTIFICATE----- blocks)", err.Error())
 }

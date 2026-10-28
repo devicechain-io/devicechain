@@ -17,6 +17,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/x509trust"
 	"github.com/devicechain-io/dc-user-management/iam"
 	"gorm.io/gorm"
 )
@@ -91,7 +92,7 @@ type IdpConnectionInput struct {
 	// audited at create and not stored (nothing would read it).
 	MfaEnforcedByIdp bool
 	// CaBundle is optional PEM: private CA certificates to trust for this provider's TLS
-	// certificate, beside the system roots (see ParseCaBundle).
+	// certificate, beside the system roots (see x509trust.ParseCaBundle).
 	CaBundle string
 }
 
@@ -126,7 +127,7 @@ type IdpConnectionDetail struct {
 	RoleMappings []IdpRoleMappingDetail
 	// CaCertificates are the certificates of the connection's private CA bundle, parsed for
 	// display; empty when it has none.
-	CaCertificates []CaCertificate
+	CaCertificates []x509trust.CaCertificate
 	// Fingerprint identifies the discovery snapshot, so an approval is of THE snapshot the
 	// administrator saw.
 	Fingerprint string
@@ -210,7 +211,7 @@ func (m *Manager) CreateIdpConnection(ctx context.Context, in IdpConnectionInput
 	if len(groupsClaim) > 64 {
 		return nil, invalid("the groups claim name is up to 64 characters")
 	}
-	caBundle, _, err := ParseCaBundle(in.CaBundle)
+	caBundle, _, err := parseCaBundle(in.CaBundle)
 	if err != nil {
 		return nil, err
 	}
@@ -305,7 +306,7 @@ func (m *Manager) connectionDetail(ctx context.Context, conn *iam.IdpConnection)
 	// The stored bundle was canonicalised on write; a row that no longer parses (edited in
 	// the database) shows no certificates and, because the client builder refuses it too,
 	// reaches no provider: it fails closed rather than quietly trusting the system roots.
-	_, caCerts, _ := ParseCaBundle(conn.CaBundle)
+	_, caCerts, _ := parseCaBundle(conn.CaBundle)
 	return &IdpConnectionDetail{
 		CaCertificates: caCerts,
 		Connection:     *conn, Domains: domains, Tenants: tenants, HasSecret: has, RoleMappings: mappings,
@@ -402,7 +403,7 @@ func (m *Manager) SetIdpCaBundle(ctx context.Context, token, bundle string) (*Id
 	if err != nil {
 		return nil, err
 	}
-	canonical, _, err := ParseCaBundle(bundle)
+	canonical, _, err := parseCaBundle(bundle)
 	if err != nil {
 		return nil, err
 	}

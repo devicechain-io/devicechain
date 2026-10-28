@@ -12,6 +12,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
+	"github.com/devicechain-io/dc-microservice/x509trust"
 	"github.com/devicechain-io/dc-user-management/iam"
 	"github.com/devicechain-io/dc-user-management/identity"
 	gql "github.com/graph-gophers/graphql-go"
@@ -101,7 +102,7 @@ func (r *IdpConnectionResolver) CaCertificates() []*IdpCaCertificateResolver {
 }
 
 // IdpCaCertificateResolver resolves the IdpCaCertificate type.
-type IdpCaCertificateResolver struct{ c identity.CaCertificate }
+type IdpCaCertificateResolver struct{ c x509trust.CaCertificate }
 
 func (r *IdpCaCertificateResolver) FingerprintSha256() string { return r.c.FingerprintSHA256 }
 func (r *IdpCaCertificateResolver) Subject() string           { return r.c.Subject }
