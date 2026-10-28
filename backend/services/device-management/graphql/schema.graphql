@@ -3080,21 +3080,31 @@ cover.
 type DeviceTrustAnchor implements Model & TokenReference & NamedEntity & MetadataEntity {
     """Server-assigned numeric identifier, as a string."""
     id: ID!
+    """When the anchor was created, as an RFC 3339 timestamp."""
     createdAt: String
+    """When the anchor was last written, as an RFC 3339 timestamp."""
     updatedAt: String
     """Always null: deleted anchors are not returned by this API."""
     deletedAt: String
+    """Identifier of the anchor, unique within the tenant."""
     token: String!
+    """Human-readable name. Null when none is set."""
     name: String
+    """Free-text description. Null when none is set."""
     description: String
+    """Free-form JSON the platform stores and does not interpret. Null when none is set."""
     metadata: String
     """The CA certificate, PEM."""
     certificatePem: String!
     """SHA-256 of the certificate, hex. Unique within the tenant."""
     fingerprintSha256: String!
+    """The certificate's subject distinguished name."""
     subject: String!
+    """The certificate's issuer distinguished name; equal to the subject for a root."""
     issuer: String!
+    """When the certificate becomes valid, as an RFC 3339 timestamp."""
     notBefore: String!
+    """When the certificate expires, as an RFC 3339 timestamp. Chains to it stop authenticating then."""
     notAfter: String!
     """False withdraws the CA: no chain to it authenticates, and the devices relying on it are disconnected."""
     enabled: Boolean!
@@ -3104,10 +3114,13 @@ type DeviceTrustAnchor implements Model & TokenReference & NamedEntity & Metadat
     profileCount: Int!
 }
 
-# Data required to create a trust anchor.
+"""Data required to create a trust anchor."""
 input DeviceTrustAnchorCreateRequest {
+    """Identifier of the anchor, unique within the tenant."""
     token: String!
+    """Human-readable name."""
     name: String
+    """Free-text description."""
     description: String
     """
     Exactly one CA certificate in PEM: it must be a CA that may sign certificates, unexpired,
@@ -3118,13 +3131,18 @@ input DeviceTrustAnchorCreateRequest {
     certificatePem: String!
     """Defaults to true."""
     enabled: Boolean
+    """Free-form JSON the platform stores and does not interpret."""
     metadata: String
 }
 
-# A PARTIAL update: omit a field to leave it, send null to clear a nullable one. The
-# certificate cannot be changed (another CA is another anchor).
+"""
+A PARTIAL update: omit a field to leave it, send null to clear a nullable one. The
+certificate cannot be changed (another CA is another anchor).
+"""
 input DeviceTrustAnchorUpdateRequest {
+    """Human-readable name. Null clears it."""
     name: String
+    """Free-text description. Null clears it."""
     description: String
     """
     Required and unclearable. Setting it false ends the live sessions of the devices that rely
@@ -3132,18 +3150,25 @@ input DeviceTrustAnchorUpdateRequest {
     sessions were not confirmed ended, and repeating it asks again.
     """
     enabled: Boolean
+    """Free-form JSON the platform stores and does not interpret. Null clears it."""
     metadata: String
 }
 
-# Criteria used when searching for trust anchors.
+"""Criteria used when searching for trust anchors."""
 input DeviceTrustAnchorSearchCriteria {
+    """1-based page number."""
     pageNumber: Int!
+    """Anchors per page."""
     pageSize: Int!
+    """Only anchors that are (or are not) enabled."""
     enabled: Boolean
 }
 
+"""A page of trust anchors."""
 type DeviceTrustAnchorSearchResults {
+    """The anchors on this page."""
     results: [DeviceTrustAnchor!]!
+    """Where this page sits in the whole result."""
     pagination: SearchResultsPagination!
 }
 
@@ -4512,12 +4537,21 @@ type Query {
     ): UnregisteredIntegrationDeviceSearchResults!
     # List provisioning profiles that meet criteria.
     provisioningProfiles(criteria: ProvisioningProfileSearchCriteria!): ProvisioningProfileSearchResults!
-    # Find trust anchors by unique id.
-    deviceTrustAnchorsById(ids: [ID!]!): [DeviceTrustAnchor!]!
-    # Find trust anchors by unique token.
-    deviceTrustAnchorsByToken(tokens: [String!]!): [DeviceTrustAnchor!]!
-    # List trust anchors that meet criteria.
-    deviceTrustAnchors(criteria: DeviceTrustAnchorSearchCriteria!): DeviceTrustAnchorSearchResults!
+    """Find trust anchors by unique id."""
+    deviceTrustAnchorsById(
+        """Ids of the anchors."""
+        ids: [ID!]!
+    ): [DeviceTrustAnchor!]!
+    """Find trust anchors by unique token."""
+    deviceTrustAnchorsByToken(
+        """Tokens of the anchors."""
+        tokens: [String!]!
+    ): [DeviceTrustAnchor!]!
+    """List trust anchors that meet the criteria."""
+    deviceTrustAnchors(
+        """Paging and filters."""
+        criteria: DeviceTrustAnchorSearchCriteria!
+    ): DeviceTrustAnchorSearchResults!
     # Get a device's current possession claim, or null if it has none.
     deviceClaim(deviceToken: String!): DeviceClaim
 
@@ -5073,14 +5107,25 @@ type Mutation {
     # Delete a single provisioning profile.
     deleteProvisioningProfile(token: String!): Boolean!
     """Create a trust anchor from a CA certificate. Refused when the tenant already holds 32."""
-    createDeviceTrustAnchor(request: DeviceTrustAnchorCreateRequest!): DeviceTrustAnchor!
+    createDeviceTrustAnchor(
+        """The anchor to create."""
+        request: DeviceTrustAnchorCreateRequest!
+    ): DeviceTrustAnchor!
     """Update a trust anchor. Disabling one ends the live sessions of the devices that rely on it."""
-    updateDeviceTrustAnchor(token: String!, request: DeviceTrustAnchorUpdateRequest!): DeviceTrustAnchor!
+    updateDeviceTrustAnchor(
+        """Token of the anchor."""
+        token: String!
+        """The fields to change."""
+        request: DeviceTrustAnchorUpdateRequest!
+    ): DeviceTrustAnchor!
     """
     Delete a trust anchor nothing relies on. Refused with extensions.code REFERENCE_VIOLATION while a
     credential or a provisioning profile still names it.
     """
-    deleteDeviceTrustAnchor(token: String!): Boolean!
+    deleteDeviceTrustAnchor(
+        """Token of the anchor."""
+        token: String!
+    ): Boolean!
     """
     Create an inbound integration. The response carries the bearer token the server
     generated for it, once. Refused when the tenant already holds as many integrations as its
