@@ -24,8 +24,9 @@ miembro limitado a algunos de los clientes o grupos del inquilino no las ve.
 La autenticación por certificado llega por etapas. En la consola puedes crear anclas de confianza,
 añadir credenciales de certificado a los dispositivos y crear perfiles de aprovisionamiento por
 certificado. Un dispositivo cuyo certificado está registrado como credencial puede conectarse con él
-al broker MQTT. Un certificado que ninguna credencial nombra todavía **se rechaza**: un dispositivo no
-se registra por sí mismo presentando un certificado por primera vez. Consulta
+al broker MQTT, y un dispositivo cuyo certificado encadena con el ancla de confianza de un perfil de
+certificado se registra solo en su primera conexión. Adoptar un dispositivo que creaste de antemano y
+renovar un certificado todavía no están disponibles. Consulta
 [Qué funciona hoy con certificados](#certificates-today).
 :::
 
@@ -177,9 +178,18 @@ id externo. Un inquilino puede tener hasta ocho perfiles por certificado.
   comprueba la cadena frente al ancla de confianza de la credencial en cada conexión y termina la sesión
   a más tardar en la primera caducidad de la cadena. Deshabilitar una credencial, un ancla o el
   dispositivo rechaza la siguiente conexión.
-- **El autorregistro por certificado todavía no está activo.** Un certificado que ninguna credencial fija
-  se rechaza. Hasta que se distribuya el registro en la primera conexión, añade tú el certificado de cada
-  dispositivo como credencial, como se explica arriba.
+- **El registro en la primera conexión funciona.** Un certificado que ninguna credencial fija, y que
+  encadena con el ancla de confianza de un perfil de certificado habilitado con la estrategia **Permitir
+  dispositivos nuevos**, crea el dispositivo y le fija el certificado. El token del dispositivo se deriva
+  de su nombre común, así que su client id se calcula a partir del certificado. Si un certificado
+  encadena con las anclas de más de un perfil, gana el perfil cuyo ancla está más cerca del certificado,
+  y un empate se rechaza. Los pasos y la regla del client id están en
+  [Conectar con un certificado](/guides/device-x509#registration).
+- **Adoptar y renovar todavía no están disponibles.** Un dispositivo que creaste de antemano y reservaste
+  para un perfil de certificado no puede registrarse por certificado, ni tampoco uno cuyo aprovisionamiento
+  se restableció; dale tú una credencial de certificado. Un dispositivo que ya tiene un certificado y
+  presenta otro distinto se rechaza hasta que llegue la renovación. Añade el certificado nuevo como
+  credencial antes de que caduque el anterior.
 - **Necesita el broker de DeviceChain.** El broker predeterminado pide a cada dispositivo un certificado
   de cliente. Una instancia devuelta a la imagen del broker original sigue atendiendo a los dispositivos
   con token y contraseña y rechaza los de certificado. Consulta

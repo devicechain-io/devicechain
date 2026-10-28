@@ -22,9 +22,9 @@ limited to some of the tenant's customers or groups does not see them.
 :::note What ships today
 Certificate authentication is arriving in stages. In the console you can create trust anchors, add
 certificate credentials to devices and create certificate provisioning profiles. A device whose
-certificate is registered as a credential can connect to the MQTT broker with it. A certificate that
-no credential names yet is **refused**: a device does not register itself by presenting a
-certificate for the first time. See [What works today with certificates](#certificates-today).
+certificate is registered as a credential can connect to the MQTT broker with it, and a device whose
+certificate chains to a certificate profile's trust anchor registers itself on its first connect.
+Adopting a device you created ahead of time and renewing a certificate are not available yet. See [What works today with certificates](#certificates-today).
 :::
 
 ## Provisioning profiles {#provisioning-profiles}
@@ -166,9 +166,18 @@ may hold up to eight certificate profiles.
   against the credential's trust anchor at every connect, and ends the session no later than the
   earliest expiry in the chain. Disabling a credential, an anchor or the device refuses the very next
   connect.
-- **Self-registration by certificate is not live yet.** A certificate that no credential pins is
-  refused. Until registration on first connect ships, add each device's certificate as a credential
-  yourself, as above.
+- **Registration on first connect works.** A certificate that no credential pins, and that chains to
+  the trust anchor of an enabled certificate profile under the **Allow new devices** strategy,
+  creates the device and pins the certificate to it. The device's token is derived from its common
+  name, so its client id is computed from the certificate. If a certificate chains to the anchors of
+  more than one profile, the profile whose anchor is closest to the certificate wins, and a tie is
+  refused. The steps and the client id rule are in
+  [Connecting with a certificate](/guides/device-x509#registration).
+- **Adopting and renewing are not available yet.** A device you created ahead of time and expected
+  for a certificate profile cannot register by certificate, nor can one whose provisioning was
+  reset; give it a certificate credential yourself. A device that already holds a certificate and
+  presents a different one is refused until renewal ships. Add the new certificate as a credential
+  before the old one expires.
 - **It needs the DeviceChain broker.** The default broker asks each device for a client certificate.
   An instance rolled back to the upstream broker image keeps token and password devices working and
   refuses certificate devices. See
