@@ -1553,6 +1553,12 @@ functionalAreas:
       #                             # when the MQTT Service preserves client addresses
       #                             # (externalTrafficPolicy: Local, or a kind NodePort): behind
       #                             # source NAT every device shares one address and one allowance.
+      #     issuerPinDisabled: false # true turns OFF the pin that refuses a certificate connect
+      #                             # unless its request was signed by a live broker server (learned
+      #                             # over the NATS system account). On by default and fail-closed.
+      #     issuerPinRefresh: 30s   # how often the live servers are re-learned, 5s to 10m.
+      #     issuerPinMinRefresh: 2s # least time between two server pings, 100ms up to issuerPinRefresh.
+      #     issuerPinGatherWindow: 750ms # how long one ping waits for answers, 100ms to 2s.
   event-sources:
     # CPU LIMIT raised from the 500m default. On GKE (3 x n2-standard-8, SSD
     # persistent disks, --ha, v0.18.0, shipped defaults) this service was throttled in

@@ -34,7 +34,7 @@ Set the infrastructure variables `server_image_repository = "nats"` and `server_
 
 ## Settings {#settings}
 
-Registration on first connect has two fixed settings, read when device-management starts, under the area's `config`:
+Registration on first connect and the [issuer pin](#issuer-pin) have these fixed settings, read when device-management starts, under the area's `config`:
 
 ```yaml
 functionalAreas:
@@ -43,16 +43,33 @@ functionalAreas:
       callout:
         jitMaxInFlight: 16       # default 16, 1 to 128
         jitSourceTrusted: false  # default false
+        issuerPinDisabled: false      # default false
+        issuerPinRefresh: 30s         # default 30s, 5s to 10m
+        issuerPinMinRefresh: 2s       # default 2s, 100ms up to issuerPinRefresh
+        issuerPinGatherWindow: 750ms  # default 750ms, 100ms to 2s
 ```
 
 | Key | Meaning |
 | --- | --- |
 | `callout.jitMaxInFlight` | How many registrations on first connect one replica works on at once. The next is refused (`jit_busy`) and the device backs off and retries. These places come out of the callout's own bound, so a wave of first connects never takes the places that reconnecting devices need, and a pinned certificate, a token or a password never waits on them. |
 | `callout.jitSourceTrusted` | Adds a limit per client address, sized by `provisioning.sourceBurst` and `provisioning.sourceEvery`. Turn it on **only** when the MQTT Service preserves client addresses (`externalTrafficPolicy: Local`, or a kind NodePort). Behind source NAT every device shares one address and one allowance, and one device's retries would refuse a fleet. With it off, sustained refusals are alerted on rather than throttled by address. |
+| `callout.issuerPinDisabled` | Turns the [issuer pin](#issuer-pin) off. On by default. |
+| `callout.issuerPinRefresh` | How often device-management re-learns the broker's live servers. A list not refreshed for three times this is not believed. |
+| `callout.issuerPinMinRefresh` | The least time between two server pings, however many requests name a server the pin does not know. Also the longest a device can be refused by a broker server that joined since the last refresh. |
+| `callout.issuerPinGatherWindow` | How long one ping waits for the servers to answer. It ends early once every server has. |
 
 The per-tenant limit is not a setting here: it is the tenant's provisioning ceiling, the same one [self-registration](../guides/device-self-registration.md) charges, managed with the tenant's other governance limits. Registrations against one profile take turns on that profile, roughly 100 to 200 a second per profile across all replicas, so a first-connect wave of 10,000 devices registers over a minute or two of device retries. The tenant allowance is charged for every attempt whose chain verified, including one refused afterwards, so a device retrying with a rotated certificate spends it.
 
 An unknown key under `callout`, or a value outside its range, stops the service at start.
+
+## Pinning requests to the broker {#issuer-pin}
+
+A certificate connect needs no secret from the device: the certificate is public. So the callout does not trust a request just because it arrived on the callout's subject. The broker signs every authorization request with a key it makes when it starts, and its server id is that key's public half. Device-management therefore learns the ids of the live broker servers over the NATS system account and grants a certificate connect only for a request signed by one of them, naming itself as the sender. A request signed by anything else is refused (`issuer_unpinned`), however good the certificate in it.
+
+- **Why it is there.** Clients cannot publish on the callout subject, and that is the first defence. The pin is the second, for the day that is misconfigured: forging a request would take a broker server's private key, which never leaves its process.
+- **It is learned, not configured.** Device-management pings the system account for the servers' ids every `callout.issuerPinRefresh`. A request from an id it has not seen triggers one more ping before it is refused, so a broker pod that joined during a rolling restart is learned by the first device that meets it. Pings are limited to one per `callout.issuerPinMinRefresh` however many requests arrive, so a flood of forged requests cannot turn into a flood of system-account traffic. A device refused inside that gap, or while the wait for a ping in flight ran out, is counted `issuer_pin_pending` (not `issuer_unpinned`, which means a ping was made and found nothing), retries on its own backoff and is admitted after it. An answer never removes a server from the list: each server's id is stamped when it answers, and drops out after three refresh periods without an answer, so a freshly started broker pod that knows of only itself cannot shrink the list. The alert [`DeviceX509IssuerPinUnavailable`](./observability.md#certificate-alerts) fires on a sustained outage.
+- **It fails closed.** While the system-account connection is down, or no list has been learned in the last three refresh periods, every certificate connect is refused (`issuer_pin_unavailable`). Token and password connects are not pinned and are unaffected.
+- **It needs the system login.** The bring-up configures it on every instance that runs the callout. A service with the pin on and no system login does not start. Setting `callout.issuerPinDisabled` runs without the pin, leaving the broker's publish restriction as the only defence; the service logs a warning at start.
 
 ## Limits {#limits}
 
@@ -66,9 +83,9 @@ An unknown key under `callout`, or a value outside its range, stops the service 
 
 ## What to watch {#monitoring}
 
-The counter `callout_x509_total{result}` counts every certificate connect by outcome, and every result exists at zero from start. The results include `ok`, `no_cert`, `chain_invalid`, `anchor_disabled`, `revoked`, `client_id_mismatch`, `unknown_pin`, `x509_cert_ignored`, `jit_created`, `jit_replayed`, `jit_rate_limited`, `jit_busy`, `jit_ambiguous` and one `jit_<code>` for each registration refusal. `callout_jit_in_flight` is the registrations in progress now, and `device_trust_anchors_expiring{window="30d"}` is one instance-wide count of enabled anchors that expire within 30 days.
+The counter `callout_x509_total{result}` counts every certificate connect by outcome, and every result exists at zero from start. The results include `ok`, `no_cert`, `chain_invalid`, `anchor_disabled`, `revoked`, `client_id_mismatch`, `unknown_pin`, `issuer_unpinned`, `issuer_pin_pending`, `issuer_pin_unavailable`, `x509_cert_ignored`, `jit_created`, `jit_replayed`, `jit_rate_limited`, `jit_busy`, `jit_ambiguous` and one `jit_<code>` for each registration refusal. `callout_issuer_pin_servers` is the number of live broker servers the pin currently believes, `callout_issuer_pin_connected` is `1` while its system-account connection is up, and `callout_issuer_pin_refresh_total{result}` counts the refreshes. `callout_jit_in_flight` is the registrations in progress now, and `device_trust_anchors_expiring{window="30d"}` is one instance-wide count of enabled anchors that expire within 30 days.
 
-The [alerts](./observability.md#certificate-alerts) are `DeviceX509ChainFailuresSustained`, `DeviceX509JitRefusedSustained`, `DeviceX509JitMisconfigured`, `DeviceTrustAnchorsExpiringSoon` and, for the broker, `BrokerMqttClientAuthLost`.
+The [alerts](./observability.md#certificate-alerts) are `DeviceX509ChainFailuresSustained`, `DeviceX509JitRefusedSustained`, `DeviceX509JitMisconfigured`, `DeviceX509IssuerPinUnavailable`, `DeviceTrustAnchorsExpiringSoon` and, for the broker, `BrokerMqttClientAuthLost`.
 
 Anchor and credential changes are journaled in the audit log. Connect outcomes are counted, not journaled.
 

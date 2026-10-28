@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # The X.509 (mTLS) device-authentication rig: certificate devices take a real instance's broker,
-# end to end, and nine planted defects are refused.
+# end to end, and ten planted defects are refused.
 #
 # WHAT THIS GATES
 #
@@ -16,7 +16,8 @@
 # counters AND by the device failing to connect. That needs a cluster, so it is a manual rig, like
 # hack/ota-rig.sh, hack/ha-rig.sh and hack/dr-rig.sh, and it follows their one rule: a check is
 # worth nothing until it has been shown to fail. Nine negative controls (N1-N9) plant a defect
-# each; every one must turn the platform's verdict red AND leave the device out.
+# each; every one must turn the platform's verdict red AND leave the device out. N10 is the
+# issuer pin (below), which is judged by the platform's gauges and counters rather than by a device.
 #
 #   hack/x509-rig.sh up      create the kind cluster dc-x509rig (its own kubeconfig, its own host
 #                            port), install, and bootstrap an instance (default profile) from
@@ -51,6 +52,18 @@
 #        N8  JIT under a disabled profile (re-enabled, the SAME certificate registers)
 #        N9  the tenant's registration budget exceeded: jit_rate_limited is counted, the refused
 #            devices do not exist
+#        N10 the issuer pin (6): every certificate connect above was admitted by a callout that
+#            pins requests to the broker's live server ids, learned over the system account.
+#            The pin must hold the live broker servers, its system connection must be up, and
+#            no genuine request may have been counted issuer_unpinned or issuer_pin_unavailable
+#            (issuer_pin_pending, a request that met a broker pod before the pin had learned it, is
+#            reported but tolerated: the device retries).
+#            The checker is shown red on a pin that holds no servers, one whose system connection
+#            is down, and one that refused the broker's own requests. A request FORGED onto the
+#            callout subject is not driven from here: the broker's publish-deny refuses it before
+#            the pin sees it (and that, with the pin refusing the same request when the deny is
+#            absent, is held by the device-management tests on an embedded broker with its real
+#            permissions).
 #
 # THE CHECKERS (see "CHECKERS"). Each attempt is a RECORD (what the broker answered, the counters
 # before and after, whether the event persisted, whether the device exists); the checkers are pure
@@ -698,6 +711,12 @@ offline_controls() {
   set_record 0 jit_created "$b" "$a_ok" 1 1
   expect_red "an admitted device whose counter did not move" "counter" yes check_admitted
   red "check_admitted: admitted and stored, but jit_created did not rise -> red on counter alone"
+  expect_red "a pin that holds no servers" "servers" yes check_pin_state 1 0 3 0 0
+  expect_red "a pin whose system connection is down" "connected" yes check_pin_state 0 3 3 0 0
+  expect_red "a pin that refused the broker's own requests" "unpinned" yes check_pin_state 1 3 3 2 0
+  expect_red "a pin that could not vouch" "unavailable" yes check_pin_state 1 3 3 0 4
+  out="$(check_pin_state 1 3 3 0 0)" || fail "check_pin_state rejects a healthy pin: $out"
+  note "healthy pin: accepted by check_pin_state"
 }
 
 # ---------------------------------------------------------------------------
@@ -1118,6 +1137,52 @@ step5_controls() {
   token_alive "after the budget was spent"
 }
 
+# dm_gauge <metric> prints "<pod> <value>" for each live device-management pod, FAILING when a pod does
+# not export the series: reading an absent gauge as zero would let a pin that was never wired look
+# like a pin that holds no servers (and the reverse).
+dm_gauge() {
+  local pod body v
+  for pod in $(dm_pods); do
+    body="$(k get --raw "/api/v1/namespaces/$namespace/pods/$pod:$dm_port/proxy/metrics")" ||
+      fail "could not read the metrics of $pod"
+    v="$(awk -v m="$1" '/^#/ { next } { i = index($1, "{"); nm = (i ? substr($1, 1, i - 1) : $1); if (nm ~ (m "$")) { v = $NF; found = 1 } } END { if (!found) exit 3; print v }' <<<"$body")" ||
+      fail "$pod exports no $1 series: the issuer pin was never wired"
+    printf '%s %s\n' "$pod" "$v"
+  done
+}
+
+# check_pin_state <connected 0|1> <servers> <broker pods> <issuer_unpinned> <issuer_pin_unavailable>:
+# a checker (see CHECKERS) over what one device-management pod reports about its issuer pin.
+check_pin_state() {
+  local -a tags=()
+  [[ "$1" == 1 ]] || { tags+=(connected); echo "  connected: callout_issuer_pin_connected is $1: the pin's system-account connection is down, so every certificate connect is refused"; }
+  (($2 >= $3 && $2 > 0)) || { tags+=(servers); echo "  servers: the pin holds $2 server id(s) but the broker runs $3 pod(s): it cannot vouch for a genuine request"; }
+  (($4 == 0)) || { tags+=(unpinned); echo "  unpinned: $4 request(s) were refused as not signed by a live broker server, and this rig sends no forged request"; }
+  (($5 == 0)) || { tags+=(unavailable); echo "  unavailable: $5 certificate connect(s) were refused because the pin could not vouch for the server ids"; }
+  if ((${#tags[@]})); then echo "RED: ${tags[*]}"; return 1; fi
+  echo GREEN
+}
+
+step6_issuer_pin() {
+  say "STEP 6 / N10: the issuer pin held for every genuine request"
+  local snap pod conn servers unpinned unavail out n=0
+  snap="$(dm_snap)"
+  unpinned="$(snap_get "$snap" issuer_unpinned)"
+  unavail="$(snap_get "$snap" issuer_pin_unavailable)"
+  # issuer_pin_pending is a genuine request refused for want of a ping (a broker pod that joined during a
+  # roll, a rate-limited re-ping): the device retried and got in. It is reported, never red.
+  pending="$(snap_get "$snap" issuer_pin_pending)"
+  # The per-pod gauges are paired by pod; the counters are summed over pods, which is the stricter reading.
+  while read -r pod conn; do
+    servers="$(dm_gauge callout_issuer_pin_servers | awk -v p="$pod" '$1 == p { print $2 }')"
+    out="$(check_pin_state "${conn%.*}" "${servers%.*}" "${#broker_pods[@]}" "$unpinned" "$unavail")" ||
+      fail "N10: device-management pod $pod: $out"
+    pass "N10: $pod holds ${servers%.*} server id(s) of ${#broker_pods[@]} broker pod(s), its system connection is up, and no genuine request was refused by the pin (issuer_unpinned=$unpinned issuer_pin_unavailable=$unavail; issuer_pin_pending=$pending is tolerated: those devices retried)"
+    n=$((n + 1))
+  done < <(dm_gauge callout_issuer_pin_connected)
+  ((n > 0)) || fail "N10: no device-management pod reported the pin"
+}
+
 # wait_connz <client id> <count> <seconds>: wait until the broker holds exactly that many sessions of the id.
 wait_connz() {
   local deadline=$((SECONDS + $3)) n
@@ -1160,11 +1225,13 @@ cmd_run() {
   step3_pinned
   step4_jit
   step5_controls
+  step6_issuer_pin
   say "X509 RIG GREEN: on a default instance built from this tree, the DeviceChain broker requested client
 certificates; $n_pinned pinned devices and $m_jit JIT-registered devices connected and had their telemetry
 stored through their certificates while the token device kept working. Nine planted defects (N1-N9)
 each turned the platform's own counter, the device's CONNACK and the store red for the reason they were
-planted, and the checkers were shown to go red on the opposite verdict."
+planted, the checkers were shown to go red on the opposite verdict, and the callout's issuer pin held
+the broker's live servers without refusing one genuine request (N10)."
 }
 
 rig_cmd="${1:-}"

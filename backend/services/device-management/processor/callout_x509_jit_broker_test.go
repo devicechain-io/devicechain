@@ -431,11 +431,11 @@ func TestX509JitRefusalsWriteNothingAndEachHasItsControl(t *testing.T) {
 		req := testRequestFromClient(t, r.user(), "", r.clientID("SN-11"))
 		req.TLS = &jwt.ClientTLS{Certs: pemsOf(leaf)}
 		before, rows := r.counts(), r.rows()
-		_, why := r.resp.authorizeRequest(req, false)
+		_, why := r.resp.authorizeRequest(req, false, "")
 		require.Equal(t, genericAuthFailure, why)
 		r.moved(before, x509ResultUnsealed)
 		require.Equal(t, rows, r.rows(), "a forged certificate request registered a device")
-		_, why = r.resp.authorizeRequest(req, true)
+		_, why = r.resp.authorizeRequest(req, true, "")
 		require.Empty(t, why)
 	})
 }

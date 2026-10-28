@@ -502,6 +502,41 @@ tests:
         alertname: DeviceX509JitMisconfigured
         exp_alerts: []
 
+  # The issuer pin cannot vouch: certificate connects refused as issuer_pin_unavailable for longer
+  # than the hold fire it as critical; a flat zero and a handful of refusals that stop (a broker
+  # roll) do not.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_callout_x509_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="issuer_pin_unavailable"}'
+        values: '0 0 0 4+4x20 84x60'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: DeviceX509IssuerPinUnavailable
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: DeviceX509IssuerPinUnavailable
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "Certificate devices are being refused because the auth callout cannot vouch for the broker's servers"
+              description: "For 5m device-management has refused certificate connects (20 in the last 5m) because its issuer pin has no usable list of the broker's live servers: its system-account connection is down, or no refresh has succeeded for three refresh periods. Every certificate device is refused until it recovers; token and password devices are not affected. Check callout_issuer_pin_connected and callout_issuer_pin_refresh_total{result=\"error\"}, the device-management log for the system-account connection, and that infrastructure.nats.auth.sysUser and sysPassword are valid."
+      # The refusals stopped: the window slides past them and it clears.
+      - eval_time: 60m
+        alertname: DeviceX509IssuerPinUnavailable
+        exp_alerts: []
+
+  # A clean pin never fires it.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_callout_x509_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="issuer_pin_unavailable"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: DeviceX509IssuerPinUnavailable
+        exp_alerts: []
+
   # Trust anchors expiring: the instance-wide count is zero (quiet), then two for longer than the
   # hold (fires), then back to zero (clears). A service that exports no series is quiet.
   - interval: 1m

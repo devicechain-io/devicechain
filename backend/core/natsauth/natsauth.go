@@ -78,8 +78,8 @@ func ServicePublishDeny() []string {
 // on.
 const SystemAccount = "SYS"
 
-// SysUser is the username the broker-presence tap presents to read the system
-// account. It is a SEPARATE credential from ServiceUser, and the separation is the
+// SysUser is the username services present to read the system account: the event-sources
+// broker-presence tap and session kicks, and device-management's callout issuer pin. It is a SEPARATE credential from ServiceUser, and the separation is the
 // point rather than tidiness: a connection in SYS observes every account's
 // connection lifecycle and can drive the server's monitoring endpoints, which is a
 // strictly wider grant than the data-plane one every service holds. Handing that
@@ -139,8 +139,10 @@ const (
 // 🔴 A SYSTEM-ACCOUNT LOGIN WITH NO PERMISSIONS BLOCK CAN DRIVE THE WHOLE BROKER, not just
 // read it: put a server into lame-duck mode ($SYS.REQ.SERVER.{id}.LDM), make it reload its
 // configuration (.RELOAD), and read every account's subscriptions, routes and JetStream state
-// (SUBSZ, ROUTEZ, JSZ, ACCOUNTZ). Its consumers in event-sources need three requests: the
-// cluster ping that names the servers, one server's connection list, and one server's kick
+// (SUBSZ, ROUTEZ, JSZ, ACCOUNTZ). Its consumers need three requests: the cluster ping that names
+// the servers (event-sources' presence tap and session kicks, and device-management's callout, which
+// pins certificate requests to the live server ids it returns), one server's connection list, and
+// one server's kick
 // (which ends a device's session when its credential is revoked or the device disabled); plus
 // the connect/disconnect advisories and the inboxes replies come back on. Everything else is
 // refused at the broker, so a holder of the login can list connections and end them, and
