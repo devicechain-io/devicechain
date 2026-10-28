@@ -1,0 +1,20 @@
+{
+    "name": "DeviceChain.Towerpulse.Editor",
+    "rootNamespace": "DeviceChain.Towerpulse.EditorTools",
+    "references": [
+        "DeviceChain.Towerpulse.Model",
+        "UnityEngine.TestRunner",
+        "UnityEditor.TestRunner"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
