@@ -619,3 +619,33 @@ func TestWithOwnFailureLogSharesTheSeriesButNotTheStreak(t *testing.T) {
 	assert.EqualValues(t, 1, testutil.ToFloat64(shared.passes.WithLabelValues(PassComplete)))
 	assert.Nil(t, (*PeriodicTaskMetrics)(nil).WithOwnFailureLog())
 }
+
+// A task's pass counter is exported from the moment its metrics are built, not from the first
+// pass. A CounterVec with no child exports nothing, so without the pre-created outcomes the
+// series was absent until a pass landed: rate() over it was empty rather than zero, and a test
+// asking "is it registered" raced the task's first pass.
+func TestPeriodicTaskPassCounterExistsBeforeAnyPass(t *testing.T) {
+	ms := &Microservice{FunctionalArea: "device-management"}
+	reg := prometheus.NewRegistry()
+	ms.UseMetricsRegistry(reg)
+	ms.NewPeriodicTaskMetrics("born_at_zero")
+
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range families {
+		if f.GetName() == "devicechain_devicemanagement_born_at_zero_passes_total" {
+			if len(f.GetMetric()) != 5 {
+				t.Fatalf("want one zero series per outcome (5), got %d", len(f.GetMetric()))
+			}
+			for _, m := range f.GetMetric() {
+				if m.GetCounter().GetValue() != 0 {
+					t.Fatalf("a series born by construction must be zero, got %v", m.GetCounter().GetValue())
+				}
+			}
+			return
+		}
+	}
+	t.Fatal("_passes_total is not exported before the first pass")
+}

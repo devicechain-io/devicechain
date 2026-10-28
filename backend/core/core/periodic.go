@@ -254,6 +254,13 @@ func (ms *Microservice) NewPeriodicTaskMetrics(name string) *PeriodicTaskMetrics
 	// give operators. NaN propagates through the subtraction and compares false, so the rule
 	// stays silent until there is something true to say.
 	m.lastSuccess.Set(math.NaN())
+	// 🔑 PRE-CREATED AT ZERO: a CounterVec exports no series until a child exists, so without
+	// this _passes_total is absent from the registry (and from a scrape) until the first pass
+	// lands. rate() over an absent series is empty rather than zero, and a wiring test that asks
+	// "is it registered" races the first pass.
+	for _, outcome := range []string{PassComplete, PassPartial, PassFailed, PassSkipped, PassCancelled} {
+		m.passes.WithLabelValues(outcome)
+	}
 	return m
 }
 

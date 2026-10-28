@@ -134,6 +134,9 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	for _, series := range []string{"session_kicks_pending", "session_kick_oldest_pending_age_seconds", "session_kick_drain_passes_total"} {
 		require.NotEmpty(t, registeredSeries(t, reg, series), "%s is not registered", series)
 	}
+	// Wait on the condition, not wall time: the series is born at zero with the task's metrics, so
+	// "registered" holds from the start and only a pass that really ran lifts it. Bound: one drain
+	// interval (the first pass is immediate).
 	require.Eventually(t, func() bool {
 		families, err := reg.Gather()
 		require.NoError(t, err)
@@ -147,7 +150,7 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 			}
 		}
 		return false
-	}, 10*time.Second, 50*time.Millisecond, "the session-kick drain never made a pass: main did not start it")
+	}, sessionKickDrainInterval, 50*time.Millisecond, "the session-kick drain never made a pass: main did not start it")
 
 	// The callout runs with its in-flight cap, its lookup bound and its load metrics attached,
 	// and the three series exist on the service's registry. Without the Configure call in the
