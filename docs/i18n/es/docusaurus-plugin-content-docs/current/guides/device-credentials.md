@@ -18,8 +18,8 @@ Disponible. Gestionas las credenciales desde la pestaña **Credenciales** de la 
 | `ACCESS_TOKEN` | un token portador (bearer token) (el id de la credencial) | un resumen irreversible con clave del token |
 | `MQTT_BASIC` | un usuario (el id de la credencial) + contraseña | un resumen irreversible con clave de la contraseña |
 
-:::note Las credenciales X.509 no se aceptan
-El tipo `X509_CERTIFICATE` no es compatible hasta que se publique la verificación de certificados. Crear o actualizar una credencial de ese tipo se rechaza (`UNSUPPORTED`), y una credencial de ese tipo que ya exista deja de autenticar. Usa `ACCESS_TOKEN` o `MQTT_BASIC`.
+:::note Credenciales X.509
+Una credencial `X509_CERTIFICATE` nombra el [ancla de confianza](../user-guide/provisioning-and-trust-anchors.md#trust-anchors) a la que encadena su certificado. La plataforma verifica la cadena al crear la credencial y fija el id de la credencial en el pin SHA-256 del certificado, que es público. Un dispositivo tiene como máximo tres, y una credencial de certificado sin ancla de confianza no autentica. Lo que puede hacer hoy un certificado está en [Qué funciona hoy con certificados](../user-guide/provisioning-and-trust-anchors.md#certificates-today).
 :::
 
 ## Leer una credencial requiere `device:write` {#reading-a-credential}

@@ -10,7 +10,7 @@ the roles they hold, and the logins you give your own customers so they can watc
 equipment without seeing anyone else's, whether you limit them to customers or to groups of
 devices.
 
-Two pages under **Settings** in the sidebar do this work: **Members** and **Roles**. Each needs
+Two pages under **Access** in the sidebar do this work: **Members** and **Roles**. Each needs
 its own permission. **Members** lists people with `member:read` and changes them with
 `member:write`; **Roles** lists roles with `role:read` and changes them with `role:write`. The
 built-in tenant administrator role holds all four. Without a permission, its page is not in your
@@ -78,7 +78,27 @@ one.
 
 ### Two-factor authentication {#member-two-factor}
 
-The **Two-factor** column of the Members list shows whether each person has turned on two-factor authentication. The tenant can require it of everyone who signs in with a password: open **Settings → Security** and choose **Require**. It needs the permission to manage members, for the whole tenant. A member without it is sent to set it up when they next enter, and password sessions already inside end at their next refresh. A tenant whose tier requires it cannot turn it off. Resetting a person who has lost their phone is an operator's job, because the account is shared by every tenant. See [Two-factor authentication](/guides/two-factor-authentication#require).
+The **Two-factor** column of the Members list shows whether each person has turned on two-factor authentication. The tenant can require it of everyone who signs in with a password; see [Sign-in Security](#sign-in-security). Resetting a person who has lost their phone is an operator's job, because the account is shared by every tenant. See [Two-factor authentication](/guides/two-factor-authentication#require).
+
+### Sign-in Security {#sign-in-security}
+
+**Access → Sign-in Security** holds the sign-in requirements for your tenant's people. Its **Two-factor
+authentication** panel has one setting, **Require two-factor authentication**: members who sign in with
+a password must use a code from an authenticator app, and anyone without one is asked to set it up the
+next time they enter the tenant.
+
+Choose **Require**. The console asks you to confirm first: members who sign in with a password and no
+second factor will be asked to set one up before they can enter, and password sessions already inside
+end at their next refresh. To stop requiring it, use the same control.
+
+- Changing it needs the permission to manage members, for the whole tenant. Without it the page tells
+  you so.
+- If the tenant's tier requires two-factor authentication, the page says so and the requirement cannot
+  be turned off here.
+- Single sign-on is governed by its connection's requirements and is not affected by this setting.
+- Each person sets up their own second factor under **Account security** in the user menu. The guide
+  to [Two-factor authentication](/guides/two-factor-authentication#require) covers what the requirement
+  does and does not bind.
 
 ### Changing a member's access {#changing-access}
 

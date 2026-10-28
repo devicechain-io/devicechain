@@ -13,7 +13,7 @@ duración, que envía a las API como cualquier otro. No interviene el inicio de 
 persona, así que la integración sigue funcionando cuando alguien se va, restablece su contraseña o
 cambia de roles.
 
-**Cuentas de servicio** está en el grupo **Configuración** de la barra lateral, junto a **Miembros**. Usa los
+**Cuentas de servicio** está en el grupo **Acceso** de la barra lateral, junto a **Miembros**. Usa los
 mismos permisos: `member:read` para listar las cuentas y `member:write` para crearlas o
 cambiarlas. Un miembro limitado a una parte del inquilino (un usuario de cliente) no puede ver la
 página.

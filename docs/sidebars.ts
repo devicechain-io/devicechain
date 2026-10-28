@@ -139,6 +139,8 @@ const sidebars: SidebarsConfig = {
         'user-guide/commanding-a-fleet',
         'user-guide/updates',
         // Connect
+        'user-guide/provisioning-and-trust-anchors',
+        'user-guide/inbound-integrations',
         'user-guide/connectors',
         // Organization
         'user-guide/assets-customers-areas',
