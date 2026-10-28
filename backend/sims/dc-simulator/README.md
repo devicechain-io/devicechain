@@ -457,6 +457,53 @@ On startup the process bootstraps its manifest, starts emitting immediately,
 and serves the control API + presentation page on `--port` (default `8090`).
 Open `http://localhost:8090/` to watch measurements arrive live.
 
+### X.509 (mTLS) device mode (`--x509`)
+
+`--x509` plays devices that authenticate with a client certificate instead of a token. It is a
+mode of its own, like `--lorawan-ns`: it needs `--handshake` (tenant, instance id, the MQTT
+broker, the device-management endpoint) and does not run a scenario.
+
+```sh
+go run . --handshake hs.json --x509 --x509-dir ./x509-state \
+  --x509-pinned 20 --x509-jit 5 \
+  --x509-register --x509-device-type my-device-type
+```
+
+It does three things, each of which can be used alone:
+
+1. **Mints** a throwaway test CA and the device certificates into `--x509-dir`. Every device
+   certificate is ECDSA P-256, has the `clientAuth` extended key usage, is not a CA, and has
+   `CN` = the device's externalId (`<prefix>pin-0001`, `<prefix>jit-0001`, ...). An existing
+   state dir is reused and topped up, never re-keyed. The CA private key is the single file
+   `ca.key`, written with mode `0600` (on Windows the mode bits are advisory); no manifest holds
+   key material. This is test PKI: never register its CA anywhere that matters.
+2. **Registers** (`--x509-register`, needs `--x509-device-type`) through the tenant GraphQL API, as
+   the sim identity does for everything else: the CA as a trust anchor, then for each *pinned*
+   certificate a device and an `X509_CERTIFICATE` credential. It is idempotent by token. The
+   `--x509-jit` certificates are minted and **never registered**: they are for devices the
+   platform has not seen, so a registration path has certificates to present.
+3. **Connects** (omit with `--x509-mint-only`) to the handshake's `mqttBroker`, which must be a
+   TLS scheme, one session per certificate: username `{tenant}:@x509`, no password, and the
+   usual device client id `{instance}:{tenant}:{token}`. The token of every minted device, pinned
+   or not, is `core.DeriveDeviceToken(CN, "pv-")`, so a device's client id is a pure function of
+   its CN. Verify the broker with `--x509-server-ca <pem>` (or the handshake's
+   `mqttTLSInsecure`). One JSON line on stdout reports connected/refused per kind and per device;
+   a refusal is a result, not a failure (a JIT certificate is refused until registration
+   exists). The sessions are held until interrupted, or for `--x509-hold`.
+
+| Flag | Env | Purpose |
+|------|-----|---------|
+| `--x509-dir` | `DC_SIM_X509_DIR` | State dir (default `x509-state`). |
+| `--x509-pinned` / `--x509-jit` | `DC_SIM_X509_PINNED` / `_JIT` | How many of each (defaults 1 and 0). |
+| `--x509-prefix` | `DC_SIM_X509_PREFIX` | CN prefix (default `sim-`). |
+| `--x509-anchor` | `DC_SIM_X509_ANCHOR` | Trust anchor token (default `dc-sim-x509-ca`). |
+| `--x509-validity` | `DC_SIM_X509_VALIDITY` | Device certificate lifetime (default one year). |
+| `--x509-hold` | `DC_SIM_X509_HOLD` | Disconnect after this long. |
+
+The unit tests prove the minted chain passes `x509trust.VerifyClientChain` and that what goes
+over a TLS handshake (certificate, username, client id) is what the callout expects. They do not
+run a real broker and callout; the rig does.
+
 ### `GET /config.json`
 
 The presentation page — and, for an `external` far end, the out-of-process client
@@ -535,6 +582,7 @@ a snapshot taken at page load would not.
 - `sim/emit.go` also holds `EventWire`, the seam that carries a scenario's events over a transport
   other than the HTTP ingress (`Runtime.Wire`), and the MQTT event body (which carries no
   credential); `sim/wire.go` has the payload builder both transports share.
+- `x509sim/` — the `--x509` mode: test CA and device certificate minting, trust-anchor and credential registration, and the certificate-presenting MQTT connect.
 - `mqttload/` — the MQTT fleet behind `dc-loadtest-mqtt`: one session per device, PUBACK-true
   accounting, jittered reconnect, observed TLS. `loadtest/mqtt.go` is its storage verdict.
 - `sim/lifecycle.go` — the `CREATED -> BOOTSTRAPPED -> RUNNING <-> STOPPED`
