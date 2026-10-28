@@ -1,0 +1,7 @@
+# Art source build output: the committed models live under Assets/Towerpulse/Art/Models
+/ArtSource/out/
+*.blend
+*.blend1
+*.blend2
+__pycache__/
+*.pyc
