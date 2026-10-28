@@ -12,6 +12,8 @@ DeviceChain is a ground-up rebuild of the SiteWhere platform. It keeps SiteWhere
 
 ## Why DeviceChain
 
+New here? [Why DeviceChain](./why-devicechain.md) compares it with the alternatives and lists what it does not do yet.
+
 - **Go-native microservices.** Services start in under a second, use little memory and ship as single binaries.
 - **Operator and CRDs.** DeviceChain uses a Kubernetes operator with a declarative `Instance` resource, not shell scripts. Tenants are control-plane database records that you manage through the admin console.
 - **GraphQL-first API.** The API is self-documenting through the published [GraphQL reference](./reference/graphql-api.md), so you need no generated client stubs. Schema introspection is off by default and is a developer setting.

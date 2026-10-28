@@ -12,6 +12,8 @@ DeviceChain 从头重建了 SiteWhere 平台。它保留了 SiteWhere 经过实�
 
 ## 为什么选择 DeviceChain {#why-devicechain}
 
+初次接触?请阅读[为什么选择 DeviceChain](./why-devicechain.md),了解它与其他方案的比较,以及目前尚未支持的功能。
+
 - **Go 原生微服务。** 服务启动不到一秒，内存占用低，以单个二进制文件交付。
 - **Operator 与 CRD。** DeviceChain 使用 Kubernetes Operator 和声明式 `Instance` 资源，而不是 Shell 脚本。租户是控制平面数据库中的记录，通过管理控制台管理。
 - **以 GraphQL 为核心的 API。** API 通过已发布的 [GraphQL 参考文档](./reference/graphql-api.md)描述自身，无需生成客户端桩代码。默认关闭模式自省，它是一项开发者设置。

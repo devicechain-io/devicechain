@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 560" width="980" height="560" role="img" aria-labelledby="t d" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif">
+  <title id="t">DeviceChain architecture overview</title>
+  <desc id="d">Devices connect to ingest services, which hand events to device-management for resolution. Resolved events go to event-management for storage, to device-state for live state, and to event-processing for detection and reaction. Reactions raise alarms, notify people, send commands back to devices and call outbound connectors. The console, dashboards, GraphQL API and MCP read the results.</desc>
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#7b8798"/>
+    </marker>
+  </defs>
+  <style>
+    .box { fill: #eef2f7; stroke: #5b6b82; stroke-width: 1.5; }
+    .hot { fill: #e3eefc; stroke: #2f6fbf; stroke-width: 2; }
+    .ttl { fill: #1b2430; font-size: 15px; font-weight: 700; }
+    .sub { fill: #354355; font-size: 12.5px; }
+    .lnk { stroke: #7b8798; stroke-width: 2; fill: none; }
+    .lbl { fill: #7b8798; font-size: 12px; }
+  </style>
+
+  <!-- devices -->
+  <rect class="box" x="20" y="190" width="150" height="130" rx="8"/>
+  <text class="ttl" x="95" y="216" text-anchor="middle">Devices</text>
+  <text class="sub" x="95" y="240" text-anchor="middle">MQTT, HTTP</text>
+  <text class="sub" x="95" y="258" text-anchor="middle">Sparkplug B, LwM2M</text>
+  <text class="sub" x="95" y="276" text-anchor="middle">LoRaWAN network</text>
+  <text class="sub" x="95" y="294" text-anchor="middle">servers</text>
+
+  <!-- ingest -->
+  <rect class="box" x="215" y="190" width="170" height="130" rx="8"/>
+  <text class="ttl" x="300" y="216" text-anchor="middle">Ingest</text>
+  <text class="sub" x="300" y="240" text-anchor="middle">event-sources</text>
+  <text class="sub" x="300" y="258" text-anchor="middle">sparkplug-ingest</text>
+  <text class="sub" x="300" y="276" text-anchor="middle">lwm2m-ingest</text>
+  <text class="sub" x="300" y="298" text-anchor="middle">decode, rate-limit</text>
+
+  <!-- resolve -->
+  <rect class="hot" x="430" y="190" width="190" height="130" rx="8"/>
+  <text class="ttl" x="525" y="216" text-anchor="middle">Resolve</text>
+  <text class="sub" x="525" y="240" text-anchor="middle">device-management</text>
+  <text class="sub" x="525" y="262" text-anchor="middle">device, profile and</text>
+  <text class="sub" x="525" y="280" text-anchor="middle">assignments written</text>
+  <text class="sub" x="525" y="298" text-anchor="middle">onto each event</text>
+
+  <path class="lnk" d="M170,255 H213" marker-end="url(#ah)"/>
+  <path class="lnk" d="M385,255 H428" marker-end="url(#ah)"/>
+
+  <!-- fan out -->
+  <path class="lnk" d="M620,255 H650 V75 H688" marker-end="url(#ah)"/>
+  <path class="lnk" d="M650,165 H688" marker-end="url(#ah)"/>
+  <path class="lnk" d="M650,255 H688" marker-end="url(#ah)"/>
+
+  <!-- store -->
+  <rect class="box" x="690" y="40" width="250" height="70" rx="8"/>
+  <text class="ttl" x="815" y="66" text-anchor="middle">Time-series store</text>
+  <text class="sub" x="815" y="88" text-anchor="middle">event-management, TimescaleDB</text>
+
+  <!-- state -->
+  <rect class="box" x="690" y="130" width="250" height="70" rx="8"/>
+  <text class="ttl" x="815" y="156" text-anchor="middle">Live state</text>
+  <text class="sub" x="815" y="178" text-anchor="middle">device-state, last known value</text>
+
+  <!-- detect/react -->
+  <rect class="hot" x="690" y="220" width="250" height="100" rx="8"/>
+  <text class="ttl" x="815" y="246" text-anchor="middle">Detect and react</text>
+  <text class="sub" x="815" y="268" text-anchor="middle">event-processing</text>
+  <text class="sub" x="815" y="286" text-anchor="middle">rules, then alarms, commands</text>
+  <text class="sub" x="815" y="304" text-anchor="middle">and connector actions</text>
+
+  <path class="lnk" d="M815,320 V348" marker-end="url(#ah)"/>
+
+  <!-- act -->
+  <rect class="box" x="690" y="350" width="250" height="100" rx="8"/>
+  <text class="ttl" x="815" y="374" text-anchor="middle">Act</text>
+  <text class="sub" x="815" y="394" text-anchor="middle">device-management: alarms</text>
+  <text class="sub" x="815" y="412" text-anchor="middle">notification-management: people</text>
+  <text class="sub" x="815" y="430" text-anchor="middle">command-delivery, outbound-connectors</text>
+
+  <!-- command return -->
+  <path class="lnk" d="M690,400 H95 V322" marker-end="url(#ah)"/>
+  <text class="lbl" x="400" y="392" text-anchor="middle">commands go back to the device</text>
+
+  <!-- readers -->
+  <rect class="box" x="215" y="490" width="725" height="56" rx="8"/>
+  <text class="ttl" x="577" y="514" text-anchor="middle">Console, dashboards and APIs</text>
+  <text class="sub" x="577" y="534" text-anchor="middle">GraphQL, live subscriptions, MCP for AI assistants</text>
+
+  <path class="lnk" d="M815,450 V488" marker-end="url(#ah)"/>
+  <path class="lnk" d="M940,75 H962 V518 H942" marker-end="url(#ah)"/>
+  <path class="lnk" d="M940,165 H962"/>
+</svg>

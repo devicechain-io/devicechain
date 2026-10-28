@@ -12,6 +12,8 @@ DeviceChain es una reconstrucción desde cero de la plataforma SiteWhere. Conser
 
 ## Por qué DeviceChain
 
+¿Primera vez? [Por qué DeviceChain](./why-devicechain.md) lo compara con las alternativas y enumera lo que todavía no hace.
+
 - **Microservicios nativos de Go.** Los servicios arrancan en menos de un segundo, usan poca memoria y se distribuyen como binarios únicos.
 - **Operador y CRDs.** DeviceChain usa un operador de Kubernetes con un recurso declarativo `Instance`, no scripts de shell. Los inquilinos son registros de base de datos del plano de control que gestionas desde la consola de administración.
 - **API GraphQL primero.** La API se autodocumenta mediante la [referencia de GraphQL](./reference/graphql-api.md) publicada, así que no necesitas stubs de cliente generados. La introspección del esquema está desactivada de forma predeterminada y es un ajuste para desarrollo.
