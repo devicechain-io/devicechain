@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/rs/zerolog/log"
+
+	"github.com/devicechain-io/dc-microservice/userclient"
 )
 
 // customerUserRole is the built-in read-only tenant role (user-management's iam.ViewerRoleToken)
@@ -38,6 +40,9 @@ const mutationSetMemberAccess = `mutation($email:String!,$roleTokens:[String!]!,
 
 const mutationSetMemberEnabled = `mutation($email:String!,$enabled:Boolean!){` +
 	`setMemberEnabled(email:$email,enabled:$enabled){email}}`
+
+const mutationAcceptInvitationAsExisting = `mutation($code:String!,$identityToken:String!){` +
+	`acceptInvitation(code:$code,identityToken:$identityToken){identityToken}}`
 
 const mutationSetMemberScope = `mutation($email:String!,$scope:[ScopeAnchorInput!]!){` +
 	`setMemberScope(email:$email,scope:$scope){email}}`
@@ -124,7 +129,7 @@ func ensureCustomerUser(ctx context.Context, rt *Runtime, u CustomerUserSpec) er
 			if re.ReissueInvitation.InvitationCode == "" {
 				return fmt.Errorf("reissueInvitation for %q returned no invitation code", u.Email)
 			}
-			if err := acceptInvitation(ctx, rt, re.ReissueInvitation.InvitationCode); err != nil {
+			if err := acceptInvitation(ctx, rt, m.Email, re.ReissueInvitation.InvitationCode); err != nil {
 				return err
 			}
 			log.Info().Str("email", u.Email).Msg("accepted the pending customer user invitation")
@@ -153,23 +158,38 @@ func ensureCustomerUser(ctx context.Context, rt *Runtime, u CustomerUserSpec) er
 	if invited.InviteMember.InvitationCode == "" {
 		return fmt.Errorf("inviteMember for %q returned no invitation code", u.Email)
 	}
-	if err := acceptInvitation(ctx, rt, invited.InviteMember.InvitationCode); err != nil {
+	if err := acceptInvitation(ctx, rt, u.Email, invited.InviteMember.InvitationCode); err != nil {
 		return err
 	}
 	log.Info().Str("email", u.Email).Str("customer", u.CustomerToken).Msg("created customer user")
 	return nil
 }
 
-func acceptInvitation(ctx context.Context, rt *Runtime, code string) error {
+// acceptInvitation redeems the code. A person with no account yet accepts by choosing the sim's
+// password. An account that has ever been usable (a member removed and invited again, or an earlier
+// run that signed in) can only accept by proving it is theirs, so a refused password accept falls
+// back to signing in with the sim's password and presenting that identity token. Both refused is
+// the error of the first, which names what the platform said about the code.
+func acceptInvitation(ctx context.Context, rt *Runtime, email, code string) error {
 	var accepted struct {
 		AcceptInvitation struct {
 			IdentityToken string `json:"identityToken"`
 		} `json:"acceptInvitation"`
 	}
-	if err := rt.Session.Query(ctx, rt.Endpoints.UserGraphQL, mutationAcceptInvitation, map[string]any{
+	err := rt.Session.Query(ctx, rt.Endpoints.UserGraphQL, mutationAcceptInvitation, map[string]any{
 		"code": code, "password": rt.SimPassword,
-	}, &accepted); err != nil {
-		return fmt.Errorf("acceptInvitation: %w", err)
+	}, &accepted)
+	if err == nil {
+		return nil
+	}
+	ia, loginErr := userclient.Login(ctx, rt.HTTPClient, rt.Endpoints.UserGraphQL, email, rt.SimPassword)
+	if loginErr != nil {
+		return fmt.Errorf("acceptInvitation: %w (and the account cannot sign in with the sim password to accept as an existing account: %v)", err, loginErr)
+	}
+	if err2 := rt.Session.Query(ctx, rt.Endpoints.UserGraphQL, mutationAcceptInvitationAsExisting, map[string]any{
+		"code": code, "identityToken": ia.IdentityToken,
+	}, &accepted); err2 != nil {
+		return fmt.Errorf("acceptInvitation: %w (as an existing account: %v)", err, err2)
 	}
 	return nil
 }

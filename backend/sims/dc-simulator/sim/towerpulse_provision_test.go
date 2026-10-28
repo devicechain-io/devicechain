@@ -490,6 +490,32 @@ func TestAPendingCustomerUserInvitationIsReissuedAndAccepted(t *testing.T) {
 	}
 }
 
+// An account that was ever usable cannot accept an invitation by choosing a password; the platform
+// answers the one INVALID_INVITATION. The bootstrap then signs in with the sim password and accepts
+// with that identity token, which is how a member removed and invited again gets back in.
+func TestAPendingCustomerUserWhoseAccountExistsAcceptsWithAnIdentityToken(t *testing.T) {
+	existing := []map[string]any{{
+		"email": TowerpulseAnnexOwnerEmail, "invitationPending": true, "roles": viewerRoles, "scope": annexScope,
+	}}
+	fake := membersFake(existing, "")
+	g, rt := newRecordingGraphQL(t, func(q string, v map[string]any) map[string]any {
+		if strings.Contains(q, "acceptInvitation(") && v["password"] != nil {
+			return nil // the fake answers an unhandled query with a refusal
+		}
+		return fake(q, v)
+	})
+	if err := ensureCustomerUser(context.Background(), rt, annexOwner()); err != nil {
+		t.Fatal(err)
+	}
+	accepts := g.called("acceptInvitation(")
+	if len(accepts) != 2 {
+		t.Fatalf("%d accepts, want the refused password accept then one with an identity token", len(accepts))
+	}
+	if v := accepts[1].vars; v["identityToken"] != "identity" || v["code"] != "reissued-1" || v["password"] != nil {
+		t.Errorf("second accept = %v, want the reissued code and the identity token alone", v)
+	}
+}
+
 // Negative control: a pending member with a refused reissue is an error naming the member, never a
 // quiet success that leaves an account nobody can sign in to.
 func TestAPendingCustomerUserWhoCannotBeReissuedIsAnErrorNamingThem(t *testing.T) {
