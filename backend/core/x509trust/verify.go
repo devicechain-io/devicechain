@@ -40,6 +40,9 @@ const (
 	ReasonExpired       Reason = "expired"
 	ReasonNotYetValid   Reason = "not_yet_valid"
 	ReasonUntrusted     Reason = "untrusted"
+	// ReasonNameConstraints: a CA in the chain carries name constraints, which this verifier
+	// cannot honour (see VerifyClientChain).
+	ReasonNameConstraints Reason = "name_constraints_unsupported"
 )
 
 // ErrChainInvalid is the sentinel every refusal wraps.
@@ -138,6 +141,14 @@ func hasPEMBlock(b []byte) bool {
 //
 // Time: now, except that a leaf whose notBefore lies within NotBeforeSkew in the future is
 // verified at its notBefore.
+//
+// 🔴 THE TRUST ANCHOR IS THE IDENTITY BOUNDARY, and name constraints are NOT honoured. A device
+// is identified by its certificate's subject common name, but Go applies a CA's name constraints
+// to subject ALTERNATIVE names only. A sub-CA constrained to ".customerA.example" would still
+// verify a leaf with any CN at all, so a constraint would LOOK like it fenced that CA in and
+// not. Rather than let it be read that way, a chain in which any CA (the anchor included)
+// carries a NameConstraints extension of any kind is refused (ReasonNameConstraints). To
+// fence a CA to a set of devices, anchor at the narrowest intermediate.
 func VerifyClientChain(anchor *x509.Certificate, presented []*x509.Certificate, now time.Time) (*Verified, error) {
 	if len(presented) == 0 {
 		return nil, refuse(ReasonNoCertificate, "")
@@ -154,6 +165,16 @@ func VerifyClientChain(anchor *x509.Certificate, presented []*x509.Certificate, 
 	}
 	if anchor == nil {
 		return nil, refuse(ReasonAnchorInvalid, "no anchor")
+	}
+	// Name constraints first, so a constrained anchor is reported as that and not as a generic
+	// anchor fault: the operator needs to know which rule they hit.
+	if hasNameConstraints(anchor) {
+		return nil, refuse(ReasonNameConstraints, "")
+	}
+	for _, c := range presented[1:] {
+		if hasNameConstraints(c) {
+			return nil, refuse(ReasonNameConstraints, "")
+		}
 	}
 	// The anchor was checked when it was stored; it is checked again here because a stored row
 	// outlives the rules, and because this function must not trust its caller's bookkeeping.
@@ -194,34 +215,25 @@ func VerifyClientChain(anchor *x509.Certificate, presented []*x509.Certificate, 
 		KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 	})
 	if err != nil {
-		return nil, refuse(classify(err, presented, anchor, now), "")
+		return nil, refuse(classify(err, at), "")
 	}
 
+	// Any verified path authenticates the device, but a cross-signed intermediate can give
+	// several, and the session must be allowed as long as the longest of them lasts, not for
+	// however long whichever path the verifier listed first does. Every certificate on every
+	// path is a presented one or the anchor, all of which passed the key and signature policy
+	// above.
 	var best *Verified
 	for _, chain := range chains {
-		ok := true
-		for _, c := range chain {
-			if CheckPublicKey(c.PublicKey) != nil {
-				ok = false
-				break
-			}
-		}
-		if !ok {
-			continue
-		}
-		na := leaf.NotAfter
+		na := chain[0].NotAfter
 		for _, c := range chain[1:] {
 			if c.NotAfter.Before(na) {
 				na = c.NotAfter
 			}
 		}
-		// Any verified path authenticates the device; report the one that lasts longest.
 		if best == nil || na.After(best.NotAfter) {
 			best = &Verified{Leaf: leaf, Fingerprint: Fingerprint(leaf), Chain: chain, NotAfter: na.UTC()}
 		}
-	}
-	if best == nil {
-		return nil, refuse(ReasonKeyPolicy, "")
 	}
 	return best, nil
 }
@@ -235,16 +247,17 @@ func hasClientAuth(c *x509.Certificate) bool {
 	return false
 }
 
-// classify maps the verifier's error to a Reason. Anything it cannot place is Untrusted.
-func classify(err error, presented []*x509.Certificate, anchor *x509.Certificate, now time.Time) Reason {
+// classify maps the verifier's error to a Reason. It judges the certificate the verifier
+// actually rejected (inv.Cert), at the instant it actually verified at, so an unrelated
+// certificate in the presentation cannot change the answer. Anything it cannot place is
+// Untrusted.
+func classify(err error, at time.Time) Reason {
 	var inv x509.CertificateInvalidError
 	if errors.As(err, &inv) {
 		switch inv.Reason {
 		case x509.Expired:
-			for _, c := range append(append([]*x509.Certificate{}, presented...), anchor) {
-				if now.Before(c.NotBefore) {
-					return ReasonNotYetValid
-				}
+			if inv.Cert != nil && at.Before(inv.Cert.NotBefore) {
+				return ReasonNotYetValid
 			}
 			return ReasonExpired
 		case x509.IncompatibleUsage:

@@ -44,6 +44,16 @@ func CheckAnchor(cert *x509.Certificate, now time.Time) error {
 	if now.After(cert.NotAfter) {
 		return anchorInvalid("the certificate has expired")
 	}
+	if now.Before(cert.NotBefore) {
+		return anchorInvalid("the certificate is not valid yet")
+	}
+	if weakSignature(cert) {
+		return anchorInvalid("the certificate is signed with a weak algorithm (SHA-1 or older)")
+	}
+	if hasNameConstraints(cert) {
+		return anchorInvalid("the certificate carries name constraints, which are not supported: " +
+			"a trust anchor is the whole identity boundary, so constrain the devices at your CA instead")
+	}
 	if err := CheckPublicKey(cert.PublicKey); err != nil {
 		return anchorInvalid("%v", err)
 	}

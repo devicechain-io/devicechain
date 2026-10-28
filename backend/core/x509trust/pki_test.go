@@ -45,6 +45,7 @@ type spec struct {
 	key       crypto.Signer
 	sigAlg    x509.SignatureAlgorithm
 	pad       int // bytes of opaque extension, to make a certificate large
+	mutate    func(*x509.Certificate)
 }
 
 func ecKey(t testing.TB) crypto.Signer {
@@ -76,6 +77,9 @@ func edKey(t testing.TB) crypto.Signer {
 
 func (s spec) template() *x509.Certificate {
 	t := s.baseTemplate()
+	if s.mutate != nil {
+		s.mutate(t)
+	}
 	if s.pad > 0 {
 		t.ExtraExtensions = []pkix.Extension{{Id: []int{1, 3, 6, 1, 4, 1, 99999, 1}, Value: make([]byte, s.pad)}}
 	}
