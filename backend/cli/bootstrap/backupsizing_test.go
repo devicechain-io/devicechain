@@ -413,9 +413,6 @@ func TestSnapshotModeSteadyStateRateIsTheOnePublished(t *testing.T) {
 	enBootstrap := readDoc(filepath.Join("docs", "deployment", "bootstrap.md"))
 	esBootstrap := readDoc(filepath.Join("i18n", "es", "docusaurus-plugin-content-docs", "current",
 		"deployment", "bootstrap.md"))
-	enRelease := readDoc(filepath.Join("docs", "deployment", "releases-and-upgrades.md"))
-	esRelease := readDoc(filepath.Join("i18n", "es", "docusaurus-plugin-content-docs", "current",
-		"deployment", "releases-and-upgrades.md"))
 
 	for _, tc := range []struct {
 		what, text, pattern string
@@ -433,10 +430,6 @@ func TestSnapshotModeSteadyStateRateIsTheOnePublished(t *testing.T) {
 			`las copias base como instantáneas de volumen llenan el almacén a unos (\d+) eventos por segundo sostenidos`, measured},
 		{"the es bootstrap.md#snapshot-base-backups", esBootstrap,
 			`y a unos (\d+) si todo fuera registro de la base de datos relacional`, allRelational},
-		{"the release note", enRelease,
-			`at about (\d+) events per second of sustained ingest rather than about`, measured},
-		{"the es release note", esRelease,
-			`a unos (\d+) eventos por segundo de ingesta sostenida en lugar de unos`, measured},
 	} {
 		pattern := regexp.MustCompile(strings.ReplaceAll(tc.pattern, " ", `\s+`))
 		for _, published := range publishedFigures(t, tc.what, tc.text, pattern) {

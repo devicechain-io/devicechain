@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The upgrade notes tell an operator, in both locales and several places each, the two
+// The surviving upgrade notes tell an operator, in both locales, the two
 // bounds above which the time-leading key rebuild refuses to start: the uncompressed rows
 // it may have to index (timeLeadingKeysDefaultTiming.maxRows) and the chunks one table may
 // have (eventStoreMaxChunks). An operator decides from those figures whether to upgrade in
@@ -123,8 +123,9 @@ func TestUpgradeNotesPublishTheRebuildBounds(t *testing.T) {
 
 // TestUpgradeNotesLocalesCarryTheSameAnchors requires both locales of the upgrade notes to
 // give their headings the same explicit ids, in the same order. The notes, and the pages
-// that point at them, send an operator to a step by id (#v0190-row-count,
-// #v0190-chunk-count). The docs build refuses a broken link to an id, but a Spanish heading
+// that point at them, send an operator to a step by id. The v0.19.0 section itself now
+// lives at its release tag; the figures this file holds are the ones the surviving notes
+// still state. The docs build refuses a broken link to an id, but a Spanish heading
 // that loses or renames an id nothing in the site links to still builds, and a link to it
 // from outside the site (a release's notes, an answer to an operator) lands at the top of
 // the page.
@@ -157,8 +158,6 @@ func TestUpgradeNotesLocalesCarryTheSameAnchors(t *testing.T) {
 			"the %s upgrade notes have no {#%s} heading for %s, which the release's notes link to",
 			locale, upgradeID, highlights.Version)
 	}
-	require.Contains(t, ids["en"], "v0190-row-count")
-	require.Contains(t, ids["en"], "v0190-chunk-count")
 	assert.Equal(t, ids["en"], ids["es"], "the English and Spanish upgrade notes give their headings different ids")
 	// The Simplified Chinese page also pins English-style ids on headings the English page
 	// leaves to its own slugs, so its links match the English ones. Those extra ids are

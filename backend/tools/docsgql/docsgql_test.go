@@ -271,8 +271,8 @@ func TestPublishedDocsExamplesValidate(t *testing.T) {
 		t.Errorf("%s:%d: %s", f.Block.File, f.Block.Line, f.Detail)
 	}
 	// The skipped set is exactly the allowlist, one skip per entry.
-	if len(r.Skips) != len(allowedSkips) || len(allowedSkips) != 6 {
-		t.Errorf("skipped %d blocks, allowlist has %d, want 6 each", len(r.Skips), len(allowedSkips))
+	if len(r.Skips) != len(allowedSkips) || len(allowedSkips) != 3 {
+		t.Errorf("skipped %d blocks, allowlist has %d, want 3 each", len(r.Skips), len(allowedSkips))
 	}
 	for _, s := range r.Skips {
 		t.Logf("skipped (%s): %s:%d", s.Reason, s.Block.File, s.Block.Line)

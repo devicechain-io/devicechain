@@ -1137,7 +1137,7 @@ antes de que existiera esta configuración mantiene el reinicio en su sitio hast
 `dcctl upgrade` aplica la infraestructura de su instancia
 ([Qué aplica una actualización a la infraestructura](./releases-and-upgrades.md#upgrade-infrastructure)),
 o hasta que se le aplica el parche descrito en las
-[notas de la versión](./releases-and-upgrades.md#database-primary-failover-in-seconds).
+[notas de la versión](https://github.com/devicechain-io/devicechain/blob/v0.18.0/docs/i18n/es/docusaurus-plugin-content-docs/current/deployment/releases-and-upgrades.md#database-primary-failover-in-seconds).
 
 Una instalación de una sola instancia no tiene ninguna réplica que promover. Su base de datos
 no está disponible hasta que la instancia se ha reiniciado, y las escrituras esperan. En las
@@ -1169,7 +1169,7 @@ antes de que se introdujera, o cualquier instancia de un almacén de eventos cre
 existiera ese límite y que aún no haya recibido ni una actualización ni el parche que describen
 las notas de la versión) sigue
 teniendo treinta minutos; las
-[notas de la versión](./releases-and-upgrades.md#database-primary-failover-in-seconds) explican
+[notas de la versión](https://github.com/devicechain-io/devicechain/blob/v0.18.0/docs/i18n/es/docusaurus-plugin-content-docs/current/deployment/releases-and-upgrades.md#database-primary-failover-in-seconds) explican
 cómo reconocer ese caso y resolverlo.
 
 Con `--ha`, una primaria que se está degradando (por un traspaso, o porque está fallando)
@@ -1340,7 +1340,7 @@ eventos en el mismo nodo, ese nodo funcionó al 94-98 % de CPU mientras los otro
   nombres, sea preferencia o no, así que rechaza estos pods de base de datos en un espacio de
   nombres donde lo prohíba. La configuración de admisión de cuotas del servidor de API puede
   imponer el mismo límite a todo espacio de nombres sin una cuota que lo admita; consulta las
-  [notas de versión](./releases-and-upgrades.md#v0190-primary-spread).
+  [notas de versión](https://github.com/devicechain-io/devicechain/blob/v0.19.0/docs/i18n/es/docusaurus-plugin-content-docs/current/deployment/releases-and-upgrades.md#v0190-primary-spread).
 - **Se aplica cuando se planifica un pod de base de datos.** Con `--ha` en tres nodos, cada nodo
   ya ejecuta una instancia de cada base de datos, así que en la práctica la preferencia decide una
   sola cosa: cuando se crea el almacén de eventos de una instancia, su primera primaria va a un
