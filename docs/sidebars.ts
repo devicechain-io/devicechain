@@ -39,6 +39,8 @@ const sidebars: SidebarsConfig = {
     // i18n/es/.../current.json, while a doc's label comes from its own front
     // matter, which the Spanish page already carries.
     'quickstart/first-device',
+    // Third: the page that answers "should I use this" before the concepts do.
+    'why-devicechain',
     {
       type: 'category',
       label: 'Concepts',
@@ -53,6 +55,7 @@ const sidebars: SidebarsConfig = {
           label: 'Foundations',
           collapsed: false,
           items: [
+            'concepts/architecture-at-a-glance',
             'concepts/architecture',
             'concepts/domain-model',
             'concepts/multi-tenancy',
