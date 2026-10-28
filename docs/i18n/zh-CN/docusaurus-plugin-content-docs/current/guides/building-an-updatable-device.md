@@ -114,3 +114,4 @@ bin/ota-boot --root "$ROOT" -- \
 - **[空中（OTA）更新](../concepts/over-the-air-updates.md)**：从平台一侧看分配、尝试和发布。
 - **[连接设备](./connecting-a-device.md#over-the-air-updates)**：设备发送和接收的每一条消息。
 - **[签名更新](./signing-updates.md)**：创建密钥、签名和轮换密钥。
+- **[控制台中的更新](../user-guide/updates.md)**：运维人员一侧：在 Web 控制台中上传制品并分配更新。

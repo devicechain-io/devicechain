@@ -114,3 +114,4 @@ It also does not do delta updates or encrypted images, and it does not handle co
 - **[Over-the-Air Updates](../concepts/over-the-air-updates.md)**: assignments, attempts and rollouts, from the platform's side.
 - **[Connecting a Device](./connecting-a-device.md#over-the-air-updates)**: every message the device sends and receives.
 - **[Signing Updates](./signing-updates.md)**: creating keys, signing, and rotating them.
+- **[Updates in the console](../user-guide/updates.md)**: the operator side: uploading artifacts and assigning updates from the web console.

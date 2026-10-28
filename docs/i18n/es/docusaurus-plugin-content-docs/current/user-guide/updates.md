@@ -300,3 +300,5 @@ estaba asignado un dispositivo no se muestran a ese miembro.
   de una actualización, plazos y firmantes.
 - [Firma de actualizaciones](../guides/signing-updates.md): generar una clave, registrarla, firmar un
   artefacto y rotar claves.
+- [Construir un dispositivo actualizable](/guides/building-an-updatable-device): un dispositivo de
+  referencia que verifica, instala y revierte una actualización.

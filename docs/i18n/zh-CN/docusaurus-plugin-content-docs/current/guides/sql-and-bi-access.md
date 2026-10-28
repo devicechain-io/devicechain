@@ -1,5 +1,5 @@
 ---
-sidebar_position: 8
+sidebar_position: 8.5
 title: SQL 与 BI 访问
 ---
 

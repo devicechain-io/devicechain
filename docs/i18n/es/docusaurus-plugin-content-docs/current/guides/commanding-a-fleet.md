@@ -37,6 +37,8 @@ comandos. Nombrar dispositivos explícitamente solo necesita la autoridad de com
 hace ya los conoce.
 :::
 
+Para lanzar y seguir un lote desde la consola web, consulta [Comandos a una flota](../user-guide/commanding-a-fleet.md) en la guía del usuario.
+
 ## Elige el objetivo: dispositivos o un grupo {#name-the-target-devices-or-a-group}
 
 `deviceTokens` y `groupToken` son alternativas, y debes suministrar **exactamente uno**. Ambos o

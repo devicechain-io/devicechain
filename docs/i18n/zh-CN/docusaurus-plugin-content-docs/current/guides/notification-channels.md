@@ -9,6 +9,8 @@ title: 配置通知渠道
 
 机器到人的路径有意与机器到机器的**[出站连接器](../concepts/outbound-connectors.md)**分开。连接器向*系统*传递载荷；通知通过收件人和按严重程度路由，向*人员*传递警报。告警如何触发见[事件处理与告警](../concepts/event-processing.md)。
 
+若想在 Web 控制台中管理策略和静默时段，请参阅用户指南中的[通知策略](../user-guide/notification-policies.md)。
+
 :::note 状态
 已提供。通过 notification-management GraphQL API 管理渠道和策略。读取需要 `notification:read`，创建或修改任何内容需要 `notification:write`。
 :::

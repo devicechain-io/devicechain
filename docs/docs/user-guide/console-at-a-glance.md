@@ -29,31 +29,24 @@ same as **Dashboards**, which holds the dashboards your team builds.
 The sidebar on the left is how you move around the console. It lists the areas of your tenant
 in a fixed order.
 
-<GuideShot id="console-sidebar" alt="The console sidebar. Under the DeviceChain logo and the words Management Console it lists Home, Dashboards, Alarms, Connectors, Devices, Assets, Customers, Areas, Facets, Browse, Audit, Updates and Settings. Devices, Assets, Customers, Areas, Updates and Settings have an arrow showing they open a sub-menu. The signed-in user's name and email are at the bottom." />
+<GuideShot id="console-sidebar" alt="The console sidebar. Under the DeviceChain logo and the words Management Console it lists Home, then six collapsible sections: Monitor, Devices, Connect, Organization, Access and Settings. Each section heading has an arrow showing that it opens and closes. The signed-in user's name and email are at the bottom." />
 
-Some entries open a sub-menu instead of a page. Selecting one opens its sub-menu and takes you
-to its first page. Only one sub-menu is open at a time.
+**Home** is a single page. Every other entry is a **collapsible section** that groups related
+pages. Select a section's heading to open or close it, and select a page inside it to go there.
 
 | Entry | What it holds |
 | --- | --- |
 | **Home** | The home page. |
-| **Dashboards** | Dashboards built by your team. |
-| **Alarms** | The alarms your rules have raised. |
-| **Notification Policies** | Who is told about alarms, and the quiet hours that hold their pages. |
-| **Connectors** | Outbound connections to other systems. |
-| **Devices** | **Devices**, **Device Types**, **Device Profiles**, **Device Groups**, **Maintenance Windows** and **Command Batches**. |
-| **Assets** | **Assets**, **Asset Types** and **Asset Groups**. |
-| **Customers** | **Customers**, **Customer Types** and **Customer Groups**. |
-| **Areas** | **Areas**, **Area Types**, **Area Groups** and **Geofences**. |
-| **Facets** | The keys you use to describe and filter devices and other entities. |
-| **Browse** | A query builder for finding entities by their facets. |
-| **Audit** | The tenant's record of who changed what. |
-| **Updates** | **Artifacts** and **Signers** for over-the-air updates. |
-| **Settings** | **Members**, **Roles**, **Branding**, **Map** and **Language**. |
+| **Monitor** | **Dashboards** built by your team, **Alarms** raised by your rules, and **Notification Policies**: who is told about alarms, and the quiet hours that hold their pages. |
+| **Devices** | **Devices**, **Device Types**, **Device Profiles** (which hold the profile's rules, metrics and commands), **Device Groups**, **Command Batches**, **Maintenance Windows** and **Updates** (**Artifacts**, **Rollouts** and **Signers** for over-the-air updates). |
+| **Connect** | How devices and other systems reach the tenant: **Provisioning Profiles**, **Trust Anchors**, **Integrations** and **Connectors** (outbound connections to other systems). |
+| **Organization** | **Assets**, **Customers** and **Areas** (including **Geofences**); **Facets**, the keys you use to describe and filter entities; and **Browse**, a query builder for finding entities by their facets. |
+| **Access** | **Members**, **Service Accounts**, **Roles**, **Sign-in Security** and **Audit**, the tenant's record of who changed what. |
+| **Settings** | **Branding**, **Map** and **Language**. |
 
 You see only the entries your role allows. If your role cannot read alarms, for example,
-**Alarms** is not in your sidebar. **Updates** appears only when your installation runs the
-update service. The **Settings** entries are for tenant administrators.
+**Alarms** is not in your sidebar. **Updates** appears only when your installation runs the update service. The **Access**
+and **Settings** sections are for tenant administrators.
 
 If your access is limited to some of the tenant's customers, the sidebar holds only **Home**,
 **Dashboards**, **Alarms** and **Devices**. See

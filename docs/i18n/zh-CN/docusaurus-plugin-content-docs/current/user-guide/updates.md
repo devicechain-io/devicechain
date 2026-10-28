@@ -176,3 +176,4 @@ import GuideShot from '@site/src/components/GuideShot';
 
 - [空中更新](/concepts/over-the-air-updates)：制品、分配、更新状态、截止期和签名者。
 - [为更新签名](/guides/signing-updates)：生成密钥、注册密钥、为制品签名以及轮换密钥。
+- [构建可更新的设备](/guides/building-an-updatable-device)：一台会校验、安装并回滚更新的参考设备。

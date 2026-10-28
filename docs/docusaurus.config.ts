@@ -196,7 +196,7 @@ const config: Config = {
           items: [
             { label: 'Introduction', to: '/' },
             { label: 'Concepts', to: '/concepts/architecture' },
-            { label: 'Guides', to: '/guides/local-development' },
+            { label: 'Guides', to: '/category/guides' },
           ],
         },
         {
