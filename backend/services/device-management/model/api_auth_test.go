@@ -48,8 +48,9 @@ func TestEvaluateCredential_NoSecretType(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-// A stored X.509 row can never authenticate: nothing verifies a certificate, so the
-// type is refused even when the row is present and enabled.
+// A stored X.509 row can never authenticate by id: its pin is public and what proves the
+// device is the TLS handshake, which this path knows nothing about. The type is refused even
+// when the row is present and enabled.
 func TestEvaluateCredential_X509IsRefused(t *testing.T) {
 	now := time.Date(2026, 6, 25, 12, 0, 0, 0, time.UTC)
 	cred := credentialRow(CredentialX509Certificate, strptr("-----BEGIN CERTIFICATE-----"), nil)

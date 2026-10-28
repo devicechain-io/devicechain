@@ -345,8 +345,11 @@ func TestImportCredentialValidation(t *testing.T) {
 		credRow(7, "MQTT_BASIC", "u7", strings.Repeat("s", 4097)),
 	}
 	res := mustImport(t, api, ctx, rows, DeviceImportModeCredentials, false)
-	require.Equal(t, []string{"INVALID", "INVALID", "INVALID", "INVALID", "REFUSED", "INVALID", "INVALID"}, outcomes(res))
-	require.Equal(t, "UNSUPPORTED", *res.Rows[4].Code)
+	require.Equal(t, []string{"INVALID", "INVALID", "INVALID", "INVALID", "INVALID", "INVALID", "INVALID"}, outcomes(res))
+	// A certificate credential's chain is checked against a trust anchor at create, which an
+	// import row has no way to name.
+	require.Equal(t, "INVALID_VALUE", *res.Rows[4].Code)
+	require.Contains(t, *res.Rows[4].Message, "createDeviceCredential")
 	require.Zero(t, countOf(t, api, ctx, &Device{}))
 }
 

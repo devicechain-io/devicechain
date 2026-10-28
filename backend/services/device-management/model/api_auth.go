@@ -87,7 +87,7 @@ func credentialRequiresSecret(ctype string) bool {
 func evaluateCredential(key *credential.DeviceSecretKey, cred *DeviceCredential, presented *PresentedCredential, now time.Time) error {
 	// Fail closed for a stored row of a type outside the supported vocabulary (a retired
 	// type): it has no verification, so it never authenticates.
-	if !CredentialType(cred.CredentialType).Valid() {
+	if !CredentialType(cred.CredentialType).PresentedById() {
 		return ErrCredentialTypeInvalid
 	}
 	if err := checkExpiry(cred, now); err != nil {
@@ -289,7 +289,7 @@ func (api *Api) lookupPresentedCredential(ctx context.Context, presented *Presen
 	if presented == nil || presented.CredentialId == "" {
 		return nil, ErrCredentialNotPresented
 	}
-	if !CredentialType(presented.CredentialType).Valid() {
+	if !CredentialType(presented.CredentialType).PresentedById() {
 		return nil, ErrCredentialTypeInvalid
 	}
 	// An access token is looked up by its keyed digest, never by the token: the stored id

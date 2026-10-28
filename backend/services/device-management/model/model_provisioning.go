@@ -68,6 +68,11 @@ type ProvisioningProfileCreateRequest struct {
 	Enabled        bool
 	ExpiresAt      *string
 	Metadata       *string
+	// TrustAnchorToken makes this an X.509 profile (see ProvisioningProfile.TrustAnchorId): its
+	// devices authenticate by certificate chain to that anchor. The profile then has no
+	// provision secret, so none is generated or returned, and its credential type is
+	// X509_CERTIFICATE (a credentialType sent with it must say so).
+	TrustAnchorToken *string
 }
 
 // A PARTIAL update to a provisioning profile: omit a field to leave the stored value
@@ -116,6 +121,10 @@ type ProvisioningProfileUpdateRequest struct {
 	// registrations; it never removes a device.
 	MaxDevices dcgraphql.OptionalInt32
 	Metadata   dcgraphql.OptionalString
+	// TrustAnchorToken re-points an X.509 profile at another trust anchor. A profile is an X.509
+	// profile or a secret profile for its whole life: naming an anchor on a secret profile, or
+	// sending null for an X.509 one, is refused (create a new profile).
+	TrustAnchorToken dcgraphql.OptionalString
 }
 
 // ProvisioningProfile carries the shared key+secret a fleet presents to
@@ -159,6 +168,11 @@ type ProvisioningProfile struct {
 	ExpiresAt             sql.NullTime
 	// MaxDevices is the cap on devices this profile registers, nil for none.
 	MaxDevices *int
+	// TrustAnchorId makes this an X.509 profile: the devices it registers authenticate with a
+	// client certificate whose chain reaches this tenant trust anchor, not with a shared
+	// secret. Such a profile carries no secret (ProvisionSecretDigest NULL, ProvisionSecretIssued
+	// false) and mints no credential of its own. ON DELETE RESTRICT.
+	TrustAnchorId *uint
 
 	// IssuedSecret is the provision secret as generated, on the row a create or a rotate just
 	// wrote, and "" on every row read from the database. It is not a column. The response to

@@ -51,7 +51,6 @@ const (
 	importCodeInvalidValue    = "INVALID_VALUE"
 	importCodeNotFound        = "NOT_FOUND"
 	importCodeDuplicateInFile = "DUPLICATE_IN_FILE"
-	importCodeUnsupported     = "UNSUPPORTED"
 )
 
 // DeviceImportRow is one device of an import file. It carries the fields of a single
@@ -231,8 +230,8 @@ func validateImportRow(row *DeviceImportRow, mode string) (outcome, code, messag
 	}
 	ctype := strings.TrimSpace(*row.CredentialType)
 	switch {
-	case CredentialType(ctype).Retired():
-		return DeviceImportRefused, importCodeUnsupported, (&UnsupportedCredentialTypeError{Type: CredentialType(ctype)}).Error(), nil
+	case CredentialType(ctype) == CredentialX509Certificate:
+		return DeviceImportInvalid, importCodeInvalidValue, refuseX509Elsewhere().Error(), nil
 	case !CredentialType(ctype).Valid():
 		return DeviceImportInvalid, importCodeInvalidValue, "credentialType must be ACCESS_TOKEN or MQTT_BASIC", nil
 	}
@@ -606,6 +605,19 @@ func (api *Api) decideImportRows(ctx context.Context, result *DeviceImportResult
 				fmt.Sprintf("provisioning profile %q is for a different device type than %q", p.earmarkToken, dt.Token))
 			continue
 		}
+		if p.earmark != nil {
+			// A certificate profile's devices carry the token derived from their external id
+			// (x509EarmarkToken); an import row names its token, so it must be that one.
+			ext := p.external
+			if _, err := x509EarmarkToken(p.earmark, row.Token, &ext); err != nil || (p.earmark.TrustAnchorId != nil && strings.TrimSpace(row.Token) == "") {
+				msg := "the token must be the one derived from the externalId for a certificate profile"
+				if err != nil {
+					msg = err.Error()
+				}
+				result.set(i, row, DeviceImportInvalid, importCodeInvalidValue, msg)
+				continue
+			}
+		}
 		if p.external != "" && byExternal[p.external] != nil {
 			result.set(i, row, DeviceImportConflict, conflict.Code, "externalId is already in use by another device")
 			continue
@@ -676,11 +688,12 @@ func (api *Api) createImportedDevice(ctx context.Context, p *importRow, dt *Devi
 		// The earmarked profile is locked before the device is inserted, the order a registration
 		// takes them in (see lockEarmarkProfiles).
 		if p.earmarkToken != "" {
-			id, err := lockEarmarkProfile(tx, p.earmarkToken, dt)
+			profile, err := lockEarmarkProfile(tx, p.earmarkToken, dt)
 			if err != nil {
 				return err
 			}
-			device.ExpectedProvisioningProfileId = id
+			id := profile.ID
+			device.ExpectedProvisioningProfileId = &id
 		}
 		if err := tx.Create(device).Error; err != nil {
 			return err

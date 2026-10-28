@@ -828,6 +828,31 @@ var entities = []entity{
 			}}
 		},
 	},
+	{
+		// A tenant trust anchor: one CA certificate. The certificate is a FIXED literal (a
+		// self-signed P-256 CA valid for a century, whose key was discarded), because every value
+		// the seed writes must be reproducible by the verify process, which holds only the
+		// receipt. Nothing is ever issued under it. Absent from a release that predates device
+		// certificates, which the baseline adapter skips like any entity the old schema does not
+		// declare. The (tenant, fingerprint) index is per tenant, so the same literal can be
+		// seeded for every probe tenant.
+		Name:     "device-trust-anchor",
+		Area:     "device-management",
+		Mutation: "createDeviceTrustAnchor",
+		Input:    "DeviceTrustAnchorCreateRequest!",
+		Read:     "deviceTrustAnchorsByToken",
+		Fields:   "token name description enabled metadata subject certificatePem",
+		Vars: func(s *state) map[string]any {
+			return map[string]any{"req": map[string]any{
+				"token":          s.tok("device-trust-anchor"),
+				"name":           "apiprobe trust anchor",
+				"description":    "A CA certificate no device is issued under; never exercised by the probe.",
+				"certificatePem": probeTrustAnchorPEM,
+				"enabled":        true,
+				"metadata":       meta("device-trust-anchor"),
+			}}
+		},
+	},
 
 	// ---- device-management: the entity families --------------------------
 	{
@@ -1602,7 +1627,7 @@ func otherWrites() int {
 	return len(seen)
 }
 
-const tenantCreateMutations = 32
+const tenantCreateMutations = 33
 
 // tenantPublishMutations is the same claim for publishes, measured the same way by
 // TestThePublishDenominatorMatchesTheSchemas. Separate from the count above because
@@ -1714,3 +1739,18 @@ func str(v any) string {
 	s, _ := v.(string)
 	return s
 }
+
+// probeTrustAnchorPEM is the CA certificate the device-trust-anchor entity seeds: self-signed,
+// ECDSA P-256, CA with keyCertSign and no name constraints, valid 2026-2126. Its private key
+// does not exist.
+const probeTrustAnchorPEM = `-----BEGIN CERTIFICATE-----
+MIIBczCCARmgAwIBAgIBATAKBggqhkjOPQQDAjAgMR4wHAYDVQQDExVhcGlwcm9i
+ZSB0cnVzdCBhbmNob3IwIBcNMjYwMTAxMDAwMDAwWhgPMjEyNjAxMDEwMDAwMDBa
+MCAxHjAcBgNVBAMTFWFwaXByb2JlIHRydXN0IGFuY2hvcjBZMBMGByqGSM49AgEG
+CCqGSM49AwEHA0IABKOW7imvI7iLdXo5/8Iau3+aDJRYl/HWRKbar/ZrPdFzglqK
+S2EMjeF4wLBfTAohXt6M7fnOwBW2FqNHvCKRbISjQjBAMA4GA1UdDwEB/wQEAwIB
+BjAPBgNVHRMBAf8EBTADAQH/MB0GA1UdDgQWBBQoJIe9smSDpYFjRgeG/os5iMwh
+/TAKBggqhkjOPQQDAgNIADBFAiEAjma/jFlw1m+t+Wu5RJsx02KLj9w9Z4NKE6pB
+BU/9S7MCIFOSPo7HynxOw8iOGGiRXucRNqStPg679z2buQ4towfa
+-----END CERTIFICATE-----
+`

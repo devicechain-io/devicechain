@@ -19,6 +19,7 @@ ALTER SEQUENCE "device-management".device_profile_activations_id_seq OWNED BY "d
 ALTER SEQUENCE "device-management".device_profile_versions_id_seq OWNED BY "device-management".device_profile_versions.id;
 ALTER SEQUENCE "device-management".device_profiles_id_seq OWNED BY "device-management".device_profiles.id;
 ALTER SEQUENCE "device-management".device_replacements_id_seq OWNED BY "device-management".device_replacements.id;
+ALTER SEQUENCE "device-management".device_trust_anchors_id_seq OWNED BY "device-management".device_trust_anchors.id;
 ALTER SEQUENCE "device-management".device_types_id_seq OWNED BY "device-management".device_types.id;
 ALTER SEQUENCE "device-management".devices_id_seq OWNED BY "device-management".devices.id;
 ALTER SEQUENCE "device-management".entity_attributes_id_seq OWNED BY "device-management".entity_attributes.id;
@@ -102,6 +103,8 @@ ALTER TABLE ONLY "device-management".device_credentials
  ADD CONSTRAINT device_credentials_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-management".device_credentials
  ADD CONSTRAINT fk_device_credentials_provisioning_profile FOREIGN KEY (provisioning_profile_id) REFERENCES "device-management".provisioning_profiles(id) ON DELETE RESTRICT;
+ALTER TABLE ONLY "device-management".device_credentials
+ ADD CONSTRAINT fk_device_credentials_trust_anchor FOREIGN KEY (trust_anchor_id) REFERENCES "device-management".device_trust_anchors(id) ON DELETE RESTRICT;
 ALTER TABLE ONLY "device-management".device_credentials ALTER COLUMN id SET DEFAULT nextval('"device-management".device_credentials_id_seq'::regclass);
 ALTER TABLE ONLY "device-management".device_management_migrations
  ADD CONSTRAINT device_management_migrations_pkey PRIMARY KEY (id);
@@ -119,6 +122,9 @@ ALTER TABLE ONLY "device-management".device_replacements
 ALTER TABLE ONLY "device-management".device_replacements
  ADD CONSTRAINT device_replacements_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-management".device_replacements ALTER COLUMN id SET DEFAULT nextval('"device-management".device_replacements_id_seq'::regclass);
+ALTER TABLE ONLY "device-management".device_trust_anchors
+ ADD CONSTRAINT device_trust_anchors_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "device-management".device_trust_anchors ALTER COLUMN id SET DEFAULT nextval('"device-management".device_trust_anchors_id_seq'::regclass);
 ALTER TABLE ONLY "device-management".device_types
  ADD CONSTRAINT "fk_device-management_device_types_maintenance_window" FOREIGN KEY (maintenance_window_id) REFERENCES "device-management".maintenance_windows(id);
 ALTER TABLE ONLY "device-management".device_types
@@ -196,6 +202,8 @@ ALTER TABLE ONLY "device-management".pending_ownership_facts
 ALTER TABLE ONLY "device-management".pending_session_kicks
  ADD CONSTRAINT pending_session_kicks_pkey PRIMARY KEY (tenant_id, device_token, origin);
 ALTER TABLE ONLY "device-management".provisioning_profiles
+ ADD CONSTRAINT fk_provisioning_profiles_trust_anchor FOREIGN KEY (trust_anchor_id) REFERENCES "device-management".device_trust_anchors(id) ON DELETE RESTRICT;
+ALTER TABLE ONLY "device-management".provisioning_profiles
  ADD CONSTRAINT provisioning_profiles_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-management".provisioning_profiles ALTER COLUMN id SET DEFAULT nextval('"device-management".provisioning_profiles_id_seq'::regclass);
 ALTER TABLE ONLY "device-management".purged_tenants
@@ -252,6 +260,9 @@ CREATE INDEX "idx_device-management_device_replacements_deleted_at" ON "device-m
 CREATE INDEX "idx_device-management_device_replacements_device_id" ON "device-management".device_replacements USING btree (device_id);
 CREATE INDEX "idx_device-management_device_replacements_occurred_time" ON "device-management".device_replacements USING btree (occurred_time);
 CREATE INDEX "idx_device-management_device_replacements_tenant_id" ON "device-management".device_replacements USING btree (tenant_id);
+CREATE INDEX "idx_device-management_device_trust_anchors_deleted_at" ON "device-management".device_trust_anchors USING btree (deleted_at);
+CREATE INDEX "idx_device-management_device_trust_anchors_tenant_id" ON "device-management".device_trust_anchors USING btree (tenant_id);
+CREATE INDEX "idx_device-management_device_trust_anchors_token" ON "device-management".device_trust_anchors USING btree (token);
 CREATE INDEX "idx_device-management_device_types_deleted_at" ON "device-management".device_types USING btree (deleted_at);
 CREATE INDEX "idx_device-management_device_types_maintenance_window_id" ON "device-management".device_types USING btree (maintenance_window_id);
 CREATE INDEX "idx_device-management_device_types_manufacturer" ON "device-management".device_types USING btree (manufacturer);
@@ -308,6 +319,7 @@ CREATE INDEX "idx_device-management_provisioning_profiles_token" ON "device-mana
 CREATE INDEX idx_alarms_scope_anchors ON "device-management".alarms USING gin (scope_anchors);
 CREATE INDEX idx_audit_tenant_time ON "device-management".audit_events USING btree (tenant_id, occurred_time DESC);
 CREATE INDEX idx_device_credentials_provisioning_profile ON "device-management".device_credentials USING btree (provisioning_profile_id) WHERE (provisioning_profile_id IS NOT NULL);
+CREATE INDEX idx_device_credentials_trust_anchor ON "device-management".device_credentials USING btree (trust_anchor_id) WHERE (trust_anchor_id IS NOT NULL);
 CREATE INDEX idx_devices_device_type ON "device-management".devices USING btree (tenant_id, device_type_id) WHERE (deleted_at IS NULL);
 CREATE INDEX idx_devices_disabled ON "device-management".devices USING btree (tenant_id, id) WHERE ((disabled_at IS NOT NULL) AND (deleted_at IS NULL));
 CREATE INDEX idx_devices_expected_provisioning_profile ON "device-management".devices USING btree (expected_provisioning_profile_id) WHERE (expected_provisioning_profile_id IS NOT NULL);
@@ -323,6 +335,7 @@ CREATE INDEX idx_entity_rel_target ON "device-management".entity_relationships U
 CREATE INDEX idx_facet_keys_deleted_at ON "device-management".facet_keys USING btree (deleted_at);
 CREATE INDEX idx_facet_keys_member_type ON "device-management".facet_keys USING btree (member_type);
 CREATE INDEX idx_facet_keys_tenant_id ON "device-management".facet_keys USING btree (tenant_id);
+CREATE INDEX idx_provisioning_profiles_trust_anchor ON "device-management".provisioning_profiles USING btree (trust_anchor_id) WHERE (trust_anchor_id IS NOT NULL);
 CREATE INDEX ix_device_profile_activations_profile_id ON "device-management".device_profile_activations USING btree (device_profile_id);
 CREATE INDEX ix_devices_list_order ON "device-management".devices USING btree (tenant_id, created_at DESC, token) WHERE (deleted_at IS NULL);
 CREATE INDEX ix_entity_attributes_facet_lookup ON "device-management".entity_attributes USING btree (tenant_id, entity_type, scope, attr_key, entity_id) WHERE (deleted_at IS NULL);
@@ -452,6 +465,12 @@ CREATE SEQUENCE "device-management".device_profiles_id_seq
  NO MAXVALUE
  CACHE 1;
 CREATE SEQUENCE "device-management".device_replacements_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE SEQUENCE "device-management".device_trust_anchors_id_seq
  START WITH 1
  INCREMENT BY 1
  NO MINVALUE
@@ -811,7 +830,9 @@ CREATE TABLE "device-management".device_credentials (
  enabled boolean DEFAULT true NOT NULL,
  expires_at timestamp with time zone,
  secret_digest character varying(128),
- provisioning_profile_id bigint
+ provisioning_profile_id bigint,
+ trust_anchor_id bigint,
+ certificate_pem text
 );
 CREATE TABLE "device-management".device_management_migrations (
  id character varying(255) NOT NULL
@@ -869,6 +890,24 @@ CREATE TABLE "device-management".device_replacements (
  retired_credential_tokens jsonb NOT NULL,
  new_credential_token character varying(128) NOT NULL,
  new_credential_type character varying(32) NOT NULL
+);
+CREATE TABLE "device-management".device_trust_anchors (
+ id bigint NOT NULL,
+ created_at timestamp with time zone,
+ updated_at timestamp with time zone,
+ deleted_at timestamp with time zone,
+ tenant_id character varying(128) NOT NULL,
+ token character varying(128) NOT NULL,
+ name character varying(128),
+ description character varying(1024),
+ metadata jsonb,
+ certificate_pem text NOT NULL,
+ fingerprint_sha256 character varying(64) NOT NULL,
+ subject character varying(1024) NOT NULL,
+ issuer character varying(1024) NOT NULL,
+ not_before timestamp with time zone NOT NULL,
+ not_after timestamp with time zone NOT NULL,
+ enabled boolean NOT NULL
 );
 CREATE TABLE "device-management".device_types (
  id bigint NOT NULL,
@@ -1168,7 +1207,8 @@ CREATE TABLE "device-management".provisioning_profiles (
  expires_at timestamp with time zone,
  provision_secret_digest character varying(128),
  max_devices integer,
- provision_secret_issued boolean DEFAULT false NOT NULL
+ provision_secret_issued boolean DEFAULT false NOT NULL,
+ trust_anchor_id bigint
 );
 CREATE TABLE "device-management".purged_tenants (
  token character varying(128) NOT NULL,
@@ -1199,6 +1239,8 @@ CREATE UNIQUE INDEX uix_device_aliases_tenant_scheme_value ON "device-management
 CREATE UNIQUE INDEX uix_device_credentials_tenant_token ON "device-management".device_credentials USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_device_profile_versions_profile_version ON "device-management".device_profile_versions USING btree (device_profile_id, version);
 CREATE UNIQUE INDEX uix_device_profiles_tenant_token ON "device-management".device_profiles USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
+CREATE UNIQUE INDEX uix_device_trust_anchors_tenant_fingerprint ON "device-management".device_trust_anchors USING btree (tenant_id, fingerprint_sha256) WHERE (deleted_at IS NULL);
+CREATE UNIQUE INDEX uix_device_trust_anchors_tenant_token ON "device-management".device_trust_anchors USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_device_types_tenant_token ON "device-management".device_types USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_devices_tenant_external_id ON "device-management".devices USING btree (tenant_id, external_id) WHERE ((deleted_at IS NULL) AND (external_id IS NOT NULL));
 CREATE UNIQUE INDEX uix_devices_tenant_token ON "device-management".devices USING btree (tenant_id, token) WHERE (deleted_at IS NULL);

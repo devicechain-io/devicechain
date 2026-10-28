@@ -249,3 +249,20 @@ func TestParseChainPEM(t *testing.T) {
 		}
 	}
 }
+
+func TestParseCertificatesKeepsOrderAndRules(t *testing.T) {
+	p := newBasicPKI(t)
+	canon, certs, err := ParseCertificates(p.leaf.pem() + p.inter.pem() + p.leaf.pem())
+	if err != nil || len(certs) != 2 || !certs[0].Equal(p.leaf.cert) || !certs[1].Equal(p.inter.cert) {
+		t.Fatalf("order or de-duplication wrong: %v", err)
+	}
+	if canon != p.leaf.pem()+p.inter.pem() {
+		t.Fatal("canonical text wrong")
+	}
+	if _, _, err := ParseCertificates(p.leaf.pem() + "-----BEGIN PRIVATE KEY-----\nAAAA\n"); !errors.Is(err, ErrBundleInvalid) {
+		t.Fatalf("a private key must be refused: %v", err)
+	}
+	if c, certs, err := ParseCertificates(" "); err != nil || c != "" || certs != nil {
+		t.Fatal("empty text is no certificates and no error")
+	}
+}

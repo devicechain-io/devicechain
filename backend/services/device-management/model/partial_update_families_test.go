@@ -60,6 +60,7 @@ func partialUpdateFamilies() []putest.Family[*Api] {
 		deviceCredentialFamily(),
 		provisioningProfileFamily(),
 		integrationFamily(),
+		trustAnchorFamily(),
 		entityRelationshipTypeFamily(),
 		deviceProfileFamily(),
 	}
@@ -1259,11 +1260,20 @@ func provisioningProfileFamily() putest.Family[*Api] {
 	return putest.Family[*Api]{
 		Name:    "provisioningProfile",
 		Token:   "pp-1",
-		Migrate: append(append([]any{}, deviceProfileTables...), &ProvisioningProfile{}),
+		Migrate: append(append([]any{}, deviceProfileTables...), &ProvisioningProfile{}, &DeviceTrustAnchor{}),
 		Seed: func(t *testing.T, api *Api, ctx context.Context) {
 			for _, tok := range []string{"dt-a", "dt-b"} {
 				if _, err := api.CreateDeviceType(ctx, &DeviceTypeCreateRequest{Token: tok}); err != nil {
 					t.Fatalf("seed device type %q: %v", tok, err)
+				}
+			}
+			// The profile is a certificate profile, so that re-pointing it at another anchor
+			// (its one anchor-related edit) is driven too. Every other field is the same on
+			// either kind.
+			for _, tok := range []string{"anchor-a", "anchor-b"} {
+				if _, err := api.CreateDeviceTrustAnchor(ctx, &DeviceTrustAnchorCreateRequest{
+					Token: tok, CertificatePem: newRootCA(t, tok).pem()}); err != nil {
+					t.Fatalf("seed trust anchor %q: %v", tok, err)
 				}
 			}
 			maxDevices := int32(maxDevicesSeed)
@@ -1272,6 +1282,7 @@ func provisioningProfileFamily() putest.Family[*Api] {
 				ProvisionKey: provisionKey, MaxDevices: &maxDevices,
 				Strategy: string(ProvisionAllowNew), DeviceTypeToken: "dt-a",
 				Enabled: true, ExpiresAt: strp(expiresAtSeed), Metadata: strp(metadataSeed),
+				TrustAnchorToken: strp("anchor-a"),
 			})
 			if err != nil {
 				t.Fatalf("seed provisioning profile: %v", err)
@@ -1281,15 +1292,16 @@ func provisioningProfileFamily() putest.Family[*Api] {
 			rows, err := api.ProvisioningProfilesByToken(ctx, []string{"pp-1"})
 			e := requireOne(t, "provisioning profile", rows, err)
 			return map[string]string{
-				"name":            nullStr(e.Name),
-				"description":     nullStr(e.Description),
-				"provisionKey":    e.ProvisionKey,
-				"maxDevices":      nullIntPtrStr(e.MaxDevices),
-				"strategy":        e.Strategy,
-				"deviceTypeToken": refTokenOf(t, e.DeviceType == nil, func() string { return e.DeviceType.Token }),
-				"enabled":         boolStr(e.Enabled),
-				"expiresAt":       nullTimeStr(e.ExpiresAt),
-				"metadata":        jsonStr(e.Metadata),
+				"name":             nullStr(e.Name),
+				"description":      nullStr(e.Description),
+				"provisionKey":     e.ProvisionKey,
+				"maxDevices":       nullIntPtrStr(e.MaxDevices),
+				"strategy":         e.Strategy,
+				"deviceTypeToken":  refTokenOf(t, e.DeviceType == nil, func() string { return e.DeviceType.Token }),
+				"enabled":          boolStr(e.Enabled),
+				"expiresAt":        nullTimeStr(e.ExpiresAt),
+				"metadata":         jsonStr(e.Metadata),
+				"trustAnchorToken": anchorTokenOf(t, api, ctx, e.TrustAnchorId),
 			}
 		},
 		NewRequest: func() any { return new(ProvisioningProfileUpdateRequest) },
@@ -1316,8 +1328,20 @@ func provisioningProfileFamily() putest.Family[*Api] {
 				func(r *ProvisioningProfileUpdateRequest) *dcgraphql.OptionalString { return &r.ExpiresAt }),
 			putest.OptionalStringField("metadata", metadataSeed, `{"fleet":"south"}`,
 				func(r *ProvisioningProfileUpdateRequest) *dcgraphql.OptionalString { return &r.Metadata }),
+			putest.RequiredRefField("trustAnchorToken", "anchor-a", "anchor-b",
+				func(r *ProvisioningProfileUpdateRequest) *dcgraphql.OptionalString { return &r.TrustAnchorToken }),
 		},
 	}
+}
+
+// anchorTokenOf is the token of the trust anchor with this id, or "" for none.
+func anchorTokenOf(t *testing.T, api *Api, ctx context.Context, id *uint) string {
+	t.Helper()
+	if id == nil {
+		return ""
+	}
+	rows, err := api.DeviceTrustAnchorsById(ctx, []uint{*id})
+	return requireOne(t, "trust anchor", rows, err).Token
 }
 
 // ─── Integration ───────────────────────────────────────────────────────────

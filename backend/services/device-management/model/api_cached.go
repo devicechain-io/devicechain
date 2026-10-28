@@ -74,7 +74,7 @@ func (capi *CachedApi) AuthenticateDevice(ctx context.Context, presented *Presen
 	creds := capi.caches.Credentials
 	tenant, hasTenant := cacheTenant(ctx)
 	if creds == nil || !hasTenant || presented == nil || presented.CredentialId == "" ||
-		!CredentialType(presented.CredentialType).Valid() {
+		!CredentialType(presented.CredentialType).PresentedById() {
 		return capi.Api.AuthenticateDevice(ctx, presented, now)
 	}
 	key := credentialCacheKey(tenant, presented.CredentialType, presented.CredentialId)
