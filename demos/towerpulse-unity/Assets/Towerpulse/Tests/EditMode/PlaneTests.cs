@@ -42,6 +42,22 @@ namespace DeviceChain.Towerpulse.Tests
             return m.Groups[1].Value;
         }
 
+        // ---- the live settings example
+
+        /// <summary>The example is copied to live.json as is; a Windows path pasted in with single backslashes is not JSON, and the player refuses to start on it.</summary>
+        [Test]
+        public void LiveExampleIsValidJsonWithOnlyTheKeysTheLoaderKnows()
+        {
+            var known = new HashSet<string> { "runnerUrl", "caPemPath", "expectInstance", "expectTenant" };
+            using (var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(RepoFile("demos/towerpulse-unity/live.example.json"))))
+            {
+                var names = doc.RootElement.EnumerateObject().Select(p => p.Name).ToList();
+                CollectionAssert.IsSubsetOf(names, known);
+                CollectionAssert.Contains(names, "runnerUrl");
+                CollectionAssert.Contains(names, "caPemPath");
+            }
+        }
+
         // ---- the wire vocabulary
 
         [Test]

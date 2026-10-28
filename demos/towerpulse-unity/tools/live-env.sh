@@ -53,13 +53,15 @@ cmd_ca() {
 	echo "broker CA written to $out"
 }
 
-# connz asks the broker's monitoring endpoint through the cluster, so nothing is exposed to the host.
+# connz asks the broker's monitoring endpoint from inside the cluster (the nats-box pod, through the headless service,
+# since the server image carries no HTTP client), so nothing is exposed to the host. It counts the MQTT sessions, which
+# is what the device plane holds: one per device, client id "<instance>:<tenant>:<device>".
 cmd_connz() {
-	local pod
-	pod="$(kc -n "$NS" get pod -l app.kubernetes.io/name=dc-nats -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
-	[ -n "$pod" ] || die "no NATS pod found in $NS"
-	kc -n "$NS" exec "$pod" -- wget -qO- 'http://localhost:8222/connz?limit=1' | python3 -c \
-		'import json,sys; d=json.load(sys.stdin); print("connections:", d.get("total"))'
+	local out total mqtt
+	out="$(kc -n "$NS" exec deploy/dc-nats-box -- wget -qO- 'http://dc-nats-headless:8222/connz?limit=10000')" || die "cannot reach the broker's monitoring port from the nats-box pod in $NS"
+	total="$(printf '%s' "$out" | grep -c '"cid"' || true)"
+	mqtt="$(printf '%s' "$out" | grep -c '"mqtt_client"' || true)"
+	echo "connections: $total (mqtt sessions: $mqtt)"
 }
 
 case "${1:-}" in
