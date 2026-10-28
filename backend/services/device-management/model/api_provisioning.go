@@ -215,6 +215,21 @@ func (api *Api) CreateProvisioningProfile(ctx context.Context, request *Provisio
 	}
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		if x509Profile {
+			// The anchor is held FOR SHARE and re-checked, as for a credential: it was read
+			// before this transaction.
+			locked, err := lockTrustAnchorShareByToken(tx, anchorToken)
+			if err != nil {
+				return err
+			}
+			if locked.ID != anchor.ID || locked.FingerprintSha256 != anchor.FingerprintSha256 {
+				return invalidAnchor("trust anchor %q changed while the profile was being created; try again", anchorToken)
+			}
+			if err := requireUsableAnchor(locked); err != nil {
+				return err
+			}
+			if err := lockTenantCreates(tx, deviceTypes[0].TenantId, "x509_profiles"); err != nil {
+				return err
+			}
 			var n int64
 			if err := tx.Model(&ProvisioningProfile{}).Where("trust_anchor_id IS NOT NULL").Count(&n).Error; err != nil {
 				return err
@@ -226,7 +241,7 @@ func (api *Api) CreateProvisioningProfile(ctx context.Context, request *Provisio
 		return tx.Create(created).Error
 	})
 	if err != nil {
-		return nil, err
+		return nil, referenceToNotFound(err, anchorToken)
 	}
 	created.IssuedSecret = issued
 	return created, nil

@@ -106,10 +106,26 @@ func (api *Api) createX509Credential(ctx context.Context, device *Device, reques
 		ExpiresAt:      sql.NullTime{Time: verified.NotAfter, Valid: true},
 	}
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
-		var n int64
-		if err := tx.Model(&DeviceCredential{}).
-			Where("device_id = ? AND credential_type = ?", device.ID, string(CredentialX509Certificate)).
-			Count(&n).Error; err != nil {
+		// The anchor is held FOR SHARE from here to the commit and re-checked: it was read, and
+		// the chain verified, before this transaction, and a disable or a delete since then must
+		// not be missed. LOCK ORDER: anchor, then device (a move in UpdateDeviceCredential takes
+		// the device alone).
+		locked, err := lockTrustAnchorShareByToken(tx, anchorToken)
+		if err != nil {
+			return err
+		}
+		if locked.ID != anchor.ID || locked.FingerprintSha256 != anchor.FingerprintSha256 {
+			return invalidAnchor("trust anchor %q changed while the credential was being created; try again", anchorToken)
+		}
+		if err := requireUsableAnchor(locked); err != nil {
+			return err
+		}
+		// The device is locked so the count below is the count the insert lands on.
+		if err := lockDeviceRow(tx, device.ID); err != nil {
+			return err
+		}
+		n, err := countX509Credentials(tx, device.ID)
+		if err != nil {
 			return err
 		}
 		if n >= MaxX509CredentialsPerDevice {
@@ -119,7 +135,7 @@ func (api *Api) createX509Credential(ctx context.Context, device *Device, reques
 		return tx.Create(created).Error
 	})
 	if err != nil {
-		return nil, err
+		return nil, referenceToNotFound(err, anchorToken)
 	}
 	return created, nil
 }

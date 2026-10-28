@@ -120,9 +120,22 @@ func TestVerifyAnchorSignatureAndValidity(t *testing.T) {
 	if got := ReasonOf(check(rsaRoot(x509.SHA1WithRSA, time.Time{}))); got != ReasonAnchorInvalid {
 		t.Fatalf("SHA-1 anchor: %q", got)
 	}
-	// An anchor that has not started yet is not an anchor, even by a second.
-	if got := ReasonOf(check(rsaRoot(x509.SHA256WithRSA, testNow.Add(time.Second)))); got != ReasonAnchorInvalid {
-		t.Fatalf("anchor starting in a second: %q", got)
+	// A CA minted moments ago may sit a little ahead of this clock: inside the skew window it is
+	// an anchor (verified at its own notBefore), one second past it is not.
+	if err := check(rsaRoot(x509.SHA256WithRSA, testNow.Add(NotBeforeSkew))); err != nil {
+		t.Fatalf("anchor starting exactly at the skew edge: %v", err)
+	}
+	if got := ReasonOf(check(rsaRoot(x509.SHA256WithRSA, testNow.Add(NotBeforeSkew+time.Second)))); got != ReasonAnchorInvalid {
+		t.Fatalf("anchor starting one second past the skew: %q", got)
+	}
+	// And the stored anchor carries the real notBefore, not a clamped one.
+	ahead := testNow.Add(3 * time.Minute)
+	a, err := ParseTrustAnchor(issue(t, nil, spec{cn: "ahead", ca: true, notBefore: ahead}).pem(), testNow)
+	if err != nil || !a.Info.NotBefore.Equal(ahead) {
+		t.Fatalf("anchor inside the skew: %v %v", a, err)
+	}
+	if _, err := ParseTrustAnchor(issue(t, nil, spec{cn: "far", ca: true, notBefore: testNow.Add(NotBeforeSkew + time.Second)}).pem(), testNow); !errors.Is(err, ErrAnchorInvalid) {
+		t.Fatalf("anchor past the skew accepted: %v", err)
 	}
 	if err := check(rsaRoot(x509.SHA256WithRSA, testNow)); err != nil {
 		t.Fatalf("anchor starting now: %v", err)

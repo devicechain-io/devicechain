@@ -4,6 +4,7 @@
 package model
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -123,4 +124,22 @@ func x509EarmarkToken(profile *ProvisioningProfile, token string, externalId *st
 			ErrInvalidEarmark, profile.Token, derived)
 	}
 	return token, nil
+}
+
+// refuseExternalIdChangeUnderCertificateEarmark refuses a change of a device external id while
+// the device is earmarked for a certificate profile (see x509EarmarkToken): its token is a
+// function of the external id, so the pair must stay as it was created.
+func (api *Api) refuseExternalIdChangeUnderCertificateEarmark(ctx context.Context, device *Device) error {
+	if device.ExpectedProvisioningProfileId == nil {
+		return nil
+	}
+	profiles, err := api.ProvisioningProfilesById(ctx, []uint{*device.ExpectedProvisioningProfileId})
+	if err != nil {
+		return err
+	}
+	if len(profiles) == 1 && profiles[0].TrustAnchorId != nil {
+		return fmt.Errorf("%w: the externalId of a device earmarked for certificate profile %q cannot change: "+
+			"its token %q is derived from it", ErrInvalidEarmark, profiles[0].Token, device.Token)
+	}
+	return nil
 }

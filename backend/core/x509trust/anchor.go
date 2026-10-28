@@ -44,7 +44,9 @@ func CheckAnchor(cert *x509.Certificate, now time.Time) error {
 	if now.After(cert.NotAfter) {
 		return anchorInvalid("the certificate has expired")
 	}
-	if now.Before(cert.NotBefore) {
+	// A CA minted moments ago may sit slightly ahead of this clock; the connect path allows the
+	// same NotBeforeSkew for a device certificate, and an anchor is held to no stricter a rule.
+	if cert.NotBefore.Sub(now) > NotBeforeSkew {
 		return anchorInvalid("the certificate is not valid yet")
 	}
 	if weakSignature(cert) {

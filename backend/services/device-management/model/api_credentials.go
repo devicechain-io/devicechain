@@ -372,9 +372,27 @@ func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 	// profile of a credential that was removed and re-issued meanwhile). trust_anchor_id and
 	// certificate_pem are the certificate credential's, fixed at create, so an update has no
 	// reason to write them either.
-	result := api.RDB.DB(ctx).Omit("ProvisioningProfileId", "TrustAnchorId", "CertificatePem").Save(updated)
-	if result.Error != nil {
-		return nil, result.Error
+	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		// A certificate credential moved onto another device counts against THAT device's limit,
+		// counted under its row lock so two moves (or a move and a create) cannot both fit the
+		// last slot. Any other credential type moves freely.
+		if repoint && CredentialType(updated.CredentialType) == CredentialX509Certificate {
+			if err := lockDeviceRow(tx, device.ID); err != nil {
+				return err
+			}
+			n, err := countX509Credentials(tx, device.ID)
+			if err != nil {
+				return err
+			}
+			if n >= MaxX509CredentialsPerDevice {
+				return invalidAnchor("device %q already holds %d certificate credentials, the most it may hold; remove one first",
+					device.Token, n)
+			}
+		}
+		return tx.Omit("ProvisioningProfileId", "TrustAnchorId", "CertificatePem").Save(updated).Error
+	})
+	if err != nil {
+		return nil, err
 	}
 	// EVERY committed update evicts, a metadata-only edit included: one database read on
 	// the device's next event, in place of a field-by-field judgement of which changes

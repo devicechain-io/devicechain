@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -385,6 +386,14 @@ func (api *Api) ImportDevices(ctx context.Context, rows []*DeviceImportRow, mode
 
 	result := &DeviceImportResult{DryRun: dryRun, Rows: make([]*DeviceImportRowResult, len(rows))}
 
+	// A row earmarked for a certificate profile may leave its token out: it is the one derived
+	// from its external id, as a single create and a bulk create derive it. The rows are copied
+	// first so the caller's are not edited.
+	rows, err := api.deriveCertificateTokens(ctx, rows)
+	if err != nil {
+		return nil, err
+	}
+
 	// Pure checks and in-file duplicates. A rejected row claims no slot, so a later valid row
 	// is not blamed for it.
 	pending := make([]*importRow, 0, len(rows))
@@ -724,4 +733,42 @@ func (api *Api) createImportedDevice(ctx context.Context, p *importRow, dt *Devi
 	}
 	device.DeviceType = dt
 	return device, nil
+}
+
+// deriveCertificateTokens fills in the omitted token of every row that names a certificate
+// profile and an external id. Rows that name neither, or whose profile is not found or is not a
+// certificate profile, are left exactly as given (and refused later, by the usual checks).
+func (api *Api) deriveCertificateTokens(ctx context.Context, rows []*DeviceImportRow) ([]*DeviceImportRow, error) {
+	tokens := make([]string, 0)
+	wants := func(row *DeviceImportRow) bool {
+		return row != nil && strings.TrimSpace(row.Token) == "" && !blank(row.ProvisioningProfileToken) && !blank(row.ExternalId)
+	}
+	for _, row := range rows {
+		if wants(row) {
+			if t := strings.TrimSpace(*row.ProvisioningProfileToken); !slices.Contains(tokens, t) {
+				tokens = append(tokens, t)
+			}
+		}
+	}
+	if len(tokens) == 0 {
+		return rows, nil
+	}
+	found, err := api.ProvisioningProfilesByToken(ctx, tokens)
+	if err != nil {
+		return nil, err
+	}
+	certificate := map[string]bool{}
+	for _, p := range found {
+		certificate[p.Token] = p.TrustAnchorId != nil
+	}
+	out := make([]*DeviceImportRow, len(rows))
+	for i, row := range rows {
+		out[i] = row
+		if wants(row) && certificate[strings.TrimSpace(*row.ProvisioningProfileToken)] {
+			cp := *row
+			cp.Token = DeriveX509DeviceToken(strings.TrimSpace(*row.ExternalId))
+			out[i] = &cp
+		}
+	}
+	return out, nil
 }

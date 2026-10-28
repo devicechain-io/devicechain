@@ -19,6 +19,7 @@
 package model
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -28,6 +29,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/conflict"
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/integrity"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -173,42 +175,6 @@ func TestDisablingAnAnchorQueuesAndClearsKicksOnPostgres(t *testing.T) {
 	assert.Empty(t, f.pendingKicks())
 }
 
-// Disable, delete and credential creation interleave without a deadlock the database has to
-// break, and without a raw constraint error reaching the caller. The first case is FORCED: a
-// disable is held between its row lock and its write while a credential create queues behind
-// it on the anchor's foreign key.
-func TestADisableHeldOpenDoesNotDeadlockACredentialCreateOnPostgres(t *testing.T) {
-	f := newPgFixture(t)
-	ca := newRootCA(t, "Maker Root")
-	f.anchor("maker", ca)
-	f.device("dev-1")
-
-	created := make(chan error, 1)
-	holdBeforeUpdate(t, f, "device_trust_anchors", func(db *gorm.DB) {
-		go func() {
-			_, err := f.x509Credential("c-1", "dev-1", ca, "maker", "SN-1")
-			created <- err
-		}()
-		// The create is provably blocked behind the disable's lock before the disable goes on.
-		waitForBlockedBackends(t, db, 1)
-	})
-	_, err := f.api.UpdateDeviceTrustAnchor(f.ctx, "maker", setEnabled(false))
-	require.NoError(t, err)
-
-	select {
-	case err := <-created:
-		require.NoError(t, err, "the create that queued behind the disable must complete")
-	case <-time.After(30 * time.Second):
-		t.Fatal("the credential create never finished: a deadlock the database did not break")
-	}
-	// The credential exists under the now-disabled anchor, where it can never authenticate.
-	creds := f.count(&DeviceCredential{})
-	assert.EqualValues(t, 1, creds)
-	a, err := f.api.DeviceTrustAnchorsByToken(f.ctx, []string{"maker"})
-	require.NoError(t, err)
-	assert.False(t, a[0].Enabled)
-}
-
 func TestAnchorOperationsInterleaveWithoutDeadlockOnPostgres(t *testing.T) {
 	f := newPgFixture(t)
 	ca := newRootCA(t, "Maker Root")
@@ -284,42 +250,256 @@ func TestAnchorOperationsInterleaveWithoutDeadlockOnPostgres(t *testing.T) {
 	assert.Zero(t, bad.Load(), "operations failed with a server error: %s", strings.Join(problems, "; "))
 }
 
-// A certificate profile registers through the same row locks the secret path uses: creating one
-// while its anchor is deleted and re-created never leaves a profile pointing at nothing.
-func TestCertificateProfileCreationRacesAnchorDeleteOnPostgres(t *testing.T) {
+// Disable, delete and credential creation interleave without a deadlock the database has to
+// break, and without a raw constraint error reaching the caller. The first case is FORCED: a
+// disable is held between its row lock and its write while a credential create queues behind
+// it on the anchor row, and the create must then see the anchor disabled.
+func TestADisableHeldOpenIsSeenByAQueuedCredentialCreateOnPostgres(t *testing.T) {
 	f := newPgFixture(t)
-	f.anchor("maker", newRootCA(t, "Maker Root"))
+	ca := newRootCA(t, "Maker Root")
+	f.anchor("maker", ca)
+	f.device("dev-1")
 
-	var wg sync.WaitGroup
-	var profileErr, deleteErr error
-	var deleted bool
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		f.profile2("pp-x", "maker", &profileErr)
-	}()
-	go func() {
-		defer wg.Done()
-		deleted, deleteErr = f.api.DeleteDeviceTrustAnchor(f.ctx, "maker")
-	}()
-	wg.Wait()
+	created := make(chan error, 1)
+	holdBefore(t, f, "update", "device_trust_anchors", func(db *gorm.DB) {
+		go func() {
+			_, err := f.x509Credential("c-1", "dev-1", ca, "maker", "SN-1")
+			created <- err
+		}()
+		// The create is provably blocked behind the disable lock before the disable goes on.
+		waitForBlockedBackends(t, db, 1)
+	})
+	_, err := f.api.UpdateDeviceTrustAnchor(f.ctx, "maker", setEnabled(false))
+	require.NoError(t, err)
 
-	switch {
-	case profileErr == nil && deleted:
-		t.Fatal("the anchor was deleted while a profile relies on it")
-	case profileErr == nil:
-		require.ErrorIs(t, deleteErr, ErrEntityInUse)
+	err = recv(t, created, "the queued credential create")
+	require.Error(t, err, "a create that queued behind a disable must see the anchor disabled")
+	assert.True(t, isInvalidRefusal(err), "want INVALID_VALUE, got %v", err)
+	assert.Contains(t, err.Error(), "disabled")
+	assert.EqualValues(t, 0, f.count(&DeviceCredential{}), "a credential was bound to a withdrawn anchor")
+}
+
+// holdBefore runs fn once, just before the first operation of kind ("update", "create" or
+// "delete") on table that the code under test issues. fn runs inside the callback, so the
+// operation transaction (and every lock it holds) is open while fn does its work.
+func holdBefore(t *testing.T, f *pgFixture, op, table string, fn func(db *gorm.DB)) {
+	t.Helper()
+	var once sync.Once
+	name := fmt.Sprintf("test:before-%s-%s-%d", op, table, time.Now().UnixNano())
+	hook := func(db *gorm.DB) {
+		if db.Statement.Table != table || db.Error != nil {
+			return
+		}
+		once.Do(func() {
+			fn(db.Session(&gorm.Session{NewDB: true}).WithContext(core.WithSystemContext(context.Background())))
+		})
+	}
+	switch op {
+	case "update":
+		require.NoError(t, f.mgr.Database.Callback().Update().Before("gorm:update").Register(name, hook))
+		t.Cleanup(func() { _ = f.mgr.Database.Callback().Update().Remove(name) })
+	case "create":
+		require.NoError(t, f.mgr.Database.Callback().Create().Before("gorm:create").Register(name, hook))
+		t.Cleanup(func() { _ = f.mgr.Database.Callback().Create().Remove(name) })
+	case "delete":
+		require.NoError(t, f.mgr.Database.Callback().Delete().Before("gorm:delete").Register(name, hook))
+		t.Cleanup(func() { _ = f.mgr.Database.Callback().Delete().Remove(name) })
 	default:
-		// The delete won; the profile's create found no anchor (or lost the foreign key), and
-		// either way left nothing behind.
-		require.NoError(t, deleteErr)
-		assert.EqualValues(t, 0, f.count(&ProvisioningProfile{}))
+		t.Fatalf("unknown operation %q", op)
 	}
 }
 
-func (f *pgFixture) profile2(token, anchor string, out *error) {
-	_, *out = f.api.CreateProvisioningProfile(f.ctx, &ProvisioningProfileCreateRequest{
+func recv(t *testing.T, ch <-chan error, what string) error {
+	t.Helper()
+	select {
+	case err := <-ch:
+		return err
+	case <-time.After(30 * time.Second):
+		t.Fatalf("%s never finished: a deadlock the database did not break", what)
+		return nil
+	}
+}
+
+func (f *pgFixture) bindProfile(token, anchor string) error {
+	_, err := f.api.CreateProvisioningProfile(f.ctx, &ProvisioningProfileCreateRequest{
 		Token: token, ProvisionKey: "key-" + token, Strategy: string(ProvisionAllowNew),
-		DeviceTypeToken: "dt-a", Enabled: true, TrustAnchorToken: &anchor,
-	})
+		DeviceTypeToken: "dt-a", Enabled: true, TrustAnchorToken: &anchor})
+	return err
+}
+
+// The delete-versus-bind interleavings, FORCED in both directions and for both kinds of bind.
+//
+// Delete first: the delete is held between its count and its DELETE, holding the anchor row. A
+// bind that starts then queues on the row, and when the delete commits it finds no anchor: it
+// is NOT_FOUND, and nothing was written.
+func TestABindQueuedBehindAnAnchorDeleteIsNotFoundOnPostgres(t *testing.T) {
+	for _, kind := range []string{"credential", "profile"} {
+		t.Run(kind, func(t *testing.T) {
+			f := newPgFixture(t)
+			ca := newRootCA(t, "Maker Root")
+			f.anchor("maker", ca)
+			f.device("dev-1")
+
+			bound := make(chan error, 1)
+			holdBefore(t, f, "delete", "device_trust_anchors", func(db *gorm.DB) {
+				go func() {
+					if kind == "credential" {
+						_, err := f.x509Credential("c-1", "dev-1", ca, "maker", "SN-1")
+						bound <- err
+						return
+					}
+					bound <- f.bindProfile("pp-x", "maker")
+				}()
+				waitForBlockedBackends(t, db, 1)
+			})
+			ok, err := f.api.DeleteDeviceTrustAnchor(f.ctx, "maker")
+			require.NoError(t, err)
+			require.True(t, ok)
+
+			err = recv(t, bound, "the queued "+kind+" create")
+			require.ErrorIs(t, err, gorm.ErrRecordNotFound, "want NOT_FOUND, got %v", err)
+			assert.EqualValues(t, 0, f.count(&DeviceCredential{}))
+			assert.EqualValues(t, 0, f.count(&ProvisioningProfile{}))
+		})
+	}
+}
+
+// Bind first: the bind is held after it locked the anchor and before its INSERT. A delete that
+// starts then queues on the anchor row, and when the bind commits it counts what the bind
+// added and is refused as in use.
+func TestADeleteQueuedBehindABindIsInUseOnPostgres(t *testing.T) {
+	for _, kind := range []string{"credential", "profile"} {
+		t.Run(kind, func(t *testing.T) {
+			f := newPgFixture(t)
+			ca := newRootCA(t, "Maker Root")
+			f.anchor("maker", ca)
+			f.device("dev-1")
+
+			deleted := make(chan error, 1)
+			table := "device_credentials"
+			if kind == "profile" {
+				table = "provisioning_profiles"
+			}
+			holdBefore(t, f, "create", table, func(db *gorm.DB) {
+				go func() {
+					_, err := f.api.DeleteDeviceTrustAnchor(f.ctx, "maker")
+					deleted <- err
+				}()
+				waitForBlockedBackends(t, db, 1)
+			})
+			var err error
+			if kind == "credential" {
+				_, err = f.x509Credential("c-1", "dev-1", ca, "maker", "SN-1")
+			} else {
+				err = f.bindProfile("pp-x", "maker")
+			}
+			require.NoError(t, err)
+
+			derr := recv(t, deleted, "the queued delete")
+			require.ErrorIs(t, derr, ErrEntityInUse, "want REFERENCE_VIOLATION, got %v", derr)
+			assert.EqualValues(t, 1, f.count(&DeviceTrustAnchor{}), "the anchor was deleted under what was bound to it")
+		})
+	}
+}
+
+// The limit of three certificate credentials a device holds is enforced under the device row
+// lock: concurrent creates fit exactly three, and a move onto the device counts against it.
+func TestTheCertificateCredentialLimitHoldsUnderRacesOnPostgres(t *testing.T) {
+	f := newPgFixture(t)
+	ca := newRootCA(t, "Maker Root")
+	f.anchor("maker", ca)
+	f.device("target")
+	f.device("source")
+
+	var wg sync.WaitGroup
+	var ok atomic.Int64
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, err := f.x509Credential(fmt.Sprintf("c-%d", i), "target", ca, "maker", fmt.Sprintf("SN-%d", i))
+			if err == nil {
+				ok.Add(1)
+			} else {
+				assert.True(t, isInvalidRefusal(err), "unexpected failure %v", err)
+			}
+		}(i)
+	}
+	wg.Wait()
+	assert.EqualValues(t, MaxX509CredentialsPerDevice, ok.Load(), "concurrent creates did not fit exactly the limit")
+
+	// A move onto the full device is refused; the control moves onto one with room.
+	for i := 0; i < 2; i++ {
+		_, err := f.x509Credential(fmt.Sprintf("s-%d", i), "source", ca, "maker", fmt.Sprintf("SS-%d", i))
+		require.NoError(t, err)
+	}
+	f.device("roomy")
+	move := func(cred, device string) error {
+		var req DeviceCredentialUpdateRequest
+		req.DeviceToken.Set, req.DeviceToken.Value = true, &device
+		_, err := f.api.UpdateDeviceCredential(f.ctx, cred, &req)
+		return err
+	}
+	err := move("s-0", "target")
+	require.Error(t, err)
+	assert.True(t, isInvalidRefusal(err), "a move past the limit: %v", err)
+	require.NoError(t, move("s-0", "roomy"), "the control: a move onto a device with room")
+
+	// A move racing a create onto a device with one slot left: exactly one wins.
+	f.device("last")
+	for i := 0; i < 2; i++ {
+		_, err := f.x509Credential(fmt.Sprintf("l-%d", i), "last", ca, "maker", fmt.Sprintf("SL-%d", i))
+		require.NoError(t, err)
+	}
+	var wins atomic.Int64
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		if _, err := f.x509Credential("l-new", "last", ca, "maker", "SL-new"); err == nil {
+			wins.Add(1)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		if move("s-1", "last") == nil {
+			wins.Add(1)
+		}
+	}()
+	wg.Wait()
+	assert.EqualValues(t, 1, wins.Load(), "a move and a create both fit the last slot")
+}
+
+// The per-tenant limits on anchors and on certificate profiles are enforced under an advisory
+// lock: concurrent creates cannot overshoot them.
+func TestTheAnchorAndProfileLimitsHoldUnderRacesOnPostgres(t *testing.T) {
+	f := newPgFixture(t)
+	for i := 0; i < MaxTrustAnchorsPerTenant-4; i++ {
+		f.anchor(fmt.Sprintf("a-%02d", i), newRootCA(t, fmt.Sprintf("CA %d", i)))
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 12; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, _ = f.api.CreateDeviceTrustAnchor(f.ctx, &DeviceTrustAnchorCreateRequest{
+				Token: fmt.Sprintf("race-%02d", i), CertificatePem: newRootCA(t, fmt.Sprintf("R %d", i)).pem()})
+		}(i)
+	}
+	wg.Wait()
+	assert.EqualValues(t, MaxTrustAnchorsPerTenant, f.count(&DeviceTrustAnchor{}), "the anchor limit was overshot or undershot")
+
+	for i := 0; i < MaxX509ProfilesPerTenant-3; i++ {
+		require.NoError(t, f.bindProfile(fmt.Sprintf("pp-%d", i), "a-00"))
+	}
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_ = f.bindProfile(fmt.Sprintf("race-pp-%d", i), "a-00")
+		}(i)
+	}
+	wg.Wait()
+	var n int64
+	require.NoError(t, f.api.RDB.DB(f.ctx).Model(&ProvisioningProfile{}).Where("trust_anchor_id IS NOT NULL").Count(&n).Error)
+	assert.EqualValues(t, MaxX509ProfilesPerTenant, n, "the certificate profile limit was overshot or undershot")
 }

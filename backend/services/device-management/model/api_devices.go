@@ -760,6 +760,13 @@ func (api *Api) UpdateDevice(ctx context.Context, token string, request *DeviceU
 		updated.DeviceTypeId = types[0].ID
 	}
 
+	if proposed := request.ExternalId.ApplyToNullString(updated.ExternalId); proposed != updated.ExternalId {
+		// A device earmarked for a certificate profile has the token derived from its external id,
+		// which is the certificate common name; changing the one would orphan the other.
+		if err := api.refuseExternalIdChangeUnderCertificateEarmark(ctx, updated); err != nil {
+			return nil, err
+		}
+	}
 	updated.ExternalId = request.ExternalId.ApplyToNullString(updated.ExternalId)
 	updated.Name = request.Name.ApplyToNullString(updated.Name)
 	updated.Description = request.Description.ApplyToNullString(updated.Description)

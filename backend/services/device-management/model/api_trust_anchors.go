@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/core"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/integrity"
 	"github.com/devicechain-io/dc-microservice/limit"
@@ -58,6 +59,57 @@ func lockTrustAnchorByToken(tx *gorm.DB, token string) (*DeviceTrustAnchor, erro
 	return &locked, nil
 }
 
+// lockTrustAnchorShareByToken reads the anchor with this token on tx, locking its row FOR SHARE
+// to the commit. A write that BINDS something to an anchor (a credential, a profile) holds it
+// while it re-checks that the anchor is still enabled and then inserts, so a disable or a delete
+// (FOR UPDATE) either finishes first, and the bind sees it, or waits for the bind and sees what
+// it added. An anchor deleted meanwhile is gorm.ErrRecordNotFound.
+func lockTrustAnchorShareByToken(tx *gorm.DB, token string) (*DeviceTrustAnchor, error) {
+	var locked DeviceTrustAnchor
+	if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).Where("token = ?", token).First(&locked).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, fmt.Errorf("trust anchor %q: %w", token, gorm.ErrRecordNotFound)
+		}
+		return nil, err
+	}
+	return &locked, nil
+}
+
+// lockTenantCreates serializes the creates of one tenant rows of a kind for the rest of the
+// transaction, so the count a limit is checked against is the count the insert lands on. On
+// PostgreSQL it is a transaction-scoped advisory lock keyed on the tenant and the kind; anywhere
+// else (the SQLite unit-test database, which has one writer at a time) there is nothing to take.
+func lockTenantCreates(tx *gorm.DB, tenant, kind string) error {
+	if tx.Dialector.Name() != "postgres" {
+		return nil
+	}
+	return tx.Exec("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", tenant+":"+kind).Error
+}
+
+// lockDeviceRow locks a device FOR UPDATE to the commit: the per-device limit on certificate
+// credentials is counted and written under it.
+func lockDeviceRow(tx *gorm.DB, id uint) error {
+	var d Device
+	return tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").Where("id = ?", id).First(&d).Error
+}
+
+// countX509Credentials is how many certificate credentials the device holds.
+func countX509Credentials(tx *gorm.DB, deviceId uint) (int64, error) {
+	var n int64
+	err := tx.Model(&DeviceCredential{}).
+		Where("device_id = ? AND credential_type = ?", deviceId, string(CredentialX509Certificate)).Count(&n).Error
+	return n, err
+}
+
+// referenceToNotFound turns the foreign-key refusal of an insert that named a trust anchor
+// deleted since it was read into the NOT_FOUND the caller would have had a moment later.
+func referenceToNotFound(err error, anchorToken string) error {
+	if class, ok := integrity.Refused(err); ok && class == integrity.ClassReference {
+		return fmt.Errorf("trust anchor %q: %w", anchorToken, gorm.ErrRecordNotFound)
+	}
+	return err
+}
+
 // trustAnchorByToken reads one anchor of the calling tenant, or gorm.ErrRecordNotFound.
 func (api *Api) trustAnchorByToken(ctx context.Context, token string) (*DeviceTrustAnchor, error) {
 	found, err := api.DeviceTrustAnchorsByToken(ctx, []string{token})
@@ -103,7 +155,14 @@ func (api *Api) CreateDeviceTrustAnchor(ctx context.Context, request *DeviceTrus
 		NotAfter:          anchor.Info.NotAfter,
 		Enabled:           enabled,
 	}
+	tenant, ok := core.TenantFromContext(ctx)
+	if !ok || tenant == "" {
+		return nil, errors.New("no tenant in context")
+	}
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockTenantCreates(tx, tenant, "trust_anchors"); err != nil {
+			return err
+		}
 		var n int64
 		if err := tx.Model(&DeviceTrustAnchor{}).Count(&n).Error; err != nil {
 			return err
@@ -205,6 +264,13 @@ func (api *Api) UpdateDeviceTrustAnchor(ctx context.Context, token string, reque
 			return err
 		}
 		updated = locked
+		if !wasEnabled && enabled {
+			// Re-enabled: the CA is trusted again, so a kick owed for its earlier withdrawal is
+			// not owed any more. It would otherwise end the sessions of devices that have just
+			// reconnected under the restored anchor.
+			return tx.Where("tenant_id = ? AND origin = ?", locked.TenantId, anchorKickOrigin(locked.ID)).
+				Delete(&PendingSessionKick{}).Error
+		}
 		if !wasEnabled || enabled {
 			return nil
 		}
