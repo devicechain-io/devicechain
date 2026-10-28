@@ -79,7 +79,7 @@ metadata:
   annotations:
     {{- if $tls.enabled }}
     {{- if $tls.selfSigned }}
-    cert-manager.io/issuer: {{ $tls.issuerName }}
+    cert-manager.io/issuer: {{ include "devicechain.tlsSigningIssuer" $ }}
     {{- else if $tls.clusterIssuer }}
     cert-manager.io/cluster-issuer: {{ $tls.clusterIssuer }}
     {{- end }}

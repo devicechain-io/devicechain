@@ -694,7 +694,7 @@ func TestGatewayCarriesTheIngressTLS(t *testing.T) {
 		wantIssuerKey string
 		wantIssuer    string
 	}{
-		{"self-signed", true, "", "cert-manager.io/issuer", "devicechain-selfsigned"},
+		{"self-signed", true, "", "cert-manager.io/issuer", "devicechain-selfsigned-signer"},
 		{"cluster issuer", true, "letsencrypt", "cert-manager.io/cluster-issuer", "letsencrypt"},
 		{"no TLS", false, "", "", ""},
 	}

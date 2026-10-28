@@ -70,10 +70,15 @@ What each command does to a cluster that still has `ingress-nginx`:
 
 5. **Check the Gateway's certificate.** On an instance that terminates TLS with its own CA (the default
    self-signed setup), confirm the Gateway's certificate was issued by the instance CA before you drop the
-   Ingress objects. An instance upgraded across the issuer switch can be left with a Gateway certificate
+   Ingress objects. An instance upgraded across the issuer switch could be left with a Gateway certificate
    issued by the earlier self-signed issuer: it has an empty subject and is not a CA-signed leaf, so an
    OpenSSL-based client has nothing to anchor it to, although a browser that accepts exceptions does not
    show the difference.
+
+   Releases from v0.26.1 sign under a new issuer name, so a certificate issued by an upgrade cannot come out
+   that way, and `dcctl upgrade --drop-legacy-ingress` reads the certificate itself and refuses, naming the
+   Secret, when it is self-signed or was not signed by its own `ca.crt`. What follows is the fallback: for an
+   instance whose certificate was issued by an earlier release, and for when that refusal names the Secret.
 
    ```bash
    kubectl -n dci-<instance> get secret devicechain-tls-gateway -o jsonpath='{.data.tls\.crt}' \

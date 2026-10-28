@@ -528,7 +528,7 @@
             },
             "issuerName": {
               "type": "string",
-              "description": "Name of the CA Issuer the chart renders when selfSigned is true; it signs the host certificate, and the Ingress and Gateway name it for issuance."
+              "description": "Base name of the Issuers the chart renders when selfSigned is true. The Issuer named <issuerName>-signer signs the host certificate, and the Ingress and Gateway name it for issuance."
             },
             "clusterIssuer": {
               "type": "string",

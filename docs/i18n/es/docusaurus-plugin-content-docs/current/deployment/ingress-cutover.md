@@ -74,6 +74,12 @@ Qué hace cada comando en un clúster que todavía tiene `ingress-nginx`:
    vacío y no es una hoja firmada por una CA, así que un cliente basado en OpenSSL no tiene nada con lo que
    anclarlo, aunque un navegador que acepta excepciones no muestra la diferencia.
 
+   Las versiones desde la v0.26.1 firman con un nombre de emisor nuevo, así que un certificado emitido por una
+   actualización ya no puede salir así, y `dcctl upgrade --drop-legacy-ingress` lee el propio certificado y se
+   niega, nombrando el Secret, cuando es autofirmado o no lo firmó su propio `ca.crt`. Lo que sigue es la
+   alternativa: para una instancia cuyo certificado emitió una versión anterior, y para cuando esa negativa
+   nombra el Secret.
+
    ```bash
    kubectl -n dci-<instance> get secret devicechain-tls-gateway -o jsonpath='{.data.tls\.crt}' \
      | base64 -d | openssl x509 -noout -subject -issuer

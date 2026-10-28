@@ -192,6 +192,16 @@ labels the namespace the chart then renders into.
 {{- end -}}
 
 {{/*
+The name of the Issuer that signs the host certificate when ingress.tls.selfSigned is on, and
+so the value of every cert-manager.io/issuer annotation. Derived from ingress.tls.issuerName,
+with a suffix, so that it is never the name an earlier release gave a self-signed Issuer: see
+issuer.yaml.
+*/}}
+{{- define "devicechain.tlsSigningIssuer" -}}
+{{- printf "%s-signer" .Values.ingress.tls.issuerName -}}
+{{- end -}}
+
+{{/*
 The instance config Secret name. C2 (ADR-022 review): the instance config holds
 persistence credentials, so it is rendered into a Secret (not a ConfigMap). When
 instance.existingSecret is set, that name is used instead so an operator can point

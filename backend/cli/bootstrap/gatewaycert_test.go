@@ -313,7 +313,7 @@ func TestTheGatewayCertificateReadSeesWhatTheClusterHolds(t *testing.T) {
 			"NotFound": apierrors.NewNotFound(gatewayGVR.GroupResource(), "devicechain"),
 		} {
 			dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
-				map[schema.GroupVersionResource]string{certificateGVR: "CertificateList", gatewayGVR: "GatewayList"})
+				map[schema.GroupVersionResource]string{certificateGVR: "CertificateList", gatewayGVR: "GatewayList", secretGVR: "SecretList"})
 			dyn.PrependReactor("*", "gateways", func(clienttesting.Action) (bool, runtime.Object, error) { return true, nil, absent })
 			_ = name
 			for _, instance := range []string{"prod", ""} {

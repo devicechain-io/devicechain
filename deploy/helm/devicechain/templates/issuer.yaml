@@ -10,9 +10,19 @@ selfSigned=false and point clusterIssuer at a configured ClusterIssuer.
 A CHAIN, not a self-signed leaf. A leaf signed by itself has an empty Subject and Issuer
 and CA:FALSE, which Go accepts as an explicit trust anchor and OpenSSL/mbedTLS clients do
 not ("couldn't get X509-issuer name"), so a device could verify an instance only by
-pinning its key. So: a bootstrap Issuer mints a CA certificate, a CA Issuer named
-issuerName (the name every cert-manager.io/issuer annotation and the Gateway refer to)
-signs the host certificate with it, and a client trusts the CA. The CA is in the host
+pinning its key. So: a bootstrap Issuer mints a CA certificate, a CA Issuer (named by
+devicechain.tlsSigningIssuer, the name every cert-manager.io/issuer annotation and the
+Gateway refer to) signs the host certificate with it, and a client trusts the CA.
+
+THE SIGNING ISSUER HAS A NAME NO EARLIER RELEASE USED. Releases before the chain rendered an
+Issuer called issuerName whose spec was selfSigned, and the chain's signing Issuer then took
+that name over, changing its spec. An upgrade applies both in one pass, and a Certificate
+created in that pass (the Gateway's) was signed by cert-manager against the Issuer's cached
+old spec: a self-signed leaf with an empty subject and CA:FALSE, marked Ready, that OpenSSL
+clients cannot anchor. Under a name nothing ever resolved to a self-signed spec, a request
+waits for the signing Issuer to be Ready instead. Only the signing Issuer is renamed: the
+bootstrap Issuer, the CA Certificate and the CA Secret keep their names, so the CA, its key
+and every device that trusts it are untouched. The CA is in the host
 certificate's own Secret as ca.crt:
 
   kubectl -n dci-<id> get secret <tls.secretName> -o jsonpath='{.data.ca\.crt}' | base64 -d
@@ -62,7 +72,7 @@ spec:
 apiVersion: cert-manager.io/v1
 kind: Issuer
 metadata:
-  name: {{ $tls.issuerName }}
+  name: {{ include "devicechain.tlsSigningIssuer" . }}
   namespace: {{ include "devicechain.instanceNamespace" . }}
   labels:
     {{- include "devicechain.instanceLabels" . | nindent 4 }}
