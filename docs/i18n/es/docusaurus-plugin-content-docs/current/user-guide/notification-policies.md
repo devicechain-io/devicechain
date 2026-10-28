@@ -12,7 +12,7 @@ el periodo de silencio. Es para administradores que se ocupan del enrutamiento d
 comportan las horas de silencio, y cómo definirlas mediante la API, está en
 [Horas de silencio](../guides/notification-channels.md#quiet-hours).
 
-Las políticas de notificación están en **Políticas de notificación** en la barra lateral. La entrada
+Las políticas de notificación están en **Supervisión → Políticas de notificación** en la barra lateral. La entrada
 aparece si tu rol puede leer notificaciones. Para cambiar una política, tu rol también necesita
 permiso para escribir notificaciones; sin él, la política se abre en solo lectura.
 

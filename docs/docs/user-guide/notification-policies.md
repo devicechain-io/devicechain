@@ -11,7 +11,7 @@ it stops paging people overnight and sends what it held when the quiet stretch e
 administrators who look after on-call routing. How quiet hours behave, and how to set them through
 the API, is in [Quiet hours](/guides/notification-channels#quiet-hours).
 
-Notification policies are under **Notification Policies** in the sidebar. The entry appears if your
+Notification policies are under **Monitor → Notification Policies** in the sidebar. The entry appears if your
 role can read notifications. Changing a policy also needs permission to write notifications;
 without it, a policy opens read-only.
 

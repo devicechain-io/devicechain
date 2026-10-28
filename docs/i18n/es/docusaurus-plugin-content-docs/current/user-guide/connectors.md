@@ -22,7 +22,7 @@ las páginas de **Conectores** lo indican en lugar de mostrar una lista.
 
 ## La lista de conectores
 
-Abre **Conectores** en la barra lateral. La lista muestra el nombre, el tipo y la descripción de cada
+Abre **Conectar → Conectores** en la barra lateral. La lista muestra el nombre, el tipo y la descripción de cada
 conector. Haz clic en una fila para abrirlo. **Eliminar**, en una fila, borra el conector tras
 confirmarlo. Cualquier regla que publique a través de un conector eliminado no podrá entregar hasta
 que la apuntes a otro, y la eliminación no se puede deshacer.

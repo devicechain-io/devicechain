@@ -22,7 +22,7 @@ El servicio de actualizaciones es opcional y no todas las instalaciones lo ejecu
 hace, la barra lateral no tiene el grupo **Actualizaciones** y los dispositivos no tienen la pestaña
 Actualizaciones. Consulta [cómo activarlo](../concepts/over-the-air-updates.md#enabling).
 
-En la barra lateral, **Actualizaciones** tiene tres pantallas: **Artefactos**, **Despliegues** y **Firmantes**.
+En la barra lateral, **Dispositivos → Actualizaciones** tiene tres pantallas: **Artefactos**, **Despliegues** y **Firmantes**.
 Actualizar un grupo de dispositivos completo se hace en [Despliegues](#rollouts). La
 asignación de una actualización a un dispositivo se hace en la página del propio dispositivo, en su
 [pestaña Actualizaciones](#assigning-an-update-to-a-device).
@@ -138,7 +138,7 @@ consola no pudo leer ese ajuste, el aviso te dice que supongas que el artefacto 
 
 Un **firmante** es una clave pública en la que tu inquilino confía para avalar artefactos. Solo se
 guarda la clave pública; la clave privada la conserva quien firma. Abre
-**Actualizaciones → Firmantes**.
+**Dispositivos → Actualizaciones → Firmantes**.
 
 <GuideShot id="updates-signers-list" alt="La lista Firmantes con dos firmantes: Acme release signing key, ED25519, Activo, con 2 artefactos con firma única y un botón Revocar; y Contract manufacturer key (2025), ECDSA_P256, Revocado, con su fecha de revocación y 0 artefactos con firma única." />
 

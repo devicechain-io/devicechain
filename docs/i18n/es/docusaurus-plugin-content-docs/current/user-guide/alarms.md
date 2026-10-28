@@ -14,7 +14,7 @@ alarmas: leer la lista, filtrarla, reconocer y despejar alarmas y exportar la li
 
 ## La lista de alarmas
 
-Elige **Alarmas** en la barra lateral. Cada fila es una alarma.
+Elige **Supervisión → Alarmas** en la barra lateral. Cada fila es una alarma.
 
 <GuideShot id="alarms-list" alt="La página Alarmas con los filtros Todos los estados, Todas las severidades y Cualquier reconocimiento y un botón Exportar CSV. Junto a la descripción hay un indicador verde En vivo. La tabla muestra alarmas bp-over-temp de severidad Mayor sobre la métrica temperature para los termostatos bp-therm-001 a bp-therm-012: tres están Activas con los botones Reconocer y Despejar, y el resto están Despejadas." />
 

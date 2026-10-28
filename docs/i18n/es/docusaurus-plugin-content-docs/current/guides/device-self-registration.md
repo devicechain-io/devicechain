@@ -26,7 +26,7 @@ El dispositivo guarda **su propia credencial**: genera 32 bytes aleatorios, los 
 
 ## Configurar un perfil {#setup}
 
-1. **Crea el perfil** en la consola, en **Perfiles de aprovisionamiento**, o con `createProvisioningProfile`. Elige el tipo de dispositivo, la estrategia, un tope opcional y, si la flota se entrega por lotes, una caducidad.
+1. **Crea el perfil** en la consola, en **Conectar → Perfiles de aprovisionamiento**, o con `createProvisioningProfile`. Elige el tipo de dispositivo, la estrategia, un tope opcional y, si la flota se entrega por lotes, una caducidad.
 2. **Copia el secreto** del diálogo que aparece a continuación. Se muestra una sola vez. Si lo pierdes, rótalo; el anterior deja de funcionar al instante.
 3. **Comprueba que el ingress de la API está habilitado.** El endpoint se sirve en la misma ruta `/api/device-management` que la API GraphQL. Con `ingress.enabled: false` la instancia no tiene camino público hasta él.
 4. **Revisa la configuración de la dirección del cliente** si ejecutas tu propio controlador de ingress o un balanceador de carga de la nube: [Direcciones de cliente y proxies de confianza](../deployment/bootstrap.md#trusted-proxies). Un error ahí no impide el registro, pero todos los dispositivos pasan a compartir una sola asignación de peticiones.

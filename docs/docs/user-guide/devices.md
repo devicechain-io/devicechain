@@ -18,7 +18,7 @@ Device types are covered in the [next chapter](/user-guide/device-types-and-prof
 
 ## The device list
 
-Open **Devices** in the sidebar, then **Devices** in its sub-menu.
+Open **Devices** in the sidebar, then **Devices** under it.
 
 <GuideShot id="devices-list" alt="The Devices page. Buttons along the top right read Export CSV, Import, Bulk create and New device. Below is a table with the columns Status, Token, Name, Type, Description and Created. Twelve rows show Online, and the first row, Boiler room thermostat, shows a dash for its status. Every row's type is Building Pulse Thermostat. The footer reads 'Showing 1–13 of 13 results' with Prev and Next buttons." />
 

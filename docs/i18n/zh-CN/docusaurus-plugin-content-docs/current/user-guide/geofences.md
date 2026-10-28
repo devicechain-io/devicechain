@@ -9,7 +9,7 @@ import GuideShot from '@site/src/components/GuideShot';
 
 **地理围栏**是在地图上绘制的边界。检测规则会用设备上报的位置与它比对，例如当追踪器离开站点时触发告警。本章介绍如何在控制台中绘制和编辑围栏，以及如何查看围栏在过去的样子。本章面向维护围栏的租户用户和管理员。使用围栏的规则请参阅[在规则中使用围栏](/concepts/geofencing#using-a-fence-in-a-rule)。
 
-地理围栏位于侧边栏的 **Areas → Geofences**（地理围栏）。
+地理围栏位于侧边栏的 **Organization → Areas → Geofences**（地理围栏）。
 
 ## 围栏列表 {#the-geofence-list}
 

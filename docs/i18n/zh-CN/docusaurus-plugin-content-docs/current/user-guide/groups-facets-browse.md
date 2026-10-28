@@ -17,7 +17,7 @@ import GuideShot from '@site/src/components/GuideShot';
 
 ## 分组 {#groups}
 
-每个类别都有自己的分组界面：**Devices → Device Groups**（设备分组）、**Assets → Asset Groups**（资产分组）、**Customers → Customer Groups**（客户分组）和 **Areas → Area Groups**（区域分组）。一个分组只包含同一类别的成员。列表显示每个分组的令牌、名称、描述和创建日期。
+每个类别都有自己的分组界面：**Devices → Device Groups**（设备分组）、**Organization → Assets → Asset Groups**（资产分组）、**Organization → Customers → Customer Groups**（客户分组）和 **Organization → Areas → Area Groups**（区域分组）。一个分组只包含同一类别的成员。列表显示每个分组的令牌、名称、描述和创建日期。
 
 <GuideShot id="device-groups-list" alt="Devices 菜单下的 Device Groups 列表，只有一个分组 rooftop-units，名称为 Rooftop units，描述为屋顶上的所有温控器。右上角有“New device group”按钮。" />
 
@@ -32,7 +32,7 @@ import GuideShot from '@site/src/components/GuideShot';
 
 值本身保存在实体上，而不在此界面。已声明但没有任何实体设置值的分面不会匹配任何内容。
 
-打开侧边栏中的 **Facets**。顶部的标签按成员类别过滤列表：**All**（全部）、**Device**（设备）、**Asset**（资产）、**Area**（区域）或 **Customer**（客户）。每一行显示成员类别、键、值类型、建议值和标签。
+打开侧边栏中的 **Organization → Facets**。顶部的标签按成员类别过滤列表：**All**（全部）、**Device**（设备）、**Asset**（资产）、**Area**（区域）或 **Customer**（客户）。每一行显示成员类别、键、值类型、建议值和标签。
 
 <GuideShot id="facets-list" alt="Facets 界面，过滤条件为 All。两个设备分面：zone，STRING 类型，建议值为 lobby、rooftop、offices、amenities、technical 和 circulation，标签为 Zone；floor，LONG 类型，没有值列表，标签为 Floor。每行都有 Delete 操作。" />
 

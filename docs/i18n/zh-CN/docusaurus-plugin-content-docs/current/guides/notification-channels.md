@@ -218,7 +218,7 @@ mutation {
 | `dropped_exhausted` | 一条暂存的通知在 5 次发送都没有送达任何渠道后被丢弃，并同时记录为死信。 |
 | `superseded` | 一条暂存的通知因策略已针对同一告警的更新事件发出通知而被丢弃。 |
 
-在控制台中，静默时段在 **Notification Policies** 页面编辑；参见[通知策略](../user-guide/notification-policies.md)。
+在控制台中，静默时段在 **Monitor → Notification Policies** 页面编辑；参见[通知策略](../user-guide/notification-policies.md)。
 
 ## 端到端验证 {#verify-the-path-end-to-end}
 

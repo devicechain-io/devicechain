@@ -15,7 +15,7 @@ import GuideShot from '@site/src/components/GuideShot';
 
 ## 连接器列表 {#the-connector-list}
 
-打开侧边栏中的 **Connectors**。列表显示每个连接器的名称、类型和描述。点击某一行即可打开。每行的 **Delete**（删除）在你确认后删除连接器。任何通过已删除连接器发布的规则都会投递失败，直到你把它指向另一个连接器，且删除无法撤销。
+打开侧边栏中的 **Connect → Connectors**。列表显示每个连接器的名称、类型和描述。点击某一行即可打开。每行的 **Delete**（删除）在你确认后删除连接器。任何通过已删除连接器发布的规则都会投递失败，直到你把它指向另一个连接器，且删除无法撤销。
 
 <GuideShot id="connectors-list" alt="Connectors 列表，只有一个连接器 Facilities event broker，类型为 MQTT，描述为向设施团队的代理发布告警事件。该行有 Delete 操作，右上角有“New connector”按钮。" />
 

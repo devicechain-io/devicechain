@@ -13,7 +13,7 @@ fleet is spread over. This chapter is for tenant users and administrators who se
 that structure.
 
 The three families work the same way, so learn one and you know them all. Each family has three
-screens in the sidebar:
+screens under **Organization** in the sidebar:
 
 | Family | Instances | Templates | Collections |
 | --- | --- | --- | --- |

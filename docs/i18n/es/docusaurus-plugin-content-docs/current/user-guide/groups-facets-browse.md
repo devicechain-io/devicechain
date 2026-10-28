@@ -24,7 +24,7 @@ hay detrás, consulta [facetas y grupos dinámicos](../concepts/domain-model.md#
 ## Grupos
 
 Cada familia tiene su propia pantalla de grupos: **Dispositivos → Grupos de dispositivos**,
-**Activos → Grupos de activos**, **Clientes → Grupos de clientes** y **Áreas → Grupos de áreas**. Un
+**Organización → Activos → Grupos de activos**, **Organización → Clientes → Grupos de clientes** y **Organización → Áreas → Grupos de áreas**. Un
 grupo solo contiene miembros de una familia. La lista muestra el token, el nombre, la descripción y la
 fecha de creación de cada grupo.
 
@@ -53,7 +53,7 @@ Explorar y le da un campo de valor en la pestaña **Facetas** de cada entidad.
 Los valores en sí viven en las entidades, no en esta pantalla. Una faceta declarada que no tiene
 valor en ninguna entidad no coincide con nada.
 
-Abre **Facetas** en la barra lateral. Los chips de arriba filtran la lista por familia de miembros:
+Abre **Organización → Facetas** en la barra lateral. Los chips de arriba filtran la lista por familia de miembros:
 **Todas**, **Dispositivo**, **Activo**, **Área** o **Cliente**. Cada fila muestra la familia, la clave,
 el tipo de valor, los valores sugeridos y la etiqueta.
 

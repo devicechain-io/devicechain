@@ -26,7 +26,7 @@ title: 设备自注册
 
 ## 设置配置 {#setup}
 
-1. **创建配置**：在控制台的**自动注册配置（Provisioning Profiles）**下，或使用 `createProvisioningProfile`。选择设备类型、策略、可选的上限，以及（如果设备群分批出厂）过期时间。
+1. **创建配置**：在控制台的 **Connect → 自动注册配置（Provisioning Profiles）**下，或使用 `createProvisioningProfile`。选择设备类型、策略、可选的上限，以及（如果设备群分批出厂）过期时间。
 2. **复制密文**：从随后弹出的对话框中复制。它只显示一次。如果丢失，请轮换它；旧密文会立即失效。
 3. **确认已启用 API Ingress。**该端点与 GraphQL API 位于同一条 `/api/device-management` 路由。`ingress.enabled: false` 时，实例没有通往它的公开路径。
 4. **检查客户端地址设置**，如果你运行自己的 Ingress 控制器或云负载均衡器：[客户端地址与受信任代理](../deployment/bootstrap.md#trusted-proxies)。那里出错不会阻止注册，但所有设备会因此共用同一份请求配额。

@@ -15,7 +15,7 @@ Usa esta pantalla para responder preguntas como «¿quién eliminó ese disposit
 anoche este script?». Es para los administradores de un inquilino y para quien revise la actividad de
 un inquilino.
 
-Abre **Auditoría** en la barra lateral. Solo aparece si tu rol concede el permiso `audit:read`. El
+Abre **Acceso → Auditoría** en la barra lateral. Solo aparece si tu rol concede el permiso `audit:read`. El
 diario solo muestra las entradas de tu propio inquilino.
 
 ## Leer el diario

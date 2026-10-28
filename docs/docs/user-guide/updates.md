@@ -21,7 +21,7 @@ The update service is optional, and not every installation runs it. If yours doe
 has no **Updates** group and devices have no Updates tab. See
 [turning it on](/concepts/over-the-air-updates#enabling).
 
-In the sidebar, **Updates** has three screens: **Artifacts**, **Rollouts** and **Signers**. Updating a
+In the sidebar, **Devices → Updates** has three screens: **Artifacts**, **Rollouts** and **Signers**. Updating a
 whole device group happens on [Rollouts](#rollouts); assigning an update to a single device happens on the device's own page, on its [Updates tab](#assigning-an-update-to-a-device).
 
 ## Artifacts
@@ -127,7 +127,7 @@ the setting, the notice tells you to assume the artifact cannot be assigned.
 ## Signers
 
 A **signer** is a public key your tenant trusts to vouch for artifacts. Only the public key is stored;
-the private key stays with whoever signs. Open **Updates → Signers**.
+the private key stays with whoever signs. Open **Devices → Updates → Signers**.
 
 <GuideShot id="updates-signers-list" alt="The Signers list with two signers: Acme release signing key, ED25519, Active, with 2 sole-signed artifacts and a Revoke button; and Contract manufacturer key (2025), ECDSA_P256, Revoked, with its revocation time and 0 sole-signed artifacts." />
 

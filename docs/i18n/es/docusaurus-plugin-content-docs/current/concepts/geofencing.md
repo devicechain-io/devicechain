@@ -12,7 +12,7 @@ Disponible: la autoría de geocercas en la consola (dibujar, editar, eliminar) o
 
 ## Dibujar una geocerca {#drawing-a-fence}
 
-En la consola, las geocercas están en **Áreas → Geocercas**. Haz clic en el mapa para colocar un vértice, haz clic en el primer vértice para cerrar la forma, y guarda. Sobre una geocerca existente puedes:
+En la consola, las geocercas están en **Organización → Áreas → Geocercas**. Haz clic en el mapa para colocar un vértice, haz clic en el primer vértice para cerrar la forma, y guarda. Sobre una geocerca existente puedes:
 
 - arrastrar un vértice para moverlo,
 - hacer Alt-clic en un vértice para eliminarlo, o

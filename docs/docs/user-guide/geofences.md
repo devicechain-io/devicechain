@@ -13,7 +13,7 @@ how to draw and edit fences in the console, and how to see what a fence looked l
 It is for tenant users and administrators who maintain fences. For the rules that use them, see
 [using a fence in a rule](/concepts/geofencing#using-a-fence-in-a-rule).
 
-Geofences are under **Areas → Geofences** in the sidebar.
+Geofences are under **Organization → Areas → Geofences** in the sidebar.
 
 ## The geofence list
 

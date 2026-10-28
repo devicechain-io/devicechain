@@ -221,7 +221,7 @@ El contador `devicechain_notificationmanagement_quiet_hours_total` cuenta lo que
 | `dropped_exhausted` | Una notificación retenida se descartó tras 5 envíos que no llegaron a ningún canal. También se registra como mensaje fallido (dead letter). |
 | `superseded` | Una notificación retenida se descartó porque la política avisó de un evento más reciente de la misma alarma. |
 
-En la consola, las horas de silencio se editan en la página **Políticas de notificación**; consulta [Políticas de notificación](../user-guide/notification-policies.md).
+En la consola, las horas de silencio se editan en la página **Supervisión → Políticas de notificación**; consulta [Políticas de notificación](../user-guide/notification-policies.md).
 
 ## Verificar la ruta de extremo a extremo
 
