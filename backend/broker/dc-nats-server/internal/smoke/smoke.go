@@ -74,6 +74,11 @@ type PrepareOptions struct {
 	PidFile, StoreDir string
 	// ClientPort, MQTTPort, HTTPPort: 0 means 4222, 1883 and 8222; -1 asks for a random port.
 	ClientPort, MQTTPort, HTTPPort int
+	// MQTTClientCA gives the MQTT listener's tls block a ca_file (the server CA), as the chart
+	// does with the instance CA. nats-server turns it into the listener's ClientCAs, which a
+	// request-only listener would send as an acceptable-CA list. Off by default, which is the shape
+	// the earlier tests ran against and why they could not see it.
+	MQTTClientCA bool
 }
 
 func orDefault(v, d int) int {
@@ -169,7 +174,7 @@ mqtt {
   port: %d
   tls {
     cert_file: %q
-    key_file: %q
+    key_file: %q%s
   }
 }
 jetstream {
@@ -191,8 +196,15 @@ authorization {
 }
 `, orDefault(o.ClientPort, 4222), orDefault(o.HTTPPort, 8222), o.PidFile,
 		p("server.crt"), p("server.key"), p("server-ca.crt"),
-		orDefault(o.MQTTPort, 1883), p("server.crt"), p("server.key"),
+		orDefault(o.MQTTPort, 1883), p("server.crt"), p("server.key"), mqttCA(o, p),
 		o.StoreDir, serviceUser, sec.ServicePassword, sec.IssuerPublic, sec.XKeyPublic, serviceUser)
+}
+
+func mqttCA(o PrepareOptions, p func(string) string) string {
+	if !o.MQTTClientCA {
+		return ""
+	}
+	return fmt.Sprintf("\n    ca_file: %q", p("server-ca.crt"))
 }
 
 // LoadSecrets reads what Prepare wrote.
@@ -464,4 +476,33 @@ func Probe(dir, addr string) (bool, error) {
 	}
 	_ = conn.Close()
 	return requested, nil
+}
+
+// AcceptableCAs returns how many issuers the listener's CertificateRequest names. A client that
+// honours the list withholds a certificate its issuer does not match, so anything but 0 turns
+// away every device whose CA is not one of them.
+func AcceptableCAs(dir, addr string) (int, error) {
+	cfg, err := ClientTLS(dir, "")
+	if err != nil {
+		return 0, err
+	}
+	n := -1
+	cfg.GetClientCertificate = func(cri *tls.CertificateRequestInfo) (*tls.Certificate, error) {
+		n = len(cri.AcceptableCAs)
+		return &tls.Certificate{}, nil
+	}
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return 0, err
+	}
+	cfg.ServerName = host
+	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 10 * time.Second}, "tcp", addr, cfg)
+	if err != nil {
+		return 0, err
+	}
+	_ = conn.Close()
+	if n < 0 {
+		return 0, errors.New("the listener sent no CertificateRequest")
+	}
+	return n, nil
 }
