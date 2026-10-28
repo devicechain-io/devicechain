@@ -139,7 +139,7 @@ variable "image" {
     default install runs.
   EOT
   type        = string
-  default     = "cgr.dev/chainguard/minio:latest@sha256:73297936408b731668ca0e835ac9add1a35cb6026a125c2f0cd476d9ef48222c"
+  default     = "cgr.dev/chainguard/minio:latest@sha256:e70b2b1e74d79457f808710483bd726ff364529ca30736eaa15a6ab547d3a5a7"
 }
 
 variable "buckets" {
