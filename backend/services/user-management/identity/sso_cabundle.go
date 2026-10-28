@@ -4,11 +4,8 @@
 package identity
 
 import (
-	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/hex"
-	"encoding/pem"
 	"errors"
 	"fmt"
 	"net/http"
@@ -19,6 +16,7 @@ import (
 
 	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/egress"
+	"github.com/devicechain-io/dc-microservice/x509trust"
 	"github.com/devicechain-io/dc-user-management/iam"
 )
 
@@ -38,109 +36,28 @@ import (
 //     transport with different roots; which address may be dialed is decided at the dial,
 //     before any TLS, so no certificate makes a forbidden destination reachable.
 
-// ErrCaBundleInvalid carries the reason a bundle was refused. The message never contains
-// the submitted text: a private key pasted by mistake must not travel into a log or an
-// error response.
-var ErrCaBundleInvalid = fmt.Errorf("%w: invalid CA bundle", ErrIdpInvalid)
-
-const (
-	// maxCaBundleBytes bounds the bundle as submitted.
-	maxCaBundleBytes = 64 << 10
-	// maxCaBundleCerts bounds the trust anchors in one bundle.
-	maxCaBundleCerts = 64
-)
+// ErrCaBundleInvalid is the core parser's refusal; the parser itself lives in core/x509trust so
+// that the trust anchors of device mTLS and a provider's private CA bundle are read by one
+// implementation. parseCaBundle adds ErrIdpInvalid so a caller classifies it as an
+// administrator's bad input.
+var ErrCaBundleInvalid = x509trust.ErrBundleInvalid
 
 // systemCertPool is the seam for loading the system roots; a test replaces it.
 var systemCertPool = x509.SystemCertPool
 
 func caInvalid(format string, a ...any) error {
-	return fmt.Errorf("%w: %s", ErrCaBundleInvalid, fmt.Sprintf(format, a...))
+	return fmt.Errorf("%w: %w: %s", ErrIdpInvalid, ErrCaBundleInvalid, fmt.Sprintf(format, a...))
 }
 
-// CaCertificate describes one certificate of a bundle for display.
-type CaCertificate struct {
-	// FingerprintSHA256 is the hex SHA-256 of the DER certificate.
-	FingerprintSHA256 string
-	Subject           string
-	Issuer            string
-	NotBefore         time.Time
-	NotAfter          time.Time
-	// IsCA is whether the certificate asserts it is a certificate authority. A bundle may
-	// carry a non-CA certificate (pinning a provider's own self-signed certificate is
-	// legitimate), so this is shown, not required.
-	IsCA bool
-}
-
-// ParseCaBundle validates a PEM bundle and returns its canonical form (the CERTIFICATE
-// blocks re-encoded, with anything outside them dropped) and the certificates it holds. An
-// empty bundle is valid and means "no private CA": it returns "" and no certificates.
-//
-// Refused: more than 64 KiB; a private key anywhere in the text; any PEM block that is not a
-// CERTIFICATE or that carries headers; a block that does not parse as X.509; no certificate
-// at all. Errors name the reason and never quote the input.
-func ParseCaBundle(text string) (string, []CaCertificate, error) {
-	if strings.TrimSpace(text) == "" {
-		return "", nil, nil
+// parseCaBundle validates a PEM bundle with the shared parser (see x509trust.ParseCaBundle for
+// what is refused and the guarantee that errors never quote the input) and marks a refusal as
+// an invalid identity provider connection.
+func parseCaBundle(text string) (string, []x509trust.CaCertificate, error) {
+	canonical, certs, err := x509trust.ParseCaBundle(text)
+	if err != nil {
+		return "", nil, fmt.Errorf("%w: %w", ErrIdpInvalid, err)
 	}
-	if len(text) > maxCaBundleBytes {
-		return "", nil, caInvalid("the bundle is larger than %d KiB", maxCaBundleBytes>>10)
-	}
-	// A private key is refused wherever it sits, including in a block too damaged to decode.
-	if strings.Contains(strings.ToUpper(text), "PRIVATE KEY") {
-		return "", nil, caInvalid("the text contains a private key; supply certificates only, and keep the key private")
-	}
-	var (
-		out    []byte
-		certs  []CaCertificate
-		seen   = map[string]bool{}
-		rest   = []byte(text)
-		blocks int
-	)
-	for {
-		var block *pem.Block
-		block, rest = pem.Decode(rest)
-		if block == nil {
-			break
-		}
-		blocks++
-		if block.Type != "CERTIFICATE" {
-			return "", nil, caInvalid("only CERTIFICATE blocks are accepted")
-		}
-		if len(block.Headers) != 0 {
-			return "", nil, caInvalid("a certificate block must not carry headers")
-		}
-		cert, err := x509.ParseCertificate(block.Bytes)
-		if err != nil {
-			return "", nil, caInvalid("a certificate block is not a valid X.509 certificate")
-		}
-		sum := sha256.Sum256(cert.Raw)
-		fp := hex.EncodeToString(sum[:])
-		if seen[fp] {
-			continue
-		}
-		seen[fp] = true
-		if len(certs) >= maxCaBundleCerts {
-			return "", nil, caInvalid("at most %d certificates", maxCaBundleCerts)
-		}
-		out = append(out, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw})...)
-		certs = append(certs, CaCertificate{
-			FingerprintSHA256: fp,
-			Subject:           cert.Subject.String(),
-			Issuer:            cert.Issuer.String(),
-			NotBefore:         cert.NotBefore.UTC(),
-			NotAfter:          cert.NotAfter.UTC(),
-			IsCA:              cert.BasicConstraintsValid && cert.IsCA,
-		})
-	}
-	// A block too damaged to decode is skipped by the PEM reader, which would silently drop
-	// a trust anchor the administrator meant to supply.
-	if markers := strings.Count(text, "-----BEGIN "); markers != blocks {
-		return "", nil, caInvalid("%d certificate block(s) could not be read; fix or remove them", markers-blocks)
-	}
-	if len(certs) == 0 {
-		return "", nil, caInvalid("no PEM certificate was found (expected -----BEGIN CERTIFICATE----- blocks)")
-	}
-	return string(out), certs, nil
+	return canonical, certs, nil
 }
 
 // caAuditLabel names the connection and the fingerprints a change added to and removed from
@@ -148,7 +65,7 @@ func ParseCaBundle(text string) (string, []CaCertificate, error) {
 func caAuditLabel(token, oldBundle, newBundle string) string {
 	fps := func(b string) map[string]bool {
 		out := map[string]bool{}
-		_, certs, _ := ParseCaBundle(b)
+		_, certs, _ := parseCaBundle(b)
 		for _, c := range certs {
 			out[c.FingerprintSHA256] = true
 		}
