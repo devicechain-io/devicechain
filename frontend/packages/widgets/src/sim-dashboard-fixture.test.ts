@@ -46,6 +46,11 @@ const GALLERY = 'wl-gallery';
 const STRESS = 'wl-stress';
 const BUILDINGPULSE = 'bp-dashboard';
 const SITEPULSE = 'sp-dashboard';
+// Towerpulse's operator board and its twin opened on the annex. Both are covered generically (parse,
+// option schemas, widget types) by the per-board block below, which walks the directory; neither
+// has a pathology of its own, so they need nothing more than that.
+const TOWERPULSE = 'tp-dashboard';
+const TOWERPULSE_ANNEX = 'tp-annex-dashboard';
 
 // Every fixture on disk. The per-board block below walks THIS list rather than a
 // hand-written one, so a board added by any scenario is covered by every generic
@@ -115,7 +120,7 @@ describe('the sim dashboard fixtures', () => {
   // side's manifest/disk equality and by the named tests below failing to read a file
   // that moved.
   it('are exactly the boards this file knows about', () => {
-    expect(fixtureTokens()).toEqual([BUILDINGPULSE, GALLERY, SITEPULSE, STRESS].sort());
+    expect(fixtureTokens()).toEqual([BUILDINGPULSE, GALLERY, SITEPULSE, STRESS, TOWERPULSE, TOWERPULSE_ANNEX].sort());
   });
 
   it('parse without throwing', () => {

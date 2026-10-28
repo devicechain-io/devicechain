@@ -217,6 +217,11 @@ type Runtime struct {
 	Tenant     string
 	HTTPClient *http.Client
 
+	// SimPassword is the sim login's password. A scenario that provisions a customer user
+	// accepts the user's invitation with it, so the person signs in with the credential the
+	// sim record already holds rather than one nobody was told. It is never logged.
+	SimPassword string
+
 	// Devices is the manifest's Expand()'d device set, filled in by
 	// bootstrap.go's Provision once every device+credential exists. Tick reads
 	// it; nothing else mutates it after Bootstrap returns.
@@ -295,6 +300,7 @@ func NewRuntime(hs *Handshake, load Load, deviceCount int) (*Runtime, error) {
 	return &Runtime{
 		Session:         userclient.NewTenantSession(httpc, hs.Endpoints.UserGraphQL, hs.SimEmail, hs.SimPassword, hs.Tenant),
 		Endpoints:       hs.Endpoints,
+		SimPassword:     hs.SimPassword,
 		InstanceId:      hs.InstanceId,
 		Tenant:          hs.Tenant,
 		HTTPClient:      httpc,

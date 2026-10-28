@@ -1288,7 +1288,7 @@ dcctl sim create <name> [flags]
 ```
   -h, --help                 help for create
       --ingress string       device-plane HTTP ingress base URL (default http(s)://<server>:8081)
-      --manifest string      built-in scenario to run (devicepulse, buildingpulse, widgetlab, sitepulse, fleetpulse) (default "devicepulse")
+      --manifest string      built-in scenario to run (devicepulse, buildingpulse, widgetlab, sitepulse, fleetpulse, towerpulse) (default "devicepulse")
       --mqtt-broker string   NATS MQTT gateway a scenario's command far end dials (default ssl://<server>:1883)
       --mqtt-insecure        skip verification of the MQTT gateway's certificate (defaults ON without --tls, since a local bring-up's gateway cert is self-signed; pass --mqtt-insecure=false to force verification)
       --seed int             deterministic generation seed for the sim's populations (default 1)

@@ -217,13 +217,17 @@ var harnessRuleBuilders = []harnessRuleBuilder{
 // it is what puts it in front of device-management's gate. Without the refusal, such a
 // scenario would simply carry an empty mirror and be waved through.
 var mirroredAlarmSeverityWire = map[string]string{
-	mirrorKey("buildingpulse", sim.BuildingpulseRuleToken): sim.BuildingpulseAlarmSeverityWire,
-	mirrorKey("widgetlab", sim.WidgetlabRuleToken):         sim.WidgetlabAlarmSeverityWire,
-	mirrorKey("sitepulse", sim.SitepulseRuleToken):         sim.SitepulseAlarmSeverityWire,
-	mirrorKey("sitepulse", sim.SitepulseOverheatRuleToken): sim.SitepulseOverheatAlarmSeverityWire,
-	mirrorKey("sitepulse", sim.SitepulseTyreRuleToken):     sim.SitepulseTyreAlarmSeverityWire,
-	mirrorKey("loadtest", HarnessRuleToken):                harnessAlarmSeverityWire,
-	mirrorKey("loadtest", HarnessCommandRuleToken):         harnessAlarmSeverityWire,
+	mirrorKey("buildingpulse", sim.BuildingpulseRuleToken):  sim.BuildingpulseAlarmSeverityWire,
+	mirrorKey("widgetlab", sim.WidgetlabRuleToken):          sim.WidgetlabAlarmSeverityWire,
+	mirrorKey("sitepulse", sim.SitepulseRuleToken):          sim.SitepulseAlarmSeverityWire,
+	mirrorKey("sitepulse", sim.SitepulseOverheatRuleToken):  sim.SitepulseOverheatAlarmSeverityWire,
+	mirrorKey("sitepulse", sim.SitepulseTyreRuleToken):      sim.SitepulseTyreAlarmSeverityWire,
+	mirrorKey("towerpulse", sim.TowerpulseZoneHotRuleToken): sim.AlarmSeverityMajorWire,
+	mirrorKey("towerpulse", sim.TowerpulseCO2RuleToken):     sim.AlarmSeverityMinorWire,
+	mirrorKey("towerpulse", sim.TowerpulseFilterRuleToken):  sim.AlarmSeverityMinorWire,
+	mirrorKey("towerpulse", sim.TowerpulseChillerRuleToken): sim.AlarmSeverityCriticalWire,
+	mirrorKey("loadtest", HarnessRuleToken):                 harnessAlarmSeverityWire,
+	mirrorKey("loadtest", HarnessCommandRuleToken):          harnessAlarmSeverityWire,
 }
 
 // mirrorKey is the mirroredAlarmSeverityWire key for one producer's rule.

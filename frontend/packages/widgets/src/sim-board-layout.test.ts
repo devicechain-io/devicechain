@@ -66,8 +66,8 @@ const key = (board: string, f: LayoutFinding) =>
   [board, f.widgetId, f.code, f.breakpoint].filter((p) => p !== undefined).join('|');
 
 describe('the committed sim boards', () => {
-  it('include buildingpulse and widgetlab, not only sitepulse', () => {
-    expect(boards()).toEqual(['bp-dashboard', 'sp-dashboard', 'wl-gallery', 'wl-stress']);
+  it('include buildingpulse, widgetlab and towerpulse, not only sitepulse', () => {
+    expect(boards()).toEqual(['bp-dashboard', 'sp-dashboard', 'tp-annex-dashboard', 'tp-dashboard', 'wl-gallery', 'wl-stress']);
   });
 
   it('are written in the current format, so nothing about them is converted on load', () => {

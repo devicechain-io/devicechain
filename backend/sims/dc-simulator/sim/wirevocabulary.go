@@ -77,4 +77,10 @@ const (
 	// records the wire tier per RULE, so a scenario may mix tiers.
 	SeverityCritical          = "critical"
 	AlarmSeverityCriticalWire = "CRITICAL"
+
+	// The minor tier, the same kind of pair again: SeverityMinor is the authoring spelling
+	// event-processing's compiler accepts and AlarmSeverityMinorWire the form on the durable
+	// row. Both are gated through the authored-rules fixture.
+	SeverityMinor          = "minor"
+	AlarmSeverityMinorWire = "MINOR"
 )
