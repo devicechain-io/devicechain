@@ -1,0 +1,13 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Models and images are binary: never diff, merge or convert their line endings.
+*.glb binary
+*.png binary
+*.jpg binary
+
+# The art source and the layout it generates are LF on every platform: a CRLF in a script
+# breaks a shebang, and in campus_layout.json it makes every regeneration a whole-file diff.
+*.py text eol=lf
+*.json text eol=lf
+*.md text eol=lf
