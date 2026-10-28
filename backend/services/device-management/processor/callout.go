@@ -213,6 +213,20 @@ func (c *CalloutResponder) Limits() (maxInFlight int, lookupTimeout, stopWait ti
 // that is given: a Secret from another instance, or the issuer seed in the wrong key, would
 // otherwise start cleanly and then fail to open a single request.
 //
+// 🔴 WHAT SEALING DOES AND DOES NOT ESTABLISH. The responder's public key is public, so anyone can
+// seal a request to it: encryption authenticates nothing. The broker's request JWT is signed by
+// the server's nkey, but that key is generated at server start (nats-server's NewServer) and
+// cannot be seeded or read from configuration, so there is no known issuer to pin. What stands
+// between a forged request and a grant is therefore the broker's publish-deny on the callout
+// subject (TestNoClientInTheCalloutAccountCanPublishARequest). A password grant still needs the
+// device's secret on top of that; a CERTIFICATE grant (username {tenant}:@x509) needs only a
+// public certificate, so it is the first grant for which the deny is the whole defence. The one
+// thing this adds for it: with an xkey configured, an @x509 request that arrives UNSEALED is
+// refused (result "unsealed"), since the broker never sends one and only a publisher bypassing it
+// would. Residual risk, plainly: a publisher that could publish on the callout subject AND seal to
+// the public key could forge a certificate grant, and an instance with no xkey configured has only
+// the deny.
+//
 // 🔴 PLAINTEXT IS STILL ANSWERED. A request without the server's xkey header is answered as
 // before (and counted, and logged). That is what lets this responder be rolled out BEFORE the
 // broker is told to encrypt, so the broker roll never meets a responder that cannot read it.
@@ -535,7 +549,10 @@ func (c *CalloutResponder) handle(msg *nats.Msg) {
 		log.Warn().Msg("Dropping auth-callout request with no user nkey.")
 		return
 	}
-	userJWT, errMsg := c.authorize(req)
+	// A request is TRUSTED, for the grants that need no secret, only if it came the way the
+	// broker sends one: sealed to this responder's key when a key is configured. See
+	// WithRequestEncryption for what that does and does not establish.
+	userJWT, errMsg := c.authorizeRequest(req, c.xkey == nil || sealTo != "")
 	c.respond(msg, sealTo, req.Server.ID, req.UserNkey, userJWT, errMsg)
 }
 
@@ -545,6 +562,13 @@ func (c *CalloutResponder) handle(msg *nats.Msg) {
 // isolation. Every failure returns the same generic message (see
 // genericAuthFailure).
 func (c *CalloutResponder) authorize(req jwt.AuthorizationRequest) (userJWT string, errMsg string) {
+	return c.authorizeRequest(req, true)
+}
+
+// authorizeRequest is authorize for a request whose arrival channel is known. trusted is false
+// for a request that arrived unsealed while an xkey is configured, which the broker never sends;
+// a certificate connect (which needs no secret from the device) is refused for one.
+func (c *CalloutResponder) authorizeRequest(req jwt.AuthorizationRequest, trusted bool) (userJWT string, errMsg string) {
 	tenant, presented, ok := parseDeviceCredential(req.ConnectOptions.Username, req.ConnectOptions.Password)
 	if !ok {
 		return "", genericAuthFailure
@@ -552,7 +576,7 @@ func (c *CalloutResponder) authorize(req jwt.AuthorizationRequest) (userJWT stri
 	// A certificate connect is its own path (callout_x509.go): the credential is the TLS client
 	// certificate, never anything in the username or password.
 	if presented.CredentialType == string(model.CredentialX509Certificate) {
-		return c.authorizeX509(req, tenant, presented)
+		return c.authorizeX509(req, tenant, presented, trusted)
 	}
 	// A certificate offered with a token or password username is ignored: the connect
 	// authenticates on that credential and nothing else.

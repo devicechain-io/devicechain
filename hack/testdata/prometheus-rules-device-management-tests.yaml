@@ -379,7 +379,7 @@ tests:
               devicechain_instance: devicechain
             exp_annotations:
               summary: "Devices with registered certificates are being refused because their certificate chain does not verify, steadily"
-              description: "For 15m device-management has refused more than one certificate connect a second (2/s now) because a registered certificate's chain does not build to its trust anchor, or has expired. Either the devices stopped sending the intermediate certificates that link them to the anchor, the chain or the anchor has expired, or a CA was replaced without the devices being re-registered. The answer on the wire is the same for every cause: check what the device presents with openssl s_client against the broker, and the expiry of the certificate, its intermediates and the trust anchor."
+              description: "For 15m device-management has refused more than one certificate connect a second (2/s now) because a registered certificate's chain does not build to its trust anchor, or has expired. Only certificates that are pinned to a credential count: certificates nothing pins and malformed presentations are separate results, so a client outside the tenant cannot raise this alert. Either the devices stopped sending the intermediate certificates that link them to the anchor, the chain or the anchor has expired, or a CA was replaced without the devices being re-registered. The answer on the wire is the same for every cause: check what the device presents with openssl s_client against the broker, and the expiry of the certificate, its intermediates and the trust anchor."
 
   # Half a failure a second is under the line, and a flood of the OTHER refusals (an unregistered
   # device, a revocation, no certificate) and of granted connects does not count: none of those is
@@ -404,10 +404,15 @@ tests:
   - interval: 1m
     input_series:
       - series: 'devicechain_devicemanagement_callout_x509_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="chain_invalid"}'
-        values: '0+120x8 960+0x50'
+        values: '0+120x13 1560+0x47'
       - series: 'devicechain_devicemanagement_callout_x509_total{namespace="dci-devicechain", pod="dc-device-management-bbbbb", result="chain_invalid"}'
         values: '0+0x60'
     alert_rule_test:
+      # 12m: the expression is true (2/s for 12m) but the 15m hold has not elapsed, so this is the
+      # case that fails if the hold is removed.
+      - eval_time: 12m
+        alertname: DeviceX509ChainFailuresSustained
+        exp_alerts: []
       - eval_time: 40m
         alertname: DeviceX509ChainFailuresSustained
         exp_alerts: []

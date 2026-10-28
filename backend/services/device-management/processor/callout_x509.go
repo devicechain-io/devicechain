@@ -35,6 +35,8 @@ const (
 	x509ResultUnknownPin        = "unknown_pin"
 	x509ResultMisconfigured     = "misconfigured"
 	x509ResultPasswordPresented = "password_presented"
+	x509ResultUnsealed          = "unsealed"
+	x509ResultCertMalformed     = "cert_malformed"
 	x509ResultTenantRefused     = "tenant_refused"
 	x509ResultError             = "error"
 	x509ResultCertIgnored       = "x509_cert_ignored"
@@ -49,7 +51,7 @@ const (
 
 var x509Results = []string{
 	x509ResultOK, x509ResultNoCert, x509ResultChainInvalid, x509ResultAnchorDisabled, x509ResultRevoked,
-	x509ResultClientIDMismatch, x509ResultUnknownPin, x509ResultMisconfigured, x509ResultPasswordPresented,
+	x509ResultClientIDMismatch, x509ResultUnknownPin, x509ResultMisconfigured, x509ResultPasswordPresented, x509ResultUnsealed, x509ResultCertMalformed,
 	x509ResultTenantRefused, x509ResultError, x509ResultCertIgnored,
 	x509ResultJitCreated, x509ResultJitAdopted, x509ResultJitRenewed, x509ResultJitReplayed,
 	x509ResultJitRateLimited, x509ResultJitBusy,
@@ -90,7 +92,12 @@ func (c *CalloutResponder) refuseX509(result string) (string, string) {
 // Every refusal is the generic denial. The certificate is public and so is its pin, so none of
 // this authenticates on what a device SAYS: the proof of possession is the TLS handshake on this
 // very connection, which the broker has already completed before it asks us.
-func (c *CalloutResponder) authorizeX509(req jwt.AuthorizationRequest, tenant string, presented *model.PresentedCredential) (string, string) {
+func (c *CalloutResponder) authorizeX509(req jwt.AuthorizationRequest, tenant string, presented *model.PresentedCredential, trusted bool) (string, string) {
+	if !trusted {
+		log.Warn().Str("tenant", tenant).Msg("Auth-callout refused a certificate connect whose request arrived unsealed " +
+			"although an xkey is configured: the broker never sends one.")
+		return c.refuseX509(x509ResultUnsealed)
+	}
 	if c.tenantDeleted(tenant) {
 		log.Debug().Str("tenant", tenant).Msg("Auth-callout refused a certificate connect for a deleted tenant.")
 		return c.refuseX509(x509ResultTenantRefused)
@@ -109,7 +116,7 @@ func (c *CalloutResponder) authorizeX509(req jwt.AuthorizationRequest, tenant st
 	if err != nil {
 		log.Debug().Err(err).Str("tenant", tenant).Str("host", req.ClientInformation.Host).
 			Msg("Auth-callout refused a certificate connect: the presented certificates are not acceptable.")
-		return c.refuseX509(x509ResultChainInvalid)
+		return c.refuseX509(x509ResultCertMalformed)
 	}
 	pin := x509trust.Fingerprint(chain[0])
 
@@ -204,7 +211,7 @@ func newX509Counter(ms *core.Microservice) *prometheus.CounterVec {
 	v := ms.NewCounterVec("callout_x509_total",
 		"Device connects by certificate (MQTT username {tenant}:@x509), by result. ok is a granted session; "+
 			"no_cert, chain_invalid, anchor_disabled, revoked, client_id_mismatch, unknown_pin, misconfigured, "+
-			"password_presented, tenant_refused and error are refusals, each answered with the same generic denial. "+
+			"password_presented, unsealed, cert_malformed, tenant_refused and error are refusals, each answered with the same generic denial. "+
 			"x509_cert_ignored counts a certificate presented with a token or password username, which authenticates "+
 			"on that credential alone. The jit_ results are registration on first connect.",
 		[]string{"result"})

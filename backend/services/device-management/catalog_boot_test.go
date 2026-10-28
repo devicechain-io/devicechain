@@ -180,7 +180,7 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 		}
 	}
 	for _, result := range []string{"ok", "no_cert", "chain_invalid", "anchor_disabled", "revoked", "client_id_mismatch",
-		"unknown_pin", "x509_cert_ignored", "jit_created", "jit_adopted", "jit_renewed", "jit_replayed",
+		"unknown_pin", "unsealed", "cert_malformed", "x509_cert_ignored", "jit_created", "jit_adopted", "jit_renewed", "jit_replayed",
 		"jit_rate_limited", "jit_busy"} {
 		v, ok := seen[result]
 		require.True(t, ok, "callout_x509_total{result=%q} does not exist at startup", result)

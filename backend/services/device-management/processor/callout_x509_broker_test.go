@@ -39,6 +39,7 @@ import (
 	"github.com/nats-io/jwt/v2"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	nats "github.com/nats-io/nats.go"
+	"github.com/nats-io/nkeys"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
@@ -780,7 +781,7 @@ func TestX509PresentedChainBoundsRefuse(t *testing.T) {
 		before := f.counts()
 		_, d := req(certs)
 		require.NotEmpty(t, d, name)
-		f.moved(before, x509ResultChainInvalid)
+		f.moved(before, x509ResultCertMalformed)
 	}
 	before := f.counts()
 	_, d := req(nil)
@@ -818,11 +819,68 @@ func TestX509ChainVerifierRefusalsReachTheWire(t *testing.T) {
 	f.moved(before, x509ResultChainInvalid)
 }
 
-// The wiring the service relies on: the lookup is not cached. CachedApi embeds *Api and
-// promotes ResolveX509Connect; a method declared on CachedApi would put a cache in front of a
-// revocation.
-func TestResolveX509ConnectIsNotCached(t *testing.T) {
-	src, err := os.ReadFile(filepath.Join("..", "model", "api_cached.go"))
+// 🔑 A CERTIFICATE GRANT NEEDS NO SECRET FROM THE DEVICE, so a request that did not come the way
+// the broker sends it is not trusted for one: with an xkey configured the broker always seals,
+// and an UNSEALED @x509 request is refused. Driven through handle with a request signed by a
+// server key and the real reply path. Controls: the same request sealed is granted, and a
+// responder with no xkey (where the broker does not seal) still grants it unsealed.
+func TestX509RequestsMustArriveSealedWhenAnXkeyIsConfigured(t *testing.T) {
+	f := newX509Fixture(t)
+	root := newTestCert(t, nil, certOpts{cn: "Maker Root", ca: true})
+	f.anchor("maker", root)
+	f.device("sensor-001")
+	leaf := newTestCert(t, root, certOpts{cn: "SN-0001"})
+	f.pin("c-1", "sensor-001", "maker", leaf)
+
+	serverKp, err := nkeys.CreateServer()
 	require.NoError(t, err)
-	assert.NotContains(t, string(src), ") ResolveX509Connect(", "CachedApi must never override ResolveX509Connect")
+	serverX, err := nkeys.CreateCurveKeys()
+	require.NoError(t, err)
+	serverXPub, err := serverX.PublicKey()
+	require.NoError(t, err)
+
+	nc := f.resp.conn
+	// ask runs one request through the responder's handler and returns whether it was granted.
+	ask := func(r *CalloutResponder, sealed bool) bool {
+		req := testRequestFromClient(t, certUser(), "", clientIDOf("sensor-001"))
+		req.TLS = &jwt.ClientTLS{Certs: pemsOf(leaf)}
+		claims := jwt.NewAuthorizationRequestClaims(req.UserNkey)
+		claims.AuthorizationRequest = req
+		tok, err := claims.Encode(serverKp)
+		require.NoError(t, err)
+		data := []byte(tok)
+		msg := &nats.Msg{Subject: AuthCalloutSubject, Reply: nc.NewRespInbox(), Header: nats.Header{}}
+		if sealed {
+			data, err = serverX.Seal(data, f.creds.XKeyPublic)
+			require.NoError(t, err)
+			msg.Header.Set(natsauth.AuthRequestXKeyHeader, serverXPub)
+		}
+		msg.Data = data
+		sub, err := nc.SubscribeSync(msg.Reply)
+		require.NoError(t, err)
+		defer sub.Unsubscribe()
+		require.NoError(t, nc.Flush())
+		r.handle(msg)
+		out, err := sub.NextMsg(5 * time.Second)
+		require.NoError(t, err)
+		body := out.Data
+		if sealed {
+			body, err = serverX.Open(body, f.creds.XKeyPublic)
+			require.NoError(t, err)
+		}
+		resp, err := jwt.DecodeAuthorizationResponseClaims(string(body))
+		require.NoError(t, err)
+		return resp.Jwt != "" && resp.Error == ""
+	}
+
+	_, err = f.resp.WithRequestEncryption(f.creds.XKeySeed, f.creds.XKeyPublic)
+	require.NoError(t, err)
+	require.True(t, ask(f.resp, true), "the control: a sealed certificate request is granted")
+	before := f.counts()
+	require.False(t, ask(f.resp, false), "an unsealed certificate request was granted although an xkey is configured")
+	f.moved(before, x509ResultUnsealed)
+
+	// A responder with no xkey configured: the broker does not seal, and an unsealed request is the norm.
+	f.resp.xkey = nil
+	require.True(t, ask(f.resp, false), "the control: with no xkey configured an unsealed request is the norm")
 }

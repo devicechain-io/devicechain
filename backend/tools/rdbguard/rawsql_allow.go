@@ -132,8 +132,8 @@ var rawJoinAllowList = []siteEntry{
 	{
 		Path: "backend/services/device-management/model/api_credentials.go", Func: "Api.credentialsWithDevice", Count: 1,
 		Why: "association join to the credential's device, which the callback does not scope; the " +
-			"caller re-checks the joined device against the credential (credentialDevice) before " +
-			"trusting it, as the function's own comment explains",
+			"function itself drops any row outside the calling tenant and clears any device that is " +
+			"not the credential's own (id and tenant) before returning, as its comment explains",
 	},
 	{
 		Path: "backend/services/device-management/model/api_group_members.go", Func: "Api.staticGroupMembers", Count: 1,

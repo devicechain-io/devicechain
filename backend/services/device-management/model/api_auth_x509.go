@@ -68,13 +68,11 @@ func (api *Api) ResolveX509Connect(ctx context.Context, fingerprint string, now 
 	if fingerprint == "" {
 		return nil, ErrCredentialNotPresented
 	}
-	found := make([]*DeviceCredential, 0, 1)
 	device := api.RDB.Database.Session(&gorm.Session{NewDB: true}).Select(connectDeviceFields)
-	result := api.credentialsWithDevice(ctx, device).
-		Where("device_credentials.credential_type = ? AND device_credentials.credential_id = ?",
-			string(CredentialX509Certificate), fingerprint).
-		Select(x509ConnectColumns).
-		Find(&found)
+	found, result := api.credentialsWithDevice(ctx, func(db *gorm.DB) *gorm.DB {
+		return db.Where("device_credentials.credential_type = ? AND device_credentials.credential_id = ?",
+			string(CredentialX509Certificate), fingerprint)
+	}, x509ConnectColumns, device)
 	markMetadataUnread(found)
 	cred, err := oneLiveCredential(result, found, string(CredentialX509Certificate), fingerprint)
 	if err != nil {
@@ -82,6 +80,11 @@ func (api *Api) ResolveX509Connect(ctx context.Context, fingerprint string, now 
 			return nil, ErrCredentialNotResolved
 		}
 		return nil, err
+	}
+	// Belt over the callback's predicate and credentialsWithDevice's own filter: a pin resolves in
+	// the calling tenant only.
+	if tenant, terr := ctxTenant(ctx); terr != nil || cred.TenantId != tenant {
+		return nil, ErrCredentialNotResolved
 	}
 	if !cred.Enabled {
 		return nil, ErrCredentialRevoked

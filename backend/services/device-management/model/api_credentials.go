@@ -514,8 +514,7 @@ func (api *Api) DeviceCredentialByCredentialId(ctx context.Context, credentialTy
 	if err != nil {
 		return nil, err
 	}
-	found := make([]*DeviceCredential, 0)
-	result := api.presentedCredentialStatement(ctx, credentialType, lookupId).Find(&found)
+	found, result := api.presentedCredentials(ctx, credentialType, lookupId, nil)
 	return oneLiveCredential(result, found, credentialType, lookupId)
 }
 
@@ -582,11 +581,8 @@ var (
 // compare, so any password would authenticate. Only the password connect, which
 // compares the secret itself, may read through this finder.
 func (api *Api) deviceCredentialForConnect(ctx context.Context, credentialType string, credentialId string) (*DeviceCredential, error) {
-	found := make([]*DeviceCredential, 0)
 	device := api.RDB.Database.Session(&gorm.Session{NewDB: true}).Select(connectDeviceFields)
-	result := api.presentedCredentialStatement(ctx, credentialType, credentialId, device).
-		Select(connectCredentialColumns).
-		Find(&found)
+	found, result := api.presentedCredentials(ctx, credentialType, credentialId, connectCredentialColumns, device)
 	markMetadataUnread(found)
 	return oneLiveCredential(result, found, credentialType, credentialId)
 }
@@ -627,11 +623,8 @@ var (
 // It is the same statement as the full finder, tenant-scoped by the same callback on the
 // credential's own table and with the same soft-delete predicate on the device join.
 func (api *Api) deviceCredentialForAuth(ctx context.Context, credentialType string, credentialId string) (*DeviceCredential, error) {
-	found := make([]*DeviceCredential, 0)
 	device := api.RDB.Database.Session(&gorm.Session{NewDB: true}).Select(authDeviceFields)
-	result := api.presentedCredentialStatement(ctx, credentialType, credentialId, device).
-		Select(authCredentialColumns).
-		Find(&found)
+	found, result := api.presentedCredentials(ctx, credentialType, credentialId, authCredentialColumns, device)
 	markMetadataUnread(found)
 	return oneLiveCredential(result, found, credentialType, credentialId)
 }
@@ -660,21 +653,47 @@ func markMetadataUnread(found []*DeviceCredential) {
 // the credential before trusting it, which is what credentialDevice does. The predicates
 // are table-qualified so a column the two tables come to share cannot make the statement
 // ambiguous.
-func (api *Api) presentedCredentialStatement(ctx context.Context, credentialType string, credentialId string,
-	deviceJoin ...any) *gorm.DB {
-	return api.credentialsWithDevice(ctx, deviceJoin...).
-		Where("device_credentials.credential_type = ? AND device_credentials.credential_id = ? AND device_credentials.enabled = ?",
+func (api *Api) presentedCredentials(ctx context.Context, credentialType string, credentialId string,
+	columns []string, deviceJoin ...any) ([]*DeviceCredential, *gorm.DB) {
+	return api.credentialsWithDevice(ctx, func(db *gorm.DB) *gorm.DB {
+		return db.Where("device_credentials.credential_type = ? AND device_credentials.credential_id = ? AND device_credentials.enabled = ?",
 			credentialType, credentialId, true)
+	}, columns, deviceJoin...)
 }
 
-// credentialsWithDevice is the credential table, tenant-scoped by the callback on its own table,
-// with the owning device on a LEFT JOIN carrying the device's soft-delete predicate. It is the
-// ONE place a credential lookup joins its device, so the join's tenant provenance is stated and
-// allow-listed once. The notes on presentedCredentialStatement apply to every caller: the joined
-// device is not tenant-scoped by the query, and must be checked against the credential
-// (credentialDevice) before it is trusted.
-func (api *Api) credentialsWithDevice(ctx context.Context, deviceJoin ...any) *gorm.DB {
-	return api.RDB.DB(ctx).Joins("Device", deviceJoin...)
+// credentialsWithDevice reads credentials with their owning device, and returns only rows whose
+// device has been CHECKED. It is the ONE place a credential lookup joins its device, so the
+// join's tenant provenance is stated, allow-listed and enforced once.
+//
+// The credential table is tenant-scoped by the callback on its own table; the device comes on a
+// LEFT JOIN carrying the device's soft-delete predicate, which the callback does not scope. So
+// after the read, every row is held to the calling tenant (a row of another tenant is dropped,
+// whatever the statement did), and a device that is not the credential's own (its id and its
+// tenant) is cleared, which credentialDevice then refuses. A caller never sees an unchecked
+// device. where adds the lookup's predicates; columns, when set, narrows the credential's.
+func (api *Api) credentialsWithDevice(ctx context.Context, where func(*gorm.DB) *gorm.DB, columns []string,
+	deviceJoin ...any) ([]*DeviceCredential, *gorm.DB) {
+	found := make([]*DeviceCredential, 0)
+	st := where(api.RDB.DB(ctx).Joins("Device", deviceJoin...))
+	if len(columns) > 0 {
+		st = st.Select(columns)
+	}
+	result := st.Find(&found)
+	if result.Error != nil {
+		return found, result
+	}
+	tenant, _ := core.TenantFromContext(ctx)
+	kept := found[:0]
+	for _, c := range found {
+		if c == nil || tenant == "" || c.TenantId != tenant {
+			continue
+		}
+		if d := c.Device; d != nil && (d.ID != c.DeviceId || d.TenantId != c.TenantId) {
+			c.Device = nil
+		}
+		kept = append(kept, c)
+	}
+	return kept, result
 }
 
 // oneLiveCredential is what a presentedCredentialStatement found, as one credential: the
