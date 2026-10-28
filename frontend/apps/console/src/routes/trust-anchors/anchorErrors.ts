@@ -5,6 +5,7 @@
 // explanation; for the families where the specifics are the useful part (which field is wrong,
 // which count was hit) the server's own sentence is appended, so nothing it knew is lost.
 
+import '@/routes/trust-anchors/catalog';
 import type { TFunction } from 'i18next';
 import { errMessage } from '@/routes/common';
 import { classifyX509Error } from './anchorRules';

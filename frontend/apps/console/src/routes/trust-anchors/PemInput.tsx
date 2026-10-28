@@ -7,6 +7,7 @@
 // 🔴 CERTIFICATES ONLY, AND NEVER A KEY. Text that looks like a private key is flagged before
 // anything is sent. The server refuses it as well; this only keeps it from leaving the browser.
 
+import '@/routes/trust-anchors/catalog';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Upload } from 'lucide-react';

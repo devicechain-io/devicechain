@@ -4,6 +4,7 @@
 // The tenant's trust anchors: the CA certificates it trusts to vouch for its devices' client
 // certificates. This page lists them and hosts the create drawer.
 
+import '@/routes/trust-anchors/catalog';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus } from 'lucide-react';

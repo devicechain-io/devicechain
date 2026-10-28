@@ -33,7 +33,6 @@ import enTenants from './locales/en/tenants.json';
 import enTiers from './locales/en/tiers.json';
 import enConnectors from './locales/en/connectors.json';
 import enProvisioning from './locales/en/provisioning.json';
-import enTrustAnchors from './locales/en/trustAnchors.json';
 import enIntegrations from './locales/en/integrations.json';
 import enCommandBatches from './locales/en/commandBatches.json';
 import enUpdateSigners from './locales/en/updateSigners.json';
@@ -167,7 +166,6 @@ const enResources = {
     tiers: enTiers,
     connectors: enConnectors,
     provisioning: enProvisioning,
-    trustAnchors: enTrustAnchors,
     integrations: enIntegrations,
     commandBatches: enCommandBatches,
     updateSigners: enUpdateSigners,

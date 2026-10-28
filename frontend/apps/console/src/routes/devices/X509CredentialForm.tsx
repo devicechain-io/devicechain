@@ -10,6 +10,7 @@
 // credential is created, so a certificate that could not authenticate is refused here, with the
 // reason, rather than stored. A device holds at most three certificate credentials.
 
+import '@/routes/trust-anchors/catalog';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';

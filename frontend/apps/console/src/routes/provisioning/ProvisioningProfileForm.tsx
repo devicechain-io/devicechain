@@ -5,6 +5,7 @@
 // and hands it straight to `onCreated` without keeping it; an edit is a PARTIAL update that names
 // only the fields the operator changed (profileForm.ts).
 
+import '@/routes/trust-anchors/catalog';
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
@@ -52,7 +53,7 @@ export function ProvisioningProfileForm({
   /** Edit only. */
   onSaved?: (message: string) => void;
 }) {
-  const { t } = useTranslation(['provisioning', 'common']);
+  const { t } = useTranslation(['provisioning', 'trustAnchors', 'common']);
   const editing = entity != null;
   // The draft the form was seeded from; an edit names only what differs from it.
   const initial = useMemo<ProfileDraft>(() => (entity ? draftOf(entity) : emptyDraft()), [entity]);
@@ -153,37 +154,37 @@ export function ProvisioningProfileForm({
       </FormField>
       {!editing && (
         <FormField
-          label={t('provisioning:authLabel')}
+          label={t('trustAnchors:authLabel')}
           htmlFor="pp-auth"
-          description={t(draft.certificate ? 'provisioning:authHelp_CERTIFICATE' : 'provisioning:authHelp_SECRET')}
+          description={t(draft.certificate ? 'trustAnchors:authHelp_CERTIFICATE' : 'trustAnchors:authHelp_SECRET')}
         >
           <SegmentedControl
-            ariaLabel={t('provisioning:authLabel')}
+            ariaLabel={t('trustAnchors:authLabel')}
             tone="joined"
             size="sm"
             fill
             value={draft.certificate ? 'CERTIFICATE' : 'SECRET'}
             onValueChange={(v) => set({ certificate: v === 'CERTIFICATE' })}
             options={[
-              { value: 'SECRET', label: t('provisioning:auth_SECRET') },
-              { value: 'CERTIFICATE', label: t('provisioning:auth_CERTIFICATE') },
+              { value: 'SECRET', label: t('trustAnchors:auth_SECRET') },
+              { value: 'CERTIFICATE', label: t('trustAnchors:auth_CERTIFICATE') },
             ]}
           />
         </FormField>
       )}
       {draft.certificate ? (
         <FormField
-          label={t('provisioning:anchorLabel')}
+          label={t('trustAnchors:anchorLabel')}
           htmlFor="pp-anchor"
-          description={t('provisioning:anchorHelp', { prefix: DERIVED_TOKEN_PREFIX })}
+          description={t('trustAnchors:anchorHelp', { prefix: DERIVED_TOKEN_PREFIX })}
         >
           <Combobox
             id="pp-anchor"
             value={draft.trustAnchorToken}
             onChange={(v) => set({ trustAnchorToken: v })}
             options={anchorOptions}
-            placeholder={t('provisioning:anchorSelect')}
-            emptyMessage={t('provisioning:anchorEmpty')}
+            placeholder={t('trustAnchors:anchorSelect')}
+            emptyMessage={t('trustAnchors:anchorEmpty')}
             disabled={disabled}
             allowClear={false}
           />

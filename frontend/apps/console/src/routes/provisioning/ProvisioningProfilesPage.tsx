@@ -5,6 +5,7 @@
 // register itself, plus the rules for which devices it may register. This page lists them and
 // hosts the create drawer; creating one shows the server-generated secret exactly once.
 
+import '@/routes/trust-anchors/catalog';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus } from 'lucide-react';

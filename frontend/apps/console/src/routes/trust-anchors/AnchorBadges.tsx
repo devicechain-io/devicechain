@@ -1,6 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
+import '@/routes/trust-anchors/catalog';
 import { useTranslation } from 'react-i18next';
 import { Badge } from '@/components/ui/badge';
 import type { TrustAnchor } from '@/lib/api/trust-anchors';

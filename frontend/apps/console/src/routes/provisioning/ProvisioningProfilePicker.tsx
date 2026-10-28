@@ -1,6 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
+import '@/routes/trust-anchors/catalog';
 import { useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox';
@@ -57,7 +58,7 @@ export function ProvisioningProfilePicker({
       htmlFor={id}
       // A certificate profile adopts the device by its certificate: the token is not free text.
       description={
-        selectedIsCertificate ? t('earmarkDerivedHint', { prefix: DERIVED_TOKEN_PREFIX }) : t('earmarkHelp')
+        selectedIsCertificate ? t('trustAnchors:earmarkDerivedHint', { prefix: DERIVED_TOKEN_PREFIX }) : t('earmarkHelp')
       }
     >
       <Combobox

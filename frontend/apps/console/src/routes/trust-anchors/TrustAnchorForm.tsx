@@ -5,6 +5,7 @@
 // uploaded). The certificate cannot be changed afterwards (another CA is another anchor), so
 // there is no edit mode. The server validates the PEM and its refusal is shown as it said it.
 
+import '@/routes/trust-anchors/catalog';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';

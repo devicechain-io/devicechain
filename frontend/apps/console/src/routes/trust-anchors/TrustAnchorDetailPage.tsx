@@ -10,6 +10,7 @@
 //   * DELETING is refused while a credential or a provisioning profile names the anchor. The
 //     page says why (and how many) instead of offering a delete the server will refuse.
 
+import '@/routes/trust-anchors/catalog';
 import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';

@@ -5,6 +5,7 @@
 // for a fleet that registers itself — rotate the secret, revoke the devices it registered, delete.
 // The edit form below the summary sends only the fields that changed.
 
+import '@/routes/trust-anchors/catalog';
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -96,7 +97,7 @@ function ProfileDetail({ profile, reload }: { profile: ProvisioningProfile; relo
       const { profile: updated, issuedSecret } = await rotateProvisioningProfileSecret(profile.token);
       if (issuedSecret === null) {
         // Only a certificate profile answers with no secret, and it is not offered a rotation.
-        setActionError(t('rotateNoSecret'));
+        setActionError(t('trustAnchors:rotateNoSecret'));
         return;
       }
       setRevealed({
@@ -202,7 +203,7 @@ function ProfileDetail({ profile, reload }: { profile: ProvisioningProfile; relo
           <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 text-sm">
             {profile.trustAnchor && (
               <>
-                <dt className="text-muted-foreground">{t('summaryAnchor')}</dt>
+                <dt className="text-muted-foreground">{t('trustAnchors:summaryAnchor')}</dt>
                 <dd className="text-foreground">
                   <Link
                     className="text-primary underline-offset-2 hover:underline"
@@ -241,7 +242,7 @@ function ProfileDetail({ profile, reload }: { profile: ProvisioningProfile; relo
             </dd>
           </dl>
           <p className="mt-3 text-xs text-muted-foreground">
-            {isCertificate ? t('summaryNoteCertificate', { prefix: DERIVED_TOKEN_PREFIX }) : t('summaryNote')}
+            {isCertificate ? t('trustAnchors:summaryNoteCertificate', { prefix: DERIVED_TOKEN_PREFIX }) : t('summaryNote')}
           </p>
         </SectionPanel>
         <SectionPanel>

@@ -113,7 +113,17 @@ describe('locale parity', () => {
 describe('the shipped registries carry every namespace', () => {
   const sorted = (xs: Iterable<string>) => [...xs].sort();
 
-  it('the English bundle registers every namespace, each wired to its own file', () => {
+  // Namespaces whose English catalog ships with a lazy route (see lazyEnglish.ts) and its catalog
+  // module, which registers it; they are deliberately not in config.ts's first-download bundle.
+  const LAZY_ENGLISH: Record<string, () => Promise<unknown>> = {
+    trustAnchors: () => import('@/routes/trust-anchors/catalog'),
+  };
+
+  it('the English bundle registers every namespace, each wired to its own file', async () => {
+    for (const [ns, load] of Object.entries(LAZY_ENGLISH)) {
+      expect(NAMESPACES as readonly string[], `${ns} is lazy but not a namespace`).toContain(ns);
+      await load();
+    }
     for (const ns of NAMESPACES) {
       expect(i18n.hasResourceBundle(DEFAULT_LOCALE, ns), `en/${ns} is not bundled`).toBe(true);
       expect(i18n.getResourceBundle(DEFAULT_LOCALE, ns), `en/${ns} is wired to another file`).toEqual(
