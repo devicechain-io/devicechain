@@ -710,6 +710,8 @@ El agente es una **pasarela**: un dispositivo corriente de la plataforma que rep
 2. Crea los dispositivos que representa la planta y asigna cada uno a la pasarela, con `assignDeviceGateway` o con `gatewayToken` al crearlo. Un dispositivo tiene como máximo una pasarela, y una pasarela no puede tener a su vez una pasarela. Asignar requiere el mismo permiso que gestionar credenciales de dispositivo.
 3. Arranca el agente. Los dispositivos locales siguen publicando en él sus propios topics, sin cambios.
 
+El agente inicia sesión con la credencial `MQTT_BASIC` anterior. Todavía no tiene un ajuste de certificado de cliente, así que hoy una pasarela no puede autenticarse por [certificado](../concepts/device-certificates.md).
+
 Una asignación surte efecto con el siguiente evento del dispositivo, en segundos y sin reconexión. Quitarla funciona igual, y el resto de dispositivos de la pasarela siguen fluyendo. Deshabilitar la pasarela, o revocar su credencial, termina su sesión.
 
 **Qué hace el agente en el enlace ascendente:**

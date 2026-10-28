@@ -184,6 +184,8 @@ The listener is TLS and the connection is broker-authenticated. Connect over TLS
 
 Set the MQTT **client id** to `{instanceId}:{tenant}:{deviceToken}` so the connection says which device it is. The broker refuses anything else, including the random one your client library invents when you leave it unset. The one exception is a `:suffix` after the device token, described below.
 
+A device can instead authenticate with a TLS client certificate: the username is `{tenant}:@x509`, there is no password, and the client id rule is unchanged. See [Connecting with a certificate](./device-x509.md).
+
 The client id is not bookkeeping. An MQTT client id is the key a broker files a device's session under, and the protocol says a connection presenting an id that is already in use *takes that session over*: the device holding it is disconnected and the new connection inherits its subscriptions. Deriving the id from the identity the broker has already authenticated stops one device, in your tenant or anyone else's, evicting another. It is also what lets a tenant's session state be found and removed if the tenant is ever deleted.
 
 If a device needs more than one connection, give each one a suffix: `{instanceId}:{tenant}:{deviceToken}:pub`, `…:sub`, and so on. Anything after the third `:` is yours to choose. Two connections sharing one client id are two clients fighting over one session, and they will disconnect each other in a loop. A device that publishes on one connection and subscribes for commands on another needs a distinct suffix for each.

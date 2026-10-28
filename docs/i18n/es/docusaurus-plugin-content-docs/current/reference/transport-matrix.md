@@ -123,6 +123,7 @@ hay ningún bróker aparte que operar.
   expresar una lectura como un comando cuya respuesta lleve el valor, pero eso es un vocabulario
   que tú defines en el perfil del dispositivo, no algo que aporte el transporte.
 
+- **Certificados de cliente.** En lugar de un token o una contraseña, un dispositivo puede autenticarse con un certificado de cliente X.509 presentado en el handshake TLS, con el usuario MQTT `{tenant}:@x509` y sin contraseña. El certificado debe encadenar con un [ancla de confianza](../concepts/device-certificates.md) que el tenant añadió, ya sea fijado a la credencial de un dispositivo o aceptado por un perfil de certificado que registra el dispositivo en su primera conexión. Los límites se dicen sin rodeos: una CA con restricciones de nombre se rechaza, no hay CRL ni OCSP (revoca deshabilitando la credencial o el ancla, y usa certificados de corta duración), y la renovación y el SDK de C# todavía no están disponibles. Consulta [Conectar con un certificado](../guides/device-x509.md).
 - **Pasarelas.** Un dispositivo puede representar a otros. El [agente de borde](../deployment/edge-services.md#gateway-identity) inicia sesión como dispositivo pasarela y publica los eventos de cada dispositivo en el [espacio de nombres de pasarela](./device-protocol.md#gateway-namespace). La plataforma acepta un evento solo para un dispositivo asignado a esa pasarela, y rechaza cualquier otro de forma visible (el motivo `NotGatewayChild`, un contador y un aviso a la pasarela) en lugar de dejar que el broker lo confirme y lo descarte. Los comandos a dispositivos tras una pasarela aún no se enrutan.
 
 ### HTTP
@@ -167,16 +168,17 @@ Un endpoint `POST` para el mismo cuerpo de evento JSON. Sencillo, y de un solo s
 
 ### Autorregistro {#self-registration}
 
-No es un transporte para lecturas, sino la forma en que un dispositivo que aún no tiene credencial obtiene una. Es solo HTTPS.
+No es un transporte para lecturas, sino la forma en que un dispositivo que aún no tiene credencial obtiene una. Con un secreto, es solo HTTPS.
 
 | Puerta | ¿Registra un dispositivo? |
 | --- | :---: |
 | HTTPS, `POST /api/device-management/provisioning/{tenant}/register` | sí |
-| MQTT, cualquier bróker | no |
+| MQTT en el bróker de la plataforma, con un certificado de cliente y un perfil de certificado | sí, en la primera conexión |
+| MQTT, de cualquier otra forma | no |
 | Ingesta de eventos HTTP, Sparkplug B, LwM2M | no |
 
 - Un dispositivo presenta la clave y el secreto de un perfil de aprovisionamiento, su número de serie y una credencial que inventó, y recibe su token de dispositivo y su id de cliente MQTT. Consulta [Autorregistro de dispositivos](../guides/device-self-registration.md) y [el contrato del endpoint](./device-protocol.md#self-registration).
-- **No hay registro al conectarse por MQTT.** Un dispositivo no puede registrarse conectándose: el bróker autentica una credencial que ya existe.
+- **No hay registro al conectarse por MQTT con un secreto.** El bróker autentica una credencial que ya existe. La excepción es un dispositivo con certificado de cliente: un [perfil de certificado](../guides/device-x509.md#registration) lo registra en su primera conexión, sin secreto y sin este endpoint.
 - Necesita el ingress de la API de la instancia y tiene limitación de tasa por dirección de cliente y por inquilino, y responde `429` con `Retry-After`.
 - Sparkplug B y LwM2M crean dispositivos mediante su propio ajuste de autorregistro, que es independiente y no usa perfiles de aprovisionamiento.
 
@@ -437,6 +439,7 @@ Se nombran explícitamente porque, desde fuera de la plataforma, «ausente de la
 | --- | --- |
 | Ingesta de dispositivo por WebSocket | No disponible. Figura como planeada en la [introducción](../intro.md). |
 | CoAP fuera de LwM2M | No disponible. CoAP llega a la plataforma a través de [LwM2M](../concepts/lwm2m.md) y no de otro modo. |
+| Certificados de cliente por HTTP o LwM2M | No disponible. Solo el bróker MQTT de la plataforma autentica un dispositivo por certificado de cliente. HTTP usa un token o una credencial básica, y LwM2M usa claves precompartidas. |
 | NATS en bruto como transporte de dispositivo | No disponible. Una credencial de dispositivo autoriza una conexión MQTT, y no existe un cliente de dispositivo nativo de NATS. |
 | Salida de comandos Sparkplug (`DCMD`) | Disponible cuando una fuente la habilita, confirmada porque el nodo informa del valor y no por una confirmación, que Sparkplug no tiene; consulta [más arriba](#sparkplug-b). |
 | Protocolos de bus de campo industrial: OPC-UA, Modbus, BACnet | No disponibles como transportes de plataforma, y **nada de lo que publica el proyecto los habla.** La forma admitida es una pasarela local que hable el bus de campo en la red de planta y reenvíe por MQTT o HTTP; la traducción de protocolo la aportas tú. El proyecto sí publica `dc-edge-agent`, que hace la *otra* mitad de ese trabajo: termina localmente la vía MQTT del dispositivo, almacena de forma duradera durante un corte de WAN y reenvía **solo por MQTT**. No habla ningún bus de campo. |

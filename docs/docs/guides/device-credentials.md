@@ -17,9 +17,10 @@ Available. You manage credentials from the **Credentials** tab of the device det
 | --- | --- | --- |
 | `ACCESS_TOKEN` | a bearer token (the credential id) | a one-way, keyed digest of the token |
 | `MQTT_BASIC` | a username (the credential id) + password | a one-way, keyed digest of the password |
+| `X509_CERTIFICATE` | a TLS client certificate, with the MQTT username `{tenant}:@x509` and no password | nothing secret: the certificate's SHA-256 is the pin, and the certificate is public |
 
 :::note X.509 credentials
-An `X509_CERTIFICATE` credential names the [trust anchor](../user-guide/provisioning-and-trust-anchors.md#trust-anchors) its certificate chains to. The platform verifies the chain when you create the credential and sets the credential's id to the certificate's SHA-256 pin, which is public. A device holds at most three, and a certificate credential with no trust anchor does not authenticate. What a certificate can do today is in [What works today with certificates](../user-guide/provisioning-and-trust-anchors.md#certificates-today).
+An `X509_CERTIFICATE` credential names the [trust anchor](../user-guide/provisioning-and-trust-anchors.md#trust-anchors) its certificate chains to. The platform verifies the chain when you create the credential and sets the credential's id to the certificate's SHA-256 pin, which is public. A device holds at most three, and a certificate credential with no trust anchor does not authenticate. What a certificate can do today is in [What works today with certificates](../user-guide/provisioning-and-trust-anchors.md#certificates-today). For the whole path, see [Connecting with a certificate](./device-x509.md) and [Certificate identity](../concepts/device-certificates.md).
 :::
 
 ## Reading a credential requires `device:write` {#reading-a-credential}

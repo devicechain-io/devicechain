@@ -184,6 +184,8 @@ El listener es TLS y la conexión está autenticada por el broker. Conéctate po
 
 Fija el **client id** de MQTT en `{instanceId}:{tenant}:{deviceToken}` para que la conexión declare qué dispositivo es. El broker rechaza cualquier otra cosa, incluido el valor aleatorio que inventa tu biblioteca cliente cuando no lo fijas. La única excepción es un `:sufijo` tras el token del dispositivo, descrito más abajo.
 
+Un dispositivo puede en cambio autenticarse con un certificado de cliente TLS: el usuario es `{tenant}:@x509`, no hay contraseña y la regla del client id no cambia. Consulta [Conectar con un certificado](./device-x509.md).
+
 El client id no es un mero trámite. Un client id de MQTT es la clave con la que un broker archiva la sesión de un dispositivo, y el protocolo establece que una conexión que presenta un id ya en uso *se apropia de esa sesión*: el dispositivo que la tenía queda desconectado y la nueva conexión hereda sus suscripciones. Derivar el id de la identidad que el broker ya autenticó impide que un dispositivo, de tu inquilino o de cualquier otro, expulse a otro. También es lo que permite encontrar y eliminar el estado de sesión de un inquilino si alguna vez se elimina ese inquilino.
 
 Si un dispositivo necesita más de una conexión, da a cada una un sufijo: `{instanceId}:{tenant}:{deviceToken}:pub`, `…:sub`, y así sucesivamente. Todo lo que vaya después del tercer `:` queda a tu elección. Dos conexiones que comparten un mismo client id son dos clientes peleando por una sola sesión, y se desconectarán mutuamente en bucle. Un dispositivo que publica en una conexión y se suscribe a comandos en otra necesita un sufijo distinto para cada una.

@@ -200,7 +200,7 @@ Un dispositivo que todavía no tiene credencial puede registrarse por sí mismo,
 POST /api/device-management/provisioning/{tenant}/register
 ```
 
-- **Solo HTTPS.** La petición lleva el secreto de aprovisionamiento en el cuerpo. No existe el registro por MQTT: un dispositivo no puede registrarse conectándose.
+- **Solo HTTPS.** La petición lleva el secreto de aprovisionamiento en el cuerpo. No existe el registro por MQTT con un secreto. Un dispositivo que tiene un certificado de cliente puede registrarse cuando se conecta por primera vez por MQTT, mediante un [perfil de certificado](../guides/device-x509.md#registration), que no tiene secreto de aprovisionamiento y no usa este endpoint.
 - **Necesita el ingress de la API de la instancia**, que enruta `/api/<area>` a los servicios y elimina el prefijo. Con `ingress.enabled: false` la ruta no tiene ningún camino público. [`dcctl device register`](./dcctl.md#dcctl-device-register) usa el mismo host `--server` que los demás comandos.
 - **No hay cabecera `Authorization`.** La clave y el secreto de aprovisionamiento del cuerpo son la autenticación.
 

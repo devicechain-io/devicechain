@@ -115,5 +115,5 @@ dcctl device register --server dc.example.com --tenant acme \
 
 - **限制。**注册按来源地址、按租户、按副本限速，每个副本最多同时处理 64 个请求。数值以及各自的响应见[限制](../reference/device-protocol.md#self-registration-limits)。每租户上限属于租户[治理](../concepts/governance.md)的一部分，可以在其层级上或按租户设置（`provisioningRegistrationsPerSecond` 和 `provisioningBurst`）。
 - **指标与告警。**`provisioning_requests_total` 按结果统计每个请求，包括探测产生的 `auth_failed` 洪流。三条告警监视它：[`ProvisioningAuthFailuresSustained`、`ProvisioningRateLimited` 和 `ProvisioningMisconfigured`](../deployment/observability.md#self-registration-alerts)。计数器见[指标参考](../deployment/metrics-reference.md)。
-- **仅限 HTTPS。**设备不能通过 MQTT 连接来注册。
+- **使用密文的注册仅限 HTTPS。**持有设备群密文的设备不能通过 MQTT 连接来注册。持有客户端证书的设备可以：[证书配置](./device-x509.md#registration)会在它首次 MQTT 连接时为其注册，无需密文。
 - **不签发 MQTT_BASIC。**自注册只签发 `ACCESS_TOKEN` 凭据。配置所要求的凭据类型若此构建无法签发，则以 `501` 拒绝。
