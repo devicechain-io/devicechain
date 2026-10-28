@@ -84,14 +84,15 @@ mutation {
        token: "sn-000123-cert"
        deviceToken: "sensor-001"
        credentialType: "X509_CERTIFICATE"
+       credentialId: ""
        enabled: true
        certificatePem: "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----\n"
        trustAnchorToken: "acme-device-ca"
-     }) { token credentialId expiresAt certificate { subjectCn trustAnchor { token } } }
+     }) { token credentialId expiresAt }
    }
    ```
 
-3. 不要发送 `credentialId`；该类型会拒绝它。服务器把它计算为证书的 SHA-256 并返回。它是公开的，就是固定值（pin）。
+3. 如上所示将 `credentialId` 留空：架构要求该字段，而非空值会被该类型拒绝。服务器把它计算为证书的 SHA-256 并返回。它是公开的，就是固定值（pin）。
 
 平台在你创建凭据时验证证书链，并拒绝无法通过认证的凭据。一台设备最多可持有三个有效的证书凭据，因此可以在旧证书到期前先添加下一张。凭据的到期时间是整条证书链上最早的到期时间。
 

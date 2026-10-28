@@ -84,14 +84,15 @@ Use this when you create devices yourself and know each device's certificate.
        token: "sn-000123-cert"
        deviceToken: "sensor-001"
        credentialType: "X509_CERTIFICATE"
+       credentialId: ""
        enabled: true
        certificatePem: "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----\n"
        trustAnchorToken: "acme-device-ca"
-     }) { token credentialId expiresAt certificate { subjectCn trustAnchor { token } } }
+     }) { token credentialId expiresAt }
    }
    ```
 
-3. Do not send a `credentialId`; it is refused for this type. The server computes it as the SHA-256 of the certificate, and returns it. It is public, and it is the pin.
+3. Send `credentialId` empty, as above: the schema requires the field, and a non-empty value is refused for this type. The server computes it as the SHA-256 of the certificate, and returns it. It is public, and it is the pin.
 
 The platform verifies the chain when you create the credential, and refuses one that could not authenticate. A device can hold up to three live certificate credentials, so you can add the next certificate before the old one expires. The credential's expiry is the earliest expiry along the whole chain.
 

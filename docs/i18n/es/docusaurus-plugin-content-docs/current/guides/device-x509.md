@@ -84,14 +84,15 @@ Elige una para cada flota.
        token: "sn-000123-cert"
        deviceToken: "sensor-001"
        credentialType: "X509_CERTIFICATE"
+       credentialId: ""
        enabled: true
        certificatePem: "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----\n"
        trustAnchorToken: "acme-device-ca"
-     }) { token credentialId expiresAt certificate { subjectCn trustAnchor { token } } }
+     }) { token credentialId expiresAt }
    }
    ```
 
-3. No envíes un `credentialId`; se rechaza para este tipo. El servidor lo calcula como el SHA-256 del certificado y lo devuelve. Es público, y es la huella fijada.
+3. Envía `credentialId` vacío, como arriba: el esquema exige el campo, y un valor no vacío se rechaza para este tipo. El servidor lo calcula como el SHA-256 del certificado y lo devuelve. Es público, y es la huella fijada.
 
 La plataforma verifica la cadena al crear la credencial y rechaza una que no podría autenticar. Un dispositivo puede tener hasta tres credenciales de certificado activas, así que puedes añadir el siguiente certificado antes de que caduque el anterior. La caducidad de la credencial es la más temprana de toda la cadena.
 
