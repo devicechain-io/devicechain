@@ -68,7 +68,7 @@ func TestRebalanceEvensOutLeadershipOnARealCluster(t *testing.T) {
 		if err != nil || si.Cluster.Leader != excluded {
 			continue
 		}
-		stepDown(t, nc, n, servers[moved%2].Name())
+		stepDown(t, nc, js, n, servers[moved%2].Name())
 		moved++
 	}
 	waitFor(t, func() bool {
@@ -82,11 +82,11 @@ func TestRebalanceEvensOutLeadershipOnARealCluster(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan := replication.PlanRebalance(snap, 0)
+	plan := replication.PlanRebalance(snap, replication.PlanOptions{Movable: func(string) bool { return true }})
 	if len(plan.Moves) == 0 {
 		t.Fatalf("an unbalanced cluster %v produced no plan", before)
 	}
-	for _, r := range replication.ApplyMoves(context.Background(), nc, plan.Moves, 10*time.Second) {
+	for _, r := range replication.ApplyMoves(context.Background(), nc, js, plan.Moves, replication.ApplyOptions{PerMove: 10 * time.Second}) {
 		if r.Err != nil {
 			t.Errorf("move %+v: %v", r.Move, r.Err)
 		}
@@ -102,18 +102,23 @@ func TestRebalanceEvensOutLeadershipOnARealCluster(t *testing.T) {
 			t.Errorf("%s leads %d streams, want 3 of 9", s, n)
 		}
 	}
+	// A move planned from an old snapshot (the leader is not who the plan saw) is skipped, not sent.
+	stale := replication.Move{Stream: names[0], From: "not-the-leader", To: servers[0].Name()}
+	if res := replication.ApplyMoves(context.Background(), nc, js, []replication.Move{stale}, replication.ApplyOptions{PerMove: 5 * time.Second}); !res[0].Skipped || res[0].Err != nil {
+		t.Errorf("a stale move was not skipped: %+v", res[0])
+	}
 	snap, err = replication.Collect(js, exp)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if again := replication.PlanRebalance(snap, 0); len(again.StreamsBefore) == 0 || !again.StreamsBefore.Balanced() {
+	if again := replication.PlanRebalance(snap, replication.PlanOptions{Movable: func(string) bool { return true }}); len(again.StreamsBefore) == 0 || !again.StreamsBefore.Balanced() {
 		t.Errorf("plan on the result is not balanced: %v", again.StreamsBefore)
 	}
 }
 
-func stepDown(t *testing.T, nc *nats.Conn, stream, to string) {
+func stepDown(t *testing.T, nc *nats.Conn, js nats.JetStreamContext, stream, to string) {
 	t.Helper()
-	res := replication.ApplyMoves(context.Background(), nc, []replication.Move{{Stream: stream, To: to}}, 10*time.Second)
+	res := replication.ApplyMoves(context.Background(), nc, js, []replication.Move{{Stream: stream, From: leaderNow(t, js, stream), To: to}}, replication.ApplyOptions{PerMove: 10 * time.Second})
 	if res[0].Err != nil {
 		t.Fatalf("step down %s: %v", stream, res[0].Err)
 	}
@@ -128,4 +133,13 @@ func waitFor(t *testing.T, ok func() bool) {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
+}
+
+func leaderNow(t *testing.T, js nats.JetStreamContext, stream string) string {
+	t.Helper()
+	si, err := js.StreamInfo(stream)
+	if err != nil || si.Cluster == nil {
+		t.Fatalf("stream info %s: %v", stream, err)
+	}
+	return si.Cluster.Leader
 }

@@ -341,6 +341,8 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 	// Ahead of the release on purpose: the renewal restarts the broker, and doing that
 	// while the services are mid-roll means two disruptions overlapping instead of
 	// one finishing before the other starts.
+	// The broker's pods as they are now, so the leadership step runs only if they were replaced.
+	brokerBefore := brokerPodUIDs(ctx, typed, InstanceNamespace(st.Instance))
 	doing("checking the broker's certificate")
 	restarted, err := renewBrokerCertificate(ctx, typed, st)
 	if err != nil {
@@ -412,10 +414,10 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 		return err
 	}
 
-	// THE BROKER'S LEADERSHIP, EVEN AGAIN. Last, once nothing is left to roll: a roll leaves the
+	// THE BROKER'S LEADERSHIP, EVEN AGAIN, only if the broker's pods were replaced. Last, once nothing is left to roll: a roll leaves the
 	// server restarted last leading nothing, which costs latency on every upgrade that rolls the
 	// broker. Warns and never fails: see brokerbalance.go.
-	if (infra != nil || restarted) && !st.DryRun {
+	if !st.DryRun && brokerRolled(brokerBefore, brokerPodUIDs(ctx, typed, InstanceNamespace(st.Instance))) {
 		runBrokerRebalance(ctx, st, typed)
 	}
 

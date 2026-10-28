@@ -63,6 +63,17 @@ type group struct {
 	candidates []string
 }
 
+// PlanOptions bound a plan.
+type PlanOptions struct {
+	// Movable says which streams may have their leaders moved, by stream name (a consumer is judged
+	// by its stream). It is REQUIRED: nil means nothing is movable, never everything, because the
+	// caller knows what is unsafe to move (device data already acknowledged to the device) and this
+	// package does not.
+	Movable func(stream string) bool
+	// MaxMoves bounds the plan; zero or less means no bound beyond the rules below.
+	MaxMoves int
+}
+
 // PlanRebalance works out, from one snapshot, the leader step-downs that even out how many
 // streams and how many consumers each server leads.
 //
@@ -73,9 +84,11 @@ type group struct {
 // It only ever moves a group to a replica that is current and online, and only when that
 // strictly reduces the gap (the source leads at least two more than the destination), so it
 // terminates and never trades one imbalance for another. A group with no such replica (a
-// single-replica group, or one whose peers lag) is counted but left where it is. maxMoves
-// bounds the plan; zero or less means no bound beyond the above.
-func PlanRebalance(snap Snapshot, maxMoves int) RebalancePlan {
+// single-replica group, or one whose peers lag) is counted but left where it is. Groups on streams
+// the options do not name are neither counted nor moved.
+func PlanRebalance(snap Snapshot, opts PlanOptions) RebalancePlan {
+	maxMoves := opts.MaxMoves
+	movable := func(stream string) bool { return opts.Movable != nil && opts.Movable(stream) }
 	plan := RebalancePlan{}
 	servers := map[string]bool{}
 	var streams, consumers []group
@@ -94,12 +107,18 @@ func PlanRebalance(snap Snapshot, maxMoves int) RebalancePlan {
 		return cands
 	}
 	for _, o := range snap.Objects {
+		if !movable(o.Name) {
+			continue
+		}
 		c := collect(o.Leader, o.Peers)
 		if o.Leader != "" {
 			streams = append(streams, group{stream: o.Name, leader: o.Leader, candidates: c})
 		}
 	}
 	for _, c := range snap.Consumers {
+		if !movable(c.Stream) {
+			continue
+		}
 		cands := collect(c.Leader, c.Peers)
 		if c.Leader != "" && c.Durable {
 			consumers = append(consumers, group{stream: c.Stream, consumer: c.Name, leader: c.Leader, candidates: cands})

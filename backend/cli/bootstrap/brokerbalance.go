@@ -64,12 +64,12 @@ func rebalanceBrokerLeadership(ctx context.Context, st *State, typed *kubernetes
 	if len(pods) < 2 {
 		return "single broker server; nothing to rebalance", nil
 	}
-	local, stop, err := forwardPort(restCfg, ns, pods[0].Name, int(cfg.Infrastructure.Nats.Port))
+	local, stop, err := forwardPortCtx(ctx, restCfg, ns, pods[0].Name, int(cfg.Infrastructure.Nats.Port))
 	if err != nil {
 		return "", fmt.Errorf("opening a port-forward to broker pod %s: %w", pods[0].Name, err)
 	}
 	defer stop()
-	nc, err := dialBroker(fmt.Sprintf("nats://127.0.0.1:%d", local), cfg.Infrastructure.Nats)
+	nc, err := dialBrokerCtx(ctx, fmt.Sprintf("nats://127.0.0.1:%d", local), cfg.Infrastructure.Nats)
 	if err != nil {
 		return "", err
 	}
@@ -85,20 +85,33 @@ func rebalanceBrokerLeadership(ctx context.Context, st *State, typed *kubernetes
 	exp := messaging.ReplicationExpectationFor(st.Instance, int(cfg.Infrastructure.Nats.StreamReplicas), areas,
 		cfg.Infrastructure.Nats.Auth.IdentityAccount)
 
-	// Settle: every group led, every replica current. Bounded; a broker that does not settle is
-	// planned over as it is, because the plan only moves onto replicas that report current.
+	// 🔴 ONLY STREAMS OFF THE ACKNOWLEDGED-INGEST PATH ARE EVER MOVED. A leader change on the broker's
+	// MQTT streams or the capture stream has lost messages already PUBACKed to devices (59,964 in one
+	// capture step-down on GKE), and a latency imbalance is never worth that. The set is a positive
+	// list derived from the stream declarations (messaging.RebalanceableStreams); there is no flag
+	// that widens it. The imbalance on the ingest streams clears at the next roll, or on its own.
+	movable := map[string]bool{}
+	for _, n := range messaging.RebalanceableStreams(st.Instance) {
+		movable[n] = true
+	}
+	isMovable := func(stream string) bool { return movable[stream] }
+
+	// Settle: every movable group led, every replica of it current. Bounded, and when it does not
+	// settle nothing is planned: a plan over a broker still catching up would move leadership onto
+	// a replica that cannot take it.
 	var snap replication.Snapshot
 	deadline := time.Now().Add(brokerRebalanceSettle)
 	for {
 		snap, err = replication.Collect(js, exp)
-		if err == nil && brokerSettled(snap) {
+		if err == nil && brokerSettled(snap, isMovable) {
 			break
 		}
 		if time.Now().After(deadline) || ctx.Err() != nil {
 			if err != nil {
 				return "", fmt.Errorf("reading the broker's leadership: %w", err)
 			}
-			break
+			return "", fmt.Errorf("the broker had not settled after %s (a group without a leader, or a replica not current), so no "+
+				"leadership was moved; run `dcctl broker rebalance %s` once it has", brokerRebalanceSettle, st.Instance)
 		}
 		select {
 		case <-ctx.Done():
@@ -106,21 +119,38 @@ func rebalanceBrokerLeadership(ctx context.Context, st *State, typed *kubernetes
 		}
 	}
 
-	plan := replication.PlanRebalance(snap, brokerRebalanceMaxMoves)
+	plan := replication.PlanRebalance(snap, replication.PlanOptions{Movable: isMovable, MaxMoves: brokerRebalanceMaxMoves})
 	if len(plan.Moves) == 0 {
 		return summarizeRebalance(plan, nil), nil
 	}
-	results := replication.ApplyMoves(ctx, nc, plan.Moves, brokerRebalancePerMove)
+	results := replication.ApplyMoves(ctx, nc, js, plan.Moves, replication.ApplyOptions{PerMove: brokerRebalancePerMove})
 	return summarizeRebalance(plan, results), rebalanceFailures(results)
 }
 
-// brokerSettled is whether every replicated group has a leader and all its replicas are current.
-func brokerSettled(snap replication.Snapshot) bool {
+// brokerSettled is whether every movable group has a leader and all its replicas are current,
+// consumers' included.
+func brokerSettled(snap replication.Snapshot, movable func(string) bool) bool {
 	for _, o := range snap.Objects {
+		if !movable(o.Name) {
+			continue
+		}
 		if o.Replicas > 1 && o.Leader == "" {
 			return false
 		}
 		for _, p := range o.Peers {
+			if !p.Current || p.Offline {
+				return false
+			}
+		}
+	}
+	for _, c := range snap.Consumers {
+		if !movable(c.Stream) || !c.Durable {
+			continue
+		}
+		if len(c.Peers) > 0 && c.Leader == "" {
+			return false
+		}
+		for _, p := range c.Peers {
 			if !p.Current || p.Offline {
 				return false
 			}
@@ -167,8 +197,20 @@ func summarizeRebalance(plan replication.RebalancePlan, results []replication.Mo
 	if len(plan.Moves) == 0 {
 		return "leadership already even (" + spreadLine("streams", plan.StreamsBefore, plan.Servers) + ")"
 	}
-	landed := len(results) - countFailed(results)
-	return fmt.Sprintf("%d of %d leader moves landed; %s -> %s; %s -> %s", landed, len(plan.Moves),
+	landed, skipped := 0, 0
+	for _, r := range results {
+		switch {
+		case r.Skipped:
+			skipped++
+		case r.Err == nil:
+			landed++
+		}
+	}
+	extra := ""
+	if skipped > 0 {
+		extra = fmt.Sprintf(" (%d no longer needed)", skipped)
+	}
+	return fmt.Sprintf("%d of %d leader moves landed%s; %s -> %s; %s -> %s", landed, len(plan.Moves), extra,
 		spreadLine("streams", plan.StreamsBefore, plan.Servers), spreadLine("streams", plan.StreamsAfter, plan.Servers),
 		spreadLine("consumers", plan.ConsumersBefore, plan.Servers), spreadLine("consumers", plan.ConsumersAfter, plan.Servers))
 }
@@ -229,4 +271,36 @@ func RebalanceBroker(ctx context.Context, opts RebalanceBrokerOptions) error {
 		fmt.Println(summary)
 	}
 	return err
+}
+
+// brokerPodUIDs maps each broker pod's name to its UID. A roll replaces the pods, so a pod whose UID
+// differs afterwards was restarted. nil when the pods could not be listed.
+func brokerPodUIDs(ctx context.Context, typed *kubernetes.Clientset, namespace string) map[string]string {
+	pods, err := natsPods(ctx, typed, namespace)
+	if err != nil {
+		return nil
+	}
+	out := make(map[string]string, len(pods))
+	for _, p := range pods {
+		out[p.Name] = string(p.UID)
+	}
+	return out
+}
+
+// brokerRolled is whether the broker's pods differ between two readings. An unreadable "before"
+// (nil) counts as rolled: not knowing is no reason to skip a step that is harmless on a broker that
+// is already even.
+func brokerRolled(before, after map[string]string) bool {
+	if before == nil || after == nil {
+		return true
+	}
+	if len(before) != len(after) {
+		return true
+	}
+	for name, uid := range after {
+		if before[name] != uid {
+			return true
+		}
+	}
+	return false
 }

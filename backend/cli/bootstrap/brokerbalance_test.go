@@ -12,7 +12,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/replication"
+	"github.com/devicechain-io/dc-microservice/streams"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -52,7 +54,7 @@ func TestTheRebalanceSummaryShowsBeforeAndAfter(t *testing.T) {
 		{Name: "a", Replicas: 3, Leader: "n1", Peers: []replication.Peer{{Name: "n0", Current: true}, {Name: "n2", Current: true}}},
 		{Name: "b", Replicas: 3, Leader: "n1", Peers: []replication.Peer{{Name: "n0", Current: true}, {Name: "n2", Current: true}}},
 		{Name: "c", Replicas: 3, Leader: "n1", Peers: []replication.Peer{{Name: "n0", Current: true}, {Name: "n2", Current: true}}},
-	}}, 0)
+	}}, replication.PlanOptions{Movable: func(string) bool { return true }})
 	results := make([]replication.MoveResult, len(plan.Moves))
 	for i, m := range plan.Moves {
 		results[i] = replication.MoveResult{Move: m}
@@ -73,24 +75,99 @@ func TestTheRebalanceSummaryShowsBeforeAndAfter(t *testing.T) {
 }
 
 func TestAnEvenBrokerIsLeftAlone(t *testing.T) {
-	plan := replication.PlanRebalance(replication.Snapshot{}, 0)
+	plan := replication.PlanRebalance(replication.Snapshot{}, replication.PlanOptions{})
 	if got := summarizeRebalance(plan, nil); !strings.Contains(got, "already even") {
 		t.Errorf("got %q", got)
 	}
 }
 
 func TestAnUnsettledBrokerIsNotPlannedOver(t *testing.T) {
+	all := func(string) bool { return true }
 	lagging := replication.Snapshot{Objects: []replication.Object{{Name: "a", Replicas: 3, Leader: "n1",
 		Peers: []replication.Peer{{Name: "n2", Current: false}}}}}
-	if brokerSettled(lagging) {
+	if brokerSettled(lagging, all) {
 		t.Error("a replica that is not current must hold the plan back")
 	}
 	leaderless := replication.Snapshot{Objects: []replication.Object{{Name: "a", Replicas: 3}}}
-	if brokerSettled(leaderless) {
+	if brokerSettled(leaderless, all) {
 		t.Error("a replicated group with no leader must hold the plan back")
 	}
-	if !brokerSettled(replication.Snapshot{}) {
+	// A consumer's replicas count as much as a stream's.
+	laggingConsumer := replication.Snapshot{Consumers: []replication.Consumer{{Stream: "a", Name: "c", Durable: true, Leader: "n1",
+		Peers: []replication.Peer{{Name: "n2", Current: false}}}}}
+	if brokerSettled(laggingConsumer, all) {
+		t.Error("a consumer replica that is not current must hold the plan back")
+	}
+	// What is not movable is not waited on: an ingest stream mid-election does not hold the rest.
+	if !brokerSettled(lagging, func(string) bool { return false }) {
+		t.Error("a group that is never moved should not hold the plan back")
+	}
+	if !brokerSettled(replication.Snapshot{}, all) {
 		t.Error("an empty snapshot has nothing to wait for")
+	}
+}
+
+func TestBrokerRolledOnlyWhenThePodsWereReplaced(t *testing.T) {
+	same := map[string]string{"dc-nats-0": "a", "dc-nats-1": "b", "dc-nats-2": "c"}
+	if brokerRolled(same, map[string]string{"dc-nats-0": "a", "dc-nats-1": "b", "dc-nats-2": "c"}) {
+		t.Error("pods that did not change were read as a roll")
+	}
+	if !brokerRolled(same, map[string]string{"dc-nats-0": "a", "dc-nats-1": "b", "dc-nats-2": "NEW"}) {
+		t.Error("a replaced pod was not read as a roll")
+	}
+	if !brokerRolled(same, map[string]string{"dc-nats-0": "a"}) {
+		t.Error("a changed pod count was not read as a roll")
+	}
+	if !brokerRolled(nil, same) {
+		t.Error("an unreadable reading must not skip the step")
+	}
+}
+
+// 🔴 THE BLOCKER'S TEST. No stream on the acknowledged-ingest path may be named movable, whatever
+// else changes: the broker's MQTT streams, the device capture stream and everything an ingest area
+// writes. A leader change on them has lost messages already PUBACKed to devices.
+func TestNoIngestStreamIsEverMovable(t *testing.T) {
+	movable := map[string]bool{}
+	for _, n := range messaging.RebalanceableStreams("inst") {
+		movable[n] = true
+	}
+	if len(movable) == 0 {
+		t.Fatal("nothing is movable: the test would pass over nothing")
+	}
+	for _, n := range []string{
+		messaging.MqttSessionStore, "$MQTT_msgs", "$MQTT_rmsgs", "$MQTT_out", "$MQTT_sess",
+		messaging.StreamName("inst", streams.DeviceEventsCapture),
+		messaging.StreamName("inst", streams.InboundEvents),
+		messaging.StreamName("inst", streams.DeviceReports),
+		messaging.StreamName("inst", streams.CommandResponses),
+		messaging.StreamName("inst", streams.FailedDecode),
+		"KV_inst_dc_leases", "some-undeclared-stream",
+	} {
+		if movable[n] {
+			t.Errorf("%s is movable", n)
+		}
+	}
+	for _, st := range streams.All {
+		if st.OnIngestPath() && movable[messaging.StreamName("inst", st.Suffix)] {
+			t.Errorf("%s is on the ingest path and movable", st.Suffix)
+		}
+	}
+	// And the other side: the streams that carry no acknowledged ingest are moved.
+	for _, suffix := range []string{streams.ResolvedEvents, streams.DerivedEvents, streams.AlarmEvents} {
+		if !movable[messaging.StreamName("inst", suffix)] {
+			t.Errorf("%s should be movable", suffix)
+		}
+	}
+	// A plan over a snapshot holding an ingest stream led by one server never touches it.
+	peers := []replication.Peer{{Name: "n1", Current: true}, {Name: "n2", Current: true}}
+	var snap replication.Snapshot
+	for _, n := range []string{"$MQTT_msgs", "$MQTT_rmsgs", "inst_device-events-capture", "inst_inbound-events"} {
+		snap.Objects = append(snap.Objects, replication.Object{Name: n, Replicas: 3, Leader: "n0", Peers: peers})
+		snap.Consumers = append(snap.Consumers, replication.Consumer{Stream: n, Name: "c", Durable: true, Leader: "n0", Peers: peers})
+	}
+	plan := replication.PlanRebalance(snap, replication.PlanOptions{Movable: func(n string) bool { return movable[n] }})
+	if len(plan.Moves) != 0 {
+		t.Fatalf("a plan moved ingest groups: %+v", plan.Moves)
 	}
 }
 

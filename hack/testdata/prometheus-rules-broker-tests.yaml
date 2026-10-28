@@ -128,8 +128,10 @@ tests:
         exp_alerts: []
 
   # Leadership after a rolling restart: dc-nats-0 (restarted last) leads nothing, dc-nats-1 and
-  # dc-nats-2 lead six streams each. dc-nats-0 has no is_stream_leader="true" series at all, so
-  # only the connection series reveals that it exists; the rule has to count it as zero.
+  # dc-nats-2 lead six replicated streams each. dc-nats-0 has no is_stream_leader="true" series at
+  # all, so only the connection series reveals that it exists; the rule has to count it as zero.
+  # Only streams the rebalancer may move are counted, and only those the services report at more
+  # than one replica.
   - name: a server that leads nothing fires after thirty minutes, and clears once leadership is even
     interval: 1m
     input_series:
@@ -139,54 +141,78 @@ tests:
         values: '10x120'
       - series: 'nats_varz_connections{namespace="dci-devicechain", pod="dc-nats-2"}'
         values: '10x120'
-      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="s1", is_stream_leader="true"}'
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-0", job="devicechain/event-processing", stream="devicechain_resolved-events"}'
+        values: '3x120'
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-0", job="devicechain/event-processing", stream="devicechain_derived-events"}'
+        values: '3x120'
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-0", job="devicechain/event-processing", stream="devicechain_alarm-events"}'
+        values: '3x120'
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-0", job="devicechain/event-processing", stream="devicechain_device-attribute"}'
+        values: '3x120'
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-0", job="devicechain/event-processing", stream="devicechain_device-commands"}'
+        values: '3x120'
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-0", job="devicechain/event-processing", stream="devicechain_device-desired"}'
+        values: '3x120'
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-0", job="devicechain/event-processing", stream="devicechain_device-roster"}'
+        values: '3x120'
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-0", job="devicechain/event-processing", stream="devicechain_entity-deleted"}'
+        values: '3x120'
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-0", job="devicechain/event-processing", stream="devicechain_raise-alarm"}'
+        values: '3x120'
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-0", job="devicechain/event-processing", stream="devicechain_failed-events"}'
+        values: '3x120'
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-0", job="devicechain/event-processing", stream="devicechain_dead-letters"}'
+        values: '3x120'
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-0", job="devicechain/event-processing", stream="devicechain_max-deliveries"}'
+        values: '3x120'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_resolved-events", is_stream_leader="true"}'
         values: '1x60 stale'
-      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="s2", is_stream_leader="true"}'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_derived-events", is_stream_leader="true"}'
         values: '1x60 stale'
-      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="s3", is_stream_leader="true"}'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_alarm-events", is_stream_leader="true"}'
         values: '1x60 stale'
-      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="s4", is_stream_leader="true"}'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_device-attribute", is_stream_leader="true"}'
         values: '1x60 stale'
-      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="s5", is_stream_leader="true"}'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_device-commands", is_stream_leader="true"}'
         values: '1x60 stale'
-      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="s6", is_stream_leader="true"}'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_device-desired", is_stream_leader="true"}'
         values: '1x60 stale'
-      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-2", stream_name="s7", is_stream_leader="true"}'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-2", stream_name="devicechain_device-roster", is_stream_leader="true"}'
         values: '1x60 stale'
-      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-2", stream_name="s8", is_stream_leader="true"}'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-2", stream_name="devicechain_entity-deleted", is_stream_leader="true"}'
         values: '1x60 stale'
-      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-2", stream_name="s9", is_stream_leader="true"}'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-2", stream_name="devicechain_raise-alarm", is_stream_leader="true"}'
         values: '1x60 stale'
-      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-2", stream_name="s10", is_stream_leader="true"}'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-2", stream_name="devicechain_failed-events", is_stream_leader="true"}'
         values: '1x60 stale'
-      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-2", stream_name="s11", is_stream_leader="true"}'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-2", stream_name="devicechain_dead-letters", is_stream_leader="true"}'
         values: '1x60 stale'
-      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-2", stream_name="s12", is_stream_leader="true"}'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-2", stream_name="devicechain_max-deliveries", is_stream_leader="true"}'
         values: '1x60 stale'
       # Minute 60: the rebalance ran; every server leads four of the twelve.
-      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-0", stream_name="s1", is_stream_leader="true"}'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-0", stream_name="devicechain_resolved-events", is_stream_leader="true"}'
         values: '_x60 1x59'
-      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-0", stream_name="s2", is_stream_leader="true"}'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-0", stream_name="devicechain_derived-events", is_stream_leader="true"}'
         values: '_x60 1x59'
-      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-0", stream_name="s7", is_stream_leader="true"}'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-0", stream_name="devicechain_device-roster", is_stream_leader="true"}'
         values: '_x60 1x59'
-      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-0", stream_name="s8", is_stream_leader="true"}'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-0", stream_name="devicechain_entity-deleted", is_stream_leader="true"}'
         values: '_x60 1x59'
-      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="s9", is_stream_leader="true"}'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_raise-alarm", is_stream_leader="true"}'
         values: '_x60 1x59'
-      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="s10", is_stream_leader="true"}'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_failed-events", is_stream_leader="true"}'
         values: '_x60 1x59'
-      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="s11", is_stream_leader="true"}'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_dead-letters", is_stream_leader="true"}'
         values: '_x60 1x59'
-      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="s12", is_stream_leader="true"}'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_max-deliveries", is_stream_leader="true"}'
         values: '_x60 1x59'
-      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-2", stream_name="s3", is_stream_leader="true"}'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-2", stream_name="devicechain_alarm-events", is_stream_leader="true"}'
         values: '_x60 1x59'
-      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-2", stream_name="s4", is_stream_leader="true"}'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-2", stream_name="devicechain_device-attribute", is_stream_leader="true"}'
         values: '_x60 1x59'
-      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-2", stream_name="s5", is_stream_leader="true"}'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-2", stream_name="devicechain_device-commands", is_stream_leader="true"}'
         values: '_x60 1x59'
-      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-2", stream_name="s6", is_stream_leader="true"}'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-2", stream_name="devicechain_device-desired", is_stream_leader="true"}'
         values: '_x60 1x59'
     alert_rule_test:
       - eval_time: 25m
@@ -200,25 +226,137 @@ tests:
               devicechain_instance: devicechain
             exp_annotations:
               summary: "one broker server leads far fewer streams than the others"
-              description: "At least one broker server leads fewer than half the streams an even share would give it, so the others carry the replication and acknowledgement work for it. After a rolling restart of the broker the server restarted last leads nothing, and at the load this was measured under that doubled publish acknowledgement latency and cost a few percent of HTTP ingest. dcctl upgrade evens leadership out after it rolls the broker, so this fires after a restart done any other way (a node drain, a pod loss, a manual rollout), or when that step was skipped or warned. Run dcctl broker rebalance <instance> to even it out; each move is a brief election for one stream. If it keeps returning, check the broker pods for repeated restarts."
+              description: "At least one broker server leads fewer than half the streams an even share would give it, so the others carry the replication and acknowledgement work for it. Only the streams that dcctl is allowed to move are counted: this instance's replicated streams other than the device-ingest ones (the broker's MQTT streams, the device capture stream and every stream an ingest area writes), which are never rebalanced because a leader change on them can lose messages already acknowledged to a device. After a rolling restart of the broker the server restarted last leads nothing, and at the load this was measured under that doubled publish acknowledgement latency and cost a few percent of HTTP ingest. dcctl upgrade evens leadership out after it rolls the broker, so this fires after a restart done any other way (a node drain, a pod loss, a manual rollout), or when that step was skipped or warned. Run dcctl broker rebalance <instance> to even it out; each move is a brief election for one stream. If it keeps returning, check the broker pods for repeated restarts."
       - eval_time: 100m
         alertname: BrokerLeadershipImbalanced
         exp_alerts: []
 
-  - name: an evenly led broker, and a broker too small to judge, stay quiet
+  # The ingest streams are never rebalanced, so an imbalance on them alone must not page: the alert
+  # could never clear. dc-nats-0 leads none of them, dc-nats-1 leads them all.
+  - name: an imbalance on the ingest streams alone stays quiet
     interval: 1m
     input_series:
       - series: 'nats_varz_connections{namespace="dci-devicechain", pod="dc-nats-0"}'
         values: '10x60'
       - series: 'nats_varz_connections{namespace="dci-devicechain", pod="dc-nats-1"}'
         values: '10x60'
-      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-0", stream_name="a", is_stream_leader="true"}'
+      - series: 'nats_varz_connections{namespace="dci-devicechain", pod="dc-nats-2"}'
+        values: '10x60'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_inbound-events", is_stream_leader="true"}'
         values: '1x60'
-      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-0", stream_name="b", is_stream_leader="true"}'
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-0", job="devicechain/event-processing", stream="devicechain_inbound-events"}'
+        values: '3x60'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_device-events-capture", is_stream_leader="true"}'
         values: '1x60'
-      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="c", is_stream_leader="true"}'
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-0", job="devicechain/event-processing", stream="devicechain_device-events-capture"}'
+        values: '3x60'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_device-reports", is_stream_leader="true"}'
         values: '1x60'
-      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="d", is_stream_leader="true"}'
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-0", job="devicechain/event-processing", stream="devicechain_device-reports"}'
+        values: '3x60'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_command-responses", is_stream_leader="true"}'
+        values: '1x60'
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-0", job="devicechain/event-processing", stream="devicechain_command-responses"}'
+        values: '3x60'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_failed-decode", is_stream_leader="true"}'
+        values: '1x60'
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-0", job="devicechain/event-processing", stream="devicechain_failed-decode"}'
+        values: '3x60'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="$MQTT_msgs", is_stream_leader="true"}'
+        values: '1x60'
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-0", job="devicechain/event-processing", stream="$MQTT_msgs"}'
+        values: '3x60'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="$MQTT_rmsgs", is_stream_leader="true"}'
+        values: '1x60'
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-0", job="devicechain/event-processing", stream="$MQTT_rmsgs"}'
+        values: '3x60'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="$MQTT_out", is_stream_leader="true"}'
+        values: '1x60'
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-0", job="devicechain/event-processing", stream="$MQTT_out"}'
+        values: '3x60'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="$MQTT_sess", is_stream_leader="true"}'
+        values: '1x60'
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-0", job="devicechain/event-processing", stream="$MQTT_sess"}'
+        values: '3x60'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: BrokerLeadershipImbalanced
+        exp_alerts: []
+
+  - name: an evenly led broker stays quiet
+    interval: 1m
+    input_series:
+      - series: 'nats_varz_connections{namespace="dci-devicechain", pod="dc-nats-0"}'
+        values: '10x60'
+      - series: 'nats_varz_connections{namespace="dci-devicechain", pod="dc-nats-1"}'
+        values: '10x60'
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-0", job="devicechain/event-processing", stream="devicechain_resolved-events"}'
+        values: '3x60'
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-0", job="devicechain/event-processing", stream="devicechain_derived-events"}'
+        values: '3x60'
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-0", job="devicechain/event-processing", stream="devicechain_alarm-events"}'
+        values: '3x60'
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-0", job="devicechain/event-processing", stream="devicechain_device-attribute"}'
+        values: '3x60'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-0", stream_name="devicechain_resolved-events", is_stream_leader="true"}'
+        values: '1x60'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_derived-events", is_stream_leader="true"}'
+        values: '1x60'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-0", stream_name="devicechain_alarm-events", is_stream_leader="true"}'
+        values: '1x60'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_device-attribute", is_stream_leader="true"}'
+        values: '1x60'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: BrokerLeadershipImbalanced
+        exp_alerts: []
+
+  # Single-replica streams cannot be moved, so they are not judged: a server leading none of them is
+  # what a broker with replica factor one looks like.
+  - name: single-replica streams are not judged
+    interval: 1m
+    input_series:
+      - series: 'nats_varz_connections{namespace="dci-devicechain", pod="dc-nats-0"}'
+        values: '10x60'
+      - series: 'nats_varz_connections{namespace="dci-devicechain", pod="dc-nats-1"}'
+        values: '10x60'
+      - series: 'nats_varz_connections{namespace="dci-devicechain", pod="dc-nats-2"}'
+        values: '10x60'
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-0", job="devicechain/event-processing", stream="devicechain_resolved-events"}'
+        values: '1x60'
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-0", job="devicechain/event-processing", stream="devicechain_derived-events"}'
+        values: '1x60'
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-0", job="devicechain/event-processing", stream="devicechain_alarm-events"}'
+        values: '1x60'
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-0", job="devicechain/event-processing", stream="devicechain_device-attribute"}'
+        values: '1x60'
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-0", job="devicechain/event-processing", stream="devicechain_device-commands"}'
+        values: '1x60'
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-0", job="devicechain/event-processing", stream="devicechain_device-desired"}'
+        values: '1x60'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_resolved-events", is_stream_leader="true"}'
+        values: '1x60'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_derived-events", is_stream_leader="true"}'
+        values: '1x60'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_alarm-events", is_stream_leader="true"}'
+        values: '1x60'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_device-attribute", is_stream_leader="true"}'
+        values: '1x60'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_device-commands", is_stream_leader="true"}'
+        values: '1x60'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_device-desired", is_stream_leader="true"}'
+        values: '1x60'
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-0", job="devicechain/event-processing", stream="devicechain_device-roster"}'
+        values: '1x60'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_device-roster", is_stream_leader="true"}'
+        values: '1x60'
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-0", job="devicechain/event-processing", stream="devicechain_entity-deleted"}'
+        values: '1x60'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_entity-deleted", is_stream_leader="true"}'
+        values: '1x60'
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-0", job="devicechain/event-processing", stream="devicechain_raise-alarm"}'
+        values: '1x60'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_raise-alarm", is_stream_leader="true"}'
         values: '1x60'
     alert_rule_test:
       - eval_time: 45m
@@ -233,9 +371,13 @@ tests:
         values: '10x60'
       - series: 'nats_varz_connections{namespace="dci-devicechain", pod="dc-nats-1"}'
         values: '10x60'
-      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="a", is_stream_leader="true"}'
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-0", job="devicechain/event-processing", stream="devicechain_resolved-events"}'
+        values: '3x60'
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-0", job="devicechain/event-processing", stream="devicechain_derived-events"}'
+        values: '3x60'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_resolved-events", is_stream_leader="true"}'
         values: '1x60'
-      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="b", is_stream_leader="true"}'
+      - series: 'nats_stream_total_messages{namespace="dci-devicechain", pod="dc-nats-1", stream_name="devicechain_derived-events", is_stream_leader="true"}'
         values: '1x60'
     alert_rule_test:
       - eval_time: 45m

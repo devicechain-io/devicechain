@@ -20,6 +20,10 @@ func peers(leader string, all ...string) []Peer {
 	return out
 }
 
+func everything(string) bool { return true }
+
+var all = PlanOptions{Movable: everything}
+
 var three = []string{"dc-nats-0", "dc-nats-1", "dc-nats-2"}
 
 // afterRoll is the placement the GKE round measured: the last server restarted leads nothing.
@@ -35,7 +39,7 @@ func afterRoll() Snapshot {
 }
 
 func TestPlanRebalanceEvensOutAServerThatLeadsNothing(t *testing.T) {
-	plan := PlanRebalance(afterRoll(), 0)
+	plan := PlanRebalance(afterRoll(), all)
 	if plan.StreamsBefore["dc-nats-0"] != 0 {
 		t.Fatalf("fixture should leave dc-nats-0 leading nothing: %v", plan.StreamsBefore)
 	}
@@ -68,7 +72,7 @@ func TestPlanRebalanceLeavesABalancedBrokerAlone(t *testing.T) {
 		l := three[i%3]
 		snap.Objects = append(snap.Objects, Object{Name: fmt.Sprint("s", i), Replicas: 3, Leader: l, Peers: peers(l, three...)})
 	}
-	if plan := PlanRebalance(snap, 0); len(plan.Moves) != 0 {
+	if plan := PlanRebalance(snap, all); len(plan.Moves) != 0 {
 		t.Fatalf("balanced broker produced moves: %+v", plan.Moves)
 	}
 }
@@ -82,7 +86,7 @@ func TestPlanRebalanceNeverMovesToAnUnfitReplica(t *testing.T) {
 	}
 	// Single replica groups cannot move at all.
 	snap.Objects = append(snap.Objects, Object{Name: "r1", Replicas: 1, Leader: "a"})
-	if plan := PlanRebalance(snap, 0); len(plan.Moves) != 0 {
+	if plan := PlanRebalance(snap, all); len(plan.Moves) != 0 {
 		t.Fatalf("moved to a lagging or offline replica: %+v", plan.Moves)
 	}
 }
@@ -94,7 +98,7 @@ func TestPlanRebalanceOnlyMovesToAReplicaOfTheGroup(t *testing.T) {
 		{Name: "z", Replicas: 2, Leader: "a", Peers: []Peer{{Name: "b", Current: true}}},
 		{Name: "w", Replicas: 1, Leader: "c"},
 	}}
-	plan := PlanRebalance(snap, 0)
+	plan := PlanRebalance(snap, all)
 	for _, m := range plan.Moves {
 		if m.To != "b" {
 			t.Errorf("moved %s to %s, which does not replicate it", m.Stream, m.To)
@@ -106,7 +110,7 @@ func TestPlanRebalanceOnlyMovesToAReplicaOfTheGroup(t *testing.T) {
 }
 
 func TestPlanRebalanceHonoursTheBound(t *testing.T) {
-	if plan := PlanRebalance(afterRoll(), 2); len(plan.Moves) != 2 {
+	if plan := PlanRebalance(afterRoll(), PlanOptions{Movable: everything, MaxMoves: 2}); len(plan.Moves) != 2 {
 		t.Fatalf("want exactly 2 moves, got %d", len(plan.Moves))
 	}
 }
@@ -148,11 +152,31 @@ func TestPlanRebalanceDoesNotSwapAnExtraGroupBetweenServers(t *testing.T) {
 		}
 		snap.Objects = append(snap.Objects, Object{Name: fmt.Sprint("s", i), Replicas: 3, Leader: l, Peers: peers(l, three...)})
 	}
-	plan := PlanRebalance(snap, 0)
+	plan := PlanRebalance(snap, all)
 	if hi, lo := plan.StreamsBefore.Max(); hi-lo != 1 {
 		t.Fatalf("fixture should differ by exactly one: %v", plan.StreamsBefore)
 	}
 	if len(plan.Moves) != 0 {
 		t.Fatalf("moved groups between servers that differ by one: %+v", plan.Moves)
+	}
+}
+
+// Ingest streams are never moved, and with no Movable at all nothing is: a plan that does not know
+// what is unsafe moves nothing.
+func TestPlanRebalanceOnlyTouchesWhatTheCallerNames(t *testing.T) {
+	snap := afterRoll()
+	none := PlanRebalance(snap, PlanOptions{})
+	if len(none.Moves) != 0 {
+		t.Fatalf("a plan with no Movable moved %d groups", len(none.Moves))
+	}
+	noS0 := func(stream string) bool { return stream != "s0" && stream != "s1" }
+	plan := PlanRebalance(snap, PlanOptions{Movable: noS0})
+	for _, m := range plan.Moves {
+		if m.Stream == "s0" || m.Stream == "s1" {
+			t.Errorf("moved %s, which the caller did not name", m.Stream)
+		}
+	}
+	if len(plan.Moves) == 0 {
+		t.Fatal("expected moves on the streams that are named")
 	}
 }

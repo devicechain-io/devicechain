@@ -110,10 +110,15 @@ servers lead everything: at the load this was measured under, publish acknowledg
 roughly doubled. ` + "`dcctl upgrade`" + ` does this after it rolls the broker; this runs the same step on
 demand, for a broker restarted some other way (a node drain, a pod loss).
 
-It asks the leader of each over-loaded group to hand over to a replica that is current, and
-moves nothing else: no data, no configuration. A broker that is already even is left alone. It
-is safe to run on a live instance, and each move is a brief leader election for one stream or
-consumer.`,
+It asks the leader of each over-loaded group to hand over to a replica that is current, one
+group at a time, each waiting for the new leader to be current, and moves nothing else: no data,
+no configuration. A broker that is already even is left alone. Each move is a brief leader
+election for one stream or consumer.
+
+Streams that hold device data already acknowledged to the device are never moved, and there is no
+option to include them: the broker's MQTT streams, the device capture stream and every stream an
+ingest service writes. A leader change on them has lost messages devices had been told were safe,
+so their imbalance clears at the next broker roll, or on its own.`,
 	Example: `  dcctl broker rebalance devicechain
   dcctl broker rebalance devicechain --kube-context kind-devicechain`,
 	Args: cobra.ExactArgs(1),
