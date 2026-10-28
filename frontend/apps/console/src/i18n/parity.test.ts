@@ -117,6 +117,8 @@ describe('the shipped registries carry every namespace', () => {
   // module, which registers it; they are deliberately not in config.ts's first-download bundle.
   const LAZY_ENGLISH: Record<string, () => Promise<unknown>> = {
     trustAnchors: () => import('@/routes/trust-anchors/catalog'),
+    adminNav: () => import('@/routes/admin/catalog'),
+    aiProviders: () => import('@/routes/admin/ai-providers/catalog'),
   };
 
   it('the English bundle registers every namespace, each wired to its own file', async () => {

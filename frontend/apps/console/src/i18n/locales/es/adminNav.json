@@ -1,0 +1,15 @@
+{
+  "adminPlatform": "Plataforma",
+  "adminTenants": "Inquilinos",
+  "adminList": "Lista",
+  "adminTiers": "Niveles",
+  "adminIdentities": "Identidades",
+  "adminRoles": "Roles",
+  "adminIdentityProviders": "Proveedores de identidad",
+  "adminAiProviders": "Proveedores de IA",
+  "adminAiPackaging": "Paquetes de IA",
+  "adminSettings": "Configuración",
+  "adminBadge": "Admin",
+  "adminTooltip": "Administración de DeviceChain",
+  "adminDeletions": "Eliminaciones"
+}

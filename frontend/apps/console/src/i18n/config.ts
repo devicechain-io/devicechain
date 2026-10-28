@@ -46,7 +46,6 @@ import enIdentities from './locales/en/identities.json';
 import enRoles from './locales/en/roles.json';
 import enMembers from './locales/en/members.json';
 import enSecurity from './locales/en/security.json';
-import enAiProviders from './locales/en/aiProviders.json';
 import enIdentityProviders from './locales/en/identityProviders.json';
 import enAiPackaging from './locales/en/aiPackaging.json';
 import enAdminSettings from './locales/en/adminSettings.json';
@@ -104,6 +103,9 @@ export const NAMESPACES = [
   'common',
   'login',
   'nav',
+  // The admin console's chrome. Lazy English (see lazyEnglish.ts): imported by routes/admin/catalog.ts,
+  // not bundled here, so the tenant console's first download does not carry it.
+  'adminNav',
   'userMenu',
   'theme',
   'devices',
@@ -129,6 +131,7 @@ export const NAMESPACES = [
   'audit',
   'identities',
   'roles',
+  // Admin-only English, lazy like adminNav: imported by routes/admin/ai-providers/catalog.ts.
   'aiProviders',
   'identityProviders',
   'aiPackaging',
@@ -177,7 +180,6 @@ const enResources = {
     audit: enAudit,
     identities: enIdentities,
     roles: enRoles,
-    aiProviders: enAiProviders,
     identityProviders: enIdentityProviders,
     aiPackaging: enAiPackaging,
     adminSettings: enAdminSettings,

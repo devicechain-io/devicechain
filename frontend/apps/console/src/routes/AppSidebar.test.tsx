@@ -18,7 +18,7 @@
 // cases above it.
 
 import '@/i18n/config';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -44,10 +44,20 @@ vi.mock('@/lib/useBrandingLogo', () => ({ useBrandingLogoSrc: () => null }));
 vi.mock('@/routes/NavUser', () => ({ NavUser: () => null }));
 
 import { SidebarProvider } from '@/components/ui/sidebar';
-import { AppSidebar } from './AppSidebar';
+import { AppSidebar, NAV, navLeaves, isLeaf } from './AppSidebar';
+import { NAV_STATE_KEY } from '@/lib/navState';
 
-afterEach(cleanup);
+const ALL_IDS = [
+  ...NAV.flatMap((n) => (isLeaf(n) ? [] : [n.id])),
+  ...['updates', 'assets', 'customers', 'areas'].map((g) => `group:${g}`),
+];
+
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 beforeEach(() => {
+  window.localStorage.clear();
   authorities.value = [];
   scope.value = [];
   area.status = 'unknown';
@@ -70,7 +80,17 @@ function renderWith(auths: string[], at = '/') {
 
 // Nav entries are rendered as their localized label; matched exactly so "Map" cannot
 // be satisfied by "Basemap" or by a map-adjacent entry elsewhere in the tree.
-const entry = (label: string) => screen.queryByText(label, { exact: true });
+// A label can appear twice (the Devices section and its Devices leaf), so this answers whether it
+// appears at all.
+const entry = (label: string) => screen.queryAllByText(label, { exact: true })[0] ?? null;
+
+// Every section and sub-group remembered as expanded, so a test can see all of the navigation.
+function openEverything() {
+  window.localStorage.setItem(
+    NAV_STATE_KEY,
+    JSON.stringify(Object.fromEntries(ALL_IDS.map((id) => [id, true]))),
+  );
+}
 
 describe('the Settings group', () => {
   it('shows every child to someone holding all three authorities', () => {
@@ -115,19 +135,19 @@ describe('the Settings group', () => {
 
   // Whether the tenant requires a second factor changes who can get in, so it is gated on
   // the member grant and not on a cosmetic one.
-  it('shows Security to a holder of member:write, and not to the cosmetic grants', () => {
+  it('shows Sign-in Security to a holder of member:write, and not to the cosmetic grants', () => {
     renderWith(['member:write'], '/tenant-security');
-    expect(entry('Security')).toBeTruthy();
+    expect(entry('Sign-in Security')).toBeTruthy();
     cleanup();
     renderWith(['branding:write', 'basemap:write', 'locale:write'], '/branding');
-    expect(entry('Security')).toBeNull();
+    expect(entry('Sign-in Security')).toBeNull();
   });
 
   // The page refuses a member limited to part of the tenant, so the entry is not advertised to one.
-  it('hides Security from a scoped member even with member:write', () => {
+  it('hides Sign-in Security from a scoped member even with member:write', () => {
     scope.value = ['customer:acme'];
     renderWith(['member:write', 'member:read'], '/members');
-    expect(entry('Security')).toBeNull();
+    expect(entry('Sign-in Security')).toBeNull();
   });
 
   // 🔴 The empty-group case. A group whose children are all filtered away must
@@ -164,16 +184,17 @@ describe('the record-management nav is untouched by the grouping', () => {
     renderWith(['device:read']);
 
     expect(entry('Devices')).toBeTruthy();
-    expect(entry('Areas')).toBeTruthy();
-    expect(entry('Facets')).toBeTruthy();
+    expect(entry('Connect')).toBeTruthy();
+    expect(entry('Organization')).toBeTruthy();
     expect(entry('Settings')).toBeNull();
+    expect(entry('Access')).toBeNull();
   });
 
   it('hides the CRUD groups from someone with only config authorities', () => {
     renderWith(['branding:write', 'basemap:write', 'locale:write'], '/basemap');
 
     expect(entry('Devices')).toBeNull();
-    expect(entry('Areas')).toBeNull();
+    expect(entry('Organization')).toBeNull();
     expect(entry('Settings')).toBeTruthy();
   });
 
@@ -254,6 +275,9 @@ describe('a scoped member', () => {
       'Notification Policies',
       'Settings',
       'Updates',
+      'Connect',
+      'Organization',
+      'Access',
     ]) {
       expect(entry(hidden), hidden).toBeNull();
     }
@@ -262,6 +286,7 @@ describe('a scoped member', () => {
   // The negative control: the same authorities WITHOUT a scope see the tenant's whole
   // navigation, so the cut above is the scope's doing and not the fixture's.
   it('is the scope, not the authorities: the same token unscoped sees everything', () => {
+    openEverything();
     renderWith(EVERYTHING, '/devices');
     for (const shown of ['Device Types', 'Provisioning Profiles', 'Customers', 'Audit', 'Settings', 'Connectors']) {
       expect(entry(shown), shown).toBeTruthy();
@@ -289,14 +314,227 @@ describe('Members and Roles', () => {
   });
 });
 
-// Provisioning profiles live in the Devices group, behind the device authority, and are never
+// Provisioning profiles live in the Connect section, behind the device authority, and are never
 // offered to a scoped member (the server refuses them the profile list and every profile field).
 describe('the Provisioning Profiles entry', () => {
-  it('sits in the Devices group for a device:read holder and for nobody without it', () => {
-    renderWith(['device:read'], '/devices');
+  it('sits in the Connect section for a device:read holder and for nobody without it', () => {
+    renderWith(['device:read'], '/provisioning-profiles');
     expect(entry('Provisioning Profiles')).toBeTruthy();
     cleanup();
     renderWith(['alarm:read'], '/');
     expect(entry('Provisioning Profiles')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// The collapsible sections.
+
+const header = (name: string) => screen.queryByRole('button', { name });
+const sectionHeaders = () =>
+  screen
+    .queryAllByRole('button')
+    .filter((b) => b.getAttribute('aria-controls')?.match(/^nav-(?!group-)/))
+    .map((b) => b.textContent?.trim());
+const link = (name: string | RegExp) => screen.queryByRole('link', { name });
+const expanded = (name: string) => header(name)?.getAttribute('aria-expanded');
+const ALL_SECTIONS = ['Monitor', 'Devices', 'Connect', 'Organization', 'Access', 'Settings'];
+
+describe('section visibility', () => {
+  // Each row: what the caller holds, and the ONLY sections they are offered. A section with
+  // nothing visible inside is not rendered at all.
+  it.each<[string[], string[]]>([
+    [[], []],
+    [['dashboard:read'], ['Monitor']],
+    [['alarm:read'], ['Monitor']],
+    [['notification:read'], ['Monitor']],
+    [['device:read'], ['Devices', 'Connect', 'Organization']],
+    [['command:read'], ['Devices']],
+    [['connector:read'], ['Connect']],
+    [['member:read'], ['Access']],
+    [['role:read'], ['Access']],
+    [['audit:read'], ['Access']],
+    [['member:write'], ['Access']],
+    [['branding:write'], ['Settings']],
+    [['basemap:write'], ['Settings']],
+    [['locale:write'], ['Settings']],
+    [['dashboard:read', 'audit:read', 'locale:write'], ['Monitor', 'Access', 'Settings']],
+  ])('holding %j offers exactly %j', (auths, expected) => {
+    openEverything();
+    renderWith(auths, '/');
+    expect(sectionHeaders()).toEqual(expected);
+  });
+
+  it('offers every section, in order, to a holder of everything', () => {
+    renderWith(['*'], '/');
+    expect(sectionHeaders()).toEqual(ALL_SECTIONS);
+    expect(link('Home')).toBeTruthy();
+  });
+
+  it('shows Updates only when the OTA area is deployed, inside Devices', () => {
+    area.status = 'available';
+    renderWith(['*'], '/devices');
+    expect(entry('Updates')).toBeTruthy();
+    cleanup();
+    area.status = 'absent';
+    renderWith(['*'], '/devices');
+    expect(entry('Updates')).toBeNull();
+    expect(header('Devices')).toBeTruthy();
+  });
+
+  // The customer-scoped member: Home, Monitor (Dashboards, Alarms) and Devices (Devices), and nothing else.
+  it.each([[['customer:acme']], [['group:north']]])('a scoped member (%j) sees Home, Monitor and Devices only', (anchors) => {
+    scope.value = anchors;
+    renderWith(['*'], '/');
+
+    expect(sectionHeaders()).toEqual(['Monitor', 'Devices']);
+    expect(link('Home')).toBeTruthy();
+    const monitor = within(header('Monitor')!.closest('li') as HTMLElement);
+    expect(monitor.getAllByRole('link').map((a) => a.textContent)).toEqual(['Dashboards', 'Alarms']);
+    const devices = within(header('Devices')!.closest('li') as HTMLElement);
+    expect(devices.getAllByRole('link').map((a) => a.textContent)).toEqual(['Devices']);
+  });
+});
+
+describe('expansion defaults and the active section', () => {
+  it('opens Monitor and Devices, and closes the rest, when nothing is stored', () => {
+    renderWith(['*'], '/');
+    expect(Object.fromEntries(ALL_SECTIONS.map((n) => [n, expanded(n)]))).toEqual({
+      Monitor: 'true',
+      Devices: 'true',
+      Connect: 'false',
+      Organization: 'false',
+      Access: 'false',
+      Settings: 'false',
+    });
+    // Collapsed sections do not render their links.
+    expect(link('Trust Anchors')).toBeNull();
+    expect(link('Dashboards')).toBeTruthy();
+  });
+
+  it.each([
+    ['/audit', 'Access', 'Audit'],
+    ['/trust-anchors', 'Connect', 'Trust Anchors'],
+    ['/facets', 'Organization', 'Facets'],
+    ['/branding', 'Settings', 'Branding'],
+    ['/tenant-security', 'Access', 'Sign-in Security'],
+  ])('expands the section holding %s', (route, section, leaf) => {
+    renderWith(['*'], route);
+    expect(expanded(section)).toBe('true');
+    expect(link(leaf)).toBeTruthy();
+  });
+
+  // The section holding the page is open whatever the user last chose, so they never land on a
+  // page whose own entry is hidden.
+  it('keeps the active section open even when it was stored as collapsed', () => {
+    window.localStorage.setItem(NAV_STATE_KEY, JSON.stringify({ access: false, devices: false }));
+    renderWith(['*'], '/audit');
+    expect(expanded('Access')).toBe('true');
+    expect(link('Audit')).toBeTruthy();
+    // ...while a stored collapse of a section that is NOT active is honoured.
+    expect(expanded('Devices')).toBe('false');
+  });
+
+  it('expands a nested group holding the route, and not its siblings', () => {
+    renderWith(['*'], '/geofences');
+    expect(expanded('Organization')).toBe('true');
+    expect(expanded('Areas')).toBe('true');
+    expect(link('Geofences')).toBeTruthy();
+    expect(expanded('Assets')).toBe('false');
+    expect(link('Asset Types')).toBeNull();
+  });
+});
+
+describe('remembering the expansion', () => {
+  it('persists a toggle and restores it on the next render', () => {
+    renderWith(['*'], '/');
+    fireEvent.click(header('Connect')!);
+    expect(expanded('Connect')).toBe('true');
+    expect(link('Trust Anchors')).toBeTruthy();
+    fireEvent.click(header('Monitor')!);
+    expect(expanded('Monitor')).toBe('false');
+    expect(JSON.parse(window.localStorage.getItem(NAV_STATE_KEY) as string)).toEqual({
+      connect: true,
+      monitor: false,
+    });
+
+    cleanup();
+    renderWith(['*'], '/');
+    expect(expanded('Connect')).toBe('true');
+    expect(expanded('Monitor')).toBe('false');
+    expect(expanded('Devices')).toBe('true');
+  });
+
+  it('remembers a nested group too', () => {
+    renderWith(['*'], '/');
+    fireEvent.click(header('Organization')!);
+    fireEvent.click(header('Customers')!);
+    cleanup();
+    renderWith(['*'], '/');
+    expect(expanded('Customers')).toBe('true');
+  });
+
+  it.each([['not json'], ['["monitor"]'], ['null'], ['{"monitor":"no","connect":1}']])(
+    'ignores unusable stored state (%s) and uses the defaults',
+    (raw) => {
+      window.localStorage.setItem(NAV_STATE_KEY, raw);
+      renderWith(['*'], '/');
+      expect(expanded('Monitor')).toBe('true');
+      expect(expanded('Connect')).toBe('false');
+    },
+  );
+
+  // Storage can be missing entirely (blocked site data, some embedded and private contexts).
+  it('renders correctly, and still toggles, with no storage at all', () => {
+    vi.spyOn(window, 'localStorage', 'get').mockImplementation(() => {
+      throw new DOMException('denied', 'SecurityError');
+    });
+    renderWith(['*'], '/');
+
+    expect(sectionHeaders()).toEqual(ALL_SECTIONS);
+    expect(expanded('Monitor')).toBe('true');
+    expect(expanded('Connect')).toBe('false');
+
+    fireEvent.click(header('Connect')!);
+    expect(expanded('Connect')).toBe('true');
+    expect(link('Trust Anchors')).toBeTruthy();
+  });
+});
+
+describe('section headers as accessible disclosure buttons', () => {
+  it('are buttons with aria-expanded that control their list', () => {
+    renderWith(['*'], '/');
+    const open = header('Monitor')!;
+    expect(open.tagName).toBe('BUTTON');
+    expect(document.getElementById(open.getAttribute('aria-controls') as string)).toBeTruthy();
+    expect(open.getAttribute('aria-expanded')).toBe('true');
+    expect(expanded('Access')).toBe('false');
+  });
+
+  // Same as the groups they replace: toggling does not move focus or remount the control.
+  it('keeps focus on the header it toggled', () => {
+    renderWith(['*'], '/');
+    const btn = header('Connect')!;
+    btn.focus();
+    fireEvent.click(btn);
+    expect(header('Connect')).toBe(btn);
+    expect(document.activeElement).toBe(btn);
+    fireEvent.click(btn);
+    expect(document.activeElement).toBe(btn);
+    expect(btn.getAttribute('aria-expanded')).toBe('false');
+  });
+});
+
+describe('Device Profiles', () => {
+  it('says what is inside a profile', () => {
+    renderWith(['device:read'], '/');
+    expect(screen.getByText('rules, metrics, commands')).toBeTruthy();
+    expect(link(/^Device Profiles/)).toBeTruthy();
+  });
+});
+
+describe('the navigation tree', () => {
+  it('lists every route once', () => {
+    const hrefs = navLeaves().map((l) => l.href);
+    expect(new Set(hrefs).size).toBe(hrefs.length);
   });
 });
