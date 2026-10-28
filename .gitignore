@@ -87,3 +87,6 @@ frontend/.api-selftest/
 
 # hack/ota-rig.sh: the rig's kubeconfig and state (a cluster credential; never committed)
 /.ota-rig/
+
+# hack/x509-rig.sh: the rig's kubeconfig and state (a cluster credential; never committed)
+/.x509-rig/
