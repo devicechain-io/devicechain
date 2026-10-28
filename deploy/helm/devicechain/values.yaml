@@ -1538,6 +1538,21 @@ functionalAreas:
       #                         # the client address); with that list empty every device
       #                         # behind the ingress shares ONE allowance, and the service
       #                         # logs a warning at start.
+      #
+      # Registration of devices by client certificate on their first connect (a device whose
+      # certificate chains to a certificate provisioning profile's trust anchor and is not yet
+      # registered). Fixed configuration, read when the pod starts. The per-tenant ceiling is the
+      # same one self-registration charges, a tenant tier and override setting.
+      #   callout:
+      #     jitMaxInFlight: 16      # registrations one replica works on at once, 1 to 128. The
+      #                             # next is refused (callout_x509_total{result="jit_busy"}) and
+      #                             # the device backs off and retries. Pinned certificates,
+      #                             # tokens and passwords never wait on these places.
+      #     jitSourceTrusted: false # true adds a per-client-address limit (sized by
+      #                             # provisioning.sourceBurst and sourceEvery). Turn it on ONLY
+      #                             # when the MQTT Service preserves client addresses
+      #                             # (externalTrafficPolicy: Local, or a kind NodePort): behind
+      #                             # source NAT every device shares one address and one allowance.
   event-sources:
     # CPU LIMIT raised from the 500m default. On GKE (3 x n2-standard-8, SSD
     # persistent disks, --ha, v0.18.0, shipped defaults) this service was throttled in

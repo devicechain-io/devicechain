@@ -152,6 +152,20 @@ type x509Fixture struct {
 	metrics  *CalloutMetrics
 	serverCA *testCert
 	creds    natsauth.Credentials
+	tenant   string
+}
+
+// fixtureOpts vary the fixture without forking it. The zero value is the SQLite fixture of the
+// pinned-path tests.
+type fixtureOpts struct {
+	// tenant is the tenant the fixture creates its device type in; x509Tenant when empty.
+	tenant string
+	// newApi builds the Api over the database to test against; SQLite when nil. The server is
+	// given so a kicker can reach it.
+	newApi func(t *testing.T, srv *natsserver.Server) *model.Api
+	// configure runs on the responder BEFORE it starts, so a test can turn registration on
+	// without racing a request.
+	configure func(t *testing.T, resp *CalloutResponder, api *model.Api)
 }
 
 const x509Tenant = "acme-corp"
@@ -199,8 +213,14 @@ func (k brokerKicker) KickDeviceSessions(_ context.Context, tenant, _ string, to
 	return nil
 }
 
-func newX509Fixture(t *testing.T) *x509Fixture {
+func newX509Fixture(t *testing.T) *x509Fixture { return newX509FixtureWith(t, fixtureOpts{}) }
+
+func newX509FixtureWith(t *testing.T, o fixtureOpts) *x509Fixture {
 	t.Helper()
+	tenant := o.tenant
+	if tenant == "" {
+		tenant = x509Tenant
+	}
 	creds, err := natsauth.GenerateCredentials()
 	require.NoError(t, err)
 
@@ -261,14 +281,19 @@ func newX509Fixture(t *testing.T) *x509Fixture {
 	require.NoError(t, err)
 	t.Cleanup(nc.Close)
 
-	tables := []any{&model.Device{}, &model.DeviceType{}, &model.DeviceProfile{}, &model.DeviceProfileVersion{},
-		&model.DeviceProfileActivation{}, &model.MetricDefinition{}, &model.CommandDefinition{}, &model.DetectionRule{},
-		&model.DetectionRuleScopeRef{}, &model.ProvisioningProfile{}, &model.DeviceCredential{},
-		&model.PendingSessionKick{}, &model.DeviceTrustAnchor{}}
-	api := model.NewApi(&rdb.RdbManager{Database: putest.NewSQLiteDB(t, tables...)})
+	var api *model.Api
+	if o.newApi != nil {
+		api = o.newApi(t, srv)
+	} else {
+		tables := []any{&model.Device{}, &model.DeviceType{}, &model.DeviceProfile{}, &model.DeviceProfileVersion{},
+			&model.DeviceProfileActivation{}, &model.MetricDefinition{}, &model.CommandDefinition{}, &model.DetectionRule{},
+			&model.DetectionRuleScopeRef{}, &model.ProvisioningProfile{}, &model.DeviceCredential{},
+			&model.PendingSessionKick{}, &model.DeviceTrustAnchor{}}
+		api = model.NewApi(&rdb.RdbManager{Database: putest.NewSQLiteDB(t, tables...)})
+	}
 	api.DeviceSecretKey = dmtest.DeviceSecretKey()
 	api.SessionKicker = brokerKicker{srv: srv, t: t}
-	ctx := putest.TenantContext(x509Tenant)()
+	ctx := putest.TenantContext(tenant)()
 	_, err = api.CreateDeviceType(ctx, &model.DeviceTypeCreateRequest{Token: "dt-a"})
 	require.NoError(t, err)
 
@@ -277,11 +302,14 @@ func newX509Fixture(t *testing.T) *x509Fixture {
 	metrics := NewCalloutMetrics(ms)
 	resp := mustResponder(t, nc, api, testChecker(t, credentialtest.NewStore()), creds.IssuerSeed, nil)
 	resp.Configure(0, 0, 0, metrics)
+	if o.configure != nil {
+		o.configure(t, resp, api)
+	}
 	require.NoError(t, resp.Start())
 	t.Cleanup(func() { _ = resp.Stop() })
 
 	return &x509Fixture{t: t, srv: srv, port: dctest.MQTTPort(t, srv), api: api, ctx: ctx,
-		resp: resp, metrics: metrics, serverCA: serverCA, creds: creds}
+		resp: resp, metrics: metrics, serverCA: serverCA, creds: creds, tenant: tenant}
 }
 
 // device creates a device in the tenant.

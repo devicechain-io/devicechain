@@ -40,13 +40,17 @@ const (
 	x509ResultTenantRefused     = "tenant_refused"
 	x509ResultError             = "error"
 	x509ResultCertIgnored       = "x509_cert_ignored"
-	// The registration results belong to registration on first connect, which counts them.
+	// The registration results belong to registration on first connect, which counts them (see
+	// callout_x509_jit.go). A connect that registered its device is counted by what registration
+	// did, and not again as ok.
 	x509ResultJitCreated     = "jit_created"
 	x509ResultJitAdopted     = "jit_adopted"
 	x509ResultJitRenewed     = "jit_renewed"
 	x509ResultJitReplayed    = "jit_replayed"
 	x509ResultJitRateLimited = "jit_rate_limited"
 	x509ResultJitBusy        = "jit_busy"
+	// x509ResultJitAmbiguous: the chain belongs to more than one usable certificate profile.
+	x509ResultJitAmbiguous = "jit_ambiguous"
 )
 
 var x509Results = []string{
@@ -54,7 +58,16 @@ var x509Results = []string{
 	x509ResultClientIDMismatch, x509ResultUnknownPin, x509ResultMisconfigured, x509ResultPasswordPresented, x509ResultUnsealed, x509ResultCertMalformed,
 	x509ResultTenantRefused, x509ResultError, x509ResultCertIgnored,
 	x509ResultJitCreated, x509ResultJitAdopted, x509ResultJitRenewed, x509ResultJitReplayed,
-	x509ResultJitRateLimited, x509ResultJitBusy,
+	x509ResultJitRateLimited, x509ResultJitBusy, x509ResultJitAmbiguous,
+}
+
+func init() {
+	// One series for every way registration itself can refuse (the closed vocabulary of
+	// model.ProvisioningCodes), built from that list so a code added there is counted here.
+	for _, code := range model.ProvisioningCodes() {
+		x509Results = append(x509Results, jitResultForCode(code))
+	}
+	x509Results = append(x509Results, x509ResultJitRevoked)
 }
 
 // countX509 counts one certificate connect by result. A responder built without metrics counts
@@ -79,7 +92,9 @@ func (c *CalloutResponder) refuseX509(result string) (string, string) {
 //     confused about which credential it is presenting;
 //  3. the presented certificates, bounded in count and size BEFORE any is parsed;
 //  4. the pin lookup, UNCACHED (model.ResolveX509Connect): a disable must refuse the very next
-//     connect, on every replica, so no answer is ever read from memory;
+//     connect, on every replica, so no answer is ever read from memory. A certificate that pins
+//     nothing goes to registration on first connect when it is on (callout_x509_jit.go), which
+//     either refuses or returns the credential it registered, and steps 5 to 7 are the same;
 //  5. the credential's trust anchor, which must exist and be enabled;
 //  6. the chain, verified against THAT anchor (x509trust.VerifyClientChain: the one definition of
 //     the decision);
@@ -125,26 +140,53 @@ func (c *CalloutResponder) authorizeX509(req jwt.AuthorizationRequest, tenant st
 	// 🔴 ResolveX509Connect, never a cached lookup. See the notes on it and on
 	// AuthenticateDeviceConnect.
 	found, err := c.api.ResolveX509Connect(ctx, pin, c.now())
+	if errors.Is(err, model.ErrCredentialNotResolved) {
+		// No credential pins this certificate: registration on first connect, if it is on. It
+		// returns the credential it registered (or found again), and the connect goes on exactly
+		// as if the pin had been there.
+		var result string
+		if found, result = c.unknownX509Pin(ctx, req, tenant, chain); found == nil {
+			return c.refuseX509(result)
+		}
+		return c.grantX509(ctx, req, tenant, chain, found, result)
+	}
+	if result := c.x509LookupRefusal(tenant, req, err); result != "" {
+		return c.refuseX509(result)
+	}
+	return c.grantX509(ctx, req, tenant, chain, found, x509ResultOK)
+}
+
+// x509LookupRefusal is the result a failed ResolveX509Connect is counted as, "" for success.
+func (c *CalloutResponder) x509LookupRefusal(tenant string, req jwt.AuthorizationRequest, err error) string {
 	switch {
 	case err == nil:
+		return ""
 	case errors.Is(err, model.ErrCredentialNotResolved):
-		return c.unknownX509Pin(ctx, req, tenant, chain)
+		return x509ResultUnknownPin
 	case errors.Is(err, model.ErrCredentialRevoked):
 		log.Debug().Str("tenant", tenant).Str("host", req.ClientInformation.Host).
 			Msg("Auth-callout refused a certificate connect: its credential is disabled.")
-		return c.refuseX509(x509ResultRevoked)
+		return x509ResultRevoked
 	case errors.Is(err, model.ErrCredentialExpired):
 		log.Debug().Str("tenant", tenant).Str("host", req.ClientInformation.Host).
 			Msg("Auth-callout refused a certificate connect: its credential has expired.")
-		return c.refuseX509(x509ResultChainInvalid)
+		return x509ResultChainInvalid
 	case errors.Is(err, model.ErrCredentialMisconfigured):
 		log.Warn().Str("tenant", tenant).
 			Msg("Auth-callout refused a certificate connect: the stored credential names no trust anchor and can never authenticate.")
-		return c.refuseX509(x509ResultMisconfigured)
+		return x509ResultMisconfigured
 	default:
 		c.logAuthFailure(tenant, err)
-		return c.refuseX509(x509ResultError)
+		return x509ResultError
 	}
+}
+
+// grantX509 is the half of a certificate connect after the pin has named a credential: the
+// credential's anchor, the chain verified to it, and the tail every device connect shares.
+// okResult is what a granted connect is counted as ("ok" for a pinned certificate, what
+// registration did for one that registered itself).
+func (c *CalloutResponder) grantX509(ctx context.Context, req jwt.AuthorizationRequest, tenant string,
+	chain []*x509.Certificate, found *model.X509Connect, okResult string) (string, string) {
 	device := found.Device
 	if device == nil || device.Token == "" {
 		log.Error().Str("tenant", tenant).Msg("Auth-callout resolved a certificate credential to no device token.")
@@ -173,7 +215,7 @@ func (c *CalloutResponder) authorizeX509(req jwt.AuthorizationRequest, tenant st
 	userJWT, why := c.grantSession(ctx, req, tenant, device)
 	switch why {
 	case grantGranted:
-		c.countX509(x509ResultOK)
+		c.countX509(okResult)
 		return userJWT, ""
 	case grantRefusedDevice:
 		// A disabled device is a withdrawal like a disabled credential.
@@ -187,15 +229,6 @@ func (c *CalloutResponder) authorizeX509(req jwt.AuthorizationRequest, tenant st
 	default:
 		return c.refuseX509(x509ResultError)
 	}
-}
-
-// unknownX509Pin is the connect whose leaf pins no credential. Today that is a refusal, counted
-// as unknown_pin. It is the one place registration on first connect attaches: it is handed the
-// presented chain and the tenant, and NOTHING here has authenticated either.
-func (c *CalloutResponder) unknownX509Pin(_ context.Context, req jwt.AuthorizationRequest, tenant string, _ []*x509.Certificate) (string, string) {
-	log.Debug().Str("tenant", tenant).Str("host", req.ClientInformation.Host).
-		Msg("Auth-callout refused a certificate connect: no credential pins this certificate.")
-	return c.refuseX509(x509ResultUnknownPin)
 }
 
 // earliestExpiry is the earlier of an optional credential expiry and a chain's notAfter.
@@ -213,7 +246,10 @@ func newX509Counter(ms *core.Microservice) *prometheus.CounterVec {
 			"no_cert, chain_invalid, anchor_disabled, revoked, client_id_mismatch, unknown_pin, misconfigured, "+
 			"password_presented, unsealed, cert_malformed, tenant_refused and error are refusals, each answered with the same generic denial. "+
 			"x509_cert_ignored counts a certificate presented with a token or password username, which authenticates "+
-			"on that credential alone. The jit_ results are registration on first connect.",
+			"on that credential alone. The jit_ results are registration on first connect: jit_created, jit_adopted, "+
+			"jit_renewed and jit_replayed are granted connects (counted by what registration did, and not again as ok); "+
+			"jit_rate_limited, jit_busy, jit_ambiguous, jit_revoked and one jit_<code> for each refusal registration "+
+			"itself gives (the device-registration vocabulary, lower case) are refusals.",
 		[]string{"result"})
 	for _, r := range x509Results {
 		v.WithLabelValues(r)

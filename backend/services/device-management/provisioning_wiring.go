@@ -5,6 +5,7 @@ package main
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/devicechain-io/dc-device-management/provisioning"
 	"github.com/devicechain-io/dc-microservice/auth"
@@ -22,6 +23,26 @@ var ProvisioningMetrics *provisioning.Metrics
 // ProvisioningUnresolvedAdmissions counts registrations admitted at the platform default for
 // want of a tenant's own ceiling. Like every collector it is built once, on the initialize path.
 var ProvisioningUnresolvedAdmissions func(core.CeilingSource)
+
+// ProvisioningTenants is the per-tenant registration ceiling: ONE limiter, charged by the
+// self-registration endpoint and by the auth callout's registration of devices by certificate,
+// so a tenant's two doors share a single allowance and neither is a way around the other.
+// wireProvisioningEndpoint sets it; provisioningTenantLimiter reads it.
+var (
+	ProvisioningTenants   *core.TenantRateLimiter
+	provisioningTenantsMu sync.Mutex
+)
+
+// provisioningTenantLimiter is the shared ceiling, built on first use if the endpoint has not
+// been wired yet.
+func provisioningTenantLimiter(infra mscfg.InfrastructureConfiguration) *core.TenantRateLimiter {
+	provisioningTenantsMu.Lock()
+	defer provisioningTenantsMu.Unlock()
+	if ProvisioningTenants == nil {
+		ProvisioningTenants = buildProvisioningTenantLimiter(infra)
+	}
+	return ProvisioningTenants
+}
 
 // buildProvisioningMetrics builds the endpoint's series. buildMetrics calls it, once: a
 // collector registered twice on this microservice's registry panics.
@@ -55,6 +76,10 @@ func wireProvisioningEndpoint() error {
 	}
 
 	pcfg := Configuration.Provisioning
+	tenants := buildProvisioningTenantLimiter(infra)
+	provisioningTenantsMu.Lock()
+	ProvisioningTenants = tenants
+	provisioningTenantsMu.Unlock()
 	h, err := provisioning.New(provisioning.Config{
 		ReadDeadline:               pcfg.ReadDeadlineDuration(),
 		MaxInFlight:                pcfg.MaxInFlight,
@@ -65,7 +90,7 @@ func wireProvisioningEndpoint() error {
 		Registrar:      Api,
 		InstanceId:     Microservice.InstanceId,
 		TenantDeleted:  provisioningTenantGate(infra),
-		Tenants:        buildProvisioningTenantLimiter(infra),
+		Tenants:        tenants,
 		TrustedProxies: trusted,
 		Metrics:        ProvisioningMetrics,
 	})

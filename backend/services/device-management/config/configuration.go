@@ -319,6 +319,10 @@ type DeviceManagementConfiguration struct {
 	// service spend before it has proved anything. It is FIXED configuration (the mounted
 	// file); the per-tenant ceiling is the one limit that lives on the database plane.
 	Provisioning ProvisioningConfiguration
+
+	// Callout bounds the device auth callout's registration of devices by certificate on their
+	// first connect. FIXED configuration, like Provisioning.
+	Callout CalloutConfiguration
 }
 
 // InMemoryCacheConfiguration sizes what one replica keeps in memory of each cache keyed by
@@ -558,6 +562,7 @@ func (c *DeviceManagementConfiguration) ApplyDefaults() {
 	c.RaiseAlarm.ApplyDefaults(c.RdbConfiguration, c.Resolution)
 	c.InMemoryCache.ApplyDefaults()
 	c.Provisioning.ApplyDefaults()
+	c.Callout.ApplyDefaults()
 }
 
 // Validate enforces semantic constraints after decoding and defaulting, failing
@@ -609,6 +614,9 @@ func (c *DeviceManagementConfiguration) Validate() error {
 		return err
 	}
 	if err := c.Provisioning.Validate(c.RdbConfiguration); err != nil {
+		return err
+	}
+	if err := c.Callout.Validate(); err != nil {
 		return err
 	}
 	// The writers the pool is shared by. Over the pool they still run, queueing for connections,

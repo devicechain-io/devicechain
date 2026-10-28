@@ -452,6 +452,36 @@ tests:
         alertname: DeviceX509JitRefusedSustained
         exp_alerts: []
 
+  # A certificate profile that cannot register anything fires on the first refusal and names the
+  # result; the quiet case is registrations that succeed or are refused for a reason the devices
+  # own (the profile disabled), which are not a misconfiguration.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_callout_x509_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="jit_ambiguous"}'
+        values: '0 0 0 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5'
+      - series: 'devicechain_devicemanagement_callout_x509_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="jit_provisioning_failed"}'
+        values: '0+9x30'
+      - series: 'devicechain_devicemanagement_callout_x509_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="jit_created"}'
+        values: '0+9x30'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: DeviceX509JitMisconfigured
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: DeviceX509JitMisconfigured
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              result: jit_ambiguous
+            exp_annotations:
+              summary: "A certificate provisioning profile cannot register devices because it is misconfigured"
+              description: "In the last 10m device-management refused 5 certificate registration(s) as jit_ambiguous. jit_provisioning_misconfigured and jit_credential_type_unsupported mean the profile's device type was deleted or it mints a credential type this build does not support; jit_ambiguous means a device's certificate chains to the trust anchor of more than one enabled profile and cannot say which was meant. Every device concerned is refused until the profile is fixed or each profile has a trust anchor of its own. The service logs the cause."
+      # The window slides past the refusals: it clears.
+      - eval_time: 25m
+        alertname: DeviceX509JitMisconfigured
+        exp_alerts: []
+
   # Trust anchors expiring: the instance-wide count is zero (quiet), then two for longer than the
   # hold (fires), then back to zero (clears). A service that exports no series is quiet.
   - interval: 1m

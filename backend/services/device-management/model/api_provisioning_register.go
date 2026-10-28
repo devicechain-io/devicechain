@@ -235,6 +235,11 @@ type ProvisionRequest struct {
 	// Name and Metadata are optional and apply only to a device this call creates.
 	Name     *string
 	Metadata *string
+	// Certificate makes this a registration by client certificate instead of by shared secret:
+	// the profile must be an X.509 profile, the device's external id is the certificate's common
+	// name, and the credential it is issued is the certificate's pin. CredentialSecret is unused.
+	// See X509Registration for what the caller owes before it sets this.
+	Certificate *X509Registration
 }
 
 // ProvisionResult holds nothing secret: not the material, and not the credential's id.
@@ -252,6 +257,13 @@ const (
 	provisionedDeviceTokenPrefix     = "pv-"
 	provisionedCredentialTokenPrefix = "pc-"
 )
+
+// ProvisionedDeviceToken is the token a device registered under external id carries: the one
+// definition of it, shared by registration by secret, by certificate, and the connect side that
+// must predict it. A change to it strands every device registered before.
+func ProvisionedDeviceToken(externalId string) string {
+	return core.DeriveDeviceToken(externalId, provisionedDeviceTokenPrefix)
+}
 
 // ProvisionDevice registers one device against an authenticated provisioning profile.
 //
@@ -293,7 +305,13 @@ const (
 // It does not authenticate (AuthenticateProvisioningProfile does) and it does not rate-limit.
 // It re-checks only that the profile it was handed is still able to register under the lock.
 func (api *Api) ProvisionDevice(ctx context.Context, request *ProvisionRequest) (*ProvisionResult, error) {
-	if api.ProvisioningChecker == nil || api.DeviceSecretKey == nil || api.EnrollmentKeys == nil {
+	// A registration by certificate compares no secret and issues no access token, so it needs
+	// none of the keys a registration by secret does.
+	if request != nil && request.Certificate != nil {
+		if err := api.prepareCertificateRegistration(request); err != nil {
+			return nil, err
+		}
+	} else if api.ProvisioningChecker == nil || api.DeviceSecretKey == nil || api.EnrollmentKeys == nil {
 		return nil, ErrProvisioningUnavailable
 	}
 	tenant, err := ctxTenant(ctx)
@@ -329,6 +347,9 @@ func (api *Api) ProvisionDevice(ctx context.Context, request *ProvisionRequest) 
 		Outcome: done.outcome, Tenant: tenant, DeviceToken: done.device.Token,
 		ExternalId: request.ExternalId, CredentialType: string(CredentialAccessToken),
 	}
+	if request.Certificate != nil {
+		result.CredentialType = string(CredentialX509Certificate)
+	}
 	if done.outcome == ProvisionReplayed {
 		// A replay writes nothing, so the write-time fence never ran. A tenant whose erasure
 		// has begun must not be told its device is registered.
@@ -357,8 +378,10 @@ func (api *Api) ProvisionDevice(ctx context.Context, request *ProvisionRequest) 
 // before a transaction opens. The endpoint checks the same things before it takes a slot, so
 // this is the model refusing on its own what no caller should send.
 func validateProvisionRequest(request *ProvisionRequest) error {
-	if err := ValidateProvisioningMaterial(request.CredentialSecret); err != nil {
-		return err
+	if request.Certificate == nil {
+		if err := ValidateProvisioningMaterial(request.CredentialSecret); err != nil {
+			return err
+		}
 	}
 	ext := request.ExternalId
 	if strings.TrimSpace(ext) == "" || utf8.RuneCountInString(ext) > maxDeviceExternalIdLen || strings.ContainsRune(ext, 0) {
@@ -397,7 +420,11 @@ func (api *Api) provisionOnce(ctx context.Context, tenant string, request *Provi
 		}
 		// What was authenticated must still be what is here: a profile disabled, expired or
 		// rotated since is refused exactly as an unknown key is.
-		if !profileCanRegister(&profile, time.Now()) ||
+		if request.Certificate != nil {
+			if err := lockCertificateProfile(tx, &profile, request); err != nil {
+				return err
+			}
+		} else if !profileCanRegister(&profile, time.Now()) ||
 			profile.ProvisionSecretDigest.String != request.Profile.ProvisionSecretDigest.String {
 			return ErrProvisioningFailed
 		}
@@ -412,7 +439,7 @@ func (api *Api) provisionOnce(ctx context.Context, tenant string, request *Provi
 				Msg("A provisioning profile carries a strategy outside the vocabulary; registrations against it are refused.")
 			return ErrProvisioningMisconfigured
 		}
-		if !provisionableCredentialType(profile.CredentialType) {
+		if !provisionableCredentialType(profile.CredentialType) && request.Certificate == nil {
 			log.Error().Str("tenant", tenant).Str("profile", profile.Token).Str("credentialType", profile.CredentialType).
 				Msg("A provisioning profile mints a credential type this build cannot; registrations against it are refused.")
 			return ErrProvisioningCredentialTypeUnsupported
@@ -497,6 +524,10 @@ func (api *Api) decideKnownDevice(ctx context.Context, tx *gorm.DB, tenant strin
 		live = append(live, c)
 	}
 
+	if request.Certificate != nil {
+		return decideKnownDeviceByCertificate(tx, profile, device, request, live, foreign)
+	}
+
 	// An exact replay of this profile's own issuance. The compare is the Checker's, under the
 	// kind that charges nothing to the MQTT connect backoff and keeps no attempt record.
 	for _, c := range live {
@@ -544,7 +575,7 @@ func checkProfileCapacity(tx *gorm.DB, profile *ProvisioningProfile) error {
 // the profile's type, earmarked for the profile, under the token derived from its external id.
 // A token that another device already holds is ErrProvisioningTokenCollision.
 func createProvisionedDevice(tx *gorm.DB, profile *ProvisioningProfile, request *ProvisionRequest) (*Device, error) {
-	token := core.DeriveDeviceToken(request.ExternalId, provisionedDeviceTokenPrefix)
+	token := ProvisionedDeviceToken(request.ExternalId)
 	var holder Device
 	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("token = ?", token).First(&holder).Error
 	switch {
@@ -578,6 +609,9 @@ func createProvisionedDevice(tx *gorm.DB, profile *ProvisioningProfile, request 
 // through the association (which would upsert the device again).
 func (api *Api) insertProvisionedCredential(tx *gorm.DB, profile *ProvisioningProfile, device *Device,
 	request *ProvisionRequest) error {
+	if request.Certificate != nil {
+		return insertCertificateCredential(tx, profile, device, request)
+	}
 	cred, err := buildDeviceCredential(api.DeviceSecretKey, device, &DeviceCredentialCreateRequest{
 		Token:          core.DeriveDeviceToken(request.ExternalId, provisionedCredentialTokenPrefix),
 		DeviceToken:    device.Token,

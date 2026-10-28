@@ -137,6 +137,10 @@ type CalloutResponder struct {
 	storeFull func() bool
 	// refusedStoreFull counts the connects storeFull refused. May be nil.
 	refusedStoreFull prometheus.Counter
+
+	// jit is registration on first connect by certificate; nil when it is off. See
+	// WithCertificateRegistration.
+	jit *jitState
 }
 
 // Defaults for the bounds above. The lookup timeout sits under the broker's 5 s
