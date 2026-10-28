@@ -5,6 +5,7 @@ package bootstrap
 
 import (
 	"encoding/base64"
+	"strings"
 	"testing"
 
 	"sigs.k8s.io/yaml"
@@ -42,6 +43,22 @@ type certManagerObject struct {
 
 func renderIssuerChain(t *testing.T, controller string, tls map[string]interface{}) map[string]certManagerObject {
 	t.Helper()
+	out := map[string]certManagerObject{}
+	for _, doc := range splitManifests(renderIngressManifest(t, controller, tls)) {
+		var obj certManagerObject
+		if err := yaml.Unmarshal([]byte(doc), &obj); err != nil {
+			continue
+		}
+		if obj.Kind == "Issuer" || obj.Kind == "Certificate" {
+			out[obj.Kind+"/"+obj.Metadata.Name] = obj
+		}
+	}
+	return out
+}
+
+// renderIngressManifest renders the chart with the given front end and ingress.tls.
+func renderIngressManifest(t *testing.T, controller string, tls map[string]interface{}) string {
+	t.Helper()
 	vals := map[string]interface{}{
 		"instance": map[string]interface{}{
 			"id": "dctest",
@@ -68,17 +85,7 @@ func renderIssuerChain(t *testing.T, controller string, tls map[string]interface
 	if err != nil {
 		t.Fatalf("rendering chart: %v", err)
 	}
-	out := map[string]certManagerObject{}
-	for _, doc := range splitManifests(manifest) {
-		var obj certManagerObject
-		if err := yaml.Unmarshal([]byte(doc), &obj); err != nil {
-			continue
-		}
-		if obj.Kind == "Issuer" || obj.Kind == "Certificate" {
-			out[obj.Kind+"/"+obj.Metadata.Name] = obj
-		}
-	}
-	return out
+	return manifest
 }
 
 // Both front ends take their certificate from the one Issuer, so both must get the chain.
@@ -125,12 +132,20 @@ func checkSelfSignedChain(t *testing.T, controller string) {
 
 	// The Issuer every cert-manager.io/issuer annotation names must be the CA Issuer, backed by
 	// the Secret the CA certificate is written to, or the host certificate stays self-signed.
-	leaf, ok := objs["Issuer/devicechain-selfsigned"]
+	leaf, ok := objs["Issuer/devicechain-selfsigned-signer"]
 	if !ok || leaf.Spec.CA == nil {
-		t.Fatalf("the Issuer named by ingress.tls.issuerName must be a CA Issuer, got %+v (present=%v)", leaf, ok)
+		t.Fatalf("the signing Issuer (<issuerName>-signer) must be a CA Issuer, got %+v (present=%v)", leaf, ok)
 	}
 	if leaf.Spec.SelfSigned != nil {
 		t.Error("the signing Issuer must not also be self-signed")
+	}
+	// 🔴 NO ISSUER IS CALLED issuerName ITSELF. Earlier releases rendered a SELF-SIGNED Issuer
+	// under that name, and an upgrade that turned it into the CA Issuer in the same pass that
+	// created the Gateway's Certificate had cert-manager sign it against the old spec: a leaf
+	// with an empty subject and CA:FALSE, Ready, that OpenSSL cannot anchor. The signing Issuer
+	// has a name no release used, so nothing can resolve to that spec.
+	if _, stale := objs["Issuer/devicechain-selfsigned"]; stale {
+		t.Error("an Issuer is rendered under the bare issuerName, the name earlier releases gave a self-signed Issuer")
 	}
 	if leaf.Spec.CA.SecretName != ca.Spec.SecretName || ca.Spec.SecretName == "" {
 		t.Errorf("CA Issuer reads Secret %q but the CA certificate is written to %q", leaf.Spec.CA.SecretName, ca.Spec.SecretName)
@@ -152,8 +167,8 @@ func checkChainFollowsValues(t *testing.T, controller string) {
 	renamed := renderIssuerChain(t, controller, map[string]interface{}{
 		"enabled": true, "selfSigned": true, "issuerName": "mine", "secretName": "mine-tls",
 	})
-	if _, ok := renamed["Issuer/mine"]; !ok {
-		t.Errorf("issuerName must name the CA Issuer, got %v", renamed)
+	if _, ok := renamed["Issuer/mine-signer"]; !ok {
+		t.Errorf("issuerName must be the base of the signing Issuer's name, got %v", renamed)
 	}
 	if ca, ok := renamed["Certificate/mine-ca"]; !ok || ca.Spec.SecretName != "mine-tls-ca" {
 		t.Errorf("the CA certificate must follow issuerName and secretName, got %+v", ca)
@@ -167,5 +182,36 @@ func checkChainFollowsValues(t *testing.T, controller string) {
 		if got := renderIssuerChain(t, controller, tls); len(got) != 0 {
 			t.Errorf("%s: rendered cert-manager objects it must not: %v", name, got)
 		}
+	}
+}
+
+// Every cert-manager.io/issuer annotation, on the Ingress objects and on the Gateway, names the
+// Issuer the chart renders as the CA signer, and none names anything else. A front end whose
+// annotation named another Issuer would be issued by whatever that name resolves to.
+func TestEveryIssuerAnnotationNamesTheSigningIssuer(t *testing.T) {
+	t.Parallel()
+	for _, fe := range frontEnds {
+		t.Run(fe, func(t *testing.T) {
+			t.Parallel()
+			tls := map[string]interface{}{"enabled": true, "selfSigned": true}
+			manifest := renderIngressManifest(t, fe, tls)
+			var names []string
+			for line := range strings.SplitSeq(manifest, "\n") {
+				if _, v, ok := strings.Cut(strings.TrimSpace(line), "cert-manager.io/issuer:"); ok {
+					names = append(names, strings.TrimSpace(v))
+				}
+			}
+			if len(names) == 0 {
+				t.Fatal("no cert-manager.io/issuer annotation rendered: the test would pass over nothing")
+			}
+			for _, n := range names {
+				if n != "devicechain-selfsigned-signer" {
+					t.Errorf("annotation names %q, want the signing Issuer devicechain-selfsigned-signer", n)
+				}
+			}
+			if _, ok := renderIssuerChain(t, fe, tls)["Issuer/devicechain-selfsigned-signer"]; !ok {
+				t.Error("the annotated Issuer is not rendered")
+			}
+		})
 	}
 }

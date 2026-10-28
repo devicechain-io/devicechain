@@ -478,9 +478,9 @@ func refuseDropWithoutGatewayCertificate(ctx context.Context, st *State) error {
 	}
 	return refuseUnlessGatewayCertificatesReady(vs, true,
 		"--drop-legacy-ingress stops rendering the Ingress objects that serve this instance's host, but its Gateway "+
-			"has no Ready certificate, so the host would stop answering over https (or present the controller's default one)",
+			"has no usable certificate (Ready, and issued as configured), so the host would stop answering over https (or present a certificate clients cannot trust)",
 		"Move DNS to the new controller so the certificate can be issued, wait for `kubectl -n "+
-			InstanceNamespace(st.Instance)+" get certificate` to show it Ready, then run it again.")
+			InstanceNamespace(st.Instance)+" get certificate` to show it Ready, and if the reason above names the Secret's issuer, delete that Secret so cert-manager issues it again, then run it again.")
 }
 
 const (
@@ -796,7 +796,7 @@ func settleClusterFrontEnd(ctx context.Context, st *State, typed kubernetes.Inte
 			return err
 		}
 		if err := refuseUnlessGatewayCertificatesReady(vs, false,
-			"--remove-legacy-ingress is refused while these instances' Gateways have no Ready certificate. Removing "+
+			"--remove-legacy-ingress is refused while these instances' Gateways have no usable certificate (Ready, and issued as configured). Removing "+
 				"ingress-nginx does not change how they are served, but the check keeps a broken Gateway "+
 				"certificate from going unnoticed until nothing else serves the host",
 			"Wait for each Certificate to show Ready (`kubectl get certificate -A`), then run it again."); err != nil {
@@ -967,6 +967,12 @@ func waitForGatewayCertificate(ctx context.Context, dyn dynamic.Interface, st *S
 		default:
 			var ready bool
 			if ready, why = gatewayCertificateState(list.Items, secret); ready {
+				var ierr error
+				if ready, why, ierr = gatewayCertificateIssued(ctx, dyn, g, secret); ierr != nil {
+					return fail("waiting for the Gateway's certificate", ierr)
+				}
+			}
+			if ready {
 				done()
 				return nil
 			}
@@ -1052,6 +1058,12 @@ func gatewayCertificatesFrom(ctx context.Context, dyn dynamic.Interface, instanc
 			switch {
 			case err == nil:
 				v.Ready, v.Why = gatewayCertificateState(certs.Items, secret)
+				if v.Ready {
+					var ierr error
+					if v.Ready, v.Why, ierr = gatewayCertificateIssued(ctx, dyn, g, secret); ierr != nil {
+						return nil, ierr
+					}
+				}
 			case apierrors.IsNotFound(err), meta.IsNoMatchError(err):
 				v.Why = "cert-manager's Certificate API is not installed on this cluster"
 			default:

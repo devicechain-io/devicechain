@@ -320,17 +320,39 @@ func (f *fakeClusterPlanner) ShowPlanFile(context.Context, string, ...tfexec.Sho
 	return f.plan, nil
 }
 
-// newFakeCertDynamic is a dynamic client holding the Certificates given.
+// newFakeCertDynamic is a dynamic client holding the Certificates, Gateways and Secrets given.
+// Every Certificate with no Secret of its own among them gets one holding a leaf signed by a CA
+// and that CA's ca.crt, which is what an instance whose issuer worked has.
 func newFakeCertDynamic(objs ...*unstructured.Unstructured) dynamic.Interface {
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
-		map[schema.GroupVersionResource]string{certificateGVR: "CertificateList", gatewayGVR: "GatewayList"})
+		map[schema.GroupVersionResource]string{
+			certificateGVR: "CertificateList", gatewayGVR: "GatewayList", secretGVR: "SecretList"})
+	gvrOf := map[string]schema.GroupVersionResource{"Gateway": gatewayGVR, "Secret": secretGVR}
+	have := map[string]bool{}
 	// Created by hand: the tracker would guess "gatewaies" for a Gateway.
 	for _, o := range objs {
-		gvr := certificateGVR
-		if o.GetKind() == "Gateway" {
-			gvr = gatewayGVR
+		gvr, ok := gvrOf[o.GetKind()]
+		if !ok {
+			gvr = certificateGVR
+		}
+		if o.GetKind() == "Secret" {
+			have[o.GetNamespace()+"/"+o.GetName()] = true
 		}
 		if _, err := dyn.Resource(gvr).Namespace(o.GetNamespace()).Create(context.Background(), o, metav1.CreateOptions{}); err != nil {
+			panic(err)
+		}
+	}
+	for _, o := range objs {
+		if o.GetKind() != "Certificate" {
+			continue
+		}
+		name, _, _ := unstructured.NestedString(o.Object, "spec", "secretName")
+		if name == "" || have[o.GetNamespace()+"/"+name] {
+			continue
+		}
+		have[o.GetNamespace()+"/"+name] = true
+		if _, err := dyn.Resource(secretGVR).Namespace(o.GetNamespace()).Create(context.Background(),
+			issuedSecret(o.GetNamespace(), name, goodIssuedMaterial()), metav1.CreateOptions{}); err != nil {
 			panic(err)
 		}
 	}

@@ -57,6 +57,11 @@ title: 迁移到 Traefik
    自签名签发者签发：它的主题为空，也不是由 CA 签发的叶子证书，因此基于 OpenSSL 的客户端没有可用于
    锚定它的根，而接受例外的浏览器看不出区别。
 
+   v0.26.1 起的版本改用新的签发者名称，因此升级签发的证书不会再出现这种情况，并且
+   `dcctl upgrade --drop-legacy-ingress` 会读取证书本身，在它是自签名、或不是由其自身的 `ca.crt`
+   签发时拒绝并指出该 Secret。下面是备用办法：用于证书由更早版本签发的实例，以及上述拒绝指出了该 Secret 的情况。
+   重命名还会让 cert-manager 从同一个 CA 为该实例的每个主机证书再签发一次；在新证书就绪之前，每个 Secret 继续提供当前证书，因此不会中断服务。
+
    ```bash
    kubectl -n dci-<instance> get secret devicechain-tls-gateway -o jsonpath='{.data.tls\.crt}' \
      | base64 -d | openssl x509 -noout -subject -issuer
