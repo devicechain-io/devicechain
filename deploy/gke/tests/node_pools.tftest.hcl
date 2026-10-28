@@ -317,10 +317,6 @@ run "the_waiters_own_timeout_is_not_a_trigger" {
   }
 
   assert {
-    condition     = !contains(keys(terraform_data.cluster_settled[0].triggers_replace), "timeout")
-    error_message = "The wait's timeout should not be a trigger."
-  }
-  assert {
     condition     = join(",", sort(keys(terraform_data.cluster_settled[0].triggers_replace))) == "cluster,labels,pool_settings,pools,release_channel"
     error_message = "The waiter should be keyed to exactly the cluster, its pools, the release channel, the labels and the pool settings."
   }
