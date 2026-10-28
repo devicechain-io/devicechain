@@ -5,7 +5,7 @@
   </picture>
 </p>
 
-**An open-source, self-hosted IoT platform for collecting device telemetry, detecting conditions in it and sending commands back, on Kubernetes.**
+**DeviceChain is an Apache 2.0 IoT platform you run on Kubernetes.** Devices connect over MQTT, HTTP, Sparkplug B or LwM2M, or through a LoRaWAN network server. Rules raise alarms and send commands back, and dashboards, over-the-air updates and multi-tenant access are built in. There is no device cap and no enterprise edition.
 
 <p align="center">
   <a href="https://devicechain.io/#see-it-run"><img src="branding/media/sitepulse-loop.webp" width="720" alt="A haul truck in a 3D quarry: its telemetry arrives over MQTT, a low-fuel rule fires, a refuel command is sent, the truck heads for the fuel bay while other trucks keep to their own lanes of the two-way haul road, it refuels, and the command completes."></a>
@@ -14,19 +14,43 @@
 </p>
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![CI](https://github.com/devicechain-io/devicechain/actions/workflows/ci.yml/badge.svg)](https://github.com/devicechain-io/devicechain/actions/workflows/ci.yml)
 [![Latest release](https://img.shields.io/github/v/release/devicechain-io/devicechain)](https://github.com/devicechain-io/devicechain/releases/latest)
 [![Artifact Hub](https://img.shields.io/endpoint?url=https://artifacthub.io/badge/repository/devicechain)](https://artifacthub.io/packages/search?repo=devicechain)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/devicechain-io/devicechain/badge)](https://scorecard.dev/viewer/?uri=github.com/devicechain-io/devicechain)
 
-DeviceChain has not reached 1.0. A release can change APIs and schemas, and each one lists its
-breaking changes first ([Status](#status)).
+- **Closes the loop.** A rule can raise an alarm and command the device, and a command is tracked until the device reports the result or its time-to-live runs out ([commands](https://docs.devicechain.io/concepts/commands), [event processing](https://docs.devicechain.io/concepts/event-processing)).
+- **Measured, with the results published.** Throughput was measured on Google Kubernetes Engine and every stored event was checked, with the setup and the limits of each run stated ([measured throughput](https://docs.devicechain.io/deployment/bootstrap#measured-throughput)). Container images and the Helm chart are signed ([verifying releases](https://docs.devicechain.io/deployment/verifying-releases)).
+- **Open, with tenants built in.** One installation serves many tenants, each isolated from the others, and a membership can be limited to one customer's data ([multi-tenancy](https://docs.devicechain.io/concepts/multi-tenancy), [security model](https://docs.devicechain.io/concepts/security-model)). All of it is Apache 2.0 and in this repository.
+
+### Try it locally
+
+You need Docker, `kubectl`, `helm`, `kind` and OpenTofu on your `PATH`, plus `dcctl` from the
+[releases page](https://github.com/devicechain-io/devicechain/releases). Most of the time is the
+bootstrap; the [quickstart](https://docs.devicechain.io/quickstart/first-device) budgets about half
+an hour end to end.
+
+```bash
+dcctl install local                                        # a kind cluster and what instances share
+dcctl bootstrap local devicechain --host localhost --no-tls # an instance, served at http://localhost/
+dcctl sim create demo                                      # a tenant and a sign-in for it
+```
+
+Open http://localhost/ and sign in as `demo@sim.devicechain.local`, the identity `sim create`
+made for the tenant `sim-demo`. Its password is the `simPassword` field in
+`~/.devicechain/sims/demo.json`. (The bootstrap also prints a password for
+`superuser@devicechain.local`, which administers the instance and sees no tenant data.)
+[Your first device](https://docs.devicechain.io/quickstart/first-device) continues from here: it
+creates a device, sends a reading with `curl` and shows it in the console.
+
+[Docs](https://docs.devicechain.io) · [Examples](examples/) · [Discussions](https://github.com/devicechain-io/devicechain/discussions) · [Releases](https://github.com/devicechain-io/devicechain/releases)
+
+DeviceChain has not reached 1.0; see [Status](#status).
 
 DeviceChain™ takes in telemetry from device fleets, keeps a record of each device and the assets,
 areas and customers it belongs to, detects conditions in the data as it arrives, and sends
-commands back. One installation serves many tenants. It is meant for teams that build an IoT
-product or run a fleet and want to run the platform in a Kubernetes cluster they control, with
-their data kept there. All of it is Apache 2.0 and in this repository, including high
-availability, multi-tenancy and command delivery; there is no paid edition.
+commands back. It is meant for teams that build an IoT product or run a fleet and want to run the
+platform in a Kubernetes cluster they control, with their data kept there.
 
 ## What it does
 
@@ -40,8 +64,8 @@ Devices send data over these transports:
   your existing Sparkplug broker as a Host Application
 - [OMA LwM2M](https://docs.devicechain.io/concepts/lwm2m) over CoAP/UDP with DTLS
 
-The transports differ in what they support. HTTP is ingest only, Sparkplug devices cannot be
-commanded, and LwM2M telemetry is decoded from SenML-JSON only. Sparkplug and LwM2M are not in
+The transports differ in what they support. HTTP is ingest only, Sparkplug commands (`NCMD` and
+`DCMD`) are opt-in and off by default, and LwM2M telemetry is decoded from SenML-JSON only. Sparkplug and LwM2M are not in
 the default install; add them at bootstrap with `--enable-area sparkplug-ingest` or
 `--enable-area lwm2m-ingest`. The
 [transport matrix](https://docs.devicechain.io/reference/transport-matrix) lists what each one
@@ -88,10 +112,11 @@ batch and the audit journals as CSV, up to 10,000 rows each.
 ### Sign-in and updates
 
 People can sign in through your own OpenID Connect identity provider, and a tenant can require it
-([single sign-on](https://docs.devicechain.io/concepts/single-sign-on)). Over-the-air updates are
-an opt-in first release: a per-tenant artifact catalogue, assignment to one device at a time and a
-resumable download. Nothing yet verifies who produced an artifact, so assigning one has to be
-allowed explicitly, and there are no console screens for it
+([single sign-on](https://docs.devicechain.io/concepts/single-sign-on)). Over-the-air updates have a per-tenant artifact catalogue with a
+verified upload, signers (an artifact nobody has signed cannot be assigned unless you allow that),
+assignment to one device or, as a rollout, to a device group a capped number of devices at a time,
+and a resumable download. The console has screens for them. Rollouts have no waves, canary
+promotion or schedules, and only a device connected over MQTT can receive a managed update
 ([over-the-air updates](https://docs.devicechain.io/concepts/over-the-air-updates)).
 
 ### APIs and data access
