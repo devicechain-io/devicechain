@@ -424,3 +424,33 @@ func TestX509ProfileAnchors(t *testing.T) {
 		assert.Empty(t, got)
 	})
 }
+
+// A second real, enabled anchor whose fingerprint is quoted correctly is still not the profile's
+// anchor: the registration names the anchor the chain was verified against, and the profile must
+// be at THAT anchor. Only the id comparison refuses this one.
+func TestCertificateRegistrationRefusesAnAnchorThatIsNotTheProfilesOwn(t *testing.T) {
+	f := newJitFixture(t, ProvisionAllowNew)
+	otherCA := newRootCA(t, "Other Root")
+	other := f.provFixture.anchor("other", otherCA)
+	leaf := otherCA.leaf(t, "SN-1")
+	verified, err := x509trust.VerifyClientChain(otherCA.cert, []*x509.Certificate{leaf.cert}, time.Now())
+	require.NoError(t, err)
+	reg := &X509Registration{Leaf: leaf.cert, NotAfter: verified.NotAfter, AnchorId: other.ID, AnchorFingerprint: other.FingerprintSha256}
+	f.refused509(ErrProvisioningFailed, "pp-x", reg)
+	// The control: the same device under the profile's own anchor registers.
+	_, err = f.register509("pp-x", f.registration(f.ca.leaf(t, "SN-1")))
+	require.NoError(t, err)
+}
+
+// A profile that no longer mints certificate credentials is not registered against, whatever its
+// anchor says.
+func TestCertificateRegistrationRefusesAProfileWhoseCredentialTypeIsNotCertificate(t *testing.T) {
+	f := newJitFixture(t, ProvisionAllowNew)
+	reg := f.registration(f.ca.leaf(t, "SN-1"))
+	p := f.profileRow("pp-x")
+	f.sql(`UPDATE provisioning_profiles SET credential_type = ? WHERE id = ?`, string(CredentialAccessToken), p.ID)
+	f.refused509(ErrProvisioningFailed, "pp-x", reg)
+	f.sql(`UPDATE provisioning_profiles SET credential_type = ? WHERE id = ?`, string(CredentialX509Certificate), p.ID)
+	_, err := f.register509("pp-x", reg)
+	require.NoError(t, err, "the control: restored, it registers")
+}

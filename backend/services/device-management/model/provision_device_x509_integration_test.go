@@ -15,6 +15,7 @@ package model
 import (
 	"crypto/x509"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,6 +23,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/x509trust"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 type pgCertFixture struct {
@@ -168,4 +170,71 @@ func TestCertificateRegistrationAnchorDisableWaitsForARegistrationInFlight(t *te
 	// Once the anchor is off, the next registration is refused (the gate under the lock).
 	_, err := f.registerLeaf(f.ca.leaf(t, "SN-2"))
 	require.ErrorIs(t, err, ErrProvisioningFailed)
+}
+
+// holdAfterDevice pauses the registration of externalId right after its DEVICE row is written
+// and before its credential is: the profile and anchor have been read and checked, and the
+// credential (whose foreign key would itself lock the anchor row) does not exist yet. That is the
+// window only the explicit FOR SHARE on the anchor covers.
+func (f *pgFixture) holdAfterDevice(externalId string) (reached <-chan struct{}, release func()) {
+	f.t.Helper()
+	reachedCh, releaseCh := make(chan struct{}), make(chan struct{})
+	var once, releaseOnce sync.Once
+	name := fmt.Sprintf("test:hold-after-device-%s-%d", externalId, time.Now().UnixNano())
+	require.NoError(f.t, f.mgr.Database.Callback().Create().After("gorm:create").Register(name, func(db *gorm.DB) {
+		d, ok := db.Statement.Dest.(*Device)
+		if !ok || db.Error != nil || d.TenantId != f.tenant || !d.ExternalId.Valid || d.ExternalId.String != externalId {
+			return
+		}
+		once.Do(func() {
+			close(reachedCh)
+			<-releaseCh
+		})
+	}))
+	rel := func() { releaseOnce.Do(func() { close(releaseCh) }) }
+	f.t.Cleanup(func() {
+		rel()
+		_ = f.mgr.Database.Callback().Create().Remove(name)
+	})
+	return reachedCh, rel
+}
+
+// 🔑 THE ANCHOR IS LOCKED FROM THE MOMENT IT IS CHECKED, NOT ONLY FROM THE CREDENTIAL INSERT. A
+// disable that arrives between the check and the insert must wait; otherwise the credential is
+// pinned to an anchor that has just been withdrawn and nothing kicks it.
+func TestCertificateRegistrationAnchorDisableWaitsBetweenTheCheckAndTheInsert(t *testing.T) {
+	f := newPgCertFixture(t)
+	leaf := f.ca.leaf(t, "SN-1")
+	reached, release := f.holdAfterDevice("SN-1")
+
+	regDone := make(chan regResult, 1)
+	go func() { res, err := f.registerLeaf(leaf); regDone <- regResult{res, err} }()
+	awaitSignal(t, reached, "the registration to write its device")
+
+	disabled := make(chan struct{})
+	var disableErr error
+	go func() {
+		_, disableErr = f.api.UpdateDeviceTrustAnchor(f.ctx, "maker", &DeviceTrustAnchorUpdateRequest{Enabled: dcgraphql.OptionalBoolOf(false)})
+		close(disabled)
+	}()
+	waitForBlockedBackend(t, f.mgr.Database)
+	notDone(t, disabled, "the anchor disable")
+
+	release()
+	awaitSignal(t, disabled, "the anchor disable")
+	require.NoError(t, disableErr)
+	reg := <-regDone
+	require.NoError(t, reg.err)
+	require.Eventually(t, func() bool {
+		f.kicker.mu.Lock()
+		defer f.kicker.mu.Unlock()
+		for _, c := range f.kicker.calls {
+			for _, tok := range c.tokens {
+				if tok == reg.res.DeviceToken {
+					return true
+				}
+			}
+		}
+		return false
+	}, 10*time.Second, 50*time.Millisecond, "the disable did not kick the device the registration created")
 }

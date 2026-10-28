@@ -283,3 +283,36 @@ func TestAnEmptyTrustedProxyListIsWarnedAbout(t *testing.T) {
 		assert.Contains(t, err.Error(), "infrastructure.http.trustedProxies")
 	})
 }
+
+// 🔴 THE ENDPOINT CHARGES THE LIMITER THE AUTH CALLOUT CHARGES. Registration by certificate on
+// first connect shares the tenant's allowance with this endpoint (calloutJitConfig reads
+// ProvisioningTenants), so the endpoint must charge exactly that object: a service that built one
+// limiter for the endpoint and another for the callout would give a tenant two allowances. This
+// spends the published limiter's allowance directly and shows the endpoint refuse as a result.
+func TestTheEndpointChargesThePublishedTenantLimiter(t *testing.T) {
+	prev := ProvisioningTenants
+	t.Cleanup(func() { ProvisioningTenants = prev })
+	w := wireProvisioning(t, nil, true)
+	require.NotNil(t, ProvisioningTenants, "wiring the endpoint did not publish its tenant limiter")
+
+	ctx := core.WithTenant(t.Context(), "acme")
+	_, err := w.api.CreateDeviceType(ctx, &model.DeviceTypeCreateRequest{Token: "dt-a"})
+	require.NoError(t, err)
+	created, err := w.api.CreateProvisioningProfile(ctx, &model.ProvisioningProfileCreateRequest{
+		Token: "pp-1", ProvisionKey: "fleet-key", Strategy: string(model.ProvisionAllowNew), DeviceTypeToken: "dt-a", Enabled: true})
+	require.NoError(t, err)
+	body := func(ext string) map[string]any {
+		return map[string]any{"provisionKey": "fleet-key", "provisionSecret": created.IssuedSecret,
+			"externalId": ext, "credentialSecret": strings.Repeat("a", 43)}
+	}
+	status, got := w.post("acme", body("SN-1"))
+	require.Equal(t, 201, status, "the control: with allowance left, it registers: %v", got)
+
+	for i := 0; i < 100000 && ProvisioningTenants.Allow("acme"); i++ {
+	}
+	status, got = w.post("acme", body("SN-2"))
+	assert.Equal(t, 429, status, "the endpoint did not charge the published limiter: %v", got)
+	// Another tenant's allowance is its own.
+	assert.False(t, ProvisioningTenants.Allow("acme"))
+	assert.True(t, ProvisioningTenants.Allow("someone-else"))
+}
