@@ -690,6 +690,33 @@ func TestX509SessionIsClampedToTheChainsEarliestNotAfter(t *testing.T) {
 	})
 }
 
+// A credential with less than a second left is refused, not minted: the JWT's expiry is whole
+// seconds, so the broker would close the session the instant it opened. The control is the same
+// credential with minutes left.
+func TestX509CredentialAboutToExpireIsRefused(t *testing.T) {
+	f := newX509Fixture(t)
+	root := newTestCert(t, nil, certOpts{cn: "Maker Root", ca: true})
+	f.anchor("maker", root)
+	f.device("sensor-001")
+	leaf := newTestCert(t, root, certOpts{cn: "SN-0001"})
+	cred := f.pin("c-1", "sensor-001", "maker", leaf)
+	setExpiry := func(at time.Time) {
+		require.NoError(t, f.api.RDB.DB(f.ctx).Model(&model.DeviceCredential{}).Where("id = ?", cred.ID).
+			Update("expires_at", at).Error)
+	}
+	setExpiry(time.Now().Add(5 * time.Minute))
+	_, denied := f.x509Authorize("sensor-001", leaf)
+	require.Empty(t, denied, "the control: minutes left, it is granted")
+
+	// 700 ms left when the lookup runs (still valid, so the lookup resolves it) but under the
+	// one-second floor the clamp enforces.
+	setExpiry(time.Now().Add(700 * time.Millisecond))
+	before := f.counts()
+	_, denied = f.x509Authorize("sensor-001", leaf)
+	require.NotEmpty(t, denied, "a credential with under a second left was minted a session")
+	f.moved(before, x509ResultChainInvalid)
+}
+
 // The gates every device connect passes, on the certificate path: the deleted-tenant gate and the
 // erasure fence each refuse a connect that is granted with the gate open.
 func TestX509TenantGatesRefuse(t *testing.T) {

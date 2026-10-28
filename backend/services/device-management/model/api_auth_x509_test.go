@@ -46,6 +46,19 @@ func TestResolveX509Connect(t *testing.T) {
 		_, err := f.api.ResolveX509Connect(f.ctx, x509trust.Fingerprint(ca.leaf(t, "SN-9").cert), now)
 		assert.ErrorIs(t, err, ErrCredentialNotResolved)
 	})
+	t.Run("another credential type that happens to carry the pin as its id", func(t *testing.T) {
+		// An MQTT username is chosen by the operator, so one can be spelled exactly like a pin.
+		// It is a different credential and must not resolve as a certificate.
+		f.device("dev-b", "dev-b-ext", "dt-a", "")
+		stranger := ca.leaf(t, "SN-LOOKALIKE")
+		secret := "a-long-enough-secret-0123456789"
+		_, err := f.api.CreateDeviceCredential(f.ctx, &DeviceCredentialCreateRequest{
+			Token: "c-basic", DeviceToken: "dev-b", CredentialType: string(CredentialMqttBasic),
+			CredentialId: x509trust.Fingerprint(stranger.cert), CredentialValue: &secret, Enabled: true})
+		require.NoError(t, err)
+		_, err = f.api.ResolveX509Connect(f.ctx, x509trust.Fingerprint(stranger.cert), now)
+		assert.ErrorIs(t, err, ErrCredentialNotResolved, "an MQTT_BASIC credential resolved as a certificate pin")
+	})
 	t.Run("nothing presented", func(t *testing.T) {
 		_, err := f.api.ResolveX509Connect(f.ctx, "", now)
 		assert.ErrorIs(t, err, ErrCredentialNotPresented)
