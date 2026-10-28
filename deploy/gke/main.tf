@@ -126,12 +126,32 @@ resource "google_container_node_pool" "this" {
 # operation in progress (it fails, rather than returning, if that never happens). It runs again
 # when a pool is added, removed or resized, since each of those starts operations of its own.
 # The outputs depend on it, so nothing that reads them is handed a cluster that is still moving.
+#
+# 🔴 AN IN-PLACE UPDATE STARTS OPERATIONS TOO, and it changes neither the cluster's ID nor a pool's:
+# a new release channel or a pool's machine settings is an UPDATE_CLUSTER or UPDATE_NODEPOOL that
+# leaves the cluster RECONCILING after the apply returns, which is exactly what this wait exists for.
+# So the waiter is replaced by two independent couplings, either of which is enough:
+#   - the settings that are INPUTS to those updates are in the triggers (release channel, labels and
+#     every pool's definition), where a plan shows them and tests/ can read them; and
+#   - replace_triggered_by replaces it whenever the cluster or any pool has a planned change, which
+#     also covers a setting this block does not name (the monitoring configuration, say).
+# An apply that changes none of them plans nothing for it, so the wait does not run again.
 resource "terraform_data" "cluster_settled" {
   count = var.wait_for_cluster_operations ? 1 : 0
 
   triggers_replace = {
-    cluster = google_container_cluster.this.id
-    pools   = join(",", sort([for name, pool in google_container_node_pool.this : "${name}:${pool.id}:${pool.node_count}"]))
+    cluster         = google_container_cluster.this.id
+    pools           = join(",", sort([for name, pool in google_container_node_pool.this : "${name}:${pool.id}:${pool.node_count}"]))
+    release_channel = var.release_channel
+    labels          = jsonencode(var.labels)
+    pool_settings   = jsonencode({ for name, pool in local.pools : name => pool if pool.node_count > 0 })
+  }
+
+  lifecycle {
+    replace_triggered_by = [
+      google_container_cluster.this,
+      google_container_node_pool.this,
+    ]
   }
 
   provisioner "local-exec" {
