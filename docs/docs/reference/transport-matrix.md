@@ -116,6 +116,7 @@ there is no separate broker to run.
   as a command whose response carries the value, but that is a vocabulary you define on the
   device profile, not something the transport provides.
 
+- **Client certificates.** Instead of a token or password, a device can authenticate with an X.509 client certificate presented in the TLS handshake, with the MQTT username `{tenant}:@x509` and no password. The certificate must chain to a [trust anchor](../concepts/device-certificates.md) the tenant added, either pinned to a device's credential or accepted by a certificate profile that registers the device on its first connect. The limits are stated plainly: a CA with name constraints is refused, there is no CRL or OCSP (revoke by disabling the credential or the anchor, and use short-lived certificates), and renewal and the C# SDK are not available yet. See [Connecting with a certificate](../guides/device-x509.md).
 - **Gateways.** A device can front other devices. The [edge agent](../deployment/edge-services.md#gateway-identity) signs in as a gateway device and publishes each device's events in the [gateway namespace](./device-protocol.md#gateway-namespace). The platform accepts an event only for a device assigned to that gateway, and refuses any other loudly (the reason `NotGatewayChild`, a counter, and a notice to the gateway) rather than letting the broker acknowledge it and drop it. Commands to devices behind a gateway are not routed yet.
 
 ### HTTP
@@ -157,16 +158,17 @@ A `POST` endpoint for the same JSON event body. Simple, and one-way.
 
 ### Self-registration {#self-registration}
 
-Not a transport for readings, but the way a device with no credential yet gets one. It is HTTPS only.
+Not a transport for readings, but the way a device with no credential yet gets one. With a secret, it is HTTPS only.
 
 | Door | Registers a device? |
 | --- | :---: |
 | HTTPS, `POST /api/device-management/provisioning/{tenant}/register` | yes |
-| MQTT, any broker | no |
+| MQTT on the platform broker, with a client certificate and a certificate profile | yes, on first connect |
+| MQTT, any other way | no |
 | HTTP event ingest, Sparkplug B, LwM2M | no |
 
 - A device presents a provisioning profile's key and secret, its serial number and a credential it made up, and receives its device token and MQTT client id. See [Device self-registration](../guides/device-self-registration.md) and [the endpoint contract](./device-protocol.md#self-registration).
-- **There is no registration by connecting over MQTT.** A device cannot register by connecting: the broker authenticates a credential that already exists.
+- **There is no registration by connecting over MQTT with a secret.** The broker authenticates a credential that already exists. The exception is a device with a client certificate: a [certificate profile](../guides/device-x509.md#registration) registers it on its first connect, with no secret and without this endpoint.
 - It needs the instance's API ingress, and it is rate limited per client address and per tenant, answering `429` with `Retry-After`.
 - Sparkplug B and LwM2M create devices through their own auto-registration setting, which is separate and does not use provisioning profiles.
 
@@ -414,6 +416,7 @@ These are named explicitly because, from outside the platform, "absent from the 
 | --- | --- |
 | WebSocket device ingest | Not available. Named as planned in the [introduction](../intro.md). |
 | CoAP outside LwM2M | Not available. CoAP reaches the platform through [LwM2M](../concepts/lwm2m.md) and not otherwise. |
+| Client certificates over HTTP or LwM2M | Not available. Only the platform's MQTT broker authenticates a device by client certificate. HTTP uses a token or basic credential, and LwM2M uses pre-shared keys. |
 | Raw NATS as a device transport | Not available. A device credential authorizes an MQTT connection, and there is no NATS-native device client. |
 | Sparkplug command egress (`DCMD`) | Available when a source enables it, confirmed by the node reporting the value rather than by an acknowledgement, which Sparkplug does not have — see [above](#sparkplug-b). |
 | Industrial fieldbus protocols — OPC-UA, Modbus, BACnet | Not available as platform transports, and **nothing the project ships speaks them.** The supported shape is a local gateway that speaks the fieldbus on the plant network and forwards over MQTT or HTTP; you supply the protocol translation. The project does ship `dc-edge-agent`, which does the *other* half of that job: it terminates the device MQTT path locally, spools durably across a WAN outage, and forwards **over MQTT only**. It speaks no fieldbus itself. |

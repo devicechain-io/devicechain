@@ -17,9 +17,10 @@ title: 设备凭据
 | --- | --- | --- |
 | `ACCESS_TOKEN` | bearer 令牌（凭据 ID） | 令牌带密钥的单向摘要 |
 | `MQTT_BASIC` | 用户名（凭据 ID）+ 密码 | 密码带密钥的单向摘要 |
+| `X509_CERTIFICATE` | TLS 客户端证书，配合 MQTT 用户名 `{tenant}:@x509`，无密码 | 没有任何机密：证书的 SHA-256 就是固定值，证书本身是公开的 |
 
 :::note X.509 凭据
-`X509_CERTIFICATE` 凭据会指定其证书所通向的[信任锚](../user-guide/provisioning-and-trust-anchors.md#trust-anchors)。创建凭据时平台会验证证书链，并把凭据 id 设为证书的 SHA-256 pin（它是公开的）。一台设备最多持有三个，没有信任锚的证书凭据不会通过认证。目前证书能做什么，参见[目前证书方面可用的功能](../user-guide/provisioning-and-trust-anchors.md#certificates-today)。
+`X509_CERTIFICATE` 凭据会指定其证书所通向的[信任锚](../user-guide/provisioning-and-trust-anchors.md#trust-anchors)。创建凭据时平台会验证证书链，并把凭据 id 设为证书的 SHA-256 pin（它是公开的）。一台设备最多持有三个，没有信任锚的证书凭据不会通过认证。目前证书能做什么，参见[目前证书方面可用的功能](../user-guide/provisioning-and-trust-anchors.md#certificates-today)。完整流程见[使用证书连接设备](./device-x509.md)和[证书身份](../concepts/device-certificates.md)。
 :::
 
 ## 读取凭据需要 `device:write` {#reading-a-credential}

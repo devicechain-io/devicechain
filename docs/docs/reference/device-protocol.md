@@ -200,7 +200,7 @@ A device that has no credential yet can register itself, over HTTPS, with a flee
 POST /api/device-management/provisioning/{tenant}/register
 ```
 
-- **HTTPS only.** The request carries the provision secret in its body. There is no MQTT registration: a device cannot register by connecting.
+- **HTTPS only.** The request carries the provision secret in its body. There is no MQTT registration with a secret. A device that holds a client certificate can be registered when it first connects over MQTT, by a [certificate profile](../guides/device-x509.md#registration), which has no provision secret and does not use this endpoint.
 - **It needs the instance's API ingress**, which routes `/api/<area>` to the services and strips the prefix. With `ingress.enabled: false` the route has no public path. [`dcctl device register`](./dcctl.md#dcctl-device-register) takes the same `--server` host as the other commands.
 - **There is no `Authorization` header.** The provision key and secret in the body are the authentication.
 

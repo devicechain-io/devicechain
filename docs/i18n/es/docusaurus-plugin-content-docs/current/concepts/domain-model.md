@@ -77,7 +77,7 @@ query {
 
 ## Identidad y credenciales
 
-Un dispositivo tiene una **identidad** estable a la que hace referencia todo lo demás, separada de sus **credenciales**, el material que usa para autenticarse. Las credenciales son conectables (pluggable): token de acceso y MQTT-basic (usuario + contraseña). Así, un dispositivo puede rotar credenciales o tener varias sin cambiar su identidad.
+Un dispositivo tiene una **identidad** estable a la que hace referencia todo lo demás, separada de sus **credenciales**, el material que usa para autenticarse. Las credenciales son conectables (pluggable): token de acceso, MQTT-basic (usuario + contraseña) y un certificado de cliente X.509 que encadena con un [ancla de confianza](./device-certificates.md) que el tenant ha añadido. Así, un dispositivo puede rotar credenciales o tener varias sin cambiar su identidad.
 
 Un dispositivo también se puede **deshabilitar** por completo, tenga las credenciales que tenga: sus eventos se descartan, no puede abrir una conexión nueva, su tráfico de configuración y de actualizaciones se rechaza y los comandos que se le envían se rechazan, hasta que se vuelve a habilitar. Consulta [Deshabilitar un dispositivo](../guides/device-credentials.md#disabling-a-device).
 

@@ -256,6 +256,39 @@ capture a profile.
 `values.schema.json` validates the deployment-selection envelope (profile enum,
 area names, image/instance shape) at `helm install`/`upgrade` time.
 
+### Device client certificates
+
+Devices can authenticate to the instance's MQTT broker with an X.509 client certificate
+(MQTT username `{tenant}:@x509`, no password). The chart needs no switch for it: it is used
+once a tenant adds a trust anchor. What it depends on lives outside the chart.
+
+- **The broker must be DeviceChain's build, `dc-nats-server`,** which requests (but does not
+  require) a client certificate on its MQTT listener. It is installed by the infrastructure
+  (`nats_server_image_*` on the OpenTofu instance root), not by this chart, and `dcctl` pins it by
+  digest. With the upstream NATS image, certificate devices are refused and
+  `BrokerMqttClientAuthLost` fires; token and password devices are unaffected.
+- **Registration of devices on their first connect** has two fixed settings, read when
+  `device-management` starts, under that area's `config`:
+
+  ```yaml
+  functionalAreas:
+    device-management:
+      config:
+        callout:
+          jitMaxInFlight: 16        # registrations one replica works on at once, 1 to 128
+          jitSourceTrusted: false   # true adds a per-client-address limit
+  ```
+
+  Turn `jitSourceTrusted` on only when the MQTT Service preserves client addresses
+  (`externalTrafficPolicy: Local`, or a kind NodePort). Behind source NAT every device shares one
+  address and one allowance. An unknown key or an out-of-range value stops the service at start.
+- **Alerts** for chain failures, refused registrations, expiring trust anchors and a broker that
+  stopped requesting certificates ship with the other PrometheusRules.
+
+There is no CRL or OCSP, a CA with name constraints is refused, and certificates are not
+accepted over HTTP or LwM2M. The documentation site's "Certificate Authentication" page covers
+operating it.
+
 ## Object store
 
 Opaque binaries that don't belong in Postgres (branding logos today; firmware/OTA +

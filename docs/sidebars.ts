@@ -65,6 +65,7 @@ const sidebars: SidebarsConfig = {
           items: [
             'concepts/sparkplug',
             'concepts/lwm2m',
+            'concepts/device-certificates',
             'concepts/device-presence',
             // Directly after presence on purpose: whether a command is dispatched
             // or held is decided by whether the device is present, so the two read
@@ -177,6 +178,7 @@ const sidebars: SidebarsConfig = {
           items: [
             'guides/connecting-a-device',
             'guides/device-credentials',
+            'guides/device-x509',
             'guides/device-self-registration',
             'guides/importing-devices',
             'guides/inbound-integrations',
@@ -283,6 +285,7 @@ const sidebars: SidebarsConfig = {
             'deployment/tuning-an-instance',
             'deployment/detection-engine',
             'deployment/edge-services',
+            'deployment/device-certificates',
             'deployment/disaster-recovery',
             'deployment/tenant-deletion',
           ],

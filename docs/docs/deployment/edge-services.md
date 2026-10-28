@@ -667,6 +667,8 @@ The agent is a **gateway**: an ordinary device on the platform that fronts other
 2. Create the devices the site fronts and assign each one to the gateway, with `assignDeviceGateway` or with `gatewayToken` when you create it. A device has at most one gateway, and a gateway cannot itself have a gateway. Assigning needs the same permission as managing device credentials.
 3. Start the agent. Local devices keep publishing their own topics to it, unchanged.
 
+The agent signs in with the `MQTT_BASIC` credential above. It has no client-certificate setting yet, so a gateway cannot authenticate by [certificate](../concepts/device-certificates.md) today.
+
 An assignment takes effect on the device's next event, within seconds, with no reconnect. Clearing one does the same, and the gateway's other devices keep flowing. Disabling the gateway, or revoking its credential, ends its session.
 
 **What the agent does on the uplink:**

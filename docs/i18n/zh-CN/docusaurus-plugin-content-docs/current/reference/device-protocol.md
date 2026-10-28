@@ -200,7 +200,7 @@ Schema 表达不了的内容：
 POST /api/device-management/provisioning/{tenant}/register
 ```
 
-- **仅限 HTTPS。**请求正文中携带预配密文。不存在 MQTT 注册：设备不能通过连接来注册。
+- **仅限 HTTPS。**请求正文中携带预配密文。不存在使用密文的 MQTT 注册。持有客户端证书的设备可以在首次通过 MQTT 连接时，由[证书配置](../guides/device-x509.md#registration)为其注册；证书配置没有注册密文，也不使用此端点。
 - **需要实例的 API Ingress**，它把 `/api/<area>` 路由到各服务并去掉前缀。`ingress.enabled: false` 时该路由没有公开路径。[`dcctl device register`](./dcctl.md#dcctl-device-register) 与其他命令使用相同的 `--server` 主机。
 - **没有 `Authorization` 请求头。**正文中的预配密钥和密文就是认证。
 

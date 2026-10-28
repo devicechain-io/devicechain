@@ -17,9 +17,10 @@ Disponible. Gestionas las credenciales desde la pestaña **Credenciales** de la 
 | --- | --- | --- |
 | `ACCESS_TOKEN` | un token portador (bearer token) (el id de la credencial) | un resumen irreversible con clave del token |
 | `MQTT_BASIC` | un usuario (el id de la credencial) + contraseña | un resumen irreversible con clave de la contraseña |
+| `X509_CERTIFICATE` | un certificado de cliente TLS, con el usuario MQTT `{tenant}:@x509` y sin contraseña | nada secreto: el SHA-256 del certificado es la huella fijada, y el certificado es público |
 
 :::note Credenciales X.509
-Una credencial `X509_CERTIFICATE` nombra el [ancla de confianza](../user-guide/provisioning-and-trust-anchors.md#trust-anchors) a la que encadena su certificado. La plataforma verifica la cadena al crear la credencial y fija el id de la credencial en el pin SHA-256 del certificado, que es público. Un dispositivo tiene como máximo tres, y una credencial de certificado sin ancla de confianza no autentica. Lo que puede hacer hoy un certificado está en [Qué funciona hoy con certificados](../user-guide/provisioning-and-trust-anchors.md#certificates-today).
+Una credencial `X509_CERTIFICATE` nombra el [ancla de confianza](../user-guide/provisioning-and-trust-anchors.md#trust-anchors) a la que encadena su certificado. La plataforma verifica la cadena al crear la credencial y fija el id de la credencial en el pin SHA-256 del certificado, que es público. Un dispositivo tiene como máximo tres, y una credencial de certificado sin ancla de confianza no autentica. Lo que puede hacer hoy un certificado está en [Qué funciona hoy con certificados](../user-guide/provisioning-and-trust-anchors.md#certificates-today). Para el recorrido completo, consulta [Conectar con un certificado](./device-x509.md) e [Identidad por certificado](../concepts/device-certificates.md).
 :::
 
 ## Leer una credencial requiere `device:write` {#reading-a-credential}

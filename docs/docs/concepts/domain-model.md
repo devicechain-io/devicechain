@@ -77,7 +77,7 @@ query {
 
 ## Identity and credentials
 
-A device has a stable **identity** that everything else references, kept separate from its **credentials**, the material it uses to authenticate. Credentials are pluggable: access token and MQTT-basic (username + password). A device can therefore rotate credentials or hold several without changing its identity.
+A device has a stable **identity** that everything else references, kept separate from its **credentials**, the material it uses to authenticate. Credentials are pluggable: access token, MQTT-basic (username + password) and an X.509 client certificate that chains to a [trust anchor](./device-certificates.md) the tenant has added. A device can therefore rotate credentials or hold several without changing its identity.
 
 A device can also be **disabled** as a whole, whatever credentials it holds: its events are discarded, it cannot open a new connection, its configuration and update traffic is refused and commands to it are refused, until it is enabled again. See [Disabling a device](../guides/device-credentials.md#disabling-a-device).
 
