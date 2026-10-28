@@ -200,7 +200,7 @@ func newRecordingGraphQL(t *testing.T, answer func(string, map[string]any) map[s
 	}))
 	t.Cleanup(srv.Close)
 	return g, &Runtime{
-		Endpoints:   Endpoints{DeviceMgmtGraphQL: srv.URL, UserGraphQL: srv.URL},
+		Endpoints:   Endpoints{DeviceMgmtGraphQL: srv.URL, UserGraphQL: srv.URL, DashboardMgmtGraphQL: srv.URL},
 		InstanceId:  "dc",
 		Tenant:      "acme",
 		SimPassword: "sim-password",
@@ -231,6 +231,14 @@ func (g *recordingGraphQL) names() []string {
 			out = append(out, "inviteMember")
 		case strings.Contains(c.query, "acceptInvitation"):
 			out = append(out, "acceptInvitation")
+		case strings.Contains(c.query, "shareDashboard"):
+			out = append(out, "shareDashboard")
+		case strings.Contains(c.query, "reissueInvitation"):
+			out = append(out, "reissueInvitation")
+		case strings.Contains(c.query, "setMemberAccess"):
+			out = append(out, "setMemberAccess")
+		case strings.Contains(c.query, "setMemberEnabled"):
+			out = append(out, "setMemberEnabled")
 		case strings.Contains(c.query, "setMemberScope"):
 			out = append(out, "setMemberScope")
 		case strings.Contains(c.query, "members("):
@@ -356,10 +364,18 @@ func membersFake(existing []map[string]any, invitationCode string) func(string, 
 			return map[string]any{"acceptInvitation": map[string]any{"identityToken": "t"}}
 		case strings.Contains(q, "setMemberScope("):
 			return map[string]any{"setMemberScope": map[string]any{"email": "x"}}
+		case strings.Contains(q, "setMemberAccess("):
+			return map[string]any{"setMemberAccess": map[string]any{"email": "x"}}
+		case strings.Contains(q, "setMemberEnabled("):
+			return map[string]any{"setMemberEnabled": map[string]any{"email": "x"}}
+		case strings.Contains(q, "reissueInvitation("):
+			return map[string]any{"reissueInvitation": map[string]any{"invitationCode": "reissued-1"}}
 		}
 		return nil
 	}
 }
+
+var viewerRoles = []map[string]any{{"token": "viewer"}}
 
 func annexOwner() CustomerUserSpec {
 	return CustomerUserSpec{Email: TowerpulseAnnexOwnerEmail, CustomerToken: TowerpulseAnnexOwnerToken}
@@ -415,7 +431,7 @@ func TestTheManifestProvisionsTheAnnexOwnerAsItsOnlyCustomerUser(t *testing.T) {
 // Idempotent: a member who already has exactly the right scope is not invited, accepted or touched.
 func TestACustomerUserWhoAlreadyHasTheRightScopeIsLeftAlone(t *testing.T) {
 	existing := []map[string]any{{
-		"email": TowerpulseAnnexOwnerEmail, "enabled": true, "invitationPending": false,
+		"email": TowerpulseAnnexOwnerEmail, "enabled": true, "invitationPending": false, "roles": viewerRoles,
 		"scope": []map[string]any{{"kind": "CUSTOMER", "token": TowerpulseAnnexOwnerToken}},
 	}}
 	g, rt := newRecordingGraphQL(t, membersFake(existing, ""))
@@ -437,7 +453,7 @@ func TestACustomerUserWhoWasWidenedOrMovedIsNarrowedBackToTheAnnex(t *testing.T)
 		"a group scope": {{"kind": "GROUP", "token": TowerpulseAnnexOwnerToken}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			existing := []map[string]any{{"email": strings.ToUpper(TowerpulseAnnexOwnerEmail), "enabled": true, "scope": scope}}
+			existing := []map[string]any{{"email": strings.ToUpper(TowerpulseAnnexOwnerEmail), "enabled": true, "roles": viewerRoles, "scope": scope}}
 			g, rt := newRecordingGraphQL(t, membersFake(existing, ""))
 			if err := ensureCustomerUser(context.Background(), rt, annexOwner()); err != nil {
 				t.Fatal(err)
@@ -450,6 +466,105 @@ func TestACustomerUserWhoWasWidenedOrMovedIsNarrowedBackToTheAnnex(t *testing.T)
 				t.Errorf("scope sent = %v, want the annex owner alone", sent)
 			}
 		})
+	}
+}
+
+var annexScope = []map[string]any{{"kind": "CUSTOMER", "token": TowerpulseAnnexOwnerToken}}
+
+// An earlier run invited the person and failed before accepting: they exist, with the right scope,
+// and can never sign in. The bootstrap issues a new code and accepts it with the sim password.
+func TestAPendingCustomerUserInvitationIsReissuedAndAccepted(t *testing.T) {
+	existing := []map[string]any{{
+		"email": TowerpulseAnnexOwnerEmail, "enabled": false, "invitationPending": true,
+		"roles": viewerRoles, "scope": annexScope,
+	}}
+	g, rt := newRecordingGraphQL(t, membersFake(existing, ""))
+	if err := ensureCustomerUser(context.Background(), rt, annexOwner()); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(g.names(), ","); got != "members,reissueInvitation,acceptInvitation" {
+		t.Fatalf("calls = %s, want members, reissueInvitation, acceptInvitation", got)
+	}
+	if a := g.called("acceptInvitation(")[0].vars; a["code"] != "reissued-1" || a["password"] != "sim-password" {
+		t.Errorf("accept = %v, want the REISSUED code and the sim password", a)
+	}
+}
+
+// An account that was ever usable cannot accept an invitation by choosing a password; the platform
+// answers the one INVALID_INVITATION. The bootstrap then signs in with the sim password and accepts
+// with that identity token, which is how a member removed and invited again gets back in.
+func TestAPendingCustomerUserWhoseAccountExistsAcceptsWithAnIdentityToken(t *testing.T) {
+	existing := []map[string]any{{
+		"email": TowerpulseAnnexOwnerEmail, "invitationPending": true, "roles": viewerRoles, "scope": annexScope,
+	}}
+	fake := membersFake(existing, "")
+	g, rt := newRecordingGraphQL(t, func(q string, v map[string]any) map[string]any {
+		if strings.Contains(q, "acceptInvitation(") && v["password"] != nil {
+			return nil // the fake answers an unhandled query with a refusal
+		}
+		return fake(q, v)
+	})
+	if err := ensureCustomerUser(context.Background(), rt, annexOwner()); err != nil {
+		t.Fatal(err)
+	}
+	accepts := g.called("acceptInvitation(")
+	if len(accepts) != 2 {
+		t.Fatalf("%d accepts, want the refused password accept then one with an identity token", len(accepts))
+	}
+	if v := accepts[1].vars; v["identityToken"] != "identity" || v["code"] != "reissued-1" || v["password"] != nil {
+		t.Errorf("second accept = %v, want the reissued code and the identity token alone", v)
+	}
+}
+
+// Negative control: a pending member with a refused reissue is an error naming the member, never a
+// quiet success that leaves an account nobody can sign in to.
+func TestAPendingCustomerUserWhoCannotBeReissuedIsAnErrorNamingThem(t *testing.T) {
+	existing := []map[string]any{{
+		"email": TowerpulseAnnexOwnerEmail, "invitationPending": true, "roles": viewerRoles, "scope": annexScope,
+	}}
+	fake := membersFake(existing, "")
+	_, rt := newRecordingGraphQL(t, func(q string, v map[string]any) map[string]any {
+		if strings.Contains(q, "reissueInvitation(") {
+			return map[string]any{"reissueInvitation": map[string]any{"invitationCode": ""}}
+		}
+		return fake(q, v)
+	})
+	err := ensureCustomerUser(context.Background(), rt, annexOwner())
+	if err == nil || !strings.Contains(err.Error(), TowerpulseAnnexOwnerEmail) {
+		t.Fatalf("err = %v, want an error naming the member", err)
+	}
+}
+
+// A member holding a broader role is put back to the viewer role in the same step as the scope, and
+// the scope sent is still the annex alone. A disabled (not pending) member is re-enabled.
+func TestACustomerUserWithTheWrongRoleOrDisabledIsConverged(t *testing.T) {
+	wrong := []map[string]any{{
+		"email": TowerpulseAnnexOwnerEmail, "enabled": true, "roles": []map[string]any{{"token": "admin"}}, "scope": annexScope,
+	}}
+	g, rt := newRecordingGraphQL(t, membersFake(wrong, ""))
+	if err := ensureCustomerUser(context.Background(), rt, annexOwner()); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(g.names(), ","); got != "members,setMemberAccess" {
+		t.Fatalf("calls = %s", got)
+	}
+	v := g.called("setMemberAccess(")[0].vars
+	if r := v["roleTokens"].([]any); len(r) != 1 || r[0] != "viewer" {
+		t.Errorf("roles = %v", r)
+	}
+	if sc := v["scope"].([]any); len(sc) != 1 || sc[0].(map[string]any)["token"] != TowerpulseAnnexOwnerToken {
+		t.Errorf("scope = %v, must stay the annex alone", sc)
+	}
+
+	off := []map[string]any{{
+		"email": TowerpulseAnnexOwnerEmail, "enabled": false, "invitationPending": false, "roles": viewerRoles, "scope": annexScope,
+	}}
+	g2, rt2 := newRecordingGraphQL(t, membersFake(off, ""))
+	if err := ensureCustomerUser(context.Background(), rt2, annexOwner()); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(g2.names(), ","); got != "members,setMemberEnabled" {
+		t.Fatalf("calls = %s", got)
 	}
 }
 
@@ -499,5 +614,69 @@ func TestTheAnnexOwnersScopeCoversExactlyTheAnnexDevices(t *testing.T) {
 		if strings.Contains(tok, "annex") {
 			t.Errorf("%s is an annex device the annex owner cannot see", tok)
 		}
+	}
+}
+
+// ---- Who can see the annex board ------------------------------------------------------------------
+
+func dashboardsFake(token string) func(string, map[string]any) map[string]any {
+	return func(q string, vars map[string]any) map[string]any {
+		switch {
+		case strings.Contains(q, "shareDashboard("):
+			return map[string]any{"shareDashboard": map[string]any{"token": token}}
+		case strings.Contains(q, "updateDashboard("):
+			return map[string]any{"updateDashboard": map[string]any{"token": token}}
+		case strings.Contains(q, "dashboardVersions("):
+			return map[string]any{"dashboardVersions": []map[string]any{{"version": 1}}}
+		case strings.Contains(q, "dashboard(token"):
+			return map[string]any{"dashboard": map[string]any{"token": token}}
+		}
+		return nil
+	}
+}
+
+func dashboardSpec(t *testing.T, token string) DashboardSpec {
+	t.Helper()
+	for _, ds := range towerpulseManifest(t).Dashboards {
+		if ds.Token == token {
+			return ds
+		}
+	}
+	t.Fatalf("no dashboard %s", token)
+	return DashboardSpec{}
+}
+
+// A member limited to a customer lists only the dashboards shared with that customer, so the annex
+// board is shared with the annex owner and with no one else; the operator's board is not shared at all.
+func TestTheAnnexBoardIsSharedWithTheAnnexOwnerAlone(t *testing.T) {
+	g, rt := newRecordingGraphQL(t, dashboardsFake(TowerpulseAnnexDashboardToken))
+	if err := ensureDashboard(context.Background(), rt, dashboardSpec(t, TowerpulseAnnexDashboardToken)); err != nil {
+		t.Fatal(err)
+	}
+	shares := g.called("shareDashboard(")
+	if len(shares) != 1 {
+		t.Fatalf("%d shares, want 1", len(shares))
+	}
+	anchors := shares[0].vars["anchors"].([]any)
+	if len(anchors) != 1 || anchors[0].(map[string]any)["kind"] != "CUSTOMER" || anchors[0].(map[string]any)["token"] != TowerpulseAnnexOwnerToken {
+		t.Errorf("anchors = %v, want the annex owner alone", anchors)
+	}
+
+	// Negative control: the operator's board carries no share, and sends none.
+	g2, rt2 := newRecordingGraphQL(t, dashboardsFake(TowerpulseDashboardToken))
+	if err := ensureDashboard(context.Background(), rt2, dashboardSpec(t, TowerpulseDashboardToken)); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(g2.called("shareDashboard(")); n != 0 {
+		t.Errorf("the operator's board was shared %d times", n)
+	}
+}
+
+func TestADashboardSharedWithAnUnknownCustomerDoesNotValidate(t *testing.T) {
+	m := towerpulseManifest(t)
+	m.Dashboards = append([]DashboardSpec(nil), m.Dashboards...)
+	m.Dashboards[1].SharedWithCustomers = []string{"no-such-customer"}
+	if err := m.Validate(); err == nil {
+		t.Error("a dashboard shared with a customer that does not exist validated")
 	}
 }

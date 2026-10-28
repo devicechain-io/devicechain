@@ -352,8 +352,10 @@ Nothing in the scenario or its defaults changes the ceiling.
 read-only `viewer` role and a scope of exactly one customer, the annex owner, and accepts the
 invitation with the sim's own password (the one in the sim record), so the account can sign in
 at once. A member limited to a customer sees only the devices assigned to it. A second board,
-`tp-annex-dashboard`, is the same board opened on the annex; the operator's is
-`tp-dashboard`. The area selectors list every area, floors and plants included, because the
+`tp-annex-dashboard`, is the same board opened on the annex and is shared with the annex owner
+(a member limited to a customer lists only what is shared with it); the operator's is
+`tp-dashboard`, shared with nobody. A re-run repairs a member left with a pending invitation, a
+wrong role or a disabled account, and never widens the scope. The area selectors list every area, floors and plants included, because the
 platform has no hierarchy to filter a building list by.
 
 **The board** (`tp-dashboard`) carries a building, floor and zone selector (the zone is a
