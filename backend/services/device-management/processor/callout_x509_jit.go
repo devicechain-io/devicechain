@@ -92,24 +92,30 @@ func (c *CalloutResponder) JitEnabled() (enabled bool, maxInFlight int, perSourc
 // authenticated either. It returns the credential the connect goes on with, or a refusal's
 // result; when it returns a credential, result is what the granted connect is counted as.
 //
-// In order, each step costing less than the one after it and NOTHING written before the last:
+// In order, each step costing less than the one after it and NOTHING written before the last. (An
+// unauthenticated sender can make a replica do steps 1 to 3's work, a profile read and up to
+// MaxX509ProfilesPerTenant chain verifications; that is bounded by the callout's own in-flight
+// pool, which every connect shares, and by nothing else on purpose.)
 //
 //  1. The client id the device must connect with, computed from the certificate's own common
 //     name (the token registration will give it is a function of that name), is compared with
 //     the one it presented. A mismatch is refused HERE: a connect that registered the device and
 //     was then refused for its client id would leave a device and a credential behind.
-//  2. The per-source bucket, when it is on.
-//  3. Which of the tenant's X.509 profiles the chain belongs to: the profiles whose anchor the
+//  2. Which of the tenant's X.509 profiles the chain belongs to: the profiles whose anchor the
 //     chain verifies to (x509trust.VerifyClientChain, per anchor). None verifying is
 //     chain_invalid. Of those matching, the usable ones are the profiles that are enabled and
 //     unexpired with an enabled anchor; if none is, the connect is anchor_disabled (a matching
-//     anchor is off) or jit_provisioning_failed (the profile is). More than one usable profile
-//     is jit_ambiguous: a certificate cannot say which of two profiles at the same anchor was
-//     meant, and guessing would register a device of the wrong type, so it is refused and the
-//     operator gives each profile its own anchor.
+//     anchor is off) or jit_provisioning_failed (the profile is). Of the usable ones the
+//     NARROWEST anchor wins (the shortest verified path); two or more at the same depth are
+//     jit_ambiguous, since a certificate cannot say which was meant and guessing would register
+//     a device of the wrong type.
+//  3. The per-source bucket, when it is on, charged only now: a chain that verifies to nothing
+//     costs no source its allowance.
 //  4. The in-flight slot (jit_busy), then the tenant's ceiling (jit_rate_limited). Only a
 //     tenant whose chain verified is charged, so an invented tenant name costs the limiter
-//     nothing.
+//     nothing, and it is charged for every attempt that got this far, including one refused
+//     afterwards: that protects the database and the allowance the endpoint shares. A device
+//     that keeps retrying with a rotated certificate, before renewal exists, spends it.
 //  5. model.ProvisionDevice with the verified certificate. A refusal is counted jit_<code>.
 //  6. The credential, read back through the same uncached lookup a pinned connect uses.
 func (c *CalloutResponder) unknownX509Pin(ctx context.Context, req jwt.AuthorizationRequest, tenant string,
@@ -140,13 +146,7 @@ func (c *CalloutResponder) unknownX509Pin(ctx context.Context, req jwt.Authoriza
 		return nil, x509ResultClientIDMismatch
 	}
 
-	// 2. The per-source bucket.
-	if c.jit.sources != nil && !c.jit.sources.Allow(sourcelimit.SourceKey(host)) {
-		log.Debug().Str("tenant", tenant).Str("host", host).Msg("Auth-callout refused a certificate registration: the source is over its rate.")
-		return nil, x509ResultJitRateLimited
-	}
-
-	// 3. The profile.
+	// 2. The profile.
 	candidates, err := c.jit.reg.X509ProfileAnchors(ctx)
 	if err != nil {
 		c.logAuthFailure(tenant, err)
@@ -198,13 +198,34 @@ func (c *CalloutResponder) unknownX509Pin(ctx context.Context, req jwt.Authoriza
 		log.Debug().Str("tenant", tenant).Str("host", host).
 			Msg("Auth-callout refused a certificate registration: the matching provisioning profile is disabled or expired.")
 		return nil, jitResultForCode(model.ProvisioningCodeFailed)
-	case len(usable) > 1:
-		log.Warn().Str("tenant", tenant).Int("profiles", len(usable)).
-			Msg("Auth-callout refused a certificate registration: the chain belongs to more than one provisioning profile. " +
-				"Give each certificate profile its own trust anchor.")
+	}
+	// The narrowest anchor wins: of the usable profiles, the one whose anchor sits closest to the
+	// leaf in the verified path (the shortest path), so an operator who anchors one profile at
+	// an intermediate CA and another at its root gets the intermediate's profile for the devices
+	// that intermediate issued. Two or more at the same depth cannot be told apart by the
+	// certificate, and guessing would register a device of the wrong type: refused.
+	chosen, ties := usable[0], 1
+	for _, m := range usable[1:] {
+		switch d, best := len(m.verified.Chain), len(chosen.verified.Chain); {
+		case d < best:
+			chosen, ties = m, 1
+		case d == best:
+			ties++
+		}
+	}
+	if ties > 1 {
+		log.Warn().Str("tenant", tenant).Int("profiles", ties).
+			Msg("Auth-callout refused a certificate registration: the chain belongs to more than one provisioning profile " +
+				"at the same trust anchor depth. Give each certificate profile its own trust anchor, or anchor one at a narrower intermediate.")
 		return nil, x509ResultJitAmbiguous
 	}
-	chosen := usable[0]
+
+	// 3b. The per-source bucket, charged only for a chain that verified to a usable profile, so
+	// a stranger's invalid certificates cost no source its allowance.
+	if c.jit.sources != nil && !c.jit.sources.Allow(sourcelimit.SourceKey(host)) {
+		log.Debug().Str("tenant", tenant).Str("host", host).Msg("Auth-callout refused a certificate registration: the source is over its rate.")
+		return nil, x509ResultJitRateLimited
+	}
 
 	// 4. The budgets.
 	select {

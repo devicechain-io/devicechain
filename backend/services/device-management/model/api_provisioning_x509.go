@@ -16,6 +16,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/x509trust"
+	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -138,8 +139,15 @@ func (api *Api) prepareCertificateRegistration(request *ProvisionRequest) error 
 func lockCertificateProfile(tx *gorm.DB, profile *ProvisioningProfile, request *ProvisionRequest) error {
 	reg := request.Certificate
 	if !certificateProfileCanRegister(profile, time.Now()) || profile.TrustAnchorId == nil ||
-		*profile.TrustAnchorId != reg.AnchorId || CredentialType(profile.CredentialType) != CredentialX509Certificate {
+		*profile.TrustAnchorId != reg.AnchorId {
 		return ErrProvisioningFailed
+	}
+	// A certificate profile that mints something else is the operator's to fix, and says so
+	// (callout_x509_total{result="jit_credential_type_unsupported"}), not a failed authentication.
+	if CredentialType(profile.CredentialType) != CredentialX509Certificate {
+		log.Error().Str("profile", profile.Token).Str("credentialType", profile.CredentialType).
+			Msg("A certificate provisioning profile mints a credential type other than X509_CERTIFICATE; registrations against it are refused.")
+		return ErrProvisioningCredentialTypeUnsupported
 	}
 	var anchor DeviceTrustAnchor
 	if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).Where("id = ?", reg.AnchorId).First(&anchor).Error; err != nil {

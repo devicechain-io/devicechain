@@ -449,7 +449,7 @@ func TestCertificateRegistrationRefusesAProfileWhoseCredentialTypeIsNotCertifica
 	reg := f.registration(f.ca.leaf(t, "SN-1"))
 	p := f.profileRow("pp-x")
 	f.sql(`UPDATE provisioning_profiles SET credential_type = ? WHERE id = ?`, string(CredentialAccessToken), p.ID)
-	f.refused509(ErrProvisioningFailed, "pp-x", reg)
+	f.refused509(ErrProvisioningCredentialTypeUnsupported, "pp-x", reg)
 	f.sql(`UPDATE provisioning_profiles SET credential_type = ? WHERE id = ?`, string(CredentialX509Certificate), p.ID)
 	_, err := f.register509("pp-x", reg)
 	require.NoError(t, err, "the control: restored, it registers")

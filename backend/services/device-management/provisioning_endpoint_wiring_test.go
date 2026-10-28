@@ -47,10 +47,13 @@ type provWiring struct {
 // builds the Api without the enrollment keys, as an instance with no root key would.
 func wireProvisioning(t *testing.T, mutate func(*config.DeviceManagementConfiguration), withKeys bool, infra ...func(*core.Microservice)) *provWiring {
 	t.Helper()
-	prevMs, prevCfg, prevApi, prevMetrics, prevGates := Microservice, Configuration, Api, ProvisioningMetrics, safetyGates
+	prevMs, prevCfg, prevApi, prevMetrics, prevGates, prevTenants := Microservice, Configuration, Api, ProvisioningMetrics, safetyGates, ProvisioningTenants
 	t.Cleanup(func() {
-		Microservice, Configuration, Api, ProvisioningMetrics, safetyGates = prevMs, prevCfg, prevApi, prevMetrics, prevGates
+		Microservice, Configuration, Api, ProvisioningMetrics, safetyGates, ProvisioningTenants = prevMs, prevCfg, prevApi, prevMetrics, prevGates, prevTenants
 	})
+	// The shared limiter is built on first use, so a test that wires with its own configuration
+	// starts without the previous test's.
+	ProvisioningTenants = nil
 
 	Microservice = &core.Microservice{InstanceId: "inst1", FunctionalArea: "device-management"}
 	Microservice.UseMetricsRegistry(prometheus.NewRegistry())
@@ -248,10 +251,11 @@ func TestAnEmptyTrustedProxyListIsWarnedAbout(t *testing.T) {
 	// it logged. Each call is a subtest because the shared sink captures one test at a time.
 	wire := func(t *testing.T, proxies []string) (string, error) {
 		logs := logSink.Capture(t)
-		prevMs, prevCfg, prevApi, prevMetrics, prevGates := Microservice, Configuration, Api, ProvisioningMetrics, safetyGates
+		prevMs, prevCfg, prevApi, prevMetrics, prevGates, prevTenants := Microservice, Configuration, Api, ProvisioningMetrics, safetyGates, ProvisioningTenants
 		t.Cleanup(func() {
-			Microservice, Configuration, Api, ProvisioningMetrics, safetyGates = prevMs, prevCfg, prevApi, prevMetrics, prevGates
+			Microservice, Configuration, Api, ProvisioningMetrics, safetyGates, ProvisioningTenants = prevMs, prevCfg, prevApi, prevMetrics, prevGates, prevTenants
 		})
+		ProvisioningTenants = nil
 		Microservice = &core.Microservice{InstanceId: "inst1", FunctionalArea: "device-management"}
 		Microservice.UseMetricsRegistry(prometheus.NewRegistry())
 		Microservice.InstanceConfiguration.Infrastructure.Http.TrustedProxies = proxies
@@ -290,8 +294,6 @@ func TestAnEmptyTrustedProxyListIsWarnedAbout(t *testing.T) {
 // limiter for the endpoint and another for the callout would give a tenant two allowances. This
 // spends the published limiter's allowance directly and shows the endpoint refuse as a result.
 func TestTheEndpointChargesThePublishedTenantLimiter(t *testing.T) {
-	prev := ProvisioningTenants
-	t.Cleanup(func() { ProvisioningTenants = prev })
 	w := wireProvisioning(t, nil, true)
 	require.NotNil(t, ProvisioningTenants, "wiring the endpoint did not publish its tenant limiter")
 

@@ -438,7 +438,7 @@ tests:
               result: jit_busy
             exp_annotations:
               summary: "Devices are being refused registration on first connect because registration is over its limit"
-              description: "For 15m device-management has refused certificate registrations at 1/s, from the jit_busy limit. jit_rate_limited means the tenant's registrations per second are at its governance ceiling; jit_busy means the registration slots of every replica are taken, usually by a factory run on one provisioning profile, whose registrations take turns. Devices back off and retry on their own; raise the tenant's provisioning ceiling or spread the run out."
+              description: "For 15m device-management has refused certificate registrations at 1/s, from the jit_busy limit. jit_rate_limited means the tenant's registrations per second are at its governance ceiling; jit_busy means the registration slots of every replica are taken, usually by a factory run on one provisioning profile, whose registrations take turns. Devices back off and retry on their own; raise the tenant's provisioning ceiling or spread the run out. A device that keeps retrying with a rotated certificate, before certificate renewal is available, spends the same allowance: every attempt that passes chain verification is charged to the tenant, including one refused afterwards."
 
   # Registrations that succeed, and an idle service, do not fire it.
   - interval: 1m
@@ -453,11 +453,17 @@ tests:
         exp_alerts: []
 
   # A certificate profile that cannot register anything fires on the first refusal and names the
-  # result; the quiet case is registrations that succeed or are refused for a reason the devices
-  # own (the profile disabled), which are not a misconfiguration.
+  # result. EACH of the alert's three results is asserted on its own series, so cutting the
+  # expression down to any one of them loses an alert here. The quiet cases are registrations
+  # that succeed and refusals for a reason the devices own (the profile disabled), which are not
+  # a misconfiguration.
   - interval: 1m
     input_series:
       - series: 'devicechain_devicemanagement_callout_x509_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="jit_ambiguous"}'
+        values: '0 0 0 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5'
+      - series: 'devicechain_devicemanagement_callout_x509_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="jit_credential_type_unsupported"}'
+        values: '0 0 0 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5'
+      - series: 'devicechain_devicemanagement_callout_x509_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="jit_provisioning_misconfigured"}'
         values: '0 0 0 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5'
       - series: 'devicechain_devicemanagement_callout_x509_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="jit_provisioning_failed"}'
         values: '0+9x30'
@@ -476,7 +482,21 @@ tests:
               result: jit_ambiguous
             exp_annotations:
               summary: "A certificate provisioning profile cannot register devices because it is misconfigured"
-              description: "In the last 10m device-management refused 5 certificate registration(s) as jit_ambiguous. jit_provisioning_misconfigured and jit_credential_type_unsupported mean the profile's device type was deleted or it mints a credential type this build does not support; jit_ambiguous means a device's certificate chains to the trust anchor of more than one enabled profile and cannot say which was meant. Every device concerned is refused until the profile is fixed or each profile has a trust anchor of its own. The service logs the cause."
+              description: "In the last 10m device-management refused 5 certificate registration(s) as jit_ambiguous. jit_provisioning_misconfigured and jit_credential_type_unsupported mean the profile's device type was deleted or it mints a credential type this build does not support; jit_ambiguous means a device's certificate chains to the trust anchor of more than one enabled profile at the same depth and cannot say which was meant. Every device concerned is refused until the profile is fixed or each profile has a trust anchor of its own. The service logs the cause."
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              result: jit_credential_type_unsupported
+            exp_annotations:
+              summary: "A certificate provisioning profile cannot register devices because it is misconfigured"
+              description: "In the last 10m device-management refused 5 certificate registration(s) as jit_credential_type_unsupported. jit_provisioning_misconfigured and jit_credential_type_unsupported mean the profile's device type was deleted or it mints a credential type this build does not support; jit_ambiguous means a device's certificate chains to the trust anchor of more than one enabled profile at the same depth and cannot say which was meant. Every device concerned is refused until the profile is fixed or each profile has a trust anchor of its own. The service logs the cause."
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              result: jit_provisioning_misconfigured
+            exp_annotations:
+              summary: "A certificate provisioning profile cannot register devices because it is misconfigured"
+              description: "In the last 10m device-management refused 5 certificate registration(s) as jit_provisioning_misconfigured. jit_provisioning_misconfigured and jit_credential_type_unsupported mean the profile's device type was deleted or it mints a credential type this build does not support; jit_ambiguous means a device's certificate chains to the trust anchor of more than one enabled profile at the same depth and cannot say which was meant. Every device concerned is refused until the profile is fixed or each profile has a trust anchor of its own. The service logs the cause."
       # The window slides past the refusals: it clears.
       - eval_time: 25m
         alertname: DeviceX509JitMisconfigured

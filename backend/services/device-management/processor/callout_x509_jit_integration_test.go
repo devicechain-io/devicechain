@@ -87,38 +87,46 @@ func (a *admitting) Allow(string) bool {
 	return true
 }
 
-// 🔑 TWO CONNECTS WITH THE SAME NEW CERTIFICATE, ON THE WIRE, CREATE EXACTLY ONE DEVICE. Both are
-// granted (the loser of the race is a replay and continues into the pinned grant), under client ids
-// that differ only by the discriminator the pin allows.
+// 🔑 TWO CONNECTS WITH THE SAME NEW CERTIFICATE, ON THE WIRE, CREATE EXACTLY ONE DEVICE. The overlap
+// is FORCED: both connects are held at the door of registration (each has found no pin, verified
+// its chain and taken its slot) until both are there, and only then released. So neither can be an
+// ordinary pinned connect that merely arrived late: one registers, and the other, having lost the
+// race, is a replay that continues into the pinned grant. Both are granted, under client ids that
+// differ only by the discriminator the pin allows.
 func TestX509JitPostgresTwoConnectsWithOneNewCertificateCreateOneDevice(t *testing.T) {
 	r := newPostgresJitRig(t, jitRigOpts{})
 	leaf := r.ca.simDevice(t, "SN-RACE", time.Hour)
 	before := r.counts()
+	entered, release := r.gate.holdAtTheDoor()
+	defer release()
 
-	type outcome struct {
-		err error
-	}
 	var wg sync.WaitGroup
-	out := make([]outcome, 2)
-	for i := range out {
+	errs := make([]error, 2)
+	for i := range errs {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, out[i].err = r.connect(fmt.Sprintf("%s:%c", r.clientID("SN-RACE"), 'a'+i), r.user(), "", *presenting(leaf))
+			_, errs[i] = r.connect(fmt.Sprintf("%s:%c", r.clientID("SN-RACE"), 'a'+i), r.user(), "", *presenting(leaf))
 		}()
 	}
+	for i := 0; i < 2; i++ {
+		select {
+		case <-entered:
+		case <-time.After(30 * time.Second):
+			t.Fatalf("only %d of the 2 connects reached the door of registration", i)
+		}
+	}
+	require.Zero(t, r.rows().devices, "nothing is written while both are held at the door")
+	release()
 	wg.Wait()
-	for i, o := range out {
-		require.NoError(t, o.err, "connect %d", i)
+	for i, err := range errs {
+		require.NoError(t, err, "connect %d", i)
 	}
 	assert.EqualValues(t, 1, r.rows().devices, "two connects created more than one device")
 	assert.EqualValues(t, 1, r.rows().credentials)
-	created := r.count(x509ResultJitCreated) - before[x509ResultJitCreated]
-	assert.EqualValues(t, 1, created, "exactly one connect registered the device")
-	// The other was a replay (it lost the race and continued) or an ordinary pinned connect (it
-	// arrived after the commit): either way it was granted and counted once.
-	others := (r.count(x509ResultJitReplayed) - before[x509ResultJitReplayed]) + (r.count(x509ResultOK) - before[x509ResultOK])
-	assert.EqualValues(t, 1, others)
+	assert.EqualValues(t, 1, r.count(x509ResultJitCreated)-before[x509ResultJitCreated], "exactly one connect registered the device")
+	assert.EqualValues(t, 1, r.count(x509ResultJitReplayed)-before[x509ResultJitReplayed], "the other lost the race and was a replay")
+	assert.Zero(t, r.count(x509ResultOK)-before[x509ResultOK], "a connect that was not inside the window was counted")
 }
 
 // 🔑 A BURST OF FIRST CONNECTS HITS THE BUDGETS EXACTLY. The tenant's allowance is 10: of 40

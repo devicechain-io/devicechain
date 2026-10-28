@@ -27,7 +27,7 @@ var ProvisioningUnresolvedAdmissions func(core.CeilingSource)
 // ProvisioningTenants is the per-tenant registration ceiling: ONE limiter, charged by the
 // self-registration endpoint and by the auth callout's registration of devices by certificate,
 // so a tenant's two doors share a single allowance and neither is a way around the other.
-// wireProvisioningEndpoint sets it; provisioningTenantLimiter reads it.
+// provisioningTenantLimiter builds it on first use, for whichever of the two doors is wired first.
 var (
 	ProvisioningTenants   *core.TenantRateLimiter
 	provisioningTenantsMu sync.Mutex
@@ -76,10 +76,7 @@ func wireProvisioningEndpoint() error {
 	}
 
 	pcfg := Configuration.Provisioning
-	tenants := buildProvisioningTenantLimiter(infra)
-	provisioningTenantsMu.Lock()
-	ProvisioningTenants = tenants
-	provisioningTenantsMu.Unlock()
+	tenants := provisioningTenantLimiter(infra)
 	h, err := provisioning.New(provisioning.Config{
 		ReadDeadline:               pcfg.ReadDeadlineDuration(),
 		MaxInFlight:                pcfg.MaxInFlight,

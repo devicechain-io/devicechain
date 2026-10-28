@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-device-management/model"
+	"github.com/devicechain-io/dc-microservice/core"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/x509trust"
 	"github.com/nats-io/jwt/v2"
@@ -198,6 +199,14 @@ func (r *jitRig) addProfile(token, anchor string, strategy model.ProvisioningStr
 		Token: token, ProvisionKey: "key-" + token, Strategy: string(strategy), DeviceTypeToken: "dt-a",
 		Enabled: true, TrustAnchorToken: &anchor, MaxDevices: maxDevices})
 	require.NoError(r.t, err)
+}
+
+// setProfileCredentialType rewrites the profile's credential type underneath the service, as a
+// defect or an older row would.
+func (r *jitRig) setProfileCredentialType(ctype string) {
+	r.t.Helper()
+	require.NoError(r.t, r.api.RDB.Database.WithContext(core.WithSystemContext(context.Background())).
+		Exec(`UPDATE provisioning_profiles SET credential_type = ? WHERE token = ?`, ctype, "pp-x").Error)
 }
 
 func (r *jitRig) clientID(cn string) string {
@@ -431,6 +440,77 @@ func TestX509JitRefusalsWriteNothingAndEachHasItsControl(t *testing.T) {
 	})
 }
 
+// 🔑 THE NARROWEST ANCHOR WINS. A profile anchored at an intermediate CA and another at its root
+// both match a device that intermediate issued; the intermediate's profile registers it. Two
+// profiles at the same depth cannot be told apart and are refused.
+func TestX509JitNarrowestAnchorWins(t *testing.T) {
+	setup := func(t *testing.T) (r *jitRig, root, inter *testCert) {
+		r = newJitRig(t, jitRigOpts{noProfile: true})
+		root = newTestCert(t, nil, certOpts{cn: "Nested Root", ca: true})
+		inter = newTestCert(t, root, certOpts{cn: "Nested Line CA", ca: true})
+		r.anchor("nest-root", root)
+		r.anchor("nest-inter", inter)
+		return
+	}
+	earmark := func(r *jitRig, cn string) uint {
+		d, err := r.api.DevicesByToken(r.ctx, []string{model.DeriveX509DeviceToken(cn)})
+		require.NoError(r.t, err)
+		require.Len(r.t, d, 1)
+		require.NotNil(r.t, d[0].ExpectedProvisioningProfileId)
+		return *d[0].ExpectedProvisioningProfileId
+	}
+	profileID := func(r *jitRig, token string) uint {
+		p, err := r.api.ProvisioningProfilesByToken(r.ctx, []string{token})
+		require.NoError(r.t, err)
+		require.Len(r.t, p, 1)
+		return p[0].ID
+	}
+
+	t.Run("the intermediate's profile registers the device", func(t *testing.T) {
+		r, _, inter := setup(t)
+		r.addProfile("pp-root", "nest-root", model.ProvisionAllowNew, nil)
+		r.addProfile("pp-inter", "nest-inter", model.ProvisionAllowNew, nil)
+		leaf := newTestCert(t, inter, certOpts{cn: "SN-N1"})
+		r.grants(x509ResultJitCreated, r.clientID("SN-N1"), leaf, inter)
+		assert.Equal(t, profileID(r, "pp-inter"), earmark(r, "SN-N1"), "the root's profile registered a device the intermediate's should have")
+	})
+	t.Run("the order the profiles were made in does not matter", func(t *testing.T) {
+		r, _, inter := setup(t)
+		r.addProfile("pp-inter", "nest-inter", model.ProvisionAllowNew, nil)
+		r.addProfile("pp-root", "nest-root", model.ProvisionAllowNew, nil)
+		r.grants(x509ResultJitCreated, r.clientID("SN-N2"), newTestCert(t, inter, certOpts{cn: "SN-N2"}), inter)
+		assert.Equal(t, profileID(r, "pp-inter"), earmark(r, "SN-N2"))
+	})
+	t.Run("a disabled narrow profile leaves the root's", func(t *testing.T) {
+		r, _, inter := setup(t)
+		r.addProfile("pp-root", "nest-root", model.ProvisionAllowNew, nil)
+		r.addProfile("pp-inter", "nest-inter", model.ProvisionAllowNew, nil)
+		_, err := r.api.UpdateProvisioningProfile(r.ctx, "pp-inter", &model.ProvisioningProfileUpdateRequest{Enabled: dcgraphql.OptionalBoolOf(false)})
+		require.NoError(t, err)
+		r.grants(x509ResultJitCreated, r.clientID("SN-N3"), newTestCert(t, inter, certOpts{cn: "SN-N3"}), inter)
+		assert.Equal(t, profileID(r, "pp-root"), earmark(r, "SN-N3"))
+	})
+	t.Run("a device issued by the root alone is the root's", func(t *testing.T) {
+		r, root, _ := setup(t)
+		r.addProfile("pp-root", "nest-root", model.ProvisionAllowNew, nil)
+		r.addProfile("pp-inter", "nest-inter", model.ProvisionAllowNew, nil)
+		r.grants(x509ResultJitCreated, r.clientID("SN-N4"), newTestCert(t, root, certOpts{cn: "SN-N4"}))
+		assert.Equal(t, profileID(r, "pp-root"), earmark(r, "SN-N4"))
+	})
+	t.Run("two profiles at the same depth are ambiguous", func(t *testing.T) {
+		r, _, inter := setup(t)
+		r.addProfile("pp-root", "nest-root", model.ProvisionAllowNew, nil)
+		r.addProfile("pp-inter-a", "nest-inter", model.ProvisionAllowNew, nil)
+		r.addProfile("pp-inter-b", "nest-inter", model.ProvisionAllowNew, nil)
+		leaf := newTestCert(t, inter, certOpts{cn: "SN-N5"})
+		r.refuses(x509ResultJitAmbiguous, r.clientID("SN-N5"), leaf, inter)
+		_, err := r.api.UpdateProvisioningProfile(r.ctx, "pp-inter-b", &model.ProvisioningProfileUpdateRequest{Enabled: dcgraphql.OptionalBoolOf(false)})
+		require.NoError(t, err)
+		r.grants(x509ResultJitCreated, r.clientID("SN-N5"), leaf, inter)
+		assert.Equal(t, profileID(r, "pp-inter-a"), earmark(r, "SN-N5"))
+	})
+}
+
 // 🔑 G14'S PRECEDENCE THROUGH THE CALLOUT, each refusal counted as jit_<code> alone, answering
 // the generic denial, writing nothing, and paired with a registration that succeeds beside it.
 func TestX509JitEveryRegistrationRefusalIsCountedByItsCode(t *testing.T) {
@@ -516,6 +596,15 @@ func TestX509JitEveryRegistrationRefusalIsCountedByItsCode(t *testing.T) {
 				earmarked(r, cn)
 				return []*testCert{own(r, cn)}
 			}},
+		{name: "a profile that mints another credential type", result: "jit_credential_type_unsupported",
+			arrange: func(r *jitRig, cn string) []*testCert {
+				r.setProfileCredentialType("ACCESS_TOKEN")
+				return []*testCert{own(r, cn)}
+			},
+			control: func(r *jitRig, cn string, chain []*testCert) {
+				r.setProfileCredentialType(string(model.CredentialX509Certificate))
+				r.grants(x509ResultJitCreated, r.clientID(cn), chain...)
+			}},
 		{name: "the derived token held by another device", result: "jit_device_token_collision",
 			arrange: func(r *jitRig, cn string) []*testCert {
 				other := "someone-else-" + cn
@@ -599,6 +688,12 @@ func TestX509JitBudgets(t *testing.T) {
 		r.sources.set(true)
 		r.refuses(x509ResultJitRateLimited, r.clientID("SN-S1"), leaf)
 		assert.Equal(t, []string{"10.1.2.3"}, r.sources.charged(), "keyed on the client address the broker saw")
+		// A chain that verifies to nothing never reaches the bucket.
+		r.sources.set(false)
+		before := len(r.sources.charged())
+		r.refuses(x509ResultChainInvalid, r.clientID("SN-S2"), simCA(t, "Stranger").simDevice(t, "SN-S2", time.Hour))
+		assert.Len(t, r.sources.charged(), before, "an invalid chain was charged to its source")
+		r.sources.set(true)
 		assert.Empty(t, r.tenants.charged(), "the source bucket is checked before the tenant's is charged")
 		r.sources.set(false)
 		r.grants(x509ResultJitCreated, r.clientID("SN-S1"), leaf)
