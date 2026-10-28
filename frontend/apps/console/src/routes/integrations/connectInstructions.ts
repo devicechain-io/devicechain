@@ -88,7 +88,7 @@ export function ttsFields(i: SnippetInput): SnippetField[] {
 /** A ready-to-run curl for a generic source, naming the identifier where the settings say it is. */
 export function genericCurl(
   i: SnippetInput,
-  settings: { binary: boolean; idKind: 'pointer' | 'header' | 'query'; idValue: string },
+  settings: { binary: boolean; idKind: 'pointer' | 'header' | 'query'; idValue: string; itemsPointer?: string },
 ): string {
   let url = integrationUrl(i);
   const headers = [authorizationHeader(i)];
@@ -108,7 +108,7 @@ export function genericCurl(
 }
 
 // A body with the identifier where a pointer says it is, and one reading.
-function exampleJsonBody(s: { idKind: string; idValue: string }): string {
+function exampleJsonBody(s: { idKind: string; idValue: string; itemsPointer?: string }): string {
   const fields: Record<string, unknown> = { temperature: 21.5 };
   if (s.idKind === 'pointer') {
     const keys = s.idValue.split('/').slice(1).map((k) => k.replace(/~1/g, '/').replace(/~0/g, '~'));
@@ -118,5 +118,7 @@ function exampleJsonBody(s: { idKind: string; idValue: string }): string {
       else node = (node[k] = {}) as Record<string, unknown>;
     });
   }
-  return JSON.stringify(fields);
+  // The codec reads the items from the array at itemsPointer, so the item sits in that array.
+  const wrap = (s.itemsPointer ?? '').split('/').slice(1).map((k) => k.replace(/~1/g, '/').replace(/~0/g, '~'));
+  return JSON.stringify(wrap.reduceRight<unknown>((inner, k) => ({ [k]: inner }), wrap.length ? [fields] : fields));
 }

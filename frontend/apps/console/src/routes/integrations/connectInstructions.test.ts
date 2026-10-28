@@ -81,6 +81,34 @@ describe('a generic source', () => {
   });
 });
 
+describe('a generic source with an items pointer', () => {
+  // The codec's resolution (event-sources/integration generic.go): the array is at itemsPointer in
+  // the document; the identifier pointer is then resolved against each ITEM.
+  const get = (node: unknown, pointer: string): unknown =>
+    pointer
+      .split('/')
+      .slice(1)
+      .map((k) => k.replace(/~1/g, '/').replace(/~0/g, '~'))
+      .reduce<unknown>((n, k) => (n as Record<string, unknown> | undefined)?.[k], node);
+  const bodyOf = (curl: string) => JSON.parse(/-d '(.*)'$/.exec(curl)![1].replace(/<device-id>/g, 'dev-1'));
+
+  it('puts the item in the array at a nested pointer, with ~0 and ~1 decoded', () => {
+    const curl = genericCurl(base, { binary: false, idKind: 'pointer', idValue: '/device/id', itemsPointer: '/a~1b/m~0n/uplinks' });
+    const body = bodyOf(curl);
+    expect(body).toEqual({ 'a/b': { 'm~n': { uplinks: [{ temperature: 21.5, device: { id: 'dev-1' } }] } } });
+    const items = get(body, '/a~1b/m~0n/uplinks') as unknown[];
+    expect(Array.isArray(items)).toBe(true);
+    expect(get(items[0], '/device/id')).toBe('dev-1');
+  });
+
+  it('wraps a header-placed identifier too, and leaves a flat object without a pointer', () => {
+    expect(bodyOf(genericCurl(base, { binary: false, idKind: 'header', idValue: 'X-Id', itemsPointer: '/uplinks' }))).toEqual({
+      uplinks: [{ temperature: 21.5 }],
+    });
+    expect(bodyOf(genericCurl(base, { binary: false, idKind: 'header', idValue: 'X-Id', itemsPointer: '' }))).toEqual({ temperature: 21.5 });
+  });
+});
+
 describe('shell quoting in the generic curl', () => {
   it('quotes a value with a single quote so the shell cannot reinterpret it', () => {
     const curl = genericCurl({ ...base, integrationToken: "it's" }, { binary: false, idKind: 'header', idValue: "X-Id" });
