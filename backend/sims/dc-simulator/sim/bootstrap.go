@@ -1248,6 +1248,39 @@ const mutationPublishDashboard = `mutation($token:String!){publishDashboard(toke
 // the publish gate only ensures at least one published version exists (publishing
 // on every run would pile up redundant versions since publish does not de-dup).
 func ensureDashboard(ctx context.Context, rt *Runtime, ds DashboardSpec) error {
+	if err := ensureDashboardContent(ctx, rt, ds); err != nil {
+		return err
+	}
+	return ensureDashboardShared(ctx, rt, ds)
+}
+
+const mutationShareDashboard = `mutation($token:String!,$anchors:[ScopeAnchorInput!]!){` +
+	`shareDashboard(token:$token,anchors:$anchors){token}}`
+
+// ensureDashboardShared shares the dashboard with the customers the spec names. The mutation
+// replaces the whole list, so it converges by itself and a re-run repairs a share someone removed.
+func ensureDashboardShared(ctx context.Context, rt *Runtime, ds DashboardSpec) error {
+	if len(ds.SharedWithCustomers) == 0 {
+		return nil
+	}
+	anchors := make([]map[string]any, 0, len(ds.SharedWithCustomers))
+	for _, c := range ds.SharedWithCustomers {
+		anchors = append(anchors, map[string]any{"kind": scopeKindCustomer, "token": c})
+	}
+	var out struct {
+		ShareDashboard struct {
+			Token string `json:"token"`
+		} `json:"shareDashboard"`
+	}
+	if err := rt.Session.Query(ctx, rt.Endpoints.DashboardMgmtGraphQL, mutationShareDashboard,
+		map[string]any{"token": ds.Token, "anchors": anchors}, &out); err != nil {
+		return fmt.Errorf("shareDashboard: %w", err)
+	}
+	log.Info().Str("token", ds.Token).Strs("customers", ds.SharedWithCustomers).Msg("shared dashboard")
+	return nil
+}
+
+func ensureDashboardContent(ctx context.Context, rt *Runtime, ds DashboardSpec) error {
 	var existing struct {
 		Dashboard *struct {
 			Token string `json:"token"`

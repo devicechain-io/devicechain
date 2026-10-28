@@ -200,7 +200,7 @@ func newRecordingGraphQL(t *testing.T, answer func(string, map[string]any) map[s
 	}))
 	t.Cleanup(srv.Close)
 	return g, &Runtime{
-		Endpoints:   Endpoints{DeviceMgmtGraphQL: srv.URL, UserGraphQL: srv.URL},
+		Endpoints:   Endpoints{DeviceMgmtGraphQL: srv.URL, UserGraphQL: srv.URL, DashboardMgmtGraphQL: srv.URL},
 		InstanceId:  "dc",
 		Tenant:      "acme",
 		SimPassword: "sim-password",
@@ -231,6 +231,8 @@ func (g *recordingGraphQL) names() []string {
 			out = append(out, "inviteMember")
 		case strings.Contains(c.query, "acceptInvitation"):
 			out = append(out, "acceptInvitation")
+		case strings.Contains(c.query, "shareDashboard"):
+			out = append(out, "shareDashboard")
 		case strings.Contains(c.query, "reissueInvitation"):
 			out = append(out, "reissueInvitation")
 		case strings.Contains(c.query, "setMemberAccess"):
@@ -586,5 +588,69 @@ func TestTheAnnexOwnersScopeCoversExactlyTheAnnexDevices(t *testing.T) {
 		if strings.Contains(tok, "annex") {
 			t.Errorf("%s is an annex device the annex owner cannot see", tok)
 		}
+	}
+}
+
+// ---- Who can see the annex board ------------------------------------------------------------------
+
+func dashboardsFake(token string) func(string, map[string]any) map[string]any {
+	return func(q string, vars map[string]any) map[string]any {
+		switch {
+		case strings.Contains(q, "shareDashboard("):
+			return map[string]any{"shareDashboard": map[string]any{"token": token}}
+		case strings.Contains(q, "updateDashboard("):
+			return map[string]any{"updateDashboard": map[string]any{"token": token}}
+		case strings.Contains(q, "dashboardVersions("):
+			return map[string]any{"dashboardVersions": []map[string]any{{"version": 1}}}
+		case strings.Contains(q, "dashboard(token"):
+			return map[string]any{"dashboard": map[string]any{"token": token}}
+		}
+		return nil
+	}
+}
+
+func dashboardSpec(t *testing.T, token string) DashboardSpec {
+	t.Helper()
+	for _, ds := range towerpulseManifest(t).Dashboards {
+		if ds.Token == token {
+			return ds
+		}
+	}
+	t.Fatalf("no dashboard %s", token)
+	return DashboardSpec{}
+}
+
+// A member limited to a customer lists only the dashboards shared with that customer, so the annex
+// board is shared with the annex owner and with no one else; the operator's board is not shared at all.
+func TestTheAnnexBoardIsSharedWithTheAnnexOwnerAlone(t *testing.T) {
+	g, rt := newRecordingGraphQL(t, dashboardsFake(TowerpulseAnnexDashboardToken))
+	if err := ensureDashboard(context.Background(), rt, dashboardSpec(t, TowerpulseAnnexDashboardToken)); err != nil {
+		t.Fatal(err)
+	}
+	shares := g.called("shareDashboard(")
+	if len(shares) != 1 {
+		t.Fatalf("%d shares, want 1", len(shares))
+	}
+	anchors := shares[0].vars["anchors"].([]any)
+	if len(anchors) != 1 || anchors[0].(map[string]any)["kind"] != "CUSTOMER" || anchors[0].(map[string]any)["token"] != TowerpulseAnnexOwnerToken {
+		t.Errorf("anchors = %v, want the annex owner alone", anchors)
+	}
+
+	// Negative control: the operator's board carries no share, and sends none.
+	g2, rt2 := newRecordingGraphQL(t, dashboardsFake(TowerpulseDashboardToken))
+	if err := ensureDashboard(context.Background(), rt2, dashboardSpec(t, TowerpulseDashboardToken)); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(g2.called("shareDashboard(")); n != 0 {
+		t.Errorf("the operator's board was shared %d times", n)
+	}
+}
+
+func TestADashboardSharedWithAnUnknownCustomerDoesNotValidate(t *testing.T) {
+	m := towerpulseManifest(t)
+	m.Dashboards = append([]DashboardSpec(nil), m.Dashboards...)
+	m.Dashboards[1].SharedWithCustomers = []string{"no-such-customer"}
+	if err := m.Validate(); err == nil {
+		t.Error("a dashboard shared with a customer that does not exist validated")
 	}
 }

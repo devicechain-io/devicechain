@@ -378,6 +378,8 @@ func (s *towerpulse) Manifest() SimManifest {
 			Name:        "Towerpulse annex",
 			Description: "The same board opened on the annex, for the annex owner.",
 			Definition:  annex,
+			// A member limited to the annex owner lists only what is shared with it.
+			SharedWithCustomers: []string{TowerpulseAnnexOwnerToken},
 		},
 	}
 	return manifest

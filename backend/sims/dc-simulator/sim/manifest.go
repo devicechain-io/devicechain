@@ -229,6 +229,11 @@ type DashboardSpec struct {
 	Name        string
 	Description string
 	Definition  string
+	// SharedWithCustomers are the customers the dashboard is shared with, by token. A member
+	// limited to a customer lists and opens only the dashboards shared with it, so a board
+	// meant for a customer user is invisible to them until this names their customer. The
+	// list REPLACES whatever the dashboard was shared with; empty leaves sharing alone.
+	SharedWithCustomers []string
 }
 
 // PopulationSpec is the populations seam (ADR-050): a declarative "N devices of
@@ -937,6 +942,11 @@ func (m SimManifest) Validate() error {
 	for _, ds := range m.Dashboards {
 		if err := core.ValidateToken(ds.Token); err != nil {
 			return fmt.Errorf("dashboard token: %w", err)
+		}
+		for _, c := range ds.SharedWithCustomers {
+			if !customerTokens[c] {
+				return fmt.Errorf("dashboard %q is shared with unknown customer %q", ds.Token, c)
+			}
 		}
 		if strings.TrimSpace(ds.Definition) == "" {
 			return fmt.Errorf("dashboard %q has an empty definition", ds.Token)
