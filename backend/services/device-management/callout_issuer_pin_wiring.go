@@ -12,7 +12,6 @@ import (
 	"github.com/devicechain-io/dc-device-management/config"
 	"github.com/devicechain-io/dc-device-management/processor"
 	mscfg "github.com/devicechain-io/dc-microservice/config"
-	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/nats-io/nats.go"
 	"github.com/rs/zerolog/log"
@@ -49,7 +48,7 @@ func (r *issuerPinRuntime) stop() {
 // so the service can start while the broker is mid-roll; the first dial failing is not a startup
 // failure, a missing login is.
 func wireCalloutIssuerPin(ctx context.Context, resp *processor.CalloutResponder, cfg *config.DeviceManagementConfiguration,
-	nc mscfg.NatsConfiguration, ms *core.Microservice) (*issuerPinRuntime, error) {
+	nc mscfg.NatsConfiguration, metrics *processor.IssuerPinMetrics) (*issuerPinRuntime, error) {
 	if cfg.Callout.IssuerPinDisabled {
 		log.Warn().Msg("callout.issuerPinDisabled is set: certificate connects are NOT pinned to the broker's live " +
 			"server ids. The broker's publish-deny on the callout subject is the only defence against a forged request.")
@@ -67,7 +66,7 @@ func wireCalloutIssuerPin(ctx context.Context, resp *processor.CalloutResponder,
 		Connected:          conn.IsConnected,
 		RefreshInterval:    cfg.Callout.IssuerPinRefreshDuration(),
 		MinRefreshInterval: cfg.Callout.IssuerPinMinRefreshDuration(),
-		Metrics:            processor.NewIssuerPinMetrics(ms),
+		Metrics:            metrics,
 	})
 	if err != nil {
 		conn.Close()

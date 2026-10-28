@@ -103,6 +103,9 @@ var (
 	CalloutRefusedStoreFull prometheus.Counter
 	// CalloutMetrics are the callout's load series (in flight, refused busy, plaintext requests).
 	CalloutMetrics *processor.CalloutMetrics
+	// IssuerPinMetrics are the issuer pin's series, built once on the initialize path with the
+	// rest (registering on the start path would panic on a second start).
+	IssuerPinMetrics *processor.IssuerPinMetrics
 
 	// OwnershipDrain publishes the device ownership facts writes queue in their own
 	// transactions (ADR-081, model/ownership_outbox.go), one replica at a time.
@@ -228,6 +231,7 @@ func buildMetrics() {
 			"and publishing.")
 	MqttStoreBackoffMetrics, CalloutRefusedStoreFull = buildMqttStoreBackoffMetrics()
 	CalloutMetrics = processor.NewCalloutMetrics(Microservice)
+	IssuerPinMetrics = processor.NewIssuerPinMetrics(Microservice)
 	buildTrustAnchorExpiryGauge()
 	GeoFencePublishFails = Microservice.NewCounter(
 		"geofence_set_publish_failures_total",
@@ -1017,7 +1021,7 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		}
 		// The issuer pin: a certificate connect is granted only for a request signed by a live
 		// broker server, learned over the system account. Fails closed (no login, no start).
-		IssuerPin, err = wireCalloutIssuerPin(ctx, CalloutResponder, Configuration, infra.Nats, Microservice)
+		IssuerPin, err = wireCalloutIssuerPin(ctx, CalloutResponder, Configuration, infra.Nats, IssuerPinMetrics)
 		if err != nil {
 			return err
 		}

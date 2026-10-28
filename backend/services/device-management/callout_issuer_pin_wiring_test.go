@@ -10,7 +10,6 @@ import (
 	"github.com/devicechain-io/dc-device-management/config"
 	"github.com/devicechain-io/dc-device-management/processor"
 	mscfg "github.com/devicechain-io/dc-microservice/config"
-	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/stretchr/testify/require"
 )
 
@@ -18,24 +17,23 @@ import (
 // server ids does not start: a certificate callout that quietly ran unpinned is the failure this
 // closes.
 func TestCalloutIssuerPinWiring(t *testing.T) {
-	ms := &core.Microservice{InstanceId: "pinwiring", FunctionalArea: "device-management"}
 	nc := mscfg.NatsConfiguration{Hostname: "127.0.0.1", Port: 1}
 
 	t.Run("no system login: the service refuses to start", func(t *testing.T) {
-		rt, err := wireCalloutIssuerPin(context.Background(), nil, config.NewDeviceManagementConfiguration(), nc, ms)
+		rt, err := wireCalloutIssuerPin(context.Background(), nil, config.NewDeviceManagementConfiguration(), nc, nil)
 		require.ErrorIs(t, err, errNoSystemLoginForIssuerPin)
 		require.Nil(t, rt)
 	})
 	t.Run("a user without a password is no login", func(t *testing.T) {
 		withUser := nc
 		withUser.Auth.SysUser = "dc_sys"
-		_, err := wireCalloutIssuerPin(context.Background(), nil, config.NewDeviceManagementConfiguration(), withUser, ms)
+		_, err := wireCalloutIssuerPin(context.Background(), nil, config.NewDeviceManagementConfiguration(), withUser, nil)
 		require.ErrorIs(t, err, errNoSystemLoginForIssuerPin)
 	})
 	t.Run("switched off explicitly: no pin and no error", func(t *testing.T) {
 		cfg := config.NewDeviceManagementConfiguration()
 		cfg.Callout.IssuerPinDisabled = true
-		rt, err := wireCalloutIssuerPin(context.Background(), nil, cfg, nc, ms)
+		rt, err := wireCalloutIssuerPin(context.Background(), nil, cfg, nc, nil)
 		require.NoError(t, err)
 		require.Nil(t, rt)
 	})
