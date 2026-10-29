@@ -54,50 +54,60 @@ func lwm2mCredentialsStamp(instanceUID string, s *corev1.Secret) string {
 	return credentialsStamp("lwm2m-identities-stamp", instanceUID, s)
 }
 
-// syncLwm2mIdentitiesSecret settles the identities Secret for this run, before the release, and
-// returns the stamp for the pods.
+// syncLwm2mIdentitiesSecret is the FIRST phase of the identities Secret's sync, run before the
+// release. It returns the stamp for the pods and the step that finishes the sync once the release has
+// succeeded (see ownedsecret_phased.go for why the order matters).
 //
-//   - A run GIVEN identities (or told to withdraw them) is the authority: the Secret is rewritten to
-//     hold exactly its keys, and removed when the run has none.
+//   - A run GIVEN identities is the authority, but only ADDITIVELY here: its keys are added or
+//     updated, and a key the run no longer has (a rotation to fewer identities) stays until the post
+//     step removes it, so the old pods can still restart if the release fails.
+//   - A run told to withdraw them writes nothing here and stamps "". Its post step deletes the
+//     Secret once the release no longer refers to it.
 //   - A run over a legacy-layout instance writes the keys it read out of the release (legacy) into
-//     the new Secret: the migration.
+//     the new Secret: the migration. Nothing is removed, so it has no post step.
 //   - Any other run keeps what is there and only reads its identity for the stamp. If the release
 //     holds identities (held) and the Secret is gone, that is an error and not a stamp of "": the
 //     pods would otherwise be rolled onto a reference that cannot resolve.
-func syncLwm2mIdentitiesSecret(ctx context.Context, typed kubernetes.Interface, st *State, legacy map[string]string, held bool) (string, error) {
+func syncLwm2mIdentitiesSecret(ctx context.Context, typed kubernetes.Interface, st *State, legacy map[string]string, held bool) (string, postReleaseStep, error) {
 	name, ns := lwm2mIdentitiesSecretName(st.Instance), InstanceNamespace(st.Instance)
 	owner := instanceOwner(st.Instance, st.InstanceUID)
-	var data map[string]string
+	rerun := fmt.Sprintf("run the same 'dcctl upgrade %s %s' command again", st.Provider, st.Instance)
+	var data, keep map[string]string
 	switch {
 	case st.Lwm2mIdentitiesGiven:
 		if data = lwm2mSecretData(st.Lwm2mIdentities); len(data) == 0 {
-			return "", deleteOwnedSecretIfOurs(ctx, typed, owner, ns, name)
+			return "", withdrawPostStep(typed, owner, ns, name, rerun), refuseForeignSecret(ctx, typed, owner, ns, name)
 		}
+		keep = data
 	case len(legacy) > 0:
 		data = legacy
 	}
 	if data != nil {
 		if err := writeOwnedSecret(ctx, typed, owner, ownedSecret{
-			Name: name, Namespace: ns, Type: corev1.SecretTypeOpaque,
+			Name: name, Namespace: ns, Type: corev1.SecretTypeOpaque, Merge: true,
 			Labels: map[string]string{"devicechain.io/instance": st.Instance}, Data: data,
 		}, time.Now); err != nil {
-			return "", err
+			return "", postReleaseStep{}, err
 		}
 	}
 	s, err := typed.CoreV1().Secrets(ns).Get(ctx, name, metav1.GetOptions{})
 	switch {
 	case apierrors.IsNotFound(err):
 		if held && !st.Lwm2mIdentitiesGiven {
-			return "", fmt.Errorf("instance %q runs LwM2M identities, but the Secret %s/%s that holds their pre-shared keys is gone. "+
+			return "", postReleaseStep{}, fmt.Errorf("instance %q runs LwM2M identities, but the Secret %s/%s that holds their pre-shared keys is gone. "+
 				"Nothing has been changed. Run 'dcctl upgrade %s %s --lwm2m-identities <file>' to write the keys again, "+
 				"or 'dcctl upgrade %s %s --withdraw-lwm2m-identities' to remove the identities",
 				st.Instance, ns, name, st.Provider, st.Instance, st.Provider, st.Instance)
 		}
-		return "", nil
+		return "", postReleaseStep{}, nil
 	case err != nil:
-		return "", fmt.Errorf("reading Secret %s/%s, which holds the LwM2M pre-shared keys: %w", ns, name, err)
+		return "", postReleaseStep{}, fmt.Errorf("reading Secret %s/%s, which holds the LwM2M pre-shared keys: %w", ns, name, err)
 	}
-	return lwm2mCredentialsStamp(st.InstanceUID, s), nil
+	var post postReleaseStep
+	if keep != nil {
+		post = prunePostStep(typed, owner, ns, name, keep, stampRevision(s), rerun)
+	}
+	return lwm2mCredentialsStamp(st.InstanceUID, s), post, nil
 }
 
 // lwm2mLegacyKeysFor is the keys a run MIGRATES: those an old-layout release holds, for a run that
@@ -110,16 +120,17 @@ func lwm2mLegacyKeysFor(st *State, previous map[string]interface{}) (map[string]
 }
 
 // settleLwm2mIdentities is the write half of helmInstall's LwM2M step, in one place so a test
-// reaches the same call helmInstall makes: the Secret is settled (written, migrated or removed)
-// BEFORE the release, and the pods' stamp lands in the values the release is built from.
+// reaches the same call helmInstall makes: the Secret is settled ADDITIVELY (created, migrated, keys
+// added or updated) BEFORE the release, and the pods' stamp lands in the values the release is built
+// from. What shrinks the Secret comes back as the step to run after the release has succeeded.
 func settleLwm2mIdentities(ctx context.Context, typed kubernetes.Interface, st *State,
-	previous map[string]interface{}, legacy map[string]string, vals map[string]interface{}) error {
-	stamp, err := syncLwm2mIdentitiesSecret(ctx, typed, st, legacy, st.Evolving && releaseHoldsLwm2mIdentities(previous))
+	previous map[string]interface{}, legacy map[string]string, vals map[string]interface{}) (postReleaseStep, error) {
+	stamp, post, err := syncLwm2mIdentitiesSecret(ctx, typed, st, legacy, st.Evolving && releaseHoldsLwm2mIdentities(previous))
 	if err != nil {
-		return err
+		return postReleaseStep{}, err
 	}
 	withLwm2mCredentialsChecksum(vals, stamp)
-	return nil
+	return post, nil
 }
 
 // withLwm2mCredentialsChecksum stamps the credentials stamp into the install values, on a copy of

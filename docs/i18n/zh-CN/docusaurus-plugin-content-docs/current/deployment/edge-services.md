@@ -262,7 +262,7 @@ dcctl upgrade   local acme --lwm2m-identities identities.json
 
 **密钥保存在哪里。** 密钥绝不是 Helm 值，因此不会出现在 `helm get values` 打印的发布记录中，轮换后的旧密钥也不会留在旧版本记录里。`dcctl` 自己写入名为 `dci-<实例>-lwm2m-identities` 的 Secret，写入发生在发布之前，且不在发布清单内，Pod 将每个密钥投射为该身份的 `pskEnv` 所指定的环境变量。发布中只记录该 Secret 的名称和一个由 Secret 版本派生的标记，密钥变化时该标记会滚动 Pod。
 
-这些身份会**被之后每一次 `dcctl upgrade` 保留**，升级不会从发布中读取任何机密内容。再次收到该文件的运行会替换它们：就地重写 Secret（即轮换）并滚动 Pod。移除必须显式进行：`dcctl upgrade ... --withdraw-lwm2m-identities` 会移除这些身份及其 Secret。对已有身份的实例重新运行 `dcctl bootstrap` 而不提供任何身份，会被拒绝，除非明确给出 `--withdraw-lwm2m-identities`，因为初始化按其参数组合出整个实例，否则会删除每台设备的密钥。同名但并非由 `dcctl` 写入的 Secret 绝不会被触碰。
+这些身份会**被之后每一次 `dcctl upgrade` 保留**，升级不会从发布中读取任何机密内容。再次收到该文件的运行会替换它们：就地重写 Secret（即轮换）并滚动 Pod。移除必须显式进行：`dcctl upgrade ... --withdraw-lwm2m-identities` 会移除这些身份及其 Secret。对已有身份的实例重新运行 `dcctl bootstrap` 而不提供任何身份，会被拒绝，除非明确给出 `--withdraw-lwm2m-identities`，因为初始化按其参数组合出整个实例，否则会删除每台设备的密钥。同名但并非由 `dcctl` 写入的 Secret 绝不会被触碰。 围绕发布，Secret 分两步变化。发布之前，`dcctl` 只添加或更新密钥，因此新发布引用的每个密钥都已存在，仍在运行的 Pod 也保留着它们启动时的全部密钥。所以，轮换为更少的身份或撤销身份时，发布运行期间旧密钥（或整个 Secret）仍留在原处。只有发布成功之后，`dcctl` 才会移除不再使用的密钥，撤销时则删除该 Secret。如果发布失败，旧密钥仍然存在，再次运行同一条命令即可完成。如果发布成功而最后这一步失败，`dcctl` 会给出警告并指出完成它的命令，然后正常退出；再次运行同一条命令同样可以完成。
 
 :::warning 密钥移出发布之前就已配置的实例
 由早期 `dcctl` 构建的实例，其密钥保存在 Helm 发布的值中，以及由 chart 渲染的 Secret `dci-<实例>-lwm2m-psk` 中。用此版本对它执行的第一次 `dcctl upgrade` 会迁移这些密钥：在发布变更**之前**先把密钥复制到新的 Secret，然后再升级；由于旧 Secret 不再出现在清单中，Helm 会将其删除。新的 Pod 使用已存在的新 Secret 启动。仍在运行的 Pod 在其环境中保留着密钥，但仅持续到容器重启为止，因此请在 lwm2m-ingest 可以接受重启时执行升级。
@@ -347,7 +347,7 @@ dcctl upgrade   local acme --sparkplug-source sources.yaml
 
 **密码存放在哪里。**它从不是 Helm value，因此不在 `helm get values` 打印的 release 记录中，更换后的密码也不会残留在旧修订里。`dcctl` 自己在 release 之前、在其清单之外写入 Secret `dci-<实例>-sparkplug-broker`，Pod 将其投射为来源的 `passwordEnv` 所指名的环境变量。release 只记录该 Secret 的名称和一个按实例加盐、由 Secret 的版本（而非其内容）派生的标记，密码变化时该标记会让 Pod 滚动。`dcctl` 既不打印密码，也不打印文件内容。若想让密码不出现在交给 `dcctl` 的文件中，请使用 `passwordFile: /path`（只读取一次），或自己管理 Secret，并在 broker 块中写 `passwordSecretRef: {name: my-secret, key: password}`；此时 `dcctl` 既不读取也不写入它。
 
-来源**会被之后的每次 `dcctl upgrade` 保留**（升级不会从 release 中读取任何机密），再次提供文件的运行会替换它们；更换密码会就地替换 Secret 并滚动 Pod。撤销必须显式进行：`dcctl upgrade ... --withdraw-sparkplug-sources` 会移除来源和 Secret。对已有来源的实例重新运行 `dcctl bootstrap` 而不提供任何来源，会被拒绝，直到你传入 `--sparkplug-source` 或 `--withdraw-sparkplug-sources`。这些键与下文所述 chart 的 `sources` 列表相同。
+来源**会被之后的每次 `dcctl upgrade` 保留**（升级不会从 release 中读取任何机密），再次提供文件的运行会替换它们；更换密码会就地替换 Secret 并滚动 Pod。撤销必须显式进行：`dcctl upgrade ... --withdraw-sparkplug-sources` 会移除来源和 Secret。对已有来源的实例重新运行 `dcctl bootstrap` 而不提供任何来源，会被拒绝，直到你传入 `--sparkplug-source` 或 `--withdraw-sparkplug-sources`。这些键与下文所述 chart 的 `sources` 列表相同。 围绕发布，Secret 分两步变化。发布之前，`dcctl` 只添加或更新密码，因此新发布引用的每个密码都已存在，仍在运行的 Pod 也保留着它们启动时的全部密码。所以，某个来源不再带有密码或撤销来源时，发布运行期间旧密码（或整个 Secret）仍留在原处。只有发布成功之后，`dcctl` 才会移除不再使用的密码，撤销时则删除该 Secret。如果发布失败，旧密码仍然存在，再次运行同一条命令即可完成。如果发布成功而最后这一步失败，`dcctl` 会给出警告并指出完成它的命令，然后正常退出；再次运行同一条命令同样可以完成。
 
 :::note 尚不存在的设备类型
 节点以来源的 `deviceTypeToken` 注册。如果设备类型在来源连接之后才创建，平台会请求未能注册的节点重新 BIRTH，直到它们注册成功；参见[先于设备类型出生的节点](../concepts/sparkplug.md#birth-recovery)。
