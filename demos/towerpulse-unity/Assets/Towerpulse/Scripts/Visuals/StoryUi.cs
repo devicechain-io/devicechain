@@ -72,6 +72,9 @@ namespace DeviceChain.Towerpulse.Visuals
 
         public RectTransform CanvasRect => canvasRect;
 
+        /// <summary>Set while a take plays a shot whose clock jumps (see <see cref="StoryText.Jump"/>): shown in the status strip's orange chip, as the model's own speed label is.</summary>
+        public string JumpLabel { get; set; }
+
         /// <summary>Names the cards that are standing, for tests and the stills log.</summary>
         public string Visible()
         {
@@ -381,7 +384,7 @@ namespace DeviceChain.Towerpulse.Visuals
         {
             var plane = app.Plane;
             Set(hudTime, TimeClock.Format(plane.Model.TimeS));
-            var accel = StoryText.Accelerated(plane.Clock.Speed);
+            var accel = JumpLabel ?? StoryText.Accelerated(plane.Clock.Speed);
             hudAccel.enabled = hudAccelBg.enabled = accel != null;
             Set(hudAccel, accel ?? "");
             if (app.ReplaySource != null)

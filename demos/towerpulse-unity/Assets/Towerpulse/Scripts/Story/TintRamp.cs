@@ -28,7 +28,7 @@ namespace DeviceChain.Towerpulse.Story
     /// display mapping only: it decides a colour for a value that was handed to it, and calculates nothing about the building.
     ///
     ///   at or below <see cref="CoolSpanC"/> under setpoint  cool blue
-    ///   at setpoint                                          calm green-teal
+    ///   at setpoint                                          calm pale blue (a neutral that reads as glass, not as a signal)
     ///   <see cref="WarmSpanC"/> over setpoint and above      hot red, through amber
     ///
     /// A value that is missing (NaN) is a faint grey: no data is not a comfortable room.
@@ -39,7 +39,7 @@ namespace DeviceChain.Towerpulse.Story
         public const double WarmSpanC = 5.0;
 
         public static readonly Rgba Cool = new Rgba(0.25f, 0.55f, 1.00f, 0.38f);
-        public static readonly Rgba Neutral = new Rgba(0.50f, 0.82f, 0.88f, 0.14f);
+        public static readonly Rgba Neutral = new Rgba(0.62f, 0.76f, 0.95f, 0.12f);
         public static readonly Rgba Amber = new Rgba(1.00f, 0.78f, 0.15f, 0.52f);
         public static readonly Rgba Hot = new Rgba(0.98f, 0.18f, 0.10f, 0.68f);
         public static readonly Rgba NoData = new Rgba(0.55f, 0.58f, 0.62f, 0.12f);

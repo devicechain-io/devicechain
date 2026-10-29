@@ -45,8 +45,15 @@ namespace DeviceChain.Towerpulse.Story
         public CameraPose To;
         public bool Smooth;
         public List<string> Cards = new List<string>();
+        /// <summary>Take plans only: which recorded run (its label ends with this, "A" or "B") the shot is filmed from; null in the live shot file.</summary>
+        public string Run;
+        /// <summary>Take plans only: the model-clock span the shot covers, in hours of the day; NaN when the shot does not say (the clock then runs as it runs).</summary>
+        public double ModelFromHour = double.NaN, ModelToHour = double.NaN;
 
         public double EndS { get { return StartS + DurationS; } }
+        public bool HasModel { get { return !double.IsNaN(ModelFromHour); } }
+        /// <summary>Model seconds that pass per show second: 1 is real time, above it is a jump that must be labelled.</summary>
+        public double Rate { get { return HasModel ? (ModelToHour - ModelFromHour) * 3600.0 / DurationS : double.NaN; } }
     }
 
     public sealed class ShotList
@@ -65,6 +72,17 @@ namespace DeviceChain.Towerpulse.Story
             if (Shots.Count == 0 || showS < Shots[0].StartS) return null;
             for (int i = 0; i < Shots.Count; i++) if (showS < Shots[i].EndS) return showS >= Shots[i].StartS ? Shots[i] : Shots[i > 0 ? i - 1 : 0];
             return Shots[Shots.Count - 1];
+        }
+
+        /// <summary>The model time, in seconds of the day, a shot with its own clock shows at a show time (linear, never eased); NaN when the shot has none.</summary>
+        public double ModelAt(double showS)
+        {
+            var shot = At(showS);
+            if (shot == null || !shot.HasModel) return double.NaN;
+            double t = (showS - shot.StartS) / shot.DurationS;
+            if (t < 0) t = 0;
+            if (t > 1) t = 1;
+            return (shot.ModelFromHour + (shot.ModelToHour - shot.ModelFromHour) * t) * 3600.0;
         }
 
         /// <summary>The camera at a show time: inside a shot, its eased move; in a gap, the previous shot's final pose (it never jumps).</summary>
@@ -102,7 +120,7 @@ namespace DeviceChain.Towerpulse.Story
         }
 
         static readonly HashSet<string> RootKeys = new HashSet<string> { "version", "shots", "note" };
-        static readonly HashSet<string> ShotKeys = new HashSet<string> { "id", "beat", "caption", "startS", "durationS", "ease", "cards", "from", "to" };
+        static readonly HashSet<string> ShotKeys = new HashSet<string> { "id", "beat", "caption", "startS", "durationS", "ease", "cards", "from", "to", "run", "modelFromHour", "modelToHour" };
         static readonly HashSet<string> PoseKeys = new HashSet<string> { "pos", "look", "fov" };
 
         public static Result Parse(string json)
@@ -172,6 +190,24 @@ namespace DeviceChain.Towerpulse.Story
                         else if (shot.Cards.Contains(name)) res.Errors.Add(where + ": card \"" + name + "\" is listed twice");
                         else shot.Cards.Add(name);
                     }
+            }
+
+            shot.Run = Str(o, "run", where, res, false);
+            bool hasFrom = o.ContainsKey("modelFromHour"), hasTo = o.ContainsKey("modelToHour");
+            if (hasFrom != hasTo) res.Errors.Add(where + ": \"modelFromHour\" and \"modelToHour\" go together");
+            else if (hasFrom)
+            {
+                shot.ModelFromHour = Num(o, "modelFromHour", where, res);
+                shot.ModelToHour = Num(o, "modelToHour", where, res);
+                if (!double.IsNaN(shot.ModelFromHour) && !double.IsNaN(shot.ModelToHour))
+                {
+                    if (shot.ModelFromHour < 0 || shot.ModelToHour > 24) res.Errors.Add(where + ": the model hours must be within 0 to 24");
+                    if (shot.ModelToHour < shot.ModelFromHour) res.Errors.Add(where + ": the model clock cannot run backwards");
+                    // a caption that names a time of day must be true of the clock the viewer reads beside it
+                    foreach (var h in new[] { shot.ModelFromHour, shot.ModelToHour })
+                        if (!StoryText.CaptionAgrees(shot.Caption, h))
+                            res.Errors.Add(where + ": the caption says \"" + StoryText.ClaimedDayPart(shot.Caption) + "\" but the clock reads " + Model.TimeClock.Format(h * 3600.0));
+                }
             }
 
             shot.From = Pose(o, "from", where, res);

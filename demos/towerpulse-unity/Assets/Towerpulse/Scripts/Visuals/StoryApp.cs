@@ -65,6 +65,10 @@ namespace DeviceChain.Towerpulse.Visuals
             ui = GetComponent<StoryUi>();
             if (ui == null) ui = gameObject.AddComponent<StoryUi>();
             ui.Bind(this);
+
+            // the take's render and the frame measurement are player modes, asked for on the command line; the scene itself is the same
+            if (TakeRenderer.Requested) gameObject.AddComponent<TakeRenderer>();
+            else if (FrameBench.Requested) gameObject.AddComponent<FrameBench>();
         }
 
         void Update()
