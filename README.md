@@ -43,7 +43,7 @@ made for the tenant `sim-demo`. Its password is the `simPassword` field in
 [Your first device](https://docs.devicechain.io/quickstart/first-device) continues from here: it
 creates a device, sends a reading with `curl` and shows it in the console.
 
-[Docs](https://docs.devicechain.io) · [Examples](examples/) · [Discussions](https://github.com/devicechain-io/devicechain/discussions) · [Releases](https://github.com/devicechain-io/devicechain/releases)
+[Docs](https://docs.devicechain.io) · [Examples](examples/) · [Roadmap](ROADMAP.md) · [Contributing](CONTRIBUTING.md) · [Discussions](https://github.com/devicechain-io/devicechain/discussions) · [Releases](https://github.com/devicechain-io/devicechain/releases)
 
 DeviceChain has not reached 1.0; see [Status](#status).
 

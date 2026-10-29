@@ -1,7 +1,9 @@
 # Contributing to DeviceChain
 
-Thanks for your interest in improving DeviceChain! This guide covers the legal
-prerequisites for contributing and the local checks your change must pass.
+Thanks for your interest in improving DeviceChain! This guide covers how to get help, the legal
+prerequisites for contributing, the local checks your change must pass, and what we expect in a
+pull request. The [roadmap](ROADMAP.md) lists what the project intends to work on; if you are looking
+for something to build, start there or with the open [issues](https://github.com/devicechain-io/devicechain/issues).
 
 ## Getting help
 
@@ -11,7 +13,7 @@ is a contribution.
 | What you have | Where it goes |
 | --- | --- |
 | A question, or something that confused you | [Discussions](https://github.com/devicechain-io/devicechain/discussions) |
-| An idea or feature request | [Discussions → Ideas](https://github.com/devicechain-io/devicechain/discussions/categories/ideas) |
+| An idea or feature request | [Discussions → Ideas](https://github.com/devicechain-io/devicechain/discussions/categories/ideas) (the [roadmap](ROADMAP.md) shows what is already planned) |
 | Something is broken | [Open an issue](https://github.com/devicechain-io/devicechain/issues/new/choose) |
 | A security vulnerability | Email **admin@devicechain.io** — see [below](#reporting-security-issues) |
 
@@ -21,23 +23,29 @@ good issue.
 
 ## Contributor License Agreement (required)
 
-DeviceChain is stewarded by **IoT Innovations, LLC**. Before we can merge your
-contribution, you must agree to our Contributor License Agreement (CLA). The CLA
-grants us a broad license to your contribution — including the right to sublicense —
-while **you keep ownership of your copyright**. This lets the project relicense or
-dual-license in the future if needed, without having to track down every
-contributor.
+In two lines: you sign a CLA once, by commenting on your first pull request, and it lets the project
+distribute and relicense your contribution while **you keep the copyright to it**. A bot blocks the
+merge until every commit author on the PR has signed.
 
-- **Individuals:** [ICLA.md](ICLA.md)
-- **Companies** (or anyone contributing as part of their employment): have an
-  authorized representative complete [CCLA.md](CCLA.md) and email it to
-  **admin@devicechain.io**.
+DeviceChain is stewarded by **IoT Innovations, LLC**. The CLA grants the steward a broad license to
+your contribution, including the right to sublicense. That lets the project relicense or dual-license
+in the future if needed, without tracking down every contributor.
 
-**How to sign:** When you open your first pull request, the **CLA Assistant** bot
-will comment with a one-click link to review and sign the ICLA electronically. The
-bot blocks merge until every commit author on the PR is covered. If you contribute
-on behalf of an employer, make sure a CCLA is on file and your account is listed in
-its Schedule B.
+- **Individuals:** read [ICLA.md](ICLA.md).
+- **Companies** (or anyone contributing as part of their employment): have an authorized
+  representative complete [CCLA.md](CCLA.md) and email it to **admin@devicechain.io**. Your
+  account must be listed in its Schedule B.
+
+**How to sign:** when you open your first pull request, the CLA Assistant workflow
+([`.github/workflows/cla.yml`](.github/workflows/cla.yml)) comments with a link to the ICLA. To
+sign, reply on the PR with exactly this comment:
+
+```text
+I have read the CLA Document and I hereby sign the CLA
+```
+
+The signature is recorded in the repository's `cla-signatures` branch, and the check turns green.
+Comment `recheck` if it does not update. Bot accounts such as Dependabot are exempt.
 
 > Why a CLA and not just a DCO sign-off? A [Developer Certificate of
 > Origin](https://developercertificate.org/) only certifies provenance; it does not
@@ -55,7 +63,10 @@ govern your contribution.
 
 ## Ground rules
 
-- Be respectful and constructive. Assume good intent.
+There is no separate code of conduct document yet, so these are the rules we hold ourselves to:
+
+- Be respectful and constructive. Assume good intent. Harassment and personal attacks are not
+  acceptable in issues, pull requests or Discussions; to report one, email **admin@devicechain.io**.
 - Discuss non-trivial changes in an issue before opening a large PR.
 - One logical change per PR; keep diffs focused and reviewable.
 
@@ -84,6 +95,12 @@ go run github.com/google/addlicense@latest -check -f hack/license-header.txt bac
 before using the name or logo beyond ordinary referential use.
 
 ## Local checks (these are the CI gates)
+
+In short: Go modules are built and tested one at a time (`go test ./...` inside the module you
+changed), the frontend needs `npm ci`, `npm run codegen`, `npm run typecheck`, `npm test` and
+`npm run build`, and the docs need `npm ci && npm run build` in `docs/`. The details, and the
+traps in each, follow. For running a single service against local dependencies, see
+[Local Development](docs/docs/guides/local-development.md).
 
 **Run the Go checks with a module as the working directory, not the repo root.** The
 root is not a Go module, so `go build ./...` there fails outright with `directory prefix
@@ -339,6 +356,43 @@ The pull request cannot know which version ships it, so two rules apply at relea
   (`feat:`, `fix:`, `refactor:`, `docs:`) are used throughout the history.
 - Reference related issues in the PR description.
 - Ensure CI is green and the CLA check passes before requesting review.
+
+### What a pull request needs
+
+- **Tests.** A bug fix includes a test that fails without the fix. A new behavior includes tests for
+  it, and for the case where it should refuse. If you add a call to a helper, test the call site, not
+  only the helper.
+- **The license header** on every new source file (see [License headers](#license-headers)).
+- **Docs, when behavior changes.** User-visible changes update the page under `docs/docs` that
+  describes them. Docs are published in three languages, so see the next section.
+- **A focused diff.** One logical change per PR, with a description that says why.
+- **No private references in public text.** Do not cite internal design-decision numbers in
+  anything the docs site, the npm or NuGet package descriptions, the Helm chart listing or console
+  strings publish; the docs CI job runs a check that fails if you do. Say the thing itself, or link
+  to a public page.
+
+### Documentation and its translations
+
+The docs are a Docusaurus site in `docs/`. English pages live in `docs/docs`. Spanish mirrors live in
+`docs/i18n/es/docusaurus-plugin-content-docs/current` and Simplified Chinese mirrors in
+`docs/i18n/zh-CN/docusaurus-plugin-content-docs/current`, at the same relative path as the English
+page. A new or renamed English page needs both mirrors; CI checks that the three trees hold the same
+files (`hack/check-docs-locale-parity.sh`) and that the Chinese pages are not stale relative to their
+English source (`docs/scripts/check-translation-freshness.mjs`). If you cannot write a translation, say so
+in the PR and a maintainer will help; do not leave the mirror out. After translating a page into
+Chinese, record it with:
+
+```bash
+cd docs && node scripts/check-translation-freshness.mjs --locale zh-CN --record <path/under/docs/docs>
+```
+
+Build the site before you push; the build fails on broken links and anchors:
+
+```bash
+cd docs && npm ci && npm run build
+hack/check-docs-adr-refs.sh
+hack/check-docs-locale-parity.sh
+```
 
 ## Reporting security issues
 
