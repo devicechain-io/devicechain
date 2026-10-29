@@ -105,6 +105,9 @@ func (r *AdminTenantDeletionResolver) CompletedAt() *string {
 	return formatPurgeTimePtr(r.M.CompletedAt)
 }
 func (r *AdminTenantDeletionResolver) ErasedAt() *string { return formatPurgeTimePtr(r.M.ErasedAt) }
+func (r *AdminTenantDeletionResolver) LastVerifiedAt() *string {
+	return formatPurgeTimePtr(r.M.ErasedVerifiedAt)
+}
 
 // Erased reads only the persisted claim and the completion stamp. It is deliberately not
 // derived from the live ledger or from "nothing is blocking": the coordinator owns the

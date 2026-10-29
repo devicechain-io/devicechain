@@ -23,6 +23,8 @@ type tenantPurgeErasedAtSnapshot struct {
 
 	// Nullable and untagged: null means no erasure claim is standing.
 	ErasedAt *time.Time
+	// The last pass that re-confirmed the claim; null whenever ErasedAt is.
+	ErasedVerifiedAt *time.Time
 }
 
 func (tenantPurgeErasedAtSnapshot) TableName() string { return "iam_tenant_purges" }
@@ -44,6 +46,9 @@ func NewTenantPurgeErasedAtMigration() *gormigrate.Migration {
 			return tx.AutoMigrate(&tenantPurgeErasedAtSnapshot{})
 		},
 		Rollback: func(tx *gorm.DB) error {
+			if err := tx.Migrator().DropColumn(&tenantPurgeErasedAtSnapshot{}, "erased_verified_at"); err != nil {
+				return err
+			}
 			return tx.Migrator().DropColumn(&tenantPurgeErasedAtSnapshot{}, "erased_at")
 		},
 	}

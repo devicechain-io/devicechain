@@ -1565,6 +1565,14 @@ for that release instead.
 With --wait the command polls until the target is reached, and exits non-zero if --timeout passes
 first. A tenant with no deletion record is an error, never a success.
 
+A token can be reused, so the command never reports "the newest record for the token". A tenant
+that is being deleted is bound to its own deletion (its current epoch); a tenant that is not being
+deleted is an error; and once the tenant is gone, the newest completed deletion of the token is
+reported with its epoch printed. Pass --epoch to bind to one specific deletion regardless.
+
+The erased claim is as of the latest pass and is withdrawn if data reappears; it is final only
+when the deletion completes. The output shows when it was last verified.
+
 This reads the operator plane and authenticates as an identity, not as a tenant.
 
 ```
@@ -1574,6 +1582,7 @@ dcctl tenant-deletion status <token> [flags]
 ### Options
 
 ```
+      --epoch string        bind to the deletion at exactly this epoch (RFC 3339, as printed by this command)
   -h, --help                help for status
       --interval duration   how often --wait polls (default 10s)
       --timeout duration    how long --wait polls before giving up (default 30m0s)

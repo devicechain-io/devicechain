@@ -61,6 +61,11 @@ type TenantPurge struct {
 	// outlive the evidence for it. Partial is not erased: it is set only when every store in
 	// the ledger is clean, and the settle window has elapsed.
 	ErasedAt *time.Time
+	// ErasedVerifiedAt is the last pass that re-confirmed the claim (every store clean and
+	// settled as of that pass). Null whenever ErasedAt is. It is what lets a reader judge how
+	// fresh the claim is: the claim is final only at CompletedAt, and until then it stands
+	// exactly as long as the passes keep confirming it.
+	ErasedVerifiedAt *time.Time
 	// Rows is the total erased across every store, at completion.
 	Rows int64 `gorm:"not null;default:0"`
 }
@@ -171,39 +176,64 @@ func (s *Store) EnsurePurgeRecord(ctx context.Context, token string, epoch time.
 	return s.PurgeRecordFor(ctx, token, epoch)
 }
 
-// SetPurgeErased makes the deletion's erasure claim stand at the given moment, or withdraws it
-// when erased is false. Setting is idempotent and never moves an established claim: the first
-// moment all stores were established clean is the evidence, and a later pass re-confirming it
-// must not rewrite it. Withdrawing clears it unconditionally.
+// ConfirmPurgeErased makes the erasure claim stand as of `at`, and says whether THIS call made
+// it (true) or found it already standing (false).
+//
+// The decision is the database's, not the caller's memory: the first UPDATE matches only a row
+// whose erased_at is still null, so of two replicas that both read the record before either
+// wrote, exactly one gets RowsAffected 1. The other re-reads, adopts the stored claim and only
+// refreshes the verification time. Counters and logs are driven from the return value.
 //
 // A completed record is never touched: CompleteTenantPurge owns that row's final shape.
-func (s *Store) SetPurgeErased(ctx context.Context, rec *TenantPurge, erased bool, at time.Time) error {
+func (s *Store) ConfirmPurgeErased(ctx context.Context, rec *TenantPurge, at time.Time) (bool, error) {
 	if rec == nil || rec.ID == 0 {
-		return fmt.Errorf("refusing to change the erasure claim of a purge with no record")
+		return false, fmt.Errorf("refusing to change the erasure claim of a purge with no record")
 	}
 	if rec.CompletedAt != nil {
-		return nil
+		return false, nil
 	}
-	if erased {
-		if rec.ErasedAt != nil {
-			return nil
-		}
-		if err := s.sys(ctx).Model(rec).Where("id = ? AND erased_at IS NULL AND completed_at IS NULL", rec.ID).
-			Update("erased_at", at).Error; err != nil {
-			return err
-		}
-		rec.ErasedAt = &at
-		return nil
+	db := s.sys(ctx)
+	set := db.Model(rec).Where("id = ? AND erased_at IS NULL AND completed_at IS NULL", rec.ID).
+		Updates(map[string]any{"erased_at": at, "erased_verified_at": at})
+	if set.Error != nil {
+		return false, set.Error
 	}
-	if rec.ErasedAt == nil {
-		return nil
+	if set.RowsAffected > 0 {
+		rec.ErasedAt, rec.ErasedVerifiedAt = &at, &at
+		return true, nil
 	}
-	if err := s.sys(ctx).Model(rec).Where("id = ? AND completed_at IS NULL", rec.ID).
-		Update("erased_at", nil).Error; err != nil {
-		return err
+	// Someone else made the claim, or the record completed under us. Refresh the
+	// verification only on a claim that stands, then adopt the stored state.
+	if err := db.Model(rec).Where("id = ? AND erased_at IS NOT NULL AND completed_at IS NULL", rec.ID).
+		Update("erased_verified_at", at).Error; err != nil {
+		return false, err
 	}
-	rec.ErasedAt = nil
-	return nil
+	var fresh TenantPurge
+	if err := db.First(&fresh, rec.ID).Error; err != nil {
+		return false, err
+	}
+	rec.ErasedAt, rec.ErasedVerifiedAt, rec.CompletedAt = fresh.ErasedAt, fresh.ErasedVerifiedAt, fresh.CompletedAt
+	return false, nil
+}
+
+// WithdrawPurgeErased withdraws a standing erasure claim and says whether THIS call did it.
+// It is withdraw-only: it can never make a claim, so it is safe to call from any early or
+// error exit of a pass. Like ConfirmPurgeErased the answer comes from RowsAffected, so two
+// replicas withdrawing the same claim report it once.
+func (s *Store) WithdrawPurgeErased(ctx context.Context, rec *TenantPurge) (bool, error) {
+	if rec == nil || rec.ID == 0 {
+		return false, fmt.Errorf("refusing to change the erasure claim of a purge with no record")
+	}
+	if rec.CompletedAt != nil {
+		return false, nil
+	}
+	out := s.sys(ctx).Model(rec).Where("id = ? AND erased_at IS NOT NULL AND completed_at IS NULL", rec.ID).
+		Updates(map[string]any{"erased_at": nil, "erased_verified_at": nil})
+	if out.Error != nil {
+		return false, out.Error
+	}
+	rec.ErasedAt, rec.ErasedVerifiedAt = nil, nil
+	return out.RowsAffected > 0, nil
 }
 
 // RecordPurgeStore writes one store's line of the ledger, replacing whatever the previous
@@ -424,8 +454,9 @@ func (s *Store) CompleteTenantPurge(ctx context.Context, t *Tenant, rec *TenantP
 			// Completion implies erasure: a record that says the token was released must
 			// never say the data was not established gone. The claim, when the coordinator
 			// already stood it, keeps its earlier moment.
-			"erased_at": gorm.Expr("COALESCE(erased_at, ?)", at),
-			"rows":      rows,
+			"erased_at":          gorm.Expr("COALESCE(erased_at, ?)", at),
+			"erased_verified_at": at,
+			"rows":               rows,
 		}).Error; err != nil {
 			return err
 		}

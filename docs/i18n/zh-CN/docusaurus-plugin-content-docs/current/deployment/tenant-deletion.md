@@ -98,17 +98,17 @@ title: 租户删除
 
 删除有两个应当区分的结果，平台会把两者都记录在删除记录上。
 
-- **已清除**（`erasedAt`）：所有存储系统都已报告已清空，并在整个静默窗口内持续保持已清空。这是平台对“该租户的数据已不存在”的声明；有人询问某项清除请求何时完成时，应引用这个时刻。
-- **已完成**（`completedAt`）：令牌还已满足完整的保留期并被释放。它比 `erasedAt` 晚大约一个令牌保留期，默认 12 小时。
+- **已清除**（`erasedAt`）：截至协调器最近一轮，所有存储系统都已报告已清空，并在整个静默窗口内持续保持已清空。这是平台对“该租户的数据已不存在”的声明，`lastVerifiedAt` 是最近一次确认它的轮次。有人询问某项清除请求何时完成时，应引用这个时刻，并附上下文所述的限定。
+- **已完成**（`completedAt`）：令牌还已满足完整的保留期并被释放。它比 `erasedAt` 晚大约一个令牌保留期，默认 12 小时。**只有 `completedAt` 是最终结果。**
 
-`erasedAt` 是持续有效的声明，而不是日志条目，且只有在所有存储系统一致时才会作出。只要有任何一个存储系统仍持有数据、无法访问，或在最近一轮中仍擦除了数据，就不会作出该声明：只完成一部分的删除不算已清除。协调器在令牌保留期内仍持续清扫，因此如果声明作出之后数据重新出现（例如静默窗口之后才落地的迟到写入），声明会被撤回，`erasedAt` 恢复为空，待各存储再次稳定后重新作出。带有 `completedAt` 的记录，其 `erasedAt` 一定不晚于它。
+`erasedAt` 是持续有效的声明，而不是日志条目，且只有在所有存储系统一致时才会作出。只要有任何一个存储系统仍持有数据、无法访问，或在最近一轮中仍擦除了数据，就不会作出该声明：只完成一部分的删除不算已清除。在重新检查完所有存储系统之前就中断的一轮也会撤回该声明，因为它没有确认任何事。协调器在令牌保留期内仍持续清扫，因此如果声明作出之后数据重新出现（例如静默窗口之后才落地的迟到写入），声明会被撤回，`erasedAt` 和 `lastVerifiedAt` 恢复为空，待各存储再次稳定后重新作出。可通过 `lastVerifiedAt` 判断声明有多新。带有 `completedAt` 的记录，其 `erasedAt` 一定不晚于它。
 
 可通过管理 API 读取；声明有效或删除已完成时，`erased` 为 true：
 
 ```graphql
 query {
   tenantDeletions(criteria: {pageNumber: 1, pageSize: 50}) {
-    results { token epoch erased erasedAt completedAt awaiting blockedBy }
+    results { token epoch erased erasedAt lastVerifiedAt completedAt awaiting blockedBy }
   }
 }
 ```
@@ -119,7 +119,7 @@ query {
 dcctl tenant-deletion status acme --email ops@example.com --password "$PASSWORD" --wait --timeout 1h
 ```
 
-`--wait` 会轮询直到声明有效，若 `--timeout` 先到则失败。`--until complete` 改为等待令牌释放。没有删除记录的令牌是错误，绝不会被当作成功。计数器 `devicechain_usermanagement_tenant_purge_erased_total`（见[下文](#blocked-store)）会在每次作出声明时计数。
+`--wait` 会轮询直到声明有效，若 `--timeout` 先到则失败。`--until complete` 改为等待令牌释放。没有删除记录的令牌是错误，绝不会被当作成功。由于令牌可以被重复使用，该命令绝不会报告“该令牌最新的记录”：正在被删除的租户绑定到它自己的那次删除（其当前纪元，从删除的那一刻起就存在），未在删除中的租户是错误，租户消失后则报告最近一次已完成的删除并打印其纪元。`--epoch` 可绑定到某一次特定的删除。输出包含声明最近一次验证的时间以及各存储系统的备注，例如本实例上不存在的遥测数据库。计数器 `devicechain_usermanagement_tenant_purge_erased_total`（见[下文](#blocked-store)）会在每次作出声明时计数。
 
 ## 什么会阻碍删除完成 {#stalled}
 

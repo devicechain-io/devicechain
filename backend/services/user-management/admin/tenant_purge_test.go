@@ -551,16 +551,14 @@ func TestACompletedDeletionWaitsOnNothing(t *testing.T) {
 	assert.Nil(t, p.ElapsesAt)
 }
 
-// TestATenantDeletedButNotYetSweptHasNoRecordYet pins a state the console WILL hit and that
-// nothing else in this file covers.
+// TestATenantDeletedButNotYetSweptHasARecordAtItsOwnEpochAndNothingChecked pins a state the
+// console WILL hit.
 //
-// Deleting a tenant stamps the row; it does not create the deletion record. The record is
-// written by the coordinator's first pass, up to a minute later at the default interval — so
-// between the operator clicking delete and that pass, the tenant is `purging` and there is no
-// record to read. A surface that treated the absent record as an error would show a failure
-// for the first minute of every single deletion, which is exactly when the operator is
-// watching.
-func TestATenantDeletedButNotYetSweptHasNoRecordYet(t *testing.T) {
+// Deleting a tenant opens the deletion record in the same transaction as the cut, so the record
+// exists from the first instant (a predecessor's completed record can never stand in for it).
+// Until the coordinator's first pass it has no ledger lines, and that must read as "nothing has
+// been checked", never as the clean-and-settled that an empty ledger would otherwise compute.
+func TestATenantDeletedButNotYetSweptHasARecordAtItsOwnEpochAndNothingChecked(t *testing.T) {
 	s := newPurgeTestService(t)
 	ctx := context.Background()
 
@@ -568,16 +566,20 @@ func TestATenantDeletedButNotYetSweptHasNoRecordYet(t *testing.T) {
 	_, err := s.DeleteTenant(ctx, "acme")
 	require.NoError(t, err)
 
-	_, _, err = s.TenantDeletion(ctx, "acme", nil)
-	require.ErrorIs(t, err, gorm.ErrRecordNotFound,
-		"the store reports absence as ErrRecordNotFound; the resolver maps that to a null field "+
-			"rather than a GraphQL error, so the console can say 'starting' instead of 'failed'")
+	rec, lines, err := s.TenantDeletion(ctx, "acme", nil)
+	require.NoError(t, err)
+	assert.Nil(t, rec.CompletedAt)
+	assert.Nil(t, rec.ErasedAt)
+	assert.Empty(t, lines)
+
+	p := s.TenantDeletionProgress(rec, lines)
+	assert.Equal(t, purge.WaitStores, p.Awaiting, "an unchecked deletion is waiting on the stores")
+	assert.NotEmpty(t, p.BlockedBy)
 
 	tenant, err := s.iam.TenantByToken(ctx, "acme")
 	require.NoError(t, err)
-	assert.True(t, tenant.PurgeState.Deleted(),
-		"the control: the tenant really IS deleted, so this is a missing RECORD and not a "+
-			"missing deletion")
+	assert.True(t, tenant.PurgeState.Deleted())
+	assert.True(t, rec.Epoch.Equal(*tenant.PurgeEpoch), "the record is at the tenant's own epoch")
 }
 
 // 🔴 TestADeletionLookupNeverSurfacesACompletedRecordUnderALiveToken is the OTHER half of the

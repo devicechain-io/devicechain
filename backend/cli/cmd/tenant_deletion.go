@@ -21,6 +21,7 @@ var (
 	tdUntil    string
 	tdTimeout  time.Duration
 	tdEvery    time.Duration
+	tdEpoch    string
 )
 
 var tenantDeletionCmd = &cobra.Command{
@@ -43,6 +44,14 @@ for that release instead.
 With --wait the command polls until the target is reached, and exits non-zero if --timeout passes
 first. A tenant with no deletion record is an error, never a success.
 
+A token can be reused, so the command never reports "the newest record for the token". A tenant
+that is being deleted is bound to its own deletion (its current epoch); a tenant that is not being
+deleted is an error; and once the tenant is gone, the newest completed deletion of the token is
+reported with its epoch printed. Pass --epoch to bind to one specific deletion regardless.
+
+The erased claim is as of the latest pass and is withdrawn if data reappears; it is final only
+when the deletion completes. The output shows when it was last verified.
+
 This reads the operator plane and authenticates as an identity, not as a tenant.`,
 	Args:         cobra.ExactArgs(1),
 	RunE:         runTenantDeletionStatus,
@@ -59,6 +68,8 @@ func init() {
 	tenantDeletionStatusCmd.Flags().BoolVar(&tdWait, "wait", false, "poll until the target is reached")
 	tenantDeletionStatusCmd.Flags().StringVar(&tdUntil, "until", string(deletions.TargetErased),
 		"what to wait for and require: erased (data established as gone) or complete (token released)")
+	tenantDeletionStatusCmd.Flags().StringVar(&tdEpoch, "epoch", "",
+		"bind to the deletion at exactly this epoch (RFC 3339, as printed by this command)")
 	tenantDeletionStatusCmd.Flags().DurationVar(&tdTimeout, "timeout", 30*time.Minute, "how long --wait polls before giving up")
 	tenantDeletionStatusCmd.Flags().DurationVar(&tdEvery, "interval", 10*time.Second, "how often --wait polls")
 
@@ -82,12 +93,12 @@ func runTenantDeletionStatus(cmd *cobra.Command, args []string) error {
 	adminURL := sim.AdminURL(server, tls)
 	endpoints := sim.ResolveEndpoints(server, "", "", tls)
 	session := userclient.NewAdminSession(nil, endpoints.UserGraphQL, tdEmail, tdPassword).WithOTP(otpFunc(otpFlag(cmd)))
-	return tenantDeletionStatus(cmd.Context(), cmd, session, adminURL, args[0], target)
+	return tenantDeletionStatus(cmd.Context(), cmd, session, adminURL, args[0], tdEpoch, target)
 }
 
 // tenantDeletionStatus is the command body over an injectable client.
 func tenantDeletionStatus(ctx context.Context, cmd *cobra.Command, c deletions.Client,
-	adminURL, token string, target deletions.Target) error {
+	adminURL, token, epoch string, target deletions.Target) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -97,11 +108,11 @@ func tenantDeletionStatus(ctx context.Context, cmd *cobra.Command, c deletions.C
 	if tdWait {
 		wctx, cancel := context.WithTimeout(ctx, tdTimeout)
 		defer cancel()
-		d, err = deletions.Wait(wctx, c, adminURL, token, target, tdEvery, func(p *deletions.Deletion) {
+		d, err = deletions.Wait(wctx, c, adminURL, token, epoch, target, tdEvery, func(p *deletions.Deletion) {
 			fmt.Fprintf(out, "waiting: %s\n", p.Awaiting)
 		})
 	} else {
-		d, err = deletions.Find(ctx, c, adminURL, token)
+		d, err = deletions.Find(ctx, c, adminURL, token, epoch)
 		if err == nil && d == nil {
 			err = fmt.Errorf("no deletion record for tenant %q: it was never deleted, or the token is not spelled as stored", token)
 		}

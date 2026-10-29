@@ -155,19 +155,23 @@ Two smaller limits, for completeness:
 A deletion has two outcomes worth separating, and the platform records both on the deletion
 record.
 
-- **Erased** (`erasedAt`): every storage system has reported clean, and has stayed clean for the
-  whole settle window. This is the platform's statement that the tenant's data is gone, and it is
-  the moment to quote when someone asks when an erasure request was fulfilled.
+- **Erased** (`erasedAt`): as of the latest coordinator pass, every storage system has reported
+  clean, continuously for the whole settle window. This is the platform's statement that the
+  tenant's data is gone, and `lastVerifiedAt` is the last pass that confirmed it. It is the moment to
+  quote when someone asks when an erasure request was fulfilled, with the caveat below.
 - **Complete** (`completedAt`): the token has also been held for the full token hold and has been
-  released. This follows `erasedAt` by roughly the token hold, 12 hours by default.
+  released. This follows `erasedAt` by roughly the token hold, 12 hours by default. **Only
+  `completedAt` is final.**
 
-`erasedAt` is a standing claim, not a log entry, and it is set only when everything agrees. If any
+`erasedAt` is a standing claim, not a log entry, and it is made only when everything agrees. If any
 one storage system still holds data, is unreachable, or has erased something on the latest pass, the
-claim is not made: a deletion that is partly done is not erased. The coordinator keeps sweeping
-through the token hold, so if data reappears after the claim was made (a late write that landed
-behind the settle window), the claim is withdrawn, `erasedAt` returns to null, and it is made again
-once the stores have settled again. A record that is `completedAt` always has an `erasedAt` that is
-not later than it.
+claim is not made: a deletion that is partly done is not erased. A pass that stops before it has
+re-checked every storage system also withdraws it, because it confirmed nothing. The coordinator
+keeps sweeping through the token hold, so if data reappears after the claim was made (a late write
+that landed behind the settle window), the claim is withdrawn, `erasedAt` and `lastVerifiedAt`
+return to null, and it is made again once the stores have settled again. Read `lastVerifiedAt` to
+judge how fresh the claim is. A record that is `completedAt` always has an `erasedAt` that is not
+later than it.
 
 Read it from the admin API, where `erased` is true once the claim stands or the deletion has
 completed:
@@ -175,7 +179,7 @@ completed:
 ```graphql
 query {
   tenantDeletions(criteria: {pageNumber: 1, pageSize: 50}) {
-    results { token epoch erased erasedAt completedAt awaiting blockedBy }
+    results { token epoch erased erasedAt lastVerifiedAt completedAt awaiting blockedBy }
   }
 }
 ```
@@ -189,6 +193,12 @@ dcctl tenant-deletion status acme --email ops@example.com --password "$PASSWORD"
 
 `--wait` polls until the claim stands and fails when `--timeout` passes first. `--until complete`
 waits for the token release instead. A token with no deletion record is an error, never a success.
+Because a token can be reused, the command never reports "the newest record for the token": a tenant
+that is being deleted is bound to its own deletion (its current epoch, which exists from the moment
+of the delete), a tenant that is not being deleted is an error, and once the tenant is gone the
+newest completed deletion is reported with its epoch printed. `--epoch` binds to one specific
+deletion. The output includes when the claim was last verified and each storage system's note, such
+as a telemetry database that does not exist on this instance.
 The `devicechain_usermanagement_tenant_purge_erased_total` counter (see
 [below](#blocked-store)) counts claims as they are made.
 

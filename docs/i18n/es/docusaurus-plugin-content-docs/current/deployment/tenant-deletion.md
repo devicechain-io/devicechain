@@ -174,21 +174,24 @@ Dos límites menores, para que consten:
 Una eliminación tiene dos resultados que conviene separar, y la plataforma registra ambos en el
 registro de la eliminación.
 
-- **Borrada** (`erasedAt`): todos los sistemas de almacenamiento han informado de que están limpios y
-  se han mantenido limpios durante toda la ventana de asentamiento. Es la afirmación de la plataforma
-  de que los datos del inquilino ya no existen, y es el momento que debes citar cuando alguien
-  pregunte cuándo se cumplió una solicitud de borrado.
+- **Borrada** (`erasedAt`): según la última pasada del coordinador, todos los sistemas de
+  almacenamiento han informado de que están limpios, de forma continua durante toda la ventana de
+  asentamiento. Es la afirmación de la plataforma de que los datos del inquilino ya no existen, y
+  `lastVerifiedAt` es la última pasada que la confirmó. Es el momento que debes citar cuando alguien
+  pregunte cuándo se cumplió una solicitud de borrado, con la salvedad indicada abajo.
 - **Completada** (`completedAt`): además, el identificador ha estado retenido durante toda la
   retención y se ha liberado. Ocurre aproximadamente una retención después de `erasedAt`, 12 horas por
-  defecto.
+  defecto. **Solo `completedAt` es definitiva.**
 
 `erasedAt` es una afirmación vigente, no una entrada de registro, y solo se hace cuando todo
 coincide. Si un solo sistema de almacenamiento aún conserva datos, no es accesible o ha borrado algo
-en la última pasada, la afirmación no se hace: una eliminación a medias no está borrada. El
-coordinador sigue barriendo durante la retención del identificador, así que si reaparecen datos
-después de la afirmación (una escritura tardía que llegó tras la ventana de asentamiento), la
-afirmación se retira, `erasedAt` vuelve a ser nulo y se hace de nuevo cuando los almacenes se han
-asentado otra vez. Un registro con `completedAt` siempre tiene un `erasedAt` que no es posterior.
+en la última pasada, la afirmación no se hace: una eliminación a medias no está borrada. Una pasada
+que se interrumpe antes de revisar de nuevo todos los sistemas también la retira, porque no confirmó
+nada. El coordinador sigue barriendo durante la retención del identificador, así que si reaparecen
+datos después de la afirmación (una escritura tardía que llegó tras la ventana de asentamiento), la
+afirmación se retira, `erasedAt` y `lastVerifiedAt` vuelven a ser nulos y se hace de nuevo cuando los
+almacenes se han asentado otra vez. Lee `lastVerifiedAt` para juzgar cuán reciente es. Un registro con
+`completedAt` siempre tiene un `erasedAt` que no es posterior.
 
 Léela desde la API de administración, donde `erased` es verdadero cuando la afirmación está vigente o
 la eliminación se ha completado:
@@ -196,7 +199,7 @@ la eliminación se ha completado:
 ```graphql
 query {
   tenantDeletions(criteria: {pageNumber: 1, pageSize: 50}) {
-    results { token epoch erased erasedAt completedAt awaiting blockedBy }
+    results { token epoch erased erasedAt lastVerifiedAt completedAt awaiting blockedBy }
   }
 }
 ```
@@ -211,7 +214,13 @@ dcctl tenant-deletion status acme --email ops@example.com --password "$PASSWORD"
 
 `--wait` consulta hasta que la afirmación esté vigente y falla si antes pasa `--timeout`.
 `--until complete` espera en cambio a la liberación del identificador. Un identificador sin registro
-de eliminación es un error, nunca un éxito. El contador
+de eliminación es un error, nunca un éxito. Como un identificador puede reutilizarse, el comando nunca
+informa de "el registro más reciente del identificador": un inquilino que se está eliminando queda
+ligado a su propia eliminación (su época actual, que existe desde el momento de la eliminación), un
+inquilino que no se está eliminando es un error, y cuando el inquilino ya no existe se informa de la
+última eliminación completada, con su época. `--epoch` liga a una eliminación concreta. La salida
+incluye cuándo se verificó por última vez la afirmación y la nota de cada sistema de almacenamiento,
+por ejemplo una base de datos de telemetría que no existe en esta instancia. El contador
 `devicechain_usermanagement_tenant_purge_erased_total` (véase [más abajo](#blocked-store)) cuenta las
 afirmaciones a medida que se hacen.
 

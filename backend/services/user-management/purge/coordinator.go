@@ -332,6 +332,17 @@ func (c *Coordinator) purgeTenant(ctx context.Context, tenant *iam.Tenant, tally
 		return fmt.Errorf("opening the deletion record for %q: %w", t.Token, err)
 	}
 
+	// 🔴 A PASS THAT ENDS BEFORE IT HAS RE-CHECKED EVERY STORE MUST NOT LEAVE A CLAIM STANDING.
+	// The claim is only as fresh as the pass that confirmed it, and the early returns below
+	// (a cancelled context, a failed ledger write, an unregistered store still incomplete)
+	// are passes that confirmed nothing. Withdraw-only: this path can never make a claim.
+	claimDecided := false
+	defer func() {
+		if !claimDecided {
+			c.withdrawClaim(sys, rec, "the pass ended before every store was re-checked")
+		}
+	}()
+
 	previous, err := c.iam.PurgeStores(sys, rec.ID)
 	if err != nil {
 		return fmt.Errorf("reading the ledger for %q: %w", t.Token, err)
@@ -397,6 +408,7 @@ func (c *Coordinator) purgeTenant(ctx context.Context, tenant *iam.Tenant, tally
 	if err := c.syncErasureClaim(sys, rec, p, lines); err != nil {
 		return err
 	}
+	claimDecided = true
 	switch p.Awaiting {
 	case WaitStores:
 		return nil
@@ -445,21 +457,59 @@ func erasureStands(p Progress, lines []iam.TenantPurgeStore) bool {
 
 func (c *Coordinator) syncErasureClaim(ctx context.Context, rec *iam.TenantPurge, p Progress,
 	lines []iam.TenantPurgeStore) error {
-	stands := erasureStands(p, lines)
-	was := rec.ErasedAt != nil
-	if err := c.iam.SetPurgeErased(ctx, rec, stands, c.now()); err != nil {
+	if !erasureStands(p, lines) {
+		var notClean []string
+		for _, l := range lines {
+			if l.CleanSince == nil {
+				notClean = append(notClean, l.Store)
+			}
+		}
+		withdrew, err := c.iam.WithdrawPurgeErased(ctx, rec)
+		if err != nil {
+			return fmt.Errorf("withdrawing the erasure claim for %q: %w", rec.Token, err)
+		}
+		if withdrew {
+			c.logClaim(rec, "withdrawn", "a storage system is not clean and settled", notClean)
+		}
+		return nil
+	}
+	made, err := c.iam.ConfirmPurgeErased(ctx, rec, c.now())
+	if err != nil {
 		return fmt.Errorf("recording the erasure claim for %q: %w", rec.Token, err)
 	}
-	switch {
-	case stands && !was:
+	if made {
 		c.metrics.erased.Inc()
-		log.Info().Str("tenant", rec.Token).Time("epoch", rec.Epoch).
-			Msg("Tenant data erased: every storage system is clean and has settled; the token is held until the hold elapses")
-	case !stands && was:
-		log.Warn().Str("tenant", rec.Token).Time("epoch", rec.Epoch).
-			Msg("Tenant erasure claim withdrawn: a storage system reported data again")
+		c.logClaim(rec, "established", "every storage system is clean and has settled; the token is held until the hold elapses", nil)
 	}
 	return nil
+}
+
+// withdrawClaim is the early-exit path: withdraw-only, on a context that outlives a cancelled
+// pass, and never fatal (the pass is already returning something more important).
+func (c *Coordinator) withdrawClaim(sys context.Context, rec *iam.TenantPurge, why string) {
+	// The pass context carries the already-sanctioned system scope; only its cancellation is shed.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(sys), 10*time.Second)
+	defer cancel()
+	withdrew, err := c.iam.WithdrawPurgeErased(ctx, rec)
+	if err != nil {
+		log.Error().Err(err).Str("tenant", rec.Token).Msg("Could not withdraw a tenant erasure claim after an early exit")
+		return
+	}
+	if withdrew {
+		c.logClaim(rec, "withdrawn", why, nil)
+	}
+}
+
+// logClaim records which way the claim moved. The direction is a field of its own so the logs
+// (with the audit journal's update of the deletion record) tell a claim from a withdrawal.
+func (c *Coordinator) logClaim(rec *iam.TenantPurge, direction, why string, stores []string) {
+	ev := log.Info()
+	msg := "Tenant erasure claim established"
+	if direction == "withdrawn" {
+		ev, msg = log.Warn(), "Tenant erasure claim withdrawn"
+	}
+	ev.Str("tenant", rec.Token).Time("epoch", rec.Epoch).Str("erasure_claim", direction).
+		Strs("not_clean_stores", stores).Str("reason", why).Msg(msg)
 }
 
 // recordCompletion observes the two durations of a finished deletion. Called once, after

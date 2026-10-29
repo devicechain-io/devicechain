@@ -192,5 +192,14 @@ func (s *Service) TenantDeletionProgress(rec *iam.TenantPurge, lines []iam.Tenan
 	if rec.CompletedAt != nil {
 		return purge.Progress{Awaiting: purge.WaitNone}
 	}
+	// 🔴 A RECORD WITH NO LEDGER LINES IS A DELETION NOBODY HAS CHECKED YET, NOT A CLEAN ONE.
+	// The record is opened in the same transaction as the delete, so it exists for the
+	// interval before the coordinator's first pass; Waiting over zero lines would read
+	// "nothing blocking, settled" and report the token hold for data no store has been asked
+	// about.
+	if len(lines) == 0 {
+		return purge.Progress{Awaiting: purge.WaitStores,
+			BlockedBy: []string{"no storage system has been checked yet; the first pass has not run"}}
+	}
 	return purge.Waiting(lines, rec.Epoch, time.Now().UTC(), s.settle, s.tokenHold)
 }
