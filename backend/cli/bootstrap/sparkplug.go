@@ -23,7 +23,8 @@ package bootstrap
 // old one: the previous revision still holds it. So dcctl writes the Secret itself,
 // dci-<instance>-sparkplug-broker, before the release and outside its manifest, the way it writes
 // the instance configuration; the release carries only the Secret's NAME (in the pod's secretKeyRef)
-// and a digest salted per instance that rolls the pods when the password changes. An upgrade
+// and a stamp, salted per instance and derived from the Secret's version rather than its content,
+// that rolls the pods when the password changes. An upgrade
 // therefore reads nothing secret out of the release, and the Secret survives it because Helm
 // never owned it. A source may instead name a Secret the operator manages themselves
 // (broker.passwordSecretRef), which dcctl neither writes nor reads. The file dcctl reads may
@@ -43,7 +44,6 @@ import (
 	"net/url"
 	"os"
 	"regexp"
-	"sort"
 	"strings"
 	"time"
 
@@ -323,58 +323,54 @@ func sparkplugProvisioning(instance string, sources []SparkplugSource) (areaConf
 	return areaConfig
 }
 
-// sparkplugCredentialsDigest is the value stamped on the sparkplug-ingest pods so a rotated
+// sparkplugCredentialsStamp is the value stamped on the sparkplug-ingest pods so a rotated
 // password rolls them: a secretKeyRef is read once, at container start, and the Secret keeps its
 // name when its content changes.
 //
-// 🔴 SALTED PER INSTANCE, AND NEVER A BARE HASH OF THE PASSWORD. This value lands in the release
-// values, which are readable; an unsalted SHA-256 of a low-entropy password there is an offline
-// guessing oracle. The salt is the declaration's UID (the same one that stamps the Secret's owner),
-// so two instances with the same password carry different digests. The separators keep ("ab","c")
-// apart from ("a","bc"). An empty Secret has no digest.
-func sparkplugCredentialsDigest(instanceUID string, data map[string]string) string {
-	if len(data) == 0 {
+// 🔴 IT IS NOT A HASH OF THE PASSWORD, OF ANY OF ITS BYTES, OR OF A VALUE CARRYING THEM. It lands in
+// the release values, which are readable, and any digest of a low-entropy secret there is an offline
+// guessing oracle, salted or not. The API server already versions the Secret: its resourceVersion
+// moves whenever the content does and stands still when it does not, so the stamp is derived from
+// that, salted per instance with the declaration's UID and bound to the Secret's own UID. A run that
+// rewrites the same password changes nothing and rolls nothing. An absent Secret has no stamp.
+func sparkplugCredentialsStamp(instanceUID string, s *corev1.Secret) string {
+	if s == nil {
 		return ""
 	}
-	keys := make([]string, 0, len(data))
-	for k := range data {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
 	h := sha256.New()
-	h.Write([]byte("sparkplug-broker\x00"))
+	h.Write([]byte("sparkplug-broker-stamp\x00"))
 	h.Write([]byte(instanceUID))
 	h.Write([]byte{0})
-	for _, k := range keys {
-		h.Write([]byte(k))
-		h.Write([]byte{0})
-		h.Write([]byte(data[k]))
-		h.Write([]byte{0})
-	}
+	h.Write([]byte(s.Name))
+	h.Write([]byte{0})
+	h.Write([]byte(s.UID))
+	h.Write([]byte{0})
+	h.Write([]byte(s.ResourceVersion))
 	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
 // syncSparkplugBrokerSecret settles the broker Secret for this run, before the release, and
-// returns the digest to stamp on the pods.
+// returns the stamp (sparkplugCredentialsStamp) for the pods.
 //
 //   - A run GIVEN sources (or told to withdraw them) is the authority: the Secret is rewritten to
 //     hold exactly its passwords (a rotation replaces the old one in place), and removed when the
 //     run has none, so a retired password does not linger.
-//   - Any other run keeps what is there and only reads it for the digest, so an upgrade that is
-//     given no file leaves the password alone and the pods' stamp where it was.
+//   - Any other run keeps what is there and only reads its identity for the stamp, so an upgrade
+//     that is given no file leaves the password alone and the pods' stamp where it was.
 func syncSparkplugBrokerSecret(ctx context.Context, typed kubernetes.Interface, st *State) (string, error) {
 	name, ns := sparkplugBrokerSecretName(st.Instance), InstanceNamespace(st.Instance)
 	owner := instanceOwner(st.Instance, st.InstanceUID)
 	if st.SparkplugSourcesGiven {
 		data := sparkplugBrokerSecretData(st.SparkplugSources)
-		if len(data) > 0 {
-			err := writeOwnedSecret(ctx, typed, owner, ownedSecret{
-				Name: name, Namespace: ns, Type: corev1.SecretTypeOpaque,
-				Labels: map[string]string{"devicechain.io/instance": st.Instance}, Data: data,
-			}, time.Now)
-			return sparkplugCredentialsDigest(st.InstanceUID, data), err
+		if len(data) == 0 {
+			return "", deleteOwnedSecretIfOurs(ctx, typed, owner, ns, name)
 		}
-		return "", deleteOwnedSecretIfOurs(ctx, typed, owner, ns, name)
+		if err := writeOwnedSecret(ctx, typed, owner, ownedSecret{
+			Name: name, Namespace: ns, Type: corev1.SecretTypeOpaque,
+			Labels: map[string]string{"devicechain.io/instance": st.Instance}, Data: data,
+		}, time.Now); err != nil {
+			return "", err
+		}
 	}
 	s, err := typed.CoreV1().Secrets(ns).Get(ctx, name, metav1.GetOptions{})
 	switch {
@@ -383,16 +379,7 @@ func syncSparkplugBrokerSecret(ctx context.Context, typed kubernetes.Interface, 
 	case err != nil:
 		return "", fmt.Errorf("reading Secret %s/%s, which holds the Sparkplug broker passwords: %w", ns, name, err)
 	}
-	data := make(map[string]string, len(s.Data))
-	for k, v := range s.Data {
-		data[k] = string(v)
-	}
-	// StringData is write-only on a real API server and always empty on a read; a client that
-	// does not convert it (a fake) leaves what was written there.
-	for k, v := range s.StringData {
-		data[k] = v
-	}
-	return sparkplugCredentialsDigest(st.InstanceUID, data), nil
+	return sparkplugCredentialsStamp(st.InstanceUID, s), nil
 }
 
 // deleteOwnedSecretIfOurs removes a Secret dcctl wrote for this instance, and leaves one it did not.
@@ -414,7 +401,7 @@ func deleteOwnedSecretIfOurs(ctx context.Context, typed kubernetes.Interface, ow
 	return nil
 }
 
-// withSparkplugCredentialsChecksum stamps the digest into the install values, on a copy of the
+// withSparkplugCredentialsChecksum stamps the credentials stamp into the install values, on a copy of the
 // area's block: vals shares sub-maps with the authoring values.
 func withSparkplugCredentialsChecksum(vals map[string]interface{}, digest string) {
 	if digest == "" {

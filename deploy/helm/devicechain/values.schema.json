@@ -789,7 +789,7 @@
           },
           "credentialsChecksum": {
             "type": "string",
-            "description": "A digest, salted per instance, of the credentials Secret dcctl writes for this area outside the release (sparkplug-ingest's broker passwords). It is stamped on the area's pod template so a rotated credential rolls the pods; the credential itself is never a value. Set by dcctl."
+            "description": "A stamp, salted per instance and derived from the version of the credentials Secret dcctl writes for this area outside the release (sparkplug-ingest's broker passwords). It is set on the area's pod template so a rotated credential rolls the pods; the credential, or anything computed from it, is never a value. Set by dcctl."
           },
           "extraEnv": {
             "type": "array",

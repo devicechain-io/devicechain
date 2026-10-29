@@ -119,8 +119,8 @@
       "translationSha256": "fdaf339f27cb74541fcb8b53ef59602b6c9fffa9156970d2b12cc8f704f025cb"
     },
     "deployment/edge-services.md": {
-      "sourceSha256": "68b071209f722503c09ac35091e7ee29c7219ae331bb1dbd1a50e3f7d491c737",
-      "translationSha256": "941550bc0a114409667842bc6644898f874ad1ad9c8806b4400bfeae9065caaf"
+      "sourceSha256": "fdad46ae30f1d85ce507beb1258eaf7ade42f59adb89ece53513f2759c6a11ef",
+      "translationSha256": "a39b794f2f166f3c76c002711c330571f9112e23d4ab99b0280f520350b1316d"
     },
     "deployment/grafana-boards.md": {
       "sourceSha256": "dcb3e71bc1562c5a1d04b26790b48404340efff24bc75be3f2900eedf4034cf2",

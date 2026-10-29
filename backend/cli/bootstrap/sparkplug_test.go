@@ -22,8 +22,10 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 )
 
 const brokerPassword = "s3cret-broker-pw"
@@ -279,7 +281,11 @@ func TestSparkplugSourcesRenderEndToEnd(t *testing.T) {
 	}
 	st := sparkplugState(sources)
 	vals := helmValues(st)
-	withSparkplugCredentialsChecksum(vals, sparkplugCredentialsDigest(st.InstanceUID, sparkplugBrokerSecretData(sources)))
+	stamp, err := sparkplugRun(t, versionedCluster(), st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withSparkplugCredentialsChecksum(vals, stamp)
 	got := renderSparkplug(t, vals)
 
 	if anywhere(vals, brokerPassword) {
@@ -340,34 +346,45 @@ func TestSparkplugSourcesRenderEndToEnd(t *testing.T) {
 	}
 }
 
-// 🔴 M1: THE POD TEMPLATE CARRIES A DIGEST SALTED PER INSTANCE, AND NO UNSALTED HASH OF THE PASSWORD.
-func TestTheSparkplugPodsCarryASaltedDigestOnly(t *testing.T) {
+// 🔴 M1: THE POD TEMPLATE CARRIES A STAMP DERIVED FROM THE SECRET'S VERSION AND SALTED PER INSTANCE, AND
+// NOTHING DERIVED FROM THE PASSWORD: not a bare hash, not a salted one.
+func TestTheSparkplugPodsCarryAVersionStampAndNothingDerivedFromThePassword(t *testing.T) {
 	t.Parallel()
-	sources, _ := ParseSparkplugSources(writeSourcesFile(t, goodSources))
-	data := sparkplugBrokerSecretData(sources)
-	digest := sparkplugCredentialsDigest("uid-1", data)
-	if digest == "" || digest != sparkplugCredentialsDigest("uid-1", data) {
-		t.Fatal("the digest is empty or not deterministic")
+	secret := func(rv, pw string) *corev1.Secret {
+		return &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "dci-dctest-sparkplug-broker", UID: "su", ResourceVersion: rv},
+			Data:       map[string][]byte{"DC_SPARKPLUG_BROKER_PW_1": []byte(pw)},
+		}
 	}
-	if digest == sparkplugCredentialsDigest("uid-2", data) {
-		t.Fatal("two instances with the same password share a digest: it is not salted")
+	stamp := sparkplugCredentialsStamp("uid-1", secret("7", brokerPassword))
+	if stamp == "" {
+		t.Fatal("no stamp for a Secret")
 	}
-	if digest == sparkplugCredentialsDigest("uid-1", map[string]string{"DC_SPARKPLUG_BROKER_PW_1": "rotated"}) {
-		t.Fatal("a rotated password does not change the digest, so the pods would not roll")
+	if stamp != sparkplugCredentialsStamp("uid-1", secret("7", "a completely different password")) {
+		t.Fatal("the stamp depends on the password: it is a digest of a secret, which the release values would then expose to guessing")
+	}
+	if stamp == sparkplugCredentialsStamp("uid-1", secret("8", brokerPassword)) {
+		t.Fatal("a new version of the Secret does not change the stamp, so the pods would not roll")
+	}
+	if stamp == sparkplugCredentialsStamp("uid-2", secret("7", brokerPassword)) {
+		t.Fatal("two instances share a stamp: it is not salted")
+	}
+	if sparkplugCredentialsStamp("uid-1", nil) != "" {
+		t.Fatal("an absent Secret has a stamp")
 	}
 	bare := sha256.Sum256([]byte(brokerPassword))
-	if digest == fmt.Sprintf("%x", bare) {
-		t.Fatal("the digest is the bare SHA-256 of the password")
+	if stamp == fmt.Sprintf("%x", bare) {
+		t.Fatal("the stamp is the bare SHA-256 of the password")
 	}
 
+	sources, _ := ParseSparkplugSources(writeSourcesFile(t, goodSources))
 	st := sparkplugState(sources)
 	vals := helmValues(st)
-	withSparkplugCredentialsChecksum(vals, digest)
+	withSparkplugCredentialsChecksum(vals, stamp)
 	got := renderSparkplug(t, vals)
-	if got.podAnno["checksum/area-credentials"] != digest {
-		t.Fatalf("the pod template does not carry the digest: %v", got.podAnno)
+	if got.podAnno["checksum/area-credentials"] != stamp {
+		t.Fatalf("the pod template does not carry the stamp: %v", got.podAnno)
 	}
-	// No annotation anywhere is a bare hash of the password or of the value that carries it.
 	for _, d := range got.docs {
 		if anywhere(d, fmt.Sprintf("%x", bare)) {
 			t.Fatal("an unsalted hash of the password is in the rendered manifest")
@@ -378,6 +395,31 @@ func TestTheSparkplugPodsCarryASaltedDigestOnly(t *testing.T) {
 	if anywhere(got.docs, fmt.Sprintf("%x", extra)) {
 		t.Fatal("the Sparkplug password is still inside the extraSecrets hash")
 	}
+}
+
+// versionedCluster is a fake cluster whose Secrets get a UID and a resourceVersion that moves on
+// every write, as an API server's do.
+func versionedCluster(objs ...runtime.Object) *fake.Clientset {
+	typed := fake.NewSimpleClientset(objs...)
+	n := 0
+	typed.PrependReactor("*", "secrets", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		var obj runtime.Object
+		switch a := action.(type) {
+		case k8stesting.CreateAction:
+			obj = a.GetObject()
+		case k8stesting.UpdateAction:
+			obj = a.GetObject()
+		}
+		if sec, ok := obj.(*corev1.Secret); ok {
+			n++
+			sec.ResourceVersion = fmt.Sprint(n)
+			if sec.UID == "" {
+				sec.UID = "secret-uid"
+			}
+		}
+		return false, nil, nil
+	})
+	return typed
 }
 
 // sparkplugRun is one run's worth of writes against a fake cluster.
@@ -414,16 +456,16 @@ func TestAnUpgradeKeepsTheSparkplugSourcesWithoutReadingASecretFromTheRelease(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	typed := fake.NewSimpleClientset()
+	typed := versionedCluster()
 
 	// The bootstrap that gave the file.
 	first := sparkplugState(sources)
-	digest1, err := sparkplugRun(t, typed, first)
+	stamp1, err := sparkplugRun(t, typed, first)
 	if err != nil {
 		t.Fatal(err)
 	}
 	previous := helmValues(first)
-	withSparkplugCredentialsChecksum(previous, digest1)
+	withSparkplugCredentialsChecksum(previous, stamp1)
 	// The release record, as `helm get values` would print it.
 	if anywhere(previous, brokerPassword) {
 		t.Fatal("the release values hold the broker password")
@@ -441,15 +483,15 @@ func TestAnUpgradeKeepsTheSparkplugSourcesWithoutReadingASecretFromTheRelease(t 
 		},
 	}
 	fresh := authoringValues(st)
-	digest2, err := sparkplugRun(t, typed, st)
+	stamp2, err := sparkplugRun(t, typed, st)
 	if err != nil {
 		t.Fatal(err)
 	}
-	withSparkplugCredentialsChecksum(fresh, digest2)
+	withSparkplugCredentialsChecksum(fresh, stamp2)
 	carryReleaseValues(fresh, previous)
 
-	if digest2 != digest1 {
-		t.Fatal("an upgrade that was given no file changed the pods' digest, which would roll them for nothing")
+	if stamp2 != stamp1 {
+		t.Fatal("an upgrade that was given no file changed the pods' stamp, which would roll them for nothing")
 	}
 	if data, ok := brokerSecret(t, typed); !ok || string(data["DC_SPARKPLUG_BROKER_PW_1"]) != brokerPassword {
 		t.Fatalf("an upgrade disturbed the password Secret: %v", data)
@@ -472,14 +514,14 @@ func TestAnUpgradeKeepsTheSparkplugSourcesWithoutReadingASecretFromTheRelease(t 
 func TestAFileGivenAgainRotatesTheSecretAndReplacesTheCarriedSources(t *testing.T) {
 	t.Parallel()
 	old, _ := ParseSparkplugSources(writeSourcesFile(t, goodSources))
-	typed := fake.NewSimpleClientset()
+	typed := versionedCluster()
 	first := sparkplugState(old)
-	digest1, err := sparkplugRun(t, typed, first)
+	stamp1, err := sparkplugRun(t, typed, first)
 	if err != nil {
 		t.Fatal(err)
 	}
 	previous := helmValues(first)
-	withSparkplugCredentialsChecksum(previous, digest1)
+	withSparkplugCredentialsChecksum(previous, stamp1)
 
 	replacement, err := ParseSparkplugSources(writeSourcesFile(t, strings.ReplaceAll(strings.ReplaceAll(goodSources, "spb-mosquitto", "new-broker"), brokerPassword, "rotated-pw")))
 	if err != nil {
@@ -488,11 +530,11 @@ func TestAFileGivenAgainRotatesTheSecretAndReplacesTheCarriedSources(t *testing.
 	st := sparkplugState(replacement)
 	st.Evolving = true
 	fresh := authoringValues(st)
-	digest2, err := sparkplugRun(t, typed, st)
+	stamp2, err := sparkplugRun(t, typed, st)
 	if err != nil {
 		t.Fatal(err)
 	}
-	withSparkplugCredentialsChecksum(fresh, digest2)
+	withSparkplugCredentialsChecksum(fresh, stamp2)
 	// What releaseValues does for a run that decides the sources.
 	carryReleaseValues(fresh, withoutSparkplugSources(previous))
 
@@ -500,8 +542,8 @@ func TestAFileGivenAgainRotatesTheSecretAndReplacesTheCarriedSources(t *testing.
 	if string(data["DC_SPARKPLUG_BROKER_PW_1"]) != "rotated-pw" {
 		t.Fatalf("the Secret still holds the old password: %v", data)
 	}
-	if digest1 == digest2 {
-		t.Fatal("a rotation did not change the digest, so the pods would not roll")
+	if stamp1 == stamp2 {
+		t.Fatal("a rotation did not change the stamp, so the pods would not roll")
 	}
 	got := renderSparkplug(t, fresh)
 	if !strings.Contains(got.configRaw, "new-broker") || strings.Contains(got.configRaw, "spb-mosquitto") {
@@ -523,31 +565,31 @@ func TestWithdrawingOrRetiringAPasswordRemovesTheSecretAndTheCarriedLeaves(t *te
 		"password-less set": {{Tenant: "plant", Broker: SparkplugBroker{URL: "tcp://spb-mosquitto:1883"}}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			typed := fake.NewSimpleClientset()
+			typed := versionedCluster()
 			first := sparkplugState(old)
-			digest1, err := sparkplugRun(t, typed, first)
+			stamp1, err := sparkplugRun(t, typed, first)
 			if err != nil {
 				t.Fatal(err)
 			}
 			previous := helmValues(first)
-			withSparkplugCredentialsChecksum(previous, digest1)
+			withSparkplugCredentialsChecksum(previous, stamp1)
 
 			st := sparkplugState(next)
 			st.Evolving = true
 			st.SparkplugSourcesGiven = true // a withdrawal gives no sources and still decides
 			fresh := authoringValues(st)
-			digest2, err := sparkplugRun(t, typed, st)
+			stamp2, err := sparkplugRun(t, typed, st)
 			if err != nil {
 				t.Fatal(err)
 			}
-			withSparkplugCredentialsChecksum(fresh, digest2)
+			withSparkplugCredentialsChecksum(fresh, stamp2)
 			carryReleaseValues(fresh, withoutSparkplugSources(previous))
 
 			if _, ok := brokerSecret(t, typed); ok {
 				t.Fatal("the retired password Secret is still in the cluster")
 			}
-			if digest2 != "" {
-				t.Fatalf("a digest is stamped for a Secret that is gone: %q", digest2)
+			if stamp2 != "" {
+				t.Fatalf("a stamp is set for a Secret that is gone: %q", stamp2)
 			}
 			got := renderSparkplug(t, fresh)
 			if anywhere(fresh, "DC_SPARKPLUG_BROKER_PW_1") {
@@ -562,7 +604,7 @@ func TestWithdrawingOrRetiringAPasswordRemovesTheSecretAndTheCarriedLeaves(t *te
 
 // A Secret named like ours that dcctl did not write is not deleted by a withdrawal.
 func TestAWithdrawalLeavesAForeignSecretAlone(t *testing.T) {
-	typed := fake.NewSimpleClientset(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "dci-dctest-sparkplug-broker", Namespace: "dci-dctest"}})
+	typed := versionedCluster(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "dci-dctest-sparkplug-broker", Namespace: "dci-dctest"}})
 	st := sparkplugState(nil)
 	st.SparkplugSourcesGiven = true
 	if _, err := sparkplugRun(t, typed, st); err == nil {
