@@ -1,0 +1,29 @@
+<!--
+  Copyright The DeviceChain Authors
+  SPDX-License-Identifier: Apache-2.0
+
+  The engine-free story layer (tint ramp, motion and lamp looks, command and alarm cards, the shot file), compiled from the SAME .cs files Unity compiles through
+  DeviceChain.Towerpulse.Story.asmdef.
+-->
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>netstandard2.1;net8.0</TargetFrameworks>
+    <RootNamespace>DeviceChain.Towerpulse.Story</RootNamespace>
+    <AssemblyName>DeviceChain.Towerpulse.Story</AssemblyName>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net8.0'">
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Model/DeviceChain.Towerpulse.Model.csproj" />
+    <ProjectReference Include="../Plane/DeviceChain.Towerpulse.Plane.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="../../Assets/Towerpulse/Scripts/Story/**/*.cs" />
+  </ItemGroup>
+
+</Project>

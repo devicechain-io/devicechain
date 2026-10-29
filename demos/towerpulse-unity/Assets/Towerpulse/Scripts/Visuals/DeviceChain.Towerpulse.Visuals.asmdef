@@ -1,0 +1,28 @@
+{
+    "name": "DeviceChain.Towerpulse.Visuals",
+    "rootNamespace": "DeviceChain.Towerpulse.Visuals",
+    "references": [
+        "DeviceChain.Towerpulse.Model",
+        "DeviceChain.Towerpulse.Plane",
+        "DeviceChain.Towerpulse.Story",
+        "DeviceChain.Towerpulse.DevicePlane",
+        "DeviceChain.Sdk.Unity",
+        "DeviceChain.Demos.Core",
+        "DeviceChain.Demos.Platform",
+        "DeviceChain.Demos.DevicePlane",
+        "UnityEngine.UI"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "DeviceChain.Sdk.dll",
+        "System.Text.Json.dll",
+        "Microsoft.Bcl.AsyncInterfaces.dll"
+    ],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

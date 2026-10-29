@@ -39,6 +39,11 @@
     <Compile Include="../../../../demos/towerpulse-unity/Assets/Towerpulse/Scripts/Model/**/*.cs" />
     <Compile Include="../../../../demos/towerpulse-unity/Assets/Towerpulse/Scripts/Plane/**/*.cs" />
     <Compile Include="../../../../demos/towerpulse-unity/Assets/Towerpulse/Scripts/DevicePlane/**/*.cs" />
+    <!-- The story layer (engine-free) and the two visuals components that need only the engine's own modules. The cards (StoryUi) and the composition
+         root that owns them use the ugui package's Text and Image, which the reference assemblies above do not carry, so the Editor compiles those. -->
+    <Compile Include="../../../../demos/towerpulse-unity/Assets/Towerpulse/Scripts/Story/**/*.cs" />
+    <Compile Include="../../../../demos/towerpulse-unity/Assets/Towerpulse/Scripts/Visuals/CampusView.cs" />
+    <Compile Include="../../../../demos/towerpulse-unity/Assets/Towerpulse/Scripts/Visuals/ShotDirector.cs" />
   </ItemGroup>
 
 </Project>

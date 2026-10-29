@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "dependencies": {
+    ".NETStandard,Version=v2.1": {
+      "devicechain.towerpulse.model": {
+        "type": "Project"
+      },
+      "devicechain.towerpulse.plane": {
+        "type": "Project",
+        "dependencies": {
+          "DeviceChain.Towerpulse.Model": "[1.0.0, )"
+        }
+      }
+    },
+    "net8.0": {
+      "Microsoft.NET.ILLink.Tasks": {
+        "type": "Direct",
+        "requested": "[8.0.31, )",
+        "resolved": "8.0.31",
+        "contentHash": "OJdAGATV2QoVWL11zlDLEluA06q8rK+cgZR47ohrO8V+Qj5z9dlvN7bG9/0e5t0IOe+yD8tREC0bpsEgDGrzIQ=="
+      },
+      "devicechain.towerpulse.model": {
+        "type": "Project"
+      },
+      "devicechain.towerpulse.plane": {
+        "type": "Project",
+        "dependencies": {
+          "DeviceChain.Towerpulse.Model": "[1.0.0, )"
+        }
+      }
+    }
+  }
+}
