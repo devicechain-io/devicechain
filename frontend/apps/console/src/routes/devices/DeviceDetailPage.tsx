@@ -64,12 +64,14 @@ export default function DeviceDetailPage() {
   // its list content is privileged, so a caller without the authority gets no tab
   // at all rather than an empty one or a 403.
   const canWriteDevice = mayWrite(claims, 'device:write');
-  const canManageCredentials = hasAuthority(claims, 'device:write') && !isScoped(claims);
+  const canManageCredentials = canWriteDevice;
   // A member limited to part of the tenant (a customer user) is served the device, its live
   // state, its events, its commands and its updates — not its assignment, its facet values
   // or its stored configuration, and no change to the device itself. Those tabs and actions
   // are left out for them rather than shown to fail.
   const scoped = isScoped(claims);
+  // A customer user holding command:write may send to their devices but not cancel a command.
+  const canSend = hasAuthority(claims, 'command:write');
   // The Updates tab belongs to an opt-in area: shown only once the area is KNOWN to be deployed
   // and the caller may read it (fail closed while discovery is pending), so it never appears
   // on an instance without update-management or 403s a caller without artifact:read.
@@ -249,7 +251,7 @@ export default function DeviceDetailPage() {
         </TabsContent>
         <TabsContent value="commands">
           <SectionPanel>
-            <DeviceCommandsPanel deviceToken={device.token} />
+            <DeviceCommandsPanel deviceToken={device.token} canIssue={canSend} canCancel={canSend && !scoped} />
           </SectionPanel>
         </TabsContent>
         <TabsContent value="configuration">

@@ -1,0 +1,222 @@
+{
+  "demo": "towerpulse",
+  "measurements": [
+    "temp_c",
+    "setpoint_c",
+    "co2_ppm",
+    "occupancy",
+    "damper_pct",
+    "supply_air_c",
+    "fan_pct",
+    "filter_dp_pa",
+    "mode",
+    "chw_supply_c",
+    "power_kw",
+    "cooling_kw",
+    "running",
+    "cop",
+    "kw",
+    "kwh",
+    "kwh_per_m2"
+  ],
+  "calculated": [
+    "cop",
+    "kwh_per_m2"
+  ],
+  "unsampledAlarmKeys": [
+    "chiller-silent"
+  ],
+  "kindGrammar": "[a-z][a-z0-9-]{0,31}",
+  "inputs": [
+    "run.json",
+    "observed.ndjson",
+    "device.ndjson"
+  ],
+  "chapters": false,
+  "anchors": [
+    {
+      "relationship": "assigned",
+      "targetType": "customer",
+      "targetToken": "tp-meridian",
+      "devices": [
+        "TP-VAV-T-F1-N",
+        "TP-VAV-T-F1-E",
+        "TP-VAV-T-F1-S",
+        "TP-VAV-T-F1-W",
+        "TP-VAV-T-F2-N",
+        "TP-VAV-T-F2-E",
+        "TP-VAV-T-F2-S",
+        "TP-VAV-T-F2-W",
+        "TP-VAV-T-F3-N",
+        "TP-VAV-T-F3-E",
+        "TP-VAV-T-F3-S",
+        "TP-VAV-T-F3-W",
+        "TP-VAV-T-F4-N",
+        "TP-VAV-T-F4-E",
+        "TP-VAV-T-F4-S",
+        "TP-VAV-T-F4-W",
+        "TP-VAV-T-F5-N",
+        "TP-VAV-T-F5-E",
+        "TP-VAV-T-F5-S",
+        "TP-VAV-T-F5-W",
+        "TP-AHU-T-1",
+        "TP-AHU-T-2",
+        "TP-CH-T",
+        "TP-EM-T"
+      ]
+    },
+    {
+      "relationship": "assigned",
+      "targetType": "area",
+      "targetToken": "tp-tower",
+      "devices": [
+        "TP-VAV-T-F1-N",
+        "TP-VAV-T-F1-E",
+        "TP-VAV-T-F1-S",
+        "TP-VAV-T-F1-W",
+        "TP-VAV-T-F2-N",
+        "TP-VAV-T-F2-E",
+        "TP-VAV-T-F2-S",
+        "TP-VAV-T-F2-W",
+        "TP-VAV-T-F3-N",
+        "TP-VAV-T-F3-E",
+        "TP-VAV-T-F3-S",
+        "TP-VAV-T-F3-W",
+        "TP-VAV-T-F4-N",
+        "TP-VAV-T-F4-E",
+        "TP-VAV-T-F4-S",
+        "TP-VAV-T-F4-W",
+        "TP-VAV-T-F5-N",
+        "TP-VAV-T-F5-E",
+        "TP-VAV-T-F5-S",
+        "TP-VAV-T-F5-W",
+        "TP-AHU-T-1",
+        "TP-AHU-T-2",
+        "TP-CH-T",
+        "TP-EM-T"
+      ]
+    },
+    {
+      "relationship": "assigned",
+      "targetType": "area",
+      "targetToken": "tp-tower-f1",
+      "devices": [
+        "TP-VAV-T-F1-N",
+        "TP-VAV-T-F1-E",
+        "TP-VAV-T-F1-S",
+        "TP-VAV-T-F1-W"
+      ]
+    },
+    {
+      "relationship": "assigned",
+      "targetType": "area",
+      "targetToken": "tp-tower-f2",
+      "devices": [
+        "TP-VAV-T-F2-N",
+        "TP-VAV-T-F2-E",
+        "TP-VAV-T-F2-S",
+        "TP-VAV-T-F2-W"
+      ]
+    },
+    {
+      "relationship": "assigned",
+      "targetType": "area",
+      "targetToken": "tp-tower-f3",
+      "devices": [
+        "TP-VAV-T-F3-N",
+        "TP-VAV-T-F3-E",
+        "TP-VAV-T-F3-S",
+        "TP-VAV-T-F3-W"
+      ]
+    },
+    {
+      "relationship": "assigned",
+      "targetType": "area",
+      "targetToken": "tp-tower-f4",
+      "devices": [
+        "TP-VAV-T-F4-N",
+        "TP-VAV-T-F4-E",
+        "TP-VAV-T-F4-S",
+        "TP-VAV-T-F4-W"
+      ]
+    },
+    {
+      "relationship": "assigned",
+      "targetType": "area",
+      "targetToken": "tp-tower-f5",
+      "devices": [
+        "TP-VAV-T-F5-N",
+        "TP-VAV-T-F5-E",
+        "TP-VAV-T-F5-S",
+        "TP-VAV-T-F5-W"
+      ]
+    },
+    {
+      "relationship": "assigned",
+      "targetType": "area",
+      "targetToken": "tp-tower-plant",
+      "devices": [
+        "TP-AHU-T-1",
+        "TP-AHU-T-2",
+        "TP-CH-T",
+        "TP-EM-T"
+      ]
+    },
+    {
+      "relationship": "assigned",
+      "targetType": "customer",
+      "targetToken": "tp-halden",
+      "devices": [
+        "TP-VAV-A-F1-N",
+        "TP-VAV-A-F1-S",
+        "TP-VAV-A-F2-N",
+        "TP-VAV-A-F2-S",
+        "TP-AHU-A-1",
+        "TP-CH-A",
+        "TP-EM-A"
+      ]
+    },
+    {
+      "relationship": "assigned",
+      "targetType": "area",
+      "targetToken": "tp-annex",
+      "devices": [
+        "TP-VAV-A-F1-N",
+        "TP-VAV-A-F1-S",
+        "TP-VAV-A-F2-N",
+        "TP-VAV-A-F2-S",
+        "TP-AHU-A-1",
+        "TP-CH-A",
+        "TP-EM-A"
+      ]
+    },
+    {
+      "relationship": "assigned",
+      "targetType": "area",
+      "targetToken": "tp-annex-f1",
+      "devices": [
+        "TP-VAV-A-F1-N",
+        "TP-VAV-A-F1-S"
+      ]
+    },
+    {
+      "relationship": "assigned",
+      "targetType": "area",
+      "targetToken": "tp-annex-f2",
+      "devices": [
+        "TP-VAV-A-F2-N",
+        "TP-VAV-A-F2-S"
+      ]
+    },
+    {
+      "relationship": "assigned",
+      "targetType": "area",
+      "targetToken": "tp-annex-plant",
+      "devices": [
+        "TP-AHU-A-1",
+        "TP-CH-A",
+        "TP-EM-A"
+      ]
+    }
+  ]
+}

@@ -1,10 +1,12 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
+import type { AnchorTarget } from './types';
+
 // The board-recording format: one captured run of a board, as a plain JSON document a
 // RecordedDataSource can play back. This file owns the SHAPE and the parser; playback is in
 // recorded.ts. The document is produced by the Sitepulse recording converter
-// (demos/sitepulse-unity/tools/recording_to_board.py, version 1) and by dc-simulator's
+// (demos/sitepulse-unity/tools/recording_to_board.py, version 1, with a demo's profile; Towerpulse's is demos/towerpulse-unity/tools/board-replay.profile.json) and by dc-simulator's
 // sitepulse-record (backend/sims/dc-simulator/recording, version 2); each writer's own
 // documentation is its side of this contract, and they must change together.
 //
@@ -52,6 +54,12 @@
 // with no entry is unknown, and a player counts its devices as declaring everything, which is the
 // live board's rule for a profile it cannot read. Every key is a kind some device has, and every
 // list names at least one measurement, each once.
+
+// Version 2 may also carry `anchors`: the groupings (an area, a floor, a customer) the run's devices belonged to, each with the
+// device tokens that were members. A board bound to an area or a floor cannot be replayed without them: a recording that carried
+// only devices could not say which of them are on floor 4, and a player that guessed would show one building's numbers as another's.
+// A recording without `anchors` keeps the older rule (the board's one customer anchor holds every device). Each anchor is named once,
+// has at least one member, and every member is a device of the run.
 
 // The newest version this reader understands; it reads every version in
 // RECORDING_FORMAT_VERSIONS.
@@ -154,6 +162,11 @@ export interface RecordedLocationColumns {
 // What each device kind's profile declares (formatVersion 2, optional): kind -> measurement names.
 export type RecordedDeclarations = Record<string, string[]>;
 
+// A grouping the run's devices belonged to (formatVersion 2, optional): which devices were its members, by token.
+export interface RecordedAnchor extends AnchorTarget {
+  devices: string[];
+}
+
 export interface BoardRecording {
   kind: typeof RECORDING_KIND;
   formatVersion: (typeof RECORDING_FORMAT_VERSIONS)[number];
@@ -168,6 +181,8 @@ export interface BoardRecording {
   devices: RecordedDevice[];
   // Absent when the recording does not say (every version 1 recording, and older version 2 ones).
   declaredMetrics?: RecordedDeclarations;
+  // Absent when the recording does not say (every version 1 recording, and older version 2 ones).
+  anchors?: RecordedAnchor[];
   channels: RecordedChannels;
   board: { path: string; sourceCommit: string; sha256: string };
   sourceHashes: Record<string, string>;
@@ -322,7 +337,7 @@ export function parseBoardRecording(input: unknown): BoardRecording {
       'build', 'clock', 'devices', 'channels', 'board', 'sourceHashes', 'converter', 'chapters',
       'measurements', 'alarms', 'locations',
     ],
-    ['excerpt', 'declaredMetrics'],
+    ['excerpt', 'declaredMetrics', 'anchors'],
   );
 
   if (root.kind !== RECORDING_KIND) {
@@ -378,6 +393,34 @@ export function parseBoardRecording(input: unknown): BoardRecording {
       if (new Set(names).size !== names.length) throw new RecordingFormatError(p, 'duplicate measurement name');
       declaredMetrics[kind] = names;
     }
+  }
+
+  let anchors: RecordedAnchor[] | undefined;
+  if (root.anchors !== undefined) {
+    if (version === 1) throw new RecordingFormatError('$.anchors', 'version 1 carries no anchors');
+    const listed = column(root.anchors, '$.anchors', (x, p): RecordedAnchor => {
+      const o = strict(x, p, ['relationship', 'targetType', 'targetToken', 'devices']);
+      const members = column(o.devices, `${p}.devices`, str);
+      if (members.length === 0) throw new RecordingFormatError(`${p}.devices`, 'has no member; leave the anchor out instead');
+      if (new Set(members).size !== members.length) throw new RecordingFormatError(`${p}.devices`, 'duplicate member');
+      for (const m of members) {
+        if (!tokens.has(m)) throw new RecordingFormatError(`${p}.devices`, `'${m}' is not a device of the run`);
+      }
+      return {
+        relationship: str(o.relationship, `${p}.relationship`),
+        targetType: oneOf(o.targetType, `${p}.targetType`, ['customer', 'area', 'asset'] as const),
+        targetToken: str(o.targetToken, `${p}.targetToken`),
+        devices: members,
+      };
+    });
+    if (listed.length === 0) throw new RecordingFormatError('$.anchors', 'declares nothing; leave it out instead');
+    const seen = new Set<string>();
+    listed.forEach((a, i) => {
+      const key = `${a.relationship}\u0000${a.targetType}\u0000${a.targetToken}`;
+      if (seen.has(key)) throw new RecordingFormatError(`$.anchors[${i}]`, 'the same anchor is declared twice');
+      seen.add(key);
+    });
+    anchors = listed;
   }
 
   const ch = strict(root.channels, '$.channels', ['measurements', 'alarms', 'locations', 'commands']);
@@ -600,5 +643,6 @@ export function parseBoardRecording(input: unknown): BoardRecording {
   };
   if (excerpt) rec.excerpt = excerpt;
   if (declaredMetrics) rec.declaredMetrics = declaredMetrics;
+  if (anchors) rec.anchors = anchors;
   return rec;
 }

@@ -1,0 +1,36 @@
+<!--
+  Copyright The DeviceChain Authors
+  SPDX-License-Identifier: Apache-2.0
+
+  The run header, recorder and reader (the shared recording format plus Towerpulse's own towerpulse.json and story.ndjson), compiled from the SAME .cs files Unity
+  compiles through DeviceChain.Towerpulse.Recording.asmdef.
+-->
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>netstandard2.1;net8.0</TargetFrameworks>
+    <RootNamespace>DeviceChain.Towerpulse.Recording</RootNamespace>
+    <AssemblyName>DeviceChain.Towerpulse.Recording</AssemblyName>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net8.0'">
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.1'">
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Model/DeviceChain.Towerpulse.Model.csproj" />
+    <ProjectReference Include="../Plane/DeviceChain.Towerpulse.Plane.csproj" />
+    <ProjectReference Include="../Story/DeviceChain.Towerpulse.Story.csproj" />
+    <ProjectReference Include="../../../shared/io.devicechain.demo-platform/Dotnet~/DeviceChain.Demos.Core/DeviceChain.Demos.Core.csproj" />
+    <ProjectReference Include="../../../shared/io.devicechain.demo-platform/Dotnet~/DeviceChain.Demos.Recording/DeviceChain.Demos.Recording.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="../../Assets/Towerpulse/Scripts/Recording/**/*.cs" />
+  </ItemGroup>
+
+</Project>

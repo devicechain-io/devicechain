@@ -29,6 +29,7 @@ namespace DeviceChain.Towerpulse.Visuals
         ShotDirector director;
         int generation = -1;
         OfflinePreview preview;
+        RecordingReplay replay;
 
         public CommandBoard Commands { get; private set; } = new CommandBoard();
         public AlarmBoard Alarms { get; private set; } = new AlarmBoard();
@@ -72,6 +73,7 @@ namespace DeviceChain.Towerpulse.Visuals
             if (generation != app.Generation) Rebuild();
             Pull();
             if (preview != null) preview.Step();
+            if (replay != null) replay.Step();
             Commands.Sync(app.Ledger, app.Plane.Model.TimeS);
         }
 
@@ -80,8 +82,11 @@ namespace DeviceChain.Towerpulse.Visuals
             generation = app.Generation;
             Commands = new CommandBoard();
             Alarms = new AlarmBoard();
+            recorded.Clear();
             // the preview exists only without a platform, and says so on every fact it makes
-            preview = app.Offline ? new OfflinePreview(app.Plane, Commands, Alarms, app.Ledger) : null;
+            // a replay feeds the boards from a recording; a plain offline plane has the scripted preview; a live one has neither
+            replay = app.ReplaySource != null ? new RecordingReplay(app.Plane, app.ReplaySource.Facts, Commands, Alarms, app.Ledger) : null;
+            preview = app.Offline && replay == null ? new OfflinePreview(app.Plane, Commands, Alarms, app.Ledger) : null;
         }
 
         // What the platform's observer reported since the last frame, folded into the boards as platform facts.
@@ -94,7 +99,7 @@ namespace DeviceChain.Towerpulse.Visuals
                 if (item is CommandItem ci && ci.Command != null && !string.IsNullOrEmpty(ci.Command.Token))
                 {
                     app.TryExternalId(ci.DeviceToken, out var ext);
-                    Commands.ApplyPlatform(ci.Command.Token, ext ?? ci.DeviceToken, ci.Command.Name, ci.Command.Status, now);
+                    Fold(StoryFact.Command(ci.Command.Token, ext ?? ci.DeviceToken, ci.Command.Name, ci.Command.Status, FactSource.Platform, now));
                 }
                 else if (item is AlarmItem ai) ApplyAlarm(ai, now);
                 else if (item is AlarmSnapshotItem snap) foreach (var a in snap.Alarms) ApplyAlarm(a, now);
@@ -106,9 +111,23 @@ namespace DeviceChain.Towerpulse.Visuals
             if (ai.Alarm == null) return;
             app.TryExternalId(ai.DeviceToken, out var ext);
             string device = ext ?? ai.DeviceToken;
-            if (ai.Alarm.IsActive) Alarms.Raise(device, ai.Alarm.AlarmKey, ai.Alarm.Severity, FactSource.Platform, now);
-            else Alarms.Clear(device, ai.Alarm.AlarmKey, now);
+            Fold(StoryFact.Alarm(device, ai.Alarm.AlarmKey, ai.Alarm.Severity, ai.Alarm.IsActive, FactSource.Platform, now));
         }
+
+        // The one way a platform fact reaches the boards, and the one place it is recorded: a replay reads these facts back and applies them with the same call.
+        void Fold(StoryFact f)
+        {
+            StoryFacts.Apply(f, Commands, Alarms, app.Ledger);
+            // the observer re-reports a standing state on every poll; the recording keeps a fact when it says something NEW, which is what a replay needs
+            // (applying a repeat changes nothing, so leaving it out cannot change a replayed state)
+            var key = f.Kind + "|" + (f.Kind == StoryFactKind.Alarm ? f.Device + "|" + f.Key : f.Token);
+            var state = f.Kind == StoryFactKind.Alarm ? (f.Active ? "active" : "cleared") : f.Status;
+            if (recorded.TryGetValue(key, out var last) && last == state) return;
+            recorded[key] = state;
+            app.RecordFact(f);
+        }
+
+        readonly System.Collections.Generic.Dictionary<string, string> recorded = new System.Collections.Generic.Dictionary<string, string>();
 
         /// <summary>
         /// Rehearsal and stills, offline only: rebuild the plane at <paramref name="fromHour"/> and run it to <paramref name="toHour"/> in 5 s steps with the preview

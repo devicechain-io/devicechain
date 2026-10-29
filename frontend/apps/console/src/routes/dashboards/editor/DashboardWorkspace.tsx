@@ -857,7 +857,9 @@ export function DashboardWorkspace({
     </Button>
   );
 
-  const historyButton = (
+  // Version history is read through endpoints a member limited to part of the tenant is refused,
+  // so the button is not offered to one.
+  const historyButton = !mayWrite(claims, 'dashboard:read') ? null : (
     <Button variant="outline" size="sm" onClick={() => setHistoryOpen(true)} data-shot="dashboard-history">
       <History size={14} /> {t('workspaceHistory')}
     </Button>

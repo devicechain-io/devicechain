@@ -19,6 +19,8 @@ namespace DeviceChain.Towerpulse.Plane
         public bool Success;
         public string Reason = "";
         public double AnsweredSimS = double.NaN;
+        /// <summary>The parameters the command arrived with (null when the host did not keep them), so a recording can replay the actuation.</summary>
+        public CommandArgs Args;
     }
 
     /// <summary>
@@ -38,10 +40,13 @@ namespace DeviceChain.Towerpulse.Plane
         /// <summary>Bumps on every change, so a reader can tell cheaply whether to look again.</summary>
         public int Version { get; private set; }
 
-        public CommandRecord Received(string token, string deviceExternalId, string name, double simS)
+        /// <summary>Raised once per NEW command (a redelivery is not new) and once per answer. The recorder listens; nothing else needs to.</summary>
+        public event Action<CommandRecord> ReceivedEvent, AnsweredEvent;
+
+        public CommandRecord Received(string token, string deviceExternalId, string name, double simS, CommandArgs args = null)
         {
             if (!string.IsNullOrEmpty(token) && byToken.TryGetValue(token, out var seen)) return seen; // a redelivery is the same command
-            var r = new CommandRecord { Token = token ?? "", DeviceExternalId = deviceExternalId ?? "", Name = name ?? "", ReceivedSimS = simS };
+            var r = new CommandRecord { Token = token ?? "", DeviceExternalId = deviceExternalId ?? "", Name = name ?? "", ReceivedSimS = simS, Args = args };
             records.Add(r);
             if (r.Token.Length > 0) byToken[r.Token] = r;
             if (records.Count > Limit)
@@ -51,6 +56,7 @@ namespace DeviceChain.Towerpulse.Plane
                 if (old.Token.Length > 0) byToken.Remove(old.Token);
             }
             Version++;
+            ReceivedEvent?.Invoke(r);
             return r;
         }
 
@@ -59,6 +65,7 @@ namespace DeviceChain.Towerpulse.Plane
             if (string.IsNullOrEmpty(token) || !byToken.TryGetValue(token, out var r) || r.Answered) return;
             r.Answered = true; r.Success = success; r.Reason = reason ?? ""; r.AnsweredSimS = simS;
             Version++;
+            AnsweredEvent?.Invoke(r);
         }
 
         public bool TryGet(string token, out CommandRecord r)

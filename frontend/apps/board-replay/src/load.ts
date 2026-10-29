@@ -62,7 +62,10 @@ export interface LoadedReplay {
 
 export interface LoadOptions {
   recordingUrl: string | null | undefined;
-  boardUrl: string | null | undefined;
+  // The board definition to pair the recording with. When the host names none, it is the file the
+  // recording itself names (its `board.path`, by file name) beside the recording, so one bundle
+  // replays any demo's run: nothing here knows which demo a recording came from.
+  boardUrl?: string | null | undefined;
   fetchFn?: typeof fetch;
   // The page origin the two URLs must resolve to. Defaults to the current page.
   origin?: string;
@@ -111,6 +114,17 @@ export async function sha256Hex(bytes: ArrayBuffer): Promise<string> {
   return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+// The board a recording names, as a URL beside the recording. Only the file NAME is taken from the
+// recording's repository path: where the file is served from is the host's business, and a path
+// that climbs or names something other than a JSON file is refused rather than followed.
+export function boardBesideRecording(recordingUrl: string, recording: BoardRecording): string {
+  const name = recording.board.path.split('/').pop() ?? '';
+  if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*\.json$/.test(name) || name.includes('..')) {
+    throw new ReplayLoadError('recordingInvalid', 'the recording names a board file this player will not fetch');
+  }
+  return new URL(name, recordingUrl).toString();
+}
+
 // anchorsOf lists the anchor bindings the board declares as slot defaults. The recording
 // cannot say which customer the devices were assigned to (it holds devices, not
 // membership), so the host declares it, and the only honest source is the board itself.
@@ -128,7 +142,7 @@ export async function loadReplay(options: LoadOptions): Promise<LoadedReplay> {
   const fetchFn = options.fetchFn ?? globalThis.fetch.bind(globalThis);
   const registry = options.registry ?? hostWidgetRegistry();
   const recordingUrl = sameOriginUrl(options.recordingUrl, origin);
-  const boardUrl = sameOriginUrl(options.boardUrl, origin);
+  const explicitBoardUrl = options.boardUrl ? sameOriginUrl(options.boardUrl, origin) : null;
 
   const recordingBytes = await getBytes(fetchFn, recordingUrl);
   let recording: BoardRecording;
@@ -138,6 +152,7 @@ export async function loadReplay(options: LoadOptions): Promise<LoadedReplay> {
     throw new ReplayLoadError('recordingInvalid', detailOf(err));
   }
 
+  const boardUrl = explicitBoardUrl ?? sameOriginUrl(boardBesideRecording(recordingUrl, recording), origin);
   const boardBytes = await getBytes(fetchFn, boardUrl);
   if ((await sha256Hex(boardBytes)) !== recording.board.sha256) {
     throw new ReplayLoadError('boardMismatch');

@@ -11,10 +11,11 @@ import { defineConfig, type Plugin } from 'vite';
 // for a page's module script to reference. Chunks and assets are hashed.
 //
 // In dev, two same-origin URLs are served from the working tree so the page runs without a
-// copy of the data: the pinned board definition, and a recording named by REPLAY_RECORDING
-// (a path to a board-recording JSON file). Nothing is copied or committed.
+// copy of the data: a board definition (REPLAY_BOARD, a file name under testdata/sim-dashboards;
+// sp-dashboard.json when unset) and a recording named by REPLAY_RECORDING (a path to a
+// board-recording JSON file). Nothing is copied or committed.
 function devData(): Plugin {
-  const board = path.resolve(import.meta.dirname, '../../testdata/sim-dashboards/sp-dashboard.json');
+  const board = path.resolve(import.meta.dirname, '../../testdata/sim-dashboards', path.basename(process.env.REPLAY_BOARD ?? 'sp-dashboard.json'));
   return {
     name: 'board-replay-dev-data',
     apply: 'serve',

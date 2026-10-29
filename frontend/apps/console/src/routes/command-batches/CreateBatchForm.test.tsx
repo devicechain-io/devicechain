@@ -502,7 +502,7 @@ describe('CreateBatchForm payload', () => {
 
     // ── the single-device panel ──
     gqlMock.mockClear();
-    const panel = render(<DeviceCommandsPanel deviceToken="therm-1" />);
+    const panel = render(<DeviceCommandsPanel deviceToken="therm-1" canIssue canCancel />);
     await waitFor(() => expect(screen.queryByRole('button', { name: /Set point|Choose|Select/ })).toBeTruthy());
     chooseFromCombobox(/Select a command|Choose|Select/, /Set point/);
     await waitFor(() => expect(panel.container.querySelectorAll('input').length).toBeGreaterThan(1));

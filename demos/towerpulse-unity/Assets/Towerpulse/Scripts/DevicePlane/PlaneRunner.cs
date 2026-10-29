@@ -49,6 +49,9 @@ namespace DeviceChain.Towerpulse.DevicePlane
             intervalS = publishIntervalSeconds;
         }
 
+        /// <summary>A reading the broker acknowledged: the device, the values as sent, the time stamped on them and the time the acknowledgement arrived. Raised on the SDK's threads.</summary>
+        public event Action<PlaneDevice, IReadOnlyDictionary<string, double>, DateTimeOffset, DateTimeOffset> Published;
+
         public IReadOnlyList<PlaneSession> Sessions => sessions;
         public TowerPlane Plane => plane;
 
@@ -66,6 +69,7 @@ namespace DeviceChain.Towerpulse.DevicePlane
                 var device = plane.Find(r.Device.ExternalId);
                 if (device == null || r.Bind == null || !r.Bind.IsBound || !credentials.TryGet(r.Bind.DeviceToken, out var credentialId)) continue;
                 var s = new PlaneSession(device, factory.Create(device.ExternalId, r.Bind.DeviceToken, credentialId), inbox);
+                s.ReadingAcked += (d, v, occ, ack) => Published?.Invoke(d, v, occ, ack);
                 sessions.Add(s);
                 todo.Add(s);
             }
@@ -109,7 +113,7 @@ namespace DeviceChain.Towerpulse.DevicePlane
             {
                 var item = cmd;
                 board.SetCommand(item.Device.ExternalId, item.Name + " received");
-                ledger?.Received(item.Token, item.Device.ExternalId, item.Name, plane.Model.TimeS);
+                ledger?.Received(item.Token, item.Device.ExternalId, item.Name, plane.Model.TimeS, item.Args);
                 plane.Commands.Submit(item.Device, item.Token, item.Name, item.Args, r =>
                 {
                     board.SetCommand(item.Device.ExternalId, item.Name + (r.Success ? " SUCCESSFUL" : " FAILED: " + r.Reason));

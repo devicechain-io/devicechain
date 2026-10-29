@@ -319,6 +319,7 @@ export interface BoardRecording {
     clock: RecordedClockSegment[];
     devices: RecordedDevice[];
     declaredMetrics?: RecordedDeclarations;
+    anchors?: RecordedAnchor[];
     channels: RecordedChannels;
     board: {
         path: string;
@@ -1882,6 +1883,14 @@ export interface RecordedAlarmSnapshot {
     requestedAtMs: number;
     total: number;
     alarms: RecordedAlarm[];
+}
+```
+
+## `.:RecordedAnchor`
+
+```ts
+export interface RecordedAnchor extends AnchorTarget {
+    devices: string[];
 }
 ```
 
