@@ -7,6 +7,7 @@
 #   acceptance.sh                         the control run, then the rule-disabled run (each on a FRESH sim)
 #   acceptance.sh control                 only the control run
 #   acceptance.sh rule-disabled           only the rule-disabled run
+#   acceptance.sh hot                     only segment A (the hot room) on a fresh sim; a take whose first run missed a platform fact is re-recorded with this
 #   acceptance.sh chiller                 only segment B (the annex chiller beat) on a fresh sim, with the calculated-metric check
 #   acceptance.sh --build editor          build the Windows player first through the open Editor (needs $UNITY_EVAL, see below)
 #
@@ -74,7 +75,7 @@ now_iso() { date -u +%Y-%m-%dT%H:%M:%S.000Z; }
 
 while [ $# -gt 0 ]; do
 	case "$1" in
-	control | rule-disabled | chiller) MODES+=("$1") ;;
+	control | rule-disabled | chiller | hot) MODES+=("$1") ;;
 	--build) BUILD="${2:?--build needs none or editor}"; shift ;;
 	--out) OUT_ROOT="${2:?--out needs a directory}"; shift ;;
 	-h | --help) sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -186,7 +187,7 @@ latest_run() { find "$1" -maxdepth 1 -type d -name 'run-*' | sort | tail -1; }
 run_mode() {
 	local mode="$1" ev short
 	ev="$OUT_ROOT/$STAMP-$mode"
-	short="$([ "$mode" = control ] && echo c || echo r)"
+	case "$mode" in control) short=c ;; hot) short=h ;; *) short=r ;; esac
 	SIM_NAME="tp-acc-$short-$(date -u +%m%d%H%M)"
 	[ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "$RUNNER/status" || true)" != 200 ] || die "something still answers $RUNNER: the previous sim's runner was not stopped"
 	mkdir -p "$ev/recordings" "$ev/logs"
@@ -214,7 +215,7 @@ run_mode() {
 	since_a="$(now_iso)"
 	if [ "$mode" != chiller ]; then
 		launch_player "$START_A" "$mode-A" "$ev/recordings" "$q" "$ev/logs/player-a.log" "$ca"
-		if [ "$mode" = control ]; then
+		if [ "$mode" = control ] || [ "$mode" = hot ]; then
 			sleep 240
 			rec_a="$(latest_run "$ev/recordings")"
 			"$PY" -I "$CHECK" common --runner "$RUNNER" --out "$ev" --since "$since_a" --recording "$rec_a" --namespace "$NS" || true
@@ -226,7 +227,7 @@ run_mode() {
 	fi
 
 	# ---- segment B and the owner (control), or segment B alone with its calculated-metric check (chiller)
-	if [ "$mode" != rule-disabled ]; then
+	if [ "$mode" != rule-disabled ] && [ "$mode" != hot ]; then
 		local since_b rec_b q2="$ev/quit-b"
 		since_b="$(now_iso)"
 		launch_player "$START_B" "$mode-B" "$ev/recordings" "$q2" "$ev/logs/player-b.log" "$ca"
@@ -246,6 +247,8 @@ EOF
 	local verdict=0 need
 	if [ "$mode" = control ]; then
 		need="sessions,telemetry,calculated,a-alarm,a-boost-sent,a-boost-successful-at-setpoint,a-alarm-cleared,b-silent,b-r4-alarm,b-restart-successful,b-reporting-again,b-alarm-cleared,o-signin,o-annex-only"
+	elif [ "$mode" = hot ]; then
+		need="sessions,telemetry,calculated,a-alarm,a-boost-sent,a-boost-successful-at-setpoint,a-alarm-cleared"
 	elif [ "$mode" = chiller ]; then
 		need="b-silent,b-r4-alarm,b-restart-successful,b-reporting-again,b-alarm-cleared,calculated"
 	else

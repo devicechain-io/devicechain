@@ -126,7 +126,7 @@ namespace DeviceChain.Towerpulse.Story
             var lower = caption.ToLowerInvariant();
             for (int i = 0; i < PartWords.Length; i++)
                 foreach (var w in PartWords[i])
-                    if (System.Text.RegularExpressions.Regex.IsMatch(lower, "\b" + w + "\b")) return PartNames[i];
+                    if (System.Text.RegularExpressions.Regex.IsMatch(lower, @"\b" + w + @"\b")) return PartNames[i];
             return null;
         }
 

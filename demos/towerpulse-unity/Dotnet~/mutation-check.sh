@@ -17,7 +17,7 @@ set -uo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 scripts="$here/../Assets/Towerpulse/Scripts"
 # every file a mutant touches is backed up whole and restored on exit
-files=(Model/BuildingModel.cs Plane/CommandEngine.cs Plane/Readings.cs Plane/Vocabulary.cs Story/CommandCard.cs Story/TintRamp.cs Story/MotionLook.cs Story/ShotFile.cs)
+files=(Model/BuildingModel.cs Plane/CommandEngine.cs Plane/Readings.cs Plane/Vocabulary.cs Story/CommandCard.cs Story/TintRamp.cs Story/MotionLook.cs Story/ShotFile.cs Story/FrameStats.cs)
 backups="$(mktemp -d)"
 for f in "${files[@]}"; do mkdir -p "$backups/$(dirname "$f")"; cp "$scripts/$f" "$backups/$f"; done
 restore() { for f in "${files[@]}"; do cp "$backups/$f" "$scripts/$f"; done; }
@@ -53,6 +53,11 @@ mutants=(
   "Story/MotionLook.cs|label: real time reads as accelerated|modelSpeed <= 1.0000001) return null;|modelSpeed < 0.5) return null;"
   "Story/ShotFile.cs|shots: a misspelled key is ignored|foreach (var k in o.Keys) if (!known.Contains(k))|foreach (var k in o.Keys) if (false)"
   "Story/ShotFile.cs|shots: overlapping shots are accepted|if (shot.StartS < prev.EndS - 1e-9)|if (false)"
+  "Story/ShotFile.cs|take: a caption that disagrees with the clock is accepted|if (!StoryText.CaptionAgrees(shot.Caption, h))|if (false)"
+  "Story/ShotFile.cs|take: the clock may run backwards|if (shot.ModelToHour < shot.ModelFromHour)|if (false)"
+  "Story/MotionLook.cs|take: a jump goes unlabelled|modelSecondsPerShowSecond <= 1.05) return null;|modelSecondsPerShowSecond <= 1e9) return null;"
+  "Story/MotionLook.cs|take: dusk starts too late|if (h < 17.5) return \"afternoon\";|if (h < 18.5) return \"afternoon\";"
+  "Story/FrameStats.cs|bench: the 99th percentile is the mean|P99Ms = Percentile(sorted, 99)|P99Ms = sum / sorted.Count"
 )
 for m in "${mutants[@]}"; do
   IFS='|' read -r file label from to <<<"$m"

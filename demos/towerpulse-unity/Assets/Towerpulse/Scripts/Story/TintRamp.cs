@@ -39,7 +39,7 @@ namespace DeviceChain.Towerpulse.Story
         public const double WarmSpanC = 5.0;
 
         public static readonly Rgba Cool = new Rgba(0.25f, 0.55f, 1.00f, 0.38f);
-        public static readonly Rgba Neutral = new Rgba(0.62f, 0.76f, 0.95f, 0.12f);
+        public static readonly Rgba Neutral = new Rgba(0.62f, 0.76f, 0.95f, 0.14f);
         public static readonly Rgba Amber = new Rgba(1.00f, 0.78f, 0.15f, 0.52f);
         public static readonly Rgba Hot = new Rgba(0.98f, 0.18f, 0.10f, 0.68f);
         public static readonly Rgba NoData = new Rgba(0.55f, 0.58f, 0.62f, 0.12f);
