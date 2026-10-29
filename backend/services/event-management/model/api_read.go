@@ -5,6 +5,7 @@ package model
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -41,8 +42,8 @@ func hasAnchor(criteria EventSearchCriteria) bool {
 	return criteria.AnchorType != nil && criteria.AnchorToken != nil
 }
 
-// 🔴 BOTH ANCHOR SUBQUERIES READ EventAnchorKey, NOT EventAnchor. The two are the same
-// table under different scope rules (see EventAnchorKey): the subquery only selects event
+// 🔴 BOTH ANCHOR SUBQUERIES READ eventAnchorKey, NOT EventAnchor. The two are the same
+// table under different scope rules (see eventAnchorKey): the subquery only selects event
 // keys, so it carries the tenant's predicate alone and can find a shared area or asset
 // that EventAnchor's own-anchor rule hides from a customer-scoped caller. What the caller
 // may SEE is decided by the outer read's own rule, which is applied to the same statement.
@@ -72,7 +73,7 @@ func hasAnchor(criteria EventSearchCriteria) bool {
 // anchorEventKeySubquery: an anchor row carries its event's own instant, so there the pair
 // is the event's exact key rather than a guess at it.
 func (api *Api) anchorKeySubquery(ctx context.Context, anchorType string, anchorToken string) *gorm.DB {
-	return api.RDB.DB(ctx).Model(&EventAnchorKey{}).
+	return api.RDB.DB(ctx).Model(&eventAnchorKey{}).
 		Select("event_id").
 		Where("anchor_type = ? AND anchor_token = ?", anchorType, anchorToken)
 }
@@ -101,7 +102,7 @@ func (api *Api) anchorFilter(ctx context.Context, criteria EventSearchCriteria, 
 // the worker and reads through this filter so that cannot happen silently. The payload
 // tables must keep anchorKeySubquery: a payload row carries its reading's instant.
 func (api *Api) anchorEventKeySubquery(ctx context.Context, anchorType string, anchorToken string) *gorm.DB {
-	return api.RDB.DB(ctx).Model(&EventAnchorKey{}).
+	return api.RDB.DB(ctx).Model(&eventAnchorKey{}).
 		Select("occurred_time, event_id").
 		Where("anchor_type = ? AND anchor_token = ?", anchorType, anchorToken)
 }
@@ -131,6 +132,38 @@ func (api *Api) eventAnchorFilter(ctx context.Context, criteria EventSearchCrite
 	return result.Where("EXISTS (?)", api.anchorEventKeySubquery(ctx, *criteria.AnchorType, *criteria.AnchorToken).
 		Select("1").
 		Where("event_anchors.occurred_time = events.occurred_time AND event_anchors.event_id = events.event_id"))
+}
+
+// scopedAnchorReadTimeout bounds a SCOPED caller's anchor-filtered read. A customer user may
+// now name a place shared with many other customers, and the payload filter then scales with
+// the whole place rather than the caller's share (measured: an events page of 297k owned
+// events on a 5,000-device area took 7.9 s). The bound is a context deadline, which pgx
+// turns into a server-side cancel, so the query stops and the caller gets a clean error
+// instead of a held connection. It is a variable only so a test can shrink it.
+var scopedAnchorReadTimeout = 15 * time.Second
+
+// boundScopedAnchorRead applies scopedAnchorReadTimeout to a scoped caller's read that
+// names an anchor. Unscoped reads, and reads with no anchor, are returned unchanged.
+func boundScopedAnchorRead(ctx context.Context, anchorType *string) (context.Context, context.CancelFunc) {
+	if anchorType != nil {
+		if _, scoped := auth.ScopeFromContext(ctx); scoped {
+			return context.WithTimeout(ctx, scopedAnchorReadTimeout)
+		}
+	}
+	return ctx, func() {}
+}
+
+// scopedReadError turns the deadline boundScopedAnchorRead set into an error that says what
+// happened. Any other error, including a caller's own cancellation, passes through.
+func scopedReadError(ctx context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return fmt.Errorf("the read did not finish within %s; narrow the time range: %w",
+			scopedAnchorReadTimeout, context.DeadlineExceeded)
+	}
+	return err
 }
 
 // AnchorsForEvent returns the anchor set of one event, addressed by its EVENT ID.
@@ -173,6 +206,8 @@ func (api *Api) Events(ctx context.Context, criteria EventSearchCriteria) (*Even
 	if err := checkAnchorFilter(ctx, criteria.AnchorType, criteria.AnchorToken); err != nil {
 		return nil, err
 	}
+	ctx, cancel := boundScopedAnchorRead(ctx, criteria.AnchorType)
+	defer cancel()
 	results := make([]Event, 0)
 	db, pag := api.RDB.ListOf(ctx, &Event{}, func(result *gorm.DB) *gorm.DB {
 		result = commonEventFilters(criteria)(result)
@@ -180,7 +215,7 @@ func (api *Api) Events(ctx context.Context, criteria EventSearchCriteria) (*Even
 	}, criteria.Pagination)
 	db.Find(&results)
 	if db.Error != nil {
-		return nil, db.Error
+		return nil, scopedReadError(ctx, db.Error)
 	}
 	return &EventSearchResults{Results: results, Pagination: pag}, nil
 }
@@ -190,6 +225,8 @@ func (api *Api) LocationEvents(ctx context.Context, criteria EventSearchCriteria
 	if err := checkAnchorFilter(ctx, criteria.AnchorType, criteria.AnchorToken); err != nil {
 		return nil, err
 	}
+	ctx, cancel := boundScopedAnchorRead(ctx, criteria.AnchorType)
+	defer cancel()
 	results := make([]LocationEvent, 0)
 	db, pag := api.RDB.ListOf(ctx, &LocationEvent{}, func(result *gorm.DB) *gorm.DB {
 		result = commonEventFilters(criteria)(result)
@@ -197,7 +234,7 @@ func (api *Api) LocationEvents(ctx context.Context, criteria EventSearchCriteria
 	}, criteria.Pagination)
 	db.Find(&results)
 	if db.Error != nil {
-		return nil, db.Error
+		return nil, scopedReadError(ctx, db.Error)
 	}
 	return &LocationEventSearchResults{Results: results, Pagination: pag}, nil
 }
@@ -207,6 +244,8 @@ func (api *Api) MeasurementEvents(ctx context.Context, criteria EventSearchCrite
 	if err := checkAnchorFilter(ctx, criteria.AnchorType, criteria.AnchorToken); err != nil {
 		return nil, err
 	}
+	ctx, cancel := boundScopedAnchorRead(ctx, criteria.AnchorType)
+	defer cancel()
 	results := make([]MeasurementEvent, 0)
 	db, pag := api.RDB.ListOf(ctx, &MeasurementEvent{}, func(result *gorm.DB) *gorm.DB {
 		result = commonEventFilters(criteria)(result)
@@ -214,7 +253,7 @@ func (api *Api) MeasurementEvents(ctx context.Context, criteria EventSearchCrite
 	}, criteria.Pagination)
 	db.Find(&results)
 	if db.Error != nil {
-		return nil, db.Error
+		return nil, scopedReadError(ctx, db.Error)
 	}
 	return &MeasurementEventSearchResults{Results: results, Pagination: pag}, nil
 }
@@ -350,6 +389,8 @@ func (api *Api) BucketedMeasurements(ctx context.Context, criteria MeasurementAg
 	if err := checkAnchorFilter(ctx, criteria.AnchorType, criteria.AnchorToken); err != nil {
 		return nil, err
 	}
+	ctx, cancel := boundScopedAnchorRead(ctx, criteria.AnchorType)
+	defer cancel()
 	criteria, buckets, err := boundBucketedRange(criteria, time.Now())
 	if err != nil {
 		return nil, err
@@ -361,7 +402,7 @@ func (api *Api) BucketedMeasurements(ctx context.Context, criteria MeasurementAg
 		// the count stops there instead of reading every name in range.
 		enough := MaxMeasurementRows/rowBuckets(buckets) + 1
 		if names, err = api.distinctMeasurementNames(ctx, criteria, rollup, enough); err != nil {
-			return nil, err
+			return nil, scopedReadError(ctx, err)
 		}
 	}
 	if err := boundBucketedRows(buckets, names); err != nil {
@@ -370,7 +411,8 @@ func (api *Api) BucketedMeasurements(ctx context.Context, criteria MeasurementAg
 	if rollup {
 		return api.bucketedMeasurementsFromRollup(ctx, criteria)
 	}
-	return api.bucketedMeasurementsFromRaw(ctx, criteria)
+	out, err := api.bucketedMeasurementsFromRaw(ctx, criteria)
+	return out, scopedReadError(ctx, err)
 }
 
 // distinctMeasurementNames counts the measurement names a read with no name filter will
@@ -498,6 +540,8 @@ func (api *Api) AlertEvents(ctx context.Context, criteria EventSearchCriteria) (
 	if err := checkAnchorFilter(ctx, criteria.AnchorType, criteria.AnchorToken); err != nil {
 		return nil, err
 	}
+	ctx, cancel := boundScopedAnchorRead(ctx, criteria.AnchorType)
+	defer cancel()
 	results := make([]AlertEvent, 0)
 	db, pag := api.RDB.ListOf(ctx, &AlertEvent{}, func(result *gorm.DB) *gorm.DB {
 		result = commonEventFilters(criteria)(result)
@@ -505,7 +549,7 @@ func (api *Api) AlertEvents(ctx context.Context, criteria EventSearchCriteria) (
 	}, criteria.Pagination)
 	db.Find(&results)
 	if db.Error != nil {
-		return nil, db.Error
+		return nil, scopedReadError(ctx, db.Error)
 	}
 	return &AlertEventSearchResults{Results: results, Pagination: pag}, nil
 }

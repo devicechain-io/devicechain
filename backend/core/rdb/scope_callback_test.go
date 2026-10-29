@@ -555,3 +555,58 @@ func TestRegisteringTenantScopingRegistersTheScopeCallbacks(t *testing.T) {
 		}
 	}
 }
+
+// ---- KeyFilterOnly --------------------------------------------------------------------
+
+// scopedKeys is a model that is only ever the inside of a key subquery.
+type scopedKeys struct {
+	ID uint `gorm:"primaryKey"`
+	TenantScoped
+	Name string
+}
+
+func (scopedKeys) ScopedBy() ScopeRule { return KeyFilterOnly() }
+
+// A key-filter-only model is usable inside a subquery under a scoped caller (within the
+// tenant), and refused when read directly or written: it holds device-derived rows that no
+// scoped caller may list.
+func TestAKeyFilterOnlyModelServesASubqueryButIsNeverReadDirectly(t *testing.T) {
+	db := newScopeTestDB(t)
+	if err := db.AutoMigrate(&scopedKeys{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ tenant, name string }{{"A", "k-a"}, {"B", "k-b"}} {
+		if err := db.WithContext(unscopedCtx(tc.tenant)).Create(&scopedKeys{Name: tc.name}).Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := db.WithContext(unscopedCtx(tc.tenant)).Create(&scopedConfig{Name: tc.name}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx := scopedCtx("A", "customer:acme-corp")
+
+	var direct []scopedKeys
+	if err := db.WithContext(ctx).Find(&direct).Error; !isScopeRefusal(err) || len(direct) != 0 {
+		t.Errorf("a scoped direct read of a key-filter-only model was not refused: %v %v", err, direct)
+	}
+	var n int64
+	if err := db.WithContext(ctx).Model(&scopedKeys{}).Count(&n).Error; !isScopeRefusal(err) {
+		t.Errorf("a scoped count of a key-filter-only model was not refused: %v", err)
+	}
+	if err := db.WithContext(ctx).Create(&scopedKeys{Name: "x"}).Error; !isScopeRefusal(err) {
+		t.Errorf("a scoped write of a key-filter-only model was not refused: %v", err)
+	}
+
+	var rows []scopedConfig
+	sub := db.WithContext(ctx).Model(&scopedKeys{}).Select("name")
+	if err := db.WithContext(ctx).Where("name IN (?)", sub).Find(&rows).Error; err != nil {
+		t.Fatalf("the subquery use was refused: %v", err)
+	}
+	if len(rows) != 1 || rows[0].Name != "k-a" {
+		t.Errorf("the subquery crossed the tenant or lost the row: %v", rows)
+	}
+	// control: an unscoped caller reads it directly
+	if err := db.WithContext(unscopedCtx("A")).Find(&direct).Error; err != nil || len(direct) != 1 {
+		t.Errorf("control: an unscoped direct read failed: %v %v", err, direct)
+	}
+}

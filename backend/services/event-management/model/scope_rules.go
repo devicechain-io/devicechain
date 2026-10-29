@@ -66,7 +66,7 @@ func (AlertEvent) ScopedBy() rdb.ScopeRule {
 // ScopedBy limits a scoped caller to the anchor rows naming an anchor in its scope. An
 // event of a device co-owned by two customers carries both anchors; a member of one must
 // not learn the other exists, so Event.anchors lists only its own. The anchor-filter
-// subqueries do NOT read this model: they read EventAnchorKey, because this rule hides the
+// subqueries do NOT read this model: they read eventAnchorKey, because this rule hides the
 // shared area row a filter has to find.
 func (EventAnchor) ScopedBy() rdb.ScopeRule {
 	return rdb.OwnAnchor("anchor_type", "anchor_token")
@@ -84,7 +84,7 @@ func (EventAnchor) ScopedBy() rdb.ScopeRule {
 // the raw path (useMeasurementRollup), and the scope callback refuses any scoped read that
 // reaches the rollup anyway.
 
-// EventAnchorKey is the event_anchors table as the ANCHOR-FILTER subqueries read it
+// eventAnchorKey is the event_anchors table as the ANCHOR-FILTER subqueries read it
 // (anchorKeySubquery, anchorEventKeySubquery). It is not a second table and is never
 // migrated or written: it exists to carry a different scope rule from EventAnchor.
 //
@@ -94,15 +94,15 @@ func (EventAnchor) ScopedBy() rdb.ScopeRule {
 // area:floor-shared searches for the row (area, floor-shared), which OwnAnchor hides from
 // every customer-scoped caller, so the answer was empty with no error.
 //
-// 🔴 THE RULE HERE IS THE TENANT'S PREDICATE ALONE (Catalogue), AND THAT IS SAFE ONLY
+// 🔴 THE RULE HERE IS THE TENANT'S PREDICATE ALONE, ADMITTED ONLY INSIDE A SUBQUERY (KeyFilterOnly), AND THAT IS SAFE ONLY
 // BECAUSE OF WHAT THE SUBQUERY IS FOR. It selects event KEYS and nothing else: nothing it
 // returns is shown to the caller, and the OUTER read (events, measurement_events,
 // location_events, alert_events) keeps its own AnchorTable rule, which admits only events
 // carrying one of the caller's scope anchors. The filter is therefore always
 // "events on this area/asset" INTERSECTED with "events this caller owns", enforced where
 // the rows are read; every count and total is that intersection too. Do not read
-// the subquery's rows anywhere else, and do not reuse this model outside an IN (...) key
-// filter.
+// the subquery's rows anywhere else, and the model is unexported and its rule refuses any scoped
+// statement that is not a subquery, so a direct read fails closed.
 //
 // The spec's first design joined the subquery to itself on the event key, to require an
 // in-scope anchor on the filter side as well. It was built and measured, and dropped: it is
@@ -114,7 +114,7 @@ func (EventAnchor) ScopedBy() rdb.ScopeRule {
 //
 // TableName takes the namer so gorm applies the functional-area prefix exactly as it does
 // to the EventAnchor this mirrors (an explicit string would bypass the prefix).
-type EventAnchorKey struct {
+type eventAnchorKey struct {
 	rdb.TenantScoped
 	EventId      []byte
 	OccurredTime time.Time
@@ -123,10 +123,10 @@ type EventAnchorKey struct {
 }
 
 // TableName is event_anchors, derived through the namer like EventAnchor's own.
-func (EventAnchorKey) TableName(namer schema.Namer) string { return namer.TableName("EventAnchor") }
+func (eventAnchorKey) TableName(namer schema.Namer) string { return namer.TableName("EventAnchor") }
 
 // ScopedBy is the tenant's predicate alone; see the type's comment for why that is safe.
-func (EventAnchorKey) ScopedBy() rdb.ScopeRule { return rdb.Catalogue() }
+func (eventAnchorKey) ScopedBy() rdb.ScopeRule { return rdb.KeyFilterOnly() }
 
 // checkAnchorFilter decides, from the caller's claims alone, whether a scoped caller may
 // filter by the requested anchor. An unscoped caller, and a request with no anchor, pass.
