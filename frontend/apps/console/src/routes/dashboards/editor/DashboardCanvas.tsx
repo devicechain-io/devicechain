@@ -76,6 +76,7 @@ import {
   type Strides,
 } from './canvasGeometry';
 import { inlineFindings, layoutFindingsOf, LAYOUT_FINDING_KEYS } from './layoutFindings';
+import '@/i18n/lazy/dashboards';
 
 // What a canvas edit did, and to which widget: the label the workspace's undo history records (and
 // announces when the edit is undone). A gesture reports ONE edit, when it is released.

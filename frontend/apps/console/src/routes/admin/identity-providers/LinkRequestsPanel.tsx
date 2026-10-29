@@ -41,6 +41,7 @@ import { SectionPanel } from '@/components/ui/section-panel';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { useToast } from '@/components/ui/toast';
 import { errMessage, useReload } from '@/routes/common';
+import '@/i18n/lazy/identityProviders';
 
 type Disposition = 'convert' | 'keep_manual' | '';
 

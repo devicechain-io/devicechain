@@ -12,6 +12,7 @@
 import { useTranslation } from 'react-i18next';
 import { useQuery } from '@/lib/hooks/use-query';
 import { getUpdateManagementInfo } from '@/lib/api/update-management';
+import '@/i18n/lazy/updates';
 
 export function DownloadsNotice() {
   const info = useQuery(getUpdateManagementInfo, []);

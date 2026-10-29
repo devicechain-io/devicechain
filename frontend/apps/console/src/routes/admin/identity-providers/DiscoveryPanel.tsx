@@ -30,6 +30,7 @@ import { useToast } from '@/components/ui/toast';
 import { formatTime } from '@/lib/utils';
 import { errMessage } from '@/routes/common';
 import { needsReapproval } from './idpForm';
+import '@/i18n/lazy/identityProviders';
 
 export function DiscoveryPanel({
   connection: c,

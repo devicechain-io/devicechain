@@ -20,6 +20,7 @@ import { useToast } from '@/components/ui/toast';
 import { useAuth } from '@/auth/AuthProvider';
 import { errMessage } from '@/routes/common';
 import { createCommandDefinition, listCommandDefinitions } from '@/lib/api/device-management';
+import '@/i18n/lazy/deviceProfiles';
 
 // The name and description are stored on the profile, a shared tenant resource, so they are the
 // canonical (English) text rather than the language of whoever pressed the button: the same

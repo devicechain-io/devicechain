@@ -43,6 +43,7 @@ import { ArtifactStateBadge, DigestChip, TrustBadge } from './badges';
 import { NewArtifactForm } from './NewArtifactForm';
 import { DownloadsNotice } from './DownloadsNotice';
 import { StoreNotice } from './StoreNotice';
+import '@/i18n/lazy/updates';
 
 const pageSize = 50;
 

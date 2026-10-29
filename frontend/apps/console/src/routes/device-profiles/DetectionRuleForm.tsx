@@ -73,6 +73,7 @@ import {
   type CondMode,
   type RuleType,
 } from './rule-model';
+import '@/i18n/lazy/deviceProfiles';
 
 
 // Option arrays are FUNCTIONS of `t` (called inside the component that renders them), never

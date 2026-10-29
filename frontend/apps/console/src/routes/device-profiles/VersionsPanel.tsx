@@ -28,6 +28,7 @@ import {
 import { BackfillSection } from './BackfillSection';
 import { CalculatedHealthSection } from './CalculatedHealthSection';
 import { ThingModelDownload } from './ThingModelDownload';
+import '@/i18n/lazy/deviceProfiles';
 
 // The authority string is a permission name, not user-facing prose, so it is hoisted
 // out of the JSX tree — the i18n literal-string lint walks every node under a JSX

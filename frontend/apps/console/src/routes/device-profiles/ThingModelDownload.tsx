@@ -7,6 +7,7 @@ import { Download } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/components/ui/toast';
 import { getDeviceProfileThingModel } from '@/lib/api/device-management';
+import '@/i18n/lazy/deviceProfiles';
 
 // The media type the WoT Thing Description 1.1 Recommendation registers for its documents.
 const TD_MEDIA_TYPE = 'application/td+json';

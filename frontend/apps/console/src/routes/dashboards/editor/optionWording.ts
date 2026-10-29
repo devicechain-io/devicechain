@@ -20,6 +20,7 @@
 import type { EnumOptionSpec, OptionSpec } from '@devicechain/dashboards';
 import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
+import '@/i18n/lazy/dashboards';
 
 // A host catalog lookup: the translated text for an id, or undefined when the console has
 // no such message.

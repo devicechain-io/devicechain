@@ -36,6 +36,7 @@ import { IdpCreateForm } from './IdpCreateForm';
 import { LinkRequestsPanel } from './LinkRequestsPanel';
 import { needsReapproval } from './idpForm';
 import { identityProviderPath } from './paths';
+import '@/i18n/lazy/identityProviders';
 
 export default function IdentityProvidersPage() {
   const { t } = useTranslation('identityProviders');

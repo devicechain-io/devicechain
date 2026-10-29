@@ -36,6 +36,7 @@ import { NewRolloutForm } from './NewRolloutForm';
 import { DownloadsNotice } from './DownloadsNotice';
 import { StoreNotice } from './StoreNotice';
 import { RolloutProgressBar, RolloutStateBadge, pauseReasonText } from './rolloutBadges';
+import '@/i18n/lazy/updates';
 
 const pageSize = 50;
 const STATES: UpdateRolloutState[] = ['DRAFT', 'RUNNING', 'PAUSED', 'COMPLETED', 'ABORTED'];

@@ -17,6 +17,7 @@ import { listCustomers } from '@/lib/api/customers';
 import { listAccessScopeGroups } from '@/lib/api/device-management';
 import { getDashboardSharing, shareDashboard, type DashboardShareTargets } from '@/lib/api/dashboards';
 import { errMessage } from '@/routes/common';
+import '@/i18n/lazy/dashboards';
 
 const CUSTOMER_PAGE = { pageNumber: 1, pageSize: 1000 };
 

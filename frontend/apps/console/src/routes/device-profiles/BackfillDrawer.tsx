@@ -34,6 +34,7 @@ import {
   parseDeviceTokens,
   toLocalInput,
 } from './backfillRange';
+import '@/i18n/lazy/deviceProfiles';
 
 export function BackfillDrawer({
   profileToken,

@@ -21,6 +21,7 @@ import { CanvasEditor } from './canvas/CanvasEditor';
 import { listMetricDefinitions, type DetectionRule } from '@/lib/api/device-management';
 import { PRESET_IDS, BATTERY_HOLD, BATTERY_LOW_BELOW, HELD_HOLD, SILENT_TIMEOUT, buildPreset, type PresetId } from './rule-presets';
 import type { RuleWarning } from '@/lib/api/event-processing';
+import '@/i18n/lazy/deviceProfiles';
 
 type Mode = 'form' | 'canvas' | 'nl';
 

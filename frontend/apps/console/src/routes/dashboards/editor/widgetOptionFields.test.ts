@@ -18,6 +18,7 @@
 import i18n, { SUPPORTED_LOCALES } from '@/i18n/config';
 import { builtinWidgetDescriptors } from '@devicechain/widgets';
 import { describe, expect, it } from 'vitest';
+import '@/i18n/lazy/dashboards';
 
 const NS = 'dashboards';
 

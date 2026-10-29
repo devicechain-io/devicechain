@@ -29,6 +29,7 @@ import { useQuery } from '@/lib/hooks/use-query';
 import { errMessage } from '@/routes/common';
 import { addArtifactSignature, listArtifactSigners, type Artifact } from '@/lib/api/update-management';
 import { SignerStateBadge } from './badges';
+import '@/i18n/lazy/updates';
 
 // Standard base64 (RFC 4648 section 4), padded. The service decodes the same alphabet.
 const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;

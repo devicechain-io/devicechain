@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { CopyToken } from '@/components/ui/copy-token';
 import type { ArtifactState, ArtifactTrustStatus, SignerState } from '@/lib/api/update-management';
 import { artifactStateLabel, signerStateLabel } from '@/lib/enumLabel';
+import '@/i18n/lazy/updates';
 
 export function TrustBadge({ status }: { status: ArtifactTrustStatus }) {
   const { t } = useTranslation('updates');

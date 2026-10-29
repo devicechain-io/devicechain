@@ -25,6 +25,7 @@ import { useTranslation } from 'react-i18next';
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox';
 import { FormField } from '@/components/ui/form-field';
 import { useQuery } from '@/lib/hooks/use-query';
+import '@/i18n/lazy/dashboards';
 
 // What an editor registered for a control receives: the SDK's editor props plus the option
 // keys the descriptor declared under this control, in schema order.

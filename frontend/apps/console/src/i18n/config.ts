@@ -27,14 +27,10 @@ import enUserMenu from './locales/en/userMenu.json';
 import enTheme from './locales/en/theme.json';
 import enDevices from './locales/en/devices.json';
 import enAlarms from './locales/en/alarms.json';
-import enDashboards from './locales/en/dashboards.json';
-import enDeviceProfiles from './locales/en/deviceProfiles.json';
 import enTenants from './locales/en/tenants.json';
 import enTiers from './locales/en/tiers.json';
 import enConnectors from './locales/en/connectors.json';
 import enProvisioning from './locales/en/provisioning.json';
-import enIntegrations from './locales/en/integrations.json';
-import enCommandBatches from './locales/en/commandBatches.json';
 import enUpdateSigners from './locales/en/updateSigners.json';
 import enBranding from './locales/en/branding.json';
 import enBasemap from './locales/en/basemap.json';
@@ -46,13 +42,11 @@ import enIdentities from './locales/en/identities.json';
 import enRoles from './locales/en/roles.json';
 import enMembers from './locales/en/members.json';
 import enSecurity from './locales/en/security.json';
-import enIdentityProviders from './locales/en/identityProviders.json';
 import enAiPackaging from './locales/en/aiPackaging.json';
 import enAdminSettings from './locales/en/adminSettings.json';
 import enAdminAudit from './locales/en/adminAudit.json';
 import enEntities from './locales/en/entities.json';
 import enVersions from './locales/en/versions.json';
-import enUpdates from './locales/en/updates.json';
 
 
 export interface Locale {
@@ -154,6 +148,10 @@ export const NAMESPACES = [
 // extra request and `t()` works the instant this module has run. Every OTHER locale is loaded on
 // demand (see catalogLoaders.ts): a Spanish operator pays for the Spanish catalogs, an English
 // one never does.
+// The namespaces NOT listed here have their English catalog registered by the first module that uses
+// them (i18n/lazy/<ns>.ts, see lazyEnglish.ts), so they ship with their route instead of in this chunk.
+// Only the large catalogs are lazy: a small one saves little of the first download and costs a chunk of
+// its own (separate gzip streams lose the shared dictionary).
 const enResources = {
   en: {
     common: enCommon,
@@ -163,14 +161,10 @@ const enResources = {
     theme: enTheme,
     devices: enDevices,
     alarms: enAlarms,
-    dashboards: enDashboards,
-    deviceProfiles: enDeviceProfiles,
     tenants: enTenants,
     tiers: enTiers,
     connectors: enConnectors,
     provisioning: enProvisioning,
-    integrations: enIntegrations,
-    commandBatches: enCommandBatches,
     updateSigners: enUpdateSigners,
     branding: enBranding,
     basemap: enBasemap,
@@ -180,13 +174,11 @@ const enResources = {
     audit: enAudit,
     identities: enIdentities,
     roles: enRoles,
-    identityProviders: enIdentityProviders,
     aiPackaging: enAiPackaging,
     adminSettings: enAdminSettings,
     adminAudit: enAdminAudit,
     entities: enEntities,
     versions: enVersions,
-    updates: enUpdates,
     members: enMembers,
     security: enSecurity,
   },

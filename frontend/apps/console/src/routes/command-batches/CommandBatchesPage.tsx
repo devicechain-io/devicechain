@@ -49,6 +49,7 @@ import { FormDrawer } from '@/components/registry';
 import { useToast } from '@/components/ui/toast';
 import { TargetKindBadge } from './TargetKindBadge';
 import { CreateBatchForm } from './CreateBatchForm';
+import '@/i18n/lazy/commandBatches';
 
 const pageSize = 20;
 

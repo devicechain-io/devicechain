@@ -17,6 +17,7 @@
 // so nothing here goes through t() at all.
 
 import i18n, { SUPPORTED_LOCALES } from '@/i18n/config';
+import '@/i18n/lazy/dashboards';
 import { describe, expect, it } from 'vitest';
 
 import type { WidgetInstance, WidgetType } from '@devicechain/dashboards';

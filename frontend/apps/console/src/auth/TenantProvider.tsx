@@ -12,7 +12,7 @@ import {
 import { useCachedResource } from '@/lib/hooks/use-cached-resource';
 import { applyBranding } from '@/lib/branding';
 import { applyTenantDefaultLocale, resetToDetectedLocale } from '@/i18n/config';
-import { MapRuntimeProvider, TenantBasemapProvider } from '@devicechain/widgets';
+import { MapRuntimeProvider, TenantBasemapProvider } from '@devicechain/widgets/host-context';
 
 import { MAP_RUNTIME } from '../map-runtime';
 

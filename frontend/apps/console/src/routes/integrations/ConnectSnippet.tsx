@@ -23,6 +23,7 @@ import {
   type SnippetField,
   type SnippetInput,
 } from './connectInstructions';
+import '@/i18n/lazy/integrations';
 
 const COMMAND_LABEL = 'snippetCommand';
 

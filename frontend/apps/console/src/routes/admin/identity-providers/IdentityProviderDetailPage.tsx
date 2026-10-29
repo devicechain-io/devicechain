@@ -41,6 +41,7 @@ import { DomainsPanel, TenantsPanel } from './ServedPanels';
 import { SettingsPanel } from './SettingsPanel';
 import { needsReapproval } from './idpForm';
 import { IDENTITY_PROVIDERS_BASE } from './paths';
+import '@/i18n/lazy/identityProviders';
 
 export default function IdentityProviderDetailPage() {
   const { t } = useTranslation('identityProviders');

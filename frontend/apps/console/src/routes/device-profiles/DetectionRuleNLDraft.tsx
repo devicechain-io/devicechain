@@ -26,6 +26,7 @@ import {
   type MetricHintInput,
   type RuleWarning,
 } from '@/lib/api/event-processing';
+import '@/i18n/lazy/deviceProfiles';
 
 export function DetectionRuleNLDraft({
   profileToken,

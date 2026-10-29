@@ -25,6 +25,7 @@ import {
 
 import { resolveText, useMessageLookup } from './optionWording';
 import type { EditorWidgetRegistry } from './widgetRegistry';
+import '@/i18n/lazy/dashboards';
 
 // Descriptors without a category share one group, listed last, so an uncategorized
 // extension is still reachable and never hidden behind a heading it did not choose.

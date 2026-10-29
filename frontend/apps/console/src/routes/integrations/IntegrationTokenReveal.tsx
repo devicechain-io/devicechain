@@ -22,6 +22,7 @@ import { useAuth } from '@/auth/AuthProvider';
 import { CopyField } from '@/routes/provisioning/SecretReveal';
 import type { Integration } from '@/lib/api/integrations';
 import { ConnectSnippet } from './ConnectSnippet';
+import '@/i18n/lazy/integrations';
 
 const ID_PREFIX = 'ig-reveal';
 const TOKEN_INPUT_ID = 'ig-reveal-token';

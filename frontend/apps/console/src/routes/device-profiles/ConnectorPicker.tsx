@@ -15,6 +15,7 @@ import { Trans, useTranslation } from 'react-i18next';
 import { Select, SelectItem } from '@/components/ui/select';
 import { useQuery } from '@/lib/hooks/use-query';
 import { listConnectors } from '@/lib/api/connectors';
+import '@/i18n/lazy/deviceProfiles';
 
 export function ConnectorPicker({ id, value, onChange }: { id: string; value: string; onChange: (v: string) => void }) {
   const { t } = useTranslation('deviceProfiles');

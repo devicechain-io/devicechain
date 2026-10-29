@@ -30,6 +30,7 @@ import {
   updateDeviceType,
   type DeviceType,
 } from '@/lib/api/device-management';
+import '@/i18n/lazy/dashboards';
 
 // The attached-profile shape carried on DeviceType.profile ({token,name,category}).
 type AttachedProfile = NonNullable<DeviceType['profile']>;

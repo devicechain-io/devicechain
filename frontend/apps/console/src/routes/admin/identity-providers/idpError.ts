@@ -5,6 +5,7 @@ import type { TFunction } from 'i18next';
 import { GraphQLRequestError } from '@devicechain/client';
 import { serverErrorCode } from '@/i18n/signInError';
 import { errMessage } from '@/routes/common';
+import '@/i18n/lazy/identityProviders';
 
 // The server refuses a disable, a delete, or a dropped tenant that would leave a tenant
 // requiring single sign-on with no enabled connection serving it, by extensions.code, with

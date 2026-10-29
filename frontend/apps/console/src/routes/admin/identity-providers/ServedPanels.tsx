@@ -35,6 +35,7 @@ import { useToast } from '@/components/ui/toast';
 import { formatTime } from '@/lib/utils';
 import { errMessage } from '@/routes/common';
 import { idpErrorMessage } from './idpError';
+import '@/i18n/lazy/identityProviders';
 
 interface PanelProps {
   connection: IdpConnection;
