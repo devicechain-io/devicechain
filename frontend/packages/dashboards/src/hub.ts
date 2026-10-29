@@ -23,6 +23,7 @@ import {
   ALARM_TYPE_COUNTS,
   ALARMS_QUERY,
   CLEAR_ALARM,
+  type AlarmAnchorInput,
   type AlarmSearchCriteriaInput,
   type AlarmStreamResult,
 } from './internal/alarm-doc';
@@ -158,6 +159,14 @@ export interface WidgetStreamSink {
 // (ADR-041), read query-then-reconcile. An alarm subscription describes the SCOPE
 // (which entity's alarms) plus the server-side filters, and receives whole snapshots
 // (not incremental events), because the authoritative rows come from the query.
+
+// What an alarm subscription reads: tenant-wide, one anchored read, or one read per device token.
+interface AlarmScope {
+  tenantWide: boolean;
+  tokens: string[];
+  anchor?: AlarmAnchorInput;
+}
+const STAMPED = new Set(['customer', 'area', 'asset']);
 
 // AlarmSubscription is one alarm widget's interest: its scope selector (undefined =
 // tenant-wide — every alarm the viewer can see) plus filters. `pageSize` bounds the
@@ -703,9 +712,9 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
     };
     this.alarmDisposers.add(dispose);
 
-    const reconcile = (tokens: string[], tenantWide: boolean): void => {
+    const reconcile = (scope: AlarmScope): void => {
       const gen = ++generation;
-      this.queryAlarms(subscription, tokens, tenantWide)
+      this.queryAlarms(subscription, scope)
         .then((snapshot) => {
           if (!disposed && gen === generation) sink.next(snapshot);
         })
@@ -725,14 +734,14 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
         // re-subscribes this widget, but organic anchor-membership change isn't picked up
         // until the widget re-subscribes — a deferred enhancement shared with the
         // measurement channel.
-        if (!scope.tenantWide && scope.tokens.length === 0) {
+        if (!scope.tenantWide && !scope.anchor && scope.tokens.length === 0) {
           sink.next({ alarms: [], total: 0 });
           return;
         }
 
         const trigger = (): void => {
           if (debounce) clearTimeout(debounce);
-          debounce = setTimeout(() => reconcile(scope.tokens, scope.tenantWide), ALARM_RECONCILE_DEBOUNCE_MS);
+          debounce = setTimeout(() => reconcile(scope), ALARM_RECONCILE_DEBOUNCE_MS);
         };
         // Subscribe unfiltered (server filters resolve once at subscribe time and a
         // widget's scope may span devices) and treat every event as a reconcile
@@ -743,21 +752,21 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
           next: () => trigger(),
           connected: (wasRetry) => {
             handle.connected();
-            if (wasRetry) reconcile(scope.tokens, scope.tenantWide);
+            if (wasRetry) reconcile(scope);
           },
           closed: () => handle.closed(),
         };
-        const closeSocket = subscribe(DEVICE_AREA, ALARM_STREAM, {}, adapter);
+        const closeSocket = subscribe(DEVICE_AREA, ALARM_STREAM, { anchor: scope.anchor }, adapter);
         unsubscribe = () => {
           handle.release();
           closeSocket();
         };
-        poll = setInterval(() => reconcile(scope.tokens, scope.tenantWide), ALARM_POLL_MS);
+        poll = setInterval(() => reconcile(scope), ALARM_POLL_MS);
         // Register a reconcile trigger so an ack/clear (via the action seam) refreshes
         // this widget immediately, not on the next poll tick.
-        reconciler = () => reconcile(scope.tokens, scope.tenantWide);
+        reconciler = () => reconcile(scope);
         this.alarmReconcilers.add(reconciler);
-        reconcile(scope.tokens, scope.tenantWide); // initial load
+        reconcile(scope); // initial load
       })
       .catch((err) => {
         if (!disposed) sink.error?.(err);
@@ -772,10 +781,13 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
   //
   // 🔴 Only an ABSENT datasource is tenant-wide. `{kind:'unbound'}` is a datasource, and
   // it resolves to zero devices like any other empty scope.
-  private async resolveAlarmScope(
-    datasource: DatasourceSelector | undefined,
-  ): Promise<{ tenantWide: boolean; tokens: string[] }> {
+  private async resolveAlarmScope(datasource: DatasourceSelector | undefined): Promise<AlarmScope> {
     if (!datasource) return { tenantWide: true, tokens: [] };
+    // A customer, area or asset the alarms are stamped with is ONE anchored read, not a read per
+    // member device. Any other anchor (a group) still expands to its devices.
+    if (datasource.kind === 'anchor' && datasource.anchor.relationship === 'assigned' && STAMPED.has(datasource.anchor.targetType)) {
+      return { tenantWide: false, tokens: [], anchor: { type: datasource.anchor.targetType, token: datasource.anchor.targetToken } };
+    }
     const groups = await this.resolveDevices(datasource);
     return { tenantWide: false, tokens: groups.map((g) => g.deviceToken) };
   }
@@ -786,17 +798,17 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
   // per-originator match counts.
   private async queryAlarms(
     sub: AlarmSubscription,
-    tokens: string[],
-    tenantWide: boolean,
+    { tenantWide, tokens, anchor }: AlarmScope,
   ): Promise<AlarmSnapshot> {
     const filters = {
       state: sub.state ?? null,
       severity: sub.severity ?? null,
       acknowledged: sub.acknowledged ?? null,
     } satisfies Partial<AlarmSearchCriteriaInput>;
-    const originators: Array<{ originatorType: string | null; originator: string | null }> = tenantWide
-      ? [{ originatorType: null, originator: null }]
-      : tokens.map((token) => ({ originatorType: 'device', originator: token }));
+    const originators: Array<{ originatorType: string | null; originator: string | null; anchor?: AlarmAnchorInput }> =
+      tenantWide || anchor
+        ? [{ originatorType: null, originator: null, anchor }]
+        : tokens.map((token) => ({ originatorType: 'device', originator: token }));
 
     if (sub.countBySeverity) {
       // One grouped read per originator query (one tenant-wide), summed by severity. Per-device

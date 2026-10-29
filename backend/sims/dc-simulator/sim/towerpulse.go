@@ -74,8 +74,11 @@ const (
 
 	TowerpulseBuildingTypeToken = "tp-building"
 	TowerpulseFloorTypeToken    = "tp-floor"
-	TowerpulseTowerToken        = "tp-tower"
-	TowerpulseAnnexToken        = "tp-annex"
+	// TowerpulsePlantTypeToken types the plant rooms, so a Floor picker limited to tp-floor does
+	// not offer "Annex plant".
+	TowerpulsePlantTypeToken = "tp-plant"
+	TowerpulseTowerToken     = "tp-tower"
+	TowerpulseAnnexToken     = "tp-annex"
 
 	TowerpulseVAVProfileToken     = "tp-vav-profile"
 	TowerpulseAHUProfileToken     = "tp-ahu-profile"
@@ -311,7 +314,7 @@ func (s *towerpulse) Manifest() SimManifest {
 				Token: towerpulseFloorToken(spec.b, f), Name: fmt.Sprintf("%s floor %d", name, f), AreaTypeToken: TowerpulseFloorTypeToken,
 			})
 		}
-		areas = append(areas, AreaSpec{Token: towerpulsePlantToken(spec.b), Name: name + " plant", AreaTypeToken: TowerpulseFloorTypeToken})
+		areas = append(areas, AreaSpec{Token: towerpulsePlantToken(spec.b), Name: name + " plant", AreaTypeToken: TowerpulsePlantTypeToken})
 	}
 
 	manifest := SimManifest{
@@ -332,6 +335,7 @@ func (s *towerpulse) Manifest() SimManifest {
 		AreaTypes: []AreaTypeSpec{
 			{Token: TowerpulseBuildingTypeToken, Name: "Building"},
 			{Token: TowerpulseFloorTypeToken, Name: "Floor"},
+			{Token: TowerpulsePlantTypeToken, Name: "Plant"},
 		},
 		Areas: areas,
 		Profiles: []ProfileSpec{

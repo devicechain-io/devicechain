@@ -505,15 +505,25 @@ grupo elegido ya no es un ámbito de acceso.
 
 {/* TODO(screenshot): dashboard-share, the Share drawer with customers and groups picked. */}
 
-Vincula los widgets de un panel que compartes a dispositivos o a los clientes con los que lo
-compartes. Un widget vinculado a un cliente, con **Relationship** establecido en `assigned` (la
+Vincula los widgets de un panel que compartes a dispositivos, a un área o un activo, o a los clientes
+con los que lo compartes. Un widget vinculado a un cliente, con **Relationship** establecido en `assigned` (la
 relación que crea la pestaña **Assignment** de un dispositivo), muestra a cada usuario de cliente los
 dispositivos de ese cliente, siempre que el cliente sea uno de los suyos; vinculado a cualquier otro
-cliente, le muestra **No tiene acceso a estos datos**. Un widget vinculado a un activo, un área o un
-grupo encuentra sus dispositivos a través de las relaciones, que un miembro con acceso limitado no
-puede leer, así que en lugar de sus datos le muestra **Not available for customer users** (no
-disponible para usuarios de cliente). En un panel compartido con un grupo, vincula los widgets a los
-dispositivos del grupo.
+cliente, le muestra **No tiene acceso a estos datos**. Un widget vinculado a un área o a un activo
+muestra a cada usuario de cliente solo sus propios dispositivos en ella: un contador de alarmas o un
+gráfico sobre una planta que comparten dos clientes muestra a cada uno sus propios números. Los
+nombres de las áreas y los activos en los que están los dispositivos de un usuario de cliente le son
+visibles, también los compartidos, así que mantén fuera de esos nombres cualquier dato confidencial.
+Un widget vinculado a un grupo encuentra sus dispositivos a través de las relaciones, que un miembro
+con acceso limitado no puede leer, así que en lugar de sus datos le muestra **Not available for
+customer users** (no disponible para usuarios de cliente). En un panel compartido con un grupo,
+vincula los widgets a los dispositivos del grupo, o a un área o un activo en los que estén.
+
+Para los selectores de un panel que compartes, establece **Picker area type** (o **Picker asset
+type**) en un slot raíz de área o de activo con el token de un tipo, por ejemplo un tipo de planta,
+para que el selector liste solo las áreas de ese tipo. Si lo dejas en blanco, lista todas las que el
+espectador puede ver, que para un usuario de cliente son las áreas en las que están sus dispositivos.
+Si un usuario de cliente abre el panel sobre un área que no puede ver, pasa a la primera que sí puede.
 
 Un programa hace lo mismo con la mutación `shareDashboard`, que requiere `dashboard:write`:
 

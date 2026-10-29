@@ -154,7 +154,7 @@ func TestTowerpulseAssignsEveryDeviceToAFloorABuildingAndAnOwner(t *testing.T) {
 				switch areaType[a.TargetToken] {
 				case TowerpulseBuildingTypeToken:
 					buildings = append(buildings, a.TargetToken)
-				case TowerpulseFloorTypeToken:
+				case TowerpulseFloorTypeToken, TowerpulsePlantTypeToken:
 					floors = append(floors, a.TargetToken)
 				default:
 					t.Errorf("%s is assigned to area %q of unknown type", d.Token, a.TargetToken)

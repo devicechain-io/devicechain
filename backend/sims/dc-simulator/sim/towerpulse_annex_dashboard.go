@@ -8,12 +8,9 @@ import (
 	"fmt"
 )
 
-// towerpulseSlotAnnex is the annex board's root: the annex owner's CUSTOMER, not an area.
-const towerpulseSlotAnnex = "annex"
-
-// buildTowerpulseAnnexDashboard renders the annex owner's board, `tp-annex-dashboard`: the annex's
-// devices, its alarms, its chiller and its meter, and nothing that belongs to the tower or acts on a
-// device.
+// buildTowerpulseAnnexDashboard renders the annex owner's board, `tp-annex-dashboard`: the annex
+// building, its floors and zones, its chiller and its meter, and nothing that belongs to the tower or
+// acts on a device.
 //
 // 🔴 A CUSTOMER BOARD IS BUILT FROM WHAT THE CUSTOMER MAY HAVE, NOT FROM THE OPERATOR'S BOARD MINUS
 // WHAT THE SERVER REFUSES. Data-plane scoping does keep the tower's numbers from an annex owner, but a
@@ -22,15 +19,14 @@ const towerpulseSlotAnnex = "annex"
 // leaves a write affordance on a read-only member's screen. The facility operator's cross-campus board
 // (buildTowerpulseDashboard) is a different document for a different person.
 //
-// 🔴 NO AREA ANCHORS. A member limited to a customer cannot read the relationship graph or list areas
-// (both answer FORBIDDEN, reason SCOPE_UNSUPPORTED), so a board anchored on the annex building and
-// floor opened for them with its context dropped, its Floor and Zone pickers empty and every aggregate
-// disabled. This board roots on the annex owner's CUSTOMER with the `assigned` relationship, which
-// customerDevices answers for exactly that member, and binds the rest to devices: the aggregates
-// (alarms by severity, devices online, the alarm table, the zone comparison) read the customer's
-// devices, and the one picker offers those same devices. It is the binding the customer-users guide
-// asks of a shared board. Floors are an area concept and have no counterpart here.
+// Compared with the operator's board it drops the tower chiller and meter cards, the tower power
+// history and the setpoint stepper; the annex power history replaces the tower's. The Building and
+// Floor pickers carry a type filter (a Floor picker that offered the building or the plant would be
+// a wrong answer), and a customer-scoped member sees only the areas their own devices are in, so the
+// pickers list the annex alone.
 func buildTowerpulseAnnexDashboard(devices []DeviceInstance) (string, error) {
+	building := TowerpulseAnnexToken
+	floor := towerpulseFloorToken(towerpulseAnnex, 1)
 	zoneDevice, err := towerpulseDevice(devices, "tp-vav-annex-f1-north")
 	if err != nil {
 		return "", err
@@ -45,19 +41,13 @@ func buildTowerpulseAnnexDashboard(devices []DeviceInstance) (string, error) {
 	}
 
 	slots := map[string]dashboardSlot{
-		towerpulseSlotAnnex: {
-			Type:  "anchor",
-			Label: "Annex",
-			DefaultBinding: &dashboardSlotBinding{
-				Kind:   "anchor",
-				Anchor: &dashboardAnchorTarget{Relationship: assignmentRelationshipType, TargetType: "customer", TargetToken: TowerpulseAnnexOwnerToken},
-			},
-		},
-		towerpulseSlotZone:         sitepulseDeviceSlot("Device", zoneDevice, &dashboardScope{Parent: towerpulseSlotAnnex, Strategy: "manual"}),
+		towerpulseSlotBuilding:     withCandidates(towerpulseAnchor("Building", building), TowerpulseBuildingTypeToken),
+		towerpulseSlotFloor:        withCandidates(towerpulseAnchor("Floor", floor), TowerpulseFloorTypeToken),
+		towerpulseSlotZone:         sitepulseDeviceSlot("Zone", zoneDevice, &dashboardScope{Parent: towerpulseSlotBuilding, Strategy: "manual"}),
 		towerpulseSlotChillerAnnex: sitepulseDeviceSlot("Annex chiller", chiller, nil),
 		towerpulseSlotMeterAnnex:   sitepulseDeviceSlot("Annex meter", meter, nil),
 	}
-	onAnnex := widgetSubject{Slot: towerpulseSlotAnnex, Measurements: []string{}}
+	onBuilding := widgetSubject{Slot: towerpulseSlotBuilding, Measurements: []string{}}
 	on := func(slot string, metrics ...string) widgetSubject {
 		return widgetSubject{Slot: slot, Measurements: metrics}
 	}
@@ -66,7 +56,7 @@ func buildTowerpulseAnnexDashboard(devices []DeviceInstance) (string, error) {
 		"Annex power", TowerpulseMeterKwKey, "last", "kW", 0, 0, nil)
 	kw.Options["sparkline"] = true
 
-	compare := buildTimeSeriesChartWidget("tp-floor-compare", box{0, 7, 7, 4}, on(towerpulseSlotAnnex, TowerpulseTempKey), "Zone temperatures")
+	compare := buildTimeSeriesChartWidget("tp-floor-compare", box{0, 7, 7, 4}, on(towerpulseSlotFloor, TowerpulseTempKey), "Zones on the floor")
 	delete(compare.Options, "windowSeconds")
 	compare.Options["groupBy"] = "device"
 	compare.Options["measurement"] = TowerpulseTempKey
@@ -81,7 +71,7 @@ func buildTowerpulseAnnexDashboard(devices []DeviceInstance) (string, error) {
 	delete(cop.Options, "windowSeconds")
 	cop.Options["precision"] = 2
 
-	alarms := buildAlarmTableWidget("tp-alarms", box{0, 12, 11, 4}, onAnnex, "Alarms", towerpulseSlotZone)
+	alarms := buildAlarmTableWidget("tp-alarms", box{0, 12, 11, 4}, onBuilding, "Alarms", towerpulseSlotZone)
 	alarms.Options["state"] = AlarmStateActiveWire
 	alarms.Options["groupBy"] = "deviceType"
 	alarms.Options["deviceTypes"] = towerpulseAlarmTabs
@@ -102,10 +92,12 @@ func buildTowerpulseAnnexDashboard(devices []DeviceInstance) (string, error) {
 		}, 10)
 
 	widgets := []dashboardWidget{
-		buildEntitySelectorWidget("tp-zone-select", box{0, 12, 0, 1}, "Device", towerpulseSlotZone),
+		buildEntitySelectorWidget("tp-building-select", box{0, 4, 0, 1}, "Building", towerpulseSlotBuilding),
+		buildEntitySelectorWidget("tp-floor-select", box{4, 4, 0, 1}, "Floor", towerpulseSlotFloor),
+		buildEntitySelectorWidget("tp-zone-select", box{8, 4, 0, 1}, "Zone", towerpulseSlotZone),
 
-		buildAlarmSeverityWidget("tp-alarm-severity", box{0, 3, 1, 3}, onAnnex, "Active alarms by severity", ""),
-		buildOnlineDoughnutWidget("tp-online", box{3, 3, 1, 3}, onAnnex, "Devices online"),
+		buildAlarmSeverityWidget("tp-alarm-severity", box{0, 3, 1, 3}, onBuilding, "Active alarms by severity", ""),
+		buildOnlineDoughnutWidget("tp-online", box{3, 3, 1, 3}, onBuilding, "Devices online"),
 		kw,
 		buildStatCardWidget("tp-kwh-m2-annex", box{9, 3, 1, 3}, on(towerpulseSlotMeterAnnex, TowerpulseKwhPerM2Key),
 			"Annex energy per m2", TowerpulseKwhPerM2Key, "last", "kWh/m2", 2, 0, nil),

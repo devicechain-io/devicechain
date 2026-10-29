@@ -319,7 +319,8 @@ integrating with a building management system.
 **Hierarchy.** Two customers (the tower's owner and the annex's owner), a building area for
 each, a floor area per floor and a plant area per building. Every device is assigned to its
 floor (or plant), its building and its owner, so every event carries a building and a customer
-anchor. The platform has no area-in-area hierarchy, so the floor-to-building link is carried by
+anchor. Plants have their own area type (`tp-plant`), so a Floor picker limited to the `tp-floor`
+type does not offer "Annex plant". The platform has no area-in-area hierarchy, so the floor-to-building link is carried by
 the device's two assignments rather than by an edge between the areas.
 
 **Rules.**
@@ -371,8 +372,9 @@ tenant, destroy does too for a sim not converged since, and the identity itself 
 
 Two boards. The operator's, `tp-dashboard`, shows both buildings and carries the setpoint control;
 it is shared with nobody. The annex owner's, `tp-annex-dashboard`, is a different board, not the
-operator's re-opened: it binds only the annex's devices (rooted on the annex owner's customer, because a member
-limited to a customer cannot read areas or the relationship graph), and
+operator's re-opened: it is anchored on the annex building and its floors (Building, Floor and Zone pickers, the first
+two limited to their area type; a member limited to a customer is answered the areas their own
+devices are in, so the pickers list the annex alone), and
 carries no command widget, so a read-only member sees no write affordance and no widget that names a
 Tower device. It is shared with the annex owner (a member limited to a customer lists only what is
 shared with it). A re-run repairs a member left with a pending invitation, a wrong role or a

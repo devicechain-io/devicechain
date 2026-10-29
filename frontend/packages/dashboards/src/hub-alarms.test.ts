@@ -10,7 +10,7 @@ import type { AlarmRow } from './types';
 // test can push events and assert teardown; gql() is a vi.fn a test drives to return
 // alarm pages (or reject). vi.hoisted shares the registry with the hoisted vi.mock.
 const h = vi.hoisted(() => ({
-  subs: [] as Array<{ sink: { next: (d: unknown) => void; connected?: (retry: boolean) => void }; closed: boolean }>,
+  subs: [] as Array<{ vars?: unknown; sink: { next: (d: unknown) => void; connected?: (retry: boolean) => void }; closed: boolean }>,
   gql: vi.fn(),
 }));
 
@@ -18,10 +18,10 @@ vi.mock('@devicechain/client', () => ({
   subscribe: (
     _area: string,
     _doc: unknown,
-    _vars: unknown,
+    vars: unknown,
     sink: { next: (d: unknown) => void; connected?: (retry: boolean) => void },
   ) => {
-    const entry = { sink, closed: false };
+    const entry = { vars, sink, closed: false };
     h.subs.push(entry);
     return () => {
       entry.closed = true;
@@ -213,6 +213,66 @@ describe('DashboardHub alarm channel', () => {
     expect(h.gql).toHaveBeenCalledTimes(2); // one query per member device
     expect(snaps[snaps.length - 1].alarms).toHaveLength(1); // deduped by token
     expect(snaps[snaps.length - 1].total).toBe(4); // 2 + 2
+  });
+
+  it('an area, asset or customer anchor is ONE anchored read, and the stream is filtered the same way', async () => {
+    h.gql.mockResolvedValue(page([alarmRow({ token: 'a' })], 3));
+    const resolver = newResolver(['d1', 'd2', 'd3']);
+    const hub = new DashboardHub({ resolver });
+    const snaps: AlarmSnapshot[] = [];
+
+    hub.subscribeAlarms(
+      {
+        datasource: {
+          kind: 'anchor',
+          anchor: { relationship: 'assigned', targetType: 'area', targetToken: 'annex' },
+          measurements: [],
+        },
+        pageSize: 10,
+      },
+      { next: (s) => snaps.push(s) },
+    );
+    await settle();
+
+    expect(h.gql).toHaveBeenCalledTimes(1); // not one per member device
+    expect(resolver.devicesForAnchor).not.toHaveBeenCalled();
+    expect(criteriaOf(0)).toMatchObject({ originatorType: null, originator: null, anchor: { type: 'area', token: 'annex' } });
+    expect(snaps[snaps.length - 1].total).toBe(3);
+    expect(h.subs[0].vars).toEqual({ anchor: { type: 'area', token: 'annex' } });
+  });
+
+  it('an anchored severity count is one grouped read', async () => {
+    h.gql.mockResolvedValue({ alarmCountsBySeverity: [{ severity: 'MAJOR', count: 2 }] });
+    const hub = new DashboardHub({ resolver: newResolver(['d1', 'd2']) });
+    const snaps: AlarmSnapshot[] = [];
+    hub.subscribeAlarms(
+      {
+        datasource: { kind: 'anchor', anchor: { relationship: 'assigned', targetType: 'customer', targetToken: 'c' }, measurements: [] },
+        pageSize: 1,
+        countBySeverity: true,
+      },
+      { next: (s) => snaps.push(s) },
+    );
+    await settle();
+    expect(h.gql).toHaveBeenCalledTimes(1);
+    expect(criteriaOf(0)).toMatchObject({ anchor: { type: 'customer', token: 'c' } });
+    expect(snaps[snaps.length - 1]).toEqual({ alarms: [], total: 2, severityCounts: [{ severity: 'MAJOR', count: 2 }] });
+  });
+
+  it('a device binding and a group anchor keep the per-device reads, with no anchor on the stream', async () => {
+    h.gql.mockResolvedValue(page([]));
+    const hub = new DashboardHub({ resolver: newResolver(['d1', 'd2']) });
+    hub.subscribeAlarms(
+      {
+        datasource: { kind: 'anchor', anchor: { relationship: 'assigned', targetType: 'group' as never, targetToken: 'g' }, measurements: [] },
+        pageSize: 10,
+      },
+      { next: () => {} },
+    );
+    await settle();
+    expect(h.gql).toHaveBeenCalledTimes(2);
+    expect(criteriaOf(0).anchor).toBeUndefined();
+    expect(h.subs[0].vars).toEqual({ anchor: undefined });
   });
 
   it('dispose stops polling and closes the trigger stream', async () => {

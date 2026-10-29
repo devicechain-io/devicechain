@@ -31,6 +31,13 @@ export interface AlarmSearchCriteriaInput {
   // Only alarms whose span overlaps this range (RFC 3339, each optional).
   startTime?: string | null;
   endTime?: string | null;
+  // Only alarms stamped with this customer, area or asset.
+  anchor?: AlarmAnchorInput | null;
+}
+
+export interface AlarmAnchorInput {
+  type: string;
+  token: string;
 }
 
 export interface AlarmsQueryResult {
@@ -154,6 +161,7 @@ export interface AlarmStreamVariables {
   state?: string | null;
   severity?: string | null;
   alarmKey?: string | null;
+  anchor?: AlarmAnchorInput | null;
 }
 
 export const ALARM_STREAM = `
@@ -163,6 +171,7 @@ export const ALARM_STREAM = `
     $state: String
     $severity: String
     $alarmKey: String
+    $anchor: AlarmAnchor
   ) {
     alarmStream(
       originatorType: $originatorType
@@ -170,6 +179,7 @@ export const ALARM_STREAM = `
       state: $state
       severity: $severity
       alarmKey: $alarmKey
+      anchor: $anchor
     ) {
       alarmToken
       eventType

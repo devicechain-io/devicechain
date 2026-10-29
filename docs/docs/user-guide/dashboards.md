@@ -617,14 +617,23 @@ it is one: saving it is refused with a message that a chosen group is no longer 
 
 {/* TODO(screenshot): dashboard-share, the Share drawer with customers and groups picked. */}
 
-Bind the widgets of a dashboard you share to devices, or to the customers you share it with. A
-widget bound to a customer, with **Relationship** set to `assigned` (the relationship a device's
-**Assignment** tab creates), shows each customer user that customer's devices, provided the customer
-is one of theirs; bound to any other customer, it tells them **You do not have access to this
-data**. A widget bound to an asset, an area or a group finds its devices through relationships,
-which a member with limited access cannot read, so it shows them **Not available for customer
-users** instead of its data. For a dashboard shared with a group, bind its widgets to the group's
-devices.
+Bind the widgets of a dashboard you share to devices, to an area or an asset, or to the customers
+you share it with. A widget bound to a customer, with **Relationship** set to `assigned` (the
+relationship a device's **Assignment** tab creates), shows each customer user that customer's
+devices, provided the customer is one of theirs; bound to any other customer, it tells them **You do
+not have access to this data**. A widget bound to an area or an asset shows each customer user only
+their own devices in it: an alarm count or a chart on a floor that two customers share shows each of
+them their own numbers. The names of the areas and assets a customer user's devices are in are
+visible to them, shared ones included, so keep confidential detail out of those names. A widget
+bound to a group finds its devices through relationships, which a member with limited access cannot
+read, so it shows them **Not available for customer users** instead of its data. For a dashboard
+shared with a group, bind its widgets to the group's devices, or to an area or asset they are in.
+
+For the pickers of a dashboard you share, set **Picker area type** (or **Picker asset type**) on a
+root area or asset slot to the token of a type, such as a floor type, so the picker lists only areas
+of that type. Left blank, it lists every one the viewer can see, which for a customer user is the
+areas their devices are in. If a customer user opens the dashboard on an area that is not one they
+can see, it falls back to the first one they can.
 
 A program does the same with the `shareDashboard` mutation, which needs `dashboard:write`:
 

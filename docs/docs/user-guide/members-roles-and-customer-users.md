@@ -249,11 +249,17 @@ A customer user sees a dashboard only once it is shared with one of their custom
 published. On the **Dashboards** list, choose **Share** on a dashboard and pick the customers and
 groups. See [Sharing with customers and groups](/user-guide/dashboards#sharing-with-customers).
 
-A shared dashboard shows each customer user only their own data. Bind its widgets to devices, or to
-the customer with the `assigned` relationship: such a widget shows the customer's users the devices
-assigned to it. A widget bound to an asset, an area or a group reads the relationship graph to find
-its devices, which customer users are not given, so it shows them **Not available for customer
-users**.
+A shared dashboard shows each customer user only their own data. Bind its widgets to devices, to the
+customer with the `assigned` relationship, or to an area or an asset. A widget bound to an area or an
+asset shows the customer user only their own devices in it, their readings and their alarms, even
+when devices of other customers share that area; the numbers in an alarm count or a chart are theirs
+alone. A widget bound to a group still reads the relationship graph to find its devices, which
+customer users are not given, so it shows them **Not available for customer users**.
+
+The Building, Floor or Zone pickers of such a dashboard list only the areas and devices the customer
+user can see. A picker can be limited to one area type (or asset type), so a Floor picker does not
+offer buildings or plant rooms. A customer user who opens the dashboard on an area that is not theirs,
+for example from a link, lands on the first one that is.
 
 ### What customer users can read of areas and assets {#areas-assets-visibility}
 
@@ -263,13 +269,22 @@ and the **name** and **description** of a type, but not its free-form metadata. 
 identifies a customer, or any other confidential detail, out of those names and descriptions, and
 out of the name of an area that devices of several customers share: a customer user can read it.
 
+**For operators:** this means a customer learns the name of any area or asset that one of their own
+devices is in, including a shared one, and the name of the area is all they learn of it. They do not
+see the other customers' devices there, their data or their alarms. Area and asset free-form metadata is withheld from
+them entirely.
+
+Members of an area or asset follow where a device is **now**: move a device to another floor and the
+customer user sees the new floor in their pickers and device lists at once. Alarms and readings that
+are counted by area follow where the device was **when they happened**, so the alarms a device
+raised on its old floor stay under that floor. Keep this in mind when you move devices between areas.
+
 ### What is not covered yet {#not-covered-yet}
 
 - A dashboard widget cannot yet show the devices of a member's group as a whole. Bind widgets on a
-  dashboard shared with a group to its devices.
+  dashboard shared with a group to its devices, or to an area or asset they are in.
 - After a group's first version, publishing a new version, which changes what its members see, is
   done through the API (`publishEntityGroup`), not from the console.
-- Assets and areas assigned to a customer are not shown to its users.
 - A customer cannot manage its own users. Your administrators invite and change them.
 
 ## Related
