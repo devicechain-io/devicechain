@@ -5,7 +5,7 @@ go 1.26.0
 require (
 	github.com/devicechain-io/dc-microservice v0.0.1
 	github.com/nats-io/nats-server/v2 v2.15.1
-	github.com/nats-io/nats.go v1.54.0
+	github.com/nats-io/nats.go v1.55.0
 	github.com/pion/dtls/v3 v3.1.15
 	github.com/plgd-dev/go-coap/v3 v3.5.6
 	github.com/prometheus/client_golang v1.25.0
