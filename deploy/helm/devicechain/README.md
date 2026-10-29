@@ -727,6 +727,7 @@ generated from the schema; do not edit it by hand.
 | `functionalAreas.<area>.extraPorts[].name` | string | - | Port name; at most 15 characters, per Kubernetes. |
 | `functionalAreas.<area>.extraPorts[].port` | integer | - | Port number, 1 to 65535. |
 | `functionalAreas.<area>.extraPorts[].protocol` | string | - | Port protocol; defaults to TCP. lwm2m-ingest sets UDP for its CoAPS port. |
+| `functionalAreas.<area>.credentialsChecksum` | string | - | A digest, salted per instance, of the credentials Secret dcctl writes for this area outside the release (sparkplug-ingest's broker passwords). It is stamped on the area's pod template so a rotated credential rolls the pods; the credential itself is never a value. Set by dcctl. |
 | `functionalAreas.<area>.extraEnv` | array | - | Extra container environment variables for this area, passed through verbatim as core-v1 EnvVar entries. Used to project a Secret into an env var — e.g. sparkplug-ingest reads each per-tenant broker password from the env var its source's broker.passwordEnv names, so an operator sets an entry here with valueFrom.secretKeyRef. |
 | `functionalAreas.<area>.extraEnv[].name` | string | - | Environment variable name. |
 | `functionalAreas.<area>.extraEnv[].value` | string | - | Literal value. Use valueFrom instead to project a Secret. |
