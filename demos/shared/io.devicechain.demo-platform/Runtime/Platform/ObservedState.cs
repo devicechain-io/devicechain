@@ -202,6 +202,16 @@ namespace DeviceChain.Demos.Platform
             Version++;
         }
 
+        /// <summary>The tokens of the alarms held as active, across every device.</summary>
+        internal List<string> ActiveAlarmTokens()
+        {
+            var tokens = new List<string>();
+            foreach (var d in devices.Values)
+                foreach (var a in d.alarms.Values)
+                    if (a.IsActive) tokens.Add(a.Token);
+            return tokens;
+        }
+
         /// <summary>
         /// The active-alarm snapshot is the platform's whole answer as of <paramref name="requestedAt"/>: an
         /// alarm held as active that the snapshot does not list, and that no event newer than the request

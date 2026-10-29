@@ -95,6 +95,25 @@ func ValidateManifestId(id string) error {
 	return fmt.Errorf("unknown manifest %q (known: %s)", id, strings.Join(KnownManifestIds, ", "))
 }
 
+// manifestTenantNames are the readable names of the tenants a scenario is shot or shown in, where one
+// reads better than the sim's own name. A scenario not listed gets "<sim> (sim)".
+var manifestTenantNames = map[string]string{
+	"towerpulse": "Towerpulse Properties",
+}
+
+// TenantDisplayName is the name a sim's tenant is created with: the explicit override, else the
+// scenario's own readable name, else "<sim> (sim)". The console shows it, so a token-shaped name
+// ("tp-acc-c-10290451") reaches a viewer only when nothing better was given.
+func TenantDisplayName(simName, manifestId, override string) string {
+	if o := strings.TrimSpace(override); o != "" {
+		return o
+	}
+	if n, ok := manifestTenantNames[manifestId]; ok {
+		return n
+	}
+	return simName + " (sim)"
+}
+
 var nameGrammar = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 
 // ValidateName rejects a sim name that would not survive the derivations below

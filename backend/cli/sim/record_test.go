@@ -124,3 +124,32 @@ func TestValidateManifestId(t *testing.T) {
 		}
 	}
 }
+
+// The tenant's name is what the console shows in its header and tenant switcher, so a scenario
+// that is filmed or demonstrated must not read as "tp-acc-c-10290451 (sim)". An explicit name wins;
+// Towerpulse has a readable one of its own; every other scenario keeps the sim's name.
+func TestTenantDisplayName(t *testing.T) {
+	cases := []struct {
+		sim, manifest, override, want string
+	}{
+		{"tp-acc-c-10290451", "towerpulse", "", "Towerpulse Properties"},
+		{"tp-acc-c-10290451", "towerpulse", "Halden Campus", "Halden Campus"},
+		{"load-1", "devicepulse", "", "load-1 (sim)"},
+		{"load-1", "devicepulse", "Acme", "Acme"},
+		{"s", "sitepulse", "  ", "s (sim)"},
+	}
+	for _, c := range cases {
+		if got := TenantDisplayName(c.sim, c.manifest, c.override); got != c.want {
+			t.Errorf("TenantDisplayName(%q, %q, %q) = %q, want %q", c.sim, c.manifest, c.override, got, c.want)
+		}
+	}
+}
+
+// A name only a known scenario can claim: a manifest the default table names must be a manifest dcctl accepts.
+func TestEveryManifestWithADefaultTenantNameIsKnown(t *testing.T) {
+	for id := range manifestTenantNames {
+		if err := ValidateManifestId(id); err != nil {
+			t.Errorf("manifestTenantNames names %q: %v", id, err)
+		}
+	}
+}

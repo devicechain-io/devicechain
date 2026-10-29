@@ -36,6 +36,7 @@ func init() {
 	registerMqttFlags(simCreateCmd.Flags())
 	simCreateCmd.Flags().String("manifest", "devicepulse",
 		"built-in scenario to run ("+strings.Join(sim.KnownManifestIds, ", ")+")")
+	simCreateCmd.Flags().String("tenant-name", "", "the tenant's display name, as the console shows it (default: the scenario's own, else \"<sim> (sim)\")")
 	simCreateCmd.Flags().String("tier", sim.DefaultTenantTier, "tenant tier to package the sim at")
 	simCreateCmd.Flags().Int("shed-priority", 0, "shed-priority override 1-100 (0 = inherit the tier's); a load-test lever to place a probe tenant in a shed band")
 	simCmd.AddCommand(simCreateCmd)
@@ -100,6 +101,7 @@ func runSimCreate(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	tier, _ := cmd.Flags().GetString("tier")
+	tenantName, _ := cmd.Flags().GetString("tenant-name")
 	// shed-priority is an optional override: a 1-100 value places the tenant in a
 	// specific band; 0 (the default, and an explicit 0) means inherit the tier's
 	// shedPriority. Pass nil rather than 0 in the inherit case, since 0 is not a valid
@@ -140,7 +142,7 @@ func runSimCreate(cmd *cobra.Command, args []string) error {
 	if err := admin.EnsureSuperuser(ctx); err != nil {
 		return err
 	}
-	if err := admin.CreateTenant(ctx, tenant, name+" (sim)", tier, shedPriority); err != nil {
+	if err := admin.CreateTenant(ctx, tenant, sim.TenantDisplayName(name, manifestId, tenantName), tier, shedPriority); err != nil {
 		return err
 	}
 	if err := admin.CreateIdentity(ctx, email, password); err != nil {

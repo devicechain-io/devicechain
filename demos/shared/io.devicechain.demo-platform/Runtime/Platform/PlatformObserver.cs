@@ -81,6 +81,12 @@ namespace DeviceChain.Demos.Platform
         public static readonly TimeSpan CommandsEvery = TimeSpan.FromSeconds(1);
         public static readonly TimeSpan PresenceEvery = TimeSpan.FromSeconds(5);
 
+        /// <summary>How often the platform's list of active alarms is checked against what the alarm stream delivered.</summary>
+        public static readonly TimeSpan AlarmCheckEvery = TimeSpan.FromSeconds(5);
+
+        /// <summary>How long the stream and the list may disagree before the stream is treated as having missed something.</summary>
+        public static readonly TimeSpan AlarmGapGrace = TimeSpan.FromSeconds(6);
+
         static readonly System.Text.Json.Serialization.Metadata.JsonTypeInfo<JsonElement> Json = PlatformJson.Element;
 
         readonly RunnerConfig config;
@@ -91,7 +97,10 @@ namespace DeviceChain.Demos.Platform
         readonly List<string> newlyObserved = new List<string>();
         readonly CommandTracker commandTracker = new CommandTracker();
         readonly Dictionary<string, DateTimeOffset> lastLog = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
+        readonly AlarmGapDetector alarmGap = new AlarmGapDetector(AlarmGapGrace);
         CancellationTokenSource cts;
+        // the alarm stream's current incarnation: ending it makes the loop in RunAlarmStream open a new socket
+        CancellationTokenSource alarmRun;
         GraphQlWsClient measurementSocket, alarmSocket;
         int generation, runGeneration;
         bool started;
@@ -132,7 +141,6 @@ namespace DeviceChain.Demos.Platform
             var measurementToken = new HandedToken(broker);
             var alarmToken = new HandedToken(broker);
             measurementSocket = new GraphQlWsClient(new ClientWebSocketFactory(), new Uri(config.WsUrl), measurementToken.Provider);
-            alarmSocket = new GraphQlWsClient(new ClientWebSocketFactory(), alarmUri, alarmToken.Provider);
             var state = OperatorQueries.Create(config, broker, Area.DeviceState).AsQueryFn();
             var devices = OperatorQueries.Create(config, broker, Area.DeviceManagement).AsQueryFn();
             var commands = OperatorQueries.Create(config, broker, Area.CommandDelivery).AsQueryFn();
@@ -149,24 +157,70 @@ namespace DeviceChain.Demos.Platform
                 },
                 (s, reason) => Post(new StatusItem("measurements", s.ToString(), reason, clock())),
                 measurementToken.RefreshAfterRejection, clock: clock);
-            var alarms = new StreamRunner<JsonElement>(
-                c => alarmSocket.SubscribeAsync(ObserverQueries.AlarmSubscription, none, Json, Json, c),
-                c => SnapshotAlarms(devices, Post, clock, c),
-                frame =>
-                {
-                    var a = ObserverQueries.ParseAlarmFrame(frame, clock());
-                    if (a != null) Post(a);
-                },
-                (s, reason) => Post(new StatusItem("alarms", s.ToString(), reason, clock())),
-                alarmToken.RefreshAfterRejection, clock: clock);
-
-            _ = Guard("measurement stream", () => measurements.RunAsync(ct), ct);
-            _ = Guard("alarm stream", () => alarms.RunAsync(ct), ct);
+            _ = Guard("alarm stream", () => RunAlarmStream(alarmUri, alarmToken, devices, none, Post, ct), ct);
+            _ = Guard("alarm check", () => Poll("alarm check", AlarmCheckEvery, c => CheckAlarms(devices, Post, c), ct), ct);
             _ = Guard("location poll", () => Poll("locations", LocationEvery, c => PollLocations(state, Post, c), ct), ct);
             _ = Guard("command poll", () => Poll("commands", CommandsEvery, c => PollCommands(commands, commandTracker, Post, clock, c), ct), ct);
             _ = Guard("presence poll", () => Poll("presence", PresenceEvery, c => PollPresence(state, Post, c), ct), ct);
         }
 
+
+        /// <summary>
+        /// The alarm stream, on a socket of its own that can be replaced: a stream that has stopped delivering looks, from inside,
+        /// like a quiet one, and the SDK client keeps handing out a socket it still believes is open. When the alarm check finds
+        /// the stream has missed something, the socket is dropped and a new one opened (which also takes a new snapshot).
+        /// </summary>
+        async Task RunAlarmStream(Uri uri, HandedToken token, QueryFn devices, JsonElement none, Action<ObserverItem> post, CancellationToken ct)
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                using (var run = CancellationTokenSource.CreateLinkedTokenSource(ct))
+                {
+                    var socket = new GraphQlWsClient(new ClientWebSocketFactory(), uri, token.Provider);
+                    alarmSocket = socket;
+                    alarmRun = run;
+                    var runner = new StreamRunner<JsonElement>(
+                        c => socket.SubscribeAsync(ObserverQueries.AlarmSubscription, none, Json, Json, c),
+                        c => SnapshotAlarms(devices, post, clock, c),
+                        frame =>
+                        {
+                            var a = ObserverQueries.ParseAlarmFrame(frame, clock());
+                            if (a != null) post(a);
+                        },
+                        (s, reason) => post(new StatusItem("alarms", s.ToString(), reason, clock())),
+                        token.RefreshAfterRejection, clock: clock);
+                    try { await runner.RunAsync(run.Token).ConfigureAwait(true); }
+                    finally
+                    {
+                        if (ReferenceEquals(alarmRun, run)) alarmRun = null;
+                        if (ReferenceEquals(alarmSocket, socket)) alarmSocket = null;
+                        _ = Task.Run(async () => { try { await socket.DisposeAsync(); } catch { /* a socket that is already gone */ } });
+                    }
+                }
+            }
+        }
+
+        // The platform's active alarms against the ones the stream delivered. A difference that lasts is a stream that stopped
+        // delivering: what the platform lists is recorded as the alarm frames the stream should have brought, the list itself is
+        // applied (so an alarm that ended unseen is cleared), and the stream is reopened.
+        async Task CheckAlarms(QueryFn devices, Action<ObserverItem> post, CancellationToken ct)
+        {
+            var requested = clock();
+            var snapshot = await ObserverQueries.FetchActiveAlarms(p => devices(ObserverQueries.ActiveAlarmsQuery, ObserverQueries.ActiveAlarmsVariables(p), ct), requested, clock);
+            if (snapshot.Truncated) return;
+            var platform = new List<string>();
+            foreach (var a in snapshot.Alarms) platform.Add(a.Alarm.Token);
+            var gap = alarmGap.Check(platform, State.ActiveAlarmTokens(), clock());
+            if (!gap.Any) return;
+
+            var missed = new HashSet<string>(gap.Missed, StringComparer.Ordinal);
+            foreach (var a in snapshot.Alarms)
+                if (missed.Contains(a.Alarm.Token)) post(a);
+            post(snapshot);
+            post(new StatusItem("alarms", StreamState.Reconnecting.ToString(), $"the stream missed {gap.Missed.Count} alarm(s) and lost {gap.EndedUnseen.Count}: reopening it", clock()));
+            LogEvery("alarm gap", $"observer alarm stream missed {gap.Missed.Count} active and {gap.EndedUnseen.Count} ended alarm(s); reopening it");
+            try { alarmRun?.Cancel(); } catch (ObjectDisposedException) { /* the incarnation ended on its own */ }
+        }
 
         async Task SnapshotMeasurements(QueryFn state, Action<ObserverItem> post, CancellationToken ct)
         {

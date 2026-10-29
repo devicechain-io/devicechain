@@ -64,6 +64,7 @@ jobs:
         run: |
           python3 -m unittest -v test_board_replay_profile
           python3 -m unittest -v test_acceptance_check
+          python3 -m unittest -v test_binary_fresh
 
       # The take's shot plan is cut from what a recording says happened (the alarm, the command sent, the command done), and the frame check's pixel test.
       - name: Towerpulse take plan tests

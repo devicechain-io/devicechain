@@ -6,7 +6,7 @@
 #
 #   render-take.sh plan   --run-a DIR --run-b DIR            writes tools/take/take-plan.json from what the two recordings say happened
 #   render-take.sh render --run-a DIR --run-b DIR            replays each run through the player's frame renderer and encodes every shot to an mp4
-#   render-take.sh owner  --stills DIR                       the annex owner's part (10 s) from console_stills.py's PNGs: devices, then alarms
+#   render-take.sh owner  --stills DIR                       the annex owner's part (10 s) from console_stills.py's PNGs: the annex board with data, then devices, then alarms
 #   render-take.sh cut    [--owner-clip FILE]                joins the shots (and the console's part, if there is one) into the 90-second cut
 #   render-take.sh loop                                      the 25-second website loop, from the same footage, as mp4 and webp
 #   render-take.sh sheet                                     a contact sheet of sampled frames, one row per shot
@@ -119,11 +119,21 @@ cmd_cut() {
 
 cmd_owner() {
 	need ffmpeg
-	[ -f "$STILLS/annex-owner-devices.png" ] && [ -f "$STILLS/annex-owner-alarms.png" ] || die "--stills must hold annex-owner-devices.png and annex-owner-alarms.png (tools/console_stills.py)"
-	local font="C\:/Windows/Fonts/segoeuib.ttf" cap
-	cap="Console capture  -  the annex owner signs in. Seven of the thirty-one devices, and only the annex alarm"
-	ffmpeg -nostdin -loglevel error -y -loop 1 -t 5 -framerate "$FPS" -i "$STILLS/annex-owner-devices.png" -loop 1 -t 5 -framerate "$FPS" -i "$STILLS/annex-owner-alarms.png" -filter_complex 		"[0:v][1:v]concat=n=2:v=1:a=0,scale=$WIDTH:$HEIGHT,format=yuv420p,drawbox=x=0:y=ih-110:w=iw:h=110:color=0x101820@0.92:t=fill,drawtext=fontfile='$font':text='$cap':fontcolor=white:fontsize=34:x=40:y=h-72,fade=t=in:st=0:d=0.3,fade=t=out:st=9.7:d=0.3[v]" -map "[v]" -c:v libx264 -pix_fmt yuv420p -crf 17 -r "$FPS" "$OUT/owner.mp4"
+	[ -f "$STILLS/annex-owner-board.png" ] && [ -f "$STILLS/annex-owner-devices.png" ] && [ -f "$STILLS/annex-owner-alarms.png" ] || die "--stills must hold annex-owner-board.png, annex-owner-devices.png and annex-owner-alarms.png (tools/console_stills.py)"
+	local font="C\:/Windows/Fonts/segoeuib.ttf" cap pan
+	cap="Console capture  -  the annex owner sees seven of thirty-one devices, only the annex alarm"
+	# the board is a tall image (1920x2320): a 1080-high window drifts down it for 5 s, from just under the page header (the owner is a viewer; nothing to edit is shown) to the bottom
+	pan="crop=w=1920:h=1080:x=0:y='140+(ih-1080-140)*min(t/5\,1)'"
+	ffmpeg -nostdin -loglevel error -y -loop 1 -t 5 -framerate "$FPS" -i "$STILLS/annex-owner-board.png" -loop 1 -t 2.5 -framerate "$FPS" -i "$STILLS/annex-owner-devices.png" -loop 1 -t 2.5 -framerate "$FPS" -i "$STILLS/annex-owner-alarms.png" -filter_complex 		"[0:v]${pan}[b];[b][1:v][2:v]concat=n=3:v=1:a=0,scale=$WIDTH:$HEIGHT,format=yuv420p,drawbox=x=0:y=ih-110:w=iw:h=110:color=0x101820@0.92:t=fill,drawtext=fontfile='$font':text='$cap':fontcolor=white:fontsize=34:x=40:y=h-72,fade=t=in:st=0:d=0.3,fade=t=out:st=9.7:d=0.3[v]" -map "[v]" -c:v libx264 -pix_fmt yuv420p -crf 17 -r "$FPS" "$OUT/owner.mp4"
 	log "owner clip -> $OUT/owner.mp4"
+	# four frames for the contact sheet, kept apart from the plan's shots (the frame check reads only those)
+	rm -rf "$OUT/owner-samples"
+	mkdir -p "$OUT/owner-samples"
+	local t k=0
+	for t in 1 3.5 6 8.5; do
+		ffmpeg -nostdin -loglevel error -y -ss "$t" -i "$OUT/owner.mp4" -frames:v 1 -q:v 3 "$OUT/owner-samples/frame_$k.jpg"
+		k=$((k + 1))
+	done
 }
 
 # The loop: five pieces of the SAME footage that run forward in each recorded run, opening and closing on the wide campus, and a half-second
@@ -172,7 +182,13 @@ cmd_sheet() {
 		[ "$n" -gt 0 ] || continue
 		for k in 0 $((n / 3)) $((2 * n / 3)) $((n - 1)); do printf "file '%s'\nduration 1\n" "$(win "${frames[$k]}")" >>"$list"; done
 	done < <("$PY" -I -c 'import json,sys; [print(s["id"]) for s in json.load(open(sys.argv[1]))["shots"]]' "$PLAN" | tr -d '\015')
-	ffmpeg -nostdin -loglevel error -y -f concat -safe 0 -i "$list" -vf "fps=1,scale=480:-2,tile=4x8:padding=4:margin=4:color=0x20242c" -frames:v 1 -q:v 3 "$OUT/contact-sheet.jpg"
+	# the console's part, if it has been cut: one more row
+	if [ -f "$OUT/owner-samples/frame_0.jpg" ]; then
+		for k in 0 1 2 3; do printf "file '%s'
+duration 1
+" "$(win "$OUT/owner-samples/frame_$k.jpg")" >>"$list"; done
+	fi
+	ffmpeg -nostdin -loglevel error -y -f concat -safe 0 -i "$list" -vf "fps=1,scale=480:-2,tile=4x9:padding=4:margin=4:color=0x20242c" -frames:v 1 -q:v 3 "$OUT/contact-sheet.jpg"
 	log "contact sheet -> $OUT/contact-sheet.jpg"
 }
 

@@ -1296,6 +1296,7 @@ dcctl sim create <name> [flags]
       --mqtt-insecure        skip verification of the MQTT gateway's certificate (defaults ON without --tls, since a local bring-up's gateway cert is self-signed; pass --mqtt-insecure=false to force verification)
       --seed int             deterministic generation seed for the sim's populations (default 1)
       --shed-priority int    shed-priority override 1-100 (0 = inherit the tier's); a load-test lever to place a probe tenant in a shed band
+      --tenant-name string   the tenant's display name, as the console shows it (default: the scenario's own, else "<sim> (sim)")
       --tier string          tenant tier to package the sim at (default "silver")
 ```
 

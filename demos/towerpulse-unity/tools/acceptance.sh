@@ -38,7 +38,9 @@
 #   TP_MQTT         the broker devices dial (default ssl://localhost:11883)
 #   TP_INGRESS      the device HTTP ingress (default http://localhost:18081; a port-forward to svc/event-sources:8081 is made if nothing answers)
 #   TP_TIER         the tenant tier         (default tp-showcase)
-#   DCCTL, SIMULATOR   the binaries (default dcctl.exe / dc-simulator.exe next to $TP_BIN or on PATH)
+#   DCCTL, SIMULATOR   the binaries. Unset (the default), both are BUILT from this tree into Build/bin/ at the start of every run. A binary you name is
+#                      used only if binary_fresh.py finds it newer than every source it is built from; a stale one is refused, because a take
+#                      recorded by a simulator older than the tree shows a platform the tree no longer is.
 #   TP_START_A, TP_START_B   model start hours (default 13.9 and 16.43)
 #   UNITY_EVAL      for --build editor: a command called as `$UNITY_EVAL tp_build.cs <seconds>` that evaluates EditorScratch/tp_build.cs in the open Editor
 #
@@ -61,8 +63,9 @@ START_B="${TP_START_B:-16.43}"
 NS="dci-${INSTANCE}"
 RUNNER="http://127.0.0.1:8090"
 PLAYER="$PROJECT/Build/Towerpulse.exe"
-DCCTL="${DCCTL:-dcctl}"
-SIMULATOR="${SIMULATOR:-dc-simulator}"
+DCCTL="${DCCTL:-}"
+SIMULATOR="${SIMULATOR:-}"
+BIN_DIR="$PROJECT/Build/bin"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 OUT_ROOT="$PROJECT/Build/acceptance"
 BUILD=none
@@ -86,6 +89,32 @@ done
 [ ${#MODES[@]} -gt 0 ] || MODES=(control rule-disabled)
 
 # ---------------------------------------------------------------------------
+# the binaries: built from this tree, or proven newer than it
+# ---------------------------------------------------------------------------
+# dcctl embeds the chart and the operator manifests (deploy/) and links core; dc-simulator links core. Either's sources changing makes a binary stale.
+prepare_binaries() {
+	command -v go >/dev/null || die "go is required to build dcctl and dc-simulator from this tree"
+	mkdir -p "$BIN_DIR"
+	if [ -z "$DCCTL" ]; then
+		make -C "$REPO/backend/cli" build BUILDDIR="$BIN_DIR" >/dev/null || die "could not build dcctl from this tree"
+		DCCTL="$BIN_DIR/dcctl.exe"
+	fi
+	if [ -z "$SIMULATOR" ]; then
+		# not `make build`: its output has no .exe suffix, which dcctl cannot launch on Windows
+		(cd "$REPO/backend/sims/dc-simulator" && go build -o "$BIN_DIR/dc-simulator.exe" .) || die "could not build dc-simulator from this tree"
+		SIMULATOR="$BIN_DIR/dc-simulator.exe"
+	fi
+	[ -f "$DCCTL" ] || [ -f "$DCCTL.exe" ] || die "dcctl not found at $DCCTL"
+	local d s
+	d="$DCCTL"; [ -f "$d" ] || d="$DCCTL.exe"
+	s="$SIMULATOR"; [ -f "$s" ] || s="$SIMULATOR.exe"
+	[ -f "$s" ] || die "dc-simulator not found at $SIMULATOR"
+	"$PY" -I "$HERE/binary_fresh.py" "$d" "$REPO/backend/cli" "$REPO/backend/core" "$REPO/deploy" || die "dcctl is stale: unset DCCTL to build it from this tree"
+	"$PY" -I "$HERE/binary_fresh.py" "$s" "$REPO/backend/sims/dc-simulator" "$REPO/backend/core" || die "dc-simulator is stale: unset SIMULATOR to build it from this tree"
+	log "binaries current with the tree: $(basename "$d"), $(basename "$s")"
+}
+
+# ---------------------------------------------------------------------------
 # preflight
 # ---------------------------------------------------------------------------
 preflight() {
@@ -93,8 +122,7 @@ preflight() {
 	command -v kubectl >/dev/null || die "kubectl is required"
 	command -v python >/dev/null || command -v python3 >/dev/null || die "python is required"
 	PY="$(command -v python3 || command -v python)"
-	command -v "$DCCTL" >/dev/null || die "dcctl not found (set DCCTL)"
-	command -v "$SIMULATOR" >/dev/null || die "dc-simulator not found (set SIMULATOR)"
+	prepare_binaries
 	TP_KUBECONFIG="$KUBECONFIG" "$HERE/live-env.sh" status >/dev/null || die "the cluster is not fully up (run tools/live-env.sh status)"
 	[ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "$RUNNER/status" || true)" != 200 ] || die "something already answers $RUNNER: stop that sim's runner first"
 	[ -z "$(player_pids)" ] || die "a Towerpulse player is already running (pid $(player_pids | tr '\n' ' ')): two players with the same client ids evict each other"
