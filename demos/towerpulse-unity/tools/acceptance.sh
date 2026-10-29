@@ -169,7 +169,7 @@ launch_player() { # launch_player <hour> <label> <record-dir> <quit-file> <log-f
 }
 
 end_player() { # end_player <quit-file>
-	echo done >"$1"
+	echo "done" >"$1"
 	local _ alive
 	for _ in $(seq 1 40); do
 		sleep 3
@@ -181,7 +181,7 @@ end_player() { # end_player <quit-file>
 	PLAYER_PID=""
 }
 
-latest_run() { ls -1d "$1"/run-* 2>/dev/null | sort | tail -1; }
+latest_run() { find "$1" -maxdepth 1 -type d -name 'run-*' | sort | tail -1; }
 
 run_mode() {
 	local mode="$1" ev short
