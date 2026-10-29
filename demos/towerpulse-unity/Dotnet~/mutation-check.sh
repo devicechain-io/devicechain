@@ -17,7 +17,7 @@ set -uo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 scripts="$here/../Assets/Towerpulse/Scripts"
 # every file a mutant touches is backed up whole and restored on exit
-files=(Model/BuildingModel.cs Plane/CommandEngine.cs Plane/Readings.cs Plane/Vocabulary.cs)
+files=(Model/BuildingModel.cs Plane/CommandEngine.cs Plane/Readings.cs Plane/Vocabulary.cs Story/CommandCard.cs Story/TintRamp.cs Story/MotionLook.cs Story/ShotFile.cs)
 backups="$(mktemp -d)"
 for f in "${files[@]}"; do mkdir -p "$backups/$(dirname "$f")"; cp "$scripts/$f" "$backups/$f"; done
 restore() { for f in "${files[@]}"; do cp "$backups/$f" "$scripts/$f"; done; }
@@ -44,6 +44,15 @@ mutants=(
   "Plane/Vocabulary.cs|plane: setpoint ceiling wider than the profile|SetpointMax = 28;|SetpointMax = 35;"
   "Plane/CommandEngine.cs|plane: a fractional boost accepted|whole && v != Math.Floor(v)|false && v != Math.Floor(v)"
   "Plane/Readings.cs|plane: a tripped chiller keeps reporting|if (!c.Online) return null;|"
+  "Story/CommandCard.cs|card: delivered counts as done|public bool Done { get { return Outcome == CardOutcome.Successful; } }|public bool Done { get { return Delivered; } }"
+  "Story/CommandCard.cs|card: a stage reached again is overwritten|if (has[i]) return;|"
+  "Story/CommandCard.cs|card: a later word rewrites the terminal one|if (Terminal) return;|"
+  "Story/TintRamp.cs|tint: the cool side scaled like the warm side|double w = dev < 0 ? dev / CoolSpanC : dev / WarmSpanC;|double w = dev / WarmSpanC;"
+  "Story/MotionLook.cs|lamp: silence drawn as a stop|if (reading == null) return LampState.NotReporting;|if (reading == null) return LampState.Stopped;"
+  "Story/MotionLook.cs|fans: a stopped chiller still spins|return running ? ChillerDegPerS : 0;|return ChillerDegPerS;"
+  "Story/MotionLook.cs|label: real time reads as accelerated|modelSpeed <= 1.0000001) return null;|modelSpeed < 0.5) return null;"
+  "Story/ShotFile.cs|shots: a misspelled key is ignored|foreach (var k in o.Keys) if (!known.Contains(k))|foreach (var k in o.Keys) if (false)"
+  "Story/ShotFile.cs|shots: overlapping shots are accepted|if (shot.StartS < prev.EndS - 1e-9)|if (false)"
 )
 for m in "${mutants[@]}"; do
   IFS='|' read -r file label from to <<<"$m"

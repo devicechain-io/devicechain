@@ -80,6 +80,13 @@
         "dependencies": {
           "DeviceChain.Towerpulse.Model": "[1.0.0, )"
         }
+      },
+      "devicechain.towerpulse.story": {
+        "type": "Project",
+        "dependencies": {
+          "DeviceChain.Towerpulse.Model": "[1.0.0, )",
+          "DeviceChain.Towerpulse.Plane": "[1.0.0, )"
+        }
       }
     }
   }

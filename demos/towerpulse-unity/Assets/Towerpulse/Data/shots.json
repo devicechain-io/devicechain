@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "note": "Camera moves for the 90-second storyboard. Metres, X east, Y up, Z north. Times are show seconds.",
+  "shots": [
+    {
+      "id": "dusk-establishing", "beat": "1 Establish", "caption": "A working campus at dusk",
+      "startS": 0, "durationS": 12, "ease": "smooth", "cards": [],
+      "from": { "pos": [58, 30, -62], "look": [4, 7, -2], "fov": 38 },
+      "to":   { "pos": [50, 26, -50], "look": [4, 8, -2], "fov": 36 }
+    },
+    {
+      "id": "f4-east-push-in", "beat": "2 A hot room", "caption": "Tower F4 East: fourteen people, sun on the glass",
+      "startS": 12, "durationS": 40, "ease": "smooth", "cards": ["zone", "alarm", "command"],
+      "from": { "pos": [46, 22, -26], "look": [27, 12, 8], "fov": 38 },
+      "to":   { "pos": [36, 15.5, -14], "look": [27.5, 12.8, 8], "fov": 30 }
+    },
+    {
+      "id": "chiller-close-up", "beat": "3 A silent chiller", "caption": "Annex chiller: the platform notices the silence",
+      "startS": 52, "durationS": 26, "ease": "smooth", "cards": ["chiller", "alarm", "command"],
+      "from": { "pos": [-3, 9, -30], "look": [-17, 2, -10], "fov": 40 },
+      "to":   { "pos": [-9, 4, -21], "look": [-17, 1.6, -10], "fov": 34 }
+    },
+    {
+      "id": "pull-back", "beat": "4 Pull back", "caption": "Thirty-one devices, one campus",
+      "startS": 78, "durationS": 12, "ease": "smooth", "cards": [],
+      "from": { "pos": [-9, 4, -21], "look": [-17, 1.6, -10], "fov": 34 },
+      "to":   { "pos": [60, 32, -64], "look": [4, 7, -2], "fov": 40 }
+    }
+  ]
+}

@@ -22,6 +22,7 @@
   <ItemGroup>
     <ProjectReference Include="../Model/DeviceChain.Towerpulse.Model.csproj" />
     <ProjectReference Include="../Plane/DeviceChain.Towerpulse.Plane.csproj" />
+    <ProjectReference Include="../Story/DeviceChain.Towerpulse.Story.csproj" />
   </ItemGroup>
 
   <ItemGroup>

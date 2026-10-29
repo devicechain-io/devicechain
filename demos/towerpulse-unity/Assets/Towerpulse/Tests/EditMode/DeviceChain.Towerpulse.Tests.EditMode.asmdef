@@ -4,6 +4,7 @@
     "references": [
         "DeviceChain.Towerpulse.Model",
         "DeviceChain.Towerpulse.Plane",
+        "DeviceChain.Towerpulse.Story",
         "UnityEngine.TestRunner",
         "UnityEditor.TestRunner"
     ],

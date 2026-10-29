@@ -36,9 +36,11 @@ namespace DeviceChain.Towerpulse.DevicePlane
         readonly CancellationTokenSource cts = new CancellationTokenSource();
         double lastPublishWall = double.NegativeInfinity;
         int shutDown;
+        readonly CommandLedger ledger;
 
-        public PlaneRunner(TowerPlane plane, ReadinessBoard board, DeviceCredentials credentials, IDeviceLinkFactory factory, double publishIntervalSeconds = 10)
+        public PlaneRunner(TowerPlane plane, ReadinessBoard board, DeviceCredentials credentials, IDeviceLinkFactory factory, double publishIntervalSeconds = 10, CommandLedger ledger = null)
         {
+            this.ledger = ledger;
             this.plane = plane ?? throw new ArgumentNullException(nameof(plane));
             this.board = board ?? throw new ArgumentNullException(nameof(board));
             this.credentials = credentials ?? throw new ArgumentNullException(nameof(credentials));
@@ -107,9 +109,11 @@ namespace DeviceChain.Towerpulse.DevicePlane
             {
                 var item = cmd;
                 board.SetCommand(item.Device.ExternalId, item.Name + " received");
+                ledger?.Received(item.Token, item.Device.ExternalId, item.Name, plane.Model.TimeS);
                 plane.Commands.Submit(item.Device, item.Token, item.Name, item.Args, r =>
                 {
                     board.SetCommand(item.Device.ExternalId, item.Name + (r.Success ? " SUCCESSFUL" : " FAILED: " + r.Reason));
+                    ledger?.Answered(item.Token, r.Success, r.Reason, plane.Model.TimeS);
                     item.Outcome.TrySetResult(r.Success ? CommandOutcome.Succeeded(r.Reason) : CommandOutcome.Failed(r.Reason));
                 });
             }
