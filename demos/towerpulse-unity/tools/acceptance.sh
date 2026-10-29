@@ -171,7 +171,8 @@ end_player() { # end_player <quit-file>
 latest_run() { ls -1d "$1"/run-* 2>/dev/null | sort | tail -1; }
 
 run_mode() {
-	local mode="$1" ev="$OUT_ROOT/$STAMP-$mode" short
+	local mode="$1" ev short
+	ev="$OUT_ROOT/$STAMP-$mode"
 	short="$([ "$mode" = control ] && echo c || echo r)"
 	SIM_NAME="tp-acc-$short-$(date -u +%m%d%H%M)"
 	mkdir -p "$ev/recordings" "$ev/logs"
