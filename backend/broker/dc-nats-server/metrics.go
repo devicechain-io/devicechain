@@ -4,6 +4,8 @@
 package main
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"net/http"
 	"runtime/debug"
@@ -35,9 +37,12 @@ type brokerMetrics struct {
 	// 0 on a TLS listener is the reload trap having fired — or a probe that could not tell, which
 	// is reported the same way on purpose: the device certificate path cannot be confirmed.
 	clientAuthRequest atomic.Int32
-	probeErrors       atomic.Uint64
-	probes            atomic.Uint64
-	build             string
+	// certNotAfter is the expiry (Unix seconds) of the MQTT certificate the listener hands out now;
+	// 0 without MQTT TLS. The server's own /varz tls_cert_not_after is stale after a hot swap.
+	certNotAfter atomic.Int64
+	probeErrors  atomic.Uint64
+	probes       atomic.Uint64
+	build        string
 }
 
 func newBrokerMetrics() *brokerMetrics {
@@ -72,10 +77,25 @@ func (m *brokerMetrics) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 	fmt.Fprintf(w, "# HELP dc_broker_mqtt_client_auth_request 1 when the MQTT listener was last seen requesting a client certificate in its TLS handshake.\n")
 	fmt.Fprintf(w, "# TYPE dc_broker_mqtt_client_auth_request gauge\n")
 	fmt.Fprintf(w, "dc_broker_mqtt_client_auth_request %d\n", m.clientAuthRequest.Load())
+	fmt.Fprintf(w, "# HELP dc_broker_mqtt_tls_cert_not_after_seconds Expiry, in Unix seconds, of the certificate the MQTT listener presents to new connections (0 without TLS). /varz tls_cert_not_after goes stale after a certificate rotation.\n")
+	fmt.Fprintf(w, "# TYPE dc_broker_mqtt_tls_cert_not_after_seconds gauge\n")
+	fmt.Fprintf(w, "dc_broker_mqtt_tls_cert_not_after_seconds %d\n", m.certNotAfter.Load())
 	fmt.Fprintf(w, "# HELP dc_broker_mqtt_client_auth_probes_total Handshakes the broker made with its own MQTT listener to check it requests client certificates.\n")
 	fmt.Fprintf(w, "# TYPE dc_broker_mqtt_client_auth_probes_total counter\n")
 	fmt.Fprintf(w, "dc_broker_mqtt_client_auth_probes_total %d\n", m.probes.Load())
 	fmt.Fprintf(w, "# HELP dc_broker_mqtt_client_auth_probe_errors_total Probes that could not complete a handshake, so could not tell.\n")
 	fmt.Fprintf(w, "# TYPE dc_broker_mqtt_client_auth_probe_errors_total counter\n")
 	fmt.Fprintf(w, "dc_broker_mqtt_client_auth_probe_errors_total %d\n", m.probeErrors.Load())
+}
+
+// notAfter is the expiry of the first certificate of tc, in Unix seconds; 0 when there is none.
+func notAfter(tc *tls.Config) int64 {
+	if tc == nil || len(tc.Certificates) == 0 || len(tc.Certificates[0].Certificate) == 0 {
+		return 0
+	}
+	leaf, err := x509.ParseCertificate(tc.Certificates[0].Certificate[0])
+	if err != nil {
+		return 0
+	}
+	return leaf.NotAfter.Unix()
 }

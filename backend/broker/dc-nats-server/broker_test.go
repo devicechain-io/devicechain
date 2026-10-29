@@ -210,9 +210,10 @@ func TestReloadKeepsClientCertificateRequest(t *testing.T) {
 			r.b.metrics.mqttTLS.Load(), r.b.metrics.clientAuthRequest.Load())
 	}
 
-	// And this binary's reload puts it back. (The full path: upstream's Reload above replaced the
-	// wrapped configs, which only a full reload installs again.)
-	if err := r.b.reloadFull(); err != nil {
+	// And this binary's reload puts it back. Upstream's Reload above came from outside this
+	// binary and replaced the wrapped configs; reload() must notice and take the full path, which
+	// installs them again (a hot swap here would go into the orphaned wrappers and restore nothing).
+	if err := r.b.reload(); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
 	if !r.requested(t) {

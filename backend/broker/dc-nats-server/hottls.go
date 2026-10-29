@@ -31,9 +31,20 @@ import (
 // untouched because nothing reloads; the next handshake presents the new certificate.
 //
 // WHEN IT DOES NOT APPLY, the reload is the full one (and, on a library without the fix above,
-// still drops callout sessions): the config text changed, a CA bundle changed, or a listener whose
-// TLS this file does not wrap is configured (websocket, leafnode, https monitoring: the library
-// installs its own GetConfigForClient on those, which would shadow ours).
+// still drops callout sessions):
+//   - the config text changed, or a CA bundle did;
+//   - a listener this file does not wrap has TLS (websocket and https monitoring install their own
+//     GetConfigForClient, which would shadow ours; leafnode, gateway and their remotes are simply
+//     not covered), or OCSP stapling is configured (unwrappedListener, wrapOptions);
+//   - something other than this binary changed the server's TLS since our last reload: a reload
+//     from outside (the config load time moved), or a hook the server put on a listener's config
+//     (OCSP stapling for a Must-Staple leaf, ocsp_peer). GetConfigForClient returns the config
+//     it is given wholesale, so those hooks, set on the wrapper, would be bypassed: ocsp_peer
+//     verify would fail OPEN. broker.hotAllowed and liveIsOurs check both before every swap.
+//
+// 🔴 THE SERVER'S OWN /varz `tls_cert_not_after` reads the wrapper's frozen first certificate and is
+// STALE after a hot swap (monitor.go). The served certificate's expiry is
+// dc_broker_mqtt_tls_cert_not_after_seconds; use that, not varz, to watch for an expiring leaf.
 //
 // DROP THIS FILE when the library carries the upstream fix: TestFullReloadDropsCalloutSessions is
 // the canary, and fails the day a bump makes the full reload keep sessions.
@@ -69,8 +80,12 @@ type hotTLS struct {
 }
 
 // wrapOptions installs the wrappers into opts and returns the holder. It must run after
-// applyDeviceTLS, so the current MQTT config is the one that requests device certificates.
+// applyDeviceTLS, so the current MQTT config is the one that requests device certificates. It
+// returns nil, wrapping nothing, when the hot path could not be used with these options.
 func wrapOptions(opts *server.Options) *hotTLS {
+	if unwrappedListener(opts) {
+		return nil
+	}
 	h := &hotTLS{}
 	opts.TLSConfig = h.client.wrap(opts.TLSConfig)
 	opts.MQTT.TLSConfig = h.mqtt.wrap(opts.MQTT.TLSConfig)
@@ -78,9 +93,41 @@ func wrapOptions(opts *server.Options) *hotTLS {
 	return h
 }
 
-// unwrappedListener reports whether opts configures TLS on a listener the wrappers do not cover.
+// unwrappedListener reports whether opts configures TLS where the wrappers do not reach, or OCSP.
 func unwrappedListener(opts *server.Options) bool {
-	return opts.Websocket.TLSConfig != nil || opts.LeafNode.TLSConfig != nil || opts.HTTPSPort != 0
+	if opts.OCSPConfig != nil || opts.Websocket.TLSConfig != nil || opts.LeafNode.TLSConfig != nil ||
+		opts.Gateway.TLSConfig != nil || opts.HTTPSPort != 0 {
+		return true
+	}
+	for _, g := range opts.Gateway.Gateways {
+		if g.TLSConfig != nil {
+			return true
+		}
+	}
+	for _, r := range opts.LeafNode.Remotes {
+		if r.TLSConfig != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// liveIsOurs reports whether the TLS configs the server holds are still the wrappers this file
+// installed, carrying no hook the server added: GetCertificate and VerifyConnection are what OCSP
+// stapling and ocsp_peer set, and the MQTT config must still ask for client certificates.
+func liveIsOurs(live *server.Options) bool {
+	for _, c := range []*tls.Config{live.TLSConfig, live.MQTT.TLSConfig, live.Cluster.TLSConfig} {
+		if c == nil {
+			continue
+		}
+		if c.GetConfigForClient == nil || c.GetCertificate != nil || c.VerifyConnection != nil {
+			return false
+		}
+	}
+	if m := live.MQTT.TLSConfig; m != nil && m.ClientAuth == tls.NoClientCert {
+		return false
+	}
+	return true
 }
 
 // swapIfKeyMaterialOnly makes next the current config of each wrapped listener when nothing but

@@ -94,7 +94,7 @@ port() {
 metric() { curl -fsS "http://127.0.0.1:$1/metrics" 2>/dev/null | awk -v n="$2" '$1 == n { print $2 }'; }
 logs() { docker logs "$1" 2>&1; }
 
-# rotate_with_sessions <container> <mqtt addr> <nats url> — holds a fleet of MQTT sessions open,
+# rotate_with_sessions <container> <mqtt addr> <nats url> - holds a fleet of MQTT sessions open,
 # rotates the broker's certificate on disk exactly as a cert-manager renewal does, sends the SIGHUP the
 # chart's config reloader sends, waits until a NEW handshake presents the new certificate, and
 # leaves the number of sessions that were lost in $lost. A rotation that did not take effect
@@ -103,7 +103,8 @@ fleet=30
 rotate_with_sessions() {
   local name="$1" addr="$2" url="$3" want got hp
   rm -f "$work/hold.ready" "$work/hold.stop" "$work/hold.out"
-  "$smoke" hold -dir "$work/pki" -nats "$url" -mqtt "$addr" -n "$fleet"     -ready "$work/hold.ready" -stop "$work/hold.stop" >"$work/hold.out" 2>&1 &
+  "$smoke" hold -dir "$work/pki" -nats "$url" -mqtt "$addr" -n "$fleet" \
+    -ready "$work/hold.ready" -stop "$work/hold.stop" >"$work/hold.out" 2>&1 &
   hp=$!
   for _ in $(seq 1 120); do [ -e "$work/hold.ready" ] && break; sleep 0.5; done
   [ -e "$work/hold.ready" ] || { cat "$work/hold.out"; kill "$hp" 2>/dev/null || true; fail "$name: $fleet sessions did not open"; }

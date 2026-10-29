@@ -39,6 +39,14 @@ type broker struct {
 	// hot swaps key material without a reload, and digest is the config the server runs (hottls.go).
 	hot    *hotTLS
 	digest string
+	// live is the options value the server was last handed (at start, or by our last full reload);
+	// the hot path reads the TLS configs in it to check nothing but this binary changed them.
+	live *server.Options
+	// lastLoad is the server's config load time as of our last reload (or start). A reload from
+	// outside this binary moves it (see reloadWith), and the hot path then stands down.
+	lastLoad time.Time
+	// hotSwaps counts reloads served by the hot path; tests read it.
+	hotSwaps atomic.Uint64
 
 	// ldm records that lame duck mode was requested. Upstream's SIGTERM handler reads the
 	// server's own (unexported) flag; see signals_unix.go for why this one is equivalent.
@@ -60,8 +68,42 @@ func prepareOptions(opts *server.Options) *hotTLS {
 // newBroker takes the options the server was created from. hot is what wrapOptions returned for
 // them, or nil, in which case every reload is the full one.
 func newBroker(s *server.Server, opts *server.Options, m *brokerMetrics, hot *hotTLS) *broker {
-	return &broker{s: s, configFile: opts.ConfigFile, metrics: m, mqttTLS: opts.MQTT.TLSConfig,
-		hot: hot, digest: opts.ConfigDigest()}
+	b := &broker{s: s, configFile: opts.ConfigFile, metrics: m, mqttTLS: opts.MQTT.TLSConfig,
+		hot: hot, digest: opts.ConfigDigest(), live: opts}
+	// Zero when unknown, which keeps the hot path off: it is allowed only when the load time is
+	// known and unmoved.
+	b.lastLoad, _ = b.configLoadTime()
+	return b
+}
+
+// configLoadTime is when the server last loaded its configuration (start, or any reload by anyone).
+func (b *broker) configLoadTime() (time.Time, bool) {
+	vz, err := b.s.Varz(nil)
+	if err != nil || vz.ConfigLoadTime.IsZero() {
+		return time.Time{}, false
+	}
+	return vz.ConfigLoadTime, true
+}
+
+// hotAllowed reports whether a key-material-only reload may skip the server. It is false when
+// anything but this binary has touched the server's TLS since our last reload:
+//
+//   - a reload from outside: $SYS.REQ.SERVER.<id>.RELOAD calls Server.Reload itself, which installs
+//     raw configs (the wrappers and the certificate request are gone) and moves the config load
+//     time. Swapping into the orphaned wrappers would be silent: no error, and every later
+//     rotation swallowed until the certificate expired. The system login is held away from that
+//     request (applyDeviceTLS), but this does not rely on it;
+//   - a hook the server installed on a listener's config since (OCSP stapling and ocsp_peer set
+//     GetCertificate / VerifyConnection on the config they apply): the config GetConfigForClient
+//     hands out would bypass them.
+func (b *broker) hotAllowed() bool {
+	if b.hot == nil || b.live == nil || b.lastLoad.IsZero() {
+		return false
+	}
+	if lt, ok := b.configLoadTime(); !ok || !lt.Equal(b.lastLoad) {
+		return false
+	}
+	return liveIsOurs(b.live)
 }
 
 // reload is the SIGHUP path. On success the server runs the new options, so the probe follows
@@ -88,20 +130,21 @@ func (b *broker) reloadWith(allowHot bool) error {
 	digest := newOpts.ConfigDigest()
 	// What the probe follows is the config the listener hands out, not its wrapper.
 	next := newOpts.MQTT.TLSConfig
-	if allowHot && b.hot != nil && digest != "" && digest == b.digest && b.hot.swapIfKeyMaterialOnly(newOpts) {
+	if allowHot && digest != "" && digest == b.digest && b.hotAllowed() && b.hot.swapIfKeyMaterialOnly(newOpts) {
 		b.mqttTLS = next
+		b.hotSwaps.Add(1)
 		b.s.Noticef("Reloaded server configuration (TLS key material only; no connection was closed)")
 		return nil
 	}
-	hot := b.hot
-	if hot != nil {
-		// A new options value carries new configs: wrap them, so the next rotation can be hot.
-		hot = wrapOptions(newOpts)
-	}
+	// A new options value carries new configs: wrap them, so the next rotation can be hot. Nil when
+	// they cannot be (hottls.go says when), and then every reload is the full one.
+	hot := wrapOptions(newOpts)
+	next = newOpts.MQTT.TLSConfig
 	if err := b.s.ReloadOptions(newOpts); err != nil {
 		return err
 	}
-	b.hot, b.digest, b.mqttTLS = hot, digest, next
+	b.hot, b.digest, b.mqttTLS, b.live = hot, digest, next, newOpts
+	b.lastLoad, _ = b.configLoadTime()
 	return nil
 }
 
@@ -117,6 +160,7 @@ func (b *broker) check() {
 	tc := b.mqttTLS
 	b.mu.Unlock()
 
+	b.metrics.certNotAfter.Store(notAfter(tc))
 	b.metrics.probes.Add(1)
 	requested, err := probeClientAuth(b.s, tc)
 	switch {
