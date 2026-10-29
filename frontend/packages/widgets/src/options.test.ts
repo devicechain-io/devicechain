@@ -136,6 +136,8 @@ const SHARED_KEY_TYPES: Record<string, readonly WidgetType[]> = {
   selectionTarget: ['alarm-table', 'entity-selector'],
   // aggregate-feed.tsx asks for the trend's buckets when the stat card is set to draw one.
   sparkline: ['stat-card'],
+  // binding-policy.ts: a stat card showing the latest reading takes the stored history as a seed.
+  stat: ['stat-card'],
   // binding-policy.ts and event-markers-feed.tsx read which markers the timeseries chart draws.
   markAlarms: ['timeseries-chart'],
   markAlarmsScope: ['timeseries-chart'],

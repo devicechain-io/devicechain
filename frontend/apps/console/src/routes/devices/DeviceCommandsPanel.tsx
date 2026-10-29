@@ -76,7 +76,18 @@ const pageSize = 25;
 // device's command-execution audit trail. It loads independently of the rest of
 // the page: if the tenant's role lacks command:read the query errors and this
 // panel shows an ErrorState rather than breaking the page.
-export function DeviceCommandsPanel({ deviceToken }: { deviceToken: string }) {
+// `canIssue` is command:write (a customer user holding it may send to their devices);
+// `canCancel` is the same authority without a scope, because cancelling is refused to a
+// member limited to part of the tenant.
+export function DeviceCommandsPanel({
+  deviceToken,
+  canIssue,
+  canCancel,
+}: {
+  deviceToken: string;
+  canIssue: boolean;
+  canCancel: boolean;
+}) {
   const { t } = useTranslation('devices');
   const { toast } = useToast();
   const [name, setName] = useState('');
@@ -263,7 +274,7 @@ export function DeviceCommandsPanel({ deviceToken }: { deviceToken: string }) {
       <HeldWhileDisabledNotice deviceToken={deviceToken} reloadKey={version} onCancelled={reload} />
 
       {/* Issue form. A command:write failure surfaces as a toast on submit. */}
-      <div className="space-y-3">
+      {canIssue && <div className="space-y-3">
         {vocabularyLoading ? (
           <HintText>{t('loadingDeviceCommands')}</HintText>
         ) : constrained ? (
@@ -360,7 +371,7 @@ export function DeviceCommandsPanel({ deviceToken }: { deviceToken: string }) {
         >
           <Send size={14} /> {t('issueCommand')}
         </Button>
-      </div>
+      </div>}
 
       {/* History / audit trail. */}
       {loading ? (
@@ -417,7 +428,7 @@ export function DeviceCommandsPanel({ deviceToken }: { deviceToken: string }) {
                   {command.error || command.responsePayload || '—'}
                 </DataTableCell>
                 <DataTableCell className="text-right">
-                  {isCancellableCommandStatus(command.status) && (
+                  {canCancel && isCancellableCommandStatus(command.status) && (
                     <Button variant="outline" size="sm" onClick={() => cancel(command)}>
                       {t('cancel')}
                     </Button>

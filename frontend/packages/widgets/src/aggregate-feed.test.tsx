@@ -535,3 +535,51 @@ describe('a stat card set to draw its trend', () => {
     expect(f.read.mock.calls[1][1].intervalSeconds).toBe(60);
   });
 });
+
+describe('a card showing the latest reading', () => {
+  // The board hands the card the newest stored bucket as its seed (see dashboard-renderer-seeds): a
+  // device that reports every few minutes would otherwise leave the card saying there is no data
+  // for as long as its next report is away, with its readings already stored.
+  const seed = (value: number, secondsAgo: number): MeasurementSample => ({
+    id: 's',
+    deviceToken: 'd-1',
+    eventType: 0,
+    occurredTime: new Date(NOW - secondsAgo * 1000).toISOString(),
+    name: 'temperature',
+    value,
+    classifier: null,
+    bucketSeconds: 60,
+  });
+  const mountLast = (hub: DashboardHub, initialSamples?: MeasurementSample[]) =>
+    render(
+      <WidgetTimeRangeProvider range={live(3600)}>
+        <ConnectedWidget widget={widget({ stat: 'last', precision: 1 })} hub={hub} initialSamples={initialSamples} />
+      </WidgetTimeRangeProvider>,
+    );
+
+  it('shows the stored reading before any live one arrives', async () => {
+    const f = makeHub(() => []);
+    mountLast(f.hub, [seed(7.5, 20)]);
+    await settle();
+    expect(figure()).toBe('7.5');
+  });
+
+  it('says there is no data without a seed or a live reading', async () => {
+    const f = makeHub(() => []);
+    mountLast(f.hub);
+    await advance(2000);
+    expect(figure()).toBeUndefined();
+    expect(document.querySelector('[data-empty-state="no-data"]')).not.toBeNull();
+  });
+
+  it('gives way to a live reading', async () => {
+    const f = makeHub(() => []);
+    mountLast(f.hub, [seed(7.5, 20)]);
+    await settle();
+    f.push({
+      id: 'm1', deviceToken: 'd-1', eventType: 2, name: 'temperature', value: 9.25, classifier: null,
+      occurredTime: new Date(NOW).toISOString(),
+    });
+    expect(figure()).toBe('9.3');
+  });
+});

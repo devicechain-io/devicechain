@@ -92,7 +92,7 @@ async function pick(label: string) {
 describe('the Sparkplug write form', () => {
   it('replaces the generated form for sparkplug.write and sends the typed metric and value', async () => {
     const created = install();
-    render(<DeviceCommandsPanel deviceToken="valve-1" />);
+    render(<DeviceCommandsPanel deviceToken="valve-1" canIssue canCancel />);
     await pick('Write metric (sparkplug.write)');
 
     fireEvent.change(await screen.findByLabelText('Metric'), { target: { value: 'Outputs/Valve1' } });
@@ -108,7 +108,7 @@ describe('the Sparkplug write form', () => {
 
   it('sends the value as text when asked to, so a String metric can hold "true"', async () => {
     const created = install();
-    render(<DeviceCommandsPanel deviceToken="valve-1" />);
+    render(<DeviceCommandsPanel deviceToken="valve-1" canIssue canCancel />);
     await pick('Write metric (sparkplug.write)');
 
     fireEvent.change(await screen.findByLabelText('Metric'), { target: { value: 'Mode' } });
@@ -122,7 +122,7 @@ describe('the Sparkplug write form', () => {
 
   it('names a missing metric and sends nothing', async () => {
     const created = install();
-    render(<DeviceCommandsPanel deviceToken="valve-1" />);
+    render(<DeviceCommandsPanel deviceToken="valve-1" canIssue canCancel />);
     await pick('Write metric (sparkplug.write)');
 
     fireEvent.change(await screen.findByLabelText('Value'), { target: { value: '5' } });
@@ -135,7 +135,7 @@ describe('the Sparkplug write form', () => {
 
   it('is not shown for any other command', async () => {
     install();
-    render(<DeviceCommandsPanel deviceToken="valve-1" />);
+    render(<DeviceCommandsPanel deviceToken="valve-1" canIssue canCancel />);
     await pick('Rebirth (sparkplug.rebirth)');
     expect(screen.queryByTestId('sparkplug-write-form')).toBeNull();
     await pick('Write metric (sparkplug.write)');
@@ -158,7 +158,7 @@ describe('the Sparkplug outcome help', () => {
 
   it('explains a confirmed write as a report, not as proof the command acted', async () => {
     install([row('sparkplug.write', 'SUCCESSFUL', confirmed)]);
-    render(<DeviceCommandsPanel deviceToken="valve-1" />);
+    render(<DeviceCommandsPanel deviceToken="valve-1" canIssue canCancel />);
     const note = await screen.findByTestId('sparkplug-outcome');
     expect(note.textContent).toContain('Confirmed by the node');
     expect(note.textContent).toContain('Outputs/Valve1 = true');
@@ -172,7 +172,7 @@ describe('the Sparkplug outcome help', () => {
       kind: 'write', reason: 'unchanged', metric: 'Outputs/Valve1', value: true, via: 'UNCHANGED', since: '2026-10-27T11:00:00Z', hostRole: 'primary',
     });
     install([row('sparkplug.write', 'SUCCESSFUL', unchanged)]);
-    render(<DeviceCommandsPanel deviceToken="valve-1" />);
+    render(<DeviceCommandsPanel deviceToken="valve-1" canIssue canCancel />);
     const note = await screen.findByTestId('sparkplug-outcome');
     expect(note.textContent).toContain('Already at the value');
     expect(note.textContent).toContain('did not see the node act on this command');
@@ -181,7 +181,7 @@ describe('the Sparkplug outcome help', () => {
 
   it('says a timeout is not a failure and that Sparkplug has no acknowledgement', async () => {
     install([row('sparkplug.write', 'TIMEOUT', reasonPayload('unconfirmed_timeout'), WINDOW_ERROR)]);
-    render(<DeviceCommandsPanel deviceToken="valve-1" />);
+    render(<DeviceCommandsPanel deviceToken="valve-1" canIssue canCancel />);
     const note = await screen.findByTestId('sparkplug-outcome');
     expect(note.textContent).toContain('Not confirmed');
     expect(note.textContent).toContain('no acknowledgement');
@@ -192,7 +192,7 @@ describe('the Sparkplug outcome help', () => {
       row('sparkplug.write', 'TIMEOUT', reasonPayload('superseded'), 'superseded by tok-9 before it was confirmed'),
       { ...row('sparkplug.write', 'TIMEOUT', reasonPayload('session_dropped'), 'broker disconnected immediately after the publish; likely refused'), id: 'b', token: 'b' },
     ]);
-    render(<DeviceCommandsPanel deviceToken="valve-1" />);
+    render(<DeviceCommandsPanel deviceToken="valve-1" canIssue canCancel />);
     const notes = await screen.findAllByTestId('sparkplug-outcome');
     const text = notes.map((n) => n.textContent).join('|');
     expect(text).toContain('Replaced by a newer write');
@@ -202,14 +202,14 @@ describe('the Sparkplug outcome help', () => {
 
   it('says a SENT command is still waiting', async () => {
     install([row('sparkplug.write', 'SENT')]);
-    render(<DeviceCommandsPanel deviceToken="valve-1" />);
+    render(<DeviceCommandsPanel deviceToken="valve-1" canIssue canCancel />);
     expect((await screen.findByTestId('sparkplug-outcome')).textContent).toContain('Waiting for the node');
   });
 
   it('warns when the confirming host was a secondary host', async () => {
     const secondary = JSON.stringify({ kind: 'write', reason: 'confirmed', metric: 'm', value: 1, via: 'DDATA', hostRole: 'secondary' });
     install([row('sparkplug.write', 'SUCCESSFUL', secondary)]);
-    render(<DeviceCommandsPanel deviceToken="valve-1" />);
+    render(<DeviceCommandsPanel deviceToken="valve-1" canIssue canCancel />);
     const warning = await screen.findByTestId('sparkplug-secondary-host');
     expect(warning.textContent).toContain('Sent by a secondary host');
     expect(warning.textContent).toContain("only the nodes' primary host");
@@ -217,7 +217,7 @@ describe('the Sparkplug outcome help', () => {
 
   it('adds nothing under a command that is not a Sparkplug command', async () => {
     install([row('reboot', 'TIMEOUT'), row('lwm2m.reboot', 'SUCCESSFUL', confirmed)]);
-    render(<DeviceCommandsPanel deviceToken="valve-1" />);
+    render(<DeviceCommandsPanel deviceToken="valve-1" canIssue canCancel />);
     await screen.findByText('lwm2m.reboot');
     expect(screen.queryByTestId('sparkplug-outcome')).toBeNull();
     expect(screen.queryByTestId('sparkplug-secondary-host')).toBeNull();
@@ -227,7 +227,7 @@ describe('the Sparkplug outcome help', () => {
     await i18n.changeLanguage('es');
     try {
       install([row('sparkplug.write', 'TIMEOUT', reasonPayload('unconfirmed_timeout'), WINDOW_ERROR)]);
-      render(<DeviceCommandsPanel deviceToken="valve-1" />);
+      render(<DeviceCommandsPanel deviceToken="valve-1" canIssue canCancel />);
       expect((await screen.findByTestId('sparkplug-outcome')).textContent).toContain('Sin confirmar');
     } finally {
       await i18n.changeLanguage('en');

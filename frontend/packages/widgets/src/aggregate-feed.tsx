@@ -24,13 +24,16 @@
 //     the readings sent during the outage (and a read that failed during it stops saying so) without
 //     waiting for the next refresh, which on a week's span is 42 minutes away;
 //   - a read for a different selector, span or freeze instant is not shown under the new one: a
-//     result is tagged with the key it was read for, and a mismatch reads as loading.
+//     result is tagged with the key it was read for, and a mismatch reads as loading;
+//   - a card showing the latest reading ('last') is also handed the newest stored bucket by the board
+//     (initialSamples), a minute's mean standing in until a live reading arrives and never over one.
 
 import {
   bucketSecondsFor,
   DEFAULT_TIME_RANGE_SECONDS,
   type AggregateResult,
   type AggregateStreamState,
+  type MeasurementSample,
   type WidgetActions,
   type WidgetDataSource,
   type WidgetDescriptor,
@@ -52,10 +55,14 @@ export interface AggregateFeedProps {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   Component: ComponentType<any>;
   actions: WidgetActions | undefined;
+  // The stored latest reading of a card that shows it (see seedKey in dashboard-renderer.tsx).
+  initialSamples?: MeasurementSample[];
+  initialSamplesAsOf?: number;
+  onReconnect?: () => void;
   ErrorFrame: ComponentType<{ widget: WidgetInstance; error: unknown }>;
 }
 
-export default function AggregateFeed({ hub, widget, descriptor, Component, actions, ErrorFrame }: AggregateFeedProps) {
+export default function AggregateFeed({ hub, widget, descriptor, Component, actions, ErrorFrame, initialSamples, initialSamplesAsOf, onReconnect }: AggregateFeedProps) {
   const range = useWidgetTimeRange();
   const now = useMemo(() => (hub.now ? () => hub.now!() : Date.now), [hub]);
   const spanSeconds = measurementSpan(descriptor, widget, range?.spanSeconds) ?? DEFAULT_TIME_RANGE_SECONDS;
@@ -65,7 +72,17 @@ export default function AggregateFeed({ hub, widget, descriptor, Component, acti
   // The newest live reading per measurement. It holds one sample: only `latest` is read, and the
   // pause keeps it from moving.
   const [resumes, resumed] = useReducer((n: number) => n + 1, 0);
-  const stream = useMeasurementStream(hub, ds, { window: 1, pausedAt, now, onReconnect: resumed });
+  const stream = useMeasurementStream(hub, ds, {
+    window: 1,
+    pausedAt,
+    now,
+    initialSamples,
+    initialSamplesAsOf,
+    onReconnect: () => {
+      resumed();
+      onReconnect?.();
+    },
+  });
 
   const trend = optBoolean(widget.options, 'sparkline');
   const key = JSON.stringify([ds ?? null, spanSeconds, pausedAt ?? null, trend]);

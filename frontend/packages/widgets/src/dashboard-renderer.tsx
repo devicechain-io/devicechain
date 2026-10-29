@@ -62,7 +62,7 @@ import {
 } from '@devicechain/widget-sdk';
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react';
 
-import { measurementSpan } from './binding-policy';
+import { measurementSpan, takesHistorySeed } from './binding-policy';
 import { ConnectedWidget } from './connected-widget';
 import {
   type WidgetCandidates,
@@ -489,9 +489,10 @@ export const RESEED_RETRY_MS = 30_000;
 // seedKey is the identity of what a measurement widget's history is OF: its concrete
 // selector, by value. Undefined for a widget that takes no seed.
 function seedKey(widget: WidgetInstance, registry: WidgetRegistry): string | undefined {
-  // Eligibility is registry metadata: only a registered measurement-channel widget takes a
-  // seed. A placeholder, an unregistered id and every other channel take none.
-  if (widget.type === UNKNOWN_WIDGET_TYPE || registry.descriptor(widget.type)?.channel !== 'measurement') {
+  // Eligibility is registry metadata (takesHistorySeed). A placeholder, an unregistered id and every
+  // other channel take none.
+  const descriptor = widget.type === UNKNOWN_WIDGET_TYPE ? undefined : registry.descriptor(widget.type);
+  if (!descriptor || !takesHistorySeed(descriptor, widget)) {
     return undefined;
   }
   return JSON.stringify(widget.datasource ?? null);

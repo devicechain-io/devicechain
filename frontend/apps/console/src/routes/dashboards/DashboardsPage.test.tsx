@@ -79,7 +79,9 @@ describe('DashboardsPage clone', () => {
     h.authorities = ['dashboard:read'];
     renderPage();
     await screen.findByText('Ops');
-    expect(screen.queryByRole('button', { name: 'Clone' })).toBeNull();
+    for (const name of ['Clone', 'New dashboard', 'Import dashboard', 'Share', 'Delete']) {
+      expect(screen.queryByRole('button', { name }), name).toBeNull();
+    }
   });
 
   it('refuses to clone a board saved by a newer version, and opens no import', async () => {

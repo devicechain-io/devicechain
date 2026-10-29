@@ -157,3 +157,11 @@ export function wantsEventMarkers(descriptor: WidgetDescriptor, widget: WidgetIn
     (declared.markCommands !== undefined && optBoolean(widget.options, 'markCommands') === true)
   );
 }
+
+// Whether a widget takes the stored history as a seed. Every measurement widget does. An aggregate
+// widget reads its own aggregates and takes none, except a card showing the LATEST reading: the live
+// stream only delivers what arrives after the board opens, so a device that reports every few
+// minutes would leave it saying there is no data while its readings are stored.
+export function takesHistorySeed(descriptor: WidgetDescriptor, widget: WidgetInstance): boolean {
+  return descriptor.channel === 'measurement' || (descriptor.channel === 'aggregate' && optString(widget.options, 'stat') === 'last');
+}

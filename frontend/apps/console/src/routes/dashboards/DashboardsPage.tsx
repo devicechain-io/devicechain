@@ -128,7 +128,7 @@ export default function DashboardsPage() {
       description={scoped ? t('descriptionShared') : t('description')}
       banner="dashboard"
       action={
-        scoped ? undefined : (
+        canWrite && (
           <div className="flex items-center gap-2">
             <Button variant="outline" onClick={() => setImporting({})} data-shot="dashboard-import-button">
               <Upload size={16} /> {t('importDashboard')}
@@ -261,7 +261,7 @@ export default function DashboardsPage() {
                         <Copy size={14} /> {t('clone')}
                       </Button>
                     )}
-                    {!scoped && (
+                    {canWrite && (
                       <Button
                         variant="ghost"
                         size="sm"

@@ -209,3 +209,39 @@ describe('the history seed a measurement widget is handed', () => {
     }
   });
 });
+
+describe('the history seed of a stat card', () => {
+  // The live stream only delivers readings that arrive after the board opens, so a card that shows
+  // the LATEST reading is seeded from the store like a gauge is. A card showing a statistic reads its
+  // own aggregates and takes no seed.
+  const statDefinition = (stat: string): DashboardDefinition => ({
+    ...definition,
+    widgets: [
+      {
+        id: 'card',
+        type: 'stat-card',
+        layout: { base: { mode: 'grid' as const, col: 0, row: 0, cols: 4, rows: 2 } },
+        datasource: { kind: 'slot', slot: 'machine', measurements: ['fuel'] },
+        options: { stat, measurement: 'fuel' },
+      },
+    ],
+  });
+
+  it('is fetched for a card showing the latest reading, and handed to it', async () => {
+    render(<DashboardRenderer definition={statDefinition('last')} hub={source} bindings={dev('hauler-1')} />);
+    await flush();
+    await act(async () => {
+      fetchFor('hauler-1')?.resolve([sample('hauler-1', 71)]);
+    });
+    expect(lastRender()).toEqual({ widgetId: 'card', device: 'hauler-1', seeded: ['hauler-1'] });
+  });
+
+  // The negative control: the same card showing a statistic is not seeded.
+  it('is not fetched for a card showing a statistic', async () => {
+    render(<DashboardRenderer definition={statDefinition('max')} hub={source} bindings={dev('hauler-1')} />);
+    await flush();
+    expect(h.fetches).toHaveLength(0);
+    expect(lastRender()?.seeded).toBeUndefined();
+  });
+});
+
