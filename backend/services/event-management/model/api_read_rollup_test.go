@@ -60,3 +60,15 @@ func TestAScopedCallerNeverUsesTheRollup(t *testing.T) {
 		TokenType: auth.TokenTypeAccess, ScopeAnchors: []string{"customer:acme"}})
 	assert.False(t, useMeasurementRollup(scoped, criteria), "a scoped caller must take the raw path")
 }
+
+// The same for a scoped read of a shared AREA: the anchor-aware raw path serves it, and the
+// rollup stays off the table for the scoped caller at every interval.
+func TestAScopedAreaAnchoredReadStaysOffTheRollup(t *testing.T) {
+	area, floor := "area", "floor-shared"
+	scoped := auth.WithClaims(context.Background(), &auth.Claims{
+		TokenType: auth.TokenTypeAccess, ScopeAnchors: []string{"customer:acme"}})
+	for _, interval := range []int64{60, 300, 3600} {
+		criteria := MeasurementAggregationCriteria{IntervalSeconds: interval, AnchorType: &area, AnchorToken: &floor}
+		assert.False(t, useMeasurementRollup(scoped, criteria), "interval %d", interval)
+	}
+}

@@ -60,6 +60,7 @@ const (
 	ruleOwnAnchor
 	ruleHeldAnchors
 	ruleReachedFromDevice
+	ruleKeyFilterOnly
 )
 
 // scopeRule is the one concrete rule type; kind says which of its fields apply.
@@ -87,6 +88,21 @@ func (r *scopeRule) allows(w ScopedWrite) bool { return r.writes&w != 0 }
 // is the storage half of auth.AuthorizeCatalogue.
 func Catalogue() ScopeRule {
 	return &scopeRule{kind: ruleCatalogue}
+}
+
+// KeyFilterOnly is the rule of a model that exists to be the inside of a key subquery
+// (`key IN (SELECT key FROM <model> WHERE ...)`) and nothing else. Its rows are
+// device-derived, so unlike Catalogue it must never be READ by a scoped caller; what keeps
+// a scoped caller inside its own rows is the OUTER statement's rule, applied to the same
+// query.
+//
+// A scoped statement on it is admitted, with the tenant's predicate alone, only when gorm
+// is building it as a subquery: gorm builds every subquery value in a DryRun session, which
+// never executes. Any other scoped read of the model - a direct Find, Count, Scan - is
+// refused with auth.ErrScopeUnsupported, and so are scoped writes. (A top-level DryRun
+// statement only renders SQL, so admitting it exposes nothing.)
+func KeyFilterOnly() ScopeRule {
+	return &scopeRule{kind: ruleKeyFilterOnly}
 }
 
 // AnchorColumn is the rule of a model whose rows carry their own anchors, in column (a

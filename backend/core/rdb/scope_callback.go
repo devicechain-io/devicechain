@@ -246,6 +246,11 @@ func addScopePredicate(db *gorm.DB, rule *scopeRule, tenant string, scope auth.S
 	switch rule.kind {
 	case ruleCatalogue:
 		return
+	case ruleKeyFilterOnly:
+		if !db.DryRun {
+			refuseScoped(db, "a key-filter-only model read directly rather than as a subquery")
+		}
+		return
 	case ruleAnchorColumn:
 		field := db.Statement.Schema.LookUpField(rule.column)
 		if field == nil {

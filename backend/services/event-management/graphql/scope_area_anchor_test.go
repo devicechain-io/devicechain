@@ -100,11 +100,8 @@ func TestTheSharedAreaFixtureHoldsOneEventPerCustomer(t *testing.T) {
 //
 // The expected value is the Acme device's event alone: not zero (today) and not both
 // customers' (the leak a naive fix would introduce). Slice S2 repairs the filter and turns
-// this test on; until then it is skipped rather than committed red, and it fails when
-// the skip is removed (verified when this was written).
+// this test on.
 func TestAScopedCallerFilteringByAnAreaAnchorIsNotAnsweredEmpty(t *testing.T) {
-	t.Skip("known defect, repaired by slice S2 of the customer-scoped area dashboards work: " +
-		"the anchor-filter subquery cannot see the area row under the OwnAnchor rule. Remove this Skip in S2.")
 	f := newSharedAreaEvents(t)
 	require.Equal(t, []string{"acme-pump"}, f.devicesOn(t, f.ctx("customer:acme"), "area", "floor-shared"),
 		"Acme's member filtering by the shared area must get exactly Acme's event")

@@ -260,14 +260,20 @@ func TestEventsVisibleForTheOwnershipPeriod(t *testing.T) {
 		assert.InDeltaf(t, 33, total(everyone, interval, nil), 1e-9, "bucketedMeasurements @%ds control", interval)
 	}
 
-	// The anchor filter argument cannot reach past the scope: Acme filtering by Globex
-	// finds nothing, on every read that takes the argument, while filtering by its own
-	// anchor still finds its rows (the control that the filter itself works).
+	// The anchor filter argument cannot reach past the scope: naming another customer is
+	// REFUSED (not answered empty), on every read that takes the argument, while filtering
+	// by its own anchor still finds its rows (the control that the filter itself works).
 	globexAnchor := &EventAnchorInput{Type: "customer", Token: "globex"}
 	acmeAnchor := &EventAnchorInput{Type: "customer", Token: "acme"}
-	assert.Empty(t, events(acme, globexAnchor), "events: Acme filtering by Globex")
-	assert.Empty(t, values(acme, globexAnchor), "measurementEvents: Acme filtering by Globex")
-	assert.Zero(t, total(acme, 60, globexAnchor), "bucketedMeasurements: Acme filtering by Globex")
+	_, err := r.Events(acme, page(globexAnchor))
+	assert.ErrorIs(t, err, auth.ErrForbidden, "events: Acme filtering by Globex")
+	_, err = r.MeasurementEvents(acme, page(globexAnchor))
+	assert.ErrorIs(t, err, auth.ErrForbidden, "measurementEvents: Acme filtering by Globex")
+	_, err = r.BucketedMeasurements(acme, struct {
+		Criteria MeasurementAggregationCriteriaInput
+	}{Criteria: MeasurementAggregationCriteriaInput{
+		StartTime: &start, EndTime: &end, IntervalSeconds: 60, Anchor: globexAnchor}})
+	assert.ErrorIs(t, err, auth.ErrForbidden, "bucketedMeasurements: Acme filtering by Globex")
 	assert.Equal(t, times(acmeAt), events(acme, acmeAnchor), "control: Acme filtering by Acme")
 	assert.Equal(t, []float64{1, 2}, values(acme, acmeAnchor), "control: Acme filtering by Acme")
 	assert.Equal(t, []float64{10, 20}, values(everyone, globexAnchor), "control: unscoped filtering by Globex")
