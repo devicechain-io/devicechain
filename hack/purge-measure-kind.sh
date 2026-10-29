@@ -49,7 +49,7 @@ echo "==> building the measurement binary (linux/amd64, static)"
 (cd "$ROOT/backend/tools/migrationdiff" &&
   CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go test -c -tags purgemeasure -o "$BIN" .)
 
-if kind get clusters 2>/dev/null | grep -qx "$CLUSTER"; then
+if grep -qx "$CLUSTER" <<<"$(kind get clusters 2>/dev/null)"; then
   echo "cluster $CLUSTER already exists; reusing it (and not deleting it on exit)"
 else
   echo "==> creating kind cluster $CLUSTER (kubeconfig $KUBECONFIG)"
@@ -70,7 +70,7 @@ done
 # On Windows (git bash) kubectl is a native binary: the commands that must not have their
 # arguments path-converted (cp and exec carry in-pod paths) are given the native form of the
 # local paths instead.
-if command -v cygpath >/dev/null 2>&1; then KCFG="$(cygpath -m "$KUBECONFIG")"; LBIN="$(cygpath -m "$BIN")"; else KCFG="$KUBECONFIG"; LBIN="$BIN"; fi
+if command -v cygpath >/dev/null 2>&1; then KCFG="$(cygpath -m "$KUBECONFIG")"; else KCFG="$KUBECONFIG"; fi
 K="kubectl --kubeconfig $KUBECONFIG -n $NS"
 KN="kubectl --kubeconfig $KCFG -n $NS"
 # A previous run's namespace (and its volumes) is removed first: leftover streams and rows would be
