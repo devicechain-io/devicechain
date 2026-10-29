@@ -250,8 +250,11 @@ def rolling_average_exceeds(events, name, threshold, window_s=300.0):
     return None
 
 
-def judge_silence(events, tripped_after, gap_s=ABSENCE_S):
-    """The chiller reported before, then stopped: (reported_before, last_before, longest_gap_s)."""
+def judge_silence(events, until=None, gap_s=ABSENCE_S):
+    """
+    The chiller reported before, then stopped: (reported_before, last_before, longest_gap_s). A gap that is still OPEN is measured to `until` (the
+    instant the absence alarm was raised, or now): the readings that would close it have not happened yet.
+    """
     ts = sorted(parse_time(e["occurredTime"]) for e in events if e["name"] == "chw_supply_c")
     if not ts:
         return False, None, 0.0
@@ -259,6 +262,8 @@ def judge_silence(events, tripped_after, gap_s=ABSENCE_S):
     for a, b in zip(ts, ts[1:]):
         if (b - a).total_seconds() > longest:
             longest, last = (b - a).total_seconds(), a
+    if until is not None and (until - ts[-1]).total_seconds() > longest:
+        longest, last = (until - ts[-1]).total_seconds(), ts[-1]
     return True, last, longest
 
 
@@ -699,7 +704,7 @@ def cmd_segment_b(a):
         time.sleep(10)
     items = []
     events = p.events(ch_tok, since)
-    reported, last, gap = judge_silence(events, None)
+    reported, last, gap = judge_silence(events, parse_time(alarm["raisedTime"]) if alarm and alarm.get("raisedTime") else None)
     raised, _, detail = judge_alarm_cycle(alarm, "CRITICAL")
     items.append(Item("b-silent", "the annex chiller reported, then went silent for at least the rule's two minutes",
                       reported and gap >= ABSENCE_S, f"last reading before the gap {last and iso(last)}, longest gap {gap:.0f} s"))
@@ -763,6 +768,22 @@ def cmd_common(a):
     items.append(Item("calculated", "calculated metrics (cop, kwh_per_m2) are stored and none was skipped as missing_input", ok, detail))
     append_items(a.out, items)
     return 0 if overall(items) else 1
+
+
+def cmd_calc(a):
+    """The calculated-metric check on its own, for a run whose recording holds the readings that explain a skip (the chiller segment)."""
+    p = Platform(a.runner)
+    d = p.devices()
+    found = set()
+    for ext in ("TP-CH-A", "TP-EM-A"):
+        crit = {"pageNumber": 1, "pageSize": 200, "deviceToken": d[ext], "startTime": a.since}
+        rows = p.gql("event-management", "query($c:EventSearchCriteria!){measurementEvents(criteria:$c){results{name}}}", {"c": crit})["measurementEvents"]["results"]
+        found |= {r["name"] for r in rows} & {"cop", "kwh_per_m2"}
+    before = json.load(open(os.path.join(a.out, "counters-before.json")))
+    samples = [json.loads(line) for line in open(os.path.join(a.recording, "device.ndjson"), encoding="utf-8") if line.strip()]
+    ok, detail = judge_calculated(before, counters(a.namespace), count_power_zero(samples), found)
+    append_items(a.out, [Item("calculated", "calculated metrics are stored and none was skipped as missing_input; the restart's honest 0/0 reading is the only non_finite", ok, detail)])
+    return 0 if ok else 1
 
 
 def read_sim_record(name):
@@ -845,6 +866,7 @@ def main(argv=None):
         quit_file=dict(required=False), timeout=dict(type=float, default=2400))
     add("segment-b", cmd_segment_b, runner=runner, out=out, since=dict(required=True), quit_file=dict(required=False), timeout=dict(type=float, default=1500))
     add("common", cmd_common, runner=runner, out=out, since=dict(required=True), recording=dict(default=None), namespace=ns)
+    add("calc", cmd_calc, runner=runner, out=out, since=dict(required=True), recording=dict(required=True), namespace=ns)
     add("owner", cmd_owner, runner=runner, sim=dict(required=True), out=out, since=dict(required=True))
     add("summary", cmd_summary, out=out, title=dict(required=True))
     a = ap.parse_args(argv)

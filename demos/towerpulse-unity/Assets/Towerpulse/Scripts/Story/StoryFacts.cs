@@ -95,6 +95,9 @@ namespace DeviceChain.Towerpulse.Story
             return a;
         }
 
+        // listed, not reflected: Enum.GetValues is not AOT/IL2CPP-safe
+        static readonly CardStage[] Stages = { CardStage.Queued, CardStage.Delivered, CardStage.Done };
+
         static string N(double v) { return double.IsNaN(v) ? "-" : v.ToString("0.###", CultureInfo.InvariantCulture); }
 
         /// <summary>
@@ -107,7 +110,7 @@ namespace DeviceChain.Towerpulse.Story
             foreach (var c in commands.Cards)
             {
                 sb.Append("card ").Append(c.Id).Append(' ').Append(c.Device).Append(' ').Append(c.Name).Append(" outcome=").Append(c.Outcome).Append(" reason=").Append(c.FailReason);
-                foreach (CardStage s in Enum.GetValues(typeof(CardStage)))
+                foreach (var s in Stages)
                 {
                     sb.Append(' ').Append(s).Append('=');
                     if (!c.Has(s)) sb.Append('-');

@@ -149,6 +149,14 @@ class Judges(unittest.TestCase):
         self.assertEqual(last.minute, 30)
         self.assertEqual(a.judge_silence([], None)[0], False)
 
+    def test_an_open_gap_is_measured_to_the_alarm(self):
+        live = [ev("chw_supply_c", 6.5, "2026-10-29T16:%02d:%02dZ" % (m, s)) for m in (20, 21) for s in (0, 30)]
+        until = a.parse_time("2026-10-29T16:24:00Z")
+        ok, last, gap = a.judge_silence(live, until)
+        self.assertTrue(ok)
+        self.assertEqual(gap, 150.0)
+        self.assertEqual(a.judge_silence(live, None)[2], 30.0, "without the alarm's time the open gap is invisible")
+
 
 class Safety(unittest.TestCase):
     def test_redact_and_leaks(self):

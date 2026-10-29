@@ -72,6 +72,15 @@
         "resolved": "1.6.0",
         "contentHash": "COC1aiAJjCoA5GBF+QKL2uLqEBew4JsCkQmoHKbN3TlOZKa2fKLz5CpiRQKDz0RsAOEGsVKqOD5bomsXq/4STQ=="
       },
+      "devicechain.demos.core": {
+        "type": "Project"
+      },
+      "devicechain.demos.recording": {
+        "type": "Project",
+        "dependencies": {
+          "DeviceChain.Demos.Core": "[1.0.0, )"
+        }
+      },
       "devicechain.towerpulse.model": {
         "type": "Project"
       },
@@ -79,6 +88,16 @@
         "type": "Project",
         "dependencies": {
           "DeviceChain.Towerpulse.Model": "[1.0.0, )"
+        }
+      },
+      "devicechain.towerpulse.recording": {
+        "type": "Project",
+        "dependencies": {
+          "DeviceChain.Demos.Core": "[1.0.0, )",
+          "DeviceChain.Demos.Recording": "[1.0.0, )",
+          "DeviceChain.Towerpulse.Model": "[1.0.0, )",
+          "DeviceChain.Towerpulse.Plane": "[1.0.0, )",
+          "DeviceChain.Towerpulse.Story": "[1.0.0, )"
         }
       },
       "devicechain.towerpulse.story": {
