@@ -330,7 +330,9 @@ function sameAnchor(a: AnchorTarget, b: AnchorTarget): boolean {
 
 // The one declared site anchor, or null when none was declared. Anything else is refused
 // when the source, resolver or lister is built, not at some later lookup.
-function declaredSite(options: RecordedSiteOptions): AnchorTarget | null {
+function declaredSite(options: RecordedSiteOptions, rec?: BoardRecording): AnchorTarget | null {
+  // The recording names its own anchors, so the host's declaration is not what decides membership.
+  if (rec?.anchors) return null;
   const anchors = options.siteAnchors;
   if (anchors === undefined) return null;
   if (anchors.length !== 1) {
@@ -345,7 +347,20 @@ function declaredSite(options: RecordedSiteOptions): AnchorTarget | null {
   return anchors[0];
 }
 
+// A recording that carries its own anchors answers from them: an anchor it does not list is unknown, never an empty set. One that does
+// not falls back to the single declared customer anchor, which holds every device.
+function recordedMembers(rec: BoardRecording, anchor: AnchorTarget): string[] | null {
+  if (!rec.anchors) return null;
+  const hit = rec.anchors.find((a) => sameAnchor(a, anchor));
+  if (!hit) {
+    throw new Error(`anchor ${anchor.targetType} '${anchor.targetToken}' (${anchor.relationship}) is not in this recording`);
+  }
+  return hit.devices;
+}
+
 function anchorMembers(rec: BoardRecording, site: AnchorTarget | null, anchor: AnchorTarget): string[] {
+  const own = recordedMembers(rec, anchor);
+  if (own) return own;
   if (!site || !sameAnchor(site, anchor)) {
     throw new Error(
       `anchor ${anchor.targetType} '${anchor.targetToken}' (${anchor.relationship}) is not in this recording`,
@@ -360,7 +375,7 @@ function anchorMembers(rec: BoardRecording, site: AnchorTarget | null, anchor: A
 // machines").
 export function createRecordedResolver(rec: BoardRecording, options: RecordedSiteOptions = {}): DeviceResolver {
   const devices = new Set(rec.devices.map((d) => d.token));
-  const site = declaredSite(options);
+  const site = declaredSite(options, rec);
   return {
     devicesForAnchor: async (anchor) => anchorMembers(rec, site, anchor),
     deviceExists: async (token) => devices.has(token),
@@ -377,9 +392,10 @@ export function createRecordedResolver(rec: BoardRecording, options: RecordedSit
 // list the declared site anchors of that type; a kind with none yields an empty list,
 // which is true of the recording.
 export function createRecordedLister(rec: BoardRecording, options: RecordedSiteOptions = {}): EntityCandidateLister {
-  const site = declaredSite(options);
+  const site = declaredSite(options, rec);
   return async (kind: EntityListKind) => {
     if (kind === 'device') return rec.devices.map((d) => ({ token: d.token, name: null }));
+    if (rec.anchors) return rec.anchors.filter((a) => a.targetType === kind).map((a) => ({ token: a.targetToken, name: null }));
     return site && site.targetType === kind ? [{ token: site.targetToken, name: null }] : [];
   };
 }
@@ -496,7 +512,7 @@ export class RecordedDataSource implements WidgetDataSource {
   // and the time shift, if any (see "Re-timing" above).
   constructor(rec: BoardRecording, clock: RecordedClock, options: RecordedSourceOptions = {}) {
     this.rec = rec;
-    this.site = declaredSite(options);
+    this.site = declaredSite(options, rec);
     this.index = indexOf(rec);
     this.cursor = clock.timeMs;
     const shift = options.timeShiftMs ?? 0;

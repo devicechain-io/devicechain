@@ -101,13 +101,15 @@ class Refusal(Exception):
     """The conversion must not proceed. Never caught and continued past."""
 
 
-PROFILE_KEYS = {"demo", "measurements", "calculated", "unsampledAlarmKeys", "kindGrammar", "inputs", "chapters"}
+PROFILE_KEYS = {"demo", "measurements", "calculated", "unsampledAlarmKeys", "kindGrammar", "inputs", "chapters", "anchors"}
+ANCHOR_TYPES = ("customer", "area", "asset")
+EMPTY_LOCATIONS_V2 = {"d": [], "t": [], "lat": [], "lon": [], "hdg": [], "spd": []}
 
 
 class Profile:
     """What differs between demos. Built from a JSON file by load_profile; SITEPULSE is the default and holds the values this module always had."""
 
-    def __init__(self, demo, measurements, inputs, calculated=(), unsampled_alarm_keys=(), kind_grammar=None, chapters=True):
+    def __init__(self, demo, measurements, inputs, calculated=(), unsampled_alarm_keys=(), kind_grammar=None, chapters=True, anchors=()):
         self.demo = demo
         self.measurements = tuple(measurements)
         self.inputs = tuple(inputs)
@@ -115,6 +117,9 @@ class Profile:
         self.unsampled_alarm_keys = tuple(unsampled_alarm_keys)
         self.kind_grammar = kind_grammar
         self.chapters = chapters
+        # The groupings the board is bound to and which devices belong to each, by external id. A recording carries only devices, so a board bound to an
+        # area or a floor needs these to be replayed: they make the output format version 2 (the format's own `anchors`).
+        self.anchors = tuple(anchors)
 
 
 def load_profile(path):
@@ -140,7 +145,21 @@ def load_profile(path):
     chapters = doc.get("chapters", True)
     _require(isinstance(chapters, bool), "chapters is not a boolean")
     _require(chapters == ("video-run.json" in inputs and "presenter.ndjson" in inputs), "chapters need video-run.json and presenter.ndjson among the inputs, and only then")
-    return Profile(doc["demo"], doc["measurements"], inputs, doc.get("calculated", []), doc.get("unsampledAlarmKeys", []), kg, chapters)
+    anchors = doc.get("anchors", [])
+    _require(isinstance(anchors, list), "anchors is not a list")
+    seen = set()
+    for i, an in enumerate(anchors):
+        where = "profile anchors[%d]" % i
+        _require(isinstance(an, dict) and set(an) == {"relationship", "targetType", "targetToken", "devices"}, "%s must have exactly relationship, targetType, targetToken and devices" % where)
+        _require(isinstance(an["relationship"], str) and re.fullmatch(r"[a-z][a-z0-9-]{0,31}", an["relationship"]), "%s relationship is not a name" % where)
+        _require(an["targetType"] in ANCHOR_TYPES, "%s targetType must be one of %s" % (where, ANCHOR_TYPES))
+        _require(isinstance(an["targetToken"], str) and re.fullmatch(GRAMMAR["token"], an["targetToken"]), "%s targetToken is not a token" % where)
+        _require(isinstance(an["devices"], list) and an["devices"] and len(set(an["devices"])) == len(an["devices"]), "%s devices must be a non-empty list without repeats" % where)
+        _require(all(isinstance(d, str) and re.fullmatch(GRAMMAR["deviceId"], d) for d in an["devices"]), "%s names a device id outside the grammar" % where)
+        key = (an["relationship"], an["targetType"], an["targetToken"])
+        _require(key not in seen, "%s repeats an anchor" % where)
+        seen.add(key)
+    return Profile(doc["demo"], doc["measurements"], inputs, doc.get("calculated", []), doc.get("unsampledAlarmKeys", []), kg, chapters, anchors)
 
 
 def _sitepulse():
@@ -450,10 +469,16 @@ def convert(run_dir, board, excerpt=None, profile=None):
         else:
             counts["otherRowsDropped"] += 1
 
+    anchors = []
+    for an in profile.anchors:
+        missing = [d for d in an["devices"] if d not in token_of_id]
+        _require(not missing, "anchor %s names devices that are not in the run: %s" % (an["targetToken"], missing[:5]))
+        anchors.append({"relationship": an["relationship"], "targetType": an["targetType"], "targetToken": an["targetToken"], "devices": [token_of_id[d] for d in an["devices"]]})
+
     # --- header
     chapters = clamp_chapters(build_chapters(video, presenter, events), duration_ms) if profile.chapters else []
     doc = {
-        "formatVersion": FORMAT_VERSION,
+        "formatVersion": 2 if anchors else FORMAT_VERSION,
         "kind": FORMAT_KIND,
         "runId": run["runId"],
         "startedAtUtc": start_utc,
@@ -473,6 +498,10 @@ def convert(run_dir, board, excerpt=None, profile=None):
         "alarms": {"snapshots": snapshots, "events": events},
         "locations": [],
     }
+
+    if anchors:
+        doc["anchors"] = anchors
+        doc["locations"] = dict(EMPTY_LOCATIONS_V2)  # format 2 holds positions as columns; this converter has none
 
     if excerpt is not None:
         lo, hi = _ms(excerpt[0]), _ms(excerpt[1])
@@ -571,9 +600,9 @@ _HEX40 = re.compile(r"[0-9a-f]{40}")
 _SCHEMA_TOP = {
     "formatVersion", "kind", "runId", "startedAtUtc", "durationMs", "platformVersion", "instance", "tenant",
     "build", "clock", "devices", "channels", "board", "sourceHashes", "converter", "chapters",
-    "measurements", "alarms", "locations", "excerpt",
+    "measurements", "alarms", "locations", "excerpt", "anchors",
 }
-_SCHEMA_REQUIRED = _SCHEMA_TOP - {"excerpt"}
+_SCHEMA_REQUIRED = _SCHEMA_TOP - {"excerpt", "anchors"}
 
 
 def _keys(obj, allowed, where, required=None):
@@ -596,7 +625,7 @@ def validate_output(doc, profile=None):
     """Schema-strict: an unknown or missing key anywhere means refuse, and every value
     must fit the grammar of its field."""
     _keys(doc, _SCHEMA_TOP, "document", _SCHEMA_REQUIRED)
-    _require(doc["kind"] == FORMAT_KIND and doc["formatVersion"] == FORMAT_VERSION, "wrong format identity")
+    _require(doc["kind"] == FORMAT_KIND and doc["formatVersion"] == (2 if "anchors" in doc else FORMAT_VERSION), "wrong format identity")
     _g("runId", doc["runId"], "runId")
     _g("timestamp", doc["startedAtUtc"], "startedAtUtc")
     _int(doc["durationMs"], "durationMs")
@@ -694,7 +723,18 @@ def validate_output(doc, profile=None):
         _int(e["tMs"], "event tMs")
         check_alarm(e, "alarm event")
         same_device(e)
-    _require(doc["locations"] == [], "this converter emits no positions")
+    _require(doc["locations"] == ([] if "anchors" not in doc else EMPTY_LOCATIONS_V2), "this converter emits no positions")
+    if "anchors" in doc:
+        seen = set()
+        for an in doc["anchors"]:
+            _keys(an, {"relationship", "targetType", "targetToken", "devices"}, "anchor")
+            _require(an["targetType"] in ANCHOR_TYPES, "anchor targetType %r not allowed" % (an["targetType"],))
+            _g("token", an["targetToken"], "anchor targetToken")
+            _require(isinstance(an["devices"], list) and an["devices"] and all(d in tokens for d in an["devices"]), "an anchor lists a device that is not in the run")
+            _require(len(set(an["devices"])) == len(an["devices"]), "an anchor lists a device twice")
+            key = (an["relationship"], an["targetType"], an["targetToken"])
+            _require(key not in seen, "an anchor is declared twice")
+            seen.add(key)
 
 
 # --- credential scan -------------------------------------------------------

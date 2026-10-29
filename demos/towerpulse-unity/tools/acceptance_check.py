@@ -28,6 +28,7 @@ import datetime
 import json
 import os
 import re
+import socket
 import subprocess
 import sys
 import time
@@ -372,6 +373,20 @@ def judge_control(alarms, commands, temp_events, rule_was_off):
 
 class PlatformError(Exception):
     pass
+
+
+def _ipv4_only():
+    """`localhost` resolves to ::1 first on this machine and the kind ingress listens on IPv4 only, so every request waited ~21 s for the fallback. The
+    Host header must stay `localhost` (the ingress routes on it), so it is the resolution that is narrowed, not the URL."""
+    original = socket.getaddrinfo
+
+    def v4(host, port, family=0, *args, **kwargs):
+        return original(host, port, socket.AF_INET, *args, **kwargs)
+
+    socket.getaddrinfo = v4
+
+
+_ipv4_only()
 
 
 def _post(url, token, query, variables):
@@ -791,8 +806,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    def add(name, fn, **flags):
-        sp = sub.add_parser(name)
+    def add(cmd_name, fn, **flags):
+        sp = sub.add_parser(cmd_name)
         sp.set_defaults(fn=fn)
         for flag, kw in flags.items():
             sp.add_argument("--" + flag.replace("_", "-"), **kw)
