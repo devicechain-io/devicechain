@@ -142,7 +142,7 @@ build_player() {
 # ---------------------------------------------------------------------------
 # one run
 # ---------------------------------------------------------------------------
-PF_PID="" SIM_PID="" SIM_NAME="" PLAYER_PID=""
+PF_PID="" SIM_NAME="" PLAYER_PID=""
 
 kill_pid() { [ -z "${1:-}" ] || taskkill.exe //PID "$1" //T //F >/dev/null 2>&1 || true; }
 
@@ -156,7 +156,7 @@ teardown() {
 	[ -z "$SIM_NAME" ] || kill_pid "$(winpid_of dcctl.exe "sim run $SIM_NAME")"
 	[ -z "$SIM_NAME" ] || "$DCCTL" sim destroy "$SIM_NAME" -i "$INSTANCE" --server "$API" >/dev/null 2>&1 || log "WARNING: sim destroy $SIM_NAME failed: destroy it by hand"
 	[ -z "$PF_PID" ] || kill_pid "$(winpid_of kubectl.exe 'port-forward svc/event-sources')"
-	SIM_NAME="" SIM_PID="" PF_PID="" PLAYER_PID=""
+	SIM_NAME="" PF_PID="" PLAYER_PID=""
 }
 trap teardown EXIT
 
@@ -170,10 +170,11 @@ launch_player() { # launch_player <hour> <label> <record-dir> <quit-file> <log-f
 
 end_player() { # end_player <quit-file>
 	echo done >"$1"
-	local _
+	local _ alive
 	for _ in $(seq 1 40); do
 		sleep 3
-		tasklist.exe /FI "PID eq $PLAYER_PID" 2>/dev/null | grep -q "$PLAYER_PID" || { PLAYER_PID=""; return 0; }
+		alive="$(tasklist.exe /FI "PID eq $PLAYER_PID" 2>/dev/null || true)"
+		case "$alive" in *"$PLAYER_PID"*) ;; *) PLAYER_PID=""; return 0 ;; esac
 	done
 	log "WARNING: the player did not close itself within two minutes; ending pid $PLAYER_PID"
 	kill_pid "$PLAYER_PID"
@@ -199,7 +200,6 @@ run_mode() {
 	"$DCCTL" sim create "$SIM_NAME" --manifest towerpulse --tier "$TIER" --seed 1 -i "$INSTANCE" --server "$API" --ingress "$INGRESS" \
 		--mqtt-broker "$MQTT" --mqtt-insecure=false >"$ev/logs/sim-create.log" 2>&1 || { tail -5 "$ev/logs/sim-create.log" >&2; die "sim create failed"; }
 	DC_SIM_EXTERNAL_DEVICE_PLANE=1 "$DCCTL" sim run "$SIM_NAME" -i "$INSTANCE" --server "$API" --simulator "$SIMULATOR" >"$ev/logs/simulator.log" 2>&1 &
-	SIM_PID=$!
 	"$PY" -I "$CHECK" ready --runner "$RUNNER" >"$ev/logs/ready.json" || { tail -5 "$ev/logs/simulator.log" >&2; die "the sim did not converge"; }
 	TP_KUBECONFIG="$KUBECONFIG" "$HERE/live-env.sh" ca "$ev/broker-ca.pem" >/dev/null
 	local ca="$ev/broker-ca.pem"
@@ -233,7 +233,7 @@ run_mode() {
 		"$PY" -I "$CHECK" segment-b --runner "$RUNNER" --out "$ev" --since "$since_b" || true
 		[ "$mode" != control ] || "$PY" -I "$CHECK" owner --runner "$RUNNER" --sim "$SIM_NAME" --out "$ev" --since "$since_a" || true
 		end_player "$q2"
-		rec_b="$(ls -1d "$ev"/recordings/run-* | sort | tail -1)"
+		rec_b="$(latest_run "$ev/recordings")"
 		"$PY" -I "$CHECK" annotate --runner "$RUNNER" --recording "$rec_b" --namespace "$NS" || true
 		[ "$mode" != chiller ] || "$PY" -I "$CHECK" calc --runner "$RUNNER" --out "$ev" --since "$since_b" --recording "$rec_b" --namespace "$NS" || true
 	fi
