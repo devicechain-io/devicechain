@@ -184,6 +184,7 @@ const sidebars: SidebarsConfig = {
             'guides/device-x509',
             'guides/device-self-registration',
             'guides/importing-devices',
+            'guides/migrating-from-another-platform',
             'guides/inbound-integrations',
             'guides/managing-assignments',
           ],

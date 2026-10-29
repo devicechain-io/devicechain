@@ -218,6 +218,10 @@
       "sourceSha256": "0a4c2689b2020c482e8fe4deb779011f06fdefb6d65b7b83b1688ffc18cac0ec",
       "translationSha256": "db30cc813825c01bd7d0d5f9760ae90909e262c3c49de2642d1df09b1c152bdf"
     },
+    "guides/migrating-from-another-platform.md": {
+      "sourceSha256": "af4d1a251ae99bfd961a0dd96e0518e2fe1a1f7bcaea1c82755e026dbfca45fd",
+      "translationSha256": "bf30813aaa9c8dfdba963114fdd5429964ff45b151edd315beae94ce4323d126"
+    },
     "guides/notification-channels.md": {
       "sourceSha256": "8784e97233c2e4efbcabaa0a15fd8556450bb703a5f1bb8cd84c027a9061076b",
       "translationSha256": "868f357a024fd54a67aa36a6b425a4cf48e136a72409efde7975b92d34227a2b"
