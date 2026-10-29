@@ -197,11 +197,12 @@ namespace DeviceChain.Sitepulse.Tests
             var parking = CommandKit.Site.Spots[SiteGeometry.ParkingSpot];
             // a slot on a bank steeper than a truck climbs has no route from anywhere (a command to it moves on to the next slot): these,
             // exactly, on the quarry's ground; every other slot is reachable from every track, and that is what is asserted below
+            // (the yard lost slot 7 from this list when the yard stand went in: its pad was surfaced 10 m further north, its stockpile and light tower moved)
             var unreachable = new Dictionary<string, int[]>
             {
                 ["sp-zone-cut"] = new[] { 13 },
                 ["sp-zone-fill"] = new int[0],
-                ["sp-zone-yard"] = new[] { 3, 7 },
+                ["sp-zone-yard"] = new[] { 3 },
             };
             Assert.AreEqual(unreachable.Keys.OrderBy(k => k), CommandKit.Site.Zones.Select(z => z.Name).OrderBy(k => k), "every zone is listed");
             foreach (var z in CommandKit.Site.Zones)
@@ -763,13 +764,15 @@ namespace DeviceChain.Sitepulse.Tests
         {
             var obstacles = CommandKit.Site.Obstacles;
             Assert.Greater(obstacles.Count, 0);
-            var starts = new List<TrackPoint>();
+            var starts = new List<(TrackPoint Point, int Track)>();
+            var tracks = new List<List<TrackPoint>>();
             for (var t = 0; t < CommandKit.TrackCount; t++)
             {
                 var frames = CommandKit.Track(t);
-                starts.Add(frames[0]);
-                starts.Add(frames[frames.Count / 3]);
-                starts.Add(frames[frames.Count * 2 / 3]);
+                tracks.Add(frames);
+                starts.Add((frames[0], t));
+                starts.Add((frames[frames.Count / 3], t));
+                starts.Add((frames[frames.Count * 2 / 3], t));
             }
 
             var reached = 0;
@@ -782,7 +785,7 @@ namespace DeviceChain.Sitepulse.Tests
                 {
                     var slots = ParkingLot.Slots(zone, zone.CentreX, zone.CentreZ, ParkingLot.Margin(kind), obstacles, foot);
                     Assert.Greater(slots.Count, 0, zone.Name);
-                    foreach (var f in starts)
+                    foreach (var (f, track) in starts)
                     {
                         var anyReach = false;
                         foreach (var slot in slots.Where((q, ix) => ix % Math.Max(1, slots.Count / 6) == 0))
@@ -801,6 +804,10 @@ namespace DeviceChain.Sitepulse.Tests
                                 {
                                     // a leg that starts or ends nearer than the clearance (a road end beside a sign, a machine that starts inside a yard) goes no nearer than that
                                     var need = Math.Min(Math.Min(clearance, Math.Min(o.Distance(xs[leg], zs[leg]), o.Distance(xs[leg + 1], zs[leg + 1]))), Math.Min(o.Distance(f.X, f.Z), o.Distance(slot.X, slot.Z)));
+                                    // a machine that starts INSIDE an outline is working it on purpose (the fill dozer's track runs through fill-heap-3 since
+                                    // #1394 moved its push to the tip's east edge, and goes 0.56 m into it): on its way out it is as deep in it as its own track
+                                    // ever takes it, and no deeper
+                                    if (need < 0.0) need = Math.Min(need, tracks[track].Min(q => o.Distance(q.X, q.Z)));
                                     // every sample is checked; the message is written only for one that fails (24 million of them are checked)
                                     foreach (var (x, z) in points)
                                         if (o.Distance(x, z) < need - 1e-3)
