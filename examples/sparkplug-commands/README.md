@@ -178,8 +178,8 @@ Read these before porting the node to your own code.
    that just ended, so a host cannot tell the new session from the old one. The node here starts from a
    random value. Separately, the will is built once per process, so a *reconnect* inside one process
    reuses the same `bdSeq`; this example does not reconnect inside a process (the container restarts).
-3. **The generated protobuf code is old.** `sparkplug_b_pb2.py` needs `protobuf==3.20.3` (pure Python
-   on a current interpreter) and the examples use the paho-mqtt 1.x API, so both are pinned in
+3. **The generated protobuf code is old.** `sparkplug_b_pb2.py` needs the pure-Python protobuf implementation (`protobuf==4.25.8`
+) on a current interpreter and the examples use the paho-mqtt 1.x API, so both are pinned in
    `edge-node/requirements.txt`.
 4. **Tahu ships no container image, and the Python library no package.** The `Dockerfile` fetches
    `python/core` from the `v1.0.22` tag by commit id at build time.
@@ -210,7 +210,7 @@ dcctl destroy local spb
 | [Eclipse Tahu](https://github.com/eclipse-tahu/tahu) v1.0.22 (`python/core`) | EPL-2.0 | Fetched into the edge-node image at build time, unmodified. Not copied into this repository. |
 | [Eclipse Mosquitto](https://mosquitto.org/) 2.0.22 | EPL-2.0 / EDL-1.0 | Run as the published image, pinned by digest. |
 | [paho-mqtt](https://github.com/eclipse/paho.mqtt.python) 1.6.1 | EPL-2.0 / EDL-1.0 | Installed in the edge-node image. |
-| [protobuf](https://github.com/protocolbuffers/protobuf) 3.20.3 | BSD-3-Clause | Installed in the edge-node image. |
+| [protobuf](https://github.com/protocolbuffers/protobuf) 4.25.8 | BSD-3-Clause | Installed in the edge-node image. |
 | [python](https://hub.docker.com/_/python) 3.12-slim | PSF-2.0 | Base image, pinned by digest. |
 
 `edge_node.py` follows the structure of Tahu's `python/examples/example.py` and is licensed with the
