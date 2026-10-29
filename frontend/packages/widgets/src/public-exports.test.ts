@@ -39,6 +39,7 @@ const FROM_SDK_ROOT = [
   'useHubConnectionState',
   'HubConnectionBadge',
   'useResolvedBindings',
+  'useViewerBindings',
   'useSlotCandidates',
   'useCandidates',
   'css',

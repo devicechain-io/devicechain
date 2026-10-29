@@ -8410,6 +8410,12 @@ re-export of useSlotCandidates from @devicechain/widget-sdk
 export declare function useTenantBasemap(): Basemap | null;
 ```
 
+## `.:useViewerBindings`
+
+```ts
+re-export of useViewerBindings from @devicechain/widget-sdk
+```
+
 ## `.:useWidgetCandidates`
 
 ```ts

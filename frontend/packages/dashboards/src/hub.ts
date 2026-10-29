@@ -1251,9 +1251,9 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
   }
 
   // isDatasourceSupported reports whether the viewer is offered the binding at all: false only
-  // when resolving an anchor is refused as SCOPE_UNSUPPORTED (an area or asset anchor, for a
-  // customer user). The resolution is the same memoized one the widget's channel makes, so a
-  // supported anchor costs no second read. Every other answer, including a failure, is true.
+  // when resolving an anchor is refused as SCOPE_UNSUPPORTED (an anchor the platform still
+  // declines for a customer user; areas and assets are answered through anchorDevices). The resolution is the same
+  // memoized one the widget's channel makes, so a supported anchor costs no second read. Every other answer, including a failure, is true.
   async isDatasourceSupported(datasource: DatasourceSelector | undefined): Promise<boolean> {
     if (datasource?.kind !== 'anchor') return true;
     try {

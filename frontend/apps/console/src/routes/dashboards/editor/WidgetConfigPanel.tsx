@@ -26,6 +26,7 @@ import {
   type DatasourceSelector,
   type DeviceSelector,
   type LocationSelection,
+  type SlotCandidates,
   type SlotDefinition,
   type ResolvedWidgetInstance,
   type SlotScope,
@@ -164,6 +165,9 @@ export interface WidgetConfigPanelProps {
   // Set (or, with undefined, clear) the scope of the selected widget's slot — the scoped-slot
   // context authoring (ADR-039). Undefined when the widget has no slot to scope.
   onScope?: (scope: SlotScope | undefined) => void;
+  // Set (or, with undefined, clear) the picker type filter of the selected widget's ROOT anchor
+  // slot. Undefined when the widget has no slot to filter.
+  onCandidates?: (candidates: SlotCandidates | undefined) => void;
   onClose: () => void;
 }
 
@@ -173,6 +177,7 @@ export function WidgetConfigPanel({
   slotName,
   slotScoped,
   slots,
+  onCandidates,
   onChange,
   onDatasource,
   onScope,
@@ -348,6 +353,10 @@ export function WidgetConfigPanel({
                 scope={slots[slotName]?.scope}
                 onScope={onScope}
               />
+            )}
+
+            {onCandidates && slotName && slots && (
+              <SlotCandidatesFields slot={slots[slotName]} onCandidates={onCandidates} />
             )}
 
             {slotScoped ? (
@@ -640,6 +649,38 @@ function SlotScopeFields({
         </>
       )}
     </div>
+  );
+}
+
+// SlotCandidatesFields authors the type a ROOT area or asset slot's picker is limited to, so a Floor
+// picker does not also offer buildings and plants. Shown only where the loader would keep it: an
+// unscoped anchor slot whose default binding is an area or an asset. A blank clears the filter.
+function SlotCandidatesFields({
+  slot,
+  onCandidates,
+}: {
+  slot: SlotDefinition | undefined;
+  onCandidates: (candidates: SlotCandidates | undefined) => void;
+}) {
+  const { t } = useTranslation('dashboards');
+  const binding = slot?.defaultBinding;
+  if (!slot || slot.type !== 'anchor' || slot.scope || binding?.kind !== 'anchor') return null;
+  const kind = binding.anchor.targetType;
+  if (kind !== 'area' && kind !== 'asset') return null;
+  const value = (kind === 'area' ? slot.candidates?.areaType : slot.candidates?.assetType) ?? '';
+  return (
+    <FormField
+      label={kind === 'area' ? t('widgetLabelPickerAreaType') : t('widgetLabelPickerAssetType')}
+      description={t('widgetPickerTypeHint')}
+    >
+      <Input
+        value={value}
+        onChange={(e) => {
+          const token = e.target.value.trim();
+          onCandidates(token ? (kind === 'area' ? { areaType: token } : { assetType: token }) : undefined);
+        }}
+      />
+    </FormField>
   );
 }
 

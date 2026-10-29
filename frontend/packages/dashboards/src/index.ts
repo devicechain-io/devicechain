@@ -55,6 +55,7 @@ export type {
   SlotSelector,
   UnboundSelector,
   SlotDefinition,
+  SlotCandidates,
   SlotScope,
   SlotBinding,
   SelectionTarget,
@@ -104,6 +105,8 @@ export {
   type ParsedBindingManifest,
 } from './bindings';
 
+export { hasRootAnchorSlots, resolveViewerBindings } from './viewer-bindings';
+
 export {
   resolveContextBindings,
   hasScopedSlots,
@@ -135,6 +138,7 @@ export {
   sameBinding,
   resolveConcrete,
   setSlotScope,
+  setSlotCandidates,
   anchorSlotNames,
   type ConcreteSelector,
 } from './slots';

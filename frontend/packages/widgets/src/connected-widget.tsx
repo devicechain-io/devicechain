@@ -597,7 +597,8 @@ function WidgetUnavailableFrame({ widget }: { widget: WidgetInstance }): ReactNo
 }
 
 // Shown when the platform does not offer the widget's binding to the viewer at all: a member limited
-// to some customers viewing a widget bound to an area or an asset. A settled state, not a failure to
+// to some customers viewing a widget bound to something the platform still declines to resolve for
+// them (a group, say; areas and assets resolve through anchorDevices). A settled state, not a failure to
 // retry, and not "no access" either, since nothing the member could be granted would change it -- so
 // the dashboard's author knows to bind it otherwise.
 function WidgetNotForCustomerUsersFrame({ widget }: { widget: WidgetInstance }): ReactNode {
@@ -607,7 +608,7 @@ function WidgetNotForCustomerUsersFrame({ widget }: { widget: WidgetInstance }):
       kind="unsupported"
       glyph="⊘"
       title="Not available for customer users"
-      detail="This widget is bound to an area or an asset, which customer users cannot view."
+      detail="This widget is bound to something customer users cannot view."
     />
   );
 }

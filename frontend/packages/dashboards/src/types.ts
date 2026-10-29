@@ -580,14 +580,25 @@ export interface SlotDefinition {
   defaultBinding?: SlotBinding;
   // Optional dependency on a parent slot (the context hierarchy). Absent = a root context.
   scope?: SlotScope;
+  // A ROOT anchor slot's picker may list only the areas of one area type, or the assets of one
+  // asset type (a Floor picker that does not offer buildings and plants). Absent = every one the
+  // viewer may see. Ignored for a customer anchor, a device slot and a scoped slot.
+  candidates?: SlotCandidates;
 }
+
+// The type filter a root anchor slot's picker applies, by the type's token.
+export interface SlotCandidates {
+  areaType?: string;
+  assetType?: string;
+}
+
 
 // The entity kinds a root context-selector can list (the anchor target types + a bare
 // device). A scoped child selector does NOT use this — its candidates are the parent
 // anchor's member devices, enumerated via the DeviceResolver, not a list query.
 export type EntityListKind = 'device' | 'customer' | 'area' | 'asset';
 
-// EntityCandidateLister lists the tenant's entities of one kind (token + optional name),
+// EntityCandidateLister lists the entities of one kind (token + optional name) the viewer may see,
 // backing a ROOT context-selector's candidate set. Injected by the host (createEntityLister)
 // so the widgets/dashboards packages carry no extra device-management coupling beyond the
 // one place (resolver.ts) that already owns it. A flat list — nested customer→area→asset

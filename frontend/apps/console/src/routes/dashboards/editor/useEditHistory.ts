@@ -40,6 +40,7 @@ export type EditAction =
   | 'options'
   | 'datasource'
   | 'scope'
+  | 'candidates'
   | 'title'
   | 'canvas'
   | 'fit'

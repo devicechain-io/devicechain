@@ -6,40 +6,38 @@
 // to device-management's schema (the Hub itself couples to event-management's
 // measurementStream), so the widget/renderer layers above stay purely presentational.
 //
-//   devicesForAnchor — a CUSTOMER anchor reads customerDevices(customer, relationship);
-//                      an area or asset anchor reads entityRelationships filtered to
-//                      (source=device, target=anchor), each relationship's source token
-//                      being a member device (the Hub opens one measurementStream per
-//                      token, per ADR-044).
+//   devicesForAnchor — a CUSTOMER anchor reads customerDevices(customer, relationship); an area
+//                      or asset anchor reads anchorDevices(targetType, target), each row being a
+//                      member device (the Hub opens one measurementStream per token, per ADR-044).
 //
-// 🔑 ONE PATH PER ANCHOR KIND, WHOEVER IS VIEWING. The relationship graph is closed to a
-// member limited to some customers (a customer user), so a customer anchor read through it
-// showed that member nothing; customerDevices answers them about their own customers, and
-// for every other viewer it answers exactly what the relationship search does (the
-// device-management test TestCustomerDevicesMatchesTheRelationshipSearchForAnUnscopedCaller
-// pins that), so there is no viewer-dependent branch here. Area and asset anchors stay on
-// the graph: a customer user is refused them (FORBIDDEN, reason SCOPE_UNSUPPORTED), and the
-// hub reports that as an unsupported binding (isDatasourceSupported) rather than as empty.
+// 🔑 ONE PATH PER ANCHOR KIND, WHOEVER IS VIEWING. The relationship graph is closed to a member
+// limited to some customers (a customer user), so an anchor read through it showed that member
+// nothing. customerDevices and anchorDevices answer that member about the devices it can see, and
+// for every other viewer they answer exactly what the relationship search does, so there is no
+// viewer-dependent branch here beyond one: anchorDevices refuses a relationship type from a scoped
+// caller, which readAreaOrAssetPage retries without. An anchor the platform still declines
+// (FORBIDDEN, reason SCOPE_UNSUPPORTED) is reported by the hub as an unsupported binding
+// (isDatasourceSupported) rather than as empty.
 //
 // Results are memoized per-anchor for the resolver's lifetime: a dashboard resolves
 // the same handful of anchors repeatedly (re-mounts, re-renders), and the membership
 // is stable for a viewing session.
 
-import { gql } from '@devicechain/client';
+import { gql, isScopeUnsupportedError } from '@devicechain/client';
 
 import type { DeviceResolver } from './hub';
 import type { MemberRef } from './members';
 import {
+  ANCHOR_DEVICES,
   CUSTOMER_DEVICES,
   DECLARED_METRICS,
   DEVICES_BY_TOKEN,
-  DEVICES_FOR_ANCHOR,
   DEVICE_NAMES,
+  type AnchorDevicesResult,
   type CustomerDevicesResult,
   type DeclaredMetricsResult,
   type DeviceNamesResult,
   type DevicesByTokenResult,
-  type EntityRelationshipsResult,
 } from './queries';
 import type { AnchorTarget } from './types';
 
@@ -47,14 +45,13 @@ import type { AnchorTarget } from './types';
 // with tens of devices, not thousands; server-side aggregation is Phase 2.
 export const ANCHOR_PAGE_SIZE = 500;
 
-// One page of an anchor's members: their tokens, the anchor's true size, and their names when
-// the read that listed them carried them (customerDevices does; the relationship search does not).
+// One page of an anchor's members: their tokens, the anchor's true size, their names and their
+// device type tokens (both anchor reads carry them, so the roster needs no second read).
 interface AnchorPage {
   tokens: string[];
   total: number;
-  names?: Map<string, string | null>;
-  // Their device type tokens, from the same read as `names`.
-  types?: Map<string, string | null>;
+  names: Map<string, string | null>;
+  types: Map<string, string | null>;
 }
 
 // The most device types one declaration read asks for.
@@ -82,19 +79,40 @@ function readAnchorPage(anchor: AnchorTarget): Promise<AnchorPage> {
       };
     });
   }
-  return gql('device-management', DEVICES_FOR_ANCHOR, {
-    criteria: {
-      pageNumber: 1,
-      pageSize: ANCHOR_PAGE_SIZE,
-      sourceType: 'device',
-      targetType: anchor.targetType,
-      target: anchor.targetToken,
-      relationshipType: anchor.relationship,
-    },
-  }).then((r: EntityRelationshipsResult) => {
-    const tokens = r.entityRelationships.results.map((rel) => rel.source.token);
-    return { tokens, total: trueSize(r.entityRelationships.pagination?.totalRecords, tokens.length) };
-  });
+  return readAreaOrAssetPage(anchor);
+}
+
+// An area or an asset: anchorDevices, which answers every viewer. The relationship type is sent
+// first, so an unscoped viewer gets exactly the devices linked by that type, as the relationship
+// search it replaces did. A member limited to some customers is refused the argument (it would let
+// them probe which edge types link their devices) and is answered the tracked ownership edges
+// instead, so that refusal is retried once without it. A second SCOPE_UNSUPPORTED is the platform
+// declining the anchor outright and surfaces as it always has.
+function readAreaOrAssetPage(anchor: AnchorTarget): Promise<AnchorPage> {
+  const read = (relationshipType?: string) =>
+    gql('device-management', ANCHOR_DEVICES, {
+      criteria: {
+        pageNumber: 1,
+        pageSize: ANCHOR_PAGE_SIZE,
+        targetType: anchor.targetType,
+        target: anchor.targetToken,
+        relationshipType,
+      },
+    });
+  return read(anchor.relationship)
+    .catch((err: unknown) => {
+      if (!isScopeUnsupportedError(err)) throw err;
+      return read();
+    })
+    .then((r: AnchorDevicesResult) => {
+      const rows = r.anchorDevices.results;
+      return {
+        tokens: rows.map((d) => d.token),
+        total: trueSize(r.anchorDevices.pagination?.totalRecords, rows.length),
+        names: new Map(rows.map((d) => [d.token, d.name])),
+        types: new Map(rows.map((d) => [d.token, d.deviceType?.token ?? null])),
+      };
+    });
 }
 
 export function createDeviceResolver(): DeviceResolver {
@@ -134,31 +152,17 @@ export function createDeviceResolver(): DeviceResolver {
       return anchorPage(anchor).then((page) => page.tokens);
     },
 
-    // The members of an anchor with their names and the anchor's true size. One page (shared with
-    // devicesForAnchor) plus, when that page carried no names, ONE batched name read, whatever the
-    // size of the fleet. A failed name read is not a failed roster: the tokens still stream, and
-    // the widget labels them by token.
+    // The members of an anchor with their names and the anchor's true size: ONE page, shared with
+    // devicesForAnchor, which carries every member's name and device type.
     anchorMembers(anchor: AnchorTarget): Promise<{ members: MemberRef[]; total: number }> {
       const key = anchorKey(anchor);
       let pending = memberCache.get(key);
       if (!pending) {
         pending = anchorPage(anchor)
-          .then(async ({ tokens, total, names: listed, types: listedTypes }) => {
-            const names = listed ?? new Map<string, string | null>();
-            const types = listedTypes ?? new Map<string, string | null>();
-            if (!listed && tokens.length > 0) {
-              try {
-                const r: DeviceNamesResult = await gql('device-management', DEVICE_NAMES, { tokens });
-                for (const d of r.devicesByToken) {
-                  names.set(d.token, d.name);
-                  types.set(d.token, d.deviceType?.token ?? null);
-                }
-              } catch {
-                // labelled by token, and of no known type
-              }
-            }
-            return { members: tokens.map((token) => ({ token, name: names.get(token) ?? null, deviceType: types.get(token) ?? null })), total };
-          })
+          .then(({ tokens, total, names, types }) => ({
+            members: tokens.map((token) => ({ token, name: names.get(token) ?? null, deviceType: types.get(token) ?? null })),
+            total,
+          }))
           .catch((err) => {
             memberCache.delete(key);
             throw err;

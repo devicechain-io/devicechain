@@ -12,7 +12,7 @@ import { DashboardHub, type DeviceResolver } from './hub';
 import { MEMBER_SEED_CONCURRENCY, type MemberBucketCriteria, type MemberRoster, type MemberSeed, type MemberSeedPlan } from './members';
 import { GraphQLRequestError } from '@devicechain/client';
 
-import { BUCKETED_MEASUREMENTS, CUSTOMER_DEVICES, DECLARED_METRICS, DEVICE_NAMES, DEVICES_FOR_ANCHOR } from './queries';
+import { ANCHOR_DEVICES, BUCKETED_MEASUREMENTS, CUSTOMER_DEVICES, DECLARED_METRICS, DEVICE_NAMES } from './queries';
 import { ANCHOR_PAGE_SIZE, createDeviceResolver } from './resolver';
 import type { DatasourceSelector, MeasurementSample } from './types';
 
@@ -54,10 +54,10 @@ function sample(deviceToken: string, name: string, value: number, at = '2026-10-
 // A backend with `n` devices in the anchor (and `total` rows in all, when that is more).
 function backend(n: number, total = n, failFor?: (token: string) => unknown) {
   h.gql.mockImplementation(async (_area: string, doc: unknown, vars: any) => {
-    if (doc === DEVICES_FOR_ANCHOR) {
+    if (doc === ANCHOR_DEVICES) {
       return {
-        entityRelationships: {
-          results: tokens(n).map((token) => ({ source: { token } })),
+        anchorDevices: {
+          results: tokens(n).map((token) => ({ token, name: `Machine ${token.slice(2)}`, deviceType: { token: 'pump' } })),
           pagination: { totalRecords: total },
         },
       };
@@ -91,7 +91,7 @@ beforeEach(() => {
 });
 
 describe('the roster', () => {
-  it('lists the anchor members with their names, from one relationship page and ONE batched name read', async () => {
+  it('lists the anchor members with their names, from ONE anchor page, with no second read', async () => {
     backend(40);
     const hub = newHub();
     const rosters: MemberRoster[] = [];
@@ -101,8 +101,8 @@ describe('the roster', () => {
     expect(rosters[0].members).toHaveLength(40);
     expect(rosters[0].members[0]).toEqual({ token: 'd-001', name: 'Machine 001', deviceType: 'pump' });
     expect(rosters[0].unbound).toBe(false);
-    expect(countOf(DEVICES_FOR_ANCHOR)).toBe(1);
-    expect(countOf(DEVICE_NAMES)).toBe(1);
+    expect(countOf(ANCHOR_DEVICES)).toBe(1);
+    expect(countOf(DEVICE_NAMES)).toBe(0);
   });
 
   it('reports the true size of an anchor larger than the page it reads', async () => {
@@ -114,21 +114,8 @@ describe('the roster', () => {
     expect(roster!.members).toHaveLength(ANCHOR_PAGE_SIZE);
     expect(roster!.total).toBe(812);
     // The page it asked for is the cap the widget will say it was cut at.
-    const asked = h.gql.mock.calls.find((c) => c[1] === DEVICES_FOR_ANCHOR)![2].criteria;
+    const asked = h.gql.mock.calls.find((c) => c[1] === ANCHOR_DEVICES)![2].criteria;
     expect(asked.pageSize).toBe(ANCHOR_PAGE_SIZE);
-  });
-
-  it('still lists the members when the name read fails: labelled by token, not lost', async () => {
-    backend(3);
-    const inner = h.gql.getMockImplementation()!;
-    h.gql.mockImplementation(async (a: string, doc: unknown, v: unknown) => {
-      if (doc === DEVICE_NAMES) throw new Error('names are down');
-      return inner(a, doc, v);
-    });
-    let roster: MemberRoster | undefined;
-    newHub().subscribeMembers(ANCHOR, { roster: (r) => (roster = r), next: () => {} });
-    await flush();
-    expect(roster!.members.map((m) => m.name)).toEqual([null, null, null]);
   });
 
   it('resolves an unbound slot to an empty, flagged roster without a single round trip', async () => {
@@ -213,16 +200,16 @@ function planOf(...windows: MemberBucketCriteria[]): MemberSeedPlan {
 const PLAN = planOf(WINDOW);
 
 describe('the seed: no query storm', () => {
-  it('costs the plan’s reads per member plus two for the whole roster (N+2 for a one-read plan)', async () => {
+  it('costs the plan’s reads per member plus one for the whole roster (N+1 for a one-read plan)', async () => {
     backend(60);
     const hub = newHub();
     hub.subscribeMembers(ANCHOR, { roster: () => {}, next: () => {} });
     await flush();
     await hub.readMemberSeeds(tokens(60), PLAN, () => {});
-    expect(countOf(DEVICES_FOR_ANCHOR)).toBe(1);
-    expect(countOf(DEVICE_NAMES)).toBe(1);
+    expect(countOf(ANCHOR_DEVICES)).toBe(1);
+    expect(countOf(DEVICE_NAMES)).toBe(0);
     expect(countOf(BUCKETED_MEASUREMENTS)).toBe(60);
-    expect(h.gql).toHaveBeenCalledTimes(62);
+    expect(h.gql).toHaveBeenCalledTimes(61);
   });
 
   it('asks the event store exactly what the plan asked, for the device it is reading', async () => {
@@ -396,7 +383,7 @@ describe('the read each anchor kind takes', () => {
     expect(call[2]).toEqual({
       criteria: { pageNumber: 1, pageSize: ANCHOR_PAGE_SIZE, customer: 'acme', relationshipType: 'assigned' },
     });
-    expect(countOf(DEVICES_FOR_ANCHOR)).toBe(0);
+    expect(countOf(ANCHOR_DEVICES)).toBe(0);
     expect(countOf(DEVICE_NAMES)).toBe(0);
   });
 
@@ -407,7 +394,7 @@ describe('the read each anchor kind takes', () => {
       newHub().subscribeMembers(ds, { roster: () => {}, next: () => {} });
     }
     await flush();
-    expect(countOf(DEVICES_FOR_ANCHOR)).toBe(2);
+    expect(countOf(ANCHOR_DEVICES)).toBe(2);
     expect(countOf(CUSTOMER_DEVICES)).toBe(0);
   });
 });
@@ -544,7 +531,7 @@ describe('isDatasourceSupported', () => {
     expect(await hub.isDatasourceSupported(ANCHOR)).toBe(true);
     hub.subscribeWidget(ANCHOR, { next: () => {} });
     await flush();
-    expect(countOf(DEVICES_FOR_ANCHOR)).toBe(1);
+    expect(countOf(ANCHOR_DEVICES)).toBe(1);
   });
 });
 
