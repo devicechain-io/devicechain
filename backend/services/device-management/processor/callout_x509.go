@@ -89,7 +89,10 @@ func (c *CalloutResponder) countX509(result string) {
 
 // refuseX509 counts a refusal and answers it with the generic denial every refusal gets, so the
 // wire says nothing of which check failed. The counter is where an operator reads that.
-func (c *CalloutResponder) refuseX509(result string) (string, string) {
+func (c *CalloutResponder) refuseX509(obs *calloutObs, result string) (string, string) {
+	if result == x509ResultError {
+		obs.errored = true
+	}
 	c.countX509(result)
 	return "", genericAuthFailure
 }
@@ -116,11 +119,11 @@ func (c *CalloutResponder) refuseX509(result string) (string, string) {
 // Every refusal is the generic denial. The certificate is public and so is its pin, so none of
 // this authenticates on what a device SAYS: the proof of possession is the TLS handshake on this
 // very connection, which the broker has already completed before it asks us.
-func (c *CalloutResponder) authorizeX509(req jwt.AuthorizationRequest, tenant string, presented *model.PresentedCredential, trusted bool, issuer string) (string, string) {
+func (c *CalloutResponder) authorizeX509(req jwt.AuthorizationRequest, tenant string, presented *model.PresentedCredential, trusted bool, issuer string, obs *calloutObs) (string, string) {
 	if !trusted {
 		log.Warn().Str("tenant", tenant).Msg("Auth-callout refused a certificate connect whose request arrived unsealed " +
 			"although an xkey is configured: the broker never sends one.")
-		return c.refuseX509(x509ResultUnsealed)
+		return c.refuseX509(obs, x509ResultUnsealed)
 	}
 	// 🔴 THE ISSUER PIN: the request must have been signed by a live broker server. A certificate
 	// grant needs no secret, so this is what stands between a forged request and a grant if the
@@ -132,34 +135,34 @@ func (c *CalloutResponder) authorizeX509(req jwt.AuthorizationRequest, tenant st
 		switch verdict {
 		case pinPinned:
 		case pinUnavailable:
-			return c.refuseX509(x509ResultPinUnavailable)
+			return c.refuseX509(obs, x509ResultPinUnavailable)
 		case pinPending:
-			return c.refuseX509(x509ResultIssuerPending)
+			return c.refuseX509(obs, x509ResultIssuerPending)
 		default:
 			log.Warn().Str("tenant", tenant).Str("issuer", issuer).Str("claimedServer", req.Server.ID).
 				Msg("Auth-callout refused a certificate connect: the request was not signed by a live broker server.")
-			return c.refuseX509(x509ResultIssuerUnpinned)
+			return c.refuseX509(obs, x509ResultIssuerUnpinned)
 		}
 	}
 	if c.tenantDeleted(tenant) {
 		log.Debug().Str("tenant", tenant).Msg("Auth-callout refused a certificate connect for a deleted tenant.")
-		return c.refuseX509(x509ResultTenantRefused)
+		return c.refuseX509(obs, x509ResultTenantRefused)
 	}
 	if presented.Secret != nil {
 		log.Debug().Str("tenant", tenant).Str("host", req.ClientInformation.Host).
 			Msg("Auth-callout refused a certificate connect that also presented a password.")
-		return c.refuseX509(x509ResultPasswordPresented)
+		return c.refuseX509(obs, x509ResultPasswordPresented)
 	}
 	if req.TLS == nil || len(req.TLS.Certs) == 0 {
 		log.Debug().Str("tenant", tenant).Str("host", req.ClientInformation.Host).
 			Msg("Auth-callout refused a certificate connect: the client presented no certificate.")
-		return c.refuseX509(x509ResultNoCert)
+		return c.refuseX509(obs, x509ResultNoCert)
 	}
 	chain, err := x509trust.ParseChainPEM(req.TLS.Certs)
 	if err != nil {
 		log.Debug().Err(err).Str("tenant", tenant).Str("host", req.ClientInformation.Host).
 			Msg("Auth-callout refused a certificate connect: the presented certificates are not acceptable.")
-		return c.refuseX509(x509ResultCertMalformed)
+		return c.refuseX509(obs, x509ResultCertMalformed)
 	}
 	pin := x509trust.Fingerprint(chain[0])
 
@@ -173,15 +176,18 @@ func (c *CalloutResponder) authorizeX509(req jwt.AuthorizationRequest, tenant st
 		// returns the credential it registered (or found again), and the connect goes on exactly
 		// as if the pin had been there.
 		var result string
-		if found, result = c.unknownX509Pin(ctx, req, tenant, chain); found == nil {
-			return c.refuseX509(result)
+		if c.jit != nil {
+			obs.path = calloutPathX509JIT
 		}
-		return c.grantX509(ctx, req, tenant, chain, found, result)
+		if found, result = c.unknownX509Pin(ctx, req, tenant, chain); found == nil {
+			return c.refuseX509(obs, result)
+		}
+		return c.grantX509(ctx, req, tenant, chain, found, result, obs)
 	}
 	if result := c.x509LookupRefusal(tenant, req, err); result != "" {
-		return c.refuseX509(result)
+		return c.refuseX509(obs, result)
 	}
-	return c.grantX509(ctx, req, tenant, chain, found, x509ResultOK)
+	return c.grantX509(ctx, req, tenant, chain, found, x509ResultOK, obs)
 }
 
 // x509LookupRefusal is the result a failed ResolveX509Connect is counted as, "" for success.
@@ -214,27 +220,27 @@ func (c *CalloutResponder) x509LookupRefusal(tenant string, req jwt.Authorizatio
 // okResult is what a granted connect is counted as ("ok" for a pinned certificate, what
 // registration did for one that registered itself).
 func (c *CalloutResponder) grantX509(ctx context.Context, req jwt.AuthorizationRequest, tenant string,
-	chain []*x509.Certificate, found *model.X509Connect, okResult string) (string, string) {
+	chain []*x509.Certificate, found *model.X509Connect, okResult string, obs *calloutObs) (string, string) {
 	device := found.Device
 	if device == nil || device.Token == "" {
 		log.Error().Str("tenant", tenant).Msg("Auth-callout resolved a certificate credential to no device token.")
-		return c.refuseX509(x509ResultError)
+		return c.refuseX509(obs, x509ResultError)
 	}
 	if found.Anchor == nil || !found.Anchor.Enabled {
 		log.Debug().Str("tenant", tenant).Str("device", device.Token).Str("host", req.ClientInformation.Host).
 			Msg("Auth-callout refused a certificate connect: its trust anchor is disabled.")
-		return c.refuseX509(x509ResultAnchorDisabled)
+		return c.refuseX509(obs, x509ResultAnchorDisabled)
 	}
 	anchorCert, err := found.Anchor.Certificate()
 	if err != nil {
 		log.Warn().Err(err).Str("tenant", tenant).Msg("Auth-callout could not read a stored trust anchor.")
-		return c.refuseX509(x509ResultMisconfigured)
+		return c.refuseX509(obs, x509ResultMisconfigured)
 	}
 	verified, err := x509trust.VerifyClientChain(anchorCert, chain, c.now())
 	if err != nil {
 		log.Debug().Err(err).Str("tenant", tenant).Str("device", device.Token).Str("host", req.ClientInformation.Host).
 			Msg("Auth-callout refused a certificate connect: the chain does not verify to the credential's trust anchor.")
-		return c.refuseX509(x509ResultChainInvalid)
+		return c.refuseX509(obs, x509ResultChainInvalid)
 	}
 	// The device is a copy carrying the credential's expiry (withConnectExpiry); the session is
 	// clamped to the earlier of that and the chain's.
@@ -247,15 +253,15 @@ func (c *CalloutResponder) grantX509(ctx context.Context, req jwt.AuthorizationR
 		return userJWT, ""
 	case grantRefusedDevice:
 		// A disabled device is a withdrawal like a disabled credential.
-		return c.refuseX509(x509ResultRevoked)
+		return c.refuseX509(obs, x509ResultRevoked)
 	case grantRefusedClient:
-		return c.refuseX509(x509ResultClientIDMismatch)
+		return c.refuseX509(obs, x509ResultClientIDMismatch)
 	case grantRefusedFence:
-		return c.refuseX509(x509ResultTenantRefused)
+		return c.refuseX509(obs, x509ResultTenantRefused)
 	case grantRefusedExpiry:
-		return c.refuseX509(x509ResultChainInvalid)
+		return c.refuseX509(obs, x509ResultChainInvalid)
 	default:
-		return c.refuseX509(x509ResultError)
+		return c.refuseX509(obs, x509ResultError)
 	}
 }
 

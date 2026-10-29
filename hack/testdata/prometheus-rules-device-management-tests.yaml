@@ -571,3 +571,83 @@ tests:
       - eval_time: 100m
         alertname: DeviceTrustAnchorsExpiringSoon
         exp_alerts: []
+
+  # Callout latency. Healthy for 20m (everything inside 128ms), slow for 30m (every connect between
+  # 256ms and 512ms), healthy again. 60 connects a minute is 1 a second, well above the traffic floor.
+  # Fires after the ten-minute hold, names the path, and clears once the slow minutes leave the window.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_callout_duration_seconds_bucket{namespace="dci-devicechain", pod="dc-device-management-aaaaa", path="token", result="granted", le="0.128"}'
+        values: '60 120 180 240 300 360 420 480 540 600 660 720 780 840 900 960 1020 1080 1140 1200 1200 1200 1200 1200 1200 1200 1200 1200 1200 1200 1200 1200 1200 1200 1200 1200 1200 1200 1200 1200 1200 1200 1200 1200 1200 1200 1200 1200 1200 1200 1260 1320 1380 1440 1500 1560 1620 1680 1740 1800 1860 1920 1980 2040 2100 2160 2220 2280 2340 2400 2460 2520 2580 2640 2700 2760 2820 2880 2940 3000 3060 3120 3180 3240 3300 3360 3420 3480 3540 3600 3660 3720 3780 3840 3900 3960 4020 4080 4140 4200'
+      - series: 'devicechain_devicemanagement_callout_duration_seconds_bucket{namespace="dci-devicechain", pod="dc-device-management-aaaaa", path="token", result="granted", le="0.256"}'
+        values: '60 120 180 240 300 360 420 480 540 600 660 720 780 840 900 960 1020 1080 1140 1200 1200 1200 1200 1200 1200 1200 1200 1200 1200 1200 1200 1200 1200 1200 1200 1200 1200 1200 1200 1200 1200 1200 1200 1200 1200 1200 1200 1200 1200 1200 1260 1320 1380 1440 1500 1560 1620 1680 1740 1800 1860 1920 1980 2040 2100 2160 2220 2280 2340 2400 2460 2520 2580 2640 2700 2760 2820 2880 2940 3000 3060 3120 3180 3240 3300 3360 3420 3480 3540 3600 3660 3720 3780 3840 3900 3960 4020 4080 4140 4200'
+      - series: 'devicechain_devicemanagement_callout_duration_seconds_bucket{namespace="dci-devicechain", pod="dc-device-management-aaaaa", path="token", result="granted", le="0.512"}'
+        values: '60 120 180 240 300 360 420 480 540 600 660 720 780 840 900 960 1020 1080 1140 1200 1260 1320 1380 1440 1500 1560 1620 1680 1740 1800 1860 1920 1980 2040 2100 2160 2220 2280 2340 2400 2460 2520 2580 2640 2700 2760 2820 2880 2940 3000 3060 3120 3180 3240 3300 3360 3420 3480 3540 3600 3660 3720 3780 3840 3900 3960 4020 4080 4140 4200 4260 4320 4380 4440 4500 4560 4620 4680 4740 4800 4860 4920 4980 5040 5100 5160 5220 5280 5340 5400 5460 5520 5580 5640 5700 5760 5820 5880 5940 6000'
+      - series: 'devicechain_devicemanagement_callout_duration_seconds_bucket{namespace="dci-devicechain", pod="dc-device-management-aaaaa", path="token", result="granted", le="1.024"}'
+        values: '60 120 180 240 300 360 420 480 540 600 660 720 780 840 900 960 1020 1080 1140 1200 1260 1320 1380 1440 1500 1560 1620 1680 1740 1800 1860 1920 1980 2040 2100 2160 2220 2280 2340 2400 2460 2520 2580 2640 2700 2760 2820 2880 2940 3000 3060 3120 3180 3240 3300 3360 3420 3480 3540 3600 3660 3720 3780 3840 3900 3960 4020 4080 4140 4200 4260 4320 4380 4440 4500 4560 4620 4680 4740 4800 4860 4920 4980 5040 5100 5160 5220 5280 5340 5400 5460 5520 5580 5640 5700 5760 5820 5880 5940 6000'
+      - series: 'devicechain_devicemanagement_callout_duration_seconds_bucket{namespace="dci-devicechain", pod="dc-device-management-aaaaa", path="token", result="granted", le="+Inf"}'
+        values: '60 120 180 240 300 360 420 480 540 600 660 720 780 840 900 960 1020 1080 1140 1200 1260 1320 1380 1440 1500 1560 1620 1680 1740 1800 1860 1920 1980 2040 2100 2160 2220 2280 2340 2400 2460 2520 2580 2640 2700 2760 2820 2880 2940 3000 3060 3120 3180 3240 3300 3360 3420 3480 3540 3600 3660 3720 3780 3840 3900 3960 4020 4080 4140 4200 4260 4320 4380 4440 4500 4560 4620 4680 4740 4800 4860 4920 4980 5040 5100 5160 5220 5280 5340 5400 5460 5520 5580 5640 5700 5760 5820 5880 5940 6000'
+      - series: 'devicechain_devicemanagement_callout_duration_seconds_count{namespace="dci-devicechain", pod="dc-device-management-aaaaa", path="token", result="granted"}'
+        values: '60 120 180 240 300 360 420 480 540 600 660 720 780 840 900 960 1020 1080 1140 1200 1260 1320 1380 1440 1500 1560 1620 1680 1740 1800 1860 1920 1980 2040 2100 2160 2220 2280 2340 2400 2460 2520 2580 2640 2700 2760 2820 2880 2940 3000 3060 3120 3180 3240 3300 3360 3420 3480 3540 3600 3660 3720 3780 3840 3900 3960 4020 4080 4140 4200 4260 4320 4380 4440 4500 4560 4620 4680 4740 4800 4860 4920 4980 5040 5100 5160 5220 5280 5340 5400 5460 5520 5580 5640 5700 5760 5820 5880 5940 6000'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: DeviceCalloutLatencyHigh
+        exp_alerts: []
+      # Slow since minute 20, but not for ten minutes yet.
+      - eval_time: 27m
+        alertname: DeviceCalloutLatencyHigh
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: DeviceCalloutLatencyHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              path: token
+            exp_annotations:
+              summary: "Device connects are being decided slowly by the auth callout"
+              description: "For 10m the 99th percentile time to decide a token device connect has been above 250ms (509.4ms now). The time runs from a request being picked up to the answer being published. The broker gives up on an answer after 5 seconds and the device is refused, so a callout this slow is on its way to refusing devices. It is nearly always the database behind the credential lookup (token and password) or the trust-anchor and chain work (x509, x509-jit), or a reconnect storm queueing behind the callout's in-flight limit. Compare callout_in_flight with its limit, callout_refused_busy_total, the device-management database latency, and the log for credential store failures."
+      - eval_time: 70m
+        alertname: DeviceCalloutLatencyHigh
+        exp_alerts: []
+
+  # A callout that stays fast never fires it.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_callout_duration_seconds_bucket{namespace="dci-devicechain", pod="dc-device-management-aaaaa", path="password", result="granted", le="0.128"}'
+        values: '60 120 180 240 300 360 420 480 540 600 660 720 780 840 900 960 1020 1080 1140 1200 1260 1320 1380 1440 1500 1560 1620 1680 1740 1800 1860 1920 1980 2040 2100 2160 2220 2280 2340 2400 2460 2520 2580 2640 2700 2760 2820 2880 2940 3000 3060 3120 3180 3240 3300 3360 3420 3480 3540 3600'
+      - series: 'devicechain_devicemanagement_callout_duration_seconds_bucket{namespace="dci-devicechain", pod="dc-device-management-aaaaa", path="password", result="granted", le="0.256"}'
+        values: '60 120 180 240 300 360 420 480 540 600 660 720 780 840 900 960 1020 1080 1140 1200 1260 1320 1380 1440 1500 1560 1620 1680 1740 1800 1860 1920 1980 2040 2100 2160 2220 2280 2340 2400 2460 2520 2580 2640 2700 2760 2820 2880 2940 3000 3060 3120 3180 3240 3300 3360 3420 3480 3540 3600'
+      - series: 'devicechain_devicemanagement_callout_duration_seconds_bucket{namespace="dci-devicechain", pod="dc-device-management-aaaaa", path="password", result="granted", le="0.512"}'
+        values: '60 120 180 240 300 360 420 480 540 600 660 720 780 840 900 960 1020 1080 1140 1200 1260 1320 1380 1440 1500 1560 1620 1680 1740 1800 1860 1920 1980 2040 2100 2160 2220 2280 2340 2400 2460 2520 2580 2640 2700 2760 2820 2880 2940 3000 3060 3120 3180 3240 3300 3360 3420 3480 3540 3600'
+      - series: 'devicechain_devicemanagement_callout_duration_seconds_bucket{namespace="dci-devicechain", pod="dc-device-management-aaaaa", path="password", result="granted", le="1.024"}'
+        values: '60 120 180 240 300 360 420 480 540 600 660 720 780 840 900 960 1020 1080 1140 1200 1260 1320 1380 1440 1500 1560 1620 1680 1740 1800 1860 1920 1980 2040 2100 2160 2220 2280 2340 2400 2460 2520 2580 2640 2700 2760 2820 2880 2940 3000 3060 3120 3180 3240 3300 3360 3420 3480 3540 3600'
+      - series: 'devicechain_devicemanagement_callout_duration_seconds_bucket{namespace="dci-devicechain", pod="dc-device-management-aaaaa", path="password", result="granted", le="+Inf"}'
+        values: '60 120 180 240 300 360 420 480 540 600 660 720 780 840 900 960 1020 1080 1140 1200 1260 1320 1380 1440 1500 1560 1620 1680 1740 1800 1860 1920 1980 2040 2100 2160 2220 2280 2340 2400 2460 2520 2580 2640 2700 2760 2820 2880 2940 3000 3060 3120 3180 3240 3300 3360 3420 3480 3540 3600'
+      - series: 'devicechain_devicemanagement_callout_duration_seconds_count{namespace="dci-devicechain", pod="dc-device-management-aaaaa", path="password", result="granted"}'
+        values: '60 120 180 240 300 360 420 480 540 600 660 720 780 840 900 960 1020 1080 1140 1200 1260 1320 1380 1440 1500 1560 1620 1680 1740 1800 1860 1920 1980 2040 2100 2160 2220 2280 2340 2400 2460 2520 2580 2640 2700 2760 2820 2880 2940 3000 3060 3120 3180 3240 3300 3360 3420 3480 3540 3600'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: DeviceCalloutLatencyHigh
+        exp_alerts: []
+
+  # A slow callout with next to no traffic is not a latency signal: the same slowness at under one
+  # connect every twenty seconds stays quiet, so a single slow request on an idle instance does not page.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_callout_duration_seconds_bucket{namespace="dci-devicechain", pod="dc-device-management-aaaaa", path="x509", result="granted", le="0.128"}'
+        values: '0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
+      - series: 'devicechain_devicemanagement_callout_duration_seconds_bucket{namespace="dci-devicechain", pod="dc-device-management-aaaaa", path="x509", result="granted", le="0.256"}'
+        values: '0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
+      - series: 'devicechain_devicemanagement_callout_duration_seconds_bucket{namespace="dci-devicechain", pod="dc-device-management-aaaaa", path="x509", result="granted", le="0.512"}'
+        values: '2 4 6 8 10 12 14 16 18 20 22 24 26 28 30 32 34 36 38 40 42 44 46 48 50 52 54 56 58 60 62 64 66 68 70 72 74 76 78 80 82 84 86 88 90 92 94 96 98 100 102 104 106 108 110 112 114 116 118 120'
+      - series: 'devicechain_devicemanagement_callout_duration_seconds_bucket{namespace="dci-devicechain", pod="dc-device-management-aaaaa", path="x509", result="granted", le="1.024"}'
+        values: '2 4 6 8 10 12 14 16 18 20 22 24 26 28 30 32 34 36 38 40 42 44 46 48 50 52 54 56 58 60 62 64 66 68 70 72 74 76 78 80 82 84 86 88 90 92 94 96 98 100 102 104 106 108 110 112 114 116 118 120'
+      - series: 'devicechain_devicemanagement_callout_duration_seconds_bucket{namespace="dci-devicechain", pod="dc-device-management-aaaaa", path="x509", result="granted", le="+Inf"}'
+        values: '2 4 6 8 10 12 14 16 18 20 22 24 26 28 30 32 34 36 38 40 42 44 46 48 50 52 54 56 58 60 62 64 66 68 70 72 74 76 78 80 82 84 86 88 90 92 94 96 98 100 102 104 106 108 110 112 114 116 118 120'
+      - series: 'devicechain_devicemanagement_callout_duration_seconds_count{namespace="dci-devicechain", pod="dc-device-management-aaaaa", path="x509", result="granted"}'
+        values: '2 4 6 8 10 12 14 16 18 20 22 24 26 28 30 32 34 36 38 40 42 44 46 48 50 52 54 56 58 60 62 64 66 68 70 72 74 76 78 80 82 84 86 88 90 92 94 96 98 100 102 104 106 108 110 112 114 116 118 120'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: DeviceCalloutLatencyHigh
+        exp_alerts: []

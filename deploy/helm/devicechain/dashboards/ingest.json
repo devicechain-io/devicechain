@@ -64,7 +64,7 @@
   },
   "timepicker": {},
   "timezone": "",
-  "title": "DeviceChain \u2014 Ingest",
+  "title": "DeviceChain — Ingest",
   "uid": "dc-ingest-ops",
   "description": "Where device data enters the platform: how much is arriving, whether the MQTT backlog is keeping up, and what is being refused or lost at the door. Start with the red tiles: messages lost before being read must be zero. Each instance gets its own copy of this board, scoped to it.",
   "version": 1,
@@ -94,7 +94,7 @@
           },
           "instant": true,
           "format": "table",
-          "expr": "max by (alertname, severity) (ALERTS{alertstate=\"firing\", devicechain_instance=\"$instance\", alertname=~\"Mqtt.*|ExternalMqtt.*|BrokerPresence.*|DeviceCredential.*|DeviceLookupCache.*|TenantsMetered.*|RateLimiter.*|JetStreamCapture.*|JetStreamDurableLostUnread|JetStreamIngestBackpressure.*|JetStreamUnreadBacklog.*|SparkplugIngest.*|Lwm2mIngest.*|Provisioning.*\"})"
+          "expr": "max by (alertname, severity) (ALERTS{alertstate=\"firing\", devicechain_instance=\"$instance\", alertname=~\"Mqtt.*|ExternalMqtt.*|BrokerPresence.*|DeviceCredential.*|DeviceLookupCache.*|TenantsMetered.*|RateLimiter.*|JetStreamCapture.*|JetStreamDurableLostUnread|JetStreamIngestBackpressure.*|JetStreamUnreadBacklog.*|SparkplugIngest.*|Lwm2mIngest.*|Provisioning.*|DeviceCallout.*\"})"
         }
       ],
       "fieldConfig": {
@@ -3063,6 +3063,144 @@
       }
     },
     {
+      "id": 120,
+      "type": "row",
+      "title": "Device sign-in callout latency",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 100
+      },
+      "panels": []
+    },
+    {
+      "id": 121,
+      "type": "timeseries",
+      "title": "Time to authorize a device connect",
+      "description": "How long the median and the slowest few percent of device connects take to be decided by the auth callout, from the moment a request is picked up to the moment the answer is published. Refusals and failures are included; requests turned away because the callout was busy or the message store was full are not timed. Above a quarter of a second for ten minutes raises DeviceCalloutLatencyHigh.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 101
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(devicechain_devicemanagement_callout_duration_seconds_bucket{namespace=\"$namespace\"}[$__rate_interval])))",
+          "legendFormat": "median"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(devicechain_devicemanagement_callout_duration_seconds_bucket{namespace=\"$namespace\"}[$__rate_interval])))",
+          "legendFormat": "99th percentile"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 30,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 122,
+      "type": "timeseries",
+      "title": "99th percentile by credential type",
+      "description": "The slowest few percent of device connects by the credential presented: token, password, certificate already registered (x509), certificate registering itself on first connect (x509-jit) and a username that named no credential (unparsed). A path with no connects in the window shows no line.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 101
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le, path) (rate(devicechain_devicemanagement_callout_duration_seconds_bucket{namespace=\"$namespace\"}[$__rate_interval])))",
+          "legendFormat": "{{path}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 30,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
       "id": 40,
       "type": "row",
       "title": "Sparkplug ingest (optional service)",
@@ -3071,7 +3209,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 100
+        "y": 109
       },
       "panels": [
         {
@@ -3344,7 +3482,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 101
+        "y": 110
       },
       "panels": [
         {
