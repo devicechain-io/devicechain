@@ -15,6 +15,7 @@ title: 租户删除
 |---|---|
 | **立即** | 撤销登录权限，禁用租户并标记为正在删除，同时记录访问切断时刻。约一分钟内，拒绝新的设备连接、数据接入和指令下发。 |
 | **一到两分钟内** | 后台协调器开始从每个持有租户数据的存储系统回收数据，持续执行直到所有系统都报告不再持有数据。 |
+| **所有存储系统持续保持已清空直至静默窗口结束**（默认五分钟） | 删除被记录为[已清除](#erased-signal)：平台确认该租户的数据已不存在。令牌仍被保留。 |
 | **至少 12 小时后** | 移除租户记录，其标识令牌可再次使用。 |
 
 删除操作本身具有幂等性。删除不存在或已经处于删除过程中的租户会成功返回，不产生其他变更。因此，可以重新运行中途失败的清理脚本。
@@ -93,6 +94,33 @@ title: 租户删除
 - 原成员在租户删除完成*之后*尝试登录，会产生一条标识该用户的新记录；此时该令牌可能已经属于其他租户。
 - 用户自身资料的日志条目仍记录被修改的账户。账户不属于租户，也不随租户删除，因此能够访问两者的运营方仍可以建立关联。销毁的是日志中的姓名，不是日志所引用账户的存在。
 
+## 确认数据已被清除 {#erased-signal}
+
+删除有两个应当区分的结果，平台会把两者都记录在删除记录上。
+
+- **已清除**（`erasedAt`）：截至协调器最近一轮，所有存储系统都已报告已清空，并在整个静默窗口内持续保持已清空。这是平台对“该租户的数据已不存在”的声明，`lastVerifiedAt` 是最近一次确认它的轮次。有人询问某项清除请求何时完成时，应引用这个时刻，并附上下文所述的限定。
+- **已完成**（`completedAt`）：令牌还已满足完整的保留期并被释放。它比 `erasedAt` 晚大约一个令牌保留期，默认 12 小时。**只有 `completedAt` 是最终结果。**
+
+`erasedAt` 是持续有效的声明，而不是日志条目，且只有在所有存储系统一致时才会作出。只要有任何一个存储系统仍持有数据、无法访问，或在最近一轮中仍擦除了数据，就不会作出该声明：只完成一部分的删除不算已清除。在重新检查完所有存储系统之前就中断的一轮也会撤回该声明，因为它没有确认任何事。协调器在令牌保留期内仍持续清扫，因此如果声明作出之后数据重新出现（例如静默窗口之后才落地的迟到写入），声明会被撤回，`erasedAt` 和 `lastVerifiedAt` 恢复为空，待各存储再次稳定后重新作出。可通过 `lastVerifiedAt` 判断声明有多新。带有 `completedAt` 的记录，其 `erasedAt` 一定不晚于它。
+
+可通过管理 API 读取；声明有效或删除已完成时，`erased` 为 true：
+
+```graphql
+query {
+  tenantDeletions(criteria: {pageNumber: 1, pageSize: 50}) {
+    results { token epoch erased erasedAt lastVerifiedAt completedAt awaiting blockedBy }
+  }
+}
+```
+
+在终端中，`dcctl tenant-deletion status <token>` 会输出同一条记录，且除非数据已被清除，否则以非零状态退出，因此清理脚本可以依赖它：
+
+```bash
+dcctl tenant-deletion status acme --email ops@example.com --password "$PASSWORD" --wait --timeout 1h
+```
+
+`--wait` 会轮询直到声明有效，若 `--timeout` 先到则失败。`--until complete` 改为等待令牌释放。没有删除记录的令牌是错误，绝不会被当作成功。由于令牌可以被重复使用，该命令绝不会报告“该令牌最新的记录”：正在被删除的租户绑定到它自己的那次删除（其当前纪元，从删除的那一刻起就存在），未在删除中的租户是错误，租户消失后则报告最近一次已完成的删除并打印其纪元。`--epoch` 可绑定到某一次特定的删除。输出包含声明最近一次验证的时间以及各存储系统的备注，例如本实例上不存在的遥测数据库。计数器 `devicechain_usermanagement_tenant_purge_erased_total`（见[下文](#blocked-store)）会在每次作出声明时计数。
+
 ## 什么会阻碍删除完成 {#stalled}
 
 删除长期未完成，通常由以下情况之一造成；平台日志会明确指出原因：
@@ -127,6 +155,7 @@ query {
 - `devicechain_usermanagement_tenant_purge_store_blocked{store,reason}`：各存储系统当前阻塞的未完成删除数量。`store` 为 `rdb`（关系型数据）、`tsdb`（遥测）、`broker`（流）、`kv`（键值存储桶）、`detect`（检测状态）、`blob`（对象存储）或 `other`。`reason` 为 `deferred`（存储回答数据仍然存在或仍在写入）或 `error`（无法向该存储发出请求）。所有组合都会导出，无阻塞时为 0。
 - `devicechain_usermanagement_tenant_purge_store_rows_erased_total{store}`：各存储已擦除的行、对象、消息或键数量。被阻塞的存储若计数仍在上升，说明正在处理大型租户；计数持平则没有进展。
 - `devicechain_usermanagement_tenant_purge_store_erase_duration_seconds{store}`：每次擦除调用的耗时，可看出时间花在哪个存储上。
+- `devicechain_usermanagement_tenant_purge_erased_total`：已作出的清除声明数（见[确认数据已被清除](#erased-signal)）。
 - `devicechain_usermanagement_tenant_purge_completed_total`、`tenant_purge_failures_total`、`tenant_purge_duration_seconds` 和 `tenant_purge_clean_duration_seconds`：已完成的删除数；协调器未能在一轮中推进某个删除的次数（下一轮会重试）；从删除到令牌释放的时间；以及从删除到最后一个存储报告已清空的时间。最后一项不含稳定等待和令牌保留等待，因此衡量的是擦除本身。
 
 三条告警使用这些指标。`TenantPurgeStoreFailing` 在某个存储持续一小时返回错误时触发。`TenantPurgeStoreHolding` 在某个存储报告数据仍然存在的时间达到令牌保留时间时触发。`TenantPurgeCoordinatorFailing` 在协调器自身持续无法推进删除时触发。前两条的 `store` 标签给出存储名称；日志行 “Tenant purge store did not report clean” 和 `tenantDeletions` 查询给出原因。

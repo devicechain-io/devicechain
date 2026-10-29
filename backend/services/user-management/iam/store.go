@@ -488,12 +488,25 @@ func (s *Store) SetTenantEnabled(ctx context.Context, t *Tenant, enabled bool) e
 // The caller must ensure no memberships still reference the tenant
 // (see CountMembershipsInTenant) — that is what actually revokes human access; this
 // marks the tenant so nothing can mint a token for it or re-create it afterwards.
+//
+// 🔴 THE DELETION RECORD IS OPENED IN THE SAME TRANSACTION AS THE CUT. A purging tenant
+// therefore always has its own record at its own epoch. If the record were left to the
+// coordinator's first pass, then between the delete and that pass the newest record for the
+// token would be a PREDECESSOR's completed one, and anything asking "is acme erased?" by token
+// would be told yes about data it had not touched. Making the record exist from the first
+// instant removes the window, rather than asking every reader to guard against it.
 func (s *Store) BeginTenantPurge(ctx context.Context, t *Tenant, epoch time.Time) error {
-	return s.sys(ctx).Model(t).Updates(map[string]any{
-		"enabled":     false,
-		"purge_state": PurgePurging,
-		"purge_epoch": epoch,
-	}).Error
+	return s.sys(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(t).Updates(map[string]any{
+			"enabled":     false,
+			"purge_state": PurgePurging,
+			"purge_epoch": epoch,
+		}).Error; err != nil {
+			return err
+		}
+		rec := TenantPurge{Token: t.Token, Epoch: epoch}
+		return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&rec).Error
+	})
 }
 
 // ListTenantTiers returns the tier catalog (ADR-065) in the operator's arranged order

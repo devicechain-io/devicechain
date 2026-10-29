@@ -324,6 +324,7 @@ Estas cuentan el coordinador de eliminación de inquilinos, que borra los datos 
 | `tenant_purge_store_rows_erased_total{store}` | Filas, objetos, mensajes o claves que ha borrado cada almacén en eliminaciones de inquilino: la señal de avance de un almacén bloqueado. |
 | `tenant_purge_store_erase_duration_seconds{store}` | Histograma de lo que tardó una llamada de borrado de un almacén. |
 | `tenant_purge_completed_total` | Eliminaciones de inquilino completadas: todos los almacenes limpios, asentados y retenidos, barreras levantadas e identificador liberado. |
+| `tenant_purge_erased_total` | Declaraciones de borrado de inquilino establecidas: todos los almacenes limpios y asentados, antes de que termine la retención del identificador. Una declaración retirada porque un almacén volvió a informar datos, y restablecida después, se cuenta de nuevo. |
 | `tenant_purge_failures_total` | Veces que el coordinador no pudo llevar la eliminación de un inquilino a término en una pasada. Reintenta en la siguiente, así que cuenta intentos. `TenantPurgeCoordinatorFailing` la vigila. |
 | `tenant_purge_duration_seconds` | Histograma de segundos desde la eliminación de un inquilino hasta la liberación de su identificador. Incluye la retención del identificador. |
 | `tenant_purge_clean_duration_seconds` | Histograma de segundos desde la eliminación de un inquilino hasta que el último almacén informó de que estaba limpio. Excluye las esperas de asentamiento y retención posteriores: lo que tardó el borrado en sí. |

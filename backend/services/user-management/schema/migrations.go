@@ -132,5 +132,8 @@ var (
 		// (its seed sealed in the secret store, never in this table), the per-source failure
 		// rows behind the lock, the single-use recovery codes, and iam_tenants.mfa_required.
 		NewMfaMigration(),
+		// The deletion record's erased_at: the standing claim that every store is clean and has
+		// stayed clean for the settle window, earlier than completed_at (the token release).
+		NewTenantPurgeErasedAtMigration(),
 	}
 )
