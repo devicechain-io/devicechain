@@ -555,16 +555,21 @@ clúster. Una actualización vuelve a emitir ese certificado cuando está dentro
 días, o cuando ya no cubre todos los nombres por los que los bróker se llaman entre sí —que es
 lo que le hace escalar una instancia a un certificado que, por lo demás, sigue holgadamente en
 vigor. La reemisión se hace bajo la **misma** autoridad, así que nada tiene que volver a
-confiar en nada, y el bróker se reinicia para que sirva de verdad el certificado nuevo en lugar
-de conservar el antiguo hasta que algo ajeno lo reinicie. Fuera de esas condiciones la
-comprobación se ejecuta y no hace nada.
+confiar en nada. Cuando solo cambia el certificado, el bróker **no** se reinicia: intercambia el
+certificado en caliente, y la actualización espera, hasta cinco minutos, a que todos los bróker
+informen del vencimiento del certificado nuevo. Si un bróker no ha cambiado en ese tiempo, la
+actualización avisa y reinicia los bróker para que ninguno siga sirviendo el certificado
+antiguo. Los bróker se reinician de inmediato cuando cambia algo más que el certificado: la
+autoridad o el número de servidores. Si la actualización cambia además la imagen o la
+configuración del bróker, ese cambio ya los reinicia. Fuera de esas condiciones la comprobación
+se ejecuta y no hace nada.
 
 Ese certificado lo acuña y lo renueva `dcctl`, no cert-manager, que emite los certificados web
 de la instancia y no interviene en el del bróker. El certificado del bróker está en el Secret
 `dc-nats-tls` del namespace de la instancia, y es `dcctl upgrade` quien lo reescribe. Un bróker
 al que se entrega un certificado nuevo bajo la misma autoridad lo sirve a las conexiones nuevas
 sin recargar su configuración, así que el cambio de certificado no corta las sesiones MQTT que
-ya mantiene. El reinicio que hace la actualización es un reinicio progresivo corriente, un
+ya mantiene. Un reinicio que sí haga la actualización es un reinicio progresivo corriente, un
 bróker cada vez, y reconecta los dispositivos como cualquier reinicio del bróker.
 
 Una instancia arrancada antes de que `dcctl` conservara esa autoridad no puede tener su
