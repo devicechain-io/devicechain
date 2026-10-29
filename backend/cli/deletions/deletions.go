@@ -79,7 +79,7 @@ const pageSize = 200
 // so there is no erasure to report, and a predecessor's finished record is not that tenant's.
 var ErrNotDeleting = errors.New("the tenant is active and is not being deleted")
 
-// Find reads the deletion of a token, bound to ONE epoch.
+// Lookup reads the deletion of a token, bound to ONE epoch.
 //
 // A TOKEN IS REUSABLE, SO A TOKEN ALONE DOES NOT NAME A DELETION. "The newest record for
 // acme" can be the PREVIOUS acme's completed one, and reporting it would tell a caller that a
@@ -94,7 +94,7 @@ var ErrNotDeleting = errors.New("the tenant is active and is not being deleted")
 //     is reported, with its epoch printed so the caller can see which one it is.
 //
 // It returns nil, nil only when no record exists at the epoch it bound to.
-func Find(ctx context.Context, c Client, adminURL, token, epoch string) (*Deletion, error) {
+func Lookup(ctx context.Context, c Client, adminURL, token, epoch string) (*Deletion, error) {
 	if epoch == "" {
 		var out struct {
 			Tenants []tenantRow `json:"tenants"`
@@ -198,7 +198,7 @@ func Reached(d *Deletion, t Target) bool {
 func Wait(ctx context.Context, c Client, adminURL, token, epoch string, t Target, every time.Duration,
 	progress func(*Deletion)) (*Deletion, error) {
 	for {
-		d, err := Find(ctx, c, adminURL, token, epoch)
+		d, err := Lookup(ctx, c, adminURL, token, epoch)
 		if err != nil {
 			return nil, err
 		}

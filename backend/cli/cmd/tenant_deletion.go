@@ -112,7 +112,7 @@ func tenantDeletionStatus(ctx context.Context, cmd *cobra.Command, c deletions.C
 			fmt.Fprintf(out, "waiting: %s\n", p.Awaiting)
 		})
 	} else {
-		d, err = deletions.Find(ctx, c, adminURL, token, epoch)
+		d, err = deletions.Lookup(ctx, c, adminURL, token, epoch)
 		if err == nil && d == nil {
 			err = fmt.Errorf("no deletion record for tenant %q: it was never deleted, or the token is not spelled as stored", token)
 		}

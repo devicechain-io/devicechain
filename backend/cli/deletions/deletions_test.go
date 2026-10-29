@@ -99,14 +99,14 @@ func TestAPurgingTenantIsBoundToItsOwnEpoch(t *testing.T) {
 			{Token: "acme", Epoch: e1, Awaiting: "STORES", BlockedBy: []string{"tsdb: holds rows"}},
 		},
 	}
-	d, err := Find(context.Background(), c, "u", "acme", "")
+	d, err := Lookup(context.Background(), c, "u", "acme", "")
 	require.NoError(t, err)
 	require.NotNil(t, d)
 	require.Equal(t, e1, d.Epoch)
 	require.False(t, Reached(d, TargetErased))
 
 	c.records[1] = Deletion{Token: "acme", Epoch: e1, Erased: true, ErasedAt: ptr("z"), Awaiting: "TOKEN_HOLD"}
-	d, err = Find(context.Background(), c, "u", "acme", "")
+	d, err = Lookup(context.Background(), c, "u", "acme", "")
 	require.NoError(t, err)
 	require.True(t, Reached(d, TargetErased))
 	require.False(t, Reached(d, TargetComplete))
@@ -117,7 +117,7 @@ func TestAnActiveTenantIsNotBeingDeletedWhateverItsPredecessorDid(t *testing.T) 
 		tenants: []tenantRow{{Token: "acme", PurgeState: "active"}},
 		records: []Deletion{{Token: "acme", Epoch: "2026-09-01T00:00:00Z", Erased: true, ErasedAt: ptr("x"), CompletedAt: ptr("y")}},
 	}
-	_, err := Find(context.Background(), c, "u", "acme", "")
+	_, err := Lookup(context.Background(), c, "u", "acme", "")
 	require.ErrorIs(t, err, ErrNotDeleting)
 }
 
@@ -125,12 +125,12 @@ func TestAGoneTenantReportsItsNewestCompletedDeletionWithItsEpoch(t *testing.T) 
 	c := &routedClient{records: []Deletion{
 		{Token: "acme", Epoch: "2026-09-01T00:00:00Z", Erased: true, ErasedAt: ptr("x"), CompletedAt: ptr("y")},
 	}}
-	d, err := Find(context.Background(), c, "u", "acme", "")
+	d, err := Lookup(context.Background(), c, "u", "acme", "")
 	require.NoError(t, err)
 	require.Equal(t, "2026-09-01T00:00:00Z", d.Epoch)
 	require.True(t, Reached(d, TargetComplete))
 
-	d, err = Find(context.Background(), c, "u", "nobody", "")
+	d, err = Lookup(context.Background(), c, "u", "nobody", "")
 	require.NoError(t, err)
 	require.Nil(t, d)
 }
@@ -143,10 +143,10 @@ func TestAnExplicitEpochBindsToExactlyThatDeletion(t *testing.T) {
 			{Token: "acme", Epoch: e1},
 		},
 	}
-	d, err := Find(context.Background(), c, "u", "acme", "2026-09-01T00:00:00Z")
+	d, err := Lookup(context.Background(), c, "u", "acme", "2026-09-01T00:00:00Z")
 	require.NoError(t, err)
 	require.Equal(t, "2026-09-01T00:00:00Z", d.Epoch)
-	d, err = Find(context.Background(), c, "u", "acme", "2030-01-01T00:00:00Z")
+	d, err = Lookup(context.Background(), c, "u", "acme", "2030-01-01T00:00:00Z")
 	require.NoError(t, err)
 	require.Nil(t, d)
 }
