@@ -181,6 +181,7 @@ Gateway 提供与 Ingress 对象相同的主机、路径和后端。变化的是
 - **下载的查询字符串不会进入访问日志**（访问日志默认关闭）。下载授权就在 `?cap=` 中。
 - **路径区分大小写，并在路径段边界结束。** `/API/<area>` 和 `/api/<area>X` 会落到控制台，而不会到达该功能区。
 - **客户端地址。** Traefik 把真实的对端地址写入 `X-Forwarded-For`，其 Service 使用 `externalTrafficPolicy: Local`；见[客户端地址与受信任代理](./bootstrap.md#trusted-proxies)。在 AWS 上，经典负载均衡器会隐藏客户端地址。`dcctl install --aws-nlb traefik` 会为 Traefik 的 Service 配置 NLB，迁移期间应使用这个值，因为 `ingress-nginx` 继续使用自己的负载均衡器提供服务。更改 Service 会替换其负载均衡器并更改主机名，所以之后要重新指向 DNS。
+- **滚动发布会先排空。** 在云负载均衡器之后（`externalTrafficPolicy: Local`），均衡器会继续向一个节点发送流量，直到健康检查把它剔除，所以立即退出的控制器 Pod 会在均衡器反应过来之前丢弃请求。现在两个控制器在收到停止指令后会继续服务 40 秒，新 Pod 就绪 15 秒之后才会移除旧 Pod，因此滚动发布或 Pod 换节点不会丢失请求。每个副本的滚动发布因此大约多花一分钟。这段等待只在负载均衡器之后生效：在本地集群中，控制器占用节点端口或位于 NodePort 之后，没有需要等待的对象，滚动发布和以前一样快。每个控制器模块的 OpenTofu 变量 `drain_seconds` 和 `min_ready_seconds` 可以调整；设为 `0` 即关闭。
 
 ## 相关 {#ingress-cutover-related}
 

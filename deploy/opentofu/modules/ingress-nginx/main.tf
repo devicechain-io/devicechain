@@ -89,6 +89,43 @@ variable "aws_nlb" {
   default     = false
 }
 
+variable "drain_seconds" {
+  description = <<-EOT
+    How long a controller pod keeps serving after it is told to terminate, so a cloud load
+    balancer that still points at its node does not hit a closed port. Applied ONLY where
+    externalTrafficPolicy is Local (a LoadBalancer Service, no host port): there the balancer
+    sends to a node until its health check fails it, which takes about three 8-second probes
+    on GCP, so a pod that leaves at once drops requests (connection refused, then connect
+    timeouts) until the balancer notices. The controller's own preStop (/wait-shutdown) signals it, and
+    --shutdown-grace-period holds the shutdown this long while it keeps serving. Not applied
+    on kind (NodePort / host port): there is no balancer to wait for and the sleep would only
+    slow every rollout. 0 turns it off.
+  EOT
+  type        = number
+  default     = 40
+
+  validation {
+    condition     = var.drain_seconds >= 0 && var.drain_seconds <= 120 && var.drain_seconds == floor(var.drain_seconds)
+    error_message = "drain_seconds must be a whole number between 0 and 120."
+  }
+}
+
+variable "min_ready_seconds" {
+  description = <<-EOT
+    Seconds a new controller pod must be ready before the rollout counts it available and
+    removes an old one. Applied only where externalTrafficPolicy is Local, for the same reason
+    as drain_seconds: the balancer needs time to see the new pod's node as healthy before the
+    old pod's node can leave. 0 turns it off.
+  EOT
+  type        = number
+  default     = 15
+
+  validation {
+    condition     = var.min_ready_seconds >= 0 && var.min_ready_seconds <= 120 && var.min_ready_seconds == floor(var.min_ready_seconds)
+    error_message = "min_ready_seconds must be a whole number between 0 and 120."
+  }
+}
+
 variable "replicas" {
   description = <<-EOT
     Controller replicas. Forced to 1 with use_host_port (two pods cannot share a node's
@@ -109,6 +146,19 @@ variable "replicas" {
 
 locals {
   replicas = var.use_host_port ? 1 : var.replicas
+
+  # Hitless rollouts behind a cloud balancer: only where the Service is a LoadBalancer with
+  # externalTrafficPolicy: Local (not the host-port recipe). The chart already runs
+  # /wait-shutdown in preStop; --shutdown-grace-period is what makes it keep serving for
+  # drain_seconds before nginx stops. terminationGracePeriodSeconds stays at the chart's 300
+  # (explicit here), which is what lets a long upload finish and is far above the drain.
+  drain = {
+    for k, v in {
+      minReadySeconds               = var.min_ready_seconds
+      extraArgs                     = { "shutdown-grace-period" = var.drain_seconds }
+      terminationGracePeriodSeconds = 300
+    } : k => v if !var.use_host_port && (k == "minReadySeconds" ? var.min_ready_seconds > 0 : var.drain_seconds > 0)
+  }
 
   ingress_controller_base = {
     replicaCount = local.replicas
@@ -224,7 +274,7 @@ resource "helm_release" "ingress_nginx" {
   values = [
     var.use_host_port
     ? yamlencode({ controller = merge(local.ingress_controller_base, local.ingress_controller_host_port) })
-    : yamlencode({ controller = merge(local.ingress_controller_base, local.ingress_controller_spread) })
+    : yamlencode({ controller = merge(local.ingress_controller_base, local.ingress_controller_spread, local.drain) })
   ]
 }
 

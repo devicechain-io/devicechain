@@ -100,3 +100,51 @@ run "host_port_mode_is_the_kind_recipe" {
     error_message = "two pods cannot share a node's host ports, so host-port mode forces one replica"
   }
 }
+
+# --- hitless rollouts behind a cloud balancer (D-SR3) ------------------------------
+
+run "a_cloud_install_drains_before_it_leaves" {
+  command = plan
+
+  assert {
+    condition     = yamldecode(helm_release.ingress_nginx.values[0]).controller.extraArgs["shutdown-grace-period"] == 40
+    error_message = "the controller must keep serving for at least the balancer's health-check failure time (3 x 8s on GCP) after SIGTERM"
+  }
+
+  assert {
+    condition     = yamldecode(helm_release.ingress_nginx.values[0]).controller.terminationGracePeriodSeconds > yamldecode(helm_release.ingress_nginx.values[0]).controller.extraArgs["shutdown-grace-period"]
+    error_message = "terminationGracePeriodSeconds must exceed the shutdown grace period or the kubelet kills the pod mid-drain"
+  }
+
+  assert {
+    condition     = yamldecode(helm_release.ingress_nginx.values[0]).controller.minReadySeconds == 15
+    error_message = "minReadySeconds gives the balancer time to see the new pod's node healthy before the old pod goes"
+  }
+}
+
+run "drain_can_be_turned_off" {
+  command = plan
+
+  variables {
+    drain_seconds     = 0
+    min_ready_seconds = 0
+  }
+
+  assert {
+    condition     = !can(yamldecode(helm_release.ingress_nginx.values[0]).controller.extraArgs) && !can(yamldecode(helm_release.ingress_nginx.values[0]).controller.minReadySeconds)
+    error_message = "0 must leave the chart's defaults alone"
+  }
+}
+
+run "kind_host_port_does_not_drain" {
+  command = plan
+
+  variables {
+    use_host_port = true
+  }
+
+  assert {
+    condition     = !can(yamldecode(helm_release.ingress_nginx.values[0]).controller.extraArgs) && !can(yamldecode(helm_release.ingress_nginx.values[0]).controller.minReadySeconds)
+    error_message = "host-port mode (kind) must not drain: no balancer, and the wait would slow every rollout"
+  }
+}

@@ -127,8 +127,8 @@
       "translationSha256": "3b051e1f38ed6656d7645a02085fb390f0359394c1cec79dddaa49ca74de2c51"
     },
     "deployment/ingress-cutover.md": {
-      "sourceSha256": "6cccdde011302f56db8c74c2a59f7a4fe1482d259cb0ef3c2da36c102d1759a2",
-      "translationSha256": "61fa08effd77639e31112936d6fd92cc919689eee8a2cffa6c3dd0b7c29f7cd7"
+      "sourceSha256": "254bf27d4198332eb0a958b5847b167f2f3f8afaa73452ed19de15eee3c616ce",
+      "translationSha256": "b7541f44fbef9416a3dfe24d84b79543a0097a97dfd8f5d4083fda8c37061730"
     },
     "deployment/kubernetes-operator.md": {
       "sourceSha256": "4947ae8be7d4297b39e5b326c9e5a8001e0fe918c540a343e17ab610e7bf5ef4",
@@ -143,8 +143,8 @@
       "translationSha256": "50fa82a5c1e8188371f0f71f328c5ad41f937396c5f7efc132044d4d61df2fe3"
     },
     "deployment/releases-and-upgrades.md": {
-      "sourceSha256": "879939414e6cb6fea3f22204b1e6376996ba54cab270bdd52be1b7ce1fee38f7",
-      "translationSha256": "07c601855da3e936862dc922b62017cabc6aff243c7aaffc8a95e01a79732911"
+      "sourceSha256": "2aa0cde6cd40aa9f3a2c716d81981a4d0b890a44dc8138813d0f96e49c087307",
+      "translationSha256": "1b7c53e1d3e0bafbdd39bcfdf80b6efef8d1d51c0ace0213a18f24c08d7ce718"
     },
     "deployment/tenant-deletion.md": {
       "sourceSha256": "3c587de5dc21a2e3faa8cbfd7369c1eef833f7f226b66dc95af5e9141f33a9db",

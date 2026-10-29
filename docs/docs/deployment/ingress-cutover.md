@@ -222,6 +222,7 @@ the edge:
   console instead of reaching the area.
 - **Client addresses.** Traefik writes the real peer into `X-Forwarded-For` and its Service uses
   `externalTrafficPolicy: Local`; see [Client addresses and trusted proxies](./bootstrap.md#trusted-proxies). On AWS a Classic Load Balancer hides the client address. `dcctl install --aws-nlb traefik` gives Traefik's Service a Network Load Balancer, and it is the value to use during the window because `ingress-nginx` keeps serving on its own load balancer. Changing a Service replaces its load balancer and changes its hostname, so repoint DNS afterwards.
+- **Rollouts drain.** Behind a cloud load balancer (`externalTrafficPolicy: Local`) the balancer keeps sending to a node until its health check fails it, so a controller pod that left at once dropped requests while the balancer caught up. Both controllers now keep serving for 40 seconds after they are told to stop, and a new pod must be ready for 15 seconds before an old one is removed, so a rollout or a pod moving node loses nothing. A rollout therefore takes about a minute per replica longer than before. The wait applies only behind a load balancer: on a local cluster, where a controller binds the node's ports or sits behind a NodePort, there is nothing to wait for and rollouts are as quick as before. The OpenTofu variables `drain_seconds` and `min_ready_seconds` of each controller module adjust it; `0` turns it off.
 
 ## Related {#ingress-cutover-related}
 
