@@ -858,7 +858,7 @@ The broker is now DeviceChain's own `nats-server` build, `dc-nats-server`: upstr
 #### Known issues {#v0260-known-issues}
 
 - **After a rolling restart of the broker, including this upgrade, the last server restarted leads no streams,** and publish-acknowledgement p99 roughly doubles until leadership rebalances.
-- **A TLS certificate rotation makes the broker reload and disconnects most MQTT sessions.** Devices reconnect on their own.
+- **A TLS certificate rotation makes the broker reload and disconnects most MQTT sessions.** Devices reconnect on their own. A later release fixes this: the broker applies a renewed certificate to new connections without a reload, so established sessions stay up. A change to the broker's configuration still reloads it, and a reload still disconnects the sessions of devices admitted by the auth callout until the broker's `nats-server` library carries the upstream fix.
 - **An ingress controller rollout drops about 5% of requests for 28 to 40 seconds.** Run it in a quiet window.
 
 ### v0.25.2 — the service-token mint leaves the public port {#v0252-upgrade}

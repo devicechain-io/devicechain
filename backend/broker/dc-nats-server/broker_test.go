@@ -55,8 +55,9 @@ func startBrokerWith(t *testing.T, withHook, clientCA bool) *running {
 		t.Fatal(err)
 	}
 	opts.NoLog = true
+	var hot *hotTLS
 	if withHook {
-		prepareOptions(opts)
+		hot = prepareOptions(opts)
 	} else {
 		opts.NoSigs = true
 	}
@@ -77,7 +78,7 @@ func startBrokerWith(t *testing.T, withHook, clientCA bool) *running {
 	return &running{
 		dir:  dir,
 		s:    s,
-		b:    newBroker(s, opts, newBrokerMetrics()),
+		b:    newBroker(s, opts, newBrokerMetrics(), hot),
 		mqtt: net.JoinHostPort("127.0.0.1", strconv.Itoa(vz.MQTT.Port)),
 		nats: "tls://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(vz.Port)),
 	}
@@ -209,8 +210,9 @@ func TestReloadKeepsClientCertificateRequest(t *testing.T) {
 			r.b.metrics.mqttTLS.Load(), r.b.metrics.clientAuthRequest.Load())
 	}
 
-	// And this binary's reload puts it back.
-	if err := r.b.reload(); err != nil {
+	// And this binary's reload puts it back. (The full path: upstream's Reload above replaced the
+	// wrapped configs, which only a full reload installs again.)
+	if err := r.b.reloadFull(); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
 	if !r.requested(t) {

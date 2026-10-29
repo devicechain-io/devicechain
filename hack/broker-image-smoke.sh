@@ -18,7 +18,8 @@
 #      binary is named nats-server and on PATH — takes the server through lame duck mode to a
 #      clean exit (status 0);
 #   5. 🔴 THE NEGATIVE CONTROL: the identical check against the UPSTREAM image must FAIL, and
-#      pass only when told the listener requests nothing. Without it, step 1 could be passing
+#      pass only when told the listener requests nothing; the same rotation against it DOES drop the
+#      sessions. Without it, step 1 could be passing
 #      because the harness cannot tell a certificate request from its absence.
 #
 # The module's own tests cover the same ground against an embedded server; this is the copy
@@ -93,6 +94,35 @@ port() {
 metric() { curl -fsS "http://127.0.0.1:$1/metrics" 2>/dev/null | awk -v n="$2" '$1 == n { print $2 }'; }
 logs() { docker logs "$1" 2>&1; }
 
+# rotate_with_sessions <container> <mqtt addr> <nats url> � holds a fleet of MQTT sessions open,
+# rotates the broker's certificate on disk exactly as a cert-manager renewal does, sends the SIGHUP the
+# chart's config reloader sends, waits until a NEW handshake presents the new certificate, and
+# leaves the number of sessions that were lost in $lost. A rotation that did not take effect
+# proves nothing about the sessions, so that is checked first.
+fleet=30
+rotate_with_sessions() {
+  local name="$1" addr="$2" url="$3" want got hp
+  rm -f "$work/hold.ready" "$work/hold.stop" "$work/hold.out"
+  "$smoke" hold -dir "$work/pki" -nats "$url" -mqtt "$addr" -n "$fleet"     -ready "$work/hold.ready" -stop "$work/hold.stop" >"$work/hold.out" 2>&1 &
+  hp=$!
+  for _ in $(seq 1 120); do [ -e "$work/hold.ready" ] && break; sleep 0.5; done
+  [ -e "$work/hold.ready" ] || { cat "$work/hold.out"; kill "$hp" 2>/dev/null || true; fail "$name: $fleet sessions did not open"; }
+  want="$("$smoke" rotate -dir "$work/pki")"
+  docker kill -s HUP "$name" >/dev/null
+  got=""
+  for _ in $(seq 1 30); do
+    got="$("$smoke" serial -dir "$work/pki" -mqtt "$addr" 2>/dev/null || true)"
+    [ "$got" = "$want" ] && break
+    sleep 1
+  done
+  [ "$got" = "$want" ] || { touch "$work/hold.stop"; wait "$hp" || true; fail "$name: a new handshake presents serial '$got', want the rotated $want"; }
+  sleep 3 # a close, if there is one, is asynchronous to the reload
+  touch "$work/hold.stop"
+  wait "$hp" || { cat "$work/hold.out"; fail "$name: the held sessions did not finish cleanly"; }
+  lost="$(sed -n 's/^lost=//p' "$work/hold.out")"
+  [ -n "$lost" ] || { cat "$work/hold.out"; fail "$name: no session count was reported"; }
+}
+
 # ---------------------------------------------------------------------------
 say "starting the broker image: $image"
 ours="$prefix-ours"
@@ -147,6 +177,11 @@ reload_and_check "SIGHUP" docker kill -s HUP "$ours"
 say "reloading through the binary on the image's PATH (nats-server -sl=reload)"
 reload_and_check "-sl=reload" docker exec "$ours" nats-server -sl=reload=/var/run/nats/nats.pid
 
+say "rotating the certificate under $fleet held MQTT sessions (SIGHUP after the files change)"
+rotate_with_sessions "$ours" "$mqtt" "$nats"
+[ "$lost" = "0" ] || { logs "$ours" | tail -20; fail "the rotation reload dropped $lost of $fleet MQTT sessions"; }
+echo "    new handshakes present the new certificate; all $fleet sessions stayed connected"
+
 say "lame duck shutdown through the chart's preStop command (nats-server -sl=ldm)"
 docker exec "$ours" nats-server -sl=ldm=/var/run/nats/nats.pid
 status=""
@@ -179,5 +214,12 @@ grep -q '^FAIL  the MQTT listener sends a CertificateRequest' "$work/control.out
 "$smoke" check -dir "$work/pki" -nats "$unats" -mqtt "$umqtt" -expect-request=false ||
   fail "the harness could not drive the upstream broker at all, so its failure above proves nothing"
 echo "    the upstream image fails the checks, and passes only when told it requests nothing"
+
+# And the rotation: upstream's reload closes every session the auth callout admitted. This is the
+# control for the rotation step above (it must see the loss that step must not), and the canary for
+# the day the library carries the fix (hottls.go in the module says what to delete).
+rotate_with_sessions "$up" "$umqtt" "$unats"
+[ "$lost" -gt 0 ] || fail "the rotation reload dropped no sessions on the upstream image: the rotation step proves nothing about the fix (the library may now carry it; see hottls.go)"
+echo "    the upstream image lost $lost of $fleet sessions to the same rotation"
 
 say "broker image smoke passed"
