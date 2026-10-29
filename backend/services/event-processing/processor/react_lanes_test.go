@@ -509,11 +509,23 @@ func TestReactDrainsTheR19MixWellAboveItsRate(t *testing.T) {
 	require.Greater(t, lanes, 3*serial, "lanes must multiply the serial rate, not match it")
 }
 
-// failingAlarms fails every request: a raise-alarm stream that never takes a publish.
-type failingAlarms struct{ attempts atomic.Int64 }
+// failingAlarms fails every request: a raise-alarm stream that never takes a publish. When gate is
+// set, the FIRST attempt holds until the gate closes (or its context ends) before failing, and
+// records which of the two released it.
+type failingAlarms struct {
+	attempts atomic.Int64
+	gate     <-chan struct{}
+	gated    atomic.Bool // the first attempt was released by the gate, not by its deadline
+}
 
-func (f *failingAlarms) Dispatch(context.Context, react.AlarmRequest) error {
-	f.attempts.Add(1)
+func (f *failingAlarms) Dispatch(ctx context.Context, _ react.AlarmRequest) error {
+	if f.attempts.Add(1) == 1 && f.gate != nil {
+		select {
+		case <-f.gate:
+			f.gated.Store(true)
+		case <-ctx.Done():
+		}
+	}
 	return fmt.Errorf("raise-alarm publish failed")
 }
 
@@ -526,16 +538,32 @@ func TestLanesDeadLetterAnExhaustedEventOnce(t *testing.T) {
 	dead := &ctxDeadRecorder{}
 	failing := &failingAlarms{}
 	others := newOrderSink(0)
+	// The failing device's first attempt is held open until the other five have been dispatched, so
+	// "the others do not wait on it" is shown by what released the attempt, not by a clock racing the
+	// dispatch of the others. The others are placed on lanes other than the failing device's (the
+	// dispatcher's own hash), so the held attempt cannot be what they queue behind.
+	allOthers := make(chan struct{})
+	failing.gate = allOthers
 	router := alarmRouter{"device-0": failing}
-	publish, start, _ := reactBroker(t, ackWait, config.DefaultReactWorkers, reactFakeResolver{rule: alarmRule(), found: true},
+	publish, start, ms := reactBroker(t, ackWait, config.DefaultReactWorkers, reactFakeResolver{rule: alarmRule(), found: true},
 		func(*messaging.NatsManager) react.AlarmSink { return router.or(others) }, dead)
-	for d := 0; d < 6; d++ {
-		publish(edgeEvent(fmt.Sprintf("device-%d", d), 0))
+	subject := messaging.ScopedSubject(ms.InstanceId, "acme", streams.DerivedEvents)
+	const lanes = config.DefaultReactWorkers
+	failingLane := LaneOf(subject, "device-0", lanes)
+	publish(edgeEvent("device-0", 0))
+	for d, n := 1, 0; n < 5 && d < 10000; d++ {
+		dev := fmt.Sprintf("device-%d", d)
+		if LaneOf(subject, dev, lanes) != failingLane {
+			publish(edgeEvent(dev, 0))
+			n++
+		}
 	}
 	start()
 
-	require.Eventually(t, func() bool { return others.done.Load() == 5 }, ackWait/2, 5*time.Millisecond,
+	// Generous bound: it only has to fail, not to be tight; the gate is what proves the property.
+	require.Eventually(t, func() bool { return others.done.Load() == 5 }, 30*time.Second, 5*time.Millisecond,
 		"the other devices waited on the failing one")
+	close(allOthers)
 	var letters []deadletter.Envelope
 	require.Eventually(t, func() bool {
 		letters = dead.letters(t)
@@ -547,6 +575,7 @@ func TestLanesDeadLetterAnExhaustedEventOnce(t *testing.T) {
 	require.Equal(t, deadletter.ReasonExhausted, letters[0].Reason)
 	require.Regexp(t, `^raiseAlarm/failed/[0-9a-f]{64}$`, letters[0].Detail)
 	require.Equal(t, "acme/p@1/r1", letters[0].Reference)
+	require.True(t, failing.gated.Load(), "the failing attempt ended at its deadline: the others did not finish while it was open")
 	require.Equal(t, int64(messaging.MaxDeliver), failing.attempts.Load(), "attempted %d times, want MaxDeliver", failing.attempts.Load())
 }
 
