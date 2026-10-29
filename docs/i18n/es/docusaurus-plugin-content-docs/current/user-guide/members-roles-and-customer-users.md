@@ -256,11 +256,18 @@ publica. En la lista de **Paneles**, elige **Compartir** en un panel y elige los
 grupos. Consulta [Compartir con clientes y grupos](/user-guide/dashboards#sharing-with-customers).
 
 Un panel compartido muestra a cada usuario de cliente solo sus propios datos. Vincula sus widgets a
-dispositivos, o al cliente con la relación `assigned`: un widget así muestra a los usuarios del
-cliente los dispositivos asignados a él. Un widget vinculado a un activo, un área o un grupo lee el
-grafo de relaciones para encontrar sus dispositivos, y los usuarios de cliente no tienen acceso a
-él, así que les muestra **Not available for customer users** (no disponible para usuarios de
-cliente).
+dispositivos, al cliente con la relación `assigned`, o a un área o un activo. Un widget vinculado a
+un área o a un activo muestra al usuario de cliente solo sus propios dispositivos en ella, sus
+lecturas y sus alarmas, incluso cuando dispositivos de otros clientes comparten esa área: los
+números de un contador de alarmas o de un gráfico son solo suyos. Un widget vinculado a un grupo
+sigue leyendo el grafo de relaciones para encontrar sus dispositivos, y los usuarios de cliente no
+tienen acceso a él, así que les muestra **Not available for customer users** (no disponible para
+usuarios de cliente).
+
+Los selectores Building, Floor o Zone de un panel así listan solo las áreas y los dispositivos que el
+usuario de cliente puede ver. Un selector puede limitarse a un tipo de área (o de activo), de modo que
+un selector de plantas no ofrezca edificios ni salas de máquinas. Si un usuario de cliente abre el
+panel sobre un área que no es suya, por ejemplo desde un enlace, aterriza en la primera que sí lo es.
 
 ### Qué pueden leer los usuarios de cliente de las áreas y los activos {#areas-assets-visibility}
 
@@ -271,13 +278,24 @@ Mantén fuera de esos nombres y descripciones el texto que identifique a un clie
 dato confidencial, y también del nombre de un área que comparten dispositivos de varios clientes:
 un usuario de cliente puede leerlo.
 
+**Para los operadores:** esto significa que un cliente conoce el nombre de cualquier área o activo en
+el que esté uno de sus propios dispositivos, también si es compartido, y el nombre es lo único que
+conoce de él. No ve los dispositivos de otros clientes en ella, ni sus datos ni sus alarmas. Los
+metadatos de formato libre del área o del activo se le ocultan por completo.
+
+Los miembros de un área o de un activo siguen dónde está un dispositivo **ahora**: si mueves un
+dispositivo a otra planta, el usuario de cliente ve la planta nueva en sus selectores y listas de
+dispositivos de inmediato. Las alarmas y las lecturas que se cuentan por área siguen dónde estaba el
+dispositivo **cuando ocurrieron**, así que las alarmas que levantó en su planta anterior permanecen
+en esa planta. Tenlo presente al mover dispositivos entre áreas.
+
 ### Lo que todavía no se cubre {#not-covered-yet}
 
 - Un widget de panel todavía no puede mostrar los dispositivos del grupo de un miembro como un
-  conjunto. En un panel compartido con un grupo, vincula los widgets a sus dispositivos.
+  conjunto. En un panel compartido con un grupo, vincula los widgets a sus dispositivos, o a un área o
+  un activo en los que estén.
 - Después de la primera versión de un grupo, publicar una versión nueva, que cambia lo que ven sus
   miembros, se hace con la API (`publishEntityGroup`), no desde la consola.
-- Los activos y las áreas asignados a un cliente no se muestran a sus usuarios.
 - Un cliente no puede gestionar sus propios usuarios. Tus administradores los invitan y los cambian.
 
 ## Relacionado

@@ -311,8 +311,8 @@
       "translationSha256": "a2958231174f0aa693932a8e429683091cdad9c262c48a1532bb0a1eea06d5c0"
     },
     "user-guide/dashboards.md": {
-      "sourceSha256": "81b2e19a96948d37af4c1135f5569e148a9699699610c50467c8f3d09f294112",
-      "translationSha256": "6dcc7aee09d4512013e5685a675ad3c0f33df5b4e4db367650f22d61ff4caed3"
+      "sourceSha256": "fdbfe650c4f44af5aa165c76dc349852ea89d24875b09881969719d4a8d821e3",
+      "translationSha256": "2b5f41c355c46f9775dcf8146c59d410c63282e508dfe8a6b9d60d29a55a5b61"
     },
     "user-guide/detection-rules.md": {
       "sourceSha256": "13ca0e97825a2202e0c5186ff34ea0fdad9add676b9cfd74e8149a9a87a516f5",
@@ -343,8 +343,8 @@
       "translationSha256": "84f993b3871a3cfb1cbd8a57f07275ec74560b9775082aaf208d9d53102d7d76"
     },
     "user-guide/members-roles-and-customer-users.md": {
-      "sourceSha256": "be1bcf87fd49b4d1d78541952c57ea95c90215ca19763bd372d5161711abdb62",
-      "translationSha256": "688dc2ea1eb180b0f9dd7f2df74b3b63c19d9a7f2469900149844260eccacfad"
+      "sourceSha256": "2de2727454a223b7c4a571d7da4f22e56fa62da111e974bee584212564541831",
+      "translationSha256": "830297cf7438c1e146ea8060316ce8a5d2d2848da6ac7bd1c19df05aef44134f"
     },
     "user-guide/notification-policies.md": {
       "sourceSha256": "939c99e5a63a9b89f10fa23db3becdbb72c6dcceac46922f39ccd28368f932cd",

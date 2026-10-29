@@ -26,6 +26,9 @@ type tpBoard struct {
 			Parent   string `json:"parent"`
 			Strategy string `json:"strategy"`
 		} `json:"scope"`
+		Candidates *struct {
+			AreaType string `json:"areaType"`
+		} `json:"candidates"`
 	} `json:"slots"`
 	TimeRange struct {
 		DefaultSeconds int `json:"defaultSeconds"`
@@ -296,8 +299,11 @@ func TestTowerpulseAnnexBoardOpensOnTheAnnex(t *testing.T) {
 	if got := op.Slots[towerpulseSlotBuilding].DefaultBinding.Anchor.TargetToken; got != TowerpulseTowerToken {
 		t.Errorf("operator board opens on %s", got)
 	}
-	if got := annex.Slots[towerpulseSlotAnnex].DefaultBinding.Anchor.TargetToken; got != TowerpulseAnnexOwnerToken {
-		t.Errorf("annex board opens on %s, want the annex owner's customer", got)
+	if got := annex.Slots[towerpulseSlotBuilding].DefaultBinding.Anchor.TargetToken; got != TowerpulseAnnexToken {
+		t.Errorf("annex board opens on %s, want the annex building", got)
+	}
+	if got := annex.Slots[towerpulseSlotFloor].DefaultBinding.Anchor.TargetToken; got != towerpulseFloorToken(towerpulseAnnex, 1) {
+		t.Errorf("annex board opens on floor %s", got)
 	}
 	if got := annex.Slots[towerpulseSlotZone].DefaultBinding.DeviceToken; !strings.HasPrefix(got, "tp-vav-annex-") {
 		t.Errorf("annex board opens on zone %s", got)
@@ -308,8 +314,8 @@ func TestTowerpulseAnnexBoardOpensOnTheAnnex(t *testing.T) {
 }
 
 // 🔴 TP-3. The board shared with the annex owner names nothing of the tower and offers no control:
-// every device or area a slot binds is the annex's, no widget issues a command, and the building
-// selector (which lists every area of the tenant) is gone.
+// every device or area a slot binds is the annex's and no widget issues a command. (The building
+// selector is back: a customer-scoped member's area list holds only the areas their devices are in.)
 func TestTheAnnexOwnersBoardBindsOnlyTheAnnexAndWritesNothing(t *testing.T) {
 	annex := towerpulseBoards(t)[TowerpulseAnnexDashboardToken]
 	for name, s := range annex.Slots {
@@ -321,7 +327,7 @@ func TestTheAnnexOwnersBoardBindsOnlyTheAnnexAndWritesNothing(t *testing.T) {
 			}
 		case "anchor":
 			tok := s.DefaultBinding.Anchor.TargetToken
-			if tok != TowerpulseAnnexOwnerToken {
+			if !strings.Contains(tok, "annex") {
 				t.Errorf("slot %s anchors on %s, which is not the annex's", name, tok)
 			}
 		}
@@ -333,9 +339,6 @@ func TestTheAnnexOwnersBoardBindsOnlyTheAnnexAndWritesNothing(t *testing.T) {
 		}
 		if _, ok := w.Options["commandName"]; ok {
 			t.Errorf("%s carries a command", w.ID)
-		}
-		if w.ID == "tp-building-select" {
-			t.Errorf("the building selector lists every area of the tenant, the tower included")
 		}
 		if strings.Contains(w.ID, "tower") {
 			t.Errorf("%s is a tower widget on the annex board", w.ID)
@@ -382,35 +385,56 @@ func TestTowerpulseBoardLayoutIsAGridWithoutOverlap(t *testing.T) {
 	}
 }
 
-// 🔴 TP-3 (second finding). A member limited to a customer is refused every area anchor and the
-// relationship graph (FORBIDDEN, SCOPE_UNSUPPORTED), so a board anchored on areas opens for them with
-// its context dropped, empty pickers and disabled aggregates. The annex board therefore carries no
-// area anchor, roots on the annex owner's customer under `assigned` (what customerDevices answers
-// for that member), and every device it binds is one of that customer's own devices.
-func TestTheAnnexBoardBindsOnlyWhatACustomerScopedCallerCanResolve(t *testing.T) {
+// 🔴 TP-3 (third finding, reversing the second). A customer-scoped member now reads the areas their own
+// devices are in and the devices anchored there, so the annex board is anchored on AREAS again: a Building
+// and a Floor picker, each limited to its area type, and a Zone picker scoped under the building. What
+// must still hold is that every area the board names is one the annex owner's devices are in, that the
+// pickers' type filters keep the plant and the building out of the Floor picker, and that no slot roots
+// on the owner's customer any more (the workaround this replaced).
+func TestTheAnnexBoardIsAnchoredOnAreasWithTypedPickers(t *testing.T) {
 	m := towerpulseManifest(t)
 	owner := m.CustomerUsers[0].CustomerToken
-	scoped := map[string]bool{}
+	// the areas the annex owner's devices are in, and the device tokens
+	inAreas, scoped := map[string]bool{}, map[string]bool{}
 	for _, d := range m.Expand(m.Seed) {
+		owned := false
+		var areas []string
 		for _, a := range d.Assignments {
-			if a.TargetType == "customer" && a.TargetToken == owner {
-				scoped[d.Token] = true
+			switch a.TargetType {
+			case "customer":
+				owned = a.TargetToken == owner
+			case "area":
+				areas = append(areas, a.TargetToken)
+			}
+		}
+		if owned {
+			scoped[d.Token] = true
+			for _, a := range areas {
+				inAreas[a] = true
 			}
 		}
 	}
-	if len(scoped) == 0 {
+	if len(scoped) == 0 || len(inAreas) == 0 {
 		t.Fatal("no device is assigned to the annex owner, so every check below would pass vacuously")
 	}
+	areaType := map[string]string{}
+	for _, a := range m.Areas {
+		areaType[a.Token] = a.AreaTypeToken
+	}
 	annex := towerpulseBoards(t)[TowerpulseAnnexDashboardToken]
-	roots := 0
+	wantType := map[string]string{towerpulseSlotBuilding: TowerpulseBuildingTypeToken, towerpulseSlotFloor: TowerpulseFloorTypeToken}
 	for name, s := range annex.Slots {
 		switch s.Type {
 		case "anchor":
-			roots++
 			a := s.DefaultBinding.Anchor
-			if a.TargetType != "customer" || a.TargetToken != owner || a.Relationship != assignmentRelationshipType {
-				t.Errorf("slot %s anchors on %s %s (%s): only the member's own customer under %q resolves for them",
+			if a.TargetType != "area" || a.Relationship != assignmentRelationshipType || !inAreas[a.TargetToken] {
+				t.Errorf("slot %s anchors on %s %s (%s): want an area the annex owner's devices are in, under %q",
 					name, a.TargetType, a.TargetToken, a.Relationship, assignmentRelationshipType)
+			}
+			if want := wantType[name]; want == "" || s.Candidates == nil || s.Candidates.AreaType != want {
+				t.Errorf("slot %s has candidates %+v, want area type %q", name, s.Candidates, want)
+			} else if areaType[a.TargetToken] != want {
+				t.Errorf("slot %s defaults to %s, which is not of its own picker type %s", name, a.TargetToken, want)
 			}
 		case "device":
 			if tok := s.DefaultBinding.DeviceToken; !scoped[tok] {
@@ -421,8 +445,8 @@ func TestTheAnnexBoardBindsOnlyWhatACustomerScopedCallerCanResolve(t *testing.T)
 			}
 		}
 	}
-	if roots != 1 {
-		t.Errorf("%d anchor slots, want the one customer anchor", roots)
+	if len(wantType) != 2 || annex.Slots[towerpulseSlotZone].Scope == nil || annex.Slots[towerpulseSlotZone].Scope.Parent != towerpulseSlotBuilding {
+		t.Error("the Zone picker is not scoped under the Building")
 	}
 	for _, w := range annex.Widgets {
 		if w.Datasource != nil {
@@ -430,18 +454,28 @@ func TestTheAnnexBoardBindsOnlyWhatACustomerScopedCallerCanResolve(t *testing.T)
 				t.Errorf("%s reads slot %q, which the board does not declare", w.ID, w.Datasource.Slot)
 			}
 		}
+	}
+	pickers := map[string]string{}
+	for _, w := range annex.Widgets {
 		if w.Type == "entity-selector" {
 			target, _ := w.Options["selectionTarget"].(string)
-			if s, ok := annex.Slots[target]; !ok || s.Scope == nil {
-				t.Errorf("%s picks slot %q, which is not a scoped device slot under the customer anchor", w.ID, target)
-			}
+			pickers[w.ID] = target
 		}
 	}
-	raw := strings.ToLower(string(mustJSON(t, annex)))
-	for _, banned := range []string{`"targettype":"area"`, `"floor"`, `"building"`} {
-		if strings.Contains(raw, banned) {
-			t.Errorf("the annex board's definition still carries %s", banned)
+	for id, target := range map[string]string{"tp-building-select": towerpulseSlotBuilding, "tp-floor-select": towerpulseSlotFloor, "tp-zone-select": towerpulseSlotZone} {
+		if pickers[id] != target {
+			t.Errorf("%s picks %q, want %q", id, pickers[id], target)
 		}
+	}
+	// The aggregates read the building and the comparison reads the floor.
+	for id, slot := range map[string]string{"tp-alarm-severity": towerpulseSlotBuilding, "tp-online": towerpulseSlotBuilding, "tp-alarms": towerpulseSlotBuilding, "tp-floor-compare": towerpulseSlotFloor} {
+		if got := annex.Widgets[annex.widget(t, id)].Datasource.Slot; got != slot {
+			t.Errorf("%s reads %s, want %s", id, got, slot)
+		}
+	}
+	// A plant is not a floor, so the Floor picker does not offer it.
+	if areaType[towerpulsePlantToken(towerpulseAnnex)] == TowerpulseFloorTypeToken {
+		t.Error("the annex plant has the floor area type, so the Floor picker would offer it")
 	}
 }
 

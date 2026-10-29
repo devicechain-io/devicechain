@@ -160,6 +160,20 @@ type dashboardSlot struct {
 	Label          string                `json:"label,omitempty"`
 	DefaultBinding *dashboardSlotBinding `json:"defaultBinding,omitempty"`
 	Scope          *dashboardScope       `json:"scope,omitempty"`
+	Candidates     *dashboardCandidates  `json:"candidates,omitempty"`
+}
+
+// dashboardCandidates mirrors SlotCandidates: a root anchor slot's picker lists only the areas of
+// this area type (or the assets of this asset type).
+type dashboardCandidates struct {
+	AreaType  string `json:"areaType,omitempty"`
+	AssetType string `json:"assetType,omitempty"`
+}
+
+// withCandidates limits an area anchor slot's picker to areas of one type.
+func withCandidates(s dashboardSlot, areaType string) dashboardSlot {
+	s.Candidates = &dashboardCandidates{AreaType: areaType}
+	return s
 }
 
 // dashboardScope mirrors SlotScope: a scoped slot's dependency on a parent anchor
