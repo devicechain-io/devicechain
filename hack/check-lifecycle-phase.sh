@@ -214,6 +214,7 @@ func (ms *Microservice) NewCounterVec(name, help string, labels []string) any { 
 func (ms *Microservice) NewGauge(name, help string, labels []string) any { return nil }
 
 func (ms *Microservice) NewGaugeVec(name, help string, labels []string) any { return nil }
+func (ms *Microservice) NewHistogramVec(name, help string, labels []string, buckets []float64) any { return nil }
 
 func (ms *Microservice) NewProcessorMetrics(name string) any { return nil }
 
