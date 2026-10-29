@@ -1,0 +1,334 @@
+{
+  "version": 1,
+  "note": "Cut from two recorded runs by tools/take/take_plan.py; regenerate it for a new take. Show seconds; the console's part fills the gap before pull-back.",
+  "shots": [
+    {
+      "id": "establish",
+      "beat": "1 Establish",
+      "caption": "A working campus, an ordinary afternoon",
+      "startS": 0.0,
+      "durationS": 10.0,
+      "ease": "smooth",
+      "cards": [],
+      "from": {
+        "pos": [
+          54,
+          28,
+          -54
+        ],
+        "look": [
+          6,
+          8,
+          -4
+        ],
+        "fov": 34
+      },
+      "to": {
+        "pos": [
+          40,
+          20,
+          -36
+        ],
+        "look": [
+          9,
+          9,
+          -4
+        ],
+        "fov": 31
+      },
+      "run": "A",
+      "modelFromHour": 13.9,
+      "modelToHour": 14.008333
+    },
+    {
+      "id": "hot-room-heats",
+      "beat": "2 A hot room",
+      "caption": "Tower F4 East: fourteen people, sun on the glass",
+      "startS": 10.0,
+      "durationS": 12.0,
+      "ease": "linear",
+      "cards": [
+        "zone",
+        "alarm",
+        "command"
+      ],
+      "from": {
+        "pos": [
+          46.0,
+          22.0,
+          -26.0
+        ],
+        "look": [
+          30.5,
+          12.0,
+          9.3
+        ],
+        "fov": 38.0
+      },
+      "to": {
+        "pos": [
+          43.84,
+          20.596,
+          -23.408
+        ],
+        "look": [
+          30.651,
+          12.173,
+          9.322
+        ],
+        "fov": 36.272
+      },
+      "run": "A",
+      "modelFromHour": 14.008333,
+      "modelToHour": 14.201389
+    },
+    {
+      "id": "hot-room-alarm",
+      "beat": "2 A hot room",
+      "caption": "Tower F4 East: fourteen people, sun on the glass",
+      "startS": 22.0,
+      "durationS": 10.0,
+      "ease": "linear",
+      "cards": [
+        "zone",
+        "alarm",
+        "command"
+      ],
+      "from": {
+        "pos": [
+          43.84,
+          20.596,
+          -23.408
+        ],
+        "look": [
+          30.651,
+          12.173,
+          9.322
+        ],
+        "fov": 36.272
+      },
+      "to": {
+        "pos": [
+          40.252,
+          18.264,
+          -19.103
+        ],
+        "look": [
+          30.902,
+          12.46,
+          9.357
+        ],
+        "fov": 33.402
+      },
+      "run": "A",
+      "modelFromHour": 14.201389,
+      "modelToHour": 14.215278
+    },
+    {
+      "id": "hot-room-cools",
+      "beat": "2 A hot room",
+      "caption": "SENT means delivered; done means back at setpoint",
+      "startS": 32.0,
+      "durationS": 18.0,
+      "ease": "linear",
+      "cards": [
+        "zone",
+        "alarm",
+        "command"
+      ],
+      "from": {
+        "pos": [
+          40.252,
+          18.264,
+          -19.103
+        ],
+        "look": [
+          30.902,
+          12.46,
+          9.357
+        ],
+        "fov": 33.402
+      },
+      "to": {
+        "pos": [
+          36.0,
+          15.5,
+          -14.0
+        ],
+        "look": [
+          31.2,
+          12.8,
+          9.4
+        ],
+        "fov": 30.0
+      },
+      "run": "A",
+      "modelFromHour": 14.215278,
+      "modelToHour": 14.369444
+    },
+    {
+      "id": "chiller-running",
+      "beat": "3 A silent chiller",
+      "caption": "Annex chiller: the platform notices the silence",
+      "startS": 50.0,
+      "durationS": 6.0,
+      "ease": "linear",
+      "cards": [
+        "chiller",
+        "alarm",
+        "command"
+      ],
+      "from": {
+        "pos": [
+          -3.0,
+          9.0,
+          -30.0
+        ],
+        "look": [
+          -17.0,
+          2.0,
+          -10.0
+        ],
+        "fov": 40.0
+      },
+      "to": {
+        "pos": [
+          -3.938,
+          8.219,
+          -28.594
+        ],
+        "look": [
+          -17.0,
+          1.938,
+          -10.0
+        ],
+        "fov": 39.062
+      },
+      "run": "B",
+      "modelFromHour": 16.470833,
+      "modelToHour": 16.502778
+    },
+    {
+      "id": "chiller-silent",
+      "beat": "3 A silent chiller",
+      "caption": "Annex chiller: the platform notices the silence",
+      "startS": 56.0,
+      "durationS": 10.0,
+      "ease": "linear",
+      "cards": [
+        "chiller",
+        "alarm",
+        "command"
+      ],
+      "from": {
+        "pos": [
+          -3.938,
+          8.219,
+          -28.594
+        ],
+        "look": [
+          -17.0,
+          1.938,
+          -10.0
+        ],
+        "fov": 39.062
+      },
+      "to": {
+        "pos": [
+          -7.444,
+          5.296,
+          -23.333
+        ],
+        "look": [
+          -17.0,
+          1.704,
+          -10.0
+        ],
+        "fov": 35.556
+      },
+      "run": "B",
+      "modelFromHour": 16.502778,
+      "modelToHour": 16.544444
+    },
+    {
+      "id": "chiller-restart",
+      "beat": "3 A silent chiller",
+      "caption": "The restart is done when the chiller reports again",
+      "startS": 66.0,
+      "durationS": 8.0,
+      "ease": "linear",
+      "cards": [
+        "chiller",
+        "alarm",
+        "command"
+      ],
+      "from": {
+        "pos": [
+          -7.444,
+          5.296,
+          -23.333
+        ],
+        "look": [
+          -17.0,
+          1.704,
+          -10.0
+        ],
+        "fov": 35.556
+      },
+      "to": {
+        "pos": [
+          -9.0,
+          4.0,
+          -21.0
+        ],
+        "look": [
+          -17.0,
+          1.6,
+          -10.0
+        ],
+        "fov": 34.0
+      },
+      "run": "B",
+      "modelFromHour": 16.544444,
+      "modelToHour": 16.677778
+    },
+    {
+      "id": "pull-back",
+      "beat": "5 Pull back",
+      "caption": "Thirty-one devices, one campus",
+      "startS": 84.0,
+      "durationS": 6.0,
+      "ease": "smooth",
+      "cards": [],
+      "from": {
+        "pos": [
+          -9,
+          4,
+          -21
+        ],
+        "look": [
+          -17,
+          1.6,
+          -10
+        ],
+        "fov": 34
+      },
+      "to": {
+        "pos": [
+          60,
+          32,
+          -64
+        ],
+        "look": [
+          4,
+          7,
+          -2
+        ],
+        "fov": 40
+      },
+      "run": "B",
+      "modelFromHour": 16.677778,
+      "modelToHour": 16.679444
+    }
+  ]
+}

@@ -20,6 +20,7 @@ namespace DeviceChain.Towerpulse.Visuals
     [DefaultExecutionOrder(200)]
     public sealed class StoryUi : MonoBehaviour
     {
+        const string LegendReplay = "device (simulated): what the controllers sent and received  ·  platform: what the platform reported back";
         const float W = 1600f, H = 900f;
         const float DockW = 424f, DockX = W - DockW - 20f;
         static readonly Color Panel = new Color(0.05f, 0.07f, 0.10f, 0.90f);
@@ -71,6 +72,9 @@ namespace DeviceChain.Towerpulse.Visuals
         Text capBeat, capText, legText;
 
         public RectTransform CanvasRect => canvasRect;
+
+        /// <summary>Set while a take plays a shot whose clock jumps (see <see cref="StoryText.Jump"/>): shown in the status strip's orange chip, as the model's own speed label is.</summary>
+        public string JumpLabel { get; set; }
 
         /// <summary>Names the cards that are standing, for tests and the stills log.</summary>
         public string Visible()
@@ -381,12 +385,14 @@ namespace DeviceChain.Towerpulse.Visuals
         {
             var plane = app.Plane;
             Set(hudTime, TimeClock.Format(plane.Model.TimeS));
-            var accel = StoryText.Accelerated(plane.Clock.Speed);
+            var accel = JumpLabel ?? StoryText.Accelerated(plane.Clock.Speed);
             hudAccel.enabled = hudAccelBg.enabled = accel != null;
             Set(hudAccel, accel ?? "");
             if (app.ReplaySource != null)
             {
-                Set(hudMode, "REPLAY  ·  " + app.ReplaySource.Header.RunId + "  ·  no platform is connected; facts are as recorded, with their sources");
+                Set(hudMode, "REPLAY  ·  " + app.ReplaySource.Header.RunId + "  ·  facts as recorded");
+                // a replay has no preview facts, so the legend does not define one
+                Set(legText, LegendReplay);
                 hudMode.color = Amber; hud.Bar.color = Amber;
             }
             else if (app.Offline)

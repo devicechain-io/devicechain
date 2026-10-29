@@ -41,6 +41,15 @@ namespace DeviceChain.Towerpulse.Visuals
             Playing = playOnStart && Error == null;
         }
 
+        /// <summary>Plays a shot list handed in (a take plan) instead of the scene's own shot file.</summary>
+        public void UseShots(ShotList list)
+        {
+            shots = list ?? throw new System.ArgumentNullException(nameof(list));
+            Error = null;
+            ShowTime = 0;
+            Playing = false;
+        }
+
         public bool Load()
         {
             Error = null;

@@ -87,5 +87,55 @@ namespace DeviceChain.Towerpulse.Story
             if (double.IsNaN(modelSpeed) || modelSpeed <= 1.0000001) return null;
             return "ACCELERATED x" + modelSpeed.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture);
         }
+        /// <summary>
+        /// The label a shot carries while its clock runs faster than the wall: "TIME JUMP x120", the speed rounded so a reader can tell a skip from real time.
+        /// Null when the shot is at real time (or has no clock of its own), because real time needs no label.
+        /// </summary>
+        public static string Jump(double modelSecondsPerShowSecond)
+        {
+            if (double.IsNaN(modelSecondsPerShowSecond) || modelSecondsPerShowSecond <= 1.05) return null;
+            return "TIME JUMP x" + Math.Round(modelSecondsPerShowSecond).ToString("0", System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        /// <summary>The part of the day a model hour falls in, by the word a caption would use for it.</summary>
+        public static string DayPart(double hourOfDay)
+        {
+            double h = ((hourOfDay % 24) + 24) % 24;
+            if (h < 5) return "night";
+            if (h < 8) return "dawn";
+            if (h < 12) return "morning";
+            if (h < 17.5) return "afternoon";
+            if (h < 20) return "dusk";
+            if (h < 22) return "evening";
+            return "night";
+        }
+
+        static readonly string[][] PartWords =
+        {
+            new[] { "dawn", "sunrise" }, new[] { "morning" }, new[] { "afternoon" }, new[] { "dusk", "sunset", "twilight" }, new[] { "evening" }, new[] { "night" },
+        };
+        static readonly string[] PartNames = { "dawn", "morning", "afternoon", "dusk", "evening", "night" };
+
+        /// <summary>
+        /// The part of the day a caption claims ("dusk", "afternoon", ...), or null when it makes no claim. A caption that names a time of day must agree with
+        /// the model clock the shot shows beside it: <see cref="CaptionAgrees"/>.
+        /// </summary>
+        public static string ClaimedDayPart(string caption)
+        {
+            if (string.IsNullOrEmpty(caption)) return null;
+            var lower = caption.ToLowerInvariant();
+            for (int i = 0; i < PartWords.Length; i++)
+                foreach (var w in PartWords[i])
+                    if (System.Text.RegularExpressions.Regex.IsMatch(lower, @"\b" + w + @"\b")) return PartNames[i];
+            return null;
+        }
+
+        /// <summary>True when the caption makes no claim about the time of day, or the claim is true at that model hour.</summary>
+        public static bool CaptionAgrees(string caption, double hourOfDay)
+        {
+            var claim = ClaimedDayPart(caption);
+            return claim == null || claim == DayPart(hourOfDay);
+        }
+
     }
 }

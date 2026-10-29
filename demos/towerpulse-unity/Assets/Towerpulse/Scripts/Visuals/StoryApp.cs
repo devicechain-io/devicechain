@@ -65,6 +65,10 @@ namespace DeviceChain.Towerpulse.Visuals
             ui = GetComponent<StoryUi>();
             if (ui == null) ui = gameObject.AddComponent<StoryUi>();
             ui.Bind(this);
+
+            // the take's render and the frame measurement are player modes, asked for on the command line; the scene itself is the same
+            if (TakeRenderer.Requested) gameObject.AddComponent<TakeRenderer>();
+            else if (FrameBench.Requested) gameObject.AddComponent<FrameBench>();
         }
 
         void Update()
@@ -74,6 +78,14 @@ namespace DeviceChain.Towerpulse.Visuals
             Pull();
             if (preview != null) preview.Step();
             if (replay != null) replay.Step();
+            Commands.Sync(app.Ledger, app.Plane.Model.TimeS);
+        }
+
+        /// <summary>Applies the recorded facts the model has reached (a replay only). The frame renderer calls it between the short steps of a long jump.</summary>
+        public void StepReplay()
+        {
+            if (replay == null) return;
+            replay.Step();
             Commands.Sync(app.Ledger, app.Plane.Model.TimeS);
         }
 
