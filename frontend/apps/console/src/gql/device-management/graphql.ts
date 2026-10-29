@@ -4,9 +4,27 @@ type Exact<T extends { [key: string]: unknown }> = { [K in keyof T]: T[K] };
 /** Internal type. DO NOT USE DIRECTLY. */
 export type Incremental<T> = T | { [P in keyof T]?: P extends ' $fragmentName' | '__typename' ? T[P] : never };
 import { DocumentTypeDecoration } from '@graphql-typed-document-node/core';
+/**
+ * An anchor to filter alarms by: the alarms of one customer, area or asset, as stamped when each
+ * alarm cycle began. An alarm stays under the area its device was in when the alarm was raised,
+ * even after the device moves; a device sold or moved raises its NEXT alarm under the new
+ * anchors. For a member whose access is limited to some customers the answer is also limited to
+ * the alarms of that member's own devices, so a shared area counts only the member's own. A
+ * customer outside that member's access is refused (FORBIDDEN); an area or asset none of its
+ * devices raised in answers nothing.
+ */
+export type AlarmAnchor = {
+  /** Token of the entity, unique within the tenant. */
+  token: string;
+  /** Entity class: customer, area or asset. Any other value is an error. */
+  type: string;
+};
+
 export type AlarmSearchCriteria = {
   acknowledged?: boolean | null | undefined;
   alarmKey?: string | null | undefined;
+  /** Only alarms stamped with this anchor (see AlarmAnchor). */
+  anchor?: AlarmAnchor | null | undefined;
   /**
    * Only alarms raised on a device of this type, by the type's token. An unknown token finds
    * nothing. A member whose access is limited to some customers matches only the devices its

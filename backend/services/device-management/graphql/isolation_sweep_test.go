@@ -125,3 +125,31 @@ func TestIsolationSweepAimedAtAHiddenAreaAndAsset(t *testing.T) {
 		})
 	}
 }
+
+// The alarm anchor filter, swept: every alarm read and the alarm stream take an anchor, and
+// the sweep fills it with a CUSTOMER anchor naming the probe, which acme's scope does not
+// name. The reads must be reached and REFUSED, not answered empty, as a customer outside the
+// scope would otherwise name a co-owner. Its control is the operator, who is not refused.
+func TestIsolationSweepAimedAtACustomerAlarmAnchor(t *testing.T) {
+	f := newScopeFixture(t)
+	out := isolationsweep.Run(t, isolationsweep.Config{
+		Schema:   gqlcore.MustParseSchema(SchemaContent, &SchemaResolver{}),
+		Scoped:   f.member("customer:acme"),
+		Unscoped: f.operator(),
+		Probe:    "globex-pump",
+		Hidden:   []string{"globex"},
+		Literals: map[string]string{"originatorType": `"device"`, "state": `"ACTIVE"`, "severity": `"WARNING"`,
+			"type": `"customer"`},
+	})
+	for _, op := range []string{"query alarms (all arguments)", "query alarmCountsBySeverity (all arguments)", "query alarmCountsByDeviceType (all arguments)"} {
+		o, ok := isolationsweep.OutcomeOf(out, op)
+		if !ok || o.Data || len(o.Codes) == 0 || o.Codes[0] != "FORBIDDEN" {
+			t.Errorf("%s: %+v (reached=%v), want FORBIDDEN for a customer anchor outside acme's scope", op, o, ok)
+		}
+	}
+	// A subscribe-time refusal carries no wire code, so the stream is judged as refused (no data)
+	// here and as FORBIDDEN by TestAlarmStreamRefusesACustomerAnchorOutsideTheScope.
+	if o, ok := isolationsweep.OutcomeOf(out, "subscription alarmStream (all arguments)"); !ok || o.Data {
+		t.Errorf("subscription alarmStream (all arguments): %+v (reached=%v), want a refusal", o, ok)
+	}
+}

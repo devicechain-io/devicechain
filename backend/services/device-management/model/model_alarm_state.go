@@ -142,6 +142,10 @@ type AlarmSearchCriteria struct {
 	// of the same alarm is not a row and no range finds it. A value that is not RFC 3339 is an error.
 	StartTime *string
 	EndTime   *string
+	// Anchor restricts to alarms stamped with this customer, area or asset: where the device
+	// was when the alarm cycle began, not where it is now. For a caller limited to part of the
+	// tenant the result is also limited to its own scope (see ResolveAlarmAnchor).
+	Anchor *AlarmAnchor
 }
 
 // Criteria for counting alarms by their originating device's type. The facets are the alarm
@@ -153,6 +157,8 @@ type AlarmCountCriteria struct {
 	Severity       *string
 	Acknowledged   *bool
 	AlarmKey       *string
+	// Anchor is as on AlarmSearchCriteria.
+	Anchor *AlarmAnchor
 }
 
 // AlarmDeviceTypeCount is how many matching alarms are raised on devices of one type at one
