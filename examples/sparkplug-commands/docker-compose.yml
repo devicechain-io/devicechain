@@ -1,0 +1,55 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# The plant side: a Mosquitto broker and one Eclipse Tahu edge node. DeviceChain, running in the
+# kind cluster, joins this broker as a Sparkplug Host Application.
+#
+# Both containers join the Docker network "kind", which every kind cluster's nodes are on, so
+# the cluster's pods can reach the broker by its container name. ./setup.sh writes .env.
+
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2.0.22@sha256:09b62ff32c2e7b64d4b431b9a89236073289b68db273de2b089edeb9b0d92b5c
+    container_name: spb-mosquitto
+    environment:
+      HOST_PASSWORD: ${HOST_PASSWORD:?run ./setup.sh first}
+      NODE_PASSWORD: ${NODE_PASSWORD:?run ./setup.sh first}
+    # The password file is built at start from the environment, so no credential is in the repo.
+    entrypoint:
+      - sh
+      - -c
+      - |
+        mosquitto_passwd -c -b /mosquitto/passwd devicechain "$$HOST_PASSWORD"
+        mosquitto_passwd -b /mosquitto/passwd tahu "$$NODE_PASSWORD"
+        cp /mosquitto/config/acl /mosquitto/acl
+        chown mosquitto:mosquitto /mosquitto/passwd /mosquitto/acl
+        chmod 0700 /mosquitto/passwd /mosquitto/acl
+        exec /usr/sbin/mosquitto -c /mosquitto/config/mosquitto.conf
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./mosquitto/acl:/mosquitto/config/acl:ro
+    ports:
+      # For inspecting traffic from the host with mosquitto_sub. DeviceChain does not use this port.
+      - "127.0.0.1:${SPB_HOST_PORT:-1884}:1883"
+    networks: [kind]
+
+  edge-node:
+    build: ./edge-node
+    image: spb-tahu-edge-node:local
+    container_name: spb-edge-node
+    depends_on: [mosquitto]
+    environment:
+      BROKER_HOST: spb-mosquitto
+      BROKER_USERNAME: tahu
+      BROKER_PASSWORD: ${NODE_PASSWORD:?run ./setup.sh first}
+      SPB_GROUP: plant-a
+      SPB_NODE: pump-station
+      SPB_DEVICE: pump-1
+      PUBLISH_SECONDS: "5"
+      # Reproduces a Tahu default that makes every report look old; see edge_node.py.
+      STALE_TIMESTAMPS: ${STALE_TIMESTAMPS:-}
+    networks: [kind]
+
+networks:
+  kind:
+    external: true
