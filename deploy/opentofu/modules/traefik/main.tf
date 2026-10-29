@@ -190,6 +190,43 @@ variable "replicas" {
   }
 }
 
+variable "drain_seconds" {
+  description = <<-EOT
+    How long a controller pod keeps serving after it is told to terminate, so a cloud load
+    balancer that still points at its node does not hit a closed port. Applied ONLY where
+    externalTrafficPolicy is Local (a LoadBalancer Service, no host port): there the balancer
+    sends to a node until its health check fails it, which takes about three 8-second probes
+    on GCP, so a pod that leaves at once drops requests (connection refused, then connect
+    timeouts) until the balancer notices. The pod sleeps this long in preStop, with Kubernetes'
+    terminating-endpoint handling keeping the node healthy-and-serving meanwhile. Not applied
+    on kind (NodePort / host port): there is no balancer to wait for and the sleep would only
+    slow every rollout. 0 turns it off.
+  EOT
+  type        = number
+  default     = 40
+
+  validation {
+    condition     = var.drain_seconds >= 0 && var.drain_seconds <= 120 && var.drain_seconds == floor(var.drain_seconds)
+    error_message = "drain_seconds must be a whole number between 0 and 120."
+  }
+}
+
+variable "min_ready_seconds" {
+  description = <<-EOT
+    Seconds a new controller pod must be ready before the rollout counts it available and
+    removes an old one. Applied only where externalTrafficPolicy is Local, for the same reason
+    as drain_seconds: the balancer needs time to see the new pod's node as healthy before the
+    old pod's node can leave. 0 turns it off.
+  EOT
+  type        = number
+  default     = 15
+
+  validation {
+    condition     = var.min_ready_seconds >= 0 && var.min_ready_seconds <= 120 && var.min_ready_seconds == floor(var.min_ready_seconds)
+    error_message = "min_ready_seconds must be a whole number between 0 and 120."
+  }
+}
+
 variable "trusted_proxy_cidrs" {
   description = <<-EOT
     Source ranges whose X-Forwarded-* headers the controller trusts and appends to.
@@ -385,6 +422,21 @@ locals {
   # version it is running (it cannot derive one from a digest) for its version-gated flags.
   version_override = var.image_digest == "" ? "" : var.image_tag
 
+  # Hitless rollouts behind a cloud balancer. Only with externalTrafficPolicy: Local (the same
+  # condition the Service below uses): the balancer keeps sending to a node that lost its
+  # endpoint until its health check fails, so the old pod must outlive that (preStop sleep,
+  # native action: the image needs no shell) and the new one must be healthy first
+  # (minReadySeconds). terminationGracePeriodSeconds keeps the chart's 60s of headroom on top
+  # of the sleep for in-flight requests. Elsewhere the chart's defaults stand.
+  etp_local = !var.use_host_port && var.service_type == "LoadBalancer"
+  drain = {
+    for k, v in {
+      minReadySeconds               = var.min_ready_seconds
+      lifecycle                     = { preStop = { sleep = { seconds = var.drain_seconds } } }
+      terminationGracePeriodSeconds = var.drain_seconds + 60
+    } : k => v if local.etp_local && (k == "minReadySeconds" ? var.min_ready_seconds > 0 : var.drain_seconds > 0)
+  }
+
   values = merge(
     {
       image  = local.image
@@ -392,7 +444,10 @@ locals {
 
       versionOverride = local.version_override
 
-      deployment = { replicas = local.replicas }
+      deployment = merge(
+        { replicas = local.replicas },
+        local.drain,
+      )
 
       # The dashboard is not routed anywhere and exposing the API adds nothing to a
       # controller whose configuration lives in Gateways.

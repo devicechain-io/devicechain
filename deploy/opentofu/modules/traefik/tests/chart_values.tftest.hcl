@@ -565,3 +565,74 @@ run "host_ports_force_one_replica_and_no_spread" {
     error_message = "the forced single replica must not get a budget that blocks its own drain"
   }
 }
+
+# --- hitless rollouts behind a cloud balancer (D-SR3) ------------------------------
+
+run "a_local_load_balancer_drains_before_it_leaves" {
+  command = plan
+
+  assert {
+    condition     = yamldecode(helm_release.traefik.values[0]).deployment.lifecycle.preStop.sleep.seconds == 40
+    error_message = "behind a Local load balancer the pod must sleep in preStop for at least the balancer's health-check failure time (3 x 8s on GCP)"
+  }
+
+  assert {
+    condition     = yamldecode(helm_release.traefik.values[0]).deployment.terminationGracePeriodSeconds > yamldecode(helm_release.traefik.values[0]).deployment.lifecycle.preStop.sleep.seconds
+    error_message = "terminationGracePeriodSeconds must exceed the preStop sleep or the kubelet kills the pod mid-drain"
+  }
+
+  assert {
+    condition     = yamldecode(helm_release.traefik.values[0]).deployment.minReadySeconds == 15
+    error_message = "minReadySeconds gives the balancer time to see the new pod's node healthy before the old pod goes"
+  }
+}
+
+run "drain_is_tunable_and_can_be_turned_off" {
+  command = plan
+
+  variables {
+    drain_seconds     = 0
+    min_ready_seconds = 0
+  }
+
+  assert {
+    condition     = !can(yamldecode(helm_release.traefik.values[0]).deployment.lifecycle) && !can(yamldecode(helm_release.traefik.values[0]).deployment.minReadySeconds) && !can(yamldecode(helm_release.traefik.values[0]).deployment.terminationGracePeriodSeconds)
+    error_message = "0 must leave the chart's defaults alone"
+  }
+}
+
+run "kind_node_port_does_not_drain" {
+  command = plan
+
+  variables {
+    service_type = "NodePort"
+  }
+
+  assert {
+    condition     = !can(yamldecode(helm_release.traefik.values[0]).deployment.lifecycle) && !can(yamldecode(helm_release.traefik.values[0]).deployment.minReadySeconds)
+    error_message = "there is no balancer on kind to wait for; the sleep would only slow every rollout"
+  }
+}
+
+run "kind_host_port_does_not_drain" {
+  command = plan
+
+  variables {
+    use_host_port = true
+  }
+
+  assert {
+    condition     = !can(yamldecode(helm_release.traefik.values[0]).deployment.lifecycle) && !can(yamldecode(helm_release.traefik.values[0]).deployment.minReadySeconds)
+    error_message = "host-port mode (kind) must not drain: no balancer, and the sleep would slow every rollout"
+  }
+}
+
+run "a_drain_longer_than_two_minutes_is_refused" {
+  command = plan
+
+  variables {
+    drain_seconds = 121
+  }
+
+  expect_failures = [var.drain_seconds]
+}
