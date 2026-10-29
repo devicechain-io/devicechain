@@ -67,7 +67,8 @@ func seedScopeFixture(t *testing.T, db *gorm.DB, extra ...any) scopeFixture {
 	if err := db.AutoMigrate(append([]any{&model.DeviceType{}, &model.Device{}, &model.DeviceAlias{}, &model.DeviceProfile{},
 		&model.CustomerType{}, &model.Customer{}, &model.IssuedCustomerToken{}, &model.Area{}, &model.EntityRelationshipType{},
 		&model.EntityRelationship{}, &model.PendingOwnershipFact{}, &model.DeviceClaim{}, &model.DeviceProfileVersion{}, &model.DeviceProfileActivation{},
-		&model.MetricDefinition{}, &model.CommandDefinition{}, &model.Alarm{}, &model.EntityAttribute{}}, extra...)...); err != nil {
+		&model.MetricDefinition{}, &model.CommandDefinition{}, &model.Alarm{}, &model.EntityAttribute{},
+		&model.AreaType{}, &model.Asset{}, &model.AssetType{}}, extra...)...); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	f := scopeFixture{db: db, api: model.NewApi(&rdb.RdbManager{Database: db})}
@@ -85,7 +86,64 @@ func seedScopeFixture(t *testing.T, db *gorm.DB, extra ...any) scopeFixture {
 		}
 		f.addDevice(t, c+"-pump", c)
 	}
+	f.seedPlaces(t)
 	return f
+}
+
+// seedPlaces adds the places the two pumps sit in (ADR-081 decision 12). Areas:
+//
+//	floor-shared    - acme-pump AND globex-pump, both on tracked edges (the SHARED area)
+//	floor-acme      - acme-pump only            floor-globex - globex-pump only
+//	floor-untracked - acme-pump through an UNTRACKED edge: reached by nothing
+//	floor-idle      - no device at all
+//
+// and assets, the same shape: asset-shared, asset-acme, asset-globex. Every area and asset
+// carries metadata, and every asset a property document, so a test can tell what a scoped
+// reader is shown of them.
+func (f scopeFixture) seedPlaces(t *testing.T) {
+	t.Helper()
+	ctx := f.operator()
+	meta := `{"lease":"L-1"}`
+	at, err := f.api.CreateAreaType(ctx, &model.AreaTypeCreateRequest{Token: "floor"})
+	if err != nil {
+		t.Fatalf("area type: %v", err)
+	}
+	ast, err := f.api.CreateAssetType(ctx, &model.AssetTypeCreateRequest{Token: "machine"})
+	if err != nil {
+		t.Fatalf("asset type: %v", err)
+	}
+	for _, a := range []string{"floor-shared", "floor-acme", "floor-globex", "floor-untracked", "floor-idle"} {
+		name := "Name of " + a
+		if _, err := f.api.CreateArea(ctx, &model.AreaCreateRequest{Token: a, Name: &name, AreaTypeToken: at.Token, Metadata: &meta}); err != nil {
+			t.Fatalf("area %s: %v", a, err)
+		}
+	}
+	for _, a := range []string{"asset-shared", "asset-acme", "asset-globex"} {
+		name := "Name of " + a
+		if _, err := f.api.CreateAsset(ctx, &model.AssetCreateRequest{Token: a, Name: &name, AssetTypeToken: ast.Token, Metadata: &meta}); err != nil {
+			t.Fatalf("asset %s: %v", a, err)
+		}
+		if err := f.db.WithContext(ctx).Model(&model.Asset{}).Where("token = ?", a).Update("properties", `{"serial":"S-1"}`).Error; err != nil {
+			t.Fatalf("asset %s properties: %v", a, err)
+		}
+	}
+	if _, err := f.api.CreateEntityRelationshipType(ctx, &model.EntityRelationshipTypeCreateRequest{Token: "monitors"}); err != nil {
+		t.Fatalf("untracked type: %v", err)
+	}
+	for _, e := range []struct{ device, kind, target, typ string }{
+		{"acme-pump", "area", "floor-shared", "assigned"}, {"globex-pump", "area", "floor-shared", "assigned"},
+		{"acme-pump", "area", "floor-acme", "assigned"}, {"globex-pump", "area", "floor-globex", "assigned"},
+		{"acme-pump", "area", "floor-untracked", "monitors"},
+		{"acme-pump", "asset", "asset-shared", "assigned"}, {"globex-pump", "asset", "asset-shared", "assigned"},
+		{"acme-pump", "asset", "asset-acme", "assigned"}, {"globex-pump", "asset", "asset-globex", "assigned"},
+	} {
+		if _, err := f.api.CreateEntityRelationship(ctx, &model.EntityRelationshipCreateRequest{
+			Token: e.device + "-in-" + e.target, SourceType: "device", Source: e.device,
+			TargetType: e.kind, Target: e.target, RelationshipType: e.typ,
+		}); err != nil {
+			t.Fatalf("place %s in %s: %v", e.device, e.target, err)
+		}
+	}
 }
 
 // operator is an unscoped caller holding every tenant authority the fixture needs.

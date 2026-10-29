@@ -6,6 +6,7 @@ package graphql
 import (
 	"context"
 	_ "embed"
+	"fmt"
 	"github.com/devicechain-io/dc-microservice/auth"
 	util "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -252,6 +253,72 @@ func (r *SchemaResolver) CustomerDevices(ctx context.Context, args struct {
 		criteria.OwnershipOnly = true
 	}
 	found, err := r.GetApi(ctx).CustomerDevices(ctx, criteria)
+	if err != nil {
+		return nil, err
+	}
+	return &DeviceSearchResultsResolver{M: *found, S: r, C: ctx}, nil
+}
+
+// AnchorDeviceSearchCriteriaInput is anchorDevices' GraphQL input.
+type AnchorDeviceSearchCriteriaInput struct {
+	PageNumber       int32
+	PageSize         int32
+	TargetType       string
+	Target           string
+	RelationshipType *string
+}
+
+// AnchorDevices lists the devices on one anchor - a customer, an area or an asset - newest
+// first, one page at a time: the members of a dashboard widget bound to that anchor, as the
+// CALLER may read them.
+//
+// 🔴 EVERY ANSWER IS THE INTERSECTION OF THE ANCHOR AND THE DEVICES THE CALLER SEES, and that
+// is enforced in the store (the Device rule beside the edge filter), not here: the page, and
+// pagination.totalRecords, count only the caller's own devices, never the whole anchor
+// (ADR-081 decision 12). For a member limited to part of the tenant:
+//
+//   - a CUSTOMER anchor must be one the scope names, checked here from the claims alone,
+//     because a device may be assigned to two customers and asking about a customer outside
+//     the scope would name the co-owner. An existing and a non-existent customer are
+//     refused alike (FORBIDDEN). This is customerDevices' rule, unchanged.
+//   - an AREA or ASSET anchor needs no pre-check: the intersection is the visibility rule.
+//     An anchor none of the caller's devices is on answers an empty page, which is a fact
+//     about the caller's own devices and confirms nothing about the anchor.
+//   - only an ownership edge (a tracked type) matches, as the relationship graph is closed
+//     to a scoped caller and an untracked edge would disclose what it hides.
+//   - any other anchor kind is refused as unsupported for scoped access, never answered empty.
+//
+// An unscoped caller is answered for any anchor and any type, as the relationship search
+// gives for (device -> anchor).
+func (r *SchemaResolver) AnchorDevices(ctx context.Context, args struct {
+	Criteria AnchorDeviceSearchCriteriaInput
+}) (*DeviceSearchResultsResolver, error) {
+	scope, err := auth.AuthorizeScoped(ctx, auth.DeviceRead)
+	if err != nil {
+		return nil, err
+	}
+	in := args.Criteria
+	criteria := model.AnchorDeviceSearchCriteria{
+		Pagination: rdb.Pagination{PageNumber: in.PageNumber, PageSize: in.PageSize},
+		TargetType: in.TargetType,
+		Target:     in.Target,
+	}
+	if in.RelationshipType != nil {
+		criteria.RelationshipType = *in.RelationshipType
+	}
+	if !model.IsAnchorDevicesTargetType(in.TargetType) {
+		if scope.IsScoped() {
+			return nil, auth.ErrScopeUnsupported
+		}
+		return nil, fmt.Errorf("targetType %q is not an anchor with devices: use customer, area or asset", in.TargetType)
+	}
+	if scope.IsScoped() {
+		if in.TargetType == auth.AnchorKindCustomer && !scopeNamesCustomer(scope, in.Target) {
+			return nil, auth.ErrForbidden
+		}
+		criteria.OwnershipOnly = true
+	}
+	found, err := r.GetApi(ctx).AnchorDevices(ctx, criteria)
 	if err != nil {
 		return nil, err
 	}

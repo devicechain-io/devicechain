@@ -374,6 +374,23 @@ type CustomerDeviceSearchCriteria struct {
 	OwnershipOnly bool
 }
 
+// Search criteria for the devices on one ANCHOR: a customer, an area or an asset. A device
+// is a member while it has a live edge of RelationshipType (any type when empty) from the
+// device to the anchor.
+type AnchorDeviceSearchCriteria struct {
+	rdb.Pagination
+	// TargetType is the anchor's kind: "customer", "area" or "asset".
+	TargetType string
+	// Target is the anchor's token. Empty matches nothing, as a half-authored binding sends.
+	Target string
+	// RelationshipType is the token of the edge's relationship type; empty means any type.
+	RelationshipType string
+	// OwnershipOnly additionally requires that type to be TRACKED, so the edge is one of
+	// ownership. The resolver sets it for a caller limited to part of the tenant; it is not
+	// part of the GraphQL input.
+	OwnershipOnly bool
+}
+
 // Results for device search.
 type DeviceSearchResults struct {
 	Results    []Device

@@ -51,6 +51,8 @@ func TestEdgeToMatchesOneTypeToOneTarget(t *testing.T) {
 		// Not leased-pump (another type), member-pump, gone-pump (deleted edge), asset-pump
 		// (an asset named acme), crossed-type-pump (tenant B's type id), idle-pump (an
 		// asset's edge on its row id) or b-pump (tenant B).
+		{EdgeTarget{Kind: "customer", Token: "acme"}, []string{"acme-pump", "leased-pump", "member-pump"}},
+		{EdgeTarget{Kind: "customer", Token: "acme", TrackedOnly: true}, []string{"acme-pump", "leased-pump"}},
 		{EdgeTarget{Kind: "customer", Token: "acme", Type: "assigned"}, []string{"acme-pump"}},
 		{EdgeTarget{Kind: "customer", Token: "acme", Type: "leased"}, []string{"leased-pump"}},
 		// An untracked type matches unless the read asks for ownership only.
@@ -136,7 +138,6 @@ func TestEdgeToRefusesWhatItCannotBuild(t *testing.T) {
 	for _, target := range []EdgeTarget{
 		{Token: "acme", Type: "assigned"},
 		{Kind: "customer", Type: "assigned"},
-		{Kind: "customer", Token: "acme"},
 	} {
 		err := f.db.WithContext(unscopedCtx("A")).Model(&ownDevice{}).Scopes(EdgeTo(ownEdges, target)).Find(&found).Error
 		if err == nil {

@@ -16,7 +16,7 @@ import (
 func (r *SchemaResolver) AreaTypesById(ctx context.Context, args struct {
 	Ids []string
 }) ([]*AreaTypeResolver, error) {
-	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+	if err := auth.AuthorizeCatalogue(ctx, auth.DeviceRead); err != nil {
 		return nil, err
 	}
 
@@ -47,7 +47,7 @@ func (r *SchemaResolver) AreaTypesById(ctx context.Context, args struct {
 func (r *SchemaResolver) AreaTypesByToken(ctx context.Context, args struct {
 	Tokens []string
 }) ([]*AreaTypeResolver, error) {
-	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+	if err := auth.AuthorizeCatalogue(ctx, auth.DeviceRead); err != nil {
 		return nil, err
 	}
 
@@ -73,7 +73,7 @@ func (r *SchemaResolver) AreaTypesByToken(ctx context.Context, args struct {
 func (r *SchemaResolver) AreaTypes(ctx context.Context, args struct {
 	Criteria model.AreaTypeSearchCriteria
 }) (*AreaTypeSearchResultsResolver, error) {
-	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+	if err := auth.AuthorizeCatalogue(ctx, auth.DeviceRead); err != nil {
 		return nil, err
 	}
 
@@ -95,7 +95,7 @@ func (r *SchemaResolver) AreaTypes(ctx context.Context, args struct {
 func (r *SchemaResolver) AreasById(ctx context.Context, args struct {
 	Ids []string
 }) ([]*AreaResolver, error) {
-	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+	if _, err := auth.AuthorizeScoped(ctx, auth.DeviceRead); err != nil {
 		return nil, err
 	}
 
@@ -125,7 +125,7 @@ func (r *SchemaResolver) AreasById(ctx context.Context, args struct {
 func (r *SchemaResolver) AreasByToken(ctx context.Context, args struct {
 	Tokens []string
 }) ([]*AreaResolver, error) {
-	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+	if _, err := auth.AuthorizeScoped(ctx, auth.DeviceRead); err != nil {
 		return nil, err
 	}
 
@@ -151,7 +151,7 @@ func (r *SchemaResolver) AreasByToken(ctx context.Context, args struct {
 func (r *SchemaResolver) Areas(ctx context.Context, args struct {
 	Criteria model.AreaSearchCriteria
 }) (*AreaSearchResultsResolver, error) {
-	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+	if _, err := auth.AuthorizeScoped(ctx, auth.DeviceRead); err != nil {
 		return nil, err
 	}
 

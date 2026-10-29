@@ -278,7 +278,20 @@ func addScopePredicate(db *gorm.DB, rule *scopeRule, tenant string, scope auth.S
 		}
 		db.Statement.AddClause(clause.Where{Exprs: []clause.Expression{expr}})
 	case ruleDeviceEdge:
-		expr, err := deviceEdgeExpr(db, rule.edges, tenant, anchors)
+		row := db.Statement.Schema.LookUpField(rule.edges.Row)
+		if row == nil {
+			refuseScoped(db, fmt.Sprintf("a device-edge rule naming no row column %q", rule.edges.Row))
+			return
+		}
+		expr, err := deviceEdgeExpr(db, rule.edges, tenant, anchors,
+			clause.Column{Table: db.Statement.Table, Name: row.DBName})
+		if err != nil {
+			refuseScoped(db, err.Error())
+			return
+		}
+		db.Statement.AddClause(clause.Where{Exprs: []clause.Expression{expr}})
+	case ruleReachedFromDevice:
+		expr, err := reachedFromDeviceExpr(db, rule, tenant, anchors)
 		if err != nil {
 			refuseScoped(db, err.Error())
 			return
@@ -344,34 +357,32 @@ func softDeleteColumn(s *schema.Schema) *schema.Field {
 
 // deviceEdgeExpr builds a DeviceEdge predicate (see DeviceEdge): an edge of a TRACKED type
 // to any of the scope's anchors.
-func deviceEdgeExpr(db *gorm.DB, e OwnershipEdges, tenant string, anchors []string) (clause.Expression, error) {
-	row := db.Statement.Schema.LookUpField(e.Row)
-	if row == nil {
-		return nil, fmt.Errorf("a device-edge rule naming no row column %q", e.Row)
-	}
+//
+// rowID is the column holding the device's id: the statement's own table for the Device
+// rule, an alias inside ReachedFromDevice's subquery.
+func deviceEdgeExpr(db *gorm.DB, e OwnershipEdges, tenant string, anchors []string, rowID clause.Column) (clause.Expr, error) {
 	targets := make([]edgeTarget, 0, len(anchors))
 	var groupTokens []string
 	for _, a := range anchors {
 		kind, token, perr := auth.ParseAnchor(a)
 		if perr != nil {
-			return nil, perr
+			return clause.Expr{}, perr
 		}
 		targets = append(targets, edgeTarget{kind: kind, token: token})
 		if e.Groups != nil && kind == e.Groups.Kind {
 			groupTokens = append(groupTokens, token)
 		}
 	}
-	edge, err := edgeExistsExpr(db, clause.Column{Table: db.Statement.Table, Name: row.DBName}, e, tenant,
-		edgeMatch{trackedOnly: true, targets: targets})
+	edge, err := edgeExistsExpr(db, rowID, e, tenant, edgeMatch{trackedOnly: true, targets: targets})
 	if err != nil {
-		return nil, err
+		return clause.Expr{}, err
 	}
 	if len(groupTokens) == 0 {
 		return edge, nil
 	}
-	members, err := groupMembersExpr(db, *e.Groups, row, tenant, groupTokens)
+	members, err := groupMembersExpr(db, *e.Groups, rowID, tenant, groupTokens)
 	if err != nil {
-		return nil, err
+		return clause.Expr{}, err
 	}
 	return clause.Expr{SQL: "(" + edge.SQL + " OR " + members.SQL + ")", Vars: append(edge.Vars, members.Vars...)}, nil
 }
@@ -480,7 +491,7 @@ const (
 // groupMembersExpr builds a DeviceEdge's group branch (see DeviceEdge) for the given group
 // tokens, which must be non-empty. Every name comes from a parsed schema and is quoted by
 // gorm; the tenant, the member kind and every token are bound parameters.
-func groupMembersExpr(db *gorm.DB, g GroupMembers, row *schema.Field, tenant string, tokens []string) (clause.Expr, error) {
+func groupMembersExpr(db *gorm.DB, g GroupMembers, rowID clause.Column, tenant string, tokens []string) (clause.Expr, error) {
 	if g.Kind == "" || g.MemberKind == "" {
 		return clause.Expr{}, fmt.Errorf("a device-edge group branch with no kind")
 	}
@@ -529,7 +540,7 @@ func groupMembersExpr(db *gorm.DB, g GroupMembers, row *schema.Field, tenant str
 	}
 	sql.WriteString(" AND ? IS NOT NULL AND ? = ? AND ? = ? AND ? = ? AND ? IN (?" + strings.Repeat(", ?", len(tokens)-1) + "))")
 	vars = append(vars, enabled, memberVersion, groupVersion, memberType, g.MemberKind,
-		memberID, clause.Column{Table: db.Statement.Table, Name: row.DBName}, groupToken)
+		memberID, rowID, groupToken)
 	for _, t := range tokens {
 		vars = append(vars, t)
 	}
@@ -814,4 +825,99 @@ func everyRowInScope(db *gorm.DB, field *schema.Field, scope auth.Scope) bool {
 	}
 	walk(reflect.ValueOf(stmt.Dest))
 	return ok && rows > 0
+}
+
+// Aliases inside a ReachedFromDevice predicate. They differ from the DeviceEdge ones
+// (scopeEdgeAlias, scopeTypeAlias) because the device-visibility predicate is nested inside
+// this subquery: the same names would shadow, and its correlation to the device row would
+// silently bind to the wrong table.
+const (
+	reachEdgeAlias   = "dc_reach_edge"
+	reachTypeAlias   = "dc_reach_type"
+	reachDeviceAlias = "dc_reach_device"
+)
+
+// reachedFromDeviceExpr builds a ReachedFromDevice predicate (see ReachedFromDevice). Every
+// name comes from a parsed schema and is quoted by gorm; the tenant, the kinds, the tracked
+// flag and every anchor are bound parameters. The nested device-visibility test is the very
+// expression the Device rule uses (deviceEdgeExpr), so the two cannot drift apart.
+func reachedFromDeviceExpr(db *gorm.DB, rule *scopeRule, tenant string, anchors []string) (clause.Expression, error) {
+	e, r := rule.edges, rule.reach
+	if r.kind == "" || e.SourceKind == "" {
+		return nil, fmt.Errorf("a reached-from-device rule with no kind")
+	}
+	if len(anchors) == 0 {
+		// A caller with no anchors reaches nothing: never everything.
+		return clause.Expr{SQL: "1 = 0"}, nil
+	}
+	token := db.Statement.Schema.LookUpField(r.tokenColumn)
+	if token == nil {
+		return nil, fmt.Errorf("a reached-from-device rule naming no token column %q", r.tokenColumn)
+	}
+	edge, edgeTenant, err := parseRuleModel(db, e.Edge, "reached-from-device edge")
+	if err != nil {
+		return nil, err
+	}
+	typ, typeTenant, err := parseRuleModel(db, e.Type, "reached-from-device type")
+	if err != nil {
+		return nil, err
+	}
+	dev, devTenant, err := parseRuleModel(db, r.device, "reached-from-device source")
+	if err != nil {
+		return nil, err
+	}
+	col := func(s *schema.Schema, alias, name string) clause.Column {
+		c, cerr := aliasedColumn(s, alias, name)
+		if cerr != nil && err == nil {
+			err = cerr
+		}
+		return c
+	}
+	typeID := col(typ, reachTypeAlias, e.TypeID)
+	edgeType := col(edge, reachEdgeAlias, e.EdgeType)
+	tracked := col(typ, reachTypeAlias, e.Tracked)
+	sourceType := col(edge, reachEdgeAlias, e.SourceType)
+	sourceID := col(edge, reachEdgeAlias, e.SourceID)
+	targetType := col(edge, reachEdgeAlias, e.TargetType)
+	targetToken := col(edge, reachEdgeAlias, e.TargetToken)
+	devRow := col(dev, reachDeviceAlias, e.Row)
+	if err != nil {
+		return nil, err
+	}
+	// The source device must be one the caller sees: the Device rule, on the aliased row.
+	visible, err := deviceEdgeExpr(db, e, tenant, anchors, devRow)
+	if err != nil {
+		return nil, err
+	}
+
+	var sql strings.Builder
+	vars := []any{
+		clause.Table{Name: edge.Table}, clause.Table{Name: reachEdgeAlias},
+		clause.Table{Name: typ.Table}, clause.Table{Name: reachTypeAlias},
+		typeID, edgeType,
+		clause.Column{Table: reachEdgeAlias, Name: edgeTenant.DBName}, tenant,
+		clause.Column{Table: reachTypeAlias, Name: typeTenant.DBName}, tenant,
+	}
+	sql.WriteString("EXISTS (SELECT 1 FROM ? AS ? JOIN ? AS ? ON ? = ? WHERE ? = ? AND ? = ?")
+	if f := softDeleteColumn(edge); f != nil {
+		sql.WriteString(" AND ? IS NULL")
+		vars = append(vars, clause.Column{Table: reachEdgeAlias, Name: f.DBName})
+	}
+	if f := softDeleteColumn(typ); f != nil {
+		sql.WriteString(" AND ? IS NULL")
+		vars = append(vars, clause.Column{Table: reachTypeAlias, Name: f.DBName})
+	}
+	sql.WriteString(" AND ? = ? AND ? = ? AND ? = ? AND ? = ?")
+	vars = append(vars, tracked, true, sourceType, e.SourceKind, targetType, r.kind,
+		targetToken, clause.Column{Table: db.Statement.Table, Name: token.DBName})
+	sql.WriteString(" AND EXISTS (SELECT 1 FROM ? AS ? WHERE ? = ? AND ? = ?")
+	vars = append(vars, clause.Table{Name: dev.Table}, clause.Table{Name: reachDeviceAlias},
+		clause.Column{Table: reachDeviceAlias, Name: devTenant.DBName}, tenant, devRow, sourceID)
+	if f := softDeleteColumn(dev); f != nil {
+		sql.WriteString(" AND ? IS NULL")
+		vars = append(vars, clause.Column{Table: reachDeviceAlias, Name: f.DBName})
+	}
+	sql.WriteString(" AND " + visible.SQL + "))")
+	vars = append(vars, visible.Vars...)
+	return clause.Expr{SQL: sql.String(), Vars: vars}, nil
 }

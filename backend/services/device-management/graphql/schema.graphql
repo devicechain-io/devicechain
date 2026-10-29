@@ -2355,6 +2355,23 @@ input CustomerDeviceSearchCriteria {
     relationshipType: String!
 }
 
+"""Criteria for the devices on one anchor: a customer, an area or an asset."""
+input AnchorDeviceSearchCriteria {
+    """Page to return, starting at 1. Values below 1 are read as 1."""
+    pageNumber: Int!
+    """Results per page. Below 1 means the default of 100; above 1000 is capped at 1000."""
+    pageSize: Int!
+    """The anchor's kind: "customer", "area" or "asset"."""
+    targetType: String!
+    """Token of the anchor."""
+    target: String!
+    """
+    Token of the relationship type linking each device to the anchor, such as "assigned".
+    Omit it for a device linked by any type.
+    """
+    relationshipType: String
+}
+
 """One page of devices matching a search."""
 type DeviceSearchResults {
     """The devices on this page."""
@@ -4443,6 +4460,21 @@ type Query {
         """The customer, the relationship type and the page to return."""
         criteria: CustomerDeviceSearchCriteria!
     ): DeviceSearchResults!
+    """
+    Searches the devices on one anchor (a customer, an area or an asset), newest first, one
+    page at a time: the members of a dashboard widget bound to that anchor, as the caller
+    may read them. Every answer, and pagination.totalRecords, counts only the devices the
+    caller can see, never the whole anchor. An anchor that does not exist matches nothing.
+    For a member limited to part of the tenant, a customer anchor must be one that member's
+    access names, or the request is refused with FORBIDDEN; an area or asset that none of
+    the member's devices is on matches nothing; only an ownership relationship (a tracked
+    type, such as the default "assigned") matches; and any other anchor kind is refused as
+    unsupported for scoped access (FORBIDDEN, reason SCOPE_UNSUPPORTED). Requires device:read.
+    """
+    anchorDevices(
+        """The anchor, an optional relationship type and the page to return."""
+        criteria: AnchorDeviceSearchCriteria!
+    ): DeviceSearchResults!
     # Find entity groups by unique id.
     entityGroupsById(ids: [ID!]!): [EntityGroup!]!
     # Find entity groups by unique token. Answered to a member whose access is limited to part
@@ -4577,17 +4609,22 @@ type Query {
     # referenced entity was deleted.
     existingEntityRefs(refs: [EntityRefInput!]!): [EntityRef!]!
 
-    # Find asset types by unique id.
+    # Find asset types by unique id. Answered to a member limited to part of the tenant too:
+    # a type is configuration, not device data.
     assetTypesById(ids: [ID!]!): [AssetType!]!
-    # Find asset types by unique token.
+    # Find asset types by unique token. Answered to a member limited to part of the tenant too.
     assetTypesByToken(tokens: [String!]!): [AssetType!]!
-    # List asset types that meet criteria.
+    # List asset types that meet criteria. Answered to a member limited to part of the tenant too.
     assetTypes(criteria: AssetTypeSearchCriteria!): AssetTypeSearchResults!
-    # Find assets by unique id.
+    # Find assets by unique id. A member limited to part of the tenant is answered with only
+    # the assets one of its visible devices is assigned to (a tracked edge); the metadata and
+    # properties of those are null for it, and any other id is omitted as if it did not exist.
     assetsById(ids: [ID!]!): [Asset!]!
-    # Find assets by unique token.
+    # Find assets by unique token. Scoped as assetsById: an asset outside the member's reach
+    # is omitted, never refused.
     assetsByToken(tokens: [String!]!): [Asset!]!
-    # List assets that meet criteria.
+    # List assets that meet criteria. Scoped as assetsById; pagination counts only the assets
+    # the member reaches.
     assets(criteria: AssetSearchCriteria!): AssetSearchResults!
     # An asset type's published property-contract versions, newest first.
     # At most 1000 per call (newest first); limit (at least 1) narrows that and offset (not negative) pages further.
@@ -4656,17 +4693,22 @@ type Query {
     # List customers that meet criteria.
     customers(criteria: CustomerSearchCriteria!): CustomerSearchResults!
 
-    # Find area types by unique id.
+    # Find area types by unique id. Answered to a member limited to part of the tenant too:
+    # a type is configuration, not device data.
     areaTypesById(ids: [ID!]!): [AreaType!]!
-    # Find area types by unique token.
+    # Find area types by unique token. Answered to a member limited to part of the tenant too.
     areaTypesByToken(tokens: [String!]!): [AreaType!]!
-    # List area types that meet criteria.
+    # List area types that meet criteria. Answered to a member limited to part of the tenant too.
     areaTypes(criteria: AreaTypeSearchCriteria!): AreaTypeSearchResults!
-    # Find areas by unique id.
+    # Find areas by unique id. A member limited to part of the tenant is answered with only
+    # the areas one of its visible devices is placed in (a tracked edge); the metadata of
+    # those is null for it, and any other id is omitted as if it did not exist.
     areasById(ids: [ID!]!): [Area!]!
-    # Find areas by unique token.
+    # Find areas by unique token. Scoped as areasById: an area outside the member's reach is
+    # omitted, never refused.
     areasByToken(tokens: [String!]!): [Area!]!
-    # List areas that meet criteria.
+    # List areas that meet criteria. Scoped as areasById; pagination counts only the areas
+    # the member reaches.
     areas(criteria: AreaSearchCriteria!): AreaSearchResults!
 }
 

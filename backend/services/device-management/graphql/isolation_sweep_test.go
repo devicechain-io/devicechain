@@ -46,7 +46,9 @@ func TestIsolationSweep(t *testing.T) {
 		}
 	}
 	// The sweep reached the opted-in reads, and they answered data rather than a refusal.
-	for _, op := range []string{"query devices", "query customers", "query deviceTypes"} {
+	for _, op := range []string{"query devices", "query customers", "query deviceTypes",
+		"query areas", "query areasById", "query areasByToken", "query assets", "query assetsById", "query assetsByToken",
+		"query areaTypes", "query assetTypes"} {
 		o, ok := isolationsweep.OutcomeOf(out, op)
 		if !ok || !o.Data {
 			t.Errorf("%s: %+v (reached=%v), want data for acme's member", op, o, ok)
@@ -60,6 +62,16 @@ func TestIsolationSweep(t *testing.T) {
 	// and refused (its hidden-vs-missing twin is the sweep's own second call).
 	if o, ok := isolationsweep.OutcomeOf(out, "query customerDevices"); !ok || o.Data || len(o.Codes) == 0 || o.Codes[0] != "FORBIDDEN" {
 		t.Errorf("query customerDevices: %+v (reached=%v), want FORBIDDEN for acme's member", o, ok)
+	}
+	// anchorDevices is opted in, but the sweep aims it at the probe's token with the probe as
+	// the anchor KIND, which names no anchor a scoped member may ask about: reached, refused.
+	if o, ok := isolationsweep.OutcomeOf(out, "query anchorDevices"); !ok || o.Data || len(o.Codes) == 0 || o.Codes[0] != "FORBIDDEN" {
+		t.Errorf("query anchorDevices: %+v (reached=%v), want FORBIDDEN for acme's member", o, ok)
+	}
+	// The relationship graph names co-owners: still closed, now with areas and assets open
+	// beside it.
+	if o, ok := isolationsweep.OutcomeOf(out, "query entityRelationships"); !ok || o.Data || len(o.Codes) == 0 || o.Codes[0] != "FORBIDDEN" {
+		t.Errorf("query entityRelationships: %+v (reached=%v), want FORBIDDEN for acme's member", o, ok)
 	}
 	if o, ok := isolationsweep.OutcomeOf(out, "query deviceScopeAnchors"); !ok || o.Data || len(o.Codes) == 0 || o.Codes[0] != "FORBIDDEN" {
 		t.Errorf("query deviceScopeAnchors: %+v (reached=%v), want FORBIDDEN for acme's member", o, ok)

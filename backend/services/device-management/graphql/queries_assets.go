@@ -16,7 +16,7 @@ import (
 func (r *SchemaResolver) AssetTypesById(ctx context.Context, args struct {
 	Ids []string
 }) ([]*AssetTypeResolver, error) {
-	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+	if err := auth.AuthorizeCatalogue(ctx, auth.DeviceRead); err != nil {
 		return nil, err
 	}
 
@@ -47,7 +47,7 @@ func (r *SchemaResolver) AssetTypesById(ctx context.Context, args struct {
 func (r *SchemaResolver) AssetTypesByToken(ctx context.Context, args struct {
 	Tokens []string
 }) ([]*AssetTypeResolver, error) {
-	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+	if err := auth.AuthorizeCatalogue(ctx, auth.DeviceRead); err != nil {
 		return nil, err
 	}
 
@@ -73,7 +73,7 @@ func (r *SchemaResolver) AssetTypesByToken(ctx context.Context, args struct {
 func (r *SchemaResolver) AssetTypes(ctx context.Context, args struct {
 	Criteria model.AssetTypeSearchCriteria
 }) (*AssetTypeSearchResultsResolver, error) {
-	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+	if err := auth.AuthorizeCatalogue(ctx, auth.DeviceRead); err != nil {
 		return nil, err
 	}
 
@@ -95,7 +95,7 @@ func (r *SchemaResolver) AssetTypes(ctx context.Context, args struct {
 func (r *SchemaResolver) AssetsById(ctx context.Context, args struct {
 	Ids []string
 }) ([]*AssetResolver, error) {
-	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+	if _, err := auth.AuthorizeScoped(ctx, auth.DeviceRead); err != nil {
 		return nil, err
 	}
 
@@ -125,7 +125,7 @@ func (r *SchemaResolver) AssetsById(ctx context.Context, args struct {
 func (r *SchemaResolver) AssetsByToken(ctx context.Context, args struct {
 	Tokens []string
 }) ([]*AssetResolver, error) {
-	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+	if _, err := auth.AuthorizeScoped(ctx, auth.DeviceRead); err != nil {
 		return nil, err
 	}
 
@@ -151,7 +151,7 @@ func (r *SchemaResolver) AssetsByToken(ctx context.Context, args struct {
 func (r *SchemaResolver) Assets(ctx context.Context, args struct {
 	Criteria model.AssetSearchCriteria
 }) (*AssetSearchResultsResolver, error) {
-	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+	if _, err := auth.AuthorizeScoped(ctx, auth.DeviceRead); err != nil {
 		return nil, err
 	}
 

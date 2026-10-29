@@ -45,7 +45,7 @@ const (
 )
 
 // ScopeRule is the visibility rule of a model for scoped callers. Build one with
-// AnchorColumn, AnchorTable, HeldAnchors, DeviceEdge, OwnAnchor, NamedAnchor or Catalogue.
+// AnchorColumn, AnchorTable, HeldAnchors, DeviceEdge, ReachedFromDevice, OwnAnchor, NamedAnchor or Catalogue.
 type ScopeRule interface {
 	rule() *scopeRule
 }
@@ -59,6 +59,7 @@ const (
 	ruleDeviceEdge
 	ruleOwnAnchor
 	ruleHeldAnchors
+	ruleReachedFromDevice
 )
 
 // scopeRule is the one concrete rule type; kind says which of its fields apply.
@@ -67,7 +68,8 @@ type scopeRule struct {
 	column string         // ruleAnchorColumn; ruleOwnAnchor (the token column)
 	set    AnchorSet      // ruleAnchorTable
 	holder AnchorHolder   // ruleHeldAnchors
-	edges  OwnershipEdges // ruleDeviceEdge
+	edges  OwnershipEdges // ruleDeviceEdge, ruleReachedFromDevice
+	reach  reachSpec      // ruleReachedFromDevice
 	// ruleOwnAnchor: the row's anchor kind is either a column (kindColumn) or one
 	// constant every row of the model shares (kindConst). Exactly one is set.
 	kindColumn, kindConst string
@@ -286,4 +288,47 @@ func OwnAnchor(kindColumn, tokenColumn string) ScopeRule {
 // refused.
 func NamedAnchor(kind, tokenColumn string) ScopeRule {
 	return &scopeRule{kind: ruleOwnAnchor, kindConst: kind, column: tokenColumn}
+}
+
+// reachSpec is what ReachedFromDevice adds to the ownership graph: the model of the source
+// devices (whose own rule is the visibility test), the kind of entity the rule's model is,
+// and the column holding the token an edge names it by.
+type reachSpec struct {
+	device      any
+	kind        string
+	tokenColumn string
+}
+
+// ReachedFromDevice is the rule of a model whose rows are TARGETS of the ownership graph
+// that a scoped caller may know of only through the devices it can see: an area, an asset
+// (ADR-081 decision 12). A scoped caller sees a row while some device it can CURRENTLY see
+// (the DeviceEdge rule over edges, evaluated on device, group branch included) has a live
+// edge of a TRACKED type to it:
+//
+//	EXISTS (SELECT 1 FROM <edge> AS dc_reach_edge
+//	        JOIN <type> AS dc_reach_type ON dc_reach_type.<id> = dc_reach_edge.<edge type>
+//	        WHERE dc_reach_edge.<tenant> = $tenant AND dc_reach_type.<tenant> = $tenant
+//	          [AND dc_reach_edge.deleted_at IS NULL] [AND dc_reach_type.deleted_at IS NULL]
+//	          AND dc_reach_type.<tracked> = $true
+//	          AND dc_reach_edge.<source type> = $deviceKind
+//	          AND dc_reach_edge.<target type> = $kind
+//	          AND dc_reach_edge.<target token> = "<table>"."<token column>"
+//	          AND EXISTS (SELECT 1 FROM <device> AS dc_reach_device
+//	                      WHERE dc_reach_device.<tenant> = $tenant
+//	                        [AND dc_reach_device.deleted_at IS NULL]
+//	                        AND dc_reach_device.<row> = dc_reach_edge.<source id>
+//	                        AND <the DeviceEdge predicate on dc_reach_device>))
+//
+// Four conjuncts carry the guarantee, and each is one a mutant must break: the TENANT on
+// every table, TRACKED on the edge's type, the edge's SOURCE being a device the caller sees
+// (not any device), and the edge naming THIS row. Visibility is CURRENT: a device that
+// moves or is sold stops conferring it on the next read. An untracked edge, or a second
+// hop (device -> asset -> customer), confers nothing. A scoped caller with no anchors sees
+// nothing. Scoped writes are refused.
+//
+// device is the source devices' model (tenant-scoped), kind the entity kind the rule's
+// model is ("area"), tokenColumn the model's token column.
+func ReachedFromDevice(edges OwnershipEdges, device any, kind, tokenColumn string) ScopeRule {
+	return &scopeRule{kind: ruleReachedFromDevice, edges: edges,
+		reach: reachSpec{device: device, kind: kind, tokenColumn: tokenColumn}}
 }

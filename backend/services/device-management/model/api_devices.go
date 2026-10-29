@@ -982,23 +982,45 @@ func (api *Api) Devices(ctx context.Context, criteria DeviceSearchCriteria) (*De
 }
 
 // CustomerDevices pages the devices with a live edge of the criteria's relationship type
-// to the customer, newest first. The edge is matched by the customer's TOKEN, which the
-// edge carries (ADR-044) and a deleted customer never hands on (its token is retired), so
-// an unknown customer or type is an empty page rather than an error — and so is an empty
-// one, as a half-authored dashboard binding sends.
-//
-// The device rows are read like every other device read: a scoped caller's device rule
-// applies beside the filter (rdb.EdgeTo), so this can narrow what a caller sees and never
-// widen it. Who may ask about which customer is the resolver's to decide.
+// to the customer, newest first. It is AnchorDevices over a customer anchor with the type
+// REQUIRED: an empty customer or type is an empty page, as a half-authored dashboard
+// binding sends, never "any type".
 func (api *Api) CustomerDevices(ctx context.Context, criteria CustomerDeviceSearchCriteria) (*DeviceSearchResults, error) {
+	target := criteria.Customer
+	if criteria.RelationshipType == "" {
+		target = ""
+	}
+	return api.AnchorDevices(ctx, AnchorDeviceSearchCriteria{
+		Pagination:       criteria.Pagination,
+		TargetType:       string(entity.TypeCustomer),
+		Target:           target,
+		RelationshipType: criteria.RelationshipType,
+		OwnershipOnly:    criteria.OwnershipOnly,
+	})
+}
+
+// AnchorDevices pages the devices with a live edge (of the criteria's type, or any) to one
+// anchor - a customer, an area or an asset - newest first. The edge is matched by the
+// anchor's TOKEN, which the edge carries (ADR-044) and a deleted anchor never hands on (its
+// token is retired), so an unknown anchor or type is an empty page rather than an error.
+//
+// 🔴 THE DEVICE ROWS ARE READ LIKE EVERY OTHER DEVICE READ: a scoped caller's device rule
+// (rdb.DeviceEdge) applies beside the filter, so this can narrow what a caller sees and
+// never widen it, and the page AND its total count only the caller's own devices. For an
+// area or an asset that intersection IS the visibility rule (ADR-081 decision 12): a scoped
+// caller asking about an anchor none of its devices is on gets an empty page, which
+// discloses nothing it did not already know. Who may ask about which CUSTOMER is the
+// resolver's to decide (a customer outside the scope would name a co-owner), and it must
+// set OwnershipOnly for a scoped caller so an untracked edge is not disclosed either.
+func (api *Api) AnchorDevices(ctx context.Context, criteria AnchorDeviceSearchCriteria) (*DeviceSearchResults, error) {
 	results := make([]Device, 0)
 	db, pag := api.RDB.ListOf(ctx, &Device{}, func(result *gorm.DB) *gorm.DB {
-		if criteria.Customer == "" || criteria.RelationshipType == "" {
+		if criteria.Target == "" || !IsAnchorDevicesTargetType(criteria.TargetType) {
 			return result.Where("1 = 0")
 		}
 		return result.Scopes(rdb.EdgeTo(deviceOwnership, rdb.EdgeTarget{
-			Kind:        string(entity.TypeCustomer),
-			Token:       criteria.Customer,
+			Kind:        criteria.TargetType,
+			Token:       criteria.Target,
 			Type:        criteria.RelationshipType,
 			TrackedOnly: criteria.OwnershipOnly,
 		})).Preload("DeviceType")
@@ -1008,4 +1030,13 @@ func (api *Api) CustomerDevices(ctx context.Context, criteria CustomerDeviceSear
 		return nil, db.Error
 	}
 	return &DeviceSearchResults{Results: results, Pagination: pag}, nil
+}
+
+// IsAnchorDevicesTargetType reports whether kind is an anchor AnchorDevices serves.
+func IsAnchorDevicesTargetType(kind string) bool {
+	switch kind {
+	case string(entity.TypeCustomer), string(entity.TypeArea), string(entity.TypeAsset):
+		return true
+	}
+	return false
 }

@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"github.com/devicechain-io/dc-device-management/model"
+	"github.com/devicechain-io/dc-microservice/auth"
 	util "github.com/devicechain-io/dc-microservice/graphql"
 	gql "github.com/graph-gophers/graphql-go"
 )
@@ -41,6 +42,12 @@ func entityIdToken(value interface{}) (uint, string) {
 		return e.ID, e.Token
 	}
 	return 0, ""
+}
+
+// isScopedCaller reports whether the request's caller is limited to part of the tenant.
+func isScopedCaller(ctx context.Context) bool {
+	_, scoped := auth.ScopeFromContext(ctx)
+	return scoped
 }
 
 func (r *EntityResolver) Id() gql.ID {

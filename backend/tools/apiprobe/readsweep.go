@@ -574,6 +574,10 @@ var sweepExemptions = map[string]string{
 		"required input FIELDS, and the planner supplies tokens to top-level arguments only; the probe " +
 		"also seeds no device-to-customer edge, so the call could only read an empty page. The edges it " +
 		"reads are swept through entityRelationships and the device rows through devices",
+	"device-management.anchorDevices": "its criteria names an anchor kind, an anchor token and an optional " +
+		"relationship type as required input FIELDS, and the planner supplies tokens to top-level " +
+		"arguments only; it is customerDevices over a customer, an area or an asset, and the rows it " +
+		"reads are swept through entityRelationships and devices",
 	"device-management.commandDispatchSchedule": "a pre-flight decision about a command the CALLER is " +
 		"about to send; it needs a commandKey from the device's own vocabulary, which is a choice, not a " +
 		"token. The window it reads is swept through maintenanceWindowOpening",
