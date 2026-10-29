@@ -47,9 +47,12 @@ class Judges(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("already at setpoint", detail)
 
-    def test_boost_answered_at_once_fails(self):
-        quick = dict(BOOST, respondedTime="2026-10-29T14:10:05Z")
-        self.assertFalse(a.judge_boost_at_setpoint(quick, hot_room())[0])
+    def test_boost_answered_at_once_fails_even_if_the_room_reads_fine(self):
+        evs = [ev("temp_c", 26.4, "2026-10-29T14:09:50Z"), ev("temp_c", 22.0, "2026-10-29T14:10:06Z")] + [ev("setpoint_c", 22.0, "2026-10-29T14:09:50Z")]
+        quick = dict(BOOST, respondedTime="2026-10-29T14:10:08Z")
+        ok, detail = a.judge_boost_at_setpoint(quick, evs)
+        self.assertFalse(ok)
+        self.assertIn("almost at once", detail)
 
     def test_boost_not_successful_or_missing_fails(self):
         self.assertFalse(a.judge_boost_at_setpoint(None, [])[0])

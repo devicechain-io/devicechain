@@ -317,7 +317,7 @@ namespace DeviceChain.Towerpulse.DevicePlane
             {
                 observed.Enqueue(item);
                 if (recorder == null) return;
-                foreach (var line in ObservedRecording.Lines(item, t => externalIdByToken.TryGetValue(t ?? "", out var e) ? e : t)) recorder.Observe(line);
+                foreach (var line in ObservedRecording.Lines(item)) recorder.Observe(line);
             };
             observer.Start();
         }
