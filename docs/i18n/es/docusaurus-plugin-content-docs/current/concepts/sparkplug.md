@@ -31,9 +31,15 @@ DeviceChain es deliberadamente estricto sobre qué muertes aplica:
 
 ## Multitenencia y configuración
 
-Cada **fuente** de Sparkplug se configura para un inquilino. Contiene la URL del broker, las credenciales (suministradas como un secreto proyectado, nunca en configuración en texto plano) y los grupos a los que suscribirse.
+Cada **fuente** de Sparkplug se configura para un inquilino. Contiene la URL del broker, las credenciales (suministradas como un secreto proyectado, nunca en configuración en texto plano) y los grupos a los que suscribirse. Las fuentes se entregan a `dcctl` como un archivo, con `--sparkplug-source`; [Cómo operar los servicios de borde](../deployment/edge-services.md#sparkplug-sources) lo muestra.
 
 Todo mensaje que llega por una fuente se atribuye *al inquilino de esa fuente*. El inquilino queda fijado por el broker por el que llegó el mensaje y nunca se lee del tópico de Sparkplug, así que la red de borde de un inquilino nunca puede confundirse con la de otro.
+
+### Un nodo que nace antes de que exista su tipo de dispositivo {#birth-recovery}
+
+Un nodo se registra la primera vez que llega su nacimiento, con el `deviceTypeToken` que nombra su fuente. Si ese tipo de dispositivo aún no existe (el error de orden habitual cuando se conecta una fuente antes de aprovisionar el inquilino), o device-management no responde durante más tiempo que el breve reintento, el nacimiento se descarta y se cuenta. Un nodo que ya nació no vuelve a anunciarse por sí solo, así que seguiría siendo desconocido.
+
+Por eso la plataforma recuerda qué nodos no pudo registrar y **pide a cada uno que vuelva a nacer** (un `NCMD` `Node Control/Rebirth`), 10 segundos después del fallo y luego a intervalos crecientes hasta una vez por minuto, hasta que un mensaje del nodo se registra. Crea el tipo de dispositivo y el nodo aparece en menos de un minuto, sin reiniciar nada. No se reproduce nada desde memoria: los nacimientos que responden se ingieren como cualquier otro, de modo que un nodo nunca puede registrarse dos veces. El primer fallo de un nodo se registra en el log como error con su causa, cada petición como aviso, y `birth_recovery_pending` se mantiene por encima de cero mientras algún nodo espera (consulta [las métricas](../deployment/edge-services.md#sparkplug-ingestion-metrics)). Un nodo que se desconecta se olvida; su siguiente nacimiento es un intento nuevo.
 
 ## Alta disponibilidad
 
@@ -52,7 +58,7 @@ La ingesta de Sparkplug-B está disponible como un servicio opcional (opt-in). I
 
 ## Comandos {#commands}
 
-DeviceChain puede enviar comandos **hacia abajo** a un nodo o dispositivo Sparkplug, por la misma sesión de Host Application que ya mantiene con tu bróker. Es **opcional y está desactivado por defecto**: hasta que una fuente lo habilita, un comando a un dispositivo Sparkplug falla al instante como no entregable, igual que antes. Habilitarlo es un ajuste de despliegue, descrito en [Comandos Sparkplug](../deployment/edge-services.md#sparkplug-commands), y hoy se hace mediante valores de Helm.
+DeviceChain puede enviar comandos **hacia abajo** a un nodo o dispositivo Sparkplug, por la misma sesión de Host Application que ya mantiene con tu bróker. Es **opcional y está desactivado por defecto**: hasta que una fuente lo habilita, un comando a un dispositivo Sparkplug falla al instante como no entregable, igual que antes. Habilitarlo es un ajuste de la fuente, descrito en [Comandos Sparkplug](../deployment/edge-services.md#sparkplug-commands).
 
 Son [comandos](./commands.md) normales: se declaran en el perfil del dispositivo, se envían desde la página del dispositivo, un lote o una regla de automatización, y están sujetos a los mismos permisos, ventanas de mantenimiento y registro de auditoría. El botón **Añadir comandos estándar de Sparkplug** de la consola declara en un perfil los tres siguientes.
 
@@ -76,11 +82,40 @@ Si el dispositivo aún no ha nacido en la sesión (el nodo está fuera de línea
 | `SUCCESSFUL`, informado | El nodo informó de la métrica con el valor solicitado después de publicar el comando. El resultado registra la métrica, el valor, cuándo se informó y en qué mensaje |
 | `SUCCESSFUL`, ya en el valor | El nodo ya había informado de ese valor y no informó de nada distinto dentro de la ventana. La plataforma no vio que el nodo actuara por este comando |
 | `TIMEOUT` | Nada lo confirmó dentro de la ventana (2 minutos por defecto). **No es un fallo**: el nodo pudo ignorar o rechazar el comando, el bróker pudo descartarlo, o el nodo obedeció y aún no ha informado |
-| `FAILED`, no entregado | Rechazado antes de enviar nada: comandos no habilitados para esa fuente, un valor no válido, una métrica no permitida, un comando caducado o el cortacircuitos de abajo |
+| `FAILED`, no entregado | Rechazado antes de enviar nada: comandos no habilitados para esa fuente, un valor no válido, una métrica no permitida, un comando caducado o el cortacircuitos de abajo. La respuesta almacenada lleva un [código de motivo](#command-refusals) que dice cuál |
 
 De ahí se desprenden dos precauciones. *Confirmado* significa que la métrica **alcanzó** el valor, no que esta solicitud lo causara: Sparkplug no autentica quién publica, así que cualquiera que pueda publicar en el topic del nodo en tu bróker puede hacer que una métrica lea cualquier valor, y las ACL de publicación del bróker son lo que respalda la evidencia. Y una métrica que un nodo informa solo al cambiar puede dejar un comando en `TIMEOUT` aunque funcionara. Un informe anterior al comando y uno marcado como histórico nunca cuentan como confirmación.
 
 Una escritura más reciente a la misma métrica del mismo dispositivo cierra la anterior que sigue esperando, como `TIMEOUT` con el motivo *superseded*. Un rebirth se confirma con el siguiente nacimiento del nodo, y un reinicio con un nacimiento con un nuevo número de secuencia de nacimiento, dentro de su propia ventana, más larga.
+
+### Por qué se rechazó un comando {#command-refusals}
+
+Un comando rechazado antes de enviar nada acaba como `FAILED`, no entregado, y su respuesta almacenada es `{"reason": "<código>"}`. El texto del error dice lo mismo con palabras; el código es lo que debe usar un script o la consola, porque la redacción puede cambiar y los códigos son un conjunto fijo. La consola muestra una frase para cada uno.
+
+| Código | Significado |
+| --- | --- |
+| `commands_not_enabled` | Los comandos están desactivados para el inquilino o para la fuente en la que está el dispositivo |
+| `broker_refused` | El cortacircuitos está abierto: el broker rechazó una publicación anterior |
+| `expired` | La caducidad del propio comando pasó antes de poder enviarlo |
+| `invalid_parameters` | Los parámetros no son los que admite el comando (una escritura necesita el nombre de una métrica y un valor escalar; un rebirth y un reboot no admiten ninguno) |
+| `unknown_command` | No es `sparkplug.write`, `sparkplug.rebirth` ni `sparkplug.reboot` |
+| `metric_protocol_control` | La métrica es una métrica de control del protocolo (`bdSeq`, `Node Control/...`, `Device Control/...`) |
+| `metric_not_writable` | La métrica no está en la lista `writableMetrics` de la fuente |
+| `metric_not_declared` | El nacimiento del nodo no declaró la métrica |
+| `datatype_unsupported` | El tipo de dato de la métrica es uno que los comandos no transportan |
+| `value_not_accepted` | El valor no se puede escribir como el tipo de dato que declaró el nodo, o está fuera de su rango |
+| `datatype_changed` | El nodo volvió a nacer con otro tipo de dato para la métrica mientras el comando esperaba |
+| `node_rebirthing` | El nodo volvió a nacer repetidamente mientras se registraba el comando |
+| `node_offline` | Un reinicio solo se envía a un nodo que está en línea en el momento del envío |
+| `reboot_impact` | El comando de reinicio no está declarado disruptivo ni destructivo en el perfil |
+| `reboot_not_allowed` | `allowReboot` está desactivado en la fuente |
+| `reboot_not_a_node` | Un reinicio se dirigió a un dispositivo y no a un nodo de borde |
+| `reboot_not_declared` | El nodo no declaró `Node Control/Reboot` en su nacimiento |
+| `reboot_not_boolean` | El nodo declara `Node Control/Reboot` con un tipo de dato distinto de Boolean |
+| `reboot_unverified` | Aún no se pudo leer el registro de reinicios recientes, así que no se pudo aplicar la regla de un reinicio por ventana |
+| `reboot_rate_limited` | El nodo ya se reinició dentro de la ventana de reinicio |
+| `no_dispatch` | No se pudo dar seguimiento a la entrega, así que el comando no se aparcó ni se envió |
+| `publish_failed` | Falló la publicación en tu broker |
 
 ### Host primario y secundario {#primary-and-secondary-host}
 

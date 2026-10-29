@@ -31,9 +31,15 @@ DeviceChain is deliberately strict about which deaths it applies:
 
 ## Tenancy and configuration
 
-Each Sparkplug **source** is configured for one tenant. It holds the broker URL, the credentials (supplied as a projected secret, never in plaintext config) and the groups to subscribe to.
+Each Sparkplug **source** is configured for one tenant. It holds the broker URL, the credentials (supplied as a projected secret, never in plaintext config) and the groups to subscribe to. You give `dcctl` the sources as a file, with `--sparkplug-source`; [Running the Edge Services](../deployment/edge-services.md#sparkplug-sources) shows it.
 
 Every message that arrives on a source is attributed to *that source's tenant*. The tenant is fixed by which broker the message came in on and is never read from the Sparkplug topic, so one tenant's edge network can never be mistaken for another's.
+
+### A node born before its device type exists {#birth-recovery}
+
+A node is registered the first time its birth arrives, under the `deviceTypeToken` its source names. If that device type does not exist yet (the usual order mistake when a source is connected before the tenant is provisioned), or device-management is unreachable for longer than the short retry, the birth is dropped and counted. A node that is already born does not announce itself again on its own, so it would stay unknown.
+
+The platform therefore remembers which nodes it could not register and **asks each one to rebirth** (an `NCMD` `Node Control/Rebirth`), 10 seconds after the failure and then at doubling intervals up to once a minute, until a message of the node registers. Create the device type and the node appears within a minute, without restarting anything. Nothing is replayed from memory: the births that answer are ingested like any other, so a node can never be registered twice. The first failure for a node is logged at error with its cause, every request at warning, and `birth_recovery_pending` stays above zero while any node is waiting (see [the metrics](../deployment/edge-services.md#sparkplug-ingestion-metrics)). A node that goes offline is forgotten; its next birth is a fresh attempt.
 
 ## High availability
 
@@ -52,7 +58,7 @@ Sparkplug-B ingestion is available as an opt-in service. It ingests measurements
 
 ## Commands {#commands}
 
-DeviceChain can send commands **down** to a Sparkplug node or device, over the same Host Application session it already holds with your broker. This is **opt-in and off by default**: until a source enables it, a command to a Sparkplug device fails at once as undeliverable, exactly as before. Enabling it is a deployment setting, described in [Sparkplug commands](../deployment/edge-services.md#sparkplug-commands), and today it is done through Helm values.
+DeviceChain can send commands **down** to a Sparkplug node or device, over the same Host Application session it already holds with your broker. This is **opt-in and off by default**: until a source enables it, a command to a Sparkplug device fails at once as undeliverable, exactly as before. Enabling it is a setting of the source, described in [Sparkplug commands](../deployment/edge-services.md#sparkplug-commands).
 
 Commands are ordinary [commands](./commands.md): declared on the device profile, sent from the device page, a batch or an automation rule, and subject to the same permissions, maintenance windows and audit trail. The console's **Add Sparkplug standard commands** button declares the three below on a profile.
 
@@ -76,11 +82,40 @@ If the device has not been born on the session yet (the node is offline, or the 
 | `SUCCESSFUL`, reported | The node reported the metric at the requested value after the command was published. The result records the metric, the value, when it was reported and in which message |
 | `SUCCESSFUL`, already at the value | The node had already reported that value, and reported nothing different within the window. The platform did not see the node act on this command |
 | `TIMEOUT` | Nothing confirmed it within the window (2 minutes by default). **This is not a failure**: the node may have ignored or rejected the command, the broker may have dropped it, or the node obeyed and has not reported yet |
-| `FAILED`, not delivered | Refused before anything was sent: commands not enabled for that source, an invalid value, a metric that is not allowed, an expired command, or the breaker below |
+| `FAILED`, not delivered | Refused before anything was sent: commands not enabled for that source, an invalid value, a metric that is not allowed, an expired command, or the breaker below. The stored response carries a [reason code](#command-refusals) saying which |
 
 Two cautions follow from that. *Confirmed* means the metric **reached** the value, not that this request caused it: Sparkplug does not authenticate who published, so anyone who can publish to the node's topic on your broker can make a metric read any value, and the broker's publish ACLs are what stand behind the evidence. And a metric a node reports only on change may leave a command at `TIMEOUT` even though it worked. A report older than the command, and a report flagged historical, never count as confirmation.
 
 A newer write to the same metric on the same device ends the older one that is still waiting, as `TIMEOUT` with the reason *superseded*. A rebirth is confirmed by the node's next birth, and a reboot by a birth with a new birth sequence number, within its own, longer window.
+
+### Why a command was refused {#command-refusals}
+
+A command refused before anything was sent ends as `FAILED`, not delivered, and its stored response is `{"reason": "<code>"}`. The error text says the same in words; the code is what a script or the console should key on, because the wording can change and the codes are a fixed set. The console shows a sentence for each.
+
+| Code | Meaning |
+| --- | --- |
+| `commands_not_enabled` | Commands are off for the tenant, or for the source the device is on |
+| `broker_refused` | The breaker is open: the broker refused an earlier publish |
+| `expired` | The command's own expiry passed before it could be sent |
+| `invalid_parameters` | The parameters are not what the command takes (a write needs a metric name and a value of a scalar kind; a rebirth and a reboot take none) |
+| `unknown_command` | Not one of `sparkplug.write`, `sparkplug.rebirth` or `sparkplug.reboot` |
+| `metric_protocol_control` | The metric is a protocol control metric (`bdSeq`, `Node Control/...`, `Device Control/...`) |
+| `metric_not_writable` | The metric is not on the source's `writableMetrics` list |
+| `metric_not_declared` | The node's birth did not declare the metric |
+| `datatype_unsupported` | The metric's datatype is one commands do not carry |
+| `value_not_accepted` | The value cannot be written as the datatype the node declared, or is out of its range |
+| `datatype_changed` | The node re-birthed with a different datatype for the metric while the command waited |
+| `node_rebirthing` | The node kept re-birthing while the command was being recorded |
+| `node_offline` | A reboot is sent only to a node that is online when it is dispatched |
+| `reboot_impact` | The reboot command is not declared disruptive or destructive on the profile |
+| `reboot_not_allowed` | `allowReboot` is off on the source |
+| `reboot_not_a_node` | A reboot was addressed to a device rather than to an edge node |
+| `reboot_not_declared` | The node did not declare `Node Control/Reboot` in its birth |
+| `reboot_not_boolean` | The node declares `Node Control/Reboot` with a datatype other than Boolean |
+| `reboot_unverified` | The record of recent reboots could not be read yet, so the one-reboot-per-window rule could not be applied |
+| `reboot_rate_limited` | The node was already rebooted within the reboot window |
+| `no_dispatch` | The delivery could not be tracked, so the command was neither parked nor sent |
+| `publish_failed` | The publish to your broker failed |
 
 ### Primary and secondary host {#primary-and-secondary-host}
 

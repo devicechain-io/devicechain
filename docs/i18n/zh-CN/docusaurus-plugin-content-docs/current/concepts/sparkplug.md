@@ -31,9 +31,15 @@ DeviceChain 有意严格限制哪些离线消息会生效：
 
 ## 租户与配置 {#tenancy-and-configuration}
 
-每个 Sparkplug **来源**配置给一个租户，保存消息代理 URL、凭据（通过投射密钥提供，绝不放在明文配置中）和订阅分组。
+每个 Sparkplug **来源**配置给一个租户，保存消息代理 URL、凭据（通过投射密钥提供，绝不放在明文配置中）和订阅分组。来源以文件形式通过 `--sparkplug-source` 交给 `dcctl`，示例见[运行边缘服务](../deployment/edge-services.md#sparkplug-sources)。
 
 来源收到的每条消息都归属于*该来源的租户*。租户由消息进入的消息代理决定，绝不从 Sparkplug 主题读取，因此一个租户的边缘网络不会被误认为另一个租户的网络。
+
+### 先于设备类型出生的节点 {#birth-recovery}
+
+节点在其 BIRTH 首次到达时，以来源指定的 `deviceTypeToken` 注册。如果该设备类型尚不存在（在租户尚未配置时就连接来源的常见顺序错误），或 device-management 不可达的时间超过短暂重试，BIRTH 会被丢弃并计数。已经出生的节点不会自行再次宣告，因此会一直保持未知。
+
+因此平台会记住哪些节点未能注册，并**请求每个节点重新 BIRTH**（`NCMD` `Node Control/Rebirth`）：失败后 10 秒第一次，之后间隔翻倍，最长每分钟一次，直到该节点的消息注册成功。创建设备类型后，节点会在一分钟内出现，无需重启任何组件。不会从内存重放任何内容：作为回应的 BIRTH 与其他 BIRTH 一样被接入，因此节点不会被重复注册。某节点的第一次失败以 error 级别记录并带原因，每次请求以 warning 级别记录，只要有节点在等待，`birth_recovery_pending` 就保持大于零（参见[指标](../deployment/edge-services.md#sparkplug-ingestion-metrics)）。离线的节点会被忘记，其下一次 BIRTH 是一次全新的尝试。
 
 ## 高可用性 {#high-availability}
 
@@ -52,7 +58,7 @@ Sparkplug-B 接入作为可选服务提供。它接入测量数据，并驱动�
 
 ## 命令 {#commands}
 
-DeviceChain 可以通过它与你的代理已有的同一个 Host Application 会话，向 Sparkplug 节点或设备**下发**命令。该功能**需要主动启用，默认关闭**：在某个来源启用之前，发给 Sparkplug 设备的命令会像以前一样立即以不可投递失败。启用是部署设置，参见 [Sparkplug 命令](../deployment/edge-services.md#sparkplug-commands)，目前通过 Helm values 完成。
+DeviceChain 可以通过它与你的代理已有的同一个 Host Application 会话，向 Sparkplug 节点或设备**下发**命令。该功能**需要主动启用，默认关闭**：在某个来源启用之前，发给 Sparkplug 设备的命令会像以前一样立即以不可投递失败。启用是来源自身的设置，参见 [Sparkplug 命令](../deployment/edge-services.md#sparkplug-commands)。
 
 它们是普通[命令](./commands.md)：在设备配置文件上声明，可从设备页面、批量操作或自动化规则发送，受同样的权限、维护窗口和审计记录约束。控制台的**添加 Sparkplug 标准命令**按钮会在配置文件上声明下面三个命令。
 
@@ -76,11 +82,40 @@ DeviceChain 可以通过它与你的代理已有的同一个 Host Application �
 | `SUCCESSFUL`，已上报 | 命令发布之后，节点上报了该指标为所请求的值。结果记录指标、值、上报时间及所在消息 |
 | `SUCCESSFUL`，本已是该值 | 节点此前已上报该值，且在窗口内没有上报任何不同的值。平台并未看到节点因这条命令而动作 |
 | `TIMEOUT` | 窗口内（默认 2 分钟）没有任何确认。**这不是失败**：节点可能忽略或拒绝了命令，代理可能丢弃了它，或节点已执行但尚未上报 |
-| `FAILED`，未投递 | 在发送任何内容之前被拒绝：该来源未启用命令、值无效、指标不被允许、命令已过期，或下文的断路器 |
+| `FAILED`，未投递 | 在发送任何内容之前被拒绝：该来源未启用命令、值无效、指标不被允许、命令已过期，或下文的断路器。存储的响应带有说明具体原因的[原因代码](#command-refusals) |
 
 由此得出两点注意。*已确认*的意思是指标**达到了**该值，而不是这次请求导致了它：Sparkplug 不认证发布者，所以任何能在你的代理上向该节点主题发布的人都可以让指标读出任意值，证据的可信度取决于代理的发布 ACL。另外，只在变化时上报的指标，即使命令生效了也可能停在 `TIMEOUT`。早于命令的上报和标记为历史的上报从不算作确认。
 
 对同一设备同一指标的更新写入，会结束仍在等待的旧写入，结果为 `TIMEOUT`，原因为 *superseded*。rebirth 由节点的下一次 birth 确认，重启由携带新 birth 序号的 birth 确认，使用各自更长的窗口。
+
+### 命令为何被拒绝 {#command-refusals}
+
+在发送任何内容之前被拒绝的命令以 `FAILED`（未投递）结束，存储的响应为 `{"reason": "<代码>"}`。错误文本用文字表达同一件事；脚本和控制台应依据代码，因为措辞可能改变，而代码是固定集合。控制台为每个代码显示一句说明。
+
+| 代码 | 含义 |
+| --- | --- |
+| `commands_not_enabled` | 租户或设备所在来源未启用命令 |
+| `broker_refused` | 断路器已打开：代理拒绝了之前的一次发布 |
+| `expired` | 命令自身的有效期在发送前已过 |
+| `invalid_parameters` | 参数不是该命令所接受的形式（写入需要指标名和标量值；rebirth 与 reboot 不带参数） |
+| `unknown_command` | 不是 `sparkplug.write`、`sparkplug.rebirth` 或 `sparkplug.reboot` |
+| `metric_protocol_control` | 该指标是协议控制指标（`bdSeq`、`Node Control/...`、`Device Control/...`） |
+| `metric_not_writable` | 该指标不在来源的 `writableMetrics` 列表中 |
+| `metric_not_declared` | 节点的 BIRTH 没有声明该指标 |
+| `datatype_unsupported` | 该指标的数据类型是命令不支持携带的类型 |
+| `value_not_accepted` | 该值无法写成节点声明的数据类型，或超出其范围 |
+| `datatype_changed` | 命令等待期间节点重新 BIRTH，该指标的数据类型已变 |
+| `node_rebirthing` | 记录命令期间节点持续重新 BIRTH |
+| `node_offline` | reboot 只发给派发时在线的节点 |
+| `reboot_impact` | reboot 命令在配置文件中未声明为破坏性或具有中断性 |
+| `reboot_not_allowed` | 来源上的 `allowReboot` 为关闭 |
+| `reboot_not_a_node` | reboot 的目标是设备，而不是边缘节点 |
+| `reboot_not_declared` | 节点没有在 BIRTH 中声明 `Node Control/Reboot` |
+| `reboot_not_boolean` | 节点以非 Boolean 的数据类型声明了 `Node Control/Reboot` |
+| `reboot_unverified` | 尚无法读取近期重启记录，因此无法应用每个窗口一次重启的规则 |
+| `reboot_rate_limited` | 该节点已在重启窗口内重启过 |
+| `no_dispatch` | 无法跟踪该投递，因此命令既未挂起也未发送 |
+| `publish_failed` | 向你的代理发布失败 |
 
 ### 主主机与次主机 {#primary-and-secondary-host}
 

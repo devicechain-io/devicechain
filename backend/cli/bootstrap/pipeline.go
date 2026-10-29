@@ -173,6 +173,11 @@ type State struct {
 	// helmValues renders them into a chart-owned Secret + lwm2m-ingest config. Setting
 	// this implies lwm2m-ingest ∈ EnabledAreas. Empty when the flag is unused.
 	Lwm2mIdentities []Lwm2mIdentity
+	// SparkplugSources are the Sparkplug broker connections (--sparkplug-source): helmValues
+	// renders them into the sparkplug-ingest area's configuration and a chart-owned Secret for
+	// the broker passwords. Setting this implies sparkplug-ingest is an enabled area. Empty when
+	// the flag is unused, which on an upgrade means "keep what the release holds".
+	SparkplugSources []SparkplugSource
 	// MqttFailClosed is the settled fail-closed MQTT choice: nil when the operator never
 	// made one (the chart's default applies and nothing is written), otherwise their explicit
 	// on or off. A bootstrap takes it from the flag; a run over a declared instance reads it

@@ -271,7 +271,7 @@ Para flotas ya existentes que hablan Sparkplug con su propio bróker.
   dispositivo Sparkplug se publica como `NCMD` o `DCMD` en la sesión de la Host Application, y se
   confirma cuando el nodo *informa* después del valor solicitado. Sparkplug no tiene confirmación de
   comandos, así que un comando que el nodo no informa acaba en `TIMEOUT`, no como fallo. Está
-  desactivado por defecto y se habilita mediante valores de Helm; consulta
+  desactivado por defecto y se habilita en los ajustes de la fuente (`dcctl bootstrap` y `dcctl upgrade` los reciben con `--sparkplug-source`); consulta
   [Comandos Sparkplug](../concepts/sparkplug.md#commands). Con él desactivado, un comando a un
   dispositivo Sparkplug acaba en `FAILED`, no entregable, con dos matices:
   - **El veredicto suele ser rápido, pero no es sincrónico con el encolado.** Encolar un comando

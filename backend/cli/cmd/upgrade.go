@@ -23,6 +23,10 @@ var (
 	upgradeMqttFailClosed bool
 	upgradeTrustedProxies []string
 
+	upgradeSparkplugSource string
+	// upgradeSparkplugSources is the file above, parsed and validated by RunE.
+	upgradeSparkplugSources []bootstrap.SparkplugSource
+
 	upgradeValues      []string
 	upgradeResetValues bool
 
@@ -57,6 +61,8 @@ func upgradeOptions(instance string, mqttFailClosed *bool, valuesOverlay map[str
 			IngressController: upgradeIngressController,
 			DropLegacyIngress: upgradeDropLegacyIngress,
 			ResetValues:       upgradeResetValues,
+
+			SparkplugSources: upgradeSparkplugSources,
 		},
 		EscrowFile:           upgradeEscrowFile,
 		EscrowPassphraseFile: upgradeEscrowPass,
@@ -127,6 +133,11 @@ that later upgrades keep ('--ingress-controller auto' returns to deciding from t
 Gateway names a new certificate Secret while the Ingress objects remain, so the host DNS still
 reaches never waits for a certificate; the upgrade waits for the Gateway's own to be Ready.
 
+A Sparkplug source ('--sparkplug-source <file>') is carried the same way as the tuning below: the
+sources and the Secret holding their broker passwords stay on the instance through every later
+upgrade, and a run given the file again replaces them. The area must already be enabled
+('dcctl enable-area ... sparkplug-ingest'); a bootstrap with the flag enables it.
+
 Operator tuning is the exception, and it is carried: a values overlay given to
 'dcctl bootstrap --values' or to this command is recorded on the instance and applied
 again by every later upgrade. '--values <file>' replaces the recorded overlay,
@@ -164,6 +175,9 @@ when they are in a terraform.tfvars beside its state
   # Once DNS points at the new controller, stop serving the host from ingress-nginx too
   dcctl upgrade local devicechain --drop-legacy-ingress
 
+  # Connect a Sparkplug broker (the file is kept: later upgrades carry it)
+  dcctl upgrade local devicechain --sparkplug-source sources.yaml
+
   # Turn the fail-closed MQTT acknowledgement on (kept by later upgrades), or back off
   dcctl upgrade local devicechain --mqtt-fail-closed
   dcctl upgrade local devicechain --mqtt-fail-closed=false`,
@@ -192,6 +206,9 @@ when they are in a terraform.tfvars beside its state
 				return err
 			}
 		}
+		if upgradeSparkplugSources, err = bootstrap.ParseSparkplugSources(upgradeSparkplugSource); err != nil {
+			return fmt.Errorf("--sparkplug-source: %w", err)
+		}
 		opts := upgradeOptions(args[1], mqttFailClosed, valuesOverlay)
 		return bootstrap.Upgrade(cmd.Context(), provider, opts)
 	},
@@ -206,6 +223,7 @@ func init() {
 	upgradeCmd.Flags().StringVar(&upgradeEscrowFile, "escrow-file", "", "where this instance's root-key escrow artifact lives (default ~/.devicechain/escrow/<instance>-rootkey.escrow). The upgrade checks it still protects the key the instance is running on")
 	upgradeCmd.Flags().BoolVar(&upgradeSkipInfra, "skip-infrastructure", false, "move only the services: leave this instance's message broker and event store on the configuration they were built with")
 	upgradeCmd.Flags().StringArrayVar(&upgradeValues, "values", nil, valuesUsage)
+	upgradeCmd.Flags().StringVar(&upgradeSparkplugSource, "sparkplug-source", "", sparkplugSourceUsage)
 	upgradeCmd.Flags().BoolVar(&upgradeMqttFailClosed, "mqtt-fail-closed", false, mqttFailClosedUsage)
 	upgradeCmd.Flags().StringSliceVar(&upgradeTrustedProxies, "trusted-proxies", nil, trustedProxiesUsage)
 	upgradeCmd.Flags().StringVar(&upgradeIngressController, "ingress-controller", "", ingressControllerUsage)

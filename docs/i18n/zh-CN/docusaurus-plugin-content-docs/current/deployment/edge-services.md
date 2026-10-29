@@ -275,15 +275,49 @@ SenML 在 LwM2M 1.1 才引入。仅支持 1.0 的设备可注册、维持会话�
 
 缺少分组却宣告在线更糟：该组边缘节点会向不存在的订阅刷新缓冲数据，随后来源因静默而将设备标记断开。断开前，来源自行发布离线状态，因为正常断开不触发遗嘱。因此代理已存储却未确认的在线宣告会被替换，不会残留。监控 **`subscribe_failures_total`**：任何增长都表示某来源停机，日志会列出被拒绝分组。
 
+**未能注册 BIRTH 的节点会被请求重新 BIRTH。**当 BIRTH 无法注册（通常是来源的设备类型尚不存在）时，节点会被记住，并按逐步加长的间隔收到 `NCMD` `Node Control/Rebirth`，直到注册成功。请监控 **`birth_recovery_pending`**：持续大于零表示有节点或整个来源没有注册，error 级别的日志会指出设备类型。创建该类型后，该指标会自行回落到零。
+
 **重新连接由平台处理，不交给 MQTT 客户端库。** 每次重连建立真正全新的会话和时间戳。Sparkplug 要求主机 birth 与 death 证书使用相同时间戳，使边缘节点拒绝旧会话延迟死亡。这也是所有副本共用一个客户端 ID 的原因：代理的重复 ID 接管负责驱逐僵尸主机。
 
 :::caution Sparkplug 路径不限制消息速率或消息总大小
 Sparkplug 按租户接入上限计量 DATA 消息中的读数，并丢弃超出部分。不计量消息速率、birth 或 death；消息总大小只受代理限制。参见 [Sparkplug 接入限制](#unbounded-sparkplug-ingest)。
 :::
 
+### 向 `dcctl` 提供 Sparkplug 来源 {#sparkplug-sources}
+
+Sparkplug 来源既是连接配置也是凭据，因此 `--values` 覆盖文件会拒绝它。请改为以文件形式交给 `dcctl`，用于 `bootstrap`（同时启用 `sparkplug-ingest` 区域）或 `upgrade`（该区域必须已在运行；`dcctl enable-area` 可启用它）：
+
+```yaml
+# sources.yaml
+- tenant: acme
+  hostId: devicechain
+  broker:
+    url: ssl://broker.acme.example:8883
+    username: devicechain
+    password: the-broker-password      # 或 passwordFile: /path/to/file
+  groups: [plant-a]
+  autoRegister: true
+  deviceTypeToken: sparkplug-pump      # 请在来源连接前创建，或参见下面的说明
+  commands:
+    enabled: true
+    hostRole: primary
+    writableMetrics: ["Outputs/*"]
+```
+
+```bash
+dcctl bootstrap local acme --enable-area sparkplug-ingest --sparkplug-source sources.yaml
+dcctl upgrade   local acme --sparkplug-source sources.yaml
+```
+
+文件在接触集群之前就会被检查（缺少租户、没有主机的代理 URL、未带设备类型的 `autoRegister`、同一代理上的两个租户、未知键）。代理密码被渲染到由 chart 拥有的 Secret 中，并作为环境变量投射到 Pod；区域配置中的来源只引用该变量名，从不保存密码，`dcctl` 也不会打印二者。来源和 Secret **会被之后的每次 `dcctl upgrade` 保留**，再次提供文件的运行会替换它们（更换密码会滚动 Pod）。不带该选项重新运行 `dcctl bootstrap` 会撤销它们。这些键与下文所述 chart 的 `sources` 列表相同。
+
+:::note 尚不存在的设备类型
+节点以来源的 `deviceTypeToken` 注册。如果设备类型在来源连接之后才创建，平台会请求未能注册的节点重新 BIRTH，直到它们注册成功；参见[先于设备类型出生的节点](../concepts/sparkplug.md#birth-recovery)。
+:::
+
 ### Sparkplug 命令 {#sparkplug-commands}
 
-[Sparkplug 命令](../concepts/sparkplug.md#commands)所述的命令下行通道**需要主动启用，默认关闭**。它按来源配置，**目前只能通过 Helm values**：`dcctl` 拒绝在 values 覆盖文件中接受 `sparkplug-ingest` 的来源，因此来源以及其中的命令都设置在 chart 的 `functionalAreas.sparkplug-ingest.config.sources` 里。
+[Sparkplug 命令](../concepts/sparkplug.md#commands)所述的命令下行通道**需要主动启用，默认关闭**。它按来源配置：写在交给 `dcctl` 的文件的 `commands` 块中（见[上文](#sparkplug-sources)）；如果你自己管理 Helm release，则写在 chart 的 `functionalAreas.sparkplug-ingest.config.sources` values 中，如下所示。
 
 ```yaml
 functionalAreas:
@@ -496,6 +530,8 @@ Chart 为 sparkplug-ingest 和 lwm2m-ingest 附带十条告警规则，见[随�
 | `is_leader` | 服务 Pod 为 1，其他为 0。总和不为 1 时触发 `SparkplugIngestLeaderCountNotOne`。 |
 | `connect_failures_total` | 配置的消息代理不可达。增长表示某来源停机，而 Pod 看起来健康。供给 `SparkplugIngestBrokerUnreachable`。 |
 | `subscribe_failures_total` | 代理接受连接，却拒绝或未确认某分组订阅，通常凭据无读取权限。来源保持离线，不接入任何分组并重试。增长时触发 `SparkplugIngestSubscriptionRefused`。 |
+| `birth_recovery_pending` | BIRTH 未能注册（多数是因为来源的 `deviceTypeToken` 指向尚不存在的设备类型）、正被请求重新 BIRTH 的节点数。持续非零表示有节点或来源没有注册。 |
+| `birth_recovery_rebirths_total` | 发给这些节点的 rebirth 命令数，间隔翻倍，最长一分钟。该序列在 `birth_recovery_pending` 非零时持续增长，表示注册一直失败。 |
 | `messages_total` | 入站 Sparkplug 流量。活跃设备群中平线表示订阅丢失或来源死亡。 |
 | `presence_emitted_total` | 产出的连接/断开信号。 |
 | `rebirth_requests_total` | 请求节点重新宣告的次数。持续增长表示节点无法重新同步。存活探测发出的 rebirth 也计入此处，因此带静默设备的设备群会在每个 `presence.probeSeconds` 内持续出现分散的少量增长。 |

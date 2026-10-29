@@ -629,6 +629,18 @@ func helmValues(st *State) map[string]interface{} {
 		mergeFunctionalArea(vals, "lwm2m-ingest", areaConfig)
 	}
 
+	// Sparkplug sources (--sparkplug-source): the broker passwords into a chart-owned Secret,
+	// the sources into sparkplug-ingest's configuration. Same shape as the LwM2M block above,
+	// and for the same reason merged rather than assigned.
+	if len(st.SparkplugSources) > 0 {
+		secret, areaConfig := sparkplugProvisioning(st.Instance, st.SparkplugSources)
+		if secret != nil {
+			existing, _ := vals["extraSecrets"].([]interface{})
+			vals["extraSecrets"] = append(existing, secret)
+		}
+		mergeFunctionalArea(vals, "sparkplug-ingest", areaConfig)
+	}
+
 	return vals
 }
 
