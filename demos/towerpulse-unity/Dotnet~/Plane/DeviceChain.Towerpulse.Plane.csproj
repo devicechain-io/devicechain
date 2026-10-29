@@ -1,0 +1,28 @@
+<!--
+  Copyright The DeviceChain Authors
+  SPDX-License-Identifier: Apache-2.0
+
+  The engine-free half of the device plane (wire vocabulary, readings, command completion), compiled from the SAME .cs files Unity compiles through
+  DeviceChain.Towerpulse.Plane.asmdef.
+-->
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>netstandard2.1;net8.0</TargetFrameworks>
+    <RootNamespace>DeviceChain.Towerpulse.Plane</RootNamespace>
+    <AssemblyName>DeviceChain.Towerpulse.Plane</AssemblyName>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net8.0'">
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Model/DeviceChain.Towerpulse.Model.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="../../Assets/Towerpulse/Scripts/Plane/**/*.cs" />
+  </ItemGroup>
+
+</Project>

@@ -74,6 +74,12 @@
       },
       "devicechain.towerpulse.model": {
         "type": "Project"
+      },
+      "devicechain.towerpulse.plane": {
+        "type": "Project",
+        "dependencies": {
+          "DeviceChain.Towerpulse.Model": "[1.0.0, )"
+        }
       }
     }
   }

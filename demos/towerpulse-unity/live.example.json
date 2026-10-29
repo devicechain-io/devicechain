@@ -1,0 +1,6 @@
+{
+  "runnerUrl": "http://localhost:8090",
+  "caPemPath": "C:/Users/YOU/towerpulse/broker-ca.pem",
+  "expectInstance": "tp",
+  "expectTenant": "sim-tp-live"
+}

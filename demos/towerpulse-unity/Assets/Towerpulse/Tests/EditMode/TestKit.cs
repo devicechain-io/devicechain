@@ -21,10 +21,12 @@ namespace DeviceChain.Towerpulse.Tests
         public readonly TowerDay Day;
         public bool R1Enabled = true;
         public bool R4Enabled = true;
-        public double BoostMinutes = 30;
+        public double BoostMinutes = 15; // the scenario's R1 sends 15 (sim/towerpulse.go TowerpulseBoostMinutes)
 
         public readonly Dictionary<string, double> HotAlarmAt = new Dictionary<string, double>();
+        /// <summary>The LATEST boost sent to each zone. A retrigger while the meeting goes on is part of the story (the room heats again), so see <see cref="FirstBoost"/> for the first.</summary>
         public readonly Dictionary<string, CommandTicket> BoostSent = new Dictionary<string, CommandTicket>();
+        public readonly Dictionary<string, CommandTicket> FirstBoost = new Dictionary<string, CommandTicket>();
         public double ChillerAlarmAt = double.NaN;
         public double MaxF4EastTempC = double.MinValue;
 
@@ -64,6 +66,7 @@ namespace DeviceChain.Towerpulse.Tests
                 {
                     HotAlarmAt[id] = t;
                     BoostSent[id] = Model.BoostCooling(id, BoostMinutes);
+                    if (!FirstBoost.ContainsKey(id)) FirstBoost[id] = BoostSent[id];
                 }
             }
             // R1 re-arms once the room has been under the threshold again.

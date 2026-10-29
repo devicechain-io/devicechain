@@ -3,6 +3,7 @@
     "rootNamespace": "DeviceChain.Towerpulse.EditorTools",
     "references": [
         "DeviceChain.Towerpulse.Model",
+        "DeviceChain.Towerpulse.DevicePlane",
         "UnityEngine.TestRunner",
         "UnityEditor.TestRunner"
     ],

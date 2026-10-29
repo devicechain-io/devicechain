@@ -2092,9 +2092,10 @@ jobs:
         run: hack/check-unity-metas.sh demos/shared/io.devicechain.demo-platform
 
   # ---------------------------------------------------------------------------
-  # Towerpulse model (demos/towerpulse-unity): the engine-free thermal, CO2 and occupancy model and
-  # its scripted day. Its Dotnet~/ sidecar compiles the SAME .cs files Unity compiles (Scripts/Model
-  # through the asmdef, Tests/EditMode through the test asmdef), at LangVersion 9 for netstandard2.1
+  # Towerpulse model and device plane (demos/towerpulse-unity): the engine-free thermal, CO2 and occupancy
+  # model and its scripted day, and the engine-free half of the device plane (wire vocabulary, readings,
+  # command completion). Its Dotnet~/ sidecar compiles the SAME .cs files Unity compiles (Scripts/Model
+  # and Scripts/Plane through their asmdefs, Tests/EditMode through the test asmdef), at LangVersion 9 for netstandard2.1
   # and net8.0 with warnings as errors, and runs the tests under NUnit. No CI job runs Unity.
   # ---------------------------------------------------------------------------
   towerpulse-model:
@@ -2117,6 +2118,11 @@ jobs:
 
       - name: Test
         run: dotnet test --no-build -c Release --blame-hang-timeout 2m
+
+      # The project's own assets are imported by the Editor with whatever .meta files are committed.
+      - name: Every Towerpulse asset and folder has a committed .meta
+        working-directory: .
+        run: hack/check-unity-metas.sh demos/towerpulse-unity/Assets/Towerpulse
 
   # ---------------------------------------------------------------------------
   # Helm chart: lint and template render.

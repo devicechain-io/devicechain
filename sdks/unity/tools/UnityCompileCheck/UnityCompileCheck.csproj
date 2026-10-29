@@ -35,6 +35,10 @@
     <!-- The shared demo platform package builds on this SDK (per-device MQTT sessions, event publishing), so its
          engine-bound assemblies are compiled here too, against the same reference assemblies. -->
     <Compile Include="../../../../demos/shared/io.devicechain.demo-platform/Runtime/**/*.cs" />
+    <!-- Towerpulse's device plane sits on that package: its engine-free model and plane, and the engine-bound sessions and bootstrap. -->
+    <Compile Include="../../../../demos/towerpulse-unity/Assets/Towerpulse/Scripts/Model/**/*.cs" />
+    <Compile Include="../../../../demos/towerpulse-unity/Assets/Towerpulse/Scripts/Plane/**/*.cs" />
+    <Compile Include="../../../../demos/towerpulse-unity/Assets/Towerpulse/Scripts/DevicePlane/**/*.cs" />
   </ItemGroup>
 
 </Project>
