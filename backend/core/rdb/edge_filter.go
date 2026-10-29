@@ -15,7 +15,8 @@ import (
 type EdgeTarget struct {
 	// Kind and Token name the target entity ("customer", "acme"). Both are required.
 	Kind, Token string
-	// Type is the token of the relationship type the edge must have. Required.
+	// Type is the token of the relationship type the edge must have. Empty means any type
+	// (a dashboard bound to an area asks for its members, not for one kind of link).
 	Type string
 	// TrackedOnly additionally requires that type to be TRACKED: the edge is then an
 	// ownership edge in DeviceEdge's sense. A read made for a scoped caller sets it, so
@@ -40,7 +41,7 @@ type EdgeTarget struct {
 //	        WHERE dc_scope_edge.<tenant> = $tenant AND dc_scope_type.<tenant> = $tenant
 //	          [AND dc_scope_edge.deleted_at IS NULL] [AND dc_scope_type.deleted_at IS NULL]
 //	          [AND dc_scope_type.<tracked> = $true]
-//	          AND dc_scope_type.<token> = $type
+//	          [AND dc_scope_type.<token> = $type]
 //	          AND dc_scope_edge.<source type> = $kind AND dc_scope_edge.<source id> = "<table>".<row>
 //	          AND dc_scope_edge.<target type> = $targetKind AND dc_scope_edge.<target token> = $targetToken)
 //
@@ -64,8 +65,8 @@ func EdgeTo(edges OwnershipEdges, target EdgeTarget) func(*gorm.DB) *gorm.DB {
 }
 
 func edgeToExpr(db *gorm.DB, e OwnershipEdges, target EdgeTarget) (clause.Expression, error) {
-	if target.Kind == "" || target.Token == "" || target.Type == "" {
-		return nil, fmt.Errorf("an edge filter needs a target kind, a target token and a type")
+	if target.Kind == "" || target.Token == "" {
+		return nil, fmt.Errorf("an edge filter needs a target kind and a target token")
 	}
 	tenant, ok := core.TenantFromContext(db.Statement.Context)
 	if !ok || tenant == "" {
@@ -82,12 +83,14 @@ func edgeToExpr(db *gorm.DB, e OwnershipEdges, target EdgeTarget) (clause.Expres
 	if row == nil {
 		return nil, fmt.Errorf("an edge filter naming no row column %q", e.Row)
 	}
-	typeToken := target.Type
-	expr, err := edgeExistsExpr(db, clause.Column{Table: stmt.Schema.Table, Name: row.DBName}, e, tenant, edgeMatch{
+	match := edgeMatch{
 		trackedOnly: target.TrackedOnly,
-		typeToken:   &typeToken,
 		targets:     []edgeTarget{{kind: target.Kind, token: target.Token}},
-	})
+	}
+	if target.Type != "" {
+		match.typeToken = &target.Type
+	}
+	expr, err := edgeExistsExpr(db, clause.Column{Table: stmt.Schema.Table, Name: row.DBName}, e, tenant, match)
 	if err != nil {
 		return nil, err
 	}

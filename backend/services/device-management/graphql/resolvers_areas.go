@@ -71,7 +71,13 @@ func (r *AreaTypeResolver) BorderColor() *string {
 	return util.NullStr(r.M.BorderColor)
 }
 
-func (r *AreaTypeResolver) Metadata() *string {
+// Metadata is operator free-form JSON, so a caller limited to part of the tenant is shown
+// null: a type is configuration a customer reads for its name and look, not the operator's
+// notes about it (ADR-081 decision 12).
+func (r *AreaTypeResolver) Metadata(ctx context.Context) *string {
+	if isScopedCaller(ctx) {
+		return nil
+	}
 	return util.MetadataStr(r.M.Metadata)
 }
 
@@ -144,7 +150,13 @@ func (r *AreaResolver) Description() *string {
 	return util.NullStr(r.M.Description)
 }
 
-func (r *AreaResolver) Metadata() *string {
+// Metadata is operator free-form JSON (lease notes, contacts), so a caller limited to part of
+// the tenant is never shown it: null, not an empty document (ADR-081 decision 12). The test
+// is on the field's own request context, never on the resolver's stored one.
+func (r *AreaResolver) Metadata(ctx context.Context) *string {
+	if isScopedCaller(ctx) {
+		return nil
+	}
 	return util.MetadataStr(r.M.Metadata)
 }
 

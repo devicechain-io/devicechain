@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"github.com/devicechain-io/dc-device-management/model"
+	"github.com/devicechain-io/dc-microservice/auth"
 	util "github.com/devicechain-io/dc-microservice/graphql"
 	gql "github.com/graph-gophers/graphql-go"
 )
@@ -41,6 +42,20 @@ func entityIdToken(value interface{}) (uint, string) {
 		return e.ID, e.Token
 	}
 	return 0, ""
+}
+
+// isScopedCaller reports whether the request's caller is limited to part of the tenant.
+//
+// 🔴 IT FAILS CLOSED: a context with no claims at all is treated as scoped, so the fields
+// that are withheld from scoped callers are withheld from it too. Every resolver that gets
+// this far has passed an authorisation gate that needs claims, so "no claims" is a wiring
+// fault, and a wiring fault must not be the case that discloses operator data.
+func isScopedCaller(ctx context.Context) bool {
+	if _, ok := auth.ClaimsFromContext(ctx); !ok {
+		return true
+	}
+	_, scoped := auth.ScopeFromContext(ctx)
+	return scoped
 }
 
 func (r *EntityResolver) Id() gql.ID {

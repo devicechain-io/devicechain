@@ -262,6 +262,15 @@ grafo de relaciones para encontrar sus dispositivos, y los usuarios de cliente n
 él, así que les muestra **Not available for customer users** (no disponible para usuarios de
 cliente).
 
+### Qué pueden leer los usuarios de cliente de las áreas y los activos {#areas-assets-visibility}
+
+Un usuario de cliente puede leer las áreas y los activos en los que está uno de sus dispositivos, y
+los tipos de área y de activo del tenant. Ve el **nombre** y la **descripción** de un área o de un
+activo, y el **nombre** y la **descripción** de un tipo, pero no sus metadatos de formato libre.
+Mantén fuera de esos nombres y descripciones el texto que identifique a un cliente, o cualquier otro
+dato confidencial, y también del nombre de un área que comparten dispositivos de varios clientes:
+un usuario de cliente puede leerlo.
+
 ### Lo que todavía no se cubre {#not-covered-yet}
 
 - Un widget de panel todavía no puede mostrar los dispositivos del grupo de un miembro como un

@@ -71,7 +71,13 @@ func (r *AssetTypeResolver) BorderColor() *string {
 	return util.NullStr(r.M.BorderColor)
 }
 
-func (r *AssetTypeResolver) Metadata() *string {
+// Metadata is operator free-form JSON, so a caller limited to part of the tenant is shown
+// null: a type is configuration a customer reads for its name and look, not the operator's
+// notes about it (ADR-081 decision 12).
+func (r *AssetTypeResolver) Metadata(ctx context.Context) *string {
+	if isScopedCaller(ctx) {
+		return nil
+	}
 	return util.MetadataStr(r.M.Metadata)
 }
 
@@ -168,12 +174,22 @@ func (r *AssetResolver) Description() *string {
 	return util.NullStr(r.M.Description)
 }
 
-func (r *AssetResolver) Metadata() *string {
+// Metadata is operator free-form JSON, so a caller limited to part of the tenant is never
+// shown it: null, not an empty document (ADR-081 decision 12). The test is on the request's
+// own claims, so it holds on every path that serves an AssetResolver.
+func (r *AssetResolver) Metadata(ctx context.Context) *string {
+	if isScopedCaller(ctx) {
+		return nil
+	}
 	return util.MetadataStr(r.M.Metadata)
 }
 
-// Properties returns the asset's property document, or null when it carries none.
-func (r *AssetResolver) Properties() *string {
+// Properties returns the asset's property document, or null when it carries none. It is
+// operator data of the same kind as metadata, so a scoped caller gets null for it too.
+func (r *AssetResolver) Properties(ctx context.Context) *string {
+	if isScopedCaller(ctx) {
+		return nil
+	}
 	return util.MetadataStr(r.M.Properties)
 }
 
