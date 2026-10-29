@@ -60,3 +60,19 @@ func TestEveryUnansweredEndingCarriesAReason(t *testing.T) {
 	assert.Equal(t, ReasonUnchanged, un.reason)
 	assert.Contains(t, un.payload, `"reason":"unchanged"`)
 }
+
+// The refusal reasons are an interface in the same way: the console keys a sentence on each.
+func TestTheRefusalReasonVocabularyIsPinned(t *testing.T) {
+	assert.Equal(t, []Reason{
+		"commands_not_enabled", "broker_refused", "expired", "invalid_parameters", "unknown_command",
+		"metric_protocol_control", "metric_not_writable", "metric_not_declared", "datatype_unsupported",
+		"value_not_accepted", "datatype_changed", "node_rebirthing", "node_offline", "reboot_impact",
+		"reboot_not_allowed", "reboot_not_a_node", "reboot_not_declared", "reboot_not_boolean",
+		"reboot_unverified", "reboot_rate_limited", "no_dispatch", "publish_failed",
+	}, RefusalReasons)
+	seen := map[Reason]bool{}
+	for _, r := range append(append([]Reason{}, Reasons...), RefusalReasons...) {
+		require.False(t, seen[r], "duplicate reason %q across the resolved and refusal sets", r)
+		seen[r] = true
+	}
+}

@@ -200,6 +200,14 @@ describe('the Sparkplug outcome help', () => {
     expect(text).not.toContain('ignored or rejected');
   });
 
+  it('says why a refused command was not sent, from its reason code and not its error text', async () => {
+    install([row('sparkplug.write', 'FAILED', reasonPayload('metric_not_writable'), 'any wording at all')]);
+    render(<DeviceCommandsPanel deviceToken="valve-1" />);
+    const note = await screen.findByTestId('sparkplug-outcome');
+    expect(note.textContent).toContain('Not sent');
+    expect(note.textContent).toContain('writable metrics');
+  });
+
   it('says a SENT command is still waiting', async () => {
     install([row('sparkplug.write', 'SENT')]);
     render(<DeviceCommandsPanel deviceToken="valve-1" />);

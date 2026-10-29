@@ -6,7 +6,9 @@
 // declared), and the outcome reading is checked against the evidence the adapter stores,
 // including the shapes it must NOT read as evidence.
 import { describe, expect, it } from 'vitest';
-import { buildSparkplugWritePayload, sparkplugOutcome } from './sparkplugCommands';
+import en from '../../i18n/locales/en/devices.json';
+import es from '../../i18n/locales/es/devices.json';
+import { SPARKPLUG_REFUSAL_REASONS, buildSparkplugWritePayload, sparkplugOutcome } from './sparkplugCommands';
 
 const build = (metric: string, value: string, mode: 'auto' | 'text' = 'auto') =>
   buildSparkplugWritePayload(metric, value, mode);
@@ -130,6 +132,30 @@ describe('sparkplugOutcome', () => {
     expect(
       sparkplugOutcome({ name: 'sparkplug.write', status: 'TIMEOUT', responsePayload: reasonOf('session_dropped') }).outcome,
     ).toEqual({ kind: 'likelyRefused' });
+  });
+
+  it('tells a command refused before the wire apart by its reason code, and ignores one it does not know', () => {
+    for (const reason of SPARKPLUG_REFUSAL_REASONS) {
+      expect(
+        sparkplugOutcome({ name: 'sparkplug.write', status: 'FAILED', responsePayload: reasonOf(reason) }).outcome,
+        reason,
+      ).toEqual({ kind: 'refused', reason });
+    }
+    expect(
+      sparkplugOutcome({ name: 'sparkplug.write', status: 'FAILED', responsePayload: reasonOf('something_new') }).outcome,
+    ).toBeNull();
+    // A refusal code on a command that was not refused says nothing.
+    expect(
+      sparkplugOutcome({ name: 'sparkplug.write', status: 'SUCCESSFUL', responsePayload: reasonOf('metric_not_writable') }).outcome,
+    ).toBeNull();
+  });
+
+  it('has a sentence in every locale for every refusal reason', () => {
+    for (const catalog of [en, es] as Record<string, string>[]) {
+      for (const reason of SPARKPLUG_REFUSAL_REASONS) {
+        expect(catalog[`sparkplugRefused_${reason}`], reason).toBeTruthy();
+      }
+    }
   });
 
   it('says nothing extra for a reason it does not know, or none, however the error text reads', () => {

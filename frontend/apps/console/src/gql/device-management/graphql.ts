@@ -152,8 +152,10 @@ export type AuditEventSearchCriteria = {
 export type CommandDefinitionCreateRequest = {
   /**
    * The key used to send the command. Letters, digits, hyphens and underscores, starting
-   * with a letter or digit; at most 128 characters. A key the profile already declares is
-   * refused with CONFLICT.
+   * with a letter or digit; at most 128 characters. Dots may separate namespaced segments
+   * (for example sparkplug.write): each segment follows the same rule, and a leading,
+   * trailing or doubled dot is refused. A key the profile already declares is refused
+   * with CONFLICT.
    */
   commandKey: string;
   /** Free-text description, up to 1024 characters. */

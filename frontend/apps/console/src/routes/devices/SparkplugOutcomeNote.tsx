@@ -32,6 +32,9 @@ export function SparkplugOutcomeNote({
     case 'inFlight':
       text = t('sparkplugOutcomeInFlight');
       break;
+    case 'refused':
+      text = t(`sparkplugRefused_${outcome.reason}`);
+      break;
     case 'unconfirmed':
       text = t('sparkplugOutcomeUnconfirmed');
       break;
