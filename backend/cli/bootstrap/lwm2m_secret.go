@@ -39,7 +39,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/fatih/color"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -90,13 +89,37 @@ func syncLwm2mIdentitiesSecret(ctx context.Context, typed kubernetes.Interface, 
 	case apierrors.IsNotFound(err):
 		if held && !st.Lwm2mIdentitiesGiven {
 			return "", fmt.Errorf("instance %q runs LwM2M identities, but the Secret %s/%s that holds their pre-shared keys is gone. "+
-				"Give --lwm2m-identities <file> to write it again", st.Instance, ns, name)
+				"Nothing has been changed. Run 'dcctl upgrade %s %s --lwm2m-identities <file>' to write the keys again, "+
+				"or 'dcctl upgrade %s %s --withdraw-lwm2m-identities' to remove the identities",
+				st.Instance, ns, name, st.Provider, st.Instance, st.Provider, st.Instance)
 		}
 		return "", nil
 	case err != nil:
 		return "", fmt.Errorf("reading Secret %s/%s, which holds the LwM2M pre-shared keys: %w", ns, name, err)
 	}
 	return lwm2mCredentialsStamp(st.InstanceUID, s), nil
+}
+
+// lwm2mLegacyKeysFor is the keys a run MIGRATES: those an old-layout release holds, for a run that
+// is moving an instance and was not itself given the identities. Nil for every other run.
+func lwm2mLegacyKeysFor(st *State, previous map[string]interface{}) (map[string]string, error) {
+	if !st.Evolving || st.Lwm2mIdentitiesGiven {
+		return nil, nil
+	}
+	return lwm2mLegacyPSKs(st.Instance, previous)
+}
+
+// settleLwm2mIdentities is the write half of helmInstall's LwM2M step, in one place so a test
+// reaches the same call helmInstall makes: the Secret is settled (written, migrated or removed)
+// BEFORE the release, and the pods' stamp lands in the values the release is built from.
+func settleLwm2mIdentities(ctx context.Context, typed kubernetes.Interface, st *State,
+	previous map[string]interface{}, legacy map[string]string, vals map[string]interface{}) error {
+	stamp, err := syncLwm2mIdentitiesSecret(ctx, typed, st, legacy, st.Evolving && releaseHoldsLwm2mIdentities(previous))
+	if err != nil {
+		return err
+	}
+	withLwm2mCredentialsChecksum(vals, stamp)
+	return nil
 }
 
 // withLwm2mCredentialsChecksum stamps the credentials stamp into the install values, on a copy of
@@ -301,8 +324,9 @@ func precheckLwm2mWithdrawal(ctx context.Context, st *State) error {
 	}
 	previous, err := lwm2mReleaseValues(st)
 	if err != nil {
-		fmt.Println(color.YellowString("could not check the release for LwM2M identities: %v", err))
-		return nil
+		// Fail closed: a release that cannot be read is not a release without identities. A fresh
+		// install has none to read, which previousReleaseValues answers as nothing, not an error.
+		return fmt.Errorf("could not check the release for LwM2M identities, so this bootstrap cannot tell whether it would remove them: %w. Nothing has been changed", err)
 	}
 	if releaseHoldsLwm2mIdentities(previous) {
 		return errSilentLwm2mWithdrawal(st.Instance)

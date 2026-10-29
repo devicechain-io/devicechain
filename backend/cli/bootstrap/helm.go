@@ -158,6 +158,12 @@ func helmInstall(ctx context.Context, st *State) error {
 		}
 		carryForwardFromRelease(st, previous)
 	}
+	// The keys an instance on the old layout holds in its release, read BEFORE any write so a
+	// malformed entry refuses with nothing changed.
+	legacyPSKs, err := lwm2mLegacyKeysFor(st, previous)
+	if err != nil {
+		return err
+	}
 
 	vals, doc, err := releaseValues(ctx, ch, st, previous)
 	if err != nil {
@@ -241,18 +247,9 @@ func helmInstall(ctx context.Context, st *State) error {
 	// The LwM2M pre-shared keys, the same way: dcctl's own Secret, written before the release, named
 	// by the lwm2m-ingest pods' secretKeyRef, with only a version stamp as a value. An instance built
 	// when the chart rendered them from the release values has them moved out here, first.
-	var legacyPSKs map[string]string
-	if st.Evolving && !st.Lwm2mIdentitiesGiven {
-		if legacyPSKs, err = lwm2mLegacyPSKs(st.Instance, previous); err != nil {
-			return err
-		}
-	}
-	lwm2mStamp, err := syncLwm2mIdentitiesSecret(ctx, typed, st, legacyPSKs,
-		st.Evolving && releaseHoldsLwm2mIdentities(previous))
-	if err != nil {
+	if err := settleLwm2mIdentities(ctx, typed, st, previous, legacyPSKs, vals); err != nil {
 		return err
 	}
-	withLwm2mCredentialsChecksum(vals, lwm2mStamp)
 	// The callout's seeds, before the release and beside the document: only device-management
 	// mounts this Secret, and its pods project it at container start.
 	if err := writeCalloutSecret(ctx, typed, st); err != nil {

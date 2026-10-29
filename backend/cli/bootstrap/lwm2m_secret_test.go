@@ -320,7 +320,7 @@ func TestAMissingLwm2mSecretIsAnErrorNotAnEmptyStamp(t *testing.T) {
 	st := lwm2mState(nil)
 	st.Evolving = true
 	if _, err := syncLwm2mIdentitiesSecret(context.Background(), versionedCluster(), st, nil, true); err == nil ||
-		!strings.Contains(err.Error(), "--lwm2m-identities") {
+		!strings.Contains(err.Error(), "--lwm2m-identities") || !strings.Contains(err.Error(), "--withdraw-lwm2m-identities") || !strings.Contains(err.Error(), "dcctl upgrade") {
 		t.Fatalf("a missing Secret under held identities was not refused with the way out: %v", err)
 	}
 	if stamp, err := syncLwm2mIdentitiesSecret(context.Background(), versionedCluster(), st, nil, false); err != nil || stamp != "" {
@@ -495,5 +495,107 @@ func TestAnOverlayStillCannotSetLwm2mIdentities(t *testing.T) {
 	}
 	if why := refuseOverlayKey([]string{"functionalAreas", "lwm2m-ingest", "extraEnv"}); why == "" {
 		t.Fatal("an overlay may set lwm2m-ingest's extraEnv")
+	}
+}
+
+// 🔴 THE MIGRATION AT THE CALL SITES helmInstall MAKES. The test above re-implements the sequence by
+// hand; this one runs the same functions helmInstall does (lwm2mLegacyKeysFor before anything is
+// written, releaseValues for the values, settleLwm2mIdentities before the release), so deleting any
+// of those calls, or the gate that skips a run given the identities, fails it.
+func TestTheMigrationRunsThroughReleaseValuesAndTheSettleStep(t *testing.T) {
+	t.Parallel()
+	psk := distinctPSK("callsite")
+	previous := legacyLwm2mRelease(psk)
+	typed := versionedCluster()
+
+	st := lwm2mState(nil)
+	st.Evolving = true
+	legacy, err := lwm2mLegacyKeysFor(st, previous)
+	if err != nil || legacy["DC_LWM2M_PSK_1"] != psk {
+		t.Fatalf("the migrating run did not read the keys out of the old release: %v %v", legacy, err)
+	}
+	vals, _, err := releaseValues(context.Background(), chartForTest(t), st, previous)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := settleLwm2mIdentities(context.Background(), typed, st, previous, legacy, vals); err != nil {
+		t.Fatal(err)
+	}
+
+	if anywhere(vals, psk) {
+		t.Fatal("the values releaseValues built hold the key")
+	}
+	if !anywhere(vals["extraSecrets"], "operator-secret") || anywhere(vals["extraSecrets"], "dci-dctest-lwm2m-psk") {
+		t.Fatalf("extraSecrets: %v", vals["extraSecrets"])
+	}
+	if !anywhere(vals, "dci-dctest-lwm2m-identities") || anywhere(vals, "dci-dctest-lwm2m-psk") {
+		t.Fatal("the env does not name the new Secret only")
+	}
+	if data, ok := lwm2mSecret(t, typed); !ok || string(data["DC_LWM2M_PSK_1"]) != psk {
+		t.Fatalf("the keys are not in the new Secret: %v", data)
+	}
+	if !anywhere(vals, "credentialsChecksum") {
+		t.Fatal("the pods carry no stamp")
+	}
+	for _, d := range renderDocs(t, vals) {
+		meta, _ := d["metadata"].(map[string]interface{})
+		if d["kind"] == "Secret" && meta["name"] == "dci-dctest-lwm2m-psk" {
+			t.Fatal("the legacy Secret is still rendered")
+		}
+		if anywhere(d, psk) {
+			t.Fatal("the manifest holds the key")
+		}
+	}
+
+	// A run GIVEN the identities does not migrate: its file is the authority.
+	given := lwm2mState(lwm2mIDs(distinctPSK("new")))
+	given.Evolving = true
+	if keys, err := lwm2mLegacyKeysFor(given, previous); err != nil || keys != nil {
+		t.Fatalf("a run given the identities read keys out of the old release: %v %v", keys, err)
+	}
+	// ...and a malformed legacy entry refuses at that early read.
+	bad := map[string]interface{}{"extraSecrets": []interface{}{
+		map[string]interface{}{"name": "dci-dctest-lwm2m-psk", "stringData": map[string]interface{}{}}}}
+	if _, err := lwm2mLegacyKeysFor(st, bad); err == nil {
+		t.Fatal("a malformed legacy entry was accepted")
+	}
+	if keys, _ := lwm2mLegacyKeysFor(lwm2mState(nil), previous); keys != nil {
+		t.Fatal("a run that is not moving an instance migrated")
+	}
+}
+
+// A release that cannot be read is not a release without identities or sources: the bootstrap
+// refuses instead of warning and carrying on.
+func TestAReleaseThatCannotBeReadRefusesTheBootstrapWithdrawalChecks(t *testing.T) {
+	oldL, oldS := lwm2mReleaseValues, sparkplugReleaseValues
+	t.Cleanup(func() { lwm2mReleaseValues, sparkplugReleaseValues = oldL, oldS })
+	boom := func(*State) (map[string]interface{}, error) { return nil, fmt.Errorf("api server unreachable") }
+	lwm2mReleaseValues, sparkplugReleaseValues = boom, boom
+	if err := precheckLwm2mWithdrawal(context.Background(), &State{Instance: "i"}); err == nil || !strings.Contains(err.Error(), "unreachable") {
+		t.Fatalf("LwM2M: an unreadable release did not refuse: %v", err)
+	}
+	if err := precheckSparkplugWithdrawal(context.Background(), &State{Instance: "i"}); err == nil || !strings.Contains(err.Error(), "unreachable") {
+		t.Fatalf("Sparkplug: an unreadable release did not refuse: %v", err)
+	}
+	// A fresh install reads no release (nil, nil) and is not blocked.
+	none := func(*State) (map[string]interface{}, error) { return nil, nil }
+	lwm2mReleaseValues, sparkplugReleaseValues = none, none
+	if err := precheckLwm2mWithdrawal(context.Background(), &State{Instance: "i"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := precheckSparkplugWithdrawal(context.Background(), &State{Instance: "i"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The overlay cannot move lwm2m-ingest's bind address: the chart's UDP port and Service do not follow.
+func TestAnOverlayCannotMoveTheLwm2mBindAddress(t *testing.T) {
+	for _, path := range [][]string{
+		{"functionalAreas", "lwm2m-ingest", "config", "listen", "port"},
+		{"functionalAreas", "lwm2m-ingest", "config", "listen", "host"},
+	} {
+		if why := refuseOverlayKey(path); why == "" {
+			t.Fatalf("an overlay may set %v", path)
+		}
 	}
 }

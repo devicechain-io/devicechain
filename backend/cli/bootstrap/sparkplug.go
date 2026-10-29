@@ -47,7 +47,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fatih/color"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -504,8 +503,8 @@ func precheckSparkplugWithdrawal(ctx context.Context, st *State) error {
 	}
 	previous, err := sparkplugReleaseValues(st)
 	if err != nil {
-		fmt.Println(color.YellowString("could not check the release for Sparkplug sources: %v", err))
-		return nil
+		// Fail closed: a release that cannot be read is not a release without sources.
+		return fmt.Errorf("could not check the release for Sparkplug sources, so this bootstrap cannot tell whether it would remove them: %w. Nothing has been changed", err)
 	}
 	if releaseHoldsSparkplugSources(previous) {
 		return errSilentSparkplugWithdrawal(st.Instance)
