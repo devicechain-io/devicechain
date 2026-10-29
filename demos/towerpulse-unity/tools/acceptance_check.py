@@ -578,6 +578,26 @@ def cmd_rules(a):
     return 0 if gone else 1
 
 
+def platform_version(namespace):
+    """The platform's version as a semver, from the image tag of the running device-management (a non-release tag becomes 0.0.0-<tag>)."""
+    image = kube(["get", "deploy", "device-management", "-o", "jsonpath={.spec.template.spec.containers[0].image}"], namespace).strip()
+    tag = image.rsplit(":", 1)[-1].split("@")[0].lstrip("v")
+    if re.fullmatch(r"\d+\.\d+\.\d+(-[0-9A-Za-z.-]{1,32})?", tag):
+        return tag
+    return "0.0.0-" + re.sub(r"[^0-9A-Za-z.-]", "-", tag)[:30]
+
+
+def stamp_platform_version(recording, namespace):
+    """run.json has no field the player can fill for this (it does not know the platform's version); the checker learns it from the cluster."""
+    path = os.path.join(recording, "run.json")
+    with open(path, encoding="utf-8") as f:
+        doc = json.load(f)
+    doc["platformVersion"] = platform_version(namespace)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(doc, f, indent=2)
+        f.write("\n")
+
+
 def cmd_annotate(a):
     p = Platform(a.runner)
     path = os.path.join(a.recording, "towerpulse.json")
@@ -595,6 +615,7 @@ def cmd_annotate(a):
             doc["ruleVersions"][r["token"]] = prof["activeVersion"]  # rules are versioned with the profile that carries them
             doc["ruleEnabled"][r["token"]] = r["enabled"]
     doc["annotatedBy"] = "acceptance_check.py annotate, from the platform's own records, after the run"
+    stamp_platform_version(a.recording, a.namespace)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(doc, f, indent=2)
         f.write("\n")
@@ -818,7 +839,7 @@ def main(argv=None):
     ns = {"default": "dci-tp"}
     add("ready", cmd_ready, runner=runner, timeout=dict(type=float, default=600))
     add("rules", cmd_rules, runner=runner, out=out).add_argument("action", choices=["disable"])
-    add("annotate", cmd_annotate, runner=runner, recording=dict(required=True))
+    add("annotate", cmd_annotate, runner=runner, recording=dict(required=True), namespace=ns)
     add("counters", cmd_counters, out=out, name=dict(required=True), namespace=ns)
     add("segment-a", cmd_segment_a, runner=runner, out=out, mode=dict(choices=["control", "rule-disabled"], required=True), since=dict(required=True),
         quit_file=dict(required=False), timeout=dict(type=float, default=2400))
