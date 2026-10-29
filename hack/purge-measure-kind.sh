@@ -30,7 +30,7 @@ case "$CLUSTER" in dc-erase*) ;; *) echo "refusing cluster '$CLUSTER': this rig 
 export KUBECONFIG="${PM_KUBECONFIG:-$HOME/.kube/dc-erase.yaml}"
 NS=purge-measure
 PG_IMAGE="${PM_PG_IMAGE:-timescale/timescaledb:latest-pg16@sha256:61f891691050da6032023c01ea885730eeeba06b7c17b403e7d0b9c49c37dfe9}"
-NATS_IMAGE="${PM_NATS_IMAGE:-nats:2.15.1-alpine@sha256:7ae34c25dfd6fe2e01c6483eabef20d796690fdcac6c4d94ca780a6cf9877fde}"
+NATS_IMAGE="${PM_NATS_IMAGE:-nats:2.15.2-alpine@sha256:823e7f1d6d8ffe3b30dbd73d4a06bbb939acf94929f7fdf224404da7a05bafb5}"
 REPORT="${PM_REPORT:-$PWD/purge-measure-kind-report.json}"
 BIN="$(mktemp -d)/purge-measure.test"
 CREATED=0
