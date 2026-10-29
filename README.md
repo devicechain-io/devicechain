@@ -69,7 +69,8 @@ The transports differ in what they support. HTTP is ingest only, Sparkplug comma
 the default install; add them at bootstrap with `--enable-area sparkplug-ingest` or
 `--enable-area lwm2m-ingest`. The
 [transport matrix](https://docs.devicechain.io/reference/transport-matrix) lists what each one
-does and what it lacks.
+does and what it lacks. A runnable Sparkplug example, with an Eclipse Tahu edge node and a
+Mosquitto broker, is in [`examples/sparkplug-commands`](examples/sparkplug-commands).
 
 ### Device model
 

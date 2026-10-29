@@ -228,3 +228,17 @@ func TestCommandKeyCapMatchesTheEnqueueCap(t *testing.T) {
 	require.NoError(t, validateCommandKey(strings.Repeat("c", enqueueNameCap)))
 	require.Error(t, validateCommandKey(strings.Repeat("c", enqueueNameCap+1)))
 }
+
+// Transports that execute a command themselves name it with a dotted, namespaced key
+// ("sparkplug.write"), and the console declares those. Every segment still has to be a token.
+func TestCommandKeyAllowsDottedNamespacesButNoOtherPunctuation(t *testing.T) {
+	for _, ok := range []string{"reboot", "sparkplug.write", "sparkplug.rebirth", "a.b.c", "Fw_v2.set-point"} {
+		require.NoError(t, validateCommandKey(ok), ok)
+	}
+	for _, bad := range []string{"", ".", ".write", "write.", "sparkplug..write", "sparkplug.-write", "a/b", "a b", "a.b/c", "a:b", "a*", "a>"} {
+		require.Error(t, validateCommandKey(bad), bad)
+	}
+	// The dots count toward the cap, so a dotted key cannot outgrow the enqueue cap either.
+	require.NoError(t, validateCommandKey(strings.Repeat("c", 63)+"."+strings.Repeat("c", 64)))
+	require.Error(t, validateCommandKey(strings.Repeat("c", 64)+"."+strings.Repeat("c", 64)))
+}

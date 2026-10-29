@@ -1,0 +1,3 @@
+# Tahu's generated sparkplug_b_pb2.py predates protobuf 4, and its examples use the paho-mqtt 1.x API.
+paho-mqtt==1.6.1
+protobuf==3.20.3

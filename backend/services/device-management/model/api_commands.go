@@ -6,6 +6,7 @@ package model
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/devicechain-io/dc-microservice/conflict"
 	"github.com/devicechain-io/dc-microservice/core"
@@ -281,9 +282,21 @@ func (api *Api) CommandDefinitionsByDeviceType(ctx context.Context, deviceTypeId
 // (ADR-043 decision 1 / ADR-042): the vocabulary a profile declares must stay
 // safe to carry in a subject/topic, so free-form keys can't ossify before later
 // enforcement lands.
+//
+// A key may be namespaced with dots ("sparkplug.write"): the transports that execute a
+// command themselves name theirs that way, and the console's "Add Sparkplug standard
+// commands" declares them. Each dot-separated segment must itself be a valid token, so a
+// dot never adds a character the grammar otherwise refuses, a leading, trailing or doubled
+// dot is refused, and the whole key keeps the token length cap (the enqueue cap). A key is
+// carried in the command's message body and a column, never spliced into a subject.
 func validateCommandKey(key string) error {
-	if err := core.ValidateToken(key); err != nil {
-		return fmt.Errorf("invalid command key %q: %w", key, err)
+	if len(key) > core.MaxTokenLen {
+		return fmt.Errorf("invalid command key %q: %w", key, core.ValidateToken(key))
+	}
+	for _, segment := range strings.Split(key, ".") {
+		if err := core.ValidateToken(segment); err != nil {
+			return fmt.Errorf("invalid command key %q: %w", key, err)
+		}
 	}
 	return nil
 }

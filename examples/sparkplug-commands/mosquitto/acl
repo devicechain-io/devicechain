@@ -1,0 +1,24 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Two logins, each allowed only what its role needs.
+
+# DeviceChain, as the Sparkplug Host Application (host id "devicechain", group "plant-a").
+# The two "write" lines on NCMD and DCMD are what the command downlink needs; without them the
+# broker refuses (or silently drops) the publish and every command ends unconfirmed.
+user devicechain
+topic read spBv1.0/plant-a/#
+topic write spBv1.0/STATE/devicechain
+topic write spBv1.0/plant-a/NCMD/+
+topic write spBv1.0/plant-a/DCMD/+/+
+
+# The edge node: publishes its own births, deaths and data, and reads commands addressed to it.
+user tahu
+topic write spBv1.0/plant-a/NBIRTH/pump-station
+topic write spBv1.0/plant-a/NDEATH/pump-station
+topic write spBv1.0/plant-a/NDATA/pump-station
+topic write spBv1.0/plant-a/DBIRTH/pump-station/+
+topic write spBv1.0/plant-a/DDATA/pump-station/+
+topic read spBv1.0/plant-a/NCMD/pump-station
+topic read spBv1.0/plant-a/DCMD/pump-station/+
+topic read spBv1.0/STATE/#
