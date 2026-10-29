@@ -151,7 +151,7 @@ var ownedWithinTunable = []struct {
 	{"functionalAreas.event-sources.config.eventSources",
 		"event-sources' listeners and broker connections are wiring, not tuning"},
 	{"functionalAreas.sparkplug-ingest.config.sources",
-		"sparkplug-ingest's broker connections, credential references and tenant bindings are wiring, not tuning"},
+		"sparkplug-ingest's broker connections, credential references and tenant bindings are wiring, not tuning: connect a broker with --sparkplug-source <file>, which keeps the password out of the configuration and carries the sources through every upgrade"},
 	{"functionalAreas.command-delivery.config.sparkplugCommands",
 		"whether Sparkplug commands are deliverable is derived by the chart from the Sparkplug sources' commands.enabled; a value written here could say they are while no source sends them, or the reverse"},
 }
@@ -260,7 +260,7 @@ func refuseOverlayKey(path []string) string {
 	// one would either be overwritten by the carry or, worse, make the carry skip.
 	for _, carried := range carriedValuePaths {
 		if pathsOverlap(path, carried) {
-			return "dcctl carries this value from the previous release itself (it is set by --lwm2m-identities, or is provisioning state), so an overlay cannot set it"
+			return "dcctl carries this value from the previous release itself (it is set by --lwm2m-identities or --sparkplug-source, or is provisioning state), so an overlay cannot set it"
 		}
 	}
 	for _, owned := range ownedWithinTunable {

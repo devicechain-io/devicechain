@@ -376,6 +376,11 @@ func stepCheckClusterSingletons(ctx context.Context, st *State) error {
 	if err := precheckValuesOverlay(ctx, st); err != nil {
 		return err
 	}
+	// A bootstrap composes the instance from its flags, so one given no Sparkplug sources over an
+	// instance that has some would silently remove them.
+	if err := precheckSparkplugWithdrawal(ctx, st); err != nil {
+		return err
+	}
 	// 🔴 AND THE SHARED RELATIONAL STORE, FOR THE SAME REASON, TWICE OVER.
 	//
 	// The connection budget is the refusal an operator is likeliest to meet, and meeting

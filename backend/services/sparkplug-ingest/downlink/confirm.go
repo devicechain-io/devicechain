@@ -90,6 +90,66 @@ var Reasons = []Reason{
 	ReasonSessionDropped, ReasonSourceDisabled,
 }
 
+// The refusal reasons: a command refused BEFORE the wire is answered UNSENT, and its stored response
+// carries {"reason": <one of these>} the same way an unanswered command does. The set is closed and
+// pinned by reasons_test.go; the console maps each code to its own sentence.
+const (
+	// ReasonCommandsNotEnabled: commands are off for the tenant or for the source the device is on.
+	ReasonCommandsNotEnabled Reason = "commands_not_enabled"
+	// ReasonBrokerRefused: the customer broker refused an earlier publish; commands are paused.
+	ReasonBrokerRefused Reason = "broker_refused"
+	// ReasonExpired: the command's own expiry passed before it could be sent.
+	ReasonExpired Reason = "expired"
+	// ReasonInvalidParameters: the command's parameters are not the shape the command takes.
+	ReasonInvalidParameters Reason = "invalid_parameters"
+	// ReasonUnknownCommand: not one of the commands this service executes.
+	ReasonUnknownCommand Reason = "unknown_command"
+	// ReasonMetricProtocolControl: the metric is a protocol control metric (Rebirth, Reboot, ...).
+	ReasonMetricProtocolControl Reason = "metric_protocol_control"
+	// ReasonMetricNotWritable: the metric is not on the source's writable-metric allowlist.
+	ReasonMetricNotWritable Reason = "metric_not_writable"
+	// ReasonMetricNotDeclared: the node's BIRTH does not declare the metric.
+	ReasonMetricNotDeclared Reason = "metric_not_declared"
+	// ReasonDatatypeUnsupported: the metric's declared datatype is one commands do not carry.
+	ReasonDatatypeUnsupported Reason = "datatype_unsupported"
+	// ReasonValueNotAccepted: the value cannot be encoded as the metric's declared datatype.
+	ReasonValueNotAccepted Reason = "value_not_accepted"
+	// ReasonDatatypeChanged: the node re-birthed with a different datatype for the metric.
+	ReasonDatatypeChanged Reason = "datatype_changed"
+	// ReasonNodeRebirthing: the node kept re-birthing while the command was being recorded.
+	ReasonNodeRebirthing Reason = "node_rebirthing"
+	// ReasonNodeOffline: a reboot is sent only to a node that is online when it is dispatched.
+	ReasonNodeOffline Reason = "node_offline"
+	// ReasonRebootImpact: the command is not declared DISRUPTIVE or DESTRUCTIVE on the profile.
+	ReasonRebootImpact Reason = "reboot_impact"
+	// ReasonRebootNotAllowed: commands.allowReboot is off on the source.
+	ReasonRebootNotAllowed Reason = "reboot_not_allowed"
+	// ReasonRebootNotANode: a reboot was addressed to a device rather than an edge node.
+	ReasonRebootNotANode Reason = "reboot_not_a_node"
+	// ReasonRebootNotDeclared: the node did not declare Node Control/Reboot in its NBIRTH.
+	ReasonRebootNotDeclared Reason = "reboot_not_declared"
+	// ReasonRebootNotBoolean: Node Control/Reboot is declared with a datatype other than Boolean.
+	ReasonRebootNotBoolean Reason = "reboot_not_boolean"
+	// ReasonRebootUnverified: the one-reboot-per-window record could not be read yet.
+	ReasonRebootUnverified Reason = "reboot_unverified"
+	// ReasonRebootRateLimited: the node was rebooted within the window.
+	ReasonRebootRateLimited Reason = "reboot_rate_limited"
+	// ReasonNoDispatch: the delivery names no dispatch, so it cannot be parked or confirmed.
+	ReasonNoDispatch Reason = "no_dispatch"
+	// ReasonPublishFailed: the publish failed for a reason none of the above names.
+	ReasonPublishFailed Reason = "publish_failed"
+)
+
+// RefusalReasons lists every Reason a command refused before the wire can carry.
+var RefusalReasons = []Reason{
+	ReasonCommandsNotEnabled, ReasonBrokerRefused, ReasonExpired, ReasonInvalidParameters,
+	ReasonUnknownCommand, ReasonMetricProtocolControl, ReasonMetricNotWritable, ReasonMetricNotDeclared,
+	ReasonDatatypeUnsupported, ReasonValueNotAccepted, ReasonDatatypeChanged, ReasonNodeRebirthing,
+	ReasonNodeOffline, ReasonRebootImpact, ReasonRebootNotAllowed, ReasonRebootNotANode,
+	ReasonRebootNotDeclared, ReasonRebootNotBoolean, ReasonRebootUnverified, ReasonRebootRateLimited,
+	ReasonNoDispatch, ReasonPublishFailed,
+}
+
 // outcome is what a command is resolved with.
 type outcome struct {
 	success bool

@@ -79,9 +79,11 @@ dcctl bootstrap <provider> <instance> [flags]
       --restore-tsdb-at string                      stop the event store's recovery at this RFC3339 timestamp instead of replaying the whole archive. For the disaster where the data was destroyed correctly — a mistaken delete — so pick a moment strictly before the damage. Needs --restore-tsdb-from
       --restore-tsdb-from string                    disaster recovery: recover the EVENT store from this archive path (the serverName inside the backup bucket, e.g. dc-tsdb) instead of initialising an empty database. 🔴 Only takes effect when the cluster is CREATED — recover by destroying the instance and rebuilding it with this set, not by re-running against a live one. When the backups are in the cluster's in-cluster object store, destroy with --keep-backups: a destroy without it deletes the archive this reads
       --skip-preflight                              skip the local-system preflight checks
+      --sparkplug-source string                     path to a YAML or JSON file of Sparkplug sources to connect: a list of {tenant, hostId, broker{url, username, password | passwordFile | passwordSecretRef{name, key}}, groups, deviceTypeToken, autoRegister, commands{enabled, hostRole, writableMetrics, ...}}. Each source is one Host Application connection out to a customer broker, bound to one tenant. The broker password is written by dcctl into a Secret of its own, dci-<instance>-sparkplug-broker, OUTSIDE the Helm release: the release records only the Secret's name and a salted digest, never the password (or name a Secret you manage yourself with passwordSecretRef, which dcctl neither reads nor writes). The sources are kept by every later upgrade. Implies --enable-area sparkplug-ingest on a bootstrap (on an upgrade the area must already run). Validated up front. A bootstrap over an instance that has sources, given none, is refused unless --withdraw-sparkplug-sources is given
       --trusted-proxies strings                     CIDR ranges of the proxies whose X-Forwarded-For the services believe (infrastructure.http.trustedProxies); repeat or comma-separate. Default: the cluster's pod range, read from its nodes, which is where the ingress controller runs; add a fronting load balancer's ranges when there is one. It is recorded on the instance and kept by every upgrade; "auto" returns to deriving it from the cluster
       --values stringArray                          a YAML file of operator tuning (replica counts, resources, an area's own configuration), merged over the values dcctl computes (repeatable; later files win). The overlay is recorded on the instance, so 'dcctl upgrade' keeps applying it; on upgrade, --values REPLACES the recorded overlay. Only tunable values are accepted: a key dcctl owns (images, credentials, endpoints, ingress host and TLS, the area set) is refused, naming it, before anything changes
       --version string                              image version/tag to deploy (default: the published release version, or 'dev' with --build)
+      --withdraw-sparkplug-sources                  remove the instance's Sparkplug sources and the Secret holding their broker passwords. Not combinable with --sparkplug-source
   -y, --yes                                         assume yes for prompts
 ```
 
@@ -1585,6 +1587,12 @@ that later upgrades keep ('--ingress-controller auto' returns to deciding from t
 Gateway names a new certificate Secret while the Ingress objects remain, so the host DNS still
 reaches never waits for a certificate; the upgrade waits for the Gateway's own to be Ready.
 
+A Sparkplug source ('--sparkplug-source \<file>') is carried the same way as the tuning below: the
+sources stay on the instance through every later upgrade, and a run given the file again replaces
+them. The broker password is not in the Helm release: dcctl writes it into a Secret of its own,
+which the upgrade leaves alone, and '--withdraw-sparkplug-sources' removes both. The area must already be enabled
+('dcctl enable-area ... sparkplug-ingest'); a bootstrap with the flag enables it.
+
 Operator tuning is the exception, and it is carried: a values overlay given to
 'dcctl bootstrap --values' or to this command is recorded on the instance and applied
 again by every later upgrade. '--values \<file>' replaces the recorded overlay,
@@ -1623,6 +1631,9 @@ when they are in a terraform.tfvars beside its state
   # Once DNS points at the new controller, stop serving the host from ingress-nginx too
   dcctl upgrade local devicechain --drop-legacy-ingress
 
+  # Connect a Sparkplug broker (the file is kept: later upgrades carry it)
+  dcctl upgrade local devicechain --sparkplug-source sources.yaml
+
   # Turn the fail-closed MQTT acknowledgement on (kept by later upgrades), or back off
   dcctl upgrade local devicechain --mqtt-fail-closed
   dcctl upgrade local devicechain --mqtt-fail-closed=false
@@ -1646,9 +1657,11 @@ dcctl upgrade <provider> <instance> [flags]
       --registry string                 image registry to pull from (default: ghcr.io/devicechain-io)
       --reset-values                    remove the tuning overlay recorded on the instance: it returns to the values dcctl computes. Cannot be combined with --values
       --skip-infrastructure             move only the services: leave this instance's message broker and event store on the configuration they were built with
+      --sparkplug-source string         path to a YAML or JSON file of Sparkplug sources to connect: a list of {tenant, hostId, broker{url, username, password | passwordFile | passwordSecretRef{name, key}}, groups, deviceTypeToken, autoRegister, commands{enabled, hostRole, writableMetrics, ...}}. Each source is one Host Application connection out to a customer broker, bound to one tenant. The broker password is written by dcctl into a Secret of its own, dci-<instance>-sparkplug-broker, OUTSIDE the Helm release: the release records only the Secret's name and a salted digest, never the password (or name a Secret you manage yourself with passwordSecretRef, which dcctl neither reads nor writes). The sources are kept by every later upgrade. Implies --enable-area sparkplug-ingest on a bootstrap (on an upgrade the area must already run). Validated up front. A bootstrap over an instance that has sources, given none, is refused unless --withdraw-sparkplug-sources is given
       --trusted-proxies strings         CIDR ranges of the proxies whose X-Forwarded-For the services believe (infrastructure.http.trustedProxies); repeat or comma-separate. Default: the cluster's pod range, read from its nodes, which is where the ingress controller runs; add a fronting load balancer's ranges when there is one. It is recorded on the instance and kept by every upgrade; "auto" returns to deriving it from the cluster
       --values stringArray              a YAML file of operator tuning (replica counts, resources, an area's own configuration), merged over the values dcctl computes (repeatable; later files win). The overlay is recorded on the instance, so 'dcctl upgrade' keeps applying it; on upgrade, --values REPLACES the recorded overlay. Only tunable values are accepted: a key dcctl owns (images, credentials, endpoints, ingress host and TLS, the area set) is refused, naming it, before anything changes
       --version string                  release version to upgrade to (default: this dcctl's pinned version)
+      --withdraw-sparkplug-sources      remove the instance's Sparkplug sources and the Secret holding their broker passwords. Not combinable with --sparkplug-source
 ```
 
 ### SEE ALSO

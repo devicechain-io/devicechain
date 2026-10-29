@@ -31,6 +31,9 @@ func seriesValue(t *testing.T, registry *prometheus.Registry, name string) float
 		}
 		metrics := family.GetMetric()
 		require.Len(t, metrics, 1, "%s is not a single unlabelled series", name)
+		if g := metrics[0].GetGauge(); g != nil {
+			return g.GetValue()
+		}
 		return metrics[0].GetCounter().GetValue()
 	}
 	require.Failf(t, "metric not registered", "no family named %s in the registry", name)
@@ -66,4 +69,18 @@ func TestRebirthQueueCountersAreExportedUnderTheirOwnNames(t *testing.T) {
 	require.Equal(t, float64(1),
 		seriesValue(t, registry, "devicechain_sparkplugingest_rebirth_dropped_total"),
 		"the counter the host increments on the DROPPED arm is not the one exported as rebirth_dropped_total")
+}
+
+// The birth-recovery pair is exported under its own names, with different values so a swap shows.
+func TestBirthRecoveryMetricsAreExportedUnderTheirOwnNames(t *testing.T) {
+	registry := newTestMicroservice(t)
+
+	metrics := buildMetrics()
+	metrics.BirthRecoveryPending.Set(2)
+	metrics.BirthRecoveryRebirths.Add(5)
+
+	require.Equal(t, float64(2),
+		seriesValue(t, registry, "devicechain_sparkplugingest_birth_recovery_pending"))
+	require.Equal(t, float64(5),
+		seriesValue(t, registry, "devicechain_sparkplugingest_birth_recovery_rebirths_total"))
 }

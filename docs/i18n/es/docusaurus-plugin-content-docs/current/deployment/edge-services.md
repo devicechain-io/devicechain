@@ -539,6 +539,8 @@ guardó pero nunca confirmó se reemplaza, por tanto, en lugar de quedarse vigen
 **`subscribe_failures_total`**: cualquier aumento significa que una fuente está caída, y la línea de
 log nombra el grupo rechazado.
 
+**Un nodo cuyos nacimientos no se pudieron registrar recibe la petición de volver a nacer.** Cuando un nacimiento no se puede registrar (normalmente porque el tipo de dispositivo de la fuente aún no existe), el nodo se recuerda y se le envía un `NCMD` `Node Control/Rebirth` a intervalos crecientes, hasta que se registra. Vigila **`birth_recovery_pending`**: un valor que se mantiene por encima de cero es un nodo, o una fuente entera, que no se registra, y la línea de log de nivel error nombra el tipo de dispositivo. Créalo y el indicador baja a cero por sí solo.
+
 **La reconexión la gestiona la plataforma, no la biblioteca cliente de MQTT.** Cada reconexión abre
 una sesión realmente nueva con una marca de tiempo nueva. Sparkplug exige que el nacimiento del host y
 su certificado de muerte lleven la misma marca de tiempo, para que un nodo de borde pueda rechazar una
@@ -552,9 +554,45 @@ lo que lo supera. No mide la tasa de mensajes, los nacimientos ni las muertes, y
 mensaje solo lo acota el broker. Consulta [Qué acota la ingesta de Sparkplug](#unbounded-sparkplug-ingest).
 :::
 
+### Entregar a `dcctl` una fuente Sparkplug {#sparkplug-sources}
+
+Una fuente Sparkplug es conexión y credencial, así que una superposición `--values` la rechaza. Entrégala a `dcctl` como archivo, en `bootstrap` (que además habilita el área `sparkplug-ingest`) o en `upgrade` (el área ya debe estar en marcha; `dcctl enable-area` la activa):
+
+```yaml
+# sources.yaml
+- tenant: acme
+  hostId: devicechain
+  broker:
+    url: ssl://broker.acme.example:8883
+    username: devicechain
+    password: the-broker-password      # o passwordFile: /ruta/al/archivo
+  groups: [plant-a]
+  autoRegister: true
+  deviceTypeToken: sparkplug-pump      # créalo antes de que la fuente conecte, o consulta la nota de abajo
+  commands:
+    enabled: true
+    hostRole: primary
+    writableMetrics: ["Outputs/*"]
+```
+
+```bash
+dcctl bootstrap local acme --enable-area sparkplug-ingest --sparkplug-source sources.yaml
+dcctl upgrade   local acme --sparkplug-source sources.yaml
+```
+
+El archivo se comprueba antes de tocar el clúster (falta el inquilino, una URL de broker sin host, un `autoRegister` sin tipo de dispositivo, dos inquilinos en un broker, una clave desconocida).
+
+**Dónde vive la contraseña.** Nunca es un valor de Helm, así que no está en el registro de la release que imprime `helm get values`, y una contraseña rotada no queda en una revisión antigua. `dcctl` escribe él mismo el Secret `dci-<instancia>-sparkplug-broker`, antes de la release y fuera de su manifiesto, y el pod lo proyecta como variable de entorno que nombra el `passwordEnv` de la fuente. La release solo lleva el nombre del Secret y una marca, con sal por instancia y derivada de la versión del Secret y no de su contenido, que reinicia el pod cuando cambia la contraseña. `dcctl` no imprime ni la contraseña ni el contenido del archivo. Para que la contraseña no esté en el archivo que entregas a `dcctl`, usa `passwordFile: /ruta` (se lee una vez), o gestiona tú mismo el Secret y escribe `passwordSecretRef: {name: mi-secret, key: password}` en el bloque broker; `dcctl` entonces ni lo lee ni lo escribe.
+
+Las fuentes **se conservan en cada `dcctl upgrade` posterior** (la actualización no lee nada secreto de la release), y una ejecución que recibe el archivo de nuevo las sustituye; una contraseña rotada reemplaza el Secret en su sitio y reinicia el pod. Retirarlas es explícito: `dcctl upgrade ... --withdraw-sparkplug-sources` elimina las fuentes y el Secret. Un `dcctl bootstrap` repetido sobre una instancia que tiene fuentes, sin recibir ninguna, se rechaza hasta que pases `--sparkplug-source` o `--withdraw-sparkplug-sources`. Las claves son las de la lista `sources` del chart, descritas más abajo.
+
+:::note Un tipo de dispositivo que aún no existe
+Un nodo se registra con el `deviceTypeToken` de la fuente. Si el tipo se crea después de que la fuente conecte, la plataforma pide que vuelvan a nacer los nodos que no pudo registrar, hasta que se registren; consulta [un nodo que nace antes de que exista su tipo de dispositivo](../concepts/sparkplug.md#birth-recovery).
+:::
+
 ### Comandos Sparkplug {#sparkplug-commands}
 
-El canal descendente de comandos descrito en [Comandos Sparkplug](../concepts/sparkplug.md#commands) es **opcional y está desactivado por defecto**. Se configura por fuente y **hoy solo mediante valores de Helm**: `dcctl` se niega a aceptar una fuente de `sparkplug-ingest` en una superposición de valores, así que las fuentes, y con ellas los comandos, se fijan en los valores del chart para `functionalAreas.sparkplug-ingest.config.sources`.
+El canal descendente de comandos descrito en [Comandos Sparkplug](../concepts/sparkplug.md#commands) es **opcional y está desactivado por defecto**. Se configura por fuente: en el bloque `commands` del archivo que entregas a `dcctl` ([arriba](#sparkplug-sources)) o, si gestionas tú mismo la release de Helm, en los valores del chart para `functionalAreas.sparkplug-ingest.config.sources`, como aquí.
 
 ```yaml
 functionalAreas:
@@ -870,6 +908,8 @@ Prefijo: `devicechain_sparkplugingest_`.
 | `is_leader` | 1 en el pod que sirve, 0 en el resto. `SparkplugIngestLeaderCountNotOne` se dispara cuando la suma no es 1. |
 | `connect_failures_total` | Un broker configurado no es alcanzable. Que suba significa que una fuente está caída mientras el pod parece sano. Alimenta `SparkplugIngestBrokerUnreachable`. |
 | `subscribe_failures_total` | El broker aceptó la conexión pero rechazó (o nunca confirmó) la suscripción a un grupo, lo más probable porque la credencial de la fuente no puede leerlo. La fuente sigue fuera de línea, no ingiere ninguno de sus grupos y reintenta. `SparkplugIngestSubscriptionRefused` se dispara ante un aumento. |
+| `birth_recovery_pending` | Nodos cuyos nacimientos no se pudieron registrar (casi siempre porque el `deviceTypeToken` de la fuente nombra un tipo de dispositivo que aún no existe) y a los que se pide que vuelvan a nacer. Un valor distinto de cero que se mantiene es un nodo, o una fuente, que no se registra. |
+| `birth_recovery_rebirths_total` | Comandos de rebirth enviados a esos nodos, a intervalos crecientes hasta un minuto. Una serie que crece junto a un `birth_recovery_pending` distinto de cero es un registro que sigue fallando. |
 | `messages_total` | Tráfico Sparkplug entrante. Una línea plana con una flota viva es el síntoma de una suscripción perdida o de una fuente muerta. |
 | `presence_emitted_total` | Señales de conexión/desconexión producidas. |
 | `rebirth_requests_total` | Nodos a los que se pide que se vuelvan a anunciar. Que suba de forma sostenida significa que un nodo no consigue resincronizarse. Los rebirths del sondeo de vida también cuentan aquí, así que en una flota con dispositivos callados espera un goteo constante repartido a lo largo de cada `presence.probeSeconds`. |

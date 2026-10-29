@@ -119,6 +119,17 @@ var dispositions = map[string]disposition{
 	// autoRegister — is provisioning state, not secret, and equally unrecorded. Both
 	// survive today only by being copied out of the previous Helm release.
 	"lwm2m-identities": gap,
+
+	// sparkplug-source is the same shape: the broker passwords are secretHalf, and the sources
+	// beside them (tenant, broker address, groups, device type, command limits) are not secret
+	// and equally unrecorded. Both survive an upgrade by being carried out of the previous Helm
+	// release (carriedValuePaths), which a second operator on another machine reads just as well,
+	// but which is not the declaration.
+	"sparkplug-source": gap,
+
+	// withdraw-sparkplug-sources is an instruction for THIS run (remove what the release holds);
+	// its result is the absence of sources, which the release records by not holding them.
+	"withdraw-sparkplug-sources": runScoped,
 }
 
 // The gaps, stated separately so the test can assert the set EXACTLY. Closing one
@@ -126,6 +137,7 @@ var dispositions = map[string]disposition{
 // adding it, which is a sentence somebody has to write.
 var knownGaps = []string{
 	"lwm2m-identities",
+	"sparkplug-source",
 }
 
 func TestEveryBootstrapFlagHasADeclaredDisposition(t *testing.T) {

@@ -39,8 +39,8 @@ set. That is the whole interoperability contract, and the part to copy into a re
 
 ## Requirements
 
-`docker` (with `compose`), `kind`, `kubectl`, `helm`, `jq`, `curl`, `dcctl`, and a DeviceChain release
-that accepts dotted command keys. **Releases up to v0.26.0 refuse the key `sparkplug.write`** when a
+`docker` (with `compose`), `kind`, `kubectl`, `jq`, `curl`, `dcctl` (with `tofu` on the path, which
+`dcctl upgrade` needs), and a DeviceChain release that accepts dotted command keys. **Releases up to v0.26.0 refuse the key `sparkplug.write`** when a
 profile declares it (`invalid command key ... must be letters, digits, hyphens and underscores`), so
 `provision.sh` stops at its first command there. Use a release that contains the change that allows
 `namespace.name` keys, or bootstrap from this source tree (`dcctl bootstrap --dev`).
@@ -65,9 +65,11 @@ docker compose up -d --build
 ./connect-devicechain.sh
 ```
 
-Order matters in step 3. A node is registered the first time it is seen, with the device type the
-source names, so that type must exist before the source connects. Births that arrive before it are
-dropped; recover by restarting the edge node (`docker restart spb-edge-node`).
+Order matters in step 3, but a mistake recovers by itself. A node is registered the first time it is
+seen, with the device type the source names. If its births arrive before that type exists they are
+dropped, and DeviceChain then asks the node to rebirth every few seconds, up to once a minute, until
+it registers (`birth_recovery_pending` counts the nodes waiting). Create the type and the node
+appears within a minute; there is nothing to restart.
 
 ### What step 3 did
 
@@ -75,15 +77,19 @@ dropped; recover by restarting the edge node (`docker restart spb-edge-node`).
   `sparkplug.write` and `sparkplug.rebirth`, published it, and a device type `sparkplug-pump`. The
   console's **Add Sparkplug standard commands** button on a profile declares the same keys (plus
   `sparkplug.reboot`, which this example leaves off).
-- `connect-devicechain.sh` upgraded the instance's Helm release with one Sparkplug **source**: broker
-  `tcp://spb-mosquitto:1883`, group `plant-a`, host id `devicechain`, `autoRegister` with that device
-  type, and `commands` enabled with `hostRole: primary` and `writableMetrics: ["Outputs/*"]`. The
-  broker password reaches the pod as a Secret, never in a values file you keep.
+- `connect-devicechain.sh` ran `dcctl upgrade local spb --sparkplug-source <file>` with one Sparkplug
+  **source**: broker `tcp://spb-mosquitto:1883`, group `plant-a`, host id `devicechain`,
+  `autoRegister` with that device type, and `commands` enabled with `hostRole: primary` and
+  `writableMetrics: ["Outputs/*"]`. The file holds the broker password only for the length of the
+  command; `dcctl` writes it into a Secret of its own, outside the Helm release, so it is in no release record or
+  configuration.
 
-Two things about that last script. It uses Helm because `dcctl` does not take a Sparkplug source in
-`--values`, so **a later `dcctl upgrade` drops the source; run the script again afterwards.** And the
-broker is reached by its container name because every kind node, and so every pod, resolves names on
-the `kind` Docker network; no `host.docker.internal` or published port is involved.
+The source is part of the instance now: **every later `dcctl upgrade` keeps it**, with no flag. Give
+the flag again to change it (a new password rolls the pod), and `dcctl upgrade --withdraw-sparkplug-sources`
+to remove it. The area has to be running, which step 1 did with `--enable-area sparkplug-ingest`; a
+bootstrap given `--sparkplug-source` enables it for you. The broker is reached by its container name
+because every kind node, and so every pod, resolves names on the `kind` Docker network; no
+`host.docker.internal` or published port is involved.
 
 ## See it work
 
@@ -140,9 +146,9 @@ birth. Sent to the device (`pump-station/pump-1`) it resolves to the node.
 
 | Send | Ends | Why |
 | --- | --- | --- |
-| `{"metric":"Temperature","value":5}` | `FAILED`, outcome `NOT_DELIVERED` | not on the source's `writableMetrics`; nothing was sent |
-| `{"metric":"Outputs/Nope","value":true}` | `FAILED`, `NOT_DELIVERED` | the node's birth does not declare it |
-| `{"metric":"Outputs/Run","value":"banana"}` | `FAILED`, `NOT_DELIVERED` | the birth declared a Boolean; refused before the wire, with the datatype in the reason |
+| `{"metric":"Temperature","value":5}` | `FAILED`, outcome `NOT_DELIVERED`, `reason: metric_not_writable` | not on the source's `writableMetrics`; nothing was sent |
+| `{"metric":"Outputs/Nope","value":true}` | `FAILED`, `NOT_DELIVERED`, `reason: metric_not_declared` | the node's birth does not declare it |
+| `{"metric":"Outputs/Run","value":"banana"}` | `FAILED`, `NOT_DELIVERED`, `reason: value_not_accepted` | the birth declared a Boolean; refused before the wire, with the datatype in the error text |
 | `{"metric":"Outputs/Interlock","value":true}` | `SENT`, then after 2 minutes `TIMEOUT`, outcome `UNKNOWN`, `reason: unconfirmed_timeout` | the node got it and never reported it: `TIMEOUT` is "not confirmed", not "failed" |
 
 `TIMEOUT` is the case to understand. The Interlock command *was* published, and the platform cannot

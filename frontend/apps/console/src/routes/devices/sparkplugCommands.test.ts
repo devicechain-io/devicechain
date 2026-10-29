@@ -6,7 +6,14 @@
 // declared), and the outcome reading is checked against the evidence the adapter stores,
 // including the shapes it must NOT read as evidence.
 import { describe, expect, it } from 'vitest';
-import { buildSparkplugWritePayload, sparkplugOutcome } from './sparkplugCommands';
+import { SPARKPLUG_REFUSAL_REASONS, buildSparkplugWritePayload, sparkplugOutcome } from './sparkplugCommands';
+
+// Every locale the console ships, found rather than listed: a new locale directory is checked the
+// day it is added.
+const catalogs = import.meta.glob('../../i18n/locales/*/devices.json', { eager: true }) as Record<
+  string,
+  { default: Record<string, string> }
+>;
 
 const build = (metric: string, value: string, mode: 'auto' | 'text' = 'auto') =>
   buildSparkplugWritePayload(metric, value, mode);
@@ -130,6 +137,32 @@ describe('sparkplugOutcome', () => {
     expect(
       sparkplugOutcome({ name: 'sparkplug.write', status: 'TIMEOUT', responsePayload: reasonOf('session_dropped') }).outcome,
     ).toEqual({ kind: 'likelyRefused' });
+  });
+
+  it('tells a command refused before the wire apart by its reason code, and ignores one it does not know', () => {
+    for (const reason of SPARKPLUG_REFUSAL_REASONS) {
+      expect(
+        sparkplugOutcome({ name: 'sparkplug.write', status: 'FAILED', responsePayload: reasonOf(reason) }).outcome,
+        reason,
+      ).toEqual({ kind: 'refused', reason });
+    }
+    expect(
+      sparkplugOutcome({ name: 'sparkplug.write', status: 'FAILED', responsePayload: reasonOf('something_new') }).outcome,
+    ).toBeNull();
+    // A refusal code on a command that was not refused says nothing.
+    expect(
+      sparkplugOutcome({ name: 'sparkplug.write', status: 'SUCCESSFUL', responsePayload: reasonOf('metric_not_writable') }).outcome,
+    ).toBeNull();
+  });
+
+  it('has a sentence in every locale for every refusal reason', () => {
+    const files = Object.entries(catalogs);
+    expect(files.length).toBeGreaterThanOrEqual(2);
+    for (const [file, catalog] of files) {
+      for (const reason of SPARKPLUG_REFUSAL_REASONS) {
+        expect(catalog.default[`sparkplugRefused_${reason}`], `${file}: ${reason}`).toBeTruthy();
+      }
+    }
   });
 
   it('says nothing extra for a reason it does not know, or none, however the error text reads', () => {

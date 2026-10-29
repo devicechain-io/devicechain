@@ -61,6 +61,13 @@ type Options struct {
 	// the flag was not given. ResetValues is `dcctl upgrade --reset-values`.
 	ValuesOverlay map[string]interface{}
 	ResetValues   bool
+	// SparkplugSources is the parsed, validated --sparkplug-source file (ParseSparkplugSources);
+	// nil when the flag was not given. An upgrade that is given none keeps the sources the
+	// release already holds (carriedValuePaths); a bootstrap that is given none withdraws them.
+	SparkplugSources []SparkplugSource
+	// WithdrawSparkplugSources is --withdraw-sparkplug-sources: remove the instance's Sparkplug
+	// sources and their password Secret. Not combinable with SparkplugSources.
+	WithdrawSparkplugSources bool
 }
 
 // Provider abstracts the target environment (local cluster today; cloud later)

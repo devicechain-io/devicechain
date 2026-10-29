@@ -84,6 +84,7 @@ export function buildSparkplugWritePayload(
 //   TIMEOUT, window ran out                   no report in the window: ignored, rejected, or
 //                                             never published
 //   TIMEOUT, superseded / broker dropped      told apart by the stored reason code
+//   FAILED, with a refusal reason             refused before anything was sent, and why
 //   SENT                                      published; the window is still open
 //
 // The evidence is the JSON the adapter stores as the command's response. It is parsed
@@ -91,8 +92,42 @@ export function buildSparkplugWritePayload(
 // prefix, an older adapter) yields no evidence rather than a wrong sentence.
 // ---------------------------------------------------------------------------------------
 
+// The reasons the adapter gives for refusing a command before it reached the wire (status FAILED,
+// NOT_DELIVERED). A closed set, pinned on the adapter side by reasons_test.go: a code that is not
+// here says nothing extra rather than a guess.
+export const SPARKPLUG_REFUSAL_REASONS = [
+  'commands_not_enabled',
+  'broker_refused',
+  'expired',
+  'invalid_parameters',
+  'unknown_command',
+  'metric_protocol_control',
+  'metric_not_writable',
+  'metric_not_declared',
+  'datatype_unsupported',
+  'value_not_accepted',
+  'datatype_changed',
+  'node_rebirthing',
+  'node_offline',
+  'reboot_impact',
+  'reboot_not_allowed',
+  'reboot_not_a_node',
+  'reboot_not_declared',
+  'reboot_not_boolean',
+  'reboot_unverified',
+  'reboot_rate_limited',
+  'no_dispatch',
+  'publish_failed',
+] as const;
+
+export type SparkplugRefusalReason = (typeof SPARKPLUG_REFUSAL_REASONS)[number];
+
+const isRefusalReason = (r: string): r is SparkplugRefusalReason =>
+  (SPARKPLUG_REFUSAL_REASONS as readonly string[]).includes(r);
+
 export type SparkplugOutcome =
   | { kind: 'inFlight' }
+  | { kind: 'refused'; reason: SparkplugRefusalReason }
   | { kind: 'unconfirmed' }
   | { kind: 'superseded' }
   | { kind: 'likelyRefused' }
@@ -164,6 +199,9 @@ export function sparkplugOutcome(command: {
             ? 'likelyRefused'
             : null;
     return { outcome: kind ? { kind } : null, secondaryHost: false };
+  }
+  if (command.status === 'FAILED') {
+    return { outcome: isRefusalReason(reason) ? { kind: 'refused', reason } : null, secondaryHost: false };
   }
   if (command.status !== 'SUCCESSFUL') return none;
 

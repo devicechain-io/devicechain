@@ -178,6 +178,7 @@ func TestGateOrder(t *testing.T) {
 		r.live("acme", "unborn", "c", CommandWrite, writeCmd("Setpoint", 5), nil)
 		assert.Equal(t, 1, r.result(ResultRefusedDisabled))
 		assert.False(t, r.log.has("park:"))
+		assert.Equal(t, "commands_not_enabled", reasonOf(r.responses.of("c")[0]))
 	})
 
 	t.Run("breaker open + invalid payload: refused_breaker", func(t *testing.T) {
@@ -190,6 +191,7 @@ func TestGateOrder(t *testing.T) {
 		require.Len(t, res, 1)
 		assert.Equal(t, cmddownlink.ReachUnsent, res[0].env.Reach)
 		assert.Equal(t, msgBreaker, errorOf(res[0]))
+		assert.Equal(t, "broker_refused", reasonOf(res[0]))
 	})
 
 	t.Run("expired + invalid payload: refused_expired", func(t *testing.T) {
@@ -199,6 +201,7 @@ func TestGateOrder(t *testing.T) {
 			cmddownlink.HeaderTransport: "sparkplug", cmddownlink.HeaderCommandExpires: past})
 		assert.Equal(t, 1, r.result(ResultRefusedExpired))
 		assert.Zero(t, r.result(ResultRefusedPayload), "the payload was validated before expiry")
+		assert.Equal(t, "expired", reasonOf(r.responses.of("c")[0]))
 	})
 
 	t.Run("not born + expired: PARKED (expiry is checked at the drain)", func(t *testing.T) {
@@ -254,6 +257,7 @@ func TestGateOrder(t *testing.T) {
 		res := r.responses.of("slow")
 		require.Len(t, res, 1)
 		assert.Equal(t, "env-nonce", res[0].env.DispatchNonce)
+		assert.Equal(t, "expired", reasonOf(res[0]))
 		assert.Len(t, r.src.published(), 1, "only the first command should have been published")
 	})
 }
@@ -308,22 +312,23 @@ func TestValidationRefusesWithAReasonAndPublishesNothing(t *testing.T) {
 		payload string
 		result  string
 		reason  string
+		code    string
 	}{
-		{"unknown key", "sparkplug.nope", ``, ResultRefusedPayload, "unknown Sparkplug command"},
-		{"write with no parameters", CommandWrite, ``, ResultRefusedPayload, "needs"},
-		{"write with a misspelled field", CommandWrite, `{"metrics":"Setpoint","value":1}`, ResultRefusedPayload, "needs"},
-		{"write with no value", CommandWrite, `{"metric":"Setpoint"}`, ResultRefusedPayload, "needs"},
-		{"write with a null value", CommandWrite, `{"metric":"Setpoint","value":null}`, ResultRefusedPayload, "must be a boolean, a number or a string"},
-		{"write with an object value", CommandWrite, `{"metric":"Setpoint","value":{"a":1}}`, ResultRefusedPayload, "cannot take"},
-		{"write off the allowlist", CommandWrite, writeCmd("Hidden", 1), ResultRefusedNotAllowed, "allowlist"},
-		{"write to a reserved metric", CommandWrite, writeCmd("Node Control/Reboot", true), ResultRefusedNotAllowed, "protocol control metric"},
-		{"write to bdSeq", CommandWrite, writeCmd("bdSeq", 1), ResultRefusedNotAllowed, "protocol control metric"},
-		{"write to a metric the BIRTH did not declare", CommandWrite, writeCmd("Outputs/Missing", true), ResultRefusedMetric, "not declared"},
-		{"write out of range", CommandWrite, writeCmd("Setpoint", 300), ResultRefusedPayload, "datatype 1"},
-		{"write a string into an integer", CommandWrite, writeCmd("Setpoint", "high"), ResultRefusedPayload, "cannot take"},
-		{"write a number into a string", CommandWrite, writeCmd("Mode", 3), ResultRefusedPayload, "cannot take"},
-		{"write a datatype commands do not carry", CommandWrite, writeCmd("Blob", "x"), ResultRefusedDatatype, "do not carry"},
-		{"rebirth with parameters", CommandRebirth, `{"force":true}`, ResultRefusedPayload, "takes no parameters"},
+		{"unknown key", "sparkplug.nope", ``, ResultRefusedPayload, "unknown Sparkplug command", "unknown_command"},
+		{"write with no parameters", CommandWrite, ``, ResultRefusedPayload, "needs", "invalid_parameters"},
+		{"write with a misspelled field", CommandWrite, `{"metrics":"Setpoint","value":1}`, ResultRefusedPayload, "needs", "invalid_parameters"},
+		{"write with no value", CommandWrite, `{"metric":"Setpoint"}`, ResultRefusedPayload, "needs", "invalid_parameters"},
+		{"write with a null value", CommandWrite, `{"metric":"Setpoint","value":null}`, ResultRefusedPayload, "must be a boolean, a number or a string", "invalid_parameters"},
+		{"write with an object value", CommandWrite, `{"metric":"Setpoint","value":{"a":1}}`, ResultRefusedPayload, "cannot take", "value_not_accepted"},
+		{"write off the allowlist", CommandWrite, writeCmd("Hidden", 1), ResultRefusedNotAllowed, "allowlist", "metric_not_writable"},
+		{"write to a reserved metric", CommandWrite, writeCmd("Node Control/Reboot", true), ResultRefusedNotAllowed, "protocol control metric", "metric_protocol_control"},
+		{"write to bdSeq", CommandWrite, writeCmd("bdSeq", 1), ResultRefusedNotAllowed, "protocol control metric", "metric_protocol_control"},
+		{"write to a metric the BIRTH did not declare", CommandWrite, writeCmd("Outputs/Missing", true), ResultRefusedMetric, "not declared", "metric_not_declared"},
+		{"write out of range", CommandWrite, writeCmd("Setpoint", 300), ResultRefusedPayload, "datatype 1", "value_not_accepted"},
+		{"write a string into an integer", CommandWrite, writeCmd("Setpoint", "high"), ResultRefusedPayload, "cannot take", "value_not_accepted"},
+		{"write a number into a string", CommandWrite, writeCmd("Mode", 3), ResultRefusedPayload, "cannot take", "value_not_accepted"},
+		{"write a datatype commands do not carry", CommandWrite, writeCmd("Blob", "x"), ResultRefusedDatatype, "do not carry", "datatype_unsupported"},
+		{"rebirth with parameters", CommandRebirth, `{"force":true}`, ResultRefusedPayload, "takes no parameters", "invalid_parameters"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newRig(t)
@@ -335,6 +340,7 @@ func TestValidationRefusesWithAReasonAndPublishesNothing(t *testing.T) {
 			require.Len(t, res, 1)
 			assert.Equal(t, cmddownlink.ReachUnsent, res[0].env.Reach)
 			assert.Contains(t, errorOf(res[0]), tc.reason)
+			assert.Equal(t, tc.code, reasonOf(res[0]), "the refusal's machine-readable reason")
 			assert.Equal(t, int32(1), spy.acks.Load())
 			assert.Zero(t, r.store.len(), "a refused command left a record")
 		})
@@ -385,18 +391,19 @@ func TestRebootNeedsAllFourGates(t *testing.T) {
 		name   string
 		break_ func(r *rig, h map[string]string) string // returns the device to command
 		reason string
+		code   string
 	}{
-		{"no impact header", func(_ *rig, h map[string]string) string { delete(h, cmddownlink.HeaderCommandImpact); return "node-3" }, "impact is unknown"},
+		{"no impact header", func(_ *rig, h map[string]string) string { delete(h, cmddownlink.HeaderCommandImpact); return "node-3" }, "impact is unknown", "reboot_impact"},
 		{"a NORMAL impact", func(_ *rig, h map[string]string) string {
 			h[cmddownlink.HeaderCommandImpact] = "NORMAL"
 			return "node-3"
-		}, "impact is NORMAL"},
-		{"allowReboot off", func(r *rig, _ map[string]string) string { r.src.cfg.AllowReboot = false; return "node-3" }, "allowReboot"},
+		}, "impact is NORMAL", "reboot_impact"},
+		{"allowReboot off", func(r *rig, _ map[string]string) string { r.src.cfg.AllowReboot = false; return "node-3" }, "allowReboot", "reboot_not_allowed"},
 		{"the NBIRTH did not declare Reboot", func(r *rig, _ map[string]string) string {
 			delete(r.src.metrics, nodeT.String()+"|"+nodeControlReboot)
 			return "node-3"
-		}, "did not declare"},
-		{"addressed to a device", func(_ *rig, _ map[string]string) string { return "pump-1" }, "edge node"},
+		}, "did not declare", "reboot_not_declared"},
+		{"addressed to a device", func(_ *rig, _ map[string]string) string { return "pump-1" }, "edge node", "reboot_not_a_node"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newRig(t)
@@ -411,6 +418,7 @@ func TestRebootNeedsAllFourGates(t *testing.T) {
 			res := r.responses.of("c")
 			require.Len(t, res, 1)
 			assert.Contains(t, errorOf(res[0]), tc.reason)
+			assert.Equal(t, tc.code, reasonOf(res[0]))
 		})
 	}
 
@@ -524,6 +532,7 @@ func TestABreakerThatOpensBeforeThePublishRefusesAndDropsTheRecord(t *testing.T)
 	require.Len(t, res, 1)
 	assert.Equal(t, cmddownlink.ReachUnsent, res[0].env.Reach)
 	assert.Equal(t, msgBreaker, errorOf(res[0]))
+	assert.Equal(t, "broker_refused", reasonOf(res[0]))
 	_, ok := r.store.get(AwaitingKey("acme", "late"))
 	assert.False(t, ok, "a refused command left its record")
 }
@@ -537,6 +546,7 @@ func TestAPublishThatFailsIsRefusedAsNotDelivered(t *testing.T) {
 	assert.Equal(t, cmddownlink.ReachUnsent, res[0].env.Reach, "a command that never reached the wire is NOT_DELIVERED")
 	assert.Equal(t, "claim-nonce", res[0].env.DispatchNonce)
 	assert.Equal(t, 1, r.result(ResultPublishFailed))
+	assert.Equal(t, "publish_failed", reasonOf(res[0]))
 	assert.Zero(t, r.store.len())
 	assert.Equal(t, int32(1), spy.acks.Load())
 }
@@ -546,16 +556,18 @@ func TestAMetricThatChangedBetweenValidationAndThePublishIsRefused(t *testing.T)
 	for name, tc := range map[string]struct {
 		err    error
 		result string
+		code   string
 	}{
-		"gone":          {host.ErrMetricUnknown, ResultRefusedMetric},
-		"retyped":       {host.ErrDatatypeChanged, ResultRefusedDatatype},
-		"value refused": {host.ErrValueRefused, ResultRefusedPayload},
+		"gone":          {host.ErrMetricUnknown, ResultRefusedMetric, "metric_not_declared"},
+		"retyped":       {host.ErrDatatypeChanged, ResultRefusedDatatype, "datatype_changed"},
+		"value refused": {host.ErrValueRefused, ResultRefusedPayload, "value_not_accepted"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := newRig(t)
 			r.src.publishErr = tc.err
 			r.live("acme", "pump-1", "c", CommandWrite, writeCmd("Setpoint", 5), nil)
 			assert.Equal(t, 1, r.result(tc.result))
+			assert.Equal(t, tc.code, reasonOf(r.responses.of("c")[0]))
 			assert.Empty(t, r.src.published())
 			assert.Zero(t, r.store.len())
 		})

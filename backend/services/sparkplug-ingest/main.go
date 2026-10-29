@@ -384,6 +384,10 @@ func buildMetrics() host.Metrics {
 			"Liveness probes that reached a verdict, by trigger: connect (the failover reconciliation run once per broker session) or periodic (one slot of the re-check that visits every node once per presence.probeSeconds on a steady session). "+
 				"A probe asks every asserted device that has gone quiet to rebirth and declares the ones that do not answer DISCONNECTED. A flat periodic series on a connected Host means the probe is not running.",
 			[]string{"trigger"})),
+		BirthRecoveryPending: Microservice.NewGauge("birth_recovery_pending",
+			"Sparkplug nodes whose births could not be registered (most often the source's deviceTypeToken names a device type that does not exist yet) and that are being asked to rebirth. A standing non-zero value is a node, or a whole source, that is not registering: create the device type."),
+		BirthRecoveryRebirths: Microservice.NewCounter("birth_recovery_rebirths_total",
+			"Rebirth commands sent to nodes that could not be registered, on a doubling interval up to a minute. A climbing series with a non-zero birth_recovery_pending is a registration that keeps failing."),
 		PresenceProbePass: Microservice.NewPeriodicTaskMetrics("presence_probe"),
 		PresenceProbeDisconnects: probePrecreated(Microservice.NewCounterVec("presence_probe_disconnects_total",
 			"Asserted devices a liveness probe declared DISCONNECTED for not answering a rebirth inside the probe window, by trigger (connect or periodic). Near zero in a healthy fleet; a standing periodic rate means death certificates are being lost.",

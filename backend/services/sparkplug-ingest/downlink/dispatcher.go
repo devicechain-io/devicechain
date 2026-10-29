@@ -620,6 +620,7 @@ func (j *job) settle(d *Dispatcher) {
 
 type refusal struct {
 	result string
+	reason Reason
 	text   string
 }
 
@@ -657,7 +658,7 @@ func (d *Dispatcher) live(ctx context.Context, w work) {
 	// row left SENT.
 	enabled, has := d.sourcesOf(w.tenant)
 	if !has {
-		d.refuseLive(j, ResultRefusedDisabled, msgDisabledTenant)
+		d.refuseLive(j, ResultRefusedDisabled, ReasonCommandsNotEnabled, msgDisabledTenant)
 		return
 	}
 	// 5. Locate. A token on an enabled source continues; one only on a disabled source is refused;
@@ -667,11 +668,11 @@ func (d *Dispatcher) live(ctx context.Context, w work) {
 	src, target, found := locate(enabled, j.device)
 	if !found {
 		if d.onDisabledSource(w.tenant, j.device) {
-			d.refuseLive(j, ResultRefusedDisabled, msgDisabledSource)
+			d.refuseLive(j, ResultRefusedDisabled, ReasonCommandsNotEnabled, msgDisabledSource)
 			return
 		}
 		if j.name == CommandReboot {
-			d.refuseLive(j, ResultRefusedRebootGate, msgRebootOffline)
+			d.refuseLive(j, ResultRefusedRebootGate, ReasonNodeOffline, msgRebootOffline)
 			return
 		}
 		d.parkLive(ctx, j, "not born on an enabled source")
@@ -681,19 +682,19 @@ func (d *Dispatcher) live(ctx context.Context, w work) {
 
 	// 6. Breaker.
 	if src.BreakerState() == host.BreakerOpen {
-		d.refuseLive(j, ResultRefusedBreaker, msgBreaker)
+		d.refuseLive(j, ResultRefusedBreaker, ReasonBrokerRefused, msgBreaker)
 		return
 	}
 	// 7. Expiry.
 	if d.expired(j) {
-		d.refuseLive(j, ResultRefusedExpired, "the command expired before it could be sent")
+		d.refuseLive(j, ResultRefusedExpired, ReasonExpired, "the command expired before it could be sent")
 		return
 	}
 	// 8. Validate.
 	p, ref, park := d.validate(j)
 	if park {
 		if j.name == CommandReboot {
-			d.refuseLive(j, ResultRefusedRebootGate, msgRebootOffline)
+			d.refuseLive(j, ResultRefusedRebootGate, ReasonNodeOffline, msgRebootOffline)
 			return
 		}
 		d.mu.Lock()
@@ -703,7 +704,7 @@ func (d *Dispatcher) live(ctx context.Context, w work) {
 		return
 	}
 	if ref != nil {
-		d.refuseLive(j, ref.result, ref.text)
+		d.refuseLive(j, ref.result, ref.reason, ref.text)
 		return
 	}
 	// 9. Rate, BEFORE any claim. A claimed command that waits is a stalled row, and a stalled
@@ -712,7 +713,7 @@ func (d *Dispatcher) live(ctx context.Context, w work) {
 	case waitAbandoned:
 		return
 	case waitExpired:
-		d.refuseLive(j, ResultRefusedExpired, "the command expired while it waited for its turn")
+		d.refuseLive(j, ResultRefusedExpired, ReasonExpired, "the command expired while it waited for its turn")
 		return
 	}
 	// 10. Confirm the claim. It returns the CURRENT nonce; a lost claim means the dispatch this
@@ -738,9 +739,9 @@ func (d *Dispatcher) live(ctx context.Context, w work) {
 
 // refuseLive answers a live command UNSENT and acks it, unless the answer could not be published
 // (nothing was sealed, so it is left to redeliver and be refused again).
-func (d *Dispatcher) refuseLive(j *job, result, text string) {
+func (d *Dispatcher) refuseLive(j *job, result string, reason Reason, text string) {
 	d.count(result)
-	if err := d.respond(j, false, cmddownlink.ReachUnsent, text); err != nil {
+	if err := d.respondRefused(j, reason, text); err != nil {
 		return
 	}
 	j.settle(d)
@@ -755,7 +756,7 @@ func (d *Dispatcher) parkLive(ctx context.Context, j *job, why string) {
 		// operator is told it was not delivered and can re-issue it.
 		log.Warn().Str("tenant", j.tenant).Str("command", j.token).Msg("Not parking a command whose delivery names no dispatch.")
 		d.count(ResultParkFailed)
-		_ = d.respond(j, false, cmddownlink.ReachUnsent, "the delivery names no dispatch, so the command cannot be parked or confirmed; re-issue it")
+		_ = d.respondRefused(j, ReasonNoDispatch, "the delivery names no dispatch, so the command cannot be parked or confirmed; re-issue it")
 		j.settle(d)
 		return
 	}
@@ -841,16 +842,16 @@ func (d *Dispatcher) drain(ctx context.Context, k deviceKey) {
 			// A reboot is never parked or carried over a birth: it is refused here, before any other
 			// gate, with its own reason.
 			if j.name == CommandReboot {
-				d.refuseClaimed(j, ResultRefusedRebootGate, msgRebootOffline)
+				d.refuseClaimed(j, ResultRefusedRebootGate, ReasonNodeOffline, msgRebootOffline)
 				continue
 			}
 			// 6-8 on the claimed row: the claim is what lets a refusal be answered.
 			if src.BreakerState() == host.BreakerOpen {
-				d.refuseClaimed(j, ResultRefusedBreaker, msgBreaker)
+				d.refuseClaimed(j, ResultRefusedBreaker, ReasonBrokerRefused, msgBreaker)
 				continue
 			}
 			if d.expired(j) {
-				d.refuseClaimed(j, ResultRefusedExpired, "the command expired before it could be sent")
+				d.refuseClaimed(j, ResultRefusedExpired, ReasonExpired, "the command expired before it could be sent")
 				continue
 			}
 			p, ref, park := d.validate(j)
@@ -859,7 +860,7 @@ func (d *Dispatcher) drain(ctx context.Context, k deviceKey) {
 				return // handed back: claiming it again now would only spin; the next birth wakes us
 			}
 			if ref != nil {
-				d.refuseClaimed(j, ref.result, ref.text)
+				d.refuseClaimed(j, ref.result, ref.reason, ref.text)
 				continue
 			}
 			d.send(ctx, j, p)
@@ -893,9 +894,9 @@ func (d *Dispatcher) retryDrain(ctx context.Context, k deviceKey) {
 }
 
 // refuseClaimed answers a claimed command UNSENT.
-func (d *Dispatcher) refuseClaimed(j *job, result, text string) {
+func (d *Dispatcher) refuseClaimed(j *job, result string, reason Reason, text string) {
 	d.count(result)
-	_ = d.respond(j, false, cmddownlink.ReachUnsent, text)
+	_ = d.respondRefused(j, reason, text)
 	j.settle(d)
 }
 
@@ -1019,6 +1020,21 @@ func (d *Dispatcher) respond(j *job, success bool, reach, text string) error {
 	return d.publishResponse(j.tenant, j.device, env)
 }
 
+// respondRefused answers a command UNSENT and carries the machine-readable reason in the stored
+// response, in the same {"reason": ...} document an unanswered command uses, so a client never has
+// to read the error text. The text stays in the error column.
+func (d *Dispatcher) respondRefused(j *job, reason Reason, text string) error {
+	env := cmddownlink.ResponseEnvelope{CommandToken: j.token, Success: false, Reach: cmddownlink.ReachUnsent, DispatchNonce: j.nonce}
+	if text != "" {
+		env.Error = &text
+	}
+	if reason != "" {
+		p := `{"reason":"` + string(reason) + `"}`
+		env.Payload = &p
+	}
+	return d.publishResponse(j.tenant, j.device, env)
+}
+
 func (d *Dispatcher) publishResponse(tenant, device string, env cmddownlink.ResponseEnvelope) error {
 	if err := cmddownlink.PublishResponse(d.responses, tenant, device, env, responseAttempts, responseBackoff); err != nil {
 		d.count(ResultResponseFailed)
@@ -1049,45 +1065,45 @@ func endOfJSON(dec *json.Decoder) bool {
 // bring.
 func (d *Dispatcher) validate(j *job) (plan, *refusal, bool) {
 	cfg := j.src.Commands()
-	refuse := func(result, format string, a ...any) (plan, *refusal, bool) {
-		return plan{}, &refusal{result: result, text: fmt.Sprintf(format, a...)}, false
+	refuse := func(result string, reason Reason, format string, a ...any) (plan, *refusal, bool) {
+		return plan{}, &refusal{result: result, reason: reason, text: fmt.Sprintf(format, a...)}, false
 	}
 	switch j.name {
 	case CommandRebirth:
 		if err := noParams(j.payload); err != nil {
-			return refuse(ResultRefusedPayload, "%s takes no parameters: %v", CommandRebirth, err)
+			return refuse(ResultRefusedPayload, ReasonInvalidParameters, "%s takes no parameters: %v", CommandRebirth, err)
 		}
 		return plan{kind: KindRebirth, target: host.CommandTarget{Group: j.target.Group, Node: j.target.Node}}, nil, false
 
 	case CommandReboot:
 		if err := noParams(j.payload); err != nil {
-			return refuse(ResultRefusedPayload, "%s takes no parameters: %v", CommandReboot, err)
+			return refuse(ResultRefusedPayload, ReasonInvalidParameters, "%s takes no parameters: %v", CommandReboot, err)
 		}
 		// All four must hold, and the order is the order an operator can act on them.
 		if j.impact != "DISRUPTIVE" && j.impact != "DESTRUCTIVE" {
-			return refuse(ResultRefusedRebootGate, "a reboot needs the command to be declared DISRUPTIVE or DESTRUCTIVE on the device profile; its impact is %s", orUnknown(j.impact))
+			return refuse(ResultRefusedRebootGate, ReasonRebootImpact, "a reboot needs the command to be declared DISRUPTIVE or DESTRUCTIVE on the device profile; its impact is %s", orUnknown(j.impact))
 		}
 		if !cfg.AllowReboot {
-			return refuse(ResultRefusedRebootGate, "reboot is not allowed on this Sparkplug source (commands.allowReboot is off)")
+			return refuse(ResultRefusedRebootGate, ReasonRebootNotAllowed, "reboot is not allowed on this Sparkplug source (commands.allowReboot is off)")
 		}
 		if j.target.IsDevice() {
-			return refuse(ResultRefusedRebootGate, "a reboot is addressed to an edge node, and %s is a device under one", j.target)
+			return refuse(ResultRefusedRebootGate, ReasonRebootNotANode, "a reboot is addressed to an edge node, and %s is a device under one", j.target)
 		}
 		ref, err := j.src.LookupMetric(j.target, nodeControlReboot)
 		switch {
 		case errors.Is(err, host.ErrNotBorn):
 			return plan{}, nil, true
 		case err != nil:
-			return refuse(ResultRefusedRebootGate, "the node %s did not declare %s in its NBIRTH", j.target, nodeControlReboot)
+			return refuse(ResultRefusedRebootGate, ReasonRebootNotDeclared, "the node %s did not declare %s in its NBIRTH", j.target, nodeControlReboot)
 		}
 		if ref.Datatype != 11 { // Boolean
-			return refuse(ResultRefusedRebootGate, "%s is declared with datatype %d, not Boolean", nodeControlReboot, ref.Datatype)
+			return refuse(ResultRefusedRebootGate, ReasonRebootNotBoolean, "%s is declared with datatype %d, not Boolean", nodeControlReboot, ref.Datatype)
 		}
 		if d.unseeded.Load() {
-			return refuse(ResultRefusedRebootGate, "the record of recent reboots could not be read yet, so the one-reboot-per-window rule cannot be applied; re-issue the reboot shortly")
+			return refuse(ResultRefusedRebootGate, ReasonRebootUnverified, "the record of recent reboots could not be read yet, so the one-reboot-per-window rule cannot be applied; re-issue the reboot shortly")
 		}
 		if last, ok := d.lastReboot(j, cfg); ok {
-			return refuse(ResultRefusedRebootGate, "node %s was already rebooted %s ago; at most one reboot per %s", j.target,
+			return refuse(ResultRefusedRebootGate, ReasonRebootRateLimited, "node %s was already rebooted %s ago; at most one reboot per %s", j.target,
 				d.now().Sub(last).Round(time.Second), cfg.RebootWindow())
 		}
 		return plan{kind: KindReboot, target: j.target, ref: ref, metric: nodeControlReboot, value: true}, nil, false
@@ -1104,37 +1120,37 @@ func (d *Dispatcher) validate(j *job) (plan, *refusal, bool) {
 			if err == nil {
 				err = errors.New("both \"metric\" (a name) and \"value\" are required")
 			}
-			return refuse(ResultRefusedPayload, "%s needs {\"metric\": name, \"value\": v}: %v", CommandWrite, err)
+			return refuse(ResultRefusedPayload, ReasonInvalidParameters, "%s needs {\"metric\": name, \"value\": v}: %v", CommandWrite, err)
 		}
 		vdec := json.NewDecoder(bytes.NewReader(p.Value))
 		vdec.UseNumber()
 		var value any
 		if err := vdec.Decode(&value); err != nil || value == nil || !endOfJSON(vdec) {
-			return refuse(ResultRefusedPayload, "the value for %q must be a boolean, a number or a string, got %s", *p.Metric, strings.TrimSpace(string(p.Value)))
+			return refuse(ResultRefusedPayload, ReasonInvalidParameters, "the value for %q must be a boolean, a number or a string, got %s", *p.Metric, strings.TrimSpace(string(p.Value)))
 		}
 		name := *p.Metric
 		if config.ReservedCommandMetric(name) {
-			return refuse(ResultRefusedNotAllowed, "metric %q is a protocol control metric and cannot be written; Rebirth and Reboot have commands of their own", name)
+			return refuse(ResultRefusedNotAllowed, ReasonMetricProtocolControl, "metric %q is a protocol control metric and cannot be written; Rebirth and Reboot have commands of their own", name)
 		}
 		if !cfg.WritableMetric(name) {
-			return refuse(ResultRefusedNotAllowed, "metric %q is not on this source's writable-metric allowlist (commands.writableMetrics)", name)
+			return refuse(ResultRefusedNotAllowed, ReasonMetricNotWritable, "metric %q is not on this source's writable-metric allowlist (commands.writableMetrics)", name)
 		}
 		ref, err := j.src.LookupMetric(j.target, name)
 		switch {
 		case errors.Is(err, host.ErrNotBorn):
 			return plan{}, nil, true
 		case err != nil:
-			return refuse(ResultRefusedMetric, "metric %q is not declared in the BIRTH of %s", name, j.target)
+			return refuse(ResultRefusedMetric, ReasonMetricNotDeclared, "metric %q is not declared in the BIRTH of %s", name, j.target)
 		}
 		if _, err := host.EncodeMetricValue(ref.Datatype, value); err != nil {
 			if errors.Is(err, host.ErrUnsupportedDatatype) {
-				return refuse(ResultRefusedDatatype, "metric %q has datatype %d in the BIRTH of %s, which commands do not carry in this release", name, ref.Datatype, j.target)
+				return refuse(ResultRefusedDatatype, ReasonDatatypeUnsupported, "metric %q has datatype %d in the BIRTH of %s, which commands do not carry in this release", name, ref.Datatype, j.target)
 			}
-			return refuse(ResultRefusedPayload, "metric %q is declared datatype %d in the BIRTH of %s and cannot take %s: %v", name, ref.Datatype, j.target, strings.TrimSpace(string(p.Value)), err)
+			return refuse(ResultRefusedPayload, ReasonValueNotAccepted, "metric %q is declared datatype %d in the BIRTH of %s and cannot take %s: %v", name, ref.Datatype, j.target, strings.TrimSpace(string(p.Value)), err)
 		}
 		return plan{kind: KindWrite, target: j.target, ref: ref, metric: name, value: value, requested: append(json.RawMessage(nil), p.Value...)}, nil, false
 	}
-	return refuse(ResultRefusedPayload, "unknown Sparkplug command %q (this service executes %s, %s and %s)", j.name, CommandWrite, CommandRebirth, CommandReboot)
+	return refuse(ResultRefusedPayload, ReasonUnknownCommand, "unknown Sparkplug command %q (this service executes %s, %s and %s)", j.name, CommandWrite, CommandRebirth, CommandReboot)
 }
 
 func orUnknown(s string) string {
@@ -1242,7 +1258,7 @@ func (d *Dispatcher) send(ctx context.Context, j *job, p plan) {
 		}
 		undo()
 		if attempt >= 2 {
-			d.refuseClaimed(j, ResultRefusedMetric, fmt.Sprintf("the node %s kept re-birthing while the command was being recorded", p.target))
+			d.refuseClaimed(j, ResultRefusedMetric, ReasonNodeRebirthing, fmt.Sprintf("the node %s kept re-birthing while the command was being recorded", p.target))
 			return
 		}
 	}
@@ -1318,15 +1334,15 @@ func (d *Dispatcher) failedSend(ctx context.Context, j *job, p plan, undo func()
 		// there): back to PARKED, to try again at the next birth. A reboot is never parked.
 		d.handBack(j)
 	case errors.Is(err, host.ErrBreakerOpen):
-		d.refuseClaimed(j, ResultRefusedBreaker, msgBreaker)
+		d.refuseClaimed(j, ResultRefusedBreaker, ReasonBrokerRefused, msgBreaker)
 	case errors.Is(err, host.ErrMetricUnknown):
-		d.refuseClaimed(j, ResultRefusedMetric, fmt.Sprintf("metric %q is no longer declared in the BIRTH of %s (the node re-birthed)", p.metric, p.target))
+		d.refuseClaimed(j, ResultRefusedMetric, ReasonMetricNotDeclared, fmt.Sprintf("metric %q is no longer declared in the BIRTH of %s (the node re-birthed)", p.metric, p.target))
 	case errors.Is(err, host.ErrDatatypeChanged):
-		d.refuseClaimed(j, ResultRefusedDatatype, err.Error())
+		d.refuseClaimed(j, ResultRefusedDatatype, ReasonDatatypeChanged, err.Error())
 	case errors.Is(err, host.ErrUnsupportedDatatype):
-		d.refuseClaimed(j, ResultRefusedDatatype, err.Error())
+		d.refuseClaimed(j, ResultRefusedDatatype, ReasonDatatypeUnsupported, err.Error())
 	case errors.Is(err, host.ErrValueRefused):
-		d.refuseClaimed(j, ResultRefusedPayload, err.Error())
+		d.refuseClaimed(j, ResultRefusedPayload, ReasonValueNotAccepted, err.Error())
 	default:
 		d.count(ResultPublishFailed)
 		d.refuseClaimedKeepCount(j, "the command could not be sent: "+err.Error())
@@ -1339,7 +1355,7 @@ func (d *Dispatcher) failedSend(ctx context.Context, j *job, p plan, undo func()
 func (d *Dispatcher) handBack(j *job) {
 	if j.name == CommandReboot {
 		j.parkedBack = true // the row is settled; a drain must still stop and look again
-		d.refuseClaimed(j, ResultRefusedRebootGate, msgRebootOffline)
+		d.refuseClaimed(j, ResultRefusedRebootGate, ReasonNodeOffline, msgRebootOffline)
 		return
 	}
 	d.parkClaimed(j)
@@ -1348,7 +1364,7 @@ func (d *Dispatcher) handBack(j *job) {
 
 // refuseClaimedKeepCount answers UNSENT without counting a refusal result (the caller counted).
 func (d *Dispatcher) refuseClaimedKeepCount(j *job, text string) {
-	_ = d.respond(j, false, cmddownlink.ReachUnsent, text)
+	_ = d.respondRefused(j, ReasonPublishFailed, text)
 	j.settle(d)
 }
 

@@ -176,6 +176,12 @@ spec:
         checksum/instance-secret: {{ include "devicechain.instanceConfigChecksum" $root | quote }}
         checksum/microservice-config: {{ include "devicechain.microserviceConfig" $root | sha256sum }}
         checksum/extra-secrets: {{ $root.Values.extraSecrets | default list | toJson | sha256sum }}
+        {{- with $areaCfg.credentialsChecksum }}
+        {{/* A Secret dcctl writes outside the release (the Sparkplug broker passwords) keeps its
+        name when its content changes, and a secretKeyRef is read once at container start. The
+        digest is dcctl's, salted per instance; the Secret's value is never a chart value. */}}
+        checksum/area-credentials: {{ . | quote }}
+        {{- end }}
         {{- $blobS3Checksum := (($root.Values.blobStorage | default dict).s3 | default dict).credentialsChecksum | default "" }}
         {{- if and $blobS3Checksum (has $area $blobMountAreas) }}
         {{/* The s3 credentials are a secretKeyRef, read once at container start, and the

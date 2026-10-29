@@ -5,6 +5,8 @@ package downlink
 
 import (
 	"encoding/json"
+	"os"
+	"regexp"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -59,4 +61,39 @@ func TestEveryUnansweredEndingCarriesAReason(t *testing.T) {
 	un := (&entry{a: Awaiting{Kind: KindWrite}}).confirmedWith("UNCHANGED", nil, nil, nil, nil, ResultConfirmedUnchanged)
 	assert.Equal(t, ReasonUnchanged, un.reason)
 	assert.Contains(t, un.payload, `"reason":"unchanged"`)
+}
+
+// The refusal reasons are an interface in the same way: the console keys a sentence on each.
+func TestTheRefusalReasonVocabularyIsPinned(t *testing.T) {
+	assert.Equal(t, []Reason{
+		"commands_not_enabled", "broker_refused", "expired", "invalid_parameters", "unknown_command",
+		"metric_protocol_control", "metric_not_writable", "metric_not_declared", "datatype_unsupported",
+		"value_not_accepted", "datatype_changed", "node_rebirthing", "node_offline", "reboot_impact",
+		"reboot_not_allowed", "reboot_not_a_node", "reboot_not_declared", "reboot_not_boolean",
+		"reboot_unverified", "reboot_rate_limited", "no_dispatch", "publish_failed",
+	}, RefusalReasons)
+	seen := map[Reason]bool{}
+	for _, r := range append(append([]Reason{}, Reasons...), RefusalReasons...) {
+		require.False(t, seen[r], "duplicate reason %q across the resolved and refusal sets", r)
+		seen[r] = true
+	}
+}
+
+// The console keys a sentence on each refusal code, so the two lists are one interface held in two
+// languages. This reads the console's list from source and requires it to equal RefusalReasons, in
+// order: a code added on one side and not the other fails here and not in front of an operator.
+//
+// 🔴 THE PARSED FILE LIVES OUTSIDE THIS MODULE AND GO'S TEST CACHE DOES NOT TRACK IT; CI runs every
+// module with -count=1.
+func TestTheConsoleKnowsEveryRefusalReason(t *testing.T) {
+	const path = "../../../../frontend/apps/console/src/routes/devices/sparkplugCommands.ts"
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	block := regexp.MustCompile(`(?s)SPARKPLUG_REFUSAL_REASONS = \[(.*?)\] as const`).FindSubmatch(raw)
+	require.NotNil(t, block, "the console's SPARKPLUG_REFUSAL_REASONS was not found")
+	var console []Reason
+	for _, m := range regexp.MustCompile(`'([a-z_]+)'`).FindAllSubmatch(block[1], -1) {
+		console = append(console, Reason(m[1]))
+	}
+	assert.Equal(t, RefusalReasons, console)
 }

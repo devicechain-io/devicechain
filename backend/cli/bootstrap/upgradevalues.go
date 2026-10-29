@@ -75,9 +75,17 @@ func carryForwardFromRelease(st *State, previous map[string]interface{}) {
 // lwm2mProvisioning emits, which is the fragile direction. The values are carried
 // forward byte for byte, and the next bootstrap is what changes them — with one
 // exception, an area's profiler block, which is dropped (see withoutProfiler).
+//
+// The Sparkplug sources (--sparkplug-source) are carried the same way and for the same reason,
+// but by their two leaves and not the area's whole block: an operator's tuning overlay may set
+// that area's replicas or resources, which makes the block exist in the fresh values, and a
+// carry that skipped an area it found already present would drop the sources on exactly the
+// instance that is tuned.
 var carriedValuePaths = [][]string{
 	{"extraSecrets"},
 	{"functionalAreas", "lwm2m-ingest"},
+	{"functionalAreas", "sparkplug-ingest", "config", "sources"},
+	{"functionalAreas", "sparkplug-ingest", "extraEnv"},
 }
 
 // carryReleaseValues copies those blocks into the freshly computed values, leaving

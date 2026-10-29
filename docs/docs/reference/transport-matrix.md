@@ -255,7 +255,7 @@ For brownfield fleets already speaking Sparkplug to their own broker.
   Sparkplug device is published as an `NCMD` or `DCMD` on the Host Application's session, and is
   confirmed when the node later *reports* the requested value. Sparkplug has no command acknowledgement,
   so a command the node does not report ends as `TIMEOUT`, not as a failure. It is off by default and
-  enabled through Helm values; see [Sparkplug commands](../concepts/sparkplug.md#commands). With it
+  enabled in the source's settings (`dcctl bootstrap` and `dcctl upgrade` take them with `--sparkplug-source`); see [Sparkplug commands](../concepts/sparkplug.md#commands). With it
   off, a command to a Sparkplug device ends as `FAILED`, undeliverable, with two qualifications:
   - **The verdict is normally prompt, but not synchronous with the enqueue.** Enqueueing a command
     triggers an immediate dispatch attempt for that device. When it is the device's only queued

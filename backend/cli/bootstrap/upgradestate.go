@@ -6,8 +6,10 @@ package bootstrap
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
+	"github.com/devicechain-io/dc-k8s/functionalarea"
 	"github.com/devicechain-io/dc-microservice/config"
 	"k8s.io/client-go/kubernetes"
 )
@@ -317,6 +319,20 @@ func applyUpgradeDeclaration(st *State, inst *dcv1beta1.Instance, opts UpgradeOp
 			"cannot deploy: %w", opts.Instance, err)
 	}
 	st.EnabledAreas = areas
+
+	// 🔴 SOURCES FOR AN AREA THAT IS NOT DEPLOYED WOULD BE ACCEPTED AND NEVER USED. A bootstrap
+	// implies the area; an upgrade does not change an instance's shape, so it says which verb does.
+	if err := CheckSparkplugFlags(opts.SparkplugSources, opts.WithdrawSparkplugSources); err != nil {
+		return err
+	}
+	st.SparkplugSourcesGiven = len(opts.SparkplugSources) > 0 || opts.WithdrawSparkplugSources
+	if len(opts.SparkplugSources) > 0 {
+		if !slices.Contains(st.EnabledAreas, string(functionalarea.SparkplugIngest)) {
+			return fmt.Errorf("--sparkplug-source needs the sparkplug-ingest area, which instance %q does not run; "+
+				"turn it on first with 'dcctl enable-area %s %s sparkplug-ingest'", opts.Instance, st.Provider, opts.Instance)
+		}
+		st.SparkplugSources = opts.SparkplugSources
+	}
 
 	// 🔴 THE FAIL-CLOSED CHOICE: THE DECLARATION'S, UNLESS THIS RUN WAS GIVEN ONE. applyDeclaration
 	// has already read the recorded choice into the State, so a flagless upgrade renders the

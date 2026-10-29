@@ -677,3 +677,15 @@ func errorOf(res response) string {
 }
 
 var errBoom = errors.New("boom")
+
+// reasonOf reads the machine-readable reason off a published response's payload.
+func reasonOf(res response) string {
+	if res.env.Payload == nil {
+		return ""
+	}
+	var doc struct {
+		Reason string `json:"reason"`
+	}
+	_ = json.Unmarshal([]byte(*res.env.Payload), &doc)
+	return doc.Reason
+}
