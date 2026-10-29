@@ -220,7 +220,7 @@ run_mode() {
 			rec_a="$(latest_run "$ev/recordings")"
 			"$PY" -I "$CHECK" common --runner "$RUNNER" --out "$ev" --since "$since_a" --recording "$rec_a" --namespace "$NS" || true
 		fi
-		"$PY" -I "$CHECK" segment-a --runner "$RUNNER" --out "$ev" --mode "$mode" --since "$since_a" || true
+		"$PY" -I "$CHECK" segment-a --runner "$RUNNER" --out "$ev" --mode "${mode/hot/control}" --since "$since_a" || true
 		end_player "$q"
 		rec_a="$(latest_run "$ev/recordings")"
 		"$PY" -I "$CHECK" annotate --runner "$RUNNER" --recording "$rec_a" --namespace "$NS" || true
