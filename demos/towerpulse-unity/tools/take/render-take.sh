@@ -90,7 +90,7 @@ render_run() { # render_run <A|B> <recording dir>
 		done
 		cp "$frames/$id/$(printf 'frame_%06d.jpg' "$n")" "$OUT/samples/$id/"
 		encode_shot "$frames/$id" "$OUT/shots/$id.mp4"
-		rm -rf "$frames/$id"
+		rm -rf "${frames:?}/${id:?}"
 	done < <(plan_shots "$run")
 }
 
@@ -100,7 +100,7 @@ cmd_render() {
 	need ffmpeg
 	render_run A "$RUN_A"
 	render_run B "$RUN_B"
-	log "done: $(ls "$OUT/shots" | wc -l) shot clips in $OUT/shots"
+	log "done: $(find "$OUT/shots" -name "*.mp4" | wc -l) shot clips in $OUT/shots"
 }
 
 cmd_cut() {
@@ -162,7 +162,7 @@ cmd_loop() {
 
 cmd_sheet() {
 	need ffmpeg
-	local rows=() id
+	local id
 	# a row per shot: its sampled frames at the start, middle and end, scaled down, tiled into one image
 	local list="$OUT/sheet.txt"
 	: >"$list"
