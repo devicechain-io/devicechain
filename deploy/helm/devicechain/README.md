@@ -594,9 +594,9 @@ generated from the schema; do not edit it by hand.
 | --- | --- | --- | --- |
 | `profile` | string | `""` | A named profile, or empty to use enabledFunctionalAreas (or fall back to the default profile). 'default' is the standard system; 'full' ships every area. |
 | `enabledFunctionalAreas` | array | `[]` | Explicit set of functional areas; mutually exclusive with profile. |
-| `extraSecrets` | array | `[]` | Extra Opaque Secrets to render into the instance namespace (templates/extra-secrets.yaml), projected into a functional area via its extraEnv secretKeyRef. |
+| `extraSecrets` | array | `[]` | Extra Opaque Secrets an operator wants rendered into the instance namespace (templates/extra-secrets.yaml), projected into a functional area via its extraEnv secretKeyRef. Values are held by the Helm release, so prefer a Secret managed outside the chart for anything sensitive. dcctl does not use this. |
 | `extraSecrets[].name` | string | - | Secret name, rendered in the instance namespace. |
-| `extraSecrets[].stringData` | object | - | Verbatim key→value entries (e.g. a base64 PSK string a service decodes at load). |
+| `extraSecrets[].stringData` | object | - | Verbatim key→value entries. |
 | `instance` | object | - | Identity and configuration of this DeviceChain instance. |
 | `instance.id` | string | `"devicechain"` | Instance id, 1 to 50 characters, a lowercase DNS-1123 label. It names the Helm release (dc-&lt;id&gt;), the instance's database and login on the shared relational store, the config objects (dci-&lt;id&gt;-config, dct-&lt;id&gt;-config), the blob claim (dci-&lt;id&gt;-blob) and the ServiceAccount (dc-&lt;id&gt;), and it is the first segment of every messaging subject, the device-plane MQTT topic and the HTTP ingest route. The instance's namespace is not the id: it is dci-&lt;id&gt;, so instance foo is deployed into namespace dci-foo, which keeps instance namespaces disjoint from the cluster's own (monitoring, cert-manager and so on). The 50-character cap comes from Helm's 53-character release-name limit applied to dc-&lt;id&gt;. |
 | `instance.createNamespace` | boolean | `true` | Whether the chart renders the instance's Namespace object, i.e. dci-&lt;instance.id&gt;. Disable when that namespace is created and managed elsewhere; either way every object this chart renders is written into it. |
@@ -727,7 +727,7 @@ generated from the schema; do not edit it by hand.
 | `functionalAreas.<area>.extraPorts[].name` | string | - | Port name; at most 15 characters, per Kubernetes. |
 | `functionalAreas.<area>.extraPorts[].port` | integer | - | Port number, 1 to 65535. |
 | `functionalAreas.<area>.extraPorts[].protocol` | string | - | Port protocol; defaults to TCP. lwm2m-ingest sets UDP for its CoAPS port. |
-| `functionalAreas.<area>.credentialsChecksum` | string | - | A stamp, salted per instance and derived from the version of the credentials Secret dcctl writes for this area outside the release (sparkplug-ingest's broker passwords). It is set on the area's pod template so a rotated credential rolls the pods; the credential, or anything computed from it, is never a value. Set by dcctl. |
+| `functionalAreas.<area>.credentialsChecksum` | string | - | A stamp, salted per instance and derived from the version of the credentials Secret dcctl writes for this area outside the release (sparkplug-ingest's broker passwords, lwm2m-ingest's pre-shared keys). It is set on the area's pod template so a rotated credential rolls the pods; the credential, or anything computed from it, is never a value. Set by dcctl. |
 | `functionalAreas.<area>.extraEnv` | array | - | Extra container environment variables for this area, passed through verbatim as core-v1 EnvVar entries. Used to project a Secret into an env var — e.g. sparkplug-ingest reads each per-tenant broker password from the env var its source's broker.passwordEnv names, so an operator sets an entry here with valueFrom.secretKeyRef. |
 | `functionalAreas.<area>.extraEnv[].name` | string | - | Environment variable name. |
 | `functionalAreas.<area>.extraEnv[].value` | string | - | Literal value. Use valueFrom instead to project a Secret. |

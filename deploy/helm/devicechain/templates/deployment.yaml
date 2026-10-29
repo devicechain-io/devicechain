@@ -169,17 +169,24 @@ spec:
     metadata:
       annotations:
         {{/* E8: roll pods deterministically when config changes. The extra-secrets
-        hash covers a value-only rotation of a projected Secret (e.g. a LwM2M device
-        PSK): that changes neither the instance config nor the per-area config, so
-        without it an in-place rotation would leave the running pod on its old key
-        (secretKeyRef env resolves at container start). A hash, never the value. */}}
+        stamp covers the SHAPE of operator-supplied extraSecrets (their names and key
+        names), never their values: a hash of key material in a pod annotation is
+        readable by anyone who can read the Deployment. A value-only rotation of such a
+        Secret therefore does not roll pods; restart them, or manage the Secret outside
+        the chart. dcctl's own credentials (LwM2M pre-shared keys, Sparkplug broker
+        passwords) are not extraSecrets: see credentialsChecksum below. */}}
         checksum/instance-secret: {{ include "devicechain.instanceConfigChecksum" $root | quote }}
         checksum/microservice-config: {{ include "devicechain.microserviceConfig" $root | sha256sum }}
-        checksum/extra-secrets: {{ $root.Values.extraSecrets | default list | toJson | sha256sum }}
+        {{- $extraShape := list }}
+        {{- range $s := $root.Values.extraSecrets | default list }}
+        {{- $extraShape = append $extraShape (dict "name" $s.name "keys" (keys $s.stringData | sortAlpha)) }}
+        {{- end }}
+        checksum/extra-secrets: {{ $extraShape | toJson | sha256sum }}
         {{- with $areaCfg.credentialsChecksum }}
-        {{/* A Secret dcctl writes outside the release (the Sparkplug broker passwords) keeps its
-        name when its content changes, and a secretKeyRef is read once at container start. The
-        digest is dcctl's, salted per instance; the Secret's value is never a chart value. */}}
+        {{/* A Secret dcctl writes outside the release (the Sparkplug broker passwords, the LwM2M
+        pre-shared keys) keeps its name when its content changes, and a secretKeyRef is read once
+        at container start. The stamp is dcctl's, derived from the Secret's version and salted per
+        instance; the Secret's value is never a chart value, nor is anything computed from it. */}}
         checksum/area-credentials: {{ . | quote }}
         {{- end }}
         {{- $blobS3Checksum := (($root.Values.blobStorage | default dict).s3 | default dict).credentialsChecksum | default "" }}

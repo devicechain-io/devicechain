@@ -27,18 +27,18 @@ profile: ""
 # e.g. [user-management, device-management, event-sources]
 enabledFunctionalAreas: []
 
-# Extra Opaque Secrets rendered into the instance namespace (see
+# Extra Opaque Secrets an OPERATOR wants rendered into the instance namespace (see
 # templates/extra-secrets.yaml). Each entry becomes one Secret; project it into a
-# functional area's env with that area's `extraEnv` secretKeyRef. Used for
-# bootstrap-time provisioning of material the chart owns the namespace for — e.g. a
-# LwM2M device PSK (`dcctl bootstrap --lwm2m-identities`). Values live in the Helm
-# release (visible to `helm get values`), same trust class as the instance-config
-# Secret; prefer an externally-managed Secret for production. stringData holds the
-# value verbatim (for a PSK, the base64 PSK STRING the service decodes at load).
+# functional area's env with that area's `extraEnv` secretKeyRef. dcctl does not use
+# this: its credentials (LwM2M pre-shared keys, Sparkplug broker passwords) are Secrets
+# it writes itself, outside the release. Whatever is set here lives in the Helm release
+# (visible to `helm get values`, and in every revision the release keeps), so prefer a
+# Secret you manage outside the chart for anything you would not print. A value-only
+# change does not roll pods (the pod stamp covers names and key names, not values).
 #   extraSecrets:
-#     - name: dci-devicechain-lwm2m-psk
+#     - name: my-extra-secret
 #       stringData:
-#         DC_LWM2M_PSK_1: <base64-encoded pre-shared key>
+#         SOME_KEY: <value>
 extraSecrets: []
 
 instance:

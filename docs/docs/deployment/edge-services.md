@@ -450,6 +450,40 @@ correct for always-connected devices. For a **queue-mode** fleet, set it comfort
 expected wake interval. Too low, and a sleeper's session keys are evicted out from under it, forcing
 the full re-handshake that DTLS Connection ID exists to avoid.
 
+### Giving `dcctl` LwM2M identities {#lwm2m-identities}
+
+A DTLS-PSK credential is a pair: the identity a device presents and the pre-shared key that proves it. `dcctl` takes the pairs from a JSON file, each bound to a tenant and an external id:
+
+```json
+[
+  {
+    "identity": "opaque-handle-1",
+    "psk": "<base64 key, at least 16 bytes>",
+    "tenant": "acme",
+    "externalId": "plant-a/sensor-1",
+    "deviceTypeToken": "sensor",
+    "autoRegister": true
+  }
+]
+```
+
+```bash
+dcctl bootstrap local acme --lwm2m-identities identities.json
+dcctl upgrade   local acme --lwm2m-identities identities.json
+```
+
+A bootstrap with the file also enables `lwm2m-ingest`; an upgrade needs the area already enabled. The file is checked before anything touches the cluster (a short key, a missing tenant or external id, an `autoRegister` without a device type, a repeated identity).
+
+**Where the keys live.** They are never a Helm value, so they are not in the release record that `helm get values` prints, and a rotated key does not linger in an old revision. `dcctl` writes the Secret `dci-<instance>-lwm2m-identities` itself, before the release and outside its manifest, and the pod projects each key as an environment variable that the identity's `pskEnv` names. The release carries only the Secret's name and a stamp, derived from the Secret's version, that rolls the pod when a key changes.
+
+The identities are **kept by every later `dcctl upgrade`**, which reads nothing secret out of the release. A run given the file again replaces them: it rewrites the Secret in place (a rotation) and rolls the pod. Removing them is explicit: `dcctl upgrade ... --withdraw-lwm2m-identities` removes the identities and the Secret. A `dcctl bootstrap` re-run over an instance that has identities, given none, is refused unless it says `--withdraw-lwm2m-identities`, because a bootstrap composes the instance from its flags and would otherwise delete every device's key. A Secret of that name that `dcctl` did not write is never touched.
+
+:::warning Instances provisioned before the keys left the release
+An instance built by an earlier `dcctl` holds its keys in the Helm release values and in a Secret the chart rendered, `dci-<instance>-lwm2m-psk`. Its first `dcctl upgrade` with this version moves them: it copies the keys into the new Secret **before** the release changes, then upgrades, and Helm removes the old Secret because it is no longer in the manifest. The new pods start on the new Secret, so no device loses its key during the move.
+
+Helm keeps up to ten earlier revisions of the release, and those revisions still hold the old values; `dcctl` does not rewrite Helm's history. If it matters that those keys are retired, rotate them after the upgrade by running `dcctl upgrade ... --lwm2m-identities` with a file of new keys (and reprovision the devices), and restrict who can read Secrets in the `default` namespace until the old revisions have aged out.
+:::
+
 ### Exposing the LwM2M port {#exposing-the-lwm2m-port}
 
 :::danger Nothing exposes the LwM2M port outside the cluster

@@ -61,6 +61,13 @@ type Options struct {
 	// the flag was not given. ResetValues is `dcctl upgrade --reset-values`.
 	ValuesOverlay map[string]interface{}
 	ResetValues   bool
+	// Lwm2mIdentities is the parsed, validated --lwm2m-identities file (ParseLwm2mIdentities); nil
+	// when the flag was not given. An upgrade that is given none keeps the identities the release
+	// already holds; a bootstrap that is given none over an instance that has some is refused.
+	Lwm2mIdentities []Lwm2mIdentity
+	// WithdrawLwm2mIdentities is --withdraw-lwm2m-identities: remove the instance's LwM2M identities
+	// and the Secret holding their keys. Not combinable with Lwm2mIdentities.
+	WithdrawLwm2mIdentities bool
 	// SparkplugSources is the parsed, validated --sparkplug-source file (ParseSparkplugSources);
 	// nil when the flag was not given. An upgrade that is given none keeps the sources the
 	// release already holds (carriedValuePaths); a bootstrap that is given none withdraws them.

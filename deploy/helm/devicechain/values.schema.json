@@ -61,12 +61,12 @@
             "additionalProperties": {
               "type": "string"
             },
-            "description": "Verbatim key→value entries (e.g. a base64 PSK string a service decodes at load)."
+            "description": "Verbatim key→value entries."
           }
         },
         "additionalProperties": false
       },
-      "description": "Extra Opaque Secrets to render into the instance namespace (templates/extra-secrets.yaml), projected into a functional area via its extraEnv secretKeyRef."
+      "description": "Extra Opaque Secrets an operator wants rendered into the instance namespace (templates/extra-secrets.yaml), projected into a functional area via its extraEnv secretKeyRef. Values are held by the Helm release, so prefer a Secret managed outside the chart for anything sensitive. dcctl does not use this."
     },
     "instance": {
       "type": "object",
@@ -789,7 +789,7 @@
           },
           "credentialsChecksum": {
             "type": "string",
-            "description": "A stamp, salted per instance and derived from the version of the credentials Secret dcctl writes for this area outside the release (sparkplug-ingest's broker passwords). It is set on the area's pod template so a rotated credential rolls the pods; the credential, or anything computed from it, is never a value. Set by dcctl."
+            "description": "A stamp, salted per instance and derived from the version of the credentials Secret dcctl writes for this area outside the release (sparkplug-ingest's broker passwords, lwm2m-ingest's pre-shared keys). It is set on the area's pod template so a rotated credential rolls the pods; the credential, or anything computed from it, is never a value. Set by dcctl."
           },
           "extraEnv": {
             "type": "array",

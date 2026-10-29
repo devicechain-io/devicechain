@@ -824,7 +824,7 @@ dcctl enable-area local my-instance outbound-connectors
 - 它不改变版本。当你的 `dcctl` 与实例属于不同发布版本时会拒绝执行；请先[升级](./releases-and-upgrades.md)实例。
 - 列出实例已在运行的领域不会改变任何内容。如果实例上一次运行没有完成，命令会重新应用实例，从而完成中途停止的 `enable-area`。
 - 该领域在应用任何内容之前就已记录。如果命令中途停止，该领域仍保持记录：再次运行 `dcctl enable-area`，或下一次 `dcctl upgrade`，都会完成其部署。
-- 启用领域只会部署它，不会配置它。有些领域需要先设置才能发挥作用。`update-management` 将制品保存在[对象存储](#object-store)中，对象存储在初始化时选定，之后无法添加；没有对象存储时，服务会运行但拒绝所有制品，命令会对此给出提示。在并非由 `dcctl` 创建的集群上，访问模式为 `ReadWriteOnce` 的 `filesystem` 存储只能供一个 Pod 使用，因此在 `user-management` 之外添加 `update-management` 会在写入任何内容之前被拒绝。（`default` 配置档已包含 `update-management`；在这类实例上，使用这种存储时它会在没有对象存储的情况下运行并拒绝制品，初始化或升级时会给出提示。）`lwm2m-ingest` 使用初始化时提供的预共享密钥（`--lwm2m-identities`）认证设备；之后再添加时，它会运行但拒绝所有握手。
+- 启用领域只会部署它，不会配置它。有些领域需要先设置才能发挥作用。`update-management` 将制品保存在[对象存储](#object-store)中，对象存储在初始化时选定，之后无法添加；没有对象存储时，服务会运行但拒绝所有制品，命令会对此给出提示。在并非由 `dcctl` 创建的集群上，访问模式为 `ReadWriteOnce` 的 `filesystem` 存储只能供一个 Pod 使用，因此在 `user-management` 之外添加 `update-management` 会在写入任何内容之前被拒绝。（`default` 配置档已包含 `update-management`；在这类实例上，使用这种存储时它会在没有对象存储的情况下运行并拒绝制品，初始化或升级时会给出提示。）`lwm2m-ingest` 使用通过 `--lwm2m-identities` 提供的预共享密钥认证设备；之后再添加时，它会运行但拒绝所有握手。
 
 没有移除领域的命令。领域可能保存数据，将其从部署中移除会使这些数据无服务可用。
 

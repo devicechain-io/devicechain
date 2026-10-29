@@ -79,7 +79,7 @@ los datos del inquilino, así que una eliminación no los toca.
 **Identidades de dispositivos LwM2M.** Cada identidad DTLS-PSK de LwM2M está vinculada a un
 inquilino y a un identificador externo en la configuración de lwm2m-ingest. Después de eliminar un
 inquilino, retira sus identidades de esa configuración: en una instancia instalada con `dcctl`,
-quítalas del archivo indicado en `--lwm2m-identities` y vuelve a ejecutar `dcctl bootstrap` con él.
+quítalas del archivo indicado en `--lwm2m-identities` y ejecuta `dcctl upgrade --lwm2m-identities` con él (o `--withdraw-lwm2m-identities` si no queda ninguna).
 De lo contrario, los vínculos se mantienen y se aplican a cualquier inquilino que se cree más
 adelante con el mismo identificador.
 

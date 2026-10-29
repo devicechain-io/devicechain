@@ -152,6 +152,8 @@ var ownedWithinTunable = []struct {
 		"event-sources' listeners and broker connections are wiring, not tuning"},
 	{"functionalAreas.sparkplug-ingest.config.sources",
 		"sparkplug-ingest's broker connections, credential references and tenant bindings are wiring, not tuning: connect a broker with --sparkplug-source <file>, which keeps the password out of the configuration and carries the sources through every upgrade"},
+	{"functionalAreas.lwm2m-ingest.config.security.identities",
+		"lwm2m-ingest's identity bindings are wiring, not tuning: provision them with --lwm2m-identities <file>, which keeps the pre-shared keys out of the configuration and carries the bindings through every upgrade"},
 	{"functionalAreas.command-delivery.config.sparkplugCommands",
 		"whether Sparkplug commands are deliverable is derived by the chart from the Sparkplug sources' commands.enabled; a value written here could say they are while no source sends them, or the reverse"},
 }

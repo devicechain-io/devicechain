@@ -63,18 +63,23 @@ func carryForwardFromRelease(st *State, previous map[string]interface{}) {
 // carriedValuePaths are the value blocks an upgrade copies WHOLE from the previous
 // release, because the State they were rendered from cannot be reconstructed.
 //
-// 🔴 THE LwM2M PRE-SHARED KEYS ARE THE REASON THIS MECHANISM EXISTS AT ALL. They are
-// supplied by a file at bootstrap (--lwm2m-identities) and rendered into a
-// chart-owned Secret; nothing records the file. Recomputing helmValues without them
-// does not leave the Secret alone — it takes the Secret OUT OF THE MANIFEST, and Helm
-// deletes what leaves the manifest. Every provisioned device would lose its
-// credential on an ordinary version bump.
+// 🔴 THE LwM2M IDENTITIES ARE THE REASON THIS MECHANISM EXISTS AT ALL. They are
+// supplied by a file (--lwm2m-identities) and nothing records the file. Recomputing
+// helmValues without them would leave lwm2m-ingest with no identity bindings and no
+// reference to the keys: every provisioned device would lose its credential on an
+// ordinary version bump. What is carried is the NON-secret half (the bindings and the
+// extraEnv that names the Secret); the keys are in a Secret dcctl wrote, outside the
+// release, which an upgrade does not touch (see lwm2m_secret.go).
 //
 // Copied as opaque structures rather than parsed back into State: reconstructing the
 // identities from their own rendering would mean depending on the exact shape
 // lwm2mProvisioning emits, which is the fragile direction. The values are carried
-// forward byte for byte, and the next bootstrap is what changes them — with one
-// exception, an area's profiler block, which is dropped (see withoutProfiler).
+// forward byte for byte, and the next run given the file is what changes them. Only the
+// two leaves are carried, as for Sparkplug, so an operator's tuning of the same area
+// (replicas, resources) is not displaced, and its profiler block is never carried.
+//
+// extraSecrets is carried for operator-supplied entries; the legacy LwM2M one is dropped
+// before the carry (withoutLegacyLwm2mSecret).
 //
 // The Sparkplug sources (--sparkplug-source) are carried the same way and for the same reason,
 // but by their two leaves and not the area's whole block: an operator's tuning overlay may set
@@ -83,7 +88,8 @@ func carryForwardFromRelease(st *State, previous map[string]interface{}) {
 // instance that is tuned.
 var carriedValuePaths = [][]string{
 	{"extraSecrets"},
-	{"functionalAreas", "lwm2m-ingest"},
+	{"functionalAreas", "lwm2m-ingest", "config", "security", "identities"},
+	{"functionalAreas", "lwm2m-ingest", "extraEnv"},
 	{"functionalAreas", "sparkplug-ingest", "config", "sources"},
 	{"functionalAreas", "sparkplug-ingest", "extraEnv"},
 }

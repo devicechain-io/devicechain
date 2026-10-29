@@ -285,9 +285,9 @@ func areaChangeNotes(st *State) []string {
 	}
 	var notes []string
 	if slices.Contains(st.AreaChange.Added, string(functionalarea.Lwm2mIngest)) {
-		notes = append(notes, "lwm2m-ingest authenticates devices against the pre-shared keys given at "+
-			"bootstrap (--lwm2m-identities), and none can be given here: the adapter will run and refuse "+
-			"every handshake.")
+		notes = append(notes, "lwm2m-ingest authenticates devices against provisioned pre-shared keys, and none are "+
+			"given until a run is handed them ('dcctl upgrade ... --lwm2m-identities <file>'): the adapter will run "+
+			"and refuse every handshake.")
 	}
 	if slices.Contains(st.AreaChange.Added, string(functionalarea.UpdateMgmt)) && st.ObjectStore == nil {
 		notes = append(notes, noObjectStoreNote)

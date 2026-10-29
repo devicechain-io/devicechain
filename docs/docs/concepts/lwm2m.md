@@ -22,6 +22,8 @@ With auto-registration enabled for a credential, the device row is created the f
 
 Roaming clients, whose network address changes, are followed via DTLS Connection ID, so a cellular device keeps its session across an IP change.
 
+The pre-shared keys are not part of the Helm release. The platform keeps them in a Secret that the installer writes itself and projects into the service at start, so `helm get values` never shows one. See [Giving `dcctl` LwM2M identities](../deployment/edge-services.md#lwm2m-identities).
+
 ### Presence from the registration lifecycle
 
 Presence is authoritative and follows the LwM2M registration lifecycle:

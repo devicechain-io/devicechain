@@ -236,6 +236,40 @@ SenML 在 LwM2M 1.1 才引入。仅支持 1.0 的设备可注册、维持会话�
 
 **默认不回收会话。** `idleTimeoutSeconds` 默认为 `0`，表示永不回收，适用于始终连接设备。**队列模式**设备群应设置为明显大于预期唤醒间隔。太短会在休眠期间驱逐会话密钥，迫使重新握手，失去 DTLS Connection ID 避免握手的意义。
 
+### 向 `dcctl` 提供 LwM2M 身份 {#lwm2m-identities}
+
+DTLS-PSK 凭据是一对内容：设备出示的身份，以及证明该身份的预共享密钥。`dcctl` 从一个 JSON 文件读取这些凭据对，每一项都绑定到一个租户和一个外部 ID：
+
+```json
+[
+  {
+    "identity": "opaque-handle-1",
+    "psk": "<base64 密钥，至少 16 字节>",
+    "tenant": "acme",
+    "externalId": "plant-a/sensor-1",
+    "deviceTypeToken": "sensor",
+    "autoRegister": true
+  }
+]
+```
+
+```bash
+dcctl bootstrap local acme --lwm2m-identities identities.json
+dcctl upgrade   local acme --lwm2m-identities identities.json
+```
+
+带该文件的初始化同时会启用 `lwm2m-ingest`；升级则要求该领域已经启用。文件会在任何内容接触集群之前先被检查（密钥过短、缺少租户或外部 ID、`autoRegister` 却没有设备类型、身份重复）。
+
+**密钥保存在哪里。** 密钥绝不是 Helm 值，因此不会出现在 `helm get values` 打印的发布记录中，轮换后的旧密钥也不会留在旧版本记录里。`dcctl` 自己写入名为 `dci-<实例>-lwm2m-identities` 的 Secret，写入发生在发布之前，且不在发布清单内，Pod 将每个密钥投射为该身份的 `pskEnv` 所指定的环境变量。发布中只记录该 Secret 的名称和一个由 Secret 版本派生的标记，密钥变化时该标记会滚动 Pod。
+
+这些身份会**被之后每一次 `dcctl upgrade` 保留**，升级不会从发布中读取任何机密内容。再次收到该文件的运行会替换它们：就地重写 Secret（即轮换）并滚动 Pod。移除必须显式进行：`dcctl upgrade ... --withdraw-lwm2m-identities` 会移除这些身份及其 Secret。对已有身份的实例重新运行 `dcctl bootstrap` 而不提供任何身份，会被拒绝，除非明确给出 `--withdraw-lwm2m-identities`，因为初始化按其参数组合出整个实例，否则会删除每台设备的密钥。同名但并非由 `dcctl` 写入的 Secret 绝不会被触碰。
+
+:::warning 密钥移出发布之前就已配置的实例
+由早期 `dcctl` 构建的实例，其密钥保存在 Helm 发布的值中，以及由 chart 渲染的 Secret `dci-<实例>-lwm2m-psk` 中。用此版本对它执行的第一次 `dcctl upgrade` 会迁移这些密钥：在发布变更**之前**先把密钥复制到新的 Secret，然后再升级；由于旧 Secret 不再出现在清单中，Helm 会将其删除。新的 Pod 使用新的 Secret 启动，因此迁移期间没有设备失去密钥。
+
+Helm 最多保留十个更早的发布版本记录，这些记录仍然保存着旧的值；`dcctl` 不会改写 Helm 的历史记录。如果这些密钥必须作废，请在升级后轮换：用包含新密钥的文件运行 `dcctl upgrade ... --lwm2m-identities`（并重新配置设备），同时在旧版本记录过期之前，限制谁能读取 `default` 命名空间中的 Secret。
+:::
+
 ### 暴露 LwM2M 端口 {#exposing-the-lwm2m-port}
 
 :::danger 默认没有任何组件将 LwM2M 端口暴露到集群之外
