@@ -375,10 +375,18 @@ describe('the parsed sim boards', () => {
 describe('the towerpulse annex board', () => {
   const def = () => parsed(TOWERPULSE_ANNEX);
 
-  it('binds only annex devices and areas', () => {
+  it("binds only annex devices and the annex owner's customer, never an area", () => {
     for (const [name, slot] of Object.entries(def().slots ?? {})) {
-      const binding = slot.defaultBinding as { deviceToken?: string; anchor?: { targetToken?: string } } | undefined;
-      const token = binding?.deviceToken ?? binding?.anchor?.targetToken ?? '';
+      const binding = slot.defaultBinding as
+        | { deviceToken?: string; anchor?: { targetType?: string; targetToken?: string } }
+        | undefined;
+      if (binding?.anchor) {
+        // A customer-scoped member is refused area anchors; the customer is what they can resolve.
+        expect(binding.anchor.targetType, `slot ${name} anchors on an area`).toBe('customer');
+        expect(binding.anchor.targetToken).toBe('tp-halden');
+        continue;
+      }
+      const token = binding?.deviceToken ?? '';
       expect(token, `slot ${name} binds ${token}`).toMatch(/annex/);
       expect(token, `slot ${name} binds ${token}`).not.toMatch(/tower/);
     }

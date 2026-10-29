@@ -62,6 +62,11 @@ type Record struct {
 	// AdminURL is the /admin/graphql endpoint create resolved, persisted so destroy
 	// tears down against the same host it was created on (not a re-derived default).
 	AdminURL string `json:"adminURL"`
+	// ScenarioIdentities are the exact accounts the simulator minted for the scenario's own people
+	// (a customer user), written back into this file by dc-simulator BEFORE it creates each one.
+	// It is the whole ownership record destroy deletes identities on: an address is never taken for
+	// the sim's by how it is spelled. Mirrors dc-simulator's Handshake field.
+	ScenarioIdentities []string `json:"scenarioIdentities,omitempty"`
 }
 
 // KnownManifestIds are the manifest ids dc-simulator's registry (sim.go) knows

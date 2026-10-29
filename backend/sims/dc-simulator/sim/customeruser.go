@@ -6,6 +6,7 @@ package sim
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/rs/zerolog/log"
@@ -44,6 +45,15 @@ const mutationSetMemberEnabled = `mutation($email:String!,$enabled:Boolean!){` +
 const mutationAcceptInvitationAsExisting = `mutation($code:String!,$identityToken:String!){` +
 	`acceptInvitation(code:$code,identityToken:$identityToken){identityToken}}`
 
+const mutationRemoveMember = `mutation($email:String!){removeMember(email:$email)}`
+
+// LegacyScenarioOwnerEmails are the untagged addresses an earlier simulator attached to a sim's
+// tenant as its customer user, before every sim was given an account of its own. They are SHARED
+// global identities, so converge removes their membership in THIS tenant and nothing else: the
+// identity and its memberships elsewhere stay. dcctl's destroy treats the same addresses the same
+// way (its LegacyScenarioOwnerEmails; TestLegacyOwnersMatchDcctl pins the two together).
+var LegacyScenarioOwnerEmails = []string{TowerpulseAnnexOwnerEmail}
+
 const mutationSetMemberScope = `mutation($email:String!,$scope:[ScopeAnchorInput!]!){` +
 	`setMemberScope(email:$email,scope:$scope){email}}`
 
@@ -58,10 +68,10 @@ const mutationSetMemberScope = `mutation($email:String!,$scope:[ScopeAnchorInput
 // sim's password is the right credential for it, and nothing here ever resets the password of an
 // identity it did not mint.
 //
-// The derivation is also the OWNERSHIP MODEL teardown runs on: dcctl recognises a sim's own people
-// by the "+<tenant>" ending of the local part (sim.ScenarioIdentityOwnedBy mirrors this), which
-// needs nothing persisted and so survives an interrupted create, a lost record and a re-bootstrap
-// alike. Keep the two in lockstep (the same example address is pinned on both sides: TestScenarioIdentityEmailIsDeterministic here and TestScenarioIdentityOwnedBy in dcctl).
+// The derivation is NOT the ownership model. An address is only spelled this way; whether the sim
+// minted it is what Runtime.Minted records (the handshake's scenarioIdentities), and dcctl's
+// teardown deletes an identity globally only if it is listed there. A person added by hand under
+// the same tag is therefore left alone.
 func ScenarioIdentityEmail(base, tenant string) (string, error) {
 	base = strings.ToLower(strings.TrimSpace(base))
 	tenant = strings.ToLower(strings.TrimSpace(tenant))
@@ -82,6 +92,7 @@ func ScenarioIdentityEmail(base, tenant string) (string, error) {
 // ensureCustomerUsers provisions every customer user of the manifest as THIS sim's own account.
 func ensureCustomerUsers(ctx context.Context, rt *Runtime, users []CustomerUserSpec) error {
 	for _, u := range users {
+		base := u.Email
 		// The manifest names the person; the SIM owns the account, so every sim gets its own
 		// address (see ScenarioIdentityEmail) and the sim's own password signs it in.
 		email, err := ScenarioIdentityEmail(u.Email, rt.Tenant)
@@ -97,8 +108,61 @@ func ensureCustomerUsers(ctx context.Context, rt *Runtime, users []CustomerUserS
 		// repeated here.
 		log.Info().Str("email", u.Email).Str("customer", u.CustomerToken).
 			Msg("customer login: sign in as this address with the sim password from the sim record")
+		// Only now, with the sim's own account in place: an older simulator attached the shared
+		// untagged address to this tenant, and the tenant cannot be deleted while it stays.
+		if slices.Contains(LegacyScenarioOwnerEmails, strings.ToLower(strings.TrimSpace(base))) {
+			if err := removeLegacyMember(ctx, rt, base); err != nil {
+				return fmt.Errorf("migrate legacy customer user %q: %w", base, err)
+			}
+		}
 	}
 	return nil
+}
+
+// removeLegacyMember takes the shared legacy address out of THIS tenant's members, if it is one.
+// removeMember keeps the account, and only this tenant's membership is affected.
+func removeLegacyMember(ctx context.Context, rt *Runtime, email string) error {
+	var found struct {
+		Members struct {
+			Results []struct {
+				Email string `json:"email"`
+			} `json:"results"`
+		} `json:"members"`
+	}
+	if err := rt.Session.Query(ctx, rt.Endpoints.UserGraphQL, queryMembersByEmail, map[string]any{
+		"criteria": map[string]any{"pageNumber": 1, "pageSize": 20, "emailPrefix": email},
+	}, &found); err != nil {
+		return fmt.Errorf("members: %w", err)
+	}
+	for _, m := range found.Members.Results {
+		if !strings.EqualFold(m.Email, email) {
+			continue
+		}
+		var ignored map[string]any
+		if err := rt.Session.Query(ctx, rt.Endpoints.UserGraphQL, mutationRemoveMember,
+			map[string]any{"email": m.Email}, &ignored); err != nil {
+			return fmt.Errorf("removeMember: %w", err)
+		}
+		log.Info().Str("email", m.Email).Str("tenant", rt.Tenant).
+			Msg("removed the legacy shared customer user from this tenant; its account is kept")
+		return nil
+	}
+	return nil
+}
+
+// adoptIfSimOwned files an EXISTING member in the ledger when it proves it is the sim's: the sim's
+// password is minted per sim and held only by its record, so an account that signs in with it was
+// created (or accepted) by this sim. A member that merely carries the tag, such as a person added by
+// hand, cannot sign in with it and stays unrecorded -- and so undeletable by teardown.
+func adoptIfSimOwned(ctx context.Context, rt *Runtime, email string) error {
+	if rt.Minted == nil || rt.Minted.Recorded(email) {
+		return nil
+	}
+	if _, err := userclient.Login(ctx, rt.HTTPClient, rt.Endpoints.UserGraphQL, email, rt.SimPassword); err != nil {
+		log.Info().Str("email", email).Msg("existing customer user does not sign in with the sim password: not recorded as the sim's own")
+		return nil
+	}
+	return rt.Minted.Record(email)
 }
 
 // ensureCustomerUser makes the person a member of the tenant, limited to one customer.
@@ -187,7 +251,7 @@ func ensureCustomerUser(ctx context.Context, rt *Runtime, u CustomerUserSpec) er
 				return err
 			}
 			log.Info().Str("email", u.Email).Msg("accepted the pending customer user invitation")
-			return nil
+			return adoptIfSimOwned(ctx, rt, m.Email)
 		}
 		if !m.Enabled {
 			if err := rt.Session.Query(ctx, rt.Endpoints.UserGraphQL, mutationSetMemberEnabled,
@@ -196,9 +260,16 @@ func ensureCustomerUser(ctx context.Context, rt *Runtime, u CustomerUserSpec) er
 			}
 			log.Info().Str("email", u.Email).Msg("re-enabled customer user")
 		}
-		return nil
+		return adoptIfSimOwned(ctx, rt, m.Email)
 	}
 
+	// Filed BEFORE the account exists: a crash after the invite must not leave an account teardown
+	// cannot tell is the sim's. A recorded name with no account is harmless.
+	if rt.Minted != nil {
+		if err := rt.Minted.Record(u.Email); err != nil {
+			return fmt.Errorf("customer user %q was not created: it could not be recorded for teardown: %w", u.Email, err)
+		}
+	}
 	var invited struct {
 		InviteMember struct {
 			InvitationCode string `json:"invitationCode"`

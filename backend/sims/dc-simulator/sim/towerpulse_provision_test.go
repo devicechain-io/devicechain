@@ -6,6 +6,7 @@ package sim
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -161,6 +162,8 @@ type recordingGraphQL struct {
 	// answer returns the data for an operation, or nil for "not modelled" (a 501, which fails the
 	// test loudly rather than reading as an empty result).
 	answer func(query string, vars map[string]any) map[string]any
+	// refuseLogin answers every login with an error, for this email only (an account whose password is not the sim's).
+	refuseLogin string
 }
 
 func newRecordingGraphQL(t *testing.T, answer func(string, map[string]any) map[string]any) (*recordingGraphQL, *Runtime) {
@@ -177,6 +180,10 @@ func newRecordingGraphQL(t *testing.T, answer func(string, map[string]any) map[s
 		}
 		var data map[string]any
 		switch {
+		case strings.Contains(req.Query, "login(") && g.refuseLogin != "" && strings.EqualFold(fmt.Sprint(req.Variables["email"]), g.refuseLogin):
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": nil, "errors": []map[string]any{{"message": "invalid credentials"}}})
+			return
 		case strings.Contains(req.Query, "login("):
 			data = map[string]any{"login": map[string]any{"identityToken": "identity", "superuser": true}}
 		case strings.Contains(req.Query, "selectTenant("):

@@ -17,8 +17,9 @@ type tpBoard struct {
 			Kind        string `json:"kind"`
 			DeviceToken string `json:"deviceToken"`
 			Anchor      struct {
-				TargetType  string `json:"targetType"`
-				TargetToken string `json:"targetToken"`
+				Relationship string `json:"relationship"`
+				TargetType   string `json:"targetType"`
+				TargetToken  string `json:"targetToken"`
 			} `json:"anchor"`
 		} `json:"defaultBinding"`
 		Scope *struct {
@@ -249,6 +250,10 @@ func TestTowerpulseBoardSlotsResolve(t *testing.T) {
 	for _, a := range m.Areas {
 		areas[a.Token] = true
 	}
+	customers := map[string]bool{}
+	for _, c := range m.Customers {
+		customers[c.Token] = true
+	}
 	for token, b := range towerpulseBoards(t) {
 		for _, w := range b.Widgets {
 			if w.Datasource != nil {
@@ -269,8 +274,9 @@ func TestTowerpulseBoardSlotsResolve(t *testing.T) {
 					t.Errorf("%s: slot %s binds device %q, which the scenario does not have", token, name, s.DefaultBinding.DeviceToken)
 				}
 			case "anchor":
-				if !areas[s.DefaultBinding.Anchor.TargetToken] || s.DefaultBinding.Anchor.TargetType != "area" {
-					t.Errorf("%s: slot %s anchors on %+v, not an area the scenario has", token, name, s.DefaultBinding.Anchor)
+				a := s.DefaultBinding.Anchor
+				if !(a.TargetType == "area" && areas[a.TargetToken]) && !(a.TargetType == "customer" && customers[a.TargetToken]) {
+					t.Errorf("%s: slot %s anchors on %+v, not an area or customer the scenario has", token, name, a)
 				}
 			}
 			if s.Scope != nil {
@@ -290,11 +296,8 @@ func TestTowerpulseAnnexBoardOpensOnTheAnnex(t *testing.T) {
 	if got := op.Slots[towerpulseSlotBuilding].DefaultBinding.Anchor.TargetToken; got != TowerpulseTowerToken {
 		t.Errorf("operator board opens on %s", got)
 	}
-	if got := annex.Slots[towerpulseSlotBuilding].DefaultBinding.Anchor.TargetToken; got != TowerpulseAnnexToken {
-		t.Errorf("annex board opens on building %s", got)
-	}
-	if got := annex.Slots[towerpulseSlotFloor].DefaultBinding.Anchor.TargetToken; !strings.HasPrefix(got, "tp-annex-") {
-		t.Errorf("annex board opens on floor %s", got)
+	if got := annex.Slots[towerpulseSlotAnnex].DefaultBinding.Anchor.TargetToken; got != TowerpulseAnnexOwnerToken {
+		t.Errorf("annex board opens on %s, want the annex owner's customer", got)
 	}
 	if got := annex.Slots[towerpulseSlotZone].DefaultBinding.DeviceToken; !strings.HasPrefix(got, "tp-vav-annex-") {
 		t.Errorf("annex board opens on zone %s", got)
@@ -318,7 +321,7 @@ func TestTheAnnexOwnersBoardBindsOnlyTheAnnexAndWritesNothing(t *testing.T) {
 			}
 		case "anchor":
 			tok := s.DefaultBinding.Anchor.TargetToken
-			if !strings.HasPrefix(tok, "tp-annex") || strings.Contains(tok, "tower") {
+			if tok != TowerpulseAnnexOwnerToken {
 				t.Errorf("slot %s anchors on %s, which is not the annex's", name, tok)
 			}
 		}
@@ -377,4 +380,76 @@ func TestTowerpulseBoardLayoutIsAGridWithoutOverlap(t *testing.T) {
 	if err := m.Validate(); err == nil {
 		t.Error("a board with a command widget validated against a scenario nothing answers for")
 	}
+}
+
+// 🔴 TP-3 (second finding). A member limited to a customer is refused every area anchor and the
+// relationship graph (FORBIDDEN, SCOPE_UNSUPPORTED), so a board anchored on areas opens for them with
+// its context dropped, empty pickers and disabled aggregates. The annex board therefore carries no
+// area anchor, roots on the annex owner's customer under `assigned` (what customerDevices answers
+// for that member), and every device it binds is one of that customer's own devices.
+func TestTheAnnexBoardBindsOnlyWhatACustomerScopedCallerCanResolve(t *testing.T) {
+	m := towerpulseManifest(t)
+	owner := m.CustomerUsers[0].CustomerToken
+	scoped := map[string]bool{}
+	for _, d := range m.Expand(m.Seed) {
+		for _, a := range d.Assignments {
+			if a.TargetType == "customer" && a.TargetToken == owner {
+				scoped[d.Token] = true
+			}
+		}
+	}
+	if len(scoped) == 0 {
+		t.Fatal("no device is assigned to the annex owner, so every check below would pass vacuously")
+	}
+	annex := towerpulseBoards(t)[TowerpulseAnnexDashboardToken]
+	roots := 0
+	for name, s := range annex.Slots {
+		switch s.Type {
+		case "anchor":
+			roots++
+			a := s.DefaultBinding.Anchor
+			if a.TargetType != "customer" || a.TargetToken != owner || a.Relationship != assignmentRelationshipType {
+				t.Errorf("slot %s anchors on %s %s (%s): only the member's own customer under %q resolves for them",
+					name, a.TargetType, a.TargetToken, a.Relationship, assignmentRelationshipType)
+			}
+		case "device":
+			if tok := s.DefaultBinding.DeviceToken; !scoped[tok] {
+				t.Errorf("slot %s binds %s, which is not one of the annex owner's devices", name, tok)
+			}
+			if s.Scope != nil && annex.Slots[s.Scope.Parent].Type != "anchor" {
+				t.Errorf("slot %s is scoped under %s, which is not an anchor", name, s.Scope.Parent)
+			}
+		}
+	}
+	if roots != 1 {
+		t.Errorf("%d anchor slots, want the one customer anchor", roots)
+	}
+	for _, w := range annex.Widgets {
+		if w.Datasource != nil {
+			if _, ok := annex.Slots[w.Datasource.Slot]; !ok {
+				t.Errorf("%s reads slot %q, which the board does not declare", w.ID, w.Datasource.Slot)
+			}
+		}
+		if w.Type == "entity-selector" {
+			target, _ := w.Options["selectionTarget"].(string)
+			if s, ok := annex.Slots[target]; !ok || s.Scope == nil {
+				t.Errorf("%s picks slot %q, which is not a scoped device slot under the customer anchor", w.ID, target)
+			}
+		}
+	}
+	raw := strings.ToLower(string(mustJSON(t, annex)))
+	for _, banned := range []string{`"targettype":"area"`, `"floor"`, `"building"`} {
+		if strings.Contains(raw, banned) {
+			t.Errorf("the annex board's definition still carries %s", banned)
+		}
+	}
+}
+
+func mustJSON(t *testing.T, v any) []byte {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }

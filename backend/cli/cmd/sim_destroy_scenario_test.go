@@ -35,10 +35,11 @@ func newInstance(m map[string][]string) *instanceTeardown {
 	return f
 }
 
-func (f *instanceTeardown) OwnedMembers(_ context.Context, tenant string) ([]sim.OwnedMember, error) {
+func (f *instanceTeardown) MembershipsOf(_ context.Context, emails []string) ([]sim.OwnedMember, error) {
 	var out []sim.OwnedMember
-	for e, ts := range f.memberships {
-		if !sim.ScenarioIdentityOwnedBy(e, tenant) {
+	for _, e := range emails {
+		ts, ok := f.memberships[e]
+		if !ok {
 			continue
 		}
 		m := sim.OwnedMember{Email: e}
@@ -78,9 +79,12 @@ func (f *instanceTeardown) DeleteTenant(_ context.Context, tenant string) (bool,
 	return true, nil
 }
 
-func towerRecord() *sim.Record {
-	return &sim.Record{Name: "tp-fu", Tenant: "sim-tp-fu", SimEmail: sim.DeriveEmail("tp-fu")}
+// towerRecord is a Towerpulse sim record. minted are the identities the simulator recorded.
+func towerRecord(minted ...string) *sim.Record {
+	return &sim.Record{Name: "tp-fu", Tenant: "sim-tp-fu", SimEmail: sim.DeriveEmail("tp-fu"), ScenarioIdentities: minted}
 }
+
+const legacyOwner = "owner@halden-labs.example"
 
 const (
 	ownerA = "owner+sim-tp-fu@halden-labs.example"
@@ -90,7 +94,7 @@ const (
 // A Towerpulse destroy removes the annex owner's membership before the tenant, so the tenant
 // delete the server refuses while any membership remains goes through.
 func TestDestroySimRemovesTheScenarioOwnedMembersBeforeTheTenant(t *testing.T) {
-	rec := towerRecord()
+	rec := towerRecord(ownerA)
 	f := newInstance(map[string][]string{
 		rec.SimEmail: {rec.Tenant},
 		ownerA:       {rec.Tenant},
@@ -113,7 +117,7 @@ func TestDestroySimRemovesTheScenarioOwnedMembersBeforeTheTenant(t *testing.T) {
 
 // An account the sim minted that ALSO belongs to another tenant loses only the membership here.
 func TestDestroySimNeverDeletesAnIdentityWithMembershipsElsewhere(t *testing.T) {
-	rec := towerRecord()
+	rec := towerRecord(ownerA)
 	f := newInstance(map[string][]string{
 		rec.SimEmail: {rec.Tenant},
 		ownerA:       {rec.Tenant, "unrelated-tenant"},
@@ -132,7 +136,7 @@ func TestDestroySimNeverDeletesAnIdentityWithMembershipsElsewhere(t *testing.T) 
 // A teardown that fails partway is retryable: the second run finds whoever is left, and the local
 // record is only removed once the tenant is.
 func TestDestroySimRetriesAfterAPartialTeardown(t *testing.T) {
-	rec := towerRecord()
+	rec := towerRecord(ownerA)
 	f := newInstance(map[string][]string{rec.SimEmail: {rec.Tenant}, ownerA: {rec.Tenant}})
 	f.failOnce = rec.SimEmail
 	recordDeleted := false
@@ -165,23 +169,87 @@ func TestDestroySimAdviceNamesMembersAddedOutsideTheSimFlow(t *testing.T) {
 	}
 }
 
-// The same example address is pinned in dc-simulator's TestScenarioIdentityEmailIsDeterministic.
-func TestScenarioIdentityOwnedBy(t *testing.T) {
-	for _, c := range []struct {
-		email, tenant string
-		want          bool
-	}{
-		{"owner+sim-x@halden-labs.example", "sim-x", true},
-		{"Owner+SIM-X@Halden-Labs.example", "sim-x", true},
-		{"owner+sim-x-2@halden-labs.example", "sim-x", false},
-		{"owner@halden-labs.example", "sim-x", false},
-		{"+sim-x@halden-labs.example", "sim-x", false},
-		{"a+b+sim-x@halden-labs.example", "sim-x", true},
-		{"owner+sim-x@halden-labs.example", "", false},
-		{"tp-fu@sim.devicechain.local", "sim-tp-fu", false},
-	} {
-		if got := sim.ScenarioIdentityOwnedBy(c.email, c.tenant); got != c.want {
-			t.Errorf("ScenarioIdentityOwnedBy(%q, %q) = %t, want %t", c.email, c.tenant, got, c.want)
-		}
+// An identity that merely CARRIES the tag is not the sim's: with no membership anywhere it is an
+// orphan someone else owns, and teardown leaves it.
+func TestDestroySimLeavesAnUnrelatedOrphanWithTheSameTag(t *testing.T) {
+	rec := towerRecord()
+	const orphan = "finance+sim-tp-fu@company.example"
+	f := newInstance(map[string][]string{rec.SimEmail: {rec.Tenant}, orphan: {}})
+	if err := destroySim(context.Background(), f, rec, func() error { return nil }, io.Discard); err != nil {
+		t.Fatalf("destroySim: %v", err)
+	}
+	if _, kept := f.memberships[orphan]; !kept {
+		t.Error("an orphan identity that only carries the tag was deleted globally")
+	}
+}
+
+// A person added to the tenant by hand with the same tag is not the sim's either: it is not
+// deleted, and the tenant delete says whose it is.
+func TestDestroySimLeavesAHandAddedHumanWithTheSameTag(t *testing.T) {
+	rec := towerRecord()
+	const human = "ops+sim-tp-fu@company.example"
+	f := newInstance(map[string][]string{rec.SimEmail: {rec.Tenant}, human: {rec.Tenant}})
+	err := destroySim(context.Background(), f, rec, func() error { return nil }, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "added outside the sim flow") {
+		t.Fatalf("err = %v, want the tenant delete refused over the hand-added member", err)
+	}
+	if !f.memberships[human][rec.Tenant] {
+		t.Error("a hand-added human with the tag lost its identity or membership")
+	}
+}
+
+// A sim converged by an earlier simulator is attached to the shared legacy owner. Destroy takes that
+// membership out of THIS tenant -- the tenant delete is refused while it stands -- and never deletes
+// the identity, which other sims and its other tenants still use. A retry after a partial teardown
+// progresses.
+func TestDestroySimMigratesTheLegacyOwnerAndNeverDeletesIt(t *testing.T) {
+	rec := towerRecord(ownerA)
+	f := newInstance(map[string][]string{
+		rec.SimEmail: {rec.Tenant},
+		ownerA:       {rec.Tenant},
+		legacyOwner:  {rec.Tenant, "sim-tp-other"},
+	})
+	f.failOnce = rec.SimEmail
+	recordDeleted := false
+	del := func() error { recordDeleted = true; return nil }
+	if err := destroySim(context.Background(), f, rec, del, io.Discard); err == nil {
+		t.Fatal("the first attempt was expected to fail")
+	}
+	if err := destroySim(context.Background(), f, rec, del, io.Discard); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if !recordDeleted || !f.tenantsGone[rec.Tenant] {
+		t.Fatalf("teardown did not finish: record deleted=%t tenant gone=%t", recordDeleted, f.tenantsGone[rec.Tenant])
+	}
+	if !f.memberships[legacyOwner]["sim-tp-other"] || f.memberships[legacyOwner][rec.Tenant] {
+		t.Errorf("legacy owner memberships = %v, want only the other tenant", f.memberships[legacyOwner])
+	}
+	if got := strings.Join(f.calls, ","); strings.Contains(got, "delete:"+legacyOwner) {
+		t.Errorf("the legacy owner's global identity was deleted: %s", got)
+	}
+}
+
+// Even when the legacy owner belongs to nothing else, it is not ours to delete globally.
+func TestDestroySimNeverDeletesTheLegacyOwnerEvenWhenItsOnlyMembershipIsHere(t *testing.T) {
+	rec := towerRecord()
+	f := newInstance(map[string][]string{rec.SimEmail: {rec.Tenant}, legacyOwner: {rec.Tenant}})
+	if err := destroySim(context.Background(), f, rec, func() error { return nil }, io.Discard); err != nil {
+		t.Fatalf("destroySim: %v", err)
+	}
+	if _, kept := f.memberships[legacyOwner]; !kept {
+		t.Error("the shared legacy identity was deleted globally")
+	}
+}
+
+// A recorded identity that also belongs to another tenant is exactly one that must not be deleted,
+// and one recorded for ANOTHER sim is not this sim's to touch.
+func TestDestroySimIgnoresIdentitiesNotInItsOwnRecord(t *testing.T) {
+	rec := towerRecord(ownerA)
+	f := newInstance(map[string][]string{rec.SimEmail: {rec.Tenant}, ownerA: {rec.Tenant}, ownerB: {"sim-tp-other"}})
+	if err := destroySim(context.Background(), f, rec, func() error { return nil }, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if _, kept := f.memberships[ownerB]; !kept {
+		t.Error("an identity outside the record was deleted")
 	}
 }

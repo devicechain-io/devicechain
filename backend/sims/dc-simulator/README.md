@@ -360,13 +360,19 @@ derived from the sim's tenant: `owner@halden-labs.example` in tenant `sim-tp-liv
 every converge (`customer login: sign in as this address with the sim password`). The password is
 the sim record's `simPassword`. Nothing resets the password of an account the sim did not mint, so
 a second Towerpulse sim on the same instance gets its own owner and neither sign-in touches the
-other. `dcctl sim destroy` recognises the accounts a sim minted by the `+<tenant>` ending of the
-address: it removes their memberships from that tenant before deleting it, deletes an account that
-belongs to nothing else, and only removes the membership of one that also belongs to another tenant.
+other. The simulator writes each account it mints into the sim record (`scenarioIdentities`)
+before it creates it, and `dcctl sim destroy` deletes **only** the accounts on that list: it
+removes their memberships from the tenant, deletes one that belongs to nothing else, and only
+removes the membership of one that also belongs to another tenant. An address is never taken for the
+sim's because it carries the `+<tenant>` tag, so an unrelated account or a person added to the
+tenant by hand with the same tag is left alone (and the tenant delete says so). An older simulator
+attached the shared `owner@halden-labs.example` instead: converge removes that membership from this
+tenant, destroy does too for a sim not converged since, and the identity itself is never deleted.
 
 Two boards. The operator's, `tp-dashboard`, shows both buildings and carries the setpoint control;
 it is shared with nobody. The annex owner's, `tp-annex-dashboard`, is a different board, not the
-operator's re-opened: it binds only the annex's building, floors, zones, chiller and meter, and
+operator's re-opened: it binds only the annex's devices (rooted on the annex owner's customer, because a member
+limited to a customer cannot read areas or the relationship graph), and
 carries no command widget, so a read-only member sees no write affordance and no widget that names a
 Tower device. It is shared with the annex owner (a member limited to a customer lists only what is
 shared with it). A re-run repairs a member left with a pending invitation, a wrong role or a
