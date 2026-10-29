@@ -18,6 +18,7 @@ import {
   type LocationSelection,
   type SlotBinding,
   type SlotDefinition,
+  type SlotCandidates,
   type SlotScope,
   type WidgetInstance,
 } from './types';
@@ -261,6 +262,26 @@ export function setSlotScope(
   if (!canScopeSlot(slots, slotName, scope.parent)) return def;
   slots[slotName] = { ...current, scope: { parent: scope.parent, strategy: scope.strategy } };
   return { ...def, slots };
+}
+
+// setSlotCandidates sets (or, with undefined/empty, clears) the picker type filter of a ROOT anchor
+// slot - the area type or asset type its picker lists. A no-op when the slot does not exist, is not
+// an anchor slot, or is scoped (a scoped slot's options are its parent's members, which no type
+// filter applies to), so the editor can never write a field the loader would ignore.
+export function setSlotCandidates(
+  def: DashboardDefinition,
+  slotName: string,
+  candidates: SlotCandidates | undefined,
+): DashboardDefinition {
+  if (!def.slots || !Object.prototype.hasOwnProperty.call(def.slots, slotName)) return def;
+  const current = def.slots[slotName];
+  if (current.type !== 'anchor' || current.scope) return def;
+  const next: SlotCandidates = {};
+  if (candidates?.areaType) next.areaType = candidates.areaType;
+  if (candidates?.assetType) next.assetType = candidates.assetType;
+  const { candidates: _drop, ...rest } = current;
+  const slot: SlotDefinition = next.areaType || next.assetType ? { ...rest, candidates: next } : rest;
+  return { ...def, slots: { ...def.slots, [slotName]: slot } };
 }
 
 // widgetBinding resolves a widget's effective entity binding for the editor: a slot

@@ -1359,6 +1359,12 @@ export declare function useSlotCandidates(definition: DashboardDefinition, bindi
 export declare function useStickyChars(chars: number, holdMs?: number): number;
 ```
 
+## `.:useViewerBindings`
+
+```ts
+export declare function useViewerBindings(definition: DashboardDefinition, base: Record<string, SlotBinding>, selection: Record<string, SlotBinding>, resolver: MemberResolver, lister: EntityCandidateLister | undefined): Record<string, SlotBinding>;
+```
+
 ## `.:useWidgetCandidates`
 
 ```ts

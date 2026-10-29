@@ -185,6 +185,7 @@ export {
   useHubConnectionState,
   HubConnectionBadge,
   useResolvedBindings,
+  useViewerBindings,
   useSlotCandidates,
   useCandidates,
   css,

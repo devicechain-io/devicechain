@@ -48,7 +48,7 @@ import {
   useBoardTimeRange,
   useBoundDevices,
   useDashboardHub,
-  useResolvedBindings,
+  useViewerBindings,
   useSlotCandidates,
   type AbsoluteLabels,
 } from '@devicechain/widgets';
@@ -1052,7 +1052,7 @@ export function View({
   const { definition, manifest, registry } = loaded;
 
   // base = definition defaults merged with the pasted manifest override; the cascade
-  // (useResolvedBindings) resolves scoped slots from their parent + the selection overlay
+  // (useViewerBindings) resolves scoped slots from their parent + the selection overlay
   // and returns the settled manifest the renderer resolves every widget's slot through.
   // The resolver backs both the hub's anchor→device-token expansion and the cascade's
   // membership lookups.
@@ -1089,7 +1089,7 @@ export function View({
   );
   const bound = useBoundDevices({ definition, resolver, address });
   const { selection, select } = bound;
-  const bindings = useResolvedBindings(definition, base, selection, resolver);
+  const bindings = useViewerBindings(definition, base, selection, resolver, lister);
   const candidates = useSlotCandidates(definition, bindings, resolver, lister);
   // ONE hub for this view's lifetime (per resolver + authorities), torn down on unmount.
   // It holds no bindings: a selection reaches the renderer as new `bindings`, and only the

@@ -20,17 +20,18 @@ import type { EntityCandidateLister, EntityListKind } from './types';
 const LIST_PAGE_SIZE = 500;
 
 export function createEntityLister(): EntityCandidateLister {
-  const cache = new Map<EntityListKind, Promise<Array<{ token: string; name: string | null }>>>();
+  const cache = new Map<string, Promise<Array<{ token: string; name: string | null }>>>();
   const criteria = { pageNumber: 1, pageSize: LIST_PAGE_SIZE };
 
-  return (kind: EntityListKind) => {
-    let pending = cache.get(kind);
+  return (kind: EntityListKind, typeToken?: string) => {
+    const key = `${kind}|${typeToken}`;
+    let pending = cache.get(key);
     if (!pending) {
-      pending = fetchKind(kind, criteria).catch((err) => {
-        cache.delete(kind);
+      pending = fetchKind(kind, criteria, typeToken).catch((err) => {
+        cache.delete(key);
         throw err;
       });
-      cache.set(kind, pending);
+      cache.set(key, pending);
     }
     return pending;
   };
@@ -39,6 +40,7 @@ export function createEntityLister(): EntityCandidateLister {
 function fetchKind(
   kind: EntityListKind,
   criteria: { pageNumber: number; pageSize: number },
+  typeToken?: string,
 ): Promise<Array<{ token: string; name: string | null }>> {
   switch (kind) {
     case 'device':
@@ -46,9 +48,9 @@ function fetchKind(
     case 'customer':
       return gql('device-management', LIST_CUSTOMERS, { criteria }).then((r) => r.customers.results);
     case 'area':
-      return gql('device-management', LIST_AREAS, { criteria }).then((r) => r.areas.results);
+      return gql('device-management', LIST_AREAS, { criteria: { ...criteria, areaTypeToken: typeToken } }).then((r) => r.areas.results);
     case 'asset':
-      return gql('device-management', LIST_ASSETS, { criteria }).then((r) => r.assets.results);
+      return gql('device-management', LIST_ASSETS, { criteria: { ...criteria, assetTypeToken: typeToken } }).then((r) => r.assets.results);
     default:
       // An out-of-union kind (a hand-edited definition can carry an empty/other targetType)
       // yields no candidates rather than throwing synchronously inside the lister.

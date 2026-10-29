@@ -10,7 +10,9 @@
 //   scoped child slot → the parent anchor's member devices (devicesForAnchor), one option
 //                       per member; empty / unbound / non-anchor parent ⇒ no options.
 //   root device slot  → the tenant's devices (the injected lister).
-//   root anchor slot  → the tenant's entities of the slot's target type; the anchor
+//   root anchor slot  → the entities of the slot's target type THE VIEWER MAY SEE (the lister
+//                       answers a customer user with the areas its devices are in), narrowed to
+//                       the slot's candidates.areaType/assetType when it declares one; the anchor
 //                       relationship + targetType come from the slot's CURRENT binding (or
 //                       its default) as a template, only the targetToken varies. A root
 //                       anchor slot with no bound/default anchor has no template ⇒ no options.
@@ -22,8 +24,10 @@ import type { MemberResolver } from './context';
 import type {
   DashboardDefinition,
   EntityCandidateLister,
+  EntityListKind,
   SelectionCandidate,
   SlotBinding,
+  SlotDefinition,
 } from './types';
 
 function ownGet<T>(map: Record<string, T> | undefined, key: string): T | undefined {
@@ -36,6 +40,21 @@ function sameBinding(a: SlotBinding | undefined, b: SlotBinding): boolean {
   if (a.kind === 'device' && b.kind === 'device') return a.deviceToken === b.deviceToken;
   if (a.kind === 'anchor' && b.kind === 'anchor') return a.anchor.targetToken === b.anchor.targetToken;
   return false;
+}
+
+// slotTypeFilter is the picker type filter a root anchor slot declares for its target kind: the
+// area type for an area slot, the asset type for an asset slot, none for anything else.
+// A lister MAY take the type token as a second argument (createEntityLister's does, and narrows the
+// areas or assets it reads); one that does not simply lists every entity of the kind. The public
+// EntityCandidateLister type stays one-argument, so a host's own lister keeps compiling.
+export const listEntities = (
+  lister: EntityCandidateLister,
+  kind: EntityListKind,
+  typeToken: string | undefined,
+): ReturnType<EntityCandidateLister> => (lister as (k: EntityListKind, t?: string) => ReturnType<EntityCandidateLister>)(kind, typeToken);
+
+export function slotTypeFilter(def: SlotDefinition, targetType: string): string | undefined {
+  return targetType === 'customer' ? undefined : def.candidates?.[targetType === 'area' ? 'areaType' : 'assetType'];
 }
 
 export async function resolveSlotCandidates(
@@ -94,7 +113,7 @@ export async function resolveSlotCandidates(
   if (!template) return [];
   let rows: Array<{ token: string; name?: string | null }>;
   try {
-    rows = await lister(template.targetType);
+    rows = await listEntities(lister, template.targetType, slotTypeFilter(def, template.targetType));
   } catch {
     return [];
   }

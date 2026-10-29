@@ -28,8 +28,10 @@ import type {
 import {
   bindingsWithoutScopedSlots,
   DashboardHub,
+  hasRootAnchorSlots,
   hasScopedSlots,
   resolveContextBindings,
+  resolveViewerBindings,
   resolveSlotCandidates,
 } from '@devicechain/dashboards';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type RefObject } from 'react';
@@ -77,7 +79,35 @@ export function useResolvedBindings(
   selection: Record<string, SlotBinding>,
   resolver: MemberResolver,
 ): Record<string, SlotBinding> {
-  const scoped = useMemo(() => hasScopedSlots(definition), [definition]);
+  return useCascade(definition, base, selection, resolver, undefined, resolveContextBindings);
+}
+
+// useViewerBindings is useResolvedBindings for a host that can list what the viewer may pick (a
+// lister): a root area or asset slot whose binding is not among those falls back to the first of
+// them (resolveViewerBindings). The async pass runs for such a board even with no scoped slot,
+// because the correction has to land before the slots that follow the root are derived.
+export function useViewerBindings(
+  definition: DashboardDefinition,
+  base: Record<string, SlotBinding>,
+  selection: Record<string, SlotBinding>,
+  resolver: MemberResolver,
+  lister: EntityCandidateLister | undefined,
+): Record<string, SlotBinding> {
+  return useCascade(definition, base, selection, resolver, lister, resolveViewerBindings);
+}
+
+function useCascade(
+  definition: DashboardDefinition,
+  base: Record<string, SlotBinding>,
+  selection: Record<string, SlotBinding>,
+  resolver: MemberResolver,
+  lister: EntityCandidateLister | undefined,
+  resolve: typeof resolveViewerBindings,
+): Record<string, SlotBinding> {
+  const scoped = useMemo(
+    () => hasScopedSlots(definition) || (!!lister && hasRootAnchorSlots(definition)),
+    [definition, lister],
+  );
   // Selection wins over base. Correct as-is for root + manual slots and every scope-free
   // dashboard; scoped `first` slots are refined by the async pass below.
   const overlaid = useMemo(() => ({ ...base, ...selection }), [base, selection]);
@@ -97,7 +127,7 @@ export function useResolvedBindings(
     }
     const gen = ++genRef.current;
     let live = true;
-    resolveContextBindings(definition, base, selection, resolver)
+    resolve(definition, base, selection, resolver, lister)
       .then((next) => {
         if (!live || gen !== genRef.current) return;
         // Only swap when the value actually changed, so an equal re-resolve doesn't churn
@@ -110,7 +140,7 @@ export function useResolvedBindings(
     return () => {
       live = false;
     };
-  }, [scoped, definition, base, selection, resolver, overlaid]);
+  }, [scoped, definition, base, selection, resolver, overlaid, lister, resolve]);
 
   return scoped ? resolved : overlaid;
 }

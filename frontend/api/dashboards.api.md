@@ -2238,6 +2238,15 @@ export type SlotBinding = {
 };
 ```
 
+## `.:SlotCandidates`
+
+```ts
+export interface SlotCandidates {
+    areaType?: string;
+    assetType?: string;
+}
+```
+
 ## `.:SlotDefinition`
 
 ```ts
@@ -2246,6 +2255,7 @@ export interface SlotDefinition {
     label?: string;
     defaultBinding?: SlotBinding;
     scope?: SlotScope;
+    candidates?: SlotCandidates;
 }
 ```
 
@@ -3180,6 +3190,12 @@ export declare function gridRect(p: GridPlacement, cell: number, gutter: Gutter)
 export declare function gutterPx(grid: CanvasGrid, scale?: number): Gutter;
 ```
 
+## `.:hasRootAnchorSlots`
+
+```ts
+export declare function hasRootAnchorSlots(definition: DashboardDefinition): boolean;
+```
+
 ## `.:hasScopedSlots`
 
 ```ts
@@ -3562,6 +3578,12 @@ export declare function resolvePlacement(layout: WidgetLayout, breakpoint: strin
 export declare function resolveSlotCandidates(definition: DashboardDefinition, slot: string, bindings: Record<string, SlotBinding>, resolver: MemberResolver, lister: EntityCandidateLister): Promise<SelectionCandidate[]>;
 ```
 
+## `.:resolveViewerBindings`
+
+```ts
+export declare function resolveViewerBindings(definition: DashboardDefinition, base: Record<string, SlotBinding>, overlay: Record<string, SlotBinding>, resolver: MemberResolver, lister?: EntityCandidateLister): Promise<Record<string, SlotBinding>>;
+```
+
 ## `.:resolveWidgetDatasource`
 
 ```ts
@@ -3662,6 +3684,12 @@ export declare function setRelativeOffset(def: DashboardDefinition, id: string, 
     fine?: boolean;
     bounds?: RelativeBounds;
 }): DashboardDefinition;
+```
+
+## `.:setSlotCandidates`
+
+```ts
+export declare function setSlotCandidates(def: DashboardDefinition, slotName: string, candidates: SlotCandidates | undefined): DashboardDefinition;
 ```
 
 ## `.:setSlotScope`

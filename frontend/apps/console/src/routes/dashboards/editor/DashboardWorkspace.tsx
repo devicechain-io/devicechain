@@ -39,6 +39,7 @@ import {
   setBoardTimeRange,
   setCanvasSizing,
   setSlotScope,
+  setSlotCandidates,
   setTitle,
   UNKNOWN_WIDGET_TYPE,
   isResolvedWidget,
@@ -75,7 +76,7 @@ import {
   stripUnknownOptions,
   useBoardTimeRange,
   useDashboardHub,
-  useResolvedBindings,
+  useViewerBindings,
   useSlotCandidates,
 } from '@devicechain/widgets';
 import { ErrorState } from '@/components/ui/error-state';
@@ -497,19 +498,19 @@ export function DashboardWorkspace({
   useEffect(() => () => synthetic.disposeAll(), [synthetic]);
 
   // The live slot manifest. base = each slot's default binding (the console adds no host
-  // override — that's the /dash embedder's job, PR I-3); useResolvedBindings runs the
+  // override — that's the /dash embedder's job, PR I-3); useViewerBindings runs the
   // scoped-slot cascade over it, resolving each scoped slot from its parent + the
   // selection overlay and returning the settled manifest (a scope-free dashboard passes
   // straight through, no async). The RENDERER resolves every widget's slot through it, so
   // a drill selection re-subscribes only the widgets bound to the re-pointed slot.
   const base = useMemo(() => effectiveBindings(working), [working]);
-  const bindings = useResolvedBindings(working, base, selection, resolver);
+  const entityLister = useMemo(() => createEntityLister(), []);
+  const bindings = useViewerBindings(working, base, selection, resolver, entityLister);
   const bindingsKey = useMemo(() => JSON.stringify(bindings), [bindings]);
   // The context/entity-selector candidate provider (ADR-039 selection amendment): a
   // scoped slot's members come from the resolver, a root slot's from the tenant entity
   // lister. Rebuilt with the resolved bindings so a parent switch refreshes a member
   // picker. Passed to the view-mode renderer only (edit mode's canvas wires no selection).
-  const entityLister = useMemo(() => createEntityLister(), []);
   const candidates = useSlotCandidates(working, bindings, resolver, entityLister);
   // EDIT MODE ONLY: debounce the manifest the canvas resolves through, so typing an anchor
   // relationship in the config panel re-subscribes the affected widgets once rather than
@@ -1184,6 +1185,11 @@ export function DashboardWorkspace({
               onScope={(scope) => {
                 const slot = widgetSlotName(selected);
                 if (slot) history.commit((w) => setSlotScope(w, slot, scope), { action: 'scope', name: widgetName(selected) });
+              }}
+              // The picker type filter of the slot's root anchor context (area type / asset type).
+              onCandidates={(candidates) => {
+                const slot = widgetSlotName(selected);
+                if (slot) history.commit((w) => setSlotCandidates(w, slot, candidates), { action: 'candidates', name: widgetName(selected) }, `candidates:${selected.id}`);
               }}
               onClose={() => setSelectedId(null)}
             />

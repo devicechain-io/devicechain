@@ -384,3 +384,25 @@ describe('slot transforms carry the location series', () => {
     expect(resolveConcrete(migrated, migrated.widgets[0])).not.toHaveProperty('location');
   });
 });
+
+describe('setSlotCandidates (the picker type filter of a root anchor slot)', () => {
+  const anchorSlot = { type: 'anchor' as const, defaultBinding: { kind: 'anchor' as const, anchor: { relationship: 'assigned', targetType: 'area' as const, targetToken: 'f1' } } };
+  const def = (slots: Record<string, any>) => ({ schemaVersion: 2, title: 't', widgets: [], slots }) as any;
+
+  it('sets, replaces and clears the filter, and survives a load', async () => {
+    const { setSlotCandidates } = await import('./slots');
+    const { parseDashboardDefinition } = await import('./definition');
+    const set = setSlotCandidates(def({ floor: anchorSlot }), 'floor', { areaType: 'tp-floor' });
+    expect(set.slots!.floor.candidates).toEqual({ areaType: 'tp-floor' });
+    expect(parseDashboardDefinition(JSON.parse(JSON.stringify(set))).slots!.floor.candidates).toEqual({ areaType: 'tp-floor' });
+    expect(setSlotCandidates(set, 'floor', undefined).slots!.floor.candidates).toBeUndefined();
+  });
+
+  it('is a no-op for a device slot, a scoped slot and a missing slot', async () => {
+    const { setSlotCandidates } = await import('./slots');
+    const d = def({ zone: { type: 'device' }, kid: { ...anchorSlot, scope: { parent: 'floor', strategy: 'first' } }, floor: anchorSlot });
+    expect(setSlotCandidates(d, 'zone', { areaType: 'x' })).toBe(d);
+    expect(setSlotCandidates(d, 'kid', { areaType: 'x' })).toBe(d);
+    expect(setSlotCandidates(d, 'nope', { areaType: 'x' })).toBe(d);
+  });
+});

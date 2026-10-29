@@ -44,6 +44,7 @@ import {
   type PlacementAnchor,
   type SlotBinding,
   type SlotDefinition,
+  type SlotCandidates,
   type SlotScope,
   type WidgetFrameSpec,
   type WidgetImplementationRef,
@@ -233,11 +234,23 @@ function parseSlots(raw: unknown): Record<string, SlotDefinition> | undefined {
     // erase the hierarchy on every load.
     const scope = parseScope(spec.scope);
     if (scope) slot.scope = scope;
+    const candidates = parseCandidates(spec.candidates);
+    if (candidates) slot.candidates = candidates;
     slots[name] = slot;
   }
   if (Object.keys(slots).length === 0) return undefined;
   validateScopes(slots); // drops any scope with a missing/non-anchor/self/cyclic parent
   return slots;
+}
+
+// parseCandidates reads a root anchor slot's picker type filter: non-empty string tokens only,
+// anything else dropped, and nothing left means no filter.
+function parseCandidates(raw: unknown): SlotCandidates | undefined {
+  if (!isRecord(raw)) return undefined;
+  const token = (v: unknown) => (typeof v === 'string' && v ? v : undefined);
+  const areaType = token(raw.areaType);
+  const assetType = token(raw.assetType);
+  return areaType || assetType ? { areaType, assetType } : undefined;
 }
 
 // parseScope reads a candidate `{ parent, strategy }` — structural shape only. A

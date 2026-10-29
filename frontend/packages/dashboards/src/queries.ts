@@ -10,49 +10,11 @@
 
 import type { TypedDocument } from '@devicechain/client';
 
-// ── device-management: the devices anchored to a target (area/customer/asset) ─
-// Filters relationships whose source is a device and whose target is the anchor
-// entity; `source { token }` yields each member device's token (measurementStream
-// is keyed by token, per ADR-044).
-
-export interface EntityRelationshipsResult {
-  entityRelationships: {
-    results: Array<{ source: { token: string } }>;
-    // The size of the whole anchor, past the page: what lets a fleet widget say "showing 500 of N".
-    pagination?: { totalRecords: number | null } | null;
-  };
-}
-export interface EntityRelationshipsVariables {
-  criteria: {
-    pageNumber: number;
-    pageSize: number;
-    sourceType: string;
-    targetType: string;
-    target: string;
-    relationshipType?: string | null;
-  };
-}
-
-export const DEVICES_FOR_ANCHOR = `
-  query DevicesForAnchor($criteria: EntityRelationshipSearchCriteria!) {
-    entityRelationships(criteria: $criteria) {
-      results {
-        source {
-          token
-        }
-      }
-      pagination {
-        totalRecords
-      }
-    }
-  }
-` as unknown as TypedDocument<EntityRelationshipsResult, EntityRelationshipsVariables>;
-
 // ── device-management: the devices of a customer anchor ─────────────────────
 // A customer anchor reads customerDevices rather than the relationship graph: the graph is
 // closed to a member limited to some customers (a customer user), and customerDevices
 // answers such a member about its own customers. For every other viewer it answers what
-// the relationship search above does for (device -> customer, type), so ONE read serves
+// the relationship search did for (device -> customer, type), so ONE read serves
 // every viewer. It carries each device's name, so the roster needs no second read.
 
 export interface CustomerDevicesResult {
@@ -86,6 +48,33 @@ export const CUSTOMER_DEVICES = `
     }
   }
 ` as unknown as TypedDocument<CustomerDevicesResult, CustomerDevicesVariables>;
+
+// ── device-management: the devices on an area or an asset anchor ────────────
+// anchorDevices answers every viewer for an area or an asset: an unscoped caller gets the devices
+// with a live edge to the anchor, and a member limited to some customers gets the same list
+// narrowed to the devices it can see (the anchor itself needs no permission of its own, since an
+// anchor none of its devices is on answers an empty page). The relationship graph that read this
+// before is closed to such a member. relationshipType is optional on the wire and REFUSED for a
+// scoped caller (SCOPE_UNSUPPORTED): the resolver sends it first and retries without it.
+
+export interface AnchorDevicesResult {
+  anchorDevices: {
+    results: Array<{ token: string; name: string | null; deviceType?: { token: string } | null }>;
+    pagination?: { totalRecords: number | null } | null;
+  };
+}
+export interface AnchorDevicesVariables {
+  criteria: {
+    pageNumber: number;
+    pageSize: number;
+    targetType: string;
+    target: string;
+    relationshipType?: string | null;
+  };
+}
+
+export const ANCHOR_DEVICES =
+  'query DashboardAnchorDevices($criteria: AnchorDeviceSearchCriteria!){anchorDevices(criteria:$criteria){results{token name deviceType{token}}pagination{totalRecords}}}' as unknown as TypedDocument<AnchorDevicesResult, AnchorDevicesVariables>;
 
 // ── device-management: which of the given device tokens still exist ──────────
 // A dashboard references a device by a STABLE token (ADR-044); the token re-key
@@ -173,7 +162,7 @@ export interface EntityListResult {
   results: Array<{ token: string; name: string | null }>;
 }
 export interface EntityListVariables {
-  criteria: { pageNumber: number; pageSize: number };
+  criteria: { pageNumber: number; pageSize: number; areaTypeToken?: string | null; assetTypeToken?: string | null };
 }
 
 export const LIST_DEVICES = `

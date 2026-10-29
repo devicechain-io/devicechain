@@ -132,6 +132,7 @@ export {
   MAX_SPAN_SAMPLES,
   withinSpan,
   useResolvedBindings,
+  useViewerBindings,
   useSlotCandidates,
   type AggregateStreamState,
   type AlarmStreamState,
