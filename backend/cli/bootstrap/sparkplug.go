@@ -47,7 +47,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fatih/color"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -334,11 +333,18 @@ func sparkplugProvisioning(instance string, sources []SparkplugSource) (areaConf
 // that, salted per instance with the declaration's UID and bound to the Secret's own UID. A run that
 // rewrites the same password changes nothing and rolls nothing. An absent Secret has no stamp.
 func sparkplugCredentialsStamp(instanceUID string, s *corev1.Secret) string {
+	return credentialsStamp("sparkplug-broker-stamp", instanceUID, s)
+}
+
+// credentialsStamp is the version stamp every area credentials Secret uses, under a domain of its
+// own so two stamps never collide. See sparkplugCredentialsStamp for why it is not a digest of the
+// secret.
+func credentialsStamp(domain, instanceUID string, s *corev1.Secret) string {
 	if s == nil {
 		return ""
 	}
 	h := sha256.New()
-	h.Write([]byte("sparkplug-broker-stamp\x00"))
+	h.Write([]byte(domain + "\x00"))
 	h.Write([]byte(instanceUID))
 	h.Write([]byte{0})
 	h.Write([]byte(s.Name))
@@ -497,8 +503,8 @@ func precheckSparkplugWithdrawal(ctx context.Context, st *State) error {
 	}
 	previous, err := sparkplugReleaseValues(st)
 	if err != nil {
-		fmt.Println(color.YellowString("could not check the release for Sparkplug sources: %v", err))
-		return nil
+		// Fail closed: a release that cannot be read is not a release without sources.
+		return fmt.Errorf("could not check the release for Sparkplug sources, so this bootstrap cannot tell whether it would remove them: %w. Nothing has been changed", err)
 	}
 	if releaseHoldsSparkplugSources(previous) {
 		return errSilentSparkplugWithdrawal(st.Instance)

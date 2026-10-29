@@ -50,7 +50,7 @@ title: 租户删除
 
 有些指向租户的设置属于服务配置，而不是租户数据，因此删除操作不会处理它们。
 
-**LwM2M 设备身份。** 每个 LwM2M DTLS-PSK 身份都在 lwm2m-ingest 配置中绑定到一个租户和一个外部 ID。删除租户后，请从该配置中移除其身份：对于使用 `dcctl` 安装的实例，从 `--lwm2m-identities` 指定的文件中移除这些身份，然后使用该文件重新运行 `dcctl bootstrap`。否则这些绑定仍然有效，并会应用于之后以相同令牌创建的任何租户。
+**LwM2M 设备身份。** 每个 LwM2M DTLS-PSK 身份都在 lwm2m-ingest 配置中绑定到一个租户和一个外部 ID。删除租户后，请从该配置中移除其身份：对于使用 `dcctl` 安装的实例，从 `--lwm2m-identities` 指定的文件中移除这些身份，然后使用该文件运行 `dcctl upgrade --lwm2m-identities`（如果一个身份都不剩，则使用 `--withdraw-lwm2m-identities`）。否则这些绑定仍然有效，并会应用于之后以相同令牌创建的任何租户。
 
 ## 有意保留的内容 {#retained}
 

@@ -18,11 +18,21 @@ import (
 // cluster exists; the service remains the fail-closed authority.
 const minLwm2mPSKBytes = 16
 
-// lwm2mPSKSecretName is the single Opaque Secret dcctl renders (via extraSecrets) to
-// hold every provisioned device PSK, one key per identity.
-func lwm2mPSKSecretName(instance string) string {
+// lwm2mIdentitiesSecretName is the one Opaque Secret dcctl writes to hold every provisioned
+// device PSK, one key per identity. It is written outside the Helm release.
+func lwm2mIdentitiesSecretName(instance string) string {
+	return fmt.Sprintf("dci-%s-lwm2m-identities", instance)
+}
+
+// lwm2mLegacyPSKSecretName is the Secret earlier dcctl versions had the CHART render from
+// extraSecrets, which put every PSK into the release values. It is read only to migrate an
+// instance off that layout (see lwm2mLegacyPSKs); nothing writes it any more.
+func lwm2mLegacyPSKSecretName(instance string) string {
 	return fmt.Sprintf("dci-%s-lwm2m-psk", instance)
 }
+
+// lwm2mPSKEnv is the variable identity n's key reaches the pod in, and the key it has in the Secret.
+func lwm2mPSKEnv(n int) string { return fmt.Sprintf("DC_LWM2M_PSK_%d", n) }
 
 // Lwm2mIdentity is one provisioned DTLS-PSK credential and its tenancy binding, as
 // read from the --lwm2m-identities file. It maps onto the lwm2m-ingest config's
@@ -34,7 +44,7 @@ type Lwm2mIdentity struct {
 	// in the clear).
 	Identity string `json:"identity"`
 	// PSK is the base64-encoded pre-shared key. It is written verbatim into the
-	// rendered Secret's stringData; the service base64-decodes it at load, so the
+	// Secret dcctl writes; the service base64-decodes it at load, so the
 	// value that reaches the env var must stay the base64 STRING.
 	PSK string `json:"psk"`
 	// Tenant and ExternalID are the required tenancy binding.
@@ -114,20 +124,27 @@ func ParseLwm2mIdentities(path string) ([]Lwm2mIdentity, error) {
 	return ids, nil
 }
 
-// lwm2mProvisioning turns the parsed identities into the two value fragments the
-// chart consumes: the extraSecrets entry holding every PSK, and the lwm2m-ingest
-// functional-area config (security.identities[] + the extraEnv secretKeyRefs that
-// project each PSK into the env var its identity names). Env vars are indexed
+// lwm2mSecretData is what dcctl writes into the identities Secret: one key per identity.
+func lwm2mSecretData(ids []Lwm2mIdentity) map[string]string {
+	data := make(map[string]string, len(ids))
+	for i, id := range ids {
+		data[lwm2mPSKEnv(i+1)] = id.PSK
+	}
+	return data
+}
+
+// lwm2mProvisioning turns the parsed identities into the one value fragment the chart consumes:
+// the lwm2m-ingest functional-area config (security.identities[]) and the extraEnv secretKeyRefs
+// that project each PSK, by Secret NAME, into the env var its identity names. It carries no key:
+// the Secret is written by syncLwm2mIdentitiesSecret, outside the release. Env vars are indexed
 // (DC_LWM2M_PSK_<n>) so they are collision-free regardless of identity contents.
-func lwm2mProvisioning(instance string, ids []Lwm2mIdentity) (secret map[string]interface{}, areaConfig map[string]interface{}) {
-	secretName := lwm2mPSKSecretName(instance)
-	stringData := make(map[string]interface{}, len(ids))
+func lwm2mProvisioning(instance string, ids []Lwm2mIdentity) (areaConfig map[string]interface{}) {
+	secretName := lwm2mIdentitiesSecretName(instance)
 	identities := make([]interface{}, 0, len(ids))
 	extraEnv := make([]interface{}, 0, len(ids))
 
 	for i, id := range ids {
-		env := fmt.Sprintf("DC_LWM2M_PSK_%d", i+1)
-		stringData[env] = id.PSK
+		env := lwm2mPSKEnv(i + 1)
 
 		ident := map[string]interface{}{
 			"identity":   id.Identity,
@@ -154,8 +171,7 @@ func lwm2mProvisioning(instance string, ids []Lwm2mIdentity) (secret map[string]
 		})
 	}
 
-	secret = map[string]interface{}{"name": secretName, "stringData": stringData}
-	areaConfig = map[string]interface{}{
+	return map[string]interface{}{
 		"config": map[string]interface{}{
 			"security": map[string]interface{}{
 				"identities": identities,
@@ -163,7 +179,6 @@ func lwm2mProvisioning(instance string, ids []Lwm2mIdentity) (secret map[string]
 		},
 		"extraEnv": extraEnv,
 	}
-	return secret, areaConfig
 }
 
 // mergeFunctionalArea sets one functional area's config into vals["functionalAreas"],

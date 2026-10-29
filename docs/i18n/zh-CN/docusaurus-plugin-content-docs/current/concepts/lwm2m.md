@@ -22,6 +22,8 @@ LwM2M 接入作为可选服务提供，使用 CoAP/UDP 和 DTLS-PSK。它驱动�
 
 网络地址变化的漫游客户端通过 DTLS Connection ID 跟踪，因此蜂窝设备在 IP 变化后仍保留会话。
 
+预共享密钥不属于 Helm 发布。平台把它们保存在由安装程序自己写入的 Secret 中，并在服务启动时投射进去，因此 `helm get values` 永远不会显示任何一个密钥。参见[向 `dcctl` 提供 LwM2M 身份](../deployment/edge-services.md#lwm2m-identities)。
+
 ### 注册生命周期驱动在线状态 {#presence-from-the-registration-lifecycle}
 
 在线状态由协议明确确定，遵循 LwM2M 注册生命周期：

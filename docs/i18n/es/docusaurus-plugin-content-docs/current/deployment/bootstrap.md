@@ -1931,7 +1931,7 @@ dcctl enable-area local my-instance outbound-connectors
   antes de escribir nada. (El perfil `default` ya incluye `update-management`; en una instancia así,
   con ese tipo de almacén, se ejecuta sin almacén de objetos y rechaza los artefactos, y el
   bootstrap o la actualización lo avisa.) `lwm2m-ingest` autentica los dispositivos con las claves precompartidas
-  indicadas en el bootstrap (`--lwm2m-identities`); si se añade después, se ejecuta y rechaza
+  indicadas con `--lwm2m-identities`; si se añade después, se ejecuta y rechaza
   todos los handshakes.
 
 No hay ningún comando que quite un área. Un área puede guardar datos, y sacarla del despliegue

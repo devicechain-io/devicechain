@@ -30,21 +30,24 @@ var bootstrapValues []string
 
 // Bootstrap command flags.
 var (
-	bootstrapKubeContext       string
-	bootstrapCluster           string
-	bootstrapProfile           string
-	bootstrapDryRun            bool
-	bootstrapAssumeYes         bool
-	bootstrapSkipPreflight     bool
-	bootstrapRegistry          string
-	bootstrapVersion           string
-	bootstrapBuild             bool
-	bootstrapHost              string
-	bootstrapNoTLS             bool
-	bootstrapAllowLegacyDb     bool
-	bootstrapDev               bool
-	bootstrapEnableAreas       []string
-	bootstrapLwm2mIdentities   string
+	bootstrapKubeContext     string
+	bootstrapCluster         string
+	bootstrapProfile         string
+	bootstrapDryRun          bool
+	bootstrapAssumeYes       bool
+	bootstrapSkipPreflight   bool
+	bootstrapRegistry        string
+	bootstrapVersion         string
+	bootstrapBuild           bool
+	bootstrapHost            string
+	bootstrapNoTLS           bool
+	bootstrapAllowLegacyDb   bool
+	bootstrapDev             bool
+	bootstrapEnableAreas     []string
+	bootstrapLwm2mIdentities string
+	bootstrapWithdrawLwm2m   bool
+	// bootstrapLwm2mIdentityList is the file above, parsed and validated by RunE.
+	bootstrapLwm2mIdentityList []bootstrap.Lwm2mIdentity
 	bootstrapSparkplugSource   string
 	bootstrapWithdrawSparkplug bool
 	// bootstrapSparkplugSources is the file above, parsed and validated by RunE.
@@ -169,8 +172,10 @@ func bootstrapOptions(instance string, enableAreas []string, mqttFailClosed *boo
 		MqttFailClosed:       mqttFailClosed,
 		TrustedProxies:       bootstrapTrustedProxies,
 		SparkplugSources:     bootstrapSparkplugSources,
+		Lwm2mIdentities:      bootstrapLwm2mIdentityList,
 
 		WithdrawSparkplugSources: bootstrapWithdrawSparkplug,
+		WithdrawLwm2mIdentities:  bootstrapWithdrawLwm2m,
 	}
 }
 
@@ -199,6 +204,7 @@ func bootstrapStateFor(opts bootstrap.Options, binding bootstrap.ClusterBinding,
 		EnableAreas:            opts.EnableAreas,
 		EnabledAreas:           enabledAreas,
 		Lwm2mIdentities:        lwm2mIdentities,
+		Lwm2mIdentitiesGiven:   len(lwm2mIdentities) > 0 || opts.WithdrawLwm2mIdentities,
 		SparkplugSources:       opts.SparkplugSources,
 		SparkplugSourcesGiven:  len(opts.SparkplugSources) > 0 || opts.WithdrawSparkplugSources,
 		MqttFailClosed:         opts.MqttFailClosed,
@@ -284,6 +290,10 @@ var bootstrapCmd = &cobra.Command{
 		}
 		// The Sparkplug sources are judged here too, for the same reason: a missing tenant, a
 		// broker URL with no host or an autoRegister without a device type fails before any cluster.
+		bootstrapLwm2mIdentityList = lwm2mIdentities
+		if err := bootstrap.CheckLwm2mFlags(lwm2mIdentities, bootstrapWithdrawLwm2m); err != nil {
+			return err
+		}
 		sparkplugSources, err := bootstrap.ParseSparkplugSources(bootstrapSparkplugSource)
 		if err != nil {
 			return fmt.Errorf("--sparkplug-source: %w", err)
@@ -688,7 +698,8 @@ func init() {
 	bootstrapCmd.Flags().StringSliceVar(&bootstrapTrustedProxies, "trusted-proxies", nil, trustedProxiesUsage)
 	bootstrapCmd.Flags().StringVar(&bootstrapSparkplugSource, "sparkplug-source", "", sparkplugSourceUsage)
 	bootstrapCmd.Flags().BoolVar(&bootstrapWithdrawSparkplug, "withdraw-sparkplug-sources", false, withdrawSparkplugUsage)
-	bootstrapCmd.Flags().StringVar(&bootstrapLwm2mIdentities, "lwm2m-identities", "", "path to a JSON file of LwM2M DTLS-PSK credentials to provision: [{identity, psk(base64), tenant, externalId, deviceTypeToken, autoRegister}]. Renders the PSKs into a chart-owned Secret and binds each to lwm2m-ingest; implies --enable-area lwm2m-ingest. Validated up front (short PSK / missing tenancy fails before any cluster). Re-running bootstrap WITHOUT this flag removes the provisioned credentials")
+	bootstrapCmd.Flags().StringVar(&bootstrapLwm2mIdentities, "lwm2m-identities", "", lwm2mIdentitiesUsage)
+	bootstrapCmd.Flags().BoolVar(&bootstrapWithdrawLwm2m, "withdraw-lwm2m-identities", false, withdrawLwm2mUsage)
 
 	bootstrapCmd.Flags().StringVar(&bootstrapObjectStore.Mode, "object-store", "", "where the instance keeps tenant logos and update artifacts: none, filesystem (a volume the chart creates) or s3. Default: a small filesystem store on a cluster dcctl created, none on one it was pointed at with --kube-context. Fixed configuration, recorded on the instance and kept by 'dcctl upgrade'")
 	bootstrapCmd.Flags().StringVar(&bootstrapObjectStore.Size, "object-store-size", "", "filesystem store: size of the volume, a Kubernetes quantity (default 5Gi, the chart default)")
@@ -775,6 +786,18 @@ const mqttFailClosedUsage = "make a QoS 1 PUBACK from the MQTT gateway mean the 
 const valuesUsage = "a YAML file of operator tuning (replica counts, resources, an area's own configuration), merged over the values dcctl computes (repeatable; later files win). " +
 	"The overlay is recorded on the instance, so 'dcctl upgrade' keeps applying it; on upgrade, --values REPLACES the recorded overlay. " +
 	"Only tunable values are accepted: a key dcctl owns (images, credentials, endpoints, ingress host and TLS, the area set) is refused, naming it, before anything changes"
+
+// lwm2mIdentitiesUsage is the help text of --lwm2m-identities on both verbs.
+const lwm2mIdentitiesUsage = "path to a JSON file of LwM2M DTLS-PSK credentials to provision: [{identity, psk(base64), tenant, externalId, deviceTypeToken, autoRegister}]. " +
+	"The identities bind each credential to lwm2m-ingest; the pre-shared keys are written by dcctl into a Secret of its own, " +
+	"dci-<instance>-lwm2m-identities, OUTSIDE the Helm release: the release records only the Secret's name and a version stamp, never a key. " +
+	"The identities are kept by every later upgrade, and a run given the file again replaces them and rewrites the Secret (a rotation). " +
+	"Implies --enable-area lwm2m-ingest on a bootstrap (on an upgrade the area must already run). Validated up front (short PSK / missing tenancy fails before any cluster). " +
+	"A bootstrap over an instance that has identities, given none, is refused unless --withdraw-lwm2m-identities is given"
+
+// withdrawLwm2mUsage is the help text of --withdraw-lwm2m-identities on both verbs.
+const withdrawLwm2mUsage = "remove the instance's LwM2M identities and the Secret holding their pre-shared keys. " +
+	"Not combinable with --lwm2m-identities"
 
 // sparkplugSourceUsage is the help text of --sparkplug-source on both verbs.
 const sparkplugSourceUsage = "path to a YAML or JSON file of Sparkplug sources to connect: a list of " +

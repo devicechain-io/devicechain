@@ -120,6 +120,10 @@ var dispositions = map[string]disposition{
 	// survive today only by being copied out of the previous Helm release.
 	"lwm2m-identities": gap,
 
+	// withdraw-lwm2m-identities is an instruction for THIS run (remove what the release holds); its
+	// result is the absence of identities, which the release records by not holding them.
+	"withdraw-lwm2m-identities": runScoped,
+
 	// sparkplug-source is the same shape: the broker passwords are secretHalf, and the sources
 	// beside them (tenant, broker address, groups, device type, command limits) are not secret
 	// and equally unrecorded. Both survive an upgrade by being carried out of the previous Helm

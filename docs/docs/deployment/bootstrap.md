@@ -1778,7 +1778,7 @@ dcctl enable-area local my-instance outbound-connectors
   `user-management` is refused before anything is written. (The `default` profile already
   includes `update-management`; on such an instance with that kind of store it runs without an
   object store and refuses artifacts, and the bootstrap or upgrade says so.) `lwm2m-ingest` authenticates devices
-  against the pre-shared keys given at bootstrap (`--lwm2m-identities`); added later, it runs and
+  against the pre-shared keys given with `--lwm2m-identities`; added later, it runs and
   refuses every handshake.
 
 There is no command that removes an area. An area may hold data, and taking it out of the

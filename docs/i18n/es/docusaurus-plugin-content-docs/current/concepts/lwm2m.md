@@ -22,6 +22,8 @@ Con el autorregistro habilitado para una credencial, la fila del dispositivo se 
 
 A los clientes itinerantes, cuya dirección de red cambia, se les sigue mediante el Connection ID de DTLS, de modo que un dispositivo celular conserva su sesión a través de un cambio de IP.
 
+Las claves precompartidas no forman parte de la versión de Helm. La plataforma las guarda en un Secret que el instalador escribe él mismo y que se proyecta en el servicio al arrancar, de modo que `helm get values` nunca muestra ninguna. Consulta [Dar identidades LwM2M a `dcctl`](../deployment/edge-services.md#lwm2m-identities).
+
 ### Presencia a partir del ciclo de vida del registro
 
 La presencia es autoritativa y sigue el ciclo de vida del registro de LwM2M:

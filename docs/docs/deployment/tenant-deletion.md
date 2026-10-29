@@ -73,7 +73,7 @@ data, so a deletion does not touch them.
 **LwM2M device identities.** Each LwM2M DTLS-PSK identity is bound to a tenant and an external id in
 the lwm2m-ingest configuration. After deleting a tenant, remove its identities from that
 configuration: for an instance installed with `dcctl`, remove them from the file passed as
-`--lwm2m-identities` and re-run `dcctl bootstrap` with it. Otherwise the bindings stay in place and
+`--lwm2m-identities` and run `dcctl upgrade --lwm2m-identities` with it (or `--withdraw-lwm2m-identities` if none remain). Otherwise the bindings stay in place and
 apply to any tenant later created at the same token.
 
 ## What is deliberately kept {#retained}

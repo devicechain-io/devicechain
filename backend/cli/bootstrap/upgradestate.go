@@ -325,6 +325,17 @@ func applyUpgradeDeclaration(st *State, inst *dcv1beta1.Instance, opts UpgradeOp
 	if err := CheckSparkplugFlags(opts.SparkplugSources, opts.WithdrawSparkplugSources); err != nil {
 		return err
 	}
+	if err := CheckLwm2mFlags(opts.Lwm2mIdentities, opts.WithdrawLwm2mIdentities); err != nil {
+		return err
+	}
+	st.Lwm2mIdentitiesGiven = len(opts.Lwm2mIdentities) > 0 || opts.WithdrawLwm2mIdentities
+	if len(opts.Lwm2mIdentities) > 0 {
+		if !slices.Contains(st.EnabledAreas, string(functionalarea.Lwm2mIngest)) {
+			return fmt.Errorf("--lwm2m-identities needs the lwm2m-ingest area, which instance %q does not run; "+
+				"turn it on first with 'dcctl enable-area %s %s lwm2m-ingest'", opts.Instance, st.Provider, opts.Instance)
+		}
+		st.Lwm2mIdentities = opts.Lwm2mIdentities
+	}
 	st.SparkplugSourcesGiven = len(opts.SparkplugSources) > 0 || opts.WithdrawSparkplugSources
 	if len(opts.SparkplugSources) > 0 {
 		if !slices.Contains(st.EnabledAreas, string(functionalarea.SparkplugIngest)) {

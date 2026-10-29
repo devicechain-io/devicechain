@@ -170,9 +170,14 @@ type State struct {
 	// on every other run. See applyAreaChange.
 	AreaChange *AreaChange
 	// Lwm2mIdentities are the provisioned LwM2M DTLS-PSK credentials (--lwm2m-identities):
-	// helmValues renders them into a chart-owned Secret + lwm2m-ingest config. Setting
-	// this implies lwm2m-ingest ∈ EnabledAreas. Empty when the flag is unused.
+	// helmValues renders them into lwm2m-ingest's config; the keys go into a Secret dcctl writes
+	// (syncLwm2mIdentitiesSecret). Setting this implies lwm2m-ingest ∈ EnabledAreas. Empty when
+	// the flag is unused, which on an upgrade means "keep what the release holds".
 	Lwm2mIdentities []Lwm2mIdentity
+	// Lwm2mIdentitiesGiven says this run decides the identities: it was given a file, or told to
+	// withdraw them. Separate from len(Lwm2mIdentities) because "no identities" is an answer too,
+	// and a run that gives it must neither carry the release's identities back nor keep the Secret.
+	Lwm2mIdentitiesGiven bool
 	// SparkplugSources are the Sparkplug broker connections (--sparkplug-source): helmValues
 	// renders them into the sparkplug-ingest area's configuration and a chart-owned Secret for
 	// the broker passwords. Setting this implies sparkplug-ingest is an enabled area. Empty when

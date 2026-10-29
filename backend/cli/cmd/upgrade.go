@@ -23,6 +23,9 @@ var (
 	upgradeMqttFailClosed bool
 	upgradeTrustedProxies []string
 
+	upgradeLwm2mIdentities   string
+	upgradeWithdrawLwm2m     bool
+	upgradeLwm2mIdentityList []bootstrap.Lwm2mIdentity
 	upgradeSparkplugSource   string
 	upgradeWithdrawSparkplug bool
 	// upgradeSparkplugSources is the file above, parsed and validated by RunE.
@@ -63,6 +66,8 @@ func upgradeOptions(instance string, mqttFailClosed *bool, valuesOverlay map[str
 			DropLegacyIngress: upgradeDropLegacyIngress,
 			ResetValues:       upgradeResetValues,
 
+			Lwm2mIdentities:          upgradeLwm2mIdentityList,
+			WithdrawLwm2mIdentities:  upgradeWithdrawLwm2m,
 			SparkplugSources:         upgradeSparkplugSources,
 			WithdrawSparkplugSources: upgradeWithdrawSparkplug,
 		},
@@ -134,6 +139,13 @@ chooses the front end by hand, records the choice on the instance, and 'nginx' i
 that later upgrades keep ('--ingress-controller auto' returns to deciding from the cluster). The
 Gateway names a new certificate Secret while the Ingress objects remain, so the host DNS still
 reaches never waits for a certificate; the upgrade waits for the Gateway's own to be Ready.
+
+LwM2M identities ('--lwm2m-identities <file>') are kept the same way. The pre-shared keys are not in the Helm
+release: dcctl writes them into a Secret of its own, dci-<instance>-lwm2m-identities, which the upgrade leaves
+alone, and '--withdraw-lwm2m-identities' removes both. An instance built before the keys moved out of the release is
+migrated by its first upgrade: the keys are copied into the new Secret before the release changes, and Helm then
+removes the chart-rendered one. Helm's earlier revisions still hold the old values, so rotate the keys afterwards
+(give '--lwm2m-identities' with new keys) if those revisions matter to you.
 
 A Sparkplug source ('--sparkplug-source <file>') is carried the same way as the tuning below: the
 sources stay on the instance through every later upgrade, and a run given the file again replaces
@@ -209,6 +221,12 @@ when they are in a terraform.tfvars beside its state
 				return err
 			}
 		}
+		if upgradeLwm2mIdentityList, err = bootstrap.ParseLwm2mIdentities(upgradeLwm2mIdentities); err != nil {
+			return fmt.Errorf("--lwm2m-identities: %w", err)
+		}
+		if err := bootstrap.CheckLwm2mFlags(upgradeLwm2mIdentityList, upgradeWithdrawLwm2m); err != nil {
+			return err
+		}
 		if upgradeSparkplugSources, err = bootstrap.ParseSparkplugSources(upgradeSparkplugSource); err != nil {
 			return fmt.Errorf("--sparkplug-source: %w", err)
 		}
@@ -229,6 +247,8 @@ func init() {
 	upgradeCmd.Flags().StringVar(&upgradeEscrowFile, "escrow-file", "", "where this instance's root-key escrow artifact lives (default ~/.devicechain/escrow/<instance>-rootkey.escrow). The upgrade checks it still protects the key the instance is running on")
 	upgradeCmd.Flags().BoolVar(&upgradeSkipInfra, "skip-infrastructure", false, "move only the services: leave this instance's message broker and event store on the configuration they were built with")
 	upgradeCmd.Flags().StringArrayVar(&upgradeValues, "values", nil, valuesUsage)
+	upgradeCmd.Flags().StringVar(&upgradeLwm2mIdentities, "lwm2m-identities", "", lwm2mIdentitiesUsage)
+	upgradeCmd.Flags().BoolVar(&upgradeWithdrawLwm2m, "withdraw-lwm2m-identities", false, withdrawLwm2mUsage)
 	upgradeCmd.Flags().StringVar(&upgradeSparkplugSource, "sparkplug-source", "", sparkplugSourceUsage)
 	upgradeCmd.Flags().BoolVar(&upgradeWithdrawSparkplug, "withdraw-sparkplug-sources", false, withdrawSparkplugUsage)
 	upgradeCmd.Flags().BoolVar(&upgradeMqttFailClosed, "mqtt-fail-closed", false, mqttFailClosedUsage)

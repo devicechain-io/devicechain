@@ -347,6 +347,10 @@ Una actualización no cambia la forma de una instancia, pero sí conserva el aju
 
 La confirmación MQTT a prueba de fallos se conserva del mismo modo: `--mqtt-fail-closed` en `dcctl bootstrap` o `dcctl upgrade` se registra en la instancia, y una actualización que omite el indicador conserva lo registrado, activado o desactivado. Consulta [MQTT con fail-closed](./observability.md#mqtt-fail-closed).
 
+### Las credenciales aprovisionadas se conservan {#upgrade-provisioned-credentials}
+
+Las credenciales que diste a `dcctl` con un archivo, las [claves precompartidas de LwM2M](./edge-services.md#lwm2m-identities) y las [contraseñas del broker de Sparkplug](./edge-services.md#sparkplug-sources), se guardan en Secrets que `dcctl` escribe él mismo, fuera de la versión de Helm. Una actualización no los toca y no lee nada secreto de la versión. La primera actualización de una instancia aprovisionada con claves LwM2M por una versión anterior las traslada a su propio Secret antes de que cambie la versión; las revisiones anteriores del historial de Helm siguen teniendo los valores antiguos, así que rota las claves después si eso te importa. Los ajustes que pusieras a mano en el bloque `lwm2m-ingest` de la versión ya no se conservan entre actualizaciones (solo las identidades y su proyección); ponlos en un [archivo de valores](./tuning-an-instance.md) indicado con `--values`.
+
 ### Qué aplica una actualización a la infraestructura {#upgrade-infrastructure}
 
 Antes de mover los servicios, `dcctl upgrade` aplica la configuración de OpenTofu de la

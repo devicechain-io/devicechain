@@ -29,6 +29,7 @@ func aPreviousRelease() map[string]interface{} {
 						},
 					},
 				},
+				"extraEnv": []interface{}{map[string]interface{}{"name": "DC_LWM2M_PSK_1"}},
 			},
 		},
 	}
@@ -68,22 +69,21 @@ func TestAnUpgradeDoesNotInventMonitoringTheInstanceNeverHad(t *testing.T) {
 	}
 }
 
-// 🔴 A VERSION BUMP MUST NOT UNPROVISION EVERY DEVICE. The LwM2M pre-shared keys come
-// from a file supplied once at bootstrap, and nothing records that file. Recomputing
-// the values without it does not leave the Secret alone — it takes the Secret out of
-// the manifest, and Helm deletes what leaves the manifest.
+// 🔴 A VERSION BUMP MUST NOT UNPROVISION EVERY DEVICE. The LwM2M identities come from a
+// file supplied once, and nothing records that file. Recomputing the values without
+// them would leave lwm2m-ingest with no bindings and no reference to the keys.
 func TestAnUpgradeKeepsTheProvisionedDeviceCredentials(t *testing.T) {
 	vals := map[string]interface{}{"image": map[string]interface{}{"tag": "v2"}}
 	carryReleaseValues(vals, aPreviousRelease())
 
-	if _, ok := vals["extraSecrets"]; !ok {
-		t.Error("the provisioned pre-shared keys left the manifest, so Helm would delete the " +
-			"Secret every LwM2M device authenticates with")
-	}
 	areas, _ := vals["functionalAreas"].(map[string]interface{})
-	if _, ok := areas["lwm2m-ingest"]; !ok {
-		t.Error("the LwM2M area lost its identity bindings, so the keys that survived would " +
+	lwm2m, ok := areas["lwm2m-ingest"].(map[string]interface{})
+	if !ok {
+		t.Fatal("the LwM2M area lost its identity bindings, so the keys that survived would " +
 			"no longer be bound to anything")
+	}
+	if _, ok := lwm2m["extraEnv"]; !ok {
+		t.Error("the LwM2M area lost the projection of its keys, so no handshake could be answered")
 	}
 }
 
@@ -94,7 +94,8 @@ func TestWhatThisRunDecidedWinsOverWhatTheReleaseHeld(t *testing.T) {
 	vals := map[string]interface{}{
 		"extraSecrets": []interface{}{map[string]interface{}{"name": "the-new-one"}},
 		"functionalAreas": map[string]interface{}{
-			"lwm2m-ingest": map[string]interface{}{"config": "the-new-one"},
+			"lwm2m-ingest": map[string]interface{}{"config": map[string]interface{}{
+				"security": map[string]interface{}{"identities": "the-new-one"}}},
 		},
 	}
 	carryReleaseValues(vals, aPreviousRelease())
@@ -106,8 +107,11 @@ func TestWhatThisRunDecidedWinsOverWhatTheReleaseHeld(t *testing.T) {
 			"supplying the identities file have no effect")
 	}
 	areas, _ := vals["functionalAreas"].(map[string]interface{})
-	if lwm2m, _ := areas["lwm2m-ingest"].(map[string]interface{}); lwm2m["config"] != "the-new-one" {
-		t.Error("the carried area config displaced the one this run computed")
+	lwm2m, _ := areas["lwm2m-ingest"].(map[string]interface{})
+	cfg, _ := lwm2m["config"].(map[string]interface{})
+	sec, _ := cfg["security"].(map[string]interface{})
+	if sec["identities"] != "the-new-one" {
+		t.Error("the carried identities displaced the ones this run computed")
 	}
 }
 
@@ -163,19 +167,17 @@ func upgradeReleaseValues(t *testing.T, previous map[string]interface{}) map[str
 // 🔴 THE CARRY HAS TO HAPPEN IN THE FUNCTION HELMINSTALL CALLS. carryReleaseValues is
 // tested on its own above; this pins that releaseValues — the one composition both
 // helmInstall and the rendered-profile checks use — actually applies it when the State
-// is moving an instance. Without it, an upgrade would compute fresh values, drop the
-// provisioned LwM2M Secret from the manifest, and Helm would delete it.
+// is moving an instance. Without it, an upgrade would compute fresh values and drop
+// the LwM2M identity bindings.
 func TestReleaseValuesCarriesThePreviousReleaseOnAnUpgrade(t *testing.T) {
 	t.Parallel()
-	vals := upgradeReleaseValues(t, aPreviousRelease())
+	previous := aPreviousRelease()
+	previous["extraSecrets"] = []interface{}{map[string]interface{}{"name": lwm2mLegacyPSKSecretName("dci-upgrade")}}
+	vals := upgradeReleaseValues(t, previous)
 
-	secrets, _ := vals["extraSecrets"].([]interface{})
-	if len(secrets) != 1 {
-		t.Fatalf("extraSecrets = %v, want the previous release's one Secret: an upgrade "+
-			"would delete the Secret every LwM2M device authenticates with", vals["extraSecrets"])
-	}
-	if name, _ := secrets[0].(map[string]interface{})["name"].(string); name != "dci-devicechain-lwm2m-psk" {
-		t.Errorf("carried Secret name = %q, want dci-devicechain-lwm2m-psk", name)
+	if v, ok := vals["extraSecrets"]; ok {
+		t.Fatalf("extraSecrets = %v: the legacy key Secret entry must leave the values (it is replaced "+
+			"by the Secret dcctl writes), or the release would keep holding the keys", v)
 	}
 	areas, _ := vals["functionalAreas"].(map[string]interface{})
 	lwm2m, _ := areas["lwm2m-ingest"].(map[string]interface{})

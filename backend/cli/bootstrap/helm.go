@@ -158,6 +158,12 @@ func helmInstall(ctx context.Context, st *State) error {
 		}
 		carryForwardFromRelease(st, previous)
 	}
+	// The keys an instance on the old layout holds in its release, read BEFORE any write so a
+	// malformed entry refuses with nothing changed.
+	legacyPSKs, err := lwm2mLegacyKeysFor(st, previous)
+	if err != nil {
+		return err
+	}
 
 	vals, doc, err := releaseValues(ctx, ch, st, previous)
 	if err != nil {
@@ -238,6 +244,12 @@ func helmInstall(ctx context.Context, st *State) error {
 		return err
 	}
 	withSparkplugCredentialsChecksum(vals, spDigest)
+	// The LwM2M pre-shared keys, the same way: dcctl's own Secret, written before the release, named
+	// by the lwm2m-ingest pods' secretKeyRef, with only a version stamp as a value. An instance built
+	// when the chart rendered them from the release values has them moved out here, first.
+	if err := settleLwm2mIdentities(ctx, typed, st, previous, legacyPSKs, vals); err != nil {
+		return err
+	}
 	// The callout's seeds, before the release and beside the document: only device-management
 	// mounts this Secret, and its pods project it at container start.
 	if err := writeCalloutSecret(ctx, typed, st); err != nil {
@@ -310,7 +322,14 @@ func releaseValues(ctx context.Context, ch *chart.Chart, st *State, previous map
 		if st.SparkplugSourcesGiven {
 			previous = withoutSparkplugSources(previous)
 		}
+		// The keys no longer live in the release: an old layout's entry is not carried, and its
+		// references are pointed at the Secret dcctl writes (see lwm2m_secret.go).
+		previous = withoutLegacyLwm2mSecret(st.Instance, previous)
+		if st.Lwm2mIdentitiesGiven {
+			previous = withoutLwm2mIdentities(previous)
+		}
 		carryReleaseValues(vals, previous)
+		pointLwm2mEnvAtTheIdentitiesSecret(st.Instance, vals)
 		if msg := removedBodyCredentialStripNotice(previous); msg != "" {
 			fmt.Println(color.YellowString(msg))
 		}
@@ -625,19 +644,15 @@ func helmValues(st *State) map[string]interface{} {
 	// value to whatever the release held.
 	persistenceFor(st).mergeInto(vals)
 
-	// LwM2M PSK provisioning (--lwm2m-identities): render the device PSKs into a
-	// chart-owned Secret (extraSecrets) and bind each into lwm2m-ingest's config
-	// (security.identities[]) + an extraEnv secretKeyRef that projects it. The area is
+	// LwM2M PSK provisioning (--lwm2m-identities): bind each identity into lwm2m-ingest's config
+	// (security.identities[]) + an extraEnv secretKeyRef that projects its key from a Secret BY NAME.
+	// No key goes into these values: the Secret is written by dcctl outside the release
+	// (syncLwm2mIdentitiesSecret). The area is
 	// turned on separately via EnabledAreas (the flag implies --enable-area
 	// lwm2m-ingest); this only supplies its config, merged so it coexists with any
 	// other functionalAreas block rather than overwriting it.
 	if len(st.Lwm2mIdentities) > 0 {
-		secret, areaConfig := lwm2mProvisioning(st.Instance, st.Lwm2mIdentities)
-		// Append rather than assign, so a future second writer of extraSecrets doesn't
-		// silently drop this one (the same clobber class mergeFunctionalArea guards).
-		existing, _ := vals["extraSecrets"].([]interface{})
-		vals["extraSecrets"] = append(existing, secret)
-		mergeFunctionalArea(vals, "lwm2m-ingest", areaConfig)
+		mergeFunctionalArea(vals, "lwm2m-ingest", lwm2mProvisioning(st.Instance, st.Lwm2mIdentities))
 	}
 
 	// Sparkplug sources (--sparkplug-source): the sources into sparkplug-ingest's configuration,

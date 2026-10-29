@@ -4,7 +4,6 @@
 package bootstrap
 
 import (
-	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"os"
@@ -86,20 +85,19 @@ func TestParseLwm2mIdentities(t *testing.T) {
 }
 
 // lwm2mProvisioning must produce the exact chart-values shapes the deployed path
-// reads: a PSK Secret entry, a security.identities[] binding, and an extraEnv
-// secretKeyRef that ties the two together by the SAME env var name.
+// reads: a security.identities[] binding and an extraEnv secretKeyRef that ties it to
+// the Secret dcctl writes by the SAME env var name. It carries no key.
 func TestLwm2mProvisioningComposition(t *testing.T) {
 	ids := []Lwm2mIdentity{
 		{Identity: "h1", PSK: b64PSK(16), Tenant: "acme", ExternalID: "plant-a/s1", DeviceTypeToken: "sensor", AutoRegister: true},
 	}
-	secret, area := lwm2mProvisioning("dctest", ids)
+	area := lwm2mProvisioning("dctest", ids)
 
-	if secret["name"] != "dci-dctest-lwm2m-psk" {
-		t.Fatalf("secret name = %v", secret["name"])
+	if data := lwm2mSecretData(ids); len(data) != 1 || data["DC_LWM2M_PSK_1"] != ids[0].PSK {
+		t.Fatalf("the Secret data must carry the verbatim base64 PSK under the env key: %v", data)
 	}
-	sd := secret["stringData"].(map[string]interface{})
-	if sd["DC_LWM2M_PSK_1"] != ids[0].PSK {
-		t.Fatalf("secret stringData must carry the verbatim base64 PSK under the env key: %v", sd)
+	if anywhere(area, ids[0].PSK) {
+		t.Fatal("the area configuration carries the key")
 	}
 
 	idents := area["config"].(map[string]interface{})["security"].(map[string]interface{})["identities"].([]interface{})
@@ -114,7 +112,7 @@ func TestLwm2mProvisioningComposition(t *testing.T) {
 	env := area["extraEnv"].([]interface{})[0].(map[string]interface{})
 	ref := env["valueFrom"].(map[string]interface{})["secretKeyRef"].(map[string]interface{})
 	// The projection must point back at the SAME secret + key the identity's pskEnv names.
-	if env["name"] != "DC_LWM2M_PSK_1" || ref["name"] != "dci-dctest-lwm2m-psk" || ref["key"] != "DC_LWM2M_PSK_1" {
+	if env["name"] != "DC_LWM2M_PSK_1" || ref["name"] != "dci-dctest-lwm2m-identities" || ref["key"] != "DC_LWM2M_PSK_1" {
 		t.Fatalf("extraEnv secretKeyRef does not tie to the secret: env=%v ref=%v", env, ref)
 	}
 }
@@ -150,16 +148,16 @@ func renderDocs(t *testing.T, vals map[string]interface{}) []map[string]interfac
 }
 
 // The end-to-end proof: a State with --lwm2m-identities, rendered through the SAME
-// helmValues → embedded chart a real bootstrap uses, produces the full projection
-// chain — a PSK Secret, the identity binding in lwm2m-ingest's mounted config, and a
-// Deployment env var that ties the two together.
+// helmValues → embedded chart a real bootstrap uses, produces the projection chain —
+// the identity binding in lwm2m-ingest's mounted config and a Deployment env var that
+// names the Secret dcctl writes — and renders NO Secret of its own.
 func TestLwm2mIdentitiesRenderEndToEnd(t *testing.T) {
 	t.Parallel()
 	enabled, err := ResolveEnabledAreas("default", []string{"lwm2m-ingest"})
 	if err != nil {
 		t.Fatalf("resolving areas: %v", err)
 	}
-	psk := b64PSK(24)
+	psk := base64.StdEncoding.EncodeToString([]byte("distinct-device-key-0123456789"))
 	st := &State{
 		Instance:      "dctest",
 		Profile:       "default",
@@ -176,8 +174,7 @@ func TestLwm2mIdentitiesRenderEndToEnd(t *testing.T) {
 	}
 	docs := renderDocs(t, helmValues(st))
 
-	// 1. The PSK Secret renders with the verbatim base64 PSK under the env key.
-	var pskSecret map[string]interface{}
+	// 1. The chart renders no Secret for the keys: dcctl writes it, outside the release.
 	var lwm2mConfigJSON string
 	var lwm2mEnv []interface{}
 	for _, d := range docs {
@@ -185,8 +182,8 @@ func TestLwm2mIdentitiesRenderEndToEnd(t *testing.T) {
 		meta, _ := d["metadata"].(map[string]interface{})
 		name, _ := meta["name"].(string)
 		switch {
-		case kind == "Secret" && name == "dci-dctest-lwm2m-psk":
-			pskSecret = d
+		case kind == "Secret" && (name == "dci-dctest-lwm2m-psk" || name == "dci-dctest-lwm2m-identities"):
+			t.Fatalf("the chart rendered the LwM2M key Secret %q: it belongs to dcctl, not the release", name)
 		case kind == "ConfigMap" && name == "dct-dctest-config":
 			if data, ok := d["data"].(map[string]interface{}); ok {
 				lwm2mConfigJSON, _ = data["lwm2m-ingest"].(string)
@@ -199,11 +196,10 @@ func TestLwm2mIdentitiesRenderEndToEnd(t *testing.T) {
 		}
 	}
 
-	if pskSecret == nil {
-		t.Fatal("PSK Secret dci-dctest-lwm2m-psk was not rendered")
-	}
-	if sd, _ := pskSecret["stringData"].(map[string]interface{}); sd["DC_LWM2M_PSK_1"] != psk {
-		t.Fatalf("PSK Secret does not carry the verbatim base64 PSK: %v", pskSecret["stringData"])
+	for _, d := range docs {
+		if anywhere(d, psk) {
+			t.Fatal("the pre-shared key is in the rendered manifest")
+		}
 	}
 
 	// 2. The identity binding reached lwm2m-ingest's mounted per-area config.
@@ -240,62 +236,12 @@ func TestLwm2mIdentitiesRenderEndToEnd(t *testing.T) {
 			continue
 		}
 		ref := ev["valueFrom"].(map[string]interface{})["secretKeyRef"].(map[string]interface{})
-		if ref["name"] != "dci-dctest-lwm2m-psk" || ref["key"] != "DC_LWM2M_PSK_1" {
+		if ref["name"] != "dci-dctest-lwm2m-identities" || ref["key"] != "DC_LWM2M_PSK_1" {
 			t.Fatalf("env projection points at the wrong secret/key: %v", ref)
 		}
 		found = true
 	}
 	if !found {
 		t.Fatal("lwm2m-ingest Deployment has no DC_LWM2M_PSK_1 env projecting the PSK Secret")
-	}
-}
-
-// A value-only PSK rotation (same identity, new key) changes only the extra Secret —
-// not the instance config or the per-area config — so without the checksum/extra-secrets
-// pod annotation the Deployment podspec would be byte-identical and the running pod
-// would keep its old key. Rendering the same identity with two different PSKs must
-// produce two different lwm2m-ingest pod hashes, so `helm upgrade` actually rolls.
-func TestLwm2mPSKRotationRollsPod(t *testing.T) {
-	t.Parallel()
-	extraSecretsChecksum := func(psk string) string {
-		enabled, err := ResolveEnabledAreas("default", []string{"lwm2m-ingest"})
-		if err != nil {
-			t.Fatalf("resolving areas: %v", err)
-		}
-		st := &State{
-			Instance:      "dctest",
-			Profile:       "default",
-			ImageRegistry: DefaultImageRegistry,
-			ImageVersion:  "v0.0.0-test",
-			EnabledAreas:  enabled,
-			Lwm2mIdentities: []Lwm2mIdentity{
-				{Identity: "opaque-1", PSK: psk, Tenant: "acme", ExternalID: "plant-a/s1", DeviceTypeToken: "sensor", AutoRegister: true},
-			},
-			Values: map[string]string{
-				"ingressHost":    "localhost",
-				"secretsRootKey": base64.StdEncoding.EncodeToString(make([]byte, 32)),
-			},
-		}
-		for _, d := range renderDocs(t, helmValues(st)) {
-			meta, _ := d["metadata"].(map[string]interface{})
-			if d["kind"] != "Deployment" || meta["name"] != "lwm2m-ingest" {
-				continue
-			}
-			ann := d["spec"].(map[string]interface{})["template"].(map[string]interface{})["metadata"].(map[string]interface{})["annotations"].(map[string]interface{})
-			cs, _ := ann["checksum/extra-secrets"].(string)
-			if cs == "" {
-				t.Fatal("lwm2m-ingest pod has no checksum/extra-secrets annotation — a PSK rotation would not roll it")
-			}
-			return cs
-		}
-		t.Fatal("lwm2m-ingest Deployment not rendered")
-		return ""
-	}
-
-	// Two distinct non-zero keys.
-	a := extraSecretsChecksum(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x11}, 16)))
-	b := extraSecretsChecksum(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0xAB}, 16)))
-	if a == b {
-		t.Fatal("checksum/extra-secrets did not change when the PSK value changed: an in-place rotation would silently not roll the pod")
 	}
 }
