@@ -23,7 +23,7 @@ import { Pagination } from '@/components/ui/pagination';
 import { useToast } from '@/components/ui/toast';
 import { rowLinkProps, useReload } from '@/routes/common';
 import { useAuth } from '@/auth/AuthProvider';
-import { isScoped } from '@devicechain/client';
+import { hasAuthority, isScoped } from '@devicechain/client';
 import { getDeviceEarmarks, listProvisioningProfiles, type ProfileRef } from '@/lib/api/provisioning';
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox';
 import { FormDrawer } from '@/components/registry';
@@ -103,6 +103,9 @@ export default function DevicesPage() {
   // names them (no filter, no column, no extra request).
   const { claims } = useAuth();
   const scoped = isScoped(claims);
+  // Creating, importing and bulk-creating are device:write, which the server refuses to a
+  // member limited to part of the tenant whatever their role names.
+  const canWrite = !scoped && hasAuthority(claims, 'device:write');
   const provisioningProfile = scoped ? '' : (params.get(REGISTERED_PARAM) ?? '');
   const expectedProvisioningProfile = scoped ? '' : (params.get(EXPECTED_PARAM) ?? '');
   const filtered = provisioningProfile !== '' || expectedProvisioningProfile !== '';
@@ -172,15 +175,19 @@ export default function DevicesPage() {
             columns={exportColumns}
             fetchPage={(pageNumber, pageSize) => listDevices({ pageNumber, pageSize })}
           />
-          <Button variant="outline" onClick={() => setImporting(true)} data-shot="device-import-button">
-            <Upload size={16} /> {t('importDevices')}
-          </Button>
-          <Button variant="outline" onClick={() => setBulkCreating(true)} data-shot="device-bulk-button">
-            <Layers size={16} /> {t('bulkCreate')}
-          </Button>
-          <Button onClick={() => setCreating(true)} data-shot="device-new-button">
-            <Plus size={16} /> {t('newDevice')}
-          </Button>
+          {canWrite && (
+            <>
+              <Button variant="outline" onClick={() => setImporting(true)} data-shot="device-import-button">
+                <Upload size={16} /> {t('importDevices')}
+              </Button>
+              <Button variant="outline" onClick={() => setBulkCreating(true)} data-shot="device-bulk-button">
+                <Layers size={16} /> {t('bulkCreate')}
+              </Button>
+              <Button onClick={() => setCreating(true)} data-shot="device-new-button">
+                <Plus size={16} /> {t('newDevice')}
+              </Button>
+            </>
+          )}
         </div>
       }
     >

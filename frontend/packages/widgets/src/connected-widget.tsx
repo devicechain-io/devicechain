@@ -425,10 +425,10 @@ const EventMarkersFeed = lazyChunk<typeof import('./event-markers-feed')>(() => 
 // the widget's containment, which shows the failure, and its Reset fetches it again.
 const AggregateFeed = lazyChunk<typeof import('./aggregate-feed')>(() => import('./aggregate-feed')).component<never, AggregateFeedProps>('default');
 
-function AggregateConnectedWidget({ widget, hub, descriptor, Component, actions }: ChannelProps) {
+function AggregateConnectedWidget(channel: ChannelProps) {
   // An aggregate names one device's measurements, so a group is refused as above.
-  const props = { hub, widget, descriptor, Component, actions, ErrorFrame: WidgetErrorFrame };
-  return widget.datasource?.kind === 'anchor' ? <FleetFeed {...props} refuse /> : <AggregateFeed {...props} />;
+  const props = { ...channel, ErrorFrame: WidgetErrorFrame };
+  return channel.widget.datasource?.kind === 'anchor' ? <FleetFeed {...props} refuse /> : <AggregateFeed {...props} />;
 }
 
 // An alarm widget grouped by device type is its own part of the alarm chunk (widgets/alarm-grouped.tsx):

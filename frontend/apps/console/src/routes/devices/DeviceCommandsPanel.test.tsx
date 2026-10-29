@@ -173,7 +173,7 @@ describe('DeviceCommandsPanel cancel control', () => {
       'CANCELLED',
     ]);
 
-    render(<DeviceCommandsPanel deviceToken="therm-1" />);
+    render(<DeviceCommandsPanel deviceToken="therm-1" canIssue canCancel />);
 
     // The history has painted once the first row is on screen.
     expect(await screen.findByText('cmd-QUEUED')).toBeTruthy();
@@ -202,7 +202,7 @@ describe('DeviceCommandsPanel cancel control', () => {
   it('shows a waiting command as still in flight rather than as an outcome', async () => {
     respondWith(['HELD', 'PARKED', 'EXPIRED']);
 
-    render(<DeviceCommandsPanel deviceToken="therm-1" />);
+    render(<DeviceCommandsPanel deviceToken="therm-1" canIssue canCancel />);
 
     // The status is rendered as the raw uppercase value the service sends — there is no
     // translation catalog for statuses, and this test pins that the new ones are shown
@@ -253,7 +253,7 @@ describe('DeviceCommandsPanel cancel outcomes', () => {
   it('reports a cancellation only when the command came back CANCELLED', async () => {
     respondToCancel('CANCELLED');
 
-    render(<DeviceCommandsPanel deviceToken="therm-1" />);
+    render(<DeviceCommandsPanel deviceToken="therm-1" canIssue canCancel />);
     await clickCancel();
 
     await waitFor(() => expect(toastMock).toHaveBeenCalled());
@@ -271,7 +271,7 @@ describe('DeviceCommandsPanel cancel outcomes', () => {
   it('does not claim success when the command was dispatched before the click', async () => {
     respondToCancel('SENT');
 
-    render(<DeviceCommandsPanel deviceToken="therm-1" />);
+    render(<DeviceCommandsPanel deviceToken="therm-1" canIssue canCancel />);
     await clickCancel();
 
     await waitFor(() => expect(toastMock).toHaveBeenCalled());
@@ -290,7 +290,7 @@ describe('DeviceCommandsPanel cancel outcomes', () => {
   it('does not claim success when the command had already finished', async () => {
     respondToCancel('SUCCESSFUL');
 
-    render(<DeviceCommandsPanel deviceToken="therm-1" />);
+    render(<DeviceCommandsPanel deviceToken="therm-1" canIssue canCancel />);
     await clickCancel();
 
     await waitFor(() => expect(toastMock).toHaveBeenCalled());
@@ -313,7 +313,7 @@ describe('DeviceCommandsPanel issue outcomes', () => {
   it('reports a successful enqueue and clears the form', async () => {
     respondToIssue({ kind: 'created' });
 
-    render(<DeviceCommandsPanel deviceToken="therm-1" />);
+    render(<DeviceCommandsPanel deviceToken="therm-1" canIssue canCancel />);
     const input = await issueCommand();
 
     await waitFor(() => expect(toastMock).toHaveBeenCalled());
@@ -330,7 +330,7 @@ describe('DeviceCommandsPanel issue outcomes', () => {
       reason: 'cannot enqueue command: command "reboot" is not in the published vocabulary for device "therm-1"',
     });
 
-    render(<DeviceCommandsPanel deviceToken="therm-1" />);
+    render(<DeviceCommandsPanel deviceToken="therm-1" canIssue canCancel />);
     const input = await issueCommand();
 
     await waitFor(() => expect(toastMock).toHaveBeenCalled());
@@ -353,7 +353,7 @@ describe('DeviceCommandsPanel issue outcomes', () => {
       ),
     });
 
-    render(<DeviceCommandsPanel deviceToken="therm-1" />);
+    render(<DeviceCommandsPanel deviceToken="therm-1" canIssue canCancel />);
     await issueCommand();
 
     await waitFor(() => expect(toastMock).toHaveBeenCalled());
@@ -401,7 +401,7 @@ function respondWithBatchToken(batchToken: string | null) {
 function renderRouted() {
   return render(
     <MemoryRouter>
-      <DeviceCommandsPanel deviceToken="therm-1" />
+      <DeviceCommandsPanel deviceToken="therm-1" canIssue canCancel />
     </MemoryRouter>,
   );
 }
@@ -462,7 +462,7 @@ describe('DeviceCommandsPanel held-while-disabled notice', () => {
   it('renders the notice above the history', async () => {
     respondWith(['QUEUED']);
 
-    render(<DeviceCommandsPanel deviceToken="therm-1" />);
+    render(<DeviceCommandsPanel deviceToken="therm-1" canIssue canCancel />);
 
     expect(await screen.findByTestId('held-notice-slot')).toBeTruthy();
   });

@@ -182,7 +182,8 @@ export type AggregateResult =
   | { status: 'unavailable'; reason: 'unsupported' | 'failed'; message?: string };
 
 // The state an aggregate widget renders from: the aggregates over its span, and the newest LIVE
-// reading per measurement (no history seed, so it is a reading and never a bucket's average).
+// reading per measurement. A reading, except on a card showing the latest one, which the board seeds
+// with the newest stored bucket until a live reading arrives (`bucketSeconds` is set on that sample).
 export interface AggregateStreamState {
   aggregates: AggregateResult;
   latest: Record<string, MeasurementSample>;
