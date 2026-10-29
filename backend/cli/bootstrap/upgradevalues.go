@@ -182,7 +182,7 @@ func unionExtraSecrets(fresh, previous interface{}) interface{} {
 		return n, ok && n != ""
 	}
 	have := map[string]bool{}
-	out := make([]interface{}, 0, len(freshList)+len(prevList))
+	out := make([]interface{}, 0, len(freshList))
 	for _, v := range freshList {
 		if n, ok := nameOf(v); ok {
 			have[n] = true
