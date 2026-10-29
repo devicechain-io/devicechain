@@ -78,7 +78,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
-kind get clusters 2>/dev/null | grep -qx "$CLUSTER" && { echo "cluster $CLUSTER already exists; delete it first" >&2; exit 1; }
+existing="$(kind get clusters 2>/dev/null || true)"
+case $'
+'"$existing"$'
+' in *$'
+'"$CLUSTER"$'
+'*) echo "cluster $CLUSTER already exists; delete it first" >&2; exit 1 ;; esac
 cat >"$work/kind.yaml" <<EOF
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
@@ -183,7 +188,12 @@ start_loop() { # <mod>
     "while true; do c=\$(curl -s -m 3 -o /dev/null -w '%{http_code}' -H 'Host: echo.test' http://$(svc_host "$1")/); echo \"\$(date +%s) \$c\"; sleep 1; done" >/dev/null
   kubectl -n app wait --for=condition=Ready pod/loop --timeout=120s >/dev/null
   # wait for the first 200 so a slow route sync is not counted as a rollout failure
-  for _ in $(seq 1 60); do kubectl -n app logs loop 2>/dev/null | grep -q ' 200$' && return 0; sleep 2; done
+  local out
+  for _ in $(seq 1 60); do
+    out="$(kubectl -n app logs loop 2>/dev/null || true)"
+    case "$out" in *' 200'*) return 0 ;; esac
+    sleep 2
+  done
   return 1
 }
 
