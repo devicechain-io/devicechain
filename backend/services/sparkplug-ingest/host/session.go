@@ -613,6 +613,14 @@ func (tr *SessionTracker) wantRebirth(s *nodeSession) bool {
 	return true
 }
 
+// NodeOnline reports whether the tracker holds a live session for the node.
+func (tr *SessionTracker) NodeOnline(group, node string) bool {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	s := tr.sessions[nodeKey{group, node}]
+	return s != nil && s.online
+}
+
 // MarkRebirthPending records that the Host has commanded a node to rebirth OUTSIDE the
 // session machine's own gap detection — the failover reconcile publishes rebirths
 // directly (ADR-067 SP4b) — so the NBIRTH answering it is treated as a commanded

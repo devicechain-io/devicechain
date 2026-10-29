@@ -129,6 +129,10 @@ func TestStartPhaseRestartDoesNotPanic(t *testing.T) {
 		"the rebirth enqueued counter is not built in the initialize phase")
 	require.Contains(t, afterInitialize, "devicechain_sparkplugingest_rebirth_dropped_total",
 		"the rebirth dropped counter is not built in the initialize phase")
+	require.Contains(t, afterInitialize, "devicechain_sparkplugingest_birth_recovery_pending",
+		"the birth recovery gauge is not built in the initialize phase")
+	require.Contains(t, afterInitialize, "devicechain_sparkplugingest_birth_recovery_rebirths_total",
+		"the birth recovery counter is not built in the initialize phase")
 	require.Contains(t, afterInitialize, "devicechain_sparkplugingest_subscribe_failures_total",
 		"the subscribe failures counter is not built in the initialize phase")
 

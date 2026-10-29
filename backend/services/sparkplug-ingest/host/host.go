@@ -201,6 +201,12 @@ type Metrics struct {
 	// state itself is read at scrape time (Client.BreakerSample), not set on transitions, so a breaker
 	// whose backoff has ended reads half-open without anything having to touch it. May be nil.
 	CommandBreakerTrips prometheus.Counter
+	// BirthRecoveryPending is the number of nodes whose births could not be registered (most often
+	// because the source's device type does not exist yet) and that are being asked to rebirth. A
+	// standing non-zero value is a node, or a source, that is not registering. May be nil.
+	BirthRecoveryPending prometheus.Gauge
+	// BirthRecoveryRebirths counts the rebirth commands sent to those nodes. May be nil.
+	BirthRecoveryRebirths prometheus.Counter
 }
 
 // Probe trigger labels for Metrics.PresenceProbes and Metrics.PresenceProbeDisconnects.
@@ -308,6 +314,13 @@ type Client struct {
 	// it may publish synchronously) so it can account for which nodes were actually asked
 	// to speak and never force-disconnect a node whose rebirth never went out.
 	rebirthPub func(group, node string) bool
+
+	// recovery is the set of nodes whose births could not be registered, and the timings it is
+	// worked on; see birthrecovery.go.
+	recovery        birthRecovery
+	recoveryInitial time.Duration
+	recoveryMax     time.Duration
+	recoveryTick    time.Duration
 
 	stateTopic string
 	// sessions is the SP2 per-node Sparkplug session machine; it validates the
@@ -465,6 +478,10 @@ func NewClient(source config.SparkplugSource, broker Broker, ingester SampleInge
 		commands:      source.Commands,
 		cmdIndex:      newCommandIndex(),
 		breaker:       NewBreaker(now),
+
+		recoveryInitial: recoveryInitialDelay,
+		recoveryMax:     recoveryMaxDelay,
+		recoveryTick:    recoveryTickEvery,
 	}
 	c.sessions = NewSessionTracker(now, defaultRebirthBackoff, c.enqueueRebirth)
 	if source.Commands.Enabled {
@@ -594,9 +611,11 @@ func (c *Client) Connect() {
 	c.subMu.Lock()
 	c.stopped = false
 	c.subMu.Unlock()
-	c.wg.Add(3)
+	c.resetRecovery()
+	c.wg.Add(4)
 	go c.runLoop(ctx)
 	go c.rebirthWorker(ctx)
+	go c.recoveryWorker(ctx)
 	go c.retryWorker(ctx, retryCh)
 }
 
@@ -1196,6 +1215,7 @@ func (c *Client) admitSamples(samples []Sample) []Sample {
 // any subset of its events, and each resubmission dedups them.
 func (c *Client) ingestSamples(externalId string, samples []Sample) {
 	c.ingest(
+		[]string{externalId},
 		func(ctx context.Context) (*Publication, error) {
 			return c.ingester.PrepareIngest(ctx, c.tenant, c.policy, externalId, samples)
 		},
@@ -1221,7 +1241,16 @@ func (c *Client) ingestSamples(externalId string, samples []Sample) {
 // batch is submitted as one call and re-tried whole; the DedupID makes an already-emitted
 // transition idempotent.
 func (c *Client) ingestPresence(events []PresenceEvent) {
+	// Only a CONNECTED transition needs the node to be asked again: a death of a node that was
+	// never registered has nothing to register.
+	var born []string
+	for _, e := range events {
+		if e.Connected {
+			born = append(born, e.ExternalId)
+		}
+	}
 	c.ingest(
+		born,
 		func(ctx context.Context) (*Publication, error) {
 			pub, err := c.ingester.PreparePresence(ctx, c.tenant, c.policy, events)
 			if err == nil && pub != nil {
@@ -1240,15 +1269,35 @@ func (c *Client) ingestPresence(events []PresenceEvent) {
 }
 
 // ingest prepares a publication under the bounded in-handler retry and submits it.
-func (c *Client) ingest(prepare func(ctx context.Context) (*Publication, error), onDrop func(reason string, err error)) {
+//
+// ids are the external ids the call is about. A failure to PREPARE (resolve or register the device)
+// that outlasts the retry budget marks their nodes for a rebirth request (see birthrecovery.go); a
+// prepare that succeeds clears them. A publish failure is a different fault and is not that.
+func (c *Client) ingest(ids []string, prepare func(ctx context.Context) (*Publication, error), onDrop func(reason string, err error)) {
 	var pub *Publication
+	var prepareErr error
 	ok := c.ingestWithRetry(func(ctx context.Context) error {
 		p, err := prepare(ctx)
 		pub = p
+		prepareErr = err
 		return err
 	}, onDrop)
-	if !ok || pub == nil {
-		return // abandoned (counted) or definitively dropped by the ingester (counted there)
+	if !ok {
+		if prepareErr != nil && len(ids) > 0 {
+			c.mu.Lock()
+			ctx := c.runCtx
+			c.mu.Unlock()
+			if ctx == nil || ctx.Err() == nil { // not a shutdown
+				c.noteUnregistered(ids, prepareErr)
+			}
+		}
+		return
+	}
+	if len(ids) > 0 {
+		c.clearUnregistered(ids)
+	}
+	if pub == nil {
+		return // definitively dropped by the ingester (counted there)
 	}
 	c.submit(&publishItem{pub: pub, onDrop: onDrop})
 }
@@ -1710,6 +1759,7 @@ func (c *Client) Stop() {
 	}
 	c.hostOnline.Store(false)
 	c.cmdIndex.clear()
+	c.resetRecovery()
 	c.sessions.EndHostSession()
 	// Drain any in-flight reconcile probe. runLoop's exit cancelled the session context,
 	// so a probe in its window aborts promptly; this just makes shutdown wait for it.
