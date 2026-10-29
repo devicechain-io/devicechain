@@ -26,6 +26,7 @@ import { useQuery } from '@/lib/hooks/use-query';
 import { useReload } from '@/routes/common';
 import { useDetectionStream } from '@/lib/hooks/use-detection-stream';
 import { listRuleHealth, type DetectionEvent } from '@/lib/api/event-processing';
+import '@/i18n/lazy/deviceProfiles';
 
 const Dash = () => <span className="text-muted-foreground">—</span>;
 

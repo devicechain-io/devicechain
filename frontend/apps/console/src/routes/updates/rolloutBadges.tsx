@@ -11,6 +11,7 @@ import { useTranslation } from 'react-i18next';
 import { Badge } from '@/components/ui/badge';
 import type { UpdateRollout, UpdateRolloutOutcome, UpdateRolloutState } from '@/lib/api/update-management';
 import { rolloutOutcomeLabel, rolloutPauseReasonLabel, rolloutStateLabel } from '@/lib/enumLabel';
+import '@/i18n/lazy/updates';
 
 export function RolloutStateBadge({ state }: { state: UpdateRolloutState }) {
   const { t } = useTranslation('updates');

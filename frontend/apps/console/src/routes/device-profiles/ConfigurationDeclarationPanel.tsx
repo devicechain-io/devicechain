@@ -42,6 +42,7 @@ import {
   setProfileConfigurationDeclaration,
   type ConfigurationKey,
 } from '@/lib/api/device-configuration';
+import '@/i18n/lazy/deviceProfiles';
 
 // Mirrors the server's attribute-key grammar and ceilings so an obvious mistake is
 // caught before the round trip. The server remains the authority and its message is

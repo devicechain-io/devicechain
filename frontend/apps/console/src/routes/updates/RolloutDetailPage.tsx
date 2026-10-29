@@ -52,6 +52,7 @@ import {
 } from '@/lib/api/update-management';
 import { Fact } from '@/routes/command-batches/Fact';
 import { RolloutOutcomeBadge, RolloutProgressBar, RolloutStateBadge, pauseReasonText } from './rolloutBadges';
+import '@/i18n/lazy/updates';
 
 const targetsPageSize = 50;
 // A running rollout moves on its own; the page re-reads it on this cadence while it does.

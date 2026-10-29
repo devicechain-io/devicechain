@@ -29,6 +29,7 @@ import {
   severityCovered,
   type NotificationChannel,
 } from '@/lib/api/notifications';
+import '@/i18n/lazy/deviceProfiles';
 
 type Check = { status: 'loading' } | { status: 'covered' } | { status: 'uncovered' } | { status: 'unknown' };
 

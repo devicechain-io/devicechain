@@ -68,6 +68,7 @@ import {
   CONFLICT_MARKER,
   type DashboardVersion,
 } from '@/lib/api/dashboards';
+import '@/i18n/lazy/dashboards';
 
 const VERSION_PAGE = 100;
 // dashboard-management clamps a page to its maximum page size.

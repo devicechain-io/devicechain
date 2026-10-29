@@ -64,6 +64,7 @@ import { CommandParameterForm } from '@/routes/devices/CommandParameterForm';
 import { groupRefusals } from './refusals';
 import { RefusalGroupList } from './RefusalGroups';
 import { buildDeviceTargets, isVersionedGroup, resolvedClaim, MAX_BATCH_DEVICES } from './batchTarget';
+import '@/i18n/lazy/commandBatches';
 
 // One large page of each picker's options. Both controls filter over fully-materialized
 // options, so a page they never ask for is an entry the operator cannot select and

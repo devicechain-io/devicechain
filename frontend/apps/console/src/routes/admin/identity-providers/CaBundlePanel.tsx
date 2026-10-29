@@ -28,6 +28,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/toast';
 import { errMessage } from '@/routes/common';
 import { CA_BUNDLE_MAX_BYTES, checkCaBundle } from './idpForm';
+import '@/i18n/lazy/identityProviders';
 
 // The textarea and the file chooser, one control: choosing a file puts its text in the box
 // so the operator sees exactly what will be sent.

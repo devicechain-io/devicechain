@@ -53,6 +53,7 @@ import {
 } from '@/lib/api/command-delivery';
 import { Fact } from './Fact';
 import { STILL_HELD_STATUSES, cancelMotion, needsSecondCancel, offerCancel, unaccounted } from './cancelOutcome';
+import '@/i18n/lazy/commandBatches';
 
 // The count of the batch's commands the platform is STILL HOLDING — the three states a
 // cancel can actually stop — as a three-valued answer whose null means "not known", plus

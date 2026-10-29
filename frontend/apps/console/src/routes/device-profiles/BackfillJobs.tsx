@@ -28,6 +28,7 @@ import {
   listCalculatedMetricBackfills,
   type CalculatedMetricBackfillJob,
 } from '@/lib/api/event-management';
+import '@/i18n/lazy/deviceProfiles';
 
 /** How often an active job's counters are re-read. */
 export const BACKFILL_POLL_MS = 5000;

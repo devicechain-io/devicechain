@@ -44,6 +44,7 @@ import {
   DataTableHeaderCell,
   DataTableRow,
 } from '@/components/ui/data-table';
+import '@/i18n/lazy/dashboards';
 
 const pageSize = 20;
 

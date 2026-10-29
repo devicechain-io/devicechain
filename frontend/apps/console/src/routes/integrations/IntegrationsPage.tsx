@@ -34,6 +34,7 @@ import {
 import { IntegrationForm } from './IntegrationForm';
 import { IntegrationBadges } from './IntegrationBadges';
 import { IntegrationTokenReveal, type RevealedToken } from './IntegrationTokenReveal';
+import '@/i18n/lazy/integrations';
 
 const pageSize = 20;
 

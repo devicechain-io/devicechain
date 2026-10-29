@@ -62,6 +62,7 @@ import { allowsSave, openStoredRule, openWithoutCompile, type Fidelity, type Ope
 import { CanvasNodeView, type CanvasNodeData } from './nodes';
 import { NodeInspector } from './inspector';
 import { PreviewPanel } from './PreviewPanel';
+import '@/i18n/lazy/deviceProfiles';
 
 const nodeTypes = { dc: CanvasNodeView };
 

@@ -20,6 +20,7 @@ import { uploadArtifactContent, formatBytes, type ArtifactUploadResult } from '@
 import { artifactStateLabel } from '@/lib/enumLabel';
 import { errMessage } from '@/routes/common';
 import { shortDigest } from './badges';
+import '@/i18n/lazy/updates';
 
 export interface UploadExpectation {
   sizeBytes: string;

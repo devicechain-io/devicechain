@@ -13,6 +13,7 @@
 
 import { useTranslation } from 'react-i18next';
 import { Badge } from '@/components/ui/badge';
+import '@/i18n/lazy/commandBatches';
 
 export function TargetKindBadge({ targetKind }: { targetKind: string }) {
   const { t } = useTranslation('commandBatches');

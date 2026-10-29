@@ -43,6 +43,7 @@ import {
   type MetricHealth,
   type WindowCounts,
 } from './calcHealth';
+import '@/i18n/lazy/deviceProfiles';
 
 const DEVICE_READ = 'device:read';
 const EVENT_READ = 'event:read';

@@ -36,6 +36,7 @@ import { errMessage } from '@/routes/common';
 import { CaBundlePanel } from './CaBundlePanel';
 import { ClaimsEditor } from './IdpCreateForm';
 import { splitList } from './idpForm';
+import '@/i18n/lazy/identityProviders';
 
 interface PanelProps {
   connection: IdpConnection;

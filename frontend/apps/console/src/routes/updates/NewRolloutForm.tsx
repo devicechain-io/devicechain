@@ -20,6 +20,7 @@ import { useQuery } from '@/lib/hooks/use-query';
 import { errMessage } from '@/routes/common';
 import { listDeviceGroupTargets } from '@/lib/api/device-management';
 import { createRollout, listArtifacts } from '@/lib/api/update-management';
+import '@/i18n/lazy/updates';
 
 // The service's bounds, restated so a value it would refuse is refused before the round trip.
 export const MAX_IN_FLIGHT = 1000;

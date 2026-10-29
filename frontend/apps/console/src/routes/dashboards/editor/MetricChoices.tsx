@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge';
 import { ToggleButton } from '@/components/ui/toggle-button';
 import { getDeviceMetricVocabulary } from '@/lib/api/device-management';
 import { useQuery } from '@/lib/hooks/use-query';
+import '@/i18n/lazy/dashboards';
 
 // MetricChoices lists the metrics the bound device's profile publishes, as buttons that
 // add or remove the key from the widget's measurements, and marks a calculated one. It

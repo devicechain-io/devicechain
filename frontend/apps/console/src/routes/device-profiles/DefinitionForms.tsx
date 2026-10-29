@@ -33,6 +33,7 @@ import {
   type CommandDefinitionCreateRequest,
 } from '@/lib/api/device-management';
 import { optNum, optText } from '@/lib/utils';
+import '@/i18n/lazy/deviceProfiles';
 
 // Shared with the other forms that feed a full-replace request — see lib/utils.ts for
 // why they return null rather than undefined. `optNum` there also rejects a

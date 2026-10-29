@@ -4,6 +4,7 @@
 import { useTranslation } from 'react-i18next';
 import { Badge } from '@/components/ui/badge';
 import type { Integration } from '@/lib/api/integrations';
+import '@/i18n/lazy/integrations';
 
 /**
  * Why an integration would or would not be taking traffic right now, as badges: switched off, a

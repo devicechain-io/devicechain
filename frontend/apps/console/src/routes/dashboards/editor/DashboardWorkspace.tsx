@@ -107,6 +107,7 @@ import { defaultWidgetRegistry, type EditorWidgetRegistry } from './widgetRegist
 import { useEditHistory, type EditAction, type EditLabel } from './useEditHistory';
 import { editorShortcut, isEditorSurfaceTarget } from './editorShortcuts';
 import { readWidgetClipboard, writeWidgetClipboard } from './widgetClipboard';
+import '@/i18n/lazy/dashboards';
 
 type SaveState = { kind: 'clean' } | { kind: 'saving' } | { kind: 'error'; message: string };
 

@@ -4,6 +4,7 @@
 import type { DashboardHub } from '@devicechain/dashboards';
 import { HubConnectionBadge, useHubConnectionState } from '@devicechain/widgets';
 import { useTranslation } from 'react-i18next';
+import '@/i18n/lazy/dashboards';
 
 // The dashboard header's live-data state. Shown only against the live hub: the synthetic
 // preview has no connection to report.

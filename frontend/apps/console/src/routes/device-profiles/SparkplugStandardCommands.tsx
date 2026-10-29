@@ -23,6 +23,7 @@ import { useToast } from '@/components/ui/toast';
 import { useAuth } from '@/auth/AuthProvider';
 import { errMessage } from '@/routes/common';
 import { createCommandDefinition, listCommandDefinitions } from '@/lib/api/device-management';
+import '@/i18n/lazy/deviceProfiles';
 
 // Stored on the profile, a shared tenant resource: the canonical (English) text, not the
 // language of whoever pressed the button. Editable afterwards like any command definition.
