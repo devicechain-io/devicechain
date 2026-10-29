@@ -6,6 +6,7 @@
 #
 #   render-take.sh plan   --run-a DIR --run-b DIR            writes tools/take/take-plan.json from what the two recordings say happened
 #   render-take.sh render --run-a DIR --run-b DIR            replays each run through the player's frame renderer and encodes every shot to an mp4
+#   render-take.sh owner  --stills DIR                       the annex owner's part (10 s) from console_stills.py's PNGs: devices, then alarms
 #   render-take.sh cut    [--owner-clip FILE]                joins the shots (and the console's part, if there is one) into the 90-second cut
 #   render-take.sh loop                                      the 25-second website loop, from the same footage, as mp4 and webp
 #   render-take.sh sheet                                     a contact sheet of sampled frames, one row per shot
@@ -37,12 +38,13 @@ need() { command -v "$1" >/dev/null 2>&1 || die "'$1' is required on PATH"; }
 cmd="${1:-}"
 [ -n "$cmd" ] || { sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'; exit 2; }
 shift
-RUN_A="" RUN_B="" OWNER_CLIP=""
+RUN_A="" RUN_B="" OWNER_CLIP="" STILLS=""
 while [ $# -gt 0 ]; do
 	case "$1" in
 	--run-a) RUN_A="${2:?--run-a needs a recording directory}"; shift ;;
 	--run-b) RUN_B="${2:?--run-b needs a recording directory}"; shift ;;
 	--owner-clip) OWNER_CLIP="${2:?--owner-clip needs a file}"; shift ;;
+	--stills) STILLS="${2:?--stills needs a directory}"; shift ;;
 	--out) OUT="${2:?--out needs a directory}"; shift ;;
 	--plan) PLAN="${2:?--plan needs a file}"; shift ;;
 	*) die "unknown argument $1" ;;
@@ -115,6 +117,15 @@ cmd_cut() {
 	log "cut: $(ffprobe -v error -show_entries format=duration -of csv=p=0 "$OUT/towerpulse-cut.mp4") s -> $OUT/towerpulse-cut.mp4"
 }
 
+cmd_owner() {
+	need ffmpeg
+	[ -f "$STILLS/annex-owner-devices.png" ] && [ -f "$STILLS/annex-owner-alarms.png" ] || die "--stills must hold annex-owner-devices.png and annex-owner-alarms.png (tools/console_stills.py)"
+	local font="C\:/Windows/Fonts/segoeuib.ttf" cap
+	cap="Console capture  -  the annex owner signs in. Seven of the thirty-one devices, and only the annex alarm"
+	ffmpeg -nostdin -loglevel error -y -loop 1 -t 5 -framerate "$FPS" -i "$STILLS/annex-owner-devices.png" -loop 1 -t 5 -framerate "$FPS" -i "$STILLS/annex-owner-alarms.png" -filter_complex 		"[0:v][1:v]concat=n=2:v=1:a=0,scale=$WIDTH:$HEIGHT,format=yuv420p,drawbox=x=0:y=ih-110:w=iw:h=110:color=0x101820@0.92:t=fill,drawtext=fontfile='$font':text='$cap':fontcolor=white:fontsize=34:x=40:y=h-72,fade=t=in:st=0:d=0.3,fade=t=out:st=9.7:d=0.3[v]" -map "[v]" -c:v libx264 -pix_fmt yuv420p -crf 17 -r "$FPS" "$OUT/owner.mp4"
+	log "owner clip -> $OUT/owner.mp4"
+}
+
 # The loop: five pieces of the SAME footage that run forward in each recorded run, opening and closing on the wide campus, and a half-second
 # cross-dissolve at the loop point. Pieces are (shot, start s, length s).
 LOOP_PIECES=("establish 0 4" "hot-room-alarm 1 6" "hot-room-cools 12 6" "chiller-silent 0 6" "pull-back 0 3.5")
@@ -170,6 +181,7 @@ plan) cmd_plan ;;
 render) cmd_render ;;
 cut) cmd_cut ;;
 loop) cmd_loop ;;
+owner) cmd_owner ;;
 sheet) cmd_sheet ;;
-*) die "unknown command $cmd (plan, render, cut, loop, sheet)" ;;
+*) die "unknown command $cmd (plan, render, owner, cut, loop, sheet)" ;;
 esac
