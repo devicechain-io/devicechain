@@ -23,8 +23,8 @@ PROVIDER="${PROVIDER:-local}"
 ctx=()
 [ -z "${KUBE_CONTEXT:-}" ] || ctx=(--kube-context "$KUBE_CONTEXT")
 
-# The sources file holds the broker password, so it exists only for this command. dcctl renders the
-# password into a Secret and never into the area's configuration.
+# The sources file holds the broker password, so it exists only for this command. dcctl writes the
+# password into a Secret of its own, outside the Helm release, and never into the area's configuration.
 umask 077
 src="$(mktemp)"
 trap 'rm -f "$src"' EXIT

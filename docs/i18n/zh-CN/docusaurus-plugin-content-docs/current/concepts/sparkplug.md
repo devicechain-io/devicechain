@@ -39,7 +39,7 @@ DeviceChain 有意严格限制哪些离线消息会生效：
 
 节点在其 BIRTH 首次到达时，以来源指定的 `deviceTypeToken` 注册。如果该设备类型尚不存在（在租户尚未配置时就连接来源的常见顺序错误），或 device-management 不可达的时间超过短暂重试，BIRTH 会被丢弃并计数。已经出生的节点不会自行再次宣告，因此会一直保持未知。
 
-因此平台会记住哪些节点未能注册，并**请求每个节点重新 BIRTH**（`NCMD` `Node Control/Rebirth`）：失败后 10 秒第一次，之后间隔翻倍，最长每分钟一次，直到该节点的消息注册成功。创建设备类型后，节点会在一分钟内出现，无需重启任何组件。不会从内存重放任何内容：作为回应的 BIRTH 与其他 BIRTH 一样被接入，因此节点不会被重复注册。某节点的第一次失败以 error 级别记录并带原因，每次请求以 warning 级别记录，只要有节点在等待，`birth_recovery_pending` 就保持大于零（参见[指标](../deployment/edge-services.md#sparkplug-ingestion-metrics)）。离线的节点会被忘记，其下一次 BIRTH 是一次全新的尝试。
+因此平台会记住哪些 id 未能注册，并**请求节点重新 BIRTH**（`NCMD` `Node Control/Rebirth`）：失败后 10 秒第一次，之后间隔翻倍，最长每分钟一次，直到失败的那些 id 解析成功；同级设备注册成功并不会结束它。只有两种原因会被重试：设备类型不存在，以及 device-management 不可达。device-management 以其他原因明确拒绝的情形只记录一次，不用 rebirth 重试，因为第二次 BIRTH 还会遇到同样的拒绝。请求五次后，节点降为每小时一次；每个五秒周期最多请求五个节点；刚被清除又很快再次失败的节点会沿用原来的间隔，而不是重新开始。创建设备类型后，节点会在一分钟内出现，无需重启任何组件。不会从内存重放任何内容：作为回应的 BIRTH 与其他 BIRTH 一样被接入，因此节点不会被重复注册。某节点的第一次失败以 error 级别记录并带原因，每次请求以 warning 级别记录，只要有节点在等待，`birth_recovery_pending` 就保持大于零（参见[指标](../deployment/edge-services.md#sparkplug-ingestion-metrics)）。离线的节点会被忘记，其下一次 BIRTH 是一次全新的尝试。
 
 ## 高可用性 {#high-availability}
 

@@ -122,13 +122,6 @@ func carryReleaseValues(vals, previous map[string]interface{}) {
 			}
 			dst = next
 		}
-		if path[0] == "extraSecrets" {
-			// Two features render into extraSecrets (the LwM2M keys, the Sparkplug broker
-			// passwords), so a run that was given one file must not lose the other's Secret by
-			// being the only writer: entries are united by name, the fresh one winning.
-			dst[leaf] = unionExtraSecrets(dst[leaf], value)
-			continue
-		}
 		if _, already := dst[leaf]; already {
 			continue
 		}
@@ -162,38 +155,6 @@ func withoutProfiler(value interface{}) interface{} {
 		if k != "profiler" {
 			out[k] = v
 		}
-	}
-	return out
-}
-
-// unionExtraSecrets returns the fresh extraSecrets with every previous entry whose name the fresh
-// list does not hold appended. Fresh entries win and keep their place; entries that are not a map
-// with a name are carried as they are, because dropping what cannot be read is the loss this
-// mechanism exists to prevent.
-func unionExtraSecrets(fresh, previous interface{}) interface{} {
-	freshList, _ := fresh.([]interface{})
-	prevList, _ := previous.([]interface{})
-	nameOf := func(v interface{}) (string, bool) {
-		m, ok := v.(map[string]interface{})
-		if !ok {
-			return "", false
-		}
-		n, ok := m["name"].(string)
-		return n, ok && n != ""
-	}
-	have := map[string]bool{}
-	out := make([]interface{}, 0, len(freshList))
-	for _, v := range freshList {
-		if n, ok := nameOf(v); ok {
-			have[n] = true
-		}
-		out = append(out, v)
-	}
-	for _, v := range prevList {
-		if n, ok := nameOf(v); ok && have[n] {
-			continue
-		}
-		out = append(out, v)
 	}
 	return out
 }

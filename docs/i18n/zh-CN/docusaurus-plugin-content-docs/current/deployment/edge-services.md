@@ -309,7 +309,11 @@ dcctl bootstrap local acme --enable-area sparkplug-ingest --sparkplug-source sou
 dcctl upgrade   local acme --sparkplug-source sources.yaml
 ```
 
-文件在接触集群之前就会被检查（缺少租户、没有主机的代理 URL、未带设备类型的 `autoRegister`、同一代理上的两个租户、未知键）。代理密码被渲染到由 chart 拥有的 Secret 中，并作为环境变量投射到 Pod；区域配置中的来源只引用该变量名，从不保存密码，`dcctl` 也不会打印二者。来源和 Secret **会被之后的每次 `dcctl upgrade` 保留**，再次提供文件的运行会替换它们（更换密码会滚动 Pod）。不带该选项重新运行 `dcctl bootstrap` 会撤销它们。这些键与下文所述 chart 的 `sources` 列表相同。
+文件在接触集群之前就会被检查（缺少租户、没有主机的代理 URL、未带设备类型的 `autoRegister`、同一代理上的两个租户、未知键）。
+
+**密码存放在哪里。**它从不是 Helm value，因此不在 `helm get values` 打印的 release 记录中，更换后的密码也不会残留在旧修订里。`dcctl` 自己在 release 之前、在其清单之外写入 Secret `dci-<实例>-sparkplug-broker`，Pod 将其投射为来源的 `passwordEnv` 所指名的环境变量。release 只记录该 Secret 的名称和一个按实例加盐的摘要，密码变化时该摘要会让 Pod 滚动。`dcctl` 既不打印密码，也不打印文件内容。若想让密码不出现在交给 `dcctl` 的文件中，请使用 `passwordFile: /path`（只读取一次），或自己管理 Secret，并在 broker 块中写 `passwordSecretRef: {name: my-secret, key: password}`；此时 `dcctl` 既不读取也不写入它。
+
+来源**会被之后的每次 `dcctl upgrade` 保留**（升级不会从 release 中读取任何机密），再次提供文件的运行会替换它们；更换密码会就地替换 Secret 并滚动 Pod。撤销必须显式进行：`dcctl upgrade ... --withdraw-sparkplug-sources` 会移除来源和 Secret。对已有来源的实例重新运行 `dcctl bootstrap` 而不提供任何来源，会被拒绝，直到你传入 `--sparkplug-source` 或 `--withdraw-sparkplug-sources`。这些键与下文所述 chart 的 `sources` 列表相同。
 
 :::note 尚不存在的设备类型
 节点以来源的 `deviceTypeToken` 注册。如果设备类型在来源连接之后才创建，平台会请求未能注册的节点重新 BIRTH，直到它们注册成功；参见[先于设备类型出生的节点](../concepts/sparkplug.md#birth-recovery)。

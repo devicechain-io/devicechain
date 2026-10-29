@@ -83,8 +83,8 @@
       "translationSha256": "de9d9023e8b7c311f6ea913fdd40c22c63f67dda23f0840d742159ad0cd565ae"
     },
     "concepts/sparkplug.md": {
-      "sourceSha256": "9fc28e62f927ed636ef5287fa4dd6cf6e071ed0d07c1ddc04a5905c612cdf398",
-      "translationSha256": "d8535efcd40e0b5e980ca58ee09388f5f50c17324adbb823a7b22b59a603a2f9"
+      "sourceSha256": "9c3b705c3f7d769134b57e14a6aff4e0299fc0c04b1e60236863af3e5db1d9ec",
+      "translationSha256": "e7049a1e70c24f190e304efb4e0caf1faf485ac13b4896b2e7a4bdfaa3ad9b28"
     },
     "concepts/system-settings.md": {
       "sourceSha256": "db845b63621d48142efaa1ea7e38e4ef33ae73d264ad52ef2c645e33086a0a2c",
@@ -119,8 +119,8 @@
       "translationSha256": "fdaf339f27cb74541fcb8b53ef59602b6c9fffa9156970d2b12cc8f704f025cb"
     },
     "deployment/edge-services.md": {
-      "sourceSha256": "a266981b78261ff2789c23b4ca99d853a5fa275db1771316c802d8a80736b4b3",
-      "translationSha256": "73b32f1adfa1e3a147de55e7222ba3854c32ea6360f996752fb48e7dfb992408"
+      "sourceSha256": "68b071209f722503c09ac35091e7ee29c7219ae331bb1dbd1a50e3f7d491c737",
+      "translationSha256": "941550bc0a114409667842bc6644898f874ad1ad9c8806b4400bfeae9065caaf"
     },
     "deployment/grafana-boards.md": {
       "sourceSha256": "dcb3e71bc1562c5a1d04b26790b48404340efff24bc75be3f2900eedf4034cf2",
@@ -259,8 +259,8 @@
       "translationSha256": "75652e3e983ab288d0e1fe0f9760fd2e9c62941fe87ab1b3e64593d38cfb182b"
     },
     "reference/dcctl.md": {
-      "sourceSha256": "387a8d8375c3396840fde38d3f15dbc0eb6bb24a0e76b2b2631127619a244751",
-      "translationSha256": "c5ce673a1ba394d8afe6a6211141824a16e888f4ad46057bb6a1221b8895acfa"
+      "sourceSha256": "d145672fe8a9cc8c0c4c3f3204c3e70069f8d25ffcc146aa3d18386e94ff8ff7",
+      "translationSha256": "71245c7762196ecc72246034dcdd608eded381714b55829e43beaf7a5c77ceb0"
     },
     "reference/device-protocol.md": {
       "sourceSha256": "72f8c1c6cdda43074da6792b6fc5bcc75b7a88ce4198e56c53bf82324adb2024",

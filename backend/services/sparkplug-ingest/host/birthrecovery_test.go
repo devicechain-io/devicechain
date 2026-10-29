@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/devicechain-io/dc-sparkplug-ingest/codec"
 	"github.com/devicechain-io/dc-sparkplug-ingest/config"
 	sppb "github.com/devicechain-io/dc-sparkplug-ingest/proto"
@@ -218,4 +219,156 @@ func TestNodeKeyOfAnExternalId(t *testing.T) {
 		_, ok := nodeKeyOf(id)
 		assert.False(t, ok, id)
 	}
+}
+
+func (r *recoveryRig) node(group, node string) *unregisteredNode {
+	r.c.recovery.mu.Lock()
+	defer r.c.recovery.mu.Unlock()
+	return r.c.recovery.nodes[nodeKey{group, node}]
+}
+
+// A sibling's success is not evidence that the failed device registered: the node is cleared only
+// when the ids that failed resolve.
+func TestASiblingDevicesSuccessDoesNotClearTheNode(t *testing.T) {
+	r := newRecoveryRig(t)
+	r.c.noteUnregistered([]string{"g/n/dev1"}, errNoType)
+	require.Equal(t, 1, r.tracked())
+
+	r.c.clearUnregistered([]string{"g/n", "g/n/dev2"})
+	assert.Equal(t, 1, r.tracked(), "a sibling's success cleared the node")
+	assert.Equal(t, float64(1), testutil.ToFloat64(r.pending))
+
+	r.c.clearUnregistered([]string{"g/n/dev1"})
+	assert.Zero(t, r.tracked(), "the failed device resolved and the node is still tracked")
+	assert.Zero(t, testutil.ToFloat64(r.pending))
+}
+
+// Only the two causes a rebirth can cure drive recovery: a missing device type, and the
+// registration path being unavailable. A refusal device-management answered with is logged and
+// not retried.
+func TestOnlyACurableCauseIsRetriedByRebirth(t *testing.T) {
+	for name, tc := range map[string]struct {
+		err  error
+		want bool
+	}{
+		"type not found":     {&svcclient.GraphQLError{Codes: []string{"NOT_FOUND"}}, true},
+		"wrapped not found":  {fmt.Errorf("create: %w", &svcclient.GraphQLError{Codes: []string{"NOT_FOUND"}}), true},
+		"unavailable":        {errors.New("svcclient: call: connection refused"), true},
+		"forbidden":          {&svcclient.GraphQLError{Codes: []string{"FORBIDDEN"}}, false},
+		"a refusal, no code": {&svcclient.GraphQLError{Messages: []string{"nope"}}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newRecoveryRig(t)
+			r.nbirth("g", "n", 1) // the session the node is asked on
+			r.c.resetRecovery()
+			r.c.noteUnregistered([]string{"g/n"}, tc.err)
+			assert.Equal(t, tc.want, r.tracked() == 1)
+			assert.Equal(t, tc.want, testutil.ToFloat64(r.pending) == 1)
+			r.advance(time.Hour)
+			r.c.recoverOnce()
+			assert.Equal(t, tc.want, len(r.rebirths()) == 1)
+		})
+	}
+}
+
+// A node cleared and failing again resumes its backoff instead of starting the cycle over.
+func TestAClearedNodeThatFailsAgainKeepsItsBackoff(t *testing.T) {
+	r := newRecoveryRig(t)
+	r.nbirth("g", "n", 1)
+	for i := 0; i < 2; i++ {
+		r.advance(time.Hour)
+		r.c.recoverOnce()
+	}
+	before := r.node("g", "n")
+	require.NotNil(t, before)
+	delay, asks := before.delay, before.asks
+	require.Greater(t, delay, r.c.recoveryInitial)
+
+	r.c.clearUnregistered([]string{"g/n"})
+	require.Zero(t, r.tracked())
+	r.c.noteUnregistered([]string{"g/n"}, errNoType)
+
+	after := r.node("g", "n")
+	require.NotNil(t, after)
+	assert.Equal(t, delay, after.delay, "the backoff started over")
+	assert.Equal(t, asks, after.asks)
+
+	// ...but not for ever.
+	r.c.clearUnregistered([]string{"g/n"})
+	r.advance(recoveryRecentTTL + time.Second)
+	r.c.noteUnregistered([]string{"g/n"}, errNoType)
+	assert.Equal(t, r.c.recoveryInitial, r.node("g", "n").delay)
+}
+
+// After a few requests at the growing interval the node drops to the long one.
+func TestARequestedNodeDropsToTheCeilingInterval(t *testing.T) {
+	r := newRecoveryRig(t)
+	r.nbirth("g", "n", 1)
+	for i := 0; i < recoveryCeilingAfter; i++ {
+		r.advance(2 * time.Hour)
+		r.c.recoverOnce()
+	}
+	require.Len(t, r.rebirths(), recoveryCeilingAfter)
+	r.advance(10 * time.Minute)
+	r.c.recoverOnce()
+	assert.Len(t, r.rebirths(), recoveryCeilingAfter, "asked again inside the ceiling interval")
+	r.advance(recoveryCeilingDelay)
+	r.c.recoverOnce()
+	assert.Len(t, r.rebirths(), recoveryCeilingAfter+1)
+}
+
+// A fleet that fails together is asked over several ticks, not in one burst.
+func TestRebirthRequestsArePacedPerTick(t *testing.T) {
+	r := newRecoveryRig(t)
+	const nodes = 12
+	for i := 0; i < nodes; i++ {
+		r.nbirth("g", fmt.Sprintf("n%d", i), 1)
+	}
+	require.Equal(t, nodes, r.tracked())
+	r.advance(recoveryInitialDelay + time.Second)
+	r.c.recoverOnce()
+	assert.Len(t, r.rebirths(), recoveryPerTick, "one tick asked more than the pace")
+	r.c.recoverOnce()
+	assert.Len(t, r.rebirths(), 2*recoveryPerTick)
+	r.c.recoverOnce()
+	assert.Len(t, r.rebirths(), nodes)
+	// and nobody twice
+	seen := map[nodeKey]bool{}
+	for _, k := range r.rebirths() {
+		assert.False(t, seen[k], "%v asked twice", k)
+		seen[k] = true
+	}
+}
+
+// A request that did not reach the wire puts the pending mark back: the next unsolicited birth of
+// the same session must still be read as a redelivery, not as the answer.
+func TestARebirthThatWasNotSentLeavesTheNodeAsItWas(t *testing.T) {
+	r := newRecoveryRig(t)
+	r.nbirth("g", "n", 1)
+	r.c.rebirthPub = func(group, node string) bool { return false }
+	r.advance(time.Hour)
+	r.c.recoverOnce()
+
+	r.c.sessions.mu.Lock()
+	s := r.c.sessions.sessions[nodeKey{"g", "n"}]
+	pending, probe := s.rebirthPending, s.probeAsked
+	r.c.sessions.mu.Unlock()
+	assert.False(t, pending, "the mark outlived a request that was never sent")
+	assert.False(t, probe)
+	assert.Zero(t, testutil.ToFloat64(r.rebirth), "an unsent request was counted")
+}
+
+// Once the set is full, a further node's refusal is logged once, not for every message.
+func TestTheCapLogIsRateLimited(t *testing.T) {
+	r := newRecoveryRig(t)
+	for i := 0; i < maxUnregisteredNodes; i++ {
+		r.c.noteUnregistered([]string{fmt.Sprintf("g/n%d", i)}, errNoType)
+	}
+	for i := 0; i < 3; i++ {
+		r.c.noteUnregistered([]string{"g/overflow"}, errNoType)
+	}
+	r.c.recovery.mu.Lock()
+	logged := len(r.c.recovery.quiet)
+	r.c.recovery.mu.Unlock()
+	assert.Equal(t, 1, logged, "the overflow node's error is rate-limited to one entry")
 }

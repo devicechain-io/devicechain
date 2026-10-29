@@ -5,6 +5,8 @@ package downlink
 
 import (
 	"encoding/json"
+	"os"
+	"regexp"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -75,4 +77,23 @@ func TestTheRefusalReasonVocabularyIsPinned(t *testing.T) {
 		require.False(t, seen[r], "duplicate reason %q across the resolved and refusal sets", r)
 		seen[r] = true
 	}
+}
+
+// The console keys a sentence on each refusal code, so the two lists are one interface held in two
+// languages. This reads the console's list from source and requires it to equal RefusalReasons, in
+// order: a code added on one side and not the other fails here and not in front of an operator.
+//
+// 🔴 THE PARSED FILE LIVES OUTSIDE THIS MODULE AND GO'S TEST CACHE DOES NOT TRACK IT; CI runs every
+// module with -count=1.
+func TestTheConsoleKnowsEveryRefusalReason(t *testing.T) {
+	const path = "../../../../frontend/apps/console/src/routes/devices/sparkplugCommands.ts"
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	block := regexp.MustCompile(`(?s)SPARKPLUG_REFUSAL_REASONS = \[(.*?)\] as const`).FindSubmatch(raw)
+	require.NotNil(t, block, "the console's SPARKPLUG_REFUSAL_REASONS was not found")
+	var console []Reason
+	for _, m := range regexp.MustCompile(`'([a-z_]+)'`).FindAllSubmatch(block[1], -1) {
+		console = append(console, Reason(m[1]))
+	}
+	assert.Equal(t, RefusalReasons, console)
 }

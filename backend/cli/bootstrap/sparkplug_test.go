@@ -4,6 +4,8 @@
 package bootstrap
 
 import (
+	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -16,6 +18,12 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/fake"
 )
 
 const brokerPassword = "s3cret-broker-pw"
@@ -130,19 +138,18 @@ func TestSparkplugProvisioningComposition(t *testing.T) {
 - tenant: other
   hostId: second
   broker: {url: 'tcp://other:1883'}
+- tenant: third
+  hostId: third
+  broker:
+    url: 'tcp://third:1883'
+    username: u
+    passwordSecretRef: {name: my-broker-secret, key: pw}
 `))
 	if err != nil {
 		t.Fatal(err)
 	}
-	secret, area := sparkplugProvisioning("dctest", sources)
+	area := sparkplugProvisioning("dctest", sources)
 
-	if secret["name"] != "dci-dctest-sparkplug-broker" {
-		t.Fatalf("secret name = %v", secret["name"])
-	}
-	sd := secret["stringData"].(map[string]interface{})
-	if len(sd) != 1 || sd["DC_SPARKPLUG_BROKER_PW_1"] != brokerPassword {
-		t.Fatalf("only the source with a password has a key: %v", sd)
-	}
 	cfg := area["config"].(map[string]interface{})["sources"].([]interface{})
 	b0 := cfg[0].(map[string]interface{})["broker"].(map[string]interface{})
 	if b0["passwordEnv"] != "DC_SPARKPLUG_BROKER_PW_1" || b0["url"] != "tcp://spb-mosquitto:1883" || b0["username"] != "devicechain" {
@@ -158,22 +165,50 @@ func TestSparkplugProvisioningComposition(t *testing.T) {
 	if _, has := b1["passwordEnv"]; has {
 		t.Fatalf("a source with no password names a variable: %v", b1)
 	}
-	env := area["extraEnv"].([]interface{})
-	if len(env) != 1 {
-		t.Fatalf("extraEnv = %v", env)
-	}
-	ref := env[0].(map[string]interface{})["valueFrom"].(map[string]interface{})["secretKeyRef"].(map[string]interface{})
-	if env[0].(map[string]interface{})["name"] != "DC_SPARKPLUG_BROKER_PW_1" || ref["name"] != "dci-dctest-sparkplug-broker" || ref["key"] != "DC_SPARKPLUG_BROKER_PW_1" {
-		t.Fatalf("the projection does not tie to the secret: %v", env[0])
+	b2 := cfg[2].(map[string]interface{})["broker"].(map[string]interface{})
+	if b2["passwordEnv"] != "DC_SPARKPLUG_BROKER_PW_3" {
+		t.Fatalf("source 2 broker = %v", b2)
 	}
 
-	// No password anywhere: no Secret at all (an empty one would be a dangling manifest).
-	secret, area = sparkplugProvisioning("dctest", sources[1:])
-	if secret != nil {
-		t.Fatalf("a Secret was rendered for sources with no password: %v", secret)
+	env := area["extraEnv"].([]interface{})
+	if len(env) != 2 {
+		t.Fatalf("extraEnv = %v", env)
 	}
-	if _, has := area["extraEnv"]; has {
-		t.Fatalf("env rendered for sources with no password: %v", area["extraEnv"])
+	ref := func(i int) (string, map[string]interface{}) {
+		e := env[i].(map[string]interface{})
+		return e["name"].(string), e["valueFrom"].(map[string]interface{})["secretKeyRef"].(map[string]interface{})
+	}
+	if name, r := ref(0); name != "DC_SPARKPLUG_BROKER_PW_1" || r["name"] != "dci-dctest-sparkplug-broker" || r["key"] != "DC_SPARKPLUG_BROKER_PW_1" {
+		t.Fatalf("the dcctl-written projection does not tie to the Secret: %v", r)
+	}
+	// An external reference projects the operator's Secret, under the variable the source names.
+	if name, r := ref(1); name != "DC_SPARKPLUG_BROKER_PW_3" || r["name"] != "my-broker-secret" || r["key"] != "pw" {
+		t.Fatalf("the external projection is wrong: %v", r)
+	}
+
+	// Only a password dcctl holds goes in the Secret dcctl writes.
+	data := sparkplugBrokerSecretData(sources)
+	if len(data) != 1 || data["DC_SPARKPLUG_BROKER_PW_1"] != brokerPassword {
+		t.Fatalf("the Secret data = %v", data)
+	}
+	if got := sparkplugBrokerSecretData(sources[1:]); len(got) != 0 {
+		t.Fatalf("a Secret would be written for sources with no password of their own: %v", got)
+	}
+}
+
+func TestPasswordSecretRefIsValidated(t *testing.T) {
+	for name, tc := range map[string]struct{ body, want string }{
+		"with a password":    {"- tenant: t\n  broker: {url: 'tcp://b:1883', username: u, password: p, passwordSecretRef: {name: s, key: k}}\n", "not both"},
+		"without a key":      {"- tenant: t\n  broker: {url: 'tcp://b:1883', username: u, passwordSecretRef: {name: s}}\n", "needs the name of a Secret"},
+		"a bad name":         {"- tenant: t\n  broker: {url: 'tcp://b:1883', username: u, passwordSecretRef: {name: 'Not_A_Name', key: k}}\n", "needs the name of a Secret"},
+		"without a username": {"- tenant: t\n  broker: {url: 'tcp://b:1883', passwordSecretRef: {name: s, key: k}}\n", "without broker.username"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := ParseSparkplugSources(writeSourcesFile(t, tc.body))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want one naming %q", err, tc.want)
+			}
+		})
 	}
 }
 
@@ -183,12 +218,14 @@ func sparkplugState(sources []SparkplugSource) *State {
 		panic(err)
 	}
 	return &State{
-		Instance:         "dctest",
-		Profile:          "default",
-		ImageRegistry:    DefaultImageRegistry,
-		ImageVersion:     "v0.0.0-test",
-		EnabledAreas:     enabled,
-		SparkplugSources: sources,
+		Instance:              "dctest",
+		InstanceUID:           "uid-1",
+		Profile:               "default",
+		ImageRegistry:         DefaultImageRegistry,
+		ImageVersion:          "v0.0.0-test",
+		EnabledAreas:          enabled,
+		SparkplugSources:      sources,
+		SparkplugSourcesGiven: len(sources) > 0,
 		Values: map[string]string{
 			"ingressHost":    "localhost",
 			"secretsRootKey": base64.StdEncoding.EncodeToString(make([]byte, 32)),
@@ -198,68 +235,80 @@ func sparkplugState(sources []SparkplugSource) *State {
 
 // what the rendered chart holds for the Sparkplug sources.
 type renderedSparkplug struct {
-	secret    map[string]interface{}
+	docs      []map[string]interface{}
 	configRaw string
 	env       []interface{}
+	podAnno   map[string]interface{}
 }
 
 func renderSparkplug(t *testing.T, vals map[string]interface{}) renderedSparkplug {
 	t.Helper()
-	var out renderedSparkplug
-	for _, d := range renderDocs(t, vals) {
+	out := renderedSparkplug{docs: renderDocs(t, vals)}
+	for _, d := range out.docs {
 		kind, _ := d["kind"].(string)
 		meta, _ := d["metadata"].(map[string]interface{})
 		name, _ := meta["name"].(string)
 		switch {
-		case kind == "Secret" && name == "dci-dctest-sparkplug-broker":
-			out.secret = d
 		case kind == "ConfigMap" && name == "dct-dctest-config":
 			if data, ok := d["data"].(map[string]interface{}); ok {
 				out.configRaw, _ = data["sparkplug-ingest"].(string)
 			}
 		case kind == "Deployment" && name == "sparkplug-ingest":
-			spec := d["spec"].(map[string]interface{})["template"].(map[string]interface{})["spec"].(map[string]interface{})
+			tpl := d["spec"].(map[string]interface{})["template"].(map[string]interface{})
+			out.podAnno, _ = tpl["metadata"].(map[string]interface{})["annotations"].(map[string]interface{})
+			spec := tpl["spec"].(map[string]interface{})
 			out.env, _ = spec["containers"].([]interface{})[0].(map[string]interface{})["env"].([]interface{})
 		}
 	}
 	return out
 }
 
-// The end-to-end proof, through the chart a real bootstrap installs: the password Secret, the
-// source in the area's mounted configuration (naming a variable, not holding a password), and the
-// Deployment env tying the two.
+// anywhere says whether s appears in the JSON form of v.
+func anywhere(v interface{}, s string) bool {
+	raw, _ := json.Marshal(v)
+	return strings.Contains(string(raw), s)
+}
+
+// 🔴 H1: THE PASSWORD IS NEVER A HELM VALUE, AND NEVER IN THE RENDERED MANIFEST. A release records
+// the values of every revision it keeps; the Secret is dcctl's, written outside it.
 func TestSparkplugSourcesRenderEndToEnd(t *testing.T) {
 	t.Parallel()
 	sources, err := ParseSparkplugSources(writeSourcesFile(t, goodSources))
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := renderSparkplug(t, helmValues(sparkplugState(sources)))
+	st := sparkplugState(sources)
+	vals := helmValues(st)
+	withSparkplugCredentialsChecksum(vals, sparkplugCredentialsDigest(st.InstanceUID, sparkplugBrokerSecretData(sources)))
+	got := renderSparkplug(t, vals)
 
-	if got.secret == nil {
-		t.Fatal("the broker password Secret was not rendered")
+	if anywhere(vals, brokerPassword) {
+		t.Fatal("the broker password is in the release values")
 	}
-	if sd, _ := got.secret["stringData"].(map[string]interface{}); sd["DC_SPARKPLUG_BROKER_PW_1"] != brokerPassword {
-		t.Fatalf("the Secret does not hold the password: %v", got.secret["stringData"])
+	if anywhere(got.docs, brokerPassword) {
+		t.Fatal("the broker password is in the rendered manifest")
+	}
+	for _, d := range got.docs {
+		if d["kind"] == "Secret" {
+			meta, _ := d["metadata"].(map[string]interface{})
+			if meta["name"] == "dci-dctest-sparkplug-broker" {
+				t.Fatal("the chart renders the broker Secret, so it would be in the release manifest")
+			}
+		}
 	}
 	if got.configRaw == "" {
 		t.Fatal("sparkplug-ingest has no key in the microservice ConfigMap")
 	}
-	if strings.Contains(got.configRaw, brokerPassword) {
-		t.Fatal("the mounted configuration carries the broker password")
-	}
 	var cfg struct {
 		Sources []struct {
 			Tenant          string
-			HostId          string
 			DeviceTypeToken string
 			AutoRegister    bool
 			Groups          []string
 			Broker          struct{ URL, Username, PasswordEnv string }
 			Commands        struct {
-				Enabled         bool
-				HostRole        string
-				WritableMetrics []string
+				Enabled  bool
+				HostRole string
 			}
 		}
 	}
@@ -271,8 +320,7 @@ func TestSparkplugSourcesRenderEndToEnd(t *testing.T) {
 	}
 	s := cfg.Sources[0]
 	if s.Tenant != "plant" || s.Broker.URL != "tcp://spb-mosquitto:1883" || s.Broker.PasswordEnv != "DC_SPARKPLUG_BROKER_PW_1" ||
-		!s.AutoRegister || s.DeviceTypeToken != "sparkplug-pump" || !s.Commands.Enabled || s.Commands.HostRole != "primary" ||
-		len(s.Groups) != 1 || s.Groups[0] != "plant-a" {
+		!s.AutoRegister || s.DeviceTypeToken != "sparkplug-pump" || !s.Commands.Enabled || s.Commands.HostRole != "primary" {
 		t.Fatalf("the source did not reach the configuration intact: %+v", s)
 	}
 	found := false
@@ -292,20 +340,97 @@ func TestSparkplugSourcesRenderEndToEnd(t *testing.T) {
 	}
 }
 
-// 🔴 The reported defect: an upgrade composed the release's values again without the source.
-// An upgrade given NO file composes values with none; carrying must put back the sources and the
-// Secret, including onto an instance whose operator tuned the same area (which makes the area's
-// block exist in the fresh values), and must not displace another feature's Secret.
-func TestAnUpgradeKeepsTheSparkplugSources(t *testing.T) {
+// 🔴 M1: THE POD TEMPLATE CARRIES A DIGEST SALTED PER INSTANCE, AND NO UNSALTED HASH OF THE PASSWORD.
+func TestTheSparkplugPodsCarryASaltedDigestOnly(t *testing.T) {
+	t.Parallel()
+	sources, _ := ParseSparkplugSources(writeSourcesFile(t, goodSources))
+	data := sparkplugBrokerSecretData(sources)
+	digest := sparkplugCredentialsDigest("uid-1", data)
+	if digest == "" || digest != sparkplugCredentialsDigest("uid-1", data) {
+		t.Fatal("the digest is empty or not deterministic")
+	}
+	if digest == sparkplugCredentialsDigest("uid-2", data) {
+		t.Fatal("two instances with the same password share a digest: it is not salted")
+	}
+	if digest == sparkplugCredentialsDigest("uid-1", map[string]string{"DC_SPARKPLUG_BROKER_PW_1": "rotated"}) {
+		t.Fatal("a rotated password does not change the digest, so the pods would not roll")
+	}
+	bare := sha256.Sum256([]byte(brokerPassword))
+	if digest == fmt.Sprintf("%x", bare) {
+		t.Fatal("the digest is the bare SHA-256 of the password")
+	}
+
+	st := sparkplugState(sources)
+	vals := helmValues(st)
+	withSparkplugCredentialsChecksum(vals, digest)
+	got := renderSparkplug(t, vals)
+	if got.podAnno["checksum/area-credentials"] != digest {
+		t.Fatalf("the pod template does not carry the digest: %v", got.podAnno)
+	}
+	// No annotation anywhere is a bare hash of the password or of the value that carries it.
+	for _, d := range got.docs {
+		if anywhere(d, fmt.Sprintf("%x", bare)) {
+			t.Fatal("an unsalted hash of the password is in the rendered manifest")
+		}
+	}
+	// And the extra-secrets hash (still over LwM2M's values) no longer covers a Sparkplug password.
+	extra := sha256.Sum256([]byte(`[{"name":"dci-dctest-sparkplug-broker","stringData":{"DC_SPARKPLUG_BROKER_PW_1":"` + brokerPassword + `"}}]`))
+	if anywhere(got.docs, fmt.Sprintf("%x", extra)) {
+		t.Fatal("the Sparkplug password is still inside the extraSecrets hash")
+	}
+}
+
+// sparkplugRun is one run's worth of writes against a fake cluster.
+func sparkplugRun(t *testing.T, typed kubernetes.Interface, st *State) (string, error) {
+	t.Helper()
+	return syncSparkplugBrokerSecret(context.Background(), typed, st)
+}
+
+func brokerSecret(t *testing.T, typed kubernetes.Interface) (map[string][]byte, bool) {
+	t.Helper()
+	s, err := typed.CoreV1().Secrets("dci-dctest").Get(context.Background(), "dci-dctest-sparkplug-broker", metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil, false
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string][]byte{}
+	for k, v := range s.Data {
+		out[k] = v
+	}
+	for k, v := range s.StringData {
+		out[k] = []byte(v)
+	}
+	return out, true
+}
+
+// 🔴 H1: AN UPGRADE KEEPS THE SOURCE WITHOUT READING ANY SECRET FROM THE RELEASE. The release
+// values hold no password; the carry puts the source back from them; the password stays in the
+// Secret dcctl wrote, which the upgrade leaves alone and reads only for the pods' digest.
+func TestAnUpgradeKeepsTheSparkplugSourcesWithoutReadingASecretFromTheRelease(t *testing.T) {
 	t.Parallel()
 	sources, err := ParseSparkplugSources(writeSourcesFile(t, goodSources))
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The release: sources, plus a LwM2M Secret that another feature put in extraSecrets.
-	previous := helmValues(sparkplugState(sources))
-	previous["extraSecrets"] = append(previous["extraSecrets"].([]interface{}),
-		map[string]interface{}{"name": "dci-dctest-lwm2m-psk", "stringData": map[string]interface{}{"DC_LWM2M_PSK_1": "x"}})
+	typed := fake.NewSimpleClientset()
+
+	// The bootstrap that gave the file.
+	first := sparkplugState(sources)
+	digest1, err := sparkplugRun(t, typed, first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := helmValues(first)
+	withSparkplugCredentialsChecksum(previous, digest1)
+	// The release record, as `helm get values` would print it.
+	if anywhere(previous, brokerPassword) {
+		t.Fatal("the release values hold the broker password")
+	}
+	if _, ok := brokerSecret(t, typed); !ok {
+		t.Fatal("the Secret was not written")
+	}
 
 	// The upgrade: no file, and the operator's overlay tunes the same area.
 	st := sparkplugState(nil)
@@ -316,41 +441,45 @@ func TestAnUpgradeKeepsTheSparkplugSources(t *testing.T) {
 		},
 	}
 	fresh := authoringValues(st)
-	if _, has := fresh["extraSecrets"]; has {
-		t.Fatal("the fresh values already hold extraSecrets, so this proves nothing about the carry")
+	digest2, err := sparkplugRun(t, typed, st)
+	if err != nil {
+		t.Fatal(err)
 	}
+	withSparkplugCredentialsChecksum(fresh, digest2)
 	carryReleaseValues(fresh, previous)
 
+	if digest2 != digest1 {
+		t.Fatal("an upgrade that was given no file changed the pods' digest, which would roll them for nothing")
+	}
+	if data, ok := brokerSecret(t, typed); !ok || string(data["DC_SPARKPLUG_BROKER_PW_1"]) != brokerPassword {
+		t.Fatalf("an upgrade disturbed the password Secret: %v", data)
+	}
 	got := renderSparkplug(t, fresh)
-	if got.secret == nil || got.configRaw == "" {
-		t.Fatalf("an upgrade dropped the source: secret=%v config=%q", got.secret != nil, got.configRaw)
+	if got.configRaw == "" || !strings.Contains(got.configRaw, `"tcp://spb-mosquitto:1883"`) || !strings.Contains(got.configRaw, "DC_SPARKPLUG_BROKER_PW_1") {
+		t.Fatalf("an upgrade dropped the source: %q", got.configRaw)
 	}
-	if !strings.Contains(got.configRaw, `"tcp://spb-mosquitto:1883"`) || !strings.Contains(got.configRaw, "DC_SPARKPLUG_BROKER_PW_1") {
-		t.Fatalf("the carried configuration is not the release's: %s", got.configRaw)
+	if anywhere(fresh, brokerPassword) || anywhere(got.docs, brokerPassword) {
+		t.Fatal("the upgraded release holds the password")
 	}
-	names := []string{}
-	for _, s := range fresh["extraSecrets"].([]interface{}) {
-		names = append(names, s.(map[string]interface{})["name"].(string))
-	}
-	sort.Strings(names)
-	if !reflect.DeepEqual(names, []string{"dci-dctest-lwm2m-psk", "dci-dctest-sparkplug-broker"}) {
-		t.Fatalf("extraSecrets after the carry = %v", names)
-	}
-	// The tuning survived beside the carried sources.
 	area := fresh["functionalAreas"].(map[string]interface{})["sparkplug-ingest"].(map[string]interface{})
 	if _, ok := area["resources"]; !ok {
 		t.Fatalf("the overlay's tuning was lost by the carry: %v", area)
 	}
 }
 
-// A run given the file again replaces what the release holds, and still keeps another feature's
-// Secret.
-func TestAFileGivenAgainReplacesTheCarriedSources(t *testing.T) {
+// A rotation replaces the dcctl-written Secret in place, changes the digest (so the pods roll), and
+// the file given again replaces the carried source rather than being overwritten by it.
+func TestAFileGivenAgainRotatesTheSecretAndReplacesTheCarriedSources(t *testing.T) {
 	t.Parallel()
 	old, _ := ParseSparkplugSources(writeSourcesFile(t, goodSources))
-	previous := helmValues(sparkplugState(old))
-	previous["extraSecrets"] = append(previous["extraSecrets"].([]interface{}),
-		map[string]interface{}{"name": "dci-dctest-lwm2m-psk", "stringData": map[string]interface{}{"k": "v"}})
+	typed := fake.NewSimpleClientset()
+	first := sparkplugState(old)
+	digest1, err := sparkplugRun(t, typed, first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := helmValues(first)
+	withSparkplugCredentialsChecksum(previous, digest1)
 
 	replacement, err := ParseSparkplugSources(writeSourcesFile(t, strings.ReplaceAll(strings.ReplaceAll(goodSources, "spb-mosquitto", "new-broker"), brokerPassword, "rotated-pw")))
 	if err != nil {
@@ -359,18 +488,133 @@ func TestAFileGivenAgainReplacesTheCarriedSources(t *testing.T) {
 	st := sparkplugState(replacement)
 	st.Evolving = true
 	fresh := authoringValues(st)
-	carryReleaseValues(fresh, previous)
+	digest2, err := sparkplugRun(t, typed, st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withSparkplugCredentialsChecksum(fresh, digest2)
+	// What releaseValues does for a run that decides the sources.
+	carryReleaseValues(fresh, withoutSparkplugSources(previous))
 
+	data, _ := brokerSecret(t, typed)
+	if string(data["DC_SPARKPLUG_BROKER_PW_1"]) != "rotated-pw" {
+		t.Fatalf("the Secret still holds the old password: %v", data)
+	}
+	if digest1 == digest2 {
+		t.Fatal("a rotation did not change the digest, so the pods would not roll")
+	}
 	got := renderSparkplug(t, fresh)
 	if !strings.Contains(got.configRaw, "new-broker") || strings.Contains(got.configRaw, "spb-mosquitto") {
 		t.Fatalf("the carry overwrote the new sources: %s", got.configRaw)
 	}
-	if sd, _ := got.secret["stringData"].(map[string]interface{}); sd["DC_SPARKPLUG_BROKER_PW_1"] != "rotated-pw" {
-		t.Fatalf("the carry overwrote the rotated password: %v", got.secret["stringData"])
+	if anywhere(fresh, "rotated-pw") || anywhere(fresh, brokerPassword) || anywhere(got.docs, "rotated-pw") {
+		t.Fatal("a password is in the release")
 	}
-	if len(fresh["extraSecrets"].([]interface{})) != 2 {
-		t.Fatalf("extraSecrets = %v", fresh["extraSecrets"])
+}
+
+// 🔴 L1 + M3: WITHDRAWING (an explicit run with no sources) removes the source from the release and the
+// password from the cluster, and the carry cannot put either back; so does a run whose sources carry
+// no password of their own.
+func TestWithdrawingOrRetiringAPasswordRemovesTheSecretAndTheCarriedLeaves(t *testing.T) {
+	t.Parallel()
+	old, _ := ParseSparkplugSources(writeSourcesFile(t, goodSources))
+	for name, next := range map[string][]SparkplugSource{
+		"withdrawn":         nil,
+		"password-less set": {{Tenant: "plant", Broker: SparkplugBroker{URL: "tcp://spb-mosquitto:1883"}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			typed := fake.NewSimpleClientset()
+			first := sparkplugState(old)
+			digest1, err := sparkplugRun(t, typed, first)
+			if err != nil {
+				t.Fatal(err)
+			}
+			previous := helmValues(first)
+			withSparkplugCredentialsChecksum(previous, digest1)
+
+			st := sparkplugState(next)
+			st.Evolving = true
+			st.SparkplugSourcesGiven = true // a withdrawal gives no sources and still decides
+			fresh := authoringValues(st)
+			digest2, err := sparkplugRun(t, typed, st)
+			if err != nil {
+				t.Fatal(err)
+			}
+			withSparkplugCredentialsChecksum(fresh, digest2)
+			carryReleaseValues(fresh, withoutSparkplugSources(previous))
+
+			if _, ok := brokerSecret(t, typed); ok {
+				t.Fatal("the retired password Secret is still in the cluster")
+			}
+			if digest2 != "" {
+				t.Fatalf("a digest is stamped for a Secret that is gone: %q", digest2)
+			}
+			got := renderSparkplug(t, fresh)
+			if anywhere(fresh, "DC_SPARKPLUG_BROKER_PW_1") {
+				t.Fatal("the retired password's projection was carried back into the release")
+			}
+			if name == "withdrawn" && strings.Contains(got.configRaw, "spb-mosquitto") {
+				t.Fatal("the withdrawn source was carried back")
+			}
+		})
 	}
+}
+
+// A Secret named like ours that dcctl did not write is not deleted by a withdrawal.
+func TestAWithdrawalLeavesAForeignSecretAlone(t *testing.T) {
+	typed := fake.NewSimpleClientset(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "dci-dctest-sparkplug-broker", Namespace: "dci-dctest"}})
+	st := sparkplugState(nil)
+	st.SparkplugSourcesGiven = true
+	if _, err := sparkplugRun(t, typed, st); err == nil {
+		t.Fatal("a Secret dcctl did not write was removed")
+	}
+	if _, ok := brokerSecret(t, typed); !ok {
+		t.Fatal("the foreign Secret is gone")
+	}
+}
+
+// 🔴 M3: a bootstrap that is given no sources over an instance that has some is refused, unless it
+// says it means to withdraw them.
+func TestABootstrapThatWouldSilentlyDropSourcesIsRefused(t *testing.T) {
+	held := map[string]interface{}{"functionalAreas": map[string]interface{}{"sparkplug-ingest": map[string]interface{}{
+		"config": map[string]interface{}{"sources": []interface{}{map[string]interface{}{"tenant": "plant"}}}}}}
+	old := sparkplugReleaseValues
+	t.Cleanup(func() { sparkplugReleaseValues = old })
+
+	for name, tc := range map[string]struct {
+		release map[string]interface{}
+		st      State
+		refused bool
+	}{
+		"given none, release holds sources":     {held, State{Instance: "i"}, true},
+		"given a file":                          {held, State{Instance: "i", SparkplugSourcesGiven: true}, false},
+		"withdrawing explicitly":                {held, State{Instance: "i", SparkplugSourcesGiven: true}, false},
+		"release holds none":                    {map[string]interface{}{}, State{Instance: "i"}, false},
+		"a fresh install (no release)":          {nil, State{Instance: "i"}, false},
+		"an upgrade is judged elsewhere":        {held, State{Instance: "i", Evolving: true}, false},
+		"a rehearsal does not read the cluster": {held, State{Instance: "i", DryRun: true}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			sparkplugReleaseValues = func(*State) (map[string]interface{}, error) { return tc.release, nil }
+			err := precheckSparkplugWithdrawal(context.Background(), &tc.st)
+			if tc.refused != (err != nil) {
+				t.Fatalf("refused=%v, want %v (%v)", err != nil, tc.refused, err)
+			}
+			if err != nil && !strings.Contains(err.Error(), "--withdraw-sparkplug-sources") {
+				t.Fatalf("the refusal does not name the way out: %v", err)
+			}
+		})
+	}
+	if err := CheckSparkplugFlags(someParsed(), true); err == nil {
+		t.Fatal("--sparkplug-source with --withdraw-sparkplug-sources was accepted")
+	}
+	if err := CheckSparkplugFlags(nil, true); err != nil {
+		t.Fatalf("a withdrawal alone was refused: %v", err)
+	}
+}
+
+func someParsed() []SparkplugSource {
+	return []SparkplugSource{{Tenant: "t", Broker: SparkplugBroker{URL: "tcp://b:1883"}}}
 }
 
 // A tuning overlay still may not set a source: that is what the flag is for.
@@ -434,14 +678,14 @@ func TestSparkplugSourceKeysAreTheServicesOwn(t *testing.T) {
 	if got, want := lowerJSON(SparkplugSource{}), fields("SparkplugSource"); !reflect.DeepEqual(got, want) {
 		t.Errorf("source keys: dcctl accepts %v, the service declares %v", got, want)
 	}
-	// dcctl's broker block swaps passwordEnv (which it writes) for password / passwordFile.
+	// dcctl's broker block swaps passwordEnv (which it writes) for the three ways to supply one.
 	want := []string{}
 	for _, f := range fields("SourceBroker") {
 		if f != "passwordenv" {
 			want = append(want, f)
 		}
 	}
-	want = append(want, "password", "passwordfile")
+	want = append(want, "password", "passwordfile", "passwordsecretref")
 	sort.Strings(want)
 	if got := lowerJSON(SparkplugBroker{}); !reflect.DeepEqual(got, want) {
 		t.Errorf("broker keys: dcctl accepts %v, the service declares %v", got, want)

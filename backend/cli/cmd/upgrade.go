@@ -23,7 +23,8 @@ var (
 	upgradeMqttFailClosed bool
 	upgradeTrustedProxies []string
 
-	upgradeSparkplugSource string
+	upgradeSparkplugSource   string
+	upgradeWithdrawSparkplug bool
 	// upgradeSparkplugSources is the file above, parsed and validated by RunE.
 	upgradeSparkplugSources []bootstrap.SparkplugSource
 
@@ -62,7 +63,8 @@ func upgradeOptions(instance string, mqttFailClosed *bool, valuesOverlay map[str
 			DropLegacyIngress: upgradeDropLegacyIngress,
 			ResetValues:       upgradeResetValues,
 
-			SparkplugSources: upgradeSparkplugSources,
+			SparkplugSources:         upgradeSparkplugSources,
+			WithdrawSparkplugSources: upgradeWithdrawSparkplug,
 		},
 		EscrowFile:           upgradeEscrowFile,
 		EscrowPassphraseFile: upgradeEscrowPass,
@@ -134,8 +136,9 @@ Gateway names a new certificate Secret while the Ingress objects remain, so the 
 reaches never waits for a certificate; the upgrade waits for the Gateway's own to be Ready.
 
 A Sparkplug source ('--sparkplug-source <file>') is carried the same way as the tuning below: the
-sources and the Secret holding their broker passwords stay on the instance through every later
-upgrade, and a run given the file again replaces them. The area must already be enabled
+sources stay on the instance through every later upgrade, and a run given the file again replaces
+them. The broker password is not in the Helm release: dcctl writes it into a Secret of its own,
+which the upgrade leaves alone, and '--withdraw-sparkplug-sources' removes both. The area must already be enabled
 ('dcctl enable-area ... sparkplug-ingest'); a bootstrap with the flag enables it.
 
 Operator tuning is the exception, and it is carried: a values overlay given to
@@ -209,6 +212,9 @@ when they are in a terraform.tfvars beside its state
 		if upgradeSparkplugSources, err = bootstrap.ParseSparkplugSources(upgradeSparkplugSource); err != nil {
 			return fmt.Errorf("--sparkplug-source: %w", err)
 		}
+		if err := bootstrap.CheckSparkplugFlags(upgradeSparkplugSources, upgradeWithdrawSparkplug); err != nil {
+			return err
+		}
 		opts := upgradeOptions(args[1], mqttFailClosed, valuesOverlay)
 		return bootstrap.Upgrade(cmd.Context(), provider, opts)
 	},
@@ -224,6 +230,7 @@ func init() {
 	upgradeCmd.Flags().BoolVar(&upgradeSkipInfra, "skip-infrastructure", false, "move only the services: leave this instance's message broker and event store on the configuration they were built with")
 	upgradeCmd.Flags().StringArrayVar(&upgradeValues, "values", nil, valuesUsage)
 	upgradeCmd.Flags().StringVar(&upgradeSparkplugSource, "sparkplug-source", "", sparkplugSourceUsage)
+	upgradeCmd.Flags().BoolVar(&upgradeWithdrawSparkplug, "withdraw-sparkplug-sources", false, withdrawSparkplugUsage)
 	upgradeCmd.Flags().BoolVar(&upgradeMqttFailClosed, "mqtt-fail-closed", false, mqttFailClosedUsage)
 	upgradeCmd.Flags().StringSliceVar(&upgradeTrustedProxies, "trusted-proxies", nil, trustedProxiesUsage)
 	upgradeCmd.Flags().StringVar(&upgradeIngressController, "ingress-controller", "", ingressControllerUsage)

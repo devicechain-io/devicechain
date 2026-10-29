@@ -637,6 +637,26 @@ func (tr *SessionTracker) MarkRebirthPending(group, node string) {
 	}
 }
 
+// MarkRebirthPendingRestorable is MarkRebirthPending that returns the way back: the function it
+// returns puts the node's rebirth state exactly as it was, for a request that never reached the wire.
+func (tr *SessionTracker) MarkRebirthPendingRestorable(group, node string) (undo func()) {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	s := tr.sessions[nodeKey{group, node}]
+	if s == nil {
+		return func() {}
+	}
+	pending, probe := s.rebirthPending, s.probeAsked
+	s.rebirthPending, s.probeAsked = true, true
+	return func() {
+		tr.mu.Lock()
+		defer tr.mu.Unlock()
+		if cur := tr.sessions[nodeKey{group, node}]; cur == s {
+			s.rebirthPending, s.probeAsked = pending, probe
+		}
+	}
+}
+
 // MarkCommandedRebirth records that an operator's command asked a node to rebirth, so the NBIRTH
 // that answers it (the same bdSeq, seq back at 0) is taken as the answer it is: the seq baseline is
 // re-adopted and the metric table rebuilt, instead of the birth being skipped as a QoS-1

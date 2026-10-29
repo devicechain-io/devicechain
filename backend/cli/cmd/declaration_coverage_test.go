@@ -126,6 +126,10 @@ var dispositions = map[string]disposition{
 	// release (carriedValuePaths), which a second operator on another machine reads just as well,
 	// but which is not the declaration.
 	"sparkplug-source": gap,
+
+	// withdraw-sparkplug-sources is an instruction for THIS run (remove what the release holds);
+	// its result is the absence of sources, which the release records by not holding them.
+	"withdraw-sparkplug-sources": runScoped,
 }
 
 // The gaps, stated separately so the test can assert the set EXACTLY. Closing one

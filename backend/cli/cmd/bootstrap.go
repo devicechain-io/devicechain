@@ -30,22 +30,23 @@ var bootstrapValues []string
 
 // Bootstrap command flags.
 var (
-	bootstrapKubeContext     string
-	bootstrapCluster         string
-	bootstrapProfile         string
-	bootstrapDryRun          bool
-	bootstrapAssumeYes       bool
-	bootstrapSkipPreflight   bool
-	bootstrapRegistry        string
-	bootstrapVersion         string
-	bootstrapBuild           bool
-	bootstrapHost            string
-	bootstrapNoTLS           bool
-	bootstrapAllowLegacyDb   bool
-	bootstrapDev             bool
-	bootstrapEnableAreas     []string
-	bootstrapLwm2mIdentities string
-	bootstrapSparkplugSource string
+	bootstrapKubeContext       string
+	bootstrapCluster           string
+	bootstrapProfile           string
+	bootstrapDryRun            bool
+	bootstrapAssumeYes         bool
+	bootstrapSkipPreflight     bool
+	bootstrapRegistry          string
+	bootstrapVersion           string
+	bootstrapBuild             bool
+	bootstrapHost              string
+	bootstrapNoTLS             bool
+	bootstrapAllowLegacyDb     bool
+	bootstrapDev               bool
+	bootstrapEnableAreas       []string
+	bootstrapLwm2mIdentities   string
+	bootstrapSparkplugSource   string
+	bootstrapWithdrawSparkplug bool
 	// bootstrapSparkplugSources is the file above, parsed and validated by RunE.
 	bootstrapSparkplugSources []bootstrap.SparkplugSource
 	bootstrapEscrowFile       string
@@ -168,6 +169,8 @@ func bootstrapOptions(instance string, enableAreas []string, mqttFailClosed *boo
 		MqttFailClosed:       mqttFailClosed,
 		TrustedProxies:       bootstrapTrustedProxies,
 		SparkplugSources:     bootstrapSparkplugSources,
+
+		WithdrawSparkplugSources: bootstrapWithdrawSparkplug,
 	}
 }
 
@@ -197,6 +200,7 @@ func bootstrapStateFor(opts bootstrap.Options, binding bootstrap.ClusterBinding,
 		EnabledAreas:           enabledAreas,
 		Lwm2mIdentities:        lwm2mIdentities,
 		SparkplugSources:       opts.SparkplugSources,
+		SparkplugSourcesGiven:  len(opts.SparkplugSources) > 0 || opts.WithdrawSparkplugSources,
 		MqttFailClosed:         opts.MqttFailClosed,
 		TrustedProxiesOverride: opts.TrustedProxies,
 		ValuesOverlay:          valuesOverlay,
@@ -285,6 +289,9 @@ var bootstrapCmd = &cobra.Command{
 			return fmt.Errorf("--sparkplug-source: %w", err)
 		}
 		bootstrapSparkplugSources = sparkplugSources
+		if err := bootstrap.CheckSparkplugFlags(sparkplugSources, bootstrapWithdrawSparkplug); err != nil {
+			return err
+		}
 
 		// Normalize --enable-area (trim, drop blanks) ONCE, so the deployment selection
 		// and the report label see the same clean set. A stray `--enable-area " "` then
@@ -680,6 +687,7 @@ func init() {
 	bootstrapCmd.Flags().BoolVar(&bootstrapMqttFailClosed, "mqtt-fail-closed", false, mqttFailClosedUsage)
 	bootstrapCmd.Flags().StringSliceVar(&bootstrapTrustedProxies, "trusted-proxies", nil, trustedProxiesUsage)
 	bootstrapCmd.Flags().StringVar(&bootstrapSparkplugSource, "sparkplug-source", "", sparkplugSourceUsage)
+	bootstrapCmd.Flags().BoolVar(&bootstrapWithdrawSparkplug, "withdraw-sparkplug-sources", false, withdrawSparkplugUsage)
 	bootstrapCmd.Flags().StringVar(&bootstrapLwm2mIdentities, "lwm2m-identities", "", "path to a JSON file of LwM2M DTLS-PSK credentials to provision: [{identity, psk(base64), tenant, externalId, deviceTypeToken, autoRegister}]. Renders the PSKs into a chart-owned Secret and binds each to lwm2m-ingest; implies --enable-area lwm2m-ingest. Validated up front (short PSK / missing tenancy fails before any cluster). Re-running bootstrap WITHOUT this flag removes the provisioned credentials")
 
 	bootstrapCmd.Flags().StringVar(&bootstrapObjectStore.Mode, "object-store", "", "where the instance keeps tenant logos and update artifacts: none, filesystem (a volume the chart creates) or s3. Default: a small filesystem store on a cluster dcctl created, none on one it was pointed at with --kube-context. Fixed configuration, recorded on the instance and kept by 'dcctl upgrade'")
@@ -770,7 +778,13 @@ const valuesUsage = "a YAML file of operator tuning (replica counts, resources, 
 
 // sparkplugSourceUsage is the help text of --sparkplug-source on both verbs.
 const sparkplugSourceUsage = "path to a YAML or JSON file of Sparkplug sources to connect: a list of " +
-	"{tenant, hostId, broker{url, username, password | passwordFile}, groups, deviceTypeToken, autoRegister, commands{enabled, hostRole, writableMetrics, ...}}. " +
-	"Each source is one Host Application connection out to a customer broker, bound to one tenant; the broker password is rendered into a Secret and never into the " +
-	"configuration, and the sources are kept by every later upgrade. Implies --enable-area sparkplug-ingest on a bootstrap (on an upgrade the area must already run). " +
-	"Validated up front. Re-running bootstrap WITHOUT this flag withdraws the sources"
+	"{tenant, hostId, broker{url, username, password | passwordFile | passwordSecretRef{name, key}}, groups, deviceTypeToken, autoRegister, commands{enabled, hostRole, writableMetrics, ...}}. " +
+	"Each source is one Host Application connection out to a customer broker, bound to one tenant. The broker password is written by dcctl into a Secret of its own, " +
+	"dci-<instance>-sparkplug-broker, OUTSIDE the Helm release: the release records only the Secret's name and a salted digest, never the password " +
+	"(or name a Secret you manage yourself with passwordSecretRef, which dcctl neither reads nor writes). The sources are kept by every later upgrade. " +
+	"Implies --enable-area sparkplug-ingest on a bootstrap (on an upgrade the area must already run). Validated up front. " +
+	"A bootstrap over an instance that has sources, given none, is refused unless --withdraw-sparkplug-sources is given"
+
+// withdrawSparkplugUsage is the help text of --withdraw-sparkplug-sources on both verbs.
+const withdrawSparkplugUsage = "remove the instance's Sparkplug sources and the Secret holding their broker passwords. " +
+	"Not combinable with --sparkplug-source"

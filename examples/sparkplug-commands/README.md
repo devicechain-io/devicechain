@@ -81,11 +81,12 @@ appears within a minute; there is nothing to restart.
   **source**: broker `tcp://spb-mosquitto:1883`, group `plant-a`, host id `devicechain`,
   `autoRegister` with that device type, and `commands` enabled with `hostRole: primary` and
   `writableMetrics: ["Outputs/*"]`. The file holds the broker password only for the length of the
-  command; `dcctl` renders it into a Secret and never into the area's configuration.
+  command; `dcctl` writes it into a Secret of its own, outside the Helm release, so it is in no release record or
+  configuration.
 
 The source is part of the instance now: **every later `dcctl upgrade` keeps it**, with no flag. Give
-the flag again to change it (a new password rolls the pod), and re-run `dcctl bootstrap` without it
-to withdraw it. The area has to be running, which step 1 did with `--enable-area sparkplug-ingest`; a
+the flag again to change it (a new password rolls the pod), and `dcctl upgrade --withdraw-sparkplug-sources`
+to remove it. The area has to be running, which step 1 did with `--enable-area sparkplug-ingest`; a
 bootstrap given `--sparkplug-source` enables it for you. The broker is reached by its container name
 because every kind node, and so every pod, resolves names on the `kind` Docker network; no
 `host.docker.internal` or published port is involved.

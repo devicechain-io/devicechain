@@ -322,6 +322,10 @@ func applyUpgradeDeclaration(st *State, inst *dcv1beta1.Instance, opts UpgradeOp
 
 	// 🔴 SOURCES FOR AN AREA THAT IS NOT DEPLOYED WOULD BE ACCEPTED AND NEVER USED. A bootstrap
 	// implies the area; an upgrade does not change an instance's shape, so it says which verb does.
+	if err := CheckSparkplugFlags(opts.SparkplugSources, opts.WithdrawSparkplugSources); err != nil {
+		return err
+	}
+	st.SparkplugSourcesGiven = len(opts.SparkplugSources) > 0 || opts.WithdrawSparkplugSources
 	if len(opts.SparkplugSources) > 0 {
 		if !slices.Contains(st.EnabledAreas, string(functionalarea.SparkplugIngest)) {
 			return fmt.Errorf("--sparkplug-source needs the sparkplug-ingest area, which instance %q does not run; "+

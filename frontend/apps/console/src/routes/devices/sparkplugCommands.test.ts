@@ -6,9 +6,14 @@
 // declared), and the outcome reading is checked against the evidence the adapter stores,
 // including the shapes it must NOT read as evidence.
 import { describe, expect, it } from 'vitest';
-import en from '../../i18n/locales/en/devices.json';
-import es from '../../i18n/locales/es/devices.json';
 import { SPARKPLUG_REFUSAL_REASONS, buildSparkplugWritePayload, sparkplugOutcome } from './sparkplugCommands';
+
+// Every locale the console ships, found rather than listed: a new locale directory is checked the
+// day it is added.
+const catalogs = import.meta.glob('../../i18n/locales/*/devices.json', { eager: true }) as Record<
+  string,
+  { default: Record<string, string> }
+>;
 
 const build = (metric: string, value: string, mode: 'auto' | 'text' = 'auto') =>
   buildSparkplugWritePayload(metric, value, mode);
@@ -151,9 +156,11 @@ describe('sparkplugOutcome', () => {
   });
 
   it('has a sentence in every locale for every refusal reason', () => {
-    for (const catalog of [en, es] as Record<string, string>[]) {
+    const files = Object.entries(catalogs);
+    expect(files.length).toBeGreaterThanOrEqual(2);
+    for (const [file, catalog] of files) {
       for (const reason of SPARKPLUG_REFUSAL_REASONS) {
-        expect(catalog[`sparkplugRefused_${reason}`], reason).toBeTruthy();
+        expect(catalog.default[`sparkplugRefused_${reason}`], `${file}: ${reason}`).toBeTruthy();
       }
     }
   });

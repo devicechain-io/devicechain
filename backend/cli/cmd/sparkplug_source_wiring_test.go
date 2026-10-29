@@ -39,7 +39,26 @@ func TestSparkplugSourceReachesTheBootstrapAndUpgradeOptions(t *testing.T) {
 		t.Fatalf("upgrade options lost the sources: %v", up.SparkplugSources)
 	}
 	upgradeSparkplugSources = nil
-	if up := upgradeOptions("prod", nil, nil); up.SparkplugSources != nil {
+	if up := upgradeOptions("prod", nil, nil); up.SparkplugSources != nil || up.WithdrawSparkplugSources {
 		t.Fatalf("an upgrade given no file carries sources: %v", up.SparkplugSources)
+	}
+
+	// The withdrawal reaches both options, and decides the sources on the state even with none.
+	if bootstrapCmd.Flags().Lookup("withdraw-sparkplug-sources") == nil || upgradeCmd.Flags().Lookup("withdraw-sparkplug-sources") == nil {
+		t.Fatal("--withdraw-sparkplug-sources is missing from a verb")
+	}
+	bootstrapWithdrawSparkplug, upgradeWithdrawSparkplug = true, true
+	t.Cleanup(func() { bootstrapWithdrawSparkplug, upgradeWithdrawSparkplug = false, false })
+	if !upgradeOptions("prod", nil, nil).WithdrawSparkplugSources {
+		t.Fatal("upgrade options lost the withdrawal")
+	}
+	bootstrapSparkplugSources = nil
+	bopts := bootstrapOptions("prod", nil, nil)
+	if !bopts.WithdrawSparkplugSources {
+		t.Fatal("bootstrap options lost the withdrawal")
+	}
+	st = bootstrapStateFor(bopts, bootstrap.ClusterBinding{}, "uid", "local", nil, nil, nil, nil, false, bootstrap.EscrowPlan{})
+	if !st.SparkplugSourcesGiven || len(st.SparkplugSources) != 0 {
+		t.Fatalf("a withdrawing bootstrap must decide the sources (given=%v)", st.SparkplugSourcesGiven)
 	}
 }

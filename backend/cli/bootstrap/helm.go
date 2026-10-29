@@ -231,6 +231,13 @@ func helmInstall(ctx context.Context, st *State) error {
 		return err
 	}
 	withObjectStoreCredentialsDigest(vals, digest)
+	// The Sparkplug broker passwords, written by dcctl outside the release and named by the
+	// sparkplug-ingest pods' secretKeyRef; only a digest of them, salted per instance, is a value.
+	spDigest, err := syncSparkplugBrokerSecret(ctx, typed, st)
+	if err != nil {
+		return err
+	}
+	withSparkplugCredentialsChecksum(vals, spDigest)
 	// The callout's seeds, before the release and beside the document: only device-management
 	// mounts this Secret, and its pods project it at container start.
 	if err := writeCalloutSecret(ctx, typed, st); err != nil {
@@ -299,6 +306,10 @@ func releaseValues(ctx context.Context, ch *chart.Chart, st *State, previous map
 	// what is installed. A carried block that the chart refuses should fail there,
 	// named, and not ten minutes later as a rollout that never became ready.
 	if st.Evolving {
+		// A run that decides the Sparkplug sources (a file, or a withdrawal) is not carried over.
+		if st.SparkplugSourcesGiven {
+			previous = withoutSparkplugSources(previous)
+		}
 		carryReleaseValues(vals, previous)
 		if msg := removedBodyCredentialStripNotice(previous); msg != "" {
 			fmt.Println(color.YellowString(msg))
@@ -629,16 +640,12 @@ func helmValues(st *State) map[string]interface{} {
 		mergeFunctionalArea(vals, "lwm2m-ingest", areaConfig)
 	}
 
-	// Sparkplug sources (--sparkplug-source): the broker passwords into a chart-owned Secret,
-	// the sources into sparkplug-ingest's configuration. Same shape as the LwM2M block above,
-	// and for the same reason merged rather than assigned.
+	// Sparkplug sources (--sparkplug-source): the sources into sparkplug-ingest's configuration,
+	// merged rather than assigned for the same reason as the LwM2M block above.
+	// No password goes into these values: the Secret is written by dcctl outside the release
+	// (syncSparkplugBrokerSecret) and the release carries only its name.
 	if len(st.SparkplugSources) > 0 {
-		secret, areaConfig := sparkplugProvisioning(st.Instance, st.SparkplugSources)
-		if secret != nil {
-			existing, _ := vals["extraSecrets"].([]interface{})
-			vals["extraSecrets"] = append(existing, secret)
-		}
-		mergeFunctionalArea(vals, "sparkplug-ingest", areaConfig)
+		mergeFunctionalArea(vals, "sparkplug-ingest", sparkplugProvisioning(st.Instance, st.SparkplugSources))
 	}
 
 	return vals
