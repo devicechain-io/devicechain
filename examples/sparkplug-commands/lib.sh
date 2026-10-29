@@ -35,6 +35,7 @@ gql() {
   printf '%s' "$resp"
 }
 
+# shellcheck disable=SC2034  # used by the scripts that source this file
 USER_GQL="$DC_URL/api/user-management/graphql"
 ADMIN_GQL="$DC_URL/api/user-management/admin/graphql"
 DM_GQL="$DC_URL/api/device-management/graphql"
