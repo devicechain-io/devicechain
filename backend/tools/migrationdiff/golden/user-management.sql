@@ -539,7 +539,8 @@ CREATE TABLE "user-management".iam_tenant_purges (
  token character varying(128) NOT NULL,
  epoch timestamp with time zone NOT NULL,
  completed_at timestamp with time zone,
- rows bigint DEFAULT 0 NOT NULL
+ rows bigint DEFAULT 0 NOT NULL,
+ erased_at timestamp with time zone
 );
 CREATE TABLE "user-management".iam_tenant_tiers (
  id bigint NOT NULL,

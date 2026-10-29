@@ -18,6 +18,7 @@ eliminación abierta y qué conserva la plataforma deliberadamente.
 |---|---|
 | **De inmediato** | Se revoca el inicio de sesión. El inquilino queda deshabilitado y marcado como en eliminación, y se registra el momento del corte. Las nuevas conexiones de dispositivos, la nueva ingesta y el nuevo envío de comandos se rechazan en aproximadamente un minuto. |
 | **En uno o dos minutos** | Un coordinador en segundo plano empieza a recuperar los datos del inquilino de todos los sistemas de almacenamiento que los contienen, y continúa hasta que cada uno informa de que no conserva nada. |
+| **Cuando todos los sistemas de almacenamiento llevan limpios toda la ventana de asentamiento** (cinco minutos por defecto) | La eliminación se registra como [borrada](#erased-signal): la plataforma respalda la afirmación de que los datos del inquilino ya no existen. El identificador sigue retenido. |
 | **Tras al menos 12 horas** | Se elimina el registro del inquilino y su identificador vuelve a estar disponible. |
 
 La eliminación en sí es idempotente. Eliminar un inquilino que no existe, o uno que ya se está
@@ -168,6 +169,52 @@ Dos límites menores, para que consten:
   con acceso a ambos todavía puede relacionarlos. Lo que se destruye es el nombre en el diario, no
   la existencia de la cuenta a la que se refería.
 
+## Saber que los datos están borrados {#erased-signal}
+
+Una eliminación tiene dos resultados que conviene separar, y la plataforma registra ambos en el
+registro de la eliminación.
+
+- **Borrada** (`erasedAt`): todos los sistemas de almacenamiento han informado de que están limpios y
+  se han mantenido limpios durante toda la ventana de asentamiento. Es la afirmación de la plataforma
+  de que los datos del inquilino ya no existen, y es el momento que debes citar cuando alguien
+  pregunte cuándo se cumplió una solicitud de borrado.
+- **Completada** (`completedAt`): además, el identificador ha estado retenido durante toda la
+  retención y se ha liberado. Ocurre aproximadamente una retención después de `erasedAt`, 12 horas por
+  defecto.
+
+`erasedAt` es una afirmación vigente, no una entrada de registro, y solo se hace cuando todo
+coincide. Si un solo sistema de almacenamiento aún conserva datos, no es accesible o ha borrado algo
+en la última pasada, la afirmación no se hace: una eliminación a medias no está borrada. El
+coordinador sigue barriendo durante la retención del identificador, así que si reaparecen datos
+después de la afirmación (una escritura tardía que llegó tras la ventana de asentamiento), la
+afirmación se retira, `erasedAt` vuelve a ser nulo y se hace de nuevo cuando los almacenes se han
+asentado otra vez. Un registro con `completedAt` siempre tiene un `erasedAt` que no es posterior.
+
+Léela desde la API de administración, donde `erased` es verdadero cuando la afirmación está vigente o
+la eliminación se ha completado:
+
+```graphql
+query {
+  tenantDeletions(criteria: {pageNumber: 1, pageSize: 50}) {
+    results { token epoch erased erasedAt completedAt awaiting blockedBy }
+  }
+}
+```
+
+Desde un terminal, `dcctl tenant-deletion status <token>` muestra el mismo registro y termina con
+código distinto de cero salvo que los datos estén borrados, de modo que un script de desmontaje
+puede confiar en él:
+
+```bash
+dcctl tenant-deletion status acme --email ops@example.com --password "$PASSWORD" --wait --timeout 1h
+```
+
+`--wait` consulta hasta que la afirmación esté vigente y falla si antes pasa `--timeout`.
+`--until complete` espera en cambio a la liberación del identificador. Un identificador sin registro
+de eliminación es un error, nunca un éxito. El contador
+`devicechain_usermanagement_tenant_purge_erased_total` (véase [más abajo](#blocked-store)) cuenta las
+afirmaciones a medida que se hacen.
+
 ## Qué puede dejar una eliminación abierta {#stalled}
 
 Una eliminación que no termina casi siempre se debe a uno de estos motivos, y cada uno se identifica
@@ -232,6 +279,8 @@ sobreviviría al borrado que describe:
   procesando un inquilino grande; si el contador está plano, no avanza.
 - `devicechain_usermanagement_tenant_purge_store_erase_duration_seconds{store}`: lo que tardó cada
   llamada de borrado, que muestra a qué almacén se va el tiempo.
+- `devicechain_usermanagement_tenant_purge_erased_total`: afirmaciones de borrado hechas (véase
+  [Saber que los datos están borrados](#erased-signal)).
 - `devicechain_usermanagement_tenant_purge_completed_total`, `tenant_purge_failures_total`,
   `tenant_purge_duration_seconds` y `tenant_purge_clean_duration_seconds`: eliminaciones completadas;
   veces que el coordinador no pudo llevar una eliminación a término en una pasada (reintenta en la

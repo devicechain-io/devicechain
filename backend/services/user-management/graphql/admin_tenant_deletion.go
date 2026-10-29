@@ -104,6 +104,15 @@ func (r *AdminTenantDeletionResolver) RetainedAuditTenant() string {
 func (r *AdminTenantDeletionResolver) CompletedAt() *string {
 	return formatPurgeTimePtr(r.M.CompletedAt)
 }
+func (r *AdminTenantDeletionResolver) ErasedAt() *string { return formatPurgeTimePtr(r.M.ErasedAt) }
+
+// Erased reads only the persisted claim and the completion stamp. It is deliberately not
+// derived from the live ledger or from "nothing is blocking": the coordinator owns the
+// decision and withdraws it, and a second derivation here could say erased while the
+// coordinator has not.
+func (r *AdminTenantDeletionResolver) Erased() bool {
+	return r.M.ErasedAt != nil || r.M.CompletedAt != nil
+}
 func (r *AdminTenantDeletionResolver) RowsErased() int32 { return int32(r.M.Rows) }
 
 func (r *AdminTenantDeletionResolver) Stores() []*AdminTenantDeletionStoreResolver {

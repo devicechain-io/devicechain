@@ -270,6 +270,7 @@ title: 指标参考
 | `tenant_purge_store_rows_erased_total{store}` | 各存储为租户删除而擦除的行、对象、消息或键数量：被阻塞存储的进展信号。 |
 | `tenant_purge_store_erase_duration_seconds{store}` | 单次存储擦除调用耗时的直方图。 |
 | `tenant_purge_completed_total` | 已完成的租户删除：所有存储已清空、已稳定并已保留，屏障已解除，令牌已释放。 |
+| `tenant_purge_erased_total` | 已确立的租户数据清除声明：所有存储已清空并已稳定，早于令牌保留期结束。若某个存储再次报告有数据而使声明被撤回，之后又重新确立，则再次计数。 |
 | `tenant_purge_failures_total` | 协调器未能在一轮中推进某个租户删除的次数。下一轮会重试，因此统计的是尝试次数。`TenantPurgeCoordinatorFailing` 监控它。 |
 | `tenant_purge_duration_seconds` | 从租户删除到其令牌被释放的秒数直方图。包含令牌保留时间。 |
 | `tenant_purge_clean_duration_seconds` | 从租户删除到最后一个存储报告已清空的秒数直方图。不含随后的稳定等待和令牌保留等待：即擦除本身所用时间。 |

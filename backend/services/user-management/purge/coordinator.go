@@ -389,7 +389,15 @@ func (c *Coordinator) purgeTenant(ctx context.Context, tenant *iam.Tenant, tally
 	// hold asks whether anything can still be admitted at all — and completion is what
 	// re-opens that door, because removing the row makes every device-plane gate read the
 	// token as an unknown tenant, which they treat as not deleted.
-	switch p := Waiting(lines, epoch, c.now(), c.settle, c.tokenHold); p.Awaiting {
+	p := Waiting(lines, epoch, c.now(), c.settle, c.tokenHold)
+	// 🔴 THE ERASURE CLAIM FOLLOWS THE SAME DECISION, IN BOTH DIRECTIONS. It stands only once
+	// every store is clean and the settle window has elapsed (the token hold is a separate,
+	// later gate), and it is withdrawn the moment a store reports anything else. A claim that
+	// could only be set would keep saying "erased" over a tenant whose data had come back.
+	if err := c.syncErasureClaim(sys, rec, p, lines); err != nil {
+		return err
+	}
+	switch p.Awaiting {
 	case WaitStores:
 		return nil
 	case WaitSettle:
@@ -423,6 +431,34 @@ func (c *Coordinator) purgeTenant(ctx context.Context, tenant *iam.Tenant, tally
 	c.recordCompletion(epoch, lines)
 	log.Info().Str("tenant", t.Token).Time("epoch", epoch).Int64("rows", total).
 		Msg("Tenant purge complete; token released")
+	return nil
+}
+
+// erasureStands reports whether a purge's data is established gone: every ledger line clean
+// and the settle window elapsed, which is Waiting having moved past its first two gates.
+func erasureStands(p Progress, lines []iam.TenantPurgeStore) bool {
+	if len(lines) == 0 {
+		return false
+	}
+	return p.Awaiting == WaitTokenHold || p.Awaiting == WaitNone
+}
+
+func (c *Coordinator) syncErasureClaim(ctx context.Context, rec *iam.TenantPurge, p Progress,
+	lines []iam.TenantPurgeStore) error {
+	stands := erasureStands(p, lines)
+	was := rec.ErasedAt != nil
+	if err := c.iam.SetPurgeErased(ctx, rec, stands, c.now()); err != nil {
+		return fmt.Errorf("recording the erasure claim for %q: %w", rec.Token, err)
+	}
+	switch {
+	case stands && !was:
+		c.metrics.erased.Inc()
+		log.Info().Str("tenant", rec.Token).Time("epoch", rec.Epoch).
+			Msg("Tenant data erased: every storage system is clean and has settled; the token is held until the hold elapses")
+	case !stands && was:
+		log.Warn().Str("tenant", rec.Token).Time("epoch", rec.Epoch).
+			Msg("Tenant erasure claim withdrawn: a storage system reported data again")
+	}
 	return nil
 }
 

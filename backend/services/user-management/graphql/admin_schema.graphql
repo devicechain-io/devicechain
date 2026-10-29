@@ -1377,6 +1377,21 @@ type TenantDeletion {
     # When every storage system had reported clean and the token was released (RFC3339).
     # Null while the deletion is still in flight.
     completedAt: String
+    """
+    When the deletion's data was established as erased, as an RFC 3339 timestamp: every
+    storage system had reported clean and had stayed clean for the settling period. This comes
+    before completedAt, because the token is held for a further period after the data is gone.
+    Null while any storage system still holds data. The claim is withdrawn, and this returns to
+    null, if a storage system reports data again before the deletion completes.
+    """
+    # The standing erasure claim (RFC3339); null whenever any store is not clean and settled.
+    erasedAt: String
+    """
+    True when the tenant's data is established as erased (erasedAt is set) or the deletion has
+    completed. False means erasure is not established: a deletion that is partial is not erased.
+    """
+    # erasedAt != nil || completedAt != nil; fail closed, never derived from "nothing blocking".
+    erased: Boolean!
     """Total number of records erased across all storage systems."""
     # Total erased across every storage system.
     rowsErased: Int!

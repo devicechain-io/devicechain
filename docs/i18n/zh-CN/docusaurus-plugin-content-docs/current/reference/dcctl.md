@@ -35,6 +35,7 @@ dcctl [command]
 * [dcctl resgen](#dcctl-resgen)	 - Generate configuration resources
 * [dcctl secrets](#dcctl-secrets)	 - Inspect and verify instance secret material
 * [dcctl sim](#dcctl-sim)	 - Create and drive DeviceChain simulations
+* [dcctl tenant-deletion](#dcctl-tenant-deletion)	 - Check whether a deleted tenant's data is established as erased
 * [dcctl upgrade](#dcctl-upgrade)	 - Move a live instance onto a released version
 * [dcctl version](#dcctl-version)	 - Get version info
 
@@ -1529,6 +1530,74 @@ dcctl sim stop <name> [flags]
 ### SEE ALSO
 
 * [dcctl sim](#dcctl-sim)	 - Create and drive DeviceChain simulations
+
+## dcctl tenant-deletion {#dcctl-tenant-deletion}
+
+Check whether a deleted tenant's data is established as erased
+
+### Options
+
+```
+      --email string      identity to authenticate as (required)
+  -h, --help              help for tenant-deletion
+      --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
+      --password string   password for the identity (required)
+  -s, --server string     instance host for platform API calls (default "localhost")
+      --tls               use https for platform endpoints
+```
+
+### SEE ALSO
+
+* [dcctl](#dcctl)	 - DeviceChain CLI
+* [dcctl tenant-deletion status](#dcctl-tenant-deletion-status)	 - Report a tenant deletion's outcome; exit non-zero unless the data is erased
+
+## dcctl tenant-deletion status {#dcctl-tenant-deletion-status}
+
+Report a tenant deletion's outcome; exit non-zero unless the data is erased
+
+### Synopsis
+
+Report the outcome of a tenant deletion, and exit non-zero unless the tenant's data is
+established as erased.
+
+"Erased" is the platform's own claim, read from the deletion record: every storage system has
+reported clean and has stayed clean for the settle window. It is not inferred here from an empty
+list of blockers. It comes before the deletion completes, because the tenant's token is then held
+for a further period (12 hours by default) before it can be reused. Use --until complete to wait
+for that release instead.
+
+With --wait the command polls until the target is reached, and exits non-zero if --timeout passes
+first. A tenant with no deletion record is an error, never a success.
+
+This reads the operator plane and authenticates as an identity, not as a tenant.
+
+```
+dcctl tenant-deletion status <token> [flags]
+```
+
+### Options
+
+```
+  -h, --help                help for status
+      --interval duration   how often --wait polls (default 10s)
+      --timeout duration    how long --wait polls before giving up (default 30m0s)
+      --until string        what to wait for and require: erased (data established as gone) or complete (token released) (default "erased")
+      --wait                poll until the target is reached
+```
+
+### Options inherited from parent commands
+
+```
+      --email string      identity to authenticate as (required)
+      --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
+      --password string   password for the identity (required)
+  -s, --server string     instance host for platform API calls (default "localhost")
+      --tls               use https for platform endpoints
+```
+
+### SEE ALSO
+
+* [dcctl tenant-deletion](#dcctl-tenant-deletion)	 - Check whether a deleted tenant's data is established as erased
 
 ## dcctl upgrade {#dcctl-upgrade}
 

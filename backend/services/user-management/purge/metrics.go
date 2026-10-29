@@ -93,7 +93,10 @@ type metrics struct {
 	eraseSeconds *prometheus.HistogramVec
 
 	completed prometheus.Counter
-	failures  prometheus.Counter
+	// erased counts erasure claims established: every store clean and settled, which is earlier
+	// than completed (the token hold follows). A withdrawn and re-established claim counts twice.
+	erased   prometheus.Counter
+	failures prometheus.Counter
 	// duration is cut -> token release. It includes the token hold, so it is bounded below
 	// by it. clean is cut -> the moment the last store went clean, which is the erasure
 	// itself without the deliberate waits, and is the figure an erasure commitment is about.
@@ -114,6 +117,8 @@ func newMetrics(ms *core.Microservice, tokenHold time.Duration) *metrics {
 			"How long one store's erase call took, by store", []string{"store"}, eraseBuckets),
 		completed: ms.NewCounter("tenant_purge_completed_total",
 			"Tenant deletions completed: every store clean, settled and held, fences lifted, token released"),
+		erased: ms.NewCounter("tenant_purge_erased_total",
+			"Tenant erasure claims established: every storage system clean and settled, before the token hold elapses. A claim withdrawn because a store reported data again and later re-established counts again"),
 		failures: ms.NewCounter("tenant_purge_failures_total",
 			"Times the coordinator could not carry one tenant's deletion through a pass (a ledger read or write, an unlifted fence, a refused interlock); "+
 				"the deletion is retried on the next pass, so this counts attempts, not abandoned deletions"),
@@ -134,6 +139,7 @@ func newMetrics(ms *core.Microservice, tokenHold time.Duration) *metrics {
 		m.eraseSeconds.WithLabelValues(s)
 	}
 	m.completed.Add(0)
+	m.erased.Add(0)
 	m.duration.WithLabelValues()
 	return m
 }

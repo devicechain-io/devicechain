@@ -317,6 +317,7 @@ These count the tenant-deletion coordinator, which erases a deleted tenant's dat
 | `tenant_purge_store_rows_erased_total{store}` | Rows, objects, messages or keys each store has erased for tenant deletions: the progress signal for a store that is blocked. |
 | `tenant_purge_store_erase_duration_seconds{store}` | Histogram of how long one store's erase call took. |
 | `tenant_purge_completed_total` | Tenant deletions completed: every store clean, settled and held, fences lifted, token released. |
+| `tenant_purge_erased_total` | Tenant erasure claims established: every storage system clean and settled, before the token hold elapses. A claim withdrawn because a store reported data again, and later re-established, counts again. |
 | `tenant_purge_failures_total` | Times the coordinator could not carry one tenant's deletion through a pass. It retries on the next pass, so this counts attempts. `TenantPurgeCoordinatorFailing` watches it. |
 | `tenant_purge_duration_seconds` | Histogram of seconds from a tenant's deletion to its token being released. Includes the token hold. |
 | `tenant_purge_clean_duration_seconds` | Histogram of seconds from a tenant's deletion to the last store reporting clean. Excludes the settle and token-hold waits that follow: the time the erasure itself took. |

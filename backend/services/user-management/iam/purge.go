@@ -51,6 +51,16 @@ type TenantPurge struct {
 	// transaction that removes the tenant row, so "the token was released" and "the
 	// erasure was recorded complete" cannot come apart.
 	CompletedAt *time.Time `gorm:"index"`
+	// ErasedAt is the standing claim "every storage system has reported clean and has stayed
+	// clean for the settle window": the moment the tenant's data is established as gone, as
+	// opposed to the moment its token is released (CompletedAt, at least the token hold later).
+	//
+	// 🔴 IT IS A CLAIM, NOT A LOG ENTRY, AND IT CAN BE WITHDRAWN. The coordinator keeps
+	// sweeping through the token hold, and a store that reports data again then (a straggler
+	// write that landed behind the settle window) clears it, because "erased" must never
+	// outlive the evidence for it. Partial is not erased: it is set only when every store in
+	// the ledger is clean, and the settle window has elapsed.
+	ErasedAt *time.Time
 	// Rows is the total erased across every store, at completion.
 	Rows int64 `gorm:"not null;default:0"`
 }
@@ -159,6 +169,41 @@ func (s *Store) EnsurePurgeRecord(ctx context.Context, token string, epoch time.
 		return nil, err
 	}
 	return s.PurgeRecordFor(ctx, token, epoch)
+}
+
+// SetPurgeErased makes the deletion's erasure claim stand at the given moment, or withdraws it
+// when erased is false. Setting is idempotent and never moves an established claim: the first
+// moment all stores were established clean is the evidence, and a later pass re-confirming it
+// must not rewrite it. Withdrawing clears it unconditionally.
+//
+// A completed record is never touched: CompleteTenantPurge owns that row's final shape.
+func (s *Store) SetPurgeErased(ctx context.Context, rec *TenantPurge, erased bool, at time.Time) error {
+	if rec == nil || rec.ID == 0 {
+		return fmt.Errorf("refusing to change the erasure claim of a purge with no record")
+	}
+	if rec.CompletedAt != nil {
+		return nil
+	}
+	if erased {
+		if rec.ErasedAt != nil {
+			return nil
+		}
+		if err := s.sys(ctx).Model(rec).Where("id = ? AND erased_at IS NULL AND completed_at IS NULL", rec.ID).
+			Update("erased_at", at).Error; err != nil {
+			return err
+		}
+		rec.ErasedAt = &at
+		return nil
+	}
+	if rec.ErasedAt == nil {
+		return nil
+	}
+	if err := s.sys(ctx).Model(rec).Where("id = ? AND completed_at IS NULL", rec.ID).
+		Update("erased_at", nil).Error; err != nil {
+		return err
+	}
+	rec.ErasedAt = nil
+	return nil
 }
 
 // RecordPurgeStore writes one store's line of the ledger, replacing whatever the previous
@@ -376,7 +421,11 @@ func (s *Store) CompleteTenantPurge(ctx context.Context, t *Tenant, rec *TenantP
 	return s.sys(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(rec).Updates(map[string]any{
 			"completed_at": at,
-			"rows":         rows,
+			// Completion implies erasure: a record that says the token was released must
+			// never say the data was not established gone. The claim, when the coordinator
+			// already stood it, keeps its earlier moment.
+			"erased_at": gorm.Expr("COALESCE(erased_at, ?)", at),
+			"rows":      rows,
 		}).Error; err != nil {
 			return err
 		}
