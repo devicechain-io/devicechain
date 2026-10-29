@@ -139,7 +139,7 @@ func main() {
 	// DeviceChain: request (never require) a client certificate on the MQTT listener, and own the
 	// signals so that a reload keeps doing so. Subscribing before the server exists leaves no
 	// window in which a SIGHUP would take its default action and terminate the process.
-	prepareOptions(opts)
+	hot := prepareOptions(opts)
 	sigs := notifySignals()
 
 	// DeviceChain: bind the metrics endpoint before starting, so a port that cannot be had stops
@@ -168,7 +168,7 @@ func main() {
 	// SIGUSR2) that waited for Run to return would be ignored for all of it, until Kubernetes
 	// killed the process mid-recovery. A SIGHUP in that window reloads like any other; the
 	// probe that follows it records an error until the listener is up.
-	b := newBroker(s, opts, newBrokerMetrics())
+	b := newBroker(s, opts, newBrokerMetrics(), hot)
 	b.serveMetrics(metricsLn)
 	b.handleSignals(sigs)
 

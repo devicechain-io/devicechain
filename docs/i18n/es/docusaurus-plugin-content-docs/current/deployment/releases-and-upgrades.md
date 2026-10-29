@@ -895,7 +895,7 @@ El broker es ahora la compilación propia de DeviceChain de `nats-server`, `dc-n
 #### Problemas conocidos {#v0260-known-issues}
 
 - **Tras un reinicio progresivo del broker, incluida esta actualización, el último servidor reiniciado no lidera ningún stream,** y el p99 del acuse de publicación se duplica aproximadamente hasta que el liderazgo se reequilibra.
-- **Una rotación de certificado TLS hace que el broker se recargue y desconecta la mayoría de las sesiones MQTT.** Los dispositivos se reconectan solos.
+- **Una rotación de certificado TLS hace que el broker se recargue y desconecta la mayoría de las sesiones MQTT.** Los dispositivos se reconectan solos. Una versión posterior lo corrige: el broker aplica el certificado renovado a las conexiones nuevas sin recargarse, así que las sesiones establecidas se mantienen. Un cambio en la configuración del broker sigue recargándolo, y una recarga sigue desconectando las sesiones de los dispositivos admitidos por el callout de autenticación hasta que la biblioteca `nats-server` del broker incluya la corrección de upstream.
 - **Un despliegue del controlador de ingress pierde alrededor del 5 % de las solicitudes durante 28 a 40 segundos.** Hazlo en una ventana tranquila.
 
 ### v0.25.2 — la emisión de tokens de servicio sale del puerto público {#v0252-upgrade}

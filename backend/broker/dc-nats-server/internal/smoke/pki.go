@@ -7,6 +7,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -129,6 +130,13 @@ func mintPKI(dir string, sans []string, bigChainBytes int) error {
 	if err := writePair(dir, "server", srv.key, srv.cert); err != nil {
 		return err
 	}
+	// The CA key lets RotateServerCert re-issue the broker's leaf under the same CA, as a
+	// cert-manager renewal does. Test material only; it is never referenced by nats.conf.
+	if kp, err := keyPEM(serverCA.key); err != nil {
+		return err
+	} else if err := os.WriteFile(filepath.Join(dir, "server-ca.key"), kp, 0o600); err != nil {
+		return err
+	}
 
 	deviceCA, err := issue(caTemplate("brokersmoke device CA"), nil)
 	if err != nil {
@@ -210,4 +218,80 @@ func padding(n int) []string {
 		out = append(out, strings.Repeat("p", 60))
 	}
 	return out
+}
+
+// RotateServerCert re-issues the broker's leaf (same names, new key, new serial) under the same CA
+// and rewrites server.crt and server.key in place, the way a cert-manager renewal rewrites the
+// mounted Secret. It returns the new serial in hex. Clients that trust server-ca.crt keep trusting.
+func RotateServerCert(dir string) (string, error) {
+	caPEM, err := os.ReadFile(filepath.Join(dir, "server-ca.crt"))
+	if err != nil {
+		return "", err
+	}
+	caBlk, _ := pem.Decode(caPEM)
+	if caBlk == nil {
+		return "", fmt.Errorf("server-ca.crt holds no certificate")
+	}
+	caCert, err := x509.ParseCertificate(caBlk.Bytes)
+	if err != nil {
+		return "", err
+	}
+	kb, err := os.ReadFile(filepath.Join(dir, "server-ca.key"))
+	if err != nil {
+		return "", err
+	}
+	kblk, _ := pem.Decode(kb)
+	if kblk == nil {
+		return "", fmt.Errorf("server-ca.key holds no PEM block")
+	}
+	k, err := x509.ParsePKCS8PrivateKey(kblk.Bytes)
+	if err != nil {
+		return "", err
+	}
+	ek, ok := k.(*ecdsa.PrivateKey)
+	if !ok {
+		return "", fmt.Errorf("server-ca.key is not an ECDSA key")
+	}
+	oldPEM, err := os.ReadFile(filepath.Join(dir, "server.crt"))
+	if err != nil {
+		return "", err
+	}
+	oldBlk, _ := pem.Decode(oldPEM)
+	if oldBlk == nil {
+		return "", fmt.Errorf("server.crt holds no certificate")
+	}
+	old, err := x509.ParseCertificate(oldBlk.Bytes)
+	if err != nil {
+		return "", err
+	}
+	tmpl := &x509.Certificate{
+		Subject:     old.Subject,
+		DNSNames:    old.DNSNames,
+		IPAddresses: old.IPAddresses,
+		KeyUsage:    x509.KeyUsageDigitalSignature,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	leaf, err := issue(tmpl, &issued{cert: caCert, key: ek})
+	if err != nil {
+		return "", err
+	}
+	if err := writePair(dir, "server", leaf.key, leaf.cert); err != nil {
+		return "", err
+	}
+	return leaf.cert.SerialNumber.Text(16), nil
+}
+
+// ServedSerial dials addr (a TLS listener), completes a handshake trusting dir's server CA, and
+// returns the serial, in hex, of the leaf the listener presented.
+func ServedSerial(dir, addr string) (string, error) {
+	cfg, err := ClientTLS(dir, "")
+	if err != nil {
+		return "", err
+	}
+	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 10 * time.Second}, "tcp", addr, cfg)
+	if err != nil {
+		return "", err
+	}
+	defer conn.Close()
+	return conn.ConnectionState().PeerCertificates[0].SerialNumber.Text(16), nil
 }

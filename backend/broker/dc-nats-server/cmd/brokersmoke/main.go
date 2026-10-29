@@ -16,6 +16,14 @@
 //	    one Go paho connect + QoS 1 publish; exit 0 when the broker accepted it
 //	brokersmoke probe -dir D -mqtt HOST:PORT
 //	    print whether the listener sent a CertificateRequest
+//	brokersmoke hold -dir D -nats URL -mqtt HOST:PORT -n N -ready FILE -stop FILE [-timeout 5m]
+//	    hold N token-device sessions (and the callout responder) open until FILE -stop exists, then
+//	    print "lost=<n>" (sessions dropped meanwhile) and exit 0
+//	brokersmoke rotate -dir D
+//	    re-issue the broker's leaf under the same CA and rewrite server.crt/server.key in place,
+//	    as a cert-manager renewal does; print the new serial
+//	brokersmoke serial -dir D -mqtt HOST:PORT
+//	    print the serial of the leaf the MQTT listener presents
 package main
 
 import (
@@ -29,17 +37,19 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/devicechain-io/dc-broker/nats-server/internal/smoke"
 )
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: brokersmoke prepare|check|respond|connect|probe [flags]")
+		fmt.Fprintln(os.Stderr, "usage: brokersmoke prepare|check|respond|connect|probe|hold|rotate|serial [flags]")
 		os.Exit(2)
 	}
 	cmds := map[string]func([]string) error{
 		"prepare": cmdPrepare, "check": cmdCheck, "respond": cmdRespond, "connect": cmdConnect, "probe": cmdProbe,
+		"hold": cmdHold, "rotate": cmdRotate, "serial": cmdSerial,
 	}
 	cmd, ok := cmds[os.Args[1]]
 	if !ok {
@@ -171,5 +181,72 @@ func cmdProbe(args []string) error {
 		return err
 	}
 	fmt.Printf("certificate_request=%v\n", req)
+	return nil
+}
+
+func cmdHold(args []string) error {
+	fs := flag.NewFlagSet("hold", flag.ExitOnError)
+	dir := fs.String("dir", "", "the prepare directory (required)")
+	url := fs.String("nats", "tls://127.0.0.1:4222", "broker client URL")
+	addr := fs.String("mqtt", "127.0.0.1:1883", "broker MQTT address")
+	n := fs.Int("n", 50, "sessions to hold")
+	ready := fs.String("ready", "", "create this file once every session is open (required)")
+	stop := fs.String("stop", "", "finish when this file exists (required)")
+	timeout := fs.Duration("timeout", 5*time.Minute, "give up waiting for -stop after this long")
+	_ = fs.Parse(args)
+	if *ready == "" || *stop == "" {
+		return errors.New("hold: -ready and -stop are required")
+	}
+	f, err := smoke.HoldFleet(*dir, *url, *addr, *n)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if err := os.WriteFile(*ready, []byte("ready\n"), 0o644); err != nil {
+		return err
+	}
+	deadline := time.Now().Add(*timeout)
+	for {
+		if _, err := os.Stat(*stop); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			return errors.New("hold: timed out waiting for the stop file")
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	fmt.Printf("lost=%d\n", f.Lost())
+	if f.Lost() > 0 {
+		fmt.Printf("first_loss=%s\n", f.FirstLoss())
+		return nil
+	}
+	if err := f.Publish(); err != nil {
+		return fmt.Errorf("a surviving session does not work: %w", err)
+	}
+	return nil
+}
+
+func cmdRotate(args []string) error {
+	fs := flag.NewFlagSet("rotate", flag.ExitOnError)
+	dir := fs.String("dir", "", "the prepare directory (required)")
+	_ = fs.Parse(args)
+	serial, err := smoke.RotateServerCert(*dir)
+	if err != nil {
+		return err
+	}
+	fmt.Println(serial)
+	return nil
+}
+
+func cmdSerial(args []string) error {
+	fs := flag.NewFlagSet("serial", flag.ExitOnError)
+	dir := fs.String("dir", "", "the prepare directory (required)")
+	addr := fs.String("mqtt", "127.0.0.1:1883", "broker MQTT address")
+	_ = fs.Parse(args)
+	serial, err := smoke.ServedSerial(*dir, *addr)
+	if err != nil {
+		return err
+	}
+	fmt.Println(serial)
 	return nil
 }
