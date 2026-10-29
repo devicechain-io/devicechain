@@ -207,6 +207,7 @@ export {
   recordingBounds,
   simulationScaleAt,
   type BoardRecording,
+  type RecordedAnchor,
   type RecordedAlarm,
   type RecordedAlarmEvent,
   type RecordedAlarmSnapshot,

@@ -9,7 +9,7 @@
 //
 //   data-recording  the recording file (required, same-origin)
 //   data-board      the board definition it was captured against (same-origin); defaults
-//                   to sp-dashboard.json beside the recording
+//                   to the board file the recording itself names, beside the recording
 //   data-locale     the page's language (en, es, zh-CN); defaults to <html lang>
 //   data-theme      dark (the default) or light
 //   data-embed      1 for the fixed-canvas embed (embed.ts lists it and its options, and
@@ -22,14 +22,6 @@ import ReplayApp, { loadEmbed } from './App';
 import { embedRequested, parseTheme } from './host-options';
 import { setReplayLocale } from './i18n/config';
 import themeCss from './theme.css?inline';
-
-export const DEFAULT_BOARD_FILE = 'sp-dashboard.json';
-
-export function defaultBoardUrl(recordingUrl: string | null): string | null {
-  if (!recordingUrl) return null;
-  const cut = recordingUrl.lastIndexOf('/');
-  return `${recordingUrl.slice(0, cut + 1)}${DEFAULT_BOARD_FILE}`;
-}
 
 // The theme is injected as a style element rather than linked, so the page needs only the
 // one module script. (Inline styles are within the site's content-security policy.)
@@ -63,7 +55,7 @@ export async function mountBoardReplay(el: HTMLElement): Promise<Root> {
   ]);
   // (Read-only: the page's language is a default for the replay, never something it sets.)
   const recordingUrl = el.dataset.recording ?? null;
-  const boardUrl = el.dataset.board ?? defaultBoardUrl(recordingUrl);
+  const boardUrl = el.dataset.board ?? null; // null: the recording names its own board (load.ts)
   // The embed's code (its option parser and player) is fetched only when the host asks for an
   // embed, and before the first render, so the embed's first frame already carries its label.
   const embed = embedRequested(el.dataset, location.search) ? (await loadEmbed()).parseEmbedOptions(el.dataset, location.search) : null;

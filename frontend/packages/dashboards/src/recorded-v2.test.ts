@@ -8,7 +8,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { AlarmSnapshot, LocationSnapshot } from './hub';
 import type { HistoryWindow } from './history';
 import type { MeasurementBucket } from './queries';
-import { NotInRecordingError, RecordedClock, RecordedDataSource, retimeShiftMs } from './recorded';
+import { NotInRecordingError, RecordedClock, RecordedDataSource, createRecordedLister, createRecordedResolver, retimeShiftMs } from './recorded';
 import { RecordingFormatError, parseBoardRecording, type BoardRecording } from './recording';
 import { settle } from './testing/data-source-contract';
 import {
@@ -389,5 +389,61 @@ describe('the declarations a recording carries', () => {
     const v1 = fixtureJson();
     v1.declaredMetrics = { Hauler: ['fuel_pct'] };
     expect(() => parseBoardRecording(v1)).toThrow(RecordingFormatError);
+  });
+});
+
+// The groupings a recording carries: what lets a board bound to an area or a floor be replayed.
+describe('the anchors a recording carries', () => {
+  const FLOOR = { relationship: 'assigned', targetType: 'area', targetToken: 'tp-tower-f4' } as const;
+  const BUILDING = { relationship: 'assigned', targetType: 'area', targetToken: 'tp-tower' } as const;
+  const anchored = (mutate?: (d: Json) => void): Json => {
+    const doc = JSON.parse(JSON.stringify(fixtureJsonV2())) as Json;
+    doc.anchors = [
+      { ...BUILDING, devices: ['sp-hauler-01', 'sp-hauler-02', 'sp-plant-01'] },
+      { ...FLOOR, devices: ['sp-hauler-02'] },
+    ];
+    mutate?.(doc);
+    return doc;
+  };
+
+  it('answers each anchor with exactly its own members, not every device', async () => {
+    const rec = parseBoardRecording(anchored());
+    const resolver = createRecordedResolver(rec, { siteAnchors: [BUILDING, FLOOR] });
+    expect(await resolver.devicesForAnchor(FLOOR)).toEqual(['sp-hauler-02']);
+    expect(await resolver.devicesForAnchor(BUILDING)).toEqual(['sp-hauler-01', 'sp-hauler-02', 'sp-plant-01']);
+  });
+
+  it('refuses an anchor the recording does not list, rather than answering with every device or none', async () => {
+    const resolver = createRecordedResolver(parseBoardRecording(anchored()), { siteAnchors: [BUILDING] });
+    await expect(resolver.devicesForAnchor({ ...FLOOR, targetToken: 'tp-tower-f9' })).rejects.toThrow(/not in this recording/);
+    await expect(resolver.devicesForAnchor(SITE)).rejects.toThrow(/not in this recording/);
+  });
+
+  it("lists the recording's anchors of a kind for a selector, and none of another kind", async () => {
+    const lister = createRecordedLister(parseBoardRecording(anchored()), {});
+    expect((await lister('area')).map((c) => c.token)).toEqual(['tp-tower', 'tp-tower-f4']);
+    expect(await lister('customer')).toEqual([]);
+  });
+
+  it('lets the board name several area anchors, which the older one-customer rule refuses', () => {
+    expect(() => createRecordedResolver(parseBoardRecording(anchored()), { siteAnchors: [BUILDING, FLOOR] })).not.toThrow();
+    expect(() => createRecordedResolver(fixtureRecordingV2(), { siteAnchors: [BUILDING, FLOOR] })).toThrow(/exactly one anchor/);
+  });
+
+  it('refuses a malformed set', () => {
+    const bad = (mutate: (d: Json) => void) => () => parseBoardRecording(anchored(mutate));
+    expect(bad((d) => (d.anchors = []))).toThrow(RecordingFormatError);
+    expect(bad((d) => d.anchors.push({ ...d.anchors[0] }))).toThrow(/declared twice/);
+    expect(bad((d) => (d.anchors[1].devices = []))).toThrow(/no member/);
+    expect(bad((d) => (d.anchors[1].devices = ['sp-hauler-02', 'sp-hauler-02']))).toThrow(/duplicate member/);
+    expect(bad((d) => (d.anchors[1].devices = ['sp-ghost-99']))).toThrow(/not a device of the run/);
+    expect(bad((d) => (d.anchors[1].targetType = 'planet'))).toThrow(RecordingFormatError);
+    expect(bad((d) => (d.anchors[1].extra = 1))).toThrow(RecordingFormatError);
+  });
+
+  it('is not a version 1 field', () => {
+    const v1 = JSON.parse(JSON.stringify(fixtureJson())) as Json;
+    v1.anchors = [{ ...BUILDING, devices: ['sp-hauler-01'] }];
+    expect(() => parseBoardRecording(v1)).toThrow(/version 1 carries no anchors/);
   });
 });

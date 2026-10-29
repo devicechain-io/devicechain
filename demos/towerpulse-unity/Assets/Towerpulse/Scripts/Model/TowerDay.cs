@@ -21,6 +21,8 @@ namespace DeviceChain.Towerpulse.Model
         public static readonly double MeetingEndS = TimeClock.At(0, 14, 45);
         public static readonly double ChillerTripS = TimeClock.At(0, 16, 30);
         public const int MeetingPeople = 14;
+        /// <summary>Names this model for a recording's header. Bump it when a change would make the same seed produce a different day.</summary>
+        public const string ModelVersion = "towerpulse-day/1";
         /// <summary>The story day is a hot one.</summary>
         public const double HotDayBiasC = 4.0;
 

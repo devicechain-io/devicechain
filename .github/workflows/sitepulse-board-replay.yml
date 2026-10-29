@@ -19,6 +19,7 @@ on:
     paths:
       - "demos/sitepulse-unity/tools/recording_to_board.py"
       - "demos/sitepulse-unity/tools/test_recording_to_board.py"
+      - "demos/towerpulse-unity/tools/**"
       - "frontend/testdata/board-replay/**"
       - "frontend/testdata/sim-dashboards/sp-dashboard.json"
       - ".github/workflows/sitepulse-board-replay.yml"
@@ -27,6 +28,7 @@ on:
     paths:
       - "demos/sitepulse-unity/tools/recording_to_board.py"
       - "demos/sitepulse-unity/tools/test_recording_to_board.py"
+      - "demos/towerpulse-unity/tools/**"
       - "frontend/testdata/board-replay/**"
       - "frontend/testdata/sim-dashboards/sp-dashboard.json"
       - ".github/workflows/sitepulse-board-replay.yml"
@@ -54,3 +56,11 @@ jobs:
       - name: Unit tests
         working-directory: demos/sitepulse-unity/tools
         run: python3 -m unittest -v test_recording_to_board
+
+      # The Towerpulse profile of the same converter (demos/towerpulse-unity/tools/board-replay.profile.json), the committed Towerpulse fixture it must
+      # reproduce byte for byte, and the acceptance checker's judgements.
+      - name: Towerpulse profile and acceptance checker tests
+        working-directory: demos/towerpulse-unity/tools
+        run: |
+          python3 -m unittest -v test_board_replay_profile
+          python3 -m unittest -v test_acceptance_check

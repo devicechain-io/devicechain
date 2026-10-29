@@ -52,6 +52,12 @@ from the start of the run, as the recording viewer applied them):
            alarm = {id, dev, key, metric, state, sev, occ, ack?}; ack appears only when true
   locations []   (always empty in this converter)
 
+A PROFILE (--profile FILE, a small JSON file; none means Sitepulse's) says what differs between demos: the measurements the board shows, the calculated
+metrics the platform derives from a reading (kept only when the reading they came from was published by the device), the alarm keys the platform raises
+without a triggering reading (an absence rule), the grammar of a device kind, and whether the take has a video/presenter side (Sitepulse's does and
+Towerpulse's does not, so it has no chapters). Towerpulse's is demos/towerpulse-unity/tools/board-replay.profile.json. The format's `kind` tag is
+unchanged: it names the FORMAT, which the first demo gave its name to.
+
 An excerpt keeps a contiguous window of measurement rows. Alarm snapshots and events
 are small and the alarm table is a fold over history, so an excerpt keeps all of them
 up to the end of its window.
@@ -74,6 +80,7 @@ FORMAT_KIND = "sitepulse-board-recording"
 
 # The only files ever opened, by exact name. See the module docstring.
 INPUT_ALLOWLIST = ("run.json", "video-run.json", "observed.ndjson", "device.ndjson", "presenter.ndjson")
+# A profile reads a subset of these, never anything else.
 
 # The metrics the board can show. engine_hours is deliberately absent.
 BOARD_MEASUREMENTS = (
@@ -94,17 +101,86 @@ class Refusal(Exception):
     """The conversion must not proceed. Never caught and continued past."""
 
 
+PROFILE_KEYS = {"demo", "measurements", "calculated", "unsampledAlarmKeys", "kindGrammar", "inputs", "chapters", "anchors"}
+ANCHOR_TYPES = ("customer", "area", "asset")
+EMPTY_LOCATIONS_V2 = {"d": [], "t": [], "lat": [], "lon": [], "hdg": [], "spd": []}
+
+
+class Profile:
+    """What differs between demos. Built from a JSON file by load_profile; SITEPULSE is the default and holds the values this module always had."""
+
+    def __init__(self, demo, measurements, inputs, calculated=(), unsampled_alarm_keys=(), kind_grammar=None, chapters=True, anchors=()):
+        self.demo = demo
+        self.measurements = tuple(measurements)
+        self.inputs = tuple(inputs)
+        self.calculated = tuple(calculated)
+        self.unsampled_alarm_keys = tuple(unsampled_alarm_keys)
+        self.kind_grammar = kind_grammar
+        self.chapters = chapters
+        # The groupings the board is bound to and which devices belong to each, by external id. A recording carries only devices, so a board bound to an
+        # area or a floor needs these to be replayed: they make the output format version 2 (the format's own `anchors`).
+        self.anchors = tuple(anchors)
+
+
+def load_profile(path):
+    """A demo's profile from its JSON file. Strict: an unknown key or a wrong type is refused, so a typo cannot quietly select a default."""
+    with open(path, encoding="utf-8") as f:
+        doc = json.load(f)
+    _require(isinstance(doc, dict), "the profile is not an object")
+    extra = set(doc) - PROFILE_KEYS
+    _require(not extra, "the profile has unexpected keys %s" % sorted(extra))
+    for k in ("demo", "measurements", "inputs"):
+        _require(k in doc, "the profile is missing %r" % k)
+    _g_plain("metric-list", doc["measurements"], r"[a-z][a-z0-9_]{0,63}", "profile measurements")
+    _g_plain("metric-list", doc.get("calculated", []), r"[a-z][a-z0-9_]{0,63}", "profile calculated")
+    _g_plain("key-list", doc.get("unsampledAlarmKeys", []), r"[a-z][a-z0-9-]{0,63}", "profile unsampledAlarmKeys")
+    inputs = doc["inputs"]
+    _require(isinstance(inputs, list) and {"run.json", "observed.ndjson", "device.ndjson"} <= set(inputs), "the profile's inputs must include run.json, observed.ndjson and device.ndjson")
+    _require(set(inputs) <= set(INPUT_ALLOWLIST), "the profile's inputs name a file this converter never reads: %s" % sorted(set(inputs) - set(INPUT_ALLOWLIST)))
+    _require(isinstance(doc["demo"], str) and re.fullmatch(r"[a-z][a-z0-9-]{0,31}", doc["demo"]), "the profile's demo is not a name")
+    kg = doc.get("kindGrammar")
+    if kg is not None:
+        _require(isinstance(kg, str), "kindGrammar is not a string")
+        re.compile(kg)
+    chapters = doc.get("chapters", True)
+    _require(isinstance(chapters, bool), "chapters is not a boolean")
+    _require(chapters == ("video-run.json" in inputs and "presenter.ndjson" in inputs), "chapters need video-run.json and presenter.ndjson among the inputs, and only then")
+    anchors = doc.get("anchors", [])
+    _require(isinstance(anchors, list), "anchors is not a list")
+    seen = set()
+    for i, an in enumerate(anchors):
+        where = "profile anchors[%d]" % i
+        _require(isinstance(an, dict) and set(an) == {"relationship", "targetType", "targetToken", "devices"}, "%s must have exactly relationship, targetType, targetToken and devices" % where)
+        _require(isinstance(an["relationship"], str) and re.fullmatch(r"[a-z][a-z0-9-]{0,31}", an["relationship"]), "%s relationship is not a name" % where)
+        _require(an["targetType"] in ANCHOR_TYPES, "%s targetType must be one of %s" % (where, ANCHOR_TYPES))
+        _require(isinstance(an["targetToken"], str) and re.fullmatch(GRAMMAR["token"], an["targetToken"]), "%s targetToken is not a token" % where)
+        _require(isinstance(an["devices"], list) and an["devices"] and len(set(an["devices"])) == len(an["devices"]), "%s devices must be a non-empty list without repeats" % where)
+        _require(all(isinstance(d, str) and re.fullmatch(GRAMMAR["deviceId"], d) for d in an["devices"]), "%s names a device id outside the grammar" % where)
+        key = (an["relationship"], an["targetType"], an["targetToken"])
+        _require(key not in seen, "%s repeats an anchor" % where)
+        seen.add(key)
+    return Profile(doc["demo"], doc["measurements"], inputs, doc.get("calculated", []), doc.get("unsampledAlarmKeys", []), kg, chapters, anchors)
+
+
+def _sitepulse():
+    return Profile("sitepulse", BOARD_MEASUREMENTS, INPUT_ALLOWLIST)
+
+
+def _g_plain(what, values, pattern, where):
+    _require(isinstance(values, list) and values and all(isinstance(v, str) and re.fullmatch(pattern, v) for v in values) or values == [], "%s is not a list of valid names" % where)
+
+
 # --- input -----------------------------------------------------------------
 
 
 _REPARSE_POINT = 0x400  # FILE_ATTRIBUTE_REPARSE_POINT: a Windows symlink or junction
 
 
-def read_allowed(run_dir, name):
+def read_allowed(run_dir, name, allowed=None):
     """Read one allowlisted input file as bytes. Any other name is refused, and so is an
     allowlisted name that is a link (symlink or Windows junction) or not a regular file:
     a link could point at one of the files that must never be read."""
-    if name not in INPUT_ALLOWLIST:
+    if name not in (INPUT_ALLOWLIST if allowed is None else allowed):
         raise Refusal("refusing to read %r: not an allowlisted input" % name)
     path = os.path.join(run_dir, name)
     st = os.lstat(path)
@@ -208,16 +284,17 @@ def _number(value, where, lo=-1e12, hi=1e12):
 # --- conversion ------------------------------------------------------------
 
 
-def convert(run_dir, board, excerpt=None):
+def convert(run_dir, board, excerpt=None, profile=None):
     """Return (document, notes). `board` is {"path", "sourceCommit", "sha256"}.
     `excerpt` is (from_seconds, to_seconds) or None. `notes` holds the cross-check
     counts for the caller to print."""
-    raw = {n: read_allowed(run_dir, n) for n in INPUT_ALLOWLIST}
+    profile = profile or _sitepulse()
+    raw = {n: read_allowed(run_dir, n, profile.inputs) for n in profile.inputs}
     run = json.loads(raw["run.json"].decode("utf-8"))
-    video = json.loads(raw["video-run.json"].decode("utf-8"))
+    video = json.loads(raw["video-run.json"].decode("utf-8")) if profile.chapters else None
     observed = _ndjson(raw["observed.ndjson"], "observed.ndjson")
     device = _ndjson(raw["device.ndjson"], "device.ndjson")
-    presenter = _ndjson(raw["presenter.ndjson"], "presenter.ndjson")  # only action rows are used, and only to find the chapter clock
+    presenter = _ndjson(raw["presenter.ndjson"], "presenter.ndjson") if profile.chapters else []  # only action rows are used, and only to find the chapter clock
 
     # --- run integrity
     _require(run.get("formatVersion") == 1, "unsupported run.json formatVersion %r" % (run.get("formatVersion"),))
@@ -225,7 +302,7 @@ def convert(run_dir, board, excerpt=None):
     _require((run.get("build") or {}).get("trackedTreeClean") is True, "the recording build's tree was not clean")
     end = run.get("end") or {}
     _require(end.get("cleanly") is True, "the run did not end cleanly")
-    _require(video.get("complete") is True, "video-run.json says the take is incomplete")
+    _require(not profile.chapters or video.get("complete") is True, "video-run.json says the take is incomplete")
     start_utc = _g("timestamp", run.get("startedAtUtc"), "startedAtUtc")
     start_us = _us(start_utc)
     duration_ms = _ms(end.get("durationSeconds"))
@@ -233,7 +310,7 @@ def convert(run_dir, board, excerpt=None):
     devices = []
     for d in run["devices"]:
         devices.append(
-            {"id": _g("deviceId", d.get("id"), "device id"), "token": _g("token", d.get("token"), "device token"), "kind": _g("kind", d.get("kind"), "device kind")}
+            {"id": _g("deviceId", d.get("id"), "device id"), "token": _g("token", d.get("token"), "device token"), "kind": _kind(d.get("kind"), "device kind", profile)}
         )
     token_of_id = {d["id"]: d["token"] for d in devices}
     index_of_token = {d["token"]: i for i, d in enumerate(devices)}
@@ -257,7 +334,7 @@ def convert(run_dir, board, excerpt=None):
 
     # --- observed rows
     cols = {"d": [], "n": [], "t": [], "v": [], "s": []}
-    names = list(BOARD_MEASUREMENTS)
+    names = list(profile.measurements)
     counts = {
         "measurementRows": 0,
         "measurementMatched": 0,
@@ -290,6 +367,11 @@ def convert(run_dir, board, excerpt=None):
         if snapshot:
             # the alarms standing when the viewer subscribed were raised before the run began
             _require(_us(a["occ"]) < start_us, "fabricated row: snapshot alarm %s was raised at %s, not before the run start" % (a["key"], a["occ"]))
+        elif a["key"] in profile.unsampled_alarm_keys:
+            # an alarm the platform raises because readings STOPPED (an absence rule) has no triggering reading. The profile names those keys,
+            # and the device must really have been silent: it published nothing at that instant.
+            _require(not any(k[0] == a["dev"] and k[2] == _us(a["occ"]) for k in pub_meas),
+                     "fabricated row: absence alarm %s on %s at %s coincides with a published reading" % (a["key"], a["dev"], a["occ"]))
         else:
             # a live alarm is the platform's verdict on a reading: that reading must be one the device published
             _require(
@@ -322,7 +404,11 @@ def convert(run_dir, board, excerpt=None):
             else:
                 seed_phase = False
             pub = pub_meas.get((dev, n, occ), None)
-            if (dev, n, occ) in pub_meas:
+            if n in profile.calculated:
+                # derived by the platform from a reading: legitimate only when the device published a reading at that very instant
+                _require(any(k[0] == dev and k[2] == occ for k in pub_meas), "fabricated row: calculated %s for %s at %s has no device-published reading to derive from" % (n, dev, r["occ"]))
+                counts["measurementMatched"] += 1
+            elif (dev, n, occ) in pub_meas:
                 if pub != r["v"]:
                     raise Refusal("observed %s %s at %s is %r but the device published %r" % (dev, n, r["occ"], r["v"], pub))
                 counts["measurementMatched"] += 1
@@ -330,7 +416,7 @@ def convert(run_dir, board, excerpt=None):
                 counts["measurementSeed"] += 1
             else:
                 raise Refusal("fabricated row: observed %s %s at %s (t=%s) has no device-published sample" % (dev, n, r["occ"], r["t"]))
-            if n not in BOARD_MEASUREMENTS:
+            if n not in profile.measurements:
                 continue
             _require(isinstance(r["v"], (int, float)) and not isinstance(r["v"], bool) and math.isfinite(r["v"]), "non-numeric value")
             counts["measurementOnBoard"] += 1
@@ -383,10 +469,16 @@ def convert(run_dir, board, excerpt=None):
         else:
             counts["otherRowsDropped"] += 1
 
+    anchors = []
+    for an in profile.anchors:
+        missing = [d for d in an["devices"] if d not in token_of_id]
+        _require(not missing, "anchor %s names devices that are not in the run: %s" % (an["targetToken"], missing[:5]))
+        anchors.append({"relationship": an["relationship"], "targetType": an["targetType"], "targetToken": an["targetToken"], "devices": [token_of_id[d] for d in an["devices"]]})
+
     # --- header
-    chapters = clamp_chapters(build_chapters(video, presenter, events), duration_ms)
+    chapters = clamp_chapters(build_chapters(video, presenter, events), duration_ms) if profile.chapters else []
     doc = {
-        "formatVersion": FORMAT_VERSION,
+        "formatVersion": 2 if anchors else FORMAT_VERSION,
         "kind": FORMAT_KIND,
         "runId": run["runId"],
         "startedAtUtc": start_utc,
@@ -399,13 +491,17 @@ def convert(run_dir, board, excerpt=None):
         "devices": devices,
         "channels": {"measurements": names, "alarms": True, "locations": False, "commands": False},
         "board": dict(board),
-        "sourceHashes": {n: _sha256(raw[n]) for n in INPUT_ALLOWLIST},
+        "sourceHashes": {n: _sha256(raw[n]) for n in profile.inputs},
         "converter": {"version": CONVERTER_VERSION},
         "chapters": chapters,
         "measurements": cols,
         "alarms": {"snapshots": snapshots, "events": events},
         "locations": [],
     }
+
+    if anchors:
+        doc["anchors"] = anchors
+        doc["locations"] = dict(EMPTY_LOCATIONS_V2)  # format 2 holds positions as columns; this converter has none
 
     if excerpt is not None:
         lo, hi = _ms(excerpt[0]), _ms(excerpt[1])
@@ -419,7 +515,7 @@ def convert(run_dir, board, excerpt=None):
         doc["excerpt"] = {"fromMs": lo, "toMs": hi}
         counts["excerptRows"] = len(keep)
 
-    validate_output(doc)
+    validate_output(doc, profile)
     findings = scan_for_credentials(doc)
     if findings:
         raise Refusal("output looks like it holds a credential: " + "; ".join(findings[:5]))
@@ -504,9 +600,9 @@ _HEX40 = re.compile(r"[0-9a-f]{40}")
 _SCHEMA_TOP = {
     "formatVersion", "kind", "runId", "startedAtUtc", "durationMs", "platformVersion", "instance", "tenant",
     "build", "clock", "devices", "channels", "board", "sourceHashes", "converter", "chapters",
-    "measurements", "alarms", "locations", "excerpt",
+    "measurements", "alarms", "locations", "excerpt", "anchors",
 }
-_SCHEMA_REQUIRED = _SCHEMA_TOP - {"excerpt"}
+_SCHEMA_REQUIRED = _SCHEMA_TOP - {"excerpt", "anchors"}
 
 
 def _keys(obj, allowed, where, required=None):
@@ -517,11 +613,19 @@ def _keys(obj, allowed, where, required=None):
     _require(not missing, "%s is missing keys %s" % (where, sorted(missing)))
 
 
-def validate_output(doc):
+def _kind(value, where, profile):
+    """A device kind, in the profile's grammar (the module's own when the profile names none)."""
+    if profile is None or profile.kind_grammar is None:
+        return _g("kind", value, where)
+    _require(isinstance(value, str) and re.fullmatch(profile.kind_grammar, value), "%s does not fit the profile's kind grammar" % where)
+    return value
+
+
+def validate_output(doc, profile=None):
     """Schema-strict: an unknown or missing key anywhere means refuse, and every value
     must fit the grammar of its field."""
     _keys(doc, _SCHEMA_TOP, "document", _SCHEMA_REQUIRED)
-    _require(doc["kind"] == FORMAT_KIND and doc["formatVersion"] == FORMAT_VERSION, "wrong format identity")
+    _require(doc["kind"] == FORMAT_KIND and doc["formatVersion"] == (2 if "anchors" in doc else FORMAT_VERSION), "wrong format identity")
     _g("runId", doc["runId"], "runId")
     _g("timestamp", doc["startedAtUtc"], "startedAtUtc")
     _int(doc["durationMs"], "durationMs")
@@ -543,7 +647,7 @@ def validate_output(doc):
     _require(isinstance(doc["board"]["sha256"], str) and _HEX64.fullmatch(doc["board"]["sha256"]), "bad board hash")
     _keys(doc["converter"], {"version"}, "converter")
     _int(doc["converter"]["version"], "converter.version", 1, 1000)
-    _keys(doc["sourceHashes"], set(INPUT_ALLOWLIST), "sourceHashes")
+    _keys(doc["sourceHashes"], set(INPUT_ALLOWLIST if profile is None else profile.inputs), "sourceHashes")
     for n, h in doc["sourceHashes"].items():
         _require(isinstance(h, str) and _HEX64.fullmatch(h), "bad source hash for %s" % n)
     _require(isinstance(doc["clock"], list) and doc["clock"], "clock is empty")
@@ -557,7 +661,7 @@ def validate_output(doc):
         _keys(d, {"id", "token", "kind"}, "device")
         _g("deviceId", d["id"], "device id")
         _g("token", d["token"], "device token")
-        _g("kind", d["kind"], "device kind")
+        _kind(d["kind"], "device kind", profile)
     last = -1
     for c in doc["chapters"]:
         _keys(c, {"tMs", "name", "note"}, "chapter")
@@ -619,7 +723,18 @@ def validate_output(doc):
         _int(e["tMs"], "event tMs")
         check_alarm(e, "alarm event")
         same_device(e)
-    _require(doc["locations"] == [], "this converter emits no positions")
+    _require(doc["locations"] == ([] if "anchors" not in doc else EMPTY_LOCATIONS_V2), "this converter emits no positions")
+    if "anchors" in doc:
+        seen = set()
+        for an in doc["anchors"]:
+            _keys(an, {"relationship", "targetType", "targetToken", "devices"}, "anchor")
+            _require(an["targetType"] in ANCHOR_TYPES, "anchor targetType %r not allowed" % (an["targetType"],))
+            _g("token", an["targetToken"], "anchor targetToken")
+            _require(isinstance(an["devices"], list) and an["devices"] and all(d in tokens for d in an["devices"]), "an anchor lists a device that is not in the run")
+            _require(len(set(an["devices"])) == len(an["devices"]), "an anchor lists a device twice")
+            key = (an["relationship"], an["targetType"], an["targetToken"])
+            _require(key not in seen, "an anchor is declared twice")
+            seen.add(key)
 
 
 # --- credential scan -------------------------------------------------------
@@ -722,10 +837,12 @@ def main(argv=None):
     ap.add_argument("--repo-root", default=".")
     ap.add_argument("--out", required=True)
     ap.add_argument("--excerpt", nargs=2, type=float, metavar=("FROM_S", "TO_S"))
+    ap.add_argument("--profile", help="the demo's profile (JSON); Sitepulse's when absent")
     a = ap.parse_args(argv)
     board = resolve_board(a.board_path, a.board_commit, a.repo_root)
     try:
-        doc, counts = convert(a.run_dir, board, tuple(a.excerpt) if a.excerpt else None)
+        profile = load_profile(a.profile) if a.profile else None
+        doc, counts = convert(a.run_dir, board, tuple(a.excerpt) if a.excerpt else None, profile)
     except Refusal as e:
         print("refused: %s" % e, file=sys.stderr)
         return 1

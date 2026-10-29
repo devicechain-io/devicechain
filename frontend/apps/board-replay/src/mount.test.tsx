@@ -76,7 +76,7 @@ describe('mounting into a host page', () => {
     expect(rootToken('--muted')).toBe('11 22% 33%');
     const files = stubFetch({
       [`${location.origin}/a/run.json`]: await fixtureRecordingText(),
-      [`${location.origin}/a/sp-dashboard.json`]: boardBytes(),
+      [`${location.origin}/a/board.json`]: boardBytes(),
     });
     vi.stubGlobal('fetch', files.fetchFn);
     mount.dataset.recording = '/a/run.json';
@@ -141,7 +141,7 @@ describe('the host options', () => {
   async function mountWith(data: Record<string, string>) {
     const files = stubFetch({
       [`${location.origin}/a/run.json`]: await fixtureRecordingText(),
-      [`${location.origin}/a/sp-dashboard.json`]: boardBytes(),
+      [`${location.origin}/a/board.json`]: boardBytes(),
     });
     vi.stubGlobal('fetch', files.fetchFn);
     Object.assign(mount.dataset, { recording: '/a/run.json', ...data });
@@ -168,7 +168,7 @@ describe('the host options', () => {
     const gate = new Promise<void>((r) => (release = r));
     const files = stubFetch({
       [`${location.origin}/a/run.json`]: await fixtureRecordingText(),
-      [`${location.origin}/a/sp-dashboard.json`]: boardBytes(),
+      [`${location.origin}/a/board.json`]: boardBytes(),
     });
     vi.stubGlobal('fetch', ((...a: Parameters<typeof fetch>) => gate.then(() => files.fetchFn(...a))) as typeof fetch);
     Object.assign(mount.dataset, { recording: '/a/run.json', embed: '1' });
@@ -184,7 +184,7 @@ describe('the host options', () => {
   it('leaves nothing running once the test has unmounted it', async () => {
     const files = stubFetch({
       [`${location.origin}/a/run.json`]: await fixtureRecordingText(),
-      [`${location.origin}/a/sp-dashboard.json`]: boardBytes(),
+      [`${location.origin}/a/board.json`]: boardBytes(),
     });
     vi.stubGlobal('fetch', files.fetchFn);
     // The embed autoplays, so its clock is asking for animation frames from the first frame on.
