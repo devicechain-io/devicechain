@@ -5434,8 +5434,11 @@ type Subscription {
         state: String
         severity: String
         alarmKey: String
-        # Only events of alarms stamped with this anchor (see AlarmAnchor), judged on every
-        # pushed event, with the same limit to the subscriber's own devices as the queries.
+        """
+        Only events of alarms stamped with this anchor (see AlarmAnchor), judged on every pushed
+        event, with the same limit to the subscriber's own devices as the queries. A customer
+        outside the subscriber's access is refused when subscribing.
+        """
         anchor: AlarmAnchor
     ): AlarmEvent!
 }
