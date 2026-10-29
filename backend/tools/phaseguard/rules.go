@@ -94,6 +94,7 @@ var Rules = []Rule{
 			{Pkg: CorePkg, Recv: "Microservice", Name: "NewCounterVec"},
 			{Pkg: CorePkg, Recv: "Microservice", Name: "NewGauge"},
 			{Pkg: CorePkg, Recv: "Microservice", Name: "NewGaugeVec"},
+			{Pkg: CorePkg, Recv: "Microservice", Name: "NewHistogramVec"},
 			{Pkg: CorePkg, Recv: "Microservice", Name: "NewProcessorMetrics"},
 			// The general door: anything building its own collector reaches the
 			// registry through this, and every constructor above is a convenience

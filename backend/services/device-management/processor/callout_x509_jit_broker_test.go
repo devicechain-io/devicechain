@@ -273,12 +273,15 @@ func TestX509JitRegistersOnTheWireAndThenConnectsPinned(t *testing.T) {
 	require.Error(t, err)
 	r.moved(before, x509ResultNoCert)
 	require.Zero(t, r.rows().devices)
+	require.EqualValues(t, 1, durationCount(t, r.metrics, calloutPathX509, calloutResultRefused))
 
 	before = r.counts()
 	c, err := r.connect(r.clientID("SN-0001"), r.user(), "", *presenting(leaf))
 	require.NoError(t, err, "a device that has never been registered must be registered by its first connect")
 	require.True(t, c.IsConnectionOpen())
 	r.moved(before, x509ResultJitCreated)
+	require.EqualValues(t, 1, durationCount(t, r.metrics, calloutPathX509JIT, calloutResultGranted),
+		"a registering connect is observed on the x509-jit path")
 
 	dev := model.DeriveX509DeviceToken("SN-0001")
 	devices, err := r.api.DevicesByToken(r.ctx, []string{dev})
@@ -297,6 +300,8 @@ func TestX509JitRegistersOnTheWireAndThenConnectsPinned(t *testing.T) {
 	_, err = r.connect(r.clientID("SN-0001"), r.user(), "", *presenting(leaf))
 	require.NoError(t, err)
 	r.moved(before, x509ResultOK)
+	require.EqualValues(t, 1, durationCount(t, r.metrics, calloutPathX509, calloutResultGranted),
+		"the pinned reconnect is observed on the x509 path")
 
 	// The tenant was charged once, for the registration, and not for the pinned connect.
 	assert.Equal(t, []string{r.tenant}, r.tenants.charged())

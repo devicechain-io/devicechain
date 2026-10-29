@@ -204,6 +204,19 @@ spec:
           annotations:
             summary: "Certificate devices are being refused because the auth callout cannot vouch for the broker's servers"
             description: "For 5m device-management has refused certificate connects ({{ "{{ $value | humanize }}" }} in the last 5m) because its issuer pin has no usable list of the broker's live servers: its system-account connection is down, or no refresh has succeeded for three refresh periods. Every certificate device is refused until it recovers; token and password devices are not affected. Check callout_issuer_pin_connected and callout_issuer_pin_refresh_total{result=\"error\"}, the device-management log for the system-account connection, and that infrastructure.nats.auth.sysUser and sysPassword are valid."
+        - alert: DeviceCalloutLatencyHigh
+          expr: |
+            histogram_quantile(0.99, sum by (le, path) (rate(devicechain_devicemanagement_callout_duration_seconds_bucket{namespace="{{ $ns }}"}[5m])))
+              > 0.25
+            and on (path)
+            sum by (path) (rate(devicechain_devicemanagement_callout_duration_seconds_count{namespace="{{ $ns }}"}[5m])) > 0.05
+          for: 10m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "Device connects are being decided slowly by the auth callout"
+            description: "For 10m the 99th percentile time to decide a {{ "{{ $labels.path }}" }} device connect has been above 250ms ({{ "{{ $value | humanizeDuration }}" }} now). The time runs from a request being picked up to the answer being published. The broker gives up on an answer after 5 seconds and the device is refused, so a callout this slow is on its way to refusing devices. It is nearly always the database behind the credential read (token and password) or the trust-anchor and chain work (x509, x509-jit), or a reconnect storm queueing behind the callout's in-flight limit. Compare callout_in_flight with its limit, callout_refused_busy_total, the device-management database latency, and the log for credential store failures."
         - alert: DeviceTrustAnchorsExpiringSoon
           expr: max(devicechain_devicemanagement_device_trust_anchors_expiring{window="30d",namespace="{{ $ns }}"}) > 0
           for: 1h

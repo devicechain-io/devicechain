@@ -167,6 +167,9 @@ type CalloutMetrics struct {
 	// X509 counts certificate connects (username "{tenant}:@x509") by result, one increment per
 	// connect; see the x509Result constants. Every result exists at zero from startup.
 	X509 *prometheus.CounterVec
+	// Duration is the time to handle one request, from pickup to the response being published,
+	// by auth path and result class (see calloutObs).
+	Duration *prometheus.HistogramVec
 	// JitInFlight is the certificate registrations being decided right now. It stays zero until
 	// registration on first connect exists.
 	JitInFlight prometheus.Gauge
@@ -181,7 +184,8 @@ func NewCalloutMetrics(ms *core.Microservice) *CalloutMetrics {
 			"Device auth-callout requests refused with the generic denial because the in-flight bound was reached."),
 		PlaintextRequests: ms.NewCounter("callout_plaintext_requests_total",
 			"Device auth-callout requests that arrived unencrypted although an xkey is configured (expected only across the broker roll that enables encryption)."),
-		X509: newX509Counter(ms),
+		X509:     newX509Counter(ms),
+		Duration: newCalloutDuration(ms),
 		JitInFlight: ms.NewGauge("callout_jit_in_flight",
 			"Certificate registrations on first connect being decided right now."),
 	}
@@ -548,6 +552,7 @@ func (c *CalloutResponder) Stop() error {
 // handle processes one authorization request: decode, decide, and reply with a
 // scoped user JWT or a denial.
 func (c *CalloutResponder) handle(msg *nats.Msg) {
+	start := time.Now()
 	data, sealTo, ok := c.openRequest(msg)
 	if !ok {
 		return
@@ -571,8 +576,10 @@ func (c *CalloutResponder) handle(msg *nats.Msg) {
 	// A request is TRUSTED, for the grants that need no secret, only if it came the way the
 	// broker sends one: sealed to this responder's key when a key is configured. See
 	// WithRequestEncryption for what that does and does not establish.
-	userJWT, errMsg := c.authorizeRequest(req, c.xkey == nil || sealTo != "", reqClaims.Issuer)
+	obs := &calloutObs{}
+	userJWT, errMsg := c.authorizeObserved(req, c.xkey == nil || sealTo != "", reqClaims.Issuer, obs)
 	c.respond(msg, sealTo, req.Server.ID, req.UserNkey, userJWT, errMsg)
+	c.observeLatency(obs, errMsg, time.Since(start))
 }
 
 // authorize resolves a decoded request to either a signed user JWT (grant) or a
@@ -586,19 +593,30 @@ func (c *CalloutResponder) authorize(req jwt.AuthorizationRequest) (userJWT stri
 	return c.authorizeRequest(req, true, "")
 }
 
+// authorizeRequest is authorizeObserved for a caller that does not read the observation.
+func (c *CalloutResponder) authorizeRequest(req jwt.AuthorizationRequest, trusted bool, issuer string) (userJWT string, errMsg string) {
+	return c.authorizeObserved(req, trusted, issuer, &calloutObs{})
+}
+
 // authorizeRequest is authorize for a request whose arrival channel is known. trusted is false
 // for a request that arrived unsealed while an xkey is configured, which the broker never sends;
 // a certificate connect (which needs no secret from the device) is refused for one. issuer is the
 // request JWT's signer (its "iss"), which a certificate connect is pinned to when a pin is set.
-func (c *CalloutResponder) authorizeRequest(req jwt.AuthorizationRequest, trusted bool, issuer string) (userJWT string, errMsg string) {
+func (c *CalloutResponder) authorizeObserved(req jwt.AuthorizationRequest, trusted bool, issuer string, obs *calloutObs) (userJWT string, errMsg string) {
+	obs.path = calloutPathUnparsed
 	tenant, presented, ok := parseDeviceCredential(req.ConnectOptions.Username, req.ConnectOptions.Password)
 	if !ok {
 		return "", genericAuthFailure
 	}
+	obs.path = calloutPathToken
+	if presented.Secret != nil {
+		obs.path = calloutPathPassword
+	}
 	// A certificate connect is its own path (callout_x509.go): the credential is the TLS client
 	// certificate, never anything in the username or password.
 	if presented.CredentialType == string(model.CredentialX509Certificate) {
-		return c.authorizeX509(req, tenant, presented, trusted, issuer)
+		obs.path = calloutPathX509
+		return c.authorizeX509(req, tenant, presented, trusted, issuer, obs)
 	}
 	// A certificate offered with a token or password username is ignored: the connect
 	// authenticates on that credential and nothing else.
@@ -653,9 +671,11 @@ func (c *CalloutResponder) authorizeRequest(req jwt.AuthorizationRequest, truste
 	}
 	if err != nil {
 		c.logAuthFailure(tenant, err)
+		obs.errored = isCalloutFault(err)
 		return "", genericAuthFailure
 	}
 	if device == nil || device.Token == "" {
+		obs.errored = true
 		// Fail closed: without a device token the only grant we could mint would be a
 		// tenant-wide one, which is exactly what this change removes.
 		log.Error().Str("tenant", tenant).Msg("Auth-callout resolved a credential to no device token.")
@@ -664,6 +684,7 @@ func (c *CalloutResponder) authorizeRequest(req jwt.AuthorizationRequest, truste
 
 	userJWT, why := c.grantSession(ctx, req, tenant, device)
 	if why != "" {
+		obs.errored = why == grantRefusedFailure
 		return "", genericAuthFailure
 	}
 	return userJWT, ""
@@ -978,4 +999,76 @@ func clampSessionTTL(ttl time.Duration, expiresAt sql.NullTime, now time.Time) (
 		return 0, false
 	}
 	return min(ttl, remaining), true
+}
+
+// The auth paths a request is labelled with, and the result classes. Both are closed sets: the
+// histogram never carries a tenant, device or credential id.
+const (
+	calloutPathToken    = "token"
+	calloutPathPassword = "password"
+	calloutPathX509     = "x509"
+	calloutPathX509JIT  = "x509-jit"
+	// calloutPathUnparsed is a request whose username named no credential.
+	calloutPathUnparsed = "unparsed"
+
+	calloutResultGranted = "granted"
+	calloutResultRefused = "refused"
+	// calloutResultError is a refusal caused by this side failing (the credential store, a
+	// timeout, an unreadable device), as opposed to a credential that was simply not good.
+	calloutResultError = "error"
+)
+
+var (
+	calloutPaths   = []string{calloutPathToken, calloutPathPassword, calloutPathX509, calloutPathX509JIT, calloutPathUnparsed}
+	calloutClasses = []string{calloutResultGranted, calloutResultRefused, calloutResultError}
+
+	// calloutDurationBuckets run from 0.25 ms to about 1 s, doubling: a granted connect is a
+	// database round trip or two, and the lookup timeout (3 s) bounds the tail.
+	calloutDurationBuckets = prometheus.ExponentialBuckets(0.00025, 2, 13)
+)
+
+// calloutObs is what one request tells the latency histogram: the path it took and whether a
+// refusal was this side's fault. It is per request and never shared.
+type calloutObs struct {
+	path    string
+	errored bool
+}
+
+// isCalloutFault reports whether a failed credential check failed on this side, rather than the
+// credential being wrong, revoked or throttled. A stored credential that can never
+// authenticate (misconfigured) is this side's defect, so it is a fault.
+func isCalloutFault(err error) bool {
+	var throttled *credential.ThrottledError
+	return !model.IsCredentialRefusal(err) && !errors.As(err, &throttled) &&
+		!errors.Is(err, model.ErrCredentialRevoked)
+}
+
+func newCalloutDuration(ms *core.Microservice) *prometheus.HistogramVec {
+	v := ms.NewHistogramVec("callout_duration_seconds",
+		"Time the device auth callout took to handle one request, from pickup to the response being "+
+			"published, by auth path (token, password, x509, x509-jit, unparsed) and result class "+
+			"(granted, refused, error). Requests turned away before pickup (busy, store backoff) "+
+			"and undecodable ones are not observed.",
+		[]string{"path", "result"}, calloutDurationBuckets)
+	for _, p := range calloutPaths {
+		for _, r := range calloutClasses {
+			v.WithLabelValues(p, r)
+		}
+	}
+	return v
+}
+
+// observeLatency records one handled request. A responder built without metrics records nothing.
+func (c *CalloutResponder) observeLatency(obs *calloutObs, errMsg string, d time.Duration) {
+	if c.metrics == nil || c.metrics.Duration == nil {
+		return
+	}
+	class := calloutResultGranted
+	switch {
+	case errMsg != "" && obs.errored:
+		class = calloutResultError
+	case errMsg != "":
+		class = calloutResultRefused
+	}
+	c.metrics.Duration.WithLabelValues(obs.path, class).Observe(d.Seconds())
 }
