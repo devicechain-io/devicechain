@@ -559,6 +559,14 @@ confiar en nada, y el bróker se reinicia para que sirva de verdad el certificad
 de conservar el antiguo hasta que algo ajeno lo reinicie. Fuera de esas condiciones la
 comprobación se ejecuta y no hace nada.
 
+Ese certificado lo acuña y lo renueva `dcctl`, no cert-manager, que emite los certificados web
+de la instancia y no interviene en el del bróker. El certificado del bróker está en el Secret
+`dc-nats-tls` del namespace de la instancia, y es `dcctl upgrade` quien lo reescribe. Un bróker
+al que se entrega un certificado nuevo bajo la misma autoridad lo sirve a las conexiones nuevas
+sin recargar su configuración, así que el cambio de certificado no corta las sesiones MQTT que
+ya mantiene. El reinicio que hace la actualización es un reinicio progresivo corriente, un
+bróker cada vez, y reconecta los dispositivos como cualquier reinicio del bróker.
+
 Una instancia arrancada antes de que `dcctl` conservara esa autoridad no puede tener su
 certificado reemitido en sitio. La actualización lo indica y continúa en lugar de fallar;
 recrear la instancia es lo que acuña una autoridad y un certificado nuevos.

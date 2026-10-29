@@ -513,7 +513,7 @@ tests:
       - eval_time: 5m
         alertname: DeviceX509IssuerPinUnavailable
         exp_alerts: []
-      - eval_time: 12m
+      - eval_time: 18m
         alertname: DeviceX509IssuerPinUnavailable
         exp_alerts:
           - exp_labels:
@@ -521,9 +521,39 @@ tests:
               devicechain_instance: devicechain
             exp_annotations:
               summary: "Certificate devices are being refused because the auth callout cannot vouch for the broker's servers"
-              description: "For 5m device-management has refused certificate connects (20 in the last 5m) because its issuer pin has no usable list of the broker's live servers: its system-account connection is down, or no refresh has succeeded for three refresh periods. Every certificate device is refused until it recovers; token and password devices are not affected. Check callout_issuer_pin_connected and callout_issuer_pin_refresh_total{result=\"error\"}, the device-management log for the system-account connection, and that infrastructure.nats.auth.sysUser and sysPassword are valid."
+              description: "For 10m device-management has refused certificate connects without a break of two minutes (8 in the last 2m) because its issuer pin has no usable list of the broker's live servers: its system-account connection is down, or no refresh has succeeded for three refresh periods. Every certificate device is refused until it recovers; token and password devices are not affected. Check callout_issuer_pin_connected and callout_issuer_pin_refresh_total{result=\"error\"}, the device-management log for the system-account connection, and that infrastructure.nats.auth.sysUser and sysPassword are valid."
       # The refusals stopped: the window slides past them and it clears.
       - eval_time: 60m
+        alertname: DeviceX509IssuerPinUnavailable
+        exp_alerts: []
+
+  # A broker roll: one blip of 5 refusals (the system connection down for about two seconds), then
+  # nothing. It is PENDING for a moment at most and never fires.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_callout_x509_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="issuer_pin_unavailable"}'
+        values: '0x5 5x60'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: DeviceX509IssuerPinUnavailable
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: DeviceX509IssuerPinUnavailable
+        exp_alerts: []
+
+  # Two blips three minutes apart (a second pod rolling): still quiet, each leaves a gap.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_callout_x509_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="issuer_pin_unavailable"}'
+        values: '0x5 5 5 5 10x60'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: DeviceX509IssuerPinUnavailable
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: DeviceX509IssuerPinUnavailable
+        exp_alerts: []
+      - eval_time: 25m
         alertname: DeviceX509IssuerPinUnavailable
         exp_alerts: []
 
@@ -531,6 +561,9 @@ tests:
   - interval: 1m
     input_series:
       - series: 'devicechain_devicemanagement_callout_x509_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="issuer_pin_unavailable"}'
+        values: '0x60'
+      # Pin off (or callout not running): the connected gauge sits at zero and nothing is refused.
+      - series: 'devicechain_devicemanagement_callout_issuer_pin_connected{namespace="dci-devicechain", pod="dc-device-management-aaaaa"}'
         values: '0x60'
     alert_rule_test:
       - eval_time: 45m

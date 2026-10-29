@@ -526,6 +526,14 @@ authority, so nothing has to re-trust anything, and the broker is restarted so t
 actually serves the new certificate rather than holding the old one until something unrelated
 rolls it. Outside those conditions the check runs and does nothing.
 
+That certificate is minted and renewed by `dcctl`, not by cert-manager, which issues the
+instance's web certificates and has no part in the broker's. The broker's certificate is in
+the `dc-nats-tls` Secret of the instance namespace, and `dcctl upgrade` is what rewrites it. A
+broker handed a new certificate under the same authority serves it to new connections without
+reloading its configuration, so the MQTT sessions it already holds are not dropped by the
+certificate change. The restart the upgrade makes is an ordinary rolling restart, one broker
+at a time, and reconnects devices the way any broker roll does.
+
 An instance bootstrapped before `dcctl` kept that authority cannot have its certificate
 re-issued in place. The upgrade says so and continues rather than failing; recreating the
 instance is what mints a fresh authority and certificate.
