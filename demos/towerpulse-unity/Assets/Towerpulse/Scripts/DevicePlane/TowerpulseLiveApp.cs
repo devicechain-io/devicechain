@@ -35,6 +35,8 @@ namespace DeviceChain.Towerpulse.DevicePlane
         /// <summary>-tp-record DIR records the run under DIR (one folder per run); -tp-replay RUNDIR plays a recorded run back with no platform; -tp-label names a run in its header.</summary>
         public const string RecordFlag = "-tp-record", ReplayFlag = "-tp-replay", LabelFlag = "-tp-label";
         public const string RecordEnv = "TOWERPULSE_RECORD";
+        /// <summary>-tp-quit-file PATH: when a file appears at PATH the player closes itself cleanly (its recording is finished, its sessions released). How an unattended run is ended without killing a process.</summary>
+        public const string QuitFileFlag = "-tp-quit-file";
         public const string OfflineEnv = "TOWERPULSE_OFFLINE";
         public const double DefaultStartHour = 13.9;
 
@@ -129,6 +131,8 @@ namespace DeviceChain.Towerpulse.DevicePlane
         void Awake()
         {
             DemoIdentity.Configure(TowerpulseScene.DemoName);
+            // 31 live sessions and a model clock must not stall because the window lost focus (an unattended acceptance run, a take being filmed)
+            Application.runInBackground = true;
         }
 
         void Start()
@@ -324,8 +328,17 @@ namespace DeviceChain.Towerpulse.DevicePlane
             PlatformLog.Error(status);
         }
 
+        string quitFile;
+        float nextQuitCheck;
+
         void Update()
         {
+            if (quitFile == null) quitFile = Flag(QuitFileFlag, out _) ?? "";
+            if (quitFile.Length > 0 && Time.realtimeSinceStartup >= nextQuitCheck)
+            {
+                nextQuitCheck = Time.realtimeSinceStartup + 1f;
+                if (File.Exists(quitFile)) { PlatformLog.Info("quit file found: closing"); Application.Quit(); return; }
+            }
             if (Offline)
             {
                 double now = Time.realtimeSinceStartup;
