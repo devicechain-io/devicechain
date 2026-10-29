@@ -115,7 +115,7 @@ def build(a, b, sb):
     cards = ["zone", "alarm", "command"]
     add("A", "hot-room-heats", "2 A hot room", caption, d_hot[0], 14.0 * 3600 + 30, a["alarm"] - 20, cards, *p1)
     add("A", "hot-room-alarm", "2 A hot room", caption, d_hot[1], a["alarm"] - 20, a["sent"] + 30, cards, *p2)
-    add("A", "hot-room-cools", "2 A hot room", "SENT means delivered; the job is done when the room is back at setpoint", d_hot[2], a["sent"] + 30, a["done"] + 20, cards, *p3)
+    add("A", "hot-room-cools", "2 A hot room", "SENT means delivered; done means back at setpoint", d_hot[2], a["sent"] + 30, a["done"] + 20, cards, *p3)
 
     ch = sb["chiller-close-up"]
     d_ch = [6.0, 10.0, 8.0]

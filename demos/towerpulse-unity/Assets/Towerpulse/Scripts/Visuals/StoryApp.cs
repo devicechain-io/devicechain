@@ -81,6 +81,14 @@ namespace DeviceChain.Towerpulse.Visuals
             Commands.Sync(app.Ledger, app.Plane.Model.TimeS);
         }
 
+        /// <summary>Applies the recorded facts the model has reached (a replay only). The frame renderer calls it between the short steps of a long jump.</summary>
+        public void StepReplay()
+        {
+            if (replay == null) return;
+            replay.Step();
+            Commands.Sync(app.Ledger, app.Plane.Model.TimeS);
+        }
+
         void Rebuild()
         {
             generation = app.Generation;

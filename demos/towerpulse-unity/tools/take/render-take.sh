@@ -32,7 +32,7 @@ SAMPLE_EVERY_S=1
 
 log() { printf '[take] %s\n' "$*" >&2; }
 die() { log "ERROR: $*"; exit 1; }
-win() { cygpath -m "$1"; }
+win() { cygpath -ma "$1"; }
 need() { command -v "$1" >/dev/null 2>&1 || die "'$1' is required on PATH"; }
 
 cmd="${1:-}"
@@ -60,7 +60,7 @@ cmd_plan() {
 }
 
 plan_shots() { # plan_shots <run>: the shot ids of a run in show order
-	"$PY" -I -c 'import json,sys; [print(s["id"]) for s in json.load(open(sys.argv[1]))["shots"] if s["run"]==sys.argv[2]]' "$PLAN" "$1"
+	"$PY" -I -c 'import json,sys; [print(s["id"]) for s in json.load(open(sys.argv[1]))["shots"] if s["run"]==sys.argv[2]]' "$PLAN" "$1" | tr -d '\015'
 }
 
 encode_shot() { # encode_shot <frames dir> <out mp4>
@@ -112,7 +112,7 @@ cmd_cut() {
 		if [ "$id" = pull-back ] && [ -n "$OWNER_CLIP" ]; then printf "file '%s'\n" "$(win "$OWNER_CLIP")" >>"$list"; fi
 		[ -f "$OUT/shots/$id.mp4" ] || die "no clip for shot $id: render first"
 		printf "file '%s'\n" "$(win "$OUT/shots/$id.mp4")" >>"$list"
-	done < <("$PY" -I -c 'import json,sys; [print(s["id"]) for s in json.load(open(sys.argv[1]))["shots"]]' "$PLAN")
+	done < <("$PY" -I -c 'import json,sys; [print(s["id"]) for s in json.load(open(sys.argv[1]))["shots"]]' "$PLAN" | tr -d '\015')
 	ffmpeg -nostdin -loglevel error -y -f concat -safe 0 -i "$list" -c:v libx264 -pix_fmt yuv420p -crf 18 -r "$FPS" -movflags +faststart "$OUT/towerpulse-cut.mp4"
 	log "cut: $(ffprobe -v error -show_entries format=duration -of csv=p=0 "$OUT/towerpulse-cut.mp4") s -> $OUT/towerpulse-cut.mp4"
 }
@@ -154,7 +154,7 @@ cmd_loop() {
 [tail][head]xfade=transition=fade:duration=$xf:offset=0[blend];\
 [body][blend]concat=n=2:v=1:a=0[v]" -map "[v]" -c:v libx264 -pix_fmt yuv420p -crf 17 -r "$FPS" -movflags +faststart "$OUT/towerpulse-loop.mp4"
 	# the website image: the Sitepulse loop's size, 720 wide at 10 fps
-	local q="${WEBP_Q:-62}"
+	local q="${WEBP_Q:-45}"
 	ffmpeg -nostdin -loglevel error -y -i "$OUT/towerpulse-loop.mp4" -vf "fps=10,scale=720:-2:flags=lanczos" -c:v libwebp -lossless 0 -q:v "$q" -compression_level 6 -loop 0 -an "$OUT/towerpulse-loop.webp"
 	rm -f "$OUT"/loop-part-*.mp4 "$OUT/loop-full.mp4"
 	log "loop: $(ffprobe -v error -show_entries format=duration -of csv=p=0 "$OUT/towerpulse-loop.mp4") s; webp $(stat -c %s "$OUT/towerpulse-loop.webp") bytes (q $q)"
@@ -171,7 +171,7 @@ cmd_sheet() {
 		local n=${#frames[@]}
 		[ "$n" -gt 0 ] || continue
 		for k in 0 $((n / 3)) $((2 * n / 3)) $((n - 1)); do printf "file '%s'\nduration 1\n" "$(win "${frames[$k]}")" >>"$list"; done
-	done < <("$PY" -I -c 'import json,sys; [print(s["id"]) for s in json.load(open(sys.argv[1]))["shots"]]' "$PLAN")
+	done < <("$PY" -I -c 'import json,sys; [print(s["id"]) for s in json.load(open(sys.argv[1]))["shots"]]' "$PLAN" | tr -d '\015')
 	ffmpeg -nostdin -loglevel error -y -f concat -safe 0 -i "$list" -vf "fps=1,scale=480:-2,tile=4x8:padding=4:margin=4:color=0x20242c" -frames:v 1 -q:v 3 "$OUT/contact-sheet.jpg"
 	log "contact sheet -> $OUT/contact-sheet.jpg"
 }

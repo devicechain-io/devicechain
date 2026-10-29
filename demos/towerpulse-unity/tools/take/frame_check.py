@@ -22,8 +22,8 @@ import sys
 
 WIDTH, HEIGHT = 1920, 1080
 JUMP_RATE = 1.05  # the same threshold StoryText.Jump uses
-# the chip sits in the status strip at (418, 27) in the 1600x900 layout, 180x26: this is a crop strictly inside it, in 1920x1080 pixels
-CHIP = (512, 37, 190, 20)
+# the chip sits in the status strip at (418, 27) in the 1600x900 layout, 180x26 (502, 32, 216x31 at 1920x1080); this is a crop of its plain fill, left of the text
+CHIP = (506, 36, 24, 22)
 
 
 def average_rgb(path, crop=None):
@@ -44,7 +44,7 @@ def size(path):
 
 def is_orange(rgb):
     r, g, b = rgb
-    return r > 200 and 70 < g < 175 and b < 130 and r - b > 100
+    return r > 170 and 60 < g < 150 and b < 90 and r - b > 110
 
 
 def check(plan_path, samples):

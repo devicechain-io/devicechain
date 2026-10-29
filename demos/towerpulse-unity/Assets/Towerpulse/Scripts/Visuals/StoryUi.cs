@@ -20,6 +20,7 @@ namespace DeviceChain.Towerpulse.Visuals
     [DefaultExecutionOrder(200)]
     public sealed class StoryUi : MonoBehaviour
     {
+        const string LegendReplay = "device (simulated): what the controllers sent and received  ·  platform: what the platform reported back";
         const float W = 1600f, H = 900f;
         const float DockW = 424f, DockX = W - DockW - 20f;
         static readonly Color Panel = new Color(0.05f, 0.07f, 0.10f, 0.90f);
@@ -389,7 +390,9 @@ namespace DeviceChain.Towerpulse.Visuals
             Set(hudAccel, accel ?? "");
             if (app.ReplaySource != null)
             {
-                Set(hudMode, "REPLAY  ·  " + app.ReplaySource.Header.RunId + "  ·  no platform is connected; facts are as recorded, with their sources");
+                Set(hudMode, "REPLAY  ·  " + app.ReplaySource.Header.RunId + "  ·  facts as recorded");
+                // a replay has no preview facts, so the legend does not define one
+                Set(legText, LegendReplay);
                 hudMode.color = Amber; hud.Bar.color = Amber;
             }
             else if (app.Offline)

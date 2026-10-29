@@ -36,6 +36,8 @@ namespace DeviceChain.Towerpulse.Visuals
         void Start()
         {
             story = GetComponent<StoryApp>();
+            // the offline plane runs on the wall clock until it is told otherwise: hold it from the first frame, then restart it at the recording's own start
+            if (story != null && story.App != null) story.App.Frozen = true;
             StartCoroutine(Run());
         }
 
@@ -75,7 +77,9 @@ namespace DeviceChain.Towerpulse.Visuals
             var ui = story.Ui;
             Time.captureFramerate = fps;
             app.Frozen = true;
+            app.Rewind(app.ReplaySource.Info.StartHour);   // the model at exactly the hour the run began, whatever frames went by before this one
             director.UseShots(plan);
+            yield return null;                              // the story layer sees the new plane and starts its replay over
 
             Directory.CreateDirectory(outDir);
             var shotsDone = new List<string>();
@@ -92,13 +96,13 @@ namespace DeviceChain.Towerpulse.Visuals
                 {
                     double showS = shot.StartS + (double)i / fps;
                     double target = plan.ModelAt(showS);
-                    if (target + 1e-6 < app.Plane.Model.TimeS)
+                    if (target + 1e-6 < app.Plane.Clock.SimAt(app.WallSeconds))
                     {
-                        Debug.LogError("[towerpulse] render: shot " + shot.Id + " needs the model at " + TimeClockText(target) + " but it is already at " + TimeClockText(app.Plane.Model.TimeS) + ": the plan's shots must move forward in model time");
+                        Debug.LogError("[towerpulse] render: shot " + shot.Id + " needs the model at " + TimeClockText(target) + " but it is already at " + TimeClockText(app.Plane.Clock.SimAt(app.WallSeconds)) + ": the plan's shots must move forward in model time");
                         Application.Quit(2);
                         yield break;
                     }
-                    StepModelTo(app, target);
+                    StepModelTo(story, target);
                     director.Seek(showS);
                     ui.JumpLabel = jump;
                     yield return null;            // every Update and LateUpdate of the frame runs with this model time and camera
@@ -121,15 +125,19 @@ namespace DeviceChain.Towerpulse.Visuals
 
         static string TimeClockText(double s) { return Model.TimeClock.Format(s); }
 
-        // the model moves in steps of at most 5 model seconds, as the rehearsal does, so a long jump runs the same plane a real minute would
-        static void StepModelTo(DevicePlane.TowerpulseLiveApp app, double target)
+        // The plane's clock is start + wall x speed, so the wall time that makes it read the target is known. The model moves in whole 5-second steps and never
+        // past the time it is asked for, and the replay is stepped after each one: a command the recording says the device received reaches the model at the
+        // model time it arrived, not at the end of a long jump, so the room cools on the day's schedule however the shot skips.
+        static void StepModelTo(StoryApp story, double target)
         {
+            var app = story.App;
             double speed = app.Plane.Clock.Speed;
+            double wall = (target - app.Plane.Clock.StartSimS) / speed;
             int guard = 0;
-            while (app.Plane.Model.TimeS < target - 1e-9 && guard++ < 100000)
+            while (app.WallSeconds < wall - 1e-9 && guard++ < 1000000)
             {
-                double left = target - app.Plane.Model.TimeS;
-                app.AdvanceOffline(Math.Min(5.0, left) / speed);
+                app.AdvanceOffline(Math.Min(5.0 / speed, wall - app.WallSeconds));
+                story.StepReplay();
             }
         }
     }
