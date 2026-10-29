@@ -599,3 +599,12 @@ func TestAnOverlayCannotMoveTheLwm2mBindAddress(t *testing.T) {
 		}
 	}
 }
+
+// The singleton step's tests run against fake clusters with no Helm storage behind them, and the
+// withdrawal prechecks now refuse a release they cannot read. Default the seam to "no release" for
+// the package's tests; the tests of the checks themselves set their own.
+func init() {
+	none := func(*State) (map[string]interface{}, error) { return nil, nil }
+	sparkplugReleaseValues = none
+	lwm2mReleaseValues = none
+}
