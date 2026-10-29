@@ -55,6 +55,9 @@ namespace DeviceChain.Towerpulse.DevicePlane
             link.StateChanged += s => Volatile.Write(ref state, (int)s);
         }
 
+        /// <summary>Raised after the broker acknowledged a reading: device, values, occurred time, acknowledgement time.</summary>
+        public event Action<PlaneDevice, IReadOnlyDictionary<string, double>, DateTimeOffset, DateTimeOffset> ReadingAcked;
+
         public PlaneDevice Device { get; }
         public LinkState Link => (LinkState)Volatile.Read(ref state);
         public bool CanPublish => Volatile.Read(ref stopped) == 0 && link.CanPublish;
@@ -97,11 +100,11 @@ namespace DeviceChain.Towerpulse.DevicePlane
             if (!CanPublish) return false;
             if (Interlocked.CompareExchange(ref inFlight, 1, 0) != 0) return false;
             var sample = Sample.Measurement(Interlocked.Increment(ref sequence), occurredUtc, values);
-            _ = SendAsync(sample);
+            _ = SendAsync(sample, values, occurredUtc);
             return true;
         }
 
-        async Task SendAsync(Sample sample)
+        async Task SendAsync(Sample sample, IReadOnlyDictionary<string, double> values, DateTimeOffset occurredUtc)
         {
             try
             {
@@ -109,6 +112,7 @@ namespace DeviceChain.Towerpulse.DevicePlane
                 Interlocked.Increment(ref published);
                 Volatile.Write(ref consecutiveFailures, 0);
                 Interlocked.Exchange(ref lastPublishTicks, DateTimeOffset.UtcNow.UtcTicks);
+                try { ReadingAcked?.Invoke(Device, values, occurredUtc, DateTimeOffset.UtcNow); } catch (Exception) { /* a listener must not turn a delivered reading into a send error */ }
             }
             catch (Exception e) when (!(e is OperationCanceledException))
             {

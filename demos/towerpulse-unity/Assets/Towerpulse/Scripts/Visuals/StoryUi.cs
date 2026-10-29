@@ -384,7 +384,12 @@ namespace DeviceChain.Towerpulse.Visuals
             var accel = StoryText.Accelerated(plane.Clock.Speed);
             hudAccel.enabled = hudAccelBg.enabled = accel != null;
             Set(hudAccel, accel ?? "");
-            if (app.Offline)
+            if (app.ReplaySource != null)
+            {
+                Set(hudMode, "REPLAY  ·  " + app.ReplaySource.Header.RunId + "  ·  no platform is connected; facts are as recorded, with their sources");
+                hudMode.color = Amber; hud.Bar.color = Amber;
+            }
+            else if (app.Offline)
             {
                 Set(hudMode, "OFFLINE PREVIEW  ·  no platform is connected; facts marked preview are scripted");
                 hudMode.color = Amber; hud.Bar.color = Amber;
@@ -433,6 +438,7 @@ namespace DeviceChain.Towerpulse.Visuals
         string PlatformSees(string externalId, string metric, string unit)
         {
             var app = story.App;
+            if (app.ReplaySource != null) return "platform: as recorded";
             if (app.Offline) return "platform: not connected (preview)";
             if (app.Observed == null || !app.TryDeviceToken(externalId, out var token)) return "platform: not watching this device";
             if (!app.Observed.TryGet(token, out var d) || !d.Measurements.TryGetValue(metric, out var v)) return "platform: nothing returned yet";

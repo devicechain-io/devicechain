@@ -6,6 +6,8 @@
         "DeviceChain.Towerpulse.Plane",
         "DeviceChain.Towerpulse.Story",
         "DeviceChain.Towerpulse.DevicePlane",
+        "DeviceChain.Towerpulse.Recording",
+        "DeviceChain.Demos.Recording",
         "DeviceChain.Sdk.Unity",
         "DeviceChain.Demos.Core",
         "DeviceChain.Demos.Platform",

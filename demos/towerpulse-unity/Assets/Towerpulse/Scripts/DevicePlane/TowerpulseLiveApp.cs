@@ -9,6 +9,9 @@ using System.Threading;
 using System.Threading.Tasks;
 using DeviceChain.Demos.Platform;
 using DeviceChain.Demos.Platform.DevicePlane;
+using DeviceChain.Demos.Platform.Recording;
+using DeviceChain.Towerpulse.Recording;
+using DeviceChain.Towerpulse.Story;
 using DeviceChain.Towerpulse.Model;
 using DeviceChain.Towerpulse.Plane;
 using UnityEngine;
@@ -29,6 +32,9 @@ namespace DeviceChain.Towerpulse.DevicePlane
     public sealed class TowerpulseLiveApp : MonoBehaviour
     {
         public const string StartHourFlag = "-tp-start-hour", SpeedFlag = "-tp-speed", SeedFlag = "-tp-seed", IntervalFlag = "-tp-interval", OfflineFlag = "-tp-offline";
+        /// <summary>-tp-record DIR records the run under DIR (one folder per run); -tp-replay RUNDIR plays a recorded run back with no platform; -tp-label names a run in its header.</summary>
+        public const string RecordFlag = "-tp-record", ReplayFlag = "-tp-replay", LabelFlag = "-tp-label";
+        public const string RecordEnv = "TOWERPULSE_RECORD";
         public const string OfflineEnv = "TOWERPULSE_OFFLINE";
         public const double DefaultStartHour = 13.9;
 
@@ -41,11 +47,13 @@ namespace DeviceChain.Towerpulse.DevicePlane
         readonly Queue<ObserverItem> observed = new Queue<ObserverItem>();
         readonly Dictionary<string, string> externalIdByToken = new Dictionary<string, string>(StringComparer.Ordinal);
         readonly Dictionary<string, string> tokenByExternalId = new Dictionary<string, string>(StringComparer.Ordinal);
-        double speed = 1, seed = 1;
+        double speed = 1, seed = 1, intervalS = 10;
         string status = "starting";
         string banner = "";
         float startedAt;
         bool shutdownBegun;
+        TowerpulseRecorder recorder;
+        string recordBase, runLabel;
 
         /// <summary>The plane once live mode is up (null before); the visuals read it.</summary>
         public TowerPlane Plane => plane;
@@ -54,6 +62,14 @@ namespace DeviceChain.Towerpulse.DevicePlane
 
         /// <summary>True when there is no platform: the plane runs alone and a scripted preview stands in for it.</summary>
         public bool Offline { get; private set; }
+
+        /// <summary>The recording being replayed, or null. A replay is an offline plane whose story layer is fed from this instead of from the preview.</summary>
+        public TowerpulseRecording ReplaySource { get; private set; }
+
+        public TowerpulseRecorder Recorder => recorder;
+
+        /// <summary>Keeps a story fact in the recording (when one is being made). The caller has already applied the fact to its boards.</summary>
+        public void RecordFact(StoryFact f) { recorder?.Fact(f); }
 
         /// <summary>What the plane received and answered, by command id. Replaced by <see cref="Rewind"/>.</summary>
         public CommandLedger Ledger { get; private set; } = new CommandLedger();
@@ -118,6 +134,13 @@ namespace DeviceChain.Towerpulse.DevicePlane
         void Start()
         {
             startedAt = Time.realtimeSinceStartup;
+            var replayDir = Flag(ReplayFlag, out var replayErr);
+            if (replayErr != null) { Stop("Replay cannot start", replayErr); return; }
+            if (replayDir != null)
+            {
+                StartReplay(replayDir);
+                return;
+            }
             if (Array.IndexOf(Environment.GetCommandLineArgs(), OfflineFlag) >= 0 || Environment.GetEnvironmentVariable(OfflineEnv) == "1")
             {
                 StartOffline();
@@ -140,6 +163,27 @@ namespace DeviceChain.Towerpulse.DevicePlane
             banner = "OFFLINE PREVIEW · " + clock.Label;
             status = "offline";
             PlatformLog.Info("offline preview · no platform · " + clock.Label);
+        }
+
+        void StartReplay(string dir)
+        {
+            try
+            {
+                var rec = TowerpulseRecording.Open(dir);
+                ReplaySource = rec;
+                Offline = true;
+                seed = rec.Info.Seed;
+                speed = rec.Info.Speed;
+                var clock = PlaneClock.FromHour(rec.Info.StartHour, speed);
+                plane = new TowerPlane(rec.Info.Seed, clock);
+                banner = "REPLAY OF " + rec.Header.RunId + " · " + rec.Info.ModelVersion + " · " + clock.Label;
+                status = "replay";
+                PlatformLog.Info("replay · " + rec.Header.RunId + " · " + rec.Facts.Count + " story facts · " + clock.Label);
+            }
+            catch (Exception e) when (e is RecordingFormatException || e is System.IO.IOException)
+            {
+                Stop("Replay cannot start", e.Message);
+            }
         }
 
         static string Flag(string flag, out string error)
@@ -179,6 +223,11 @@ namespace DeviceChain.Towerpulse.DevicePlane
                 var clock = PlaneClock.FromHour(hour, speed);
                 plane = new TowerPlane((ulong)seed, clock);
                 var devices = TowerpulseScene.Devices(plane.Devices);
+                recordBase = Flag(RecordFlag, out err) ?? Environment.GetEnvironmentVariable(RecordEnv);
+                if (err != null) { Stop("Live mode cannot start", err); return; }
+                runLabel = Flag(LabelFlag, out err);
+                if (err != null) { Stop("Live mode cannot start", err); return; }
+                intervalS = interval;
 
                 var client = new RunnerConfigClient(settings.Value);
                 var cfg = await client.Fetch(ct);
@@ -199,6 +248,7 @@ namespace DeviceChain.Towerpulse.DevicePlane
                 ct.ThrowIfCancellationRequested();
 
                 runner = new PlaneRunner(plane, board, credentials, new SdkDeviceLinkFactory(cfg.Value, caPem), interval, Ledger);
+                if (!StartRecorder(cfg.Value, hour)) return;
                 status = "connecting";
                 await runner.StartAllAsync();
                 PlatformLog.Info("sessions started · " + runner.Readiness());
@@ -210,6 +260,38 @@ namespace DeviceChain.Towerpulse.DevicePlane
             catch (Exception e)
             {
                 Stop("Live mode failed", e.GetType().Name + ": " + e.Message);
+            }
+        }
+
+        // Opened before the sessions start, so the first reading is in it. A recording that cannot be made refuses the run: a take nobody can replay is not a take.
+        bool StartRecorder(RunnerConfig cfg, double hour)
+        {
+            if (string.IsNullOrEmpty(recordBase)) return true;
+            try
+            {
+                var header = new RunHeader
+                {
+                    Instance = cfg.InstanceId, Tenant = cfg.Tenant, Build = BuildInfo.Read(Path.Combine(Application.dataPath, "..", "build-info.json")),
+                };
+                header.Clock.Add(new ClockSegment { From = 0, Mode = speed > 1.0000001 ? ClockSegment.Accelerated : ClockSegment.Real, Scale = speed });
+                var info = new TowerpulseRunInfo
+                {
+                    ModelVersion = TowerDay.ModelVersion, ManifestId = TowerpulseScene.DemoName, Seed = (ulong)seed, StartHour = hour, Speed = speed, IntervalSeconds = intervalS, Label = runLabel,
+                };
+                recorder = TowerpulseRecorder.Create(recordBase, header, info);
+                foreach (var d in board.Devices)
+                    if (d.Bind != null && d.Bind.IsBound) recorder.AddDevice(d.Device.ExternalId, d.Bind.DeviceToken, SceneKind.Of(plane.Find(d.Device.ExternalId).Kind));
+                recorder.RewriteHeaders();
+                runner.Published += (dev, values, occ, ack) => recorder.Sample(dev.ExternalId, values, occ, ack);
+                Ledger.ReceivedEvent += r => recorder.Fact(StoryFacts.FromReceived(r));
+                Ledger.AnsweredEvent += r => recorder.Fact(StoryFacts.FromAnswered(r));
+                PlatformLog.Info("recording to " + recorder.Directory);
+                return true;
+            }
+            catch (Exception e)
+            {
+                Stop("Live mode cannot start", "the recording could not be made: " + e.Message);
+                return false;
             }
         }
 
@@ -227,7 +309,12 @@ namespace DeviceChain.Towerpulse.DevicePlane
             }
             Observed = new ObservedState(DateTimeOffset.UtcNow);
             observer = new PlatformObserver(cfg, broker, watched, Observed, ObserverState);
-            observer.Watch = item => observed.Enqueue(item);
+            observer.Watch = item =>
+            {
+                observed.Enqueue(item);
+                if (recorder == null) return;
+                foreach (var line in ObservedRecording.Lines(item, t => externalIdByToken.TryGetValue(t ?? "", out var e) ? e : t)) recorder.Observe(line);
+            };
             observer.Start();
         }
 
@@ -280,6 +367,7 @@ namespace DeviceChain.Towerpulse.DevicePlane
                 try { runner.ShutdownAsync().Wait(PlaneRunner.DisposeTimeout + TimeSpan.FromSeconds(1)); }
                 catch (Exception e) { Debug.LogWarning(DemoIdentity.LogPrefix + "shutdown: " + e.GetType().Name); }
             }
+            try { recorder?.Close(); } catch (Exception e) { Debug.LogWarning(DemoIdentity.LogPrefix + "recording close: " + e.GetType().Name); }
         }
     }
 }
