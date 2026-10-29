@@ -27,6 +27,7 @@ import {
   type NodeConfig,
   type NodeType,
 } from './model';
+import '@/i18n/lazy/deviceProfiles';
 
 
 const asRecord = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' ? (v as Record<string, unknown>) : {});

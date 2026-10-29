@@ -15,6 +15,7 @@ import { getDeviceType, listDevices, listDeviceTypes } from '@/lib/api/device-ma
 import { listCustomers } from '@/lib/api/customers';
 import { listAreas } from '@/lib/api/areas';
 import { listAssets } from '@/lib/api/assets';
+import '@/i18n/lazy/dashboards';
 
 // The entity kinds a dashboard datasource can point at: a device directly, or one
 // of the anchor target types.

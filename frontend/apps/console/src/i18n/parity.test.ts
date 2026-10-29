@@ -119,6 +119,12 @@ describe('the shipped registries carry every namespace', () => {
     trustAnchors: () => import('@/routes/trust-anchors/catalog'),
     adminNav: () => import('@/routes/admin/catalog'),
     aiProviders: () => import('@/routes/admin/ai-providers/catalog'),
+    commandBatches: () => import('@/i18n/lazy/commandBatches'),
+    dashboards: () => import('@/i18n/lazy/dashboards'),
+    deviceProfiles: () => import('@/i18n/lazy/deviceProfiles'),
+    identityProviders: () => import('@/i18n/lazy/identityProviders'),
+    integrations: () => import('@/i18n/lazy/integrations'),
+    updates: () => import('@/i18n/lazy/updates'),
   };
 
   it('the English bundle registers every namespace, each wired to its own file', async () => {

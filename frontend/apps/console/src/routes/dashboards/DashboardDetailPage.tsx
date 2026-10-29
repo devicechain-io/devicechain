@@ -27,6 +27,7 @@ import {
 import { preloadWidgets } from '@devicechain/widgets';
 import { DashboardWorkspace } from './editor/DashboardWorkspace';
 import { defaultWidgetRegistry } from './editor/widgetRegistry';
+import '@/i18n/lazy/dashboards';
 
 // The marker loadPublished answers for a dashboard that exists but was never published.
 const NOT_PUBLISHED = Symbol('not-published');

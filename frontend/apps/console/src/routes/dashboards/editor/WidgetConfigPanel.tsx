@@ -52,6 +52,7 @@ import {
   type OptionFieldContext,
 } from './widgetOptionFields';
 import { defaultWidgetRegistry, type EditorWidgetRegistry } from './widgetRegistry';
+import '@/i18n/lazy/dashboards';
 
 // What the panel offers for a widget's data source is read from the widget's DESCRIPTOR —
 // its datasource policy (does it bind one at all, and to which kinds of entity) and its

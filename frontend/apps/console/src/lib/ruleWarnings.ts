@@ -6,6 +6,7 @@
 // the author's language and a new server-side code still shows (as the English fallback) in a console
 // build that predates it.
 import type { TFunction } from 'i18next';
+import '@/i18n/lazy/deviceProfiles';
 
 export interface WarningLike {
   code?: string | null;

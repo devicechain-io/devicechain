@@ -18,6 +18,7 @@ import {
   type NodeType,
   type PortType,
 } from './model';
+import '@/i18n/lazy/deviceProfiles';
 
 // The data an editor node carries: its canvas type, opaque config, the latest compile diagnostic (an
 // error message from compileCanvas, anchored to this node), and — while a firing is selected in the

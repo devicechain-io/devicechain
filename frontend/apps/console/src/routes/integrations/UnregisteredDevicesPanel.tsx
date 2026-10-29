@@ -32,6 +32,7 @@ import {
   DataTableHeaderCell,
   DataTableRow,
 } from '@/components/ui/data-table';
+import '@/i18n/lazy/integrations';
 
 const pageSize = 50;
 

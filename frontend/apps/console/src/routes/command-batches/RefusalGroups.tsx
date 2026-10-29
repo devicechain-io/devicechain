@@ -16,6 +16,7 @@ import { useTranslation } from 'react-i18next';
 import { Badge } from '@/components/ui/badge';
 import { HintText } from '@/components/ui/hint-text';
 import { sampleCoverage, type RefusalGroup } from './refusals';
+import '@/i18n/lazy/commandBatches';
 
 export function RefusalGroupBlock({ group }: { group: RefusalGroup }) {
   const { t } = useTranslation('commandBatches');

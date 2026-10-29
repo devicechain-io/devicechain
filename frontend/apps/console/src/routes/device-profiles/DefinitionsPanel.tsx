@@ -33,6 +33,7 @@ import { useQuery } from '@/lib/hooks/use-query';
 import { errMessage, useReload } from '@/routes/common';
 import { useAuth } from '@/auth/AuthProvider';
 import { hasAuthority } from '@devicechain/client';
+import '@/i18n/lazy/deviceProfiles';
 
 export interface DefinitionColumn<TDef> {
   /** i18n key, e.g. "deviceProfiles:defColKey" or "common:colName" — resolved here. */

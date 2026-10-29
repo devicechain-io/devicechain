@@ -53,6 +53,7 @@ import {
   type CommandDefinition,
   type DetectionRule,
 } from '@/lib/api/device-management';
+import '@/i18n/lazy/deviceProfiles';
 
 // The rule type is inside the opaque definition JSON; read it defensively for the
 // list column (event-processing owns the taxonomy — the console only labels it).

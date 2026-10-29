@@ -46,6 +46,7 @@ import {
   type RetryCandidate,
   type RetryClass,
 } from './retrySelection';
+import '@/i18n/lazy/commandBatches';
 
 // The states in which a command is still in flight: counted, never selectable.
 const IN_FLIGHT = ['QUEUED', 'HELD', 'SENT', 'PARKED'];

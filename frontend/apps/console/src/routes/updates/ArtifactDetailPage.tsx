@@ -53,6 +53,7 @@ import { Fact } from '@/routes/command-batches/Fact';
 import { ArtifactStateBadge, DigestChip, SignerStateBadge, TrustBadge } from './badges';
 import { AddSignatureForm } from './AddSignatureForm';
 import { UploadPanel, useArtifactUpload } from './useArtifactUpload';
+import '@/i18n/lazy/updates';
 
 // Where the signing runbook lives. Linked, not restated: the commands are tooling-specific
 // and belong in one place that can change without a console release.

@@ -24,6 +24,7 @@ import { getCalculatedMetricPlan } from '@/lib/api/device-management';
 import { getCalculatedMetricBackfillAvailability } from '@/lib/api/event-management';
 import { BackfillDrawer } from './BackfillDrawer';
 import { BackfillJobs } from './BackfillJobs';
+import '@/i18n/lazy/deviceProfiles';
 
 const DEVICE_WRITE = 'device:write';
 const EVENT_READ = 'event:read';

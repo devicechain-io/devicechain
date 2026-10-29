@@ -41,6 +41,7 @@ import {
   withType,
   type IntegrationDraft,
 } from './integrationDraft';
+import '@/i18n/lazy/integrations';
 
 const POINTER_EXAMPLE = { items: '/uplinks', time: '/time', frame: '/frame' };
 

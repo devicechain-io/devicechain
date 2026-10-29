@@ -41,6 +41,7 @@ import { formatBytes, parseByteCount, sha256Digest } from '@/lib/artifactUpload'
 import { artifactKindLabel } from '@/lib/enumLabel';
 import { shortDigest } from './badges';
 import { UploadPanel, useArtifactUpload } from './useArtifactUpload';
+import '@/i18n/lazy/updates';
 
 const KINDS: ArtifactKind[] = ['FIRMWARE', 'SOFTWARE', 'CONFIGURATION'];
 

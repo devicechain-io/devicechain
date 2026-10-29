@@ -23,6 +23,7 @@ import { defaultWidgetRegistry } from '../editor/widgetRegistry';
 import { buildImportPayload, prepareImport } from '../import/importDefinition';
 import { generateBoard, type BoardLabels } from './generate';
 import { loadBoardSource } from './source';
+import '@/i18n/lazy/dashboards';
 
 export function BoardFromProfileDrawer({
   open,

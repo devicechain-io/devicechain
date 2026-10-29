@@ -34,6 +34,7 @@ import { IntegrationBadges } from './IntegrationBadges';
 import { IntegrationTokenReveal, type RevealedToken } from './IntegrationTokenReveal';
 import { ConnectSnippet } from './ConnectSnippet';
 import { UnregisteredDevicesPanel } from './UnregisteredDevicesPanel';
+import '@/i18n/lazy/integrations';
 
 const ID_PREFIX = 'ig-detail';
 

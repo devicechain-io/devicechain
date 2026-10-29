@@ -54,6 +54,7 @@ import { Input } from '@/components/ui/input';
 import { EntityPicker, SharedDeviceTypeCatalogue, type EntityKind } from './EntityPicker';
 import { editorControlOf, hostControl, type ControlEditorProps } from './controlEditors';
 import { enumChoiceLabel, enumPlaceholder, fieldHelp, fieldLabel, useMessageLookup } from './optionWording';
+import '@/i18n/lazy/dashboards';
 
 // ---- Which control authors which option -------------------------------------
 

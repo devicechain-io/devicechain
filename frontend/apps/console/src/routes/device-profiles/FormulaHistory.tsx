@@ -23,6 +23,7 @@ import { getDevice, listMetricDefinitions } from '@/lib/api/device-management';
 import { calculatedEvents, type CalculatedEventsResult } from '@/lib/api/event-management';
 import { optNum } from '@/lib/utils';
 import { absentInputs } from './calcHealth';
+import '@/i18n/lazy/deviceProfiles';
 
 /** The most samples the server evaluates in one request (it refuses above this). */
 export const HISTORY_SAMPLE_CAP = 50_000;

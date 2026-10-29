@@ -30,6 +30,7 @@ import {
   type IdpCreateState,
   type IdpKind,
 } from './idpForm';
+import '@/i18n/lazy/identityProviders';
 
 // Kept out of the JSX so the i18n lint rule does not read the discriminants as prose.
 const KIND_OPTIONS_KEYS: IdpKind[] = ['tenant', 'instance'];

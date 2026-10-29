@@ -40,6 +40,7 @@ import {
   type BindingRefStatus,
   type PreparedImport,
 } from './importDefinition';
+import '@/i18n/lazy/dashboards';
 
 // Where the JSON came from. `text` is absent for the paste/upload door.
 export interface ImportSource {

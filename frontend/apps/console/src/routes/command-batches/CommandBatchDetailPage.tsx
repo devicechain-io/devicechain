@@ -54,6 +54,7 @@ import { groupRefusals, totalRefused, type RefusalGroup } from './refusals';
 import { RefusalGroupList } from './RefusalGroups';
 import { CancelBatchButton, CancelBatchReport, useBatchCancel } from './CancelBatchAction';
 import { RetryBatchButton, RetryBatchPanel, useBatchRetry } from './RetryBatchAction';
+import '@/i18n/lazy/commandBatches';
 
 const commandsPageSize = 25;
 

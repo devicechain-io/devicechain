@@ -20,6 +20,7 @@ import { errMessage } from '@/routes/common';
 import { testMetricFormula, type MetricFormulaTest } from '@/lib/api/device-management';
 import { FormulaHistory } from './FormulaHistory';
 import { optNum } from '@/lib/utils';
+import '@/i18n/lazy/deviceProfiles';
 
 /** The per-formula cost ceiling the publish gate enforces (the API states it in its schema). */
 export const FORMULA_COST_CEILING = 100;
