@@ -305,6 +305,58 @@ eliminación a término en una pasada. Las dos primeras llevan el almacén en su
 línea de registro «Tenant purge store did not report clean» y la consulta `tenantDeletions` indican
 el motivo.
 
+### Cuánto tarda borrar un inquilino grande {#measured}
+
+El borrado en sí es rápido comparado con las dos esperas deliberadas. Es una única medición, con su
+configuración indicada; no es un compromiso de nivel de servicio ni se extrapola a otros tamaños o
+equipos.
+
+**Configuración.** El código de borrado real de cada sistema de almacenamiento se ejecutó contra un
+inquilino sembrado dentro de un clúster [kind](https://kind.sigs.k8s.io/) de un solo nodo
+(Kubernetes 1.37) en una estación de trabajo Windows con 20 CPU lógicas y 64 GiB de memoria asignados
+a Docker. TimescaleDB 2.28 sobre PostgreSQL 16 y un servidor NATS JetStream se ejecutaron como un pod
+sin réplicas cada uno, sobre volúmenes locales, de modo que cada llamada cruzó la red del clúster. El
+inquilino compartía cada almacén con otros tres inquilinos cuyas filas estaban intercaladas con las
+suyas, y la ejecución fallaba si los datos del inquilino eliminado no habían desaparecido o si los de
+los demás se habían tocado.
+
+| Sembrado para el inquilino eliminado | Cantidad |
+|---|---|
+| Eventos (todos los tipos) / de ellos, mediciones | 2,7 millones / 2,43 millones |
+| Eventos de ubicación / anclas de eventos | 270 000 / 270 000 |
+| Cubos de resumen en el agregado continuo | 2,43 millones |
+| Fragmentos de telemetría (23 de 31 comprimidos, como los deja la política de ciclo de vida) | 31 |
+| Dispositivos, atributos, comandos y entradas de auditoría (base de datos principal) | unas 99 000 filas |
+| Mensajes del broker / entradas clave-valor / objetos almacenados | 2,7 millones / 63 000 / 18 000 |
+
+| Sistema de almacenamiento | Primera pasada hasta quedar limpio | Borrado en esa pasada |
+|---|---|---|
+| Base de datos de telemetría | 9,4 s | 8,1 millones de filas (748 MiB de registro de escritura anticipada) |
+| Base de datos principal | 2,5 s | 108 000 filas |
+| Broker de mensajes | 2,3 s | 2,7 millones de mensajes |
+| Almacén clave-valor | 1,8 s | 63 000 entradas |
+| Almacén de objetos | 0,3 s | 18 000 objetos |
+| **Total, uno tras otro** | **16,2 s** | |
+
+Una segunda pasada no encontró nada en ningún almacén, en menos de medio segundo cada uno. Las cifras
+son el tiempo dentro de los almacenes. Excluyen tres cosas:
+
+- **El motor de procesamiento de eventos en vivo.** Se le pide expulsar al inquilino de la memoria y
+  su coste lo acota una espera fija, no el tamaño del inquilino. No estaba en ejecución en esta
+  medición.
+- **Las esperas.** Los datos se establecen como [borrados](#erased-signal) cuando todos los sistemas
+  llevan limpios la ventana de asentamiento, así que con los valores por defecto el tiempo desde la
+  eliminación hasta `erasedAt` es la primera pasada del coordinador (se ejecuta cada minuto) más los
+  16 segundos más cinco minutos. El identificador se libera 12 horas después de que el último sistema
+  quedara limpio. Ambas esperas son configuración, no trabajo.
+- **Un clúster real.** Fue un servidor de cada tipo sin replicación. Los flujos replicados, el
+  almacenamiento remoto y el tráfico de otros inquilinos costarán más. Las cifras del broker y del
+  almacén clave-valor deben leerse como cotas inferiores.
+
+Para repetirlo en tu hardware, ejecuta `hack/purge-measure-kind.sh` desde el repositorio de código
+fuente (`hack/purge-measure.sh` hace lo mismo en dos contenedores desechables). Imprime un informe
+JSON con los tiempos por almacén, los recuentos sembrados y la configuración de los servidores.
+
 ## Configuración {#configuration}
 
 Estos ajustes residen bajo `tenantPurge` en el servicio user-management. En los tres, `0` significa

@@ -275,6 +275,57 @@ token hold. `TenantPurgeCoordinatorFailing` fires when the coordinator itself ke
 deletion through a pass. The first two carry the store in their `store` label; the log line "Tenant
 purge store did not report clean" and the `tenantDeletions` query carry the reason.
 
+### How long erasing a large tenant takes {#measured}
+
+The erasure itself is fast compared with the two deliberate waits. This is one measurement, with
+its setup stated; it is not a service-level commitment, and it is not extrapolated to other sizes
+or hardware.
+
+**Setup.** The real erasure code for each storage system ran against a seeded tenant inside a
+single-node [kind](https://kind.sigs.k8s.io/) cluster (Kubernetes 1.37) on one Windows workstation
+with 20 logical CPUs and 64 GiB of memory given to Docker. TimescaleDB 2.28 on PostgreSQL 16 and a
+NATS JetStream server ran as one unreplicated pod each on local volumes, so every call crossed the
+cluster network. The tenant shared every store with three other tenants whose rows were interleaved
+with its own, and the run failed unless the deleted tenant's data was gone and the other tenants' was
+untouched.
+
+| Seeded for the deleted tenant | Amount |
+|---|---|
+| Events (all types) / of which measurements | 2.7 million / 2.43 million |
+| Location events / event anchors | 270,000 / 270,000 |
+| Rollup buckets in the continuous aggregate | 2.43 million |
+| Telemetry chunks (23 of 31 compressed, as the lifecycle policy leaves them) | 31 |
+| Devices, attributes, commands, audit entries (main database) | about 99,000 rows |
+| Broker messages / key-value entries / stored objects | 2.7 million / 63,000 / 18,000 |
+
+| Storage system | First pass until clean | Erased on that pass |
+|---|---|---|
+| Telemetry database | 9.4 s | 8.1 million rows (748 MiB of write-ahead log) |
+| Main database | 2.5 s | 108,000 rows |
+| Message broker | 2.3 s | 2.7 million messages |
+| Key-value store | 1.8 s | 63,000 entries |
+| Object store | 0.3 s | 18,000 objects |
+| **Total, one after another** | **16.2 s** | |
+
+A second pass found nothing in any store, in under half a second each. The numbers above are the
+time spent inside the stores. They leave out three things:
+
+- **The live event-processing engine.** It is asked to evict the tenant from memory and its
+  cost is bounded by a fixed wait, not by the tenant's size. It was not running in this
+  measurement.
+- **The waiting.** The data is established as [erased](#erased-signal) once every system has
+  been clean for the settle window, so with the defaults the time from the delete to `erasedAt` is
+  the coordinator's first pass (it runs every minute) plus the 16 seconds plus five minutes. The
+  token is released 12 hours after the last system went clean. Both waits are configuration, not
+  work.
+- **A real cluster.** This was one server of each kind with no replication. Replicated streams,
+  remote storage and other tenants' traffic will cost more. The broker and key-value figures are
+  best read as lower bounds.
+
+To repeat it on your own hardware, run `hack/purge-measure-kind.sh` from the source repository
+(`hack/purge-measure.sh` does the same on two throwaway containers). It prints a JSON report with
+the per-store times, the seeded counts and the server settings.
+
 ## Configuration {#configuration}
 
 These settings live under `tenantPurge` in the user-management service. For all three, `0` means "use

@@ -32,8 +32,10 @@ require recreating an instance, and evidence for the claims the documentation ma
   default. The work is to turn it on by default once the remaining measurements are in. See
   [quality of service](https://docs.devicechain.io/guides/connecting-a-device#quality-of-service).
 - **Tenant deletion: finishing the evidence.** Deleting a tenant erases its data, and that is
-  tested. Still to do: a count of work blocked per storage system, a completion signal, and a
-  published measurement of how long erasing a large tenant takes. See
+  tested. The count of work blocked per storage system, the completion signal (`erasedAt`, and
+  `dcctl tenant-deletion status`) and a first measurement of erasing a large tenant on one node are
+  published. Still to do: the same measurement on a replicated multi-node cluster, which is the
+  figure a data-processing agreement should quote. See
   [tenant deletion](https://docs.devicechain.io/deployment/tenant-deletion).
 
 ## Next
