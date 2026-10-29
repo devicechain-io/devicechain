@@ -59,11 +59,11 @@ fi
 # `kind load` cannot import these from a Docker engine that uses the containerd image store (it
 # fails with "content digest ... not found" on --all-platforms), so the pinned images are tagged
 # locally and streamed into the node with a single-platform import.
-docker tag "$PG_IMAGE" dc-erase-pm/timescaledb:pinned
-docker tag "$NATS_IMAGE" dc-erase-pm/nats:pinned
-PG_IMAGE=dc-erase-pm/timescaledb:pinned
-NATS_IMAGE=dc-erase-pm/nats:pinned
-for img in "$PG_IMAGE" "$NATS_IMAGE"; do
+PG_REF=dc-erase-pm/timescaledb:pinned
+NATS_REF=dc-erase-pm/nats:pinned
+docker tag "$PG_IMAGE" "$PG_REF"
+docker tag "$NATS_IMAGE" "$NATS_REF"
+for img in "$PG_REF" "$NATS_REF"; do
   docker save "$img" | docker exec --privileged -i "$CLUSTER-control-plane" ctr --namespace=k8s.io images import --platform linux/amd64 - >/dev/null
 done
 
@@ -101,7 +101,7 @@ spec:
     spec:
       containers:
         - name: pg
-          image: $PG_IMAGE
+          image: $PG_REF
           imagePullPolicy: IfNotPresent
           args: ["-c", "max_wal_size=8GB", "-c", "checkpoint_timeout=15min"]
           env:
@@ -124,7 +124,7 @@ spec:
     spec:
       containers:
         - name: nats
-          image: $NATS_IMAGE
+          image: $NATS_REF
           imagePullPolicy: IfNotPresent
           args: ["-js", "-sd", "/data"]
           volumeMounts: [{name: data, mountPath: /data}]
@@ -138,7 +138,7 @@ metadata: {name: runner, labels: {app: runner}}
 spec:
   containers:
     - name: runner
-      image: $PG_IMAGE
+      image: $PG_REF
       imagePullPolicy: IfNotPresent
       command: ["sleep", "infinity"]
       volumeMounts: [{name: scratch, mountPath: /scratch}]
