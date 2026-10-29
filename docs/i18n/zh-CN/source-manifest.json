@@ -119,8 +119,8 @@
       "translationSha256": "fdaf339f27cb74541fcb8b53ef59602b6c9fffa9156970d2b12cc8f704f025cb"
     },
     "deployment/edge-services.md": {
-      "sourceSha256": "03009c996469e89a3df6600379fbbe92af55ad447ac794fbda1ae442774a08dc",
-      "translationSha256": "c0128c2e94b3c01b02f634dcfd99e9f681bbcf4a88d9124aaa826009ffa7389a"
+      "sourceSha256": "4cde6643566ad6f2396e4b4d54f4d87db94a74fcbb5f51df769cfde6eda0cda7",
+      "translationSha256": "5eeea61b615e2b9504f2daa79f10a10c8f6c34ca918b540d10787bcd3c4cbede"
     },
     "deployment/grafana-boards.md": {
       "sourceSha256": "dcb3e71bc1562c5a1d04b26790b48404340efff24bc75be3f2900eedf4034cf2",
@@ -143,8 +143,8 @@
       "translationSha256": "a2b42ac998f6d463070c13abfec93869ecd7d74fe8f2e18245b1cc9b918530d6"
     },
     "deployment/releases-and-upgrades.md": {
-      "sourceSha256": "2aa0cde6cd40aa9f3a2c716d81981a4d0b890a44dc8138813d0f96e49c087307",
-      "translationSha256": "1b7c53e1d3e0bafbdd39bcfdf80b6efef8d1d51c0ace0213a18f24c08d7ce718"
+      "sourceSha256": "8421e0bdb7bb2bacae50a620c91b1c92db9e30f24529fd0871e0129d4a9cec79",
+      "translationSha256": "26926bb7a5fe4245efcd79bb461e4d99fbd4ce9b823034ddd987d0bef4fcb557"
     },
     "deployment/tenant-deletion.md": {
       "sourceSha256": "3c587de5dc21a2e3faa8cbfd7369c1eef833f7f226b66dc95af5e9141f33a9db",

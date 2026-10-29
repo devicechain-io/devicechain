@@ -351,41 +351,51 @@ func credentialsStamp(domain, instanceUID string, s *corev1.Secret) string {
 	h.Write([]byte{0})
 	h.Write([]byte(s.UID))
 	h.Write([]byte{0})
-	h.Write([]byte(s.ResourceVersion))
+	h.Write([]byte(stampRevision(s)))
 	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
-// syncSparkplugBrokerSecret settles the broker Secret for this run, before the release, and
-// returns the stamp (sparkplugCredentialsStamp) for the pods.
+// syncSparkplugBrokerSecret is the FIRST phase of the broker Secret's sync, run before the release.
+// It returns the stamp (sparkplugCredentialsStamp) for the pods and the step that finishes the sync
+// once the release has succeeded (see ownedsecret_phased.go for why the order matters).
 //
-//   - A run GIVEN sources (or told to withdraw them) is the authority: the Secret is rewritten to
-//     hold exactly its passwords (a rotation replaces the old one in place), and removed when the
-//     run has none, so a retired password does not linger.
+//   - A run GIVEN sources is the authority, but only ADDITIVELY here: its passwords are added or
+//     updated in the Secret (a rotation replaces the old one in place), and a password the run no
+//     longer has stays until the post step removes it, so the old pods can still restart if the
+//     release fails.
+//   - A run told to withdraw (given none, or none with a password of its own) writes nothing here and
+//     stamps "". Its post step deletes the Secret once the release no longer refers to it.
 //   - Any other run keeps what is there and only reads its identity for the stamp, so an upgrade
 //     that is given no file leaves the password alone and the pods' stamp where it was.
-func syncSparkplugBrokerSecret(ctx context.Context, typed kubernetes.Interface, st *State) (string, error) {
+func syncSparkplugBrokerSecret(ctx context.Context, typed kubernetes.Interface, st *State) (string, postReleaseStep, error) {
 	name, ns := sparkplugBrokerSecretName(st.Instance), InstanceNamespace(st.Instance)
 	owner := instanceOwner(st.Instance, st.InstanceUID)
+	rerun := fmt.Sprintf("run the same 'dcctl upgrade %s %s' command again", st.Provider, st.Instance)
+	var keep map[string]string
 	if st.SparkplugSourcesGiven {
-		data := sparkplugBrokerSecretData(st.SparkplugSources)
-		if len(data) == 0 {
-			return "", deleteOwnedSecretIfOurs(ctx, typed, owner, ns, name)
+		keep = sparkplugBrokerSecretData(st.SparkplugSources)
+		if len(keep) == 0 {
+			return "", withdrawPostStep(typed, owner, ns, name, rerun), refuseForeignSecret(ctx, typed, owner, ns, name)
 		}
 		if err := writeOwnedSecret(ctx, typed, owner, ownedSecret{
-			Name: name, Namespace: ns, Type: corev1.SecretTypeOpaque,
-			Labels: map[string]string{"devicechain.io/instance": st.Instance}, Data: data,
+			Name: name, Namespace: ns, Type: corev1.SecretTypeOpaque, Merge: true,
+			Labels: map[string]string{"devicechain.io/instance": st.Instance}, Data: keep,
 		}, time.Now); err != nil {
-			return "", err
+			return "", postReleaseStep{}, err
 		}
 	}
 	s, err := typed.CoreV1().Secrets(ns).Get(ctx, name, metav1.GetOptions{})
 	switch {
 	case apierrors.IsNotFound(err):
-		return "", nil
+		return "", postReleaseStep{}, nil
 	case err != nil:
-		return "", fmt.Errorf("reading Secret %s/%s, which holds the Sparkplug broker passwords: %w", ns, name, err)
+		return "", postReleaseStep{}, fmt.Errorf("reading Secret %s/%s, which holds the Sparkplug broker passwords: %w", ns, name, err)
 	}
-	return sparkplugCredentialsStamp(st.InstanceUID, s), nil
+	var post postReleaseStep
+	if keep != nil {
+		post = prunePostStep(typed, owner, ns, name, keep, stampRevision(s), rerun)
+	}
+	return sparkplugCredentialsStamp(st.InstanceUID, s), post, nil
 }
 
 // deleteOwnedSecretIfOurs removes a Secret dcctl wrote for this instance, and leaves one it did not.

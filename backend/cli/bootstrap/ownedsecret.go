@@ -104,6 +104,11 @@ type ownedSecret struct {
 	// deletes a Secret that has left the chart's manifest.
 	Annotations map[string]string
 	Data        map[string]string
+	// Merge makes an UPDATE additive: the keys already in the Secret stay, and Data adds or
+	// overwrites keys. A create is unaffected. It is the first half of a two-phase sync (see
+	// ownedsecret_phased.go): the keys the old pods still reference survive until the release
+	// that replaces them has succeeded.
+	Merge bool
 	// Scope is what the Secret belongs to. The zero value is an INSTANCE, so a spec
 	// has to say "cluster" out loud to be shared.
 	Scope ownerKind
@@ -217,7 +222,11 @@ func writeOwnedSecret(
 	// existence, and an update that rewrote it would report every re-run as a
 	// rotation, which is the one question the stamp exists to answer.
 	updated := existing.DeepCopy()
-	applyOwnedSecretFields(updated, spec)
+	if spec.Merge {
+		mergeOwnedSecretFields(updated, spec)
+	} else {
+		applyOwnedSecretFields(updated, spec)
+	}
 	setAnnotations(updated, owner, own.mintedAt)
 	if _, err := api.Update(ctx, updated, metav1.UpdateOptions{}); err != nil {
 		return fmt.Errorf("updating Secret %s/%s: %w", spec.Namespace, spec.Name, err)

@@ -48,6 +48,12 @@ func lwm2mState(ids []Lwm2mIdentity) *State {
 	}
 }
 
+// syncLw is the first phase only, for the tests that do not care about the second.
+func syncLw(ctx context.Context, typed kubernetes.Interface, st *State, legacy map[string]string, held bool) (string, error) {
+	stamp, _, err := syncLwm2mIdentitiesSecret(ctx, typed, st, legacy, held)
+	return stamp, err
+}
+
 func lwm2mSecret(t *testing.T, typed kubernetes.Interface) (map[string][]byte, bool) {
 	t.Helper()
 	s, err := typed.CoreV1().Secrets("dci-dctest").Get(context.Background(), "dci-dctest-lwm2m-identities", metav1.GetOptions{})
@@ -157,7 +163,7 @@ func TestAnUpgradeKeepsTheLwm2mIdentitiesWithoutReadingASecretFromTheRelease(t *
 	typed := versionedCluster()
 
 	first := lwm2mState(lwm2mIDs(psk))
-	stamp1, err := syncLwm2mIdentitiesSecret(context.Background(), typed, first, nil, false)
+	stamp1, err := syncLw(context.Background(), typed, first, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +188,7 @@ func TestAnUpgradeKeepsTheLwm2mIdentitiesWithoutReadingASecretFromTheRelease(t *
 	if lwm2mLegacy, err := lwm2mLegacyPSKs(st.Instance, previous); err != nil || lwm2mLegacy != nil {
 		t.Fatalf("an upgrade found keys in the release: %v %v", lwm2mLegacy, err)
 	}
-	stamp2, err := syncLwm2mIdentitiesSecret(context.Background(), typed, st, nil, releaseHoldsLwm2mIdentities(previous))
+	stamp2, err := syncLw(context.Background(), typed, st, nil, releaseHoldsLwm2mIdentities(previous))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,7 +225,7 @@ func TestAFileGivenAgainRotatesTheLwm2mSecretAndReplacesTheCarriedIdentities(t *
 	oldPSK, newPSK := distinctPSK("old"), distinctPSK("new")
 	typed := versionedCluster()
 	first := lwm2mState(lwm2mIDs(oldPSK))
-	stamp1, err := syncLwm2mIdentitiesSecret(context.Background(), typed, first, nil, false)
+	stamp1, err := syncLw(context.Background(), typed, first, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +237,7 @@ func TestAFileGivenAgainRotatesTheLwm2mSecretAndReplacesTheCarriedIdentities(t *
 	st := lwm2mState(ids)
 	st.Evolving = true
 	fresh := authoringValues(st)
-	stamp2, err := syncLwm2mIdentitiesSecret(context.Background(), typed, st, nil, true)
+	stamp2, err := syncLw(context.Background(), typed, st, nil, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,7 +265,7 @@ func TestWithdrawingTheLwm2mIdentitiesRemovesTheSecretAndTheCarriedLeaves(t *tes
 	t.Parallel()
 	typed := versionedCluster()
 	first := lwm2mState(lwm2mIDs(distinctPSK("a")))
-	stamp1, err := syncLwm2mIdentitiesSecret(context.Background(), typed, first, nil, false)
+	stamp1, err := syncLw(context.Background(), typed, first, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,13 +276,19 @@ func TestWithdrawingTheLwm2mIdentitiesRemovesTheSecretAndTheCarriedLeaves(t *tes
 	st.Evolving = true
 	st.Lwm2mIdentitiesGiven = true // a withdrawal gives no identities and still decides
 	fresh := authoringValues(st)
-	stamp2, err := syncLwm2mIdentitiesSecret(context.Background(), typed, st, nil, true)
+	stamp2, post, err := syncLwm2mIdentitiesSecret(context.Background(), typed, st, nil, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	withLwm2mCredentialsChecksum(fresh, stamp2)
 	carryReleaseValues(fresh, withoutLwm2mIdentities(previous))
 
+	if _, ok := lwm2mSecret(t, typed); !ok {
+		t.Fatal("the Secret was removed BEFORE the release")
+	}
+	if err := finishOwnedSecrets(context.Background(), nil, []postReleaseStep{post}, func(m string) { t.Fatal(m) }); err != nil {
+		t.Fatal(err)
+	}
 	if _, ok := lwm2mSecret(t, typed); ok {
 		t.Fatal("the withdrawn keys' Secret is still in the cluster")
 	}
@@ -303,7 +315,7 @@ func TestALwm2mWithdrawalOrRotationLeavesAForeignSecretAlone(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			typed := versionedCluster(foreign())
-			if _, err := syncLwm2mIdentitiesSecret(context.Background(), typed, st, nil, false); err == nil {
+			if _, err := syncLw(context.Background(), typed, st, nil, false); err == nil {
 				t.Fatal("a Secret dcctl did not write was changed")
 			}
 			data, ok := lwm2mSecret(t, typed)
@@ -319,11 +331,11 @@ func TestALwm2mWithdrawalOrRotationLeavesAForeignSecretAlone(t *testing.T) {
 func TestAMissingLwm2mSecretIsAnErrorNotAnEmptyStamp(t *testing.T) {
 	st := lwm2mState(nil)
 	st.Evolving = true
-	if _, err := syncLwm2mIdentitiesSecret(context.Background(), versionedCluster(), st, nil, true); err == nil ||
+	if _, err := syncLw(context.Background(), versionedCluster(), st, nil, true); err == nil ||
 		!strings.Contains(err.Error(), "--lwm2m-identities") || !strings.Contains(err.Error(), "--withdraw-lwm2m-identities") || !strings.Contains(err.Error(), "dcctl upgrade") {
 		t.Fatalf("a missing Secret under held identities was not refused with the way out: %v", err)
 	}
-	if stamp, err := syncLwm2mIdentitiesSecret(context.Background(), versionedCluster(), st, nil, false); err != nil || stamp != "" {
+	if stamp, err := syncLw(context.Background(), versionedCluster(), st, nil, false); err != nil || stamp != "" {
 		t.Fatalf("an instance with no identities was refused: %q %v", stamp, err)
 	}
 }
@@ -366,7 +378,7 @@ func TestAnInstanceOnTheOldLwm2mLayoutIsMigratedWithoutAWindowWithoutKeys(t *tes
 	}
 	st := lwm2mState(nil)
 	st.Evolving = true
-	stamp, err := syncLwm2mIdentitiesSecret(context.Background(), typed, st, legacy, releaseHoldsLwm2mIdentities(previous))
+	stamp, err := syncLw(context.Background(), typed, st, legacy, releaseHoldsLwm2mIdentities(previous))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -429,7 +441,7 @@ func TestAnInstanceOnTheOldLwm2mLayoutIsMigratedWithoutAWindowWithoutKeys(t *tes
 	if err != nil || again != nil {
 		t.Fatalf("the migrated release still holds keys: %v %v", again, err)
 	}
-	stamp2, err := syncLwm2mIdentitiesSecret(context.Background(), typed, st, nil, true)
+	stamp2, err := syncLw(context.Background(), typed, st, nil, true)
 	if err != nil || stamp2 != stamp {
 		t.Fatalf("the second run moved the stamp (%q -> %q): %v", stamp, stamp2, err)
 	}
@@ -518,7 +530,7 @@ func TestTheMigrationRunsThroughReleaseValuesAndTheSettleStep(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := settleLwm2mIdentities(context.Background(), typed, st, previous, legacy, vals); err != nil {
+	if _, err := settleLwm2mIdentities(context.Background(), typed, st, previous, legacy, vals); err != nil {
 		t.Fatal(err)
 	}
 

@@ -239,7 +239,9 @@ func helmInstall(ctx context.Context, st *State) error {
 	withObjectStoreCredentialsDigest(vals, digest)
 	// The Sparkplug broker passwords, written by dcctl outside the release and named by the
 	// sparkplug-ingest pods' secretKeyRef; only a digest of them, salted per instance, is a value.
-	spDigest, err := syncSparkplugBrokerSecret(ctx, typed, st)
+	// Both of these are the FIRST phase only: additive, so the old pods keep every key they name if
+	// the release fails. What removes a key or the Secret runs after the release (finishOwnedSecrets).
+	spDigest, spPost, err := syncSparkplugBrokerSecret(ctx, typed, st)
 	if err != nil {
 		return err
 	}
@@ -247,7 +249,8 @@ func helmInstall(ctx context.Context, st *State) error {
 	// The LwM2M pre-shared keys, the same way: dcctl's own Secret, written before the release, named
 	// by the lwm2m-ingest pods' secretKeyRef, with only a version stamp as a value. An instance built
 	// when the chart rendered them from the release values has them moved out here, first.
-	if err := settleLwm2mIdentities(ctx, typed, st, previous, legacyPSKs, vals); err != nil {
+	lwPost, err := settleLwm2mIdentities(ctx, typed, st, previous, legacyPSKs, vals)
+	if err != nil {
 		return err
 	}
 	// The callout's seeds, before the release and beside the document: only device-management
@@ -270,22 +273,27 @@ func helmInstall(ctx context.Context, st *State) error {
 
 	// Upgrade if the release already exists, otherwise install — so a re-run is
 	// idempotent.
-	hist := action.NewHistory(actionConfig)
-	hist.Max = 1
-	if _, err := hist.Run(releaseName); err == driver.ErrReleaseNotFound {
-		inst := action.NewInstall(actionConfig)
-		inst.ReleaseName = releaseName
-		inst.Namespace = releaseNamespace
-		inst.Wait = true
-		inst.Timeout = helmTimeout
-		_, err := inst.RunWithContext(ctx, ch, vals)
+	release := func() error {
+		hist := action.NewHistory(actionConfig)
+		hist.Max = 1
+		if _, err := hist.Run(releaseName); err == driver.ErrReleaseNotFound {
+			inst := action.NewInstall(actionConfig)
+			inst.ReleaseName = releaseName
+			inst.Namespace = releaseNamespace
+			inst.Wait = true
+			inst.Timeout = helmTimeout
+			_, err := inst.RunWithContext(ctx, ch, vals)
+			return brokerAdminFailure(ctx, st.KubeContext, st.Instance, err)
+		} else if err != nil {
+			return err
+		}
+		_, err := newHelmUpgrade(actionConfig, releaseNamespace).RunWithContext(ctx, releaseName, ch, vals)
 		return brokerAdminFailure(ctx, st.KubeContext, st.Instance, err)
-	} else if err != nil {
-		return err
 	}
-
-	_, err = newHelmUpgrade(actionConfig, releaseNamespace).RunWithContext(ctx, releaseName, ch, vals)
-	return brokerAdminFailure(ctx, st.KubeContext, st.Instance, err)
+	// The SECOND phase of the credentials Secrets: only after the release has succeeded is a key or a
+	// Secret the old pods referenced removed (see ownedsecret_phased.go).
+	return finishOwnedSecrets(ctx, release(), []postReleaseStep{spPost, lwPost},
+		func(msg string) { fmt.Println(color.YellowString("warning: " + msg)) })
 }
 
 // releaseValues is the value map helmInstall hands Helm, and the instance configuration

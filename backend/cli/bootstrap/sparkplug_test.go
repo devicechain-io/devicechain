@@ -425,6 +425,13 @@ func versionedCluster(objs ...runtime.Object) *fake.Clientset {
 // sparkplugRun is one run's worth of writes against a fake cluster.
 func sparkplugRun(t *testing.T, typed kubernetes.Interface, st *State) (string, error) {
 	t.Helper()
+	stamp, _, err := syncSparkplugBrokerSecret(context.Background(), typed, st)
+	return stamp, err
+}
+
+// sparkplugRunSteps is sparkplugRun with the second phase handed back.
+func sparkplugRunSteps(t *testing.T, typed kubernetes.Interface, st *State) (string, postReleaseStep, error) {
+	t.Helper()
 	return syncSparkplugBrokerSecret(context.Background(), typed, st)
 }
 
@@ -578,13 +585,19 @@ func TestWithdrawingOrRetiringAPasswordRemovesTheSecretAndTheCarriedLeaves(t *te
 			st.Evolving = true
 			st.SparkplugSourcesGiven = true // a withdrawal gives no sources and still decides
 			fresh := authoringValues(st)
-			stamp2, err := sparkplugRun(t, typed, st)
+			stamp2, post, err := sparkplugRunSteps(t, typed, st)
 			if err != nil {
 				t.Fatal(err)
 			}
 			withSparkplugCredentialsChecksum(fresh, stamp2)
 			carryReleaseValues(fresh, withoutSparkplugSources(previous))
 
+			if _, ok := brokerSecret(t, typed); !ok {
+				t.Fatal("the Secret was removed BEFORE the release")
+			}
+			if err := finishOwnedSecrets(context.Background(), nil, []postReleaseStep{post}, func(m string) { t.Fatal(m) }); err != nil {
+				t.Fatal(err)
+			}
 			if _, ok := brokerSecret(t, typed); ok {
 				t.Fatal("the retired password Secret is still in the cluster")
 			}
