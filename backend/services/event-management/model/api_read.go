@@ -41,6 +41,13 @@ func hasAnchor(criteria EventSearchCriteria) bool {
 	return criteria.AnchorType != nil && criteria.AnchorToken != nil
 }
 
+// 🔴 BOTH ANCHOR SUBQUERIES READ EventAnchorKey, NOT EventAnchor. The two are the same
+// table under different scope rules (see EventAnchorKey): the subquery only selects event
+// keys, so it carries the tenant's predicate alone and can find a shared area or asset
+// that EventAnchor's own-anchor rule hides from a customer-scoped caller. What the caller
+// may SEE is decided by the outer read's own rule, which is applied to the same statement.
+// checkAnchorFilter decides, from the claims alone, which anchors a scoped caller may name.
+//
 // anchorKeySubquery returns the tenant-scoped set of EVENT IDS that carry the requested
 // anchor, read from the event_anchors set table (ADR-013 addendum 2026-07-01). The anchor
 // target is addressed by its stable per-tenant token (ADR-044). An event is found by any
@@ -65,7 +72,7 @@ func hasAnchor(criteria EventSearchCriteria) bool {
 // anchorEventKeySubquery: an anchor row carries its event's own instant, so there the pair
 // is the event's exact key rather than a guess at it.
 func (api *Api) anchorKeySubquery(ctx context.Context, anchorType string, anchorToken string) *gorm.DB {
-	return api.RDB.DB(ctx).Model(&EventAnchor{}).
+	return api.RDB.DB(ctx).Model(&EventAnchorKey{}).
 		Select("event_id").
 		Where("anchor_type = ? AND anchor_token = ?", anchorType, anchorToken)
 }
@@ -94,9 +101,36 @@ func (api *Api) anchorFilter(ctx context.Context, criteria EventSearchCriteria, 
 // the worker and reads through this filter so that cannot happen silently. The payload
 // tables must keep anchorKeySubquery: a payload row carries its reading's instant.
 func (api *Api) anchorEventKeySubquery(ctx context.Context, anchorType string, anchorToken string) *gorm.DB {
-	return api.RDB.DB(ctx).Model(&EventAnchor{}).
+	return api.RDB.DB(ctx).Model(&EventAnchorKey{}).
 		Select("occurred_time, event_id").
 		Where("anchor_type = ? AND anchor_token = ?", anchorType, anchorToken)
+}
+
+// eventAnchorFilter restricts a read of the BASE event table to the events carrying the
+// requested anchor. No-op when no anchor is set.
+//
+// An UNSCOPED caller gets the key subquery (anchorEventKeySubquery), exactly as before. A
+// SCOPED caller gets the same test as a CORRELATED EXISTS on the event's full key instead,
+// and the difference is a plan, not a result. The read is already limited to the caller's
+// own events by the table's scope rule, and which of the two tests Postgres runs first is
+// its choice; with the parameters of a prepared statement it cannot tell a customer with 50
+// devices from one with 5,000, and measured on a 5,000-device shared area it started from
+// the AREA side: hashed all 300,000 area rows to find a customer's 3,000 (3.9 s, against
+// 0.2 s). A correlated probe of uq_event_anchors_idem (tenant, occurred_time, event_id, ...)
+// has no area side to start from, so the caller's own side drives. The payload tables
+// cannot take this form (their rows carry the reading's instant, not the anchor's, so no
+// index serves a probe by event_id alone) and keep the key subquery.
+func (api *Api) eventAnchorFilter(ctx context.Context, criteria EventSearchCriteria, result *gorm.DB) *gorm.DB {
+	if !hasAnchor(criteria) {
+		return result
+	}
+	if _, scoped := auth.ScopeFromContext(ctx); !scoped {
+		return result.Where("(occurred_time, event_id) IN (?)",
+			api.anchorEventKeySubquery(ctx, *criteria.AnchorType, *criteria.AnchorToken))
+	}
+	return result.Where("EXISTS (?)", api.anchorEventKeySubquery(ctx, *criteria.AnchorType, *criteria.AnchorToken).
+		Select("1").
+		Where("event_anchors.occurred_time = events.occurred_time AND event_anchors.event_id = events.event_id"))
 }
 
 // AnchorsForEvent returns the anchor set of one event, addressed by its EVENT ID.
@@ -136,14 +170,13 @@ func (api *Api) AnchorsForEvent(ctx context.Context, eventId []byte,
 // event_anchors set table (the base event no longer carries a single anchor), on the base
 // event's full key (anchorEventKeySubquery).
 func (api *Api) Events(ctx context.Context, criteria EventSearchCriteria) (*EventSearchResults, error) {
+	if err := checkAnchorFilter(ctx, criteria.AnchorType, criteria.AnchorToken); err != nil {
+		return nil, err
+	}
 	results := make([]Event, 0)
 	db, pag := api.RDB.ListOf(ctx, &Event{}, func(result *gorm.DB) *gorm.DB {
 		result = commonEventFilters(criteria)(result)
-		if hasAnchor(criteria) {
-			result = result.Where("(occurred_time, event_id) IN (?)",
-				api.anchorEventKeySubquery(ctx, *criteria.AnchorType, *criteria.AnchorToken))
-		}
-		return result
+		return api.eventAnchorFilter(ctx, criteria, result)
 	}, criteria.Pagination)
 	db.Find(&results)
 	if db.Error != nil {
@@ -154,6 +187,9 @@ func (api *Api) Events(ctx context.Context, criteria EventSearchCriteria) (*Even
 
 // Search for location events that meet criteria.
 func (api *Api) LocationEvents(ctx context.Context, criteria EventSearchCriteria) (*LocationEventSearchResults, error) {
+	if err := checkAnchorFilter(ctx, criteria.AnchorType, criteria.AnchorToken); err != nil {
+		return nil, err
+	}
 	results := make([]LocationEvent, 0)
 	db, pag := api.RDB.ListOf(ctx, &LocationEvent{}, func(result *gorm.DB) *gorm.DB {
 		result = commonEventFilters(criteria)(result)
@@ -168,6 +204,9 @@ func (api *Api) LocationEvents(ctx context.Context, criteria EventSearchCriteria
 
 // Search for measurement events that meet criteria.
 func (api *Api) MeasurementEvents(ctx context.Context, criteria EventSearchCriteria) (*MeasurementEventSearchResults, error) {
+	if err := checkAnchorFilter(ctx, criteria.AnchorType, criteria.AnchorToken); err != nil {
+		return nil, err
+	}
 	results := make([]MeasurementEvent, 0)
 	db, pag := api.RDB.ListOf(ctx, &MeasurementEvent{}, func(result *gorm.DB) *gorm.DB {
 		result = commonEventFilters(criteria)(result)
@@ -308,6 +347,9 @@ func boundBucketedRows(buckets, names int64) error {
 // The read is bounded before it runs: at most MaxMeasurementBuckets buckets, and at
 // most MaxMeasurementRows rows (buckets x measurement names).
 func (api *Api) BucketedMeasurements(ctx context.Context, criteria MeasurementAggregationCriteria) ([]MeasurementBucket, error) {
+	if err := checkAnchorFilter(ctx, criteria.AnchorType, criteria.AnchorToken); err != nil {
+		return nil, err
+	}
 	criteria, buckets, err := boundBucketedRange(criteria, time.Now())
 	if err != nil {
 		return nil, err
@@ -453,6 +495,9 @@ func (api *Api) rollupMeasurementScope(ctx context.Context, criteria Measurement
 
 // Search for alert events that meet criteria.
 func (api *Api) AlertEvents(ctx context.Context, criteria EventSearchCriteria) (*AlertEventSearchResults, error) {
+	if err := checkAnchorFilter(ctx, criteria.AnchorType, criteria.AnchorToken); err != nil {
+		return nil, err
+	}
 	results := make([]AlertEvent, 0)
 	db, pag := api.RDB.ListOf(ctx, &AlertEvent{}, func(result *gorm.DB) *gorm.DB {
 		result = commonEventFilters(criteria)(result)
