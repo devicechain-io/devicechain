@@ -117,7 +117,7 @@ variable "chart_version" {
 #
 # ROLLBACK, and what it costs. The upstream image still runs this module unchanged:
 #   server_image_repository = "nats"
-#   server_image_tag        = "2.15.1-alpine"
+#   server_image_tag        = "2.15.2-alpine"
 # The broker then requests no client certificate, so devices that authenticate by
 # certificate cannot connect (token and password devices are unaffected), and
 # BrokerMqttClientAuthLost fires to say so. It is a rollback, not a supported

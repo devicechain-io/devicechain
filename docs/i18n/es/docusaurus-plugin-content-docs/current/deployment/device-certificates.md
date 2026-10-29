@@ -8,7 +8,7 @@ Esta página es el lado del operador de los [certificados de cliente de disposit
 
 ## La compilación del broker {#broker}
 
-El servidor NATS no solicita un certificado de cliente en su listener MQTT del modo que necesita DeviceChain: su archivo de configuración puede desactivar los certificados o exigir uno a todos los clientes. Por eso el broker de la plataforma es la compilación propia de DeviceChain de `nats-server`, `dc-nats-server`: el `v2.15.1` original sin modificar, más un ajuste, aplicado al arrancar y en cada recarga de configuración. El listener MQTT **solicita, pero no exige,** un certificado de cliente.
+El servidor NATS no solicita un certificado de cliente en su listener MQTT del modo que necesita DeviceChain: su archivo de configuración puede desactivar los certificados o exigir uno a todos los clientes. Por eso el broker de la plataforma es la compilación propia de DeviceChain de `nats-server`, `dc-nats-server`: el `v2.15.2` original sin modificar, más un ajuste, aplicado al arrancar y en cada recarga de configuración. El listener MQTT **solicita, pero no exige,** un certificado de cliente.
 
 - **Los dispositivos con token y contraseña no se ven afectados.** Un cliente que no envía certificado se conecta como antes. Un certificado enviado con un usuario de token o de contraseña se ignora.
 - **El callout de autenticación hace la comprobación.** El broker entrega al callout de device-management los certificados que presentó el cliente, y este verifica la cadena. El broker en sí no decide nada sobre la confianza.
@@ -30,7 +30,7 @@ El servidor comprueba, haciendo un handshake con su propio puerto MQTT al arranc
 
 ### Volver al broker original {#rollback}
 
-Fija las variables de infraestructura `server_image_repository = "nats"` y `server_image_tag = "2.15.1-alpine"`. Entonces se rechaza a todos los dispositivos con certificado, porque el broker original nunca pide un certificado, y `BrokerMqttClientAuthLost` explica por qué. Nada más se ve afectado.
+Fija las variables de infraestructura `server_image_repository = "nats"` y `server_image_tag = "2.15.2-alpine"`. Entonces se rechaza a todos los dispositivos con certificado, porque el broker original nunca pide un certificado, y `BrokerMqttClientAuthLost` explica por qué. Nada más se ve afectado.
 
 ## Ajustes {#settings}
 

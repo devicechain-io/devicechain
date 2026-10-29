@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // The signal handling below follows nats-server's server/signal.go (handleSignals and
-// handleSignal) at v2.15.1, Copyright 2012-2026 The NATS Authors, Apache License 2.0, changed
+// handleSignal) at v2.15.2, Copyright 2012-2026 The NATS Authors, Apache License 2.0, changed
 // only where this file says so.
 
 //go:build !windows

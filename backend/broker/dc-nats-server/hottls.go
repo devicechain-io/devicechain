@@ -12,7 +12,7 @@ import (
 
 // A certificate rotation must not disconnect the fleet.
 //
-// 🔴 WHY A RELOAD CANNOT BE USED FOR IT (nats-server v2.15.1). Server.ReloadOptions always runs
+// 🔴 WHY A RELOAD CANNOT BE USED FOR IT (nats-server v2.15.2, unchanged from v2.15.1). Server.ReloadOptions always runs
 // reloadAuthorization (reload.go, diffOptions: `case "accounts"` appends an accountsOption
 // unconditionally, because accounts "always differ"), and that closes every client for which
 // clientHasMovedToDifferentAccount is true. That function looks the CONNECT username up in the

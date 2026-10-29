@@ -42,7 +42,7 @@ module="$root/backend/broker/dc-nats-server"
 
 # The upstream image the negative control runs: the version the broker is built on (the
 # version-skew guard keeps this in step), pinned by digest.
-upstream_image="nats:2.15.1-alpine@sha256:7ae34c25dfd6fe2e01c6483eabef20d796690fdcac6c4d94ca780a6cf9877fde"
+upstream_image="nats:2.15.2-alpine@sha256:823e7f1d6d8ffe3b30dbd73d4a06bbb939acf94929f7fdf224404da7a05bafb5"
 
 for tool in docker go curl; do
   command -v "$tool" >/dev/null 2>&1 || { echo "FAIL: $tool is required" >&2; exit 2; }

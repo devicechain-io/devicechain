@@ -1082,7 +1082,7 @@ run_assertions() {
   accepts nats_server_image_tag ""
   accepts nats_server_image_tag "v0.26.0"
   accepts nats_server_image_tag "0.24.0-drill.1"
-  accepts nats_server_image_tag "2.15.1-alpine"
+  accepts nats_server_image_tag "2.15.2-alpine"
   rejects nats_server_image_digest "sha256:abc"
   rejects nats_server_image_digest "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
   rejects nats_server_image_digest "sha256:0123456789ABCDEF0123456789abcdef0123456789abcdef0123456789abcdef"
