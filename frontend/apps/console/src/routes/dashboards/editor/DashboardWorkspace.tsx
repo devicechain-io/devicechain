@@ -904,9 +904,9 @@ export function DashboardWorkspace({
         <DropdownMenuItem onSelect={downloadExport}>{t('workspaceDownloadJson')}</DropdownMenuItem>
         <DropdownMenuItem onSelect={() => void copyExport(false)}>{t('workspaceCopyJson')}</DropdownMenuItem>
         <DropdownMenuItem onSelect={() => void copyExport(true)}>{t('workspaceCopyTemplate')}</DropdownMenuItem>
-        <DropdownMenuItem disabled={!canEdit} onSelect={() => setCloneOpen(true)}>
-          {t('workspaceClone')}
-        </DropdownMenuItem>
+        {canEdit && (
+          <DropdownMenuItem onSelect={() => setCloneOpen(true)}>{t('workspaceClone')}</DropdownMenuItem>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -963,12 +963,20 @@ export function DashboardWorkspace({
       {previewControl}
       {exportMenu}
       {historyButton}
-      <Button variant="outline" size="sm" onClick={toggleMode} disabled={!canEdit} data-shot="dashboard-edit">
-        {t('workspaceEdit')}
-      </Button>
-      <Button variant="destructive" size="sm" onClick={remove} disabled={!canEdit}>
-        <Trash2 size={14} /> {t('delete')}
-      </Button>
+      {/* Editing, cloning and deleting are refused to a member limited to part of the tenant and to
+          a member without dashboard:write, so neither is offered (not merely disabled). Export and
+          Preview stay: they act on the published definition the caller was already served, in the
+          browser, and make no request of their own. */}
+      {canEdit && (
+        <>
+          <Button variant="outline" size="sm" onClick={toggleMode} data-shot="dashboard-edit">
+            {t('workspaceEdit')}
+          </Button>
+          <Button variant="destructive" size="sm" onClick={remove}>
+            <Trash2 size={14} /> {t('delete')}
+          </Button>
+        </>
+      )}
     </div>
   );
 
