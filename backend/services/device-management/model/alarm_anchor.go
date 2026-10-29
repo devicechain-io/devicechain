@@ -51,7 +51,11 @@ func ResolveAlarmAnchor(ctx context.Context, a AlarmAnchor) (string, error) {
 		return "", fmt.Errorf("anchor token is required")
 	}
 	stamp := a.Type + ":" + a.Token
-	if scope, scoped := auth.ScopeFromContext(ctx); scoped && a.Type == auth.AnchorKindCustomer {
+	// Fails closed like the resolvers' isScopedCaller: a context with no claims at all is a
+	// wiring fault and is treated as a scoped caller naming nothing.
+	_, hasClaims := auth.ClaimsFromContext(ctx)
+	scope, scoped := auth.ScopeFromContext(ctx)
+	if (scoped || !hasClaims) && a.Type == auth.AnchorKindCustomer {
 		named := false
 		for _, held := range scope.Anchors() {
 			if held == stamp {
