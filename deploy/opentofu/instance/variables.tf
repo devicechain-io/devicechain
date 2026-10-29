@@ -141,7 +141,7 @@ variable "nats_chart_version" {
 # repository from the image registry the instance runs from and the tag from its
 # DeviceChain release, as for every service image.
 variable "nats_server_image_repository" {
-  description = "Repository of the broker image, without a tag or digest (see modules/nats server_image_repository). The upstream rollback is \"nats\" with tag \"2.15.1-alpine\"; it disables certificate device authentication."
+  description = "Repository of the broker image, without a tag or digest (see modules/nats server_image_repository). The upstream rollback is \"nats\" with tag \"2.15.2-alpine\"; it disables certificate device authentication."
   type        = string
   default     = "ghcr.io/devicechain-io/dc-nats-server"
 

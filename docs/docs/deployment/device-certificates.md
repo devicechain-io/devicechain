@@ -8,7 +8,7 @@ This page is the operator's side of [device client certificates](../concepts/dev
 
 ## The broker build {#broker}
 
-The NATS server will not request a client certificate on its MQTT listener in the way DeviceChain needs: its configuration file can turn certificates off, or require one from every client. The platform broker is therefore DeviceChain's own `nats-server` build, `dc-nats-server`: upstream `v2.15.1` unmodified, plus one setting, applied when it starts and again on every configuration reload. The MQTT listener **requests, but does not require,** a client certificate.
+The NATS server will not request a client certificate on its MQTT listener in the way DeviceChain needs: its configuration file can turn certificates off, or require one from every client. The platform broker is therefore DeviceChain's own `nats-server` build, `dc-nats-server`: upstream `v2.15.2` unmodified, plus one setting, applied when it starts and again on every configuration reload. The MQTT listener **requests, but does not require,** a client certificate.
 
 - **Token and password devices are unaffected.** A client that sends no certificate connects as before. A certificate sent with a token or password username is ignored.
 - **The authentication callout does the checking.** The broker hands the certificates the client presented to the callout in device-management, which verifies the chain. The broker itself decides nothing about trust.
@@ -30,7 +30,7 @@ The server checks, by handshaking with its own MQTT port at start, after every r
 
 ### Rolling back to the upstream broker {#rollback}
 
-Set the infrastructure variables `server_image_repository = "nats"` and `server_image_tag = "2.15.1-alpine"`. Every certificate device is then refused, because the upstream broker never asks for a certificate, and `BrokerMqttClientAuthLost` says why. Nothing else is affected.
+Set the infrastructure variables `server_image_repository = "nats"` and `server_image_tag = "2.15.2-alpine"`. Every certificate device is then refused, because the upstream broker never asks for a certificate, and `BrokerMqttClientAuthLost` says why. Nothing else is affected.
 
 ## Settings {#settings}
 

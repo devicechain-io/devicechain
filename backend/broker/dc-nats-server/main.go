@@ -1,7 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 //
-// main and usageStr follow nats-server's main.go at v2.15.1, Copyright 2012-2026 The NATS Authors,
+// main and usageStr follow nats-server's main.go at v2.15.2, Copyright 2012-2026 The NATS Authors,
 // Apache License 2.0, changed only where the comments below say so.
 
 // Command nats-server is DeviceChain's broker: upstream nats-server's own main, built on the

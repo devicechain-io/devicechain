@@ -8,7 +8,7 @@ title: 证书认证
 
 ## 消息代理构建 {#broker}
 
-NATS 服务器无法按 DeviceChain 需要的方式在其 MQTT 监听器上请求客户端证书：它的配置文件只能关闭证书，或要求每个客户端都提供证书。因此平台消息代理是 DeviceChain 自己构建的 `nats-server`，即 `dc-nats-server`：未经修改的上游 `v2.15.1`，外加一项设置，在启动时和每次配置重载时都会应用。MQTT 监听器**请求但不强制**客户端证书。
+NATS 服务器无法按 DeviceChain 需要的方式在其 MQTT 监听器上请求客户端证书：它的配置文件只能关闭证书，或要求每个客户端都提供证书。因此平台消息代理是 DeviceChain 自己构建的 `nats-server`，即 `dc-nats-server`：未经修改的上游 `v2.15.2`，外加一项设置，在启动时和每次配置重载时都会应用。MQTT 监听器**请求但不强制**客户端证书。
 
 - **令牌和密码设备不受影响。** 不发送证书的客户端照常连接。与令牌或密码用户名一起发送的证书会被忽略。
 - **由认证回调（auth callout）完成检查。** 消息代理把客户端出示的证书交给 device-management 中的回调，由它验证证书链。消息代理本身不对信任做任何决定。
@@ -30,7 +30,7 @@ NATS 服务器无法按 DeviceChain 需要的方式在其 MQTT 监听器上请�
 
 ### 回退到上游消息代理 {#rollback}
 
-设置基础设施变量 `server_image_repository = "nats"` 和 `server_image_tag = "2.15.1-alpine"`。此后所有证书设备都会被拒绝，因为上游消息代理从不请求证书，`BrokerMqttClientAuthLost` 会说明原因。其他一切不受影响。
+设置基础设施变量 `server_image_repository = "nats"` 和 `server_image_tag = "2.15.2-alpine"`。此后所有证书设备都会被拒绝，因为上游消息代理从不请求证书，`BrokerMqttClientAuthLost` 会说明原因。其他一切不受影响。
 
 ## 设置 {#settings}
 

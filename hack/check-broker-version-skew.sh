@@ -52,6 +52,18 @@ EXCEPTIONS=(
   "hack/purge-measure.sh"
 )
 
+# Library versions whose nats Helm chart has not been published yet, mapped to the chart the
+# deployment stays on meanwhile, with why. The broker image is DeviceChain's own build and the
+# chart's default image is overridden, so the chart contributes templates only; a server-only
+# patch release can precede its chart. An entry whose library version is no longer the
+# broker's is stale and FAILS, so the list can only shrink. Move the chart pins and delete the
+# entry once the chart is published.
+CHART_LAGS=(
+  # nats-server 2.15.2 (security release, 2026-10-26); nats chart 2.15.2 was not published
+  # (latest is 2.15.1, whose templates were verified against this module).
+  "2.15.2=2.15.1"
+)
+
 is_exception() {
   local f="$1" e
   for e in "${EXCEPTIONS[@]}"; do
@@ -91,7 +103,13 @@ check() {
     "deploy/opentofu/modules/nats/main.tf:chart_version"
     "deploy/opentofu/instance/variables.tf:nats_chart_version"
   )
-  local spec file var
+  local spec file var lag="" l
+  for l in "${CHART_LAGS[@]}"; do
+    [ "${l%%=*}" = "$ours" ] && lag="${l#*=}"
+  done
+  for l in "${CHART_LAGS[@]}"; do
+    [ "${l%%=*}" = "$ours" ] || { echo "STALE CHART LAG: $l; the broker is on $ours, remove it from CHART_LAGS" >&2; bad=1; }
+  done
   for spec in "${chart_pins[@]}"; do
     file="${spec%%:*}"
     var="${spec#*:}"
@@ -106,7 +124,7 @@ check() {
       continue
     fi
     n=$((n + 1))
-    if [ "${v#v}" != "$ours" ]; then
+    if [ "${v#v}" != "$ours" ] && [ "${v#v}" != "$lag" ]; then
       echo "SKEW: $file $var defaults to $v" >&2
       bad=1
     fi

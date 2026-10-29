@@ -93,12 +93,12 @@ run "the_upstream_rollback_renders" {
 
   variables {
     server_image_repository = "nats"
-    server_image_tag        = "2.15.1-alpine"
+    server_image_tag        = "2.15.2-alpine"
   }
 
   assert {
-    condition     = try(yamldecode(helm_release.nats.values[0]).container.image.repository, null) == "nats" && try(yamldecode(helm_release.nats.values[0]).container.image.tag, null) == "2.15.1-alpine"
-    error_message = "the upstream rollback (nats:2.15.1-alpine) must reach container.image"
+    condition     = try(yamldecode(helm_release.nats.values[0]).container.image.repository, null) == "nats" && try(yamldecode(helm_release.nats.values[0]).container.image.tag, null) == "2.15.2-alpine"
+    error_message = "the upstream rollback (nats:2.15.2-alpine) must reach container.image"
   }
 }
 
