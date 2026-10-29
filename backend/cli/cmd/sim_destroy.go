@@ -32,10 +32,12 @@ membership that made inspection routine.)
 
 Teardown order is enforced: the people go first, because the server refuses a tenant
 delete while any membership still references it. That is the sim's scoped identity and any
-account the scenario minted for its own people (a customer user), which the sim names
-local+tenant@domain. An account that belongs to this tenant alone is deleted; one that
-also belongs to another tenant only loses its membership here. Anyone else added to the
-tenant by hand is not touched, and the tenant delete will say so.
+account the scenario minted for its own people (a customer user), which the simulator
+records in the sim record as it creates it. A recorded account that belongs to this tenant
+alone is deleted; one that also belongs to another tenant only loses its membership here.
+The shared owner address an earlier simulator attached loses its membership here too and is
+never deleted. Anyone else -- including an account that merely carries the sim's tag -- is not
+touched, and the tenant delete will say so.
 
 🔴 THE NAME STAYS TAKEN UNTIL THE PURGE FINISHES. 'dcctl sim create <name>' refuses a
 name whose tenant is still being deleted, and that refusal is the point: the tenant
@@ -70,7 +72,7 @@ func init() {
 // teardown below can be driven over a fake in a test — the network is what gets
 // replaced, not the ordering logic under test.
 type simTeardown interface {
-	OwnedMembers(ctx context.Context, tenant string) ([]sim.OwnedMember, error)
+	MembershipsOf(ctx context.Context, emails []string) ([]sim.OwnedMember, error)
 	RemoveMembership(ctx context.Context, email, tenant string) error
 	DeleteIdentity(ctx context.Context, email string) (bool, error)
 	DeleteTenant(ctx context.Context, token string) (bool, error)
@@ -86,28 +88,39 @@ type simTeardown interface {
 // rather than an operator left with a live tenant and nothing naming it.
 func destroySim(ctx context.Context, admin simTeardown, rec *sim.Record, deleteRecord func() error, out io.Writer) error {
 	// The scenario's own people first: a scenario that provisions members (a customer user) leaves
-	// memberships the server will not let the tenant outlive. An account that belongs to this tenant
-	// alone goes with its membership; one that also belongs elsewhere only loses THIS membership,
-	// so tearing down a sim never signs a person out of another tenant. A retry after a partial
-	// teardown finds whoever is left.
-	owned, err := admin.OwnedMembers(ctx, rec.Tenant)
+	// memberships the server will not let the tenant outlive.
+	//
+	// 🔴 OWNERSHIP IS A RECORD, NEVER A SPELLING. The only identities deleted globally are the ones
+	// the simulator wrote into the sim record as it minted them, and only while this tenant is all
+	// they belong to; one that also belongs elsewhere only loses THIS membership, so tearing down a
+	// sim never signs a person out of another tenant. An address that merely carries the sim's
+	// "+tag", or a member added to the tenant by hand, is not on that list and is left alone (the
+	// tenant delete then says so). The one other address with a claim is the shared legacy owner an
+	// earlier simulator attached: it loses its membership here, and its identity is never deleted.
+	// A retry after a partial teardown finds whoever is left.
+	recorded := rec.ScenarioIdentities
+	lookup := append(slices.Clone(recorded), sim.LegacyScenarioOwnerEmails...)
+	people, err := admin.MembershipsOf(ctx, lookup)
 	if err != nil {
 		return err
 	}
-	for _, m := range owned {
-		if slices.ContainsFunc(m.Tenants, func(t string) bool { return t != rec.Tenant }) {
-			if slices.Contains(m.Tenants, rec.Tenant) {
-				if err := admin.RemoveMembership(ctx, m.Email, rec.Tenant); err != nil {
-					return err
-				}
+	for _, m := range people {
+		here := slices.Contains(m.Tenants, rec.Tenant)
+		elsewhere := slices.ContainsFunc(m.Tenants, func(t string) bool { return t != rec.Tenant })
+		minted := slices.ContainsFunc(recorded, func(e string) bool { return strings.EqualFold(e, m.Email) })
+		if minted && !elsewhere {
+			if _, err := admin.DeleteIdentity(ctx, m.Email); err != nil {
+				return err
 			}
-			fmt.Fprintf(out, "membership of %q in %q removed; the identity is kept (it belongs to other tenants)\n", m.Email, rec.Tenant)
+			fmt.Fprintf(out, "identity %q removed\n", m.Email)
 			continue
 		}
-		if _, err := admin.DeleteIdentity(ctx, m.Email); err != nil {
-			return err
+		if here {
+			if err := admin.RemoveMembership(ctx, m.Email, rec.Tenant); err != nil {
+				return err
+			}
+			fmt.Fprintf(out, "membership of %q in %q removed; the identity is kept (it is not exclusively this sim's)\n", m.Email, rec.Tenant)
 		}
-		fmt.Fprintf(out, "identity %q removed\n", m.Email)
 	}
 
 	// DeleteIdentity removes the identity AND its memberships, which is what makes

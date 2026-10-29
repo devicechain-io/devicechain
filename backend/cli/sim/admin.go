@@ -160,33 +160,31 @@ func (a *Admin) DeleteIdentity(ctx context.Context, email string) (bool, error) 
 	return out.DeleteIdentity, nil
 }
 
-// OwnedMember is a scenario-owned person found in a sim's tenant, and every tenant they belong to.
+// OwnedMember is an identity teardown asked about, and every tenant it belongs to.
 type OwnedMember struct {
 	Email   string
 	Tenants []string
 }
 
-// ScenarioIdentityOwnedBy reports whether email is an account the sim of this tenant minted for a
-// scenario person: its local part ends in "+<tenant>". The scenario derives the address that way
-// (dc-simulator's ScenarioIdentityEmail), which is the whole ownership record -- nothing is
-// persisted, so an interrupted create or a lost sim record still leaves the accounts findable.
-//
-// The tag is matched whole, after the LAST plus: "+sim-a" must not claim an account of sim "sim-a-b".
-func ScenarioIdentityOwnedBy(email, tenant string) bool {
-	email = strings.ToLower(strings.TrimSpace(email))
-	at := strings.LastIndex(email, "@")
-	if at <= 0 || tenant == "" {
-		return false
-	}
-	local := email[:at]
-	plus := strings.LastIndex(local, "+")
-	return plus > 0 && local[plus+1:] == strings.ToLower(tenant)
-}
+// LegacyScenarioOwnerEmails are the shared, untagged addresses an earlier simulator attached to a
+// sim's tenant as the scenario's customer user. They are global identities other sims (and people)
+// may use, so teardown may take one's membership out of THIS tenant and must never delete it.
+// Mirrors dc-simulator's LegacyScenarioOwnerEmails; a test there pins the two together.
+var LegacyScenarioOwnerEmails = []string{"owner@halden-labs.example"}
 
-// OwnedMembers lists the scenario-owned people with a membership in the sim's tenant, with every
-// tenant each belongs to (so teardown can tell an account that is only this sim's from one that is
-// not). The identity directory is unpaged by the API; this is a teardown, not a hot path.
-func (a *Admin) OwnedMembers(ctx context.Context, tenant string) ([]OwnedMember, error) {
+// MembershipsOf looks up the given emails in the identity directory and returns those that exist,
+// each with every tenant it belongs to (so teardown can tell an account that is only this sim's
+// from one that is not). Emails are matched exactly (case-insensitively); nothing is matched by
+// pattern, because ownership is a RECORD (Record.ScenarioIdentities), not something an address can
+// claim by how it is spelled. The directory is unpaged by the API; this is a teardown, not a hot path.
+func (a *Admin) MembershipsOf(ctx context.Context, emails []string) ([]OwnedMember, error) {
+	if len(emails) == 0 {
+		return nil, nil
+	}
+	want := make(map[string]bool, len(emails))
+	for _, e := range emails {
+		want[strings.ToLower(strings.TrimSpace(e))] = true
+	}
 	var out struct {
 		Identities []struct {
 			Email       string `json:"email"`
@@ -198,18 +196,18 @@ func (a *Admin) OwnedMembers(ctx context.Context, tenant string) ([]OwnedMember,
 	if err := a.session.Query(ctx, a.adminURL, identityMembershipsQuery, nil, &out); err != nil {
 		return nil, fmt.Errorf("list identities: %w", err)
 	}
-	var owned []OwnedMember
+	var found []OwnedMember
 	for _, id := range out.Identities {
-		if !ScenarioIdentityOwnedBy(id.Email, tenant) {
+		if !want[strings.ToLower(strings.TrimSpace(id.Email))] {
 			continue
 		}
 		m := OwnedMember{Email: id.Email}
 		for _, ms := range id.Memberships {
 			m.Tenants = append(m.Tenants, ms.Tenant)
 		}
-		owned = append(owned, m)
+		found = append(found, m)
 	}
-	return owned, nil
+	return found, nil
 }
 
 // RemoveMembership removes one identity's membership in one tenant and nothing else: the identity

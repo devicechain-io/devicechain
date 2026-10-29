@@ -238,6 +238,9 @@ func run(handshakePath, bind, port string, load sim.Load, noFarEnd bool, plane d
 	if err != nil {
 		return err
 	}
+	// The accounts this sim mints for the scenario's people are filed in the handshake file, which
+	// is dcctl's sim record: `dcctl sim destroy` deletes exactly those.
+	rt.Minted = sim.NewFileLedger(hs, handshakePath)
 	rt.FarEndDisabled = noFarEnd
 	rt.ExternalDevicePlane = plane.external
 	if noFarEnd {

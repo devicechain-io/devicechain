@@ -29,7 +29,7 @@ type fakeTeardown struct {
 	tenantErr       error
 }
 
-func (f *fakeTeardown) OwnedMembers(context.Context, string) ([]sim.OwnedMember, error) {
+func (f *fakeTeardown) MembershipsOf(context.Context, []string) ([]sim.OwnedMember, error) {
 	return nil, nil
 }
 

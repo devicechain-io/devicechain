@@ -222,6 +222,11 @@ type Runtime struct {
 	// sim record already holds rather than one nobody was told. It is never logged.
 	SimPassword string
 
+	// Minted files the accounts this sim creates for the scenario's own people, so `dcctl sim
+	// destroy` can delete exactly those. Nil (a load test, a test) records nothing; the persistent sim sets it to a FileLedger,
+	// and an account that was never recorded is never deleted globally: the safe direction.
+	Minted MintedLedger
+
 	// Devices is the manifest's Expand()'d device set, filled in by
 	// bootstrap.go's Provision once every device+credential exists. Tick reads
 	// it; nothing else mutates it after Bootstrap returns.

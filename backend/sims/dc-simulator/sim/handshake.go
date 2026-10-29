@@ -7,7 +7,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 )
 
 // Endpoints is the set of base URLs a sim needs to reach the platform. All four
@@ -112,6 +115,107 @@ type Handshake struct {
 	// address — it is a trust decision about one, and burying a verification
 	// opt-out among base URLs is how it stops being read as one.
 	MqttTLSInsecure bool `json:"mqttTLSInsecure"`
+
+	// ScenarioIdentities are the exact accounts THIS simulator minted for the scenario's own
+	// people (a customer user), appended here before each is created. It is dcctl's whole ownership
+	// record for teardown: `dcctl sim destroy` deletes an identity globally only if it is listed
+	// here, never because of how its address is spelled.
+	ScenarioIdentities []string `json:"scenarioIdentities,omitempty"`
+}
+
+// handshakeWriteMu serialises write-backs within the process. dcctl only writes the file at create.
+var handshakeWriteMu sync.Mutex
+
+// MintedLedger is where a Runtime files the accounts it mints, so teardown can delete exactly
+// those. Recorded answers from what is already on file; Record persists BEFORE the caller creates
+// the account, so a crash between the two leaves a recorded name with no account (harmless: destroy
+// finds nothing to delete) and never the reverse.
+type MintedLedger interface {
+	Recorded(email string) bool
+	Record(email string) error
+}
+
+// FileLedger is the MintedLedger over the handshake file: the accounts already on file are read from
+// the loaded handshake, and a new one is appended to the file itself. It is not part of Handshake
+// because the file path is not part of the wire contract.
+type FileLedger struct {
+	hs   *Handshake
+	path string
+}
+
+// NewFileLedger files minted accounts into the file hs was loaded from.
+func NewFileLedger(hs *Handshake, path string) *FileLedger { return &FileLedger{hs: hs, path: path} }
+
+// Recorded reports whether email is already on the ledger.
+func (l *FileLedger) Recorded(email string) bool {
+	handshakeWriteMu.Lock()
+	defer handshakeWriteMu.Unlock()
+	return slices.ContainsFunc(l.hs.ScenarioIdentities, func(e string) bool { return strings.EqualFold(e, email) })
+}
+
+// Record appends email to the ledger in memory and in the handshake file.
+// The file is read back and edited as a generic object, so every field dcctl wrote (and any a newer
+// dcctl adds) survives; the replacement is atomic and keeps the record's 0600 mode.
+func (l *FileLedger) Record(email string) error {
+	h := l.hs
+	email = strings.ToLower(strings.TrimSpace(email))
+	if email == "" {
+		return fmt.Errorf("record scenario identity: empty email")
+	}
+	if l.path == "" {
+		return fmt.Errorf("record scenario identity %q: no handshake file to record into", email)
+	}
+	handshakeWriteMu.Lock()
+	defer handshakeWriteMu.Unlock()
+	if slices.ContainsFunc(h.ScenarioIdentities, func(e string) bool { return strings.EqualFold(e, email) }) {
+		return nil
+	}
+	raw, err := os.ReadFile(l.path)
+	if err != nil {
+		return fmt.Errorf("record scenario identity %q: read %q: %w", email, l.path, err)
+	}
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return fmt.Errorf("record scenario identity %q: parse %q: %w", email, l.path, err)
+	}
+	var onFile []string
+	if cur, ok := doc["scenarioIdentities"]; ok {
+		if err := json.Unmarshal(cur, &onFile); err != nil {
+			return fmt.Errorf("record scenario identity %q: %q has a malformed scenarioIdentities: %w", email, l.path, err)
+		}
+	}
+	if !slices.ContainsFunc(onFile, func(e string) bool { return strings.EqualFold(e, email) }) {
+		onFile = append(onFile, email)
+	}
+	enc, err := json.Marshal(onFile)
+	if err != nil {
+		return err
+	}
+	doc["scenarioIdentities"] = enc
+	out, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(l.path), filepath.Base(l.path)+".tmp*")
+	if err != nil {
+		return fmt.Errorf("record scenario identity %q: %w", email, err)
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(out); err != nil {
+		tmp.Close()
+		return fmt.Errorf("record scenario identity %q: %w", email, err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("record scenario identity %q: %w", email, err)
+	}
+	if err := os.Chmod(tmp.Name(), 0o600); err != nil {
+		return fmt.Errorf("record scenario identity %q: %w", email, err)
+	}
+	if err := os.Rename(tmp.Name(), l.path); err != nil {
+		return fmt.Errorf("record scenario identity %q: replace %q: %w", email, l.path, err)
+	}
+	h.ScenarioIdentities = append(h.ScenarioIdentities, email)
+	return nil
 }
 
 // LoadHandshake reads and validates a handshake file from path.

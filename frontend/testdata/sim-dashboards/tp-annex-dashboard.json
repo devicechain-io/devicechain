@@ -13,16 +13,16 @@
   },
   "schemaVersion": 3,
   "slots": {
-    "building": {
+    "annex": {
       "defaultBinding": {
         "anchor": {
           "relationship": "assigned",
-          "targetToken": "tp-annex",
-          "targetType": "area"
+          "targetToken": "tp-halden",
+          "targetType": "customer"
         },
         "kind": "anchor"
       },
-      "label": "Building",
+      "label": "Annex",
       "type": "anchor"
     },
     "chillerAnnex": {
@@ -32,18 +32,6 @@
       },
       "label": "Annex chiller",
       "type": "device"
-    },
-    "floor": {
-      "defaultBinding": {
-        "anchor": {
-          "relationship": "assigned",
-          "targetToken": "tp-annex-f1",
-          "targetType": "area"
-        },
-        "kind": "anchor"
-      },
-      "label": "Floor",
-      "type": "anchor"
     },
     "meterAnnex": {
       "defaultBinding": {
@@ -58,9 +46,9 @@
         "deviceToken": "tp-vav-annex-f1-north",
         "kind": "device"
       },
-      "label": "Zone",
+      "label": "Device",
       "scope": {
-        "parent": "building",
+        "parent": "annex",
         "strategy": "manual"
       },
       "type": "device"
@@ -72,28 +60,11 @@
   "title": "Towerpulse annex",
   "widgets": [
     {
-      "id": "tp-floor-select",
-      "layout": {
-        "base": {
-          "col": 0,
-          "cols": 6,
-          "mode": "grid",
-          "row": 0,
-          "rows": 1
-        }
-      },
-      "options": {
-        "selectionTarget": "floor",
-        "title": "Floor"
-      },
-      "type": "entity-selector"
-    },
-    {
       "id": "tp-zone-select",
       "layout": {
         "base": {
-          "col": 6,
-          "cols": 6,
+          "col": 0,
+          "cols": 12,
           "mode": "grid",
           "row": 0,
           "rows": 1
@@ -101,7 +72,7 @@
       },
       "options": {
         "selectionTarget": "selectedZone",
-        "title": "Zone"
+        "title": "Device"
       },
       "type": "entity-selector"
     },
@@ -109,7 +80,7 @@
       "datasource": {
         "kind": "slot",
         "measurements": [],
-        "slot": "building"
+        "slot": "annex"
       },
       "id": "tp-alarm-severity",
       "layout": {
@@ -131,7 +102,7 @@
       "datasource": {
         "kind": "slot",
         "measurements": [],
-        "slot": "building"
+        "slot": "annex"
       },
       "id": "tp-online",
       "layout": {
@@ -258,7 +229,7 @@
             "value": 26
           }
         ],
-        "title": "Zone temperature",
+        "title": "Temperature",
         "unit": "°C"
       },
       "type": "gauge"
@@ -296,7 +267,7 @@
             "value": 1000
           }
         ],
-        "title": "Zone CO2",
+        "title": "CO2",
         "unit": "ppm"
       },
       "type": "gauge"
@@ -307,7 +278,7 @@
         "measurements": [
           "temp_c"
         ],
-        "slot": "floor"
+        "slot": "annex"
       },
       "id": "tp-floor-compare",
       "layout": {
@@ -332,7 +303,7 @@
             "value": 26
           }
         ],
-        "title": "Zones on the floor",
+        "title": "Zone temperatures",
         "unit": "°C"
       },
       "type": "timeseries-chart"
@@ -365,7 +336,7 @@
       "datasource": {
         "kind": "slot",
         "measurements": [],
-        "slot": "building"
+        "slot": "annex"
       },
       "id": "tp-alarms",
       "layout": {
