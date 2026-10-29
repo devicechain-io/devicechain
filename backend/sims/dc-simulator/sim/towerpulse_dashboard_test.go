@@ -183,7 +183,13 @@ func TestTowerpulseBoardWidgetsAreConfiguredForTheStory(t *testing.T) {
 // included), so no card is bound to a number nothing ever produces.
 func TestTowerpulseBoardReadsOnlyMetricsItsSubjectsDeclare(t *testing.T) {
 	m := towerpulseManifest(t)
-	b := towerpulseBoards(t)[TowerpulseDashboardToken]
+	for token, b := range towerpulseBoards(t) {
+		t.Run(token, func(t *testing.T) { checkTowerpulseBoardReadsOnlyDeclaredMetrics(t, m, b) })
+	}
+}
+
+func checkTowerpulseBoardReadsOnlyDeclaredMetrics(t *testing.T, m SimManifest, b tpBoard) {
+	t.Helper()
 	profileOf := map[string]string{}
 	for _, dt := range m.DeviceTypes {
 		profileOf[dt.Token] = dt.ProfileToken
@@ -226,7 +232,7 @@ func TestTowerpulseBoardReadsOnlyMetricsItsSubjectsDeclare(t *testing.T) {
 			}
 		}
 	}
-	if checked < 10 {
+	if checked < 8 {
 		t.Errorf("only %d bindings were checked; the walk has gone blind", checked)
 	}
 }
@@ -276,8 +282,8 @@ func TestTowerpulseBoardSlotsResolve(t *testing.T) {
 	}
 }
 
-// The annex board is the same board opened on the annex: what a customer scoped to the annex lands
-// on, so it must default to the annex at every level and share everything else.
+// The annex board is its own document, built from what a customer scoped to the annex may see:
+// it opens on the annex at every level, and it is NOT the operator's board re-opened.
 func TestTowerpulseAnnexBoardOpensOnTheAnnex(t *testing.T) {
 	boards := towerpulseBoards(t)
 	op, annex := boards[TowerpulseDashboardToken], boards[TowerpulseAnnexDashboardToken]
@@ -293,8 +299,55 @@ func TestTowerpulseAnnexBoardOpensOnTheAnnex(t *testing.T) {
 	if got := annex.Slots[towerpulseSlotZone].DefaultBinding.DeviceToken; !strings.HasPrefix(got, "tp-vav-annex-") {
 		t.Errorf("annex board opens on zone %s", got)
 	}
-	if len(op.Widgets) != len(annex.Widgets) {
-		t.Errorf("the two boards differ in widgets: %d vs %d", len(op.Widgets), len(annex.Widgets))
+	if len(annex.Widgets) >= len(op.Widgets) {
+		t.Errorf("the annex board has %d widgets to the operator's %d: it is the operator's board re-opened, not a customer variant", len(annex.Widgets), len(op.Widgets))
+	}
+}
+
+// 🔴 TP-3. The board shared with the annex owner names nothing of the tower and offers no control:
+// every device or area a slot binds is the annex's, no widget issues a command, and the building
+// selector (which lists every area of the tenant) is gone.
+func TestTheAnnexOwnersBoardBindsOnlyTheAnnexAndWritesNothing(t *testing.T) {
+	annex := towerpulseBoards(t)[TowerpulseAnnexDashboardToken]
+	for name, s := range annex.Slots {
+		switch s.Type {
+		case "device":
+			tok := s.DefaultBinding.DeviceToken
+			if !strings.Contains(tok, "annex") || strings.Contains(tok, "tower") {
+				t.Errorf("slot %s binds %s, which is not the annex's", name, tok)
+			}
+		case "anchor":
+			tok := s.DefaultBinding.Anchor.TargetToken
+			if !strings.HasPrefix(tok, "tp-annex") || strings.Contains(tok, "tower") {
+				t.Errorf("slot %s anchors on %s, which is not the annex's", name, tok)
+			}
+		}
+	}
+	for _, w := range annex.Widgets {
+		switch w.Type {
+		case commandSliderWidgetType, commandToggleWidgetType, "command-button":
+			t.Errorf("%s is a %s: the annex owner is read-only and a control is a write affordance", w.ID, w.Type)
+		}
+		if _, ok := w.Options["commandName"]; ok {
+			t.Errorf("%s carries a command", w.ID)
+		}
+		if w.ID == "tp-building-select" {
+			t.Errorf("the building selector lists every area of the tenant, the tower included")
+		}
+		if strings.Contains(w.ID, "tower") {
+			t.Errorf("%s is a tower widget on the annex board", w.ID)
+		}
+	}
+	raw, _ := json.Marshal(annex)
+	for _, banned := range []string{"tp-tower", "-tower-", "tp-chiller-tower", "tp-meter-tower", "set-setpoint", "setpoint"} {
+		if strings.Contains(strings.ToLower(string(raw)), banned) {
+			t.Errorf("the annex board's definition mentions %q", banned)
+		}
+	}
+	// And the operator's board keeps what the annex board gave up: the cross-campus view and the control.
+	op := towerpulseBoards(t)[TowerpulseDashboardToken]
+	if len(op.ofType("command-slider")) != 1 || op.Slots[towerpulseSlotChillerTower].DefaultBinding.DeviceToken != "tp-chiller-tower" {
+		t.Error("the operator's board lost its tower chiller or its setpoint control")
 	}
 }
 

@@ -449,6 +449,18 @@ func (m *towerpulseModel) reading(token string) map[string]float64 {
 
 // ---- Commands, with completion semantics -------------------------------------------------
 
+// towerpulseAttempt is one dispatch of a command: the callback that answers THAT dispatch, which
+// the receiver bound to the nonce the frame carried.
+type towerpulseAttempt struct {
+	nonce  string
+	answer func(success bool)
+}
+
+// towerpulseMaxAttempts bounds the live dispatch attempts held per pending command. command-delivery
+// re-dispatches rarely (a lost acknowledgement, a claim lease expiring), so a handful covers any real
+// run; the bound is what a misbehaving broker replaying frames cannot grow past.
+const towerpulseMaxAttempts = 8
+
 // towerpulseCommand is one command the campus has been handed and not yet settled.
 type towerpulseCommand struct {
 	token  string // the delivery token
@@ -456,7 +468,9 @@ type towerpulseCommand struct {
 	key    string
 	// deadline is the simulated second after which a command that has not done its job fails.
 	deadline float64
-	answer   func(success bool)
+	// answers are the reply callbacks of every live dispatch attempt of this command, one per
+	// distinct dispatch nonce, in arrival order. See towerpulseCommands.receive.
+	answers []towerpulseAttempt
 	// done reports whether the command's job is done, and fail whether it has become
 	// impossible. Evaluated against the live model on every settle.
 	done func() bool
@@ -491,12 +505,28 @@ func newTowerpulseCommands(model *towerpulseModel) *towerpulseCommands {
 	}
 }
 
-// receive takes one command frame. A redelivery of a command still pending is ignored (the
-// answer will come when it settles); a redelivery of one already settled is answered again
-// with the same outcome, because the first answer may have been the thing that was lost.
-func (c *towerpulseCommands) receive(device, token, key string, payload json.RawMessage, answer func(bool)) {
+// receive takes one command frame.
+//
+// 🔴 PHYSICAL IDENTITY AND REPLY IDENTITY ARE DIFFERENT THINGS. The command token says WHICH WORK
+// this is, so a second frame for a token already pending must never actuate it again. The dispatch
+// nonce says WHICH ATTEMPT is waiting for an answer, and command-delivery accepts a response only
+// against the dispatch it currently holds: when a lost acknowledgement makes it release the claim and
+// dispatch the same command again with a NEW nonce while a long boost is still running, the answer
+// to the first nonce is rejected, and a restart that worked reads as a timeout. So a frame for a
+// pending command adds its own reply callback instead of being dropped, and settling answers every
+// live attempt with the one outcome.
+//
+// The callbacks are keyed by nonce and kept in arrival order, never "the latest wins": an OLD frame
+// can arrive after a newer one, and replacing the newer callback with it would strand the dispatch
+// the platform is actually waiting on. A nonce seen again (a same-attempt redelivery) changes
+// nothing. A command already settled is answered again to whichever attempt asks, because the
+// answer that was lost may be the one for this nonce.
+func (c *towerpulseCommands) receive(device, token, nonce, key string, payload json.RawMessage, answer func(bool)) {
+	// Held across accept so two frames of one token racing in cannot both actuate. The lock order
+	// (c.mu, then the model's) is settle's.
 	c.mu.Lock()
-	if _, pending := c.pending[token]; pending {
+	if cmd, pending := c.pending[token]; pending {
+		cmd.addAttempt(nonce, answer)
 		c.mu.Unlock()
 		return
 	}
@@ -505,29 +535,31 @@ func (c *towerpulseCommands) receive(device, token, key string, payload json.Raw
 		c.dispatch(func() { answer(outcome) })
 		return
 	}
-	c.mu.Unlock()
-
 	cmd, immediate, ok := c.model.accept(device, key, payload)
-	if !ok {
-		c.record(token, false)
-		c.dispatch(func() { answer(false) })
+	if !ok || immediate {
+		c.settled[token] = ok
+		c.mu.Unlock()
+		c.dispatch(func() { answer(ok) })
 		return
 	}
-	if immediate {
-		c.record(token, true)
-		c.dispatch(func() { answer(true) })
-		return
-	}
-	cmd.token, cmd.device, cmd.key, cmd.answer = token, device, key, answer
-	c.mu.Lock()
+	cmd.token, cmd.device, cmd.key = token, device, key
+	cmd.addAttempt(nonce, answer)
 	c.pending[token] = cmd
 	c.mu.Unlock()
 }
 
-func (c *towerpulseCommands) record(token string, outcome bool) {
-	c.mu.Lock()
-	c.settled[token] = outcome
-	c.mu.Unlock()
+// addAttempt registers one dispatch attempt's reply callback, once per nonce, evicting the oldest
+// when the bound is reached.
+func (cmd *towerpulseCommand) addAttempt(nonce string, answer func(bool)) {
+	for _, a := range cmd.answers {
+		if a.nonce == nonce {
+			return
+		}
+	}
+	if len(cmd.answers) >= towerpulseMaxAttempts {
+		cmd.answers = cmd.answers[1:]
+	}
+	cmd.answers = append(cmd.answers, towerpulseAttempt{nonce: nonce, answer: answer})
 }
 
 // settle answers every pending command whose job is done or whose time has run out. Called
@@ -561,8 +593,11 @@ func (c *towerpulseCommands) settle() {
 	}
 	c.mu.Unlock()
 	for i, cmd := range finished {
-		answer, outcome := cmd.answer, outcomes[i]
-		c.dispatch(func() { answer(outcome) })
+		outcome := outcomes[i]
+		for _, a := range cmd.answers {
+			answer := a.answer
+			c.dispatch(func() { answer(outcome) })
+		}
 	}
 }
 

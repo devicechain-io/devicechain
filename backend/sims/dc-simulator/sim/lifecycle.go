@@ -87,7 +87,14 @@ type Lifecycle struct {
 // NewLifecycle builds a Lifecycle in the CREATED state.
 func NewLifecycle(s Sim, rt *Runtime) *Lifecycle {
 	m := s.Manifest()
-	return &Lifecycle{sim: s, rt: rt, state: StateCreated, name: m.Name, farEndMode: m.FarEndMode()}
+	mode := m.FarEndMode()
+	if rt.ExternalDevicePlane && mode == FarEndInternal {
+		// The device plane is someone else's, commands included: this process keeps the broker
+		// requirement of an external far end (the client learns the address from the same
+		// handshake) and attaches nothing.
+		mode = FarEndExternal
+	}
+	return &Lifecycle{sim: s, rt: rt, state: StateCreated, name: m.Name, farEndMode: mode}
 }
 
 // State returns the current FSM state.
@@ -138,6 +145,13 @@ func (l *Lifecycle) Reset(ctx context.Context) error {
 // Start transitions BOOTSTRAPPED/STOPPED -> RUNNING and starts the tick loop
 // (one Sim.Tick every EmitInterval) on a goroutine tied to Stop.
 func (l *Lifecycle) Start(ctx context.Context) error {
+	if l.rt.ExternalDevicePlane {
+		// Loud, not a no-op that reports RUNNING: a Tick here is the second writer the flag exists to
+		// prevent, and "started" over a loop that does nothing would read as a live sim.
+		return fmt.Errorf("this sim was started with --external-device-plane: an external device plane " +
+			"owns every device's telemetry and commands, so this process runs no tick loop (restart it " +
+			"without the flag to play the devices here)")
+	}
 	l.mu.Lock()
 	if l.state != StateBootstrapped && l.state != StateStopped {
 		s := l.state
@@ -280,6 +294,10 @@ type statusResponse struct {
 	// command widget looks live is not evidence that anything answers it, and this
 	// is the only place that distinction is visible without a live cluster.
 	CommandFarEnd farEndStatus `json:"commandFarEnd"`
+
+	// ExternalDevicePlane reports --external-device-plane: this process provisions and converges only,
+	// and an outside client is every device. Omitted when off, so an ordinary sim's /status is unchanged.
+	ExternalDevicePlane bool `json:"externalDevicePlane,omitempty"`
 }
 
 // ControlServer exposes the ADR-035 control-API seam (bootstrap/start/stop/
@@ -313,6 +331,7 @@ func (c *ControlServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 	c.lc.mu.Unlock()
 	// Outside the lock: commandFarEndStatus takes the same mutex.
 	resp.CommandFarEnd = c.lc.commandFarEndStatus()
+	resp.ExternalDevicePlane = c.rt.ExternalDevicePlane
 	resp.Tenant = c.rt.Tenant
 	resp.InstanceId = c.rt.InstanceId
 	resp.DeviceCount = len(c.rt.Devices)

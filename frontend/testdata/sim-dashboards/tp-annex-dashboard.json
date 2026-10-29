@@ -33,14 +33,6 @@
       "label": "Annex chiller",
       "type": "device"
     },
-    "chillerTower": {
-      "defaultBinding": {
-        "deviceToken": "tp-chiller-tower",
-        "kind": "device"
-      },
-      "label": "Tower chiller",
-      "type": "device"
-    },
     "floor": {
       "defaultBinding": {
         "anchor": {
@@ -61,14 +53,6 @@
       "label": "Annex meter",
       "type": "device"
     },
-    "meterTower": {
-      "defaultBinding": {
-        "deviceToken": "tp-meter-tower",
-        "kind": "device"
-      },
-      "label": "Tower meter",
-      "type": "device"
-    },
     "selectedZone": {
       "defaultBinding": {
         "deviceToken": "tp-vav-annex-f1-north",
@@ -85,31 +69,14 @@
   "timeRange": {
     "defaultSeconds": 3600
   },
-  "title": "Towerpulse",
+  "title": "Towerpulse annex",
   "widgets": [
-    {
-      "id": "tp-building-select",
-      "layout": {
-        "base": {
-          "col": 0,
-          "cols": 4,
-          "mode": "grid",
-          "row": 0,
-          "rows": 1
-        }
-      },
-      "options": {
-        "selectionTarget": "building",
-        "title": "Building"
-      },
-      "type": "entity-selector"
-    },
     {
       "id": "tp-floor-select",
       "layout": {
         "base": {
-          "col": 4,
-          "cols": 4,
+          "col": 0,
+          "cols": 6,
           "mode": "grid",
           "row": 0,
           "rows": 1
@@ -125,8 +92,8 @@
       "id": "tp-zone-select",
       "layout": {
         "base": {
-          "col": 8,
-          "cols": 4,
+          "col": 6,
+          "cols": 6,
           "mode": "grid",
           "row": 0,
           "rows": 1
@@ -187,40 +154,12 @@
         "measurements": [
           "kw"
         ],
-        "slot": "meterTower"
-      },
-      "id": "tp-kw-tower",
-      "layout": {
-        "base": {
-          "col": 6,
-          "cols": 3,
-          "mode": "grid",
-          "row": 1,
-          "rows": 3
-        }
-      },
-      "options": {
-        "measurement": "kw",
-        "precision": 0,
-        "sparkline": true,
-        "stat": "last",
-        "title": "Tower power",
-        "unit": "kW"
-      },
-      "type": "stat-card"
-    },
-    {
-      "datasource": {
-        "kind": "slot",
-        "measurements": [
-          "kw"
-        ],
         "slot": "meterAnnex"
       },
       "id": "tp-kw-annex",
       "layout": {
         "base": {
-          "col": 9,
+          "col": 6,
           "cols": 3,
           "mode": "grid",
           "row": 1,
@@ -240,24 +179,29 @@
     {
       "datasource": {
         "kind": "slot",
-        "measurements": [],
-        "slot": "chillerTower"
+        "measurements": [
+          "kwh_per_m2"
+        ],
+        "slot": "meterAnnex"
       },
-      "id": "tp-chiller-tower-status",
+      "id": "tp-kwh-m2-annex",
       "layout": {
         "base": {
-          "col": 0,
+          "col": 9,
           "cols": 3,
           "mode": "grid",
-          "row": 4,
+          "row": 1,
           "rows": 3
         }
       },
       "options": {
-        "staleAfterSeconds": 120,
-        "title": "Tower chiller status"
+        "measurement": "kwh_per_m2",
+        "precision": 2,
+        "stat": "last",
+        "title": "Annex energy per m2",
+        "unit": "kWh/m2"
       },
-      "type": "device-status"
+      "type": "stat-card"
     },
     {
       "datasource": {
@@ -268,8 +212,8 @@
       "id": "tp-chiller-annex-status",
       "layout": {
         "base": {
-          "col": 3,
-          "cols": 3,
+          "col": 0,
+          "cols": 4,
           "mode": "grid",
           "row": 4,
           "rows": 3
@@ -285,55 +229,77 @@
       "datasource": {
         "kind": "slot",
         "measurements": [
-          "kwh_per_m2"
+          "temp_c"
         ],
-        "slot": "meterTower"
+        "slot": "selectedZone"
       },
-      "id": "tp-kwh-m2-tower",
+      "id": "tp-zone-temp",
       "layout": {
         "base": {
-          "col": 6,
-          "cols": 3,
+          "col": 4,
+          "cols": 4,
           "mode": "grid",
           "row": 4,
           "rows": 3
         }
       },
       "options": {
-        "measurement": "kwh_per_m2",
-        "precision": 2,
-        "stat": "last",
-        "title": "Tower energy per m2",
-        "unit": "kWh/m2"
+        "flashOnChange": true,
+        "max": 34,
+        "measurement": "temp_c",
+        "min": 16,
+        "thresholds": [
+          {
+            "level": "normal",
+            "value": 16
+          },
+          {
+            "level": "major",
+            "value": 26
+          }
+        ],
+        "title": "Zone temperature",
+        "unit": "°C"
       },
-      "type": "stat-card"
+      "type": "gauge"
     },
     {
       "datasource": {
         "kind": "slot",
         "measurements": [
-          "kwh_per_m2"
+          "co2_ppm"
         ],
-        "slot": "meterAnnex"
+        "slot": "selectedZone"
       },
-      "id": "tp-kwh-m2-annex",
+      "id": "tp-zone-co2",
       "layout": {
         "base": {
-          "col": 9,
-          "cols": 3,
+          "col": 8,
+          "cols": 4,
           "mode": "grid",
           "row": 4,
           "rows": 3
         }
       },
       "options": {
-        "measurement": "kwh_per_m2",
-        "precision": 2,
-        "stat": "last",
-        "title": "Annex energy per m2",
-        "unit": "kWh/m2"
+        "flashOnChange": true,
+        "max": 1400,
+        "measurement": "co2_ppm",
+        "min": 400,
+        "thresholds": [
+          {
+            "level": "normal",
+            "value": 400
+          },
+          {
+            "level": "minor",
+            "value": 1000
+          }
+        ],
+        "title": "Zone CO2",
+        "unit": "ppm"
       },
-      "type": "stat-card"
+      "type": "gauge"
     },
     {
       "datasource": {
@@ -440,116 +406,13 @@
       "datasource": {
         "kind": "slot",
         "measurements": [],
-        "slot": "selectedZone"
-      },
-      "id": "tp-setpoint",
-      "layout": {
-        "base": {
-          "col": 0,
-          "cols": 6,
-          "mode": "grid",
-          "row": 15,
-          "rows": 2
-        }
-      },
-      "options": {
-        "commandLabel": "Set setpoint",
-        "commandName": "set-setpoint",
-        "mode": "stepper",
-        "parameter": "celsius",
-        "parameterSchema": "[{\"name\":\"celsius\",\"kind\":\"SCALAR\",\"dataType\":\"DOUBLE\",\"unit\":\"C\",\"required\":true,\"minValue\":18,\"maxValue\":28}]",
-        "step": 0.5,
-        "title": "Setpoint"
-      },
-      "type": "command-slider"
-    },
-    {
-      "datasource": {
-        "kind": "slot",
-        "measurements": [
-          "temp_c"
-        ],
-        "slot": "selectedZone"
-      },
-      "id": "tp-zone-temp",
-      "layout": {
-        "base": {
-          "col": 0,
-          "cols": 3,
-          "mode": "grid",
-          "row": 17,
-          "rows": 3
-        }
-      },
-      "options": {
-        "flashOnChange": true,
-        "max": 34,
-        "measurement": "temp_c",
-        "min": 16,
-        "thresholds": [
-          {
-            "level": "normal",
-            "value": 16
-          },
-          {
-            "level": "major",
-            "value": 26
-          }
-        ],
-        "title": "Zone temperature",
-        "unit": "°C"
-      },
-      "type": "gauge"
-    },
-    {
-      "datasource": {
-        "kind": "slot",
-        "measurements": [
-          "co2_ppm"
-        ],
-        "slot": "selectedZone"
-      },
-      "id": "tp-zone-co2",
-      "layout": {
-        "base": {
-          "col": 3,
-          "cols": 3,
-          "mode": "grid",
-          "row": 17,
-          "rows": 3
-        }
-      },
-      "options": {
-        "flashOnChange": true,
-        "max": 1400,
-        "measurement": "co2_ppm",
-        "min": 400,
-        "thresholds": [
-          {
-            "level": "normal",
-            "value": 400
-          },
-          {
-            "level": "minor",
-            "value": 1000
-          }
-        ],
-        "title": "Zone CO2",
-        "unit": "ppm"
-      },
-      "type": "gauge"
-    },
-    {
-      "datasource": {
-        "kind": "slot",
-        "measurements": [],
-        "slot": "meterTower"
+        "slot": "meterAnnex"
       },
       "id": "tp-power-history",
       "layout": {
         "base": {
-          "col": 6,
-          "cols": 6,
+          "col": 0,
+          "cols": 12,
           "mode": "grid",
           "row": 15,
           "rows": 5
@@ -577,7 +440,7 @@
           }
         ],
         "pageSize": 10,
-        "title": "Tower power history"
+        "title": "Annex power history"
       },
       "type": "history-table"
     }

@@ -9,10 +9,9 @@ import (
 	"time"
 )
 
-// The towerpulse board, `tp-dashboard`, and its twin `tp-annex-dashboard`: one definition
-// opened on two buildings. The twin exists for the annex owner, a customer user who can see
-// only the annex, whose board must open on the annex rather than on a tower they have no
-// devices in.
+// The towerpulse operator board, `tp-dashboard`: the facility operator's view of both buildings.
+// The annex owner has a board of their own (towerpulse_annex_dashboard.go), built from only what
+// that customer may see rather than re-opened from this one.
 //
 // What is on it, top to bottom, and what each widget proves:
 //
@@ -41,13 +40,6 @@ import (
 // hierarchy to filter a building list by, and the selector offers whatever areas the tenant
 // has. Picking a floor gives a floor board (everything on it), which is a use rather than a
 // fault, but a reader who expects only "Tower" and "Annex" should know the list is longer.
-
-type towerpulseDefaults int
-
-const (
-	towerpulseTowerDefault towerpulseDefaults = iota
-	towerpulseAnnexDefault
-)
 
 const (
 	towerpulseSlotBuilding     = "building"
@@ -92,10 +84,10 @@ func towerpulseDevice(devices []DeviceInstance, token string) (DeviceInstance, e
 	return DeviceInstance{}, fmt.Errorf("towerpulse board: no device %q to bind", token)
 }
 
-// buildTowerpulseDashboard renders the board from the campus's devices, opened on the tower
-// or on the annex.
-func buildTowerpulseDashboard(devices []DeviceInstance, open towerpulseDefaults) (string, error) {
-	building, floor, zone := towerpulseOpening(open)
+// buildTowerpulseDashboard renders the operator's board from the campus's devices, opened on the
+// tower.
+func buildTowerpulseDashboard(devices []DeviceInstance) (string, error) {
+	building, floor, zone := TowerpulseTowerToken, towerpulseFloorToken(towerpulseTower, 4), TowerpulseHotZone
 	zoneDevice, err := towerpulseDevice(devices, zone)
 	if err != nil {
 		return "", err
@@ -217,12 +209,4 @@ func buildTowerpulseDashboard(devices []DeviceInstance, open towerpulseDefaults)
 		return "", fmt.Errorf("marshal towerpulse dashboard definition: %w", err)
 	}
 	return string(raw), nil
-}
-
-// towerpulseTowerToken names the building, floor and zone a board opens on.
-func towerpulseOpening(open towerpulseDefaults) (building, floor, zone string) {
-	if open == towerpulseAnnexDefault {
-		return TowerpulseAnnexToken, towerpulseFloorToken(towerpulseAnnex, 1), "tp-vav-annex-f1-north"
-	}
-	return TowerpulseTowerToken, towerpulseFloorToken(towerpulseTower, 4), TowerpulseHotZone
 }

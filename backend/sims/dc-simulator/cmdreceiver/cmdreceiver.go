@@ -98,6 +98,12 @@ type responseEnvelope struct {
 type Command struct {
 	// Token is the delivery token the answer is matched by.
 	Token string
+	// Nonce is the dispatch nonce of THIS frame. The answer func is already bound to it, so a
+	// handler needs it only to tell two dispatches of one command apart: command-delivery
+	// re-dispatches a command it is unsure was delivered with a NEW nonce and accepts a response
+	// only against the dispatch it currently holds, so a handler that drops the second frame as a
+	// "duplicate" loses the callback that can still be accepted.
+	Nonce string
 	// Name is the command's key on the device's profile.
 	Name string
 	// Payload is the command's argument object, as the platform sent it.
@@ -110,7 +116,10 @@ type Command struct {
 // there it reports a perfect round trip for work that has not happened.
 //
 // Receive is called on every receipt of a frame, redeliveries included (the platform delivers
-// at least once), so an implementation must recognise a command it already holds. It must not
+// at least once), so an implementation must recognise a command it already holds -- by Token, for
+// the work. Each frame has its own answer func (bound to that frame's Nonce), and a redelivery
+// with a new Nonce is a new dispatch the platform is waiting on: keep its answer func too, and
+// answer every live one with the outcome rather than discarding the later frame. It must not
 // block: the broker's goroutine is calling it. The answer func publishes the outcome and may
 // block on the broker, so call it from a goroutine of its own, once the command's job is done;
 // it is safe to call again for a redelivery of a command that is already settled.
@@ -443,7 +452,7 @@ func (r *Receiver) onMessage(ds *deviceState) mqtt.MessageHandler {
 		if err := json.Unmarshal(msg.Payload(), &env); err != nil {
 			return
 		}
-		h.Receive(ds.token, Command{Token: token, Name: env.Name, Payload: env.Payload},
+		h.Receive(ds.token, Command{Token: token, Nonce: nonce, Name: env.Name, Payload: env.Payload},
 			func(success bool) { r.recordResponse(ds, r.publishOutcome(ds, token, nonce, success)) })
 	}
 }

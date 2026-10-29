@@ -147,12 +147,7 @@ func Provision(ctx context.Context, rt *Runtime, manifest SimManifest) error {
 
 	// Last: a customer user is limited to a customer that must already exist, and the
 	// devices they are meant to see assigned to it.
-	for _, u := range manifest.CustomerUsers {
-		if err := ensureCustomerUser(ctx, rt, u); err != nil {
-			return fmt.Errorf("provision customer user %q: %w", u.Email, err)
-		}
-	}
-	return nil
+	return ensureCustomerUsers(ctx, rt, manifest.CustomerUsers)
 }
 
 // --- device profile + metrics -------------------------------------------------

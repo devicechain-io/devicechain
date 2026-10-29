@@ -47,6 +47,60 @@ const mutationAcceptInvitationAsExisting = `mutation($code:String!,$identityToke
 const mutationSetMemberScope = `mutation($email:String!,$scope:[ScopeAnchorInput!]!){` +
 	`setMemberScope(email:$email,scope:$scope){email}}`
 
+// ScenarioIdentityEmail is the address a scenario-owned person has in ONE sim: the manifest's
+// base address with the sim's tenant plus-addressed onto its local part, so owner@halden.example in
+// tenant sim-a is owner+sim-a@halden.example.
+//
+// 🔴 IDENTITIES ARE GLOBAL TO THE INSTANCE AND A SIM'S PASSWORD IS NOT. Every sim record is minted
+// a password of its own, so a fixed address shared by two sims is one account with two claimants:
+// the second can neither accept (the account exists) nor sign in (the first sim's password is the
+// one it holds). Deriving the address from the tenant gives every sim its own account, so the
+// sim's password is the right credential for it, and nothing here ever resets the password of an
+// identity it did not mint.
+//
+// The derivation is also the OWNERSHIP MODEL teardown runs on: dcctl recognises a sim's own people
+// by the "+<tenant>" ending of the local part (sim.ScenarioIdentityOwnedBy mirrors this), which
+// needs nothing persisted and so survives an interrupted create, a lost record and a re-bootstrap
+// alike. Keep the two in lockstep (the same example address is pinned on both sides: TestScenarioIdentityEmailIsDeterministic here and TestScenarioIdentityOwnedBy in dcctl).
+func ScenarioIdentityEmail(base, tenant string) (string, error) {
+	base = strings.ToLower(strings.TrimSpace(base))
+	tenant = strings.ToLower(strings.TrimSpace(tenant))
+	if tenant == "" {
+		return "", fmt.Errorf("scenario identity %q: the runtime carries no tenant to namespace it by", base)
+	}
+	at := strings.LastIndex(base, "@")
+	if at <= 0 || at == len(base)-1 {
+		return "", fmt.Errorf("scenario identity %q is not an email address", base)
+	}
+	local, domain := base[:at], base[at+1:]
+	if strings.Contains(local, "+") {
+		return "", fmt.Errorf("scenario identity %q already carries a plus tag, which is the sim's to add", base)
+	}
+	return local + "+" + tenant + "@" + domain, nil
+}
+
+// ensureCustomerUsers provisions every customer user of the manifest as THIS sim's own account.
+func ensureCustomerUsers(ctx context.Context, rt *Runtime, users []CustomerUserSpec) error {
+	for _, u := range users {
+		// The manifest names the person; the SIM owns the account, so every sim gets its own
+		// address (see ScenarioIdentityEmail) and the sim's own password signs it in.
+		email, err := ScenarioIdentityEmail(u.Email, rt.Tenant)
+		if err != nil {
+			return fmt.Errorf("provision customer user %q: %w", u.Email, err)
+		}
+		u.Email = email
+		if err := ensureCustomerUser(ctx, rt, u); err != nil {
+			return fmt.Errorf("provision customer user %q: %w", u.Email, err)
+		}
+		// The operator's way in, on every converge: an account the sim minted is useless to
+		// someone who was never told its name. The password is the sim record's, so it is not
+		// repeated here.
+		log.Info().Str("email", u.Email).Str("customer", u.CustomerToken).
+			Msg("customer login: sign in as this address with the sim password from the sim record")
+	}
+	return nil
+}
+
 // ensureCustomerUser makes the person a member of the tenant, limited to one customer.
 //
 // Create-or-converge like every step of Provision: a member who is absent is invited with

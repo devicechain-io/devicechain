@@ -68,6 +68,11 @@ func main() {
 		"run a scenario that needs a command far end WITHOUT one. Its command widgets then "+
 			"enqueue commands nothing answers, which reach SENT and expire — an escape hatch for "+
 			"a host that cannot reach the MQTT gateway, not a default")
+	externalPlane := flag.Bool("external-device-plane", envBoolOr("DC_SIM_EXTERNAL_DEVICE_PLANE", false),
+		"an EXTERNAL client (e.g. a Unity player) is the device plane: provision and converge the "+
+			"tenant, then idle with the control API and presentation page only -- no telemetry is "+
+			"published and no device subscribes to commands from this process. Unlike "+
+			"--no-command-far-end, which leaves telemetry running")
 	playDevices := flag.Bool("play-devices", envBoolOr("DC_SIM_PLAY_DEVICES", false),
 		"sitepulse only: play the device plane in this process (the scene's machine model and fleet "+
 			"tracks) instead of a Unity player. Never run a player against the same sim while this is on")
@@ -140,10 +145,14 @@ func main() {
 		EmitInterval: *emitInterval,
 		Concurrency:  *concurrency,
 	}
+	if *externalPlane && *playDevices {
+		log.Fatal().Msg("--external-device-plane and --play-devices are opposites: one says an outside client is the " +
+			"devices, the other that this process is")
+	}
 	if *publishLog != "" && !*playDevices {
 		log.Fatal().Msg("--publish-log logs what --play-devices publishes; without it this process publishes nothing")
 	}
-	if err := run(*handshakePath, *bind, *port, load, *noFarEnd, devicePlane{play: *playDevices, publishLog: *publishLog}); err != nil {
+	if err := run(*handshakePath, *bind, *port, load, *noFarEnd, devicePlane{play: *playDevices, publishLog: *publishLog, external: *externalPlane}); err != nil {
 		log.Fatal().Err(err).Msg("dc-simulator exited")
 	}
 }
@@ -174,6 +183,8 @@ func runLoRaWAN(c lorawan.Config) error {
 type devicePlane struct {
 	play       bool
 	publishLog string
+	// external: an outside client is the device plane (--external-device-plane).
+	external bool
 }
 
 func run(handshakePath, bind, port string, load sim.Load, noFarEnd bool, plane devicePlane) error {
@@ -228,6 +239,7 @@ func run(handshakePath, bind, port string, load sim.Load, noFarEnd bool, plane d
 		return err
 	}
 	rt.FarEndDisabled = noFarEnd
+	rt.ExternalDevicePlane = plane.external
 	if noFarEnd {
 		log.Warn().Str("manifestId", manifestId).
 			Msg(farEndOptOutWarning(driver.Manifest().FarEndMode()))
@@ -243,13 +255,20 @@ func run(handshakePath, bind, port string, load sim.Load, noFarEnd bool, plane d
 	if err := lc.Bootstrap(ctx); err != nil {
 		return err
 	}
-	if err := lc.Start(ctx); err != nil {
-		return err
+	if plane.external {
+		// Provisioned and converged; nothing else runs. The control API and the presentation page
+		// below stay up so the sim can be inspected and re-converged (POST /reset), but Start is refused.
+		log.Warn().Int("deviceCount", len(rt.Devices)).
+			Msg("external device plane: this process publishes no telemetry and subscribes as no device")
+	} else {
+		if err := lc.Start(ctx); err != nil {
+			return err
+		}
+		log.Info().Int("deviceCount", len(rt.Devices)).
+			Dur("emitInterval", load.Interval()).
+			Float64("targetRatePerSec", load.TargetRate(len(rt.Devices))).
+			Msg("sim running")
 	}
-	log.Info().Int("deviceCount", len(rt.Devices)).
-		Dur("emitInterval", load.Interval()).
-		Float64("targetRatePerSec", load.TargetRate(len(rt.Devices))).
-		Msg("sim running")
 
 	webRoot, err := fs.Sub(webFiles, "web")
 	if err != nil {

@@ -367,3 +367,31 @@ describe('the parsed sim boards', () => {
     });
   }
 });
+
+// The annex owner is a read-only customer user who may see only the annex. Their board is built from
+// what that customer may have, not the operator's board re-opened: no slot names a tower device or
+// area, and no widget issues a command. (The Go side asserts the same off the builder; this holds the
+// committed fixture, which is what the console renders.)
+describe('the towerpulse annex board', () => {
+  const def = () => parsed(TOWERPULSE_ANNEX);
+
+  it('binds only annex devices and areas', () => {
+    for (const [name, slot] of Object.entries(def().slots ?? {})) {
+      const binding = slot.defaultBinding as { deviceToken?: string; anchor?: { targetToken?: string } } | undefined;
+      const token = binding?.deviceToken ?? binding?.anchor?.targetToken ?? '';
+      expect(token, `slot ${name} binds ${token}`).toMatch(/annex/);
+      expect(token, `slot ${name} binds ${token}`).not.toMatch(/tower/);
+    }
+  });
+
+  it('carries no command widget, so it offers a read-only member no write affordance', () => {
+    for (const widget of def().widgets) {
+      expect(WIDGET_CHANNEL[widget.type], `${widget.id} (${widget.type}) is a control (command) widget`).not.toBe('control');
+      expect(widget.options?.commandName, `${widget.id} carries a command`).toBeUndefined();
+    }
+  });
+
+  it('is not the operator board re-opened', () => {
+    expect(def().widgets.length).toBeLessThan(parsed(TOWERPULSE).widgets.length);
+  });
+});

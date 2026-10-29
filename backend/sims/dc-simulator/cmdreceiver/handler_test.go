@@ -5,6 +5,7 @@ package cmdreceiver
 
 import (
 	"encoding/json"
+	"strings"
 	"sync"
 	"testing"
 
@@ -146,4 +147,28 @@ func TestOutcomePayload(t *testing.T) {
 	a, _ := responsePayload("c", "n")
 	b, _ := outcomePayload("c", "n", true)
 	assert.Equal(t, string(b), string(a))
+}
+
+// A re-dispatch of one command carries a NEW nonce, and each frame's answer is bound to ITS OWN
+// nonce. The handler is told which nonce a frame carried so it can keep both attempts instead of
+// discarding the later one as a duplicate, and each answer reaches the broker for the right one.
+func TestAHandlerSeesEachFramesNonceAndEachAnswerCarriesItsOwn(t *testing.T) {
+	r := New("i1", "t1", "ssl://broker", nil)
+	h := &recordingHandler{}
+	r.SetHandler(h)
+	ds, c := deviceWithClient(t, r, "probe-1")
+
+	r.onMessage(ds)(nil, fakeMessage{[]byte(boostFrame)})
+	r.onMessage(ds)(nil, fakeMessage{[]byte(strings.Replace(boostFrame, `"n-1"`, `"n-2"`, 1))})
+
+	require.Len(t, h.received, 2)
+	assert.Equal(t, "n-1", h.received[0].Nonce)
+	assert.Equal(t, "n-2", h.received[1].Nonce)
+
+	h.answers[1](true)
+	h.answers[0](true)
+	answers := c.answers()
+	require.Len(t, answers, 2)
+	assert.Equal(t, "n-2", answers[0].DispatchNonce)
+	assert.Equal(t, "n-1", answers[1].DispatchNonce)
 }
