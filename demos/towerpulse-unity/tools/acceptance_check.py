@@ -833,6 +833,10 @@ def cmd_summary(a):
     cpath = os.path.join(a.out, "context.json")
     if os.path.exists(cpath):
         ctx = list(json.load(open(cpath)).items())
+    missing = [r for r in (a.require.split(",") if a.require else []) if r not in {i.id for i in items}]
+    if missing:
+        # a run that never reached a check has not passed it: the absence is a failure, recorded as one
+        items += [Item(m, "required check", False, "never ran") for m in missing]
     text = summary_md(a.title, items, ctx)
     with open(os.path.join(a.out, "SUMMARY.md"), "w", encoding="utf-8") as f:
         f.write(text)
@@ -868,7 +872,7 @@ def main(argv=None):
     add("common", cmd_common, runner=runner, out=out, since=dict(required=True), recording=dict(default=None), namespace=ns)
     add("calc", cmd_calc, runner=runner, out=out, since=dict(required=True), recording=dict(required=True), namespace=ns)
     add("owner", cmd_owner, runner=runner, sim=dict(required=True), out=out, since=dict(required=True))
-    add("summary", cmd_summary, out=out, title=dict(required=True))
+    add("summary", cmd_summary, out=out, title=dict(required=True), require=dict(default=""))
     a = ap.parse_args(argv)
     try:
         return a.fn(a)

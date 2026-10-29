@@ -158,6 +158,27 @@ class Judges(unittest.TestCase):
         self.assertEqual(a.judge_silence(live, None)[2], 30.0, "without the alarm's time the open gap is invisible")
 
 
+class Summary(unittest.TestCase):
+    def run_summary(self, items, require):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as d:
+            a.append_items(d, items)
+            rc = a.main(["summary", "--out", d, "--title", "t", "--require", require])
+            with open(os.path.join(d, "SUMMARY.md"), encoding="utf-8") as f:
+                return rc, f.read()
+
+    def test_a_run_that_never_reached_a_required_check_fails(self):
+        rc, text = self.run_summary([a.Item("baseline", "d", True)], "baseline,c-no-alarm")
+        self.assertEqual(rc, 1)
+        self.assertIn("**Result: FAIL**", text)
+        self.assertIn("`c-no-alarm`", text)
+
+    def test_all_required_checks_present_and_passing_passes(self):
+        rc, _ = self.run_summary([a.Item("x", "d", True), a.Item("y", "d", True)], "x,y")
+        self.assertEqual(rc, 0)
+
+
 class Safety(unittest.TestCase):
     def test_redact_and_leaks(self):
         jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.c2lnbmF0dXJl"

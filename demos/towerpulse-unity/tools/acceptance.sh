@@ -7,6 +7,7 @@
 #   acceptance.sh                         the control run, then the rule-disabled run (each on a FRESH sim)
 #   acceptance.sh control                 only the control run
 #   acceptance.sh rule-disabled           only the rule-disabled run
+#   acceptance.sh chiller                 only segment B (the annex chiller beat) on a fresh sim, with the calculated-metric check
 #   acceptance.sh --build editor          build the Windows player first through the open Editor (needs $UNITY_EVAL, see below)
 #
 # What a run does. It provisions a brand-new sim (`dcctl sim create --manifest towerpulse`, so a fresh tenant: stale alarms and commands from an earlier
@@ -19,6 +20,13 @@
 #
 # The rule-disabled run is the SAME seed and the same day with R1 disabled (draft + publish) before the player starts. It must give NO alarm and NO
 # boost while the zone still overheats: the platform, not the script, closed the loop in the control run. Only segment A runs (R4 is untouched).
+#
+# The chiller COP and its one honest gap. When a restart is accepted the chiller is online again but has not started: its first reading carries power_kw 0
+# and cooling_kw 0, which is what the plant really draws then. The platform's cop (cooling_kw / power_kw) is 0/0 for that reading, which is not a number, so
+# it is SKIPPED as non_finite and no cop is stored for it: nothing is faked, and the plane keeps sending the true zeros. The check therefore requires every
+# non_finite skip to be explained by a power 0 / cooling 0 reading the plane really sent (count_power_zero over the recording), and missing_input to be 0.
+# The chart plots one-minute averages of the stored cop, so the neighbouring readings keep that minute's point; a minute with NO stored cop would be a gap
+# (the chart does not connect nulls), never an invented value.
 #
 # acceptance_check.py judges the platform's side from the platform's own records (alarms, commands, stored telemetry, the broker's connections, the
 # calculated-metric counters) and the annex owner's sign-in. The sim is destroyed afterwards. Evidence goes to Build/acceptance/<stamp>-<mode>/ (ignored by git).
@@ -66,7 +74,7 @@ now_iso() { date -u +%Y-%m-%dT%H:%M:%S.000Z; }
 
 while [ $# -gt 0 ]; do
 	case "$1" in
-	control | rule-disabled) MODES+=("$1") ;;
+	control | rule-disabled | chiller) MODES+=("$1") ;;
 	--build) BUILD="${2:?--build needs none or editor}"; shift ;;
 	--out) OUT_ROOT="${2:?--out needs a directory}"; shift ;;
 	-h | --help) sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -138,12 +146,16 @@ PF_PID="" SIM_PID="" SIM_NAME="" PLAYER_PID=""
 
 kill_pid() { [ -z "${1:-}" ] || taskkill.exe //PID "$1" //T //F >/dev/null 2>&1 || true; }
 
+# `$!` is the MSYS pid of a background job, which taskkill does not know: the WINDOWS pid of what this script started is found from its command line.
+# Only an exact pid is ever ended, never a process by name.
+winpid_of() { powershell.exe -NoProfile -Command "(Get-CimInstance Win32_Process | Where-Object { \$_.Name -eq '$1' -and \$_.CommandLine -like '*$2*' } | Select-Object -First 1).ProcessId" | tr -d '\r'; }
+
 teardown() {
 	log "teardown: sim ${SIM_NAME:-none}"
 	[ -z "$PLAYER_PID" ] || kill_pid "$PLAYER_PID"
-	kill_pid "$SIM_PID"
+	[ -z "$SIM_NAME" ] || kill_pid "$(winpid_of dcctl.exe "sim run $SIM_NAME")"
 	[ -z "$SIM_NAME" ] || "$DCCTL" sim destroy "$SIM_NAME" -i "$INSTANCE" --server "$API" >/dev/null 2>&1 || log "WARNING: sim destroy $SIM_NAME failed: destroy it by hand"
-	kill_pid "$PF_PID"
+	[ -z "$PF_PID" ] || kill_pid "$(winpid_of kubectl.exe 'port-forward svc/event-sources')"
 	SIM_NAME="" SIM_PID="" PF_PID="" PLAYER_PID=""
 }
 trap teardown EXIT
@@ -175,6 +187,7 @@ run_mode() {
 	ev="$OUT_ROOT/$STAMP-$mode"
 	short="$([ "$mode" = control ] && echo c || echo r)"
 	SIM_NAME="tp-acc-$short-$(date -u +%m%d%H%M)"
+	[ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "$RUNNER/status" || true)" != 200 ] || die "something still answers $RUNNER: the previous sim's runner was not stopped"
 	mkdir -p "$ev/recordings" "$ev/logs"
 	log "=== $mode run on a fresh sim ($SIM_NAME); evidence in $ev"
 
@@ -199,27 +212,30 @@ run_mode() {
 	# ---- segment A
 	local since_a rec_a q="$ev/quit-a"
 	since_a="$(now_iso)"
-	launch_player "$START_A" "$mode-A" "$ev/recordings" "$q" "$ev/logs/player-a.log" "$ca"
-	if [ "$mode" = control ]; then
-		sleep 240
+	if [ "$mode" != chiller ]; then
+		launch_player "$START_A" "$mode-A" "$ev/recordings" "$q" "$ev/logs/player-a.log" "$ca"
+		if [ "$mode" = control ]; then
+			sleep 240
+			rec_a="$(latest_run "$ev/recordings")"
+			"$PY" -I "$CHECK" common --runner "$RUNNER" --out "$ev" --since "$since_a" --recording "$rec_a" --namespace "$NS" || true
+		fi
+		"$PY" -I "$CHECK" segment-a --runner "$RUNNER" --out "$ev" --mode "$mode" --since "$since_a" || true
+		end_player "$q"
 		rec_a="$(latest_run "$ev/recordings")"
-		"$PY" -I "$CHECK" common --runner "$RUNNER" --out "$ev" --since "$since_a" --recording "$rec_a" --namespace "$NS" || true
+		"$PY" -I "$CHECK" annotate --runner "$RUNNER" --recording "$rec_a" --namespace "$NS" || true
 	fi
-	"$PY" -I "$CHECK" segment-a --runner "$RUNNER" --out "$ev" --mode "$mode" --since "$since_a" || true
-	end_player "$q"
-	rec_a="$(latest_run "$ev/recordings")"
-	"$PY" -I "$CHECK" annotate --runner "$RUNNER" --recording "$rec_a" || true
 
-	# ---- segment B and the owner (control only)
-	if [ "$mode" = control ]; then
+	# ---- segment B and the owner (control), or segment B alone with its calculated-metric check (chiller)
+	if [ "$mode" != rule-disabled ]; then
 		local since_b rec_b q2="$ev/quit-b"
 		since_b="$(now_iso)"
 		launch_player "$START_B" "$mode-B" "$ev/recordings" "$q2" "$ev/logs/player-b.log" "$ca"
 		"$PY" -I "$CHECK" segment-b --runner "$RUNNER" --out "$ev" --since "$since_b" || true
-		"$PY" -I "$CHECK" owner --runner "$RUNNER" --sim "$SIM_NAME" --out "$ev" --since "$since_a" || true
+		[ "$mode" != control ] || "$PY" -I "$CHECK" owner --runner "$RUNNER" --sim "$SIM_NAME" --out "$ev" --since "$since_a" || true
 		end_player "$q2"
 		rec_b="$(ls -1d "$ev"/recordings/run-* | sort | tail -1)"
-		"$PY" -I "$CHECK" annotate --runner "$RUNNER" --recording "$rec_b" || true
+		"$PY" -I "$CHECK" annotate --runner "$RUNNER" --recording "$rec_b" --namespace "$NS" || true
+		[ "$mode" != chiller ] || "$PY" -I "$CHECK" calc --runner "$RUNNER" --out "$ev" --since "$since_b" --recording "$rec_b" --namespace "$NS" || true
 	fi
 
 	"$PY" -I - "$ev" "$mode" "$SIM_NAME" "$INSTANCE" "$(git -C "$PROJECT" rev-parse --short=12 HEAD)" "$STAMP" <<'EOF'
@@ -227,8 +243,15 @@ import json, sys
 ev, mode, sim, inst, sha, stamp = sys.argv[1:7]
 json.dump({"mode": mode, "sim": sim, "instance": inst, "commit": sha, "stamp": stamp, "clock": "wall (model speed 1; readings stamped with the wall clock)", "seed": 1}, open(ev + "/context.json", "w"))
 EOF
-	local verdict=0
-	"$PY" -I "$CHECK" summary --out "$ev" --title "Towerpulse acceptance: $mode" || verdict=$?
+	local verdict=0 need
+	if [ "$mode" = control ]; then
+		need="sessions,telemetry,calculated,a-alarm,a-boost-sent,a-boost-successful-at-setpoint,a-alarm-cleared,b-silent,b-r4-alarm,b-restart-successful,b-reporting-again,b-alarm-cleared,o-signin,o-annex-only"
+	elif [ "$mode" = chiller ]; then
+		need="b-silent,b-r4-alarm,b-restart-successful,b-reporting-again,b-alarm-cleared,calculated"
+	else
+		need="rule-disabled-effective,c-no-alarm,c-no-boost,c-zone-overheated,c-rule-was-off"
+	fi
+	"$PY" -I "$CHECK" summary --out "$ev" --title "Towerpulse acceptance: $mode" --require "$need" || verdict=$?
 	leak_scan "$ev" || verdict=2
 	teardown
 	return "$verdict"
