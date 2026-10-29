@@ -124,7 +124,7 @@ cmd_owner() {
 	cap="Console capture  -  the annex owner sees seven of thirty-one devices, only the annex alarm"
 	# the board is a tall image (1920x2320): a 1080-high window drifts down it for 5 s, from just under the page header (the owner is a viewer; nothing to edit is shown) to the bottom
 	pan="crop=w=1920:h=1080:x=0:y='140+(ih-1080-140)*min(t/5\,1)'"
-	ffmpeg -nostdin -loglevel error -y -loop 1 -t 5 -framerate "$FPS" -i "$STILLS/annex-owner-board.png" -loop 1 -t 2.5 -framerate "$FPS" -i "$STILLS/annex-owner-devices.png" -loop 1 -t 2.5 -framerate "$FPS" -i "$STILLS/annex-owner-alarms.png" -filter_complex 		"[0:v]$pan[b];[b][1:v][2:v]concat=n=3:v=1:a=0,scale=$WIDTH:$HEIGHT,format=yuv420p,drawbox=x=0:y=ih-110:w=iw:h=110:color=0x101820@0.92:t=fill,drawtext=fontfile='$font':text='$cap':fontcolor=white:fontsize=34:x=40:y=h-72,fade=t=in:st=0:d=0.3,fade=t=out:st=9.7:d=0.3[v]" -map "[v]" -c:v libx264 -pix_fmt yuv420p -crf 17 -r "$FPS" "$OUT/owner.mp4"
+	ffmpeg -nostdin -loglevel error -y -loop 1 -t 5 -framerate "$FPS" -i "$STILLS/annex-owner-board.png" -loop 1 -t 2.5 -framerate "$FPS" -i "$STILLS/annex-owner-devices.png" -loop 1 -t 2.5 -framerate "$FPS" -i "$STILLS/annex-owner-alarms.png" -filter_complex 		"[0:v]${pan}[b];[b][1:v][2:v]concat=n=3:v=1:a=0,scale=$WIDTH:$HEIGHT,format=yuv420p,drawbox=x=0:y=ih-110:w=iw:h=110:color=0x101820@0.92:t=fill,drawtext=fontfile='$font':text='$cap':fontcolor=white:fontsize=34:x=40:y=h-72,fade=t=in:st=0:d=0.3,fade=t=out:st=9.7:d=0.3[v]" -map "[v]" -c:v libx264 -pix_fmt yuv420p -crf 17 -r "$FPS" "$OUT/owner.mp4"
 	log "owner clip -> $OUT/owner.mp4"
 	# four frames for the contact sheet, kept apart from the plan's shots (the frame check reads only those)
 	rm -rf "$OUT/owner-samples"
