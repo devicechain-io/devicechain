@@ -165,5 +165,13 @@ func TestScopedAreasPlanOnTenKDevices(t *testing.T) {
 		t.Logf("%s\n%s", label, strings.Join(rows, "\n"))
 	}
 	explain("scoped areas list (first page of 100)", caller, func(d *gorm.DB) *gorm.DB { return d.Limit(100) })
+	// INFO-1: one token, three ways - reached by the caller, present but hidden from it,
+	// and absent. If the plan started from the areas row and ran the reach EXISTS only for
+	// a token that exists, hidden and missing would differ in time.
+	// cust-0 reaches area-0; area-1 exists and is hidden from it; no-such-area does not exist.
+	for _, tok := range []string{"area-0", "area-1", "no-such-area"} {
+		tok := tok
+		explain("scoped areasByToken, one token: "+tok, caller, func(d *gorm.DB) *gorm.DB { return d.Where("token IN ?", []string{tok}) })
+	}
 	explain("scoped areas by token", caller, func(d *gorm.DB) *gorm.DB { return d.Where("token IN ?", []string{"area-0", "area-7", "area-14"}) })
 }

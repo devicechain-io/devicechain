@@ -83,3 +83,45 @@ func TestIsolationSweep(t *testing.T) {
 		t.Errorf("query deviceConstantsPage: %+v (reached=%v), want FORBIDDEN for acme's member", o, ok)
 	}
 }
+
+// LOW-2: the main sweep aims its probe at globex's DEVICE, so its hidden-versus-missing
+// comparison never met a real hidden area or asset. These runs aim it at floor-globex and at
+// asset-globex, which the unscoped control sees and acme's member must not: every operation's
+// answer for the hidden place must be indistinguishable from the answer for a name that
+// exists nowhere. anchorDevices is called with a literal targetType so its all-arguments
+// document reaches the area (or asset) branch rather than stopping at an unknown kind.
+func TestIsolationSweepAimedAtAHiddenAreaAndAsset(t *testing.T) {
+	for _, c := range []struct{ probe, kind string }{{"floor-globex", "area"}, {"asset-globex", "asset"}} {
+		t.Run(c.probe, func(t *testing.T) {
+			f := newScopeFixture(t)
+			out := isolationsweep.Run(t, isolationsweep.Config{
+				Schema:   gqlcore.MustParseSchema(SchemaContent, &SchemaResolver{}),
+				Scoped:   f.member("customer:acme"),
+				Unscoped: f.operator(),
+				Probe:    c.probe,
+				Hidden:   []string{"globex"},
+				Literals: map[string]string{"originatorType": `"device"`, "state": `"ACTIVE"`, "severity": `"WARNING"`,
+					"targetType": `"` + c.kind + `"`},
+			})
+			byToken := "query " + c.kind + "sByToken"
+			if o, ok := isolationsweep.OutcomeOf(out, byToken); !ok || !o.Data {
+				t.Errorf("%s: %+v (reached=%v), want data (an empty list) for acme's member", byToken, o, ok)
+			}
+			// What the sweep's anchorDevices call means: acme asking about a place only globex
+			// has a device on is an empty page with total 0, and the operator's is not.
+			q := `{ anchorDevices(criteria: {pageNumber: 1, pageSize: 10, targetType: "` + c.kind + `", target: "` + c.probe +
+				`"}) { results { token } pagination { totalRecords } } }`
+			acme := serve(t, f.member("customer:acme"), q, nil)
+			requireServed(t, acme, "anchorDevices on the hidden place")
+			page := acme.data["anchorDevices"].(map[string]any)
+			if n := page["pagination"].(map[string]any)["totalRecords"].(float64); n != 0 || len(page["results"].([]any)) != 0 {
+				t.Errorf("acme on %s: %v, want an empty page", c.probe, page)
+			}
+			op := serve(t, f.operator(), q, nil)
+			requireServed(t, op, "control anchorDevices")
+			if n := op.data["anchorDevices"].(map[string]any)["pagination"].(map[string]any)["totalRecords"].(float64); n != 1 {
+				t.Errorf("control: the operator on %s saw %v devices, want globex's one", c.probe, n)
+			}
+		})
+	}
+}

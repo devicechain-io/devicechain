@@ -285,7 +285,8 @@ type AnchorDeviceSearchCriteriaInput struct {
 //     An anchor none of the caller's devices is on answers an empty page, which is a fact
 //     about the caller's own devices and confirms nothing about the anchor.
 //   - only an ownership edge (a tracked type) matches, as the relationship graph is closed
-//     to a scoped caller and an untracked edge would disclose what it hides.
+//     to a scoped caller and an untracked edge would disclose what it hides. A scoped caller
+//     may therefore not name a relationshipType at all: it is refused, not ignored.
 //   - any other anchor kind is refused as unsupported for scoped access, never answered empty.
 //
 // An unscoped caller is answered for any anchor and any type, as the relationship search
@@ -313,6 +314,12 @@ func (r *SchemaResolver) AnchorDevices(ctx context.Context, args struct {
 		return nil, fmt.Errorf("targetType %q is not an anchor with devices: use customer, area or asset", in.TargetType)
 	}
 	if scope.IsScoped() {
+		// A relationship type names an edge, and the relationship graph is closed to a scoped
+		// caller: it must not be able to probe which types link its devices to an anchor.
+		// Ownership (tracked) edges are the only ones it matches, so there is nothing to choose.
+		if in.RelationshipType != nil {
+			return nil, auth.ErrScopeUnsupported
+		}
 		if in.TargetType == auth.AnchorKindCustomer && !scopeNamesCustomer(scope, in.Target) {
 			return nil, auth.ErrForbidden
 		}

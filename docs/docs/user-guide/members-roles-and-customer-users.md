@@ -255,6 +255,14 @@ assigned to it. A widget bound to an asset, an area or a group reads the relatio
 its devices, which customer users are not given, so it shows them **Not available for customer
 users**.
 
+### What customer users can read of areas and assets {#areas-assets-visibility}
+
+A customer user can read the areas and assets that one of their devices is placed in, and the area
+types and asset types of the tenant. They see the **name** and **description** of an area or asset,
+and the **name** and **description** of a type, but not its free-form metadata. Keep text that
+identifies a customer, or any other confidential detail, out of those names and descriptions, and
+out of the name of an area that devices of several customers share: a customer user can read it.
+
 ### What is not covered yet {#not-covered-yet}
 
 - A dashboard widget cannot yet show the devices of a member's group as a whole. Bind widgets on a

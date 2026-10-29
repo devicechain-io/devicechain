@@ -67,8 +67,11 @@ func TestIsolationSweepForAGroupMember(t *testing.T) {
 		Literals: map[string]string{"originatorType": `"device"`, "state": `"ACTIVE"`, "severity": `"WARNING"`},
 	})
 	t.Logf("swept %d operations as group:north's member", len(out))
-	if o, ok := isolationsweep.OutcomeOf(out, "query devices"); !ok || !o.Data {
-		t.Errorf("query devices: %+v (reached=%v), want data for the group's member", o, ok)
+	for _, op := range []string{"query devices", "query areas", "query areasById", "query areasByToken",
+		"query assets", "query assetsById", "query assetsByToken", "query areaTypes", "query assetTypes"} {
+		if o, ok := isolationsweep.OutcomeOf(out, op); !ok || !o.Data {
+			t.Errorf("%s: %+v (reached=%v), want data for the group's member", op, o, ok)
+		}
 	}
 	// The access-scope switch is a write: a member never widens its own scope with it.
 	if o, ok := isolationsweep.OutcomeOf(out, "mutation setEntityGroupAccessScope"); !ok || o.Data ||

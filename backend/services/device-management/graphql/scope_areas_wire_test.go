@@ -322,14 +322,12 @@ func TestAnchorDevicesIgnoresUntrackedEdgesForAScopedCaller(t *testing.T) {
 	if got := askAnchor(t, acme, "area", "floor-untracked", nil); len(got.tokens) != 0 || got.total != 0 {
 		t.Fatalf("an area reached only by an untracked edge: %+v", got)
 	}
-	if got := askAnchor(t, acme, "area", "floor-untracked", str("monitors")); len(got.tokens) != 0 || got.total != 0 {
-		t.Fatalf("an untracked type asked for by name: %+v", got)
-	}
-	if got := askAnchor(t, acme, "area", "floor-shared", str("monitors")); len(got.tokens) != 0 {
-		t.Fatalf("a type with no edge to the area: %+v", got)
-	}
-	if got := askAnchor(t, acme, "area", "floor-shared", str("assigned")); !reflect.DeepEqual(got.tokens, []string{"acme-pump"}) {
-		t.Fatalf("the tracked type by name: %+v", got)
+	// A scoped caller may not name a relationship type at all: refused, tracked or not, so
+	// it cannot probe which types link its devices to an anchor.
+	for _, rel := range []string{"monitors", "assigned", "no-such-type"} {
+		if got := askAnchor(t, acme, "area", "floor-shared", str(rel)); !got.scope {
+			t.Fatalf("a scoped relationshipType %q: %+v, want the scope's refusal", rel, got)
+		}
 	}
 	// Control: unscoped, the untracked edge is there, with or without the type.
 	if got := askAnchor(t, f.operator(), "area", "floor-untracked", nil); !reflect.DeepEqual(got.tokens, []string{"acme-pump"}) {
@@ -401,5 +399,54 @@ func TestGroupScopedMemberReachesTheAreasOfItsGroupsDevices(t *testing.T) {
 	}
 	if got := askAnchor(t, north, "area", "floor-globex", nil); len(got.tokens) != 0 {
 		t.Fatalf("group:north on floor-globex: %+v", got)
+	}
+}
+
+// LOW-1: a type's free-form metadata is the operator's note about it, withheld from a scoped
+// member as NULL like an area's, while its token, name and look stay readable. The unscoped
+// control reads the metadata, so the null is the scope's doing. An asset type's propertySchema
+// is the SHAPE of an asset's property document (field names and types), which a customer's
+// console needs to render the asset it may see, and is deliberately left visible.
+func TestScopedTypeMetadataIsWithheld(t *testing.T) {
+	f := newScopeFixture(t)
+	for _, q := range []struct{ query, op string }{
+		{`{ areaTypesByToken(tokens: ["floor"]) { token metadata } }`, "areaTypesByToken"},
+		{`{ assetTypesByToken(tokens: ["machine"]) { token metadata propertySchema } }`, "assetTypesByToken"},
+		{`{ customerTypesByToken(tokens: ["retail"]) { token metadata } }`, "customerTypesByToken"},
+	} {
+		row := func(c context.Context) map[string]any {
+			s := serve(t, c, q.query, nil)
+			requireServed(t, s, q.op)
+			return s.data[q.op].([]any)[0].(map[string]any)
+		}
+		if got := row(f.member("customer:acme")); got["metadata"] != nil || got["token"] == nil {
+			t.Fatalf("%s: a scoped member was shown type metadata, or lost the token: %v", q.op, got)
+		}
+		if got := row(f.operator()); got["metadata"] == nil {
+			t.Fatalf("control, %s: the operator's type metadata is gone: %v", q.op, got)
+		}
+	}
+}
+
+// INFO-2: the withholding test fails CLOSED. A context carrying no claims is treated as
+// scoped, so a wiring fault withholds rather than discloses.
+func TestIsScopedCallerFailsClosedWithoutClaims(t *testing.T) {
+	if !isScopedCaller(context.Background()) {
+		t.Fatal("a context with no claims was treated as unscoped")
+	}
+	f := newScopeFixture(t)
+	if isScopedCaller(f.operator()) {
+		t.Fatal("control: the operator was treated as scoped")
+	}
+	if !isScopedCaller(f.member("customer:acme")) {
+		t.Fatal("control: a scoped member was treated as unscoped")
+	}
+	// And through a resolver: the metadata of an area served on a claimless context is null.
+	areas, err := f.api.AreasByToken(f.operator(), []string{"floor-shared"})
+	if err != nil || len(areas) != 1 {
+		t.Fatalf("areas: %v %v", areas, err)
+	}
+	if got := (&AreaResolver{M: *areas[0]}).Metadata(context.Background()); got != nil {
+		t.Fatalf("an area served without claims showed metadata: %v", *got)
 	}
 }

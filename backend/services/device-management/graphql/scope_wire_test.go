@@ -76,7 +76,8 @@ func seedScopeFixture(t *testing.T, db *gorm.DB, extra ...any) scopeFixture {
 	if _, err := f.api.CreateDeviceType(ctx, &model.DeviceTypeCreateRequest{Token: "pump"}); err != nil {
 		t.Fatalf("device type: %v", err)
 	}
-	ct, err := f.api.CreateCustomerType(ctx, &model.CustomerTypeCreateRequest{Token: "retail"})
+	typeMeta := `{"note":"type-note"}`
+	ct, err := f.api.CreateCustomerType(ctx, &model.CustomerTypeCreateRequest{Token: "retail", Metadata: &typeMeta})
 	if err != nil {
 		t.Fatalf("customer type: %v", err)
 	}
@@ -104,11 +105,11 @@ func (f scopeFixture) seedPlaces(t *testing.T) {
 	t.Helper()
 	ctx := f.operator()
 	meta := `{"lease":"L-1"}`
-	at, err := f.api.CreateAreaType(ctx, &model.AreaTypeCreateRequest{Token: "floor"})
+	at, err := f.api.CreateAreaType(ctx, &model.AreaTypeCreateRequest{Token: "floor", Metadata: &meta})
 	if err != nil {
 		t.Fatalf("area type: %v", err)
 	}
-	ast, err := f.api.CreateAssetType(ctx, &model.AssetTypeCreateRequest{Token: "machine"})
+	ast, err := f.api.CreateAssetType(ctx, &model.AssetTypeCreateRequest{Token: "machine", Metadata: &meta})
 	if err != nil {
 		t.Fatalf("asset type: %v", err)
 	}

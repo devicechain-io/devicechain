@@ -2367,7 +2367,7 @@ input AnchorDeviceSearchCriteria {
     target: String!
     """
     Token of the relationship type linking each device to the anchor, such as "assigned".
-    Omit it for a device linked by any type.
+    Omit it for a device linked by any type. Refused for a member limited to part of the tenant.
     """
     relationshipType: String
 }
@@ -4467,8 +4467,8 @@ type Query {
     caller can see, never the whole anchor. An anchor that does not exist matches nothing.
     For a member limited to part of the tenant, a customer anchor must be one that member's
     access names, or the request is refused with FORBIDDEN; an area or asset that none of
-    the member's devices is on matches nothing; only an ownership relationship (a tracked
-    type, such as the default "assigned") matches; and any other anchor kind is refused as
+    the member's devices is on matches nothing; only ownership (tracked) relationships match,
+    so naming a relationshipType is refused as unsupported for scoped access; and any other anchor kind is refused as
     unsupported for scoped access (FORBIDDEN, reason SCOPE_UNSUPPORTED). Requires device:read.
     """
     anchorDevices(

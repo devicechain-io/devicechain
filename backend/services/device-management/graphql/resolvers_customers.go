@@ -71,7 +71,13 @@ func (r *CustomerTypeResolver) BorderColor() *string {
 	return util.NullStr(r.M.BorderColor)
 }
 
-func (r *CustomerTypeResolver) Metadata() *string {
+// Metadata is operator free-form JSON, so a caller limited to part of the tenant is shown
+// null: a type is configuration a customer reads for its name and look, not the operator's
+// notes about it (ADR-081 decision 12).
+func (r *CustomerTypeResolver) Metadata(ctx context.Context) *string {
+	if isScopedCaller(ctx) {
+		return nil
+	}
 	return util.MetadataStr(r.M.Metadata)
 }
 
