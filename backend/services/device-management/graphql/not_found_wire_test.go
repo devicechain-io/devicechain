@@ -63,6 +63,7 @@ func TestAnAlarmStreamForAnUnknownOriginatorKeepsTheMiss(t *testing.T) {
 		State          *string
 		Severity       *string
 		AlarmKey       *string
+		Anchor         *model.AlarmAnchor
 	}{OriginatorType: &kind, Originator: &token})
 
 	if err == nil {

@@ -122,6 +122,12 @@ func (api *Api) alarmDeviceTypeFilter(ctx context.Context, deviceType *string) (
 // Search for alarms that meet criteria. An unresolvable originator or device type yields an
 // empty result rather than an error.
 func (api *Api) Alarms(ctx context.Context, criteria AlarmSearchCriteria) (*AlarmSearchResults, error) {
+	// The anchor is judged first: a refusal must not depend on whether the rest of the criteria
+	// happen to name something, or it would confirm what an empty answer hides.
+	atAnchor, err := alarmAnchorFilter(ctx, criteria.Anchor)
+	if err != nil {
+		return nil, err
+	}
 	empty := &AlarmSearchResults{Results: make([]Alarm, 0), Pagination: rdb.SearchResultsPagination{}}
 	filter, ok, err := alarmFacets{
 		originatorType: criteria.OriginatorType, originator: criteria.Originator, state: criteria.State,
@@ -151,7 +157,7 @@ func (api *Api) Alarms(ctx context.Context, criteria AlarmSearchCriteria) (*Alar
 
 	results := make([]Alarm, 0)
 	db, pag := api.RDB.ListOf(ctx, &Alarm{}, func(result *gorm.DB) *gorm.DB {
-		result = ofType(filter(result))
+		result = atAnchor(ofType(filter(result)))
 		// Overlap, not containment: an alarm raised before the range and still active (or cleared
 		// inside it) was present during the range. A re-raise nulls cleared_time, so NULL means
 		// active. No index is added for these: the caller that sends a range (a chart's event
@@ -196,6 +202,10 @@ func alarmRangeBound(name string, value *string) (*time.Time, error) {
 // counted, by the same device read the search's DeviceType filter uses (alarmDevices), so for every
 // type the count equals the total of the search filtered to it. Ordered by type id, then severity.
 func (api *Api) AlarmCountsByDeviceType(ctx context.Context, criteria AlarmCountCriteria) ([]AlarmDeviceTypeCount, error) {
+	atAnchor, err := alarmAnchorFilter(ctx, criteria.Anchor)
+	if err != nil {
+		return nil, err
+	}
 	filter, ok, err := alarmFacets{
 		originatorType: criteria.OriginatorType, originator: criteria.Originator, state: criteria.State,
 		severity: criteria.Severity, acknowledged: criteria.Acknowledged, alarmKey: criteria.AlarmKey,
@@ -218,7 +228,7 @@ func (api *Api) AlarmCountsByDeviceType(ctx context.Context, criteria AlarmCount
 		Joins("JOIN (?) AS d ON d.id = alarms.originator_id AND d.tenant_id = alarms.tenant_id",
 			api.alarmDevices(ctx).Select("devices.id", "devices.device_type_id", "devices.tenant_id")).
 		Where("alarms.originator_type = ?", string(entity.TypeDevice))
-	if err := filter(q).Group("d.device_type_id, alarms.severity").
+	if err := atAnchor(filter(q)).Group("d.device_type_id, alarms.severity").
 		Order("d.device_type_id, alarms.severity").Scan(&rows).Error; err != nil {
 		return nil, err
 	}
@@ -259,6 +269,10 @@ func (api *Api) AlarmCountsByDeviceType(ctx context.Context, criteria AlarmCount
 // type-filtered search's total; an unknown type counts nothing. Severities with no alarm are
 // absent. Ordered by severity.
 func (api *Api) AlarmCountsBySeverity(ctx context.Context, criteria AlarmCountCriteria, deviceType *string) ([]AlarmSeverityCount, error) {
+	atAnchor, err := alarmAnchorFilter(ctx, criteria.Anchor)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]AlarmSeverityCount, 0)
 	filter, ok, err := alarmFacets{
 		originatorType: criteria.OriginatorType, originator: criteria.Originator, state: criteria.State,
@@ -279,7 +293,7 @@ func (api *Api) AlarmCountsBySeverity(ctx context.Context, criteria AlarmCountCr
 	}
 	var rows []AlarmSeverityCount
 	q := api.RDB.DB(ctx).Model(&Alarm{}).Select("alarms.severity AS severity, COUNT(*) AS count")
-	if err := ofType(filter(q)).Group("alarms.severity").Order("alarms.severity").Scan(&rows).Error; err != nil {
+	if err := atAnchor(ofType(filter(q))).Group("alarms.severity").Order("alarms.severity").Scan(&rows).Error; err != nil {
 		return nil, err
 	}
 	return append(out, rows...), nil

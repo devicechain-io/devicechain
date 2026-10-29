@@ -32,6 +32,9 @@ type alarmEventFilter struct {
 	state          *string
 	severity       *string
 	alarmKey       *string
+	// anchor is the stamp ("area:floor-4") an alarm must carry, from model.ResolveAlarmAnchor.
+	// Judged on EVERY event, against the stamp the event carries, beside the scope below.
+	anchor *string
 	// scope is the subscriber's scope (ADR-081). For a scoped subscriber an event passes
 	// only when the alarm's scope stamp shares an anchor with it: the same rule the alarms
 	// query applies in the database (Alarm.ScopedBy), applied here to the live feed, which
@@ -56,6 +59,9 @@ func (f alarmEventFilter) matches(ev *model.AlarmStateChangeEvent) bool {
 	if f.alarmKey != nil && ev.AlarmKey != *f.alarmKey {
 		return false
 	}
+	if f.anchor != nil && !slices.Contains(ev.ScopeAnchors, *f.anchor) {
+		return false
+	}
 	if f.scope.IsScoped() && !sharesAnchor(f.scope.Anchors(), ev.ScopeAnchors) {
 		return false
 	}
@@ -72,6 +78,47 @@ func sharesAnchor(scope, stamp []string) bool {
 	return false
 }
 
+// alarmStreamArgs are alarmStream's arguments.
+type alarmStreamArgs struct {
+	OriginatorType *string
+	Originator     *string
+	State          *string
+	Severity       *string
+	AlarmKey       *string
+	Anchor         *model.AlarmAnchor
+}
+
+// newAlarmEventFilter builds the subscription's filter from its arguments, everything but the
+// originator (resolved against the store by the caller).
+func newAlarmEventFilter(ctx context.Context, scope auth.Scope, args alarmStreamArgs) (alarmEventFilter, error) {
+	// Reject an unknown state/severity up front rather than accept a filter that can
+	// never match — a silently-empty stream is undebuggable, the same reason the
+	// originator path surfaces an error instead of yielding nothing.
+	if args.State != nil && !model.AlarmState(*args.State).Valid() {
+		return alarmEventFilter{}, fmt.Errorf("invalid state %q", *args.State)
+	}
+	if args.Severity != nil && !model.AlarmSeverity(*args.Severity).Valid() {
+		return alarmEventFilter{}, fmt.Errorf("invalid severity %q", *args.Severity)
+	}
+	filter := alarmEventFilter{
+		originatorType: args.OriginatorType,
+		state:          args.State,
+		severity:       args.Severity,
+		alarmKey:       args.AlarmKey,
+		scope:          scope,
+	}
+	if args.Anchor != nil {
+		// The same rule as the alarm queries: a customer outside the subscriber's scope is
+		// refused at subscribe time, never filtered into a silently empty stream.
+		stamp, err := model.ResolveAlarmAnchor(ctx, *args.Anchor)
+		if err != nil {
+			return alarmEventFilter{}, err
+		}
+		filter.anchor = &stamp
+	}
+	return filter, nil
+}
+
 // AlarmStream streams alarm state-change events to the subscriber as transitions
 // happen (ADR-041 / ADR-037). It taps the live alarm-events feed for the caller's
 // tenant and pushes each event — the same envelope the alarm integrator and operator API
@@ -79,13 +126,7 @@ func sharesAnchor(scope, stamp []string) bool {
 // feed is torn down when the client unsubscribes or disconnects (ctx cancelled).
 // Named distinctly from the alarm queries because both resolve off the one root
 // resolver; unlike a query it streams from subscribe time onward with no backfill.
-func (r *SchemaResolver) AlarmStream(ctx context.Context, args struct {
-	OriginatorType *string
-	Originator     *string
-	State          *string
-	Severity       *string
-	AlarmKey       *string
-}) (<-chan *AlarmEventResolver, error) {
+func (r *SchemaResolver) AlarmStream(ctx context.Context, args alarmStreamArgs) (<-chan *AlarmEventResolver, error) {
 	// Open to a scoped subscriber (ADR-081): every event is matched against the scope
 	// below, and an originator outside the scope is not found at subscribe time — the
 	// device lookup runs under the subscriber's own context, so the scope callback hides
@@ -98,23 +139,9 @@ func (r *SchemaResolver) AlarmStream(ctx context.Context, args struct {
 	if !ok {
 		return nil, core.ErrNoTenant
 	}
-
-	// Reject an unknown state/severity up front rather than accept a filter that can
-	// never match — a silently-empty stream is undebuggable, the same reason the
-	// originator path below surfaces an error instead of yielding nothing.
-	if args.State != nil && !model.AlarmState(*args.State).Valid() {
-		return nil, fmt.Errorf("invalid state %q", *args.State)
-	}
-	if args.Severity != nil && !model.AlarmSeverity(*args.Severity).Valid() {
-		return nil, fmt.Errorf("invalid severity %q", *args.Severity)
-	}
-
-	filter := alarmEventFilter{
-		originatorType: args.OriginatorType,
-		state:          args.State,
-		severity:       args.Severity,
-		alarmKey:       args.AlarmKey,
-		scope:          scope,
+	filter, err := newAlarmEventFilter(ctx, scope, args)
+	if err != nil {
+		return nil, err
 	}
 	// Resolve an originator token to its id once, at subscribe time, so per-event
 	// filtering is a cheap int compare (mirrors the Alarms query criteria). An

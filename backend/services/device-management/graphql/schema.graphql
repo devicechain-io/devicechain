@@ -1677,6 +1677,22 @@ type Alarm implements Model & TokenReference & MetadataEntity {
     metadata: String
 }
 
+"""
+An anchor to filter alarms by: the alarms of one customer, area or asset, as stamped when each
+alarm cycle began. An alarm stays under the area its device was in when the alarm was raised,
+even after the device moves; a device sold or moved raises its NEXT alarm under the new
+anchors. For a member whose access is limited to some customers the answer is also limited to
+the alarms of that member's own devices, so a shared area counts only the member's own. A
+customer outside that member's access is refused (FORBIDDEN); an area or asset none of its
+devices raised in answers nothing.
+"""
+input AlarmAnchor {
+    """Entity class: customer, area or asset. Any other value is an error."""
+    type: String!
+    """Token of the entity, unique within the tenant."""
+    token: String!
+}
+
 # Criteria used when searching for alarms. All facets are optional and AND together;
 # originator restricts to a single entity by its (originatorType, originator token).
 input AlarmSearchCriteria {
@@ -1707,6 +1723,8 @@ input AlarmSearchCriteria {
     no upper bound. A value that is not RFC 3339 is an error.
     """
     endTime: String
+    """Only alarms stamped with this anchor (see AlarmAnchor)."""
+    anchor: AlarmAnchor
 }
 
 """
@@ -1727,6 +1745,8 @@ input AlarmCountCriteria {
     acknowledged: Boolean
     """Only alarms with this alarm key."""
     alarmKey: String
+    """Only alarms stamped with this anchor (see AlarmAnchor)."""
+    anchor: AlarmAnchor
 }
 
 """
@@ -5414,6 +5434,12 @@ type Subscription {
         state: String
         severity: String
         alarmKey: String
+        """
+        Only events of alarms stamped with this anchor (see AlarmAnchor), judged on every pushed
+        event, with the same limit to the subscriber's own devices as the queries. A customer
+        outside the subscriber's access is refused when subscribing.
+        """
+        anchor: AlarmAnchor
     ): AlarmEvent!
 }
 
