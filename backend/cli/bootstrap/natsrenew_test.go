@@ -6,12 +6,16 @@ package bootstrap
 import (
 	"context"
 	"crypto/x509"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
 )
 
@@ -33,13 +37,25 @@ func anInstanceWithBrokerMaterialMintedAt(t *testing.T, mintedAt time.Time, repl
 	// renewal that writes a certificate and does not roll the broker onto it has
 	// changed nothing an operator can observe — so "there was no StatefulSet to
 	// restart" must not be a state any of these tests passes through quietly.
-	c := fake.NewSimpleClientset(&appsv1.StatefulSet{
+	n := int32(replicas)
+	objs := []runtime.Object{&appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{Name: natsStatefulSetName, Namespace: InstanceNamespace(testInstance)},
-	})
+		Spec:       appsv1.StatefulSetSpec{Replicas: &n},
+	}}
+	for i := 0; i < replicas; i++ {
+		objs = append(objs, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+			Name:      fmt.Sprintf("%s-%d", natsStatefulSetName, i),
+			Namespace: InstanceNamespace(testInstance),
+			Labels:    map[string]string{"app.kubernetes.io/name": "nats", "app.kubernetes.io/instance": "dc-nats", "app.kubernetes.io/component": "nats"},
+		}})
+	}
+	c := fake.NewSimpleClientset(objs...)
 	if err := writeMintedSecrets(context.Background(), c, st); err != nil {
 		t.Fatalf("writing the broker's material: %v", err)
 	}
 	settleStringDataLikeAnAPIServer(t, c)
+	// A fake client cannot proxy to a pod; every renewal here reads the served certificate through this.
+	podsServeTheSecret(t, c)
 	return c, st
 }
 
@@ -93,38 +109,6 @@ func TestARenewedCertificateStillVerifiesAgainstTheAuthorityTheServicesTrust(t *
 	}); err != nil {
 		t.Errorf("the renewed certificate does not verify against the authority every service "+
 			"was given: %v. Every service would reject the broker", err)
-	}
-}
-
-// 🔴 AND IT MUST RESTART THE BROKER, or it is a no-op that reports success. The NATS
-// chart rolls its pods on a checksum of the rendered ConfigMap, not of this Secret, so
-// a new certificate written and nothing else is a certificate nothing is serving — the
-// old leaf keeps being presented until something unrelated happens to roll the pods,
-// which on a healthy instance may be never.
-func TestTheBrokerIsRestartedOntoTheCertificateItWasGiven(t *testing.T) {
-	c, st := anInstanceWithBrokerMaterialMintedAt(t, time.Now().UTC().Add(-335*24*time.Hour), 1)
-
-	reported, err := renewBrokerCertificate(context.Background(), c, st)
-	if err != nil {
-		t.Fatalf("renewing the broker's certificate: %v", err)
-	}
-	// 🔴 THE RETURN VALUE IS WHAT Upgrade WAITS ON. A restart it does not report is a
-	// restart nothing waits for: under --skip-infrastructure the services would roll
-	// onto a broker whose servers are still coming back.
-	if !reported {
-		t.Error("the broker was restarted but renewBrokerCertificate reported restarted=false, " +
-			"so the upgrade does not wait for its servers before rolling the services")
-	}
-
-	var restarted bool
-	for _, a := range c.Actions() {
-		if a.GetVerb() == "patch" && a.GetResource().Resource == "statefulsets" {
-			restarted = true
-		}
-	}
-	if !restarted {
-		t.Error("the broker was not restarted, so it keeps presenting the certificate that was " +
-			"about to expire while the renewal reports success")
 	}
 }
 
@@ -290,5 +274,131 @@ func TestTheStoredAuthorityIsNotTheObjectTheBrokerMounts(t *testing.T) {
 		if string(value) == caKey {
 			t.Errorf("the authority's private key is in the broker's own Secret under %q", key)
 		}
+	}
+}
+
+// Stands in for the broker pods: each reports the expiry of whatever certificate the Secret holds
+// at the moment it is asked, which is what a pod does once the kubelet has projected the Secret and
+// the reloader has HUPed the server. Restored when the test ends.
+func podsServeTheSecret(t *testing.T, c *fake.Clientset) {
+	t.Helper()
+	prev, prevTimeout, prevPoll := brokerServedNotAfter, brokerHotRenewTimeout, brokerHotRenewPoll
+	brokerHotRenewTimeout, brokerHotRenewPoll = 2*time.Second, 5*time.Millisecond
+	brokerServedNotAfter = func(ctx context.Context, _ kubernetes.Interface, ns, pod string) (time.Time, error) {
+		settleStringDataLikeAnAPIServer(t, c)
+		return brokerLeaf(t, c).NotAfter, nil
+	}
+	t.Cleanup(func() { brokerServedNotAfter, brokerHotRenewTimeout, brokerHotRenewPoll = prev, prevTimeout, prevPoll })
+}
+
+func statefulSetPatched(c *fake.Clientset) bool {
+	for _, a := range c.Actions() {
+		if a.GetVerb() == "patch" && a.GetResource().Resource == "statefulsets" {
+			return true
+		}
+	}
+	return false
+}
+
+// 🔴 A LEAF-ONLY RENEWAL MUST NOT ROLL THE BROKER. The broker hot-swaps its MQTT certificate on
+// the reloader's SIGHUP when only the key material changed, keeping every session; a restart
+// throws that away. The renewal waits for the pods to serve the new certificate instead.
+func TestALeafOnlyRenewalDoesNotRestartTheBrokerAndVerifiesTheSwap(t *testing.T) {
+	c, st := anInstanceWithBrokerMaterialMintedAt(t, time.Now().UTC().Add(-335*24*time.Hour), 3)
+	podsServeTheSecret(t, c)
+	probed := map[string]bool{}
+	inner := brokerServedNotAfter
+	brokerServedNotAfter = func(ctx context.Context, k kubernetes.Interface, ns, pod string) (time.Time, error) {
+		probed[pod] = true
+		return inner(ctx, k, ns, pod)
+	}
+	before := brokerLeaf(t, c)
+
+	restarted, err := renewBrokerCertificate(context.Background(), c, st)
+	if err != nil {
+		t.Fatalf("renewing the broker's certificate: %v", err)
+	}
+	if restarted || statefulSetPatched(c) {
+		t.Fatal("the broker was rolled for a renewal that changed only its leaf")
+	}
+	settleStringDataLikeAnAPIServer(t, c)
+	if brokerLeaf(t, c).SerialNumber.Cmp(before.SerialNumber) == 0 {
+		t.Fatal("the certificate was not replaced")
+	}
+	if len(probed) != 3 {
+		t.Errorf("served certificate verified on %d of 3 pods: %v", len(probed), probed)
+	}
+}
+
+// The authority changed under the leaf: the pods' CA pool would change, so the hot path would fall
+// back to a full reload. Rolled, and the probe is never consulted.
+func TestACertificateAuthorityChangeRestartsTheBroker(t *testing.T) {
+	c, st := anInstanceWithBrokerMaterialMintedAt(t, time.Now().UTC().Add(-335*24*time.Hour), 1)
+	podsServeTheSecret(t, c)
+	brokerServedNotAfter = func(context.Context, kubernetes.Interface, string, string) (time.Time, error) {
+		t.Error("the served certificate was probed although the CA changed")
+		return time.Time{}, nil
+	}
+	secrets := c.CoreV1().Secrets(InstanceNamespace(testInstance))
+	cur, err := secrets.Get(context.Background(), natsReleaseName+"-tls", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := mintNATSTLS(natsReleaseName, InstanceNamespace(testInstance), 1, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cur.Data["ca.crt"] = []byte(other.CACertPEM)
+	if _, err := secrets.Update(context.Background(), cur, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	restarted, err := renewBrokerCertificate(context.Background(), c, st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !restarted || !statefulSetPatched(c) {
+		t.Error("the broker was not restarted although the CA bundle it mounts changed")
+	}
+}
+
+// A change to the broker's config (here the server count, which rewrites routes and the leaf's
+// names) cannot be hot: the pods roll for it anyway.
+func TestAConfigChangeRestartsTheBroker(t *testing.T) {
+	c, st := anInstanceWithBrokerMaterialMintedAt(t, time.Now().UTC().Add(-335*24*time.Hour), 1)
+	podsServeTheSecret(t, c)
+	brokerServedNotAfter = func(context.Context, kubernetes.Interface, string, string) (time.Time, error) {
+		t.Error("the served certificate was probed although the config changed")
+		return time.Time{}, nil
+	}
+	st.HA = true // the instance is now scaled to three servers; the running StatefulSet has one.
+
+	restarted, err := renewBrokerCertificate(context.Background(), c, st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !restarted || !statefulSetPatched(c) {
+		t.Error("the broker was not restarted although the topology changed")
+	}
+}
+
+// 🔴 NEVER LEAVE THE OLD CERTIFICATE SERVING SILENTLY. A pod that has not switched within the
+// bound means the swap is not coming (reloader not running, volume not projected, hot path
+// refused): the renewal warns and rolls the broker.
+func TestAnUnverifiedSwapFallsBackToARestart(t *testing.T) {
+	c, st := anInstanceWithBrokerMaterialMintedAt(t, time.Now().UTC().Add(-335*24*time.Hour), 1)
+	podsServeTheSecret(t, c)
+	old := brokerLeaf(t, c).NotAfter
+	brokerServedNotAfter = func(context.Context, kubernetes.Interface, string, string) (time.Time, error) {
+		return old, nil // still the old certificate
+	}
+	brokerHotRenewTimeout = 100 * time.Millisecond
+
+	restarted, err := renewBrokerCertificate(context.Background(), c, st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !restarted || !statefulSetPatched(c) {
+		t.Error("the broker kept serving the old certificate behind a green renewal")
 	}
 }

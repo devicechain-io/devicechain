@@ -338,9 +338,13 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 	// they were told to and the broker stops accepting connections anyway, on the
 	// anniversary of a bootstrap.
 	//
-	// Ahead of the release on purpose: the renewal restarts the broker, and doing that
-	// while the services are mid-roll means two disruptions overlapping instead of
-	// one finishing before the other starts.
+	// Ahead of the release on purpose: a renewal that has to restart the broker (a CA or
+	// topology change, or a hot swap that did not verify) would otherwise overlap the
+	// services' roll, two disruptions instead of one finishing before the other starts.
+	// A leaf-only renewal does not restart it: the broker swaps the certificate in place
+	// and the renewal waits until every pod serves it (see renewBrokerCertificate). That
+	// only helps when the broker image is unchanged; an image or config change rolls the
+	// broker in the infrastructure apply below regardless.
 	// The broker's pods as they are now, so the leadership step runs only if they were replaced.
 	brokerBefore := brokerPodUIDs(ctx, typed, InstanceNamespace(st.Instance))
 	doing("checking the broker's certificate")

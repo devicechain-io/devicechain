@@ -522,16 +522,21 @@ issued by an authority `dcctl` mints at bootstrap and keeps in the cluster. An u
 re-issues that certificate when it is inside its last 30 days, or when it no longer covers
 every name the brokers dial each other by — which is what scaling an instance up does to a
 certificate that is otherwise still comfortably in date. The re-issue is under the **same**
-authority, so nothing has to re-trust anything, and the broker is restarted so that it
-actually serves the new certificate rather than holding the old one until something unrelated
-rolls it. Outside those conditions the check runs and does nothing.
+authority, so nothing has to re-trust anything. When only the certificate changes, the broker
+is **not** restarted: it swaps the certificate in place, and the upgrade then waits, up to five
+minutes, until every broker reports the new certificate's expiry. If a broker has not switched
+in that time, the upgrade warns and restarts the brokers so none is left serving the old
+certificate. The brokers are restarted straight away when more than the certificate changed:
+the authority, or the number of servers. When the upgrade also changes the broker's image or
+configuration, the brokers are rolled by that change in any case. Outside those conditions the
+check runs and does nothing.
 
 That certificate is minted and renewed by `dcctl`, not by cert-manager, which issues the
 instance's web certificates and has no part in the broker's. The broker's certificate is in
 the `dc-nats-tls` Secret of the instance namespace, and `dcctl upgrade` is what rewrites it. A
 broker handed a new certificate under the same authority serves it to new connections without
 reloading its configuration, so the MQTT sessions it already holds are not dropped by the
-certificate change. The restart the upgrade makes is an ordinary rolling restart, one broker
+certificate change. A restart the upgrade does make is an ordinary rolling restart, one broker
 at a time, and reconnects devices the way any broker roll does.
 
 An instance bootstrapped before `dcctl` kept that authority cannot have its certificate
