@@ -308,6 +308,11 @@ element, where `$` is the document, `$.a` a property, `$.a[]` an array's items a
 `{instance}`, `{tenant}` and `{device}` as placeholders. The command tree and the topics are
 read by building the release's own code, so neither has a file to keep in step by hand.
 
+The device **credential types** (`ACCESS_TOKEN`, `MQTT_BASIC`, `X509_CERTIFICATE`) are frozen by
+`TestCredentialVocabularyKeepsEveryShippedType` in `backend/services/device-management/model`: adding a
+type means adding a row to `shippedCredentialTypes` in the same change, and removing one or changing how
+it is presented fails the test, since a provisioned device would stop connecting.
+
 ## Changing the C# SDK or the npm packages
 
 | Surface | Run | Breaking | Declare in |
