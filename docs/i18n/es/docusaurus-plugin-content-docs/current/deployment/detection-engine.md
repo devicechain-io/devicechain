@@ -78,8 +78,8 @@ encolado; eso sí, cada réplica consume su propio límite de salida en ese inte
 Con una sola réplica no hay presupuesto de interrupción de pods, y drenar su nodo detiene la
 detección hasta que el pod se reprograma. Un standby es la forma de evitarlo.
 
-## Qué cuesta un reinicio
- {#what-a-restart-costs}
+## Qué cuesta un reinicio {#what-a-restart-costs}
+
 Un reinicio es rutina, no un incidente. Al arrancar, el motor recarga su último punto de control y
 reproduce el flujo desde esa posición, de modo que vuelve a derivar el estado que tenía.
 
