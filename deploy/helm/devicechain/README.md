@@ -536,13 +536,14 @@ re-opens every private address for every tenant.
   `outbound-connectors`. Requires a policy-enforcing CNI to do anything; see
   "Bounding tenant egress" above.
 - Optional (`ingress.enabled=true`): the instance's routing on one host, in one of two forms
-  chosen by `ingress.controller`. `nginx` (the default) renders `Ingress` objects: the API
+  chosen by `ingress.controller`. `gateway` (the default) renders a Gateway API `Gateway` and
+  `HTTPRoute`s for any conformant controller; the deprecated `nginx` renders `Ingress` objects: the API
   ingress routes `https://<host>/api/<area>/graphql` to each enabled area (stripping the
   `/api/<area>` prefix), and the web ingress serves the console at `https://<host>/`, plus
   the OAuth discovery route and the update-artifact upload and download routes. `gateway`
-  renders a Gateway API `Gateway` and `HTTPRoute`s that serve exactly the same hosts, paths
-  and backends, for any conformant controller (the OpenTofu install registers Traefik's
-  `GatewayClass`). Exactly one form is rendered, except during a cutover from `nginx` to `gateway`, when
+  serves exactly the same hosts, paths and backends (the OpenTofu install registers Traefik's
+  `GatewayClass`). `nginx` is deprecated, because the Kubernetes project has retired
+  ingress-nginx, and is kept for one more minor so an existing instance can be moved. Exactly one form is rendered, except during a cutover from `nginx` to `gateway`, when
   `ingress.legacy.enabled` renders the `Ingress` objects beside the `Gateway` (the Ingress
   objects keep `ingress.tls.secretName`, which is what DNS still reaches, and the Gateway names
   `ingress.gateway.tlsSecretName`, so the two never issue into one Secret and the serving side
@@ -666,8 +667,8 @@ generated from the schema; do not edit it by hand.
 | `securityContext` | object | see values.yaml | Container-level securityContext. The hardened defaults drop all Linux capabilities, forbid privilege escalation and use a read-only root filesystem; the service images are static binaries that write nothing to the root filesystem. |
 | `ingress` | object | - | Optional routing + cert-manager TLS exposing the GraphQL/HTTP surface: Ingress objects (controller nginx) or a Gateway API Gateway with HTTPRoutes (controller gateway). Requires the OpenTofu controller + cert-manager. |
 | `ingress.enabled` | boolean | `false` | Render the routing objects: the API, the well-known discovery route and the web console. Each enabled area is reachable at https://&lt;host&gt;/api/&lt;area&gt;/graphql and the console at https://&lt;host&gt;/. |
-| `ingress.controller` | string | `"nginx"` | Which front end serves the host: nginx renders Ingress objects for the ingress-nginx controller, gateway renders a Gateway API Gateway and HTTPRoutes for any conformant controller. Exactly one is rendered, and both serve the same hosts, paths and backends. |
-| `ingress.className` | string | `"nginx"` | IngressClass the controller registered (the OpenTofu ingress_class). Used when controller is nginx. |
+| `ingress.controller` | string | `"gateway"` | Which front end serves the host: gateway (the default) renders a Gateway API Gateway and HTTPRoutes for any conformant controller, nginx renders Ingress objects for the ingress-nginx controller. nginx is deprecated: the Kubernetes project has retired ingress-nginx, and the value stays for one more minor so an existing instance can be moved off it. Exactly one is rendered, and both serve the same hosts, paths and backends. |
+| `ingress.className` | string | `"nginx"` | IngressClass the controller registered (the OpenTofu ingress_class). Used when controller is nginx (deprecated). |
 | `ingress.gateway` | object | - | The Gateway API front end, used when controller is gateway. |
 | `ingress.gateway.className` | string | `"traefik"` | GatewayClass the controller registered (the OpenTofu gateway_class). |
 | `ingress.gateway.annotations` | object | `{}` | Annotations merged onto the Gateway, after the cert-manager issuer annotation. |

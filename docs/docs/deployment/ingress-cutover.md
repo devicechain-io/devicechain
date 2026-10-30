@@ -10,6 +10,14 @@ New installs serve their host through **Traefik** and the Kubernetes **Gateway A
 `ingress-nginx`: the move is done in steps, and the host keeps answering throughout. A cluster with no
 `ingress-nginx` needs none of it; `dcctl install` puts Traefik alone on it.
 
+:::caution ingress-nginx is deprecated
+The Kubernetes project has retired `ingress-nginx`, and DeviceChain has deprecated it with it. From this release:
+
+- A **new cluster** is served by Traefik alone. (On an existing local cluster that has both controllers, a new instance is still served by `ingress-nginx` until it is removed.) `dcctl install` no longer installs `ingress-nginx` on a cluster that does not have it, the Helm chart's `ingress.controller` defaults to `gateway`, and the OpenTofu variable `enable_ingress_nginx` defaults to `false`.
+- An **existing install is not moved by a `dcctl` upgrade.** An instance served by `ingress-nginx` stays on it, still serving, and `dcctl upgrade` prints a deprecation warning each time until you do the steps below. A cluster that has `ingress-nginx` keeps it. This holds for installs made with `dcctl`. If you install the Helm chart directly, set `ingress.controller=nginx` before you upgrade the chart: the new default renders a Gateway and removes the Ingress objects, and with no Traefik on the cluster the host stops answering.
+- The `nginx` choice stays available for one more minor release so that you can move in your own time, and is then removed. Move before you upgrade to the release that removes it.
+:::
+
 What each command does to a cluster that still has `ingress-nginx`:
 
 - **`dcctl install`** leaves `ingress-nginx` serving and installs Traefik and the Gateway API definitions beside it.

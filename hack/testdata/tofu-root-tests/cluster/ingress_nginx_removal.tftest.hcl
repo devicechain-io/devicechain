@@ -211,3 +211,47 @@ run "a_solver_label_that_is_not_true_is_not_a_solver" {
   }
   expect_failures = [terraform_data.ingress_nginx_removal_guard]
 }
+
+# An Ingress with no class is served by the cluster's default IngressClass. When that is
+# ingress-nginx's, removing the controller strands it too; when it is not, it is nobody's here.
+run "a_classless_ingress_counts_when_nginx_is_the_default_class" {
+  command = plan
+  override_data {
+    target = data.kubernetes_resources.ingresses_of_the_nginx_class
+    values = {
+      objects = [
+        { metadata = { name = "bare", namespace = "dci-z", annotations = {} }, spec = {} },
+      ]
+    }
+  }
+  override_data {
+    target = data.kubernetes_resources.ingress_classes
+    values = {
+      objects = [
+        { metadata = { name = "nginx", annotations = { "ingressclass.kubernetes.io/is-default-class" = "true" } }, spec = { controller = "k8s.io/ingress-nginx" } },
+      ]
+    }
+  }
+  expect_failures = [terraform_data.ingress_nginx_removal_guard]
+}
+
+run "a_classless_ingress_is_not_nginxs_when_another_class_is_the_default" {
+  command = plan
+  override_data {
+    target = data.kubernetes_resources.ingresses_of_the_nginx_class
+    values = {
+      objects = [
+        { metadata = { name = "bare", namespace = "dci-z", annotations = {} }, spec = {} },
+      ]
+    }
+  }
+  override_data {
+    target = data.kubernetes_resources.ingress_classes
+    values = {
+      objects = [
+        { metadata = { name = "nginx", annotations = {} }, spec = { controller = "k8s.io/ingress-nginx" } },
+        { metadata = { name = "traefik", annotations = { "ingressclass.kubernetes.io/is-default-class" = "true" } }, spec = { controller = "traefik.io/ingress-controller" } },
+      ]
+    }
+  }
+}

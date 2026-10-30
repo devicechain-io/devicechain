@@ -457,7 +457,32 @@ func settleFrontEnd(ctx context.Context, st *State) error {
 		why += "; recorded on the instance, so a later upgrade keeps it until --ingress-controller auto"
 	}
 	fmt.Printf("  front end        %s%s (%s)\n", choice.Controller, map[bool]string{true: " + legacy Ingress"}[choice.Legacy], why)
+	if w := ingressNginxDeprecation(choice, facts.GatewayClass); w != "" {
+		fmt.Println(color.YellowString("  warning: %s", w))
+	}
 	return checkNginxOnlyOverlay(st)
+}
+
+// ingressNginxDeprecation is the notice for an instance still served by ingress-nginx, whether
+// alone or beside the Gateway in the cutover window; empty for an instance on the Gateway alone.
+// It is a notice and not a refusal: the instance keeps serving exactly as it does, and the move
+// is the operator's, on the operator's schedule (docs: Moving an existing install to Traefik).
+func ingressNginxDeprecation(choice frontEndChoice, gatewayClass bool) string {
+	switch {
+	case choice.Controller == frontEndNginx && gatewayClass:
+		// Traefik is already here: the instance is on nginx by a recorded or given choice.
+		return "ingress-nginx is DEPRECATED: the Kubernetes project has retired it, and this instance stays on it until you move it. " +
+			"Traefik is already on this cluster: run `dcctl upgrade --ingress-controller auto` (or `gateway`) to start the move " +
+			"(see \"Moving an existing install to Traefik\" in the documentation)"
+	case choice.Controller == frontEndNginx:
+		return "ingress-nginx is DEPRECATED: the Kubernetes project has retired it, and this instance stays on it until you move it. " +
+			"Run `dcctl install` with this release to add Traefik beside it, then `dcctl upgrade` to start the move " +
+			"(see \"Moving an existing install to Traefik\" in the documentation)"
+	case choice.Legacy:
+		return "this instance is in the cutover window: ingress-nginx is DEPRECATED and still serves its Ingress objects. " +
+			"Move DNS to Traefik, then run `dcctl upgrade --drop-legacy-ingress`"
+	}
+	return ""
 }
 
 // refuseDropWithoutGatewayCertificate is the precondition of --drop-legacy-ingress: dropping the
@@ -668,10 +693,15 @@ func planClusterFrontEnd(f clusterFrontEnd, local, removeLegacy bool) (clusterFr
 		}
 		p.Notes = append(p.Notes, "removing ingress-nginx; no Ingress object names its class")
 	default:
+		// 🔴 SAID OUT LOUD, BECAUSE THE ROOT'S DEFAULT IS NOW OFF. enable_ingress_nginx defaults to
+		// false (a new cluster never gets the retired controller), so a cluster that has it keeps it
+		// only by being told to; leaving it to the default would be a removal.
+		p.Vars = append(p.Vars, "enable_ingress_nginx=true")
 		if local {
 			p.Vars = append(p.Vars, "ingress_use_host_port=true")
 		}
-		p.Notes = append(p.Notes, "ingress-nginx stays and keeps serving; Traefik is installed beside it. When every "+
+		p.Notes = append(p.Notes, "DEPRECATED: ingress-nginx is retired upstream and is no longer installed on a new cluster; "+
+			"this cluster has it, so it stays and keeps serving, and Traefik is installed beside it. When every "+
 			"instance has moved (`dcctl upgrade --drop-legacy-ingress`), `dcctl install --remove-legacy-ingress` removes it")
 	}
 	return p, nil

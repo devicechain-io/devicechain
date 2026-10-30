@@ -51,7 +51,7 @@ Each in a namespace of its own, it installs:
 - the CloudNativePG operator (`cnpg-system`);
 - cert-manager (`cert-manager`);
 - monitoring (Prometheus and Grafana, in `monitoring` — see [Observability](./observability.md));
-- the ingress controller: Traefik, with the Gateway API definitions it serves. A cluster that already runs `ingress-nginx` keeps it, still serving, and gains Traefik beside it; see [Moving an existing install to Traefik](./ingress-cutover.md).
+- the ingress controller: Traefik, with the Gateway API definitions it serves. `ingress-nginx` is deprecated and is no longer installed. A cluster that already runs it keeps it, still serving, and gains Traefik beside it; see [Moving an existing install to Traefik](./ingress-cutover.md).
 
 The operator is one controller per cluster, shared by every instance on it. That is why
 installing it is the cluster command's job rather than each instance's, and why moving a

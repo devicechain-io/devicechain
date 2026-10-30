@@ -54,7 +54,7 @@ Cada uno en un namespace propio, instala:
 - el operador CloudNativePG (`cnpg-system`);
 - cert-manager (`cert-manager`);
 - la monitorización (Prometheus y Grafana, en `monitoring` —consulta [Observabilidad](./observability.md));
-- el controlador de ingress: Traefik, con las definiciones de la Gateway API que sirve. Un clúster que ya ejecuta `ingress-nginx` lo conserva, sirviendo, y recibe Traefik a su lado; consulta [Pasar una instalación existente a Traefik](./ingress-cutover.md).
+- el controlador de ingress: Traefik, con las definiciones de la Gateway API que sirve. `ingress-nginx` está obsoleto y ya no se instala. Un clúster que ya lo ejecuta lo conserva, sirviendo, y recibe Traefik a su lado; consulta [Pasar una instalación existente a Traefik](./ingress-cutover.md).
 
 El operador es un solo controlador por clúster, compartido por todas las instancias que haya
 en él. Por eso instalarlo es tarea del comando del clúster y no de cada instancia, y por eso

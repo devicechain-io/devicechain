@@ -7,6 +7,15 @@ title: 迁移到 Traefik
 
 新安装通过 **Traefik** 和 Kubernetes **Gateway API** 提供主机服务。早期版本使用 `ingress-nginx`，该项目已被 Kubernetes 社区停止维护。本页面向已经运行 `ingress-nginx` 的安装：迁移分步进行，主机全程持续响应。没有 `ingress-nginx` 的集群无需这些步骤，`dcctl install` 只会为它安装 Traefik。
 
+:::caution ingress-nginx 已弃用
+Kubernetes 项目已停止维护 `ingress-nginx`，DeviceChain 也随之将其弃用。自本版本起：
+
+- **新集群**仅由 Traefik 提供服务。（在已有两种控制器的现有本地集群上，新实例在 `ingress-nginx` 被移除之前仍由它提供服务。）`dcctl install` 不再在没有 `ingress-nginx` 的集群上安装它，Helm Chart 的 `ingress.controller` 默认值为 `gateway`，OpenTofu 变量 `enable_ingress_nginx` 默认值为 `false`。
+- **现有安装不会因 `dcctl` 升级而被迁移。** 由 `ingress-nginx` 提供服务的实例会继续留在它上面并正常提供服务，在你完成下面的步骤之前，每次 `dcctl upgrade` 都会打印弃用警告。已有 `ingress-nginx` 的集群会保留它。这适用于通过 `dcctl` 完成的安装。如果你直接安装 Helm Chart，请在升级 Chart 之前设置 `ingress.controller=nginx`：新的默认值会生成 Gateway 并删除 Ingress 对象，而集群上没有 Traefik 时，该主机将无法响应。
+- `nginx` 选项会再保留一个次要版本，方便你按自己的节奏迁移，之后将被移除。请在升级到移除它的版本之前完成迁移。
+:::
+
+
 在仍有 `ingress-nginx` 的集群上，各命令的作用如下：
 
 - **`dcctl install`** 让 `ingress-nginx` 继续提供服务，并在它旁边安装 Traefik 和 Gateway API 定义。Traefik 拥有自己的负载均衡器，因此也有自己的地址。

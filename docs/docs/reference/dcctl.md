@@ -733,9 +733,10 @@ or upgrading one instance.
 instance bootstrapped on the cluster, on the nodes it names; --database-toleration lets
 them onto nodes tainted to keep other workloads off.
 
-The ingress controller is Traefik, which serves Gateway API routes. A cluster that already
-runs ingress-nginx keeps it, serving, and gains Traefik beside it; a cluster that does not
-gets Traefik alone. --remove-legacy-ingress removes ingress-nginx, and refuses while any
+The ingress controller is Traefik, which serves Gateway API routes. ingress-nginx is
+DEPRECATED (the Kubernetes project has retired it) and is no longer installed: a cluster that
+already runs it keeps it, serving, and gains Traefik beside it; a cluster that does not gets
+Traefik alone. --remove-legacy-ingress removes ingress-nginx, and refuses while any
 Ingress object in the cluster still names its class: move each instance first with
 'dcctl upgrade --drop-legacy-ingress'.
 
@@ -1656,6 +1657,9 @@ The fail-closed MQTT acknowledgement is the other: '--mqtt-fail-closed' (or
 choice. A plain upgrade with no flag keeps whatever was recorded, so an instance built
 with it stays on, and one told off stays off.
 
+ingress-nginx is DEPRECATED. A new instance is served by the Gateway; an instance already on
+ingress-nginx stays on it, with a warning, until the cluster has Traefik and you move it.
+
 Where the cluster runs Traefik (the Gateway API controller that replaces ingress-nginx) an
 upgrade moves the instance's routing to a Gateway and HTTPRoutes. While ingress-nginx is still
 on the cluster the instance's Ingress objects are rendered beside them under a certificate
@@ -1738,7 +1742,7 @@ dcctl upgrade <provider> <instance> [flags]
       --escrow-file string              where this instance's root-key escrow artifact lives (default ~/.devicechain/escrow/<instance>-rootkey.escrow). The upgrade checks it still protects the key the instance is running on
       --escrow-passphrase-file string   read the escrow passphrase from this file (or $DCCTL_ESCROW_PASSPHRASE). Only needed to WRITE an escrow for an instance that has none — checking an existing one needs no passphrase
   -h, --help                            help for upgrade
-      --ingress-controller string       which front end serves the instance's host: gateway (a Gateway API Gateway and HTTPRoutes, served by Traefik), nginx (Ingress objects, served by ingress-nginx) or auto. The choice is RECORDED on the instance and kept by every later upgrade, so 'nginx' stays a rollback until 'gateway' or 'auto' says otherwise; auto drops the record and decides from the cluster. With no choice recorded or given, where Traefik runs the instance is served by the Gateway, and while it still has Ingress objects and ingress-nginx remains they are rendered beside it, so the host keeps answering there until --drop-legacy-ingress. nginx needs ingress-nginx on the cluster, and gateway needs Traefik
+      --ingress-controller string       which front end serves the instance's host: gateway (a Gateway API Gateway and HTTPRoutes, served by Traefik), nginx (Ingress objects, served by ingress-nginx) or auto. nginx is DEPRECATED: ingress-nginx is retired upstream, and the choice is kept for one more minor so an instance can be moved off it in its own time. The choice is RECORDED on the instance and kept by every later upgrade, so 'nginx' stays a rollback until 'gateway' or 'auto' says otherwise; auto drops the record and decides from the cluster. With no choice recorded or given, where Traefik runs the instance is served by the Gateway, and while it still has Ingress objects and ingress-nginx remains they are rendered beside it, so the host keeps answering there until --drop-legacy-ingress. nginx needs ingress-nginx on the cluster, and gateway needs Traefik
       --kube-context string             kube-context to target (default: the cluster recorded at bootstrap; a different context is refused)
       --lwm2m-identities string         path to a JSON file of LwM2M DTLS-PSK credentials to provision: [{identity, psk(base64), tenant, externalId, deviceTypeToken, autoRegister}]. The identities bind each credential to lwm2m-ingest; the pre-shared keys are written by dcctl into a Secret of its own, dci-<instance>-lwm2m-identities, OUTSIDE the Helm release: the release records only the Secret's name and a version stamp, never a key. The identities are kept by every later upgrade, and a run given the file again replaces them and rewrites the Secret (a rotation). Implies --enable-area lwm2m-ingest on a bootstrap (on an upgrade the area must already run). Validated up front (short PSK / missing tenancy fails before any cluster). A bootstrap over an instance that has identities, given none, is refused unless --withdraw-lwm2m-identities is given
       --mqtt-fail-closed                make a QoS 1 PUBACK from the MQTT gateway mean the platform holds the message (infrastructure.nats.mqttFailClosed). The trade: a QoS 1 publish is REFUSED (no PUBACK, connection closed, the device resends) while the broker's MQTT message store has no leader, instead of being acknowledged and possibly lost, and the ingest ceiling is lower, so size the instance below it. It covers QoS 1 only, and its guarantee is stated for a replicated broker (a cluster installed with --ha). --mqtt-fail-closed=false turns it off again. Fixed configuration, recorded on the instance and kept by 'dcctl upgrade' when the flag is omitted; not giving the flag leaves the platform default

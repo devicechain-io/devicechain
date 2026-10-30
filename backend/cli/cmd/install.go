@@ -223,9 +223,10 @@ or upgrading one instance.
 instance bootstrapped on the cluster, on the nodes it names; --database-toleration lets
 them onto nodes tainted to keep other workloads off.
 
-The ingress controller is Traefik, which serves Gateway API routes. A cluster that already
-runs ingress-nginx keeps it, serving, and gains Traefik beside it; a cluster that does not
-gets Traefik alone. --remove-legacy-ingress removes ingress-nginx, and refuses while any
+The ingress controller is Traefik, which serves Gateway API routes. ingress-nginx is
+DEPRECATED (the Kubernetes project has retired it) and is no longer installed: a cluster that
+already runs it keeps it, serving, and gains Traefik beside it; a cluster that does not gets
+Traefik alone. --remove-legacy-ingress removes ingress-nginx, and refuses while any
 Ingress object in the cluster still names its class: move each instance first with
 'dcctl upgrade --drop-legacy-ingress'.
 

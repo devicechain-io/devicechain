@@ -2376,7 +2376,7 @@ jobs:
             esac
           done
           refuses "a Gateway and an Ingress naming one certificate Secret" "must differ from ingress.tls.secretName" --set "instance.config.infrastructure.secrets.rootKey=$KEY" --set ingress.enabled=true --set ingress.controller=gateway --set ingress.legacy.enabled=true
-          refuses "legacy ingress beside the nginx front end" "needs ingress.controller: gateway"             --set "instance.config.infrastructure.secrets.rootKey=$KEY" --set ingress.enabled=true --set ingress.legacy.enabled=true
+          refuses "legacy ingress beside the nginx front end" "needs ingress.controller: gateway"             --set "instance.config.infrastructure.secrets.rootKey=$KEY" --set ingress.enabled=true --set ingress.controller=nginx --set ingress.legacy.enabled=true
 
           renders "inline config" --set "instance.config.infrastructure.secrets.rootKey=$KEY"
           renders "inline config, ingest-only" --set profile=ingest-only \

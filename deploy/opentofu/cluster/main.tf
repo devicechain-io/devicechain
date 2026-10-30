@@ -777,13 +777,28 @@ data "kubernetes_resources" "ingresses_of_the_nginx_class" {
   kind        = "Ingress"
 }
 
+# An Ingress that names no class is served by whichever IngressClass is the cluster default, so
+# when ingress-nginx's class is the default those Ingresses are its too.
+data "kubernetes_resources" "ingress_classes" {
+  api_version = "networking.k8s.io/v1"
+  kind        = "IngressClass"
+}
+
 locals {
   ingress_nginx_installed = length(data.kubernetes_resources.ingress_nginx_release.objects) > 0
+  nginx_is_default_class = anytrue([
+    for c in data.kubernetes_resources.ingress_classes.objects :
+    try(c.spec.controller, "") == "k8s.io/ingress-nginx" &&
+    try(c.metadata.annotations["ingressclass.kubernetes.io/is-default-class"], "") == "true"
+  ])
   ingresses_on_nginx = [
     for o in data.kubernetes_resources.ingresses_of_the_nginx_class.objects :
     "${o.metadata.namespace}/${o.metadata.name}"
     if(try(o.spec.ingressClassName, "") == var.ingress_class ||
-    try(o.metadata.annotations["kubernetes.io/ingress.class"], "") == var.ingress_class) &&
+      try(o.metadata.annotations["kubernetes.io/ingress.class"], "") == var.ingress_class ||
+      (local.nginx_is_default_class &&
+        try(o.spec.ingressClassName, "") == "" &&
+    try(o.metadata.annotations["kubernetes.io/ingress.class"], "") == "")) &&
     # cert-manager's HTTP-01 solver Ingress lives for one challenge and is nobody's host: it does
     # not hold the removal up (and the controller going away ends the challenge, which retries).
     try(o.metadata.labels["acme.cert-manager.io/http01-solver"], "") != "true" &&

@@ -99,8 +99,8 @@
       "translationSha256": "bcc789a10ea594596da5c7360b818fad3e2eabb6e5ff6fd36a90b8c2ee005127"
     },
     "deployment/bootstrap.md": {
-      "sourceSha256": "fbce55138efb069cb5298a8e0daf7d53cfae655e399a2ae373bacaa06e19a074",
-      "translationSha256": "179e7db36b042d9ab0c96784b4a0798bbb82d7234ba633c109d06d00972174cd"
+      "sourceSha256": "e3411390c81aa7e0f2489475339c6acd16ca5b2dcae515962db0968374c74fa1",
+      "translationSha256": "d51c5aad34ef16bdef0f350176ca55e794543a20a76f98bd461122631f76dd25"
     },
     "deployment/cluster-lock.md": {
       "sourceSha256": "bdb2c0833562eeebfffd0ccaeb8210d5fdf01d0ffb7113c4fcd779d4199030ae",
@@ -127,8 +127,8 @@
       "translationSha256": "3b051e1f38ed6656d7645a02085fb390f0359394c1cec79dddaa49ca74de2c51"
     },
     "deployment/ingress-cutover.md": {
-      "sourceSha256": "254bf27d4198332eb0a958b5847b167f2f3f8afaa73452ed19de15eee3c616ce",
-      "translationSha256": "b7541f44fbef9416a3dfe24d84b79543a0097a97dfd8f5d4083fda8c37061730"
+      "sourceSha256": "11f7ba29969ace2fe2a0b03b8badf1191e767fcbb042c8238a543ff927d3cfec",
+      "translationSha256": "e61700bf89b478a36cc14f10bd6a1749b27648c1be1caefc674e663adf6389dd"
     },
     "deployment/kubernetes-operator.md": {
       "sourceSha256": "4947ae8be7d4297b39e5b326c9e5a8001e0fe918c540a343e17ab610e7bf5ef4",
@@ -259,8 +259,8 @@
       "translationSha256": "75652e3e983ab288d0e1fe0f9760fd2e9c62941fe87ab1b3e64593d38cfb182b"
     },
     "reference/dcctl.md": {
-      "sourceSha256": "ae054313d6110ec6960bac22ccc4bc926629c08e6ab00b9be98e9e0d3270455a",
-      "translationSha256": "abefe42e2287d90dabe473021ba359d300dea36d96563dd245cf9731af665397"
+      "sourceSha256": "ffd030e52a199292fef9009d08ffba451207ce7dce5c8ec2936e1adefe07a1a7",
+      "translationSha256": "cfba840ecd3e0fc50a1668f245e554c6beb7a43e12af9e8ddc36a89b30ca89d6"
     },
     "reference/device-protocol.md": {
       "sourceSha256": "72f8c1c6cdda43074da6792b6fc5bcc75b7a88ce4198e56c53bf82324adb2024",

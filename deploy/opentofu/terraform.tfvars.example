@@ -46,16 +46,17 @@
 # value), so a bump is a deliberate act with something to re-verify. An empty value is
 # REFUSED: it used to install latest, which made the version resolve at apply time and
 # two bootstraps of this commit install different software.
-# enable_ingress_nginx        = true
+# enable_ingress_nginx        = false   # DEPRECATED; true keeps ingress-nginx on a cluster that runs it
 # enable_cert_manager         = true
 # ingress_class               = "nginx"
 # ingress_nginx_chart_version = "4.15.1"
 # cert_manager_chart_version  = "v1.21.1"
 
 # Gateway API + Traefik (the controller that replaces ingress-nginx; installed NEXT TO it
-# where it is already installed, which then stays untouched). ON BY DEFAULT. Turn
-# enable_ingress_nginx off to run Traefik alone: the root refuses that while an Ingress of
-# ingress_class remains, unless allow_ingress_nginx_removal = true. The CRDs are installed only when the
+# where it is already installed, which then stays untouched). ON BY DEFAULT, and ingress-nginx
+# is OFF by default (deprecated). Over a cluster that has it, turning enable_ingress_nginx off is
+# refused while an Ingress of ingress_class
+# remains, unless allow_ingress_nginx_removal = true. The CRDs are installed only when the
 # cluster has none. A set that is not ours and that Traefik cannot run against (GKE's, for
 # one, may lack a CRD or sit below the provisional v1.5.1 floor) is never an error: Traefik
 # and cert-manager's Gateway shim are SKIPPED with a warning and a gateway_api_notice output.
