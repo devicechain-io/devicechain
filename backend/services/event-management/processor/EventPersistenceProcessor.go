@@ -94,7 +94,25 @@ type PersistMetrics struct {
 	batchSize prometheus.Observer
 	// fallbacks is persist_batch_fallbacks_total: batch transactions that did not commit.
 	fallbacks prometheus.Counter
+	// rows is persist_rows_total: stored rows, which for a measurement event is one per
+	// entry (derived entries included), so rows/s stays comparable between a profile with
+	// calculated metrics and one without.
+	rows prometheus.Counter
+	// batchRows is persist_batch_rows: stored rows per committed transaction.
+	batchRows prometheus.Observer
+	// commitSeconds is persist_commit_duration_seconds: wall time of one committed
+	// transaction, begin to COMMIT, with buckets fine enough to compare two runs.
+	commitSeconds prometheus.Observer
 }
+
+// commitBuckets covers the observed range of one persist transaction, from a local commit
+// to a replicated one under load. The per-message persist_duration_seconds uses the
+// default buckets, whose 250ms-500ms-1s steps are too wide to tell a 20% change from noise.
+var commitBuckets = []float64{.001, .002, .003, .005, .0075, .01, .015, .02, .03, .05, .075, .1, .15, .2, .3, .5, 1, 2.5}
+
+// batchRowBuckets covers the rows one transaction can hold: MaxBatch events of any
+// number of entries each.
+var batchRowBuckets = []float64{1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 4096}
 
 // start marks one message in flight. Nil-safe, like everything on this type, because
 // tests build workers by literal without metrics.
@@ -105,10 +123,14 @@ func (m *PersistMetrics) start() func(result string) {
 	return m.messages.Start()
 }
 
-// committed records one committed transaction holding n events.
-func (m *PersistMetrics) committed(n int) {
+// committed records one committed transaction holding n events and rows stored rows, that
+// took d from its first statement to its COMMIT.
+func (m *PersistMetrics) committed(n, rows int, d time.Duration) {
 	if m != nil {
 		m.batchSize.Observe(float64(n))
+		m.rows.Add(float64(rows))
+		m.batchRows.Observe(float64(rows))
+		m.commitSeconds.Observe(d.Seconds())
 	}
 }
 
@@ -135,6 +157,12 @@ func NewPersistMetrics(ms *core.Microservice) *PersistMetrics {
 			nil, []float64{1, 2, 4, 8, 16, 32, 64}).WithLabelValues(),
 		fallbacks: ms.NewCounter("persist_batch_fallbacks_total",
 			"Batch transactions that did not commit, after which their events were written again."),
+		rows: ms.NewCounter("persist_rows_total", "Rows stored by committed persistence transactions."),
+		batchRows: ms.NewHistogramVec("persist_batch_rows", "Rows stored per committed persistence transaction.",
+			nil, batchRowBuckets).WithLabelValues(),
+		commitSeconds: ms.NewHistogramVec("persist_commit_duration_seconds",
+			"Wall time of one committed persistence transaction.",
+			nil, commitBuckets).WithLabelValues(),
 	}
 }
 
