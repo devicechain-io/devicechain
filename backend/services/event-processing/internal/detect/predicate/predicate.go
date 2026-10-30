@@ -119,6 +119,10 @@ type Predicate struct {
 	// metric-gated leaf must see only events carrying its measurement.
 	referencesFences bool
 
+	// referencesAttr records whether the leaf reads the `attr` variable at all, by any shape: a
+	// dynamic (device-attribute) bound. Computed once at compile from the type-checked AST.
+	referencesAttr bool
+
 	// trueWithoutAttributes records whether the leaf is definitely true for every event from every
 	// device holding none of the attributes it reads. See TrueWithoutAttributes; rules.Compile
 	// decides, per rule kind, whether that is a refusal.
@@ -192,6 +196,7 @@ func compile(source string, costCeiling uint64) (*Predicate, error) {
 	}
 	p := &Predicate{source: source, program: program, costMax: est.Max}
 	p.referencesFences = referencesFences(ast.NativeRep())
+	p.referencesAttr = referencesAttr(ast.NativeRep())
 
 	// Attribute-absence analysis: only a leaf that reads `attr` can be true BECAUSE an attribute
 	// is absent, so a leaf that never names it (the matchAll `true` of absence/connectivity, a pure

@@ -103,6 +103,11 @@ func trueWhenAttributesAbsent(env *cel.Env, ast *cel.Ast) (bool, error) {
 	return ok && b, nil
 }
 
+// ReferencesAttributes reports whether the leaf reads the device's attributes at all (a dynamic
+// bound). Such a leaf is evaluated against the attributes as they are NOW, not as they were when
+// the event happened, so a replay of the same events need not reproduce its detections.
+func (p *Predicate) ReferencesAttributes() bool { return p.referencesAttr }
+
 // referencesAttr reports whether the leaf reads the `attr` variable at all, by any shape.
 func referencesAttr(a *celast.AST) bool { return referencesIdent(a, VarAttr) }
 

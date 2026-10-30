@@ -79,7 +79,7 @@ Con una sola réplica no hay presupuesto de interrupción de pods, y drenar su n
 detección hasta que el pod se reprograma. Un standby es la forma de evitarlo.
 
 ## Qué cuesta un reinicio
-
+ {#what-a-restart-costs}
 Un reinicio es rutina, no un incidente. Al arrancar, el motor recarga su último punto de control y
 reproduce el flujo desde esa posición, de modo que vuelve a derivar el estado que tenía.
 
@@ -367,26 +367,38 @@ el broker confirma que no queda nada por procesar, de modo que el trabajo pendie
 que el motor declare silencioso a un dispositivo cuando lo que ocurre es que aún no ha leído sus
 eventos.
 
-### Con qué rapidez llega una detección a sus acciones {#how-quickly-does-a-detection-reach-its-actions}
+### ¿Con qué rapidez llega una detección a sus acciones? {#how-quickly-does-a-detection-reach-its-actions}
 
-Una detección llega a las acciones de su regla (levantar una alarma, enviar un comando, llamar a un
-conector) aproximadamente un segundo después de que el motor la decide, más el tiempo que la lectura
-tardó en llegar al motor. Nada espera a un punto de control: el motor entrega cada detección al
-broker en su siguiente tic de un segundo, y el punto de control que confirma el estado del motor y
-da acuse a la secuencia llega según su propio calendario (`checkpointIntervalSeconds`,
-`checkpointEvents`). Publicar una detección antes es seguro porque un punto de control solo confirma
-estado *por detrás* de detecciones ya entregadas. Un reinicio entre medias reproduce desde el último
-punto de control y vuelve a derivar las mismas detecciones, que el flujo derivado reduce a una, igual
-que cuando la instantánea de un punto de control falla después de su publicación.
+Para una **regla determinista ante el reprocesamiento**, una regla de umbral o de repetición con un
+límite fijo, la detección llega a las acciones de su regla (levantar una alarma, enviar un comando,
+llamar a un conector) en aproximadamente un segundo desde que el motor la decide (hasta un tic), más
+el tiempo que la lectura tardó en llegar al motor. El motor entrega una detección así al broker en su
+siguiente tic de un segundo sin esperar a un punto de control, y el punto de control que confirma el
+estado del motor y da acuse a la secuencia llega según su propio calendario
+(`checkpointIntervalSeconds`, `checkpointEvents`). Publicar antes es seguro para estas reglas porque
+un reinicio previo al punto de control reproduce desde el último y deriva de nuevo las mismas
+detecciones, que el flujo derivado reduce a una, igual que cuando la instantánea de un punto de
+control falla después de su publicación. Si el broker rechaza una publicación, las detecciones
+vuelven a esperar al punto de control hasta que se recupere.
 
-Siguen aplicando dos cosas. El tiempo del evento puede retener una detección: una regla que necesita
-ver eventos posteriores o un periodo de silencio antes de decidir (una ventana, una duración, una
-ausencia) se rige por los tiempos descritos arriba, no por este tic. Y el `raisedTime` de una alarma
-es el tiempo de la *lectura* que la levantó, no el momento en que se escribió la alarma, así que el
-`queuedTime` de un comando menos el `raisedTime` de la alarma mide todo el camino desde la lectura, no
-un intervalo entre la alarma y el comando: ambos se escriben con milisegundos de diferencia. Las versiones anteriores retenían una detección hasta
-el punto de control, lo que añadía entre nada y `checkpointIntervalSeconds` (10 segundos por defecto)
-entre una lectura y su alarma y comandos.
+Todo lo demás sigue esperando al punto de control, hasta `checkpointIntervalSeconds` (10 segundos
+por defecto) después de la lectura:
+
+- Las reglas con un **umbral dinámico (basado en atributos)** y los demás tipos de regla que no son
+  deterministas ante el reprocesamiento. Publicar una antes y reiniciar podría dejar una alarma
+  levantada que un reprocesamiento nunca limpia, o levantar una segunda en otro momento: es la
+  [advertencia anterior](#what-a-restart-costs) bajo otra forma.
+- Las reglas de ausencia, duración, sesión, agregado, tasa y ventana por conteo, y las reglas sobre
+  un borde de correlación o de conectividad. Se deciden por el tiempo del evento, como se describe en
+  «Tiempos» más arriba, y algunas se juzgan contra el padrón de dispositivos o la versión activa en el
+  momento de publicarse.
+
+El `raisedTime` de una alarma es el tiempo de la *lectura* que la levantó, no el momento en que se
+escribió la alarma, así que el `queuedTime` de un comando menos el `raisedTime` de la alarma mide todo
+el camino desde la lectura, no un intervalo entre la alarma y el comando: ambos se escriben con
+milisegundos de diferencia. Las versiones anteriores retenían toda detección hasta el punto de
+control, lo que añadía entre nada y `checkpointIntervalSeconds` entre una lectura y su alarma y
+comandos.
 
 ## Una alarma levantada que no se limpia
 

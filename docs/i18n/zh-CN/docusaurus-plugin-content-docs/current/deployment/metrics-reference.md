@@ -87,9 +87,9 @@ title: 指标参考
 | `detect_checkpoints_total` | 已提交的 DETECT 快照检查点。 |
 | `detect_consumer_ack_pending` | 已解析事件持久消费者上已投递但未确认的消息（进行中的工作）。 |
 | `detect_consumer_pending` | 已解析事件持久消费者上等待的未投递消息（主要的 DETECT 滞后信号）。 |
-| `detect_derived_publish_ack_seconds` | 每个已发布的派生事件等待代理确认的时间（分布）。仅统计成功的发布。这不是检测延迟：检测会在触发后约一秒发布，早于提交它的检查点。 |
-| `detect_derived_publish_pass_seconds` | 每个检查点发布其检测所用的时间，从第一次发送到最后一次确认，以分布形式记录。不包括检测等待其检查点的时间。 |
-| `detect_derived_publish_outstanding` | 当前已发送、正在等待消息总线确认的派生事件数（受 `derivedPublishing.maxInFlight` 限制）。检查点之间为零。 |
+| `detect_derived_publish_ack_seconds` | 每个已发布的派生事件等待代理确认的时间（分布）。仅统计成功的发布。这不是检测延迟：重放时结果确定的规则，其检测会在触发后约一秒内发布，早于提交它的检查点；其他检测则等待各自的检查点。 |
+| `detect_derived_publish_pass_seconds` | 每次发布（一个节拍或一个检查点）发布其检测所用的时间，从第一次发送到最后一次确认，以分布形式记录。不包括检测等待某次发布的时间。 |
+| `detect_derived_publish_outstanding` | 当前已发送、正在等待消息总线确认的派生事件数（受 `derivedPublishing.maxInFlight` 限制）。 |
 | `detect_derived_publish_outstanding_bytes` | 这些事件的负载字节数（受 `derivedPublishing.maxBufferedBytes` 限制，但单个更大的事件会单独发送）。 |
 | `detect_derived_publish_window_full_seconds_total` | 检查点在另一个检测已可发送、但在途上限或字节预算没有空间时，等待确认所花的秒数。 |
 | `detect_derived_publish_lane_waits_total` | 在 `derivedPublishing.maxInFlight` 大于 1 时，需要等待同一设备（或关联锚点）的前一个检测得到确认后才能发送的检测数。 |
