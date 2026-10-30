@@ -734,6 +734,88 @@ Cuando esté en una versión que registra una declaración, las actualizaciones 
 
 Las tres versiones menores más recientes se documentan por completo, de la más nueva a la más antigua.
 
+### v0.27.0 — los dispositivos inician sesión con certificado y los comandos Sparkplug funcionan {#v0270-upgrade}
+
+`v0.27.0` es una actualización in situ desde `v0.26.0`: `dcctl install` para el clúster y después un `dcctl upgrade` por cada instancia, como se describe [para v0.17.0](https://github.com/devicechain-io/devicechain/blob/v0.17.0/docs/i18n/es/docusaurus-plugin-content-docs/current/deployment/releases-and-upgrades.md#v0170-upgrade). Pasa a `dcctl install` los ajustes con los que se instaló el clúster, como `--kube-context`, `--ha`, `--compact` y `--database-node-selector`, además del nuevo `--version`. Si vienes de `v0.25.2` o anterior, lee primero las [notas de `v0.26.0`](#v0260-upgrade) y síguelas con `--version v0.27.0`.
+
+```bash
+dcctl install local --version v0.27.0
+dcctl upgrade local devicechain --version v0.27.0 --dry-run
+dcctl upgrade local devicechain --version v0.27.0
+```
+
+La versión permite que los dispositivos [se autentiquen con un certificado X.509](../guides/device-x509.md), hace utilizables los comandos Sparkplug B, renueva el certificado del broker sin desconectar las sesiones de los dispositivos y da a los usuarios de cliente paneles de áreas y activos. Lo que exige actuar, en el orden en que hacerlo:
+
+- **Si instalas el chart sin `dcctl` y el callout de autenticación del broker está activado, dale el acceso de sistema del broker.** El callout ahora comprueba que una conexión con certificado la solicitó un servidor vivo del broker, y pide esa lista a la cuenta de sistema del broker. Sin `infrastructure.nats.auth.sysUser` y `sysPassword`, device-management se niega a arrancar. Defínelos, o define `callout.issuerPinDisabled: true` para funcionar sin la comprobación (el servicio registra una advertencia). Una instalación con `dcctl` ya tiene el acceso. Consulta [Anclar las solicitudes al broker](./device-certificates.md#issuer-pin).
+- **No vuelvas a ejecutar `dcctl bootstrap` sobre una instancia con fuentes Sparkplug o identidades LwM2M sin decir qué hacer con ellas.** Ahora se niega salvo que pases de nuevo el mismo archivo (`--sparkplug-source`, `--lwm2m-identities`) o las retires a propósito (`--withdraw-sparkplug-sources`, `--withdraw-lwm2m-identities`). Antes, repetir el bootstrap sin el indicador eliminaba las credenciales en silencio. `dcctl upgrade` las conserva, como antes.
+- **Rota tus claves precompartidas de LwM2M después de actualizar.** Consulta [las claves de LwM2M salen de la release de Helm](#v0270-lwm2m).
+- **Los ajustes que añadiste a mano al bloque `lwm2m-ingest` de la release ya no se conservan** en una actualización. Ponlos en un [archivo de valores](./tuning-an-instance.md) y pásalo con `--values`.
+- **Si defines `extraSecrets` en los valores del chart, su suma de verificación cambió.** `checksum/extra-secrets` ahora cubre el nombre y los nombres de clave de cada Secret, nunca los valores. Cambiar solo un valor ya no reinicia los pods; reinícialos tú cuando cambie un valor.
+- **Un cliente GraphQL tipado debe aceptar `null` en `ProvisioningProfileSecretResult.issuedSecret`.** Un perfil de aprovisionamiento que nombra un ancla de confianza no tiene secreto. Todo perfil que lo tiene lo sigue devolviendo una vez, como antes.
+- **Avanza desde esta versión; no retrocedas.** Consulta [Volver atrás](#v0270-going-back).
+
+Se ejecutan dos migraciones, una en el primer arranque del servicio que la posee, y cada una puede volver a ejecutarse si se interrumpe: en `device-management`, una tabla de anclas de confianza y columnas para el ancla en las credenciales y los perfiles de aprovisionamiento; en `user-management`, dos columnas anulables en el registro de purga del tenant que guardan cuándo se estableció que los datos estaban borrados y cuándo se comprobó por última vez. Ninguna reescribe una fila.
+
+#### Los comandos Sparkplug B funcionan y `dcctl` acepta una fuente Sparkplug {#v0270-sparkplug}
+
+En `v0.26.0` se rechazaba una clave de comando con un punto, y los tipos de comando Sparkplug (`sparkplug.write` y los comandos de rebirth y reboot) se nombran así, de modo que no se podía crear ningún comando Sparkplug. Ahora una clave puede llevar espacios de nombres con puntos, y cada segmento sigue la misma regla de antes. Los comandos Sparkplug siguen desactivados hasta que los activas para una fuente, como en `v0.26.0`.
+
+- **Un comando rechazado dice por qué.** Un comando rechazado antes de llegar al nodo (`FAILED` o `NOT_DELIVERED`) ahora guarda como respuesta un motivo legible por máquina, por ejemplo `commands_not_enabled`, `node_offline`, `node_rebirthing`, `metric_not_writable` o `reboot_not_allowed`. La consola explica cada uno. Lo que hayas escrito que dependiera del texto del error anterior debe usar el código de motivo.
+- **Un nodo que nació antes de que existiera su tipo de dispositivo recibe una petición de rebirth.** La plataforma recuerda el nodo y le pide un rebirth 10 segundos después del registro fallido, y luego con un intervalo que se duplica hasta un minuto, hasta que se registra. Dos métricas nuevas, `birth_recovery_pending` y `birth_recovery_rebirths_total`, lo muestran.
+- **`dcctl bootstrap` y `dcctl upgrade` aceptan `--sparkplug-source <archivo>`.** El archivo lista las fuentes, la contraseña del broker queda en un Secret que `dcctl` escribe por sí mismo, y las actualizaciones posteriores conservan ambos. Un bootstrap con el indicador activa el área; una actualización con él se niega si el área no está en ejecución y nombra `dcctl enable-area`. Consulta [Dar a `dcctl` una fuente Sparkplug](./edge-services.md#sparkplug-sources). Una superposición de `--values` sigue sin poder definir una fuente.
+
+#### Las claves de LwM2M salen de la release de Helm {#v0270-lwm2m}
+
+Hasta ahora `dcctl` ponía cada clave precompartida de dispositivo LwM2M en los valores de la release de Helm, donde `helm get values` la mostraba y el historial de Helm la conservaba en cada revisión. Ahora `dcctl` escribe las claves en el Secret `dci-<instancia>-lwm2m-identities` por sí mismo, fuera de la release, y la release solo lleva el nombre del Secret y un sello que no se deriva de ninguna clave.
+
+- **La primera actualización traslada las claves.** Las lee de la release una vez, escribe el Secret nuevo antes de cambiar nada más, elimina la entrada antigua de `extraSecrets` y ejecuta la actualización de Helm. Los dispositivos conservan las claves que tienen. Los pods que siguen en ejecución las mantienen en su entorno hasta que se reinician.
+- **Rota las claves después.** Las revisiones que Helm registró antes de esta actualización (conserva hasta diez) siguen guardando los valores antiguos, igual que cualquier copia de seguridad de la release. Ejecuta `dcctl upgrade local <instancia> --lwm2m-identities <archivo>` con claves nuevas; un archivo pasado de nuevo reescribe el Secret y reinicia los pods. Hasta que las revisiones antiguas caduquen, restringe quién puede leer Secrets en el namespace donde Helm guarda sus releases (`default`).
+- **`dcctl upgrade` incorpora `--lwm2m-identities` y `--withdraw-lwm2m-identities`,** y el Secret de Sparkplug funciona igual. Un Secret que `dcctl` no escribió nunca se toca.
+- **Reducir o borrar espera a la release.** `dcctl` añade claves antes de la release y quita las que nada referencia solo después de que tenga éxito. Una actualización fallida deja las claves antiguas para los pods en ejecución, y la siguiente ejecución termina el trabajo. Si el último paso falla tras una release correcta, la ejecución avisa con el comando exacto y no falla.
+
+#### Autenticación por certificado {#v0270-certificates}
+
+Los dispositivos pueden autenticarse en el broker de la plataforma con un certificado de cliente X.509, ya sea fijado a un dispositivo que creaste o registrado en la primera conexión mediante un perfil de aprovisionamiento por certificado. No se confía en nada hasta que añades un ancla de confianza, así que una actualización no cambia el comportamiento de ningún dispositivo. Los dispositivos con token y contraseña se conectan como antes. Lee [Actualizar una instancia que ya está en marcha](./device-certificates.md#cutover) antes de añadir la primera ancla, y [Conectar con un certificado](../guides/device-x509.md) para los pasos.
+
+- **La petición de certificado del broker ya no nombra un emisor aceptado.** Un cliente Go o el simulador retenía un certificado cuyo emisor no figuraba en la lista del broker; ahora el broker no envía lista, así que el dispositivo presenta el certificado que tiene.
+- **Cada conexión con certificado se comprueba contra los servidores vivos del broker.** Consulta [Anclar las solicitudes al broker](./device-certificates.md#issuer-pin). La nueva alerta `DeviceX509IssuerPinUnavailable` avisa ante una interrupción sostenida, no ante un reinicio del broker.
+- **Con el chart llegan tres alertas y un histograma de latencia.** `DeviceX509ChainFailuresSustained`, `DeviceX509JitRefusedSustained` y `DeviceTrustAnchorsExpiringSoon` permanecen en silencio en una instancia sin anclas de confianza. `callout_duration_seconds{path,result}` y la alerta de aviso `DeviceCalloutLatencyHigh` cubren todos los caminos del callout.
+
+#### El certificado del broker se renueva sin desconectar dispositivos {#v0270-broker}
+
+- **Un certificado TLS renovado ya no desconecta las sesiones MQTT.** El broker aplica un certificado cambiado bajo la misma autoridad a las conexiones nuevas sin recargar su configuración, así que un dispositivo conectado sigue conectado. En una prueba, 30 sesiones mantenidas tras el callout de autenticación sobrevivieron a una rotación y la conexión siguiente recibió el certificado nuevo.
+- **`dcctl upgrade` renueva el certificado hoja del broker sin reiniciarlo** cuando el único motivo es la caducidad: la autoridad no cambia y el broker ya ejecuta el número de réplicas para el que se emite el certificado. Escribe el Secret y espera hasta cinco minutos a que cada pod del broker informe de la nueva caducidad. Si no puede confirmarse, avisa y reinicia el broker, de modo que un certificado antiguo nunca queda sirviéndose tras una renovación aparentemente correcta. Un cambio de autoridad, de nombres o de número de réplicas sigue reiniciándolo.
+- **Un cambio en la configuración del broker sigue recargándolo,** y una recarga sigue desconectando las sesiones de los dispositivos admitidos por el callout, hasta que la biblioteca del broker incluya una corrección de upstream que aún no está en ninguna versión. `dcctl upgrade` reinicia el broker en toda actualización que cambie su imagen o su configuración.
+- **La biblioteca del broker es nats-server 2.15.2,** una versión de seguridad; entre sus correcciones, el callout de autenticación ahora respeta los tipos de conexión que permite. `dc-nats-server` se construye sobre ella. La imagen de control para volver al broker upstream es `nats:2.15.2-alpine`; el ajuste que se usa es `server_image_tag = "2.15.2-alpine"`.
+- **Tras una actualización que reinicia el broker, `dcctl` reequilibra el liderazgo.** El servidor reiniciado en último lugar solía no liderar ningún stream, y el p99 del acuse de publicación se duplicaba aproximadamente hasta que el liderazgo se movía. El último paso de `dcctl upgrade` ahora mueve los líderes de streams y consumidores para igualar los servidores e imprime los líderes por servidor antes y después. Es de mejor esfuerzo: un fallo es una advertencia, nunca un fallo de la actualización. [`dcctl broker rebalance <instancia>`](../reference/dcctl.md#dcctl-broker-rebalance) hace lo mismo a petición, y la nueva alerta `BrokerLeadershipImbalanced` salta cuando un servidor lidera menos de la mitad de la media.
+
+#### Los despliegues de ingress conservan las solicitudes {#v0270-ingress}
+
+Detrás de un balanceador de carga en la nube, los pods de Traefik e ingress-nginx ahora esperan antes de irse (`drain_seconds`, 40 por defecto) y un pod nuevo debe estar listo durante `min_ready_seconds` (15) antes de sustituir al siguiente, de modo que un despliegue ya no pierde solicitudes mientras la comprobación de salud del balanceador se pone al día. Los valores son variables de los módulos de OpenTofu de los controladores; 0 desactiva cada uno. Un clúster local, sin balanceador en la nube, no cambia. El primer `dcctl install` que lo aplique reinicia el controlador una vez, con el drenaje más largo. Consulta [qué cambia en el borde](./ingress-cutover.md#ingress-cutover-differences).
+
+#### Usuarios de cliente y la consola {#v0270-customers}
+
+- **Un usuario de cliente ve las áreas y los activos en los que están sus dispositivos visibles.** La regla está en el almacén, junto al predicado del tenant: un área o activo aparece mientras un dispositivo que el solicitante puede ver tiene una relación seguida con él, y `anchorDevices` lista los dispositivos que hay en él. Los nombres de áreas y activos son visibles para quien pueda ver un dispositivo en ellos; sus demás campos se ocultan. Nada del propio grafo de relaciones se abre.
+- **Las alarmas y el historial de eventos pueden filtrarse por ancla.** `alarms`, `alarmCountsBySeverity`, `alarmCountsByDeviceType` y la suscripción `alarmStream` aceptan un `anchor` opcional (un cliente, un área o un activo), y la respuesta se limita al alcance del solicitante. Una alarma permanece bajo el área en la que estaba su dispositivo cuando se generó. Un ancla de cliente fuera del alcance del solicitante se rechaza. No hace falta migración.
+- **La consola oculta lo que el servidor rechaza.** A un usuario de cliente no se le ofrecen acciones de nuevo dispositivo, importación, cancelar comando ni escritura de paneles, y una tarjeta de estadística con la última lectura se rellena con el valor almacenado más reciente en lugar de esperar al siguiente.
+
+#### El borrado de un tenant indica cuándo se han borrado los datos {#v0270-tenant-erasure}
+
+El registro de borrado de un tenant incorpora `erased`, `erasedAt` y `lastVerifiedAt`. La afirmación solo se hace cuando todos los almacenes llevan limpios durante la ventana de asentamiento, se retira si algún almacén retrocede, y un libro vacío se lee como «aún se está comprobando», nunca como borrado. `dcctl tenant-deletion status <token> [--wait] [--until erased|complete]` termina con código distinto de cero hasta que los datos están borrados. La métrica `tenant_purge_erased_total` cuenta las afirmaciones. Consulta [Saber que los datos están borrados](./tenant-deletion.md#erased-signal) y [Cuánto tarda borrar un tenant grande](./tenant-deletion.md#measured) para la medición y lo que no cubre.
+
+#### El acuse MQTT con cierre ante fallo sigue siendo opcional {#v0270-fail-closed}
+
+El acuse MQTT con cierre ante fallo (`--mqtt-fail-closed`) sigue desactivado salvo que lo actives, como en `v0.26.0`, y sigue siendo una opción hasta la 1.0. El [transporte MQTT](../reference/transport-matrix.md#mqtt--the-platform-broker) ahora indica sus límites medidos y las cotas de pérdida con él desactivado y activado. No cambia nada para una instancia que no lo define.
+
+#### Volver atrás {#v0270-going-back}
+
+Avanza desde esta versión; no retrocedas. Las dos migraciones nuevas añaden una tabla y columnas que `v0.26.0` no conoce, y una instancia con LwM2M guarda sus claves en un Secret que `v0.26.0` no lee. Una actualización fallida se corrige ejecutando `dcctl upgrade` de nuevo.
+
+#### Problemas conocidos {#v0270-known-issues}
+
+- **Un cambio en la configuración del broker sigue desconectando a los dispositivos admitidos por el callout de autenticación,** hasta que la biblioteca del broker incluya la corrección de upstream. Una renovación de certificado no lo hace.
+- **El drenaje del despliegue solo se prueba en kind mediante sus ajustes,** porque un clúster local no tiene balanceador de carga en la nube. Falta una medición en la nube de un despliegue bajo carga.
+
 ### v0.26.0 — los dispositivos se registran solos y el front end pasa a Traefik {#v0260-upgrade}
 
 `v0.26.0` es una actualización in situ desde `v0.25.2`: `dcctl install` para el clúster y después un `dcctl upgrade` por cada instancia, como se describe [para v0.17.0](https://github.com/devicechain-io/devicechain/blob/v0.17.0/docs/i18n/es/docusaurus-plugin-content-docs/current/deployment/releases-and-upgrades.md#v0170-upgrade). Pasa a `dcctl install` los ajustes con los que se instaló el clúster, como `--kube-context`, `--ha`, `--compact` y `--database-node-selector`, además del nuevo `--version`. Si vienes de `v0.25.1` o `v0.25.0`, lee también las notas de las versiones intermedias.
@@ -911,9 +993,9 @@ El broker es ahora la compilación propia de DeviceChain de `nats-server`, `dc-n
 
 #### Problemas conocidos {#v0260-known-issues}
 
-- **Tras un reinicio progresivo del broker, incluida esta actualización, el último servidor reiniciado no lidera ningún stream,** y el p99 del acuse de publicación se duplica aproximadamente hasta que el liderazgo se reequilibra.
-- **Una rotación de certificado TLS hace que el broker se recargue y desconecta la mayoría de las sesiones MQTT.** Los dispositivos se reconectan solos. Una versión posterior lo corrige: el broker aplica el certificado renovado a las conexiones nuevas sin recargarse, así que las sesiones establecidas se mantienen. Un cambio en la configuración del broker sigue recargándolo, y una recarga sigue desconectando las sesiones de los dispositivos admitidos por el callout de autenticación hasta que la biblioteca `nats-server` del broker incluya la corrección de upstream.
-- **Un despliegue del controlador de ingress pierde alrededor del 5 % de las solicitudes durante 28 a 40 segundos.** Hazlo en una ventana tranquila. Una versión posterior lo corrige: ambos controladores drenan antes de que un pod se vaya y esperan antes de retirar uno antiguo, así que un despliegue ya no pierde solicitudes detrás de un balanceador de carga en la nube; consulta [qué cambia en el borde](./ingress-cutover.md#ingress-cutover-differences).
+- **Tras un reinicio progresivo del broker, incluida esta actualización, el último servidor reiniciado no lidera ningún stream,** y el p99 del acuse de publicación se duplica aproximadamente hasta que el liderazgo se reequilibra. **Corregido en `v0.27.0`:** `dcctl upgrade` reequilibra el liderazgo tras reiniciar el broker; consulta [el certificado del broker se renueva sin desconectar dispositivos](#v0270-broker).
+- **Una rotación de certificado TLS hace que el broker se recargue y desconecta la mayoría de las sesiones MQTT.** Los dispositivos se reconectan solos. **Corregido en `v0.27.0`:** el broker aplica el certificado renovado a las conexiones nuevas sin recargarse, así que las sesiones establecidas se mantienen. Un cambio en la configuración del broker sigue recargándolo, y una recarga sigue desconectando las sesiones de los dispositivos admitidos por el callout de autenticación hasta que la biblioteca `nats-server` del broker incluya la corrección de upstream.
+- **Un despliegue del controlador de ingress pierde alrededor del 5 % de las solicitudes durante 28 a 40 segundos.** Hazlo en una ventana tranquila. **Corregido en `v0.27.0`:** ambos controladores drenan antes de que un pod se vaya y esperan antes de retirar uno antiguo, así que un despliegue ya no pierde solicitudes detrás de un balanceador de carga en la nube; consulta [qué cambia en el borde](./ingress-cutover.md#ingress-cutover-differences).
 
 ### v0.25.2 — la emisión de tokens de servicio sale del puerto público {#v0252-upgrade}
 

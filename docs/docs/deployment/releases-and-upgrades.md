@@ -695,6 +695,91 @@ Once you are on a release that records a declaration, ordinary in-place upgrades
 
 The three most recent minor releases are documented in full, newest first.
 
+### v0.27.0 — devices sign in by certificate, and Sparkplug commands work {#v0270-upgrade}
+
+`v0.27.0` is an in-place upgrade from `v0.26.0`: `dcctl install` for the cluster, then one `dcctl upgrade` for
+each instance, as described [for v0.17.0](https://github.com/devicechain-io/devicechain/blob/v0.17.0/docs/docs/deployment/releases-and-upgrades.md#v0170-upgrade). Give `dcctl install` the settings the cluster was
+installed with, such as `--kube-context`, `--ha`, `--compact` and `--database-node-selector`, as well as the new `--version`. Coming from
+`v0.25.2` or earlier, read the [`v0.26.0` notes](#v0260-upgrade) first and follow them with `--version v0.27.0`.
+
+```bash
+dcctl install local --version v0.27.0
+dcctl upgrade local devicechain --version v0.27.0 --dry-run
+dcctl upgrade local devicechain --version v0.27.0
+```
+
+The release lets devices [authenticate with an X.509 certificate](../guides/device-x509.md), makes Sparkplug B commands usable, renews the broker's certificate without dropping device sessions, and gives customer users area and asset dashboards. What needs action, in the order to do it:
+
+- **If you install the chart without `dcctl` and the broker's auth callout is on, give it the broker's system login.** The callout now checks that a certificate connect was requested by a live broker server, and it asks the broker's system account for that list. Without `infrastructure.nats.auth.sysUser` and `sysPassword`, device-management refuses to start. Set them, or set `callout.issuerPinDisabled: true` to run without the check (the service logs a warning). A `dcctl` install already has the login. See [Pinning requests to the broker](./device-certificates.md#issuer-pin).
+- **Do not re-run `dcctl bootstrap` over an instance that has Sparkplug sources or LwM2M identities without saying what to do with them.** It now refuses unless you give the same file again (`--sparkplug-source`, `--lwm2m-identities`) or withdraw them on purpose (`--withdraw-sparkplug-sources`, `--withdraw-lwm2m-identities`). Before this release a bootstrap re-run without the flag removed the credentials silently. `dcctl upgrade` keeps them, as before.
+- **Rotate your LwM2M pre-shared keys after upgrading.** See [the LwM2M keys leave the Helm release](#v0270-lwm2m).
+- **Settings you added by hand to the `lwm2m-ingest` block of the release are no longer carried** by an upgrade. Put them in a [values file](./tuning-an-instance.md) and give it with `--values`.
+- **If you set `extraSecrets` in the chart values, know that its checksum changed.** `checksum/extra-secrets` now covers each Secret's name and key names, never the values. Changing only a value no longer restarts the pods; restart them yourself when a value changes.
+- **A typed GraphQL client must accept `null` for `ProvisioningProfileSecretResult.issuedSecret`.** A provisioning profile that names a trust anchor has no secret. Every profile that has one still returns it once, as before.
+- **Roll forward from this release.** See [Going back](#v0270-going-back).
+
+Two migrations run, one per first start of the service that owns it, and each can be run again if it is interrupted: in `device-management`, a trust-anchor table and columns for the anchor on credentials and provisioning profiles; in `user-management`, two nullable columns on the tenant purge record that hold when the data was established as erased and when that was last checked. Neither rewrites a row.
+
+#### Sparkplug B commands work, and `dcctl` takes a Sparkplug source {#v0270-sparkplug}
+
+In `v0.26.0` a command key with a dot in it was refused, and the Sparkplug command types (`sparkplug.write`, and the rebirth and reboot commands) are named that way, so no Sparkplug command could be created. A key may now be namespaced with dots, each segment following the same rule as before. Sparkplug commands stay off until you turn them on for a source, as in `v0.26.0`.
+
+- **A refused command says why.** A command refused before it reaches the node (`FAILED` or `NOT_DELIVERED`) now has a machine-readable reason as its stored response, for example `commands_not_enabled`, `node_offline`, `node_rebirthing`, `metric_not_writable` or `reboot_not_allowed`. The console explains each. Anything you wrote that matched the wording of the old error text should match the reason code instead.
+- **A node born before its device type existed is asked to rebirth.** The platform remembers the node and asks it to rebirth 10 seconds after the failed registration, then on a doubling interval up to a minute, until it registers. Two new metrics, `birth_recovery_pending` and `birth_recovery_rebirths_total`, show it.
+- **`dcctl bootstrap` and `dcctl upgrade` take `--sparkplug-source <file>`.** The file lists the sources, the broker password stays in a Secret that `dcctl` writes itself, and later upgrades carry both. A bootstrap with the flag turns the area on; an upgrade with it refuses when the area is not running and names `dcctl enable-area`. See [Giving `dcctl` a Sparkplug source](./edge-services.md#sparkplug-sources). A `--values` overlay still cannot set a source.
+
+#### The LwM2M keys leave the Helm release {#v0270-lwm2m}
+
+Until now `dcctl` put every LwM2M device pre-shared key in the Helm release's values, where `helm get values` printed it and Helm's history kept it for every revision. `dcctl` now writes the keys to the Secret `dci-<instance>-lwm2m-identities` itself, outside the release, and the release carries only the Secret's name and a stamp that is not derived from any key.
+
+- **The first upgrade moves the keys.** It reads them out of the release once, writes the new Secret before anything else changes, drops the old `extraSecrets` entry and runs the Helm upgrade. Devices keep the keys they have. The pods that are still running hold them in their environment until they restart.
+- **Rotate the keys afterwards.** The revisions Helm recorded before this upgrade (it keeps up to ten) still hold the old values, and so does anything that backed up the release. Run `dcctl upgrade local <instance> --lwm2m-identities <file>` with new keys; a file given again rewrites the Secret and restarts the pods. Until the old revisions age out, restrict who can read Secrets in the namespace where Helm stores its releases (`default`).
+- **`dcctl upgrade` gains `--lwm2m-identities` and `--withdraw-lwm2m-identities`,** and the Sparkplug Secret works the same way. A Secret `dcctl` did not write is never touched.
+- **A shrink or a delete waits for the release.** `dcctl` adds keys before the release and removes the ones nothing references only after it succeeds. A failed upgrade leaves the old keys in place for the running pods, and the next run finishes the job. If the final step fails after a successful release, the run warns with the exact command and does not fail.
+
+#### Certificate authentication {#v0270-certificates}
+
+Devices can authenticate to the platform broker with an X.509 client certificate, either pinned to a device you created or registered on first connect through a certificate provisioning profile. Nothing is trusted until you add a trust anchor, so an upgrade changes no device's behaviour. Token and password devices connect as before. Read [Upgrading an instance that already runs](./device-certificates.md#cutover) before you add the first anchor, and [Connecting with a certificate](../guides/device-x509.md) for the steps.
+
+- **The broker's request for a certificate no longer names an accepted issuer.** A Go client or the simulator withheld a certificate whose issuer the broker's list did not name; the broker now sends no list, so a device presents the certificate it has.
+- **Every certificate connect is checked against the live broker servers.** See [Pinning requests to the broker](./device-certificates.md#issuer-pin). The new alert `DeviceX509IssuerPinUnavailable` pages on a sustained outage, not on a broker roll.
+- **Three alerts and a latency histogram arrive with the chart.** `DeviceX509ChainFailuresSustained`, `DeviceX509JitRefusedSustained` and `DeviceTrustAnchorsExpiringSoon` are quiet on an instance with no trust anchors. `callout_duration_seconds{path,result}` and the warning `DeviceCalloutLatencyHigh` cover every path through the callout.
+
+#### The broker certificate renews without dropping devices {#v0270-broker}
+
+- **A renewed TLS certificate no longer disconnects MQTT sessions.** The broker applies a certificate that changed under the same authority to new connections without reloading its configuration, so a device that is connected stays connected. In a test, 30 held sessions behind the auth callout survived a rotation and the next connection was served the new certificate.
+- **`dcctl upgrade` renews a broker leaf certificate without rolling the broker** when expiry is the only reason: the authority is unchanged and the broker already runs the replica count the certificate is issued for. It writes the Secret, then waits up to five minutes for every broker pod to report the new expiry. If that cannot be confirmed, it warns and rolls the broker, so an old certificate is never left serving behind a green renewal. A change of authority, of names or of replica count still rolls it.
+- **A change to the broker's configuration still reloads it,** and a reload still drops the sessions of devices the auth callout admitted, until the broker library carries an upstream fix that is not in a release yet. `dcctl upgrade` rolls the broker for any upgrade that changes its image or configuration.
+- **The broker library is nats-server 2.15.2,** a security release; among its fixes the auth callout now respects the connection types it allows. `dc-nats-server` is built on it. The control image for going back to the upstream broker is `nats:2.15.2-alpine`; the setting to use is `server_image_tag = "2.15.2-alpine"`.
+- **After an upgrade rolls the broker, `dcctl` evens out leadership.** The server that restarted last used to lead no streams, and publish-acknowledgement p99 roughly doubled until leadership moved. The last step of `dcctl upgrade` now moves stream and consumer leaders to even the servers out and prints the leaders per server before and after. It is best effort: a failure is a warning, never an upgrade failure. [`dcctl broker rebalance <instance>`](../reference/dcctl.md#dcctl-broker-rebalance) does the same on demand, and the new alert `BrokerLeadershipImbalanced` fires when a server leads fewer than half the average.
+
+#### Ingress rollouts keep requests {#v0270-ingress}
+
+Behind a cloud load balancer, Traefik and ingress-nginx pods now wait before they leave (`drain_seconds`, 40 by default) and a new pod must be ready for `min_ready_seconds` (15) before the next is replaced, so a rollout no longer drops requests while the load balancer's health check catches up. The values are module variables of the OpenTofu controller modules; 0 turns either off. A local cluster, which has no cloud load balancer, is unchanged. The first `dcctl install` that applies this rolls the controller once, with the longer drain. See [what changes at the edge](./ingress-cutover.md#ingress-cutover-differences).
+
+#### Customer users and the console {#v0270-customers}
+
+- **A customer user sees the areas and assets their visible devices are in.** The rule is in the store, beside the tenant predicate: an area or asset appears while a device the caller can see has a tracked relationship to it, and `anchorDevices` lists the devices on it. Area and asset names are visible to anyone who can see a device in them; their other fields are withheld. Nothing on the relationship graph itself opens.
+- **Alarms and event history can be filtered by an anchor.** `alarms`, `alarmCountsBySeverity`, `alarmCountsByDeviceType` and the `alarmStream` subscription take an optional `anchor` (a customer, an area or an asset), and the answer is limited to the caller's own scope. An alarm stays under the area its device was in when it was raised. A customer anchor outside the caller's scope is refused. No migration is needed.
+- **The console hides what the server refuses.** A customer user is not offered new device, import, command cancel or dashboard write actions, and a stat card that shows the latest reading is filled from the newest stored value instead of waiting for the next one.
+
+#### Tenant deletion says when the data is erased {#v0270-tenant-erasure}
+
+A tenant deletion record gains `erased`, `erasedAt` and `lastVerifiedAt`. The claim is made only when every store has been clean for the settle window, it is withdrawn if any store regresses, and an empty ledger reads as "still being checked", never as erased. `dcctl tenant-deletion status <token> [--wait] [--until erased|complete]` exits non-zero until the data is erased. The metric `tenant_purge_erased_total` counts the claims. See [Knowing that the data is erased](./tenant-deletion.md#erased-signal), and [How long erasing a large tenant takes](./tenant-deletion.md#measured) for the measured run and what it does not cover.
+
+#### Fail-closed MQTT acknowledgement stays opt-in {#v0270-fail-closed}
+
+The fail-closed MQTT acknowledgement (`--mqtt-fail-closed`) stays off unless you turn it on, as in `v0.26.0`, and it stays an option through 1.0. The [MQTT transport](../reference/transport-matrix.md#mqtt--the-platform-broker) now states its measured limits and the loss bounds with it off and on. Nothing changes for an instance that does not set it.
+
+#### Going back {#v0270-going-back}
+
+Roll forward from this release, not back. The two new migrations add a table and columns that `v0.26.0` does not know, and an LwM2M instance has its keys in a Secret that `v0.26.0` does not read. A failed upgrade is fixed by running `dcctl upgrade` again.
+
+#### Known issues {#v0270-known-issues}
+
+- **A change to the broker's configuration still disconnects the devices the auth callout admitted,** until the broker library carries the upstream fix. A certificate renewal does not.
+- **The rollout drain is proved on kind only by its settings,** since a local cluster has no cloud load balancer. A cloud measurement of a rollout under load is still to come.
+
 ### v0.26.0 — devices enrol themselves, and the front end moves to Traefik {#v0260-upgrade}
 
 `v0.26.0` is an in-place upgrade from `v0.25.2`: `dcctl install` for the cluster, then one `dcctl upgrade` for
@@ -874,9 +959,9 @@ The broker is now DeviceChain's own `nats-server` build, `dc-nats-server`: upstr
 
 #### Known issues {#v0260-known-issues}
 
-- **After a rolling restart of the broker, including this upgrade, the last server restarted leads no streams,** and publish-acknowledgement p99 roughly doubles until leadership rebalances.
-- **A TLS certificate rotation makes the broker reload and disconnects most MQTT sessions.** Devices reconnect on their own. A later release fixes this: the broker applies a renewed certificate to new connections without a reload, so established sessions stay up. A change to the broker's configuration still reloads it, and a reload still disconnects the sessions of devices admitted by the auth callout until the broker's `nats-server` library carries the upstream fix.
-- **An ingress controller rollout drops about 5% of requests for 28 to 40 seconds.** Run it in a quiet window. A later release fixes this: both controllers now drain before a pod leaves and wait before removing an old one, so a rollout no longer drops requests behind a cloud load balancer; see [what changes at the edge](./ingress-cutover.md#ingress-cutover-differences).
+- **After a rolling restart of the broker, including this upgrade, the last server restarted leads no streams,** and publish-acknowledgement p99 roughly doubles until leadership rebalances. **Fixed in `v0.27.0`:** `dcctl upgrade` now evens out leadership after it rolls the broker; see [the broker certificate renews without dropping devices](#v0270-broker).
+- **A TLS certificate rotation makes the broker reload and disconnects most MQTT sessions.** Devices reconnect on their own. **Fixed in `v0.27.0`:** the broker applies a renewed certificate to new connections without a reload, so established sessions stay up. A change to the broker's configuration still reloads it, and a reload still disconnects the sessions of devices admitted by the auth callout until the broker's `nats-server` library carries the upstream fix.
+- **An ingress controller rollout drops about 5% of requests for 28 to 40 seconds.** Run it in a quiet window. **Fixed in `v0.27.0`:** both controllers now drain before a pod leaves and wait before removing an old one, so a rollout no longer drops requests behind a cloud load balancer; see [what changes at the edge](./ingress-cutover.md#ingress-cutover-differences).
 
 ### v0.25.2 — the service-token mint leaves the public port {#v0252-upgrade}
 
