@@ -1,0 +1,29 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# One container: a furnace. It joins the Docker network "kind", which every kind cluster's node is
+# on, and reaches the platform broker's MQTT node port (31883) by the node's container name.
+# ./provision.sh writes .env (the device's password) and pki/instance-ca.crt (the broker's CA).
+
+services:
+  furnace:
+    image: eclipse-mosquitto:2.0.22@sha256:09b62ff32c2e7b64d4b431b9a89236073289b68db273de2b089edeb9b0d92b5c
+    container_name: rules-furnace
+    entrypoint: ["/bin/sh", "/furnace.sh"]
+    environment:
+      # The kind node's container name: <cluster>-control-plane. "devicechain" is dcctl's default cluster.
+      MQTT_HOST: ${MQTT_HOST:-devicechain-control-plane}
+      MQTT_PORT: ${MQTT_PORT:-31883}
+      INSTANCE: ${INSTANCE:-rules}
+      TENANT: ${DC_TENANT:-rules-demo}
+      DEVICE: ${DC_DEVICE:-furnace-1}
+      DEVICE_PASSWORD: ${DEVICE_PASSWORD:?run ./provision.sh first}
+      TICK_SECONDS: "5"
+    volumes:
+      - ./device/furnace.sh:/furnace.sh:ro
+      - ./pki:/pki:ro
+    networks: [kind]
+
+networks:
+  kind:
+    external: true
