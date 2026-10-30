@@ -13,8 +13,8 @@ no necesita nada de esto; `dcctl install` le instala solo Traefik.
 :::caution ingress-nginx está obsoleto
 El proyecto Kubernetes ha retirado `ingress-nginx`, y DeviceChain lo da por obsoleto con él. A partir de esta versión:
 
-- Una **instalación nueva** se sirve solo con Traefik. `dcctl install` ya no instala `ingress-nginx` en un clúster que no lo tiene, el valor `ingress.controller` del chart de Helm es `gateway` por defecto y la variable de OpenTofu `enable_ingress_nginx` es `false` por defecto.
-- Una **instalación existente no se mueve al actualizar.** Una instancia servida por `ingress-nginx` sigue en él, sirviendo, y `dcctl upgrade` muestra un aviso de obsolescencia cada vez hasta que sigas los pasos de abajo. Un clúster que tiene `ingress-nginx` lo conserva.
+- Un **clúster nuevo** se sirve solo con Traefik. (En un clúster local existente que tiene ambos controladores, una instancia nueva sigue sirviéndose con `ingress-nginx` hasta que se elimine.) `dcctl install` ya no instala `ingress-nginx` en un clúster que no lo tiene, el valor `ingress.controller` del chart de Helm es `gateway` por defecto y la variable de OpenTofu `enable_ingress_nginx` es `false` por defecto.
+- Una **instalación existente no se mueve al actualizar con `dcctl`.** Una instancia servida por `ingress-nginx` sigue en él, sirviendo, y `dcctl upgrade` muestra un aviso de obsolescencia cada vez hasta que sigas los pasos de abajo. Un clúster que tiene `ingress-nginx` lo conserva. Esto vale para las instalaciones hechas con `dcctl`. Si instalas el chart de Helm directamente, define `ingress.controller=nginx` antes de actualizar el chart: el nuevo valor por defecto genera un Gateway y elimina los objetos Ingress, y sin Traefik en el clúster el host deja de responder.
 - La opción `nginx` sigue disponible una versión menor más para que puedas pasar a tu ritmo, y después se elimina. Pasa antes de actualizar a la versión que la elimine.
 :::
 

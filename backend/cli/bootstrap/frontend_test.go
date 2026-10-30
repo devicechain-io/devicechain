@@ -1008,23 +1008,37 @@ func TestTheChartDefaultsToTheGatewayFrontEnd(t *testing.T) {
 // The notice names ingress-nginx for every instance still served by it, alone or in the
 // cutover window, and is silent for one on the Gateway alone. It is a notice, never an error.
 func TestIngressNginxDeprecationNotice(t *testing.T) {
-	if w := ingressNginxDeprecation(frontEndChoice{Controller: frontEndGateway}); w != "" {
+	if w := ingressNginxDeprecation(frontEndChoice{Controller: frontEndGateway}, true); w != "" {
 		t.Errorf("an instance on the Gateway alone was warned: %q", w)
 	}
 	for name, c := range map[string]frontEndChoice{
 		"nginx alone":    {Controller: frontEndNginx},
 		"cutover window": {Controller: frontEndGateway, Legacy: true},
 	} {
-		w := ingressNginxDeprecation(c)
+		w := ingressNginxDeprecation(c, false)
 		if !strings.Contains(w, "DEPRECATED") || !strings.Contains(w, "ingress-nginx") {
 			t.Errorf("%s: notice = %q", name, w)
 		}
 	}
 }
 
+// The next step the notice names depends on whether Traefik is already on the cluster.
+func TestIngressNginxDeprecationNamesTheRightNextStep(t *testing.T) {
+	nginx := frontEndChoice{Controller: frontEndNginx}
+	if w := ingressNginxDeprecation(nginx, false); !strings.Contains(w, "dcctl install") || strings.Contains(w, "--ingress-controller auto") {
+		t.Errorf("no Traefik: %q", w)
+	}
+	w := ingressNginxDeprecation(nginx, true)
+	if !strings.Contains(w, "--ingress-controller auto") || strings.Contains(w, "run `dcctl install`") {
+		t.Errorf("Traefik present: %q", w)
+	}
+}
+
 // An instance that runs ingress-nginx and is upgraded stays on it, still serving, when the
 // cluster has nothing else to serve it, and is only ever moved by an install that added Traefik
 // first. The default flip changes what a NEW instance gets and nothing about these.
+// (The annotation -> override step, which carries a recorded choice into these runs, is covered
+// by frontend_wiring_test.go; here the override is set directly.)
 func TestAnUpgradeKeepsAnNginxInstanceOnNginxUntilTheClusterHasTraefik(t *testing.T) {
 	stub := func(f frontEndFacts) {
 		prev := readFrontEndFacts

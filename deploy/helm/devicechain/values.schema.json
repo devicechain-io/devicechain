@@ -463,6 +463,7 @@
         "controller": {
           "type": "string",
           "enum": ["nginx", "gateway"],
+          "default": "gateway",
           "description": "Which front end serves the host: gateway (the default) renders a Gateway API Gateway and HTTPRoutes for any conformant controller, nginx renders Ingress objects for the ingress-nginx controller. nginx is deprecated: the Kubernetes project has retired ingress-nginx, and the value stays for one more minor so an existing instance can be moved off it. Exactly one is rendered, and both serve the same hosts, paths and backends."
         },
         "className": {
