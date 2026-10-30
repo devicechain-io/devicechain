@@ -190,7 +190,7 @@ dcctl destroy local lora
 | [ChirpStack Gateway Bridge](https://www.chirpstack.io/docs/chirpstack-gateway-bridge/) 4 | MIT | Run as the published image, pinned by digest. |
 | [chirpstack-api](https://pypi.org/project/chirpstack-api/) 4.20.0 | MIT | Installed in the `setup` container to call ChirpStack's gRPC API. |
 | [grpcio](https://pypi.org/project/grpcio/) 1.84.0 | Apache-2.0 | Installed in the `setup` container. |
-| [cryptography](https://pypi.org/project/cryptography/) 45.0.7 | Apache-2.0 / BSD-3-Clause | Installed in the `simulator` container for AES and CMAC. |
+| [cryptography](https://pypi.org/project/cryptography/) 50.0.2 | Apache-2.0 / BSD-3-Clause | Installed in the `simulator` container for AES and CMAC. |
 | [PostgreSQL](https://www.postgresql.org/) 14 | PostgreSQL | ChirpStack's database; published image, pinned by digest. |
 | [Valkey](https://valkey.io/) 8 | BSD-3-Clause | ChirpStack's cache (it speaks the Redis protocol); published image, pinned by digest. |
 | [Eclipse Mosquitto](https://mosquitto.org/) 2.0.22 | EPL-2.0 / EDL-1.0 | The MQTT broker between the bridge and ChirpStack; published image, pinned by digest. |
