@@ -111,7 +111,7 @@ hay ningún bróker aparte que operar.
   mensaje por encima del techo del inquilino se sigue descartando después de su PUBACK. `dcctl bootstrap` y
   `dcctl upgrade` lo activan con `--mqtt-fail-closed`. Consulte
   [calidad de servicio](../guides/connecting-a-device.md#quality-of-service) y
-  [MQTT a prueba de fallos](../deployment/observability.md#mqtt-fail-closed).
+  [MQTT a prueba de fallos](../deployment/observability.md#mqtt-fail-closed). Está desactivado por defecto en 1.0, porque con él activado el techo es más bajo y la sobrecarga aún no genera contrapresión; el techo medido y las cotas de pérdida con él desactivado están en [calidad de servicio](../guides/connecting-a-device.md#quality-of-service).
 - **Escritura ◐**: los comandos se entregan, pero la entrega es **solo en vivo y sin
   confirmación**. Una publicación alcanza a un dispositivo que esté conectado y suscrito en ese
   instante. El bróker no la retiene para uno que no lo esté, y nada informa a la plataforma de si

@@ -160,7 +160,7 @@ DETECT/REACT 引擎（参见[事件处理](../concepts/event-processing.md)）�
 | `JetStreamCaptureLeaderChanged` | warning | 过去 15 分钟内，捕获流在有事件到达时更换了主节点（`devicechain_*_jetstream_stream_leader_changes_total`，由每 30 秒读取的代理流信息计数，并要求同一时段内 `devicechain_eventsources_total_inbound_messages` 有增长）。流没有主节点的那几秒里，代理的 MQTT 网关仍会向设备确认写入该流的 QoS 1 发布，却没有把它们存到任何地方，也没有任何计数器记录：**切换期间发布的 MQTT 事件可能已被确认却丢失**，且 `JetStreamDurableLostUnread` 不会因这种丢失触发。在每秒 12,000 个事件的测试中，一次这样的主节点退位丢失了约五秒的事件。默认设置还有第二种丢失已确认事件的方式，本告警不涵盖，且不需要更换主节点：如果 `event-sources` 在持续负载下落后，直到捕获流达到上限，该流会丢弃最早的未读消息，由 `JetStreamDurableLostUnread` 报告（来自 `devicechain_<area>_jetstream_consumer_unread_skipped_total`）。短于一个采样周期且回到同一服务器的切换不会被发现。代理的滚动重启（包括升级时的滚动）同样会移动主节点，并且无论流量大小都可能以同样的方式丢失事件；由于它会在例行重启时触发，因此这是警告级别。开启 `infrastructure.nats.mqttFailClosed` 后，QoS 1 事件由代理的消息存储保存，不会以这种方式丢失；只有 QoS 0 事件会。该限制见 [MQTT：平台代理](../reference/transport-matrix.md#mqtt--the-platform-broker)。 | 在代理日志中查找 `Leader falling behind, stepping down`：这表示主节点所在节点过载。检查代理节点的 CPU，以及捕获流的主节点是否与 inbound-events 的主节点在同一节点上（`nats stream cluster step-down --preferred` 可移动它）。丢失的事件无法恢复；切换发生的时间界定了需要在设备自身记录中核对的范围。请在低流量时段安排计划内的代理重启。 |
 | `JetStreamReaderForeignDropped` | warning | 过去 15 分钟内，设备捕获读取器丢弃了存放在它不读取的 subject 下的消息（`devicechain_*_jetstream_reader_foreign_dropped_total`）。代理把整个捕获流交给该读取器，读取器只保留设备发布遥测所用的 subject。设备的发布不会以其他 subject 落入其中，因此被丢弃的消息是经由别的途径写入该流的，最可能是另一个流上的推送消费者，其投递 subject 是某个设备遥测 subject。没有任何消息被转发，也没有缺失任何设备事件。请找出该推送消费者（在每个流上执行 `nats consumer ls`）以及创建它的登录凭据。event-sources 会记录它丢弃的第一条消息的 subject 和序号。 |
 | `JetStreamStreamNearFull` | info | 保存运营方记录而非供服务处理消息的流，字节或消息占用超过 80% 持续十分钟，包括 `failed-decode`、`failed-events`、`connector-dispatch.dead`、`max-deliveries`，以及用户管理未报告读取时的 `dead-letters`。无人处理这些记录，满后会丢弃尚未查看的内容。服务读取的流不在此范围，因为通常保留一周历史、常接近上限，改监控消费者。 | 找到填满原因：拒绝载荷的解码器、解析/存储失败事件、目标拒绝所有发送的连接器。`dead-letters` 检查用户管理是否运行。仅在需要更长保留时提高上限。kube-prometheus-stack 默认 Alertmanager 抑制 `info`，要接收需明确路由。 |
-| `JetStreamDurableLostUnread` | critical | 消费者越过读取前已被移除的消息，这些消息从未处理。 | 租户正在删除时属预期，因为删除移除了未读内容。否则是消费者落后时流已满：容量不足，或消费慢于生产。 |
+| `JetStreamDurableLostUnread` | critical | 消费者越过读取前已被移除的消息，这些消息从未处理。 | 租户正在删除时属预期，因为删除移除了未读内容。否则是消费者落后时流已满：容量不足，或消费慢于生产。 在开启了 [MQTT 故障关闭确认](#mqtt-fail-closed)的实例上，捕获流的 durable 不会触发此告警，因为该流丢弃的副本是可跳过的；其他 durable 仍会触发。 |
 | `JetStreamDurableStalledBehindStream` | critical | 消费者至少两分钟未获得消息，流却已丢弃它前面的消息。仍在读取的慢消费者不触发，其损失由 `JetStreamDurableLostUnread` 报告。 | 服务仍运行才能报告，但消费者不读取。检查处理是否卡在数据库等依赖，或 Pod 等待就绪。无法快速修复时，提高流上限以停止丢弃。 |
 
 上限位于 `instance.config.infrastructure.nats`：高吞吐流使用 `streamMaxBytes`，其他使用 `streamMaxBytesCold`，以及 `streamMaxMsgs`。JetStream 卷按总和配置，因此提高上限时同步扩卷，参见[初始化实例](./bootstrap.md)。
@@ -425,12 +425,12 @@ kube-state-metrics 本身因节点失效等原因移动期间的重启，只要�
 - 在代理上被手动删除的消费者会在 30 秒内重新创建。在此之前（以及之后各 Pod 重新读取存储前的几秒内），该类发布会被确认却不保存，这也是 `MqttFailClosedDurableMissing` 为 critical 的原因。
 - 超出租户接入上限的消息仍会被确认后丢弃，与关闭该设置时相同。
 - 边缘代理内置的 MQTT 消息代理不在覆盖范围内。它上行到平台的连接与其他设备一样是 QoS 1 发布，属于覆盖范围。
-- 捕获流仍会收到每条 QoS 1 发布的一份副本，由其读取器跳过。如果它在过载下写满，其上的 `JetStreamDurableLostUnread` 也会把这些被跳过的副本计入，因此会高估丢失量：真正丢失的只有其中的 QoS 0 发布，QoS 1 发布由存储保存。同理，开启该设置后 `JetStreamCaptureLeaderChanged` 不会导致 QoS 1 丢失。
+- 捕获流仍会收到每条 QoS 1 发布的一份副本，由其读取器跳过。如果它在过载下写满，该流会连同 QoS 0 发布（尽力而为）一起丢弃这些可跳过的副本。`JetStreamDurableLostUnread` 会把它们全部计为丢失，因此在开启该设置的实例上，它不会为捕获 durable 触发（其他 durable 仍会触发）。其后果是：此时该告警对捕获流保持沉默，开启该设置后仍可能丢失的已确认 QoS 1 事件既没有告警也没有计数器。同理，开启该设置后 `JetStreamCaptureLeaderChanged` 不会导致 QoS 1 丢失。
 - 各 Pod 用自己的时钟判断彼此的租约。时钟相差超过约 30 秒时，Pod 之间可能来回交接存储，这只会产生重复，不会丢失。
-- 存储积压大量消息时发生的代理崩溃不在覆盖范围内。在一次每秒 9,000 条 QoS 1 事件的负载测试中（当时存储读取器尚未提速），存储积累了约 150 万条未读消息，三台 NATS 服务器中有两台内存耗尽并重启，约三分之一已确认的事件始终没有进入事件存储。这些事件在哪一环丢失尚未查明。在查明之前，不要指望该设置能扛住代理崩溃，并应把持续增长的存储（`devicechain_eventsources_mqtt_failclosed_durable_pending`）当作需要解决的问题，而不是存储能够吸收的情况。
-- 与捕获流相比，存储每次发布给代理带来的开销更大。拒绝而非淘汰的存储在每次发布时都要检查上限，其开销随同时发布的设备数增加而增长，因此开启该设置后 PUBACK 更慢：在一次每秒 6,000 条事件的测试中，第 99 百分位为 336 ms，关闭时为 35 ms。
+- 过载时尚不会形成反压，该设置也不能保证代理内存耗尽时不丢消息。在[服务质量](../guides/connecting-a-device.md#quality-of-service)所述的环境中，每秒 9,000 条 QoS 1 事件时三次运行中有一次让一台代理服务器内存耗尽，丢失了 264 万条已确认事件中的 294,740 条；每秒 12,000 条时三台服务器全部内存耗尽，336 万条中丢失 621,280 条（18.5%）。存储的大小上限和 80% 的连接退避都没有起作用：服务器被终止时存储不到 30%，增长的是代理中等待写入存储的发布队列，位于存储之前。丢失发生在内存耗尽之前，没有任何计数器变化，事件在哪一环丢失尚未查明。请保持在那里测得的上限以下（约每秒 8,000 条），不要指望该设置能扛住代理崩溃。
+- 与捕获流相比，存储每次发布给代理带来的开销更大，而且开启该设置后平台能跟上的流量更少。在[服务质量](../guides/connecting-a-device.md#quality-of-service)所述的环境中，第 99 百分位的 PUBACK 时间在每秒 6,000 条事件时为 45 ms，7,500 条时为 485 ms，8,250 条时为 1.12 s；关闭该设置、每秒 6,000 条时为 55 ms。开启时实测的无损上限约为每秒 8,000 条。
 - 退避机制按字节衡量存储大小，并且只拒绝新连接：已连接的设备会继续发布。即使远低于上限的 80%，积压也可能很大。
-- 存储中的积压本身占用的代理内存很少，存储写满时每台服务器约为几十 MiB。每台 NATS 服务器的内存主要用于重复检测窗口，在每秒 10,000 条事件的持续负载下，无论该设置开启与否，都会接近其软内存上限。CPU 不足的服务器还会在内存中排队积压工作，因此如果某台服务器曾因内存不足（OOM）被终止，请调高 `nats_memory_limit`。
+- 存储中的积压本身占用的代理内存很少，存储写满时每台服务器约为几十 MiB。每台 NATS 服务器的内存主要用于重复检测窗口，每台服务器上每个持续的每秒事件约占 89 KiB 存活堆，服务器的常驻内存约为其存活堆的两倍，因此在每秒 8,000 条事件的持续负载下，一台服务器已接近其 4 GiB 上限中的 3 GiB，无论该设置开启与否。CPU 不足的服务器还会在内存中排队积压工作，因此如果某台服务器曾因内存不足（OOM）被终止，请调高 `nats_memory_limit`。没有告警监控代理内存：健康的服务器本来就运行在上限附近，对它设阈值会一直沉默到服务器被终止。`InstanceContainerRestarted` 会报告这次终止（代理容器的最后状态为 `OOMKilled`），这才是该采取行动的信号。
 
 ## 事件持久化 {#event-persistence}
 

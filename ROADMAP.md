@@ -27,10 +27,6 @@ require recreating an instance, and evidence for the claims the documentation ma
 - **A last upgrade drill from the final 0.x release.** Upgrade a populated instance from the last
   pre-1.0 release to the release candidate and check that nothing is lost, before the tag is cut.
   See [releases and upgrades](https://docs.devicechain.io/deployment/releases-and-upgrades).
-- **Acknowledged MQTT telemetry is durable by default.** The setting that makes a QoS 1
-  acknowledgement mean "the platform holds this message" exists and is measured, but it is off by
-  default. The work is to turn it on by default once the remaining measurements are in. See
-  [quality of service](https://docs.devicechain.io/guides/connecting-a-device#quality-of-service).
 - **Tenant deletion: finishing the evidence.** Deleting a tenant erases its data, and that is
   tested. The count of work blocked per storage system, the completion signal (`erasedAt`, and
   `dcctl tenant-deletion status`) and a first measurement of erasing a large tenant on one node are
@@ -45,6 +41,13 @@ what people ask for, so tell us if it should change.
 
 **Connecting and decoding**
 
+- **Acknowledged MQTT telemetry is durable by default.** The setting that makes a QoS 1
+  acknowledgement mean "the platform holds this message" exists and is measured, and in 1.0 it
+  stays opt-in. With it on, an instance keeps up with less traffic than with it off, and when
+  traffic goes past that limit the broker runs out of memory and loses messages instead of
+  refusing them. Turning it on by default needs overload to push back first. Until then the
+  documentation states how much each path can lose with it off, and the limit measured with it on.
+  See [quality of service](https://docs.devicechain.io/guides/connecting-a-device#quality-of-service).
 - **Payload decoders you write yourself.** Inbound integrations store what a network server decodes
   and can map a generic JSON body. The next step is a decoder you author per device profile, in the
   same expression language the detection engine uses. See

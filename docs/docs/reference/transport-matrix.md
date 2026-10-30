@@ -104,7 +104,7 @@ there is no separate broker to run.
   over the tenant's ceiling is still dropped after its PUBACK. `dcctl bootstrap` and `dcctl upgrade`
   turn it on with `--mqtt-fail-closed`. See
   [quality of service](../guides/connecting-a-device.md#quality-of-service) and
-  [fail-closed MQTT](../deployment/observability.md#mqtt-fail-closed).
+  [fail-closed MQTT](../deployment/observability.md#mqtt-fail-closed). It is off by default in 1.0, because the ceiling with it on is lower and overload does not yet push back; the measured ceiling and the loss bounds with it off are under [quality of service](../guides/connecting-a-device.md#quality-of-service).
 - **Write ◐** — commands are delivered, but delivery is **live-only and unacknowledged**. A
   publish reaches a device that is connected and subscribed at that instant. The broker does not
   hold it for a device that is not, and nothing tells the platform whether the device received
