@@ -186,6 +186,69 @@ tests:
               description: "Durable devicechain_outbound-connectors_connector-dispatch on stream devicechain_connector-dispatch stepped past messages that were removed before it read them, so they were never processed. If a tenant was being deleted, this is expected: the deletion purged messages the consumer had not reached yet. Otherwise the stream was full and discarding its oldest messages while this consumer was behind: either the stream's ceiling is too small for the traffic, or the consumer is slower than its producer. JetStreamDurableFallingBehind and JetStreamDurableUnreadNearFull, which watch this consumer's backlog, tell the two apart."
 
   # ------------------------------------------------------------------
+  # FAIL-CLOSED MQTT ON: the capture stream's evictions are skippable copies (and best-effort
+  # QoS 0), so the capture durable does not page. The platform's fail-closed series is present
+  # (it is registered only with the setting on); the capture counter rises 0 -> 500.
+  # ------------------------------------------------------------------
+  - name: capture evictions on a fail-closed instance are quiet
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_jetstream_consumer_unread_skipped_total{namespace="dci-devicechain", pod="dc-event-sources-7c9f-aaaaa", job="devicechain/event-sources", stream="devicechain_device-events-capture", durable="devicechain_event-sources_device-events-capture"}'
+        values: '0x9 500x50'
+      - series: 'devicechain_eventsources_mqtt_failclosed_durable_present{namespace="dci-devicechain", pod="dc-event-sources-7c9f-aaaaa", job="devicechain/event-sources", durable="events"}'
+        values: '1x60'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: JetStreamDurableLostUnread
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # FAIL-CLOSED MQTT OFF (no fail-closed series at all): the same capture eviction is real
+  # loss of acknowledged messages and pages.
+  # ------------------------------------------------------------------
+  - name: capture evictions with fail-closed off page
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_jetstream_consumer_unread_skipped_total{namespace="dci-devicechain", pod="dc-event-sources-7c9f-aaaaa", job="devicechain/event-sources", stream="devicechain_device-events-capture", durable="devicechain_event-sources_device-events-capture"}'
+        values: '0x9 500x50'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: JetStreamDurableLostUnread
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+              stream: devicechain_device-events-capture
+              durable: devicechain_event-sources_device-events-capture
+            exp_annotations:
+              summary: "a consumer lost messages it never read"
+              description: "Durable devicechain_event-sources_device-events-capture on stream devicechain_device-events-capture stepped past messages that were removed before it read them, so they were never processed. If a tenant was being deleted, this is expected: the deletion purged messages the consumer had not reached yet. Otherwise the stream was full and discarding its oldest messages while this consumer was behind: either the stream's ceiling is too small for the traffic, or the consumer is slower than its producer. JetStreamDurableFallingBehind and JetStreamDurableUnreadNearFull, which watch this consumer's backlog, tell the two apart."
+
+  # ------------------------------------------------------------------
+  # The exemption is for the capture durable ONLY. With fail-closed on, a different durable
+  # that loses unread messages still pages.
+  # ------------------------------------------------------------------
+  - name: a non-capture durable still pages on a fail-closed instance
+    interval: 1m
+    input_series:
+      - series: 'devicechain_notificationmanagement_jetstream_consumer_unread_skipped_total{namespace="dci-devicechain", pod="dc-notification-management-7c9f-aaaaa", job="devicechain/notification-management", stream="devicechain_alarm-events", durable="devicechain_notification-management_alarm-events"}'
+        values: '0x9 5x50'
+      - series: 'devicechain_eventsources_mqtt_failclosed_durable_present{namespace="dci-devicechain", pod="dc-event-sources-7c9f-aaaaa", job="devicechain/event-sources", durable="events"}'
+        values: '1x60'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: JetStreamDurableLostUnread
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+              stream: devicechain_alarm-events
+              durable: devicechain_notification-management_alarm-events
+            exp_annotations:
+              summary: "a consumer lost messages it never read"
+              description: "Durable devicechain_notification-management_alarm-events on stream devicechain_alarm-events stepped past messages that were removed before it read them, so they were never processed. If a tenant was being deleted, this is expected: the deletion purged messages the consumer had not reached yet. Otherwise the stream was full and discarding its oldest messages while this consumer was behind: either the stream's ceiling is too small for the traffic, or the consumer is slower than its producer. JetStreamDurableFallingBehind and JetStreamDurableUnreadNearFull, which watch this consumer's backlog, tell the two apart."
+
+  # ------------------------------------------------------------------
   # A stalled durable with messages already discarded ahead of it.
   #
   #   minutes 0- 4   gap 0

@@ -84,7 +84,7 @@ title: 传输能力矩阵
   存储写满时会拒绝发布，主节点切换中的存储则不会确认发布，因此设备收不到 PUBACK，会重新发送。
   QoS 0 发布保持上述行为，超出租户上限的消息仍会在 PUBACK 之后被丢弃。`dcctl bootstrap` 和 `dcctl upgrade` 用 `--mqtt-fail-closed` 开启它。参见
   [服务质量](../guides/connecting-a-device.md#quality-of-service)和
-  [MQTT 故障关闭](../deployment/observability.md#mqtt-fail-closed)。
+  [MQTT 故障关闭](../deployment/observability.md#mqtt-fail-closed)。该设置在 1.0 中默认关闭，因为开启后上限更低，且过载时尚不会形成反压；实测上限，以及关闭时各路径的丢失上界，见[服务质量](../guides/connecting-a-device.md#quality-of-service)。
 - **写入 ◐**：命令可以送出，但投递**仅面向当前在线连接，且没有确认**。
   发布只会到达那一刻已连接并订阅的设备。代理不会为未连接或未订阅的设备保留消息，
   平台也不会获知设备是否收到。系统有意不设 `DELIVERED` 状态：独立于响应确认投递需要这种传输并不提供的确认机制。

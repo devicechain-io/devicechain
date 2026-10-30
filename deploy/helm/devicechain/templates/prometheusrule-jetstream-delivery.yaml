@@ -114,8 +114,31 @@ spec:
         # exists at 0 from the moment the reader is created, so increase() sees the
         # FIRST loss too; a pod restart resets it to 0, and a reset followed by a
         # flat series correctly stays silent.
+        #
+        # 🔑 THE CAPTURE DURABLE IS EXEMPT ON AN INSTANCE WITH FAIL-CLOSED MQTT ON
+        # (infrastructure.nats.mqttFailClosed). There a QoS 1 publish is held by the broker's
+        # message store, and the copy that also lands in the capture stream is one its reader
+        # skips, so what the capture stream evicts is skippable copies plus QoS 0 publishes,
+        # which are best effort by contract. The counter cannot tell those from real loss,
+        # and in a load test it counted 8.48M skippable evictions as critical while the
+        # acknowledged events that were really lost fired nothing. Fail-closed is detected
+        # from the platform's own series: devicechain_eventsources_mqtt_failclosed_durable_present
+        # is registered ONLY when the setting is on (see prometheusrule-event-sources.yaml),
+        # so any sample of it means "on" and an off instance has none. The exemption is
+        # for the capture durable ONLY: every other durable still pages, with the setting
+        # on or off. If event-sources is down on a fail-closed instance the series is gone
+        # and the capture durable pages again, which fails loud rather than quiet.
         - alert: JetStreamDurableLostUnread
-          expr: max by (stream, durable) (increase({__name__=~"devicechain_[a-z0-9]+_jetstream_consumer_unread_skipped_total", namespace="{{ $ns }}"}[10m])) > 0
+          expr: |
+            (
+              max by (stream, durable) (increase({__name__=~"devicechain_[a-z0-9]+_jetstream_consumer_unread_skipped_total", durable!~".+_event-sources_device-events-capture(_unfiltered)?", namespace="{{ $ns }}"}[10m])) > 0
+            )
+            or
+            (
+              (max by (stream, durable) (increase({__name__=~"devicechain_[a-z0-9]+_jetstream_consumer_unread_skipped_total", durable=~".+_event-sources_device-events-capture(_unfiltered)?", namespace="{{ $ns }}"}[10m])) > 0)
+              unless on ()
+              (count(devicechain_eventsources_mqtt_failclosed_durable_present{namespace="{{ $ns }}"}) > 0)
+            )
           labels:
             severity: critical
             devicechain_instance: {{ $id }}
