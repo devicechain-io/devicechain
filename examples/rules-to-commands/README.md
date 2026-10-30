@@ -128,17 +128,18 @@ form and the canvas edit the same rule, and the same compiler checks both.
 | Check | Result |
 | --- | --- |
 | Profile with the rule publishes | yes; the compiler accepted it |
-| Alarm raised when the reading passes 80 | yes, `CRITICAL`, at the 84 reading, and **before** the command (the next row) |
-| Command sent by the rule | queued about 10 s after the alarm in both cycles observed (8 s and 10 s) |
+| Alarm raised when the reading passes 80 | yes, `CRITICAL`, at the 84 reading |
+| Command sent by the rule | queued together with the alarm, within about a second of the reading that fired the rule |
 | Device answers | `SUCCESSFUL`, outcome `SUCCEEDED`, answer payload stored |
 | Alarm clears without being authored | yes, at the first reading at or below 80 |
 | Second excursion | a second alarm and a second command, same behaviour |
 
 ## Things worth knowing
 
-1. **Actions are independent.** The alarm and the command are separate actions. In the runs above the
-   alarm appeared at the reading that fired the rule and the command followed about ten seconds later,
-   so a device that must react inside a few seconds should not depend on this path alone.
+1. **Actions are independent.** The alarm and the command are separate actions of the same firing; both
+   are published together, normally within about a second of the reading (a static threshold like this
+   one does not wait for the engine's checkpoint). See
+   [how quickly a detection reaches its actions](https://docs.devicechain.io/deployment/detection-engine#how-quickly-does-a-detection-reach-its-actions).
 2. **A profile that declares commands accepts only those.** The `cool-down` definition is what the
    rule's `sendCommand` action names; `provision.sh` creates it before the rule.
 3. **Publish, then rules run.** Editing the draft changes nothing live. Publishing atomically replaces
