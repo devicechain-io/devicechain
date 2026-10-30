@@ -1,0 +1,14 @@
+{
+  "name": "Furnace over temperature",
+  "description": "Above 80 degrees: raise a critical alarm and tell the furnace to cool down.",
+  "type": "threshold",
+  "severity": "critical",
+  "when": { "metric": "temperature", "op": "gt", "threshold": 80 },
+  "actions": [
+    { "type": "raiseAlarm", "raiseAlarm": { "alarmKey": "furnace-overheat" } },
+    {
+      "type": "sendCommand",
+      "sendCommand": { "command": "cool-down", "payload": "{\"targetC\":55}", "expiresAfter": "15m" }
+    }
+  ]
+}
