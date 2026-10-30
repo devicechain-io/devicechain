@@ -389,6 +389,11 @@ func TestPlanClusterFrontEnd(t *testing.T) {
 		if has(p, "enable_ingress_nginx=false") || has(p, "allow_ingress_nginx_removal=true") {
 			t.Errorf("a plain install planned to remove the controller that is serving: %v", p.Vars)
 		}
+		// The cluster root's default is OFF (a new cluster never gets the retired controller), so a
+		// cluster that has it keeps it only by being told to. Absent, the plan would be a removal.
+		if !has(p, "enable_ingress_nginx=true") {
+			t.Errorf("a plain install over ingress-nginx did not say to keep it, and the root's default is off: %v", p.Vars)
+		}
 		if !has(p, "enable_traefik=true") {
 			t.Errorf("Traefik was not installed beside it: %v", p.Vars)
 		}
@@ -966,4 +971,89 @@ func TestGrafanasIngressIsExemptOnlyWhenThisRootOwnsIt(t *testing.T) {
 	if count(*foreign, true) != 1 {
 		t.Error("another release's Grafana Ingress was exempted")
 	}
+}
+
+// ---------------------------------------------------------------------------
+// ingress-nginx is deprecated: the chart default, the notice, and what an upgrade keeps
+// ---------------------------------------------------------------------------
+
+// The chart's own default is the Gateway. dcctl always names the front end, so this is what an
+// install that does not come through dcctl (helm directly) gets, and what a State that settled
+// nothing would get if ingressValues ever stopped naming it.
+func TestTheChartDefaultsToTheGatewayFrontEnd(t *testing.T) {
+	t.Parallel()
+	ch := chartForTest(t)
+	ing, _ := ch.Values["ingress"].(map[string]interface{})
+	if ing["controller"] != frontEndGateway {
+		t.Fatalf("the chart's ingress.controller default is %v, want %q", ing["controller"], frontEndGateway)
+	}
+	st := compactState(false)
+	st.IngressController = frontEndGateway
+	vals, _, err := releaseValues(t.Context(), ch, st, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Leave the front end out, as a plain `helm install --set ingress.enabled=true` does.
+	delete(vals["ingress"].(map[string]interface{}), "controller")
+	manifest, err := renderChartClientSide(t.Context(), ch, vals)
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := routingKindsOf(t, manifest)
+	if k.ingresses != 0 || k.gateways != 1 || k.routes == 0 {
+		t.Errorf("a chart given no front end rendered %+v, want the Gateway alone", k)
+	}
+}
+
+// The notice names ingress-nginx for every instance still served by it, alone or in the
+// cutover window, and is silent for one on the Gateway alone. It is a notice, never an error.
+func TestIngressNginxDeprecationNotice(t *testing.T) {
+	if w := ingressNginxDeprecation(frontEndChoice{Controller: frontEndGateway}); w != "" {
+		t.Errorf("an instance on the Gateway alone was warned: %q", w)
+	}
+	for name, c := range map[string]frontEndChoice{
+		"nginx alone":    {Controller: frontEndNginx},
+		"cutover window": {Controller: frontEndGateway, Legacy: true},
+	} {
+		w := ingressNginxDeprecation(c)
+		if !strings.Contains(w, "DEPRECATED") || !strings.Contains(w, "ingress-nginx") {
+			t.Errorf("%s: notice = %q", name, w)
+		}
+	}
+}
+
+// An instance that runs ingress-nginx and is upgraded stays on it, still serving, when the
+// cluster has nothing else to serve it, and is only ever moved by an install that added Traefik
+// first. The default flip changes what a NEW instance gets and nothing about these.
+func TestAnUpgradeKeepsAnNginxInstanceOnNginxUntilTheClusterHasTraefik(t *testing.T) {
+	stub := func(f frontEndFacts) {
+		prev := readFrontEndFacts
+		t.Cleanup(func() { readFrontEndFacts = prev })
+		readFrontEndFacts = func(context.Context, string, string) (frontEndFacts, error) { return f, nil }
+	}
+	t.Run("a cluster that has only ingress-nginx", func(t *testing.T) {
+		stub(frontEndFacts{clusterFrontEnd: clusterFrontEnd{NginxClass: true}, InstanceHasIngress: true})
+		st := compactState(false)
+		st.Values["ingressHost"] = "iot.example.com"
+		if err := settleFrontEnd(t.Context(), st); err != nil {
+			t.Fatal(err)
+		}
+		if st.IngressController != frontEndNginx || st.LegacyIngress {
+			t.Errorf("an nginx instance was moved: controller=%q legacy=%v", st.IngressController, st.LegacyIngress)
+		}
+		if ing := ingressValues(st); ing["controller"] != frontEndNginx {
+			t.Errorf("the chart was handed %v, and would render its default instead of the Ingress objects", ing)
+		}
+	})
+	t.Run("a recorded nginx choice survives Traefik arriving", func(t *testing.T) {
+		stub(frontEndFacts{clusterFrontEnd: clusterFrontEnd{NginxClass: true, GatewayClass: true}, InstanceHasIngress: true})
+		st := compactState(false)
+		st.IngressControllerOverride = frontEndNginx // what the declaration's annotation yields
+		if err := settleFrontEnd(t.Context(), st); err != nil {
+			t.Fatal(err)
+		}
+		if st.IngressController != frontEndNginx || st.LegacyIngress {
+			t.Errorf("a recorded nginx choice was undone: controller=%q legacy=%v", st.IngressController, st.LegacyIngress)
+		}
+	})
 }

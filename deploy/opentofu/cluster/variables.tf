@@ -170,9 +170,16 @@ variable "postgres_storage_class" {
 # --- Ingress + TLS (ADR-002) ----------------------------------------------------
 
 variable "enable_ingress_nginx" {
-  description = "Install the NGINX ingress controller. Set false if the cluster already has one."
+  description = <<-EOT
+    DEPRECATED. Install the ingress-nginx controller, which the Kubernetes project has retired.
+    Off by default: a new cluster gets Traefik (enable_traefik) and the Gateway API alone. Set
+    true to keep ingress-nginx on a cluster that already runs it, or to install it for an
+    instance that has not moved off it (dcctl install does this for a cluster that has it).
+    Turning it off over a cluster that has it is refused while an Ingress of its class remains
+    (allow_ingress_nginx_removal).
+  EOT
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "allow_ingress_nginx_removal" {

@@ -39,7 +39,7 @@ var (
 )
 
 const (
-	ingressControllerUsage = "which front end serves the instance's host: gateway (a Gateway API Gateway and HTTPRoutes, served by Traefik), nginx (Ingress objects, served by ingress-nginx) or auto. " +
+	ingressControllerUsage = "which front end serves the instance's host: gateway (a Gateway API Gateway and HTTPRoutes, served by Traefik), nginx (Ingress objects, served by ingress-nginx) or auto. nginx is DEPRECATED: ingress-nginx is retired upstream, and the choice is kept for one more minor so an instance can be moved off it in its own time. " +
 		"The choice is RECORDED on the instance and kept by every later upgrade, so 'nginx' stays a rollback until 'gateway' or 'auto' says otherwise; auto drops the record and decides from the cluster. " +
 		"With no choice recorded or given, where Traefik runs the instance is served by the Gateway, and while it still has Ingress objects and ingress-nginx remains they are rendered beside it, so the host keeps answering there until --drop-legacy-ingress. " +
 		"nginx needs ingress-nginx on the cluster, and gateway needs Traefik"
@@ -128,6 +128,9 @@ The fail-closed MQTT acknowledgement is the other: '--mqtt-fail-closed' (or
 '--mqtt-fail-closed=false') sets it on a live instance, and the declaration records the
 choice. A plain upgrade with no flag keeps whatever was recorded, so an instance built
 with it stays on, and one told off stays off.
+
+ingress-nginx is DEPRECATED. A new instance is served by the Gateway; an instance already on
+ingress-nginx stays on it, with a warning, until the cluster has Traefik and you move it.
 
 Where the cluster runs Traefik (the Gateway API controller that replaces ingress-nginx) an
 upgrade moves the instance's routing to a Gateway and HTTPRoutes. While ingress-nginx is still

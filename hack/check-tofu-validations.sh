@@ -1036,7 +1036,7 @@ run_assertions() {
   # opt-out. (traefik_on also reads the CRD module's verdict, which needs a cluster, so it is
   # exercised with the CRD module off.)
   evaluates true "var.enable_traefik"
-  evaluates true "var.enable_ingress_nginx"
+  evaluates false "var.enable_ingress_nginx"
   unset TF_VAR_enable_gateway_api_crds
   evaluates true "var.enable_gateway_api_crds"
   export TF_VAR_enable_gateway_api_crds=false

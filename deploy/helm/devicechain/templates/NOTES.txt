@@ -19,3 +19,10 @@ Single sign-on and the MCP authorization server are OFF on this instance.
     --set functionalAreas.user-management.config.auth.issuerUrl=https://<host>/api/user-management
 
 {{- end }}
+{{- if and .Values.ingress.enabled (eq .Values.ingress.controller "nginx") }}
+
+ingress.controller "nginx" is DEPRECATED. The Kubernetes project has retired ingress-nginx, and this
+value will be removed in a later release. The default is now "gateway" (Gateway API, served by
+Traefik). To move an existing instance off it, see "Moving an existing install to Traefik" in the
+DeviceChain documentation (dcctl upgrade does the steps for you).
+{{- end }}

@@ -1215,16 +1215,18 @@ securityContext:
     drop:
       - ALL
 
-# Ingress exposing the GraphQL/HTTP surface, with cert-manager TLS. Requires the
-# ingress-nginx controller + cert-manager from deploy/opentofu. Disabled by
+# Routing exposing the GraphQL/HTTP surface, with cert-manager TLS. Requires a controller
+# (Traefik by default) + cert-manager from deploy/opentofu. Disabled by
 # default; enable to route an external host to the per-area Services. Each enabled
 # area is reachable at https://<host>/<area>/graphql (the /<area> prefix is
 # stripped before the request reaches the service).
 ingress:
   enabled: false
-  # Which front end serves the host: "nginx" renders Ingress objects (the ingress-nginx
-  # controller), "gateway" renders a Gateway API Gateway + HTTPRoutes (any conformant
-  # controller; the OpenTofu install registers Traefik's GatewayClass). Exactly one is
+  # Which front end serves the host: "gateway" (the default) renders a Gateway API Gateway
+  # + HTTPRoutes (any conformant controller; the OpenTofu install registers Traefik's
+  # GatewayClass), "nginx" renders Ingress objects for the ingress-nginx controller. nginx is
+  # DEPRECATED: the Kubernetes project has retired ingress-nginx, and the value is kept
+  # for one more minor so an existing instance can be moved off it in its own time. Exactly one is
   # rendered. They serve the same hosts, paths and backends; a test pins that.
   #
   # The settings below that name nginx (className, annotations, uploadMaxBodySize) apply
@@ -1233,9 +1235,9 @@ ingress:
   # those annotations did: the request body is not capped or buffered, the 60s response
   # timeout is the controller's, and the download's query string is kept out of its
   # access log. See the chart README.
-  controller: nginx
+  controller: gateway
   # Must match the IngressClass the controller registered (OpenTofu `ingress_class`).
-  # Used when controller is nginx.
+  # Used when controller is nginx (deprecated).
   className: nginx
   # The Gateway front end (controller: gateway).
   gateway:

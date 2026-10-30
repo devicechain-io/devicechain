@@ -159,8 +159,9 @@ rendered by the Helm chart (it knows the enabled functional areas) — set
 
 **Gateway API + Traefik** (the controller that replaces ingress-nginx) are **on by default**
 (`enable_gateway_api_crds`, `enable_traefik`). Next to an ingress-nginx that is already installed
-they run beside it, which is left exactly as it is; `dcctl install` sets `enable_ingress_nginx=false`
-for a cluster that does not have it, so a fresh cluster never gets the retired controller. Removing a
+they run beside it, which is left exactly as it is. `enable_ingress_nginx` is **deprecated and off by
+default**, so a fresh cluster never gets the retired controller; `dcctl install` sets it `true`
+for a cluster that already has ingress-nginx, so that cluster keeps serving it. Removing a
 controller that is there is guarded: the root refuses `enable_ingress_nginx=false` over a cluster
 that has ingress-nginx while any Ingress of its class remains, unless `allow_ingress_nginx_removal`
 is set (dcctl sets it, after its own check, for `dcctl install --remove-legacy-ingress`).

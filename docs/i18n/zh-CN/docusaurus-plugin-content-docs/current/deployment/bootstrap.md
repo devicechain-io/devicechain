@@ -36,7 +36,7 @@ DeviceChain 尚未正式发布。`dcctl install local` 和 `dcctl bootstrap loca
 - CloudNativePG Operator（`cnpg-system`）；
 - cert-manager（`cert-manager`）；
 - 监控 Prometheus、Grafana（`monitoring`），见[可观测性](./observability.md)；
-- ingress 控制器：Traefik，以及它所服务的 Gateway API 定义。已经运行 `ingress-nginx` 的集群会保留它并继续提供服务，同时在它旁边增加 Traefik，见[将现有安装迁移到 Traefik](./ingress-cutover.md)。
+- ingress 控制器：Traefik，以及它所服务的 Gateway API 定义。`ingress-nginx` 已弃用，不再安装。已经运行它的集群会保留它并继续提供服务，同时在它旁边增加 Traefik，见[将现有安装迁移到 Traefik](./ingress-cutover.md)。
 
 每集群一个 Operator，由全部实例共享。因此由集群命令安装，而非各实例分别安装；集群升级到新版本也从此处开始，参见[发布与升级](./releases-and-upgrades.md#rolling-upgrades)。
 
