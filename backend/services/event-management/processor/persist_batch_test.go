@@ -210,6 +210,17 @@ func TestABatchHoldsAtMostMaxBatchMessages(t *testing.T) {
 	if got, sum := r.metric(t, metricBatchSize, "", ""), r.histogramSum(t, metricBatchSize); got != 4 || sum != 100 {
 		t.Errorf("batch-size histogram holds %v observations summing to %v; want 4 summing to 100", got, sum)
 	}
+	// Each message carries three measurement entries, so 100 messages are 300 rows, in the
+	// same four transactions, each of which was timed.
+	if got := r.metric(t, "devicechain_eventmanagement_persist_rows_total", "", ""); got != 300 {
+		t.Errorf("persist_rows_total = %v; want 300", got)
+	}
+	if got, sum := r.metric(t, "devicechain_eventmanagement_persist_batch_rows", "", ""), r.histogramSum(t, "devicechain_eventmanagement_persist_batch_rows"); got != 4 || sum != 300 {
+		t.Errorf("batch-rows histogram holds %v observations summing to %v; want 4 summing to 300", got, sum)
+	}
+	if got := r.metric(t, "devicechain_eventmanagement_persist_commit_duration_seconds", "", ""); got != 4 {
+		t.Errorf("commit-duration histogram holds %v observations; want 4", got)
+	}
 }
 
 // The default batch is taken whole: 128 messages at the default maxBatch are exactly two
