@@ -442,6 +442,9 @@ kube-state-metrics 本身因节点失效等原因移动期间的重启，只要�
 | --- | --- |
 | `devicechain_eventmanagement_persist_batch_size` | 每提交事务事件数。小批表示跟得上，接近上限表示忙。10 个写入器共享流时，即使存储落后也很少满批，应结合积压。 |
 | `devicechain_eventmanagement_persist_batch_fallbacks_total` | 未提交、随后重写事件的批事务。偶发增长通常一个拒绝事件；多事件语句拒绝行时，定位需要再一次尝试，可能增长两次。持续增长表示反复拒绝，例如删除租户设备仍发送。每个包含这些事件的批次多花一个事务，不论数量；事件在 `persist_messages_total` 显示为 `erased`。 |
+| `devicechain_eventmanagement_persist_rows_total` | 已存储的行数。一个测量事件每个条目存储一行（包含计算指标），因此比较启用与未启用计算指标的配置档时，应保持相同的是该速率，而不是每秒事件数。 |
+| `devicechain_eventmanagement_persist_batch_rows` | 每个已提交事务的行数。 |
+| `devicechain_eventmanagement_persist_commit_duration_seconds` | 单个已提交事务的耗时，分桶范围为 1 毫秒到 2.5 秒。将 `_sum` 的速率除以 `persist_rows_total` 的速率即得每行存储的延迟。`persist_duration_seconds` 按事件计、随批次行数增长且默认分桶较粗，比较两次运行时应使用本指标。 |
 | `devicechain_eventmanagement_persist_inflight` | 写入器持有事件，包括等待批提交。 |
 | `devicechain_eventmanagement_persist_store_held_events` | 因事件库无法写入而被保留、尚未确认的事件数。正常时为 0；见[事件库无法写入时](#event-store-down)。 |
 

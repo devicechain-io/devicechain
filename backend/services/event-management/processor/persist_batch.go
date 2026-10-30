@@ -138,13 +138,14 @@ func (ep *EventPersistenceWorker) collect(ctx context.Context) (batch []pendingE
 // the context of a message of its own tenant, and a statement that ever forgot to would
 // fail closed with ErrNoTenant rather than write under a batch-mate's tenant.
 func (ep *EventPersistenceWorker) persistBatch(ctx context.Context, batch []pendingEvent) {
+	started := time.Now()
 	// Each pass either returns or sets at least one message aside, so the loop ends: the
 	// one-message-at-a-time write that finds an unattributed refusal is part of the same
 	// pass, not a pass of its own.
 	for len(batch) > 1 {
 		failedAt, err := ep.writeBatch(ctx, batch, ep.writeGrouped)
 		if err == nil {
-			ep.acknowledge(batch)
+			ep.acknowledge(batch, started)
 			return
 		}
 		ep.metrics.fallback()
@@ -166,7 +167,7 @@ func (ep *EventPersistenceWorker) persistBatch(ctx context.Context, batch []pend
 				Msg("A grouped event write was refused; writing the batch again one event at a time")
 			failedAt, err = ep.writeBatch(ctx, batch, ep.writeEach)
 			if err == nil {
-				ep.acknowledge(batch)
+				ep.acknowledge(batch, started)
 				return
 			}
 			ep.metrics.fallback()
@@ -220,6 +221,23 @@ func (ep *EventPersistenceWorker) persistBatch(ctx context.Context, batch []pend
 	}
 }
 
+// eventRows is how many rows a message stores: one per measurement entry, derived entries
+// included, and one for any other event. It is what lets rows/s and latency per row be
+// compared between a profile with calculated metrics and one without, where events/s and
+// latency per event are not.
+func eventRows(event *resolvedevent.ResolvedEvent) int {
+	if payload, ok := event.Payload.(*resolvedevent.ResolvedMeasurementsPayload); ok && payload != nil {
+		n := 0
+		for _, sample := range payload.Entries {
+			n += len(sample.Entries)
+		}
+		if n > 0 {
+			return n
+		}
+	}
+	return 1
+}
+
 // writeBatch writes batch with write in one transaction, returning the index of the
 // message write blamed (or -1) with the transaction's error.
 func (ep *EventPersistenceWorker) writeBatch(ctx context.Context, batch []pendingEvent,
@@ -235,8 +253,12 @@ func (ep *EventPersistenceWorker) writeBatch(ctx context.Context, batch []pendin
 
 // acknowledge acknowledges every message of a batch whose transaction committed — after
 // COMMIT, never inside the transaction.
-func (ep *EventPersistenceWorker) acknowledge(batch []pendingEvent) {
-	ep.metrics.committed(len(batch))
+func (ep *EventPersistenceWorker) acknowledge(batch []pendingEvent, started time.Time) {
+	rows := 0
+	for _, p := range batch {
+		rows += eventRows(p.event)
+	}
+	ep.metrics.committed(len(batch), rows, time.Since(started))
 	for _, p := range batch {
 		p.msg.Ack()
 		p.done(core.ResultOK)
@@ -246,9 +268,10 @@ func (ep *EventPersistenceWorker) acknowledge(batch []pendingEvent) {
 // persistOne is the per-message path: PersistEvent in a transaction of its own, then
 // dispose. A batch of one takes it, and so does every message a batch gives up on.
 func (ep *EventPersistenceWorker) persistOne(p pendingEvent) {
+	started := time.Now()
 	_, err := ep.PersistEvent(p.ctx, *p.event)
 	if err == nil {
-		ep.metrics.committed(1)
+		ep.metrics.committed(1, eventRows(p.event), time.Since(started))
 	}
 	ep.dispose(p, err)
 }
