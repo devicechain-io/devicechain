@@ -472,6 +472,10 @@ type ResolvedEventsProcessor struct {
 	// publishPasses numbers publishPending's passes, so an outcome can name the pass it belongs to.
 	publishPasses  uint64
 	lastCheckpoint time.Time
+	// flushDetections' last failure; see there.
+	flushFailedAt time.Time
+	// detOrd numbers buffered detections (pendingDetection.ord).
+	detOrd uint64
 	// lastBudgetSample is the wall-clock time of the most recent per-tenant state-budget
 	// measurement (slice 6c). The budget is sampled from the ticker on its OWN cadence, decoupled
 	// from checkpoint() — which every call site activity-gates, so a rule-budget breach that changes
@@ -1731,6 +1735,13 @@ func (rp *ResolvedEventsProcessor) run() {
 				if !rp.checkpoint(rp.pctx()) {
 					tickErr = errTickCheckpointNotCommitted
 				}
+			} else {
+				// Not a checkpoint tick: deliver what has fired and replays identically, so such a
+				// detection waits one tick for the broker and not up to a whole checkpoint interval.
+				// The result is discarded on purpose: a failed flush leaves the buffer as it was,
+				// is counted by detect_derived_publish_failures_total, and is retried and reported
+				// by the next checkpoint.
+				rp.flushDetections(rp.pctx())
 			}
 			// Per-tenant state-budget accounting (ADR-023 amendment, slice 6c), sampled on the ticker
 			// on its own cadence — NOT from checkpoint(), whose every call site is activity-gated
@@ -1946,7 +1957,7 @@ func (rp *ResolvedEventsProcessor) applyResolved(msg messaging.Message) bool {
 	// the number lives — a store-and-forward fleet whose windowed or duration rules stop firing
 	// shows up as a rising detect_late_samples_total instead of silence.
 	rp.metrics.recordLateSamples(rp.engine.DrainLateSamples())
-	rp.drainDetections(triggerTime(msg, event))
+	rp.drainDetections(triggerTime(msg, event), true)
 	if rp.engine.LastSeq() > prev || descoped {
 		rp.dirty = true
 		rp.metrics.recordApplied()
@@ -1975,6 +1986,12 @@ func (rp *ResolvedEventsProcessor) skipPoison(seq uint64) bool {
 type pendingDetection struct {
 	detectcore.Detection
 	triggeredAt time.Time
+	// early is whether the tick may publish this detection ahead of the checkpoint (see
+	// earlyPublishable). It is decided where the detection is buffered and never revisited.
+	early bool
+	// ord is the detection's place in the buffer's arrival order, which a partial flush uses to put
+	// what it leaves behind back in order.
+	ord uint64
 	// out and state are the publisher's (derived_publish.go): the prepared output once one has
 	// been built, and whether it is still to be sent or already acknowledged. A detection that is
 	// buffered and never published has neither.
@@ -2016,10 +2033,17 @@ func triggerTime(msg messaging.Message, ev *resolvedevent.ResolvedEvent) time.Ti
 // frontier (applyResolved), or the advance's own time (idleAdvance). A watermark-fired detection
 // — one series' Absence fired by another series' event — is therefore stamped with the message
 // that fired it, which is the input that caused the emission, not the silent series' last event.
-func (rp *ResolvedEventsProcessor) drainDetections(triggeredAt time.Time) int {
+//
+// replayable is whether the detections came from applying a stream event (true) or from a
+// wall-clock advance (false). Only the first can be published early.
+func (rp *ResolvedEventsProcessor) drainDetections(triggeredAt time.Time, replayable bool) int {
 	dets := rp.engine.Drain()
 	for _, d := range dets {
-		rp.pendingDets = append(rp.pendingDets, pendingDetection{Detection: d, triggeredAt: triggeredAt})
+		rp.detOrd++
+		rp.pendingDets = append(rp.pendingDets, pendingDetection{
+			Detection: d, triggeredAt: triggeredAt, ord: rp.detOrd,
+			early: replayable && rp.earlyPublishable(d),
+		})
 	}
 	if len(dets) > 0 {
 		rp.dirty = true
@@ -2149,7 +2173,7 @@ func (rp *ResolvedEventsProcessor) idleAdvance(ctx context.Context, now time.Tim
 		return
 	}
 	changed := rp.engine.Advance(now)
-	if n := rp.drainDetections(now); n > 0 {
+	if n := rp.drainDetections(now, false); n > 0 {
 		rp.metrics.recordIdleAdvance(n)
 	}
 	if changed {
@@ -2656,6 +2680,122 @@ func (rp *ResolvedEventsProcessor) runCheckpoint(ctx context.Context, force bool
 	rp.lastCheckpoint = rp.clock.Now()
 	rp.phases.flush()
 	return true
+}
+
+// earlyPublishable reports whether a detection may be published ahead of the checkpoint that
+// commits the state behind it.
+//
+// Publishing early is safe only for a detection a replay would derive again, identically: a crash
+// between the early publish and the commit replays from the last snapshot, and a detection that
+// replay reproduces carries the same DedupID and collapses. One that replay does NOT reproduce
+// would leave a Raised downstream with nothing behind it (a stuck alarm, since the restored
+// engine holds no latch and so never emits the Resolved), or a phantom raise at a different
+// OccurredTime that gets a new DedupID (a second command). Two things make a detection that kind:
+//
+//   - a dynamic bound. A leaf that reads a device attribute is evaluated against the attribute as
+//     it is now, not as it was at the event (see the caveat on checkpoint and on
+//     runtime.DerivedEvent).
+//   - a publish-time gate. dropSupersededDetections judges Absence and the frontier-driven kinds
+//     against the roster and active versions as they are when the publish happens, so the same
+//     detection can be kept at one time and dropped at another.
+//
+// It is decided from the rule's compiled kind and leaf, at the point the detection is buffered.
+// The kind switch lists every kind on purpose and ends in a default that says no: a kind added
+// later publishes at the checkpoint, as it always did, until someone decides it belongs here.
+func (rp *ResolvedEventsProcessor) earlyPublishable(d detectcore.Detection) bool {
+	if rp.registry == nil {
+		return false
+	}
+	sr, ok := rp.registry.Lookup(d.RuleID)
+	if !ok || sr.Compiled == nil || sr.Compiled.Predicate == nil {
+		return false
+	}
+	return earlyPublishableKind(sr.Compiled.Core.Kind, sr.Compiled.Predicate.ReferencesAttributes())
+}
+
+// earlyPublishableKind is earlyPublishable's decision, apart from the registry lookup.
+func earlyPublishableKind(kind detectcore.RuleKind, readsAttributes bool) bool {
+	switch kind {
+	case detectcore.Threshold, detectcore.Repeating:
+		// Decided on the arriving event alone and not gated at publish.
+		return !readsAttributes
+	case detectcore.Absence, // gated at publish on the roster (dropSupersededDetections)
+		detectcore.Duration, detectcore.Session, detectcore.Aggregate, // frontier kinds, gated on the active version
+		detectcore.DeltaRate, detectcore.CountWindow, detectcore.SlidingAgg,
+		detectcore.Correlation,  // not gated, but not yet shown to replay identically across a membership change
+		detectcore.Connectivity: // presence edges, likewise
+		return false
+	default:
+		return false
+	}
+}
+
+// flushDetections hands the replay-deterministic buffered detections (earlyPublishable) to the
+// broker WITHOUT committing a snapshot or acking anything, so one reaches REACT within a tick of
+// firing instead of waiting for the next checkpoint (up to CheckpointInterval, 10 s by default, on
+// a quiet stream). Every other detection stays in the buffer for the checkpoint.
+//
+// This is the first step of runCheckpoint taken on its own, so it is the same publish under the
+// same ownership check. It leaves the deliver-before-checkpoint contract intact: the contract is
+// that the committed sequence never passes a message whose detections are unpublished, and this
+// moves nothing past anything. A crash after an early flush and before the next commit replays
+// from the last snapshot and re-derives the same detections, which carry the same DedupID and
+// collapse in the derived stream's duplicate window: the case a checkpoint whose publish
+// succeeded and whose Save failed has always been.
+//
+// A detection is flushed only when no earlier detection of its tenant and series is being held
+// back, so a series is never published out of order.
+//
+// A failed flush is not retried by the tick until a checkpoint has run, so a broker that has
+// stopped answering costs one bounded attempt per interval and not one per tick; the checkpoint
+// it falls back to retries the same buffer and reports the failure.
+func (rp *ResolvedEventsProcessor) flushDetections(ctx context.Context) {
+	if rp.stale || len(rp.pendingDets) == 0 || (!rp.flushFailedAt.IsZero() && !rp.flushFailedAt.Before(rp.lastCheckpoint)) {
+		return
+	}
+	if rp.leadershipEnabled() && !rp.heldNow() {
+		return // the checkpoint's ownership check, ahead of the same publish
+	}
+	type lane struct{ tenant, series string }
+	held := map[lane]bool{}
+	var flush, keep []pendingDetection
+	for _, d := range rp.pendingDets {
+		tenant, _ := runtime.RuleTenant(d.RuleID)
+		k := lane{tenant, d.Series}
+		if d.early && !held[k] {
+			flush = append(flush, d)
+			continue
+		}
+		held[k] = true
+		keep = append(keep, d)
+	}
+	if len(flush) == 0 {
+		return
+	}
+	defer rp.phases.enter(rp.phases.enter(phasePublish))
+	pubCtx, pubCancel := context.WithTimeout(ctx, rp.checkpointTimeout())
+	defer pubCancel()
+	rp.pendingDets = flush
+	ok := rp.publishPending(pubCtx)
+	// What the pass did not retire (all of it on a failure) goes back among the rest, in arrival order.
+	rp.pendingDets = mergeByOrd(rp.pendingDets, keep)
+	if !ok {
+		rp.flushFailedAt = rp.clock.Now()
+	}
+}
+
+// mergeByOrd merges two lists, each in ascending ord, into one.
+func mergeByOrd(a, b []pendingDetection) []pendingDetection {
+	out := make([]pendingDetection, 0, len(a)+len(b))
+	for len(a) > 0 && len(b) > 0 {
+		if a[0].ord < b[0].ord {
+			out, a = append(out, a[0]), a[1:]
+		} else {
+			out, b = append(out, b[0]), b[1:]
+		}
+	}
+	out = append(out, a...)
+	return append(out, b...)
 }
 
 // ackThroughCommitted acknowledges everything the checkpoint just made durable, with ONE

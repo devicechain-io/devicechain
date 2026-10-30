@@ -64,3 +64,25 @@ func TestFallbackIdiomFiresOnAbsentAttribute(t *testing.T) {
 		t.Fatalf("attribute set: want (false, nil), got (%v, %v)", got, err)
 	}
 }
+
+// ReferencesAttributes is what keeps a dynamic-bound detection out of the early publish, so it must
+// see the attribute read in every shape and nothing else.
+func TestReferencesAttributes(t *testing.T) {
+	for src, want := range map[string]bool{
+		`"t" in m && m["t"] > 80.0`:                     false,
+		`device == "d1"`:                                false,
+		`true`:                                          false,
+		`"lim" in attr && m["t"] > attr["lim"]`:         true,
+		`has(attr.lim) && m["t"] > attr["lim"]`:         true,
+		`m["t"] > 80.0 || !("lim" in attr)`:             true,
+		`cel.bind(x, "lim" in attr, x && m["t"] > 1.0)`: true,
+	} {
+		p, err := Compile(src)
+		if err != nil {
+			t.Fatalf("%s: %v", src, err)
+		}
+		if got := p.ReferencesAttributes(); got != want {
+			t.Errorf("%s: ReferencesAttributes = %v, want %v", src, got, want)
+		}
+	}
+}

@@ -45,7 +45,7 @@ func raisedAbsenceProc(t *testing.T) (*ResolvedEventsProcessor, *edgeWriter) {
 	rp.armer.ApplyDeviceMembership(runtime.RosterEntry{Tenant: "acme", DeviceToken: "dev1", ProfileToken: "p1", ExpectedSince: testBase}, true)
 
 	eng.Advance(testBase.Add(11 * time.Second)) // past the 10s dead-man deadline: the absence raises
-	rp.drainDetections(testBase.Add(11 * time.Second))
+	rp.drainDetections(testBase.Add(11*time.Second), true)
 	if !rp.publishPending(context.Background()) {
 		t.Fatal("publishing the raise failed")
 	}
@@ -80,7 +80,7 @@ func TestAbsenceClearPublishedWhenDeviceLeavesScope(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			rp, w := raisedAbsenceProc(t)
 			tc.apply(rp)
-			rp.drainDetections(testBase.Add(12 * time.Second))
+			rp.drainDetections(testBase.Add(12*time.Second), true)
 			if !rp.publishPending(context.Background()) {
 				t.Fatal("publish failed")
 			}
@@ -103,9 +103,9 @@ func TestAbsenceRaiseAndClearInOneBatchBothDropped(t *testing.T) {
 	rp.armer.ApplyDeviceMembership(runtime.RosterEntry{Tenant: "acme", DeviceToken: "dev1", ProfileToken: "p1", ExpectedSince: testBase}, true)
 
 	eng.Advance(testBase.Add(11 * time.Second))
-	rp.drainDetections(testBase.Add(11 * time.Second)) // raise buffered, not yet published
+	rp.drainDetections(testBase.Add(11*time.Second), true) // raise buffered, not yet published
 	rp.armer.ApplyDeviceMembership(runtime.RosterEntry{Tenant: "acme", DeviceToken: "dev1", ProfileToken: ""}, true)
-	rp.drainDetections(testBase.Add(12 * time.Second)) // its clear buffered behind it
+	rp.drainDetections(testBase.Add(12*time.Second), true) // its clear buffered behind it
 
 	if !rp.publishPending(context.Background()) {
 		t.Fatal("publish failed")
@@ -121,9 +121,9 @@ func TestAbsenceClearThenRearmInOneBatchKeepsOrder(t *testing.T) {
 	rp, w := raisedAbsenceProc(t)
 	rp.armer.ApplyDeviceMembership(runtime.RosterEntry{Tenant: "acme", DeviceToken: "dev1", ProfileToken: ""}, true)
 	rp.armer.ApplyDeviceMembership(runtime.RosterEntry{Tenant: "acme", DeviceToken: "dev1", ProfileToken: "p1", ExpectedSince: testBase.Add(13 * time.Second)}, true)
-	rp.drainDetections(testBase.Add(12 * time.Second))
+	rp.drainDetections(testBase.Add(12*time.Second), true)
 	rp.engine.Advance(testBase.Add(30 * time.Second)) // the re-armed dead-man elapses: a fresh raise
-	rp.drainDetections(testBase.Add(30 * time.Second))
+	rp.drainDetections(testBase.Add(30*time.Second), true)
 
 	if !rp.publishPending(context.Background()) {
 		t.Fatal("publish failed")
@@ -151,7 +151,7 @@ func twoVersionProc(t *testing.T, ruleV2 string) (*ResolvedEventsProcessor, *edg
 	rp.armer.ApplyActiveVersion(runtime.ActiveEntry{Tenant: "acme", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: testBase})
 	rp.armer.ApplyDeviceMembership(runtime.RosterEntry{Tenant: "acme", DeviceToken: "dev1", ProfileToken: "p1", ExpectedSince: testBase}, true)
 	eng.Advance(testBase.Add(11 * time.Second))
-	rp.drainDetections(testBase.Add(11 * time.Second))
+	rp.drainDetections(testBase.Add(11*time.Second), true)
 	if !rp.publishPending(context.Background()) || len(w.got) != 1 || w.got[0] != "dev1:raised" {
 		t.Fatalf("setup: want the v1 absence raised and published, got %v", w.got)
 	}
@@ -166,7 +166,7 @@ func twoVersionProc(t *testing.T, ruleV2 string) (*ResolvedEventsProcessor, *edg
 func TestSupersessionOfAStillSilentDevicePublishesNoClear(t *testing.T) {
 	rp, w := twoVersionProc(t, "r1")
 	rp.armer.ApplyActiveVersion(runtime.ActiveEntry{Tenant: "acme", ProfileToken: "p1", ActiveVersionToken: "p1@v2", PublishedAt: testBase.Add(20 * time.Second)})
-	rp.drainDetections(testBase.Add(21 * time.Second))
+	rp.drainDetections(testBase.Add(21*time.Second), true)
 	if !rp.publishPending(context.Background()) {
 		t.Fatal("publish failed")
 	}
@@ -180,7 +180,7 @@ func TestSupersessionOfAStillSilentDevicePublishesNoClear(t *testing.T) {
 func TestRepublishThatRemovesTheRuleStillClears(t *testing.T) {
 	rp, w := twoVersionProc(t, "other")
 	rp.armer.ApplyActiveVersion(runtime.ActiveEntry{Tenant: "acme", ProfileToken: "p1", ActiveVersionToken: "p1@v2", PublishedAt: testBase.Add(20 * time.Second)})
-	rp.drainDetections(testBase.Add(21 * time.Second))
+	rp.drainDetections(testBase.Add(21*time.Second), true)
 	if !rp.publishPending(context.Background()) {
 		t.Fatal("publish failed")
 	}
@@ -195,11 +195,11 @@ func TestAbsencePairingIsPerKey(t *testing.T) {
 	rp, w := raisedAbsenceProc(t) // dev1 (B): raised + published
 	rp.armer.ApplyDeviceMembership(runtime.RosterEntry{Tenant: "acme", DeviceToken: "devA", ProfileToken: "p1", ExpectedSince: testBase.Add(12 * time.Second)}, true)
 	rp.engine.Advance(testBase.Add(30 * time.Second))
-	rp.drainDetections(testBase.Add(30 * time.Second)) // devA raise buffered, unpublished
+	rp.drainDetections(testBase.Add(30*time.Second), true) // devA raise buffered, unpublished
 	for _, dev := range []string{"devA", "dev1"} {
 		rp.armer.ApplyDeviceMembership(runtime.RosterEntry{Tenant: "acme", DeviceToken: dev, ProfileToken: ""}, true)
 	}
-	rp.drainDetections(testBase.Add(31 * time.Second))
+	rp.drainDetections(testBase.Add(31*time.Second), true)
 	if !rp.publishPending(context.Background()) {
 		t.Fatal("publish failed")
 	}
