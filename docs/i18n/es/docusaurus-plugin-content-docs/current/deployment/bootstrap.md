@@ -1788,6 +1788,11 @@ escritura anticipada de la base de datos ocupa alrededor de 1,1 GB más mientras
 seguridad le siguen el ritmo, así que 32Gi contienen unos 27 millones de eventos: unas siete
 horas de un inquilino que envía a su techo predeterminado completo.
 
+Una fila de medición costó unos 600 bytes en disco, índices incluidos y antes de comprimir, en una
+prueba posterior (51 millones de filas llenaron 31 GB), así que la cifra anterior es la prudente.
+Cómo dimensionar el volumen para su tráfico, con métricas calculadas y retención, y cómo ampliarlo
+en línea, está en [Dimensionar el almacén de eventos](./tuning-an-instance.md#event-store-sizing).
+
 El almacén de eventos comprime las imágenes de página de su registro de escritura anticipada
 (`wal_compression = lz4`). Tras cada punto de control, el primer cambio en una página escribe la
 página entera en el registro, y en este almacén la mayoría de esas páginas son páginas de índice.

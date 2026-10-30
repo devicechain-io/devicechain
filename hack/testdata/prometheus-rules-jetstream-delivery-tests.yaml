@@ -1546,3 +1546,100 @@ tests:
             exp_annotations:
               summary: "A consumer is close to losing messages it has not read"
               description: "Durable devicechain_device-state_resolved-events has not yet read 90% of what stream devicechain_resolved-events can hold. Once its unread backlog reaches the stream's ceiling, the stream discards its oldest messages to make room, and this consumer will never process the ones it had not reached (JetStreamDurableLostUnread). New messages are still accepted. Find out why the consumer is slow: its service's logs, its database, and JetStreamDurableFallingBehind. If the traffic has outgrown the stream, raise the stream's ceiling (and the JetStream volume with it)."
+
+  # ------------------------------------------------------------------
+  # EventStoreRefusingWrites: event-management is HOLDING events its database refused
+  # (disk full, read-only, unreachable). Zero on a healthy instance, so the quiet case is
+  # the series at 0; it fires after the 2m `for` and clears when the store recovers.
+  # ------------------------------------------------------------------
+  - name: events held because the event store refuses writes page, and recovery clears the alert
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventmanagement_persist_store_held_events{namespace="dci-devicechain", pod="dc-event-management-7c9f-aaaaa", job="devicechain/event-management"}'
+        values: '0x3 128x10 0x10'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: EventStoreRefusingWrites
+        exp_alerts: []
+      # Held since minute 4; the 2m `for` has not elapsed.
+      - eval_time: 5m
+        alertname: EventStoreRefusingWrites
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: EventStoreRefusingWrites
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "The event store is refusing writes; events are being held, not stored"
+              description: "event-management is holding 128 events its database refused. They are not lost: they stay unacknowledged in the message broker and are stored once the database accepts writes again. Nothing new is being stored meanwhile, and the longer this lasts the larger the backlog behind it; once the backlog fills 90% of the resolved-events stream the platform refuses new events (JetStreamIngestBackpressureEngaged), and MQTT events the broker has already acknowledged wait in the capture stream, which discards its oldest once full. The usual cause is a full volume: check DatabaseVolumeCritical and the event-store claim (kubectl get pvc, and the database pod's log for 'No space left on device'), and expand it (spec.storage.size on the dc-tsdb Cluster; online where the storage class allows it) or lower the event retention. Otherwise look for a read-only primary or an exhausted connection limit."
+      - eval_time: 20m
+        alertname: EventStoreRefusingWrites
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # EventPersistBacklogGrowing: event-management's backlog is large AND rising. A large
+  # backlog that is draining, and a small one that is rising, stay quiet.
+  # ------------------------------------------------------------------
+  - name: a growing event-management backlog warns, a draining one and a small one do not
+    interval: 1m
+    input_series:
+      # Rising 500 a minute from 2000: large and growing.
+      - series: 'devicechain_eventmanagement_jetstream_consumer_pending_messages{namespace="dci-devicechain", pod="dc-event-management-7c9f-aaaaa", job="devicechain/event-management", stream="devicechain_resolved-events", durable="devicechain_event-management_resolved-events"}'
+        values: '2000+500x40 22000-500x40'
+      # The same durable on another stream shape: draining from 50000, large but falling.
+      - series: 'devicechain_devicestate_jetstream_consumer_pending_messages{namespace="dci-devicechain", pod="dc-device-state-7c9f-aaaaa", job="devicechain/device-state", stream="devicechain_resolved-events", durable="devicechain_device-state_resolved-events"}'
+        values: '50000-500x80'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: EventPersistBacklogGrowing
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: EventPersistBacklogGrowing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              stream: devicechain_resolved-events
+              durable: devicechain_event-management_resolved-events
+            exp_annotations:
+              summary: "Events are arriving faster than the event store persists them"
+              description: "Durable devicechain_event-management_resolved-events has 17000 events waiting and the backlog has grown steadily for ten minutes. Either the event store is down or refusing writes (EventStoreRefusingWrites, DatabaseVolumeCritical), or ingest is outrunning persistence: compare the batch-size histogram on the persistence dashboard and the database's CPU and IOPS, and raise persistence.writers or persistence.maxBatch. At 90% of the resolved-events ceiling new events are refused (JetStreamIngestBackpressureEngaged) rather than discarded."
+      # Draining since minute 41: the slope is negative, so it clears.
+      - eval_time: 75m
+        alertname: EventPersistBacklogGrowing
+        exp_alerts: []
+
+  - name: a small event-management backlog that is rising does not warn
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventmanagement_jetstream_consumer_pending_messages{namespace="dci-devicechain", pod="dc-event-management-7c9f-aaaaa", job="devicechain/event-management", stream="devicechain_resolved-events", durable="devicechain_event-management_resolved-events"}'
+        values: '0+1x60'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: EventPersistBacklogGrowing
+        exp_alerts: []
+
+  # The reader reports nothing (event-management is down, which is exactly when the backlog
+  # builds): the broker's own pending count stands in for it.
+  - name: a growing event-management backlog still warns from the broker's count alone
+    interval: 1m
+    input_series:
+      - series: 'nats_consumer_num_pending{stream_name="devicechain_resolved-events", consumer_name="devicechain_event-management_resolved-events"}'
+        values: '2000+500x40'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: EventPersistBacklogGrowing
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: EventPersistBacklogGrowing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              stream: devicechain_resolved-events
+              durable: devicechain_event-management_resolved-events
+            exp_annotations:
+              summary: "Events are arriving faster than the event store persists them"
+              description: "Durable devicechain_event-management_resolved-events has 17000 events waiting and the backlog has grown steadily for ten minutes. Either the event store is down or refusing writes (EventStoreRefusingWrites, DatabaseVolumeCritical), or ingest is outrunning persistence: compare the batch-size histogram on the persistence dashboard and the database's CPU and IOPS, and raise persistence.writers or persistence.maxBatch. At 90% of the resolved-events ceiling new events are refused (JetStreamIngestBackpressureEngaged) rather than discarded."

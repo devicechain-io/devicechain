@@ -77,6 +77,42 @@ dcctl upgrade local my-instance --version <new-version>
 
 在应用任何内容之前，覆盖层还会对照 chart 的 values 模式进行校验，并与实例的其他值一起渲染。类型错误的值、超过上限的请求量，或 chart 拒绝的组合，都会使本次运行在未做任何更改的情况下停止。
 
+## 事件库容量规划 {#event-store-sizing}
+
+事件库是唯一由流量决定增长的卷，因此需要有意识地规划。三个数字决定其大小。
+
+- **每行存储字节数。** 一行测量数据在磁盘上约占 600 字节（含索引、未压缩）：在每秒 10,000 条读数的基准中，
+  32Gi 的卷约存了 5100 万行后写满。更早的一次测量连同预写日志约为 1 KB；除非您测过自己的数据，请按较大的数字规划，直到测出自己的数据；下面的公式把每行字节数作为变量。
+  事件库会对早于 `lifecycle.compressAfterDays`（默认 7）的数据块做无损压缩（在 `event-management` 配置中），
+  但对最近一周没有作用：请至少按这一周未压缩的数据量规划卷大小。600 字节是未压缩的数字，
+  压缩比取决于您的数据，请先实测再依赖。
+- **每次读数对应的行数。** 适用于某个配置文件的每个[计算指标](../user-guide/calculated-metrics.md)，
+  每次读数都会多存一行。每个公式每次读数多存一行，所以带有 N 个计算指标的配置文件每次读数存储 (1 + N) 行，所以 N 个公式最多把体积放大到 1 + N 倍。档位上限 `calculatedMetricsPerProfile` 默认是 0（关闭），最大 32；它只是上限，成本取决于实际使用。
+- **保留期。** `lifecycle.retentionDays` 默认是 0，即永久保留数据。打算长期运行的实例应当设置它，
+  这样卷只需容纳保留窗口加上未压缩的一周。
+
+经验公式：未压缩窗口需要 每秒读数 × (1 + 计算指标数) × 每行字节数 × 86,400 秒 × 天数，并为预写日志、维护和增长
+留出四分之一的卷空间。按实测的 600 字节、每秒 10,000 条读数计，约为每天 520 GB，所以默认的七天未压缩数据约为 3.6 TB。
+再加上压缩后的历史数据和保留窗口所需的空间。
+
+三条告警按您希望收到的顺序监视该卷：`DatabaseVolumeFillsWithinDay`（将在 24 小时内写满）、
+`DatabaseVolumeFillingFast`（一小时内）和 `DatabaseVolumeCritical`（已满 95%）。如果数据库仍然停止写入，
+`EventStoreRefusingWrites` 会触发，`event-management` 会保留无法存储的事件而不是丢弃它们
+（见[事件库无法写入时](./observability.md#event-store-down)）。
+
+### 在线扩卷 {#event-store-expand}
+
+在允许卷扩容的 StorageClass 上，提高事件库 Cluster 的容量。数据库算子会就地调整每个实例的卷声明，无需重启：
+
+```bash
+kubectl -n <instance namespace> patch cluster dc-tsdb --type merge \
+  -p '{"spec":{"storage":{"size":"48Gi"}}}'
+kubectl -n <instance namespace> get pvc -w
+```
+
+如果数据库 Pod 已因磁盘写满而反复崩溃重启，请在其卷声明扩容后删除该 Pod，让它在更大的文件系统上重启。
+随后被保留的事件及其后的积压会入库，告警也会随空闲比例上升而恢复。还要把安装时 OpenTofu 配置中的 `timescale_storage` 设为新容量。Cluster 由该值应用：只要配置值不变，Helm 的三方合并就会保留手工修改的容量；配置值更小会让数据库算子拒绝缩容并使升级失败；灾难恢复重建则会回到配置的容量。
+
 ## 副本数与数据库的连接预算 {#connections}
 
 每个实例的数据库登录账号被限制为其服务能够打开的连接数：每个 Pod 一个完整的连接池，并为滚动更新预留一倍。覆盖层如果提高了使用关系型数据库的区域的副本数，或该区域的连接池（`functionalAreas.<area>.config.rdbConfiguration.maxOpenConnections`），这个上限也会随之提高，`dcctl` 会在做任何更改之前向共享数据库申请更大的上限。如果集群的连接预算无法满足，本次运行会在未做任何更改的情况下停止：降低覆盖层中的值，或重新运行安装该集群时使用的 `dcctl install`，并加上取值更大的 `--max-connections`（例如 `dcctl install local --max-connections 1000`；如果集群安装时用了 `--kube-context`、`--ha` 或 `--compact`，也要一并带上）来提高预算。移除覆盖层会归还这些连接。

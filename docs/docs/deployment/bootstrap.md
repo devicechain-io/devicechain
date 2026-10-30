@@ -1646,6 +1646,11 @@ Each event-store instance has a 32Gi volume, so three of them under `--ha` (4Gi 
 about 1.1 GB more while backups keep up with it, so 32Gi holds about 27 million events: about
 seven hours of one tenant sending at its full default ceiling.
 
+A measurement row measured about 600 bytes on disk, indexes included and before compression, in a later
+benchmark (51 million rows filled 31 GB), so the figure above is the cautious one. How to size the
+volume for your traffic, with calculated metrics and retention, and how to expand it online, is in
+[Sizing the event store](./tuning-an-instance.md#event-store-sizing).
+
 The event store compresses the page images in its write-ahead log (`wal_compression = lz4`).
 After each checkpoint, the first change to a page writes the whole page into the log, and on this
 store most of those pages are index pages. In one comparison on a development build after v0.18.0,

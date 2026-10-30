@@ -583,7 +583,7 @@ func TestAConnectionFailureWritesEveryMessageAgainOnItsOwn(t *testing.T) {
 			// and the other seven together.
 			wantTxs, wantFallbacks := int64(4), 2.0
 			if tc.connection {
-				wantTxs, wantFallbacks = 9, 1
+				wantTxs, wantFallbacks = 10, 1 // the 9 plus the probe that finds the store up
 			}
 			if got := r.api.txs.Load(); got != wantTxs {
 				t.Errorf("took %d transactions; want %d", got, wantTxs)

@@ -94,6 +94,9 @@ type PersistMetrics struct {
 	batchSize prometheus.Observer
 	// fallbacks is persist_batch_fallbacks_total: batch transactions that did not commit.
 	fallbacks prometheus.Counter
+	// held is persist_store_held_events: events a writer is holding, unacked, because the
+	// event store cannot take writes (disk full, read-only, unreachable). Zero when healthy.
+	held prometheus.Gauge
 	// rows is persist_rows_total: stored rows, which for a measurement event is one per
 	// entry (derived entries included), so rows/s stays comparable between a profile with
 	// calculated metrics and one without.
@@ -103,6 +106,13 @@ type PersistMetrics struct {
 	// commitSeconds is persist_commit_duration_seconds: wall time of one committed
 	// transaction, begin to COMMIT, with buckets fine enough to compare two runs.
 	commitSeconds prometheus.Observer
+}
+
+// holding moves the held-events gauge by n. Nil-safe.
+func (m *PersistMetrics) holding(n int) {
+	if m != nil && m.held != nil {
+		m.held.Add(float64(n))
+	}
 }
 
 // commitBuckets covers the observed range of one persist transaction, from a local commit
@@ -157,6 +167,8 @@ func NewPersistMetrics(ms *core.Microservice) *PersistMetrics {
 			nil, []float64{1, 2, 4, 8, 16, 32, 64}).WithLabelValues(),
 		fallbacks: ms.NewCounter("persist_batch_fallbacks_total",
 			"Batch transactions that did not commit, after which their events were written again."),
+		held: ms.NewGauge("persist_store_held_events",
+			"Events held unacked because the event store cannot take writes (disk full, read-only, unreachable); they are written when it recovers. Zero when healthy."),
 		rows: ms.NewCounter("persist_rows_total", "Rows stored by committed persistence transactions."),
 		batchRows: ms.NewHistogramVec("persist_batch_rows", "Rows stored per committed persistence transaction.",
 			nil, batchRowBuckets).WithLabelValues(),
@@ -292,6 +304,7 @@ func (eproc *EventPersistenceProcessor) initializeEventPersistenceWorkers(ctx co
 			eproc.OnInvalidEvent, eproc.OnFailedEvent, eproc.metrics)
 		resolver.MaxBatch = eproc.persistence.MaxBatch
 		resolver.Linger = eproc.persistence.Linger()
+		resolver.Halt = eproc.procCtx.Done()
 		eproc.workers = append(eproc.workers, resolver)
 		// Workers run on a background context (not the cancelable read context)
 		// so that on shutdown they drain the remaining buffered messages to

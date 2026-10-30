@@ -847,10 +847,34 @@ wait once.
 | `devicechain_eventmanagement_persist_batch_rows` | Rows per committed transaction. |
 | `devicechain_eventmanagement_persist_commit_duration_seconds` | Wall time of one committed transaction, with buckets from 1 ms to 2.5 s. Divide its rate of `_sum` by the rate of `persist_rows_total` for the latency per stored row. Unlike `persist_duration_seconds`, which is per event, grows with the rows a batch holds and has coarse default buckets, this is the figure to compare between two runs. |
 | `devicechain_eventmanagement_persist_inflight` | Events writers hold, including those waiting for their batch to commit. |
+| `devicechain_eventmanagement_persist_store_held_events` | Events held unacknowledged because the event store cannot take writes. 0 when healthy; see [When the event store cannot take writes](#event-store-down). |
 
 `persist_duration_seconds` measures each event from when a writer takes it until its batch commits,
 including up to `persistence.lingerMillis` spent waiting for the batch to fill, so under light load
 its median sits about 10 milliseconds higher than with the wait off.
+
+### When the event store cannot take writes {#event-store-down}
+
+When the database refuses a write because it cannot take writes at all (its volume is full, it is read-only, it is out of connections, or it does not answer), `event-management` does not
+count that against the events. An event that is refused for its own sake is retried a few times
+and then reported as failed, but an event refused because the store is down would be reported
+after about four minutes of outage, and a full volume lasts longer than that. So these events are
+**held**: the writer keeps them unacknowledged, tells the broker at once, and again every 20 seconds, that they are still being worked on (which does not use up their deliveries), asks the store a trivial question every 2 to 30 seconds (with random jitter), writes them again once it answers, and acknowledges them only once the store has committed them. A writer that is holding
+does not read more, so the backlog waits in the `resolved-events` stream, where the
+[ingest backpressure](#ingest-backpressure) gate refuses new events before the stream discards
+unread ones. When the volume is expanded or the database recovers, the held events and the backlog
+behind them are stored, in order, with nothing lost. A connection error on its own does not hold events: if the store answers the question, the event is treated as the problem and takes its delivery attempts as before.
+
+The limits are the broker's: a held event is not lost, but a stream that is full discards its
+oldest message. At 90% of the `resolved-events` ceiling new events are refused for every tenant.
+MQTT events that the broker has already acknowledged wait in the capture stream, which discards
+its oldest once it is full unless [fail-closed MQTT](../guides/connecting-a-device.md#quality-of-service)
+is on. A shutdown ends the hold and leaves the events unacknowledged for the next pod.
+
+| Alert | Severity | What it means | What to do |
+| --- | --- | --- | --- |
+| `EventStoreRefusingWrites` | critical | `event-management` has held events its database refused for 2 minutes (`devicechain_eventmanagement_persist_store_held_events` above 0). Nothing new is being stored. | Find out why the database refuses writes. The usual cause is a full volume (`DatabaseVolumeCritical`; look for `No space left on device` in the database pod's log): expand it, see [Sizing the event store](./tuning-an-instance.md#event-store-sizing). Otherwise look for a read-only primary or an exhausted connection limit. |
+| `EventPersistBacklogGrowing` | warning | The `event-management` consumer has more than 1,000 events waiting and the backlog has grown steadily for 10 minutes. | Either the store is down (`EventStoreRefusingWrites`), or ingest is outrunning persistence: see [Tuning it](#tuning-it-1). |
 
 ### Tuning it
 
@@ -1296,8 +1320,10 @@ The chart's alerts for each link of that chain:
 | `DatabaseVolumeFillingFast` | An event-store volume is more than half full and, at its rate over the last 15 minutes, will be full within the hour, for 3 minutes. | If only the primary climbs, it is unshipped log: fix archiving first. If every member climbs, it is data: grow the volume or shorten data retention. |
 | `DatabaseVolumeFillingUp` | A database volume is more than 75% full, for an hour. Database storage here does not come back on its own: several tables are append-only by design and nothing prunes them (the audit journal and the version histories of device profiles, entity groups, dashboards, connectors and geofence sets, plus the geofence geometry archive), because a stored event names the version it was resolved against and a rollback returns to a stored version. Retention settings do not apply to them; those prune the time-series store. | Grow the volume while there is room to work, and find what is producing versions. On the relational primary, count rows per tenant in a history table, for example `SELECT tenant_id, count(*) FROM "device-management".geo_fence_set_versions GROUP BY tenant_id ORDER BY 2 DESC LIMIT 10;`. One tenant re-authoring in a loop is the usual answer. For an event-store volume, check the data-lifecycle retention settings; for a `-wal` volume, the archiving alerts above are where the cause is. |
 | `DatabaseVolumeAlmostFull` | A database volume is more than 85% full, for 15 minutes. | Grow it now. |
+| `DatabaseVolumeFillsWithinDay` | An event-store volume is less than 80% free and, at its rate over the last 2 hours, will be full within 24 hours, for 15 minutes. | You have a day: grow the volume, shorten retention, or check that compression is acting. See [Sizing the event store](./tuning-an-instance.md#event-store-sizing). |
+| `DatabaseVolumeCritical` | A database volume is more than 95% full, for 2 minutes. It needs no history, so it also catches a volume that jumped. | Grow it now. On an event-store volume, the events it cannot take are held in the message broker meanwhile (`EventStoreRefusingWrites`), but that buffer is finite. |
 
-The two rate alerts exist because the fixed thresholds are too slow for a volume that fills in
+The rate alerts exist because the fixed thresholds are too slow for a volume that fills in
 minutes, which is what sustained ingest does to one. They were checked against a benchmark in
 which the event-store primary went from 45% to full in about nine minutes after the object store
 filled: the rate alert fires about two minutes before the volume is full, while the 85% alert,

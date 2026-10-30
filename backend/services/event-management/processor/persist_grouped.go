@@ -321,7 +321,7 @@ func logAltIdSkip(altId string) {
 //     one message at a time.
 func blame(g *tenantGroup, carried []int, err error) (int, error) {
 	switch {
-	case rdb.IsConnectionFailure(err):
+	case rdb.IsStoreRefusingWrites(err), rdb.IsConnectionFailure(err):
 		return -1, err
 	case errors.Is(err, rdb.ErrTenantPurged):
 		return g.first, err
