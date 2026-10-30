@@ -116,24 +116,21 @@ hay que dimensionar a propósito. Tres cifras lo deciden.
 - **Bytes por fila almacenada.** Una fila de medición cuesta unos 600 bytes en disco, índices
   incluidos, antes de comprimir: un volumen de 32Gi contenía unos 51 millones de filas cuando se
   llenó en una prueba a 10 000 lecturas por segundo. Una medición anterior dio cerca de 1 KB con el
-  registro de escritura anticipada; dimensione con la cifra mayor salvo que haya medido la suya.
+  registro de escritura anticipada; dimensione con la cifra mayor hasta que haya medido la suya; la fórmula siguiente toma el tamaño de fila como variable.
   El almacén de eventos comprime los fragmentos anteriores a `lifecycle.compressAfterDays` (7 por
   defecto) en la configuración de `event-management`, sin pérdida, pero no hace nada con la semana
   más reciente: dimensione el volumen para al menos esa cantidad de datos sin comprimir. La cifra
   de 600 bytes es la no comprimida, y la razón de compresión depende de sus datos, así que mídala
   antes de contar con ella.
 - **Filas por lectura.** Cada [métrica calculada](../user-guide/calculated-metrics.md) que se aplica
-  a un perfil almacena una fila más por lectura. Un perfil con N métricas calculadas almacena
-  (1 + N) filas por lectura, de modo que un valor por defecto de 8 multiplica el volumen hasta por
-  9. El techo del nivel `calculatedMetricsPerProfile` es un techo, y el coste depende del uso.
+  a un perfil almacena una fila más por lectura. Cada fórmula añade una fila por lectura, así que un perfil con N métricas calculadas almacena
+  (1 + N) filas por lectura, de modo que N fórmulas multiplican el volumen hasta por 1 + N. El techo del nivel `calculatedMetricsPerProfile` es 0 (desactivado) por defecto y como máximo 32; es un techo, y el coste depende del uso.
 - **Retención.** `lifecycle.retentionDays` es 0 por defecto, es decir, conserva los datos para
   siempre. Una instancia pensada para funcionar indefinidamente debería fijarlo; entonces el volumen
   solo tiene que contener la ventana más la semana sin comprimir.
 
-Como regla, la ventana sin comprimir necesita lecturas por segundo × (1 + métricas calculadas) × 600
-bytes × 86 400 segundos × días, dejando libre una cuarta parte del volumen para el registro de
-escritura anticipada, el mantenimiento y el crecimiento. A 10 000 lecturas por segundo son unos
-520 GB al día, así que los siete días sin comprimir por defecto son unos 3,6 TB. Añada lo que
+Como regla, la ventana sin comprimir necesita lecturas por segundo × (1 + métricas calculadas) × bytes por fila × 86 400 segundos × días, dejando libre una cuarta parte del volumen para el registro de
+escritura anticipada, el mantenimiento y el crecimiento. A los 600 bytes medidos y 10 000 lecturas por segundo son unos 520 GB al día, así que los siete días sin comprimir por defecto son unos 3,6 TB. Añada lo que
 necesiten el historial comprimido y la ventana de retención.
 
 Tres alertas vigilan el volumen, en el orden en que conviene enterarse: `DatabaseVolumeFillsWithinDay`
@@ -155,13 +152,10 @@ kubectl -n <instance namespace> patch cluster dc-tsdb --type merge \
 kubectl -n <instance namespace> get pvc -w
 ```
 
-Las reclamaciones crecen una a una. Si el pod de la base de datos ya estaba en bucle de reinicios
+Si el pod de la base de datos ya estaba en bucle de reinicios
 por el disco lleno, elimine ese pod cuando su reclamación haya crecido para que reinicie sobre el
 sistema de archivos mayor. Entonces se almacenan los eventos retenidos y la acumulación detrás de
-ellos, y las alertas se resuelven al subir la fracción libre. El tamaño también lo fija la
-configuración OpenTofu de la instalación (`timescale_storage`), que el siguiente `dcctl install`
-vuelve a aplicar, y el operador de la base de datos se niega a reducir un volumen: compruebe que el
-tamaño que aplicará una actualización no sea menor que aquel al que lo amplió.
+ellos, y las alertas se resuelven al subir la fracción libre. Fije también `timescale_storage` al nuevo tamaño en la configuración OpenTofu de la instalación. El Cluster se aplica desde ese valor: la fusión de tres vías de Helm conserva un tamaño modificado a mano solo mientras el valor configurado no cambie, un valor configurado menor hace que el operador de la base de datos rechace la reducción y falle la actualización, y una reconstrucción de recuperación ante desastres vuelve al tamaño configurado.
 
 ## Réplicas y el presupuesto de conexiones de la base de datos {#connections}
 

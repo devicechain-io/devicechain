@@ -888,17 +888,15 @@ desactivada.
 ### Cuando el almacén de eventos no puede aceptar escrituras {#event-store-down}
 
 Cuando la base de datos rechaza una escritura porque no puede aceptar ninguna (su volumen está
-lleno, es de solo lectura, se quedó sin memoria o sin conexiones, o es inalcanzable),
+lleno, es de solo lectura, se quedó sin conexiones o no responde),
 `event-management` no lo cuenta en contra de los eventos. Un evento rechazado por sí mismo se
 reintenta unas cuantas veces y luego se informa como fallido, pero un evento rechazado porque el
 almacén está caído se informaría tras unos cuatro minutos de interrupción, y un volumen lleno dura
-más que eso. Por eso estos eventos se **retienen**: el escritor los mantiene sin confirmar, avisa
-al bróker cada 20 segundos de que siguen en trámite (lo que no gasta sus entregas), los vuelve a
-escribir cada 2 a 30 segundos y los confirma solo cuando el almacén los ha consolidado. Un escritor
+más que eso. Por eso estos eventos se **retienen**: el escritor los mantiene sin confirmar, avisa al bróker de inmediato, y de nuevo cada 20 segundos, de que siguen en trámite (lo que no gasta sus entregas), hace al almacén una consulta trivial cada 2 a 30 segundos (con variación aleatoria), los vuelve a escribir cuando responde y los confirma solo cuando el almacén los ha consolidado. Un escritor
 que retiene no lee más, así que la acumulación espera en el flujo `resolved-events`, donde la
 compuerta de [contrapresión de la ingesta](#ingest-backpressure) rechaza eventos nuevos antes de que
 el flujo descarte los no leídos. Cuando se amplía el volumen o la base de datos se recupera, los
-eventos retenidos y la acumulación detrás de ellos se almacenan, en orden, sin pérdida.
+eventos retenidos y la acumulación detrás de ellos se almacenan, en orden, sin pérdida. Un error de conexión por sí solo no retiene eventos: si el almacén responde a esa consulta, el problema es el evento y consume sus intentos de entrega como antes.
 
 Los límites son los del bróker: un evento retenido no se pierde, pero un flujo lleno descarta su
 mensaje más antiguo. Al 90 % del techo de `resolved-events` se rechazan los eventos nuevos de todos

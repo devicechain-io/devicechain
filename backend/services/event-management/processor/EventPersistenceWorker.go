@@ -44,6 +44,10 @@ type EventPersistenceWorker struct {
 	// held is what the store refused and this worker is waiting to write again.
 	// Only this worker's goroutine touches it.
 	held []pendingEvent
+	// counted is how much of held the held-events gauge has been told about.
+	counted int
+	// holdStart is when the current hold began; probedOK is when the store last answered a probe.
+	holdStart, probedOK time.Time
 
 	// metrics records RED-style instrumentation for each message handled by this
 	// worker (ADR-022 E13) and the batch signals. Shared by reference with sibling

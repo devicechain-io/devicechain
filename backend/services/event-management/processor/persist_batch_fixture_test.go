@@ -63,6 +63,22 @@ type txApi struct {
 	// statement, as a database that cannot take writes does.
 	storeDown atomic.Bool
 	storeErr  error
+
+	// downFromTx, when positive, makes the store refuse (storeErr) from that transaction
+	// number on: the store goes down part way through a batch's handling.
+	downFromTx atomic.Int64
+
+	// commitDown, while set, runs every transaction's statements and then refuses the
+	// COMMIT with storeErr, as a disk that fills at commit does.
+	commitDown atomic.Bool
+
+	// anchorDown, while set, refuses every event_anchors statement with storeErr and
+	// nothing else: a STATEMENT refused, with the connection and the transaction fine.
+	anchorDown atomic.Bool
+
+	// anchorFailTxLimit, when positive, confines failAnchorsFor's refusal to the first
+	// that many transactions.
+	anchorFailTxLimit atomic.Int64
 }
 
 func newTxApi(ep *EventPersistenceWorker) *txApi {
@@ -76,6 +92,17 @@ func (a *txApi) PersistInTx(ctx context.Context, fn func(db *gorm.DB) error) err
 	a.txs.Add(1)
 	if a.storeDown.Load() {
 		return a.storeErr
+	}
+	if n := a.downFromTx.Load(); n > 0 && a.txs.Load() >= n {
+		return a.storeErr
+	}
+	if a.commitDown.Load() {
+		return a.Api.PersistInTx(ctx, func(tx *gorm.DB) error {
+			if err := fn(tx); err != nil {
+				return err
+			}
+			return a.storeErr
+		})
 	}
 	if a.beforeTx != nil {
 		a.beforeTx()
@@ -102,6 +129,12 @@ func (a *txApi) PersistInTx(ctx context.Context, fn func(db *gorm.DB) error) err
 }
 
 func (a *txApi) CreateEventAnchors(ctx context.Context, db *gorm.DB, anchors []*model.EventAnchor) error {
+	if a.anchorDown.Load() {
+		return a.storeErr
+	}
+	if lim := a.anchorFailTxLimit.Load(); lim > 0 && a.txs.Load() > lim {
+		return a.Api.CreateEventAnchors(ctx, db, anchors)
+	}
 	if a.failAnchorsFor != "" && slices.ContainsFunc(anchors, func(an *model.EventAnchor) bool {
 		return an.DeviceToken == a.failAnchorsFor
 	}) {

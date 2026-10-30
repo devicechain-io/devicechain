@@ -3998,6 +3998,61 @@
           "sort": "desc"
         }
       }
+    },
+    {
+      "id": 101,
+      "type": "timeseries",
+      "title": "Events held because the event store cannot take writes",
+      "description": "Events a writer is holding unacknowledged because the database refused them as unavailable (volume full, read-only, out of connections, or not answering). 0 when healthy. While it is above 0 nothing new is being stored and the backlog waits in the broker; they are written when the store recovers. The alert is EventStoreRefusingWrites.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 142
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(devicechain_eventmanagement_persist_store_held_events{namespace=\"$namespace\"})",
+          "legendFormat": "held events"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 15,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
     }
   ]
 }

@@ -5,6 +5,9 @@ package processor
 
 import (
 	"context"
+	"database/sql/driver"
+	"errors"
+	"fmt"
 	emconfig "github.com/devicechain-io/dc-event-management/config"
 	"github.com/devicechain-io/dc-event-management/model"
 	"github.com/devicechain-io/dc-microservice/core"
@@ -15,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/prometheus/client_golang/prometheus"
 	"gorm.io/gorm"
+	"net"
 	"sync"
 	"testing"
 	"time"
@@ -531,19 +535,26 @@ func TestAPurgedTenantIsSetAsideFromItsBatchAllAtOnce(t *testing.T) {
 	}
 }
 
-// A refusal that is NOT a store outage (a serialization failure) blames its message: the
-// message is set aside and the other seven commit together, and it is left for redelivery.
-// The refused statement carried all eight messages' anchors, so this first writes the batch
-// again one message at a time to find dev-3 -- one more transaction and one more fallback --
+// A connection that fails at one message's statement blames no message: every message is
+// written again on its own, and the one whose statement kept failing is left for
+// redelivery. Setting it aside and re-batching the rest instead would, through an outage,
+// cost connection attempts on every re-batch of every batch. The control is a transient
+// refusal that is NOT a connection failure: the same message is set aside and the other
+// seven commit together, and it is left for redelivery just the same. The refused
+// statement carried all eight messages' anchors, so the control first writes the batch
+// again one message at a time to find dev-3 — one more transaction and one more fallback —
 // and the last transaction writes the seven grouped again (5 statements, not 7 x 4 + 1).
-// A STORE outage (connection, disk full, read-only) blames nobody and is held instead; see
-// persist_hold_test.go.
-func TestAnErrorThatIsNotAStoreOutageIsSetAsideFromItsBatch(t *testing.T) {
+// A connection failure is never sent down that path: it blames nobody, grouped or not.
+func TestAConnectionFailureWritesEveryMessageAgainOnItsOwn(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		err        error
 		connection bool
 	}{
+		{"connection exception, SQLSTATE 08006", &pgconn.PgError{Code: "08006", Message: "injected: connection failure"}, true},
+		{"server shutting down, SQLSTATE 57P01", &pgconn.PgError{Code: "57P01", Message: "injected: admin shutdown"}, true},
+		{"a bad connection", fmt.Errorf("injected: %w", driver.ErrBadConn), true},
+		{"a network error", &net.OpError{Op: "read", Net: "tcp", Err: errors.New("injected: connection reset")}, true},
 		{"control: serialization failure, SQLSTATE 40001", &pgconn.PgError{Code: "40001", Message: "injected: could not serialize"}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -561,7 +572,7 @@ func TestAnErrorThatIsNotAStoreOutageIsSetAsideFromItsBatch(t *testing.T) {
 			// and the other seven together.
 			wantTxs, wantFallbacks := int64(4), 2.0
 			if tc.connection {
-				wantTxs, wantFallbacks = 9, 1
+				wantTxs, wantFallbacks = 10, 1 // the 9 plus the probe that finds the store up
 			}
 			if got := r.api.txs.Load(); got != wantTxs {
 				t.Errorf("took %d transactions; want %d", got, wantTxs)
@@ -708,6 +719,8 @@ func TestAFailedCommitWritesEveryMessageAgainOnItsOwn(t *testing.T) {
 		ambiguous bool
 		alt       bool
 	}{
+		{"rolled back", false, true},
+		{"committed but reported failed, with an alternate id", true, true},
 		{"committed but reported failed, without an alternate id", true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

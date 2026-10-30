@@ -41,31 +41,32 @@ func TestIsConnectionFailureRecognisesConnectionErrors(t *testing.T) {
 	}
 }
 
-// IsStoreUnavailable adds the server-side "cannot take this write" classes to the connection
-// failures, and nothing that is a statement's or a value's fault.
-func TestIsStoreUnavailableRecognisesAStoreThatCannotTakeWrites(t *testing.T) {
+// IsStoreRefusingWrites is the server saying it cannot take writes, and nothing a statement or
+// a value did, and nothing that merely looks like a lost connection.
+func TestIsStoreRefusingWritesRecognisesAStoreThatCannotTakeWrites(t *testing.T) {
 	for _, tc := range []struct {
 		err  error
 		want bool
 	}{
 		{&pgconn.PgError{Code: "53100"}, true}, // disk_full
-		{&pgconn.PgError{Code: "53200"}, true}, // out_of_memory
 		{&pgconn.PgError{Code: "53300"}, true}, // too_many_connections
 		{&pgconn.PgError{Code: "25006"}, true}, // read_only_sql_transaction
 		{&pgconn.PgError{Code: "58030"}, true}, // io_error
 		{fmt.Errorf("wrapped: %w", &pgconn.PgError{Code: "53100"}), true},
-		{&pgconn.PgError{Code: "08006"}, true}, // everything a connection failure is
-		{fmt.Errorf("wrapped: %w", driver.ErrBadConn), true},
-		{&pgconn.PgError{Code: "22003"}, false}, // a value's fault
-		{&pgconn.PgError{Code: "23505"}, false}, // a constraint
-		{&pgconn.PgError{Code: "40001"}, false}, // serialization failure
-		{&pgconn.PgError{Code: "42P01"}, false}, // a missing table
+		{&pgconn.PgError{Code: "53200"}, false}, // out_of_memory: can be one statement
+		{&pgconn.PgError{Code: "53400"}, false}, // configuration_limit_exceeded: can be one statement
+		{&pgconn.PgError{Code: "08006"}, false}, // a connection failure needs a probe
+		{fmt.Errorf("wrapped: %w", driver.ErrBadConn), false},
+		{&pgconn.PgError{Code: "22003"}, false},
+		{&pgconn.PgError{Code: "23505"}, false},
+		{&pgconn.PgError{Code: "40001"}, false},
+		{&pgconn.PgError{Code: "42P01"}, false},
 		{fmt.Errorf("%w (tenant %q)", ErrTenantPurged, "gone"), false},
 		{errors.New("some statement error"), false},
 		{nil, false},
 	} {
-		if got := IsStoreUnavailable(tc.err); got != tc.want {
-			t.Errorf("IsStoreUnavailable(%v) = %v; want %v", tc.err, got, tc.want)
+		if got := IsStoreRefusingWrites(tc.err); got != tc.want {
+			t.Errorf("IsStoreRefusingWrites(%v) = %v; want %v", tc.err, got, tc.want)
 		}
 	}
 }

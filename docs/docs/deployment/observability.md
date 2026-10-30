@@ -852,18 +852,15 @@ its median sits about 10 milliseconds higher than with the wait off.
 
 ### When the event store cannot take writes {#event-store-down}
 
-When the database refuses a write because it cannot take writes at all (its volume is full, it is
-read-only, it is out of memory or connections, or it is unreachable), `event-management` does not
+When the database refuses a write because it cannot take writes at all (its volume is full, it is read-only, it is out of connections, or it does not answer), `event-management` does not
 count that against the events. An event that is refused for its own sake is retried a few times
 and then reported as failed, but an event refused because the store is down would be reported
 after about four minutes of outage, and a full volume lasts longer than that. So these events are
-**held**: the writer keeps them unacknowledged, tells the broker every 20 seconds that they are
-still being worked on (which does not use up their deliveries), writes them again every 2 to 30
-seconds, and acknowledges them only once the store has committed them. A writer that is holding
+**held**: the writer keeps them unacknowledged, tells the broker at once, and again every 20 seconds, that they are still being worked on (which does not use up their deliveries), asks the store a trivial question every 2 to 30 seconds (with random jitter), writes them again once it answers, and acknowledges them only once the store has committed them. A writer that is holding
 does not read more, so the backlog waits in the `resolved-events` stream, where the
 [ingest backpressure](#ingest-backpressure) gate refuses new events before the stream discards
 unread ones. When the volume is expanded or the database recovers, the held events and the backlog
-behind them are stored, in order, with nothing lost.
+behind them are stored, in order, with nothing lost. A connection error on its own does not hold events: if the store answers the question, the event is treated as the problem and takes its delivery attempts as before.
 
 The limits are the broker's: a held event is not lost, but a stream that is full discards its
 oldest message. At 90% of the `resolved-events` ceiling new events are refused for every tenant.
