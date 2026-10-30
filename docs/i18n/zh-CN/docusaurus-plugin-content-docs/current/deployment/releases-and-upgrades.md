@@ -550,7 +550,7 @@ dcctl upgrade local devicechain --version v0.27.0
 
 #### 入口滚动发布不再丢请求 {#v0270-ingress}
 
-在云负载均衡器之后，Traefik 和 ingress-nginx 的 Pod 现在会在退出前先等待（`drain_seconds`，默认 40），新 Pod 必须就绪 `min_ready_seconds`（15）之后才会替换下一个，所以滚动发布不再在负载均衡器的健康检查追上之前丢失请求。这些值是 OpenTofu 控制器模块的变量；设为 0 即关闭。没有云负载均衡器的本地集群不变。在云集群上，首次应用这一变化的 `dcctl install` 会以更长的排空时间把每个控制器滚动一次。参见[边缘处的变化](./ingress-cutover.md#ingress-cutover-differences)。
+在云负载均衡器之后，Traefik 和 ingress-nginx 的 Pod 现在会在退出前先等待（`drain_seconds`，默认 40），新 Pod 必须就绪 `min_ready_seconds`（15）之后才会替换下一个，所以滚动发布不再在负载均衡器的健康检查追上之前丢失请求。这些值是 OpenTofu 控制器模块的变量；设为 0 即关闭。在 GKE 上，Traefik 滚动发布期间通过云负载均衡器每秒一次的请求循环没有出现失败请求，而此前的测量出现过失败。没有云负载均衡器的本地集群不变。在云集群上，首次应用这一变化的 `dcctl install` 会以更长的排空时间把每个控制器滚动一次。参见[边缘处的变化](./ingress-cutover.md#ingress-cutover-differences)。
 
 #### 客户用户与控制台 {#v0270-customers}
 
@@ -573,7 +573,6 @@ dcctl upgrade local devicechain --version v0.27.0
 #### 已知问题 {#v0270-known-issues}
 
 - **更改代理配置仍会断开经认证调用放行的设备，** 直到代理库包含上游修复。证书续期不会。
-- **在 kind 上，滚动发布的排空只能通过其设置来验证，** 因为本地集群没有云负载均衡器。负载下滚动发布的云上实测仍待进行。
 
 ### v0.26.0：设备自行注册，前端迁移到 Traefik {#v0260-upgrade}
 

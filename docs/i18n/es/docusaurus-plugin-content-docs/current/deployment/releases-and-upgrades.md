@@ -791,7 +791,7 @@ Los dispositivos pueden autenticarse en el broker de la plataforma con un certif
 
 #### Los despliegues de ingress conservan las solicitudes {#v0270-ingress}
 
-Detrás de un balanceador de carga en la nube, los pods de Traefik e ingress-nginx ahora esperan antes de irse (`drain_seconds`, 40 por defecto) y un pod nuevo debe estar listo durante `min_ready_seconds` (15) antes de sustituir al siguiente, de modo que un despliegue ya no pierde solicitudes mientras la comprobación de salud del balanceador se pone al día. Los valores son variables de los módulos de OpenTofu de los controladores; 0 desactiva cada uno. Un clúster local, sin balanceador en la nube, no cambia. En un clúster en la nube, el primer `dcctl install` que lo aplique reinicia cada controlador una vez, con el drenaje más largo. Consulta [qué cambia en el borde](./ingress-cutover.md#ingress-cutover-differences).
+Detrás de un balanceador de carga en la nube, los pods de Traefik e ingress-nginx ahora esperan antes de irse (`drain_seconds`, 40 por defecto) y un pod nuevo debe estar listo durante `min_ready_seconds` (15) antes de sustituir al siguiente, de modo que un despliegue ya no pierde solicitudes mientras la comprobación de salud del balanceador se pone al día. Los valores son variables de los módulos de OpenTofu de los controladores; 0 desactiva cada uno. En GKE, un bucle de una solicitud por segundo a través de un balanceador de carga en la nube durante despliegues de Traefik no registró solicitudes fallidas, mientras que la medición anterior sí las registró. Un clúster local, sin balanceador en la nube, no cambia. En un clúster en la nube, el primer `dcctl install` que lo aplique reinicia cada controlador una vez, con el drenaje más largo. Consulta [qué cambia en el borde](./ingress-cutover.md#ingress-cutover-differences).
 
 #### Usuarios de cliente y la consola {#v0270-customers}
 
@@ -814,7 +814,6 @@ Avanza desde esta versión; no retrocedas. Las dos migraciones nuevas añaden un
 #### Problemas conocidos {#v0270-known-issues}
 
 - **Un cambio en la configuración del broker sigue desconectando a los dispositivos admitidos por el callout de autenticación,** hasta que la biblioteca del broker incluya la corrección de upstream. Una renovación de certificado no lo hace.
-- **El drenaje del despliegue solo se prueba en kind mediante sus ajustes,** porque un clúster local no tiene balanceador de carga en la nube. Falta una medición en la nube de un despliegue bajo carga.
 
 ### v0.26.0 — los dispositivos se registran solos y el front end pasa a Traefik {#v0260-upgrade}
 
