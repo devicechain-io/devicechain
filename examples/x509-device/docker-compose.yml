@@ -1,0 +1,28 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# One container: the device. It joins the Docker network "kind", which every kind cluster's node is
+# on, and reaches the platform broker's MQTT node port (31883) by the node's container name.
+# ./pki.sh makes the certificates and ./provision.sh puts the broker's CA at pki/instance-ca.crt.
+
+services:
+  device:
+    image: eclipse-mosquitto:2.0.22@sha256:09b62ff32c2e7b64d4b431b9a89236073289b68db273de2b089edeb9b0d92b5c
+    container_name: x509-device
+    entrypoint: ["/bin/sh", "/device.sh"]
+    environment:
+      # The kind node's container name: <cluster>-control-plane. "devicechain" is dcctl's default cluster.
+      MQTT_HOST: ${MQTT_HOST:-devicechain-control-plane}
+      MQTT_PORT: ${MQTT_PORT:-31883}
+      INSTANCE: ${INSTANCE:-x509}
+      TENANT: ${DC_TENANT:-x509-demo}
+      DEVICE: ${DC_DEVICE:-thermostat-1}
+      PUBLISH_SECONDS: "5"
+    volumes:
+      - ./device/device.sh:/device.sh:ro
+      - ./pki:/pki:ro
+    networks: [kind]
+
+networks:
+  kind:
+    external: true
