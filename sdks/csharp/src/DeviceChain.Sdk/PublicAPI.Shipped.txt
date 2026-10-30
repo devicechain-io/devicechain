@@ -16,6 +16,7 @@ DeviceChain.Sdk.Auth.AuthSession.Memberships.get -> System.Collections.Generic.I
 DeviceChain.Sdk.Auth.AuthSession.RefreshAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<DeviceChain.Sdk.Auth.AuthToken!>!
 DeviceChain.Sdk.Auth.AuthSession.SelectTenantAsync(string! tenant, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<DeviceChain.Sdk.Auth.AuthToken!>!
 DeviceChain.Sdk.Auth.AuthSession.Superuser.get -> bool
+DeviceChain.Sdk.Auth.AuthSession.VerifyMfaAsync(string! challenge, string! code, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<DeviceChain.Sdk.Auth.IdentityAuth!>!
 DeviceChain.Sdk.Auth.AuthToken
 DeviceChain.Sdk.Auth.AuthToken.AccessToken.get -> string!
 DeviceChain.Sdk.Auth.AuthToken.AccessToken.set -> void
@@ -40,6 +41,10 @@ DeviceChain.Sdk.Auth.Membership.Roles.get -> System.Collections.Generic.List<str
 DeviceChain.Sdk.Auth.Membership.Roles.set -> void
 DeviceChain.Sdk.Auth.Membership.Tenant.get -> string!
 DeviceChain.Sdk.Auth.Membership.Tenant.set -> void
+DeviceChain.Sdk.Auth.MfaRequiredException
+DeviceChain.Sdk.Auth.MfaRequiredException.Challenge.get -> string!
+DeviceChain.Sdk.Auth.MfaRequiredException.ExpiresAt.get -> System.DateTimeOffset?
+DeviceChain.Sdk.Auth.MfaRequiredException.Methods.get -> System.Collections.Generic.IReadOnlyList<string!>!
 DeviceChain.Sdk.DeviceChainClient
 DeviceChain.Sdk.DeviceChainClient.Auth.get -> DeviceChain.Sdk.Auth.AuthSession!
 DeviceChain.Sdk.DeviceChainClient.DeviceChainClient(System.Uri! origin, DeviceChain.Sdk.Transport.IHttpTransport! httpTransport, DeviceChain.Sdk.Transport.IWebSocketFactory! webSocketFactory, DeviceChain.Sdk.Subscriptions.IReadLoopDriver? readLoopDriver = null) -> void
@@ -51,12 +56,15 @@ DeviceChain.Sdk.DeviceChainClient.LoginAsync(string! email, string! password, Sy
 DeviceChain.Sdk.DeviceChainClient.Origin.get -> System.Uri!
 DeviceChain.Sdk.DeviceChainClient.SelectTenantAsync(string! tenant, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<DeviceChain.Sdk.Auth.AuthToken!>!
 DeviceChain.Sdk.DeviceChainClient.Subscriptions(DeviceChain.Sdk.Area area) -> DeviceChain.Sdk.Subscriptions.GraphQlWsClient!
+DeviceChain.Sdk.DeviceChainClient.VerifyMfaAsync(string! challenge, string! code, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<DeviceChain.Sdk.Auth.IdentityAuth!>!
 DeviceChain.Sdk.DeviceChainClient.WebSocketUri(DeviceChain.Sdk.Area area) -> System.Uri!
 DeviceChain.Sdk.GraphQlClient
 DeviceChain.Sdk.GraphQlClient.GraphQlClient(DeviceChain.Sdk.Transport.IHttpTransport! transport, System.Uri! origin, DeviceChain.Sdk.TokenProvider? tokenProvider = null) -> void
 DeviceChain.Sdk.GraphQlClient.GraphQlClient(System.Net.Http.HttpClient! http, System.Uri! origin, DeviceChain.Sdk.TokenProvider? tokenProvider = null) -> void
 DeviceChain.Sdk.GraphQlClient.SendAsync<TVars, TData>(DeviceChain.Sdk.Area area, string! query, TVars variables, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TVars>! variablesInfo, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TData>! dataInfo, DeviceChain.Sdk.RequestOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<TData>!
 DeviceChain.Sdk.GraphQlError
+DeviceChain.Sdk.GraphQlError.Code.get -> string?
+DeviceChain.Sdk.GraphQlError.Code.set -> void
 DeviceChain.Sdk.GraphQlError.GraphQlError() -> void
 DeviceChain.Sdk.GraphQlError.Message.get -> string!
 DeviceChain.Sdk.GraphQlError.Message.set -> void
@@ -318,6 +326,7 @@ DeviceChain.Sdk.Transport.WebSocketMessage.WebSocketMessage() -> void
 DeviceChain.Sdk.Transport.WebSocketMessageKind
 DeviceChain.Sdk.Transport.WebSocketMessageKind.Closed = 1 -> DeviceChain.Sdk.Transport.WebSocketMessageKind
 DeviceChain.Sdk.Transport.WebSocketMessageKind.Text = 0 -> DeviceChain.Sdk.Transport.WebSocketMessageKind
+const DeviceChain.Sdk.Auth.MfaRequiredException.ErrorCode = "MFA_CHALLENGE" -> string!
 const DeviceChain.Sdk.Ingest.DeviceEventPublisher.AccessTokenCredential = "ACCESS_TOKEN" -> string!
 override DeviceChain.Sdk.Ingest.LocationFix.Equals(object? obj) -> bool
 override DeviceChain.Sdk.Ingest.LocationFix.GetHashCode() -> int
