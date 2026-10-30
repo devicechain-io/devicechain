@@ -13,6 +13,12 @@
   <sub>Sitepulse, a simulated quarry whose machines are real devices on a real DeviceChain instance: a truck's fuel drops low, a rule raises an alarm and sends it to refuel, and the truck reports the command done. Rendered from a recorded run.</sub>
 </p>
 
+<p align="center">
+  <a href="https://devicechain.io/#see-it-run"><img src="branding/media/towerpulse-loop.webp" width="480" alt="A simulated facility-services campus, a five-floor tower and a two-floor lab annex: a hot meeting room raises an alarm and a boost-cooling command is sent, then an annex chiller stops reporting, a critical alarm is raised and a restart command brings it back."></a>
+  <br>
+  <sub>Towerpulse, a second simulated site: 31 devices on a real DeviceChain instance. A hot meeting room triggers a rule that raises an alarm and sends a boost-cooling command, and an annex chiller that stops reporting is restarted by command. Rendered from a recorded run, with time jumps labelled.</sub>
+</p>
+
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![CI](https://github.com/devicechain-io/devicechain/actions/workflows/ci.yml/badge.svg)](https://github.com/devicechain-io/devicechain/actions/workflows/ci.yml)
 [![Latest release](https://img.shields.io/github/v/release/devicechain-io/devicechain)](https://github.com/devicechain-io/devicechain/releases/latest)
