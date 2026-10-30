@@ -234,4 +234,72 @@ spec:
               climbing together, it is data: ingest is outgrowing the volume, so grow it
               (spec.storage.size on the Cluster, where the storage class supports expansion) or
               shorten data retention.
+        # An EVENT-STORE volume on course to fill within the DAY: the early tier of
+        # DatabaseVolumeFillingFast, for the time it takes to act. The hour-ahead rule is
+        # the page; this is the heads-up with a working day's notice.
+        #
+        # The event store is the one volume whose growth is set by traffic rather than by
+        # authoring. Measured: a 32 GiB volume took about 51 million measurement rows (about
+        # 600 bytes a row, uncompressed) and filled in two hours of back-to-back 10,000 a
+        # second load; calculated metrics multiply stored rows by (1 + the formulas that
+        # apply). A static percentage cannot say "at this rate it is gone by tomorrow", a
+        # projection can.
+        #
+        # predict_linear over TWO hours, projected 24 h ahead, gated on less than 80% free so
+        # a nearly empty volume taking a burst is not warned about. `for: 15m` rides out a
+        # compaction or a retention sweep, both of which move free space in steps. dc-tsdb
+        # only, for the reason on DatabaseVolumeFillingFast.
+        - alert: DatabaseVolumeFillsWithinDay
+          expr: |
+            (
+              predict_linear(kubelet_volume_stats_available_bytes{namespace=~"{{ $dbsel }}", persistentvolumeclaim=~"dc-tsdb-.*"}[2h], 86400) < 0
+            )
+            and on (namespace, persistentvolumeclaim)
+            (
+              kubelet_volume_stats_available_bytes{namespace=~"{{ $dbsel }}", persistentvolumeclaim=~"dc-tsdb-.*"}
+              /
+              kubelet_volume_stats_capacity_bytes{namespace=~"{{ $dbsel }}", persistentvolumeclaim=~"dc-tsdb-.*"}
+            ) < 0.8
+          for: 15m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "An event-store volume will be full within a day at its current rate"
+            description: >-
+              {{ "{{ $labels.persistentvolumeclaim }}" }} is on course to run out of space within
+              24 hours at the rate it has filled over the last two. When it fills, PostgreSQL stops
+              and the platform can no longer store events. Events are held in the message broker
+              meanwhile and new ingest is refused once the broker's backlog limit is reached, but a
+              store that stays stopped for longer than the broker can hold loses data (see
+              EventStoreRefusingWrites). Act now, with a day in hand: grow the volume
+              (spec.storage.size on the Cluster; the volume expands online where the storage class
+              allows it), shorten the data retention, or check that compression is acting (an
+              uncompressed row is about 600 bytes). Size it against stored rows, which calculated
+              metrics multiply by (1 + the formulas that apply to the profile).
+        # A database volume at 95% full, held two minutes. The static backstop under the two
+        # rate-based rules: it needs no history, so it also catches a volume that jumped (a
+        # bulk import, a restore, an index build) and a Prometheus that was restarted and has
+        # not yet built the window predict_linear wants.
+        - alert: DatabaseVolumeCritical
+          expr: |
+            (
+              kubelet_volume_stats_available_bytes{namespace=~"{{ $dbsel }}", persistentvolumeclaim=~"dc-(rdb|tsdb)-.*"}
+              /
+              kubelet_volume_stats_capacity_bytes{namespace=~"{{ $dbsel }}", persistentvolumeclaim=~"dc-(rdb|tsdb)-.*"}
+            ) < 0.05
+          for: 2m
+          labels:
+            severity: critical
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "A database volume is over 95% full"
+            description: >-
+              {{ "{{ $labels.persistentvolumeclaim }}" }} is over 95% full. PostgreSQL stops
+              writing when it fills, and CloudNativePG does not fail over a full disk. Grow the
+              volume now (spec.storage.size, or spec.walStorage.size for a -wal claim; the
+              expansion is online where the storage class supports it), or free space by lowering
+              the event data retention. On a dc-tsdb claim, events the store cannot take are
+              held in the message broker (EventStoreRefusingWrites) and ingest backs off, but that
+              buffer is finite.
 {{- end }}

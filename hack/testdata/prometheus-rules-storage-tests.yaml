@@ -512,3 +512,104 @@ tests:
       - eval_time: 20m
         alertname: DatabaseVolumeFillingFast
         exp_alerts: []
+
+  # -------------------------------------------------------------------------
+  # DatabaseVolumeFillsWithinDay: the day-ahead heads-up for the event store. The
+  # incident it exists for filled a 32 GiB volume in about two hours of sustained
+  # load; the hour-ahead rule pages, this one gives a working day's notice.
+  # -------------------------------------------------------------------------
+  - name: an event-store volume on course to fill within a day warns, and growing it clears the warning
+    interval: 1m
+    input_series:
+      # 60 % free of 100 GB, losing 100 MB a minute (6 GB an hour): empty in ~10 h.
+      - series: 'kubelet_volume_stats_available_bytes{namespace="dci-devicechain", persistentvolumeclaim="dc-tsdb-1"}'
+        values: "60000000000-100000000x70 200000000000+0x50"
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="dci-devicechain", persistentvolumeclaim="dc-tsdb-1"}'
+        values: "100000000000+0x70 400000000000+0x50"
+    alert_rule_test:
+      # The `for: 15m` is still running at 10m.
+      - eval_time: 10m
+        alertname: DatabaseVolumeFillsWithinDay
+        exp_alerts: []
+      - eval_time: 60m
+        alertname: DatabaseVolumeFillsWithinDay
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              namespace: dci-devicechain
+              persistentvolumeclaim: dc-tsdb-1
+            exp_annotations:
+              summary: "An event-store volume will be full within a day at its current rate"
+              description: "dc-tsdb-1 is on course to run out of space within 24 hours at the rate it has filled over the last two. When it fills, PostgreSQL stops and the platform can no longer store events. Events are held in the message broker meanwhile and new ingest is refused once the broker's backlog limit is reached, but a store that stays stopped for longer than the broker can hold loses data (see EventStoreRefusingWrites). Act now, with a day in hand: grow the volume (spec.storage.size on the Cluster; the volume expands online where the storage class allows it), shorten the data retention, or check that compression is acting (an uncompressed row is about 600 bytes). Size it against stored rows, which calculated metrics multiply by (1 + the formulas that apply to the profile)."
+      # Expanded at 70m: capacity quadruples and most of it is free, so it clears.
+      - eval_time: 115m
+        alertname: DatabaseVolumeFillsWithinDay
+        exp_alerts: []
+
+  - name: slow event-store growth, a relational volume and the other claims do not raise the day-ahead warning
+    interval: 1m
+    input_series:
+      # Losing 1 MB a minute from 60 %: weeks of room.
+      - series: 'kubelet_volume_stats_available_bytes{namespace="dci-devicechain", persistentvolumeclaim="dc-tsdb-1"}'
+        values: "60000000000-1000000x200"
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="dci-devicechain", persistentvolumeclaim="dc-tsdb-1"}'
+        values: "100000000000+0x200"
+      # Filling fast but on the RELATIONAL volume: its spills are transient, not paged on.
+      - series: 'kubelet_volume_stats_available_bytes{namespace="dc-system", persistentvolumeclaim="dc-rdb-1"}'
+        values: "60000000000-100000000x200"
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="dc-system", persistentvolumeclaim="dc-rdb-1"}'
+        values: "100000000000+0x200"
+      # The broker's claim, filling fast, is not a database.
+      - series: 'kubelet_volume_stats_available_bytes{namespace="dc-system", persistentvolumeclaim="dc-nats-js-dc-nats-0"}'
+        values: "60000000000-100000000x200"
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="dc-system", persistentvolumeclaim="dc-nats-js-dc-nats-0"}'
+        values: "100000000000+0x200"
+    alert_rule_test:
+      - eval_time: 150m
+        alertname: DatabaseVolumeFillsWithinDay
+        exp_alerts: []
+
+  # -------------------------------------------------------------------------
+  # DatabaseVolumeCritical: the static backstop at 95 %, with no history needed.
+  # -------------------------------------------------------------------------
+  - name: a volume that jumps to over 95 percent full is critical, and expanding it clears the alert
+    interval: 1m
+    input_series:
+      # 50 % free, then a bulk load leaves 3 % free, then the volume is expanded.
+      - series: 'kubelet_volume_stats_available_bytes{namespace="dci-devicechain", persistentvolumeclaim="dc-tsdb-1"}'
+        values: "50000000000+0x5 3000000000+0x10 53000000000+0x10"
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="dci-devicechain", persistentvolumeclaim="dc-tsdb-1"}'
+        values: "100000000000+0x15 200000000000+0x10"
+      # Healthy neighbours.
+      - series: 'kubelet_volume_stats_available_bytes{namespace="dc-system", persistentvolumeclaim="dc-rdb-1"}'
+        values: "50000000000+0x30"
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="dc-system", persistentvolumeclaim="dc-rdb-1"}'
+        values: "100000000000+0x30"
+      # The broker's claim at 2 % free is not a database volume.
+      - series: 'kubelet_volume_stats_available_bytes{namespace="dc-system", persistentvolumeclaim="dc-nats-js-dc-nats-0"}'
+        values: "20000000+0x30"
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="dc-system", persistentvolumeclaim="dc-nats-js-dc-nats-0"}'
+        values: "1000000000+0x30"
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: DatabaseVolumeCritical
+        exp_alerts: []
+      # Over 95 % since minute 5; the 2m `for` has not elapsed at 5m30.
+      - eval_time: 5m30s
+        alertname: DatabaseVolumeCritical
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: DatabaseVolumeCritical
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+              namespace: dci-devicechain
+              persistentvolumeclaim: dc-tsdb-1
+            exp_annotations:
+              summary: "A database volume is over 95% full"
+              description: "dc-tsdb-1 is over 95% full. PostgreSQL stops writing when it fills, and CloudNativePG does not fail over a full disk. Grow the volume now (spec.storage.size, or spec.walStorage.size for a -wal claim; the expansion is online where the storage class supports it), or free space by lowering the event data retention. On a dc-tsdb claim, events the store cannot take are held in the message broker (EventStoreRefusingWrites) and ingest backs off, but that buffer is finite."
+      - eval_time: 22m
+        alertname: DatabaseVolumeCritical
+        exp_alerts: []

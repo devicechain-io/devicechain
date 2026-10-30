@@ -878,13 +878,41 @@ esa espera una sola vez.
 | `devicechain_eventmanagement_persist_batch_size` | Eventos por transacción confirmada. Lotes pequeños indican que los escritores van al día. Lotes que crecen hacia el límite indican que los escritores están ocupados. Con 10 escritores compartiendo un mismo flujo, los lotes rara vez llegan al límite aunque el almacenamiento vaya retrasado, así que léala junto a la cola del consumidor. |
 | `devicechain_eventmanagement_persist_batch_fallbacks_total` | Transacciones de lote que no se confirmaron, tras lo cual sus eventos se volvieron a escribir. Un aumento ocasional es un evento rechazado, o dos cuando la base de datos rechazó una fila de una sentencia que llevaba varios eventos, porque encontrar el evento requiere un segundo intento. Un ritmo constante indica que algo rechaza escrituras una y otra vez, por ejemplo un inquilino eliminado cuyos dispositivos siguen enviando: cada lote que contiene sus eventos cuesta una transacción adicional, por muchos que contenga. Esos eventos aparecen en `persist_messages_total` como `erased`. |
 | `devicechain_eventmanagement_persist_inflight` | Eventos que tienen los escritores, incluidos los que esperan a que su lote se confirme. |
+| `devicechain_eventmanagement_persist_store_held_events` | Eventos retenidos sin confirmar porque el almacén de eventos no puede aceptar escrituras. 0 cuando todo está sano; vea [Cuando el almacén de eventos no puede aceptar escrituras](#event-store-down). |
 
 `persist_duration_seconds` mide cada evento desde que un escritor lo toma hasta que su lote se
 confirma, incluido el tiempo, hasta `persistence.lingerMillis`, que espera a que el lote se llene,
 así que con poca carga su mediana queda unos 10 milisegundos por encima que con la espera
 desactivada.
 
-### Ajustarlo
+### Cuando el almacén de eventos no puede aceptar escrituras {#event-store-down}
+
+Cuando la base de datos rechaza una escritura porque no puede aceptar ninguna (su volumen está
+lleno, es de solo lectura, se quedó sin memoria o sin conexiones, o es inalcanzable),
+`event-management` no lo cuenta en contra de los eventos. Un evento rechazado por sí mismo se
+reintenta unas cuantas veces y luego se informa como fallido, pero un evento rechazado porque el
+almacén está caído se informaría tras unos cuatro minutos de interrupción, y un volumen lleno dura
+más que eso. Por eso estos eventos se **retienen**: el escritor los mantiene sin confirmar, avisa
+al bróker cada 20 segundos de que siguen en trámite (lo que no gasta sus entregas), los vuelve a
+escribir cada 2 a 30 segundos y los confirma solo cuando el almacén los ha consolidado. Un escritor
+que retiene no lee más, así que la acumulación espera en el flujo `resolved-events`, donde la
+compuerta de [contrapresión de la ingesta](#ingest-backpressure) rechaza eventos nuevos antes de que
+el flujo descarte los no leídos. Cuando se amplía el volumen o la base de datos se recupera, los
+eventos retenidos y la acumulación detrás de ellos se almacenan, en orden, sin pérdida.
+
+Los límites son los del bróker: un evento retenido no se pierde, pero un flujo lleno descarta su
+mensaje más antiguo. Al 90 % del techo de `resolved-events` se rechazan los eventos nuevos de todos
+los inquilinos. Los eventos MQTT que el bróker ya confirmó esperan en el flujo de captura, que
+descarta los más antiguos cuando se llena salvo que esté activado el
+[MQTT con cierre seguro](../guides/connecting-a-device.md#quality-of-service). Un apagado termina la
+retención y deja los eventos sin confirmar para el siguiente pod.
+
+| Alerta | Severidad | Qué significa | Qué hacer |
+| --- | --- | --- | --- |
+| `EventStoreRefusingWrites` | crítica | `event-management` retiene desde hace 2 minutos eventos que su base de datos rechazó (`devicechain_eventmanagement_persist_store_held_events` por encima de 0). No se está almacenando nada nuevo. | Averigüe por qué la base de datos rechaza escrituras. La causa habitual es un volumen lleno (`DatabaseVolumeCritical`; busque `No space left on device` en el registro del pod de la base de datos): amplíelo, vea [Dimensionar el almacén de eventos](./tuning-an-instance.md#event-store-sizing). Si no, busque un primario de solo lectura o un límite de conexiones agotado. |
+| `EventPersistBacklogGrowing` | advertencia | El consumidor de `event-management` tiene más de 1000 eventos en espera y la acumulación ha crecido de forma constante durante 10 minutos. | O bien el almacén está caído (`EventStoreRefusingWrites`), o bien la ingesta supera a la persistencia: vea [Ajustarlo](#tuning-it-1). |
+
+### Ajustarlo {#tuning-it-1}
 
 | Ajuste (configuración de `event-management`) | Valor por defecto | Qué hace |
 | --- | --- | --- |
@@ -1363,8 +1391,10 @@ Las alertas del chart para cada eslabón de esa cadena:
 | `DatabaseVolumeFillingFast` | Un volumen del almacén de eventos está lleno en más de la mitad y, al ritmo de los últimos 15 minutos, se llenará en menos de una hora, durante 3 minutos. | Si solo sube el primario, es log sin enviar: arregla primero el archivado. Si suben todos los miembros, son datos: amplía el volumen o acorta la retención de datos. |
 | `DatabaseVolumeFillingUp` | Un volumen de base de datos está lleno en más de un 75 %, durante una hora. El almacenamiento de la base de datos aquí no se recupera por sí solo: varias tablas son de solo anexado por diseño y nada las poda (el diario de auditoría y los historiales de versiones de perfiles de dispositivo, grupos de entidades, paneles, conectores y conjuntos de geocercas, además del archivo de geometrías de geocercas), porque un evento almacenado nombra la versión contra la que se resolvió y una reversión vuelve a una versión almacenada. Los ajustes de retención no se aplican a ellas; esos podan el almacén de series temporales. | Amplía el volumen mientras haya margen para trabajar y averigua qué está produciendo versiones. En el primario relacional, cuenta las filas por inquilino en una tabla de historial, por ejemplo `SELECT tenant_id, count(*) FROM "device-management".geo_fence_set_versions GROUP BY tenant_id ORDER BY 2 DESC LIMIT 10;`. Lo habitual es un inquilino que reescribe en bucle. Para un volumen del almacén de eventos, revisa los ajustes de retención del ciclo de vida de los datos; para un volumen `-wal`, la causa está en las alertas de archivado de arriba. |
 | `DatabaseVolumeAlmostFull` | Un volumen de base de datos está lleno en más de un 85 %, durante 15 minutos. | Amplíalo ya. |
+| `DatabaseVolumeFillsWithinDay` | Un volumen del almacén de eventos tiene menos de un 80 % libre y, al ritmo de las últimas 2 horas, estará lleno en menos de 24 horas, durante 15 minutos. | Tiene un día: amplíe el volumen, acorte la retención o compruebe que la compresión actúa. Vea [Dimensionar el almacén de eventos](./tuning-an-instance.md#event-store-sizing). |
+| `DatabaseVolumeCritical` | Un volumen de base de datos está lleno en más de un 95 %, durante 2 minutos. No necesita historial, así que también detecta un volumen que saltó de golpe. | Amplíelo ya. En un volumen del almacén de eventos, los eventos que no puede aceptar quedan retenidos en el bróker de mensajes mientras tanto (`EventStoreRefusingWrites`), pero ese búfer es finito. |
 
-Las dos alertas de ritmo existen porque los umbrales fijos son demasiado lentos para un volumen
+Las alertas de ritmo existen porque los umbrales fijos son demasiado lentos para un volumen
 que se llena en minutos, que es lo que la ingesta sostenida hace con él. Se comprobaron con una
 prueba de rendimiento en la que el primario del almacén de eventos pasó del 45 % a lleno en unos
 nueve minutos después de que se llenara el almacén de objetos: la alerta de ritmo se dispara unos

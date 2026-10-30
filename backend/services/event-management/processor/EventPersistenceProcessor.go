@@ -94,6 +94,16 @@ type PersistMetrics struct {
 	batchSize prometheus.Observer
 	// fallbacks is persist_batch_fallbacks_total: batch transactions that did not commit.
 	fallbacks prometheus.Counter
+	// held is persist_store_held_events: events a writer is holding, unacked, because the
+	// event store cannot take writes (disk full, read-only, unreachable). Zero when healthy.
+	held prometheus.Gauge
+}
+
+// holding moves the held-events gauge by n. Nil-safe.
+func (m *PersistMetrics) holding(n int) {
+	if m != nil && m.held != nil {
+		m.held.Add(float64(n))
+	}
 }
 
 // start marks one message in flight. Nil-safe, like everything on this type, because
@@ -135,6 +145,8 @@ func NewPersistMetrics(ms *core.Microservice) *PersistMetrics {
 			nil, []float64{1, 2, 4, 8, 16, 32, 64}).WithLabelValues(),
 		fallbacks: ms.NewCounter("persist_batch_fallbacks_total",
 			"Batch transactions that did not commit, after which their events were written again."),
+		held: ms.NewGauge("persist_store_held_events",
+			"Events held unacked because the event store cannot take writes (disk full, read-only, unreachable); they are written when it recovers. Zero when healthy."),
 	}
 }
 
@@ -264,6 +276,7 @@ func (eproc *EventPersistenceProcessor) initializeEventPersistenceWorkers(ctx co
 			eproc.OnInvalidEvent, eproc.OnFailedEvent, eproc.metrics)
 		resolver.MaxBatch = eproc.persistence.MaxBatch
 		resolver.Linger = eproc.persistence.Linger()
+		resolver.Halt = eproc.procCtx.Done()
 		eproc.workers = append(eproc.workers, resolver)
 		// Workers run on a background context (not the cancelable read context)
 		// so that on shutdown they drain the remaining buffered messages to

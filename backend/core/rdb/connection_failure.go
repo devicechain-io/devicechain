@@ -42,3 +42,35 @@ func IsConnectionFailure(err error) bool {
 	}
 	return false
 }
+
+// IsStoreUnavailable reports whether err says the database cannot take a write RIGHT NOW,
+// for a reason no redelivery of the same message can be blamed for and that clears when the
+// operator (or the database) fixes the store: the connection failed (IsConnectionFailure),
+// the server is out of a resource it needs to accept the write, it is read-only, or its
+// storage reports an I/O fault.
+//
+// The classes, by SQLSTATE:
+//
+//   - 53xxx, insufficient resources: 53100 disk_full (the event-store incident this exists
+//     for), 53200 out_of_memory, 53300 too_many_connections, 53400 configuration_limit_exceeded.
+//   - 25006, read_only_sql_transaction: a replica, or a primary fenced by its operator.
+//   - 58xxx, system error: 58030 io_error and its neighbours.
+//
+// A consumer uses this to HOLD a message instead of counting the failure against its
+// delivery budget. A message abandoned because the database was full is data the platform
+// acknowledged and then threw away, and the database coming back does not bring it back.
+// This is deliberately a different question from rdb.IsConnectionFailure, which only decides
+// how a failed batch is replayed.
+func IsStoreUnavailable(err error) bool {
+	if err == nil {
+		return false
+	}
+	if IsConnectionFailure(err) {
+		return true
+	}
+	var pgerr *pgconn.PgError
+	if errors.As(err, &pgerr) {
+		return strings.HasPrefix(pgerr.Code, "53") || strings.HasPrefix(pgerr.Code, "58") || pgerr.Code == "25006"
+	}
+	return false
+}

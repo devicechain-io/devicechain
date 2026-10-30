@@ -58,6 +58,11 @@ type txApi struct {
 	// beforeTx, when non-nil, runs as each transaction is opened — a test resets a
 	// statement counter there to count only the last transaction's statements.
 	beforeTx func()
+
+	// storeDown, while set, refuses every transaction with storeErr before it runs a
+	// statement, as a database that cannot take writes does.
+	storeDown atomic.Bool
+	storeErr  error
 }
 
 func newTxApi(ep *EventPersistenceWorker) *txApi {
@@ -69,6 +74,9 @@ func (a *txApi) PersistInTx(ctx context.Context, fn func(db *gorm.DB) error) err
 		<-a.gate
 	}
 	a.txs.Add(1)
+	if a.storeDown.Load() {
+		return a.storeErr
+	}
 	if a.beforeTx != nil {
 		a.beforeTx()
 	}

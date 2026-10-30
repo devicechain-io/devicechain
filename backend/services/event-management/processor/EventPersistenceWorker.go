@@ -37,6 +37,14 @@ type EventPersistenceWorker struct {
 	// committed. Zero takes only what is already waiting.
 	Linger time.Duration
 
+	// Halt, when closed, ends the wait for the event store to take writes (persist_hold.go).
+	// Nil never closes, which is what a worker built by literal wants.
+	Halt <-chan struct{}
+
+	// held is what the store refused and this worker is waiting to write again.
+	// Only this worker's goroutine touches it.
+	held []pendingEvent
+
 	// metrics records RED-style instrumentation for each message handled by this
 	// worker (ADR-022 E13) and the batch signals. Shared by reference with sibling
 	// workers; may be nil in tests, so it is only ever touched via its nil-safe methods.
@@ -541,6 +549,7 @@ func (ep *EventPersistenceWorker) Process(ctx context.Context) {
 		batch, open := ep.collect(ctx)
 		if len(batch) > 0 {
 			ep.persistBatch(ctx, batch)
+			ep.settleHeld(ctx)
 		}
 		if !open {
 			log.Debug().Msg("Event persister received shutdown signal.")

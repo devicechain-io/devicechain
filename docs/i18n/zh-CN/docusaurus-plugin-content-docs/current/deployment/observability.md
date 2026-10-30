@@ -443,8 +443,29 @@ kube-state-metrics 本身因节点失效等原因移动期间的重启，只要�
 | `devicechain_eventmanagement_persist_batch_size` | 每提交事务事件数。小批表示跟得上，接近上限表示忙。10 个写入器共享流时，即使存储落后也很少满批，应结合积压。 |
 | `devicechain_eventmanagement_persist_batch_fallbacks_total` | 未提交、随后重写事件的批事务。偶发增长通常一个拒绝事件；多事件语句拒绝行时，定位需要再一次尝试，可能增长两次。持续增长表示反复拒绝，例如删除租户设备仍发送。每个包含这些事件的批次多花一个事务，不论数量；事件在 `persist_messages_total` 显示为 `erased`。 |
 | `devicechain_eventmanagement_persist_inflight` | 写入器持有事件，包括等待批提交。 |
+| `devicechain_eventmanagement_persist_store_held_events` | 因事件库无法写入而被保留、尚未确认的事件数。正常时为 0；见[事件库无法写入时](#event-store-down)。 |
 
 `persist_duration_seconds` 从写入器取得事件计到批提交，包括最多 `persistence.lingerMillis` 的填批等待，因此轻载中位数比关闭等待约高十毫秒。
+
+### 事件库无法写入时 {#event-store-down}
+
+当数据库因完全无法写入而拒绝写入（卷已满、只读、内存或连接耗尽，或无法连接）时，
+`event-management` 不会把这算作事件自身的失败。因事件自身原因被拒绝的事件会重试几次，然后报告为失败；
+但如果因事件库宕机而被拒绝，大约四分钟后就会被报告为失败，而卷写满的时间比这更长。因此这些事件会被
+**保留**：写入器保持它们未确认，每 20 秒告知代理它们仍在处理中（这不会消耗它们的投递次数），每隔 2 到
+30 秒重新写入，只有在事件库提交后才确认。保留事件的写入器不再继续读取，所以积压会留在 `resolved-events`
+流中，由[接入背压](#ingest-backpressure)闸门在该流丢弃未读消息之前拒绝新事件。扩卷或数据库恢复后，被保留的事件
+及其后的积压会按顺序入库，不丢失任何事件。
+
+限制来自代理：被保留的事件不会丢失，但已满的流会丢弃其最旧的消息。到达 `resolved-events` 上限的 90% 时，
+所有租户的新事件都会被拒绝。代理已确认的 MQTT 事件在捕获流中等待，除非启用了
+[故障关闭 MQTT](../guides/connecting-a-device.md#quality-of-service)，否则捕获流写满后会丢弃最旧的事件。
+关闭服务会结束保留，并把事件留作未确认，交给下一个 Pod。
+
+| 告警 | 严重级别 | 含义 | 处理方式 |
+| --- | --- | --- | --- |
+| `EventStoreRefusingWrites` | 严重 | `event-management` 已保留其数据库拒绝的事件 2 分钟（`devicechain_eventmanagement_persist_store_held_events` 大于 0）。目前没有任何新事件入库。 | 查明数据库为何拒绝写入。常见原因是卷已满（`DatabaseVolumeCritical`；在数据库 Pod 日志中查找 `No space left on device`）：为其扩卷，见[事件库容量规划](./tuning-an-instance.md#event-store-sizing)。否则检查是否有只读的主库或连接数耗尽。 |
+| `EventPersistBacklogGrowing` | 警告 | `event-management` 消费者有超过 1000 个事件在等待，且积压已持续稳定增长 10 分钟。 | 要么事件库宕机（`EventStoreRefusingWrites`），要么接入速度超过持久化速度：见[调优](#tuning-it-1)。 |
 
 ### 调优 {#tuning-it-1}
 
@@ -659,6 +680,8 @@ chart 覆盖链条各环节：
 | `DatabaseVolumeFillingFast` | 事件库卷超过一半，按最近十五分钟速率将在一小时内满，持续三分钟。 | 仅主实例增长是未归档 WAL，先修复归档；全部成员增长是数据，扩卷或缩短保留。 |
 | `DatabaseVolumeFillingUp` | 某数据库卷持续一小时超过 75%。这里的数据库存储不会自行恢复：有几张表按设计只追加，没有任何东西清理它们（审计日志，以及设备档案、实体组、仪表盘、连接器和地理围栏集的版本历史，外加地理围栏几何归档），因为已存储的事件会指明它被解析时所依据的版本，而回滚会回到某个已存储的版本。保留设置不适用于它们；那些设置清理的是时序存储。 | 趁还有余地时扩卷，并找出是什么在产生版本。在关系型主库上，统计某张历史表中每个租户的行数，例如 `SELECT tenant_id, count(*) FROM "device-management".geo_fence_set_versions GROUP BY tenant_id ORDER BY 2 DESC LIMIT 10;`。通常的答案是某个租户在循环中反复编写。对于事件库卷，检查数据生命周期保留设置；对于 `-wal` 卷，原因要看上面的归档告警。 |
 | `DatabaseVolumeAlmostFull` | 数据库卷超过 85% 持续十五分钟。 | 立即扩卷。 |
+| `DatabaseVolumeFillsWithinDay` | 事件库卷空闲不足 80%，且按过去 2 小时的速率将在 24 小时内写满，持续 15 分钟。 | 您还有一天时间：扩卷、缩短保留期，或确认压缩在生效。见[事件库容量规划](./tuning-an-instance.md#event-store-sizing)。 |
+| `DatabaseVolumeCritical` | 数据库卷超过 95% 已满，持续 2 分钟。它不依赖历史数据，因此也能发现骤然变满的卷。 | 立即扩卷。若是事件库卷，它暂时无法写入的事件会先保留在消息代理中（`EventStoreRefusingWrites`），但这个缓冲是有限的。 |
 
 速率告警是因为固定阈值对几分钟填满卷太慢。基准中对象存储满后，事件库主卷约九分钟从 45% 到满，速率告警约提前两分钟触发，而等待十五分钟的 85% 告警会在卷已满后才触发。
 

@@ -145,6 +145,17 @@ func (ep *EventPersistenceWorker) persistBatch(ctx context.Context, batch []pend
 			return
 		}
 		ep.metrics.fallback()
+		if rdb.IsStoreUnavailable(err) {
+			// The store refused the write (full, read-only, unreachable): nothing in the
+			// batch is to blame and every message of it would be refused the same way, so
+			// the whole batch is held until the store takes writes again.
+			log.Warn().Err(err).Int("events", len(batch)).
+				Msg("The event store cannot take writes; holding the batch until it can")
+			for _, p := range batch {
+				ep.hold(p, err)
+			}
+			return
+		}
 		if errors.Is(err, errGroupUnattributed) {
 			// The database refused a statement carrying several events. Find which one by
 			// writing the same batch again, one event at a time, in a new transaction.
@@ -156,6 +167,12 @@ func (ep *EventPersistenceWorker) persistBatch(ctx context.Context, batch []pend
 				return
 			}
 			ep.metrics.fallback()
+			if rdb.IsStoreUnavailable(err) {
+				for _, p := range batch {
+					ep.hold(p, err)
+				}
+				return
+			}
 		}
 		if failedAt < 0 || rdb.IsConnectionFailure(err) {
 			// Nothing in the batch is to blame — the transaction could not begin or commit,
@@ -243,6 +260,15 @@ func (ep *EventPersistenceWorker) dispose(p pendingEvent, err error) {
 		return
 	}
 	err = classifyPersistFailure(err)
+	// The store cannot take writes: HOLD the message. This comes before the delivery budget
+	// is consulted on purpose. The budget is for a message that is the problem; here the
+	// store is, and acking-and-reporting an event on its fifth delivery because the disk was
+	// full for five minutes throws away data the platform already acknowledged.
+	if rdb.IsStoreUnavailable(err) && !errors.Is(err, ErrDeterministic) &&
+		!errors.Is(err, rdb.ErrTenantPurged) {
+		ep.hold(p, err)
+		return
+	}
 	disposition := messaging.Dispose(p.msg, err)
 	// An erased tenant's event is settled at once and reported NOWHERE: the fence refuses
 	// that tenant on every delivery, and a failed-events copy of its payload would be a new

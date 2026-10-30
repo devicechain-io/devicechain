@@ -108,6 +108,61 @@ con los demás valores de la instancia antes de aplicar nada. Un valor de tipo i
 petición por encima de su límite o una combinación que el chart rechaza detiene la ejecución sin
 cambiar nada.
 
+## Dimensionar el almacén de eventos {#event-store-sizing}
+
+El almacén de eventos es el único volumen cuyo crecimiento lo marca el tráfico, así que es el que
+hay que dimensionar a propósito. Tres cifras lo deciden.
+
+- **Bytes por fila almacenada.** Una fila de medición cuesta unos 600 bytes en disco, índices
+  incluidos, antes de comprimir: un volumen de 32Gi contenía unos 51 millones de filas cuando se
+  llenó en una prueba a 10 000 lecturas por segundo. Una medición anterior dio cerca de 1 KB con el
+  registro de escritura anticipada; dimensione con la cifra mayor salvo que haya medido la suya.
+  El almacén de eventos comprime los fragmentos anteriores a `lifecycle.compressAfterDays` (7 por
+  defecto) en la configuración de `event-management`, sin pérdida, pero no hace nada con la semana
+  más reciente: dimensione el volumen para al menos esa cantidad de datos sin comprimir. La cifra
+  de 600 bytes es la no comprimida, y la razón de compresión depende de sus datos, así que mídala
+  antes de contar con ella.
+- **Filas por lectura.** Cada [métrica calculada](../user-guide/calculated-metrics.md) que se aplica
+  a un perfil almacena una fila más por lectura. Un perfil con N métricas calculadas almacena
+  (1 + N) filas por lectura, de modo que un valor por defecto de 8 multiplica el volumen hasta por
+  9. El techo del nivel `calculatedMetricsPerProfile` es un techo, y el coste depende del uso.
+- **Retención.** `lifecycle.retentionDays` es 0 por defecto, es decir, conserva los datos para
+  siempre. Una instancia pensada para funcionar indefinidamente debería fijarlo; entonces el volumen
+  solo tiene que contener la ventana más la semana sin comprimir.
+
+Como regla, la ventana sin comprimir necesita lecturas por segundo × (1 + métricas calculadas) × 600
+bytes × 86 400 segundos × días, dejando libre una cuarta parte del volumen para el registro de
+escritura anticipada, el mantenimiento y el crecimiento. A 10 000 lecturas por segundo son unos
+520 GB al día, así que los siete días sin comprimir por defecto son unos 3,6 TB. Añada lo que
+necesiten el historial comprimido y la ventana de retención.
+
+Tres alertas vigilan el volumen, en el orden en que conviene enterarse: `DatabaseVolumeFillsWithinDay`
+(va camino de llenarse en 24 horas), `DatabaseVolumeFillingFast` (en una hora) y
+`DatabaseVolumeCritical` (95 % lleno). Si la base de datos deja de aceptar escrituras de todos
+modos, salta `EventStoreRefusingWrites` y `event-management` retiene los eventos que no pudo
+almacenar en lugar de descartarlos (vea [Cuando el almacén de eventos no puede aceptar
+escrituras](./observability.md#event-store-down)).
+
+### Ampliar el volumen en línea {#event-store-expand}
+
+En una StorageClass que permita ampliar volúmenes, suba el tamaño en el Cluster del almacén de
+eventos. El operador de la base de datos redimensiona la reclamación de cada instancia en su sitio,
+sin reiniciar:
+
+```bash
+kubectl -n <instance namespace> patch cluster dc-tsdb --type merge \
+  -p '{"spec":{"storage":{"size":"48Gi"}}}'
+kubectl -n <instance namespace> get pvc -w
+```
+
+Las reclamaciones crecen una a una. Si el pod de la base de datos ya estaba en bucle de reinicios
+por el disco lleno, elimine ese pod cuando su reclamación haya crecido para que reinicie sobre el
+sistema de archivos mayor. Entonces se almacenan los eventos retenidos y la acumulación detrás de
+ellos, y las alertas se resuelven al subir la fracción libre. El tamaño también lo fija la
+configuración OpenTofu de la instalación (`timescale_storage`), que el siguiente `dcctl install`
+vuelve a aplicar, y el operador de la base de datos se niega a reducir un volumen: compruebe que el
+tamaño que aplicará una actualización no sea menor que aquel al que lo amplió.
+
 ## Réplicas y el presupuesto de conexiones de la base de datos {#connections}
 
 El usuario de base de datos de cada instancia está limitado a las conexiones que sus servicios

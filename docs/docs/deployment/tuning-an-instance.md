@@ -102,6 +102,60 @@ The overlay is also checked against the chart's values schema, and rendered with
 other values, before anything is applied. A value of the wrong type, a request above its limit, or
 a combination the chart refuses stops the run with nothing changed.
 
+## Sizing the event store {#event-store-sizing}
+
+The event store is the one volume whose growth is set by traffic, so it is the one to size on
+purpose. Three figures decide it.
+
+- **Bytes per stored row.** A measurement row costs about 600 bytes on disk, indexes included,
+  before compression: a 32Gi volume held about 51 million rows when it filled in a benchmark at
+  10,000 readings per second. An earlier measurement put the figure near 1 KB with the
+  write-ahead log; size with the larger figure unless you have measured your own. The event store
+  compresses chunks older than `lifecycle.compressAfterDays` (7 by default) in
+  `event-management`'s config, losslessly, but it does nothing for the newest week: size the
+  volume for at least that much uncompressed data. The 600-byte figure is the uncompressed one,
+  and the compression ratio depends on your data, so measure it before counting on it.
+- **Rows per reading.** Every [calculated metric](../user-guide/calculated-metrics.md) that
+  applies to a profile stores one more row per reading. A profile with N calculated metrics
+  stores (1 + N) rows per reading, so a default of 8 multiplies the volume by up to 9. The tier
+  ceiling `calculatedMetricsPerProfile` is a ceiling, and the cost depends on use.
+- **Retention.** `lifecycle.retentionDays` is 0 by default, which keeps data forever. An
+  instance meant to run indefinitely should set it, and then the volume only has to hold the
+  window plus the uncompressed week.
+
+As a rule, the uncompressed window needs readings per second × (1 + calculated metrics) × 600
+bytes × 86,400 seconds × days, with a quarter of the volume left free for the write-ahead log,
+maintenance and growth. At 10,000 readings per second that is about 520 GB a day, so the default
+seven uncompressed days is about 3.6 TB. Add what the compressed history and the retention window
+need.
+
+Three alerts watch the volume, in the order you want to hear them: `DatabaseVolumeFillsWithinDay`
+(on course to fill within 24 hours), `DatabaseVolumeFillingFast` (within the hour) and
+`DatabaseVolumeCritical` (95% full). If the database stops taking writes anyway,
+`EventStoreRefusingWrites` fires and `event-management` holds the events it could not store
+instead of dropping them (see [When the event store cannot take
+writes](./observability.md#event-store-down)).
+
+### Expanding the volume online {#event-store-expand}
+
+On a StorageClass that allows volume expansion, raise the size on the event store's Cluster. The
+database operator resizes each instance's claim in place, with no restart:
+
+```bash
+kubectl -n <instance namespace> patch cluster dc-tsdb --type merge \
+  -p '{"spec":{"storage":{"size":"48Gi"}}}'
+kubectl -n <instance namespace> get pvc -w
+```
+
+The claims grow one at a time. If the database pod was already crash-looping on a full disk,
+delete that pod once its claim has grown so it restarts on the larger filesystem. The held events
+and the backlog behind them are then stored, and the alerts clear as the free fraction rises. The
+size is also set by the install's OpenTofu configuration (`timescale_storage`), which the next
+`dcctl install` applies again, and the database operator refuses to shrink a volume: check that
+the size an upgrade will apply is not smaller than the one you grew to. A StorageClass without expansion cannot grow a
+volume: the only ways out are to shorten retention (which frees space as chunks are dropped) or to
+restore into a larger cluster.
+
 ## Replicas and the database's connection budget {#connections}
 
 Each instance's database login is limited to the connections its services can open: a full pool
