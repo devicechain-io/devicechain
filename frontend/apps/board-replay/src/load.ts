@@ -27,8 +27,7 @@ import {
   type BoardRecording,
   type DashboardDefinition,
 } from '@devicechain/dashboards';
-import { hostWidgetRegistry, type WidgetRegistry } from '@devicechain/host-widgets';
-import { preloadWidgets } from '@devicechain/widgets';
+import type { WidgetRegistry } from '@devicechain/host-widgets';
 
 export type ReplayErrorCode =
   | 'missingUrl'
@@ -140,9 +139,15 @@ export function anchorsOf(definition: DashboardDefinition): AnchorTarget[] {
 export async function loadReplay(options: LoadOptions): Promise<LoadedReplay> {
   const origin = options.origin ?? globalThis.location.origin;
   const fetchFn = options.fetchFn ?? globalThis.fetch.bind(globalThis);
-  const registry = options.registry ?? hostWidgetRegistry();
+  // The widget library (and the deployment's registry built on it) is the bulk of the app, and
+  // nothing needs it until a board is parsed. It is fetched here, in parallel with the two files,
+  // so it stays out of the first download and costs no extra round trip.
+  const widgetsLib = import('./widgets-lib');
+  const boardView = import('./Board');
+  for (const p of [widgetsLib, boardView]) p.catch(() => undefined);
   const recordingUrl = sameOriginUrl(options.recordingUrl, origin);
   const explicitBoardUrl = options.boardUrl ? sameOriginUrl(options.boardUrl, origin) : null;
+  const registry = options.registry ?? (await widgetsLib).hostWidgetRegistry();
 
   const recordingBytes = await getBytes(fetchFn, recordingUrl);
   let recording: BoardRecording;
@@ -174,7 +179,8 @@ export async function loadReplay(options: LoadOptions): Promise<LoadedReplay> {
 
   // The code of the board's lazily loaded widgets arrives before the board is shown, so the
   // first frame is the whole board rather than a board with empty boxes still filling in.
-  await preloadWidgets(registry, definition.widgets.map((w) => w.type));
+  await (await widgetsLib).preloadWidgets(registry, definition.widgets.map((w) => w.type));
+  await boardView;
 
   return { recording, definition, registry, siteAnchors: anchorsOf(definition) };
 }

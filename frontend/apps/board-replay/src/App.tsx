@@ -20,7 +20,6 @@ import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import type { WidgetRegistry } from '@devicechain/host-widgets';
-import { Board } from './Board';
 import type { EmbedOptions } from './embed';
 import type { ReplayTheme } from './host-options';
 import { loadReplay, ReplayLoadError, type LoadedReplay } from './load';
@@ -48,6 +47,8 @@ export interface ReplayAppProps {
 
 // The embed is loaded only in embed mode. mount.tsx fetches it (loadEmbed) before it renders an
 // embed, so by the first render this resolves at once and the label is on the first frame.
+const Board = lazy(() => import('./Board').then((m) => ({ default: m.Board })));
+
 export const loadEmbed = () => import('./EmbedPlayer');
 const EmbedView = lazy(loadEmbed);
 
@@ -202,7 +203,9 @@ function Player({
         data-state={replayState(view, seeking)}
         style={{ flex: '1 1 auto', minHeight: 0, overflow: 'auto' }}
       >
-        <Board definition={definition} registry={registry} source={source} resolver={resolver} lister={lister} themeRoot={themeRoot} />
+        <Suspense fallback={null}>
+          <Board definition={definition} registry={registry} source={source} resolver={resolver} lister={lister} themeRoot={themeRoot} />
+        </Suspense>
       </main>
       <TransportBar clock={clock} recording={recording} seeking={seeking} onSeeking={setSeeking} />
     </>
