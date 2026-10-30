@@ -506,7 +506,7 @@ dcctl upgrade local devicechain --version v0.27.0
 该版本让设备可以[使用 X.509 证书认证](../guides/device-x509.md)，让 Sparkplug B 命令可用，在不断开设备会话的情况下续期代理证书，并为客户用户提供区域和资产仪表板。需要采取的行动，按执行顺序如下：
 
 - **如果不使用 `dcctl` 安装 chart，且代理的认证调用已开启，请为其提供代理的系统登录。** 认证调用现在会检查证书连接请求是否来自在线的代理服务器，并向代理的系统账户索取该列表。没有 `infrastructure.nats.auth.sysUser` 和 `sysPassword`，device-management 会拒绝启动。请设置它们，或设置 `callout.issuerPinDisabled: true` 以不做该检查运行（服务会记录一条警告）。使用 `dcctl` 的安装已经具备该登录。参见[将请求绑定到代理](./device-certificates.md#issuer-pin)。
-- **对已有 Sparkplug 数据源或 LwM2M 身份的实例，重新运行 `dcctl bootstrap` 时必须说明如何处理它们。** 现在除非再次传入同一个文件（`--sparkplug-source`、`--lwm2m-identities`），或有意撤销它们（`--withdraw-sparkplug-sources`、`--withdraw-lwm2m-identities`），否则会拒绝执行。此前不带该标志重新运行 bootstrap 会悄悄移除这些凭据。`dcctl upgrade` 与以前一样会保留它们。
+- **对已有 Sparkplug 数据源或 LwM2M 身份的实例再次运行 `dcctl bootstrap`，必须说明如何处理它们。**（对正在运行的实例，`dcctl bootstrap` 本来就拒绝重建；这里针对的是重试未完成的 bootstrap。）现在除非再次传入同一个文件（`--sparkplug-source`、`--lwm2m-identities`），或有意撤销它们（`--withdraw-sparkplug-sources`、`--withdraw-lwm2m-identities`），否则会拒绝执行。此前不带该标志重新运行 bootstrap 会悄悄移除这些凭据。`dcctl upgrade` 与以前一样会保留它们。
 - **升级后请轮换 LwM2M 预共享密钥。** 参见 [LwM2M 密钥离开 Helm release](#v0270-lwm2m)。
 - **你手动添加到 release 的 `lwm2m-ingest` 块中的设置，升级时不再被保留。** 请把它们放进[值文件](./tuning-an-instance.md)，并用 `--values` 传入。
 - **如果你在 chart 值中设置了 `extraSecrets`，请注意它的校验和变了。** `checksum/extra-secrets` 现在只涵盖每个 Secret 的名称和键名，从不涵盖值。只改一个值不再重启 Pod；值变化时请自行重启。
@@ -550,7 +550,7 @@ dcctl upgrade local devicechain --version v0.27.0
 
 #### 入口滚动发布不再丢请求 {#v0270-ingress}
 
-在云负载均衡器之后，Traefik 和 ingress-nginx 的 Pod 现在会在退出前先等待（`drain_seconds`，默认 40），新 Pod 必须就绪 `min_ready_seconds`（15）之后才会替换下一个，所以滚动发布不再在负载均衡器的健康检查追上之前丢失请求。这些值是 OpenTofu 控制器模块的变量；设为 0 即关闭。没有云负载均衡器的本地集群不变。首次应用这一变化的 `dcctl install` 会以更长的排空时间滚动一次控制器。参见[边缘处的变化](./ingress-cutover.md#ingress-cutover-differences)。
+在云负载均衡器之后，Traefik 和 ingress-nginx 的 Pod 现在会在退出前先等待（`drain_seconds`，默认 40），新 Pod 必须就绪 `min_ready_seconds`（15）之后才会替换下一个，所以滚动发布不再在负载均衡器的健康检查追上之前丢失请求。这些值是 OpenTofu 控制器模块的变量；设为 0 即关闭。没有云负载均衡器的本地集群不变。在云集群上，首次应用这一变化的 `dcctl install` 会以更长的排空时间把每个控制器滚动一次。参见[边缘处的变化](./ingress-cutover.md#ingress-cutover-differences)。
 
 #### 客户用户与控制台 {#v0270-customers}
 
