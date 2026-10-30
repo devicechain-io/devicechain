@@ -1,0 +1,90 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# A ChirpStack v4 network server with a simulated LoRaWAN gateway and two simulated devices.
+# ChirpStack's web UI and API are published on 127.0.0.1:8080. Nothing else is published.
+
+services:
+  postgres:
+    image: postgres:14-alpine@sha256:862ffc2556a2db763f0439c8323490000cd01975d2798a845e4a8dd3a905862f
+    environment:
+      POSTGRES_USER: chirpstack
+      POSTGRES_PASSWORD: chirpstack
+      POSTGRES_DB: chirpstack
+    volumes:
+      - ./chirpstack/initdb.sql:/docker-entrypoint-initdb.d/001-extensions.sql:ro
+      - postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chirpstack"]
+      interval: 3s
+      retries: 20
+
+  redis:
+    image: valkey/valkey:8-alpine@sha256:2602ace2be6569bc2bbb06f873776516ab9089821525be34f4305c67eb9db02a
+    command: ["valkey-server", "--save", "", "--appendonly", "no"]
+
+  mosquitto:
+    image: eclipse-mosquitto:2.0.22@sha256:09b62ff32c2e7b64d4b431b9a89236073289b68db273de2b089edeb9b0d92b5c
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+
+  chirpstack:
+    image: chirpstack/chirpstack:4@sha256:6ef779ce1dfbef273a1c99649672170c791441b42832c8245b01110eab3a369a # 4.20.0
+    command: ["-c", "/etc/chirpstack"]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_started}
+      mosquitto: {condition: service_started}
+    volumes:
+      - ./chirpstack:/etc/chirpstack:ro
+    # Docker Desktop provides host.docker.internal itself; Linux needs this line.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "127.0.0.1:8080:8080"
+
+  gateway-bridge:
+    image: chirpstack/chirpstack-gateway-bridge:4@sha256:cc820a195e739fa653c6d7fd403abe73b9b0c79b5dd4ab0f4bf9c6443470121b
+    depends_on: [mosquitto]
+    environment:
+      INTEGRATION__MQTT__EVENT_TOPIC_TEMPLATE: eu868/gateway/{{ .GatewayID }}/event/{{ .EventType }}
+      INTEGRATION__MQTT__STATE_TOPIC_TEMPLATE: eu868/gateway/{{ .GatewayID }}/state/{{ .StateType }}
+      INTEGRATION__MQTT__COMMAND_TOPIC_TEMPLATE: eu868/gateway/{{ .GatewayID }}/command/#
+      INTEGRATION__MQTT__AUTH__GENERIC__SERVERS: tcp://mosquitto:1883
+
+  # Gives ChirpStack the gateway, device profile (with its codec), application, HTTP integration
+  # to DeviceChain and two devices, over ChirpStack's gRPC API. ./connect-chirpstack.sh runs it.
+  setup:
+    image: python:3.12-slim@sha256:aa943ce411423c7582288f18707ff66eddcbaeb510502d747a72aeb34f30d159
+    profiles: ["setup"]
+    depends_on: [chirpstack]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    working_dir: /setup
+    volumes:
+      - ./setup:/setup:ro
+      - ./.integration-token:/run/integration-token:ro
+    environment:
+      CHIRPSTACK: chirpstack:8080
+      DC_UPLINK_URL: ${DC_UPLINK_URL:-}
+      DC_INGRESS_HOST: ${DC_INGRESS_HOST:-}
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    command: ["sh", "-c", "pip install --quiet --root-user-action=ignore --no-cache-dir --target /tmp/lib -r requirements.txt && PYTHONPATH=/tmp/lib exec python -u configure.py"]
+
+  # Plays one gateway and two devices. Started on its own, once ChirpStack knows them:
+  #   docker compose --profile sim up -d simulator
+  simulator:
+    image: python:3.12-slim@sha256:aa943ce411423c7582288f18707ff66eddcbaeb510502d747a72aeb34f30d159
+    profiles: ["sim"]
+    depends_on: [gateway-bridge]
+    working_dir: /sim
+    volumes:
+      - ./simulator:/sim:ro
+    environment:
+      GATEWAY_HOST: gateway-bridge
+      INTERVAL_SECONDS: ${INTERVAL_SECONDS:-10}
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    command: ["sh", "-c", "pip install --quiet --root-user-action=ignore --no-cache-dir --target /tmp/lib -r requirements.txt && PYTHONPATH=/tmp/lib exec python -u simulator.py"]
+
+volumes:
+  postgres:

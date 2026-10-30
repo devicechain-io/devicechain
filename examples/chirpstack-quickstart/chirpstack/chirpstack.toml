@@ -1,0 +1,30 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# A minimal ChirpStack v4 configuration for this example: one region (EU868), the gateway bridge
+# over MQTT, and PostgreSQL and Redis from the same compose file. The API secret and the database
+# password are throwaway values for a stack that is not published on any port but the web UI.
+
+[logging]
+  level = "info"
+
+[postgresql]
+  dsn = "postgres://chirpstack:chirpstack@postgres/chirpstack?sslmode=disable"
+
+[redis]
+  servers = ["redis://redis/"]
+
+[network]
+  net_id = "000000"
+  enabled_regions = ["eu868"]
+
+[api]
+  bind = "0.0.0.0:8080"
+  secret = "example-only-not-a-secret"
+
+[integration]
+  enabled = ["mqtt"]
+
+  [integration.mqtt]
+    server = "tcp://mosquitto:1883/"
+    json = true
