@@ -493,6 +493,88 @@ dcctl bootstrap local devicechain
 
 最近三个次版本的说明完整保留，按从新到旧排列。
 
+### v0.27.0：设备使用证书登录，Sparkplug 命令可用 {#v0270-upgrade}
+
+`v0.27.0` 是从 `v0.26.0` 起的原地升级：先对集群运行 `dcctl install`，再对每个实例运行一次 `dcctl upgrade`，方法见[v0.17.0 的说明](https://github.com/devicechain-io/devicechain/blob/v0.17.0/docs/docs/deployment/releases-and-upgrades.md#v0170-upgrade)。请给 `dcctl install` 传入集群安装时使用的设置（如 `--kube-context`、`--ha`、`--compact` 和 `--database-node-selector`），以及新的 `--version`。如果从 `v0.25.2` 或更早版本升级，请先阅读 [`v0.26.0` 的说明](#v0260-upgrade)，并在其中使用 `--version v0.27.0`。
+
+```bash
+dcctl install local --version v0.27.0
+dcctl upgrade local devicechain --version v0.27.0 --dry-run
+dcctl upgrade local devicechain --version v0.27.0
+```
+
+该版本让设备可以[使用 X.509 证书认证](../guides/device-x509.md)，让 Sparkplug B 命令可用，在不断开设备会话的情况下续期代理证书，并为客户用户提供区域和资产仪表板。需要采取的行动，按执行顺序如下：
+
+- **如果不使用 `dcctl` 安装 chart，且代理的认证调用已开启，请为其提供代理的系统登录。** 认证调用现在会检查证书连接请求是否来自在线的代理服务器，并向代理的系统账户索取该列表。没有 `infrastructure.nats.auth.sysUser` 和 `sysPassword`，device-management 会拒绝启动。请设置它们，或设置 `callout.issuerPinDisabled: true` 以不做该检查运行（服务会记录一条警告）。使用 `dcctl` 的安装已经具备该登录。参见[将请求绑定到代理](./device-certificates.md#issuer-pin)。
+- **对已有 Sparkplug 数据源或 LwM2M 身份的实例，重新运行 `dcctl bootstrap` 时必须说明如何处理它们。** 现在除非再次传入同一个文件（`--sparkplug-source`、`--lwm2m-identities`），或有意撤销它们（`--withdraw-sparkplug-sources`、`--withdraw-lwm2m-identities`），否则会拒绝执行。此前不带该标志重新运行 bootstrap 会悄悄移除这些凭据。`dcctl upgrade` 与以前一样会保留它们。
+- **升级后请轮换 LwM2M 预共享密钥。** 参见 [LwM2M 密钥离开 Helm release](#v0270-lwm2m)。
+- **你手动添加到 release 的 `lwm2m-ingest` 块中的设置，升级时不再被保留。** 请把它们放进[值文件](./tuning-an-instance.md)，并用 `--values` 传入。
+- **如果你在 chart 值中设置了 `extraSecrets`，请注意它的校验和变了。** `checksum/extra-secrets` 现在只涵盖每个 Secret 的名称和键名，从不涵盖值。只改一个值不再重启 Pod；值变化时请自行重启。
+- **带类型的 GraphQL 客户端必须接受 `ProvisioningProfileSecretResult.issuedSecret` 为 `null`。** 指定信任锚的自动注册配置没有密钥。有密钥的配置仍与以前一样只返回一次。
+- **从此版本只能向前，不要回退。** 参见[回退](#v0270-going-back)。
+
+升级会运行两个迁移，每个在拥有它的服务首次启动时运行，被中断后都可以再次运行：`device-management` 中是一张信任锚表，以及凭据和自动注册配置上指向信任锚的列；`user-management` 中是租户清除记录上的两个可为空的列，记录数据何时被确认已擦除，以及最后一次检查的时间。两者都不重写任何行。
+
+#### Sparkplug B 命令可用，`dcctl` 接受 Sparkplug 数据源 {#v0270-sparkplug}
+
+在 `v0.26.0` 中，带点号的命令键会被拒绝，而 Sparkplug 命令类型（`sparkplug.write` 以及 rebirth 和 reboot 命令）正是这样命名的，所以无法创建任何 Sparkplug 命令。现在命令键可以用点号划分命名空间，每一段遵循与以前相同的规则。与 `v0.26.0` 一样，Sparkplug 命令在你为某个数据源开启之前保持关闭。
+
+- **被拒绝的命令会说明原因。** 在到达节点之前被拒绝的命令（`FAILED` 或 `NOT_DELIVERED`）现在会把机器可读的原因作为存储的响应，例如 `commands_not_enabled`、`node_offline`、`node_rebirthing`、`metric_not_writable` 或 `reboot_not_allowed`。控制台会逐一解释。你之前依据旧错误文字写的匹配逻辑，应改为匹配原因代码。
+- **先于设备类型出现的节点会被要求 rebirth。** 平台会记住该节点，并在注册失败 10 秒后请求它 rebirth，之后以翻倍的间隔（最长一分钟）重复，直到它注册成功。新增两个指标 `birth_recovery_pending` 和 `birth_recovery_rebirths_total` 可以观察这一过程。
+- **`dcctl bootstrap` 和 `dcctl upgrade` 接受 `--sparkplug-source <文件>`。** 文件列出各数据源，代理密码保存在由 `dcctl` 自己写入的 Secret 中，之后的升级会保留两者。带该标志的 bootstrap 会开启该区域；带该标志的升级在该区域未运行时会拒绝，并指向 `dcctl enable-area`。参见[为 `dcctl` 提供 Sparkplug 数据源](./edge-services.md#sparkplug-sources)。`--values` 覆盖文件仍不能设置数据源。
+
+#### LwM2M 密钥离开 Helm release {#v0270-lwm2m}
+
+此前 `dcctl` 把每个 LwM2M 设备预共享密钥放在 Helm release 的值中，`helm get values` 会打印它，Helm 历史也会在每个修订中保留它。现在 `dcctl` 自己把密钥写入 Secret `dci-<实例>-lwm2m-identities`，位于 release 之外，release 只带有该 Secret 的名称和一个不由任何密钥派生的戳。
+
+- **第一次升级会迁移密钥。** 它从 release 中读取一次密钥，在改变其他任何东西之前写入新的 Secret，删除旧的 `extraSecrets` 条目，然后运行 Helm 升级。设备保留它们已有的密钥。仍在运行的 Pod 会在环境中保留密钥，直到重启。
+- **之后请轮换密钥。** Helm 在本次升级之前记录的修订（最多保留十个）仍保存旧值，任何对 release 的备份也一样。请用新密钥运行 `dcctl upgrade local <实例> --lwm2m-identities <文件>`；再次传入文件会重写 Secret 并重启 Pod。在旧修订过期之前，请限制谁能读取 Helm 存放 release 的命名空间（`default`）中的 Secret。
+- **`dcctl upgrade` 新增 `--lwm2m-identities` 和 `--withdraw-lwm2m-identities`，** Sparkplug 的 Secret 以同样方式工作。不是 `dcctl` 写入的 Secret 永远不会被触碰。
+- **缩减或删除要等 release 成功之后。** `dcctl` 在 release 之前添加密钥，只在 release 成功之后才移除不再被引用的密钥。失败的升级会为运行中的 Pod 保留旧密钥，下一次运行会完成收尾。如果 release 成功后最后一步失败，运行会给出确切的命令并发出警告，但不会失败。
+
+#### 证书认证 {#v0270-certificates}
+
+设备可以用 X.509 客户端证书向平台代理认证，证书可以固定到你创建的设备，也可以在首次连接时通过证书自动注册配置完成注册。在你添加信任锚之前，不会信任任何东西，所以升级不会改变任何设备的行为。令牌和密码设备照常连接。添加第一个信任锚之前请阅读[升级已在运行的实例](./device-certificates.md#cutover)，具体步骤见[使用证书连接](../guides/device-x509.md)。
+
+- **代理的证书请求不再列出可接受的签发者。** Go 客户端或模拟器会扣留签发者不在代理列表中的证书；现在代理不再发送列表，设备会出示它所拥有的证书。
+- **每个证书连接都会对照在线的代理服务器检查。** 参见[将请求绑定到代理](./device-certificates.md#issuer-pin)。新告警 `DeviceX509IssuerPinUnavailable` 在持续中断时告警，而不会在代理滚动时告警。
+- **chart 带来三个告警和一个延迟直方图。** 在没有信任锚的实例上，`DeviceX509ChainFailuresSustained`、`DeviceX509JitRefusedSustained` 和 `DeviceTrustAnchorsExpiringSoon` 保持安静。`callout_duration_seconds{path,result}` 和警告级告警 `DeviceCalloutLatencyHigh` 覆盖认证调用的每条路径。
+
+#### 代理证书续期不会断开设备 {#v0270-broker}
+
+- **续期后的 TLS 证书不再断开 MQTT 会话。** 代理对同一机构下变更的证书直接用于新连接，而不重新加载配置，所以已连接的设备保持连接。在一次测试中，认证调用之后保持的 30 个会话在一次轮换后全部存活，下一次连接获得了新证书。
+- **当到期是唯一原因时，`dcctl upgrade` 续期代理叶证书而不滚动代理：** 机构不变，且代理已按证书签发时的副本数运行。它写入 Secret，然后最多等待五分钟，直到每个代理 Pod 报告新的到期时间。如果无法确认，它会发出警告并滚动代理，所以不会在一次看似成功的续期之后仍然提供旧证书。机构、名称或副本数的变化仍会滚动代理。
+- **更改代理配置仍会触发重新加载，** 重新加载仍会断开经认证调用放行的设备会话，直到代理库包含一个尚未出现在任何版本中的上游修复。凡是改变代理镜像或配置的升级，`dcctl upgrade` 都会滚动代理。
+- **代理库是 nats-server 2.15.2，** 这是一个安全版本；其修复之一是认证调用现在遵守它所允许的连接类型。`dc-nats-server` 基于它构建。回退到上游代理的对照镜像是 `nats:2.15.2-alpine`，使用的设置是 `server_image_tag = "2.15.2-alpine"`。
+- **升级滚动代理之后，`dcctl` 会平衡领导权。** 最后重启的服务器过去不领导任何流，发布确认的 p99 大约翻倍，直到领导权转移。`dcctl upgrade` 的最后一步现在会移动流和消费者的领导者以使各服务器均衡，并打印前后各服务器的领导者数量。这是尽力而为：失败只是警告，绝不会让升级失败。[`dcctl broker rebalance <实例>`](../reference/dcctl.md#dcctl-broker-rebalance) 可按需执行同样的操作，新告警 `BrokerLeadershipImbalanced` 在某台服务器领导的数量不足平均值一半时触发。
+
+#### 入口滚动发布不再丢请求 {#v0270-ingress}
+
+在云负载均衡器之后，Traefik 和 ingress-nginx 的 Pod 现在会在退出前先等待（`drain_seconds`，默认 40），新 Pod 必须就绪 `min_ready_seconds`（15）之后才会替换下一个，所以滚动发布不再在负载均衡器的健康检查追上之前丢失请求。这些值是 OpenTofu 控制器模块的变量；设为 0 即关闭。没有云负载均衡器的本地集群不变。首次应用这一变化的 `dcctl install` 会以更长的排空时间滚动一次控制器。参见[边缘处的变化](./ingress-cutover.md#ingress-cutover-differences)。
+
+#### 客户用户与控制台 {#v0270-customers}
+
+- **客户用户可以看到其可见设备所在的区域和资产。** 该规则在存储层，与租户谓词并列：只要调用者可见的设备与某个区域或资产存在被跟踪的关系，该区域或资产就会出现，`anchorDevices` 列出其上的设备。区域和资产的名称对任何能看到其中设备的人可见；其他字段不予显示。关系图本身不会开放。
+- **告警和事件历史可以按锚点过滤。** `alarms`、`alarmCountsBySeverity`、`alarmCountsByDeviceType` 和 `alarmStream` 订阅接受可选的 `anchor`（客户、区域或资产），结果限于调用者自己的范围。告警保留在其设备被触发时所在的区域之下。超出调用者范围的客户锚点会被拒绝。无需迁移。
+- **控制台隐藏服务器会拒绝的操作。** 不再向客户用户提供新建设备、导入、取消命令或仪表板写入操作，显示最新读数的统计卡片会用最近存储的值填充，而不是等待下一个读数。
+
+#### 租户删除会说明数据何时被擦除 {#v0270-tenant-erasure}
+
+租户删除记录新增 `erased`、`erasedAt` 和 `lastVerifiedAt`。只有当所有存储在沉淀窗口内都保持干净时才会作出该声明；任何存储出现回退就撤回；空的账本读作“仍在检查”，绝不读作已擦除。`dcctl tenant-deletion status <令牌> [--wait] [--until erased|complete]` 在数据被确认擦除之前以非零状态退出。指标 `tenant_purge_erased_total` 统计这些声明。参见[确认数据已擦除](./tenant-deletion.md#erased-signal)，以及[擦除大型租户需要多久](./tenant-deletion.md#measured)中的实测结果及其未涵盖的范围。
+
+#### 失败即关闭的 MQTT 确认仍为可选 {#v0270-fail-closed}
+
+失败即关闭的 MQTT 确认（`--mqtt-fail-closed`）与 `v0.26.0` 一样，除非你开启否则保持关闭，并且在 1.0 之前仍是可选项。[MQTT 传输](../reference/transport-matrix.md#mqtt--the-platform-broker)现在说明了关闭和开启时的实测限制与丢失上界。不设置它的实例没有任何变化。
+
+#### 回退 {#v0270-going-back}
+
+从此版本只能向前，不要回退。两个新迁移添加了 `v0.26.0` 不认识的表和列，使用 LwM2M 的实例把密钥放在 `v0.26.0` 不会读取的 Secret 中。失败的升级通过再次运行 `dcctl upgrade` 来修复。
+
+#### 已知问题 {#v0270-known-issues}
+
+- **更改代理配置仍会断开经认证调用放行的设备，** 直到代理库包含上游修复。证书续期不会。
+- **在 kind 上，滚动发布的排空只能通过其设置来验证，** 因为本地集群没有云负载均衡器。负载下滚动发布的云上实测仍待进行。
+
 ### v0.26.0：设备自行注册，前端迁移到 Traefik {#v0260-upgrade}
 
 `v0.26.0` 是从 `v0.25.2` 起的原地升级：先对集群运行 `dcctl install`，再对每个实例运行一次 `dcctl upgrade`，方法见[v0.17.0 的说明](https://github.com/devicechain-io/devicechain/blob/v0.17.0/docs/docs/deployment/releases-and-upgrades.md#v0170-upgrade)。请给 `dcctl install` 传入集群安装时使用的设置（如 `--kube-context`、`--ha`、`--compact` 和 `--database-node-selector`），以及新的 `--version`。如果从 `v0.25.1` 或 `v0.25.0` 升级，请同时阅读中间各版本的说明。
@@ -644,9 +726,9 @@ DeviceChain 现在可以向 Sparkplug 节点和设备发送命令：写入一个
 
 #### 已知问题 {#v0260-known-issues}
 
-- **代理滚动重启之后（包括这次升级），最后一个重启的服务器不领导任何流，** 发布确认的 p99 大约翻倍，直到领导权重新平衡。
-- **TLS 证书轮换会使代理重新加载，并断开大多数 MQTT 会话。** 设备会自行重连。后续版本已修复：代理无需重新加载，即可对新连接使用续期后的证书，已建立的会话保持不变。更改代理配置仍会触发重新加载；在代理的 `nats-server` 库包含上游修复之前，重新加载仍会断开经认证调用放行的设备会话。
-- **入口控制器的滚动发布会在 28 到 40 秒内丢弃约 5% 的请求。** 请在安静的时段进行。后续版本已修复：两个控制器会在 Pod 退出前先排空，并在移除旧 Pod 前等待，因此在云负载均衡器之后滚动发布不再丢失请求；参见[边缘处的变化](./ingress-cutover.md#ingress-cutover-differences)。
+- **代理滚动重启之后（包括这次升级），最后一个重启的服务器不领导任何流，** 发布确认的 p99 大约翻倍，直到领导权重新平衡。**已在 `v0.27.0` 中修复：**`dcctl upgrade` 在滚动代理后会平衡领导权；参见[代理证书续期不会断开设备](#v0270-broker)。
+- **TLS 证书轮换会使代理重新加载，并断开大多数 MQTT 会话。** 设备会自行重连。**已在 `v0.27.0` 中修复：**代理无需重新加载，即可对新连接使用续期后的证书，已建立的会话保持不变。更改代理配置仍会触发重新加载；在代理的 `nats-server` 库包含上游修复之前，重新加载仍会断开经认证调用放行的设备会话。
+- **入口控制器的滚动发布会在 28 到 40 秒内丢弃约 5% 的请求。** 请在安静的时段进行。**已在 `v0.27.0` 中修复：**两个控制器会在 Pod 退出前先排空，并在移除旧 Pod 前等待，因此在云负载均衡器之后滚动发布不再丢失请求；参见[边缘处的变化](./ingress-cutover.md#ingress-cutover-differences)。
 
 ### v0.25.2：服务令牌签发离开公共端口 {#v0252-upgrade}
 
