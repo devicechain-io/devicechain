@@ -472,6 +472,8 @@ type ResolvedEventsProcessor struct {
 	// publishPasses numbers publishPending's passes, so an outcome can name the pass it belongs to.
 	publishPasses  uint64
 	lastCheckpoint time.Time
+	// flushDetections' last failure; see there.
+	flushFailedAt time.Time
 	// lastBudgetSample is the wall-clock time of the most recent per-tenant state-budget
 	// measurement (slice 6c). The budget is sampled from the ticker on its OWN cadence, decoupled
 	// from checkpoint() — which every call site activity-gates, so a rule-budget breach that changes
@@ -1731,6 +1733,10 @@ func (rp *ResolvedEventsProcessor) run() {
 				if !rp.checkpoint(rp.pctx()) {
 					tickErr = errTickCheckpointNotCommitted
 				}
+			} else {
+				// Not a checkpoint tick: deliver what has fired, so a detection waits one tick
+				// for the broker and not up to a whole checkpoint interval.
+				rp.flushDetections(rp.pctx())
 			}
 			// Per-tenant state-budget accounting (ADR-023 amendment, slice 6c), sampled on the ticker
 			// on its own cadence — NOT from checkpoint(), whose every call site is activity-gated
@@ -2656,6 +2662,36 @@ func (rp *ResolvedEventsProcessor) runCheckpoint(ctx context.Context, force bool
 	rp.lastCheckpoint = rp.clock.Now()
 	rp.phases.flush()
 	return true
+}
+
+// flushDetections hands the buffered detections to the broker WITHOUT committing a snapshot or
+// acking anything, so a detection reaches REACT within one tick of firing instead of waiting for
+// the next checkpoint (up to CheckpointInterval, 10 s by default, on a quiet stream).
+//
+// This is the first step of runCheckpoint taken on its own, so it is the same publish under the
+// same ownership check. It leaves the deliver-before-checkpoint contract intact: the contract is
+// that the committed sequence never passes a message whose detections are unpublished, and this
+// moves nothing past anything. A crash after an early flush and before the next commit replays
+// from the last snapshot and re-derives the same detections, which carry the same DedupID and
+// collapse in the derived stream's duplicate window: the case a checkpoint whose publish
+// succeeded and whose Save failed has always been.
+//
+// A failed flush is not retried by the tick until a checkpoint has run, so a broker that has
+// stopped answering costs one bounded attempt per interval and not one per tick; the checkpoint
+// it falls back to retries the same buffer and reports the failure.
+func (rp *ResolvedEventsProcessor) flushDetections(ctx context.Context) {
+	if rp.stale || len(rp.pendingDets) == 0 || rp.flushFailedAt.After(rp.lastCheckpoint) {
+		return
+	}
+	if rp.leadershipEnabled() && !rp.heldNow() {
+		return // the checkpoint's ownership check, ahead of the same publish
+	}
+	defer rp.phases.enter(rp.phases.enter(phasePublish))
+	pubCtx, pubCancel := context.WithTimeout(ctx, rp.checkpointTimeout())
+	defer pubCancel()
+	if !rp.publishPending(pubCtx) {
+		rp.flushFailedAt = rp.clock.Now()
+	}
 }
 
 // ackThroughCommitted acknowledges everything the checkpoint just made durable, with ONE

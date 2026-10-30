@@ -122,7 +122,7 @@ está bloqueado dentro de una llamada.
 | `detect_checkpoints_total` | Puntos de control de instantánea de DETECT confirmados. |
 | `detect_consumer_ack_pending` | Mensajes entregados pero sin confirmar en el consumidor durable de eventos resueltos (trabajo en curso). |
 | `detect_consumer_pending` | Mensajes sin entregar a la espera en el consumidor durable de eventos resueltos (la señal principal de retraso de DETECT). |
-| `detect_derived_publish_ack_seconds` | Tiempo que cada evento derivado publicado esperó a que el broker lo confirmara, como distribución. Solo publicaciones correctas. No es la latencia de detección: una detección espera a su punto de control antes de publicarse. |
+| `detect_derived_publish_ack_seconds` | Tiempo que cada evento derivado publicado esperó a que el broker lo confirmara, como distribución. Solo publicaciones correctas. No es la latencia de detección: una detección se publica aproximadamente un segundo después de dispararse, antes del punto de control que la confirma. |
 | `detect_derived_publish_pass_seconds` | Tiempo que cada punto de control dedicó a publicar sus detecciones, desde el primer envío hasta la última confirmación, como distribución. No incluye el tiempo que las detecciones esperaron a su punto de control. |
 | `detect_derived_publish_outstanding` | Eventos derivados enviados que esperan ahora mismo la confirmación del broker (limitados por `derivedPublishing.maxInFlight`). Cero entre puntos de control. |
 | `detect_derived_publish_outstanding_bytes` | Bytes de contenido de esos eventos (limitados por `derivedPublishing.maxBufferedBytes`, salvo que un único evento mayor se envía solo). |

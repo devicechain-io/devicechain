@@ -116,7 +116,7 @@ it is stale while `detect_is_leader` and `detect_live` both read 1, the loop is 
 | `detect_checkpoints_total` | Committed DETECT snapshot checkpoints. |
 | `detect_consumer_ack_pending` | Delivered-but-unacked messages on the resolved-events durable consumer (in-flight work). |
 | `detect_consumer_pending` | Undelivered messages waiting on the resolved-events durable consumer (the primary DETECT lag signal). |
-| `detect_derived_publish_ack_seconds` | Time each published derived event waited for the broker to acknowledge it, as a distribution. Successful publishes only. It is not detection latency: a detection waits for its checkpoint before it is published. |
+| `detect_derived_publish_ack_seconds` | Time each published derived event waited for the broker to acknowledge it, as a distribution. Successful publishes only. It is not detection latency: a detection is published about a second after it fires, ahead of the checkpoint that commits it. |
 | `detect_derived_publish_pass_seconds` | Time each checkpoint spent publishing its detections, from the first send to the last acknowledgement, as a distribution. It does not include the time detections waited for their checkpoint. |
 | `detect_derived_publish_outstanding` | Derived events sent and waiting for the broker's acknowledgement right now (bounded by `derivedPublishing.maxInFlight`). Zero between checkpoints. |
 | `detect_derived_publish_outstanding_bytes` | Payload bytes of those events (bounded by `derivedPublishing.maxBufferedBytes`, except that a single larger event is sent on its own). |

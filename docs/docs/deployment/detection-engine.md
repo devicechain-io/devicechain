@@ -330,6 +330,26 @@ other path is genuine silence, where no event will ever arrive to trigger it; **
 wall-clock time and only once the broker confirms there is nothing left to process, so a backlog
 cannot make the engine call a device silent when it simply has not read that device's events yet.
 
+### How quickly does a detection reach its actions?
+
+A detection reaches the actions of its rule (raise an alarm, send a command, call a connector)
+about a second after the engine decides it, plus the time the reading took to reach the engine.
+Nothing waits for a checkpoint: the engine hands each detection to the broker on its next
+one-second tick, and the checkpoint that commits the engine's state and acknowledges the stream
+follows on its own schedule (`checkpointIntervalSeconds`, `checkpointEvents`). Publishing a
+detection early is safe because the checkpoint only ever commits state *behind* detections that
+were already delivered. A restart in between replays from the last checkpoint and re-derives the
+same detections, which the derived stream collapses to one, exactly as it does when a checkpoint's
+snapshot fails after its publish.
+
+Two things still apply. Event time can hold a detection back: a rule that needs to see later
+events or a quiet period before it can decide (a window, a duration, an absence) is bound by the
+timing described above, not by this tick. And an alarm's `raisedTime` is the time of the *reading* that raised it, not the
+moment the alarm was written, so a command's `queuedTime` minus the alarm's `raisedTime` measures the
+whole path from the reading, not a gap between the alarm and the command: the two are written
+within milliseconds of each other. Earlier releases held a detection until the checkpoint, which added anywhere from nothing up to
+`checkpointIntervalSeconds` (10 seconds by default) between a reading and its alarm and commands.
+
 ## A raised alarm that will not clear
 
 An alarm is cleared by its **last** contributing rule resolving, not by any one of them. If several
