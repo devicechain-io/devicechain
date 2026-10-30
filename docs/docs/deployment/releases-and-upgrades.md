@@ -755,7 +755,7 @@ Devices can authenticate to the platform broker with an X.509 client certificate
 
 #### Ingress rollouts keep requests {#v0270-ingress}
 
-Behind a cloud load balancer, Traefik and ingress-nginx pods now wait before they leave (`drain_seconds`, 40 by default) and a new pod must be ready for `min_ready_seconds` (15) before the next is replaced, so a rollout no longer drops requests while the load balancer's health check catches up. The values are module variables of the OpenTofu controller modules; 0 turns either off. A local cluster, which has no cloud load balancer, is unchanged. On a cloud cluster, the first `dcctl install` that applies this rolls each controller once, with the longer drain. See [what changes at the edge](./ingress-cutover.md#ingress-cutover-differences).
+Behind a cloud load balancer, Traefik and ingress-nginx pods now wait before they leave (`drain_seconds`, 40 by default) and a new pod must be ready for `min_ready_seconds` (15) before the next is replaced, so a rollout no longer drops requests while the load balancer's health check catches up. The values are module variables of the OpenTofu controller modules; 0 turns either off. On GKE, a request loop of one a second through a cloud load balancer during Traefik rollouts saw no failed requests, where the previous measurement saw failures. A local cluster, which has no cloud load balancer, is unchanged. On a cloud cluster, the first `dcctl install` that applies this rolls each controller once, with the longer drain. See [what changes at the edge](./ingress-cutover.md#ingress-cutover-differences).
 
 #### Customer users and the console {#v0270-customers}
 
@@ -778,7 +778,6 @@ Roll forward from this release, not back. The two new migrations add a table and
 #### Known issues {#v0270-known-issues}
 
 - **A change to the broker's configuration still disconnects the devices the auth callout admitted,** until the broker library carries the upstream fix. A certificate renewal does not.
-- **The rollout drain is proved on kind only by its settings,** since a local cluster has no cloud load balancer. A cloud measurement of a rollout under load is still to come.
 
 ### v0.26.0 — devices enrol themselves, and the front end moves to Traefik {#v0260-upgrade}
 
