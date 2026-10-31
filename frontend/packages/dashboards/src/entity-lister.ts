@@ -44,7 +44,7 @@ function fetchKind(
 ): Promise<Array<{ token: string; name: string | null }>> {
   switch (kind) {
     case 'device':
-      return gql('device-management', LIST_DEVICES, { criteria }).then((r) => r.devices.results);
+      return gql('device-management', LIST_DEVICES, { criteria: { ...criteria, deviceType: typeToken } }).then((r) => r.devices.results);
     case 'customer':
       return gql('device-management', LIST_CUSTOMERS, { criteria }).then((r) => r.customers.results);
     case 'area':

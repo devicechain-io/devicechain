@@ -9,7 +9,8 @@
 //
 //   scoped child slot → the parent anchor's member devices (devicesForAnchor), one option
 //                       per member; empty / unbound / non-anchor parent ⇒ no options.
-//   root device slot  → the tenant's devices (the injected lister).
+//   root device slot  → the tenant's devices (the injected lister), narrowed to the slot's
+//                       candidates.deviceType when it declares one.
 //   root anchor slot  → the entities of the slot's target type THE VIEWER MAY SEE (the lister
 //                       answers a customer user with the areas its devices are in), narrowed to
 //                       the slot's candidates.areaType/assetType when it declares one; the anchor
@@ -95,7 +96,7 @@ export async function resolveSlotCandidates(
   if (def.type === 'device') {
     let rows: Array<{ token: string; name?: string | null }>;
     try {
-      rows = await lister('device');
+      rows = await listEntities(lister, 'device', def.candidates?.deviceType);
     } catch {
       return [];
     }

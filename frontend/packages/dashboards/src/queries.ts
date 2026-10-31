@@ -162,7 +162,13 @@ export interface EntityListResult {
   results: Array<{ token: string; name: string | null }>;
 }
 export interface EntityListVariables {
-  criteria: { pageNumber: number; pageSize: number; areaTypeToken?: string | null; assetTypeToken?: string | null };
+  criteria: {
+    pageNumber: number;
+    pageSize: number;
+    areaTypeToken?: string | null;
+    assetTypeToken?: string | null;
+    deviceType?: string | null;
+  };
 }
 
 export const LIST_DEVICES = `

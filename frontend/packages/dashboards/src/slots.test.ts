@@ -402,7 +402,17 @@ describe('setSlotCandidates (the picker type filter of a root anchor slot)', () 
     const { setSlotCandidates } = await import('./slots');
     const d = def({ zone: { type: 'device' }, kid: { ...anchorSlot, scope: { parent: 'floor', strategy: 'first' } }, floor: anchorSlot });
     expect(setSlotCandidates(d, 'zone', { areaType: 'x' })).toBe(d);
+    expect(setSlotCandidates(d, 'floor', { deviceType: 'x' })).toBe(d);
     expect(setSlotCandidates(d, 'kid', { areaType: 'x' })).toBe(d);
     expect(setSlotCandidates(d, 'nope', { areaType: 'x' })).toBe(d);
+  });
+
+  it('sets, survives a load and clears the device type of a root device slot', async () => {
+    const { setSlotCandidates } = await import('./slots');
+    const { parseDashboardDefinition } = await import('./definition');
+    const set = setSlotCandidates(def({ zone: { type: 'device' } }), 'zone', { deviceType: 'thermostat' });
+    expect(set.slots!.zone.candidates).toEqual({ deviceType: 'thermostat' });
+    expect(parseDashboardDefinition(JSON.parse(JSON.stringify(set))).slots!.zone.candidates).toEqual({ deviceType: 'thermostat' });
+    expect(setSlotCandidates(set, 'zone', undefined).slots!.zone.candidates).toBeUndefined();
   });
 });
