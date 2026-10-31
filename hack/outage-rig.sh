@@ -337,8 +337,8 @@ build_control_image() {
   mkdir -p "$src"
   git -C "$repo_root" archive "$control_ref" -- backend deploy examples go.work go.work.sum .ko.yaml | tar -x -C "$src"
   (cd "$src/backend/services/event-management" &&
-    KO_CONFIG_PATH="$src/.ko.yaml" KO_DOCKER_REPO=localhost:5000/event-management \
-      ko build --bare --tags "$tag" --platform linux/amd64 ./ >&2)
+    KO_DOCKER_REPO=localhost:5000/event-management \
+      "$repo_root/hack/ko-build.sh" --bare --tags "$tag" --platform linux/amd64 ./ >&2)
   rm -rf "$src"
   printf 'localhost:5000/event-management:%s' "$tag"
 }
