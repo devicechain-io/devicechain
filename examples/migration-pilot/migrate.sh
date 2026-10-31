@@ -76,7 +76,7 @@ plan() {
       $m[0] as $m | .[$i] | if $m.ruleKinds[.kind] and (.kind != "script-chain")
         then "\(.name)  ->  \($m.ruleKinds[.kind])"
         else "\(.name)  ->  SKIPPED: \($m.ruleKinds[.kind] // "unknown rule kind")" end' "$SRC/rules.json"
-    jq -r --argjson i "$i" '.[$i].kind' "$SRC/rules.json" | grep -qx threshold && echo "    $(rule_json "$i")"
+    grep -qx threshold <<<"$(jq -r --argjson i "$i" '.[$i].kind' "$SRC/rules.json")" && echo "    $(rule_json "$i")"
   done
   echo
   echo "== dashboard =="

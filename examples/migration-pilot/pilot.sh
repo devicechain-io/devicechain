@@ -27,7 +27,7 @@ export INSTANCE DC_TENANT
 compose() { docker compose -p migration-pilot -f pilot/docker-compose.yml --env-file pilot/.env "$@"; }
 
 # access_token SERIAL: the token the device already holds, which is what the export carried.
-access_token() { tr -d '\r' < source/devices.csv | awk -F, -v s="$1" 'toupper($2) == toupper(s) { print $7; exit }'; }
+access_token() { awk -F, -v s="$1" '{ sub(/\r$/, "") } toupper($2) == toupper(s) { print $7; exit }' source/devices.csv; }
 
 up() {
   mkdir -p pilot/state pilot/pki pilot/logs
