@@ -650,8 +650,10 @@ func initOwnershipDrain() error {
 // device by token, and a device deleted on another replica must stop resolving at once rather
 // than when a cached copy expires.
 func newDeviceReportsConsumer(reader messaging.MessageReader, dead *deadletter.Sink) *processor.DeviceReportsConsumer {
-	return processor.NewDeviceReportsConsumer(Microservice, reader,
+	rc := processor.NewDeviceReportsConsumer(Microservice, reader,
 		core.NewNoOpLifecycleCallbacks(), Api, dead, DeviceReportsMetrics)
+	rc.Hold = newStoreHold("device-reports")
+	return rc
 }
 
 // newRaiseAlarmConsumer assembles the raise-alarm consumer from this service's globals. It
@@ -668,8 +670,10 @@ func newDeviceReportsConsumer(reader messaging.MessageReader, dead *deadletter.S
 // sees the setting reach the consumer: a call site handing over a literal would build and run
 // with one lane whatever raiseAlarm.workers says.
 func newRaiseAlarmConsumer(reader messaging.MessageReader, dead *deadletter.Sink) *processor.RaiseAlarmConsumer {
-	return processor.NewRaiseAlarmConsumer(Microservice, reader,
+	rc := processor.NewRaiseAlarmConsumer(Microservice, reader,
 		core.NewNoOpLifecycleCallbacks(), Api, dead, RaiseAlarmMetrics, Configuration.RaiseAlarm.Workers)
+	rc.Hold = newStoreHold("raise-alarm")
+	return rc
 }
 
 // wireDetectionRuleValidator injects the ADR-044 sync-validation gate onto the shared

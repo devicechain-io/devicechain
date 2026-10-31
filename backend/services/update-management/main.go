@@ -41,6 +41,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/secrets"
 	"github.com/devicechain-io/dc-microservice/service"
+	"github.com/devicechain-io/dc-microservice/storehold"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/devicechain-io/dc-update-management/config"
@@ -355,6 +356,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	}
 	ReportsReader = reader
 	ReportsConsumer = newReportsConsumer(reader, dead)
+	ReportsConsumer.Hold = newStoreHold("device-reports")
 	if err := ReportsConsumer.Initialize(context.Background()); err != nil {
 		return err
 	}
@@ -364,6 +366,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	}
 	RosterReader = rosterReader
 	RosterConsumer = processor.NewRosterConsumer(Microservice, rosterReader, core.NewNoOpLifecycleCallbacks(), Api, dead)
+	RosterConsumer.Hold = newStoreHold("device-roster")
 	return RosterConsumer.Initialize(context.Background())
 }
 
@@ -375,6 +378,12 @@ func newDeadLetterSink(nmgr *messaging.NatsManager) (*deadletter.Sink, error) {
 		return nil, err
 	}
 	return DeadLetters.NewSink(w), nil
+}
+
+// newStoreHold builds the Holder that keeps a consumer's messages unacked, outside their
+// delivery budget, while this service's relational store cannot take writes (core/storehold).
+func newStoreHold(consumer string) *storehold.Holder {
+	return storehold.New(Microservice, consumer, storehold.RDBProbe(RdbManager))
 }
 
 // newReportsConsumer assembles the device-reports consumer from this service globals. It is a

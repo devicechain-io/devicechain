@@ -14,6 +14,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/ota"
+	"github.com/devicechain-io/dc-microservice/storehold"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/devicechain-io/dc-update-management/model"
 	"github.com/prometheus/client_golang/prometheus"
@@ -176,6 +177,14 @@ type ReportsConsumer struct {
 	UpdateReportsMetrics
 
 	dead *deadletter.Sink
+
+	// Hold keeps a report unacked, outside its delivery budget, while the relational store cannot
+	// take writes (core/storehold). A device report is the device's only copy of what it did (an
+	// update's progress, a download request), so a database outage past the delivery budget used
+	// to letter and ack it. Re-running is safe: ApplyReport is the append-only attempt reducer
+	// and answers VerdictDuplicate for a report it has already folded in, a grant is re-issued
+	// from the same assignment, and a sync is a read. Nil holds nothing.
+	Hold *storehold.Holder
 	gate syncGate
 
 	procCtx    context.Context
@@ -260,7 +269,11 @@ func (rc *ReportsConsumer) handle(ctx context.Context, msg messaging.Message) {
 
 	switch {
 	case rep.Update != nil:
-		verdict, err := rc.Api.ApplyReport(msgctx, token, *rep.Update)
+		var verdict ota.Verdict
+		err := rc.held(msgctx, msg, func(c context.Context) (e error) {
+			verdict, e = rc.Api.ApplyReport(c, token, *rep.Update)
+			return e
+		})
 		if err != nil {
 			if rc.settleDisabled(err, msg, token, rep.Kind, done) {
 				return
@@ -274,7 +287,9 @@ func (rc *ReportsConsumer) handle(ctx context.Context, msg messaging.Message) {
 				Msg("Update report not applied.")
 		}
 	case rep.DownloadRequest != nil:
-		if err := rc.grant(msgctx, token, rep.DownloadRequest.AssignmentID); err != nil {
+		if err := rc.held(msgctx, msg, func(c context.Context) error {
+			return rc.grant(c, token, rep.DownloadRequest.AssignmentID)
+		}); err != nil {
 			if rc.settleDisabled(err, msg, token, rep.Kind, done) {
 				return
 			}
@@ -288,7 +303,11 @@ func (rc *ReportsConsumer) handle(ctx context.Context, msg messaging.Message) {
 			done(core.ResultInvalid)
 			return
 		}
-		views, err := rc.Api.CurrentUpdates(msgctx, token)
+		var views []model.UpdateAssignmentView
+		err := rc.held(msgctx, msg, func(c context.Context) (e error) {
+			views, e = rc.Api.CurrentUpdates(c, token)
+			return e
+		})
 		if err != nil {
 			rc.gate.forget(tenant + "/" + token)
 			if rc.settleDisabled(err, msg, token, rep.Kind, done) {
@@ -304,6 +323,17 @@ func (rc *ReportsConsumer) handle(ctx context.Context, msg messaging.Message) {
 
 	msg.Ack()
 	done(core.ResultOK)
+}
+
+// held runs one store operation for msg under the consumer's store hold (core/storehold). A nil
+// Hold runs it once. Shutdown ends the hold with messaging.ErrHoldReleased, which Dispose
+// answers Retry on every delivery, so retryOrDrop leaves the message unacked.
+func (rc *ReportsConsumer) held(msgctx context.Context, msg messaging.Message, op func(context.Context) error) error {
+	ctx := rc.procCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return rc.Hold.RunCtx(ctx, msgctx, []messaging.Message{msg}, op)
 }
 
 // settleDisabled settles a message from a device an operator has disabled, and reports whether it

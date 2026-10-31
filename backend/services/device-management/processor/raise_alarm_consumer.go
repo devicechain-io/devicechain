@@ -13,6 +13,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/storehold"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
 	"time"
@@ -76,6 +77,16 @@ type RaiseAlarmConsumer struct {
 	// stamps this service as the letter's source and counts a lost letter on the process's
 	// dead_letter_lost_total.
 	dead *deadletter.Sink
+
+	// Hold keeps an edge unacked, outside its delivery budget, while the relational store cannot
+	// take writes (core/storehold). An edge is edge-TRIGGERED: a dropped raise does not re-emit
+	// until the condition falls and re-breaches, so an outage longer than the delivery budget
+	// (about four minutes) used to lose it for good. Nil holds nothing.
+	//
+	// Re-running an edge is safe: the integrator keys each contributor by its rule and folds
+	// by the edge's OCCURRED time under an optimistic CAS, so applying the same edge twice is a
+	// stale no-op the second time -- the same property redelivery already relies on.
+	Hold *storehold.Holder
 
 	procCtx    context.Context
 	procCancel context.CancelFunc
@@ -308,7 +319,11 @@ func (rc *RaiseAlarmConsumer) handle(ctx context.Context, msg messaging.Message)
 	// plain (uncached) Api so a delete on any replica is seen at once. A store error is transient
 	// (retry); an EMPTY result is a device that no longer exists (deleted between detection and
 	// dispatch) — poison, dropped, since a retry cannot bring it back.
-	devices, err := rc.Api.DevicesByToken(msgctx, []string{req.DeviceToken})
+	var devices []*model.Device
+	err = rc.held(msgctx, msg, func(c context.Context) (e error) {
+		devices, e = rc.Api.DevicesByToken(c, []string{req.DeviceToken})
+		return e
+	})
 	if err != nil {
 		rc.retryOrDrop(msg, done, err, "resolve device for raise-alarm")
 		return
@@ -320,14 +335,28 @@ func (rc *RaiseAlarmConsumer) handle(ctx context.Context, msg messaging.Message)
 		return
 	}
 
-	if err := rc.Api.ApplyAlarmContributorEdge(msgctx, devices[0].ID, req.AlarmKey, req.MetricKey,
-		req.RuleID, edge, severity.String(), req.Value, req.OccurredTime); err != nil {
+	if err := rc.held(msgctx, msg, func(c context.Context) error {
+		return rc.Api.ApplyAlarmContributorEdge(c, devices[0].ID, req.AlarmKey, req.MetricKey,
+			req.RuleID, edge, severity.String(), req.Value, req.OccurredTime)
+	}); err != nil {
 		rc.retryOrDrop(msg, done, err, "apply alarm edge")
 		return
 	}
 
 	msg.Ack()
 	done(core.ResultOK)
+}
+
+// held runs one store operation for msg under the consumer's store hold: while the store cannot
+// take writes the edge stays unacked and is run again when it answers. A nil Hold runs it once.
+// Shutdown ends the hold with messaging.ErrHoldReleased, which Dispose answers Retry on every
+// delivery, so retryOrDrop leaves the edge unacked instead of lettering it.
+func (rc *RaiseAlarmConsumer) held(msgctx context.Context, msg messaging.Message, op func(context.Context) error) error {
+	ctx := rc.procCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return rc.Hold.RunCtx(ctx, msgctx, []messaging.Message{msg}, op)
 }
 
 // retryOrDrop leaves a transiently-failed request unacked for redelivery, or acks (drops) it once the

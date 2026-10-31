@@ -580,6 +580,15 @@ func (sp *StateProcessor) mergeAdmitted(p pendingMerge) {
 // projection write failed with err: settled at once for an erased tenant, redelivered until
 // the finite MaxDeliver cap, then given up on (the projection is reconstructable, so dropping
 // beats looping forever). detail names the write, for the log.
+//
+// 🔑 THIS STATE PROJECTION DELIBERATELY DOES NOT HOLD ON A STORE OUTAGE (core/storehold), unlike
+// the consumers that letter and ack at the cap. It is rebuildable from the event history and
+// the next event for a device restamps it, so a few minutes of outage costs a stale live view
+// that repairs itself, while a hold would stop the reader and let the resolved-events backlog
+// (which event-management already holds) grow behind a cache. The OWNERSHIP consumer in
+// ownership_processor.go is the exception and does hold: a dropped ownership fact leaves a
+// sold device that reports nothing in its old owner's scoped view until it next speaks.
+// Revisit if this projection ever becomes the system of record.
 func (sp *StateProcessor) dispose(p pendingMerge, err error, detail string) {
 	msg := p.msg
 	switch messaging.Dispose(msg, err) {

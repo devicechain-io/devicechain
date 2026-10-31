@@ -15,6 +15,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/secrets"
 	"github.com/devicechain-io/dc-microservice/service"
+	"github.com/devicechain-io/dc-microservice/storehold"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/devicechain-io/dc-notification-management/config"
 	"github.com/devicechain-io/dc-notification-management/graphql"
@@ -158,6 +159,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// belongs to the connection, and a second registration of the same collector panics.
 	NotificationProcessor = processor.NewNotificationProcessor(Microservice, AlarmEventsReader,
 		core.NewNoOpLifecycleCallbacks(), Notifier, deadLetters, NotifyMetrics)
+	NotificationProcessor.Hold = storehold.New(Microservice, "alarm-notification", storehold.RDBProbe(RdbManager))
 	return NotificationProcessor.Initialize(context.Background())
 }
 

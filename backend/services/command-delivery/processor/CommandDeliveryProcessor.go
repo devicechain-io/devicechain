@@ -18,6 +18,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/storehold"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
 )
@@ -134,6 +135,14 @@ type CommandDeliveryProcessor struct {
 	CommandResponsesReader   messaging.MessageReader
 	DeviceCommandsWriter     messaging.MessageWriter
 	Api                      model.CommandDeliveryApi
+
+	// Hold keeps a command RESPONSE unacked, outside its delivery budget, while the relational
+	// store cannot take writes (core/storehold). A response is the device's only copy of what it
+	// did: at its last delivery it used to be lettered and acked, and the letter's write-back
+	// needs the very store that was down. Nil holds nothing. Re-running MarkResponse is safe:
+	// it settles by command and dispatch nonce, and an answer to an already-settled command is
+	// refused (ErrCommandNotAnswerable), which is what a redelivery already meets.
+	Hold *storehold.Holder
 
 	// DeliveryMetrics is every Prometheus instrument this processor exports. It is
 	// EMBEDDED BY VALUE, so every reader below still says cproc.ClaimsLost, and a
@@ -936,8 +945,17 @@ func (cproc *CommandDeliveryProcessor) handleResponse(ctx context.Context, msg m
 		return true
 	}
 
-	if _, err := cproc.Api.MarkResponse(tenantCtx, response.CommandToken, responder,
-		response.DispatchNonce, response.Success, normalizeReach(response.Reach), responsePayloadText(response.Payload), response.Error); err != nil {
+	// 🔴 AFTER AN AMBIGUOUS COMMIT A RE-RUN LETTERS AN ANSWER THAT WAS APPLIED. If MarkResponse's
+	// COMMIT succeeded but its acknowledgement was lost (a connection reset), the hold (or a
+	// redelivery) runs it again against a command that is no longer answerable and gets
+	// ErrCommandNotAnswerable, which is lettered below as unprocessable. The command is already
+	// settled, so the letter is a redundant record, not a loss: benign, and the same thing a
+	// redelivery has always done.
+	if err := cproc.Hold.RunCtx(ctx, tenantCtx, []messaging.Message{msg}, func(c context.Context) error {
+		_, e := cproc.Api.MarkResponse(c, response.CommandToken, responder,
+			response.DispatchNonce, response.Success, normalizeReach(response.Reach), responsePayloadText(response.Payload), response.Error)
+		return e
+	}); err != nil {
 		// A device answering for a command it does not own is refused, and the refusal is
 		// TERMINAL, not transient: the same message would be refused on every redelivery,
 		// so retrying it only burns the delivery budget. Ack it, count it as invalid, and

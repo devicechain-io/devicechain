@@ -13,6 +13,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/storehold"
 	"github.com/rs/zerolog/log"
 )
 
@@ -36,6 +37,11 @@ type RosterConsumer struct {
 	Api          RosterApi
 
 	dead *deadletter.Sink
+
+	// Hold keeps a roster fact unacked, outside its delivery budget, while the relational store
+	// cannot take writes (core/storehold). Re-running DeviceRosterChanged is safe: it re-evaluates
+	// the device's assignments against the fact's enabled flag. Nil holds nothing.
+	Hold *storehold.Holder
 
 	procCtx    context.Context
 	procCancel context.CancelFunc
@@ -100,7 +106,13 @@ func (rc *RosterConsumer) handle(ctx context.Context, msg messaging.Message) {
 		msg.Ack()
 		return
 	}
-	if err := rc.Api.DeviceRosterChanged(msgctx, ev.DeviceToken, ev.Enabled); err != nil {
+	ctx2 := rc.procCtx
+	if ctx2 == nil {
+		ctx2 = ctx
+	}
+	if err := rc.Hold.RunCtx(ctx2, msgctx, []messaging.Message{msg}, func(c context.Context) error {
+		return rc.Api.DeviceRosterChanged(c, ev.DeviceToken, ev.Enabled)
+	}); err != nil {
 		rc.retryOrDrop(msgctx, msg, ev.DeviceToken, err)
 		return
 	}

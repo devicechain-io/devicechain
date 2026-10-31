@@ -455,7 +455,7 @@ kube-state-metrics 本身因节点失效等原因移动期间的重启，只要�
 当数据库因完全无法写入而拒绝写入（卷已满、只读、连接耗尽，或无法连接）时，
 `event-management` 不会把这算作事件自身的失败。因事件自身原因被拒绝的事件会重试几次，然后报告为失败；
 但如果因事件库宕机而被拒绝，大约四分钟后就会被报告为失败，而卷写满的时间比这更长。因此这些事件会被
-**保留**：写入器保持它们未确认，立即并每隔 20 秒告知代理它们仍在处理中（这不会消耗它们的投递次数），每隔 2 到 30 秒（带随机抖动）向事件库发一次简单查询，应答后才重新写入，只有在事件库提交后才确认。保留事件的写入器不再继续读取，所以积压会留在 `resolved-events`
+**保留**：写入器保持它们未确认，立即并每隔 20 秒告知代理它们仍在处理中（这不会消耗它们的投递次数），在尝试之间等待，起初 2 秒，事件库持续拒绝写入时带随机抖动地翻倍直至 30 秒（卷写满时仍能应答简单查询），能写入时才重新写入，只有在事件库提交后才确认。保留事件的写入器不再继续读取，所以积压会留在 `resolved-events`
 流中，由[接入背压](#ingest-backpressure)闸门在该流丢弃未读消息之前拒绝新事件。扩卷或数据库恢复后，被保留的事件
 及其后的积压会按顺序入库，不丢失任何事件。仅有连接错误并不会让事件被保留：如果事件库应答了该查询，则问题出在事件本身，仍按原有方式消耗其投递次数。
 
@@ -466,8 +466,34 @@ kube-state-metrics 本身因节点失效等原因移动期间的重启，只要�
 
 | 告警 | 严重级别 | 含义 | 处理方式 |
 | --- | --- | --- | --- |
-| `EventStoreRefusingWrites` | 严重 | `event-management` 已保留其数据库拒绝的事件 2 分钟（`devicechain_eventmanagement_persist_store_held_events` 大于 0）。目前没有任何新事件入库。 | 查明数据库为何拒绝写入。常见原因是卷已满（`DatabaseVolumeCritical`；在数据库 Pod 日志中查找 `No space left on device`）：为其扩卷，见[事件库容量规划](./tuning-an-instance.md#event-store-sizing)。否则检查是否有只读的主库或连接数耗尽。 |
+| `EventStoreRefusingWrites` | 严重 | `event-management` 已保留其数据库拒绝的事件 2 分钟（`devicechain_eventmanagement_persist_store_held_events` 大于 0）。目前没有任何新事件入库。 | 查明数据库为何拒绝写入。常见原因是卷已满（`DatabaseVolumeCritical`；在数据库 Pod 日志中查找 `No space left on device`）：为其扩卷，见[事件库容量规划](./tuning-an-instance.md#event-store-sizing)。否则检查是否有只读的主库或连接数耗尽。期间应避免重启 `event-management`：每次重启都会用掉每个被保留事件五次投递中的一次。 |
 | `EventPersistBacklogGrowing` | 警告 | `event-management` 消费者有超过 1000 个事件在等待，且积压已持续稳定增长 10 分钟。 | 要么事件库宕机（`EventStoreRefusingWrites`），要么接入速度超过持久化速度：见[调优](#tuning-it-1)。 |
+| `ConsumerHoldingForDatabase` | 严重 | 某个服务已保留其数据库拒绝的消息 2 分钟（`devicechain_<服务>_store_held_messages` 大于 0）。该消费者没有进展：根据 `consumer`，表现为设备事件未解析、告警边沿未应用、命令未应答、通知未发送，或更新上报未记录。 | 查明该服务的数据库为何拒绝写入。常见原因是卷已满（`DatabaseVolumeCritical`；在数据库 Pod 日志中查找 `No space left on device`）：为其扩卷（`spec.storage.size`）。否则检查是否有只读的主库或连接数耗尽。期间应避免重启该服务：每次重启都会用掉每条被保留消息五次投递中的一次。 |
+
+### 其他服务的数据库无法写入时 {#service-store-down}
+
+不只 `event-management` 会在数据库故障期间丢消息。下表中的每个消费者原本在消息第五次投递之后（约四分钟）
+就会放弃它：写入死信或直接丢弃，然后确认，因此数据库满了或无法连接的时间更长时，平台已经确认的数据会被丢掉：
+尚未解析的设备事件、告警边沿（被丢掉的触发不会再次发送，直到条件再次变化）、设备上报、命令响应，以及某个告警的通知。
+现在它们和上文一样**保留**：消息保持未确认，并被告知仍在处理中，不消耗投递次数，服务会等待，起初 2 秒，数据库持续拒绝时翻倍直至 30 秒（即使它仍能应答简单查询，卷写满时就是如此），
+然后重新执行，成功后才确认。保留消息的消费者不再继续读取，所以积压会留在流中。设备事件解析器是一个池：
+被某个解析器保留的事件会让该解析器停下，所有解析器都在保留时，解析会停止，直到数据库应答。
+
+| 服务 | 会保留的消费者（`consumer` 标签） |
+| --- | --- |
+| `device-management` | `inbound-event-resolution`、`raise-alarm`、`device-reports` |
+| `command-delivery` | `command-responses`、`dead-letter-writeback`、`device-roster` |
+| `notification-management` | `alarm-notification` |
+| `update-management` | `device-reports`、`device-roster` |
+| `device-state` | `device-ownership` |
+
+
+`devicechain_<服务>_store_held_messages{consumer="..."}` 是某个消费者正在保留的消息数。健康时为 0，
+持续大于 0 达 2 分钟时触发 `ConsumerHoldingForDatabase`。与事件一样，仅有连接错误并不会让消息被保留：
+如果数据库应答了该查询，则问题出在消息本身，仍按原有方式消耗其投递次数。关闭服务会结束保留，并把消息留作未确认，交给下一个 Pod，但保留消息的服务每重启一次，
+每条消息就会用掉五次投递中的一次，所以在 `ConsumerHoldingForDatabase` 或 `EventStoreRefusingWrites` 触发期间应避免重启服务。
+`device-state` 只保留其归属消费者，否则已售出且不再上报的设备会一直留在原所有者的视图中。
+它的实时状态投影不保留：它可由事件历史重建，下一个事件会重新写入，所以无法应用的内容会被丢弃。
 
 ### 调优 {#tuning-it-1}
 

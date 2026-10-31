@@ -524,7 +524,24 @@ spec:
             devicechain_instance: {{ $id }}
           annotations:
             summary: "The event store is refusing writes; events are being held, not stored"
-            description: "event-management is holding {{ "{{ $value }}" }} events its database refused. They are not lost: they stay unacknowledged in the message broker and are stored once the database accepts writes again. Nothing new is being stored meanwhile, and the longer this lasts the larger the backlog behind it; once the backlog fills 90% of the resolved-events stream the platform refuses new events (JetStreamIngestBackpressureEngaged), and MQTT events the broker has already acknowledged wait in the capture stream, which discards its oldest once full. The usual cause is a full volume: check DatabaseVolumeCritical and the event-store claim (kubectl get pvc, and the database pod's log for 'No space left on device'), and expand it (spec.storage.size on the dc-tsdb Cluster; online where the storage class allows it) or lower the event retention. Otherwise look for a read-only primary or an exhausted connection limit."
+            description: "event-management is holding {{ "{{ $value }}" }} events its database refused. They are not lost: they stay unacknowledged in the message broker and are stored once the database accepts writes again. Nothing new is being stored meanwhile, and the longer this lasts the larger the backlog behind it; once the backlog fills 90% of the resolved-events stream the platform refuses new events (JetStreamIngestBackpressureEngaged), and MQTT events the broker has already acknowledged wait in the capture stream, which discards its oldest once full. The usual cause is a full volume: check DatabaseVolumeCritical and the event-store claim (kubectl get pvc, and the database pod's log for 'No space left on device'), and expand it (spec.storage.size on the dc-tsdb Cluster; online where the storage class allows it) or lower the event retention. Otherwise look for a read-only primary or an exhausted connection limit. Avoid restarting the service while this fires: a shutdown releases what it is holding and each restart uses one of the five deliveries a message has, so repeated restarts can still exhaust them."
+        # The same condition for every OTHER consumer that writes to a database (core/storehold):
+        # device-management's event resolver, raise-alarm and device-reports consumers, and
+        # command-delivery, notification-management and update-management's. Each HOLDS the
+        # messages its database refused, unacked and outside their delivery budget, and runs them
+        # again when the store answers; this gauge is the number held, per consumer. Before the
+        # hold those messages were lettered and acked at their last delivery (about four minutes
+        # in), so a database outage lost acknowledged data. `max by (job, consumer)` names the
+        # service and the consumer (summed over its replicas); event-management has its own, above.
+        - alert: ConsumerHoldingForDatabase
+          expr: sum by (job, consumer) ({__name__=~"devicechain_[a-z0-9]+_store_held_messages", namespace="{{ $ns }}"}) > 0
+          for: 2m
+          labels:
+            severity: critical
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "A service is holding messages because its database refuses writes"
+            description: "{{ "{{ $labels.job }}" }} is holding {{ "{{ $value }}" }} message(s) in its {{ "{{ $labels.consumer }}" }} consumer that its database refused. They are not lost: they stay unacknowledged in the message broker and are processed once the database accepts writes again. That consumer is not making progress meanwhile, so what it does is delayed: device events resolved, alarm edges applied, commands answered, notifications sent or update reports recorded, depending on the consumer. The usual cause is a full volume: check DatabaseVolumeCritical and the service's database claim (kubectl get pvc, and the database pod's log for 'No space left on device'), and expand it (spec.storage.size on the Cluster; online where the storage class allows it). Otherwise look for a read-only primary or an exhausted connection limit. Avoid restarting the service while this fires: a shutdown releases what it is holding and each restart uses one of the five deliveries a message has, so repeated restarts can still exhaust them."
         # The event-management consumer is behind AND getting further behind. The existing
         # JetStreamDurableFallingBehind waits 15 minutes at 10000 messages; this one watches the
         # slope, which separates a store that is down from a burst being worked off: a backlog

@@ -14,6 +14,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/storehold"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
 )
@@ -74,6 +75,15 @@ type NotificationProcessor struct {
 	// ExecuteStop drain the reader before closing the channel it feeds, so the reader
 	// can never send on a closed channel at SIGTERM, and the workers drain the
 	// remaining backlog to completion before exiting.
+	// Hold keeps an alarm event unacked, outside its delivery budget, while the relational
+	// store cannot take writes (core/storehold). Without it an outage past the delivery budget
+	// (about four minutes) dead-lettered the event and acked it: nobody was paged. Only the
+	// failures that happen BEFORE any channel is tried are held (loading policies and state,
+	// holding for quiet hours, recording a lifecycle transition, resolving a channel secret
+	// when nothing was delivered), so a re-run never re-sends a page: Notify returns an error
+	// only when nothing was delivered. Nil holds nothing.
+	Hold *storehold.Holder
+
 	procCtx    context.Context
 	procCancel context.CancelFunc
 	readerWG   sync.WaitGroup
@@ -297,7 +307,17 @@ func (np *NotificationProcessor) dispatchOne(ctx context.Context, msg messaging.
 	// The context carries the message's AckDeadline — when the broker will redeliver it —
 	// so the Notifier bounds the dispatch against the clock that actually started at fetch,
 	// not against a fresh AckWait counted from now.
-	if err := np.Notifier.Notify(messaging.WithAckDeadline(msgctx, msg), event); err != nil {
+	//
+	// Under a store hold each re-run measures its dispatch budget from the message's CURRENT ack
+	// deadline: every beat the hold sends re-arms the message's capacity slot (Message.InProgress),
+	// so WithAckDeadline follows the last successful beat rather than the fetch time.
+	holdCtx := np.procCtx
+	if holdCtx == nil {
+		holdCtx = ctx
+	}
+	if err := np.Hold.RunCtx(holdCtx, msgctx, []messaging.Message{msg}, func(c context.Context) error {
+		return np.Notifier.Notify(messaging.WithAckDeadline(c, msg), event)
+	}); err != nil {
 		// 🔴 ONE ERROR IS PERMANENT AND MUST NOT SPEND THE RETRY BUDGET: the tenant has been
 		// deleted and this area's ADR-077 erasure fence refuses its writes. It reaches here
 		// as an ordinary error, which everything below would read as transient — five

@@ -12,6 +12,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/storehold"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
 )
@@ -74,6 +75,12 @@ type DeadLetterWriteback struct {
 	// failures stop looking transient. Built on first use by writebackPacer(), because
 	// this struct is also assembled by literal in tests that never run the constructor.
 	readPacer *core.ReadPacer
+
+	// Hold keeps a dead letter unacked while the relational store cannot take writes
+	// (core/storehold): settling the command it records is the very write that is failing, and
+	// at the last delivery the command would otherwise read as in flight until its TTL and then
+	// lapse to TIMEOUT. MarkResponseLost is idempotent. Nil holds nothing.
+	Hold *storehold.Holder
 
 	procCtx    context.Context
 	procCancel context.CancelFunc
@@ -359,7 +366,11 @@ func (w *DeadLetterWriteback) Handle(msg messaging.Message) {
 	// The tenant comes from the SUBJECT, which is what scoped the letter, and it has to:
 	// the commands table is tenant-scoped, so a write without a tenant in context is
 	// refused by the scope callback rather than running unscoped.
-	settled, err := w.api.MarkResponseLost(tenantCtx, e.Reference)
+	var settled bool
+	err = w.Hold.RunCtx(w.procCtx, tenantCtx, []messaging.Message{msg}, func(c context.Context) (e2 error) {
+		settled, e2 = w.api.MarkResponseLost(c, e.Reference)
+		return e2
+	})
 	if err != nil {
 		// 🔴 A PURGED TENANT IS TERMINAL, NOT TRANSIENT. Deleting a tenant erases its
 		// rows and fences further writes, so this update will be refused on every

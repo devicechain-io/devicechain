@@ -13,6 +13,7 @@ import (
 	"github.com/devicechain-io/dc-device-state/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/storehold"
 	"github.com/rs/zerolog/log"
 )
 
@@ -36,6 +37,14 @@ type OwnershipProcessor struct {
 	Microservice *core.Microservice
 	Reader       messaging.MessageReader
 	Api          OwnershipApplier
+
+	// Hold keeps a fact unacked, outside its delivery budget, while the projection's database
+	// cannot take writes (core/storehold). Unlike the state projection, a dropped fact is NOT
+	// repaired by the next event: a device that was sold and then reports nothing stays in its
+	// old owner's scoped view -- a scope leak -- until it next sends something. Facts are rare,
+	// and ApplyDeviceOwnership is idempotent (it is ordered by the fact's change time). Nil
+	// holds nothing.
+	Hold *storehold.Holder
 
 	procCtx    context.Context
 	procCancel context.CancelFunc
@@ -111,8 +120,10 @@ func (op *OwnershipProcessor) ExecuteTerminate(context.Context) error { return n
 // handle applies one fact and settles its message. A fact no redelivery can fix — no tenant
 // in its subject, a payload that will not decode — is acked and dropped, loudly. A write that
 // failed takes the platform's disposition: settled for an erased tenant, left unacked for
-// redelivery (AckWait paces it) until the last delivery, then dropped. Dropping a fact loses
-// nothing permanent: the device's next event received after the change restamps it.
+// redelivery (AckWait paces it) until the last delivery, then dropped -- except that a write
+// the DATABASE refused is held (Hold), not counted against that budget, because dropping a
+// fact does not repair itself: the device's next event restamps it, but a sold device that
+// reports nothing keeps showing in its old owner's view until then.
 func (op *OwnershipProcessor) handle(ctx context.Context, msg messaging.Message) {
 	tctx, tenant, ok := messaging.TenantContextFromSubject(ctx, msg.Subject)
 	if !ok {
@@ -126,7 +137,15 @@ func (op *OwnershipProcessor) handle(ctx context.Context, msg messaging.Message)
 		_ = msg.Ack()
 		return
 	}
-	applied, err := op.Api.ApplyDeviceOwnership(tctx, fact.DeviceToken, fact.Anchors, fact.ChangedTime)
+	var applied bool
+	holdCtx := op.procCtx
+	if holdCtx == nil {
+		holdCtx = ctx
+	}
+	err = op.Hold.RunCtx(holdCtx, tctx, []messaging.Message{msg}, func(c context.Context) (e error) {
+		applied, e = op.Api.ApplyDeviceOwnership(c, fact.DeviceToken, fact.Anchors, fact.ChangedTime)
+		return e
+	})
 	if err != nil {
 		switch messaging.Dispose(msg, err) {
 		case messaging.TenantErased:

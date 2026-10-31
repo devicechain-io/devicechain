@@ -23,6 +23,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/service"
+	"github.com/devicechain-io/dc-microservice/storehold"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/rs/zerolog/log"
@@ -169,6 +170,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	//
 	// Floored positive by ApplyDefaults, so what lands here is always usable and never the
 	// "unset" zero the field treats as "use the platform default".
+	CommandDeliveryProcessor.Hold = newStoreHold("command-responses")
 	CommandDeliveryProcessor.SweepInterval = time.Duration(Configuration.SweepIntervalSeconds) * time.Second
 	CommandDeliveryProcessor.DisabledSource = disabledSource(infra)
 	// The re-stamp pass reads windows from the same owner enqueue asked. Set here for the
@@ -225,6 +227,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	if err != nil {
 		return err
 	}
+	DeadLetterWriteback.Hold = newStoreHold("dead-letter-writeback")
 	if err := DeadLetterWriteback.Initialize(context.Background()); err != nil {
 		return err
 	}
@@ -239,7 +242,14 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	}
 	RosterConsumer = processor.NewRosterConsumer(Microservice, rosterReader, core.NewNoOpLifecycleCallbacks(),
 		Api, CommandDeliveryProcessor, deadLetters)
+	RosterConsumer.Hold = newStoreHold("device-roster")
 	return RosterConsumer.Initialize(context.Background())
+}
+
+// newStoreHold builds the Holder that keeps a consumer's messages unacked, outside their
+// delivery budget, while this service's relational store cannot take writes (core/storehold).
+func newStoreHold(consumer string) *storehold.Holder {
+	return storehold.New(Microservice, consumer, storehold.RDBProbe(RdbManager))
 }
 
 // disabledSource builds the correction source for the disabled-device record, or nil when

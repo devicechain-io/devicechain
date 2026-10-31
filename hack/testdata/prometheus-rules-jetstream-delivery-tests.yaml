@@ -1573,9 +1573,52 @@ tests:
               devicechain_instance: devicechain
             exp_annotations:
               summary: "The event store is refusing writes; events are being held, not stored"
-              description: "event-management is holding 128 events its database refused. They are not lost: they stay unacknowledged in the message broker and are stored once the database accepts writes again. Nothing new is being stored meanwhile, and the longer this lasts the larger the backlog behind it; once the backlog fills 90% of the resolved-events stream the platform refuses new events (JetStreamIngestBackpressureEngaged), and MQTT events the broker has already acknowledged wait in the capture stream, which discards its oldest once full. The usual cause is a full volume: check DatabaseVolumeCritical and the event-store claim (kubectl get pvc, and the database pod's log for 'No space left on device'), and expand it (spec.storage.size on the dc-tsdb Cluster; online where the storage class allows it) or lower the event retention. Otherwise look for a read-only primary or an exhausted connection limit."
+              description: "event-management is holding 128 events its database refused. They are not lost: they stay unacknowledged in the message broker and are stored once the database accepts writes again. Nothing new is being stored meanwhile, and the longer this lasts the larger the backlog behind it; once the backlog fills 90% of the resolved-events stream the platform refuses new events (JetStreamIngestBackpressureEngaged), and MQTT events the broker has already acknowledged wait in the capture stream, which discards its oldest once full. The usual cause is a full volume: check DatabaseVolumeCritical and the event-store claim (kubectl get pvc, and the database pod's log for 'No space left on device'), and expand it (spec.storage.size on the dc-tsdb Cluster; online where the storage class allows it) or lower the event retention. Otherwise look for a read-only primary or an exhausted connection limit. Avoid restarting the service while this fires: a shutdown releases what it is holding and each restart uses one of the five deliveries a message has, so repeated restarts can still exhaust them."
       - eval_time: 20m
         alertname: EventStoreRefusingWrites
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # ConsumerHoldingForDatabase: any other consumer HOLDING messages its database refused.
+  # Zero on a healthy instance; fires after the 2m `for`, per (job, consumer), and clears
+  # when the store recovers. A second consumer held at the same time pages separately.
+  # ------------------------------------------------------------------
+  - name: consumers holding messages for their database page, and recovery clears the alert
+    interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_store_held_messages{namespace="dci-devicechain", pod="dc-device-management-7c9f-aaaaa", job="devicechain/device-management", consumer="inbound-event-resolution"}'
+        values: '0x3 40x10 0x10'
+      - series: 'devicechain_devicemanagement_store_held_messages{namespace="dci-devicechain", pod="dc-device-management-7c9f-aaaaa", job="devicechain/device-management", consumer="raise-alarm"}'
+        values: '0x3 5x10 0x10'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: ConsumerHoldingForDatabase
+        exp_alerts: []
+      # Held since minute 4; the 2m `for` has not elapsed.
+      - eval_time: 5m
+        alertname: ConsumerHoldingForDatabase
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: ConsumerHoldingForDatabase
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+              job: devicechain/device-management
+              consumer: inbound-event-resolution
+            exp_annotations:
+              summary: "A service is holding messages because its database refuses writes"
+              description: "devicechain/device-management is holding 40 message(s) in its inbound-event-resolution consumer that its database refused. They are not lost: they stay unacknowledged in the message broker and are processed once the database accepts writes again. That consumer is not making progress meanwhile, so what it does is delayed: device events resolved, alarm edges applied, commands answered, notifications sent or update reports recorded, depending on the consumer. The usual cause is a full volume: check DatabaseVolumeCritical and the service's database claim (kubectl get pvc, and the database pod's log for 'No space left on device'), and expand it (spec.storage.size on the Cluster; online where the storage class allows it). Otherwise look for a read-only primary or an exhausted connection limit. Avoid restarting the service while this fires: a shutdown releases what it is holding and each restart uses one of the five deliveries a message has, so repeated restarts can still exhaust them."
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+              job: devicechain/device-management
+              consumer: raise-alarm
+            exp_annotations:
+              summary: "A service is holding messages because its database refuses writes"
+              description: "devicechain/device-management is holding 5 message(s) in its raise-alarm consumer that its database refused. They are not lost: they stay unacknowledged in the message broker and are processed once the database accepts writes again. That consumer is not making progress meanwhile, so what it does is delayed: device events resolved, alarm edges applied, commands answered, notifications sent or update reports recorded, depending on the consumer. The usual cause is a full volume: check DatabaseVolumeCritical and the service's database claim (kubectl get pvc, and the database pod's log for 'No space left on device'), and expand it (spec.storage.size on the Cluster; online where the storage class allows it). Otherwise look for a read-only primary or an exhausted connection limit. Avoid restarting the service while this fires: a shutdown releases what it is holding and each restart uses one of the five deliveries a message has, so repeated restarts can still exhaust them."
+      - eval_time: 20m
+        alertname: ConsumerHoldingForDatabase
         exp_alerts: []
 
   # ------------------------------------------------------------------
