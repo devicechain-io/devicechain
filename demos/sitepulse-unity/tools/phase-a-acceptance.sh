@@ -392,8 +392,12 @@ restore_pending() {
 make_wrong_ca() {
 	local out="$1" tmp
 	tmp="$(mktemp -d)"
-	openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -keyout "$tmp/key.pem" -out "$out" \
-		-subj "/CN=sitepulse-acceptance-wrong-ca" -days 1 >/dev/null 2>&1
+	# MSYS2_ARG_CONV_EXCL: Git Bash would otherwise rewrite the "/CN=..." subject into a Windows path and openssl would refuse it
+	# With the conversion off an absolute path would reach a native openssl unconverted too, so it works in the temp directory
+	# on relative names and the certificate is moved into place after.
+	( cd "$tmp" && MSYS2_ARG_CONV_EXCL='*' openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -keyout key.pem -out cert.pem \
+		-subj "/CN=sitepulse-acceptance-wrong-ca" -days 1 >/dev/null 2>&1 ) || die "openssl could not generate the wrong CA"
+	mv "$tmp/cert.pem" "$out"
 	rm -rf "$tmp"   # the key is not kept: nothing is ever signed with it
 	openssl x509 -in "$out" -noout >/dev/null 2>&1 || die "could not generate the wrong CA"
 }
