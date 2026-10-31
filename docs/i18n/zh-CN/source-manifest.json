@@ -254,9 +254,13 @@
       "sourceSha256": "8c92379caa16ed42b9ad7ec2c7457310321a4cfca5b168ed1a470eb5e8dbe050",
       "translationSha256": "77b96b5fc20dc75565ebb74d446299c5a0adde854570774828507aa4b59158aa"
     },
+    "quickstart/feature-tour.md": {
+      "sourceSha256": "a7862064ae2b3d948a073ff08c25dec88cc369fdc7c47ab07607d02e6dd06fc1",
+      "translationSha256": "f244c19f027f30c0957fe19913abbb76765cb7d14e5a9262d08ab3fa6343649b"
+    },
     "quickstart/first-device.md": {
-      "sourceSha256": "6c48f8a85e02b2a90b09d496396844dc8d323488b1343196ae1705c29edb1469",
-      "translationSha256": "12d2f4bd8a3a30ee0a444d1f9d66f096f2dec77d9aff675dceab3fdf6804de56"
+      "sourceSha256": "d38d4c8c580b9390a3862f564671389c73eb81b949db1fd8d73bd69433f7241f",
+      "translationSha256": "e5256712ec6c7ea0aa8ac96169f57f6f6c55b21260300e9d9dc79fafd5b34d7f"
     },
     "reference/dcctl.md": {
       "sourceSha256": "a196830ec839874b60d289a58dc913a2a002b7fbb422806033e457d62a421a8a",
@@ -359,8 +363,8 @@
       "translationSha256": "18fee81a14d118798cc7ee237a8884fb4e5600ac0c626bb9b9a0f6be67b77193"
     },
     "user-guide/signing-in.md": {
-      "sourceSha256": "dc25b72b3f4ad5901a99f9984bf88472e31f4f98cf7c1dbc39a0a7db64090328",
-      "translationSha256": "b7b16aa6f0ce11293609da4a07923c8ce305eb0cd049b072accf331887fee2e1"
+      "sourceSha256": "3e291970c903b61bd4d6ce09dadb81f0476dc562a9cc999784ffbcc3c87ceb50",
+      "translationSha256": "cb59084910f04fba71a8436edb90fb2d6a59e51ee59cc1a401eb626fe684988f"
     },
     "user-guide/tenant-settings.md": {
       "sourceSha256": "6d33c73966574661dbe82bdc6ae21655ad5c7494d2e57139e049ba38585468d7",
