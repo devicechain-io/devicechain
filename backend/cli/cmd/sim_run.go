@@ -92,7 +92,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 	simulator, _ := cmd.Flags().GetString("simulator")
 	if simulator == "" {
 		if simulator, err = exec.LookPath("dc-simulator"); err != nil {
-			return fmt.Errorf("dc-simulator is not on PATH; build it (backend/sims/dc-simulator) or pass --simulator: %w", err)
+			return fmt.Errorf("dc-simulator is not on PATH; download it from the release page (dc-simulator_<version>_<os>_<arch>) and put it on PATH, or pass --simulator: %w", err)
 		}
 	}
 	o := simRunOptions{handshake: handshake, controlAddr: rec.ControlAddr}

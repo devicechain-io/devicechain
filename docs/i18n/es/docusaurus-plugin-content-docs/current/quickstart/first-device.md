@@ -301,13 +301,22 @@ un `429` y cualquiera de los dos tipos de `503`, como se describe arriba.
 ## Adónde ir después {#where-to-go-next}
 
 - **Ejecuta una flota simulada.** Un dispositivo no es una flota. El `dcctl sim create` del paso 2
-  también preparó un escenario simulado. Compila y ejecuta el simulador para que aprovisione un
-  inquilino poblado y emita de forma continua:
+  también preparó un escenario simulado. Descarga el simulador y ejecútalo para que aprovisione un
+  inquilino poblado y emita de forma continua. No necesitas el toolchain de Go: `dc-simulator` va
+  adjunto a cada [release de GitHub](https://github.com/devicechain-io/devicechain/releases) como
+  `dc-simulator_<versión>_<so>_<arquitectura>` (un `.tar.gz`, o un `.zip` en Windows), para Linux,
+  macOS y Windows en `amd64` y `arm64`, con sus resúmenes SHA-256 en `dc-simulator_checksums.txt`
+  en la misma release. Descomprímelo y luego ponlo en tu `PATH` o indícaselo a `dcctl`:
 
   ```bash
-  cd backend/sims/dc-simulator && make build
-  ./build/dc-simulator --handshake ~/.devicechain/sims/demo.json
+  tar -xzf dc-simulator_<versión>_<so>_<arquitectura>.tar.gz
+  dcctl sim run demo --simulator ./dc-simulator
   ```
+
+  `dcctl sim run` encuentra por sí mismo el archivo de handshake y el puerto de control de la
+  simulación, y busca `dc-simulator` en tu `PATH` cuando omites `--simulator`. Quien contribuya y
+  compile desde un checkout del código puede ejecutar `cd backend/sims/dc-simulator && make build`
+  y usar `./build/dc-simulator`.
 
   Después contrólalo con `dcctl sim status demo`, `dcctl sim stop demo` y `dcctl sim start demo`.
   El simulador usa el mismo endpoint de ingesta, así que también necesita la redirección de puerto

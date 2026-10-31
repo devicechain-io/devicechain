@@ -57,6 +57,7 @@ on:
 #   nuget             — nuget.org trusted publishing (OIDC)  -> id-token: write
 #   cli               — goreleaser creates the Release       -> contents: write
 #   edge-agent        — gh release upload                    -> contents: write
+#   simulator         — gh release upload                    -> contents: write
 #   provenance        — attest + gh release upload           -> contents: write,
 #                                                               id-token: write,
 #                                                               attestations: write
@@ -1307,6 +1308,75 @@ jobs:
             --clobber
 
   # ---------------------------------------------------------------------------
+  # Cross-compile the reference simulator (dc-simulator) and attach its archives to the
+  # GitHub Release the `cli` job just created, so `dcctl sim run` works with no Go toolchain.
+  #
+  # Same shape as `edge-agent`, for the same reason: dcctl's goreleaser owns the single Release
+  # and this module's .goreleaser.yaml sets `release.disable: true`, so `goreleaser release`
+  # here builds the archives + a UNIQUELY named checksum file (dc-simulator_checksums.txt)
+  # without any GitHub write; the upload step attaches them. The archives are then attested by
+  # the `provenance` job along with the dcctl and edge-agent archives.
+  simulator:
+    needs: [guard, images, loadtest-gate, cli]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # gh release upload
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # goreleaser needs full history (tags + commits) for version/commit stamping.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.work
+          cache: true
+          cache-dependency-path: "**/go.sum"
+
+      - name: go mod download
+        run: hack/go-mod-download.sh backend/sims/dc-simulator
+
+      - name: goreleaser build (archives + checksums, no publish)
+        uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7
+        with:
+          version: "~> v2"
+          args: release --clean
+          workdir: backend/sims/dc-simulator
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Same tag-disambiguation reason as the cli job above.
+          GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
+
+      # A `-ldflags -X` to a renamed/nonexistent var silently no-ops, shipping a binary that
+      # reports "dev". Run the freshly built binary and confirm it reports the release tag.
+      - name: Verify the simulator binary is version-stamped
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          binary="$(find backend/sims/dc-simulator/dist -type f -name dc-simulator -path '*linux_amd64*' | head -1)"
+          if [ -z "$binary" ]; then
+            echo "::error::Could not find the built linux/amd64 dc-simulator to verify."
+            exit 1
+          fi
+          out="$("$binary" -version)"
+          echo "reported: $out"
+          # goreleaser strips the leading 'v' for .Version, so match the tag with or without it.
+          if ! echo "$out" | grep -qE "dc-simulator (v?${TAG#v})[ (]"; then
+            echo "::error::dc-simulator '-version' reported '$out', which does not carry tag '${TAG}' — ldflags stamping is broken (renamed main.version var?)."
+            exit 1
+          fi
+
+      - name: Attach simulator artifacts to the Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        # --clobber makes a re-run idempotent (it only ever overwrites this module's own
+        # uniquely-named assets, never dcctl's or the edge agent's).
+        run: |
+          gh release upload "$TAG"             backend/sims/dc-simulator/dist/dc-simulator_*.tar.gz             backend/sims/dc-simulator/dist/dc-simulator_*.zip             backend/sims/dc-simulator/dist/dc-simulator_checksums.txt             --clobber
+
+  # ---------------------------------------------------------------------------
   # Sign build provenance for every binary archive on the Release.
   #
   # A SEPARATE job, not a step in `cli`/`edge-agent`, because signing needs
@@ -1321,7 +1391,7 @@ jobs:
   # its Sigstore bundle is attached to the Release, so it can also be verified
   # offline with `--bundle`.
   provenance:
-    needs: [guard, cli, edge-agent]
+    needs: [guard, cli, edge-agent, simulator]
     runs-on: ubuntu-latest
     permissions:
       contents: write     # gh release download + upload
@@ -1336,14 +1406,14 @@ jobs:
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/assets"
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "$RUNNER_TEMP/assets" \
-            --pattern 'dcctl_*.tar.gz' --pattern 'dcctl_*.zip' --pattern 'dc-edge-agent_*.tar.gz'
+            --pattern 'dcctl_*.tar.gz' --pattern 'dcctl_*.zip' --pattern 'dc-edge-agent_*.tar.gz' \n            --pattern 'dc-simulator_*.tar.gz' --pattern 'dc-simulator_*.zip'
           ls -l "$RUNNER_TEMP/assets"
-          # dcctl ships 6 archives and the edge agent 4. Fail on a short count rather
+          # dcctl ships 6 archives, the edge agent 4 and the simulator 6. Fail on a short count rather
           # than sign whatever happened to be there: a silently partial attestation
           # reads exactly like a complete one.
           n="$(find "$RUNNER_TEMP/assets" -type f | wc -l)"
-          if [ "$n" -ne 10 ]; then
-            echo "::error::expected 10 release archives to attest, found $n"
+          if [ "$n" -ne 16 ]; then
+            echo "::error::expected 16 release archives to attest, found $n"
             exit 1
           fi
 
@@ -1386,7 +1456,7 @@ jobs:
   # exists because a cross-repo write is not something GITHUB_TOKEN can do by design.
   # 🔴 It EXPIRES. When this job fails, check the token's expiry before anything else.
   publish-manifest:
-    needs: [guard, cli, edge-agent, provenance]
+    needs: [guard, cli, edge-agent, simulator, provenance]
     runs-on: ubuntu-latest
     permissions:
       contents: read  # gh release view; the website push uses its own PAT
