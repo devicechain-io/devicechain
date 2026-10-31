@@ -64,7 +64,8 @@ const (
 // test so the behaviour is exercised through the SAME registration the command uses.
 func registerMqttFlags(fs *pflag.FlagSet) {
 	fs.String(flagMqttBroker, "",
-		"NATS MQTT gateway a scenario's command far end dials (default ssl://<server>:1883)")
+		"NATS MQTT gateway a scenario's command far end dials (default: the local cluster's published MQTT port on a loopback --server, "+
+			"else ssl://<server>:1883; set it explicitly for any other topology)")
 	fs.Bool(flagMqttInsecure, false,
 		"skip verification of the MQTT gateway's certificate (defaults ON without --tls, since a "+
 			"local bring-up's gateway cert is self-signed; pass --mqtt-insecure=false to force verification)")

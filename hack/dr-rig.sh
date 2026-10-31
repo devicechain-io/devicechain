@@ -159,6 +159,14 @@
 
 set -euo pipefail
 
+# Git Bash (MSYS) rewrites any argument that looks like a POSIX path before a native
+# program sees it, so `docker run --mount ...,dst=/data` and `docker exec ... /data/x`
+# reach docker as `C:/Program Files/Git/data/...` ("mount path must be absolute", rc 125).
+# Exclude exactly the arguments this rig passes. A no-op on every other platform.
+case "$(uname -s)" in
+  MINGW* | MSYS* | CYGWIN*) export MSYS2_ARG_CONV_EXCL="type=volume;/data" ;;
+esac
+
 say() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 note() { printf '\033[0;37m    %s\033[0m\n' "$*"; }
 fail() { printf '\n\033[1;31mFAIL: %s\033[0m\n' "$*" >&2; exit 1; }
