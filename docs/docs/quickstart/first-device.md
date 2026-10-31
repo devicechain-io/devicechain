@@ -307,13 +307,22 @@ and either kind of `503`, as described above.
 ## Where to go next {#where-to-go-next}
 
 - **Run a simulated fleet.** One device is not a fleet. `dcctl sim create` from step 2 also set up
-  a simulated scenario. Build and run the simulator to have it provision a populated tenant and
-  emit continuously:
+  a simulated scenario. Download the simulator and run it to have it provision a populated tenant
+  and emit continuously. No Go toolchain is needed: `dc-simulator` is attached to every
+  [GitHub release](https://github.com/devicechain-io/devicechain/releases) as
+  `dc-simulator_<version>_<os>_<arch>` (a `.tar.gz`, or a `.zip` on Windows), for Linux, macOS and
+  Windows on `amd64` and `arm64`, with its SHA-256 digests in `dc-simulator_checksums.txt` on the
+  same release. Unpack it, then either put it on your `PATH` or point `dcctl` at it:
 
   ```bash
-  cd backend/sims/dc-simulator && make build
-  ./build/dc-simulator --handshake ~/.devicechain/sims/demo.json
+  tar -xzf dc-simulator_<version>_<os>_<arch>.tar.gz
+  dcctl sim run demo --simulator ./dc-simulator
   ```
+
+  `dcctl sim run` finds the sim's handshake file and control port itself, and looks for
+  `dc-simulator` on your `PATH` when you leave out `--simulator`. Contributors building from a
+  source checkout can run `cd backend/sims/dc-simulator && make build` and use
+  `./build/dc-simulator` instead.
 
   Then control it with `dcctl sim status demo`, `dcctl sim stop demo` and `dcctl sim start demo`.
   The simulator reaches the same ingest endpoint, so it needs the port-forward from step 5 too.

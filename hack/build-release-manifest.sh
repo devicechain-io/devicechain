@@ -7,8 +7,9 @@
 #   hack/build-release-manifest.sh <tag> [out.json]
 #   hack/build-release-manifest.sh --self-test
 #
-# It lists two products' downloads, each in its own table of identical rows: `dcctl` (the
-# installer) and `edgeAgent` (the dc-edge-agent static binaries for an edge host).
+# It lists three products' downloads, each in its own table of identical rows: `dcctl` (the
+# installer), `edgeAgent` (the dc-edge-agent static binaries for an edge host) and `simulator`
+# (the dc-simulator reference runner that `dcctl sim run` drives).
 #
 # The manifest is a PUBLIC CONTRACT the moment anything curls it — an install script, a
 # docs version banner, the website's download menu. That is why it carries `schemaVersion`
@@ -75,6 +76,11 @@ STUB
       echo "$(sha_of "dc-edge-agent_${ver}_$f.tar.gz")  dc-edge-agent_${ver}_$f.tar.gz" \
         >>"$tmp/assets/dc-edge-agent_checksums.txt"
     done
+    for f in linux_amd64.tar.gz linux_arm64.tar.gz darwin_amd64.tar.gz darwin_arm64.tar.gz \
+             windows_amd64.zip windows_arm64.zip; do
+      echo "$(sha_of "dc-simulator_${ver}_$f")  dc-simulator_${ver}_$f" \
+        >>"$tmp/assets/dc-simulator_checksums.txt"
+    done
   }
   run() { # run -> rc; manifest in $tmp/out.json, stderr in $tmp/err
     rm -f "$tmp/out.json"
@@ -107,7 +113,13 @@ STUB
     [ "$(jq -r .url <<<"$row")" = "https://github.com/example/repo/releases/download/$tag/$file" ] \
       || fail "edgeAgent $os/$arch url: $(jq -r .url <<<"$row")"
   done
-  echo "self-test ok: a complete release lists 6 dcctl and 4 edge-agent archives, each with its own digest" >&2
+  [ "$(q '.simulator | length')" = 6 ] || fail "simulator has $(q '.simulator | length') rows, not 6"
+  want="$(sha_of "dc-simulator_${ver}_windows_arm64.zip")"
+  [ "$(q '.simulator[] | select(.os=="windows" and .arch=="arm64") | .sha256')" = "$want" ] \
+    || fail "simulator windows/arm64 carries the wrong digest"
+  [ "$(q '[.simulator[].filename | select(startswith("dc-simulator_") | not)] | length')" = 0 ] \
+    || fail "a non-simulator file reached the simulator table"
+  echo "self-test ok: a complete release lists 6 dcctl, 4 edge-agent and 6 simulator archives, each with its own digest" >&2
 
   # 2. The edge agent's checksum file is absent: the edge-agent job did not finish. A
   # manifest offering dcctl alone is the defect this table exists to end, so it is refused.
@@ -140,6 +152,18 @@ STUB
   run && fail "a release missing the windows/amd64 dcctl archive was published"
   grep -q "dcctl_${ver}_windows_amd64.zip" "$tmp/err" || fail "the refusal does not name the missing dcctl archive"
   echo "self-test ok: a missing dcctl archive is still refused by name" >&2
+
+  # 6. The simulator's checksum file is absent, or one of its archives is: refused by name,
+  # like the edge agent's, rather than published as a release with no simulator to run a scenario.
+  plant; rm "$tmp/assets/dc-simulator_checksums.txt"
+  run && fail "a release without dc-simulator_checksums.txt was published"
+  grep -q "could not download dc-simulator_checksums.txt" "$tmp/err" \
+    || fail "the refusal does not say which checksum file is missing"
+  [ -f "$tmp/out.json" ] && fail "a refused run still left a manifest behind"
+  plant; sed -i '/windows_arm64/d' "$tmp/assets/dc-simulator_checksums.txt"
+  run && fail "a release missing the windows/arm64 simulator archive was published"
+  grep -q "dc-simulator_${ver}_windows_arm64.zip" "$tmp/err" || fail "the refusal does not name the missing simulator archive"
+  echo "self-test ok: a missing simulator checksum file or archive is refused by name" >&2
 
   echo "self-test passed" >&2
   exit 0
@@ -192,6 +216,7 @@ sums() { # <checksum-asset> <filename-prefix> <out.json>  ->  {filename: sha}
 }
 sums checksums.txt dcctl_ "$WORK/dcctl.json"
 sums dc-edge-agent_checksums.txt dc-edge-agent_ "$WORK/edge.json"
+sums dc-simulator_checksums.txt dc-simulator_ "$WORK/sim.json"
 
 VERSION_NO_V="${TAG#v}"
 BASE="https://github.com/$REPO/releases/download/$TAG"
@@ -203,6 +228,7 @@ BASE="https://github.com/$REPO/releases/download/$TAG"
 #              except a zip for windows.
 #   edgeAgent  (backend/edge/dc-edge-agent/.goreleaser.yaml): linux/darwin x amd64/arm64,
 #              tar.gz. No windows build: the agent reads free disk with syscall.Statfs.
+#   simulator  (backend/sims/dc-simulator/.goreleaser.yaml): the same matrix as dcctl.
 #
 # `edgeAgent` is a NEW top-level key with the same row shape as `dcctl`, so this stays
 # schemaVersion 1: every existing field keeps its name, type and meaning, and a reader that
@@ -218,6 +244,7 @@ jq -n \
   --arg released "${RELEASED_AT:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}" \
   --slurpfile dcctl "$WORK/dcctl.json" \
   --slurpfile edge "$WORK/edge.json" \
+  --slurpfile sim "$WORK/sim.json" \
   --slurpfile hl "$HIGHLIGHTS" '
   def table($product; $sums; $platforms):
     $platforms
@@ -241,6 +268,13 @@ jq -n \
         {os:"linux",  arch:"arm64", ext:"tar.gz"},
         {os:"darwin", arch:"amd64", ext:"tar.gz"},
         {os:"darwin", arch:"arm64", ext:"tar.gz"} ]) as $edgeRows
+  | table("dc-simulator"; $sim[0];
+      [ {os:"linux",   arch:"amd64", ext:"tar.gz"},
+        {os:"linux",   arch:"arm64", ext:"tar.gz"},
+        {os:"darwin",  arch:"amd64", ext:"tar.gz"},
+        {os:"darwin",  arch:"arm64", ext:"tar.gz"},
+        {os:"windows", arch:"amd64", ext:"zip"},
+        {os:"windows", arch:"arm64", ext:"zip"} ]) as $simRows
   | {
       schemaVersion: 1,
       version: $tag,
@@ -251,9 +285,10 @@ jq -n \
       docs: "https://docs.devicechain.io",
       highlights: ($h.highlights // []),
       dcctl: $dcctlRows,
-      edgeAgent: $edgeRows
+      edgeAgent: $edgeRows,
+      simulator: $simRows
     }
 ' > "$WORK/manifest.json"
 mv "$WORK/manifest.json" "$OUT"
 
-echo "wrote $OUT ($(jq -r '.dcctl | length' "$OUT") dcctl artifacts, $(jq -r '.edgeAgent | length' "$OUT") edge-agent artifacts, $(jq -r '.highlights | length' "$OUT") highlights)"
+echo "wrote $OUT ($(jq -r '.dcctl | length' "$OUT") dcctl artifacts, $(jq -r '.edgeAgent | length' "$OUT") edge-agent artifacts, $(jq -r '.simulator | length' "$OUT") simulator artifacts, $(jq -r '.highlights | length' "$OUT") highlights)"
