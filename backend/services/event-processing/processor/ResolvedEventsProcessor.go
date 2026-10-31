@@ -1013,6 +1013,11 @@ func (rp *ResolvedEventsProcessor) buildTerm(ctx context.Context) error {
 	if err := rp.reconcileRegistry(ctx); err != nil {
 		return err
 	}
+	// Forget keyed state of device incarnations the roster says have ended, BEFORE the dead-man
+	// reconcile below (which re-arms a live device whose dead-man entry this may have dropped).
+	if err := rp.reconcileDetectionState(ctx); err != nil {
+		return err
+	}
 	// Arm the dead-man over the FINAL (post-replay) engine and reconcile it from the durable
 	// read-models BEFORE any live consumption (ADR-051 slice 4c-2b-2b): the restored snapshot is
 	// authoritative for FIRED state, the projections for MEMBERSHIP. The armer was already built for
@@ -2298,16 +2303,106 @@ func (rp *ResolvedEventsProcessor) applyRuleUpdate(upd ruleUpdate) {
 }
 
 // applySeriesDrop forgets a deleted device's keyed state in every rule of its tenant, on the
-// single-writer loop. The state is serialized, so a drop that removed anything dirties the loop and
-// the next checkpoint captures it; otherwise a restart would replay the dropped latch back to life.
+// single-writer loop. It is the fast path; reconcileDetectionState is the durable one (it runs at the
+// start of every term and catches whatever this signal lost to a leadership change or a crash).
+//
+// What counts as stale is decided from the roster row, not from the signal: a tombstone means the
+// device is gone, and a LIVE row means it was recreated, so only state older than the row's current
+// incarnation goes. That makes a delete fact redelivered after a recreate harmless (the roster's
+// monotonic guard rejected it, so the row is still the newer incarnation and the new device's own
+// latch survives). With no roster wired (scaffold path) there is nothing to consult and the signal
+// is trusted. A failed read leaves the state for the next term's reconcile.
+//
+// The state is serialized, so a drop that removed anything dirties the loop and the next checkpoint
+// captures it; otherwise a restart would replay the dropped latch back to life.
 func (rp *ResolvedEventsProcessor) applySeriesDrop(sd seriesDrop) {
-	n := rp.engine.DropSeries(sd.deviceToken, func(ruleID string) bool {
-		t, ok := runtime.RuleTenant(ruleID)
-		return ok && t == sd.tenant
-	})
-	if n > 0 {
+	stale := func(string, time.Time, bool) bool { return true }
+	if rp.RosterStore != nil {
+		rctx, cancel := context.WithTimeout(rp.pctx(), loopReadTimeout)
+		row, _, err := rp.RosterStore.Load(rctx, sd.tenant, sd.deviceToken)
+		cancel()
+		if err != nil {
+			log.Warn().Err(err).Str("tenant", sd.tenant).Str("device", sd.deviceToken).
+				Msg("Detection-state drop for a deleted device could not read the roster; the next term's reconcile will repeat it.")
+			return
+		}
+		// Load reports found=false as a zero row; an absent row selects nothing (see staleForRow).
+		stale = staleForRow(sd.tenant, row, !row.LastEventAt.IsZero())
+	}
+	if rp.engine.DropSeries(sd.deviceToken, stale) > 0 {
 		rp.dirty = true
 	}
+}
+
+// staleForRow builds the DropSeries predicate for one device's roster row: everything of the tenant's
+// rules if the device is tombstoned, and only a raised latch stamped before the row's last lifecycle
+// event (its current incarnation began) if it is live. found=false (no row) selects nothing: a series
+// the roster has never heard of is not evidence of a deletion.
+func staleForRow(tenant string, row model.DeviceRoster, found bool) func(string, time.Time, bool) bool {
+	return func(ruleID string, raisedAt time.Time, raised bool) bool {
+		if !found {
+			return false
+		}
+		if t, ok := runtime.RuleTenant(ruleID); !ok || t != tenant {
+			return false
+		}
+		if row.Deleted {
+			return true
+		}
+		return raised && raisedAt.Before(row.LastEventAt)
+	}
+}
+
+// reconcileDetectionState drops keyed engine state that belongs to a device incarnation which has
+// ended, derived entirely from durable state, so it does not depend on the one-shot entity-deleted
+// signal reaching the loop and a checkpoint. It runs at the start of every leadership term, after
+// restore + catch-up + replay, and closes what the signal cannot: a drop queued when the term ended,
+// a crash between the fact's ack and the next checkpoint (the restored snapshot still holds the
+// latch), a device deleted while the service was down, and a device deleted AND recreated while
+// down. State is stale when its device is tombstoned, or when it is a raised latch older than the
+// live row's last lifecycle event (the device's current incarnation began after it).
+//
+// Only the raised latch carries a time to compare, so for a live (recreated) device that is the
+// state judged; a recreated device's other keyed state (an open window, a Duration run) is judged
+// by the tombstone alone. It runs before reconcileDeadmanArming, which re-arms a live device whose
+// dead-man entry this may have dropped. Startup goroutine, single writer.
+func (rp *ResolvedEventsProcessor) reconcileDetectionState(ctx context.Context) error {
+	if rp.RosterStore == nil {
+		return nil
+	}
+	rows, err := rp.RosterStore.LoadAllLifecycle(ctx)
+	if err != nil {
+		return fmt.Errorf("load roster lifecycle for detection-state reconcile: %w", err)
+	}
+	type devKey struct{ tenant, token string }
+	byDev := make(map[devKey]model.DeviceRoster, len(rows))
+	for _, r := range rows {
+		byDev[devKey{r.Tenant, r.DeviceToken}] = r
+	}
+	visited := make(map[devKey]struct{})
+	dropped := 0
+	for _, k := range rp.engine.SeriesKeys() {
+		tenant, ok := runtime.RuleTenant(k.Rule)
+		if !ok {
+			continue
+		}
+		dk := devKey{tenant, k.Series}
+		if _, done := visited[dk]; done {
+			continue
+		}
+		visited[dk] = struct{}{}
+		row, found := byDev[dk]
+		if !found {
+			continue
+		}
+		dropped += rp.engine.DropSeries(k.Series, staleForRow(tenant, row, true))
+	}
+	if dropped > 0 {
+		// Serialized state changed and a restart would restore it: force the next checkpoint.
+		rp.dirty = true
+		log.Info().Int("dropped", dropped).Msg("Dropped DETECT keyed state belonging to deleted or recreated devices.")
+	}
+	return nil
 }
 
 // applyArmRecheck re-reads a device's authoritative roster membership and arms or disarms its

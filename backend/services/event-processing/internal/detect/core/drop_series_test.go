@@ -3,7 +3,10 @@
 
 package core
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 // A deleted device's token is reusable, and the series IS the token. Without DropSeries the old
 // device's raised latch absorbs the recreated device's first matching reading: no edge, no alarm.
@@ -27,7 +30,7 @@ func TestDropSeriesLetsARecreatedSeriesRaiseAgain(t *testing.T) {
 			}
 			feed(3, 2, "other")
 
-			if n := d.DropSeries("cc-0002", func(string) bool { return true }); n == 0 {
+			if n := d.DropSeries("cc-0002", func(string, time.Time, bool) bool { return true }); n == 0 {
 				t.Fatal("dropping a raised series must report state removed")
 			}
 			if got := d.Drain(); len(got) != 0 {
@@ -41,7 +44,7 @@ func TestDropSeriesLetsARecreatedSeriesRaiseAgain(t *testing.T) {
 				t.Fatalf("a drop for one series must not touch another: %+v", got)
 			}
 			// A predicate that selects no rule drops nothing.
-			if n := d.DropSeries("cc-0002", func(string) bool { return false }); n != 0 {
+			if n := d.DropSeries("cc-0002", func(string, time.Time, bool) bool { return false }); n != 0 {
 				t.Fatalf("unselected rules must be left alone, dropped %d", n)
 			}
 		})

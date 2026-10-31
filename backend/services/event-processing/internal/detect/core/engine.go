@@ -521,27 +521,99 @@ func (e *Engine) Descope(ruleID, series string, at time.Time) bool {
 	return dropped || len(e.out) > before
 }
 
-// DropSeries forgets one series' keyed state for every rule the predicate selects, WITHOUT emitting
-// a Resolved: the raised latch, open runs, windows, cursors and timers all go. It is the teardown
-// for a series whose identity is DELETED (a device removed from the platform). The series name is
-// the device token and tokens are reusable, so a recreated device is a NEW entity that arrives under
-// the old key; left in place, the old device's "already raised" latch makes the new one's first
-// matching reading a non-edge and the alarm is never raised. No Resolved is owed: deleting the device
-// already cascaded its alarm objects, so downstream holds nothing to resolve. Returns the number of
-// entries dropped. Runs on the single-writer loop; the caller marks the checkpoint dirty when > 0.
-func (e *Engine) DropSeries(series string, match func(ruleID string) bool) int {
+// DropSeries forgets one series' keyed state for every rule whose stale predicate selects it,
+// WITHOUT emitting a Resolved: the raised latch, open runs, windows, cursors and timers all go. It
+// is the teardown for a series whose device identity ended (the device was deleted, or deleted and
+// recreated). The series name is the device token and tokens are reusable, so a recreated device is
+// a NEW entity arriving under the old key; left in place, the old device's "already raised" latch
+// makes the new one's first matching reading a non-edge and the alarm is never raised. No Resolved is
+// owed: deleting the device already cascaded its alarm objects, so downstream holds nothing to
+// resolve.
+//
+// stale is asked once per rule with that rule's id and the series' raised-latch time (raised=false
+// when it holds none), so the caller can tell state that PREDATES the device's current incarnation
+// from state the current one wrote. Returns the number of entries dropped. Runs on the single-writer
+// loop; the caller marks the checkpoint dirty when > 0.
+func (e *Engine) DropSeries(series string, stale func(ruleID string, raisedAt time.Time, raised bool) bool) int {
 	n := 0
-	for id, r := range e.rules {
-		if !match(id) {
-			continue
-		}
-		key := SeriesKey{Rule: id, Series: series}
-		n += dropOneKey(e.raised, key)
-		if e.dropSeriesKey(key, r.Kind) {
-			n++
-		}
+	for id := range e.rules {
+		n += e.dropSeriesOfRule(id, series, stale)
 	}
 	return n
+}
+
+// dropSeriesOfRule is DropSeries for one rule, so the sharded detector can reach a key's owner
+// without walking every rule in every shard.
+func (e *Engine) dropSeriesOfRule(id, series string, stale func(string, time.Time, bool) bool) int {
+	r, ok := e.rules[id]
+	if !ok {
+		return 0
+	}
+	key := SeriesKey{Rule: id, Series: series}
+	raisedAt, raised := e.raised[key]
+	if !stale(id, raisedAt, raised) {
+		return 0
+	}
+	n := dropOneKey(e.raised, key)
+	if e.dropSeriesKey(key, r.Kind) {
+		n++
+	}
+	return n
+}
+
+// SeriesKeys returns every distinct (rule, series) the engine holds keyed state for, across all of
+// its state maps and the timer wheel. It is the enumeration the restore-time reconcile walks to find
+// state belonging to a device that has since been deleted or recreated. Order is unspecified.
+func (e *Engine) SeriesKeys() []SeriesKey {
+	seen := make(map[SeriesKey]struct{})
+	add := func(k SeriesKey) { seen[k] = struct{}{} }
+	for k := range e.runs {
+		add(k)
+	}
+	for k := range e.sliding {
+		add(k)
+	}
+	for k := range e.lastVal {
+		add(k)
+	}
+	for k := range e.counts {
+		add(k)
+	}
+	for k := range e.session {
+		add(k)
+	}
+	for k := range e.slides {
+		add(k)
+	}
+	for k := range e.corr {
+		add(k)
+	}
+	for k := range e.expected {
+		add(k)
+	}
+	for k := range e.newest {
+		add(k)
+	}
+	for k := range e.raised {
+		add(k)
+	}
+	for k := range e.presenceState {
+		add(k)
+	}
+	for k := range e.pending {
+		add(k)
+	}
+	for k := range e.wheel.live {
+		add(k)
+	}
+	for pk := range e.panes {
+		add(SeriesKey{Rule: pk.Rule, Series: pk.Series})
+	}
+	out := make([]SeriesKey, 0, len(seen))
+	for k := range seen {
+		out = append(out, k)
+	}
+	return out
 }
 
 // dropSeriesKey garbage-collects one exact SeriesKey across the per-series structures, reporting

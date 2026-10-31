@@ -17,7 +17,8 @@ type Detector interface {
 	RemoveRule(id string)
 	RemoveMatching(match func(ruleID string) bool) int
 	Descope(ruleID, series string, at time.Time) bool
-	DropSeries(series string, match func(ruleID string) bool) int
+	DropSeries(series string, stale func(ruleID string, raisedAt time.Time, raised bool) bool) int
+	SeriesKeys() []SeriesKey
 	ProcessEvent(ev Event)
 	ProcessResolved(seq uint64, t time.Time, evs []Event)
 	ProcessReceived(seq uint64, t time.Time, r Receipt, evs []Event)

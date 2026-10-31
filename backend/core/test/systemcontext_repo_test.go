@@ -79,7 +79,7 @@ var sanctionedSystemContexts = map[string][]string{
 	// like the rest of the tree.
 	"backend/services/event-processing/model/detect_rule_store.go":               {"DetectRuleStore.LoadAll"},
 	"backend/services/event-processing/model/device_attribute_store.go":          {"DeviceAttributeStore.LoadAll"},
-	"backend/services/event-processing/model/device_roster_store.go":             {"DeviceRosterStore.LoadAll"},
+	"backend/services/event-processing/model/device_roster_store.go":             {"DeviceRosterStore.LoadAll", "DeviceRosterStore.LoadAllLifecycle"},
 	"backend/services/event-processing/model/profile_active_store.go":            {"ProfileActiveStore.LoadAll"},
 	"backend/services/notification-management/processor/RetentionSweeper.go":     {"RetentionSweeper.runOnce"},
 	"backend/services/notification-management/processor/escalation_scheduler.go": {"EscalationScheduler.runOnce"},
