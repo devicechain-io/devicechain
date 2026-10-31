@@ -21,7 +21,10 @@
 #                           images built from THIS tree under a unique tag; assert the download base
 #                           was derived from the ingress host
 #   hack/ota-rig.sh run     provision, build the device images, start the device, then the
-#                           positive update, N1-N7 and the four-device rollout
+#                           positive update, N1-N7, the four-device rollout and the failure
+#                           matrix M1-M7
+#   hack/ota-rig.sh matrix  the failure matrix alone, on a fresh tenant with four devices on
+#                           1.0.0 (DC_OTA_RIG_CASES="m3 m7" narrows it while a case is worked on)
 #   hack/ota-rig.sh all     up + run
 #   hack/ota-rig.sh down    remove the device container, destroy the instance, delete the cluster
 #                           and dcctl's local state for it
@@ -73,6 +76,10 @@
 #      device's dispatchedAt is no earlier than the previous device's last report, compared as
 #      RFC 3339 instants (a fabricated overlapping timeline must fail it, offline, first). Then
 #      the device-state checker is shown red twice against the new state
+#   8  the FAILURE MATRIX, M1-M7, described above `step8_matrix`: a signature that does not verify,
+#      bytes that do not hash, an offline period mid-download and one before the assignment,
+#      cancellation (in flight and queued), a deadline, and a rollout that pauses at its
+#      failure threshold with one device unable to take the image
 #
 # OFFLINE CONTROLS run first, with no cluster: the rollout-overlap check must reject a fabricated
 # overlapping timeline (including one a naive string compare of timestamps would pass) and accept
@@ -176,6 +183,11 @@ cleanup() {
     helm --kubeconfig "$kubeconfig" --kube-context "$kube_context" -n "$helm_ns" rollback "$helm_release" "$n7_restore_rev" >/dev/null 2>&1 ||
       echo "cleanup: the rollback FAILED; restore it by hand: helm -n $helm_ns rollback $helm_release $n7_restore_rev"
   fi
+  # The failure matrix takes the devices' network down; never leave the container that way.
+  if [[ "${mx_link_down:-0}" == 1 ]]; then
+    MSYS_NO_PATHCONV=1 docker exec "$device_container" sh -c "ip link set eth0 up; ip route replace default via ${mx_gw:-0.0.0.0} dev eth0" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "${mx_watcher:-}" ]]; then kill "$mx_watcher" 2>/dev/null || true; fi
   if [[ -n "$n4_watcher" ]]; then
     kill "$n4_watcher" 2>/dev/null || true
     MSYS_NO_PATHCONV=1 docker exec "$device_container" pkill -f /tmp/killat.sh 2>/dev/null || true
@@ -445,7 +457,7 @@ um_metric() {
 
 assignment_json() {
   updq 'query($t:String!){updateAssignment(token:$t){token current deviceToken artifact{token version}
-    attempt{state targetVersion targetDigest progress{bytes total} failure{stage code detail platform}}}}' \
+    attempt{state targetVersion targetDigest cancelRequested progress{bytes total} failure{stage code detail platform}}}}' \
     "$(jq -n --arg t "$1" '{t:$t}')" | jq -c '.updateAssignment'
 }
 
@@ -809,7 +821,7 @@ step3_artifacts() {
 start_container() {
   dk rm -f "$device_container" >/dev/null 2>&1 || true
   dk run -d --init --name "$device_container" --network kind --add-host "$host:$node_ip" \
-    --label devicechain.io/ota-rig="$cluster" "$device_image" sleep infinity >/dev/null
+    --cap-add NET_ADMIN --label devicechain.io/ota-rig="$cluster" "$device_image" sleep infinity >/dev/null
   dx mkdir -p /opt/ota
   dk cp "$(winpath "$images/ota-boot")" "$device_container:/opt/ota/ota-boot"
   dk cp "$(winpath "$images/ota-device-1.0.0")" "$device_container:/opt/ota/ota-device-1.0.0"
@@ -1316,6 +1328,616 @@ step7_fleet() {
   red "the still_on checker names what moved, and only that"
 }
 
+# ---------------------------------------------------------------------------
+# Step 8: the failure matrix (M1-M7)
+# ---------------------------------------------------------------------------
+#
+# The happy path and N1-N7 above show that a planted DEVICE-side defect turns the verdict red. The
+# matrix covers what a field fleet does to an update that no defect planted in an image can: the
+# network goes away, an operator changes their mind, a deadline passes, one device of many cannot
+# take the image. Each case reads the PLATFORM's state (the assignment, the rollout) and the
+# DEVICE's (what it runs, what it left on disk), and each is shown able to fail:
+#
+#   M1  a signature that does not verify is refused at the platform (not stored, artifact stays
+#       UNVERIFIED, not assignable); the same artifact signed correctly is then accepted. The
+#       device-side SIGNATURE_INVALID branch cannot be reached through a platform that checks a
+#       signature before storing it; it is pinned by examples/ota-device/internal/verify.
+#   M2  bytes that do not hash to the declared digest are refused at upload (artifact stays
+#       UPLOADING, not assignable); the true bytes are then accepted. The device-side digest
+#       check is N4.
+#   M3  the device's network goes down at 50% of a download and stays down past its idle timeout:
+#       the platform holds the attempt non-terminal, and on reconnect it resumes with a Range
+#       request (the server streams less again than the device already held) and reaches UPDATED.
+#   M4  the device is offline when the update is assigned: the platform holds it (QUEUED or
+#       INITIATED) and it completes on reconnect.
+#   M5  CANCELLATION. M5a: cancelled mid-download while the device is unreachable: the request is
+#       recorded (cancelRequested), the attempt stays non-terminal until the device confirms, then
+#       CANCELLED; the device keeps its version and leaves no partial file. M5b: cancelled while
+#       queued for an offline device: CANCELLED at once and the device downloads nothing.
+#   M6  TIMEOUT: the download-phase deadline is cut to 20 s by a rig-only helm upgrade; a device
+#       that goes silent mid-download ends TIMED_OUT, and what the late device does is recorded.
+#   M7  PARTIAL ROLLOUT FAILURE: a four-device rollout with maxInFlight=1 and failureThreshold=1,
+#       the second target unable to take the image: the rollout PAUSES at the threshold with the
+#       remaining targets undispatched and still on their old version; resumed with a higher
+#       threshold it dispatches the rest and COMPLETES, the failed device still reported failed.
+#
+# Negative controls: check_attempt and check_rollout are each run against a state that does not
+# match and must go red on exactly the field that differs; the resume arithmetic is shown to
+# reject a restart from byte zero; every outage is shown real by a broker probe that fails while
+# the link is down and succeeds after, and every "holds" assertion is followed by the release that
+# proves the wait was not vacuous.
+
+mx_gw=""
+mx_held=""
+mx_assignment=""
+mx_link_down=0
+mx_watcher=""
+
+# resume_problems <size> <held> <served>: why a download that streamed <served> bytes in total for
+# an artifact of <size> bytes, of which the device held <held> when it was cut, was not a Range
+# resume. A resume streams the whole image once plus whatever the server had written that the
+# device never received; a restart from byte zero streams at least <held> bytes again.
+resume_problems() {
+  local size="$1" held="$2" served="$3"
+  ((served >= size)) || echo "the server streamed $served bytes in all, fewer than the image's $size"
+  ((served - size < held)) || echo "the server streamed $((served - size)) bytes beyond the image, at least the $held the device held: that is a restart, not a resume"
+}
+
+offline_controls_resume() {
+  local p
+  p="$(resume_problems 48000000 24000000 49500000)"
+  [[ -z "$p" ]] || fail "the resume check rejects a resume that re-sent 1.5 MB of in-flight bytes: $p"
+  note "resume arithmetic: 49.5 MB streamed for a 48 MB image held to 24 MB: accepted as a resume"
+  p="$(resume_problems 48000000 24000000 72000000)"
+  [[ "$p" == *"a restart, not a resume"* ]] || fail "the resume check accepted a restart from byte zero (got: '${p:-nothing}')"
+  red "resume arithmetic: 72 MB streamed for a 48 MB image held to 24 MB (a restart from zero) -> rejected"
+  p="$(resume_problems 48000000 24000000 30000000)"
+  [[ "$p" == *"fewer than the image"* ]] || fail "the resume check accepted a download that streamed less than the image (got: '${p:-nothing}')"
+  red "resume arithmetic: 30 MB streamed for a 48 MB image -> rejected"
+}
+
+# inactive_slot <n> prints the slot a download on device n goes to. A device the launcher has never
+# switched has no boot.json yet and runs slot a, so a missing file means "a is confirmed", never "b".
+inactive_slot() {
+  local c
+  c="$(dx sh -c "cat /dev$1/boot.json 2>/dev/null || true" | jq -r '.confirmed // empty')"
+  if [[ "$c" == b ]]; then echo a; else echo b; fi
+}
+
+# probe_broker succeeds when the device container can open the instance's MQTT node port.
+probe_broker() { dx sh -c "nc -z -w 3 $node_ip 31883" >/dev/null 2>&1; }
+
+# link_down / link_up take the device container's network away and give it back. The rig's own
+# calls to the instance go through the host, so they are not affected. Every device in the
+# container is offline while it is down; the matrix runs one case at a time.
+# mx_read_gw remembers the container's default gateway the first time, while the route still has one.
+mx_read_gw() {
+  [[ -z "$mx_gw" ]] || return 0
+  mx_gw="$(dx ip route show default | awk '{for (i = 1; i < NF; i++) if ($i == "via") { print $(i + 1); break }}')"
+  [[ "$mx_gw" =~ ^[0-9.]+$ ]] || { mx_gw=""; fail "cannot read the container's default gateway"; }
+}
+link_down() {
+  mx_read_gw
+  dx ip link set eth0 down
+  mx_link_down=1
+}
+link_up() {
+  dx ip link set eth0 up
+  dx ip route replace default via "$mx_gw" dev eth0
+  mx_link_down=0
+}
+
+expect_offline() { if probe_broker; then fail "the broker is still reachable from the device container: the outage is not real"; fi; note "probe: the broker's node port is unreachable from the device container"; }
+expect_online() {
+  local deadline=$((SECONDS + 30))
+  until probe_broker; do ((SECONDS < deadline)) || fail "the broker is unreachable after the link came back"; sleep 1; done
+  note "probe: the broker's node port is reachable again"
+}
+
+# arm_outage <n> <size> <percent>: a watcher INSIDE the container takes the link down the moment
+# device n's partial download reaches <percent> of <size>, then prints the bytes it holds.
+arm_outage() {
+  local n="$1" size="$2" pct="$3" slot target
+  mx_read_gw
+  slot="$(inactive_slot "$n")"; target=$((size * pct / 100))
+  dx test ! -e "/dev$n/slots/$slot/ota-device.part" || fail "a .part file is already in device $n's slot $slot"
+  dxi sh -c "cat > /tmp/linkat.sh" <<EOF
+#!/bin/sh
+part=/dev$n/slots/$slot/ota-device.part
+end=\$((\$(date +%s) + 120))
+while [ "\$(date +%s)" -lt "\$end" ]; do
+  s=\$(stat -c %s "\$part" 2>/dev/null || echo 0)
+  if [ "\$s" -ge $target ]; then
+    ip link set eth0 down
+    sleep 1
+    stat -c %s "\$part"
+    exit 0
+  fi
+done
+echo timeout
+exit 1
+EOF
+  dx sh /tmp/linkat.sh >"$rig_tmp/outage-held" &
+  mx_watcher=$!
+  sleep 2
+}
+
+# await_outage <size>: waits for the watcher (so it must run in this shell, never in a command
+# substitution), marks the link down and leaves the bytes held in mx_held.
+await_outage() {
+  local size="$1" held
+  wait "$mx_watcher" || {
+    echo "outage evidence: assignment ${mx_assignment:-?}: $(assignment_json "${mx_assignment:-x}" 2>&1 | head -c 600)" >&2
+    dx sh -c 'ls -la /dev*/slots/*/ 2>&1 | head -40' >&2 || true
+    fail "the download never reached the outage threshold of $size bytes"
+  }
+  mx_watcher=""
+  mx_link_down=1
+  held="$(tr -d '\r\n ' <"$rig_tmp/outage-held")"
+  [[ "$held" =~ ^[0-9]+$ && "$held" -gt 0 && "$held" -lt "$size" ]] ||
+    fail "the outage did not land mid-download (held '$held' of $size); raise DC_OTA_RIG_PAD_MB"
+  mx_held="$held"
+}
+
+# hold_nonterminal <assignment> <seconds> [stop-state]: samples the attempt about every 3 s and
+# fails the moment it is terminal (unless it is <stop-state>, which ends the wait early and
+# successfully). Prints the distinct states seen on one line.
+hold_nonterminal() {
+  local a="$1" deadline=$((SECONDS + $2)) stop="${3:-}" j st seen=""
+  while ((SECONDS < deadline)); do
+    j="$(assignment_json "$a")" || j=""
+    st="$(jq -r '.attempt.state // empty' <<<"$j")"
+    seen="$seen $st"
+    if [[ -n "$stop" && "$st" == "$stop" ]]; then break; fi
+    if terminal_state "$st"; then fail "attempt $a went terminal ($st) while it was meant to be held: $(jq -c .attempt <<<"$j")"; fi
+    sleep 3
+  done
+  tr ' ' '\n' <<<"$seen" | sed '/^$/d' | uniq | paste -sd' '
+}
+
+# check_attempt <assignment> <state> <failure code | "-" for none | "*" for any>: the platform's
+# verdict on one attempt. A checker (see CHECKERS); its tags are state and code.
+check_attempt() {
+  local a="$1" want="$2" code="$3" j st got
+  local -a red=()
+  j="$(assignment_json "$a")" || { echo "TRANSPORT: assignment $a could not be read"; return 2; }
+  [[ -n "$j" && "$j" != null ]] || { echo "TRANSPORT: there is no assignment $a"; return 2; }
+  st="$(jq -r '.attempt.state' <<<"$j")"; got="$(jq -r '.attempt.failure.code // "-"' <<<"$j")"
+  [[ "$st" == "$want" ]] || { red+=(state); echo "  state: the attempt is $st, wanted $want"; }
+  [[ "$code" == "*" || "$got" == "$code" ]] || { red+=(code); echo "  code: the failure code is $got, wanted $code"; }
+  if ((${#red[@]})); then echo "RED: ${red[*]}"; return 1; fi
+  echo "platform: assignment $a is $st (failure code $got)"
+  echo GREEN
+}
+
+# check_rollout <rollout> <state> <succeeded> <failed> <pending> <pause reason | "-">
+# A checker; its tags are state, counts and reason.
+check_rollout() {
+  local r="$1" want="$2" ok="$3" bad="$4" pend="$5" reason="$6" j st p reasongot
+  local -a red=()
+  j="$(updq 'query($t:String!){updateRollout(token:$t){state pauseReason progress{total pending inFlight succeeded failed unknown cancelled skipped}}}' \
+    "$(jq -n --arg t "$r" '{t:$t}')" | jq -c .updateRollout)" || { echo "TRANSPORT: rollout $r could not be read"; return 2; }
+  [[ -n "$j" && "$j" != null ]] || { echo "TRANSPORT: there is no rollout $r"; return 2; }
+  st="$(jq -r .state <<<"$j")"; reasongot="$(jq -r '.pauseReason // "-"' <<<"$j")"
+  p="$(jq -r '"succeeded=\(.progress.succeeded) failed=\(.progress.failed) pending=\(.progress.pending)"' <<<"$j")"
+  [[ "$st" == "$want" ]] || { red+=(state); echo "  state: the rollout is $st, wanted $want"; }
+  [[ "$p" == "succeeded=$ok failed=$bad pending=$pend" ]] || { red+=(counts); echo "  counts: the rollout shows $p, wanted succeeded=$ok failed=$bad pending=$pend"; }
+  [[ "$reasongot" == "$reason" ]] || { red+=(reason); echo "  reason: the pause reason is $reasongot, wanted $reason"; }
+  if ((${#red[@]})); then echo "RED: ${red[*]}"; return 1; fi
+  echo "platform: rollout $r is $st ($p, pause reason $reasongot)"
+  echo GREEN
+}
+
+# expect_green <label> <checker...>: a checker that must pass; its explanation is printed.
+expect_green() {
+  local label="$1" out
+  shift
+  out="$("$@" 2>&1)" || fail "$label: $out"
+  printf '%s\n' "${out%$'\n'GREEN}" | sed 's/^/    | /'
+}
+
+build_matrix_images() {
+  say "STEP 8: building the matrix images (1.0.5 and 1.0.7 and 1.0.8 padded, 1.0.6 and 1.1.0 small)"
+  local ex="$repo_root/examples/ota-device" bi="devicechain.io/examples/ota-device/internal/buildinfo" v
+  for v in 1.0.5 1.0.6 1.0.7 1.0.8 1.1.0; do
+    (cd "$ex" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-X $bi.Version=$v" -o "$images/ota-device-$v" ./cmd/ota-device)
+  done
+  # A different run of random bytes on each padded image: the digests must differ.
+  for v in 1.0.5 1.0.7 1.0.8; do head -c "$((pad_mb * 1024 * 1024))" /dev/urandom >>"$images/ota-device-$v"; done
+}
+
+# m_artifact_state <token> prints "<state> <trustStatus>".
+m_artifact_state() {
+  updq 'query($t:String!){artifact(token:$t){state trustStatus}}' "$(jq -n --arg t "$1" '{t:$t}')" |
+    jq -r '.artifact | "\(.state) \(.trustStatus)"'
+}
+
+m1_bad_signature() {
+  say "M1: a signature that does not verify is refused at the platform"
+  local file="$images/ota-device-1.1.0" other="$images/ota-device-1.0.0" tok=fw-m-badsig size digest bad out
+  size="$(wc -c <"$file" | tr -d ' ')"; digest="sha256:$(openssl dgst -sha256 -r "$file" | cut -d' ' -f1)"
+  updq 'mutation($r:ArtifactCreateRequest!){createArtifact(request:$r){token state}}' \
+    "$(jq -n --arg t "$tok" --arg s "$size" --arg d "$digest" --arg p "$profile" \
+      '{r:{token:$t,kind:"FIRMWARE",name:"ota-device-badsig",version:"1.1.1",component:"firmware",sizeBytes:$s,digest:$d,mediaType:"application/octet-stream",compatibleProfiles:[$p]}}')" >/dev/null ||
+    fail "createArtifact $tok"
+  [[ "$(curl_api -o /dev/null -w '%{http_code}' -X PUT "$upd/updates/artifacts/$tok/content" -H "Authorization: Bearer $tenant_token" \
+    -H 'Content-Type: application/octet-stream' --data-binary "@$(winpath "$file")")" == 2* ]] || fail "upload of $tok"
+  # A well-formed ECDSA signature by the signer's own key, over DIFFERENT bytes.
+  bad="$(openssl dgst -sha256 -sign "$rig_tmp/ecdsa.pem" -binary "$other" | base64 | tr -d '\n')"
+  if out="$(updq 'mutation($a:String!,$s:String!,$g:String!){addArtifactSignature(artifactToken:$a,signerToken:$s,signature:$g){state trustStatus}}' \
+    "$(jq -n --arg a "$tok" --arg s "$(jq -r '.registerArtifactSigner.token' "$rig_tmp/signer-ecdsa.json")" --arg g "$bad" '{a:$a,s:$s,g:$g}')" 2>&1)"; then
+    fail "the platform ACCEPTED a signature that does not verify: $out"
+  fi
+  note "platform refused the signature: $(head -c 300 <<<"$out")"
+  [[ "$(m_artifact_state "$tok")" == "AVAILABLE UNVERIFIED" ]] || fail "after the refusal $tok is '$(m_artifact_state "$tok")', expected AVAILABLE UNVERIFIED"
+  note "platform: $tok stays AVAILABLE UNVERIFIED"
+  if out="$(updq 'mutation($d:String!,$a:String!){assignArtifact(deviceToken:$d,artifactToken:$a){token}}' "$(jq -n --arg d ota-dev-1 --arg a "$tok" '{d:$d,a:$a}')" 2>&1)"; then
+    fail "an artifact whose only signature was refused was ASSIGNED: $out"
+  fi
+  note "platform refused to assign it: $(head -c 300 <<<"$out")"
+  # The control: the same call with the correct signature is accepted, so the refusal was about the signature.
+  out="$(openssl dgst -sha256 -sign "$rig_tmp/ecdsa.pem" -binary "$file" | base64 | tr -d '\n')"
+  updq 'mutation($a:String!,$s:String!,$g:String!){addArtifactSignature(artifactToken:$a,signerToken:$s,signature:$g){state trustStatus}}' \
+    "$(jq -n --arg a "$tok" --arg s "$(jq -r '.registerArtifactSigner.token' "$rig_tmp/signer-ecdsa.json")" --arg g "$out" '{a:$a,s:$s,g:$g}')" >/dev/null ||
+    fail "the CORRECT signature on $tok was refused: the M1 refusal proves nothing"
+  [[ "$(m_artifact_state "$tok")" == "AVAILABLE SIGNED" ]] || fail "after the correct signature $tok is '$(m_artifact_state "$tok")'"
+  red "M1 -> a non-verifying signature is refused, the artifact stays UNVERIFIED and unassignable; the correct one makes it SIGNED"
+}
+
+m2_hash_mismatch_at_upload() {
+  say "M2: bytes that do not hash to the declared digest are refused at upload"
+  local file="$images/ota-device-1.1.0" tok=fw-m-hash size digest code last
+  size="$(wc -c <"$file" | tr -d ' ')"; digest="sha256:$(openssl dgst -sha256 -r "$file" | cut -d' ' -f1)"
+  updq 'mutation($r:ArtifactCreateRequest!){createArtifact(request:$r){token state}}' \
+    "$(jq -n --arg t "$tok" --arg s "$size" --arg d "$digest" --arg p "$profile" \
+      '{r:{token:$t,kind:"FIRMWARE",name:"ota-device-hash",version:"1.1.2",component:"firmware",sizeBytes:$s,digest:$d,mediaType:"application/octet-stream",compatibleProfiles:[$p]}}')" >/dev/null ||
+    fail "createArtifact $tok"
+  # The same size, one byte different.
+  cp "$file" "$rig_tmp/m2-tampered"
+  last="$(tail -c 1 "$file" | od -An -tu1 | tr -d ' ')"
+  printf "$(printf '\\%03o' $(((last + 1) % 256)))" | dd of="$rig_tmp/m2-tampered" bs=1 seek=$((size - 1)) count=1 conv=notrunc 2>/dev/null
+  [[ "$(wc -c <"$rig_tmp/m2-tampered" | tr -d ' ')" == "$size" ]] || fail "the tampered copy is not $size bytes"
+  code="$(curl_api -o "$rig_tmp/upload.out" -w '%{http_code}' -X PUT "$upd/updates/artifacts/$tok/content" \
+    -H "Authorization: Bearer $tenant_token" -H 'Content-Type: application/octet-stream' --data-binary "@$(winpath "$rig_tmp/m2-tampered")")"
+  [[ "$code" != 2* ]] || fail "the platform ACCEPTED bytes that do not hash to the declared digest (HTTP $code)"
+  note "platform refused the upload: HTTP $code $(head -c 300 "$rig_tmp/upload.out")"
+  [[ "$(m_artifact_state "$tok")" == "UPLOADING UNVERIFIED" ]] || fail "after the refusal $tok is '$(m_artifact_state "$tok")', expected UPLOADING UNVERIFIED"
+  note "platform: $tok stays UPLOADING (no content stored)"
+  code="$(curl_api -o "$rig_tmp/upload.out" -w '%{http_code}' -X PUT "$upd/updates/artifacts/$tok/content" \
+    -H "Authorization: Bearer $tenant_token" -H 'Content-Type: application/octet-stream' --data-binary "@$(winpath "$file")")"
+  [[ "$code" == 2* ]] || fail "the TRUE bytes were refused too (HTTP $code): the M2 refusal proves nothing"
+  [[ "$(m_artifact_state "$tok")" == "AVAILABLE UNVERIFIED" ]] || fail "after the true bytes $tok is '$(m_artifact_state "$tok")'"
+  red "M2 -> tampered bytes refused at upload, artifact stays UPLOADING; the true bytes make it AVAILABLE"
+}
+
+m3_offline_midflight() {
+  say "M3: device 2's network goes down at 50% of the 1.0.5 download and stays down 45 s (idle timeout 30 s)"
+  local file="$images/ota-device-1.0.5" size held a pid0 boot0 applied0 bytes0 bytes1 served seen p
+  size="$(wc -c <"$file" | tr -d ' ')"
+  publish fw-m105 ota-device 1.0.5 "$file" ecdsa
+  wait_payload 2 >/dev/null
+  pid0="$(payload_pid 2)"; boot0="$(last_boot 2)"; applied0="$(um_metric update_reports_total 'verdict="APPLIED"')"
+  bytes0="$(um_metric update_download_bytes_total '')"
+  arm_outage 2 "$size" 50
+  a="$(assign ota-dev-2 fw-m105)"
+  mx_assignment="$a"
+  await_outage "$size"
+  held="$mx_held"
+  note "device: network down holding $held of $size bytes ($((held * 100 / size))%)"
+  expect_offline
+  seen="$(hold_nonterminal "$a" 45)"
+  note "platform: states over the 45 s outage: $seen"
+  [[ " $seen " != *" UPDATED "* ]] || fail "the attempt finished while the device was offline"
+  link_up
+  expect_online
+  j="$(wait_terminal "$a" 420)"
+  [[ "$(jq -r .attempt.state <<<"$j")" == UPDATED ]] || fail "after reconnecting the update ended $(jq -c .attempt <<<"$j")"
+  sleep 3
+  check_updated 2 "$a" 1.0.5 "$pid0" "$boot0" "$applied0" >"$rig_tmp/check-m3" || fail "M3: $(cat "$rig_tmp/check-m3")"
+  grep -v '^GREEN$' "$rig_tmp/check-m3"
+  bytes1="$(um_metric update_download_bytes_total '')"
+  served=$((bytes1 - bytes0))
+  note "server: $served bytes streamed in all for a $size-byte image; the device held $held when cut"
+  p="$(resume_problems "$size" "$held" "$served")"
+  [[ -z "$p" ]] || fail "M3 was not a Range resume: $p"
+  note "the download resumed: $((served - size)) bytes beyond the image (the server's in-flight writes), fewer than the $held held"
+  red "M3 -> an offline period past the idle timeout mid-download: attempt held non-terminal, resumed by Range on reconnect, UPDATED on 1.0.5"
+}
+
+m4_offline_before_assign() {
+  say "M4: device 1 is offline when 1.0.6 is assigned"
+  local file="$images/ota-device-1.0.6" a j pid0 boot0 applied0 seen
+  publish fw-m106 ota-device 1.0.6 "$file" ecdsa
+  wait_payload 1 >/dev/null
+  pid0="$(payload_pid 1)"; boot0="$(last_boot 1)"; applied0="$(um_metric update_reports_total 'verdict="APPLIED"')"
+  link_down
+  expect_offline
+  a="$(assign ota-dev-1 fw-m106)"
+  mx_assignment="$a"
+  seen="$(hold_nonterminal "$a" 30)"
+  note "platform: states over 30 s with the device offline: $seen"
+  [[ "$seen" =~ ^(QUEUED|INITIATED)( (QUEUED|INITIATED))*$ ]] || fail "with the device offline the attempt should be held at QUEUED or INITIATED, it went through: $seen"
+  link_up
+  expect_online
+  j="$(wait_terminal "$a" 420)"
+  [[ "$(jq -r .attempt.state <<<"$j")" == UPDATED ]] || fail "after reconnecting the update ended $(jq -c .attempt <<<"$j")"
+  sleep 3
+  check_updated 1 "$a" 1.0.6 "$pid0" "$boot0" "$applied0" >"$rig_tmp/check-m4" || fail "M4: $(cat "$rig_tmp/check-m4")"
+  grep -v '^GREEN$' "$rig_tmp/check-m4"
+  red "M4 -> assigned to an offline device: held at ${seen// /, }; completed on reconnect, UPDATED on 1.0.6"
+}
+
+m5_cancellation() {
+  say "M5a: cancel mid-download while device 3 is unreachable"
+  local file="$images/ota-device-1.0.7" size held a j slot before after version0 seen bytes0 bytes1 id
+  size="$(wc -c <"$file" | tr -d ' ')"
+  publish fw-m107 ota-device 1.0.7 "$file" ecdsa
+  wait_payload 3 >/dev/null
+  version0="$(jq -r .version <<<"$(describe_running "$(payload_pid 3)")")"
+  slot="$(inactive_slot 3)"; before="$(slot_hash 3 "$slot")"
+  arm_outage 3 "$size" 50
+  a="$(assign ota-dev-3 fw-m107)"
+  mx_assignment="$a"
+  await_outage "$size"
+  held="$mx_held"
+  note "device: network down holding $held of $size bytes"
+  expect_offline
+  updq 'mutation($t:String!){cancelUpdate(assignmentToken:$t){token attempt{state cancelRequested}}}' "$(jq -n --arg t "$a" '{t:$t}')" >"$rig_tmp/cancel.json" ||
+    fail "cancelUpdate mid-download"
+  note "platform: cancelUpdate answered $(jq -c .cancelUpdate.attempt "$rig_tmp/cancel.json")"
+  seen="$(hold_nonterminal "$a" 20)"
+  j="$(assignment_json "$a")"
+  [[ "$(jq -r .attempt.cancelRequested <<<"$j")" == true ]] || fail "the cancel request was not recorded: $(jq -c .attempt <<<"$j")"
+  note "platform: cancelRequested=true and the attempt stays $seen until the device confirms"
+  link_up
+  expect_online
+  j="$(wait_terminal "$a" 420)"
+  expect_green "M5a platform" check_attempt "$a" CANCELLED -
+  wait_payload 3 >/dev/null
+  id="$(describe_running "$(payload_pid 3)")"
+  [[ "$(jq -r .version <<<"$id")" == "$version0" ]] || fail "device 3 runs $id after the cancel, it ran $version0 before"
+  after="$(slot_hash 3 "$slot")"
+  [[ "$before" == "$after" ]] || fail "the inactive slot changed: $before -> $after"
+  dx test ! -e "/dev3/slots/$slot/ota-device.part" || fail "the cancelled download left a .part file in slot $slot"
+  note "device: still $id, inactive slot untouched, no partial file left"
+  expect_red "M5a checker negative control" "state" "*" "wanted UPDATED" check_attempt "$a" UPDATED -
+  red "M5a -> cancel recorded while unreachable (cancelRequested, non-terminal), CANCELLED once the device confirmed; device on $version0, nothing left behind"
+
+  say "M5b: cancel while queued for an offline device 4: cancelled at once, nothing downloaded"
+  version0="$(jq -r .version <<<"$(describe_running "$(payload_pid 4)")")"
+  link_down
+  expect_offline
+  bytes0="$(um_metric update_download_bytes_total '')"
+  a="$(assign ota-dev-4 fw-m107)"
+  mx_assignment="$a"
+  updq 'mutation($t:String!){cancelUpdate(assignmentToken:$t){token attempt{state cancelRequested}}}' "$(jq -n --arg t "$a" '{t:$t}')" >"$rig_tmp/cancel.json" ||
+    fail "cancelUpdate while queued"
+  note "platform: cancelUpdate answered $(jq -c .cancelUpdate.attempt "$rig_tmp/cancel.json")"
+  expect_green "M5b platform" check_attempt "$a" CANCELLED -
+  link_up
+  expect_online
+  sleep 25
+  bytes1="$(um_metric update_download_bytes_total '')"
+  [[ "$bytes0" == "$bytes1" ]] || fail "the device downloaded $((bytes1 - bytes0)) bytes of a cancelled update"
+  expect_green "M5b platform, after the reconnect" check_attempt "$a" CANCELLED -
+  wait_payload 4 >/dev/null
+  id="$(describe_running "$(payload_pid 4)")"
+  [[ "$(jq -r .version <<<"$id")" == "$version0" ]] || fail "device 4 runs $id after the cancel, it ran $version0 before"
+  note "device: still $id; the server streamed 0 bytes after the cancel"
+  expect_red "M5b checker negative control" "state" "*" "wanted UPDATED" check_attempt "$a" UPDATED -
+  red "M5b -> cancelled at once while queued; the device came back, downloaded nothing and kept $version0"
+}
+
+m6_timeout() {
+  say "M6: the download-phase deadline cut to 20 s; device 4 goes silent mid-download"
+  local file="$images/ota-device-1.0.8" size held a j rev deadline st version0 id late
+  need helm
+  size="$(wc -c <"$file" | tr -d ' ')"
+  publish fw-m108 ota-device 1.0.8 "$file" ecdsa
+  helm_ns="$(helm --kubeconfig "$kubeconfig" --kube-context "$kube_context" list -A -o json |
+    jq -r --arg r "$helm_release" '.[] | select(.name == $r) | .namespace')"
+  [[ -n "$helm_ns" ]] || fail "no helm release $helm_release on $cluster"
+  rev="$(helm --kubeconfig "$kubeconfig" --kube-context "$kube_context" -n "$helm_ns" history "$helm_release" -o json | jq -r '.[-1].revision')"
+  n7_restore_rev="$rev"
+  helm --kubeconfig "$kubeconfig" --kube-context "$kube_context" -n "$helm_ns" upgrade "$helm_release" \
+    "$(winpath "$repo_root/deploy/helm/devicechain")" --reuse-values \
+    --set-json 'functionalAreas.update-management.config.updates.sweepIntervalSeconds=5' \
+    --set-json 'functionalAreas.update-management.config.updates.deadlines.downloadSeconds=20' >/dev/null ||
+    fail "the rig-only helm upgrade failed"
+  wait_downloads_configured true
+  note "platform: update-management rolled out with deadlines.downloadSeconds=20, sweepIntervalSeconds=5"
+  wait_payload 4 >/dev/null
+  version0="$(jq -r .version <<<"$(describe_running "$(payload_pid 4)")")"
+  arm_outage 4 "$size" 50
+  a="$(assign ota-dev-4 fw-m108)"
+  mx_assignment="$a"
+  await_outage "$size"
+  held="$mx_held"
+  note "device: network down holding $held of $size bytes"
+  expect_offline
+  deadline=$((SECONDS + 180)); st=""
+  while ((SECONDS < deadline)); do
+    j="$(assignment_json "$a")" || j=""
+    st="$(jq -r '.attempt.state // empty' <<<"$j")"
+    [[ "$st" == TIMED_OUT ]] && break
+    terminal_state "$st" && fail "the silent device's attempt went $st, not TIMED_OUT: $(jq -c .attempt <<<"$j")"
+    sleep 3
+  done
+  [[ "$st" == TIMED_OUT ]] || fail "the attempt never timed out (last state '$st')"
+  note "platform: TIMED_OUT while the device was silent: $(jq -c .attempt <<<"$j")"
+  expect_green "M6 platform" check_attempt "$a" TIMED_OUT '*'
+  expect_red "M6 checker negative control" "state" "*" "wanted UPDATED" check_attempt "$a" UPDATED "*"
+  # Give the deadline back before the device returns, so what follows is the product's behaviour.
+  helm --kubeconfig "$kubeconfig" --kube-context "$kube_context" -n "$helm_ns" rollback "$helm_release" "$rev" >/dev/null ||
+    fail "helm rollback to $rev failed"
+  n7_restore_rev=""
+  wait_downloads_configured true
+  link_up
+  expect_online
+  sleep 90
+  j="$(assignment_json "$a")"
+  late="$(jq -c '.attempt' <<<"$j")"
+  id="$(describe_running "$(payload_pid 4)")"
+  note "platform: 90 s after the device returned the attempt is $late"
+  note "device: runs $id (it ran $version0 before)"
+  [[ "$(jq -r .attempt.state <<<"$j")" == TIMED_OUT ]] ||
+    fail "the TIMED_OUT attempt changed to $(jq -r .attempt.state <<<"$j") after the device returned: a terminal verdict was reopened"
+  [[ "$(jq -r .version <<<"$id")" == "$version0" ]] ||
+    fail "the device installed $id after the platform declared the attempt TIMED_OUT: platform and device disagree"
+  red "M6 -> TIMED_OUT while silent; after it returned the platform stayed TIMED_OUT and the device stayed on $version0"
+}
+
+m7_partial_rollout() {
+  say "M7: four devices, maxInFlight=1, failureThreshold=1; the second target cannot take the image"
+  local file="$images/ota-device-1.1.0" g=ota-rig-matrix r=rollout-m110 reqs j order second dev slot n deadline st id
+  publish fw-m110 ota-device 1.1.0 "$file" ecdsa
+  dmq 'mutation($r:EntityGroupCreateRequest){createEntityGroup(request:$r){token}}' \
+    "$(jq -n --arg t "$g" '{r:{token:$t,name:"OTA rig matrix",memberType:"device",membershipMode:"static"}}')" >/dev/null ||
+    fail "createEntityGroup $g"
+  reqs="$(jq -n --arg g "$g" '[range(1;5) | {token:"\($g)-m\(.)",sourceType:"group",source:$g,targetType:"device",target:"ota-dev-\(.)",relationshipType:"member"}]')"
+  dmq 'mutation($r:[EntityRelationshipCreateRequest!]!){createEntityRelationships(requests:$r){token}}' \
+    "$(jq -n --argjson r "$reqs" '{r:$r}')" >/dev/null || fail "adding the four devices to $g"
+  for n in 1 2 3 4; do wait_payload "$n" >/dev/null; done
+  # The fault goes in BEFORE the start: an 11 MB image updates a device in a couple of seconds, so a
+  # fault planted after the start arrives after the second device is done. The members were added
+  # in order and the rollout freezes them in that order; that assumption is checked below against
+  # the order the platform reports, and the case fails if it does not hold.
+  second=ota-dev-2
+  n=2
+  slot="$(inactive_slot "$n")"
+  # A NON-EMPTY directory where the partial file goes: the device removes an empty one.
+  dx sh -c "mkdir -p /dev$n/slots/$slot/ota-device.part && touch /dev$n/slots/$slot/ota-device.part/keep"
+  updq 'mutation($r:UpdateRolloutCreateRequest!){createUpdateRollout(request:$r){token state}}' \
+    "$(jq -n --arg t "$r" --arg g "$g" '{r:{token:$t,name:"OTA rig 1.1.0",artifactToken:"fw-m110",groupToken:$g,maxInFlight:1,failureThreshold:1}}')" >/dev/null ||
+    fail "createUpdateRollout"
+  updq 'mutation($t:String!){startUpdateRollout(token:$t){state targetCount}}' "$(jq -n --arg t "$r" '{t:$t}')" >/dev/null || fail "startUpdateRollout"
+  order="$(updq 'query($t:String!){updateRolloutTargets(token:$t,criteria:{pageNumber:1,pageSize:50}){results{deviceToken}}}' "$(jq -n --arg t "$r" '{t:$t}')" |
+    jq -r '.updateRolloutTargets.results[].deviceToken' | paste -sd' ')"
+  [[ "$(cut -d' ' -f2 <<<"$order")" == "$second" ]] ||
+    fail "the rollout froze its targets as '$order', so $second is not the second: the rig's fault is on the wrong device"
+  note "rollout: dispatch order $order; fault planted before the start on $second (slot $slot)"
+  deadline=$((SECONDS + 600))
+  while ((SECONDS < deadline)); do
+    st="$(updq 'query($t:String!){updateRollout(token:$t){state}}' "$(jq -n --arg t "$r" '{t:$t}')" | jq -r .updateRollout.state)"
+    [[ "$st" == PAUSED || "$st" == COMPLETED ]] && break
+    sleep 3
+  done
+  [[ "$st" == PAUSED ]] || fail "the rollout ended $st, expected PAUSED at the failure threshold"
+  expect_green "M7 paused" check_rollout "$r" PAUSED 1 1 2 FAILURE_THRESHOLD
+  updq 'query($t:String!){updateRolloutTargets(token:$t,criteria:{pageNumber:1,pageSize:50}){results{deviceToken outcome}}}' "$(jq -n --arg t "$r" '{t:$t}')" |
+    jq -r '.updateRolloutTargets.results[] | "    target \(.deviceToken): \(.outcome)"'
+  j="$(updq 'query($d:String!){updateAssignments(criteria:{pageNumber:1,pageSize:5,deviceToken:$d,component:"firmware",currentOnly:true}){results{token attempt{state failure{stage code detail}}}}}' \
+    "$(jq -n --arg d "$second" '{d:$d}')")"
+  note "platform: $second's attempt: $(jq -c '.updateAssignments.results[0].attempt' <<<"$j")"
+  [[ "$(jq -r '.updateAssignments.results[0].attempt.state' <<<"$j")" == FAILED ]] || fail "the faulted device's attempt is not FAILED"
+  for dev in $order; do
+    n="${dev##*-}"
+    id="$(describe_running "$(wait_payload "$n")")"
+    note "device $n ($dev): runs $id"
+  done
+  # Targets 3 and 4 were never dispatched: they must not run 1.1.0.
+  for dev in $(cut -d' ' -f3- <<<"$order"); do
+    n="${dev##*-}"
+    [[ "$(jq -r .version <<<"$(describe_running "$(payload_pid "$n")")")" != 1.1.0 ]] || fail "$dev was never dispatched yet runs 1.1.0"
+  done
+  [[ "$(jq -r .version <<<"$(describe_running "$(payload_pid "${second##*-}")")")" != 1.1.0 ]] || fail "the faulted device runs 1.1.0"
+  note "platform+devices: the halt held: the failed device and both undispatched devices are not on 1.1.0"
+  expect_red "M7 checker negative control (paused is not completed)" "state counts reason" "*" "wanted COMPLETED" check_rollout "$r" COMPLETED 4 0 0 -
+
+  say "M7: clear the fault, resume with failureThreshold=2: the rest is dispatched and the rollout completes with the failure still reported"
+  dx rm -rf "/dev${second##*-}/slots/$(inactive_slot "${second##*-}")/ota-device.part"
+  updq 'mutation($t:String!,$f:Int){resumeUpdateRollout(token:$t,failureThreshold:$f){state}}' "$(jq -n --arg t "$r" '{t:$t,f:2}')" >/dev/null || fail "resumeUpdateRollout"
+  deadline=$((SECONDS + 600))
+  while ((SECONDS < deadline)); do
+    st="$(updq 'query($t:String!){updateRollout(token:$t){state}}' "$(jq -n --arg t "$r" '{t:$t}')" | jq -r .updateRollout.state)"
+    [[ "$st" == COMPLETED || "$st" == PAUSED ]] && break
+    sleep 3
+  done
+  [[ "$st" == COMPLETED ]] || fail "after the resume the rollout is $st, expected COMPLETED"
+  expect_green "M7 completed" check_rollout "$r" COMPLETED 3 1 0 -
+  for dev in $(cut -d' ' -f1,3- <<<"$order"); do
+    n="${dev##*-}"
+    id="$(describe_running "$(wait_payload "$n")")"
+    [[ "$(jq -r .version <<<"$id")" == 1.1.0 ]] || fail "$dev runs $id after the rollout"
+  done
+  [[ "$(jq -r .version <<<"$(describe_running "$(payload_pid "${second##*-}")")")" != 1.1.0 ]] || fail "the device that failed runs 1.1.0 though its attempt is FAILED"
+  note "devices: the three that succeeded run 1.1.0; the failed one still does not"
+  expect_red "M7 checker negative control (completed is not paused)" "state reason" "counts" "wanted PAUSED" check_rollout "$r" PAUSED 3 1 0 FAILURE_THRESHOLD
+  red "M7 -> PAUSED at the threshold with 2 undispatched and unchanged; after the resume COMPLETED 3 succeeded / 1 failed"
+}
+
+# mx_want <case>: DC_OTA_RIG_CASES ("m3 m7") narrows a run to those cases while one is being
+# worked on; unset, every case runs, and the evidence for a release is always a full run.
+mx_want() { [[ -z "${DC_OTA_RIG_CASES:-}" || " $DC_OTA_RIG_CASES " == *" $1 "* ]]; }
+
+step8_matrix() {
+  local c
+  offline_controls_resume
+  build_matrix_images
+  for c in m1_bad_signature m2_hash_mismatch_at_upload m3_offline_midflight m4_offline_before_assign m5_cancellation m6_timeout m7_partial_rollout; do
+    if mx_want "${c%%_*}"; then "$c"; fi
+  done
+}
+
+# cmd_matrix runs the failure matrix alone, on a fresh tenant with four devices on 1.0.0.
+cmd_matrix() {
+  need kubectl; need docker; need jq; need curl; need openssl; need go; need helm
+  cluster_exists || fail "kind cluster $cluster does not exist; run 'hack/ota-rig.sh up'"
+  k get ns "$namespace" >/dev/null 2>&1 || fail "instance $instance is not on $cluster; run 'hack/ota-rig.sh up'"
+  run_id="$(date -u +%H%M%S)"
+  tenant="${DC_OTA_RIG_TENANT:-ota$run_id}"
+  member_email="ota-rig@$tenant.test"
+  say "matrix $run_id: tenant $tenant on instance $instance (cluster $cluster)"
+  note "git HEAD $(git -C "$repo_root" rev-parse HEAD); $(git -C "$repo_root" status --porcelain | wc -l | tr -d ' ') dirty path(s)"
+  note "hack/ota-rig.sh blob $(git -C "$repo_root" hash-object hack/ota-rig.sh)"
+  note "update-management image: $(k -n "$namespace" get deploy update-management -o jsonpath='{.spec.template.spec.containers[0].image}')"
+  discover
+  step1_download_base
+  step2_provision
+  build_images
+  start_container
+  local n r0
+  for n in 1 2 3 4; do create_device "$n"; done
+  r0="$(reports_total)"
+  for n in 1 2 3 4; do start_device "$n"; done
+  for n in 1 2 3 4; do wait_payload "$n" >/dev/null; done
+  wait_heard "$r0" 4
+  step8_matrix
+  say "MATRIX GREEN: M1-M7 each showed the platform's state and the device's, and each checker was shown red against a state it must refuse."
+}
+
+# cmd_noobject checks what an operator who evaluates the product on an instance built with
+# `--object-store none` actually meets. Point it at such an instance (DC_OTA_RIG_INSTANCE, on the
+# rig's cluster), made with `dcctl bootstrap local <name> --object-store none ...`. The service
+# must run and say, in the API and not only in the install output, that it has no store, and an
+# attempt to declare an artifact must be refused with a code that names the cause.
+cmd_noobject() {
+  need kubectl; need jq; need curl; need openssl
+  cluster_exists || fail "kind cluster $cluster does not exist"
+  k get ns "$namespace" >/dev/null 2>&1 || fail "instance $instance is not on $cluster"
+  run_id="$(date -u +%H%M%S)"
+  tenant="${DC_OTA_RIG_TENANT:-ota$run_id}"
+  member_email="ota-rig@$tenant.test"
+  say "no object store: tenant $tenant on instance $instance (cluster $cluster)"
+  discover
+  step2_provision
+  local info out
+  info="$(updq '{updateManagementInfo{objectStoreConfigured downloadsConfigured}}')" || fail "updateManagementInfo"
+  note "platform: updateManagementInfo $(jq -c .updateManagementInfo <<<"$info")"
+  [[ "$(jq -r .updateManagementInfo.objectStoreConfigured <<<"$info")" == false ]] ||
+    fail "this instance reports an object store; point DC_OTA_RIG_INSTANCE at one bootstrapped with --object-store none"
+  if out="$(updq 'mutation($r:ArtifactCreateRequest!){createArtifact(request:$r){token state}}' \
+    "$(jq -n --arg p "$profile" '{r:{token:"fw-noobj",kind:"FIRMWARE",name:"ota-device",version:"1.0.1",component:"firmware",sizeBytes:"1024",
+      digest:"sha256:0000000000000000000000000000000000000000000000000000000000000000",mediaType:"application/octet-stream",compatibleProfiles:[$p]}}')" 2>&1)"; then
+    fail "createArtifact SUCCEEDED on an instance with no object store: $out"
+  fi
+  note "platform: createArtifact refused: $(head -c 400 <<<"$out")"
+  [[ "$out" == *OBJECT_STORE_NOT_CONFIGURED* ]] || fail "the refusal does not carry the code OBJECT_STORE_NOT_CONFIGURED: $out"
+  # Everything that needs no content still works: the service is not broken, it has no store.
+  updq '{artifacts(criteria:{pageNumber:1,pageSize:5}){results{token}}}' >/dev/null || fail "listing artifacts failed on the storeless instance"
+  pass "no object store: the service runs, says objectStoreConfigured=false, and refuses artifacts with OBJECT_STORE_NOT_CONFIGURED"
+}
+
 cmd_run() {
   need kubectl; need docker; need jq; need curl; need openssl; need go
   cluster_exists || fail "kind cluster $cluster does not exist; run 'hack/ota-rig.sh up'"
@@ -1351,12 +1973,14 @@ cmd_run() {
   n5_liar
   n7_downloads_disabled
   step7_fleet
+  step8_matrix
   say "OTA RIG GREEN: a separately built device took 1.0.1 over the instance's broker and ingress,
 proved by three discriminating sources (the platform's UPDATED, the confirmed slot's hash, the
 running binary's describe) and three liveness signals (PID, bootId, applied reports). Every
 planted defect (N1-N7) turned its verdict red for the reason it was planted, while the device
 kept running what it ran before; the four-device rollout completed 4/4 and was serial by its
-own timestamps."
+own timestamps; and the failure matrix (M1-M7: bad signature, bad hash, offline mid-update and
+before assignment, cancellation, timeout, a rollout paused by one failed device) held."
 }
 
 rig_cmd="${1:-}"
@@ -1365,6 +1989,8 @@ case "$rig_cmd" in
   run) cmd_run ;;
   all) cmd_up; cmd_run ;;
   down) cmd_down ;;
-  controls) offline_controls ;;
-  *) fail "usage: hack/ota-rig.sh up | run | all | down | controls" ;;
+  matrix) cmd_matrix ;;
+  noobject) cmd_noobject ;;
+  controls) offline_controls; offline_controls_resume ;;
+  *) fail "usage: hack/ota-rig.sh up | run | matrix | noobject | all | down | controls" ;;
 esac

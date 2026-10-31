@@ -18,12 +18,17 @@ firmantes y los despliegues, y una pestaña Actualizaciones en cada dispositivo 
 seguirla; consulta [Actualizaciones](../user-guide/updates.md) en la guía de usuario. Un pequeño
 dispositivo de referencia del repositorio sigue todo el lado del dispositivo del protocolo; consulta
 [Construir un dispositivo actualizable](../guides/building-an-updatable-device.md).
+La ruta de actualización se validó contra ese dispositivo de referencia, no contra hardware de producción;
+consulta [Qué se ha validado](#validated).
 
-**Todavía no:** los despliegues no tienen oleadas, promoción canario, programaciones ni ventanas de
-mantenimiento. Solo un dispositivo conectado por MQTT puede recibir una actualización gestionada, porque las
-asignaciones viajan por su canal MQTT. Los dispositivos que solo usan HTTP no pueden, los dispositivos
-[LwM2M](./lwm2m.md) se actualizan con comandos ordinarios y [Sparkplug](./sparkplug.md) no tiene
-actualización de firmware; consulta [Qué dispositivos se pueden actualizar](#transports).
+**No está en 1.0:** los despliegues no tienen oleadas, promoción canario, programaciones ni ventanas de
+mantenimiento; un despliegue solo asigna a su grupo un número limitado de dispositivos a la vez. Las
+actualizaciones gestionadas son **solo por MQTT**: solo un dispositivo conectado por MQTT puede recibir una,
+porque las asignaciones viajan por su canal MQTT. Los dispositivos que solo usan HTTP no pueden. La plataforma
+no actualiza en absoluto los dispositivos [LwM2M](./lwm2m.md); se actualizan con comandos ordinarios.
+[Sparkplug](./sparkplug.md) no define ninguna actualización de firmware, así que un nodo de borde Sparkplug solo
+puede recibir una actualización gestionada si además se conecta como dispositivo MQTT ordinario. Consulta
+[Qué dispositivos se pueden actualizar](#transports).
 :::
 
 ## Activarlo {#enabling}
@@ -340,6 +345,30 @@ ejecutar nada de la imagen antes de comprobar el digest y la firma, conservar la
 lugar de tomar una de un mensaje, e informar `RUNNING` solo con pruebas de la versión que realmente se ejecuta.
 [Construir un dispositivo actualizable](../guides/building-an-updatable-device.md) recorre una implementación de
 referencia que hace todo esto y muestra el orden de las comprobaciones.
+
+## Qué se ha validado {#validated}
+
+La ruta de actualización se validó de extremo a extremo contra el **dispositivo de referencia**, el pequeño
+programa descrito en [Construir un dispositivo actualizable](../guides/building-an-updatable-device.md). Se
+ejecutó como un proceso independiente fuera del clúster, llegó a la instancia solo por su broker e ingress
+públicos, verificó el firmante y el hash, descargó una imagen firmada mediante la concesión de descarga,
+reemplazó su propio ejecutable, se reinició e informó de la versión que estaba ejecutando; la plataforma mostró
+la asignación como `UPDATED`. Ese es todo el alcance de la afirmación: la plataforma no se ha validado en
+hardware de producción ni contra ninguna otra implementación de dispositivo. Un dispositivo que construyas tú
+debes probarlo tú, y las comprobaciones anteriores son las que conviene repetir en él.
+
+Estos casos de fallo se ejercitaron contra el mismo dispositivo, cada uno con el estado que mostró la plataforma:
+
+| Caso | Qué mostró la plataforma |
+| --- | --- |
+| Una firma que no se verifica | Se rechaza al adjuntarla (`SIGNATURE_INVALID`); el artefacto sigue `UNVERIFIED` y no se puede asignar. |
+| Bytes que no coinciden con el resumen declarado | Se rechazan en la subida; el artefacto sigue `UPLOADING`. Un dispositivo que recibe una imagen dañada informa `FAILED` con `VERIFICATION_FAILED`. |
+| Una firma de una clave en la que el dispositivo no confía | `FAILED` con `UNKNOWN_SIGNER`; el dispositivo sigue ejecutando su versión anterior. |
+| Una descarga interrumpida a medias | El dispositivo la reanuda con una petición `Range` desde los bytes que conserva; la plataforma muestra `DOWNLOADING` todo el tiempo y luego `UPDATED`. |
+| El dispositivo se desconecta durante la actualización y luego se reconecta | El intento sigue sin ser terminal (`DOWNLOADING`, o `QUEUED` si el dispositivo estaba desconectado al asignar) y se completa tras la reconexión. |
+| Cancelación | Mientras el dispositivo no es alcanzable, la petición se registra (`cancelRequested`) y el intento sigue sin ser terminal hasta que el dispositivo la confirma; entonces `CANCELLED`. Una actualización en cola pasa a `CANCELLED` de inmediato. El dispositivo conserva su versión y no deja ningún archivo parcial. |
+| Vence un plazo | El intento termina en `TIMED_OUT` (código de fallo `DEADLINE`). Un dispositivo que vuelve después no lo reabre. |
+| Falla un dispositivo de un despliegue | Al alcanzar `failureThreshold`, el despliegue se pausa con el motivo `FAILURE_THRESHOLD` y los dispositivos aún no despachados quedan intactos. Reanudado con un umbral mayor, despacha el resto y se completa, informando aún del dispositivo fallido. |
 
 ## Seguimiento {#monitoring}
 
