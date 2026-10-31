@@ -76,3 +76,12 @@ func TestDisposeRefusesANilError(t *testing.T) {
 	}()
 	Dispose(Message{NumDelivered: 1}, nil)
 }
+
+// A released hold is never judged: even on the final delivery Dispose answers Retry, so a
+// consumer cannot letter and ack a message whose only fault was a shutdown during an outage.
+func TestDisposeNeverExhaustsAReleasedHold(t *testing.T) {
+	msg := Message{NumDelivered: MaxDeliver}
+	if got := Dispose(msg, fmt.Errorf("apply: %w", ErrHoldReleased)); got != Retry {
+		t.Fatalf("Dispose(released, last delivery) = %v; want Retry", got)
+	}
+}

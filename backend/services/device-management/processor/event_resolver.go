@@ -29,6 +29,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/proto"
+	"github.com/devicechain-io/dc-microservice/storehold"
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
@@ -95,6 +96,13 @@ type EventResolver struct {
 	// pointed at each event as it is resolved, which is safe because a resolver resolves one
 	// event at a time.
 	calcObs calcObserver
+	// hold keeps an event alive, unacked and outside its delivery budget, while the
+	// relational store cannot take the lookups and writes resolution makes (core/storehold).
+	// Shared across the pool. Nil holds nothing: a resolver built without one fails the event
+	// into the ordinary retry path.
+	hold *storehold.Holder
+	// holdCtx ends a hold on shutdown: the event is left unacked for the next pod.
+	holdCtx context.Context
 }
 
 // EventTimePolicy is the resolution-time event-time policy: the tolerance a
@@ -308,12 +316,28 @@ func (rez *EventResolver) resolveProfile(ctx context.Context, api model.DeviceMa
 	return res, 0, nil
 }
 
+// relationshipTokenNamespace namespaces the derived tokens of relationships created from events.
+var relationshipTokenNamespace = uuid.MustParse("6f1c3a52-8d0e-5b7a-9c41-2e5d7a9b1c30")
+
 // Create a new relationship based on an inbound event. The source is the
 // originating device; the target is a uniform (type, token) reference (ADR-013).
 func (rez *EventResolver) CreateNewEntityRelationship(ctx context.Context, device *model.Device,
 	relcreate esmodel.UnresolvedNewRelationshipPayload) (*model.EntityRelationship, uint, error) {
+	// 🔴 THE TOKEN IS DERIVED, NOT RANDOM. This runs under a store hold and on every redelivery,
+	// and a commit whose acknowledgement was lost (a connection reset after COMMIT) looks to the
+	// caller exactly like a failed write. A random token then created the relationship a second
+	// time on the re-run. Derived from the tenant and the relationship's identity, the re-run
+	// finds the first one by token and uses it.
+	tenant, _ := core.TenantFromContext(ctx)
+	token := uuid.NewSHA1(relationshipTokenNamespace, []byte(strings.Join([]string{
+		tenant, string(entity.TypeDevice), device.Token, relcreate.TargetType, relcreate.Target, relcreate.RelationshipType}, "\x00"))).String()
+	if found, ferr := rez.Api.EntityRelationshipsByToken(ctx, []string{token}); ferr != nil {
+		return nil, uint(resolvedevent.FailureReason_ApiCallFailed), ferr
+	} else if len(found) > 0 && found[0] != nil {
+		return found[0], 0, nil
+	}
 	create := &model.EntityRelationshipCreateRequest{
-		Token:            uuid.New().String(),
+		Token:            token,
 		SourceType:       string(entity.TypeDevice),
 		Source:           device.Token,
 		TargetType:       relcreate.TargetType,
@@ -1324,6 +1348,14 @@ func (rez *EventResolver) ResolveEvent(ctx context.Context, unrez *esmodel.Unres
 	return rez.HandleEvent(ctx, device, unrez)
 }
 
+// holdContext is the context that ends a hold: the pool's, when it has one, else the caller's.
+func (rez *EventResolver) holdContext(fallback context.Context) context.Context {
+	if rez.holdCtx != nil {
+		return rez.holdCtx
+	}
+	return fallback
+}
+
 // Converts unresolved events into resolved events.
 func (rez *EventResolver) Process(ctx context.Context) {
 	for {
@@ -1384,8 +1416,28 @@ func (rez *EventResolver) Process(ctx context.Context) {
 
 			// Attempt to resolve event using the per-message tenant context.
 			started := time.Now()
-			resolved, reason, err := rez.ResolveEvent(msgctx, event)
+			//
+			// 🔴 A resolve that failed because the STORE is down is HELD, not retried against the
+			// delivery budget: the budget ends in a failed-events record and an ack, so an
+			// outage longer than MaxDeliver x AckWait (about four minutes) used to discard every
+			// event the device had already been PUBACKed for. Resolution is idempotent on
+			// re-execution (it is re-run on every redelivery already): lookups, plus an
+			// auto-registration keyed by token that a repeat finds already done.
+			var (
+				resolved []EventResolutionResults
+				reason   uint
+			)
+			err = rez.hold.RunCtx(rez.holdContext(ctx), msgctx, []messaging.Message{unresolved}, func(c context.Context) error {
+				var rerr error
+				resolved, reason, rerr = rez.ResolveEvent(c, event)
+				return rerr
+			})
 			rez.slow.observe(time.Since(started), correlation)
+			if errors.Is(err, storehold.ErrReleased) {
+				// Shutdown ended the hold. Unacked, for the next pod; no letter, no ack.
+				done(core.ResultRetry)
+				continue
+			}
 			if err != nil {
 				// Resolution failed. Retry via redelivery (a transient lookup error
 				// may clear, and a not-yet-registered device may appear) until the

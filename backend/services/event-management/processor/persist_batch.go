@@ -243,6 +243,7 @@ func eventRows(event *resolvedevent.ResolvedEvent) int {
 func (ep *EventPersistenceWorker) writeBatch(ctx context.Context, batch []pendingEvent,
 	write func(*gorm.DB, []pendingEvent) (int, error)) (int, error) {
 	failedAt := -1
+	ep.writeStart = time.Now()
 	err := ep.Api.PersistInTx(ctx, func(tx *gorm.DB) error {
 		var err error
 		failedAt, err = write(tx, batch)
@@ -269,6 +270,7 @@ func (ep *EventPersistenceWorker) acknowledge(batch []pendingEvent, started time
 // dispose. A batch of one takes it, and so does every message a batch gives up on.
 func (ep *EventPersistenceWorker) persistOne(p pendingEvent) {
 	started := time.Now()
+	ep.writeStart = started
 	_, err := ep.PersistEvent(p.ctx, *p.event)
 	if err == nil {
 		ep.metrics.committed(1, eventRows(p.event), time.Since(started))

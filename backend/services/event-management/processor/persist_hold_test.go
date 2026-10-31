@@ -35,9 +35,9 @@ func (r *batchRig) gauge(t *testing.T, name string) float64 {
 
 func probeTimings(t *testing.T, min, max time.Duration) {
 	t.Helper()
-	omin, omax := heldProbeMin, heldProbeMax
-	heldProbeMin, heldProbeMax = min, max
-	t.Cleanup(func() { heldProbeMin, heldProbeMax = omin, omax })
+	omin, omax := holdTuning.ProbeMin, holdTuning.ProbeMax
+	holdTuning.ProbeMin, holdTuning.ProbeMax = min, max
+	t.Cleanup(func() { holdTuning.ProbeMin, holdTuning.ProbeMax = omin, omax })
 }
 
 func fastProbes(t *testing.T) { probeTimings(t, 5*time.Millisecond, 20*time.Millisecond) }
@@ -366,9 +366,9 @@ func TestHeldEventsAreToldTheyAreInProgressAtOnceAndOnCadence(t *testing.T) {
 	// Waits (200-400 ms) much longer than the beat interval (60 ms): the old ticker-per-wait
 	// would have sent nothing for the whole of a wait.
 	probeTimings(t, 200*time.Millisecond, 400*time.Millisecond)
-	every := heldProgressEvery
-	heldProgressEvery = 60 * time.Millisecond
-	t.Cleanup(func() { heldProgressEvery = every })
+	every := holdTuning.ProgressEvery
+	holdTuning.ProgressEvery = 60 * time.Millisecond
+	t.Cleanup(func() { holdTuning.ProgressEvery = every })
 
 	r := newBatchRig(t, 4)
 	r.api.storeDown.Store(true)
@@ -388,7 +388,9 @@ func TestHeldEventsAreToldTheyAreInProgressAtOnceAndOnCadence(t *testing.T) {
 
 	var zeroed atomic.Bool
 	stop := make(chan struct{})
+	pollDone := make(chan struct{})
 	go func() {
+		defer close(pollDone)
 		seen := false
 		for {
 			select {
@@ -405,7 +407,9 @@ func TestHeldEventsAreToldTheyAreInProgressAtOnceAndOnCadence(t *testing.T) {
 			}
 		}
 	}()
-	defer close(stop)
+	var stopOnce sync.Once
+	stopPoller := func() { stopOnce.Do(func() { close(stop); <-pollDone }) }
+	defer stopPoller()
 
 	start := time.Now()
 	done := r.runAsync(msgs)
@@ -418,6 +422,9 @@ func TestHeldEventsAreToldTheyAreInProgressAtOnceAndOnCadence(t *testing.T) {
 		snap[i] = append([]time.Time(nil), beats[i]...)
 	}
 	mu.Unlock()
+	// Stop watching the gauge BEFORE the store recovers: its legitimate fall to 0 on recovery
+	// is not "dropped to 0 during a probe", and a poller still running would call it one.
+	stopPoller()
 	r.api.storeDown.Store(false)
 	r.finishWithin(t, done)
 

@@ -5,12 +5,10 @@ package processor
 
 import (
 	"context"
-	"math/rand/v2"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
-	"github.com/devicechain-io/dc-microservice/messaging"
-	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/storehold"
 	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
 )
@@ -32,9 +30,9 @@ import (
 //
 //   - kept unacked, and told to the broker as InProgress, which restarts the ack-wait WITHOUT
 //     spending a delivery: at once when a message is held, then whenever a third of AckWait
-//     has passed, and before and after every probe (heldProgressEvery);
+//     has passed, and before and after every probe (holdTuning.ProgressEvery);
 //   - written again only after the store answers a trivial probe, on a jittered backoff
-//     (heldProbeMin doubling to heldProbeMax), and acked only once a commit confirms them;
+//     (holdTuning.ProbeMin doubling to holdTuning.ProbeMax), and acked only once a commit confirms them;
 //   - never read past: a writer that holds does not collect, its channel fills, the read loop
 //     blocks in handOff, and the consumer stops fetching. The backlog then waits UNREAD in
 //     resolved-events, which is the quantity the stream's backpressure gate watches
@@ -54,48 +52,39 @@ import (
 //
 // The held count is bounded: one batch per writer (persistence.maxBatch x writers).
 // Shutdown ends the hold (Halt), leaving the messages unacked for redelivery to the next pod.
-var (
-	heldProbeMin = 2 * time.Second
-	heldProbeMax = 30 * time.Second
-	// heldProbeTimeout bounds one probe, well under heldProgressEvery so a probe against a
-	// blackholed database cannot let a held message's ack-wait lapse.
-	heldProbeTimeout = 5 * time.Second
-	// probeFresh is how long a successful probe is believed, so a run of per-message
-	// dispositions after one failed batch asks the store once, not once each.
-	probeFresh = time.Second
-)
+// holdTuning is the hold's timing (storehold.Tuning); tests shorten it.
+var holdTuning = storehold.DefaultTuning()
 
-// heldProgressEvery is how often held messages are told they are still in progress. A
-// third of AckWait leaves two missed beats of margin before the broker redelivers.
-var heldProgressEvery = messaging.AckWait / 3
+// holder is this worker's storehold.Holder, built on first use because the worker is also
+// assembled by literal in tests. The classification, the probe, the beat cadence and the held
+// gauge are the shared definition in core/storehold; what stays here is the BATCH shape: a
+// writer holds the messages of a failed batch itself and writes them again as a batch.
+func (ep *EventPersistenceWorker) holder() *storehold.Holder {
+	if ep.hold_ == nil {
+		h := &storehold.Holder{
+			Name: "event-persistence",
+			Halt: ep.Halt,
+			Tune: holdTuning,
+			Probe: func(ctx context.Context) error {
+				return ep.Api.PersistInTx(ctx, func(db *gorm.DB) error { return db.Exec("SELECT 1").Error })
+			},
+		}
+		ep.hold_ = h
+	}
+	return ep.hold_
+}
 
 // storeAnswers probes the event store with a trivial query and reports whether it answered.
 func (ep *EventPersistenceWorker) storeAnswers(ctx context.Context) bool {
-	if !ep.probedOK.IsZero() && time.Since(ep.probedOK) < probeFresh {
-		return true
-	}
-	pctx, cancel := context.WithTimeout(ctx, heldProbeTimeout)
-	defer cancel()
-	err := ep.Api.PersistInTx(pctx, func(db *gorm.DB) error { return db.Exec("SELECT 1").Error })
-	if err != nil {
-		ep.probedOK = time.Time{}
-		return false
-	}
-	ep.probedOK = time.Now()
-	return true
+	return ep.holder().StoreAnswers(ctx)
 }
 
 // outage reports whether err means the STORE, and not the message, is what failed.
 func (ep *EventPersistenceWorker) outage(ctx context.Context, err error) bool {
-	switch {
-	case err == nil:
-		return false
-	case rdb.IsStoreRefusingWrites(err):
-		return true
-	case rdb.IsConnectionFailure(err):
-		return !ep.storeAnswers(ctx)
-	}
-	return false
+	// A probe cached from before the failed write began is not evidence about why it failed
+	// (storehold.StoreAnswersSince): on a flapping database it would call a connection reset a
+	// poison message. writeStart is when the write that produced err began.
+	return ep.holder().OutageSince(ctx, err, ep.writeStart)
 }
 
 // hold keeps p unacked and takes it out of the batch flow; settleHeld writes it again.
@@ -115,17 +104,10 @@ func (ep *EventPersistenceWorker) hold(p pendingEvent, err error) {
 	ep.held = append(ep.held, p)
 }
 
-// beat tells the broker p is in progress when it has not been told within heldProgressEvery
-// (or always, when force is set).
+// beat tells the broker p is in progress when it has not been told within the tuning's
+// ProgressEvery (or always, when force is set).
 func (ep *EventPersistenceWorker) beat(p *pendingEvent, force bool) {
-	if !force && time.Since(p.progressAt) < heldProgressEvery {
-		return
-	}
-	if err := p.msg.InProgress(); err != nil {
-		log.Warn().Err(err).Int("worker", ep.WorkerId).Msg("Could not extend a held event's acknowledgement window")
-		return
-	}
-	p.progressAt = time.Now()
+	ep.holder().Beat(p.msg, &p.progressAt, force)
 }
 
 // beatAll sends the progress beats that are due.
@@ -144,25 +126,20 @@ func (ep *EventPersistenceWorker) syncHeldGauge() {
 	}
 }
 
-// jitter spreads d over 0.5x to 1.5x so the writers do not probe in lock-step.
-func jitter(d time.Duration) time.Duration {
-	return time.Duration(float64(d) * (0.5 + rand.Float64()))
-}
-
 // settleHeld blocks until every held message has been committed and acked, or Halt closes.
 // Only the worker's own goroutine calls it, so held needs no lock.
 func (ep *EventPersistenceWorker) settleHeld(ctx context.Context) {
 	ep.syncHeldGauge()
-	wait := heldProbeMin
+	wait := holdTuning.ProbeMin
 	for len(ep.held) > 0 {
-		if !ep.waitHeld(jitter(wait)) {
+		if !ep.waitHeld(storehold.Jitter(wait)) {
 			ep.releaseHeld()
 			return
 		}
 		ep.beatAll()
 		if !ep.storeAnswers(ctx) {
 			ep.beatAll()
-			wait = min(wait*2, heldProbeMax)
+			wait = min(wait*2, holdTuning.ProbeMax)
 			continue
 		}
 		batch := ep.held
@@ -177,9 +154,9 @@ func (ep *EventPersistenceWorker) settleHeld(ctx context.Context) {
 				Msg("Event store accepts writes again; held events committed")
 			ep.holdStart = time.Time{}
 		case len(ep.held) < before:
-			wait = heldProbeMin
+			wait = holdTuning.ProbeMin
 		default:
-			wait = min(wait*2, heldProbeMax)
+			wait = min(wait*2, holdTuning.ProbeMax)
 		}
 	}
 }
@@ -190,7 +167,7 @@ func (ep *EventPersistenceWorker) waitHeld(d time.Duration) bool {
 	deadline := time.NewTimer(d)
 	defer deadline.Stop()
 	for {
-		step := min(heldProgressEvery/2, max(time.Millisecond, time.Until(ep.nextBeat())))
+		step := min(holdTuning.ProgressEvery/2, max(time.Millisecond, time.Until(ep.nextBeat())))
 		t := time.NewTimer(step)
 		select {
 		case <-ep.Halt:
@@ -207,9 +184,9 @@ func (ep *EventPersistenceWorker) waitHeld(d time.Duration) bool {
 
 // nextBeat is when the earliest held message next needs a beat.
 func (ep *EventPersistenceWorker) nextBeat() time.Time {
-	next := time.Now().Add(heldProgressEvery)
+	next := time.Now().Add(holdTuning.ProgressEvery)
 	for i := range ep.held {
-		if t := ep.held[i].progressAt.Add(heldProgressEvery); t.Before(next) {
+		if t := ep.held[i].progressAt.Add(holdTuning.ProgressEvery); t.Before(next) {
 			next = t
 		}
 	}

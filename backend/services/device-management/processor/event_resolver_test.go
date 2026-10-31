@@ -415,6 +415,7 @@ func (suite *EventResolverTestSuite) TestNewRelationshipStampsTrackedAnchorMembe
 			{TargetType: "area", TargetToken: "warehouse-3", TargetId: 900},
 		}}, nil)
 	// The assignment being created: device -> gateway.
+	suite.API.Mock.On("EntityRelationshipsByToken").Return([]*dmodel.EntityRelationship{}, nil)
 	suite.API.Mock.On("CreateEntityRelationship").Return(
 		&dmodel.EntityRelationship{TargetType: "gateway", TargetToken: "gw-1", TargetId: 42}, nil)
 	// device 500 is in beta-fleet@1; the already-tracked area 900 is in arid-areas@2. The NEW
@@ -469,6 +470,7 @@ func (suite *EventResolverTestSuite) TestNewRelationshipCarriesEveryAnchorTheDev
 		&dmodel.EntityRelationshipSearchResults{Results: []dmodel.EntityRelationship{
 			trackedRel(7, "customer", "acme"),
 		}}, nil)
+	suite.API.Mock.On("EntityRelationshipsByToken").Return([]*dmodel.EntityRelationship{}, nil)
 	suite.API.Mock.On("CreateEntityRelationship").Return(
 		&dmodel.EntityRelationship{Model: gorm.Model{ID: 9}, TargetType: "gateway", TargetToken: "gw-1", TargetId: 42}, nil)
 	suite.API.MembershipsFn = func(entityType string, entityId uint) []dmodel.GroupMembership {
