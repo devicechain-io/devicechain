@@ -61,6 +61,7 @@ namespace DeviceChain.Towerpulse.Visuals
             director = GetComponent<ShotDirector>();
             if (director == null) director = gameObject.AddComponent<ShotDirector>();
             if (director.Camera == null) director.Configure(shotFile, Camera.main);
+            if (ShotList.LoopRequested(Environment.GetCommandLineArgs())) director.Loop = true;
 
             ui = GetComponent<StoryUi>();
             if (ui == null) ui = gameObject.AddComponent<StoryUi>();

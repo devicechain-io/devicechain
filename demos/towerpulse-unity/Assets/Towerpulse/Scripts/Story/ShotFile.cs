@@ -62,6 +62,13 @@ namespace DeviceChain.Towerpulse.Story
         /// <summary>The cards a shot may show, by the name the shot file gives them.</summary>
         public static readonly string[] KnownCards = { "zone", "alarm", "command", "chiller" };
 
+        /// <summary>
+        /// -tp-loop: play the storyboard again from the top each time it ends. A live run is an hour long and the platform's alarm and command arrive minutes in, long after the
+        /// 90-second storyboard has ended on its pull-back (which shows no card), so without it a live run never shows the cards it is observing. Off by default; a take is unaffected.
+        /// </summary>
+        public const string LoopFlag = "-tp-loop";
+        public static bool LoopRequested(string[] commandLineArgs) { return commandLineArgs != null && Array.IndexOf(commandLineArgs, LoopFlag) >= 0; }
+
         public List<Shot> Shots = new List<Shot>();
 
         public double TotalS { get { return Shots.Count == 0 ? 0 : Shots[Shots.Count - 1].EndS; } }
