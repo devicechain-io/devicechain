@@ -18,9 +18,14 @@ import (
 // 🔴 THIS EXISTS BECAUSE A FULL DISK USED TO LOSE ACKNOWLEDGED EVENTS. A write the store
 // refused was left unacked, so the broker redelivered it every AckWait (60 s); on the fifth
 // delivery (messaging.MaxDeliver) the old disposition gave up, published the event to
-// failed-events (which nothing reads) and ACKED it. Five deliveries is four minutes, so any
-// store outage longer than that turned the whole in-flight window into acknowledged-then-
-// discarded events, one window per four minutes for as long as the outage lasted. The
+// failed-events (which nothing reads) and ACKED it. Five deliveries is four minutes. When the
+// store answered every statement at once with an error (a full disk, no free connections,
+// read-only, a refused connection), an outage longer than that turned the whole in-flight
+// window into acknowledged-then-discarded events, one window per four minutes for as long as
+// the outage lasted. When each attempt instead hung (no endpoints, a crash-looping primary),
+// the batch-to-single fallback made each writer take minutes per batch, the handoff channel
+// filled and the reader stopped fetching: a throttle, so the loss window was longer and
+// depended on the outage's shape. The hold now holds in every case. The
 // GKE calc-cost gate lost 1.72M PUBACKed events to a 32 GiB volume that filled this way.
 //
 // The delivery budget is for a message that is the problem. When the STORE is the problem,

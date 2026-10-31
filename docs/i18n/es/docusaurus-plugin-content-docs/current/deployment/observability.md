@@ -893,9 +893,12 @@ desactivada.
 Cuando la base de datos rechaza una escritura porque no puede aceptar ninguna (su volumen está
 lleno, es de solo lectura, se quedó sin conexiones o no responde),
 `event-management` no lo cuenta en contra de los eventos. Un evento rechazado por sí mismo se
-reintenta unas cuantas veces y luego se informa como fallido, pero un evento rechazado porque el
-almacén está caído se informaría tras unos cuatro minutos de interrupción, y un volumen lleno dura
-más que eso. Por eso estos eventos se **retienen**: el escritor los mantiene sin confirmar, avisa al bróker de inmediato, y de nuevo cada 20 segundos, de que siguen en trámite (lo que no gasta sus entregas), espera entre intentos, primero 2 segundos y duplicando hasta 30 segundos con variación aleatoria mientras el almacén siga rechazando escrituras (un volumen lleno aún responde a una consulta trivial), los vuelve a escribir cuando puede y los confirma solo cuando el almacén los ha consolidado. Un escritor
+reintenta unas cuantas veces y luego se informa como fallido. Un evento rechazado porque el
+almacén está caído, cuando el almacén respondía a cada escritura de inmediato con un error (un
+volumen lleno, un servidor de solo lectura, sin conexiones libres, una conexión rechazada), se
+informaría tras unos cuatro minutos de interrupción, y un volumen lleno dura más que eso. Cuando
+cada intento se quedaba colgado (sin ningún destino accesible), los escritores se volvían más lentos
+y la pérdida llegaba más tarde, tras un tiempo que dependía de la interrupción. Por eso estos eventos se **retienen**: el escritor los mantiene sin confirmar, avisa al bróker de inmediato, y de nuevo cada 20 segundos, de que siguen en trámite (lo que no gasta sus entregas), espera entre intentos, primero 2 segundos y duplicando hasta 30 segundos con variación aleatoria mientras el almacén siga rechazando escrituras (un volumen lleno aún responde a una consulta trivial), los vuelve a escribir cuando puede y los confirma solo cuando el almacén los ha consolidado. Un escritor
 que retiene no lee más, así que la acumulación espera en el flujo `resolved-events`, donde la
 compuerta de [contrapresión de la ingesta](#ingest-backpressure) rechaza eventos nuevos antes de que
 el flujo descarte los no leídos. Cuando se amplía el volumen o la base de datos se recupera, los
@@ -918,9 +921,11 @@ retención y deja los eventos sin confirmar para el siguiente pod.
 
 `event-management` no es el único servicio cuyos mensajes se perdían en una interrupción de la base
 de datos. Cada consumidor de la tabla siguiente se rendía con un mensaje tras su quinta entrega
-(unos cuatro minutos), escribía una carta de mensajes fallidos o lo descartaba, y lo confirmaba, de
-modo que una base de datos llena o inaccesible durante más tiempo descartaba lo que la plataforma ya
-había confirmado: eventos de dispositivos aún sin resolver, flancos de alarma (un aviso descartado
+(unos cuatro minutos), escribía una carta de mensajes fallidos o lo descartaba, y lo confirmaba.
+Una base de datos que siguiera respondiendo de inmediato con un error (llena, de solo lectura, sin
+conexiones) durante más tiempo descartaba lo que la plataforma ya había confirmado, mientras que una
+en la que cada intento se quedaba colgado solo ralentizaba a los consumidores y perdía más tarde. Lo
+perdido eran eventos de dispositivos aún sin resolver, flancos de alarma (un aviso descartado
 no se vuelve a enviar hasta que cambie la condición), informes de dispositivos, respuestas a
 comandos y las notificaciones de una alarma. Ahora **retienen** igual que se describe arriba: el
 mensaje queda sin confirmar y se avisa de que sigue en trámite, no gasta una entrega, el servicio espera, primero 2 segundos y duplicando hasta 30 segundos mientras la base de datos
