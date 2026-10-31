@@ -55,7 +55,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT="$(cd "$HERE/.." && pwd)"
 REPO="$(git -C "$PROJECT" rev-parse --show-toplevel)"
-LIVE_ENV="$HERE/live-env.sh"
+LIVE_ENV="${LIVE_ENV:-$HERE/live-env.sh}"
 CHECK="$HERE/phase_a_check.py"
 
 SP_HOME="${SP_HOME:-$HOME/sitepulse-env}"
@@ -102,7 +102,10 @@ done
 [ "$WITH_RUN" = 0 ] || DO_RUN=1
 { [ "$SOAK_MIN" -ge 1 ] && [ "$SOAK_MIN" -le 240 ]; } || die "--soak MINUTES is 1 to 240"
 
-win() { wslpath -w "$1"; }
+# From WSL the Windows player is reached through wslpath; from Git Bash on Windows (python3 may be only a
+# Store stub there, so $PYTHON names the interpreter) the same conversion is cygpath.
+if command -v wslpath >/dev/null 2>&1; then win() { wslpath -w "$1"; }; else win() { cygpath -w "$1"; }; fi
+if [ -n "${PYTHON:-}" ]; then python3() { "$PYTHON" "$@"; }; fi
 now_iso() { date -u +%Y-%m-%dT%H:%M:%S.%3NZ; }
 need() { command -v "$1" >/dev/null 2>&1 || die "'$1' is required on PATH"; }
 
@@ -116,14 +119,15 @@ item() { # item PASS|FAIL|info id description [detail]
 # preflight: refuse to start on anything that would make the run mean nothing
 # ---------------------------------------------------------------------------
 
-win_pids() { tasklist.exe /FI "IMAGENAME eq Sitepulse.exe" /FO CSV /NH 2>/dev/null | tr -d '\r' | awk -F'","' '/Sitepulse.exe/ {gsub(/"/,"",$2); print $2}' | sort -n; }
+# MSYS2_ARG_CONV_EXCL: Git Bash would otherwise turn /FI into a Windows path and tasklist would refuse it
+win_pids() { MSYS2_ARG_CONV_EXCL='*' tasklist.exe /FI "IMAGENAME eq Sitepulse.exe" /FO CSV /NH 2>/dev/null | tr -d '\r' | awk -F'","' '/Sitepulse.exe/ {gsub(/"/,"",$2); print $2}' | sort -n; }
 
 preflight() {
 	need python3
 	need openssl
 	need curl
 	command -v tasklist.exe >/dev/null 2>&1 || die "tasklist.exe is not reachable: this script drives a Windows player from WSL"
-	command -v wslpath >/dev/null 2>&1 || die "wslpath is required"
+	command -v wslpath >/dev/null 2>&1 || command -v cygpath >/dev/null 2>&1 || die "wslpath (WSL) or cygpath (Git Bash) is required"
 	"$LIVE_ENV" status >/dev/null || die "the environment is not fully up (run: $LIVE_ENV status)"
 	[ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$RUNNER/status")" = 200 ] || die "the runner does not answer $RUNNER/status"
 	CA_SRC="${SP_CA_PEM:-$SP_HOME/nats-ca.pem}"
@@ -239,7 +243,7 @@ wait_player() {
 		sleep 1
 	done
 	log "the player did not exit within ${secs}s: closing the process this script started (pid $PLAYER_PID)"
-	taskkill.exe /F /PID "$PLAYER_PID" >/dev/null 2>&1 || true
+	MSYS2_ARG_CONV_EXCL='*' taskkill.exe /F /PID "$PLAYER_PID" >/dev/null 2>&1 || true
 	wait "$PLAYER_JOB" 2>/dev/null || true
 	return 1
 }

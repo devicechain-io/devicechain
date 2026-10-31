@@ -42,6 +42,7 @@
 #                      used only if binary_fresh.py finds it newer than every source it is built from; a stale one is refused, because a take
 #                      recorded by a simulator older than the tree shows a platform the tree no longer is.
 #   TP_START_A, TP_START_B   model start hours (default 13.9 and 16.43)
+#   TP_HOOK         optional: an executable called as `$TP_HOOK <sim> <evidence-dir> <since>` in the control run, after the owner check, while the player is still up
 #   UNITY_EVAL      for --build editor: a command called as `$UNITY_EVAL tp_build.cs <seconds>` that evaluates EditorScratch/tp_build.cs in the open Editor
 #
 # Credentials are read by dcctl, the simulator, the player and acceptance_check.py themselves; this script never reads, prints or stores one.
@@ -222,7 +223,7 @@ run_mode() {
 	log "=== $mode run on a fresh sim ($SIM_NAME); evidence in $ev"
 
 	if ! curl -s -o /dev/null --max-time 3 "$INGRESS/"; then
-		kubectl -n "$NS" port-forward svc/event-sources 18081:8081 >"$ev/logs/port-forward.log" 2>&1 &
+		kubectl -n "$NS" port-forward svc/event-sources "${INGRESS##*:}:8081" >"$ev/logs/port-forward.log" 2>&1 &
 		PF_PID=$!
 		sleep 3
 	fi
@@ -261,6 +262,8 @@ run_mode() {
 		launch_player "$START_B" "$mode-B" "$ev/recordings" "$q2" "$ev/logs/player-b.log" "$ca"
 		"$PY" -I "$CHECK" segment-b --runner "$RUNNER" --out "$ev" --since "$since_b" || true
 		[ "$mode" != control ] || "$PY" -I "$CHECK" owner --runner "$RUNNER" --sim "$SIM_NAME" --out "$ev" --since "$since_a" || true
+		# an optional extra check run while the player is still up and the sim is live: TP_HOOK <sim> <evidence-dir> <since>. It never decides the verdict.
+		[ "$mode" != control ] || [ -z "${TP_HOOK:-}" ] || "$TP_HOOK" "$SIM_NAME" "$ev" "$since_a" || log "WARNING: TP_HOOK failed"
 		end_player "$q2"
 		rec_b="$(latest_run "$ev/recordings")"
 		"$PY" -I "$CHECK" annotate --runner "$RUNNER" --recording "$rec_b" --namespace "$NS" || true
