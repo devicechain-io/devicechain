@@ -1,2 +1,4 @@
 .state/
 pki/
+# The site files are configuration, not secrets: keep them tracked despite the root *.env rule.
+!sites/*.env
