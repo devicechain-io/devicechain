@@ -421,6 +421,10 @@ type ResolvedEventsProcessor struct {
 	// consumers cannot install a stale value out of lifecycle order. Buffered generously (attribute
 	// facts can burst on a fleet config push); the loop drains one per resolved-event-batch iteration.
 	attrUpdates chan attrUpdate
+
+	// seriesDrops carries a deleted device's identity to the loop, which drops the device's keyed
+	// state from the engine (applySeriesDrop).
+	seriesDrops chan seriesDrop
 	// attrRetries holds device rechecks whose LoadDevice failed transiently (applyAttrRecheck), to be
 	// re-attempted on the ticker (retryAttrRechecks). It closes the one-DB-blip window in which the
 	// driving fact is already persisted-and-acked but the view kept a stale bound: without a retry the
@@ -686,6 +690,15 @@ type attrUpdate struct {
 	deviceToken string
 }
 
+// seriesDrop is a signal to FORGET a deleted device's keyed detection state on the single-writer
+// loop (applySeriesDrop). The detection series is the device token, and tokens are reusable, so a
+// recreated device inherits whatever the deleted one left behind (an "already raised" latch makes
+// its first matching reading a non-edge) unless the deletion tears it down.
+type seriesDrop struct {
+	tenant      string
+	deviceToken string
+}
+
 // fenceUpdate is one tenant's FROZEN fence set, compiled off-loop by the geofence-set fact
 // consumer and installed on the single-writer loop by applyFenceSet (ADR-078).
 //
@@ -740,6 +753,7 @@ func NewResolvedEventsProcessor(ms *core.Microservice, reader messaging.MessageR
 		// Buffered generously for the same reason as armUpdates: an attribute config push across a
 		// fleet bursts, and the loop drains one recheck per resolved-event-batch iteration.
 		attrUpdates: make(chan attrUpdate, 256),
+		seriesDrops: make(chan seriesDrop, 256),
 		// Buffered modestly: a fence edit is a human authoring action, so these arrive at
 		// authoring rates rather than at fleet rates, and the loop drains one per iteration.
 		fenceUpdates: make(chan fenceUpdate, 32),
@@ -1658,6 +1672,9 @@ func (rp *ResolvedEventsProcessor) run() {
 			// reconcile on restart), so it needs no checkpoint of its own. A nil armUpdates channel
 			// (scaffold path) never selects here.
 			rp.applyArmRecheck(au)
+		case sd := <-rp.seriesDrops:
+			rp.phases.enter(phaseControl)
+			rp.applySeriesDrop(sd)
 		case at := <-rp.attrUpdates:
 			rp.phases.enter(phaseControl)
 			// Dynamic-threshold recheck on the single writer: re-read the authoritative attribute
@@ -2277,6 +2294,19 @@ func (rp *ResolvedEventsProcessor) applyRuleUpdate(upd ruleUpdate) {
 	// token / scaffold) or nil armer skips it.
 	if rp.armer != nil && upd.active != nil {
 		rp.armer.ApplyActiveVersion(*upd.active)
+	}
+}
+
+// applySeriesDrop forgets a deleted device's keyed state in every rule of its tenant, on the
+// single-writer loop. The state is serialized, so a drop that removed anything dirties the loop and
+// the next checkpoint captures it; otherwise a restart would replay the dropped latch back to life.
+func (rp *ResolvedEventsProcessor) applySeriesDrop(sd seriesDrop) {
+	n := rp.engine.DropSeries(sd.deviceToken, func(ruleID string) bool {
+		t, ok := runtime.RuleTenant(ruleID)
+		return ok && t == sd.tenant
+	})
+	if n > 0 {
+		rp.dirty = true
 	}
 }
 

@@ -521,6 +521,29 @@ func (e *Engine) Descope(ruleID, series string, at time.Time) bool {
 	return dropped || len(e.out) > before
 }
 
+// DropSeries forgets one series' keyed state for every rule the predicate selects, WITHOUT emitting
+// a Resolved: the raised latch, open runs, windows, cursors and timers all go. It is the teardown
+// for a series whose identity is DELETED (a device removed from the platform). The series name is
+// the device token and tokens are reusable, so a recreated device is a NEW entity that arrives under
+// the old key; left in place, the old device's "already raised" latch makes the new one's first
+// matching reading a non-edge and the alarm is never raised. No Resolved is owed: deleting the device
+// already cascaded its alarm objects, so downstream holds nothing to resolve. Returns the number of
+// entries dropped. Runs on the single-writer loop; the caller marks the checkpoint dirty when > 0.
+func (e *Engine) DropSeries(series string, match func(ruleID string) bool) int {
+	n := 0
+	for id, r := range e.rules {
+		if !match(id) {
+			continue
+		}
+		key := SeriesKey{Rule: id, Series: series}
+		n += dropOneKey(e.raised, key)
+		if e.dropSeriesKey(key, r.Kind) {
+			n++
+		}
+	}
+	return n
+}
+
 // dropSeriesKey garbage-collects one exact SeriesKey across the per-series structures, reporting
 // whether anything was removed. It deliberately does NOT touch the raised latch (Descope's
 // resolve owns it) and does NOT drop buffered out-detections: a resolved event is wholly in- or

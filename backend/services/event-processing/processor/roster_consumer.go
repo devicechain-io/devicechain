@@ -213,6 +213,17 @@ func (rp *ResolvedEventsProcessor) handleEntityDeletedFact(msg messaging.Message
 	// relationships, anchors) is consumed elsewhere (event-management) and ignored here.
 	// DeletedTime is the lifecycle clock both teardowns are ordered on, so a stale redelivered
 	// delete cannot erase a device whose newer create/re-set already advanced the clock.
+	// The live consumer also tells the loop to forget the device's keyed detection state (latches,
+	// runs, windows), whose series is the device token: a recreated device reuses the token and would
+	// otherwise inherit the deleted one's "already raised" latch, so its first matching reading would
+	// raise nothing. It is signalled before the projection teardowns so it does not depend on their
+	// stores being wired; the catch-up path (signal=false) runs before the engine is restored.
+	if signal && ev.EntityType == entity.TypeDevice && ev.EntityToken != "" &&
+		validRosterToken(ev.EntityToken) && !ev.DeletedTime.IsZero() {
+		if !rp.signalSeriesDrop(tenant, ev.EntityToken) {
+			return false // shutdown mid-send: leave unacked; the deletion redelivers next start
+		}
+	}
 	if ev.EntityType == entity.TypeDevice && (rp.RosterStore != nil || rp.AttributeStore != nil) {
 		// A malformed device fact is skipped rather than applied — symmetric with the roster
 		// consumer's drop: an over-long token would overflow the tombstone/fence insert, and a
@@ -257,6 +268,20 @@ func (rp *ResolvedEventsProcessor) handleEntityDeletedFact(msg messaging.Message
 	}
 	rp.ackFact(msg, "entity-deleted")
 	return true
+}
+
+// signalSeriesDrop marshals a deleted device's detection-state teardown onto the single-writer loop.
+// Returns false ONLY on shutdown mid-send.
+func (rp *ResolvedEventsProcessor) signalSeriesDrop(tenant, deviceToken string) bool {
+	if rp.seriesDrops == nil { // scaffold path: no loop to tell
+		return true
+	}
+	select {
+	case rp.seriesDrops <- seriesDrop{tenant: tenant, deviceToken: deviceToken}:
+		return true
+	case <-rp.pctx().Done():
+		return false
+	}
 }
 
 // ackFact acks a best-effort fact, logging a failed ack (harmless: a redelivered fact re-persists
