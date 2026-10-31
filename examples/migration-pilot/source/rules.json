@@ -1,0 +1,27 @@
+[
+  {
+    "name": "Cold room too warm",
+    "appliesToType": "Cold Chain Sensor",
+    "kind": "threshold",
+    "condition": { "key": "temperature", "operator": ">", "value": 8 },
+    "forMinutes": 10,
+    "severity": "CRITICAL",
+    "action": "create alarm"
+  },
+  {
+    "name": "Battery low",
+    "appliesToType": "Cold Chain Sensor",
+    "kind": "threshold",
+    "condition": { "key": "battery", "operator": "<", "value": 15 },
+    "forMinutes": 0,
+    "severity": "WARNING",
+    "action": "create alarm"
+  },
+  {
+    "name": "Pump pressure check and restart",
+    "appliesToType": "Pump Controller",
+    "kind": "script-chain",
+    "nodes": ["filter: pressure > 600", "script: compute restart delay", "rpc: restart pump", "rest call: ticketing system"],
+    "action": "custom flow"
+  }
+]

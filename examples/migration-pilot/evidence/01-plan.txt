@@ -1,0 +1,30 @@
+== device types -> profiles, metrics ==
+Cold Chain Sensor  ->  profile cold-chain-sensor, device type cold-chain-sensor
+    metric temperature  DOUBLE  Cel
+    metric humidity  DOUBLE  %
+    metric battery  INT  %
+    metric door_open  BOOLEAN  -
+    SKIPPED status_text (string): a metric must be numeric or boolean; report the value as a device attribute instead
+Pump Controller  ->  profile pump-controller, device type pump-controller
+    metric flow_rate  DOUBLE  L/min
+    metric pressure  DOUBLE  kPa
+    metric running  BOOLEAN  -
+
+== rules ==
+Cold room too warm  ->  carried: threshold rule, or a duration rule when the source holds the condition for some minutes
+    {"name":"Cold room too warm","type":"duration","severity":"critical","when":{"metric":"temperature","op":"gt","threshold":8},"hold":"10m","actions":[{"type":"raiseAlarm","raiseAlarm":{"alarmKey":"cold-room-too-warm"}}]}
+Battery low  ->  carried: threshold rule, or a duration rule when the source holds the condition for some minutes
+    {"name":"Battery low","type":"threshold","severity":"warning","when":{"metric":"battery","op":"lt","threshold":15},"actions":[{"type":"raiseAlarm","raiseAlarm":{"alarmKey":"battery-low"}}]}
+Pump pressure check and restart  ->  SKIPPED: not carried: a free-form script flow has no equivalent; rebuild it as rules plus a webhook
+
+== dashboard ==
+Cold chain overview  ->  SKIPPED: dashboards are rebuilt by hand in the canvas editor (4 widgets to place)
+
+== devices ==
+25 rows in the export
+    Cold Chain Sensor: 17
+    Pump Controller: 8
+    credential ACCESS_TOKEN -> ACCESS_TOKEN: 24
+    credential BASIC -> MQTT_BASIC: 1
+
+(the server decides each device row; run './migrate.sh check' after 'model' for the dry run)

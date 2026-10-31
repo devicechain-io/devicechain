@@ -1,0 +1,22 @@
+[
+  {
+    "name": "Cold Chain Sensor",
+    "description": "Temperature and humidity probe for a cold room",
+    "telemetryKeys": [
+      { "key": "temperature", "type": "double",  "unit": "Cel" },
+      { "key": "humidity",    "type": "double",  "unit": "%" },
+      { "key": "battery",     "type": "long",    "unit": "%" },
+      { "key": "door_open",   "type": "boolean" },
+      { "key": "status_text", "type": "string" }
+    ]
+  },
+  {
+    "name": "Pump Controller",
+    "description": "Controller for a circulation pump",
+    "telemetryKeys": [
+      { "key": "flow_rate", "type": "double",  "unit": "L/min" },
+      { "key": "pressure",  "type": "double",  "unit": "kPa" },
+      { "key": "running",   "type": "boolean" }
+    ]
+  }
+]

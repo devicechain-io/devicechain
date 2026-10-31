@@ -1,0 +1,25 @@
+$ ./pilot.sh status
+targets: legacy dc
+device   enabled   legacy readings   DeviceChain readings
+cc-0001  true                   59                    236
+cc-0002  true                   59                    238
+pc-0001  true                   59                    180
+
+$ ./pilot.sh compare
+device   key            legacy deviceChain  result
+cc-0001  temperature        61       61  match
+cc-0001  humidity           61       61  match
+cc-0001  battery            61       61  match
+cc-0001  door_open          62       61  match
+cc-0001  status_text        62        0  not sent: a text value cannot be a metric
+cc-0002  temperature        62       62  match
+cc-0002  humidity           62       62  match
+cc-0002  battery            63       65  MISMATCH
+cc-0002  door_open          63       63  match
+cc-0002  status_text        63        0  not sent: a text value cannot be a metric
+pc-0001  flow_rate          64       64  match
+pc-0001  pressure           64       64  match
+pc-0001  running            64       64  match
+
+alarms raised in DeviceChain by the migrated rules:
+  cc-0002  battery-low  WARNING  ACTIVE

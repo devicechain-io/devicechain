@@ -1,0 +1,65 @@
+$ ./pilot.sh quarantine      # disable in DeviceChain while the devices keep publishing to it
+{"token":"cc-0001","enabled":false}
+{"token":"cc-0002","enabled":false}
+{"token":"pc-0001","enabled":false}
+
+$ docker logs --tail 4 pilot-cc-0001
+tick 41 legacy ok
+Connection error: Connection Refused: not authorised.
+Error: The connection was refused.
+tick 41 dc FAILED
+
+$ ./pilot.sh status
+targets: legacy dc
+device   enabled   legacy readings   DeviceChain readings
+cc-0001  false                  42                    140
+cc-0002  false                  43                    144
+pc-0001  false                  43                    108
+
+(20 s later)
+targets: legacy dc
+device   enabled   legacy readings   DeviceChain readings
+cc-0001  false                  51                    140
+cc-0002  false                  51                    144
+pc-0001  false                  52                    108
+
+$ ./pilot.sh rollback --disable
+step 1: devices now publish to the previous platform only (targets: legacy)
+step 2: disabling the pilot devices in DeviceChain
+{"token":"cc-0001","enabled":false}
+{"token":"cc-0002","enabled":false}
+{"token":"pc-0001","enabled":false}
+
+$ ./pilot.sh status
+targets: legacy
+device   enabled   legacy readings   DeviceChain readings
+cc-0001  false                  61                    140
+cc-0002  false                  62                    144
+pc-0001  false                  63                    108
+
+$ ./pilot.sh resume
+{"token":"cc-0001","enabled":true}
+{"token":"cc-0002","enabled":true}
+{"token":"pc-0001","enabled":true}
+devices publish to both again (targets: legacy dc)
+
+$ ./pilot.sh status
+targets: legacy dc
+device   enabled   legacy readings   DeviceChain readings
+cc-0001  true                   75                    184
+cc-0002  true                   76                    192
+pc-0001  true                   76                    144
+
+$ ./pilot.sh rollback --delete
+step 1: devices now publish to the previous platform only (targets: legacy)
+step 2: deleting the pilot devices from DeviceChain (their readings go with them)
+{"cc-0001":true}
+{"cc-0002":true}
+{"pc-0001":true}
+
+$ ./pilot.sh status
+targets: legacy
+device   enabled   legacy readings   DeviceChain readings
+cc-0001  absent                 79                    188
+cc-0002  absent                 80                    192
+pc-0001  absent                 80                    144

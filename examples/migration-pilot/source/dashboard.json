@@ -1,0 +1,11 @@
+{
+  "title": "Cold chain overview",
+  "description": "One board for the warehouse team. A selector picks a warehouse and the board shows only that warehouse's sensors.",
+  "aliases": [{ "name": "warehouse", "filter": "devices whose attribute site equals the selection" }],
+  "widgets": [
+    { "type": "latest-values", "title": "Now",                 "keys": ["temperature", "humidity"] },
+    { "type": "time-series",   "title": "Temperature, 24 h",   "keys": ["temperature"], "range": "24h" },
+    { "type": "alarm-table",   "title": "Open alarms" },
+    { "type": "html-card",     "title": "Escalation contacts", "note": "static text holding a phone list" }
+  ]
+}

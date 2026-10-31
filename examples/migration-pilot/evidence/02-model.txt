@@ -1,0 +1,19 @@
+tenant migration-pilot: exists
+profile cold-chain-sensor: created
+metric cold-chain-sensor/temperature: created
+metric cold-chain-sensor/humidity: created
+metric cold-chain-sensor/battery: created
+metric cold-chain-sensor/door_open: created
+metric status_text: skipped (string)
+rule cold-room-too-warm: created
+rule battery-low: created
+profile cold-chain-sensor: published
+device type cold-chain-sensor: created
+profile pump-controller: created
+metric pump-controller/flow_rate: created
+metric pump-controller/pressure: created
+metric pump-controller/running: created
+rule Pump pressure check and restart: skipped (script-chain)
+profile pump-controller: published
+device type pump-controller: created
+dashboard: skipped (rebuild by hand)
