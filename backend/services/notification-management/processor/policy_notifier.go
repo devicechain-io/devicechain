@@ -20,6 +20,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/secrets"
+	"github.com/devicechain-io/dc-microservice/storehold"
 	"github.com/devicechain-io/dc-notification-management/model"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
@@ -125,6 +126,11 @@ type PolicyNotifier struct {
 	// bookkeeping has to survive. Zero means the constant (this struct is also built by
 	// literal in tests) — read it through wholeDispatchBudget, never directly.
 	budget time.Duration
+
+	// Hold holds the post-release state write through a store outage (storehold). The release
+	// path runs on the scheduler, with no message to beat. MAY BE NIL (struct-literal fixtures):
+	// the write then runs once, as before; read it through settle.
+	Hold *storehold.Holder
 
 	// TenantDeleted reports whether a tenant has been through the ADR-077 delete door.
 	// A closure rather than the governance resolver type so this package needs no live
@@ -467,28 +473,61 @@ func (n *PolicyNotifier) dispatch(ctx context.Context, event *dmmodel.AlarmState
 	}
 
 	// At least one channel delivered: record the notification so the throttle/escalation
-	// state reflects it. A failure here is logged, not left for redelivery — the sends
+	// state reflects it. A failure here must not be left for redelivery -- the sends
 	// already happened, and redelivery would double-send them.
+	//
+	// 🔴 BUT IT MUST NOT BE DROPPED EITHER, which is what this used to do. A database outage
+	// that began after the page went out failed both writes below with a log line and an ack.
+	// The consequences were real: with no state row the alarm never entered the escalation
+	// substrate (the page is never followed up) and the throttle had no basis (the next
+	// transition of the same alarm paged again at once); with a row, NotifyCount and
+	// LastNotifiedAt stayed behind, so the throttle window opened early and the escalation
+	// timer ran from an older page. And the held quiet-hours deferral survived, so its release
+	// later paged a SECOND time about an older event and stamped that older severity.
+	//
+	// So the writes are SETTLED: held in place (storehold.Settle) while the store cannot take
+	// them, with the message beaten in progress and outside its delivery budget, then run once
+	// it answers. Only the write is retried, never the send. Both are idempotent on a re-run
+	// (the supersede is a delete; the record is one atomic transaction).
+	//
+	// 🔑 THE RESIDUAL WINDOW, honestly: a webhook or SMTP send cannot be made exactly-once, and
+	// this is at-least-once with the page done before the record. If the process dies, or shuts
+	// down, between the send and a successful write, the record is lost (shutdown logs it at
+	// error; a crash leaves nothing to log). We choose to lose the record there rather than
+	// redeliver, because a redelivery re-sends the page, which is the worse failure for the
+	// person paged. A write the store applied just before the connection dropped is re-run and
+	// may count the notification twice: an over-count only ever delays an escalation or widens a
+	// throttle by one page, never repeats one.
 	//
 	// 🔑 IT RUNS OFF THE PARENT CONTEXT, NOT dctx, ON PURPOSE. A dispatch that spent its
 	// whole budget delivering would otherwise find its own budget already expired at the
 	// one write that has to happen: with no state row the alarm never enters the
 	// escalation substrate, so the page that just went out would never be followed up.
-	// recordTimeout is smaller than dispatchMargin so this still lands inside AckWait.
-	rctx, rcancel := context.WithTimeout(ctx, recordTimeout)
-	defer rcancel()
-	if err := n.api.RecordNotification(rctx, event.AlarmToken, event.AlarmKey, event.Severity,
-		event.RaisedTime, event.OccurredTime); err != nil {
+	// recordTimeout bounds each ATTEMPT and is smaller than dispatchMargin so the first
+	// still lands inside AckWait; a held re-run is kept alive by the hold's beats.
+	if err := storehold.Settle(ctx, func(c context.Context) error {
+		rctx, rcancel := context.WithTimeout(c, recordTimeout)
+		defer rcancel()
+		return n.api.RecordNotification(rctx, event.AlarmToken, event.AlarmKey, event.Severity,
+			event.RaisedTime, event.OccurredTime)
+	}); err != nil {
 		log.Error().Err(err).Str("tenant", tenant).Str("alarm", event.AlarmToken).
-			Msg("Delivered notification but failed to record notification state")
+			Msg("Delivered notification but failed to record notification state; the alarm " +
+				"will not escalate and its throttle is not armed")
 	}
 	// A page about the alarm as it is NOW has gone out through these policies, so whatever
 	// they were holding about it from earlier is answered. Released later it would page a
 	// second time, about an older event — and stamp the notification state with that older
 	// severity, which the escalation that follows would then page at.
 	if ids := n.pagingPolicyIDs(event, sendNow, state); len(ids) > 0 {
-		superseded, err := n.api.SupersedeNotificationDeferrals(rctx, event.AlarmToken, ids, event.OccurredTime)
-		if err != nil {
+		var superseded int64
+		if err := storehold.Settle(ctx, func(c context.Context) error {
+			rctx, rcancel := context.WithTimeout(c, recordTimeout)
+			defer rcancel()
+			var err error
+			superseded, err = n.api.SupersedeNotificationDeferrals(rctx, event.AlarmToken, ids, event.OccurredTime)
+			return err
+		}); err != nil {
 			log.Error().Err(err).Str("tenant", tenant).Str("alarm", event.AlarmToken).
 				Msg("Paged, but could not drop what quiet hours held about the alarm; it will be " +
 					"sent again when released")
