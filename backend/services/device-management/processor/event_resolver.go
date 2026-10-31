@@ -1418,9 +1418,10 @@ func (rez *EventResolver) Process(ctx context.Context) {
 			started := time.Now()
 			//
 			// 🔴 A resolve that failed because the STORE is down is HELD, not retried against the
-			// delivery budget: the budget ends in a failed-events record and an ack, so an
-			// outage longer than MaxDeliver x AckWait (about four minutes) used to discard every
-			// event the device had already been PUBACKed for. Resolution is idempotent on
+			// delivery budget: the budget ends in a failed-events record and an ack, so a
+			// fast-failing outage longer than MaxDeliver x AckWait (about four minutes) used to
+			// discard every event the device had already been PUBACKed for (a hanging one was
+			// throttled, and lost later). Resolution is idempotent on
 			// re-execution (it is re-run on every redelivery already): lookups, plus an
 			// auto-registration keyed by token that a repeat finds already done.
 			var (

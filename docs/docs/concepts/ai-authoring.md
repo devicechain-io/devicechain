@@ -25,6 +25,7 @@ This is the **determinism boundary**, and it is a hard line:
 - The AI (and the canvas) sit **only** on the authoring side. They help you write a rule.
 - What runs is the **compiled rule** — deterministic CEL over the keyed-streaming engine. By construction it gives the same firings when events are replayed ([replay-correct](./event-processing.md)).
 - **Neither the model nor the canvas ever sits in the replay-correct detection path.** A restart re-derives identical firings from the compiled rule; the model that helped draft it is nowhere in that loop.
+- **One caveat applies to the claims above:** a rule whose threshold reads a **device attribute** is evaluated against the attribute's *current* value on replay, so a replay can lose a firing or add one. Rules with a fixed threshold are unaffected. See [what a restart costs](../deployment/detection-engine.md#what-a-restart-costs).
 
 When you use the Describe door, the service runs a **bounded compile-and-repair loop**. It drafts a candidate and compiles it. If the compiler rejects it, the service feeds the error back for a limited number of repair attempts. What you receive is a candidate that already compiles. You still review it in the form and save it into the profile's draft yourself, and it runs only once you publish the profile; nothing is armed on your behalf.
 
@@ -58,7 +59,7 @@ Users do **not** pick a model per task. Model choice is operator configuration, 
 
 ### What the AI never touches
 
-- It never runs in the live [detection and actions](./event-processing.md) path. That path is deterministic CEL, replay-correct, and model-free.
+- It never runs in the live [detection and actions](./event-processing.md) path. That path is deterministic CEL, replay-correct for rules with fixed thresholds (see the [replay caveat](../deployment/detection-engine.md#what-a-restart-costs) for attribute-based ones), and model-free.
 - It never sees another tenant's data, and it is not a privileged backdoor. This is distinct from the [MCP surface](./mcp.md), where an AI *agent* operates the platform under a user's own tenant-scoped token.
 - Tenant business data (device names, attribute values) and secrets are not the model's to expose; keys stay write-only in the secret store.
 - **It writes nothing.** A drafted rule is returned for a person to review and save through the ordinary authoring path, under their own token. The drafting call itself persists nothing.

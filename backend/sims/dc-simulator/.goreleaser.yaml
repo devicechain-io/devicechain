@@ -1,0 +1,70 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# goreleaser config for the DeviceChain reference simulator (dc-simulator).
+#
+# Cross-compiles static `dc-simulator` binaries and attaches them, archived + checksummed, to
+# the GitHub Release created for a vX.Y.Z tag, so `dcctl sim run` works without a Go toolchain.
+# The release workflow runs this from the backend/sims/dc-simulator directory, so this module IS
+# the project root and `main: .` resolves to backend/sims/dc-simulator/main.go.
+#
+# Like the edge agent's, it does NOT create or publish the GitHub Release itself
+# (release.disable: true): dcctl's goreleaser owns the single Release for the tag. This one only
+# builds the archives + a UNIQUELY NAMED checksum file; the release workflow uploads them onto the
+# existing Release with `gh release upload`.
+
+version: 2
+
+project_name: dc-simulator
+
+# No `go mod tidy` before-hook, for the same reason as dcctl's config: a tidy that changed
+# anything would build the release from files that differ from the tag. CI's tidy gate
+# (hack/check-go-mod-tidy.sh) guarantees the committed go.mod/go.sum need no change.
+
+builds:
+  - id: dc-simulator
+    binary: dc-simulator
+    main: .
+    env:
+      - CGO_ENABLED=0
+    # Same matrix as dcctl: the simulator is run from a developer or evaluator machine next to
+    # dcctl, so it needs every platform dcctl does. It has no platform-specific syscalls.
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+      - -X main.gitCommit={{ .FullCommit }}
+      - -X main.buildDate={{ .Date }}
+
+archives:
+  - id: dc-simulator
+    ids:
+      - dc-simulator
+    name_template: >-
+      dc-simulator_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    formats:
+      - tar.gz
+    # Windows users expect a .zip rather than a tarball.
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+
+checksum:
+  # UNIQUE name (not the default "checksums.txt"): dcctl's goreleaser publishes its own
+  # checksums.txt onto the SAME Release, and `gh release upload --clobber` would otherwise
+  # silently replace dcctl's checksums with this one.
+  name_template: "dc-simulator_checksums.txt"
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot"
+
+# This goreleaser never owns the GitHub Release (dcctl's does); it only produces the artifacts.
+release:
+  disable: true

@@ -10,12 +10,32 @@ wheel loaders and haul trucks report telemetry to a DeviceChain instance and car
 sent from it. The scene shows what the platform observed and what the machine did, side by side,
 so a viewer can follow a command from the console to the machine and back.
 
-**Status: early.** This project holds the machine models and their rigs, the quarry terrain with
-its roads, site props, processing plant and vegetation, and a looping preview of an 18-machine
-fleet working the site (`Scenes/Quarry.unity`), drawn in one clean, stylized look: the low-poly
-machines, faceted rock and conifers, and terrain in broad fields of colour. The connection to a DeviceChain instance through the
-[Unity SDK](../../sdks/unity) comes next. Nothing here talks to a platform yet, and the scene's
-look is still being worked on (see [Known limitations](#known-limitations)).
+**Status.** The scene connects to a DeviceChain instance. In **live** mode each of the 18 machines
+and the plant is a real device: it signs in with its own credential, publishes over MQTT through the
+[Unity SDK](../../sdks/unity), receives and answers commands, and the cards show only what the
+platform reports back. The default **choreographed** mode is a scripted preview with illustrative
+values and needs no instance, and **replay** plays a recorded live run back with no network (see
+[Modes](#modes)). The project also holds the machine models and their rigs, the quarry terrain with
+its roads, site props, processing plant and vegetation, drawn in one clean, stylized look. The
+scene's look is still being worked on (see [Known limitations](#known-limitations)).
+
+A second showcase, [Towerpulse](../towerpulse-unity) (a simulated facility-services campus with 31
+devices), reuses the same shared connection package and acceptance approach.
+
+## Quick start
+
+1. **Preview, no instance needed.** Open the project (see [Opening the project](#opening-the-project)),
+   open `Scenes/Quarry.unity` and press Play. This is choreographed mode; its card values are
+   illustrative.
+2. **Connect it to an instance.** Live mode needs a running DeviceChain instance with the Sitepulse
+   simulation and its runner. `tools/live-env.sh up` brings up an isolated one (a kind cluster
+   named `sitepulse`, using a released `dcctl`); see [Live environment](#live-environment). Stage the
+   C# SDK (`sdks/unity/stage-sdk.sh`, then remove the five assemblies Unity already ships, as the
+   package's `VERIFICATION.md` lists), point the player at the runner and the broker's CA with
+   `live.json` or `-dc-runner <url> -dc-ca <path>`, and start it with `-sitepulse-mode live`
+   (see [Modes](#modes)).
+3. **Replay a recorded run.** `Sitepulse.exe -sitepulse-replay <runId|path>` plays a run recorded in
+   live mode back with no network (see [Recording, replay and rendering](#recording-replay-and-rendering)).
 
 ## Prerequisites
 
@@ -111,7 +131,7 @@ and motor stand beside it, before a conveyor carries the crushed rock up to the 
 radial stacker. `QuarryFleetPreview` plays the choreography in `Data/quarry_fleet.json` (a loader
 on a low bench filling each haul truck in two passes, five trucks running the loop up the
 two-lane ramp, a sixth calling at the refuel bay, dozers working the cut and the dump, idle
-machines parked in the yard) through the same `MachineRig` the platform connection will drive.
+machines parked in the yard) through the same `MachineRig` that live mode drives from the platform's commands.
 
 Cosmetic effects follow what the machines do: dust behind them that grows with speed and with a
 loaded climb, exhaust when they pull away or climb, rotating amber beacons on working machines,
@@ -143,11 +163,10 @@ targets fan out. A target hidden by the ground gets no card, nor does a machine 
 screen than the largest one in view, and the zone's name never sits over a card's target. It is one overlay that is switched on and off as a whole, so the same scene
 also makes clean stills.
 
-**The values are illustrative.** Until the scene is connected to a DeviceChain instance the
-readings are derived from the preview choreography (whether a truck is loaded, how fast it moves,
-which loader feeds the crusher) in one method, `IotOverlay.UpdateReadings`, and are not platform
-data. Connecting the scene replaces that method's source with the observed readings; the cards
-and the records do not change.
+**In choreographed mode the values are illustrative.** The readings are derived from the preview
+choreography (whether a truck is loaded, how fast it moves, which loader feeds the crusher) in one
+method, `IotOverlay.UpdateReadings`, and are not platform data. In live mode that method's source is
+the observed readings; the cards and the records do not change.
 
 The sky (`Art/Shaders/StylizedSky.shader`) is drawn as code to match: a soft gradient whose
 horizon is the scene's fog colour, a warm glow round the sun, and a few flat cumulus low over the
@@ -259,6 +278,26 @@ tenant-admin token on loopback only; the script never prints it. It needs `docke
 `helm`, `openssl`, `curl`, `gh` (to download `dcctl`) and OpenTofu or Terraform. `up` writes the broker's
 CA to `$SP_HOME/nats-ca.pem` (and to `$SP_CA_OUT` if set, e.g. a folder under `/mnt/c` the player
 can read); that is the `-dc-ca` a player is started with.
+
+## Contributing
+
+What runs in CI, and what does not:
+
+- The generated site, fleet choreography and topology are checked and must reproduce byte for byte
+  (workflow `sitepulse-fleet`, on changes under `ArtSource/` and the quarry data files).
+- The recording-to-board converter and its committed excerpt are tested (workflow
+  `sitepulse-board-replay`).
+- The Unity package is compiled against real UnityEngine reference assemblies (`unity-compile-check`),
+  and the C# SDK's MQTT client is tested against the broker the platform ships, both authless and
+  behind the platform's real auth callout (the `csharp` job).
+- The shared demo-platform package's engine-free assemblies are compiled and tested outside Unity
+  (the `demo-platform` job).
+- The Unity Editor tests (`Tests/EditMode`), the Windows player build, and the live acceptance run
+  below are **not** in CI: they need a licensed Unity install and, for acceptance, a live instance.
+  Run the Edit Mode tests and, for anything touching the connection, the acceptance script before
+  sending a change.
+
+The Python tools have unit tests: `cd tools && python3 -m unittest`.
 
 ## Acceptance
 

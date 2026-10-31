@@ -248,12 +248,14 @@ curl -s -X POST http://localhost/api/event-management/graphql \
 
 ## 下一步 {#where-to-go-next}
 
-- **运行模拟设备群。** 一台设备还不算设备群。第 2 步的 `dcctl sim create` 同时配置了一个模拟场景。构建并运行模拟器，让它创建包含完整数据的租户并持续发送数据：
+- **运行模拟设备群。** 一台设备还不算设备群。第 2 步的 `dcctl sim create` 同时配置了一个模拟场景。下载并运行模拟器，让它创建包含完整数据的租户并持续发送数据。无需 Go 工具链：每个 [GitHub 发布版本](https://github.com/devicechain-io/devicechain/releases)都附带 `dc-simulator_<版本>_<操作系统>_<架构>`（`.tar.gz`，Windows 为 `.zip`），支持 Linux、macOS 和 Windows 的 `amd64` 与 `arm64`，其 SHA-256 摘要位于同一发布版本的 `dc-simulator_checksums.txt` 中。解压后，将它放入 `PATH`，或让 `dcctl` 指向它：
 
   ```bash
-  cd backend/sims/dc-simulator && make build
-  ./build/dc-simulator --handshake ~/.devicechain/sims/demo.json
+  tar -xzf dc-simulator_<版本>_<操作系统>_<架构>.tar.gz
+  dcctl sim run demo --simulator ./dc-simulator
   ```
+
+  `dcctl sim run` 会自行找到该模拟的 handshake 文件和控制端口；省略 `--simulator` 时，它会在 `PATH` 中查找 `dc-simulator`。从源码检出构建的贡献者可以运行 `cd backend/sims/dc-simulator && make build`，并改用 `./build/dc-simulator`。
 
   然后使用 `dcctl sim status demo`、`dcctl sim stop demo` 和 `dcctl sim start demo` 控制它。模拟器访问的是同一个接入端点，因此同样需要第 5 步的端口转发。
 

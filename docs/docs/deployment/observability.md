@@ -857,8 +857,11 @@ its median sits about 10 milliseconds higher than with the wait off.
 
 When the database refuses a write because it cannot take writes at all (its volume is full, it is read-only, it is out of connections, or it does not answer), `event-management` does not
 count that against the events. An event that is refused for its own sake is retried a few times
-and then reported as failed, but an event refused because the store is down would be reported
-after about four minutes of outage, and a full volume lasts longer than that. So these events are
+and then reported as failed. An event refused because the store is down, when the store answered
+every write at once with an error (a full volume, a read-only server, no free connections, a refused
+connection), would be reported after about four minutes of outage, and a full volume lasts longer
+than that. When each attempt hung instead (no reachable endpoint), the writers slowed down and the
+loss came later, after a time that depended on the outage. So these events are
 **held**: the writer keeps them unacknowledged, tells the broker at once, and again every 20 seconds, that they are still being worked on (which does not use up their deliveries), waits between attempts, 2 seconds at first and doubling up to 30 seconds with random jitter while the store keeps refusing writes (a full volume still answers a trivial question), writes them again once it can, and acknowledges them only once the store has committed them. A writer that is holding
 does not read more, so the backlog waits in the `resolved-events` stream, where the
 [ingest backpressure](#ingest-backpressure) gate refuses new events before the stream discards
@@ -881,8 +884,10 @@ is on. A shutdown ends the hold and leaves the events unacknowledged for the nex
 
 `event-management` is not the only service whose messages used to be lost in a database outage.
 Every consumer in the table below gave up on a message after its fifth delivery (about four
-minutes), wrote a dead letter or dropped it, and acknowledged it, so a database that stayed full or
-unreachable for longer discarded what the platform had already acknowledged: device events not yet
+minutes), wrote a dead letter or dropped it, and acknowledged it. A database that kept answering at
+once with an error (full, read-only, out of connections) for longer than that discarded what the
+platform had already acknowledged, while one where every attempt hung only slowed the consumers and
+lost later. The losses were device events not yet
 resolved, alarm edges (a dropped raise is not sent again until the condition changes), device
 reports, command responses, and the pages for an alarm. They now **hold** exactly as above: the
 message stays unacknowledged and is told it is still being worked on, it does not use up a

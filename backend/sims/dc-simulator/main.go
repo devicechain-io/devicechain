@@ -41,6 +41,14 @@ import (
 //go:embed web/index.html
 var webFiles embed.FS
 
+// Build metadata, stamped by the release build (-X main.version=...). Plain package vars,
+// like the edge agent's: an unstamped `go build` reports "dev".
+var (
+	version   = "dev"
+	gitCommit = "unknown"
+	buildDate = "unknown"
+)
+
 // defaultPort is the sim's own control/presentation HTTP port. Distinct from
 // any platform service port since it belongs to an external process.
 const defaultPort = "8090"
@@ -110,7 +118,13 @@ func main() {
 		validity:   flag.Duration("x509-validity", envDurationOr("DC_SIM_X509_VALIDITY", 0), "x509 mode: device certificate lifetime (default 1 year)"),
 		holdFor:    flag.Duration("x509-hold", envDurationOr("DC_SIM_X509_HOLD", 0), "x509 mode: disconnect after this long (0 holds until interrupted)"),
 	}
+	showVersion := flag.Bool("version", false, "print the build version, commit and date, then exit")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Printf("dc-simulator %s (commit %s, built %s)\n", version, gitCommit, buildDate)
+		return
+	}
 
 	if *x509Mode {
 		if *handshakePath == "" {

@@ -17,11 +17,16 @@ short-lived grant, and tracking of each attempt with deadlines. The console has 
 signers and rollouts, and an Updates tab on each device for assigning and following an update; see
 [Updates](/user-guide/updates) in the user guide. A small reference device in the repository follows the
 whole device side of the protocol; see [Building an Updatable Device](../guides/building-an-updatable-device.md).
+The update path was validated against that reference device, not against production hardware; see
+[What has been validated](#validated).
 
-**Not yet:** rollouts have no waves, canary promotion, schedules or maintenance windows. Only a device
-connected over MQTT can receive a managed update, because assignments travel on its MQTT channel. Devices that
-speak only HTTP cannot, [LwM2M](./lwm2m.md) devices are updated with ordinary commands instead, and
-[Sparkplug](./sparkplug.md) has no firmware update at all; see [Which devices can be updated](#transports).
+**Not in 1.0:** rollouts have no waves, canary promotion, schedules or maintenance windows; a rollout
+dispatches to its group a capped number of devices at a time and that is all. Managed updates are
+**MQTT-only**: only a device connected over MQTT can receive one, because assignments travel on its MQTT
+channel. Devices that speak only HTTP cannot. [LwM2M](./lwm2m.md) devices are not updated by the platform at all;
+they are updated with ordinary commands. [Sparkplug](./sparkplug.md) defines no firmware update, so a Sparkplug
+edge node can take a managed update only if it also connects as an ordinary MQTT device. See
+[Which devices can be updated](#transports).
 :::
 
 ## Turning it on {#enabling}
@@ -330,6 +335,29 @@ the image before the digest and signature have been checked, keep the trust keys
 taking one from a message, and report `RUNNING` only from evidence of the version that is actually running.
 [Building an Updatable Device](../guides/building-an-updatable-device.md) walks through a reference
 implementation that does all of this and shows the order of checks.
+
+## What has been validated {#validated}
+
+The update path was validated end to end against the **reference device**, the small program described in
+[Building an Updatable Device](../guides/building-an-updatable-device.md). It ran as a separate process
+outside the cluster, reached the instance only through its public broker and ingress, verified the signer and
+the hash, fetched a signed image through the download grant, replaced its own executable, restarted, and
+reported the version it was then running; the platform showed the assignment `UPDATED`. That is the extent of
+the claim: the platform has not been validated on production hardware or against any other device
+implementation. A device you build is yours to test, and the checks above are the ones to repeat on it.
+
+These failure cases were exercised against the same device, each with the state the platform showed:
+
+| Case | What the platform showed |
+| --- | --- |
+| A signature that does not verify | Refused when it is attached (`SIGNATURE_INVALID`); the artifact stays `UNVERIFIED` and cannot be assigned. |
+| Bytes that do not hash to the declared digest | Refused at upload; the artifact stays `UPLOADING`. A device that receives a corrupted image reports `FAILED` with `VERIFICATION_FAILED`. |
+| A signature by a key the device does not trust | `FAILED` with `UNKNOWN_SIGNER`; the device keeps running its old version. |
+| A download interrupted part-way | The device resumes with a `Range` request from the bytes it holds; the platform shows `DOWNLOADING` throughout and then `UPDATED`. |
+| The device goes offline mid-update, then reconnects | The attempt stays non-terminal (`DOWNLOADING`, or `QUEUED` when the device was offline at assignment) and completes after the reconnect. |
+| Cancellation | While the device is unreachable the request is recorded (`cancelRequested`) and the attempt stays non-terminal until the device confirms, then `CANCELLED`; a queued update is `CANCELLED` at once. The device keeps its version and leaves no partial file. |
+| A deadline passes | The attempt ends `TIMED_OUT` (failure code `DEADLINE`). A device that returns afterwards does not reopen it. |
+| One device of a rollout fails | With `failureThreshold` reached the rollout pauses with the reason `FAILURE_THRESHOLD` and the devices not yet dispatched are untouched. Resumed with a higher threshold, it dispatches the rest and completes, still reporting the failed device. |
 
 ## Watching it {#monitoring}
 
