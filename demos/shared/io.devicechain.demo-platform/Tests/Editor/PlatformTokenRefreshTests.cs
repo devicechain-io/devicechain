@@ -30,12 +30,14 @@ namespace DeviceChain.Demos.Tests
                 () => DateTimeOffset.FromUnixTimeSeconds(now));
         }
 
-        // Wait for what the test is about to assert, with a bounded budget of frames and of time: a
-        // loaded Editor can take many frames to finish a refresh, and a fixed few were not always enough.
-        static IEnumerator Until(Func<bool> condition, int maxFrames = 300, double maxSeconds = 20)
+        // Wait for what the test is about to assert, bounded by wall-clock time only. A frame budget
+        // is the wrong bound: in a batch-mode Editor frames can pass in microseconds, so 300 of them
+        // end before the refresh's continuation has been scheduled and the test asserts on a fetch
+        // that has not started yet.
+        static IEnumerator Until(Func<bool> condition, double maxSeconds = 20)
         {
             var end = DateTime.UtcNow.AddSeconds(maxSeconds);
-            for (var i = 0; i < maxFrames && DateTime.UtcNow < end && !condition(); i++) yield return null;
+            while (DateTime.UtcNow < end && !condition()) yield return null;
         }
 
         [UnityTest]
@@ -91,7 +93,7 @@ namespace DeviceChain.Demos.Tests
 
             now = 10_000 - 100;                                   // inside the margin: renew
             b.Tick();
-            for (var i = 0; i < 300 && b.ExpiresAt != DateTimeOffset.FromUnixTimeSeconds(10_900); i++) yield return null;
+            yield return Until(() => b.ExpiresAt == DateTimeOffset.FromUnixTimeSeconds(10_900));
             Assert.AreEqual(DateTimeOffset.FromUnixTimeSeconds(10_900), b.ExpiresAt, "renewed");
             var fetchesBefore = fetches;
 
