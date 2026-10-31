@@ -210,6 +210,10 @@ type ResolveMetrics struct {
 
 	// calc counts calculated-metric outcomes (ADR-082), shared by the pool.
 	calc *CalcMetrics
+
+	// drops counts measurement entries dropped at resolution while the rest of their event was
+	// stored, shared by the pool.
+	drops *MeasurementDropMetrics
 }
 
 // NewResolveMetrics builds the inbound resolve loop's instruments.
@@ -223,8 +227,9 @@ type ResolveMetrics struct {
 func NewResolveMetrics(ms *core.Microservice) ResolveMetrics {
 	calc := newCalcMetrics(ms)
 	return ResolveMetrics{
-		calc: &calc,
-		red:  ms.NewProcessorMetrics("resolve"),
+		calc:  &calc,
+		drops: newMeasurementDropMetrics(ms),
+		red:   ms.NewProcessorMetrics("resolve"),
 		eventTimeBounded: ms.NewCounter(
 			"resolve_event_time_bounded_total",
 			"Reported event times refused for leading the server clock by more than the configured tolerance, and replaced with the ceiling"),
@@ -794,6 +799,7 @@ func (iproc *InboundEventsProcessor) initializeEventResolvers(ctx context.Contex
 		resolver.hold = iproc.hold
 		resolver.holdCtx = iproc.holdCtx
 		resolver.calcObs.metrics = iproc.metrics.calc
+		resolver.drops = iproc.metrics.drops
 		iproc.resolvers = append(iproc.resolvers, resolver)
 		// Resolvers run on a background context (not the cancelable read context)
 		// so that on shutdown they drain the remaining buffered messages to

@@ -135,8 +135,8 @@
       "translationSha256": "3067ac1abd941bc443648074cfde097575030e82f768a19438598154a9b33554"
     },
     "deployment/metrics-reference.md": {
-      "sourceSha256": "159377d42ea1bb9def53d2ed84db08c83757ee88d485f9d135e8f3c7dfdfe7b3",
-      "translationSha256": "2b5454361caa15e56421df2d70691ab9de492707df749e8000ed3ea16c80bf97"
+      "sourceSha256": "ac5db7aea789f93f397a0adef7f4e62b607e08f74d39ee9db3d270f2d09c8871",
+      "translationSha256": "0ff2b7eb53505f144284f8f0b77671aad92593a6ccadb70576a20b43bb49b44b"
     },
     "deployment/observability.md": {
       "sourceSha256": "075a74604135d300c4c31c699c4c989e1cb647020dd6c93d9da0216cb6a32ec2",
@@ -163,8 +163,8 @@
       "translationSha256": "1aa4b1724ff1f09b3e656d5ae03f2ddea922604d11924b15c6e95041f9ae5c67"
     },
     "getting-help.md": {
-      "sourceSha256": "d2916a800d246984451cb78dcd77e2c7d3cdfe6f7abd1544a0d6e3f9e9e495c1",
-      "translationSha256": "b620bf2b1f75a46da3f2d1f2cedc7e5e613b5ad65eeb946ceeeeff71f554842f"
+      "sourceSha256": "b8f9b58ac234876db71e47b54930a2113f8541702f14c274a8c094a45994549b",
+      "translationSha256": "ff88c2e0514de1bcd633b035f8f1fa69fbff256eca84cf00788cfef2ebb4c7ff"
     },
     "guides/adding-widget-packages.md": {
       "sourceSha256": "afe424503a36f137586695e18a84afaf83c6e3fca72e57e9535ef702f980b67f",

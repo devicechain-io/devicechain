@@ -63,7 +63,12 @@ usually faster than waiting on a reply.
     The exceptions are `NaN`, `Inf` and any value of 1,000,000,000,000 or more in magnitude,
     which the store cannot hold: that entry alone is dropped, with a warning in device-management's logs.
   - An undeclared measurement with a non-numeric value is dropped — that entry alone — with a
-    warning in device-management's logs.
+    warning in device-management's logs. This includes a text value such as `"ok"` and a boolean
+    written as `true` or `false`: the `true` to 1 and `false` to 0 conversion applies only to a metric
+    declared with the boolean data type. The device's other readings in the same message are stored
+    and the device is acknowledged as normal, so the drop is not visible to the sender. Every dropped
+    entry is counted in `resolve_measurement_dropped_total`, by reason; the warning names the tenant,
+    device and metric, once per device and metric.
   - A *declared* measurement whose value does not match its declared type is worse: the whole event
     is dead-lettered. So is one that is `NaN`, infinite, or 1,000,000,000,000 or more in magnitude.
 

@@ -67,7 +67,12 @@ suele ser más rápido que esperar una respuesta.
     1.000.000.000.000, que el almacén no puede guardar: se descarta solo esa entrada, con una
     advertencia en los registros de device-management.
   - Una medición sin declarar con valor no numérico se descarta —solo esa entrada— con una
-    advertencia en los registros de device-management.
+    advertencia en los registros de device-management. Esto incluye un valor de texto como `"ok"` y
+    un booleano escrito como `true` o `false`: la conversión de `true` a 1 y de `false` a 0 se aplica
+    solo a una métrica declarada con el tipo de dato booleano. Las demás lecturas del mismo mensaje se
+    almacenan y el dispositivo recibe la confirmación habitual, de modo que quien envía no ve el
+    descarte. Cada entrada descartada se cuenta en `resolve_measurement_dropped_total`, por motivo; la
+    advertencia indica el tenant, el dispositivo y la métrica, una vez por dispositivo y métrica.
   - Una medición *declarada* cuyo valor no coincide con su tipo declarado es peor: el evento
     completo se envía a la cola de mensajes no entregados. Lo mismo ocurre con un valor `NaN`,
     infinito o de magnitud igual o superior a 1.000.000.000.000.

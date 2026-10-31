@@ -96,6 +96,9 @@ type EventResolver struct {
 	// pointed at each event as it is resolved, which is safe because a resolver resolves one
 	// event at a time.
 	calcObs calcObserver
+	// drops counts and reports measurement entries dropped while the rest of the event is stored.
+	// Pool-wide; nil in tests that do not look at it (a nil value records nothing).
+	drops *MeasurementDropMetrics
 	// hold keeps an event alive, unacked and outside its delivery budget, while the
 	// relational store cannot take the lookups and writes resolution makes (core/storehold).
 	// Shared across the pool. Nil holds nothing: a resolver built without one fails the event
@@ -553,7 +556,7 @@ func (rez *EventResolver) ResolveMeasurementsEventPayload(ctx context.Context, d
 					// already rejected, so this is a defensive backstop: drop the entry
 					// rather than stamp a classifier onto a value that would then
 					// dead-letter the whole batch at persist.
-					dropMeasurement(device.Token, mxkey, mxvalue, "declared metric data type is not storable")
+					rez.dropMeasurement(ctx, device.Token, mxkey, mxvalue, dropDeclaredNotStorable, "declared metric data type is not storable")
 					continue
 				}
 				// The classifier is the metric definition's id AS OF the profile's
@@ -584,12 +587,12 @@ func (rez *EventResolver) ResolveMeasurementsEventPayload(ctx context.Context, d
 				// best-effort (ADR-016 lenient additive typing), so drop just this
 				// entry instead of dead-lettering the whole event and discarding its
 				// valid numeric siblings. Declare it as a metric to persist it.
-				dropMeasurement(device.Token, mxkey, mxvalue, "undeclared and non-numeric")
+				rez.dropMeasurement(ctx, device.Token, mxkey, mxvalue, dropUndeclaredNonNumeric, "undeclared and non-numeric")
 				continue
 			} else if err := model.CheckStorableMeasurement(f); err != nil {
 				// Numeric but not storable: NaN, +/-Inf, or beyond decimal(20,8). Dropped like
 				// the non-numeric case, so a lenient key costs only its own entry.
-				dropMeasurement(device.Token, mxkey, mxvalue, "undeclared and not storable: "+err.Error())
+				rez.dropMeasurement(ctx, device.Token, mxkey, mxvalue, dropUndeclaredUnstorable, "undeclared and not storable: "+err.Error())
 				continue
 			}
 			rmentries = append(rmentries, rmentry)
@@ -718,6 +721,15 @@ func (g *calcGroup) set(def *model.ResolvedMetric, name, raw string) {
 func dropMeasurement(deviceToken, metricKey, value, reason string) {
 	log.Warn().Str("device", deviceToken).Str("metric", metricKey).Str("value", value).Str("reason", reason).
 		Msg("Dropping unstorable measurement (declare it as a numeric metric to persist)")
+}
+
+// dropMeasurement counts and reports one entry discarded while the event's other entries are
+// kept. The device's acknowledgement does not carry it and nothing is dead-lettered, so the
+// counter (resolve_measurement_dropped_total) and the once-per-device warning are the operator's
+// only signal that a payload is losing data.
+func (rez *EventResolver) dropMeasurement(ctx context.Context, deviceToken, key, value, reason, detail string) {
+	tenant, _ := core.TenantFromContext(ctx)
+	rez.drops.record(tenant, deviceToken, key, value, reason, detail)
 }
 
 // normalizeBool renders a validated boolean measurement as "1"/"0" so it stores in
