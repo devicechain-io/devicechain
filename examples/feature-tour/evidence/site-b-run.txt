@@ -1,0 +1,48 @@
+created tenant tour-b (tier bronze)
+created operator identity operator@coldchain-b.example (password in ./.state/tour-b/operator-password)
+made operator@coldchain-b.example a tenant-admin of tour-b
+created device profile cold-room
+created metric temperature
+created metric humidity
+created command boost-cooling
+created detection rule cold-room-too-warm
+published profile cold-room
+created device type cold-room
+created device coldroom-b1
+created MQTT credential for coldroom-b1
+created device coldroom-b2
+created MQTT credential for coldroom-b2
+created customer type
+created customer globex
+created assignment coldroom-b1 -> globex
+ready: tenant tour-b, devices coldroom-b1 (customer globex) and coldroom-b2
+created dashboard tour-b-ops
+published dashboard tour-b-ops
+created dashboard tour-b-customer
+published dashboard tour-b-customer
+shared tour-b-customer with customer globex
+invited ops@globex.example (role viewer, limited to customer globex)
+accepted: ops@globex.example can sign in (password in ./.state/tour-b/customer-password)
+started tour-coldroom-b1
+started tour-coldroom-b2
+== waiting for the rule to act on coldroom-b1 (up to 5 minutes) ==
+PASS  the rule raised an alarm on coldroom-b1 and its command ended SUCCESSFUL
+PASS  createCommand boost-cooling was accepted (QUEUED), not rejected
+PASS  your own command reached SUCCESSFUL (the device answered; last status: SUCCESSFUL)
+== operator ==
+PASS  the operator sees both devices (2)
+PASS  the operator sees alarms on both devices (2 devices with alarms)
+    alarm cold-room-too-warm MAJOR ACTIVE raised 2026-10-31T18:14:57.197608Z cleared - last value 7
+    command boost-cooling SUCCESSFUL outcome SUCCEEDED answered 2026-10-31T18:15:00.859704Z "cooling to 3"
+    command boost-cooling SUCCESSFUL outcome SUCCEEDED answered 2026-10-31T18:14:59.163796Z "cooling to 2"
+PASS  the operator sees both dashboards (2)
+== customer user ops@globex.example ==
+PASS  the customer sees exactly coldroom-b1 (saw: coldroom-b1)
+PASS  the customer sees alarms for coldroom-b1 only (saw: coldroom-b1)
+PASS  the customer reads no state of coldroom-b2 (0 measurements)
+PASS  the customer reads coldroom-b1's latest readings (2)
+PASS  the customer lists only the board shared with them (saw: tour-b-customer)
+PASS  the operator's board is invisible to the customer
+PASS  the read-only customer user cannot send a command (refused: FORBIDDEN)
+
+tour tour-b: all checks passed

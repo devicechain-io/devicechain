@@ -359,6 +359,10 @@ un `429` y cualquiera de los dos tipos de `503`, como se describe arriba.
   El simulador usa el mismo endpoint de ingesta, así que también necesita la redirección de puerto
   del paso 5.
 
+- **[Recorrido por las funciones](./feature-tour.md)**: sigue desde aquí hasta un panel, una regla
+  que genera una alarma y envía un comando, la respuesta del dispositivo y un usuario cliente que
+  ve solo su propio dispositivo; después repite el mismo recorrido como segundo tenant.
+
 - **[Conexión de un dispositivo](../guides/connecting-a-device.md)**: el transporte real, MQTT, con
   la credencial en la conexión además de en el evento, más todas las formas de payload y las reglas
   que impone el pipeline.

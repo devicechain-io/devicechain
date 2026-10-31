@@ -362,6 +362,10 @@ and either kind of `503`, as described above.
   Then control it with `dcctl sim status demo`, `dcctl sim stop demo` and `dcctl sim start demo`.
   The simulator reaches the same ingest endpoint, so it needs the port-forward from step 5 too.
 
+- **[Feature tour](./feature-tour.md)**: carry on from here to a dashboard, a rule that raises an
+  alarm and sends a command, the device's answer, and a customer user who sees only their own
+  device, then run the same tour again as a second tenant.
+
 - **[Connecting a device](../guides/connecting-a-device.md)**: the real transport, MQTT, with the
   credential on the connection as well as the event, plus every payload shape and the rules the
   pipeline enforces.

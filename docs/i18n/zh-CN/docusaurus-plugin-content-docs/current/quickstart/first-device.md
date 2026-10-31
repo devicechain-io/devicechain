@@ -286,6 +286,8 @@ curl -s -X POST http://localhost/api/event-management/graphql \
 
   然后使用 `dcctl sim status demo`、`dcctl sim stop demo` 和 `dcctl sim start demo` 控制它。模拟器访问的是同一个接入端点，因此同样需要第 5 步的端口转发。
 
+- **[功能导览](./feature-tour.md)**：从这里继续，依次完成仪表板、会触发告警并下发命令的规则、设备对命令的应答，以及只能看到自己设备的客户用户，然后以第二个租户再运行一遍同样的导览。
+
 - **[连接设备](../guides/connecting-a-device.md)**：使用真实传输方式 MQTT，在连接和事件中都提供凭据，并了解所有载荷格式和流水线执行的规则。
 - **[传输能力矩阵](../reference/transport-matrix.md)**：在选定传输方式之前，了解各方式在两个方向上支持的功能。
 - **[发送命令](../guides/sending-commands.md)**：了解另一个方向的通信。
