@@ -231,6 +231,32 @@ func TestSettleRetriesOnlyTheWriteAfterAnIrreversibleStep(t *testing.T) {
 	}
 }
 
+// A Settle inside a Run whose context already carries a short deadline (a re-run's) must outlive
+// that deadline: a write failing as an outage past it is retried, not dropped as DeadlineExceeded.
+func TestSettleOutlivesTheOuterRunsDeadline(t *testing.T) {
+	store := &holdtest.Store{}
+	h, _ := newHolder(store, nil)
+	msg, _ := holdtest.Msg("s", nil, 1)
+	start0 := time.Now()
+	opCtx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	err := h.RunCtx(context.Background(), opCtx, []messaging.Message{msg},
+		func(ctx context.Context) error {
+			return storehold.Settle(ctx, func(c context.Context) error {
+				if c.Err() != nil {
+					return c.Err()
+				}
+				if time.Since(start0) < 120*time.Millisecond {
+					return holdtest.DiskFull
+				}
+				return nil
+			})
+		})
+	if err != nil {
+		t.Fatalf("Settle returned %v after the outer deadline passed, want nil", err)
+	}
+}
+
 // Outside a Run there is nothing to hold on: the write runs once and its error is returned.
 func TestSettleWithoutAScopeRunsOnce(t *testing.T) {
 	var n int

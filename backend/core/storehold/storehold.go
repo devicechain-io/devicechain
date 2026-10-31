@@ -425,7 +425,13 @@ type scope struct {
 // which is the residual at-least-once window and is the caller's to report.
 func Settle(ctx context.Context, op func(ctx context.Context) error) error {
 	if sc, ok := ctx.Value(scopeKey{}).(*scope); ok {
-		return sc.h.RunCtx(sc.holdCtx, ctx, sc.msgs, op)
+		// 🔴 WithoutCancel: the caller's ctx may be a re-run's context, bounded to two thirds of
+		// AckWait. A second outage that outlasts that deadline would fail every attempt with
+		// DeadlineExceeded, which is not an outage, and the record would be dropped. The write
+		// keeps the values (tenant) but not the outer deadline; each attempt is bounded by the
+		// op's own timeout and by the inner rerun's AckWait bound, and shutdown still ends the
+		// hold through holdCtx.
+		return sc.h.RunCtx(sc.holdCtx, context.WithoutCancel(ctx), sc.msgs, op)
 	}
 	return op(ctx)
 }
