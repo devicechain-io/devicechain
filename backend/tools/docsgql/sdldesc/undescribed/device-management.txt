@@ -54,7 +54,7 @@ AlarmEvent.state
 AlarmSearchCriteria
 AlarmSearchCriteria.acknowledged
 AlarmSearchCriteria.alarmKey
-AlarmSearchCriteria.originator
+AlarmSearchCriteria.originatorToken
 AlarmSearchCriteria.originatorType
 AlarmSearchCriteria.pageNumber
 AlarmSearchCriteria.pageSize
@@ -1004,7 +1004,7 @@ SelectorPreview.members
 SelectorPreview.valid
 Subscription.alarmStream
 Subscription.alarmStream(alarmKey:)
-Subscription.alarmStream(originator:)
+Subscription.alarmStream(originatorToken:)
 Subscription.alarmStream(originatorType:)
 Subscription.alarmStream(severity:)
 Subscription.alarmStream(state:)

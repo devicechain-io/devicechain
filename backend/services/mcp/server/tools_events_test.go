@@ -73,7 +73,7 @@ func TestListAlarms_FilterMapping(t *testing.T) {
 	defer done()
 	ack := true
 	_, out, err := tools.ListAlarms(context.Background(), authedReq("tok"),
-		ListAlarmsInput{Originator: "d1", State: "ACTIVE", Acknowledged: &ack})
+		ListAlarmsInput{OriginatorToken: "d1", State: "ACTIVE", Acknowledged: &ack})
 	if err != nil {
 		t.Fatalf("ListAlarms: %v", err)
 	}
@@ -81,8 +81,8 @@ func TestListAlarms_FilterMapping(t *testing.T) {
 		t.Errorf("unexpected alarms: %+v", out.Alarms)
 	}
 	crit := (*captured)["variables"].(map[string]any)["criteria"].(map[string]any)
-	// An originator device token expands to originatorType=device + originator.
-	if crit["originatorType"] != "device" || crit["originator"] != "d1" || crit["state"] != "ACTIVE" || crit["acknowledged"] != true {
+	// An originatorToken device token expands to originatorType=device + originator.
+	if crit["originatorType"] != "device" || crit["originatorToken"] != "d1" || crit["state"] != "ACTIVE" || crit["acknowledged"] != true {
 		t.Errorf("alarm criteria not mapped: %v", crit)
 	}
 }

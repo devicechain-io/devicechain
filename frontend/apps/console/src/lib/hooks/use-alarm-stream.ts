@@ -74,7 +74,7 @@ export function useAlarmStream(
     const unsubscribe = subscribe(
       'device-management',
       ALARM_STREAM,
-      { originatorType: null, originator: null, state: null, severity: null, alarmKey: null },
+      { originatorType: null, originatorToken: null, state: null, severity: null, alarmKey: null },
       sink,
     );
     return () => {
