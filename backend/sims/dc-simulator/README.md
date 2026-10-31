@@ -340,14 +340,22 @@ action chain is independent of the detection kind (only a correlation rule, whos
 area, is refused), and event-processing's real publish gate and DETECT engine were run against
 the document this scenario publishes.
 
-**Calculated metrics need a tier that allows them.** `cop = cooling_kw / power_kw` and
-`kwh_per_m2 = kwh / device.floor_area_m2` (the meters carry `floor_area_m2` as a device
-constant, written into their metadata). A tenant's tier sets `calculatedMetricsPerProfile`, and
-it is **0 by default**, so bootstrap fails at the publish with a message naming the key. The
-sim's tenant cannot raise it (the tier is operator-defined and edited on the admin plane); an
-operator sets it to at least 1 on a tier (console, Administration, Tiers, or `updateTenantTier`)
-and creates the sim on that tier with `dcctl sim create --manifest towerpulse --tier <tier>`.
-Nothing in the scenario or its defaults changes the ceiling.
+**Calculated metrics need a tier that allows them, and the showcase makes its own.**
+`cop = cooling_kw / power_kw` and `kwh_per_m2 = kwh / device.floor_area_m2` (the meters carry
+`floor_area_m2` as a device constant, written into their metadata). A tenant's tier sets
+`calculatedMetricsPerProfile`, and it is **0 in every platform tier**; that stays the default.
+So `dcctl sim create --manifest towerpulse` ensures a tier named `tp-showcase` first, using the
+operator login it already needs: it is created if absent, and if present only RAISED to the
+scenario's floors (`calculatedMetricsPerProfile` 1, which is the most any one Towerpulse profile
+declares, `ingestReadingsPerSecond` 1000, `ingestBurst` 2000), never lowered, so re-running is safe
+and a higher value you set by hand survives. Nothing else is touched: silver, gold and bronze
+keep calculated metrics off, and only the showcase's own tenant has them on. `sim destroy`
+removes the sim's tenant and identities but leaves `tp-showcase` in place, because it is shared
+by every Towerpulse sim on the instance (delete it in the console, Administration, Tiers, when no
+tenant is at it). To use a tier you manage yourself, pass `--tier <token>`; that tier is used as
+given and never created or changed, and the publish fails naming `calculatedMetricsPerProfile` if
+it is below 1. If the operator login cannot create tiers, create fails at once naming the tier and
+its config (dcctl has no tier command; use `createTenantTier` on the admin API or the console).
 
 **The annex owner.** Bootstrap invites a customer user into the tenant with the read-only `viewer`
 role and a scope of exactly one customer, the annex owner, and accepts the invitation with the

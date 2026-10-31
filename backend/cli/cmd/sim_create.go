@@ -24,7 +24,14 @@ that tenant with the tenant-admin role (full authority scoped to that one tenant
 The sim actor authenticates as that identity and never touches the admin surface.
 
 Idempotent: re-running create against an existing sim reconciles it (and keeps the
-stored password in sync with the identity).`,
+stored password in sync with the identity).
+
+A scenario that needs more than the default tier allows gets its own. towerpulse
+publishes calculated metrics, which are off in every platform tier, so create ensures
+a tier named tp-showcase (calculated metrics on, ingest sized for the scenario) before
+creating the tenant. It is created if absent and only RAISED if present, never lowered,
+and sim destroy leaves it in place because it is shared by every towerpulse sim. Pass
+--tier to use an existing tier instead; that tier is then never created or changed.`,
 	Args:         cobra.ExactArgs(1),
 	RunE:         runSimCreate,
 	SilenceUsage: true,
@@ -37,7 +44,7 @@ func init() {
 	simCreateCmd.Flags().String("manifest", "devicepulse",
 		"built-in scenario to run ("+strings.Join(sim.KnownManifestIds, ", ")+")")
 	simCreateCmd.Flags().String("tenant-name", "", "the tenant's display name, as the console shows it (default: the scenario's own, else \"<sim> (sim)\")")
-	simCreateCmd.Flags().String("tier", sim.DefaultTenantTier, "tenant tier to package the sim at")
+	simCreateCmd.Flags().String("tier", "", "tenant tier to package the sim at (default: the tier the scenario needs, which create makes if absent, else "+sim.DefaultTenantTier+")")
 	simCreateCmd.Flags().Int("shed-priority", 0, "shed-priority override 1-100 (0 = inherit the tier's); a load-test lever to place a probe tenant in a shed band")
 	simCmd.AddCommand(simCreateCmd)
 }
@@ -101,6 +108,16 @@ func runSimCreate(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	tier, _ := cmd.Flags().GetString("tier")
+	// An explicit --tier is the operator's choice and is used as given, never created. Without
+	// one, a scenario that needs its own tier (Towerpulse needs calculated metrics, which every
+	// platform tier has off) gets it ensured below; any other scenario is packaged at silver.
+	var needTier *sim.TierSpec
+	if tier == "" {
+		tier = sim.DefaultTenantTier
+		if spec, ok := sim.TierForManifest(manifestId); ok {
+			needTier, tier = &spec, spec.Token
+		}
+	}
 	tenantName, _ := cmd.Flags().GetString("tenant-name")
 	// shed-priority is an optional override: a 1-100 value places the tenant in a
 	// specific band; 0 (the default, and an explicit 0) means inherit the tier's
@@ -141,6 +158,11 @@ func runSimCreate(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
 	if err := admin.EnsureSuperuser(ctx); err != nil {
 		return err
+	}
+	if needTier != nil {
+		if err := admin.EnsureTier(ctx, *needTier); err != nil {
+			return err
+		}
 	}
 	if err := admin.CreateTenant(ctx, tenant, sim.TenantDisplayName(name, manifestId, tenantName), tier, shedPriority); err != nil {
 		return err

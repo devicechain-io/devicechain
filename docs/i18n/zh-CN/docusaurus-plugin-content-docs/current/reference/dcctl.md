@@ -1284,6 +1284,13 @@ The sim actor authenticates as that identity and never touches the admin surface
 Idempotent: re-running create against an existing sim reconciles it (and keeps the
 stored password in sync with the identity).
 
+A scenario that needs more than the default tier allows gets its own. towerpulse
+publishes calculated metrics, which are off in every platform tier, so create ensures
+a tier named tp-showcase (calculated metrics on, ingest sized for the scenario) before
+creating the tenant. It is created if absent and only RAISED if present, never lowered,
+and sim destroy leaves it in place because it is shared by every towerpulse sim. Pass
+--tier to use an existing tier instead; that tier is then never created or changed.
+
 ```
 dcctl sim create <name> [flags]
 ```
@@ -1299,7 +1306,7 @@ dcctl sim create <name> [flags]
       --seed int             deterministic generation seed for the sim's populations (default 1)
       --shed-priority int    shed-priority override 1-100 (0 = inherit the tier's); a load-test lever to place a probe tenant in a shed band
       --tenant-name string   the tenant's display name, as the console shows it (default: the scenario's own, else "<sim> (sim)")
-      --tier string          tenant tier to package the sim at (default "silver")
+      --tier string          tenant tier to package the sim at (default: the tier the scenario needs, which create makes if absent, else silver)
 ```
 
 ### Options inherited from parent commands
