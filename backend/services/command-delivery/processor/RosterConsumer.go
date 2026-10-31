@@ -13,6 +13,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/storehold"
 	"github.com/rs/zerolog/log"
 )
 
@@ -53,6 +54,11 @@ type RosterConsumer struct {
 	Resumer      Resumer
 
 	dead *deadletter.Sink
+
+	// Hold keeps a roster fact unacked, outside its delivery budget, while the relational store
+	// cannot take writes (core/storehold). Nil holds nothing. Both writes are idempotent: the
+	// disabled record is set to the fact's value, and a resume of an enabled device is a no-op.
+	Hold *storehold.Holder
 
 	procCtx    context.Context
 	procCancel context.CancelFunc
@@ -121,7 +127,11 @@ func (rc *RosterConsumer) handle(ctx context.Context, msg messaging.Message) {
 	if syncer, ok := rc.Resumer.(TenantSyncer); ok {
 		syncer.EnsureTenantSynced(ctx, tenant)
 	}
-	wasDisabled, err := rc.Api.SetDeviceDisabled(msgctx, ev.DeviceToken, ev.Disabled)
+	var wasDisabled bool
+	err = rc.Hold.Run(ctx, []messaging.Message{msg}, func() (e error) {
+		wasDisabled, e = rc.Api.SetDeviceDisabled(msgctx, ev.DeviceToken, ev.Disabled)
+		return e
+	})
 	if err != nil {
 		rc.retryOrDrop(msgctx, msg, ev.DeviceToken, err)
 		return
@@ -136,7 +146,9 @@ func (rc *RosterConsumer) handle(ctx context.Context, msg messaging.Message) {
 	// carries the toggle flag but, if it was the record that told us, not wasDisabled: the hold
 	// reconciler's release of an enabled device's holds covers that remainder.
 	if !ev.Disabled && (ev.Enabled || wasDisabled) && rc.Resumer != nil {
-		if err := rc.Resumer.ResumeDevice(ctx, tenant, ev.DeviceToken); err != nil {
+		if err := rc.Hold.Run(ctx, []messaging.Message{msg}, func() error {
+			return rc.Resumer.ResumeDevice(ctx, tenant, ev.DeviceToken)
+		}); err != nil {
 			rc.retryOrDrop(msgctx, msg, ev.DeviceToken, err)
 			return
 		}

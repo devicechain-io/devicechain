@@ -777,6 +777,36 @@ en el flujo.
 Su intervalo más bajo es de 5 ms, así que un cuantil por debajo de eso es una estimación, no una
 medida.
 
+### Cuando la base de datos de otro servicio no puede aceptar escrituras {#service-store-down}
+
+`event-management` no es el único servicio cuyos mensajes se perdían en una interrupción de la base
+de datos. Cada consumidor de la tabla siguiente se rendía con un mensaje tras su quinta entrega
+(unos cuatro minutos), escribía una carta de mensajes fallidos o lo descartaba, y lo confirmaba, de
+modo que una base de datos llena o inaccesible durante más tiempo descartaba lo que la plataforma ya
+había confirmado: eventos de dispositivos aún sin resolver, flancos de alarma (un aviso descartado
+no se vuelve a enviar hasta que cambie la condición), informes de dispositivos, respuestas a
+comandos y las notificaciones de una alarma. Ahora **retienen** igual que se describe arriba: el
+mensaje queda sin confirmar y se avisa de que sigue en trámite, no gasta una entrega, el servicio
+hace a su base de datos una consulta trivial cada 2 a 30 segundos, y el trabajo se vuelve a
+ejecutar, y se confirma, cuando la base de datos responde. Un consumidor que retiene no lee más, así
+que la acumulación espera en el flujo.
+
+| Servicio | Consumidores que retienen (etiqueta `consumer`) |
+| --- | --- |
+| `device-management` | `inbound-event-resolution`, `raise-alarm`, `device-reports` |
+| `command-delivery` | `command-responses`, `dead-letter-writeback`, `device-roster` |
+| `notification-management` | `alarm-notification` |
+| `update-management` | `device-reports`, `device-roster` |
+
+`devicechain_<servicio>_store_held_messages{consumer="..."}` es el número de mensajes que un
+consumidor está reteniendo. Vale 0 cuando todo está sano, y `ConsumerHoldingForDatabase` salta
+cuando se mantiene por encima de 0 durante 2 minutos. Igual que con los eventos, un error de
+conexión por sí solo no retiene un mensaje: si la base de datos responde a la consulta, el problema
+es el mensaje y consume sus intentos de entrega como antes. Un apagado termina la retención y deja
+el mensaje sin confirmar para el siguiente pod. `device-state` no retiene: su vista en vivo se
+reconstruye desde el historial de eventos y el siguiente evento la vuelve a sellar, así que
+descarta lo que no puede aplicar.
+
 ### Ajustarlo
 
 | Ajuste (configuración de `device-management`) | Valor por defecto | Qué hace |
@@ -912,6 +942,7 @@ retención y deja los eventos sin confirmar para el siguiente pod.
 | --- | --- | --- | --- |
 | `EventStoreRefusingWrites` | crítica | `event-management` retiene desde hace 2 minutos eventos que su base de datos rechazó (`devicechain_eventmanagement_persist_store_held_events` por encima de 0). No se está almacenando nada nuevo. | Averigüe por qué la base de datos rechaza escrituras. La causa habitual es un volumen lleno (`DatabaseVolumeCritical`; busque `No space left on device` en el registro del pod de la base de datos): amplíelo, vea [Dimensionar el almacén de eventos](./tuning-an-instance.md#event-store-sizing). Si no, busque un primario de solo lectura o un límite de conexiones agotado. |
 | `EventPersistBacklogGrowing` | advertencia | El consumidor de `event-management` tiene más de 1000 eventos en espera y la acumulación ha crecido de forma constante durante 10 minutos. | O bien el almacén está caído (`EventStoreRefusingWrites`), o bien la ingesta supera a la persistencia: vea [Ajustarlo](#tuning-it-1). |
+| `ConsumerHoldingForDatabase` | crítica | Un servicio retiene desde hace 2 minutos mensajes que su base de datos rechazó (`devicechain_<servicio>_store_held_messages` por encima de 0). Ese consumidor no avanza: no se resuelven eventos de dispositivos, no se aplican flancos de alarma, no se responden comandos, no se envían notificaciones o no se registran informes de actualización, según `consumer`. | Averigüe por qué la base de datos de ese servicio rechaza escrituras. La causa habitual es un volumen lleno (`DatabaseVolumeCritical`; busque `No space left on device` en el registro del pod de la base de datos): amplíelo (`spec.storage.size`). Si no, busque un primario de solo lectura o un límite de conexiones agotado. |
 
 ### Ajustarlo {#tuning-it-1}
 

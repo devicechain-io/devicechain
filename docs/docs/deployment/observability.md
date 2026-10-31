@@ -745,6 +745,34 @@ The rest wait in the stream.
 `resolve_duration_seconds` includes the time a resolver waits to hand its result on. Its lowest
 bucket is 5 ms, so a quantile below that is an estimate, not a measurement.
 
+### When another service's database cannot take writes {#service-store-down}
+
+`event-management` is not the only service whose messages used to be lost in a database outage.
+Every consumer in the table below gave up on a message after its fifth delivery (about four
+minutes), wrote a dead letter or dropped it, and acknowledged it, so a database that stayed full or
+unreachable for longer discarded what the platform had already acknowledged: device events not yet
+resolved, alarm edges (a dropped raise is not sent again until the condition changes), device
+reports, command responses, and the pages for an alarm. They now **hold** exactly as above: the
+message stays unacknowledged and is told it is still being worked on, it does not use up a
+delivery, the service asks its database a trivial question every 2 to 30 seconds, and the work runs
+again, and is acknowledged, once the database answers. A consumer that holds does not read more,
+so the backlog waits in the stream.
+
+| Service | Consumers that hold (the `consumer` label) |
+| --- | --- |
+| `device-management` | `inbound-event-resolution`, `raise-alarm`, `device-reports` |
+| `command-delivery` | `command-responses`, `dead-letter-writeback`, `device-roster` |
+| `notification-management` | `alarm-notification` |
+| `update-management` | `device-reports`, `device-roster` |
+
+`devicechain_<service>_store_held_messages{consumer="..."}` is the number of messages a consumer is
+holding. It is 0 when healthy, and `ConsumerHoldingForDatabase` fires when it stays above 0 for 2
+minutes. As for events, a connection error on its own does not hold a message: if the database
+answers the question, the message is the problem and takes its delivery attempts as before. A
+shutdown ends the hold and leaves the message unacknowledged for the next pod. `device-state` does
+not hold: its live view is rebuilt from the event history and the next event restamps it, so it
+drops what it cannot apply.
+
 ### Tuning it
 
 | Setting (`device-management` config) | Default | What it does |
@@ -875,6 +903,7 @@ is on. A shutdown ends the hold and leaves the events unacknowledged for the nex
 | --- | --- | --- | --- |
 | `EventStoreRefusingWrites` | critical | `event-management` has held events its database refused for 2 minutes (`devicechain_eventmanagement_persist_store_held_events` above 0). Nothing new is being stored. | Find out why the database refuses writes. The usual cause is a full volume (`DatabaseVolumeCritical`; look for `No space left on device` in the database pod's log): expand it, see [Sizing the event store](./tuning-an-instance.md#event-store-sizing). Otherwise look for a read-only primary or an exhausted connection limit. |
 | `EventPersistBacklogGrowing` | warning | The `event-management` consumer has more than 1,000 events waiting and the backlog has grown steadily for 10 minutes. | Either the store is down (`EventStoreRefusingWrites`), or ingest is outrunning persistence: see [Tuning it](#tuning-it-1). |
+| `ConsumerHoldingForDatabase` | critical | A service has held messages its database refused for 2 minutes (`devicechain_<service>_store_held_messages` above 0). That consumer is making no progress: device events are not resolved, alarm edges not applied, commands not answered, notifications not sent, or update reports not recorded, depending on `consumer`. | Find out why that service's database refuses writes. The usual cause is a full volume (`DatabaseVolumeCritical`; look for `No space left on device` in the database pod's log): expand it (`spec.storage.size`). Otherwise look for a read-only primary or an exhausted connection limit. |
 
 ### Tuning it
 

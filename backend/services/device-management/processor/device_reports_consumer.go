@@ -15,6 +15,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/ota"
+	"github.com/devicechain-io/dc-microservice/storehold"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
@@ -80,6 +81,10 @@ type DeviceReportsConsumer struct {
 	DeviceReportsMetrics
 
 	dead *deadletter.Sink
+
+	// Hold keeps a report unacked, outside its delivery budget, while the relational store
+	// cannot take writes (core/storehold). Nil holds nothing.
+	Hold *storehold.Holder
 
 	procCtx    context.Context
 	procCancel context.CancelFunc
@@ -178,6 +183,20 @@ func (rc *DeviceReportsConsumer) ExecuteStart(ctx context.Context) error {
 	return nil
 }
 
+// held runs one store operation for msg under the consumer's store hold (core/storehold): while
+// the store cannot take writes the message stays unacked, outside its delivery budget, and the
+// operation runs again when the store answers. A nil Hold runs it once. Re-running is safe: a
+// sync is throttled per device and a config.status report is recorded by revision and digest and
+// refused when stale, which is what redelivery already relies on. Shutdown ends the hold with
+// messaging.ErrHoldReleased, which retryOrDrop leaves unacked (Dispose answers Retry).
+func (rc *DeviceReportsConsumer) held(msg messaging.Message, op func() error) error {
+	ctx := rc.procCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return rc.Hold.Run(ctx, []messaging.Message{msg}, op)
+}
+
 // handle applies one device message and acks it or leaves it unacked for redelivery.
 func (rc *DeviceReportsConsumer) handle(ctx context.Context, msg messaging.Message) {
 	done := rc.metrics.Start()
@@ -204,7 +223,10 @@ func (rc *DeviceReportsConsumer) handle(ctx context.Context, msg messaging.Messa
 
 	switch {
 	case rep.Sync != nil:
-		if _, err := rc.Api.SyncDeviceConfiguration(msgctx, token, rep.Sync.Config.HaveRevision); err != nil {
+		if err := rc.held(msg, func() error {
+			_, e := rc.Api.SyncDeviceConfiguration(msgctx, token, rep.Sync.Config.HaveRevision)
+			return e
+		}); err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				rc.unknownDevice(msg, token, done)
 				return
@@ -225,8 +247,10 @@ func (rc *DeviceReportsConsumer) handle(ctx context.Context, msg messaging.Messa
 		}
 	case rep.ConfigStatus != nil:
 		s := rep.ConfigStatus
-		err := rc.Api.ApplyDeviceConfigurationReport(msgctx, token, s.Revision, s.Digest,
-			model.ConfigurationStatus(s.Status), s.Errors)
+		err := rc.held(msg, func() error {
+			return rc.Api.ApplyDeviceConfigurationReport(msgctx, token, s.Revision, s.Digest,
+				model.ConfigurationStatus(s.Status), s.Errors)
+		})
 		var refusal *model.ConfigurationReportRefusal
 		switch {
 		case err == nil:

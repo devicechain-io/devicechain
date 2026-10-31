@@ -468,6 +468,27 @@ kube-state-metrics 本身因节点失效等原因移动期间的重启，只要�
 | --- | --- | --- | --- |
 | `EventStoreRefusingWrites` | 严重 | `event-management` 已保留其数据库拒绝的事件 2 分钟（`devicechain_eventmanagement_persist_store_held_events` 大于 0）。目前没有任何新事件入库。 | 查明数据库为何拒绝写入。常见原因是卷已满（`DatabaseVolumeCritical`；在数据库 Pod 日志中查找 `No space left on device`）：为其扩卷，见[事件库容量规划](./tuning-an-instance.md#event-store-sizing)。否则检查是否有只读的主库或连接数耗尽。 |
 | `EventPersistBacklogGrowing` | 警告 | `event-management` 消费者有超过 1000 个事件在等待，且积压已持续稳定增长 10 分钟。 | 要么事件库宕机（`EventStoreRefusingWrites`），要么接入速度超过持久化速度：见[调优](#tuning-it-1)。 |
+| `ConsumerHoldingForDatabase` | 严重 | 某个服务已保留其数据库拒绝的消息 2 分钟（`devicechain_<服务>_store_held_messages` 大于 0）。该消费者没有进展：根据 `consumer`，表现为设备事件未解析、告警边沿未应用、命令未应答、通知未发送，或更新上报未记录。 | 查明该服务的数据库为何拒绝写入。常见原因是卷已满（`DatabaseVolumeCritical`；在数据库 Pod 日志中查找 `No space left on device`）：为其扩卷（`spec.storage.size`）。否则检查是否有只读的主库或连接数耗尽。 |
+
+### 其他服务的数据库无法写入时 {#service-store-down}
+
+不只 `event-management` 会在数据库故障期间丢消息。下表中的每个消费者原本在消息第五次投递之后（约四分钟）
+就会放弃它：写入死信或直接丢弃，然后确认，因此数据库满了或无法连接的时间更长时，平台已经确认的数据会被丢掉：
+尚未解析的设备事件、告警边沿（被丢掉的触发不会再次发送，直到条件再次变化）、设备上报、命令响应，以及某个告警的通知。
+现在它们和上文一样**保留**：消息保持未确认，并被告知仍在处理中，不消耗投递次数，服务每隔 2 到 30 秒向数据库发一次简单查询，
+数据库应答后才重新执行并确认。保留消息的消费者不再继续读取，所以积压会留在流中。
+
+| 服务 | 会保留的消费者（`consumer` 标签） |
+| --- | --- |
+| `device-management` | `inbound-event-resolution`、`raise-alarm`、`device-reports` |
+| `command-delivery` | `command-responses`、`dead-letter-writeback`、`device-roster` |
+| `notification-management` | `alarm-notification` |
+| `update-management` | `device-reports`、`device-roster` |
+
+`devicechain_<服务>_store_held_messages{consumer="..."}` 是某个消费者正在保留的消息数。健康时为 0，
+持续大于 0 达 2 分钟时触发 `ConsumerHoldingForDatabase`。与事件一样，仅有连接错误并不会让消息被保留：
+如果数据库应答了该查询，则问题出在消息本身，仍按原有方式消耗其投递次数。关闭服务会结束保留，并把消息留作未确认，交给下一个 Pod。
+`device-state` 不保留：它的实时视图可由事件历史重建，下一个事件会重新写入，所以无法应用的内容会被丢弃。
 
 ### 调优 {#tuning-it-1}
 

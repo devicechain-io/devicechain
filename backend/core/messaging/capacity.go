@@ -210,6 +210,18 @@ func WithAckDeadline(ctx context.Context, msg Message) context.Context {
 	return context.WithValue(ctx, ackDeadlineKey{}, d)
 }
 
+// WithAckDeadlineAt is WithAckDeadline for a caller that knows better than the message does: a
+// consumer that held the message through an outage and told the broker it was still in progress
+// (core/storehold) has had its ack-wait restarted, so the deadline the message was fetched with
+// is long past while the real one is not. Measuring a dispatch budget from the stale one would
+// refuse the work the moment the hold ended.
+func WithAckDeadlineAt(ctx context.Context, at time.Time) context.Context {
+	if at.IsZero() {
+		return ctx
+	}
+	return context.WithValue(ctx, ackDeadlineKey{}, at)
+}
+
 // AckDeadlineFrom returns the AckDeadline WithAckDeadline put on ctx, and false when there
 // is none.
 func AckDeadlineFrom(ctx context.Context) (time.Time, bool) {

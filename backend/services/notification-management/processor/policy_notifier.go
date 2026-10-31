@@ -460,6 +460,9 @@ func (n *PolicyNotifier) dispatch(ctx context.Context, event *dmmodel.AlarmState
 					"because redelivery cannot change that.")
 			return nil
 		}
+		if tally.storeErr != nil {
+			return fmt.Errorf("all %d channel deliveries failed for alarm %q: %w", len(deliveries), event.AlarmToken, tally.storeErr)
+		}
 		return fmt.Errorf("all %d channel deliveries failed for alarm %q", len(deliveries), event.AlarmToken)
 	}
 
@@ -520,6 +523,10 @@ func (n *PolicyNotifier) pagingPolicyIDs(event *dmmodel.AlarmStateChangeEvent,
 // the redelivery — which is what retryable() expresses, and the fold is written once
 // there so a later reader cannot accidentally make only one of them count.
 type dispatchTally struct {
+	// storeErr is the first store error that stopped a channel being tried at all (its delivery
+	// secret could not be read). It is kept so that when nothing was delivered the error handed
+	// back says the STORE failed, and a consumer holding for a store outage can see it.
+	storeErr    error
 	delivered   int
 	refused     int
 	failed      int
@@ -566,6 +573,9 @@ func (n *PolicyNotifier) deliverAll(ctx context.Context, deliveries []delivery,
 			log.Error().Err(err).Str("tenant", tenant).Str("channel", d.channel.Token).
 				Msg("Skipping channel: failed to resolve delivery secret")
 			tally.failed++
+			if tally.storeErr == nil {
+				tally.storeErr = err
+			}
 			continue
 		}
 		d.secret = secret
