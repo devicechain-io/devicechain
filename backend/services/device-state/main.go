@@ -16,6 +16,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/service"
+	"github.com/devicechain-io/dc-microservice/storehold"
 	"github.com/devicechain-io/dc-microservice/streams"
 )
 
@@ -151,8 +152,17 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 		return err
 	}
 	OwnershipReader = owners
-	OwnershipProcessor = processor.NewOwnershipProcessor(Microservice, OwnershipReader, Api, core.NewNoOpLifecycleCallbacks())
+	OwnershipProcessor = newOwnershipProcessor(OwnershipReader)
 	return OwnershipProcessor.Initialize(context.Background())
+}
+
+// newOwnershipProcessor assembles the ownership consumer from this service's globals, with the
+// store hold that keeps a fact unacked through a database outage. A function of its own so the
+// wiring test can build exactly what the service builds.
+func newOwnershipProcessor(reader messaging.MessageReader) *processor.OwnershipProcessor {
+	op := processor.NewOwnershipProcessor(Microservice, reader, Api, core.NewNoOpLifecycleCallbacks())
+	op.Hold = storehold.New(Microservice, "device-ownership", storehold.RDBProbe(RdbManager))
+	return op
 }
 
 // Called after microservice has been initialized.

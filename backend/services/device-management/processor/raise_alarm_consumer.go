@@ -320,8 +320,8 @@ func (rc *RaiseAlarmConsumer) handle(ctx context.Context, msg messaging.Message)
 	// (retry); an EMPTY result is a device that no longer exists (deleted between detection and
 	// dispatch) — poison, dropped, since a retry cannot bring it back.
 	var devices []*model.Device
-	err = rc.held(msg, func() (e error) {
-		devices, e = rc.Api.DevicesByToken(msgctx, []string{req.DeviceToken})
+	err = rc.held(msgctx, msg, func(c context.Context) (e error) {
+		devices, e = rc.Api.DevicesByToken(c, []string{req.DeviceToken})
 		return e
 	})
 	if err != nil {
@@ -335,8 +335,8 @@ func (rc *RaiseAlarmConsumer) handle(ctx context.Context, msg messaging.Message)
 		return
 	}
 
-	if err := rc.held(msg, func() error {
-		return rc.Api.ApplyAlarmContributorEdge(msgctx, devices[0].ID, req.AlarmKey, req.MetricKey,
+	if err := rc.held(msgctx, msg, func(c context.Context) error {
+		return rc.Api.ApplyAlarmContributorEdge(c, devices[0].ID, req.AlarmKey, req.MetricKey,
 			req.RuleID, edge, severity.String(), req.Value, req.OccurredTime)
 	}); err != nil {
 		rc.retryOrDrop(msg, done, err, "apply alarm edge")
@@ -351,12 +351,12 @@ func (rc *RaiseAlarmConsumer) handle(ctx context.Context, msg messaging.Message)
 // take writes the edge stays unacked and is run again when it answers. A nil Hold runs it once.
 // Shutdown ends the hold with messaging.ErrHoldReleased, which Dispose answers Retry on every
 // delivery, so retryOrDrop leaves the edge unacked instead of lettering it.
-func (rc *RaiseAlarmConsumer) held(msg messaging.Message, op func() error) error {
+func (rc *RaiseAlarmConsumer) held(msgctx context.Context, msg messaging.Message, op func(context.Context) error) error {
 	ctx := rc.procCtx
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return rc.Hold.Run(ctx, []messaging.Message{msg}, op)
+	return rc.Hold.RunCtx(ctx, msgctx, []messaging.Message{msg}, op)
 }
 
 // retryOrDrop leaves a transiently-failed request unacked for redelivery, or acks (drops) it once the

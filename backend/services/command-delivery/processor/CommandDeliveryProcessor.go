@@ -945,8 +945,14 @@ func (cproc *CommandDeliveryProcessor) handleResponse(ctx context.Context, msg m
 		return true
 	}
 
-	if err := cproc.Hold.Run(ctx, []messaging.Message{msg}, func() error {
-		_, e := cproc.Api.MarkResponse(tenantCtx, response.CommandToken, responder,
+	// 🔴 AFTER AN AMBIGUOUS COMMIT A RE-RUN LETTERS AN ANSWER THAT WAS APPLIED. If MarkResponse's
+	// COMMIT succeeded but its acknowledgement was lost (a connection reset), the hold (or a
+	// redelivery) runs it again against a command that is no longer answerable and gets
+	// ErrCommandNotAnswerable, which is lettered below as unprocessable. The command is already
+	// settled, so the letter is a redundant record, not a loss: benign, and the same thing a
+	// redelivery has always done.
+	if err := cproc.Hold.RunCtx(ctx, tenantCtx, []messaging.Message{msg}, func(c context.Context) error {
+		_, e := cproc.Api.MarkResponse(c, response.CommandToken, responder,
 			response.DispatchNonce, response.Success, normalizeReach(response.Reach), responsePayloadText(response.Payload), response.Error)
 		return e
 	}); err != nil {

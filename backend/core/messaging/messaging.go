@@ -334,7 +334,7 @@ func (m Message) AckDeadline() time.Time {
 	if m.slot == nil {
 		return time.Time{}
 	}
-	return m.slot.deadline
+	return m.slot.getDeadline()
 }
 
 // Release returns this message's capacity slot, so its reader can fetch another. It is
@@ -425,7 +425,13 @@ type progressAcknowledger interface {
 // whose acknowledger cannot do it (a produced or synthetic message, or a reader without one).
 func (m Message) InProgress() error {
 	if p, ok := m.ack.(progressAcknowledger); ok {
-		return p.InProgress()
+		if err := p.InProgress(); err != nil {
+			return err
+		}
+		// The broker's ack-wait restarted: so did this message's capacity slot's.
+		if m.slot != nil {
+			m.slot.extend()
+		}
 	}
 	return nil
 }

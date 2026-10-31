@@ -110,8 +110,8 @@ func (rc *RosterConsumer) handle(ctx context.Context, msg messaging.Message) {
 	if ctx2 == nil {
 		ctx2 = ctx
 	}
-	if err := rc.Hold.Run(ctx2, []messaging.Message{msg}, func() error {
-		return rc.Api.DeviceRosterChanged(msgctx, ev.DeviceToken, ev.Enabled)
+	if err := rc.Hold.RunCtx(ctx2, msgctx, []messaging.Message{msg}, func(c context.Context) error {
+		return rc.Api.DeviceRosterChanged(c, ev.DeviceToken, ev.Enabled)
 	}); err != nil {
 		rc.retryOrDrop(msgctx, msg, ev.DeviceToken, err)
 		return

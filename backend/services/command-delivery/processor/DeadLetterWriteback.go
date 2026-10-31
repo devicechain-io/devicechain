@@ -367,8 +367,8 @@ func (w *DeadLetterWriteback) Handle(msg messaging.Message) {
 	// the commands table is tenant-scoped, so a write without a tenant in context is
 	// refused by the scope callback rather than running unscoped.
 	var settled bool
-	err = w.Hold.Run(w.procCtx, []messaging.Message{msg}, func() (e2 error) {
-		settled, e2 = w.api.MarkResponseLost(tenantCtx, e.Reference)
+	err = w.Hold.RunCtx(w.procCtx, tenantCtx, []messaging.Message{msg}, func(c context.Context) (e2 error) {
+		settled, e2 = w.api.MarkResponseLost(c, e.Reference)
 		return e2
 	})
 	if err != nil {

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -359,4 +360,44 @@ func TestAckWaitSeamFeedsTheDurableAndTheDeadline(t *testing.T) {
 	require.Equal(t, r.leftoverSince.Add(7*time.Second), msg.AckDeadline(), "the message's AckDeadline")
 	require.Panics(t, func() { nmgr.SetAckWaitForTesting(t, time.Second) },
 		"changing AckWait after a durable exists must be refused")
+}
+
+// slotProgressAck is an acknowledger that can say a message is in progress.
+type slotProgressAck struct{ beats atomic.Int32 }
+
+func (p *slotProgressAck) Ack() error        { return nil }
+func (p *slotProgressAck) InProgress() error { p.beats.Add(1); return nil }
+
+// A message the broker was told is in progress is not reclaimed at its ORIGINAL ack deadline:
+// the slot is re-armed with the broker's restarted ack-wait, AckDeadline follows the last beat,
+// and the held-past-AckWait counter (which says "may have been sent twice") stays quiet during
+// a long hold. Without a beat the same slot IS reclaimed (the control).
+func TestInProgressReArmsTheCapacitySlot(t *testing.T) {
+	var reclaimed atomic.Int32
+	c := newCapacity(2, 150*time.Millisecond, func(string) { reclaimed.Add(1) })
+	<-c.tokens
+	<-c.tokens
+	beaten := &slotProgressAck{}
+	held := Message{ack: beaten, slot: c.hold(time.Now())}
+	control := Message{ack: &slotProgressAck{}, slot: c.hold(time.Now())}
+
+	var last time.Time
+	for i := 0; i < 8; i++ { // 8 x 60 ms = well past the 150 ms AckWait
+		time.Sleep(60 * time.Millisecond)
+		if err := held.InProgress(); err != nil {
+			t.Fatal(err)
+		}
+		last = time.Now()
+	}
+	if got := reclaimed.Load(); got != 1 {
+		t.Fatalf("reclaimed %d slots; want only the control's", got)
+	}
+	if control.slot.state.Load() != slotReclaimed || held.slot.state.Load() != slotHeld {
+		t.Fatalf("states: control %d, held %d", control.slot.state.Load(), held.slot.state.Load())
+	}
+	want := last.Add(150 * time.Millisecond)
+	if d := held.AckDeadline(); d.Before(want.Add(-20*time.Millisecond)) || d.After(want.Add(20*time.Millisecond)) {
+		t.Fatalf("AckDeadline %v; want about last beat + AckWait (%v)", d, want)
+	}
+	held.Release()
 }

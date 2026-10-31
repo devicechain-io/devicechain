@@ -189,12 +189,12 @@ func (rc *DeviceReportsConsumer) ExecuteStart(ctx context.Context) error {
 // sync is throttled per device and a config.status report is recorded by revision and digest and
 // refused when stale, which is what redelivery already relies on. Shutdown ends the hold with
 // messaging.ErrHoldReleased, which retryOrDrop leaves unacked (Dispose answers Retry).
-func (rc *DeviceReportsConsumer) held(msg messaging.Message, op func() error) error {
+func (rc *DeviceReportsConsumer) held(msgctx context.Context, msg messaging.Message, op func(context.Context) error) error {
 	ctx := rc.procCtx
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return rc.Hold.Run(ctx, []messaging.Message{msg}, op)
+	return rc.Hold.RunCtx(ctx, msgctx, []messaging.Message{msg}, op)
 }
 
 // handle applies one device message and acks it or leaves it unacked for redelivery.
@@ -223,8 +223,8 @@ func (rc *DeviceReportsConsumer) handle(ctx context.Context, msg messaging.Messa
 
 	switch {
 	case rep.Sync != nil:
-		if err := rc.held(msg, func() error {
-			_, e := rc.Api.SyncDeviceConfiguration(msgctx, token, rep.Sync.Config.HaveRevision)
+		if err := rc.held(msgctx, msg, func(c context.Context) error {
+			_, e := rc.Api.SyncDeviceConfiguration(c, token, rep.Sync.Config.HaveRevision)
 			return e
 		}); err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -247,8 +247,8 @@ func (rc *DeviceReportsConsumer) handle(ctx context.Context, msg messaging.Messa
 		}
 	case rep.ConfigStatus != nil:
 		s := rep.ConfigStatus
-		err := rc.held(msg, func() error {
-			return rc.Api.ApplyDeviceConfigurationReport(msgctx, token, s.Revision, s.Digest,
+		err := rc.held(msgctx, msg, func(c context.Context) error {
+			return rc.Api.ApplyDeviceConfigurationReport(c, token, s.Revision, s.Digest,
 				model.ConfigurationStatus(s.Status), s.Errors)
 		})
 		var refusal *model.ConfigurationReportRefusal

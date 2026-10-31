@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-command-delivery/model"
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/storehold"
 	"github.com/devicechain-io/dc-microservice/storehold/holdtest"
@@ -209,4 +210,70 @@ func TestAWritebackIsHeldThroughAStoreOutageNotStranded(t *testing.T) {
 			}
 		})
 	}
+}
+
+// outageRosterApi refuses SetDeviceDisabled with err for the first `failures` calls.
+type outageRosterApi struct {
+	failures int32
+	err      error
+	calls    atomic.Int32
+}
+
+func (a *outageRosterApi) SetDeviceDisabled(context.Context, string, bool) (bool, error) {
+	if a.calls.Add(1) <= a.failures {
+		return false, a.err
+	}
+	return false, nil
+}
+
+func rosterOrigin(m messaging.Message, ack *gateAck) messaging.Message {
+	return messaging.NewConsumedMessage(m.Subject, m.Value, messaging.MaxDeliver, nil, ack).
+		WithOrigin(messaging.Origin{Suffix: streams.DeviceRoster, Stream: "inst_device-roster",
+			Consumer: "inst_command-delivery_device-roster", Seq: 5})
+}
+
+// The roster's first write (the disabled record) is held too, and a connection-class error with
+// a store that does not answer the probe is an outage even though the error is not one the
+// server stated.
+func TestARosterFactIsHeldWhenItsFirstWriteFailsAndTheStoreIsDown(t *testing.T) {
+	store := &holdtest.Store{}
+	store.Down.Store(true)
+	api := &outageRosterApi{failures: 1, err: holdtest.ConnLost}
+	dead := &deadRecorder{}
+	ms := &core.Microservice{InstanceId: "inst", FunctionalArea: "command-delivery"}
+	rc := NewRosterConsumer(ms, nil, core.NewNoOpLifecycleCallbacks(), api, nil, testDeadSink(dead))
+	rc.Hold = holdFor(store)
+	ack := &gateAck{}
+	m := rosterMsg(t, "dev-1", true, false)
+	go func() { time.Sleep(150 * time.Millisecond); store.Down.Store(false) }()
+	finishes(t, "the roster handler", func() { rc.handle(context.Background(), rosterOrigin(m, ack)) })
+	require.Empty(t, dead.msgs, "a connection error while the store is down must be held, not lettered")
+	require.Equal(t, 1, ack.n)
+	require.Equal(t, int32(2), api.calls.Load())
+}
+
+// Shutdown during a hold leaves a roster fact and a dead-letter write-back unacked even on their
+// last delivery.
+func TestAHeldRosterFactAndWritebackAreLeftUnackedOnShutdown(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { time.Sleep(100 * time.Millisecond); cancel() }()
+
+	resumer := &outageResumer{failures: 1 << 30, err: holdtest.DiskFull}
+	dead := &deadRecorder{}
+	rc := newTestRosterConsumer(realApi(t), nil)
+	rc.Resumer, rc.dead, rc.Hold = resumer, testDeadSink(dead), holdFor(&holdtest.Store{})
+	ack := &gateAck{}
+	m := rosterMsg(t, "dev-1", false, true)
+	finishes(t, "the roster handler", func() { rc.handle(ctx, rosterOrigin(m, ack)) })
+	require.Zero(t, ack.n)
+	require.Empty(t, dead.msgs)
+
+	api := &outageDisposition{failures: 1 << 30, err: holdtest.DiskFull}
+	w := newTestWriteback(t, api)
+	w.Hold = holdFor(&holdtest.Store{})
+	w.procCtx = ctx // already cancelled by now: the hold must release at once
+	wack := &countingAck{}
+	finishes(t, "the write-back", func() { w.Handle(letter(t, "tenant-a", responseLetter("cmd-9"), messaging.MaxDeliver, wack)) })
+	require.Zero(t, wack.acks)
+	require.Zero(t, testutil.ToFloat64(w.stranded), "a released letter is not a stranded command")
 }

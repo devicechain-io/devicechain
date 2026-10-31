@@ -195,3 +195,29 @@ func TestADeviceReportIsHeldThroughAStoreOutageNotLettered(t *testing.T) {
 		}
 	}
 }
+
+// A device report holds through a connection-class error while the store is DOWN (the probe
+// fails), and shutdown during that hold leaves the report unacked and unlettered even on its
+// last delivery.
+func TestAHeldDeviceReportIsLeftUnackedOnShutdown(t *testing.T) {
+	store := &holdtest.Store{}
+	store.Down.Store(true)
+	ms := holdTestMicroservice()
+	rec := &deadRecorder{}
+	api := &reportsApi{failures: 1 << 30, err: holdtest.ConnLost}
+	rc := NewDeviceReportsConsumer(ms, nil, core.NewNoOpLifecycleCallbacks(), api,
+		deadletter.NewProducer(ms).NewSink(rec), NewDeviceReportsMetrics(ms))
+	rc.Hold = testHold(store)
+	if err := rc.Initialize(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	rc.procCtx = ctx
+	go func() { time.Sleep(100 * time.Millisecond); cancel() }()
+	ack := &fakeAck{}
+	body := `{"v":1,"kind":"sync","bootId":"b","config":{"haveRevision":0}}`
+	finishesWithin(t, "a held report on shutdown", func() { rc.handle(ctx, reportMsg(body, messaging.MaxDeliver, ack)) })
+	if len(rec.msgs) != 0 || ack.acks != 0 {
+		t.Fatalf("letters=%d acks=%d; want a released report left unacked and unlettered", len(rec.msgs), ack.acks)
+	}
+}

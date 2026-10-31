@@ -165,3 +165,24 @@ func TestARosterFactIsHeldThroughAStoreOutageNotLettered(t *testing.T) {
 		})
 	}
 }
+
+// Shutdown during a hold leaves a roster fact unacked and unlettered even on its last delivery,
+// and a connection-class error while the store is DOWN is held rather than lettered.
+func TestAHeldRosterFactIsLeftUnackedOnShutdownAndHoldsOnAConnectionError(t *testing.T) {
+	store := &holdtest.Store{}
+	store.Down.Store(true)
+	ms := &core.Microservice{InstanceId: "inst", FunctionalArea: "update-management"}
+	api := &outageRosterApi{failures: 1 << 30, err: holdtest.ConnLost}
+	dead := &letterRecorder{}
+	c := NewRosterConsumer(ms, nil, core.NewNoOpLifecycleCallbacks(), api, deadletter.NewProducer(ms).NewSink(dead))
+	c.Hold = holdFor(store)
+	ctx, cancel := context.WithCancel(context.Background())
+	c.procCtx = ctx
+	go func() { time.Sleep(100 * time.Millisecond); cancel() }()
+	ack := &ackRecorder{}
+	m := messaging.NewConsumedMessage("inst.acme.device-roster", rosterFact(t, "dev-1", true), messaging.MaxDeliver, nil, ack)
+	finishes(t, "handle", func() { c.handle(ctx, m) })
+	require.Zero(t, ack.acks)
+	require.Empty(t, dead.msgs)
+	require.Greater(t, api.calls.Load(), int32(0))
+}

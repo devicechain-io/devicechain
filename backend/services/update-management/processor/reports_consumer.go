@@ -270,8 +270,8 @@ func (rc *ReportsConsumer) handle(ctx context.Context, msg messaging.Message) {
 	switch {
 	case rep.Update != nil:
 		var verdict ota.Verdict
-		err := rc.held(msg, func() (e error) {
-			verdict, e = rc.Api.ApplyReport(msgctx, token, *rep.Update)
+		err := rc.held(msgctx, msg, func(c context.Context) (e error) {
+			verdict, e = rc.Api.ApplyReport(c, token, *rep.Update)
 			return e
 		})
 		if err != nil {
@@ -287,8 +287,8 @@ func (rc *ReportsConsumer) handle(ctx context.Context, msg messaging.Message) {
 				Msg("Update report not applied.")
 		}
 	case rep.DownloadRequest != nil:
-		if err := rc.held(msg, func() error {
-			return rc.grant(msgctx, token, rep.DownloadRequest.AssignmentID)
+		if err := rc.held(msgctx, msg, func(c context.Context) error {
+			return rc.grant(c, token, rep.DownloadRequest.AssignmentID)
 		}); err != nil {
 			if rc.settleDisabled(err, msg, token, rep.Kind, done) {
 				return
@@ -304,8 +304,8 @@ func (rc *ReportsConsumer) handle(ctx context.Context, msg messaging.Message) {
 			return
 		}
 		var views []model.UpdateAssignmentView
-		err := rc.held(msg, func() (e error) {
-			views, e = rc.Api.CurrentUpdates(msgctx, token)
+		err := rc.held(msgctx, msg, func(c context.Context) (e error) {
+			views, e = rc.Api.CurrentUpdates(c, token)
 			return e
 		})
 		if err != nil {
@@ -328,12 +328,12 @@ func (rc *ReportsConsumer) handle(ctx context.Context, msg messaging.Message) {
 // held runs one store operation for msg under the consumer's store hold (core/storehold). A nil
 // Hold runs it once. Shutdown ends the hold with messaging.ErrHoldReleased, which Dispose
 // answers Retry on every delivery, so retryOrDrop leaves the message unacked.
-func (rc *ReportsConsumer) held(msg messaging.Message, op func() error) error {
+func (rc *ReportsConsumer) held(msgctx context.Context, msg messaging.Message, op func(context.Context) error) error {
 	ctx := rc.procCtx
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return rc.Hold.Run(ctx, []messaging.Message{msg}, op)
+	return rc.Hold.RunCtx(ctx, msgctx, []messaging.Message{msg}, op)
 }
 
 // settleDisabled settles a message from a device an operator has disabled, and reports whether it

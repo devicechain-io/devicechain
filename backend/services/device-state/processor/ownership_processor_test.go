@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,6 +18,8 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/storehold"
+	"github.com/devicechain-io/dc-microservice/storehold/holdtest"
 	"github.com/stretchr/testify/require"
 )
 
@@ -124,4 +127,84 @@ func TestAResolvedEventCarriesItsOwnersStamp(t *testing.T) {
 	require.NotNil(t, none.Anchors, "owned by nobody is a stamp, not an absent one")
 	require.Empty(t, none.Anchors)
 	require.True(t, none.At.Equal(received))
+}
+
+// outageApplier refuses ApplyDeviceOwnership with err for the first `failures` calls.
+type outageApplier struct {
+	failures int32
+	err      error
+	calls    atomic.Int32
+}
+
+func (o *outageApplier) ApplyDeviceOwnership(context.Context, string, []string, time.Time) (bool, error) {
+	if o.calls.Add(1) <= o.failures {
+		return false, o.err
+	}
+	return true, nil
+}
+
+func holdFor(store *holdtest.Store) *storehold.Holder {
+	return &storehold.Holder{Name: "test", Probe: store.Probe, Tune: holdtest.FastTuning()}
+}
+
+func finishes(t *testing.T, what string, f func()) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() { defer close(done); f() }()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("%s did not finish", what)
+	}
+}
+
+// 🔴 A DROPPED OWNERSHIP FACT DOES NOT REPAIR ITSELF for a device that was sold and reports
+// nothing: it stays in its old owner's scoped view. On its LAST delivery, with the database
+// refusing writes, the fact is held and applied once the store answers. The control (no hold)
+// drops it; a poison fact (connection error, live store) still takes its budget.
+func TestAnOwnershipFactIsHeldThroughAStoreOutage(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		hold    bool
+		err     error
+		applied bool
+	}{
+		{"store down, held", true, holdtest.DiskFull, true},
+		{"control: no hold drops it", false, holdtest.DiskFull, false},
+		{"poison, store answers", true, holdtest.ConnLost, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			api := &outageApplier{failures: 3, err: tc.err}
+			if tc.hold && !tc.applied {
+				api.failures = 1 << 30
+			}
+			op := &OwnershipProcessor{Api: api}
+			if tc.hold {
+				op.Hold = holdFor(&holdtest.Store{})
+			}
+			ack := &factAck{}
+			finishes(t, "handle", func() {
+				op.handle(context.Background(), factMessage(t, "instance1.acme.device-ownership", messaging.MaxDeliver, ack))
+			})
+			require.Equal(t, 1, ack.acked)
+			if tc.applied {
+				require.Equal(t, int32(4), api.calls.Load(), "three refusals, then applied")
+			} else if tc.hold {
+				require.Equal(t, int32(1), api.calls.Load(), "a poison fact is not re-run")
+			}
+		})
+	}
+}
+
+// Shutdown during a hold leaves the fact unacked even on its last delivery.
+func TestAHeldOwnershipFactIsLeftUnackedOnShutdown(t *testing.T) {
+	api := &outageApplier{failures: 1 << 30, err: holdtest.DiskFull}
+	ctx, cancel := context.WithCancel(context.Background())
+	op := &OwnershipProcessor{Api: api, Hold: holdFor(&holdtest.Store{}), procCtx: ctx}
+	ack := &factAck{}
+	go func() { time.Sleep(100 * time.Millisecond); cancel() }()
+	finishes(t, "a held fact on shutdown", func() {
+		op.handle(ctx, factMessage(t, "instance1.acme.device-ownership", messaging.MaxDeliver, ack))
+	})
+	require.Zero(t, ack.acked)
 }

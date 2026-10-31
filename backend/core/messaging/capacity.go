@@ -5,6 +5,7 @@ package messaging
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -114,11 +115,36 @@ func (c *capacity) hold(stamp time.Time) *slot {
 // which would silently shrink the pool one forgotten branch at a time until the reader
 // fetched nothing at all.
 type slot struct {
-	owner    *capacity
+	owner *capacity
+	// deadline is when the broker will redeliver this message unless it is acked or told it is
+	// still in progress; extend moves it. Guarded by mu, with the timer it arms.
+	mu       sync.Mutex
 	deadline time.Time
 	timer    *time.Timer
 	state    atomic.Int32
 	inWorker atomic.Bool
+}
+
+// getDeadline is the slot's current redelivery deadline.
+func (s *slot) getDeadline() time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.deadline
+}
+
+// extend re-arms the slot after the broker was told its message is still in progress, which
+// restarts the broker's ack-wait: the deadline moves to now + ackWait and the reclaim timer
+// with it. Without it a message held past its fetch AckWait (core/storehold) is reclaimed and
+// counted as held past AckWait -- "may have been sent twice" -- while the broker is, in fact,
+// holding the redelivery back. A slot that is no longer held stays as it is.
+func (s *slot) extend() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state.Load() != slotHeld {
+		return
+	}
+	s.deadline = time.Now().Add(s.owner.ackWait)
+	s.timer.Reset(s.owner.ackWait)
 }
 
 // release returns the slot if it is still held. A second call, or a call after the timer
@@ -154,7 +180,7 @@ func (s *slot) handOut() bool {
 	if s.state.Load() != slotHeld {
 		return false
 	}
-	if !time.Now().Before(s.deadline) {
+	if !time.Now().Before(s.getDeadline()) {
 		s.reclaim()
 		return false
 	}
@@ -208,18 +234,6 @@ func WithAckDeadline(ctx context.Context, msg Message) context.Context {
 		return ctx
 	}
 	return context.WithValue(ctx, ackDeadlineKey{}, d)
-}
-
-// WithAckDeadlineAt is WithAckDeadline for a caller that knows better than the message does: a
-// consumer that held the message through an outage and told the broker it was still in progress
-// (core/storehold) has had its ack-wait restarted, so the deadline the message was fetched with
-// is long past while the real one is not. Measuring a dispatch budget from the stale one would
-// refuse the work the moment the hold ended.
-func WithAckDeadlineAt(ctx context.Context, at time.Time) context.Context {
-	if at.IsZero() {
-		return ctx
-	}
-	return context.WithValue(ctx, ackDeadlineKey{}, at)
 }
 
 // AckDeadlineFrom returns the AckDeadline WithAckDeadline put on ctx, and false when there

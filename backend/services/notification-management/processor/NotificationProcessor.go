@@ -308,20 +308,15 @@ func (np *NotificationProcessor) dispatchOne(ctx context.Context, msg messaging.
 	// so the Notifier bounds the dispatch against the clock that actually started at fetch,
 	// not against a fresh AckWait counted from now.
 	//
-	// Under a store hold a re-run measures its budget from a fresh ack deadline: the hold told
-	// the broker the message was in progress, so the deadline it was fetched with is long past.
-	attempt := 0
+	// Under a store hold each re-run measures its dispatch budget from the message's CURRENT ack
+	// deadline: every beat the hold sends re-arms the message's capacity slot (Message.InProgress),
+	// so WithAckDeadline follows the last successful beat rather than the fetch time.
 	holdCtx := np.procCtx
 	if holdCtx == nil {
 		holdCtx = ctx
 	}
-	if err := np.Hold.Run(holdCtx, []messaging.Message{msg}, func() error {
-		c := messaging.WithAckDeadline(msgctx, msg)
-		if attempt > 0 {
-			c = messaging.WithAckDeadlineAt(msgctx, time.Now().Add(messaging.AckWait*2/3))
-		}
-		attempt++
-		return np.Notifier.Notify(c, event)
+	if err := np.Hold.RunCtx(holdCtx, msgctx, []messaging.Message{msg}, func(c context.Context) error {
+		return np.Notifier.Notify(messaging.WithAckDeadline(c, msg), event)
 	}); err != nil {
 		// 🔴 ONE ERROR IS PERMANENT AND MUST NOT SPEND THE RETRY BUDGET: the tenant has been
 		// deleted and this area's ADR-077 erasure fence refuses its writes. It reaches here

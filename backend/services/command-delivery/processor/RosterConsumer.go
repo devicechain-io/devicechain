@@ -128,8 +128,8 @@ func (rc *RosterConsumer) handle(ctx context.Context, msg messaging.Message) {
 		syncer.EnsureTenantSynced(ctx, tenant)
 	}
 	var wasDisabled bool
-	err = rc.Hold.Run(ctx, []messaging.Message{msg}, func() (e error) {
-		wasDisabled, e = rc.Api.SetDeviceDisabled(msgctx, ev.DeviceToken, ev.Disabled)
+	err = rc.Hold.RunCtx(ctx, msgctx, []messaging.Message{msg}, func(c context.Context) (e error) {
+		wasDisabled, e = rc.Api.SetDeviceDisabled(c, ev.DeviceToken, ev.Disabled)
 		return e
 	})
 	if err != nil {
@@ -146,8 +146,8 @@ func (rc *RosterConsumer) handle(ctx context.Context, msg messaging.Message) {
 	// carries the toggle flag but, if it was the record that told us, not wasDisabled: the hold
 	// reconciler's release of an enabled device's holds covers that remainder.
 	if !ev.Disabled && (ev.Enabled || wasDisabled) && rc.Resumer != nil {
-		if err := rc.Hold.Run(ctx, []messaging.Message{msg}, func() error {
-			return rc.Resumer.ResumeDevice(ctx, tenant, ev.DeviceToken)
+		if err := rc.Hold.RunCtx(ctx, ctx, []messaging.Message{msg}, func(c context.Context) error {
+			return rc.Resumer.ResumeDevice(c, tenant, ev.DeviceToken)
 		}); err != nil {
 			rc.retryOrDrop(msgctx, msg, ev.DeviceToken, err)
 			return
