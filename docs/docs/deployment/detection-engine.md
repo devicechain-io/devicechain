@@ -91,7 +91,7 @@ the handover period and replays, because nothing records that it stopped cleanly
 | **Events already processed and committed** | Nothing is lost. Messages are acknowledged only *after* the checkpoint that includes them commits, so anything not committed is redelivered. |
 | **Alarms and commands already sent** | Re-derived and re-sent, then collapsed: an alarm is an idempotent update, and a command carries a key that prevents a second enqueue. |
 | **Outbound webhooks and connector publishes already sent** | Collapsed too. A detection re-derived within 30 minutes is recognised by the message bus and never dispatched again, and a request the engine sends again within about ten minutes — a detection that was in flight when the pod stopped — is stored once. After a longer outage a request can be **sent again**; see the delivery section below. |
-| **Rule fire counts** | **Over-counted.** A replay increments them again. The *last fired* time is correct; treat the count as a floor, not an exact total. |
+| **Rule fire counts** | **Can be over-counted.** A replay can increment them again, so a count is a replay-inflated operational statistic, not an exact audit count. It can read higher than the number of distinct firings, and it can also fall short (see [rule-health counts are approximate](#rule-health-counts-are-approximate)). The *last fired* time is correct. For an exact account, use the alarms and commands themselves, which are collapsed by identity. |
 | **Open windows, holds and timers** | Restored from the checkpoint. A hold that was part-way through is still part-way through. |
 | **Rules using a dynamic (attribute-based) threshold** | See the caveat below. |
 
@@ -101,6 +101,22 @@ attribute is read at its *current* value rather than the value it held at the or
 If the attribute changed in between, a firing can be lost or an extra one produced. Rules with a
 **fixed** threshold are unaffected. If you rely on exact replay behaviour — for auditing an
 erasure, or reproducing an incident — prefer fixed thresholds.
+
+This is also why rules differ in when they publish. A threshold or repeating rule with a fixed
+bound is **statically** replay-deterministic: a replay derives the same detection again, so the
+engine can publish it ahead of the checkpoint. Every other rule kind, including any rule with a
+dynamic threshold, is **checkpoint-bound**: its detection waits for the checkpoint that commits
+the state behind it, because a replay may not reproduce it (see
+[how quickly does a detection reach its actions](#how-quickly-does-a-detection-reach-its-actions)).
+:::
+
+:::caution Stored once is not done once
+The platform collapses repeats by identity, so an alarm update, a command row or a published
+request is **stored** once. That is a statement about the platform's records, not about the world.
+It does not prove that a device ran a command once or that a receiving endpoint saw a request
+once: a command whose acknowledgement is lost can reach the device again, and an outbound request
+can reach its destination twice (see [the delivery section](#delivery-everything-is-at-least-once)).
+Make devices and receivers idempotent rather than relying on one stored row.
 :::
 
 ## Delivery: everything is at-least-once

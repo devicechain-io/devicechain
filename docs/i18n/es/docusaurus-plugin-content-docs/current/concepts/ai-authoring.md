@@ -25,6 +25,7 @@ Este es el **límite de determinismo**, y es una línea firme:
 - La IA (y el lienzo) se sitúan **únicamente** en el lado de la autoría. Te ayudan a escribir una regla.
 - Lo que se ejecuta es la **regla compilada** — CEL determinista sobre el motor de streaming con clave. Por construcción, produce los mismos disparos cuando se reprocesan los eventos ([replay-correct](./event-processing.md)).
 - **Ni el modelo ni el lienzo se sitúan jamás en la ruta de detección replay-correct.** Un reinicio vuelve a derivar disparos idénticos a partir de la regla compilada; el modelo que ayudó a redactarla no está en ningún punto de ese ciclo.
+- **Una salvedad se aplica a lo anterior:** una regla cuyo umbral lee un **atributo de dispositivo** se evalúa con el valor *actual* del atributo al reprocesar, así que un reprocesamiento puede perder un disparo o añadir uno. Las reglas con umbral fijo no se ven afectadas. Vea [qué cuesta un reinicio](../deployment/detection-engine.md#what-a-restart-costs).
 
 Cuando usas la puerta Describir, el servicio ejecuta un **ciclo acotado de compilación y reparación**. Redacta una candidata y la compila. Si el compilador la rechaza, el servicio le devuelve el error para un número limitado de intentos de reparación. Lo que recibes es una candidata que ya compila. Tú sigues revisándola en el formulario y guardándola en el borrador del perfil por tu cuenta, y solo se ejecuta cuando publicas el perfil; nada queda activado en tu nombre.
 
@@ -58,7 +59,7 @@ Los usuarios **no** eligen un modelo por tarea. La elección de modelo es config
 
 ### Lo que la IA nunca toca
 
-- Nunca se ejecuta en la ruta en vivo de [detección y acciones](./event-processing.md). Esa ruta es CEL determinista, replay-correct y sin modelo.
+- Nunca se ejecuta en la ruta en vivo de [detección y acciones](./event-processing.md). Esa ruta es CEL determinista, replay-correct para las reglas con umbral fijo (vea la [salvedad del reprocesamiento](../deployment/detection-engine.md#what-a-restart-costs) para las basadas en atributos) y sin modelo.
 - Nunca ve los datos de otro inquilino, y no es una puerta trasera privilegiada. Esto es distinto de la [superficie MCP](./mcp.md), donde un *agente* de IA opera la plataforma bajo el propio token con alcance de inquilino de un usuario.
 - Los datos de negocio del inquilino (nombres de dispositivos, valores de atributos) y los secretos no son del modelo para exponer; las claves permanecen de solo escritura en el almacén de secretos.
 - **No escribe nada.** Una regla redactada se devuelve para que una persona la revise y la guarde por la vía de autoría habitual, bajo su propio token. La llamada de redacción no persiste nada por sí misma.
