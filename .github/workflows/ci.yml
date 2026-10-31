@@ -1555,7 +1555,10 @@ jobs:
       # English remains the reference; locale refreshes may happen in batches.
       # Report changed source pages without blocking unrelated English edits.
       - name: Chinese translation review status
-        run: node docs/scripts/check-translation-freshness.mjs
+        run: node docs/scripts/check-translation-freshness.mjs --locale zh-CN
+
+      - name: Spanish translation review status
+        run: node docs/scripts/check-translation-freshness.mjs --locale es
 
       # Netlify builds the docs site, not Actions — so a backend rename would break
       # the docs deploy AFTER merge, in a Go pull request that triggers no docs

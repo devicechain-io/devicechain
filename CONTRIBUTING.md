@@ -382,13 +382,14 @@ The docs are a Docusaurus site in `docs/`. English pages live in `docs/docs`. Sp
 `docs/i18n/es/docusaurus-plugin-content-docs/current` and Simplified Chinese mirrors in
 `docs/i18n/zh-CN/docusaurus-plugin-content-docs/current`, at the same relative path as the English
 page. A new or renamed English page needs both mirrors; CI checks that the three trees hold the same
-files (`hack/check-docs-locale-parity.sh`) and that the Chinese pages are not stale relative to their
-English source (`docs/scripts/check-translation-freshness.mjs`). If you cannot write a translation, say so
-in the PR and a maintainer will help; do not leave the mirror out. After translating a page into
-Chinese, record it with:
+files (`hack/check-docs-locale-parity.sh`) and reports (advisory) which Chinese and Spanish pages are
+stale relative to their English source (`docs/scripts/check-translation-freshness.mjs`). If you cannot
+write a translation, say so in the PR and a maintainer will help; do not leave the mirror out. After
+translating a page, record it with:
 
 ```bash
 cd docs && node scripts/check-translation-freshness.mjs --locale zh-CN --record <path/under/docs/docs>
+cd docs && node scripts/check-translation-freshness.mjs --locale es --record <path/under/docs/docs>
 ```
 
 Build the site before you push; the build fails on broken links and anchors:
