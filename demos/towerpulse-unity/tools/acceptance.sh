@@ -222,7 +222,7 @@ run_mode() {
 	log "=== $mode run on a fresh sim ($SIM_NAME); evidence in $ev"
 
 	if ! curl -s -o /dev/null --max-time 3 "$INGRESS/"; then
-		kubectl -n "$NS" port-forward svc/event-sources 18081:8081 >"$ev/logs/port-forward.log" 2>&1 &
+		kubectl -n "$NS" port-forward svc/event-sources "${INGRESS##*:}:8081" >"$ev/logs/port-forward.log" 2>&1 &
 		PF_PID=$!
 		sleep 3
 	fi
