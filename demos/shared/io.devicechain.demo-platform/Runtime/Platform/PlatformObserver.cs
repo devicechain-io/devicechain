@@ -157,6 +157,7 @@ namespace DeviceChain.Demos.Platform
                 },
                 (s, reason) => Post(new StatusItem("measurements", s.ToString(), reason, clock())),
                 measurementToken.RefreshAfterRejection, clock: clock);
+            _ = Guard("measurement stream", () => measurements.RunAsync(ct), ct);
             _ = Guard("alarm stream", () => RunAlarmStream(alarmUri, alarmToken, devices, none, Post, ct), ct);
             _ = Guard("alarm check", () => Poll("alarm check", AlarmCheckEvery, c => CheckAlarms(devices, Post, c), ct), ct);
             _ = Guard("location poll", () => Poll("locations", LocationEvery, c => PollLocations(state, Post, c), ct), ct);
