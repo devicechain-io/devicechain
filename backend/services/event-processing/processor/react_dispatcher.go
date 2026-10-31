@@ -113,6 +113,10 @@ type ReactDispatcher struct {
 	// how a dispatcher assembled without one (a test) behaves.
 	held func() bool
 
+	// now is the clock runQueued judges a delivery's ack deadline against. Nil is time.Now; a test
+	// sets it so whether a delivery counts as late does not depend on how loaded the machine is.
+	now func() time.Time
+
 	procCtx    context.Context
 	procCancel context.CancelFunc
 	wg         sync.WaitGroup
@@ -272,7 +276,7 @@ func (rd *ReactDispatcher) runLanes() {
 // the durable.
 func (rd *ReactDispatcher) runQueued(msg messaging.Message, behind func() int) {
 	defer rd.metrics.leaveInFlight()
-	if rd.procCtx.Err() != nil || !rd.termHeld() || expired(msg, time.Now()) {
+	if rd.procCtx.Err() != nil || !rd.termHeld() || expired(msg, rd.clock()) {
 		msg.Release()
 		return
 	}
@@ -306,6 +310,14 @@ func watchShare(deadline time.Time, behind func() int, cancel context.CancelFunc
 		}
 	}()
 	return func() { close(done) }
+}
+
+// clock is the time runQueued judges a delivery's ack deadline against.
+func (rd *ReactDispatcher) clock() time.Time {
+	if rd.now != nil {
+		return rd.now()
+	}
+	return time.Now()
 }
 
 // termHeld reports whether this replica may start a delivery: it holds the DETECT term, or no

@@ -261,7 +261,17 @@ func gaugeValue(t *testing.T, ms *core.Microservice, name string) float64 {
 func reactBroker(t *testing.T, ackWait time.Duration, workers int, resolver react.RuleResolver,
 	alarms func(nmgr *messaging.NatsManager) react.AlarmSink, dead deadletter.Writer) (publish func(ev runtime.DerivedEvent), start func(), ms *core.Microservice) {
 	t.Helper()
-	b := startDetectBroker(t)
+	publish, start, ms, _ = reactBrokerClock(t, ackWait, workers, resolver, alarms, dead, nil)
+	return publish, start, ms
+}
+
+// reactBrokerClock is reactBroker with the clock the lanes judge a delivery's ack deadline against
+// (nil: the real one) and the test broker returned, so a test can read the dead-letter stream the
+// max-delivery recorder writes to.
+func reactBrokerClock(t *testing.T, ackWait time.Duration, workers int, resolver react.RuleResolver,
+	alarms func(nmgr *messaging.NatsManager) react.AlarmSink, dead deadletter.Writer, now func() time.Time) (publish func(ev runtime.DerivedEvent), start func(), ms *core.Microservice, b *detectBroker) {
+	t.Helper()
+	b = startDetectBroker(t)
 	ms = &core.Microservice{InstanceId: b.instance, FunctionalArea: "event-processing"}
 	ms.UseMetricsRegistry(prometheus.NewRegistry())
 	ms.InstanceConfiguration.Infrastructure.Nats = b.natsConfig()
@@ -288,6 +298,7 @@ func reactBroker(t *testing.T, ackWait time.Duration, workers int, resolver reac
 		sink = dl.NewSink(dead)
 	}
 	rd := NewReactDispatcher(ms, reader, workers, resolver, nil, alarms(nmgr), nil, nil, sink, testShedBudget, NewReactMetrics(ms))
+	rd.now = now
 	publish = func(ev runtime.DerivedEvent) {
 		t.Helper()
 		body, err := json.Marshal(ev)
@@ -298,7 +309,7 @@ func reactBroker(t *testing.T, ackWait time.Duration, workers int, resolver reac
 		require.NoError(t, rd.Start(context.Background()))
 		t.Cleanup(func() { _ = rd.Stop(context.Background()) })
 	}
-	return publish, start, ms
+	return publish, start, ms, b
 }
 
 // hangOnce is an alarm sink that, on the first request for one device, waits until its context
@@ -545,8 +556,14 @@ func TestLanesDeadLetterAnExhaustedEventOnce(t *testing.T) {
 	allOthers := make(chan struct{})
 	failing.gate = allOthers
 	router := alarmRouter{"device-0": failing}
-	publish, start, ms := reactBroker(t, ackWait, config.DefaultReactWorkers, reactFakeResolver{rule: alarmRule(), found: true},
-		func(*messaging.NatsManager) react.AlarmSink { return router.or(others) }, dead)
+	// Lateness is not what this test measures. A delivery the lane dequeues past its ack deadline is
+	// skipped (runQueued) and lettered by the max-delivery recorder instead, which is
+	// TestASkippedFinalDeliveryIsLetteredByTheRecorder's property; on a loaded runner a 1 s deadline
+	// is missed often enough to make THIS test's dispatcher letter intermittent. A clock that never
+	// reaches a deadline takes the machine's load out of which of the two paths the event takes.
+	neverLate := func() time.Time { return time.Time{} }
+	publish, start, ms, _ := reactBrokerClock(t, ackWait, config.DefaultReactWorkers, reactFakeResolver{rule: alarmRule(), found: true},
+		func(*messaging.NatsManager) react.AlarmSink { return router.or(others) }, dead, neverLate)
 	subject := messaging.ScopedSubject(ms.InstanceId, "acme", streams.DerivedEvents)
 	const lanes = config.DefaultReactWorkers
 	failingLane := LaneOf(subject, "device-0", lanes)
@@ -577,6 +594,40 @@ func TestLanesDeadLetterAnExhaustedEventOnce(t *testing.T) {
 	require.Equal(t, "acme/p@1/r1", letters[0].Reference)
 	require.True(t, failing.gated.Load(), "the failing attempt ended at its deadline: the others did not finish while it was open")
 	require.Equal(t, int64(messaging.MaxDeliver), failing.attempts.Load(), "attempted %d times, want MaxDeliver", failing.attempts.Load())
+}
+
+// A delivery the lane dequeues past its ack deadline is skipped, and that includes the FINAL one.
+// Nothing is lost by it: the broker counts the skipped delivery, runs out of deliveries, and the
+// max-delivery recorder writes the letter (reason no-outcome) onto the dead-letter stream. What is
+// lost is the dispatcher's own exhausted letter, which names the failed actions, because no attempt
+// ran. Every delivery is skipped here (a clock past every deadline), so no sink is ever called,
+// nothing is acked, and the event is lettered exactly once, by the recorder.
+func TestASkippedFinalDeliveryIsLetteredByTheRecorder(t *testing.T) {
+	t.Parallel()
+	const ackWait = 300 * time.Millisecond
+	dead := &ctxDeadRecorder{}
+	failing := &failingAlarms{}
+	alwaysLate := func() time.Time { return time.Now().Add(24 * time.Hour) }
+	publish, start, _, b := reactBrokerClock(t, ackWait, config.DefaultReactWorkers, reactFakeResolver{rule: alarmRule(), found: true},
+		func(*messaging.NatsManager) react.AlarmSink { return failing }, dead, alwaysLate)
+	publish(edgeEvent("device-0", 0))
+	start()
+
+	require.Eventually(t, func() bool { return b.streamHeld(t, streams.DeadLetters) == 1 },
+		time.Duration(messaging.MaxDeliver+2)*ackWait+10*time.Second, 20*time.Millisecond,
+		"the recorder did not letter an event whose every delivery was skipped as late")
+	time.Sleep(2 * ackWait)
+	require.Equal(t, uint64(1), b.streamHeld(t, streams.DeadLetters), "lettered exactly once")
+	js, err := b.nc.JetStream()
+	require.NoError(t, err)
+	raw, err := js.GetMsg(messaging.StreamName(b.instance, streams.DeadLetters), 1)
+	require.NoError(t, err)
+	letter, err := deadletter.Unmarshal(raw.Data)
+	require.NoError(t, err)
+	require.Equal(t, deadletter.ReasonNoOutcome, letter.Reason)
+	require.Equal(t, messaging.MaxDeliver, letter.Attempts)
+	require.Zero(t, failing.attempts.Load(), "a delivery skipped as late must not run its actions")
+	require.Empty(t, dead.letters(t), "no dispatcher letter: no attempt ran")
 }
 
 // alarmRouter sends a device's requests to its own sink and every other device's to a default.
