@@ -90,5 +90,6 @@ R="$OUT/reconciliation.md"
   jq -rs '.[] | select(.outcome != "created" and .outcome != "exists") | "| \(.kind) | \(.source) | \(.reason // .outcome) |"' <<<"$LEDGER"
   echo
   if [ "$rc" -eq 0 ]; then echo "**Result: reconciled.**"; else echo "**Result: DOES NOT RECONCILE.**"; fi
-} | tee "$R"
+} > "$R"   # not piped to tee: a pipeline would run this block in a subshell and lose rc
+cat "$R"
 exit "$rc"

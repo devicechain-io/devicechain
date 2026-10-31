@@ -193,7 +193,8 @@ run_import() {
         rows { row token outcome code message }
       }
     }' "$(jq -c --argjson dry "$dry" '{rows:., dry:$dry}' "$rows")")" || die "importDevices failed"
-  local f="$OUT/import-$([ "$dry" = true ] && echo dry-run || echo real).json"
+  local f
+  f="$OUT/import-$([ "$dry" = true ] && echo dry-run || echo real).json"
   jq '.data.importDevices' <<<"$resp" > "$f"
   jq -r '"dryRun=\(.dryRun)  created=\(.created) exists=\(.exists) conflict=\(.conflict) invalid=\(.invalid) refused=\(.refused)"' "$f"
   jq -r '.rows[] | select(.outcome != "CREATED" and .outcome != "EXISTS") | "  row \(.row) \(.token): \(.outcome) \(.code): \(.message)"' "$f"
