@@ -16,6 +16,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
+	"github.com/devicechain-io/dc-microservice/storehold"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
@@ -46,8 +47,10 @@ type EventPersistenceWorker struct {
 	held []pendingEvent
 	// counted is how much of held the held-events gauge has been told about.
 	counted int
-	// holdStart is when the current hold began; probedOK is when the store last answered a probe.
-	holdStart, probedOK time.Time
+	// holdStart is when the current hold began.
+	holdStart time.Time
+	// hold_ is the shared hold machinery (persist_hold.go holder()).
+	hold_ *storehold.Holder
 
 	// metrics records RED-style instrumentation for each message handled by this
 	// worker (ADR-022 E13) and the batch signals. Shared by reference with sibling

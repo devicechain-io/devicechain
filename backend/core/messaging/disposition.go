@@ -5,6 +5,12 @@ package messaging
 
 import "errors"
 
+// ErrHoldReleased is what a consumer's store hold (core/storehold) returns when shutdown ended
+// the hold: the message is still unacked and the next pod will get it. It is not a failure OF
+// the message, so Dispose answers Retry for it on EVERY delivery, the last included -- a
+// release must never be mistaken for a message that spent its budget and be lettered and acked.
+var ErrHoldReleased = errors.New("messaging: store hold released at shutdown; message left unacked")
+
 // Disposition is what a consumer does with a message whose handling FAILED. Dispose is the
 // one place that decides it, so a consumer does not re-derive "is this the last attempt?"
 // and, before that, "can any attempt succeed?" on its own.
@@ -47,6 +53,8 @@ type tenantErased interface{ TenantErased() bool }
 
 // Dispose decides what a consumer does with msg after its handling failed with err:
 //
+//   - Retry, on ANY delivery, when err is (or wraps) ErrHoldReleased: shutdown ended a store hold
+//     and the message was never judged.
 //   - TenantErased, on ANY delivery, when err is (or wraps) the erasure fence's refusal. It
 //     comes first, so the final delivery of an erased tenant's message is not lettered either.
 //   - Exhausted on the final delivery (NumDelivered >= MaxDeliver).
@@ -65,6 +73,8 @@ func Dispose(msg Message, err error) Disposition {
 	}
 	var erased tenantErased
 	switch {
+	case errors.Is(err, ErrHoldReleased):
+		return Retry
 	case errors.As(err, &erased) && erased.TenantErased():
 		return TenantErased
 	case msg.NumDelivered >= MaxDeliver:

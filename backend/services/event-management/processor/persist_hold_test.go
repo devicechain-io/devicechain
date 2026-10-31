@@ -35,9 +35,9 @@ func (r *batchRig) gauge(t *testing.T, name string) float64 {
 
 func probeTimings(t *testing.T, min, max time.Duration) {
 	t.Helper()
-	omin, omax := heldProbeMin, heldProbeMax
-	heldProbeMin, heldProbeMax = min, max
-	t.Cleanup(func() { heldProbeMin, heldProbeMax = omin, omax })
+	omin, omax := holdTuning.ProbeMin, holdTuning.ProbeMax
+	holdTuning.ProbeMin, holdTuning.ProbeMax = min, max
+	t.Cleanup(func() { holdTuning.ProbeMin, holdTuning.ProbeMax = omin, omax })
 }
 
 func fastProbes(t *testing.T) { probeTimings(t, 5*time.Millisecond, 20*time.Millisecond) }
@@ -366,9 +366,9 @@ func TestHeldEventsAreToldTheyAreInProgressAtOnceAndOnCadence(t *testing.T) {
 	// Waits (200-400 ms) much longer than the beat interval (60 ms): the old ticker-per-wait
 	// would have sent nothing for the whole of a wait.
 	probeTimings(t, 200*time.Millisecond, 400*time.Millisecond)
-	every := heldProgressEvery
-	heldProgressEvery = 60 * time.Millisecond
-	t.Cleanup(func() { heldProgressEvery = every })
+	every := holdTuning.ProgressEvery
+	holdTuning.ProgressEvery = 60 * time.Millisecond
+	t.Cleanup(func() { holdTuning.ProgressEvery = every })
 
 	r := newBatchRig(t, 4)
 	r.api.storeDown.Store(true)

@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
+	"github.com/devicechain-io/dc-microservice/storehold"
 	"strconv"
 	"sync"
 	"time"
@@ -98,6 +99,13 @@ type InboundEventsProcessor struct {
 	// ONE event-time knob and it lives here because resolution is the one place the
 	// event time is decided (see EventTimePolicy).
 	MaxFutureSkew time.Duration
+
+	// hold is the resolver pool's storehold.Holder (WithStoreHold); holdCancel ends every
+	// hold at shutdown so a stop is not blocked behind a store that is down, leaving the held
+	// events unacked for the next pod.
+	hold       *storehold.Holder
+	holdCtx    context.Context
+	holdCancel context.CancelFunc
 
 	messages  chan messaging.Message
 	failed    chan failedItem
@@ -268,6 +276,17 @@ func WithSecretTransit(t *credential.SecretTransit) InboundOption {
 func WithGatewayNotices(n GatewayNoticer) InboundOption {
 	return func(iproc *InboundEventsProcessor) { iproc.gatewayNoticer = n }
 }
+
+// WithStoreHold hands the resolver pool the Holder that keeps an event unacked, and outside its
+// delivery budget, while the service's relational store cannot take writes. Production wiring
+// always passes one (the service's wiring test pins it); without one an outage is retried
+// against the delivery budget as before.
+func WithStoreHold(h *storehold.Holder) InboundOption {
+	return func(iproc *InboundEventsProcessor) { iproc.hold = h }
+}
+
+// StoreHold is the Holder WithStoreHold set, or nil, for the service's wiring test.
+func (iproc *InboundEventsProcessor) StoreHold() *storehold.Holder { return iproc.hold }
 
 // SecretTransit is the key WithSecretTransit set. It exists so the service's wiring test can
 // check main.go hands on the key it derived.
@@ -761,6 +780,7 @@ func (iproc *InboundEventsProcessor) initializeEventResolvers(ctx context.Contex
 		iproc.metrics.workers.Set(float64(count))
 	}
 	log.Info().Int("resolution.workers", count).Msg("Resolving inbound events")
+	iproc.holdCtx, iproc.holdCancel = context.WithCancel(context.Background())
 	for w := 1; w <= count; w++ {
 		resolver := NewEventResolver(w, iproc.Api, iproc.AuthMode, eventTime, iproc.messages,
 			iproc.OnInvalidEvent, iproc.OnResolvedEvent, iproc.OnUnresolvedEvent, iproc.metrics.red,
@@ -771,6 +791,8 @@ func (iproc *InboundEventsProcessor) initializeEventResolvers(ctx context.Contex
 		resolver.deviceDisabled = iproc.metrics.deviceDisabled
 		resolver.integrationAliasMismatch = iproc.metrics.integrationAliasMismatch
 		resolver.gateway = gateway
+		resolver.hold = iproc.hold
+		resolver.holdCtx = iproc.holdCtx
 		resolver.calcObs.metrics = iproc.metrics.calc
 		iproc.resolvers = append(iproc.resolvers, resolver)
 		// Resolvers run on a background context (not the cancelable read context)
@@ -907,6 +929,11 @@ func (iproc *InboundEventsProcessor) Stop(ctx context.Context) error {
 // reader, then close the channel it feeds, then wait for the resolvers it feeds
 // before closing the channels they feed, then wait for the outbound loops.
 func (iproc *InboundEventsProcessor) ExecuteStop(context.Context) error {
+	// A resolver holding an event for a store that is down would block the drain below
+	// forever: end every hold first. Those events stay unacked and the next pod gets them.
+	if iproc.holdCancel != nil {
+		iproc.holdCancel()
+	}
 	if iproc.procCancel != nil {
 		iproc.procCancel()
 	}

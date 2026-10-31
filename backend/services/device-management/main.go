@@ -25,6 +25,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/service"
+	"github.com/devicechain-io/dc-microservice/storehold"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/devicechain-io/dc-microservice/svcclient"
 	nats "github.com/nats-io/nats.go"
@@ -324,9 +325,18 @@ func newInboundEventsProcessor() *processor.InboundEventsProcessor {
 		time.Duration(Configuration.MaxEventFutureSkewSeconds)*time.Second, ResolveMetrics,
 		processor.WithResolvers(Configuration.Resolution.Workers),
 		processor.WithDeadLetters(DeadLetters),
+		processor.WithStoreHold(newStoreHold("inbound-event-resolution")),
 		processor.WithSecretTransit(SecretTransit),
 		processor.WithGatewayNotices(messaging.NewGatewayNoticePublisher(
 			func() *nats.Conn { return NatsManager.Conn() }, Microservice.InstanceId)))
+}
+
+// newStoreHold builds the Holder that keeps a consumer's messages unacked, outside their
+// delivery budget, while this service's relational store cannot take writes (core/storehold).
+// Every consumer that letters or drops a message on its last delivery has one; a function of
+// its own so the wiring tests can build exactly what the service builds.
+func newStoreHold(consumer string) *storehold.Holder {
+	return storehold.New(Microservice, consumer, storehold.RDBProbe(RdbManager))
 }
 
 // buildApis builds the service's two Apis over the relational store and the broker: the
