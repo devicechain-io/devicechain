@@ -99,7 +99,7 @@ traspaso y reproduce el flujo, porque nada registra que se detuvo limpiamente.
 | **Eventos ya procesados y confirmados** | No se pierde nada. Solo se acusa recibo de los mensajes *después* de que se confirme el punto de control que los incluye, así que todo lo que no llegó a confirmarse se vuelve a entregar. |
 | **Alarmas y comandos ya enviados** | Se vuelven a derivar y se reenvían, y luego se colapsan: una alarma es una actualización idempotente, y un comando lleva una clave que impide un segundo encolado. |
 | **Webhooks salientes y publicaciones a conectores ya enviados** | También se colapsan. Una detección que se vuelve a derivar dentro de 30 minutos la reconoce el bus de mensajes y no se despacha otra vez, y una solicitud que el motor vuelve a enviar en unos diez minutos (una detección que estaba en curso cuando el pod se detuvo) se almacena una sola vez. Tras una interrupción más larga, una solicitud puede **enviarse de nuevo**; vea la sección de entrega más abajo. |
-| **Conteos de disparo de las reglas** | **Se cuentan de más.** Un reprocesamiento vuelve a incrementarlos. La hora del *último disparo* sí es correcta; trate el conteo como un mínimo, no como un total exacto. |
+| **Conteos de disparo de las reglas** | **Pueden contarse de más.** Un reprocesamiento puede volver a incrementarlos, así que un conteo es una estadística operativa inflada por el reprocesamiento, no un conteo de auditoría exacto. Puede ser mayor que el número de disparos distintos, y también puede quedarse corto (vea [los recuentos de salud de reglas son aproximados](#rule-health-counts-are-approximate)). La hora del *último disparo* sí es correcta. Para una cuenta exacta, use las propias alarmas y comandos, que se colapsan por identidad. |
 | **Ventanas abiertas, sostenimientos y temporizadores** | Se restauran desde el punto de control. Un sostenimiento que iba a medias sigue a medias. |
 | **Reglas que usan un umbral dinámico (basado en atributos)** | Vea la advertencia de abajo. |
 
@@ -110,9 +110,27 @@ tiempo del evento original. Si el atributo cambió en el intervalo, puede perder
 producirse uno de más. Las reglas con umbral **fijo** no se ven afectadas. Si depende del
 comportamiento exacto del reprocesamiento —para auditar un borrado o reproducir un incidente—,
 prefiera umbrales fijos.
+
+Por eso las reglas también difieren en cuándo publican. Una regla de umbral o de repetición con
+límite fijo es **estáticamente** determinista ante el reprocesamiento: un reprocesamiento deriva de
+nuevo la misma detección, de modo que el motor puede publicarla antes del punto de control. Todas
+las demás clases de regla, incluida cualquier regla con umbral dinámico, están **ligadas al punto
+de control**: su detección espera al punto de control que confirma el estado que la respalda,
+porque un reprocesamiento podría no reproducirla (vea
+[¿con qué rapidez llega una detección a sus acciones?](#how-quickly-does-a-detection-reach-its-actions)).
 :::
 
-## Entrega: todo es al menos una vez
+:::caution Almacenado una vez no es hecho una vez
+La plataforma colapsa las repeticiones por identidad, así que una actualización de alarma, una fila
+de comando o una solicitud publicada se **almacena** una sola vez. Eso es una afirmación sobre los
+registros de la plataforma, no sobre el mundo. No prueba que un dispositivo ejecutara un comando una
+sola vez ni que un endpoint receptor viera una solicitud una sola vez: un comando cuyo acuse se
+pierde puede llegar de nuevo al dispositivo, y una solicitud saliente puede llegar dos veces a su
+destino (vea [la sección de entrega](#delivery-everything-is-at-least-once)). Haga que los
+dispositivos y los receptores sean idempotentes en lugar de confiar en una sola fila almacenada.
+:::
+
+## Entrega: todo es al menos una vez {#delivery-everything-is-at-least-once}
 
 La vía de la telemetría es «al menos una vez» de extremo a extremo, así que planifique contando con
 una repetición y no con exactamente una entrega.
@@ -579,7 +597,7 @@ puede adelantarse una marca de tiempo, y el retraso acota cuánto espera el moto
 Cada ajuste de `ruleHealth`, de `derivedPublishing` y de `react` es opcional; si se indica, debe estar dentro de
 su rango (incluido el cero) o el servicio no arranca.
 
-### Los recuentos de salud de reglas son aproximados
+### Los recuentos de salud de reglas son aproximados {#rule-health-counts-are-approximate}
 
 La vista de salud de reglas de la consola muestra cuántas veces ha disparado cada regla y cuándo lo
 hizo por última vez. Esos contadores no se escriben al publicar cada detección: el motor suma cada
