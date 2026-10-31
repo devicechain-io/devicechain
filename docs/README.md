@@ -59,7 +59,10 @@ npm run translations:status -- --record concepts/architecture.md
 npm run translations:status -- --record intro.md --record quickstart/first-device.md
 ```
 
-Commit `i18n/zh-CN/source-manifest.json` with those translations. The command
+Spanish (`i18n/es/`) is tracked the same way: pass `--locale es`, for example
+`npm run translations:status -- --locale es --record intro.md`.
+
+Commit `i18n/<locale>/source-manifest.json` with those translations. The command
 requires both files to exist and validates all requested paths before recording
 any of them. It normalizes line endings before hashing. Recording is an explicit
 review acknowledgment, not a translation operation or a proof of translation
