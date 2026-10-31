@@ -205,3 +205,63 @@ func TestARerunIsBeatenWhileItBlocksAndIsBounded(t *testing.T) {
 		t.Error("a re-run's context must carry a deadline when the caller's has none")
 	}
 }
+
+// Settle holds a write that follows an irreversible step, and re-runs ONLY the write: the step
+// the enclosing Run operation took is not repeated.
+func TestSettleRetriesOnlyTheWriteAfterAnIrreversibleStep(t *testing.T) {
+	store := &holdtest.Store{}
+	h, _ := newHolder(store, nil)
+	msg, _ := holdtest.Msg("s", nil, 1)
+	var sends, writes atomic.Int32
+	err := h.RunCtx(context.Background(), context.Background(), []messaging.Message{msg},
+		func(ctx context.Context) error {
+			sends.Add(1)
+			return storehold.Settle(ctx, func(context.Context) error {
+				if writes.Add(1) <= 2 {
+					return holdtest.DiskFull
+				}
+				return nil
+			})
+		})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if sends.Load() != 1 || writes.Load() != 3 {
+		t.Fatalf("sends=%d writes=%d, want 1 and 3: only the write is retried", sends.Load(), writes.Load())
+	}
+}
+
+// A Settle inside a Run whose context already carries a short deadline (a re-run's) must outlive
+// that deadline: a write failing as an outage past it is retried, not dropped as DeadlineExceeded.
+func TestSettleOutlivesTheOuterRunsDeadline(t *testing.T) {
+	store := &holdtest.Store{}
+	h, _ := newHolder(store, nil)
+	msg, _ := holdtest.Msg("s", nil, 1)
+	start0 := time.Now()
+	opCtx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	err := h.RunCtx(context.Background(), opCtx, []messaging.Message{msg},
+		func(ctx context.Context) error {
+			return storehold.Settle(ctx, func(c context.Context) error {
+				if c.Err() != nil {
+					return c.Err()
+				}
+				if time.Since(start0) < 120*time.Millisecond {
+					return holdtest.DiskFull
+				}
+				return nil
+			})
+		})
+	if err != nil {
+		t.Fatalf("Settle returned %v after the outer deadline passed, want nil", err)
+	}
+}
+
+// Outside a Run there is nothing to hold on: the write runs once and its error is returned.
+func TestSettleWithoutAScopeRunsOnce(t *testing.T) {
+	var n int
+	err := storehold.Settle(context.Background(), func(context.Context) error { n++; return holdtest.DiskFull })
+	if err != holdtest.DiskFull || n != 1 {
+		t.Fatalf("err=%v runs=%d, want the refusal after one run", err, n)
+	}
+}

@@ -271,6 +271,8 @@ func (h *Holder) RunCtx(holdCtx, opCtx context.Context, msgs []messaging.Message
 	if h == nil {
 		return op(opCtx)
 	}
+	// The scope lets work the operation does AFTER its irreversible step hold in place (Settle).
+	opCtx = context.WithValue(opCtx, scopeKey{}, &scope{h: h, holdCtx: holdCtx, msgs: msgs})
 	var (
 		start    time.Time
 		attempts int
@@ -395,4 +397,47 @@ func (h *Holder) sleep(ctx context.Context, d time.Duration, msgs []messaging.Me
 			h.beatAll(msgs, beats)
 		}
 	}
+}
+
+type scopeKey struct{}
+
+type scope struct {
+	h       *Holder
+	holdCtx context.Context
+	msgs    []messaging.Message
+}
+
+// Settle runs op, a store write that follows an IRREVERSIBLE step the enclosing Run operation
+// has already taken (a page sent, a webhook posted), and holds it in place through a store
+// outage instead of failing it.
+//
+// 🔴 WHY NOT LET Run RE-EXECUTE THE WHOLE OPERATION. Run's contract is that the operation is
+// idempotent on re-execution, and a send is not: failing the operation after the send redelivers
+// the message and sends again. A consumer that cannot make its irreversible step idempotent
+// instead logs-and-swallows the follow-up write's failure, which loses the record. Settle is the
+// third option: the message stays held (beaten in progress, outside its delivery budget) and ONLY
+// the write is retried, once the store answers, so nothing is re-sent and nothing is lost.
+//
+// op must be idempotent on re-execution (a write the store may have applied before the
+// connection dropped is run again). Outside a Run (no scope on ctx) op runs once, as a plain
+// call. It returns op's final error: nil, a non-outage error the caller dispositions itself, or
+// ErrReleased when shutdown ended the hold -- the irreversible step stays done and unrecorded,
+// which is the residual at-least-once window and is the caller's to report.
+func Settle(ctx context.Context, op func(ctx context.Context) error) error {
+	if sc, ok := ctx.Value(scopeKey{}).(*scope); ok {
+		// 🔴 WithoutCancel: the caller's ctx may be a re-run's context, bounded to two thirds of
+		// AckWait. A second outage that outlasts that deadline would fail every attempt with
+		// DeadlineExceeded, which is not an outage, and the record would be dropped. The write
+		// keeps the values (tenant) but not the outer deadline; each attempt is bounded by the
+		// op's own timeout and by the inner rerun's AckWait bound, and shutdown still ends the
+		// hold through holdCtx.
+		return sc.h.RunCtx(sc.holdCtx, context.WithoutCancel(ctx), sc.msgs, op)
+	}
+	return op(ctx)
+}
+
+// SettleWith is Settle for a caller that has no message in flight (a scheduler pass): it holds
+// op on h with nothing to beat, ending when halt closes or ctx ends.
+func (h *Holder) SettleWith(ctx context.Context, op func(ctx context.Context) error) error {
+	return h.RunCtx(ctx, ctx, nil, op)
 }

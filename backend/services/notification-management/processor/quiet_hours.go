@@ -275,14 +275,20 @@ func (n *PolicyNotifier) releaseAlarm(ctx context.Context, alarm string, due []*
 	if tally.delivered > 0 {
 		n.finish(ctx, alarm, claimed)
 		n.countQuiet(quietReleased, len(claimed))
-		sctx, scancel := context.WithTimeout(ctx, recordTimeout)
-		defer scancel()
-		// The cycle is the HELD event's (its RaisedTime travels in the stored event), not
-		// whatever cycle the state row is on now: a page held through a clear and re-raise
-		// describes the cycle it was raised in, and RecordNotification ignores it as stale
-		// rather than writing it into the newer cycle as that cycle's first page.
-		if err := n.api.RecordNotification(sctx, alarm, latest.AlarmKey, latest.Severity,
-			event.RaisedTime, now); err != nil {
+		// Settled, not logged-and-dropped: the page is out and its deferral rows are deleted, so
+		// this write is the only record that it happened. Without it the alarm has no throttle
+		// basis and never escalates. Held on the notifier's own Holder (the scheduler has no
+		// message to beat); at-least-once, as dispatch documents.
+		if err := n.settle(ctx, func(c context.Context) error {
+			sctx, scancel := context.WithTimeout(c, recordTimeout)
+			defer scancel()
+			// The cycle is the HELD event's (its RaisedTime travels in the stored event), not
+			// whatever cycle the state row is on now: a page held through a clear and re-raise
+			// describes the cycle it was raised in, and RecordNotification ignores it as stale
+			// rather than writing it into the newer cycle as that cycle's first page.
+			return n.api.RecordNotification(sctx, alarm, latest.AlarmKey, latest.Severity,
+				event.RaisedTime, now)
+		}); err != nil {
 			log.Error().Err(err).Str("alarm", alarm).
 				Msg("Released a held notification but failed to record notification state")
 		}
@@ -337,12 +343,18 @@ func releaseRetryDelay(attempt int) time.Duration {
 	return time.Minute << (attempt - 1)
 }
 
-// finish removes leased deferrals whose release is decided. A failure is logged and not
-// returned: the row keeps its lease and comes due again, so the cost of a failed finish is
-// the same release a second time — a duplicate, the side to err on.
+// finish removes leased deferrals whose release is decided. It is settled (held through a
+// store outage, see settle), because after a send it is what stops the page going out again:
+// a row that outlives its page comes due when its lease ends and is released a second time.
+// A failure that survives the hold is logged and not returned: the row keeps its lease and
+// comes due again, so the residual cost is that same duplicate — the side to err on.
 func (n *PolicyNotifier) finish(ctx context.Context, alarm string, done []*model.NotificationDeferral) {
 	for _, d := range done {
-		if err := n.api.FinishNotificationDeferral(ctx, d); err != nil {
+		if err := n.settle(ctx, func(c context.Context) error {
+			fctx, cancel := context.WithTimeout(c, recordTimeout)
+			defer cancel()
+			return n.api.FinishNotificationDeferral(fctx, d)
+		}); err != nil {
 			log.Error().Err(err).Str("alarm", alarm).Uint("policy", d.PolicyId).
 				Msg("Could not remove a released held notification; it will be released again " +
 					"when its lease ends")
@@ -424,4 +436,13 @@ func resolvedSince(state *model.NotificationState, occurred time.Time) bool {
 		return true
 	}
 	return state.ClearedAt.Valid && !state.ClearedAt.Time.Before(occurred)
+}
+
+// settle runs a store write that follows a send, holding it through a store outage on the
+// notifier's Holder (nil runs it once). See storehold.Settle for why the send is never re-run.
+func (n *PolicyNotifier) settle(ctx context.Context, op func(ctx context.Context) error) error {
+	if n.Hold == nil {
+		return op(ctx)
+	}
+	return n.Hold.SettleWith(ctx, op)
 }

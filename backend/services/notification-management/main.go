@@ -262,6 +262,9 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 				Configuration.DeliveryTimeout(),
 				governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "notification-management", safetyGates),
 				egressGuard, NotifyMetrics)
+			// The scheduler's release path writes state after a page; hold that write through a
+			// store outage rather than dropping it.
+			Notifier.Hold = storehold.New(Microservice, "deferral-release", storehold.RDBProbe(RdbManager))
 
 			// Retention sweep: prune cleared per-alarm state older than the retention window so
 			// the notification state stays bounded (ADR-017 N.C). A negative interval disables
