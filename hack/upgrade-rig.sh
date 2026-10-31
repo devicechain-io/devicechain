@@ -310,10 +310,13 @@ rdb_db=""
 # seed is baseline-constrained and this measurement must not be — see cmd_tablesweep.
 sweep_tenant="${DC_SWEEP_TENANT:-apiprobe-coverage}"
 
-# Port-forward state. pf_pid is checked by stop_forward, which is called on every exit
-# path out of cmd_tablesweep rather than from a trap: this script already installs an
-# EXIT trap for the values file, and a second one would silently replace the first.
+# Port-forward state. pf_pid is checked by stop_forward, which cmd_tablesweep runs on its
+# normal path AND from an EXIT trap (this script installs no other EXIT trap). pf_pid and
+# pf_port are set by pg_forward in the CURRENT shell: calling it as `$(pg_forward)` would
+# run it in a subshell, lose pf_pid, and leave stop_forward with nothing to kill -- the
+# kubectl port-forward would outlive the rig.
 pf_pid=""
+pf_port=""
 
 cluster="devicechain-upgrade"
 kube_context="kind-$cluster"
@@ -2235,7 +2238,8 @@ pf_port_from() {
   sed -n 's/^Forwarding from 127\.0\.0\.1:\([0-9]\{1,\}\).*/\1/p' "$1" | sed -n 1p
 }
 
-# pg_forward opens a port-forward to the relational store and prints the local port.
+# pg_forward opens a port-forward to the relational store and sets pf_port to the local
+# port. NOT for use in a command substitution (see pf_pid above).
 #
 # A RANDOM local port (`:5432`), not a fixed one: a fixed port collides with whatever a
 # developer already has forwarded, and the collision surfaces as an authentication
@@ -2261,7 +2265,7 @@ pg_forward() {
     fail "could not open a port-forward to dc-postgresql in dc-system. kubectl said:
 $(sed -n '1,10s/^/    /p' "$pf_log")"
   fi
-  printf '%s' "$port"
+  pf_port="$port"
 }
 
 stop_forward() {
@@ -2314,7 +2318,9 @@ failed is a CREATE, on an instance that is running the code under test."
   rdb_db="$(rdb_database "$pod" devices)"
   read -r user secret <<<"$(pg_credentials)"
 
-  port="$(pg_forward)"
+  trap stop_forward EXIT
+  pg_forward
+  port="$pf_port"
   # 🔴 The password goes in PGPASSWORD, never in the DSN. A password on a command line
   # is readable by any local process through /proc for as long as the command runs, and
   # is one `set -x` away from a CI step log with a ninety-day retention. apiprobe
@@ -2345,6 +2351,7 @@ failed is a CREATE, on an instance that is running the code under test."
     sleep 10
   done
   stop_forward
+  trap - EXIT
 
   if [[ $rc -eq $APIPROBE_EXIT_SETUP ]]; then
     fail "THE TABLE SWEEP COULD NOT RUN, and this says NOTHING either way (apiprobe exit
