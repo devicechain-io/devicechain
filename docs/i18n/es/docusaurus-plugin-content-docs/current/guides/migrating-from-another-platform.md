@@ -84,13 +84,42 @@ Los dispositivos detrás de un servidor de red LoRaWAN no cambian en absoluto. A
 
 ### Trasladar el historial {#history}
 
-Las lecturas llevan su propia hora. El `occurredTime` de una entrada es el instante en que se almacena, se grafica y se evalúa, de modo que puedes reproducir el historial por la misma vía de ingesta que los datos en vivo. Se aplican dos límites: una lectura cuyo `occurredTime` sea más de **366 días** anterior al momento en que la plataforma la recibe se rechaza, y la ingesta tiene un límite de tasa por tenant, así que una reproducción grande debe espaciarse. Pon un `altId` en cada evento reproducido para que un reintento no lo almacene dos veces. Consulta [cargas diferidas y reglas con ventana](./connecting-a-device.md#buffered-uploads-and-windowed-rules) y [calidad de servicio](./connecting-a-device.md#quality-of-service).
+Nada convierte por ti el historial almacenado de otra plataforma: no existe un importador de historial, y leer la base de datos o los archivos de exportación de la plataforma anterior es trabajo tuyo. Lo que ofrece DeviceChain es la vía de ingesta, que acepta lecturas con su propia hora. El `occurredTime` de una entrada es el instante en que se almacena, se grafica y se evalúa, de modo que puedes reproducir el historial por la misma vía de ingesta que los datos en vivo. Se aplican dos límites: una lectura cuyo `occurredTime` sea más de **366 días** anterior al momento en que la plataforma la recibe se rechaza, y la ingesta tiene un límite de tasa por tenant, así que una reproducción grande debe espaciarse. Pon un `altId` en cada evento reproducido para que un reintento no lo almacene dos veces. Consulta [cargas diferidas y reglas con ventana](./connecting-a-device.md#buffered-uploads-and-windowed-rules) y [calidad de servicio](./connecting-a-device.md#quality-of-service).
 
 Si necesitas un historial más antiguo, o el volumen es grande, decide primero si lo necesitas en la plataforma nueva. Mantener el almacén antiguo en solo lectura para informes y empezar el nuevo desde el cambio suele ser la respuesta más barata. Para que los datos de DeviceChain sean accesibles desde tus herramientas de informes actuales, consulta [acceso SQL y BI](./sql-and-bi-access.md).
 
 ### Reconstruir los paneles {#dashboards}
 
 Un panel es una definición JSON que DeviceChain puede exportar e importar, pero solo importa paneles de DeviceChain: los widgets están enlazados a las métricas y entidades propias de DeviceChain. Reconstruye cada panel en el [editor de lienzo](../user-guide/dashboards.md), usando ranuras (slots) para que un panel se enlace a un dispositivo o a un cliente al abrirse en lugar de nombrar uno. Un panel importado se guarda como borrador con un token nuevo y nunca se publica por ti; consulta [importar un panel](../user-guide/dashboards.md#importar-un-panel). Cuando tengas unos cuantos paneles, expórtalos como tus plantillas.
+
+## Un ejemplo completo {#worked-example}
+
+El repositorio incluye una evaluación ejecutable en `examples/migration-pilot`
+([en GitHub](https://github.com/devicechain-io/devicechain/tree/main/examples/migration-pilot)).
+Parte de una exportación pequeña e inventada de "la plataforma anterior": 25 dispositivos de dos
+tipos, sus claves de telemetría, dos reglas de umbral y una regla basada en scripts, la descripción
+de un panel y un token de acceso por dispositivo. Después hace, con `curl` y `jq` contra la API
+GraphQL pública y nada más:
+
+1. **Un plan.** Un archivo de mapeo convierte cada concepto en su equivalente de DeviceChain, y el
+   plan muestra el resultado, incluido lo que no se trasladará, antes de escribir nada.
+2. **El modelo.** Crea los perfiles, las métricas, las reglas de detección y los tipos de
+   dispositivo, y publica los perfiles.
+3. **Una prueba en seco y luego la importación.** La importación de dispositivos descrita
+   [más arriba](#csv) comprueba las 25 filas sin escribir y después crea 23 dispositivos con sus
+   tokens de acceso existentes. Las otras dos vuelven con un motivo: una contraseña de menos de 16
+   bytes y un número de serie que aparece dos veces.
+4. **Un informe de conciliación.** Cada elemento de la exportación queda contabilizado como creado,
+   ya existente u omitido con un motivo, y después los totales se leen de DeviceChain y se comparan.
+5. **Un piloto en paralelo.** Tres dispositivos simulados publican a la vez en un sustituto de la
+   plataforma anterior y en DeviceChain, y se comparan los valores. Cambiar una línea de la
+   configuración del dispositivo lo devuelve a la plataforma anterior, y el ejemplo muestra tanto
+   eso como el bloqueo firme en DeviceChain.
+
+Es una vía de viabilidad, no un conversor. No lee por ti los archivos de la plataforma anterior, no
+reconstruye reglas ni paneles, no convierte el historial, y un dispositivo sigue necesitando que se
+cambien sus ajustes de conexión y su payload. El ejemplo lo detalla, incluido lo que cuesta cada
+límite.
 
 ## Lo que no tiene equivalente directo {#no-equivalent}
 

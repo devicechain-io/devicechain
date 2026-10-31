@@ -1,0 +1,4 @@
+dryRun=false  created=23 exists=0 conflict=0 invalid=2 refused=0
+  row 23 pc-0007: INVALID INVALID_VALUE: credentialValue must be at least 16 bytes for an MQTT_BASIC credential
+  row 25 cc-0003: INVALID DUPLICATE_IN_FILE: token also appears at row 3
+attributes set for the imported devices

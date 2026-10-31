@@ -1,0 +1,18 @@
+$ # negative control: delete one migrated device behind the report's back
+{"data":{"deleteDevice":true}}
+$ ./reconcile.sh
+## 2. Read back: DeviceChain holds what the ledger says
+
+| Item | Ledger (created + already there) | Counted in DeviceChain | Match |
+| --- | ---: | ---: | :---: |
+| metric | 7 | 7 | yes |
+| rule | 2 | 2 | yes |
+| device | 23 | 22 | NO |
+| credential | 23 | 22 | NO |
+| attribute | 23 | 22 | NO |
+
+## 3. Skipped, and why
+
+$ ./migrate.sh import     # puts it back
+dryRun=false  created=1 exists=22 conflict=0 invalid=2 refused=0
+  row 23 pc-0007: INVALID INVALID_VALUE: credentialValue must be at least 16 bytes for an MQTT_BASIC credential

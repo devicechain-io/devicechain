@@ -1,0 +1,19 @@
+{
+  "_comment": "The model mapping: how each concept in ./source lands in DeviceChain. Edit this file, not the scripts.",
+  "types": {
+    "Cold Chain Sensor": { "profile": "cold-chain-sensor", "deviceType": "cold-chain-sensor", "category": "sensor" },
+    "Pump Controller":   { "profile": "pump-controller",   "deviceType": "pump-controller",   "category": "pump" }
+  },
+  "dataTypes": { "double": "DOUBLE", "long": "INT", "boolean": "BOOLEAN" },
+  "unsupportedDataTypes": {
+    "string": "a metric must be numeric or boolean; report the value as a device attribute instead"
+  },
+  "credentialTypes": { "ACCESS_TOKEN": "ACCESS_TOKEN", "BASIC": "MQTT_BASIC" },
+  "operators": { ">": "gt", ">=": "gte", "<": "lt", "<=": "lte", "==": "eq" },
+  "severities": { "CRITICAL": "critical", "MAJOR": "major", "MINOR": "minor", "WARNING": "warning" },
+  "ruleKinds": {
+    "threshold": "carried: threshold rule, or a duration rule when the source holds the condition for some minutes",
+    "script-chain": "not carried: a free-form script flow has no equivalent; rebuild it as rules plus a webhook"
+  },
+  "deviceAttributes": { "site": { "scope": "SERVER", "valueType": "STRING" } }
+}

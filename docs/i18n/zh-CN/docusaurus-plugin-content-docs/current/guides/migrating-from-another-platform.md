@@ -84,13 +84,32 @@ title: 从其他物联网平台迁移到 DeviceChain
 
 ### 迁移历史数据 {#history}
 
-读数自带时间。条目的 `occurredTime` 就是它被存储、绘图和评估所依据的时刻，因此可以通过与实时数据相同的接入路径回放历史。有两个限制：`occurredTime` 比平台收到它的时间早超过 **366 天**的读数会被拒绝；接入还有按租户的速率限制，所以大规模回放应当控制节奏。请给每个回放的事件设置 `altId`，这样重试就不会重复存储。参见[缓冲上传与窗口规则](./connecting-a-device.md#buffered-uploads-and-windowed-rules)和[服务质量](./connecting-a-device.md#quality-of-service)。
+没有任何工具会替你转换其他平台已存储的历史数据：不存在历史数据导入器，读取原平台的数据库或导出文件需要你自己完成。DeviceChain 提供的是接入路径，它接受自带时间的读数。条目的 `occurredTime` 就是它被存储、绘图和评估所依据的时刻，因此可以通过与实时数据相同的接入路径回放历史。有两个限制：`occurredTime` 比平台收到它的时间早超过 **366 天**的读数会被拒绝；接入还有按租户的速率限制，所以大规模回放应当控制节奏。请给每个回放的事件设置 `altId`，这样重试就不会重复存储。参见[缓冲上传与窗口规则](./connecting-a-device.md#buffered-uploads-and-windowed-rules)和[服务质量](./connecting-a-device.md#quality-of-service)。
 
 如果需要更早的历史，或者数据量很大，请先判断是否真的需要把它放进新平台。让旧存储以只读方式继续支持报表，新平台从切换时开始记录，往往是更便宜的做法。若想之后让现有报表工具访问 DeviceChain 的数据，参见 [SQL 与 BI 访问](./sql-and-bi-access.md)。
 
 ### 重建仪表板 {#dashboards}
 
 仪表板是一份 JSON 定义，DeviceChain 可以导出和导入，但只能导入 DeviceChain 自己的仪表板：组件绑定的是 DeviceChain 自己的指标和实体。请在[画布编辑器](../user-guide/dashboards.md)中重建每个仪表板，使用插槽（slot），让仪表板在打开时才绑定到某台设备或某个客户，而不是写死其中之一。导入的仪表板会以新 token 保存为草稿，不会替你发布，参见[导入仪表板](../user-guide/dashboards.md#importing-a-dashboard)。有了几个仪表板之后，可以把它们导出作为你的模板。
+
+## 一个完整示例 {#worked-example}
+
+仓库的 `examples/migration-pilot` 中带有一个可运行的评估示例
+（[在 GitHub 上](https://github.com/devicechain-io/devicechain/tree/main/examples/migration-pilot)）。
+它从一份虚构的小型“原平台”导出开始：两种类型共 25 台设备、它们的遥测键、两条阈值规则和一条基于脚本的规则、
+一份仪表板描述，以及每台设备一个访问令牌。随后只用 `curl` 和 `jq` 调用公开的 GraphQL API 完成以下工作：
+
+1. **计划。** 一个映射文件把每个概念转换为对应的 DeviceChain 概念，计划会在写入任何内容之前打印结果，
+   包括不会被迁移的部分。
+2. **模型。** 创建配置文件、指标、检测规则和设备类型，并发布配置文件。
+3. **试运行，然后导入。** 前文所述的[设备导入](#csv)先在不写入的情况下检查全部 25 行，
+   再用设备已有的访问令牌创建 23 台设备。另外两行会带着原因返回：密码短于 16 字节，以及一个序列号出现了两次。
+4. **核对报告。** 导出中的每一项都被记为已创建、已存在或带原因跳过，随后从 DeviceChain 读回数量并进行比较。
+5. **并行试点。** 三台模拟设备同时向原平台的替身和 DeviceChain 发布数据，并比较其数值。
+   修改设备配置中的一行即可退回原平台，示例同时演示了这一点和 DeviceChain 侧的强制停用。
+
+它是一条可行性路径，不是转换器。它不会替你读取原平台的文件，不会重建规则或仪表板，不会转换历史数据，
+设备仍然需要修改连接设置和负载格式。示例对此有详细说明，包括每项限制的代价。
 
 ## 没有直接对应的内容 {#no-equivalent}
 

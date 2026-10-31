@@ -1,0 +1,26 @@
+name,serial,type,site,firmware,credentialType,credential
+Cold room sensor 1,CC-0001,Cold Chain Sensor,warehouse-1,2.4.1,ACCESS_TOKEN,EXAMPLE-TOKEN-cc-0001-k919
+Cold room sensor 2,CC-0002,Cold Chain Sensor,warehouse-2,2.4.1,ACCESS_TOKEN,EXAMPLE-TOKEN-cc-0002-k838
+Cold room sensor 3,CC-0003,Cold Chain Sensor,warehouse-3,2.4.1,ACCESS_TOKEN,EXAMPLE-TOKEN-cc-0003-k757
+Cold room sensor 4,CC-0004,Cold Chain Sensor,warehouse-4,2.4.1,ACCESS_TOKEN,EXAMPLE-TOKEN-cc-0004-k676
+Cold room sensor 5,CC-0005,Cold Chain Sensor,warehouse-1,2.4.1,ACCESS_TOKEN,EXAMPLE-TOKEN-cc-0005-k595
+Cold room sensor 6,CC-0006,Cold Chain Sensor,warehouse-2,2.4.1,ACCESS_TOKEN,EXAMPLE-TOKEN-cc-0006-k514
+Cold room sensor 7,CC-0007,Cold Chain Sensor,warehouse-3,2.4.1,ACCESS_TOKEN,EXAMPLE-TOKEN-cc-0007-k433
+Cold room sensor 8,CC-0008,Cold Chain Sensor,warehouse-4,2.4.1,ACCESS_TOKEN,EXAMPLE-TOKEN-cc-0008-k352
+Cold room sensor 9,CC-0009,Cold Chain Sensor,warehouse-1,2.4.1,ACCESS_TOKEN,EXAMPLE-TOKEN-cc-0009-k271
+Cold room sensor 10,CC-0010,Cold Chain Sensor,warehouse-2,2.4.1,ACCESS_TOKEN,EXAMPLE-TOKEN-cc-0010-k190
+Cold room sensor 11,CC-0011,Cold Chain Sensor,warehouse-3,2.4.1,ACCESS_TOKEN,EXAMPLE-TOKEN-cc-0011-k109
+Cold room sensor 12,CC-0012,Cold Chain Sensor,warehouse-4,2.4.1,ACCESS_TOKEN,EXAMPLE-TOKEN-cc-0012-k028
+Cold room sensor 13,CC-0013,Cold Chain Sensor,warehouse-1,2.4.1,ACCESS_TOKEN,EXAMPLE-TOKEN-cc-0013-k947
+Cold room sensor 14,CC-0014,Cold Chain Sensor,warehouse-2,2.4.1,ACCESS_TOKEN,EXAMPLE-TOKEN-cc-0014-k866
+Cold room sensor 15,CC-0015,Cold Chain Sensor,warehouse-3,2.4.1,ACCESS_TOKEN,EXAMPLE-TOKEN-cc-0015-k785
+Cold room sensor 16,CC-0016,Cold Chain Sensor,warehouse-4,2.4.1,ACCESS_TOKEN,EXAMPLE-TOKEN-cc-0016-k704
+Pump controller 1,PC-0001,Pump Controller,plant-1,1.9.0,ACCESS_TOKEN,EXAMPLE-TOKEN-pc-0001-k729
+Pump controller 2,PC-0002,Pump Controller,plant-2,1.9.0,ACCESS_TOKEN,EXAMPLE-TOKEN-pc-0002-k458
+Pump controller 3,PC-0003,Pump Controller,plant-1,1.9.0,ACCESS_TOKEN,EXAMPLE-TOKEN-pc-0003-k187
+Pump controller 4,PC-0004,Pump Controller,plant-2,1.9.0,ACCESS_TOKEN,EXAMPLE-TOKEN-pc-0004-k916
+Pump controller 5,PC-0005,Pump Controller,plant-1,1.9.0,ACCESS_TOKEN,EXAMPLE-TOKEN-pc-0005-k645
+Pump controller 6,PC-0006,Pump Controller,plant-2,1.9.0,ACCESS_TOKEN,EXAMPLE-TOKEN-pc-0006-k374
+Pump controller 7,PC-0007,Pump Controller,plant-1,1.9.0,BASIC,pump7
+Pump controller 8,PC-0008,Pump Controller,plant-2,1.9.0,ACCESS_TOKEN,EXAMPLE-TOKEN-pc-0008-k832
+Cold room sensor 17 (spare),CC-0003,Cold Chain Sensor,warehouse-1,2.4.1,ACCESS_TOKEN,EXAMPLE-TOKEN-cc-0017-k321

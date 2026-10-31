@@ -1,0 +1,80 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# The pilot: a stand-in for the previous platform's broker, a recorder that keeps what it received,
+# and three simulated devices that publish to it AND to DeviceChain. Started by ./pilot.sh up,
+# which writes .env (tokens, the kind node's name) and pki/instance-ca.crt first.
+#
+# The devices join the Docker network "kind", which every kind cluster's node is on, and reach the
+# platform broker's MQTT node port (31883) by the node's container name.
+
+x-image: &mosquitto eclipse-mosquitto:2.0.22@sha256:09b62ff32c2e7b64d4b431b9a89236073289b68db273de2b089edeb9b0d92b5c
+
+x-device: &device
+  image: *mosquitto
+  entrypoint: ["/bin/sh", "/device.sh"]
+  volumes:
+    - ./device.sh:/device.sh:ro
+    - ./state:/state
+    - ./pki:/pki:ro
+  networks: [default, kind]
+  depends_on: [legacy-broker]
+
+x-env: &env
+  TENANT: ${DC_TENANT:-migration-pilot}
+  INSTANCE: ${INSTANCE:-pilot}
+  DC_HOST: ${DC_HOST:?run ./pilot.sh up}
+  DC_PORT: ${DC_PORT:-31883}
+  LEGACY_HOST: legacy-broker
+  TICK_SECONDS: "3"
+
+services:
+  # Stands in for the previous platform's ingest. Anonymous and plain: only here so the pilot has a
+  # "before" to compare with.
+  legacy-broker:
+    image: *mosquitto
+    container_name: pilot-legacy-broker
+    command: ["sh", "-c", "printf 'listener 1883\\nallow_anonymous true\\n' > /tmp/m.conf && exec mosquitto -c /tmp/m.conf"]
+    networks: [default]
+
+  legacy-recorder:
+    image: *mosquitto
+    container_name: pilot-legacy-recorder
+    command: ["sh", "-c", "mosquitto_sub -h legacy-broker -t 'legacy/#' -F '%t %p' >> /logs/legacy.log"]
+    volumes: ["./logs:/logs"]
+    networks: [default]
+    depends_on: [legacy-broker]
+
+  cc-0001:
+    <<: *device
+    container_name: pilot-cc-0001
+    environment:
+      <<: *env
+      DEVICE: cc-0001
+      KIND: cold
+      BATTERY: "87"
+      ACCESS_TOKEN: ${TOKEN_CC_0001:?run ./pilot.sh up}
+
+  # Battery reads 12, below the migrated "Battery low" rule's limit of 15: the pilot should raise an alarm.
+  cc-0002:
+    <<: *device
+    container_name: pilot-cc-0002
+    environment:
+      <<: *env
+      DEVICE: cc-0002
+      KIND: cold
+      BATTERY: "12"
+      ACCESS_TOKEN: ${TOKEN_CC_0002:?run ./pilot.sh up}
+
+  pc-0001:
+    <<: *device
+    container_name: pilot-pc-0001
+    environment:
+      <<: *env
+      DEVICE: pc-0001
+      KIND: pump
+      ACCESS_TOKEN: ${TOKEN_PC_0001:?run ./pilot.sh up}
+
+networks:
+  kind:
+    external: true

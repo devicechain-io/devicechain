@@ -136,7 +136,9 @@ for the checks it offers, such as `dcctl device register` above.
 
 ### Move history {#history}
 
-Readings carry their own time. An entry's `occurredTime` is the instant it is stored, charted and
+Nothing converts another platform's stored history for you: there is no history importer, and
+reading the old platform's database or export files is work you do yourself. What DeviceChain
+offers is the ingest path, which accepts readings with their own time. An entry's `occurredTime` is the instant it is stored, charted and
 evaluated at, so you can replay history through the same ingest path as live data. Two limits apply:
 a reading with an `occurredTime` more than **366 days** older than the moment the platform receives
 it is refused, and ingest is rate-limited per tenant, so a large replay should be paced. Set an
@@ -158,6 +160,33 @@ customer when it is opened instead of naming one. An imported board is saved as 
 token and is never published for you; see
 [importing a dashboard](../user-guide/dashboards.md#importing-a-dashboard). Once you have a few
 boards, export them as your templates.
+
+## A worked example {#worked-example}
+
+The repository carries a runnable evaluation under `examples/migration-pilot`
+([on GitHub](https://github.com/devicechain-io/devicechain/tree/main/examples/migration-pilot)).
+It starts from a small, invented export of "the previous platform": 25 devices of two types, their
+telemetry keys, two threshold rules and one script-based rule, a dashboard description and an
+access token per device. It then does, with `curl` and `jq` against the public GraphQL API and
+nothing else:
+
+1. **A plan.** A mapping file turns each concept into its DeviceChain counterpart, and the plan
+   prints the result, including what will not be carried, before anything is written.
+2. **The model.** It creates the profiles, metrics, detection rules and device types, and publishes
+   the profiles.
+3. **A dry run, then the import.** The device import described [above](#csv) checks all 25 rows
+   without writing, then creates 23 devices with their existing access tokens. The other two come
+   back with a reason: a password shorter than 16 bytes, and a serial number that appears twice.
+4. **A reconciliation report.** Every item in the export is accounted for as created, already there
+   or skipped with a reason, and the counts are then read back from DeviceChain and compared.
+5. **A side-by-side pilot.** Three simulated devices publish to a stand-in for the old platform and
+   to DeviceChain at the same time, and the values are compared. Flipping one line in the device's
+   configuration moves it back, and the example shows both that and the hard stop in DeviceChain.
+
+It is a feasibility path, not a converter. It does not read the old platform's files for you, it
+does not rebuild rules or dashboards, it does not convert history, and a device still needs its
+connection settings and its payload changed. The example says so in detail, including what each
+limit costs.
 
 ## What has no direct equivalent {#no-equivalent}
 
