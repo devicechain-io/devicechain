@@ -101,7 +101,7 @@ export DC_URL=http://localhost INSTANCE=devicechain MQTT_HOST=devicechain-contro
 几秒之内，读数就会出现在控制台（设备页面中的最新值）和 API 中：
 
 ```bash
-curl -s "$DC_URL/api/device-state/graphql" -H "Authorization: Bearer $DC_TOKEN" -H 'Content-Type: application/json' \
+curl -s http://localhost/api/device-state/graphql -H "Authorization: Bearer $DC_TOKEN" -H 'Content-Type: application/json' \
   -d '{"query":"{latestMeasurements(deviceToken:\"coldroom-a1\"){name value unit}}"}'
 ```
 

@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Shared helpers for the tour's scripts. Source it; do not run it.
+# The endpoint and state-file variables are read by the scripts that source this file.
+# shellcheck disable=SC2034
 #
 # A tour is one script set and one SITE FILE of parameters (sites/site-a.env, sites/site-b.env).
 # Pass the site file as the first argument of any script, or export SITE. Anything a site file
@@ -133,7 +135,6 @@ secret_file() {
   printf '%s' "$(cat "$f")"
 }
 
-DEVICE_PASSWORD_FILE="$STATE_DIR/device-password"
 CUSTOMER_PASSWORD_FILE="$STATE_DIR/customer-password"
 
 # The customer user's login: the email is a parameter; the password is generated once into the state dir.

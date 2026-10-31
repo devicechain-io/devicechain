@@ -7,8 +7,10 @@
 # claim the tour makes. Exits non-zero if any claim fails.
 #
 #   ./05-verify.sh sites/site-a.env
+# Each claim is `[ test ]; check "claim" $?`: the $? is that test's result, on purpose.
+# shellcheck disable=SC2319
 set -uo pipefail
-cd "$(dirname "$0")"
+cd "$(dirname "$0")" || exit 1
 . ./lib.sh
 
 fails=0

@@ -151,7 +151,7 @@ En pocos segundos las lecturas están en la consola (la página del dispositivo,
 valores) y por la API:
 
 ```bash
-curl -s "$DC_URL/api/device-state/graphql" -H "Authorization: Bearer $DC_TOKEN" -H 'Content-Type: application/json' \
+curl -s http://localhost/api/device-state/graphql -H "Authorization: Bearer $DC_TOKEN" -H 'Content-Type: application/json' \
   -d '{"query":"{latestMeasurements(deviceToken:\"coldroom-a1\"){name value unit}}"}'
 ```
 
