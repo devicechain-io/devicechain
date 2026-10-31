@@ -27,7 +27,7 @@ alarmq='query($c:AlarmSearchCriteria!){alarms(criteria:$c){results{alarmKey seve
 cmdq='query($c:CommandSearchCriteria!){commands(criteria:$c){results{token name status outcome queuedTime respondedTime responsePayload}}}'
 ok=1
 for _ in $(seq 1 60); do
-  a="$(q "$DM_GQL" "$OP" "$alarmq" "$(jq -nc --arg d "$TOUR_DEVICE_1" '{c:{pageNumber:1,pageSize:10,originatorType:"device",originator:$d}}')" | jq '.data.alarms.results | length')"
+  a="$(q "$DM_GQL" "$OP" "$alarmq" "$(jq -nc --arg d "$TOUR_DEVICE_1" '{c:{pageNumber:1,pageSize:10,originatorType:"device",originatorToken:$d}}')" | jq '.data.alarms.results | length')"
   c="$(q "$CMD_GQL" "$OP" "$cmdq" "$(jq -nc --arg d "$TOUR_DEVICE_1" '{c:{pageNumber:1,pageSize:10,deviceToken:$d,status:"SUCCESSFUL"}}')" | jq '.data.commands.results | length')"
   if [ "${a:-0}" -gt 0 ] && [ "${c:-0}" -gt 0 ]; then ok=0; break; fi
   sleep 5
@@ -54,7 +54,7 @@ nd="$(q "$DM_GQL" "$OP" '{devices(criteria:{pageNumber:1,pageSize:50}){results{t
 [ "${nd:-0}" -ge 2 ]; check "the operator sees both devices ($nd)" $?
 na="$(q "$DM_GQL" "$OP" "$alarmq" '{"c":{"pageNumber":1,"pageSize":50}}' | jq '[.data.alarms.results[].originatorToken] | unique | length')"
 [ "${na:-0}" -ge 2 ]; check "the operator sees alarms on both devices ($na devices with alarms)" $?
-q "$DM_GQL" "$OP" "$alarmq" "$(jq -nc --arg d "$TOUR_DEVICE_1" '{c:{pageNumber:1,pageSize:5,originatorType:"device",originator:$d}}')" \
+q "$DM_GQL" "$OP" "$alarmq" "$(jq -nc --arg d "$TOUR_DEVICE_1" '{c:{pageNumber:1,pageSize:5,originatorType:"device",originatorToken:$d}}')" \
   | jq -r '.data.alarms.results[] | "    alarm \(.alarmKey) \(.severity) \(.state) raised \(.raisedTime) cleared \(.clearedTime // "-") last value \(.lastValue // "-")"'
 q "$CMD_GQL" "$OP" "$cmdq" "$(jq -nc --arg d "$TOUR_DEVICE_1" '{c:{pageNumber:1,pageSize:5,deviceToken:$d}}')" \
   | jq -r '.data.commands.results[] | "    command \(.name) \(.status) outcome \(.outcome // "-") answered \(.respondedTime // "-") \(.responsePayload // "")"'

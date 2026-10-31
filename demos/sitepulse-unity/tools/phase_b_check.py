@@ -326,7 +326,7 @@ def rollback_profile(platform, profile, version):
 def alarms_of(platform, device_token):
     return platform.gql("device-management",
                         "query($c:AlarmSearchCriteria!){alarms(criteria:$c){results{token alarmKey state raisedTime clearedTime}}}",
-                        {"c": {"pageNumber": 1, "pageSize": 50, "originatorType": "device", "originator": device_token}})["alarms"]["results"]
+                        {"c": {"pageNumber": 1, "pageSize": 50, "originatorType": "device", "originatorToken": device_token}})["alarms"]["results"]
 
 
 def commands_since(platform, device_token, since, page_size=100):

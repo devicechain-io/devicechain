@@ -80,12 +80,12 @@ func sharesAnchor(scope, stamp []string) bool {
 
 // alarmStreamArgs are alarmStream's arguments.
 type alarmStreamArgs struct {
-	OriginatorType *string
-	Originator     *string
-	State          *string
-	Severity       *string
-	AlarmKey       *string
-	Anchor         *model.AlarmAnchor
+	OriginatorType  *string
+	OriginatorToken *string
+	State           *string
+	Severity        *string
+	AlarmKey        *string
+	Anchor          *model.AlarmAnchor
 }
 
 // newAlarmEventFilter builds the subscription's filter from its arguments, everything but the
@@ -147,16 +147,16 @@ func (r *SchemaResolver) AlarmStream(ctx context.Context, args alarmStreamArgs) 
 	// filtering is a cheap int compare (mirrors the Alarms query criteria). An
 	// unresolvable originator is a client error surfaced now, not a silently empty
 	// stream that never yields.
-	if args.Originator != nil {
+	if args.OriginatorToken != nil {
 		if args.OriginatorType == nil {
 			return nil, errors.New("originatorType is required when filtering by originator")
 		}
-		id, err := r.GetApi(ctx).ResolveEntityToken(ctx, *args.OriginatorType, *args.Originator)
+		id, err := r.GetApi(ctx).ResolveEntityToken(ctx, *args.OriginatorType, *args.OriginatorToken)
 		if err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				// The miss stays in the chain: it is what the GraphQL boundary answers
 				// with NOT_FOUND, as it does for every other service's miss.
-				return nil, fmt.Errorf("originator %q: %w", *args.Originator, err)
+				return nil, fmt.Errorf("originator %q: %w", *args.OriginatorToken, err)
 			}
 			return nil, err
 		}

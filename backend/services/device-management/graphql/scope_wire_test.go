@@ -300,7 +300,7 @@ func TestDeviceOutsideScopeIsNotFound(t *testing.T) {
 			Severity       *string
 			AlarmKey       *string
 			Anchor         *model.AlarmAnchor
-		}{OriginatorType: &kind, Originator: &token})
+		}{OriginatorType: &kind, OriginatorToken: &token})
 		return err
 	}
 	outside, missing := stream(acme, "globex-pump"), stream(acme, "no-such-pump")

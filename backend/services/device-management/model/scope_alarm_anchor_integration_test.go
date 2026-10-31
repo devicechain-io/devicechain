@@ -161,7 +161,7 @@ func TestAlarmAnchorIsTheIntersectionWithTheScopeOnPostgres(t *testing.T) {
 		require.True(t, errors.Is(err, auth.ErrForbidden), "counts by device type: %v", err)
 		// The refusal does not wait on the other facets naming something.
 		dev, bogus := "device", "no-such-device"
-		_, err = r.api.Alarms(acme, AlarmSearchCriteria{OriginatorType: &dev, Originator: &bogus, Anchor: a})
+		_, err = r.api.Alarms(acme, AlarmSearchCriteria{OriginatorType: &dev, OriginatorToken: &bogus, Anchor: a})
 		require.True(t, errors.Is(err, auth.ErrForbidden), "alarms with an unresolvable originator: %v", err)
 	}
 

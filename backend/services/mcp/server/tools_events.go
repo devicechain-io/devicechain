@@ -159,13 +159,13 @@ type AlarmSummary struct {
 const alarmFields = `token originatorToken alarmKey metricKey state severity acknowledged raisedTime clearedTime acknowledgedTime acknowledgedBy lastValue`
 
 type ListAlarmsInput struct {
-	Originator   string `json:"originator,omitempty" jsonschema:"optional device token to filter alarms to one device"`
-	State        string `json:"state,omitempty" jsonschema:"optional alarm state filter: one of ACTIVE, CLEARED (an active alarm is 'ACTIVE', not 'RAISED')"`
-	Severity     string `json:"severity,omitempty" jsonschema:"optional severity filter: one of CRITICAL, MAJOR, MINOR, WARNING, INDETERMINATE"`
-	AlarmKey     string `json:"alarmKey,omitempty" jsonschema:"optional alarm-key filter"`
-	Acknowledged *bool  `json:"acknowledged,omitempty" jsonschema:"optional acknowledged filter"`
-	PageNumber   int    `json:"pageNumber,omitempty" jsonschema:"1-based page number (default 1)"`
-	PageSize     int    `json:"pageSize,omitempty" jsonschema:"alarms per page (default 25, max 100)"`
+	OriginatorToken string `json:"originatorToken,omitempty" jsonschema:"optional device token to filter alarms to one device"`
+	State           string `json:"state,omitempty" jsonschema:"optional alarm state filter: one of ACTIVE, CLEARED (an active alarm is 'ACTIVE', not 'RAISED')"`
+	Severity        string `json:"severity,omitempty" jsonschema:"optional severity filter: one of CRITICAL, MAJOR, MINOR, WARNING, INDETERMINATE"`
+	AlarmKey        string `json:"alarmKey,omitempty" jsonschema:"optional alarm-key filter"`
+	Acknowledged    *bool  `json:"acknowledged,omitempty" jsonschema:"optional acknowledged filter"`
+	PageNumber      int    `json:"pageNumber,omitempty" jsonschema:"1-based page number (default 1)"`
+	PageSize        int    `json:"pageSize,omitempty" jsonschema:"alarms per page (default 25, max 100)"`
 }
 
 type ListAlarmsOutput struct {
@@ -193,9 +193,9 @@ func (t *Tools) ListAlarms(ctx context.Context, req *mcp.CallToolRequest, in Lis
 	putIfSet(criteria, "state", in.State)
 	putIfSet(criteria, "severity", in.Severity)
 	putIfSet(criteria, "alarmKey", in.AlarmKey)
-	if in.Originator != "" {
+	if in.OriginatorToken != "" {
 		criteria["originatorType"] = "device"
-		criteria["originator"] = in.Originator
+		criteria["originatorToken"] = in.OriginatorToken
 	}
 	if in.Acknowledged != nil {
 		criteria["acknowledged"] = *in.Acknowledged

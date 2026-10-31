@@ -119,15 +119,15 @@ func (Alarm) DefaultOrder() string {
 }
 
 // Search criteria for locating alarms. All facets are optional and AND together;
-// Originator restricts to a single entity by its (type, token).
+// OriginatorToken restricts to a single entity by its (type, token).
 type AlarmSearchCriteria struct {
 	rdb.Pagination
-	OriginatorType *string // entity type of the originator (e.g. "device")
-	Originator     *string // originator entity token (resolved to OriginatorId)
-	State          *string // ACTIVE | CLEARED
-	Severity       *string
-	Acknowledged   *bool
-	AlarmKey       *string
+	OriginatorType  *string // entity type of the originator (e.g. "device")
+	OriginatorToken *string // originator entity token (resolved to OriginatorId)
+	State           *string // ACTIVE | CLEARED
+	Severity        *string
+	Acknowledged    *bool
+	AlarmKey        *string
 	// DeviceType restricts to alarms raised on a device of this type, by the type's token. An
 	// unknown token finds nothing, as an unknown originator does. Which devices count is the
 	// caller's own device read: a member whose access is limited to some customers reaches only
@@ -151,12 +151,12 @@ type AlarmSearchCriteria struct {
 // Criteria for counting alarms by their originating device's type. The facets are the alarm
 // search's (minus paging and the type itself, which is the grouping) and AND together.
 type AlarmCountCriteria struct {
-	OriginatorType *string
-	Originator     *string
-	State          *string
-	Severity       *string
-	Acknowledged   *bool
-	AlarmKey       *string
+	OriginatorType  *string
+	OriginatorToken *string
+	State           *string
+	Severity        *string
+	Acknowledged    *bool
+	AlarmKey        *string
 	// Anchor is as on AlarmSearchCriteria.
 	Anchor *AlarmAnchor
 }

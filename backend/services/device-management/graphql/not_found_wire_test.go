@@ -64,7 +64,7 @@ func TestAnAlarmStreamForAnUnknownOriginatorKeepsTheMiss(t *testing.T) {
 		Severity       *string
 		AlarmKey       *string
 		Anchor         *model.AlarmAnchor
-	}{OriginatorType: &kind, Originator: &token})
+	}{OriginatorType: &kind, OriginatorToken: &token})
 
 	if err == nil {
 		t.Fatal("an alarm stream for an originator that does not exist was accepted")

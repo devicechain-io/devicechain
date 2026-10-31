@@ -185,7 +185,7 @@ func harnessDocuments() []harnessDocument {
 		{"queryHarnessAlarm", "device-management", queryHarnessAlarm, map[string]any{
 			"c": map[string]any{
 				"pageNumber": 1, "pageSize": 1,
-				"originatorType": "device", "originator": "harness-probe-001",
+				"originatorType": "device", "originatorToken": "harness-probe-001",
 				"alarmKey": HarnessAlarmKey,
 			},
 		}},
