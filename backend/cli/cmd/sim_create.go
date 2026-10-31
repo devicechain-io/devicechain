@@ -5,8 +5,10 @@ package cmd
 
 import (
 	"fmt"
+	"net"
 	"strings"
 
+	"github.com/devicechain-io/dcctl/bootstrap"
 	"github.com/devicechain-io/dcctl/sim"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -151,6 +153,9 @@ func runSimCreate(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	if strings.TrimSpace(mqttBroker) == "" {
+		mqttBroker = clusterMqttBroker(cmd, server, instance)
+	}
 	endpoints := sim.ResolveEndpoints(server, ingress, mqttBroker, tls)
 	adminURL := sim.AdminURL(server, tls)
 	admin := sim.NewAdmin(endpoints.UserGraphQL, adminURL, adminEmail, adminPassword).WithOTP(otpFunc(otpFlag(cmd)))
@@ -239,4 +244,32 @@ func simCreateNextSteps(name string) []string {
 		fmt.Sprintf("dcctl sim stop %s   |   dcctl sim start %s", name, name),
 		fmt.Sprintf("dcctl sim destroy %s", name),
 	}
+}
+
+// clusterMqttBroker derives the MQTT gateway address from the kind cluster's actual
+// published host port, for a loopback --server only. Empty means "could not tell",
+// and the caller keeps the conventional ssl://<server>:1883.
+func clusterMqttBroker(cmd *cobra.Command, server, instance string) string {
+	host := server
+	if h, _, err := net.SplitHostPort(server); err == nil {
+		host = h
+	}
+	switch host {
+	case "localhost", "127.0.0.1", "::1":
+	default:
+		return ""
+	}
+	kubeContext, _ := cmd.Flags().GetString("kube-context")
+	if kubeContext == "" {
+		binding, source := bootstrap.ResolveBinding(bootstrap.Options{Instance: instance})
+		if source == bootstrap.BindingUnreadable {
+			return ""
+		}
+		kubeContext = binding.KubeContext
+	}
+	p, ok := bootstrap.KindPublishedHostPort(kubeContext, bootstrap.KindMQTTNodePort)
+	if !ok || p == 1883 {
+		return ""
+	}
+	return fmt.Sprintf("ssl://%s:%d", host, p)
 }
