@@ -116,3 +116,18 @@ func (s *DeviceRosterStore) LoadAll(ctx context.Context) ([]DeviceRoster, error)
 	}
 	return rosters, nil
 }
+
+// LoadAllLifecycle returns EVERY roster row, tombstones included: the durable record of which
+// device incarnations have ended. LoadAll drops tombstones because arming wants only live devices;
+// the detection-state reconcile needs the tombstones themselves (state for a deleted device is stale)
+// and each live row's LastEventAt (state older than the device's current incarnation is stale).
+//
+// 🔴 IT READS EVERY TENANT'S ROWS, declared with a system context, for the same reason LoadAll does.
+// Declared in sanctionedSystemContexts (backend/core/test).
+func (s *DeviceRosterStore) LoadAllLifecycle(ctx context.Context) ([]DeviceRoster, error) {
+	var rosters []DeviceRoster
+	if err := s.rdb.DB(dccore.WithSystemContext(ctx)).Find(&rosters).Error; err != nil {
+		return nil, err
+	}
+	return rosters, nil
+}

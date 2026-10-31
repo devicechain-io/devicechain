@@ -295,6 +295,7 @@ func (rp *ResolvedEventsProcessor) resetForTerm() {
 	drain(rp.ruleUpdates)
 	drain(rp.armUpdates)
 	drain(rp.attrUpdates)
+	drain(rp.seriesDrops)
 	drain(rp.fenceUpdates)
 	// These two are maps of rechecks the previous term queued but never completed.
 	// They are cleared rather than drained, for the same reason: the new term's

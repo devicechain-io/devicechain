@@ -150,6 +150,26 @@ func (s *Sharded) Descope(ruleID, series string, at time.Time) bool {
 	return s.shards[shardOf(ruleID, series, len(s.shards), s.salt)].Descope(ruleID, series, at)
 }
 
+// DropSeries forgets one series' state for every rule the predicate selects (see Engine.DropSeries).
+// The rule set is replicated across shards but a (rule, series) key lives only in its owner, so each
+// rule is routed to the shard that holds the key.
+func (s *Sharded) DropSeries(series string, stale func(ruleID string, raisedAt time.Time, raised bool) bool) int {
+	n := 0
+	for id := range s.shards[0].rules {
+		n += s.shards[shardOf(id, series, len(s.shards), s.salt)].dropSeriesOfRule(id, series, stale)
+	}
+	return n
+}
+
+// SeriesKeys concatenates the shards' keys; they are disjoint by ownership.
+func (s *Sharded) SeriesKeys() []SeriesKey {
+	var out []SeriesKey
+	for _, e := range s.shards {
+		out = append(out, e.SeriesKeys()...)
+	}
+	return out
+}
+
 // ProcessEvent applies one event, with the same idempotency guard as the engine's.
 func (s *Sharded) ProcessEvent(ev Event) { s.ProcessResolved(ev.Seq, ev.Time, []Event{ev}) }
 

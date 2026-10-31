@@ -421,6 +421,10 @@ type ResolvedEventsProcessor struct {
 	// consumers cannot install a stale value out of lifecycle order. Buffered generously (attribute
 	// facts can burst on a fleet config push); the loop drains one per resolved-event-batch iteration.
 	attrUpdates chan attrUpdate
+
+	// seriesDrops carries a deleted device's identity to the loop, which drops the device's keyed
+	// state from the engine (applySeriesDrop).
+	seriesDrops chan seriesDrop
 	// attrRetries holds device rechecks whose LoadDevice failed transiently (applyAttrRecheck), to be
 	// re-attempted on the ticker (retryAttrRechecks). It closes the one-DB-blip window in which the
 	// driving fact is already persisted-and-acked but the view kept a stale bound: without a retry the
@@ -686,6 +690,15 @@ type attrUpdate struct {
 	deviceToken string
 }
 
+// seriesDrop is a signal to FORGET a deleted device's keyed detection state on the single-writer
+// loop (applySeriesDrop). The detection series is the device token, and tokens are reusable, so a
+// recreated device inherits whatever the deleted one left behind (an "already raised" latch makes
+// its first matching reading a non-edge) unless the deletion tears it down.
+type seriesDrop struct {
+	tenant      string
+	deviceToken string
+}
+
 // fenceUpdate is one tenant's FROZEN fence set, compiled off-loop by the geofence-set fact
 // consumer and installed on the single-writer loop by applyFenceSet (ADR-078).
 //
@@ -740,6 +753,7 @@ func NewResolvedEventsProcessor(ms *core.Microservice, reader messaging.MessageR
 		// Buffered generously for the same reason as armUpdates: an attribute config push across a
 		// fleet bursts, and the loop drains one recheck per resolved-event-batch iteration.
 		attrUpdates: make(chan attrUpdate, 256),
+		seriesDrops: make(chan seriesDrop, 256),
 		// Buffered modestly: a fence edit is a human authoring action, so these arrive at
 		// authoring rates rather than at fleet rates, and the loop drains one per iteration.
 		fenceUpdates: make(chan fenceUpdate, 32),
@@ -997,6 +1011,11 @@ func (rp *ResolvedEventsProcessor) buildTerm(ctx context.Context) error {
 	// timers for the fleet (a version it can't see has no absence rules) AND live events for the new
 	// version match no rules at all. Runs on this startup goroutine, before the loop launches.
 	if err := rp.reconcileRegistry(ctx); err != nil {
+		return err
+	}
+	// Forget keyed state of device incarnations the roster says have ended, BEFORE the dead-man
+	// reconcile below (which re-arms a live device whose dead-man entry this may have dropped).
+	if err := rp.reconcileDetectionState(ctx); err != nil {
 		return err
 	}
 	// Arm the dead-man over the FINAL (post-replay) engine and reconcile it from the durable
@@ -1658,6 +1677,9 @@ func (rp *ResolvedEventsProcessor) run() {
 			// reconcile on restart), so it needs no checkpoint of its own. A nil armUpdates channel
 			// (scaffold path) never selects here.
 			rp.applyArmRecheck(au)
+		case sd := <-rp.seriesDrops:
+			rp.phases.enter(phaseControl)
+			rp.applySeriesDrop(sd)
 		case at := <-rp.attrUpdates:
 			rp.phases.enter(phaseControl)
 			// Dynamic-threshold recheck on the single writer: re-read the authoritative attribute
@@ -2278,6 +2300,109 @@ func (rp *ResolvedEventsProcessor) applyRuleUpdate(upd ruleUpdate) {
 	if rp.armer != nil && upd.active != nil {
 		rp.armer.ApplyActiveVersion(*upd.active)
 	}
+}
+
+// applySeriesDrop forgets a deleted device's keyed state in every rule of its tenant, on the
+// single-writer loop. It is the fast path; reconcileDetectionState is the durable one (it runs at the
+// start of every term and catches whatever this signal lost to a leadership change or a crash).
+//
+// What counts as stale is decided from the roster row, not from the signal: a tombstone means the
+// device is gone, and a LIVE row means it was recreated, so only state older than the row's current
+// incarnation goes. That makes a delete fact redelivered after a recreate harmless (the roster's
+// monotonic guard rejected it, so the row is still the newer incarnation and the new device's own
+// latch survives). With no roster wired (scaffold path) there is nothing to consult and the signal
+// is trusted. A failed read leaves the state for the next term's reconcile.
+//
+// The state is serialized, so a drop that removed anything dirties the loop and the next checkpoint
+// captures it; otherwise a restart would replay the dropped latch back to life.
+func (rp *ResolvedEventsProcessor) applySeriesDrop(sd seriesDrop) {
+	stale := func(string, time.Time, bool) bool { return true }
+	if rp.RosterStore != nil {
+		rctx, cancel := context.WithTimeout(rp.pctx(), loopReadTimeout)
+		row, _, err := rp.RosterStore.Load(rctx, sd.tenant, sd.deviceToken)
+		cancel()
+		if err != nil {
+			log.Warn().Err(err).Str("tenant", sd.tenant).Str("device", sd.deviceToken).
+				Msg("Detection-state drop for a deleted device could not read the roster; the next term's reconcile will repeat it.")
+			return
+		}
+		// Load reports found=false as a zero row; an absent row selects nothing (see staleForRow).
+		stale = staleForRow(sd.tenant, row, !row.LastEventAt.IsZero())
+	}
+	if rp.engine.DropSeries(sd.deviceToken, stale) > 0 {
+		rp.dirty = true
+	}
+}
+
+// staleForRow builds the DropSeries predicate for one device's roster row: everything of the tenant's
+// rules if the device is tombstoned, and only a raised latch stamped before the row's last lifecycle
+// event (its current incarnation began) if it is live. found=false (no row) selects nothing: a series
+// the roster has never heard of is not evidence of a deletion.
+func staleForRow(tenant string, row model.DeviceRoster, found bool) func(string, time.Time, bool) bool {
+	return func(ruleID string, raisedAt time.Time, raised bool) bool {
+		if !found {
+			return false
+		}
+		if t, ok := runtime.RuleTenant(ruleID); !ok || t != tenant {
+			return false
+		}
+		if row.Deleted {
+			return true
+		}
+		return raised && raisedAt.Before(row.LastEventAt)
+	}
+}
+
+// reconcileDetectionState drops keyed engine state that belongs to a device incarnation which has
+// ended, derived entirely from durable state, so it does not depend on the one-shot entity-deleted
+// signal reaching the loop and a checkpoint. It runs at the start of every leadership term, after
+// restore + catch-up + replay, and closes what the signal cannot: a drop queued when the term ended,
+// a crash between the fact's ack and the next checkpoint (the restored snapshot still holds the
+// latch), a device deleted while the service was down, and a device deleted AND recreated while
+// down. State is stale when its device is tombstoned, or when it is a raised latch older than the
+// live row's last lifecycle event (the device's current incarnation began after it).
+//
+// Only the raised latch carries a time to compare, so for a live (recreated) device that is the
+// state judged; a recreated device's other keyed state (an open window, a Duration run) is judged
+// by the tombstone alone. It runs before reconcileDeadmanArming, which re-arms a live device whose
+// dead-man entry this may have dropped. Startup goroutine, single writer.
+func (rp *ResolvedEventsProcessor) reconcileDetectionState(ctx context.Context) error {
+	if rp.RosterStore == nil {
+		return nil
+	}
+	rows, err := rp.RosterStore.LoadAllLifecycle(ctx)
+	if err != nil {
+		return fmt.Errorf("load roster lifecycle for detection-state reconcile: %w", err)
+	}
+	type devKey struct{ tenant, token string }
+	byDev := make(map[devKey]model.DeviceRoster, len(rows))
+	for _, r := range rows {
+		byDev[devKey{r.Tenant, r.DeviceToken}] = r
+	}
+	visited := make(map[devKey]struct{})
+	dropped := 0
+	for _, k := range rp.engine.SeriesKeys() {
+		tenant, ok := runtime.RuleTenant(k.Rule)
+		if !ok {
+			continue
+		}
+		dk := devKey{tenant, k.Series}
+		if _, done := visited[dk]; done {
+			continue
+		}
+		visited[dk] = struct{}{}
+		row, found := byDev[dk]
+		if !found {
+			continue
+		}
+		dropped += rp.engine.DropSeries(k.Series, staleForRow(tenant, row, true))
+	}
+	if dropped > 0 {
+		// Serialized state changed and a restart would restore it: force the next checkpoint.
+		rp.dirty = true
+		log.Info().Int("dropped", dropped).Msg("Dropped DETECT keyed state belonging to deleted or recreated devices.")
+	}
+	return nil
 }
 
 // applyArmRecheck re-reads a device's authoritative roster membership and arms or disarms its
