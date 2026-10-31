@@ -8,7 +8,7 @@
 // — so a non-conforming (but grammar-valid) token is allowed; the mask drives
 // generation and the pattern hint, not a hard block.
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { AlertCircle, Check, Loader2, RefreshCw } from 'lucide-react';
 import { generateToken, isValidToken, resolveMask } from '@devicechain/client';
@@ -37,6 +37,14 @@ interface TokenFieldProps {
   placeholder?: string;
   id?: string;
   disabled?: boolean;
+  /**
+   * Mint a token from the mask once, as soon as the mask is known, when the field is still empty.
+   * For forms where the token is only an identifier the user has no reason to choose: left empty
+   * the field shows the raw pattern (e.g. `{slug}`) as its placeholder and the form stays blocked
+   * until the user replaces it by hand. Only ever fills an EMPTY field, once, and never
+   * overwrites what the user has typed.
+   */
+  autoGenerate?: boolean;
 }
 
 export function TokenField({
@@ -48,6 +56,7 @@ export function TokenField({
   placeholder,
   id,
   disabled,
+  autoGenerate,
 }: TokenFieldProps) {
   const { t } = useTranslation('common');
   const { isAuthenticated, isIdentityAuthenticated } = useAuth();
@@ -100,6 +109,9 @@ export function TokenField({
     };
   }, [value, invalid, checkAvailability]);
 
+  const autoDone = useRef(false);
+  const regenerateRef = useRef<() => Promise<void>>(async () => {});
+
   const regenerate = async () => {
     if (!mask) return;
     let candidate = generateToken(mask, { seed });
@@ -116,6 +128,15 @@ export function TokenField({
     }
     onChange(candidate);
   };
+  regenerateRef.current = regenerate;
+
+  useEffect(() => {
+    if (!autoGenerate || autoDone.current || !mask || value !== '') return;
+    autoDone.current = true;
+    void regenerateRef.current();
+    // Once per field: `value` and `mask` are read at the moment the mask first resolves.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoGenerate, mask]);
 
   return (
     <div className="space-y-1">

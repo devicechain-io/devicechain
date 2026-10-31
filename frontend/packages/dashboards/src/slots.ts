@@ -264,9 +264,10 @@ export function setSlotScope(
   return { ...def, slots };
 }
 
-// setSlotCandidates sets (or, with undefined/empty, clears) the picker type filter of a ROOT anchor
-// slot - the area type or asset type its picker lists. A no-op when the slot does not exist, is not
-// an anchor slot, or is scoped (a scoped slot's options are its parent's members, which no type
+// setSlotCandidates sets (or, with undefined/empty, clears) the picker type filter of a ROOT
+// slot - the area type or asset type an anchor slot's picker lists, or the device type a device
+// slot's does. Only the field that fits the slot's kind is kept. A no-op when the slot does not
+// exist or is scoped (a scoped slot's options are its parent's members, which no type
 // filter applies to), so the editor can never write a field the loader would ignore.
 export function setSlotCandidates(
   def: DashboardDefinition,
@@ -275,12 +276,19 @@ export function setSlotCandidates(
 ): DashboardDefinition {
   if (!def.slots || !Object.prototype.hasOwnProperty.call(def.slots, slotName)) return def;
   const current = def.slots[slotName];
-  if (current.type !== 'anchor' || current.scope) return def;
+  if (current.scope) return def;
   const next: SlotCandidates = {};
-  if (candidates?.areaType) next.areaType = candidates.areaType;
-  if (candidates?.assetType) next.assetType = candidates.assetType;
+  if (current.type === 'anchor') {
+    if (candidates?.areaType) next.areaType = candidates.areaType;
+    if (candidates?.assetType) next.assetType = candidates.assetType;
+  } else if (candidates?.deviceType) {
+    next.deviceType = candidates.deviceType;
+  }
+  // A filter that names only a field the slot's kind cannot use is a no-op, not a silent clear.
+  const asked = !!(candidates?.areaType || candidates?.assetType || candidates?.deviceType);
+  if (asked && !next.areaType && !next.assetType && !next.deviceType) return def;
   const { candidates: _drop, ...rest } = current;
-  const slot: SlotDefinition = next.areaType || next.assetType ? { ...rest, candidates: next } : rest;
+  const slot: SlotDefinition = next.areaType || next.assetType || next.deviceType ? { ...rest, candidates: next } : rest;
   return { ...def, slots: { ...def.slots, [slotName]: slot } };
 }
 

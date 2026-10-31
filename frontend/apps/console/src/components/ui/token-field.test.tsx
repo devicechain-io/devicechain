@@ -84,3 +84,24 @@ describe('when the masks were read', () => {
     expect(screen.queryByText(UNAVAILABLE)).toBeNull();
   });
 });
+
+describe('autoGenerate', () => {
+  it('mints a token once, as soon as the mask is known, when the field is empty', async () => {
+    masks.value = { device: '{slug}' };
+    const onChange = vi.fn();
+    render(<TokenField entityType="device" value="" onChange={onChange} seed="Pump 4" autoGenerate />);
+    await waitFor(() => expect(onChange).toHaveBeenCalledTimes(1));
+    expect(onChange.mock.calls[0][0]).toMatch(/^pump-4/);
+  });
+
+  it('never overwrites what is already typed, and does nothing unless asked', async () => {
+    masks.value = { device: '{slug}' };
+    const typed = vi.fn();
+    render(<TokenField entityType="device" value="mine" onChange={typed} seed="Pump 4" autoGenerate />);
+    const plain = vi.fn();
+    render(<TokenField entityType="device" value="" onChange={plain} seed="Pump 4" />);
+    await screen.findAllByText(/Pattern:/);
+    expect(typed).not.toHaveBeenCalled();
+    expect(plain).not.toHaveBeenCalled();
+  });
+});

@@ -586,10 +586,12 @@ export interface SlotDefinition {
   candidates?: SlotCandidates;
 }
 
-// The type filter a root anchor slot's picker applies, by the type's token.
+// The type filter a root slot's picker applies, by the type's token: the area type or asset type
+// of an anchor slot, the device type of a device slot.
 export interface SlotCandidates {
   areaType?: string;
   assetType?: string;
+  deviceType?: string;
 }
 
 

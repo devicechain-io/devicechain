@@ -1,7 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { resolveSlotCandidates } from './candidates';
 import type { MemberResolver } from './context';
@@ -119,6 +119,13 @@ describe('resolveSlotCandidates', () => {
     );
     expect(out.map((c) => c.label)).toEqual(['d1', 'Sensor 2']);
     expect(out.map((c) => c.selected)).toEqual([false, true]);
+  });
+
+  it('asks the lister for the declared device type when a root device slot declares one', async () => {
+    const d = def({ dev: { type: 'device', candidates: { deviceType: 'thermostat' } } });
+    const lister = vi.fn(async (_kind: string, _type?: string) => [{ token: 'd1' }]) as unknown as EntityCandidateLister;
+    await resolveSlotCandidates(d, 'dev', {}, resolverOf([]), lister);
+    expect(lister).toHaveBeenCalledWith('device', 'thermostat');
   });
 
   it('fails safe to no candidates when the lister throws', async () => {

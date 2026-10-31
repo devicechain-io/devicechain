@@ -133,7 +133,7 @@ describe('CommandButton', () => {
     expect(send).toHaveBeenCalledWith('therm-1', 'ping', undefined);
   });
 
-  it('disables Send and explains when the viewer lacks command:write', () => {
+  it('offers no control and explains when the viewer lacks command:write', () => {
     const readOnly: WidgetActions = {
       can: () => false,
       acknowledgeAlarm: vi.fn(async () => {}),
@@ -143,8 +143,26 @@ describe('CommandButton', () => {
     render(
       <CommandButton widget={widget({ commandName: 'reboot' })} data={state()} actions={readOnly} />,
     );
-    expect((screen.getByRole('button', { name: /send/i }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole('button', { name: /send/i })).toBeNull();
     expect(screen.getByText(/don’t have permission/i)).toBeTruthy();
+  });
+
+  it('keeps the delivery history visible when the viewer lacks command:write', () => {
+    const readOnly: WidgetActions = {
+      can: () => false,
+      acknowledgeAlarm: vi.fn(async () => {}),
+      clearAlarm: vi.fn(async () => {}),
+      sendCommand: vi.fn(async () => ({ status: 'sent' as const, token: 't' })),
+    };
+    render(
+      <CommandButton
+        widget={widget({ commandName: 'reboot', parameterSchema: JSON.stringify([{ name: 'delay', dataType: 'INT' }]) })}
+        data={state({ commands: [command()], total: 1 })}
+        actions={readOnly}
+      />,
+    );
+    expect(screen.queryByLabelText(/delay/)).toBeNull();
+    expect(screen.getByText('reboot')).toBeTruthy();
   });
 
   it('disables Send and explains when no device is bound', () => {

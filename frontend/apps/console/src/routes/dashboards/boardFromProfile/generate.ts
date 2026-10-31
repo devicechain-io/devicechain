@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Turns what a device type's profile declares into a dashboard definition made ONLY of widgets the
-// console already ships: a device selector, one card per measurement, a chart of the key numeric
-// measurements, an alarm table, and a button for each command that is safe to send from a board.
+// console already ships: a device selector, one card per measurement, a chart per unit of the
+// numeric measurements, an alarm table, and a button for each command that is safe to send from a board.
 //
 // Pure: no I/O, no i18n lookups (the caller passes the words), so the same input always gives the
 // same board and the tests can assert it exactly. The output is a plain JSON-able object in the
@@ -17,6 +17,11 @@ export const SCHEMA_VERSION = 3;
 export const MAX_CARDS = 12;
 // More lines than this on one chart are unreadable; the first few declared are the key ones.
 export const MAX_CHART_SERIES = 4;
+// Charts are grouped by unit so every y-axis has ONE scale (humidity near 65 next to a temperature
+// near 3 on a shared axis flattens the temperature into a line). A measurement with no unit is
+// not known to share a scale with anything, so it gets a chart of its own. More charts than this
+// is a wall; the cards still show every measurement.
+export const MAX_CHARTS = 4;
 
 const COLUMNS = 12;
 const SELECTOR_SLOT = 'device';
@@ -42,9 +47,7 @@ export interface BoardCommand {
 // Every word the board contains, supplied by the caller (translated in the app, literal in tests).
 export interface BoardLabels {
   device: string;
-  // The selector offers every device of the tenant, not only this type's: a slot cannot yet be
-  // narrowed to a device type, so the board says so beside the selector.
-  selectorScope: string;
+  // The chart's title stem; the unit (or the measurement, for one with no unit) follows it.
   chart: string;
   alarms: string;
   calculated: string;
@@ -58,6 +61,9 @@ export interface BoardInput {
   commands: readonly BoardCommand[];
   // A device of this type to preselect, or none when the type has no devices yet.
   defaultDevice?: string | null;
+  // The device type's token. The selector offers only devices of this type, so a board made for
+  // one type never lands on (or lets the viewer wander to) a device of another.
+  deviceType?: string | null;
   labels: BoardLabels;
 }
 
@@ -77,6 +83,8 @@ export interface BoardSummary {
   // The declared measurements that got no card, in declared order.
   leftOut: string[];
   chartMeasurements: string[];
+  // One entry per chart: the unit it is scaled in (none for a unitless measurement) and its series.
+  charts: Array<{ unit: string | null; measurements: string[] }>;
   commands: string[];
   // Commands not given a button because sending them from a board is not safe.
   skippedCommands: string[];
@@ -90,6 +98,28 @@ type Json = Record<string, unknown>;
 
 function place(col: number, row: number, cols: number, rows: number): Json {
   return { base: { mode: 'grid', col, row, cols, rows } };
+}
+
+// Groups the numeric measurements into charts, each sharing one unit (and so one axis scale).
+function planCharts(metrics: readonly BoardMetric[]): Array<{ unit: string | null; measurements: string[] }> {
+  const byUnit = new Map<string, { unit: string | null; measurements: string[] }>();
+  const charts: Array<{ unit: string | null; measurements: string[] }> = [];
+  for (const m of metrics) {
+    if (!NUMERIC.has(m.dataType)) continue;
+    const unit = m.unit?.trim() || null;
+    if (unit === null) {
+      charts.push({ unit: null, measurements: [m.key] });
+      continue;
+    }
+    let group = byUnit.get(unit);
+    if (!group) {
+      group = { unit, measurements: [] };
+      byUnit.set(unit, group);
+      charts.push(group);
+    }
+    if (group.measurements.length < MAX_CHART_SERIES) group.measurements.push(m.key);
+  }
+  return charts.slice(0, MAX_CHARTS);
 }
 
 export function generateBoard(input: BoardInput): GeneratedBoard {
@@ -115,11 +145,8 @@ export function generateBoard(input: BoardInput): GeneratedBoard {
   const slotSource = (measurements: string[]): Json => ({ kind: 'slot', slot: SELECTOR_SLOT, measurements });
 
   let row = 0;
-  add({ id: 'selector', type: 'entity-selector', title: labels.device }, [0, row, 6, 1], {
+  add({ id: 'selector', type: 'entity-selector', title: labels.device }, [0, row, COLUMNS, 1], {
     options: { title: labels.device, selectionTarget: SELECTOR_SLOT },
-  });
-  add({ id: 'note-selector', type: 'label', title: labels.selectorScope }, [6, row, 6, 1], {
-    options: { text: labels.selectorScope, align: 'left' },
   });
   row += 1;
 
@@ -142,23 +169,28 @@ export function generateBoard(input: BoardInput): GeneratedBoard {
   });
   row += Math.ceil(shown.length / 4) * 2;
 
-  const chartMeasurements = metrics
-    .filter((m) => NUMERIC.has(m.dataType))
-    .slice(0, MAX_CHART_SERIES)
-    .map((m) => m.key);
-  if (chartMeasurements.length > 0) {
-    add({ id: 'chart', type: 'timeseries-chart', title: labels.chart }, [0, row, 8, 4], {
-      datasource: slotSource(chartMeasurements),
-      options: { title: labels.chart },
-    });
-  }
-  // Beside the chart when there is one; the whole row otherwise.
-  const alarmCols = chartMeasurements.length > 0 ? 4 : COLUMNS;
-  add({ id: 'alarms', type: 'alarm-table', title: labels.alarms }, [COLUMNS - alarmCols, row, alarmCols, 4], {
+  const charts = planCharts(metrics);
+  charts.forEach((c, i) => {
+    const title = `${labels.chart} (${c.unit ?? c.measurements[0]})`;
+    const options: Json = { title };
+    if (c.unit) options.unit = c.unit;
+    add(
+      { id: `chart-${i + 1}`, type: 'timeseries-chart', title },
+      [(i % 2) * 6, row + Math.floor(i / 2) * 4, 6, 4],
+      { datasource: slotSource(c.measurements), options },
+    );
+  });
+  // Two charts per row. The alarm table takes the empty half of an odd last row; otherwise a row
+  // of its own.
+  const chartRows = Math.ceil(charts.length / 2);
+  const beside = charts.length % 2 === 1;
+  const alarmCols = beside ? 6 : COLUMNS;
+  const alarmRow = beside ? row + (chartRows - 1) * 4 : row + chartRows * 4;
+  add({ id: 'alarms', type: 'alarm-table', title: labels.alarms }, [COLUMNS - alarmCols, alarmRow, alarmCols, 4], {
     datasource: slotSource([]),
     options: { title: labels.alarms, state: 'ACTIVE' },
   });
-  row += 4;
+  row = alarmRow + 4;
 
   if (skippedCommands.length > 0) note('note-commands', labels.commandsLeftOut(skippedCommands.length));
   safe.forEach((c, i) => {
@@ -184,6 +216,7 @@ export function generateBoard(input: BoardInput): GeneratedBoard {
       [SELECTOR_SLOT]: {
         label: labels.device,
         type: 'device',
+        ...(input.deviceType ? { candidates: { deviceType: input.deviceType } } : {}),
         ...(input.defaultDevice ? { defaultBinding: { kind: 'device', deviceToken: input.defaultDevice } } : {}),
       },
     },
@@ -197,7 +230,8 @@ export function generateBoard(input: BoardInput): GeneratedBoard {
       widgets: planned,
       cards: shown.length,
       leftOut,
-      chartMeasurements,
+      chartMeasurements: charts.flatMap((c) => c.measurements),
+      charts,
       commands: safe.map((c) => c.key),
       skippedCommands,
     },

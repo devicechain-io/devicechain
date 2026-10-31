@@ -74,6 +74,10 @@ export function CommandButton({ widget, data, actions }: WidgetProps<CommandStre
 
   const canWrite = actions?.can('command:write') ?? false;
   const hasSeam = typeof actions?.sendCommand === 'function';
+  // A viewer the host KNOWS lacks command:write (a host supplied the seam and said no) is not
+  // offered the control. A mount with no seam at all (a preview, the widget gallery) still shows
+  // the form, disabled, so the author can see what the widget looks like.
+  const denied = !!actions && !canWrite;
   const deviceToken = data.deviceToken;
   // The form is operable only when the viewer may write AND the runtime supplies the send
   // seam; a read-only mount shows the form disabled. Sending additionally needs a bound
@@ -140,6 +144,16 @@ export function CommandButton({ widget, data, actions }: WidgetProps<CommandStre
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: 10, overflowY: 'auto' }}>
         {!commandName ? (
           <div style={{ ...hint, margin: 'auto' }}>No command configured.</div>
+        ) : denied ? (
+          // A viewer without command:write is not offered the control at all: a form and a
+          // Send button that can never work read as a broken board. The reason stands in its
+          // place, and the delivery history (read-only) stays.
+          <>
+            <div role="note" style={{ ...hint, flexShrink: 0 }}>
+              {NO_PERMISSION}
+            </div>
+            <CommandHistory commands={data.commands} sentToken={sentToken} loading={data.loading} error={data.error} />
+          </>
         ) : (
           <>
             {/* Typed parameter form. */}
@@ -175,7 +189,7 @@ export function CommandButton({ widget, data, actions }: WidgetProps<CommandStre
               </button>
 
               {!canWrite ? (
-                <div style={hint}>You don’t have permission to issue commands.</div>
+                <div style={hint}>{NO_PERMISSION}</div>
               ) : !hasSeam ? (
                 <div style={hint}>Commands aren’t available in this view.</div>
               ) : !deviceToken ? (
@@ -377,6 +391,8 @@ const hint: CSSProperties = { fontSize: fontVar('xs'), color: css('muted-foregro
 // What a viewer is told when the platform could not decide the enqueue. It is fixed
 // prose on purpose: the thrown error's text describes in-cluster machinery, and a
 // dashboard is the surface most likely to be embedded outside the tenant's own console.
+const NO_PERMISSION = 'You don’t have permission to issue commands.';
+
 const SEND_FAILED = 'Couldn’t issue the command. Try again.';
 
 const inputStyle: CSSProperties = {

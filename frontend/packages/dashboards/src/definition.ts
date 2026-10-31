@@ -243,14 +243,20 @@ function parseSlots(raw: unknown): Record<string, SlotDefinition> | undefined {
   return slots;
 }
 
-// parseCandidates reads a root anchor slot's picker type filter: non-empty string tokens only,
+// parseCandidates reads a root slot's picker type filter: non-empty string tokens only,
 // anything else dropped, and nothing left means no filter.
 function parseCandidates(raw: unknown): SlotCandidates | undefined {
   if (!isRecord(raw)) return undefined;
   const token = (v: unknown) => (typeof v === 'string' && v ? v : undefined);
   const areaType = token(raw.areaType);
   const assetType = token(raw.assetType);
-  return areaType || assetType ? { areaType, assetType } : undefined;
+  const deviceType = token(raw.deviceType);
+  if (!areaType && !assetType && !deviceType) return undefined;
+  return {
+    ...(areaType ? { areaType } : {}),
+    ...(assetType ? { assetType } : {}),
+    ...(deviceType ? { deviceType } : {}),
+  };
 }
 
 // parseScope reads a candidate `{ parent, strategy }` — structural shape only. A

@@ -23,8 +23,8 @@ vi.mock('@/lib/api/device-management', () => ({
   getProfilePublishedVocabulary: vi.fn(),
 }));
 vi.mock('@/components/ui/token-field', () => ({
-  TokenField: (p: { id?: string; value: string; onChange: (v: string) => void }) => (
-    <input aria-label="token" id={p.id} value={p.value} onChange={(e) => p.onChange(e.target.value)} />
+  TokenField: (p: { id?: string; value: string; onChange: (v: string) => void; autoGenerate?: boolean }) => (
+    <input data-auto={String(!!p.autoGenerate)} aria-label="token" id={p.id} value={p.value} onChange={(e) => p.onChange(e.target.value)} />
   ),
 }));
 
@@ -129,11 +129,14 @@ describe('BoardFromProfileDrawer', () => {
     expect(call).toMatchObject({ token: 'boiler-board', name: 'Boiler dashboard' });
     const stored = JSON.parse(call.definition ?? '') as {
       title: string;
-      slots: Record<string, { defaultBinding?: unknown }>;
+      slots: Record<string, { defaultBinding?: unknown; candidates?: unknown }>;
       widgets: Array<{ type: string }>;
     };
     expect(stored.title).toBe('Boiler dashboard');
     expect(stored.slots.device.defaultBinding).toEqual({ kind: 'device', deviceToken: 'boiler-1' });
+    // The selector offers only devices of the type the board was made from.
+    expect(stored.slots.device.candidates).toEqual({ deviceType: 'boiler' });
+    expect(listDevices).toHaveBeenCalledWith(expect.objectContaining({ deviceType: 'boiler' }));
     expect(stored.widgets.map((w) => w.type)).toContain('command-button');
     // A draft: created, never overwritten, never published.
     expect(updateDashboard).not.toHaveBeenCalled();
@@ -180,7 +183,6 @@ describe('BoardFromProfileDrawer', () => {
     expect(await screen.findByText('1 measurement card')).toBeTruthy();
     expect(screen.getByText(/no devices yet/)).toBeTruthy();
     expect(screen.getByText(/Built from the profile's draft/)).toBeTruthy();
-    expect(screen.getAllByText(/lists every device in the tenant/).length).toBeGreaterThan(0);
   });
 
   it('refuses a profile with no measurements, with no way to create', async () => {
@@ -190,6 +192,14 @@ describe('BoardFromProfileDrawer', () => {
     expect(await screen.findByText(/declares no measurements/)).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Create draft and open editor' })).toBeNull();
     expect(createDashboard).not.toHaveBeenCalled();
+  });
+
+  it('asks the token field to mint a token, so the user is not left with a raw pattern to replace', async () => {
+    vi.mocked(listDevices).mockResolvedValue(asReturn({ results: [] }));
+    vi.mocked(listMetricDefinitions).mockResolvedValue(asReturn([draftMetric('temperature')]));
+    renderDrawer();
+    await screen.findByText('1 measurement card');
+    expect(screen.getByLabelText('token').getAttribute('data-auto')).toBe('true');
   });
 
   it('shows a failed create and stays on the form', async () => {

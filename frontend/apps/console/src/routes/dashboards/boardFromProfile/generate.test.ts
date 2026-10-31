@@ -14,6 +14,7 @@ import {
   generateBoard,
   MAX_CARDS,
   MAX_CHART_SERIES,
+  MAX_CHARTS,
   type BoardCommand,
   type BoardInput,
   type BoardMetric,
@@ -21,7 +22,6 @@ import {
 
 const labels: BoardInput['labels'] = {
   device: 'Device',
-  selectorScope: 'Lists every device',
   chart: 'Telemetry',
   alarms: 'Alarms',
   calculated: 'Calculated',
@@ -73,8 +73,8 @@ function assertValid(definition: Record<string, unknown>) {
 type Loose = Record<string, any>;
 const widgetsOf = (b: ReturnType<typeof generated>, type: string) =>
   (b.definition.widgets as Loose[]).filter((w) => w.type === type);
-// The notes about what was left out, without the selector-scope note every board carries.
-const notesOf = (b: ReturnType<typeof generated>) => widgetsOf(b, 'label').filter((w) => w.id !== 'note-selector');
+// The notes about what was left out.
+const notesOf = (b: ReturnType<typeof generated>) => widgetsOf(b, 'label');
 
 describe('a small profile', () => {
   it('gets a selector, a card per measurement with its unit, a chart and an alarm table', () => {
@@ -86,7 +86,11 @@ describe('a small profile', () => {
       ['temperature', 'C'],
       ['humidity', '%'],
     ]);
-    expect(widgetsOf(b, 'timeseries-chart')[0].datasource.measurements).toEqual(['temperature', 'humidity']);
+    // Different units, different scales: one chart (and one axis) each.
+    expect(widgetsOf(b, 'timeseries-chart').map((w) => [w.datasource.measurements, w.options.unit])).toEqual([
+      [['temperature'], 'C'],
+      [['humidity'], '%'],
+    ]);
     expect(widgetsOf(b, 'alarm-table')).toHaveLength(1);
     expect(notesOf(b)).toHaveLength(0);
     expect(b.summary.leftOut).toEqual([]);
@@ -102,12 +106,16 @@ describe('a small profile', () => {
     expect(widgetsOf(generated(), 'entity-selector')[0].options.selectionTarget).toBe('device');
   });
 
-  it('says beside the selector that it lists every device, not only this type', () => {
-    const b = generated();
-    const note = (b.definition.widgets as Loose[]).find((w) => w.id === 'note-selector');
-    expect(note?.type).toBe('label');
-    expect(note?.options.text).toBe('Lists every device');
-    expect(note?.layout.base.row).toBe(widgetsOf(b, 'entity-selector')[0].layout.base.row);
+  it('narrows the selector to devices of the type, so it cannot land on another type', () => {
+    const b = generated({ deviceType: 'boiler', defaultDevice: 'boiler-1' });
+    assertValid(b.definition);
+    const slots = b.definition.slots as Loose;
+    expect(slots.device.candidates).toEqual({ deviceType: 'boiler' });
+    expect(slots.device.defaultBinding).toEqual({ kind: 'device', deviceToken: 'boiler-1' });
+    // Still narrowed when the type has no device yet: the selector then offers none, not another type's.
+    const empty = generated({ deviceType: 'boiler', defaultDevice: null }).definition.slots as Loose;
+    expect(empty.device.candidates).toEqual({ deviceType: 'boiler' });
+    expect((generated().definition.slots as Loose).device.candidates).toBeUndefined();
   });
 
   it('is deterministic', () => {
@@ -121,6 +129,42 @@ describe('a small profile', () => {
     assertValid(b.definition);
     expect(widgetsOf(b, 'latest-card')[0].options.precision).toBe(0);
     expect(widgetsOf(b, 'timeseries-chart')[0].datasource.measurements).toEqual(['cycles']);
+  });
+
+  it('puts measurements sharing a unit on one chart, a unit apart on its own axis', () => {
+    const b = generated({
+      metrics: [
+        metric('temperature', { unit: 'C' }),
+        metric('humidity', { unit: '%' }),
+        metric('dewPoint', { unit: 'C' }),
+      ],
+    });
+    assertValid(b.definition);
+    const charts = widgetsOf(b, 'timeseries-chart');
+    expect(charts.map((w) => w.datasource.measurements)).toEqual([['temperature', 'dewPoint'], ['humidity']]);
+    expect(charts.map((w) => w.options.title)).toEqual(['Telemetry (C)', 'Telemetry (%)']);
+    expect(b.summary.charts.map((c) => c.unit)).toEqual(['C', '%']);
+  });
+
+  it('gives a measurement with no unit a chart of its own', () => {
+    const b = generated({ metrics: [metric('a'), metric('b'), metric('c', { unit: '' })] });
+    assertValid(b.definition);
+    const charts = widgetsOf(b, 'timeseries-chart');
+    expect(charts.map((w) => w.datasource.measurements)).toEqual([['a'], ['b'], ['c']]);
+    expect(charts[0].options).not.toHaveProperty('unit');
+  });
+
+  it('lays charts two to a row and tucks the alarm table into an odd last row', () => {
+    const three = generated({ metrics: [metric('a'), metric('b'), metric('c')] });
+    assertValid(three.definition);
+    const alarms = three.summary.widgets.find((w) => w.id === 'alarms')!;
+    const last = three.summary.widgets.find((w) => w.id === 'chart-3')!;
+    expect([alarms.row, alarms.col, alarms.cols]).toEqual([last.row, 6, 6]);
+    const two = generated({ metrics: [metric('a'), metric('b')] });
+    assertValid(two.definition);
+    const full = two.summary.widgets.find((w) => w.id === 'alarms')!;
+    expect(full.cols).toBe(12);
+    expect(full.row).toBeGreaterThan(two.summary.widgets.find((w) => w.id === 'chart-2')!.row);
   });
 
   it('has no chart when nothing is numeric, and the alarm table takes the full row', () => {
@@ -146,10 +190,14 @@ describe('a large profile', () => {
     expect(notesOf(b)[0].options.text).toBe(`Showing ${MAX_CARDS} of 60`);
   });
 
-  it('draws at most a few series on the chart', () => {
-    expect(widgetsOf(generated({ metrics: sixty }), 'timeseries-chart')[0].datasource.measurements).toHaveLength(
-      MAX_CHART_SERIES,
-    );
+  it('draws at most a few charts, and a few series on each', () => {
+    const sameUnit = sixty.map((m) => ({ ...m, unit: 'C' }));
+    const one = widgetsOf(generated({ metrics: sameUnit }), 'timeseries-chart');
+    expect(one).toHaveLength(1);
+    expect(one[0].datasource.measurements).toHaveLength(MAX_CHART_SERIES);
+    const b = generated({ metrics: sixty });
+    assertValid(b.definition);
+    expect(widgetsOf(b, 'timeseries-chart')).toHaveLength(MAX_CHARTS);
   });
 
   it('stays valid at exactly the cap and one past it', () => {
