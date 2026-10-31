@@ -1467,8 +1467,8 @@ EOF
 await_outage() {
   local size="$1" held
   wait "$mx_watcher" || {
-    echo "outage evidence: assignment ${mx_assignment:-?}: $(assignment_json "${mx_assignment:-x}" 2>&1 | head -c 600)" >&2
-    dx sh -c 'ls -la /dev*/slots/*/ 2>&1 | head -40' >&2 || true
+    echo "outage evidence: assignment ${mx_assignment:-?}: $(mx_out="$(assignment_json "${mx_assignment:-x}" 2>&1)"; printf '%s' "${mx_out:0:600}")" >&2
+    dx sh -c 'ls -la /dev*/slots/*/ 2>&1 | sed -n 1,40p' >&2 || true
     fail "the download never reached the outage threshold of $size bytes"
   }
   mx_watcher=""
@@ -1595,6 +1595,7 @@ m2_hash_mismatch_at_upload() {
   # The same size, one byte different.
   cp "$file" "$rig_tmp/m2-tampered"
   last="$(tail -c 1 "$file" | od -An -tu1 | tr -d ' ')"
+  # shellcheck disable=SC2059 # the format IS the computed octal escape, by design
   printf "$(printf '\\%03o' $(((last + 1) % 256)))" | dd of="$rig_tmp/m2-tampered" bs=1 seek=$((size - 1)) count=1 conv=notrunc 2>/dev/null
   [[ "$(wc -c <"$rig_tmp/m2-tampered" | tr -d ' ')" == "$size" ]] || fail "the tampered copy is not $size bytes"
   code="$(curl_api -o "$rig_tmp/upload.out" -w '%{http_code}' -X PUT "$upd/updates/artifacts/$tok/content" \
@@ -1836,7 +1837,8 @@ m7_partial_rollout() {
     note "device $n ($dev): runs $id"
   done
   # Targets 3 and 4 were never dispatched: they must not run 1.1.0.
-  for dev in $(cut -d' ' -f3- <<<"$order"); do
+  read -ra undispatched <<<"$(cut -d' ' -f3- <<<"$order")"
+  for dev in "${undispatched[@]}"; do
     n="${dev##*-}"
     [[ "$(jq -r .version <<<"$(describe_running "$(payload_pid "$n")")")" != 1.1.0 ]] || fail "$dev was never dispatched yet runs 1.1.0"
   done
@@ -1855,7 +1857,8 @@ m7_partial_rollout() {
   done
   [[ "$st" == COMPLETED ]] || fail "after the resume the rollout is $st, expected COMPLETED"
   expect_green "M7 completed" check_rollout "$r" COMPLETED 3 1 0 -
-  for dev in $(cut -d' ' -f1,3- <<<"$order"); do
+  read -ra unaffected <<<"$(cut -d' ' -f1,3- <<<"$order")"
+  for dev in "${unaffected[@]}"; do
     n="${dev##*-}"
     id="$(describe_running "$(wait_payload "$n")")"
     [[ "$(jq -r .version <<<"$id")" == 1.1.0 ]] || fail "$dev runs $id after the rollout"
