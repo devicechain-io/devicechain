@@ -500,6 +500,15 @@ que está haciendo y escribe su estado— y devuelve el bloqueo del clúster, as
 volver a ejecutarla. Un segundo `Ctrl+C` sale de inmediato y renuncia a ambas cosas. Consulta
 [Interrumpir una ejecución](./cluster-lock.md#interrupt).
 
+Si la ejecución se terminó de golpe en lugar de detenerse (se mató el proceso o se cerró la
+terminal), hay dos obstáculos antes de volver a ejecutarla. El bloqueo del clúster sigue
+retenido, así que la nueva ejecución espera a que venza el arrendamiento, luego dice que la
+reclamación parece obsoleta y nombra [`dcctl instances reclaim`](./cluster-lock.md#reclaim), que
+ejecutas cuando estás seguro de que el proceso ya no existe. Y si la ejecución había pasado del
+paso 6, la nueva se detiene con `an escrow artifact for instance ... already exists`: contiene la
+clave que la instancia a medio construir ya tiene, así que vuelve a ejecutar con
+`--restore-root-key <ruta>`, usando la ruta de ese mensaje.
+
 Si la ejecución ya había llegado al paso 8, volver a ejecutarla también la termina: el paso 3
 deja pasar una nueva ejecución hasta que un arranque inicial de la instancia haya terminado con
 éxito. Un **segundo** `Ctrl+C` durante el paso 8 puede dejar la release de Helm de la instancia
@@ -742,8 +751,11 @@ Las alertas de las instantáneas se describen en
   comprobación previa falla si falta alguno de los que necesita la ejecución. Docker solo hace
   falta para un clúster local de kind o para `--build`: una instalación en un clúster que nombras
   con `--kube-context`, a partir de imágenes publicadas, no lo comprueba ni lo usa. Donde hace
-  falta, debería ser un motor de Docker nativo y no Docker Desktop, y su daemon tiene que ser
-  accesible.
+  falta, su daemon tiene que ser accesible: Docker Engine en Linux, Docker Desktop en macOS y
+  Windows.
+- **Puertos libres 80, 443 y 1883 del host** para un clúster local de kind, que los publica para
+  la consola, HTTPS y MQTT. `dcctl preflight local` falla, nombrando el contenedor que ocupa uno,
+  en lugar de dejar que la creación del clúster falle con el error de enlace de Docker.
 - **`ko`**, solo para compilar imágenes desde el código fuente con `--build`. La comprobación
   previa avisa, en lugar de fallar, cuando falta.
 

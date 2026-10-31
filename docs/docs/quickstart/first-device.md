@@ -30,6 +30,9 @@ tools is missing. A gap costs you the first ten seconds rather than ten minutes.
   `devicechain` (or the name given with `--cluster`) and offers to create one if there is none.
   `--kube-context <name>` points it at a cluster you already run, which it will never create or
   delete.
+- Ports **80**, **443** and **1883** on your machine must be free. The kind cluster publishes them
+  for the console, HTTPS and MQTT, and creating it fails if another program (often another local
+  Kubernetes cluster) already holds one. `dcctl preflight local` names the holder before you start.
 - Kubernetes **1.29 or newer**, either way. Older versions are refused, because the database
   charts refuse them.
 
@@ -38,6 +41,38 @@ tools is missing. A gap costs you the first ten seconds rather than ten minutes.
 
 The commands below assume the instance is reachable at `localhost` over plain HTTP, which is what
 the flags in step 1 produce.
+
+## Get dcctl {#get-dcctl}
+
+`dcctl` is one file, attached to every [GitHub release](https://github.com/devicechain-io/devicechain/releases)
+as `dcctl_<version>_<os>_<arch>`: a `.tar.gz` for Linux and macOS, a `.zip` for Windows, with
+`<os>` one of `linux`, `darwin` or `windows` and `<arch>` one of `amd64` or `arm64`. The release's
+`checksums.txt` lists the SHA-256 digest of each. `<version>` is the release without its leading
+`v` (`0.27.0` for the release tagged `v0.27.0`).
+
+On Linux or macOS:
+
+```bash
+curl -fLO https://github.com/devicechain-io/devicechain/releases/download/v<version>/dcctl_<version>_<os>_<arch>.tar.gz
+curl -fLO https://github.com/devicechain-io/devicechain/releases/download/v<version>/checksums.txt
+sha256sum --ignore-missing -c checksums.txt   # on macOS: shasum -a 256 --ignore-missing -c checksums.txt
+tar -xzf dcctl_<version>_<os>_<arch>.tar.gz
+sudo mv dcctl /usr/local/bin/
+```
+
+On Windows, in PowerShell:
+
+```powershell
+curl.exe -fLO https://github.com/devicechain-io/devicechain/releases/download/v<version>/dcctl_<version>_windows_amd64.zip
+curl.exe -fLO https://github.com/devicechain-io/devicechain/releases/download/v<version>/checksums.txt
+(Get-FileHash dcctl_<version>_windows_amd64.zip -Algorithm SHA256).Hash.ToLower()
+Select-String windows_amd64 checksums.txt
+Expand-Archive dcctl_<version>_windows_amd64.zip -DestinationPath .
+```
+
+The two digests must match. Then put `dcctl.exe` in a directory on your `PATH`. `dcctl version`
+prints the release it came from, which is also the release of the images it installs. To check
+the release's signatures as well, see [Verifying releases](../deployment/verifying-releases.md).
 
 ## 1. Bring up an instance {#1-bring-up-an-instance}
 

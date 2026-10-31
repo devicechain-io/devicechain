@@ -31,6 +31,10 @@ segundos y no diez minutos.
   `devicechain` (o el nombre indicado con `--cluster`) y se ofrece a crear uno si no lo hay.
   `--kube-context <nombre>` lo apunta a un clúster que ya operas, y ese nunca lo crea ni lo
   borra.
+- Los puertos **80**, **443** y **1883** de tu máquina deben estar libres. El clúster de kind los
+  publica para la consola, HTTPS y MQTT, y crearlo falla si otro programa (a menudo otro clúster
+  local de Kubernetes) ya ocupa alguno. `dcctl preflight local` nombra quién lo ocupa antes de
+  empezar.
 - Kubernetes **1.29 o posterior**, en cualquier caso. Las versiones más antiguas se rechazan, porque
   los charts de la base de datos las rechazan.
 
@@ -39,6 +43,39 @@ segundos y no diez minutos.
 
 Los comandos de abajo suponen que la instancia es alcanzable en `localhost` por HTTP sin cifrar, que
 es lo que producen las opciones del paso 1.
+
+## Obtener dcctl {#get-dcctl}
+
+`dcctl` es un único archivo, adjunto a cada [versión de GitHub](https://github.com/devicechain-io/devicechain/releases)
+como `dcctl_<versión>_<so>_<arq>`: un `.tar.gz` para Linux y macOS, un `.zip` para Windows, con
+`<so>` igual a `linux`, `darwin` o `windows` y `<arq>` igual a `amd64` o `arm64`. El archivo
+`checksums.txt` de la versión lista el resumen SHA-256 de cada uno. `<versión>` es la versión sin
+la `v` inicial (`0.27.0` para la versión etiquetada `v0.27.0`).
+
+En Linux o macOS:
+
+```bash
+curl -fLO https://github.com/devicechain-io/devicechain/releases/download/v<versión>/dcctl_<versión>_<so>_<arq>.tar.gz
+curl -fLO https://github.com/devicechain-io/devicechain/releases/download/v<versión>/checksums.txt
+sha256sum --ignore-missing -c checksums.txt   # en macOS: shasum -a 256 --ignore-missing -c checksums.txt
+tar -xzf dcctl_<versión>_<so>_<arq>.tar.gz
+sudo mv dcctl /usr/local/bin/
+```
+
+En Windows, en PowerShell:
+
+```powershell
+curl.exe -fLO https://github.com/devicechain-io/devicechain/releases/download/v<versión>/dcctl_<versión>_windows_amd64.zip
+curl.exe -fLO https://github.com/devicechain-io/devicechain/releases/download/v<versión>/checksums.txt
+(Get-FileHash dcctl_<versión>_windows_amd64.zip -Algorithm SHA256).Hash.ToLower()
+Select-String windows_amd64 checksums.txt
+Expand-Archive dcctl_<versión>_windows_amd64.zip -DestinationPath .
+```
+
+Los dos resúmenes deben coincidir. Después coloca `dcctl.exe` en un directorio de tu `PATH`.
+`dcctl version` muestra la versión de la que procede, que es también la versión de las imágenes
+que instala. Para comprobar además las firmas de la versión, consulta
+[Verificar las versiones](../deployment/verifying-releases.md).
 
 ## 1. Levantar una instancia {#1-bring-up-an-instance}
 

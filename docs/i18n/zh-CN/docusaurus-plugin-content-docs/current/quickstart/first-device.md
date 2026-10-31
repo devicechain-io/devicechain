@@ -21,11 +21,38 @@ title: 你的第一台设备
 - 必须安装 `helm`。`dcctl` 自带 Chart，并通过 Helm 的 Go 库而不是命令安装，但预检仍会检查这个二进制文件。
 - 缺少 `ko` 和 `cloud-provider-kind` 只会产生警告。只有从源码构建镜像（`--build`）时才需要 `ko`。
 - 无需事先准备集群。`dcctl install local` 会查找名为 `devicechain` 的 kind 集群（或通过 `--cluster` 指定的名称）；如果不存在，就会询问是否创建。`--kube-context <name>` 可指向你已有的集群，该命令绝不会创建或删除这个集群。
+- 本机的 **80**、**443** 和 **1883** 端口必须空闲。kind 集群会将它们发布出来，分别用于控制台、HTTPS 和 MQTT；如果其他程序（通常是另一个本地 Kubernetes 集群）已占用其中任何一个，创建集群就会失败。`dcctl preflight local` 会在开始之前指出占用者。
 - 无论采用哪种方式，都需要 Kubernetes **1.29 或更新版本**。旧版本会被拒绝，因为数据库 Chart 不支持它们。
 
 `dcctl preflight local` 会运行相同的检查，并检查 Docker 引擎、内核限制、磁盘和端口，但不初始化任何内容。[初始化指南](../deployment/bootstrap.md#prerequisites)提供了详细说明。
 
 下列命令假设实例可以通过 `localhost` 上的普通 HTTP 访问，这正是第 1 步中的参数所配置的方式。
+
+## 获取 dcctl {#get-dcctl}
+
+`dcctl` 是单个文件，作为 `dcctl_<version>_<os>_<arch>` 附在每个 [GitHub 发布版本](https://github.com/devicechain-io/devicechain/releases)上：Linux 和 macOS 为 `.tar.gz`，Windows 为 `.zip`；`<os>` 为 `linux`、`darwin` 或 `windows`，`<arch>` 为 `amd64` 或 `arm64`。发布版本中的 `checksums.txt` 列出了每个文件的 SHA-256 摘要。`<version>` 是不带前导 `v` 的版本号（标签为 `v0.27.0` 的版本写作 `0.27.0`）。
+
+在 Linux 或 macOS 上：
+
+```bash
+curl -fLO https://github.com/devicechain-io/devicechain/releases/download/v<version>/dcctl_<version>_<os>_<arch>.tar.gz
+curl -fLO https://github.com/devicechain-io/devicechain/releases/download/v<version>/checksums.txt
+sha256sum --ignore-missing -c checksums.txt   # macOS 上：shasum -a 256 --ignore-missing -c checksums.txt
+tar -xzf dcctl_<version>_<os>_<arch>.tar.gz
+sudo mv dcctl /usr/local/bin/
+```
+
+在 Windows 的 PowerShell 中：
+
+```powershell
+curl.exe -fLO https://github.com/devicechain-io/devicechain/releases/download/v<version>/dcctl_<version>_windows_amd64.zip
+curl.exe -fLO https://github.com/devicechain-io/devicechain/releases/download/v<version>/checksums.txt
+(Get-FileHash dcctl_<version>_windows_amd64.zip -Algorithm SHA256).Hash.ToLower()
+Select-String windows_amd64 checksums.txt
+Expand-Archive dcctl_<version>_windows_amd64.zip -DestinationPath .
+```
+
+两个摘要必须一致。然后把 `dcctl.exe` 放到 `PATH` 中的某个目录。`dcctl version` 会输出它所属的发布版本，也就是它所安装镜像的版本。如需同时校验发布版本的签名，请参阅[验证发布版本](../deployment/verifying-releases.md)。
 
 ## 1. 启动实例 {#1-bring-up-an-instance}
 

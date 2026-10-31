@@ -231,6 +231,8 @@ kubectl label namespace dci-<id> devicechain.io/instance=<id>
 :::tip `Ctrl+C` 可正常停止运行
 中断会让基础设施工具正常完成当前操作并写入状态，再释放集群锁，之后重跑即可。第二次 `Ctrl+C` 立即退出，放弃两者。详见[中断运行](./cluster-lock.md#interrupt)。
 
+如果运行是被强行终止而不是被停止的（进程被杀掉，或终端被关闭），重跑前还有两道关。集群锁仍被持有，所以重跑会先等待租约过期，然后提示该占用看起来已过期，并给出 [`dcctl instances reclaim`](./cluster-lock.md#reclaim)，在确认原进程确实已经消失后再运行它。如果该次运行已经越过第 6 步，重跑会停在 `an escrow artifact for instance ... already exists`：该文件保存着半成品实例已有的密钥，因此请使用该消息中的路径，加上 `--restore-root-key <path>` 重跑。
+
 已到第 8 步时，重跑仍可完成，因为首次成功结束前第 3 步允许继续。但第 8 步期间的**第二次** `Ctrl+C` 可能使 Helm release 留在进行中状态。重跑会在第 8 步报错 `another operation (install/upgrade/rollback) is in progress`，dcctl 不自动清除此状态。用 `dcctl destroy` 删除，再重新初始化。
 :::
 
@@ -299,7 +301,8 @@ kind 不强制卷大小限制，可使用宿主机可用磁盘。
 - **默认 StorageClass 上的持久卷磁盘。** 非本地集群（非 kind、minikube、k3d、docker-desktop、rancher-desktop）使用默认设置，没有 `--compact`、`--no-cnpg`、`--no-monitoring`、`--backup-credentials-file` 时，`dcctl install --ha` 为集群申请 204 GiB，包括三个关系型数据库卷、160 GiB [备份存储](#backup-store-size)和 Prometheus。每实例再申请 144 GiB，用于三个事件存储卷及三个代理卷；单实例集群合计 348 GiB。无 `--ha` 时集群 188 GiB，每实例 48 GiB。每个额外持续摄取实例还需增加约 160 GiB 备份容量，详见[备份存储容量](#backup-store-size)。云环境先核对磁盘配额。新的 Google Cloud 项目每区域 SSD 默认 500 GB 配额，每 GiB 卷按一 GB 计，两种 GKE 磁盘类均计入。单实例卷容量低于配额；[GKE 指南](https://github.com/devicechain-io/devicechain/blob/main/deploy/gke/README.md#before-you-start)使用标准启动盘，计入不同配额，因此默认高可用单实例也适用。平衡型或 SSD 启动盘则计入 SSD 配额。指南说明多实例需申请的配额。本地集群监控不使用持久卷，kind 不强制容量。
 - **满足请求的 CPU 和内存。** 非 `--compact` 时，处理每个事件的五个服务合计请求约 4 CPU；`--ha` 下 `event-management` 两个 Pod，合计约 5 CPU。每个 NATS 服务器请求 500m CPU 和 768Mi 内存，高可用下有三个，另需其他服务、数据库和集群组件资源。无法容纳的 Pod 保持 `Pending`，安装等待至超时。各项见[服务容量配置](#service-sizing)；笔记本等资源有限集群使用 [`--compact`](#--compact)。
 - **OpenTofu 1.9 或更新版本**（`tofu`，也支持 `terraform` 1.9 或更新）位于 `PATH`。`dcctl` 使用它部署基础设施，安装见 [opentofu.org](https://opentofu.org)。`dcctl preflight local` 提前检查工具及环境，但不检查其版本；旧版本加载配置时失败。
-- **`kubectl`、`helm`** 位于 `PATH`；`local` 提供方还需 **`docker`** 和 **`kind`**。缺少本次运行所需的工具会使预检失败。只有本地 kind 集群或 `--build` 才需要 Docker：使用已发布镜像安装到 `--kube-context` 指定的集群时，既不检查也不使用它。需要时应为原生引擎，而非 Docker Desktop，且守护进程可访问。
+- **`kubectl`、`helm`** 位于 `PATH`；`local` 提供方还需 **`docker`** 和 **`kind`**。缺少本次运行所需的工具会使预检失败。只有本地 kind 集群或 `--build` 才需要 Docker：使用已发布镜像安装到 `--kube-context` 指定的集群时，既不检查也不使用它。需要时，其守护进程必须可访问：Linux 上为 Docker Engine，macOS 和 Windows 上为 Docker Desktop。
+- **空闲的主机端口 80、443 和 1883**（本地 kind 集群使用）。集群会将它们发布出来，分别用于控制台、HTTPS 和 MQTT。`dcctl preflight local` 会在端口被占用时失败并指出占用它的容器，而不是让集群创建时才因 Docker 的绑定错误而失败。
 - **`ko`** 仅 `--build` 源码构建需要，缺少时预检警告而非失败。
 
 ## 镜像来源 {#image-source}
