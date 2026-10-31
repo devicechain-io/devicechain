@@ -37,7 +37,8 @@
 #   TP_INSTANCE     instance id            (default tp)         TP_API  http host:port of the ingress (default localhost:18080)
 #   TP_MQTT         the broker devices dial (default ssl://localhost:11883)
 #   TP_INGRESS      the device HTTP ingress (default http://localhost:18081; a port-forward to svc/event-sources:8081 is made if nothing answers)
-#   TP_TIER         the tenant tier         (default tp-showcase)
+#   TP_TIER         an EXISTING tenant tier to use instead (default: unset; `sim create` makes and raises its own tp-showcase tier,
+#                   the one place calculated metrics are on, and the platform's tiers stay as they are)
 #   DCCTL, SIMULATOR   the binaries. Unset (the default), both are BUILT from this tree into Build/bin/ at the start of every run. A binary you name is
 #                      used only if binary_fresh.py finds it newer than every source it is built from; a stale one is refused, because a take
 #                      recorded by a simulator older than the tree shows a platform the tree no longer is.
@@ -58,7 +59,7 @@ INSTANCE="${TP_INSTANCE:-tp}"
 API="${TP_API:-localhost:18080}"
 MQTT="${TP_MQTT:-ssl://localhost:11883}"
 INGRESS="${TP_INGRESS:-http://localhost:18081}"
-TIER="${TP_TIER:-tp-showcase}"
+TIER="${TP_TIER:-}"
 START_A="${TP_START_A:-13.9}"
 START_B="${TP_START_B:-16.43}"
 NS="dci-${INSTANCE}"
@@ -227,7 +228,7 @@ run_mode() {
 		PF_PID=$!
 		sleep 3
 	fi
-	"$DCCTL" sim create "$SIM_NAME" --manifest towerpulse --tier "$TIER" --seed 1 -i "$INSTANCE" --server "$API" --ingress "$INGRESS" \
+	"$DCCTL" sim create "$SIM_NAME" --manifest towerpulse ${TIER:+--tier "$TIER"} --seed 1 -i "$INSTANCE" --server "$API" --ingress "$INGRESS" \
 		--mqtt-broker "$MQTT" --mqtt-insecure=false >"$ev/logs/sim-create.log" 2>&1 || { tail -5 "$ev/logs/sim-create.log" >&2; die "sim create failed"; }
 	DC_SIM_EXTERNAL_DEVICE_PLANE=1 "$DCCTL" sim run "$SIM_NAME" -i "$INSTANCE" --server "$API" --simulator "$SIMULATOR" >"$ev/logs/simulator.log" 2>&1 &
 	"$PY" -I "$CHECK" ready --runner "$RUNNER" >"$ev/logs/ready.json" || { tail -5 "$ev/logs/simulator.log" >&2; die "the sim did not converge"; }
