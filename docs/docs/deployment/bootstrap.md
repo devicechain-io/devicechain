@@ -464,6 +464,14 @@ An interrupted run stops the infrastructure tool gracefully — it finishes what
 writes its state — and hands the cluster lock back, so re-running is all you need. A second
 `Ctrl+C` exits immediately and gives up both. See [Interrupting a run](./cluster-lock.md#interrupt).
 
+If the run was killed rather than stopped (the process was terminated, or the terminal closed),
+two things stand between you and the re-run. The cluster lock is still held, so the re-run waits
+for the lease, then says the claim looks stale and names
+[`dcctl instances reclaim`](./cluster-lock.md#reclaim), which you run once you are sure the
+process is gone. And if the run had passed step 6, the re-run stops with `an escrow artifact for
+instance ... already exists`: it holds the key the half-built instance already has, so re-run with
+`--restore-root-key <path>`, using the path in that message.
+
 If the run had already reached step 8, running it again still finishes it: step 3 lets a
 re-run through until a bootstrap of the instance has ended successfully. A **second** `Ctrl+C`
 during step 8 can leave the instance's Helm release marked as still in progress. The re-run
@@ -680,8 +688,11 @@ The alerts for snapshots are described under
 - **`kubectl` and `helm`** on your `PATH`, and **`docker`** and **`kind`** for the `local`
   provider. The preflight check fails if any the run needs is missing. Docker is needed only for a
   local kind cluster or for `--build`: an install into a cluster you name with `--kube-context`,
-  from published images, does not check for it or use it. Where it is needed, it should be a
-  native Docker engine rather than Docker Desktop, and its daemon must be reachable.
+  from published images, does not check for it or use it. Where it is needed, its daemon must
+  be reachable: Docker Engine on Linux, Docker Desktop on macOS and Windows.
+- **Free host ports 80, 443 and 1883** for a local kind cluster, which publishes them for the
+  console, HTTPS and MQTT. `dcctl preflight local` fails, naming the container that holds one,
+  rather than letting the cluster create fail on Docker's bind error.
 - **`ko`**, only to build images from source with `--build`. The preflight check warns rather
   than fails when it is missing.
 
