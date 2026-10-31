@@ -8,9 +8,14 @@
 // 🔴 THIS EXISTS BECAUSE A DATABASE OUTAGE USED TO LOSE ACKNOWLEDGED DATA. A consumer that
 // leaves a failed message unacked lets the broker redeliver it every AckWait; on the final
 // delivery (messaging.MaxDeliver) most consumers give up, report the message to a letter
-// (failed-events, a dead-letter, a counted drop) and ACK it. Five deliveries is four minutes,
-// so any outage longer than that turned the whole in-flight window into acknowledged-then-
-// discarded messages, one window per four minutes for as long as the outage lasted. The
+// (failed-events, a dead-letter, a counted drop) and ACK it. Five deliveries is four minutes.
+// When the database answered every statement at once with an error (a full disk, no free
+// connections, read-only, a refused connection), an outage longer than that turned the whole
+// in-flight window into acknowledged-then-discarded messages, one window per four minutes for
+// as long as the outage lasted. When each attempt instead hung (no endpoints, a crash-looping
+// primary), a batching consumer's writers slowed until its handoff channel filled and its
+// reader stopped fetching, which throttled the loss: the window was longer and depended on the
+// outage's shape. A Holder holds in every case. The
 // delivery budget is for a message that is the problem. When the STORE is the problem every
 // message fails the same way, redelivery cannot be blamed on any of them, and they must not be
 // counted against it. They are HELD.
