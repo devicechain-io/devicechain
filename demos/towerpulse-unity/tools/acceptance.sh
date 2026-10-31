@@ -43,6 +43,8 @@
 #                      used only if binary_fresh.py finds it newer than every source it is built from; a stale one is refused, because a take
 #                      recorded by a simulator older than the tree shows a platform the tree no longer is.
 #   TP_START_A, TP_START_B   model start hours (default 13.9 and 16.43)
+#   TP_LOOP         1: start the player with -tp-loop, so the 90-second storyboard repeats and the alarm and command cards show whenever the platform raises them
+#                   (a live run only reaches them minutes in, after one pass has ended on a card-less pull-back)
 #   TP_HOOK         optional: an executable called as `$TP_HOOK <sim> <evidence-dir> <since>` in the control run, after the owner check, while the player is still up
 #   UNITY_EVAL      for --build editor: a command called as `$UNITY_EVAL tp_build.cs <seconds>` that evaluates EditorScratch/tp_build.cs in the open Editor
 #
@@ -194,7 +196,7 @@ trap teardown EXIT
 launch_player() { # launch_player <hour> <label> <record-dir> <quit-file> <log-file> <ca>
 	local hour="$1" label="$2" rec="$3" quit="$4" logf="$5" ca="$6"
 	rm -f "$quit"
-	PLAYER_PID="$(powershell.exe -NoProfile -Command "(Start-Process -FilePath '$(win "$PLAYER")' -PassThru -ArgumentList '-screen-width','960','-screen-height','540','-screen-fullscreen','0','-dc-runner','$RUNNER','-dc-ca','$(win "$ca")','-tp-start-hour','$hour','-tp-seed','1','-tp-record','$(win "$rec")','-tp-label','$label','-tp-quit-file','$(win "$quit")','-logFile','$(win "$logf")').Id" | tr -d '\r')"
+	PLAYER_PID="$(powershell.exe -NoProfile -Command "(Start-Process -FilePath '$(win "$PLAYER")' -PassThru -ArgumentList '-screen-width','960','-screen-height','540','-screen-fullscreen','0','-dc-runner','$RUNNER','-dc-ca','$(win "$ca")','-tp-start-hour','$hour','-tp-seed','1','-tp-record','$(win "$rec")','-tp-label','$label','-tp-quit-file','$(win "$quit")','-logFile','$(win "$logf")'${TP_LOOP:+,'-tp-loop'}).Id" | tr -d '\r')"
 	[[ "$PLAYER_PID" =~ ^[0-9]+$ ]] || die "could not start the player"
 	log "player pid $PLAYER_PID ($label from hour $hour)"
 }

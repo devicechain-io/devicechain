@@ -42,6 +42,14 @@ namespace DeviceChain.Towerpulse.Tests
         }
 
         [Test]
+        public void TheStoryboardLoopsOnlyWhenAsked()
+        {
+            Assert.That(ShotList.LoopRequested(new[] { "Towerpulse.exe", "-tp-loop" }), Is.True);
+            Assert.That(ShotList.LoopRequested(new[] { "Towerpulse.exe", "-tp-seed", "1" }), Is.False, "a live run plays the storyboard once unless asked");
+            Assert.That(ShotList.LoopRequested(null), Is.False);
+        }
+
+        [Test]
         public void ColdIsBlueAndHotIsRed()
         {
             var cold = TintRamp.Colour(19.0, 22.5);
