@@ -219,8 +219,8 @@
       "translationSha256": "2599cdf5ffe7bbf7e1de3b18febf3f3e909817b08c9625848780603fc64cb376"
     },
     "guides/migrating-from-another-platform.md": {
-      "sourceSha256": "af4d1a251ae99bfd961a0dd96e0518e2fe1a1f7bcaea1c82755e026dbfca45fd",
-      "translationSha256": "0fbb9226dafcc9d5b7bec847a819260d277e47180a7ab4ed15cba7214b9655bb"
+      "sourceSha256": "2973b243eadb457d7144b054268fcd3c0eb62c06845b826100dc2b9e9a6b0d22",
+      "translationSha256": "a738de1d906f3df53de9e43d08615b4080a65333739b186e5e852105999dd6de"
     },
     "guides/notification-channels.md": {
       "sourceSha256": "8784e97233c2e4efbcabaa0a15fd8556450bb703a5f1bb8cd84c027a9061076b",
@@ -254,9 +254,13 @@
       "sourceSha256": "8c92379caa16ed42b9ad7ec2c7457310321a4cfca5b168ed1a470eb5e8dbe050",
       "translationSha256": "58275ca2c5f981e41e2f671fb1fb30e449ae9d29d7f8891460f7782add232bdf"
     },
+    "quickstart/feature-tour.md": {
+      "sourceSha256": "a7862064ae2b3d948a073ff08c25dec88cc369fdc7c47ab07607d02e6dd06fc1",
+      "translationSha256": "d0bb16371dfed5955fea931048abf6cc4e5eb04206b33299d31426f11d4ee9fb"
+    },
     "quickstart/first-device.md": {
-      "sourceSha256": "6c48f8a85e02b2a90b09d496396844dc8d323488b1343196ae1705c29edb1469",
-      "translationSha256": "a3919e703ba1a6b26f24dd54fbc48ed7e875eb2084bc001a85c999606f35fcb7"
+      "sourceSha256": "d38d4c8c580b9390a3862f564671389c73eb81b949db1fd8d73bd69433f7241f",
+      "translationSha256": "3955da8ba966cf89a41575be91ad5ac78ade2b9c11921694d9d320f9522d4793"
     },
     "reference/dcctl.md": {
       "sourceSha256": "a196830ec839874b60d289a58dc913a2a002b7fbb422806033e457d62a421a8a",
@@ -359,8 +363,8 @@
       "translationSha256": "b52fa092e168532ec998921b3ebb4641583fd1a175edce08208b477ea1e570f9"
     },
     "user-guide/signing-in.md": {
-      "sourceSha256": "dc25b72b3f4ad5901a99f9984bf88472e31f4f98cf7c1dbc39a0a7db64090328",
-      "translationSha256": "4d023f17c602451ed07a41dafc01350c02d8bed87fba6e2bb313c95efbe0c4a4"
+      "sourceSha256": "3e291970c903b61bd4d6ce09dadb81f0476dc562a9cc999784ffbcc3c87ceb50",
+      "translationSha256": "1b6c602df631b130649f21de586faede57617341b6f193bf46b8882d5065bd01"
     },
     "user-guide/tenant-settings.md": {
       "sourceSha256": "6d33c73966574661dbe82bdc6ae21655ad5c7494d2e57139e049ba38585468d7",
