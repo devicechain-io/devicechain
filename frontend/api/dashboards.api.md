@@ -2244,6 +2244,7 @@ export type SlotBinding = {
 export interface SlotCandidates {
     areaType?: string;
     assetType?: string;
+    deviceType?: string;
 }
 ```
 
