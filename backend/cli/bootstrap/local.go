@@ -87,8 +87,9 @@ func (localProvider) EnsureCluster(ctx context.Context, opts Options) (ClusterBi
 	if !opts.AssumeYes &&
 		!confirm(fmt.Sprintf("No kind cluster %q found. Create it now?", clusterName)) {
 		return ClusterBinding{}, fmt.Errorf(
-			"no kind cluster %q and creation declined; create one, or pass --kube-context to "+
-				"install into an existing cluster, then re-run", clusterName)
+			"no kind cluster %q, and it was not created (the prompt was declined, or there is no "+
+				"terminal to answer it); re-run with --yes to create it, or pass --kube-context to "+
+				"install into an existing cluster", clusterName)
 	}
 	if err := createKindCluster(ctx, clusterName); err != nil {
 		return ClusterBinding{}, err

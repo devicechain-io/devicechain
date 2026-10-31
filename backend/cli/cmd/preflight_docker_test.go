@@ -271,3 +271,35 @@ func TestALocalRunDoesNotRequireTheKindContextToExistYet(t *testing.T) {
 		t.Errorf("failures %d without kind-lab in the kubeconfig, %d with: a cluster not yet created was treated as a missing context", without, with)
 	}
 }
+
+// A taken host port stops the kind create on Docker's bind error seconds into an
+// install, so the preflight must fail on it when the cluster does not exist yet, and
+// must not when the cluster that holds the ports is the one being reused.
+func TestATakenHostPortFailsOnlyWhenTheClusterIsNotYetThere(t *testing.T) {
+	origPort, origRun := portInUse, runCmd
+	t.Cleanup(func() { portInUse, runCmd = origPort, origRun })
+	portInUse = func(p int) bool { return p == 80 || p == 1883 }
+	existing := ""
+	runCmd = func(name string, args ...string) string {
+		switch {
+		case name == "kind":
+			return existing
+		case name == "docker" && len(args) > 1 && args[1] == "--filter":
+			return "other-control-plane"
+		}
+		return ""
+	}
+
+	d := &doctor{cluster: "lab"}
+	d.checkPorts()
+	if d.fails != 2 {
+		t.Errorf("failures = %d with ports 80 and 1883 taken and no cluster lab, want 2", d.fails)
+	}
+
+	existing = "other\nlab\n"
+	d = &doctor{cluster: "lab"}
+	d.checkPorts()
+	if d.fails != 0 {
+		t.Errorf("failures = %d, want 0: the ports are held by the existing cluster lab itself", d.fails)
+	}
+}
