@@ -26,11 +26,11 @@ import { createDeviceResolver } from './resolver';
 import { resolveViewerBindings } from './viewer-bindings';
 import type { AnchorTarget, DashboardDefinition, EntityCandidateLister, SlotBinding } from './types';
 
-const h = vi.hoisted(() => ({ gql: vi.fn() }));
+const h = vi.hoisted(() => ({ gql: vi.fn(), token: null as string | null }));
 
 vi.mock('@devicechain/client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@devicechain/client')>();
-  return { ...actual, gql: (...args: unknown[]) => h.gql(...args), subscribe: () => () => {} };
+  return { ...actual, gql: (...args: unknown[]) => h.gql(...args), resolveAuthToken: async () => h.token, subscribe: () => () => {} };
 });
 
 // The tenant: a building and three floors, one of them shared by two customers. Acme sees
@@ -47,6 +47,13 @@ const scopeUnsupported = () =>
   new GraphQLRequestError('GraphQL error', 200, [
     { message: 'not available', extensions: { code: 'FORBIDDEN', reason: 'SCOPE_UNSUPPORTED' } },
   ]);
+
+const b64 = (o: object) => Buffer.from(JSON.stringify(o)).toString('base64url');
+const jwt = (claims: object) => `${b64({ alg: 'none' })}.${b64({ sub: 'u', exp: 4102444800, ...claims })}.sig`;
+
+beforeEach(() => {
+  h.token = null;
+});
 
 // What the platform answers: `scoped` is Acme's customer user, otherwise the tenant admin.
 function platform(scoped: boolean) {
@@ -179,6 +186,36 @@ describe('a customer user opening an area board', () => {
     const asked = calls.filter((c) => c.doc === 'anchorDevices').map((c) => c.vars.criteria.relationshipType);
     expect(asked).toEqual(['assigned', undefined]);
     expect(calls.some((c) => c.doc === 'entityRelationships')).toBe(false);
+  });
+
+  it('a token carrying a scope sends no relationship type: zero refused anchorDevices calls, still only its own devices', async () => {
+    h.token = jwt({ scp: ['customer:acme'] });
+    const calls = platform(true);
+    const resolver = createDeviceResolver();
+    // Three parallel reads, as a board opening makes.
+    const lists = await Promise.all(['floor-shared', 'floor-acme', 'building-acme'].map((t) => resolver.devicesForAnchor(anchorOf(t))));
+    expect(lists).toEqual([['acme-vav'], ['acme-ahu'], ['acme-vav', 'acme-ahu']]);
+    const asked = calls.filter((c) => c.doc === 'anchorDevices');
+    expect(asked).toHaveLength(3);
+    expect(asked.every((c) => c.vars.criteria.relationshipType === undefined)).toBe(true);
+    // The out-of-scope device never appears.
+    expect(lists.flat()).not.toContain('globex-vav');
+  });
+
+  it('NEGATIVE CONTROL: an unscoped token still sends the relationship type, so the test above reads the token', async () => {
+    h.token = jwt({});
+    const calls = platform(false);
+    await createDeviceResolver().devicesForAnchor(anchorOf('floor-shared'));
+    expect(calls.filter((c) => c.doc === 'anchorDevices').every((c) => c.vars.criteria.relationshipType === 'assigned')).toBe(true);
+  });
+
+  it('with no token to read, learns from the first refusal and does not ask again', async () => {
+    h.token = null;
+    const calls = platform(true);
+    const resolver = createDeviceResolver();
+    await resolver.devicesForAnchor(anchorOf('floor-shared'));
+    await resolver.devicesForAnchor(anchorOf('floor-acme'));
+    expect(calls.filter((c) => c.doc === 'anchorDevices').map((c) => c.vars.criteria.relationshipType)).toEqual(['assigned', undefined, undefined]);
   });
 
   it('still reports an anchor the platform declines outright as not offered', async () => {

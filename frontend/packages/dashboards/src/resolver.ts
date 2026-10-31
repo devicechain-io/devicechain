@@ -23,7 +23,7 @@
 // the same handful of anchors repeatedly (re-mounts, re-renders), and the membership
 // is stable for a viewing session.
 
-import { gql, isScopeUnsupportedError } from '@devicechain/client';
+import { decodeToken, gql, isScoped, isScopeUnsupportedError, resolveAuthToken } from '@devicechain/client';
 
 import type { DeviceResolver } from './hub';
 import type { MemberRef } from './members';
@@ -60,7 +60,28 @@ const DECLARED_BATCH_SIZE = 100;
 // A server that reports no total is taken at its word: the page is the fleet.
 const trueSize = (reported: number | null | undefined, page: number) => Math.max(reported ?? page, page);
 
-function readAnchorPage(anchor: AnchorTarget): Promise<AnchorPage> {
+// Whether the viewer is a scoped member, learned once per resolver: from the access token's `scp`
+// claim (the server enforces the scope regardless; this only stops the client asking what it knows
+// will be refused), and from a refusal if the token could not say. Never widens anything.
+interface ViewerScope {
+  scoped: boolean | null;
+}
+
+async function viewerIsScoped(viewer: ViewerScope): Promise<boolean> {
+  if (viewer.scoped !== null) return viewer.scoped;
+  let token: string | null = null;
+  try {
+    token = await resolveAuthToken();
+  } catch {
+    token = null;
+  }
+  // No token to read says nothing: stay unknown (a refusal will teach it) rather than caching false.
+  if (!token) return false;
+  viewer.scoped = isScoped(decodeToken(token));
+  return viewer.scoped;
+}
+
+function readAnchorPage(anchor: AnchorTarget, viewer: ViewerScope): Promise<AnchorPage> {
   if (anchor.targetType === 'customer') {
     return gql('device-management', CUSTOMER_DEVICES, {
       criteria: {
@@ -79,7 +100,7 @@ function readAnchorPage(anchor: AnchorTarget): Promise<AnchorPage> {
       };
     });
   }
-  return readAreaOrAssetPage(anchor);
+  return readAreaOrAssetPage(anchor, viewer);
 }
 
 // An area or an asset: anchorDevices, which answers every viewer. The relationship type is sent
@@ -87,8 +108,10 @@ function readAnchorPage(anchor: AnchorTarget): Promise<AnchorPage> {
 // search it replaces did. A member limited to some customers is refused the argument (it would let
 // them probe which edge types link their devices) and is answered the tracked ownership edges
 // instead, so that refusal is retried once without it. A second SCOPE_UNSUPPORTED is the platform
-// declining the anchor outright and surfaces as it always has.
-function readAreaOrAssetPage(anchor: AnchorTarget): Promise<AnchorPage> {
+// declining the anchor outright and surfaces as it always has. A viewer known to be scoped (from the
+// token, or from an earlier refusal) is never sent the argument at all, so the supported path makes
+// no refused call.
+async function readAreaOrAssetPage(anchor: AnchorTarget, viewer: ViewerScope): Promise<AnchorPage> {
   const read = (relationshipType?: string) =>
     gql('device-management', ANCHOR_DEVICES, {
       criteria: {
@@ -99,9 +122,11 @@ function readAreaOrAssetPage(anchor: AnchorTarget): Promise<AnchorPage> {
         relationshipType,
       },
     });
-  return read(anchor.relationship)
+  const first = (await viewerIsScoped(viewer)) ? read() : read(anchor.relationship);
+  return first
     .catch((err: unknown) => {
-      if (!isScopeUnsupportedError(err)) throw err;
+      if (!isScopeUnsupportedError(err) || viewer.scoped === true) throw err;
+      viewer.scoped = true;
       return read();
     })
     .then((r: AnchorDevicesResult) => {
@@ -116,6 +141,7 @@ function readAreaOrAssetPage(anchor: AnchorTarget): Promise<AnchorPage> {
 }
 
 export function createDeviceResolver(): DeviceResolver {
+  const viewer: ViewerScope = { scoped: null };
   const anchorCache = new Map<string, Promise<AnchorPage>>();
   const memberCache = new Map<string, Promise<{ members: MemberRef[]; total: number }>>();
   // Memoize existence per token for the resolver's lifetime: many widgets on a
@@ -137,7 +163,7 @@ export function createDeviceResolver(): DeviceResolver {
     const key = anchorKey(anchor);
     let pending = anchorCache.get(key);
     if (!pending) {
-      pending = readAnchorPage(anchor)
+      pending = readAnchorPage(anchor, viewer)
         .catch((err) => {
           anchorCache.delete(key);
           throw err;
