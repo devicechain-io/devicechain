@@ -504,10 +504,14 @@ Si la ejecución se terminó de golpe en lugar de detenerse (se mató el proceso
 terminal), hay dos obstáculos antes de volver a ejecutarla. El bloqueo del clúster sigue
 retenido, así que la nueva ejecución espera a que venza el arrendamiento, luego dice que la
 reclamación parece obsoleta y nombra [`dcctl instances reclaim`](./cluster-lock.md#reclaim), que
-ejecutas cuando estás seguro de que el proceso ya no existe. Y si la ejecución había pasado del
-paso 6, la nueva se detiene con `an escrow artifact for instance ... already exists`: contiene la
-clave que la instancia a medio construir ya tiene, así que vuelve a ejecutar con
-`--restore-root-key <ruta>`, usando la ruta de ese mensaje.
+ejecutas cuando estás seguro de que el proceso ya no existe. El artefacto de depósito no te pide
+nada: si la ejecución había pasado del paso 6, la nueva reconoce el artefacto que escribió,
+comprueba que la frase de contraseña que le diste lo abre y reutiliza su clave en lugar de acuñar
+otra, y lo indica en su salida. La recuperación son dos pasos, reclamar y volver a ejecutar, con la
+misma frase de contraseña de depósito de antes. Solo cuando no puede saber que el artefacto es el
+de la instancia a medio construir (una frase de contraseña distinta, o un artefacto dejado por una
+instancia que ya no existe) se detiene con `an escrow artifact for instance ... already exists`, y
+ese mensaje dice qué hacer.
 
 Si la ejecución ya había llegado al paso 8, volver a ejecutarla también la termina: el paso 3
 deja pasar una nueva ejecución hasta que un arranque inicial de la instancia haya terminado con

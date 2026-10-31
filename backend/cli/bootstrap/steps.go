@@ -391,6 +391,21 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 	// of them are irreversible and one of them used to be silent.
 	secretsRootKey := st.Escrow.RestoredRootKey
 	reused := false
+
+	// 🔴 A RUN KILLED BEFORE THE HELM STEP LEFT AN ARTIFACT AND NO KEY IN THE CLUSTER, so
+	// the decision to adopt that artifact's key has to be made HERE, before the mint — once
+	// the default arm below has run, a second key exists and the only way to honour the
+	// artifact is to refuse, which is what used to send the operator off to re-run with
+	// --restore-root-key. See keyFromHalfBuiltEscrow for the evidence it requires. Never
+	// consulted when restoring, dry-running, or when the instance's config document exists
+	// (`deployed`): those have their own answers below.
+	var (
+		escrowedKey   string
+		escrowedKeyID string
+	)
+	if secretsRootKey == "" && deployed == nil && !st.DryRun {
+		escrowedKey, escrowedKeyID = keyFromHalfBuiltEscrow(ctx, st)
+	}
 	switch {
 	case secretsRootKey != "":
 		// Recovery: the key comes from the artifact — and the rule the default
@@ -421,6 +436,15 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 		reused = true
 		notes = append(notes, "root key reused from the running instance")
 
+	case escrowedKey != "":
+		// The artifact IS the escrow of the key this half-built instance is being built
+		// around, so it is neither rewritten nor refused. `reused` stays false: it routes
+		// to ReconcileEscrow, and the write below is skipped by escrowedKey instead.
+		secretsRootKey = escrowedKey
+		notes = append(notes, fmt.Sprintf(
+			"escrow artifact %s already holds this instance's key (key id %s); reusing it",
+			st.Escrow.Path, escrowedKeyID))
+
 	default:
 		secretsRootKey, err = randomKeyBase64(32)
 		if err != nil {
@@ -446,6 +470,9 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 			} else {
 				notes = append(notes, "would write the root-key escrow to "+st.Escrow.Path)
 			}
+		case escrowedKey != "":
+			// Already on disk and already proven to open this key; writing would only
+			// collide with it.
 		case reused:
 			outcome, recErr := ReconcileEscrow(st.Escrow, secretsRootKey, st.Instance, time.Now().UTC())
 			if recErr != nil {

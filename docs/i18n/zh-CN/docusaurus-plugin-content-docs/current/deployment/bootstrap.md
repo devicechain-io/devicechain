@@ -231,7 +231,7 @@ kubectl label namespace dci-<id> devicechain.io/instance=<id>
 :::tip `Ctrl+C` 可正常停止运行
 中断会让基础设施工具正常完成当前操作并写入状态，再释放集群锁，之后重跑即可。第二次 `Ctrl+C` 立即退出，放弃两者。详见[中断运行](./cluster-lock.md#interrupt)。
 
-如果运行是被强行终止而不是被停止的（进程被杀掉，或终端被关闭），重跑前还有两道关。集群锁仍被持有，所以重跑会先等待租约过期，然后提示该占用看起来已过期，并给出 [`dcctl instances reclaim`](./cluster-lock.md#reclaim)，在确认原进程确实已经消失后再运行它。如果该次运行已经越过第 6 步，重跑会停在 `an escrow artifact for instance ... already exists`：该文件保存着半成品实例已有的密钥，因此请使用该消息中的路径，加上 `--restore-root-key <path>` 重跑。
+如果运行是被强行终止而不是被停止的（进程被杀掉，或终端被关闭），重跑前还有两道关。集群锁仍被持有，所以重跑会先等待租约过期，然后提示该占用看起来已过期，并给出 [`dcctl instances reclaim`](./cluster-lock.md#reclaim)，在确认原进程确实已经消失后再运行它。托管文件则无需你操作：如果该次运行已经越过第 6 步，重跑会识别出它先前写下的文件，检查你提供的口令能否打开它，并复用其中的密钥而不是再生成一个，输出中会说明这一点。因此恢复只需两步，即 reclaim 和重跑，并使用与之前相同的托管口令。只有当它无法确认该文件属于这个半成品实例（口令不同，或文件来自已不存在的实例）时，才会停在 `an escrow artifact for instance ... already exists`，该消息会说明该怎么做。
 
 已到第 8 步时，重跑仍可完成，因为首次成功结束前第 3 步允许继续。但第 8 步期间的**第二次** `Ctrl+C` 可能使 Helm release 留在进行中状态。重跑会在第 8 步报错 `another operation (install/upgrade/rollback) is in progress`，dcctl 不自动清除此状态。用 `dcctl destroy` 删除，再重新初始化。
 :::

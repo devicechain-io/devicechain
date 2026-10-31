@@ -169,12 +169,22 @@ func (e *ClaimHeldError) Error() string {
 		what = fmt.Sprintf("this cluster (working on instance %q)", e.Instance)
 	}
 	if e.LooksStale {
-		return fmt.Sprintf(
+		msg := fmt.Sprintf(
 			"%s is claimed by %s, which last renewed %s — by this machine's clock that looks stale, "+
 				"but a clock that disagrees looks the same. If that process is genuinely gone, "+
 				"take the claim with `dcctl instances reclaim --kube-context %s`, which checks properly "+
 				"before it steals",
 			what, e.Holder, ago, e.KubeContext)
+		// What THIS machine can add: a holder that is a process here which is no longer
+		// running is the killed-run case, and worth saying. Evidence only — the claim is
+		// still taken by the explicit reclaim, never implicitly, and the reclaim still
+		// asks for the identity to be typed back, so it is printed to copy from.
+		if pid, gone := holderIsGoneFromThisMachine(e.Holder); gone {
+			msg += fmt.Sprintf(".\n  The holder is process %d on this machine, which is no longer running."+
+				"\n  Reclaim asks for the holder identity to be typed back; it is:\n\n    %s",
+				pid, e.Holder)
+		}
+		return msg
 	}
 	return fmt.Sprintf(
 		"%s is being worked on by %s, which renewed %s; wait for it to finish rather than "+
