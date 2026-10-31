@@ -23,29 +23,37 @@
 #   hack/outage-rig.sh controls  the offline controls only (no cluster)
 #   hack/outage-rig.sh down      delete the cluster and dcctl's local state for it
 #
+# THE OUTAGE. FAST-FAILING, and that is the whole point. The event store (the dc-tsdb PostgreSQL
+# cluster) is made READ-ONLY: `ALTER DATABASE <event db> SET default_transaction_read_only = on`,
+# then every backend of that database is terminated so each pooled connection comes back with the
+# setting. From then on the database ANSWERS every write at once with SQLSTATE 25006. Nothing hangs.
+# That is the outage that loses events without the hold: every in-flight message is redelivered
+# every AckWait (60 s), and the fifth delivery, about four minutes in, is exhausted and
+# acknowledged away. (A real full disk lost 1.72M events that way.) A SLOW-failing outage -- a
+# hibernated cluster, where each dial hangs for the connect timeout -- does NOT show it: the writers
+# stall, the handoff channel fills and the reader stops fetching, which is an accidental hold. A rig
+# built on hibernation passes against the old code, so it gates nothing.
+#
 # THE POSITIVE RUN. 60 MQTT devices publish 200 events/s at QoS 1 for DC_OUTRIG_DRIVE seconds
-# (default 720). DC_OUTRIG_OUT_AT seconds in, the event store (CloudNativePG cluster dc-tsdb) is
-# HIBERNATED -- its pod is deleted, its volume kept -- for DC_OUTRIG_OUT_LEN seconds (default 420,
-# seven minutes: well past the four-minute budget), then woken. The load test (dc-loadtest-mqtt,
-# --identity full) reads every PUBACKed event back by (device, occurredTime). The run PASSES only if
+# (default 720). DC_OUTRIG_OUT_AT seconds in, the event store goes read-only for DC_OUTRIG_OUT_LEN
+# seconds (default 420, seven minutes: well past the four-minute budget), then writable again. The
+# load test (dc-loadtest-mqtt, --identity full) reads every PUBACKed event back by
+# (device, occurredTime). The run PASSES only if
 #   1  the harness exits 0 (every PUBACKed event is stored exactly once: lost 0, excess 0), and
 #   2  failed-events, dead-letters, failed-decode and max-deliveries gained NOTHING, and
 #   3  the event-management held gauge was above zero DURING the outage (the hold engaged: a run in
 #      which the outage never touched a write would pass 1 and 2 for the wrong reason), and
-#   4  it is back to zero afterwards.
+#   4  it is back to zero afterwards, and
+#   5  event-management logged refused writes (SQLSTATE 25006) during the outage: the outage was
+#      fast-failing, not a hang.
 #
-# THE NEGATIVE CONTROL. The same run with NO outage (the event store is never taken away). It MUST
-# be red, and red for exactly one reason: check 3, the hold never engaged. A rig whose "hold engaged"
-# check cannot fail would call every quiet run a pass; this run proves it can. If the control is
-# green, or red for any other reason, the rig fails.
-#
-# WHAT THIS CONTROL IS NOT: a run of the pre-hold images. That was tried (event-management from
-# before the hold, and the device-management resolver from before its hold, each through a seven
-# minute outage on this rig) and BOTH STILL LOST NOTHING: those consumers kept retrying and never
-# reached their delivery limit in that setup, so "no hold loses events" cannot be shown for the
-# event store this way. The pre-hold notification consumer does letter (77 dead letters in the same
-# kind of run), but that path needs a webhook receiver and a widened egress allowance and is not
-# part of this rig.
+# THE NEGATIVE CONTROL. The SAME outage against the OLD event-management, built from
+# DC_OUTRIG_CONTROL_REF (default 69fb09b07, the parent of the merge that added the hold), swapped in
+# for the control and swapped back afterwards. It MUST be red, and red because events were LOST or
+# lettered (checks 1 or 2): without the hold the fifth delivery is spent and the message is gone.
+# If it is green, the outage was not fast-failing (or the rig is blind) and the rig fails. It is
+# the real thing, not a stand-in: DC_OUTRIG_CONTROL=quiet selects the weaker control instead (the
+# same run with NO outage, which must be red only for check 3, the hold never engaging).
 #
 # OFFLINE CONTROLS (`controls`, and run first by `run`): the verdict function is fed fabricated
 # reports -- one clean, one with a loss, one with an excess, one with a lettered event, one whose
@@ -74,6 +82,8 @@ out_len="${DC_OUTRIG_OUT_LEN:-420}"
 rate="${DC_OUTRIG_RATE:-200}"
 devices="${DC_OUTRIG_DEVICES:-60}"
 min_free_gb="${DC_OUTRIG_MIN_FREE_GB:-100}"
+control_ref="${DC_OUTRIG_CONTROL_REF:-69fb09b07}"  # event-management before the hold (parent of its merge)
+control_mode="${DC_OUTRIG_CONTROL:-old}"           # old | quiet
 exe="$(go env GOEXE 2>/dev/null || true)"
 dcctl="$repo_root/backend/cli/build/dcctl$exe"
 loadtest="$state_dir/bin/dc-loadtest-mqtt$exe"
@@ -120,7 +130,7 @@ offline_controls() {
   for c in "5 0 0 11 0:a loss" "0 3 0 11 0:an excess" "0 0 7 11 0:a lettered event" "0 0 0 0 0:no hold" "0 0 0 11 4:a hold never released"; do
     # shellcheck disable=SC2086 # the fields are the point
     if out="$(verdict ${c%%:*} 2>&1)"; then fail "control: ${c##*:} was judged green"; fi
-    red "${c##*:} -> red ($(head -1 <<<"$out"))"
+    red "${c##*:} -> red ($(sed -n 1p <<<"$out"))"
   done
   if verdict 0 0 0 11 0 2 >/dev/null 2>&1; then fail "control: a harness that exited 2 was judged green"; fi
   red "a harness exit status of 2 -> red"
@@ -166,7 +176,7 @@ nodes:
 EOF
     kind create cluster --name "$cluster" --kubeconfig "$kubeconfig" --config "$(winpath "$state_dir/kind.yaml")" --wait 120s
   fi
-  make -C "$repo_root/backend/cli" build >/dev/null
+  make -C "$(winpath "$repo_root")/backend/cli" build >/dev/null
   local tag
   tag="outrig-$(git -C "$repo_root" rev-parse --short=8 HEAD)-$(date -u +%Y%m%dT%H%M%SZ)"
   printf '%s\n' "$tag" >"$state_dir/image-tag"
@@ -199,9 +209,8 @@ forward_pid=""
 start_forward() {
   k -n traefik port-forward svc/traefik "$http_port:80" >"$state_dir/forward.log" 2>&1 &
   forward_pid=$!
-  local i
-  for i in $(seq 1 30); do
-    curl -s -o /dev/null "http://localhost:$http_port/" && return 0
+  for _ in $(seq 1 30); do
+    curl -s "http://localhost:$http_port/" >/dev/null && return 0
     sleep 1
   done
   fail "the ingress did not answer on localhost:$http_port (see $state_dir/forward.log)"
@@ -230,17 +239,48 @@ sink_total() {
 
 held_now() {
   local p v
-  p="$(kn get pods -o name | grep '/event-management-' | head -1 | cut -d/ -f2)"
-  v="$(k get --raw "/api/v1/namespaces/$namespace/pods/$p:8080/proxy/metrics" |
+  p="$(kn get pods -o name | grep '/event-management-' | sed -n 1p | cut -d/ -f2)"
+  v="$(MSYS_NO_PATHCONV=1 k get --raw "/api/v1/namespaces/$namespace/pods/$p:8080/proxy/metrics" |
     awk '/^devicechain_eventmanagement_persist_store_held_events/ {print $2}')"
   printf '%s' "${v:-0}"
 }
 
-hibernate() { kn annotate cluster.postgresql.cnpg.io/dc-tsdb "cnpg.io/hibernation=$1" --overwrite >/dev/null; }
+# psql_tsdb runs one statement as the superuser inside the event store's primary pod (local socket).
+psql_tsdb() { kn exec dc-tsdb-1 -c postgres -- psql -U postgres -d postgres -v ON_ERROR_STOP=1 -tA -c "$1"; }
 
-# one_run <sim-name> prints "<lost> <excess> <sink-gain> <held-peak> <held-after> <harness-rc>"
+# event_db names the event store's database: the one holding event-management's schema.
+event_db() {
+  local d has
+  for d in $(psql_tsdb "SELECT datname FROM pg_database WHERE NOT datistemplate AND datname <> 'postgres'"); do
+    has="$(kn exec dc-tsdb-1 -c postgres -- psql -U postgres -d "$d" -tA -c "SELECT to_regclass('\"event-management\".event_management_migrations') IS NOT NULL" 2>/dev/null || true)"
+    if [[ "$has" == t ]]; then printf '%s' "$d"; return 0; fi
+  done
+  fail "could not find the event store's database on dc-tsdb-1"
+}
+
+# store_readonly on|off makes the event store refuse every write at once (SQLSTATE 25006) or take
+# writes again. The setting is a database default, so existing connections keep their old value:
+# terminating the database's backends makes every pooled connection reconnect and pick it up.
+store_readonly() {
+  local db
+  db="$(event_db)"
+  psql_tsdb "ALTER DATABASE \"$db\" SET default_transaction_read_only = $1" >/dev/null
+  psql_tsdb "SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity WHERE datname = '$db' AND pid <> pg_backend_pid()" >/dev/null
+}
+
+# refusals counts the lines of a saved event-management log that show a write refused by a
+# read-only database (SQLSTATE 25006) -- proof the outage was fast-failing (an answer), not a hang.
+refusals() {
+  local n
+  n="$(grep -c -e 'SQLSTATE 25006' "$1" || true)"
+  printf '%s' "${n:-0}"
+}
+
+# one_run <sim-name> <outage: yes|no> prints
+#   "<lost> <excess> <sink-gain> <held-peak> <held-after> <harness-rc> <refusals>"
+# on stdout and nothing else (progress goes to stderr).
 one_run() {
-  local sim="$1" sinks0 lt_pid t0 now peak=0 h on=0 off=0 rc=0 rep
+  local sim="$1" outage="$2" sinks0 lt_pid t0 now peak=0 h on=0 off=0 rc=0 rep refused=0 sampled=0
   "$dcctl" sim create "$sim" -i "$instance" -s "localhost:$http_port" --kube-context "$kube_context" \
     --mqtt-broker "ssl://localhost:$mqtt_port" >/dev/null
   sinks0="$(sink_total)"
@@ -253,17 +293,33 @@ one_run() {
   t0="$(date +%s)"
   while kill -0 "$lt_pid" 2>/dev/null; do
     now=$(($(date +%s) - t0))
-    if ((on == 0 && now >= out_at)); then note "t+${now}s: hibernating the event store"; hibernate on; on=$now; fi
-    if ((on > 0 && off == 0 && now >= on + out_len)); then note "t+${now}s: waking the event store"; hibernate off; off=1; fi
-    if ((on > 0 && off == 0)); then h="$(held_now)"; awk -v h="$h" -v p="$peak" 'BEGIN{exit !(h+0>p+0)}' && peak="$h"; fi
+    if [[ "$outage" == yes ]] && ((on == 0 && now >= out_at)); then
+      note "t+${now}s: the event store goes read-only" >&2
+      store_readonly on
+      on=$now
+    fi
+    if ((on > 0 && off == 0 && now >= on + out_len)); then
+      note "t+${now}s: the event store takes writes again" >&2
+      store_readonly off
+      off=1
+    fi
+    if ((on > 0 && off == 0)); then
+      h="$(held_now)"
+      awk -v h="$h" -v p="$peak" 'BEGIN{exit !(h+0>p+0)}' && peak="$h"
+      if ((sampled == 0 && now >= on + out_len / 2)); then
+        sampled=1
+        kn logs deploy/event-management --since="$((now - on + 15))s" --tail=-1 >"$state_dir/$sim.outage-logs" 2>&1 || true
+        refused="$(refusals "$state_dir/$sim.outage-logs")"
+        note "t+${now}s: $refused refused-write (SQLSTATE 25006) log lines since the outage began" >&2
+      fi
+    fi
     sleep 10
   done
   wait "$lt_pid" || rc=$?
-  ((on > 0 && off == 0)) && hibernate off
-  until kn get pod dc-tsdb-1 2>/dev/null | grep -q ' 2/2 '; do sleep 3; done
-  [[ -s "$rep" ]] || { echo "no-report no-report no-report $peak $(held_now) $rc"; return; }
-  printf '%s %s %s %s %s %s' "$(jq .storage.lost "$rep")" "$(jq .storage.excess "$rep")" \
-    "$(($(sink_total) - sinks0))" "$peak" "$(held_now)" "$rc"
+  if ((on > 0 && off == 0)); then store_readonly off; fi
+  [[ -s "$rep" ]] || { echo "no-report no-report no-report $peak $(held_now) $rc $refused"; return; }
+  printf '%s %s %s %s %s %s %s' "$(jq .storage.lost "$rep")" "$(jq .storage.excess "$rep")" \
+    "$(($(sink_total) - sinks0))" "$peak" "$(held_now)" "$rc" "$refused"
 }
 
 build_loadtest() {
@@ -271,35 +327,72 @@ build_loadtest() {
   (cd "$repo_root/backend/sims/dc-simulator" && go build -o "$loadtest" ./cmd/loadtest-mqtt)
 }
 
+# build_control_image builds event-management as it was at $control_ref (before the hold) and
+# pushes it to the local registry under a unique tag; prints the image reference.
+build_control_image() {
+  local src tag
+  tag="outrig-ctl-${control_ref}-$(date -u +%Y%m%dT%H%M%SZ)"
+  src="$state_dir/control-src"
+  rm -rf "$src"
+  mkdir -p "$src"
+  git -C "$repo_root" archive "$control_ref" -- backend deploy examples go.work go.work.sum .ko.yaml | tar -x -C "$src"
+  (cd "$src/backend/services/event-management" &&
+    KO_CONFIG_PATH="$src/.ko.yaml" KO_DOCKER_REPO=localhost:5000/event-management \
+      ko build --bare --tags "$tag" --platform linux/amd64 ./ >&2)
+  rm -rf "$src"
+  printf 'localhost:5000/event-management:%s' "$tag"
+}
+
 cmd_run() {
-  need kubectl; need jq; need curl; need go
+  need kubectl; need jq; need curl; need go; need ko
   offline_controls
   k get ns "$namespace" >/dev/null 2>&1 || fail "no instance $instance on $cluster: run 'hack/outage-rig.sh up' first"
   [[ -x "$dcctl" ]] || fail "dcctl is not built; run 'hack/outage-rig.sh up'"
   build_loadtest
   start_forward
 
-  say "POSITIVE: ${drive}s of ${rate} ev/s, event store down for ${out_len}s from t+${out_at}s"
-  local res lost excess sinks peak after rc
-  res="$(one_run "outrig-hold-$(date -u +%H%M%S)")"
-  read -r lost excess sinks peak after rc <<<"$res"
-  note "lost=$lost excess=$excess sink-gain=$sinks held-peak=$peak held-after=$after harness-rc=$rc"
+  say "POSITIVE: ${drive}s of ${rate} ev/s, event store refusing writes for ${out_len}s from t+${out_at}s"
+  local res lost excess sinks peak after rc refused
+  res="$(one_run "outrig-hold-$(date -u +%H%M%S)" yes)"
+  read -r lost excess sinks peak after rc refused <<<"$res"
+  note "lost=$lost excess=$excess sink-gain=$sinks held-peak=$peak held-after=$after harness-rc=$rc refused-log-lines=$refused"
   verdict "$lost" "$excess" "$sinks" "$peak" "$after" "$rc" || fail "the positive run is red"
-  pass "nothing lost, lettered or stored twice through a ${out_len}s outage; the hold engaged and released"
+  [[ "$refused" =~ ^[0-9]+$ && "$refused" -gt 0 ]] ||
+    fail "no refused write was logged during the outage: it was not fast-failing, so this run proves nothing"
+  pass "nothing lost, lettered or stored twice through a ${out_len}s fast-failing outage; the hold engaged and released"
 
-  say "NEGATIVE CONTROL: the same run with no outage"
-  local keep_out_at="$out_at" why
-  out_at=$((drive + 3600)) # never reached: the event store stays up
-  res="$(one_run "outrig-quiet-$(date -u +%H%M%S)")"
-  out_at="$keep_out_at"
-  read -r lost excess sinks peak after rc <<<"$res"
-  note "lost=$lost excess=$excess sink-gain=$sinks held-peak=$peak held-after=$after harness-rc=$rc"
-  if why="$(verdict "$lost" "$excess" "$sinks" "$peak" "$after" "$rc")"; then
-    fail "the control PASSED with no outage: the hold-engaged check cannot fail"
+  local why
+  if [[ "$control_mode" == quiet ]]; then
+    say "NEGATIVE CONTROL (weak): the same run with no outage"
+    res="$(one_run "outrig-quiet-$(date -u +%H%M%S)" no)"
+    read -r lost excess sinks peak after rc refused <<<"$res"
+    note "lost=$lost excess=$excess sink-gain=$sinks held-peak=$peak held-after=$after harness-rc=$rc"
+    if why="$(verdict "$lost" "$excess" "$sinks" "$peak" "$after" "$rc")"; then
+      fail "the control PASSED with no outage: the hold-engaged check cannot fail"
+    fi
+    [[ "$why" == "the hold never engaged"* && "$(wc -l <<<"$why")" == 1 ]] ||
+      fail "the control was red for the wrong reason: $why"
+    red "no outage -> $why"
+  else
+    say "NEGATIVE CONTROL: the same outage against event-management as of $control_ref (no hold)"
+    local img keep
+    keep="$(kn get deploy event-management -o jsonpath='{.spec.template.spec.containers[0].image}')"
+    img="$(build_control_image)"
+    note "control image $img (restoring $keep afterwards)"
+    kn set image deploy/event-management "*=$img" >/dev/null
+    kn rollout status deploy/event-management --timeout=180s >/dev/null
+    res="$(one_run "outrig-ctl-$(date -u +%H%M%S)" yes)" || true
+    kn set image deploy/event-management "*=$keep" >/dev/null
+    kn rollout status deploy/event-management --timeout=180s >/dev/null
+    read -r lost excess sinks peak after rc refused <<<"$res"
+    note "lost=$lost excess=$excess sink-gain=$sinks held-peak=$peak held-after=$after harness-rc=$rc refused-log-lines=$refused"
+    if why="$(verdict "$lost" "$excess" "$sinks" "$peak" "$after" "$rc")"; then
+      fail "the control PASSED against the pre-hold code: the outage is not fast-failing, or the rig is blind"
+    fi
+    [[ "$why" == *"lost"* || "$why" == *"dead-letter"* ]] ||
+      fail "the control was red, but not because anything was lost or lettered: $why"
+    red "pre-hold code under the same outage -> ${why//$'\n'/; }"
   fi
-  [[ "$why" == "the hold never engaged"* && "$(wc -l <<<"$why")" == 1 ]] ||
-    fail "the control was red for the wrong reason: $why"
-  red "no outage -> $why"
   say "ALL CHECKS PASSED"
 }
 
