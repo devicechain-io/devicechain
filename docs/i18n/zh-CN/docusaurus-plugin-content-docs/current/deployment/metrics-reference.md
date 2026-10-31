@@ -70,6 +70,7 @@ title: 指标参考
 | `raise_alarm_dead_lettered_total` | 在应用它们的所有尝试都失败后写入死信流的触发告警边，使本应被触发或清除的告警可以被看到，而不是只写进日志。 |
 | `resolve_device_disabled_total` | 因设备已[停用](../guides/device-credentials.md#disabling-a-device)而被拒绝的事件。这些事件被丢弃，不进入死信。 |
 | `resolve_event_time_bounded_total` | 因报告的事件时间领先服务器时钟超过配置的容差而被拒绝、并被替换为容差允许的最晚时间的情况。 |
+| `resolve_measurement_dropped_total{reason}` | 解析时被丢弃、而同一事件的其余部分已被存储的测量条目：`undeclared_non_numeric`（配置文件未声明的键携带文本值或布尔字面量）、`undeclared_unstorable`（未声明的键携带 `NaN`、无穷大或超出范围的数值）和 `declared_not_storable`（已声明的键，其数据类型不是时间序列指标）。设备会收到正常的确认，也不会进入死信队列，因此这是设备载荷正在丢失数据的信号。该指标不带租户、设备或指标标签；日志行（每个设备和指标一条）会指明它们。在配置文件中声明该指标即可存储。 |
 | `resolve_not_gateway_child_total` | 因[网关](./edge-services.md#gateway-identity)为未分配给它的设备或不存在的设备发布事件，或网关已停用而被拒绝的事件数。每个事件连同载荷记录到 `failed-events` 流（原因 `NotGatewayChild`），不会重试，并通过网关的通知主题告知网关。该指标不带租户或网关标签；日志行（每个网关和设备每分钟最多一条）会指明它们。增长通常意味着某台设备从未分配给其网关，或被分配给了另一个网关。 |
 
 ## 事件处理：检测 {#event-processing-detect}
