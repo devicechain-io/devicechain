@@ -270,7 +270,8 @@ func (api *Api) CreateArtifact(ctx context.Context, req *ArtifactCreateRequest) 
 	// for ever, so a deployment with no object store refuses the declaration itself.
 	if api.Blobs == nil {
 		return nil, refuse(CodeObjectStoreNotConfigured,
-			"the object store is not configured, so artifact content cannot be stored")
+			"the object store is not configured, so artifact content cannot be stored; configure one at install time "+
+				"(dcctl bootstrap --object-store filesystem|s3, or the chart's instance.config.infrastructure.blob.backend)")
 	}
 	if !validKind(req.Kind) {
 		return nil, refuse(CodeInvalidArtifact, "kind must be one of %s", strings.Join(Kinds, ", "))
