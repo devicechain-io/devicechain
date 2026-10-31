@@ -69,9 +69,6 @@ func (ep *EventPersistenceWorker) holder() *storehold.Holder {
 				return ep.Api.PersistInTx(ctx, func(db *gorm.DB) error { return db.Exec("SELECT 1").Error })
 			},
 		}
-		if ep.metrics != nil && ep.metrics.held != nil {
-			h.Held = ep.metrics.held
-		}
 		ep.hold_ = h
 	}
 	return ep.hold_
@@ -84,7 +81,10 @@ func (ep *EventPersistenceWorker) storeAnswers(ctx context.Context) bool {
 
 // outage reports whether err means the STORE, and not the message, is what failed.
 func (ep *EventPersistenceWorker) outage(ctx context.Context, err error) bool {
-	return ep.holder().Outage(ctx, err)
+	// A probe cached from before the failed write began is not evidence about why it failed
+	// (storehold.StoreAnswersSince): on a flapping database it would call a connection reset a
+	// poison message. writeStart is when the write that produced err began.
+	return ep.holder().OutageSince(ctx, err, ep.writeStart)
 }
 
 // hold keeps p unacked and takes it out of the batch flow; settleHeld writes it again.

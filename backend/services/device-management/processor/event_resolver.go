@@ -316,12 +316,28 @@ func (rez *EventResolver) resolveProfile(ctx context.Context, api model.DeviceMa
 	return res, 0, nil
 }
 
+// relationshipTokenNamespace namespaces the derived tokens of relationships created from events.
+var relationshipTokenNamespace = uuid.MustParse("6f1c3a52-8d0e-5b7a-9c41-2e5d7a9b1c30")
+
 // Create a new relationship based on an inbound event. The source is the
 // originating device; the target is a uniform (type, token) reference (ADR-013).
 func (rez *EventResolver) CreateNewEntityRelationship(ctx context.Context, device *model.Device,
 	relcreate esmodel.UnresolvedNewRelationshipPayload) (*model.EntityRelationship, uint, error) {
+	// 🔴 THE TOKEN IS DERIVED, NOT RANDOM. This runs under a store hold and on every redelivery,
+	// and a commit whose acknowledgement was lost (a connection reset after COMMIT) looks to the
+	// caller exactly like a failed write. A random token then created the relationship a second
+	// time on the re-run. Derived from the tenant and the relationship's identity, the re-run
+	// finds the first one by token and uses it.
+	tenant, _ := core.TenantFromContext(ctx)
+	token := uuid.NewSHA1(relationshipTokenNamespace, []byte(strings.Join([]string{
+		tenant, string(entity.TypeDevice), device.Token, relcreate.TargetType, relcreate.Target, relcreate.RelationshipType}, "\x00"))).String()
+	if found, ferr := rez.Api.EntityRelationshipsByToken(ctx, []string{token}); ferr != nil {
+		return nil, uint(resolvedevent.FailureReason_ApiCallFailed), ferr
+	} else if len(found) > 0 && found[0] != nil {
+		return found[0], 0, nil
+	}
 	create := &model.EntityRelationshipCreateRequest{
-		Token:            uuid.New().String(),
+		Token:            token,
 		SourceType:       string(entity.TypeDevice),
 		Source:           device.Token,
 		TargetType:       relcreate.TargetType,
@@ -1411,9 +1427,9 @@ func (rez *EventResolver) Process(ctx context.Context) {
 				resolved []EventResolutionResults
 				reason   uint
 			)
-			err = rez.hold.Run(rez.holdContext(ctx), []messaging.Message{unresolved}, func() error {
+			err = rez.hold.RunCtx(rez.holdContext(ctx), msgctx, []messaging.Message{unresolved}, func(c context.Context) error {
 				var rerr error
-				resolved, reason, rerr = rez.ResolveEvent(msgctx, event)
+				resolved, reason, rerr = rez.ResolveEvent(c, event)
 				return rerr
 			})
 			rez.slow.observe(time.Since(started), correlation)

@@ -151,9 +151,20 @@ func (h *Holder) tune() *Tuning {
 // StoreAnswers probes the store and reports whether it answered. A successful answer is
 // believed for Tuning.ProbeFresh.
 func (h *Holder) StoreAnswers(ctx context.Context) bool {
+	return h.StoreAnswersSince(ctx, time.Time{})
+}
+
+// StoreAnswersSince is StoreAnswers that only believes a cached answer taken AFTER since.
+//
+// 🔴 A CACHED "THE STORE ANSWERED" IS EVIDENCE ABOUT THE STORE AT THE MOMENT IT WAS TAKEN. A
+// caller classifying the failure of an operation must pass the time that operation STARTED: a
+// probe from before it says nothing about why it failed, and on a flapping database a stale
+// "answered" turns a connection reset into a poison message that is lettered and acked unstored
+// at its last delivery.
+func (h *Holder) StoreAnswersSince(ctx context.Context, since time.Time) bool {
 	t := h.tune()
 	h.mu.Lock()
-	if !h.probedOK.IsZero() && time.Since(h.probedOK) < t.ProbeFresh {
+	if !h.probedOK.IsZero() && time.Since(h.probedOK) < t.ProbeFresh && h.probedOK.After(since) {
 		h.mu.Unlock()
 		return true
 	}
@@ -173,13 +184,19 @@ func (h *Holder) StoreAnswers(ctx context.Context) bool {
 
 // Outage reports whether err means the STORE, and not the message, is what failed.
 func (h *Holder) Outage(ctx context.Context, err error) bool {
+	return h.OutageSince(ctx, err, time.Time{})
+}
+
+// OutageSince is Outage for an operation that began at since: a connection-class error is an
+// outage only if a probe taken after since fails (see StoreAnswersSince).
+func (h *Holder) OutageSince(ctx context.Context, err error, since time.Time) bool {
 	switch {
 	case err == nil:
 		return false
 	case rdb.IsStoreRefusingWrites(err):
 		return true
 	case rdb.IsConnectionFailure(err):
-		return !h.StoreAnswers(ctx)
+		return !h.StoreAnswersSince(ctx, since)
 	}
 	return false
 }
@@ -223,23 +240,48 @@ func Jitter(d time.Duration) time.Duration {
 // shutdown ended the hold.
 //
 // msgs are the messages that stay alive meanwhile; pass every message the operation covers.
-// op must be idempotent on re-execution.
+// op must be idempotent on re-execution. See RunCtx for the context an op should use.
 //
 // A nil Holder runs op once and holds nothing: the behaviour of a consumer built without one
 // (a test, or a service that has not wired it), which production wiring tests pin as non-nil.
 func (h *Holder) Run(ctx context.Context, msgs []messaging.Message, op func() error) error {
+	return h.RunCtx(ctx, ctx, msgs, func(context.Context) error { return op() })
+}
+
+// RunCtx is Run for an operation that takes the context it must use for its store calls.
+// holdCtx ends the hold (shutdown); opCtx is the context the operation runs under (a message's
+// tenant context, say). A RE-RUN is handed opCtx bounded to two thirds of AckWait when opCtx has
+// no deadline of its own, so a store call that hangs on a half-dead connection cannot outlast
+// the ack window the beats are holding open.
+//
+// Backoff: the wait between probes starts at ProbeMin and DOUBLES, up to ProbeMax, every time
+// the operation fails as an outage again, whether or not the probe between attempts answered.
+// A full disk answers SELECT 1 and refuses every write, so waiting on the probe alone would
+// retry the write every couple of seconds for as long as the volume stays full.
+//
+// While an operation is re-running, a watchdog keeps beating the held messages: a re-run that
+// takes longer than the ack window must not lose them to a redelivery.
+func (h *Holder) RunCtx(holdCtx, opCtx context.Context, msgs []messaging.Message,
+	op func(ctx context.Context) error) error {
 	if h == nil {
-		return op()
+		return op(opCtx)
 	}
 	var (
 		start    time.Time
 		attempts int
 		beats    []time.Time
 		held     bool
+		wait     = h.tune().ProbeMin
 	)
 	for {
-		err := op()
-		if err == nil || !h.Outage(ctx, err) {
+		attemptStart := time.Now()
+		var err error
+		if held {
+			err = h.rerun(opCtx, msgs, beats, op)
+		} else {
+			err = op(opCtx)
+		}
+		if err == nil || !h.OutageSince(holdCtx, err, attemptStart) {
 			if held {
 				h.Adjust(-len(msgs))
 				if err == nil {
@@ -263,13 +305,42 @@ func (h *Holder) Run(ctx context.Context, msgs []messaging.Message, op func() er
 		for i, m := range msgs {
 			h.Beat(m, &beats[i], attempts == 1)
 		}
-		if !h.waitStore(ctx, msgs, beats) {
+		ok, used := h.waitStore(holdCtx, msgs, beats, wait)
+		if !ok {
 			h.Adjust(-len(msgs))
 			log.Info().Str("consumer", h.Name).Int("messages", len(msgs)).Dur("heldFor", time.Since(start)).
 				Msg("Shutdown while holding; messages left unacked for redelivery")
 			return ErrReleased
 		}
+		wait = min(used*2, h.tune().ProbeMax)
 	}
+}
+
+// rerun runs op once more under a deadline, with a watchdog beating msgs while it is in flight.
+func (h *Holder) rerun(opCtx context.Context, msgs []messaging.Message, beats []time.Time,
+	op func(ctx context.Context) error) error {
+	if _, has := opCtx.Deadline(); !has {
+		var cancel context.CancelFunc
+		opCtx, cancel = context.WithTimeout(opCtx, messaging.AckWait*2/3)
+		defer cancel()
+	}
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		t := time.NewTicker(max(time.Millisecond, h.tune().ProgressEvery/2))
+		defer t.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-t.C:
+				h.beatAll(msgs, beats)
+			}
+		}
+	}()
+	defer func() { close(stop); <-done }()
+	return op(opCtx)
 }
 
 func (h *Holder) beatAll(msgs []messaging.Message, beats []time.Time) {
@@ -279,19 +350,20 @@ func (h *Holder) beatAll(msgs []messaging.Message, beats []time.Time) {
 }
 
 // waitStore blocks on jittered, doubling probes (beating meanwhile) until the store answers.
-// It reports false if Halt closed or ctx ended first.
-func (h *Holder) waitStore(ctx context.Context, msgs []messaging.Message, beats []time.Time) bool {
+// It starts at wait and reports the longest wait it used. It reports false if Halt closed or
+// ctx ended first.
+func (h *Holder) waitStore(ctx context.Context, msgs []messaging.Message, beats []time.Time,
+	wait time.Duration) (bool, time.Duration) {
 	t := h.tune()
-	wait := t.ProbeMin
 	for {
 		if !h.sleep(ctx, Jitter(wait), msgs, beats) {
-			return false
+			return false, wait
 		}
 		h.beatAll(msgs, beats)
 		answered := h.StoreAnswers(ctx)
 		h.beatAll(msgs, beats)
 		if answered {
-			return true
+			return true, wait
 		}
 		wait = min(wait*2, t.ProbeMax)
 	}

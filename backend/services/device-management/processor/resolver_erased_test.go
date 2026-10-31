@@ -51,6 +51,7 @@ func (suite *InboundEventsProcessorTestSuite) TestARelationshipEventRefusedByThe
 			suite.API.Mock.On("DevicesByToken", mock.Anything, mock.Anything).Return([]*dmodel.Device{buildDevice()}, nil)
 			suite.API.Mock.On("TrackedRelationshipsForDevice", mock.Anything, mock.Anything).Return(
 				&dmodel.EntityRelationshipSearchResults{Results: []dmodel.EntityRelationship{}}, nil)
+			suite.API.Mock.On("EntityRelationshipsByToken", mock.Anything, mock.Anything).Return([]*dmodel.EntityRelationship{}, nil)
 			suite.API.Mock.On("CreateEntityRelationship", mock.Anything, mock.Anything).Return(
 				(*dmodel.EntityRelationship)(nil), tc.err)
 

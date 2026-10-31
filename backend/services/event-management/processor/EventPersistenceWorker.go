@@ -49,6 +49,8 @@ type EventPersistenceWorker struct {
 	counted int
 	// holdStart is when the current hold began.
 	holdStart time.Time
+	// writeStart is when the store write being classified began (see outage).
+	writeStart time.Time
 	// hold_ is the shared hold machinery (persist_hold.go holder()).
 	hold_ *storehold.Holder
 

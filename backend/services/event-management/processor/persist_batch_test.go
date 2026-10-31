@@ -583,7 +583,7 @@ func TestAConnectionFailureWritesEveryMessageAgainOnItsOwn(t *testing.T) {
 			// and the other seven together.
 			wantTxs, wantFallbacks := int64(4), 2.0
 			if tc.connection {
-				wantTxs, wantFallbacks = 10, 1 // the 9 plus the probe that finds the store up
+				wantTxs, wantFallbacks = 11, 1 // the 9, the probe after the batch failed, and the probe after dev-3 failed on its own (a cached probe from before that write is not believed)
 			}
 			if got := r.api.txs.Load(); got != wantTxs {
 				t.Errorf("took %d transactions; want %d", got, wantTxs)

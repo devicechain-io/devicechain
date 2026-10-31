@@ -126,3 +126,82 @@ func TestRunReleasesOnHalt(t *testing.T) {
 		t.Errorf("gauge %d acked %d; want the gauge cleared and the message left unacked", gauge.Value(), ack.Acked.Load())
 	}
 }
+
+// A probe taken BEFORE the operation began says nothing about why it failed. With a non-zero
+// ProbeFresh (holdtest.FastTuning sets none, which hides this), a cached "answered" must not
+// turn a re-run's connection error into a poison message.
+func TestACachedProbeFromBeforeTheOperationIsNotBelieved(t *testing.T) {
+	store := &holdtest.Store{}
+	h, _ := newHolder(store, nil)
+	h.Tune.ProbeFresh = time.Hour
+	ctx := context.Background()
+	if !h.StoreAnswers(ctx) { // caches an answer
+		t.Fatal("store should answer")
+	}
+	store.Down.Store(true) // the store drops after that probe
+	began := time.Now()
+	if !h.OutageSince(ctx, holdtest.ConnLost, began) {
+		t.Fatal("a connection error after a stale cached probe must re-probe and see the outage")
+	}
+	// Control: the same cache IS believed for an operation that began before it.
+	store.Down.Store(false)
+	h.StoreAnswers(ctx)
+	store.Down.Store(true)
+	if h.OutageSince(ctx, holdtest.ConnLost, time.Now().Add(-time.Hour)) {
+		t.Fatal("control: a probe taken after the operation began is believed")
+	}
+}
+
+// A full disk ANSWERS the probe and refuses every write. The wait between re-runs must grow
+// anyway, not restart at ProbeMin each time.
+func TestTheWaitGrowsWhileTheStoreAnswersButKeepsRefusingWrites(t *testing.T) {
+	store := &holdtest.Store{} // up: SELECT 1 succeeds
+	h, _ := newHolder(store, nil)
+	h.Tune.ProbeMin, h.Tune.ProbeMax = 20*time.Millisecond, 160*time.Millisecond
+	msg, _ := holdtest.Msg("s", nil, messaging.MaxDeliver)
+	var times []time.Time
+	err := h.Run(context.Background(), []messaging.Message{msg}, func() error {
+		times = append(times, time.Now())
+		if len(times) < 6 {
+			return holdtest.DiskFull
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := times[1].Sub(times[0])
+	last := times[5].Sub(times[4])
+	if last < 3*first/2 || last < 80*time.Millisecond {
+		t.Fatalf("waits did not grow: first %v, last %v", first, last)
+	}
+}
+
+// While a re-run is in flight the held message keeps being beaten, and the op is handed a
+// context with a deadline under AckWait.
+func TestARerunIsBeatenWhileItBlocksAndIsBounded(t *testing.T) {
+	store := &holdtest.Store{}
+	h, _ := newHolder(store, nil)
+	msg, ack := holdtest.Msg("s", nil, messaging.MaxDeliver)
+	calls := 0
+	var hadDeadline bool
+	err := h.RunCtx(context.Background(), context.Background(), []messaging.Message{msg}, func(ctx context.Context) error {
+		calls++
+		if calls == 1 {
+			return holdtest.DiskFull
+		}
+		_, hadDeadline = ctx.Deadline()
+		before := ack.Progress.Load()
+		time.Sleep(400 * time.Millisecond) // ProgressEvery is 60 ms
+		if got := ack.Progress.Load() - before; got < 3 {
+			t.Errorf("only %d beats during a 400 ms re-run", got)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hadDeadline {
+		t.Error("a re-run's context must carry a deadline when the caller's has none")
+	}
+}

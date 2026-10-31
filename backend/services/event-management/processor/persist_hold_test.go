@@ -388,7 +388,9 @@ func TestHeldEventsAreToldTheyAreInProgressAtOnceAndOnCadence(t *testing.T) {
 
 	var zeroed atomic.Bool
 	stop := make(chan struct{})
+	pollDone := make(chan struct{})
 	go func() {
+		defer close(pollDone)
 		seen := false
 		for {
 			select {
@@ -405,7 +407,9 @@ func TestHeldEventsAreToldTheyAreInProgressAtOnceAndOnCadence(t *testing.T) {
 			}
 		}
 	}()
-	defer close(stop)
+	var stopOnce sync.Once
+	stopPoller := func() { stopOnce.Do(func() { close(stop); <-pollDone }) }
+	defer stopPoller()
 
 	start := time.Now()
 	done := r.runAsync(msgs)
@@ -418,6 +422,9 @@ func TestHeldEventsAreToldTheyAreInProgressAtOnceAndOnCadence(t *testing.T) {
 		snap[i] = append([]time.Time(nil), beats[i]...)
 	}
 	mu.Unlock()
+	// Stop watching the gauge BEFORE the store recovers: its legitimate fall to 0 on recovery
+	// is not "dropped to 0 during a probe", and a poller still running would call it one.
+	stopPoller()
 	r.api.storeDown.Store(false)
 	r.finishWithin(t, done)
 
