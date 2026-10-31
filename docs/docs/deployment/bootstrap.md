@@ -468,9 +468,13 @@ If the run was killed rather than stopped (the process was terminated, or the te
 two things stand between you and the re-run. The cluster lock is still held, so the re-run waits
 for the lease, then says the claim looks stale and names
 [`dcctl instances reclaim`](./cluster-lock.md#reclaim), which you run once you are sure the
-process is gone. And if the run had passed step 6, the re-run stops with `an escrow artifact for
-instance ... already exists`: it holds the key the half-built instance already has, so re-run with
-`--restore-root-key <path>`, using the path in that message.
+process is gone. The escrow artifact needs nothing from you: if the run had passed step 6, the
+re-run recognises the artifact it wrote, checks that the passphrase you gave it opens that
+artifact, and reuses its key instead of minting another, saying so in its output. The recovery is
+two steps, reclaim and re-run, using the same escrow passphrase as before. Only when it cannot
+tell the artifact is the half-built instance's own (a different passphrase, or an artifact left by
+an instance that no longer exists) does it stop with `an escrow artifact for instance ... already
+exists`, and that message says what to do.
 
 If the run had already reached step 8, running it again still finishes it: step 3 lets a
 re-run through until a bootstrap of the instance has ended successfully. A **second** `Ctrl+C`

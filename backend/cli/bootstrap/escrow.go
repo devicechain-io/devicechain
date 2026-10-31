@@ -544,6 +544,60 @@ func WriteEscrow(plan EscrowPlan, rootKeyBase64, instance string, now time.Time)
 	return nil
 }
 
+// keyFromHalfBuiltEscrow finds the root key a killed bootstrap already escrowed, so the
+// re-run deploys THAT key instead of minting a second one and then refusing to write it.
+//
+// 🔴 WHERE THE KEY LIVES AT EACH STEP IS THE WHOLE ARGUMENT. The key is minted and
+// escrowed in the render step (6); the infrastructure step (7) writes the instance's
+// credential Secrets, none of which holds it; and it reaches the cluster for the first
+// time in the instance's config document, written by the Helm step (8). So a run killed
+// in step 7 leaves an artifact on disk and NO copy of the key in the cluster — there is
+// nothing there to fingerprint against, and the only holder of the key is the artifact.
+// A run killed after step 8 began has the config document, `deployed` is set, and the
+// reuse-and-ReconcileEscrow path already handles it (art.Matches against the cluster's
+// key); this function is for the window before that, and is never consulted otherwise.
+//
+// Because the minted key has not been written anywhere when this runs, deciding here —
+// before the mint — is what guarantees no second key reaches the cluster or the disk.
+//
+// It answers only when ALL of these hold; any other outcome returns "" and the caller
+// proceeds exactly as before (WriteEscrow refuses, with describeBlockingArtifact):
+//   - an escrow is being written at all and the artifact at its path parses;
+//   - it was written for THIS instance name;
+//   - this cluster holds the instance's credential Secret — the evidence this attempt
+//     got past the render step, since it is written after the escrow (a destroyed
+//     instance's namespace, and so that Secret, is gone, which keeps an old artifact
+//     from being adopted by a new instance of the same name);
+//   - the passphrase this run was given opens it, which proves the operator can use it.
+//
+// The key is returned base64 and never printed; keyID is the artifact's fingerprint.
+func keyFromHalfBuiltEscrow(ctx context.Context, st *State) (rootKeyBase64, keyID string) {
+	if st.Escrow.Path == "" || st.Escrow.Passphrase == "" {
+		return "", ""
+	}
+	raw, err := os.ReadFile(st.Escrow.Path)
+	if err != nil {
+		return "", ""
+	}
+	art, err := escrow.Decode(raw)
+	if err != nil || art.Instance != st.Instance {
+		return "", ""
+	}
+	held, err := readInstanceCredentialSecret(ctx, st.KubeContext, st.Instance)
+	if err != nil || !held {
+		return "", ""
+	}
+	key, err := escrow.Open(art, st.Escrow.Passphrase)
+	if err != nil {
+		return "", ""
+	}
+	defer zeroBytes(key)
+	if !art.Matches(key) {
+		return "", ""
+	}
+	return base64.StdEncoding.EncodeToString(key), art.Fingerprint
+}
+
 // describeBlockingArtifact explains what is already at path, distinguishing a real
 // escrow from a stub or a stray file, and names the action that fits each.
 func describeBlockingArtifact(path string, existing []byte) string {
