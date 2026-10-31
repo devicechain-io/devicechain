@@ -119,7 +119,8 @@ item() { # item PASS|FAIL|info id description [detail]
 # preflight: refuse to start on anything that would make the run mean nothing
 # ---------------------------------------------------------------------------
 
-win_pids() { tasklist.exe /FI "IMAGENAME eq Sitepulse.exe" /FO CSV /NH 2>/dev/null | tr -d '\r' | awk -F'","' '/Sitepulse.exe/ {gsub(/"/,"",$2); print $2}' | sort -n; }
+# MSYS2_ARG_CONV_EXCL: Git Bash would otherwise turn /FI into a Windows path and tasklist would refuse it
+win_pids() { MSYS2_ARG_CONV_EXCL='*' tasklist.exe /FI "IMAGENAME eq Sitepulse.exe" /FO CSV /NH 2>/dev/null | tr -d '\r' | awk -F'","' '/Sitepulse.exe/ {gsub(/"/,"",$2); print $2}' | sort -n; }
 
 preflight() {
 	need python3
@@ -242,7 +243,7 @@ wait_player() {
 		sleep 1
 	done
 	log "the player did not exit within ${secs}s: closing the process this script started (pid $PLAYER_PID)"
-	taskkill.exe /F /PID "$PLAYER_PID" >/dev/null 2>&1 || true
+	MSYS2_ARG_CONV_EXCL='*' taskkill.exe /F /PID "$PLAYER_PID" >/dev/null 2>&1 || true
 	wait "$PLAYER_JOB" 2>/dev/null || true
 	return 1
 }

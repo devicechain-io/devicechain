@@ -29,6 +29,22 @@ import time
 import urllib.error
 import urllib.request
 
+
+def _ipv4_only():
+    """On Windows `localhost` resolves to ::1 first while a kind ingress listens on IPv4 only, so every request to the platform waited ~21 s for the
+    fallback (the stored-sample check makes thousands). Only the resolution is narrowed: the Host header stays `localhost`, which the ingress routes on."""
+    import socket
+    original = socket.getaddrinfo
+
+    def v4(host, port, family=0, *args, **kwargs):
+        return original(host, port, socket.AF_INET, *args, **kwargs)
+
+    if sys.platform == "win32":
+        socket.getaddrinfo = v4
+
+
+_ipv4_only()
+
 # ---------------------------------------------------------------------------------------------
 # redaction (mirrors demos/shared/io.devicechain.demo-platform/Runtime/Core/Redactor.cs: a JWT becomes a short hash, a 32+ hex run its tail)
 # ---------------------------------------------------------------------------------------------
