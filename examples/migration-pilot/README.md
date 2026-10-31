@@ -224,6 +224,9 @@ both platforms should hold the same values.
 
 `./pilot.sh compare` checks that after a minute and a half ([`evidence/07-pilot-side-by-side.txt`](evidence/07-pilot-side-by-side.txt)):
 
+(The recorded file shows one `MISMATCH` for `cc-0002` battery: two readings sent to DeviceChain by hand during the
+run, not a difference between the platforms.)
+
 ```
 device   key            legacy deviceChain  result
 cc-0001  temperature        33       33  match
@@ -271,25 +274,22 @@ readings you can afford to lose.
 Things the run turned up. They are properties of the product today, and each is the kind of thing a
 migration plan should budget for.
 
-1. **A text reading is dropped quietly.** A device that sends `"status_text":"ok"` in `measurements` gets a
-   normal acknowledgement, and the other readings in the same message are stored, but the text is dropped. The
-   only trace is a warning in the device-management log (`Dropping unstorable measurement`). Check every text key of the old
+1. **A text reading is dropped, and only the operator hears about it.** A device that sends `"status_text":"ok"` in
+   `measurements` gets a normal acknowledgement, and the other readings in the same message are stored, but the text is
+   dropped. The drop is counted in the `resolve_measurement_dropped_total` metric (reason `undeclared_non_numeric`) and
+   logged by device-management once per device and key; the device itself is not told. Check every text key of the old
    payload and decide, per key, where it goes.
 2. **A key the profile does not declare is stored anyway**, without a unit or type (`undeclared_key` was stored
    as 5). Declaring every key on the profile first is what gives a reading its unit and lets a rule see it.
-3. **A boolean sent as `"true"` is accepted** and stored as 1, as is `"1"`. The pilot sends `"0"`/`"1"`.
+3. **A metric declared boolean accepts `"true"`** and stores it as 1, as it does `"1"`. A key the profile does not
+   declare gets no such conversion: `"true"` there is text and is dropped like finding 1. The pilot sends `"0"`/`"1"`.
 4. **Deleting a device does not delete its readings.** After `rollback --delete`, the readings were still there
    (188 rows for `cc-0001`), and a device recreated with the same token owns them again. That is useful (a
    rollback does not destroy evidence), and `pilot.sh` therefore counts only from the start of the run. It is also
    why a pilot you want to start clean needs new tokens.
-5. **A rule that fires on a change does not fire for a condition that already holds.** `cc-0002` reports a
-   battery of 12 from its first message. The first run raised `Battery low` at once. After the device was deleted
-   and recreated, the same stream raised nothing for over a minute, until a reading above the limit (90) and then one
-   below (12) was sent by hand. If you recreate pilot devices, expect a device already past a limit to stay quiet
-   until it crosses it again. This was observed, and the cause has not been isolated further here.
-6. **A password shorter than 16 bytes cannot be carried** (above), and **a repeated serial number is caught in
+5. **A password shorter than 16 bytes cannot be carried** (above), and **a repeated serial number is caught in
    the file** before anything is written (`DUPLICATE_IN_FILE`), which is exactly what the dry run is for.
-7. **No bulk path for attributes or rules.** Devices import in bulk (1,000 rows a call). Everything else here is
+6. **No bulk path for attributes or rules.** Devices import in bulk (1,000 rows a call). Everything else here is
    one call per item. For 25 devices that is nothing; for a large fleet it is a script you loop.
 
 ## Clean up
