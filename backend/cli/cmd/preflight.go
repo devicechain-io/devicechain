@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -24,7 +25,13 @@ import (
 type doctor struct {
 	fails int
 	warns int
+	// cluster is the kind cluster the run would create or reuse; the port check
+	// needs it to tell its own published ports from someone else's. Empty when the
+	// run targets an existing cluster.
+	cluster string
 }
+
+const dockerInstallHint = "install Docker (Docker Desktop on macOS and Windows, Docker Engine on Linux): https://docs.docker.com/get-docker/"
 
 func (d *doctor) pass(msg string) { fmt.Printf("  %s %s\n", color.GreenString("✅"), msg) }
 func (d *doctor) info(msg string) { fmt.Printf("  %s %s\n", color.HiBlackString("•"), msg) }
@@ -105,7 +112,7 @@ func (d *doctor) checkTools(provider string, opts doctorOpts) {
 	section("Tooling", "🧰")
 	var checks []toolCheck
 	if opts.needsDocker() {
-		checks = append(checks, toolCheck{names: []string{"docker"}, required: true, guidance: "install a native Docker engine (not Docker Desktop)"})
+		checks = append(checks, toolCheck{names: []string{"docker"}, required: true, guidance: dockerInstallHint})
 	}
 	checks = append(checks,
 		toolCheck{names: []string{"kubectl"}, required: true, guidance: "https://kubernetes.io/docs/tasks/tools/"},
@@ -158,19 +165,23 @@ func (d *doctor) checkTools(provider string, opts doctorOpts) {
 func (d *doctor) checkDockerEngine() string {
 	section("Docker engine", "🐳")
 	if !haveTool("docker") {
-		d.fail("docker not installed", "install a native Docker engine")
+		d.fail("docker not installed", dockerInstallHint)
 		return ""
 	}
 	if runCmd("docker", "info", "--format", "{{.ServerVersion}}") == "" {
-		d.fail("docker daemon not reachable", "start dockerd (e.g. 'sudo service docker start') and ensure your user is in the 'docker' group")
+		d.fail("docker daemon not reachable", "start Docker Desktop, or on Linux start dockerd (e.g. 'sudo service docker start') and make sure your user is in the 'docker' group")
 		return ""
 	}
 	d.pass("docker daemon reachable")
 
 	if ctx := runCmd("docker", "context", "show"); ctx != "" {
-		if ctx == "default" {
+		switch {
+		case ctx == "default":
 			d.pass("docker context = default (native engine)")
-		} else {
+		case runtime.GOOS != "linux":
+			// Docker Desktop's own context is the normal, working setup off Linux.
+			d.pass("docker context = " + ctx)
+		default:
 			d.warn("docker context = "+ctx, "for the clean WSL2/Linux-native path run: docker context use default")
 		}
 	}
@@ -191,8 +202,10 @@ func (d *doctor) checkDockerEngine() string {
 		}
 	}
 	if drv := runCmd("docker", "info", "--format", "{{.Driver}}"); drv != "" {
-		if drv == "overlay2" {
-			d.pass("storage driver: overlay2")
+		// "overlayfs" is the containerd image store's snapshotter, the default engine
+		// since Docker 29; kind runs on it as it does on overlay2.
+		if drv == "overlay2" || drv == "overlayfs" {
+			d.pass("storage driver: " + drv)
 		} else {
 			d.warn("storage driver: "+drv, "overlay2 is recommended for kind")
 		}
@@ -216,20 +229,48 @@ func (d *doctor) checkDocker(opts doctorOpts) string {
 func (d *doctor) checkPorts() {
 	section("Ports & registry", "🔌")
 	registryUp := strings.Contains(runCmd("docker", "ps", "--format", "{{.Names}}"), "kind-registry")
-	for _, p := range []int{80, 443, 5000} {
+	// A cluster dcctl is about to CREATE publishes 80, 443 and 1883 on the host (ingress
+	// HTTP, ingress HTTPS, MQTT). If something else holds one, the create dies on Docker's
+	// bind error, so say so here; a cluster that already exists holds them itself.
+	clusterExists := d.cluster != "" && containsLine(runCmd("kind", "get", "clusters"), d.cluster)
+	for _, p := range []int{80, 443, 1883, 5000} {
 		inUse := portInUse(p)
 		switch {
 		case p == 5000 && inUse && registryUp:
 			d.pass("port 5000 in use by the kind-registry container (expected)")
+		case inUse && p == 5000:
+			d.warn("port 5000 already in use", "free it or it may conflict with the local image registry")
+		case inUse && clusterExists:
+			d.pass(fmt.Sprintf("port %d in use (by the existing kind cluster %q, expected)", p, d.cluster))
 		case inUse:
-			d.warn(fmt.Sprintf("port %d already in use", p), "free it or it may conflict with the cluster/registry")
+			d.fail(portHolderMessage(p), fmt.Sprintf("stop what holds port %d and re-run: creating the kind cluster publishes it on the host and fails while it is taken", p))
 		default:
 			d.pass(fmt.Sprintf("port %d free", p))
 		}
 	}
 }
 
-func portInUse(port int) bool {
+// portHolderMessage names the Docker container publishing a port when there is one,
+// which is the usual holder on a machine that already runs another kind cluster.
+func portHolderMessage(p int) string {
+	holder := strings.TrimSpace(runCmd("docker", "ps", "--filter", fmt.Sprintf("publish=%d", p), "--format", "{{.Names}}"))
+	if holder != "" {
+		return fmt.Sprintf("port %d already in use by container %s", p, strings.ReplaceAll(holder, "\n", ", "))
+	}
+	return fmt.Sprintf("port %d already in use", p)
+}
+
+func containsLine(haystack, line string) bool {
+	for _, l := range strings.Split(haystack, "\n") {
+		if strings.TrimSpace(l) == line {
+			return true
+		}
+	}
+	return false
+}
+
+// portInUse is a variable so a test can present a host whose ports are taken.
+var portInUse = func(port int) bool {
 	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 200*time.Millisecond)
 	if err != nil {
 		return false
@@ -252,10 +293,15 @@ func (d *doctor) checkKubeContexts(selected string) {
 	}
 	if current != "" {
 		d.info("current-context: " + color.GreenString(current))
+	} else if selected == "" {
+		// dcctl creates its own kind cluster and context, so none yet is the normal start.
+		d.info("no current-context set yet (the kind cluster dcctl creates provides one)")
 	} else {
 		d.warn("no current-context set", "select one with: kubectl config use-context <name>")
 	}
-	if len(names) == 0 {
+	if len(names) == 0 && selected == "" {
+		d.info("no contexts in the kubeconfig yet (expected before the first install)")
+	} else if len(names) == 0 {
 		d.warn("no contexts found in kubeconfig", "create a local cluster (kind create cluster --config deploy/local/kind-cluster.yaml) or add a context")
 	}
 	for _, name := range names {
@@ -406,6 +452,9 @@ var (
 
 func runDoctor(provider string, opts doctorOpts) *doctor {
 	d := &doctor{}
+	if opts.hostsKind() {
+		d.cluster = strings.TrimPrefix(opts.Target, "kind-")
+	}
 	d.checkTools(provider, opts)
 	dockerRoot := d.checkDocker(opts)
 	if opts.needsDocker() {
