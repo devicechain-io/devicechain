@@ -1,0 +1,14 @@
+{
+  "name": "Cold room too warm",
+  "description": "Above the site's line: raise an alarm and tell the room to boost its cooling. The threshold and the command's target are filled in from the site file.",
+  "type": "threshold",
+  "severity": "major",
+  "when": { "metric": "temperature", "op": "gt", "threshold": 8 },
+  "actions": [
+    { "type": "raiseAlarm", "raiseAlarm": { "alarmKey": "cold-room-too-warm" } },
+    {
+      "type": "sendCommand",
+      "sendCommand": { "command": "boost-cooling", "payload": "{\"targetC\":4}", "expiresAfter": "15m" }
+    }
+  ]
+}

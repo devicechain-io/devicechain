@@ -39,6 +39,9 @@ const sidebars: SidebarsConfig = {
     // i18n/es/.../current.json, while a doc's label comes from its own front
     // matter, which the Spanish page already carries.
     'quickstart/first-device',
+    // Right after it: the tour carries the same instance on to a dashboard, an alarm, a
+    // command's outcome and a customer user's view. Also a bare doc id, for the same reason.
+    'quickstart/feature-tour',
     // Third: the page that answers "should I use this" before the concepts do.
     'why-devicechain',
     {
