@@ -55,7 +55,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT="$(cd "$HERE/.." && pwd)"
 REPO="$(git -C "$PROJECT" rev-parse --show-toplevel)"
-LIVE_ENV="$HERE/live-env.sh"
+LIVE_ENV="${LIVE_ENV:-$HERE/live-env.sh}"
 CHECK="$HERE/phase_a_check.py"
 
 SP_HOME="${SP_HOME:-$HOME/sitepulse-env}"
@@ -102,7 +102,10 @@ done
 [ "$WITH_RUN" = 0 ] || DO_RUN=1
 { [ "$SOAK_MIN" -ge 1 ] && [ "$SOAK_MIN" -le 240 ]; } || die "--soak MINUTES is 1 to 240"
 
-win() { wslpath -w "$1"; }
+# From WSL the Windows player is reached through wslpath; from Git Bash on Windows (python3 may be only a
+# Store stub there, so $PYTHON names the interpreter) the same conversion is cygpath.
+if command -v wslpath >/dev/null 2>&1; then win() { wslpath -w "$1"; }; else win() { cygpath -w "$1"; }; fi
+if [ -n "${PYTHON:-}" ]; then python3() { "$PYTHON" "$@"; }; fi
 now_iso() { date -u +%Y-%m-%dT%H:%M:%S.%3NZ; }
 need() { command -v "$1" >/dev/null 2>&1 || die "'$1' is required on PATH"; }
 
@@ -123,7 +126,7 @@ preflight() {
 	need openssl
 	need curl
 	command -v tasklist.exe >/dev/null 2>&1 || die "tasklist.exe is not reachable: this script drives a Windows player from WSL"
-	command -v wslpath >/dev/null 2>&1 || die "wslpath is required"
+	command -v wslpath >/dev/null 2>&1 || command -v cygpath >/dev/null 2>&1 || die "wslpath (WSL) or cygpath (Git Bash) is required"
 	"$LIVE_ENV" status >/dev/null || die "the environment is not fully up (run: $LIVE_ENV status)"
 	[ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$RUNNER/status")" = 200 ] || die "the runner does not answer $RUNNER/status"
 	CA_SRC="${SP_CA_PEM:-$SP_HOME/nats-ca.pem}"

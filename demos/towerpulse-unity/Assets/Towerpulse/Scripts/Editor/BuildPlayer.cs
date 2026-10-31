@@ -24,6 +24,21 @@ namespace DeviceChain.Towerpulse.EditorTools
         public const string InfoPath = "Build/build-info.json";
         public const string StoryScene = "Assets/Towerpulse/Scenes/Towerpulse.unity";
 
+        /// <summary>The <c>-executeMethod</c> entry point for <c>Unity.exe -batchmode</c>: a build that did not finish exits non-zero.</summary>
+        public static void Windows64()
+        {
+            try
+            {
+                UnityEngine.Debug.Log("[towerpulse] build: " + Run());
+            }
+            catch (Exception e)
+            {
+                UnityEngine.Debug.LogError("[towerpulse] build FAILED: " + e.Message);
+                if (UnityEngine.Application.isBatchMode) EditorApplication.Exit(1);
+                throw;
+            }
+        }
+
         public static string Run()
         {
             if (!File.Exists(StoryScene)) throw new InvalidOperationException(StoryScene + " does not exist");
