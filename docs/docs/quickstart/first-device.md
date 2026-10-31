@@ -131,8 +131,11 @@ kubectl -n dci-devicechain get secret dci-devicechain-superuser -o jsonpath='{.d
 That Secret keeps the password the superuser was **first** given. If you change the password in
 the console, the Secret is not updated.
 
-Open the console at `http://localhost/` and sign in. It is empty, because there is no tenant yet
-and every device belongs to one.
+Open the console at the URL the bootstrap printed (`http://localhost/` on a default install) and
+sign in. As the superuser you land in the instance **Admin** console. It has no tenant pages and is
+empty of devices, because there is no tenant yet and every device belongs to one. The superuser
+administers the instance; it is not a tenant user. To work in the tenant console you need a
+tenant-admin identity, which the next step creates.
 
 ## 2. Create a tenant {#2-create-a-tenant}
 
@@ -163,6 +166,12 @@ cat ~/.devicechain/sims/demo.json
 
 The `simPassword` field is the password for `demo@sim.devicechain.local`. You use both in the next
 step.
+
+To see the tenant in the console, sign out of the superuser and sign in as
+`demo@sim.devicechain.local` with that password. This is the identity that opens the tenant
+console. If you would rather not use `dcctl sim create`, create the identity with the
+`createIdentity` mutation on the instance admin API and then grant it the tenant-admin role in the
+tenant with `addMembership`.
 
 :::tip Borrowed from the simulator
 `dcctl sim create` is the first half of the [simulator](#where-to-go-next) workflow. It is used

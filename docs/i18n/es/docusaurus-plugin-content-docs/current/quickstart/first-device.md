@@ -127,8 +127,12 @@ kubectl -n dci-devicechain get secret dci-devicechain-superuser -o jsonpath='{.d
 Ese Secret conserva la contraseña que el superusuario recibió **al principio**. Si cambias la
 contraseña en la consola, el Secret no se actualiza.
 
-Abre la consola en `http://localhost/` e inicia sesión. Está vacía, porque todavía no hay ningún
-inquilino y todo dispositivo pertenece a uno.
+Abre la consola en la URL que imprimió el bootstrap (`http://localhost/` en una instalación por
+defecto) e inicia sesión. Como superusuario llegas a la consola de **administración** de la
+instancia. No tiene páginas de inquilino y está vacía de dispositivos, porque todavía no hay ningún
+inquilino y todo dispositivo pertenece a uno. El superusuario administra la instancia; no es un
+usuario de inquilino. Para trabajar en la consola de inquilino necesitas una identidad de
+administrador de inquilino, que crea el paso siguiente.
 
 ## 2. Crear un inquilino {#2-create-a-tenant}
 
@@ -157,6 +161,12 @@ cat ~/.devicechain/sims/demo.json
 
 El campo `simPassword` es la contraseña de `demo@sim.devicechain.local`. Usarás ambos en el paso
 siguiente.
+
+Para ver el inquilino en la consola, cierra la sesión del superusuario e inicia sesión como
+`demo@sim.devicechain.local` con esa contraseña. Esta es la identidad que abre la consola de
+inquilino. Si prefieres no usar `dcctl sim create`, crea la identidad con la mutación
+`createIdentity` de la API de administración de la instancia y concédele el rol de administrador de
+inquilino en el inquilino con `addMembership`.
 
 :::tip Tomado prestado del simulador
 `dcctl sim create` es la primera mitad del flujo del [simulador](#where-to-go-next). Se usa aquí

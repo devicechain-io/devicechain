@@ -11,7 +11,11 @@ Este capítulo explica cómo entrar en la consola y qué puedes cambiar de tu pr
 dentro: los pasos del inicio de sesión, el inicio de sesión único, la elección de inquilino, qué
 pasa cuando una sesión expira y el menú de usuario.
 
-Es para todas las personas que usan la consola. Tu cuenta la crea un administrador; no se puede
+Es para todas las personas que usan la consola. El superusuario de la instancia inicia sesión en la
+consola de administración de la instancia, que no tiene páginas de inquilino; para usar la consola
+de un inquilino necesitas una identidad de administrador de inquilino, que `dcctl sim create` crea
+para un primer inquilino (o que un administrador crea con `createIdentity` y `addMembership` en la
+API de administración). Tu cuenta la crea un administrador; no se puede
 crear desde la página de inicio de sesión.
 
 ## Los pasos del inicio de sesión

@@ -1112,7 +1112,7 @@ func stepReport(ctx context.Context, st *State) error {
 	fmt.Printf("  %s %s\n", color.WhiteString("Kube context:"), color.GreenString(st.KubeContext))
 	if host := st.Values["ingressHost"]; host != "" {
 		scheme := st.Values["scheme"]
-		fmt.Printf("  %s %s\n", color.WhiteString("Console:"), color.GreenString("%s://%s/", scheme, host))
+		fmt.Printf("  %s %s\n", color.WhiteString("Console:"), color.GreenString("%s", ConsoleURL(st.KubeContext, scheme, host)))
 		fmt.Printf("  %s %s\n", color.WhiteString("GraphQL:"), color.GreenString("%s://%s/api/<area>/graphql", scheme, host))
 		if note := ssoUnavailableNote(scheme, host); note != "" {
 			fmt.Printf("  %s %s\n", color.WhiteString("Single sign-on:"), color.YellowString("%s", note))

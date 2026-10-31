@@ -94,7 +94,7 @@ kubectl -n dci-devicechain get secret dci-devicechain-superuser -o jsonpath='{.d
 
 这个 Secret 保存的是超级用户**最初**获得的密码。如果你在控制台中修改密码，Secret 不会更新。
 
-打开 `http://localhost/` 上的控制台并登录。此时控制台是空的，因为还没有租户，而每台设备都必须属于一个租户。
+打开引导程序打印的 URL 上的控制台（默认安装为 `http://localhost/`）并登录。以超级用户身份登录后进入的是实例**管理（Admin）**控制台，其中没有租户页面，也没有任何设备，因为还没有租户，而每台设备都必须属于一个租户。超级用户负责管理实例，不是租户用户。要使用租户控制台，需要一个租户管理员身份，下一步会创建它。
 
 ## 2. 创建租户 {#2-create-a-tenant}
 
@@ -120,6 +120,8 @@ cat ~/.devicechain/sims/demo.json
 ```
 
 `simPassword` 字段是 `demo@sim.devicechain.local` 的密码。下一步会用到这两项。
+
+要在控制台中查看该租户，请退出超级用户，并以 `demo@sim.devicechain.local` 和该密码登录。这个身份才能打开租户控制台。如果不想使用 `dcctl sim create`，可以通过实例管理 API 的 `createIdentity` 变更操作创建身份，再用 `addMembership` 在该租户中授予其租户管理员角色。
 
 :::tip 借用模拟器的命令
 `dcctl sim create` 是[模拟器](#where-to-go-next)工作流的前半部分。这里使用它，是因为它会创建租户及限定于该租户的身份，正好满足需求；手动操作则需要调用实例管理 API 的三个变更操作。此后的步骤都使用任何应用都能使用的普通租户 API。

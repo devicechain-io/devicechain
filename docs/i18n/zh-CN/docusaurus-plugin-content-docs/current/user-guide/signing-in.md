@@ -9,7 +9,7 @@ import GuideShot from '@site/src/components/GuideShot';
 
 本章介绍如何进入控制台，以及登录后可以修改自己账户的哪些内容：登录步骤、单点登录、选择租户、会话过期后会发生什么，以及用户菜单。
 
-本章面向所有使用控制台的人。账户由管理员提供，无法在登录页自行创建。
+本章面向所有使用控制台的人。实例超级用户登录的是实例管理（Admin）控制台，其中没有租户页面；要使用租户控制台，需要租户管理员身份：首个租户可由 `dcctl sim create` 创建，或由管理员通过管理 API 的 `createIdentity` 和 `addMembership` 创建。账户由管理员提供，无法在登录页自行创建。
 
 ## 登录步骤 {#the-sign-in-steps}
 
