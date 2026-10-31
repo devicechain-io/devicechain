@@ -238,6 +238,11 @@ func TestCreateRefusesWithoutAnObjectStore(t *testing.T) {
 	env.api.Blobs = nil
 	_, err := env.api.CreateArtifact(tenantCtx("acme"), validRequest("fw-1", []byte("data")))
 	requireRefusal(t, err, CodeObjectStoreNotConfigured)
+	// The refusal must tell the operator how to fix it, naming both the bootstrap flag and the chart value.
+	var re *RefusalError
+	require.True(t, errors.As(err, &re))
+	require.Contains(t, re.Msg, "dcctl bootstrap --object-store")
+	require.Contains(t, re.Msg, "instance.config.infrastructure.blob.backend")
 }
 
 func TestSizeCeilings(t *testing.T) {
