@@ -97,7 +97,9 @@ func stubTheSecret(t *testing.T, password string) *[]string {
 }
 
 func TestSimCreateSignsInWithTheInstancesSecret(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home) // os.UserHomeDir on Windows
 	t.Setenv(adminPasswordEnv, "")
 	asked := stubTheSecret(t, "the-instances-seed")
 	srv, sent := aLoginRecorder(t)
@@ -116,7 +118,9 @@ func TestSimCreateSignsInWithTheInstancesSecret(t *testing.T) {
 }
 
 func TestSimDestroySignsInWithTheSecretOfTheInstanceItsRecordNames(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home) // os.UserHomeDir on Windows
 	t.Setenv(adminPasswordEnv, "")
 	asked := stubTheSecret(t, "the-instances-seed")
 	srv, sent := aLoginRecorder(t)

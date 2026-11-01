@@ -30,6 +30,7 @@ func refusedHome(t *testing.T, instance string) (home string, prior bootstrap.Pr
 	t.Helper()
 	home = t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home) // os.UserHomeDir on Windows
 	prior = bootstrap.CapturePriorLocalState(instance)
 	if err := bootstrap.WriteInstanceRecord(bootstrap.InstanceRecord{
 		Instance: instance, Provider: "local", Cluster: "alpha-cluster",
@@ -159,6 +160,7 @@ func TestTheCommandLayerClearsTheRecordAfterAStoreRefusal(t *testing.T) {
 func TestADryRunIsNotUnwound(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home) // os.UserHomeDir on Windows
 	prior := bootstrap.CapturePriorLocalState("bravo")
 	// A live record for the same name, of the kind a dry run must never touch.
 	if err := bootstrap.WriteInstanceRecord(bootstrap.InstanceRecord{
