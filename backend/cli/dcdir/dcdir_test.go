@@ -13,6 +13,7 @@ import (
 func TestRootIsTheDirectoryUnderTheOperatorsHome(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home) // os.UserHomeDir on Windows
 
 	got, err := Root()
 	if err != nil {
@@ -29,6 +30,7 @@ func TestRootIsTheDirectoryUnderTheOperatorsHome(t *testing.T) {
 func TestRootDoesNotCreateAnything(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home) // os.UserHomeDir on Windows
 
 	if _, err := Root(); err != nil {
 		t.Fatalf("Root: %v", err)
@@ -41,6 +43,7 @@ func TestRootDoesNotCreateAnything(t *testing.T) {
 func TestEveryInventoryMemberResolvesUnderTheRoot(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home) // os.UserHomeDir on Windows
 
 	names := MemberNames()
 	if len(names) == 0 {
@@ -66,6 +69,7 @@ func TestEveryInventoryMemberResolvesUnderTheRoot(t *testing.T) {
 func TestAnInstanceLivesUnderTheInstancesDirectory(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home) // os.UserHomeDir on Windows
 
 	got, err := Instance("prod")
 	if err != nil {
@@ -84,6 +88,7 @@ func TestAnInstanceLivesUnderTheInstancesDirectory(t *testing.T) {
 func TestAnInstanceMayBeNAMEDAfterASibling(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home) // os.UserHomeDir on Windows
 
 	for _, name := range MemberNames() {
 		got, err := Instance(name)
@@ -108,7 +113,9 @@ func TestAnInstanceMayBeNAMEDAfterASibling(t *testing.T) {
 // package does not account for, which is what the literal gate exists to stop
 // happening anywhere else.
 func TestAnUnregisteredSiblingIsRefused(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home) // os.UserHomeDir on Windows
 
 	got, err := Sibling("mystery")
 	if err == nil {
@@ -157,6 +164,7 @@ func TestNothingIsInventoriedThatDoesNotExist(t *testing.T) {
 func TestAClusterLivesUnderTheClustersDirectory(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home) // os.UserHomeDir on Windows
 
 	got, err := Cluster("163e7f17-d87c-42fe-8bc0-e672e35f5ee7")
 	if err != nil {
@@ -179,6 +187,7 @@ func TestAClusterLivesUnderTheClustersDirectory(t *testing.T) {
 func TestAnEmptyClusterIdentityIsRefused(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home) // os.UserHomeDir on Windows
 
 	clusters, err := Sibling(Clusters)
 	if err != nil {
@@ -202,6 +211,7 @@ func TestAnEmptyClusterIdentityIsRefused(t *testing.T) {
 func TestAValidIdentityIsStillAccepted(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home) // os.UserHomeDir on Windows
 
 	for _, uid := range []string{
 		"163e7f17-d87c-42fe-8bc0-e672e35f5ee7",
