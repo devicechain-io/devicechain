@@ -495,7 +495,7 @@ dcctl bootstrap local devicechain
 
 ### v1.0.0：首个稳定版本，数据库故障时事件被保留，Traefik 成为默认入口 {#v100-upgrade}
 
-`v1.0.0` 是首个稳定版本。它是从 `v0.27.0` 起的原地升级：先对集群运行 `dcctl install`，再对每个实例运行一次 `dcctl upgrade`，方法见[v0.17.0 的说明](https://github.com/devicechain-io/devicechain/blob/v0.17.0/docs/docs/deployment/releases-and-upgrades.md#v0170-upgrade)。请给 `dcctl install` 传入集群安装时使用的设置（如 `--kube-context`、`--ha`、`--compact` 和 `--database-node-selector`），以及 `--version`。本版本不运行任何迁移，也不改写任何行，因此除升级本身外没有数据步骤。如果从 `v0.26.0` 或更早版本升级，请先阅读 [`v0.27.0` 的说明](#v0270-upgrade)，并在其中使用 `--version v1.0.0`。由 `v0.16.0` 或更早版本创建的实例仍然[低于升级下限](#pre-declaration-recreate)，需要重建而不是升级。
+`v1.0.0` 是首个稳定版本。它是从 `v0.27.0` 起的原地升级：先对集群运行 `dcctl install`，再对每个实例运行一次 `dcctl upgrade`，方法见[v0.17.0 的说明](https://github.com/devicechain-io/devicechain/blob/v0.17.0/docs/docs/deployment/releases-and-upgrades.md#v0170-upgrade)。请给 `dcctl install` 传入集群安装时使用的设置（如 `--cluster`、`--kube-context`、`--ha`、`--compact` 和 `--database-node-selector`），以及 `--version`。本版本不运行任何迁移，也不改写任何行，因此除升级本身外没有数据步骤。如果从 `v0.26.0` 或更早版本升级，请先阅读 [`v0.27.0` 的说明](#v0270-upgrade)，并在其中使用 `--version v1.0.0`。由 `v0.16.0` 或更早版本创建的实例仍然[低于升级下限](#pre-declaration-recreate)，需要重建而不是升级。
 
 ```bash
 dcctl install local --version v1.0.0
@@ -570,7 +570,7 @@ Kubernetes 项目已停用 ingress-nginx。新集群现在仅由 Traefik 和 Gat
 - **打印的控制台 URL 和 `dcctl sim create` 的 MQTT 地址取自 kind 控制平面容器实际发布的端口。** 无法确定时，会打印此前的文字。
 - **被强制终止的 `dcctl bootstrap` 可以重新运行。** 在基础设施步骤中被终止的运行会留下托管（escrow）制品，需要 `--restore-root-key` 才能完成。现在重新运行会在该制品指明本实例、实例的凭据 Secret 已在集群中、且口令能打开它时采纳该制品。其他情况仍像以前一样拒绝。过期锁的拒绝信息现在会说明持有者何时是本机上已不再运行的进程。
 - **没有终端且没有 `--yes` 的 `dcctl install`** 不再报告创建被拒绝。
-- **`dc-simulator` 附在每个发布中，** 与 `dcctl` 和 `dc-edge-agent` 并列，覆盖 Linux、macOS 和 Windows 的 `amd64` 与 `arm64`，附校验和与来源证明。`dcctl sim run --simulator ./dc-simulator` 不再需要 Go 编译器，`dc-simulator -version` 会报告发布版本。
+- **`dc-simulator` 附在每个发布中，** 与 `dcctl` 和 `dc-edge-agent` 并列，覆盖 Linux、macOS 和 Windows 的 `amd64` 与 `arm64`，附校验和与来源证明。`dcctl sim run --simulator ./dc-simulator` 不再需要 Go 编译器，`dc-simulator -version` 会报告发布版本。`dcctl sim run` 通过 `event-sources` 的设备接入监听端口发布数据，标准安装不会在集群外暴露该端口，因此运行期间请保持 `kubectl -n dci-devicechain port-forward svc/event-sources 8081:8081` 处于运行状态（参见[首个设备指南的第 5 步](../quickstart/first-device.md#5-open-a-path-to-the-ingest-endpoint)）。
 
 #### 仪表板 {#v100-dashboards}
 
