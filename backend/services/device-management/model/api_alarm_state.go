@@ -37,12 +37,12 @@ func (api *Api) AlarmsByToken(ctx context.Context, tokens []string) ([]*Alarm, e
 
 // alarmFacets are the filters an alarm search and an alarm count share.
 type alarmFacets struct {
-	originatorType *string
-	originator     *string
-	state          *string
-	severity       *string
-	acknowledged   *bool
-	alarmKey       *string
+	originatorType  *string
+	originatorToken *string
+	state           *string
+	severity        *string
+	acknowledged    *bool
+	alarmKey        *string
 }
 
 // resolve turns the facets into a filter. An Originator token, when supplied, is resolved to
@@ -51,11 +51,11 @@ type alarmFacets struct {
 // caller answers with an empty result rather than an error.
 func (f alarmFacets) resolve(ctx context.Context, api *Api) (filter func(*gorm.DB) *gorm.DB, ok bool, err error) {
 	var originatorId *uint
-	if f.originator != nil {
+	if f.originatorToken != nil {
 		if f.originatorType == nil {
 			return nil, false, errors.New("originatorType is required when filtering by originator")
 		}
-		id, err := api.ResolveEntityToken(ctx, *f.originatorType, *f.originator)
+		id, err := api.ResolveEntityToken(ctx, *f.originatorType, *f.originatorToken)
 		if err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return nil, false, nil
@@ -130,7 +130,7 @@ func (api *Api) Alarms(ctx context.Context, criteria AlarmSearchCriteria) (*Alar
 	}
 	empty := &AlarmSearchResults{Results: make([]Alarm, 0), Pagination: rdb.SearchResultsPagination{}}
 	filter, ok, err := alarmFacets{
-		originatorType: criteria.OriginatorType, originator: criteria.Originator, state: criteria.State,
+		originatorType: criteria.OriginatorType, originatorToken: criteria.OriginatorToken, state: criteria.State,
 		severity: criteria.Severity, acknowledged: criteria.Acknowledged, alarmKey: criteria.AlarmKey,
 	}.resolve(ctx, api)
 	if err != nil {
@@ -207,7 +207,7 @@ func (api *Api) AlarmCountsByDeviceType(ctx context.Context, criteria AlarmCount
 		return nil, err
 	}
 	filter, ok, err := alarmFacets{
-		originatorType: criteria.OriginatorType, originator: criteria.Originator, state: criteria.State,
+		originatorType: criteria.OriginatorType, originatorToken: criteria.OriginatorToken, state: criteria.State,
 		severity: criteria.Severity, acknowledged: criteria.Acknowledged, alarmKey: criteria.AlarmKey,
 	}.resolve(ctx, api)
 	if err != nil {
@@ -275,7 +275,7 @@ func (api *Api) AlarmCountsBySeverity(ctx context.Context, criteria AlarmCountCr
 	}
 	out := make([]AlarmSeverityCount, 0)
 	filter, ok, err := alarmFacets{
-		originatorType: criteria.OriginatorType, originator: criteria.Originator, state: criteria.State,
+		originatorType: criteria.OriginatorType, originatorToken: criteria.OriginatorToken, state: criteria.State,
 		severity: criteria.Severity, acknowledged: criteria.Acknowledged, alarmKey: criteria.AlarmKey,
 	}.resolve(ctx, api)
 	if err != nil {

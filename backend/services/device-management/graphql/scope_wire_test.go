@@ -293,14 +293,7 @@ func TestDeviceOutsideScopeIsNotFound(t *testing.T) {
 	// same sentinel a device that never existed produces (the wire answers NOT_FOUND).
 	stream := func(ctx context.Context, token string) error {
 		kind := "device"
-		_, err := (&SchemaResolver{}).AlarmStream(ctx, struct {
-			OriginatorType *string
-			Originator     *string
-			State          *string
-			Severity       *string
-			AlarmKey       *string
-			Anchor         *model.AlarmAnchor
-		}{OriginatorType: &kind, Originator: &token})
+		_, err := (&SchemaResolver{}).AlarmStream(ctx, alarmStreamArgs{OriginatorType: &kind, OriginatorToken: &token})
 		return err
 	}
 	outside, missing := stream(acme, "globex-pump"), stream(acme, "no-such-pump")

@@ -105,14 +105,14 @@ export async function clearAlarm(token: string): Promise<void> {
 export const ALARM_STREAM = graphql(`
   subscription AlarmStream(
     $originatorType: String
-    $originator: String
+    $originatorToken: String
     $state: String
     $severity: String
     $alarmKey: String
   ) {
     alarmStream(
       originatorType: $originatorType
-      originator: $originator
+      originatorToken: $originatorToken
       state: $state
       severity: $severity
       alarmKey: $alarmKey

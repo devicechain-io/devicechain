@@ -21,7 +21,7 @@ export interface AlarmSearchCriteriaInput {
   pageNumber: number;
   pageSize: number;
   originatorType?: string | null;
-  originator?: string | null;
+  originatorToken?: string | null;
   state?: string | null;
   severity?: string | null;
   acknowledged?: boolean | null;
@@ -157,7 +157,7 @@ export interface AlarmStreamResult {
 
 export interface AlarmStreamVariables {
   originatorType?: string | null;
-  originator?: string | null;
+  originatorToken?: string | null;
   state?: string | null;
   severity?: string | null;
   alarmKey?: string | null;
@@ -167,7 +167,7 @@ export interface AlarmStreamVariables {
 export const ALARM_STREAM = `
   subscription DashboardAlarmStream(
     $originatorType: String
-    $originator: String
+    $originatorToken: String
     $state: String
     $severity: String
     $alarmKey: String
@@ -175,7 +175,7 @@ export const ALARM_STREAM = `
   ) {
     alarmStream(
       originatorType: $originatorType
-      originator: $originator
+      originatorToken: $originatorToken
       state: $state
       severity: $severity
       alarmKey: $alarmKey

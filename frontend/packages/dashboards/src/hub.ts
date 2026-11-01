@@ -805,10 +805,10 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
       severity: sub.severity ?? null,
       acknowledged: sub.acknowledged ?? null,
     } satisfies Partial<AlarmSearchCriteriaInput>;
-    const originators: Array<{ originatorType: string | null; originator: string | null; anchor?: AlarmAnchorInput }> =
+    const originators: Array<{ originatorType: string | null; originatorToken: string | null; anchor?: AlarmAnchorInput }> =
       tenantWide || anchor
-        ? [{ originatorType: null, originator: null, anchor }]
-        : tokens.map((token) => ({ originatorType: 'device', originator: token }));
+        ? [{ originatorType: null, originatorToken: null, anchor }]
+        : tokens.map((token) => ({ originatorType: 'device', originatorToken: token }));
 
     if (sub.countBySeverity) {
       // One grouped read per originator query (one tenant-wide), summed by severity. Per-device

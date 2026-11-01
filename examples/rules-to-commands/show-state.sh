@@ -16,7 +16,7 @@ gql "$DC_URL/api/device-state/graphql" "$TOK" "$(jq -nc --arg d "$DC_DEVICE" '"{
 
 echo "== alarms =="
 gql "$DM_GQL" "$TOK" 'query($c:AlarmSearchCriteria!){alarms(criteria:$c){results{alarmKey severity state acknowledged raisedTime clearedTime lastValue}}}' \
-  "$(jq -nc --arg d "$DC_DEVICE" '{c:{pageNumber:1,pageSize:5,originatorType:"device",originator:$d}}')" \
+  "$(jq -nc --arg d "$DC_DEVICE" '{c:{pageNumber:1,pageSize:5,originatorType:"device",originatorToken:$d}}')" \
   | jq -r '.data.alarms.results[] | "    \(.alarmKey)  \(.severity)  \(.state)  raised \(.raisedTime // "-")  cleared \(.clearedTime // "-")  last value \(.lastValue // "-")"'
 
 echo "== commands sent by the rule =="

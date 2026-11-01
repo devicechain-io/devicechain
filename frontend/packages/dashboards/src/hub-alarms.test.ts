@@ -87,7 +87,7 @@ describe('DashboardHub alarm channel', () => {
     await settle();
 
     expect(h.gql).toHaveBeenCalledTimes(1);
-    expect(criteriaOf(0).originator).toBeNull();
+    expect(criteriaOf(0).originatorToken).toBeNull();
     expect(criteriaOf(0).originatorType).toBeNull();
     expect(snaps[snaps.length - 1]).toEqual({ alarms: [expect.objectContaining({ token: 'a' })], total: 7 });
     // A tenant-wide subscription opens one trigger stream.
@@ -105,7 +105,7 @@ describe('DashboardHub alarm channel', () => {
     await settle();
 
     expect(criteriaOf(0).originatorType).toBe('device');
-    expect(criteriaOf(0).originator).toBe('therm-1');
+    expect(criteriaOf(0).originatorToken).toBe('therm-1');
   });
 
   it('passes state/severity filters through to the query', async () => {
@@ -236,7 +236,7 @@ describe('DashboardHub alarm channel', () => {
 
     expect(h.gql).toHaveBeenCalledTimes(1); // not one per member device
     expect(resolver.devicesForAnchor).not.toHaveBeenCalled();
-    expect(criteriaOf(0)).toMatchObject({ originatorType: null, originator: null, anchor: { type: 'area', token: 'annex' } });
+    expect(criteriaOf(0)).toMatchObject({ originatorType: null, originatorToken: null, anchor: { type: 'area', token: 'annex' } });
     expect(snaps[snaps.length - 1].total).toBe(3);
     expect(h.subs[0].vars).toEqual({ anchor: { type: 'area', token: 'annex' } });
   });

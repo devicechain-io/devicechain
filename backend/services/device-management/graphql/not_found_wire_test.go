@@ -57,14 +57,7 @@ func TestAnAlarmStreamForAnUnknownOriginatorKeepsTheMiss(t *testing.T) {
 	}
 	kind, token := "device", "nope"
 
-	_, err := (&SchemaResolver{}).AlarmStream(ctx, struct {
-		OriginatorType *string
-		Originator     *string
-		State          *string
-		Severity       *string
-		AlarmKey       *string
-		Anchor         *model.AlarmAnchor
-	}{OriginatorType: &kind, Originator: &token})
+	_, err := (&SchemaResolver{}).AlarmStream(ctx, alarmStreamArgs{OriginatorType: &kind, OriginatorToken: &token})
 
 	if err == nil {
 		t.Fatal("an alarm stream for an originator that does not exist was accepted")

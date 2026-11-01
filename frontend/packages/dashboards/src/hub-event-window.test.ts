@@ -42,7 +42,7 @@ describe('the hub sends the range', () => {
       { next: (s) => snaps.push(s) },
     );
     await settle();
-    expect(criteria()).toMatchObject({ originator: 'd-1', pageSize: 30, startTime: iso(NOW - HOUR), endTime: null });
+    expect(criteria()).toMatchObject({ originatorToken: 'd-1', pageSize: 30, startTime: iso(NOW - HOUR), endTime: null });
     expect(snaps[0].total).toBe(7);
     dispose();
   });

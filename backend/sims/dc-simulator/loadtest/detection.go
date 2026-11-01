@@ -463,11 +463,11 @@ type sessionQuerier interface {
 func (o *alarmOracle) snapshot(ctx context.Context, deviceToken string) (alarmSnapshot, error) {
 	vars := map[string]any{
 		"c": map[string]any{
-			"pageNumber":     1,
-			"pageSize":       1,
-			"originatorType": "device",
-			"originator":     deviceToken,
-			"alarmKey":       HarnessAlarmKey,
+			"pageNumber":      1,
+			"pageSize":        1,
+			"originatorType":  "device",
+			"originatorToken": deviceToken,
+			"alarmKey":        HarnessAlarmKey,
 		},
 	}
 	var out struct {

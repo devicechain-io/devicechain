@@ -1694,12 +1694,12 @@ input AlarmAnchor {
 }
 
 # Criteria used when searching for alarms. All facets are optional and AND together;
-# originator restricts to a single entity by its (originatorType, originator token).
+# originator restricts to a single entity by its (originatorType, originatorToken).
 input AlarmSearchCriteria {
     pageNumber: Int!
     pageSize: Int!
     originatorType: String
-    originator: String
+    originatorToken: String
     state: String
     severity: String
     acknowledged: Boolean
@@ -1733,10 +1733,10 @@ AlarmSearchCriteria, without paging and without deviceType (the per-type count's
 per-severity count takes it as an argument of its own), and they AND together.
 """
 input AlarmCountCriteria {
-    """Entity type of the originator, e.g. "device". Required when originator is set."""
+    """Entity type of the originator, e.g. "device". Required when originatorToken is set."""
     originatorType: String
     """Only alarms of this originator, by its token. An unknown token counts nothing."""
-    originator: String
+    originatorToken: String
     """Only alarms in this state: ACTIVE or CLEARED."""
     state: String
     """Only alarms at this severity."""
@@ -5426,11 +5426,11 @@ type AlarmEvent {
 # the alarm queries on reconnect and periodically — so a dropped event can't leave a
 # stale row (e.g. a missed CLEARED showing a ghost active alarm).
 type Subscription {
-    # Streams alarm state-change events. When originator is supplied, originatorType
+    # Streams alarm state-change events. When originatorToken is supplied, originatorType
     # is required and the token is resolved to its id once at subscribe time.
     alarmStream(
         originatorType: String
-        originator: String
+        originatorToken: String
         state: String
         severity: String
         alarmKey: String

@@ -38,7 +38,7 @@ export type AlarmSearchCriteria = {
    * no upper bound. A value that is not RFC 3339 is an error.
    */
   endTime?: string | null | undefined;
-  originator?: string | null | undefined;
+  originatorToken?: string | null | undefined;
   originatorType?: string | null | undefined;
   pageNumber: number;
   pageSize: number;
@@ -1271,7 +1271,7 @@ export type ClearAlarmMutation = { clearAlarm: { id: string } };
 
 export type AlarmStreamSubscriptionVariables = Exact<{
   originatorType?: string | null | undefined;
-  originator?: string | null | undefined;
+  originatorToken?: string | null | undefined;
   state?: string | null | undefined;
   severity?: string | null | undefined;
   alarmKey?: string | null | undefined;
@@ -2526,10 +2526,10 @@ export const ClearAlarmDocument = new TypedDocumentString(`
 }
     `) as unknown as TypedDocumentString<ClearAlarmMutation, ClearAlarmMutationVariables>;
 export const AlarmStreamDocument = new TypedDocumentString(`
-    subscription AlarmStream($originatorType: String, $originator: String, $state: String, $severity: String, $alarmKey: String) {
+    subscription AlarmStream($originatorType: String, $originatorToken: String, $state: String, $severity: String, $alarmKey: String) {
   alarmStream(
     originatorType: $originatorType
-    originator: $originator
+    originatorToken: $originatorToken
     state: $state
     severity: $severity
     alarmKey: $alarmKey

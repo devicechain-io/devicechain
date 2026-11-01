@@ -128,7 +128,7 @@ func TestAlarmRaisedCarriesDeviceAnchors(t *testing.T) {
 
 	// Filtering by an originator outside the scope finds nothing, as a missing one does.
 	dt, other := "device", "globex-pump"
-	found, err := r.api.Alarms(r.member("customer:acme"), AlarmSearchCriteria{OriginatorType: &dt, Originator: &other})
+	found, err := r.api.Alarms(r.member("customer:acme"), AlarmSearchCriteria{OriginatorType: &dt, OriginatorToken: &other})
 	require.NoError(t, err)
 	require.Empty(t, found.Results)
 

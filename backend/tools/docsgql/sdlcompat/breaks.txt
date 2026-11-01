@@ -20,3 +20,7 @@
 # Before v1.0.0 a declared break may ship in any release; say so in that release's
 # highlights (.github/release-highlights.json, `"breaking": true`). From v1.0.0 a covered
 # interface breaks only in a major release.
+
+v0.27.0 device-management AlarmSearchCriteria.originator input-field-removed Renamed to originatorToken so the alarm filter names the originator the way Alarm.originatorToken and every other token field do; send originatorToken.
+v0.27.0 device-management AlarmCountCriteria.originator input-field-removed Renamed to originatorToken to match AlarmSearchCriteria and Alarm.originatorToken; send originatorToken.
+v0.27.0 device-management Subscription.alarmStream(originator:) argument-removed Renamed to originatorToken to match the alarm filters and AlarmEvent.originatorToken; pass originatorToken.

@@ -163,8 +163,8 @@ describe('the device-type filter', () => {
     const dispose = scopedHub().subscribeAlarms({ datasource: ANCHOR, pageSize: 50, deviceType: 'sensor' }, { next: (s) => snaps.push(s) });
     await settle();
     expect(alarmReads().map((c) => (c[2] as { criteria: Record<string, unknown> }).criteria)).toEqual([
-      expect.objectContaining({ originatorType: 'device', originator: 'therm-1', deviceType: 'sensor' }),
-      expect.objectContaining({ originatorType: 'device', originator: 'sens-1', deviceType: 'sensor' }),
+      expect.objectContaining({ originatorType: 'device', originatorToken: 'therm-1', deviceType: 'sensor' }),
+      expect.objectContaining({ originatorType: 'device', originatorToken: 'sens-1', deviceType: 'sensor' }),
     ]);
     expect(snaps).toHaveLength(1);
     dispose();
@@ -186,7 +186,7 @@ describe('the per-type counts', () => {
     await settle();
     expect(countReads()).toHaveLength(1);
     expect(countReads()[0][2]).toEqual({
-      criteria: { state: 'ACTIVE', severity: null, acknowledged: null, originatorType: null, originator: null },
+      criteria: { state: 'ACTIVE', severity: null, acknowledged: null, originatorType: null, originatorToken: null },
     });
     expect(alarmReads().filter((c) => !String(c[1]).includes('alarmCountsByDeviceType'))).toHaveLength(0);
     expect(snaps[0]).toEqual({
@@ -202,7 +202,7 @@ describe('the per-type counts', () => {
 
   it('sum a scoped widget’s per-originator counts by type and severity', async () => {
     h.gql.mockImplementation(async (_a: string, _doc: string, vars: Record<string, unknown>) => {
-      const o = (vars.criteria as { originator: string }).originator;
+      const o = (vars.criteria as { originatorToken: string }).originatorToken;
       return {
         alarmCountsByDeviceType:
           o === 'therm-1'
@@ -239,7 +239,7 @@ describe('the per-severity counts', () => {
     expect(severityReads()).toHaveLength(1);
     // No originator facet, no type: nothing narrows the count to devices.
     expect(severityReads()[0][2]).toEqual({
-      criteria: { state: 'ACTIVE', severity: null, acknowledged: null, originatorType: null, originator: null },
+      criteria: { state: 'ACTIVE', severity: null, acknowledged: null, originatorType: null, originatorToken: null },
       deviceType: null,
     });
     expect(h.gql.mock.calls).toHaveLength(1);
@@ -265,7 +265,7 @@ describe('the per-severity counts', () => {
 
   it('sum a scoped widget’s per-originator counts by severity', async () => {
     h.gql.mockImplementation(async (_a: string, _doc: string, vars: Record<string, unknown>) => {
-      const o = (vars.criteria as { originator: string }).originator;
+      const o = (vars.criteria as { originatorToken: string }).originatorToken;
       return {
         alarmCountsBySeverity:
           o === 'therm-1' ? [{ severity: 'MAJOR', count: 2 }] : [{ severity: 'MAJOR', count: 1 }, { severity: 'CRITICAL', count: 4 }],
