@@ -43,9 +43,9 @@ configuration document, the chart release and the service images belong to one i
 
 ## Pre-1.0 stability {#pre-10-stability}
 
-:::warning DeviceChain is pre-1.0
+:::warning This section describes releases before v1.0.0
 
-Until **v1.0.0**, any release — including a patch release — may change APIs, schemas, or
+`v1.0.0` is the first stable release, and the [versioning and upgrade policy](./versioning-policy.md) applies from it. Until **v1.0.0**, any release — including a patch release — may change APIs, schemas, or
 behavior without a compatibility shim. This is deliberate: while the data model is still
 settling, we prefer a clean cutover to carrying a shim we would have to support forever.
 
@@ -694,6 +694,109 @@ Once you are on a release that records a declaration, ordinary in-place upgrades
 ## Recent releases {#recent-releases}
 
 The three most recent minor releases are documented in full, newest first.
+
+### v1.0.0 — the first stable release: a database outage holds events, and Traefik is the default front end {#v100-upgrade}
+
+`v1.0.0` is the first stable release. It is an in-place upgrade from `v0.27.0`: `dcctl install` for the cluster, then one `dcctl upgrade` for each instance, as described [for v0.17.0](https://github.com/devicechain-io/devicechain/blob/v0.17.0/docs/docs/deployment/releases-and-upgrades.md#v0170-upgrade). Give `dcctl install` the settings the cluster was installed with, such as `--kube-context`, `--ha`, `--compact` and `--database-node-selector`, as well as `--version`. No migration runs and no row is rewritten, so there is no data step beyond the upgrade itself. Coming from `v0.26.0` or earlier, read the [`v0.27.0` notes](#v0270-upgrade) first and follow them with `--version v1.0.0`. An instance built by `v0.16.0` or earlier is still [below the line](#pre-declaration-recreate) and is recreated, not upgraded.
+
+```bash
+dcctl install local --version v1.0.0
+dcctl upgrade local devicechain --version v1.0.0 --dry-run
+dcctl upgrade local devicechain --version v1.0.0
+```
+
+From this release the [versioning and upgrade policy](./versioning-policy.md) applies: the interfaces it lists as covered change incompatibly only in a major release. Gates in CI compare each covered interface (the device wire formats, the GraphQL schemas, the `dcctl` commands and flags, the npm packages and the C# SDK) with the previous release, and a break has to be declared in a file the gate reads.
+
+What needs action, in the order to do it:
+
+- **Rename the alarm filter `originator` to `originatorToken`.** In the `device-management` GraphQL schema, `AlarmSearchCriteria`, `AlarmCountCriteria` and `Subscription.alarmStream` took `originator`, while `Alarm`, `AlarmEvent` and `AlarmState` already returned `originatorToken`. The three inputs now take `originatorToken`, and there is no alias: a request that still sends `originator` is refused. The MCP tool `list_alarms` takes `originatorToken` as well. The console and the dashboard packages are already updated. See [Alarm filters name the originator by token](#v100-alarm-filter).
+- **If you install the chart with Helm directly (not through `dcctl`) and your instance is served by ingress-nginx, set `ingress.controller=nginx` before you upgrade the chart.** The chart's default is now `gateway`. The new default renders a Gateway and its routes and removes the Ingress objects, and if the cluster has no Traefik `GatewayClass` the host stops answering. `dcctl` always names the front end itself, so it is not affected. See [Traefik is the default front end](#v100-front-end).
+- **If you apply the OpenTofu cluster root directly,** `enable_ingress_nginx` now defaults to `false`, so a new cluster is not given ingress-nginx. Set it to `true` to keep the controller on a cluster that runs it. `dcctl install` does this for you when it finds ingress-nginx in the cluster. The root still refuses to remove the controller while an Ingress of its class remains.
+- **Expect events to be held, not discarded, when a database cannot take writes.** This is a change in behaviour for anything that watched the dead-letter sinks during an outage. See [A database outage holds messages](#v100-store-hold) for the alerts that arrive with it.
+- **Going back.** See [Going back](#v100-going-back).
+
+#### A database outage holds messages instead of discarding them {#v100-store-hold}
+
+In a load test on a 32 GiB event-store volume, the volume filled when the event store's row count reached about 51 million. The primary crash-looped with "No space left on device", and the load harness counted 1,722,366 events that the broker had acknowledged and the platform had not stored. The cause was a delivery limit. When the event store refused a write, `event-management` left the message unacknowledged and the broker redelivered it every 60 seconds. On the fifth delivery, about four minutes in, it published the event to a sink that nothing reads and acknowledged it. An outage in which the database answered every statement at once with an error discarded the whole in-flight window, one window per four minutes, for as long as it lasted. Nothing alerted on it.
+
+- **`event-management` holds events the store refuses.** When the server says it cannot take writes (disk full, too many connections, read-only, an I/O error), or a connection error is confirmed by a failing `SELECT 1` probe, the writer keeps the batch unacknowledged, tells the broker it is still working on it, and writes again only after the store answers a probe. The backlog waits unread in the stream, where the existing backpressure gate refuses new events before the stream discards unread ones. A message that crashes its writer while the store answers is still set aside after its delivery budget, as before. The new metric is `devicechain_eventmanagement_persist_store_held_events`.
+- **The same hold covers the other consumers that discarded at the last delivery.** In `device-management`: the event resolver, `raise-alarm` and `device-reports`. In `command-delivery`: `command-responses`, `dead-letter-writeback` and `device-roster`. In `notification-management`: `alarm-notification`. In `update-management`: `device-reports` and `device-roster`. The live-state projection in `device-state` is left alone on purpose, because it can be rebuilt from the stream; its ownership consumer holds. Each held consumer reports `devicechain_<service>_store_held_messages{consumer}`.
+- **A page is neither repeated nor forgotten.** The writes that follow a sent notification (the notification record, and dropping what quiet hours held) are now held in place and re-run when the store answers. Only the write is retried; the send is not repeated. A webhook or SMTP send cannot be exactly-once: if the service stops between the send and the write, the record is lost, and the loss is logged.
+- **Each restart of a holding service uses one of a message's five deliveries.** A hold that outlives several restarts can still reach the last delivery.
+- **Five new alerts.** `DatabaseVolumeFillsWithinDay` (warning) fires when an event-store volume with less than 80% free will be full within 24 hours at its rate over the last two hours. `DatabaseVolumeCritical` (critical) fires when any database volume is over 95% full. `EventStoreRefusingWrites` (critical) fires when `event-management` is holding events its database refused. `EventPersistBacklogGrowing` (warning) fires when the backlog is above 1,000 and has risen steadily for ten minutes. `ConsumerHoldingForDatabase` (critical, by service and consumer) covers the other services. The existing volume and JetStream alerts are unchanged. See [When the event store cannot take writes](./observability.md#event-store-down) and [When another service's database cannot take writes](./observability.md#service-store-down).
+- **Three new persist metrics** give latency per stored row: `persist_rows_total`, `persist_batch_rows` and `persist_commit_duration_seconds` (1 ms to 2.5 s buckets). `persist_duration_seconds` is unchanged; it is per message and includes the batch wait, so it rises with the number of rows in a commit.
+- **Sizing guidance.** An event-store row measured about 600 bytes, uncompressed. [Sizing the event store](./tuning-an-instance.md#event-store-sizing) gives the multiplier that calculated metrics add, retention and compression, and how to expand the volume online.
+
+The hold was exercised end to end on a kind cluster, with the event store made read-only for seven minutes under 200 events per second of QoS 1 MQTT. Twice, every one of the 144,000 events was stored once, and none of the four dead-letter sinks gained a message. The same outage against the build from just before the hold lost about 37,500 of them. That comparison runs as `hack/outage-rig.sh`. A slow-failing outage (connections that hang rather than fail) throttles the writers instead of exhausting deliveries, so how much the earlier build lost depended on its shape; the hold covers both.
+
+The limit of this change: an event the broker has acknowledged to an MQTT device but that is still in the capture stream can be evicted when that stream is full, unless fail-closed MQTT acknowledgement is on. See [Known issues](#v100-known-issues).
+
+#### Detection is faster, and a recreated device can raise again {#v100-detection}
+
+- **A detection is published within a tick.** A fired detection used to wait for the next checkpoint (10 seconds by default) before it went to the reaction stage, so on a quiet stream a rule's alarm and its `sendCommand` came 0 to 10 seconds after the reading. The alarm and the command were always written within milliseconds of each other. Pending detections are now published on every tick. The early publish commits and acknowledges nothing; after a crash the same detections are derived again with the same identity, and the stream's duplicate window collapses them.
+- **A device deleted and recreated with the same token raises alarms again.** The engine kept its raised latch, cursors, windows and timers for a token after the device was deleted, so the recreated device's first reading in breach found the rule already latched and raised nothing until it crossed out of the condition and back. The state is now dropped when the device is deleted, and reconciled at the start of every leadership term from the durable roster, so a deletion that was queued when a term ended is covered too.
+- **Rule fire counts are statistics, not a floor.** The detection-engine page said a count inflated by replay should be read as a lower bound. It can read high after a replay, and the rule-health counters can also fall short, so neither bound holds. Use the alarms and commands, collapsed by identity, for an exact account. A row stored once is also not proof of one physical action, because delivery to a device or a receiver can repeat.
+
+#### Measurements that are dropped are now counted {#v100-measurement-drops}
+
+A device that publishes a text value next to valid readings, for example `status_text` of `"ok"` beside `battery` of 50, is acknowledged and the valid readings are stored; the text entry was dropped with only a warning in the `device-management` log. The counter `resolve_measurement_dropped_total{reason}` now counts these, with the reasons `undeclared_non_numeric`, `undeclared_unstorable` and `declared_not_storable`. The warning is logged once per tenant, device, metric and reason, and says the rest of the event was stored. The contract is unchanged: the event is not rejected, and a declared metric with a wrongly typed value is still dead-lettered. A true/false value becomes 1 or 0 only for a metric declared boolean.
+
+#### Alarm filters name the originator by token {#v100-alarm-filter}
+
+Every other token reference on the GraphQL surface is named `...Token`, and `Alarm`, `AlarmEvent` and `AlarmState` expose `originatorToken`, but the alarm filters took `originator`, so a script that reused a field name as a filter name errored. The filters now match:
+
+| Input | Before | Now |
+| --- | --- | --- |
+| `AlarmSearchCriteria` | `originator` | `originatorToken` |
+| `AlarmCountCriteria` | `originator` | `originatorToken` |
+| `Subscription.alarmStream` argument | `originator` | `originatorToken` |
+
+`originatorType` is unchanged and is still required when a token is given. The three removals are declared in the GraphQL compatibility gate's breaks file. A typed client regenerated from the schema fails to compile until it uses the new name.
+
+#### Traefik is the default front end; ingress-nginx is deprecated {#v100-front-end}
+
+The Kubernetes project has retired ingress-nginx. A new cluster is now served by Traefik and the Gateway API alone, and ingress-nginx is deprecated. Nothing moves silently: `dcctl` names the front end explicitly, so the chart default affects only installs made with Helm directly.
+
+- **A cluster that only has ingress-nginx** keeps serving its instances from it, and `dcctl upgrade` prints a deprecation warning on every run.
+- **A cluster that has both controllers** is unchanged from `v0.26.0` and `v0.27.0`. An instance gets a Gateway beside its Ingress objects, moving DNS is yours to do, and `--drop-legacy-ingress` and `--remove-legacy-ingress` stay guarded.
+- **A recorded `--ingress-controller nginx` choice is kept** across upgrades.
+- **`dcctl install` over a cluster that has ingress-nginx keeps it.** It passes `enable_ingress_nginx=true` so that the new default cannot read as a removal.
+- **The `nginx` choice is kept for one more minor release.** Use that time to [move the instance to Traefik](./ingress-cutover.md).
+
+#### Installing and running `dcctl` {#v100-dcctl}
+
+Found by installing from the public release on a clean Windows machine with Docker Desktop.
+
+- **`dcctl preflight` checks host ports 80, 443 and 1883.** A port another container holds fails the check, before `dcctl install` fails with Docker's own message, and the check names the holder. A cluster that already holds them passes. Docker Desktop is no longer reported as unsuitable, and a missing current context before the first install is informational.
+- **Preflight checks disk on Windows and macOS.** It checks the free space of the volume that holds `dcctl` state and Docker Desktop's disk image (a warning under 40 GiB, a failure under 20 GiB) and prints Docker's own disk usage. Docker Desktop's VM limit cannot be read from the command line, so the output says to confirm it.
+- **The printed Console URL and the MQTT address of `dcctl sim create` come from the ports the kind control-plane container actually publishes.** When they cannot be determined, the earlier text is printed.
+- **A killed `dcctl bootstrap` can be re-run.** A run killed in the infrastructure step left an escrow artifact that needed `--restore-root-key` to finish. The re-run now adopts the artifact when it names the instance, the instance's credential Secret is in the cluster and the passphrase opens it. Any other case refuses as before. A stale-lock refusal now says when the holder is a process on this machine that is no longer running.
+- **`dcctl install` with no terminal and no `--yes`** no longer reports that creation was declined.
+- **`dc-simulator` is attached to every release,** beside `dcctl` and `dc-edge-agent`, for Linux, macOS and Windows on `amd64` and `arm64`, with checksums and provenance. `dcctl sim run --simulator ./dc-simulator` no longer needs a Go compiler, and `dc-simulator -version` reports the release.
+
+#### Dashboards {#v100-dashboards}
+
+- **The board generated from a device type's profile is fixed in four ways.** It draws one chart per unit instead of every measurement on one axis (a measurement with no unit gets its own chart; at most four charts and four series per chart). Its device selector offers only devices of that type, through a new optional `candidates.deviceType` filter on device slots. The dashboard token is filled in on its own instead of blocking Create on the placeholder. And a command button shows no form and no Send button to a viewer who lacks `command:write`; it shows the reason and keeps the read-only history.
+- **A customer-scoped viewer no longer triggers refused calls.** Opening a dashboard made one refused `anchorDevices` call for every area and asset anchor before retrying without a relationship type. The viewer's scope is now read from the access token, and no relationship type is sent. The server is unchanged, so nothing a scoped member can see widens.
+
+#### Smaller changes {#v100-smaller}
+
+- **`update-management` says how to configure the object store.** The refusal `OBJECT_STORE_NOT_CONFIGURED` on `createArtifact` now names `dcctl bootstrap --object-store filesystem|s3` and the chart value `instance.config.infrastructure.blob.backend`.
+- **Over-the-air updates are documented against what was validated.** Managed updates are MQTT only, LwM2M devices are updated by ordinary commands, Sparkplug defines no firmware update, and waves, canaries and schedules are not in 1.0. A repeatable rig now covers a signature that does not verify, a digest mismatch at upload, a resumed download, an offline assignment, a cancel, a deadline and a paused rollout.
+- **The credential type vocabulary is frozen** by a test with a negative control, and six expired compatibility break declarations were removed.
+- **New guides and examples.** A [feature tour](../quickstart/feature-tour.md) walks the whole path from a device type to a customer user who sees only their own device, and runs for a second site by changing one parameters file. `examples/migration-pilot` is a worked evaluation of moving from another platform, linked from the [migration guide](../guides/migrating-from-another-platform.md). Examples also cover a device that signs in with an X.509 certificate, ChirpStack uplinks, and a rule that raises an alarm and commands a device. The quickstart gains a step for getting `dcctl`, and says which host ports must be free and how to recover from a killed bootstrap.
+- **The Sitepulse and Towerpulse showcases show platform readings again.** In `v0.27.0` their live device cards never showed what the platform reported, because the shared observer built its measurement stream but never started it; the devices published normally. Rebuild the demo players from this release. `dcctl sim create --manifest towerpulse` now provisions its own showcase tier, with calculated metrics enabled for that tier only; calculated metrics stay off in every default tier.
+- **The Spanish translations are tracked for freshness** against the English pages, as the Chinese ones already were.
+
+#### Going back {#v100-going-back}
+
+No migration runs in this release, so nothing in a database needs undoing. Roll forward when you can: a failed upgrade is fixed by running `dcctl upgrade` again. If you go back to `v0.27.0`, a GraphQL client that was changed to send `originatorToken` must be reverted with it.
+
+#### Known issues {#v100-known-issues}
+
+- **Fail-closed MQTT acknowledgement is off by default,** as in `v0.24.0` through `v0.27.0`. With it off, an event the broker has acknowledged can still be lost if the capture stream fills. The [MQTT transport](../reference/transport-matrix.md#mqtt--the-platform-broker) states the measured limits and the loss bounds with it off and on.
+- **A change to the broker's configuration still disconnects the devices the auth callout admitted,** until the broker library carries the upstream fix. A certificate renewal does not.
+- **Two paths are not covered by the hold.** A message the reader had already fetched ahead of a holding writer, and that is older than half the ack wait, is dropped unacknowledged and uses a delivery, and the recorder of messages that reach their last delivery may write a letter for it before a writer holds it. The recorder's re-publish is not covered either.
 
 ### v0.27.0 — devices sign in by certificate, and Sparkplug commands work {#v0270-upgrade}
 

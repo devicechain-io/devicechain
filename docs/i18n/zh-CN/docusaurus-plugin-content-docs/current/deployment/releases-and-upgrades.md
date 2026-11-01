@@ -36,9 +36,9 @@ Operator 是每集群一个控制器，由集群上的所有实例共用，因�
 
 ## 1.0 之前的稳定性 {#pre-10-stability}
 
-:::warning DeviceChain 尚未达到 1.0
+:::warning 本节描述 v1.0.0 之前的发布
 
-在 **v1.0.0** 之前，任何发布，包括补丁发布，都可能改变 API、Schema 或行为，不提供兼容层。
+`v1.0.0` 是首个稳定版本，[版本与升级策略](./versioning-policy.md)自该版本起适用。在 **v1.0.0** 之前，任何发布，包括补丁发布，都可能改变 API、Schema 或行为，不提供兼容层。
 这是有意的：数据模型仍在稳定过程中，我们更倾向于干净切换，而非永久维护兼容层。
 
 **每项破坏性变更都会列在对应发布说明最前面。升级前务必阅读。**
@@ -492,6 +492,109 @@ dcctl bootstrap local devicechain
 ## 近期版本 {#recent-releases}
 
 最近三个次版本的说明完整保留，按从新到旧排列。
+
+### v1.0.0：首个稳定版本，数据库故障时事件被保留，Traefik 成为默认入口 {#v100-upgrade}
+
+`v1.0.0` 是首个稳定版本。它是从 `v0.27.0` 起的原地升级：先对集群运行 `dcctl install`，再对每个实例运行一次 `dcctl upgrade`，方法见[v0.17.0 的说明](https://github.com/devicechain-io/devicechain/blob/v0.17.0/docs/docs/deployment/releases-and-upgrades.md#v0170-upgrade)。请给 `dcctl install` 传入集群安装时使用的设置（如 `--kube-context`、`--ha`、`--compact` 和 `--database-node-selector`），以及 `--version`。本版本不运行任何迁移，也不改写任何行，因此除升级本身外没有数据步骤。如果从 `v0.26.0` 或更早版本升级，请先阅读 [`v0.27.0` 的说明](#v0270-upgrade)，并在其中使用 `--version v1.0.0`。由 `v0.16.0` 或更早版本创建的实例仍然[低于升级下限](#pre-declaration-recreate)，需要重建而不是升级。
+
+```bash
+dcctl install local --version v1.0.0
+dcctl upgrade local devicechain --version v1.0.0 --dry-run
+dcctl upgrade local devicechain --version v1.0.0
+```
+
+从本版本起适用[版本与升级策略](./versioning-policy.md)：其中列为受保护的接口，只在主版本中发生不兼容变更。CI 中的检查会把每个受保护的接口（设备线路格式、GraphQL Schema、`dcctl` 命令与标志、npm 包和 C# SDK）与上一个发布比较，任何破坏性变更都必须写进检查所读取的文件。
+
+需要采取的行动，按执行顺序如下：
+
+- **把告警过滤器 `originator` 改名为 `originatorToken`。** 在 `device-management` 的 GraphQL Schema 中，`AlarmSearchCriteria`、`AlarmCountCriteria` 和 `Subscription.alarmStream` 此前接受 `originator`，而 `Alarm`、`AlarmEvent` 和 `AlarmState` 早已返回 `originatorToken`。这三个输入现在接受 `originatorToken`，且没有别名：仍然发送 `originator` 的请求会被拒绝。MCP 工具 `list_alarms` 也改为接受 `originatorToken`。控制台和仪表板包已经更新。参见[告警过滤器用令牌指明发起者](#v100-alarm-filter)。
+- **如果直接用 Helm（而非 `dcctl`）安装 chart，且你的实例由 ingress-nginx 提供服务，请在升级 chart 之前设置 `ingress.controller=nginx`。** chart 的默认值现在是 `gateway`。新的默认值会渲染 Gateway 及其路由并删除 Ingress 对象，如果集群没有 Traefik 的 `GatewayClass`，该主机将不再响应。`dcctl` 总是自行指明入口，因此不受影响。参见[Traefik 是默认入口](#v100-front-end)。
+- **如果你直接应用 OpenTofu 的集群根，** `enable_ingress_nginx` 现在默认为 `false`，新集群不会再安装 ingress-nginx。设为 `true` 可在已运行该控制器的集群上保留它。`dcctl install` 在集群中发现 ingress-nginx 时会替你这样做。只要还有属于其类的 Ingress，该根仍然拒绝移除控制器。
+- **当数据库无法接受写入时，事件会被保留而不是丢弃。** 这对在故障期间监视死信去向的任何东西都是行为变化。随之而来的告警见[数据库故障会保留消息](#v100-store-hold)。
+- **回退。** 参见[回退](#v100-going-back)。
+
+#### 数据库故障会保留消息，而不是丢弃 {#v100-store-hold}
+
+在一次使用 32 GiB 事件存储卷的负载测试中，卷在事件存储的行数达到约 5100 万时被写满。主库陷入崩溃重启循环，报 “No space left on device”，负载工具统计到 1,722,366 个事件已被代理确认、但平台没有存储。原因是投递次数上限。事件存储拒绝写入时，`event-management` 让消息保持未确认，代理每 60 秒重新投递一次。到第五次投递（约四分钟后），它把事件发布到一个无人读取的去处并将其确认。如果数据库对每条语句都立即返回错误，整个在途窗口都会被丢弃，故障持续多久，就每四分钟丢弃一个窗口。没有任何告警。
+
+- **`event-management` 保留存储拒绝的事件。** 当服务器表示无法接受写入（磁盘已满、连接过多、只读、I/O 错误），或连接类错误经 `SELECT 1` 探测失败确认时，写入器会让该批消息保持未确认，告知代理仍在处理，并且只在存储通过探测应答后才再次写入。积压会在流中等待、不被读取，现有的背压闸门会在流丢弃未读消息之前拒绝新事件。存储正常应答时让写入器崩溃的消息，仍像以前一样在用完投递预算后被搁置。新增指标为 `devicechain_eventmanagement_persist_store_held_events`。
+- **同样的保留覆盖其他在最后一次投递时丢弃消息的消费者。** `device-management` 中：事件解析器、`raise-alarm` 和 `device-reports`。`command-delivery` 中：`command-responses`、`dead-letter-writeback` 和 `device-roster`。`notification-management` 中：`alarm-notification`。`update-management` 中：`device-reports` 和 `device-roster`。`device-state` 中的实时状态投影有意不处理，因为它可以从流重建；其所有权消费者会保留。每个保留中的消费者都会上报 `devicechain_<service>_store_held_messages{consumer}`。
+- **通知既不会重复，也不会遗漏。** 已发送通知之后的写入（通知记录，以及清除静默时段所保留的内容）现在会原地保留，并在存储应答后重新执行。只重试写入，不重复发送。Webhook 或 SMTP 发送无法做到恰好一次：如果服务在发送与写入之间停止，记录会丢失，并且会写入日志。
+- **保留中的服务每重启一次，就消耗一条消息五次投递中的一次。** 跨越多次重启的保留仍可能走到最后一次投递。
+- **五个新告警。** 事件存储卷剩余空间不足 80%，且按最近两小时的速率将在 24 小时内写满时，触发 `DatabaseVolumeFillsWithinDay`（警告）。任何数据库卷使用超过 95% 时触发 `DatabaseVolumeCritical`（严重）。`event-management` 正在保留其数据库拒绝的事件时触发 `EventStoreRefusingWrites`（严重）。积压高于 1,000 且持续十分钟稳步上升时触发 `EventPersistBacklogGrowing`（警告）。`ConsumerHoldingForDatabase`（严重，按服务和消费者）覆盖其他服务。现有的卷告警和 JetStream 告警不变。参见[事件存储无法接受写入时](./observability.md#event-store-down)和[其他服务的数据库无法接受写入时](./observability.md#service-store-down)。
+- **三个新的持久化指标**给出每个已存储行的延迟：`persist_rows_total`、`persist_batch_rows` 和 `persist_commit_duration_seconds`（1 ms 到 2.5 s 的分桶）。`persist_duration_seconds` 不变；它按消息计量并包含批次等待，因此会随一次提交中的行数上升。
+- **容量规划指引。** 一行事件存储数据实测约 600 字节（未压缩）。[事件存储容量规划](./tuning-an-instance.md#event-store-sizing)给出计算指标带来的倍数、保留期和压缩，以及如何在线扩容卷。
+
+这一保留机制在 kind 集群上做了端到端验证：事件存储被设为只读七分钟，同时以每秒 200 个事件的速率发送 QoS 1 MQTT。两次运行中，全部 144,000 个事件都恰好存储一次，四个死信去向均未增加任何消息。同样的故障下，保留机制之前的构建丢失了约 37,500 个。该对比以 `hack/outage-rig.sh` 运行。慢速失败的故障（连接挂起而不是报错）会使写入器变慢而不是耗尽投递次数，因此更早的构建丢失多少取决于故障形态；保留机制对两种情况都适用。
+
+这一变更的限制：代理已向 MQTT 设备确认、但仍在捕获流中的事件，在该流写满时仍可能被淘汰，除非开启了失败即关闭的 MQTT 确认。参见[已知问题](#v100-known-issues)。
+
+#### 检测更快，重建的设备可以再次触发告警 {#v100-detection}
+
+- **检测在一个周期内发布。** 触发的检测过去要等到下一个检查点（默认 10 秒）才进入反应阶段，所以在安静的流上，规则的告警及其 `sendCommand` 会在读数之后 0 到 10 秒才出现。告警与命令此前总是在几毫秒内先后写入。现在待发布的检测在每个周期都会发布。提前发布不提交也不确认任何内容；崩溃后，同样的检测会以同样的标识重新推导，流的重复窗口会将其合并。
+- **删除后以相同令牌重建的设备可以再次触发告警。** 设备被删除后，引擎仍保留该令牌的已触发锁存、游标、窗口和定时器，所以重建后的设备的第一个越限读数发现规则已被锁存，在其离开条件再重新进入之前不会触发任何告警。现在设备被删除时会清除该状态，并在每个领导任期开始时依据持久的花名册进行对账，因此任期结束时仍在排队的删除也能覆盖。
+- **规则触发次数是统计值，不是下限。** 检测引擎页面曾说，被重放放大的计数应当作下限。重放之后它可能偏高，规则健康计数器也可能偏低，所以两个边界都不成立。要得到准确的账目，请使用按标识合并后的告警和命令。另外，一行只存储一次，并不证明只发生了一次实际动作，因为向设备或接收方的投递可能重复。
+
+#### 被丢弃的测量值现在会计数 {#v100-measurement-drops}
+
+设备在有效读数旁发布一个文本值，例如 `status_text` 为 `"ok"`、`battery` 为 50，该事件会被确认，有效读数会被存储；文本条目过去被丢弃，只在 `device-management` 日志中留下一条警告。计数器 `resolve_measurement_dropped_total{reason}` 现在对此计数，原因为 `undeclared_non_numeric`、`undeclared_unstorable` 和 `declared_not_storable`。警告按租户、设备、指标和原因各记录一次，并说明事件的其余部分已存储。契约不变：事件不会被拒绝，类型错误的已声明指标仍会进入死信。真/假值只对声明为布尔的指标转换为 1 或 0。
+
+#### 告警过滤器用令牌指明发起者 {#v100-alarm-filter}
+
+GraphQL 接口上其他所有令牌引用都叫 `...Token`，`Alarm`、`AlarmEvent` 和 `AlarmState` 也暴露 `originatorToken`，但告警过滤器却接受 `originator`，因此把字段名当过滤器名复用的脚本会报错。现在过滤器与之一致：
+
+| 输入 | 之前 | 现在 |
+| --- | --- | --- |
+| `AlarmSearchCriteria` | `originator` | `originatorToken` |
+| `AlarmCountCriteria` | `originator` | `originatorToken` |
+| `Subscription.alarmStream` 参数 | `originator` | `originatorToken` |
+
+`originatorType` 不变，提供令牌时仍然必填。这三处移除已在 GraphQL 兼容性检查的破坏性变更文件中声明。由 Schema 重新生成的强类型客户端在改用新名称之前无法编译。
+
+#### Traefik 是默认入口，ingress-nginx 已弃用 {#v100-front-end}
+
+Kubernetes 项目已停用 ingress-nginx。新集群现在仅由 Traefik 和 Gateway API 提供服务，ingress-nginx 已弃用。不会有任何悄然迁移：`dcctl` 明确指定入口，因此 chart 的默认值只影响直接用 Helm 做的安装。
+
+- **只有 ingress-nginx 的集群** 继续用它为实例提供服务，`dcctl upgrade` 每次运行都会打印弃用警告。
+- **同时有两个控制器的集群** 与 `v0.26.0` 和 `v0.27.0` 相比没有变化。实例会在其 Ingress 对象旁获得一个 Gateway，迁移 DNS 由你负责，`--drop-legacy-ingress` 和 `--remove-legacy-ingress` 仍受保护。
+- **已记录的 `--ingress-controller nginx` 选择会在升级中保留。**
+- **在已有 ingress-nginx 的集群上运行 `dcctl install` 会保留它。** 它会传入 `enable_ingress_nginx=true`，使新的默认值不会被当作移除。
+- **`nginx` 选项再保留一个次版本。** 请利用这段时间[把实例迁移到 Traefik](./ingress-cutover.md)。
+
+#### 安装与运行 `dcctl` {#v100-dcctl}
+
+这些问题是在一台干净的、装有 Docker Desktop 的 Windows 机器上，从公开发布安装时发现的。
+
+- **`dcctl preflight` 检查主机端口 80、443 和 1883。** 被其他容器占用的端口会使检查失败，早于 `dcctl install` 以 Docker 自己的消息失败，并且检查会指出占用者。已持有这些端口的集群通过检查。Docker Desktop 不再被报告为不适用，首次安装前没有当前上下文仅为提示。
+- **Preflight 在 Windows 和 macOS 上检查磁盘。** 它检查保存 `dcctl` 状态和 Docker Desktop 磁盘映像的卷的可用空间（低于 40 GiB 警告，低于 20 GiB 失败），并打印 Docker 自己的磁盘用量。Docker Desktop 的虚拟机上限无法从命令行读取，所以输出会提示你自行确认。
+- **打印的控制台 URL 和 `dcctl sim create` 的 MQTT 地址取自 kind 控制平面容器实际发布的端口。** 无法确定时，会打印此前的文字。
+- **被强制终止的 `dcctl bootstrap` 可以重新运行。** 在基础设施步骤中被终止的运行会留下托管（escrow）制品，需要 `--restore-root-key` 才能完成。现在重新运行会在该制品指明本实例、实例的凭据 Secret 已在集群中、且口令能打开它时采纳该制品。其他情况仍像以前一样拒绝。过期锁的拒绝信息现在会说明持有者何时是本机上已不再运行的进程。
+- **没有终端且没有 `--yes` 的 `dcctl install`** 不再报告创建被拒绝。
+- **`dc-simulator` 附在每个发布中，** 与 `dcctl` 和 `dc-edge-agent` 并列，覆盖 Linux、macOS 和 Windows 的 `amd64` 与 `arm64`，附校验和与来源证明。`dcctl sim run --simulator ./dc-simulator` 不再需要 Go 编译器，`dc-simulator -version` 会报告发布版本。
+
+#### 仪表板 {#v100-dashboards}
+
+- **由设备类型的配置文件生成的看板修复了四处问题。** 它按单位各画一张图，而不是把所有测量值放在同一根轴上（没有单位的测量值单独一张图；每个看板最多四张图，每张图最多四个系列）。它的设备选择器只提供该类型的设备，这通过设备槽上新增的可选 `candidates.deviceType` 过滤器实现。仪表板令牌会自动填入，而不再因占位符而阻塞“创建”。缺少 `command:write` 的查看者看不到命令按钮的表单和“发送”按钮；界面会显示原因，并保留只读历史。
+- **限定到客户的查看者不再触发被拒绝的调用。** 打开仪表板时，每个区域和资产锚点都会先发起一次被拒绝的 `anchorDevices` 调用，再不带关系类型重试。现在会从访问令牌读取查看者的范围，不再发送关系类型。服务器不变，因此限定范围的成员能看到的内容没有扩大。
+
+#### 其他较小的变更 {#v100-smaller}
+
+- **`update-management` 说明如何配置对象存储。** `createArtifact` 上的拒绝 `OBJECT_STORE_NOT_CONFIGURED` 现在会指出 `dcctl bootstrap --object-store filesystem|s3` 和 chart 值 `instance.config.infrastructure.blob.backend`。
+- **空中升级的文档以已验证的内容为准。** 受管升级仅支持 MQTT，LwM2M 设备用普通命令升级，Sparkplug 没有定义固件升级，分批、金丝雀和计划在 1.0 中不提供。一套可重复的测试台现在覆盖签名验证失败、上传时摘要不匹配、续传下载、离线分配、取消、截止时间和暂停的发布。
+- **凭据类型词汇表已冻结**，由带负向对照的测试保证，并移除了六条已过期的兼容性破坏声明。
+- **新的指南和示例。** [功能导览](../quickstart/feature-tour.md)走完从设备类型到只看到自己设备的客户用户的整条路径，只需更改一个参数文件即可为第二个站点运行。`examples/migration-pilot` 是迁移自其他平台的实操评估，链接自[迁移指南](../guides/migrating-from-another-platform.md)。其他示例涵盖使用 X.509 证书登录的设备、ChirpStack 上行消息，以及触发告警并向设备发送命令的规则。快速入门新增了获取 `dcctl` 的步骤，并说明了必须空闲的主机端口，以及如何从被强制终止的 bootstrap 中恢复。
+- **Sitepulse 和 Towerpulse 演示重新显示平台读数。** 在 `v0.27.0` 中，它们的实时设备卡片从未显示平台上报的内容，因为共享观察器创建了测量流却从未启动它；设备本身发布正常。请用此版本重新构建演示播放器。`dcctl sim create --manifest towerpulse` 现在会自行配置其演示层级，仅为该层级启用计算指标；所有默认层级中计算指标仍保持关闭。
+- **西班牙语翻译现在像中文一样**按新鲜度对照英文页面进行跟踪。
+
+#### 回退 {#v100-going-back}
+
+本版本不运行任何迁移，因此数据库中没有需要撤销的内容。请尽量向前走：升级失败后，再运行一次 `dcctl upgrade` 即可修复。如果回退到 `v0.27.0`，已改为发送 `originatorToken` 的 GraphQL 客户端也必须一并回退。
+
+#### 已知问题 {#v100-known-issues}
+
+- **失败即关闭的 MQTT 确认默认关闭，** 与 `v0.24.0` 到 `v0.27.0` 相同。关闭时，代理已确认的事件在捕获流写满时仍可能丢失。[MQTT 传输](../reference/transport-matrix.md#mqtt--the-platform-broker)说明了关闭与开启时的实测限制和丢失上界。
+- **更改代理配置仍会断开由认证调用放行的设备，** 直到代理库包含上游修复。证书续期不会。
+- **有两条路径不在保留机制的覆盖范围内。** 读取器已提前取到、且早于确认等待时间一半的消息，在写入器保留时会被不确认地丢弃并消耗一次投递，记录达到最后一次投递的消息的记录器可能在写入器保留它之前为其写入一封信。记录器的重新发布也不在覆盖范围内。
 
 ### v0.27.0：设备使用证书登录，Sparkplug 命令可用 {#v0270-upgrade}
 
