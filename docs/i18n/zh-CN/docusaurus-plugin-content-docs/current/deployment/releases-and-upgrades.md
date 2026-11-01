@@ -515,7 +515,7 @@ dcctl upgrade local devicechain --version v1.0.0
 
 #### 数据库故障会保留消息，而不是丢弃 {#v100-store-hold}
 
-在一次使用 32 GiB 事件存储卷的负载测试中，卷在约 5100 万行时被写满。主库陷入崩溃重启循环，报 “No space left on device”，负载工具统计到 1,722,366 个事件已被代理确认、但平台没有存储。原因是投递次数上限。事件存储拒绝写入时，`event-management` 让消息保持未确认，代理每 60 秒重新投递一次。到第五次投递（约四分钟后），它把事件发布到一个无人读取的去处并将其确认。如果数据库对每条语句都立即返回错误，整个在途窗口都会被丢弃，故障持续多久，就每四分钟丢弃一个窗口。没有任何告警。
+在一次使用 32 GiB 事件存储卷的负载测试中，卷在事件存储的行数达到约 5100 万时被写满。主库陷入崩溃重启循环，报 “No space left on device”，负载工具统计到 1,722,366 个事件已被代理确认、但平台没有存储。原因是投递次数上限。事件存储拒绝写入时，`event-management` 让消息保持未确认，代理每 60 秒重新投递一次。到第五次投递（约四分钟后），它把事件发布到一个无人读取的去处并将其确认。如果数据库对每条语句都立即返回错误，整个在途窗口都会被丢弃，故障持续多久，就每四分钟丢弃一个窗口。没有任何告警。
 
 - **`event-management` 保留存储拒绝的事件。** 当服务器表示无法接受写入（磁盘已满、连接过多、只读、I/O 错误），或连接类错误经 `SELECT 1` 探测失败确认时，写入器会让该批消息保持未确认，告知代理仍在处理，并且只在存储通过探测应答后才再次写入。积压会在流中等待、不被读取，现有的背压闸门会在流丢弃未读消息之前拒绝新事件。存储正常应答时让写入器崩溃的消息，仍像以前一样在用完投递预算后被搁置。新增指标为 `devicechain_eventmanagement_persist_store_held_events`。
 - **同样的保留覆盖其他在最后一次投递时丢弃消息的消费者。** `device-management` 中：事件解析器、`raise-alarm` 和 `device-reports`。`command-delivery` 中：`command-responses`、`dead-letter-writeback` 和 `device-roster`。`notification-management` 中：`alarm-notification`。`update-management` 中：`device-reports` 和 `device-roster`。`device-state` 中的实时状态投影有意不处理，因为它可以从流重建；其所有权消费者会保留。每个保留中的消费者都会上报 `devicechain_<service>_store_held_messages{consumer}`。
