@@ -45,9 +45,9 @@ procedimiento.
 
 ## Estabilidad previa a 1.0 {#pre-10-stability}
 
-:::warning DeviceChain es previo a 1.0
+:::warning Esta sección describe las versiones anteriores a la v1.0.0
 
-Hasta la **v1.0.0**, cualquier versión —incluida una versión de parche— puede cambiar APIs, esquemas o
+`v1.0.0` es la primera versión estable, y la [política de versiones y actualización](./versioning-policy.md) se aplica desde ella. Hasta la **v1.0.0**, cualquier versión —incluida una versión de parche— puede cambiar APIs, esquemas o
 comportamiento sin una capa de compatibilidad. Esto es deliberado: mientras el modelo de datos aún se
 está asentando, preferimos un cambio limpio antes que cargar con una capa de compatibilidad que
 tendríamos que mantener para siempre.
@@ -733,6 +733,108 @@ Cuando esté en una versión que registra una declaración, las actualizaciones 
 ## Versiones recientes {#recent-releases}
 
 Las tres versiones menores más recientes se documentan por completo, de la más nueva a la más antigua.
+
+### v1.0.0 — la primera versión estable: una caída de la base de datos retiene los eventos y Traefik es el acceso por defecto {#v100-upgrade}
+
+`v1.0.0` es la primera versión estable. Es una actualización in situ desde `v0.27.0`: `dcctl install` para el clúster y después un `dcctl upgrade` por cada instancia, como se describe [para v0.17.0](https://github.com/devicechain-io/devicechain/blob/v0.17.0/docs/i18n/es/docusaurus-plugin-content-docs/current/deployment/releases-and-upgrades.md#v0170-upgrade). Pasa a `dcctl install` los ajustes con los que se instaló el clúster, como `--kube-context`, `--ha`, `--compact` y `--database-node-selector`, además de `--version`. No se ejecuta ninguna migración y no se reescribe ninguna fila, así que no hay un paso de datos más allá de la propia actualización. Si vienes de `v0.26.0` o anterior, lee primero las [notas de `v0.27.0`](#v0270-upgrade) y síguelas con `--version v1.0.0`. Una instancia creada con `v0.16.0` o anterior sigue [por debajo del límite](#pre-declaration-recreate) y se recrea, no se actualiza.
+
+```bash
+dcctl install local --version v1.0.0
+dcctl upgrade local devicechain --version v1.0.0 --dry-run
+dcctl upgrade local devicechain --version v1.0.0
+```
+
+Desde esta versión se aplica la [política de versiones y actualización](./versioning-policy.md): las interfaces que lista como cubiertas cambian de forma incompatible solo en una versión mayor. Controles en CI comparan cada interfaz cubierta (los formatos de cable de los dispositivos, los esquemas GraphQL, los comandos y banderas de `dcctl`, los paquetes npm y el SDK de C#) con la versión anterior, y una ruptura debe declararse en un archivo que el control lee.
+
+Lo que exige actuar, en el orden en que hacerlo:
+
+- **Cambia el nombre del filtro de alarmas `originator` por `originatorToken`.** En el esquema GraphQL de `device-management`, `AlarmSearchCriteria`, `AlarmCountCriteria` y `Subscription.alarmStream` recibían `originator`, mientras que `Alarm`, `AlarmEvent` y `AlarmState` ya devolvían `originatorToken`. Las tres entradas ahora reciben `originatorToken` y no hay alias: una solicitud que siga enviando `originator` se rechaza. La herramienta MCP `list_alarms` también recibe `originatorToken`. La consola y los paquetes de paneles ya están actualizados. Consulta [Los filtros de alarmas nombran al originador por su token](#v100-alarm-filter).
+- **Si instalas el chart directamente con Helm (no con `dcctl`) y tu instancia la sirve ingress-nginx, define `ingress.controller=nginx` antes de actualizar el chart.** El valor por defecto del chart ahora es `gateway`. El nuevo valor por defecto genera un Gateway y sus rutas y elimina los objetos Ingress, y si el clúster no tiene un `GatewayClass` de Traefik, el host deja de responder. `dcctl` siempre indica por sí mismo el acceso, así que no le afecta. Consulta [Traefik es el acceso por defecto](#v100-front-end).
+- **Si aplicas directamente la raíz de OpenTofu del clúster,** `enable_ingress_nginx` ahora vale `false` por defecto, de modo que un clúster nuevo no recibe ingress-nginx. Ponlo en `true` para conservar el controlador en un clúster que ya lo ejecuta. `dcctl install` lo hace por ti cuando encuentra ingress-nginx en el clúster. La raíz sigue negándose a quitar el controlador mientras quede un Ingress de su clase.
+- **Espera que los eventos se retengan, no que se descarten, cuando una base de datos no puede aceptar escrituras.** Es un cambio de comportamiento para todo lo que vigilaba los destinos de mensajes fallidos durante una caída. Consulta [Una caída de la base de datos retiene los mensajes](#v100-store-hold) para ver las alertas que llegan con él.
+- **Volver atrás.** Consulta [Volver atrás](#v100-going-back).
+
+#### Una caída de la base de datos retiene los mensajes en lugar de descartarlos {#v100-store-hold}
+
+En una prueba de carga con un volumen de 32 GiB para el almacén de eventos, el volumen se llenó con unos 51 millones de filas. El primario entró en un bucle de reinicios con «No space left on device», y el arnés de carga contó 1.722.366 eventos que el broker había confirmado y la plataforma no había almacenado. La causa era un límite de entregas. Cuando el almacén de eventos rechazaba una escritura, `event-management` dejaba el mensaje sin confirmar y el broker lo reentregaba cada 60 segundos. En la quinta entrega, unos cuatro minutos después, publicaba el evento en un destino que nadie lee y lo confirmaba. Una caída en la que la base de datos respondía a cada sentencia de inmediato con un error descartaba toda la ventana en vuelo, una ventana cada cuatro minutos, mientras durara. Nada lo alertaba.
+
+- **`event-management` retiene los eventos que el almacén rechaza.** Cuando el servidor dice que no puede aceptar escrituras (disco lleno, demasiadas conexiones, solo lectura, un error de E/S), o un error de conexión se confirma con una sonda `SELECT 1` que falla, el escritor mantiene el lote sin confirmar, avisa al broker de que sigue trabajando en él y vuelve a escribir solo cuando el almacén responde a una sonda. La acumulación espera sin leer en el flujo, donde la compuerta de contrapresión existente rechaza eventos nuevos antes de que el flujo descarte los no leídos. Un mensaje que hace fallar a su escritor mientras el almacén responde se aparta tras agotar su presupuesto de entregas, como antes. La nueva métrica es `devicechain_eventmanagement_persist_store_held_events`.
+- **La misma retención cubre a los demás consumidores que descartaban en la última entrega.** En `device-management`: el resolvedor de eventos, `raise-alarm` y `device-reports`. En `command-delivery`: `command-responses`, `dead-letter-writeback` y `device-roster`. En `notification-management`: `alarm-notification`. En `update-management`: `device-reports` y `device-roster`. La proyección del estado en vivo de `device-state` se deja como está a propósito, porque puede reconstruirse desde el flujo; su consumidor de propiedad sí retiene. Cada consumidor que retiene informa `devicechain_<service>_store_held_messages{consumer}`.
+- **Un aviso ni se repite ni se olvida.** Las escrituras que siguen a una notificación enviada (el registro de la notificación y quitar lo que retenían las horas de silencio) ahora se retienen en su sitio y se repiten cuando el almacén responde. Solo se reintenta la escritura; el envío no se repite. Un envío por webhook o SMTP no puede ser exactamente una vez: si el servicio se detiene entre el envío y la escritura, el registro se pierde y la pérdida se registra en el log.
+- **Cada reinicio de un servicio que retiene consume una de las cinco entregas de un mensaje.** Una retención que sobrevive a varios reinicios aún puede llegar a la última entrega.
+- **Cinco alertas nuevas.** `DatabaseVolumeFillsWithinDay` (advertencia) salta cuando un volumen del almacén de eventos con menos del 80 % libre estará lleno en 24 horas al ritmo de las últimas dos horas. `DatabaseVolumeCritical` (crítica) salta cuando cualquier volumen de base de datos supera el 95 % de uso. `EventStoreRefusingWrites` (crítica) salta cuando `event-management` retiene eventos que su base de datos rechazó. `EventPersistBacklogGrowing` (advertencia) salta cuando la acumulación supera 1.000 y ha crecido de forma sostenida durante diez minutos. `ConsumerHoldingForDatabase` (crítica, por servicio y consumidor) cubre los demás servicios. Las alertas existentes de volumen y de JetStream no cambian. Consulta [Cuando el almacén de eventos no puede aceptar escrituras](./observability.md#event-store-down) y [Cuando la base de datos de otro servicio no puede aceptar escrituras](./observability.md#service-store-down).
+- **Tres métricas de persistencia nuevas** dan la latencia por fila almacenada: `persist_rows_total`, `persist_batch_rows` y `persist_commit_duration_seconds` (cubos de 1 ms a 2,5 s). `persist_duration_seconds` no cambia; es por mensaje e incluye la espera del lote, por lo que sube con el número de filas de una confirmación.
+- **Guía de dimensionamiento.** Una fila del almacén de eventos midió unos 600 bytes sin comprimir. [Dimensionar el almacén de eventos](./tuning-an-instance.md#event-store-sizing) da el multiplicador que añaden las métricas calculadas, la retención y la compresión, y cómo ampliar el volumen en caliente.
+
+La retención se probó de extremo a extremo en un clúster kind, con el almacén de eventos en solo lectura durante siete minutos bajo 200 eventos por segundo de MQTT QoS 1. Dos veces, cada uno de los 144.000 eventos se almacenó una sola vez y ninguno de los cuatro destinos de mensajes fallidos recibió un mensaje. La misma caída contra la compilación anterior a la retención perdió unos 37.500. Esa comparación se ejecuta como `hack/outage-rig.sh`. Una caída de fallo lento (conexiones que se cuelgan en lugar de fallar) frena a los escritores en vez de agotar las entregas, de modo que lo que perdía la compilación anterior dependía de su forma; la retención cubre ambos casos.
+
+El límite de este cambio: un evento que el broker ha confirmado a un dispositivo MQTT pero que sigue en el flujo de captura puede expulsarse cuando ese flujo está lleno, salvo que la confirmación MQTT con cierre ante fallo esté activada. Consulta [Problemas conocidos](#v100-known-issues).
+
+#### La detección es más rápida y un dispositivo recreado puede volver a generar alarmas {#v100-detection}
+
+- **Una detección se publica en un tick.** Una detección disparada esperaba hasta el siguiente punto de control (10 segundos por defecto) antes de pasar a la etapa de reacción, así que en un flujo tranquilo la alarma de una regla y su `sendCommand` llegaban entre 0 y 10 segundos después de la lectura. La alarma y el comando siempre se escribían con milisegundos de diferencia. Ahora las detecciones pendientes se publican en cada tick. La publicación anticipada no confirma ni reconoce nada; tras una caída, las mismas detecciones se derivan de nuevo con la misma identidad y la ventana de duplicados del flujo las colapsa.
+- **Un dispositivo eliminado y recreado con el mismo token vuelve a generar alarmas.** El motor conservaba el pestillo de alarma, los cursores, las ventanas y los temporizadores de un token después de eliminar el dispositivo, de modo que la primera lectura en incumplimiento del dispositivo recreado encontraba la regla ya activada y no generaba nada hasta que salía de la condición y volvía a entrar. Ahora el estado se descarta al eliminar el dispositivo y se reconcilia al inicio de cada mandato de liderazgo a partir del registro duradero, con lo que también se cubre una eliminación que estaba en cola cuando terminó un mandato.
+- **Los recuentos de disparos de reglas son estadísticas, no un mínimo.** La página del motor de detección decía que un recuento inflado por una reproducción debía leerse como cota inferior. Puede leerse alto tras una reproducción, y los contadores de salud de las reglas también pueden quedarse cortos, así que ninguna cota se sostiene. Usa las alarmas y los comandos, colapsados por identidad, para una cuenta exacta. Además, una fila almacenada una vez no prueba una única acción física, porque la entrega a un dispositivo o a un receptor puede repetirse.
+
+#### Las mediciones descartadas ahora se cuentan {#v100-measurement-drops}
+
+Un dispositivo que publica un valor de texto junto a lecturas válidas, por ejemplo `status_text` con `"ok"` junto a `battery` con 50, recibe confirmación y las lecturas válidas se almacenan; la entrada de texto se descartaba con solo una advertencia en el log de `device-management`. El contador `resolve_measurement_dropped_total{reason}` ahora las cuenta, con los motivos `undeclared_non_numeric`, `undeclared_unstorable` y `declared_not_storable`. La advertencia se registra una vez por tenant, dispositivo, métrica y motivo, y dice que el resto del evento se almacenó. El contrato no cambia: el evento no se rechaza, y una métrica declarada con un valor de tipo incorrecto sigue enviándose a mensajes fallidos. Un valor verdadero/falso pasa a 1 o 0 solo para una métrica declarada booleana.
+
+#### Los filtros de alarmas nombran al originador por su token {#v100-alarm-filter}
+
+Toda otra referencia a un token en la superficie GraphQL se llama `...Token`, y `Alarm`, `AlarmEvent` y `AlarmState` exponen `originatorToken`, pero los filtros de alarmas recibían `originator`, así que un script que reutilizaba el nombre de un campo como nombre de filtro fallaba. Ahora los filtros coinciden:
+
+| Entrada | Antes | Ahora |
+| --- | --- | --- |
+| `AlarmSearchCriteria` | `originator` | `originatorToken` |
+| `AlarmCountCriteria` | `originator` | `originatorToken` |
+| Argumento de `Subscription.alarmStream` | `originator` | `originatorToken` |
+
+`originatorType` no cambia y sigue siendo obligatorio cuando se da un token. Las tres eliminaciones están declaradas en el archivo de rupturas del control de compatibilidad de GraphQL. Un cliente tipado regenerado a partir del esquema no compila hasta que use el nombre nuevo.
+
+#### Traefik es el acceso por defecto; ingress-nginx queda obsoleto {#v100-front-end}
+
+El proyecto Kubernetes ha retirado ingress-nginx. Un clúster nuevo ahora lo sirven solo Traefik y la Gateway API, y ingress-nginx queda obsoleto. Nada se mueve en silencio: `dcctl` indica el acceso de forma explícita, así que el valor por defecto del chart solo afecta a las instalaciones hechas directamente con Helm.
+
+- **Un clúster que solo tiene ingress-nginx** sigue sirviendo sus instancias con él, y `dcctl upgrade` imprime un aviso de obsolescencia en cada ejecución.
+- **Un clúster que tiene ambos controladores** no cambia respecto a `v0.26.0` y `v0.27.0`. Una instancia recibe un Gateway junto a sus objetos Ingress, mover el DNS te corresponde a ti, y `--drop-legacy-ingress` y `--remove-legacy-ingress` siguen protegidos.
+- **Una elección registrada de `--ingress-controller nginx` se conserva** entre actualizaciones.
+- **`dcctl install` sobre un clúster que tiene ingress-nginx lo conserva.** Pasa `enable_ingress_nginx=true` para que el nuevo valor por defecto no se lea como una eliminación.
+- **La opción `nginx` se mantiene una versión menor más.** Aprovecha ese tiempo para [mover la instancia a Traefik](./ingress-cutover.md).
+
+#### Instalar y ejecutar `dcctl` {#v100-dcctl}
+
+Hallado al instalar desde la versión pública en una máquina Windows limpia con Docker Desktop.
+
+- **`dcctl preflight` comprueba los puertos del host 80, 443 y 1883.** Un puerto que mantiene otro contenedor hace fallar la comprobación, antes de que `dcctl install` falle con el mensaje propio de Docker, y la comprobación nombra quién lo tiene. Un clúster que ya los tiene pasa la comprobación. Docker Desktop ya no se informa como inadecuado, y la ausencia de contexto actual antes de la primera instalación es informativa.
+- **Preflight comprueba el disco en Windows y macOS.** Comprueba el espacio libre del volumen que contiene el estado de `dcctl` y la imagen de disco de Docker Desktop (advertencia por debajo de 40 GiB, fallo por debajo de 20 GiB) e imprime el uso de disco de Docker. El límite de la VM de Docker Desktop no puede leerse desde la línea de comandos, así que la salida pide confirmarlo.
+- **La URL de la consola impresa y la dirección MQTT de `dcctl sim create` salen de los puertos que el contenedor del plano de control de kind publica realmente.** Cuando no pueden determinarse, se imprime el texto anterior.
+- **Un `dcctl bootstrap` interrumpido a la fuerza puede volver a ejecutarse.** Una ejecución terminada a la fuerza en el paso de infraestructura dejaba un artefacto de custodia que necesitaba `--restore-root-key` para terminar. Ahora la repetición adopta el artefacto cuando nombra la instancia, el Secret de credenciales de la instancia está en el clúster y la frase de paso lo abre. Cualquier otro caso se rechaza como antes. Un rechazo por bloqueo obsoleto ahora dice cuando quien lo mantiene es un proceso de esta máquina que ya no se está ejecutando.
+- **`dcctl install` sin terminal y sin `--yes`** ya no informa de que se rechazó la creación.
+- **`dc-simulator` se adjunta a cada versión,** junto a `dcctl` y `dc-edge-agent`, para Linux, macOS y Windows en `amd64` y `arm64`, con sumas de verificación y procedencia. `dcctl sim run --simulator ./dc-simulator` ya no necesita un compilador de Go, y `dc-simulator -version` informa de la versión.
+
+#### Paneles {#v100-dashboards}
+
+- **El panel generado a partir del perfil de un tipo de dispositivo se corrige en cuatro aspectos.** Dibuja un gráfico por unidad en lugar de todas las mediciones en un solo eje (una medición sin unidad tiene su propio gráfico; como máximo cuatro gráficos y cuatro series por gráfico). Su selector de dispositivos ofrece solo dispositivos de ese tipo, mediante un nuevo filtro opcional `candidates.deviceType` en los huecos de dispositivo. El token del panel se rellena solo en lugar de bloquear Crear con el marcador. Y un botón de comando no muestra formulario ni botón Enviar a un espectador que carece de `command:write`; muestra el motivo y conserva el historial de solo lectura.
+- **Un espectador limitado a un cliente ya no provoca llamadas rechazadas.** Abrir un panel hacía una llamada `anchorDevices` rechazada por cada ancla de área y de activo antes de reintentar sin tipo de relación. Ahora el alcance del espectador se lee del token de acceso y no se envía ningún tipo de relación. El servidor no cambia, así que nada de lo que puede ver un miembro con alcance se amplía.
+
+#### Cambios menores {#v100-smaller}
+
+- **`update-management` dice cómo configurar el almacén de objetos.** El rechazo `OBJECT_STORE_NOT_CONFIGURED` en `createArtifact` ahora nombra `dcctl bootstrap --object-store filesystem|s3` y el valor del chart `instance.config.infrastructure.blob.backend`.
+- **Las actualizaciones por aire se documentan según lo validado.** Las actualizaciones gestionadas son solo por MQTT, los dispositivos LwM2M se actualizan con comandos normales, Sparkplug no define ninguna actualización de firmware, y las oleadas, los canarios y las programaciones no están en 1.0. Un arnés repetible ahora cubre una firma que no se verifica, una discrepancia de huella al subir, una descarga reanudada, una asignación sin conexión, una cancelación, un plazo y un despliegue en pausa.
+- **El vocabulario de tipos de credencial queda congelado** por una prueba con control negativo, y se quitaron seis declaraciones de ruptura de compatibilidad caducadas.
+- **Guías y ejemplos nuevos.** Un [recorrido de funciones](../quickstart/feature-tour.md) sigue todo el camino desde un tipo de dispositivo hasta un usuario cliente que solo ve su propio dispositivo, y se ejecuta para un segundo sitio cambiando un único archivo de parámetros. `examples/migration-pilot` es una evaluación práctica de migrar desde otra plataforma, enlazada desde la [guía de migración](../guides/migrating-from-another-platform.md). Otros ejemplos cubren un dispositivo que inicia sesión con un certificado X.509, los uplinks de ChirpStack y una regla que genera una alarma y envía un comando a un dispositivo. La guía de inicio rápido añade un paso para obtener `dcctl` e indica qué puertos del host deben estar libres y cómo recuperarse de un bootstrap interrumpido a la fuerza.
+- **Las traducciones al español se siguen por actualidad** frente a las páginas en inglés, como ya se hacía con las chinas.
+
+#### Volver atrás {#v100-going-back}
+
+En esta versión no se ejecuta ninguna migración, así que no hay nada que deshacer en una base de datos. Avanza siempre que puedas: una actualización fallida se arregla ejecutando `dcctl upgrade` de nuevo. Si vuelves a `v0.27.0`, un cliente GraphQL que se cambió para enviar `originatorToken` debe revertirse con ella.
+
+#### Problemas conocidos {#v100-known-issues}
+
+- **La confirmación MQTT con cierre ante fallo está desactivada por defecto,** como de `v0.24.0` a `v0.27.0`. Con ella desactivada, un evento que el broker ha confirmado aún puede perderse si el flujo de captura se llena. El [transporte MQTT](../reference/transport-matrix.md#mqtt--the-platform-broker) indica los límites medidos y las cotas de pérdida con ella desactivada y activada.
+- **Un cambio en la configuración del broker sigue desconectando los dispositivos que admitió el callout de autenticación,** hasta que la biblioteca del broker incluya la corrección de origen. Una renovación de certificado no lo hace.
+- **Dos rutas no las cubre la retención.** Un mensaje que el lector ya había leído por adelantado respecto a un escritor que retiene, y que supera la mitad del plazo de confirmación, se descarta sin confirmar y consume una entrega, y el registrador de mensajes que llegan a su última entrega puede escribir una carta para él antes de que un escritor lo retenga. Tampoco se cubre la republicación del registrador.
 
 ### v0.27.0 — los dispositivos inician sesión con certificado y los comandos Sparkplug funcionan {#v0270-upgrade}
 
