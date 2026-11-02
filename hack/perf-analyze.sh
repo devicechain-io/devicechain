@@ -138,7 +138,7 @@ analyze() {
       ev_note="**ASSUMED**: hypertable \`$name\` had the most rows inserted ($("$JQ" -r '.hypertables | to_entries | sort_by(-.value) | map("\(.key)=\(.value)") | join(", ")' "$tsd")); pass --events-hypertable to pin it"
     fi
     events="$n"
-    local tw; tw="$("$JQ" -r '(.from | sub("\\.[0-9]+";"") | fromdateiso8601) as $a | (.to | sub("\\.[0-9]+";"") | fromdateiso8601) as $b | ($b - $a)' "$tsd" 2>/dev/null || echo 0)"
+    local tw; tw="$("$JQ" -r '(.from | sub("\\.[0-9]+";"") | sub("\\+00:00$";"Z") | fromdateiso8601) as $a | (.to | sub("\\.[0-9]+";"") | sub("\\+00:00$";"Z") | fromdateiso8601) as $b | ($b - $a)' "$tsd" 2>/dev/null || echo 0)"
     [[ "${tw:-0}" -gt 0 ]] || { say "the event-store snapshots have no usable window; pass --events N"; return 1; }
     ev_rate="$(awk -v n="$events" -v w="$tw" 'BEGIN { printf "%.6f", n / w }')"
   else
@@ -301,7 +301,7 @@ JSON
     echo 'container_cpu_usage_seconds_total{namespace="ns1",pod="ds-1",container="svc"} 16 1060000'
     echo 'container_cpu_usage_seconds_total{namespace="ns1",pod="gone-1",container="svc"} 3 1060000'
   } >"$d/$p-node-n1-cadvisor-post.prom"
-  echo '{"valid":true,"from":"2026-11-02T10:00:00Z","to":"2026-11-02T10:01:00Z","hypertables":{"events":60000,"measurements":1000}}' >"$d/$p-timescaledb-t-1-sysstat-delta.json"
+  echo '{"valid":true,"from":"2026-11-02T10:00:00.123456+00:00","to":"2026-11-02T10:01:00.654321+00:00","hypertables":{"events":60000,"measurements":1000}}' >"$d/$p-timescaledb-t-1-sysstat-delta.json"
 
   rep="$("$SELF" --dir "$d" --round rT --phase R1 --events-hypertable events 2>&1)" || { echo "self-test: analysis failed: $rep" >&2; return 1; }
   # device-management: 42 CPU-s over 60 s = 0.70 cores; 60,000 events in 60 s = 1000/s => 0.70/1000*1000 = 0.700 per 1k
