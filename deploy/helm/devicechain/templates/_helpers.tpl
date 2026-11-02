@@ -1382,6 +1382,26 @@ that has to be right about it.
 {{- end -}}
 
 {{/*
+devicechain.profilerSampling answers, as YAML, the contention-sampling settings of one
+area's profiling listener: blockRate (nanoseconds blocked per sampled event) and
+mutexFraction (1 in N contended events). Empty when the listener is off or neither is
+set. Setting either without profiler.enabled is refused at render: the samples would have
+no endpoint, so the service itself would refuse to start on them and this says so first.
+*/}}
+{{- define "devicechain.profilerSampling" -}}
+{{- $p := get .areaCfg "profiler" | default dict -}}
+{{- $b := $p.blockRate | default 0 | int -}}
+{{- $m := $p.mutexFraction | default 0 | int -}}
+{{- if and (or (gt $b 0) (gt $m 0)) (not $p.enabled) -}}
+{{- fail (printf "functionalAreas.%s.profiler.blockRate/mutexFraction is set but profiler.enabled is not: the samples would have no endpoint to be read from. Enable the profiler, or remove the setting." .area) -}}
+{{- end -}}
+{{- if $p.enabled -}}
+blockRate: {{ $b }}
+mutexFraction: {{ $m }}
+{{- end -}}
+{{- end -}}
+
+{{/*
 devicechain.validateProfilerAreas refuses a profiling listener turned on for an area
 this release does not deploy. Such a setting renders nothing, so without this it
 would be accepted and do nothing, and the first sign would be a refused port-forward.

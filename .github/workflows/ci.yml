@@ -57,6 +57,14 @@ jobs:
       - name: release-candidate run script self-test
         run: hack/loadtest-rc-run.sh --self-test
 
+      # The performance-round collector and analyser against stub kubectl/curl: the steady
+      # marker refusals, the missing-component and replaced-pod failures, --dry-run writing
+      # nothing, and the per-event arithmetic. Needs jq (preinstalled on the runner image).
+      - name: performance-round collector self-test
+        run: |
+          hack/perf-collect.sh --self-test
+          hack/perf-analyze.sh --self-test
+
       # The calculated-metrics cost gate's pure checks (tier merge, counter and stored-row-shape
       # checks, the verdict table), each against a twin that must be refused. The rest of the
       # harness needs a cluster.

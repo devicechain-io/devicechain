@@ -23,6 +23,17 @@ const (
 	// A value that is set but malformed refuses startup; see profilerAddress.
 	ENV_PROFILER_ADDRESS = "DC_PROFILER_ADDRESS"
 
+	// ENV_PROFILER_BLOCK_RATE and ENV_PROFILER_MUTEX_FRACTION turn on block and mutex
+	// contention sampling for a profiling RUN, and only with the profiling listener
+	// (setting either without ENV_PROFILER_ADDRESS refuses startup: sampling nobody can
+	// read is cost for nothing). The block rate is nanoseconds blocked per sampled
+	// event (runtime.SetBlockProfileRate); the mutex fraction is 1-in-N contended
+	// events (runtime.SetMutexProfileFraction). Both are positive whole numbers; unset
+	// leaves the profile off and its endpoint answering 404. The chart writes them from
+	// functionalAreas.<area>.profiler.blockRate / .mutexFraction.
+	ENV_PROFILER_BLOCK_RATE     = "DC_PROFILER_BLOCK_RATE"
+	ENV_PROFILER_MUTEX_FRACTION = "DC_PROFILER_MUTEX_FRACTION"
+
 	// ENV_REMOVED_SHUTDOWN_DRAIN_SECONDS is a variable this process REFUSES TO START
 	// ON, not one it reads. The shutdown drain window is instance configuration —
 	// infrastructure.shutdown.drainSeconds, written by the chart from its

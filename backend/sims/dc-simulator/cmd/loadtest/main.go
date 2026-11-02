@@ -43,6 +43,12 @@ func main() {
 		"emit cadence per device, e.g. 200ms (0 keeps the 5s demo cadence)")
 	concurrency := flag.Int("concurrency", envIntOr("DC_LOADTEST_CONCURRENCY", 0),
 		"max emits in flight per tick (0 derives it from the device count)")
+	steadyMarker := flag.String("steady-marker", envOr("DC_LOADTEST_STEADY_MARKER", ""),
+		"write the steady-state marker JSON to this path: warmup, then steady, then ended or aborted; hack/perf-collect.sh collects profiles only while it says steady")
+	steadyWarmup := flag.Duration("steady-warmup", envDurationOr("DC_LOADTEST_STEADY_WARMUP", 5*time.Minute),
+		"with --steady-marker, how far into the drive the steady state begins (must be shorter than the drive)")
+	steadyPhase := flag.String("steady-phase", envOr("DC_LOADTEST_STEADY_PHASE", ""),
+		"with --steady-marker, the phase label the marker carries (for example R1); the collector checks it")
 	hold := flag.Duration("hold", envDurationOr("DC_LOADTEST_HOLD", loadtest.DefaultHold),
 		"how long to hold at load before reconciling")
 	minAccepted := flag.Int64("min-accepted", int64(envIntOr("DC_LOADTEST_MIN_ACCEPTED", loadtest.DefaultMinAccepted)),
@@ -76,7 +82,12 @@ func main() {
 		manifestId = "devicepulse"
 	}
 
+	var steady *loadtest.SteadyMarker
+	if *steadyMarker != "" {
+		steady = &loadtest.SteadyMarker{Path: *steadyMarker, Phase: *steadyPhase, Warmup: *steadyWarmup}
+	}
 	profile := loadtest.Profile{
+		Steady:         steady,
 		Manifest:       manifestId,
 		Seed:           hs.Seed,
 		Devices:        *devices,

@@ -271,6 +271,19 @@ spec:
             - name: DC_PROFILER_ADDRESS
               value: {{ . | quote }}
             {{- end }}
+            {{/* Contention sampling for a profiling run: block and mutex profiles are
+            empty (and answer 404) unless these are set; see
+            devicechain.profilerSampling. Only ever rendered with the listener on. */}}
+            {{- with include "devicechain.profilerSampling" (dict "area" $area "areaCfg" $areaCfg "root" $root) | fromYaml }}
+            {{- if .blockRate }}
+            - name: DC_PROFILER_BLOCK_RATE
+              value: {{ .blockRate | int | quote }}
+            {{- end }}
+            {{- if .mutexFraction }}
+            - name: DC_PROFILER_MUTEX_FRACTION
+              value: {{ .mutexFraction | int | quote }}
+            {{- end }}
+            {{- end }}
             {{- /* user-management's superuser SEED password, from the instance's own
             Secret (devicechain.superuserSecret) — never from a config document, and
             never a default. It is OPTIONAL on purpose: the value is needed only to seed

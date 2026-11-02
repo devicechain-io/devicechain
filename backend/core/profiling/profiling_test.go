@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"runtime/pprof"
 	"runtime/trace"
 	"strings"
@@ -336,4 +337,34 @@ func TestAProfileADependencyRegistersIsNotServed(t *testing.T) {
 	status, _, body := fetch(t, http.MethodGet, srv.URL+Prefix+name)
 	assert.Equal(t, http.StatusNotFound, status, "%s", body)
 	assert.Contains(t, string(body), "unknown profile")
+}
+
+// Contention sampling is a switch for a profiling run: until EnableContention turns a
+// profile's sampling on it answers 404, and once on it is served. Asking for one must not
+// turn the other on.
+func TestEnableContentionServesOnlyWhatWasAskedFor(t *testing.T) {
+	t.Cleanup(func() {
+		runtime.SetBlockProfileRate(0)
+		runtime.SetMutexProfileFraction(0)
+		sampled["block"].Store(false)
+		sampled["mutex"].Store(false)
+	})
+	srv, _ := serve(t)
+
+	EnableContention(0, 0)
+	for _, name := range []string{"block", "mutex"} {
+		status, _, _ := fetch(t, http.MethodGet, srv.URL+Prefix+name)
+		assert.Equal(t, http.StatusNotFound, status, "%s with no sampling asked for", name)
+	}
+
+	EnableContention(1, 0)
+	status, _, _ := fetch(t, http.MethodGet, srv.URL+Prefix+"block")
+	assert.Equal(t, http.StatusOK, status, "block once its sampling is on")
+	status, _, body := fetch(t, http.MethodGet, srv.URL+Prefix+"mutex")
+	assert.Equal(t, http.StatusNotFound, status, "mutex must stay off when only block was asked for")
+	assert.Contains(t, string(body), "not collected")
+
+	EnableContention(0, 5)
+	status, _, _ = fetch(t, http.MethodGet, srv.URL+Prefix+"mutex")
+	assert.Equal(t, http.StatusOK, status, "mutex once its sampling is on")
 }

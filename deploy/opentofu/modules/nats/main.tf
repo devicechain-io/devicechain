@@ -590,6 +590,54 @@ variable "route_compression" {
   }
 }
 
+variable "profiling_port" {
+  description = <<-EOT
+    A profiling RUN switch, OFF (0) by default. A positive port sets nats-server's
+    `prof_port`, which serves Go pprof (CPU, heap, goroutine, block, mutex) over
+    plain HTTP on that port of every broker pod, so a profile of the broker's CPU can
+    be taken with `kubectl port-forward` during a performance run.
+
+    Nothing exposes it. The chart declares no container port for it and no Service
+    selects it, so it is reachable only by port-forward or from inside the pod
+    network, WITHOUT authentication (nats-server binds it on the pod's host
+    address, not loopback). That is why it is a run-only switch: turn it on for the
+    run, turn it off after. Changing it ROLLS THE BROKER one server at a time, because
+    nats-server cannot reload prof_port.
+
+    The monitoring port (8222: /varz /jsz /connz) is separate, is on by default in the
+    chart, and needs no switch.
+  EOT
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = var.profiling_port == floor(var.profiling_port) && var.profiling_port >= 0 && var.profiling_port <= 65535
+    error_message = "profiling_port must be 0 (off) or a TCP port from 1 to 65535."
+  }
+
+  validation {
+    # The listeners and sidecars this module's pods already bind.
+    condition     = !contains([4222, 1883, 6222, 7422, 7777, 7778, 8222], var.profiling_port)
+    error_message = "profiling_port collides with a port the broker pod already serves (4222, 1883, 6222, 7422, 7777, 7778, 8222)."
+  }
+}
+
+variable "profiling_block_rate" {
+  description = "With profiling_port, nats-server's `prof_block_rate`: the block profile samples one blocking event per this many nanoseconds spent blocked (1 samples every event). 0 (the default) leaves the block profile off. The mutex profile needs no setting. Meaningless without profiling_port, and refused then."
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = var.profiling_block_rate == floor(var.profiling_block_rate) && var.profiling_block_rate >= 0
+    error_message = "profiling_block_rate must be 0 (off) or a positive whole number of nanoseconds."
+  }
+
+  validation {
+    condition     = var.profiling_block_rate == 0 || var.profiling_port > 0
+    error_message = "profiling_block_rate needs profiling_port: the samples would have no endpoint to be read from."
+  }
+}
+
 locals {
   # Service name the internal services present (see natsauth.ServiceUser). Kept in
   # sync with the Go constant; a mismatch would lock every service out.
@@ -1252,8 +1300,22 @@ locals {
   # (yamlencode output), not the map level: `{config.merge = {...}}` and the
   # base config are different object types that an HCL ternary cannot unify, but
   # two yamlencode() results are both strings and unify cleanly.
-  chart_values_encoded = var.enable_auth ? yamlencode(merge(local.chart_values, {
-    config = merge(local.chart_values.config, { merge = local.auth_merge_content })
+  #
+  # config.merge is ONE map, so the broker-auth content and the run-only profiling keys
+  # are combined here before it is laid over the chart's config. Each part is a filtered
+  # for-expression (see route_compression_merge) so an absent part contributes no key,
+  # and with both off the merge is empty and the document is what it was before the
+  # profiling variables existed.
+  profiling_merge = {
+    for k, v in {
+      prof_port       = var.profiling_port
+      prof_block_rate = var.profiling_block_rate
+    } : k => v if v > 0
+  }
+  auth_part    = { for k, v in local.auth_merge_content : k => v if var.enable_auth }
+  config_merge = merge(local.auth_part, local.profiling_merge)
+  chart_values_encoded = length(local.config_merge) > 0 ? yamlencode(merge(local.chart_values, {
+    config = merge(local.chart_values.config, { merge = local.config_merge })
   })) : yamlencode(local.chart_values)
 
   # --- What ha_topology reports -----------------------------------------------

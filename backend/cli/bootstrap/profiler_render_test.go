@@ -295,3 +295,49 @@ func TestAnUpgradeDoesNotCarryAProfilerForward(t *testing.T) {
 		t.Error("dropping it edited the previous release's own record")
 	}
 }
+
+// CONTENTION SAMPLING: block and mutex profiles are empty unless sampling is on, so a
+// profiling run sets the two rates. They reach the one area's pod, only with the
+// listener, and are absent by default.
+func TestProfilerContentionSamplingReachesThatPodAlone(t *testing.T) {
+	t.Parallel()
+	manifest, err := renderChart(t, profilerOn("device-state",
+		map[string]interface{}{"enabled": true, "blockRate": 10000, "mutexFraction": 5}))
+	if err != nil {
+		t.Fatalf("rendering with sampling on: %v", err)
+	}
+	pods := podsOf(t, manifest)
+	if got := pods["device-state"].env["DC_PROFILER_BLOCK_RATE"]; got != "10000" {
+		t.Errorf("DC_PROFILER_BLOCK_RATE = %q, want 10000", got)
+	}
+	if got := pods["device-state"].env["DC_PROFILER_MUTEX_FRACTION"]; got != "5" {
+		t.Errorf("DC_PROFILER_MUTEX_FRACTION = %q, want 5", got)
+	}
+	for area, p := range pods {
+		if area == "device-state" {
+			continue
+		}
+		for _, k := range []string{"DC_PROFILER_BLOCK_RATE", "DC_PROFILER_MUTEX_FRACTION"} {
+			if v, ok := p.env[k]; ok {
+				t.Errorf("%s carries %s=%q although only device-state was enabled", area, k, v)
+			}
+		}
+	}
+
+	// Listener on, sampling unset: neither variable is written.
+	manifest, err = renderChart(t, profilerOn("device-state", map[string]interface{}{"enabled": true}))
+	if err != nil {
+		t.Fatalf("rendering with the profiler on: %v", err)
+	}
+	for _, k := range []string{"DC_PROFILER_BLOCK_RATE", "DC_PROFILER_MUTEX_FRACTION"} {
+		if v, ok := podsOf(t, manifest)["device-state"].env[k]; ok {
+			t.Errorf("%s=%q rendered although no sampling was asked for", k, v)
+		}
+	}
+
+	// Sampling without the listener is refused: the service would refuse to start on it.
+	_, err = renderChart(t, profilerOn("device-state", map[string]interface{}{"blockRate": 10000}))
+	if err == nil || !strings.Contains(err.Error(), "profiler.enabled is not") {
+		t.Errorf("sampling without the listener should be refused at render, got: %v", err)
+	}
+}

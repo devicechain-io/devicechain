@@ -248,6 +248,8 @@ functionalAreas:
     profiler:
       enabled: true
       # address: "127.0.0.1:6060"   # default; an IP address and a port
+      # blockRate: 0       # block/mutex profiles are empty unless sampling is on;
+      # mutexFraction: 0   # set for a profiling run only (they cost CPU under contention)
 ```
 
 The documentation's observability page, under "Profiling a service", explains how to
@@ -740,4 +742,6 @@ generated from the schema; do not edit it by hand.
 | `functionalAreas.<area>.profiler` | object | - | Opt-in profiling listener for this area: Go runtime profiles (CPU, heap, goroutines, execution trace) on a port of its own, never on the Service or the ingress. Off by default. Turning it on restarts this area's pods only. |
 | `functionalAreas.<area>.profiler.enabled` | boolean | - | Serve profiles from this area's pods. Default false. |
 | `functionalAreas.<area>.profiler.address` | string | - | IP address and port the listener binds. Default 127.0.0.1:6060, the pod's loopback address, reachable only with kubectl port-forward. Any other address is reachable by anything that can reach the pod, without authentication. |
+| `functionalAreas.<area>.profiler.blockRate` | integer | - | Turn on block-profile sampling for a profiling run: nanoseconds blocked per sampled event (1 samples every event). 0 (default) leaves the block profile off. Needs enabled: true. |
+| `functionalAreas.<area>.profiler.mutexFraction` | integer | - | Turn on mutex-profile sampling for a profiling run: sample 1 in this many contended events. 0 (default) leaves the mutex profile off. Needs enabled: true. |
 <!-- values:end -->
