@@ -162,9 +162,9 @@ func seedTenant(t *testing.T, db *gorm.DB, tenant string, base int) {
 	// anywhere, which is the claim this seed exists to make concrete.
 	for i := 0; i < 2; i++ {
 		mustExec(t, db, `INSERT INTO "event-management".failed_event_records
-		               (tenant_id, occurred_time, record_seq, source_area, reason, device_token, error)
-		             VALUES (?, now() - make_interval(mins => ?), ?, 'device-management', 3, ?, 'no such device')`,
-			tenant, 10+i, base+i, tenant+"-ghost")
+		               (tenant_id, row_id, occurred_time, record_seq, source_area, reason, device_token, error, payload_retained)
+		             VALUES (?, ?, now() - make_interval(mins => ?), ?, 'device-management', 3, ?, 'no such device', true)`,
+			tenant, fmt.Sprintf("%s-row-%d", tenant, i), 10+i, base+i, tenant+"-ghost")
 	}
 }
 
