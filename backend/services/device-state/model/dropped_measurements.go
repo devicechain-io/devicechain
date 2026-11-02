@@ -6,8 +6,10 @@ package model
 import (
 	"context"
 	"sort"
+	"strings"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"gorm.io/gorm"
@@ -89,8 +91,13 @@ type DroppedMeasurementInput struct {
 // droppedKey is the unique key of a drop row within one device.
 type droppedKey struct{ name, reason string }
 
-// cutTo cuts s to at most n bytes on a UTF-8 boundary.
+// cutTo cuts s to at most n bytes on a UTF-8 boundary, after removing NUL: PostgreSQL refuses
+// 0x00 in a varchar (SQLSTATE 22021), which would fail the write of the whole batch every time.
+// The producer strips it too; this is for a producer that did not.
 func cutTo(s string, n int) string {
+	if strings.IndexByte(s, 0) >= 0 {
+		s = strings.ReplaceAll(s, "\x00", "")
+	}
 	if len(s) <= n {
 		return s
 	}
@@ -112,10 +119,10 @@ func coalesceDropped(deviceToken string, inputs []DroppedMeasurementInput) []Dro
 	byKey := make(map[droppedKey]int, len(inputs))
 	rows := make([]DroppedMeasurement, 0, len(inputs))
 	for _, in := range inputs {
-		if !knownDroppedReason(in.Reason) || in.Name == "" {
+		name := cutTo(in.Name, droppedNameMax)
+		if !knownDroppedReason(in.Reason) || name == "" {
 			continue
 		}
-		name := cutTo(in.Name, droppedNameMax)
 		value := cutTo(in.Value, droppedValueMax)
 		at := storedTime(in.OccurredTime)
 		k := droppedKey{name, in.Reason}
@@ -229,17 +236,16 @@ func enforceDroppedBound(tdb *gorm.DB, tokens []string) error {
 		Having("count(*) > ?", MaxDroppedMeasurementsPerDevice).Scan(&over).Error; err != nil {
 		return err
 	}
+	tenant, _ := core.TenantFromContext(ctx)
 	for _, o := range over {
-		var ids []uint
-		if err := tdb.Model(&DroppedMeasurement{}).Where("device_token = ?", o.DeviceToken).
-			Order("last_time DESC, id DESC").Offset(MaxDroppedMeasurementsPerDevice).Limit(evictScan).
-			Pluck("id", &ids).Error; err != nil {
-			return err
-		}
-		if len(ids) == 0 {
-			continue
-		}
-		res := tdb.Where("id IN ?", ids).Delete(&DroppedMeasurement{})
+		// ONE statement picks and deletes: the ids are chosen by the ordering at the moment of
+		// the delete, so a row refreshed since a separate read cannot be deleted on its old
+		// rank. The subquery is built outside the tenant-scope callback, so it names the tenant
+		// itself (a device token is unique only per tenant).
+		beyond := tdb.Session(&gorm.Session{NewDB: true}).Model(&DroppedMeasurement{}).Select("id").
+			Where("tenant_id = ? AND device_token = ?", tenant, o.DeviceToken).
+			Order("last_time DESC, id DESC").Offset(MaxDroppedMeasurementsPerDevice).Limit(evictScan)
+		res := tdb.Where("id IN (?)", beyond).Delete(&DroppedMeasurement{})
 		if res.Error != nil {
 			return res.Error
 		}
@@ -257,6 +263,14 @@ func (api *Api) MergeDroppedMeasurements(ctx context.Context, deviceToken string
 	}
 	ctx, ev := withEvictions(ctx)
 	if err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		// 🔴 Serialize with every other writer of this device the way the batch does: take the
+		// device's device_states row lock FIRST. Without it this transaction upserts and evicts
+		// drop rows while a batch holds the device row and does the same, and the two can meet
+		// in opposite row orders (40P01). With it a device's drop writes happen one at a time,
+		// whichever path they arrive by.
+		if err := lockOrCreate(tx, []string{deviceToken}); err != nil {
+			return err
+		}
 		return upsertDropped(tx, []string{deviceToken}, rows)
 	}); err != nil {
 		return err

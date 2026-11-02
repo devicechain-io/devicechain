@@ -87,7 +87,7 @@ export default function DeviceDetailPage() {
   // The keys the platform discards from this device's messages. Read once, for the notice above
   // the tabs and the table on the Connectivity tab. A role without state:read, or any failure,
   // yields no notice (see DroppedMeasurementsNotice) rather than breaking the page.
-  const { data: dropped } = useQuery(() => getDroppedMeasurements(token), [token, version]);
+  const { current: dropped } = useQuery(() => getDroppedMeasurements(token), [token, version]);
   const [tab, setTab] = useState('basic');
 
   if (loading) {

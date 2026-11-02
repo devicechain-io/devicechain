@@ -744,15 +744,24 @@ func dropMeasurement(deviceToken, metricKey, value, reason string) {
 func (rez *EventResolver) dropMeasurement(ctx context.Context, deviceToken, key, value, reason, detail string) resolvedevent.DroppedMeasurementEntry {
 	tenant, _ := core.TenantFromContext(ctx)
 	rez.drops.record(tenant, deviceToken, key, value, reason, detail)
-	// 🔴 A diagnostic must never be able to refuse the event it describes: the wire refuses a
-	// string that is not UTF-8, and the record is the one place a discarded (so never
-	// validated) device string is carried onto it. Cut first, then repaired, so a cut inside a
-	// multi-byte rune is not what makes it invalid.
+	// 🔴 A diagnostic must never be able to refuse the event it describes, nor the write that
+	// records it: the wire refuses a string that is not UTF-8, and PostgreSQL refuses a NUL
+	// (0x00, SQLSTATE 22021) in a varchar, which JSON can carry ("\u0000") and ToValidUTF8
+	// keeps. The record is the one place a discarded (so never validated) device string is
+	// carried onto the wire, so it is repaired here. The name is repaired and then cut to its
+	// column; the value is cut first, then repaired, so a cut inside a multi-byte rune is not
+	// what makes it invalid.
 	return resolvedevent.DroppedMeasurementEntry{
-		Name:   strings.ToValidUTF8(key, "�"),
+		Name:   resolvedevent.TruncateDroppedName(repairDropped(key)),
 		Reason: reason,
-		Value:  strings.ToValidUTF8(resolvedevent.TruncateDroppedValue(value), "�"),
+		Value:  repairDropped(resolvedevent.TruncateDroppedValue(value)),
 	}
+}
+
+// repairDropped makes a device string safe to carry on a drop record: invalid UTF-8 becomes the
+// replacement rune and NUL is removed.
+func repairDropped(s string) string {
+	return strings.ReplaceAll(strings.ToValidUTF8(s, "\uFFFD"), "\x00", "")
 }
 
 // normalizeBool renders a validated boolean measurement as "1"/"0" so it stores in

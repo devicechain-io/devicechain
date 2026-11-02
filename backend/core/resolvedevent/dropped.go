@@ -29,6 +29,10 @@ var DroppedReasons = []string{DropUndeclaredNonNumeric, DropUndeclaredUnstorable
 // key lost data, not a copy of the data, so a long text value is cut.
 const MaxDroppedValueBytes = 64
 
+// MaxDroppedNameBytes bounds the key a drop record carries: the width of the column that holds it
+// (the same as a stored reading's name), so a longer key cannot make the consumer's write fail.
+const MaxDroppedNameBytes = 128
+
 // DroppedMeasurementEntry is one measurement entry the resolver discarded from a sample while it
 // stored the sample's other entries.
 //
@@ -53,4 +57,16 @@ func TruncateDroppedValue(v string) string {
 		cut--
 	}
 	return v[:cut]
+}
+
+// TruncateDroppedName cuts a key to MaxDroppedNameBytes on a UTF-8 boundary.
+func TruncateDroppedName(n string) string {
+	if len(n) <= MaxDroppedNameBytes {
+		return n
+	}
+	cut := MaxDroppedNameBytes
+	for cut > 0 && !utf8.RuneStart(n[cut]) {
+		cut--
+	}
+	return n[:cut]
 }

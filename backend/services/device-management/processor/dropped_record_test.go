@@ -128,3 +128,32 @@ func TestAnInvalidUTF8DropCannotRefuseTheEvent(t *testing.T) {
 	_, err = resolvedevent.MarshalResolvedEvent(event(raw))
 	assert.Error(t, err)
 }
+
+// A NUL (JSON carries "\u0000") is removed from a dropped name and value: PostgreSQL refuses
+// 0x00 in a varchar (22021), which would fail the consumer's write of the whole batch on every
+// delivery. Negative control: the all-NUL name is empty after the strip, so it is still a drop.
+func TestANULInADropIsRemovedAtTheProducer(t *testing.T) {
+	rez := NewEventResolver(1, nil, "", EventTimePolicy{}, nil, nil, nil, nil, nil, nil)
+	got := resolveUndeclaredSamples(t, rez, map[string]string{"la\x00bel": "o\x00k\x00", "battery": "50"})
+	require.Len(t, got.Entries[0].Dropped, 1)
+	d := got.Entries[0].Dropped[0]
+	assert.Equal(t, "label", d.Name)
+	assert.Equal(t, "ok", d.Value)
+	assert.NotContains(t, d.Name+d.Value, "\x00")
+}
+
+// The dropped key is cut to the width of the column that stores it, on a UTF-8 boundary.
+func TestADroppedNameIsCutOnARuneBoundary(t *testing.T) {
+	rez := NewEventResolver(1, nil, "", EventTimePolicy{}, nil, nil, nil, nil, nil, nil)
+	// 'é' is two bytes: 127 ASCII bytes then é straddles the 128-byte limit.
+	long := strings.Repeat("a", 127) + "é" + strings.Repeat("b", 100)
+	got := resolveUndeclaredSamples(t, rez, map[string]string{long: "ok", "battery": "50"})
+	require.Len(t, got.Entries[0].Dropped, 1)
+	name := got.Entries[0].Dropped[0].Name
+	assert.Equal(t, strings.Repeat("a", 127), name, "the straddling rune is dropped whole, never split")
+	assert.LessOrEqual(t, len(name), resolvedevent.MaxDroppedNameBytes)
+
+	short := strings.Repeat("c", resolvedevent.MaxDroppedNameBytes)
+	got = resolveUndeclaredSamples(t, rez, map[string]string{short: "ok"})
+	assert.Equal(t, short, got.Entries[0].Dropped[0].Name, "a name at the limit is kept whole")
+}

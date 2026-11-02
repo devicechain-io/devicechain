@@ -10,8 +10,9 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { gqlMock, claims } = vi.hoisted(() => ({
+const { gqlMock, claims, params } = vi.hoisted(() => ({
   gqlMock: vi.fn(),
+  params: { token: 'dev-1' },
   claims: {
     value: { tenant: 'oem', username: 'ann', roles: [], authorities: ['*'], typ: 'access', scopeAnchors: [] as string[] },
   },
@@ -23,7 +24,7 @@ vi.mock('@devicechain/client', async (importOriginal) => {
 });
 vi.mock('react-router-dom', async (importOriginal) => {
   const actual = await importOriginal<typeof import('react-router-dom')>();
-  return { ...actual, useNavigate: () => vi.fn(), useParams: () => ({ token: 'dev-1' }) };
+  return { ...actual, useNavigate: () => vi.fn(), useParams: () => ({ token: params.token }) };
 });
 vi.mock('@/auth/AuthProvider', () => ({ useAuth: () => ({ claims: claims.value }) }));
 vi.mock('@/lib/updateAuthority', () => ({
@@ -78,6 +79,7 @@ function renderPage() {
 afterEach(cleanup);
 beforeEach(() => {
   gqlMock.mockReset();
+  params.token = 'dev-1';
   claims.value = { ...claims.value, scopeAnchors: [], authorities: ['*'] };
 });
 
@@ -133,6 +135,46 @@ describe('the discarded-keys notice on the device page', () => {
     serve(undefined);
     renderPage();
     await screen.findByRole('tab', { name: 'Connectivity' });
+    expect(screen.queryByTestId('dropped-measurements-notice')).toBeNull();
+  });
+
+  // The gateway and child links change only the token, so the page instance survives from device
+  // A to device B. A's keys must not stand in for B's while B loads, nor after B's read fails.
+  // (Negative control: reading the sticky `data` instead of `current` fails both assertions.)
+  it("does not show device A's keys on device B while B loads or after B's read fails", async () => {
+    const view = () => (
+      <MemoryRouter>
+        <ConfirmProvider>
+          <DeviceDetailPage />
+        </ConfirmProvider>
+      </MemoryRouter>
+    );
+    let answerB: (v: unknown) => void = () => {};
+    gqlMock.mockImplementation((service: string, doc: unknown) => {
+      if (service === 'device-management') {
+        return Promise.resolve({ devicesByToken: [{ ...DEVICE, token: params.token, name: params.token }], deviceTypes: { results: [], pagination: {} } });
+      }
+      if (service === 'device-state' && /query DroppedMeasurements/.test(String(doc))) {
+        if (params.token === 'dev-1') return Promise.resolve({ droppedMeasurements: DROPPED });
+        return new Promise((resolve, reject) => {
+          answerB = (e) => (e instanceof Error ? reject(e) : resolve(e));
+        });
+      }
+      return Promise.resolve({});
+    });
+
+    const { rerender } = render(view());
+    await screen.findByTestId('dropped-measurements-notice');
+
+    // Navigate to B; its dropped read is still in flight.
+    params.token = 'dev-2';
+    rerender(view());
+    await waitFor(() => expect(gqlMock.mock.calls.some((c) => c[1] && JSON.stringify(c[2] ?? {}).includes('dev-2'))).toBe(true));
+    expect(screen.queryByTestId('dropped-measurements-notice')).toBeNull();
+
+    // B's read fails: still nothing, indefinitely.
+    answerB(new Error('boom'));
+    await new Promise((r) => setTimeout(r, 50));
     expect(screen.queryByTestId('dropped-measurements-notice')).toBeNull();
   });
 });

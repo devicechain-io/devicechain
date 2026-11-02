@@ -14,6 +14,8 @@ import (
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
+	gormlogger "gorm.io/gorm/logger"
 )
 
 var droppedT0 = time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
@@ -264,4 +266,71 @@ func TestTheBatchWritesTheDroppedRecord(t *testing.T) {
 func TestADroppedRecordIsScopedLikeALatestReading(t *testing.T) {
 	assert.Equal(t, LatestMeasurement{}.ScopedBy(), DroppedMeasurement{}.ScopedBy())
 	assert.Equal(t, LatestLocation{}.ScopedBy(), DroppedMeasurement{}.ScopedBy())
+}
+
+// A NUL in a discarded name or value is removed before the write: PostgreSQL refuses 0x00 in a
+// varchar (22021), which would refuse every batch the entry rides in. A name that is only NULs
+// is nameless and skipped.
+func TestANULInADroppedEntryIsRemoved(t *testing.T) {
+	r := resolvedevent.DropUndeclaredNonNumeric
+	rows := coalesceDropped("d1", []DroppedMeasurementInput{
+		drop("la\x00bel", r, "o\x00k", droppedT0),
+		drop("\x00\x00", r, "x", droppedT0),
+	})
+	require.Len(t, rows, 1)
+	assert.Equal(t, "label", rows[0].Name)
+	assert.Equal(t, "ok", rows[0].LastValue)
+
+	// Two spellings of one key that differ only by a NUL are one key, not two.
+	rows = coalesceDropped("d1", []DroppedMeasurementInput{
+		drop("a\x00b", r, "1", droppedT0), drop("ab", r, "2", droppedT0.Add(time.Second))})
+	require.Len(t, rows, 1)
+	assert.EqualValues(t, 2, rows[0].Count)
+}
+
+// The eviction is ONE statement that chooses the rows by the ordering as it deletes, and it
+// names the tenant inside its subquery: with a read and then a delete by id, a row refreshed
+// between them is deleted on its old rank. Two tenants with the same device token each keep
+// their own bound.
+func TestEvictionDeletesInOneOrderedStatementPerTenant(t *testing.T) {
+	api := newSQLiteProjectionApi(t, "db")
+	r := resolvedevent.DropUndeclaredNonNumeric
+	var rowsA, rowsB []DroppedMeasurement
+	for i := 0; i <= MaxDroppedMeasurementsPerDevice+2; i++ {
+		row := DroppedMeasurement{DeviceToken: "d1", Name: fmt.Sprintf("k%02d", i), Reason: r,
+			LastValue: "v", Count: 1, FirstTime: droppedT0, LastTime: droppedT0.Add(time.Duration(i) * time.Second)}
+		rowsA = append(rowsA, row)
+		if i < 5 {
+			rowsB = append(rowsB, row)
+		}
+	}
+	ctxA, ctxB := core.WithTenant(context.Background(), "acme"), core.WithTenant(context.Background(), "globex")
+	require.NoError(t, api.RDB.DB(ctxA).Create(&rowsA).Error)
+	require.NoError(t, api.RDB.DB(ctxB).Create(&rowsB).Error)
+
+	rec := &sqlRecorder{}
+	require.NoError(t, enforceDroppedBound(api.RDB.DB(ctxA).Session(&gorm.Session{Logger: rec}), []string{"d1"}))
+	var deletes []string
+	for _, s := range rec.sql {
+		if strings.HasPrefix(strings.ToUpper(s), "DELETE") {
+			deletes = append(deletes, s)
+		}
+	}
+	require.Len(t, deletes, 1, "one DELETE, not a read followed by a delete by id")
+	assert.Contains(t, deletes[0], "ORDER BY last_time DESC, id DESC")
+	assert.Contains(t, deletes[0], "tenant_id")
+	assert.Len(t, droppedRows(t, api, ctxA, "d1"), MaxDroppedMeasurementsPerDevice)
+	assert.Len(t, droppedRows(t, api, ctxB, "d1"), 5, "the other tenant's device of the same token is untouched")
+}
+
+// sqlRecorder is a gorm logger that keeps the SQL of every statement.
+type sqlRecorder struct{ sql []string }
+
+func (r *sqlRecorder) LogMode(gormlogger.LogLevel) gormlogger.Interface { return r }
+func (r *sqlRecorder) Info(context.Context, string, ...interface{})     {}
+func (r *sqlRecorder) Warn(context.Context, string, ...interface{})     {}
+func (r *sqlRecorder) Error(context.Context, string, ...interface{})    {}
+func (r *sqlRecorder) Trace(_ context.Context, _ time.Time, fc func() (string, int64), _ error) {
+	s, _ := fc()
+	r.sql = append(r.sql, s)
 }
