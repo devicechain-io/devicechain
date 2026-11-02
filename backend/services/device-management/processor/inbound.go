@@ -496,16 +496,16 @@ func (iproc *InboundEventsProcessor) OnInvalidEvent(err error, msg messaging.Mes
 		return
 	}
 	// Where the original is and how big it is. It goes in the record's message because
-	// FailedEvent has no structured place for it, and the failed-events stream has no
-	// consumer to give one to — this text and the log line below are what an operator
-	// actually reads.
+	// FailedEvent has no structured place for it. event-management's failed-events index
+	// stores the record's stream position, so the original is LOCATED rather than copied;
+	// this text and the log line below are what an operator reads of the locator.
 	locator := fmt.Sprintf("%d bytes on subject %q at stream sequence %d, delivery %d",
 		len(msg.Value), msg.Subject, msg.StreamSeq, msg.NumDelivered)
 	bounded := boundDecodeError(err.Error())
-	// Logged at warn because nothing consumes failed-events: a record published there is
-	// retained for the cold tier's window and expires unread, so without this line the
-	// only operator-visible trace of an undecodable message is a RED counter that says
-	// neither which message nor why.
+	// Logged at warn because the failed-events index keeps only a bounded row per device and
+	// reason (a flood is folded into a count) and its record is retained for the cold tier's
+	// window, so this line is the only place an operator sees WHICH message, at the rate it
+	// arrived.
 	log.Warn().Str("correlation", msg.CorrelationID()).
 		Msg(fmt.Sprintf("Dead-lettering an inbound message that could not be parsed (%s): %s", locator, bounded))
 	failed := resolvedevent.NewFailedEvent(uint(resolvedevent.FailureReason_Invalid), iproc.Microservice.FunctionalArea,

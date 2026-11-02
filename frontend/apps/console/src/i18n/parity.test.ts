@@ -123,6 +123,7 @@ describe('the shipped registries carry every namespace', () => {
     dashboards: () => import('@/i18n/lazy/dashboards'),
     deviceProfiles: () => import('@/i18n/lazy/deviceProfiles'),
     identityProviders: () => import('@/i18n/lazy/identityProviders'),
+    ingestFailures: () => import('@/i18n/lazy/ingestFailures'),
     integrations: () => import('@/i18n/lazy/integrations'),
     updates: () => import('@/i18n/lazy/updates'),
   };

@@ -155,6 +155,17 @@ func seedTenant(t *testing.T, db *gorm.DB, tenant string, base int) {
 			tenant, []byte(fmt.Sprintf("%s-evt-%d", tenant, i)),
 			[]byte(fmt.Sprintf("%s-pay-%d", tenant, i)), tenant+"-dev", 10+i)
 	}
+
+	// The failed-events index: a hypertable of its own with no continuous aggregate behind it,
+	// holding what the platform refused for the tenant. A deleted tenant leaves ZERO of these
+	// rows, and the purge reaches the table by its tenant column rather than by being named
+	// anywhere, which is the claim this seed exists to make concrete.
+	for i := 0; i < 2; i++ {
+		mustExec(t, db, `INSERT INTO "event-management".failed_event_records
+		               (tenant_id, occurred_time, record_seq, source_area, reason, device_token, error)
+		             VALUES (?, now() - make_interval(mins => ?), ?, 'device-management', 3, ?, 'no such device')`,
+			tenant, 10+i, base+i, tenant+"-ghost")
+	}
 }
 
 // materializationOf returns the hypertable holding a continuous aggregate's rows.
@@ -212,6 +223,7 @@ func tenantRowCounts() []seededLocation {
 		{"event-processing.device_rosters", `"event-processing".device_rosters`, "tenant = ?", 1},
 		{"user-management.iam_memberships", `"user-management".iam_memberships`, "tenant_id = ?", 1},
 		{"event-management.measurement_events", `"event-management".measurement_events`, "tenant_id = ?", 3},
+		{"event-management.failed_event_records", `"event-management".failed_event_records`, "tenant_id = ?", 2},
 	}
 }
 

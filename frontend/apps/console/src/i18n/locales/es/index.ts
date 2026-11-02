@@ -21,6 +21,7 @@ import esProvisioning from './provisioning.json';
 import esTrustAnchors from './trustAnchors.json';
 import esIntegrations from './integrations.json';
 import esCommandBatches from './commandBatches.json';
+import esIngestFailures from './ingestFailures.json';
 import esUpdateSigners from './updateSigners.json';
 import esBranding from './branding.json';
 import esBasemap from './basemap.json';
@@ -59,6 +60,7 @@ const es = {
     trustAnchors: esTrustAnchors,
     integrations: esIntegrations,
     commandBatches: esCommandBatches,
+    ingestFailures: esIngestFailures,
     updateSigners: esUpdateSigners,
     branding: esBranding,
     basemap: esBasemap,

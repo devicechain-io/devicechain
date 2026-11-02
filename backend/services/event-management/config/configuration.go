@@ -17,6 +17,10 @@ import (
 const (
 	DefaultChunkIntervalHours = 24
 	DefaultCompressAfterDays  = 7
+
+	// DefaultFailedEventRetentionDays is how long a failed-events index row is kept. The one
+	// retention window that is ON by default, because the index holds no telemetry.
+	DefaultFailedEventRetentionDays = 7
 )
 
 // Event persistence sizing. See PersistenceConfiguration.
@@ -301,6 +305,14 @@ type LifecycleConfiguration struct {
 	// tenant-level deletion that is already covered by construction).
 	LocationRetentionDays *int
 
+	// FailedEventRetentionDays is how long the failed-events index (the rows behind a tenant's
+	// failedEvents query) is kept. Unset (nil) defaults to 7 days; an explicit 0 keeps it
+	// forever. Unlike RetentionDays it is ON by default, because the index holds no telemetry:
+	// it is the platform's own record of what it refused, useful while someone is still asking
+	// why a device stopped showing up, and a table that grows without bound otherwise. It is
+	// independent of RetentionDays in both directions.
+	FailedEventRetentionDays *int
+
 	// DisableRollupReads is a kill-switch for the continuous-aggregate read path
 	// (ADR-026): when false (default) bucketed measurement reads whose interval is a
 	// whole multiple of the rollup's base bucket are served from the pre-aggregated
@@ -336,6 +348,10 @@ func (c *EventManagementConfiguration) ApplyDefaults() {
 	if c.Lifecycle.CompressAfterDays == nil {
 		d := DefaultCompressAfterDays
 		c.Lifecycle.CompressAfterDays = &d
+	}
+	if c.Lifecycle.FailedEventRetentionDays == nil {
+		d := DefaultFailedEventRetentionDays
+		c.Lifecycle.FailedEventRetentionDays = &d
 	}
 	c.Persistence.ApplyDefaults()
 	c.CalculatedBackfill.ApplyDefaults()
@@ -376,6 +392,10 @@ func (c *EventManagementConfiguration) Validate() error {
 	if c.Lifecycle.LocationRetentionDays != nil && *c.Lifecycle.LocationRetentionDays < 0 {
 		return fmt.Errorf("lifecycle.locationRetentionDays cannot be negative, got %d",
 			*c.Lifecycle.LocationRetentionDays)
+	}
+	if c.Lifecycle.FailedEventRetentionDays != nil && *c.Lifecycle.FailedEventRetentionDays < 0 {
+		return fmt.Errorf("lifecycle.failedEventRetentionDays cannot be negative, got %d",
+			*c.Lifecycle.FailedEventRetentionDays)
 	}
 	if err := c.Persistence.Validate(c.TsdbConfiguration); err != nil {
 		return err

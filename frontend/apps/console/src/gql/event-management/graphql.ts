@@ -97,6 +97,59 @@ export type EventSearchCriteria = {
 };
 
 /**
+ * Whether the original event behind a failure record can still be fetched by an operator from the
+ * platform's failure stream. The stream keeps records for a bounded time, the same bound that rolls
+ * its oldest records off unread, so this turns EXPIRED sooner or later for every record; a record
+ * that is EXPIRED stays listed here and says so, rather than reading as an error or as empty.
+ */
+export type FailedEventPayloadStatus =
+  /** The stream still holds the original. */
+  | 'AVAILABLE'
+  /** The stream has discarded the original to make room; only this summary remains. */
+  | 'EXPIRED'
+  /** The stream could not be asked just now. Neither of the above is claimed. */
+  | 'UNKNOWN';
+
+/**
+ * Why the platform refused an event or could not store it. UNKNOWN is a reason this version of the
+ * API does not name: either none was given, or a newer part of the platform wrote one, and then
+ * reasonCode carries its number. A reason is never reported as a different one.
+ */
+export type FailedEventReason =
+  /** A platform service the event needed could not be reached, or storing the event failed. */
+  | 'API_CALL_FAILED'
+  /** The device exists and an operator has disabled it. */
+  | 'DEVICE_DISABLED'
+  /** No device has the token the sender named. */
+  | 'DEVICE_NOT_FOUND'
+  /** An integration's event named a device that no longer holds the alias it was resolved from. */
+  | 'INTEGRATION_ALIAS_MISMATCH'
+  /** The message could not be read at all. */
+  | 'INVALID'
+  /** A gateway published for a device that is not assigned to it, or that does not exist. */
+  | 'NOT_GATEWAY_CHILD'
+  /** The credential the device presented was missing or wrong. */
+  | 'UNAUTHENTICATED'
+  /** No reason, or one this version does not name; see reasonCode. */
+  | 'UNKNOWN';
+
+/** Filters and paging for the failed-event list. All supplied filters must match. */
+export type FailedEventSearchCriteria = {
+  /** Only failures for this device token, exactly as the sender named it. */
+  deviceToken?: string | null | undefined;
+  /** Page to return, starting at 1; values below 1 are treated as 1. */
+  pageNumber: number;
+  /** Results per page. Values below 1 become 100; values above 100 are capped at 100. */
+  pageSize: number;
+  /** Only failures for this reason. UNKNOWN selects every reason this version does not name. */
+  reason?: FailedEventReason | null | undefined;
+  /** Only failures recorded at or after this instant, an RFC 3339 timestamp. */
+  since?: string | null | undefined;
+  /** Only failures recorded at or before this instant, an RFC 3339 timestamp. */
+  until?: string | null | undefined;
+};
+
+/**
  * Filters for a server-side, time-bucketed measurement aggregation. The device, event type, time
  * range and anchor filters work as in EventSearchCriteria, with an added filter on measurement
  * name. startTime is required; a range that would produce more than 10,000 buckets, or a
@@ -196,6 +249,28 @@ export type HourlyMeasurementCountsQueryVariables = Exact<{
 
 
 export type HourlyMeasurementCountsQuery = { bucketedMeasurements: Array<{ bucketStart: string, count: number }> };
+
+export type FailedEventsQueryVariables = Exact<{
+  criteria: FailedEventSearchCriteria;
+}>;
+
+
+export type FailedEventsQuery = { failedEvents: { results: Array<{ recordSeq: string, occurredTime: string, sourceArea: string, reason: FailedEventReason, reasonCode: number, deviceToken: string | null, eventType: number | null, error: string, correlation: string, suppressed: number, overflow: boolean, payloadStatus: FailedEventPayloadStatus }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+
+export type FailedEventSummaryQueryVariables = Exact<{
+  since: string;
+}>;
+
+
+export type FailedEventSummaryQuery = { failedEventSummary: Array<{ reason: FailedEventReason, reasonCode: number, records: number, suppressed: number, devices: Array<{ deviceToken: string, records: number }> }> };
+
+export type FailedEventCountQueryVariables = Exact<{
+  deviceToken: string;
+  since: string;
+}>;
+
+
+export type FailedEventCountQuery = { failedEventCount: number };
 
 export class TypedDocumentString<TResult, TVariables>
   extends String
@@ -335,3 +410,47 @@ export const HourlyMeasurementCountsDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<HourlyMeasurementCountsQuery, HourlyMeasurementCountsQueryVariables>;
+export const FailedEventsDocument = new TypedDocumentString(`
+    query FailedEvents($criteria: FailedEventSearchCriteria!) {
+  failedEvents(criteria: $criteria) {
+    results {
+      recordSeq
+      occurredTime
+      sourceArea
+      reason
+      reasonCode
+      deviceToken
+      eventType
+      error
+      correlation
+      suppressed
+      overflow
+      payloadStatus
+    }
+    pagination {
+      pageStart
+      pageEnd
+      totalRecords
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<FailedEventsQuery, FailedEventsQueryVariables>;
+export const FailedEventSummaryDocument = new TypedDocumentString(`
+    query FailedEventSummary($since: String!) {
+  failedEventSummary(since: $since) {
+    reason
+    reasonCode
+    records
+    suppressed
+    devices {
+      deviceToken
+      records
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<FailedEventSummaryQuery, FailedEventSummaryQueryVariables>;
+export const FailedEventCountDocument = new TypedDocumentString(`
+    query FailedEventCount($deviceToken: String!, $since: String!) {
+  failedEventCount(deviceToken: $deviceToken, since: $since)
+}
+    `) as unknown as TypedDocumentString<FailedEventCountQuery, FailedEventCountQueryVariables>;

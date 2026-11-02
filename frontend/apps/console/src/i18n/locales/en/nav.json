@@ -9,6 +9,7 @@
   "deviceProfiles": "Device Profiles",
   "deviceGroups": "Device Groups",
   "commandBatches": "Command Batches",
+  "ingestFailures": "Ingest failures",
   "assets": "Assets",
   "assetTypes": "Asset Types",
   "assetGroups": "Asset Groups",

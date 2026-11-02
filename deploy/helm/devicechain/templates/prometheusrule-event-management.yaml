@@ -1,0 +1,42 @@
+{{/*
+Alerting rules for event-management's failed-events index.
+
+WHY THIS GROUP EXISTS. event-management reads the failed-events stream into an index a tenant
+queries as failedEvents. The index deliberately hides a flood: it keeps at most ten rows per
+device per reason per hour and folds the rest into a count. So the TABLE cannot tell an
+operator that a fleet is being refused a thousand events a second; the rate counter the reader
+increments for EVERY record can, and this rule reads that.
+
+ANY ONE REASON ABOVE 1 RECORD A SECOND FOR 15 MINUTES FIRES. A handful of refusals is a device
+with a typo; a sustained rate is a fleet that was configured wrong or a release that broke
+ingest, and it is the case where nobody is looking at a single device.
+
+THE SERIES IS A COUNTER THAT EXISTS ONLY ONCE A REASON HAS BEEN SEEN, which is right here: a
+reason that has never occurred has no rate to be above 1. There is no absent() arm; an
+event-management that exports nothing is a pod failing loudly in its own right, which the
+container-restart alerts catch.
+*/}}
+{{- if and .Values.metrics.enabled .Values.metrics.alerts }}
+{{- $ns := include "devicechain.instanceNamespace" . }}
+{{- $id := .Values.instance.id }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: event-management
+  namespace: {{ $ns }}
+  labels:
+    {{- include "devicechain.instanceLabels" . | nindent 4 }}
+spec:
+  groups:
+    - name: devicechain.event-management
+      rules:
+        - alert: FailedEventsSustained
+          expr: sum by (reason) (rate(devicechain_eventmanagement_failed_events_recorded_total{namespace="{{ $ns }}"}[5m])) > 1
+          for: 15m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "the platform has been refusing more than one event a second for the same reason for 15 minutes"
+            description: "Events are being refused or could not be stored at more than one a second for the reason named by the reason label, and have been for 15 minutes. This is a fleet-wide pattern, not one device: a credential or certificate that is wrong across many devices (unauthenticated), devices that were never registered (device_not_found), a gateway publishing for devices it does not hold (not_gateway_child), or a failing dependency (api_call_failed). The tenants' failedEvents query and the Ingest failures view in the console show which devices and what the platform said, at most ten rows per device an hour with the rest counted. Nothing is re-sent: the events were not stored, and fixing the cause makes the devices' next events succeed."
+{{- end }}

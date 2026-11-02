@@ -40,12 +40,14 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	savedProc, savedRec, savedNats, savedSvc := EventPersistenceProcessor, EntityAnchorReconciler, NatsManager, Svc
 	savedSweep, savedWorker := AnchorSweep, BackfillWorker
 	savedRevents, savedFailed, savedDentity := ResolvedEventsReader, FailedEventsWriter, EntityDeletedReader
+	savedFevReader, savedFevIndexer, savedFevMetrics := FailedEventsReader, FailedEventsIndexer, FailedEventMetrics
 	t.Cleanup(func() {
 		Microservice, Configuration, Api = savedMs, savedCfg, savedApi
 		PersistMetrics, BackfillMetrics = savedMetrics, savedBackfillMetrics
 		EventPersistenceProcessor, EntityAnchorReconciler, NatsManager, Svc = savedProc, savedRec, savedNats, savedSvc
 		AnchorSweep, BackfillWorker = savedSweep, savedWorker
 		ResolvedEventsReader, FailedEventsWriter, EntityDeletedReader = savedRevents, savedFailed, savedDentity
+		FailedEventsReader, FailedEventsIndexer, FailedEventMetrics = savedFevReader, savedFevIndexer, savedFevMetrics
 	})
 
 	Microservice = &core.Microservice{
@@ -72,7 +74,7 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	NatsManager = Svc.Nats
 	t.Cleanup(func() {
 		// A refused start leaves no processors to stop; do not let a nil deref mask the refusal.
-		if EventPersistenceProcessor != nil && EntityAnchorReconciler != nil {
+		if EventPersistenceProcessor != nil && EntityAnchorReconciler != nil && FailedEventsIndexer != nil {
 			if err := beforeMicroserviceStopped(context.Background()); err != nil {
 				t.Logf("stopping the service: %v", err)
 			}
@@ -87,6 +89,8 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	require.NotNil(t, ResolvedEventsReader, "resolved-events reader")
 	require.NotNil(t, FailedEventsWriter, "failed-events writer")
 	require.NotNil(t, EntityDeletedReader, "entity-deleted reader")
+	require.NotNil(t, FailedEventsReader, "failed-events reader (the index consumer's durable, declared in streams.All)")
+	require.NotNil(t, FailedEventsIndexer, "failed-events index consumer")
 
 	// Opened lazily, per subscriber, after start: graphql/subscriptions_events.go:49 feeds the
 	// events subscription from the tenant's resolved-events stream as a live (non-durable) feed.

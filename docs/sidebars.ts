@@ -189,6 +189,7 @@ const sidebars: SidebarsConfig = {
             'guides/importing-devices',
             'guides/migrating-from-another-platform',
             'guides/inbound-integrations',
+            'guides/why-isnt-my-data-showing-up',
             'guides/managing-assignments',
           ],
         },

@@ -56,7 +56,7 @@ const config: CodegenConfig = {
     },
     './src/gql/event-management/': {
       schema: '../../../backend/services/event-management/graphql/schema.graphql',
-      documents: ['src/lib/api/event-management.ts'],
+      documents: ['src/lib/api/event-management.ts', 'src/lib/api/ingest-failures.ts'],
       preset: 'client',
       presetConfig: { fragmentMasking: false },
       config: { documentMode: 'string' },

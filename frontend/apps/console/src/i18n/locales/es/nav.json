@@ -10,6 +10,7 @@
   "deviceProfiles": "Perfiles de dispositivo",
   "deviceGroups": "Grupos de dispositivos",
   "commandBatches": "Lotes de comandos",
+  "ingestFailures": "Fallos de ingesta",
   "assets": "Activos",
   "assetTypes": "Tipos de activo",
   "assetGroups": "Grupos de activos",

@@ -21,11 +21,14 @@ CREATE FUNCTION analytics.reader_tenant() RETURNS text
  THEN substring(session_user::text from 11)
  END
  $$;
+CREATE INDEX failed_event_records_occurred_time_idx ON "event-management".failed_event_records USING btree (occurred_time DESC);
 CREATE INDEX idx_audit_tenant_time ON "event-management".audit_events USING btree (tenant_id, occurred_time DESC);
 CREATE INDEX idx_calculated_backfills_status_updated ON "event-management".calculated_backfills USING btree (status, updated_at);
 CREATE INDEX idx_calculated_backfills_tenant_profile ON "event-management".calculated_backfills USING btree (tenant_id, profile_token, created_at DESC);
 CREATE INDEX idx_event_anchors_lookup ON "event-management".event_anchors USING btree (tenant_id, anchor_type, anchor_token, occurred_time DESC);
 CREATE INDEX idx_events_tenant_device_time ON "event-management".events USING btree (tenant_id, device_token, occurred_time DESC);
+CREATE INDEX idx_failed_event_records_device ON "event-management".failed_event_records USING btree (tenant_id, device_token, reason, occurred_time DESC);
+CREATE INDEX idx_failed_event_records_tenant_time ON "event-management".failed_event_records USING btree (tenant_id, occurred_time DESC);
 CREATE INDEX idx_measurement_tenant_device_name_time ON "event-management".measurement_events USING btree (tenant_id, device_token, name, occurred_time DESC);
 CREATE INDEX measurement_events_occurred_time_idx ON "event-management".measurement_events USING btree (occurred_time DESC);
 CREATE SCHEMA "event-management";
@@ -127,6 +130,18 @@ CREATE TABLE "event-management".events (
  alt_id text,
  processed_time timestamp with time zone
 );
+CREATE TABLE "event-management".failed_event_records (
+ tenant_id character varying(128) NOT NULL,
+ occurred_time timestamp with time zone NOT NULL,
+ record_seq bigint NOT NULL,
+ source_area character varying(64) NOT NULL,
+ reason integer NOT NULL,
+ device_token character varying(128) DEFAULT ''::character varying NOT NULL COLLATE pg_catalog."C",
+ event_type bigint,
+ error character varying(512) DEFAULT ''::character varying NOT NULL,
+ correlation character varying(128) DEFAULT ''::character varying NOT NULL,
+ suppressed bigint DEFAULT 0 NOT NULL
+);
 CREATE TABLE "event-management".location_events (
  tenant_id character varying(128) NOT NULL,
  event_id bytea NOT NULL,
@@ -175,6 +190,7 @@ CREATE UNIQUE INDEX uix_calculated_backfills_tenant_active ON "event-management"
 CREATE UNIQUE INDEX uix_calculated_backfills_tenant_token ON "event-management".calculated_backfills USING btree (tenant_id, token);
 CREATE UNIQUE INDEX uq_alert_events_idem ON "event-management".alert_events USING btree (tenant_id, occurred_time, payload_id);
 CREATE UNIQUE INDEX uq_event_anchors_idem ON "event-management".event_anchors USING btree (tenant_id, occurred_time, event_id, anchor_type, anchor_token);
+CREATE UNIQUE INDEX uq_failed_event_records_seq ON "event-management".failed_event_records USING btree (tenant_id, record_seq, occurred_time);
 CREATE UNIQUE INDEX uq_location_events_idem ON "event-management".location_events USING btree (tenant_id, occurred_time, payload_id);
 CREATE UNIQUE INDEX uq_measurement_events_idem ON "event-management".measurement_events USING btree (tenant_id, occurred_time, payload_id);
 CREATE UNIQUE INDEX uq_state_change_events_idem ON "event-management".state_change_events USING btree (tenant_id, device_token, occurred_time, state, session_id);
@@ -293,6 +309,7 @@ TIMESCALE CONTINUOUS AGGREGATE measurement_rollups MATERIALIZED_ONLY f MATERIALI
 TIMESCALE HYPERTABLE alert_events DIMENSION occurred_time INTERVAL 7 days COMPRESSION f;
 TIMESCALE HYPERTABLE event_anchors DIMENSION occurred_time INTERVAL 7 days COMPRESSION f;
 TIMESCALE HYPERTABLE events DIMENSION occurred_time INTERVAL 7 days COMPRESSION f;
+TIMESCALE HYPERTABLE failed_event_records DIMENSION occurred_time INTERVAL 7 days COMPRESSION f;
 TIMESCALE HYPERTABLE location_events DIMENSION occurred_time INTERVAL 7 days COMPRESSION f;
 TIMESCALE HYPERTABLE measurement_events DIMENSION occurred_time INTERVAL 7 days COMPRESSION f;
 TIMESCALE HYPERTABLE state_change_events DIMENSION occurred_time INTERVAL 7 days COMPRESSION f;

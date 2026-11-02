@@ -5,6 +5,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { AlertTriangle, HelpCircle, Trash2, Wifi, WifiOff } from 'lucide-react';
 import { PageShell } from '@/components/ui/page-shell';
+import { DeviceRejectedNotice } from './DeviceRejectedNotice';
 import { CopyToken } from '@/components/ui/copy-token';
 import { SectionPanel } from '@/components/ui/section-panel';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
@@ -157,6 +158,7 @@ export default function DeviceDetailPage() {
     >
       {/* Connectivity + events sit in their own tabs, so they load only when
           opened and the page stays digestible. */}
+      {!scoped && <DeviceRejectedNotice deviceToken={device.token} />}
       <Tabs defaultValue="basic">
         <TabsList>
           <TabsTrigger value="basic">{t('tabBasic')}</TabsTrigger>

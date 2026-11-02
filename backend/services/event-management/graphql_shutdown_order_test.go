@@ -208,9 +208,11 @@ func startShutdownFixture(t *testing.T) (*shutdownProbe, string) {
 
 	prevMs, prevGql, prevNats, prevRdb := Microservice, GraphQLManager, NatsManager, RdbManager
 	prevPersist, prevRecon, prevSweep, prevSvc := EventPersistenceProcessor, EntityAnchorReconciler, AnchorSweep, Svc
+	prevFev := FailedEventsIndexer
 	t.Cleanup(func() {
 		Microservice, GraphQLManager, NatsManager, RdbManager = prevMs, prevGql, prevNats, prevRdb
 		EventPersistenceProcessor, EntityAnchorReconciler, AnchorSweep, Svc = prevPersist, prevRecon, prevSweep, prevSvc
+		FailedEventsIndexer = prevFev
 	})
 
 	area := fmt.Sprintf("event-management-shutdown-%d", time.Now().UnixNano())
@@ -272,6 +274,8 @@ func startShutdownFixture(t *testing.T) (*shutdownProbe, string) {
 	EntityAnchorReconciler = processor.NewEntityAnchorReconciler(Microservice, nil, nil,
 		core.NewNoOpLifecycleCallbacks())
 	require.NoError(t, EntityAnchorReconciler.Initialize(context.Background()))
+	FailedEventsIndexer = processor.NewFailedEventsIndexer(Microservice, nil, nil, nil, core.NewNoOpLifecycleCallbacks())
+	require.NoError(t, FailedEventsIndexer.Initialize(context.Background()))
 
 	// The reconciliation sweep is nil-guarded in the stopper; there is nothing to stop.
 	AnchorSweep = nil

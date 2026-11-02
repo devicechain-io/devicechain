@@ -22,6 +22,9 @@ type Documents = {
     "\n  mutation CancelCalculatedMetricBackfill($token: String!) {\n    cancelCalculatedMetricBackfill(token: $token) {\n      token\n      status\n      cancelRequestedAt\n    }\n  }\n": typeof types.CancelCalculatedMetricBackfillDocument,
     "\n  query CalculatedMetricBackfills($profileToken: String, $first: Int) {\n    calculatedMetricBackfills(profileToken: $profileToken, first: $first) {\n      nodes {\n        token\n        status\n        profileToken\n        profileVersion\n        metricKeys\n        warnings\n        from\n        to\n        devicesTotal\n        devicesDone\n        progress\n        samples\n        computed\n        written\n        alreadyPresent\n        windowsCompressed\n        windowsBeyondRetention\n        windowsRefreshed\n        skipped {\n          reason\n          count\n        }\n        storedInputPrecision\n        failure\n        createdAt\n        createdBy\n        startedAt\n        finishedAt\n        cancelRequestedAt\n      }\n      nextCursor\n    }\n  }\n": typeof types.CalculatedMetricBackfillsDocument,
     "\n  query HourlyMeasurementCounts($criteria: MeasurementAggregationCriteria!) {\n    bucketedMeasurements(criteria: $criteria) {\n      bucketStart\n      count\n    }\n  }\n": typeof types.HourlyMeasurementCountsDocument,
+    "\n  query FailedEvents($criteria: FailedEventSearchCriteria!) {\n    failedEvents(criteria: $criteria) {\n      results {\n        recordSeq\n        occurredTime\n        sourceArea\n        reason\n        reasonCode\n        deviceToken\n        eventType\n        error\n        correlation\n        suppressed\n        overflow\n        payloadStatus\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": typeof types.FailedEventsDocument,
+    "\n  query FailedEventSummary($since: String!) {\n    failedEventSummary(since: $since) {\n      reason\n      reasonCode\n      records\n      suppressed\n      devices {\n        deviceToken\n        records\n      }\n    }\n  }\n": typeof types.FailedEventSummaryDocument,
+    "\n  query FailedEventCount($deviceToken: String!, $since: String!) {\n    failedEventCount(deviceToken: $deviceToken, since: $since)\n  }\n": typeof types.FailedEventCountDocument,
 };
 const documents: Documents = {
     "\n  query Events($criteria: EventSearchCriteria!) {\n    events(criteria: $criteria) {\n      results {\n        id\n        deviceToken\n        eventType\n        occurredTime\n        source\n      }\n      pagination {\n        totalRecords\n      }\n    }\n  }\n": types.EventsDocument,
@@ -31,6 +34,9 @@ const documents: Documents = {
     "\n  mutation CancelCalculatedMetricBackfill($token: String!) {\n    cancelCalculatedMetricBackfill(token: $token) {\n      token\n      status\n      cancelRequestedAt\n    }\n  }\n": types.CancelCalculatedMetricBackfillDocument,
     "\n  query CalculatedMetricBackfills($profileToken: String, $first: Int) {\n    calculatedMetricBackfills(profileToken: $profileToken, first: $first) {\n      nodes {\n        token\n        status\n        profileToken\n        profileVersion\n        metricKeys\n        warnings\n        from\n        to\n        devicesTotal\n        devicesDone\n        progress\n        samples\n        computed\n        written\n        alreadyPresent\n        windowsCompressed\n        windowsBeyondRetention\n        windowsRefreshed\n        skipped {\n          reason\n          count\n        }\n        storedInputPrecision\n        failure\n        createdAt\n        createdBy\n        startedAt\n        finishedAt\n        cancelRequestedAt\n      }\n      nextCursor\n    }\n  }\n": types.CalculatedMetricBackfillsDocument,
     "\n  query HourlyMeasurementCounts($criteria: MeasurementAggregationCriteria!) {\n    bucketedMeasurements(criteria: $criteria) {\n      bucketStart\n      count\n    }\n  }\n": types.HourlyMeasurementCountsDocument,
+    "\n  query FailedEvents($criteria: FailedEventSearchCriteria!) {\n    failedEvents(criteria: $criteria) {\n      results {\n        recordSeq\n        occurredTime\n        sourceArea\n        reason\n        reasonCode\n        deviceToken\n        eventType\n        error\n        correlation\n        suppressed\n        overflow\n        payloadStatus\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.FailedEventsDocument,
+    "\n  query FailedEventSummary($since: String!) {\n    failedEventSummary(since: $since) {\n      reason\n      reasonCode\n      records\n      suppressed\n      devices {\n        deviceToken\n        records\n      }\n    }\n  }\n": types.FailedEventSummaryDocument,
+    "\n  query FailedEventCount($deviceToken: String!, $since: String!) {\n    failedEventCount(deviceToken: $deviceToken, since: $since)\n  }\n": types.FailedEventCountDocument,
 };
 
 /**
@@ -61,6 +67,18 @@ export function graphql(source: "\n  query CalculatedMetricBackfills($profileTok
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
 export function graphql(source: "\n  query HourlyMeasurementCounts($criteria: MeasurementAggregationCriteria!) {\n    bucketedMeasurements(criteria: $criteria) {\n      bucketStart\n      count\n    }\n  }\n"): typeof import('./graphql').HourlyMeasurementCountsDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query FailedEvents($criteria: FailedEventSearchCriteria!) {\n    failedEvents(criteria: $criteria) {\n      results {\n        recordSeq\n        occurredTime\n        sourceArea\n        reason\n        reasonCode\n        deviceToken\n        eventType\n        error\n        correlation\n        suppressed\n        overflow\n        payloadStatus\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n"): typeof import('./graphql').FailedEventsDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query FailedEventSummary($since: String!) {\n    failedEventSummary(since: $since) {\n      reason\n      reasonCode\n      records\n      suppressed\n      devices {\n        deviceToken\n        records\n      }\n    }\n  }\n"): typeof import('./graphql').FailedEventSummaryDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query FailedEventCount($deviceToken: String!, $since: String!) {\n    failedEventCount(deviceToken: $deviceToken, since: $since)\n  }\n"): typeof import('./graphql').FailedEventCountDocument;
 
 
 export function graphql(source: string) {

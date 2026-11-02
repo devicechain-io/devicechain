@@ -103,18 +103,14 @@ func NewEventPersistenceWorker(workerId int, api model.EventManagementApi,
 // the delivery cap (ADR-024). A transient failure (e.g. a DB blip) is not wrapped and
 // keeps the retry path.
 //
-// 🔴 "ABANDONED", NOT "DEAD-LETTERED", AND THE DIFFERENCE IS THAT NOTHING DRAINS
-// failed-events. The platform HAS a dead-letter sink — streams.DeadLetters, whose
+// 🔴 "ABANDONED", NOT "DEAD-LETTERED", AND THE DIFFERENCE IS THAT NOTHING WORKS
+// failed-events OFF. The platform HAS a dead-letter sink — streams.DeadLetters, whose
 // letters user-management stores and command-delivery reads back — and this is not
-// it. streams.FailedEvents has exactly two references in the backend, and both are
-// NewWriter (this service and device-management): no consumer, no store, no console
-// surface. So an event that lands there is retained for the stream's cold-tier
-// window and then expires unread, and the operator-visible record of the failure is
-// the log line and the RED metrics counter, not a queue anyone can work off.
-//
-// That is a real gap rather than a naming quibble, and it is recorded here instead
-// of being papered over: the vocabulary is the only thing that told a reader a queue
-// existed to be drained.
+// it. streams.FailedEvents is READ, by this service, into the failed_event_records
+// index a tenant's administrators query (failedEvents): a report of what was refused
+// and why, with the original located on the stream until the cold tier rolls it off.
+// Nothing replays it. An event that lands there is not retried or recovered, and the
+// vocabulary must not suggest a queue anyone can work off.
 var ErrDeterministic = model.ErrDeterministic
 
 // classifyPersistFailure re-classifies a database error that no redelivery can fix.

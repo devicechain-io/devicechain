@@ -6,6 +6,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
   AlertTriangle,
+  FileWarning,
   BellRing,
   Boxes,
   Building2,
@@ -115,6 +116,9 @@ export const NAV: NavNode[] = [
     items: [
       { labelKey: 'dashboards', href: '/dashboards', icon: LayoutDashboard, requires: 'dashboard:read', scoped: true },
       { labelKey: 'alarms', href: '/alarms', icon: AlertTriangle, requires: 'alarm:read', scoped: true },
+      // Events the platform refused (unknown device, bad credential...). A whole-tenant view with no
+      // customer to scope it to, so it is not offered to a customer-scoped member.
+      { labelKey: 'ingestFailures', href: '/ingest-failures', icon: FileWarning, requires: 'event:read' },
       // Who gets paged for an alarm, and when they are left alone. notification-management has its
       // own authority pair, separate from alarm:read.
       { labelKey: 'notificationPolicies', href: '/notification-policies', icon: BellRing, requires: 'notification:read' },

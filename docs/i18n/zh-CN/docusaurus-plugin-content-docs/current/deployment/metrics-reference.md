@@ -156,6 +156,16 @@ title: 指标参考
 | `react_events_poison_dropped_total` | 因分发持续失败而在达到重投递上限后被丢弃的派生事件。它们同时也写入死信流，因此这与 `react_events_dead_lettered_total` 统计的是同一批事件；保留它是因为 `ReactPoisonDropping` 告警依据它触发。 |
 | `react_workers` | REACT 可同时分发的派生事件数（`react.workers`）。同一设备的事件按流中顺序逐个分发，但留待重新投递的事件会在其后的事件之后再次分发。 |
 
+## Event management {#event-management}
+
+前缀：`devicechain_eventmanagement_`。
+
+| 指标 | 计数内容与处理方式 |
+| --- | --- |
+| `failed_events_recorded_total{source,reason}` | [失败事件索引](../guides/why-isnt-my-data-showing-up.md)读取到的、平台拒绝或无法存储的事件记录数，按写入该记录的区域和原因划分。每条记录都计数，包括被洪泛上限并入已有行的记录，因此它是平台拒绝事件的真实速率。`FailedEventsSustained` 依据它触发。 |
+| `failed_events_suppressed_total{reason}` | 因设备或原因达到每小时上限而并入已有行计数、未新增行的记录数。持续偏高说明某个设备或某种原因在大量拒绝事件。 |
+| `failed_events_unindexed_total{cause}` | 索引完全没有存储的记录数：`no_tenant`（主题未指明租户）、`undecodable`（记录无法解码）、`erased`（该租户的数据已被擦除）、`gave_up`（存储在每次投递时都拒绝了该记录）。只有 `gave_up` 值得排查；该记录会保留在失败流中，直到被滚动淘汰。 |
+
 ## 事件来源 {#event-sources}
 
 前缀：`devicechain_eventsources_`。

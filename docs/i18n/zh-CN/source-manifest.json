@@ -135,12 +135,12 @@
       "translationSha256": "781e5f66c1b6e91d10b5483b3538b378480fa658223675b5e265531be156c4bf"
     },
     "deployment/metrics-reference.md": {
-      "sourceSha256": "ac5db7aea789f93f397a0adef7f4e62b607e08f74d39ee9db3d270f2d09c8871",
-      "translationSha256": "6982dcaa1d1a96e9750d367bfac6b8a2fa1102c049b8fec5e74ed83192408c6b"
+      "sourceSha256": "c18d51d6a896d53edbbb0a46bb42c6012c6fec7aef9b45c6ff1038f138607072",
+      "translationSha256": "ae4f9dfe5bc3a580b22d4546a400cd29d74781029d90b4ea9e375d09c43cbe7b"
     },
     "deployment/observability.md": {
-      "sourceSha256": "1773cfc802df54bf93f7c095a39578ff1a705b7d55778f0df6ebe067369957d3",
-      "translationSha256": "6d258b7e993aff50cc4eb25eeb62f5043fbc9ff1e17cd853f31ba39dba781576"
+      "sourceSha256": "8712248f2af525ad79501a65e0f7a5e513447899c97695fa5ef8a2794c67da06",
+      "translationSha256": "c9ca91feec4abf4ddd67c35e28f5e224442a9dff8261ac66c12f81818c071dae"
     },
     "deployment/releases-and-upgrades.md": {
       "sourceSha256": "5519bf7ef8a6450e445c064ab773604fcbe8fe4eda3097372fef510c51cc2d81",
@@ -241,6 +241,10 @@
     "guides/two-factor-authentication.md": {
       "sourceSha256": "8c24067929c966a1b6942368e4acd69438557d11f4204b784877e0c01e6fd728",
       "translationSha256": "118d4d718f861ecb7ca46fdee90f4c4856a38d25e0d86c8210ee31f3a5a78545"
+    },
+    "guides/why-isnt-my-data-showing-up.md": {
+      "sourceSha256": "d85eaee86e2bb79333b6b7b06cf613db74c9920c9f653104f1d845e68df631e0",
+      "translationSha256": "816ef2e6395990a90ab14054beb890829cbc1c386e00f987ea61bfb4ec3a780d"
     },
     "guides/widget-versions-and-compatibility.md": {
       "sourceSha256": "11cdfdffa5b333142fb41b13646e9aa523d0abb5c605fe55835569c2232a0098",
