@@ -124,6 +124,8 @@ func runTestServer(t *testing.T) *natsserver.Server {
 	t.Helper()
 	srv, err := natsserver.NewServer(&natsserver.Options{
 		Host: "127.0.0.1", Port: -1, JetStream: true, StoreDir: dctest.JetStreamStoreDir(t),
+		// Not 75% of the free disk: see dctest.JetStreamMaxStore.
+		JetStreamMaxStore: dctest.JetStreamMaxStore,
 	})
 	if err != nil {
 		t.Fatalf("new nats server: %v", err)
