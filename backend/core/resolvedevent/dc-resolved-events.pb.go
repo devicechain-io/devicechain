@@ -835,7 +835,12 @@ type PResolvedMeasurementsEntry struct {
 	// carries its time, in exactly one form: this one, or occurred_time as an RFC 3339
 	// string for an instant this count cannot hold. Neither present: a message written
 	// before per-sample times existed, which decodes at the envelope's time.
-	Occurred      *int64 `protobuf:"fixed64,3,opt,name=occurred,proto3,oneof" json:"occurred,omitempty"`
+	Occurred *int64 `protobuf:"fixed64,3,opt,name=occurred,proto3,oneof" json:"occurred,omitempty"`
+	// The entries of this sample the resolver discarded while it stored the rest (a text value
+	// for a key the profile does not declare, a non-finite number, ...). A diagnostic for the
+	// device-state projection only: it is not part of the stored event and not of its identity.
+	// Empty on a sample that lost nothing, and then absent from the wire.
+	Dropped       []*PDroppedMeasurement `protobuf:"bytes,4,rep,name=dropped,proto3" json:"dropped,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -891,6 +896,77 @@ func (x *PResolvedMeasurementsEntry) GetOccurred() int64 {
 	return 0
 }
 
+func (x *PResolvedMeasurementsEntry) GetDropped() []*PDroppedMeasurement {
+	if x != nil {
+		return x.Dropped
+	}
+	return nil
+}
+
+// *
+// One measurement entry discarded at resolution while its event's other entries were stored.
+// reason is one of the closed vocabulary in dropped.go (the same strings as the
+// resolve_measurement_dropped_total label); value is truncated to 64 bytes.
+type PDroppedMeasurement struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Reason        string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
+	Value         string                 `protobuf:"bytes,3,opt,name=value,proto3" json:"value,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PDroppedMeasurement) Reset() {
+	*x = PDroppedMeasurement{}
+	mi := &file_resolvedevent_dc_resolved_events_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PDroppedMeasurement) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PDroppedMeasurement) ProtoMessage() {}
+
+func (x *PDroppedMeasurement) ProtoReflect() protoreflect.Message {
+	mi := &file_resolvedevent_dc_resolved_events_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PDroppedMeasurement.ProtoReflect.Descriptor instead.
+func (*PDroppedMeasurement) Descriptor() ([]byte, []int) {
+	return file_resolvedevent_dc_resolved_events_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *PDroppedMeasurement) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *PDroppedMeasurement) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+func (x *PDroppedMeasurement) GetValue() string {
+	if x != nil {
+		return x.Value
+	}
+	return ""
+}
+
 // *
 // Payload for a measurement event.
 type PResolvedMeasurementsPayload struct {
@@ -902,7 +978,7 @@ type PResolvedMeasurementsPayload struct {
 
 func (x *PResolvedMeasurementsPayload) Reset() {
 	*x = PResolvedMeasurementsPayload{}
-	mi := &file_resolvedevent_dc_resolved_events_proto_msgTypes[9]
+	mi := &file_resolvedevent_dc_resolved_events_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -914,7 +990,7 @@ func (x *PResolvedMeasurementsPayload) String() string {
 func (*PResolvedMeasurementsPayload) ProtoMessage() {}
 
 func (x *PResolvedMeasurementsPayload) ProtoReflect() protoreflect.Message {
-	mi := &file_resolvedevent_dc_resolved_events_proto_msgTypes[9]
+	mi := &file_resolvedevent_dc_resolved_events_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -927,7 +1003,7 @@ func (x *PResolvedMeasurementsPayload) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PResolvedMeasurementsPayload.ProtoReflect.Descriptor instead.
 func (*PResolvedMeasurementsPayload) Descriptor() ([]byte, []int) {
-	return file_resolvedevent_dc_resolved_events_proto_rawDescGZIP(), []int{9}
+	return file_resolvedevent_dc_resolved_events_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *PResolvedMeasurementsPayload) GetEntries() []*PResolvedMeasurementsEntry {
@@ -957,7 +1033,7 @@ type PResolvedAlertEntry struct {
 
 func (x *PResolvedAlertEntry) Reset() {
 	*x = PResolvedAlertEntry{}
-	mi := &file_resolvedevent_dc_resolved_events_proto_msgTypes[10]
+	mi := &file_resolvedevent_dc_resolved_events_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -969,7 +1045,7 @@ func (x *PResolvedAlertEntry) String() string {
 func (*PResolvedAlertEntry) ProtoMessage() {}
 
 func (x *PResolvedAlertEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_resolvedevent_dc_resolved_events_proto_msgTypes[10]
+	mi := &file_resolvedevent_dc_resolved_events_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -982,7 +1058,7 @@ func (x *PResolvedAlertEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PResolvedAlertEntry.ProtoReflect.Descriptor instead.
 func (*PResolvedAlertEntry) Descriptor() ([]byte, []int) {
-	return file_resolvedevent_dc_resolved_events_proto_rawDescGZIP(), []int{10}
+	return file_resolvedevent_dc_resolved_events_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *PResolvedAlertEntry) GetType() string {
@@ -1038,7 +1114,7 @@ type PResolvedAlertsPayload struct {
 
 func (x *PResolvedAlertsPayload) Reset() {
 	*x = PResolvedAlertsPayload{}
-	mi := &file_resolvedevent_dc_resolved_events_proto_msgTypes[11]
+	mi := &file_resolvedevent_dc_resolved_events_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1050,7 +1126,7 @@ func (x *PResolvedAlertsPayload) String() string {
 func (*PResolvedAlertsPayload) ProtoMessage() {}
 
 func (x *PResolvedAlertsPayload) ProtoReflect() protoreflect.Message {
-	mi := &file_resolvedevent_dc_resolved_events_proto_msgTypes[11]
+	mi := &file_resolvedevent_dc_resolved_events_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1063,7 +1139,7 @@ func (x *PResolvedAlertsPayload) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PResolvedAlertsPayload.ProtoReflect.Descriptor instead.
 func (*PResolvedAlertsPayload) Descriptor() ([]byte, []int) {
-	return file_resolvedevent_dc_resolved_events_proto_rawDescGZIP(), []int{11}
+	return file_resolvedevent_dc_resolved_events_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *PResolvedAlertsPayload) GetEntries() []*PResolvedAlertEntry {
@@ -1092,7 +1168,7 @@ type PResolvedStateChangePayload struct {
 
 func (x *PResolvedStateChangePayload) Reset() {
 	*x = PResolvedStateChangePayload{}
-	mi := &file_resolvedevent_dc_resolved_events_proto_msgTypes[12]
+	mi := &file_resolvedevent_dc_resolved_events_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1104,7 +1180,7 @@ func (x *PResolvedStateChangePayload) String() string {
 func (*PResolvedStateChangePayload) ProtoMessage() {}
 
 func (x *PResolvedStateChangePayload) ProtoReflect() protoreflect.Message {
-	mi := &file_resolvedevent_dc_resolved_events_proto_msgTypes[12]
+	mi := &file_resolvedevent_dc_resolved_events_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1117,7 +1193,7 @@ func (x *PResolvedStateChangePayload) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PResolvedStateChangePayload.ProtoReflect.Descriptor instead.
 func (*PResolvedStateChangePayload) Descriptor() ([]byte, []int) {
-	return file_resolvedevent_dc_resolved_events_proto_rawDescGZIP(), []int{12}
+	return file_resolvedevent_dc_resolved_events_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *PResolvedStateChangePayload) GetState() string {
@@ -1245,13 +1321,18 @@ const file_resolvedevent_dc_resolved_events_proto_rawDesc = "" +
 	"\v_classifierB\a\n" +
 	"\x05_unitB\f\n" +
 	"\n" +
-	"_data_type\"\xe6\x01\n" +
+	"_data_type\"\xb6\x02\n" +
 	"\x1aPResolvedMeasurementsEntry\x12^\n" +
 	"\fmeasurements\x18\x01 \x03(\v2:.io.devicechain.devicemanagement.PResolvedMeasurementEntryR\fmeasurements\x12(\n" +
 	"\roccurred_time\x18\x02 \x01(\tH\x00R\foccurredTime\x88\x01\x01\x12\x1f\n" +
-	"\boccurred\x18\x03 \x01(\x10H\x01R\boccurred\x88\x01\x01B\x10\n" +
+	"\boccurred\x18\x03 \x01(\x10H\x01R\boccurred\x88\x01\x01\x12N\n" +
+	"\adropped\x18\x04 \x03(\v24.io.devicechain.devicemanagement.PDroppedMeasurementR\adroppedB\x10\n" +
 	"\x0e_occurred_timeB\v\n" +
-	"\t_occurred\"u\n" +
+	"\t_occurred\"W\n" +
+	"\x13PDroppedMeasurement\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason\x12\x14\n" +
+	"\x05value\x18\x03 \x01(\tR\x05value\"u\n" +
 	"\x1cPResolvedMeasurementsPayload\x12U\n" +
 	"\aentries\x18\x01 \x03(\v2;.io.devicechain.devicemanagement.PResolvedMeasurementsEntryR\aentries\"\xdb\x01\n" +
 	"\x13PResolvedAlertEntry\x12\x12\n" +
@@ -1296,7 +1377,7 @@ func file_resolvedevent_dc_resolved_events_proto_rawDescGZIP() []byte {
 }
 
 var file_resolvedevent_dc_resolved_events_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_resolvedevent_dc_resolved_events_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
+var file_resolvedevent_dc_resolved_events_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
 var file_resolvedevent_dc_resolved_events_proto_goTypes = []any{
 	(FailureReason)(0),                      // 0: io.devicechain.devicemanagement.FailureReason
 	(*PFailedEvent)(nil),                    // 1: io.devicechain.devicemanagement.PFailedEvent
@@ -1308,10 +1389,11 @@ var file_resolvedevent_dc_resolved_events_proto_goTypes = []any{
 	(*PResolvedLocationsPayload)(nil),       // 7: io.devicechain.devicemanagement.PResolvedLocationsPayload
 	(*PResolvedMeasurementEntry)(nil),       // 8: io.devicechain.devicemanagement.PResolvedMeasurementEntry
 	(*PResolvedMeasurementsEntry)(nil),      // 9: io.devicechain.devicemanagement.PResolvedMeasurementsEntry
-	(*PResolvedMeasurementsPayload)(nil),    // 10: io.devicechain.devicemanagement.PResolvedMeasurementsPayload
-	(*PResolvedAlertEntry)(nil),             // 11: io.devicechain.devicemanagement.PResolvedAlertEntry
-	(*PResolvedAlertsPayload)(nil),          // 12: io.devicechain.devicemanagement.PResolvedAlertsPayload
-	(*PResolvedStateChangePayload)(nil),     // 13: io.devicechain.devicemanagement.PResolvedStateChangePayload
+	(*PDroppedMeasurement)(nil),             // 10: io.devicechain.devicemanagement.PDroppedMeasurement
+	(*PResolvedMeasurementsPayload)(nil),    // 11: io.devicechain.devicemanagement.PResolvedMeasurementsPayload
+	(*PResolvedAlertEntry)(nil),             // 12: io.devicechain.devicemanagement.PResolvedAlertEntry
+	(*PResolvedAlertsPayload)(nil),          // 13: io.devicechain.devicemanagement.PResolvedAlertsPayload
+	(*PResolvedStateChangePayload)(nil),     // 14: io.devicechain.devicemanagement.PResolvedStateChangePayload
 }
 var file_resolvedevent_dc_resolved_events_proto_depIdxs = []int32{
 	0,  // 0: io.devicechain.devicemanagement.PFailedEvent.reason:type_name -> io.devicechain.devicemanagement.FailureReason
@@ -1319,13 +1401,14 @@ var file_resolvedevent_dc_resolved_events_proto_depIdxs = []int32{
 	3,  // 2: io.devicechain.devicemanagement.PResolvedEvent.scope_memberships:type_name -> io.devicechain.devicemanagement.PScopeMembership
 	6,  // 3: io.devicechain.devicemanagement.PResolvedLocationsPayload.entries:type_name -> io.devicechain.devicemanagement.PResolvedLocationEntry
 	8,  // 4: io.devicechain.devicemanagement.PResolvedMeasurementsEntry.measurements:type_name -> io.devicechain.devicemanagement.PResolvedMeasurementEntry
-	9,  // 5: io.devicechain.devicemanagement.PResolvedMeasurementsPayload.entries:type_name -> io.devicechain.devicemanagement.PResolvedMeasurementsEntry
-	11, // 6: io.devicechain.devicemanagement.PResolvedAlertsPayload.entries:type_name -> io.devicechain.devicemanagement.PResolvedAlertEntry
-	7,  // [7:7] is the sub-list for method output_type
-	7,  // [7:7] is the sub-list for method input_type
-	7,  // [7:7] is the sub-list for extension type_name
-	7,  // [7:7] is the sub-list for extension extendee
-	0,  // [0:7] is the sub-list for field type_name
+	10, // 5: io.devicechain.devicemanagement.PResolvedMeasurementsEntry.dropped:type_name -> io.devicechain.devicemanagement.PDroppedMeasurement
+	9,  // 6: io.devicechain.devicemanagement.PResolvedMeasurementsPayload.entries:type_name -> io.devicechain.devicemanagement.PResolvedMeasurementsEntry
+	12, // 7: io.devicechain.devicemanagement.PResolvedAlertsPayload.entries:type_name -> io.devicechain.devicemanagement.PResolvedAlertEntry
+	8,  // [8:8] is the sub-list for method output_type
+	8,  // [8:8] is the sub-list for method input_type
+	8,  // [8:8] is the sub-list for extension type_name
+	8,  // [8:8] is the sub-list for extension extendee
+	0,  // [0:8] is the sub-list for field type_name
 }
 
 func init() { file_resolvedevent_dc_resolved_events_proto_init() }
@@ -1338,15 +1421,15 @@ func file_resolvedevent_dc_resolved_events_proto_init() {
 	file_resolvedevent_dc_resolved_events_proto_msgTypes[5].OneofWrappers = []any{}
 	file_resolvedevent_dc_resolved_events_proto_msgTypes[7].OneofWrappers = []any{}
 	file_resolvedevent_dc_resolved_events_proto_msgTypes[8].OneofWrappers = []any{}
-	file_resolvedevent_dc_resolved_events_proto_msgTypes[10].OneofWrappers = []any{}
-	file_resolvedevent_dc_resolved_events_proto_msgTypes[12].OneofWrappers = []any{}
+	file_resolvedevent_dc_resolved_events_proto_msgTypes[11].OneofWrappers = []any{}
+	file_resolvedevent_dc_resolved_events_proto_msgTypes[13].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_resolvedevent_dc_resolved_events_proto_rawDesc), len(file_resolvedevent_dc_resolved_events_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   13,
+			NumMessages:   14,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

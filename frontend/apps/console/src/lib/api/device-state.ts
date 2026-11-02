@@ -9,6 +9,7 @@ import type {
   DeviceStatesByDeviceTokenQuery,
   LatestMeasurementsQuery,
   LatestLocationQuery,
+  DroppedMeasurementsQuery,
 } from '@/gql/device-state/graphql';
 
 // Public types derived from the generated operation results so they always
@@ -16,6 +17,7 @@ import type {
 export type DeviceState = DeviceStatesByDeviceTokenQuery['deviceStatesByDeviceToken'][number];
 export type LatestMeasurement = LatestMeasurementsQuery['latestMeasurements'][number];
 export type LatestLocation = NonNullable<LatestLocationQuery['latestLocation']>;
+export type DroppedMeasurement = DroppedMeasurementsQuery['droppedMeasurements'][number];
 
 // 🔴 `presenceSource` is not decoration. It discriminates a REPORTED disconnect
 // (ASSERTED — a transport told us the device went away) from mere silence (INFERRED —
@@ -71,6 +73,27 @@ const LATEST_MEASUREMENTS = graphql(`
 export async function getLatestMeasurements(deviceToken: string): Promise<LatestMeasurement[]> {
   const data = await gql('device-state', LATEST_MEASUREMENTS, { deviceToken });
   return data.latestMeasurements;
+}
+
+const DROPPED_MEASUREMENTS = graphql(`
+  query DroppedMeasurements($deviceToken: String!) {
+    droppedMeasurements(deviceToken: $deviceToken) {
+      id
+      name
+      reason
+      lastValue
+      count
+      lastTime
+    }
+  }
+`);
+
+// getDroppedMeasurements returns the measurement keys a device sent that the platform
+// discarded while it stored the rest of the message (the drop record). Requires state:read,
+// and is visible to the same readers as the device's latest readings.
+export async function getDroppedMeasurements(deviceToken: string): Promise<DroppedMeasurement[]> {
+  const data = await gql('device-state', DROPPED_MEASUREMENTS, { deviceToken });
+  return data.droppedMeasurements;
 }
 
 const LATEST_LOCATION = graphql(`

@@ -588,5 +588,18 @@
   "aliasProblem_value_ttsDeviceId": "1 to 36 letters, digits and hyphens, not starting or ending with a hyphen.",
   "aliasProblem_value_custom": "1 to 128 characters, with no control characters.",
   "aliasProblem_name": "Use lower-case letters, digits, hyphen or underscore, up to 63 characters.",
-  "aliasProblem_duplicate": "A device holds one value per scheme."
+  "aliasProblem_duplicate": "A device holds one value per scheme.",
+  "droppedKeysNotice_one": "{{count}} metric key from this device is being discarded",
+  "droppedKeysNotice_other": "{{count}} metric keys from this device are being discarded",
+  "droppedKeysHint": "The device is acknowledged and its other readings are stored, but these keys are not. Declare a key as a numeric metric on the device's profile to store it.",
+  "droppedKeysShowDetails": "Show the keys",
+  "droppedKeysTitle": "Discarded keys",
+  "droppedKeyColumn": "Key",
+  "droppedReasonColumn": "Why",
+  "droppedLastValueColumn": "Last value",
+  "droppedCountColumn": "Times",
+  "droppedLastSeenColumn": "Last seen",
+  "droppedReason_UNDECLARED_NON_NUMERIC": "Not declared on the profile, and the value is not a number",
+  "droppedReason_UNDECLARED_UNSTORABLE": "Not declared on the profile, and the number cannot be stored",
+  "droppedReason_DECLARED_NOT_STORABLE": "Declared with a data type that is not a time-series metric"
 }

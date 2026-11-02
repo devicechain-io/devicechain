@@ -25,6 +25,10 @@ type Api struct {
 	// initialized NatsManager, which does not exist when the Api is built; nil means
 	// the process cannot emit, and DemoteAssertedPresence fails closed on it.
 	demotions *DemotionEmitter
+	// OnDroppedEvicted is told, once a transaction has committed, how many drop-record rows
+	// its bound enforcement deleted (dropped_measurement_evicted_total). Wired
+	// after construction because the instrument is built after the Api; nil counts nothing.
+	OnDroppedEvicted func(n int64)
 }
 
 // Create a new API instance.
@@ -50,6 +54,9 @@ type DeviceStateApi interface {
 	LatestMeasurementsByDeviceToken(ctx context.Context, deviceToken string) ([]*LatestMeasurement, error)
 	MergeLatestLocations(ctx context.Context, deviceToken string, inputs []LatestLocationInput) error
 	LatestLocationsByDeviceToken(ctx context.Context, deviceTokens []string) ([]*LatestLocation, error)
+	MergeDroppedMeasurements(ctx context.Context, deviceToken string, inputs []DroppedMeasurementInput) error
+	DroppedMeasurementsByDeviceToken(ctx context.Context, deviceToken string) ([]*DroppedMeasurement, error)
+	DroppedMeasurementCount(ctx context.Context, deviceToken string) (int64, error)
 }
 
 // PresenceTransition is an authoritative presence claim (ADR-067) carried by a

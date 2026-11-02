@@ -208,6 +208,22 @@ message PResolvedMeasurementsEntry {
     // string for an instant this count cannot hold. Neither present: a message written
     // before per-sample times existed, which decodes at the envelope's time.
     optional sfixed64 occurred = 3;
+    // The entries of this sample the resolver discarded while it stored the rest (a text value
+    // for a key the profile does not declare, a non-finite number, ...). A diagnostic for the
+    // device-state projection only: it is not part of the stored event and not of its identity.
+    // Empty on a sample that lost nothing, and then absent from the wire.
+    repeated PDroppedMeasurement dropped = 4;
+}
+
+/**
+ * One measurement entry discarded at resolution while its event's other entries were stored.
+ * reason is one of the closed vocabulary in dropped.go (the same strings as the
+ * resolve_measurement_dropped_total label); value is truncated to 64 bytes.
+ */
+message PDroppedMeasurement {
+    string name = 1;
+    string reason = 2;
+    string value = 3;
 }
 
 /**

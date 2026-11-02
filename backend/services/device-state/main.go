@@ -18,6 +18,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/service"
 	"github.com/devicechain-io/dc-microservice/storehold"
 	"github.com/devicechain-io/dc-microservice/streams"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 var (
@@ -51,6 +52,8 @@ var (
 	// InactivitySweepMetrics is the inactivity monitor's pass signals, built once for the
 	// same reason and in the same place.
 	InactivitySweepMetrics *core.PeriodicTaskMetrics
+	// DroppedEvicted is dropped_measurement_evicted_total, built once for the same reason.
+	DroppedEvicted prometheus.Counter
 )
 
 func main() {
@@ -97,7 +100,18 @@ func parseConfiguration() error {
 // what makes this the safe half; messaging.NewNatsManager carries the reasoning.
 func buildMetrics() {
 	StateMetrics = processor.NewStateMetrics(Microservice)
+	// Rows the per-device bound on the drop record deleted; the Api reports to it once a
+	// transaction has committed (see AfterRdb, which wires the two).
+	DroppedEvicted = Microservice.NewCounter("dropped_measurement_evicted_total",
+		"Dropped-measurement records evicted because a device exceeded its bound of distinct (key, reason) pairs; the oldest last-seen goes first.")
 	InactivitySweepMetrics = Microservice.NewPeriodicTaskMetrics("inactivity_sweep")
+}
+
+// wireDroppedEvictions points the Api's eviction report at dropped_measurement_evicted_total.
+// A function of its own so a test can see the wire exists: an Api left unwired counts nothing,
+// and nothing else would notice.
+func wireDroppedEvictions(api *model.Api) {
+	api.OnDroppedEvicted = func(n int64) { DroppedEvicted.Add(float64(n)) }
 }
 
 // newStateProcessor assembles the state processor from this service's globals: its writers
@@ -203,6 +217,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			// Build every Prometheus instrument this service exports, before the NATS
 			// manager that consumes them.
 			buildMetrics()
+			wireDroppedEvictions(Api)
 			return nil
 		},
 		Nats: &service.NatsSpec{OnCreate: createNatsComponents},

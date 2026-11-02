@@ -31,5 +31,6 @@ var (
 		NewBaselineSchema(),
 		NewLatestLocationSchema(),
 		NewDeviceStateScopeAnchorsSchema(),
+		NewDroppedMeasurementsSchema(),
 	}
 )

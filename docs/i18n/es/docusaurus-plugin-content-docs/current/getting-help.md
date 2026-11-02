@@ -73,6 +73,12 @@ suele ser más rápido que esperar una respuesta.
     almacenan y el dispositivo recibe la confirmación habitual, de modo que quien envía no ve el
     descarte. Cada entrada descartada se cuenta en `resolve_measurement_dropped_total`, por motivo; la
     advertencia indica el tenant, el dispositivo y la métrica, una vez por dispositivo y métrica.
+
+    El mismo dato aparece en la página del dispositivo en la consola: cuando un dispositivo pierde
+    claves, un aviso sobre las pestañas indica cuántas, y la pestaña Conectividad lista cada clave con
+    el motivo, el último valor que envió el dispositivo, cuántas veces y cuándo lo hizo por última vez.
+    La misma lista es `droppedMeasurements` en el endpoint GraphQL de device-state. Conserva como máximo
+    32 claves por dispositivo y la ve cualquiera que pueda leer las últimas lecturas del dispositivo.
   - Una medición *declarada* cuyo valor no coincide con su tipo declarado es peor: el evento
     completo se envía a la cola de mensajes no entregados. Lo mismo ocurre con un valor `NaN`,
     infinito o de magnitud igual o superior a 1.000.000.000.000.

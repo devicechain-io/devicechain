@@ -588,5 +588,18 @@
   "aliasProblem_value_ttsDeviceId": "De 1 a 36 letras, dígitos y guiones, sin empezar ni terminar en guion.",
   "aliasProblem_value_custom": "De 1 a 128 caracteres, sin caracteres de control.",
   "aliasProblem_name": "Usa minúsculas, dígitos, guion o guion bajo, hasta 63 caracteres.",
-  "aliasProblem_duplicate": "Un dispositivo tiene un valor por esquema."
+  "aliasProblem_duplicate": "Un dispositivo tiene un valor por esquema.",
+  "droppedKeysNotice_one": "Se está descartando {{count}} clave de métrica de este dispositivo",
+  "droppedKeysNotice_other": "Se están descartando {{count}} claves de métrica de este dispositivo",
+  "droppedKeysHint": "El dispositivo recibe su confirmación y sus demás lecturas se guardan, pero estas claves no. Declara la clave como métrica numérica en el perfil del dispositivo para guardarla.",
+  "droppedKeysShowDetails": "Ver las claves",
+  "droppedKeysTitle": "Claves descartadas",
+  "droppedKeyColumn": "Clave",
+  "droppedReasonColumn": "Motivo",
+  "droppedLastValueColumn": "Último valor",
+  "droppedCountColumn": "Veces",
+  "droppedLastSeenColumn": "Visto por última vez",
+  "droppedReason_UNDECLARED_NON_NUMERIC": "No está declarada en el perfil y el valor no es un número",
+  "droppedReason_UNDECLARED_UNSTORABLE": "No está declarada en el perfil y el número no se puede guardar",
+  "droppedReason_DECLARED_NOT_STORABLE": "Declarada con un tipo de dato que no es una métrica de serie temporal"
 }

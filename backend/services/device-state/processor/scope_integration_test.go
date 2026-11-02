@@ -77,7 +77,7 @@ func scopeFixture(t *testing.T) (*StateProcessor, *OwnershipProcessor, context.C
 		}
 	})
 	sys := mgr.Database.WithContext(core.WithSystemContext(context.Background()))
-	for _, table := range []string{"device_states", "latest_measurements", "latest_locations"} {
+	for _, table := range []string{"device_states", "latest_measurements", "latest_locations", "dropped_measurements"} {
 		require.NoError(t, sys.Exec(fmt.Sprintf(`TRUNCATE TABLE "device-state".%q`, table)).Error)
 	}
 	api := model.NewApi(mgr)
