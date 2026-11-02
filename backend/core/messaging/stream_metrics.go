@@ -83,6 +83,15 @@ type streamMetrics struct {
 	replicasActual  *prometheus.GaugeVec
 	peersCurrent    *prometheus.GaugeVec
 
+	// peersOnline is peersCurrent without the lag test: the leader plus every peer
+	// the leader has heard from recently enough not to call it offline. A follower
+	// that is merely behind counts here and not in peersCurrent, so the two together
+	// separate "a copy is gone" (online < actual: page) from "a copy is catching up"
+	// (current < actual while online == actual: expected under sustained load).
+	// peersCurrent alone cannot make that distinction, which is why an alert on it
+	// flapped on a healthy cluster at ~6,000 events/s.
+	peersOnline *prometheus.GaugeVec
+
 	// brokerClustered is the fourth number, and without it the other three cannot
 	// see the very state A0 exists to close.
 	//
@@ -365,6 +374,10 @@ func newStreamMetrics(ms *core.Microservice) *streamMetrics {
 		peersCurrent: ms.NewGaugeVec("jetstream_peers_current",
 			"RAFT peers currently caught up and online for this stream or KV bucket, including the leader. "+
 				"Below jetstream_replicas_actual means the stream is labelled replicated but is not.",
+			[]string{"stream"}),
+		peersOnline: ms.NewGaugeVec("jetstream_peers_online",
+			"RAFT peers online for this stream or KV bucket, including the leader, whether or not they are "+
+				"caught up. Below jetstream_replicas_actual means a copy is gone or unreachable, not merely behind.",
 			[]string{"stream"}),
 		brokerClustered: ms.NewGauge("jetstream_broker_clustered",
 			"1 when the connected NATS server reports a cluster, 0 otherwise. Paired with "+
@@ -903,6 +916,7 @@ func (m *streamMetrics) sampleReplication(name string, info *nats.StreamInfo, de
 	m.replicasDesired.WithLabelValues(name).Set(float64(desired))
 	m.replicasActual.WithLabelValues(name).Set(float64(actual))
 	m.peersCurrent.WithLabelValues(name).Set(float64(currentPeers(info)))
+	m.peersOnline.WithLabelValues(name).Set(float64(onlinePeers(info)))
 }
 
 // forgetReplication drops a stream's replication series when it cannot be read.
@@ -921,6 +935,7 @@ func (m *streamMetrics) forgetReplication(name string) {
 	m.replicasDesired.DeleteLabelValues(name)
 	m.replicasActual.DeleteLabelValues(name)
 	m.peersCurrent.DeleteLabelValues(name)
+	m.peersOnline.DeleteLabelValues(name)
 }
 
 // currentPeers counts the RAFT peers that are caught up AND online, including the
@@ -940,6 +955,26 @@ func currentPeers(info *nats.StreamInfo) int {
 	}
 	for _, p := range info.Cluster.Replicas {
 		if p.Current && !p.Offline {
+			n++
+		}
+	}
+	return n
+}
+
+// onlinePeers counts the RAFT peers that are online, including the leader, whether
+// or not they are caught up. A peer the leader does not list at all is not counted
+// either, so a lost copy and an unreachable one both read low. It differs from
+// currentPeers only for a peer that is Offline=false and Current=false: lagging.
+func onlinePeers(info *nats.StreamInfo) int {
+	if info.Cluster == nil {
+		return 1
+	}
+	n := 0
+	if info.Cluster.Leader != "" {
+		n++
+	}
+	for _, p := range info.Cluster.Replicas {
+		if !p.Offline {
 			n++
 		}
 	}
