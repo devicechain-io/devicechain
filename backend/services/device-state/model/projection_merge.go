@@ -336,8 +336,9 @@ type ProjectionUpdate struct {
 	OccurredAt   time.Time
 	Presence     *PresenceTransition // nil for a plain data event
 	Identity     DeviceIdentity
-	Measurements []LatestMeasurementInput // measurement events only
-	Locations    []LatestLocationInput    // location events only
+	Measurements []LatestMeasurementInput  // measurement events only
+	Locations    []LatestLocationInput     // location events only
+	Dropped      []DroppedMeasurementInput // measurement events only: entries the resolver discarded
 }
 
 // BatchRefusal is MergeProjectionBatch's error when a statement written for one tenant
@@ -425,7 +426,8 @@ func (api *Api) MergeProjectionBatch(ctx context.Context, updates []ProjectionUp
 	}
 	sort.Strings(tenants)
 
-	return api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+	ctx, ev := withEvictions(ctx)
+	if err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		for _, t := range tenants {
 			tdb := tx.WithContext(core.WithTenant(ctx, t))
 			if err := mergeTenantBatch(tdb, byTenant[t], updates); err != nil {
@@ -433,7 +435,11 @@ func (api *Api) MergeProjectionBatch(ctx context.Context, updates []ProjectionUp
 			}
 		}
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	api.reportEvictions(ev)
+	return nil
 }
 
 // mergeTenantBatch is MergeProjectionBatch for one tenant, on a handle bound to it. devices
@@ -460,12 +466,20 @@ func mergeTenantBatch(tdb *gorm.DB, devices map[string][]int, updates []Projecti
 func writeLatest(tdb *gorm.DB, tokens []string, devices map[string][]int, updates []ProjectionUpdate) error {
 	var measurements []LatestMeasurement
 	var locations []LatestLocation
+	var dropped []DroppedMeasurement
+	var droppedTokens []string
 	for _, tok := range tokens {
 		var readings []LatestMeasurementInput
 		var fixes []LatestLocationInput
+		var drops []DroppedMeasurementInput
 		for _, i := range devices[tok] {
 			readings = append(readings, updates[i].Measurements...)
 			fixes = append(fixes, updates[i].Locations...)
+			drops = append(drops, updates[i].Dropped...)
+		}
+		if rows := coalesceDropped(tok, drops); len(rows) > 0 {
+			dropped = append(dropped, rows...)
+			droppedTokens = append(droppedTokens, tok)
 		}
 		measurements = append(measurements, coalesceMeasurements(tok, readings)...)
 		if fix := coalesceLocations(tok, fixes); fix != nil {
@@ -475,7 +489,11 @@ func writeLatest(tdb *gorm.DB, tokens []string, devices map[string][]int, update
 	if err := upsertLatestMeasurements(tdb, measurements); err != nil {
 		return err
 	}
-	return upsertLatestLocations(tdb, locations)
+	if err := upsertLatestLocations(tdb, locations); err != nil {
+		return err
+	}
+	// Last, so the table order stays (tenant, table, key): the drop record is the newest table.
+	return upsertDropped(tdb, droppedTokens, dropped)
 }
 
 // mergeWithLocks is mergeTenantBatch's locked path (steps 1-4 above), for a tenant batch that

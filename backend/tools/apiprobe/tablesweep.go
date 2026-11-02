@@ -159,6 +159,10 @@ var tableSweepExemptions = map[string]string{
 		"Same owner and same reason as device_states.",
 	"device-state.latest_measurements": "the latest-measurement projection, written from device traffic. " +
 		"Same owner and same reason as device_states.",
+	"device-state.dropped_measurements": "the record of measurement keys the platform discarded at resolution, " +
+		"written from device traffic (a key the profile does not declare, with a value that is not a number). " +
+		"Same owner and same reason as device_states: the drill sends no telemetry, and the load harness " +
+		"owns the device plane.",
 	// 🔑 event-processing.device_attributes IS NOT HERE, AND IT WAS. The exemption said it
 	// is "fed from the event pipeline rather than from the tenant API", and that was simply
 	// wrong: setEntityAttribute in device-management PROJECTS into it, so seeding a tenant

@@ -7,7 +7,9 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
 	"strconv"
+	"strings"
 
 	"github.com/devicechain-io/dc-device-state/model"
 	util "github.com/devicechain-io/dc-microservice/graphql"
@@ -123,6 +125,17 @@ func (r *DeviceStateResolver) PresenceTime() *string {
 	return nil
 }
 
+// DroppedMeasurementCount is the number of (key, reason) rows in the device's drop record. It
+// asks the database only when the field is selected, once per resolver, under the caller's own
+// tenant and scope. The count of one device is far below a GraphQL Int.
+func (r *DeviceStateResolver) DroppedMeasurementCount() (int32, error) {
+	n, err := r.S.GetApi(r.C).DroppedMeasurementCount(r.C, r.M.DeviceToken)
+	if err != nil {
+		return 0, err
+	}
+	return int32(n), nil
+}
+
 // --------------------------
 // Latest measurement resolver
 // --------------------------
@@ -190,6 +203,82 @@ func (r *LatestMeasurementResolver) OccurredTime() string {
 		return *s
 	}
 	return ""
+}
+
+// ---------------------------
+// Dropped measurement resolver
+// ---------------------------
+
+type DroppedMeasurementResolver struct {
+	M model.DroppedMeasurement
+	S *SchemaResolver
+	C context.Context
+}
+
+func (r *DroppedMeasurementResolver) Id() gql.ID {
+	return gql.ID(fmt.Sprint(r.M.ID))
+}
+
+func (r *DroppedMeasurementResolver) CreatedAt() *string {
+	return util.FormatTime(r.M.CreatedAt)
+}
+
+func (r *DroppedMeasurementResolver) UpdatedAt() *string {
+	return util.FormatTime(r.M.UpdatedAt)
+}
+
+// DeletedAt is always null: nothing soft-deletes a drop row (the Model interface carries it).
+func (r *DroppedMeasurementResolver) DeletedAt() *string {
+	return nil
+}
+
+func (r *DroppedMeasurementResolver) DeviceToken() string {
+	return r.M.DeviceToken
+}
+
+func (r *DroppedMeasurementResolver) Name() string {
+	return r.M.Name
+}
+
+// Reason is the enum value of the stored reason (see droppedReasonEnum).
+func (r *DroppedMeasurementResolver) Reason() string {
+	return droppedReasonEnum(r.M.Reason)
+}
+
+func (r *DroppedMeasurementResolver) LastValue() string {
+	return r.M.LastValue
+}
+
+// Count saturates at the largest GraphQL Int rather than being refused: the field is non-null
+// inside a non-null list, so a refusal would blank the whole record for a device that has been
+// sending one text key long enough, and "more than two billion" is the true answer.
+func (r *DroppedMeasurementResolver) Count() int32 {
+	if r.M.Count > math.MaxInt32 {
+		return math.MaxInt32
+	}
+	return int32(r.M.Count)
+}
+
+func (r *DroppedMeasurementResolver) FirstTime() string {
+	if s := util.FormatTime(r.M.FirstTime); s != nil {
+		return *s
+	}
+	return ""
+}
+
+func (r *DroppedMeasurementResolver) LastTime() string {
+	if s := util.FormatTime(r.M.LastTime); s != nil {
+		return *s
+	}
+	return ""
+}
+
+// droppedReasonEnum maps a reason of the shared vocabulary (resolvedevent.DroppedReasons) to its
+// GraphQL enum value. The enum is the vocabulary upper-cased, and dropped_reason_test.go pins
+// that the schema declares exactly those values, so a reason added to the vocabulary without the
+// enum fails the build.
+func droppedReasonEnum(reason string) string {
+	return strings.ToUpper(reason)
 }
 
 // -----------------------

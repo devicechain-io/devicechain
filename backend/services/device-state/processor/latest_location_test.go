@@ -63,7 +63,7 @@ func newLocationProcessor(t *testing.T) *StateProcessor {
 	}
 	// All three projections, so a non-location event exercises its own real write path
 	// rather than failing on a missing table and looking like a skip.
-	if err := db.AutoMigrate(&model.DeviceState{}, &model.LatestMeasurement{}, &model.LatestLocation{}); err != nil {
+	if err := db.AutoMigrate(&model.DeviceState{}, &model.LatestMeasurement{}, &model.LatestLocation{}, &model.DroppedMeasurement{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	api := model.NewApi(&rdb.RdbManager{Database: db})

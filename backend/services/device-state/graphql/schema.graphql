@@ -155,6 +155,75 @@ type DeviceState implements Model {
     been applied.
     """
     presenceTime: String
+    """
+    How many distinct measurement keys from this device are being discarded: the number of
+    (key, reason) rows droppedMeasurements returns for it, not a count of events. Zero when
+    nothing is. A badge, cheap enough to ask for on a page of devices. Counts what the
+    caller can see, so it is zero for a member whose access is limited to some customers when
+    none of them owns the device now.
+    """
+    droppedMeasurementCount: Int!
+}
+
+"""
+Why a measurement key sent by a device is discarded while the rest of its message is stored.
+In every case the remedy is the same: declare the key as a numeric metric on the device's
+profile to store it.
+"""
+enum DroppedMeasurementReason {
+    """The key is not declared on the profile and its value is not a number, for example the text "ok"."""
+    UNDECLARED_NON_NUMERIC
+    """
+    The key is not declared on the profile and its value is a number that cannot be stored: not
+    a number (NaN), infinite, or beyond the range of a stored measurement.
+    """
+    UNDECLARED_UNSTORABLE
+    """The key is declared on the profile with a data type that is not a time-series metric."""
+    DECLARED_NOT_STORABLE
+}
+
+"""
+A measurement key a device sent that the platform discarded while it stored the rest of the
+message, and why. One row per device, key and reason, so a device that sends the same text key
+in every message is one row with a growing count. At most 32 rows are kept per device; past that
+the row last seen longest ago is dropped. Declare the key as a numeric metric on the device's
+profile to store it.
+"""
+type DroppedMeasurement implements Model {
+    """Server-assigned numeric identifier of the row, serialized as a string. Rows are addressed by device token."""
+    id: ID!
+    """When the row was first created, as an RFC 3339 timestamp."""
+    createdAt: String
+    """When the row was last modified, as an RFC 3339 timestamp."""
+    updatedAt: String
+    """
+    When the row was deleted, as an RFC 3339 timestamp. Deleted rows are not returned by this
+    API, so this is null in practice.
+    """
+    deletedAt: String
+    """Token of the device that sent the key."""
+    deviceToken: String!
+    """The measurement key that was discarded, for example status_text."""
+    name: String!
+    """Why it was discarded."""
+    reason: DroppedMeasurementReason!
+    """
+    The value the device last sent under this key, cut to 64 bytes. It is the device's own
+    content and is visible to the same readers as the device's latest measurement values.
+    """
+    lastValue: String!
+    """
+    How many times the key was discarded. A message the platform delivers twice can count twice,
+    so read it as how often, not as an exact total. Stops growing at 2147483647.
+    """
+    count: Int!
+    """When the key was first discarded, as an RFC 3339 timestamp: the earliest the device sent it."""
+    firstTime: String!
+    """
+    When the key was last discarded, as an RFC 3339 timestamp: the latest time the device sent it.
+    A message delivered late does not move it back.
+    """
+    lastTime: String!
 }
 
 """
@@ -386,6 +455,17 @@ type Query {
         """Token of the device."""
         deviceToken: String!
     ): [LatestMeasurement!]!
+    """
+    Returns the measurement keys this device sent that the platform discarded, ordered by key
+    then reason, each with the reason, the last value, how often and when. Empty when nothing
+    is being discarded. Declare a key as a numeric metric on the device's profile to store it.
+    Requires state:read. Empty for a member whose access is limited to some customers when none
+    of them owns the device now.
+    """
+    droppedMeasurements(
+        """Token of the device."""
+        deviceToken: String!
+    ): [DroppedMeasurement!]!
     """
     Returns the last-known position of one device, or null when it has never been located.
     Requires location:read. Null for a member whose access is limited to some customers when

@@ -54,7 +54,7 @@ func newSQLiteProjectionApi(t *testing.T, _ string) *Api {
 	if err := rdb.RegisterTenantScoping(db); err != nil {
 		t.Fatalf("register tenant scoping: %v", err)
 	}
-	if err := db.AutoMigrate(&DeviceState{}, &LatestMeasurement{}, &LatestLocation{}); err != nil {
+	if err := db.AutoMigrate(&DeviceState{}, &LatestMeasurement{}, &LatestLocation{}, &DroppedMeasurement{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	return NewApi(&rdb.RdbManager{Database: db})
