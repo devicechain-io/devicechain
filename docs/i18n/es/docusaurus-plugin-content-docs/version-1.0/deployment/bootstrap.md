@@ -1,0 +1,2075 @@
+---
+sidebar_position: 1
+title: Arranque inicial de una instancia
+---
+
+# Arranque inicial de una instancia
+
+Un despliegue de DeviceChain se construye con dos comandos. `dcctl install` prepara un
+clúster una sola vez. Después, `dcctl bootstrap` levanta en él una instancia completa de
+DeviceChain —su infraestructura y todas las cargas de trabajo de servicio— tantas veces como
+instancias quieras:
+
+```bash
+dcctl install local
+dcctl bootstrap local my-instance
+```
+
+`dcctl` lleva su propio contenido. La configuración de infraestructura de OpenTofu, el chart
+de Helm y los manifiestos del operador están todos incrustados en él, así que nunca necesitas
+un checkout del árbol de código fuente ni `git` para desplegar.
+
+Lo que no lleva son sus propias herramientas. `install` y `bootstrap` ejecutan `kubectl`,
+`helm` y `tofu` (o `terraform`) como binarios en tu `PATH`, y además `docker` y `kind` cuando
+dcctl gestiona el propio clúster (el proveedor `local`) y `docker` cuando construye imágenes
+(`--build`). Ambos comandos comprueban que estén las que necesita la ejecución antes de empezar
+y se detienen si falta alguna, así que instálalas primero. La lista completa está en
+[Prerrequisitos](#prerequisites).
+
+:::note Estado
+DeviceChain está en fase previa al lanzamiento. `dcctl install local` y `dcctl bootstrap local`
+están implementados y validados de extremo a extremo en Kubernetes local (kind).
+`dcctl install local` crea el clúster de kind por ti si no existe ninguno, y te pregunta antes
+salvo que pases `--yes`. El proveedor `gcp` es una mejora planificada.
+:::
+
+## Instalar el clúster {#install}
+
+`dcctl install <provider>` prepara un clúster para alojar instancias de DeviceChain. Instala
+los requisitos previos que comparten todas las instancias del clúster.
+
+En el namespace `dc-k8s-system` instala el **operador de DeviceChain** y las dos definiciones
+de recurso personalizado que reconcilia, `Instance` e `InstanceConfiguration`. Son lo que hace
+que un clúster pueda alojar una instancia: `dcctl bootstrap` declara un `Instance`, y no puede
+declarar uno en un clúster donde la definición no existe. Consulta
+[el operador](./kubernetes-operator.md).
+
+En el namespace `dc-system` instala:
+
+- la base de datos relacional (`dc-rdb`), que contiene una base de datos por instancia;
+- el almacén de objetos al que se archivan los respaldos de base de datos.
+
+Cada uno en un namespace propio, instala:
+
+- el operador CloudNativePG (`cnpg-system`);
+- cert-manager (`cert-manager`);
+- la monitorización (Prometheus y Grafana, en `monitoring` —consulta [Observabilidad](./observability.md));
+- el controlador de ingress: Traefik, con las definiciones de la Gateway API que sirve. `ingress-nginx` está obsoleto y ya no se instala. Un clúster que ya lo ejecuta lo conserva, sirviendo, y recibe Traefik a su lado; consulta [Pasar una instalación existente a Traefik](./ingress-cutover.md).
+
+El operador es un solo controlador por clúster, compartido por todas las instancias que haya
+en él. Por eso instalarlo es tarea del comando del clúster y no de cada instancia, y por eso
+mover un clúster a una versión nueva empieza aquí: consulta
+[Versiones y actualizaciones](./releases-and-upgrades.md#rolling-upgrades).
+
+`install` también crea la identidad de base de datos base con la que se crea el login de base
+de datos propio de cada instancia, y registra la instalación en el clúster.
+
+En qué clúster instala:
+
+- **`local`** — `--cluster <name>` (por defecto `devicechain`) nombra un clúster de kind. Si
+  no existe ninguno con ese nombre, `install` lo crea, preguntando antes salvo que pases
+  `--yes`. Si existe, lo reutiliza.
+- **Cualquier proveedor** — `--kube-context <ctx>` instala en un clúster que ya existe.
+  `dcctl` nunca crea ni elimina un clúster al que se llega de este modo.
+
+### Volver a ejecutar install {#re-running-install}
+
+Volver a ejecutar `install` contra el mismo clúster lo hace converger: lo que ya está en su
+sitio se deja como está, y lo que falta se añade. Eso incluye el volumen del almacén de objetos de
+respaldo, que conserva el tamaño que tiene; consulta
+[Tamaño del almacén de objetos de respaldo](#backup-store-size).
+
+**Cambiar sus ajustes** —`--ha`, `--compact`, la monitorización, los respaldos,
+`--backup-snapshot-class`, la ubicación de las bases de datos— se rechaza mientras exista alguna instancia en el clúster. Cada instancia se construyó con los ajustes
+vigentes cuando se arrancó, y ninguna se reconstruye cuando cambian. Eso incluye el archivo
+externo: un `--backup-credentials-file` que nombre otro endpoint u otro bucket del almacén de
+eventos también se rechaza, porque el almacén de eventos de cada instancia sigue archivando en
+el que tenía cuando se construyó.
+
+Hay una excepción: una nueva ejecución puede aumentar `--max-connections` mientras hay
+instancias en marcha (consulta [el presupuesto de conexiones](#connection-budget)). Reducirlo
+se rechaza como cualquier otro cambio. Una nueva ejecución que no pase `--max-connections`
+conserva el presupuesto que ya tiene el clúster.
+
+**Una ejecución que falló a mitad se repara de la misma forma.** Cuando hayas corregido la
+causa, vuelve a ejecutar el mismo `dcctl install`. Si el almacén de objetos de los respaldos no
+pudo arrancar la primera vez, por ejemplo porque no se pudo descargar su imagen, la nueva
+ejecución lo elimina, lo crea de nuevo y espera a que esté listo, igual que la primera. Si la
+causa sigue ahí, la nueva ejecución falla del mismo modo. Antes de dar el clúster por instalado,
+`install` comprueba además que el almacén de objetos de los respaldos ha terminado su despliegue,
+así que un almacén que quedó sin estar listo tras un cambio fallido anterior se notifica en
+lugar de pasarse por alto.
+
+`install` también espera, hasta 15 minutos, a que se hayan unido todas las instancias de la base de
+datos relacional, y termina con un error que nombra la base de datos y cuántas de sus instancias
+están listas si alguna no lo ha hecho. Para entonces la instalación ya está registrada y el bloqueo
+del clúster liberado, así que se pueden hacer bootstrap de instancias mientras sigue esperando. Para
+seguir la base de datos, obsérvela con `kubectl`; ejecutar de nuevo el mismo `dcctl install` también
+sigue esperando, pero vuelve a aplicar los requisitos previos y rechaza los bootstraps mientras se
+ejecuta.
+
+### Dónde guarda install su estado {#install-state}
+
+Los requisitos previos se aplican con OpenTofu, y su estado vive en la máquina que ejecutó
+`dcctl install`, en `~/.devicechain/clusters/<cluster-uid>/infra`.
+
+El directorio se indexa por la identidad del clúster —el UID de su namespace `kube-system`— y
+no por su nombre. Un clúster de kind borrado y vuelto a crear lleva el mismo nombre de contexto
+sin contener ninguno de los recursos que describe el estado antiguo. El `cluster.json` que hay
+junto a `infra/` registra el nombre del clúster y el kube-context por los que tú lo conoces,
+de modo que puedes emparejar un directorio con su clúster:
+
+```bash
+cat ~/.devicechain/clusters/*/cluster.json
+kubectl --context <kube-context> get namespace kube-system -o jsonpath='{.metadata.uid}'
+```
+
+Los proveedores de OpenTofu están fijados a versiones exactas, y cada ejecución, incluida
+`dcctl destroy`, lleva el `.terraform.lock.hcl` del directorio a las versiones que fija este
+dcctl. Por eso cada ejecución consulta al registro de proveedores qué versiones existen, así
+que el registro, o un espejo de proveedores que hayas configurado, debe ser accesible.
+
+Una nueva ejecución trabaja a partir de ese estado, así que **un clúster ya instalado solo
+puede reinstalarse desde la máquina que tiene su directorio**. Ejecuta `dcctl install` contra
+él desde otra máquina y se rechaza antes de aplicar nada:
+
+```text
+cluster ... is already installed (by dcctl <version>, <time>), but this machine holds no state
+for it under ~/.devicechain/clusters/<cluster-uid>. It was installed from another machine, and
+re-applying from empty state would try to create every prerequisite again. Run `dcctl install`
+from the machine that installed it
+```
+
+Aplicar desde un estado vacío planificaría todos los requisitos previos como nuevos y fallaría
+a medias con nombres ya en uso, así que la negativa es el resultado seguro. Pero convierte ese
+directorio en precondición de toda nueva ejecución descrita en esta página, incluida la que
+aumenta `--max-connections`.
+
+El directorio es la única copia del estado de los requisitos previos del clúster, y ningún
+respaldo de DeviceChain lo contiene. Consérvalo en la máquina desde la que instalas. Si otra
+máquina va a tomar el relevo, copia antes a ella el directorio
+`~/.devicechain/clusters/<cluster-uid>/` completo. Contiene el estado de la raíz del clúster,
+credenciales incluidas, así que trátalo como tratas el directorio del depósito (escrow).
+
+### TLS, flags e instalación en un portátil {#install-tls-and-flags}
+
+`--no-tls` en `dcctl install` solo tiene sentido junto con `--compact`, donde descarta
+cert-manager. Sin `--compact` se rechaza. Para servir una instancia por HTTP simple, pasa
+`--no-tls` a `dcctl bootstrap`.
+
+Con TLS activado, el certificado de la instancia procede de una autoridad certificadora autofirmada que el chart crea en el namespace de la instancia, por lo que el navegador avisa una vez. Un cliente que deba verificar la instancia, como un dispositivo que se registra por HTTPS, confía en esa autoridad en lugar de omitir la verificación. Está guardada como `ca.crt` en el Secret del propio certificado (`devicechain-tls`, salvo que lo renombres):
+
+```bash
+kubectl -n dci-<id> get secret devicechain-tls -o jsonpath='{.data.ca\.crt}' | base64 -d > instance-ca.pem
+curl --cacert instance-ca.pem https://<host>/
+```
+
+La autoridad dura diez años. Renovar el certificado del host la conserva, y el chart fija su clave privada (`rotationPolicy: Never`), de modo que incluso una autoridad reemitida sigue verificando lo que firmó la anterior. Solo eliminar el Secret propio de la autoridad (`devicechain-tls-ca`) crea una nueva, y los clientes deben obtener `ca.crt` de nuevo. Una instancia actualizada desde un chart anterior conserva su certificado autofirmado previo hasta que se renueve; elimina el Secret `devicechain-tls` para que se reemita de inmediato desde la autoridad. Una instancia que ya pasó al Gateway sirve `devicechain-tls-gateway` para siempre, con un certificado hoja nuevo de la misma autoridad, así que obtén `ca.crt` de ese Secret.
+
+Los flags se enumeran en [Flags de instalación](#install-flags). En un portátil:
+
+```bash
+dcctl install local --dev
+dcctl bootstrap local devicechain --dev
+```
+
+`dcctl bootstrap` se niega en un clúster donde `dcctl install` no ha terminado, y la negativa
+nombra el comando de instalación que hay que ejecutar. `dcctl upgrade` se niega en el mismo
+caso.
+
+### Eliminar un clúster {#removing-a-cluster}
+
+Todavía no hay ningún comando que desinstale los requisitos previos. [`dcctl destroy`](#destroy)
+elimina una instancia y los deja en su sitio. Para eliminar un clúster local que creó
+`dcctl install`, bórralo con kind:
+
+```bash
+kind delete cluster --name devicechain
+docker rm -f kind-registry   # el registro de imágenes local, si usaste --build
+```
+
+kind no sabe nada de `~/.devicechain/clusters/`, así que borrar el clúster de este modo deja
+atrás su directorio. El siguiente `dcctl destroy` de una instancia que estaba en ese clúster
+descubre que el clúster ya no existe y elimina el directorio junto con el estado local propio
+de la instancia —consulta [Eliminar una instancia](#destroy). O elimínalo a mano, una vez que
+su `cluster.json` haya confirmado a qué clúster pertenecía.
+
+En un clúster que conservas, como un clúster gestionado o cualquier clúster que no haya creado
+`dcctl install`, los requisitos previos permanecen después de eliminar la última instancia. Quitarlos
+a mano no está admitido: incluyen la base de datos relacional compartida y sus copias de seguridad, y el almacén de
+objetos de copias del propio clúster si lo usas, junto con las copias de instancias que una
+eliminación conservó o no pudo borrar (consulta [Qué pasa con los respaldos de la instancia](#destroy-backups)). Conserva el directorio del
+clúster en `~/.devicechain/clusters/<cluster-uid>/` mientras sigan ahí, porque todo `dcctl install`
+posterior en el clúster trabaja a partir de él (consulta
+[Dónde guarda install su estado](#install-state)).
+
+### El presupuesto de conexiones {#connection-budget}
+
+La base de datos relacional tiene un número fijo de conexiones, fijado por `--max-connections`
+(por defecto `700`). Cada instancia reserva un límite de conexiones en su login de base de
+datos, dimensionado a partir de las áreas que habilita. `dcctl bootstrap` rechaza una
+instancia cuya reserva no cabe en lo que queda.
+
+El perfil por defecto ejecuta ocho servicios que usan la base de datos, así que una instancia
+con el perfil por defecto reserva 320 conexiones y `700` admite dos. Un clúster instalado con un
+valor por defecto anterior (`600`) conserva su presupuesto en una nueva ejecución, por lo que una
+segunda instancia con el perfil por defecto, o una actualización que aumente la reserva de una
+instancia, puede rechazarse: sube antes el presupuesto volviendo a ejecutar el `dcctl install` con el que se instaló el clúster, añadiendo `--max-connections 700` (por ejemplo `dcctl install local --max-connections 700`).
+
+Esa comprobación se hace **antes de escribir nada de la instancia** —ni namespace, ni base de
+datos, ni login—, así que un arranque rechazado no deja nada que limpiar. Un clúster pensado
+para alojar muchas instancias, o instancias con muchas áreas habilitadas, necesita un
+presupuesto mayor.
+
+Cada servicio mantiene abiertas entre usos todas las conexiones que ha abierto su pool, hasta el
+tamaño del pool (20 si no se fija `maxOpenConnections`), y cierra cada una una hora después de
+abrirla. La reserva permite a cada área un pod con un pool completo del tamaño predeterminado, más
+otro pod durante un despliegue, así que con los valores predeterminados todos los pools caben en ella. Un
+servicio con `replicas` por encima de 1, o con un `maxOpenConnections` mayor, puede mantener más
+que eso después de un periodo de mucha carga, así que comprueba esos ajustes frente al límite de
+conexiones de la instancia.
+
+El presupuesto es el único ajuste de instalación que puede cambiar con instancias en marcha, y
+solo hacia arriba: vuelve a ejecutar `dcctl install` con un `--max-connections` mayor. No sale
+gratis. Cambiar el límite de conexiones de la base de datos reinicia sus instancias de base de
+datos una a una. En un clúster instalado sin `--ha` solo hay una, así que **todas las
+instancias del clúster pierden brevemente su base de datos** mientras se reinicia. Hazlo en un
+momento tranquilo.
+
+`dcctl upgrade` se admite contra el mismo presupuesto. Una versión puede cambiar lo que
+necesitan las áreas relacionales de una instancia, así que la actualización compara la
+necesidad de esta versión con el límite que ya tiene el login de la instancia, antes de
+escribir nada. Una necesidad que no ha cambiado no se vuelve a admitir. Un aumento que el
+presupuesto no puede admitir se rechaza sin haber movido nada:
+
+```text
+this release needs instance "my-instance"'s database login to hold <n> connections, up from <m>,
+and nothing has been changed: ... Destroy an instance, or raise the budget by re-running
+`dcctl install` with a larger --max-connections
+```
+
+El remedio es el de arriba, y reinicia la base de datos. En un clúster cuyo presupuesto está
+casi agotado, auméntalo en un momento tranquilo *antes* de la ventana de actualización, en
+lugar de descubrir la necesidad dentro de ella.
+
+Un aumento que cabe se aplica antes de que los servicios se desplieguen. Si una versión
+necesita *menos*, el login se recorta solo cuando todos los servicios están listos en la nueva
+versión. Un recorte que falla no hace fallar la actualización, porque los servicios ya están en
+marcha. Se imprime como una advertencia que termina en ``re-run `dcctl upgrade` to finish it``,
+y hasta que lo hagas el login retiene más presupuesto del que necesita.
+`dcctl upgrade --dry-run` informa de la comprobación que haría sin iniciar sesión en el
+almacén.
+
+## Qué hace bootstrap {#what-it-does}
+
+El arranque inicial se ejecuta como una canalización (pipeline) ordenada que construye una
+instancia, y te indica qué paso falló si alguno lo hace.
+
+Es un verbo de creación. Todas las credenciales de la instancia se acuñan aquí —las
+contraseñas de las bases de datos, la autoridad y los logins del broker, el secreto entre
+servicios, la clave raíz del almacén de secretos— porque ninguna de ellas existe todavía.
+Apúntalo a una instancia que ya esté en marcha y se detiene en el paso 3, antes de tocar la
+infraestructura o el chart. Nombra el comando que sí mueve una instancia viva:
+`dcctl upgrade`, descrito en
+[Versiones y actualizaciones](./releases-and-upgrades.md#rolling-upgrades).
+
+Una ejecución que *falló* a mitad de camino es un caso distinto, y volver a ejecutarla sigue
+siendo la forma de repararla. El paso 3 solo rechaza una instancia **viva**: una cuyo
+documento de configuración (escrito en el paso 8) existe **y** cuyo primer arranque inicial
+ha terminado. Cuando el paso 5 declara la instancia, deja anotado en la declaración que su
+primer arranque inicial no ha terminado, y solo una ejecución que acaba con éxito retira esa
+anotación. Hasta entonces, un fallo en cualquier paso, incluso dentro de la instalación de
+Helm o mientras se espera a que todo esté listo, deja una instancia a medio construir. Vuelve
+a ejecutar el mismo `dcctl bootstrap`, desde la misma máquina, para terminarla.
+
+Una instancia cuyo primer arranque inicial empezó con una versión anterior de `dcctl` no
+lleva esa anotación. Si ese arranque falló después de empezar el paso 8, el paso 3 no puede
+distinguirla de una instancia en marcha y la rechaza. La negativa nombra las dos salidas:
+`dcctl upgrade`, que ejecuta sobre la instancia la misma instalación de Helm y la misma espera
+a que todo esté listo, o `dcctl destroy` seguido de un arranque inicial nuevo.
+
+:::warning Excepción única: instancias creadas antes de que la base de datos pasara a CloudNativePG
+La base de datos relacional pasó de ser un StatefulSet a un clúster de CloudNativePG, y no
+existe una actualización en sitio. En una instancia creada antes de ese cambio, el arranque
+inicial **se niega** y te indica cómo volcar los datos o descartarlos deliberadamente.
+Consulta [la excepción de la base de datos heredada](#legacy-db-removal).
+:::
+
+### La excepción de la base de datos heredada {#legacy-db-removal}
+
+El directorio de datos de un StatefulSet no puede ser adoptado por el operador, y por eso no
+existe una actualización en sitio. La negativa es justamente el objetivo: sin ella, la base de
+datos antigua se eliminaría y una nueva, vacía, ocuparía el mismo nombre de host, dejando una
+instancia que parece perfectamente sana y no tiene ningún dato.
+
+Esta es la única razón documentada para ejecutar `dcctl bootstrap` contra una instancia que ya
+está viva, así que `--allow-legacy-db-removal` queda exceptuado tanto de la negativa del paso 3
+como de esta. Nada más lo está.
+
+El flag se divide por la misma línea que las bases de datos. La base de datos relacional
+pertenece al clúster, así que la cubre `dcctl install --allow-legacy-db-removal`. El almacén de
+eventos pertenece a la instancia, así que lo cubre `dcctl bootstrap --allow-legacy-db-removal`.
+
+### Varias instancias en un mismo clúster {#several-instances}
+
+Un clúster puede alojar más de una instancia de DeviceChain. Los servicios de cada instancia,
+su broker (NATS), su almacén de eventos (TimescaleDB) y sus credenciales viven en un namespace
+propio, que lleva el nombre de la instancia detrás del prefijo `dci-`: la instancia
+`devicechain` se ejecuta en el namespace `dci-devicechain`.
+
+El prefijo impide que el namespace de una instancia choque alguna vez con uno de los que usa
+el propio clúster. `monitoring`, `cert-manager`, `traefik` y los demás quedan fuera de
+alcance por construcción, así que ningún id de instancia puede ocupar uno de ellos.
+
+Cada instancia se conecta a la base de datos relacional compartida con un login propio que es
+dueño de exactamente una base de datos, de modo que ninguna instancia puede llegar a los datos
+de otra.
+
+Lo que comparten las instancias son los requisitos previos del clúster: el operador de
+DeviceChain y sus definiciones de recurso personalizado, el controlador de ingress,
+cert-manager, el operador CloudNativePG, la monitorización, la base de datos relacional y el
+almacén de objetos de los respaldos. [`dcctl install`](#install) los instala una vez. Cada
+arranque inicial los reutiliza y sigue los ajustes con los que se instaló el clúster: alta
+disponibilidad, tamaño compacto, monitorización y respaldos.
+
+Dos cosas de un clúster solo pueden pertenecer a una instancia, y el arranque inicial se ocupa
+de ambas:
+
+- **El host del ingress.** Un controlador de ingress al que se le dan dos instancias en un
+  mismo host solo sirve una de ellas, en silencio. Un arranque inicial cuyo host ya sirve otra
+  instancia se rechaza. Dale a cada instancia su propio `--host` (en un clúster local, por
+  ejemplo `--host beta.localhost`).
+- **El puerto MQTT local.** En un clúster local, el puerto 1883 de tu máquina llega solo al
+  broker de la primera instancia. Los brokers de las instancias posteriores son alcanzables
+  desde dentro del clúster, y el arranque inicial lo indica cuando ocurre.
+
+#### Ingress y tu propio controlador {#ingress-controller}
+
+La instalación del clúster configura un controlador de ingress y cada instancia recibe sus rutas del chart. Nada en
+el borde es un control de seguridad: el emisor de tokens de servicio y el conjunto de claves de firma los sirve
+`user-management` en un puerto interno al que no apunta ninguna ruta del ingress, de modo que el puerto público
+responde 404 para ellos detrás de cualquier controlador. El emisor está protegido por el secreto de servicio
+compartido, que se compara en tiempo constante. Las rutas del chart no llevan ningún snippet de configuración. `ingress-nginx`, en un clúster que
+aún lo ejecuta, sigue aceptando snippets en esta versión, porque las instancias que aún no se han actualizado
+dependen de ellos.
+
+Si traes tu propio controlador, enruta los cinco ingress del chart. Un controlador que implemente la Gateway API puede servir en su lugar el Gateway y los HTTPRoutes que genera el chart (`ingress.controller: gateway`; el README del chart lista lo que debe hacer ese controlador):
+
+- `/api/<area>` al puerto `graphql` del Service de cada área, quitando el prefijo.
+- `/` a la consola.
+- `/.well-known/oauth-protected-resource` (a `mcp`) y `/.well-known/oauth-authorization-server` (a `user-management`),
+  sin quitar nada, cuando esas áreas están activadas.
+- La subida de actualizaciones, `PUT /api/update-management/updates/artifacts/<token>/content`, a `update-management`. No
+  almacenes en búfer el cuerpo de la solicitud, porque el servicio autentica antes de leerlo.
+- La descarga de actualizaciones, `GET /api/update-management/updates/download/<artifact>`, a `update-management`. Mantén
+  su cadena de consulta fuera de los registros de acceso, porque la concesión viaja en ella.
+
+No necesitas una regla que oculte las rutas `/auth/`, y no debes enrutar a un puerto de Service llamado `internal-auth`.
+La política de red del chart (`networkPolicy.enabled`, desactivada en las instalaciones de `dcctl`) también puede
+limitar ese puerto al namespace de la propia instancia. Consulta
+[Endpoints que nunca salen del clúster](../concepts/security-model.md#internal-endpoints).
+
+#### El namespace de la instancia {#instance-namespace}
+
+El arranque inicial comprueba el namespace de la instancia en el mismo punto. Una instancia es
+dueña de `dci-<id>`: dcctl escribe ahí su clave raíz, el par de claves TLS de su broker y todas
+sus credenciales de base de datos, y `dcctl destroy` elimina el namespace entero. Por eso un
+`dci-<id>` que ya existe y no lleva la etiqueta `devicechain.io/instance=<id>` se rechaza antes
+de escribir nada de eso.
+
+Nada salvo dcctl crea namespaces bajo `dci-`. La causa probable es un `dcctl destroy` anterior
+de esta misma instancia que no terminó. La negativa lo dice y nombra el comando para
+terminarlo, `dcctl destroy <provider> <id>`. Un namespace que aún se está eliminando también se
+rechaza, hasta que desaparece.
+
+Si el namespace lo creaste tú a propósito —para llevar una cuota, una política o un RBAC
+propios—, entrégaselo a la instancia y vuelve a ejecutar el arranque inicial:
+
+```bash
+kubectl label namespace dci-<id> devicechain.io/instance=<id>
+```
+
+#### Nombres de instancia {#instance-names}
+
+Los nombres de instancia son letras minúsculas, dígitos y `-`, de 50 caracteres como máximo.
+El nombre es, tal cual, la base de datos de la instancia y el login de esa base de datos.
+También es la cola de otros dos nombres: el namespace es `dci-` más el nombre, y la release de
+Helm es `dc-` más el nombre. El límite de 50 caracteres sale de esa release: Helm limita el
+nombre de una release a 53 caracteres, así que al nombre en sí le quedan 50.
+
+Una instancia construida antes de que cada instancia tuviera su propio namespace ejecuta su
+broker y su almacén de eventos en el namespace compartido `dc-system`, y no se pueden mover en
+sitio. El arranque inicial rechaza una instancia así e indica que hay que destruirla y volver a
+arrancarla.
+
+### Los pasos del arranque inicial {#bootstrap-steps}
+
+Estos son los pasos que la ejecución va imprimiendo (`[8/10] Install instance (Helm)`), de modo
+que un fallo nombra un paso que puedes encontrar aquí:
+
+1. **Ensure local registry** (asegurar el registro local) — solo en la ruta de desarrollo
+   `--build`: aprovisiona un registro local y compila todas las imágenes en él. En la ruta de
+   imágenes publicadas no hace nada y lo indica. Va primero porque el chart que se instala más
+   adelante nombra esas imágenes, y en la ruta `--build` este es el paso que las produce.
+2. **Claim the cluster** (reclamar el clúster) — crea el namespace del operador y toma el
+   **bloqueo del clúster**, antes de aplicar nada. Mientras está tomado, un segundo
+   `dcctl bootstrap` contra el mismo clúster se rechaza en lugar de aplicarse silenciosamente
+   por encima de este. Consulta [El bloqueo del clúster](./cluster-lock.md), que también
+   explica qué hacer cuando resulta que el clúster está reclamado por otra persona.
+3. **Refuse a rebuild** (rechazar una reconstrucción) — pregunta al clúster si esta instancia
+   ya está viva y se detiene si lo está. Su posición es deliberada por ambos lados. Va
+   *después* del bloqueo, porque un arranque inicial concurrente es justamente lo que dejaría
+   obsoleta la respuesta entre leerla y actuar sobre ella. Va *antes* de que se aplique nada de
+   la instancia, porque todos los pasos que vienen debajo escriben en un clúster que puede
+   estar ejecutando ya la instancia sobre la que escribirían. Una ejecución en seco dice qué
+   rechazaría una ejecución real, en lugar de ocultarlo.
+   Reconoce una instancia viva por su documento de configuración, salvo que la declaración de
+   la instancia indique que su primer arranque inicial nunca terminó. En ese caso deja pasar
+   la ejecución para terminar la instancia. Si no puede leer la declaración, se detiene en
+   lugar de suponer.
+4. **Check what other instances hold** (comprobar lo que tienen otras instancias) — pregunta
+   al clúster qué host de ingress y qué puerto MQTT local tienen ya otras instancias, y se
+   detiene si el host de esta instancia es uno de ellos. También mira el namespace en el que
+   está a punto de construirse esta instancia, `dci-<id>`, y se detiene si existe y no es de
+   esta instancia, o si aún se está eliminando. El paso se ejecuta antes de escribir nada, así
+   que una negativa no deja nada detrás. Un puerto MQTT local que tiene otra instancia no
+   detiene la ejecución, y se indica. Una ejecución en seco dice qué rechazaría una ejecución
+   real. Consulta [Varias instancias en un mismo clúster](#several-instances), incluida la
+   etiqueta que entrega a la instancia un namespace que creaste tú.
+5. **Declare the instance** (declarar la instancia) — escribe la **declaración** de la
+   instancia en el clúster: el proveedor y el clúster al que pertenece, el perfil, la versión
+   de imagen y si sus bases de datos se están recuperando desde un archivo. Acto seguido se
+   vuelve a leer, y todos los pasos siguientes trabajan con lo que se leyó y no con los flags
+   que lo produjeron. El registro de lo que es esta instancia está en el clúster, no en tu
+   portátil. Consulta
+   [la declaración de la instancia](./kubernetes-operator.md#instance-declaration).
+   Cuando la ejecución está construyendo la instancia (el paso 3 no encontró documento de
+   configuración, o encontró que el primer arranque inicial nunca terminó), la declaración
+   lleva además la anotación `core.devicechain.io/bootstrap-unfinished: "true"`. Una ejecución
+   que acaba con éxito la retira, en la misma escritura que registra la instancia como `Ready`.
+6. **Render configuration** (renderizar la configuración) — resuelve el id de la instancia, el
+   namespace, el perfil y todas las credenciales generadas: el material de autenticación del
+   broker (una credencial para cada área que usa el broker y la clave del emisor del callout), la
+   autoridad certificadora que firma el propio certificado TLS del broker, el secreto de
+   autenticación entre servicios y la **clave raíz del almacén de secretos**. Todas se acuñan
+   aquí, porque el paso 3 ha establecido que no hay ninguna instancia viva de la que tomarlas.
+   Terminar una instancia a medio construir es la excepción: ahí el paso vuelve a leer lo que
+   una ejecución anterior ya dejó en el clúster en lugar de generar un segundo juego, también
+   cuando esa ejecución llegó a escribir el documento de configuración. La autoridad
+   certificadora del broker es lo único que cada ejecución emite de nuevo.
+   El paso también registra las credenciales del broker en la máquina desde la que lo
+   ejecutas, antes de configurar el broker con ellas. El broker se configura antes que la
+   instancia, y sus credenciales ya no se pueden recuperar del clúster una vez están en él, así
+   que esto es lo que te permite retomar una ejecución interrumpida con solo volver a
+   ejecutarla. Además, la clave raíz se deposita en un archivo cifrado que tú conservas;
+   consulta [Recuperación ante desastres](./disaster-recovery.md).
+7. **Apply infrastructure** (aplicar la infraestructura) — ejecuta `tofu apply` sobre la
+   configuración de OpenTofu incrustada vía
+   [terraform-exec](https://github.com/hashicorp/terraform-exec), solo para esta instancia: su
+   propio broker (NATS) y almacén de eventos (TimescaleDB) en su namespace, con el estado
+   guardado en `~/.devicechain/instances/<instance>/infra`. El paso también crea el login y la
+   base de datos propios de la instancia en la base de datos relacional compartida. Los
+   requisitos previos compartidos del clúster no se aplican aquí; los dejó en su sitio
+   [`dcctl install`](#install). Las ejecuciones posteriores son incrementales.
+8. **Install instance (Helm)** (instalar la instancia) — escribe el **documento de
+   configuración** de la instancia, del que cada servicio lee sus credenciales y sus
+   endpoints. Después despliega el chart de Helm vía el SDK de Helm para Go, bloqueando hasta
+   que las cargas de trabajo estén listas. El paso 3 busca ese documento en cualquier
+   ejecución posterior. La instancia cuenta como viva cuando, además, una ejecución ha
+   terminado con éxito.
+9. **Wait for readiness** (esperar a que todo esté listo) — sondea el Deployment de cada área
+   habilitada hasta que haya terminado de desplegarse sobre la configuración que ha producido
+   esta ejecución. Es una puerta de confirmación explícita, en lugar de confiar en la espera
+   del propio paso de Helm. Que haya réplicas disponibles no basta: cuando se están
+   sustituyendo pods, eso ya es cierto de los que están de salida. Así que el paso espera
+   además a que se observe la nueva plantilla, a que todas las réplicas se hayan recreado sobre
+   ella y a que no quede ninguna réplica antigua en ejecución. `dcctl upgrade` usa la misma
+   puerta por la misma razón. Después espera, hasta 15 minutos, a que se hayan unido todas las
+   instancias del almacén de eventos de la instancia, porque los servicios están listos solo en el
+   primario. Si alguna no lo ha hecho, el paso falla con un error que nombra la base de datos y
+   cuántas de sus instancias están listas; nada se deshace, y ejecutar de nuevo el mismo
+   `dcctl bootstrap` termina la instancia.
+10. **Report access info** (informar de los datos de acceso) — imprime el namespace, el correo
+    del superusuario y dónde se guarda su contraseña (y la propia contraseña, una sola vez: en
+    la ejecución que la generó, o en la que termina un arranque inicial que falló antes de
+    mostrarla), y cómo llegar a la instancia.
+
+:::tip `Ctrl+C` detiene una ejecución de forma limpia
+Una ejecución interrumpida detiene la herramienta de infraestructura con elegancia —termina lo
+que está haciendo y escribe su estado— y devuelve el bloqueo del clúster, así que basta con
+volver a ejecutarla. Un segundo `Ctrl+C` sale de inmediato y renuncia a ambas cosas. Consulta
+[Interrumpir una ejecución](./cluster-lock.md#interrupt).
+
+Si la ejecución se terminó de golpe en lugar de detenerse (se mató el proceso o se cerró la
+terminal), hay dos obstáculos antes de volver a ejecutarla. El bloqueo del clúster sigue
+retenido, así que la nueva ejecución espera a que venza el arrendamiento, luego dice que la
+reclamación parece obsoleta y nombra [`dcctl instances reclaim`](./cluster-lock.md#reclaim), que
+ejecutas cuando estás seguro de que el proceso ya no existe. El artefacto de depósito no te pide
+nada: si la ejecución había pasado del paso 6, la nueva reconoce el artefacto que escribió,
+comprueba que la frase de contraseña que le diste lo abre y reutiliza su clave en lugar de acuñar
+otra, y lo indica en su salida. La recuperación son dos pasos, reclamar y volver a ejecutar, con la
+misma frase de contraseña de depósito de antes. Solo cuando no puede saber que el artefacto es el
+de la instancia a medio construir (una frase de contraseña distinta, o un artefacto dejado por una
+instancia que ya no existe) se detiene con `an escrow artifact for instance ... already exists`, y
+ese mensaje dice qué hacer.
+
+Si la ejecución ya había llegado al paso 8, volver a ejecutarla también la termina: el paso 3
+deja pasar una nueva ejecución hasta que un arranque inicial de la instancia haya terminado con
+éxito. Un **segundo** `Ctrl+C` durante el paso 8 puede dejar la release de Helm de la instancia
+marcada como todavía en curso. Entonces la nueva ejecución se detiene en el paso 8 con
+`another operation (install/upgrade/rollback) is in progress`, y dcctl no lo resuelve por ti.
+Para recuperarte, usa `dcctl destroy` y vuelve a hacer el arranque inicial.
+:::
+
+Dado que los artefactos incrustados son los *mismos* que distribuye la plataforma, una
+instancia arrancada de este modo ejercita el despliegue real. No puede desviarse de un
+despliegue de producción.
+
+### El destino de respaldo predeterminado {#default-backup-destination}
+
+Los respaldos de base de datos necesitan un destino. De forma predeterminada, ese destino es un
+**MinIO** de una sola réplica en el namespace `dc-system`, instalado por `dcctl install`. Así,
+una instalación estándar produce instancias cuyo log de escritura anticipada (WAL) se archiva
+de verdad, en lugar de instancias que llevan un plugin de respaldo sin ningún sitio donde
+escribir.
+
+:::info El destino de respaldo predeterminado es un componente AGPL
+MinIO se distribuye bajo licencia AGPL-3.0. La edición comunitaria de MinIO se archivó en abril de
+2026 y sus propias imágenes ya no se publican, así que DeviceChain ejecuta una compilación de una
+bifurcación mantenida (`cgr.dev/chainguard/minio`), fijada por digest, que tus nodos descargan de
+`cgr.dev`. Una compilación con parches llega a tu clúster solo cuando una versión de DeviceChain
+mueve esa fijación. Para evitar tanto la licencia como esa dependencia, apunta los respaldos a un
+almacenamiento fuera del clúster.
+:::
+
+Ninguna de las dos cosas afecta a la licencia Apache-2.0 de la propia DeviceChain. La imagen se
+referencia, nunca se compila, modifica ni redistribuye, y la plataforma se comunica con ella
+mediante la API HTTP de S3. Pero el componente sí se ejecuta en *tu* clúster, y muchas
+organizaciones no permiten software AGPL con independencia de cómo se use.
+
+El almacenamiento fuera del clúster es la configuración de producción recomendada de todos
+modos, por un motivo que nada tiene que ver con las licencias: un bucket dentro del clúster
+comparte su dominio de fallo, así que no puede constituir recuperación ante desastres. Pasa
+`--backup-credentials-file` a `dcctl install` para nombrar un almacén de objetos que ya tengas.
+Consulta [Recuperación ante desastres](./disaster-recovery.md) y el `backup_destination` de la
+configuración de OpenTofu.
+
+#### Ventanas de recuperación {#backup-retention}
+
+Cada base de datos conserva su propia ventana de recuperación: el intervalo de tiempo dentro del
+cual se puede restaurar a cualquier punto. La base de datos relacional, que guarda inquilinos,
+usuarios, dispositivos, reglas, secretos y el último estado conocido de cada dispositivo, conserva
+**30 días**; se ajusta con `backup_retention_rdb` en la configuración de OpenTofu del clúster. El
+almacén de eventos de cada instancia conserva **7 días**; se ajusta con `backup_retention_tsdb` en
+un `terraform.tfvars` junto al estado de OpenTofu de la instancia
+(`~/.devicechain/instances/<instancia>/infra/instance/`), donde lo lee cada aplicación de la
+instancia que hace `dcctl`, también la de una actualización. La base de datos relacional tiene la ventana más larga porque sin
+ella no se puede reconstruir una instancia, y los errores de los que se restaura, como una
+migración defectuosa o un borrado por error, se descubren a menudo días después. El historial de
+eventos es voluminoso, tiene su propio [ciclo de vida de los datos](../concepts/architecture.md), y
+su log es lo que llena el almacén de respaldos.
+
+Una ventana es un número entero y una unidad: `d` para días, `w` para semanas o `m` para **meses**
+(no minutos). Cualquier otra forma se rechaza antes de empezar la aplicación. Una ventana vacía
+conserva todos los respaldos. Alargar una ventana guarda más en el almacén de respaldos: consulta
+más abajo.
+
+#### Tamaño del almacén de objetos de respaldo {#backup-store-size}
+
+El almacén predeterminado tiene 160 GiB, dimensionado a partir del almacén de eventos
+predeterminado para que, con una ingesta sostenida, se llene primero el volumen del almacén de
+eventos. Mientras una instancia está tranquila, el log de escritura anticipada que archiva no
+cuesta casi nada. Con ingesta sostenida, el log crece al ritmo de las escrituras: medido en Google
+Kubernetes Engine, hasta unos 1,9 KB por evento ingerido para las dos bases de datos juntas,
+frente a aproximadamente 1 KB por evento de datos almacenados. (Esta página daba antes
+aproximadamente 1 KB por evento para el archivo; esa cifra era baja). 160 GiB guardan el archivo
+de un almacén de eventos de 32 GiB lleno, más un respaldo base completo de cada base de datos, con
+más de un tercio del almacén todavía libre. Así, las alertas del propio almacén de respaldos no
+se disparan, y las alertas del almacén de eventos nombran la causa.
+
+Eso se cumple para una instancia cuyo almacén de eventos se llena en aproximadamente un día. No se
+cumple:
+
+- **con varias instancias que ingieren de forma continua.** El almacén pertenece al clúster, y
+  cada instancia añade su propio archivo. Añade unos 160 GiB por cada una de esas instancias, o
+  envía los respaldos a un almacén de objetos que gestiones tú (`--backup-credentials-file`), que
+  es de todos modos la configuración de producción recomendada.
+- **cuando el almacén de eventos tarda más de aproximadamente un día en llenarse.** El almacén
+  guarda un respaldo base completo de cada base de datos por cada día de la
+  [ventana de recuperación](#backup-retention) de esa base de datos, más el log archivado desde
+  entonces. Con las ventanas predeterminadas son 32 copias comprimidas de la base de datos
+  relacional y 9 del almacén de eventos, y tienen que caber junto al log: 32 veces el tamaño
+  comprimido de la base de datos relacional más 9 veces el del almacén de eventos tiene que quedar
+  por debajo de 160 GiB. La base de datos relacional ocupa normalmente megabytes, así que en la
+  práctica el almacén de eventos tiene que comprimirse bastante por debajo de unos 17 GiB.
+- **cuando una ventana de retención (`retentionDays`) limita los datos almacenados de una
+  instancia.** Su almacén de eventos no se llena nunca, pero sigue enviando aquí su log: una semana
+  del almacén de eventos y 30 días de la base de datos relacional, cuyo log crece con la ingesta
+  porque registra el último estado conocido de cada dispositivo. En la única medición realizada,
+  de una flota pequeña que informa con frecuencia, los respaldos de la base de datos relacional
+  eran aproximadamente un 14 % del contenido del almacén. Con esa proporción, unos 100 eventos por
+  segundo sostenidos llenan el almacén predeterminado antes de contar ningún respaldo base. La
+  proporción no está medida para flotas más grandes o más lentas, donde probablemente es mayor: si
+  el log de la base de datos relacional fuera todo el archivo, la cifra sería de unos 35 eventos
+  por segundo.
+- **cuando amplías el almacén de eventos.** Cada GiB que añades al volumen del almacén de eventos
+  necesita unos cinco GiB más aquí.
+
+En esos casos, el aviso son las alertas descritas en
+[Respaldos que dejan de enviarse](./observability.md#backup-archiving):
+`BackupDestinationAlmostFull` al 85 % de ocupación y `BackupDestinationFillingFast` con un ritmo
+pronunciado, y `PostgresWALArchivingFailing` cuando el archivado ya se ha detenido. Un respaldo
+base llega de golpe, así que un almacén que ya pasa del 85 % puede llenarse con el siguiente
+respaldo nocturno: actúa con la primera alerta. Cuando el almacén está lleno, el archivado se
+detiene para todas las instancias del clúster, y cada base de datos conserva el log sin enviar en
+su propio volumen hasta que también se llena y la base de datos se detiene.
+
+Cada base de datos comprime con zstd el log que archiva. La cifra de 1,9 KB, y los 100 y 35
+eventos por segundo calculados a partir de ella más arriba, se midieron antes de que esta versión
+comprimiera el log del almacén de eventos, le diera claves encabezadas por el tiempo y archivara con
+zstd, cuando el archivo se comprimía con gzip, así que pecan por exceso: en la prueba de rendimiento
+de la versión, el archivo del almacén de eventos ocupó unos 0,47 KB por evento almacenado. La parte
+de la base de datos relacional no se volvió a medir. Sobre el mismo log, la salida de zstd fue entre un 2 % y un 16 %
+menor que la de gzip, así que el cambio no hace crecer el archivo. Un segmento cerrado antes de
+tiempo en una base de datos tranquila ocupa unos 16 KiB, o unos 32 KiB en una base de datos que
+sigue archivando con gzip.
+
+El tamaño del almacén se fija cuando `dcctl install` lo crea por primera vez. Volver a ejecutar
+install, también como primer paso de una actualización, conserva el tamaño que tiene el almacén, y
+lo mismo hace un `tofu apply` directo de la configuración de OpenTofu. Para ampliarlo, con una
+StorageClass que permita la expansión de volúmenes:
+
+```bash
+kubectl -n dc-system patch pvc dc-object-store-data \
+  -p '{"spec":{"resources":{"requests":{"storage":"320Gi"}}}}'
+```
+
+En kind, el volumen no está limitado a su tamaño: usa lo que tenga el disco del host.
+
+Acortar una ventana de recuperación (`backup_retention_tsdb` para el almacén de eventos de una
+instancia, `backup_retention_rdb` para la base de datos relacional) no resuelve la ingesta: guarda
+menos historial pero sigue guardando un día completo de log, y renuncia a alcance de recuperación
+para ganar espacio. Las alertas descritas en
+[Respaldos que dejan de enviarse](./observability.md#backup-archiving) avisan antes de que se
+llene el almacén o un volumen de base de datos.
+
+#### Respaldos base como instantáneas de volumen {#snapshot-base-backups}
+
+En un clúster cuyo controlador de almacenamiento toma instantáneas de volumen CSI, `dcctl install
+--backup-snapshot-class <class>` toma el respaldo base diario de cada base de datos como una
+instantánea de volumen de sus discos, en lugar de una copia completa en el almacén de respaldos.
+Sin la opción no cambia nada.
+
+- **Lo que no cambia.** Cada base de datos sigue archivando su log de escritura anticipada en el
+  almacén de respaldos, de forma continua. Un respaldo base completo sigue yendo al almacén de
+  respaldos una vez por semana (el domingo a las 04:00): el almacén solo poda el log antiguo en
+  relación con los respaldos base que guarda, así que sin ninguno conservaría cada segmento hasta
+  llenarse, y toda restauración lee el almacén.
+- **La clase.** Tiene que existir, tener `deletionPolicy: Delete` y pertenecer al controlador de
+  almacenamiento que aprovisiona los volúmenes de las bases de datos (normalmente el de la
+  StorageClass predeterminada). `dcctl install` comprueba las tres cosas antes de cambiar nada, y
+  lo mismo hace cada `dcctl bootstrap`, así que una clase borrada después de la instalación se
+  detecta antes de construir una instancia. El clúster necesita un controlador de instantáneas
+  CSI: Google Kubernetes Engine y Azure AKS lo incluyen con sus controladores de disco; en Amazon
+  EKS, instala antes el complemento del controlador de instantáneas.
+- **Retención.** CloudNativePG no borra las instantáneas antiguas. Lo hace el operador de
+  DeviceChain, cada diez minutos: conserva todas las instantáneas dentro de la
+  [ventana de recuperación](#backup-retention) de la base de datos y la más reciente anterior a
+  ella, y borra el resto, lo que borra también la copia del proveedor.
+  `DatabaseSnapshotPruningStalled` se dispara cuando deja de hacerlo. Cada pasada registra su
+  hora en la programación, en la anotación `devicechain.io/snapshot-retention-checked-at`.
+- **Lo que no hace.** Ninguna restauración lee una instantánea. Una restauración
+  (`--restore-rdb-from`, `--restore-tsdb-from`) lee el almacén de respaldos: el respaldo base
+  semanal más reciente y el log desde entonces, así que puede reproducir hasta una semana de log.
+  Las instantáneas de una instancia se borran con su namespace cuando se destruye, y las de la
+  base de datos relacional cuando se borra el namespace `dc-system`. Las instantáneas tomadas en
+  tu proveedor de nube sobreviven al clúster, y borrar la copia del proveedor puede terminar
+  después de que el namespace haya desaparecido. Si el clúster se borra antes, se quedan en el
+  proveedor con el contenido de las bases de datos, incluidos los datos que ha eliminado el
+  borrado de un inquilino, hasta que las borres allí; ya nada las poda. Antes de borrar el
+  clúster, comprueba que `kubectl get volumesnapshotcontent` no muestra ninguna cuyo namespace
+  de instantánea (la columna `VOLUMESNAPSHOTNAMESPACE`) sea `dc-system` o el de una de tus
+  instancias; después, revisa la lista de instantáneas de tu proveedor. La
+  [guía de Google Kubernetes Engine](https://github.com/devicechain-io/devicechain/blob/main/deploy/gke/README.md#tearing-it-down)
+  da los comandos para GKE.
+- **Lo que hace con el almacén de respaldos.** El almacén guarda ahora hasta una semana más de log
+  de cada base de datos: el log hasta el respaldo base semanal más reciente anterior a cada
+  ventana. Guarda menos copias completas, pero donde el log es la mayor parte de lo que guarda, se
+  llena antes. Con las ventanas y el almacén predeterminados, y la proporción relacional medida
+  más arriba, las copias base como instantáneas de volumen llenan el almacén a unos 60 eventos por
+  segundo sostenidos, no a unos 100; y a unos 29 si todo fuera registro de la base de datos
+  relacional. Las alertas de arriba son el aviso, igual que sin instantáneas. No cambia el tamaño
+  predeterminado del almacén: la regla de dimensionamiento de [más arriba](#backup-store-size)
+  cuenta un respaldo base completo de cada base de datos y el log de cada evento que guarda un
+  almacén de eventos lleno, sea cual sea la programación de los respaldos base, y un respaldo base
+  completo sigue llegando al almacén al crearse cada base de datos y luego cada semana, así que la
+  regla da los mismos 160 GiB con o sin instantáneas.
+- **Pertenece al clúster.** Todas las instancias lo siguen, y cambiarlo se rechaza mientras haya
+  instancias en el clúster, como los demás [ajustes de install](#re-running-install).
+
+Las alertas de las instantáneas se describen en
+[Respaldos que dejan de enviarse](./observability.md#backup-archiving).
+
+## Prerrequisitos {#prerequisites}
+
+- **Un clúster de Kubernetes, versión 1.29 o más reciente**, y un kube-context que apunte a él.
+  El mínimo proviene de los charts de CloudNativePG, que se niegan a instalarse por debajo de
+  esa versión. `dcctl preflight` lo verifica por adelantado, porque de lo contrario el fallo
+  aparece a mitad de un arranque que ya ha escrito tu archivo de depósito (escrow) de la clave
+  raíz. Para el proveedor `local` esto es un clúster de kind, que `dcctl install local` crea
+  por ti (`--cluster <name>`, por defecto `devicechain`). Pasa `--kube-context <name>` para
+  usar en su lugar un clúster que ya tengas (kind / minikube / k3d / docker-desktop).
+- **Disco para los volúmenes persistentes**, en la StorageClass predeterminada del clúster. En un
+  clúster que no es local (ni kind, ni minikube, ni k3d, ni docker-desktop, ni rancher-desktop), con
+  los ajustes de install predeterminados (sin `--compact`, `--no-cnpg`, `--no-monitoring` ni
+  `--backup-credentials-file`), `dcctl install --ha` reclama 204 GiB para el clúster: tres
+  volúmenes de la base de datos relacional, el [almacén de respaldos](#backup-store-size)
+  (160 GiB) y el Prometheus de la pila de monitorización. Cada instancia reclama 144 GiB más, tres
+  volúmenes del almacén de eventos y tres del broker de mensajes: 348 GiB para un clúster con una
+  instancia. Sin `--ha`, el clúster reclama 188 GiB y cada instancia 48 GiB. Cada instancia
+  adicional que ingiere de forma continua obliga además a ampliar el almacén de respaldos en unos
+  160 GiB, como explica [Tamaño del almacén](#backup-store-size). En un proveedor de nube,
+  comprueba antes la cuota de disco. Un proyecto nuevo de Google Cloud permite 500 GB de SSD por
+  región, y cuenta cada GiB de volumen como un GB; las dos clases de disco de Google Kubernetes
+  Engine cuentan para ella. Los volúmenes de una instancia quedan por debajo, y una instalación
+  `--ha` predeterminada con una instancia cabe en el clúster que crea la
+  [guía de Google Kubernetes Engine](https://github.com/devicechain-io/devicechain/blob/main/deploy/gke/README.md#before-you-start)
+  porque sus nodos arrancan desde discos estándar, que cuentan para otra cuota. Unos discos de arranque
+  equilibrados o SSD también contarían para la cuota de SSD. La guía indica la cuota que hay que
+  solicitar para más instancias. En un clúster local la pila de monitorización no guarda
+  ningún volumen, y en kind los tamaños no se aplican.
+- **CPU y memoria para las solicitudes.** Sin `--compact`, los cinco servicios que procesan cada
+  evento solicitan unas 4 CPU entre todos, unas 5 con `--ha`, donde `event-management` se ejecuta
+  en dos pods, y cada servidor NATS (tres con `--ha`) solicita 500m de
+  CPU y 768Mi de memoria, además de los demás servicios, las bases de datos y los componentes
+  propios del clúster. Un pod que no cabe se queda en `Pending`, y la instalación espera hasta
+  agotar su tiempo límite. Consulta cada cifra en
+  [Dimensionamiento de los servicios](#service-sizing). En un clúster que no puede dedicarles eso,
+  como un portátil, usa [`--compact`](#--compact).
+- **OpenTofu 1.9 o posterior** (el binario `tofu`; `terraform` 1.9 o posterior también
+  funciona) en tu `PATH`. `dcctl` lo ejecuta para aprovisionar infraestructura. Instálalo desde
+  [opentofu.org](https://opentofu.org). Ejecuta `dcctl preflight local` para comprobar que está
+  y el resto de tu entorno de antemano. La comprobación previa no mira su versión; una anterior
+  falla al cargar la configuración de la infraestructura.
+- **`kubectl` y `helm`** en tu `PATH`, y **`docker`** y **`kind`** para el proveedor `local`. La
+  comprobación previa falla si falta alguno de los que necesita la ejecución. Docker solo hace
+  falta para un clúster local de kind o para `--build`: una instalación en un clúster que nombras
+  con `--kube-context`, a partir de imágenes publicadas, no lo comprueba ni lo usa. Donde hace
+  falta, su daemon tiene que ser accesible: Docker Engine en Linux, Docker Desktop en macOS y
+  Windows.
+- **Puertos libres 80, 443 y 1883 del host** para un clúster local de kind, que los publica para
+  la consola, HTTPS y MQTT. `dcctl preflight local` falla, nombrando el contenedor que ocupa uno,
+  en lugar de dejar que la creación del clúster falle con el error de enlace de Docker.
+- **`ko`**, solo para compilar imágenes desde el código fuente con `--build`. La comprobación
+  previa avisa, en lugar de fallar, cuando falta.
+
+## Origen de las imágenes {#image-source}
+
+Por defecto, el arranque inicial despliega las **imágenes publicadas** desde
+`ghcr.io/devicechain-io`, sin nada que compilar:
+
+```bash
+dcctl bootstrap local my-instance
+```
+
+Si trabajas desde un checkout del código fuente, puedes compilar las imágenes desde el código y
+desplegar esas en su lugar con `--build`. Compila cada servicio y el operador con
+[`ko`](https://ko.build), además de la consola web con `docker build`, en un registro local, y
+despliega por referencia:
+
+```bash
+# desde un checkout de código fuente; requiere Docker + ko
+dcctl bootstrap local my-instance --build
+```
+
+La única diferencia entre ambos caminos es el registro desde el que los pods extraen las
+imágenes. La canalización, el chart y el operador son idénticos.
+
+## Flags de bootstrap {#useful-flags}
+
+| Flag | Propósito |
+|------|-----------|
+| `--cluster <name>` | Proveedor `local`: el clúster de kind en el que crear la instancia (por defecto `devicechain`). Debe estar ya [instalado](#install); el arranque inicial nunca crea un clúster. |
+| `--kube-context <name>` | Apunta en su lugar a un clúster instalado a través de este kube-context. |
+| `--profile <profile>` | Perfil de área funcional: `default` (el sistema estándar, usado cuando se omite), `full` (todo: añade inferencia de IA, conectores salientes, MCP, ingesta de Sparkplug B e ingesta de LwM2M; la gestión de actualizaciones over-the-air forma parte de `default`), `telemetry` o `ingest-only`. |
+| `--enable-area <area>` | Despliega un área funcional además de las del perfil, por ejemplo `--enable-area outbound-connectors`. Repetible. Para añadir una a una instancia que ya está en marcha, consulta [Añadir un área funcional más adelante](#enable-area). |
+| `--build` | Compila las imágenes desde el código fuente en un registro local (ruta para desarrolladores; necesita el árbol de código fuente + Docker + ko). |
+| `--registry` / `--version` | Sobrescribe el registro/etiqueta de imagen (por defecto: `ghcr.io/devicechain-io` publicado, o `localhost:5000` + `dev` con `--build`). |
+| `--host <name>` | Host de ingress en el que exponer la instancia (por defecto `devicechain.local`). Usa `localhost` en un clúster local para llegar a la consola sin editar `/etc/hosts`. |
+| `--no-tls` | Sirve HTTP simple en lugar de un certificado autofirmado. Con `--host localhost`, un `http://localhost/` sin configuración adicional (sin advertencia de certificado). En un clúster instalado sin cert-manager está activado por defecto, y `--no-tls=false` se rechaza: no hay nada que emita el certificado. |
+| `--object-store <none\|filesystem\|s3>` | Dónde guarda la instancia los logotipos de los tenants y los artefactos de actualización. Por defecto, un pequeño volumen de sistema de archivos en un clúster creado por dcctl y ninguno en uno al que lo apuntaste con `--kube-context`. Se ajusta con los flags `--object-store-*`; consulta [el almacén de objetos](#object-store). |
+| `--dry-run` | Imprime lo que haría cada paso sin cambiar nada. Una ejecución en seco no toma el bloqueo del clúster; sí informa de si otro operador está reteniendo el clúster. |
+| `--skip-preflight` | Omite las comprobaciones de entorno. |
+| `--escrow-passphrase-file <path>` | Lee la frase de paso del depósito de la clave raíz desde un archivo en lugar de pedirla. Consulta más abajo. |
+| `--escrow-file <path>` | Escribe el artefacto de depósito en otro sitio distinto de `~/.devicechain/escrow/`. |
+| `--no-escrow` | **No** deposita la clave raíz. Solo para instancias desechables; implícito con `--dev`. A una instancia creada así se le puede dar un depósito más tarde —consulta [la reconciliación del depósito](./disaster-recovery.md#escrow-reconcile). |
+| `--restore-root-key <path>` | Recuperación ante desastres: siembra la clave raíz de esta instancia desde un artefacto de depósito en lugar de acuñar una. Solo se acepta cuando hay algo que esa clave pueda abrir: una base de datos que el almacén relacional ya contiene para esta instancia (consulta [Recuperar una instancia](./disaster-recovery.md#recover)), o esta misma instancia a medio construir por una ejecución anterior que se está terminando. Tras `dcctl destroy` no se da ninguna de las dos cosas y el flag se **rechaza**: la siguiente instancia con ese nombre acuña una clave propia, así que arranca sin el flag y aparta antes el artefacto antiguo, porque el arranque inicial no sobrescribe ninguno. `dcctl secrets escrow show <path>` te dice para qué instancia se escribió un artefacto. |
+
+### El depósito de la clave raíz {#escrow}
+
+El arranque inicial escribe una copia cifrada de la **clave raíz del almacén de secretos** de
+la instancia en `~/.devicechain/escrow/<instance>-rootkey.escrow`, sellada con una frase de
+paso que tú eliges. Te pide esa frase de paso, o la toma de `--escrow-passphrase-file` o de
+`DCCTL_ESCROW_PASSPHRASE`.
+
+El depósito está activado por defecto. Una ejecución no interactiva sin frase de paso
+**falla** en lugar de continuar sin ella:
+
+```bash
+# automatización
+DCCTL_ESCROW_PASSPHRASE="$(pass show devicechain/prod-escrow)" \
+  dcctl bootstrap local prod --yes
+
+# una instancia desechable
+dcctl bootstrap local scratch --dev
+```
+
+:::danger Este archivo no es opcional para nada que te importe
+La clave raíz cifra todos los secretos que guarda la instancia. Vive solo en el etcd del
+clúster, y **ningún respaldo de DeviceChain contiene etcd**. Sin este archivo, un respaldo de
+base de datos restaurado en un clúster nuevo rehidrata secretos que nada puede descifrar. Lee
+[Recuperación ante desastres](./disaster-recovery.md) antes de necesitarlo.
+:::
+
+Las áreas que guardan secretos se niegan a arrancar en lugar de servir credenciales que no
+pueden abrir. El servicio user-management es una de ellas: sella la clave de firma de tokens,
+así que nadie puede iniciar sesión. Te enteras de inmediato, y para entonces ya no hay nada que
+hacer. [Recuperación ante desastres](./disaster-recovery.md) explica el procedimiento completo.
+
+A una instancia que no tiene depósito —creada con `--no-escrow` o con `--dev`— se le puede dar
+uno más tarde sin reconstruirla. `dcctl upgrade` escribe el artefacto que falta cuando le pasas
+una frase de paso, y comprueba uno existente cada vez que se ejecuta. Consulta
+[la reconciliación del depósito](./disaster-recovery.md#escrow-reconcile).
+
+### El almacén de objetos {#object-store}
+
+Los logotipos de marca de los tenants y los artefactos de actualización viven en un almacén de
+objetos, no en la base de datos. Sin uno, declarar un artefacto de actualización se rechaza con
+`OBJECT_STORE_NOT_CONFIGURED`, y una subida de logotipo se responde con `503`. El almacén es **configuración fija**: se elige al hacer bootstrap,
+se escribe en la configuración montada de la instancia y se adopta reiniciando los pods. No es un
+ajuste en tiempo de ejecución.
+
+| Modo | Qué obtienes |
+|------|--------------|
+| `--object-store filesystem` | Un volumen que crea el chart y que monta en los servicios que usan el almacén. Ajusta su tamaño con `--object-store-size` (por defecto `5Gi`), elige la clase con `--object-store-storage-class` (por defecto, la clase predeterminada del clúster) y usa `--object-store-access-mode ReadWriteMany` cuando más de un pod deba compartirlo (requiere una clase de almacenamiento que lo admita). |
+| `--object-store s3` | Un bucket en AWS S3 o en un servicio compatible con S3 como MinIO. Indica `--object-store-s3-bucket` y `--object-store-s3-region` o `--object-store-s3-endpoint` (con `--object-store-s3-path-style` para MinIO). |
+| `--object-store none` | Sin almacén. |
+
+Si omites `--object-store`, un clúster que dcctl creó él mismo (el clúster kind local) recibe un
+almacén de sistema de archivos de `5Gi`, de modo que los logotipos y los artefactos funcionan desde
+el primer momento. Un clúster al que apuntaste dcctl con `--kube-context` no recibe ninguno hasta que
+elijas: si existe un volumen de la clase adecuada, o si prefieres un bucket, lo decides tú.
+
+Los flags que no pueden aplicarse se rechazan en lugar de ignorarse. Un bucket junto con
+`--object-store filesystem`, un tamaño de volumen junto con `s3` o cualquier detalle junto con
+`none` falla antes de crear nada.
+
+#### Credenciales de S3 {#object-store-s3-credentials}
+
+Una clave de acceso nunca es un flag, nunca es un campo del registro de la instancia y nunca se
+escribe en la configuración de la instancia. En su lugar, apunta dcctl a un Secret de Kubernetes que
+ya exista:
+
+```bash
+kubectl -n storage create secret generic minio-keys \
+  --from-literal=AWS_ACCESS_KEY_ID=... --from-literal=AWS_SECRET_ACCESS_KEY=...
+
+dcctl bootstrap local prod --object-store s3 \
+  --object-store-s3-bucket dc-objects --object-store-s3-endpoint https://minio.example.com:9000 \
+  --object-store-s3-path-style --object-store-s3-credentials-secret storage/minio-keys
+```
+
+El valor es `<namespace>/<nombre>`. Antes de crear nada, dcctl comprueba que el Secret existe y
+contiene ambas claves; después copia esas dos claves (y nada más) a un Secret propio en el namespace
+de la instancia, que los servicios leen mediante las variables de entorno habituales del SDK de AWS.
+Se elimina un único salto de línea final de cada valor (una clave escrita con `kubectl create secret
+--from-file` lo lleva); cualquier otro espacio en blanco o carácter de control se rechaza. Ningún
+rechazo imprime un valor.
+
+Para rotar una clave, actualiza tu Secret y ejecuta `dcctl upgrade`. El upgrade copia los valores
+nuevos y estampa un resumen (digest) de ellos en los pods que los leen, de modo que los pods se
+reinician con la clave nueva aunque la versión de la release no haya cambiado.
+
+Para ello dcctl necesita, con las credenciales de tu kubeconfig, permiso `get` sobre Secrets en el
+namespace donde vive tu Secret, y `create` y `update` sobre Secrets en el namespace propio de la
+instancia (`dci-<instancia>`).
+
+En un clúster creado por dcctl (el clúster kind local) los pods no tienen ninguna identidad en la nube
+a la que recurrir, así que `--object-store s3` sin un Secret de credenciales se rechaza. En un
+clúster en la nube puedes omitir el flag y dar a los pods una identidad: un perfil de instancia, o una
+anotación de IAM para service accounts mediante `serviceAccount.annotations` del chart. dcctl no
+establece esa anotación por ti.
+
+#### Conservar el almacén {#object-store-persistence}
+
+La elección queda registrada en la declaración de la instancia, de modo que `dcctl upgrade` y un
+segundo operador reconstruyen exactamente el almacén con el que se creó la instancia. La declaración
+contiene el nombre del Secret, nunca su contenido. Una nueva ejecución de `dcctl bootstrap` sobre una
+instancia ya existente (terminar un bootstrap interrumpido, reintentar una restauración) que no indique
+ningún flag `--object-store*` conserva el almacén declarado en lugar de aplicar encima los valores por
+defecto.
+
+Se rechazan, tanto por dcctl como por el propio recurso Instance, los cambios que dejarían huérfano o
+perderían lo que contiene el almacén: eliminarlo, pasar de sistema de archivos a S3 o a la inversa,
+reducir un volumen, cambiar su clase de almacenamiento o modo de acceso, y cambiar un bucket, un
+endpoint o una región. Se permite ampliar un volumen, cambiar el Secret que guarda las credenciales y
+cambiar el estilo de ruta.
+
+Una instancia creada sin almacén no lo adquiere con `dcctl upgrade`, que no tiene flags de almacén.
+Para dárselo, destrúyela y haz bootstrap de nuevo con el flag.
+
+En un clúster creado por dcctl, los pods del almacén se programan juntos en un único nodo, porque un
+volumen `ReadWriteOnce` se acopla a un solo nodo. En cualquier otro clúster, dcctl rechaza antes de crear
+nada un conjunto de áreas que montaría un almacén `ReadWriteOnce` desde más de un pod; usa
+`--object-store-access-mode ReadWriteMany` con una clase de almacenamiento que lo admita, o S3.
+
+El chart marca el volumen del almacén con `helm.sh/resource-policy: keep`, de modo que un cambio
+posterior de los valores no puede hacer que Helm borre los logotipos y artefactos almacenados.
+`dcctl destroy` elimina el namespace de la instancia y con él el volumen. Para borrar un volumen
+deliberadamente conservando la instancia, ejecuta
+`kubectl -n dci-<instancia> delete pvc dci-<instancia>-blob`.
+
+### Direcciones de cliente y proxies de confianza {#trusted-proxies}
+
+Algunos endpoints limitan las solicitudes por dirección de cliente, y el autorregistro de dispositivos es el primero. Detrás del controlador de ingress, la dirección que un servicio ve en la conexión es la del pod del controlador, así que, si no se indica a los servicios que crean la cabecera `X-Forwarded-For` del controlador, todos los dispositivos que hay detrás comparten un único cupo por pod del controlador, y un extraño que lo agote hace que se rechace con `429` a todos ellos.
+
+Por eso `dcctl bootstrap` y `dcctl upgrade` generan `infrastructure.http.trustedProxies` para la instancia: el rango de pods del clúster, leído de los CIDR de pods de los nodos y fusionado en el menor número de prefijos. El controlador de ingress se ejecuta en ese rango, esté donde esté programado. La lista queda registrada en la instancia, de modo que una actualización que no pueda leer los nodos la conserva, y una que pueda leerlos sigue a un clúster que ha crecido. Un clúster cuyos nodos no exponen un rango de pods (algunos CNI asignan ellos mismos las direcciones) no recibe lista y se avisa en cada ejecución; indica tú el rango.
+
+Para fijarla tú mismo, pasa `--trusted-proxies` a `bootstrap` o `upgrade` (CIDR, repetidos o separados por comas). Una lista explícita se conserva tal cual en todas las actualizaciones posteriores; `--trusted-proxies=auto` devuelve la instancia a derivarla.
+
+También deben cumplirse estas cosas en el borde, o la cabecera que creen los servicios no será la del cliente:
+
+- Con Traefik, que usa una instalación nueva, no hay nada que fijar. Sus entrypoints no confían en ninguna cabecera reenviada propia, así que descarta cualquier `X-Forwarded-*` y `X-Real-Ip` que enviara un cliente y escribe en `X-Forwarded-For` el par TCP real. Su Service debe conservar la dirección del cliente: la instalación fija `externalTrafficPolicy: Local` en el Service LoadBalancer de Traefik. Eso conserva la dirección en los balanceadores que pasan la conexión tal cual (GKE, AKS, un Network Load Balancer de AWS). El motivo de `Local`: con el valor por defecto (`Cluster`) el tráfico del balanceador de la nube se traduce al origen de un nodo y todos los dispositivos de internet compartirían una cuota por nodo. Con `Local` el balanceador envía tráfico solo a los nodos que ejecutan un pod de Traefik, lo cual averigua comprobando el Service con un health check. Una instalación HA ejecuta dos réplicas de Traefik, repartidas entre nodos por una anti-afinidad preferente y mantenidas durante un drenaje de nodo por un PodDisruptionBudget con `minAvailable: 1`, de modo que el balanceador conserva un destino durante una actualización progresiva o la pérdida de un nodo. Una instalación sin HA ejecuta una, y también un clúster local que da a Traefik los puertos del host, porque dos pods no pueden compartirlos. La variable de OpenTofu `traefik_replicas` fija otro número.
+- En AWS un Service LoadBalancer recibe un Classic Load Balancer si no se anota. Actúa como proxy TCP, así que el controlador ve la dirección del propio balanceador y `Local` no devuelve la del cliente. En EKS usa `dcctl install --aws-nlb`, que admite `traefik`, `nginx`, `all` o `none`: añade `service.beta.kubernetes.io/aws-load-balancer-type: nlb` al Service LoadBalancer del controlador indicado, y un Network Load Balancer pasa la dirección del cliente. `traefik` cambia solo el Service de Traefik, que es lo que conviene durante un paso, de modo que `ingress-nginx` sigue sirviendo con su Classic load balancer; `nginx` cambia solo el de `ingress-nginx`, `all` ambos y `none` desactiva los dos. Sin el flag cada Service conserva lo que tiene. Cambiar un Service existente imprime un aviso, porque AWS **sustituye su balanceador y cambia el nombre de host**: repunta el DNS después. Una primera instalación, o repetir el estado actual, no imprime nada.
+- Con `ingress-nginx`, en un clúster que aún lo ejecuta, deja `use-forwarded-headers` desactivado (la instalación de dcctl lo hace). Así el controlador escribe en `X-Forwarded-For` el par TCP real. La instalación también fija `externalTrafficPolicy: Local` en su Service LoadBalancer, por el mismo motivo, y vale la misma salvedad de AWS: `--aws-nlb nginx` o `--aws-nlb all` cubre también su Service. Una instalación HA ejecuta dos réplicas de `ingress-nginx`, repartidas entre nodos, para que el balanceador conserve un destino durante una actualización progresiva o la pérdida de un nodo (la variable `ingress_nginx_replicas` fija otro número; con una sola réplica no queda destino mientras se reinicia). Un controlador propio necesita el mismo ajuste, o PROXY protocol desde el balanceador.
+- Detrás de un balanceador de capa 7 que añade él mismo la cabecera (el balanceo HTTP(S) de Google Cloud, un proxy que operas tú), indica a Traefik los rangos del balanceador con la variable de OpenTofu `traefik_trusted_proxy_cidrs`, y pasa a `--trusted-proxies` los rangos del balanceador **además** del rango de pods. Traefik añade entonces la dirección del proxy a la cadena, y los servicios la recorren de derecha a izquierda: si solo se confía en el rango de pods, el recorrido se detiene en el proxy y todos los clientes comparten un único cupo. Para `ingress-nginx` lo equivalente es activar `use-forwarded-headers` con `proxy-real-ip-cidr` fijado a esos rangos.
+
+Un `--trusted-proxies` explícito **sustituye** el rango de pods derivado; no se suma a él. Siempre que lo pases, lista el rango de pods y cualquier otro salto de confianza.
+
+Muchos abonados detrás de una misma dirección de operador (CGNAT) siguen compartiendo un cupo. Es un límite de usar la dirección de origen como clave, que estos ajustes no pueden resolver.
+
+## Flags de instalación {#install-flags}
+
+Estos son flags de [`dcctl install`](#install). Describen el clúster, y toda instancia
+arrancada en él los sigue. Ninguno es un flag de `dcctl bootstrap`.
+
+| Flag | Propósito |
+|------|-----------|
+| `--cluster <name>` | Proveedor `local`: el clúster de kind en el que instalar (por defecto `devicechain`), que se crea si no existe. |
+| `--kube-context <name>` | Instala en el clúster existente al que apunta este kube-context. `dcctl` nunca lo crea ni lo elimina. |
+| `--compact` | Preajuste de huella pequeña; consulta más abajo. |
+| `--ha` | Alta disponibilidad; consulta más abajo. Requiere al menos **3 nodos planificables**. |
+| `--no-tls` | Con `--compact`: no instala cert-manager y, por tanto, tampoco respaldos de base de datos. `--compact --no-tls=false` conserva ambos. Se rechaza sin `--compact`: usa `dcctl bootstrap --no-tls` para servir una instancia por HTTP simple. |
+| `--no-monitoring` | Omite la pila de monitorización (Prometheus y Grafana). |
+| `--no-cnpg` | Omite el operador CloudNativePG y el plugin de respaldo de base de datos. Para un clúster que **ya ejecuta CloudNativePG**: Helm no puede adoptar objetos creados por otro instalador, así que sin este flag la instalación falla. |
+| `--remove-legacy-ingress` | Quita `ingress-nginx` de un clúster que aún lo ejecuta. Sin este flag, una instalación deja `ingress-nginx` sirviendo e instala Traefik a su lado. Se rechaza mientras algún objeto Ingress del clúster nombre todavía su clase: mueve antes cada instancia, como describe [Pasar una instalación existente a Traefik](./ingress-cutover.md). En un clúster local, Traefik toma los puertos 80 y 443 del nodo en la misma aplicación. |
+| `--backup-credentials-file <path>` | Envía los respaldos de base de datos a un almacén de objetos que ya tengas, descrito por un archivo JSON, en lugar del que hay dentro del clúster. Consulta [Recuperación ante desastres](./disaster-recovery.md). |
+| `--backup-snapshot-class <class>` | Toma el respaldo base diario de cada base de datos como una instantánea de volumen CSI con esta VolumeSnapshotClass, en lugar de una copia completa en el almacén de respaldos; una copia completa sigue yendo al almacén cada semana, y las restauraciones siguen leyendo el almacén. La clase tiene que existir, usar `deletionPolicy: Delete` y pertenecer al controlador que aprovisiona los volúmenes de las bases de datos. Se rechaza con `--no-cnpg` o `--compact --no-tls`, que no dejan respaldos. Consulta [Respaldos base como instantáneas de volumen](#snapshot-base-backups). |
+| `--database-node-selector <clave>=<valor>` | Ejecuta las bases de datos solo en nodos con esta etiqueta (repetible). Se aplica al almacén relacional compartido y al almacén de eventos de cada instancia arrancada en el clúster. Consulta [Ubicación de las bases de datos](#database-placement). |
+| `--database-toleration <clave>[=<valor>][:<efecto>]` | Permite que las bases de datos se ejecuten en nodos con este taint, escrito como lo escribe `kubectl taint` (repetible). Necesita `--database-node-selector`. |
+| `--restore-rdb-from <archive>` | Recuperación ante desastres: recupera el almacén relacional compartido desde esta ruta de archivo dentro del bucket de respaldos (`dc-rdb` para un almacén que nunca se ha restaurado) en lugar de inicializar uno vacío. Solo surte efecto cuando el almacén se **crea** —contra un clúster cuyo almacén ya existe no mueve ningún dato—, así que es una palanca de reconstrucción, no de reparación. Necesita el plugin de respaldo, así que se rechaza en un clúster instalado con `--no-cnpg` o con `--compact --no-tls`. Consulta [Recuperar una instancia](./disaster-recovery.md#recover). |
+| `--restore-rdb-at <timestamp>` | Detiene esa recuperación en un instante en lugar de reproducir todo el archivo, para datos destruidos *correctamente*, por una migración defectuosa o un borrado por error; elige un momento estrictamente anterior al daño. Necesita `--restore-rdb-from`, y una marca de tiempo RFC 3339 con desfase explícito (`2026-07-27T13:59:00Z`): sin él, PostgreSQL la interpreta en la zona horaria del propio servidor en recuperación y se detiene en un momento distinto del que nombraste. |
+| `--max-connections <n>` | El presupuesto de conexiones de la base de datos relacional (por defecto `700` en una primera instalación; una nueva ejecución sin él conserva el presupuesto actual); consulta [el presupuesto de conexiones](#connection-budget). Puede aumentarse, pero no reducirse, con instancias en marcha. |
+| `--allow-legacy-db-removal` | La mitad relacional de la excepción única descrita en [Qué hace bootstrap](#what-it-does). |
+| `--dry-run` | Imprime lo que haría cada paso sin cambiar nada. Una ejecución en seco no crea ningún clúster, así que las comprobaciones que necesitan leer uno —en particular la de capacidad de nodos de `--ha`— informan de lo que no pudieron ver en lugar de hacer fallar el ensayo. Lo que *sí* llegan a ver sigue siendo fatal: un clúster que responde y no puede alojar `--ha` también hace fallar una ejecución en seco. En un clúster que responde, una ejecución en seco también aplica los rechazos de una reinstalación —una instalación desde una máquina sin el estado del clúster, ajustes cambiados bajo instancias en ejecución, un `--backup-snapshot-class` inutilizable— y falla con el mismo mensaje que daría la instalación. En un clúster al que no llega, dice que no los comprobó. |
+| `--yes` | No pregunta antes de crear un clúster de kind. |
+| `--skip-preflight` | Omite las comprobaciones de entorno. |
+| `--dev` | Comodidad local para un clúster en un portátil; implica `--build --yes`. |
+
+### `--compact` {#--compact}
+
+`--compact` es un preajuste para clústeres pequeños, que se elige al instalar. Compone palancas
+que ya existen en lugar de añadir un eje de ajuste propio:
+
+- techos por stream más bajos de JetStream y KV, y los volúmenes más pequeños que eso permite
+  (3Gi JetStream, 2Gi Postgres relacional, 4Gi TimescaleDB, y un almacén de objetos de respaldo
+  de 20Gi cuando se mantiene TLS);
+- **solicitudes** (requests) de programación más bajas (25m / 64Mi) para cada servicio y cada
+  servidor NATS, para que los pods quepan en un nodo pequeño. Los límites quedan intactos: bajar el límite de memoria convierte la
+  presión en OOMKills y bajar el límite de CPU produce throttling, y ninguna de las dos cosas
+  reduce nada. `device-management`, `event-management`, `event-sources` y `device-state`
+  conservan sus límites de CPU más altos, y las solicitudes por servicio que usa una instalación
+  predeterminada se desactivan para que las más bajas se apliquen a todos los servicios;
+  consulta [Dimensionamiento de los servicios](#service-sizing);
+- sin la pila de monitorización, el mayor consumidor individual;
+- sin cert-manager, ya que con TLS desactivado nada necesita que se emita un certificado
+  (mantener TLS conserva también cert-manager; consulta más abajo), y en consecuencia sin el
+  plugin de respaldo de base de datos.
+
+**No** cambia qué servicios se ejecutan. Eso sigue en el `--profile` de cada instancia, donde
+queda nombrado y visible. Un perfil *más grande* que `default` —hoy solo `full`— se rechaza en
+un clúster compacto. Las cifras compactas publicadas se miden sobre `default`, así que no
+describirían una instancia que ejecuta cinco servicios más (inferencia de IA, conectores
+salientes, MCP, ingesta de Sparkplug B e ingesta de LwM2M). Los perfiles más pequeños
+(`telemetry`, `ingest-only`) sí se aceptan.
+
+Puedes conservar tanto TLS como la monitorización. Un `--no-tls=false` o
+`--no-monitoring=false` explícito en `dcctl install` se respeta, y el resto de las palancas
+compactas siguen aplicándose. Mantener TLS también conserva cert-manager, que es lo que emite
+el certificado. En un clúster instalado sin cert-manager, toda instancia se sirve sin TLS:
+`dcctl bootstrap` activa `--no-tls` por defecto y rechaza `--no-tls=false`.
+
+:::note Por qué `--compact --no-tls` descarta el plugin de respaldo
+El plugin Barman Cloud emite sus propios certificados a través de cert-manager, así que
+descartar cert-manager descarta también el plugin. Volver a activar TLS (`--no-tls=false`)
+restablece ambos. Hacen falta *ambos* flags de instalación: `dcctl install --no-tls` sin
+`--compact` se rechaza, y `--no-tls` en `dcctl bootstrap`, como en el ejemplo de URL local más
+abajo, solo cambia cómo se sirve esa instancia.
+:::
+
+El operador CloudNativePG en sí se instala en *todo* clúster, incluido el compacto: un
+Deployment que solicita 100m/128Mi, más sus CRDs. Es un costo de huella que el modo compacto no
+evita, y es deliberado. El respaldo no es una función de alta disponibilidad, así que la capa
+de almacenamiento tiene una sola forma en todas partes. Ambas bases de datos se ejecutan ahora
+sobre el operador: tanto el almacén relacional como el de eventos.
+
+:::caution Los tamaños de volumen son un presupuesto de tiempo, no de capacidad
+El volumen de JetStream se deriva: los techos por stream se reservan por adelantado, así que
+el volumen se dimensiona para contener su suma. Los dos volúmenes de base de datos no. Nada
+poda las tablas de comandos o de alarmas, y `retentionDays` es `0` por defecto, es decir,
+conservar los datos para siempre. En una instancia compacta pensada para ejecutarse
+indefinidamente, establece una ventana de retención en lugar de confiar en el tamaño del
+volumen.
+:::
+
+:::caution Elígelo antes de la primera instancia
+Bajar un techo por debajo de lo que un stream o bucket de KV ya contiene tiene éxito en
+silencio, no trunca nada y rechaza escrituras hasta que los datos envejecen y se purgan. Por
+eso `dcctl install` se niega a cambiar sus ajustes mientras exista alguna instancia en el
+clúster: `--compact` se decide una vez, antes de que haya nada ejecutándose bajo él.
+:::
+
+:::tip URL local sin configuración
+`dcctl bootstrap local my-instance --build --host localhost --no-tls` expone la consola en
+`http://localhost/`, sin entrada en el archivo hosts y sin advertencia de certificado.
+:::
+
+### `--ha` {#ha}
+
+`--ha` se elige al instalar, y lo sigue toda instancia del clúster. Cada instancia ejecuta su
+broker de mensajería como un clúster RAFT de 3 nodos, un servidor por nodo, con **cada stream
+de JetStream y cada bucket KV replicados a lo largo de él**. La instancia sobrevive entonces a
+la pérdida de cualquier nodo sin perder mensajes, sesiones de dispositivo ni estado en vivo.
+
+```bash
+dcctl install local --ha
+dcctl bootstrap local my-instance
+```
+
+Ese único ajuste establece ambas mitades, y ese es justamente su propósito. El tamaño del
+broker es infraestructura (OpenTofu); el factor de réplica por stream es configuración de la
+instancia (Helm). Viven en herramientas distintas, ninguna de las cuales puede ver a la otra.
+Elevar solo la primera es el modo de fallo que este flag existe para evitar: un clúster de
+tres nodos cuyos streams siguen siendo de una sola réplica cuesta el triple de cómputo, informa
+de tres pares sanos y no sobrevive a nada.
+
+:::caution Sobrevive exactamente a la pérdida de un nodo
+Tres servidores confirman por mayoría, de modo que dos siguen siendo quórum y uno no. Perder un
+segundo nodo —incluido perder uno por una actualización continua de nodos mientras otro ya
+está caído— detiene las escrituras hasta que un nodo regrese. Planifica el mantenimiento de un
+nodo a la vez. Sobrevivir a dos pérdidas simultáneas requiere un clúster de 5 servidores, que
+hoy no es una topología soportada.
+:::
+
+**Tres nodos planificables, no tres nodos.** Los servidores llevan una restricción dura de
+antiafinidad. Si el clúster no puede colocar uno por nodo, el excedente queda en `Pending` en
+lugar de duplicarse, porque réplicas colocadas en el mismo nodo costarían lo que cuesta la
+replicación sin proteger de nada. `dcctl` cuenta los nodos planificables y rechaza la
+operación antes de aprovisionar nada. En un clúster `kind` local esto significa tres workers:
+kind solo elimina el taint del plano de control en un clúster de un solo nodo, de modo que un
+plano de control más dos workers es un clúster de tres nodos con dos nodos utilizables.
+
+**`--ha` también ejecuta `event-management` en dos pods.** Este servicio almacena cada evento. En
+un grupo de tres nodos de servicios, uno de los nodos ejecuta además el servidor NATS que lidera el
+stream de eventos entrantes, que usa más CPU que cualquier servicio. En las pruebas, el planificador
+puso allí el único pod de `event-management` junto con `device-state`. Ese nodo funcionó al 94-95%
+de CPU y, con 6800 eventos por segundo ofrecidos y un solo pod, el almacenamiento bajó a 6592 por
+segundo durante tres minutos, la primera etapa en quedarse atrás. Un segundo pod permite almacenar
+usando la CPU de otro nodo. Los dos pods
+prefieren nodos distintos, pero es una preferencia, no una garantía. Cada pod llena sus propios
+lotes, así que un lote contiene más o menos la mitad de eventos y el almacén de eventos confirma más
+o menos el doble de transacciones por evento; el nodo del almacén de eventos se mantuvo por debajo
+del 70% de CPU. Los 6000 eventos por segundo de la fila de v0.19.0 de [Rendimiento medido](#measured-throughput), y los 10 000 de las filas siguientes, se midieron con dos pods. Dos pods solicitan el doble de CPU, 1,8 núcleos entre los dos. Cada pod
+tiene además sus propias conexiones al almacén de eventos, así que estas instancias reservan 80 de
+sus conexiones para la plataforma en lugar de 40 (consulta
+[Límite de conexiones](../guides/sql-and-bi-access.md#connection-cap)). Con `--compact --ha`, y sin
+`--ha`, `event-management` se ejecuta en un pod.
+
+#### Bases de datos con `--ha` {#ha-databases}
+
+`--ha` también ejecuta la base de datos relacional como tres instancias con replicación
+síncrona, detrás del mismo nombre de host `dc-postgresql` que los clientes ya usan. El operador
+mantiene ese nombre de host y lo mueve para que siga a la primaria a través de una conmutación
+por error, de modo que no cambia la configuración de ningún servicio.
+
+La replicación síncrona es lo que obliga a *tres* instancias en lugar de dos. Una réplica en
+espera debe confirmar cada commit, así que con solo dos instancias la pérdida de cualquiera de
+ellas detiene todas las escrituras: peor disponibilidad que un solo nodo, a cambio de mayor
+durabilidad. Una tercera instancia permite perder una réplica en espera sin que el clúster se
+quede sin su réplica confirmadora.
+
+El almacén de eventos también se replica en tres instancias, con una diferencia deliberada:
+**no** retiene una escritura a la espera de una réplica. Si no hay ninguna disponible, vuelve a
+la replicación asíncrona y se pone al día cuando reaparece una. Esa concesión es la correcta
+para este almacén y la equivocada para el otro. Los eventos ya se conservan de forma duradera
+aguas arriba en la capa de mensajería hasta que se persisten, así que las escrituras de una
+conmutación por error pueden reproducirse. El registro de auditoría del almacén relacional no
+tiene nada así aguas arriba, y por eso ese almacén se detiene. El costo es que el punto de
+recuperación del almacén de eventos queda acotado por el retraso de replicación en lugar de
+ser cero.
+
+`--ha` cambia el número de réplicas de un servicio, el de `event-management` (dos pods; consulta
+más arriba). Todos los demás servicios se quedan en una, y nada de esto sobrevive por sí solo a la
+pérdida de un nodo. La replicación es lo que hace posible la recuperación, no lo que la
+ejecuta.
+
+:::caution Una escritura detenida queda confirmada, no rechazada
+Esto se aplica al almacén relacional, que es el que se detiene. Cuando no hay ninguna réplica
+en espera disponible, una escritura no falla: espera, y la fila ya se ha confirmado
+localmente. Un cliente que se rinda y reintente escribirá dos veces salvo que la operación sea
+idempotente. `statement_timeout` **no** acota esa espera, porque la espera ocurre después del
+commit y no durante la sentencia.
+:::
+
+#### Cuando se detiene la primaria de una base de datos {#ha-database-failover}
+
+Una instancia de base de datos se detiene cuando se elimina su pod, cuando se drena su nodo y
+cuando se despliega un cambio en su configuración. La instancia primero escribe un checkpoint,
+después deja de aceptar conexiones nuevas y concede cinco segundos a los clientes conectados
+para que se desconecten. Los servicios de la plataforma mantienen abiertas sus conexiones a la
+base de datos mientras se ejecutan, así que esperar más solo retrasaría lo que viene después.
+Pasados esos cinco segundos, la instancia cierra todas las conexiones abiertas y se detiene.
+Las escrituras que estaban en curso fallan, y los servicios las reintentan.
+
+Con `--ha`, se promueve una réplica en espera en cuanto la antigua primaria se ha detenido, y
+`dc-postgresql` o `dc-timescaledb-single` pasa a apuntar a ella. En las pruebas, la nueva
+primaria aceptaba escrituras entre 20 y 25 segundos después de que la antigua cerrara sus
+conexiones, aproximadamente medio minuto después de eliminar el pod. En una base de datos que
+tiene esta configuración, desplegar un cambio de configuración no reinicia la primaria en su
+sitio: primero se reinician las réplicas en espera, después el papel de primaria se traspasa a
+una réplica al día, y la antigua primaria se reinicia como réplica. En las pruebas, ese
+traspaso interrumpió las escrituras durante unos diez segundos. Un almacén de eventos creado
+antes de que existiera esta configuración mantiene el reinicio en su sitio hasta que
+`dcctl upgrade` aplica la infraestructura de su instancia
+([Qué aplica una actualización a la infraestructura](./releases-and-upgrades.md#upgrade-infrastructure)),
+o hasta que se le aplica el parche descrito en las
+[notas de la versión](https://github.com/devicechain-io/devicechain/blob/v0.18.0/docs/i18n/es/docusaurus-plugin-content-docs/current/deployment/releases-and-upgrades.md#database-primary-failover-in-seconds).
+
+Una instalación de una sola instancia no tiene ninguna réplica que promover. Su base de datos
+no está disponible hasta que la instancia se ha reiniciado, y las escrituras esperan. En las
+pruebas, con una base de datos pequeña, las escrituras se reanudaron unos 15 segundos después
+de detenerse; un reinicio con más registro de escritura anticipada que reproducir tarda más.
+
+En ambos casos, la capa de mensajería conserva los eventos hasta que se almacenan. Cada uno se
+entrega hasta cinco veces, con un minuto entre entregas, antes de abandonarlo y
+[registrarlo como no entregado](./observability.md#max-delivery-records). Por eso una
+interrupción de la base de datos de menos de unos cuatro minutos no deja ningún evento sin
+entregar.
+
+Una instancia que se está deteniendo dispone como máximo de dos minutos en total. Si para
+entonces no se ha detenido, se detiene de forma forzosa y se elimina su pod. El motivo más
+probable es que siga intentando copiar su último registro de escritura anticipada (WAL) a un
+almacén de copias de seguridad inaccesible. Los datos confirmados siguen donde se
+confirmaron, pero puede faltar parte del archivo de copias de seguridad: puede que una
+restauración a un momento concreto no alcance un instante dentro de ese hueco, y la alerta
+`PostgresWALArchivingFailing` ya está activa. Las restauraciones a momentos posteriores a la
+siguiente copia base no se ven afectadas. Una copia base que esté en curso cuando se detiene la
+primaria se abandona, y la siguiente copia programada se ejecuta con normalidad.
+
+Los mismos dos minutos cubren también un problema conocido del operador de base de datos. Una
+instancia puede apagar PostgreSQL correctamente y después no terminar: su registro acaba con
+`failed waiting for all runnables to end within grace period of 30s`, y su pod se queda en
+`Terminating` aunque la base de datos ya se ha detenido. Los datos no tienen ningún problema, y
+el pod se elimina al cumplirse los dos minutos. Un pod que aún no tiene este límite (uno creado
+antes de que se introdujera, o cualquier instancia de un almacén de eventos creado antes de que
+existiera ese límite y que aún no haya recibido ni una actualización ni el parche que describen
+las notas de la versión) sigue
+teniendo treinta minutos; las
+[notas de la versión](https://github.com/devicechain-io/devicechain/blob/v0.18.0/docs/i18n/es/docusaurus-plugin-content-docs/current/deployment/releases-and-upgrades.md#database-primary-failover-in-seconds) explican
+cómo reconocer ese caso y resolverlo.
+
+Con `--ha`, una primaria que se está degradando (por un traspaso, o porque está fallando)
+también se detiene de forma abrupta si no se ha apagado en dos minutos. En el almacén relacional
+eso no pierde nada, porque cada commit se retiene hasta que una réplica lo tiene. El almacén de
+eventos no espera a una réplica cuando no hay ninguna disponible, así que un commit hecho
+mientras no había ninguna réplica conectada solo existe en su primaria, y se pierde si esa
+primaria se sustituye antes de que una réplica se ponga al día. Es la concesión sobre el punto
+de recuperación descrita más arriba, y una parada abrupta es una vía más para llegar a ella.
+
+#### Cómo verificarlo {#verifying-it}
+
+Una afirmación de alta disponibilidad vale solo lo que el broker realmente sostiene, así que
+compruébalo ahí y no en la configuración renderizada:
+
+```bash
+dcctl ha verify --instance my-instance
+```
+
+Esto lee el broker en vivo. Verifica que cada stream, bucket KV y consumidor durable lleva el
+factor de réplica declarado **con todos los pares al día**, y que los tres servidores están en
+tres nodos distintos. Termina con código distinto de cero si algo se queda corto, e imprime
+qué examinó para que un resultado correcto sobre un conjunto vacío no se confunda con un éxito
+real.
+
+#### Perder un nodo y recuperarlo {#ha-node-loss}
+
+`--ha` sobrevive a la pérdida de un nodo. Así se ve desde fuera, en el orden en que ocurre:
+
+- **El broker elige nuevos líderes en segundos.** Los streams cuyo líder estaba en el nodo
+  perdido eligen uno nuevo, y en las pruebas las escrituras confirmadas se reanudaron en unos
+  diez segundos para los servicios cuya propia conexión con el broker iba a un servidor
+  superviviente. Las publicaciones en curso en ese momento fallan, y un dispositivo que publica
+  por HTTP puede recibir algunas respuestas `503` y debe reintentar. Un `503` sin cabecera
+  `Retry-After` significa que la publicación falló y puede que el evento se haya almacenado
+  igualmente, así que un reintento lo almacena dos veces salvo que lleve `altId` y
+  `occurredTime` (consulta [calidad de servicio](../guides/connecting-a-device.md#quality-of-service)).
+  Las conexiones nuevas a
+  través del servicio del broker pueden seguir fallando de forma intermitente durante unos 45
+  segundos, hasta que el servidor de ese nodo vuelve o Kubernetes da el nodo por perdido y deja de
+  dirigir tráfico a él.
+- **Un servicio conectado al servidor perdido se reconecta en un minuto, aproximadamente.** Una
+  máquina que se detiene de golpe no cierra nada, así que un servicio cuya propia conexión con el
+  broker iba al servidor de ese nodo solo se entera cuando ese servidor deja de responder. Cada
+  servicio envía un ping a su servidor cada 10 segundos y da la conexión por perdida tras tres
+  intervalos sin respuesta (30 segundos), o en cuanto una escritura lleva 10 segundos sin avanzar;
+  entre las dos cosas detectan una conexión muerta en 40 segundos como mucho. Después el servicio
+  se reconecta, lo que lleva unos segundos, o más mientras el servicio del broker siga dirigiendo
+  algunas conexiones nuevas al servidor perdido (consulta el punto anterior). Hasta entonces no
+  puede publicar ni recibir. Si es `event-sources`, la ingesta HTTP se rechaza o agota su tiempo
+  mientras tanto, así que los dispositivos que publican por HTTP deben reintentar ante respuestas
+  `503` y tiempos agotados. Una petición que agotó su tiempo también puede haberse almacenado, así
+  que la misma regla de `altId` y `occurredTime` se aplica a su reintento.
+- **Puede que Kubernetes no informe de nada.** Una máquina que se reinicia dentro del periodo de
+  gracia del nodo (entre 40 y 50 segundos, aproximadamente) nunca se marca como `NotReady`, así
+  que ningún evento de nodo ni alerta de Kubernetes registra la pérdida. Si las alertas del chart
+  están instaladas, `BrokerConnectionDiedSilently` sí lo hace; consulta
+  [Una conexión con el broker que murió en silencio](./observability.md#broker-connection-dead).
+- **El procesamiento de eventos puede detenerse durante un minuto, aproximadamente.** Si el
+  servidor del broker del nodo perdido era el líder del stream de eventos entrantes, los eventos
+  de los dispositivos se siguen aceptando, pero su resolución puede detenerse durante un minuto,
+  sin que se notifique ningún error, antes de reanudarse y procesar lo acumulado. No se pierde
+  nada; las alarmas y los eventos almacenados de ese minuto llegan con retraso.
+- **Los pods de los servicios se mueven al cabo de un minuto y cuarto, aproximadamente.**
+  Kubernetes tarda primero entre 40 y 50 segundos en dar el nodo por perdido. Después desaloja
+  cada pod de servicio de ese nodo al cabo de `nodeLossTolerationSeconds` (30 por defecto; `null`
+  restablece los 300 del propio Kubernetes) y lo arranca en otro nodo. Con una réplica por
+  servicio, que es lo predeterminado, un servicio cuyo pod estaba en el nodo perdido no está
+  disponible hasta entonces. Con `--ha`, `event-management` se ejecuta en dos pods y, cuando están
+  en nodos distintos (el planificador lo prefiere pero no lo garantiza), el otro sigue almacenando
+  eventos mientras tanto. Las instancias de base de datos y el operador de base de datos usan
+  los mismos 30 segundos. Los servidores del broker no: Kubernetes no los recrea en otro nodo
+  mientras no pueda confirmar que el anterior se ha detenido, así que un plazo más corto no
+  aportaría nada.
+- **Una primaria de base de datos que estaba en el nodo perdido conmuta.** Se promueve una
+  réplica en cuanto el operador de base de datos ve que la primaria es inaccesible, y
+  `dc-postgresql` o `dc-timescaledb-single` pasa a apuntar a ella. Tarda más que
+  [detener una primaria](#ha-database-failover), porque nada avisa al operador de que la primaria
+  ha desaparecido; en las pruebas, con el propio operador en un nodo superviviente, la nueva
+  primaria aceptaba escrituras unos dos minutos después de perder el nodo. Mientras tanto, los
+  eventos esperan en la capa de mensajería.
+- **Los pods desalojados del nodo perdido aparecen en `Terminating` hasta que vuelve.** Kubernetes no puede
+  confirmar que se han detenido, así que los deja ahí. No elimines a la fuerza un pod cuyo nodo
+  es inaccesible: en el caso de una instancia de base de datos o de un servidor del broker, eso
+  permite que arranque un sustituto mientras el original puede seguir ejecutándose al otro lado
+  del fallo. Si la máquina no va a volver, confirma que está apagada y elimina después su objeto
+  Node; Kubernetes elimina entonces sus pods. Una instancia de base de datos cuyo nodo vuelve se
+  reincorpora como réplica.
+- **Recuperar el nodo también es una interrupción breve.** Un servidor del broker que quedó
+  aislado ha seguido celebrando elecciones por su cuenta y, al reincorporarse, los streams y
+  consumidores de los demás servidores vuelven a elegir a sus líderes. Cuenta con que JetStream
+  responda "temporalmente no disponible" durante unos segundos, unos 45 segundos después de que
+  vuelva el nodo, con que la ingesta HTTP rechace algunas publicaciones en ese intervalo, y con
+  que algunos eventos que ya estaban en curso se procesen hasta un minuto tarde. No se pierde
+  nada, y los servicios se vuelven a enlazar solos.
+
+Planifica la vuelta de un nodo como planificas su pérdida, y no retires un segundo nodo hasta
+que `dcctl ha verify` vuelva a pasar.
+
+#### Mantenimiento de un nodo de base de datos {#ha-database-node-maintenance}
+
+Con `--ha`, cada base de datos ejecuta tres instancias y nunca dos en el mismo nodo. En un clúster
+con exactamente tres nodos que las bases de datos pueden usar (tres nodos de base de datos, si los
+[reservaste para ellas](#database-placement)), cada uno de esos nodos ejecuta por tanto una
+instancia de cada base de datos. Lo que sigue describe acordonar uno de ellos, hacer el trabajo y
+desacordonar el mismo nodo, como en un parche del sistema operativo o un reinicio:
+
+- **La primaria que esté en el nodo se conmuta a una réplica en espera.** En cuanto el nodo se
+  acordona, el operador de bases de datos empieza a conmutar la primaria a una réplica en espera de
+  otro nodo, y el drenado puede desalojar la primaria antigua mientras eso ocurre. Las escrituras en
+  esa base de datos se detienen durante la conmutación (consulta
+  [Cuando se detiene la primaria de una base de datos](#ha-database-failover)), y los servicios las
+  reintentan. En las pruebas, una primaria nueva estuvo en funcionamiento unos diez segundos
+  después del acordonamiento.
+- **Las instancias desalojadas esperan a que vuelva el nodo.** Cada uno de los demás nodos ya
+  ejecuta una instancia de la misma base de datos, así que la instancia desalojada de cada base de
+  datos queda en `Pending` hasta que el nodo se desacordona. Todas las bases de datos funcionan con
+  dos de sus tres instancias mientras el nodo esté fuera. Es lo esperado, y no hay nada que
+  corregir.
+- **No dejes que ninguna base de datos pierda otra instancia mientras tanto.** Si el almacén
+  relacional pierde su réplica en espera restante, todas las escrituras en él esperan (consulta
+  [Bases de datos con `--ha`](#ha-databases)). Si el almacén de eventos de una instancia pierde su
+  réplica en espera, sigue funcionando sin replicación, y su punto de recuperación queda entonces
+  acotado por el retraso de replicación. Mantén el mantenimiento corto y no retires nada más hasta
+  que el nodo vuelva.
+- **Desacordona el nodo cuando termine el trabajo.** Las instancias que esperaban vuelven a
+  arrancar en él y se reincorporan como réplicas en espera. En las pruebas, tras un nodo que había
+  estado fuera menos de un minuto, todas las bases de datos volvieron a tener tres instancias
+  listas en menos de 45 segundos tras el desacordonamiento. Un nodo que se sustituye en lugar de
+  devolverse, como hace la actualización de un grupo de nodos gestionado, no se probó: una
+  instancia en espera solo puede arrancar donde su volumen pueda seguirla.
+
+Si las bases de datos comparten nodos con el resto de la instancia (no configuraste la
+[ubicación de las bases de datos](#database-placement)), drenar un nodo también retira un servidor
+del bróker y los pods de servicio que hay en él, y el servidor del bróker también queda en
+`Pending` hasta que se desacordona. Trátalo como [perder un nodo](#ha-node-loss), pero planificado:
+un nodo cada vez.
+
+Antes de drenar el siguiente nodo, comprueba que cada base de datos ha vuelto a su plena capacidad:
+
+```bash
+kubectl get clusters.postgresql.cnpg.io -A
+```
+
+`READY` debe mostrar 3 en todas las bases de datos. Si había un servidor del bróker en el nodo,
+ejecuta también `dcctl ha verify` para la instancia, como tras [perder un nodo](#ha-node-loss).
+
+Mientras un nodo que la instancia necesita está acordonado, se rechazan tanto volver a ejecutar
+`dcctl install` como un nuevo `dcctl bootstrap`, porque un nodo acordonado no cuenta entre los
+nodos que comprueban (consulta [Ubicación de las bases de datos](#database-placement)); termina
+antes el mantenimiento.
+
+Sin `--ha`, cada base de datos tiene una sola instancia y ninguna réplica en espera a la que
+conmutar. Nada impide drenar su nodo: la instancia se detiene, y la base de datos no está
+disponible hasta que la instancia pueda arrancar de nuevo. Si su volumen está ligado a ese nodo,
+como en un clúster kind local, eso no ocurre hasta que el nodo se desacordona.
+
+#### Dónde se ejecutan las primarias de las bases de datos {#ha-database-primaries}
+
+Cada base de datos prefiere un nodo que no ejecute la primaria de otra base de datos de
+DeviceChain. En las pruebas, con tres nodos de 8 vCPU y las primarias relacional y del almacén de
+eventos en el mismo nodo, ese nodo funcionó al 94-98 % de CPU mientras los otros dos estaban al
+45-51 %.
+
+- **Es una preferencia, no un requisito.** Un clúster con menos nodos sigue planificando todas
+  las instancias de base de datos. La única excepción es un `ResourceQuota` con el ámbito
+  `CrossNamespacePodAffinity`: rechaza los pods cuya ubicación tiene en cuenta otros espacios de
+  nombres, sea preferencia o no, así que rechaza estos pods de base de datos en un espacio de
+  nombres donde lo prohíba. La configuración de admisión de cuotas del servidor de API puede
+  imponer el mismo límite a todo espacio de nombres sin una cuota que lo admita; consulta las
+  [notas de versión](https://github.com/devicechain-io/devicechain/blob/v0.19.0/docs/i18n/es/docusaurus-plugin-content-docs/current/deployment/releases-and-upgrades.md#v0190-primary-spread).
+- **Se aplica cuando se planifica un pod de base de datos.** Con `--ha` en tres nodos, cada nodo
+  ya ejecuta una instancia de cada base de datos, así que en la práctica la preferencia decide una
+  sola cosa: cuando se crea el almacén de eventos de una instancia, su primera primaria va a un
+  nodo que no ejecuta la primaria relacional. Una [conmutación por error](#ha-database-failover),
+  un traspaso, o el traspaso con el que termina una actualización progresiva de una base de
+  datos, todavía pueden dejar las dos primarias en un mismo nodo, y la preferencia no las vuelve
+  a separar.
+- **Un almacén de eventos creado antes de que existiera esta preferencia la adquiere cuando se
+  actualiza su instancia.** Hasta entonces sus pods no llevan la etiqueta que buscan las demás
+  bases de datos ni la preferencia. `dcctl upgrade` aplica el almacén de eventos de la instancia
+  ([Qué aplica una actualización a la infraestructura](./releases-and-upgrades.md#upgrade-infrastructure))
+  y añade ambas. La etiqueta llega a los pods en ejecución sin reiniciarlos. La preferencia cambia
+  la especificación de los pods, así que las instancias del almacén se reinician una vez por ella:
+  con `--ha`, primero las réplicas en espera y después un traspaso a una de ellas; sin `--ha`, la
+  única instancia se reinicia y los eventos esperan en el stream de ingesta hasta que vuelve. Una
+  actualización con `--skip-infrastructure` deja el almacén de eventos sin ninguna de las dos
+  hasta que una actualización sin esa opción lo aplique. Adquirir la preferencia no mueve una
+  primaria: con `--ha`, ese reinicio termina con un traspaso a una réplica en espera que ya está
+  ubicada, así que las primarias pueden seguir compartiendo un nodo después. Compruébalo y, si es
+  así, mueve una como se indica a continuación.
+
+Para ver dónde están las primarias:
+
+```bash
+kubectl get pods -A -l cnpg.io/instanceRole=primary -o wide
+```
+
+Si dos de ellas comparten nodo, traspasa la primaria de una base de datos a una réplica en espera
+de otro nodo. Con el plugin de `kubectl` de CloudNativePG:
+
+```bash
+kubectl cnpg promote dc-rdb dc-rdb-2 -n dc-system
+```
+
+o, sin el plugin:
+
+```bash
+kubectl -n dc-system patch cluster dc-rdb --subresource=status --type=merge \
+  -p '{"status":{"targetPrimary":"dc-rdb-2"}}'
+```
+
+Elige una réplica en un nodo que, según el primer comando, no tenga ninguna primaria. Un traspaso
+interrumpe brevemente las escrituras de la base de datos (consulta
+[Cuando se detiene la primaria de una base de datos](#ha-database-failover)), y los servicios las
+reintentan. Una instalación de una sola instancia no tiene ninguna réplica a la que traspasar.
+
+### Ubicación de las bases de datos {#database-placement}
+
+Por defecto, las bases de datos se ejecutan en los nodos que elija Kubernetes. Si tu clúster tiene
+nodos reservados para bases de datos, `dcctl install` puede colocarlas en ellos:
+
+```bash
+dcctl install local --kube-context "$CTX" --ha \
+  --database-node-selector example.com/role=database \
+  --database-toleration dedicated=database:NoSchedule
+```
+
+- `--database-node-selector clave=valor` ejecuta las bases de datos solo en los nodos que llevan la
+  etiqueta. Repítelo para exigir varias etiquetas.
+- `--database-toleration` les permite entrar en nodos con un taint, escrito como lo escribe
+  `kubectl taint`: `dedicated=database:NoSchedule` tolera ese taint con ese valor, y
+  `dedicated:NoSchedule` lo tolera con cualquier valor. Necesita `--database-node-selector`, porque
+  una tolerancia solo permite un nodo; no lo elige.
+
+Una etiqueta por sí sola limita dónde se ejecutan las bases de datos, pero no impide que otras cargas
+se ejecuten en esos nodos. Solo un taint lo impide, y por eso un grupo de nodos reservado para bases
+de datos suele llevar ambos.
+
+**Qué coloca.** El almacén relacional compartido y el almacén de eventos de cada instancia arrancada
+en el clúster. `dcctl bootstrap` no tiene flags de ubicación: sigue a la instalación. NATS, el
+almacén de objetos de respaldo, la pila de monitorización y los servicios no se colocan. NATS no
+declara tolerancias, así que en un clúster cuyos nodos de bases de datos tienen un taint se ejecuta
+en los demás nodos. Es deliberado: un servidor NATS usa más de un núcleo de CPU bajo carga, y con
+`--ha` sus tres servidores se ejecutan en tres nodos distintos, de modo que en un grupo de tres nodos
+de bases de datos uno de ellos compartiría nodo con la primaria del almacén de eventos, el pod de base
+de datos más cargado.
+
+**Qué se comprueba.**
+
+- Antes de instalar nada, `install` rechaza una ubicación que los nodos no pueden aceptar: cada base
+  de datos ejecuta una instancia por nodo, así que necesita tantos nodos utilizables como instancias
+  tiene (tres con `--ha`, una en otro caso). Un nodo es utilizable cuando lleva todas las etiquetas,
+  no está acordonado y cada taint `NoSchedule` o `NoExecute` que tiene está tolerado. El mensaje
+  enumera los nodos que encontró y qué dejó fuera a cada uno. `bootstrap` vuelve a comprobarlo para
+  cada instancia, porque los nodos pueden vaciarse, reetiquetarse o recibir taints después de la
+  instalación.
+- El apply comprueba el mismo recuento contra el número de instancias que ejecuta realmente cada base
+  de datos, y lo rechaza antes de crear o cambiar esa base de datos.
+- Un nodo acordonado por mantenimiento, o que no está listo, no cuenta. Mientras una actualización de
+  nodos tiene fuera uno de los nodos de bases de datos, se rechaza volver a ejecutar `install` o un
+  `bootstrap` nuevo; termina la actualización y vuelve a ejecutarlo. Lo que hacen las bases de
+  datos mientras el nodo está fuera se explica en
+  [Mantenimiento de un nodo de base de datos](#ha-database-node-maintenance).
+- Las primarias de las dos bases de datos siguen
+  [prefiriendo nodos distintos](#ha-database-primaries), entre los nodos que elegiste. Si la
+  selección es un solo nodo, lo comparten.
+
+Para ver dónde se ejecutan las bases de datos:
+
+```bash
+kubectl get pods -A -l cnpg.io/cluster -o wide
+```
+
+**Cambiarla.** La ubicación es un ajuste de la instalación, así que cambiarla se rechaza mientras
+alguna instancia se ejecute en el clúster, como los demás ajustes (consulta
+[Volver a ejecutar install](#re-running-install)). Eso incluye volver a ejecutar `install` sin los
+flags en un clúster instalado con ellos. Elígela en la primera instalación: los volúmenes de una base
+de datos se quedan donde se crearon, y un almacenamiento ligado a un nodo o a una zona no puede seguir
+a una instancia a un nodo en otro lugar.
+
+Sin ninguna instancia en marcha, nada rechaza el cambio, y aun así puede dejar fuera de servicio la
+base de datos relacional. La base relacional sobrevive a todas las instancias, así que volver a
+ejecutar con otra ubicación mueve sus pods a los nodos recién seleccionados. Si sus volúmenes están
+ligados a un nodo (almacenamiento local-path, como en kind) o a una zona fuera de la nueva selección,
+esos pods se quedan en `Pending` y la base no vuelve. `dcctl` cuenta los nodos que coinciden; no
+comprueba dónde están los volúmenes existentes. Cambia la ubicación solo donde el almacenamiento de la
+base pueda seguirla, o donde puedas permitirte recrear la base.
+
+### Dimensionamiento de los servicios {#service-sizing}
+
+Cada servicio de backend solicita 128Mi de memoria y tiene un límite de 256Mi, salvo
+`event-processing`, cuyo límite es 384Mi (un mínimo: un `resources.limits.memory` superior de nivel superior, o un límite propio de ese servicio, se usa tal cual). La CPU se dimensiona por servicio a partir de mediciones:
+
+| Servicio | Solicitud de CPU | Límite de CPU |
+| --- | --- | --- |
+| `device-management` | 450m | 2 núcleos |
+| `event-management` | 900m | 2 núcleos |
+| `device-state` | 950m | 2 núcleos |
+| `event-sources` | 1 núcleo | 2 núcleos |
+| `event-processing` | 400m | 1 núcleo |
+| cualquier otro servicio de backend | 100m | 500m |
+
+Cada servidor NATS solicita 500m de CPU y 768Mi de memoria, con un límite de 4Gi de memoria y sin
+límite de CPU; consulta [El intermediario de mensajes](#broker-sizing).
+
+Con [`--compact`](#--compact), cada servicio de backend y cada servidor NATS solicita en cambio
+25m y 64Mi, y los límites quedan como arriba. La consola se dimensiona por separado.
+
+Los cinco servicios de la tabla anterior que tienen un límite de CPU propio ejecutan además el
+recolector de basura de Go con `GOGC=400` y un límite blando de memoria (`GOMEMLIMIT`) al 75 % del
+límite de memoria del propio servicio. A 6.000 eventos por segundo esto redujo entre un 4 % y un
+18 % la CPU que cuesta cada evento (un 18 % en `device-management` y `event-management`), porque el
+recolector se ejecutó entre cuatro y trece veces menos. El límite blando es lo que mantiene el
+montón más grande dentro del contenedor: hace que el recolector trabaje más en lugar de dejar que
+el montón supere el límite. Por eso `event-processing` tiene 384Mi, ya que su conjunto de trabajo
+llegó a 174 MiB de 256Mi en esa prueba. Ponga `functionalAreas.<servicio>.gogc` y
+`functionalAreas.<servicio>.goMemLimitPercent` a `0` para desactivar cualquiera de los dos en un
+servicio.
+
+Los cuatro primeros servicios hacen el trabajo por evento: recibir, resolver y almacenar cada
+evento, y fusionarlo en el estado en vivo de cada dispositivo. `event-processing` ejecuta la
+detección sobre cada evento; su límite es el doble de lo que se midió que usaba (consulta más
+abajo). Los límites de los cuatro primeros servicios
+están dimensionados para el tráfico en vivo de los dispositivos al techo de ingesta predeterminado de un inquilino, 1000
+lecturas por segundo con una lectura por mensaje, y para unos 4000 eventos por segundo, el ritmo
+que sostenía una instalación predeterminada antes de que se aumentaran los valores de persistencia
+de `event-management` (consulta [Rendimiento medido](#measured-throughput)).
+
+- **Las solicitudes son lo que cada servicio usó a 6000 eventos por segundo.** Una solicitud es la
+  CPU que el planificador reserva para un pod en su nodo, y nada más: decide dónde va el pod. Cada
+  una de las de arriba es lo que ese servicio usó, medido, a 6000 eventos por segundo, redondeado
+  hacia arriba: el ritmo que sostuvo la versión candidata v0.19.0 como instalación `--ha`
+  predeterminada, con `event-management` en dos pods y la ubicación de los pods decidida por el
+  planificador, en un clúster de tres nodos de base de datos y tres nodos de servicios de 4 vCPU,
+  con la resolución, el almacenamiento y el estado en vivo de los dispositivos siguiendo el ritmo
+  (consulta [Rendimiento medido](#measured-throughput)). La cifra de `device-management` se volvió
+  a medir a ese ritmo en una versión de desarrollo anterior a v0.22.0, después de que bajara su
+  coste por evento: unos 0,43 núcleos, redondeados hacia arriba a 450m. `event-processing` es la excepción: su
+  solicitud es lo que usó con su límite de 1 núcleo a 6800 eventos por segundo ofrecidos. Con esa
+  solicitud y ese límite, en la versión candidata, la detección siguió el ritmo a 6000 (cola máxima
+  por debajo de 1000) y se quedó atrás a partir de 7600 ofrecidos; queda fuera de la comprobación de
+  almacenamiento exactamente una vez de [Rendimiento medido](#measured-throughput). Con las
+  solicitudes menores que tenían antes (las de la fila sustituida de
+  [Rendimiento medido](#measured-throughput)), estos servicios solicitaban entre el 15% y el 66% de lo que usaban a ese ritmo, y el
+  planificador juntaba a los más ocupados: a 6000 eventos por segundo dos nodos de servicios
+  funcionaban a un 80% de CPU mientras el tercero estaba al 55%. La memoria se queda en 128Mi:
+  ningún servicio de la ruta de eventos usó más de 51Mi en ninguna muestra, hasta 9200 eventos por
+  segundo. Una solicitud es por pod, así que un servicio escalado a dos réplicas solicita el doble
+  para el mismo tráfico. Con `--ha`, `event-management` se ejecuta en dos pods, así que solicita
+  1,8 núcleos; consulta [`--ha`](#ha). Cada pod conserva la cifra de un solo pod, medida con un pod
+  haciendo todo el trabajo, así que ahí reserva más de lo que usan los dos.
+- **Los límites no reservan nada.** Kubernetes planifica un pod según sus solicitudes, así que
+  los límites más altos no necesitan espacio adicional en un nodo. Solo permiten que un servicio
+  ocupado use la CPU que el nodo tiene libre. `--compact` reduce todas las solicitudes y no toca
+  los límites.
+- **Bajar un límite de CPU recorta el rendimiento; no ahorra capacidad.** Con 500m, en un clúster
+  kind `--ha` de cuatro nodos, `device-management` resolvía como máximo unos 720 eventos por
+  segundo, frenado por su límite en casi todos los periodos de planificación, y cada evento por
+  encima de eso esperaba en el stream de entrada. Medido allí sin un límite que lo frenara, usaba
+  hasta 0,96 milinúcleos de CPU por evento y `event-management` hasta 0,53 por evento almacenado,
+  así que el techo predeterminado necesita alrededor de un núcleo y de medio núcleo; cada límite es
+  el doble, porque un límite de CPU se aplica en periodos cortos y un servicio ocupado lo alcanza
+  en ráfagas mucho antes que su media. En un clúster en la nube de tres nodos, con 500m,
+  `event-sources` quedaba frenado por su límite en el 84% de los periodos de planificación a 4000
+  eventos por segundo, y sus respuestas más lentas limitaron el ritmo al que podían enviar los
+  dispositivos a unos 4300 eventos por segundo; `device-state` fusionaba el estado en vivo a no
+  más de unos 2300 eventos por segundo, así que la vista en vivo de los dispositivos se retrasaba
+  minutos. Medidos sin un límite que los frenara, usan 0,14 y 0,37 milinúcleos por evento, así que
+  a 4000 eventos por segundo necesitan alrededor de medio núcleo y de núcleo y medio.
+- **La detección dispone de hasta un núcleo.** `event-processing` comprueba cada evento contra las
+  reglas de detección, en una sola partición. Con su límite anterior de 500m, en un clúster en la
+  nube de tres nodos, su límite lo frenó en un 5% de los periodos de planificación a 6000 eventos
+  por segundo y se quedó atrás: su cola llegó a unos 41 000 y 93 000 eventos en dos ejecuciones de
+  10 minutos. Con el límite de 1 núcleo y la solicitud de 400m, en la versión candidata, siguió el
+  ritmo a 6000 eventos por segundo (cola máxima por debajo de 1000) y se quedó atrás a partir de
+  7600 ofrecidos, sin que su límite lo frenara. La detección queda fuera de la comprobación de
+  almacenamiento exactamente una vez de [Rendimiento medido](#measured-throughput). Su límite es de
+  1 núcleo.
+- **Los servicios más ocupados evitan el primario del almacén de eventos.** `device-management`,
+  `event-management` y `event-sources` prefieren un nodo que no ejecute el primario del almacén
+  de eventos de la instancia (en las instalaciones que usan CloudNativePG, la opción
+  predeterminada), que es el proceso individual más ocupado de una instalación. Es una
+  preferencia, no un requisito: en un clúster con menos nodos que servicios ocupados se siguen
+  planificando. Solo se aplica cuando se planifica un pod, así que una conmutación por error de
+  la base de datos no mueve los pods en ejecución. Con la configuración ajustada de abajo, sacar
+  `event-management` de ese nodo elevó el ritmo sostenido de unos 4750 a unos 5600 eventos por
+  segundo; su efecto con la configuración predeterminada no se ha medido. Para desactivarlo en un
+  servicio, establece `functionalAreas.<servicio>.avoidEventStorePrimary: false`.
+- **Los cinco servicios de la ruta de eventos se reparten entre los nodos.** `device-management`,
+  `event-management`, `device-state`, `event-sources` y `event-processing` prefieren un nodo que
+  ejecute menos de los cinco, así que con tres nodos suelen ejecutarse no más de dos por nodo. Es
+  una preferencia que el planificador pondera junto con otras, no una garantía: con menos nodos se
+  siguen planificando, y un nodo con más CPU libre puede ganar. Solo se aplica cuando se planifica
+  un pod, así que los pods en ejecución no se mueven. Qué servidor NATS lidera un stream lo decide
+  NATS, así que un servicio puede seguir compartiendo nodo con el servidor más ocupado. Un servicio
+  con un reparto propio deja de recibir el reparto predeterminado del clúster, que coloca las
+  réplicas de un servicio en nodos y zonas distintos; con una réplica, lo predeterminado, eso no
+  cambia nada. Con más de una réplica, los pods del propio servicio siguen prefiriendo nodos
+  distintos, mediante una preferencia por evitar los nodos que ya ejecutan uno de ellos, pero ya
+  no zonas distintas. Con
+  `--ha`, `event-management` se ejecuta en dos pods, así que esto se le aplica. Para desactivarlo
+  en un servicio, establece `functionalAreas.<servicio>.eventPathSpread: false`.
+- **Las primarias de las bases de datos prefieren nodos distintos.** En las pruebas, un nodo que
+  ejecutaba a la vez la primaria relacional y la del almacén de eventos funcionó al 94-98 % de CPU
+  mientras los demás estaban a la mitad, aproximadamente. Consulta
+  [Dónde se ejecutan las primarias de las bases de datos](#ha-database-primaries), incluido cómo
+  comprobarlo después de una conmutación por error o de una actualización.
+- **Más tráfico necesita más.** Varios inquilinos enviando cada uno a su techo, mensajes con
+  muchas lecturas, o un inquilino [admitido por encima de su
+  techo](../concepts/governance.md#ingest-above-ceiling) mientras se pone al día necesitan más
+  que esto. Añade `replicas` a `device-management`, que escala horizontalmente (más réplicas
+  reordenan un poco más los eventos de un mismo dispositivo; consulta `watermarkLatenessSeconds`
+  en [la configuración del motor de detección](./detection-engine.md#configuration)), o aumenta
+  el límite de un servicio:
+
+  ```yaml
+  functionalAreas:
+    device-management:
+      resources:
+        limits:
+          cpu: "4"
+  ```
+
+  La CPU y la memoria de un servicio vienen de tres sitios, y cada uno prevalece sobre el
+  anterior, clave a clave: los `resources` de nivel superior, después la solicitud de CPU medida
+  del servicio (`functionalAreas.<servicio>.measuredRequests`), y después los
+  `functionalAreas.<servicio>.resources` propios del servicio. Así que indica solo lo que cambia.
+  Para garantizar la CPU cuando el nodo está saturado, aumenta también la solicitud en los
+  `resources` propios del servicio. Una solicitud por encima del límite de su servicio se rechaza
+  al generar el chart, y el rechazo indica de dónde vino cada valor.
+
+  Los límites y las solicitudes de CPU propios de los servicios de la ruta de eventos se definen
+  de la misma forma, así que los `resources` de nivel superior no los sustituyen: un límite de
+  nivel superior de 4 núcleos da 4 núcleos a los demás servicios de backend y deja a los cinco en
+  sus propios límites (2 núcleos, y 1 para `event-processing`), y un `requests.cpu` de nivel
+  superior no llega a ninguno de los cinco. Define los suyos en `functionalAreas`, como
+  arriba. En una instalación solo con el chart, `useMeasuredRequests: false` desactiva las
+  solicitudes medidas, de modo que las solicitudes de nivel superior se aplican a todos los
+  servicios; es lo que hace `--compact`.
+
+La métrica que muestra un servicio frenado por su límite es
+`container_cpu_cfs_throttled_periods_total` de su contenedor.
+
+#### El intermediario de mensajes {#broker-sizing}
+
+Cada servidor NATS solicita 500m de CPU y 768Mi de memoria, y tiene un límite de 4Gi de memoria. Su
+runtime de Go recibe un límite de memoria blando del 80% de ese valor (`GOMEMLIMIT`), así que
+recolecta con más intensidad antes de que el kernel lo detenga. Antes, los servidores no
+solicitaban ni tenían límite de nada, lo que los ponía los primeros en la cola de desalojo cuando
+un nodo se quedaba sin memoria.
+
+- **La memoria se dimensiona a partir de mediciones.** En la prueba de rendimiento de la versión,
+  la memoria residente de ningún servidor pasó de unos 830 MiB (conjunto de trabajo de unos
+  1,3 GiB) en ninguna ejecución hasta 9200 eventos por segundo ofrecidos, por debajo del límite de
+  2Gi que tenían, y ninguno se detuvo por memoria. La solicitud de 768Mi queda por debajo de ese pico: decide
+  dónde se coloca un servidor, y lo que lo detiene es el límite. Esas ejecuciones fueron de ingesta constante:
+  no se midió un servidor que vuelve a unirse a su clúster ni que se pone al día con una cola
+  grande tras perder un nodo. Si alguna vez un servidor se detiene por quedarse sin memoria
+  (`OOMKilled` en `kubectl describe pod`), aumenta su límite.
+- **La detección de duplicados ocupa memoria en proporción a la ingesta sostenida, y fija el
+  límite.** Para que un evento reentregado se guarde una sola vez, cada servidor recuerda el id de
+  mensaje de cada evento publicado en el stream de eventos entrantes y en el de eventos resueltos
+  durante los últimos 10 minutos. Cada id cuesta unos 120 bytes en cada servidor, así que una
+  ingesta sostenida de E eventos por segundo ocupa unos E × 1200 s × 120 bytes: unos 145 MB a
+  1000 eventos por segundo, 860 MB a 6000 y 1,4 GB a 10 000. Las detecciones y las acciones que
+  disparan suman lo suyo: unos 420 MB a 1000 detecciones por segundo. Con los 830 MiB medidos
+  arriba, un servidor a 10 000 eventos por segundo necesita unos 2,6 GiB; por eso el límite es de
+  4Gi, que lo deja un 15 % por debajo del límite blando del 80 %. Se tarda 10 minutos de ingesta
+  constante en llegar ahí. Si fijas `nats_memory_limit` por debajo de 4Gi, reduce en proporción
+  el ritmo que puedes sostener.
+- **Un reinicio de más de unos 8 minutos puede guardar un evento dos veces.** Los 10 minutos
+  cubren toda reentrega mientras hay un consumidor en marcha. También cubren un pod de
+  `event-sources` o `device-management` que muere y vuelve en unos 8 minutos. Si tarda más, los
+  eventos que ese pod tenía en curso se guardan de nuevo: como mucho su ventana de publicación.
+  Para evitarlo, ejecuta `event-sources` y `device-management` con 2 o más réplicas, de modo que
+  un pod superviviente retome el trabajo un minuto después. Un broker que guarda una
+  publicación, pierde su confirmación y luego falla las publicaciones durante más de unos 8
+  minutos tiene el mismo efecto, y ahí más réplicas no ayudan.
+- **La CPU se solicita por debajo de lo que un servidor usa con carga**: unos 4,4 núcleos entre
+  los tres servidores a 6000 eventos por segundo, de 1,6 a 1,8 de ellos en el servidor que lidera
+  el stream de eventos entrantes. Con `--ha` en tres nodos cada nodo ejecuta exactamente un
+  servidor, así que la solicitud no puede cambiar dónde se ejecuta. Lo que hace es mantener los
+  servidores fuera de la clase que se desaloja primero y darles una parte de la CPU de un nodo
+  ocupado. Solicitar todo su uso quitaría más de 4 núcleos a un clúster de tres nodos sin mover nada.
+  Sin `--ha`, un único servidor lleva todos los eventos y su uso no se midió; 500m se queda corto.
+  No hay límite de CPU: todos los eventos pasan por el intermediario, y un límite frenaría a todos
+  los servicios a la vez.
+- **Cada nodo necesita espacio para un servidor.** Con `--ha` los servidores deben ejecutarse en
+  tres nodos distintos. Si en uno de los tres no caben 500m y 768Mi más, ese servidor se queda en
+  `Pending`, y el bootstrap espera hasta 15 minutos antes de fallar.
+  `kubectl get pods -n <namespace de la instancia>` muestra el servidor en `Pending`, y
+  `kubectl describe pod` sobre él indica por qué.
+- **Las instancias existentes los reciben al actualizarse.** `dcctl upgrade` aplica el bróker de
+  una instancia, así que una instancia creada con una versión anterior recibe estas solicitudes y
+  este límite al actualizarse a esta, y sus servidores se reinician para tomarlos: de uno en uno
+  con `--ha`. Consulta
+  [Qué aplica una actualización a la infraestructura](./releases-and-upgrades.md#upgrade-infrastructure).
+- Para cambiarlos, establece `nats_cpu_request`, `nats_memory_request` o `nats_memory_limit` en
+  un `terraform.tfvars` junto al estado de OpenTofu de la instancia
+  (`~/.devicechain/instances/<instancia>/infra/instance/`), que lee cada aplicación de la
+  instancia que hace `dcctl`, también la de una actualización. La memoria admite `Mi` o `Gi`. En
+  una instancia instalada con `--compact`, `dcctl` pasa las dos solicitudes por sí mismo en cada
+  aplicación, lo que prevalece sobre el archivo, así que allí solo `nats_memory_limit` se puede
+  cambiar de esta forma.
+
+#### Compresión entre los servidores del bróker {#route-compression}
+
+Los servidores de un bróker en clúster (`--ha`) se copian entre sí cada evento almacenado por sus
+propias conexiones, llamadas rutas. `nats_route_compression` comprime ese tráfico. **En un bróker
+en clúster es `s2_fast` por defecto.** Un único servidor no tiene rutas, así que no hay nada que
+comprimir.
+
+- **Los valores son `off`, `s2_fast`, `s2_better`, `s2_best` y `s2_auto`.** Cualquier otro valor,
+  incluida otra forma de escribir uno de estos, se rechaza al aplicar la instancia. Si la variable
+  no se establece, vale `s2_fast` con `--ha` y `off` sin él. Un valor que establezcas siempre
+  prevalece sobre ese valor por defecto, `off` incluido. `off` no añade nada a la configuración
+  del bróker, y ninguna ruta se comprime.
+- **`s2_fast` es el que conviene usar.** `s2_better` y `s2_best` gastan más CPU a cambio de
+  mensajes más pequeños. `s2_auto` elige un nivel según el tiempo de ida y vuelta de cada ruta y no
+  comprime por debajo de 10 ms, lo que abarca todas las rutas dentro de una zona, así que en un
+  clúster de una sola zona no cambia nada.
+- **Solo afecta al tráfico entre servidores del bróker.** Las conexiones de dispositivos y servicios
+  no se comprimen, ni tampoco lo que el bróker escribe en disco.
+- **Lo que se midió.** En un clúster de Google Kubernetes Engine de tres nodos con TLS activado en
+  el bróker, con 18 000 eventos por segundo ofrecidos, `s2_fast` redujo un 60% por evento el
+  tráfico entre servidores del bróker y un 37% el tráfico de red de los pods del bróker. Comprimir
+  cuesta a cada servidor del bróker entre un 2,6 y un 2,9% de su CPU, y escribir menos a través de
+  TLS ahorra más que eso: en total, el bróker usó alrededor de un 4% menos de CPU por evento. El
+  rendimiento subió alrededor de un 5%, dentro de la variación entre ejecuciones de esa medición,
+  así que cuenta con los bytes y la CPU, no con el rendimiento.
+- **Al actualizar una instancia con `--ha`** a la versión con este valor por defecto, los
+  servidores del bróker se reinician de uno en uno, una vez, para activar la compresión, salvo que
+  la variable ya esté establecida. Mientras tanto, los servidores con el ajuste antiguo y el nuevo
+  se ponen de acuerdo en cada conexión: un servidor que aún no se ha reiniciado sigue a un par que
+  pide compresión.
+- **Para desactivarla**, establece `nats_route_compression = "off"` en el `terraform.tfvars` junto
+  al estado de OpenTofu de la instancia (`~/.devicechain/instances/<instancia>/infra/instance/`) y
+  ejecuta `dcctl upgrade`. Eliminar la línea no la desactiva: vuelve al valor por defecto. El
+  mismo archivo admite cualquier otro modo. Cada cambio reinicia los servidores del bróker de uno
+  en uno.
+- **Un bróker sin `--ha` rechaza cualquier modo distinto de `off`.** Un único servidor no tiene
+  rutas, así que el ajuste no haría nada.
+- **Para comprobarla**, consulta `/routez` del bróker en el puerto de monitorización 8222: el campo
+  `compression` de cada ruta muestra el modo en uso. Los contadores de bytes de ahí cuentan los
+  mensajes antes de comprimirlos, así que no muestran el ahorro. Los bytes de red de los pods del
+  bróker sí.
+
+#### Rendimiento medido {#measured-throughput}
+
+| Versión | Clúster | Configuración | Ritmo sostenido | Resultado |
+| --- | --- | --- | --- | --- |
+| v0.18.0 | Google Kubernetes Engine, 3 × n2-standard-8 (8 vCPU cada uno), discos persistentes SSD, `--ha` | los valores predeterminados de v0.18.0, anteriores al dimensionamiento de arriba | unos 3800 eventos/s | Dos ejecuciones de 10 minutos a 4000 eventos/s ofrecidos almacenaron cada una 2 399 000 eventos, tantos como se aceptaron (se compararon los totales, no cada evento). La etapa más lenta mantuvo el 96,5% del ritmo ofrecido en una ejecución (la resolución, 3858 por segundo) y el 98% en la otra. El estado en vivo de los dispositivos solo siguió el ritmo hasta unos 2300 eventos por segundo, con el límite de 500m que tenía entonces `device-state`. |
+| v0.18.0 | el mismo | ajustada: ver abajo | unos 5600 eventos/s | Ejecuciones de 180 segundos. A 5600 ofrecidos, cada etapa mantuvo al menos el 98,9% del ritmo ofrecido, la cola se vació en 3 segundos y el número de eventos almacenados fue igual al de aceptados (se compararon los totales, no cada evento). El estado en vivo siguió el ritmo. |
+| después de v0.18.0, antes de sus valores de persistencia | el mismo | el dimensionamiento de arriba, con `event-management` en `persistence.writers: 5` y `persistence.maxBatch: 32` | unos 3900 eventos/s | Dos ejecuciones de 10 minutos a 4000 eventos/s ofrecidos almacenaron cada una 2 400 000 eventos, tantos como se aceptaron (se compararon los totales, no cada evento). El almacenamiento fue la etapa más lenta, con el 96,7% y el 95,7% del ritmo ofrecido. El estado en vivo de los dispositivos se mantuvo a unos 40 segundos. |
+| después de v0.18.0 | el mismo | ajustada: `event-management` con `persistence.writers: 10` y `persistence.maxBatch: 64`; ver abajo | unos 6000 eventos/s | Ejecuciones de 180 segundos. A 6000 ofrecidos, cada etapa mantuvo al menos el 98% del ritmo ofrecido, la cola se vació en 5 segundos y el número de eventos almacenados fue igual al de aceptados (se compararon los totales, no cada evento). Mantenido 5 minutos a 6000, el almacenamiento conservó el 96%, así que la cifra sostenida es de unos 5800 a 6000. |
+| después de v0.18.0 | Google Kubernetes Engine, 3 × n2-standard-4 nodos de base de datos (con taint, solo bases de datos) y 3 × n2-highcpu-4 nodos de servicios, discos persistentes SSD, `--ha` | los valores predeterminados anteriores a las solicitudes de arriba (`device-management` 500m, `event-management` y `device-state` 400m, `event-sources` 150m, `event-processing` 100m), con los valores de persistencia actuales de `event-management` | unos 6000 eventos/s | Sustituida por la fila siguiente, medida con las solicitudes de arriba y los tamaños de volumen predeterminados. Dos ejecuciones de 10 minutos a 6000 eventos/s ofrecidos almacenaron cada una 3 600 000 eventos, tantos como se aceptaron (se compararon los totales, no cada evento). La resolución, el almacenamiento y el estado en vivo de los dispositivos mantuvieron cada uno el 99,7% del ritmo ofrecido o más, y la cola se vació en 10 segundos. La detección (`event-processing`) se quedó atrás: su cola llegó a unos 93 000 eventos. Los volúmenes del almacén de eventos y de las copias de seguridad eran más pequeños que los predeterminados. Las solicitudes de arriba se dimensionaron a partir de estas ejecuciones. |
+| versión candidata v0.19.0 | Google Kubernetes Engine (`us-east4-b`), 3 × n2-standard-4 nodos de base de datos (16 GB; con taint, solo bases de datos) y 3 × n2-custom-4-8192 nodos de servicios (4 vCPU, 8 GB), discos de arranque persistentes estándar, `--ha`, los tamaños de volumen predeterminados | los valores predeterminados de arriba, con `event-management` en dos pods (el valor predeterminado de `--ha`) y la generación de perfiles de Go activada pero inactiva | 6000 eventos/s | Dos ejecuciones de 10 minutos a 6000 eventos/s ofrecidos aceptaron cada una 5997 eventos/s y almacenaron exactamente una vez los 3 600 000 eventos aceptados. Se comprobó evento por evento, por el dispositivo y el instante de ocurrencia de cada uno: ninguno faltante, ninguno almacenado dos veces, ninguno inesperado. La resolución, el almacenamiento y el estado en vivo de los dispositivos siguieron cada uno el ritmo, y la cola se vació en unos 2 segundos. La detección (`event-processing`), que esa comprobación no cubre, siguió el ritmo con una cola máxima por debajo de 1000 eventos, y se quedó atrás a partir de 7600 ofrecidos. |
+| versión de desarrollo anterior a v0.22.0 (`46a616c2`) | el mismo | los valores predeterminados de esa versión, con `event-management` en dos pods y la generación de perfiles de Go activada, y con la ubicación fijada (ver abajo) | 10 000 eventos/s | Una ejecución de 10 minutos a 10 000 eventos/s ofrecidos: la resolución, el almacenamiento y el estado en vivo de los dispositivos mantuvieron cada uno de 9999 a 10 003 eventos por segundo, y cada uno de los unos 6 millones de eventos aceptados se almacenó exactamente una vez, comprobado evento por evento: ninguno faltante, ninguno almacenado dos veces, ninguno inesperado. La cola se vació en unos 7 segundos. En ejecuciones de 3 minutos desde 11 600 ofrecidos, la resolución se mantuvo en unos 11 100 a 11 400 por segundo y el estado en vivo de los dispositivos fue el primero en quedarse atrás, a unos 10 000. |
+| versión de desarrollo anterior a v0.22.0 (`65b580d9`) | el mismo | como la fila anterior, con el líder de cada consumidor también fijado en un servidor del bróker | 10 000 eventos/s | Una ejecución de 10 minutos a 10 000 eventos/s ofrecidos: cada etapa mantuvo de 9953 a 9990 eventos por segundo, y cada uno de los unos 6 millones de eventos aceptados se almacenó exactamente una vez, comprobado evento por evento. La cola se vació en unos 6 segundos. En ejecuciones de 3 minutos una réplica de `device-management` resolvió como mucho unos 10 300 por segundo, la primera etapa en quedarse atrás. |
+| después de v0.22.0 (`75b4f2e6`) | el mismo | los valores predeterminados de esa versión (un lote de lectura de 256), con la ubicación fijada como arriba, la instancia sirviendo HTTP sin cifrar (`dcctl bootstrap --no-tls`) y [la publicación en el líder del stream](./observability.md#leader-affinity) desactivada y luego activada | no medido: solo ejecuciones de 3 minutos | A 14 000 ofrecidos, la ingesta aceptó 13 825 eventos por segundo y una réplica de `device-management` resolvió 12 729, con cada evento almacenado exactamente una vez, comprobado evento por evento; la cola se vació en 19 segundos. Con la publicación en el líder del stream activada (el valor predeterminado desde entonces), resolvió 13 512 por segundo con 13 397 aceptados, y la cola se vació en 8 segundos. Son techos de 3 minutos, no ritmos sostenidos. El nodo que ejecutaba el servidor líder del stream de eventos entrantes estuvo al 93-95% de CPU. |
+
+Las filas de v0.18.0 se midieron en v0.18.0, la fila de v0.19.0 en su versión candidata, las dos
+filas de 10 000 en versiones de desarrollo que entraron en v0.22.0, la última fila en una versión
+de desarrollo posterior a v0.22.0, y las demás en la versión de desarrollo entre v0.18.0 y v0.19.0,
+todas con el generador de carga en un nodo aparte y un almacén de eventos replicado (`--ha`). En
+las cuatro últimas filas cada evento llevaba una lectura, de un inquilino cuyo límite de ingesta se
+elevó para la prueba.
+
+En las tres últimas filas la ubicación se fijó en lugar de dejarla al planificador, para poder
+comparar las ejecuciones: un nodo de servicios ejecutaba el servidor del bróker líder del stream de
+eventos entrantes con `device-management`, `event-processing` y un pod de `event-management`; otro
+ejecutaba `event-sources` y el otro pod de `event-management`; el tercero ejecutaba `device-state`
+con el servidor líder del stream de eventos resueltos. Los pods se reiniciaron hasta que la conexión
+al bróker de cada servicio quedó en el mismo servidor en todas las ejecuciones. La ubicación importa
+en este clúster: en una ejecución de 3 minutos a 10 800 ofrecidos, el líder de un solo consumidor en
+el servidor líder de los eventos entrantes costó alrededor del 9% del ritmo de resolución. Una
+instalación predeterminada deja la ubicación al planificador y al bróker, y no se ha medido así a
+10 000 eventos por segundo; la fila de v0.19.0 sí se midió así. Estos resultados describen esa carga
+y ese clúster, no son una garantía de capacidad.
+
+Con la configuración predeterminada de v0.18.0, lo que frenó el ritmo fue el grupo de
+resolutores de `device-management` y, más allá de él, los límites de CPU de `event-sources` y
+`device-state` que el dimensionamiento de arriba aumenta. Con ellos aumentados, el límite pasó a
+ser el almacenamiento de eventos: 5 escritores que confirmaban hasta 32 eventos cada uno llenaban
+todos los lotes desde 4400 eventos por segundo, y cada confirmación tardaba unos 38 milisegundos,
+así que el almacenamiento se detenía cerca de 4200 por segundo. Por eso `event-management` usa
+ahora por defecto 10 escritores y lotes de hasta 64 (ver [Persistencia de
+eventos](./observability.md#event-persistence)).
+
+La fila ajustada de v0.18.0 usó `device-management` con 2 réplicas, `resolution.workers: 32` y
+`rdbConfiguration.maxOpenConnections: 48`; `event-sources` con 2 réplicas; `event-management` con
+`persistence.writers: 10` y `persistence.maxBatch: 64`, en un nodo sin el primario del almacén de
+eventos; `device-state` con `projection.writers: 5`, `projection.maxBatch: 64` y
+`projection.lingerMillis: 25`; límites de CPU de 4 núcleos (2 para `event-processing`); y límites
+de memoria de 1Gi. La fila ajustada posterior dejó `device-management` con sus valores por defecto
+y una réplica, y por lo demás usó los mismos ajustes de `event-management` y `device-state`, con
+límites de CPU de 4 núcleos y de memoria de 1Gi para `device-management`, `event-sources`,
+`event-management` y `device-state`. En ella, `event-management` usó como mucho unos 1,7 núcleos; no
+se midió con su límite por defecto de 2. Sus lotes quedaron por debajo de 32 de media en todas las
+ejecuciones, así que la medición no muestra que un lote de 64 ayude más que uno de 32. Los lotes
+fueron de unos 21 eventos de media a 6000 por segundo; por encima, el almacenamiento dejó de crecer
+con lotes de 28 a 30 eventos de media, por debajo del límite, mientras dos de los tres nodos, uno
+de ellos el del almacén de eventos, estaban al 86-95% de CPU. No se aisló cuál de esas dos cosas
+limitó el ritmo, pero para más rendimiento en ese clúster de tres nodos hacen falta más nodos antes
+que más ajustes por servicio. Una instalación predeterminada con los nuevos valores de persistencia
+se midió en los clústeres divididos de las filas desde la sustituida en adelante, donde sostuvo
+6000 eventos por segundo, y 10 000 con la ubicación fijada, con `event-management` en dos pods desde
+la fila de v0.19.0; no se ha medido en el clúster de tres nodos de las cuatro primeras filas.
+
+#### Volumen del almacén de eventos {#event-store-volume}
+
+Cada instancia del almacén de eventos tiene un volumen de 32Gi, así que tres con `--ha` (4Gi cada
+uno con `--compact`). Una medición almacenada ocupa alrededor de 1,05 KB, y el registro de
+escritura anticipada de la base de datos ocupa alrededor de 1,1 GB más mientras las copias de
+seguridad le siguen el ritmo, así que 32Gi contienen unos 27 millones de eventos: unas siete
+horas de un inquilino que envía a su techo predeterminado completo.
+
+Una fila de medición costó unos 600 bytes en disco, índices incluidos y antes de comprimir, en una
+prueba posterior (51 millones de filas llenaron 31 GB), así que la cifra anterior es la prudente.
+Cómo dimensionar el volumen para su tráfico, con métricas calculadas y retención, y cómo ampliarlo
+en línea, está en [Dimensionar el almacén de eventos](./tuning-an-instance.md#event-store-sizing).
+
+El almacén de eventos comprime las imágenes de página de su registro de escritura anticipada
+(`wal_compression = lz4`). Tras cada punto de control, el primer cambio en una página escribe la
+página entera en el registro, y en este almacén la mayoría de esas páginas son páginas de índice.
+En una comparación en una versión de desarrollo posterior a v0.18.0, en un clúster de la misma
+forma que el de [Rendimiento medido](#measured-throughput), con un ajuste distinto del de las filas
+de esa tabla, a 5200 eventos por segundo ofrecidos, la compresión redujo el registro escrito por
+evento almacenado de unos 3,0 KB a unos 1,7 KB, y los puntos de control forzados por el tamaño del
+registro bajaron en una proporción parecida (de 5,8 a 3,2 por millón de eventos almacenados). No
+cambia lo que contiene este volumen: el registro sigue ocupando alrededor de 1,1 GB mientras las
+copias de seguridad le siguen el ritmo, así que la cifra anterior se mantiene. El
+[tamaño del almacén de respaldos](#backup-store-size) se midió antes de esta compresión, de las
+claves encabezadas por el tiempo y del archivado con zstd, así que peca por exceso: en la prueba de
+rendimiento de la versión, el archivo del almacén de eventos ocupó unos 0,47 KB por evento
+almacenado, frente a los 1,9 KB que ese dimensionamiento supone para las dos bases de datos; la
+parte de la base de datos relacional no se volvió a medir. El almacén relacional no comprime su registro.
+
+Con el [almacén de respaldos predeterminado](#backup-store-size) y una sola instancia, este
+volumen es lo primero que se llena con una ingesta sostenida, y `DatabaseVolumeFillingFast` avisa
+antes. Si se llena primero el almacén de respaldos (varias instancias en él, un almacén más
+pequeño o un almacén de eventos ampliado por encima de su tamaño predeterminado), el archivado se
+detiene, y el registro que la base de datos no puede enviar se acumula en este volumen hasta que
+se llena y la base de datos se detiene; las [alertas](./observability.md#backup-archiving) avisan
+antes de ambas cosas. Una ventana de retención
+(`retentionDays` en la configuración `lifecycle` de event-management) limita los datos
+almacenados en una instancia que deba funcionar indefinidamente, pero no el archivo.
+
+El tamaño se fija al crear una instancia. `dcctl upgrade` aplica el resto de la configuración del
+almacén de eventos y conserva su volumen con el tamaño que tiene. Para ampliarlo, con una
+StorageClass que permita la expansión de volúmenes:
+
+```bash
+kubectl -n dci-<instance> patch clusters.postgresql.cnpg.io dc-tsdb --type merge \
+  -p '{"spec":{"storage":{"size":"64Gi"}}}'
+```
+
+Ampliar este volumen mueve el punto en que el almacén de respaldos se llena primero. Amplía el
+almacén de respaldos unas cinco veces lo que añadas aquí; consulta
+[Tamaño del almacén de objetos de respaldo](#backup-store-size).
+
+## Después del arranque inicial {#after-bootstrap}
+
+El comando imprime el namespace, la credencial de **superusuario** y cómo llegar a la
+instancia a través del ingress del clúster. El superusuario es `superuser@devicechain.local`,
+y no hay contraseña por defecto. El arranque genera una para la instancia, la guarda en el
+Secret `dci-<instance>-superuser` del namespace de la instancia y la imprime una sola vez, al
+final de la ejecución que la generó (o de la que termina un arranque inicial que falló antes de
+imprimirla). Para volver a leerla:
+
+```bash
+kubectl -n dci-my-instance get secret dci-my-instance-superuser -o jsonpath='{.data.password}' | base64 -d
+```
+
+### La contraseña del superusuario {#superuser-password}
+
+El servicio user-management lee esa contraseña una sola vez: para crear el superusuario la
+primera vez que arranca con la tabla de identidades vacía. A partir de ahí, el Secret es un
+registro de la contraseña que el superusuario recibió al principio. Cambiar la contraseña en
+la consola no lo actualiza. Cuando un arranque **recupera** una instancia y sus identidades
+vuelven con ella, el superusuario restaurado conserva la contraseña que tenía. El informe
+entonces no imprime el valor del Secret, e indica que puede no ser la contraseña del
+superusuario.
+
+Las instancias arrancadas con una versión anterior no tienen ese Secret. Su superusuario se
+creó con la contraseña por defecto que publicaban esas versiones. Ni `dcctl upgrade` ni una
+nueva ejecución del arranque sobre la instancia en marcha (una restauración, o
+`--allow-legacy-db-removal`) la cambian ni generan un Secret para ella, y ambos lo indican al
+terminar. Si esa contraseña no se ha cambiado desde entonces, cámbiala en la consola.
+
+Una instalación hecha solo con Helm, sin `dcctl`, debe crear ese Secret por su cuenta (clave
+`password`) antes de que user-management arranque por primera vez, o nombrar otro con el valor
+del chart `instance.superuserSecret`. Sin él, user-management se niega a crear el superusuario.
+
+### Iniciar sesión en la consola {#sign-in}
+
+La instancia incluye la **consola web**. El ingress la sirve en la raíz del host
+(`https://<host>/`) y enruta `https://<host>/api/<area>/graphql` a cada servicio de área
+funcional. Abre la consola en un navegador e inicia sesión con el correo electrónico y la
+contraseña del superusuario.
+
+Una instancia recién creada **no tiene tenants**, así que aterrizas en la consola de
+administración (`/admin`) para crear tu primer tenant y asignar membresías. Cambia a un tenant
+para llegar a la consola del tenant. (Para una instancia headless/solo de ingesta, despliega
+con la consola deshabilitada; consulta el valor `frontend.enabled` del chart.)
+
+Para inspeccionar la instancia en ejecución:
+
+```bash
+kubectl --context <kube-context> get pods -n dci-my-instance
+```
+
+### Ejecutar una simulación {#run-a-simulation}
+
+Para explorar la consola con una flota en movimiento en lugar de una vacía, ejecuta una
+**simulación**. `sim create` acuña una identidad y un tenant acotados en la instancia y escribe
+el archivo de handshake que el proceso `dc-simulator` lee al arrancar:
+
+```bash
+dcctl sim create demo --instance my-instance --server localhost
+```
+
+El simulador inyecta entonces telemetría y alarmas por el mismo canal de dispositivo que usa
+el hardware real; consulta
+[Probarlo con datos simulados](../intro.md#trying-it-with-simulated-data).
+
+### Añadir un área funcional más adelante {#enable-area}
+
+Una instancia ejecuta las áreas que nombra su perfil, más las que se añadieron con
+`--enable-area` en el bootstrap. Para añadir una a una instancia que ya está en marcha (por
+ejemplo, conectores salientes, inferencia de IA o MCP en una instancia
+`default`), usa `dcctl enable-area`:
+
+```bash
+dcctl enable-area local my-instance outbound-connectors --dry-run
+dcctl enable-area local my-instance outbound-connectors
+```
+
+- Los nombres se comprueban contra el catálogo de áreas antes de tocar el clúster. El nuevo
+  conjunto de áreas de la instancia se comprueba en busca de dependencias que falten antes de
+  escribir nada: por ejemplo, `outbound-connectors` necesita `event-processing`, que el perfil
+  `telemetry` no ejecuta, así que nombra las dos.
+- El área queda registrada en la instancia, de modo que un `dcctl upgrade` posterior la conserva.
+- La instancia se aplica como la aplica `dcctl upgrade` (el broker de mensajería y el almacén de
+  eventos, el documento de configuración y después los servicios), en la versión que ya ejecuta,
+  y el comando espera a que todos los servicios estén listos. Así que, como una actualización, se
+  ejecuta en la máquina que guarda el estado de la instancia, necesita `tofu` y no acuña
+  credenciales.
+- No cambia de versión. Se niega cuando tu `dcctl` es de una versión distinta a la de la
+  instancia; [actualiza](./releases-and-upgrades.md) primero la instancia.
+- Nombrar un área que la instancia ya ejecuta no cambia nada. Si la última ejecución sobre la
+  instancia no terminó, el comando vuelve a aplicar la instancia, lo que completa un
+  `enable-area` que se detuvo a medias.
+- El área se registra antes de aplicar nada. Si el comando se detiene a medias, el área sigue
+  registrada: volver a ejecutar `dcctl enable-area`, o el siguiente `dcctl upgrade`, termina de
+  desplegarla.
+- Habilitar un área la despliega; no la configura. Algunas áreas necesitan ajustes antes de hacer
+  trabajo útil. `update-management` guarda los artefactos en el
+  [almacén de objetos](#object-store), que se elige en el bootstrap y no se puede añadir después;
+  sin él, el servicio se ejecuta y rechaza todos los artefactos, y el comando lo avisa. En un
+  clúster que `dcctl` no creó, un almacén `filesystem` con el modo de acceso `ReadWriteOnce` solo
+  puede servir a un pod, así que añadir `update-management` junto a `user-management` se rechaza
+  antes de escribir nada. (El perfil `default` ya incluye `update-management`; en una instancia así,
+  con ese tipo de almacén, se ejecuta sin almacén de objetos y rechaza los artefactos, y el
+  bootstrap o la actualización lo avisa.) `lwm2m-ingest` autentica los dispositivos con las claves precompartidas
+  indicadas con `--lwm2m-identities`; si se añade después, se ejecuta y rechaza
+  todos los handshakes.
+
+No hay ningún comando que quite un área. Un área puede guardar datos, y sacarla del despliegue
+dejaría esos datos sin nada que los sirva.
+
+## Eliminar una instancia {#destroy}
+
+```bash
+dcctl destroy local my-instance
+```
+
+`dcctl destroy` elimina **solo esa instancia**, en este orden:
+
+1. Su release de Helm. El namespace de la instancia pertenece a esa release, así que
+   desinstalarla elimina el namespace y todo lo que contiene, incluidos su broker NATS y su
+   almacén de eventos.
+2. Su estado de infraestructura, mediante `tofu destroy`, que elimina lo que ese estado aún
+   contenga. Destroy muestra el plan de OpenTofu de lo que elimina, sin la lista de valores de
+   salida del plan: un destroy calcula algunos de esos valores con los valores predeterminados
+   de la configuración en lugar de con los ajustes de la instancia, así que la lista no
+   describiría la instancia.
+3. Su base de datos y su login de base de datos en la base de datos relacional compartida.
+4. Su namespace, si sigue ahí. Un arranque que se detuvo antes de que Helm instalara nada deja
+   un namespace sin release que desinstalar. Destroy espera a ver desaparecer el namespace por
+   completo.
+5. Los respaldos de su almacén de eventos, cuando están en el almacén de objetos propio del
+   clúster (el [destino predeterminado](#default-backup-destination)): se borra todo lo que hay
+   bajo la ruta a la que archivaba el almacén de eventos de la instancia —su archivo del log de
+   escritura anticipada y sus respaldos base—, y destroy comprueba después que la ruta ha
+   quedado vacía.
+6. Comprueba que lo que eliminó ya no existe y, solo entonces, elimina su estado local en
+   `~/.devicechain/instances/<instance>/`.
+
+El artefacto de depósito de la clave raíz se conserva; consulta
+[Recuperación ante desastres](./disaster-recovery.md#after-destroy).
+
+### Qué pasa con los respaldos de la instancia {#destroy-backups}
+
+Destroy lee a qué ruta archiva el almacén de eventos de la instancia antes de cambiar nada, la
+muestra, y solo elimina esa ruta cuando el namespace de la instancia ya no existe, de modo que
+nada sigue escribiendo en ella. Elimina esa única ruta y nada más: ni los respaldos de la base de
+datos relacional compartida, ni los de otra instancia, ni un archivo anterior que haya quedado con
+el mismo nombre de instancia.
+
+- **Los respaldos en un almacén de objetos que tú proporcionaste**
+  (`dcctl install --backup-credentials-file`) no se borran nunca. Son la copia que sobrevive al
+  clúster. Destroy indica dónde están; bórralos tú cuando ya no los necesites.
+- **`--keep-backups`** conserva también los respaldos del almacén interno. Úsalo cuando vayas a
+  reconstruir la instancia a partir de ellos con `dcctl bootstrap --restore-tsdb-from` en el
+  mismo clúster: un destroy sin esa opción borra precisamente el archivo que lee esa
+  restauración. `dcctl destroy --all` acepta `--keep-backups` y lo aplica a todas las instancias.
+- **Los respaldos base como instantáneas de volumen** (`dcctl install --backup-snapshot-class`)
+  del almacén de eventos de la instancia están en su namespace, y se borran con él, con
+  `--keep-backups` o sin él. Ninguna restauración los lee: `--restore-tsdb-from` lee el almacén de
+  respaldos, que `--keep-backups` conserva.
+- **Si no se puede acceder al almacén de objetos**, o destroy no puede saber qué ruta es la de la
+  instancia, el destroy termina igualmente. Indica qué dejó, y su línea final no da la instancia
+  por destruida del todo.
+
+Un destroy que se interrumpe después de que el almacén de eventos haya desaparecido, incluido uno
+interrumpido mientras elimina los respaldos, recuerda la ruta que leyó, así que ejecutarlo de nuevo
+sigue eliminándolos.
+
+Las versiones anteriores a esta dejaban los respaldos de una instancia destruida en el almacén
+interno, donde nada los elimina nunca. Después de eliminar los respaldos de la propia instancia,
+destroy enumera las rutas del bucket que parecen archivos anteriores del mismo nombre de
+instancia, y las deja. No enumera nada cuando deja en su sitio los respaldos de la propia
+instancia: con `--keep-backups`, en un almacén externo, o cuando no pudo acceder al almacén o
+borrar en él. Para encontrar y eliminar esos archivos a
+mano, accede al almacén mediante un port-forward y usa cualquier cliente S3, por ejemplo la CLI
+de AWS:
+
+```bash
+kubectl -n dc-system port-forward svc/dc-object-store 9000:9000 &
+export AWS_ACCESS_KEY_ID="$(kubectl -n dc-system get secret dc-object-store-credentials \
+  -o jsonpath='{.data.MINIO_ROOT_USER}' | base64 -d)"
+export AWS_SECRET_ACCESS_KEY="$(kubectl -n dc-system get secret dc-object-store-credentials \
+  -o jsonpath='{.data.MINIO_ROOT_PASSWORD}' | base64 -d)"
+aws s3 ls s3://devicechain-tsdb/ --endpoint-url http://127.0.0.1:9000
+aws s3 rm --recursive s3://devicechain-tsdb/<path>/ --endpoint-url http://127.0.0.1:9000
+```
+
+Cada instancia en marcha archiva bajo la ruta que nombra su almacén de eventos; puedes verla con
+`kubectl -n dci-<instance> get clusters.postgresql.cnpg.io dc-tsdb -o yaml` (el `serverName`
+bajo `spec.plugins`). Elimina solo rutas que no use ninguna instancia en marcha y de las que nadie
+vaya a restaurar.
+
+Si un paso falla o se interrumpe —incluido un namespace que sigue terminando cuando se agota
+la espera—, destroy termina con un error y conserva el estado local. Ejecutar de nuevo el mismo
+comando continúa donde se detuvo.
+
+Si la instancia sigue en marcha pero falta su estado local de infraestructura —porque se
+perdió, o porque la instancia se arrancó desde otra máquina—, destroy **se niega**, porque sin
+ese estado no puede ejecutar la destrucción de la infraestructura. `--without-state` elimina la
+instancia de todos modos, por su release de Helm, su base de datos y su login, y su namespace,
+e informa de que se omitió la destrucción de la infraestructura. Una instancia cuyo estado
+local es anterior a la división de la infraestructura en una parte de clúster y otra de
+instancia se rechaza del mismo modo, antes de cualquier cambio, y también necesita
+`--without-state`. `dcctl destroy --all` acepta `--without-state`.
+
+Destroy nunca elimina el clúster ni los requisitos previos que dejó `dcctl install`, así que el
+siguiente `dcctl bootstrap` en el clúster no necesita instalar antes. Destruir una instancia y
+volver a arrancarla con el mismo nombre es como se recrea una instancia. Una instancia
+construida por una versión anterior, de antes de que existiera `dcctl install`, es la
+excepción: también hay que recrear su clúster; consulta
+[Versiones y actualizaciones](./releases-and-upgrades.md#pre-declaration-recreate).
+
+Si el propio clúster de kind ya no existe —borrado con `kind delete cluster`—, destroy no tiene
+nada que desinstalar y lo dice, limpiando solo el estado local. Eso es el directorio de la
+instancia y el directorio propio del clúster en `~/.devicechain/clusters/<cluster-uid>/`, que
+creó `dcctl install` y que `kind delete cluster` dejó atrás (consulta
+[Instalar el clúster](#install)). Mientras lo hace, imprime:
+
+```text
+removing the gone cluster's local state (~/.devicechain/clusters/<cluster-uid>)
+```
+
+Todavía no hay ningún comando de desinstalación. Para eliminar un clúster local que creó
+`dcctl install`, usa kind directamente, como se muestra en [Instalar el clúster](#install). En un clúster que
+conservas, consulta [Eliminar un clúster](#removing-a-cluster).

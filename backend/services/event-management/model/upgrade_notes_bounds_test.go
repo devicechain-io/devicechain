@@ -26,7 +26,10 @@ import (
 // The pages live outside this module and Go's test cache does not track them, so a plain
 // `go test` can serve a stale PASS over an edit there; CI runs -count=1.
 
-// upgradeNotesPages are the English page and its Spanish twin.
+// upgradeNotesPages are the English page and its Spanish twin. They are the LIVING docs
+// (docs/docs and the locale's `current`), deliberately not the frozen versioned snapshots:
+// the published figures must track the constants in this module, and a snapshot records
+// what a past release said, so it would fail the moment a bound is retuned.
 var upgradeNotesPages = map[string]string{
 	"en": filepath.Join("..", "..", "..", "..", "docs", "docs", "deployment", "releases-and-upgrades.md"),
 	"es": filepath.Join("..", "..", "..", "..", "docs", "i18n", "es", "docusaurus-plugin-content-docs", "current",

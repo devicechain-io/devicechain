@@ -1,6 +1,6 @@
 import type { Config } from '@docusaurus/types';
 import type * as Preset from '@docusaurus/preset-classic';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { themes as prismThemes } from 'prism-react-renderer';
 
@@ -12,9 +12,31 @@ import { themes as prismThemes } from 'prism-react-renderer';
 const generatedReference = resolve(__dirname, 'generated/graphql-reference');
 const searchDocsDirs = [
   'docs',
+  // The frozen snapshots (`docusaurus docs:version`) are indexed pages too, so they must be in
+  // the content hash: a snapshot that changed would otherwise leave the index file name alone.
+  'versioned_docs',
   'i18n',
   ...(existsSync(generatedReference) ? ['generated/graphql-reference'] : []),
 ];
+
+// Released snapshots, newest first, as `docusaurus docs:version` records them. The docs
+// plugin's `lastVersion` and `versions` are DERIVED from this file, so cutting a snapshot
+// needs no config edit and the site root cannot keep serving an older release than
+// versions.json lists. Absent or empty means no snapshot yet: the living docs are served.
+const versionsFile = resolve(__dirname, 'versions.json');
+const releasedVersions: string[] = existsSync(versionsFile)
+  ? JSON.parse(readFileSync(versionsFile, 'utf8'))
+  : [];
+const docsVersions = {
+  current: { label: 'Next', path: 'next', banner: 'unreleased' as const, badge: true },
+  // Newest snapshot: no banner. Older ones keep Docusaurus's default 'unmaintained' banner.
+  ...Object.fromEntries(
+    releasedVersions.map((v, i) => [
+      v,
+      { label: v, badge: true, ...(i === 0 ? { banner: 'none' as const } : {}) },
+    ]),
+  ),
+};
 
 const config: Config = {
   title: 'DeviceChain',
@@ -91,6 +113,17 @@ const config: Config = {
         docs: {
           routeBasePath: '/', // docs are the site root
           sidebarPath: './sidebars.ts',
+          // VERSIONING. `docs/docs` + `i18n/<locale>/.../current` are the LIVING docs (the next,
+          // unreleased release); `versioned_docs/version-X.Y` + `versioned_sidebars` +
+          // `i18n/<locale>/.../version-X.Y` are FROZEN snapshots cut by
+          // `npx docusaurus docs:version X.Y` at each release (see docs/README.md).
+          // Readers land on `lastVersion` at the site root (/…); the living docs are served
+          // under /next/… with an unreleased banner. Authors keep editing `docs/docs` only.
+          // The guards deliberately treat the two differently: translation freshness, the
+          // docs-drafts rot guard and the generated-reference checks follow the living tree;
+          // ADR-reference scanning and locale parity cover the snapshots too.
+          lastVersion: releasedVersions[0] ?? 'current',
+          versions: docsVersions,
           editUrl: 'https://github.com/devicechain-io/devicechain/tree/main/docs/',
         },
         blog: false,
@@ -168,6 +201,8 @@ const config: Config = {
       },
       items: [
         { type: 'docSidebar', sidebarId: 'docs', position: 'left', label: 'Docs' },
+        // Version switcher: the released snapshots plus Next (the living docs).
+        { type: 'docsVersionDropdown', position: 'right' },
         { type: 'localeDropdown', position: 'right' },
         // Rendered as icons, not text — see `.navbar-social` in src/css/custom.css
         // for how, and for why the label below still has to be a real word rather

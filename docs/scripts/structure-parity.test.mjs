@@ -243,6 +243,8 @@ test('the real docs tree passes, and a planted missing anchor in a copy of it fa
   try {
     await cp(path.join(docsRoot, 'docs'), path.join(root, 'docs'), { recursive: true });
     await cp(path.join(docsRoot, 'i18n'), path.join(root, 'i18n'), { recursive: true });
+    // The frozen snapshots are compared too (their English half is versioned_docs).
+    await cp(path.join(docsRoot, 'versioned_docs'), path.join(root, 'versioned_docs'), { recursive: true });
     const page = 'user-guide/administering-the-instance.md';
     const target = path.join(root, 'i18n/es/docusaurus-plugin-content-docs/current', page);
     const text = await readFile(target, 'utf8');

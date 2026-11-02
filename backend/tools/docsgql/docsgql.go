@@ -602,8 +602,18 @@ func Walk(root string, rels ...string) ([]Block, []Payload, error) {
 	var payloads []Payload
 	for _, rel := range rels {
 		err := filepath.WalkDir(filepath.Join(root, rel), func(p string, d fs.DirEntry, err error) error {
-			if err != nil || d.IsDir() {
+			if err != nil {
 				return err
+			}
+			// The frozen docs snapshots (docs/i18n/<locale>/.../version-X.Y) are skipped: they
+			// document the API of a past release, so they are not validated against the
+			// schemas served today, and counting them would break the per-locale parity
+			// against English (whose snapshot, docs/versioned_docs, is never walked).
+			if d.IsDir() {
+				if strings.HasPrefix(d.Name(), "version-") {
+					return filepath.SkipDir
+				}
+				return nil
 			}
 			if ext := filepath.Ext(p); ext != ".md" && ext != ".mdx" {
 				return nil
@@ -758,7 +768,9 @@ func (r Report) Print(w io.Writer) {
 }
 
 // allowedSkips is the complete set of blocks the docs may contain that are no executable
-// document. Everything else is validated, and a new skip fails until it is listed here.
+// document. Only the LIVING trees are listed: the frozen versioned snapshots are not
+// validated against the schemas served today (they document the API of a past release).
+// Everything else is validated, and a new skip fails until it is listed here.
 var allowedSkips = func() []AllowedSkip {
 	var out []AllowedSkip
 	for _, tree := range []string{
