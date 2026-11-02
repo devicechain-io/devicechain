@@ -28,11 +28,11 @@
 # refuses an absent, blank or over-long theme, and this file's whole argument is that two
 # guards which must agree are one guard with two callers.
 #
-# 🔴 THE PRE-1.0 WARNING LIVES HERE, NOT IN .goreleaser.yaml. It used to sit in
-# the config's `release.header`, which `--release-header` OVERRIDES -- so leaving
-# it there would have left a paragraph that looks load-bearing, is never emitted,
-# and drifts. It is emitted unconditionally below, so it cannot be forgotten on
-# the one release that needed it most. Remove it at v1.0.0.
+# The pre-1.0 warning this header used to carry is gone: v1.0.0 is the first stable
+# release, and from it the versioning policy applies. It was still emitted on v1.0.0
+# itself, so its release page opened by telling readers the release was pre-1.0. The
+# self-test now refuses it. Any future banner belongs HERE, not in .goreleaser.yaml's
+# `release.header`, which `--release-header` overrides.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -81,15 +81,10 @@ emit() { # <tag> <highlights.json> <living-docs-file-or-empty> [frozen-docs-file
   fi
 
   # The heading comes FIRST. A link to a release page unfurls (on X, Slack, ...) into
-  # GitHub's preview card, which quotes the opening text of this body: with the warning
-  # first, every shared release read "Warning / Pre-1.0 release" instead of what it ships.
+  # GitHub's preview card, which quotes the opening text of this body, so it must say
+  # what the release ships.
   cat <<EOF
 ## What's in ${base} — ${theme}
-
-> [!WARNING]
-> **Pre-1.0 release.** Until v1.0.0, any release — including a patch — may change
-> APIs, schemas, or behavior without a compatibility shim.
-> See [Pre-1.0 stability](https://docs.devicechain.io/deployment/releases-and-upgrades#pre-10-stability).
 
 EOF
 
@@ -111,7 +106,7 @@ EOF
 }
 
 if [ "${1:-}" = "--self-test" ]; then
-  echo "==> Self-test: the header must carry the warning, the highlights, and the breaking callout only when breaking"
+  echo "==> Self-test: the header must carry no pre-1.0 warning, the highlights, and the breaking callout only when breaking"
   tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
   hl="$tmp/hl.json"; docs="$tmp/docs.md"
   printf '### v0.9.0 — x {#v090-upgrade}\n' > "$docs"
@@ -122,7 +117,7 @@ if [ "${1:-}" = "--self-test" ]; then
 
   write v0.9.0 false
   out="$(emit v0.9.0 "$hl" "$docs")"
-  grep -q 'Pre-1.0 release' <<<"$out" || { echo "  FAIL: no pre-1.0 warning" >&2; exit 1; }
+  ! grep -qi 'pre-1.0' <<<"$out" || { echo "  FAIL: a stable-era header still carries the pre-1.0 warning" >&2; exit 1; }
   grep -q -- '- first thing' <<<"$out" || { echo "  FAIL: highlight missing" >&2; exit 1; }
   grep -q -- '- second thing' <<<"$out" || { echo "  FAIL: highlight missing" >&2; exit 1; }
   grep -q 'v090-upgrade' <<<"$out" || { echo "  FAIL: wrong or missing anchor" >&2; exit 1; }
