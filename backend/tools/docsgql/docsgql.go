@@ -769,7 +769,8 @@ func (r Report) Print(w io.Writer) {
 
 // allowedSkips is the complete set of blocks the docs may contain that are no executable
 // document. Only the LIVING trees are listed: the frozen versioned snapshots are not
-// validated against the schemas served today (they document the API of a past release). Everything else is validated, and a new skip fails until it is listed here.
+// validated against the schemas served today (they document the API of a past release).
+// Everything else is validated, and a new skip fails until it is listed here.
 var allowedSkips = func() []AllowedSkip {
 	var out []AllowedSkip
 	for _, tree := range []string{

@@ -22,9 +22,11 @@ To snapshot a release (for example 1.1), after the tag and before editing for th
 release, from this directory: run `npm run prebuild` (the generated GraphQL reference must
 exist), then `npx docusaurus docs:version 1.1`. That copies `current` into
 `versioned_docs/version-1.1` and `versioned_sidebars`, and copies each locale's `current`
-into `version-1.1`. Then set `lastVersion` and add a `'1.1'` entry to `versions` in
-`docusaurus.config.ts`, and commit. Check that every locale got its copy (the
-locale-parity guard fails otherwise).
+into `version-1.1` and prepends `1.1` to `versions.json`. `docusaurus.config.ts` derives
+`lastVersion` and the per-version labels from that file, so there is no config edit; commit
+the result. Add the `version-1.1/reference/dcctl.md` entries to the structure-parity
+allowlist, and check that every locale got its copy (the locale-parity guard fails
+otherwise).
 
 Guards follow the living docs (translation freshness, the docs-drafts rot guard, alert
 coverage, the GraphQL and command example checks, and the Go tests that read pages),
