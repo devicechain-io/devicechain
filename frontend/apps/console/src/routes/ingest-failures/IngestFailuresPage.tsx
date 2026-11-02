@@ -172,7 +172,7 @@ function IngestFailuresView() {
             </DataTableHead>
             <DataTableBody>
               {results.map((row) => (
-                <DataTableRow key={row.recordSeq}>
+                <DataTableRow key={row.id}>
                   <DataTableCell className="whitespace-nowrap text-muted-foreground">
                     {formatTime(row.occurredTime)}
                   </DataTableCell>
@@ -191,6 +191,9 @@ function IngestFailuresView() {
                     {row.error || '—'}
                     {row.payloadStatus === 'EXPIRED' && (
                       <span className="mt-1 block text-xs">{t('payloadExpired')}</span>
+                    )}
+                    {row.payloadStatus === 'NOT_RETAINED' && (
+                      <span className="mt-1 block text-xs">{t('payloadNotRetained')}</span>
                     )}
                   </DataTableCell>
                   <DataTableCell>

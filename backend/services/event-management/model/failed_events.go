@@ -5,6 +5,8 @@ package model
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"time"
@@ -50,9 +52,10 @@ const (
 	MaxFailedEventsPageSize = 100
 	// MaxFailedEventSummaryDevices bounds the top-device list of the summary.
 	MaxFailedEventSummaryDevices = 10
-	// MaxFailedEventSummarySpan bounds how far back the summary reads, which is also the longest
-	// retention that is worth reading: the table is bounded by its window and its flood bound,
-	// and an unbounded span would make the count a scan of everything it holds.
+	// MaxFailedEventSummarySpan bounds how far back ANY read of the index looks (the list, the
+	// summary and the per-device count), which is also the longest retention that is worth
+	// reading: the table is bounded by its window and its flood bound, and an unbounded span
+	// would make a read a scan of everything it holds.
 	MaxFailedEventSummarySpan = 31 * 24 * time.Hour
 )
 
@@ -64,8 +67,14 @@ const (
 // cannot be trusted on.
 type FailedEventRecord struct {
 	rdb.TenantScoped
+	// RowID is the row's opaque public identity: random, assigned when the row is created, and
+	// the only identifier the API serves for it. The stream position below is deliberately NOT
+	// served: it is a position on a stream shared by every tenant, so the gap between two of a
+	// tenant's rows would tell it how many records other tenants produced in between.
+	RowID        string    `gorm:"type:varchar(32);not null"`
 	OccurredTime time.Time `gorm:"not null"`
-	// RecordSeq is the record's position on the failed-events stream: where its payload is.
+	// RecordSeq is the record's position on the failed-events stream: where its payload is. It
+	// never leaves the service.
 	RecordSeq int64 `gorm:"not null"`
 	// SourceArea is the functional area that wrote the record.
 	SourceArea string `gorm:"type:varchar(64);not null"`
@@ -79,8 +88,26 @@ type FailedEventRecord struct {
 	EventType   *int64
 	Error       string `gorm:"type:varchar(512);not null"`
 	Correlation string `gorm:"type:varchar(128);not null"`
+	// PayloadRetained is whether the record's envelope carried an archived event at all, decided
+	// when the record is indexed. False for a record whose writer kept nothing (a message that
+	// would not parse is dead-lettered with no payload) and for the overflow row: no amount of
+	// stream retention will ever produce an original for those, which is a different statement
+	// from "the stream has rolled past it". No gorm default: a default would turn false into true.
+	PayloadRetained bool `gorm:"not null"`
 	// Suppressed counts records the flood bound folded into this row instead of adding one.
 	Suppressed int64 `gorm:"not null"`
+}
+
+// BeforeCreate assigns the row's opaque id.
+func (r *FailedEventRecord) BeforeCreate(*gorm.DB) error {
+	if r.RowID == "" {
+		var b [16]byte
+		if _, err := rand.Read(b[:]); err != nil {
+			return fmt.Errorf("mint a failed-event row id: %w", err)
+		}
+		r.RowID = hex.EncodeToString(b[:])
+	}
+	return nil
 }
 
 // DefaultOrder implements rdb.Sortable: newest first, ending in the stream position, which is

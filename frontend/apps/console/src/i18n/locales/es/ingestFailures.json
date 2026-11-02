@@ -16,6 +16,7 @@
   "noDevice": "no indicado",
   "overflowRow": "Más registros de este motivo",
   "payloadExpired": "El evento original ya no se conserva; solo queda este resumen.",
+  "payloadNotRetained": "El original no se conservó.",
   "range1h": "Última hora",
   "range24h": "Últimas 24 horas",
   "range7d": "Últimos 7 días",

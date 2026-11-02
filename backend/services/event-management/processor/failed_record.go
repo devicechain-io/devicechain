@@ -27,6 +27,10 @@ type FailedRecord struct {
 	DeviceToken string
 	EventType   *int64
 	Error       string
+	// PayloadRetained is whether the envelope carried an archived event at all. It is a fact
+	// about the record, decided here once and stored, so "the original was never kept" is not
+	// confused with "the stream has since discarded it".
+	PayloadRetained bool
 }
 
 // ParseFailedRecord reads one failed-events record.
@@ -42,7 +46,11 @@ type FailedRecord struct {
 // device-management archives the UNRESOLVED event, as the sender framed it (the device token is
 // the sender's claim); event-management archives the RESOLVED event it could not store (the
 // token is the device's own). A reason of Invalid archives either nothing or the raw bytes that
-// would not parse, which are not read at all.
+// would not parse; device-management's Invalid records carry no payload, but
+// event-management's Invalid is ALSO written for a resolved event the database refused
+// deterministically (bad data), and that record carries a valid PResolvedEvent with the
+// device's token. So an event-management record is decoded whatever its reason, and bytes
+// that were never an event simply fail to decode and leave the device empty.
 func ParseFailedRecord(value []byte) (*FailedRecord, error) {
 	pf := &resolvedevent.PFailedEvent{}
 	if err := proto.Unmarshal(value, pf); err != nil {
@@ -52,8 +60,13 @@ func ParseFailedRecord(value []byte) (*FailedRecord, error) {
 		Reason:     int32(pf.Reason),
 		SourceArea: model.SanitizeFailedEventText(pf.Service, 64),
 		Error:      tenantVisibleError(pf),
+
+		PayloadRetained: len(pf.Payload) > 0,
 	}
-	if len(pf.Payload) == 0 || pf.Reason == resolvedevent.FailureReason_Invalid {
+	if len(pf.Payload) == 0 {
+		return rec, nil
+	}
+	if pf.Reason == resolvedevent.FailureReason_Invalid && pf.Service != areaEventManagement {
 		return rec, nil
 	}
 	switch pf.Service {

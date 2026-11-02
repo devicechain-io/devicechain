@@ -50,13 +50,13 @@ A fleet with one wrong credential can be refused thousands of events a second. T
 - at most **10 records an hour** are kept per device and reason; every further record is **counted** on the newest of them (the **Also folded in** column);
 - at most **1,000 records an hour** are itemized per reason, across all devices. A probe of invented tokens is bounded the same way; the rest are counted on a single row marked as further records for that reason.
 
-Nothing is lost from the counts: the totals in the reason chips include everything that was folded in. The counts are a measure of magnitude, not an audit: after a platform restart a count can lag by about a second's worth.
+Nothing is lost from the counts: the totals in the reason chips include everything that was folded in. The counts are a measure of magnitude, not an audit: counts are written about once a second, so during a database outage they wait in memory and a platform restart before it clears loses them.
 
 ## How long records are kept {#retention}
 
 Seven days by default. An operator changes it with `lifecycle.failedEventRetentionDays` in event-management's configuration (`0` keeps the records indefinitely); it is separate from `lifecycle.retentionDays`, which governs telemetry.
 
-The original event itself, where the platform archived one, stays on the platform's failure stream only until that stream's size bound rolls it off. A record whose original has rolled off is still listed, and says that the original is no longer held (`payloadStatus: EXPIRED` in the API). It is not an error.
+The original event itself, where the platform archived one, stays on the platform's failure stream only until that stream's size bound rolls it off. A record whose original has rolled off is still listed, and says that the original is no longer held (`payloadStatus: EXPIRED` in the API). It is not an error. Some records never had an original: when the platform could not read a message at all it kept nothing of it, and the console says "the original was not kept" (`payloadStatus: NOT_RETAINED`). The API never returns the original event itself.
 
 ## Deleting a tenant {#deletion}
 

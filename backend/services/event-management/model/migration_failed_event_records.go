@@ -23,6 +23,12 @@ import (
 // design rather than an omission: it stays on the stream, located by record_seq, so the
 // relational store never holds an archived device payload and an expired one reads as expired.
 //
+// row_id is the row's opaque public identity (random, minted by the writer): the API serves it
+// instead of record_seq, which is a position on a stream every tenant shares. payload_retained
+// says whether the record's envelope carried an archived event at all, decided when the record
+// was indexed; it is what lets "the original was never kept" read differently from "the stream
+// has rolled past it".
+//
 // suppressed counts records the flood bound folded into this row instead of inserting (see
 // FailedEventGate). It is the only column ever UPDATEd.
 //
@@ -42,6 +48,7 @@ import (
 var failedEventRecordsDDL = []string{
 	`CREATE TABLE IF NOT EXISTS "event-management".failed_event_records (
 		tenant_id varchar(128) NOT NULL,
+		row_id varchar(32) NOT NULL,
 		occurred_time timestamptz NOT NULL,
 		record_seq bigint NOT NULL,
 		source_area varchar(64) NOT NULL,
@@ -50,9 +57,13 @@ var failedEventRecordsDDL = []string{
 		event_type bigint,
 		error varchar(512) NOT NULL DEFAULT '',
 		correlation varchar(128) NOT NULL DEFAULT '',
+		payload_retained boolean NOT NULL,
 		suppressed bigint NOT NULL DEFAULT 0
 	)`,
-	`SELECT create_hypertable('"event-management".failed_event_records', 'occurred_time', if_not_exists => TRUE)`,
+	// create_default_indexes => FALSE: Timescale's own (occurred_time DESC) btree would be a
+	// fourth index on a table the three below already serve (every read is tenant-first and
+	// every write is the unique arbiter), paid for on every insert.
+	`SELECT create_hypertable('"event-management".failed_event_records', 'occurred_time', create_default_indexes => FALSE, if_not_exists => TRUE)`,
 	// A record's identity, and the arbiter that makes a redelivery add nothing.
 	`CREATE UNIQUE INDEX IF NOT EXISTS uq_failed_event_records_seq
 		ON "event-management".failed_event_records (tenant_id, record_seq, occurred_time)`,

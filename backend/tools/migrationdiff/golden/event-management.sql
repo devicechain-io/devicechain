@@ -21,7 +21,6 @@ CREATE FUNCTION analytics.reader_tenant() RETURNS text
  THEN substring(session_user::text from 11)
  END
  $$;
-CREATE INDEX failed_event_records_occurred_time_idx ON "event-management".failed_event_records USING btree (occurred_time DESC);
 CREATE INDEX idx_audit_tenant_time ON "event-management".audit_events USING btree (tenant_id, occurred_time DESC);
 CREATE INDEX idx_calculated_backfills_status_updated ON "event-management".calculated_backfills USING btree (status, updated_at);
 CREATE INDEX idx_calculated_backfills_tenant_profile ON "event-management".calculated_backfills USING btree (tenant_id, profile_token, created_at DESC);
@@ -132,6 +131,7 @@ CREATE TABLE "event-management".events (
 );
 CREATE TABLE "event-management".failed_event_records (
  tenant_id character varying(128) NOT NULL,
+ row_id character varying(32) NOT NULL,
  occurred_time timestamp with time zone NOT NULL,
  record_seq bigint NOT NULL,
  source_area character varying(64) NOT NULL,
@@ -140,6 +140,7 @@ CREATE TABLE "event-management".failed_event_records (
  event_type bigint,
  error character varying(512) DEFAULT ''::character varying NOT NULL,
  correlation character varying(128) DEFAULT ''::character varying NOT NULL,
+ payload_retained boolean NOT NULL,
  suppressed bigint DEFAULT 0 NOT NULL
 );
 CREATE TABLE "event-management".location_events (

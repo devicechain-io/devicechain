@@ -280,10 +280,13 @@ func (ix *FailedEventsIndexer) index(ctx context.Context, tenant string, rec *Fa
 		EventType:    rec.EventType,
 		Error:        rec.Error,
 		Correlation:  model.SanitizeFailedEventText(msg.CorrelationID(), 128),
+
+		PayloadRetained: rec.PayloadRetained,
 	}
 	if d.Verdict == VerdictAdmitOverflow {
 		row.DeviceToken = model.OverflowDeviceToken
 		row.EventType = nil
+		row.PayloadRetained = false
 		row.Error = "further records for this reason were not itemized; they are counted here"
 	}
 	if _, err := ix.Store.InsertFailedEventRecord(ctx, row); err != nil {

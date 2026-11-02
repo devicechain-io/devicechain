@@ -50,13 +50,13 @@ Una flota con una sola credencial incorrecta puede ver rechazados miles de event
 - se conservan como máximo **10 registros por hora** por dispositivo y motivo; cada registro adicional se **cuenta** en el más reciente de ellos (la columna **Agrupados además**);
 - se detallan como máximo **1000 registros por hora** por motivo, entre todos los dispositivos. Un sondeo con tokens inventados queda acotado igual; el resto se cuenta en una sola fila marcada como más registros de ese motivo.
 
-Los totales de los botones de motivo incluyen todo lo agrupado. Los contadores miden magnitud, no son una auditoría: tras reiniciar la plataforma un contador puede quedar atrasado en alrededor de un segundo.
+Los totales de los botones de motivo incluyen todo lo agrupado. Los contadores miden magnitud, no son una auditoría: los contadores se escriben aproximadamente una vez por segundo, así que durante una caída de la base de datos esperan en memoria y un reinicio de la plataforma antes de que se resuelva los pierde.
 
 ## Cuánto tiempo se conservan {#retention}
 
 Siete días por omisión. Un operador lo cambia con `lifecycle.failedEventRetentionDays` en la configuración de event-management (`0` conserva los registros indefinidamente); es independiente de `lifecycle.retentionDays`, que rige la telemetría.
 
-El evento original, cuando la plataforma archivó uno, permanece en el flujo de fallos de la plataforma solo hasta que el límite de tamaño de ese flujo lo descarta. Un registro cuyo original ya se descartó sigue en la lista e indica que el original ya no se conserva (`payloadStatus: EXPIRED` en la API). No es un error.
+El evento original, cuando la plataforma archivó uno, permanece en el flujo de fallos de la plataforma solo hasta que el límite de tamaño de ese flujo lo descarta. Un registro cuyo original ya se descartó sigue en la lista e indica que el original ya no se conserva (`payloadStatus: EXPIRED` en la API). No es un error. Algunos registros nunca tuvieron un original: cuando la plataforma no pudo leer un mensaje, no conservó nada de él, y la consola indica «el original no se conservó» (`payloadStatus: NOT_RETAINED`). La API nunca devuelve el evento original.
 
 ## Al eliminar un tenant {#deletion}
 

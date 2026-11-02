@@ -97,17 +97,20 @@ export type EventSearchCriteria = {
 };
 
 /**
- * Whether the original event behind a failure record can still be fetched by an operator from the
- * platform's failure stream. The stream keeps records for a bounded time, the same bound that rolls
- * its oldest records off unread, so this turns EXPIRED sooner or later for every record; a record
- * that is EXPIRED stays listed here and says so, rather than reading as an error or as empty.
+ * Whether the original event behind a failure record is still held on the platform's failure stream.
+ * The stream keeps records for a bounded time, the same bound that rolls its oldest records off
+ * unread, so a held original turns EXPIRED sooner or later; a record that is EXPIRED stays listed
+ * here and says so, rather than reading as an error or as empty. This API never returns the
+ * original, in any state.
  */
 export type FailedEventPayloadStatus =
   /** The stream still holds the original. */
   | 'AVAILABLE'
   /** The stream has discarded the original to make room; only this summary remains. */
   | 'EXPIRED'
-  /** The stream could not be asked just now. Neither of the above is claimed. */
+  /** The record never held an original (the platform could not read the message and kept nothing of it, or this is the overflow row); it will not become AVAILABLE or EXPIRED. */
+  | 'NOT_RETAINED'
+  /** The stream could not be asked just now. None of the above is claimed. */
   | 'UNKNOWN';
 
 /**
@@ -135,7 +138,11 @@ export type FailedEventReason =
 
 /** Filters and paging for the failed-event list. All supplied filters must match. */
 export type FailedEventSearchCriteria = {
-  /** Only failures for this device token, exactly as the sender named it. */
+  /**
+   * Only failures for this device token, as the sender named it (a token longer than 128 bytes
+   * is matched as the platform stored it, cut to 128). The overflow row has no token and cannot be
+   * filtered for: "*" is refused with INVALID_VALUE.
+   */
   deviceToken?: string | null | undefined;
   /** Page to return, starting at 1; values below 1 are treated as 1. */
   pageNumber: number;
@@ -143,7 +150,10 @@ export type FailedEventSearchCriteria = {
   pageSize: number;
   /** Only failures for this reason. UNKNOWN selects every reason this version does not name. */
   reason?: FailedEventReason | null | undefined;
-  /** Only failures recorded at or after this instant, an RFC 3339 timestamp. */
+  /**
+   * Only failures recorded at or after this instant, an RFC 3339 timestamp. Defaults to, and is
+   * capped at, 31 days ago.
+   */
   since?: string | null | undefined;
   /** Only failures recorded at or before this instant, an RFC 3339 timestamp. */
   until?: string | null | undefined;
@@ -255,7 +265,7 @@ export type FailedEventsQueryVariables = Exact<{
 }>;
 
 
-export type FailedEventsQuery = { failedEvents: { results: Array<{ recordSeq: string, occurredTime: string, sourceArea: string, reason: FailedEventReason, reasonCode: number, deviceToken: string | null, eventType: number | null, error: string, correlation: string, suppressed: number, overflow: boolean, payloadStatus: FailedEventPayloadStatus }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+export type FailedEventsQuery = { failedEvents: { results: Array<{ id: string, occurredTime: string, sourceArea: string, reason: FailedEventReason, reasonCode: number, deviceToken: string | null, eventType: number | null, error: string, correlation: string, suppressed: number, overflow: boolean, payloadStatus: FailedEventPayloadStatus }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
 export type FailedEventSummaryQueryVariables = Exact<{
   since: string;
@@ -414,7 +424,7 @@ export const FailedEventsDocument = new TypedDocumentString(`
     query FailedEvents($criteria: FailedEventSearchCriteria!) {
   failedEvents(criteria: $criteria) {
     results {
-      recordSeq
+      id
       occurredTime
       sourceArea
       reason

@@ -139,8 +139,8 @@
       "translationSha256": "86a5f006196e7dbafad027d32f2aefd71fb367b2eaa38bdf7af15d5a802e7222"
     },
     "deployment/observability.md": {
-      "sourceSha256": "8712248f2af525ad79501a65e0f7a5e513447899c97695fa5ef8a2794c67da06",
-      "translationSha256": "5bc591cc9d55b34e8a0f21a4a6b7828adef08aa8a1772f773e4115fedf7e0884"
+      "sourceSha256": "0590be80c3e1e9804f8c28a132b0dfa43a8d6044be34669c3492416fd4461395",
+      "translationSha256": "3efe0d4e30d98646584803144de0939d0ffcb06ad72eed1e36561ad75b13c884"
     },
     "deployment/releases-and-upgrades.md": {
       "sourceSha256": "5519bf7ef8a6450e445c064ab773604fcbe8fe4eda3097372fef510c51cc2d81",
@@ -243,8 +243,8 @@
       "translationSha256": "80398d3b7641afe635a4ca6a8fa0052f02f264cda8f34ce0977189199c584e85"
     },
     "guides/why-isnt-my-data-showing-up.md": {
-      "sourceSha256": "658e20f5efb6da4c0f6615007ebcac97c53731ec6cd680ad60ec11fcbb362071",
-      "translationSha256": "b74134ce024c405b02674f9b8dd13d95c3429019bb695417b66e77a7531be667"
+      "sourceSha256": "76af6f16aa6c56eaf2fdfe019054cdad0d39450f72f66ee8cf37bd14a429d758",
+      "translationSha256": "326d2e264d8656a71c1b97b84961eb16577bc152e425546a8e2a931f8ad5de3a"
     },
     "guides/widget-versions-and-compatibility.md": {
       "sourceSha256": "11cdfdffa5b333142fb41b13646e9aa523d0abb5c605fe55835569c2232a0098",

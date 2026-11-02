@@ -198,8 +198,9 @@ var compressSegmentBy = map[string]string{
 
 	// The failed-events index: bounded by its flood gate to a handful of rows per device per
 	// hour, so far below the break-even for a per-device key, and read by tenant first. Its
-	// default window (7 days) equals the compression window, so it is dropped before it is
-	// compressed unless an operator lengthens it.
+	// default window (7 days) equals the compression window, so the two policies come due on
+	// the same chunk at the same time and which one runs first is not defined; either way the
+	// chunk is gone in the end, and compression only matters once an operator lengthens it.
 	FailedEventsHypertable: "tenant_id",
 }
 

@@ -31,7 +31,7 @@ vi.mock('@/auth/AuthProvider', () => ({
 import IngestFailuresPage from './IngestFailuresPage';
 
 const row = (over: Record<string, unknown>) => ({
-  recordSeq: '1',
+  id: 'a1',
   occurredTime: '2026-11-02T12:00:00Z',
   sourceArea: 'device-management',
   reason: 'DEVICE_NOT_FOUND',
@@ -51,9 +51,9 @@ beforeEach(async () => {
   scopeAnchors = [];
   listFailedEvents.mockReset().mockResolvedValue({
     results: [
-      row({ recordSeq: '3', suppressed: 41, payloadStatus: 'EXPIRED' }),
-      row({ recordSeq: '2', reason: 'UNKNOWN', reasonCode: 99, deviceToken: null, error: 'x' }),
-      row({ recordSeq: '1', overflow: true, deviceToken: null }),
+      row({ id: 'a3', suppressed: 41, payloadStatus: 'EXPIRED' }),
+      row({ id: 'a2', reason: 'UNKNOWN', reasonCode: 99, deviceToken: null, error: 'x', payloadStatus: 'NOT_RETAINED' }),
+      row({ id: 'a1', overflow: true, deviceToken: null }),
     ],
     pagination: { pageStart: 1, pageEnd: 3, totalRecords: 3 },
   });
@@ -80,6 +80,8 @@ describe('IngestFailuresPage', () => {
     expect(screen.getByText('Further records for this reason')).toBeTruthy();
     // an expired original reads as expired, on the row that has one
     expect(screen.getAllByText(/no longer held/)).toHaveLength(1);
+    // a record that never held one says so, in its own words
+    expect(screen.getAllByText('The original was not kept.')).toHaveLength(1);
     // the chip carries the summary's count
     expect(await screen.findByText(/Unknown device · 43/)).toBeTruthy();
   });

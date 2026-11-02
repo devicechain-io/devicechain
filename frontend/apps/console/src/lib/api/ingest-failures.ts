@@ -21,7 +21,7 @@ const FAILED_EVENTS = graphql(`
   query FailedEvents($criteria: FailedEventSearchCriteria!) {
     failedEvents(criteria: $criteria) {
       results {
-        recordSeq
+        id
         occurredTime
         sourceArea
         reason

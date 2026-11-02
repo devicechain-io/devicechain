@@ -37,7 +37,7 @@ func seedFailed(t *testing.T, api *model.Api, tenant string, seq int64, at time.
 	t.Helper()
 	ctx := core.WithTenant(context.Background(), tenant)
 	_, err := api.InsertFailedEventRecord(ctx, &model.FailedEventRecord{OccurredTime: at, RecordSeq: seq,
-		SourceArea: "device-management", Reason: reason, DeviceToken: device, Error: "no such device"})
+		SourceArea: "device-management", Reason: reason, DeviceToken: device, Error: "no such device", PayloadRetained: true})
 	require.NoError(t, err)
 }
 
@@ -54,7 +54,7 @@ func TestFailedEventsQueryIsTenantAdminOnly(t *testing.T) {
 	schema := gqlcore.MustParseSchema(SchemaContent, &SchemaResolver{})
 
 	const q = `query { failedEvents(criteria: {pageNumber: 1, pageSize: 10, reason: DEVICE_NOT_FOUND}) {
-		results { recordSeq reason reasonCode deviceToken error suppressed overflow payloadStatus }
+		results { id reason reasonCode deviceToken error suppressed overflow payloadStatus }
 		pagination { totalRecords } } }`
 	run := func(ctx context.Context) (rows []map[string]interface{}, codes []string) {
 		resp := schema.Exec(ctx, q, "", nil)
@@ -78,7 +78,7 @@ func TestFailedEventsQueryIsTenantAdminOnly(t *testing.T) {
 	rows, codes := run(admin)
 	require.Empty(t, codes)
 	require.Len(t, rows, 1, "only the DEVICE_NOT_FOUND row of this tenant")
-	assert.Equal(t, "7", rows[0]["recordSeq"])
+	assert.Regexp(t, `^[0-9a-f]{32}$`, rows[0]["id"], "an opaque id, not the stream position")
 	assert.Equal(t, "DEVICE_NOT_FOUND", rows[0]["reason"])
 	assert.EqualValues(t, 3, rows[0]["reasonCode"])
 	assert.Equal(t, "ghost-1", rows[0]["deviceToken"])
@@ -194,11 +194,107 @@ func (f fakeFirst) StreamFirstSequence(context.Context, string) (uint64, error) 
 // AVAILABLE, and a stream that cannot be asked reads UNKNOWN. None of the three is an error.
 func TestAnExpiredPayloadReadsExpiredNotAnError(t *testing.T) {
 	w := askWatermark(context.Background(), fakeFirst{first: 100})
-	assert.Equal(t, "EXPIRED", payloadStatusOf(w, 99))
-	assert.Equal(t, "AVAILABLE", payloadStatusOf(w, 100))
-	assert.Equal(t, "AVAILABLE", payloadStatusOf(w, 5000))
+	assert.Equal(t, "EXPIRED", payloadStatusOf(w, 99, true))
+	assert.Equal(t, "AVAILABLE", payloadStatusOf(w, 100, true))
+	assert.Equal(t, "AVAILABLE", payloadStatusOf(w, 5000, true))
+	assert.Equal(t, "NOT_RETAINED", payloadStatusOf(w, 5000, false), "a record that never held an original is not 'available'")
+	assert.Equal(t, "NOT_RETAINED", payloadStatusOf(w, 99, false), "nor 'expired'")
 
 	down := askWatermark(context.Background(), fakeFirst{err: errors.New("broker unreachable")})
-	assert.Equal(t, "UNKNOWN", payloadStatusOf(down, 99), "an unanswered question is not 'expired'")
-	assert.Equal(t, "UNKNOWN", payloadStatusOf(payloadWatermark{}, 0))
+	assert.Equal(t, "UNKNOWN", payloadStatusOf(down, 99, true), "an unanswered question is not 'expired'")
+	assert.Equal(t, "UNKNOWN", payloadStatusOf(payloadWatermark{}, 0, true))
+}
+
+// The SDL's payload-status enum is exactly what payloadStatusOf can answer.
+func TestThePayloadStatusEnumMatchesWhatTheResolverAnswers(t *testing.T) {
+	declared := enumValues(t, "FailedEventPayloadStatus")
+	w := askWatermark(context.Background(), fakeFirst{first: 100})
+	answered := map[string]bool{
+		payloadStatusOf(w, 99, true):                   true,
+		payloadStatusOf(w, 100, true):                  true,
+		payloadStatusOf(payloadWatermark{}, 100, true): true,
+		payloadStatusOf(w, 100, false):                 true,
+	}
+	var got []string
+	for v := range answered {
+		got = append(got, v)
+	}
+	assert.ElementsMatch(t, declared, got)
+	assert.NotContains(t, declared, "NOT_A_STATUS", "control: the extraction sees a value that is missing")
+}
+
+// The stream position is not part of the tenant's schema: it is a position on a stream every
+// tenant shares.
+func TestTheStreamPositionIsNotServed(t *testing.T) {
+	api := failedEventsApi(t)
+	seedFailed(t, api, "acme", 5, time.Now().UTC(), int32(resolvedevent.FailureReason_DeviceNotFound), "dev")
+	schema := gqlcore.MustParseSchema(SchemaContent, &SchemaResolver{})
+	admin := scopedCtx(api, "acme", nil, string(auth.DeviceWrite))
+	resp := schema.Exec(admin, `query { failedEvents(criteria: {pageNumber: 1, pageSize: 10}) { results { recordSeq } } }`, "", nil)
+	assert.NotEmpty(t, resp.Errors, "recordSeq must not be a field of FailedEvent")
+	resp = schema.Exec(admin, `query { failedEvents(criteria: {pageNumber: 1, pageSize: 10}) { results { id } } }`, "", nil)
+	require.Empty(t, resp.Errors, "control: the same query with the opaque id succeeds")
+}
+
+// Every read of the index looks back at most 31 days, and a device filter means what the writer
+// stored.
+func TestQueryBoundsAndFilterNormalization(t *testing.T) {
+	api := failedEventsApi(t)
+	now := time.Now().UTC()
+	long := strings.Repeat("a", 128)
+	nf := int32(resolvedevent.FailureReason_DeviceNotFound)
+	seedFailed(t, api, "acme", 1, now.Add(-40*24*time.Hour), nf, "old-dev")
+	seedFailed(t, api, "acme", 2, now.Add(-time.Hour), nf, "new-dev")
+	seedFailed(t, api, "acme", 3, now.Add(-time.Minute), nf, long)
+	schema := gqlcore.MustParseSchema(SchemaContent, &SchemaResolver{})
+	admin := scopedCtx(api, "acme", nil, string(auth.DeviceWrite))
+	tokens := func(q string, vars map[string]interface{}) ([]string, int) {
+		resp := schema.Exec(admin, q, "", vars)
+		var data struct {
+			FailedEvents struct {
+				Results []struct{ DeviceToken string }
+			}
+		}
+		if len(resp.Errors) == 0 {
+			require.NoError(t, json.Unmarshal(resp.Data, &data))
+		}
+		var out []string
+		for _, r := range data.FailedEvents.Results {
+			out = append(out, r.DeviceToken)
+		}
+		return out, len(resp.Errors)
+	}
+
+	// No since: the default window, not everything the table holds.
+	got, _ := tokens(`query { failedEvents(criteria: {pageNumber: 1, pageSize: 10}) { results { deviceToken } } }`, nil)
+	assert.ElementsMatch(t, []string{"new-dev", long}, got, "the 40-day-old row is outside the default window")
+	// A since older than the floor is clamped to it.
+	got, _ = tokens(`query($s: String) { failedEvents(criteria: {pageNumber: 1, pageSize: 10, since: $s}) { results { deviceToken } } }`,
+		map[string]interface{}{"s": now.Add(-90 * 24 * time.Hour).Format(time.RFC3339)})
+	assert.ElementsMatch(t, []string{"new-dev", long}, got, "a since beyond 31 days reads 31 days")
+	// A narrower since is honoured.
+	got, _ = tokens(`query($s: String) { failedEvents(criteria: {pageNumber: 1, pageSize: 10, since: $s}) { results { deviceToken } } }`,
+		map[string]interface{}{"s": now.Add(-10 * time.Minute).Format(time.RFC3339)})
+	assert.Equal(t, []string{long}, got)
+
+	// A token longer than the column is found the way the writer stored it.
+	got, _ = tokens(`query($t: String) { failedEvents(criteria: {pageNumber: 1, pageSize: 10, deviceToken: $t}) { results { deviceToken } } }`,
+		map[string]interface{}{"t": long + "bbbb"})
+	assert.Equal(t, []string{long}, got)
+
+	// The overflow marker is refused on the list and on the count.
+	_, errs := tokens(`query { failedEvents(criteria: {pageNumber: 1, pageSize: 10, deviceToken: "*"}) { results { deviceToken } } }`, nil)
+	assert.NotZero(t, errs)
+	cnt := schema.Exec(admin, `query { failedEventCount(deviceToken: "*", since: "2020-01-01T00:00:00Z") }`, "", nil)
+	assert.NotEmpty(t, cnt.Errors)
+
+	// The count is clamped too: the 40-day-old row is not counted from a since beyond the floor.
+	count := func(tok string) string {
+		r := schema.Exec(admin, `query($t: String!) { failedEventCount(deviceToken: $t, since: "2020-01-01T00:00:00Z") }`, "",
+			map[string]interface{}{"t": tok})
+		require.Empty(t, r.Errors)
+		return string(r.Data)
+	}
+	assert.JSONEq(t, `{"failedEventCount":0}`, count("old-dev"))
+	assert.JSONEq(t, `{"failedEventCount":1}`, count("new-dev"), "control: a row inside the floor is counted")
 }

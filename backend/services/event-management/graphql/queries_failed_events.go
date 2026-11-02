@@ -16,6 +16,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/devicechain-io/dc-microservice/streams"
+	gql "github.com/graph-gophers/graphql-go"
 )
 
 // The failed-events index (tenant plane). Every field requires device:write through
@@ -70,9 +71,30 @@ type FailedEventSearchCriteriaInput struct {
 	Until       *string
 }
 
-func toFailedEventCriteria(in FailedEventSearchCriteriaInput) (model.FailedEventSearchCriteria, error) {
-	c := model.FailedEventSearchCriteria{DeviceToken: in.DeviceToken, KnownReasons: model.KnownReasonCodes()}
+// claimedFilter makes a device token the caller names fit what the index stores: the same
+// normalization the writer applied to the sender's claim. The overflow marker is refused rather
+// than normalized: it stands for no device, and a filter on it would be a way to ask for the
+// platform's own bookkeeping row by name.
+func claimedFilter(raw string) (string, error) {
+	if raw == model.OverflowDeviceToken {
+		return "", integrity.NewRefusal(integrity.ClassInvalid, "deviceToken is not a device token")
+	}
+	return model.ClaimedDeviceToken(raw), nil
+}
+
+// readFloor is the oldest instant any read of the index looks at, as of now.
+func readFloor(now time.Time) time.Time { return now.Add(-model.MaxFailedEventSummarySpan) }
+
+func toFailedEventCriteria(in FailedEventSearchCriteriaInput, now time.Time) (model.FailedEventSearchCriteria, error) {
+	c := model.FailedEventSearchCriteria{KnownReasons: model.KnownReasonCodes()}
 	c.PageNumber, c.PageSize = in.PageNumber, in.PageSize
+	if in.DeviceToken != nil {
+		tok, err := claimedFilter(*in.DeviceToken)
+		if err != nil {
+			return c, err
+		}
+		c.DeviceToken = &tok
+	}
 	if in.Reason != nil {
 		if *in.Reason == reasonUnknown {
 			c.UnknownReasons = true
@@ -82,13 +104,19 @@ func toFailedEventCriteria(in FailedEventSearchCriteriaInput) (model.FailedEvent
 			return c, integrity.NewRefusal(integrity.ClassInvalid, fmt.Sprintf("%q is not a failure reason", *in.Reason))
 		}
 	}
+	// The window defaults to, and is clamped to, the longest span the index is read over: an
+	// unbounded list is a scan of everything the table holds.
+	since := readFloor(now)
 	if in.Since != nil {
 		t, err := parseInstant("since", *in.Since)
 		if err != nil {
 			return c, err
 		}
-		c.Since = &t
+		if t.After(since) {
+			since = t
+		}
 	}
+	c.Since = &since
 	if in.Until != nil {
 		t, err := parseInstant("until", *in.Until)
 		if err != nil {
@@ -106,7 +134,7 @@ func (r *SchemaResolver) FailedEvents(ctx context.Context, args struct {
 	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
 		return nil, err
 	}
-	criteria, err := toFailedEventCriteria(args.Criteria)
+	criteria, err := toFailedEventCriteria(args.Criteria, time.Now())
 	if err != nil {
 		return nil, err
 	}
@@ -152,8 +180,13 @@ func askWatermark(ctx context.Context, q firstSequencer) payloadWatermark {
 
 // payloadStatusOf says whether the stream still holds the record at seq. When the stream could
 // not be asked it says UNKNOWN: neither "held" nor "gone" is claimed for a record nobody looked at.
-func payloadStatusOf(w payloadWatermark, seq int64) string {
+//
+// A record whose envelope carried no archived event reads NOT_RETAINED whatever the stream holds:
+// there never was an original, which is a different thing from one that has since expired.
+func payloadStatusOf(w payloadWatermark, seq int64, retained bool) string {
 	switch {
+	case !retained:
+		return "NOT_RETAINED"
 	case !w.known || seq <= 0:
 		return "UNKNOWN"
 	case uint64(seq) < w.first:
@@ -174,7 +207,7 @@ func (r *SchemaResolver) FailedEventSummary(ctx context.Context, args struct {
 	if err != nil {
 		return nil, err
 	}
-	if floor := time.Now().Add(-model.MaxFailedEventSummarySpan); since.Before(floor) {
+	if floor := readFloor(time.Now()); since.Before(floor) {
 		since = floor
 	}
 	lines, err := r.GetApi(ctx).FailedEventSummary(ctx, since)
@@ -200,7 +233,14 @@ func (r *SchemaResolver) FailedEventCount(ctx context.Context, args struct {
 	if err != nil {
 		return 0, err
 	}
-	n, err := r.GetApi(ctx).DeviceFailedEventCount(ctx, model.ClaimedDeviceToken(args.DeviceToken), since)
+	if floor := readFloor(time.Now()); since.Before(floor) {
+		since = floor
+	}
+	token, err := claimedFilter(args.DeviceToken)
+	if err != nil {
+		return 0, err
+	}
+	n, err := r.GetApi(ctx).DeviceFailedEventCount(ctx, token, since)
 	if err != nil {
 		return 0, err
 	}
@@ -243,9 +283,13 @@ type FailedEventResolver struct {
 	W payloadWatermark
 }
 
-func (r *FailedEventResolver) PayloadStatus() string { return payloadStatusOf(r.W, r.M.RecordSeq) }
+func (r *FailedEventResolver) PayloadStatus() string {
+	return payloadStatusOf(r.W, r.M.RecordSeq, r.M.PayloadRetained)
+}
 
-func (r *FailedEventResolver) RecordSeq() string { return fmt.Sprintf("%d", r.M.RecordSeq) }
+// ID is the row's opaque identity. The record's stream position is not served: it is a position
+// on a stream shared by every tenant.
+func (r *FailedEventResolver) ID() gql.ID { return gql.ID(r.M.RowID) }
 func (r *FailedEventResolver) OccurredTime() string {
 	return r.M.OccurredTime.UTC().Format(time.RFC3339Nano)
 }

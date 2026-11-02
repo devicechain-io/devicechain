@@ -16,6 +16,7 @@
   "noDevice": "none named",
   "overflowRow": "Further records for this reason",
   "payloadExpired": "The original event is no longer held; only this summary remains.",
+  "payloadNotRetained": "The original was not kept.",
   "range1h": "Last hour",
   "range24h": "Last 24 hours",
   "range7d": "Last 7 days",
