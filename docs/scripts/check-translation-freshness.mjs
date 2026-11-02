@@ -3,6 +3,14 @@
 
 // English is the reference. Freshness is advisory by default: translations may
 // be refreshed in batches, independently of English documentation changes.
+//
+// SCOPE: the LIVING docs only (docs/docs against i18n/<locale>/.../current, with the
+// source-manifest.json beside it). The frozen snapshots (versioned_docs/version-X.Y and
+// i18n/<locale>/.../version-X.Y) are deliberately NOT checked and have no manifest: a
+// snapshot is copied from `current` whole, English and translations together, at the
+// release, and is never edited again, so "English changed since the last review" cannot
+// happen there and a notice would be unfixable noise. Their completeness is the locale-parity
+// guard's job (hack/check-docs-locale-parity.sh); their skeletons, the structure guard's.
 import { createHash } from 'node:crypto';
 import { readFile, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';

@@ -12,6 +12,9 @@ import { themes as prismThemes } from 'prism-react-renderer';
 const generatedReference = resolve(__dirname, 'generated/graphql-reference');
 const searchDocsDirs = [
   'docs',
+  // The frozen snapshots (`docusaurus docs:version`) are indexed pages too, so they must be in
+  // the content hash: a snapshot that changed would otherwise leave the index file name alone.
+  'versioned_docs',
   'i18n',
   ...(existsSync(generatedReference) ? ['generated/graphql-reference'] : []),
 ];
@@ -91,6 +94,29 @@ const config: Config = {
         docs: {
           routeBasePath: '/', // docs are the site root
           sidebarPath: './sidebars.ts',
+          // VERSIONING. `docs/docs` + `i18n/<locale>/.../current` are the LIVING docs (the next,
+          // unreleased release); `versioned_docs/version-X.Y` + `versioned_sidebars` +
+          // `i18n/<locale>/.../version-X.Y` are FROZEN snapshots cut by
+          // `npx docusaurus docs:version X.Y` at each release (see docs/README.md).
+          // Readers land on `lastVersion` at the site root (/…); the living docs are served
+          // under /next/… with an unreleased banner. Authors keep editing `docs/docs` only.
+          // The guards deliberately treat the two differently: translation freshness, the
+          // docs-drafts rot guard and the generated-reference checks follow the living tree;
+          // ADR-reference scanning and locale parity cover the snapshots too.
+          lastVersion: '1.0',
+          versions: {
+            current: {
+              label: 'Next',
+              path: 'next',
+              banner: 'unreleased',
+              badge: true,
+            },
+            '1.0': {
+              label: '1.0',
+              badge: true,
+              banner: 'none',
+            },
+          },
           editUrl: 'https://github.com/devicechain-io/devicechain/tree/main/docs/',
         },
         blog: false,
@@ -168,6 +194,8 @@ const config: Config = {
       },
       items: [
         { type: 'docSidebar', sidebarId: 'docs', position: 'left', label: 'Docs' },
+        // Version switcher: the released snapshots plus Next (the living docs).
+        { type: 'docsVersionDropdown', position: 'right' },
         { type: 'localeDropdown', position: 'right' },
         // Rendered as icons, not text — see `.navbar-social` in src/css/custom.css
         // for how, and for why the label below still has to be a real word rather

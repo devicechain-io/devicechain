@@ -13,7 +13,8 @@
 #
 # The line this draws:
 #
-#   Rendered documentation   docs/docs, docs/i18n, docs/blog, docs/src  -> NO ADR refs
+#   Rendered documentation   docs/docs, docs/versioned_docs, docs/versioned_sidebars,
+#                            docs/i18n, docs/blog, docs/src             -> NO ADR refs
 #   Draft feature docs       docs-drafts/**/*.md, body only            -> NO ADR refs
 #   npm registry metadata    frontend/packages/*/package.json          -> NO ADR refs
 #   npm package readme       frontend/packages/*/README.md, scanned whole -> NO ADR refs
@@ -66,7 +67,13 @@ cd "$ROOT"
 
 # Rendered content only. docs/build is generated output and is not checked —
 # it is a copy of what these sources already say.
-TARGETS=(docs/docs docs/i18n docs/blog docs/src)
+#
+# The FROZEN snapshots are INCLUDED deliberately: docs/versioned_docs and
+# docs/versioned_sidebars are served to readers exactly like the living docs, and their
+# translations live under docs/i18n/<locale>/.../version-X.Y (already covered by
+# docs/i18n). A snapshot is a copy cut from a tree this guard already passed, so it
+# starts clean, and scanning it keeps a hand-edit of a frozen page honest.
+TARGETS=(docs/docs docs/versioned_docs docs/versioned_sidebars docs/i18n docs/blog docs/src)
 PATTERN='ADR-[0-9]{3}'
 
 scan() {

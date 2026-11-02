@@ -607,6 +607,9 @@ func newDocsScan() *docsScan {
 }
 
 // docsTrees returns docs/docs and every locale's current tree under repo, relative to it.
+// The frozen versioned snapshots (docs/versioned_docs, .../version-X.Y) are left out on
+// purpose: they record the commands a past release shipped, and checking them against
+// today's command tree would fail the moment a command is renamed.
 func docsTrees(repo string) ([]string, error) {
 	trees := []string{filepath.Join("docs", "docs")}
 	locales, err := filepath.Glob(filepath.Join(repo, "docs", "i18n", "*", "docusaurus-plugin-content-docs", "current"))

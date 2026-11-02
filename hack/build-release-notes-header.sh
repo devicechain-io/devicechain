@@ -46,18 +46,35 @@ anchor_for() {
   echo "${base//./}-upgrade"
 }
 
-emit() { # <tag> <highlights.json> <docs-file-or-empty>
-  local tag="$1" hl="$2" docs="$3"
+# 🔴 WHICH URL, now that the docs site is versioned. The site root serves the LATEST
+# FROZEN snapshot (docusaurus `lastVersion`), and the living docs (docs/docs) are served
+# under /next/. A release is tagged BEFORE its snapshot is cut, so its upgrade section is
+# in the living docs only at tag time, and the unversioned URL would land on a page that
+# lacks it (the link would still resolve, to the top of the page). So:
+#
+#   anchor in the latest frozen snapshot  -> https://docs.devicechain.io/deployment/...
+#                                            (the stable default; a rebuilt older header
+#                                            keeps a working link forever)
+#   anchor only in the living docs        -> https://docs.devicechain.io/next/deployment/...
+#                                            (a release being tagged now)
+#   anchor in neither                     -> fail, as before
+emit() { # <tag> <highlights.json> <living-docs-file-or-empty> [frozen-docs-file]
+  local tag="$1" hl="$2" docs="$3" frozen="${4:-}"
+  local site="https://docs.devicechain.io"
   local base="${tag%%-*}"
   local anchor; anchor="$(anchor_for "$tag")"
   local theme; theme="$(jq -r '(.theme // "") | gsub("^\\s+|\\s+$";"")' "$hl")"
-  local url="https://docs.devicechain.io/deployment/releases-and-upgrades#${anchor}"
+  local url="${site}/deployment/releases-and-upgrades#${anchor}"
 
   # An anchor that does not exist silently lands the reader at the top of a long
   # page, which is indistinguishable from a working link until someone follows
   # it. If we are pointing at a section, the section has to be there.
   if [ -n "$docs" ]; then
-    if ! grep -q "{#${anchor}}" "$docs"; then
+    if [ -n "$frozen" ] && [ -f "$frozen" ] && grep -q "{#${anchor}}" "$frozen"; then
+      :  # published in the latest snapshot: the unversioned URL serves it
+    elif grep -q "{#${anchor}}" "$docs"; then
+      url="${site}/next/deployment/releases-and-upgrades#${anchor}"
+    else
       echo "::error::the upgrade guide has no {#${anchor}} section for ${tag}. Add it to $(basename "$docs") (and its es mirror) before tagging." >&2
       return 1
     fi
@@ -142,6 +159,18 @@ if [ "${1:-}" = "--self-test" ]; then
   fi
   echo "  ok: a missing upgrade-guide section is refused"
 
+  # The versioned-site URL: a section only in the living docs links under /next/; one that
+  # is already in the latest frozen snapshot links at the unversioned root.
+  printf '### v0.9.0 — x {#v090-upgrade}
+' > "$docs"
+  : > "$tmp/frozen.md"
+  out="$(emit v0.9.0 "$hl" "$docs" "$tmp/frozen.md")"
+  grep -q 'docs.devicechain.io/next/deployment/releases-and-upgrades#v090-upgrade' <<<"$out"     || { echo "  FAIL: a section only in the living docs did not link under /next/" >&2; exit 1; }
+  cp "$docs" "$tmp/frozen.md"
+  out="$(emit v0.9.0 "$hl" "$docs" "$tmp/frozen.md")"
+  grep -q 'docs.devicechain.io/deployment/releases-and-upgrades#v090-upgrade' <<<"$out"     && ! grep -q '/next/' <<<"$out"     || { echo "  FAIL: a section in the latest snapshot did not link at the unversioned root" >&2; exit 1; }
+  echo "  ok: the link is /next/ until the section is frozen into the latest snapshot"
+
   echo "==> Self-test passed"
   exit 0
 fi
@@ -153,4 +182,11 @@ DOCS="$ROOT/docs/docs/deployment/releases-and-upgrades.md"
 # One guard, two callers: the version/emptiness rules live in that script.
 "$ROOT/hack/check-release-highlights.sh" "$TAG" "$HL" >/dev/null
 
-emit "$TAG" "$HL" "$DOCS"
+# The latest frozen snapshot of the same page, if any (docs/versions.json lists newest first).
+FROZEN=""
+if [ -f "$ROOT/docs/versions.json" ]; then
+  latest="$(jq -r '.[0] // empty' "$ROOT/docs/versions.json")"
+  [ -n "$latest" ] && FROZEN="$ROOT/docs/versioned_docs/version-${latest}/deployment/releases-and-upgrades.md"
+fi
+
+emit "$TAG" "$HL" "$DOCS" "$FROZEN"

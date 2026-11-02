@@ -105,7 +105,11 @@ check_drafts() {
     while IFS= read -r s; do
       [ -n "$s" ] || continue
       symbol_is_allowed "$s" && continue
-      grep -rqF -- "$s" "${roots[@]}" 2>/dev/null && continue
+      # The frozen docs snapshots (docs/versioned_docs, docs/versioned_sidebars and the
+      # i18n version-* trees) are EXCLUDED on purpose: they are copies of what the docs
+      # said at a past release, so a symbol that only survives there has been removed from
+      # the tree and is exactly the rot this check exists to report.
+      grep -rqF --exclude-dir=versioned_docs --exclude-dir=versioned_sidebars         --exclude-dir='version-*' -- "$s" "${roots[@]}" 2>/dev/null && continue
       problems+="${f}: names a symbol that appears nowhere in the tree: ${s}"$'\n'
     done < <(draft_symbols "$f")
   done < <(find "$base" -type f -name '*.md' -print0)

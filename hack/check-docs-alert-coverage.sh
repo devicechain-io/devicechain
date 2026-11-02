@@ -50,6 +50,10 @@ check() {
     return 1
   fi
 
+  # LIVING docs only (docs/docs and each locale's `current`), on purpose. The frozen
+  # snapshots (versioned_docs, i18n/.../version-X.Y) describe a past release's alerts; the
+  # chart's rules move on, and a new alert is documented in `current`, never retrofitted
+  # into a snapshot. Checking snapshots would fail every release after the one it froze.
   local trees=("$repo/docs/docs")
   for loc in "$repo"/docs/i18n/*/docusaurus-plugin-content-docs/current; do
     [ -d "$loc" ] && trees+=("$loc")

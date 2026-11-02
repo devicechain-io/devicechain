@@ -3,6 +3,34 @@
 User-facing documentation for DeviceChain, built with [Docusaurus 3](https://docusaurus.io/).
 Content lives under [`docs/`](./docs); some of it also feeds the public website.
 
+## Versions
+
+The site is versioned (Docusaurus docs versioning). `docs/docs` and each locale's
+`i18n/<locale>/docusaurus-plugin-content-docs/current` are the LIVING docs for the next,
+unreleased release; this is the only place to edit. Frozen snapshots sit beside them:
+
+| What | Where | URL |
+|---|---|---|
+| Latest release (`lastVersion` in `docusaurus.config.ts`) | `versioned_docs/version-X.Y`, `versioned_sidebars/`, `i18n/<locale>/.../version-X.Y` | `/…` (the site root) |
+| Next, unreleased (labelled with a banner) | `docs/` and `.../current` | `/next/…` |
+| An older release | `versioned_docs/version-X.Y` | `/X.Y/…` |
+
+`versions.json` lists the snapshots, newest first. Do not edit a snapshot except to fix a
+mistake in what that release shipped.
+
+To snapshot a release (for example 1.1), after the tag and before editing for the next
+release, from this directory: run `npm run prebuild` (the generated GraphQL reference must
+exist), then `npx docusaurus docs:version 1.1`. That copies `current` into
+`versioned_docs/version-1.1` and `versioned_sidebars`, and copies each locale's `current`
+into `version-1.1`. Then set `lastVersion` and add a `'1.1'` entry to `versions` in
+`docusaurus.config.ts`, and commit. Check that every locale got its copy (the
+locale-parity guard fails otherwise).
+
+Guards follow the living docs (translation freshness, the docs-drafts rot guard, alert
+coverage, the GraphQL and command example checks, and the Go tests that read pages),
+except ADR-reference scanning, locale parity and structure parity, which cover the
+snapshots too. Each states its choice where it is configured.
+
 ## Local development
 
 ```bash
