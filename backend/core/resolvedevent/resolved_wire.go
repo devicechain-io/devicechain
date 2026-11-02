@@ -85,6 +85,11 @@ const (
 	measurementsEntryReadings  = protowire.Number(1)
 	measurementsEntryTime      = protowire.Number(2)
 	measurementsEntryNanos     = protowire.Number(3)
+	measurementsEntryDropped   = protowire.Number(4)
+
+	droppedName   = protowire.Number(1)
+	droppedReason = protowire.Number(2)
+	droppedValue  = protowire.Number(3)
 
 	measurementName       = protowire.Number(1)
 	measurementValue      = protowire.Number(2)
@@ -366,7 +371,19 @@ func measurementsEntrySize(entry *ResolvedMeasurementsEntry, at wireInstant) (in
 		}
 		size += tagSize + protowire.SizeBytes(measurementSize(mx))
 	}
+	for j := range entry.Dropped {
+		d := &entry.Dropped[j]
+		if !utf8.ValidString(d.Name) || !utf8.ValidString(d.Reason) || !utf8.ValidString(d.Value) {
+			return 0, errResolvedNotUTF8
+		}
+		size += tagSize + protowire.SizeBytes(droppedSize(d))
+	}
 	return size, nil
+}
+
+// droppedSize is the encoded size of one PDroppedMeasurement's body.
+func droppedSize(d *DroppedMeasurementEntry) int {
+	return stringSize(d.Name) + stringSize(d.Reason) + stringSize(d.Value)
 }
 
 // measurementValid reports whether every string of one reading is valid UTF-8.
@@ -427,6 +444,14 @@ func appendMeasurementsPayload(out []byte, payload *ResolvedMeasurementsPayload,
 		}
 		out = at.appendString(out, measurementsEntryTime, sizing.times)
 		out = at.appendCount(out, measurementsEntryNanos)
+		for j := range entry.Dropped {
+			d := &entry.Dropped[j]
+			out = protowire.AppendTag(out, measurementsEntryDropped, protowire.BytesType)
+			out = protowire.AppendVarint(out, uint64(droppedSize(d)))
+			out = appendString(out, droppedName, d.Name)
+			out = appendString(out, droppedReason, d.Reason)
+			out = appendString(out, droppedValue, d.Value)
+		}
 	}
 	return out
 }

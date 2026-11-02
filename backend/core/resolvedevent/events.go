@@ -97,6 +97,14 @@ type ResolvedMeasurementEntry struct {
 type ResolvedMeasurementsEntry struct {
 	Entries      []ResolvedMeasurementEntry
 	OccurredTime time.Time
+	// Dropped is what the resolver discarded from this sample while it stored the rest (see
+	// DroppedMeasurementEntry). It is not stored with the event and not part of its identity.
+	//
+	// 🔴 omitempty AND IdentityView ARE BOTH LOAD-BEARING, for the reason Derived documents:
+	// event-management derives the event id from json.Marshal of the payload. With omitempty a
+	// sample that lost nothing marshals exactly as it did before the field existed, and
+	// IdentityView removes it from a sample that did, so a drop never moves an id.
+	Dropped []DroppedMeasurementEntry `json:",omitempty"`
 }
 
 // Payload with resolved measurement entries.
@@ -118,7 +126,7 @@ type ResolvedMeasurementsPayload struct {
 // keeps its place (and its time) even if every entry in it was derived, so the remaining
 // structure is exactly what the same reading would have resolved to with no formulas.
 func (p *ResolvedMeasurementsPayload) IdentityView() *ResolvedMeasurementsPayload {
-	if p == nil || !p.hasDerived() {
+	if p == nil || !p.hasIdentityExcluded() {
 		return p
 	}
 	view := &ResolvedMeasurementsPayload{Entries: make([]ResolvedMeasurementsEntry, len(p.Entries))}
@@ -141,9 +149,13 @@ func (p ResolvedMeasurementsPayload) IdentityPayload() any { return p.IdentityVi
 
 var _ eventidentity.Viewer = ResolvedMeasurementsPayload{}
 
-// hasDerived reports whether any entry of the payload is Derived.
-func (p *ResolvedMeasurementsPayload) hasDerived() bool {
+// hasIdentityExcluded reports whether any entry of the payload is Derived or any sample carries a
+// drop record: the two things IdentityView removes.
+func (p *ResolvedMeasurementsPayload) hasIdentityExcluded() bool {
 	for i := range p.Entries {
+		if len(p.Entries[i].Dropped) > 0 {
+			return true
+		}
 		for j := range p.Entries[i].Entries {
 			if p.Entries[i].Entries[j].Derived {
 				return true

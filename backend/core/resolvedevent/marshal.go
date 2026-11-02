@@ -260,6 +260,9 @@ func UnmarshalPayloadForMeasurementsEvent(encoded []byte, envelope time.Time) (*
 			Entries:      mxs,
 			OccurredTime: occurred,
 		}
+		for _, pd := range pbentry.Dropped {
+			entry.Dropped = append(entry.Dropped, DroppedMeasurementEntry{Name: pd.Name, Reason: pd.Reason, Value: pd.Value})
+		}
 		entries = append(entries, entry)
 	}
 	payload.Entries = entries

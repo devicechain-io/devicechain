@@ -535,6 +535,10 @@ func (rez *EventResolver) ResolveMeasurementsEventPayload(ctx context.Context, d
 	for _, umsentry := range mpayload.Entries {
 		occurred := rez.eventTime.boundEntry(umsentry.OccurredTime, event.OccurredTime, event.ProcessedTime)
 		rmentries := make([]resolvedevent.ResolvedMeasurementEntry, 0, len(umsentry.Measurements))
+		// What this sample loses is recorded on it (resolvedevent.DroppedMeasurementEntry) as
+		// well as counted, so device-state can say WHICH device and key. Nil for a sample that
+		// lost nothing, so its wire bytes and identity document are what they were.
+		var dropped []resolvedevent.DroppedMeasurementEntry
 		var grp *calcGroup
 		if calculated {
 			grp = findCalcGroup(&groups, occurred, len(rmsentries), profile, constants)
@@ -556,7 +560,7 @@ func (rez *EventResolver) ResolveMeasurementsEventPayload(ctx context.Context, d
 					// already rejected, so this is a defensive backstop: drop the entry
 					// rather than stamp a classifier onto a value that would then
 					// dead-letter the whole batch at persist.
-					rez.dropMeasurement(ctx, device.Token, mxkey, mxvalue, dropDeclaredNotStorable, "declared metric data type is not storable")
+					dropped = append(dropped, rez.dropMeasurement(ctx, device.Token, mxkey, mxvalue, dropDeclaredNotStorable, "declared metric data type is not storable"))
 					continue
 				}
 				// The classifier is the metric definition's id AS OF the profile's
@@ -587,19 +591,25 @@ func (rez *EventResolver) ResolveMeasurementsEventPayload(ctx context.Context, d
 				// best-effort (ADR-016 lenient additive typing), so drop just this
 				// entry instead of dead-lettering the whole event and discarding its
 				// valid numeric siblings. Declare it as a metric to persist it.
-				rez.dropMeasurement(ctx, device.Token, mxkey, mxvalue, dropUndeclaredNonNumeric, "undeclared and non-numeric")
+				dropped = append(dropped, rez.dropMeasurement(ctx, device.Token, mxkey, mxvalue, dropUndeclaredNonNumeric, "undeclared and non-numeric"))
 				continue
 			} else if err := model.CheckStorableMeasurement(f); err != nil {
 				// Numeric but not storable: NaN, +/-Inf, or beyond decimal(20,8). Dropped like
 				// the non-numeric case, so a lenient key costs only its own entry.
-				rez.dropMeasurement(ctx, device.Token, mxkey, mxvalue, dropUndeclaredUnstorable, "undeclared and not storable: "+err.Error())
+				dropped = append(dropped, rez.dropMeasurement(ctx, device.Token, mxkey, mxvalue, dropUndeclaredUnstorable, "undeclared and not storable: "+err.Error()))
 				continue
 			}
 			rmentries = append(rmentries, rmentry)
 		}
+		// Sorted for the same reason the entries are (below): the loop above ranges a map.
+		slices.SortFunc(dropped, func(a, b resolvedevent.DroppedMeasurementEntry) int {
+			return strings.Compare(a.Name, b.Name)
+		})
+		// An all-dropped sample is still appended, empty, exactly as before the record existed.
 		rmsentry := resolvedevent.ResolvedMeasurementsEntry{
 			Entries:      rmentries,
 			OccurredTime: occurred,
+			Dropped:      dropped,
 		}
 		rmsentries = append(rmsentries, rmsentry)
 	}
@@ -727,9 +737,22 @@ func dropMeasurement(deviceToken, metricKey, value, reason string) {
 // kept. The device's acknowledgement does not carry it and nothing is dead-lettered, so the
 // counter (resolve_measurement_dropped_total) and the once-per-device warning are the operator's
 // only signal that a payload is losing data.
-func (rez *EventResolver) dropMeasurement(ctx context.Context, deviceToken, key, value, reason, detail string) {
+//
+// It returns the record to put on the sample being built (resolvedevent.DroppedMeasurementEntry),
+// whose value is cut to resolvedevent.MaxDroppedValueBytes. The warning logs the value as sent,
+// and the record carries the same text: neither redacts it, there is no redaction to share.
+func (rez *EventResolver) dropMeasurement(ctx context.Context, deviceToken, key, value, reason, detail string) resolvedevent.DroppedMeasurementEntry {
 	tenant, _ := core.TenantFromContext(ctx)
 	rez.drops.record(tenant, deviceToken, key, value, reason, detail)
+	// 🔴 A diagnostic must never be able to refuse the event it describes: the wire refuses a
+	// string that is not UTF-8, and the record is the one place a discarded (so never
+	// validated) device string is carried onto it. Cut first, then repaired, so a cut inside a
+	// multi-byte rune is not what makes it invalid.
+	return resolvedevent.DroppedMeasurementEntry{
+		Name:   strings.ToValidUTF8(key, "�"),
+		Reason: reason,
+		Value:  strings.ToValidUTF8(resolvedevent.TruncateDroppedValue(value), "�"),
+	}
 }
 
 // normalizeBool renders a validated boolean measurement as "1"/"0" so it stores in
