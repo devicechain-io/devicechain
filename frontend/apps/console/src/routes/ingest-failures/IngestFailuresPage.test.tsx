@@ -19,6 +19,15 @@ vi.mock('@/lib/api/ingest-failures', () => ({
   getFailedEventSummary: (...a: unknown[]) => getFailedEventSummary(...a),
 }));
 
+// The caller's claims, swapped per test: the page is for device:write, not the viewer baseline.
+let authorities = ['device:write'];
+let scopeAnchors: string[] = [];
+vi.mock('@/auth/AuthProvider', () => ({
+  useAuth: () => ({
+    claims: { tenant: 'acme', username: 'ann', roles: [], authorities, typ: 'access', scopeAnchors },
+  }),
+}));
+
 import IngestFailuresPage from './IngestFailuresPage';
 
 const row = (over: Record<string, unknown>) => ({
@@ -38,6 +47,8 @@ const row = (over: Record<string, unknown>) => ({
 });
 
 beforeEach(async () => {
+  authorities = ['device:write'];
+  scopeAnchors = [];
   listFailedEvents.mockReset().mockResolvedValue({
     results: [
       row({ recordSeq: '3', suppressed: 41, payloadStatus: 'EXPIRED' }),
@@ -95,5 +106,20 @@ describe('IngestFailuresPage', () => {
     renderAt('/ingest-failures');
     await screen.findAllByText('no such device');
     expect(document.body.textContent ?? '').not.toMatch(/retry|recover/i);
+  });
+
+  it('is refused to a viewer holding only the read-only baseline, and fires no query', async () => {
+    authorities = ['event:read', 'device:read', 'alarm:read'];
+    renderAt('/ingest-failures');
+    expect(await screen.findByText(/members who manage devices/)).toBeTruthy();
+    expect(listFailedEvents).not.toHaveBeenCalled();
+    expect(getFailedEventSummary).not.toHaveBeenCalled();
+  });
+
+  it('is refused to a member limited to some customers, even holding device:write', async () => {
+    scopeAnchors = ['customer:acme'];
+    renderAt('/ingest-failures');
+    expect(await screen.findByText(/members who manage devices/)).toBeTruthy();
+    expect(listFailedEvents).not.toHaveBeenCalled();
   });
 });

@@ -18,7 +18,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/streams"
 )
 
-// The failed-events index (tenant plane). Every field requires event:read through
+// The failed-events index (tenant plane). Every field requires device:write through
 // auth.Authorize, which refuses a customer-scoped caller outright: a record of a refusal often
 // names a device that does not exist, so it has no customer to scope it to, and rev 1 serves
 // the tenant's administrators only.
@@ -103,7 +103,7 @@ func toFailedEventCriteria(in FailedEventSearchCriteriaInput) (model.FailedEvent
 func (r *SchemaResolver) FailedEvents(ctx context.Context, args struct {
 	Criteria FailedEventSearchCriteriaInput
 }) (*FailedEventSearchResultsResolver, error) {
-	if err := auth.Authorize(ctx, auth.EventRead); err != nil {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
 		return nil, err
 	}
 	criteria, err := toFailedEventCriteria(args.Criteria)
@@ -167,7 +167,7 @@ func payloadStatusOf(w payloadWatermark, seq int64) string {
 func (r *SchemaResolver) FailedEventSummary(ctx context.Context, args struct {
 	Since string
 }) ([]*FailedEventReasonCountResolver, error) {
-	if err := auth.Authorize(ctx, auth.EventRead); err != nil {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
 		return nil, err
 	}
 	since, err := parseInstant("since", args.Since)
@@ -193,7 +193,7 @@ func (r *SchemaResolver) FailedEventCount(ctx context.Context, args struct {
 	DeviceToken string
 	Since       string
 }) (int32, error) {
-	if err := auth.Authorize(ctx, auth.EventRead); err != nil {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
 		return 0, err
 	}
 	since, err := parseInstant("since", args.Since)

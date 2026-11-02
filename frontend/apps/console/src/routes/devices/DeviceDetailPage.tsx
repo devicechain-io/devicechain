@@ -158,7 +158,7 @@ export default function DeviceDetailPage() {
     >
       {/* Connectivity + events sit in their own tabs, so they load only when
           opened and the page stays digestible. */}
-      {!scoped && <DeviceRejectedNotice deviceToken={device.token} />}
+      {canWriteDevice && <DeviceRejectedNotice deviceToken={device.token} />}
       <Tabs defaultValue="basic">
         <TabsList>
           <TabsTrigger value="basic">{t('tabBasic')}</TabsTrigger>

@@ -12,6 +12,7 @@
   "deviceFilterPlaceholder": "Filter by device token…",
   "empty": "No refused events match. A device whose data is missing for another reason is not listed here.",
   "loading": "Loading ingest failures…",
+  "notPermitted": "Ingest failures are shown to members who manage devices (device:write).",
   "noDevice": "none named",
   "overflowRow": "Further records for this reason",
   "payloadExpired": "The original event is no longer held; only this summary remains.",

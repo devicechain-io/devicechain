@@ -7,7 +7,7 @@ title: 为什么我的设备数据没有出现
 设备在发送事件，却什么也没有出现。在翻阅 Pod 日志之前，先看看平台**拒绝**了什么。平台在拒绝一个事件或无法存储它时，会留下一条简短记录，你的租户可以读取这些记录。
 
 :::note 状态
-已提供。在控制台的 **Monitor** 部分打开**摄取失败（Ingest failures）**，或在 event-management 的 GraphQL API 上查询 `failedEvents` 和 `failedEventSummary`。两者都需要 `event:read`，且不向访问范围仅限于部分客户的成员提供：被拒绝的事件常常指向一个并不存在的设备，因此不属于任何客户。
+已提供。在控制台的 **Monitor** 部分打开**摄取失败（Ingest failures）**，或在 event-management 的 GraphQL API 上查询 `failedEvents` 和 `failedEventSummary`。两者都需要 `device:write`（管理设备、因而能对拒绝采取行动的成员所持有的授权），而不是每个成员都拥有的只读基线；也不向访问范围仅限于部分客户的成员提供：被拒绝的事件常常指向一个并不存在的设备，因此不属于任何客户。
 :::
 
 ## 你看到的是什么 {#what}

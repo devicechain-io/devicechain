@@ -12,6 +12,7 @@
   "deviceFilterPlaceholder": "Filtrar por token de dispositivo…",
   "empty": "Ningún evento rechazado coincide. Un dispositivo cuyos datos faltan por otra razón no aparece aquí.",
   "loading": "Cargando fallos de ingesta…",
+  "notPermitted": "Los fallos de ingesta se muestran a los miembros que gestionan dispositivos (device:write).",
   "noDevice": "no indicado",
   "overflowRow": "Más registros de este motivo",
   "payloadExpired": "El evento original ya no se conserva; solo queda este resumen.",

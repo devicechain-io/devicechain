@@ -834,7 +834,7 @@ type Query {
     time: the answer to "why is my device's data not showing up". Each record names the reason,
     the device token the sender claimed and the platform's error. Records are kept for 7 days by
     default (an operator can change it) and are not a queue: nothing is re-sent. Requires
-    event:read; customer-scoped callers are refused with FORBIDDEN. A since or until that is not
+    device:write; customer-scoped callers are refused with FORBIDDEN. A since or until that is not
     RFC 3339 is refused with INVALID_VALUE.
     """
     failedEvents(
@@ -843,7 +843,7 @@ type Query {
     ): FailedEventSearchResults!
     """
     Counts the tenant's failures per reason since an instant, with the devices with the most of
-    each. Records folded into a count are included. Requires event:read; customer-scoped callers
+    each. Records folded into a count are included. Requires device:write; customer-scoped callers
     are refused with FORBIDDEN. since is an RFC 3339 timestamp; a value older than 31 days is
     treated as 31 days ago. Reasons with no records are omitted.
     """
@@ -853,7 +853,7 @@ type Query {
     ): [FailedEventReasonCount!]!
     """
     How many events were refused for one claimed device token since an instant, including records
-    folded into a count. Drives "N events from this device were rejected". Requires event:read;
+    folded into a count. Drives "N events from this device were rejected". Requires device:write;
     customer-scoped callers are refused with FORBIDDEN.
     """
     failedEventCount(

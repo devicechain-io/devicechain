@@ -43,7 +43,7 @@ func seedFailed(t *testing.T, api *model.Api, tenant string, seq int64, at time.
 
 // The acceptance query: an unknown-token device's refusal is found by reason, and nothing else
 // is. Then the controls: another tenant sees none of it, a customer-scoped member is refused
-// outright, and a caller without event:read is refused.
+// outright, and a viewer holding only the read-only baseline (event:read) is refused.
 func TestFailedEventsQueryIsTenantAdminOnly(t *testing.T) {
 	api := failedEventsApi(t)
 	const tenant = "acme"
@@ -74,7 +74,7 @@ func TestFailedEventsQueryIsTenantAdminOnly(t *testing.T) {
 		return data.FailedEvents.Results, codes
 	}
 
-	admin := scopedCtx(api, tenant, nil, string(auth.EventRead))
+	admin := scopedCtx(api, tenant, nil, string(auth.DeviceWrite))
 	rows, codes := run(admin)
 	require.Empty(t, codes)
 	require.Len(t, rows, 1, "only the DEVICE_NOT_FOUND row of this tenant")
@@ -85,11 +85,11 @@ func TestFailedEventsQueryIsTenantAdminOnly(t *testing.T) {
 	assert.Equal(t, "UNKNOWN", rows[0]["payloadStatus"], "no broker was asked, so neither held nor gone is claimed")
 
 	// Negative controls.
-	_, codes = run(scopedCtx(api, tenant, []string{"customer:acme"}, string(auth.EventRead)))
+	_, codes = run(scopedCtx(api, tenant, []string{"customer:acme"}, string(auth.DeviceWrite)))
 	assert.NotEmpty(t, codes, "a customer-scoped member read the tenant's failures")
-	_, codes = run(scopedCtx(api, tenant, nil, string(auth.DeviceRead)))
-	assert.NotEmpty(t, codes, "failedEvents answered without event:read")
-	other := scopedCtx(api, "globex", nil, string(auth.EventRead))
+	_, codes = run(scopedCtx(api, tenant, nil, string(auth.EventRead), string(auth.DeviceRead)))
+	assert.NotEmpty(t, codes, "failedEvents answered without device:write")
+	other := scopedCtx(api, "globex", nil, string(auth.DeviceWrite))
 	rows, codes = run(other)
 	require.Empty(t, codes)
 	require.Len(t, rows, 1)
@@ -105,7 +105,7 @@ func TestSummaryAndCountAreAuthorizedToo(t *testing.T) {
 	const sum = `query($s: String!) { failedEventSummary(since: $s) { reason records devices { deviceToken records } } }`
 	const cnt = `query($s: String!) { failedEventCount(deviceToken: "ghost-1", since: $s) }`
 
-	admin := scopedCtx(api, "acme", nil, string(auth.EventRead))
+	admin := scopedCtx(api, "acme", nil, string(auth.DeviceWrite))
 	resp := schema.Exec(admin, sum, "", map[string]interface{}{"s": since})
 	require.Empty(t, resp.Errors)
 	assert.Contains(t, string(resp.Data), `"DEVICE_NOT_FOUND"`)
@@ -114,8 +114,11 @@ func TestSummaryAndCountAreAuthorizedToo(t *testing.T) {
 	assert.JSONEq(t, `{"failedEventCount":1}`, string(resp.Data))
 
 	for _, q := range []string{sum, cnt} {
-		scoped := scopedCtx(api, "acme", []string{"customer:acme"}, string(auth.EventRead))
+		scoped := scopedCtx(api, "acme", []string{"customer:acme"}, string(auth.DeviceWrite))
 		assert.NotEmpty(t, schema.Exec(scoped, q, "", map[string]interface{}{"s": since}).Errors, "scoped caller")
+		viewer := scopedCtx(api, "acme", nil, string(auth.EventRead), string(auth.DeviceRead))
+		assert.NotEmpty(t, schema.Exec(viewer, q, "", map[string]interface{}{"s": since}).Errors,
+			"a viewer with only the read-only baseline must be refused")
 		bad := schema.Exec(admin, q, "", map[string]interface{}{"s": "yesterday"})
 		assert.NotEmpty(t, bad.Errors, "a since that is not RFC 3339 is refused")
 	}
@@ -126,7 +129,7 @@ func TestAnUnknownReasonKeepsItsNumber(t *testing.T) {
 	api := failedEventsApi(t)
 	seedFailed(t, api, "acme", 1, time.Now().UTC(), 99, "dev")
 	schema := gqlcore.MustParseSchema(SchemaContent, &SchemaResolver{})
-	admin := scopedCtx(api, "acme", nil, string(auth.EventRead))
+	admin := scopedCtx(api, "acme", nil, string(auth.DeviceWrite))
 
 	resp := schema.Exec(admin, `query { failedEvents(criteria: {pageNumber: 1, pageSize: 10, reason: UNKNOWN}) {
 		results { reason reasonCode } } }`, "", nil)

@@ -5,6 +5,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useSearchParams } from 'react-router-dom';
 import { formatTime } from '@/lib/utils';
+import { useAuth } from '@/auth/AuthProvider';
+import { mayWrite } from '@/lib/scope';
 import { useQuery } from '@/lib/hooks/use-query';
 import { useDebouncedValue } from '@/lib/hooks/use-debounced-value';
 import {
@@ -59,7 +61,7 @@ function sinceFor(hours: number): string {
   return new Date(Date.now() - hours * 3600_000).toISOString();
 }
 
-export default function IngestFailuresPage() {
+function IngestFailuresView() {
   const { t } = useTranslation('ingestFailures');
   const [pageNumber, setPageNumber] = useState(1);
   const [reason, setReason] = useState<FailedEventReason | ''>('');
@@ -215,4 +217,22 @@ export default function IngestFailuresPage() {
       )}
     </PageShell>
   );
+}
+
+/**
+ * The page is for the members who manage devices (device:write), not the read-only baseline every
+ * member holds, and never for a member limited to some customers. The server refuses the others
+ * too; this keeps them from landing on an error, and the queries do not fire for them.
+ */
+export default function IngestFailuresPage() {
+  const { t } = useTranslation('ingestFailures');
+  const { claims } = useAuth();
+  if (!mayWrite(claims, 'device:write')) {
+    return (
+      <PageShell title={t('title')}>
+        <EmptyState description={t('notPermitted')} />
+      </PageShell>
+    );
+  }
+  return <IngestFailuresView />;
 }
