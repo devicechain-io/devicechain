@@ -135,12 +135,12 @@
       "translationSha256": "781e5f66c1b6e91d10b5483b3538b378480fa658223675b5e265531be156c4bf"
     },
     "deployment/metrics-reference.md": {
-      "sourceSha256": "ac5db7aea789f93f397a0adef7f4e62b607e08f74d39ee9db3d270f2d09c8871",
-      "translationSha256": "6982dcaa1d1a96e9750d367bfac6b8a2fa1102c049b8fec5e74ed83192408c6b"
+      "sourceSha256": "887fd07334f4165ec03a7422dede7b2925d620479d75ed56a684310ee13f4783",
+      "translationSha256": "048542a5ecd984c051629a59d79d713abde5b1de6d02a362e6ae3b387b10257d"
     },
     "deployment/observability.md": {
-      "sourceSha256": "1773cfc802df54bf93f7c095a39578ff1a705b7d55778f0df6ebe067369957d3",
-      "translationSha256": "6d258b7e993aff50cc4eb25eeb62f5043fbc9ff1e17cd853f31ba39dba781576"
+      "sourceSha256": "21de24722a405d164dd93573af5cab3e7d2869547f4ba98c8064e41beb6292a3",
+      "translationSha256": "f7818eef59768063f02b9538f54dabf94dad1e20b4a2d1b4ffd2a96cc13e3f9c"
     },
     "deployment/releases-and-upgrades.md": {
       "sourceSha256": "5519bf7ef8a6450e445c064ab773604fcbe8fe4eda3097372fef510c51cc2d81",
@@ -163,8 +163,8 @@
       "translationSha256": "410019e852d32ee7738835bdfc01dff5f42a30e2a6e45f9afafe73484500ef98"
     },
     "getting-help.md": {
-      "sourceSha256": "b8f9b58ac234876db71e47b54930a2113f8541702f14c274a8c094a45994549b",
-      "translationSha256": "be2babee8b48ec7aca4093b6fc76aedf30567dba9b2e1be83ffcaa4904d048a1"
+      "sourceSha256": "a8b80052effc622c05b4f688850b900b6080124c9865aaaaf33763ccc8affc80",
+      "translationSha256": "df04a7ec37c43eb3b99f1bf973026fa3764a482c3620b112e65f70561002928d"
     },
     "guides/adding-widget-packages.md": {
       "sourceSha256": "afe424503a36f137586695e18a84afaf83c6e3fca72e57e9535ef702f980b67f",
@@ -271,8 +271,8 @@
       "translationSha256": "8f537a406cd85ee8e0a0b30317d1b935ce43f501d884af8202cf6f9bc9e550e9"
     },
     "reference/graphql-api.md": {
-      "sourceSha256": "0492b0cad614ff8314bab4261fb3f364c29130a698bbd44eea791cf070ecb456",
-      "translationSha256": "71100351d54d015a04d23cfabe23a032af4ba9aa9189e71bf2c30719e0dc9f11"
+      "sourceSha256": "8587805e0a4878136fd38a350dc08a2391b88a6fecc3989b03aa20f458c7b8ae",
+      "translationSha256": "e4ac25fe037e3f13bc573f0ade92213d5bc1a44a511a3b1efa0cd59a0947d4ff"
     },
     "reference/npm-packages.md": {
       "sourceSha256": "a2950de3cf160b9a6e5194c6f92f67c99edc262295fe328236b98224fdf73aa4",
