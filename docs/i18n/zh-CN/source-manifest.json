@@ -99,8 +99,8 @@
       "translationSha256": "bcc789a10ea594596da5c7360b818fad3e2eabb6e5ff6fd36a90b8c2ee005127"
     },
     "deployment/bootstrap.md": {
-      "sourceSha256": "f28f8cf3c62ea07117fd5d5c9308c6675722eea830689ef95a05a6825dea8d1a",
-      "translationSha256": "719352757ded79ac9c91c25ffe49cb34661abc5e54b2973a5616d3630f1f6930"
+      "sourceSha256": "442f3eeab6fb838f7218517927ae1cd02e974f677580e7b668a7a634cc382475",
+      "translationSha256": "f53962a952761e75970bf2be0988f99ce13c7629d36d9bda8b4aff2c79b772bb"
     },
     "deployment/cluster-lock.md": {
       "sourceSha256": "bdb2c0833562eeebfffd0ccaeb8210d5fdf01d0ffb7113c4fcd779d4199030ae",
