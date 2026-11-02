@@ -545,7 +545,15 @@ func (f *failingAlarms) Dispatch(ctx context.Context, _ react.AlarmRequest) erro
 // acked, while the other devices' events, in other lanes, are dispatched beside it.
 func TestLanesDeadLetterAnExhaustedEventOnce(t *testing.T) {
 	t.Parallel()
-	const ackWait = time.Second
+	// ackWait must clear the reader's 1 s fetch long-poll by a wide margin. A capacity reader stamps
+	// every message of a fetch with the moment the poll STARTED, and the broker only redelivers a
+	// copy when its previous ack-wait runs out, which can be any time inside that poll. At an
+	// ackWait equal to the poll, a copy landing late in it has a few milliseconds left of its slot
+	// when the reader pops it, and a stall of that size (a loaded runner) makes handOut drop it as
+	// already redelivering. The broker still counted that delivery, so the event reached the
+	// MaxDeliver cap (and its exhausted letter) after only MaxDeliver-1 attempts. With twice the
+	// poll, a copy keeps at least a second of slot, whatever the load.
+	const ackWait = 2 * time.Second
 	dead := &ctxDeadRecorder{}
 	failing := &failingAlarms{}
 	others := newOrderSink(0)
