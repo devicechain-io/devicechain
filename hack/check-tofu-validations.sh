@@ -422,6 +422,12 @@ run_assertions() {
   for v in off s2_fast s2_better s2_best s2_auto; do accepts nats_route_compression "$v"; done
   for v in "" on accept fast S2_FAST s2 gzip; do rejects nats_route_compression "$v"; done
 
+  # --- run-only profiling switches (default 0 = off) ----------------------------
+  for v in 0 6061 65535; do accepts nats_profiling_port "$v"; done
+  for v in -1 65536 1.5; do rejects nats_profiling_port "$v"; done
+  accepts nats_profiling_block_rate 0; accepts nats_profiling_block_rate 10000 -var nats_profiling_port=6061
+  for v in -1 1.5; do rejects nats_profiling_block_rate "$v"; done
+
   # evaluates <expected> <expr> [-var k=v ...] — the expression must evaluate to
   # exactly <expected> under those variables.
   evaluates() {
