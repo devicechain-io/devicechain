@@ -52,6 +52,23 @@ func RemoveJetStreamStoreDir(dir string) error {
 	return removeStoreDir(dir, os.RemoveAll, storeDirRemovalBudget, time.Sleep)
 }
 
+// JetStreamMaxStore is the JetStream file-store ceiling for a test broker that creates
+// the platform's streams. Pass it as natsserver.Options.JetStreamMaxStore.
+//
+// 🔴 LEAVE IT UNSET AND THE BROKER'S CEILING IS THE RUNNER'S FREE DISK. The server
+// defaults the store to 75% of the free space under StoreDir, and JetStream reserves every
+// stream's MaxBytes UP FRONT, so creating all of streams.All at the default ceilings
+// (about 9.5 GiB: 1 GiB per Hot stream, 128 MiB per Cold one) needs a disk with ~13 GiB
+// free at that instant. CI's runner has little more than that and the other modules'
+// tests share it, so a run that started a few GiB short failed every stream-creating
+// test with "insufficient storage resources available" after the 30-attempt retry: 58 s,
+// three tests, no relation to the change under test.
+//
+// The reservation is accounting, not allocation: nothing is written until a message is,
+// and these tests write kilobytes. So the ceiling is a fixed number well above the sum
+// instead of a measurement of the machine.
+const JetStreamMaxStore int64 = 64 << 30
+
 // storeDirRemovalBudget bounds the retry. A consumer's flush is one small file write,
 // and the server makes at most one after its consumers have been stopped.
 const storeDirRemovalBudget = 5 * time.Second
