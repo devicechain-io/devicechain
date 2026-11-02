@@ -70,7 +70,7 @@ func Run(ctx context.Context, hs *sim.Handshake, p Profile) (*Report, error) {
 		return nil, fmt.Errorf("bootstrap: %w", err)
 	}
 
-	start, end, err := drive(ctx, rt, driver, p.Hold)
+	start, end, err := driveMarked(ctx, rt, driver, p.Hold, p.Steady)
 	if err != nil {
 		// The drive was aborted (context cancelled). No verdict — the accepted
 		// ledger is not a clean stop boundary, so reconciling it would be
@@ -173,9 +173,21 @@ func requireCleanTenant(ctx context.Context, c eventCounter) error {
 // real abort (ctx cancelled by the caller) cancels in flight, and that path
 // returns an error rather than a verdict.
 func drive(ctx context.Context, rt *sim.Runtime, driver sim.Sim, hold time.Duration) (start, end time.Time, err error) {
+	return driveMarked(ctx, rt, driver, hold, nil)
+}
+
+// driveMarked is drive with the steady-state marker (see SteadyMarker): "warmup" at the
+// start, "steady" once the warm-up has elapsed, and "ended"/"aborted" when the drive stops.
+// A nil marker is plain drive. A marker that cannot be written aborts the drive, because a
+// collector that was told to wait for a steady window would otherwise wait for ever.
+func driveMarked(ctx context.Context, rt *sim.Runtime, driver sim.Sim, hold time.Duration, mk *SteadyMarker) (start, end time.Time, err error) {
 	start = time.Now()
 	rt.Stats.Reset(start)
 	deadline := start.Add(hold)
+	if err := mk.Begin(start, hold); err != nil {
+		return start, start, err
+	}
+	defer func() { _ = mk.End(err == nil) }()
 
 	// Immediate first tick so a hold shorter than one interval still applies a
 	// full tick of load. Tick's returned error summarises per-emit failures
@@ -202,6 +214,11 @@ func drive(ctx context.Context, rt *sim.Runtime, driver sim.Sim, hold time.Durat
 				end = time.Now()
 				rt.Stats.Freeze(end)
 				return start, end, nil
+			}
+			if err := mk.Tick(now); err != nil {
+				end = time.Now()
+				rt.Stats.Freeze(end)
+				return start, end, err
 			}
 			rt.Stats.Ticks.Add(1)
 			_ = driver.Tick(ctx, rt)

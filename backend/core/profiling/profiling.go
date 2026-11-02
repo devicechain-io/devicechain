@@ -29,6 +29,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -67,6 +68,35 @@ var notCollected = map[string]string{
 		"so it would be empty and would read as no blocking",
 	"mutex": "the mutex profile is not collected: its sampling rate is off in DeviceChain services, " +
 		"so it would be empty and would read as no contention",
+}
+
+// sampled records which of the two contention profiles have had their sampling turned
+// ON by EnableContention. Until then they answer 404 as notCollected says; after it
+// they are served like any snapshot profile, because from that point they are not empty
+// by construction.
+var sampled = map[string]*atomic.Bool{"block": {}, "mutex": {}}
+
+// EnableContention turns on block and/or mutex contention sampling for the life of the
+// process and lets this endpoint serve the matching profile. A zero argument leaves that
+// profile off (and still answering 404), so asking for neither changes nothing.
+//
+// blockRateNanos is runtime.SetBlockProfileRate's argument: on average one blocking
+// event is sampled per that many nanoseconds spent blocked (1 samples every event).
+// mutexFraction is runtime.SetMutexProfileFraction's: on average 1 in that many
+// contended mutex events is sampled.
+//
+// Both cost CPU in proportion to how contended the process is, which is why this is a
+// switch for a profiling RUN and not a default: core.Microservice calls it only when
+// the operator asked for a rate and the profiling listener is on.
+func EnableContention(blockRateNanos, mutexFraction int) {
+	if blockRateNanos > 0 {
+		runtime.SetBlockProfileRate(blockRateNanos)
+		sampled["block"].Store(true)
+	}
+	if mutexFraction > 0 {
+		runtime.SetMutexProfileFraction(mutexFraction)
+		sampled["mutex"].Store(true)
+	}
 }
 
 // writeMargin is how long a profile's response may take to reach the client once the
@@ -131,12 +161,12 @@ func index(w http.ResponseWriter, _ *http.Request) {
 // named serves one of the snapshot profiles in Served.
 func named(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	if why, ok := notCollected[name]; ok {
+	if why, ok := notCollected[name]; ok && !sampled[name].Load() {
 		fail(w, http.StatusNotFound, "%s", why)
 		return
 	}
 	p := pprof.Lookup(name)
-	if !slices.Contains(Served, name) || p == nil {
+	if !(slices.Contains(Served, name) || sampled[name] != nil && sampled[name].Load()) || p == nil {
 		fail(w, http.StatusNotFound, "unknown profile %q; this endpoint serves: %s, profile, trace",
 			name, strings.Join(Served, ", "))
 		return

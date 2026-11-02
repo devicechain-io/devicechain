@@ -374,6 +374,28 @@ variable "nats_route_compression" {
   }
 }
 
+variable "nats_profiling_port" {
+  description = "A profiling RUN switch, off (0) by default: a positive port sets nats-server's prof_port on every broker pod, serving Go pprof for a performance run. Never exposed by a Service or a container port; reach it with kubectl port-forward. It is unauthenticated, so turn it off after the run. Changing it restarts the broker's servers one at a time. See modules/nats var.profiling_port."
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = var.nats_profiling_port == floor(var.nats_profiling_port) && var.nats_profiling_port >= 0 && var.nats_profiling_port <= 65535
+    error_message = "nats_profiling_port must be 0 (off) or a TCP port from 1 to 65535."
+  }
+}
+
+variable "nats_profiling_block_rate" {
+  description = "With nats_profiling_port, nats-server's prof_block_rate (nanoseconds blocked per sampled event; 0 leaves the block profile off). Refused without nats_profiling_port. See modules/nats var.profiling_block_rate."
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = var.nats_profiling_block_rate == floor(var.nats_profiling_block_rate) && var.nats_profiling_block_rate >= 0
+    error_message = "nats_profiling_block_rate must be 0 (off) or a positive whole number of nanoseconds."
+  }
+}
+
 variable "enable_database_backups" {
   description = <<-EOT
     WAL archiving, scheduled base backups and PITR for both database stores
@@ -613,6 +635,12 @@ variable "timescale_image" {
   EOT
   type        = string
   default     = "ghcr.io/devicechain-io/postgresql-timescaledb:17.11-ts2.28.3-r1"
+}
+
+variable "timescale_statement_stats" {
+  description = "A profiling RUN switch, off by default: preload pg_stat_statements on the event store (after timescaledb) and track statements, so a performance run can read the top statements by total time. The operand image already carries the library, so no image change is needed. Restarts Postgres when it changes, so set it before the run and unset it after. See modules/cnpg-cluster var.statement_stats."
+  type        = bool
+  default     = false
 }
 
 variable "timescale_instances" {

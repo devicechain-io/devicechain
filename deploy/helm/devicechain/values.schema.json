@@ -851,6 +851,16 @@
                 "type": "string",
                 "minLength": 1,
                 "description": "IP address and port the listener binds. Default 127.0.0.1:6060, the pod's loopback address, reachable only with kubectl port-forward. Any other address is reachable by anything that can reach the pod, without authentication."
+              },
+              "blockRate": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Turn on block-profile sampling for a profiling run: nanoseconds blocked per sampled event (1 samples every event). 0 (default) leaves the block profile off. Needs enabled: true."
+              },
+              "mutexFraction": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Turn on mutex-profile sampling for a profiling run: sample 1 in this many contended events. 0 (default) leaves the mutex profile off. Needs enabled: true."
               }
             },
             "additionalProperties": false

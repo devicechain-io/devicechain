@@ -105,6 +105,9 @@ type Profile struct {
 	// defaulted here, so a harness that builds a Profile without it runs as it always has,
 	// and cmd/loadtest supplies DefaultStateTimeout unless told otherwise.
 	StateTimeout time.Duration
+
+	// Steady, when set, writes the steady-state marker for this drive (see SteadyMarker).
+	Steady *SteadyMarker
 }
 
 // Load returns the sim load profile this run drives with.
@@ -143,6 +146,9 @@ func (p Profile) withDefaults() Profile {
 func (p Profile) Validate() error {
 	if p.Manifest == "" {
 		return fmt.Errorf("manifest is required")
+	}
+	if err := p.Steady.Validate(p.Hold); err != nil {
+		return err
 	}
 	// 🔴 REFUSE A SCENARIO THAT GENERATES NOTHING, UP FRONT — before Run provisions a
 	// topology, before NewRuntime opens a session, and above all before the hold window.

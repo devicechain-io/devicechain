@@ -210,6 +210,29 @@ variable "parameters" {
   default     = {}
 }
 
+variable "statement_stats" {
+  description = <<-EOT
+    A profiling RUN switch, OFF by default: preload pg_stat_statements and turn on
+    statement tracking (pg_stat_statements.track = all, .max = 10000) and
+    track_io_timing, so a performance run can read the top statements by total time
+    from the pg_stat_statements view.
+
+    Both the library and the GUCs ship in the CloudNativePG operand image (and so in
+    the TimescaleDB image built on it): no image change is needed. What this does NOT
+    do is CREATE EXTENSION, which installs only the view; hack/perf-collect.sh does
+    that idempotently when it takes its first snapshot.
+
+    Changing it RESTARTS Postgres (shared_preload_libraries is read at start), so turn
+    it on before the run and off after, never during a measurement window. The
+    overhead is small but not zero, which is why it is not a default.
+
+    It adds to var.shared_preload_libraries and var.parameters and never replaces
+    them: an explicit value the caller set for any of these keys wins.
+  EOT
+  type        = bool
+  default     = false
+}
+
 variable "resources" {
   description = <<-EOT
     Resource requests/limits for the Postgres instances.
@@ -541,6 +564,19 @@ locals {
   # reports is a copy, and the CI harness asserting on it is then checking the
   # copy against itself. A local is the only place both the resource and an
   # output can reach.
+  # The run-only statement-statistics additions; empty when the switch is off, so the
+  # values document is then exactly what it was before the switch existed. A filtered
+  # for-expression, as in modules/nats route_compression_merge, so the shape is the
+  # same either way. The caller's own parameters win over these.
+  stats_parameters = {
+    for k, v in {
+      "pg_stat_statements.track" = "all"
+      "pg_stat_statements.max"   = "10000"
+      "track_io_timing"          = "on"
+    } : k => v if var.statement_stats
+  }
+  stats_libraries = var.statement_stats && !contains(var.shared_preload_libraries, "pg_stat_statements") ? ["pg_stat_statements"] : []
+
   base_values = {
     name                   = var.name
     chartDigest            = local.chart_digest
@@ -548,8 +584,8 @@ locals {
     instances              = var.instances
     aliasServiceName       = var.alias_service_name
     resources              = var.resources
-    parameters             = var.parameters
-    sharedPreloadLibraries = var.shared_preload_libraries
+    parameters             = merge(local.stats_parameters, var.parameters)
+    sharedPreloadLibraries = concat(var.shared_preload_libraries, local.stats_libraries)
 
     nodeLossTolerationSeconds = var.node_loss_toleration_seconds
 
