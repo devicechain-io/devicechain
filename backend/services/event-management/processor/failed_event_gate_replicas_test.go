@@ -4,7 +4,6 @@
 package processor
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"strings"
@@ -16,8 +15,6 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -208,10 +205,7 @@ func TestADeterministicRefusalKeepsItsDeviceAndEventType(t *testing.T) {
 // A flush that cannot write logs once for the outage, with the number of rows waiting, and once
 // when it recovers - not a line per row per second.
 func TestAFlushOutageIsLoggedOnce(t *testing.T) {
-	var out bytes.Buffer
-	saved := log.Logger
-	log.Logger = zerolog.New(&out)
-	t.Cleanup(func() { log.Logger = saved })
+	out := logSink.Capture(t)
 
 	store := newFailedStore(t)
 	g := NewFailedEventGate(store)
