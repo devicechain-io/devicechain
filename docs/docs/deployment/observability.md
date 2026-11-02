@@ -1052,7 +1052,8 @@ each stream and KV bucket it uses every 30 seconds, and five alerts watch the re
 | Alert | Severity | What it means | What to do |
 | --- | --- | --- | --- |
 | `JetStreamNotReplicatedAsConfigured` | warning | For 15 minutes, a stream has had fewer replicas than the instance is configured for, as seen by the service named by the `job` label. The instance is not highly available for that stream. | Make sure the NATS cluster has enough servers for `instance.config.infrastructure.nats.streamReplicas`. A replica increase runs only when a service starts, so once the cluster is large enough, restart the affected Deployments. |
-| `JetStreamReplicaPeersDegraded` | warning | For 20 minutes, a stream has had fewer current, online copies than it has replicas. Losing its leader may lose data or availability. The wait is long because newly added replicas copy the stream's data before they count as current, and because under sustained high event rates a copy can fall briefly behind; see below. | Check the health and placement of the NATS pods. Three replicas on pods that share one node do not survive the loss of that node. |
+| `JetStreamReplicaPeersDegraded` | warning | For 20 minutes, a stream has had fewer online copies than it has replicas: a copy is offline or missing. Losing its leader may lose data or availability. A copy that is merely behind its leader still counts as online, so lag does not raise this. | Check the health and placement of the NATS pods. Three replicas on pods that share one node do not survive the loss of that node. |
+| `JetStreamReplicaPeersLagging` | warning | For 15 minutes after a 15-minute window, at least one online copy of a stream was not caught up at any check. A copy that falls behind for a few seconds under load and then recovers does not raise it; one that stays behind does. | Look for CPU or disk pressure on the NATS pods. A copy this far behind cannot take over without losing recent messages. |
 | `JetStreamLeaseBucketNotReplicated` | critical | On an instance configured for more than one replica, the bucket that decides which pod may write has fewer than three replicas. Losing its server blocks every standby from taking over. | As for `JetStreamNotReplicatedAsConfigured`. Do not rely on failover while it fires. |
 | `JetStreamClusterUnused` | warning | The broker is clustered, but every stream is configured for one replica, so the instance runs several NATS servers and survives no server loss. | Set `streamReplicas` to match the cluster (`dcctl install --ha` sets both), or scale the NATS cluster down if one server is what you intended. |
 | `JetStreamReplicationUnobserved` | warning | For 15 minutes, a running pod has been unable to read the replication state of a stream it could read earlier. The alerts above cannot judge that stream for that pod while this fires, so its replication is unknown, not healthy. | If it fires for every stream at once, the broker or JetStream is unavailable: check the NATS pods and the service's connection logs. If it is one stream, that stream has most likely lost its leader: inspect it with `nats stream info`. |
@@ -1074,23 +1075,24 @@ each stream and KV bucket it uses every 30 seconds, and five alerts watch the re
   unreadable. A resolved notification is not proof of recovery.
 - A pod that is not running exports nothing, so it cannot fire. Pod health alerts cover that case.
 
-At sustained high event rates, `JetStreamReplicaPeersDegraded` can go pending and clear again
-without anything being wrong. A copy of one of the busiest streams falls a moment behind its
+At sustained high event rates a copy of one of the busiest streams falls a moment behind its
 leader, counts as not current until it catches up, and then does. In two 10-minute tests at 6,000
 events a second on a three-server broker, the busiest stream had a copy that was not current in
-about one check in five, and never for more than a few seconds at a time, and the alert went
-pending and cleared again repeatedly. It fires only when a stream has been short of current copies
-at every check for 20 minutes, so lag of this kind clears it rather than firing it. To check
-replication, run `dcctl ha verify`: it keeps re-checking for up to 90 seconds (`--settle`) before
-it reports a failure, so a copy that is briefly behind does not fail it, and it passed when run
-after each of those tests.
+about one check in five, and never for more than a few seconds at a time. An alert on that count
+went pending and cleared again repeatedly on a cluster that had lost nothing, so
+`JetStreamReplicaPeersDegraded` reads the online count instead, which lag does not lower.
+`JetStreamReplicaPeersLagging` covers the other case, a copy that stays behind: it looks at the
+best value over 15 minutes, so lag that keeps clearing stays quiet and lag that does not clear
+arms it. To check replication, run `dcctl ha verify`: it keeps re-checking for up to 90 seconds
+(`--settle`) before it reports a failure, so a copy that is briefly behind does not fail it, and
+it passed when run after each of those tests.
 
 The alerts read these series, which every service that uses JetStream exports:
 
-- **`devicechain_<area>_jetstream_replicas_desired{stream}`**, **`_replicas_actual{stream}`** and
-  **`_peers_current{stream}`**: the configured replica count, the count the broker reports, and
-  the copies that are current and online. A service that cannot read a stream removes all three
-  for it rather than keep reporting its last values.
+- **`devicechain_<area>_jetstream_replicas_desired{stream}`**, **`_replicas_actual{stream}`**,
+  **`_peers_online{stream}`** and **`_peers_current{stream}`**: the configured replica count, the
+  count the broker reports, the copies that are online, and the copies that are online and caught
+  up. A service that cannot read a stream removes all four for it rather than keep reporting its last values.
 - **`devicechain_<area>_jetstream_broker_clustered`**: 1 when the connected broker is clustered, 0
   otherwise, including while the service is disconnected. It exists for as long as the pod runs.
 

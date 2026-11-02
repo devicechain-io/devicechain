@@ -66,35 +66,72 @@ spec:
               (JSClusterNoPeersError) is warned and not retried. Once the cluster is whole, restart
               the affected Deployments to re-run the lift.
         # Labelled replicated, but not actually replicated. A stream reporting
-        # Replicas:3 whose peers are stale or offline has the cost of replication
+        # Replicas:3 whose peers are gone or offline has the cost of replication
         # and none of the protection, and this is the single most likely way a
         # merely-plumbed cluster passes a naive check.
+        #
+        # Reads peers_ONLINE, not peers_current. "Current" folds two different
+        # things together: a peer that is GONE (offline, or not listed by the leader
+        # at all) and a peer that is merely BEHIND. Under sustained load a healthy
+        # follower is briefly not current as a matter of course -- at ~6,000 events/s
+        # the busiest streams had one non-current copy at about one check in five --
+        # so an alert on "current" armed continuously on a cluster that had lost
+        # nothing, and would have paged it had the hold been shorter. Offline does
+        # not flap that way: it means the leader has not heard from the peer at all.
+        # Lag has its own alert below, with a threshold that tolerates the flapping.
         - alert: JetStreamReplicaPeersDegraded
           expr: |
             min by (stream, job, namespace) (
-              {__name__=~"devicechain_.+_jetstream_peers_current", namespace="{{ $ns }}"}
+              {__name__=~"devicechain_.+_jetstream_peers_online", namespace="{{ $ns }}"}
             )
             <
             max by (stream, job, namespace) (
               {__name__=~"devicechain_.+_jetstream_replicas_actual", namespace="{{ $ns }}"}
             )
-          # 20m, and longer than the alert above rather than shorter. This is the
-          # one that sees RAFT CATCH-UP: an in-place lift flips Config.Replicas
-          # immediately (so the config alert clears at once) and then copies the
-          # data, during which the new followers are legitimately not Current. On a
-          # populated hot stream that copy is not quick, and a 10m window turned a
-          # correctly-progressing lift into a page.
+          # 20m is kept. A restarting NATS pod is offline for its whole restart, and a
+          # freshly lifted replica can be unlisted until it joins; neither is a loss.
           for: 20m
           labels:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
-            summary: "JetStream replica peers are not current"
+            summary: "JetStream replica peers are offline"
             description: >-
-              {{ "{{ $labels.stream }}" }} reports more replicas than it has current, online RAFT
-              peers. It is labelled replicated but is not: losing the leader may lose data or
-              availability. Check NATS pod health and placement — three replicas across pods that
-              share one node survive zero node losses.
+              {{ "{{ $labels.stream }}" }} reports more replicas than it has online RAFT
+              peers: a copy is offline or missing. It is labelled replicated but is not: losing the
+              leader may lose data or availability. Check NATS pod health and placement -- three
+              replicas across pods that share one node survive zero node losses.
+        # The other half of what "current" used to mean: every copy is online, but one
+        # has not been caught up at ANY check for a sustained stretch.
+        #
+        # max_over_time over the window, not an instant comparison. A healthy follower
+        # under heavy load is non-current for a few seconds at a time, so within any
+        # 15 minutes there are checks where every copy is current and the maximum
+        # equals the replica count: the alert stays quiet. A follower that is stuck
+        # behind (a stalled disk, a starved NATS pod) is never fully current in the
+        # window, the maximum stays low, and it arms. Quiet on lag that keeps clearing,
+        # loud on lag that does not.
+        - alert: JetStreamReplicaPeersLagging
+          expr: |
+            max by (stream, job, namespace) (
+              max_over_time({__name__=~"devicechain_.+_jetstream_peers_current", namespace="{{ $ns }}"}[15m])
+            )
+            <
+            max by (stream, job, namespace) (
+              {__name__=~"devicechain_.+_jetstream_replicas_actual", namespace="{{ $ns }}"}
+            )
+          for: 15m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "A JetStream replica has not caught up"
+            description: >-
+              {{ "{{ $labels.stream }}" }} has had at least one online replica that was not
+              caught up at any check for the last 30 minutes. Short lag under heavy load is normal
+              and does not raise this. A copy this far behind cannot take over without losing
+              recent messages. Check the NATS pods for CPU or disk pressure; it clears once every
+              copy has been caught up at least once in a 15-minute window.
         # The fence substrate, called out by name and at higher severity.
         #
         # min by (stream, job, namespace), matching the two rules above — and the

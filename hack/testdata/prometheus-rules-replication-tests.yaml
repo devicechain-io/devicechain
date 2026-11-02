@@ -60,11 +60,15 @@ tests:
         values: '1x60'
       - series: 'devicechain_eventprocessing_jetstream_peers_current{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="devicechain_resolved-events"}'
         values: '1x60'
+      - series: 'devicechain_eventprocessing_jetstream_peers_online{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="devicechain_resolved-events"}'
+        values: '1x60'
       - series: 'devicechain_eventprocessing_jetstream_replicas_desired{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="KV_devicechain_dc_leases"}'
         values: '1x60'
       - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="KV_devicechain_dc_leases"}'
         values: '1x60'
       - series: 'devicechain_eventprocessing_jetstream_peers_current{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="KV_devicechain_dc_leases"}'
+        values: '1x60'
+      - series: 'devicechain_eventprocessing_jetstream_peers_online{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="KV_devicechain_dc_leases"}'
         values: '1x60'
       - series: 'devicechain_eventprocessing_jetstream_broker_clustered{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
         values: '0x60'
@@ -89,6 +93,8 @@ tests:
         values: '3x60'
       - series: 'devicechain_eventprocessing_jetstream_peers_current{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="KV_devicechain_dc_leases"}'
         values: '3x60'
+      - series: 'devicechain_eventprocessing_jetstream_peers_online{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="KV_devicechain_dc_leases"}'
+        values: '3x60'
       - series: 'devicechain_eventprocessing_jetstream_broker_clustered{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
         values: '1x60'
       - series: 'devicechain_eventprocessing_jetstream_replicas_desired{namespace="dci-devicechain", pod="dc-event-processing-6b7d-bbbbb", job="devicechain/event-processing", stream="KV_devicechain_dc_leases"}'
@@ -97,6 +103,8 @@ tests:
         values: '3x60'
       - series: 'devicechain_eventprocessing_jetstream_peers_current{namespace="dci-devicechain", pod="dc-event-processing-6b7d-bbbbb", job="devicechain/event-processing", stream="KV_devicechain_dc_leases"}'
         values: '3x60'
+      - series: 'devicechain_eventprocessing_jetstream_peers_online{namespace="dci-devicechain", pod="dc-event-processing-6b7d-bbbbb", job="devicechain/event-processing", stream="KV_devicechain_dc_leases"}'
+        values: '3x60'
       - series: 'devicechain_eventprocessing_jetstream_broker_clustered{namespace="dci-devicechain", pod="dc-event-processing-6b7d-bbbbb", job="devicechain/event-processing"}'
         values: '1x60'
       - series: 'devicechain_devicemanagement_jetstream_replicas_desired{namespace="dci-devicechain", pod="dc-device-management-5c4f-ccccc", job="devicechain/device-management", stream="devicechain_resolved-events"}'
@@ -104,6 +112,8 @@ tests:
       - series: 'devicechain_devicemanagement_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-device-management-5c4f-ccccc", job="devicechain/device-management", stream="devicechain_resolved-events"}'
         values: '3x60'
       - series: 'devicechain_devicemanagement_jetstream_peers_current{namespace="dci-devicechain", pod="dc-device-management-5c4f-ccccc", job="devicechain/device-management", stream="devicechain_resolved-events"}'
+        values: '3x60'
+      - series: 'devicechain_devicemanagement_jetstream_peers_online{namespace="dci-devicechain", pod="dc-device-management-5c4f-ccccc", job="devicechain/device-management", stream="devicechain_resolved-events"}'
         values: '3x60'
       - series: 'devicechain_devicemanagement_jetstream_broker_clustered{namespace="dci-devicechain", pod="dc-device-management-5c4f-ccccc", job="devicechain/device-management"}'
         values: '1x60'
@@ -151,12 +161,14 @@ tests:
   # ------------------------------------------------------------------
   # Labelled three replicas with two current peers, for longer than the 20m `for`.
   # ------------------------------------------------------------------
-  - name: a replicated stream short of current peers fires JetStreamReplicaPeersDegraded
+  - name: a replicated stream short of online peers fires JetStreamReplicaPeersDegraded
     interval: 1m
     input_series:
       - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="devicechain_resolved-events"}'
         values: '3x30'
       - series: 'devicechain_eventprocessing_jetstream_peers_current{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="devicechain_resolved-events"}'
+        values: '2x30'
+      - series: 'devicechain_eventprocessing_jetstream_peers_online{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="devicechain_resolved-events"}'
         values: '2x30'
     alert_rule_test:
       - eval_time: 19m
@@ -172,8 +184,86 @@ tests:
               severity: warning
               devicechain_instance: devicechain
             exp_annotations:
-              summary: "JetStream replica peers are not current"
-              description: "devicechain_resolved-events reports more replicas than it has current, online RAFT peers. It is labelled replicated but is not: losing the leader may lose data or availability. Check NATS pod health and placement — three replicas across pods that share one node survive zero node losses."
+              summary: "JetStream replica peers are offline"
+              description: "devicechain_resolved-events reports more replicas than it has online RAFT peers: a copy is offline or missing. It is labelled replicated but is not: losing the leader may lose data or availability. Check NATS pod health and placement -- three replicas across pods that share one node survive zero node losses."
+
+  # ------------------------------------------------------------------
+  # THE FLAP (6,000 events/s): every copy is online the whole time, but one is not
+  # current at one check in five, never for more than a sample. Neither the offline
+  # alert nor the lagging alert may arm, let alone fire. The old expression
+  # (peers_current < actual) held pending through this and pages at 20m.
+  # ------------------------------------------------------------------
+  - name: a follower that is online but intermittently behind under load raises nothing
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="devicechain_resolved-events"}'
+        values: '3x90'
+      - series: 'devicechain_eventprocessing_jetstream_peers_online{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="devicechain_resolved-events"}'
+        values: '3x90'
+      - series: 'devicechain_eventprocessing_jetstream_peers_current{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="devicechain_resolved-events"}'
+        values: '3 3 3 2 3 3 3 3 2 3 3 3 3 2 3 3 3 3 2 3 3 3 3 2 3 3 3 3 2 3 3 3 3 2 3 3 3 3 2 3 3 3 3 2 3 3 3 3 2 3 3 3 3 2 3 3 3 3 2 3 3 3 3 2 3 3 3 3 2 3 3 3 3 2 3 3 3 3 2 3 3 3 3 2 3 3 3 3 2 3'
+    alert_rule_test:
+      - {eval_time: 25m, alertname: JetStreamReplicaPeersDegraded, exp_alerts: []}
+      - {eval_time: 60m, alertname: JetStreamReplicaPeersDegraded, exp_alerts: []}
+      - {eval_time: 25m, alertname: JetStreamReplicaPeersLagging, exp_alerts: []}
+      - {eval_time: 60m, alertname: JetStreamReplicaPeersLagging, exp_alerts: []}
+
+  # ------------------------------------------------------------------
+  # A copy that is online but NEVER caught up: stuck behind, not lost. The offline
+  # alert stays quiet; the lagging alert fires once the window and the hold have run.
+  # ------------------------------------------------------------------
+  - name: a follower stuck behind but online fires JetStreamReplicaPeersLagging only
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="devicechain_resolved-events"}'
+        values: '3x60'
+      - series: 'devicechain_eventprocessing_jetstream_peers_online{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="devicechain_resolved-events"}'
+        values: '3x60'
+      - series: 'devicechain_eventprocessing_jetstream_peers_current{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="devicechain_resolved-events"}'
+        values: '3x10 2x50'
+    alert_rule_test:
+      - {eval_time: 60m, alertname: JetStreamReplicaPeersDegraded, exp_alerts: []}
+      - {eval_time: 39m, alertname: JetStreamReplicaPeersLagging, exp_alerts: []}
+      - eval_time: 41m
+        alertname: JetStreamReplicaPeersLagging
+        exp_alerts:
+          - exp_labels:
+              stream: devicechain_resolved-events
+              job: devicechain/event-processing
+              namespace: dci-devicechain
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "A JetStream replica has not caught up"
+              description: "devicechain_resolved-events has had at least one online replica that was not caught up at any check for the last 30 minutes. Short lag under heavy load is normal and does not raise this. A copy this far behind cannot take over without losing recent messages. Check the NATS pods for CPU or disk pressure; it clears once every copy has been caught up at least once in a 15-minute window."
+
+  # ------------------------------------------------------------------
+  # A copy lost from the leader's peer list while the survivors keep flapping under
+  # load: online drops 3 -> 2 and stays. Still pages.
+  # ------------------------------------------------------------------
+  - name: a lost copy still fires JetStreamReplicaPeersDegraded while the survivors are under load
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="devicechain_resolved-events"}'
+        values: '3x60'
+      - series: 'devicechain_eventprocessing_jetstream_peers_online{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="devicechain_resolved-events"}'
+        values: '3x10 2x50'
+      - series: 'devicechain_eventprocessing_jetstream_peers_current{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="devicechain_resolved-events"}'
+        values: '3x10 2 2 1 2 2 2 2 2 1 2 2 2 2 2 1 2 2 2 2 2 1 2 2 2 2 2 1 2 2 2 2 2 1 2 2 2 2 2 1 2 2 2 2 2 1 2 2 2 2 2'
+    alert_rule_test:
+      - {eval_time: 29m, alertname: JetStreamReplicaPeersDegraded, exp_alerts: []}
+      - eval_time: 31m
+        alertname: JetStreamReplicaPeersDegraded
+        exp_alerts:
+          - exp_labels:
+              stream: devicechain_resolved-events
+              job: devicechain/event-processing
+              namespace: dci-devicechain
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "JetStream replica peers are offline"
+              description: "devicechain_resolved-events reports more replicas than it has online RAFT peers: a copy is offline or missing. It is labelled replicated but is not: losing the leader may lose data or availability. Check NATS pod health and placement -- three replicas across pods that share one node survive zero node losses."
 
   # ------------------------------------------------------------------
   # RAFT CATCH-UP after a replica lift: the new followers are not current for fifteen
@@ -186,6 +276,8 @@ tests:
       - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="devicechain_resolved-events"}'
         values: '3x40'
       - series: 'devicechain_eventprocessing_jetstream_peers_current{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="devicechain_resolved-events"}'
+        values: '1x14 3x25'
+      - series: 'devicechain_eventprocessing_jetstream_peers_online{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="devicechain_resolved-events"}'
         values: '1x14 3x25'
     alert_rule_test:
       - eval_time: 14m
@@ -261,6 +353,8 @@ tests:
       - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="KV_devicechain_dc_leases"}'
         values: '1x30'
       - series: 'devicechain_eventprocessing_jetstream_peers_current{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="KV_devicechain_dc_leases"}'
+        values: '1x30'
+      - series: 'devicechain_eventprocessing_jetstream_peers_online{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="KV_devicechain_dc_leases"}'
         values: '1x30'
       - series: 'devicechain_eventprocessing_jetstream_broker_clustered{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
         values: '1x30'

@@ -1109,7 +1109,8 @@ y cada bucket KV que usa, y cinco avisos vigilan el resultado:
 | Alerta | Severidad | Qué significa | Qué hacer |
 | --- | --- | --- | --- |
 | `JetStreamNotReplicatedAsConfigured` | warning | Durante 15 minutos, un flujo ha tenido menos réplicas de las configuradas para la instancia, según el servicio indicado por la etiqueta `job`. La instancia no es de alta disponibilidad para ese flujo. | Asegúrese de que el clúster de NATS tiene servidores suficientes para `instance.config.infrastructure.nats.streamReplicas`. El aumento de réplicas solo se ejecuta cuando un servicio arranca, así que, cuando el clúster sea lo bastante grande, reinicie los Deployments afectados. |
-| `JetStreamReplicaPeersDegraded` | warning | Durante 20 minutos, un flujo ha tenido menos copias actualizadas y en línea que réplicas. Perder su líder puede perder datos o disponibilidad. La espera es larga porque las réplicas recién añadidas copian los datos del flujo antes de contar como actualizadas, y porque con tasas de eventos altas y sostenidas una copia puede quedarse brevemente atrás; consulte más abajo. | Revise el estado y la ubicación de los pods de NATS. Tres réplicas en pods que comparten un nodo no sobreviven a la pérdida de ese nodo. |
+| `JetStreamReplicaPeersDegraded` | warning | Durante 20 minutos, un flujo ha tenido menos copias en línea que réplicas: una copia está fuera de línea o falta. Perder su líder puede perder datos o disponibilidad. Una copia que solo va por detrás de su líder sigue contando como en línea, así que el retraso no lo activa. | Revise el estado y la ubicación de los pods de NATS. Tres réplicas en pods que comparten un nodo no sobreviven a la pérdida de ese nodo. |
+| `JetStreamReplicaPeersLagging` | warning | Durante 15 minutos, tras una ventana de 15 minutos, al menos una copia en línea de un flujo no estuvo al día en ninguna comprobación. Una copia que se retrasa unos segundos bajo carga y se recupera no lo activa; una que sigue por detrás, sí. | Busque presión de CPU o de disco en los pods de NATS. Una copia tan atrasada no puede asumir el liderazgo sin perder mensajes recientes. |
 | `JetStreamLeaseBucketNotReplicated` | critical | En una instancia configurada para más de una réplica, el bucket que decide qué pod puede escribir tiene menos de tres réplicas. Perder su servidor impide que cualquier réplica en espera tome el relevo. | Igual que para `JetStreamNotReplicatedAsConfigured`. No confíe en la conmutación por error mientras esté activo. |
 | `JetStreamClusterUnused` | warning | El bróker está en clúster, pero todos los flujos están configurados para una réplica, así que la instancia ejecuta varios servidores de NATS y no sobrevive a la pérdida de ninguno. | Ajuste `streamReplicas` al clúster (`dcctl install --ha` fija ambos), o reduzca el clúster de NATS si lo que quería era un solo servidor. |
 | `JetStreamReplicationUnobserved` | warning | Durante 15 minutos, un pod en ejecución no ha podido leer el estado de replicación de un flujo que antes sí podía leer. Mientras está activo, los avisos anteriores no pueden juzgar ese flujo para ese pod, así que su replicación es desconocida, no correcta. | Si se activa para todos los flujos a la vez, el bróker o JetStream no está disponible: revise los pods de NATS y los registros de conexión del servicio. Si es un solo flujo, lo más probable es que ese flujo haya perdido su líder: inspecciónelo con `nats stream info`. |
@@ -1132,23 +1133,25 @@ y cada bucket KV que usa, y cinco avisos vigilan el resultado:
 - Un pod que no está en ejecución no exporta nada, así que no puede activarlo. Los avisos de
   salud de los pods cubren ese caso.
 
-Con tasas de eventos altas y sostenidas, `JetStreamReplicaPeersDegraded` puede pasar a pendiente y
-volver a despejarse sin que nada vaya mal. Una copia de uno de los flujos con más tráfico se queda
+Con tasas de eventos altas y sostenidas, una copia de uno de los flujos con más tráfico se queda
 un momento por detrás de su líder, cuenta como no actualizada hasta que lo alcanza, y después lo
 alcanza. En dos pruebas de 10 minutos a 6000 eventos por segundo con un bróker de tres servidores,
 el flujo con más tráfico tuvo una copia no actualizada en aproximadamente una de cada cinco
-comprobaciones, y nunca durante más de unos segundos seguidos, y el aviso pasó a pendiente y se
-despejó repetidas veces. Solo se activa cuando un flujo lleva 20 minutos sin todas sus copias
-actualizadas en cada comprobación, así que un retraso de este tipo lo despeja en lugar de activarlo.
-Para comprobar la replicación, ejecute `dcctl ha verify`: sigue comprobando durante hasta 90
-segundos (`--settle`) antes de informar de un fallo, así que una copia que va brevemente por detrás
-no lo hace fallar, y pasó al ejecutarlo después de cada una de esas pruebas.
+comprobaciones, y nunca durante más de unos segundos seguidos. Un aviso sobre ese recuento pasó a
+pendiente y se despejó repetidas veces en un clúster que no había perdido nada, por lo que
+`JetStreamReplicaPeersDegraded` lee el recuento de copias en línea, que el retraso no reduce.
+`JetStreamReplicaPeersLagging` cubre el otro caso, una copia que sigue por detrás: mira el mejor
+valor de 15 minutos, así que un retraso que se despeja una y otra vez no lo activa y uno que no se
+despeja, sí. Para comprobar la replicación, ejecute `dcctl ha verify`: sigue comprobando durante
+hasta 90 segundos (`--settle`) antes de informar de un fallo, así que una copia que va brevemente
+por detrás no lo hace fallar, y pasó al ejecutarlo después de cada una de esas pruebas.
 
 Los avisos leen estas series, que exporta cada servicio que usa JetStream:
 
-- **`devicechain_<area>_jetstream_replicas_desired{stream}`**, **`_replicas_actual{stream}`** y
-  **`_peers_current{stream}`**: el número de réplicas configurado, el que informa el bróker y las
-  copias actualizadas y en línea. Un servicio que no puede leer un flujo elimina las tres para ese
+- **`devicechain_<area>_jetstream_replicas_desired{stream}`**, **`_replicas_actual{stream}`**,
+  **`_peers_online{stream}`** y **`_peers_current{stream}`**: el número de réplicas configurado, el
+  que informa el bróker, las copias en línea y las copias en línea y al día. Un servicio que no puede
+  leer un flujo elimina las cuatro para ese
   flujo en lugar de seguir informando de sus últimos valores.
 - **`devicechain_<area>_jetstream_broker_clustered`**: 1 cuando el bróker conectado está en
   clúster y 0 en otro caso, también mientras el servicio está desconectado. Existe mientras el pod

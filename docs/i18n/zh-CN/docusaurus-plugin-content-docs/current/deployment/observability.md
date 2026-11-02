@@ -576,7 +576,8 @@ UPDATE "event-management".calculated_backfills
 | 告警 | 严重程度 | 含义 | 处理 |
 | --- | --- | --- | --- |
 | `JetStreamNotReplicatedAsConfigured` | warning | `job` 服务观察到流副本少于配置，持续十五分钟，该流不具备预期高可用。 | NATS 服务器数应满足 `instance.config.infrastructure.nats.streamReplicas`。副本提升仅在服务启动执行，集群扩足后重启受影响 Deployment。 |
-| `JetStreamReplicaPeersDegraded` | warning | 流连续二十分钟拥有的当前在线副本少于副本数。失去主副本可能丢数据或可用性。等待较长，因为新副本复制数据需要时间，高持续速率下也可能短暂落后，见下文。 | 检查 NATS Pod 健康及放置。三个副本在同节点，不耐受该节点失效。 |
+| `JetStreamReplicaPeersDegraded` | warning | 流连续二十分钟在线副本少于副本数：有副本离线或缺失。失去主副本可能丢数据或可用性。仅落后主副本的副本仍算在线，因此滞后不会触发。 | 检查 NATS Pod 健康及放置。三个副本在同节点，不耐受该节点失效。 |
+| `JetStreamReplicaPeersLagging` | warning | 在十五分钟窗口之后再持续十五分钟，流至少有一个在线副本在每次检查中都未追上。高负载下落后几秒又恢复的副本不会触发；持续落后的会。 | 检查 NATS Pod 的 CPU 或磁盘压力。落后如此之久的副本接管时会丢失近期消息。 |
 | `JetStreamLeaseBucketNotReplicated` | critical | 配置多副本实例中，决定哪个 Pod 可写的租约桶少于三个副本。失去其服务器将阻止所有备用接管。 | 同副本不足告警；触发期间不能依赖切换。 |
 | `JetStreamClusterUnused` | warning | 代理已集群化，所有流却配置单副本，运行多个 NATS 仍不耐受服务器丢失。 | `streamReplicas` 与集群匹配；`dcctl install --ha` 设置两者。如果只需单服务器，可缩小集群。 |
 | `JetStreamReplicationUnobserved` | warning | 运行 Pod 十五分钟无法读取之前可读的流复制状态，其他告警无法判断该流，应视为未知而非健康。 | 全部流同时触发时，检查代理/JetStream、NATS Pod 和连接日志。单流时可能流失去主副本，用 `nats stream info` 检查。 |
@@ -589,11 +590,11 @@ UPDATE "event-management".calculated_backfills
 - Pod 最后成功读取六小时后会解除，即使仍不可读，因此解除通知不证明恢复。
 - 未运行 Pod 不导出，不能触发，由 Pod 健康告警覆盖。
 
-持续高事件速率下，`JetStreamReplicaPeersDegraded` 可能反复 pending 又解除，并非故障。繁忙流副本短暂落后主副本，追上前不算 current。在三服务器代理两次十分钟、每秒 6,000 事件测试中，最忙流约五次检查有一次非 current，每次仅几秒，告警反复 pending/解除。只有二十分钟每次检查都不足才触发，因此短暂滞后会解除。运行 `dcctl ha verify` 最多复查 90 秒（`--settle`）才判失败，短暂落后不导致失败；两次测试后均通过。
+持续高事件速率下，繁忙流的副本会短暂落后主副本，追上前不算 current。在三服务器代理两次十分钟、每秒 6,000 事件测试中，最忙流约五次检查有一次非 current，每次仅几秒。基于该计数的告警在未丢失任何东西的集群上反复 pending 又解除，因此 `JetStreamReplicaPeersDegraded` 改读在线副本数，滞后不会使其下降。`JetStreamReplicaPeersLagging` 覆盖另一种情况，即副本持续落后：它取十五分钟内的最佳值，反复解除的滞后不会触发，不解除的会。运行 `dcctl ha verify` 最多复查 90 秒（`--settle`）才判失败，短暂落后不导致失败；两次测试后均通过。
 
 使用 JetStream 的服务导出：
 
-- **`devicechain_<area>_jetstream_replicas_desired{stream}`**、**`_replicas_actual{stream}`**、**`_peers_current{stream}`**：配置副本数、代理实际数、当前在线副本数。无法读取时移除三项，不保留旧值。
+- **`devicechain_<area>_jetstream_replicas_desired{stream}`**、**`_replicas_actual{stream}`**、**`_peers_online{stream}`**、**`_peers_current{stream}`**：配置副本数、代理实际数、在线副本数、在线且已追上的副本数。无法读取时移除四项，不保留旧值。
 - **`devicechain_<area>_jetstream_broker_clustered`**：连接代理已集群化为 1，否则包括断开时为 0，Pod 运行期间始终存在。
 
 以下没有告警，但发布缓慢时应查看：

@@ -500,6 +500,24 @@ func TestReplicationMetricsReportBrokerStateNotConfig(t *testing.T) {
 		t.Errorf("currentPeers = %d with one offline peer, want 2", got)
 	}
 
+	// onlinePeers separates a lagging copy (still online) from a gone one.
+	if got := onlinePeers(&stale); got != 3 {
+		t.Errorf("onlinePeers = %d with one lagging peer, want 3; lag is not loss", got)
+	}
+	if got := onlinePeers(&offline); got != 2 {
+		t.Errorf("onlinePeers = %d with one offline peer, want 2", got)
+	}
+	gone := *info
+	goneCluster := *info.Cluster
+	goneCluster.Replicas = []*nats.PeerInfo{{Name: "n2", Current: true}}
+	gone.Cluster = &goneCluster
+	if got := onlinePeers(&gone); got != 2 {
+		t.Errorf("onlinePeers = %d with one peer unlisted, want 2", got)
+	}
+	if got := onlinePeers(&nats.StreamInfo{}); got != 1 {
+		t.Errorf("onlinePeers = %d with no cluster info, want 1", got)
+	}
+
 	// An unclustered broker reports no cluster block; the single server holding the
 	// stream is one current peer, not zero.
 	if got := currentPeers(&nats.StreamInfo{}); got != 1 {
