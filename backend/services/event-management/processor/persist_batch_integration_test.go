@@ -347,6 +347,7 @@ func BenchmarkPersistBatch(b *testing.B) {
 		}
 	}
 	shapes = append(shapes, shape{10, 1, true}, shape{10, 16, true}, shape{10, 64, true})
+	benchPersistPaced(b, mgr)
 	for _, sh := range shapes {
 		writers, batch := sh.writers, sh.batch
 		name := fmt.Sprintf("writers=%d/batch=%d", writers, batch)

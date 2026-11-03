@@ -41,6 +41,7 @@ func BenchmarkProjectionWriters(b *testing.B) {
 	mgr, _ := newFenceBenchManager(b, "dswritersbench", true)
 	base := time.Now().UTC().Truncate(time.Hour)
 	var invocation int
+	benchProjectionPaced(b, mgr)
 	for _, fleet := range []struct {
 		name    string
 		devices int
