@@ -427,46 +427,58 @@ type commandOracle struct {
 	endpoint string
 }
 
+// commandPageSize is the page the oracle asks for; the server may cap it lower, so the read
+// pages until it has everything rather than assuming one page holds all of a device's commands.
+const commandPageSize = 500
+
 // snapshot reads the durable command state for one device, filtered by deviceToken
-// so the result is exactly that device's commands. pageSize is generous relative to
-// K so every command row is returned (and the count cross-checks totalRecords).
+// so the result is exactly that device's commands. It pages through every page, then
+// cross-checks the rows collected against totalRecords: a mismatch (pages that do not
+// add up) is a fail-closed error, never a silently-undercounted SUCCESSFUL tally.
 func (o *commandOracle) snapshot(ctx context.Context, deviceToken string) (commandSnapshot, error) {
-	vars := map[string]any{
-		"c": map[string]any{
-			"pageNumber":  1,
-			"pageSize":    500,
-			"deviceToken": deviceToken,
-		},
+	type row struct {
+		Token  string `json:"token"`
+		Status string `json:"status"`
 	}
-	var out struct {
-		Commands struct {
-			Results []struct {
-				Token  string `json:"token"`
-				Status string `json:"status"`
-			} `json:"results"`
-			Pagination struct {
-				TotalRecords *int64 `json:"totalRecords"`
-			} `json:"pagination"`
-		} `json:"commands"`
+	var rows []row
+	total := -1
+	for page := 1; ; page++ {
+		vars := map[string]any{
+			"c": map[string]any{
+				"pageNumber":  page,
+				"pageSize":    commandPageSize,
+				"deviceToken": deviceToken,
+			},
+		}
+		var out struct {
+			Commands struct {
+				Results    []row `json:"results"`
+				Pagination struct {
+					TotalRecords *int64 `json:"totalRecords"`
+				} `json:"pagination"`
+			} `json:"commands"`
+		}
+		if err := o.session.Query(ctx, o.endpoint, queryHarnessCommands, vars, &out); err != nil {
+			return commandSnapshot{}, fmt.Errorf("query commands for %s (page %d): %w", deviceToken, page, err)
+		}
+		// A null totalRecords is a fail-closed error, not a silent "no commands" that a
+		// no-spurious check would read as a clean pass.
+		if out.Commands.Pagination.TotalRecords == nil {
+			return commandSnapshot{}, fmt.Errorf("query commands for %s: server returned a null totalRecords", deviceToken)
+		}
+		total = int(*out.Commands.Pagination.TotalRecords)
+		rows = append(rows, out.Commands.Results...)
+		// Done when everything is in hand, or the server has run out of rows (an empty page
+		// that still leaves rows short is caught by the guard below, not looped on).
+		if len(rows) >= total || len(out.Commands.Results) == 0 {
+			break
+		}
 	}
-	if err := o.session.Query(ctx, o.endpoint, queryHarnessCommands, vars, &out); err != nil {
-		return commandSnapshot{}, fmt.Errorf("query commands for %s: %w", deviceToken, err)
+	if len(rows) != total {
+		return commandSnapshot{}, fmt.Errorf("query commands for %s: pages returned %d commands but totalRecords is %d", deviceToken, len(rows), total)
 	}
-	// A null totalRecords is a fail-closed error, not a silent "no commands" that a
-	// no-spurious check would read as a clean pass.
-	if out.Commands.Pagination.TotalRecords == nil {
-		return commandSnapshot{}, fmt.Errorf("query commands for %s: server returned a null totalRecords", deviceToken)
-	}
-	total := int(*out.Commands.Pagination.TotalRecords)
-	// The count invariant reconciles against totalRecords (a real COUNT(*)), not the
-	// returned page — but guard the two agreeing so a totalRecords that outran a
-	// bounded page (more commands than pageSize) is a fail-closed error, not a
-	// silently-undercounted SUCCESSFUL tally.
-	if total > len(out.Commands.Results) {
-		return commandSnapshot{}, fmt.Errorf("query commands for %s: totalRecords %d exceeds returned page %d — raise pageSize", deviceToken, total, len(out.Commands.Results))
-	}
-	snap := commandSnapshot{Count: total, Statuses: make(map[string]int, len(out.Commands.Results))}
-	for _, r := range out.Commands.Results {
+	snap := commandSnapshot{Count: total, Statuses: make(map[string]int, len(rows))}
+	for _, r := range rows {
 		snap.Statuses[r.Status]++
 		if r.Status == cmdStatusSuccessful {
 			snap.Successful++
