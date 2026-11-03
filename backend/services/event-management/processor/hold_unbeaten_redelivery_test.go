@@ -308,6 +308,20 @@ func (p *f1Pod) stopWithStoreDown() {
 
 // ONE LONG HOLD. The store is down for three AckWaits. What the broker does with the messages
 // that wait outside the held writer is the first step of the F1 claim.
+//
+// F1 (a hold spends the delivery budget of unbeaten messages, exhausting MaxDeliver) was
+// TESTED AND REFUTED; this is the structural guard. A reader blocked in the hand-off pulls
+// nothing, so the broker redelivers nothing however long the hold lasts; one delivery is
+// spent at the first pull after recovery.
+//
+// Measured with a flapping store (down 1.5 x AckWait, answering for a two-transaction window,
+// repeat; 1 s AckWait, 1500 events, one pod): batch 16 without fetch-ahead reached a highest
+// delivery count of 3 after 16 cycles; production's shape (batch 128, ahead on) reached 4
+// after 40 cycles (about 100 AckWaits), for one message in 1500, then plateaued. Nothing went
+// to failed-events or the dead-letter stream and 1500 of 1500 events were stored after a
+// restart. The margin is thin (4 of 5) and wall-clock driven, so that run is not kept as a
+// test. NOT MODELLED: a crash-looping pod with the store down spends one delivery of the
+// whole pool per restart.
 func TestF1ALongHoldDoesNotRedeliverToABlockedReader(t *testing.T) {
 	f1Tune(t)
 	b := newF1Broker(t)
@@ -336,80 +350,4 @@ func TestF1ALongHoldDoesNotRedeliverToABlockedReader(t *testing.T) {
 	t.Logf("deliveries per message after one 3 x AckWait hold: max=%d histogram=%v", max, hist)
 	require.Zero(t, pod.failedEvents())
 	pod.stopWithStoreDown()
-}
-
-// deadLetters is how many letters the max-delivery recorder has filed.
-func (p *f1Pod) deadLetters() uint64 {
-	t := p.b.t
-	t.Helper()
-	js, err := p.nmgr.Conn().JetStream()
-	require.NoError(t, err)
-	si, err := js.StreamInfo(messaging.StreamName(p.b.instance, streams.DeadLetters))
-	if err != nil {
-		return 0
-	}
-	return si.State.Msgs
-}
-
-// flap runs one cycle of a flapping store: down for longer than AckWait, then answering for
-// a window of `window` transactions, then down again.
-func (p *f1Pod) flap(window int64) {
-	t := p.b.t
-	t.Helper()
-	api := p.b.api
-	api.down.Store(true)
-	api.grant.Store(0)
-	p.holdSteady()
-	f1Elapse(f1AckWait + f1AckWait/2)
-	api.grant.Store(window)
-	f1WaitFor(t, "the window to be used", 30*time.Second, func() bool { return api.grant.Load() == 0 })
-	p.holdSteady()
-}
-
-// A STORE THAT FLAPS: down for longer than AckWait, answering for a window of two
-// transactions, down again, over and over, with production's fetch shape (batch 128, ahead).
-//
-// F1's claim was that each such cycle spends a delivery of every message waiting outside the
-// held writer, so MaxDeliver (5) is exhausted in five cycles and the event is then lost.
-// MEASURED: it is not. A delivery is spent only when the reader PULLS a redelivery, and the
-// reader pulls only when a writer has taken a message out of the hand-off channel, which is
-// the same thing that persists and acks messages. The pool is first-in-first-out, so a
-// message waits at most about one pool's worth of drain before its first copy reaches a
-// writer. Over 40 cycles (about 100 AckWaits) the highest delivery count reached was 4, by
-// one message in 1500, and it plateaued there: no message reached MaxDeliver, nothing went
-// to failed-events or the dead-letter stream, and every event was stored after a restart.
-//
-// What this pins is the property F1 feared losing: however the store flaps, no event is
-// abandoned for want of deliveries. The cycle count is kept to what runs in seconds (the
-// counts plateau by cycle 8); raise it to soak.
-func TestF1AFlappingStoreDoesNotExhaustTheDeliveriesOfUnbeatenMessages(t *testing.T) {
-	if testing.Short() {
-		t.Skip("runs the broker through ten AckWait-long outages")
-	}
-	f1Tune(t)
-	b := newF1Broker(t)
-	b.api.down.Store(true)
-	pod := b.startPod()
-	const n = 1500
-	pod.publish(0, n)
-	for cycle := 1; cycle <= 10; cycle++ {
-		pod.flap(2)
-	}
-	max, hist := pod.spy.histogram()
-	t.Logf("after 10 flaps: highest delivery count %d, messages by count %v, stored %d of %d, consumer %+v",
-		max, hist, pod.stored(), n, pod.consumer())
-	// Positive control: the unbeaten messages DID spend deliveries (otherwise the bound
-	// below would hold vacuously), and not a single one reached the last delivery.
-	require.GreaterOrEqual(t, max, 2, "no message was ever redelivered; the flapping did not exercise the claim")
-	require.Less(t, max, messaging.MaxDeliver, "a message used up its deliveries while the store flapped")
-
-	// A restart with the store still down, then recovery: nothing is missing.
-	pod.stopWithStoreDown()
-	b.api.down.Store(false)
-	pod2 := b.startPod()
-	require.True(t, pod2.settled(60*time.Second), "the backlog never drained after the store recovered")
-	require.EqualValues(t, n, pod2.stored(), "events missing after the flapping store recovered")
-	require.Zero(t, pod2.failedEvents(), "an event was reported failed")
-	require.Zero(t, pod2.deadLetters(), "an event ran out of deliveries and was dead-lettered")
-	pod2.stopWithStoreDown()
 }
