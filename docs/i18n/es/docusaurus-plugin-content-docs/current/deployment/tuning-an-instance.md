@@ -63,6 +63,7 @@ Una superposición solo puede fijar los valores siguientes. Todo lo demás se re
 | `resources`, `useMeasuredRequests`, `goMemLimitPercent`, `gogc`, `goMemLimit` | CPU y memoria, y el comportamiento de memoria de Go, de todas las áreas |
 | `functionalAreas.<area>.replicas`, `.strategy`, `.resources`, `.measuredRequests`, `.goMemLimitPercent`, `.memoryLimitFloor`, `.gogc`, `.goMemLimit`, `.avoidEventStorePrimary`, `.eventPathSpread` | Lo mismo, para un área |
 | `functionalAreas.<area>.config` | La configuración propia de esa área. Una clave desconocida detiene el servicio al arrancar |
+| `functionalAreas.<area>.profiler.enabled`, `.blockRate`, `.mutexFraction` | El listener de profiling de diagnóstico, desactivado por defecto (véase [Observabilidad](./observability.md)). Su `address` no es ajustable |
 | `frontend.replicas`, `frontend.resources` | Los pods de la consola |
 | `metrics.alerts`, `metrics.grafanaDashboards` | Reglas de alerta y paneles |
 | `ingress.className`, `ingress.annotations`, `ingress.uploadMaxBodySize`, `networkPolicy.additionalAllowedCidrs`, `serviceAccount.annotations` | Cómo se publica el ingress y quién puede llegar a los pods |

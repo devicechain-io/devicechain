@@ -53,6 +53,7 @@ dcctl upgrade local my-instance --version <new-version>
 | `resources`、`useMeasuredRequests`、`goMemLimitPercent`、`gogc`、`goMemLimit` | 所有区域的 CPU、内存以及 Go 的内存行为 |
 | `functionalAreas.<area>.replicas`、`.strategy`、`.resources`、`.measuredRequests`、`.goMemLimitPercent`、`.memoryLimitFloor`、`.gogc`、`.goMemLimit`、`.avoidEventStorePrimary`、`.eventPathSpread` | 同上，但只针对一个区域 |
 | `functionalAreas.<area>.config` | 该区域自身的配置。未知的键会使服务在启动时停止 |
+| `functionalAreas.<area>.profiler.enabled`、`.blockRate`、`.mutexFraction` | 诊断用的性能分析监听器，默认关闭（见 [可观测性](./observability.md)）。其 `address` 不可调整 |
 | `frontend.replicas`、`frontend.resources` | 控制台的 Pod |
 | `metrics.alerts`、`metrics.grafanaDashboards` | 告警规则和仪表板 |
 | `ingress.className`、`ingress.annotations`、`ingress.uploadMaxBodySize`、`networkPolicy.additionalAllowedCidrs`、`serviceAccount.annotations` | 入口如何对外提供，以及谁可以访问 Pod |
