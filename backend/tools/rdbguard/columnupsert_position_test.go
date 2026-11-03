@@ -20,6 +20,12 @@ var mk = NewColumnUpsert[Row]`,
 func f() { mk := rdb.NewColumnUpsert[Row]; _ = mk }`,
 		"a call in a function body": `package model
 func f() any { return ` + goodTable + ` }`,
+		"a call in a func literal in a package var": `package model
+var t = func() any { return ` + goodTable + ` }`,
+		"an instantiated call in a func literal in a package var": `package model
+var t = func() any { return rdb.NewColumnUpsert[Row](tenant, key, rdb.Upsert{Set: []rdb.Assignment{rdb.SetTo("a", "excluded.a")}}) }`,
+		"a call in a func literal statement": `package model
+var f = func() { ` + goodTable + ` }`,
 		"a call in a method": `package model
 func (x X) f() any { return ` + goodTable + ` }`,
 		"a call in a local var": `package model

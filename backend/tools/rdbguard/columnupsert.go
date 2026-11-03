@@ -75,6 +75,28 @@ func (s *siteScanner) columnUpsertFindings(fset *token.FileSet, file *ast.File, 
 			}
 			return true
 		})
+		// A call inside a function literal runs when the literal is called, not when the package
+		// initializes: construction at request time, with the plan cache rebuilt per call.
+		ast.Inspect(root, func(n ast.Node) bool {
+			lit, ok := n.(*ast.FuncLit)
+			if !ok {
+				return true
+			}
+			ast.Inspect(lit.Body, func(m ast.Node) bool {
+				if call, ok := m.(*ast.CallExpr); ok && isColumnUpsertCall(call) {
+					fun := call.Fun
+					switch f := fun.(type) {
+					case *ast.IndexExpr:
+						fun = f.X
+					case *ast.IndexListExpr:
+						fun = f.X
+					}
+					delete(inPos, fun)
+				}
+				return true
+			})
+			return false
+		})
 		skip := map[*ast.Ident]bool{}
 		flag := func(n ast.Node) {
 			out = append(out, Finding{
