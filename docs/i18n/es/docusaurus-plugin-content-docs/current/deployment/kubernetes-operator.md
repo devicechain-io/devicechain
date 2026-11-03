@@ -21,16 +21,20 @@ registros de base de datos del plano de control (consulta
 :::note Estado
 Disponible: el chart de Helm renderiza las cargas de trabajo y la configuración por servicio, y
 `dcctl bootstrap` y `dcctl upgrade` gestionan el ciclo de vida de una instancia. El operador
-observa el recurso `Instance` y no actúa sobre nada ahí. Su otra única tarea es en un clúster
+observa el recurso `Instance` y escribe en su [estado](#instance-status) lo que observa de las
+cargas de trabajo de la instancia. Su otra única tarea es en un clúster
 instalado con [`--backup-snapshot-class`](./bootstrap.md#snapshot-base-backups): cada diez
 minutos borra los respaldos base como instantáneas de volumen de las bases de datos que han
 salido de su ventana de recuperación, cosa que CloudNativePG no hace. Planificado, sin empezar:
-la agregación del estado de la instancia y los overlays de Kustomize por entorno.
+los overlays de Kustomize por entorno.
 :::
 
-La agregación de estado llegará sobre el bucle de observación del operador. Hasta entonces, el
-`Instance` no reporta ningún estado, así que consulta las propias cargas de trabajo, o `dcctl`,
-para saber si una instancia está sana.
+`kubectl get dci` responde «¿está en marcha, y en qué versión?» sin leer las cargas de trabajo:
+
+```text
+NAME   PROVIDER   CLUSTER           PROFILE   REQUESTED   OPERATION   READY   RUNNING   AGE
+prod   local      kind-devicechain  default   1.0.3       Ready       True    1.0.3     12d
+```
 
 ## Desplegando con Helm
 
@@ -136,6 +140,56 @@ instalación que hay que ejecutar. Las definiciones instaladas a mano no dejan c
 versión las puso, así que esas se dejan pasar con una nota que nombra el mismo comando, en
 lugar de rechazarse.
 
+### Estado de la instancia {#instance-status}
+
+El operador es el único que escribe el `status` de una `Instance`, y registra lo que
+**observó**: lee los Deployments de la instancia en cada cambio de la `Instance` o de alguno de
+ellos, así que el estado sigue un despliegue mientras ocurre. Otras dos cosas del recurso son de
+naturaleza distinta:
+
+| Dónde | Qué dice | Quién lo escribe |
+|---|---|---|
+| `status` | lo que el operador **observó** de las cargas de trabajo | solo el operador |
+| anotaciones (`core.devicechain.io/phase`, `last-applied-by`, `last-applied-at`) | lo que la última ejecución de `dcctl` **pretendía** o hizo; la columna `OPERATION` | `dcctl` |
+| el Lease `dcctl` en el espacio de nombres del operador | quién opera sobre el clúster **ahora mismo** | `dcctl` |
+
+`dcctl` nunca escribe `status`, y el operador nunca lee las anotaciones: `OPERATION` puede decir
+`Upgrading` mientras `READY` dice `True`, y ambas cosas son ciertas.
+
+| Campo | Significado |
+|---|---|
+| `status.observedGeneration` | la generación de la especificación a partir de la cual se calculó el estado |
+| `status.conditions` | `Ready`, `WorkloadsAvailable`, `RolloutComplete` (abajo) |
+| `status.version.requested` | `spec.imageVersion` |
+| `status.version.running` | la etiqueta de imagen que ejecuta cada área con pods deseados; `mixed` mientras difieren; vacío si no se puede derivar |
+| `status.areas[]` | una entrada por área funcional: `name`, `desiredReplicas`, `readyReplicas`, `updatedReplicas`, `image` |
+
+El estado es pequeño y acotado: una entrada por área funcional, y nada por inquilino ni por
+dispositivo.
+
+| Condición | Motivo (`reason`) | Estado | Significado |
+|---|---|---|---|
+| `WorkloadsAvailable` | `AllAreasAvailable` | True | cada área que quiere pods tiene todos disponibles |
+| | `NoWorkloads` | False | no existe ningún Deployment de área (aún no renderizado, o eliminado), o todas las áreas están a cero réplicas |
+| | `AreaUnavailable` | False | al menos un área quiere pods y no tiene ninguno disponible |
+| | `AreaDegraded` | False | cada área tiene algún pod disponible, pero al menos una tiene menos de los que quiere |
+| `RolloutComplete` | `RolloutComplete` | True | cada Deployment ha convergido a su plantilla actual y la versión en ejecución es la solicitada |
+| | `NoWorkloads` | False | no existe ningún Deployment de área |
+| | `RolloutInProgress` | False | un área no ha convergido: quedan pods antiguos, o el controlador del Deployment no ha observado la última plantilla |
+| | `ProgressDeadlineExceeded` | False | un Deployment informa de que su despliegue ha dejado de progresar |
+| | `VersionMismatch` | False | ha convergido, pero en una versión distinta de `spec.imageVersion` |
+| | `VersionUnknown` | Unknown | ha convergido, pero la versión en ejecución no se puede derivar (imágenes fijadas solo por digest) |
+| `Ready` | `Ready` | True | `WorkloadsAvailable` y `RolloutComplete` son ambas True |
+| | (el motivo de la primera condición que no es True) | False / Unknown | |
+
+Una carga de trabajo ausente siempre se informa con un motivo; nunca se lee como sana. `Ready`
+es el estado asentado: es False mientras hay un despliegue en curso aunque los pods sigan
+sirviendo, así que lee `WorkloadsAvailable` para saber si la instancia está sirviendo.
+
+`Instance` es una API soportada. Pueden añadirse campos de estado, tipos de condición y motivos
+nuevos; nada se elimina ni cambia de significado. Un lector debe tratar como Unknown un tipo de
+condición o un motivo que no reconozca.
+
 Los inquilinos **no** son recursos personalizados. Son registros de base de datos del plano de
 control, creados a través de la API de administración de la instancia y la consola `/admin`, y
 comparten los servicios de la instancia (consulta
@@ -174,20 +228,21 @@ capas rechazan esa edición:
 - `dcctl` compara esos mismos campos con la declaración que ya está en el clúster antes de
   escribir.
 
-### Leer la columna PHASE {#phase}
+### Leer la columna OPERATION {#phase}
 
-`kubectl get instances` imprime una columna **PHASE**, leída de la anotación
+`kubectl get instances` imprime una columna **OPERATION**, leída de la anotación
 `core.devicechain.io/phase` de la declaración. `dcctl instances list` lee la misma anotación y
 la muestra en palabras en su columna STATUS. Solo funciona en la máquina que arrancó la
 instancia, a partir de los registros locales de esa máquina.
 
-:::warning La fase es intención, no salud
+:::warning La operación es intención, no salud
 Registra lo que **la última ejecución de `dcctl` intentaba hacer**. Nada de lo que la escribe
-ha mirado un pod, y por eso `dcctl instances list` nunca dice `running`. Para saber si las
-cargas de trabajo están en marcha, míralas: `kubectl get pods -n dci-<id>`.
+ha mirado un pod, y por eso `dcctl instances list` nunca dice `running`. Si las cargas de
+trabajo están en marcha lo dice la columna **READY**, que el operador calcula a partir de los
+Deployments (consulta [Estado de la instancia](#instance-status)).
 :::
 
-| PHASE | STATUS en `dcctl instances list` | Qué significa |
+| OPERATION | STATUS en `dcctl instances list` | Qué significa |
 |---|---|---|
 | `Bootstrapping` | `bootstrap started, not finished` | `dcctl bootstrap` escribió la declaración y todavía no ha escrito una fase final. Así se ve también un bootstrap sano que se está ejecutando ahora mismo en otra terminal. |
 | `Upgrading` | `upgrade started, not finished` | Lo mismo, para `dcctl upgrade`. |
@@ -295,7 +350,7 @@ DeviceChain asigna deliberadamente cada capa a una sola herramienta:
 |---|---|---|
 | Infraestructura | **OpenTofu** | NATS, TimescaleDB, namespaces, ingress, TLS |
 | Cargas de trabajo | **Chart de Helm** | Deployments, Services y los ConfigMaps de configuración por área |
-| Ciclo de vida | **Operador** | observa el recurso `Instance` y hoy no actúa sobre nada ahí (la agregación de estado está planificada); poda los respaldos base como instantáneas de volumen a su ventana de recuperación |
+| Ciclo de vida | **Operador** | observa el recurso `Instance` y sus Deployments y escribe el [estado](#instance-status) observado; poda los respaldos base como instantáneas de volumen a su ventana de recuperación |
 | Identidad y configuración de instancia | **`dcctl`** | escribe la declaración `Instance` y el Secret de configuración de instancia que montan las cargas de trabajo |
 | Configuración de negocio | API de administración de la instancia / consola `/admin`, y la API / consola propia de cada inquilino | los inquilinos y los ajustes propios de cada inquilino (como la marca) |
 
@@ -307,8 +362,8 @@ Cada capa se ejecuta en un momento distinto:
 - **`dcctl install`** aplica además el operador y sus definiciones, a partir de manifiestos
   incrustados en la CLI y no a través de ninguna de las otras dos capas.
 - **El chart** renderiza las cargas de trabajo.
-- **El operador** observa el recurso `Instance` (consulta la nota de estado al principio de esta
-  página para saber qué hace hoy con él).
+- **El operador** observa el recurso `Instance` y los Deployments de la instancia (consulta
+  [Estado de la instancia](#instance-status) para saber qué escribe).
 
 El arranque del clúster nunca vive en el código de la aplicación ni del operador; es tarea de la
 capa de infraestructura. Los módulos de OpenTofu viven en

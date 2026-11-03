@@ -11,6 +11,14 @@ rules:
   verbs:
   - get
 - apiGroups:
+  - apps
+  resources:
+  - deployments
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - core.devicechain.io
   resources:
   - instances

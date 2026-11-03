@@ -9,12 +9,13 @@ import (
 
 // Provenance annotations.
 //
-// These are METADATA rather than status fields, and the choice is a scheduling
-// one rather than a principle. The claim protocol that lands next puts a holder
-// and a heartbeat in the status, written by dcctl, alongside the conditions the
-// operator writes — two writers on one subresource, which that design records as
-// an open question. Provenance does not need to wait on the answer, and putting
-// it in the status now would pre-commit to one.
+// These are METADATA rather than status fields, and the choice is a principle:
+// status has exactly ONE writer, the operator, and it records what the operator
+// OBSERVED. Annotations record what a dcctl run ASSERTED, and the claim — who is
+// operating on the instance right now — is a coordination.k8s.io Lease named
+// `dcctl` (backend/cli/bootstrap/claim.go), not a field here. Two typed writers on
+// one status subresource drop each other's fields on round-trip, which is why
+// dcctl never writes status at all.
 const (
 	// AnnotationLastAppliedBy records the dcctl version that last wrote the spec.
 	AnnotationLastAppliedBy = "core.devicechain.io/last-applied-by"
@@ -406,10 +407,20 @@ type SecretReference struct {
 	Name string `json:"name"`
 }
 
-// InstanceStatus is the OBSERVED state.
+// InstanceStatus is the OBSERVED state, and the operator is its only writer.
 //
 // Nothing here is an input: if dcctl needs a value to reproduce a bootstrap it
-// belongs in the spec.
+// belongs in the spec. What a dcctl run ASSERTED is in the annotations and who is
+// operating now is the `dcctl` Lease; this is what the operator SAW.
+//
+// The status is part of the supported API. Every field is optional and a reader
+// must tolerate its absence (an instance the operator has not reached yet carries
+// none). Changes are additive only: fields and condition types may be added,
+// nothing is removed, retyped or given a new meaning. Unknown condition types and
+// reasons must be read as Unknown.
+//
+// It is deliberately small and bounded: one entry per functional area (a few
+// dozen at most) and nothing per tenant or per device.
 type InstanceStatus struct {
 	// ObservedGeneration is the spec generation this status was computed from.
 	// Without it a reader cannot tell a status that reflects the current spec from
@@ -420,12 +431,11 @@ type InstanceStatus struct {
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 
 	// Conditions report what the operator can see of the instance's workloads.
-	//
-	// Nothing writes these yet; the reconciler that will is a later slice. When it
-	// does, absence must be reported with a reason rather than as health: a
-	// resource whose CRD is not installed, one not created yet, and one that is
-	// failing are three different answers, and collapsing any of them into "not
-	// Ready" throws away the part a human can act on.
+	// The types and reasons are the Condition* and Reason* constants in this
+	// package. Absence is reported with a reason rather than as health: no
+	// workloads at all, an area with nothing available and an area merely short of
+	// replicas are different answers and collapsing any of them into "not Ready"
+	// throws away the part a human can act on.
 	//
 	// +optional
 	// +patchMergeKey=type
@@ -433,7 +443,110 @@ type InstanceStatus struct {
 	// +listType=map
 	// +listMapKey=type
 	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type"`
+
+	// Version is the version the instance is requested to be at and the version its
+	// workloads are actually running.
+	//
+	// +optional
+	Version *ObservedVersion `json:"version,omitempty"`
+
+	// Areas is one entry per functional-area workload found in the instance's
+	// namespace, sorted by name.
+	//
+	// +optional
+	// +listType=map
+	// +listMapKey=name
+	Areas []AreaStatus `json:"areas,omitempty"`
 }
+
+// ObservedVersion compares the requested version with the running one.
+type ObservedVersion struct {
+	// Requested echoes spec.imageVersion.
+	//
+	// +optional
+	Requested string `json:"requested,omitempty"`
+
+	// Running is the image tag the workloads run: the tag when every area with at
+	// least one desired replica runs the same one, VersionMixed when they differ
+	// (mid-rollout, or an area pinned to its own image), and empty when it cannot
+	// be derived (no workloads, or images referenced by digest alone).
+	//
+	// +optional
+	Running string `json:"running,omitempty"`
+}
+
+// VersionMixed is the value of ObservedVersion.Running when areas run different tags.
+const VersionMixed = "mixed"
+
+// AreaStatus is the observed state of one functional area's Deployment.
+type AreaStatus struct {
+	// Name is the functional area (the devicechain.io/functional-area label).
+	//
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
+
+	// DesiredReplicas is the Deployment's spec.replicas.
+	DesiredReplicas int32 `json:"desiredReplicas"`
+
+	// ReadyReplicas is the number of pods passing readiness.
+	ReadyReplicas int32 `json:"readyReplicas"`
+
+	// UpdatedReplicas is the number of pods at the Deployment's current template.
+	// A finished rollout has this equal to DesiredReplicas; AvailableReplicas
+	// alone cannot say so, because old pods count toward it.
+	UpdatedReplicas int32 `json:"updatedReplicas"`
+
+	// Image is the container image of the area's main container as the Deployment
+	// declares it.
+	//
+	// +optional
+	Image string `json:"image,omitempty"`
+}
+
+// The condition types the operator writes. These names are API.
+const (
+	// ConditionReady is the summary: True only when WorkloadsAvailable and
+	// RolloutComplete are both True. Its reason is the first False condition's.
+	ConditionReady = "Ready"
+	// ConditionWorkloadsAvailable says every functional area wanting pods has them
+	// all available.
+	ConditionWorkloadsAvailable = "WorkloadsAvailable"
+	// ConditionRolloutComplete says the workloads have converged on the current
+	// template and on the requested version.
+	ConditionRolloutComplete = "RolloutComplete"
+)
+
+// The reasons the operator writes. These names are API: adding one is minor,
+// renaming one or changing what it means is breaking.
+const (
+	// ReasonReady is Ready=True.
+	ReasonReady = "Ready"
+	// ReasonAllAreasAvailable is WorkloadsAvailable=True.
+	ReasonAllAreasAvailable = "AllAreasAvailable"
+	// ReasonRolloutComplete is RolloutComplete=True.
+	ReasonRolloutComplete = "RolloutComplete"
+
+	// ReasonNoWorkloads: no functional-area Deployment exists for the instance (not
+	// rendered yet, or removed). Never reported as healthy.
+	ReasonNoWorkloads = "NoWorkloads"
+	// ReasonAreaUnavailable: at least one area wants pods and has none available.
+	ReasonAreaUnavailable = "AreaUnavailable"
+	// ReasonAreaDegraded: every area wanting pods has at least one available, but
+	// at least one has fewer than it wants.
+	ReasonAreaDegraded = "AreaDegraded"
+	// ReasonRolloutInProgress: at least one area has not converged on its current
+	// template.
+	ReasonRolloutInProgress = "RolloutInProgress"
+	// ReasonProgressDeadlineExceeded: a Deployment reports it has stopped making
+	// progress (its Progressing condition is False).
+	ReasonProgressDeadlineExceeded = "ProgressDeadlineExceeded"
+	// ReasonVersionMismatch: the workloads have converged but run a different
+	// version from spec.imageVersion.
+	ReasonVersionMismatch = "VersionMismatch"
+	// ReasonVersionUnknown: the workloads have converged but the running version
+	// cannot be derived from their images (RolloutComplete is Unknown).
+	ReasonVersionUnknown = "VersionUnknown"
+)
 
 //+kubebuilder:object:root=true
 //+kubebuilder:resource:scope=Cluster,shortName=dci
@@ -441,11 +554,17 @@ type InstanceStatus struct {
 //+kubebuilder:printcolumn:name="Provider",type=string,JSONPath=`.spec.provider`
 //+kubebuilder:printcolumn:name="Cluster",type=string,JSONPath=`.spec.cluster`
 //+kubebuilder:printcolumn:name="Profile",type=string,JSONPath=`.spec.profile`
-//+kubebuilder:printcolumn:name="Version",type=string,JSONPath=`.spec.imageVersion`
-// The phase is a column because `kubectl get dci` is the one reader dcctl does not
-// control, and an operator looking at a cluster mid-run is exactly who needs to see
-// that a bootstrap, an upgrade or a destroy did not finish. An instance carrying no
-// annotation renders blank, which is honest: nothing recorded what it was doing.
+//+kubebuilder:printcolumn:name="Requested",type=string,JSONPath=`.spec.imageVersion`
+// Ready and Running are OBSERVED: the operator's conditions and the version its
+// workloads actually run. Operation is INTENT: what the last dcctl run was trying to
+// do, read from an annotation. It is a column because `kubectl get dci` is the one
+// reader dcctl does not control, and an operator looking at a cluster mid-run is
+// exactly who needs to see that a bootstrap, an upgrade or a destroy did not finish.
+// It is named Operation, not Phase, so that intent is not read as state. An instance
+// carrying no annotation renders blank, which is honest: nothing recorded what it was
+// doing.
+//+kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
+//+kubebuilder:printcolumn:name="Running",type=string,JSONPath=`.status.version.running`
 //
 // 🔴 THE BACKSLASHES ARE REQUIRED AND MUST NOT BE TIDIED AWAY, AND THE TIDY VERSION
 // FAILS SILENTLY. The API server evaluates this path itself — apiextensions-apiserver's
@@ -456,7 +575,7 @@ type InstanceStatus struct {
 // carry the backslashes through: controller-gen parses a backquoted marker argument as
 // a raw string. Both halves are pinned by TestThePhaseColumnActuallyResolves, which
 // drives the real evaluator the way the API server drives it.
-//+kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.metadata.annotations.core\.devicechain\.io/phase`
+//+kubebuilder:printcolumn:name="Operation",type=string,JSONPath=`.metadata.annotations.core\.devicechain\.io/phase`
 //+kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // Instance is the declaration of a DeviceChain instance.
