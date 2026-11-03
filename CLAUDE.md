@@ -342,20 +342,7 @@ done
 
 ## Forked dependencies
 
-**`github.com/nats-io/nats-server/v2` → `github.com/devicechain-io/nats-server/v2@v2.15.2-dc.1`**
-
-Only `backend/broker/dc-nats-server` (the broker image) carries the `replace`; every other module imports
-nats-server solely as an embedded test server and stays on upstream. Upstream's `flushOutbound` writes one
-TLS record and one syscall per queued buffer; the fork coalesces small buffers into records of up to 16 KiB
-(measured by the `tlsbench_*` harness in that module). The fork is cut from the upstream **v2.15.2 tag**
-(branch `dc-release-v2.15.2`, one commit), not from `main`, so the broker runs no unreleased upstream change
-it did not choose. It inherits upstream's tags, so `v2.15.2` on the fork is *unpatched*; only `-dc.N` tags
-carry the change, which is why the guard matches the exact version. **Drop the `replace` and the guard, and
-bump to upstream, when a release ships an equivalent.** The `nats-server fork guard` step in the `go` CI job
-enforces the replace with `GOWORK=off` (the image is built that way). Dependabot does not track the fork, so
-re-check NATS security advisories by hand when reviewing broker CVEs, and rebase the fork onto each new tag.
-
-Retired: `github.com/graph-gophers/graphql-go` was carried as a fork (`devicechain-io/graphql-go`) because
+None. `github.com/graph-gophers/graphql-go` was carried as a fork (`devicechain-io/graphql-go`) because
 upstream silently discarded input-object entries the schema does not define when the value arrived
 through a **variable** — a fail-open, since every real client sends variables. Upstream v1.10.3 carries
 the fix, so the fork, every module's `replace`, and the CI guard were retired.

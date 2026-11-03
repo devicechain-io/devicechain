@@ -30,15 +30,3 @@ require (
 	golang.org/x/sys v0.49.0 // indirect
 	golang.org/x/time v0.16.0 // indirect
 )
-
-// The image runs DeviceChain's fork of nats-server, not upstream. Upstream's flushOutbound
-// writes one TLS record and makes one syscall per queued buffer, so a connection that
-// flushes many small buffers (an MQTT fan-in over TLS) pays a record header, an AEAD seal
-// and a write per buffer. The fork coalesces small buffers into records of up to 16 KiB.
-// It is cut from the v2.15.2 TAG, not from upstream main, so the broker runs no unreleased
-// upstream change it did not choose; branch dc-release-v2.15.2 carries exactly one commit
-// on top of the tag. Only the -dc.N tags carry the change: the fork inherits upstream's
-// tags, so v2.15.2 on it is unpatched, which is why the CI `nats-server fork guard` step
-// matches the exact version. Drop this replace (and that step) once upstream ships an
-// equivalent and bump to that release. See "Forked dependencies" in CLAUDE.md.
-replace github.com/nats-io/nats-server/v2 => github.com/devicechain-io/nats-server/v2 v2.15.2-dc.1

@@ -6,13 +6,13 @@ package main
 // Exact-delivery integrity check on the production shape: a 3-node TLS route cluster running
 // JetStream, a file stream with Replicas=3, publishers acking every message, and two durable
 // pull consumers (on different nodes) that must each see every acknowledged message exactly
-// once, byte-for-byte, in per-publisher order. Run it against stock and coalescing builds.
+// once, byte-for-byte, in per-publisher order. Run it against a candidate broker build to check delivery integrity.
 //
 // Skipped unless DCB_RUN=1 and DCB_JSRUN=1. Knobs: DCB_N (total messages, default 200000),
 // DCB_PUBS (default 4), DCB_TLS.
 //
 // Payload sizes are deterministic per (publisher, seq): mostly 200-500 B, some 0 B, some
-// straddling the 16 KiB coalescing bound (15.9-16.5 KiB) and some well above it.
+// straddling the 16 KiB TLS record bound (15.9-16.5 KiB) and some well above it.
 
 import (
 	"bytes"
