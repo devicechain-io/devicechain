@@ -71,6 +71,7 @@ usage_err() { say "$*"; exit 2; }
 kubeconfig="" ns="" round="" phase="" duration="" out="" marker="" kctx=""
 cpu_profiles=1 steady_check=1 dry_run=0 skip_nats=0 skip_db=0
 nats_ns="" nats_prof_port="" rdb_cluster="dc-rdb" tsdb_cluster="dc-tsdb"
+rdb_ns="" psql_ns=""
 tsdb_database="" services_filter=""
 
 while [[ $# -gt 0 ]]; do
@@ -90,6 +91,7 @@ while [[ $# -gt 0 ]]; do
     --skip-nats) skip_nats=1; shift ;;
     --skip-db) skip_db=1; shift ;;
     --nats-namespace) nats_ns="$2"; shift 2 ;;
+    --rdb-namespace) rdb_ns="$2"; shift 2 ;;
     --nats-prof-port) nats_prof_port="$2"; shift 2 ;;
     --rdb-cluster) rdb_cluster="$2"; shift 2 ;;
     --tsdb-cluster) tsdb_cluster="$2"; shift 2 ;;
@@ -119,7 +121,11 @@ to_seconds() {
 
 kargs=()
 k() { # kubectl bound to the lane-private kubeconfig, never the ambient one
-  env -u KUBECONFIG "$KUBECTL" "${kargs[@]}" "$@"
+  # MSYS2_ARG_CONV_EXCL: Git Bash on Windows rewrites an argument that starts with "/" into a
+  # Windows path, so `get --raw /api/v1/nodes/N/proxy/metrics/cadvisor` reached the API server as
+  # "C:/Program Files/Git/api/..." and every node read answered NotFound (r25). Other platforms
+  # ignore the variable.
+  env -u KUBECONFIG MSYS2_ARG_CONV_EXCL='/api;/apis' "$KUBECTL" "${kargs[@]}" "$@"
 }
 
 # ---------------------------------------------------------------------------
@@ -143,6 +149,9 @@ self_test() {
  {"metadata":{"name":"device-state-bbb","uid":"u2","labels":{"devicechain.io/functional-area":"device-state"}},
   "spec":{"nodeName":"n2","containers":[{"name":"svc","env":[{"name":"DC_PROFILER_ADDRESS","value":"127.0.0.1:6060"}]}]},
   "status":{"phase":"Running","containerStatuses":[{"name":"svc","ready":true,"restartCount":0,"image":"img/ds:1","imageID":"img/ds@sha256:bb"}]}},
+ {"metadata":{"name":"frontend-ccc","uid":"u6","labels":{"devicechain.io/functional-area":"frontend"}},
+  "spec":{"nodeName":"n1","containers":[{"name":"frontend"}]},
+  "status":{"phase":"Running","containerStatuses":[{"name":"frontend","ready":true,"restartCount":0,"image":"img/fe:1","imageID":"img/fe@sha256:ee"}]}},
  {"metadata":{"name":"dc-nats-0","uid":"u3","labels":{"app.kubernetes.io/name":"nats","app.kubernetes.io/component":"nats"}},
   "spec":{"nodeName":"n1","containers":[{"name":"nats"}]},
   "status":{"phase":"Running","containerStatuses":[{"name":"nats","ready":true,"restartCount":0,"image":"img/nats:1","imageID":"img/nats@sha256:cc"}]}},
@@ -157,12 +166,13 @@ JSON
   cat >"$d/fx/deploys.json" <<'JSON'
 {"items":[
  {"metadata":{"name":"device-management","labels":{"devicechain.io/functional-area":"device-management"}},"spec":{"replicas":1}},
- {"metadata":{"name":"device-state","labels":{"devicechain.io/functional-area":"device-state"}},"spec":{"replicas":1}}
+ {"metadata":{"name":"device-state","labels":{"devicechain.io/functional-area":"device-state"}},"spec":{"replicas":1}},
+ {"metadata":{"name":"frontend","labels":{"devicechain.io/functional-area":"frontend"}},"spec":{"replicas":1}}
 ]}
 JSON
   jq '.items[1].spec.replicas = 2' "$d/fx/deploys.json" >"$d/fx/deploys-short.json"
   cat >"$d/fx/natsconf.json" <<'JSON'
-{"items":[{"data":{"nats.conf":"server_name: x\nprof_port: 6061\n"}}]}
+{"items":[{"data":{"nats.conf":"{\n  \"server_name\": \"x\",\n  \"prof_port\": 6061,\n  \"prof_block_rate\": 100000\n}\n"}}]}
 JSON
 
   # --- stub kubectl: answers only the calls this script makes, from fixtures.
@@ -175,6 +185,7 @@ echo "${args[*]}" >>"$STUB_DIR/kubectl.log"
 case "${args[0]}" in
   get)
     case "${args[*]}" in
+      *"get pods"*"-n nsdb"*) echo '{"items":[]}' ;;   # a second namespace that holds no pods of its own
       *"get pods"*)
         echo x >>"$STUB_DIR/podreads"
         if [[ -n "${STUB_PODS_AFTER:-}" && "$(wc -l <"$STUB_DIR/podreads")" -ge 2 ]]; then cat "$STUB_DIR/fx/$STUB_PODS_AFTER"; else cat "$STUB_DIR/fx/${STUB_PODS:-pods.json}"; fi ;;
@@ -296,6 +307,22 @@ STUB
   # ...and a dry run still REFUSES on a marker that is not steady, so it is a real preflight.
   steady_marker warmup R1 "$later"; run 3 --dry-run
 
+  # 8. The broker's prof_port is read from its config when --nats-prof-port is not given, in the
+  #    JSON form the chart renders (`"prof_port": 6061,`), and the console (a static nginx behind
+  #    the same functional-area label) is not a profiling target.
+  steady_marker steady R1 "$later"; rm -rf "$d/out"
+  out="$(env STUB_DIR="$d" KUBECTL="$d/bin/kubectl" CURL="$d/bin/curl" "$SELF" --kubeconfig "$d/kc" --namespace ns1 \
+    --round rT --phase R1 --duration 1 --out "$d/out" --marker "$d/marker.json" --dry-run 2>&1)" && code=0 || code=$?
+  [[ "$code" -eq 0 ]] && grep -q "nats dc-nats-0 :6061" <<<"$out" \
+    || { echo "self-test: prof_port was not read from the JSON broker config (exit $code)" >&2; echo "$out" >&2; rc=1; }
+  ! grep -q "frontend" <<<"$out" || { echo "self-test: the console was planned as a profiling target" >&2; echo "$out" >&2; rc=1; }
+
+  # 9. The relational store may live in another namespace (dc-system): its psql runs there.
+  rm -rf "$d/out"; : >"$d/kubectl.log"
+  run 0 --rdb-namespace nsdb
+  grep -q "exec -n nsdb dc-rdb-1" "$d/kubectl.log" || { echo "self-test: --rdb-namespace did not move the relational store's psql" >&2; rc=1; }
+  grep -q "exec -n ns1 dc-tsdb-1" "$d/kubectl.log" || { echo "self-test: the event store's psql left the instance namespace" >&2; rc=1; }
+
   [[ "$rc" -eq 0 ]] && echo "self-test: ok"
   return "$rc"
 }
@@ -322,6 +349,8 @@ if [[ "$steady_check" -eq 1 && -z "$marker" ]]; then
 fi
 [[ -n "$out" ]] || out="$ROOT/perf-$round"
 [[ -n "$nats_ns" ]] || nats_ns="$ns"
+# The relational store lives in the cluster's system namespace (dc-system), not the instance's.
+[[ -n "$rdb_ns" ]] || rdb_ns="$ns"
 window=$(( secs * cpu_profiles + 30 ))   # profiles plus the before/after snapshots and slack
 
 # ---------------------------------------------------------------------------
@@ -350,7 +379,17 @@ fi
 # ---------------------------------------------------------------------------
 # Discovery (read-only)
 # ---------------------------------------------------------------------------
-pods_json="$(k get pods -n "$ns" -o json)" || die "cannot list pods in $ns"
+# all_pods: the instance's pods, plus the relational store's when it lives in another namespace
+# (the manifest, the restart check and the CPU mapping all work from this one list).
+all_pods() {
+  local a b
+  a="$(k get pods -n "$ns" -o json)" || return 1
+  if [[ "$rdb_ns" == "$ns" ]]; then printf '%s\n' "$a"; return 0; fi
+  b="$(k get pods -n "$rdb_ns" -o json)" || return 1
+  # on stdin, not --argjson: two pod lists overflow a Windows command line
+  printf '%s\n%s\n' "$a" "$b" | "$jq_real" -s '{items: (.[0].items + .[1].items)}' | tr -d '\r'
+}
+pods_json="$(all_pods)" || die "cannot list pods in $ns (and $rdb_ns)"
 deploys_json="$(k get deploy -n "$ns" -l devicechain.io/functional-area -o json)" || die "cannot list deployments in $ns"
 
 failures_file="$(mktemp)"; rows_file="$(mktemp)"; trap 'pf_close 2>/dev/null || true; rm -f "$failures_file" "$rows_file"; [[ -z "${pf_dir:-}" ]] || rm -rf "$pf_dir"' EXIT
@@ -369,6 +408,8 @@ mapfile -t areas < <("$JQ" -r '.items[] | .metadata.labels["devicechain.io/funct
 for row in "${areas[@]}"; do
   area="${row%%|*}"; want="${row##*|}"
   if [[ -n "$services_filter" && ",$services_filter," != *",$area,"* ]]; then continue; fi
+  # The console is a static nginx behind the same label; it is no Go service and has no profiler.
+  [[ "$area" != frontend ]] || continue
   mapfile -t svc_pods < <("$JQ" -r --arg a "$area" '.items[] | select(.metadata.labels["devicechain.io/functional-area"]==$a and .status.phase=="Running" and ([.status.containerStatuses[]?.ready]|all)) | .metadata.name' <<<"$pods_json")
   if [[ ${#svc_pods[@]} -ne "$want" ]]; then
     fail_rec "$area" "-" pods "${#svc_pods[@]} of $want pods ready (the Deployment wants $want); a smaller sample is not collected silently"
@@ -394,7 +435,11 @@ if [[ "$skip_nats" -eq 0 ]]; then
     if [[ -z "$nats_prof_port" ]]; then
       cm="$(k get configmap -n "$nats_ns" -l app.kubernetes.io/name=nats -o json 2>/dev/null || true)"
       [[ -n "$cm" ]] || cm='{"items":[]}'
-      nats_prof_port="$("$JQ" -r '[.items[]?.data[]? | capture("^\\s*prof_port\\s*[:=]\\s*(?<p>[0-9]+)")?.p][0] // ""' <<<"$cm" 2>/dev/null || true)"
+      # jq pulls out the config values and grep -E finds the port: jq's regex functions behave
+      # differently across jq releases (this one passed on jq 1.8 and failed on CI's runner).
+      cm_values="$("$JQ" -r '.items[]?.data[]?' <<<"$cm" 2>/dev/null || true)"
+      nats_prof_port="$(grep -oE '"?prof_port"?[[:space:]]*[:=][[:space:]]*[0-9]+' <<<"$cm_values" \
+        | grep -oE '[0-9]+$' | sed -n '1p' || true)"
     fi
     if [[ -z "$nats_prof_port" ]]; then
       fail_rec nats "-" profiler "prof_port is not in the broker config and --nats-prof-port was not given: set the OpenTofu instance variable nats_profiling_port for the run"
@@ -493,28 +538,36 @@ profile_pod() { # component pod port kind(service|nats)
   local c="$1" p="$2" port="$3" tgt="$4" i kd
   trap 'pf_close' EXIT
   trap 'exit 143' TERM INT
-  if ! pf_open "$( [[ $tgt == nats ]] && echo "$nats_ns" || echo "$ns")" "$p" "$port"; then
-    fail_rec "$c" "$p" port-forward "cannot port-forward to $p:$port (is the profiling listener on?)"; return 0
-  fi
-  local base="http://127.0.0.1:$PF_PORT"
+  local pfns; pfns="$( [[ $tgt == nats ]] && echo "$nats_ns" || echo "$ns")"
+  # One port-forward PER PROFILE, not one per pod: a forward that sat idle across a 60 s profile
+  # was dropped by the API server on a real cluster (r25), and every later fetch of that pod then
+  # failed with "connection refused". A forward costs about a second.
+  pf_fetch() { # kind path file maxtime
+    if ! pf_open "$pfns" "$p" "$port"; then
+      fail_rec "$c" "$p" "$1" "cannot port-forward to $p:$port (is the profiling listener on?)"; return 1
+    fi
+    local rc=0
+    fetch "$c" "$p" "$1" "http://127.0.0.1:$PF_PORT$2" "$3" "$4" || rc=$?
+    pf_close
+    return "$rc"
+  }
   # cpu profiles back to back; the other pods run theirs at the same time, so the window is shared
   for i in $(seq 1 "$cpu_profiles"); do
-    fetch "$c" "$p" "cpu$i" "$base/debug/pprof/profile?seconds=$secs" "$(outname "$c" "$p" "cpu$i" pb.gz)" $((secs + 30)) || true
+    pf_fetch "cpu$i" "/debug/pprof/profile?seconds=$secs" "$(outname "$c" "$p" "cpu$i" pb.gz)" $((secs + 30)) || true
   done
   for kd in heap allocs; do
-    fetch "$c" "$p" "$kd" "$base/debug/pprof/$kd" "$(outname "$c" "$p" "$kd" pb.gz)" 60 || true
+    pf_fetch "$kd" "/debug/pprof/$kd" "$(outname "$c" "$p" "$kd" pb.gz)" 60 || true
   done
   if [[ "$tgt" == service ]]; then
     for kd in mutex block; do
-      fetch "$c" "$p" "$kd" "$base/debug/pprof/$kd" "$(outname "$c" "$p" "$kd" pb.gz)" 60 || true
+      pf_fetch "$kd" "/debug/pprof/$kd" "$(outname "$c" "$p" "$kd" pb.gz)" 60 || true
     done
   else
     # nats-server has no mutex-fraction setting; block needs prof_block_rate in its config
     if [[ -n "${nats_block_on:-}" ]]; then
-      fetch "$c" "$p" block "$base/debug/pprof/block" "$(outname "$c" "$p" block pb.gz)" 60 || true
+      pf_fetch block "/debug/pprof/block" "$(outname "$c" "$p" block pb.gz)" 60 || true
     fi
   fi
-  pf_close
 }
 
 # ---- NATS monitoring snapshots (port-forward to the monitor port)
@@ -531,7 +584,7 @@ nats_monitor() { # pod when(pre|post)
 
 # ---- databases
 psql_json() { # pod database sql -> stdout
-  k exec -n "$ns" "$1" -c postgres -- psql -X -At -v ON_ERROR_STOP=1 -d "$2" -c "$3"
+  k exec -n "${psql_ns:-$ns}" "$1" -c postgres -- psql -X -At -v ON_ERROR_STOP=1 -d "$2" -c "$3"
 }
 PGSS_SQL="SELECT jsonb_build_object('takenAt', now(), 'statsReset', (SELECT stats_reset FROM pg_stat_statements_info), 'dealloc', (SELECT dealloc FROM pg_stat_statements_info), 'statements', coalesce((SELECT jsonb_agg(jsonb_build_object('key', s.userid::text||'/'||s.dbid::text||'/'||s.queryid::text||'/'||s.toplevel::text, 'db', d.datname, 'queryid', s.queryid::text, 'query', left(s.query, 400), 'calls', s.calls, 'total_exec_time', s.total_exec_time, 'rows', s.rows, 'shared_blks_hit', s.shared_blks_hit, 'shared_blks_read', s.shared_blks_read, 'wal_bytes', s.wal_bytes, 'wal_records', s.wal_records)) FROM pg_stat_statements s LEFT JOIN pg_database d ON d.oid = s.dbid), '[]'::jsonb))"
 SYS_SQL_BASE="'takenAt', now(), 'inRecovery', pg_is_in_recovery(), 'walLsn', pg_current_wal_lsn()::text, 'statsReset', (SELECT stats_reset FROM pg_stat_bgwriter), 'bgwriter', (SELECT to_jsonb(b) - 'stats_reset' FROM pg_stat_bgwriter b), 'wal', (SELECT to_jsonb(w) - 'stats_reset' FROM pg_stat_wal w)"
@@ -562,6 +615,7 @@ SYS_DELTA='
 
 db_snapshot() { # component pod when(pre|post)
   local c="$1" p="$2" when="$3" database="postgres" f pj sj hasck errf="$pf_dir/pg.err.$BASHPID"
+  if [[ "$c" == postgres ]]; then psql_ns="$rdb_ns"; else psql_ns="$ns"; fi
   # The app database is only needed for the per-hypertable counts (the event store).
   if [[ "$c" == timescaledb ]]; then
     database="$tsdb_database"
@@ -630,7 +684,7 @@ node_snapshots() { # when
     f="$(outname node "$n" "cadvisor-$when" prom)"
     if k get --raw "/api/v1/nodes/$n/proxy/metrics/cadvisor" 2>"$errf" \
         | grep -E "^(container_cpu_usage_seconds_total|container_cpu_cfs_throttled_seconds_total|container_memory_working_set_bytes|container_memory_rss|machine_cpu_cores)[{ ]" \
-        | grep -E "namespace=\"$ns\"|id=\"/\"|^machine_cpu_cores" >"$f"; then
+        | grep -E "namespace=\"($ns|$rdb_ns)\"|id=\"/\"|^machine_cpu_cores" >"$f"; then
       artifact node "$n" "cadvisor-$when" "$f" || true
     else
       rm -f "$f"; fail_rec node "$n" "cadvisor-$when" "cannot read the node's cAdvisor metrics through the API server: $(head -c 200 "$errf" | tr '\n' ' ')"
@@ -647,7 +701,7 @@ node_snapshots() { # when
 nats_block_on=""
 if [[ "$skip_nats" -eq 0 ]]; then
   cm_all="$(k get configmap -n "$nats_ns" -l app.kubernetes.io/name=nats -o json 2>/dev/null || true)"
-  if [[ -n "$cm_all" ]] && "$JQ" -e '[.items[]?.data[]? | select(test("^\\s*prof_block_rate\\s*[:=]\\s*[1-9]"))] | length > 0' >/dev/null 2>&1 <<<"$cm_all"; then nats_block_on=1; fi
+  if [[ -n "$cm_all" ]] && "$JQ" -e '[.items[]?.data[]? | select(test("(^|\\n)\\s*\"?prof_block_rate\"?\\s*[:=]\\s*[1-9]"))] | length > 0' >/dev/null 2>&1 <<<"$cm_all"; then nats_block_on=1; fi
 fi
 
 say "round=$round phase=$phase namespace=$ns: $cpu_profiles x ${secs}s CPU profile(s) from ${#plan[@]} target(s) -> $out"
@@ -683,7 +737,7 @@ done
 node_snapshots post
 
 # --- did anything move under us?
-pods_after="$(k get pods -n "$ns" -o json)" || die "cannot list pods after the window"
+pods_after="$(all_pods)" || die "cannot list pods after the window"
 identity_after="$(identity "$pods_after")"
 invalid_pods="[]"
 for row in "${plan[@]}"; do
