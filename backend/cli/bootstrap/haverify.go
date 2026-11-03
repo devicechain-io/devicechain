@@ -110,7 +110,7 @@ func VerifyReplication(ctx context.Context, opts HaVerifyOptions) (replication.R
 		return rep, err
 	}
 
-	cfg, err := deployedInstanceConfig(ctx, typed, opts.InstanceId)
+	cfg, err := deployedInstanceConfigWithLogins(ctx, typed, opts.InstanceId)
 	if err != nil {
 		return rep, err
 	}
@@ -272,11 +272,23 @@ func deployedInstanceConfig(ctx context.Context, typed kubernetes.Interface, ins
 	// The services call ApplyDefaults before reading any of this, so a key omitted
 	// from the Secret must be judged the way they will judge it and not as a zero.
 	cfg.ApplyDefaults()
-	// The logins are NOT in the document: AreaPasswords is dcctl's overlay from the per-login
-	// Secrets and nothing writes it into the instance document. A view built from the document
-	// alone has AreaLogins=true and no password for anyone, and operatorLogin then reports the
-	// administrator's Secret as unreadable when it was never asked for.
-	logins, err := readNatsLoginPasswords(ctx, typed, namespace, instanceId)
+	return cfg, nil
+}
+
+// deployedInstanceConfigWithLogins is deployedInstanceConfig plus the broker logins, overlaid from the
+// per-login Secrets, for the callers that present an operator login to the broker.
+//
+// The logins are NOT in the document: AreaPasswords is dcctl's overlay and nothing writes it into
+// the instance document, so a view built from the document alone has AreaLogins=true and no
+// password, and operatorLogin would report the administrator's Secret as unreadable though it was
+// never asked for. They are kept out of deployedInstanceConfig itself because DeployedRootKey (the
+// restore drill) reads only the document and must not start failing on an unreadable login Secret.
+func deployedInstanceConfigWithLogins(ctx context.Context, typed kubernetes.Interface, instanceId string) (*config.InstanceConfiguration, error) {
+	cfg, err := deployedInstanceConfig(ctx, typed, instanceId)
+	if err != nil {
+		return nil, err
+	}
+	logins, err := readNatsLoginPasswords(ctx, typed, InstanceNamespace(instanceId), instanceId)
 	if err != nil {
 		return nil, err
 	}
