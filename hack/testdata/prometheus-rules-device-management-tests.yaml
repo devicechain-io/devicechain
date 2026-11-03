@@ -521,7 +521,7 @@ tests:
               devicechain_instance: devicechain
             exp_annotations:
               summary: "Certificate devices are being refused because the auth callout cannot vouch for the broker's servers"
-              description: "For 10m device-management has refused certificate connects without a break of two minutes (8 in the last 2m) because its issuer pin has no usable list of the broker's live servers: its system-account connection is down, or no refresh has succeeded for three refresh periods. Every certificate device is refused until it recovers; token and password devices are not affected. Check callout_issuer_pin_connected and callout_issuer_pin_refresh_total{result=\"error\"}, the device-management log for the system-account connection, and that infrastructure.nats.auth.sysUser and sysPassword are valid."
+              description: "For 10m device-management has refused certificate connects without a break of two minutes because its issuer pin has no usable list of the broker's live servers: its system-account connection is down, or no refresh has succeeded for three refresh periods. Every certificate device is refused until it recovers; token and password devices are not affected. Check callout_issuer_pin_connected and callout_issuer_pin_refresh_total{result=\"error\"}, the device-management log for the system-account connection, and that infrastructure.nats.auth.sysUser and sysPassword are valid."
       # The refusals stopped: the window slides past them and it clears.
       - eval_time: 60m
         alertname: DeviceX509IssuerPinUnavailable
@@ -538,6 +538,54 @@ tests:
         alertname: DeviceX509IssuerPinUnavailable
         exp_alerts: []
       - eval_time: 20m
+        alertname: DeviceX509IssuerPinUnavailable
+        exp_alerts: []
+
+  # The D-X1 case: the same blip, but asked what alert_rule_test cannot ask -- was the alert ever
+  # PENDING? alert_rule_test lists only FIRING alerts, so the blip test above passed while the
+  # alert sat pending for minutes (GKE round r22). The ALERTS series carries both states, so every
+  # sampled minute of the blip and its aftermath must hold no ALERTS sample for this alert at all.
+  # The blip is at minute 5; the old `for: 10m` form is pending from minute 5 until the window
+  # slides past it, which the 6m and 7m samples catch.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_callout_x509_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="issuer_pin_unavailable"}'
+        values: '0x5 5x60'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="DeviceX509IssuerPinUnavailable"}'
+        eval_time: 6m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="DeviceX509IssuerPinUnavailable"}'
+        eval_time: 7m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="DeviceX509IssuerPinUnavailable"}'
+        eval_time: 12m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="DeviceX509IssuerPinUnavailable"}'
+        eval_time: 20m
+        exp_samples: []
+
+  # A real outage whose refusals arrive as a trickle of one a minute (a tiny fleet backing off):
+  # each two-minute window still sees a refusal, so it fires, within about the
+  # hold. Then it clears once they stop.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_callout_x509_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="issuer_pin_unavailable"}'
+        values: '0 0 0 1+1x20 21x40'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: DeviceX509IssuerPinUnavailable
+        exp_alerts: []
+      - eval_time: 18m
+        alertname: DeviceX509IssuerPinUnavailable
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "Certificate devices are being refused because the auth callout cannot vouch for the broker's servers"
+              description: "For 10m device-management has refused certificate connects without a break of two minutes because its issuer pin has no usable list of the broker's live servers: its system-account connection is down, or no refresh has succeeded for three refresh periods. Every certificate device is refused until it recovers; token and password devices are not affected. Check callout_issuer_pin_connected and callout_issuer_pin_refresh_total{result=\"error\"}, the device-management log for the system-account connection, and that infrastructure.nats.auth.sysUser and sysPassword are valid."
+      - eval_time: 40m
         alertname: DeviceX509IssuerPinUnavailable
         exp_alerts: []
 
