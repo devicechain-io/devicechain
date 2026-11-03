@@ -639,7 +639,15 @@ func TestTheBrokerAdministratorCanStepALeaderDown(t *testing.T) {
 		name := messaging.StreamName(permInstance, st.Suffix)
 		require.True(t, p.publishes("$JS.API.STREAM.LEADER.STEPDOWN."+name), name)
 		require.True(t, p.publishes("$JS.API.CONSUMER.LEADER.STEPDOWN."+name+".some-durable"), name)
+		// The executor reads a consumer before and after moving it.
+		require.True(t, p.publishes("$JS.API.CONSUMER.INFO."+name+".some-durable"), name)
 	}
+	// ...and the read is no wider than the move: nothing that fetches, acks or removes a consumer.
+	name := messaging.StreamName(permInstance, streams.All[0].Suffix)
+	for _, verb := range []string{"CONSUMER.MSG.NEXT.", "CONSUMER.DELETE.", "CONSUMER.CREATE."} {
+		require.False(t, p.publishes("$JS.API."+verb+name+".some-durable"), verb)
+	}
+	require.False(t, p.publishes("$JS.API.CONSUMER.INFO.anything.d"), "an undeclared stream's consumer")
 	require.False(t, p.publishes("$JS.API.META.LEADER.STEPDOWN"), "the meta group is not the administrator's to move")
 }
 

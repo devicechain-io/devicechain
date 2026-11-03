@@ -20,6 +20,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/natsauth"
 	"github.com/devicechain-io/dc-microservice/natsauth/permtest"
+	"github.com/devicechain-io/dc-microservice/replication"
 	"github.com/devicechain-io/dc-microservice/streams"
 )
 
@@ -165,4 +166,60 @@ func TestAStreamLostWithEveryReplicaIsReportedByNameNotRecreatedAndTheAdministra
 	b.Reconcile(t, "event-sources")
 	require.True(t, present(), "the administrator did not restore the stream")
 	require.False(t, stayedLost(), "negative control: the check still passes once the stream is back")
+}
+
+// 🔴 THE REBALANCE RUNS AS THE ADMINISTRATOR, AND READS EVERY GROUP BEFORE IT MOVES IT. `dcctl
+// broker rebalance` (and the step at the end of `dcctl upgrade`) reads a consumer's leader with a
+// CONSUMER.INFO request before it asks that consumer to step down. The administrator held the
+// step-down verb for a stream's consumers but not the read, so on a real cluster (GKE round r26)
+// every consumer move failed: the broker silently drops a publish the login may not make, so the
+// request surfaced as "reading the group before the move: context deadline exceeded" next to the
+// "Permissions Violation for Publish to $JS.API.CONSUMER.INFO" line. This runs the executor's own
+// read over the real grants, for a consumer on every stream the rebalance is allowed to move.
+func TestTheAdministratorCanReadTheConsumersItMovesInARebalance(t *testing.T) {
+	instance := fmt.Sprintf("rebal%d", time.Now().UnixNano())
+	b := permtest.Start(t, instance)
+
+	adminConn, err := nats.Connect(fmt.Sprintf("nats://%s:%d", b.Host, b.Port),
+		nats.UserInfo(natsauth.AdminUser, permtest.Password(natsauth.AdminUser)),
+		nats.CustomInboxPrefix(messaging.InboxPrefix(config.NatsAdminPrincipal)))
+	require.NoError(t, err)
+	t.Cleanup(adminConn.Close)
+	adminJS, err := adminConn.JetStream()
+	require.NoError(t, err)
+
+	movable := map[string]bool{}
+	for _, n := range messaging.RebalanceableStreams(instance) {
+		movable[n] = true
+	}
+	checked := 0
+	for _, st := range streams.All {
+		name := messaging.StreamName(instance, st.Suffix)
+		if !movable[name] || st.Shape == streams.ShapeAdvisory {
+			continue
+		}
+		for _, r := range streams.ReadersOf(st.Suffix) {
+			if r.Mode != streams.ReadDurable {
+				continue
+			}
+			durable := messaging.DurableName(instance, r.Area, st.Suffix)
+			// The consumer exists the way a deployed one does: its reader area created it.
+			areaJS, err := b.Connect(t, r.Area).JetStream()
+			require.NoError(t, err)
+			_, err = areaJS.AddConsumer(name, &nats.ConsumerConfig{Durable: durable, AckPolicy: nats.AckExplicitPolicy})
+			require.NoError(t, err, "%s creating %s", r.Area, durable)
+
+			// A move the group does not need (the plan's source is not its leader) is skipped, but only
+			// after the group has been READ; a read the broker refuses is an error here.
+			res := replication.ApplyMoves(context.Background(), adminConn, adminJS,
+				[]replication.Move{{Stream: name, Consumer: durable, From: "not-the-leader", To: "nowhere"}},
+				replication.ApplyOptions{PerMove: 3 * time.Second})
+			require.Len(t, res, 1)
+			require.NoError(t, res[0].Err, "reading %s/%s as the administrator", name, durable)
+			require.True(t, res[0].Skipped)
+			checked++
+		}
+	}
+	require.NotZero(t, checked, "no rebalanceable stream has a durable reader, so nothing was exercised")
+	b.RequireNoViolations(t)
 }

@@ -449,9 +449,16 @@ func AdminPermissions(instanceId string) (Permissions, error) {
 	// able to force an election on another instance's streams, nor on the broker's own MQTT streams.
 	// It changes who coordinates a group, never what it holds, and adds no right to read, write
 	// or remove a message.
+	//
+	// The executor READS a group before it moves it (the group's leader and whether its replicas are
+	// current), and again afterwards to see it settle: STREAM.INFO for a stream, CONSUMER.INFO for a
+	// consumer. A broker drops a publish its login may not make without answering, so a step-down
+	// grant without the matching read does not fail visibly: the move times out. CONSUMER.INFO is
+	// granted on exactly the consumers the step-down already covers, and returns state only.
 	shape := func(stream string) {
 		g.api("STREAM.INFO."+stream, "STREAM.CREATE."+stream, "STREAM.UPDATE."+stream,
-			"STREAM.LEADER.STEPDOWN."+stream, "CONSUMER.LEADER.STEPDOWN."+stream+".>")
+			"STREAM.LEADER.STEPDOWN."+stream, "CONSUMER.LEADER.STEPDOWN."+stream+".>",
+			"CONSUMER.INFO."+stream+".>")
 	}
 	for _, st := range streams.All {
 		name := messaging.StreamName(instanceId, st.Suffix)
