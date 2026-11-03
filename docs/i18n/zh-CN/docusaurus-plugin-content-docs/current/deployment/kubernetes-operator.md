@@ -13,10 +13,15 @@ DeviceChain 分两层部署，每层都由一个 `dcctl` 命令就位：
 Operator 监视 `Instance` 资源。租户不在其职责内：租户是控制平面数据库记录（参见[自定义资源](#custom-resources)）。
 
 :::note 状态
-已可用：Helm Chart 渲染各服务工作负载和配置，`dcctl bootstrap` 与 `dcctl upgrade` 驱动实例生命周期。Operator 观察 `Instance` 资源，目前不对其中内容执行任何操作。它的另一项工作针对使用 [`--backup-snapshot-class`](./bootstrap.md#snapshot-base-backups) 安装的集群：每十分钟删除已超出恢复窗口的数据库卷快照基础备份，CloudNativePG 不会执行这项清理。实例状态聚合和按环境划分的 Kustomize 覆盖层已规划，但尚未开始。
+已可用：Helm Chart 渲染各服务工作负载和配置，`dcctl bootstrap` 与 `dcctl upgrade` 驱动实例生命周期。Operator 观察 `Instance` 资源，并把它观察到的实例工作负载情况写入该资源的[状态](#instance-status)。它的另一项工作针对使用 [`--backup-snapshot-class`](./bootstrap.md#snapshot-base-backups) 安装的集群：每十分钟删除已超出恢复窗口的数据库卷快照基础备份，CloudNativePG 不会执行这项清理。按环境划分的 Kustomize 覆盖层已规划，但尚未开始。
 :::
 
-状态聚合将加入 Operator 的监视循环。在实现之前，`Instance` 不报告状态，因此应读取工作负载本身或使用 `dcctl` 判断实例是否健康。
+`kubectl get dci` 无需读取工作负载即可回答“是否在运行、版本是什么”：
+
+```text
+NAME   PROVIDER   CLUSTER           PROFILE   REQUESTED   OPERATION   READY   RUNNING   AGE
+prod   local      kind-devicechain  default   v1.0.3      Ready       True    v1.0.3    12d
+```
 
 ## 使用 Helm 部署 {#deploying-with-helm}
 
@@ -87,6 +92,47 @@ helm install dc deploy/helm/devicechain \
 
 `dcctl bootstrap` 和 `dcctl upgrade` 只读取定义。集群没有定义，或定义能够识别为来自不同发布版本时，它们会拒绝操作，并指出应运行的安装命令。手动安装的定义没有安装版本记录，因此允许通过，但会提示同一个命令，而不是拒绝。
 
+### 实例状态 {#instance-status}
+
+Operator 是 `Instance` 的 `status` 的唯一写入者，记录它**观察到**的内容：`Instance` 或其任一 Deployment 发生变化时，它都会读取该实例的 Deployment，因此状态会随滚动更新实时变化。资源上的另外两样东西性质不同：
+
+| 位置 | 含义 | 写入者 |
+|---|---|---|
+| `status` | Operator 对工作负载**观察到**的情况 | 仅 Operator |
+| 注解（`core.devicechain.io/phase`、`last-applied-by`、`last-applied-at`） | 上次 `dcctl` 运行**意图**或所做的事；即 `OPERATION` 列 | `dcctl` |
+| Operator 命名空间中的 `dcctl` Lease | **此刻**谁在操作该集群 | `dcctl` |
+
+`dcctl` 从不写入 `status`，Operator 也从不读取这些注解：`OPERATION` 可以显示 `Upgrading`，而 `READY` 显示 `True`，两者同时成立。
+
+| 字段 | 含义 |
+|---|---|
+| `status.observedGeneration` | 计算此状态所依据的 spec 代数 |
+| `status.conditions` | `Ready`、`WorkloadsAvailable`、`RolloutComplete`（见下） |
+| `status.version.requested` | `spec.imageVersion` |
+| `status.version.running` | 所有需要 Pod 的功能域运行的镜像标签；各域不一致时为 `mixed`（保留值：绝不会是发布标签）；无法得出时为空 |
+| `status.areas[]` | 每个功能域一项：`name`、`desiredReplicas`、`readyReplicas`、`availableReplicas`、`updatedReplicas`、`image`（完整镜像引用，而非仅标签）。各条件依据 `availableReplicas` 计算 |
+
+状态小而有界：每个功能域一项，没有按租户或按设备的内容。
+
+| 条件 | 原因（`reason`） | 状态 | 含义 |
+|---|---|---|---|
+| `WorkloadsAvailable` | `AllAreasAvailable` | True | 每个需要 Pod 的功能域都有全部 Pod 可用 |
+| | `NoWorkloads` | False | 不存在功能域 Deployment（尚未渲染或已被移除），或所有功能域都缩容到零 |
+| | `AreaUnavailable` | False | 至少一个功能域需要 Pod 却没有任何可用 Pod |
+| | `AreaDegraded` | False | 每个功能域都至少有一个可用 Pod，但至少一个少于所需数量 |
+| `RolloutComplete` | `RolloutComplete` | True | 每个 Deployment 都已收敛到当前模板，且运行版本即请求版本 |
+| | `NoWorkloads` | False | 不存在功能域 Deployment |
+| | `RolloutInProgress` | False | 某功能域尚未收敛：仍有旧 Pod，或 Deployment 控制器尚未观察到最新模板 |
+| | `ProgressDeadlineExceeded` | False | 某 Deployment 报告其滚动更新已停止推进 |
+| | `VersionMismatch` | False | 已收敛，但版本与 `spec.imageVersion` 不同 |
+| | `VersionUnknown` | Unknown | 已收敛，但无法从镜像得出运行版本（镜像仅以 digest 固定） |
+| `Ready` | `Ready` | True | `WorkloadsAvailable` 与 `RolloutComplete` 均为 True |
+| | （第一个非 True 条件的原因） | False / Unknown | |
+
+缺失的工作负载总是带着原因报告，绝不会被当作健康。`Ready` 表示已稳定：滚动更新期间即使 Pod 仍在服务，它也为 False，因此要判断实例是否在提供服务，请读取 `WorkloadsAvailable`。
+
+`Instance` 是受支持的 API。可以新增状态字段、条件类型和原因；不会删除任何内容，也不会改变含义。读取方应将无法识别的条件类型或原因视为 Unknown。
+
 租户**不是**自定义资源。它们是通过实例管理员 API 和 `/admin` 控制台创建的控制平面数据库记录，共享实例服务（参见[多租户](../concepts/multi-tenancy.md)）。
 
 ```bash
@@ -115,15 +161,15 @@ kubectl --context <kube-context> get instance <id> -o yaml
 - CRD 通过验证表达式携带规则，因此 API 服务器会拒绝用 `kubectl` 进行的手动编辑。
 - `dcctl` 写入前，会将同样的字段与集群内已有声明比较。
 
-### 读取 PHASE 列 {#phase}
+### 读取 OPERATION 列 {#phase}
 
-`kubectl get instances` 打印 **PHASE** 列，其值来自声明的 `core.devicechain.io/phase` 注解。`dcctl instances list` 读取同一注解，并在 STATUS 列中用文字显示。该命令仅在引导实例的机器上工作，依据该机器的本地记录。
+`kubectl get instances` 打印 **OPERATION** 列，其值来自声明的 `core.devicechain.io/phase` 注解。`dcctl instances list` 读取同一注解，并在 STATUS 列中用文字显示。该命令仅在引导实例的机器上工作，依据该机器的本地记录。
 
-:::warning 阶段表示意图，而不是健康状态
-它记录**上次 `dcctl` 运行试图执行的操作**。写入它的流程没有检查任何 Pod，因此 `dcctl instances list` 从不报告 `running`。要知道工作负载是否运行，请直接查看：`kubectl get pods -n dci-<id>`。
+:::warning 操作表示意图，而不是健康状态
+它记录**上次 `dcctl` 运行试图执行的操作**。写入它的流程没有检查任何 Pod，因此 `dcctl instances list` 从不报告 `running`。工作负载是否运行由 **READY** 列表示，它由 Operator 根据 Deployment 计算（参见[实例状态](#instance-status)）。
 :::
 
-| PHASE | `dcctl instances list` STATUS | 含义 |
+| OPERATION | `dcctl instances list` STATUS | 含义 |
 |---|---|---|
 | `Bootstrapping` | `bootstrap started, not finished` | `dcctl bootstrap` 已写入声明，但尚未写入最终阶段。另一个终端中正在正常执行的引导也显示此状态。 |
 | `Upgrading` | `upgrade started, not finished` | 相同含义，对应 `dcctl upgrade`。 |
@@ -193,7 +239,7 @@ DeviceChain 刻意将每层交给一个工具：
 |---|---|---|
 | 基础设施 | **OpenTofu** | NATS、TimescaleDB、命名空间、入口、TLS |
 | 工作负载 | **Helm Chart** | Deployment、Service 和各功能域配置 ConfigMap |
-| 生命周期 | **Operator** | 监视 `Instance` 资源，目前不对其中内容采取行动（已规划状态聚合）；按恢复窗口清理卷快照基础备份 |
+| 生命周期 | **Operator** | 监视 `Instance` 资源及其 Deployment，并写入观察到的[状态](#instance-status)；按恢复窗口清理卷快照基础备份 |
 | 实例身份与配置 | **`dcctl`** | 写入 `Instance` 声明及工作负载挂载的实例配置 Secret |
 | 业务配置 | 实例管理员 API / `/admin` 控制台，以及每个租户自己的 API / 控制台 | 租户及各租户自己的设置（例如品牌） |
 
@@ -202,6 +248,6 @@ DeviceChain 刻意将每层交给一个工具：
 - **OpenTofu** 在安装集群时运行（`dcctl install`，配置所有实例共享的前提组件），也在引导实例时运行（配置该实例自己的消息代理和事件存储）。
 - **`dcctl install`** 还会应用 Operator 及其定义，使用嵌入 CLI 的清单，而不通过其他两层。
 - **Chart** 渲染工作负载。
-- **Operator** 监视 `Instance` 资源（目前如何处理它，参见本页顶部的状态说明）。
+- **Operator** 监视 `Instance` 资源和实例的 Deployment（写入的内容参见[实例状态](#instance-status)）。
 
 集群引导从不放在应用或 Operator 代码中，而是基础设施层的工作。OpenTofu 模块位于 [`deploy/opentofu`](https://github.com/devicechain-io/devicechain/tree/main/deploy/opentofu)。它们为数据库层配置保留保护，使数据库能在应用拆除后继续存在（参见[发布与升级](./releases-and-upgrades.md#data-durability)）。

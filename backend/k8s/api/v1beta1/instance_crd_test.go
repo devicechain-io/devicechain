@@ -252,15 +252,15 @@ func printerColumns(t *testing.T, crd map[string]interface{}) []map[string]inter
 // It is joined to the Go constants deliberately: the object is built from
 // AnnotationPhase, so renaming the annotation without regenerating the manifest
 // fails here rather than in a cluster.
-func TestThePhaseColumnActuallyResolves(t *testing.T) {
+func TestTheOperationColumnActuallyResolves(t *testing.T) {
 	var path string
 	for _, col := range printerColumns(t, loadInstanceCRD(t)) {
-		if col["name"] == "Phase" {
+		if col["name"] == "Operation" {
 			path, _ = col["jsonPath"].(string)
 		}
 	}
 	if path == "" {
-		t.Fatal("the generated CRD serves no Phase column, so `kubectl get dci` cannot show " +
+		t.Fatal("the generated CRD serves no Operation column, so `kubectl get dci` cannot show " +
 			"that a run did not finish. The column comes from the printcolumn marker on " +
 			"Instance via `make manifests` — run it, or restore the marker")
 	}
@@ -285,7 +285,7 @@ func TestThePhaseColumnActuallyResolves(t *testing.T) {
 	// and would let a broken column look loudly broken here and silently blank
 	// there.
 	cell := func(expr string, obj map[string]interface{}) string {
-		jp := jsonpath.New("Phase")
+		jp := jsonpath.New("Operation")
 		if err := jp.Parse("{" + expr + "}"); err != nil {
 			return ""
 		}
@@ -305,7 +305,7 @@ func TestThePhaseColumnActuallyResolves(t *testing.T) {
 		dcv1beta1.AnnotationPhase: dcv1beta1.PhaseUpgrading,
 	})
 	if got := cell(path, annotated); got != dcv1beta1.PhaseUpgrading {
-		t.Errorf("the Phase column rendered %q for an instance annotated %q. A column that "+
+		t.Errorf("the Operation column rendered %q for an instance annotated %q. A column that "+
 			"resolves to nothing prints an empty cell — the same cell an instance with no phase "+
 			"prints — so this is the failure no operator would ever notice. The path is %q",
 			got, dcv1beta1.PhaseUpgrading, path)
@@ -327,5 +327,48 @@ func TestThePhaseColumnActuallyResolves(t *testing.T) {
 		t.Errorf("%s rendered %q. It did not resolve when this column was written, which is the "+
 			"whole reason the marker carries backslashes; if client-go has changed, re-examine "+
 			"that comment rather than deleting this test", bracket, got)
+	}
+}
+
+// The observed columns are evaluated against a status shaped like the one the
+// operator writes, with the API server's own evaluator (see the Operation test
+// above for why presence alone proves nothing). The object is built from the Go
+// condition constants so a rename that skips the manifest fails here.
+func TestTheReadyAndRunningColumnsResolveAgainstTheObservedStatus(t *testing.T) {
+	paths := map[string]string{}
+	for _, col := range printerColumns(t, loadInstanceCRD(t)) {
+		name, _ := col["name"].(string)
+		paths[name], _ = col["jsonPath"].(string)
+	}
+	obj := map[string]interface{}{
+		"status": map[string]interface{}{
+			"conditions": []interface{}{
+				map[string]interface{}{"type": dcv1beta1.ConditionWorkloadsAvailable, "status": "False"},
+				map[string]interface{}{"type": dcv1beta1.ConditionReady, "status": "True"},
+			},
+			"version": map[string]interface{}{"running": "1.0.3"},
+		},
+	}
+	for col, want := range map[string]string{"Ready": "True", "Running": "1.0.3"} {
+		path := paths[col]
+		if path == "" {
+			t.Fatalf("the generated CRD serves no %s column; run `make manifests`", col)
+		}
+		jp := jsonpath.New(col)
+		if err := jp.Parse("{" + path + "}"); err != nil {
+			t.Fatal(err)
+		}
+		jp.AllowMissingKeys(true)
+		results, err := jp.FindResults(obj)
+		var buf bytes.Buffer
+		if err == nil && len(results) > 0 && len(results[0]) > 0 {
+			_ = jp.PrintResults(&buf, results[0])
+		}
+		if buf.String() != want {
+			t.Errorf("the %s column rendered %q, want %q (path %s)", col, buf.String(), want, path)
+		}
+	}
+	if _, ok := paths["Phase"]; ok {
+		t.Error("the intent column is called Operation; a Phase column beside Ready reads as state")
 	}
 }

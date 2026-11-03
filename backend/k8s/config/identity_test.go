@@ -98,6 +98,50 @@ func TestTheIdentityMovesWithTheSchema(t *testing.T) {
 	}
 }
 
+// TestTheIdentityMovesWithTheOperatorsPermissions: the operator writes Instance
+// status from the Deployments it reads, so an operator installed without that
+// ClusterRole rule is not the one a bootstrap needs. A change to the role must
+// move the identity so that `dcctl install` is asked for.
+func TestTheIdentityMovesWithTheOperatorsPermissions(t *testing.T) {
+	base, err := RenderOperator("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := IdentityOf(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := renderOverlay("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	touched := false
+	for _, r := range res.Resources() {
+		if r.GetKind() != "ClusterRole" {
+			continue
+		}
+		ann := r.GetAnnotations()
+		if ann == nil {
+			ann = map[string]string{}
+		}
+		ann["pretend-the-rules-changed"] = "yes"
+		if err := r.SetAnnotations(ann); err != nil {
+			t.Fatal(err)
+		}
+		touched = true
+	}
+	if !touched {
+		t.Fatal("no ClusterRole in the rendered overlay to modify")
+	}
+	moved, err := identityOf(res)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if moved == id {
+		t.Fatal("the identity did not move when the operator's ClusterRole did")
+	}
+}
+
 // TestIdentityOfRefusesAStreamWithNoCRD keeps the reader fail-closed: an empty
 // answer here would be a value every cluster agrees on.
 func TestIdentityOfRefusesAStreamWithNoCRD(t *testing.T) {

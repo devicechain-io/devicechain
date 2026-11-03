@@ -5,12 +5,17 @@ package controllers
 
 import (
 	"context"
-	"fmt"
 
+	appsv1 "k8s.io/api/apps/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	corev1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
 )
@@ -20,9 +25,11 @@ import (
 // Static workload rendering (namespace, ConfigMaps, Deployments, Services per
 // functional area) has moved to the Helm chart at deploy/helm/devicechain
 // (ADR-022 decision 4); the operator no longer imperatively stamps it. The one
-// genuine control-loop responsibility that remains on the Instance — readiness
-// status aggregation across the chart-rendered Deployments — is tracked as a
-// follow-up; this reconciler is the scaffold it lands on.
+// genuine control-loop responsibility that remains on the Instance is OBSERVED
+// STATUS: on every reconcile it reads the chart-rendered Deployments and writes
+// what it saw (conditions, per-area replicas and images, the running version) to
+// Instance.status. It is the ONLY writer of that status — dcctl asserts intent in
+// annotations and claims through a Lease, and never writes status.
 //
 // 🔴 CONFIG HOT-RELOAD IS NOT ON THAT LIST, AND IT USED TO BE. It was removed
 // because it describes something this platform deliberately does not do, and
@@ -53,11 +60,20 @@ type InstanceReconciler struct {
 //+kubebuilder:rbac:groups=core.devicechain.io,resources=instances,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=core.devicechain.io,resources=instances/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=core.devicechain.io,resources=instances/finalizers,verbs=update
+//+kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch
 
-// Reconcile observes an Instance. Workloads are rendered by Helm, so there is no
-// child stamping here; deleting the Instance is handled by ordinary resource
-// lifecycle. Status aggregation lands on this loop later; config does not, for
-// the reasons on InstanceReconciler.
+// Reconcile observes an Instance and writes its OBSERVED status.
+//
+// Nothing here changes a workload: they are rendered by Helm, and deleting the
+// Instance is ordinary resource lifecycle. The status is recomputed from scratch
+// on every pass, from the Deployments in the instance's namespace, so it is
+// correct after a missed event and needs no memory of the previous pass. The
+// write is skipped when nothing moved, which is what stops the status update's own
+// watch event from becoming a loop.
+//
+// 🔴 THE dcctl ANNOTATIONS ARE NOT READ HERE. Status is what the operator saw;
+// the phase annotation is what a dcctl run intended. Folding one into the other
+// would make the operator pretend to know something only the CLI does.
 func (r *InstanceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
@@ -66,8 +82,43 @@ func (r *InstanceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	log.Info(fmt.Sprintf("Observed instance '%s'", instance.ObjectMeta.Name))
+	var deployments appsv1.DeploymentList
+	if err := r.List(ctx, &deployments,
+		client.InNamespace(corev1beta1.InstanceNamespace(instance.Name)),
+		client.MatchingLabels{instanceLabel: instance.Name}); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	desired := computeStatus(instance, deployments.Items)
+	if apiequality.Semantic.DeepEqual(instance.Status, desired) {
+		return ctrl.Result{}, nil
+	}
+	// A merge patch from the object as read, with no resourceVersion precondition.
+	// Status has one writer, but not one process: the operator runs without leader
+	// election, so two replicas during a rollout of the operator itself can both
+	// patch. They compute the same status from the same Deployments and the patch
+	// replaces whole fields, so the last write wins harmlessly. A spec or annotation
+	// write by dcctl between the read and here must not fail the status write.
+	patch := client.MergeFrom(instance.DeepCopy())
+	instance.Status = desired
+	if err := r.Status().Patch(ctx, instance, patch); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+	log.V(1).Info("Updated instance status", "instance", instance.Name)
 	return ctrl.Result{}, nil
+}
+
+// deploymentToInstance maps a Deployment event to the Instance it belongs to, so
+// the status follows a rollout rather than waiting for the CR to change.
+func deploymentToInstance(_ context.Context, obj client.Object) []reconcile.Request {
+	d, ok := obj.(*appsv1.Deployment)
+	if !ok {
+		return nil
+	}
+	if id := instanceForDeployment(d); id != "" {
+		return []reconcile.Request{{NamespacedName: client.ObjectKey{Name: id}}}
+	}
+	return nil
 }
 
 // SetupWithManager wires the controller to reconcile on Instance changes.
@@ -102,5 +153,13 @@ func (r *InstanceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 func (r *InstanceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&corev1beta1.Instance{}).
+		// Deployments are a core API and always present, so watching them is safe where
+		// watching an optional CRD is not (above). Only an instance's own functional-area
+		// workloads can enqueue anything.
+		Watches(&appsv1.Deployment{}, handler.EnqueueRequestsFromMapFunc(deploymentToInstance),
+			builder.WithPredicates(predicate.NewPredicateFuncs(func(o client.Object) bool {
+				d, ok := o.(*appsv1.Deployment)
+				return ok && instanceForDeployment(d) != ""
+			}))).
 		Complete(r)
 }

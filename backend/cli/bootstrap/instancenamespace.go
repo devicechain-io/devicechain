@@ -55,9 +55,13 @@ import (
 // 🔴 IT IS NOT THE `dci-` IN `dci-<id>-config`. That one prefixes object NAMES, predates
 // this, and means something else; `dci-acme-config` is not "the namespace plus -config".
 // The two are spelled alike and a reader who merges them will rename one of them.
-const instanceNamespacePrefix = "dci-"
+//
+// 🔴 THE PREFIX ITSELF LIVES IN THE OPERATOR'S API PACKAGE, because the operator needs the
+// same answer to find an instance's Deployments. This delegates, so there is one spelling
+// in Go and chart_namespace_agreement_test.go holds the chart's to it.
+const instanceNamespacePrefix = dcv1beta1.InstanceNamespacePrefix
 
-func InstanceNamespace(instance string) string { return instanceNamespacePrefix + instance }
+func InstanceNamespace(instance string) string { return dcv1beta1.InstanceNamespace(instance) }
 
 // instanceNamespaceLabel is what says a namespace is an instance's. The chart writes it
 // on everything it renders, the namespace included (devicechain.instanceLabels in

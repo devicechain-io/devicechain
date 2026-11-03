@@ -307,9 +307,12 @@ func instanceToUnstructured(inst *dcv1beta1.Instance) (*unstructured.Unstructure
 // ValidateInstanceSpecChange — because the fields that must not move are exactly
 // the ones a blind write would move silently.
 //
-// The claim semantics that make this safe under two operators (create-or-adopt
-// with a compare-and-swap, and a heartbeat) are a separate concern and land with
-// them. What is here is the declaration itself.
+// The claim that makes this safe under two operators is NOT here and is not a
+// field on this object: it is a coordination.k8s.io Lease named `dcctl` in the
+// operator namespace (claim.go), which carries the holder and the heartbeat. What
+// is here is the declaration itself. dcctl never writes status — the operator is
+// its only writer — so the only things this file puts on the object beside the
+// spec are the provenance and phase annotations.
 //
 // It is the BOOTSTRAP path's entry point, which is why it names the phase its
 // caller is in (through writeBootstrapDecl) rather than taking one: its single caller is the claim step, and a

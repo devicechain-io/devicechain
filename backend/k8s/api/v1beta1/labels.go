@@ -14,9 +14,18 @@ const (
 	// as its value.
 	InstanceNamespaceLabel = "devicechain.io/instance"
 
+	// InstanceNamespacePrefix is what an instance's namespace name starts with; the rest is
+	// the instance id. It is spelled HERE and nowhere else: dcctl's InstanceNamespace
+	// delegates to InstanceNamespace below and the operator calls it, and the chart's
+	// devicechain.instanceNamespace is held equal by a dcctl test that renders it.
+	InstanceNamespacePrefix = "dci-"
+
 	// ComponentLabel, set to InfrastructureComponent, is on the cluster's shared
 	// namespace (dc-system): the one the OpenTofu cluster configuration stamps, and
 	// dcctl creates ahead of it with the same labels.
 	ComponentLabel          = "devicechain.io/component"
 	InfrastructureComponent = "infrastructure"
 )
+
+// InstanceNamespace is the namespace an instance's workloads live in.
+func InstanceNamespace(instance string) string { return InstanceNamespacePrefix + instance }

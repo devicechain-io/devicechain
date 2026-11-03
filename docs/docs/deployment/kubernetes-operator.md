@@ -20,16 +20,19 @@ control-plane database records (see [Custom resources](#custom-resources)).
 :::note Status
 Available: the Helm chart renders the per-service workloads and config, and `dcctl bootstrap`
 and `dcctl upgrade` drive an instance's lifecycle. The operator observes the `Instance`
-resource and acts on nothing there. Its one other job is on a cluster installed with
+resource and writes what it observes of the instance's workloads into the resource's
+[status](#instance-status). Its one other job is on a cluster installed with
 [`--backup-snapshot-class`](./bootstrap.md#snapshot-base-backups): every ten minutes it deletes
 the databases' volume-snapshot base backups that have left their recovery window, which
-CloudNativePG does not do. Planned, not started: instance status aggregation and
-per-environment Kustomize overlays.
+CloudNativePG does not do. Planned, not started: per-environment Kustomize overlays.
 :::
 
-Status aggregation will land on the operator's watch loop. Until it does, the `Instance`
-reports no status, so read the workloads themselves, or `dcctl`, to learn whether an instance
-is healthy.
+`kubectl get dci` answers "is it up, and at which version" without reading the workloads:
+
+```text
+NAME   PROVIDER   CLUSTER           PROFILE   REQUESTED   OPERATION   READY   RUNNING   AGE
+prod   local      kind-devicechain  default   v1.0.3      Ready       True    v1.0.3    12d
+```
 
 ## Deploying with Helm
 
@@ -130,6 +133,56 @@ definitions, or with ones identifiably from a different release, and name the in
 to run. Definitions installed by hand carry no record of which release put them there, so those
 are let through with a note naming the same command rather than refused.
 
+### Instance status {#instance-status}
+
+The operator is the only writer of an `Instance`'s `status`, and it records what it
+**observed**: it reads the instance's Deployments on every change to the `Instance` or to one of
+them, so the status follows a rollout as it happens. Two other things are on the resource and are
+different in kind:
+
+| Where | What it says | Who writes it |
+|---|---|---|
+| `status` | what the operator **observed** of the workloads | the operator only |
+| annotations (`core.devicechain.io/phase`, `last-applied-by`, `last-applied-at`) | what the last `dcctl` run **intended** or did; the `OPERATION` column | `dcctl` |
+| the `dcctl` Lease in the operator's namespace | who is operating on the cluster **right now** | `dcctl` |
+
+`dcctl` never writes `status`, and the operator never reads the annotations: `OPERATION` can say
+`Upgrading` while `READY` says `True`, and both are true.
+
+| Field | Meaning |
+|---|---|
+| `status.observedGeneration` | the spec generation this status was computed from |
+| `status.conditions` | `Ready`, `WorkloadsAvailable`, `RolloutComplete` (below) |
+| `status.version.requested` | `spec.imageVersion` |
+| `status.version.running` | the image tag every area with wanted pods runs; `mixed` (reserved: never a release tag) while areas differ; empty when it cannot be derived |
+| `status.areas[]` | one entry per functional area: `name`, `desiredReplicas`, `readyReplicas`, `availableReplicas`, `updatedReplicas`, and `image` (the full image reference, not a bare tag). The conditions are computed from `availableReplicas` |
+
+The status is small and bounded: one entry per functional area, and nothing per tenant or per
+device.
+
+| Condition | Reason | Status | Meaning |
+|---|---|---|---|
+| `WorkloadsAvailable` | `AllAreasAvailable` | True | every area that wants pods has all of them available |
+| | `NoWorkloads` | False | no area Deployment exists (not rendered yet, or removed), or every area is scaled to zero |
+| | `AreaUnavailable` | False | at least one area wants pods and has none available |
+| | `AreaDegraded` | False | every wanting area has a pod available, but at least one has fewer than it wants |
+| `RolloutComplete` | `RolloutComplete` | True | every Deployment has converged on its current template and the running version is the requested one |
+| | `NoWorkloads` | False | no area Deployment exists |
+| | `RolloutInProgress` | False | an area has not converged: old pods remain, or the Deployment controller has not observed the latest template |
+| | `ProgressDeadlineExceeded` | False | a Deployment reports that its rollout has stopped progressing |
+| | `VersionMismatch` | False | converged, but on a different version from `spec.imageVersion` |
+| | `VersionUnknown` | Unknown | converged, but the running version cannot be derived (images pinned by digest alone) |
+| `Ready` | `Ready` | True | `WorkloadsAvailable` and `RolloutComplete` are both True |
+| | (the reason of the first condition that is not True) | False / Unknown | |
+
+An absent workload is always reported with a reason; it is never read as healthy. `Ready` is the
+settled state: it is False while a rollout is under way even though pods keep serving, so read
+`WorkloadsAvailable` to ask whether the instance is serving.
+
+`Instance` is a supported API. New status fields, condition types and reasons may be added;
+nothing is removed or changes meaning. A reader must treat a condition type or reason it does not
+recognise as Unknown.
+
 Tenants are **not** custom resources. They are control-plane database records, created through
 the instance admin API and the `/admin` console, and they share the instance's services (see
 [Multi-Tenancy](../concepts/multi-tenancy.md)).
@@ -167,20 +220,21 @@ edit:
 - `dcctl` compares the same fields against the declaration already in the cluster before it
   writes.
 
-### Reading the PHASE column {#phase}
+### Reading the OPERATION column {#phase}
 
-`kubectl get instances` prints a **PHASE** column, read from the declaration's
+`kubectl get instances` prints an **OPERATION** column, read from the declaration's
 `core.devicechain.io/phase` annotation. `dcctl instances list` reads the same annotation and
 renders it as words in its STATUS column. It works only on the machine that bootstrapped the
 instance, from that machine's local records.
 
-:::warning The phase is intent, not health
+:::warning The operation is intent, not health
 It records what the **last `dcctl` run was trying to do**. Nothing that writes it has looked at
-a pod, which is why `dcctl instances list` never says `running`. To know whether the workloads
-are up, look at them: `kubectl get pods -n dci-<id>`.
+a pod, which is why `dcctl instances list` never says `running`. Whether the workloads are up is
+the **READY** column, which the operator computes from the Deployments (see
+[Instance status](#instance-status)).
 :::
 
-| PHASE | `dcctl instances list` STATUS | What it means |
+| OPERATION | `dcctl instances list` STATUS | What it means |
 |---|---|---|
 | `Bootstrapping` | `bootstrap started, not finished` | `dcctl bootstrap` wrote the declaration and has not yet written a final phase. This is also what a healthy bootstrap running right now in another terminal looks like. |
 | `Upgrading` | `upgrade started, not finished` | The same, for `dcctl upgrade`. |
@@ -284,7 +338,7 @@ DeviceChain deliberately gives each layer to one tool:
 |---|---|---|
 | Infrastructure | **OpenTofu** | NATS, TimescaleDB, namespaces, ingress, TLS |
 | Workloads | **Helm chart** | Deployments, Services, and the per-area config ConfigMaps |
-| Lifecycle | **Operator** | watches the `Instance` resource and acts on nothing there today (status aggregation is planned); prunes volume-snapshot base backups to their recovery window |
+| Lifecycle | **Operator** | watches the `Instance` resource and its Deployments and writes the observed [status](#instance-status); prunes volume-snapshot base backups to their recovery window |
 | Instance identity + config | **`dcctl`** | writes the `Instance` declaration and the instance config Secret the workloads mount |
 | Business configuration | instance admin API / `/admin` console, and each tenant's own API / console | tenants, and each tenant's own settings (such as branding) |
 
@@ -296,8 +350,8 @@ Each layer runs at a different point:
 - **`dcctl install`** also applies the operator and its definitions, from manifests embedded
   in the CLI rather than through either of the other two layers.
 - **The chart** renders the workloads.
-- **The operator** watches the `Instance` resource (see the status note at the top of this page for
-  what it does with it today).
+- **The operator** watches the `Instance` resource and the instance's Deployments (see
+  [Instance status](#instance-status) for what it writes).
 
 Cluster bootstrapping never lives in application or operator code; it is the infrastructure
 layer's job. The OpenTofu modules live in
