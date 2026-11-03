@@ -38,6 +38,23 @@ type EventPersistenceWorker struct {
 	// committed. Zero takes only what is already waiting.
 	Linger time.Duration
 
+	// collector serializes this pod's writers' COLLECTION: one at a time holds the token
+	// while it receives a batch, so a lingering writer's batch fills at the pod's whole
+	// rate instead of being split among the idle writers. Nil is no token, which is what a
+	// worker built by literal gets: collection then behaves as it always did.
+	collector *messaging.Collector
+
+	// raw, dones and batch are this writer's own buffers, allocated once at MaxBatch and
+	// reused for every batch: the messages as received, the clock-stops started at receipt,
+	// and the admitted messages. They are cleared once the batch has been settled, so no
+	// reference outlives it. Only this worker's goroutine touches them. A held message is
+	// copied into held BY VALUE (hold), so held never aliases batch.
+	raw   []messaging.Message
+	dones []func(string)
+	batch []pendingEvent
+	// onReceive is the received callback handed to CollectRaw, bound once.
+	onReceive func(messaging.Message)
+
 	// Halt, when closed, ends the wait for the event store to take writes (persist_hold.go).
 	// Nil never closes, which is what a worker built by literal wants.
 	Halt <-chan struct{}
@@ -556,6 +573,7 @@ func (ep *EventPersistenceWorker) Process(ctx context.Context) {
 			ep.persistBatch(ctx, batch)
 			ep.settleHeld(ctx)
 		}
+		ep.clearBuffers()
 		if !open {
 			log.Debug().Msg("Event persister received shutdown signal.")
 			return

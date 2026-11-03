@@ -604,6 +604,19 @@ func (api *Api) DeviceStates(ctx context.Context, criteria DeviceStateSearchCrit
 // The planner ignored both indexes and the UPDATE paid to maintain them — +51% buffers for
 // the composite, to read none of it.
 //
+// The same shape, 500,000 rows, 5,714 stale, PostgreSQL 17 (EXPLAIN ANALYZE, warm cache), for
+// the single UPDATE this used to be and for the form it has now (candidates locked FOR UPDATE
+// SKIP LOCKED in a subquery, the UPDATE restricted to them):
+//
+//	single UPDATE                       119-138 ms   76-82k buffers   Seq Scan
+//	ARRAY(subquery), SKIP LOCKED        134-205 ms   97-104k buffers  InitPlan LockRows (Seq Scan) once + Index Scan on the primary key
+//
+// The locking read is one sequential scan, run once as an InitPlan (the same plan on a
+// two-row table, where a nested loop used to re-run it per outer row), and the UPDATE then
+// fetches the locked rows by primary key. The scan itself cannot be an index scan, for the
+// reason above. It is paid once a minute, for up to about one and a half times the cost of the single UPDATE; what it buys
+// is that the sweep cannot be a party to a deadlock (see below).
+//
 // The reason is structural, not a statistics accident: the time predicate compares
 // last_activity_time against a PER-ROW deadline (inactivity_timeout, or the default when it
 // is 0), so the bound differs for every row and no index on last_activity_time can seek it.
@@ -628,9 +641,46 @@ func (api *Api) SweepInactive(ctx context.Context, now time.Time) (int64, error)
 	// authoritative DEATH/LWT, never a data-silence timeout (ADR-067 decision 6), so
 	// the sweep must not flip it. The predicate is applied in the statement so an
 	// asserted device is never even considered.
-	res := db.Model(&DeviceState{}).
+	//
+	// 🔴 THE SWEEP NEVER WAITS FOR A ROW LOCK. It selects its candidates in a subquery that
+	// locks them FOR UPDATE SKIP LOCKED, and the UPDATE touches exactly those rows. The
+	// sweep used to be one UPDATE over a sequential scan: it locked rows in heap order and,
+	// meeting a row a writer held, WAITED for it while holding every row it had already
+	// flipped. A batch locks its device rows in token order, so a batch holding one stale
+	// row and wanting another that the sweep already held closed a cycle with it
+	// (40P01 after deadlock_timeout), and with batches of tens of events that happened
+	// every few seconds and stalled every writer. A transaction that never waits for a row
+	// lock cannot be in a wait-for cycle. What it costs: a row a writer holds at that
+	// instant is left for the next pass (the device is being written, so it is not
+	// silent), as is a row whose writer rolls back.
+	//
+	// The staleness predicate is stated ONCE, in the subquery: the locking read has already
+	// rechecked it against the latest version of each row it locked, and the sweep holds
+	// those locks from then on, so the outer statement repeats nothing and the two cannot
+	// drift apart. (A subquery that lost the predicate would flip fresh devices; the sweep
+	// agreement test catches that.) The outer scan filters on the id set before it tries
+	// any lock, so it never waits on a row outside the set and owns every row inside it.
+	// The callbacks that ran on the single statement still run: both statements are built
+	// from the same session, and the system context the sweep runs under adds no tenant
+	// predicate to either.
+	candidates := api.RDB.DB(ctx).Model(&DeviceState{}).Select("id").
 		Where("active = ? AND presence_source <> ?", true, PresenceSourceAsserted).
 		Where(frag, args...).
+		Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"})
+	//
+	// 🔴 THE PLAN MUST NOT MATTER. `id IN (subquery)` lets the planner pick a nested loop that
+	// runs the locking subquery once per outer row: O(rows x candidates), and, worse, a row it
+	// has already updated is then skipped by the next run as self-modified, so the pass flips
+	// fewer rows than it should. On Postgres the candidates are therefore collected into an
+	// array by an uncorrelated ARRAY(subquery), which is an InitPlan: evaluated exactly once
+	// whatever the statistics say. SQLite drops the locking clause and has one plan, so it
+	// keeps IN.
+	idMatch := "id IN (?)"
+	if db.Dialector.Name() == "postgres" {
+		idMatch = "id = ANY(ARRAY(?))"
+	}
+	res := db.Model(&DeviceState{}).
+		Where(idMatch, candidates).
 		Updates(map[string]any{
 			"active":                false,
 			"last_disconnect_time":  sql.NullTime{Time: now, Valid: true},

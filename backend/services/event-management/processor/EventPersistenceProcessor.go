@@ -47,6 +47,9 @@ type EventPersistenceProcessor struct {
 	messages chan messaging.Message
 	failed   chan failedItem
 	workers  []*EventPersistenceWorker
+	// collector is the one token this pod's writers take turns holding while they receive a
+	// batch (messaging.Collector).
+	collector messaging.Collector
 
 	// persistence sizes the writers: how many run and how many events each commits in one
 	// transaction. Defaulted in the constructor by the configuration's own ApplyDefaults.
@@ -106,6 +109,28 @@ type PersistMetrics struct {
 	// commitSeconds is persist_commit_duration_seconds: wall time of one committed
 	// transaction, begin to COMMIT, with buckets fine enough to compare two runs.
 	commitSeconds prometheus.Observer
+	// collectFull is persist_collect_full_total: batches that reached MaxBatch, i.e. that
+	// the collector filled without waiting out the linger. A share near 100% is a backlog.
+	collectFull prometheus.Counter
+	// handoffDepth is persist_handoff_depth: messages waiting in the hand-off channel when
+	// a writer finished receiving. Near its capacity with full batches means the writers or
+	// the database are the bound; near 0 with few full batches is a trickle, which is healthy.
+	handoffDepth prometheus.Observer
+}
+
+// handoffBuckets covers the hand-off channel's depth, up to its capacity.
+var handoffBuckets = []float64{0, 1, 2, 4, 8, 16, 32, 64, 100}
+
+// collected records one received batch of n raw messages against the cap max, with depth
+// messages still waiting in the hand-off channel. Nil-safe.
+func (m *PersistMetrics) collected(n, max, depth int) {
+	if m == nil || m.collectFull == nil {
+		return
+	}
+	if n >= max {
+		m.collectFull.Inc()
+	}
+	m.handoffDepth.Observe(float64(depth))
 }
 
 // holding moves the held-events gauge by n. Nil-safe.
@@ -175,6 +200,11 @@ func NewPersistMetrics(ms *core.Microservice) *PersistMetrics {
 		commitSeconds: ms.NewHistogramVec("persist_commit_duration_seconds",
 			"Wall time of one committed persistence transaction.",
 			nil, commitBuckets).WithLabelValues(),
+		collectFull: ms.NewCounter("persist_collect_full_total",
+			"Batches that reached the writer's batch cap, i.e. that were filled without waiting out the linger."),
+		handoffDepth: ms.NewHistogramVec("persist_handoff_depth",
+			"Messages waiting in the hand-off channel when a writer finished receiving its batch.",
+			nil, handoffBuckets).WithLabelValues(),
 	}
 }
 
@@ -305,6 +335,7 @@ func (eproc *EventPersistenceProcessor) initializeEventPersistenceWorkers(ctx co
 		resolver.MaxBatch = eproc.persistence.MaxBatch
 		resolver.Linger = eproc.persistence.Linger()
 		resolver.Halt = eproc.procCtx.Done()
+		resolver.collector = &eproc.collector
 		eproc.workers = append(eproc.workers, resolver)
 		// Workers run on a background context (not the cancelable read context)
 		// so that on shutdown they drain the remaining buffered messages to

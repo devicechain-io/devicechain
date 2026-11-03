@@ -332,7 +332,14 @@ func TestF1ALongHoldDoesNotRedeliverToABlockedReader(t *testing.T) {
 	b := newF1Broker(t)
 	b.api.down.Store(true)
 	pod := b.startPod()
-	const n = 400
+	// Enough events to back the pipeline up behind the held writers. With serialized
+	// collection a writer takes a whole batch (up to MaxBatch) before it holds, so the writers
+	// can between them hold Writers x MaxBatch events and the hand-off channel only fills
+	// beyond that; 400 events were all absorbed by the held batches (held=400, channel empty,
+	// nothing pending), the reader never blocked and the channel never filled. Add the
+	// hand-off channel, what the reader holds (one message plus a fetch buffer and one fetched
+	// ahead) and a margin.
+	n := pod.eproc.persistence.Writers*pod.eproc.persistence.MaxBatch + MESSAGE_BACKLOG_SIZE + 2*f1Batch + 100
 	pod.publish(0, n)
 	pod.holdSteady()
 	before := pod.consumer()
@@ -341,7 +348,7 @@ func TestF1ALongHoldDoesNotRedeliverToABlockedReader(t *testing.T) {
 	t.Logf("before: %+v during(3 x AckWait later): %+v", before, during)
 
 	// The unbeaten window exists: well over the hand-off channel's worth of messages is
-	// delivered and unacked, and the writer holds only one batch.
+	// delivered and unacked, and the writers hold only their batches.
 	require.GreaterOrEqual(t, during.ackPending, MESSAGE_BACKLOG_SIZE)
 	// A reader blocked in the hand-off pulls nothing, so the broker redelivers nothing: no
 	// delivery is spent however long the hold lasts.

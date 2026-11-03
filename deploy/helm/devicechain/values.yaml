@@ -1852,12 +1852,14 @@ functionalAreas:
     #                         # 20 unless set); above half of it is logged.
     #       maxBatch: 64      # events per transaction, 1 to 64. 1 turns batching off.
     #       lingerMillis: 10  # how long a writer holding a batch that is not full
-    #                         # waits for more, up to 1000. A writer that finds
-    #                         # events already waiting does not wait, so under a
-    #                         # backlog it costs nothing; below a few hundred
-    #                         # events/s per replica every event still commits
-    #                         # alone, up to this much later. 0 commits only what is
-    #                         # already waiting, which adds no latency.
+    #                         # waits for more, up to 1000. The writers take turns
+    #                         # receiving a batch, so the wait fills one batch at
+    #                         # the replica's whole rate (about rate x linger
+    #                         # events, up to maxBatch), not at a tenth of it. A
+    #                         # writer that finds events already waiting does not
+    #                         # wait, so under a backlog it costs nothing. 0
+    #                         # commits only what is already waiting, which adds
+    #                         # no latency.
     #
     # Calculated-metric backfill worker (defaults shown). It fills calculated metrics into
     # stored history for jobs a tenant creates; with no job it costs one lock attempt and
@@ -1913,8 +1915,12 @@ functionalAreas:
     #                         # rdbConfiguration.maxOpenConnections (20 unless set);
     #                         # above half of it is logged.
     #       maxBatch: 32      # events per transaction, 1 to 64. 1 turns batching off.
-    #       lingerMillis: 0   # how long a writer waits for a batch to fill, up to
-    #                         # 1000. 0 merges only what is already waiting, which
+    #       lingerMillis: 10  # how long a writer waits for a batch to fill, up to
+    #                         # 1000. The writers take turns receiving a batch, so
+    #                         # the wait fills one batch at the whole rate (about
+    #                         # rate x linger events, up to maxBatch). Under a
+    #                         # backlog a batch is already full and the wait is not
+    #                         # paid. 0 merges only what is already waiting, which
     #                         # adds no latency.
   dashboard-management:
     config: {}

@@ -64,17 +64,20 @@ const (
 	// On a three-node cloud cluster at 6,000 to 6,800 events a second, 59% of this service's
 	// transactions stored a single event, each with its own commit and its own wait for the
 	// synchronous standby. A writer waits only when nothing is already waiting for it (see
-	// messaging.CollectBatch), so under a backlog it takes a batch at once and the wait never
+	// messaging.CollectRaw), so under a backlog it takes a batch at once and the wait never
 	// happens: the wait costs latency, never throughput. With 10 writers and commits of about
 	// 14 ms it bounds the service to about 420 commits a second, against about 670 measured
 	// at 6,000 events a second.
 	//
-	// The saving needs every writer to be busy. A lingering writer queues for its next event
-	// behind the writers already idle, and an event goes to the writer that has waited
-	// longest, so a lingering writer gets a second event only once no writer is idle: about
-	// writers / (linger + commit time) events a second, roughly 400 to 500 per replica at
-	// the defaults. Below that rate each event still commits alone, up to this much later.
-	// Reasoned from those measurements, not yet measured end to end.
+	// The writers take turns receiving a batch: one at a time holds a collection token
+	// while it waits, and the idle writers wait for the token instead of taking its events.
+	// So the wait fills ONE batch at the pod's whole rate: a batch holds about
+	// rate x linger events, up to the cap, however many writers there are. (Writers that each
+	// waited on their own would split the stream between them and fill a tenth of that.) The
+	// token is released before the events are decoded and before the commit, so decoding and
+	// committing still run in parallel. Below about maxBatch / linger events a second per
+	// replica a batch is a partial one and an event waits up to this much longer than with
+	// the wait off; above it batches fill and the wait is not paid.
 	DefaultPersistenceLingerMillis = 10
 )
 

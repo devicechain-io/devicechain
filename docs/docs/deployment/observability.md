@@ -833,10 +833,10 @@ event in it is written again on its own.
 
 A writer that finds fewer events waiting than a full batch waits up to 10 milliseconds for more
 before it commits (`persistence.lingerMillis`). A writer that finds events already waiting takes them
-at once, so under a backlog the wait costs nothing. The wait saves commits only once every writer is
-busy: an arriving event goes to a writer that is idle before one that is waiting to fill its batch,
-so below roughly a few hundred events per second per replica each event is still committed alone,
-up to 10 milliseconds later than it would be without the wait. Batching helps most under load: on a
+at once, so under a backlog the wait costs nothing. The writers take turns receiving a batch, so the wait
+fills one batch at the replica's whole rate: a batch holds about the rate times the wait, up to the
+batch limit, however many writers there are. Below that rate a batch is a partial one and an event
+waits up to 10 milliseconds longer than it would without the wait. Batching helps most under load: on a
 replicated event store most of each commit is spent waiting for the standby, and a batch pays that
 wait once.
 
@@ -848,11 +848,14 @@ wait once.
 | `devicechain_eventmanagement_persist_batch_rows` | Rows per committed transaction. |
 | `devicechain_eventmanagement_persist_commit_duration_seconds` | Wall time of one committed transaction, with buckets from 1 ms to 2.5 s. Divide its rate of `_sum` by the rate of `persist_rows_total` for the latency per stored row. Unlike `persist_duration_seconds`, which is per event, grows with the rows a batch holds and has coarse default buckets, this is the figure to compare between two runs. |
 | `devicechain_eventmanagement_persist_inflight` | Events writers hold, including those waiting for their batch to commit. |
+| `devicechain_eventmanagement_persist_collect_full_total` | Batches that reached `persistence.maxBatch` without waiting out the wait. A share near 100% of `persist_batch_size` observations means a backlog. |
+| `devicechain_eventmanagement_persist_handoff_depth` | Events waiting in the hand-off channel when a writer finished receiving its batch. Near the channel's size with full batches means the writers or the event store are the limit; near 0 with few full batches is a trickle, which is healthy. |
 | `devicechain_eventmanagement_persist_store_held_events` | Events held unacknowledged because the event store cannot take writes. 0 when healthy; see [When the event store cannot take writes](#event-store-down). |
 
 `persist_duration_seconds` measures each event from when a writer takes it until its batch commits,
-including up to `persistence.lingerMillis` spent waiting for the batch to fill, so under light load
-its median sits about 10 milliseconds higher than with the wait off.
+including up to `persistence.lingerMillis` spent waiting for the batch to fill and any wait for another
+writer to finish receiving its batch, so under light load its median sits about 10 milliseconds higher
+than with the wait off.
 
 ### When the event store cannot take writes {#event-store-down}
 
@@ -1016,14 +1019,17 @@ it is merged again on its own.
 | `devicechain_devicestate_state_write_conflict_retries_total` | Single-event writes run again in place after PostgreSQL aborted them as a deadlock victim or serialization failure. A rate that keeps climbing means the inactivity sweep and the writers are colliding often; an event whose retries are all lost is left for redelivery and counted as `retry` in the message results. |
 | `devicechain_devicestate_dropped_measurement_evicted_total` | Dropped-measurement records evicted because a device exceeded its limit of 32 distinct (key, reason) pairs; the pair seen longest ago goes first. A device that keeps sending new text keys moves this, and the device's discarded-keys list then shows only the most recent ones. |
 | `devicechain_devicestate_state_inflight` | Events writers hold, including those waiting for their batch to commit. |
+| `devicechain_devicestate_state_collect_full_total` | Batches that reached `projection.maxBatch` without waiting out the wait. A share near 100% of `state_batch_size` observations means a backlog. |
+| `devicechain_devicestate_state_handoff_depth` | Events waiting in the hand-off channel when a writer finished receiving its batch. Near the channel's size with full batches means the writers or the database are the limit; near 0 with few full batches is a trickle, which is healthy. |
+| `devicechain_devicestate_state_batch_conflict_retries_total` | Batches that lost a transaction conflict (a deadlock victim or a serialization failure) and were run again once, unchanged. A batch that loses twice is counted in `state_batch_fallbacks_total` as well. Normally 0. |
 
-`state_duration_seconds` measures each event from when a writer takes it until its batch commits.
+`state_duration_seconds` measures each event from when a writer takes it until its batch commits, including up to `projection.lingerMillis` spent waiting for the batch to fill and any wait for another writer to finish receiving its batch.
 
 | Setting (`device-state` config) | Default | What it does |
 | --- | --- | --- |
 | `projection.writers` | `10` | Writers running in parallel, each holding one database connection while it merges. Must be below `rdbConfiguration.maxOpenConnections` (20 unless set). |
 | `projection.maxBatch` | `32` | Most events merged in one transaction, from `1` to `64`. `1` turns batching off. |
-| `projection.lingerMillis` | `0` | How long a writer waits for more events before merging a batch that is not full, up to `1000`. `0` merges what is already waiting. |
+| `projection.lingerMillis` | `10` | How long a writer waits for more events before merging a batch that is not full, up to `1000`. The writers take turns receiving a batch, so the wait fills one batch at the replica's whole rate. A writer that finds events waiting does not wait. `0` merges what is already waiting. |
 
 Batching is what carries throughput on a replicated database. Merges for one device wait for each
 other, so on a small fleet whose devices send in turn, more writers can mean more batches waiting on

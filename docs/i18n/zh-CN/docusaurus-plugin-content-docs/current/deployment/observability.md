@@ -437,7 +437,7 @@ kube-state-metrics 本身因节点失效等原因移动期间的重启，只要�
 
 事件管理批量写入。每个写入器拿取已等待事件到上限，在一个事务提交，对批次每个租户每张表写一次，而非每事件一次。连接和断开仍在批次中逐条写。事务提交后才确认事件。批次中某事件被拒绝时，事务全部回滚；拒绝事件单独重写，按非批量方式重试或报告，其他事件排除它后重新提交。因租户已删除而被拒绝的事件例外：拒绝适用于该租户的所有事件，因此都不再重写，而是立即确认、不作任何报告，并计为 `erased`（参见[租户删除](./tenant-deletion.md#database-writes)）。数据库拒绝多事件语句中的行时无法指出原事件，因此先在新事务逐事件写入来定位。若失败不是单个事件原因，例如数据库连接丢失，全部事件逐个重写。
 
-写入器拿到不足整批事件时，最多等待十毫秒（`persistence.lingerMillis`）再提交。已有积压时立即拿取，因此等待不增加积压处理成本。只有全部写入器忙时才减少提交：新事件先交给空闲写入器，而非等填满的写入器，所以每副本低于约几百事件/秒时仍单独提交，只多等最多十毫秒。复制数据库大部分提交时间等待备用副本，一批仅支付一次，因此负载下收益最大。
+写入器拿到不足整批事件时，最多等待十毫秒（`persistence.lingerMillis`）再提交。已有积压时立即拿取，因此等待不增加积压处理成本。各写入器轮流接收一批，因此这段等待以副本的全部速率填满同一批：一批大约包含“速率乘以等待时间”个事件，不超过批次上限，与写入器数量无关。低于该速率时批次不满，事件比不等待时最多多等十毫秒。复制数据库大部分提交时间等待备用副本，一批仅支付一次，因此负载下收益最大。
 
 | 指标 | 含义 |
 | --- | --- |
@@ -447,9 +447,11 @@ kube-state-metrics 本身因节点失效等原因移动期间的重启，只要�
 | `devicechain_eventmanagement_persist_batch_rows` | 每个已提交事务的行数。 |
 | `devicechain_eventmanagement_persist_commit_duration_seconds` | 单个已提交事务的耗时，分桶范围为 1 毫秒到 2.5 秒。将 `_sum` 的速率除以 `persist_rows_total` 的速率即得每行存储的延迟。`persist_duration_seconds` 按事件计、随批次行数增长且默认分桶较粗，比较两次运行时应使用本指标。 |
 | `devicechain_eventmanagement_persist_inflight` | 写入器持有事件，包括等待批提交。 |
+| `devicechain_eventmanagement_persist_collect_full_total` | 未等满等待时间就达到 `persistence.maxBatch` 的批次数。占 `persist_batch_size` 观测的比例接近 100% 表示有积压。 |
+| `devicechain_eventmanagement_persist_handoff_depth` | 写入器接收完一批时，交接通道中仍在等待的事件数。接近通道大小且批次已满，说明限制在写入器或事件库；接近 0 且很少满批是涓流，属正常。 |
 | `devicechain_eventmanagement_persist_store_held_events` | 因事件库无法写入而被保留、尚未确认的事件数。正常时为 0；见[事件库无法写入时](#event-store-down)。 |
 
-`persist_duration_seconds` 从写入器取得事件计到批提交，包括最多 `persistence.lingerMillis` 的填批等待，因此轻载中位数比关闭等待约高十毫秒。
+`persist_duration_seconds` 从写入器取得事件计到批提交，包括最多 `persistence.lingerMillis` 的填批等待以及等待其他写入器接收完它那一批的时间，因此轻载中位数比关闭等待约高十毫秒。
 
 ### 事件库无法写入时 {#event-store-down}
 
@@ -559,14 +561,17 @@ UPDATE "event-management".calculated_backfills
 | `devicechain_devicestate_state_write_conflict_retries_total` | 单事件写入被 PostgreSQL 作为死锁受害者或序列化失败中止后，就地重新执行的次数。持续增长表示不活动扫描与写入方频繁冲突；重试全部失败的事件留待重投递，并在消息结果中计为 `retry`。 |
 | `devicechain_devicestate_dropped_measurement_evicted_total` | 因设备超出 32 个不同（键，原因）组合的上限而被淘汰的丢弃测量记录；最久未出现的组合最先被淘汰。持续发送新文本键的设备会使该计数上升，此时设备的已丢弃键列表只显示最近的那些。 |
 | `devicechain_devicestate_state_inflight` | 写入器持有事件，包括等待批提交。 |
+| `devicechain_devicestate_state_collect_full_total` | 未等满等待时间就达到 `projection.maxBatch` 的批次数。占 `state_batch_size` 观测的比例接近 100% 表示有积压。 |
+| `devicechain_devicestate_state_handoff_depth` | 写入器接收完一批时，交接通道中仍在等待的事件数。接近通道大小且批次已满，说明限制在写入器或数据库；接近 0 且很少满批是涓流，属正常。 |
+| `devicechain_devicestate_state_batch_conflict_retries_total` | 因事务冲突（死锁受害者或序列化失败）而丢失、并原样重新执行一次的批次数。两次都丢失的批次也计入 `state_batch_fallbacks_total`。通常为 0。 |
 
-`state_duration_seconds` 从写入器取得事件计到批提交。
+`state_duration_seconds` 从写入器取得事件计到批提交，包括最多 `projection.lingerMillis` 的填批等待以及等待其他写入器接收完它那一批的时间。
 
 | 设置（`device-state`） | 默认值 | 作用 |
 | --- | --- | --- |
 | `projection.writers` | `10` | 并行写入器，每个合并时一个连接，低于 `rdbConfiguration.maxOpenConnections`（默认 20）。 |
 | `projection.maxBatch` | `32` | 单事务最大合并事件数，范围 `1`–`64`，`1` 禁用批量。 |
-| `projection.lingerMillis` | `0` | 不满批最大等待，上限 `1000`，`0` 直接合并已有内容。 |
+| `projection.lingerMillis` | `10` | 不满批最大等待，上限 `1000`。各写入器轮流接收一批，因此等待以副本的全部速率填满同一批；已有等待事件时不等。`0` 直接合并已有内容。 |
 
 批量支撑复制数据库吞吐。同设备合并互相等待，因此小设备群轮流发送时，更多写入器可能意味着更多批次等待同设备。三节点云集群约 1,700–1,900 台设备，5 写入器在约每秒 6,800 事件开始落后。选择 10 写入器的运行同时提高 CPU 请求和 `projection.maxBatch` 至 64，未隔离各自贡献。默认数量 10，是池一半，默认批仍 32，因为该运行平均批约 15，32 平均不构成限制。只有满批且数据库有余量才继续提高。启动日志列出实际值。实时状态仍落后时，消费者触发 `JetStreamDurableFallingBehind`，参见[持续落后](#consumer-backlog)。
 

@@ -100,10 +100,14 @@ type StateProcessor struct {
 	sweepMetrics *core.PeriodicTaskMetrics
 
 	messages chan messaging.Message
+	// collector is the one token this pod's writers take turns holding while they receive a
+	// batch (messaging.Collector). Nil is no token: collection then behaves as it always did.
+	collector *messaging.Collector
 
 	// projection sizes the writers: how many run, and how many events each merges in one
 	// transaction. Defaulted in the constructor by the configuration's own ApplyDefaults; a
-	// processor assembled by literal has it zero, which CollectBatch reads as batches of one.
+	// processor assembled by literal has MaxBatch zero, which the writers read as batches of one,
+	// and a nil linger, which reads as the default (10 ms).
 	projection config.ProjectionConfiguration
 
 	// Shutdown coordination (A5): procCancel stops the read loop; the WaitGroups
@@ -150,6 +154,15 @@ func (sp *StateProcessor) pacer() *core.ReadPacer {
 // processing loop exports, plus what only a batching writer has to say. Every method is
 // nil-safe, because tests assemble processors by literal without metrics.
 type StateMetrics struct {
+	// collectFull is state_collect_full_total: batches that reached MaxBatch, i.e. that the
+	// collector filled without waiting out the linger. A share near 100% is a backlog.
+	collectFull prometheus.Counter
+	// handoffDepth is state_handoff_depth: events waiting in the hand-off channel when a
+	// writer finished receiving its batch. Near its capacity with full batches means the
+	// writers or the database are the bound; near 0 with few full batches is a trickle,
+	// which is healthy.
+	handoffDepth prometheus.Observer
+
 	// messages is state_messages_total, _duration_seconds and _inflight. A message is in
 	// flight from when a writer takes it until its disposition, which includes the time it
 	// waits for its batch to commit.
@@ -158,6 +171,10 @@ type StateMetrics struct {
 	batchSize prometheus.Observer
 	// fallbacks is state_batch_fallbacks_total: batch transactions that did not commit.
 	fallbacks prometheus.Counter
+	// batchConflictRetries is state_batch_conflict_retries_total: batches that lost a
+	// transaction conflict (a deadlock victim or a serialization failure) and were run again,
+	// once, as the same batch. It counts the conflict, not the outcome of the retry.
+	batchConflictRetries prometheus.Counter
 	// conflictRetries is state_write_conflict_retries_total: single-event writes run again in
 	// place after PostgreSQL aborted them as a deadlock victim or serialization failure.
 	conflictRetries prometheus.Counter
@@ -171,6 +188,21 @@ func (m *StateMetrics) start() func(result string) {
 	return m.messages.Start()
 }
 
+// handoffBuckets covers the hand-off channel's depth, up to its default capacity.
+var handoffBuckets = []float64{0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512}
+
+// collected records one received batch of n raw events against the cap max, with depth
+// events still waiting in the hand-off channel. Nil-safe.
+func (m *StateMetrics) collected(n, max, depth int) {
+	if m == nil || m.collectFull == nil {
+		return
+	}
+	if n >= max {
+		m.collectFull.Inc()
+	}
+	m.handoffDepth.Observe(float64(depth))
+}
+
 // committed records one committed transaction holding n events.
 func (m *StateMetrics) committed(n int) {
 	if m != nil {
@@ -182,6 +214,13 @@ func (m *StateMetrics) committed(n int) {
 func (m *StateMetrics) fallback() {
 	if m != nil {
 		m.fallbacks.Inc()
+	}
+}
+
+// batchConflictRetry records one batch run again after a transaction conflict.
+func (m *StateMetrics) batchConflictRetry() {
+	if m != nil && m.batchConflictRetries != nil {
+		m.batchConflictRetries.Inc()
 	}
 }
 
@@ -208,6 +247,13 @@ func NewStateMetrics(ms *core.Microservice) *StateMetrics {
 			nil, []float64{1, 2, 4, 8, 16, 32, 64}).WithLabelValues(),
 		fallbacks: ms.NewCounter("state_batch_fallbacks_total",
 			"Batch transactions that did not commit, after which their events were merged again."),
+		collectFull: ms.NewCounter("state_collect_full_total",
+			"Batches that reached the writer's batch cap, i.e. that were filled without waiting out the linger."),
+		handoffDepth: ms.NewHistogramVec("state_handoff_depth",
+			"Events waiting in the hand-off channel when a writer finished receiving its batch.",
+			nil, handoffBuckets).WithLabelValues(),
+		batchConflictRetries: ms.NewCounter("state_batch_conflict_retries_total",
+			"Batches that lost a transaction conflict (deadlock victim or serialization failure) and were run again once as the same batch."),
 		conflictRetries: ms.NewCounter("state_write_conflict_retries_total",
 			"Single-event writes run again in place after PostgreSQL aborted them as a deadlock victim or serialization failure."),
 	}
@@ -293,6 +339,7 @@ func (sp *StateProcessor) Linger() time.Duration {
 // Initialize pool of workers that merge device state in parallel.
 func (sp *StateProcessor) initializeWorkers() {
 	sp.messages = make(chan messaging.Message, messageBacklog(sp.projection.Writers, sp.projection.MaxBatch))
+	sp.collector = &messaging.Collector{}
 	log.Info().Int("writers", sp.projection.Writers).Int("maxBatch", sp.projection.MaxBatch).
 		Dur("linger", sp.projection.Linger()).Msg("Device state projection writers started")
 	for w := 1; w <= sp.projection.Writers; w++ {
@@ -349,26 +396,88 @@ func (sp *StateProcessor) handOff(ctx context.Context, msg messaging.Message) bo
 	}
 }
 
-// processMessages is the worker loop: it collects the events already waiting for it into a
-// batch and merges them (mergeBatch). The A3 ack contract rides on each messaging.Message,
-// so the worker that merges a message is the one that acks it (success / poison) or leaves
-// it unacked for redelivery (transient). The batch collected when the channel closes is
-// merged before the worker exits, so ExecuteStop still drains the backlog.
+// processMessages is the worker loop: it collects a batch of events and merges them
+// (mergeBatch). The A3 ack contract rides on each messaging.Message, so the worker that
+// merges a message is the one that acks it (success / poison) or leaves it unacked for
+// redelivery (transient). The batch collected when the channel closes is merged before the
+// worker exits, so ExecuteStop still drains the backlog.
+//
+// Collection is serialized across the pod's writers: one at a time holds the collector's
+// token while it RECEIVES raw messages, so a lingering writer's batch fills at the whole
+// pod's rate. The token is released before admission and before the merge, so decoding and
+// committing stay parallel. The writer reuses one set of buffers for every batch, cleared
+// once the batch is merged.
 //
 // ctx is the WORKER's context and carries no tenant; each message's own tenant comes from
 // its subject (admit).
 func (sp *StateProcessor) processMessages(ctx context.Context) {
+	w := sp.newWriterBuffers()
 	for {
-		batch, open := messaging.CollectBatch(sp.messages, sp.projection.MaxBatch, sp.projection.Linger(),
-			func(msg messaging.Message) (pendingMerge, bool) { return sp.admit(ctx, msg) })
+		batch, open := w.collect(ctx)
 		if len(batch) > 0 {
 			sp.mergeBatch(ctx, batch)
 		}
+		w.clear()
 		if !open {
 			log.Debug().Msg("Device state merger received shutdown signal.")
 			return
 		}
 	}
+}
+
+// writerBuffers is one writer's reused storage: the messages as received, the RED
+// clock-stops started at receipt, and the admitted messages, each allocated once at the
+// batch cap. Only the writer's own goroutine touches it.
+type writerBuffers struct {
+	sp    *StateProcessor
+	limit int
+	raw   []messaging.Message
+	dones []func(string)
+	batch []pendingMerge
+	// received is bound once, because a method value allocates each time it is made.
+	received func(messaging.Message)
+}
+
+func (sp *StateProcessor) newWriterBuffers() *writerBuffers {
+	limit := sp.projection.MaxBatch
+	if limit < 1 {
+		limit = 1
+	}
+	w := &writerBuffers{sp: sp, limit: limit,
+		raw:   make([]messaging.Message, 0, limit),
+		dones: make([]func(string), 0, limit),
+		batch: make([]pendingMerge, 0, limit),
+	}
+	// Each message's RED clock starts at receipt, so the wait for the token and the linger
+	// are inside state_duration_seconds exactly as they were when each writer collected for
+	// itself.
+	w.received = func(messaging.Message) { w.dones = append(w.dones, sp.metrics.start()) }
+	return w
+}
+
+// collect receives the next batch under the collector's token and, once the token is
+// released, admits it. The batch lives in the writer's buffer until clear.
+func (w *writerBuffers) collect(ctx context.Context) (batch []pendingMerge, open bool) {
+	sp := w.sp
+	w.dones = w.dones[:0]
+	w.raw, open = messaging.CollectRaw(sp.collector, sp.messages, w.raw, w.limit, sp.projection.Linger(), w.received)
+	sp.metrics.collected(len(w.raw), w.limit, len(sp.messages))
+	w.batch = w.batch[:0]
+	for i, msg := range w.raw {
+		if p, ok := sp.admitStarted(ctx, msg, w.dones[i]); ok {
+			w.batch = append(w.batch, p)
+		}
+	}
+	return w.batch, open
+}
+
+// clear drops every reference the buffers hold, once the batch is merged, so nothing the
+// last batch held is kept alive by a slot the next one has not yet overwritten.
+func (w *writerBuffers) clear() {
+	clear(w.raw[:cap(w.raw)])
+	clear(w.dones[:cap(w.dones)])
+	clear(w.batch[:cap(w.batch)])
+	w.raw, w.dones, w.batch = w.raw[:0], w.dones[:0], w.batch[:0]
 }
 
 // pendingMerge is one admitted message waiting for its batch.
@@ -385,9 +494,14 @@ type pendingMerge struct {
 // (acked, recorded invalid: redelivery cannot fix any of the three), so it joins no batch. It
 // is the ONE place an event becomes a model.ProjectionUpdate, for both paths.
 func (sp *StateProcessor) admit(ctx context.Context, msg messaging.Message) (pendingMerge, bool) {
-	// RED metrics for this merge (E13): time the message and record its
-	// disposition exactly once on whichever path it leaves by.
-	done := sp.metrics.start()
+	return sp.admitStarted(ctx, msg, sp.metrics.start())
+}
+
+// admitStarted is admit for a message whose RED clock (E13) was started when it was
+// RECEIVED, which is what the batch path does: done records the message's disposition
+// exactly once on whichever path it leaves by, and its duration then covers the wait for the
+// collector token and the linger, not just what happens after admission.
+func (sp *StateProcessor) admitStarted(ctx context.Context, msg messaging.Message, done func(string)) (pendingMerge, bool) {
 
 	// Derive the per-message tenant from the message subject and build a
 	// tenant-scoped context. Without a parseable tenant the state can not be
@@ -463,6 +577,7 @@ func (sp *StateProcessor) mergeBatch(ctx context.Context, batch []pendingMerge) 
 	// A batch of ONE goes through the same single transaction as any other: the per-message
 	// path costs two (device state, then latest values), and under paced load a lone event is
 	// a few percent of all of them. It reaches the per-message path only by failing here.
+	retried := false
 	for len(batch) > 0 {
 		updates := make([]model.ProjectionUpdate, len(batch))
 		for i := range batch {
@@ -477,6 +592,21 @@ func (sp *StateProcessor) mergeBatch(ctx context.Context, batch []pendingMerge) 
 				p.done(core.ResultOK)
 			}
 			return
+		}
+		// A batch that lost a transaction conflict (PostgreSQL rolled it back whole) is run
+		// again ONCE, unchanged and in the same order, after a short jittered pause: the
+		// transaction it collided with has usually finished, and a second conflict is rare. It
+		// costs one transaction where the per-message path below costs two to four per event.
+		// Only a conflict is retried: a refused statement, a fence refusal and a lost
+		// connection take the branches below exactly as before, and so does a second conflict.
+		if !retried && rdb.IsTransactionConflict(err) {
+			retried = true
+			sp.metrics.batchConflictRetry()
+			log.Warn().Err(err).Int("events", len(batch)).
+				Msg("A device state batch lost a transaction conflict; running it again")
+			// The workers run on context.Background(), so this is a plain sleep.
+			time.Sleep(time.Duration(5+rand.Intn(21)) * time.Millisecond)
+			continue
 		}
 		sp.metrics.fallback()
 		var refused *model.BatchRefusal

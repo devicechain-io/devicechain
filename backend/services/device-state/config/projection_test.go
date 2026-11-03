@@ -13,16 +13,16 @@ import (
 )
 
 // The projection settings load as written, and an empty document takes the defaults: 10
-// writers, batches of up to 32, no linger.
+// writers, batches of up to 32, a 10 ms linger.
 func TestProjectionWritersLoad(t *testing.T) {
 	cfg := &DeviceStateConfiguration{}
 	require.NoError(t, core.LoadConfiguration([]byte(`{"projection":{"writers":8,"maxBatch":16,"lingerMillis":5}}`), cfg))
-	assert.Equal(t, ProjectionConfiguration{Writers: 8, MaxBatch: 16, LingerMillis: 5}, cfg.Projection)
+	assert.Equal(t, ProjectionConfiguration{Writers: 8, MaxBatch: 16, LingerMillis: intp(5)}, cfg.Projection)
 	assert.Equal(t, 5*time.Millisecond, cfg.Projection.Linger())
 
 	cfg = &DeviceStateConfiguration{}
 	require.NoError(t, core.LoadConfiguration([]byte(``), cfg))
-	assert.Equal(t, ProjectionConfiguration{Writers: 10, MaxBatch: 32, LingerMillis: 0}, cfg.Projection)
+	assert.Equal(t, ProjectionConfiguration{Writers: 10, MaxBatch: 32, LingerMillis: intp(10)}, cfg.Projection)
 	assert.Equal(t, 10, DefaultProjectionWriters)
 	assert.Equal(t, 32, DefaultProjectionMaxBatch)
 }
@@ -70,4 +70,40 @@ func TestProjectionWritersAreBounded(t *testing.T) {
 			}
 		})
 	}
+}
+
+func intp(n int) *int { return &n }
+
+// The linger defaults to 10 ms, and an EXPLICIT 0 stays 0: it is a pointer so that "not set"
+// and "off" can be told apart, and a default that swallowed the 0 would make the wait
+// impossible to turn off.
+func TestTheDefaultProjectionLingers(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		doc  string
+		want time.Duration
+	}{
+		{"unset", `{}`, 10 * time.Millisecond},
+		{"unset beside other settings", `{"projection":{"writers":4}}`, 10 * time.Millisecond},
+		{"null", `{"projection":{"lingerMillis":null}}`, 10 * time.Millisecond},
+		{"an explicit zero", `{"projection":{"lingerMillis":0}}`, 0},
+		{"set", `{"projection":{"lingerMillis":3}}`, 3 * time.Millisecond},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &DeviceStateConfiguration{}
+			require.NoError(t, core.LoadConfiguration([]byte(tc.doc), cfg))
+			require.NotNil(t, cfg.Projection.LingerMillis, "the load must leave the linger set")
+			assert.Equal(t, tc.want, cfg.Projection.Linger())
+		})
+	}
+
+	// A value built in code and never defaulted reads the same way a loaded one does.
+	assert.Equal(t, 10*time.Millisecond, ProjectionConfiguration{}.Linger())
+	assert.Equal(t, time.Duration(0), ProjectionConfiguration{LingerMillis: intp(0)}.Linger())
+	var p ProjectionConfiguration
+	p.ApplyDefaults()
+	assert.Equal(t, DefaultProjectionLingerMillis, *p.LingerMillis)
+	zero := ProjectionConfiguration{LingerMillis: intp(0)}
+	zero.ApplyDefaults()
+	assert.Equal(t, 0, *zero.LingerMillis, "ApplyDefaults must not overwrite an explicit 0")
 }

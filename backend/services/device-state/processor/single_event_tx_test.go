@@ -12,6 +12,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
@@ -273,8 +274,13 @@ func TestABatchOfOneThatFailsFallsBackToThePerMessagePath(t *testing.T) {
 			reg := stateRegistry(built)
 			acks := drainQueue(built, []messaging.Message{threeMetrics(t, "bc-01", t0)})
 			built.Api = api.Api
-			if got := api.batches.Load(); got != 1 {
-				t.Errorf("MergeProjectionBatch ran %d times; want 1", got)
+			// A conflict is run again once before the per-message path; anything else is not.
+			want := int32(1)
+			if rdb.IsTransactionConflict(tc.err) {
+				want = 2
+			}
+			if got := api.batches.Load(); got != want {
+				t.Errorf("MergeProjectionBatch ran %d times; want %d", got, want)
 			}
 			if got := api.perState.Load(); got != 1 {
 				t.Errorf("the per-message path ran %d times; want 1", got)
