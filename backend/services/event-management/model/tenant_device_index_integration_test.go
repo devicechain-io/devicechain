@@ -71,7 +71,7 @@ func storeIndexesFor(t *testing.T, db *gorm.DB) map[string]map[string]string {
 func assertFinalIndexes(t *testing.T, db *gorm.DB, minChunks int) {
 	t.Helper()
 	want := storeIndexesFor(t, db)
-	for _, table := range LifecycleHypertables {
+	for _, table := range eventStoreTables {
 		assert.Equalf(t, want[table], hypertableIndexes(t, db, table), "indexes on %s", table)
 	}
 	assertChunkSets(t, db, minChunks, func(table string) []string { return sortedNames(want[table]) })
@@ -152,7 +152,7 @@ func TestIntegrationEventsDeviceIndexLeadsWithTenant(t *testing.T) {
 	require.Len(t, byDevice.Results, 2)
 	assert.True(t, byDevice.Results[0].OccurredTime.Equal(time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)))
 	assert.True(t, byDevice.Results[1].OccurredTime.Equal(time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)))
-	for _, table := range LifecycleHypertables {
+	for _, table := range eventStoreTables {
 		require.NoError(t, sys.Exec(`SELECT decompress_chunk(?::regclass)`, oldChunk[table]).Error)
 	}
 	assertFinalIndexes(t, sys, 2)

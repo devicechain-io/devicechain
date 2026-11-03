@@ -186,7 +186,7 @@ func TestIntegrationDeviceAltIdKeyBuildsOverCompressedChunks(t *testing.T) {
 	require.NoError(t, insertAltEvent(sys, "acme", "dev-b", "m1", 0x52, at))
 	require.Error(t, insertAltEvent(sys, "acme", "dev-a", "m1", 0x53, at))
 
-	for _, table := range LifecycleHypertables {
+	for _, table := range eventStoreTables {
 		require.NoError(t, sys.Exec(`SELECT decompress_chunk(?::regclass)`, oldChunk[table]).Error)
 	}
 	assertFinalIndexes(t, sys, 2)

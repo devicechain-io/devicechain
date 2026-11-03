@@ -260,7 +260,7 @@ func TestIntegrationIndexTrimRefusesTooManyChunksBeforeLocking(t *testing.T) {
 		assert.Contains(t, err.Error(), want)
 	}
 	assert.NotContains(t, err.Error(), "measurement_events (", "only a table over the ceiling is named")
-	for _, table := range LifecycleHypertables {
+	for _, table := range eventStoreTables {
 		assert.Equalf(t, preTrimNames(table), sortedNames(hypertableIndexes(t, sys, table)),
 			"no index is dropped from %s by a refused start", table)
 	}

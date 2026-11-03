@@ -135,7 +135,7 @@ func preTrimNames(table string) []string {
 // and that each table HAS chunks — an empty map would pass any comparison.
 func assertChunkSets(t *testing.T, db *gorm.DB, minChunks int, want func(string) []string) {
 	t.Helper()
-	for _, table := range LifecycleHypertables {
+	for _, table := range eventStoreTables {
 		chunks := chunkIndexSuffixes(t, db, table)
 		require.GreaterOrEqualf(t, len(chunks), minChunks, "%s: too few chunks for this check to mean anything", table)
 		for chunk, got := range chunks {
@@ -205,7 +205,7 @@ func TestIntegrationEventStoreKeepsOnlyTheIndexesItsQueriesUse(t *testing.T) {
 	sys := systemDB(mgr)
 	twoChunkSeed(t, sys)
 
-	for _, table := range LifecycleHypertables {
+	for _, table := range eventStoreTables {
 		assert.Equalf(t, afterTrimIndexes[table], hypertableIndexes(t, sys, table), "indexes on %s", table)
 	}
 	assertChunkSets(t, sys, 2, func(table string) []string { return sortedNames(afterTrimIndexes[table]) })
@@ -228,7 +228,7 @@ func TestIntegrationIndexTrimAppliesOverCompressedChunks(t *testing.T) {
 	twoChunkSeed(t, sys)
 
 	oldChunk := map[string]string{}
-	for _, table := range LifecycleHypertables {
+	for _, table := range eventStoreTables {
 		require.NoError(t, sys.Exec(enableCompressionStmt(table)).Error, "enable compression on %s", table)
 		var chunk string
 		require.NoError(t, sys.Raw(`SELECT format('%I.%I', chunk_schema, chunk_name)
@@ -253,7 +253,7 @@ func TestIntegrationIndexTrimAppliesOverCompressedChunks(t *testing.T) {
 
 	after := newPostgresManagerWith(t, inst, migrationsThrough(t, NewIndexTrimSchema().ID))
 	sys = systemDB(after)
-	for _, table := range LifecycleHypertables {
+	for _, table := range eventStoreTables {
 		assert.Equalf(t, afterTrimIndexes[table], hypertableIndexes(t, sys, table), "indexes on %s", table)
 	}
 	assertChunkSets(t, sys, 2, func(table string) []string { return sortedNames(afterTrimIndexes[table]) })
@@ -285,7 +285,7 @@ func TestIntegrationIndexTrimAppliesOverCompressedChunks(t *testing.T) {
 	}
 	assertReads("compressed")
 
-	for _, table := range LifecycleHypertables {
+	for _, table := range eventStoreTables {
 		require.NoError(t, sys.Exec(`SELECT decompress_chunk(?::regclass)`, oldChunk[table]).Error)
 	}
 	assertChunkSets(t, sys, 2, func(table string) []string { return sortedNames(afterTrimIndexes[table]) })
@@ -454,7 +454,7 @@ func TestIntegrationIndexTrimWaitsBoundedlyForALockAndResumes(t *testing.T) {
 	_, err = holder.Exec(context.Background(), `ROLLBACK`)
 	require.NoError(t, err)
 	require.NoError(t, newIndexTrimSchema(timing).Migrate(sys), "the next run must resume and finish")
-	for _, table := range LifecycleHypertables {
+	for _, table := range eventStoreTables {
 		assert.Equalf(t, afterTrimIndexes[table], hypertableIndexes(t, sys, table), "indexes on %s", table)
 	}
 
