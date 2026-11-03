@@ -161,7 +161,7 @@ func TestAQueueOfEventsIsMergedInOneTransaction(t *testing.T) {
 	}
 }
 
-// A batch is bounded by maxBatch: 100 events at 32 are four transactions (32+32+32+4).
+// A batch is bounded by maxBatch: 100 events at the default of 64 are two transactions (64+36).
 func TestABatchHoldsAtMostMaxBatchEvents(t *testing.T) {
 	sp, _, _ := newFencedStateProcessor(t)
 	reg := stateRegistry(sp)
@@ -176,8 +176,9 @@ func TestABatchHoldsAtMostMaxBatchEvents(t *testing.T) {
 			t.Errorf("message %d acknowledged %d times; want 1", i, n)
 		}
 	}
-	if _, n, sum, _ := gathered(t, reg, "state_batch_size", ""); n != 4 || sum != 100 {
-		t.Errorf("batch-size histogram holds %v observations summing to %v; want 4 summing to 100", n, sum)
+	want := float64((100 + sp.MaxBatch() - 1) / sp.MaxBatch())
+	if _, n, sum, _ := gathered(t, reg, "state_batch_size", ""); n != want || sum != 100 {
+		t.Errorf("batch-size histogram holds %v observations summing to %v; want %v summing to 100", n, sum, want)
 	}
 }
 

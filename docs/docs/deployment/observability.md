@@ -1171,7 +1171,7 @@ it is merged again on its own.
 | Setting (`device-state` config) | Default | What it does |
 | --- | --- | --- |
 | `projection.writers` | `10` | Writers running in parallel, each holding one database connection while it merges. Must be below `rdbConfiguration.maxOpenConnections` (20 unless set). |
-| `projection.maxBatch` | `32` | Most events merged in one transaction, from `1` to `64`. `1` turns batching off. |
+| `projection.maxBatch` | `64` | Most events merged in one transaction, from `1` to `64`. `1` turns batching off. |
 | `projection.lingerMillis` | `10` | How long a writer waits for more events before merging a batch that is not full, up to `1000`. The writers take turns receiving a batch, so the wait fills one batch at the replica's whole rate. A writer that finds events waiting does not wait. `0` merges what is already waiting. |
 
 Batching is what carries throughput on a replicated database. Merges for one device wait for each
@@ -1179,8 +1179,12 @@ other, so on a small fleet whose devices send in turn, more writers can mean mor
 the same devices. On a three-node cloud cluster with about 1,700 to 1,900 devices, 5 writers fell
 behind from about 6,800 events per second. 10 writers were chosen in a run that also raised the
 service's CPU request and `projection.maxBatch` to 64, so the share of each was not separated. The default
-writer count is 10, half the default connection pool, and the default `projection.maxBatch` stays
-32: batches in that run averaged about 15, so 32 did not bind on average. Raise it further only when the batches are full and the database has room to spare. The
+writer count is 10, half the default connection pool, and the default `projection.maxBatch` is 64,
+the largest value accepted. Each batch is split by tenant before it is written, so with many
+tenants a batch of 32 writes only a few rows per tenant; a higher limit lets a backlog or a longer
+`projection.lingerMillis` fill more of them. A batch still holds only about the replica's event
+rate times `projection.lingerMillis` when no backlog has built, so at a few thousand events per
+second and the default wait the limit is not what ends the batch. The
 service logs the values it is using when it starts. If the live state still falls behind, `JetStreamDurableFallingBehind` fires for the
 `device-state` consumer (see [A consumer that stays behind](#consumer-backlog)).
 

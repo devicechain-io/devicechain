@@ -13,7 +13,7 @@
 //	  -bench 'ProjectionWriters/paced' -benchtime=60000x -count=1 -p 1 ./processor/
 //
 // DC_BENCH_PACED selects the arms, as a comma-separated list of
-// rate:commitMs:lingerMs:writers:mix (default below), mix being
+// rate:commitMs:lingerMs:writers:mix[:tenants] (default below), mix being
 //
 //   - plain: every event a measurement;
 //   - change1: one event in a hundred is a presence claim (the state-change mix);
@@ -21,6 +21,10 @@
 //     reconnect-storm mix);
 //   - sweep0: the sweep alongside, and no claims at all (the control that separates the
 //     sweep's contention from the claim path's).
+//
+// tenants (optional, default 1) spreads the fleet over that many tenants, event i going to
+// tenant i mod tenants, so a collected batch splits into one upsert per tenant. DC_BENCH_MAXBATCH
+// overrides projection.maxBatch for every arm (unset: the shipped default).
 //
 // The sweep runs every 2 s against a clock set so that a device silent for 900 ms counts as
 // past the 600 s timeout. A device reports every fleet/rate seconds (1 s at 3,000/s, 2 s at
@@ -68,7 +72,24 @@ const pacedFleet = 3000
 // pacedProjection is the projection configuration a paced arm runs: the shipped defaults
 // but for what the arm sets.
 func pacedProjection(writers, lingerMs int) config.ProjectionConfiguration {
-	return config.ProjectionConfiguration{Writers: writers, LingerMillis: &lingerMs}
+	cfg := config.ProjectionConfiguration{Writers: writers, LingerMillis: &lingerMs}
+	if v := os.Getenv("DC_BENCH_MAXBATCH"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			panic("DC_BENCH_MAXBATCH must be numeric: " + err.Error())
+		}
+		cfg.MaxBatch = n
+	}
+	return cfg
+}
+
+// pacedTenant is the tenant of the device at fleet position i when the arm spreads the fleet
+// over tenants of them; one tenant keeps the single-tenant name the earlier rounds used.
+func pacedTenant(i, tenants int) string {
+	if tenants <= 1 {
+		return "acme"
+	}
+	return fmt.Sprintf("acme%d", i%tenants)
 }
 
 // slowMergeApi times every batch merge and injects latency after it.
@@ -108,6 +129,7 @@ func (a pacedAck) Ack() error {
 type pacedArm struct {
 	rate, commitMs, lingerMs, writers int
 	mix                               string
+	tenants                           int
 }
 
 func pacedArms(tb testing.TB) []pacedArm {
@@ -118,8 +140,8 @@ func pacedArms(tb testing.TB) []pacedArm {
 	var arms []pacedArm
 	for _, s := range strings.Split(spec, ",") {
 		f := strings.Split(strings.TrimSpace(s), ":")
-		if len(f) != 5 {
-			tb.Fatalf("DC_BENCH_PACED entry %q is not rate:commitMs:lingerMs:writers:mix", s)
+		if len(f) != 5 && len(f) != 6 {
+			tb.Fatalf("DC_BENCH_PACED entry %q is not rate:commitMs:lingerMs:writers:mix[:tenants]", s)
 		}
 		var v [4]int
 		for i := 0; i < 4; i++ {
@@ -132,7 +154,15 @@ func pacedArms(tb testing.TB) []pacedArm {
 		if f[4] != "plain" && f[4] != "change1" && f[4] != "storm10" && f[4] != "sweep0" {
 			tb.Fatalf("DC_BENCH_PACED entry %q: mix must be plain, change1, storm10 or sweep0", s)
 		}
-		arms = append(arms, pacedArm{v[0], v[1], v[2], v[3], f[4]})
+		tenants := 1
+		if len(f) == 6 {
+			n, err := strconv.Atoi(f[5])
+			if err != nil || n < 1 {
+				tb.Fatalf("DC_BENCH_PACED entry %q: tenants must be a positive number", s)
+			}
+			tenants = n
+		}
+		arms = append(arms, pacedArm{v[0], v[1], v[2], v[3], f[4], tenants})
 	}
 	return arms
 }
@@ -188,7 +218,7 @@ func percentileMs(sorted []int64, p float64) float64 {
 
 // pacedStateChange is a consumed presence claim for device. Sessions rise with i, so every
 // claim is newer than the last and none is refused as stale.
-func pacedStateChange(tb testing.TB, device string, i int, at time.Time, ack messaging.Acknowledger) messaging.Message {
+func pacedStateChange(tb testing.TB, tenant, device string, i int, at time.Time, ack messaging.Acknowledger) messaging.Message {
 	tb.Helper()
 	state := "CONNECTED"
 	if (i/10)%2 == 1 {
@@ -203,10 +233,11 @@ func pacedStateChange(tb testing.TB, device string, i int, at time.Time, ack mes
 	if err != nil {
 		tb.Fatalf("marshal resolved event: %v", err)
 	}
-	return messaging.NewConsumedMessage("instance1.acme.resolved-events", encoded, 1, nil, ack)
+	return messaging.NewConsumedMessage("instance1."+tenant+".resolved-events", encoded, 1, nil, ack)
 }
 
-var pacedWarmed bool
+// pacedWarmed records the tenant counts whose fleets already have their rows.
+var pacedWarmed = map[int]bool{}
 
 // benchProjectionPaced runs BenchmarkProjectionWriters' paced arms.
 func benchProjectionPaced(b *testing.B, mgr *rdb.RdbManager) {
@@ -217,6 +248,9 @@ func benchProjectionPaced(b *testing.B, mgr *rdb.RdbManager) {
 		arm := arm
 		name := fmt.Sprintf("paced/rate=%d/commit=%dms/linger=%dms/writers=%d/mix=%s",
 			arm.rate, arm.commitMs, arm.lingerMs, arm.writers, arm.mix)
+		if arm.tenants > 1 {
+			name += fmt.Sprintf("/tenants=%d", arm.tenants)
+		}
 		b.Run(name, func(b *testing.B) { benchPacedArm(b, mgr, arm) })
 	}
 }
@@ -237,14 +271,14 @@ func newPacedProcessor(tb testing.TB, mgr *rdb.RdbManager, cfg config.Projection
 
 func benchPacedArm(b *testing.B, mgr *rdb.RdbManager, arm pacedArm) {
 	n := b.N
-	if !pacedWarmed {
+	if !pacedWarmed[arm.tenants] {
 		// Every device's row exists before anything is timed: two FIRST events for one
 		// device race on its unique index, and a paced run is not about first sight.
 		warm, _, _ := newPacedProcessor(b, mgr, config.ProjectionConfiguration{Writers: 1, MaxBatch: 1})
 		var acked atomic.Int64
 		at := time.Now().UTC()
 		for i := 0; i < pacedFleet; i++ {
-			warm.handOff(context.Background(), benchMeasurement(b, "acme", fmt.Sprintf("pf-%d", i), at, countingAck{&acked}))
+			warm.handOff(context.Background(), benchMeasurement(b, pacedTenant(i, arm.tenants), fmt.Sprintf("pf-%d", i), at, countingAck{&acked}))
 			for acked.Load() < int64(i+1) {
 				time.Sleep(100 * time.Microsecond)
 			}
@@ -252,7 +286,7 @@ func benchPacedArm(b *testing.B, mgr *rdb.RdbManager, arm pacedArm) {
 		if err := warm.ExecuteStop(context.Background()); err != nil {
 			b.Fatalf("stop: %v", err)
 		}
-		pacedWarmed = true
+		pacedWarmed[arm.tenants] = true
 	}
 
 	sp, reg, api := newPacedProcessor(b, mgr, pacedProjection(arm.writers, arm.lingerMs))
@@ -270,9 +304,9 @@ func benchPacedArm(b *testing.B, mgr *rdb.RdbManager, arm pacedArm) {
 		ack := pacedAck{at: acksAt, idx: i, n: &acked}
 		switch {
 		case arm.mix == "change1" && i%100 == 0, arm.mix == "storm10" && i%10 == 0:
-			msgs[i] = pacedStateChange(b, dev, i, at, ack)
+			msgs[i] = pacedStateChange(b, pacedTenant(i%pacedFleet, arm.tenants), dev, i, at, ack)
 		default:
-			msgs[i] = benchMeasurement(b, "acme", dev, at, ack)
+			msgs[i] = benchMeasurement(b, pacedTenant(i%pacedFleet, arm.tenants), dev, at, ack)
 		}
 	}
 	handoff := make([]int64, n)

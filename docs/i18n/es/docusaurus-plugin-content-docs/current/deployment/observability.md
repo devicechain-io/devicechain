@@ -1226,7 +1226,7 @@ confirma, incluido el tiempo, hasta `projection.lingerMillis`, que espera a que 
 | Ajuste (configuración de `device-state`) | Valor por defecto | Qué hace |
 | --- | --- | --- |
 | `projection.writers` | `10` | Escritores en paralelo; cada uno ocupa una conexión a la base de datos mientras fusiona. Debe ser menor que `rdbConfiguration.maxOpenConnections` (20 si no se indica). |
-| `projection.maxBatch` | `32` | Máximo de eventos fusionados en una transacción, de `1` a `64`. `1` desactiva los lotes. |
+| `projection.maxBatch` | `64` | Máximo de eventos fusionados en una transacción, de `1` a `64`. `1` desactiva los lotes. |
 | `projection.lingerMillis` | `10` | Cuánto espera un escritor a más eventos antes de fusionar un lote incompleto, hasta `1000`. Los escritores se turnan para recibir un lote, así que la espera llena un solo lote al ritmo total de la réplica. Un escritor que encuentra eventos esperando no espera. `0` fusiona lo que ya está esperando. |
 
 En una base de datos replicada, lo que sostiene el rendimiento son los lotes. Las fusiones de un
@@ -1237,9 +1237,12 @@ partir de unos 6800 eventos por segundo. Los 10 escritores se eligieron en una e
 aumentó la solicitud de CPU del servicio y `projection.maxBatch` a 64, así que no se separó la parte
 de cada cambio.
 El número de escritores por defecto es 10, la mitad del pool de conexiones por defecto, y
-`projection.maxBatch` sigue en 32 por defecto: en esa ejecución los lotes promediaron unos 15, así
-que 32 no limitó en promedio. Auméntelo más solo si los lotes van llenos y la base de
-datos tiene margen. El servicio registra los valores que usa al arrancar. Si el
+`projection.maxBatch` es 64 por defecto, el mayor valor admitido. Cada lote se divide por inquilino
+antes de escribirse, así que con muchos inquilinos un lote de 32 escribe pocas filas por inquilino;
+un límite mayor permite que una cola acumulada o un `projection.lingerMillis` más largo llenen más
+de ellas. Sin cola acumulada, un lote sigue conteniendo solo unos tantos eventos como el ritmo de
+la réplica por `projection.lingerMillis`, así que a unos pocos miles de eventos por segundo y con la
+espera por defecto el límite no es lo que cierra el lote. El servicio registra los valores que usa al arrancar. Si el
 estado en vivo sigue quedándose atrás, `JetStreamDurableFallingBehind` salta para el consumidor de
 `device-state` (consulte [Un consumidor que se queda atrás](#consumer-backlog)).
 

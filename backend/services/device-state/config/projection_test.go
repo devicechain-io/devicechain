@@ -13,7 +13,7 @@ import (
 )
 
 // The projection settings load as written, and an empty document takes the defaults: 10
-// writers, batches of up to 32, a 10 ms linger.
+// writers, batches of up to 64, a 10 ms linger.
 func TestProjectionWritersLoad(t *testing.T) {
 	cfg := &DeviceStateConfiguration{}
 	require.NoError(t, core.LoadConfiguration([]byte(`{"projection":{"writers":8,"maxBatch":16,"lingerMillis":5}}`), cfg))
@@ -22,9 +22,9 @@ func TestProjectionWritersLoad(t *testing.T) {
 
 	cfg = &DeviceStateConfiguration{}
 	require.NoError(t, core.LoadConfiguration([]byte(``), cfg))
-	assert.Equal(t, ProjectionConfiguration{Writers: 10, MaxBatch: 32, LingerMillis: intp(10)}, cfg.Projection)
+	assert.Equal(t, ProjectionConfiguration{Writers: 10, MaxBatch: 64, LingerMillis: intp(10)}, cfg.Projection)
 	assert.Equal(t, 10, DefaultProjectionWriters)
-	assert.Equal(t, 32, DefaultProjectionMaxBatch)
+	assert.Equal(t, 64, DefaultProjectionMaxBatch)
 }
 
 // projection.writers is bounded by the relational pool it draws from — 20 unless

@@ -220,7 +220,7 @@ func contendSweepWithBatches(t *testing.T, instance string, claimEvery int) {
 				a := &eventAck{}
 				acks = append(acks, a)
 				if k := round*devices + i; claimEvery > 0 && k%claimEvery == 0 {
-					msgs = append(msgs, pacedStateChange(t, fmt.Sprintf("sw-%03d", n), 1000+k, at(round), a))
+					msgs = append(msgs, pacedStateChange(t, "acme", fmt.Sprintf("sw-%03d", n), 1000+k, at(round), a))
 					claimed[fmt.Sprintf("sw-%03d", n)] = true
 					continue
 				}
