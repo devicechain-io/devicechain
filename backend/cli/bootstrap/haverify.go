@@ -250,7 +250,7 @@ var settleInterval = 5 * time.Second
 // re-render of what dcctl thinks it installed. An instance whose Secret was
 // edited by hand, or installed by an older dcctl, or managed externally via
 // instance.existingSecret, is judged on what it is running.
-func deployedInstanceConfig(ctx context.Context, typed *kubernetes.Clientset, instanceId string) (*config.InstanceConfiguration, error) {
+func deployedInstanceConfig(ctx context.Context, typed kubernetes.Interface, instanceId string) (*config.InstanceConfiguration, error) {
 	// The Secret NAME is built from the instance id; the namespace it lives in comes
 	// through InstanceNamespace. Two prefixes, two meanings — see DeployedInstanceConfig.
 	name := fmt.Sprintf("dci-%s-config", instanceId)
@@ -272,6 +272,15 @@ func deployedInstanceConfig(ctx context.Context, typed *kubernetes.Clientset, in
 	// The services call ApplyDefaults before reading any of this, so a key omitted
 	// from the Secret must be judged the way they will judge it and not as a zero.
 	cfg.ApplyDefaults()
+	// The logins are NOT in the document: AreaPasswords is dcctl's overlay from the per-login
+	// Secrets and nothing writes it into the instance document. A view built from the document
+	// alone has AreaLogins=true and no password for anyone, and operatorLogin then reports the
+	// administrator's Secret as unreadable when it was never asked for.
+	logins, err := readNatsLoginPasswords(ctx, typed, namespace, instanceId)
+	if err != nil {
+		return nil, err
+	}
+	cfg.Infrastructure.Nats.Auth.AreaPasswords = logins
 	return cfg, nil
 }
 
@@ -392,7 +401,7 @@ func operatorLogin(natscfg config.NatsConfiguration) (user, password string, err
 	password = natscfg.Auth.AreaPasswords[config.NatsAdminPrincipal]
 	if password == "" {
 		return "", "", fmt.Errorf("the instance has a login for every principal, and the broker administrator's " +
-			"(Secret dci-<instance>-nats-broker-admin) could not be read, so there is no login to inspect the broker with")
+			"(Secret dci-<instance>-nats-broker-admin) is absent or holds no password, so there is no login to inspect the broker with")
 	}
 	return natsauth.LoginUser(config.NatsAdminPrincipal), password, nil
 }
