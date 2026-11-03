@@ -335,7 +335,7 @@ kube-state-metrics 本身因节点失效等原因移动期间的重启，只要�
 | `BrokerCertificateExpiringSoon`（warning） | 持续一小时，`pod` 标签所指的代理服务器所提供的 TLS 证书将在不到 30 天且多于 7 天内到期。证书到期后，代理会拒绝来自设备和实例自身服务的 TLS 连接。证书只由 `dcctl upgrade` 续期，所以大约十一个月没有升级的实例会走到这一步。 | 运行 `dcctl upgrade <instance>`：它会在证书最后 30 天内重新签发证书，且只有证书变化时无需重启代理即可原地切换。服务器开始提供新证书后告警即解除。如果升级后仍持续触发，说明服务器没有切换；请阅读其日志并重启该 Pod。 |
 | `BrokerCertificateExpiryCritical`（critical） | 持续十分钟，服务器所提供的证书将在不到 7 天内到期，或已经过期。 | 立即运行 `dcctl upgrade <instance>`。由早期版本引导的实例不保留其证书颁发机构，无法原地重新签发证书；`dcctl upgrade` 会明确说明，此时必须重建该实例。如果已经升级而告警仍在触发，请重启该服务器 Pod。 |
 
-这两条证书告警读取 `dc_broker_mqtt_tls_cert_not_after_seconds`，即代理此刻向新连接提供的证书的到期时间，因此它们反映设备实际看到的情况：已写入但从未被应用的续期会让告警持续，而代理一旦切换，告警即解除。代理不终止 TLS 时它们保持安静，且不覆盖证书颁发机构（有效期十年）。`Instance` 的 `BrokerCertificateValid` 条件无需 Prometheus 即可报告同样的到期时间以及颁发机构的到期时间；参见[代理证书到期](./kubernetes-operator.md#broker-certificate-expiry)。
+这两条证书告警读取 `dc_broker_mqtt_tls_cert_not_after_seconds`，即代理此刻向新连接提供的证书的到期时间，因此它们反映设备实际看到的情况：已写入但从未被应用的续期会让告警持续，而代理一旦切换，告警即解除。代理不终止 TLS 时它们保持安静，且不覆盖证书颁发机构（有效期十年）。如果代理的指标端口没有被抓取（例如 `dc-metrics` 出故障的紧凑实例），则不会有任何告警，上述条件是唯一的信号。`Instance` 的 `BrokerCertificateValid` 条件无需 Prometheus 即可报告同样的到期时间以及颁发机构的到期时间；参见[代理证书到期](./kubernetes-operator.md#broker-certificate-expiry)。
 
 代理在自己的指标端口（`dc-metrics`，7778）上导出以下指标：监听器请求证书时
 `dc_broker_mqtt_client_auth_request` 为 1，终止 TLS 时 `dc_broker_mqtt_tls` 为 1，`dc_broker_info`

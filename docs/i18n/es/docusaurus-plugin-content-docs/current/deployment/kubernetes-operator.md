@@ -180,8 +180,8 @@ dispositivo.
 | | `VersionMismatch` | False | ha convergido, pero en una versión distinta de `spec.imageVersion` |
 | | `VersionUnknown` | Unknown | ha convergido, pero la versión en ejecución no se puede derivar (imágenes fijadas solo por digest) |
 | `BrokerCertificateValid` | `CertificateValid` | True | el certificado TLS del broker y la autoridad que lo firmó tienen más de 30 días de vigencia |
-| | `CertificateExpiringSoon` | True | uno de los dos caduca en menos de 30 días; `dcctl upgrade` renueva el certificado |
-| | `CertificateExpired` | False | uno de los dos ha caducado: el broker rechaza las conexiones TLS hasta que se renueve |
+| | `CertificateExpiringSoon` | True | uno de los dos caduca en menos de 30 días; `dcctl upgrade` renueva el certificado, pero nunca la autoridad, que obliga a reconstruir la instancia |
+| | `CertificateExpired` | False | uno de los dos ha caducado: el broker rechaza las conexiones TLS hasta que se renueve el certificado (o, si es la autoridad, se reconstruya la instancia) |
 | | `CertificateNotPublished` | Unknown | no se ha publicado ninguna caducidad para la instancia (la tocó por última vez un `dcctl` anterior a esto) |
 | | `CertificateUnreadable` | Unknown | la caducidad publicada no es una hora RFC 3339 |
 | `Ready` | `Ready` | True | `WorkloadsAvailable` y `RolloutComplete` son ambas True, y el certificado del broker no ha caducado |
@@ -199,9 +199,11 @@ actualiza perdería por tanto el TLS del broker en el aniversario de su bootstra
 avisara. `BrokerCertificateValid` es ese aviso en la propia `Instance`.
 
 El operador no tiene acceso a los Secrets, así que no lee el certificado. `dcctl` publica cuándo
-caducan el certificado y su autoridad, como dos anotaciones de la `Instance`, cada vez que los
-coloca o los renueva (`dcctl bootstrap` y cada `dcctl upgrade`, también uno que no renueva nada,
-de modo que una instancia más antigua las obtiene en su siguiente upgrade):
+caducan el certificado y su autoridad, como dos anotaciones de la `Instance`: las fechas del
+certificado del Secret del broker, escritas cuando el broker ya lo sirve (`dcctl bootstrap` y cada
+`dcctl upgrade`, también uno que no renueva nada, de modo que una instancia más antigua las
+obtiene en su siguiente upgrade). Si una renovación reinicia el broker y el reinicio no termina,
+se conserva la fecha anterior, así que la condición peca de pesimista:
 
 | Anotación | Valor |
 |---|---|

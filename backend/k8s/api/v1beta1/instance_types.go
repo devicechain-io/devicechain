@@ -56,7 +56,8 @@ const (
 	// the broker's TLS leaf certificate, and the authority that signed it, expire
 	// (RFC 3339, UTC). They are written by dcctl wherever it mints or renews that
 	// certificate (bootstrap, and every upgrade), from the PUBLIC certificate in the
-	// broker's TLS Secret.
+	// broker's TLS Secret, once the broker serves it: a restart that does not finish
+	// leaves the older, more pessimistic date.
 	//
 	// The operator is given no access to Secrets, so the expiry has to be published
 	// by the step that knows it. A date is not a secret, and these are assertions of

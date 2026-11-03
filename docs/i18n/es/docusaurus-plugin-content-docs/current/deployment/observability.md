@@ -715,7 +715,9 @@ Las dos alertas de certificado leen `dc_broker_mqtt_tls_cert_not_after_seconds`,
 certificado que el broker presenta ahora mismo a las conexiones nuevas, así que siguen lo que ven
 los dispositivos: una renovación escrita pero que nunca se aplicó sigue alertando, y las alertas
 se resuelven en cuanto el broker cambia. Callan si el broker no termina TLS y no cubren la
-autoridad de certificación (válida diez años). La condición `BrokerCertificateValid` de la
+autoridad de certificación (válida diez años). Si el puerto de métricas del broker no se recopila
+(por ejemplo, una instancia compacta cuyo `dc-metrics` falla), nada alerta y la condición de
+arriba es la única señal. La condición `BrokerCertificateValid` de la
 Instance informa de la misma caducidad, y de la de la autoridad, sin Prometheus; consulte
 [Caducidad del certificado del broker](./kubernetes-operator.md#broker-certificate-expiry).
 

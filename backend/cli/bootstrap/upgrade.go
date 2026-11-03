@@ -353,14 +353,6 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 		return fail("renewing the broker's certificate", err)
 	}
 	done()
-	// Published whether or not anything was renewed: the Secret is what the broker
-	// loads, so its expiry is the one to report, and an instance bootstrapped before the
-	// date was published gets it on its first upgrade. See publishBrokerCertificateExpiry.
-	doing("publishing the broker certificate's expiry")
-	if err := publishBrokerCertificateExpiry(ctx, typed, dyn, st); err != nil {
-		return fail("publishing the broker certificate's expiry", err)
-	}
-	done()
 	// A restart is waited on, so it is finished before anything else rolls.
 	if restarted {
 		doing("waiting for the broker's servers to restart")
@@ -370,6 +362,18 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 		}
 		done()
 	}
+	// 🔴 PUBLISHED AFTER THE WAIT, NEVER BEFORE. The annotation is "the Secret's certificate,
+	// once the broker serves it". Ahead of a restart that fails or hangs it would claim a
+	// fresh year while the pods still present the old, possibly expired, leaf, and the
+	// condition would read Valid; after it, a failed wait returns above and the older, more
+	// pessimistic date stays (TestTheExpiryIsPublishedOnlyAfterTheBrokerRestartIsWaitedOn).
+	// Published whether or not anything was renewed, so an instance bootstrapped before the
+	// date existed gets it on its first upgrade.
+	doing("publishing the broker certificate's expiry")
+	if err := publishBrokerCertificateExpiry(ctx, typed, dyn, st); err != nil {
+		return fail("publishing the broker certificate's expiry", err)
+	}
+	done()
 
 	// THE BROKER AND THE EVENT STORE, BEFORE THE SERVICES.
 	//

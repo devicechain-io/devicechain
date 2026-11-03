@@ -127,8 +127,8 @@ Operator 是 `Instance` 的 `status` 的唯一写入者，记录它**观察到**
 | | `VersionMismatch` | False | 已收敛，但版本与 `spec.imageVersion` 不同 |
 | | `VersionUnknown` | Unknown | 已收敛，但无法从镜像得出运行版本（镜像仅以 digest 固定） |
 | `BrokerCertificateValid` | `CertificateValid` | True | 代理的 TLS 证书及其签发机构的有效期都还剩 30 天以上 |
-| | `CertificateExpiringSoon` | True | 两者之一将在 30 天内到期；`dcctl upgrade` 会续期证书 |
-| | `CertificateExpired` | False | 两者之一已过期：在续期之前，代理会拒绝 TLS 连接 |
+| | `CertificateExpiringSoon` | True | 两者之一将在 30 天内到期；`dcctl upgrade` 会续期证书，但从不续期颁发机构，那需要重建实例 |
+| | `CertificateExpired` | False | 两者之一已过期：在证书续期（若是颁发机构，则重建实例）之前，代理会拒绝 TLS 连接 |
 | | `CertificateNotPublished` | Unknown | 尚未为该实例发布到期时间（它上次由早于此功能的 `dcctl` 操作） |
 | | `CertificateUnreadable` | Unknown | 已发布的到期时间不是 RFC 3339 时间 |
 | `Ready` | `Ready` | True | `WorkloadsAvailable` 与 `RolloutComplete` 均为 True，且代理证书未过期 |
@@ -140,7 +140,7 @@ Operator 是 `Instance` 的 `status` 的唯一写入者，记录它**观察到**
 
 代理的 TLS 证书有效期为一年，只在 `dcctl upgrade` 运行时、于证书最后 30 天内续期。因此从不升级的实例会在引导一周年时失去代理 TLS，而没有任何提示。`BrokerCertificateValid` 就是 `Instance` 自身上的这个提示。
 
-Operator 无权访问 Secret，所以它不读取证书。`dcctl` 在放置或续期证书时（`dcctl bootstrap` 以及每一次 `dcctl upgrade`，包括没有续期任何东西的那次，因此较旧的实例会在下一次升级时获得）把证书及其签发机构的到期时间发布为 `Instance` 上的两个注解：
+Operator 无权访问 Secret，所以它不读取证书。`dcctl` 在放置或续期证书时（`dcctl bootstrap` 以及每一次 `dcctl upgrade`，包括没有续期任何东西的那次，因此较旧的实例会在下一次升级时获得）把证书及其签发机构的到期时间发布为 `Instance` 上的两个注解：代理 Secret 中证书的日期，在代理开始提供该证书之后才写入。如果续期重启了代理而重启未完成，则保留较旧的日期，使条件偏向悲观：
 
 | 注解 | 值 |
 |---|---|

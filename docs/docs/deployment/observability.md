@@ -687,7 +687,9 @@ The two certificate alerts read `dc_broker_mqtt_tls_cert_not_after_seconds`, the
 certificate the broker is presenting to new connections right now, so they follow what devices
 see: a renewal that was written but never picked up keeps alerting, and the alerts clear as soon
 as the broker switches. They are quiet for a broker that does not terminate TLS, and they do not
-cover the certificate authority (valid for ten years). The Instance's `BrokerCertificateValid`
+cover the certificate authority (valid for ten years). If the broker's metrics port is not
+scraped (for example a compact instance whose `dc-metrics` is broken), nothing alerts and the
+condition below is the only signal. The Instance's `BrokerCertificateValid`
 condition reports the same expiry, and the authority's, without Prometheus; see [Broker
 certificate expiry](./kubernetes-operator.md#broker-certificate-expiry).
 

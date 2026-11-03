@@ -61,7 +61,8 @@ starts renewing, so a warning means "the next upgrade will renew it".
 
 QUIET when the listener does not terminate TLS (the series is 0, filtered out), and when the
 series does not exist; a broker that is not exporting it is BrokerMqttClientAuthLost's
-business. An instance with monitoring off is not covered here; the operator reports the same
+business. A compact instance whose dc-metrics port is broken alerts on nothing here (condition
+only: the BrokerCertificateValid condition below is its sole signal). An instance with monitoring off is not covered here; the operator reports the same
 expiry as the BrokerCertificateValid condition on the Instance. That condition also covers the
 certificate authority, which this series does not.
 */}}

@@ -173,8 +173,8 @@ device.
 | | `VersionMismatch` | False | converged, but on a different version from `spec.imageVersion` |
 | | `VersionUnknown` | Unknown | converged, but the running version cannot be derived (images pinned by digest alone) |
 | `BrokerCertificateValid` | `CertificateValid` | True | the broker's TLS certificate and the authority that signed it have more than 30 days left |
-| | `CertificateExpiringSoon` | True | one of them expires within 30 days; `dcctl upgrade` renews the certificate |
-| | `CertificateExpired` | False | one of them has expired: the broker refuses TLS connections until it is renewed |
+| | `CertificateExpiringSoon` | True | one of them expires within 30 days; `dcctl upgrade` renews the certificate, but never the authority, which means rebuilding the instance |
+| | `CertificateExpired` | False | one of them has expired: the broker refuses TLS connections until the certificate is renewed (or, for the authority, the instance rebuilt) |
 | | `CertificateNotPublished` | Unknown | no expiry has been published for the instance (it was last touched by a `dcctl` from before this existed) |
 | | `CertificateUnreadable` | Unknown | the published expiry is not an RFC 3339 time |
 | `Ready` | `Ready` | True | `WorkloadsAvailable` and `RolloutComplete` are both True, and the broker certificate has not expired |
@@ -192,9 +192,11 @@ broker TLS on the anniversary of its bootstrap with nothing saying so. `BrokerCe
 is that warning on the `Instance` itself.
 
 The operator has no access to Secrets, so it does not read the certificate. `dcctl` publishes
-when the certificate and its authority expire, as two annotations on the `Instance`, whenever it
-places or renews them (`dcctl bootstrap`, and every `dcctl upgrade`, including one that renews
-nothing, so an older instance gets them on its next upgrade):
+when the certificate and its authority expire, as two annotations on the `Instance`: the dates of
+the certificate in the broker's Secret, written once the broker serves it (`dcctl bootstrap`, and
+every `dcctl upgrade`, including one that renews nothing, so an older instance gets them on its
+next upgrade). If a renewal restarts the broker and the restart does not finish, the older date
+stays, so the condition errs on the pessimistic side:
 
 | Annotation | Value |
 |---|---|

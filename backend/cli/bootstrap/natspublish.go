@@ -22,6 +22,9 @@ import (
 // certificate and its authority expire, so the operator can report on them without
 // being given access to Secrets (see dcv1beta1.AnnotationBrokerCertificateNotAfter).
 //
+// Callers publish only once the broker serves the Secret's certificate (Upgrade orders
+// it after the restart wait).
+//
 // 🔴 IT PUBLISHES WHAT THE SECRET HOLDS NOW, NOT WHAT THE CALLER MEANT TO WRITE. Both
 // callers (the bootstrap, right after it places the material, and the upgrade, right
 // after the renewal step) call this once the Secret is settled, and reading it back

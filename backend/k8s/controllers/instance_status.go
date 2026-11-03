@@ -32,9 +32,10 @@ const (
 	maxNamed = 5
 
 	// certWarnWindow is how close to expiry the broker's certificate is reported as
-	// expiring soon. It equals what dcctl upgrade renews inside (natsLeafRenewBefore),
-	// and the chart's BrokerCertificateExpiringSoon alert fires on the same boundary,
-	// so a warning here and one in the alert manager arrive together.
+	// expiring soon. It equals what dcctl upgrade renews inside (natsLeafRenewBefore) and
+	// the chart's BrokerCertificateExpiringSoon alert uses the same 30 days, but the two
+	// are not simultaneous: the alert holds for an hour and reads the certificate the
+	// broker is serving, this reads the date dcctl published.
 	certWarnWindow = 30 * 24 * time.Hour
 
 	// certRecheck bounds how long the operator goes without looking at a published
@@ -306,22 +307,29 @@ func sameVersion(a, b string) bool {
 // a plausible Valid: an instance last touched by an older dcctl must not read as
 // verified. When both leaf and authority are published the worse of the two is reported.
 func certificateVerdict(instance *corev1beta1.Instance, now time.Time) (verdict, time.Duration) {
-	type subject struct{ what, annotation string }
+	// leaf is re-issued by dcctl upgrade; the authority never is, so the remedy differs.
+	type subject struct {
+		what, annotation, remedy string
+	}
 	subjects := []subject{
-		{"broker certificate", corev1beta1.AnnotationBrokerCertificateNotAfter},
-		{"broker certificate authority", corev1beta1.AnnotationBrokerCANotAfter},
+		{"broker certificate", corev1beta1.AnnotationBrokerCertificateNotAfter,
+			"run dcctl upgrade to renew it (an instance that does not keep its authority cannot be renewed in place and has to be rebuilt)"},
+		{"broker certificate authority", corev1beta1.AnnotationBrokerCANotAfter,
+			"renewal never re-issues the authority, so the instance has to be rebuilt"},
 	}
 	var (
-		expired, soon []string
-		next          time.Duration
-		published     int
-		earliest      time.Time
+		expired, soon, unreadable []string
+		next                      time.Duration
+		published                 int
+		earliest                  time.Time
 	)
 	schedule := func(d time.Duration) {
 		if d > 0 && (next == 0 || d < next) {
 			next = d
 		}
 	}
+	// Both subjects are judged before anything is returned, so a definite False on one
+	// is never hidden by an unreadable value on the other.
 	for _, sub := range subjects {
 		raw, ok := instance.Annotations[sub.annotation]
 		if !ok {
@@ -329,9 +337,9 @@ func certificateVerdict(instance *corev1beta1.Instance, now time.Time) (verdict,
 		}
 		notAfter, err := time.Parse(time.RFC3339, raw)
 		if err != nil {
-			return verdict{metav1.ConditionUnknown, corev1beta1.ReasonCertificateUnreadable,
-				fmt.Sprintf("annotation %s is %q, which is not an RFC 3339 time; run dcctl upgrade to publish it again",
-					sub.annotation, raw)}, 0
+			unreadable = append(unreadable, fmt.Sprintf("annotation %s is %q, which is not an RFC 3339 time; run dcctl upgrade to publish it again",
+				sub.annotation, raw))
+			continue
 		}
 		published++
 		notAfter = notAfter.UTC()
@@ -340,24 +348,27 @@ func certificateVerdict(instance *corev1beta1.Instance, now time.Time) (verdict,
 		}
 		switch remaining := notAfter.Sub(now); {
 		case remaining <= 0:
-			expired = append(expired, fmt.Sprintf("the %s expired at %s", sub.what, notAfter.Format(time.RFC3339)))
+			expired = append(expired, fmt.Sprintf("the %s expired at %s: %s", sub.what, notAfter.Format(time.RFC3339), sub.remedy))
 		case remaining <= certWarnWindow:
-			soon = append(soon, fmt.Sprintf("the %s expires at %s", sub.what, notAfter.Format(time.RFC3339)))
+			soon = append(soon, fmt.Sprintf("the %s expires at %s: %s", sub.what, notAfter.Format(time.RFC3339), sub.remedy))
 			schedule(remaining + time.Second)
 		default:
 			schedule(remaining - certWarnWindow + time.Second)
 		}
 	}
 	switch {
+	case len(expired) > 0:
+		return verdict{metav1.ConditionFalse, corev1beta1.ReasonCertificateExpired,
+			"the broker refuses TLS connections until this is fixed; " + strings.Join(expired, "; ")}, certRecheck
+	case len(soon) > 0:
+		return verdict{metav1.ConditionTrue, corev1beta1.ReasonCertificateExpiringSoon,
+			strings.Join(soon, "; ")}, capRecheck(next)
+	case len(unreadable) > 0:
+		return verdict{metav1.ConditionUnknown, corev1beta1.ReasonCertificateUnreadable,
+			strings.Join(unreadable, "; ")}, capRecheck(next)
 	case published == 0:
 		return verdict{metav1.ConditionUnknown, corev1beta1.ReasonCertificateNotPublished,
 			"no broker certificate expiry has been published for this instance; dcctl upgrade publishes it"}, 0
-	case len(expired) > 0:
-		return verdict{metav1.ConditionFalse, corev1beta1.ReasonCertificateExpired,
-			strings.Join(expired, "; ") + ": the broker refuses TLS connections until it is renewed with dcctl upgrade"}, certRecheck
-	case len(soon) > 0:
-		return verdict{metav1.ConditionTrue, corev1beta1.ReasonCertificateExpiringSoon,
-			strings.Join(soon, "; ") + ": run dcctl upgrade to renew it"}, capRecheck(next)
 	}
 	return verdict{metav1.ConditionTrue, corev1beta1.ReasonCertificateValid,
 		fmt.Sprintf("the broker certificate is valid until %s", earliest.Format(time.RFC3339))}, capRecheck(next)

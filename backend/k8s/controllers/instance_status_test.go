@@ -363,7 +363,7 @@ func TestOperatorWritesObservedStatus(t *testing.T) {
 			t.Fatal(err)
 		}
 		live.Annotations = map[string]string{
-			dcv1beta1.AnnotationBrokerCertificateNotAfter: time.Now().Add(4 * time.Second).UTC().Format(time.RFC3339),
+			dcv1beta1.AnnotationBrokerCertificateNotAfter: time.Now().Add(10 * time.Second).UTC().Format(time.RFC3339),
 		}
 		if err := r.c.Update(context.Background(), live); err != nil {
 			t.Fatal(err)

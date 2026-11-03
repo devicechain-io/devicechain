@@ -4,11 +4,18 @@
 package controllers
 
 import (
+	"context"
+	"strings"
 	"testing"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	corev1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
 )
@@ -49,6 +56,10 @@ func TestCertificateVerdict(t *testing.T) {
 		{"expired beats expiring soon", instanceWithCert(at(5*day), at(-day)), metav1.ConditionFalse, corev1beta1.ReasonCertificateExpired},
 		{"a leaf alone is judged", instanceWithCert(at(5*day), ""), metav1.ConditionTrue, corev1beta1.ReasonCertificateExpiringSoon},
 		{"garbage is Unknown, not valid", instanceWithCert("next tuesday", decade), metav1.ConditionUnknown, corev1beta1.ReasonCertificateUnreadable},
+		{"an unreadable authority date is Unknown too", instanceWithCert(at(300*day), "soon"), metav1.ConditionUnknown, corev1beta1.ReasonCertificateUnreadable},
+		{"a garbage leaf cannot hide an expired authority", instanceWithCert("junk", at(-day)), metav1.ConditionFalse, corev1beta1.ReasonCertificateExpired},
+		{"a garbage authority cannot hide an expired leaf", instanceWithCert(at(-day), "junk"), metav1.ConditionFalse, corev1beta1.ReasonCertificateExpired},
+		{"a garbage leaf does not hide an authority expiring soon", instanceWithCert("junk", at(3*day)), metav1.ConditionTrue, corev1beta1.ReasonCertificateExpiringSoon},
 		{"a non-UTC offset is read as the instant it names",
 			instanceWithCert(certNow.Add(-time.Hour).In(time.FixedZone("x", 5*3600)).Format(time.RFC3339), ""),
 			metav1.ConditionFalse, corev1beta1.ReasonCertificateExpired},
@@ -133,4 +144,57 @@ func findCondition(cs []metav1.Condition, typ string) *metav1.Condition {
 		}
 	}
 	return nil
+}
+
+// The remedy differs by subject: renewal re-issues the leaf and never the authority.
+func TestCertificateRemedyFollowsTheSubject(t *testing.T) {
+	const day = 24 * time.Hour
+	leaf, _ := certificateVerdict(instanceWithCert(at(3*day), at(3000*day)), certNow)
+	if !strings.Contains(leaf.Message, "dcctl upgrade") {
+		t.Errorf("leaf message %q should point at dcctl upgrade", leaf.Message)
+	}
+	ca, _ := certificateVerdict(instanceWithCert(at(300*day), at(3*day)), certNow)
+	if strings.Contains(ca.Message, "run dcctl upgrade") || !strings.Contains(ca.Message, "rebuilt") {
+		t.Errorf("authority message %q should say the instance has to be rebuilt, not to upgrade", ca.Message)
+	}
+	gone, _ := certificateVerdict(instanceWithCert(at(-day), at(3000*day)), certNow)
+	if !strings.Contains(gone.Message, "rebuilt") {
+		t.Errorf("expired leaf message %q should mention the no-authority rebuild case", gone.Message)
+	}
+}
+
+// Reconcile itself, with a fixed clock: what it asks to be called back after.
+func TestReconcileRequeuesForTheNextCertificateBoundary(t *testing.T) {
+	const day = 24 * time.Hour
+	sch := runtime.NewScheme()
+	if err := clientgoscheme.AddToScheme(sch); err != nil {
+		t.Fatal(err)
+	}
+	if err := corev1beta1.AddToScheme(sch); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name string
+		inst *corev1beta1.Instance
+		want time.Duration
+	}{
+		{"unpublished asks for nothing", instanceWithCert("", ""), 0},
+		{"a far boundary is capped at the backstop", instanceWithCert(at(365*day), ""), certRecheck},
+		{"a near boundary is exact", instanceWithCert(at(30*day+10*time.Minute), ""), 10*time.Minute + time.Second},
+		{"expired keeps the backstop", instanceWithCert(at(-day), ""), certRecheck},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			c.inst.Name = "x"
+			cl := fake.NewClientBuilder().WithScheme(sch).WithObjects(c.inst).WithStatusSubresource(&corev1beta1.Instance{}).Build()
+			r := &InstanceReconciler{Client: cl, Scheme: sch, Now: func() time.Time { return certNow }}
+			res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "x"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.RequeueAfter != c.want {
+				t.Errorf("RequeueAfter = %s, want %s", res.RequeueAfter, c.want)
+			}
+		})
+	}
 }

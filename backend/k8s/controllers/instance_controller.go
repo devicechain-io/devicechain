@@ -81,9 +81,17 @@ func (r *InstanceReconciler) now() time.Time {
 // write is skipped when nothing moved, which is what stops the status update's own
 // watch event from becoming a loop.
 //
-// 🔴 THE dcctl ANNOTATIONS ARE NOT READ HERE. Status is what the operator saw;
-// the phase annotation is what a dcctl run intended. Folding one into the other
-// would make the operator pretend to know something only the CLI does.
+// 🔴 THE dcctl ANNOTATIONS ARE NOT READ HERE, WITH ONE EXCEPTION. Status is what the
+// operator saw; the phase annotation is what a dcctl run intended. Folding one into the
+// other would make the operator pretend to know something only the CLI does.
+//
+// The exception is the published broker-certificate expiry dates
+// (AnnotationBrokerCertificateNotAfter, AnnotationBrokerCANotAfter). The operator has no
+// access to Secrets, so the step that mints or renews the certificate publishes a
+// non-secret date and the operator compares it with its OWN clock; the condition it
+// writes is therefore an observation about time, not a copy of an assertion. Nothing
+// else is read from the annotations, the operator remains the only status writer, and
+// absent or unreadable dates are reported as Unknown rather than trusted.
 func (r *InstanceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 

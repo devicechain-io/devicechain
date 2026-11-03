@@ -4,6 +4,7 @@
 package bootstrap
 
 import (
+	"go/ast"
 	"testing"
 	"time"
 
@@ -88,5 +89,37 @@ func TestPublishingWithNoSecretOrNoDeclarationIsQuiet(t *testing.T) {
 	}
 	if _, has := readBack(t, dyn, testInstance).Annotations[dcv1beta1.AnnotationBrokerCertificateNotAfter]; has {
 		t.Error("an expiry was published with no certificate to read it from")
+	}
+}
+
+// 🔴 A RESTART THAT DOES NOT FINISH MUST NOT PUBLISH THE NEW DATE. The pods still present the
+// old leaf, so the older, more pessimistic date has to stay on the declaration. Upgrade needs a
+// cluster, so this holds the order on the source: the publish comes after the restart wait,
+// and outside its `if restarted` (an upgrade that renews nothing still publishes).
+func TestTheExpiryIsPublishedOnlyAfterTheBrokerRestartIsWaitedOn(t *testing.T) {
+	upgrade, fset := upgradeFuncDecl(t)
+	var waitPos, pubPos int
+	ast.Inspect(upgrade.Body, func(n ast.Node) bool {
+		if call, ok := n.(*ast.CallExpr); ok {
+			if id, ok := call.Fun.(*ast.Ident); ok {
+				switch id.Name {
+				case "waitForBrokerRollout":
+					waitPos = fset.Position(call.Pos()).Offset
+				case "publishBrokerCertificateExpiry":
+					pubPos = fset.Position(call.Pos()).Offset
+				}
+			}
+		}
+		return true
+	})
+	if waitPos == 0 || pubPos == 0 {
+		t.Fatalf("Upgrade must call both the restart wait (%d) and the publish (%d)", waitPos, pubPos)
+	}
+	if pubPos < waitPos {
+		t.Error("Upgrade publishes the certificate's expiry before it waits for the restarted broker")
+	}
+	calls, guards := guardsOf(upgrade, "publishBrokerCertificateExpiry")
+	if calls != 1 || len(guards[0]) != 0 {
+		t.Errorf("the publish must run once, unconditionally on a restart; got %d call(s) under %v", calls, guards)
 	}
 }
