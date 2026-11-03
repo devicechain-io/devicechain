@@ -16,7 +16,6 @@ package model
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"math/rand"
 	"os"
@@ -218,13 +217,13 @@ func loadRacePG(t *testing.T, api *Api, token string) DeviceState {
 // PostgreSQL: lockOrCreate takes the conflict arm (locking the row, inserting nothing), and the
 // batch folds its events into the row that is there. This is the LOCKED path (a batch with a
 // presence claim); the heartbeat path is the next test. The other writer is simulated inside
-// the batch's own transaction, right before its first create, as the SQLite test does.
+// the batch's own transaction, right before its first write to device_states, as the SQLite test does.
 func TestABatchFoldsIntoARowAnotherWriterCreatedMeanwhileOnPostgres(t *testing.T) {
 	api := newPostgresProjectionApi(t, "race")
 	t0 := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
 	armed := true
-	if err := api.RDB.Database.Callback().Create().Before("gorm:create").Register("test:create_meanwhile", func(tx *gorm.DB) {
-		if !armed || tx.Statement.Table != "device_states" {
+	if err := api.RDB.Database.Callback().Raw().Before("gorm:raw").Register("test:create_meanwhile", func(tx *gorm.DB) {
+		if !armed || !writesDeviceStates(tx) {
 			return
 		}
 		armed = false
@@ -258,8 +257,8 @@ func TestAHeartbeatBatchFoldsIntoARowAnotherWriterCreatedMeanwhileOnPostgres(t *
 	api := newPostgresProjectionApi(t, "hbrace")
 	t0 := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
 	armed := true
-	if err := api.RDB.Database.Callback().Create().Before("gorm:create").Register("test:create_meanwhile", func(tx *gorm.DB) {
-		if !armed || tx.Statement.Table != "device_states" {
+	if err := api.RDB.Database.Callback().Raw().Before("gorm:raw").Register("test:create_meanwhile", func(tx *gorm.DB) {
+		if !armed || !writesDeviceStates(tx) {
 			return
 		}
 		armed = false
@@ -309,7 +308,7 @@ func holdsRowUntilCommit(t *testing.T, name string, afterCreate bool, batch func
 	done := make(chan error, 1)
 	var finishedInsideBatch bool
 	fire := func(tx *gorm.DB) {
-		if tx.Statement.Table != "device_states" || !armed.CompareAndSwap(true, false) {
+		if !(tx.Statement.Table == "device_states" || writesDeviceStates(tx)) || !armed.CompareAndSwap(true, false) {
 			return
 		}
 		go func() {
@@ -324,7 +323,7 @@ func holdsRowUntilCommit(t *testing.T, name string, afterCreate bool, batch func
 		}
 	}
 	if afterCreate {
-		if err := api.RDB.Database.Callback().Create().After("gorm:create").Register("test:write_meanwhile", fire); err != nil {
+		if err := api.RDB.Database.Callback().Raw().After("gorm:raw").Register("test:write_meanwhile", fire); err != nil {
 			t.Fatalf("register callback: %v", err)
 		}
 	} else {
@@ -791,23 +790,16 @@ func TestTheUpsertsRunOnPostgres(t *testing.T) {
 	}
 }
 
-// The write-back of a batch's existing device rows is split so that no statement binds more
-// than PostgreSQL's parameter limit: one row more than a statement can carry is two
-// statements, and every row lands. MergeProjectionBatch puts no bound of its own on a batch.
-func TestABatchOfMoreExistingDevicesThanOneStatementHoldsOnPostgres(t *testing.T) {
+// A batch's device rows are written as ONE column-array statement per write, however many
+// devices it holds: the statement binds one array per column, so it has no parameter limit to
+// split by (the multi-row VALUES statements it replaced were cut at PostgreSQL's 65,535 and a
+// batch of more devices than that allowed was several). The batch here is larger than any such
+// statement could carry, every device exists, and every row lands.
+func TestABatchOfMoreExistingDevicesThanAValuesStatementHoldsOnPostgres(t *testing.T) {
 	api := newPostgresProjectionApi(t, "wide")
 	ctx := context.Background()
 	acme := core.WithTenant(ctx, "acme")
-	cols, err := foldColumns(api.RDB.DB(acme))
-	if err != nil {
-		t.Fatalf("columns: %v", err)
-	}
-	cols = append(cols, "updated_at")
-	perStatement, err := rdb.RowsPerInsert(foldedStatesUpsert(api.RDB.DB(acme), cols), []DeviceState{})
-	if err != nil {
-		t.Fatalf("rows per statement: %v", err)
-	}
-	n := perStatement + 1
+	const n = 6000 // x 17 parameters a row would be 102,000
 	t0 := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
 	t1 := t0.Add(time.Minute)
 	batchAt := func(when time.Time) []ProjectionUpdate {
@@ -821,36 +813,14 @@ func TestABatchOfMoreExistingDevicesThanOneStatementHoldsOnPostgres(t *testing.T
 		t.Fatalf("first sight of %d devices: %v", n, err)
 	}
 
-	// Precondition: the same rows in ONE statement are refused by the driver, so only the
-	// split lets the batch below through.
-	t.Run("one statement is too large", func(t *testing.T) {
-		var rows []DeviceState
-		if err := api.RDB.DB(acme).Order("device_token").Find(&rows).Error; err != nil {
-			t.Fatalf("read: %v", err)
-		}
-		if len(rows) != n {
-			t.Fatalf("%d rows seeded; want %d", len(rows), n)
-		}
-		probe := errors.New("roll back the probe")
-		err := api.RDB.DB(acme).Transaction(func(tx *gorm.DB) error {
-			if err := foldedStatesUpsert(tx, cols).Create(&rows).Error; err != nil {
-				return err
-			}
-			return probe
-		})
-		if !rdb.IsStatementTooLarge(err) {
-			t.Fatalf("%d rows in one statement: err = %v; want the driver's statement-too-large refusal", n, err)
-		}
-	})
-
 	counter := rdbtest.NewStatementCounter("device_states")
 	counted := NewApi(&rdb.RdbManager{Database: api.RDB.Database.Session(&gorm.Session{Logger: counter})})
 	counter.Reset()
 	if err := counted.MergeProjectionBatch(ctx, batchAt(t1)); err != nil {
 		t.Fatalf("a batch of %d existing devices: %v", n, err)
 	}
-	if _, marked := counter.Counts(); marked != 2 {
-		t.Errorf("the batch sent %d statements on device_states; want 2 (two heartbeat upserts)", marked)
+	if _, marked := counter.Counts(); marked != 1 {
+		t.Errorf("the batch sent %d statements on device_states; want 1 (one heartbeat upsert)", marked)
 	}
 	countAt := func(when time.Time) int64 {
 		var moved int64
@@ -863,8 +833,8 @@ func TestABatchOfMoreExistingDevicesThanOneStatementHoldsOnPostgres(t *testing.T
 		t.Errorf("%d of %d devices at %v after the batch", moved, n, t1)
 	}
 
-	// The same devices in a batch with a claim take the locked path: lockOrCreate (two
-	// statements, in token order), a lock read and the two write-backs.
+	// The same devices in a batch with a claim take the locked path: lockOrCreate (one
+	// statement, in token order), a lock read and the write-back.
 	t2 := t1.Add(time.Minute)
 	withClaim := batchAt(t2)
 	withClaim[0] = claim("acme", "w-00000", t2, presence.ClaimConnected, 1)
@@ -872,11 +842,40 @@ func TestABatchOfMoreExistingDevicesThanOneStatementHoldsOnPostgres(t *testing.T
 	if err := counted.MergeProjectionBatch(ctx, withClaim); err != nil {
 		t.Fatalf("a batch of %d existing devices with a claim: %v", n, err)
 	}
-	if _, marked := counter.Counts(); marked != 5 {
-		t.Errorf("the batch with a claim sent %d statements on device_states; want 5 (two lockOrCreate statements, "+
-			"a lock read and two write-backs)", marked)
+	if _, marked := counter.Counts(); marked != 3 {
+		t.Errorf("the batch with a claim sent %d statements on device_states; want 3 (lockOrCreate, "+
+			"a lock read and the write-back)", marked)
 	}
 	if moved := countAt(t2); moved != int64(n) {
 		t.Errorf("%d of %d devices at %v after the batch with a claim", moved, n, t2)
+	}
+}
+
+// THE COLUMN-ARRAY WRITES LEAVE WHAT THE GORM WRITES LEFT, on a real server: the same batches
+// (several events per device folded to one row first, a guard that excludes rows, older / equal /
+// newer readings, NULL times, anchors) through the statements as they were before and through
+// the ones in use, on two identical databases. See columnarWritesEqualTheGormWrites.
+func TestColumnarWritesEqualTheGormWritesOnPostgres(t *testing.T) {
+	columnarWritesEqualTheGormWrites(t, newPostgresProjectionApi(t, "colold"), newPostgresProjectionApi(t, "colnew"))
+}
+
+// Why the batch is folded to one row per device BEFORE the statement: PostgreSQL refuses an
+// INSERT … ON CONFLICT DO UPDATE that would touch one row twice, column-array or not. The
+// counterpart is TestColumnarWritesEqualTheGormWritesOnPostgres, whose batch has several events
+// per device and succeeds because the batch folds them first.
+func TestTwoRowsOfOneKeyInOneColumnarStatementAreRefusedOnPostgres(t *testing.T) {
+	api := newPostgresProjectionApi(t, "colduplicate")
+	ctx := core.WithTenant(context.Background(), "acme")
+	t0 := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+	rows := []DeviceState{
+		*foldNew("dup", []int{0}, []ProjectionUpdate{data("acme", "dup", t0)}),
+		*foldNew("dup", []int{0}, []ProjectionUpdate{data("acme", "dup", t0.Add(time.Second))}),
+	}
+	err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		_, err := upsertDeviceStates(tx, deviceStateHeartbeat, rows)
+		return err
+	})
+	if err == nil || !strings.Contains(err.Error(), "cannot affect row a second time") {
+		t.Fatalf("two rows of one key in one statement: err = %v; want PostgreSQL's cannot-affect-row-a-second-time", err)
 	}
 }

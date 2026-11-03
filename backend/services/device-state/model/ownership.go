@@ -97,7 +97,7 @@ func ownerSet(anchors []string) rdb.Anchors {
 }
 
 // applyOwners folds an event's stamp into row: it replaces the stored stamp when it is
-// strictly later (see the file comment). It is the Go half of the rule; heartbeatSet's
+// strictly later (see the file comment). It is the Go half of the rule; deviceStateHeartbeat's
 // scope_anchors arms are the SQL half, and projection_equivalence_test.go pins the two.
 func applyOwners(row *DeviceState, o Owners) {
 	if o.At.IsZero() {
