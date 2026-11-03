@@ -6,8 +6,8 @@ Service, Ingress or Gateway, and a switch is turned off again after the run.
 
 | What | Switch | Default | Where | Restarts |
 |---|---|---|---|---|
-| Go profiles of one service | `functionalAreas.<area>.profiler.enabled` | off | Helm values | that area's pods |
-| Block / mutex profiles | `functionalAreas.<area>.profiler.blockRate` (ns per sampled event; 1 = all), `.mutexFraction` (1 in N) | 0 (off, the endpoints answer 404) | Helm values, need `enabled` | that area's pods |
+| Go profiles of one service | `functionalAreas.<area>.profiler.enabled` | off | Helm values, or `dcctl --values` | that area's pods |
+| Block / mutex profiles | `functionalAreas.<area>.profiler.blockRate` (ns per sampled event; 1 = all), `.mutexFraction` (1 in N) | 0 (off, the endpoints answer 404) | Helm values or `dcctl --values`, need `enabled` | that area's pods |
 | NATS server pprof | OpenTofu `nats_profiling_port` (instance root; module `profiling_port`) | 0 (off) | `deploy/opentofu` | broker, one server at a time |
 | NATS block profile | `nats_profiling_block_rate` (needs the port) | 0 | `deploy/opentofu` | broker |
 | `pg_stat_statements`, relational DB | OpenTofu `postgres_statement_stats` (cluster root) | false | `deploy/opentofu` | Postgres (rolling) |
