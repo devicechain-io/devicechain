@@ -88,3 +88,12 @@ run "crds_are_upgraded_with_the_chart" {
     error_message = "the CRD upgrade job's busybox image must be pinned: the chart defaults it to latest"
   }
 }
+
+run "node_exporter_runs_on_tainted_pools" {
+  command = plan
+
+  assert {
+    condition     = contains([for t in yamldecode(helm_release.kube_prometheus_stack.values[0])["prometheus-node-exporter"].tolerations : t.operator], "Exists") && length([for t in yamldecode(helm_release.kube_prometheus_stack.values[0])["prometheus-node-exporter"].tolerations : t if try(t.key, null) != null]) == 0
+    error_message = "node-exporter must carry a bare operator: Exists toleration: a tainted pool (dedicated=broker) otherwise has no node series and the DaemonSet alerts fire"
+  }
+}
