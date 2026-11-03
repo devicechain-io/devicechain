@@ -43,6 +43,21 @@ title: 为什么我的设备数据没有出现
 
 如果某设备的事件在过去 24 小时内被拒绝，其详情页会提示，并附带指向该设备拒绝原因的链接。
 
+## 通过命令行 {#cli}
+
+`dcctl events failed` 以租户成员的身份读取相同的记录，同样需要 `device:write`：
+
+```bash
+# 过去一天的失败，按原因计数，并列出造成其中大部分的设备
+dcctl events failed -s dc.example.com --tls --tenant acme --email ops@acme.example --password "$PASSWORD" --summary
+
+# 某台设备因某个原因被拒绝的记录，按时间从新到旧，以 JSON 输出
+dcctl events failed --tenant acme --email ops@acme.example --password "$PASSWORD" \
+  --device sensor-17 --reason device-not-found --since 6h --output json
+```
+
+`--since` 和 `--until` 接受 RFC 3339 时间，或距今多长时间（`6h`）。平台最多向前读取 31 天。列表在 `--limit` 条记录（默认 100）处停止，并在仍有更多匹配记录时说明。`--summary` 只接受 `--since`（默认 24 小时）。参见[命令参考](../reference/dcctl.md#dcctl-events-failed)。该命令不会返回原始事件。
+
 ## 洪泛上限 {#flood-bound}
 
 只要整个设备群中有一个凭据错误，每秒就可能有成千上万个事件被拒绝。如果全部保存，列表和它背后的存储都会失去用处。因此：

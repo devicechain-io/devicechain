@@ -242,6 +242,10 @@
       "sourceSha256": "8c24067929c966a1b6942368e4acd69438557d11f4204b784877e0c01e6fd728",
       "translationSha256": "118d4d718f861ecb7ca46fdee90f4c4856a38d25e0d86c8210ee31f3a5a78545"
     },
+    "guides/why-isnt-my-data-showing-up.md": {
+      "sourceSha256": "493e7ad204f05ba6e5eb035b76d53428a381b87376468ccc2ad643d8df8594c4",
+      "translationSha256": "a8a68dbb10153576344f5e87e33b2aefcddc0d8639cc27b1e41ae0ef14a043fb"
+    },
     "guides/widget-versions-and-compatibility.md": {
       "sourceSha256": "11cdfdffa5b333142fb41b13646e9aa523d0abb5c605fe55835569c2232a0098",
       "translationSha256": "a39e7ad7208d03548a365a4499ce22b3208871ededb3fd44174b4f4720e94a4d"
@@ -263,8 +267,8 @@
       "translationSha256": "e5256712ec6c7ea0aa8ac96169f57f6f6c55b21260300e9d9dc79fafd5b34d7f"
     },
     "reference/dcctl.md": {
-      "sourceSha256": "b2e5561ea1804923aff1f0d1c0ad2058e8f9ca66196140b42d4dcedf775e99ea",
-      "translationSha256": "ea13e38bef68a398cb9f9600c87eaa28c2d01d73d2ed53c8b38053c10b4b148d"
+      "sourceSha256": "e472bd15e237fb24fdf47dc44cc8756671f46be05810328b1bfecb18a876448d",
+      "translationSha256": "eeac24a7abfdfa343f5372542bde62be431f2d098b08526985f0120c2fd37ccf"
     },
     "reference/device-protocol.md": {
       "sourceSha256": "72f8c1c6cdda43074da6792b6fc5bcc75b7a88ce4198e56c53bf82324adb2024",
