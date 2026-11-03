@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"regexp"
 	"testing"
 	"time"
 
@@ -148,9 +149,9 @@ func TestCoalescingKeepsTheLatestAndTheFirstAmongEquals(t *testing.T) {
 	}
 }
 
-// A large batch of readings is written in chunks, and every row lands: 1200 rows are three
-// statements of at most 500.
-func TestALargeUpsertIsChunkedAndEveryRowLands(t *testing.T) {
+// A large batch of readings is written as ONE column-array statement, and every row lands: it
+// binds one array per column however many rows there are, so there is no chunking to do.
+func TestALargeUpsertIsOneStatementAndEveryRowLands(t *testing.T) {
 	api := newSQLiteProjectionApi(t, "db")
 	counter := rdbtest.NewStatementCounter(rdb.FenceTable)
 	db := api.RDB.Database.Session(&gorm.Session{Logger: counter})
@@ -168,8 +169,8 @@ func TestALargeUpsertIsChunkedAndEveryRowLands(t *testing.T) {
 	if err := upsertLatestMeasurements(db.WithContext(ctx), rows); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
-	if all, _ := counter.Counts(); all != 3 {
-		t.Errorf("1200 rows took %d statements; want 3", all)
+	if all, _ := counter.Counts(); all != 1 {
+		t.Errorf("1200 rows took %d statements; want 1", all)
 	}
 	var n int64
 	if err := api.RDB.DB(ctx).Model(&LatestMeasurement{}).Count(&n).Error; err != nil {
@@ -242,14 +243,14 @@ func loadRace(t *testing.T, api *Api) []DeviceState {
 //
 // The other writer is simulated inside the batch's own transaction, the one way to put a row
 // there deterministically on SQLite: a callback creates it right before the batch's first
-// create on device_states.
+// write to device_states.
 func TestABatchFoldsIntoARowAnotherWriterCreatedMeanwhile(t *testing.T) {
 	api := newSQLiteProjectionApi(t, "db")
 	db := api.RDB.Database
 	t0 := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
 	armed := true
-	if err := db.Callback().Create().Before("gorm:create").Register("test:create_meanwhile", func(tx *gorm.DB) {
-		if !armed || tx.Statement.Table != "device_states" {
+	if err := db.Callback().Raw().Before("gorm:raw").Register("test:create_meanwhile", func(tx *gorm.DB) {
+		if !armed || !writesDeviceStates(tx) {
 			return
 		}
 		armed = false
@@ -291,14 +292,14 @@ func TestABatchFoldsIntoARowAnotherWriterCreatedMeanwhile(t *testing.T) {
 // lands right before the batch's INSERT, which then takes its conflict arm instead of
 // inserting — the batch folds into the row rather than losing it, with no lock read and no
 // second statement. Simulated by a callback that creates the row just before the batch's
-// create, on the batch's own connection.
+// write, on the batch's own connection.
 func TestAHeartbeatBatchFoldsIntoARowAnotherWriterCreatedMeanwhile(t *testing.T) {
 	api := newSQLiteProjectionApi(t, "db")
 	db := api.RDB.Database
 	t0 := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
 	armed := true
-	if err := db.Callback().Create().Before("gorm:create").Register("test:create_meanwhile", func(tx *gorm.DB) {
-		if !armed || tx.Statement.Table != "device_states" {
+	if err := db.Callback().Raw().Before("gorm:raw").Register("test:create_meanwhile", func(tx *gorm.DB) {
+		if !armed || !writesDeviceStates(tx) {
 			return
 		}
 		armed = false
@@ -329,3 +330,14 @@ func TestAHeartbeatBatchFoldsIntoARowAnotherWriterCreatedMeanwhile(t *testing.T)
 			t0.Add(2*time.Minute), t0)
 	}
 }
+
+// writesDeviceStates reports whether the statement a Raw callback is looking at is the
+// column-array upsert of device_states (the batch's device-row write, which is a raw statement
+// and no longer a gorm Create).
+func writesDeviceStates(tx *gorm.DB) bool {
+	return writesDeviceStatesSQL.MatchString(tx.Statement.SQL.String())
+}
+
+// writesDeviceStatesSQL matches the INSERT into device_states on either dialect: SQLite quotes
+// the bare table, PostgreSQL the area's schema as well.
+var writesDeviceStatesSQL = regexp.MustCompile("^INSERT INTO [`\"]?[^ ]*device_states")

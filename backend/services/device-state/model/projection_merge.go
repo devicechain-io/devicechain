@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
-	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -42,35 +41,15 @@ import (
 // soft-deletes these rows (the tenant purge hard-deletes with raw SQL), so that state is not
 // reachable today.
 
-// upsertChunk is the most rows one upsert statement carries. 500 rows of the widest row
+// upsertChunk is the most rows one dropped_measurements insert carries (the column-array
+// upserts bind arrays and need no chunking). 500 rows of the widest row
 // (latest_locations, twelve columns) is 6000 parameters, far below either database's limit.
 const upsertChunk = 500
-
-// latestMeasurementGuard applies the DO UPDATE only when the incoming reading is STRICTLY
-// newer than the stored one. The unqualified table name refers to the insert's target on
-// both databases, even though the insert names it with the area's schema prefix.
-var latestMeasurementGuard = clause.Where{Exprs: []clause.Expression{
-	clause.Expr{SQL: "latest_measurements.occurred_time < excluded.occurred_time"},
-}}
-
-// latestLocationGuard is latestMeasurementGuard for positions.
-var latestLocationGuard = clause.Where{Exprs: []clause.Expression{
-	clause.Expr{SQL: "latest_locations.occurred_time < excluded.occurred_time"},
-}}
 
 // deviceStateKey is device_states' conflict key: the columns every one of the batch's
 // device-row statements arbitrates on (the heartbeat upsert, lockOrCreate, writeFoldedStates'
 // write-back), and therefore the columns the write-back never rewrites. One definition for every use.
 var deviceStateKey = []string{"tenant_id", "device_token"}
-
-// deviceStateConflict is deviceStateKey as an ON CONFLICT target.
-func deviceStateConflict() []clause.Column {
-	cols := make([]clause.Column, len(deviceStateKey))
-	for i, k := range deviceStateKey {
-		cols[i] = clause.Column{Name: k}
-	}
-	return cols
-}
 
 // notFolded is what foldedStateColumns has and the fold never reads or writes: the row's
 // soft-delete marker and its per-device inactivity override (neither is touched by
@@ -128,8 +107,9 @@ func foldColumns(db *gorm.DB) ([]string, error) {
 }
 
 // foldSelect is the lock read's column list: foldColumns, the key the rows are matched on, and
-// the primary key so the write-back names the row it holds (an absent id would burn a fresh
-// sequence value per row written, and a row that conflicts is never inserted anyway).
+// the primary key. The column-array write-back omits id, so each row it writes draws a value
+// from device_states' bigint sequence even though it always conflicts; that costs a gap in the
+// sequence and nothing else.
 func foldSelect(db *gorm.DB) ([]string, error) {
 	cols, err := foldColumns(db)
 	if err != nil {
@@ -170,25 +150,18 @@ func zeroUnderDefault(db *gorm.DB, cols []string, rows []DeviceState) error {
 }
 
 // writeFoldedStates writes back every existing row the batch has locked and folded for one
-// tenant, as one multi-row INSERT … ON CONFLICT (tenant_id, device_token) DO UPDATE per
-// rdb.RowsPerInsert rows (rdb.CreateChunked): one statement for any batch the processor forms,
-// where a Save per device was one each. Every row in rows was read FOR UPDATE by this
-// transaction, so for every one the conflict arm is taken — it is an UPDATE of a row the
-// transaction already holds, the statement Save would have sent, and it takes no lock that was
-// not already held. The explicit id in VALUES is therefore never inserted.
+// tenant, as ONE column-array INSERT … ON CONFLICT (tenant_id, device_token) DO UPDATE
+// (deviceStateFolded): one statement for any batch the processor forms, where a Save per device
+// was one each. Every row in rows was read FOR UPDATE by this transaction, so for every one the
+// conflict arm is taken — it is an UPDATE of a row the transaction already holds, the statement
+// Save would have sent, and it takes no lock that was not already held. The id is never
+// inserted: the table omits it and the sequence applies, to a row that conflicts and so is never
+// stored.
 //
-// It is a gorm Create, not raw SQL, so the erasure fence and the tenant stamp run on it as they
-// ran on Save (raw SQL runs on gorm's Raw processor, where neither is registered). UpdatedAt is
-// set here because a Create stamps it only when it is zero, and a row read back never is; Save
-// stamps it on every write, and the GraphQL updatedAt shows it. (gorm's
-// gorm:update_track_time setting is no substitute: it is cleared after the first statement, so
-// under a chunked write only the first chunk would be stamped.) Moving from an update to a
-// create changes nothing else a callback sees: the fence is still read at the transaction's
-// first write for the tenant (now the batch's first device-row statement), and DeviceState
-// is exempt from the audit journal on both paths.
-//
-// 🔴 Not OnConflict{UpdateAll: true}: gorm binds its updated_at assignment after
-// rdb.RowsPerInsert has counted, and core/rdb refuses that combination (ErrRowWidthUnknown).
+// The column table does what Save did through the callbacks: the erasure fence is read at the
+// transaction's first write for the tenant, the tenant is stamped from the context, and
+// DeviceState is exempt from the audit journal. UpdatedAt is set (upsertDeviceStates) because
+// the table reads no clock and Save stamped it on every write; the GraphQL updatedAt shows it.
 func writeFoldedStates(tdb *gorm.DB, rows []DeviceState) error {
 	if len(rows) == 0 {
 		return nil
@@ -200,20 +173,8 @@ func writeFoldedStates(tdb *gorm.DB, rows []DeviceState) error {
 	if err := zeroUnderDefault(tdb, cols, rows); err != nil {
 		return err
 	}
-	now := tdb.NowFunc()
-	for i := range rows {
-		rows[i].UpdatedAt = now
-	}
-	return rdb.CreateChunked(foldedStatesUpsert(tdb, append(cols, "updated_at")), &rows).Error
-}
-
-// foldedStatesUpsert is tdb with writeFoldedStates' conflict clause: on the device's key,
-// overwrite cols from the incoming row.
-func foldedStatesUpsert(tdb *gorm.DB, cols []string) *gorm.DB {
-	return tdb.Clauses(clause.OnConflict{
-		Columns:   deviceStateConflict(),
-		DoUpdates: clause.AssignmentColumns(cols),
-	})
+	_, err = upsertDeviceStates(tdb, deviceStateFolded, rows)
+	return err
 }
 
 // coalesceMeasurements reduces one device's readings, in arrival order, to one row per name:
@@ -277,30 +238,31 @@ func coalesceLocations(deviceToken string, inputs []LatestLocationInput) *Latest
 }
 
 // upsertLatestMeasurements writes rows — one tenant's, sorted by device token then name,
-// each (device, name) at most once — under latestMeasurementGuard.
+// each (device, name) at most once — under latestMeasurementGuard, as one column-array statement.
 func upsertLatestMeasurements(tx *gorm.DB, rows []LatestMeasurement) error {
 	if len(rows) == 0 {
 		return nil
 	}
-	return tx.Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "tenant_id"}, {Name: "device_token"}, {Name: "name"}},
-		DoUpdates: clause.AssignmentColumns([]string{"value", "classifier", "unit", "data_type", "occurred_time", "updated_at"}),
-		Where:     latestMeasurementGuard,
-	}).CreateInBatches(&rows, upsertChunk).Error
+	now := tx.NowFunc()
+	for i := range rows {
+		stampLatest(now, &rows[i].CreatedAt, &rows[i].UpdatedAt)
+	}
+	_, err := latestMeasurementUpsert.Upsert(tx, pointers(rows))
+	return err
 }
 
 // upsertLatestLocations writes rows — one tenant's, sorted by device token, each device at
-// most once — under latestLocationGuard.
+// most once — under latestLocationGuard, as one column-array statement.
 func upsertLatestLocations(tx *gorm.DB, rows []LatestLocation) error {
 	if len(rows) == 0 {
 		return nil
 	}
-	return tx.Clauses(clause.OnConflict{
-		Columns: []clause.Column{{Name: "tenant_id"}, {Name: "device_token"}},
-		DoUpdates: clause.AssignmentColumns([]string{"latitude", "longitude", "elevation", "accuracy", "speed",
-			"heading", "occurred_time", "updated_at"}),
-		Where: latestLocationGuard,
-	}).CreateInBatches(&rows, upsertChunk).Error
+	now := tx.NowFunc()
+	for i := range rows {
+		stampLatest(now, &rows[i].CreatedAt, &rows[i].UpdatedAt)
+	}
+	_, err := latestLocationUpsert.Upsert(tx, pointers(rows))
+	return err
 }
 
 // MergeLatestMeasurements advances the current value of each named measurement for a device
@@ -387,8 +349,8 @@ func (e *BatchRefusal) Unwrap() error { return e.Err }
 // 🔴 THE LOCK ORDER. A transaction that waits for a lock while holding another can deadlock
 // only with one that acquires the same two in the opposite order. Every batch therefore takes
 // device_states row locks in ONE statement and in ascending (tenant, token) order, whether
-// the row exists or not: the heartbeat upsert and lockOrCreate both walk VALUES in token
-// order, and an INSERT … ON CONFLICT takes a new row (its own insert, which a second
+// the row exists or not: the heartbeat upsert and lockOrCreate both insert their rows in token
+// order (VALUES on SQLite, the unnested arrays on Postgres), and an INSERT … ON CONFLICT takes a new row (its own insert, which a second
 // inserter waits on until commit) and an existing one (the conflict arm's row lock) at the
 // SAME point of that walk. Everything after it touches only rows already held, then
 // latest_measurements in (token, name) order, then latest_locations in token order, each one
@@ -533,11 +495,6 @@ func mergeWithLocks(tdb *gorm.DB, tokens []string, devices map[string][]int, upd
 	return writeLatest(tdb, tokens, devices, updates)
 }
 
-// lockOrCreateNever is lockOrCreate's DO UPDATE condition: never true, so the conflict arm
-// writes nothing — but PostgreSQL locks a conflicting row whether or not the condition holds,
-// which is the whole point.
-var lockOrCreateNever = clause.Where{Exprs: []clause.Expression{clause.Expr{SQL: "1 = 0"}}}
-
 // lockOrCreate takes every device row of a locked-path tenant batch in ONE statement, walking
 // tokens (sorted) in order: a device with no row gets the blank row (blankDeviceState), and a
 // device with one takes the conflict arm, which locks the row and, by lockOrCreateNever,
@@ -553,12 +510,8 @@ func lockOrCreate(tdb *gorm.DB, tokens []string) error {
 	for i, tok := range tokens {
 		rows[i] = *blankDeviceState(tok)
 	}
-	return rdb.CreateChunked(tdb.Clauses(clause.OnConflict{
-		Columns: deviceStateConflict(),
-		DoUpdates: clause.Set{{Column: clause.Column{Name: "updated_at"},
-			Value: clause.Column{Table: "device_states", Name: "updated_at"}}},
-		Where: lockOrCreateNever,
-	}), &rows).Error
+	_, err := upsertDeviceStates(tdb, deviceStateLock, rows)
+	return err
 }
 
 // foldInto folds a device's updates into row, in arrival order.
@@ -578,70 +531,13 @@ func foldNew(tok string, idx []int, updates []ProjectionUpdate) *DeviceState {
 	return row
 }
 
-// heartbeatGuard is the DO UPDATE's WHERE: it EXCLUDES the one row a plain data event cannot
-// be folded into in SQL — an INFERRED, inactive device the event is fresh for, which the
-// event resurrects (Active, LastConnectTime and InactivityAlarmTime change, and which event
-// supplies LastConnectTime depends on arrival order). The condition is applyEvent's test, in
-// SQL: `fresh` is "no activity recorded, or the event is NOT OLDER" (>=, the frozen-clock
-// rule), and the flip needs presence_source <> ASSERTED and not active. excluded holds the
-// batch's folded row, whose last_activity_time is the latest time in the batch; a batch flips
-// the row exactly when its latest event is fresh, because activity only ever rises through
-// fresh events.
-//
-// A row this excludes is still LOCKED by the conflict arm, and is not counted in RowsAffected:
-// that shortfall is how mergeHeartbeats finds the rows it must fold in Go.
-var heartbeatGuard = clause.Where{Exprs: []clause.Expression{clause.Expr{SQL: "NOT (device_states.presence_source <> '" +
-	PresenceSourceAsserted + "' AND NOT device_states.active AND (device_states.last_activity_time IS NULL " +
-	"OR excluded.last_activity_time >= device_states.last_activity_time))"}}}
-
-// heartbeatSet is the DO UPDATE's SET: applyEvent's data-event rule for a row heartbeatGuard
-// let through, which cannot flip. There each event's only effects are the identity overwrite
-// (the last non-empty value), the monotone advance of last_activity_time when the event is
-// not older, and the owners stamp's strictly-later replacement — effects that commute, so one
-// SET over the batch's folded row (excluded) equals folding its events in any order. updated_at
-// is stamped as Save stamped it.
-//
-// applyEvent's data branch is the Go twin of this; model/projection_equivalence_test.go pins
-// the two together.
-var heartbeatSet = clause.Set{
-	{Column: clause.Column{Name: "external_id"}, Value: clause.Expr{SQL: "CASE WHEN excluded.external_id <> '' " +
-		"THEN excluded.external_id ELSE device_states.external_id END"}},
-	{Column: clause.Column{Name: "source"}, Value: clause.Expr{SQL: "CASE WHEN excluded.source <> '' " +
-		"THEN excluded.source ELSE device_states.source END"}},
-	{Column: clause.Column{Name: "last_activity_time"}, Value: clause.Expr{SQL: "CASE WHEN " +
-		"device_states.last_activity_time IS NULL OR excluded.last_activity_time >= device_states.last_activity_time " +
-		"THEN excluded.last_activity_time ELSE device_states.last_activity_time END"}},
-	// The owners stamp (applyOwners): the batch's latest stamp replaces the stored one when
-	// strictly later. Both arms test the OLD row's precedence — a SET reads the row as it was
-	// before the statement on both databases — so they agree on whether to move.
-	{Column: clause.Column{Name: "scope_anchors"}, Value: clause.Expr{SQL: "CASE WHEN " + ownersNewer +
-		" THEN excluded.scope_anchors ELSE device_states.scope_anchors END"}},
-	{Column: clause.Column{Name: "scope_anchors_at"}, Value: clause.Expr{SQL: "CASE WHEN " + ownersNewer +
-		" THEN excluded.scope_anchors_at ELSE device_states.scope_anchors_at END"}},
-	{Column: clause.Column{Name: "updated_at"}, Value: clause.Column{Table: "excluded", Name: "updated_at"}},
-}
-
-// ownersNewer is applyOwners' test in SQL: the batch carries a stamp, and the stored row has
-// none or an older one.
-const ownersNewer = "excluded.scope_anchors_at IS NOT NULL AND (device_states.scope_anchors_at IS NULL " +
-	"OR excluded.scope_anchors_at > device_states.scope_anchors_at)"
-
-// heartbeatUpsert is tdb with mergeHeartbeats' conflict clause.
-func heartbeatUpsert(tdb *gorm.DB) *gorm.DB {
-	return tdb.Clauses(clause.OnConflict{
-		Columns:   deviceStateConflict(),
-		DoUpdates: heartbeatSet,
-		Where:     heartbeatGuard,
-	})
-}
-
 // mergeHeartbeats is mergeTenantBatch's path for a tenant batch with NO presence claim: ONE
 // INSERT … ON CONFLICT DO UPDATE writes every device's row.
 //
 //   - A device with no row is inserted as foldNew builds it, in Go: the insert arm IS
 //     newDeviceState and applyEvent, so first sight needs no lock read and no per-device insert,
 //     and two writers racing to create a row fold into each other instead of one losing.
-//   - A device with a row takes heartbeatSet — unless heartbeatGuard excludes it, in which
+//   - A device with a row takes deviceStateHeartbeat's SET — unless heartbeatGuard excludes it, in which
 //     case the statement locks the row and leaves it alone.
 //
 // The statement takes each row in token order (the VALUES order) — a new row by inserting it,
@@ -670,15 +566,11 @@ func mergeHeartbeats(tdb *gorm.DB, tokens []string, devices map[string][]int, up
 	for i, tok := range tokens {
 		rows[i] = *foldNew(tok, devices[tok], updates)
 	}
-	now := tdb.NowFunc()
-	for i := range rows {
-		rows[i].UpdatedAt = now
+	written, err := upsertDeviceStates(tdb, deviceStateHeartbeat, rows)
+	if err != nil {
+		return err
 	}
-	res := rdb.CreateChunked(heartbeatUpsert(tdb), &rows)
-	if res.Error != nil {
-		return res.Error
-	}
-	if res.RowsAffected < int64(len(rows)) {
+	if written < int64(len(rows)) {
 		if err := foldSkipped(tdb, tokens, devices, updates); err != nil {
 			return err
 		}

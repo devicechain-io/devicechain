@@ -325,6 +325,26 @@ func TimeColumn[R any](name string, get func(*R) time.Time) Column[R] {
 	return c
 }
 
+// NullTimeColumn binds a nullable timestamptz column (sql.NullTime) as timestamptz[]; an
+// invalid value is NULL. A Valid zero time is written as the zero time, as a Create writes it.
+func NullTimeColumn[R any](name string, get func(*R) sql.NullTime) Column[R] {
+	return Column[R]{
+		name:   name,
+		pgType: "timestamptz",
+		array: func(rows []*R) (any, error) {
+			out := make([]*time.Time, len(rows))
+			for i, r := range rows {
+				if v := get(r); v.Valid {
+					t := v.Time
+					out[i] = &t
+				}
+			}
+			return out, nil
+		},
+		value: func(r *R) any { return get(r) },
+	}
+}
+
 // NumericColumn binds a nullable numeric/decimal column.
 //
 // 🔴 ON POSTGRES THE VALUES TRAVEL AS TEXT, AND THE TEXT IS EXACTLY THE DRIVER'S. A float64

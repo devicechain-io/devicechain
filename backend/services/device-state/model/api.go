@@ -372,7 +372,7 @@ func applyEvent(found *DeviceState, occurredAt time.Time, pt *PresenceTransition
 	// data at that time; whether it is alive NOW is the sweep's question, not this one's.
 	//
 	// 🔴 THIS BRANCH HAS A SQL TWIN. A batch with no presence claim does not run applyEvent on the
-	// rows that already exist; heartbeatSet and heartbeatGuard (projection_merge.go) apply the
+	// rows that already exist; deviceStateHeartbeat and heartbeatGuard (columnar_writes.go) apply the
 	// rule below in the database for every row it cannot flip, and the guard sends the rows it
 	// can flip back here. A change to this branch is a change to both, and
 	// projection_equivalence_test.go fails when they disagree.

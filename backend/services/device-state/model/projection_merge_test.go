@@ -369,10 +369,16 @@ func TestTheHeartbeatUpsertListsItsRowsInTokenOrder(t *testing.T) {
 	api := newSQLiteProjectionApi(t, "db")
 	t0 := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
 	var seen []string
-	if err := api.RDB.Database.Callback().Create().Before("gorm:create").Register("test:values_order", func(tx *gorm.DB) {
-		if rows, ok := tx.Statement.Dest.(*[]DeviceState); ok && tx.Statement.Table == "device_states" {
-			for _, r := range *rows {
-				seen = append(seen, r.DeviceToken)
+	// On SQLite the column-array upsert renders a VALUES list, one placeholder group per row
+	// (the tenant, then deviceStateColumns in order: created_at, updated_at, device_token), so a
+	// row's token is the fourth variable of its group. The order the groups are listed is the
+	// order the server walks them, which on PostgreSQL is the order the arrays are unnested.
+	const tokenAt = 3
+	stride := len(deviceStateColumns) + 1
+	if err := api.RDB.Database.Callback().Raw().Before("gorm:raw").Register("test:values_order", func(tx *gorm.DB) {
+		if writesDeviceStates(tx) {
+			for i := tokenAt; i < len(tx.Statement.Vars); i += stride {
+				seen = append(seen, tx.Statement.Vars[i].(string))
 			}
 		}
 	}); err != nil {
@@ -393,9 +399,9 @@ func TestTheHeartbeatUpsertListsItsRowsInTokenOrder(t *testing.T) {
 	}
 }
 
-// The heartbeat upsert is a gorm Create, so core/rdb's tenant rules apply to it: with no tenant
-// bound it fails closed, and with one its update arm is confined to that tenant's rows (the
-// guard core/rdb prepends to the statement's own WHERE).
+// The heartbeat upsert is a core/rdb column-array upsert, so its tenant rules apply to it: with
+// no tenant bound it fails closed, and with one its update arm is confined to that tenant's rows
+// (the term core/rdb appends to the statement's own WHERE, which the caller's guard cannot reach).
 func TestTheHeartbeatUpsertKeepsTheTenantRules(t *testing.T) {
 	api := newSQLiteProjectionApi(t, "db")
 	t0 := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
@@ -405,8 +411,8 @@ func TestTheHeartbeatUpsertKeepsTheTenantRules(t *testing.T) {
 		t.Fatalf("a heartbeat upsert with no tenant in context returned %v; want core.ErrNoTenant", err)
 	}
 	var sql string
-	if err := api.RDB.Database.Callback().Create().After("gorm:create").Register("test:upsert_sql", func(tx *gorm.DB) {
-		if tx.Statement.Table == "device_states" {
+	if err := api.RDB.Database.Callback().Raw().After("gorm:raw").Register("test:upsert_sql", func(tx *gorm.DB) {
+		if writesDeviceStates(tx) {
 			sql = tx.Statement.SQL.String()
 		}
 	}); err != nil {
@@ -415,7 +421,7 @@ func TestTheHeartbeatUpsertKeepsTheTenantRules(t *testing.T) {
 	if err := api.MergeProjectionBatch(context.Background(), updates); err != nil {
 		t.Fatalf("batch: %v", err)
 	}
-	if !strings.Contains(sql, "`device_states`.`tenant_id` = `excluded`.`tenant_id` AND (") {
+	if !strings.Contains(sql, "AND t.`tenant_id` = excluded.`tenant_id`") || !strings.Contains(sql, "WHERE (NOT (") {
 		t.Errorf("the heartbeat upsert's update arm is not confined to its tenant: %s", sql)
 	}
 }
