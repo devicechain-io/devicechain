@@ -21,6 +21,7 @@ dcctl [command]
 
 ### Commands
 
+* [dcctl attr](#dcctl-attr)	 - Set, read and remove an entity's attributes (facet values)
 * [dcctl bootstrap](#dcctl-bootstrap)	 - Bootstrap a DeviceChain instance
 * [dcctl broker](#dcctl-broker)	 - Message broker operations
 * [dcctl dead-letters](#dcctl-dead-letters)	 - Inspect work the platform accepted and then gave up on
@@ -38,6 +39,181 @@ dcctl [command]
 * [dcctl tenant-deletion](#dcctl-tenant-deletion)	 - Check whether a deleted tenant's data is established as erased
 * [dcctl upgrade](#dcctl-upgrade)	 - Move a live instance onto a released version
 * [dcctl version](#dcctl-version)	 - Get version info
+
+## dcctl attr {#dcctl-attr}
+
+Set, read and remove an entity's attributes (facet values)
+
+### Synopsis
+
+Set, read and remove the current-state attributes of a device, asset, area or customer.
+
+A facet's values ARE attributes: the facet declaration says which keys classify an entity,
+and the value lives on the entity as an attribute in the SHARED scope. This command is the
+scriptable way to write them, the same rows the console's Facets tab edits.
+
+The entity is addressed by kind and token: dcctl attr set device meter-0042 climate arid.
+
+Writes default to the SHARED scope because it is the only one facet selectors read. A value
+written at CLIENT or SERVER scope is valid, reads back, and matches nothing in Browse or in
+a dynamic group; pass --scope only for an attribute that is not a facet value.
+
+SHARED is also the scope a device reads its configuration from. Writing or removing a SHARED
+attribute on a device whose profile declares that key as configuration creates a new
+configuration revision for the device, whether or not you meant it as a facet value.
+
+The server authorizes every call as the identity you sign in with. This command checks no
+permission itself.
+
+### Options
+
+```
+      --email string      identity to authenticate as; it must be a member of the tenant (required)
+  -h, --help              help for attr
+      --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
+      --password string   password for the identity (required)
+  -s, --server string     instance host for platform API calls (default "localhost")
+  -t, --tenant string     tenant that owns the entity (required)
+      --tls               use https for platform endpoints
+```
+
+### SEE ALSO
+
+* [dcctl](#dcctl)	 - DeviceChain CLI
+* [dcctl attr get](#dcctl-attr-get)	 - Show an entity's attributes
+* [dcctl attr set](#dcctl-attr-set)	 - Set one attribute (a facet value) on an entity
+* [dcctl attr unset](#dcctl-attr-unset)	 - Remove one attribute (a facet value) from an entity
+
+## dcctl attr get {#dcctl-attr-get}
+
+Show an entity's attributes
+
+### Synopsis
+
+Show an entity's attributes in every scope, or one key when [key] is given.
+
+Attributes outside the SHARED scope are listed too, which explains a facet that reads set
+but matches nothing: the device reported its own value at CLIENT scope. Narrow with --scope.
+
+A token that names no entity answers exactly like an entity with no attributes, so an empty
+result is not proof the entity exists.
+
+```
+dcctl attr get <kind> <token> [key] [flags]
+```
+
+### Options
+
+```
+  -h, --help            help for get
+  -o, --output string   output format: table or json (default "table")
+      --scope string    attribute scope: CLIENT, SERVER, SHARED (default: every scope)
+```
+
+### Options inherited from parent commands
+
+```
+      --email string      identity to authenticate as; it must be a member of the tenant (required)
+      --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
+      --password string   password for the identity (required)
+  -s, --server string     instance host for platform API calls (default "localhost")
+  -t, --tenant string     tenant that owns the entity (required)
+      --tls               use https for platform endpoints
+```
+
+### SEE ALSO
+
+* [dcctl attr](#dcctl-attr)	 - Set, read and remove an entity's attributes (facet values)
+
+## dcctl attr set {#dcctl-attr-set}
+
+Set one attribute (a facet value) on an entity
+
+### Synopsis
+
+Set one attribute on an entity, creating it or replacing its value.
+
+\<kind> is device, asset, area or customer, and \<token> is the entity's token.
+
+For a SHARED-scope write the value type is taken from the facet's declaration, so
+"dcctl attr set device meter-0042 floor 3" is written as the LONG the facet declares. A
+--type that contradicts the declaration is refused, because the write would save and never
+match. A key that is not declared as a facet has no type to take, so --type is required.
+
+A facet value must match the declared vocabulary's spelling and case exactly: "Arid" does
+not match a facet value "arid".
+
+A negative number looks like a flag, so put it after "--" (flags first):
+
+```
+  dcctl attr set device m1 offset --tenant acme --email you@example.com --password <password> -- -5
+```
+
+Writing one key never touches another: this is an upsert on (entity, scope, key).
+
+```
+dcctl attr set <kind> <token> <key> <value> [flags]
+```
+
+### Options
+
+```
+  -h, --help           help for set
+      --scope string   attribute scope: CLIENT, SERVER, SHARED; SHARED is the only scope facets read (default "SHARED")
+      --type string    value type: STRING, LONG, DOUBLE, BOOLEAN, JSON (default: the facet's declared type)
+```
+
+### Options inherited from parent commands
+
+```
+      --email string      identity to authenticate as; it must be a member of the tenant (required)
+      --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
+      --password string   password for the identity (required)
+  -s, --server string     instance host for platform API calls (default "localhost")
+  -t, --tenant string     tenant that owns the entity (required)
+      --tls               use https for platform endpoints
+```
+
+### SEE ALSO
+
+* [dcctl attr](#dcctl-attr)	 - Set, read and remove an entity's attributes (facet values)
+
+## dcctl attr unset {#dcctl-attr-unset}
+
+Remove one attribute (a facet value) from an entity
+
+### Synopsis
+
+Remove one attribute from an entity.
+
+This deletes the row; it does not write an empty value, which would stay on the entity and
+still count as a value. Removing a key that is not set succeeds and says so.
+
+```
+dcctl attr unset <kind> <token> <key> [flags]
+```
+
+### Options
+
+```
+  -h, --help           help for unset
+      --scope string   attribute scope: CLIENT, SERVER, SHARED (default "SHARED")
+```
+
+### Options inherited from parent commands
+
+```
+      --email string      identity to authenticate as; it must be a member of the tenant (required)
+      --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
+      --password string   password for the identity (required)
+  -s, --server string     instance host for platform API calls (default "localhost")
+  -t, --tenant string     tenant that owns the entity (required)
+      --tls               use https for platform endpoints
+```
+
+### SEE ALSO
+
+* [dcctl attr](#dcctl-attr)	 - Set, read and remove an entity's attributes (facet values)
 
 ## dcctl bootstrap {#dcctl-bootstrap}
 

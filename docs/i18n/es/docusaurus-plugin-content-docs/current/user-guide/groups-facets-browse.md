@@ -92,6 +92,28 @@ faceta, la pestaña te dice en qué grupos entraría o de cuáles saldría la en
 pestaña se describe en [Activos, clientes y áreas](./assets-customers-areas.md#facets); los
 dispositivos tienen la misma pestaña.
 
+Para asignar valores desde un script, usa `dcctl attr`. Direcciona una entidad por tipo (`device`,
+`asset`, `area` o `customer`) y token, inicia sesión con la identidad que le indiques y escribe el
+mismo valor que la pestaña Facetas:
+
+```bash
+dcctl attr set device meter-0042 floor 3 --tenant acme --email you@example.com --password <password>
+dcctl attr get device meter-0042 --tenant acme --email you@example.com --password <password>
+dcctl attr unset device meter-0042 floor --tenant acme --email you@example.com --password <password>
+```
+
+Los valores se escriben en el ámbito compartido, el único que leen las facetas, y toman el tipo que
+declara la faceta, así que el `3` de arriba se almacena como `LONG` para una faceta `LONG`. Un
+`--type` que contradiga la declaración se rechaza en lugar de guardarse. Además, un valor debe coincidir exactamente, en ortografía y
+mayúsculas, con el vocabulario declarado: `Arid` no coincide con `arid`. Un número negativo parece una
+opción, así que ponlo después de `--`, como en `dcctl attr set device m1 offset -- -5` (con las demás
+opciones antes). En un dispositivo, el ámbito compartido es también de donde sale su configuración:
+escribir o quitar una clave que el perfil del dispositivo declara como configuración crea una nueva
+revisión de configuración. `get` también lista los
+atributos de los demás ámbitos, lo que explica una faceta que figura como asignada pero no coincide
+con nada. El servidor decide si tu identidad puede escribir, igual que en la consola. Consulta la
+[referencia de comandos](../reference/dcctl.md#dcctl-attr).
+
 ## Explorar {#browse}
 
 **Explorar** convierte las facetas en un filtro. Elige una familia con los chips de arriba

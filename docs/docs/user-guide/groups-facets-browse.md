@@ -87,6 +87,26 @@ click **Clear** to remove it. If dynamic groups depend on the facet, the tab tel
 change would move the entity into or out of. The tab is described in
 [Assets, customers and areas](/user-guide/assets-customers-areas#facets); devices have the same tab.
 
+To set values from a script, use `dcctl attr`. It addresses an entity by kind (`device`, `asset`,
+`area` or `customer`) and token, signs in as the identity you give it, and writes the same value the
+Facets tab does:
+
+```bash
+dcctl attr set device meter-0042 floor 3 --tenant acme --email you@example.com --password <password>
+dcctl attr get device meter-0042 --tenant acme --email you@example.com --password <password>
+dcctl attr unset device meter-0042 floor --tenant acme --email you@example.com --password <password>
+```
+
+Values are written in the shared scope, the only one facets read, and take the type the facet
+declares, so `3` above is stored as a `LONG` for a `LONG` facet. A `--type` that contradicts the
+declaration is refused rather than saved. A value must also match the declared vocabulary's exact
+spelling and case, so `Arid` does not match `arid`. A negative number looks like a flag, so put it
+after `--`, as in `dcctl attr set device m1 offset -- -5` (with the other flags before it). On a
+device, the shared scope is also where its configuration comes from: writing or removing a key that
+the device's profile declares as configuration creates a new configuration revision. `get` also lists attributes in the other scopes, which
+explains a facet that reads as set but matches nothing. The server decides whether your identity may
+write, as it does for the console. See the [command reference](../reference/dcctl.md#dcctl-attr).
+
 ## Browse
 
 **Browse** turns facets into a filter. Pick a member family with the chips at the top (**Device**,
