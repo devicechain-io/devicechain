@@ -503,6 +503,40 @@ jobs:
           GOOS: windows
         run: go vet -tags "integration interop" ./...
 
+      # The broker image must run DeviceChain's nats-server fork, not upstream. Upstream's
+      # flushOutbound writes one TLS record and one syscall per queued buffer; the fork
+      # coalesces small buffers into records of up to 16 KiB. See "Forked dependencies" in
+      # CLAUDE.md. Only this module needs the replace: every other module imports nats-server
+      # solely as an embedded test server. A `replace` applies ONLY in the main module and
+      # the image is built with GOWORK=off, so the check does too: it proves this module's
+      # own go.mod carries the replace rather than inheriting anything from the workspace.
+      - name: nats-server fork guard
+        if: ${{ matrix.module == 'backend/broker/dc-nats-server' }}
+        working-directory: ${{ matrix.module }}
+        env:
+          # Pin the exact -dc.N. Matching only the module PATH would accept
+          # github.com/devicechain-io/nats-server/v2@v2.15.2, a real tag on the fork that
+          # points at upstream's UNPATCHED code, since a fork inherits the upstream tags.
+          WANT: "=> github.com/devicechain-io/nats-server/v2 v2.15.2-dc.1"
+        run: |
+          set -o pipefail
+          if ! resolved="$(GOWORK=off go list -m github.com/nats-io/nats-server/v2 2>&1)"; then
+            echo "::error::Could not resolve nats-server, so the fork could not be verified."
+            echo "$resolved"
+            exit 1
+          fi
+          echo "resolved: $resolved"
+          case "$resolved" in
+            *"$WANT"*) echo "OK: patched fork in use." ;;
+            *)
+              echo "::error::The broker module does not resolve the patched nats-server fork."
+              echo "Expected a replacement matching: $WANT"
+              echo "Fix with:"
+              echo "  go mod edit -replace github.com/nats-io/nats-server/v2=github.com/devicechain-io/nats-server/v2@v2.15.2-dc.1"
+              exit 1
+              ;;
+          esac
+
       # Known-vulnerability scan of this module's dependency graph. It lives here,
       # in the go matrix, rather than in a workflow of its own because govulncheck
       # has to run INSIDE a module (same constraint as every other Go gate here) and
