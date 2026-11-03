@@ -844,16 +844,7 @@ functionalAreas:
 ```
 
 - **直接安装 Helm chart：** 添加到 values，正常运行 `helm upgrade`。
-- **通过 `dcctl bootstrap` 安装：** `dcctl` 无此选项，用实例当前 chart 版本执行 `helm upgrade`。`helm list -n default` 显示版本，release 名为 `dc-<instance>`：
-
-  ```bash
-  helm get values dc-<instance> -n default -o yaml > dc-values.yaml
-  # add the profiler block above to dc-values.yaml
-  helm upgrade dc-<instance> oci://ghcr.io/devicechain-io/charts/devicechain \
-    --version <chart-version> -n default -f dc-values.yaml
-  ```
-
-  仅改 Pod 设置，不改 `dcctl` 拥有的实例配置 Secret。下次 `dcctl upgrade` 或 `dcctl bootstrap` 重新计算 release，会再次关闭监听器。
+- **通过 `dcctl` 安装：** 把该块写入 values 文件，用 `--values` 传入（`dcctl bootstrap` 或 `dcctl upgrade`）。`dcctl` 接受 `functionalAreas.<area>.profiler` 下的 `enabled`、`blockRate` 和 `mutexFraction`；监听器的 `address` 不能这样调整，保持回环默认值。`dcctl` 会把这些值与实例一同记录，之后的升级会一直保留，直到用另一个 `--values` 文件替换或用 `--reset-values` 清除。运行结束后用同样的方法关闭 profiler。
 
 服务未部署时，安装拒绝设置，因为不会生效；地址端口已被该 Pod 使用时也拒绝。运行后记录 `Profiling listener is ON` 及地址。
 

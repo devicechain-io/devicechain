@@ -137,15 +137,46 @@ func TestCommandOracleNullTotalIsError(t *testing.T) {
 	assert.Contains(t, err.Error(), "null totalRecords")
 }
 
-// totalRecords outrunning the returned page is a fail-closed error, not a silently
-// undercounted SUCCESSFUL tally (which could make an incomplete round-trip look done).
-func TestCommandOraclePageOverflowIsError(t *testing.T) {
-	o := &commandOracle{session: &fakeSession{respond: func(map[string]any) (json.RawMessage, error) {
+// Pages that stop short of totalRecords (the server ran out of rows) are a fail-closed
+// error, not a silently undercounted SUCCESSFUL tally (which could make an incomplete
+// round-trip look done).
+func TestCommandOraclePagesShortOfTotalIsError(t *testing.T) {
+	o := &commandOracle{session: &fakeSession{respond: func(vars map[string]any) (json.RawMessage, error) {
+		if vars["c"].(map[string]any)["pageNumber"].(int) > 1 {
+			return commandsJSON(3), nil
+		}
 		return commandsJSON(3, map[string]any{"token": "c1", "status": "SUCCESSFUL"}), nil
 	}}}
 	_, err := o.snapshot(context.Background(), "harness-cmd-probe-001")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "exceeds returned page")
+	assert.Contains(t, err.Error(), "totalRecords is 3")
+}
+
+// More commands than one page (570 > 500, the r24/r25 failure) are read across pages and
+// counted in full.
+func TestCommandOraclePagesThroughMoreThanOnePage(t *testing.T) {
+	const total = 570
+	var pages []int
+	o := &commandOracle{session: &fakeSession{respond: func(vars map[string]any) (json.RawMessage, error) {
+		c := vars["c"].(map[string]any)
+		page, size := c["pageNumber"].(int), c["pageSize"].(int)
+		pages = append(pages, page)
+		var rows []map[string]any
+		for i := (page - 1) * size; i < page*size && i < total; i++ {
+			status := "SUCCESSFUL"
+			if i == total-1 {
+				status = "SENT"
+			}
+			rows = append(rows, map[string]any{"token": fmt.Sprintf("c%d", i), "status": status})
+		}
+		return commandsJSON(total, rows...), nil
+	}}}
+	s, err := o.snapshot(context.Background(), "harness-cmd-probe-001")
+	require.NoError(t, err)
+	assert.Equal(t, []int{1, 2}, pages)
+	assert.Equal(t, total, s.Count)
+	assert.Equal(t, total-1, s.Successful)
+	assert.False(t, s.roundTripComplete())
 }
 
 func TestCommandOracleQueryErrorPropagates(t *testing.T) {

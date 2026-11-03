@@ -224,6 +224,9 @@ func TestARefusedKeyIsNamedAndRefusedBeforeAnyChange(t *testing.T) {
 		// ...in any spelling the service would bind: the services match keys as encoding/json does.
 		"functionalAreas.device-management.config.DeviceAuthMode":                "functionalAreas:\n  device-management:\n    config:\n      DeviceAuthMode: disabled\n",
 		"functionalAreas.event-management.config.TsdbConfiguration.MaxOpenConns": "functionalAreas:\n  event-management:\n    config:\n      TsdbConfiguration:\n        MaxOpenConns: 80\n",
+		// The profiler's switches are tunable; where its listener binds is not, nor anything else under it.
+		"functionalAreas.device-management.profiler.address": "functionalAreas:\n  device-management:\n    profiler:\n      address: \"0.0.0.0:6060\"\n",
+		"functionalAreas.device-management.profiler.extra":   "functionalAreas:\n  device-management:\n    profiler:\n      extra: true\n",
 		// An ingress annotation the chart sets itself would REPLACE the chart's.
 		"ingress.annotations.nginx.ingress.kubernetes.io/configuration-snippet": "ingress:\n  annotations:\n    nginx.ingress.kubernetes.io/configuration-snippet: \"#\"\n",
 		"ingress.annotations.nginx.ingress.kubernetes.io/enable-access-log":     "ingress:\n  annotations:\n    nginx.ingress.kubernetes.io/enable-access-log: \"true\"\n",
@@ -661,5 +664,19 @@ func TestACorruptRecordedOverlayIsReplacedByEitherWayOut(t *testing.T) {
 	}
 	if err := adoptRecordedValuesOverlay(&State{Instance: "prod"}, corrupt()); err == nil {
 		t.Error("a bootstrap without --values carried an unreadable record")
+	}
+}
+
+// The profiler's three switches are accepted in an overlay, per area; its address is refused
+// (see TestARefusedKeyIsNamedAndRefusedBeforeAnyChange).
+func TestTheProfilerSwitchesAreTunable(t *testing.T) {
+	t.Parallel()
+	body := "functionalAreas:\n  device-management:\n    profiler:\n      enabled: true\n      blockRate: 1\n      mutexFraction: 5\n"
+	got, err := LoadValuesOverlay([]string{writeOverlayFile(t, "profiler.yaml", body)})
+	if err != nil {
+		t.Fatalf("the profiler switches were refused: %v", err)
+	}
+	if got == nil {
+		t.Fatal("the overlay was dropped")
 	}
 }

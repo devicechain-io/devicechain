@@ -52,7 +52,7 @@ func rebalanceBrokerLeadership(ctx context.Context, st *State, typed *kubernetes
 	if err != nil {
 		return "", fmt.Errorf("building kube config: %w", err)
 	}
-	cfg, err := deployedInstanceConfig(ctx, typed, st.Instance)
+	cfg, err := deployedInstanceConfigWithLogins(ctx, typed, st.Instance)
 	if err != nil {
 		return "", err
 	}

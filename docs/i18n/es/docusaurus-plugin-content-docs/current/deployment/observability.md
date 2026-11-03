@@ -1618,20 +1618,13 @@ functionalAreas:
 
 - **Instalada directamente con el chart de Helm:** añade el bloque a tus valores y ejecuta
   `helm upgrade` como de costumbre.
-- **Instalada con `dcctl bootstrap`:** `dcctl` no tiene una opción para esto. Cambia la release
-  con `helm upgrade`, usando la versión del chart que ya ejecuta la instancia. `helm list -n default`
-  muestra esa versión, y la release se llama `dc-<instance>`:
-
-  ```bash
-  helm get values dc-<instance> -n default -o yaml > dc-values.yaml
-  # añade a dc-values.yaml el bloque profiler de arriba
-  helm upgrade dc-<instance> oci://ghcr.io/devicechain-io/charts/devicechain \
-    --version <chart-version> -n default -f dc-values.yaml
-  ```
-
-  Esto cambia solo la configuración de los pods, no el Secret de configuración de la instancia
-  que gestiona `dcctl`. El siguiente `dcctl upgrade` o `dcctl bootstrap` recalcula la release y
-  vuelve a desactivar el listener.
+- **Instalada con `dcctl`:** pon el bloque en un archivo de valores y pásalo con `--values`
+  (`dcctl bootstrap` o `dcctl upgrade`). `dcctl` acepta `enabled`, `blockRate` y
+  `mutexFraction` bajo `functionalAreas.<area>.profiler`; la `address` del listener no se puede
+  ajustar así y se queda en el valor por defecto de loopback. `dcctl` registra los valores con la
+  instancia, de modo que las actualizaciones posteriores los conservan hasta que los sustituyas
+  con otro archivo `--values` o los borres con `--reset-values`. Desactiva el profiler al terminar
+  la ejecución de la misma manera.
 
 La configuración se rechaza al instalar si el servicio no está desplegado, porque no haría nada.
 También se rechaza si la dirección usa un puerto que el pod del servicio ya sirve. Una vez en

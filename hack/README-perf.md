@@ -6,8 +6,8 @@ Service, Ingress or Gateway, and a switch is turned off again after the run.
 
 | What | Switch | Default | Where | Restarts |
 |---|---|---|---|---|
-| Go profiles of one service | `functionalAreas.<area>.profiler.enabled` | off | Helm values | that area's pods |
-| Block / mutex profiles | `functionalAreas.<area>.profiler.blockRate` (ns per sampled event; 1 = all), `.mutexFraction` (1 in N) | 0 (off, the endpoints answer 404) | Helm values, need `enabled` | that area's pods |
+| Go profiles of one service | `functionalAreas.<area>.profiler.enabled` | off | Helm values, or `dcctl --values` | that area's pods |
+| Block / mutex profiles | `functionalAreas.<area>.profiler.blockRate` (ns per sampled event; 1 = all), `.mutexFraction` (1 in N) | 0 (off, the endpoints answer 404) | Helm values or `dcctl --values`, need `enabled` | that area's pods |
 | NATS server pprof | OpenTofu `nats_profiling_port` (instance root; module `profiling_port`) | 0 (off) | `deploy/opentofu` | broker, one server at a time |
 | NATS block profile | `nats_profiling_block_rate` (needs the port) | 0 | `deploy/opentofu` | broker |
 | `pg_stat_statements`, relational DB | OpenTofu `postgres_statement_stats` (cluster root) | false | `deploy/opentofu` | Postgres (rolling) |
@@ -16,6 +16,34 @@ Service, Ingress or Gateway, and a switch is turned off again after the run.
 The NATS monitoring endpoints (`/varz`, `/jsz`, `/connz` on the `monitor` port, 8222) are on in
 the broker chart already and need no switch. The collector reaches them, and every profile
 port, with `kubectl port-forward` to a pod.
+
+## Setting the switches through `dcctl` (what the first real round found)
+
+- The OpenTofu variables are plain `TF_VAR_*` environment variables on the `dcctl` process:
+  `TF_VAR_postgres_statement_stats=true` for `dcctl install`, and
+  `TF_VAR_timescale_statement_stats=true TF_VAR_nats_profiling_port=6061
+  TF_VAR_nats_profiling_block_rate=100000` for `dcctl bootstrap`. Set them before the instance
+  exists, so no database or broker restart lands in a measurement.
+- 🔴 `dcctl bootstrap --values` REFUSES the profiler keys: `functionalAreas.<area>.profiler` is
+  deliberately outside the tunable allowlist (`bootstrap/valuesoverlay.go`), so the chart value in
+  the table above cannot be set through `dcctl` as shipped. r25 ran a local `dcctl` build with
+  `"functionalAreas.*.profiler"` added to `tunableValues`; without that, set
+  `DC_PROFILER_ADDRESS` (`127.0.0.1:6060`), `DC_PROFILER_BLOCK_RATE` and
+  `DC_PROFILER_MUTEX_FRACTION` on each Deployment by hand, which the operator keeps until the next
+  upgrade.
+- The collector needs every Go-service Deployment profiled (the console, a static nginx, is
+  skipped), so list every area the profile deploys.
+
+## Running it against a real cluster
+
+- The relational store lives in the cluster namespace (`dc-system`), not the instance's: pass
+  `--rdb-namespace dc-system`.
+- The steady marker is written by the harness, which runs in the cluster; mirror it to the file
+  `--marker` names (a loop of `kubectl exec <loadgen> -- cat <marker>`).
+- On Windows under Git Bash do NOT export `MSYS_NO_PATHCONV=1` for the collector: it makes `jq`
+  unable to open the `/tmp` and `/c/...` paths the script passes it, and the collector then
+  refuses every marker as "not JSON". The collector protects its own `kubectl get --raw /api/...`
+  calls itself.
 
 ## Safety properties (each one is tested)
 

@@ -51,6 +51,13 @@ func (suite *EventPersistenceProcessorTestSuite) SetupTest() {
 	suite.EP.Initialize(ctx)
 }
 
+// TearDownTest stops the processor SetupTest started. Initialize starts the writer goroutines,
+// and one left running reads the package-level hold timings that a later test writes (a data
+// race under -race). Stop is refused, harmlessly, for a processor the test already stopped.
+func (suite *EventPersistenceProcessorTestSuite) TearDownTest() {
+	_ = suite.EP.Stop(context.Background())
+}
+
 // Test processing loop termination on EOF.
 func (suite *EventPersistenceProcessorTestSuite) TestLifecycle() {
 	suite.Inbound.Mock.On("ReadMessage", mock.Anything).Return(messaging.Message{}, io.EOF)
