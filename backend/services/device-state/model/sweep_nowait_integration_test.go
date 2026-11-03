@@ -268,4 +268,3 @@ func TestTheSweepFlipsByRowNotByToken(t *testing.T) {
 		t.Error("the fresh device of another tenant with the same token was flipped")
 	}
 }
-
