@@ -165,11 +165,16 @@ func siteScan(kind siteKind, allow []siteEntry, roots []string) (Result, error) 
 
 func (s *siteScanner) scanFile(fset *token.FileSet, file *ast.File, rel string, res *Result) []Finding {
 	base := path.Base(rel)
-	if s.kind == kindRawSQL && (strings.HasPrefix(base, "migration_") || strings.HasPrefix(base, "baseline")) {
-		return nil
-	}
 	p := s.facts.pkg(path.Dir(rel))
 	var out []Finding
+	// The column-upsert rule runs BEFORE the migration-file early return: a file named
+	// migration_* or baseline* is exempt from the raw-SQL rule, not from this one.
+	if s.kind == kindRawSQL {
+		out = append(out, s.columnUpsertFindings(fset, file, p)...)
+	}
+	if s.kind == kindRawSQL && (strings.HasPrefix(base, "migration_") || strings.HasPrefix(base, "baseline")) {
+		return out
+	}
 
 	for _, decl := range file.Decls {
 		fn := declName(decl)

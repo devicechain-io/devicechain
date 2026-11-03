@@ -76,10 +76,21 @@ var rawSQLAllowList = []siteEntry{
 	// --- tenant-write ---
 	{
 		Path: "backend/core/rdb/insert_columns.go", Func: "ColumnTable.exec", Count: 2,
-		Why: "the column-array insert (one statement on Postgres, its VALUES rendering on sqlite): an " +
-			"INSERT ... ON CONFLICT DO NOTHING whose text is built from the model's own gorm schema, never " +
-			"from a caller, and whose tenant column is bound from the context after the tenant-mismatch " +
-			"check and the erasure fence have run (ColumnTable.Insert)",
+		Why: "the column-array insert and upsert (one statement on Postgres, its VALUES rendering on sqlite). " +
+			"The text is built from the model's own gorm schema plus, for an upsert, caller-written SQL " +
+			"FRAGMENTS (each SET expression and the WHERE guard): those are constants given once, when the " +
+			"table is built, and are not computed. Three things make that so. rdb.Fragment is a named string " +
+			"type, so only a constant converts to it implicitly; NewColumnUpsert accepts, at construction, " +
+			"only an ALLOWLISTED grammar (t. and excluded. column references, numeric and plain string " +
+			"literals, AND/OR/NOT/IS/NULL/CASE, COALESCE, NULLIF, operators, parentheses; commas only in " +
+			"function arguments), so a fragment cannot name another table or call another function; and " +
+			"this scan's " +
+			"column-upsert rule (columnupsert.go) fails any construction site whose fragments are not string " +
+			"literals or package constants, so a reviewer reads every one in place. The caller's guard is " +
+			"rendered in parentheses ANDed with the statement's own tenant term, SET may not name the tenant " +
+			"column, id or created_at, the conflict target must name the tenant column, and the tenant itself " +
+			"is bound from the context after the tenant-mismatch check and the erasure fence have run " +
+			"(ColumnTable.write)",
 	},
 
 	// --- erasure ---
