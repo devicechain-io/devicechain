@@ -180,6 +180,9 @@ func (s *siteScanner) scanFile(fset *token.FileSet, file *ast.File, rel string, 
 			if !ok || len(call.Args) == 0 || inner[call] {
 				return true
 			}
+			if s.kind == kindRawSQL && isColumnUpsertCall(call) {
+				out = append(out, s.fragmentFindings(fset, call, p)...)
+			}
 			// A call to a local closure that forwards a parameter to Exec/Raw IS the site:
 			// the statement's text is the argument at the call, not the closure's parameter.
 			if id, ok := call.Fun.(*ast.Ident); ok && s.kind == kindRawSQL {

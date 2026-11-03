@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -46,9 +47,12 @@ import (
 //     reach that column. The row's own field is still checked and stamped, so a caller that
 //     filed a row under the wrong tenant hears about it, and the rows it gets back read as
 //     a Create's would.
-//   - dc:tenant_upsert_check: only acts on DO UPDATE, which this does not offer. The
+//   - dc:tenant_upsert_check: only acts on DO UPDATE, which Insert does not offer. The
 //     conflict target must still name the tenant column (refused at build otherwise), the
-//     rule tenant_upsert.go applies to an upsert's target.
+//     rule tenant_upsert.go applies to an upsert's target. Upsert (NewColumnUpsert, in
+//     insert_columns_upsert.go) does offer it, and does itself what that callback does:
+//     the update arm is confined to the statement's own tenant, SET may not assign the
+//     tenant column, and the caller's guard is parenthesised.
 //   - dc:tenant_fence_create (tenant_fence.go): the same readFence, with the same
 //     per-transaction memo, read exactly when the handle has that callback registered — that
 //     is, exactly when a Create on the same handle would read it.
@@ -65,7 +69,8 @@ import (
 //
 // The one raw statement it issues is reviewed in the raw-SQL guard's allow-list
 // (backend/tools/rdbguard), like every other raw statement over a tenant table; its text
-// is built from the model's own schema and never from a caller.
+// is built from the model's own schema and, for an upsert, from SQL fragments that are
+// constants given once when the table is built (see Fragment), never from a caller's data.
 //
 // Only Postgres and SQLite are rendered. SQLite has no unnest, so there the same checks
 // guard a multi-row VALUES statement: that rendering exists so the unit tests that drive
@@ -76,9 +81,13 @@ type ColumnTable[R any] struct {
 	conflict []string
 	columns  []Column[R]
 
+	// upsert is nil for the insert (ON CONFLICT DO NOTHING) and set for the upsert mode
+	// built by NewColumnUpsert.
+	upsert *Upsert
+
 	// plans caches the validated statement per dialect and resolved table name: the name
 	// depends on the handle's naming strategy (its schema prefix), not on the model alone.
-	plans sync.Map // dialect + "/" + table -> *columnPlan
+	plans sync.Map // dialect + "/" + table -> *columnPlan[R]
 }
 
 // Column is one column of a ColumnTable: its name, the Postgres element type its array
@@ -92,6 +101,13 @@ type Column[R any] struct {
 	array func(rows []*R) (any, error)
 	// value reads one row's value, for the VALUES rendering.
 	value func(row *R) any
+	// zero reports whether one row's value is the Go zero value; set only by the
+	// constructors an upsert needs it for (TimeColumn: a caller-stamped time must be set).
+	zero func(row *R) bool
+	// withDefault returns this column with a zero value replaced by def, the value gorm
+	// parsed from the field's literal `default:` tag; nil for a column type that cannot
+	// substitute. Upsert mode only.
+	withDefault func(def any) (Column[R], error)
 }
 
 func typedColumn[R, V any](name, pgType string, get func(*R) V) Column[R] {
@@ -109,9 +125,138 @@ func typedColumn[R, V any](name, pgType string, get func(*R) V) Column[R] {
 	}
 }
 
+// defaulting makes the withDefault of a typed column: the column rebuilt so a zero value
+// reads as def, which is what a gorm Create does for a field with a literal default.
+func defaulting[R, V any](name, pgType string, get func(*R) V, isZero func(V) bool,
+	conv func(any) (V, bool)) func(any) (Column[R], error) {
+	return func(def any) (Column[R], error) {
+		v, ok := conv(def)
+		if !ok {
+			return Column[R]{}, fmt.Errorf("column %q: its default %v (%T) is not a value this column type holds",
+				name, def, def)
+		}
+		return typedColumn(name, pgType, func(r *R) V {
+			if x := get(r); !isZero(x) {
+				return x
+			}
+			return v
+		}), nil
+	}
+}
+
 // TextColumn binds a string column (text or varchar) as text[].
 func TextColumn[R any](name string, get func(*R) string) Column[R] {
-	return typedColumn(name, "text", get)
+	c := typedColumn(name, "text", get)
+	c.withDefault = defaulting(name, "text", get, func(v string) bool { return v == "" },
+		func(d any) (string, bool) { s, ok := d.(string); return s, ok })
+	return c
+}
+
+// BoolColumn binds a boolean column as bool[].
+func BoolColumn[R any](name string, get func(*R) bool) Column[R] {
+	c := typedColumn(name, "bool", get)
+	c.withDefault = defaulting(name, "bool", get, func(v bool) bool { return !v },
+		func(d any) (bool, bool) { b, ok := d.(bool); return b, ok })
+	return c
+}
+
+// IntColumn binds an int column as int8[] (the server narrows it to the column's width
+// on assignment, as it does a single bound parameter).
+func IntColumn[R any](name string, get func(*R) int) Column[R] {
+	wide := func(r *R) int64 { return int64(get(r)) }
+	c := typedColumn(name, "int8", wide)
+	c.withDefault = defaulting(name, "int8", wide, func(v int64) bool { return v == 0 }, int64Default)
+	return c
+}
+
+// int64Default reads a gorm-parsed integer default.
+func int64Default(d any) (int64, bool) {
+	switch v := d.(type) {
+	case int64:
+		return v, true
+	case uint64:
+		if v <= math.MaxInt64 {
+			return int64(v), true
+		}
+	}
+	return 0, false
+}
+
+// Uint64Column binds an unsigned 64-bit integer stored in a bigint column as int8[]. A
+// value above the bigint range is REFUSED (ErrColumnValue), never converted: a plain int64
+// conversion would wrap it into a negative number and store that, where binding the uint64
+// as a single parameter fails in the driver (see IsEncodeRefusal).
+func Uint64Column[R any](name string, get func(*R) uint64) Column[R] {
+	conv := func(v uint64) (int64, error) {
+		if v > math.MaxInt64 {
+			return 0, fmt.Errorf("%w: column %q: %d is above the bigint range", ErrColumnValue, name, v)
+		}
+		return int64(v), nil
+	}
+	return Column[R]{
+		name:   name,
+		pgType: "int8",
+		array: func(rows []*R) (any, error) {
+			out := make([]int64, len(rows))
+			for i, r := range rows {
+				c, err := conv(get(r))
+				if err != nil {
+					return nil, err
+				}
+				out[i] = c
+			}
+			return out, nil
+		},
+		// Only reached after array has accepted every row (see Insert).
+		value: func(r *R) any { c, _ := conv(get(r)); return c },
+		withDefault: func(def any) (Column[R], error) {
+			d, ok := int64Default(def)
+			if !ok {
+				return Column[R]{}, fmt.Errorf("column %q: its default %v (%T) is not a bigint", name, def, def)
+			}
+			return Uint64Column(name, func(r *R) uint64 {
+				if v := get(r); v != 0 {
+					return v
+				}
+				return uint64(d)
+			}), nil
+		},
+	}
+}
+
+// anchorsPgType marks the Anchors column: the array is text[] of each row's array LITERAL
+// and the statement casts every element, so the column is text[] in the table.
+const anchorsPgType = "text[]"
+
+// AnchorsColumn binds a text[] anchors column (declared as Anchors).
+//
+// 🔴 EACH ROW TRAVELS AS THE STRING Anchors.Value() RENDERS: a PostgreSQL array literal
+// with every element quoted, the exact text a gorm Create binds. The statement then reads
+// `unnest($n::text[])::text[]`, so the server parses each literal the way it parses the
+// single bound parameter. That is what keeps a nil list NULL (a nil element in the bound
+// text[]), an empty list '{}', and an element holding a quote, backslash, comma or brace
+// intact: none of them is ever spliced into SQL, and none is split by the array syntax of
+// the outer bind (the driver encodes each string as one element of its own).
+func AnchorsColumn[R any](name string, get func(*R) Anchors) Column[R] {
+	return Column[R]{
+		name:   name,
+		pgType: anchorsPgType,
+		array: func(rows []*R) (any, error) {
+			out := make([]*string, len(rows))
+			for i, r := range rows {
+				v, err := get(r).Value()
+				if err != nil {
+					return nil, fmt.Errorf("%w: column %q: %v", ErrColumnValue, name, err)
+				}
+				if v != nil {
+					s := v.(string)
+					out[i] = &s
+				}
+			}
+			return out, nil
+		},
+		value: func(r *R) any { return get(r) },
+	}
 }
 
 // NullTextColumn binds a nullable string column as text[]; a nil pointer is NULL.
@@ -126,7 +271,9 @@ func BytesColumn[R any](name string, get func(*R) []byte) Column[R] {
 
 // Int64Column binds an integer column as int8[].
 func Int64Column[R any](name string, get func(*R) int64) Column[R] {
-	return typedColumn(name, "int8", get)
+	c := typedColumn(name, "int8", get)
+	c.withDefault = defaulting(name, "int8", get, func(v int64) bool { return v == 0 }, int64Default)
+	return c
 }
 
 // NullInt64Column binds a nullable integer column as int8[]; a nil pointer is NULL.
@@ -171,7 +318,9 @@ func NullUintColumn[R any](name string, get func(*R) *uint) Column[R] {
 
 // TimeColumn binds a timestamptz column as timestamptz[].
 func TimeColumn[R any](name string, get func(*R) time.Time) Column[R] {
-	return typedColumn(name, "timestamptz", get)
+	c := typedColumn(name, "timestamptz", get)
+	c.zero = func(r *R) bool { return get(r).IsZero() }
+	return c
 }
 
 // NumericColumn binds a nullable numeric/decimal column.
@@ -238,7 +387,7 @@ func NewColumnTable[R any](tenant func(*R) *string, conflict []string, columns .
 }
 
 // columnPlan is a ColumnTable validated against one resolved table.
-type columnPlan struct {
+type columnPlan[R any] struct {
 	// unnest is the whole Postgres statement.
 	unnest string
 	// head is "INSERT INTO t (cols) VALUES " and tail the ON CONFLICT clause, for the
@@ -246,6 +395,11 @@ type columnPlan struct {
 	head, tail string
 	// group is one row's placeholder group, "(?,…,?)".
 	group string
+	// cols are the columns as written: the table's, with a zero value replaced by its
+	// field's literal default where the upsert's model has one.
+	cols []Column[R]
+	// mustSet are the columns whose zero value is refused (caller-stamped times).
+	mustSet []Column[R]
 }
 
 // sqliteMaxVariables is SQLite's default bound on the parameters one statement binds
@@ -262,6 +416,30 @@ const sqliteMaxVariables = 32766
 // and then set to it; on a refusal nothing is stamped and nothing is written. An empty
 // rows writes nothing and reads nothing.
 func (t *ColumnTable[R]) Insert(db *gorm.DB, rows []*R) (int64, error) {
+	if t.upsert != nil {
+		return 0, fmt.Errorf("%w: this table was built by NewColumnUpsert; call Upsert", ErrColumnarModel)
+	}
+	return t.write(db, rows)
+}
+
+// Upsert writes rows ON CONFLICT … DO UPDATE under the tenant in db's context, the way
+// Insert writes them, and returns the rows written: those inserted plus those updated. A
+// conflicting row the update arm's WHERE excludes (the caller's guard, or another
+// tenant's row) is neither updated nor counted. Everything Insert checks is checked here,
+// and the terms of the upsert (NewColumnUpsert) on top. Two rows of one batch that name the
+// same conflict key fail on Postgres (a row cannot be affected twice by one statement), as
+// they do in a gorm upsert; the caller deduplicates.
+//
+// The rows' generated ids are not read back (there is no RETURNING), and a substituted
+// default is not written back to the row; only the tenant is stamped on it.
+func (t *ColumnTable[R]) Upsert(db *gorm.DB, rows []*R) (int64, error) {
+	if t.upsert == nil {
+		return 0, fmt.Errorf("%w: this table was built by NewColumnTable; call Insert", ErrColumnarModel)
+	}
+	return t.write(db, rows)
+}
+
+func (t *ColumnTable[R]) write(db *gorm.DB, rows []*R) (int64, error) {
 	if db.Error != nil {
 		return 0, db.Error
 	}
@@ -294,7 +472,7 @@ func (t *ColumnTable[R]) Insert(db *gorm.DB, rows []*R) (int64, error) {
 				ErrTenantMismatch, named, tenant)
 		}
 	}
-	arrays, err := t.arrays(rows)
+	arrays, err := t.arrays(plan, rows)
 	if err != nil {
 		return 0, err
 	}
@@ -330,9 +508,17 @@ func (t *ColumnTable[R]) Insert(db *gorm.DB, rows []*R) (int64, error) {
 // per row. unnest pads a shorter array with NULLs and the statement would succeed, so a
 // short array is refused here rather than stored as missing values. It runs for every
 // dialect, so a value a column refuses is refused on sqlite too.
-func (t *ColumnTable[R]) arrays(rows []*R) ([]any, error) {
-	out := make([]any, len(t.columns))
-	for i, c := range t.columns {
+func (t *ColumnTable[R]) arrays(plan *columnPlan[R], rows []*R) ([]any, error) {
+	for _, z := range plan.mustSet {
+		for _, r := range rows {
+			if z.zero(r) {
+				return nil, fmt.Errorf("%w: column %q is stamped by the caller in an upsert and a row leaves it "+
+					"zero", ErrColumnValue, z.name)
+			}
+		}
+	}
+	out := make([]any, len(plan.cols))
+	for i, c := range plan.cols {
 		a, err := c.array(rows)
 		if err != nil {
 			return nil, err
@@ -346,28 +532,28 @@ func (t *ColumnTable[R]) arrays(rows []*R) ([]any, error) {
 }
 
 // exec issues the statement(s) for rows on tx; arrays are the checked column arrays.
-func (t *ColumnTable[R]) exec(tx *gorm.DB, plan *columnPlan, tenant string, rows []*R, arrays []any) (int64, error) {
+func (t *ColumnTable[R]) exec(tx *gorm.DB, plan *columnPlan[R], tenant string, rows []*R, arrays []any) (int64, error) {
 	if plan.unnest != "" {
-		args := make([]any, 0, len(t.columns)+1)
+		args := make([]any, 0, len(plan.cols)+1)
 		args = append(args, tenant)
 		args = append(args, arrays...)
 		res := tx.Exec(plan.unnest, args...)
 		return res.RowsAffected, res.Error
 	}
-	per := sqliteMaxVariables / (len(t.columns) + 1)
+	per := sqliteMaxVariables / (len(plan.cols) + 1)
 	var affected int64
 	for start := 0; start < len(rows); start += per {
 		chunk := rows[start:min(start+per, len(rows))]
 		var b strings.Builder
 		b.WriteString(plan.head)
-		args := make([]any, 0, len(chunk)*(len(t.columns)+1))
+		args := make([]any, 0, len(chunk)*(len(plan.cols)+1))
 		for i, r := range chunk {
 			if i > 0 {
 				b.WriteByte(',')
 			}
 			b.WriteString(plan.group)
 			args = append(args, tenant)
-			for _, c := range t.columns {
+			for _, c := range plan.cols {
 				args = append(args, c.value(r))
 			}
 		}
@@ -383,7 +569,7 @@ func (t *ColumnTable[R]) exec(tx *gorm.DB, plan *columnPlan, tenant string, rows
 
 // plan validates the table against db's schema for its model, once per resolved table,
 // and returns the statement to issue.
-func (t *ColumnTable[R]) plan(db *gorm.DB) (*columnPlan, error) {
+func (t *ColumnTable[R]) plan(db *gorm.DB) (*columnPlan[R], error) {
 	stmt := &gorm.Statement{DB: db}
 	if err := stmt.Parse(new(R)); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrColumnarModel, err)
@@ -391,7 +577,7 @@ func (t *ColumnTable[R]) plan(db *gorm.DB) (*columnPlan, error) {
 	// The statement is the dialect's as much as the table's: its quoting and its shape.
 	key := db.Dialector.Name() + "/" + stmt.Schema.Table
 	if p, ok := t.plans.Load(key); ok {
-		return p.(*columnPlan), nil
+		return p.(*columnPlan[R]), nil
 	}
 	p, err := t.build(db, stmt)
 	if err != nil {
@@ -401,8 +587,9 @@ func (t *ColumnTable[R]) plan(db *gorm.DB) (*columnPlan, error) {
 	return p, nil
 }
 
-func (t *ColumnTable[R]) build(db *gorm.DB, stmt *gorm.Statement) (*columnPlan, error) {
+func (t *ColumnTable[R]) build(db *gorm.DB, stmt *gorm.Statement) (*columnPlan[R], error) {
 	s := stmt.Schema
+	up := t.upsert
 	refuse := func(format string, args ...any) error {
 		return fmt.Errorf("%w (%s): %s", ErrColumnarModel, s.Name, fmt.Sprintf(format, args...))
 	}
@@ -438,12 +625,13 @@ func (t *ColumnTable[R]) build(db *gorm.DB, stmt *gorm.Statement) (*columnPlan, 
 		return nil, refuse("it has associations, which a Create also writes")
 	}
 
-	named := map[string]bool{}
-	for _, c := range t.columns {
-		if named[c.name] {
+	cols := slices.Clone(t.columns)
+	index := map[string]int{}
+	for i, c := range cols {
+		if _, dup := index[c.name]; dup {
 			return nil, refuse("column %q is listed twice", c.name)
 		}
-		named[c.name] = true
+		index[c.name] = i
 		f := s.LookUpField(c.name)
 		if f == nil || f.DBName != c.name {
 			return nil, refuse("column %q is not a column of the model", c.name)
@@ -454,22 +642,60 @@ func (t *ColumnTable[R]) build(db *gorm.DB, stmt *gorm.Statement) (*columnPlan, 
 		if !f.Creatable {
 			return nil, refuse("column %q is not written by a Create", c.name)
 		}
+		if up != nil && (omittedByUpsert(f) || isSoftDelete(f)) {
+			return nil, refuse("column %q is never written by an upsert: the database generates the id, "+
+				"and deleted_at is always NULL", c.name)
+		}
 	}
+	var mustSet []Column[R]
 	for _, name := range s.DBNames {
 		f := s.FieldsByDBName[name]
 		if f == nil || !f.Creatable {
 			continue
 		}
+		if up != nil && (omittedByUpsert(f) || isSoftDelete(f)) {
+			continue // not a column of the statement: the sequence / NULL applies
+		}
+		i, covered := index[name]
 		if f.AutoCreateTime != 0 || f.AutoUpdateTime != 0 {
-			return nil, refuse("column %q is stamped by gorm on create", name)
+			if up == nil {
+				return nil, refuse("column %q is stamped by gorm on create", name)
+			}
+			// gorm would stamp a zero time with now(); this write does not read a clock, so
+			// the caller stamps it and a zero is refused (arrays).
+			if !covered || cols[i].zero == nil {
+				return nil, refuse("column %q is stamped by gorm on create; an upsert needs it as a "+
+					"TimeColumn the caller stamps", name)
+			}
+			mustSet = append(mustSet, cols[i])
+			continue
 		}
 		if f.HasDefaultValue {
-			return nil, refuse("column %q has a default, which a Create applies to a zero value", name)
+			if up == nil {
+				return nil, refuse("column %q has a default, which a Create applies to a zero value", name)
+			}
+			if f.DefaultValueInterface == nil {
+				return nil, refuse("column %q has a default that is a database expression (%q), which an "+
+					"upsert cannot apply the way a Create does", name, f.DefaultValue)
+			}
+			if !covered {
+				return nil, refuse("column %q is not covered, so the write would leave it to the database "+
+					"where a Create writes the field's value", name)
+			}
+			if cols[i].withDefault == nil {
+				return nil, refuse("column %q has a default, and its column type cannot apply it to a zero "+
+					"value as a Create does", name)
+			}
+			sub, err := cols[i].withDefault(f.DefaultValueInterface)
+			if err != nil {
+				return nil, refuse("%v", err)
+			}
+			cols[i] = sub
 		}
 		if bindsExpression(f.FieldType) {
 			return nil, refuse("column %q binds an expression", name)
 		}
-		if f != tenantField && !named[name] {
+		if f != tenantField && !covered {
 			return nil, refuse("column %q is not covered, so the write would leave it to the database "+
 				"where a Create writes the field's value", name)
 		}
@@ -491,10 +717,10 @@ func (t *ColumnTable[R]) build(db *gorm.DB, stmt *gorm.Statement) (*columnPlan, 
 	}
 
 	q := func(name string) string { return stmt.Quote(name) }
-	cols := make([]string, 0, len(t.columns)+1)
-	cols = append(cols, q(tenantField.DBName))
-	for _, c := range t.columns {
-		cols = append(cols, q(c.name))
+	names := make([]string, 0, len(cols)+1)
+	names = append(names, q(tenantField.DBName))
+	for _, c := range cols {
+		names = append(names, q(c.name))
 	}
 	target := make([]string, len(t.conflict))
 	for i, name := range t.conflict {
@@ -502,11 +728,34 @@ func (t *ColumnTable[R]) build(db *gorm.DB, stmt *gorm.Statement) (*columnPlan, 
 	}
 	// Schema.Table, not Statement.Table: the latter is the bare name, with the schema prefix
 	// split off into TableExpr, and the statement must name the table exactly as a Create does.
-	insert := "INSERT INTO " + q(stmt.Schema.Table) + " (" + strings.Join(cols, ",") + ")"
+	insert := "INSERT INTO " + q(stmt.Schema.Table)
+	if up != nil {
+		insert += " AS t"
+	}
+	insert += " (" + strings.Join(names, ",") + ")"
 	tail := " ON CONFLICT (" + strings.Join(target, ",") + ") DO NOTHING"
+	dialect := db.Dialector.Name()
+	if up != nil {
+		sets, err := upsertAssignments(up, s, tenantField, index, q)
+		if err != nil {
+			return nil, refuse("%v", err)
+		}
+		// The caller's guard stands in parentheses, so an OR in it cannot take the tenant
+		// term as one of its operands; the tenant term is the statement's own.
+		tenantTerm := "t." + q(tenantField.DBName) + " = $1::text"
+		if dialect == "sqlite" {
+			tenantTerm = "t." + q(tenantField.DBName) + " = excluded." + q(tenantField.DBName)
+		}
+		guard := tenantTerm
+		if up.Where != "" {
+			guard = "(" + string(up.Where) + ") AND " + tenantTerm
+		}
+		tail = " ON CONFLICT (" + strings.Join(target, ",") + ") DO UPDATE SET " + strings.Join(sets, ", ") +
+			" WHERE " + guard
+	}
 
-	p := &columnPlan{}
-	switch name := db.Dialector.Name(); name {
+	p := &columnPlan[R]{cols: cols, mustSet: mustSet}
+	switch dialect {
 	case "postgres":
 		// One unnest per column in the SELECT LIST, not unnest(a, b, …) in FROM. The FROM
 		// form is ROWS FROM (unnest(a), unnest(b), …), a function scan that materialises
@@ -515,22 +764,27 @@ func (t *ColumnTable[R]) build(db *gorm.DB, stmt *gorm.Statement) (*columnPlan, 
 		// materialised. On the event store's tables that is the difference between costing
 		// the server a little more per batch than the VALUES list it replaces and a little
 		// less. Every array has one element per row, so lockstep pairs them exactly.
-		unnests := make([]string, len(t.columns))
-		for i, c := range t.columns {
-			if c.pgType == "numeric" {
+		unnests := make([]string, len(cols))
+		for i, c := range cols {
+			param := "$" + strconv.Itoa(i+2)
+			switch c.pgType {
+			case "numeric":
 				// Text on the wire, numeric to the server: see NumericColumn.
-				unnests[i] = "unnest($" + strconv.Itoa(i+2) + "::text[]::numeric[])"
-			} else {
-				unnests[i] = "unnest($" + strconv.Itoa(i+2) + "::" + c.pgType + "[])"
+				unnests[i] = "unnest(" + param + "::text[]::numeric[])"
+			case anchorsPgType:
+				// Array literals on the wire, text[] to the server: see AnchorsColumn.
+				unnests[i] = "unnest(" + param + "::text[])::text[]"
+			default:
+				unnests[i] = "unnest(" + param + "::" + c.pgType + "[])"
 			}
 		}
 		p.unnest = insert + " SELECT $1::text, " + strings.Join(unnests, ", ") + tail
 	case "sqlite":
 		p.head = insert + " VALUES "
 		p.tail = tail
-		p.group = "(" + strings.TrimSuffix(strings.Repeat("?,", len(cols)), ",") + ")"
+		p.group = "(" + strings.TrimSuffix(strings.Repeat("?,", len(names)), ",") + ")"
 	default:
-		return nil, refuse("dialect %q is not rendered; only postgres and sqlite are", name)
+		return nil, refuse("dialect %q is not rendered; only postgres and sqlite are", dialect)
 	}
 	// gorm's Exec rewrites '?' (and '@name') in the SQL it is handed. The Postgres statement
 	// must contain neither, or its arrays would be bound somewhere other than where its $n
