@@ -248,23 +248,57 @@ func TestTwoSweepsAndBatchesDoNotDeadlock(t *testing.T) {
 }
 
 // The sweep flips by ROW, not by device token: two tenants hold the same token, one stale
-// and one fresh, and only the stale one flips.
+// and one fresh, and only the stale one flips. Run in both creation orders (the stale row
+// first or last in the heap) and with the planner's nested loop switched off, so neither the
+// plan nor the scan order can hide a sweep that matches by token. (With a nested loop the
+// locking subquery used to be re-run per outer row, and a row the first run had already
+// updated was skipped by the next as self-modified: the pass then flipped too few rows.)
 func TestTheSweepFlipsByRowNotByToken(t *testing.T) {
-	api := newPostgresProjectionApi(t, "byrow")
-	seedStale(t, api, "tenant-a", "same")
-	fresh := &DeviceState{TenantId: "tenant-b", DeviceToken: "same", Active: true, PresenceSource: PresenceSourceInferred,
-		LastActivityTime: sql.NullTime{Time: sweepAt(), Valid: true}}
-	if err := api.RDB.DB(core.WithTenant(context.Background(), "tenant-b")).Create(fresh).Error; err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-	n, err := api.SweepInactive(core.WithSystemContext(context.Background()), sweepAt())
-	if err != nil || n != 1 {
-		t.Fatalf("sweep = %d, %v; want 1, nil", n, err)
-	}
-	if activeOf(t, api, "tenant-a", "same") {
-		t.Error("the stale device was not flipped")
-	}
-	if !activeOf(t, api, "tenant-b", "same") {
-		t.Error("the fresh device of another tenant with the same token was flipped")
+	for _, tc := range []struct {
+		name         string
+		staleFirst   bool
+		noNestedLoop bool
+	}{
+		{"stale row first", true, false},
+		{"fresh row first", false, false},
+		{"stale row first, no nested loop", true, true},
+		{"fresh row first, no nested loop", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			api := newPostgresProjectionApi(t, "byrow")
+			seedFresh := func() {
+				fresh := &DeviceState{TenantId: "tenant-b", DeviceToken: "same", Active: true, PresenceSource: PresenceSourceInferred,
+					LastActivityTime: sql.NullTime{Time: sweepAt(), Valid: true}}
+				if err := api.RDB.DB(core.WithTenant(context.Background(), "tenant-b")).Create(fresh).Error; err != nil {
+					t.Fatalf("seed: %v", err)
+				}
+			}
+			if tc.staleFirst {
+				seedStale(t, api, "tenant-a", "same")
+				seedFresh()
+			} else {
+				seedFresh()
+				seedStale(t, api, "tenant-a", "same")
+			}
+			ctx := core.WithSystemContext(context.Background())
+			if tc.noNestedLoop {
+				// One connection for the whole pool, so the setting applies to the sweep.
+				sqldb, _ := api.RDB.Database.DB()
+				sqldb.SetMaxOpenConns(1)
+				if _, err := sqldb.Exec(`SET enable_nestloop = off`); err != nil {
+					t.Fatalf("set: %v", err)
+				}
+			}
+			n, err := api.SweepInactive(ctx, sweepAt())
+			if err != nil || n != 1 {
+				t.Fatalf("sweep = %d, %v; want 1, nil", n, err)
+			}
+			if activeOf(t, api, "tenant-a", "same") {
+				t.Error("the stale device was not flipped")
+			}
+			if !activeOf(t, api, "tenant-b", "same") {
+				t.Error("the fresh device of another tenant with the same token was flipped")
+			}
+		})
 	}
 }

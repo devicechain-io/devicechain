@@ -609,13 +609,13 @@ func (api *Api) DeviceStates(ctx context.Context, criteria DeviceStateSearchCrit
 // SKIP LOCKED in a subquery, the UPDATE restricted to them):
 //
 //	single UPDATE                       119-138 ms   76-82k buffers   Seq Scan
-//	subquery, SKIP LOCKED               216-236 ms   ~95k buffers     Seq Scan (LockRows) hashed, Hash Semi Join on id
+//	ARRAY(subquery), SKIP LOCKED        134-205 ms   97-104k buffers  InitPlan LockRows (Seq Scan) once + Index Scan on the primary key
 //
-// About twice the time and a sixth more buffers: the locking read is a sequential scan, and
-// the UPDATE then scans the table once more against the hashed id set (PostgreSQL does not
-// pull up a subquery that carries row marks). Neither scan can be an index scan, for the
-// reason above. It is paid once a minute; what it buys is that the sweep cannot be a party to
-// a deadlock (see below).
+// The locking read is one sequential scan, run once as an InitPlan (the same plan on a
+// two-row table, where a nested loop used to re-run it per outer row), and the UPDATE then
+// fetches the locked rows by primary key. The scan itself cannot be an index scan, for the
+// reason above. It is paid once a minute, for up to about one and a half times the cost of the single UPDATE; what it buys
+// is that the sweep cannot be a party to a deadlock (see below).
 //
 // The reason is structural, not a statistics accident: the time predicate compares
 // last_activity_time against a PER-ROW deadline (inactivity_timeout, or the default when it
@@ -667,8 +667,20 @@ func (api *Api) SweepInactive(ctx context.Context, now time.Time) (int64, error)
 		Where("active = ? AND presence_source <> ?", true, PresenceSourceAsserted).
 		Where(frag, args...).
 		Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"})
+	//
+	// 🔴 THE PLAN MUST NOT MATTER. `id IN (subquery)` lets the planner pick a nested loop that
+	// runs the locking subquery once per outer row: O(rows x candidates), and, worse, a row it
+	// has already updated is then skipped by the next run as self-modified, so the pass flips
+	// fewer rows than it should. On Postgres the candidates are therefore collected into an
+	// array by an uncorrelated ARRAY(subquery), which is an InitPlan: evaluated exactly once
+	// whatever the statistics say. SQLite drops the locking clause and has one plan, so it
+	// keeps IN.
+	idMatch := "id IN (?)"
+	if db.Dialector.Name() == "postgres" {
+		idMatch = "id = ANY(ARRAY(?))"
+	}
 	res := db.Model(&DeviceState{}).
-		Where("id IN (?)", candidates).
+		Where(idMatch, candidates).
 		Updates(map[string]any{
 			"active":                false,
 			"last_disconnect_time":  sql.NullTime{Time: now, Valid: true},

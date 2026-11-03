@@ -881,10 +881,12 @@ esa espera una sola vez.
 | `devicechain_eventmanagement_persist_batch_rows` | Filas por transacción confirmada. |
 | `devicechain_eventmanagement_persist_commit_duration_seconds` | Tiempo real de una transacción confirmada, con intervalos de 1 ms a 2,5 s. Divida la tasa de `_sum` entre la tasa de `persist_rows_total` para obtener la latencia por fila almacenada. A diferencia de `persist_duration_seconds`, que es por evento, crece con las filas de un lote y usa intervalos gruesos, esta es la cifra que conviene comparar entre dos ejecuciones. |
 | `devicechain_eventmanagement_persist_inflight` | Eventos que tienen los escritores, incluidos los que esperan a que su lote se confirme. |
+| `devicechain_eventmanagement_persist_collect_full_total` | Lotes que alcanzaron `persistence.maxBatch` sin agotar la espera. Una proporción cercana al 100% de las observaciones de `persist_batch_size` indica cola acumulada. |
+| `devicechain_eventmanagement_persist_handoff_depth` | Eventos esperando en el canal de entrega cuando un escritor terminó de recibir su lote. Cerca del tamaño del canal con lotes completos indica que el límite son los escritores o el almacén de eventos; cerca de 0 con pocos lotes completos es un goteo, lo cual es sano. |
 | `devicechain_eventmanagement_persist_store_held_events` | Eventos retenidos sin confirmar porque el almacén de eventos no puede aceptar escrituras. 0 cuando todo está sano; vea [Cuando el almacén de eventos no puede aceptar escrituras](#event-store-down). |
 
 `persist_duration_seconds` mide cada evento desde que un escritor lo toma hasta que su lote se
-confirma, incluido el tiempo, hasta `persistence.lingerMillis`, que espera a que el lote se llene,
+confirma, incluido el tiempo, hasta `persistence.lingerMillis`, que espera a que el lote se llene y la espera a que otro escritor termine de recibir su lote,
 así que con poca carga su mediana queda unos 10 milisegundos por encima que con la espera
 desactivada.
 
@@ -1063,9 +1065,12 @@ cada uno de sus eventos se vuelve a fusionar por separado.
 | `devicechain_devicestate_state_write_conflict_retries_total` | Escrituras de un solo evento que se repitieron en el momento tras abortarlas PostgreSQL como víctima de un interbloqueo o por un fallo de serialización. Un ritmo que sigue subiendo indica que el barrido de inactividad y los escritores colisionan a menudo; un evento cuyos reintentos se pierden todos queda para reentrega y se cuenta como `retry` en los resultados de mensajes. |
 | `devicechain_devicestate_dropped_measurement_evicted_total` | Registros de mediciones descartadas expulsados porque un dispositivo superó su límite de 32 pares (clave, motivo) distintos; sale primero el par visto hace más tiempo. Un dispositivo que sigue enviando claves de texto nuevas hace subir este contador, y la lista de claves descartadas del dispositivo muestra entonces solo las más recientes. |
 | `devicechain_devicestate_state_inflight` | Eventos que tienen los escritores, incluidos los que esperan a que su lote se confirme. |
+| `devicechain_devicestate_state_collect_full_total` | Lotes que alcanzaron `projection.maxBatch` sin agotar la espera. Una proporción cercana al 100% de las observaciones de `state_batch_size` indica cola acumulada. |
+| `devicechain_devicestate_state_handoff_depth` | Eventos esperando en el canal de entrega cuando un escritor terminó de recibir su lote. Cerca del tamaño del canal con lotes completos indica que el límite son los escritores o la base de datos; cerca de 0 con pocos lotes completos es un goteo, lo cual es sano. |
+| `devicechain_devicestate_state_batch_conflict_retries_total` | Lotes que perdieron un conflicto de transacción (víctima de un interbloqueo o fallo de serialización) y se ejecutaron de nuevo una vez, sin cambios. Un lote que pierde dos veces cuenta también en `state_batch_fallbacks_total`. Normalmente 0. |
 
 `state_duration_seconds` mide cada evento desde que un escritor lo toma hasta que su lote se
-confirma.
+confirma, incluido el tiempo, hasta `projection.lingerMillis`, que espera a que el lote se llene y la espera a que otro escritor termine de recibir su lote.
 
 | Ajuste (configuración de `device-state`) | Valor por defecto | Qué hace |
 | --- | --- | --- |

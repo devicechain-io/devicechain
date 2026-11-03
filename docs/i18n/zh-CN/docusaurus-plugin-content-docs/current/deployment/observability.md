@@ -446,9 +446,11 @@ kube-state-metrics 本身因节点失效等原因移动期间的重启，只要�
 | `devicechain_eventmanagement_persist_batch_rows` | 每个已提交事务的行数。 |
 | `devicechain_eventmanagement_persist_commit_duration_seconds` | 单个已提交事务的耗时，分桶范围为 1 毫秒到 2.5 秒。将 `_sum` 的速率除以 `persist_rows_total` 的速率即得每行存储的延迟。`persist_duration_seconds` 按事件计、随批次行数增长且默认分桶较粗，比较两次运行时应使用本指标。 |
 | `devicechain_eventmanagement_persist_inflight` | 写入器持有事件，包括等待批提交。 |
+| `devicechain_eventmanagement_persist_collect_full_total` | 未等满等待时间就达到 `persistence.maxBatch` 的批次数。占 `persist_batch_size` 观测的比例接近 100% 表示有积压。 |
+| `devicechain_eventmanagement_persist_handoff_depth` | 写入器接收完一批时，交接通道中仍在等待的事件数。接近通道大小且批次已满，说明限制在写入器或事件库；接近 0 且很少满批是涓流，属正常。 |
 | `devicechain_eventmanagement_persist_store_held_events` | 因事件库无法写入而被保留、尚未确认的事件数。正常时为 0；见[事件库无法写入时](#event-store-down)。 |
 
-`persist_duration_seconds` 从写入器取得事件计到批提交，包括最多 `persistence.lingerMillis` 的填批等待，因此轻载中位数比关闭等待约高十毫秒。
+`persist_duration_seconds` 从写入器取得事件计到批提交，包括最多 `persistence.lingerMillis` 的填批等待以及等待其他写入器接收完它那一批的时间，因此轻载中位数比关闭等待约高十毫秒。
 
 ### 事件库无法写入时 {#event-store-down}
 
@@ -557,8 +559,11 @@ UPDATE "event-management".calculated_backfills
 | `devicechain_devicestate_state_write_conflict_retries_total` | 单事件写入被 PostgreSQL 作为死锁受害者或序列化失败中止后，就地重新执行的次数。持续增长表示不活动扫描与写入方频繁冲突；重试全部失败的事件留待重投递，并在消息结果中计为 `retry`。 |
 | `devicechain_devicestate_dropped_measurement_evicted_total` | 因设备超出 32 个不同（键，原因）组合的上限而被淘汰的丢弃测量记录；最久未出现的组合最先被淘汰。持续发送新文本键的设备会使该计数上升，此时设备的已丢弃键列表只显示最近的那些。 |
 | `devicechain_devicestate_state_inflight` | 写入器持有事件，包括等待批提交。 |
+| `devicechain_devicestate_state_collect_full_total` | 未等满等待时间就达到 `projection.maxBatch` 的批次数。占 `state_batch_size` 观测的比例接近 100% 表示有积压。 |
+| `devicechain_devicestate_state_handoff_depth` | 写入器接收完一批时，交接通道中仍在等待的事件数。接近通道大小且批次已满，说明限制在写入器或数据库；接近 0 且很少满批是涓流，属正常。 |
+| `devicechain_devicestate_state_batch_conflict_retries_total` | 因事务冲突（死锁受害者或序列化失败）而丢失、并原样重新执行一次的批次数。两次都丢失的批次也计入 `state_batch_fallbacks_total`。通常为 0。 |
 
-`state_duration_seconds` 从写入器取得事件计到批提交。
+`state_duration_seconds` 从写入器取得事件计到批提交，包括最多 `projection.lingerMillis` 的填批等待以及等待其他写入器接收完它那一批的时间。
 
 | 设置（`device-state`） | 默认值 | 作用 |
 | --- | --- | --- |

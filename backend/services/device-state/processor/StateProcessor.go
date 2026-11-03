@@ -106,7 +106,8 @@ type StateProcessor struct {
 
 	// projection sizes the writers: how many run, and how many events each merges in one
 	// transaction. Defaulted in the constructor by the configuration's own ApplyDefaults; a
-	// processor assembled by literal has it zero, which the writers read as batches of one.
+	// processor assembled by literal has MaxBatch zero, which the writers read as batches of one,
+	// and a nil linger, which reads as the default (10 ms).
 	projection config.ProjectionConfiguration
 
 	// Shutdown coordination (A5): procCancel stops the read loop; the WaitGroups
@@ -603,10 +604,8 @@ func (sp *StateProcessor) mergeBatch(ctx context.Context, batch []pendingMerge) 
 			sp.metrics.batchConflictRetry()
 			log.Warn().Err(err).Int("events", len(batch)).
 				Msg("A device state batch lost a transaction conflict; running it again")
-			select {
-			case <-ctx.Done():
-			case <-time.After(time.Duration(5+rand.Intn(21)) * time.Millisecond):
-			}
+			// The workers run on context.Background(), so this is a plain sleep.
+			time.Sleep(time.Duration(5+rand.Intn(21)) * time.Millisecond)
 			continue
 		}
 		sp.metrics.fallback()
