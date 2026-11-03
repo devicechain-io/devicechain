@@ -26,8 +26,14 @@ type compactSizing struct {
 	// JetStream per-stream ceilings, in bytes. These are RESERVED UP FRONT at
 	// stream creation, so they are a disk floor rather than a cap on growth —
 	// which is why the PV below is derived from them and not chosen separately.
-	StreamMaxBytes        int64
-	StreamMaxBytesCold    int64
+	StreamMaxBytes     int64
+	StreamMaxBytesCold int64
+	// StreamDesignRate is the events a second the hot event streams are sized to hold for the
+	// default runway. It is what keeps the runway rule from raising the 64 MiB ceiling below:
+	// 50 events a second for 15 minutes asks for about 20 MiB a stream, so the byte ceiling
+	// binds and a compact install holds its events for about 50 minutes at that rate. It is
+	// named rather than left absent so the preset states its own capacity.
+	StreamDesignRate      int64
 	MqttStoreMaxBytes     int64
 	MqttQoS2StoreMaxBytes int64
 	KvCacheMaxBytes       int64
@@ -150,6 +156,7 @@ type compactSizing struct {
 var compact = compactSizing{
 	StreamMaxBytes:        64 << 20,
 	StreamMaxBytesCold:    16 << 20,
+	StreamDesignRate:      50,
 	MqttStoreMaxBytes:     32 << 20,
 	MqttQoS2StoreMaxBytes: 8 << 20,
 	// 4 MiB, down from 8, when the credential-attempt State bucket arrived: that
@@ -179,6 +186,7 @@ func (c compactSizing) natsValues() map[string]interface{} {
 	return map[string]interface{}{
 		"streamMaxBytes":        c.StreamMaxBytes,
 		"streamMaxBytesCold":    c.StreamMaxBytesCold,
+		"streamDesignRate":      c.StreamDesignRate,
 		"mqttStoreMaxBytes":     c.MqttStoreMaxBytes,
 		"mqttQoS2StoreMaxBytes": c.MqttQoS2StoreMaxBytes,
 		"kvCacheMaxBytes":       c.KvCacheMaxBytes,

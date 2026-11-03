@@ -653,7 +653,7 @@ type streamBounds struct {
 // idempotent.
 func (nmgr *NatsManager) streamBounds(suffix string) streamBounds {
 	c := nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats
-	b := streamBounds{maxBytes: c.StreamMaxBytesFor(suffix), maxMsgs: c.StreamMaxMsgs, maxMsgSize: c.StreamMaxMsgSize}
+	b := streamBounds{maxBytes: c.StreamMaxBytesFor(suffix), maxMsgs: c.StreamMaxMsgsFor(suffix), maxMsgSize: c.StreamMaxMsgSize}
 	if b.maxMsgs <= 0 {
 		b.maxMsgs = config.DefaultStreamMaxMsgs
 	}

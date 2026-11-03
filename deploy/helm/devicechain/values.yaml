@@ -225,6 +225,27 @@ instance:
         # resources available" — see that variable's comment for the full story.
         streamMaxBytes: 1073741824 # 1 GiB per hot stream
         streamMaxBytesCold: 134217728 # 128 MiB per control-plane stream
+        # The outage runway. inbound-events, resolved-events and the device-events capture
+        # stream hold one message per ingested event, and what they hold is how long events can
+        # wait while a consumer or the event store is down (and how far back rule preview and
+        # detection replay can reach). A flat byte ceiling answers that in bytes, not time: 1 GiB
+        # held resolved-events for 2.8 minutes at 20,000 events a second. So each of those streams
+        # is sized to hold AT LEAST streamDesignRate events a second for streamRunwayMinutes:
+        # rate x minutes x ~384-448 bytes an event. streamMaxBytes stays the floor, so the
+        # defaults below (1,000 events a second for 15 minutes, about 350-400 MB a stream) keep
+        # the 1 GiB ceiling and add nothing to the reservation.
+        #
+        # streamDesignRate is the PEAK events a second the whole instance ingests, across
+        # tenants. It is not a rate limit; it is the rate the disk is sized for. For a busier
+        # instance raise it AND the JetStream volume (nats_jetstream_storage): at 20,000 a second
+        # for 15 minutes the three streams reserve about 8.1 + 6.9 + 6.9 GB (20 GiB) on every
+        # broker server, up from 3 GiB, so the volume needs roughly 17 GiB more than the default
+        # 16Gi one. `dcctl bootstrap` checks the sum against the
+        # volume before it changes anything and says which of the two is short. A value of 0 or an
+        # absent key sizes the streams by streamMaxBytes alone, as before this key existed.
+        # streamRunwayMinutes is capped at the streams' 7-day age window (10080).
+        streamDesignRate: 1000
+        streamRunwayMinutes: 15
         streamMaxMsgs: 5000000 # 5M messages per stream
         streamMaxMsgSize: 1048576 # 1 MiB per message
         # The MQTT gateway's own streams. nats-server creates $MQTT_msgs, $MQTT_out

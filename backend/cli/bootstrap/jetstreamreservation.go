@@ -75,6 +75,15 @@ func checkJetStreamReservation(n *config.NatsConfiguration, ceiling int64, sourc
 		return nil
 	}
 	remedy := "Grow the instance's JetStream volume (see the upgrade guide), or lower the stream ceilings."
+	if extra := n.RunwayReservation(); extra > 0 {
+		// Name the runway when it is what tipped the sum over: the operator asked for a time,
+		// and the disk to hold it is the part that is missing.
+		remedy = fmt.Sprintf("The outage runway asks for %d MiB of it: %d events a second held for %d minutes "+
+			"on the event streams (infrastructure.nats.streamDesignRate and streamRunwayMinutes). "+
+			"Grow the instance's JetStream volume by at least %d MiB (see the upgrade guide), or lower the "+
+			"design rate or the runway.",
+			extra>>20, n.StreamDesignRate, n.StreamRunwayMinutes, (reserved-ceiling)>>20+1)
+	}
 	if n.MqttFailClosed {
 		remedy += " `--mqtt-fail-closed=false` is the way back: it is the setting that raises the " +
 			"reservation by giving the MQTT message store the hot stream ceiling."

@@ -284,6 +284,24 @@ type Stream struct {
 	// reservation arithmetic — and so into both the default and the --compact budget
 	// tests — automatically rather than needing to be remembered twice.
 	MaxBytesCap int64
+	// RunwayBytesPerMessage, when positive, marks this stream's ceiling as sized by TIME and
+	// says how many bytes one event costs it on disk: its payload, subject, headers and the
+	// broker's per-record framing, rounded UP. Such a stream holds one message per ingested
+	// event, so config.StreamMaxBytesFor gives it at least
+	// designRate x runway x RunwayBytesPerMessage (NatsConfiguration.StreamDesignRate and
+	// StreamRunwayMinutes), on top of its tier's ceiling. Zero leaves the tier's ceiling alone,
+	// which is right for a stream whose volume follows something other than the event rate
+	// (rule firings, commands, human activity).
+	//
+	// WHY TIME. A byte ceiling says nothing about how long the stream can hold events while a
+	// reader or the database is down, and that is what the ceiling is FOR: it is the platform's
+	// runway through an outage and the horizon rule preview and DETECT replay can reach back
+	// to. A flat 1 GiB held resolved-events for 2.8 minutes at 20,000 events a second.
+	//
+	// The figures are measured on a running instance (stored bytes / stored messages, rounded
+	// up for envelopes that carry anchors and groups) and are an upper-ish bound, not an exact
+	// size: a stream that stores smaller messages simply holds the runway for longer.
+	RunwayBytesPerMessage int64
 	// DuplicateWindowSeconds, when positive, is how long JetStream remembers a
 	// published message's "Nats-Msg-Id" and suppresses a repeat of it. Every stream
 	// declares one, and it must be at least the longest time between a message's first
@@ -690,10 +708,11 @@ var All = []Stream{
 	// device-management is also a WRITER here, for one thing only: an event-envelope member that
 	// must retry is republished alone, in the legacy shape (processor.WithSplitWriter).
 	{Suffix: InboundEvents, Writers: []string{"device-management", "device-state", "event-sources", "lwm2m-ingest", "sparkplug-ingest"}, Readers: []Reader{{"device-management", ReadDurable}}, Tier: Hot, DuplicateWindowSeconds: RedeliveryDuplicateWindowSeconds,
-		DeadLetterKind:      kindEvent,
-		BackpressureReaders: []string{"device-management"},
-		Forwards:            map[string]string{"device-management": ResolvedEvents},
-		Why:                 "raw device telemetry — the primary ingest path"},
+		RunwayBytesPerMessage: 384,
+		DeadLetterKind:        kindEvent,
+		BackpressureReaders:   []string{"device-management"},
+		Forwards:              map[string]string{"device-management": ResolvedEvents},
+		Why:                   "raw device telemetry — the primary ingest path"},
 	//
 	// event-processing is REPLAY-COVERED: DETECT acks a resolved event only after a
 	// snapshot checkpoint covers it, applies every delivery on first sight (true while the
@@ -725,6 +744,7 @@ var All = []Stream{
 	// backlog is still warned on (the chart's JetStreamDurableUnreadNearFull), as an upper
 	// bound: the checkpoint is never behind what the durable has acknowledged.
 	{Suffix: ResolvedEvents, AllowDirect: true, PlatformAuthored: true, Writers: []string{"device-management"}, Readers: []Reader{{"device-state", ReadDurable}, {"event-management", ReadDurable}, {"event-management", ReadLive}, {"event-processing", ReadAckFloor}, {"event-processing", ReadEphemeral}}, Tier: Hot, DeadLetterKind: kindEvent,
+		RunwayBytesPerMessage:  448,
 		DuplicateWindowSeconds: RedeliveryDuplicateWindowSeconds,
 		ReplayCovered:          []string{"event-processing"},
 		BackpressureReaders:    []string{"event-management"},
@@ -845,7 +865,8 @@ var All = []Stream{
 	// Window: the broker's MQTT gateway stores device publishes here with no Nats-Msg-Id.
 	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
 	{Suffix: DeviceEventsCapture, DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, Readers: []Reader{{"event-sources", ReadDurable}}, Tier: Hot, Shape: ShapeDeviceEvents,
-		DeadLetterKind: kindEvent, Retention: RetentionWorkQueue, RecreateOnRetentionChange: true,
+		RunwayBytesPerMessage: 384,
+		DeadLetterKind:        kindEvent, Retention: RetentionWorkQueue, RecreateOnRetentionChange: true,
 		Forwards: map[string]string{"event-sources": InboundEvents},
 		Why:      "raw device publishes, captured by the broker and held only until forwarded — the ingest durability floor"},
 
@@ -1110,6 +1131,23 @@ func DuplicateWindowSecondsFor(suffix string) int {
 // config.StreamMaxBytesFor, which is the single place the two are reconciled.
 func MaxBytesCapFor(suffix string) int64 {
 	return bySuffix[suffix].MaxBytesCap
+}
+
+// RunwayBytesPerMessageFor returns a suffix's declared on-disk cost per event, or 0 when the
+// stream is not sized by time (Stream.RunwayBytesPerMessage).
+func RunwayBytesPerMessageFor(suffix string) int64 {
+	return bySuffix[suffix].RunwayBytesPerMessage
+}
+
+// RunwaySuffixes lists the streams whose ceiling is sized by time, in declaration order.
+func RunwaySuffixes() []string {
+	var out []string
+	for _, st := range All {
+		if st.RunwayBytesPerMessage > 0 {
+			out = append(out, st.Suffix)
+		}
+	}
+	return out
 }
 
 // RetentionFor returns a suffix's declared retention. An undeclared suffix reads as

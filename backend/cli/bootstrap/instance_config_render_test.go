@@ -126,6 +126,8 @@ func TestChartJetStreamCeilingsReachTheStruct(t *testing.T) {
 		{"mqttQoS2StoreMaxBytes", n.MqttQoS2StoreMaxBytes, config.DefaultMqttQoS2StoreMaxBytes},
 		{"kvCacheMaxBytes", n.KvCacheMaxBytes, config.DefaultKvCacheMaxBytes},
 		{"kvStateMaxBytes", n.KvStateMaxBytes, config.DefaultKvStateMaxBytes},
+		{"streamDesignRate", n.StreamDesignRate, config.DefaultStreamDesignRate},
+		{"streamRunwayMinutes", int64(n.StreamRunwayMinutes), config.DefaultStreamRunwayMinutes},
 	} {
 		if tc.got == 0 {
 			t.Errorf("%s decoded as 0: the chart's key does not match the Go field, so "+
