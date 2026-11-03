@@ -65,7 +65,7 @@ const maxValuesOverlayBytes = 128 * 1024
 // 🔴 WHAT IS NOT HERE IS THE POINT. image, instance, profile, enabledFunctionalAreas,
 // extraSecrets, blobStorage, the rest of ingress and metrics and networkPolicy, the pod and
 // container security contexts, an area's image / extraEnv / extraPorts and its profiler
-// listener are all dcctl's or the declaration's. None of them is a tuning knob: they are
+// listener's ADDRESS are all dcctl's or the declaration's. None of them is a tuning knob: they are
 // credentials, wiring, exposure or a way to weaken the pod's isolation.
 var tunableValues = []string{
 	// Scale and rollout.
@@ -114,6 +114,13 @@ var tunableValues = []string{
 	"functionalAreas.*.avoidEventStorePrimary",
 	"functionalAreas.*.eventPathSpread",
 	"functionalAreas.*.config",
+	// The profiler's switches: an off-by-default diagnostic that opens a loopback listener,
+	// reached only by port-forward. Its ADDRESS stays out: any non-loopback value exposes
+	// unauthenticated profiles to whatever can reach the pod, and nothing about a profiling
+	// run needs it (collection goes through a port-forward).
+	"functionalAreas.*.profiler.enabled",
+	"functionalAreas.*.profiler.blockRate",
+	"functionalAreas.*.profiler.mutexFraction",
 }
 
 // ownedWithinTunable are values INSIDE a tunable subtree that dcctl nonetheless owns.

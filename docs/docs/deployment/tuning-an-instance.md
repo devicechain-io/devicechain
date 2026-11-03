@@ -60,6 +60,7 @@ An overlay may set only the values below. Anything else is refused.
 | `resources`, `useMeasuredRequests`, `goMemLimitPercent`, `gogc`, `goMemLimit` | CPU and memory, and Go's memory behaviour, for every area |
 | `functionalAreas.<area>.replicas`, `.strategy`, `.resources`, `.measuredRequests`, `.goMemLimitPercent`, `.memoryLimitFloor`, `.gogc`, `.goMemLimit`, `.avoidEventStorePrimary`, `.eventPathSpread` | The same, for one area |
 | `functionalAreas.<area>.config` | That area's own configuration. An unknown key stops the service at startup |
+| `functionalAreas.<area>.profiler.enabled`, `.blockRate`, `.mutexFraction` | The diagnostic profiling listener, off by default (see [Observability](./observability.md)). Its `address` is not tunable |
 | `frontend.replicas`, `frontend.resources` | The console's pods |
 | `metrics.alerts`, `metrics.grafanaDashboards` | Alerting rules and dashboards |
 | `ingress.className`, `ingress.annotations`, `ingress.uploadMaxBodySize`, `networkPolicy.additionalAllowedCidrs`, `serviceAccount.annotations` | How the ingress is fronted and who may reach the pods |
