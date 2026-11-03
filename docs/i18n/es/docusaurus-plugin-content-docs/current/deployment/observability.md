@@ -307,7 +307,8 @@ resultado:
 Los límites son `streamMaxBytes` (los flujos de alto volumen), `streamMaxBytesCold` (los demás) y
 `streamMaxMsgs`, bajo `instance.config.infrastructure.nats`. El volumen de JetStream se dimensiona a
 partir de su suma, así que aumente el volumen junto con ellos (consulte
-[Arrancar una instancia](./bootstrap.md)).
+[Arrancar una instancia](./bootstrap.md)). Los tres flujos que llevan un mensaje por evento se dimensionan además por tiempo; consulte
+[Cuánto pueden esperar los flujos de eventos durante una interrupción](#outage-runway).
 
 Las alertas de acumulación (`JetStreamCaptureBacklogWillOverflow`, `JetStreamCaptureBacklogGrowing`,
 `JetStreamDurableFallingBehind` y `JetStreamDurableUnreadNearFull`) leen la acumulación de cada consumidor
@@ -458,6 +459,7 @@ de control, que la compuerta no ve. `ReplayCoveredDeliveriesExhausted` lo vigila
 | Alerta | Severidad | Qué significa | Qué hacer |
 | --- | --- | --- | --- |
 | `JetStreamUnreadBacklogNearFull` | warning | Un consumidor que controla la compuerta lleva 5 minutos con más del 80% de su flujo sin leer. Al 90% el flujo rechaza eventos nuevos para todos los inquilinos: los dispositivos HTTP reciben `503` con `Retry-After`, los eventos de los dispositivos MQTT esperan en el flujo de captura, y las lecturas de Sparkplug y LwM2M, y los eventos de un broker MQTT externo, se descartan y se cuentan. | Averigüe por qué el consumidor va lento: los registros de su servicio, su base de datos, `JetStreamDurableFallingBehind`. Si el tráfico ha superado el flujo, aumente su límite y, con él, el volumen de JetStream. |
+| `JetStreamOutageRunwayHalfUsed` | warning | Un consumidor de `inbound-events` o `resolved-events` lleva 3 minutos sin haber leído más del 50% de lo que cabe en su flujo. El flujo está dimensionado para retener el margen de interrupción configurado (`streamRunwayMinutes` a `streamDesignRate` eventos por segundo), así que más de la mitad de ese tiempo se ha agotado. Al 80% avisa `JetStreamUnreadBacklogNearFull`, y al 90% la plataforma deja de aceptar eventos nuevos en el flujo. | Averigüe por qué el consumidor va retrasado: su servicio no está en marcha o falla en bucle, su base de datos no está disponible o va lenta (`EventStoreRefusingWrites`, `ConsumerHoldingForDatabase`), o el tráfico ha superado la tasa de diseño. Si es así, aumente `streamDesignRate` junto con el volumen de JetStream (consulte [Cuánto pueden esperar los flujos de eventos durante una interrupción](#outage-runway)). |
 | `JetStreamIngestBackpressureEngaged` | critical | Un flujo lleva un minuto rechazando eventos nuevos, para todos los inquilinos: la cola sin leer de un consumidor está cerca del límite, o el flujo lleno descarta el historial procesado por delante de ella tan deprisa que se agotaría en 30 segundos, o un servicio que escribe en él lleva 30 segundos sin poder medir esa cola. | `JetStreamUnreadBacklogNearFull` indica qué consumidor va atrasado. La causa más probable es que el servicio de ese consumidor no esté funcionando: escalado a cero réplicas o en un bucle de reinicios. Un servicio desplegado que no funciona sigue frenando la ingesta, a propósito. Si `JetStreamUnreadBacklogNearFull` no se dispara, es el segundo caso: `jetstream_backpressure_history_runway_seconds` lo muestra, y el registro del servicio que escribe indica el consumidor y el ritmo. El rechazo se levanta solo cuando la cola de ese consumidor baja del 80% y, si la causa era el historial, cuando ese historial duraría un minuto o el consumidor lo ha leído todo. Si ninguno de los dos indica un consumidor, puede que el servicio que escribe no esté llegando al broker: consulta [Una conexión con el broker que murió en silencio](#broker-connection-dead). |
 
 Los servicios que escriben en los dos flujos exportan estas series:
@@ -477,6 +479,80 @@ Los servicios que escriben en los dos flujos exportan estas series:
   puede mostrar 0 cuando el servicio de hecho está rechazando.
 - **`devicechain_<area>_jetstream_publish_refused_total{stream}`**: mensajes que el servicio no
   publicó porque el flujo estaba rechazando.
+
+## Cuánto pueden esperar los flujos de eventos durante una interrupción {#outage-runway}
+
+Mientras el almacén de eventos, un servicio o la base de datos están caídos, los eventos esperan en
+el broker de mensajes. Tres flujos llevan un mensaje por cada evento que se ingiere: el flujo de
+captura de dispositivos (eventos MQTT que el broker ya confirmó y que `event-sources` aún no ha
+reenviado), `inbound-events` y `resolved-events`. Cuánto pueden esperar es el **margen de
+interrupción**, y también es hasta dónde pueden leer hacia atrás la vista previa de reglas y la
+reproducción de detección. Lo fija el tamaño de esos flujos.
+
+**Qué ocurre cuando uno se llena.** Cada flujo conserva como máximo 7 días, un límite de bytes y un
+límite de cantidad de mensajes, y al alcanzar cualquiera de ellos el broker descarta su mensaje más
+**antiguo**, lo haya leído o no un consumidor. Lo que eso significa depende del flujo:
+
+| Flujo | Al llegar al límite |
+| --- | --- |
+| `inbound-events`, `resolved-events` | La plataforma deja de aceptar eventos nuevos antes de que el broker descarte uno sin leer: cuando el consumidor que controla el flujo lleva sin leer el 90% de lo que cabe, todo servicio que escribe en él rechaza los eventos nuevos (consulte [Contrapresión en la ruta de ingesta](#ingest-backpressure)). El descarte de mensajes antiguos por parte del broker queda como respaldo contabilizado. |
+| Flujo de captura de dispositivos | Aquí nada puede rechazar un evento, porque el broker ya lo confirmó al dispositivo. El broker descarta los eventos más antiguos que `event-sources` no ha reenviado, y `JetStreamDurableLostUnread` lo notifica. Con [MQTT con cierre ante fallo](#mqtt-fail-closed) activado, los eventos QoS 1 esperan en cambio en el almacén de mensajes del broker, que rechaza nuevas publicaciones cuando está lleno. |
+| Cualquier otro flujo | El broker descarta los mensajes más antiguos que un consumidor no ha leído, y `JetStreamDurableLostUnread` lo notifica. |
+
+Por tanto, el límite de un flujo decide cuánto puede durar una interrupción antes de que se rechace
+la ingesta (`inbound-events`, `resolved-events`) o se pierdan eventos (el flujo de captura). Un
+límite expresado solo en bytes no dice nada sobre ese tiempo: el valor anterior de 1 GiB retenía
+`resolved-events` unos 2,8 minutos a 20 000 eventos por segundo.
+
+**La regla de dimensionamiento.** Cada uno de los tres flujos recibe como mínimo
+
+> `streamDesignRate` × `streamRunwayMinutes` × 60 × el coste por evento del flujo
+
+donde el coste por evento es su tamaño almacenado, redondeado hacia arriba: 384 bytes para el flujo
+de captura e `inbound-events`, y 448 para `resolved-events`. `streamMaxBytes` sigue siendo el
+mínimo, de modo que se aplica el mayor de los dos. El límite de cantidad de mensajes `streamMaxMsgs`
+se eleva del mismo modo, hasta `streamDesignRate` × `streamRunwayMinutes` × 60, para que tampoco
+pueda acortar el margen. Los flujos cuyo volumen no sigue la tasa de eventos (disparos de reglas,
+comandos, envío a conectores, los flujos del plano de control) conservan los límites de su nivel.
+
+Ambas claves están bajo `instance.config.infrastructure.nats`:
+
+| Clave | Significado | Valor por defecto |
+| --- | --- | --- |
+| `streamDesignRate` | El máximo de eventos por segundo que ingiere toda la instancia, sumando los inquilinos. Es la tasa para la que se dimensiona el disco, no un límite de tasa. `0` o ausente dimensiona los flujos solo con `streamMaxBytes`. | `1000` (`50` con `--compact`) |
+| `streamRunwayMinutes` | Cuántos minutos de eventos a esa tasa retienen los flujos. Como máximo 10 080, los 7 días tras los cuales el broker descarta un mensaje sea cual sea el límite. | `15` |
+
+Los valores por defecto piden menos de lo que ya dan los límites de bytes existentes, así que una
+instalación por defecto conserva su límite de 1 GiB y el margen que informa es mayor que los 15
+minutos pedidos: unos 47 minutos a 1000 eventos por segundo para el flujo de captura e
+`inbound-events`, y 40 para `resolved-events`. Una instalación `--compact` conserva su límite de
+64 MiB, que retiene unos 50 minutos a sus 50 eventos por segundo. Un valor fuera de los límites
+detiene el servicio al arrancar y nombra la clave.
+
+**Dimensionar el volumen.** Los límites se reservan por adelantado en el volumen del broker, en cada
+servidor del broker, así que un margen que el volumen no pueda alojar dejaría a los últimos
+servicios en arrancar sin poder crear sus flujos. `dcctl` compara la reserva con el volumen antes de
+cambiar nada y, cuando lo que no cabe es el margen, lo dice y cuánto falta. Subir la tasa significa,
+por tanto, subir con ella el volumen de JetStream (`nats_jetstream_storage`). Para los tres flujos
+con los 15 minutos por defecto y [MQTT con cierre ante fallo](#mqtt-fail-closed) desactivado:
+
+| Tasa de diseño (eventos por segundo) | Flujo de captura | `inbound-events` | `resolved-events` | Volumen de JetStream mínimo |
+| --- | --- | --- | --- | --- |
+| 1000 o menos | 1 GiB | 1 GiB | 1 GiB | 16Gi (el valor por defecto) |
+| 5000 | 1,6 GiB | 1,6 GiB | 1,9 GiB | 16Gi |
+| 10 000 | 3,2 GiB | 3,2 GiB | 3,8 GiB | 22Gi |
+| 20 000 | 6,4 GiB | 6,4 GiB | 7,5 GiB | 33Gi |
+
+Los tamaños de volumen dejan el 10% de margen propio del broker y las reservas de los demás flujos
+(unos 8,3 GiB con los valores por defecto); redondee hacia arriba, no hacia abajo. Los flujos de una
+instancia que ya está en marcha toman los nuevos límites en el sitio la próxima vez que arranquen
+sus servicios, conservando lo que contienen. Si se baja un límite por debajo de lo que un flujo
+contiene, el broker descarta de inmediato los mensajes más antiguos.
+
+`JetStreamOutageRunwayHalfUsed` avisa cuando un consumidor de `inbound-events` o `resolved-events` ha
+consumido la mitad del margen, mucho antes de `JetStreamUnreadBacklogNearFull` (80%) y del rechazo
+al 90%. A la tasa de diseño, el tiempo que queda es la parte del flujo que sigue libre por su margen;
+la alerta existe para que ese tiempo se dedique a arreglar el problema.
 
 ## Una conexión con el broker que murió en silencio {#broker-connection-dead}
 

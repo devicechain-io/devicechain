@@ -299,7 +299,8 @@ each durable consumer it reads, and these alerts watch the result:
 
 The ceilings are `streamMaxBytes` (the high-volume streams), `streamMaxBytesCold` (the others) and
 `streamMaxMsgs` under `instance.config.infrastructure.nats`. The JetStream volume is sized from
-their sum, so raise the volume with them (see [Bootstrap an Instance](./bootstrap.md)).
+their sum, so raise the volume with them (see [Bootstrap an Instance](./bootstrap.md)). The three streams that carry one message for each event are also sized by time; see
+[How long the event streams can wait out an outage](#outage-runway).
 
 The backlog alerts (`JetStreamCaptureBacklogWillOverflow`, `JetStreamCaptureBacklogGrowing`,
 `JetStreamDurableFallingBehind` and `JetStreamDurableUnreadNearFull`) read each consumer's backlog from
@@ -444,6 +445,7 @@ which the gate does not see. `ReplayCoveredDeliveriesExhausted` watches that.
 | Alert | Severity | What it means | What to do |
 | --- | --- | --- | --- |
 | `JetStreamUnreadBacklogNearFull` | warning | A gating consumer has been more than 80% of its stream behind for 5 minutes. At 90% the stream refuses new events for every tenant: HTTP devices get `503` with a `Retry-After`, MQTT devices' events wait in the capture stream, and Sparkplug and LwM2M readings, and events from an external MQTT broker, are dropped and counted. | Find out why the consumer is slow: its service's logs, its database, `JetStreamDurableFallingBehind`. If the traffic has outgrown the stream, raise its ceiling and the JetStream volume with it. |
+| `JetStreamOutageRunwayHalfUsed` | warning | A consumer behind `inbound-events` or `resolved-events` has not yet read more than 50% of what its stream can hold, for 3 minutes. The stream is sized to hold the configured outage runway (`streamRunwayMinutes` at `streamDesignRate` events a second), so more than half of that time is gone. At 80% `JetStreamUnreadBacklogNearFull` warns, and at 90% the platform stops accepting new events on the stream. | Find out why the consumer is behind: its service is not running or is crash-looping, its database is unavailable or slow (`EventStoreRefusingWrites`, `ConsumerHoldingForDatabase`), or the traffic has outgrown the design rate. If it has, raise `streamDesignRate` together with the JetStream volume (see [How long the event streams can wait out an outage](#outage-runway)). |
 | `JetStreamIngestBackpressureEngaged` | critical | A stream has been refusing new events for a minute, for every tenant: a consumer's unread backlog is near the ceiling, or the full stream is discarding the processed history ahead of it fast enough to run out within 30 seconds, or a service writing to it has not been able to measure that backlog for 30 seconds. | `JetStreamUnreadBacklogNearFull` names the consumer that is behind. The likeliest cause is that the consumer's service is not running: scaled to zero replicas or crash-looping. A deployed service that is not running still holds ingest back, on purpose. If `JetStreamUnreadBacklogNearFull` is quiet, it is the second case: `jetstream_backpressure_history_runway_seconds` shows it, and the writing service's log names the consumer and the rate. The refusal lifts on its own once that consumer's backlog is below 80% and, if the history was the cause, once that history would last a minute or the consumer has read everything. If neither names a consumer, the writing service may not be reaching the broker at all: see [A broker connection that died silently](#broker-connection-dead). |
 
 The services that write to the two streams export these series:
@@ -463,6 +465,78 @@ The services that write to the two streams export these series:
   show 0 when the service is in fact refusing.
 - **`devicechain_<area>_jetstream_publish_refused_total{stream}`**: messages the service did not
   publish because the stream was refusing.
+
+## How long the event streams can wait out an outage {#outage-runway}
+
+While the event store, a service or the database is down, events wait in the message broker.
+Three streams carry one message for every event that is ingested: the device capture stream (MQTT
+events the broker has acknowledged and `event-sources` has not yet forwarded), `inbound-events`
+and `resolved-events`. How long they can wait is the **outage runway**, and it is also how far
+back rule preview and detection replay can read. It is set by the size of those streams.
+
+**What happens when one is full.** Every stream keeps at most 7 days, a byte ceiling and a
+message-count ceiling, and when it reaches either, the broker discards its **oldest** message
+whether or not a consumer has read it. What that means depends on the stream:
+
+| Stream | At the ceiling |
+| --- | --- |
+| `inbound-events`, `resolved-events` | The platform stops accepting new events before the broker discards one that is unread: once the consumer that gates the stream has not read 90% of what it can hold, every service that writes to it refuses new events (see [Backpressure on the ingest path](#ingest-backpressure)). The broker's discarding of old messages remains as a counted backstop. |
+| Device capture stream | Nothing can refuse an event here, because the broker acknowledged it to the device first. The broker discards the oldest events that `event-sources` has not forwarded, and `JetStreamDurableLostUnread` reports it. With [fail-closed MQTT](#mqtt-fail-closed) on, QoS 1 events wait in the broker's message store instead, which refuses new publishes when it is full. |
+| Every other stream | The broker discards the oldest messages a consumer has not read, and `JetStreamDurableLostUnread` reports it. |
+
+A stream's ceiling therefore decides how long an outage can last before ingest is refused
+(`inbound-events`, `resolved-events`) or events are lost (the capture stream). A ceiling given in
+bytes alone says nothing about that time: an earlier default of 1 GiB held `resolved-events` for
+about 2.8 minutes at 20,000 events a second.
+
+**The sizing rule.** Each of the three streams is given at least
+
+> `streamDesignRate` × `streamRunwayMinutes` × 60 × the stream's cost per event
+
+where the cost per event is its stored size, rounded up: 384 bytes for the capture stream and
+`inbound-events`, 448 for `resolved-events`. `streamMaxBytes` stays the floor, so the larger of
+the two applies. The message-count ceiling `streamMaxMsgs` is raised the same way, to
+`streamDesignRate` × `streamRunwayMinutes` × 60, so it cannot cut the runway short either.
+Streams whose volume does not follow the event rate (rule firings, commands, connector dispatch,
+the control-plane streams) keep their tier ceilings.
+
+Both keys are under `instance.config.infrastructure.nats`:
+
+| Key | Meaning | Default |
+| --- | --- | --- |
+| `streamDesignRate` | The most events a second the whole instance ingests, across tenants. It is the rate the disk is sized for, not a rate limit. `0` or absent sizes the streams by `streamMaxBytes` alone. | `1000` (`50` with `--compact`) |
+| `streamRunwayMinutes` | How many minutes of events at that rate the streams hold. At most 10,080, the 7 days after which the broker discards a message whatever the ceiling. | `15` |
+
+The defaults ask for less than the existing byte ceilings give, so a default installation keeps
+its 1 GiB ceiling and the runway it reports is longer than the 15 minutes asked for: about 47
+minutes at 1,000 events a second for the capture stream and `inbound-events`, and 40 for
+`resolved-events`. A `--compact` installation keeps its 64 MiB ceiling, which holds about 50
+minutes at its 50 events a second. A value outside the limits stops the service at startup, naming
+the key.
+
+**Sizing the volume.** The ceilings are reserved on the broker's volume up front, on every broker
+server, so a runway the volume cannot hold would leave the last services to start unable to create
+their streams. `dcctl` compares the reservation with the volume before it changes anything, and
+when the runway is what does not fit, says so and by how much. Raising the rate therefore means
+raising the JetStream volume (`nats_jetstream_storage`) with it. For the three streams at the default
+15 minutes, with [fail-closed MQTT](#mqtt-fail-closed) off:
+
+| Design rate (events a second) | Capture stream | `inbound-events` | `resolved-events` | Smallest JetStream volume |
+| --- | --- | --- | --- | --- |
+| 1,000 or less | 1 GiB | 1 GiB | 1 GiB | 16Gi (the default) |
+| 5,000 | 1.6 GiB | 1.6 GiB | 1.9 GiB | 16Gi |
+| 10,000 | 3.2 GiB | 3.2 GiB | 3.8 GiB | 22Gi |
+| 20,000 | 6.4 GiB | 6.4 GiB | 7.5 GiB | 33Gi |
+
+The volume sizes leave the broker's own 10% of headroom and the other streams' reservations (about
+8.3 GiB at the defaults); round up rather than down. The streams of an instance that already runs
+take the new ceilings in place the next time their services start, keeping what they hold. The
+broker discards the oldest messages at once if a ceiling is lowered below what a stream holds.
+
+`JetStreamOutageRunwayHalfUsed` warns when a consumer behind `inbound-events` or `resolved-events`
+has used half of the runway, well before `JetStreamUnreadBacklogNearFull` (80%) and the refusal at
+90%. At the design rate, the time left is the share of the stream still free times its runway;
+the alert exists so that time is spent on a fix.
 
 ## A broker connection that died silently {#broker-connection-dead}
 
