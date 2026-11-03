@@ -19,10 +19,6 @@ package main
 //	DCB_SIZE=300       payload bytes
 //	DCB_SUBS=8         subscribers (each receives every message)
 //	DCB_PUBS=4         publishers
-//
-// With -tags dcbench and a nats-server build that exports RawWrites/RawWriteBytes (the bench
-// fork used while evaluating the coalescing patch), each node also reports its raw socket
-// writes. Without the tag that column is zero.
 
 import (
 	"bufio"
@@ -118,8 +114,6 @@ func benchNodeMain() {
 	fmt.Printf("SLOW %d\n", s.NumSlowConsumers())
 	s.Shutdown()
 	s.WaitForShutdown()
-	w, wb := benchRawWrites()
-	fmt.Printf("STATS %d %d\n", w, wb)
 }
 
 func writeBenchCerts(t *testing.T, dir string) {
@@ -141,15 +135,13 @@ func writeBenchCerts(t *testing.T, dir string) {
 }
 
 type benchNode struct {
-	cmd    *exec.Cmd
-	stdin  interface{ Close() error }
-	out    *bufio.Scanner
-	cport  int
-	rport  int
-	cpu    time.Duration
-	slow   int64
-	writes int64
-	wbytes int64
+	cmd   *exec.Cmd
+	stdin interface{ Close() error }
+	out   *bufio.Scanner
+	cport int
+	rport int
+	cpu   time.Duration
+	slow  int64
 }
 
 func startBenchNode(t *testing.T, name, dir string, cport, rport int, peer string, useTLS bool, extra ...string) *benchNode {
@@ -181,9 +173,6 @@ func (n *benchNode) stop(t *testing.T) {
 	for n.out.Scan() {
 		if f := strings.Fields(n.out.Text()); len(f) == 2 && f[0] == "SLOW" {
 			n.slow, _ = strconv.ParseInt(f[1], 10, 64)
-		} else if len(f) == 3 && f[0] == "STATS" {
-			n.writes, _ = strconv.ParseInt(f[1], 10, 64)
-			n.wbytes, _ = strconv.ParseInt(f[2], 10, 64)
 		}
 	}
 	n.cmd.Wait()
@@ -317,11 +306,10 @@ func TestTLSThroughputBench(t *testing.T) {
 	a.stop(t)
 	b.stop(t)
 	cpu := a.cpu + b.cpu
-	writes := a.writes + b.writes
 	fmt.Printf("RESULT tls=%v rate=%d size=%d subs=%d pubs=%d published=%d delivered=%d/%d wall=%.2fs "+
-		"msgs/s(pub)=%.0f deliveries/s=%.0f servercpu=%.2fs cpu_s_per_1k_published=%.4f cpu_s_per_1k_deliveries=%.4f rawwrites=%d rawwrites_per_delivery=%.4f slow_consumers=%d client_dropped=%d\n",
+		"msgs/s(pub)=%.0f deliveries/s=%.0f servercpu=%.2fs cpu_s_per_1k_published=%.4f cpu_s_per_1k_deliveries=%.4f slow_consumers=%d client_dropped=%d\n",
 		useTLS, rate, size, nsubs, npubs, total, delivered, want, elapsed.Seconds(),
 		float64(total)/elapsed.Seconds(), float64(delivered)/elapsed.Seconds(), cpu.Seconds(),
 		cpu.Seconds()/float64(total)*1000, cpu.Seconds()/float64(delivered)*1000,
-		writes, float64(writes)/float64(delivered), a.slow+b.slow, clientDropped)
+		a.slow+b.slow, clientDropped)
 }

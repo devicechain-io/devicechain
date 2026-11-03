@@ -4,13 +4,8 @@
 // main and usageStr follow nats-server's main.go at v2.15.2, Copyright 2012-2026 The NATS Authors,
 // Apache License 2.0, changed only where the comments below say so.
 
-// Command nats-server is DeviceChain's broker: upstream nats-server's own main, plus one setting
-// its configuration file cannot express, built on DeviceChain's fork of the library.
-//
-// The image builds the FORK, github.com/devicechain-io/nats-server/v2 (go.mod's replace): upstream
-// v2.15.2 plus one commit that coalesces small outbound buffers into TLS records of up to 16 KiB
-// instead of one record and one syscall each. Nothing in this package changes for it; see
-// "Forked dependencies" in CLAUDE.md, and the CI `nats-server fork guard` step.
+// Command nats-server is DeviceChain's broker: upstream nats-server's own main, built on the
+// unmodified upstream library, plus one setting its configuration file cannot express.
 //
 // The MQTT listener requests (but does not require) a client certificate, so a device that
 // authenticates by certificate proves possession of its key in the TLS handshake and the auth
