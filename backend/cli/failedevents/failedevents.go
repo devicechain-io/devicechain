@@ -60,6 +60,20 @@ type Options struct {
 	Until    *time.Time
 	// Limit is the most records to fetch; the walk stops there and says so if more exist.
 	Limit int
+	// Now is the clock the walk pins its window to; time.Now when nil.
+	Now func() time.Time
+}
+
+// MaxLookback is how far back the server reads; an older since is treated as this old.
+const MaxLookback = 31 * 24 * time.Hour
+
+// ClampSince returns since, or now-MaxLookback when since is older, which is the instant
+// the server will actually use.
+func ClampSince(now, since time.Time) time.Time {
+	if floor := now.Add(-MaxLookback); since.Before(floor) {
+		return floor.UTC()
+	}
+	return since.UTC()
 }
 
 // Event is one record as rendered.
@@ -116,19 +130,33 @@ func List(ctx context.Context, client Client, opts Options) (Listing, error) {
 	if size > maxServerPage {
 		size = maxServerPage
 	}
+	// 🔴 PIN THE WINDOW. The list is newest-first and paged by offset, so a failure that
+	// arrives between two fetches shifts every row down and the last rows of one page
+	// reappear on the next. Pinning until to the walk's first instant leaves newer
+	// records outside it; since is pinned too, because the server's own default and cap
+	// (now minus 31 days) would otherwise move under the walk.
+	now := time.Now
+	if opts.Now != nil {
+		now = opts.Now
+	}
+	start := now().UTC()
+	until := start
+	if opts.Until != nil {
+		until = opts.Until.UTC()
+	}
+	since := ClampSince(start, start.Add(-MaxLookback))
+	if opts.Since != nil {
+		since = ClampSince(start, *opts.Since)
+	}
+	seen := map[string]bool{}
 	for p := 1; ; p++ {
-		criteria := map[string]any{"pageNumber": p, "pageSize": size}
+		criteria := map[string]any{"pageNumber": p, "pageSize": size,
+			"since": since.Format(time.RFC3339), "until": until.Format(time.RFC3339)}
 		if opts.Reason != "" {
 			criteria["reason"] = opts.Reason
 		}
 		if opts.Device != "" {
 			criteria["deviceToken"] = opts.Device
-		}
-		if opts.Since != nil {
-			criteria["since"] = opts.Since.UTC().Format(time.RFC3339)
-		}
-		if opts.Until != nil {
-			criteria["until"] = opts.Until.UTC().Format(time.RFC3339)
 		}
 		var resp listResponse
 		if err := client.Query(ctx, opts.Endpoint, listQuery,
@@ -137,7 +165,13 @@ func List(ctx context.Context, client Client, opts Options) (Listing, error) {
 		}
 		page := resp.FailedEvents.Results
 		out.Total = resp.FailedEvents.Pagination.TotalRecords
-		out.Events = append(out.Events, page...)
+		// Belt: a row already listed is never listed again.
+		for _, e := range page {
+			if !seen[e.ID] {
+				seen[e.ID] = true
+				out.Events = append(out.Events, e)
+			}
+		}
 		// The server may clamp the page size, so a short page is not the end: the walk
 		// ends when everything the server says exists has been collected, the limit is
 		// reached, or the server returns nothing.

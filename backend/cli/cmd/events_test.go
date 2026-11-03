@@ -53,6 +53,9 @@ func TestEventsFailedRefusesBadInput(t *testing.T) {
 		"bad reason": {func() { evReason = "nope" }, "--reason"},
 		"bad since":  {func() { evSince = "soon" }, "--since"},
 		"bad until":  {func() { evUntil = "later" }, "--until"},
+		"empty window": {func() {
+			evSince, evUntil = "2026-11-02T00:00:00Z", "2026-11-01T00:00:00Z"
+		}, "is later than --until"},
 		"summary with a list filter": {func() {
 			evSummary = true
 			eventsFailedCmd.Flags().Lookup("device").Changed = true

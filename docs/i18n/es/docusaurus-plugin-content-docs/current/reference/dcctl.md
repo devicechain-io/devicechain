@@ -790,7 +790,8 @@ Each record names the reason, the device token the SENDER claimed (a claim, not 
 the device exists) and the platform's error. Narrow with --reason, --device, --since and
 --until. Reading is bounded by --limit: when more records match than were fetched, the
 output says so rather than letting a truncated list read as a complete one. The server
-reads at most 31 days back.
+reads at most 31 days back; an older --since is treated as 31 days ago. Durations have no
+day unit, so 31 days is 744h.
 
 With --summary, print the count of failures per reason since --since (default 24h), with
 the devices that account for the most of each. Counts include records the platform folded

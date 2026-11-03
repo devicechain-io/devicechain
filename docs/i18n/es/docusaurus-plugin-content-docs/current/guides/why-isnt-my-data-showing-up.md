@@ -49,7 +49,7 @@ Cuando se rechazaron eventos de un dispositivo en las últimas 24 horas, su pág
 
 ```bash
 # los fallos del último día, contados por motivo, con los dispositivos que originan la mayoría
-dcctl events failed --tenant acme --email ops@acme.example --password "$PASSWORD" --summary
+dcctl events failed -s dc.example.com --tls --tenant acme --email ops@acme.example --password "$PASSWORD" --summary
 
 # los rechazos de un dispositivo por un motivo, del más reciente al más antiguo, en JSON
 dcctl events failed --tenant acme --email ops@acme.example --password "$PASSWORD" \

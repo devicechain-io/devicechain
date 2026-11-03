@@ -49,7 +49,7 @@ title: 为什么我的设备数据没有出现
 
 ```bash
 # 过去一天的失败，按原因计数，并列出造成其中大部分的设备
-dcctl events failed --tenant acme --email ops@acme.example --password "$PASSWORD" --summary
+dcctl events failed -s dc.example.com --tls --tenant acme --email ops@acme.example --password "$PASSWORD" --summary
 
 # 某台设备因某个原因被拒绝的记录，按时间从新到旧，以 JSON 输出
 dcctl events failed --tenant acme --email ops@acme.example --password "$PASSWORD" \

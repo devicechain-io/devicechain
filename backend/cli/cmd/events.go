@@ -53,7 +53,8 @@ Each record names the reason, the device token the SENDER claimed (a claim, not 
 the device exists) and the platform's error. Narrow with --reason, --device, --since and
 --until. Reading is bounded by --limit: when more records match than were fetched, the
 output says so rather than letting a truncated list read as a complete one. The server
-reads at most 31 days back.
+reads at most 31 days back; an older --since is treated as 31 days ago. Durations have no
+day unit, so 31 days is 744h.
 
 With --summary, print the count of failures per reason since --since (default 24h), with
 the devices that account for the most of each. Counts include records the platform folded
@@ -133,7 +134,8 @@ func runEventsFailed(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	opts := failedevents.Options{Endpoint: sim.EventManagementGraphQL(server, tls), Device: evDevice, Limit: evLimit}
+	opts := failedevents.Options{Endpoint: sim.EventManagementGraphQL(server, tls), Device: evDevice,
+		Limit: evLimit, Now: timeNow}
 	if evReason != "" {
 		r, err := failedevents.NormalizeReason(evReason)
 		if err != nil {
@@ -154,6 +156,16 @@ func runEventsFailed(cmd *cobra.Command, args []string) error {
 			return err
 		}
 		opts.Until = &t
+	}
+	// The server never reads past 31 days back, so what is echoed in the output is the
+	// instant it will really use, not the one that was typed.
+	if opts.Since != nil {
+		c := failedevents.ClampSince(timeNow(), *opts.Since)
+		opts.Since = &c
+	}
+	if opts.Since != nil && opts.Until != nil && opts.Since.After(*opts.Until) {
+		return fmt.Errorf("--since (%s) is later than --until (%s): that window is empty",
+			opts.Since.Format(time.RFC3339), opts.Until.Format(time.RFC3339))
 	}
 
 	endpoints := sim.ResolveEndpoints(server, "", "", tls)
