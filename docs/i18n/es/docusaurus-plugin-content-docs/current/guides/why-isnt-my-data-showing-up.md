@@ -43,6 +43,21 @@ Si la tabla está vacía y los datos siguen sin aparecer, la plataforma no recha
 
 Cuando se rechazaron eventos de un dispositivo en las últimas 24 horas, su página de detalle lo indica, con un enlace a los motivos de ese dispositivo.
 
+## Desde la línea de comandos {#cli}
+
+`dcctl events failed` lee los mismos registros como miembro del tenant, con el mismo requisito de `device:write`:
+
+```bash
+# los fallos del último día, contados por motivo, con los dispositivos que originan la mayoría
+dcctl events failed --tenant acme --email ops@acme.example --password "$PASSWORD" --summary
+
+# los rechazos de un dispositivo por un motivo, del más reciente al más antiguo, en JSON
+dcctl events failed --tenant acme --email ops@acme.example --password "$PASSWORD" \
+  --device sensor-17 --reason device-not-found --since 6h --output json
+```
+
+`--since` y `--until` aceptan una hora RFC 3339 o hace cuánto tiempo (`6h`). La plataforma lee como máximo 31 días atrás. Un listado se detiene en `--limit` registros (100 por defecto) e indica cuándo coincidieron más. `--summary` solo acepta `--since` (24 horas por defecto). Consulta la [referencia de comandos](../reference/dcctl.md#dcctl-events-failed). El comando no devuelve el evento original.
+
 ## El límite de inundación {#flood-bound}
 
 Una flota con una sola credencial incorrecta puede ver rechazados miles de eventos por segundo. La lista sería inútil, y también el almacén que la respalda, si guardara cada uno. Por eso:

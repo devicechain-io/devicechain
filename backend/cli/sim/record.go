@@ -258,6 +258,13 @@ func DeviceManagementURL(server string, tls bool) string {
 	return fmt.Sprintf("%s://%s/api/device-management", h, server)
 }
 
+// EventManagementGraphQL is event-management's tenant GraphQL endpoint through the
+// /api/<area> ingress convention (the chart strips the prefix).
+func EventManagementGraphQL(server string, tls bool) string {
+	h, _ := scheme(tls)
+	return fmt.Sprintf("%s://%s/api/event-management/graphql", h, server)
+}
+
 // DefaultMqttBroker is the NATS MQTT gateway address for an instance host: the
 // gateway's own listener, not an /api ingress route, so it is host:1883 the way the
 // device-plane ingress is host:8081.

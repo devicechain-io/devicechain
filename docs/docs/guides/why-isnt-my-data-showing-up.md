@@ -43,6 +43,21 @@ If the table is empty and the data is still missing, the platform did not refuse
 
 When events from a device were rejected in the last 24 hours, its detail page says so, with a link to the reasons for that device.
 
+## From the command line {#cli}
+
+`dcctl events failed` reads the same records as a member of the tenant, with the same `device:write` requirement:
+
+```bash
+# the last day's failures, counted per reason, with the devices behind most of them
+dcctl events failed --tenant acme --email ops@acme.example --password "$PASSWORD" --summary
+
+# one device's refusals for one reason, newest first, as JSON
+dcctl events failed --tenant acme --email ops@acme.example --password "$PASSWORD" \
+  --device sensor-17 --reason device-not-found --since 6h --output json
+```
+
+`--since` and `--until` take an RFC 3339 time or how long ago (`6h`). The platform reads at most 31 days back. A list stops at `--limit` records (100 by default) and says when more matched. `--summary` takes only `--since` (24 hours by default). See the [command reference](../reference/dcctl.md#dcctl-events-failed). The command does not return the original event.
+
 ## The flood bound {#flood-bound}
 
 A fleet with one wrong credential can be refused thousands of events a second. The list would be useless, and so would the store behind it, if it kept every one. So:

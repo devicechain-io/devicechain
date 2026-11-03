@@ -28,6 +28,7 @@ dcctl [command]
 * [dcctl destroy](#dcctl-destroy)	 - Destroy a DeviceChain instance
 * [dcctl device](#dcctl-device)	 - Act as a device
 * [dcctl enable-area](#dcctl-enable-area)	 - Turn on a functional area on a running instance
+* [dcctl events](#dcctl-events)	 - Inspect a tenant's events
 * [dcctl ha](#dcctl-ha)	 - Inspect an instance's high-availability posture
 * [dcctl install](#dcctl-install)	 - Prepare a cluster for DeviceChain instances
 * [dcctl instances](#dcctl-instances)	 - Inspect the DeviceChain instances on this machine
@@ -747,6 +748,99 @@ dcctl enable-area <provider> <instance> <area> [<area>...] [flags]
 ### SEE ALSO
 
 * [dcctl](#dcctl)	 - DeviceChain CLI
+
+## dcctl events {#dcctl-events}
+
+Inspect a tenant's events
+
+### Synopsis
+
+Inspect events a tenant's devices sent to the platform.
+
+These commands read the tenant plane as a member of the tenant, so they show what that
+member's console shows, under the same grants.
+
+### Options
+
+```
+      --email string      identity to authenticate as; it must be a member of the tenant (required)
+  -h, --help              help for events
+      --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
+      --password string   password for the identity (required)
+  -s, --server string     instance host for platform API calls (default "localhost")
+  -t, --tenant string     tenant whose events are read (required)
+      --tls               use https for platform endpoints
+```
+
+### SEE ALSO
+
+* [dcctl](#dcctl)	 - DeviceChain CLI
+* [dcctl events failed](#dcctl-events-failed)	 - List the events the platform refused or could not store
+
+## dcctl events failed {#dcctl-events-failed}
+
+List the events the platform refused or could not store
+
+### Synopsis
+
+List the events the platform refused or could not store for a tenant, newest first:
+the answer to "why isn't my device's data showing up".
+
+Each record names the reason, the device token the SENDER claimed (a claim, not proof
+the device exists) and the platform's error. Narrow with --reason, --device, --since and
+--until. Reading is bounded by --limit: when more records match than were fetched, the
+output says so rather than letting a truncated list read as a complete one. The server
+reads at most 31 days back.
+
+With --summary, print the count of failures per reason since --since (default 24h), with
+the devices that account for the most of each. Counts include records the platform folded
+into a count rather than itemizing.
+
+This is a report, not a queue: nothing is re-sent or replayed, and the original event is
+not fetched. The PAYLOAD column says only whether the platform still holds it.
+
+It needs device:write on the tenant, and is refused for a member whose access is limited
+to some customers.
+
+```
+dcctl events failed [flags]
+```
+
+### Examples
+
+```
+  dcctl events failed -t acme --email ops@acme.example --password ... --reason device-not-found
+  dcctl events failed -t acme --email ops@acme.example --password ... --device sensor-17 --since 6h
+  dcctl events failed -t acme --email ops@acme.example --password ... --summary -o json
+```
+
+### Options
+
+```
+      --device string   only this device token, as the sender named it
+  -h, --help            help for failed
+      --limit int       most records to fetch (default 100)
+  -o, --output string   output format: table or json (default "table")
+      --reason string   only this reason: INVALID, API_CALL_FAILED, DEVICE_NOT_FOUND, UNAUTHENTICATED, DEVICE_DISABLED, NOT_GATEWAY_CHILD, INTEGRATION_ALIAS_MISMATCH, UNKNOWN (any case; '-' for '_')
+      --since string    only records from this RFC3339 time onward, or this long ago (e.g. 2026-09-04T00:00:00Z or 6h); the server reads at most 31 days back
+      --summary         count failures per reason instead of listing them (default window 24h)
+      --until string    only records up to this RFC3339 time, or up to this long ago
+```
+
+### Options inherited from parent commands
+
+```
+      --email string      identity to authenticate as; it must be a member of the tenant (required)
+      --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
+      --password string   password for the identity (required)
+  -s, --server string     instance host for platform API calls (default "localhost")
+  -t, --tenant string     tenant whose events are read (required)
+      --tls               use https for platform endpoints
+```
+
+### SEE ALSO
+
+* [dcctl events](#dcctl-events)	 - Inspect a tenant's events
 
 ## dcctl ha {#dcctl-ha}
 
