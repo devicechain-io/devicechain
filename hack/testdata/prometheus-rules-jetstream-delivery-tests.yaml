@@ -1736,3 +1736,58 @@ tests:
             exp_annotations:
               summary: "Events are arriving faster than the event store persists them"
               description: "Durable devicechain_event-management_resolved-events has 17000 events waiting and the backlog has grown steadily for ten minutes. Either the event store is down or refusing writes (EventStoreRefusingWrites, DatabaseVolumeCritical), or ingest is outrunning persistence: compare the batch-size histogram on the persistence dashboard and the database's CPU and IOPS, and raise persistence.writers or persistence.maxBatch. At 90% of the resolved-events ceiling new events are refused (JetStreamIngestBackpressureEngaged) rather than discarded."
+
+  # ------------------------------------------------------------------
+  # The outage runway is half used: a gating consumer's unread backlog over 50% of its
+  # stream, for 3m, once per durable although two writer services (two pods) report it.
+  #
+  #   minutes 0-4   flat at 0.2 (quiet)
+  #   minutes 5-14  0.6 / 0.58 on the two pods
+  # ------------------------------------------------------------------
+  - name: a backlog that has used half the outage runway warns after 3m
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_jetstream_backpressure_unread_ratio{namespace="dci-devicechain", pod="dc-event-sources-7c9f-aaaaa", job="devicechain/event-sources", stream="devicechain_resolved-events", durable="devicechain_event-management_resolved-events"}'
+        values: '0.2x4 0.6x10'
+      - series: 'devicechain_devicemanagement_jetstream_backpressure_unread_ratio{namespace="dci-devicechain", pod="dc-device-management-7c9f-bbbbb", job="devicechain/device-management", stream="devicechain_resolved-events", durable="devicechain_event-management_resolved-events"}'
+        values: '0.2x4 0.58x10'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: JetStreamOutageRunwayHalfUsed
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: JetStreamOutageRunwayHalfUsed
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: JetStreamOutageRunwayHalfUsed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              stream: devicechain_resolved-events
+              durable: devicechain_event-management_resolved-events
+            exp_annotations:
+              summary: "Half of an event stream's outage runway is used"
+              description: "Durable devicechain_event-management_resolved-events has not yet processed 60% of what stream devicechain_resolved-events can hold. That stream is sized to hold events for the configured outage runway (infrastructure.nats.streamRunwayMinutes at streamDesignRate events a second) while a consumer or the database is down, so more than half of that time is gone. At 80% JetStreamUnreadBacklogNearFull warns, and at 90% the platform stops accepting new events on the stream, for every tenant. Find out why the consumer is behind: its service is not running or is crash-looping, its database is unavailable or slow (EventStoreRefusingWrites, ConsumerHoldingForDatabase), or the traffic has outgrown the design rate. If the rate has outgrown the design, raise streamDesignRate together with the JetStream volume."
+
+  # ------------------------------------------------------------------
+  # The negative controls, each carrying its own series: a backlog that stays under half,
+  # a spike over half shorter than the `for`, a backlog that drains back under half before
+  # it has held for 3m, and another instance at 0.99.
+  # ------------------------------------------------------------------
+  - name: a backlog under half, a short spike and another instance leave the runway alone
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_jetstream_backpressure_unread_ratio{namespace="dci-devicechain", pod="dc-event-sources-7c9f-aaaaa", job="devicechain/event-sources", stream="devicechain_inbound-events", durable="devicechain_device-management_inbound-events"}'
+        values: '0.45x12'
+      - series: 'devicechain_devicemanagement_jetstream_backpressure_unread_ratio{namespace="dci-devicechain", pod="dc-device-management-7c9f-ccccc", job="devicechain/device-management", stream="devicechain_resolved-events", durable="devicechain_event-management_resolved-events"}'
+        values: '0.7x2 0.3x10'
+      - series: 'devicechain_eventsources_jetstream_backpressure_unread_ratio{namespace="dci-other", pod="dc-event-sources-7c9f-zzzzz", job="other/event-sources", stream="other_inbound-events", durable="other_device-management_inbound-events"}'
+        values: '0.99x12'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: JetStreamOutageRunwayHalfUsed
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: JetStreamOutageRunwayHalfUsed
+        exp_alerts: []
