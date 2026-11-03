@@ -105,7 +105,7 @@ after `--`, as in `dcctl attr set device m1 offset -- -5` (with the other flags 
 device, the shared scope is also where its configuration comes from: writing or removing a key that
 the device's profile declares as configuration creates a new configuration revision. `get` also lists attributes in the other scopes, which
 explains a facet that reads as set but matches nothing. The server decides whether your identity may
-write, as it does for the console. See the [command reference](/reference/dcctl#dcctl-attr).
+write, as it does for the console. See the [command reference](../reference/dcctl.md#dcctl-attr).
 
 ## Browse
 
