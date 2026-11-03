@@ -412,6 +412,9 @@ func NewColumnTable[R any](tenant func(*R) *string, conflict []string, columns .
 type columnPlan[R any] struct {
 	// unnest is the whole Postgres statement.
 	unnest string
+	// unnestPlain is the same statement without the ON CONFLICT clause, issued when the
+	// caller opted in with WithPlainInsert. Empty for an upsert, and for sqlite.
+	unnestPlain string
 	// head is "INSERT INTO t (cols) VALUES " and tail the ON CONFLICT clause, for the
 	// VALUES rendering, which repeats a placeholder group per row between them.
 	head, tail string
@@ -562,7 +565,11 @@ func (t *ColumnTable[R]) exec(tx *gorm.DB, plan *columnPlan[R], tenant string, r
 		args := make([]any, 0, len(plan.cols)+1)
 		args = append(args, tenant)
 		args = append(args, arrays...)
-		res := tx.Exec(plan.unnest, args...)
+		stmt := plan.unnest
+		if plan.unnestPlain != "" && plainInsert(tx.Statement.Context) {
+			stmt = plan.unnestPlain
+		}
+		res := tx.Exec(stmt, args...)
 		return res.RowsAffected, res.Error
 	}
 	per := sqliteMaxVariables / (len(plan.cols) + 1)
@@ -813,6 +820,9 @@ func (t *ColumnTable[R]) build(db *gorm.DB, stmt *gorm.Statement) (*columnPlan[R
 			}
 		}
 		p.unnest = insert + " SELECT $1::text, " + strings.Join(unnests, ", ") + tail
+		if up == nil {
+			p.unnestPlain = insert + " SELECT $1::text, " + strings.Join(unnests, ", ")
+		}
 	case "sqlite":
 		p.head = insert + " VALUES "
 		p.tail = tail

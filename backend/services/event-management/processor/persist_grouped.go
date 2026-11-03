@@ -116,8 +116,51 @@ func (ep *EventPersistenceWorker) writeGrouped(tx *gorm.DB, batch []pendingEvent
 	if err != nil {
 		return failedAt, err
 	}
+	if tx.Dialector.Name() != "postgres" {
+		return ep.writeGroups(tx, batch, groups, seq, false)
+	}
+	// Optimistic first pass: plain INSERTs, no ON CONFLICT arbiter (see optimisticSavepoint).
+	if err := tx.SavePoint(optimisticSavepoint).Error; err != nil {
+		return -1, err
+	}
+	failedAt, err = ep.writeGroups(tx, batch, groups, seq, true)
+	if err == nil || !rdb.IsUniqueViolation(err) {
+		return failedAt, err
+	}
+	// Something in the batch is already stored: a redelivery (a broker roll, an ack lost
+	// before the commit), or two identical rows in one batch. Undo the pass and write the
+	// batch again with the arbiter, which absorbs those rows exactly as it always has. A
+	// unique violation the arbiter does not cover (the alternate-id key) comes back from
+	// this pass as it always has.
+	log.Debug().Err(err).Int("events", len(batch)).
+		Msg("A batch met rows that are already stored; writing it again with ON CONFLICT")
+	if err := tx.RollbackTo(optimisticSavepoint).Error; err != nil {
+		return -1, err
+	}
+	return ep.writeGroups(tx, batch, groups, seq, false)
+}
+
+// optimisticSavepoint brackets writeGrouped's first pass.
+//
+// 🔴 THE FIRST PASS WRITES WITHOUT ON CONFLICT. An ON CONFLICT insert logs every row twice
+// (a speculative heap insert, then its confirmation), about 8% of an event's heap WAL, to
+// protect against a duplicate that a healthy pipeline almost never sends. The first pass
+// therefore writes plain INSERTs (rdb.WithPlainInsert); a duplicate is then a unique
+// violation, which aborts the pass, and the savepoint undoes it so the batch is written
+// again the old way. Duplicates are refused exactly as before; a redelivered batch costs
+// one rolled-back pass, and never an error the writer would loop on.
+//
+// One savepoint per batch transaction, not per statement or per tenant: every savepoint that
+// writes holds a subtransaction until the transaction ends, and PostgreSQL slows every
+// snapshot once one backend holds more than 64.
+const optimisticSavepoint = "dc_optimistic_insert"
+
+// writeGroups writes the grouped messages' rows, then the sequential ones, with plain
+// INSERTs when plain is set.
+func (ep *EventPersistenceWorker) writeGroups(tx *gorm.DB, batch []pendingEvent, groups []*tenantGroup,
+	seq []sequentialMessage, plain bool) (int, error) {
 	for _, g := range groups {
-		if failedAt, err := ep.writeGroup(tx, g); err != nil {
+		if failedAt, err := ep.writeGroup(tx, g, plain); err != nil {
 			return failedAt, err
 		}
 	}
@@ -223,7 +266,11 @@ func buildRows(pevent model.Event, event resolvedevent.ResolvedEvent, rows *mode
 // writeGroup writes one tenant's grouped messages: the alternate-id skip, then the parent
 // and payload rows of every message not skipped, then their anchors. It returns the batch
 // index of the message to blame with the error, or -1 (see blame).
-func (ep *EventPersistenceWorker) writeGroup(tx *gorm.DB, g *tenantGroup) (int, error) {
+func (ep *EventPersistenceWorker) writeGroup(tx *gorm.DB, g *tenantGroup, plain bool) (int, error) {
+	ctx := g.ctx
+	if plain {
+		ctx = rdb.WithPlainInsert(ctx)
+	}
 	skipped := make([]bool, len(g.members))
 
 	// The in-batch rule. Written one at a time, a message's probe sees an earlier message
@@ -284,12 +331,12 @@ func (ep *EventPersistenceWorker) writeGroup(tx *gorm.DB, g *tenantGroup) (int, 
 		}
 	}
 	if len(rowWriters) > 0 {
-		if err := ep.Api.CreateEventRows(g.ctx, tx, &rows); err != nil {
+		if err := ep.Api.CreateEventRows(ctx, tx, &rows); err != nil {
 			return blame(g, rowWriters, err)
 		}
 	}
 	if len(anchorWriters) > 0 {
-		if err := ep.Api.CreateEventAnchors(g.ctx, tx, anchors); err != nil {
+		if err := ep.Api.CreateEventAnchors(ctx, tx, anchors); err != nil {
 			return blame(g, anchorWriters, err)
 		}
 	}
