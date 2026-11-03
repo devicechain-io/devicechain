@@ -5,6 +5,7 @@ package controllers
 
 import (
 	"context"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
@@ -55,6 +56,15 @@ import (
 type InstanceReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+	// Now is the clock; nil means time.Now. Tests set it to move time without waiting.
+	Now func() time.Time
+}
+
+func (r *InstanceReconciler) now() time.Time {
+	if r.Now != nil {
+		return r.Now()
+	}
+	return time.Now()
 }
 
 //+kubebuilder:rbac:groups=core.devicechain.io,resources=instances,verbs=get;list;watch;create;update;patch;delete
@@ -89,9 +99,15 @@ func (r *InstanceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, err
 	}
 
-	desired := computeStatus(instance, deployments.Items)
+	now := r.now()
+	desired := computeStatus(instance, deployments.Items, now)
+	// 🔴 TIME IS AN INPUT NO EVENT ANNOUNCES. A certificate crosses its warning window
+	// and then its expiry with nothing in the cluster changing, so every pass schedules
+	// its own next look (a published expiry is re-read at least hourly).
+	_, recheck := certificateVerdict(instance, now)
+	result := ctrl.Result{RequeueAfter: recheck}
 	if apiequality.Semantic.DeepEqual(instance.Status, desired) {
-		return ctrl.Result{}, nil
+		return result, nil
 	}
 	// A merge patch from the object as read, with no resourceVersion precondition.
 	// Status has one writer, but not one process: the operator runs without leader
@@ -105,7 +121,7 @@ func (r *InstanceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	log.V(1).Info("Updated instance status", "instance", instance.Name)
-	return ctrl.Result{}, nil
+	return result, nil
 }
 
 // deploymentToInstance maps a Deployment event to the Instance it belongs to, so

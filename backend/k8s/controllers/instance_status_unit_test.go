@@ -6,6 +6,7 @@ package controllers
 import (
 	"strings"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -64,7 +65,7 @@ func TestComputeStatusReasons(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			st := computeStatus(inst, c.ds)
+			st := computeStatus(inst, c.ds, time.Unix(1_700_000_000, 0))
 			for typ, want := range map[string]string{
 				corev1beta1.ConditionWorkloadsAvailable: c.available,
 				corev1beta1.ConditionRolloutComplete:    c.rollout,

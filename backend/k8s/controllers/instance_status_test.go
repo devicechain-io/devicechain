@@ -342,6 +342,62 @@ func TestOperatorWritesObservedStatus(t *testing.T) {
 		}
 	})
 
+	t.Run("the broker certificate's condition follows the clock with no event to announce it", func(t *testing.T) {
+		inst := r.instance(t, "cert", "1.0.0")
+		d := r.deployment(t, "dci-cert", "cert", "device-state", "reg/device-state:1.0.0", 1)
+		r.settle(t, d, 1)
+
+		// Nothing published: Unknown, and it must not make a serving instance unready.
+		got := r.await(t, "cert", "Ready with the certificate Unknown", func(i *dcv1beta1.Instance) bool {
+			return is(i, dcv1beta1.ConditionReady, T, dcv1beta1.ReasonReady)
+		})
+		if c := cond(got, dcv1beta1.ConditionBrokerCertificateValid); c == nil ||
+			c.Status != metav1.ConditionUnknown || c.Reason != dcv1beta1.ReasonCertificateNotPublished {
+			t.Fatalf("BrokerCertificateValid = %+v, want Unknown/CertificateNotPublished", c)
+		}
+
+		// Published as expiring in a few seconds: inside the warning window, so
+		// ExpiringSoon, and Ready is untouched.
+		live := &dcv1beta1.Instance{}
+		if err := r.c.Get(context.Background(), client.ObjectKeyFromObject(inst), live); err != nil {
+			t.Fatal(err)
+		}
+		live.Annotations = map[string]string{
+			dcv1beta1.AnnotationBrokerCertificateNotAfter: time.Now().Add(4 * time.Second).UTC().Format(time.RFC3339),
+		}
+		if err := r.c.Update(context.Background(), live); err != nil {
+			t.Fatal(err)
+		}
+		got = r.await(t, "cert", "ExpiringSoon", func(i *dcv1beta1.Instance) bool {
+			return is(i, dcv1beta1.ConditionBrokerCertificateValid, T, dcv1beta1.ReasonCertificateExpiringSoon)
+		})
+		if !is(got, dcv1beta1.ConditionReady, T, dcv1beta1.ReasonReady) {
+			t.Errorf("Ready = %+v, want it untouched by an expiring certificate", cond(got, dcv1beta1.ConditionReady))
+		}
+
+		// 🔴 NOTHING WRITES TO THE CLUSTER FROM HERE. The condition has to flip to Expired,
+		// and Ready with it, on the operator's own requeue.
+		got = r.await(t, "cert", "Expired by the clock alone", func(i *dcv1beta1.Instance) bool {
+			return is(i, dcv1beta1.ConditionBrokerCertificateValid, F, dcv1beta1.ReasonCertificateExpired)
+		})
+		if !is(got, dcv1beta1.ConditionReady, F, dcv1beta1.ReasonCertificateExpired) {
+			t.Errorf("Ready = %+v, want False/CertificateExpired", cond(got, dcv1beta1.ConditionReady))
+		}
+
+		// A renewal publishes a later date and everything recovers.
+		if err := r.c.Get(context.Background(), client.ObjectKeyFromObject(inst), live); err != nil {
+			t.Fatal(err)
+		}
+		live.Annotations[dcv1beta1.AnnotationBrokerCertificateNotAfter] = time.Now().Add(365 * 24 * time.Hour).UTC().Format(time.RFC3339)
+		if err := r.c.Update(context.Background(), live); err != nil {
+			t.Fatal(err)
+		}
+		r.await(t, "cert", "valid again", func(i *dcv1beta1.Instance) bool {
+			return is(i, dcv1beta1.ConditionBrokerCertificateValid, T, dcv1beta1.ReasonCertificateValid) &&
+				is(i, dcv1beta1.ConditionReady, T, dcv1beta1.ReasonReady)
+		})
+	})
+
 	t.Run("a Deployment carrying the label in another namespace counts for nothing", func(t *testing.T) {
 		r.instance(t, "stray", "1.0.0")
 		r.await(t, "stray", "NoWorkloads", func(i *dcv1beta1.Instance) bool {

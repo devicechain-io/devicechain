@@ -75,7 +75,7 @@ func applyInfra(ctx context.Context, st *State) (err error) {
 		}
 	}()
 
-	_, _, typed, err := kubeClients(st.KubeContext)
+	dyn, _, typed, err := kubeClients(st.KubeContext)
 	if err != nil {
 		return fmt.Errorf("connecting to the cluster to prepare the instance namespace: %w", err)
 	}
@@ -89,6 +89,11 @@ func applyInfra(ctx context.Context, st *State) (err error) {
 		return err
 	}
 	if err := writeMintedSecrets(ctx, typed, st); err != nil {
+		return err
+	}
+	// The certificate just placed is published on the declaration so the operator can
+	// report its expiry (the other call site is the upgrade's renewal step).
+	if err := publishBrokerCertificateExpiry(ctx, typed, dyn, st); err != nil {
 		return err
 	}
 

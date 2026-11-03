@@ -159,7 +159,7 @@ naturaleza distinta:
 | Campo | Significado |
 |---|---|
 | `status.observedGeneration` | la generación de la especificación a partir de la cual se calculó el estado |
-| `status.conditions` | `Ready`, `WorkloadsAvailable`, `RolloutComplete` (abajo) |
+| `status.conditions` | `Ready`, `WorkloadsAvailable`, `RolloutComplete`, `BrokerCertificateValid` (abajo) |
 | `status.version.requested` | `spec.imageVersion` |
 | `status.version.running` | la etiqueta de imagen que ejecuta cada área con pods deseados; `mixed` (reservado: nunca es una etiqueta de versión) mientras difieren; vacío si no se puede derivar |
 | `status.areas[]` | una entrada por área funcional: `name`, `desiredReplicas`, `readyReplicas`, `availableReplicas`, `updatedReplicas` e `image` (la referencia completa de la imagen, no solo la etiqueta). Las condiciones se calculan a partir de `availableReplicas` |
@@ -179,12 +179,50 @@ dispositivo.
 | | `ProgressDeadlineExceeded` | False | un Deployment informa de que su despliegue ha dejado de progresar |
 | | `VersionMismatch` | False | ha convergido, pero en una versión distinta de `spec.imageVersion` |
 | | `VersionUnknown` | Unknown | ha convergido, pero la versión en ejecución no se puede derivar (imágenes fijadas solo por digest) |
-| `Ready` | `Ready` | True | `WorkloadsAvailable` y `RolloutComplete` son ambas True |
+| `BrokerCertificateValid` | `CertificateValid` | True | el certificado TLS del broker y la autoridad que lo firmó tienen más de 30 días de vigencia |
+| | `CertificateExpiringSoon` | True | uno de los dos caduca en menos de 30 días; `dcctl upgrade` renueva el certificado |
+| | `CertificateExpired` | False | uno de los dos ha caducado: el broker rechaza las conexiones TLS hasta que se renueve |
+| | `CertificateNotPublished` | Unknown | no se ha publicado ninguna caducidad para la instancia (la tocó por última vez un `dcctl` anterior a esto) |
+| | `CertificateUnreadable` | Unknown | la caducidad publicada no es una hora RFC 3339 |
+| `Ready` | `Ready` | True | `WorkloadsAvailable` y `RolloutComplete` son ambas True, y el certificado del broker no ha caducado |
 | | (el motivo de la primera condición que no es True) | False / Unknown | |
 
 Una carga de trabajo ausente siempre se informa con un motivo; nunca se lee como sana. `Ready`
 es el estado asentado: es False mientras hay un despliegue en curso aunque los pods sigan
 sirviendo, así que lee `WorkloadsAvailable` para saber si la instancia está sirviendo.
+
+#### Caducidad del certificado del broker {#broker-certificate-expiry}
+
+El certificado TLS del broker es válido durante un año y solo se renueva cuando se ejecuta
+`dcctl upgrade`, dentro de los últimos 30 días del certificado. Una instancia que nunca se
+actualiza perdería por tanto el TLS del broker en el aniversario de su bootstrap sin que nada lo
+avisara. `BrokerCertificateValid` es ese aviso en la propia `Instance`.
+
+El operador no tiene acceso a los Secrets, así que no lee el certificado. `dcctl` publica cuándo
+caducan el certificado y su autoridad, como dos anotaciones de la `Instance`, cada vez que los
+coloca o los renueva (`dcctl bootstrap` y cada `dcctl upgrade`, también uno que no renueva nada,
+de modo que una instancia más antigua las obtiene en su siguiente upgrade):
+
+| Anotación | Valor |
+|---|---|
+| `core.devicechain.io/broker-certificate-not-after` | cuándo caduca el certificado del broker, RFC 3339, UTC |
+| `core.devicechain.io/broker-ca-not-after` | cuándo caduca la autoridad de certificación que lo firmó |
+
+El operador compara esas fechas con su propio reloj, así que la condición cambia con el paso del
+tiempo sin que cambie nada más en el clúster: se revisa en cada límite y al menos cada hora. El
+mensaje nombra la fecha, de modo que no cambia de una revisión a la siguiente.
+
+`Ready` solo sigue al caso False. Un certificado próximo a caducar deja `Ready` como está, porque
+la instancia está sirviendo y un estado que pasara a no listo por una fecha renovable enseñaría a
+ignorarlo; uno caducado significa que el TLS hacia el broker falla, que es lo que `Ready` existe
+para decir. `Unknown` nunca cambia `Ready`. Si las cargas de trabajo tampoco están sanas, `Ready`
+conserva el motivo de las cargas de trabajo, porque es lo primero que hay que arreglar.
+
+Las instancias con monitorización activada también reciben las alertas
+`BrokerCertificateExpiringSoon` y `BrokerCertificateExpiryCritical`, que leen la caducidad del
+certificado que el broker está sirviendo y no de estas anotaciones (consulta el [runbook de
+alertas](./observability.md#broker-client-certificates)). La condición es lo que cubre una
+instancia sin monitorización, y lo único que cubre la autoridad de certificación.
 
 `Instance` es una API soportada. Pueden añadirse campos de estado, tipos de condición y motivos
 nuevos; nada se elimina ni cambia de significado. Un lector debe tratar como Unknown un tipo de

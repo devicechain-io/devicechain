@@ -107,7 +107,7 @@ Operator 是 `Instance` 的 `status` 的唯一写入者，记录它**观察到**
 | 字段 | 含义 |
 |---|---|
 | `status.observedGeneration` | 计算此状态所依据的 spec 代数 |
-| `status.conditions` | `Ready`、`WorkloadsAvailable`、`RolloutComplete`（见下） |
+| `status.conditions` | `Ready`、`WorkloadsAvailable`、`RolloutComplete`、`BrokerCertificateValid`（见下） |
 | `status.version.requested` | `spec.imageVersion` |
 | `status.version.running` | 所有需要 Pod 的功能域运行的镜像标签；各域不一致时为 `mixed`（保留值：绝不会是发布标签）；无法得出时为空 |
 | `status.areas[]` | 每个功能域一项：`name`、`desiredReplicas`、`readyReplicas`、`availableReplicas`、`updatedReplicas`、`image`（完整镜像引用，而非仅标签）。各条件依据 `availableReplicas` 计算 |
@@ -126,10 +126,32 @@ Operator 是 `Instance` 的 `status` 的唯一写入者，记录它**观察到**
 | | `ProgressDeadlineExceeded` | False | 某 Deployment 报告其滚动更新已停止推进 |
 | | `VersionMismatch` | False | 已收敛，但版本与 `spec.imageVersion` 不同 |
 | | `VersionUnknown` | Unknown | 已收敛，但无法从镜像得出运行版本（镜像仅以 digest 固定） |
-| `Ready` | `Ready` | True | `WorkloadsAvailable` 与 `RolloutComplete` 均为 True |
+| `BrokerCertificateValid` | `CertificateValid` | True | 代理的 TLS 证书及其签发机构的有效期都还剩 30 天以上 |
+| | `CertificateExpiringSoon` | True | 两者之一将在 30 天内到期；`dcctl upgrade` 会续期证书 |
+| | `CertificateExpired` | False | 两者之一已过期：在续期之前，代理会拒绝 TLS 连接 |
+| | `CertificateNotPublished` | Unknown | 尚未为该实例发布到期时间（它上次由早于此功能的 `dcctl` 操作） |
+| | `CertificateUnreadable` | Unknown | 已发布的到期时间不是 RFC 3339 时间 |
+| `Ready` | `Ready` | True | `WorkloadsAvailable` 与 `RolloutComplete` 均为 True，且代理证书未过期 |
 | | （第一个非 True 条件的原因） | False / Unknown | |
 
 缺失的工作负载总是带着原因报告，绝不会被当作健康。`Ready` 表示已稳定：滚动更新期间即使 Pod 仍在服务，它也为 False，因此要判断实例是否在提供服务，请读取 `WorkloadsAvailable`。
+
+#### 代理证书到期 {#broker-certificate-expiry}
+
+代理的 TLS 证书有效期为一年，只在 `dcctl upgrade` 运行时、于证书最后 30 天内续期。因此从不升级的实例会在引导一周年时失去代理 TLS，而没有任何提示。`BrokerCertificateValid` 就是 `Instance` 自身上的这个提示。
+
+Operator 无权访问 Secret，所以它不读取证书。`dcctl` 在放置或续期证书时（`dcctl bootstrap` 以及每一次 `dcctl upgrade`，包括没有续期任何东西的那次，因此较旧的实例会在下一次升级时获得）把证书及其签发机构的到期时间发布为 `Instance` 上的两个注解：
+
+| 注解 | 值 |
+|---|---|
+| `core.devicechain.io/broker-certificate-not-after` | 代理证书的到期时间，RFC 3339，UTC |
+| `core.devicechain.io/broker-ca-not-after` | 签发它的证书颁发机构的到期时间 |
+
+Operator 用自己的时钟与这些时间比较，所以即使集群中其他内容都没有变化，条件也会随时间推移而变化：它在每个边界处重新检查，且至少每小时一次。消息中写明日期，因此不会在两次检查之间变化。
+
+`Ready` 只跟随 False 的情况。证书只是临近到期时 `Ready` 保持不变，因为实例仍在提供服务，而因一个可续期的日期就变为未就绪的状态会让读者习惯性地忽略它；证书已过期则意味着到代理的 TLS 失败，这正是 `Ready` 要表达的。`Unknown` 从不改变 `Ready`。如果工作负载同时也不健康，`Ready` 保留工作负载的原因，因为那是最先需要修复的。
+
+启用监控的实例还会得到 `BrokerCertificateExpiringSoon` 与 `BrokerCertificateExpiryCritical` 告警，它们读取的是代理当前正在提供的证书的到期时间，而不是这些注解（参见[告警手册](./observability.md#broker-client-certificates)）。该条件覆盖未启用监控的实例，也是唯一覆盖证书颁发机构的手段。
 
 `Instance` 是受支持的 API。可以新增状态字段、条件类型和原因；不会删除任何内容，也不会改变含义。读取方应将无法识别的条件类型或原因视为 Unknown。
 
