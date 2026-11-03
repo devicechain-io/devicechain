@@ -18,9 +18,16 @@
 //   - plain: every event a measurement;
 //   - change1: one event in a hundred is a presence claim (the state-change mix);
 //   - storm10: one in ten is, while the inactivity sweep runs alongside (the
-//     reconnect-storm mix). The sweep runs every 2 s against a clock set so that a device
-//     silent for 900 ms (of its 1 s cycle) counts as past the 600 s timeout: about a
-//     tenth of the fleet is flipped inactive per pass, in contention with the batches.
+//     reconnect-storm mix);
+//   - sweep0: the sweep alongside, and no claims at all (the control that separates the
+//     sweep's contention from the claim path's).
+//
+// The sweep runs every 2 s against a clock set so that a device silent for 900 ms counts as
+// past the 600 s timeout. A device reports every fleet/rate seconds (1 s at 3,000/s, 2 s at
+// 1,500/s), so the share of the fleet flipped per pass is about 1 - 0.9/(fleet/rate): a
+// tenth at 3,000/s but over half at 1,500/s. The run reports the rows it actually flipped
+// per pass (sweep-flipped/pass), the passes that failed, the server's deadlock count over
+// the run, and logs deadlock_timeout.
 //
 // commitMs is latency injected after each batch merge returns, standing in for the
 // synchronous-standby wait of a replicated relational store. It delays the writer and the
@@ -122,8 +129,8 @@ func pacedArms(tb testing.TB) []pacedArm {
 			}
 			v[i] = n
 		}
-		if f[4] != "plain" && f[4] != "change1" && f[4] != "storm10" {
-			tb.Fatalf("DC_BENCH_PACED entry %q: mix must be plain, change1 or storm10", s)
+		if f[4] != "plain" && f[4] != "change1" && f[4] != "storm10" && f[4] != "sweep0" {
+			tb.Fatalf("DC_BENCH_PACED entry %q: mix must be plain, change1, storm10 or sweep0", s)
 		}
 		arms = append(arms, pacedArm{v[0], v[1], v[2], v[3], f[4]})
 	}
@@ -158,6 +165,18 @@ func pgStatTotalMillis(mgr *rdb.RdbManager) (ms float64, ok bool) {
 		return 0, false
 	}
 	return ms, true
+}
+
+// pgDeadlocks is the server's deadlock count for the connected database, or ok=false.
+func pgDeadlocks(mgr *rdb.RdbManager) (n int64, ok bool) {
+	sqldb, err := mgr.Database.DB()
+	if err != nil {
+		return 0, false
+	}
+	if err := sqldb.QueryRow(`SELECT deadlocks FROM pg_stat_database WHERE datname = current_database()`).Scan(&n); err != nil {
+		return 0, false
+	}
+	return n, true
 }
 
 func percentileMs(sorted []int64, p float64) float64 {
@@ -260,7 +279,8 @@ func benchPacedArm(b *testing.B, mgr *rdb.RdbManager, arm pacedArm) {
 
 	stopSweep := make(chan struct{})
 	var sweeps sync.WaitGroup
-	if arm.mix == "storm10" {
+	var flipped, passes, failedPasses atomic.Int64
+	if arm.mix == "storm10" || arm.mix == "sweep0" {
 		sweeps.Add(1)
 		go func() {
 			defer sweeps.Done()
@@ -271,13 +291,26 @@ func benchPacedArm(b *testing.B, mgr *rdb.RdbManager, arm pacedArm) {
 				case <-stopSweep:
 					return
 				case <-tick.C:
-					_, _ = sp.Api.SweepInactive(core.WithSystemContext(context.Background()), time.Now().UTC().Add(600*time.Second-900*time.Millisecond))
+					n, err := sp.Api.SweepInactive(core.WithSystemContext(context.Background()), time.Now().UTC().Add(600*time.Second-900*time.Millisecond))
+					passes.Add(1)
+					if err != nil {
+						failedPasses.Add(1)
+						continue
+					}
+					flipped.Add(n)
 				}
 			}
 		}()
 	}
 
 	dbMs0, dbOK := pgStatTotalMillis(mgr)
+	deadlocks0, dlOK := pgDeadlocks(mgr)
+	if arm.mix == "storm10" || arm.mix == "sweep0" {
+		var dt string
+		if sqldb, err := mgr.Database.DB(); err == nil && sqldb.QueryRow(`SHOW deadlock_timeout`).Scan(&dt) == nil {
+			b.Logf("deadlock_timeout = %s", dt)
+		}
+	}
 	sum0, cnt0 := histogramOf(reg, "state_batch_size")
 	nanos0, merges0 := api.nanos.Load(), api.merges.Load()
 	cpu0, cpuOK := processCPU()
@@ -327,6 +360,18 @@ func benchPacedArm(b *testing.B, mgr *rdb.RdbManager, arm pacedArm) {
 	}
 	b.ReportMetric(float64(m1.Mallocs-m0.Mallocs)/float64(n), "allocs/ev")
 	b.ReportMetric(1000*float64(testFallbacks(reg))/float64(n), "fallbacks/1000ev")
+	b.ReportMetric(1000*counterOf(reg, "state_batch_conflict_retries_total")/float64(n), "conflict-retries/1000ev")
+	if passes.Load() > 0 {
+		b.ReportMetric(float64(flipped.Load())/float64(passes.Load()), "sweep-flipped/pass")
+		b.ReportMetric(float64(failedPasses.Load()), "sweep-failed-passes")
+	}
+	if dlOK {
+		// The server's statistics are flushed lazily; give them a moment.
+		time.Sleep(2 * time.Second)
+		if d1, ok := pgDeadlocks(mgr); ok {
+			b.ReportMetric(float64(d1-deadlocks0), "deadlocks")
+		}
+	}
 	lat := make([]int64, n)
 	for i := range lat {
 		lat[i] = acksAt[i].Load() - handoff[i]
@@ -363,4 +408,18 @@ func testFallbacks(reg *prometheus.Registry) float64 {
 		}
 	}
 	return 0
+}
+
+// counterOf sums the counters of reg whose name ends with suffix.
+func counterOf(reg *prometheus.Registry, suffix string) float64 {
+	families, _ := reg.Gather()
+	var v float64
+	for _, f := range families {
+		if strings.HasSuffix(f.GetName(), suffix) {
+			for _, m := range f.GetMetric() {
+				v += m.GetCounter().GetValue()
+			}
+		}
+	}
+	return v
 }

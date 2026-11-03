@@ -170,6 +170,10 @@ type StateMetrics struct {
 	batchSize prometheus.Observer
 	// fallbacks is state_batch_fallbacks_total: batch transactions that did not commit.
 	fallbacks prometheus.Counter
+	// batchConflictRetries is state_batch_conflict_retries_total: batches that lost a
+	// transaction conflict (a deadlock victim or a serialization failure) and were run again,
+	// once, as the same batch. It counts the conflict, not the outcome of the retry.
+	batchConflictRetries prometheus.Counter
 	// conflictRetries is state_write_conflict_retries_total: single-event writes run again in
 	// place after PostgreSQL aborted them as a deadlock victim or serialization failure.
 	conflictRetries prometheus.Counter
@@ -212,6 +216,13 @@ func (m *StateMetrics) fallback() {
 	}
 }
 
+// batchConflictRetry records one batch run again after a transaction conflict.
+func (m *StateMetrics) batchConflictRetry() {
+	if m != nil && m.batchConflictRetries != nil {
+		m.batchConflictRetries.Inc()
+	}
+}
+
 // conflictRetry records one single-event write run again after a transaction conflict.
 func (m *StateMetrics) conflictRetry() {
 	if m != nil {
@@ -240,6 +251,8 @@ func NewStateMetrics(ms *core.Microservice) *StateMetrics {
 		handoffDepth: ms.NewHistogramVec("state_handoff_depth",
 			"Events waiting in the hand-off channel when a writer finished receiving its batch.",
 			nil, handoffBuckets).WithLabelValues(),
+		batchConflictRetries: ms.NewCounter("state_batch_conflict_retries_total",
+			"Batches that lost a transaction conflict (deadlock victim or serialization failure) and were run again once as the same batch."),
 		conflictRetries: ms.NewCounter("state_write_conflict_retries_total",
 			"Single-event writes run again in place after PostgreSQL aborted them as a deadlock victim or serialization failure."),
 	}
@@ -563,6 +576,7 @@ func (sp *StateProcessor) mergeBatch(ctx context.Context, batch []pendingMerge) 
 	// A batch of ONE goes through the same single transaction as any other: the per-message
 	// path costs two (device state, then latest values), and under paced load a lone event is
 	// a few percent of all of them. It reaches the per-message path only by failing here.
+	retried := false
 	for len(batch) > 0 {
 		updates := make([]model.ProjectionUpdate, len(batch))
 		for i := range batch {
@@ -577,6 +591,23 @@ func (sp *StateProcessor) mergeBatch(ctx context.Context, batch []pendingMerge) 
 				p.done(core.ResultOK)
 			}
 			return
+		}
+		// A batch that lost a transaction conflict (PostgreSQL rolled it back whole) is run
+		// again ONCE, unchanged and in the same order, after a short jittered pause: the
+		// transaction it collided with has usually finished, and a second conflict is rare. It
+		// costs one transaction where the per-message path below costs two to four per event.
+		// Only a conflict is retried: a refused statement, a fence refusal and a lost
+		// connection take the branches below exactly as before, and so does a second conflict.
+		if !retried && rdb.IsTransactionConflict(err) {
+			retried = true
+			sp.metrics.batchConflictRetry()
+			log.Warn().Err(err).Int("events", len(batch)).
+				Msg("A device state batch lost a transaction conflict; running it again")
+			select {
+			case <-ctx.Done():
+			case <-time.After(time.Duration(5+rand.Intn(21)) * time.Millisecond):
+			}
+			continue
 		}
 		sp.metrics.fallback()
 		var refused *model.BatchRefusal

@@ -115,17 +115,41 @@ func TestAPoisonWriteDoesNotFailItsBatchMatesOnPostgres(t *testing.T) {
 	}
 }
 
-// The inactivity sweep updates many rows in one statement, in scan order, and a batch holds
-// several rows' locks at once, so the two can deadlock — PostgreSQL then aborts one side.
-// Whichever loses, nothing is lost. A batch that loses is merged again one event at a time,
-// and that one-event write is a transaction too, so it can lose a deadlock in its turn: such
-// an event is deliberately left unacknowledged and the broker redelivers it after AckWait.
-// So the contract is not "every event is acknowledged on its first delivery" but "every
-// event is applied, acknowledged exactly once, and none is dropped", and this test hands the
-// unacknowledged ones back, as the broker would, until they are. Every device ends active at
-// its event's time, since each event is newer than the sweep's deadline.
+// The inactivity sweep updates many rows in one statement and a batch holds several rows'
+// locks at once. The sweep never WAITS for a row a writer holds (it locks its candidates with
+// SKIP LOCKED and leaves a held row for its next pass), so it cannot be in a wait-for cycle
+// with a batch: no batch is refused, no write is retried, nothing is left for redelivery, no
+// sweep fails and the server counts no deadlock. Every event is applied and acknowledged
+// exactly once, and every device ends active at its event's time, since each event is newer
+// than the sweep's deadline.
+//
+// This used to tolerate deadlocks ("whichever loses, nothing is lost"), and that tolerance
+// was the bug: a batch that lost was merged again one event at a time and every writer
+// stalled for deadlock_timeout behind the cycle.
 func TestTheSweepAndBatchesContendWithoutLosingAnything(t *testing.T) {
-	mgr, _ := newFenceBenchManager(t, "dsbatchsweep", true)
+	contendSweepWithBatches(t, "dsbatchsweep", 0)
+}
+
+// The same with every 10th event a presence claim, which takes the locked path.
+func TestTheSweepAndClaimBatchesContendWithoutLosingAnything(t *testing.T) {
+	contendSweepWithBatches(t, "dsbatchsweepclaims", 10)
+}
+
+func contendSweepWithBatches(t *testing.T, instance string, claimEvery int) {
+	mgr, _ := newFenceBenchManager(t, instance, true)
+	deadlocks := func() int64 {
+		time.Sleep(1500 * time.Millisecond)
+		sqldb, err := mgr.Database.DB()
+		if err != nil {
+			t.Fatalf("pool: %v", err)
+		}
+		var n int64
+		if err := sqldb.QueryRow(`SELECT deadlocks FROM pg_stat_database WHERE datname = current_database()`).Scan(&n); err != nil {
+			t.Fatalf("read deadlocks: %v", err)
+		}
+		return n
+	}
+	deadlocksBefore := deadlocks()
 	ms := &core.Microservice{InstanceId: "test", FunctionalArea: "device-state"}
 	reg := prometheus.NewRegistry()
 	ms.UseMetricsRegistry(reg)
@@ -181,6 +205,7 @@ func TestTheSweepAndBatchesContendWithoutLosingAnything(t *testing.T) {
 			pending = next
 		}
 	}
+	claimed := map[string]bool{}
 	build := func(rounds int, descending bool, at func(round int) time.Time) ([]messaging.Message, []*eventAck) {
 		var msgs []messaging.Message
 		var acks []*eventAck
@@ -194,6 +219,11 @@ func TestTheSweepAndBatchesContendWithoutLosingAnything(t *testing.T) {
 				}
 				a := &eventAck{}
 				acks = append(acks, a)
+				if k := round*devices + i; claimEvery > 0 && k%claimEvery == 0 {
+					msgs = append(msgs, pacedStateChange(t, fmt.Sprintf("sw-%03d", n), 1000+k, at(round), a))
+					claimed[fmt.Sprintf("sw-%03d", n)] = true
+					continue
+				}
 				msgs = append(msgs, benchMeasurement(t, tenant, fmt.Sprintf("sw-%03d", n), at(round), a))
 			}
 		}
@@ -256,6 +286,11 @@ func TestTheSweepAndBatchesContendWithoutLosingAnything(t *testing.T) {
 	}
 	want := fresh.Add(3 * time.Second)
 	for _, ds := range states {
+		if claimed[ds.DeviceToken] {
+			// A claimed device is ASSERTED, which the sweep skips, and its last claim decides
+			// whether it ends connected, so there is nothing of the sweep's to check on it.
+			continue
+		}
 		if !ds.Active || !ds.LastActivityTime.Time.Equal(want) {
 			t.Errorf("%s active=%v activity=%v; want active at %v", ds.DeviceToken, ds.Active, ds.LastActivityTime.Time, want)
 		}
@@ -268,6 +303,21 @@ func TestTheSweepAndBatchesContendWithoutLosingAnything(t *testing.T) {
 		t.Errorf("state_messages_total{result=retry} = %v; want %d, the events handed back for redelivery", retried, redelivered)
 	}
 	inPlace, _, _, _ := gathered(t, reg, "state_write_conflict_retries_total", "")
+	if f := testutil.ToFloat64(metrics.fallbacks); f != 0 {
+		t.Errorf("state_batch_fallbacks_total = %v; want 0: the sweep must not make a batch lose", f)
+	}
+	if inPlace != 0 {
+		t.Errorf("state_write_conflict_retries_total = %v; want 0", inPlace)
+	}
+	if redelivered != 0 {
+		t.Errorf("%d events were left for redelivery; want 0", redelivered)
+	}
+	if sweepErrs.Load() != 0 {
+		t.Errorf("%d sweeps failed; want 0", sweepErrs.Load())
+	}
+	if d := deadlocks() - deadlocksBefore; d != 0 {
+		t.Errorf("the server counted %d deadlocks; want 0", d)
+	}
 	t.Logf("contended sweeps failed %d time(s); batch fallbacks %v; events left for redelivery %d; writes retried in place %v; final sweep flipped %d",
 		sweepErrs.Load(), testutil.ToFloat64(metrics.fallbacks), redelivered, inPlace, flipped)
 }

@@ -866,10 +866,10 @@ conexión perdida con la base de datos, cada uno de sus eventos se vuelve a escr
 Un escritor que encuentra menos eventos esperando que un lote completo espera hasta 10
 milisegundos a que lleguen más antes de confirmar (`persistence.lingerMillis`). Un escritor que
 encuentra eventos ya esperando los toma enseguida, así que con cola acumulada la espera no cuesta
-nada. La espera ahorra confirmaciones solo cuando todos los escritores están ocupados: un evento que
-llega va a un escritor libre antes que a uno que espera para llenar su lote, así que por debajo de
-unos pocos cientos de eventos por segundo por réplica cada evento se sigue confirmando solo, hasta
-10 milisegundos más tarde que sin la espera. Los lotes ayudan sobre todo con carga: en un almacén de
+nada. Los escritores se turnan para recibir un lote, así que la espera llena un solo lote al ritmo
+total de la réplica: un lote contiene aproximadamente el ritmo por la espera, hasta el límite del lote,
+sea cual sea el número de escritores. Por debajo de ese ritmo el lote queda incompleto y un evento espera
+hasta 10 milisegundos más que sin la espera. Los lotes ayudan sobre todo con carga: en un almacén de
 eventos replicado, la mayor parte de cada confirmación se va en esperar a la réplica, y un lote paga
 esa espera una sola vez.
 
@@ -1071,7 +1071,7 @@ confirma.
 | --- | --- | --- |
 | `projection.writers` | `10` | Escritores en paralelo; cada uno ocupa una conexión a la base de datos mientras fusiona. Debe ser menor que `rdbConfiguration.maxOpenConnections` (20 si no se indica). |
 | `projection.maxBatch` | `32` | Máximo de eventos fusionados en una transacción, de `1` a `64`. `1` desactiva los lotes. |
-| `projection.lingerMillis` | `0` | Cuánto espera un escritor a más eventos antes de fusionar un lote incompleto, hasta `1000`. `0` fusiona lo que ya está esperando. |
+| `projection.lingerMillis` | `10` | Cuánto espera un escritor a más eventos antes de fusionar un lote incompleto, hasta `1000`. Los escritores se turnan para recibir un lote, así que la espera llena un solo lote al ritmo total de la réplica. Un escritor que encuentra eventos esperando no espera. `0` fusiona lo que ya está esperando. |
 
 En una base de datos replicada, lo que sostiene el rendimiento son los lotes. Las fusiones de un
 mismo dispositivo se esperan entre sí, así que en una flota pequeña cuyos dispositivos envían por

@@ -402,14 +402,21 @@ func (e *BatchRefusal) Unwrap() error { return e.Err }
 // meet the same way when a third writer created a row between one's read and its inserts.
 // lockOrCreate is the cure for both: there is no "existing first" any more.
 //
-// Two shapes outside the batch can still meet a batch in a deadlock, and PostgreSQL then
-// aborts one side: the inactivity sweep updates many rows in scan order, and during a rolling
-// upgrade an older writer locks in its own order. A batch that loses is a *BatchRefusal and
-// its tenant's updates are merged again one at a time, which costs transactions. That
-// one-event write is a transaction too and can lose a deadlock in its turn: the processor
-// retries it in place a few times, and an event that still loses is left unacknowledged for
-// the broker to redeliver, not applied. A sweep that loses is recorded as a failed pass and
-// runs again at the next.
+// The inactivity sweep is not a party to this order, and cannot be: it never waits for a row
+// lock (SweepInactive locks its candidates FOR UPDATE SKIP LOCKED and leaves a row a batch
+// holds for its next pass), and a transaction that never waits cannot be in a wait-for cycle.
+// It used to be one UPDATE over a sequential scan, which locked rows in heap order and waited
+// for any row a batch held while holding every row it had already flipped, so it closed a
+// cycle with ANY batch of more than one device; that stayed cheap while batches held one or
+// two events and stalled every writer for deadlock_timeout once they held tens.
+//
+// One shape outside the batch can still meet a batch in a deadlock: during a rolling upgrade
+// an older writer locks in its own order. A batch that loses is a *BatchRefusal; one that lost
+// a transaction conflict is run again once, unchanged (mergeBatch), and a second loss merges
+// its tenant's updates again one at a time, which costs transactions. That one-event write is
+// a transaction too and can lose in its turn: the processor retries it in place a few times,
+// and an event that still loses is left unacknowledged for the broker to redeliver, not
+// applied.
 func (api *Api) MergeProjectionBatch(ctx context.Context, updates []ProjectionUpdate) error {
 	byTenant := map[string]map[string][]int{}
 	for i, u := range updates {
