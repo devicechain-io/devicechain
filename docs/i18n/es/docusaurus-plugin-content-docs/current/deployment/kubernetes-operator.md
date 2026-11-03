@@ -33,7 +33,7 @@ los overlays de Kustomize por entorno.
 
 ```text
 NAME   PROVIDER   CLUSTER           PROFILE   REQUESTED   OPERATION   READY   RUNNING   AGE
-prod   local      kind-devicechain  default   1.0.3       Ready       True    1.0.3     12d
+prod   local      kind-devicechain  default   v1.0.3      Ready       True    v1.0.3    12d
 ```
 
 ## Desplegando con Helm
@@ -161,8 +161,8 @@ naturaleza distinta:
 | `status.observedGeneration` | la generación de la especificación a partir de la cual se calculó el estado |
 | `status.conditions` | `Ready`, `WorkloadsAvailable`, `RolloutComplete` (abajo) |
 | `status.version.requested` | `spec.imageVersion` |
-| `status.version.running` | la etiqueta de imagen que ejecuta cada área con pods deseados; `mixed` mientras difieren; vacío si no se puede derivar |
-| `status.areas[]` | una entrada por área funcional: `name`, `desiredReplicas`, `readyReplicas`, `updatedReplicas`, `image` |
+| `status.version.running` | la etiqueta de imagen que ejecuta cada área con pods deseados; `mixed` (reservado: nunca es una etiqueta de versión) mientras difieren; vacío si no se puede derivar |
+| `status.areas[]` | una entrada por área funcional: `name`, `desiredReplicas`, `readyReplicas`, `availableReplicas`, `updatedReplicas` e `image` (la referencia completa de la imagen, no solo la etiqueta). Las condiciones se calculan a partir de `availableReplicas` |
 
 El estado es pequeño y acotado: una entrada por área funcional, y nada por inquilino ni por
 dispositivo.

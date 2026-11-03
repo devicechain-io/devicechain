@@ -84,7 +84,7 @@ func (r *InstanceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 
 	var deployments appsv1.DeploymentList
 	if err := r.List(ctx, &deployments,
-		client.InNamespace(instanceNamespace(instance.Name)),
+		client.InNamespace(corev1beta1.InstanceNamespace(instance.Name)),
 		client.MatchingLabels{instanceLabel: instance.Name}); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -93,8 +93,11 @@ func (r *InstanceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	if apiequality.Semantic.DeepEqual(instance.Status, desired) {
 		return ctrl.Result{}, nil
 	}
-	// A merge patch from the object as read: only the operator writes status, so
-	// there is no concurrent writer to protect against, and a spec or annotation
+	// A merge patch from the object as read, with no resourceVersion precondition.
+	// Status has one writer, but not one process: the operator runs without leader
+	// election, so two replicas during a rollout of the operator itself can both
+	// patch. They compute the same status from the same Deployments and the patch
+	// replaces whole fields, so the last write wins harmlessly. A spec or annotation
 	// write by dcctl between the read and here must not fail the status write.
 	patch := client.MergeFrom(instance.DeepCopy())
 	instance.Status = desired

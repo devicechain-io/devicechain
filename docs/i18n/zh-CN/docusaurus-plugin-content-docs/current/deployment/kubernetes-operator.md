@@ -20,7 +20,7 @@ Operator 监视 `Instance` 资源。租户不在其职责内：租户是控制�
 
 ```text
 NAME   PROVIDER   CLUSTER           PROFILE   REQUESTED   OPERATION   READY   RUNNING   AGE
-prod   local      kind-devicechain  default   1.0.3       Ready       True    1.0.3     12d
+prod   local      kind-devicechain  default   v1.0.3      Ready       True    v1.0.3    12d
 ```
 
 ## 使用 Helm 部署 {#deploying-with-helm}
@@ -109,8 +109,8 @@ Operator 是 `Instance` 的 `status` 的唯一写入者，记录它**观察到**
 | `status.observedGeneration` | 计算此状态所依据的 spec 代数 |
 | `status.conditions` | `Ready`、`WorkloadsAvailable`、`RolloutComplete`（见下） |
 | `status.version.requested` | `spec.imageVersion` |
-| `status.version.running` | 所有需要 Pod 的功能域运行的镜像标签；各域不一致时为 `mixed`；无法得出时为空 |
-| `status.areas[]` | 每个功能域一项：`name`、`desiredReplicas`、`readyReplicas`、`updatedReplicas`、`image` |
+| `status.version.running` | 所有需要 Pod 的功能域运行的镜像标签；各域不一致时为 `mixed`（保留值：绝不会是发布标签）；无法得出时为空 |
+| `status.areas[]` | 每个功能域一项：`name`、`desiredReplicas`、`readyReplicas`、`availableReplicas`、`updatedReplicas`、`image`（完整镜像引用，而非仅标签）。各条件依据 `availableReplicas` 计算 |
 
 状态小而有界：每个功能域一项，没有按租户或按设备的内容。
 

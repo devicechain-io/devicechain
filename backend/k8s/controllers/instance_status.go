@@ -14,6 +14,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/selection"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	corev1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
 )
@@ -22,20 +24,12 @@ import (
 // (devicechain.areaLabels): the instance id, and the area the Deployment serves.
 const (
 	areaLabel     = "devicechain.io/functional-area"
-	instanceLabel = "devicechain.io/instance"
-
-	// instanceNamespacePrefix is dcctl's InstanceNamespace (bootstrap/instancenamespace.go)
-	// and the chart's devicechain.instanceNamespace. It is spelled in three places and a
-	// test in the CLI holds the chart and dcctl equal; the operator cannot import either.
-	instanceNamespacePrefix = "dci-"
+	instanceLabel = corev1beta1.InstanceNamespaceLabel
 
 	// maxNamed bounds how many areas a condition message names, so a message stays
 	// short on an instance with every area down.
 	maxNamed = 5
 )
-
-// instanceNamespace is the namespace an instance's workloads live in.
-func instanceNamespace(instance string) string { return instanceNamespacePrefix + instance }
 
 // instanceForDeployment maps a Deployment back to the Instance that owns it, or
 // "" when it is not one of an instance's functional-area workloads. Both the label
@@ -43,7 +37,7 @@ func instanceNamespace(instance string) string { return instanceNamespacePrefix 
 // namespace cannot move an instance's status.
 func instanceForDeployment(d *appsv1.Deployment) string {
 	id := d.Labels[instanceLabel]
-	if id == "" || d.Labels[areaLabel] == "" || d.Namespace != instanceNamespace(id) {
+	if id == "" || d.Labels[areaLabel] == "" || d.Namespace != corev1beta1.InstanceNamespace(id) {
 		return ""
 	}
 	return id
@@ -65,11 +59,12 @@ func computeStatus(instance *corev1beta1.Instance, deployments []appsv1.Deployme
 		}
 		byName[name] = d
 		areas = append(areas, corev1beta1.AreaStatus{
-			Name:            name,
-			DesiredReplicas: desiredReplicas(d),
-			ReadyReplicas:   d.Status.ReadyReplicas,
-			UpdatedReplicas: d.Status.UpdatedReplicas,
-			Image:           mainImage(d),
+			Name:              name,
+			DesiredReplicas:   desiredReplicas(d),
+			ReadyReplicas:     d.Status.ReadyReplicas,
+			AvailableReplicas: d.Status.AvailableReplicas,
+			UpdatedReplicas:   d.Status.UpdatedReplicas,
+			Image:             mainImage(d),
 		})
 	}
 	sort.Slice(areas, func(i, j int) bool { return areas[i].Name < areas[j].Name })
@@ -152,6 +147,23 @@ func runningVersion(areas []corev1beta1.AreaStatus) string {
 	return tag
 }
 
+// differing names the areas whose tag is not the requested one, with the tag each runs.
+func differing(requested, running string, areas []corev1beta1.AreaStatus) string {
+	var out []string
+	for _, a := range areas {
+		if a.DesiredReplicas == 0 {
+			continue
+		}
+		if t := imageTag(a.Image); !sameVersion(requested, t) {
+			out = append(out, fmt.Sprintf("%s runs %q", a.Name, t))
+		}
+	}
+	if len(out) == 0 {
+		return fmt.Sprintf("the workloads run %q", running)
+	}
+	return named(out)
+}
+
 func named(names []string) string {
 	if len(names) > maxNamed {
 		return strings.Join(names[:maxNamed], ", ") + fmt.Sprintf(" and %d more", len(names)-maxNamed)
@@ -184,7 +196,7 @@ func workloadsAvailable(areas []corev1beta1.AreaStatus, byName map[string]*appsv
 			continue
 		}
 		wanting++
-		avail := byName[a.Name].Status.AvailableReplicas
+		avail := a.AvailableReplicas
 		switch {
 		case avail == 0:
 			none = append(none, a.Name)
@@ -218,7 +230,7 @@ func rolloutComplete(requested, running string, areas []corev1beta1.AreaStatus, 
 	if len(areas) == 0 {
 		return noWorkloads()
 	}
-	var stalled, pending []string
+	var stalled, pending, short []string
 	for _, a := range areas {
 		d := byName[a.Name]
 		for _, c := range d.Status.Conditions {
@@ -226,11 +238,16 @@ func rolloutComplete(requested, running string, areas []corev1beta1.AreaStatus, 
 				stalled = append(stalled, a.Name)
 			}
 		}
-		if d.Status.ObservedGeneration < d.Generation ||
+		switch {
+		case d.Status.ObservedGeneration < d.Generation ||
 			d.Status.UpdatedReplicas != a.DesiredReplicas ||
-			d.Status.Replicas != a.DesiredReplicas ||
-			d.Status.AvailableReplicas != a.DesiredReplicas {
+			d.Status.Replicas != a.DesiredReplicas:
 			pending = append(pending, a.Name)
+		case a.AvailableReplicas != a.DesiredReplicas:
+			// Converged on the template, but pods are missing or not ready: a crashed or
+			// unschedulable pod, not an unfinished rollout. Kubernetes counts this as
+			// not complete too, so RolloutComplete stays False, with its own message.
+			short = append(short, a.Name)
 		}
 	}
 	switch {
@@ -240,12 +257,15 @@ func rolloutComplete(requested, running string, areas []corev1beta1.AreaStatus, 
 	case len(pending) > 0:
 		return verdict{metav1.ConditionFalse, corev1beta1.ReasonRolloutInProgress,
 			fmt.Sprintf("not yet converged on the current template: %s", named(pending))}
+	case len(short) > 0:
+		return verdict{metav1.ConditionFalse, corev1beta1.ReasonRolloutInProgress,
+			fmt.Sprintf("template rolled out, but pods are not all available: %s (see WorkloadsAvailable)", named(short))}
 	case running == "":
 		return verdict{metav1.ConditionUnknown, corev1beta1.ReasonVersionUnknown,
 			"the running version cannot be derived from the workloads' images"}
 	case requested != "" && !sameVersion(requested, running):
 		return verdict{metav1.ConditionFalse, corev1beta1.ReasonVersionMismatch,
-			fmt.Sprintf("workloads run %q but the instance requests %q", running, requested)}
+			fmt.Sprintf("the instance requests %q but %s", requested, differing(requested, running, areas))}
 	}
 	return verdict{metav1.ConditionTrue, corev1beta1.ReasonRolloutComplete,
 		fmt.Sprintf("all areas converged on %s", running)}
@@ -266,6 +286,15 @@ func summarize(available, rollout verdict) verdict {
 	}
 	return verdict{metav1.ConditionTrue, corev1beta1.ReasonReady,
 		"every area is available and the rollout is complete"}
+}
+
+// CacheOptions is the manager cache configuration the status controller needs: only
+// instance-labelled Deployments are cached, so the operator does not hold every
+// Deployment in the cluster in memory. main.go and the envtest rig both use it.
+func CacheOptions() cache.Options {
+	return cache.Options{ByObject: map[client.Object]cache.ByObject{
+		&appsv1.Deployment{}: {Label: InstanceDeploymentSelector()},
+	}}
 }
 
 // InstanceDeploymentSelector selects the Deployments the operator cares about:

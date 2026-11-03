@@ -31,7 +31,7 @@ CloudNativePG does not do. Planned, not started: per-environment Kustomize overl
 
 ```text
 NAME   PROVIDER   CLUSTER           PROFILE   REQUESTED   OPERATION   READY   RUNNING   AGE
-prod   local      kind-devicechain  default   1.0.3       Ready       True    1.0.3     12d
+prod   local      kind-devicechain  default   v1.0.3      Ready       True    v1.0.3    12d
 ```
 
 ## Deploying with Helm
@@ -154,8 +154,8 @@ different in kind:
 | `status.observedGeneration` | the spec generation this status was computed from |
 | `status.conditions` | `Ready`, `WorkloadsAvailable`, `RolloutComplete` (below) |
 | `status.version.requested` | `spec.imageVersion` |
-| `status.version.running` | the image tag every area with wanted pods runs; `mixed` while areas differ; empty when it cannot be derived |
-| `status.areas[]` | one entry per functional area: `name`, `desiredReplicas`, `readyReplicas`, `updatedReplicas`, `image` |
+| `status.version.running` | the image tag every area with wanted pods runs; `mixed` (reserved: never a release tag) while areas differ; empty when it cannot be derived |
+| `status.areas[]` | one entry per functional area: `name`, `desiredReplicas`, `readyReplicas`, `availableReplicas`, `updatedReplicas`, and `image` (the full image reference, not a bare tag). The conditions are computed from `availableReplicas` |
 
 The status is small and bounded: one entry per functional area, and nothing per tenant or per
 device.

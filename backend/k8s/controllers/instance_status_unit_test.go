@@ -4,6 +4,7 @@
 package controllers
 
 import (
+	"strings"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -100,5 +101,45 @@ func TestImageTag(t *testing.T) {
 		if got := imageTag(image); got != want {
 			t.Errorf("imageTag(%q) = %q, want %q", image, got, want)
 		}
+	}
+}
+
+func TestInstanceForDeployment(t *testing.T) {
+	mk := func(ns string, labels map[string]string) *appsv1.Deployment {
+		return &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Labels: labels}}
+	}
+	both := map[string]string{instanceLabel: "x", areaLabel: "device-state"}
+	for name, c := range map[string]struct {
+		d    *appsv1.Deployment
+		want string
+	}{
+		"its own namespace and labels": {mk("dci-x", both), "x"},
+		"label in another namespace":   {mk("elsewhere", both), ""},
+		"another instance's namespace": {mk("dci-y", both), ""},
+		"no area label":                {mk("dci-x", map[string]string{instanceLabel: "x"}), ""},
+		"no instance label":            {mk("dci-x", map[string]string{areaLabel: "a"}), ""},
+		"the id without the prefix":    {mk("x", both), ""},
+	} {
+		if got := instanceForDeployment(c.d); got != c.want {
+			t.Errorf("%s: instanceForDeployment = %q, want %q", name, got, c.want)
+		}
+	}
+}
+
+func TestMessagesNameWhatIsWrong(t *testing.T) {
+	inst := &corev1beta1.Instance{ObjectMeta: metav1.ObjectMeta{Name: "x", Generation: 1}}
+	inst.Spec.ImageVersion = "1.0.1"
+	msg := func(ds ...appsv1.Deployment) string {
+		return meta.FindStatusCondition(computeStatus(inst, ds).Conditions, corev1beta1.ConditionRolloutComplete).Message
+	}
+
+	// A crashed pod after a finished rollout is not "not converged on the template".
+	if m := msg(dep("a", "r/a:1.0.1", 2, 2, 2, 1, 1, 1)); strings.Contains(m, "not yet converged") || !strings.Contains(m, "a") {
+		t.Errorf("availability shortfall message = %q", m)
+	}
+	// A mismatch names the areas that differ.
+	m := msg(dep("a", "r/a:1.0.1", 1, 1, 1, 1, 1, 1), dep("b", "r/b:1.0.0", 1, 1, 1, 1, 1, 1))
+	if !strings.Contains(m, `b runs "1.0.0"`) || strings.Contains(m, "a runs") {
+		t.Errorf("mismatch message = %q", m)
 	}
 }

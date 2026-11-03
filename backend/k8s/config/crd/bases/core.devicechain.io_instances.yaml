@@ -29,14 +29,14 @@ spec:
     - jsonPath: .spec.imageVersion
       name: Requested
       type: string
+    - jsonPath: .metadata.annotations.core\.devicechain\.io/phase
+      name: Operation
+      type: string
     - jsonPath: .status.conditions[?(@.type=="Ready")].status
       name: Ready
       type: string
     - jsonPath: .status.version.running
       name: Running
-      type: string
-    - jsonPath: .metadata.annotations.core\.devicechain\.io/phase
-      name: Operation
       type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
@@ -365,14 +365,21 @@ spec:
                   description: AreaStatus is the observed state of one functional
                     area's Deployment.
                   properties:
+                    availableReplicas:
+                      description: |-
+                        AvailableReplicas is the number of pods ready for the Deployment's
+                        minReadySeconds. The WorkloadsAvailable and RolloutComplete conditions are
+                        computed from it, not from ReadyReplicas.
+                      format: int32
+                      type: integer
                     desiredReplicas:
                       description: DesiredReplicas is the Deployment's spec.replicas.
                       format: int32
                       type: integer
                     image:
                       description: |-
-                        Image is the container image of the area's main container as the Deployment
-                        declares it.
+                        Image is the FULL image reference (registry, repository, tag and any digest) of
+                        the area's main container as the Deployment declares it, not a bare tag.
                       type: string
                     name:
                       description: Name is the functional area (the devicechain.io/functional-area
@@ -391,6 +398,7 @@ spec:
                       format: int32
                       type: integer
                   required:
+                  - availableReplicas
                   - desiredReplicas
                   - name
                   - readyReplicas
@@ -485,9 +493,12 @@ spec:
                   running:
                     description: |-
                       Running is the image tag the workloads run: the tag when every area with at
-                      least one desired replica runs the same one, VersionMixed when they differ
+                      least one desired replica runs the same one, "mixed" when they differ
                       (mid-rollout, or an area pinned to its own image), and empty when it cannot
                       be derived (no workloads, or images referenced by digest alone).
+
+                      "mixed" is RESERVED: it is never a release tag, and no release will be
+                      published under it. A reader must treat it as "more than one version".
                     type: string
                 type: object
             type: object

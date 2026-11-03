@@ -31,20 +31,26 @@ import (
 // has to parse a version, and the developer path is covered exactly as well as
 // the released one.
 //
-// 🔴 THE DIGEST COVERS THE CRDs ONLY, AND THAT IS A DELIBERATE NARROWING. What
-// a bootstrap depends on is the CustomResourceDefinition: it writes an Instance
-// and the API server validates it against whatever schema is installed. It does
-// NOT depend on the controller, which today fetches the Instance, logs that it
-// saw it, and returns — the operator ships, runs, and does nothing. Including
-// the controller Deployment would make the digest move whenever the image
-// reference moves, so a cluster installed with `--registry` set and a bootstrap
-// run without it would disagree about a schema that is in fact identical, and
-// the refusal would fire on a difference that cannot hurt anyone.
+// 🔴 THE DIGEST COVERS THE CRDs AND THE OPERATOR'S CLUSTERROLE, AND NOT THE
+// CONTROLLER WORKLOAD. A bootstrap depends on the CustomResourceDefinition: it
+// writes an Instance and the API server validates it against whatever schema is
+// installed. Since the operator started writing Instance status from the
+// Deployments it watches, a bootstrap also depends on the operator being able to
+// do that, which is what its ClusterRole grants: an operator installed before the
+// rule existed would run, log permission errors and leave every status empty.
+// The ClusterRole is therefore part of what "the operator here is the one I need"
+// means, and a change to it moves the identity, so `dcctl install` is asked for.
 //
-// ⚠️ THE DAY THE CONTROLLER DOES SOMETHING, THIS IS WHERE TO TIGHTEN IT, and
-// the narrowing above becomes wrong rather than merely conservative: a
-// reconciler that acts on an Instance is a second reader whose version matters,
-// and the digest then has to cover the workload too.
+// The controller Deployment stays out. Including it would make the digest move
+// whenever the image reference moves, so a cluster installed with `--registry`
+// set and a bootstrap run without it would disagree about a schema and a role
+// that are in fact identical, and the refusal would fire on a difference that
+// cannot hurt anyone.
+//
+// ⚠️ BEHAVIOUR THAT NEEDS NO NEW PERMISSION AND NO NEW SCHEMA IS NOT SEEN. A
+// controller change that reads and writes only what the ClusterRole and the CRD
+// already allow does not move this digest; if such a change must be adopted
+// before bootstrap proceeds, the workload (without its image) has to join it.
 const IdentityAnnotation = "core.devicechain.io/operator-identity"
 
 // stampIdentity computes the operator identity over the rendered CRDs and writes
@@ -73,7 +79,8 @@ func stampIdentity(res resmap.ResMap) error {
 	return nil
 }
 
-// identityOf digests the CustomResourceDefinitions in a rendered overlay.
+// identityOf digests the CustomResourceDefinitions and ClusterRoles in a rendered
+// overlay.
 //
 // Resources are digested in name order rather than stream order. kustomize's
 // ordering is stable today, but an identity that moved when the renderer
@@ -82,8 +89,13 @@ func stampIdentity(res resmap.ResMap) error {
 // to switch it off.
 func identityOf(res resmap.ResMap) (string, error) {
 	var crds []string
+	hasCRD := false
 	for _, r := range res.Resources() {
-		if r.GetKind() != "CustomResourceDefinition" {
+		switch r.GetKind() {
+		case "CustomResourceDefinition":
+			hasCRD = true
+		case "ClusterRole":
+		default:
 			continue
 		}
 		y, err := r.AsYAML()
@@ -92,7 +104,7 @@ func identityOf(res resmap.ResMap) (string, error) {
 		}
 		crds = append(crds, r.GetName()+"\n"+string(y))
 	}
-	if len(crds) == 0 {
+	if !hasCRD {
 		// Fail rather than digest nothing. An empty digest is a perfectly good
 		// hex string that every cluster would agree on, so a renderer that
 		// stopped emitting CRDs would produce an identity that matches

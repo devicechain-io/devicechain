@@ -16,7 +16,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -53,9 +52,7 @@ func startStatusRig(t *testing.T) *statusRig {
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
 		Scheme:  scheme.Scheme,
 		Metrics: metricsserver.Options{BindAddress: "0"},
-		Cache: cache.Options{ByObject: map[client.Object]cache.ByObject{
-			&appsv1.Deployment{}: {Label: controllers.InstanceDeploymentSelector()},
-		}},
+		Cache:   controllers.CacheOptions(),
 	})
 	if err != nil {
 		t.Fatal(err)

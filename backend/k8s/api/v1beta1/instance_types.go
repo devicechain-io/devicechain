@@ -467,9 +467,12 @@ type ObservedVersion struct {
 	Requested string `json:"requested,omitempty"`
 
 	// Running is the image tag the workloads run: the tag when every area with at
-	// least one desired replica runs the same one, VersionMixed when they differ
+	// least one desired replica runs the same one, "mixed" when they differ
 	// (mid-rollout, or an area pinned to its own image), and empty when it cannot
 	// be derived (no workloads, or images referenced by digest alone).
+	//
+	// "mixed" is RESERVED: it is never a release tag, and no release will be
+	// published under it. A reader must treat it as "more than one version".
 	//
 	// +optional
 	Running string `json:"running,omitempty"`
@@ -491,13 +494,18 @@ type AreaStatus struct {
 	// ReadyReplicas is the number of pods passing readiness.
 	ReadyReplicas int32 `json:"readyReplicas"`
 
+	// AvailableReplicas is the number of pods ready for the Deployment's
+	// minReadySeconds. The WorkloadsAvailable and RolloutComplete conditions are
+	// computed from it, not from ReadyReplicas.
+	AvailableReplicas int32 `json:"availableReplicas"`
+
 	// UpdatedReplicas is the number of pods at the Deployment's current template.
 	// A finished rollout has this equal to DesiredReplicas; AvailableReplicas
 	// alone cannot say so, because old pods count toward it.
 	UpdatedReplicas int32 `json:"updatedReplicas"`
 
-	// Image is the container image of the area's main container as the Deployment
-	// declares it.
+	// Image is the FULL image reference (registry, repository, tag and any digest) of
+	// the area's main container as the Deployment declares it, not a bare tag.
 	//
 	// +optional
 	Image string `json:"image,omitempty"`
@@ -555,6 +563,7 @@ const (
 //+kubebuilder:printcolumn:name="Cluster",type=string,JSONPath=`.spec.cluster`
 //+kubebuilder:printcolumn:name="Profile",type=string,JSONPath=`.spec.profile`
 //+kubebuilder:printcolumn:name="Requested",type=string,JSONPath=`.spec.imageVersion`
+//+kubebuilder:printcolumn:name="Operation",type=string,JSONPath=`.metadata.annotations.core\.devicechain\.io/phase`
 // Ready and Running are OBSERVED: the operator's conditions and the version its
 // workloads actually run. Operation is INTENT: what the last dcctl run was trying to
 // do, read from an annotation. It is a column because `kubectl get dci` is the one
@@ -575,7 +584,6 @@ const (
 // carry the backslashes through: controller-gen parses a backquoted marker argument as
 // a raw string. Both halves are pinned by TestThePhaseColumnActuallyResolves, which
 // drives the real evaluator the way the API server drives it.
-//+kubebuilder:printcolumn:name="Operation",type=string,JSONPath=`.metadata.annotations.core\.devicechain\.io/phase`
 //+kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // Instance is the declaration of a DeviceChain instance.
