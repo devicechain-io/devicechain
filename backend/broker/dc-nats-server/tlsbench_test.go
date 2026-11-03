@@ -76,6 +76,10 @@ func benchNodeMain() {
 		NoLog: true, NoSigs: true,
 		Cluster: server.ClusterOpts{Name: "bench", Host: "127.0.0.1", Port: rport},
 	}
+	if os.Getenv("DCB_JS") == "1" {
+		opts.JetStream = true
+		opts.StoreDir = os.Getenv("DCB_STORE")
+	}
 	if useTLS {
 		cert, err := tls.LoadX509KeyPair(dir+"/c.pem", dir+"/k.pem")
 		if err != nil {
@@ -93,17 +97,25 @@ func benchNodeMain() {
 	if peer := os.Getenv("DCB_PEER"); peer != "" {
 		opts.Routes = server.RoutesFromStr(peer)
 	}
+	if os.Getenv("DCB_LOG") == "1" {
+		opts.NoLog = false
+		opts.Debug = false
+	}
 	s, err := server.NewServer(opts)
+	if os.Getenv("DCB_LOG") == "1" {
+		s.ConfigureLogger()
+	}
 	if err != nil {
 		panic(err)
 	}
 	go s.Start()
-	if !s.ReadyForConnections(10 * time.Second) {
+	if !s.ReadyForConnections(90 * time.Second) {
 		panic("not ready")
 	}
 	fmt.Println("READY")
 	// Block until the parent closes our stdin.
 	_, _ = bufio.NewReader(os.Stdin).ReadString(0)
+	fmt.Printf("SLOW %d\n", s.NumSlowConsumers())
 	s.Shutdown()
 	s.WaitForShutdown()
 	w, wb := benchRawWrites()
@@ -135,17 +147,18 @@ type benchNode struct {
 	cport  int
 	rport  int
 	cpu    time.Duration
+	slow   int64
 	writes int64
 	wbytes int64
 }
 
-func startBenchNode(t *testing.T, name, dir string, cport, rport int, peer string, useTLS bool) *benchNode {
+func startBenchNode(t *testing.T, name, dir string, cport, rport int, peer string, useTLS bool, extra ...string) *benchNode {
 	cmd := exec.Command(os.Args[0], "-test.run=^$")
 	tl := "0"
 	if useTLS {
 		tl = "1"
 	}
-	cmd.Env = append(os.Environ(), "DCB_CHILD=1", "DCB_NODE="+name, "DCB_DIR="+dir, "DCB_TLS="+tl,
+	cmd.Env = append(append(os.Environ(), extra...), "DCB_CHILD=1", "DCB_NODE="+name, "DCB_DIR="+dir, "DCB_TLS="+tl,
 		"DCB_CPORT="+strconv.Itoa(cport), "DCB_RPORT="+strconv.Itoa(rport), "DCB_PEER="+peer)
 	in, _ := cmd.StdinPipe()
 	out, _ := cmd.StdoutPipe()
@@ -166,7 +179,9 @@ func startBenchNode(t *testing.T, name, dir string, cport, rport int, peer strin
 func (n *benchNode) stop(t *testing.T) {
 	n.stdin.Close()
 	for n.out.Scan() {
-		if f := strings.Fields(n.out.Text()); len(f) == 3 && f[0] == "STATS" {
+		if f := strings.Fields(n.out.Text()); len(f) == 2 && f[0] == "SLOW" {
+			n.slow, _ = strconv.ParseInt(f[1], 10, 64)
+		} else if len(f) == 3 && f[0] == "STATS" {
 			n.writes, _ = strconv.ParseInt(f[1], 10, 64)
 			n.wbytes, _ = strconv.ParseInt(f[2], 10, 64)
 		}
@@ -212,6 +227,7 @@ func TestTLSThroughputBench(t *testing.T) {
 
 	var got atomic.Int64
 	var subs []*nats.Conn
+	var subList []*nats.Subscription
 	for i := 0; i < nsubs; i++ {
 		port := cA
 		if i%2 == 1 {
@@ -219,7 +235,8 @@ func TestTLSThroughputBench(t *testing.T) {
 		}
 		nc := connect(port)
 		subs = append(subs, nc)
-		nc.Subscribe("bench.>", func(m *nats.Msg) { got.Add(1) })
+		sub, _ := nc.Subscribe("bench.>", func(m *nats.Msg) { got.Add(1) })
+		subList = append(subList, sub)
 		nc.Flush()
 	}
 	var pubs []*nats.Conn
@@ -289,6 +306,11 @@ func TestTLSThroughputBench(t *testing.T) {
 	elapsed := time.Since(start)
 	delivered := got.Load()
 	_ = ctx
+	var clientDropped int64
+	for _, sb := range subList {
+		d, _ := sb.Dropped()
+		clientDropped += int64(d)
+	}
 	for _, nc := range append(subs, pubs...) {
 		nc.Close()
 	}
@@ -297,9 +319,9 @@ func TestTLSThroughputBench(t *testing.T) {
 	cpu := a.cpu + b.cpu
 	writes := a.writes + b.writes
 	fmt.Printf("RESULT tls=%v rate=%d size=%d subs=%d pubs=%d published=%d delivered=%d/%d wall=%.2fs "+
-		"msgs/s(pub)=%.0f deliveries/s=%.0f servercpu=%.2fs cpu_s_per_1k_published=%.4f cpu_s_per_1k_deliveries=%.4f rawwrites=%d rawwrites_per_delivery=%.4f\n",
+		"msgs/s(pub)=%.0f deliveries/s=%.0f servercpu=%.2fs cpu_s_per_1k_published=%.4f cpu_s_per_1k_deliveries=%.4f rawwrites=%d rawwrites_per_delivery=%.4f slow_consumers=%d client_dropped=%d\n",
 		useTLS, rate, size, nsubs, npubs, total, delivered, want, elapsed.Seconds(),
 		float64(total)/elapsed.Seconds(), float64(delivered)/elapsed.Seconds(), cpu.Seconds(),
 		cpu.Seconds()/float64(total)*1000, cpu.Seconds()/float64(delivered)*1000,
-		writes, float64(writes)/float64(delivered))
+		writes, float64(writes)/float64(delivered), a.slow+b.slow, clientDropped)
 }
