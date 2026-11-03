@@ -10,6 +10,7 @@ require (
 	github.com/devicechain-io/dc-k8s v0.0.1
 	github.com/devicechain-io/dc-microservice v0.0.1
 	github.com/fatih/color v1.19.0
+	github.com/graph-gophers/graphql-go v1.10.3
 	github.com/hashicorp/terraform-exec v0.26.0
 	github.com/hashicorp/terraform-json v0.29.0
 	github.com/jackc/pgx/v5 v5.11.0

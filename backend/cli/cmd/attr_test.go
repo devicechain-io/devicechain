@@ -85,6 +85,23 @@ func TestAttrOutputFlagIsValidated(t *testing.T) {
 	}
 }
 
+// A negative value looks like a flag; after "--" it is a positional argument, with the
+// flags still allowed before it. This is the exact form the help documents.
+func TestAttrSetAcceptsANegativeValueAfterDoubleDash(t *testing.T) {
+	c := &cobra.Command{Use: "set"}
+	c.Flags().String("tenant", "", "")
+	if err := c.ParseFlags([]string{"device", "m1", "offset", "--tenant", "acme", "--", "-5"}); err != nil {
+		t.Fatal(err)
+	}
+	got := c.Flags().Args()
+	if err := attrSetCmd.Args(attrSetCmd, got); err != nil {
+		t.Fatalf("args %v refused: %v", got, err)
+	}
+	if len(got) != 4 || got[3] != "-5" {
+		t.Errorf("args = %v, want -5 kept as the value", got)
+	}
+}
+
 func TestAttrCommandsTakeOTPAndAreRegistered(t *testing.T) {
 	if attrCmd.PersistentFlags().Lookup("otp") == nil {
 		t.Error("dcctl attr takes a password but not --otp")

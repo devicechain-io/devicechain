@@ -99,7 +99,11 @@ dcctl attr unset device meter-0042 floor --tenant acme --email you@example.com -
 
 Values are written in the shared scope, the only one facets read, and take the type the facet
 declares, so `3` above is stored as a `LONG` for a `LONG` facet. A `--type` that contradicts the
-declaration is refused rather than saved. `get` also lists attributes in the other scopes, which
+declaration is refused rather than saved. A value must also match the declared vocabulary's exact
+spelling and case, so `Arid` does not match `arid`. A negative number looks like a flag, so put it
+after `--`, as in `dcctl attr set device m1 offset -- -5` (with the other flags before it). On a
+device, the shared scope is also where its configuration comes from: writing or removing a key that
+the device's profile declares as configuration creates a new configuration revision. `get` also lists attributes in the other scopes, which
 explains a facet that reads as set but matches nothing. The server decides whether your identity may
 write, as it does for the console. See the [command reference](/reference/dcctl#dcctl-attr).
 

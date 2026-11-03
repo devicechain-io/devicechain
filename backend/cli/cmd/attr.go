@@ -37,6 +37,10 @@ Writes default to the SHARED scope because it is the only one facet selectors re
 written at CLIENT or SERVER scope is valid, reads back, and matches nothing in Browse or in
 a dynamic group; pass --scope only for an attribute that is not a facet value.
 
+SHARED is also the scope a device reads its configuration from. Writing or removing a SHARED
+attribute on a device whose profile declares that key as configuration creates a new
+configuration revision for the device, whether or not you meant it as a facet value.
+
 The server authorizes every call as the identity you sign in with. This command checks no
 permission itself.`,
 }
@@ -52,6 +56,13 @@ For a SHARED-scope write the value type is taken from the facet's declaration, s
 "dcctl attr set device meter-0042 floor 3" is written as the LONG the facet declares. A
 --type that contradicts the declaration is refused, because the write would save and never
 match. A key that is not declared as a facet has no type to take, so --type is required.
+
+A facet value must match the declared vocabulary's spelling and case exactly: "Arid" does
+not match a facet value "arid".
+
+A negative number looks like a flag, so put it after "--" (flags first):
+
+  dcctl attr set device m1 offset --tenant acme --email you@example.com --password <password> -- -5
 
 Writing one key never touches another: this is an upsert on (entity, scope, key).`,
 	Args:         cobra.ExactArgs(4),
@@ -166,6 +177,11 @@ func runAttrGet(cmd *cobra.Command, args []string) error {
 	})
 	if err != nil {
 		return err
+	}
+	if len(attrs) == 0 && !asJSON && key != "" {
+		fmt.Fprintf(cmd.OutOrStdout(), "%s is not set on %s %q, or the token is unknown: the API answers "+
+			"the same for both, so check the token if you expected it to exist.\n", key, args[0], args[1])
+		return nil
 	}
 	if len(attrs) == 0 && !asJSON {
 		fmt.Fprintf(cmd.OutOrStdout(), "No attributes found on %s %q. If you expected some, check the token: "+

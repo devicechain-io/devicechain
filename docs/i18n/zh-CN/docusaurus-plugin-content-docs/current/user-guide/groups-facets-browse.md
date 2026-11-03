@@ -66,7 +66,7 @@ dcctl attr get device meter-0042 --tenant acme --email you@example.com --passwor
 dcctl attr unset device meter-0042 floor --tenant acme --email you@example.com --password <password>
 ```
 
-值写入共享（shared）作用域，这是分面唯一会读取的作用域，并采用分面所声明的类型，因此对于 `LONG` 分面，上面的 `3` 会存为 `LONG`。与声明相矛盾的 `--type` 会被拒绝，而不是被保存。`get` 还会列出其他作用域中的属性，这可以解释为何某个分面显示已设置却没有匹配到任何内容。你的身份是否有权写入由服务器决定，与控制台一致。参见[命令参考](/reference/dcctl#dcctl-attr)。
+值写入共享（shared）作用域，这是分面唯一会读取的作用域，并采用分面所声明的类型，因此对于 `LONG` 分面，上面的 `3` 会存为 `LONG`。与声明相矛盾的 `--type` 会被拒绝，而不是被保存。值还必须与所声明词汇表的拼写和大小写完全一致，因此 `Arid` 不会匹配 `arid`。负数看起来像选项，所以请把它放在 `--` 之后，例如 `dcctl attr set device m1 offset -- -5`（其他选项放在前面）。对设备而言，共享作用域同时也是其配置的来源：写入或移除设备配置文件中声明为配置的键，会创建新的配置修订版本。`get` 还会列出其他作用域中的属性，这可以解释为何某个分面显示已设置却没有匹配到任何内容。你的身份是否有权写入由服务器决定，与控制台一致。参见[命令参考](/reference/dcctl#dcctl-attr)。
 
 ## 浏览 {#browse}
 
