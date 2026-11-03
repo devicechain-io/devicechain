@@ -131,7 +131,7 @@ func TestMessagesNameWhatIsWrong(t *testing.T) {
 	inst := &corev1beta1.Instance{ObjectMeta: metav1.ObjectMeta{Name: "x", Generation: 1}}
 	inst.Spec.ImageVersion = "1.0.1"
 	msg := func(ds ...appsv1.Deployment) string {
-		return meta.FindStatusCondition(computeStatus(inst, ds).Conditions, corev1beta1.ConditionRolloutComplete).Message
+		return meta.FindStatusCondition(computeStatus(inst, ds, time.Unix(1_700_000_000, 0)).Conditions, corev1beta1.ConditionRolloutComplete).Message
 	}
 
 	// A crashed pod after a finished rollout is not "not converged on the template".
